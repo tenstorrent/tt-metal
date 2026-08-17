@@ -5,8 +5,6 @@
 #include "sort_program_factory.hpp"
 
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 
@@ -28,23 +26,27 @@ namespace {
 // The ROW_MAJOR and TILE configurations bind different sets of dataflow buffers, so the layout gate
 // has to reach the kernels at preprocessor level: a `dfb::` handle exists only where the host
 // actually binds it, and `if constexpr` still resolves names in its discarded branch.
-KernelSpec::CompilerOptions::Defines layout_defines(bool is_row_major) {
+//
+// The same reasoning applies to IS_UINT16_FP32_MODE: the UInt16 staging DFBs are only bound
+// when the input dtype is UInt16, so the reader/writer software-conversion loops (which
+// reference `dfb::uint16_input_stage` etc.) must also be preprocessor-gated to avoid the
+// undeclared handles from tripping name lookup on the non-UINT16 path.
+KernelSpec::CompilerOptions::Defines sort_kernel_defines(bool is_row_major, bool is_uint16_input) {
     KernelSpec::CompilerOptions::Defines defines;
     if (is_row_major) {
         defines.insert({"IS_ROW_MAJOR", "1"});
     }
+    if (is_uint16_input) {
+        defines.insert({"IS_UINT16_FP32_MODE", "1"});
+    }
     return defines;
 }
 
-// Same as layout_defines, plus TOPK_UINT16_FP32_DEST when UInt16 values live in 32-bit DEST
-// (UINT32 indices or Float32 input force fp32_dest_acc_en). Gates the native half-word fixup in
-// topk/sort SFPU after bit-11 removal (#50215). Compute-only; reader/writer don't need it.
-KernelSpec::CompilerOptions::Defines compute_defines(bool is_row_major, bool uint16_in_fp32_dest) {
-    auto defines = layout_defines(is_row_major);
-    if (uint16_in_fp32_dest) {
-        defines.insert({"TOPK_UINT16_FP32_DEST", "1"});
-    }
-    return defines;
+// Layout-only overload kept for the CrossCore factory, which routes UINT16 inputs to
+// a different program via select_program_factory and therefore never sets
+// IS_UINT16_FP32_MODE (its reader/writer have no software-conversion loops).
+KernelSpec::CompilerOptions::Defines layout_defines(bool is_row_major) {
+    return sort_kernel_defines(is_row_major, /*is_uint16_input=*/false);
 }
 
 }  // namespace
@@ -56,11 +58,16 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactorySingleRowSingleCore::
 
     const tt::DataFormat input_tensor_cb_data_format =
         datatype_to_dataformat_converter(tensor_args.input_tensor.dtype());
-    const tt::DataFormat value_tensor_cb_data_format = datatype_to_dataformat_converter(output_tensors.at(0).dtype());
+    // Value output dtype is always equal to input dtype in compute_output_specs (see
+    // sort_device_operation.cpp), and the DFB sizing uses sort_value_cb_data_format
+    // (Float32 for UINT16) rather than the output tensor's raw dtype, so
+    // output_tensors.at(0).dtype() / value_tensor_cb_data_format aren't needed here.
     const tt::DataFormat index_tensor_cb_data_format = datatype_to_dataformat_converter(output_tensors.at(1).dtype());
 
-    const uint32_t input_tensor_tile_size = tile_size(input_tensor_cb_data_format);
-    const uint32_t value_tensor_tile_size = tile_size(value_tensor_cb_data_format);
+    // Only the index tile size is needed directly; INPUT_TENSOR / INPUT_TRANSPOSED /
+    // VALUE_TENSOR / RM_* all use sort_value_tile_size (below) so the fp32 sort path
+    // works uniformly for UINT16 (where sort_value_cb_data_format is promoted to
+    // Float32) and non-UINT16 inputs.
     const uint32_t index_tensor_tile_size = tile_size(index_tensor_cb_data_format);
 
     const auto& input_mesh_tensor = tensor_args.input_tensor.mesh_tensor();
@@ -88,10 +95,26 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactorySingleRowSingleCore::
     const uint32_t all_core_utilization_loop_residuum = Ht % total_number_of_cores;
 
     const bool is_32_bit_index = index_tensor_cb_data_format == tt::DataFormat::UInt32;
-    const bool is_32_bit_data = is_32_bit_index || input_tensor_cb_data_format == tt::DataFormat::Float32;
-    // UInt16 values + 32-bit DEST (from UINT32 indices or FP32 input): enable native half-word fixup
-    // in topk/sort SFPU after debug bit 11 removal (#50215).
-    const bool uint16_in_fp32_dest = is_32_bit_data && input_tensor_cb_data_format == tt::DataFormat::UInt16;
+    // UINT16 keys must also run in fp32_dest_acc_en mode so the SFPU compares
+    // them as 32-bit floats.  The hardware unpack converts the uint16 integer
+    // value to an exact float32 (all 0..65535 are representable in 24-bit
+    // mantissa), avoiding the bf16 precision loss that collapses integers > 256.
+    const bool is_32_bit_data = is_32_bit_index || input_tensor_cb_data_format == tt::DataFormat::Float32 ||
+                                input_tensor_cb_data_format == tt::DataFormat::UInt16;
+
+    // With fp32_dest_acc_en=True, pack_tile writes 32-bit floats. Intermediate value DFBs
+    // (INPUT_TRANSPOSED, VALUE_TENSOR / RM_VALUE_OUTPUT) must use Float32 so that fp32
+    // values from the DEST register are stored and read back without truncation.  The
+    // writer then converts Float32 → UInt16 element-by-element when sending to DRAM.
+    const bool is_uint16_input = (input_tensor_cb_data_format == tt::DataFormat::UInt16);
+    const tt::DataFormat sort_value_cb_data_format =
+        is_uint16_input ? tt::DataFormat::Float32 : input_tensor_cb_data_format;
+    const uint32_t sort_value_tile_size = tile_size(sort_value_cb_data_format);
+    // Number of bytes a Float32-promoted RM value row occupies.  For UINT16 inputs
+    // the reader software-converts each UInt16 row into a Float32 row before handing
+    // it to the compute kernel (via RM_INPUT / RM_VALUE_OUTPUT), so this is
+    // 2 × W_value_bytes.  For non-UINT16 dtypes it equals W_value_bytes.
+    const uint32_t W_sort_value_bytes = input_shape[3] * tt::datum_size(sort_value_cb_data_format);
 
     CoreRangeSet core_range;
     if (Ht >= total_number_of_cores) {
@@ -135,6 +158,11 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactorySingleRowSingleCore::
     const DFBSpecName RM_VALUE_OUTPUT{"rm_value_output"};
     const DFBSpecName RM_INDEX_OUTPUT{"rm_index_output"};
     const DFBSpecName RM_POST_SORT_INDEX{"rm_post_sort_index"};
+    // UINT16 conversion staging DFBs — only bound when is_uint16_input.
+    const DFBSpecName UINT16_INPUT_STAGE{"uint16_input_stage"};
+    const DFBSpecName UINT16_CONV{"uint16_conv"};
+    const DFBSpecName RM_UINT16_INPUT_STAGE{"rm_uint16_input_stage"};
+    const DFBSpecName RM_UINT16_OUTPUT_STAGE{"rm_uint16_output_stage"};
 
     const TensorParamName INPUT_PARAM{"input"};
     const TensorParamName VALUE_PARAM{"value_output"};
@@ -145,12 +173,28 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactorySingleRowSingleCore::
 
     // -----------------------------------------------------------------------
     // Dataflow buffers
+    //
+    // When the input is UInt16 the hardware unpack cannot numerically convert
+    // UInt16 → Float32 (the ISA only allows UInt16 → UInt16 destination).  The
+    // reader kernel software-converts each element on the RISC-V core: DMA the
+    // raw UInt16 tile from DRAM into a staging DFB (uint16_input_stage /
+    // rm_uint16_input_stage) and then emit float(uint16_val) into INPUT_TENSOR /
+    // RM_INPUT — which are promoted to Float32 for the UINT16 mode via
+    // sort_value_cb_data_format.  Compute then sorts on Float32 exactly.
+    // Symmetrically the writer software-converts sorted Float32 → UInt16 in
+    // uint16_conv / rm_uint16_output_stage before DMA back to DRAM.  Non-UINT16
+    // dtypes do not bind these staging DFBs.
     // -----------------------------------------------------------------------
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = INPUT_TENSOR,
-        .entry_size = input_tensor_tile_size,
+        // INPUT_TENSOR carries the values the compute kernel sorts. With
+        // is_uint16_input the reader software-converts UInt16 → Float32 into
+        // this buffer, so it needs to be sized and formatted for Float32; for
+        // non-UINT16 dtypes sort_value_* equals input_tensor_* (see the
+        // sort_value_cb_data_format derivation above).
+        .entry_size = sort_value_tile_size,
         .num_entries = is_row_major ? Wt : cb_in_units,
-        .data_format_metadata = input_tensor_cb_data_format,
+        .data_format_metadata = sort_value_cb_data_format,
     });
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = INDEX_TENSOR,
@@ -160,9 +204,12 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactorySingleRowSingleCore::
     });
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = INPUT_TRANSPOSED,
-        .entry_size = input_tensor_tile_size,
+        // The transposed value buffer sits between pack_tile and the next
+        // sort iteration and must round-trip fp32 without truncation when
+        // fp32_dest_acc_en is on (Float32 / UINT16 inputs).
+        .entry_size = sort_value_tile_size,
         .num_entries = Wt,
-        .data_format_metadata = input_tensor_cb_data_format,
+        .data_format_metadata = sort_value_cb_data_format,
     });
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = INDEX_TRANSPOSED,
@@ -175,9 +222,11 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactorySingleRowSingleCore::
         // these two have no endpoint there and are declared for TILE only.
         spec.dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = VALUE_TENSOR,
-            .entry_size = value_tensor_tile_size,
+            // Same reasoning as INPUT_TRANSPOSED — this receives pack_tile
+            // output before the writer converts back to UInt16 for DRAM.
+            .entry_size = sort_value_tile_size,
             .num_entries = num_cb_unit,
-            .data_format_metadata = value_tensor_cb_data_format,
+            .data_format_metadata = sort_value_cb_data_format,
         });
         spec.dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = INDEX_OUTPUT,
@@ -194,20 +243,46 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactorySingleRowSingleCore::
         .data_format_metadata = tt::DataFormat::UInt8,
     });
 
+    if (is_uint16_input && !is_row_major) {
+        // TILE path staging DFBs for the UInt16 <-> Float32 software conversion.
+        // Reader stages one raw UInt16 tile per iteration in uint16_input_stage,
+        // then converts into INPUT_TENSOR (Float32).  Writer stages one converted
+        // UInt16 tile in uint16_conv before DMA to DRAM.  Both are single-tile CBs.
+        const uint32_t uint16_one_tile_size = tile_size(tt::DataFormat::UInt16);
+        spec.dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = UINT16_INPUT_STAGE,
+            .entry_size = uint16_one_tile_size,
+            .num_entries = 1,
+            .data_format_metadata = tt::DataFormat::UInt16,
+        });
+        spec.dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = UINT16_CONV,
+            .entry_size = uint16_one_tile_size,
+            .num_entries = 1,
+            .data_format_metadata = tt::DataFormat::UInt16,
+        });
+    }
+
     if (is_row_major) {
-        // rm_input: reader pushes TILE_HEIGHT pages, each W_value_bytes wide.
+        // rm_input: reader pushes TILE_HEIGHT pages of sorted-value dtype.  For
+        // UINT16 this is Float32 (W_sort_value_bytes == 2 × W_value_bytes) after
+        // the reader's software conversion; for other dtypes it equals
+        // W_value_bytes.
         spec.dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = RM_INPUT,
-            .entry_size = W_value_bytes,
+            .entry_size = W_sort_value_bytes,
             .num_entries = tt::constants::TILE_HEIGHT,
-            .data_format_metadata = input_tensor_cb_data_format,
+            .data_format_metadata = sort_value_cb_data_format,
         });
-        // rm_value_output: compute pushes untilized value rows; writer drains them.
+        // rm_value_output: compute pushes untilized value rows; writer drains
+        // them.  Sized for sort_value_cb_data_format so the pack_untilize output
+        // fits when running the fp32 sort path (UINT16 inputs land here as
+        // Float32; writer converts back to UInt16 before DMA to DRAM).
         spec.dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = RM_VALUE_OUTPUT,
-            .entry_size = W_value_bytes,
+            .entry_size = W_sort_value_bytes,
             .num_entries = tt::constants::TILE_HEIGHT,
-            .data_format_metadata = value_tensor_cb_data_format,
+            .data_format_metadata = sort_value_cb_data_format,
         });
         // rm_index_output: compute pushes untilized index rows; reader drains them.
         spec.dataflow_buffers.push_back(DataflowBufferSpec{
@@ -227,6 +302,25 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactorySingleRowSingleCore::
             .num_entries = Wt,
             .data_format_metadata = index_tensor_cb_data_format,
         });
+        if (is_uint16_input) {
+            // ROW_MAJOR UInt16 staging DFBs — one raw UInt16 row each.  Reader
+            // stages incoming rows in rm_uint16_input_stage before software-
+            // converting to Float32 into RM_INPUT.  Writer software-converts
+            // Float32 rows from RM_VALUE_OUTPUT into rm_uint16_output_stage
+            // before DMA to DRAM.
+            spec.dataflow_buffers.push_back(DataflowBufferSpec{
+                .unique_id = RM_UINT16_INPUT_STAGE,
+                .entry_size = W_value_bytes,
+                .num_entries = 1,
+                .data_format_metadata = tt::DataFormat::UInt16,
+            });
+            spec.dataflow_buffers.push_back(DataflowBufferSpec{
+                .unique_id = RM_UINT16_OUTPUT_STAGE,
+                .entry_size = W_value_bytes,
+                .num_entries = 1,
+                .data_format_metadata = tt::DataFormat::UInt16,
+            });
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -257,6 +351,21 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactorySingleRowSingleCore::
             .accessor_name = "rm_index_output",
             .endpoint_type = DFBEndpointType::CONSUMER,
         });
+        if (is_uint16_input) {
+            // Reader also owns the raw-UInt16 staging DFB in ROW_MAJOR + UINT16
+            // mode (see reader_single_row_single_core.cpp's #ifdef
+            // IS_UINT16_FP32_MODE branch, which produces + consumes it inline).
+            reader_dfb_bindings.push_back(DFBBinding{
+                .dfb_spec_name = RM_UINT16_INPUT_STAGE,
+                .accessor_name = "rm_uint16_input_stage",
+                .endpoint_type = DFBEndpointType::PRODUCER,
+            });
+            reader_dfb_bindings.push_back(DFBBinding{
+                .dfb_spec_name = RM_UINT16_INPUT_STAGE,
+                .accessor_name = "rm_uint16_input_stage",
+                .endpoint_type = DFBEndpointType::CONSUMER,
+            });
+        }
     } else {
         reader_dfb_bindings.push_back(DFBBinding{
             .dfb_spec_name = INPUT_TENSOR,
@@ -268,6 +377,20 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactorySingleRowSingleCore::
             .accessor_name = "index_tensor_output",
             .endpoint_type = DFBEndpointType::CONSUMER,
         });
+        if (is_uint16_input) {
+            // TILE-path staging DFB — same producer/consumer pattern as the
+            // ROW_MAJOR one above.
+            reader_dfb_bindings.push_back(DFBBinding{
+                .dfb_spec_name = UINT16_INPUT_STAGE,
+                .accessor_name = "uint16_input_stage",
+                .endpoint_type = DFBEndpointType::PRODUCER,
+            });
+            reader_dfb_bindings.push_back(DFBBinding{
+                .dfb_spec_name = UINT16_INPUT_STAGE,
+                .accessor_name = "uint16_input_stage",
+                .endpoint_type = DFBEndpointType::CONSUMER,
+            });
+        }
     }
 
     // The writer generates the index tiles the compute kernel sorts, in both configurations.
@@ -282,12 +405,39 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactorySingleRowSingleCore::
             .accessor_name = "rm_value_output",
             .endpoint_type = DFBEndpointType::CONSUMER,
         });
+        if (is_uint16_input) {
+            // Writer stages the software-converted UInt16 row before DMA.
+            writer_dfb_bindings.push_back(DFBBinding{
+                .dfb_spec_name = RM_UINT16_OUTPUT_STAGE,
+                .accessor_name = "rm_uint16_output_stage",
+                .endpoint_type = DFBEndpointType::PRODUCER,
+            });
+            writer_dfb_bindings.push_back(DFBBinding{
+                .dfb_spec_name = RM_UINT16_OUTPUT_STAGE,
+                .accessor_name = "rm_uint16_output_stage",
+                .endpoint_type = DFBEndpointType::CONSUMER,
+            });
+        }
     } else {
         writer_dfb_bindings.push_back(DFBBinding{
             .dfb_spec_name = VALUE_TENSOR,
             .accessor_name = "value_tensor",
             .endpoint_type = DFBEndpointType::CONSUMER,
         });
+        if (is_uint16_input) {
+            // TILE-path Float32 → UInt16 conversion staging (matches
+            // writer_single_row_single_core.cpp #ifdef IS_UINT16_FP32_MODE).
+            writer_dfb_bindings.push_back(DFBBinding{
+                .dfb_spec_name = UINT16_CONV,
+                .accessor_name = "uint16_conv",
+                .endpoint_type = DFBEndpointType::PRODUCER,
+            });
+            writer_dfb_bindings.push_back(DFBBinding{
+                .dfb_spec_name = UINT16_CONV,
+                .accessor_name = "uint16_conv",
+                .endpoint_type = DFBEndpointType::CONSUMER,
+            });
+        }
     }
 
     if (is_row_major) {
@@ -380,12 +530,16 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactorySingleRowSingleCore::
 
     // -----------------------------------------------------------------------
     // Kernels
+    //
+    // The IS_UINT16_FP32_MODE compile-time define below gates the reader/writer
+    // kernel software-conversion loops.  See the DFB spec block above for the
+    // matching UINT16_INPUT_STAGE / UINT16_CONV / RM_UINT16_* staging DFBs.
     // -----------------------------------------------------------------------
     spec.kernels.push_back(KernelSpec{
         .unique_id = READER,
         .source = "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/"
                   "reader_single_row_single_core.cpp",
-        .compiler_options = {.defines = layout_defines(is_row_major)},
+        .compiler_options = {.defines = sort_kernel_defines(is_row_major, is_uint16_input)},
         .dfb_bindings = std::move(reader_dfb_bindings),
         .tensor_bindings =
             {
@@ -410,7 +564,7 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactorySingleRowSingleCore::
         .unique_id = WRITER,
         .source = "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/"
                   "writer_single_row_single_core.cpp",
-        .compiler_options = {.defines = layout_defines(is_row_major)},
+        .compiler_options = {.defines = sort_kernel_defines(is_row_major, is_uint16_input)},
         .dfb_bindings = std::move(writer_dfb_bindings),
         .tensor_bindings =
             {
@@ -431,13 +585,21 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactorySingleRowSingleCore::
     });
 
     ComputeGen1Config compute_hw_config{.enable_32_bit_dest = is_32_bit_data};
-    if (input_tensor_cb_data_format == tt::DataFormat::Float32) {
-        // Only buffers this configuration actually binds may appear here, and an absent entry
-        // means UnpackToSrc. Float32 operands are unpacked straight to Dest so the sort keeps full
-        // precision; the index buffers stay on the default path.
+    // UINT16 keys also route through the fp32 sort path (sort_value_cb_data_format
+    // is Float32 for UINT16 — the reader's software conversion writes Float32 into
+    // INPUT_TENSOR), so treat UINT16 the same as Float32 here: the value buffers
+    // that the compute kernel unpacks must go UnpackToDest to preserve the full
+    // 32-bit mantissa.  Without UnpackToDest, the hardware unpack would see a
+    // Float32 CB and still load it in a reduced-precision (BF16/TF32) mode,
+    // losing bits > 255 and defeating the software conversion.  Index buffers
+    // stay on the default path.
+    if (input_tensor_cb_data_format == tt::DataFormat::Float32 || is_uint16_input) {
         compute_hw_config.unpack_modes.insert({INPUT_TENSOR, UnpackMode::UnpackToDest});
         compute_hw_config.unpack_modes.insert({INPUT_TRANSPOSED, UnpackMode::UnpackToDest});
         if (is_row_major) {
+            // rm_input carries Float32 for both native Float32 RM inputs and
+            // UINT16 RM inputs (after reader software conversion), so
+            // tilize_block must load the full 32-bit mantissa here.
             compute_hw_config.unpack_modes.insert({RM_INPUT, UnpackMode::UnpackToDest});
         } else {
             compute_hw_config.unpack_modes.insert({VALUE_TENSOR, UnpackMode::UnpackToDest});
@@ -448,7 +610,11 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactorySingleRowSingleCore::
         .unique_id = COMPUTE,
         .source = "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/compute/"
                   "sort_single_row_single_core.cpp",
-        .compiler_options = {.defines = compute_defines(is_row_major, uint16_in_fp32_dest)},
+        // Compute kernels build at O3; the compiler-options default is O2, so the level is stated
+        // explicitly rather than inherited.
+        .compiler_options =
+            {.defines = sort_kernel_defines(is_row_major, is_uint16_input),
+             .opt_level = KernelSpec::CompilerOptions::OptLevel::O3},
         .dfb_bindings = std::move(compute_dfb_bindings),
         .compile_time_args =
             {
@@ -633,7 +799,6 @@ Tensor build_physical_core_lookup_table_tensor(const SortInputs& tensor_args, st
     // on the worker grid, so this is built once when the program is created; the framework keeps the
     // tensor alive and re-binds its address to the reader on every dispatch.
     std::vector<uint32_t> physical_core_lookup_table_data;
-    physical_core_lookup_table_data.reserve(layout.core_range.num_cores() * 2);
     for (const auto& core_range : layout.core_range.ranges()) {
         for (const auto& core_coord : core_range) {
             const auto physical_core = device->worker_core_from_logical_core(core_coord);
@@ -719,11 +884,25 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactoryCrossCoreDataExchange
         all_core_utilization_count,
         total_number_of_cores_virtual);
 
+    // UINT16 inputs are excluded from this factory by
+    // SortDeviceOperation::select_program_factory: any UINT16 above the SingleCore
+    // threshold is routed to SortProgramFactorySingleRowMultiCore
+    // (`!is_uint16 && Wt <= total_number_of_tiles_for_hybrid_approach`) because the
+    // CrossCore factory has no UInt16 <-> Float32 conversion DFBs.  Guard with
+    // TT_FATAL (not TT_ASSERT — which compiles out in release builds) so a broken
+    // routing invariant fails loudly instead of silently sorting UINT16 keys in
+    // bf16 mode and returning wrong indices.
+    TT_FATAL(
+        input_tensor_cb_data_format != tt::DataFormat::UInt16,
+        "Invariant violated: UINT16 input reached the CrossCore sort factory.  "
+        "SortDeviceOperation::select_program_factory routes UINT16 to "
+        "SortProgramFactorySingleRowMultiCore for Wt above the SingleCore "
+        "threshold; this factory does not implement the UInt16 <-> Float32 "
+        "conversion loops.");
+
     // uint32 index tensor support
     const bool is_32_bit_index = index_tensor_cb_data_format == tt::DataFormat::UInt32;
     const bool is_32_bit_data = is_32_bit_index || input_tensor_cb_data_format == tt::DataFormat::Float32;
-    // UInt16 values + 32-bit DEST: enable native half-word fixup after bit-11 removal (#50215).
-    const bool uint16_in_fp32_dest = is_32_bit_data && input_tensor_cb_data_format == tt::DataFormat::UInt16;
 
     const bool is_row_major = (tensor_args.input_tensor.layout() == Layout::ROW_MAJOR);
     const auto tile_width = tensor_args.input_tensor.tensor_spec().tile().get_width();
@@ -1195,7 +1374,10 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactoryCrossCoreDataExchange
         .unique_id = COMPUTE,
         .source = "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/compute/"
                   "sort_cross_core_data_exchange.cpp",
-        .compiler_options = {.defines = compute_defines(is_row_major, uint16_in_fp32_dest)},
+        // Compute kernels build at O3; the compiler-options default is O2, so the level is stated
+        // explicitly rather than inherited.
+        .compiler_options =
+            {.defines = layout_defines(is_row_major), .opt_level = KernelSpec::CompilerOptions::OptLevel::O3},
         .dfb_bindings = std::move(compute_dfb_bindings),
         .compile_time_args =
             {
@@ -1232,27 +1414,18 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactoryCrossCoreDataExchange
 }
 
 // Single row - multi core
-//
-// NOT PORTED to Metal 2.0. This factory needs two WorkUnitSpecs over disjoint node sets (a
-// single-node coordinator and the worker grid), each binding its own dataflow buffers. Under
-// that shape the per-core-range dataflow-buffer config payload is sized by the largest
-// per-kernel-group buffer count but indexed by the program-global buffer id, so a buffer whose
-// id exceeds that count is serialized out of bounds.
-// Fix tracked in issue #51409.
-ProgramDescriptor SortProgramFactorySingleRowMultiCore::create_descriptor(
+ttnn::device_operation::ProgramArtifacts SortProgramFactorySingleRowMultiCore::create_program_artifacts(
     const SortParams& attributes, const SortInputs& tensor_args, std::vector<Tensor>& output_tensors) {
     const tt::DataFormat input_tensor_cb_data_format =
         datatype_to_dataformat_converter(tensor_args.input_tensor.dtype());
-    const tt::DataFormat value_tensor_cb_data_format = datatype_to_dataformat_converter(output_tensors.at(0).dtype());
     const tt::DataFormat index_tensor_cb_data_format = datatype_to_dataformat_converter(output_tensors.at(1).dtype());
 
     const uint32_t input_tensor_tile_size = tile_size(input_tensor_cb_data_format);
-    const uint32_t value_tensor_tile_size = tile_size(value_tensor_cb_data_format);
     const uint32_t index_tensor_tile_size = tile_size(index_tensor_cb_data_format);
 
-    auto* const input_buffer = tensor_args.input_tensor.buffer();
-    auto* const value_buffer = output_tensors.at(0).buffer();
-    auto* const index_buffer = output_tensors.at(1).buffer();
+    const auto& input_mesh_tensor = tensor_args.input_tensor.mesh_tensor();
+    const auto& value_mesh_tensor = output_tensors.at(0).mesh_tensor();
+    const auto& index_mesh_tensor = output_tensors.at(1).mesh_tensor();
 
     const auto tile_width = tensor_args.input_tensor.tensor_spec().tile().get_width();
     const auto tile_height = tensor_args.input_tensor.tensor_spec().tile().get_height();
@@ -1266,6 +1439,8 @@ ProgramDescriptor SortProgramFactorySingleRowMultiCore::create_descriptor(
 
     const uint32_t value_element_size = tt::datum_size(input_tensor_cb_data_format);
     const uint32_t W_tile_bytes = tile_width * value_element_size;
+    const uint32_t index_element_size = tt::datum_size(index_tensor_cb_data_format);
+    const uint32_t W_index_bytes = tile_width * index_element_size;
 
     auto* device = tensor_args.input_tensor.device();
     const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
@@ -1277,9 +1452,21 @@ ProgramDescriptor SortProgramFactorySingleRowMultiCore::create_descriptor(
     const uint32_t all_core_utilization_loop_count = total_work_units / number_of_available_cores;
 
     const bool is_32_bit_index = index_tensor_cb_data_format == tt::DataFormat::UInt32;
-    const bool is_32_bit_data = is_32_bit_index || input_tensor_cb_data_format == tt::DataFormat::Float32;
-    // UInt16 values + 32-bit DEST: enable native half-word fixup after bit-11 removal (#50215).
-    const bool uint16_in_fp32_dest = is_32_bit_data && input_tensor_cb_data_format == tt::DataFormat::UInt16;
+    // UINT16 keys must also run in fp32_dest_acc_en mode so the SFPU compares
+    // them as 32-bit floats.  See comment in SortProgramFactorySingleRowSingleCore
+    // for the full rationale.
+    const bool is_32_bit_data = is_32_bit_index || input_tensor_cb_data_format == tt::DataFormat::Float32 ||
+                                input_tensor_cb_data_format == tt::DataFormat::UInt16;
+
+    const bool is_uint16_input = (input_tensor_cb_data_format == tt::DataFormat::UInt16);
+    const tt::DataFormat sort_value_cb_data_format =
+        is_uint16_input ? tt::DataFormat::Float32 : input_tensor_cb_data_format;
+    const uint32_t sort_value_tile_size = tile_size(sort_value_cb_data_format);
+    // For UINT16 inputs, c_0 must be Float32 because the reader does a software
+    // UInt16 → Float32 conversion (hardware unpack cannot convert UInt16 → Float32).
+    // See SortProgramFactorySingleRowSingleCore for the full rationale.
+    const tt::DataFormat input_cb_data_format = is_uint16_input ? tt::DataFormat::Float32 : input_tensor_cb_data_format;
+    const uint32_t input_cb_tile_size = is_uint16_input ? sort_value_tile_size : input_tensor_tile_size;
 
     const uint32_t log2Wt = std::log2(Wt);
 
@@ -1313,173 +1500,420 @@ ProgramDescriptor SortProgramFactorySingleRowMultiCore::create_descriptor(
     CoreRangeSet all_core_set({CoreRange(coordinator_core)});
     all_core_set = all_core_set.merge<CoreRangeSet>(core_range);
 
-    ProgramDescriptor desc;
+    // -----------------------------------------------------------------------
+    // Resource names
+    //
+    // The coordinator and the workers run different kernels on disjoint nodes and share no dataflow
+    // buffer, so each side gets its own buffer specs. Placement is derived from the bindings, which
+    // is what keeps the coordinator node from carrying the worker buffers it never touches.
+    // -----------------------------------------------------------------------
+    const KernelSpecName COORDINATOR{"coordinator"};
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+    const KernelSpecName COMPUTE{"compute"};
+
+    const DFBSpecName COORD_INPUT{"coord_input_tensor"};
+    const DFBSpecName COORD_INDEX{"coord_index_tensor"};
+    const DFBSpecName COORD_VALUE_ROW{"rm_coord_value_row"};
+    const DFBSpecName COORD_INDEX_ROW{"rm_coord_index_row"};
+
+    const DFBSpecName WORKER_INPUT{"input_tensor"};
+    const DFBSpecName WORKER_INDEX{"index_tensor"};
+    const DFBSpecName WORKER_INPUT_TRANSPOSED{"input_tensor_transposed"};
+    const DFBSpecName WORKER_INDEX_TRANSPOSED{"index_tensor_transposed"};
+    const DFBSpecName WORKER_VALUE_OUTPUT{"input_tensor_output"};
+    const DFBSpecName WORKER_INDEX_OUTPUT{"index_tensor_output"};
+    const DFBSpecName WORKER_RM_IN_VALUE{"rm_worker_input_value"};
+    const DFBSpecName WORKER_RM_IN_INDEX{"rm_worker_input_index"};
+    const DFBSpecName WORKER_RM_OUT_VALUE{"rm_worker_output_value"};
+    const DFBSpecName WORKER_RM_OUT_INDEX{"rm_worker_output_index"};
+
+    // Staging buffers for the UInt16 software conversion. Both are one raw UInt16 tile, which is
+    // wide enough to also hold a pair-row on the row-major path, so one buffer per direction serves
+    // both layouts. They exist only when the input dtype is UInt16.
+    const DFBSpecName WORKER_UINT16_INPUT_STAGE{"uint16_input_stage"};
+    const DFBSpecName WORKER_UINT16_CONV{"uint16_conv"};
+
+    const SemaphoreSpecName SEM_COORD_TO_CORES{"coordinator_to_cores"};
+    const SemaphoreSpecName SEM_CORES_TO_COORD_READY{"cores_to_coordinator_ready"};
+    const SemaphoreSpecName SEM_CORES_TO_COORD_DONE{"cores_to_coordinator_done"};
+
+    const TensorParamName INPUT_PARAM{"input"};
+    const TensorParamName VALUE_PARAM{"value_output"};
+    const TensorParamName INDEX_PARAM{"index_output"};
+
+    ProgramSpec spec;
+    spec.name = "sort_single_row_multi_core";
 
     // -----------------------------------------------------------------------
-    // Circular buffers (c_0–c_5 on all cores, c_6–c_9 RM-only)
+    // Dataflow buffers
     // -----------------------------------------------------------------------
     constexpr uint32_t buffer_scale_factor = 2;
-    constexpr uint32_t input_tensor_cb_index = tt::CBIndex::c_0;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = buffer_scale_factor * input_tensor_tile_size,
-        .core_ranges = all_core_set,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(input_tensor_cb_index),
-            .data_format = input_tensor_cb_data_format,
-            .page_size = input_tensor_tile_size,
-        }}},
-    });
 
-    constexpr uint32_t index_tensor_cb_index = tt::CBIndex::c_1;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = buffer_scale_factor * index_tensor_tile_size,
-        .core_ranges = all_core_set,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(index_tensor_cb_index),
-            .data_format = index_tensor_cb_data_format,
-            .page_size = index_tensor_tile_size,
-        }}},
-    });
-
-    constexpr uint32_t input_tensor_transposed_cb_index = tt::CBIndex::c_2;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = buffer_scale_factor * input_tensor_tile_size,
-        .core_ranges = all_core_set,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(input_tensor_transposed_cb_index),
-            .data_format = input_tensor_cb_data_format,
-            .page_size = input_tensor_tile_size,
-        }}},
-    });
-
-    constexpr uint32_t index_tensor_transposed_cb_index = tt::CBIndex::c_3;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = buffer_scale_factor * index_tensor_tile_size,
-        .core_ranges = all_core_set,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(index_tensor_transposed_cb_index),
-            .data_format = index_tensor_cb_data_format,
-            .page_size = index_tensor_tile_size,
-        }}},
-    });
-
-    constexpr uint32_t input_tensor_output_cb_index = tt::CBIndex::c_4;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = buffer_scale_factor * value_tensor_tile_size,
-        .core_ranges = all_core_set,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(input_tensor_output_cb_index),
-            .data_format = value_tensor_cb_data_format,
-            .page_size = value_tensor_tile_size,
-        }}},
-    });
-
-    constexpr uint32_t index_tensor_output_cb_index = tt::CBIndex::c_5;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = buffer_scale_factor * index_tensor_tile_size,
-        .core_ranges = all_core_set,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(index_tensor_output_cb_index),
-            .data_format = index_tensor_cb_data_format,
-            .page_size = index_tensor_tile_size,
-        }}},
-    });
-
-    const uint32_t index_element_size = tt::datum_size(index_tensor_cb_data_format);
-    const uint32_t W_index_bytes = tile_width * index_element_size;
-
-    constexpr uint32_t rm_coord_value_row_cb_index = tt::CBIndex::c_6;
-    constexpr uint32_t rm_coord_index_row_cb_index = tt::CBIndex::c_7;
-    constexpr uint32_t rm_worker_input_value_cb_index = tt::CBIndex::c_6;
-    constexpr uint32_t rm_worker_input_index_cb_index = tt::CBIndex::c_7;
-    constexpr uint32_t rm_worker_output_value_cb_index = tt::CBIndex::c_8;
-    constexpr uint32_t rm_worker_output_index_cb_index = tt::CBIndex::c_9;
-    if (is_row_major) {
-        const CoreRangeSet coordinator_core_set{CoreRange(coordinator_core)};
-        constexpr uint32_t TILE_H = tt::constants::TILE_HEIGHT;
-
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = W_tile_bytes,
-            .core_ranges = coordinator_core_set,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(rm_coord_value_row_cb_index),
-                .data_format = input_tensor_cb_data_format,
-                .page_size = W_tile_bytes,
-            }}},
+    if (!is_row_major) {
+        // The coordinator stages one tile at a time through these while copying the input to the
+        // output in DRAM and generating the index tensor there.
+        spec.dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = COORD_INPUT,
+            .entry_size = input_cb_tile_size,
+            .num_entries = buffer_scale_factor,
+            .data_format_metadata = input_cb_data_format,
         });
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = W_index_bytes,
-            .core_ranges = coordinator_core_set,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(rm_coord_index_row_cb_index),
-                .data_format = index_tensor_cb_data_format,
-                .page_size = W_index_bytes,
-            }}},
-        });
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = 2 * TILE_H * W_tile_bytes,
-            .core_ranges = core_range,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(rm_worker_input_value_cb_index),
-                .data_format = input_tensor_cb_data_format,
-                .page_size = W_tile_bytes,
-            }}},
-        });
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = 2 * TILE_H * W_index_bytes,
-            .core_ranges = core_range,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(rm_worker_input_index_cb_index),
-                .data_format = index_tensor_cb_data_format,
-                .page_size = W_index_bytes,
-            }}},
-        });
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = 2 * TILE_H * W_tile_bytes,
-            .core_ranges = core_range,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(rm_worker_output_value_cb_index),
-                .data_format = input_tensor_cb_data_format,
-                .page_size = W_tile_bytes,
-            }}},
-        });
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = 2 * TILE_H * W_index_bytes,
-            .core_ranges = core_range,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(rm_worker_output_index_cb_index),
-                .data_format = index_tensor_cb_data_format,
-                .page_size = W_index_bytes,
-            }}},
+        spec.dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = COORD_INDEX,
+            .entry_size = index_tensor_tile_size,
+            .num_entries = buffer_scale_factor,
+            .data_format_metadata = index_tensor_cb_data_format,
         });
     }
 
-    // Semaphores.  The cores->coordinator channel uses two separate semaphores so a fast
-    // reader's next-row readiness increment can never be miscounted as a sub-stage
-    // confirmation: on one shared counter it could overshoot the coordinator's exact-match
-    // wait and deadlock the op at Ht >= 2.  Readiness -> ready sem; per-pair confirmations
-    // -> done sem.
-    constexpr uint32_t coordinator_to_cores_semaphore_id = 0;
-    constexpr uint32_t cores_to_coordinator_ready_semaphore_id = 1;
-    constexpr uint32_t cores_to_coordinator_done_semaphore_id = 2;
-    desc.semaphores.push_back(SemaphoreDescriptor{
-        .id = coordinator_to_cores_semaphore_id,
-        .core_type = tt::CoreType::WORKER,
-        .core_ranges = all_core_set,
-        .initial_value = 0,
+    spec.dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = WORKER_INPUT,
+        .entry_size = input_cb_tile_size,
+        .num_entries = buffer_scale_factor,
+        .data_format_metadata = input_cb_data_format,
     });
-    desc.semaphores.push_back(SemaphoreDescriptor{
-        .id = cores_to_coordinator_ready_semaphore_id,
-        .core_type = tt::CoreType::WORKER,
-        .core_ranges = all_core_set,
-        .initial_value = 0,
+    spec.dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = WORKER_INDEX,
+        .entry_size = index_tensor_tile_size,
+        .num_entries = buffer_scale_factor,
+        .data_format_metadata = index_tensor_cb_data_format,
     });
-    desc.semaphores.push_back(SemaphoreDescriptor{
-        .id = cores_to_coordinator_done_semaphore_id,
-        .core_type = tt::CoreType::WORKER,
-        .core_ranges = all_core_set,
-        .initial_value = 0,
+    spec.dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = WORKER_INPUT_TRANSPOSED,
+        .entry_size = sort_value_tile_size,
+        .num_entries = buffer_scale_factor,
+        .data_format_metadata = sort_value_cb_data_format,
     });
+    spec.dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = WORKER_INDEX_TRANSPOSED,
+        .entry_size = index_tensor_tile_size,
+        .num_entries = buffer_scale_factor,
+        .data_format_metadata = index_tensor_cb_data_format,
+    });
+    spec.dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = WORKER_VALUE_OUTPUT,
+        .entry_size = sort_value_tile_size,
+        .num_entries = buffer_scale_factor,
+        .data_format_metadata = sort_value_cb_data_format,
+    });
+    spec.dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = WORKER_INDEX_OUTPUT,
+        .entry_size = index_tensor_tile_size,
+        .num_entries = buffer_scale_factor,
+        .data_format_metadata = index_tensor_cb_data_format,
+    });
+
+    // The worker row-major value and index buffers hold pair-rows: each entry is 2 * TILE_W wide,
+    // the concatenation of the left tile's row and the right tile's row. That is what
+    // tilize_block(buffer, 2, out) expects, namely TILE_H rows of 2 * TILE_W elements laid out
+    // contiguously. The reader builds this layout by reading the left half and the right half of
+    // each row into a single reserved entry.
+    //
+    // The coordinator's own row buffers stay at the raw input dtype and one raw row per entry: its
+    // row-major branch only passes raw rows from the input tensor through to the output tensor.
+    const uint32_t W_sort_value_bytes = tile_width * tt::datum_size(sort_value_cb_data_format);
+    const uint32_t W_pair_value_bytes = 2 * W_sort_value_bytes;
+    const uint32_t W_pair_index_bytes = 2 * W_index_bytes;
+
+    if (is_row_major) {
+        constexpr uint32_t TILE_H = tt::constants::TILE_HEIGHT;
+
+        spec.dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = COORD_VALUE_ROW,
+            .entry_size = W_tile_bytes,
+            .num_entries = 1,
+            .data_format_metadata = input_tensor_cb_data_format,
+        });
+        spec.dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = COORD_INDEX_ROW,
+            .entry_size = W_index_bytes,
+            .num_entries = 1,
+            .data_format_metadata = index_tensor_cb_data_format,
+        });
+        spec.dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = WORKER_RM_IN_VALUE,
+            .entry_size = W_pair_value_bytes,
+            .num_entries = TILE_H,
+            .data_format_metadata = sort_value_cb_data_format,
+        });
+        spec.dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = WORKER_RM_IN_INDEX,
+            .entry_size = W_pair_index_bytes,
+            .num_entries = TILE_H,
+            .data_format_metadata = index_tensor_cb_data_format,
+        });
+        spec.dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = WORKER_RM_OUT_VALUE,
+            .entry_size = W_pair_value_bytes,
+            .num_entries = TILE_H,
+            .data_format_metadata = sort_value_cb_data_format,
+        });
+        spec.dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = WORKER_RM_OUT_INDEX,
+            .entry_size = W_pair_index_bytes,
+            .num_entries = TILE_H,
+            .data_format_metadata = index_tensor_cb_data_format,
+        });
+    }
+
+    if (is_uint16_input) {
+        // The reader stages raw UInt16 data here before converting it to Float32, and the writer
+        // converts sorted Float32 values back into its own staging buffer before writing to DRAM.
+        // Each is both produced and consumed by the single kernel that owns it.
+        const uint32_t uint16_one_tile_size = tile_size(tt::DataFormat::UInt16);
+        spec.dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = WORKER_UINT16_INPUT_STAGE,
+            .entry_size = uint16_one_tile_size,
+            .num_entries = 1,
+            .data_format_metadata = tt::DataFormat::UInt16,
+        });
+        spec.dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = WORKER_UINT16_CONV,
+            .entry_size = uint16_one_tile_size,
+            .num_entries = 1,
+            .data_format_metadata = tt::DataFormat::UInt16,
+        });
+    }
+
+    // -----------------------------------------------------------------------
+    // Semaphores. The cores to coordinator channel uses two separate semaphores so a fast reader's
+    // next-row readiness increment can never be miscounted as a sub-stage confirmation: on one
+    // shared counter it could overshoot the coordinator's exact-match wait and deadlock the op at
+    // Ht >= 2. Readiness goes to the ready semaphore, per-pair confirmations to the done semaphore.
+    // -----------------------------------------------------------------------
+    spec.semaphores.push_back(SemaphoreSpec{.unique_id = SEM_COORD_TO_CORES, .target_nodes = all_core_set});
+    spec.semaphores.push_back(SemaphoreSpec{.unique_id = SEM_CORES_TO_COORD_READY, .target_nodes = all_core_set});
+    spec.semaphores.push_back(SemaphoreSpec{.unique_id = SEM_CORES_TO_COORD_DONE, .target_nodes = all_core_set});
+
+    // -----------------------------------------------------------------------
+    // Tensor parameters
+    // -----------------------------------------------------------------------
+    spec.tensor_parameters.push_back(
+        TensorParameter{.unique_id = INPUT_PARAM, .spec = input_mesh_tensor.tensor_spec()});
+    spec.tensor_parameters.push_back(
+        TensorParameter{.unique_id = VALUE_PARAM, .spec = value_mesh_tensor.tensor_spec()});
+    spec.tensor_parameters.push_back(
+        TensorParameter{.unique_id = INDEX_PARAM, .spec = index_mesh_tensor.tensor_spec()});
+
+    // -----------------------------------------------------------------------
+    // Kernel resource bindings
+    // -----------------------------------------------------------------------
+    Group<DFBBinding> coordinator_dfb_bindings;
+    Group<DFBBinding> reader_dfb_bindings;
+    Group<DFBBinding> writer_dfb_bindings;
+    Group<DFBBinding> compute_dfb_bindings;
+
+    // The coordinator both fills its staging buffers from DRAM and drains them back, so it holds
+    // both ends of each.
+    if (is_row_major) {
+        coordinator_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = COORD_VALUE_ROW,
+            .accessor_name = "rm_coord_value_row",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        });
+        coordinator_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = COORD_VALUE_ROW,
+            .accessor_name = "rm_coord_value_row",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        });
+        coordinator_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = COORD_INDEX_ROW,
+            .accessor_name = "rm_coord_index_row",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        });
+        coordinator_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = COORD_INDEX_ROW,
+            .accessor_name = "rm_coord_index_row",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        });
+    } else {
+        coordinator_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = COORD_INPUT,
+            .accessor_name = "input_tensor",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        });
+        coordinator_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = COORD_INPUT,
+            .accessor_name = "input_tensor",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        });
+        coordinator_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = COORD_INDEX,
+            .accessor_name = "index_tensor",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        });
+        coordinator_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = COORD_INDEX,
+            .accessor_name = "index_tensor",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        });
+    }
+
+    if (is_row_major) {
+        reader_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = WORKER_RM_IN_VALUE,
+            .accessor_name = "rm_input_value",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        });
+        reader_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = WORKER_RM_IN_INDEX,
+            .accessor_name = "rm_input_index",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        });
+    } else {
+        reader_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = WORKER_INPUT,
+            .accessor_name = "input_tensor",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        });
+        reader_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = WORKER_INDEX,
+            .accessor_name = "index_tensor",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        });
+    }
+
+    if (is_uint16_input) {
+        // The reader fills the staging buffer over the NoC and then reads it back to convert each
+        // element, so it holds both ends by itself.
+        reader_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = WORKER_UINT16_INPUT_STAGE,
+            .accessor_name = "uint16_input_stage",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        });
+        reader_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = WORKER_UINT16_INPUT_STAGE,
+            .accessor_name = "uint16_input_stage",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        });
+    }
+
+    if (is_row_major) {
+        writer_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = WORKER_RM_OUT_VALUE,
+            .accessor_name = "rm_output_value",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        });
+        writer_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = WORKER_RM_OUT_INDEX,
+            .accessor_name = "rm_output_index",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        });
+    } else {
+        writer_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = WORKER_VALUE_OUTPUT,
+            .accessor_name = "input_tensor_output",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        });
+        writer_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = WORKER_INDEX_OUTPUT,
+            .accessor_name = "index_tensor_output",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        });
+    }
+
+    if (is_uint16_input) {
+        // Mirror of the reader's staging buffer: the writer fills it with converted values and then
+        // sources its own NoC write from it.
+        writer_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = WORKER_UINT16_CONV,
+            .accessor_name = "uint16_conv",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        });
+        writer_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = WORKER_UINT16_CONV,
+            .accessor_name = "uint16_conv",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        });
+    }
+
+    // In ROW_MAJOR the compute kernel fills the tile-format buffers itself from the tilize and
+    // drains the output ones through pack_untilize, so it holds both ends of all four.
+    if (is_row_major) {
+        compute_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = WORKER_INPUT,
+            .accessor_name = "input_tensor",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        });
+        compute_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = WORKER_INDEX,
+            .accessor_name = "index_tensor",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        });
+    }
+    compute_dfb_bindings.push_back(DFBBinding{
+        .dfb_spec_name = WORKER_INPUT,
+        .accessor_name = "input_tensor",
+        .endpoint_type = DFBEndpointType::CONSUMER,
+    });
+    compute_dfb_bindings.push_back(DFBBinding{
+        .dfb_spec_name = WORKER_INDEX,
+        .accessor_name = "index_tensor",
+        .endpoint_type = DFBEndpointType::CONSUMER,
+    });
+    compute_dfb_bindings.push_back(DFBBinding{
+        .dfb_spec_name = WORKER_INPUT_TRANSPOSED,
+        .accessor_name = "input_tensor_transposed",
+        .endpoint_type = DFBEndpointType::PRODUCER,
+    });
+    compute_dfb_bindings.push_back(DFBBinding{
+        .dfb_spec_name = WORKER_INPUT_TRANSPOSED,
+        .accessor_name = "input_tensor_transposed",
+        .endpoint_type = DFBEndpointType::CONSUMER,
+    });
+    compute_dfb_bindings.push_back(DFBBinding{
+        .dfb_spec_name = WORKER_INDEX_TRANSPOSED,
+        .accessor_name = "index_tensor_transposed",
+        .endpoint_type = DFBEndpointType::PRODUCER,
+    });
+    compute_dfb_bindings.push_back(DFBBinding{
+        .dfb_spec_name = WORKER_INDEX_TRANSPOSED,
+        .accessor_name = "index_tensor_transposed",
+        .endpoint_type = DFBEndpointType::CONSUMER,
+    });
+    compute_dfb_bindings.push_back(DFBBinding{
+        .dfb_spec_name = WORKER_VALUE_OUTPUT,
+        .accessor_name = "input_tensor_output",
+        .endpoint_type = DFBEndpointType::PRODUCER,
+    });
+    compute_dfb_bindings.push_back(DFBBinding{
+        .dfb_spec_name = WORKER_INDEX_OUTPUT,
+        .accessor_name = "index_tensor_output",
+        .endpoint_type = DFBEndpointType::PRODUCER,
+    });
+    if (is_row_major) {
+        compute_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = WORKER_VALUE_OUTPUT,
+            .accessor_name = "input_tensor_output",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        });
+        compute_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = WORKER_INDEX_OUTPUT,
+            .accessor_name = "index_tensor_output",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        });
+        compute_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = WORKER_RM_IN_VALUE,
+            .accessor_name = "rm_input_value",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        });
+        compute_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = WORKER_RM_IN_INDEX,
+            .accessor_name = "rm_input_index",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        });
+        compute_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = WORKER_RM_OUT_VALUE,
+            .accessor_name = "rm_output_value",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        });
+        compute_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = WORKER_RM_OUT_INDEX,
+            .accessor_name = "rm_output_index",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        });
+    }
 
     // -----------------------------------------------------------------------
     // Kernels
@@ -1487,174 +1921,222 @@ ProgramDescriptor SortProgramFactorySingleRowMultiCore::create_descriptor(
     const auto coordinator_core_physical_coord = device->worker_core_from_logical_core(coordinator_core);
     const auto start_core_logical = core_range.ranges()[0].start_coord;
     const auto start_core_physical_coord = device->worker_core_from_logical_core(start_core_logical);
-    const auto end_core_physical_coord = device->worker_core_from_logical_core(coordinator_core);
 
-    std::vector<uint32_t> coordinator_compile_time_args = {
-        total_work_units,
-        Wt,
-        Ht,
-        total_number_of_cores,
-        number_of_available_cores,
-        input_tensor_cb_index,
-        index_tensor_cb_index,
-        static_cast<uint32_t>(is_32_bit_data)};
-    TensorAccessorArgs(*input_buffer).append_to(coordinator_compile_time_args);
-    TensorAccessorArgs(*value_buffer).append_to(coordinator_compile_time_args);
-    TensorAccessorArgs(*index_buffer).append_to(coordinator_compile_time_args);
+    // Coordinator's `set_multicast(..., num_dests)` requires `num_dests` to match the
+    // number of actual destinations in the multicast rectangle (per dataflow_api.h:
+    // "when mcasting to an 8x8 grid that includes self, num_dests should be 63").
+    //
+    // In the FULL-GRID case core_range spans (0,0)..(grid_x-1,grid_y-1) minus the
+    // coord corner (63 workers on an 8x8 grid).  The bounding box then covers the
+    // full grid including the coord, so multicasting to it with num_dests == 63
+    // matches: rect size (64) − src (coord in rect) = 63.
+    //
+    // In the PARTIAL-GRID case core_range is a strict sub-rectangle of the grid
+    // that does NOT contain the coord (e.g. Wt=64 → workers at (0,0)-(7,3), coord
+    // at (7,7)).  Previously we still passed the coord as the multicast end coord,
+    // which produced a rectangle covering all 63 non-coord cores while
+    // `num_dests` counted only the 32 workers.  The NoC then acknowledged 63
+    // destinations while the coord's barrier only accounted for 32 → NoC ack
+    // counter drift → workers never get the "go" semaphore → hang.
+    //
+    // Fix: derive the multicast rectangle from `core_range.bounding_box()` and
+    // compute `num_multicast_dests` from the bounding-box size (subtracting one
+    // when the coord — the multicast source — is inside the bbox, since
+    // `noc_semaphore_set_multicast` does not deliver to self).  `num_workers`
+    // (used for the coord's `wait()` on per-worker signals) stays as
+    // `core_range.num_cores()`.
+    const CoreRange multicast_bbox = core_range.bounding_box();
+    const auto end_core_physical_coord = device->worker_core_from_logical_core(multicast_bbox.end_coord);
+    const bool coord_in_multicast_bbox = multicast_bbox.contains(coordinator_core);
+    const uint32_t num_multicast_dests =
+        static_cast<uint32_t>(multicast_bbox.size()) - (coord_in_multicast_bbox ? 1u : 0u);
+    const uint32_t num_workers = static_cast<uint32_t>(core_range.num_cores());
 
-    coordinator_compile_time_args.push_back(static_cast<uint32_t>(is_row_major));
-    coordinator_compile_time_args.push_back(static_cast<uint32_t>(rm_coord_value_row_cb_index));
-    coordinator_compile_time_args.push_back(static_cast<uint32_t>(rm_coord_index_row_cb_index));
-    coordinator_compile_time_args.push_back(W_tile_bytes);
-    coordinator_compile_time_args.push_back(W_index_bytes);
-    coordinator_compile_time_args.push_back(tile_width);
+    spec.kernels.push_back(KernelSpec{
+        .unique_id = COORDINATOR,
+        .source = "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/"
+                  "coordinator_single_row_multi_core.cpp",
+        .compiler_options = {.defines = sort_kernel_defines(is_row_major, is_uint16_input)},
+        .dfb_bindings = std::move(coordinator_dfb_bindings),
+        .semaphore_bindings =
+            {
+                SemaphoreBinding{.semaphore_spec_name = SEM_COORD_TO_CORES, .accessor_name = "coordinator_to_cores"},
+                SemaphoreBinding{
+                    .semaphore_spec_name = SEM_CORES_TO_COORD_READY, .accessor_name = "cores_to_coordinator_ready"},
+                SemaphoreBinding{
+                    .semaphore_spec_name = SEM_CORES_TO_COORD_DONE, .accessor_name = "cores_to_coordinator_done"},
+            },
+        .tensor_bindings =
+            {
+                TensorBinding{.tensor_parameter_name = INPUT_PARAM, .accessor_name = "input_tensor"},
+                TensorBinding{.tensor_parameter_name = VALUE_PARAM, .accessor_name = "output_tensor"},
+                TensorBinding{.tensor_parameter_name = INDEX_PARAM, .accessor_name = "output_index_tensor"},
+            },
+        .compile_time_args =
+            {
+                {"Wt", Wt},
+                {"Ht", Ht},
+                {"is_32_bit_data", static_cast<uint32_t>(is_32_bit_data)},
+                {"W_tile_bytes", W_tile_bytes},
+                {"W_index_bytes", W_index_bytes},
+                {"tile_width", static_cast<uint32_t>(tile_width)},
+            },
+        .runtime_arg_schema =
+            {.runtime_arg_names =
+                 {"start_core_physical_coord_x",
+                  "start_core_physical_coord_y",
+                  "end_core_physical_coord_x",
+                  "end_core_physical_coord_y",
+                  "number_of_workers",
+                  "num_multicast_dests"}},
+        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+    });
 
-    KernelDescriptor coordinator_desc;
-    coordinator_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/coordinator_single_row_multi_core.cpp";
-    coordinator_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    coordinator_desc.core_ranges = CoreRangeSet(CoreRange(coordinator_core));
-    coordinator_desc.compile_time_args = std::move(coordinator_compile_time_args);
-    coordinator_desc.config = ReaderConfigDescriptor{};
-    coordinator_desc.emplace_runtime_args(
-        coordinator_core,
-        {static_cast<uint32_t>(start_core_physical_coord.x),
-         static_cast<uint32_t>(start_core_physical_coord.y),
-         static_cast<uint32_t>(end_core_physical_coord.x),
-         static_cast<uint32_t>(end_core_physical_coord.y),
-         coordinator_to_cores_semaphore_id,
-         cores_to_coordinator_ready_semaphore_id,
-         cores_to_coordinator_done_semaphore_id,
-         static_cast<uint32_t>(core_range.num_cores()),
-         input_buffer,
-         value_buffer,
-         index_buffer});
+    // The workers read their input from the value-output buffer: the coordinator has already copied
+    // the input tensor there and generated the index tensor alongside it, and the sort then runs in
+    // place in those two output buffers.
+    spec.kernels.push_back(KernelSpec{
+        .unique_id = READER,
+        .source = "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/"
+                  "reader_single_row_multi_core.cpp",
+        .compiler_options = {.defines = sort_kernel_defines(is_row_major, is_uint16_input)},
+        .dfb_bindings = std::move(reader_dfb_bindings),
+        .semaphore_bindings =
+            {
+                SemaphoreBinding{.semaphore_spec_name = SEM_COORD_TO_CORES, .accessor_name = "coordinator_to_cores"},
+                SemaphoreBinding{
+                    .semaphore_spec_name = SEM_CORES_TO_COORD_READY, .accessor_name = "cores_to_coordinator_ready"},
+            },
+        .tensor_bindings =
+            {
+                TensorBinding{.tensor_parameter_name = VALUE_PARAM, .accessor_name = "input_tensor"},
+                TensorBinding{.tensor_parameter_name = INDEX_PARAM, .accessor_name = "index_tensor"},
+            },
+        .compile_time_args =
+            {
+                {"Wt", Wt},
+                {"Ht", Ht},
+                {"compute_with_storage_grid_size_x", static_cast<uint32_t>(compute_with_storage_grid_size.x)},
+                {"number_of_available_cores", number_of_available_cores},
+                {"W_tile_bytes", W_tile_bytes},
+                {"W_index_bytes", W_index_bytes},
+            },
+        // The coordinator sits on one fixed core, so every worker addresses the same pair of
+        // coordinates. Broadcasting them as common arguments keeps one copy per program instead
+        // of one per worker node.
+        .runtime_arg_schema =
+            {.common_runtime_arg_names = {"coordinator_core_physical_coord_x", "coordinator_core_physical_coord_y"}},
+        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+    });
 
-    std::vector<uint32_t> reader_compile_time_args = {
-        input_tensor_cb_index,
-        index_tensor_cb_index,
-        Wt,
-        Ht,
-        total_number_of_cores,
-        compute_with_storage_grid_size.x,
-        compute_with_storage_grid_size.y,
-        number_of_available_cores};
-    TensorAccessorArgs(*value_buffer).append_to(reader_compile_time_args);
-    TensorAccessorArgs(*index_buffer).append_to(reader_compile_time_args);
+    spec.kernels.push_back(KernelSpec{
+        .unique_id = WRITER,
+        .source = "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/"
+                  "writer_single_row_multi_core.cpp",
+        .compiler_options = {.defines = sort_kernel_defines(is_row_major, is_uint16_input)},
+        .dfb_bindings = std::move(writer_dfb_bindings),
+        .semaphore_bindings =
+            {
+                SemaphoreBinding{
+                    .semaphore_spec_name = SEM_CORES_TO_COORD_DONE, .accessor_name = "cores_to_coordinator_done"},
+            },
+        .tensor_bindings =
+            {
+                TensorBinding{.tensor_parameter_name = VALUE_PARAM, .accessor_name = "input_tensor"},
+                TensorBinding{.tensor_parameter_name = INDEX_PARAM, .accessor_name = "index_tensor"},
+            },
+        .compile_time_args =
+            {
+                {"Wt", Wt},
+                {"Ht", Ht},
+                {"compute_with_storage_grid_size_x", static_cast<uint32_t>(compute_with_storage_grid_size.x)},
+                {"number_of_available_cores", number_of_available_cores},
+                {"W_tile_bytes", W_tile_bytes},
+                {"W_index_bytes", W_index_bytes},
+            },
+        // See the reader above: one fixed coordinator core means one value for every worker.
+        .runtime_arg_schema =
+            {.common_runtime_arg_names = {"coordinator_core_physical_coord_x", "coordinator_core_physical_coord_y"}},
+        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+    });
 
-    // ROW_MAJOR args for reader (appended after TensorAccessorArgs).
-    reader_compile_time_args.push_back(static_cast<uint32_t>(is_row_major));
-    reader_compile_time_args.push_back(static_cast<uint32_t>(rm_worker_input_value_cb_index));
-    reader_compile_time_args.push_back(static_cast<uint32_t>(rm_worker_input_index_cb_index));
-    reader_compile_time_args.push_back(W_tile_bytes);
-    reader_compile_time_args.push_back(W_index_bytes);
-
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/reader_single_row_multi_core.cpp";
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = core_range;
-    reader_desc.compile_time_args = std::move(reader_compile_time_args);
-    reader_desc.config = ReaderConfigDescriptor{};
-
-    std::vector<uint32_t> writer_compile_time_args = {
-        input_tensor_output_cb_index,
-        index_tensor_output_cb_index,
-        Wt,
-        Ht,
-        total_number_of_cores,
-        compute_with_storage_grid_size.x,
-        compute_with_storage_grid_size.y,
-        number_of_available_cores};
-    TensorAccessorArgs(*value_buffer).append_to(writer_compile_time_args);
-    TensorAccessorArgs(*index_buffer).append_to(writer_compile_time_args);
-
-    // ROW_MAJOR args for writer.
-    writer_compile_time_args.push_back(static_cast<uint32_t>(is_row_major));
-    writer_compile_time_args.push_back(static_cast<uint32_t>(rm_worker_output_value_cb_index));
-    writer_compile_time_args.push_back(static_cast<uint32_t>(rm_worker_output_index_cb_index));
-    writer_compile_time_args.push_back(W_tile_bytes);
-    writer_compile_time_args.push_back(W_index_bytes);
-
-    KernelDescriptor writer_desc;
-    writer_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/writer_single_row_multi_core.cpp";
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = core_range;
-    writer_desc.compile_time_args = std::move(writer_compile_time_args);
-    writer_desc.config = WriterConfigDescriptor{};
-
-    // Worker per-core runtime args.  The coordinator core is excluded — its args
-    // are emplaced separately above on the coordinator kernel.
-    for (const auto& cr : core_range.ranges()) {
-        for (const auto& core : cr) {
-            reader_desc.emplace_runtime_args(
-                core,
-                {value_buffer,
-                 index_buffer,
-                 static_cast<uint32_t>(coordinator_core_physical_coord.x),
-                 static_cast<uint32_t>(coordinator_core_physical_coord.y),
-                 coordinator_to_cores_semaphore_id,
-                 cores_to_coordinator_ready_semaphore_id});
-            writer_desc.emplace_runtime_args(
-                core,
-                {value_buffer,
-                 index_buffer,
-                 static_cast<uint32_t>(coordinator_core_physical_coord.x),
-                 static_cast<uint32_t>(coordinator_core_physical_coord.y),
-                 coordinator_to_cores_semaphore_id,
-                 cores_to_coordinator_done_semaphore_id});
+    ComputeGen1Config compute_hw_config{.enable_32_bit_dest = is_32_bit_data};
+    if (input_tensor_cb_data_format == tt::DataFormat::Float32 || is_uint16_input) {
+        // Only buffers this configuration actually binds may appear here, and an absent entry
+        // means UnpackToSrc. Float32 operands are unpacked straight to Dest so the sort keeps full
+        // precision; the index buffers stay on the default path.
+        compute_hw_config.unpack_modes.insert({WORKER_INPUT, UnpackMode::UnpackToDest});
+        compute_hw_config.unpack_modes.insert({WORKER_INPUT_TRANSPOSED, UnpackMode::UnpackToDest});
+        compute_hw_config.unpack_modes.insert({WORKER_VALUE_OUTPUT, UnpackMode::UnpackToDest});
+        if (is_row_major) {
+            compute_hw_config.unpack_modes.insert({WORKER_RM_IN_VALUE, UnpackMode::UnpackToDest});
         }
     }
 
-    std::vector<uint32_t> compute_compile_time_args = {
-        input_tensor_cb_index,
-        index_tensor_cb_index,
-        input_tensor_transposed_cb_index,
-        index_tensor_transposed_cb_index,
-        input_tensor_output_cb_index,
-        index_tensor_output_cb_index,
-        Wt,
-        Ht,
-        number_of_available_cores,
-        compute_with_storage_grid_size.x,
-        compute_with_storage_grid_size.y,
-        static_cast<uint32_t>(attributes.descending),
-        static_cast<uint32_t>(attributes.stable),
-        log2Wt};
-    compute_compile_time_args.push_back(static_cast<uint32_t>(is_row_major));
-    compute_compile_time_args.push_back(static_cast<uint32_t>(rm_worker_input_value_cb_index));
-    compute_compile_time_args.push_back(static_cast<uint32_t>(rm_worker_input_index_cb_index));
-    compute_compile_time_args.push_back(static_cast<uint32_t>(rm_worker_output_value_cb_index));
-    compute_compile_time_args.push_back(static_cast<uint32_t>(rm_worker_output_index_cb_index));
-    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode_vector(
-        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
-    if (input_tensor_cb_data_format == tt::DataFormat::Float32) {
-        unpack_to_dest_mode_vector[input_tensor_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-        unpack_to_dest_mode_vector[input_tensor_transposed_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-        unpack_to_dest_mode_vector[input_tensor_output_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-        unpack_to_dest_mode_vector[rm_worker_input_value_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-    }
+    spec.kernels.push_back(KernelSpec{
+        .unique_id = COMPUTE,
+        .source = "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/compute/"
+                  "sort_single_row_multi_core.cpp",
+        // Compute kernels build at O3; the compiler-options default is O2, so the level is stated
+        // explicitly rather than inherited.
+        .compiler_options =
+            {.defines = sort_kernel_defines(is_row_major, is_uint16_input),
+             .opt_level = KernelSpec::CompilerOptions::OptLevel::O3},
+        .dfb_bindings = std::move(compute_dfb_bindings),
+        .compile_time_args =
+            {
+                {"Wt", Wt},
+                {"Ht", Ht},
+                {"number_of_available_cores", number_of_available_cores},
+                {"compute_with_storage_grid_size_x", static_cast<uint32_t>(compute_with_storage_grid_size.x)},
+                {"descending", static_cast<uint32_t>(attributes.descending)},
+                {"stable", static_cast<uint32_t>(attributes.stable)},
+                {"log2Wt", log2Wt},
+            },
+        .hw_config = ComputeHardwareConfig{compute_hw_config},
+    });
 
-    KernelDescriptor compute_desc;
-    compute_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/compute/sort_single_row_multi_core.cpp";
-    compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    compute_desc.core_ranges = core_range;
-    compute_desc.compile_time_args = std::move(compute_compile_time_args);
-    if (uint16_in_fp32_dest) {
-        compute_desc.defines = {{"TOPK_UINT16_FP32_DEST", "1"}};
-    }
-    compute_desc.config = ComputeConfigDescriptor{
-        .fp32_dest_acc_en = is_32_bit_data,
-        .unpack_to_dest_mode = std::move(unpack_to_dest_mode_vector),
+    spec.work_units.push_back(WorkUnitSpec{
+        .name = "coordinator",
+        .kernels = {COORDINATOR},
+        .target_nodes = CoreRangeSet(CoreRange(coordinator_core)),
+    });
+    spec.work_units.push_back(WorkUnitSpec{
+        .name = "workers",
+        .kernels = {READER, WRITER, COMPUTE},
+        .target_nodes = core_range,
+    });
+
+    // -----------------------------------------------------------------------
+    // Run args
+    // -----------------------------------------------------------------------
+    KernelRunArgs coordinator_run_args{
+        .kernel = COORDINATOR,
+        .runtime_arg_values = MakeRuntimeArgsForSingleNode(
+            coordinator_core,
+            {{"start_core_physical_coord_x", static_cast<uint32_t>(start_core_physical_coord.x)},
+             {"start_core_physical_coord_y", static_cast<uint32_t>(start_core_physical_coord.y)},
+             {"end_core_physical_coord_x", static_cast<uint32_t>(end_core_physical_coord.x)},
+             {"end_core_physical_coord_y", static_cast<uint32_t>(end_core_physical_coord.y)},
+             {"number_of_workers", num_workers},
+             {"num_multicast_dests", num_multicast_dests}}),
     };
 
-    desc.kernels.push_back(std::move(coordinator_desc));
-    desc.kernels.push_back(std::move(reader_desc));
-    desc.kernels.push_back(std::move(writer_desc));
-    desc.kernels.push_back(std::move(compute_desc));
+    const KernelRunArgs::CommonRuntimeArgValues coordinator_coord_args{
+        {"coordinator_core_physical_coord_x", static_cast<uint32_t>(coordinator_core_physical_coord.x)},
+        {"coordinator_core_physical_coord_y", static_cast<uint32_t>(coordinator_core_physical_coord.y)}};
 
-    return desc;
+    KernelRunArgs reader_run_args{.kernel = READER, .common_runtime_arg_values = coordinator_coord_args};
+    KernelRunArgs writer_run_args{.kernel = WRITER, .common_runtime_arg_values = coordinator_coord_args};
+
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args.push_back(std::move(coordinator_run_args));
+    run_args.kernel_run_args.push_back(std::move(reader_run_args));
+    run_args.kernel_run_args.push_back(std::move(writer_run_args));
+    run_args.tensor_args.emplace(INPUT_PARAM, input_mesh_tensor);
+    run_args.tensor_args.emplace(VALUE_PARAM, value_mesh_tensor);
+    run_args.tensor_args.emplace(INDEX_PARAM, index_mesh_tensor);
+
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 }  // namespace ttnn::prim

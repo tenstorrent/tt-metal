@@ -13,6 +13,7 @@
 #include "ckernel_template.h"
 #include "llk_assert.h"
 #include "llk_defs.h"
+#include "llk_tdma_guard.h"
 #include "tensix_types.h"
 #include "tensor_shape.h"
 

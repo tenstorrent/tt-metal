@@ -279,7 +279,8 @@ jobs:
           # compile edge; the build preset's -k0 keeps going so all fixes still export.
           cmake --preset clang-tidy-fix-parallel \
             -DCMAKE_CXX_CLANG_TIDY="$(pwd)/cmake/clang-tidy-export-fixes-wrapper.sh;$(pwd)/.build/clang-tidy/fixes;--warnings-as-errors=*" \
-            -DCMAKE_C_CLANG_TIDY="$(pwd)/cmake/clang-tidy-export-fixes-wrapper.sh;$(pwd)/.build/clang-tidy/fixes;--warnings-as-errors=*"
+            -DCMAKE_C_CLANG_TIDY="$(pwd)/cmake/clang-tidy-export-fixes-wrapper.sh;$(pwd)/.build/clang-tidy/fixes;--warnings-as-errors=*" \
+            -DTT_USE_SYSTEM_SFPI=ON
 
       - name: Pack CPM cache
         if: steps.cpm-cache.outputs.cache-hit != 'true'

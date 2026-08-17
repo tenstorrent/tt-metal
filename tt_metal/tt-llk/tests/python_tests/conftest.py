@@ -43,7 +43,7 @@ from helpers.device import LLKAssertException
 from helpers.exalens_server import ExalensServer
 from helpers.format_config import InputOutputFormat
 from helpers.logger import configure_logger, logger
-from helpers.perf import PerfConfig, PerfReport, combine_perf_reports
+from helpers.perf.core import PerfConfig, PerfReport, combine_perf_reports
 from helpers.test_config import BuildMode, TestConfig, process_coverage_run_artefacts
 from ttexalens import check_context, tt_exalens_init
 from ttexalens.tt_exalens_lib import get_tensix_state
@@ -867,7 +867,7 @@ def counter_report(request, worker_id):
 
     PerfConfig.COUNTER_REPORT = None
 
-    if TestConfig.MODE == TestMode.PRODUCE:
+    if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
         return
 
     if PerfConfig.TEST_COUNTER == 0:
@@ -957,6 +957,21 @@ skip_for_blackhole = pytest.mark.skipif(
 skip_for_quasar = pytest.mark.skipif(
     get_chip_architecture() == ChipArchitecture.QUASAR,
     reason="Test is not supported on Quasar architecture",
+)
+
+wormhole_only = pytest.mark.skipif(
+    get_chip_architecture() != ChipArchitecture.WORMHOLE,
+    reason="Test is only supported on Wormhole architecture",
+)
+
+blackhole_only = pytest.mark.skipif(
+    get_chip_architecture() != ChipArchitecture.BLACKHOLE,
+    reason="Test is only supported on Blackhole architecture",
+)
+
+quasar_only = pytest.mark.skipif(
+    get_chip_architecture() != ChipArchitecture.QUASAR,
+    reason="Test is only supported on Quasar architecture",
 )
 
 skip_for_coverage = pytest.mark.skipif(

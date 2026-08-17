@@ -14,7 +14,6 @@ void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
 
     constexpr uint32_t num_tiles_per_cycle = get_compile_time_arg_val(0);
-    // DPRINT("num_tiles_per_cycle: {}\n", num_tiles_per_cycle);
     constexpr auto cb_pre_lhs_id = tt::CBIndex::c_0;
     constexpr auto cb_pre_rhs_id = tt::CBIndex::c_1;
 

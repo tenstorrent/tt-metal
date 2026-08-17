@@ -4,7 +4,6 @@
 
 #include <stdint.h>
 #include <api/dataflow/dataflow_api.h>
-#include "api/debug/dprint.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
 void kernel_main() {

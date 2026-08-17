@@ -510,6 +510,7 @@ def test_glm_kv_cache_table(
         sp_axis=sp_axis,
         tp_axis=tp_axis,
         is_chunked=True,
+        active_seq_len=chunk_size_global,
         slot_num=1,
         layer_num=1,
     )
@@ -724,6 +725,7 @@ def test_glm52_kv_cache_table(
         sp_axis=sp_axis,
         tp_axis=tp_axis,
         is_chunked=True,
+        active_seq_len=chunk_size_global,
         slot_num=1,
         layer_num=1,
     )

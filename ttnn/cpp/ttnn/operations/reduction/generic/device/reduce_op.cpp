@@ -96,8 +96,16 @@ Tensor reduce(
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids,
     bool negate,
-    bool use_row_major_support,
-    bool fast_and_approximate_mode) {
+    bool fast_and_approximate_mode,
+    const std::optional<tt::tt_metal::Layout>& output_layout) {
+    // Only ttnn::sum / ttnn::mean expose output_layout and convert when the device path can't emit it.
+    // Checked before the MIN branch, which would drop the request silently.
+    TT_FATAL(
+        !output_layout.has_value() || reduce_math == tt::tt_metal::ReduceOpMath::SUM ||
+            reduce_math == tt::tt_metal::ReduceOpMath::AVG,
+        "output_layout is only supported for sum (SUM) and mean (AVG) reductions, got {}",
+        reduce_math);
+
     if (reduce_math == tt::tt_metal::ReduceOpMath::MIN && input_tensor.dtype() != tt::tt_metal::DataType::INT32) {
         return reduce_min(input_tensor, reduce_dim, scaler, output_mem_config, compute_kernel_config, sub_core_grids);
     }
@@ -137,23 +145,27 @@ Tensor reduce(
     // MAX/MIN are excluded because the RM compute kernel accumulates partial reductions via
     // Accumulate::at across chunks, and the cross-chunk fold uses SUM semantics. Wiring MAX
     // accumulation through that pipeline is doable but not yet done; for now they tilize.
-    //
-    // The path is opt-in via use_row_major_support: when false (the default), eligibility is forced
-    // off and the op always tilizes through the classic tile-reduce kernels. Default-off because the
-    // dense RM path currently regresses perf and can hang on tall (multi-H-tile) reduces; flip on
-    // only once those are fixed.
     const bool both_interleaved =
         input_tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED &&
         output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED;
     const bool rm_base_eligible =
-        use_row_major_support && input_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR &&
-        input_tensor.logical_shape().rank() == 4 && both_interleaved &&
+        input_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR && input_tensor.logical_shape().rank() == 4 &&
+        both_interleaved &&
         (input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16 ||
          input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32) &&
         (reduce_math == tt::tt_metal::ReduceOpMath::AVG || reduce_math == tt::tt_metal::ReduceOpMath::SUM);
-    const bool use_rm_dense_w = rm_base_eligible && reduce_dim == tt::tt_metal::ReduceOpDim::W;
+
+    // A TILE request must be explicit: std::nullopt means "whatever the selected path emits".
+    // The RM H path can emit both layouts, so it stays eligible; the RM W path can emit only
+    // ROW_MAJOR, so a TILE request sends it back to the tilize + tile-reduce path.
+    const bool explicit_tile_request = output_layout == tt::tt_metal::Layout::TILE;
+    const bool use_rm_dense_w =
+        rm_base_eligible && reduce_dim == tt::tt_metal::ReduceOpDim::W && !explicit_tile_request;
     const bool use_rm_dense_h = rm_base_eligible && reduce_dim == tt::tt_metal::ReduceOpDim::H;
     const bool use_rm_dense = use_rm_dense_w || use_rm_dense_h;
+    // Layout the dense RM path will be asked to produce; ROW_MAJOR unless TILE was requested.
+    const auto rm_dense_out_layout =
+        explicit_tile_request ? tt::tt_metal::Layout::TILE : tt::tt_metal::Layout::ROW_MAJOR;
 
     // High-level mean uses AVG with scaler (1/N). On the tiled path, GMPOOL AVG matches that intent. On the dense
     // row-major W/H path we tilize one logical row at a time from a narrow RM page; AVG applies an extra normalization
@@ -167,10 +179,10 @@ Tensor reduce(
     }
 
     // Reduce only works with tile layout on the classic path; dense path keeps row-major input.
-    Tensor tilized_input = input_tensor;
+    Tensor prepared_input = input_tensor;
     if (!use_rm_dense) {
         auto padded_shape = ttnn::operations::data_movement::pad_to_tile_shape(input_tensor.padded_shape());
-        tilized_input = ttnn::tilize_with_val_padding(
+        prepared_input = ttnn::tilize_with_val_padding(
             input_tensor, padded_shape, pad_value, input_tensor.memory_config(), std::nullopt, true, sub_core_grids);
     }
 
@@ -179,7 +191,7 @@ Tensor reduce(
     // scaler CB. Int32 post-mul rounds through fp32, so it is lossy for |result| > 2^24.
     // The accurate fp32 SFPU mean also post-muls (SFPU ignores the scaler CB), applying the 1/N here.
     const bool use_post_mul =
-        ttnn::prim::requires_post_mul(reduce_math, tilized_input.dtype(), scaler, use_sfpu_fp32_mean);
+        ttnn::prim::requires_post_mul(reduce_math, prepared_input.dtype(), scaler, use_sfpu_fp32_mean);
     const float reduce_scaler = use_post_mul ? 1.0f : scaler;
     const float post_mul = use_post_mul ? scaler : 1.0f;
 
@@ -221,7 +233,7 @@ Tensor reduce(
     // into W-then-H regardless of tile count; forcing the two-step keeps it off the single-core path.
     const bool use_two_step_hw_sfpu_reduce =
         (reduce_dim == tt::tt_metal::ReduceOpDim::HW) &&
-        ((tilized_input.dtype() == tt::tt_metal::DataType::INT32 &&
+        ((prepared_input.dtype() == tt::tt_metal::DataType::INT32 &&
           (reduce_math == tt::tt_metal::ReduceOpMath::MAX || reduce_math == tt::tt_metal::ReduceOpMath::SUM ||
            reduce_math == tt::tt_metal::ReduceOpMath::MIN)) ||
          use_sfpu_fp32_mean);
@@ -240,12 +252,12 @@ Tensor reduce(
         const bool keep_w_fp32 =
             reduce_math == tt::tt_metal::ReduceOpMath::SUM &&
             ((output_dtype.has_value() && out_final_dtype == tt::tt_metal::DataType::BFLOAT16 &&
-              tilized_input.dtype() == tt::tt_metal::DataType::FLOAT32) ||
-             (tilized_input.dtype() == tt::tt_metal::DataType::BFLOAT16 && config.fp32_dest_acc_en));
+              prepared_input.dtype() == tt::tt_metal::DataType::FLOAT32) ||
+             (prepared_input.dtype() == tt::tt_metal::DataType::BFLOAT16 && config.fp32_dest_acc_en));
         const auto out_w_dtype = keep_w_fp32 ? tt::tt_metal::DataType::FLOAT32 : out_final_dtype;
 
         const Tensor output_tensor = ttnn::prim::reduce(
-            tilized_input,
+            prepared_input,
             prim_reduce_math,
             tt::tt_metal::ReduceOpDim::W,
             1.0f,
@@ -280,13 +292,77 @@ Tensor reduce(
     }
 
     if (negate && reduce_dim == tt::tt_metal::ReduceOpDim::H &&
-        !ttnn::prim::h_reduce_negate_fits_in_l1(tilized_input, sub_core_grids)) {
+        !ttnn::prim::h_reduce_negate_fits_in_l1(prepared_input, sub_core_grids)) {
         return h_reduce_with_external_negate(
-            tilized_input, reduce_scaler, post_mul, output_dtype.value_or(input_tensor.dtype()));
+            prepared_input, reduce_scaler, post_mul, output_dtype.value_or(input_tensor.dtype()));
+    }
+
+    // H-axis split: the un-split RM-H path uses only NC*Wt cores, so tall-H shapes starve the grid.
+    // Split the reduction axis into S segments — stage 1 → (N,C,S,W) FP32 partials, stage 2 →
+    // collapse the slice axis with the user scaler and final dtype. Sum over H is the sum of the
+    // per-slice sums, so mean's 1/N applies once, in stage 2.
+    if (use_rm_dense_h) {
+        const auto& logical = input_tensor.logical_shape();
+        const auto& padded = input_tensor.padded_shape();
+        const uint32_t tile_h = input_tensor.tensor_spec().tile().get_height();
+        const uint32_t tile_w = input_tensor.tensor_spec().tile().get_width();
+        const uint32_t NC = logical[0] * logical[1];
+        const uint32_t Wt = (padded[3] + tile_w - 1) / tile_w;
+        const uint32_t Ht_rm = (logical[2] + tile_h - 1) / tile_h;
+        const uint32_t col_groups = NC * Wt;  // cores the un-split path would use
+
+        const auto grid = input_tensor.device()->compute_with_storage_grid_size();
+        const uint32_t grid_cores = sub_core_grids.has_value() ? sub_core_grids->num_cores() : (grid.x * grid.y);
+
+        // Splitting an Ht_rm below this costs more (extra dispatch + rounding) than it gains.
+        constexpr uint32_t k_min_ht_for_split = 16;  // ~H >= 512 rows
+        uint32_t num_h_slices = 1;
+        if (col_groups > 0 && col_groups < grid_cores && Ht_rm >= k_min_ht_for_split) {
+            const uint32_t slices_to_fill_grid = grid_cores / col_groups;  // slices that keep the grid filled
+            num_h_slices =
+                (slices_to_fill_grid < Ht_rm) ? slices_to_fill_grid : Ht_rm;  // never more slices than H tiles
+        }
+
+        if (num_h_slices >= 2) {
+            // Stage 1 emits ROW_MAJOR partials; only stage 2 honors the requested layout.
+            const Tensor partials = ttnn::prim::reduce(
+                prepared_input,
+                tt::tt_metal::ReduceOpMath::SUM,
+                tt::tt_metal::ReduceOpDim::H,
+                /*scaler=*/1.0f,
+                output_mem_config,
+                tt::tt_metal::DataType::FLOAT32,
+                config,
+                sub_core_grids,
+                /*negate=*/false,
+                /*post_mul_scaler=*/1.0f,
+                /*row_major_w_dense_path=*/false,
+                /*row_major_h_dense_path=*/true,
+                /*use_sfpu_reduce=*/use_sfpu_fp32_mean,
+                /*num_h_slices=*/num_h_slices,
+                /*output_layout=*/tt::tt_metal::Layout::ROW_MAJOR);
+
+            return ttnn::prim::reduce(
+                partials,
+                tt::tt_metal::ReduceOpMath::SUM,
+                tt::tt_metal::ReduceOpDim::H,
+                reduce_scaler,
+                output_mem_config,
+                output_dtype.value_or(input_tensor.dtype()),
+                config,
+                sub_core_grids,
+                /*negate=*/false,
+                /*post_mul_scaler=*/post_mul,
+                /*row_major_w_dense_path=*/false,
+                /*row_major_h_dense_path=*/true,
+                /*use_sfpu_reduce=*/use_sfpu_fp32_mean,
+                /*num_h_slices=*/1,
+                /*output_layout=*/rm_dense_out_layout);
+        }
     }
 
     return ttnn::prim::reduce(
-        tilized_input,
+        prepared_input,
         prim_reduce_math,
         reduce_dim,
         reduce_scaler,
@@ -298,7 +374,9 @@ Tensor reduce(
         /*post_mul_scaler=*/post_mul,
         /*row_major_w_dense_path=*/use_rm_dense_w,
         /*row_major_h_dense_path=*/use_rm_dense_h,
-        /*use_sfpu_reduce=*/use_sfpu_fp32_mean);
+        /*use_sfpu_reduce=*/use_sfpu_fp32_mean,
+        /*num_h_slices=*/1,
+        /*output_layout=*/use_rm_dense ? rm_dense_out_layout : tt::tt_metal::Layout::TILE);
 }
 
 }  // namespace ttnn::operations::reduction::generic::detail

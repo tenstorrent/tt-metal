@@ -23,7 +23,7 @@ With this, every TT module that holds weights follows the same 3-method pattern:
 | `_convert_and_cache_weights(torch_weights, ..., device)` | `@staticmethod` | Single workhorse that handles all weight paths. When `device=None` it builds cache; when `device=mesh_device` it loads to device. Accepts `None` for `torch_weights` — creates minimal `torch.empty()` placeholders with post-transform shapes, skipping expensive host operations (`torch.randn`, transpose, stacking, slicing). `ttnn.as_tensor` ignores the placeholder when a `.tensorbin` cache file exists |
 
 
-Components implementing this pattern: `TtParallelEmbedding`, `TtDistributedRmsNorm`, `ttMLA`, `TtMoEGatePrefill`, `TtRoutedExpert`, `TtSharedExpert` (inherited by `TtFfn` as well). Note: the method signatures are not yet unified across modules — each component has different arguments reflecting its weight structure (single tensor, dict, list of dicts, state_dict, etc.).
+Components implementing this pattern: `TtParallelEmbedding`, `TtDistributedRmsNorm`, `ttMLA`, `TtMoEGatePrefill`, `TtRoutedExpert`, `TtSharedExpert` (inherited by `TtFfn` as well), `TtLatentMoeProjections` (Kimi-K3 LatentMoE only; owns a `TtDistributedRmsNorm` for the latent norm, so its cache nests under the same prefix — **and deliberately omits the third branch below: with neither weights nor a complete cache it raises `ValueError` rather than falling back to random weights**, because a silently-random latent projection produces plausible-but-wrong output that no PCC check downstream would attribute to it). Note: the method signatures are not yet unified across modules — each component has different arguments reflecting its weight structure (single tensor, dict, list of dicts, state_dict, etc.).
 
 ---
 

@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include <cstring>
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
@@ -30,10 +29,11 @@ void generate_rand_tile(const uint32_t dfb_id, const uint32_t seed) {
 
     DataflowBuffer dfb_obj(dfb_id);
 
-    uint32_t rand_scale = 0;
-    const float one_f = 1.0f;
-    std::memcpy(&rand_scale, &one_f, sizeof(uint32_t));  // Alternative to std::bit_cast
-    uint32_t rand_from = 0;
+    // The random tile is packed to BF16 before the strict cumulative-probability
+    // comparison. Keep the FP32 endpoint below the BF16 midpoint to 1.0 so the
+    // packed threshold remains strictly less than 1.0.
+    constexpr uint32_t rand_scale = 0x3F7F7FFFU;
+    constexpr uint32_t rand_from = 0;
 
     if (seed != 0) {
         rand_tile_init(seed);

@@ -10,7 +10,7 @@
 #include "experimental/kernel_args.h"
 #include <ttnn/cpp/ttnn/operations/experimental/quasar/pool_generic/device/kernels/pool_kernels_common.hpp>
 
-#define ENABLE_DEBUG_PRINT 0  // [DEBUG] test DM-core DPRINT capture (remove after)
+#define ENABLE_DEBUG_PRINT 0
 
 #if ENABLE_DEBUG_PRINT == 1
 #include "api/debug/dprint.h"
@@ -106,31 +106,6 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
                 const uint32_t read_offset =
                     in_l1_read_base_addr + (stick_offset * shard_width_bytes + c_i * MAX_BYTES_PER_REDUCTION);
 #ifdef ARCH_QUASAR
-                // [DIAG cache-vs-data RESULT] The invalidate above proved coherency is NOT the cause: with the
-                // invalidate before this DPRINT, POOLSRC still shows 0.4375 -> the data at base is genuinely
-                // wrong (stick ~447 / row13), not stale cache. Reverted the read invalidate; the real bug is
-                // the input base / data-layout (in_shard_cb.get_read_ptr() misaligned with the input's stick0).
-                // [DIAG 64c reconfig escape] Dump the SOURCE the reader gathers for the first few windows:
-                // base + stick_offset + the actual read address + the source values. golden out_stick0 ~0.032
-                // (input row1); if src[] here already reads ~0.44 (row13) the reader/base is wrong; if src[]
-                // is correct (~0.03) but the output is 0.4375, the bug is downstream (compute reduce).
-                if (c_i == 0 && h == 0 && w_offset == 0 && ind <= 8) {
-                    volatile tt_l1_ptr uint16_t* sv = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(read_offset);
-                    DPRINT(
-                        "POOLSRC ind={} soff={} roff={} base={} sw={} inwp={} src0={} src1={} src2={} src3={}\n",
-                        (uint32_t)ind,
-                        (uint32_t)stick_offset,
-                        (uint32_t)read_offset,
-                        (uint32_t)in_l1_read_base_addr,
-                        (uint32_t)shard_width_bytes,
-                        (uint32_t)in_w_padded,
-                        bf16_t(sv[0]),
-                        bf16_t(sv[1]),
-                        bf16_t(sv[2]),
-                        bf16_t(sv[3]));
-                }
-#endif
-#ifdef ARCH_QUASAR
                 // Quasar sim: a local self-loopback NOC read (self_ep, src_coord==dst_coord) into in_cb drops
                 // data / reads stale SRAM. The window gather is a same-core L1->L1 copy, so do it with a direct
                 // RISC copy for reliable data. read_offset and the in_cb write ptr are L1-aligned (>=16B) and
@@ -223,7 +198,6 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
  */
 void kernel_main() {
 #if ENABLE_DEBUG_PRINT == 1
-    DPRINT("READER_ENTER (data-movement kernel_main reached)\n");
 #endif
     constexpr uint32_t reader_nindices = get_arg(args::reader_nindices);
     constexpr uint32_t kernel_h = get_arg(args::kernel_h);
@@ -367,21 +341,12 @@ void kernel_main() {
                 DataflowBuffer icb_clear(in_cb_id);
                 Noc clear_noc;
 #ifdef ARCH_QUASAR
-                // [DIAG — clear-overrun / stale-wr_ptr probe, revert after]: this once-at-init clear writes
                 // clrsz = esz*mbf bytes starting at get_write_ptr() (= the DM wr_ptr). It overruns adjacent L1
                 // if clrsz > alloc (mbf > nent) OR if wr_ptr is stale from a prior op (not reset to the ring
                 // base per launch -- the suspected Bug-1 reconfig escape). Compare across a lone 64c run vs a
                 // 64c-after-32c run: wr changing => stale wr_ptr; clrsz>alloc => size overrun. (The 0xDEADBEEF
                 // poison was reverted -- a bf16 value can't fault the RISC; the poison fault was this overrun
                 // clobbering a control region with garbage instead of benign zeros.)
-                DPRINT(
-                    "POOLCLR wr={} esz={} mbf={} clrsz={} nent={} alloc={}\n",
-                    (uint32_t)icb_clear.get_write_ptr(),
-                    (uint32_t)icb_clear.get_entry_size(),
-                    (uint32_t)multi_buffering_factor,
-                    (uint32_t)(icb_clear.get_entry_size() * multi_buffering_factor),
-                    (uint32_t)icb_clear.get_total_num_entries(),
-                    (uint32_t)(icb_clear.get_total_num_entries() * icb_clear.get_entry_size()));
 #endif
                 clear_noc.async_write_zeros(icb_clear, icb_clear.get_entry_size() * multi_buffering_factor);
                 clear_noc.write_zeros_l1_barrier();
@@ -465,13 +430,6 @@ void kernel_main() {
     // [#47797 DEBUG] If POOL hangs at waypoint R, dump the loop-control values. A garbage num_segments
     // (e.g. unwritten reader_indices config) or stride_w==0 makes while(num_segments--)/the inner stride
     // loop spin forever. Compare these against the host sliding-window config for this pool.
-    DPRINT(
-        "POOL rdr id={} nseg={} strW={} kH={} kW={}\n",
-        (uint32_t)reader_id,
-        (uint32_t)num_segments,
-        (uint32_t)stride_w,
-        (uint32_t)kernel_h,
-        (uint32_t)kernel_w);
 
     // This reader's output-stick counter. With split reader, reader0 writes even output rows, reader1
     // writes odd, so global row = 2*counter + reader_id.
@@ -481,7 +439,6 @@ void kernel_main() {
         uint32_t start_end_segment = reader_indices_ptr[segments_counter++];
         uint16_t start = start_end_segment & 0xffff;
         uint16_t end = start_end_segment >> 16;
-        DPRINT("POOL seg start={} end={}\n", (uint32_t)start, (uint32_t)end);  // [#47797 DEBUG]
 
         if (!first_row_value) {
             start += stride_w;
@@ -536,15 +493,8 @@ void kernel_main() {
                 // face0 = tilized rows 0..15, each row = 16 channels; ip[r*16+0] = row r channel 0.
                 // Window rows (the 9 sticks) should read the input value (channel 0 -> 1); cleared/tail
                 // rows read the pool identity (-inf). Shows whether reader1 fills its window rows at all.
-                DPRINT(
-                    "INCB rdr={} ind={} in_cb_base={} face0 col0 rows0..15: ",
-                    (uint32_t)reader_id,
-                    (uint32_t)ind,
-                    in_cb_peek.get_read_ptr());
                 for (uint32_t r = 0; r < 16; ++r) {
-                    DPRINT("{} ", bf16_t(ip[r * 16]));
                 }
-                DPRINT("\n");
             }
 #endif
             // [DEBUG scratch->out workaround] We just fed the input for this output stick; compute reduces
@@ -599,26 +549,15 @@ void kernel_main() {
 #ifdef ARCH_QUASAR
                 flush_l2_cache_range(reinterpret_cast<uintptr_t>(dst_w), static_cast<size_t>(out_row_bytes));
 #endif
-                // DEBUG (compute-vs-read locator): dump the scratch row-0 (reduced result) the reader sees,
                 // limited to the first few global sticks to avoid flooding/crashing the dprint server.
                 // Distinct sensible values per stick => compute/reduce/pack is fine and the bug is in the
                 // out-copy/assembly; constant/garbage (e.g. 2.0) => compute-side or a fixed/stale read.
                 if (global_stick < 4u) {
                     volatile tt_l1_ptr uint16_t* rp = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(scratch_row0_addr);
-                    DPRINT(
-                        "SCRATCH2OUT rdr={} gstick={} rdptr={} npages={} row0[0..7]: ",
-                        (uint32_t)reader_id,
-                        global_stick,
-                        scratch_row0_addr,
-                        (uint32_t)scratch_npages);
                     for (uint32_t j = 0; j < 8; ++j) {
-                        DPRINT("{} ", bf16_t(rp[j]));
                     }
-                    DPRINT(" [60..63]: ");
                     for (uint32_t j = 60; j < 64; ++j) {
-                        DPRINT("{} ", bf16_t(rp[j]));
                     }
-                    DPRINT("\n");
                 }
             }
             scratch_cb.pop_front(scratch_npages);

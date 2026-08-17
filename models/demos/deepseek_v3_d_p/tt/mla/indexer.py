@@ -256,6 +256,7 @@ class TtIndexer:
         sp_ccl_topology,
         tp_ccl_topology,
         seq_len: int = 1024,
+        active_seq_len: int | None = None,
         slot_num: int = 1,
         layer_num: int = 1,
     ):
@@ -306,6 +307,22 @@ class TtIndexer:
             index_rope_interleave=config.index_rope_interleave,
         )
         self.seq_len = seq_len
+        # Keep the index tensor width fixed at the configured maximum, except on small-cache test /
+        # deployment configurations where the cache itself cannot contain that many entries.  This
+        # width is static for the model lifetime; early prefixes fill the unused suffix with the
+        # sparse-SDPA sentinel through topk_large_indices(valid_length=...).
+        self.index_topk_capacity = min(self.index_args.index_topk, self.seq_len)
+        assert 16 <= self.index_topk_capacity <= 2048 and self.index_topk_capacity % 16 == 0, (
+            "indexer top-k capacity must be in [16, 2048] and a multiple of 16; " f"got {self.index_topk_capacity}"
+        )
+        # Chunked sparse MLA has a fixed active prefill chunk.  The TP gathers below are activation
+        # collectives, so their maximum output is this chunk (not the growing key-cache length).  Keep
+        # the optional default for direct TtIndexer users that predate the explicit active-sequence arg.
+        self.active_seq_len = active_seq_len if active_seq_len is not None else seq_len
+        assert (
+            self.active_seq_len % self.sp_factor == 0
+        ), f"active_seq_len ({self.active_seq_len}) must divide SP factor ({self.sp_factor})"
+        self.active_seq_len_local = self.active_seq_len // self.sp_factor
         # Block-cyclic key-cache path: mirrors the MLA KVPE cache — a persistent, per-user/layer,
         # block-cyclic ND-sharded key cache written by update_padded_kv_cache and scored by
         # indexer_score_dsa's block-cyclic reader. The rope is always the interleaved on-device INDEXED op
@@ -329,6 +346,42 @@ class TtIndexer:
         self._is_index_compact = self._num_index_layers is not None
         self._index_layer_idx = full_indexer_rank(config, layer_idx) if self._is_index_compact else layer_idx
         self._index_cache_layers = self._num_index_layers if self._is_index_compact else self.layer_num
+        # Stable, worst-case TP gather outputs.  Indexer layers execute serially, so TT_CCL shares each
+        # buffer across them.  This keeps the high-bandwidth gathers allocation-free and their output
+        # address fixed on the hot forward path.
+        self._k_all_gather_output = None
+        self._weights_all_gather_output = None
+        self._topk_indices_all_gather_output = None
+        if self.tp_factor > 1:
+            assert (
+                self.active_seq_len_local % self.tp_factor == 0
+            ), f"local active_seq_len ({self.active_seq_len_local}) must divide TP factor ({self.tp_factor})"
+            assert (self.active_seq_len_local // self.tp_factor) % ttnn.TILE_SIZE == 0, (
+                "the TP-local active sequence length must be tile aligned for high_bw_all_gather; "
+                f"got {self.active_seq_len_local // self.tp_factor}"
+            )
+            assert self.index_args.index_head_dim % (self.tp_factor * ttnn.TILE_SIZE) == 0, (
+                "the TP-local index head dimension must be tile aligned for high_bw_all_gather; "
+                f"got {self.index_args.index_head_dim // self.tp_factor}"
+            )
+            self._k_all_gather_output = self.tt_ccl.get_mla_high_bw_all_gather_buffer(
+                name="indexer_k_all_reduce",
+                shape=[1, 1, self.active_seq_len_local, self.index_args.index_head_dim],
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+            )
+            self._weights_all_gather_output = self.tt_ccl.get_mla_high_bw_all_gather_buffer(
+                name="indexer_weights_all_reduce",
+                shape=[1, self.tp_factor, self.active_seq_len_local, self.index_args.index_n_heads],
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+            )
+            self._topk_indices_all_gather_output = self.tt_ccl.get_mla_high_bw_all_gather_buffer(
+                name="indexer_topk_indices",
+                shape=[1, 1, self.active_seq_len_local, self.index_topk_capacity],
+                dtype=ttnn.uint32,
+                layout=ttnn.TILE_LAYOUT,
+            )
         self._upload_weights(idx_host)
         # DS block-cyclic uses the interleaved rotary_embedding_indexed op, but DS weights emit the
         # half-split (rotate_half) rope arrangement. Permute the rope half (half-split -> interleaved) so
@@ -366,14 +419,13 @@ class TtIndexer:
         )
         if rs_only:
             return t
-        return ttnn.experimental.all_gather_async(
+        assert self._k_all_gather_output is not None
+        assert tuple(t.shape) == (1, 1, self.active_seq_len_local, self.index_args.index_head_dim // self.tp_factor)
+        return ttnn.experimental.high_bw_all_gather(
             t,
             dim=3,
-            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=self.tp_axis),
-            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
+            output_tensor=self._k_all_gather_output,
             num_links=self.ccl_num_links,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=self.tp_ccl_topology,
             cluster_axis=self.tp_axis,
         )
 
@@ -388,14 +440,13 @@ class TtIndexer:
         917-929), measured cheaper even on an 18x-wider tensor than wts."""
         if self.tp_factor == 1:
             return t
-        t = ttnn.experimental.all_gather_async(
+        assert self._weights_all_gather_output is not None
+        assert tuple(t.shape) == (1, 1, self.active_seq_len_local, self.index_args.index_n_heads)
+        t = ttnn.experimental.high_bw_all_gather(
             t,
             dim=1,
-            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=self.tp_axis),
-            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
+            output_tensor=self._weights_all_gather_output,
             num_links=self.ccl_num_links,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=self.tp_ccl_topology,
             cluster_axis=self.tp_axis,
         )
         return ttnn.experimental.fast_reduce_nc(
@@ -408,14 +459,19 @@ class TtIndexer:
         indices that were computed on TP-seq-sharded query rows back to the [1,1,S/sp,k] contract.)"""
         if self.tp_factor == 1:
             return t
-        return ttnn.experimental.all_gather_async(
+        assert dim == 2, "TtIndexer only regathers TP-split sequence rows"
+        assert self._topk_indices_all_gather_output is not None
+        assert tuple(t.shape) == (
+            1,
+            1,
+            self.active_seq_len_local // self.tp_factor,
+            self.index_topk_capacity,
+        )
+        return ttnn.experimental.high_bw_all_gather(
             t,
             dim=dim,
-            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=self.tp_axis),
-            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
+            output_tensor=self._topk_indices_all_gather_output,
             num_links=self.ccl_num_links,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=self.tp_ccl_topology,
             cluster_axis=self.tp_axis,
         )
 
@@ -672,16 +728,13 @@ class TtIndexer:
         # partial-logit all-reduce over tp. This is the win: the removed step was a 2-CCL (RS+AG) all-reduce
         # spanning the full end_pos-wide logit (+ a TILE<->ROW_MAJOR round-trip), the indexer's dominant cost.
         # Top-k key indices [1,1,S/sp,k] (ROW_MAJOR uint32). Future/pad -inf columns surface as the
-        # 0xFFFFFFFF sentinel that sparse_mla drops. topk_large_indices: 16 <= k <= 2048, multiple of 16.
-        # index_topk is a multiple of 16, so k is too iff end_pos is — assert it at the caller contract
-        # (current chunk sizing guarantees tile alignment) rather than failing deep inside the op.
-        assert end_pos % 16 == 0, f"indexer top-k requires a tile-aligned key count; got end_pos={end_pos}"
+        # 0xFFFFFFFF sentinel that sparse_mla drops. The indexer score/cache contract requires a
+        # 16-element-aligned key prefix; this is independent of fixed top-k capacity.
+        assert end_pos % 16 == 0, f"indexer cache prefix must be 16-element aligned; got end_pos={end_pos}"
         # Block-cyclic logits are the full preallocated width T with a stale [end_pos, T) tail (kv_len only
         # wrote the real prefix); valid_length bounds top-k to that prefix so the tail is never read or ranked.
         topk_valid_length = end_pos
-        idx = ttnn.experimental.topk_large_indices(
-            logits, k=min(self.index_args.index_topk, end_pos), valid_length=topk_valid_length
-        )
+        idx = ttnn.experimental.topk_large_indices(logits, k=self.index_topk_capacity, valid_length=topk_valid_length)
         # TP×SP: topk ran on the TP-seq-sharded rows ([1,1,S/(sp·tp),k]); regather over TP back to the
         # [1,1,S/sp,k] contract so sparse_sdpa/mla.py are unchanged. (Redundant TP-round-trip for GLM's
         # head→seq reshard, which re-splits it; correct regardless. tp=1: no-op.)
@@ -700,7 +753,8 @@ class TtIndexer:
             idx = ttnn.to_layout(idx_gathered, ttnn.ROW_MAJOR_LAYOUT)
             ttnn.deallocate(idx_local)
             ttnn.deallocate(idx_tiled)
-            ttnn.deallocate(idx_gathered)
+            # high_bw_all_gather returns a fresh wrapper around model-owned scratch; do not
+            # deallocate its backing buffer on the hot path.
         return idx
 
 
