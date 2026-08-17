@@ -24,7 +24,8 @@ others cost us time.
       separate from where its files live.
     - Also, running a model's own code is only allowed for one hardcoded model name. Ours passed the
       early checks and then failed when it ran, blaming the model rather than the setting. A model's
-      config already declares that it ships its own code, so decide from that. We did, and it worked.
+      config already declares that it ships its own code, which is enough on its own. We changed it
+      to use that, and it worked.
 
 3. Use the saved inputs in the tests, and allow more than one prompt
     - Which arguments a component gets is decided by a hardcoded list of names taken from
