@@ -520,20 +520,47 @@ def _mmrs_prefill_shared_bufs(tt_ccl, M, N, nd, dtype):
     return cache[key]
 
 
-def matmul_reduce_scatter_prefill(x, weight, tt_ccl, compute_cfg, topology, nd, dtype, grid=(8, 8), rs_offset=(0, 8)):
+def _mmrs_prefill_placement(mesh_device, num_links, want_grid=(8, 8)):
+    """Topology-aware (matmul grid, RS core offset) for the fused prefill MMRS.
+
+    ccl choose_worker_cores (ccl_common.cpp) selects the first num_links * 2 * (1 + workers_per_dir)
+    worker cores row-major from (0,0) and then SHIFTS them by reduce_scatter_core_grid_offset; the
+    shifted set must stay on the worker grid AND off the matmul rows (a collision deadlocks the
+    fused CCL). workers_per_dir is data-size dependent (reduce_scatter_default_workers: up to 8 on
+    Linear topologies, which a 1x2 mesh uses, for our ~40MB fp32 GDN-out intermediates), so a
+    2-link call selects 2*2*(1+8)=36 cores. On a p150a 1x2 worker grid the old fixed (8,8)/(0,8)
+    pushes 14 of those 36 cores off the grid (rows 10-11 don't exist). Instead, reserve the bottom
+    ceil(36/W) rows for the RS workers and cap the matmul grid above them, so the two footprints
+    are always disjoint and in-grid on any worker-grid shape.
+    """
+    try:
+        gs = mesh_device.compute_with_storage_grid_size()
+        W, H = int(gs.x), int(gs.y)
+    except Exception:
+        return want_grid, (0, want_grid[1])
+    n_rs = num_links * 2 * 9  # worst case: 8 workers + 1 mux core per direction, 2 directions/link
+    rs_rows = math.ceil(n_rs / W)
+    gx = min(want_grid[0], W)
+    gy = want_grid[1] if want_grid[1] + rs_rows <= H else max(1, H - rs_rows)
+    return (gx, gy), (0, gy)
+
+
+def matmul_reduce_scatter_prefill(x, weight, tt_ccl, compute_cfg, topology, nd, dtype, grid=None, rs_offset=None):
     """Fused row-parallel out-proj matmul + reduce-scatter for PREFILL (matmul_reduce_scatter_async).
 
     Unlike decode (M=1, where the 2D matmul collapses to ~8 cores and this loses), at prefill M>>1 the
     2D matmul fills the grid, so overlapping the RS with the matmul is a WIN (biggest for the fp32
-    GDN-out with its large RS). grid=(8,8): matmul rows 0-7, RS workers rows 8-9. x: K-sharded
+    GDN-out with its large RS). Matmul rows 0..gy-1; RS workers the bottom ceil(36/W) rows
+    (_mmrs_prefill_placement derives both from the device grid). x: K-sharded
     [.,M,K_local]; weight [K_local,N]. Returns [1,1,M,N/nd] (cloned; shared buffer survives)."""
     M, K_local = x.shape[-2], x.shape[-1]
     N = weight.shape[-1]
     interm, out_buf = _mmrs_prefill_shared_bufs(tt_ccl, M, N, nd, dtype)
     x4 = ttnn.reshape(x, (1, 1, M, K_local))
-    # RS-bound: 2 ethernet links parallelize the fp32 cross-device reduce (P150x4 max; traced_8k win).
-    # grid (8,8) leaves rows 8-9 for the 2 RS worker rows.
+    # RS-bound: 2 ethernet links parallelize the fp32 cross-device reduce (traced_8k win).
     num_links = 2
+    if grid is None or rs_offset is None:
+        grid, rs_offset = _mmrs_prefill_placement(tt_ccl.mesh_device, num_links)
     per_core_N = max(1, math.ceil(N / TILE_SIZE / grid[0]))
     pc = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=grid,
