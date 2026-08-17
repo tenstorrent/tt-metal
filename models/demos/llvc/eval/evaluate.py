@@ -414,7 +414,8 @@ def convert_stage(args: argparse.Namespace) -> dict:
             source_paths.append(os.path.abspath(fname))
             converted_paths.append(os.path.abspath(out_path))
             logger.info(
-                "[%s] e2e_RTF=%.3f e2e_latency=%.2fms device_RTF=%.3f raw_pcc=%.4f lag=%d aligned_pcc=%.4f aligned_si_sdr=%.1fdB",
+                "[%s] e2e_RTF=%.3f e2e_latency=%.2fms device_RTF=%.3f raw_pcc=%.4f lag=%d"
+                " aligned_pcc=%.4f aligned_si_sdr=%.1fdB",
                 os.path.basename(fname),
                 rtf,
                 latency,
@@ -497,7 +498,8 @@ def _write_markdown(report: dict, path: str) -> None:
         "|---|---|",
         f"| Streaming mean RTF | {st['mean_rtf']:.3f} |",
         f"| Mean chunk latency | {st['mean_chunk_latency_ms']:.2f} ms |",
-        f"| Decoder throughput | {thr['achieved_frames_per_s']:.0f} frames/s ({thr['speed_vs_realtime']:.2f}× real-time) |",
+        f"| Decoder throughput | {thr['achieved_frames_per_s']:.0f} frames/s"
+        f" ({thr['speed_vs_realtime']:.2f}× real-time) |",
         f"| Real-time frame rate needed | {thr['realtime_frames_per_s']:.0f} frames/s |",
         f"| Token-level accuracy (global PCC, raw) | {tok['global_pcc_mean']:.4f} |",
         f"| Token-level accuracy (SI-SDR, raw) | {tok['si_sdr_db_mean']:.1f} dB |",
@@ -514,7 +516,8 @@ def _write_markdown(report: dict, path: str) -> None:
         ]
     if "content_preservation_wer" in report:
         lines.append(
-            f"| Content preservation (WER, source vs converted) | {report['content_preservation_wer']['wer'] * 100:.1f}% |"
+            f"| Content preservation (WER, source vs converted) |"
+            f" {report['content_preservation_wer']['wer'] * 100:.1f}% |"
         )
     if "speaker_similarity" in report:
         spk = report["speaker_similarity"]

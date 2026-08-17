@@ -23,7 +23,6 @@ from typing import Optional
 import torch
 
 import ttnn
-
 from models.demos.llvc.tt.config import TILE_SIZE
 
 # Additive mask fill for SDPA key-padding (fused kernel ignores structural causality).
