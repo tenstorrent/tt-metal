@@ -2,77 +2,71 @@
    not in this format
     - In TTS most models are like this. Only a few load directly with transformers (SpeechT5,
       VITS/MMS, Bark, Parler-TTS, Moshi, CSM, Dia). Most ship their own code: XTTS-v2, StyleTTS2,
-      F5-TTS, CosyVoice, Fish Speech, GPT-SoVITS, Kokoro, Voxtral-TTS and others. Being on the HF
-      Hub does not mean transformers can load it.
-    - You already have something for this. It writes a small loader for the model, which the
-      generated tests then use, and PCC still checks correctness. But it is off by default and only
-      runs after a component has already failed, so these models just look unsupported.
-    - Fix: turn it on by default, or point at it in the error when loading fails.
-    - We are testing whether it works on our model and will report the result.
+      F5-TTS, CosyVoice, GPT-SoVITS, Kokoro, Voxtral-TTS and others. Being on the HF Hub does not
+      mean transformers can load it.
+    - You already have something for this, but it is off by default and only runs after a component
+      has already failed, so these models just look unsupported.
+    - We turned it on and it worked. In 12 minutes it wrote a loader that reads the native 8 GB
+      checkpoint, matches the reference exactly including the cached path, and produces audio.
+    - But it did not write the architecture. It found an existing PyTorch version of the model on our
+      machine and adapted it. Without one it stops and says so. So it saves you writing an HF
+      wrapper, not finding a PyTorch implementation.
+    - Fix: turn it on by default, and say clearly when there is no implementation to adapt.
 
 2. Fix the model bring up from local path
-    - A folder on disk behaves differently from a Hub name, and the difference only shows up later,
-      with a confusing error:
+    - A folder on disk behaves differently from a Hub name, and fails later with a confusing error:
         - a local folder gets a shallower check, and the run dies three stages later pointing at the
           wrong thing
-        - the optimize stage confuses the folder holding the weights with the folder holding the
-          generated code, so you cannot point it at the model at all
-        - pointing it at the generated code instead loses track of which model that code came from,
-          so optimize cannot build its own correctness check even though it already wrote one. We had
-          to name that check by hand.
-    - Fix: accept a folder anywhere a Hub name is accepted, and keep track of both the model and the
-      generated code, instead of one replacing the other.
+        - optimize confuses the folder holding the weights with the folder holding the generated
+          code, so you cannot point it at the model
+        - pointing it at the generated code loses track of which model it came from, so optimize
+          cannot build its own correctness check even though it wrote one. We named it by hand.
+    - Fix: accept a folder anywhere a Hub name works, and keep track of both.
     - Related: models that ship their own code only work if their name is in a hardcoded list, and
-      that list has one entry. Ours passed the early checks, then failed when it ran, with an error
-      blaming the model rather than the loader. Fix: look at the model instead, its config already
-      says it ships its own code. We changed this and it worked.
+      that list has one entry. Ours passed the early checks, then failed when it ran, blaming the
+      model rather than the loader. Fix: look at the model. Its config already says it ships its own
+      code. We changed this and it worked.
 
 3. Support multiple input prompts for the tests
-    - Two separate problems:
-        - the end to end test uses one prompt to decide pass or fail for the whole model, and there
-          is no way to add more. One prompt cannot tell a real bug from a lucky guess.
-        - the per component tests never use real inputs. The pipeline saves real inputs and outputs
-          for every component, and says the tests will use them, but they do not. The main input is
-          random noise.
-        - worse, inputs are guessed from the argument names. For our model that gave a wrongly
-          shaped input where a table of rotation values was needed, dropped the mask that stops the
-          model looking ahead (so the reference answer itself became wrong), and passed decimals
-          where whole numbers were needed. These had to be written by hand during bring-up before
-          the tests meant anything.
-    - Fix: use the saved inputs and compare against the saved output. It is all already on disk.
-    - Fix: let the end to end test run more than one prompt.
-    - Fix: make the log say what the test actually used.
+    - The end to end test uses one prompt to decide pass or fail for the whole model, and there is no
+      way to add more. One prompt cannot tell a real bug from a lucky guess.
+    - The per component tests never use real inputs. Real inputs and outputs are saved for every
+      component, and the log says the tests use them, but they do not. The main input is random noise.
+    - Worse, inputs are guessed from the argument names. For our model that gave a wrongly shaped
+      input where a table of rotation values was needed, dropped the mask that stops the model
+      looking ahead (so the reference answer itself became wrong), and passed decimals where whole
+      numbers were needed. These had to be written by hand before the tests meant anything.
+    - Fix: use the saved inputs and compare against the saved output. Let the end to end test take
+      more than one prompt. Make the log say what the test actually used.
 
 4. Model has two implementations of decode step, eager one without KV cache and traced one with KV
    cache:
     - Both are written when the pipeline is wired together, not during bring-up.
     - The cache never reaches the component, for two reasons:
         - the saved example contains a real cache, but the same object is given to the reference and
-          then to the port. The reference writes into it as it runs, so the port sees one entry more
-          than the reference did. So the cache is dropped, and the tool notes the cost itself: with
-          no cache the test compares a single value and returns 1.0 whatever the inputs are.
+          then to the port. The reference writes into it as it runs, so the port sees one entry too
+          many. So the cache is dropped. The tool notes the cost: with no cache the test compares a
+          single value and returns 1.0 whatever the inputs are.
         - the test only passes arguments whose names are on a recognised list, and the cache is not
           on it, so it always arrives empty.
-      Using the cache and ignoring it therefore score the same, so the simpler version was accepted.
-    - The version that actually generates speech then has no choice but to recompute. It must use
-      the accepted components, and one that ignores the cache can only be given the whole prompt plus
-      everything generated so far, on every frame.
-    - Careful when fixing: the plan expects the model to run once per frame plus once for the
-      prompt, so a correct fix will fail that check, and the one verifying that the accepted
-      components are the ones being used. Update both in the same change or a good fix looks like a regression.
-    - The traced version is correct at any position when called normally. It is stuck at one
-      position only once recorded, because the position is baked in: a recording made at position
-      200 always writes to slot 200. To replay it in a loop the position has to live on the device.
-    - Effect: speed was measured on the traced version while correctness was checked on the eager
-      one. It reported 17.2% faster; what ships got 13.2% faster (297.69 to 258.26 ms per audio
-      frame), because most edits touched shared code. So the work is not lost, but nothing measured
-      what ships. Our hand written port of the same model on the same board runs at 26.9 ms.
+      Using the cache and ignoring it score the same, so the simpler version was accepted.
+    - The version that generates speech then has no choice but to recompute. It must use the accepted
+      components, and one that ignores the cache can only be given the whole prompt plus everything
+      generated so far, every frame.
+    - Careful: the plan expects the model to run once per frame plus once for the prompt, so a
+      correct fix will fail that check, and the one verifying which components are used. Update both
+      in the same change or a good fix looks like a regression.
+    - The traced version is correct at any position when called normally. It is stuck at one position
+      only once recorded, because the position is baked in. To replay it in a loop the position has
+      to live on the device.
+    - Effect: speed was measured on the traced version, correctness on the eager one. It reported
+      17.2% faster; what ships got 13.2% (297.69 to 258.26 ms per audio frame), because most edits
+      touched shared code. So the work is not lost, but nothing measured what ships. Our hand written
+      port of the same model on the same board runs at 26.9 ms.
     - Fix, in order:
         1. copy the saved inputs before giving them to each side
-        2. add the cache to the recognised list, so the component is tested with one
-        3. let the component use the cache. Its signature already has the argument and the reference
-           shows how it should work.
-        4. update the expected call counts, and both checks, in the same change
+        2. add the cache to the recognised list
+        3. let the component use the cache, its signature already has the argument
+        4. update the expected call counts and both checks in the same change
         5. for the traced version, make the position live on the device
-    - Also worth adding: before measuring speed, check that the code being measured is the code that
-      actually generates speech. That alone would have caught this.
+    - Also: before measuring speed, check that the code measured is the code that generates speech.
