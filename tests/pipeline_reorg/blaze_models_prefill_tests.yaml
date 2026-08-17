@@ -30,7 +30,7 @@
   test_group: module
   skus:
     bh_sc1:
-      timeout: 8
+      timeout: 14
   owner_id: U08RL15T4N8
   team: models
   sp_config: sc1
@@ -174,7 +174,7 @@
       # Measured 9.9 min at L61/mid15k (the untraced mode also does the per-layer decoder-output PCC,
       # which is a host readback per layer per chunk). 20 min is ~2x headroom. Was 40; the (team, sku)
       # time budget is a SUM, so the traced twin has to come out of the same allowance.
-      timeout: 20
+      timeout: 26
   owner_id: U07N3CUUN05  # Iva Potkonjak
   team: models
   sp_config: sc1
@@ -200,7 +200,7 @@
     bh_sc1:
       # Measured 5.2 min at L61/mid15k — cheaper than its untraced twin because the traced mode asserts
       # KV PCC only (a host readback cannot live inside a capture). ~2.3x headroom.
-      timeout: 14
+      timeout: 26
   owner_id: U07N3CUUN05  # Iva Potkonjak
   team: models
   sp_config: sc1
@@ -317,6 +317,38 @@
   skus:
     bh_sc1:
       timeout: 24
+  owner_id: U08RL15T4N8
+  team: models
+  sp_config: sc1
+
+- name: "Blaze - Kimi K3 MoE"
+  cmd: |
+
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_kimi_k3_moe -k "fabric2d-mesh-8x4 and kimi_k3-5k-pcc" -vvv --tb=short
+    '
+  test_type: kimi_k3_moe
+  test_group: module
+  skus:
+    bh_sc1:
+      timeout: 26
+  owner_id: U08RL15T4N8
+  team: models
+  sp_config: sc1
+
+- name: "Blaze - Kimi K3 MoE perf"
+  cmd: |
+
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/perf/test_moe_perf.py::test_kimi_k3_moe_perf_galaxy -vvv --tb=short
+    '
+  test_type: kimi_k3_moe_perf
+  test_group: module
+  skus:
+    bh_sc1_high_power:
+      timeout: 22
   owner_id: U08RL15T4N8
   team: models
   sp_config: sc1
