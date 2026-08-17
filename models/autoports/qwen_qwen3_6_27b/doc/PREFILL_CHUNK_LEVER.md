@@ -102,3 +102,70 @@ from the scan's own documented structure — but arithmetic on step counts is no
 latency prediction: each step's cost depends on the tensor shapes, and larger
 chunks make each step wider. Wider-and-fewer is usually better on this hardware,
 which is why it is worth measuring, not why it is certain.
+
+---
+
+## Addendum: the tradeoff is op-count against FLOPs, so expect an optimum
+
+Added the same day, after counting the scan body. The section above says
+sequential steps decrease with chunk size, which is true, but it is only half the
+trade and "bigger is better" does not follow. The full picture:
+
+### Exact per-step cost
+
+The scan loop body is exactly **five device ops**, two of them matmuls:
+
+```
+while distance < sequence:
+    previous_transform = ttnn.concat([identity[:, :distance], transform[:, :-distance]], dim=1)
+    previous_bias      = ttnn.concat([zero[:, :distance],     bias[:, :-distance]],      dim=1)
+    old_transform = transform
+    transform = ttnn.matmul(old_transform, previous_transform)
+    bias      = ttnn.add(ttnn.matmul(old_transform, previous_bias), bias)
+    distance *= 2
+```
+
+Each step's tensors are shaped `[groups, chunk, d, d]`, so **per-step work is
+proportional to the chunk**, while the number of steps is `log2(chunk)`.
+
+### Two quantities move in opposite directions
+
+For a sequence `S` with chunk `C`, per gated-delta layer:
+
+| quantity | formula | C=32 | C=128 | C=256 |
+|---|---|---:|---:|---:|
+| scan **dispatches** | `5 * (S/C) * log2(C)` | 100 | 35 | 20 |
+| scan **FLOPs** | `∝ S * log2(C)` | 5·S | 7·S | 8·S |
+
+(at S=128; dispatch counts exclude the ~35 setup/teardown ops per chunk.)
+
+So raising the chunk **reduces dispatches** by up to 5× and **increases total
+arithmetic** by up to 1.6×. This is inherent to a Hillis-Steele scan, which is
+work-inefficient by design: `O(C log C)` work for `O(log C)` depth, against
+`O(C)` work and `O(C)` depth for a sequential scan.
+
+### Which term dominates today
+
+Measured, at S=128: ~240 device ops per linear layer × 48 layers ≈ **11,500
+dispatches**, against a warm TTFT of ~3,784 ms — about **0.3 ms per op**, which is
+a dispatch-scale cost, not a compute-scale one for tensors this small.
+
+Independent check from the other direction: prefill of a 128-token prompt is
+roughly `2 * 27e9 * 128 ≈ 6.9 TFLOP`, delivered in 3.784 s, i.e. **~1.8 TFLOP/s
+aggregate across four Blackhole devices**. That is one to two orders of magnitude
+below what this mesh can sustain, so prefill today is nowhere near arithmetic
+limited.
+
+**Therefore the dispatch term should dominate and larger chunks should win — up to
+the point where the 1.6× extra arithmetic and the linear growth in intermediate
+footprint catch up.** That is a prediction with a predicted *shape*: warm TTFT
+should fall from 32 to 64 to 128, then flatten or reverse. If it falls
+monotonically through 256, the sweep should be extended.
+
+### A further lever, not attempted here
+
+If arithmetic does become the limit, the work-inefficiency is itself removable: a
+Blelloch (work-efficient) scan does `O(C)` work with `2*log2(C)` depth, trading a
+doubling of depth for the removal of the `log2(C)` work factor. That is a real
+kernel-level change rather than a constant, so it is only worth considering if the
+chunk sweep shows the FLOP term binding.
