@@ -80,17 +80,17 @@ single p150b. Seven things worth fixing. Points 5 and 6 are one line each.
       0.95 end to end, and the gate documents 0.99 as required. The command line passes 0.95 and that
       is the one that wins. Bring-up then prints the next command to run without any threshold, so
       copying what it just gave you gets 0.95.
-    - Fix: 0.99 everywhere, and make the docs agree. The components, the matmul sweep and the gate's
-      own default already use it, the end to end value passed on the command line is the only 0.95.
-      That looser bar does not only permit a worse model, it produces one: the same code scored 0.9586
-      at 0.95 and 0.9986 at 0.99, because the repair loop stops as soon as it clears. Also print the
-      target that was used.
+    - Fix: the components, the matmul sweep and the gate's own default already use 0.99, so the end to
+      end value passed on the command line is the only 0.95 and could simply match. That looser bar
+      does not only permit a worse model, it produces one: the same code scored 0.9586 at 0.95 and
+      0.9986 at 0.99, because the repair loop stops as soon as it clears. Printing the target that was
+      used would help too, and the docs could then settle on one number.
 
 6. The correctness gate accepts values that cannot be correlations
     - It reported a PCC of 33.612 and marked it verified against a threshold of 0.99. Nothing checks
       the range, and the test's exit code is ignored, so reading the number out of the log is the only
       signal there is. Every optimization the tool keeps rests on that one answer.
-    - Fix: check that the value is in range, and use the exit code.
+    - Fix: a range check would catch it, and the exit code is already there to be used.
 
 7. Name the optimization steps, so a good run can be repeated
     - Every large win came from the structural step, but that step lists only three things to try and
