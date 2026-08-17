@@ -1713,10 +1713,14 @@ MeshGraph TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
         fabric_type_candidates.push_back(FabricType::TORUS_Y);
         fabric_type_candidates.push_back(FabricType::TORUS_X);
     }
-    // T3K cannot support MESH https://github.com/tenstorrent/tt-metal/issues/32146
+
     const bool ring_requires_torus = (fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D_RING ||
                                       fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D_NEIGHBOR_EXCHANGE) &&
                                      cluster.get_cluster_type() != tt::tt_metal::ClusterType::T3K;
+
+    // Everything except T3K cannot be downgraded to MESH when
+    // asked for FABRIC_1D_RING or FABRIC_1D_NEIGHBOR_EXCHANGE:
+    // https://github.com/tenstorrent/tt-metal/issues/32146
     if (requested_fabric_type != FabricType::MESH && !ring_requires_torus) {
         fabric_type_candidates.push_back(FabricType::MESH);
     }
