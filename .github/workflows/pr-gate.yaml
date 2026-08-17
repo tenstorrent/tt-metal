@@ -297,12 +297,13 @@ jobs:
 
   # Full clang-tidy scan (same checks enforced at merge gate).
   # force-scan=true → single full-scan job (avoids 4-way per-target split with high setup overhead).
-  # Gated on any-code-changed so docs/workflow-only PRs are skipped entirely.
+  # Gated on run-clang-tidy so docs-only PRs and workflow-only PRs that cannot
+  # affect the scan (see find-changed-files.sh's explicit key-workflow list) are skipped entirely.
   code-analysis:
     needs: [build-docker-images, find-changed-files]
     if: >-
       ${{
-        needs.find-changed-files.outputs.any-code-changed == 'true' &&
+        needs.find-changed-files.outputs.run-clang-tidy == 'true' &&
         ((github.event_name == 'pull_request' && !github.event.pull_request.draft) || github.event_name == 'merge_group')
       }}
     uses: ./.github/workflows/code-analysis.yaml
