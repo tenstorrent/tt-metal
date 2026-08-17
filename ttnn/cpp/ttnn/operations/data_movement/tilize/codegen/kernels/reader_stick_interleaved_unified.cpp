@@ -720,8 +720,7 @@ void kernel_main() {
             for (uint32_t i = 0; i < num_blocks; i++) {
                 cb.reserve_back(num_tiles_per_row);
                 uint32_t l1_write_addr = cb.get_write_ptr();
-                fill_with_val<elem_size>(
-                    l1_write_addr, static_cast<uint32_t>(padded_X_size << 5), pad_value);
+                fill_with_val<elem_size>(l1_write_addr, padded_X_size << 5, pad_value);
                 cb.push_back(num_tiles_per_row);
             }
         };
@@ -753,12 +752,11 @@ void kernel_main() {
                                {.offset_bytes = l1_offset});
                 uint32_t size_of_padding_columns = padded_X_size - unpadded_X_size;
                 fill_with_val<elem_size>(
-                    static_cast<uint32_t>(l1_base + start_of_row_l1_offset + unpadded_X_size),
+                    l1_base + start_of_row_l1_offset + unpadded_X_size,
                     size_of_padding_columns, pad_value);
                 l1_offset += valid_last_page_bytes + size_of_padding_columns;
             }
-            fill_with_val<elem_size>(
-                static_cast<uint32_t>(l1_base + l1_offset), padding_rows * padded_X_size, pad_value);
+            fill_with_val<elem_size>(l1_base + l1_offset, padding_rows * padded_X_size, pad_value);
             noc.async_read_barrier();
             cb.push_back(num_tiles_per_row * has_rows);
         };
