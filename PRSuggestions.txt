@@ -73,8 +73,8 @@ effect for the least work.
       decode, so prefill carries about half the weight while being 2% of a real utterance, and decode,
       which is 97%, enters once. The edits still helped and the shipped path did get faster, but they
       were ranked by something that does not reflect where the time goes, so rank by a whole utterance
-      instead. It also publishes per call time as per token time, which means measuring a longer and
-      more realistic utterance makes the cost per token look worse.
+      instead. Separately, the number reported as per token is really the whole call, so measuring a
+      longer and more realistic utterance makes the cost per token look worse.
 
 5. The two accuracy thresholds disagree, and the looser one is what you get
     - The gate documents 0.99 as required, the command line passes 0.95 and overrides it. Same port,
