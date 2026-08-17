@@ -92,7 +92,7 @@ def plan(n_tokens, chunk_size, chunked):
     return n_chunks, chunk, n_chunks * chunk
 
 
-def check_kv_pcc(runtime, kv_cache, golden_dir, n_tokens, num_layers, hf_config):
+def check_kv_pcc(runtime, kv_cache, golden_dir, n_tokens, num_layers, hf_config, slot_id=0):
     """Per-layer K / V / index_k PCC: device cache (gather_layer) vs the golden trace. The device
     stores K / index_k Meta-RoPE swizzled over the rotary slice; the golden is HF half-split, so
     permute the golden's rotary slice (identity tail) before comparing. V is raw (no swizzle).
@@ -117,7 +117,7 @@ def check_kv_pcc(runtime, kv_cache, golden_dir, n_tokens, num_layers, hf_config)
     logger.info(f"[kv-pcc] per-layer K / V / index_k vs golden ({golden_dir}):")
     mins = {"k": 1.0, "v": 1.0, "index_k": 1.0}
     for L in range(num_layers):
-        dev_k, dev_v, dev_ik = runtime.gather_layer(kv_cache, slot_id=0, layer_idx=L, n_tokens=n_tokens)
+        dev_k, dev_v, dev_ik = runtime.gather_layer(kv_cache, slot_id=slot_id, layer_idx=L, n_tokens=n_tokens)
         with safe_open(str(kv_dir / f"layer_{L}.safetensors"), framework="pt") as h:
             keys = set(h.keys())
             g_k = h.get_tensor(f"key_cache_layer_{L}").float()[:, :, :n_tokens, :][..., src]  # HF -> Meta
@@ -271,12 +271,13 @@ def main():
             )
             print("[prefill-pcc] loading real bf16 weights + EP placement (slow: bf16 source read) ...", flush=True)
             state_dict = ModelArgs.load_state_dict(model_args.weights_path)
+        num_users = int(os.getenv("PREFILL_NUM_USERS", "1"))
         cfg = TtPrefillRuntimeConfig(
             num_layers=num_layers,
             max_seq_len=total,
             mesh_shape=(rows, cols),
             chunk_size=chunk,
-            num_users=1,
+            num_users=num_users,
             expert_weight_dtype=expert_dtype,
             weight_cache_path=cache_path,
         )
@@ -286,11 +287,49 @@ def main():
         # The runtime is stateless w.r.t. the cache (engine-owned model): allocate it here and pass it
         # into every runtime call (compile / prefill_chunk / gather_layer), mirroring the prefill engine.
         kv_cache = allocate_kv_caches(
-            mesh, num_layers=num_layers, max_seq_len=total, num_users=1, head_dim=hf_config.head_dim
+            mesh, num_layers=num_layers, max_seq_len=total, num_users=num_users, head_dim=hf_config.head_dim
         )
 
         print(f"[prefill-pcc] compiling ({num_layers}L, SP=8 × TP=4 + EP=32) ...", flush=True)
         runtime.compile(kv_cache)
+
+        # --- Request-mode WRITE+READ slot correctness (PREFILL_TWO_USER_PCC=1, PREFILL_NUM_USERS>=2):
+        # prefill each user into its own slot (device-valued write/read slot when PREFILL_DEVICE_SLOT_SLICE=1),
+        # then PCC every user's cache vs the golden. A mis-targeted slot corrupts one user's KV -> its PCC
+        # craters. Same golden for all users, so each slot must match it independently.
+        if os.getenv("PREFILL_TWO_USER_PCC") == "1":
+            assert num_users >= 2, "PREFILL_TWO_USER_PCC needs PREFILL_NUM_USERS>=2"
+            two_padded = token_ids + [0] * (total - n_tokens)
+            reps = int(os.getenv("PREFILL_TPS_ITERS", "3"))
+            passes = []
+            for r in range(reps):
+                t0 = time.perf_counter()
+                for uid in range(num_users):
+                    for c in range(n_chunks):
+                        a = c * chunk
+                        inp = runtime.make_chunk_input(two_padded[a : a + chunk])
+                        runtime.prefill_chunk(
+                            inp, kv_cache, slot_id=uid, actual_start=a, actual_end=min(a + chunk, n_tokens)
+                        )
+                ttnn.synchronize_device(mesh)
+                passes.append(time.perf_counter() - t0)
+                tok = num_users * n_chunks * chunk
+                print(
+                    f"[prefill-pcc] TWO_USER eager pass {r}: {passes[-1] * 1000:.1f} ms "
+                    f"({tok / passes[-1]:.0f} tok/s, {num_users}u x {n_chunks} chunks)",
+                    flush=True,
+                )
+            steady = statistics.median(passes[1:]) if reps > 1 else passes[0]
+            print(
+                f"[prefill-pcc] TWO_USER eager steady-state (pass>=1): {steady * 1000:.1f} ms/seq "
+                f"({num_users * n_chunks * chunk / steady:.0f} tok/s, {num_users}u)",
+                flush=True,
+            )
+            for uid in range(num_users):
+                print(f"[prefill-pcc] --- user {uid} (slot {uid}) KV PCC vs golden ---", flush=True)
+                check_kv_pcc(runtime, kv_cache, golden_dir, n_tokens, num_layers, hf_config, slot_id=uid)
+            print("[prefill-pcc] DONE", flush=True)
+            return 0
 
         # --- Full per-chunk trace POOL (PREFILL_TRACE_POOL=1): capture one trace per chunk index, then
         # replay the whole sequence R times. This is the pipeline design's correctness gate in isolation
@@ -300,27 +339,43 @@ def main():
             padded = token_ids + [0] * (total - n_tokens)
             runtime.capture_prefill_trace_pool(kv_cache, slot_id=0, n_chunks=n_chunks, token_ids=padded)
             repeats = int(os.getenv("PREFILL_TRACE_POOL_REPEATS", "3"))
+            # Request-mode: one captured bucket pool replayed once per active user, re-targeting the
+            # cache-read slot between users via kv_cache.set_read_user. The user count is NOT baked into
+            # the trace (prefill is per-user-per-chunk), so a load-varying 1..N users is just the replay
+            # count. Requires PREFILL_DEVICE_SLOT_SLICE=1 (device-valued read slot).
+            users = int(os.getenv("PREFILL_TRACE_POOL_USERS", "1"))
             passes = []
             for r in range(repeats):
                 t0 = time.perf_counter()
-                for c in range(n_chunks):
-                    runtime.update_chunk_input(c, tokens=padded[c * chunk : (c + 1) * chunk])
-                    runtime.replay_chunk(c)
+                for u in range(users):
+                    if users > 1:
+                        kv_cache.set_read_user(u)
+                    for c in range(n_chunks):
+                        runtime.update_chunk_input(c, tokens=padded[c * chunk : (c + 1) * chunk])
+                        runtime.replay_chunk(c)
                 ttnn.synchronize_device(mesh)
                 passes.append(time.perf_counter() - t0)
+                tok = users * n_chunks * chunk
                 print(
                     f"[prefill-pcc] TRACE_POOL pass {r}: {passes[-1] * 1000:.1f} ms "
-                    f"({n_chunks * chunk / passes[-1]:.0f} tok/s, {n_chunks} chunks)",
+                    f"({tok / passes[-1]:.0f} tok/s, {users}u x {n_chunks} chunks)",
                     flush=True,
                 )
             steady = statistics.median(passes[1:]) if repeats > 1 else passes[0]
             print(
                 f"[prefill-pcc] TRACE_POOL steady-state (pass>=1): {steady * 1000:.1f} ms/seq "
-                f"({n_chunks * chunk / steady:.0f} tok/s)",
+                f"({users * n_chunks * chunk / steady:.0f} tok/s, {users}u)",
                 flush=True,
             )
             if os.environ.get("PREFILL_SKIP_PCC") == "1":
                 print("[prefill-pcc] PREFILL_SKIP_PCC=1 -> skipping KV PCC (perf only)", flush=True)
+            elif users > 1:
+                # RB1 makes the KV-write slot device-valued too, so set_read_user re-targets BOTH read and
+                # write: each user's replay pass above fills its own slot from empty. PCC every user's slot
+                # vs the golden — a mis-targeted read or write corrupts that user's KV and craters its PCC.
+                for uid in range(users):
+                    print(f"[prefill-pcc] --- traced user {uid} (slot {uid}) KV PCC vs golden ---", flush=True)
+                    check_kv_pcc(runtime, kv_cache, golden_dir, n_tokens, num_layers, hf_config, slot_id=uid)
             else:
                 check_kv_pcc(runtime, kv_cache, golden_dir, n_tokens, num_layers, hf_config)
             runtime.release_trace_pool()
