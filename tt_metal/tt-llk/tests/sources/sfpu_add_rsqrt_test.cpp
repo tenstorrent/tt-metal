@@ -106,8 +106,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
         0 /* dst_index */, formats.math, formats.math);
 
-    // Reset DEST addressing so the SFPU op starts at the tile-0 base, matching the
-    // other sfpi-based SFPU drivers (binop_scalar / ternary).
+    // Kept for init/uninit symmetry only -- it does NOT reset DEST addressing. The body of
+    // _llk_math_eltwise_unary_datacopy_uninit_ is empty on Blackhole (and on Wormhole); what
+    // actually rebases DEST to the tile-0 base is _llk_math_eltwise_unary_sfpu_params_ below,
+    // via _llk_math_eltwise_sfpu_start_ -> math::set_dst_write_addr<Tile32x32, SrcRegs>(0).
+    // The same paired call appears in sfpu_binop_scalar_test.cpp, sfpu_ternary_test.cpp and
+    // sfpu_binary_test.cpp for the same reason.
     _llk_math_eltwise_unary_datacopy_uninit_<BroadcastType::NONE, unpack_to_dest>();
 
     // ITERATIONS=8 with VectorMode::RC is exactly what add_rsqrt_tile dispatches.
