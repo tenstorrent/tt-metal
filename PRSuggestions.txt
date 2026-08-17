@@ -24,10 +24,10 @@
       against, so it writes no check at all, and that file becomes what every later test is scored
       against. Ours was correct. A slightly wrong one, one RoPE convention or one norm epsilon, would
       set every component's target wrong and nothing in the run could tell.
-    - Fix: when it writes the architecture itself, have it check what it can
-      without a reference: that every weight in the checkpoint got used, that each stage returns the
-      expected shape and finite numbers, that the cached and recomputed paths agree, and that the
-      same seed gives the same result. And say in the log which of the two it did.
+    - Fix: when it writes the architecture itself, have it check what it can without a reference: that
+      every weight in the checkpoint got used, that each stage returns the expected shape and finite
+      numbers, that the cached and recomputed paths agree, and that the same seed gives the same
+      result. And say in the log which of the two it did.
 
 2. Fix the model bring up from local path
     - A folder on disk behaves differently from a Hub name, and fails later with a confusing error:
