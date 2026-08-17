@@ -14,6 +14,19 @@ quarter full and paid for the padding. **182 → 111 us per op.**
 The profiler pointed straight at this: SDPA was 14.9% of baseline at 182.6 us per instance, and
 `576 / 256 = 2.25` is visibly not an integer.
 
+## Before/after visual
+
+![SDPA chunk 256 to 192: core utilization, estimated L1 payload, and measured kernel time](assets/02-sdpa-chunk-192.svg)
+
+**How to read it.** Kernel duration is measured. Grid useful-work ratios and the BF16 Q/K/V
+operand payload are derived estimates. DRAM/L1 phase durations and per-RISC overlap were not
+preserved, so the pipeline strip is schematic rather than a measured timeline.
+
+**Bottleneck conclusion.** This change removed padded attention work: scheduled token slots fell
+from 768 to 576 and SDPA time fell 39.2%. The profile contains device-kernel time, not host
+wall-clock time, so it does not establish a CPU-bound path. Historical per-RISC timings are needed
+to distinguish compute, data-movement, and synchronization limits at this stage.
+
 ## Kernel time by op code, one replay
 
 | Op | inst | Δ inst | us each | Δ us each | ms | % |

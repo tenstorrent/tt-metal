@@ -18,7 +18,7 @@ from models.experimental.janus_pro.tt.model_config import ModelArgs
 from models.tt_transformers.tt.ccl import TT_CCL
 
 
-@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": None}], indirect=True)
 @pytest.mark.parametrize(
     "mesh_device",
     [
