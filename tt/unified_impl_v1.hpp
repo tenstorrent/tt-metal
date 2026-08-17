@@ -363,6 +363,12 @@ auto matmul(const ComputeBlock& a, const ComputeBlock& b) {
     return matmul<Geometry>(as_node(a), as_node(b));
 }
 
+template <typename Geometry, ReduceAxis Axis>
+ReduceNode<Geometry, Axis, ReducePool::Sum, expr::UnaryChain<>> reduce_sum(
+    const ComputeBlock& b, const Storage& scaler) {
+    return {b.get_cb_id(), scaler.cb_id};
+}
+
 // --- NocAsyncReadTx ---
 
 template <int thread>
@@ -476,6 +482,11 @@ NocAsyncWriteCoreTx<thread>::~NocAsyncWriteCoreTx() {
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     if constexpr (thread == TT_DM_THREAD_ID) {
         noc_async_writes_flushed();
+        // The arrival flag is an ATOMIC, and a write flush does not cover atomics.
+        // Leaving one outstanding is an inter-kernel data race: the ack lands after
+        // this kernel has finished, against whatever runs next. The watcher calls
+        // it "kernel completing with pending NOC transactions".
+        noc_async_atomic_barrier();
         cb_pop_front(src_cb, src_tiles);
     }
 #if defined(ASSERT_ENABLED) && ASSERT_ENABLED
@@ -505,6 +516,38 @@ Block NocAsyncWriteCoreTx<thread>::wait(uint32_t num_writers) const {
 }
 
 // --- Data movement ---
+
+template <int thread>
+void fill_reduce_scaler(const Storage& scaler, uint32_t value_bits) {
+#if defined(IS_DM_THREAD) && IS_DM_THREAD
+    if constexpr (thread == TT_DM_THREAD_ID) {
+        cb_reserve_back(scaler.cb_id, 1);
+
+        const uint32_t words = cb_page_bytes(scaler.cb_id) / sizeof(uint32_t);
+        volatile tt_l1_ptr uint32_t* page = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(scaler.cb_id));
+
+        // Everything the reduction must not pick up has to read as zero.
+        for (uint32_t w = 0; w < words; ++w) {
+            page[w] = 0;
+        }
+
+        // A tile is four 16x16 faces, so a quarter of the page each, and one row
+        // is a sixteenth of a face.
+        const uint32_t face_words = words / 4;
+        const uint32_t row_words = face_words / 16;
+        for (uint32_t f = 0; f < 4; ++f) {
+            for (uint32_t w = 0; w < row_words; ++w) {
+                page[f * face_words + w] = value_bits;
+            }
+        }
+
+        cb_push_back(scaler.cb_id, 1);
+    }
+#else
+    (void)scaler;
+    (void)value_bits;
+#endif
+}
 
 template <int thread, typename Accessor>
 NocAsyncReadTx<thread> noc_load(const Storage& storage, const Accessor& acc, uint32_t block_idx) {
@@ -722,6 +765,10 @@ void synchronize_cores(PhysicalMcast region) {
             release.set(0);  // leave the pair as we found it
         } else {
             arrived.inc_remote(region.start);
+            // Same reason as in NocAsyncWriteCoreTx's destructor: an arrival is an
+            // atomic, and nothing else here drains it. Parking on `release` does
+            // not -- that spins on local L1.
+            noc_async_atomic_barrier();
             release.wait(1);
             release.set(0);
         }

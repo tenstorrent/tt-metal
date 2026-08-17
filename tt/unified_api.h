@@ -51,6 +51,15 @@ struct PhysicalCoord {
     uint32_t x;
 
     // This core's own physical coordinate, on this thread's NOC.
+    //
+    // DATA MOVEMENT ONLY. On a compute projection this returns the ORIGIN, not
+    // the real coordinate: my_x/my_y are filled by risc_init(), which does not
+    // run on a TRISC, so metal gives compute no way to know where it is. The
+    // consequence is a quiet one -- a statement whose COMPUTE side branches on
+    // this behaves as though every core were (0,0), so circular-buffer traffic
+    // guarded by it happens everywhere and the pushes go unmatched. Gate NOC work
+    // on it, never CB work; if compute must branch on position, pass the
+    // coordinate in as a per-core runtime arg, which every projection can read.
     static PhysicalCoord this_core();
     static PhysicalCoord origin();
 
@@ -64,6 +73,7 @@ struct LogicalCoord {
     uint32_t y;
     uint32_t x;
 
+    // Same caveat as PhysicalCoord::this_core(): the origin on compute.
     static LogicalCoord this_core();
     static LogicalCoord origin();
 
@@ -340,6 +350,10 @@ inline constexpr uint32_t kCoreGridH = 1;
 inline constexpr uint32_t kCoreGridW = 1;
 #endif
 
+// Two bfloat16 1.0 values in one 32-bit word -- the scaler a SUM reduction wants.
+// A float32 CB would want a single 0x3F800000 instead.
+inline constexpr uint32_t kReduceScalerOne = 0x3F803F80u;
+
 // ---------------------------------------------------------------------------
 // synchronize_cores -- barrier across the CORES of a region
 //
@@ -440,6 +454,19 @@ auto exp_(const ComputeBlock& b);
 
 template <typename Geometry>
 auto matmul(const ComputeBlock& a, const ComputeBlock& b);
+
+// Reduce `b`'s tile grid down one axis, within and across tiles. `Geometry` is
+// the INPUT grid, `Axis` says which dimension collapses, and the destination
+// Storage must hold Geometry::out_tiles(Axis) tiles -- see ReduceAxis in
+// tt/unified_math.hpp for the shapes.
+//
+//     u::Storage out(kCbOut, u::ReduceGeometry<4, 4>::out_tiles(u::ReduceAxis::Rows));
+//     out.store(u::reduce_sum<u::ReduceGeometry<4, 4>, u::ReduceAxis::Rows>(block, scaler));
+//
+// `scaler` must have been filled by fill_reduce_scaler and is never consumed.
+template <typename Geometry, ReduceAxis Axis>
+ReduceNode<Geometry, Axis, ReducePool::Sum, expr::UnaryChain<>> reduce_sum(
+    const ComputeBlock& b, const Storage& scaler);
 
 // ---------------------------------------------------------------------------
 // NOC transaction handles
@@ -649,6 +676,17 @@ NocAsyncReadTx<thread> noc_load(const Storage& storage, PhysicalMcast mcast, con
 
 template <int thread, int pair = thread, typename Accessor>
 NocAsyncReadTx<thread> noc_load(const Storage& storage, LogicalMcast mcast, const Accessor& acc, uint32_t block_idx);
+
+// Fill a one-page Storage with the constant metal's reduce folds in: the value in
+// the first row of each of the tile's four 16x16 faces, zero everywhere else.
+// Call it ONCE, before the first reduction; it pushes the page and nothing ever
+// pops it, because every reduce_tile re-reads the same tile.
+//
+// `value_bits` is written as raw 32-bit words, so its packing follows the CB's
+// format: for bfloat16 one word is TWO values, which is what kReduceScalerOne is.
+// Sum wants 1.0; an average wants 1/N (1/sqrt(N) reducing both axes).
+template <int thread>
+void fill_reduce_scaler(const Storage& scaler, uint32_t value_bits = kReduceScalerOne);
 
 // Drains a Block to a tensor. Takes the Block by value: this call consumes it.
 template <int thread, typename Accessor>

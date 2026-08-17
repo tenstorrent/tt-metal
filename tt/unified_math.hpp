@@ -22,6 +22,11 @@
 //                 bias spills through an intermediate CB instead
 //                 (bmm_large_block_zm_fused_bias_activation.cpp:384).
 //
+//   ReduceFusion -- metal's reduce folds a whole tile grid down an axis, within
+//                 and across tiles, accumulating into ONE DST slot. So there is
+//                 nothing to allocate either, and again only a unary epilogue can
+//                 fuse. Unlike the other two it has no DST budget to check.
+//
 // Adding an FPU op later means adding a node type that declares
 // `using fusion_kind = FPUFusion;` -- Strategy<FPUFusion> is reused as-is.
 
@@ -106,9 +111,9 @@ struct ExpOp {
     static void apply_in_place(uint32_t slot) { apply(slot, slot); }
 };
 
-// NOTE: a cross-tile reduction is deliberately absent. It is not an op -- it
-// accumulates across the tile loop and packs once, so it wants a third Strategy
-// alongside SFPUFusion/FPUFusion.
+// NOTE: a reduction is not here among the ops, and not by omission: it collapses
+// the tile loop instead of running inside it, so it is a third KIND. See
+// ReduceNode and Strategy<ReduceFusion> below.
 
 // A unary usable in either kind: a node in an SFPU tree, or a link in an FPU
 // node's epilogue chain. Both run on the SFPU against DST, so one implementation
@@ -138,6 +143,8 @@ using SFPUFusion = expr::TreeKind;
 
 struct FPUFusion {};
 
+struct ReduceFusion {};
+
 // Compile-time geometry, so the strategy can unroll and the DST budget is
 // checkable with a static_assert. Names follow matmul_block's own parameters:
 // A is rt_dim x kt_dim tiles, B is kt_dim x ct_dim, C is rt_dim x ct_dim.
@@ -164,6 +171,91 @@ struct MatmulNode {
     uint32_t in0_cb;
     uint32_t in1_cb;
 };
+
+// --- Reduction ---
+//
+// A reduction is not an op: it collapses the tile loop rather than running inside
+// it, and metal wants its dimension as a template argument. So it gets its own
+// kind and driver, reducing WITHIN each tile and ACROSS the block at once.
+//
+// The axis names say what COLLAPSES. Metal names the survivor instead, which is
+// the usual source of error, so the mapping is written out:
+//
+//   Rows -> REDUCE_COL     Ht x Wt -> 1 x Wt, each column's value in row 0
+//   Cols -> REDUCE_ROW     Ht x Wt -> Ht x 1, each row's value in column 0
+//   Both -> REDUCE_SCALAR  Ht x Wt -> 1 x 1,  the value at [0, 0]
+//
+// reduce_init programs the packer's edge masks so every datum that is NOT part of
+// the result is written out as zero -- so a 4x4-tile block reduced over Rows
+// leaves one valid row spread across 1x4 tiles, and nothing else.
+enum class ReduceAxis { Rows, Cols, Both };
+
+// Ours rather than metal's PoolType, because this names a template argument of a
+// type that appears in shared kernel code, and PoolType only exists on a compute
+// build.
+enum class ReducePool { Sum, Avg, Max };
+
+#if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
+// Ours -> metal's, in the one place metal's enums are nameable. Note the axis
+// crossover: collapsing rows is REDUCE_COL, because metal names what survives.
+constexpr ckernel::PoolType metal_pool(ReducePool p) {
+    return p == ReducePool::Sum   ? ckernel::PoolType::SUM
+           : p == ReducePool::Avg ? ckernel::PoolType::AVG
+                                  : ckernel::PoolType::MAX;
+}
+
+constexpr ckernel::ReduceDim metal_dim(ReduceAxis a) {
+    return a == ReduceAxis::Rows   ? ckernel::ReduceDim::REDUCE_COL
+           : a == ReduceAxis::Cols ? ckernel::ReduceDim::REDUCE_ROW
+                                   : ckernel::ReduceDim::REDUCE_SCALAR;
+}
+#endif
+
+// The INPUT tile grid, row-major: tile (h, w) is at index h * wt + w.
+template <uint32_t Ht, uint32_t Wt>
+struct ReduceGeometry {
+    static constexpr uint32_t ht = Ht;
+    static constexpr uint32_t wt = Wt;
+    static constexpr uint32_t num_tiles = Ht * Wt;
+
+    // Tiles the result occupies, which is what the destination Storage must hold.
+    static constexpr uint32_t out_tiles(ReduceAxis axis) {
+        return axis == ReduceAxis::Rows ? Wt : (axis == ReduceAxis::Cols ? Ht : 1);
+    }
+
+    // Input tiles feeding one output tile.
+    static constexpr uint32_t group(ReduceAxis axis) {
+        return axis == ReduceAxis::Rows ? Ht : (axis == ReduceAxis::Cols ? Wt : num_tiles);
+    }
+
+    // Index of the g'th contributor to output tile `o`.
+    static constexpr uint32_t contributor(ReduceAxis axis, uint32_t o, uint32_t g) {
+        return axis == ReduceAxis::Rows ? g * Wt + o : (axis == ReduceAxis::Cols ? o * Wt + g : g);
+    }
+};
+
+// `scaler_cb` holds the constant reduce_tile folds in: see fill_reduce_scaler.
+template <typename Geometry, ReduceAxis Axis, ReducePool Pool, typename Chain>
+struct ReduceNode {
+    using fusion_kind = ReduceFusion;
+    using geometry = Geometry;
+    using chain = Chain;
+    static constexpr ReduceAxis axis = Axis;
+    static constexpr ReducePool pool = Pool;
+
+    uint32_t in_cb;
+    uint32_t scaler_cb;
+};
+
+template <typename G, ReduceAxis A, ReducePool P, typename Chain>
+auto relu(const ReduceNode<G, A, P, Chain>& r) {
+    return ReduceNode<G, A, P, expr::chain_append_t<Chain, ReluOp>>{r.in_cb, r.scaler_cb};
+}
+
+template <typename G, ReduceAxis A, ReducePool P, typename Chain>
+auto exp_(const ReduceNode<G, A, P, Chain>& r) {
+    return ReduceNode<G, A, P, expr::chain_append_t<Chain, ExpOp>>{r.in_cb, r.scaler_cb};
+}
 
 // --- Operand plumbing ---
 //
@@ -482,6 +574,66 @@ struct Strategy<FPUFusion> {
         (void)out_cb;
         (void)reload;
         (void)finish;
+#endif
+    }
+};
+
+// Reduce: metal's reduce, folding the input grid down one axis. Every contributor
+// to an output tile accumulates into DST slot 0 -- reduce_tile adds into idst
+// rather than overwriting it -- so this costs ONE slot whatever the geometry.
+template <>
+struct Strategy<ReduceFusion> {
+    template <typename Node>
+    static void run(const Node& node, uint32_t cb_id, uint32_t num_tiles) {
+        using G = typename Node::geometry;
+        constexpr ReduceAxis kAxis = Node::axis;
+        constexpr uint32_t kOut = G::out_tiles(kAxis);
+        constexpr uint32_t kGroup = G::group(kAxis);
+#if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
+        using Chain = typename Node::chain;
+        constexpr ckernel::PoolType kPool = metal_pool(Node::pool);
+        constexpr ckernel::ReduceDim kDim = metal_dim(kAxis);
+
+        // The destination has to be exactly the shape the axis leaves behind.
+        ASSERT(num_tiles == kOut);
+
+        // The scaler is read by every reduce_tile and never popped, so waiting is
+        // idempotent -- one page stays at the front for the kernel's lifetime.
+        cb_wait_front(node.scaler_cb, 1);
+
+        if constexpr (kDim == ckernel::ReduceDim::REDUCE_ROW && kPool != ckernel::PoolType::MAX) {
+            // SUM/AVG along a row is an MVMUL with the operands swapped, so the
+            // scaler has to be SrcA before init -- see reduce_init's own note.
+            ckernel::reconfig_data_format(node.scaler_cb, node.in_cb);
+        }
+        ckernel::reduce_init<kPool, kDim>(node.in_cb, node.scaler_cb, cb_id);
+
+        cb_reserve_back(cb_id, kOut);
+        for (uint32_t o = 0; o < kOut; ++o) {
+            ckernel::tile_regs_acquire();
+            for (uint32_t g = 0; g < kGroup; ++g) {
+                ckernel::reduce_tile<kPool, kDim>(node.in_cb, node.scaler_cb, G::contributor(kAxis, o, g), 0, 0);
+            }
+            if constexpr (!Chain::empty) {
+                Chain::apply_in_place(0);
+            }
+            ckernel::tile_regs_commit();
+            ckernel::tile_regs_wait();
+            ckernel::pack_tile(0, cb_id);
+            ckernel::tile_regs_release();
+        }
+        cb_push_back(cb_id, kOut);
+
+        // Mandatory, not tidiness: reduce_init left the packer masking every datum
+        // outside the result to zero, and the next op inherits that until it is
+        // reset.
+        ckernel::reduce_uninit(node.in_cb);
+#else
+        (void)node;
+        (void)cb_id;
+        (void)num_tiles;
+        (void)kOut;
+        (void)kGroup;
 #endif
     }
 };
