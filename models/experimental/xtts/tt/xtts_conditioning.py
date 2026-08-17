@@ -18,6 +18,7 @@ from models.experimental.xtts.config import (  # noqa: F401 — re-exported for 
     PERCEIVER_HEAD_DIM,
     PERCEIVER_HEADS,
     PERCEIVER_INNER,
+    TILE,
 )
 
 L1 = ttnn.L1_MEMORY_CONFIG
@@ -221,13 +222,24 @@ class TtXttsConditioning(LightweightModule):
                 num_batches=1,
             )
             cols = dram_group_norm_virtual_columns(grid, HIDDEN_SIZE, GROUP_NORM_GROUPS)
-            mask = self._gn_masks.get(cols)
+            # A non-tile-aligned S needs the doubled mask (second set with rows >= S % TILE zeroed,
+            # selected on the final row-tile). Build it here: given a single-set mask, group_norm
+            # derives the second set itself with a host build + upload per call, which is fatal
+            # inside a trace capture.
+            rows_in_last_tile = s % TILE
+            mask = self._gn_masks.get((cols, rows_in_last_tile))
             if mask is None:
                 mask = ttnn.to_device(
-                    ttnn.create_group_norm_input_mask(HIDDEN_SIZE, GROUP_NORM_GROUPS, cols, ttnn.bfloat16),
+                    ttnn.create_group_norm_input_mask(
+                        HIDDEN_SIZE,
+                        GROUP_NORM_GROUPS,
+                        cols,
+                        ttnn.bfloat16,
+                        rows_in_last_tile=rows_in_last_tile,
+                    ),
                     self.device,
                 )
-                self._gn_masks[cols] = mask
+                self._gn_masks[(cols, rows_in_last_tile)] = mask
             affine = [
                 ttnn.from_torch(
                     ttnn.create_group_norm_weight_bias_rm(t, HIDDEN_SIZE, cols),
