@@ -21,6 +21,11 @@ from models.common.sampling.vocab_padding import (
     get_vocab_shard_dims,
 )
 
+# Rows wider than this are untilized in chunks before argmax (see
+# _untilize_for_argmax); the chunk width bounds untilize's per-core CB.
+_ARGMAX_UNTILIZE_MAX_WIDTH = 128 * 1024
+_ARGMAX_UNTILIZE_CHUNK = 32 * 1024
+
 
 class TTSampling(LightweightModule):
     """
@@ -451,6 +456,35 @@ class TTSampling(LightweightModule):
             sub_core_grids=self.sub_core_grids,
         )
 
+    def _untilize_for_argmax(self, logits):
+        """Untilize the gathered logits row that ``ttnn.argmax`` consumes.
+
+        ``untilize`` sizes its circular buffer by the stick it processes, so a
+        262144-wide bf16 row asks for ~600 KB of L1 per core. That fits on an
+        idle device but collides with the L1 buffers a traced decode step keeps
+        live ("Statically allocated circular buffers ... clash with L1 buffers on
+        core range [0-0 - 0-0]"). Untilizing in ``_ARGMAX_UNTILIZE_CHUNK``-wide
+        pieces caps the CB at the chunk stick (~64 KB) and then concatenates them
+        for a single multi-core argmax; measured 5.0 ms vs 4.5 ms for the
+        monolithic untilize at vocab 262144 / batch 32 on WH.
+
+        Narrower rows (the Galaxy configs that already ship this path) keep the
+        single untilize — they never approached the L1 ceiling.
+        """
+        width = logits.shape[-1]
+        if width <= _ARGMAX_UNTILIZE_MAX_WIDTH or width % _ARGMAX_UNTILIZE_CHUNK != 0:
+            return ttnn.untilize(logits, use_multicore=True)
+
+        parts = ttnn.split(logits, _ARGMAX_UNTILIZE_CHUNK, dim=3)
+        untilized = []
+        for part in parts:
+            untilized.append(ttnn.untilize(part, use_multicore=True))
+            part.deallocate(True)
+        out = ttnn.concat(untilized, dim=3)
+        for chunk in untilized:
+            chunk.deallocate(True)
+        return out
+
     def _perform_all_gather(self, tensor, dim, cluster_axis, memory_config, num_links, buffer_key=None, dtype=None):
         """
         Flexible all-gather that works across different CCL implementations.
@@ -624,7 +658,7 @@ class TTSampling(LightweightModule):
                 )
             if slice_valid_vocab:
                 x = self._slice_valid_vocab_for_argmax(x)
-            x_untilized = ttnn.untilize(x, use_multicore=True)
+            x_untilized = self._untilize_for_argmax(x)
             tt_out_tok = ttnn.argmax(
                 x_untilized,
                 dim=-1,
