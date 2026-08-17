@@ -646,7 +646,7 @@ inline __attribute__((always_inline)) void configure_stream()
     static_assert(Group < 8u, "NoC stream group must fit in three bits");
     static_assert(Stream < 8u, "NoC stream number must fit in three bits");
     constexpr std::uint32_t stream_id = (Group << 3) | Stream;
-    cfg::write<cfg::Access::TensixCfgUnit, cfg::StreamIdSync::BankSel, stream_id, detail::stream_section<Slot>>();
+    cfg::write<cfg::Access::TensixCfgUnit, cfg::StreamIdSync::BankSel, detail::stream_section<Slot>, stream_id>();
 }
 
 /** @brief Program one runtime-selected STREAM_ID_SYNC slot and NoC stream ID. */
@@ -697,11 +697,11 @@ inline __attribute__((always_inline)) void configure_stream_target()
     static_assert(FullTarget <= detail::max_stream_target<Target>, "STREAMWAIT target exceeds the selected counter width");
     if constexpr (Target == StreamTarget::Phase)
     {
-        cfg::write<cfg::Access::TensixCfgUnit, cfg::StreamwaitPhaseHi::Val, (FullTarget >> detail::STREAM_TARGET_LOW_BITS)>();
+        cfg::write<cfg::Access::TensixCfgUnit, cfg::StreamwaitPhaseHi::Val, cfg::Sec::S0, (FullTarget >> detail::STREAM_TARGET_LOW_BITS)>();
     }
     else
     {
-        cfg::write<cfg::Access::TensixCfgUnit, cfg::StreamwaitNumMsgsHi::Val, (FullTarget >> detail::STREAM_TARGET_LOW_BITS)>();
+        cfg::write<cfg::Access::TensixCfgUnit, cfg::StreamwaitNumMsgsHi::Val, cfg::Sec::S0, (FullTarget >> detail::STREAM_TARGET_LOW_BITS)>();
     }
 }
 
@@ -715,11 +715,11 @@ inline __attribute__((always_inline)) void configure_stream_target(const StreamT
         "STREAMWAIT target exceeds the selected counter width");
     if (target == StreamTarget::Phase)
     {
-        cfg::write<cfg::Access::TensixCfgUnit, cfg::StreamwaitPhaseHi::Val>(full_target >> detail::STREAM_TARGET_LOW_BITS);
+        cfg::write<cfg::Access::TensixCfgUnit, cfg::StreamwaitPhaseHi::Val, cfg::Sec::S0>(full_target >> detail::STREAM_TARGET_LOW_BITS);
     }
     else
     {
-        cfg::write<cfg::Access::TensixCfgUnit, cfg::StreamwaitNumMsgsHi::Val>(full_target >> detail::STREAM_TARGET_LOW_BITS);
+        cfg::write<cfg::Access::TensixCfgUnit, cfg::StreamwaitNumMsgsHi::Val, cfg::Sec::S0>(full_target >> detail::STREAM_TARGET_LOW_BITS);
     }
 }
 

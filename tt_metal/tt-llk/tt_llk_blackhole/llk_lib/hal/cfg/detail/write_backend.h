@@ -131,7 +131,7 @@ inline __attribute__((always_inline)) void write_words(const Words&... words)
     }
 }
 
-template <const Field& F, std::uint32_t Count, Sec S, std::size_t ArrayCount>
+template <const Field& F, Sec S, std::uint32_t Count, std::size_t ArrayCount>
 inline __attribute__((always_inline)) void write_array_mmio(volatile std::uint32_t* tt_reg_ptr cfg, const std::uint32_t (&values)[ArrayCount])
 {
     static_assert(F.file == RegisterFile::State, "RISC writes target state CFG");

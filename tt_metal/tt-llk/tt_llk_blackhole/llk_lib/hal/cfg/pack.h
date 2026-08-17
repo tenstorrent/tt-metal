@@ -206,11 +206,11 @@ public:
  * the compile-time index supplied by `forEach()`.
  *
  * @code{.cpp}
- * write<Access::TensixCfgUnit, Packer[0].AddrCtrl[PackerReg::Reg0].Zstride>(z_stride);
- * write<Access::TensixCfgUnit, Packer[0].AddrBase[PackerReg::Reg1]>(base);
+ * write<Access::TensixCfgUnit, Packer[0].AddrCtrl[PackerReg::Reg0].Zstride, Sec::S0>(z_stride);
+ * write<Access::TensixCfgUnit, Packer[0].AddrBase[PackerReg::Reg1], Sec::S0>(base);
  *
  * Packer[0].AddrCtrl.forEach([&](auto R) {
- *     write<Access::MMIO, Packer[0].AddrCtrl[R].Xstride>(x_stride[R]);
+ *     write<Access::MMIO, Packer[0].AddrCtrl[R].Xstride, Sec::S0>(x_stride[R]);
  * });
  * @endcode
  */
@@ -331,11 +331,11 @@ public:
  * Invalid runtime indices trap instead of producing an out-of-bounds access.
  *
  * @code{.cpp}
- * write<Access::TensixCfgUnit, TileRowSetMapping[2][5]>(mask_set_index);
+ * write<Access::TensixCfgUnit, TileRowSetMapping[2][5], Sec::S0>(mask_set_index);
  *
  * TileRowSetMapping.forEach([&](auto M) {
  *     TileRowSetMapping[M].forEach([&](auto S) {
- *         write<Access::MMIO, TileRowSetMapping[M][S]>(values[M][S]);
+ *         write<Access::MMIO, TileRowSetMapping[M][S], Sec::S0>(values[M][S]);
  *     });
  * });
  * @endcode
@@ -489,11 +489,11 @@ public:
  * Invalid runtime indices trap instead of producing an out-of-bounds access.
  *
  * @code{.cpp}
- * write<Access::TensixCfgUnit, TileFaceSetMapping[2][5]>(face_mask_set_index);
+ * write<Access::TensixCfgUnit, TileFaceSetMapping[2][5], Sec::S0>(face_mask_set_index);
  *
  * TileFaceSetMapping.forEach([&](auto M) {
  *     TileFaceSetMapping[M].forEach([&](auto S) {
- *         write<Access::MMIO, TileFaceSetMapping[M][S]>(values[M][S]);
+ *         write<Access::MMIO, TileFaceSetMapping[M][S], Sec::S0>(values[M][S]);
  *     });
  * });
  * @endcode

@@ -451,8 +451,8 @@ struct ThconFields
  * corresponding THCON section.
  *
  * @code{.cpp}
- * write<Backend::TENSIX_ENGINE, Thcon[Reg2].Out_data_format, Sec::S0>(format);
- * write<Backend::TENSIX_ENGINE, Thcon[Reg7].Offset_address, Sec::S1>(offset);
+ * write<Access::TensixCfgUnit, Thcon[Reg2].Out_data_format, Sec::S0>(format);
+ * write<Access::TensixCfgUnit, Thcon[Reg7].Offset_address, Sec::S1>(offset);
  * @endcode
  */
 inline constexpr ThconFields Thcon {};

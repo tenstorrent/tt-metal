@@ -16,7 +16,7 @@ namespace hal::cfg
 /**
  * @brief Absolute config word of field @p F at section @p S (compile-time).
  */
-template <const Field& F, Sec S = Sec::S0>
+template <const Field& F, Sec S>
 inline constexpr std::uint32_t word_addr = F.addr32(S);
 
 /**
@@ -25,7 +25,7 @@ inline constexpr std::uint32_t word_addr = F.addr32(S);
  * Use @ref set to construct one. Assignments from different generated structs
  * can be combined when their fields occupy the same physical CFG word.
  */
-template <const Field& F, Sec S = Sec::S0>
+template <const Field& F, Sec S>
 struct FieldAssignment
 {
     static_assert(F.width <= 32, "field wider than 32b cannot be assigned through a single value");
@@ -46,7 +46,7 @@ struct FieldAssignment
  * constant assignments therefore emits immediate TTI_RMWCIB/TTI_SETC16
  * instructions without constructing an opcode at runtime.
  */
-template <const Field& F, std::uint32_t Value, Sec S = Sec::S0>
+template <const Field& F, Sec S, std::uint32_t Value>
 struct ConstantFieldAssignment
 {
     static_assert(F.width <= 32, "field wider than 32b cannot be assigned through a single value");
@@ -63,7 +63,7 @@ struct ConstantFieldAssignment
 /**
  * @brief Associate a runtime value with a generated CFG field.
  */
-template <const Field& F, Sec S = Sec::S0>
+template <const Field& F, Sec S>
 inline constexpr FieldAssignment<F, S> set(const std::uint32_t value)
 {
     return {value};
@@ -72,8 +72,8 @@ inline constexpr FieldAssignment<F, S> set(const std::uint32_t value)
 /**
  * @brief Associate a compile-time value with a generated CFG field.
  */
-template <const Field& F, std::uint32_t Value, Sec S = Sec::S0>
-inline constexpr ConstantFieldAssignment<F, Value, S> set()
+template <const Field& F, Sec S, std::uint32_t Value>
+inline constexpr ConstantFieldAssignment<F, S, Value> set()
 {
     return {};
 }
@@ -145,7 +145,7 @@ inline constexpr auto word(const First& first, const Rest&... rest)
  * The field must begin at bit zero of the selected word. No field mask is
  * applied: writing the result replaces all 32 bits.
  */
-template <const Field& F, Sec S = Sec::S0>
+template <const Field& F, Sec S>
 inline constexpr auto word(const std::uint32_t value)
 {
     static_assert(F.file == RegisterFile::State, "prepacked CFG words target the state CFG");
@@ -158,7 +158,7 @@ inline constexpr auto word(const std::uint32_t value)
 /**
  * @brief Wrap a prepacked complete CFG word at an offset from field @p F.
  */
-template <const Field& F, std::uint32_t WordOffset, Sec S = Sec::S0>
+template <const Field& F, Sec S, std::uint32_t WordOffset>
 inline constexpr auto word_at(const std::uint32_t value)
 {
     static_assert(F.file == RegisterFile::State, "prepacked CFG words target the state CFG");

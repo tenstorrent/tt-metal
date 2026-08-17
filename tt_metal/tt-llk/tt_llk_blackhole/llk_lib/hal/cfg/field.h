@@ -67,12 +67,12 @@ struct Field
         return (abs0() + static_cast<std::uint32_t>(s) * sec_bits) / wbits;
     }
 
-    constexpr std::uint32_t shamt(Sec s = Sec::S0) const
+    constexpr std::uint32_t shamt(Sec s) const
     {
         return (abs0() + static_cast<std::uint32_t>(s) * sec_bits) % wbits;
     }
 
-    constexpr std::uint32_t mask(Sec s = Sec::S0) const
+    constexpr std::uint32_t mask(Sec s) const
     { // valid for width <= 32
         return width >= 32 ? 0xffffffffu : (((1u << width) - 1u) << shamt(s));
     }

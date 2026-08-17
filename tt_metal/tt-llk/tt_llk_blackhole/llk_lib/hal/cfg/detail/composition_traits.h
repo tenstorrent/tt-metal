@@ -15,7 +15,7 @@ namespace hal::cfg
 template <const Field& F, Sec S>
 struct FieldAssignment;
 
-template <const Field& F, std::uint32_t Value, Sec S>
+template <const Field& F, Sec S, std::uint32_t Value>
 struct ConstantFieldAssignment;
 
 template <RegisterFile File, std::uint32_t Addr, std::uint32_t Mask>
@@ -39,8 +39,8 @@ struct is_field_assignment<FieldAssignment<F, S>> : std::true_type
 {
 };
 
-template <const Field& F, std::uint32_t Value, Sec S>
-struct is_field_assignment<ConstantFieldAssignment<F, Value, S>> : std::true_type
+template <const Field& F, Sec S, std::uint32_t Value>
+struct is_field_assignment<ConstantFieldAssignment<F, S, Value>> : std::true_type
 {
 };
 
@@ -49,8 +49,8 @@ struct is_constant_field_assignment : std::false_type
 {
 };
 
-template <const Field& F, std::uint32_t Value, Sec S>
-struct is_constant_field_assignment<ConstantFieldAssignment<F, Value, S>> : std::true_type
+template <const Field& F, Sec S, std::uint32_t Value>
+struct is_constant_field_assignment<ConstantFieldAssignment<F, S, Value>> : std::true_type
 {
 };
 

@@ -436,15 +436,18 @@ public:
  *
  * @code{.cpp}
  * write<Access::TensixCfgUnit,
- *       Unpacker[0].AddrCtrl[UnpackerReg::Reg0].Xstride>(x_stride);
+ *       Unpacker[0].AddrCtrl[UnpackerReg::Reg0].Xstride,
+ *       Sec::S0>(x_stride);
  * write<Access::TensixCfgUnit,
- *       Unpacker[1].AddrBase[UnpackerReg::Reg1]>(base);
+ *       Unpacker[1].AddrBase[UnpackerReg::Reg1],
+ *       Sec::S0>(base);
  * write<Access::TensixCfgUnit,
- *       Unpacker[0].BlobsYStart[BlobContext::Context01]>(blobs_y_start);
+ *       Unpacker[0].BlobsYStart[BlobContext::Context01],
+ *       Sec::S0>(blobs_y_start);
  *
  * Unpacker.forEach([&](auto U) {
  *     Unpacker[U].Cntx.forEach([&](auto C) {
- *         write<Access::MMIO, Unpacker[U].Cntx[C].Base>(base[U][C]);
+ *         write<Access::MMIO, Unpacker[U].Cntx[C].Base, Sec::S0>(base[U][C]);
  *     });
  * });
  * @endcode

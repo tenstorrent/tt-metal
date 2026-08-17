@@ -52,14 +52,14 @@ inline constexpr auto gpr(const std::uint32_t index)
  *
  * @tparam B  must be @ref Access::MMIO.
  * @tparam F  reference to a generated `static constexpr Field`.
- * @tparam S  section (@ref Sec), defaults to S0.
+ * @tparam S  section (@ref Sec).
  * @tparam Target thread-CFG bank. Current selects the issuing TRISC; an
  *         explicit T0/T1/T2 target is required from BRISC. Leave this at
  *         Current for state CFG.
  *
  * @return The field value, shifted down to bit zero.
  */
-template <Access B, const Field& F, Sec S = Sec::S0, ThreadTarget Target = ThreadTarget::Current>
+template <Access B, const Field& F, Sec S, ThreadTarget Target = ThreadTarget::Current>
 inline __attribute__((always_inline)) std::uint32_t read()
 {
     static_assert(B == Access::MMIO, "value-returning cfg::read() requires Access::MMIO");
@@ -85,7 +85,7 @@ inline __attribute__((always_inline)) std::uint32_t read()
  * the word containing that field. Unlike @ref read, no mask or shift is
  * applied.
  */
-template <Access B, const Field& F, std::uint32_t WordOffset = 0, Sec S = Sec::S0, ThreadTarget Target = ThreadTarget::Current>
+template <Access B, const Field& F, Sec S, std::uint32_t WordOffset = 0, ThreadTarget Target = ThreadTarget::Current>
 inline __attribute__((always_inline)) std::uint32_t read_word()
 {
     static_assert(B == Access::MMIO, "value-returning cfg::read_word() requires Access::MMIO");
@@ -109,7 +109,7 @@ inline __attribute__((always_inline)) std::uint32_t read_word()
  * This is the read-side counterpart of the pointer-taking `write()` overload
  * and avoids re-reading CFG_STATE_ID when several words use the same bank.
  */
-template <Access B, const Field& F, std::uint32_t WordOffset = 0, Sec S = Sec::S0>
+template <Access B, const Field& F, Sec S, std::uint32_t WordOffset = 0>
 inline __attribute__((always_inline)) std::uint32_t read_word(const volatile std::uint32_t* tt_reg_ptr cfg)
 {
     static_assert(B == Access::MMIO, "an already-resolved CFG pointer is valid only for the Access::MMIO backend");
@@ -130,7 +130,7 @@ inline __attribute__((always_inline)) std::uint32_t read_word(const volatile std
  * current thread's CFG_STATE_ID. Use `F.mask(S)` and `F.shamt(S)` when
  * subsequent GPR operations need only the selected field.
  */
-template <Access A, const Field& F, Sec S = Sec::S0, std::uint32_t GprIndex, GprTransferSize Size, WrcfgCompletion Completion>
+template <Access A, const Field& F, Sec S, std::uint32_t GprIndex, GprTransferSize Size, WrcfgCompletion Completion>
 inline __attribute__((always_inline)) void read(detail::GprOperand<GprIndex, Size, Completion>)
 {
     static_assert(A == Access::TensixCfgUnit, "RDCFG requires Access::TensixCfgUnit");
@@ -153,7 +153,7 @@ inline __attribute__((always_inline)) void read(detail::GprOperand<GprIndex, Siz
  * @tparam GprIndex: Compile-time destination GPR index.
  * @param destination: Common GPR operand receiving the CFG word.
  */
-template <Access A, const Field& F, Sec S = Sec::S0, std::uint32_t GprIndex>
+template <Access A, const Field& F, Sec S, std::uint32_t GprIndex>
 inline __attribute__((always_inline)) void read(const hal::Gpr<GprIndex> destination)
 {
     read<A, F, S>(detail::with_cfg_policy<GprTransferSize::Bits32, WrcfgCompletion::Wait>(destination));
@@ -172,7 +172,7 @@ inline __attribute__((always_inline)) void read(const hal::Gpr<GprIndex> destina
  * @note TensixCfgUnit emits WRCFG and its requested completion NOP. TensixScalarUnit
  *       emits REG2FLOP without a completion NOP and accepts only THCON destinations.
  */
-template <Access A, const Field& F, Sec S = Sec::S0, std::uint32_t GprIndex, GprTransferSize Size, WrcfgCompletion Completion>
+template <Access A, const Field& F, Sec S, std::uint32_t GprIndex, GprTransferSize Size, WrcfgCompletion Completion>
 inline __attribute__((always_inline)) void write(const detail::GprOperand<GprIndex, Size, Completion> source)
 {
     static_assert(
@@ -242,7 +242,7 @@ inline __attribute__((always_inline)) void write(const detail::GprOperand<GprInd
  * @tparam GprIndex: Compile-time or runtime source GPR index.
  * @param source: Common GPR operand supplying one complete word.
  */
-template <Access A, const Field& F, Sec S = Sec::S0, std::uint32_t GprIndex>
+template <Access A, const Field& F, Sec S, std::uint32_t GprIndex>
 inline __attribute__((always_inline)) void write(const hal::Gpr<GprIndex> source)
 {
     write<A, F, S>(detail::with_cfg_policy<GprTransferSize::Bits32, WrcfgCompletion::Wait>(source));
@@ -323,17 +323,17 @@ public:
         (*this)(word(first, rest...));
     }
 
-    template <const Field& F, Sec S = Sec::S0>
+    template <const Field& F, Sec S>
     inline __attribute__((always_inline)) void field(const std::uint32_t value) const
     {
         (*this)(set<F, S>(value));
     }
 
-    template <const Field& F, std::uint32_t Count, Sec S = Sec::S0, std::size_t ArrayCount>
+    template <const Field& F, Sec S, std::uint32_t Count, std::size_t ArrayCount>
     inline __attribute__((always_inline)) void words(const std::uint32_t (&values)[ArrayCount]) const
     {
         static_assert(A == Access::MMIO, "array writes require Access::MMIO");
-        detail::write_array_mmio<F, Count, S>(cfg_, values);
+        detail::write_array_mmio<F, S, Count>(cfg_, values);
     }
 
 private:
@@ -345,8 +345,8 @@ private:
  *
  * @code
  * write<Access::MMIO>([&](auto& out) {
- *     out.template field<PrngSeed::Seed_Val>(seed);
- *     out(word<Thcon[Reg1].Row_start_section_size>(packed));
+ *     out.template field<PrngSeed::Seed_Val, Sec::S0>(seed);
+ *     out(word<Thcon[Reg1].Row_start_section_size, Sec::S0>(packed));
  * });
  * @endcode
  */
@@ -376,11 +376,11 @@ inline __attribute__((always_inline)) void write(volatile std::uint32_t* tt_reg_
 /**
  * @brief Write a fixed-size array of consecutive prepacked CFG words.
  */
-template <Access A, const Field& F, std::uint32_t Count, Sec S = Sec::S0, std::size_t ArrayCount>
+template <Access A, const Field& F, Sec S, std::uint32_t Count, std::size_t ArrayCount>
 inline __attribute__((always_inline)) void write(const std::uint32_t (&values)[ArrayCount])
 {
     static_assert(A == Access::MMIO, "array writes require Access::MMIO");
-    detail::write_array_mmio<F, Count, S>(ckernel::get_cfg_pointer(), values);
+    detail::write_array_mmio<F, S, Count>(ckernel::get_cfg_pointer(), values);
 }
 
 /**
@@ -388,9 +388,9 @@ inline __attribute__((always_inline)) void write(const std::uint32_t (&values)[A
  *
  * @code
  * write<Access::TensixCfgUnit>(
- *     set<AluFormatSpecReg0::SrcA>(src_a),
- *     set<AluFormatSpecReg1::SrcB>(src_b),
- *     set<AluAccCtrl::Fp32_enabled>(fp32));
+ *     set<AluFormatSpecReg0::SrcA, Sec::S0>(src_a),
+ *     set<AluFormatSpecReg1::SrcB, Sec::S0>(src_b),
+ *     set<AluAccCtrl::Fp32_enabled, Sec::S0>(fp32));
  * @endcode
  */
 template <
@@ -415,13 +415,13 @@ inline __attribute__((always_inline)) void write(const First& first, const Rest&
  *
  * @tparam A  @ref Access — RISC MMIO or Tensix instruction.
  * @tparam F  reference to a generated `static constexpr Field` (e.g. Reg::Field).
- * @tparam S  section (@ref Sec), defaults to S0.
+ * @tparam S  section (@ref Sec).
  *
  * @note SETC16 (Access::TensixCfgUnit on the Thread file) writes a whole 16-bit thread
  *       word and has no per-field RMW; for a word packing several fields,
  *       compose the value and write it whole (as addr_mod_t does).
  */
-template <Access A, const Field& F, Sec S = Sec::S0>
+template <Access A, const Field& F, Sec S>
 inline __attribute__((always_inline)) void write(const std::uint32_t value)
 {
     static_assert(
@@ -464,13 +464,13 @@ inline __attribute__((always_inline)) void write(const std::uint32_t value)
  *
  * @tparam A      must be @ref Access::TensixCfgUnit (RISC MMIO is a runtime store).
  * @tparam F      reference to a generated `static constexpr Field`.
+ * @tparam S      section (@ref Sec).
  * @tparam Value  compile-time value to place in the field.
- * @tparam S      section, defaults to S0.
  *
  * @note Only the config-word bytes the field actually covers are emitted
  *       (RMWCIB per non-zero mask byte), pruned at compile time.
  */
-template <Access A, const Field& F, std::uint32_t Value, Sec S = Sec::S0>
+template <Access A, const Field& F, Sec S, std::uint32_t Value>
 inline __attribute__((always_inline)) void write()
 {
     static_assert(A == Access::TensixCfgUnit, "compile-time instruction emission requires Access::TensixCfgUnit");
