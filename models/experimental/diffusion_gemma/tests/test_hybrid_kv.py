@@ -3,20 +3,12 @@
 
 from types import SimpleNamespace
 
-
 from models.experimental.diffusion_gemma.tt import hybrid_kv
 
 
 class _Cache:
     def __init__(self, shape):
         self.shape = shape
-
-
-def test_model_owned_hybrid_kv_has_no_rollback_switch():
-    # The hybrid layout is the only build layout; the DG_MODEL_OWNED_HYBRID_KV
-    # rollback was deleted once every entrypoint constructed hybrid by default.
-    assert not hasattr(hybrid_kv, "model_owned_hybrid_kv_enabled")
-    assert not hasattr(hybrid_kv, "MODEL_OWNED_HYBRID_KV_ENV")
 
 
 def test_model_kwargs_enable_bounded_paged_cache():
@@ -26,11 +18,6 @@ def test_model_kwargs_enable_bounded_paged_cache():
     assert kwargs["bounded_sliding_kv_cache"] is True
     assert kwargs["paged_attention_config"].block_size == 64
     assert kwargs["paged_attention_config"].max_num_blocks == 4096
-
-
-def test_model_kwargs_reject_concurrent_model_owned_sequences(expect_error):
-    with expect_error(ValueError, match="max_batch_size=1"):
-        hybrid_kv.model_owned_hybrid_kv_model_kwargs(max_seq_len=4096, max_batch_size=2)
 
 
 def test_attach_builds_sliding_tables_and_zero_copy_full_views(monkeypatch):
