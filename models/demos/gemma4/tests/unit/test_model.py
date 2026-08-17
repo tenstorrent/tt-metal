@@ -318,18 +318,26 @@ def test_single_layer_model(mesh_device, layer_group, reset_seeds, request):
 @parametrize_mesh_with_fabric()
 @pytest.mark.parametrize("layer_group", ["sliding_only"], ids=["sliding_only"])
 def test_single_layer_model_real_weights(mesh_device, layer_group, reset_seeds, request):
-    """Truncated model on the checkpoint's trained weights, full vocab.
+    """Truncated model on the checkpoint's trained weights.
 
-    ``test_single_layer_model`` runs on random weights *and* a 256-entry vocab,
-    so its lm_head is 1/1000th of the real one and never exercises the
-    column-parallel split or the softcap at real logit magnitudes. This runs the
-    same stack — embedding, N real layers, real final norm, real tied lm_head —
-    at the true vocab.
+    ``test_single_layer_model`` runs the same stack on HF's constructor init.
+    This runs it on the real thing: real projections, real norms, real final
+    norm, and the real tied lm_head — so the layer-to-logits path is gated at
+    the magnitudes the model actually runs at rather than at unit scale.
 
     It stops short of ``test_full_model`` on purpose: one layer isolates a
     weight/layout regression to the layer, where a 48- or 60-layer PCC folds it
     into the whole backbone's accumulated error and tells you nothing about
     where it came from.
+
+    Vocab is capped at 256, matching the random-init test. Every weight is
+    still the trained one — the embedding is the first 256 rows of the real
+    table and the lm_head is tied to that slice — but the *shape* of the output
+    matmul is not the shipped one. The full ``[hidden, 262144]`` lm_head, its
+    column-parallel split and its program config are covered by test_lm_head.py
+    and ``test_full_model``; at the true vocab this test cannot run on a single
+    chip at all (31B stages the tied lm_head as fp32 = 5.64 GB against ~360 MB
+    free, measured).
     """
     skip_unless_real_weights()
 
@@ -337,21 +345,16 @@ def test_single_layer_model_real_weights(mesh_device, layer_group, reset_seeds, 
     from models.demos.gemma4.tt.ccl import CCLManager
 
     num_layers = 1
-    real_vocab = TestFactory.create_hf_config().vocab_size
-
-    # The real tied lm_head is the constraint, not the layer. 31B stages
-    # [5376, 262144] as fp32 = 5.64 GB, which does not fit one chip's DRAM
-    # (measured: 360 MB free at that point). Same >4096 hidden cutoff the
-    # global-attention skips in this file and test_attention.py already use.
-    tp_check = mesh_device.shape[1] if hasattr(mesh_device, "shape") else 1
-    if tp_check == 1 and TestFactory.create_hf_config().hidden_size > 4096:
-        pytest.skip("Real-vocab tied lm_head does not fit single-device DRAM for large models")
-    hf_text_config = _create_hf_text_config(vocab_size=real_vocab, num_layers=num_layers)
+    vocab = 256
+    hf_text_config = _create_hf_text_config(vocab_size=vocab, num_layers=num_layers)
     if getattr(hf_text_config, "enable_moe_block", False):
-        pytest.skip("MoE variants need the reduced-expert path; covered by test_moe_real_weights")
+        pytest.skip("MoE variants need the reduced-expert path; the real expert count cannot be reduced")
 
     hf_model = _create_hf_model(hf_text_config)
     real_state = load_real_model_substate(num_layers)
+    # Slice the real embedding to the configured vocab; the tie to lm_head
+    # follows it, so both stay trained values rather than constructor init.
+    real_state["embed_tokens.weight"] = real_state["embed_tokens.weight"][:vocab].contiguous()
     _, unexpected = hf_model.load_state_dict(real_state, strict=False)
     assert not unexpected, f"Real weights the HF reference stack has no home for: {unexpected[:5]}"
     # _create_hf_model ties lm_head to embed_tokens by identity; load_state_dict
@@ -408,7 +411,7 @@ def test_single_layer_model_real_weights(mesh_device, layer_group, reset_seeds, 
     )
 
     passing, pcc_msg = compare_tensors(tt_logits_torch, hf_logits, pcc_threshold=get_pcc_threshold(request))
-    logger.info(f"TP={tp} real-weights ({num_layers}-layer, vocab={real_vocab}) PCC: {pcc_msg}")
+    logger.info(f"TP={tp} real-weights ({num_layers}-layer, vocab={vocab}) PCC: {pcc_msg}")
     assert passing, f"Single-layer model real-weights (layers={num_layers}, tp={tp}) PCC too low: {pcc_msg}"
 
 
