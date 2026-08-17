@@ -190,15 +190,76 @@ static int pin_cpu_for(PinRole, uint32_t = 0) { return -1; }
 static void pin_self_to_cpu(int) {}
 #endif
 
+// Pair one START/END marker into the lane's stack; an END that closes a zone emits one complete
+// kRecZone record (rare long zones spill the full end timestamp into a trailing kRecExt). `meta_lane`
+// carries the dev|lane bits; the record's hash comes from the END marker (equal to the START's by
+// construction of the wire). Returns records appended.
+static inline uint32_t pair_zone_marker(
+    PerfDebugLaneZoneStack& zs, uint32_t type, uint32_t hash, uint64_t ts, uint32_t meta_lane, PerfDebugRec* out) {
+    if (type == PP_ZONE_START) {
+        if (zs.depth < PerfDebugLaneZoneStack::kDepth) [[likely]] {
+            zs.start_ts[zs.depth++] = ts;
+        } else {
+            zs.overflow++;
+        }
+        return 0;
+    }
+    if (zs.overflow != 0) [[unlikely]] {
+        zs.overflow--;
+        return 0;
+    }
+    if (zs.depth == 0) [[unlikely]] {
+        return 0;  // capture-start straddle: the END's START predates the drain
+    }
+    const uint64_t start = zs.start_ts[--zs.depth];
+    const uint64_t d = ts - start;
+    out[0] = PerfDebugRec{
+        start,
+        d < kRecLongZoneDur ? static_cast<uint32_t>(d) : kRecLongZoneDur,
+        (kRecZone << kRecTypeShift) | meta_lane | hash};
+    if (d < kRecLongZoneDur) [[likely]] {
+        return 1;
+    }
+    out[1] = PerfDebugRec{ts, 0, (kRecExt << kRecTypeShift) | meta_lane};
+    return 2;
+}
+
 #if defined(__x86_64__)
-// Zone-block emit into 12 B {ts,meta} records.
+// Zone-block emit: a screened all-marker block is single-lane, so the lane's pairing stack is hoisted.
+// An ADJACENT [START, END] pair is a complete leaf zone at ANY stack depth (real streams are mostly leaf
+// zones inside a long-lived FW/KERNEL wrapper), so those pair positionally with no stack traffic; the
+// loop-carried depth dependency only engages at nesting boundaries. Not valid while overflow is pending:
+// an END must consume the overflow count before it may close anything.
 static uint32_t emit_zone_block_avx2(
-    const uint32_t* lin, uint32_t nwords, uint32_t base_meta, uint32_t hi, uint32_t /*prog*/, PerfDebugRec* out) {
+    const uint32_t* lin,
+    uint32_t nwords,
+    uint32_t meta_lane,
+    uint32_t hi,
+    PerfDebugLaneZoneStack& zs,
+    PerfDebugRec* out) {
     uint32_t k = 0;
-    for (uint32_t i = 0; i + 1 < nwords; i += 2) {
-        _mm_prefetch(reinterpret_cast<const char*>(lin + i + 16), _MM_HINT_T0);
-        out[k++] = PerfDebugRec{
-            pp_full_ts(hi, lin[i + 1]), ((lin[i] >> 27) << kRecTypeShift) | base_meta | (lin[i] & 0xFFFFu)};
+    uint32_t i = 0;
+    while (i + 1 < nwords) {
+        if (zs.overflow == 0) [[likely]] {
+            while (i + 3 < nwords && (lin[i] >> 27) == PP_ZONE_START && (lin[i + 2] >> 27) == PP_ZONE_END) {
+                _mm_prefetch(reinterpret_cast<const char*>(lin + i + 16), _MM_HINT_T0);
+                const uint64_t start = pp_full_ts(hi, lin[i + 1]);
+                const uint64_t d = pp_full_ts(hi, lin[i + 3]) - start;
+                out[k++] = PerfDebugRec{
+                    start,
+                    d < kRecLongZoneDur ? static_cast<uint32_t>(d) : kRecLongZoneDur,
+                    (kRecZone << kRecTypeShift) | meta_lane | (lin[i + 2] & 0xFFFFu)};
+                if (d >= kRecLongZoneDur) [[unlikely]] {
+                    out[k++] = PerfDebugRec{start + d, 0, (kRecExt << kRecTypeShift) | meta_lane};
+                }
+                i += 4;
+            }
+            if (i + 1 >= nwords) {
+                break;
+            }
+        }
+        k += pair_zone_marker(zs, lin[i] >> 27, lin[i] & 0xFFFFu, pp_full_ts(hi, lin[i + 1]), meta_lane, out + k);
+        i += 2;
     }
     return k;
 }
@@ -793,6 +854,7 @@ PerfDebugProfiler::DeviceCtx::DeviceCtx(DeviceCtx&& o) noexcept :
     dram_frames(o.dram_frames),
     core_virt(std::move(o.core_virt)),
     virt_to_noc0(std::move(o.virt_to_noc0)),
+    lane_zones(std::move(o.lane_zones)),
     active(o.active),
     hz_raw(std::move(o.hz_raw)),
     nharts(o.nharts),
@@ -929,7 +991,7 @@ void PerfDebugProfiler::start(const std::shared_ptr<distributed::MeshDevice>& me
                 ctx.chip_id);
             tracy_->AddDevice(ctx.chip_id, tracy::Profiler::GetTime(), 0.0, freq);
         }
-        // NOTE: per-core Tracy contexts are created LAZILY on each core's first zone (HandleWorkerZone ->
+        // NOTE: per-core Tracy contexts are created LAZILY on each core's first zone (GetZoneSink ->
         // GetOrCreateContext). We deliberately do NOT pre-create the full worker grid here: only ~16 of
         // ~110 cores typically run the workload, and pre-creating all of them litters the capture with
         // empty (count=0) contexts that read as "cores not showing up". The per-zone mutex+lookup cost is
@@ -1247,6 +1309,7 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
     if (first_ts_.size() < ctx.nl) {
         first_ts_.assign(ctx.nl, 0);  // stagger probe (see header); 0 = lane not seen yet
     }
+    ctx.lane_zones.assign(ctx.nl, {});
     ctx.core_virt.resize(num_cores);
 
     // Pre-zero every core's profiler control vector (heads and tails start clean) and build the maps the
@@ -2228,6 +2291,7 @@ void PerfDebugProfiler::decode_ranges(DeviceCtx& ctx, uint32_t sock_idx, uint32_
     const uint32_t dev_bits = dev_idx << kRecDevShift;
     const size_t bound = total_words + st.resid.size() + 16;
 
+    size_t markers = 0;  // wire zone markers consumed (8 B each) -- the honest marker-wire numerator
     auto emit_into = [&](PerfDebugRec* out, size_t& k) {
         for (const auto& r : ranges) {
             pz::spsc_decode(
@@ -2239,7 +2303,9 @@ void PerfDebugProfiler::decode_ranges(DeviceCtx& ctx, uint32_t sock_idx, uint32_
                     if (type > PP_ZONE_END) {
                         return;
                     }
-                    out[k++] = PerfDebugRec{ts, (type << kRecTypeShift) | dev_bits | (lane << kRecLaneShift) | hash};
+                    markers++;
+                    k += pair_zone_marker(
+                        ctx.lane_zones[lane], type, hash, ts, dev_bits | (lane << kRecLaneShift), out + k);
                 },
                 [&](uint32_t lane,
                     uint32_t type,
@@ -2250,22 +2316,24 @@ void PerfDebugProfiler::decode_ranges(DeviceCtx& ctx, uint32_t sock_idx, uint32_
                     uint32_t n) {
                     const uint32_t ml = dev_bits | (lane << kRecLaneShift);
                     const uint32_t rt = (type == PP_EVENT) ? kRecEvent : kRecData;
-                    out[k++] = PerfDebugRec{ts, (rt << kRecTypeShift) | ml | (id & 0xFFFFu)};
-                    out[k++] = PerfDebugRec{(static_cast<uint64_t>(id) << 32) | n, (kRecExt << kRecTypeShift) | ml};
+                    out[k++] = PerfDebugRec{ts, 0, (rt << kRecTypeShift) | ml | (id & 0xFFFFu)};
+                    out[k++] = PerfDebugRec{(static_cast<uint64_t>(id) << 32) | n, 0, (kRecExt << kRecTypeShift) | ml};
                     for (uint32_t c = 0; c < (n + 1u) / 2u; c++) {
                         const uint64_t hi = payload[2 * c];
                         const uint64_t lo = (2 * c + 1 < n) ? payload[2 * c + 1] : 0u;
-                        out[k++] = PerfDebugRec{(hi << 32) | lo, (kRecCont << kRecTypeShift) | ml};
+                        out[k++] = PerfDebugRec{(hi << 32) | lo, 0, (kRecCont << kRecTypeShift) | ml};
                     }
                 },
-                [&](const uint32_t* p, uint32_t nw, uint32_t lane, uint32_t bhi, uint32_t bprog) {
+                [&](const uint32_t* p, uint32_t nw, uint32_t lane, uint32_t bhi, uint32_t /*bprog*/) {
+                    markers += nw / 2;
 #if defined(__x86_64__)
-                    k += emit_zone_block_avx2(p, nw, dev_bits | (lane << kRecLaneShift), bhi, bprog, out + k);
+                    k += emit_zone_block_avx2(
+                        p, nw, dev_bits | (lane << kRecLaneShift), bhi, ctx.lane_zones[lane], out + k);
 #else
                     const uint32_t ml = dev_bits | (lane << kRecLaneShift);
+                    PerfDebugLaneZoneStack& zs = ctx.lane_zones[lane];
                     for (uint32_t j = 0; j < nw; j += 2) {
-                        out[k++] = PerfDebugRec{
-                            pp_full_ts(bhi, p[j + 1]), ((p[j] >> 27) << kRecTypeShift) | ml | (p[j] & 0xFFFFu)};
+                        k += pair_zone_marker(zs, p[j] >> 27, p[j] & 0xFFFFu, pp_full_ts(bhi, p[j + 1]), ml, out + k);
                     }
 #endif
                 });
@@ -2290,13 +2358,13 @@ void PerfDebugProfiler::decode_ranges(DeviceCtx& ctx, uint32_t sock_idx, uint32_
         publish_submit_batch(worker);
     }
 
-    if (k != 0) {
+    wp.zone_recs += markers;
+    if (k != 0 || markers != 0) {
         if (ctx.marker_ts_base == 0) {
             // First record ts; benign if two sockets race the latch.
             ctx.marker_ts_base = 1;
         }
         wp.emit[sock_idx] += k;
-        wp.zone_recs += k;
         wp.recs += k;
         wp.last_rec_ns = static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch())
@@ -2741,20 +2809,39 @@ void PerfDebugProfiler::consumer_thread() {
         uint32_t got = 0;
         uint64_t vals[kMaxEventValues] = {};
     } pend;
+    // A long zone (dur sentinel) waiting for the kRecExt that carries its real end timestamp. Local for
+    // the same batch-straddle reason as `pend`.
+    struct PendingZone {
+        bool active = false;
+        PerfDebugRec rec{};
+    } zpend;
+    // Per-(device, core) zone sinks and a flat (hash, risc) -> interned srcloc table: the handler's
+    // mutex paths run once per core / per zone identity, everything after is a plain load per zone.
+    struct SinkSlot {
+        PerfDebugTracyHandler::ZoneSink sink;
+        bool resolved = false;
+    };
+    std::vector<std::vector<SinkSlot>> sink_cache(devices_.size());
+    for (size_t d = 0; d < devices_.size(); d++) {
+        sink_cache[d].assign(devices_[d].core_virt.size(), {});
+    }
+    std::vector<const void*> srcloc_cache(size_t{65536} * 8, nullptr);
     std::vector<uint64_t> con_last_ts_(4096, 0);
     auto emit_batch = [&](std::span<PerfDebugRec> b) {
         for (const auto& r : b) {
             const uint32_t rt = r.meta >> kRecTypeShift;
-            if (rt != kRecZoneStart && rt != kRecZoneEnd) {
+            // Zone records are emitted in COMPLETION order per lane, so the END timestamp is the
+            // monotonic one (a long zone's real end arrives in its EXT record -- skip the sentinel).
+            if (rt != kRecZone || r.dur == kRecLongZoneDur) {
                 continue;
             }
             const uint32_t ln = (r.meta >> kRecLaneShift) & (kRecLaneMax - 1u);
             if (ln < con_last_ts_.size()) {
                 w_con_seen_.fetch_add(1, std::memory_order_relaxed);
-                if (r.ts < con_last_ts_[ln]) {
+                if (r.ts + r.dur < con_last_ts_[ln]) {
                     w_con_regress_.fetch_add(1, std::memory_order_relaxed);
                 } else {
-                    con_last_ts_[ln] = r.ts;
+                    con_last_ts_[ln] = r.ts + r.dur;
                 }
             }
         }
@@ -2819,8 +2906,66 @@ void PerfDebugProfiler::consumer_thread() {
             }
         };
 
+        // Resolve and push one complete zone: cached per-core sink, cached per-(hash, risc) srcloc,
+        // then a single lock-free Tracy item. start/end are raw device timestamps.
+        auto push_zone = [&](uint32_t meta, uint64_t start_raw, uint64_t end_raw) {
+            const uint32_t dev_idx = (meta >> kRecDevShift) & (kRecDevMax - 1u);
+            const uint32_t lane = (meta >> kRecLaneShift) & (kRecLaneMax - 1u);
+            if (dev_idx >= devices_.size()) {
+                return;
+            }
+            DeviceCtx& ctx = devices_[dev_idx];
+            const uint32_t ci = lane / kNRisc, risc = lane % kNRisc;
+            if (ci >= ctx.core_virt.size()) {
+                return;
+            }
+            SinkSlot& slot = sink_cache[dev_idx][ci];
+            if (!slot.resolved) {
+                const auto [vx, vy] = ctx.core_virt[ci];
+                uint32_t nx = vx, ny = vy;
+                if (auto it = ctx.virt_to_noc0.find((static_cast<uint64_t>(vx) << 32) | vy);
+                    it != ctx.virt_to_noc0.end()) {
+                    nx = it->second.first;
+                    ny = it->second.second;
+                }
+                slot.sink = tracy_->GetZoneSink(ctx.chip_id, nx, ny);
+                slot.resolved = true;
+            }
+            if (!slot.sink.ctx) {
+                return;  // Tracy compiled out, or the device was never anchored
+            }
+            const uint32_t hash = meta & 0xFFFFu;
+            const size_t skey = (static_cast<size_t>(hash) << 3) | risc;
+            const void* srcloc = srcloc_cache[skey];
+            if (srcloc == nullptr) {
+                std::string_view name;
+                if (auto it = zone_names_.find(static_cast<uint16_t>(hash)); it != zone_names_.end()) {
+                    name = it->second;
+                }
+                srcloc = tracy_->InternZoneSrcloc(hash, risc, name);
+                srcloc_cache[skey] = srcloc;
+            }
+            // Synced: push RAW device timestamps -- the context was anchored with a real (host, device)
+            // pair, so Tracy places them exactly. Unsynced: fall back to rebasing on the first marker seen.
+            const uint64_t base = ctx.synced ? 0 : ctx.marker_ts_base;
+            const uint64_t start = (start_raw >= base) ? (start_raw - base) : 0;
+            const uint64_t end = (end_raw >= base) ? (end_raw - base) : 0;
+            PerfDebugTracyHandler::PushWorkerZone(slot.sink, srcloc, risc, start, end);
+        };
+
         for (const auto& r : b) {
             const uint32_t rt = r.meta >> kRecTypeShift;
+            if (rt == kRecZone) [[likely]] {
+                if (r.dur == kRecLongZoneDur) [[unlikely]] {
+                    zpend.active = true;  // real end follows in the adjacent kRecExt
+                    zpend.rec = r;
+                    continue;
+                }
+                if (!tracy_push_disabled()) {
+                    push_zone(r.meta, r.ts, r.ts + r.dur);
+                }
+                continue;
+            }
             if (rt == kRecCont) {
                 if (pend.active && pend.got < kMaxEventValues) {
                     pend.vals[pend.got++] = r.ts;
@@ -2831,6 +2976,13 @@ void PerfDebugProfiler::consumer_thread() {
                 continue;
             }
             if (rt == kRecExt) {
+                if (zpend.active) {
+                    zpend.active = false;
+                    if (!tracy_push_disabled()) {
+                        push_zone(zpend.rec.meta, zpend.rec.ts, r.ts);
+                    }
+                    continue;
+                }
                 if (pend.active) {
                     pend.id = static_cast<uint32_t>(r.ts >> 32);
                     pend.want = ((static_cast<uint32_t>(r.ts) & 0x7Fu) + 1u) / 2u;  // payload words -> uint64s
@@ -2851,46 +3003,6 @@ void PerfDebugProfiler::consumer_thread() {
                 pend.prog = 0;
                 pend.want = UINT32_MAX;  // unknown until the EXT record lands
                 continue;
-            }
-            if (rt != kRecZoneStart && rt != kRecZoneEnd) {
-                continue;
-            }
-            const uint32_t dev_idx = (r.meta >> kRecDevShift) & (kRecDevMax - 1u);
-            const uint32_t lane = (r.meta >> kRecLaneShift) & (kRecLaneMax - 1u);
-            if (dev_idx >= devices_.size()) {
-                continue;
-            }
-            DeviceCtx& ctx = devices_[dev_idx];
-            const uint32_t ci = lane / kNRisc, risc = lane % kNRisc;
-            if (ci >= ctx.core_virt.size()) {
-                continue;
-            }
-            const auto [vx, vy] = ctx.core_virt[ci];
-            uint32_t nx = vx, ny = vy;
-            if (auto it = ctx.virt_to_noc0.find((static_cast<uint64_t>(vx) << 32) | vy); it != ctx.virt_to_noc0.end()) {
-                nx = it->second.first;
-                ny = it->second.second;
-            }
-            std::string_view name;
-            if (auto it = zone_names_.find(static_cast<uint16_t>(r.meta)); it != zone_names_.end()) {
-                name = it->second;
-            }
-            perf_debug::WorkerZonePacket pkt;
-            pkt.chip_id = ctx.chip_id;
-            pkt.core_virtual_x = vx;
-            pkt.core_virtual_y = vy;
-            pkt.core_noc0_x = nx;
-            pkt.core_noc0_y = ny;
-            pkt.risc = risc;
-            pkt.timer_id = r.meta & 0xFFFFu;
-            pkt.name = name;
-            // Synced: push the RAW device timestamp -- the context was anchored with a real (host, device)
-            // pair, so Tracy places it exactly. Unsynced: fall back to rebasing on the first marker seen.
-            const uint64_t base = ctx.synced ? 0 : ctx.marker_ts_base;
-            pkt.timestamp = (r.ts >= base) ? (r.ts - base) : 0;
-            pkt.is_start = (rt == kRecZoneStart);
-            if (!tracy_push_disabled()) {
-                tracy_->HandleWorkerZone(pkt);
             }
         }
         cnt += b.size();

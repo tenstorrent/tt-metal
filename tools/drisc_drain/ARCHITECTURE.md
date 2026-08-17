@@ -11,7 +11,7 @@ Use these names. Confusing them has already cost real debugging time.
 | **L1 marker ring** | worker L1, one per RISC | 2-word markers | the worker RISC (producer) | the FILLER's bulk span read |
 | **DRAM frame ring** | device DRAM, one per FILLER | whole frames | its FILLER | its MOVER |
 | **socket FIFO** | host RAM, one per MOVER | 64 B pages | its MOVER, over PCIe | the host writer thread |
-| **host record ring** | host RAM, one shared | 24 B `PerfDebugRec` | the decoder threads | the consumer thread -> Tracy |
+| **host record ring** | host RAM, one shared | 16 B `PerfDebugRec` (one complete zone) | the decoder threads | the consumer thread -> Tracy |
 
 So: `ring_ensure_room` / `PROFILER_STALL_ZONE` / `SPSC_STALL_COUNT_0` are about the **L1 marker ring**.
 `ring-room waits` and `head`/`tail` are about the **DRAM frame ring**. `reserve_pages` / credit-wait /
@@ -71,7 +71,7 @@ one L1 would overlap staging, socket config, results and handshake with no count
 | **DRAM frame ring** | device DRAM | one frame | **64 MiB = 6,355 frames** | 1 per FILLER (**4**) |
 | **socket FIFO** | host RAM | 64 B page | 196,608 pages = **12 MiB** | 1 per MOVER (2) |
 | host read chunk | host RAM | pooled buffer | <= 1,024 pages = **64 KB** per read | pool <= 4,096 |
-| **host record ring** | host RAM | 24 B `PerfDebugRec` | 4 Mi default = 96 MiB (runs use 16 Mi = **384 MiB**) | 1 shared |
+| **host record ring** | host RAM | 16 B `PerfDebugRec` (one complete zone) | 4 Mi default = 64 MiB (runs use 16 Mi = **256 MiB**) | 1 shared |
 
 Geometry notes that are load-bearing, not incidental:
 - 2,640 words is a whole number of 64 B pages, so a frame never needs padding, and the bulk span read

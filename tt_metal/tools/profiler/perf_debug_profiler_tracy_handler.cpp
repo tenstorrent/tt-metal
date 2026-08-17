@@ -22,14 +22,6 @@ PerfDebugTracyHandler::PerfDebugTracyHandler() = default;
 PerfDebugTracyHandler::~PerfDebugTracyHandler() {
     std::lock_guard<std::mutex> lock(mutex_);
 #if defined(TRACY_ENABLE)
-    if (orphan_end_count_ > 0) {
-        log_debug(
-            tt::LogMetal,
-            "[perf-debug profiler] dropped {} orphan ZONE_ENDs across {} lanes (capture-boundary straddles / "
-            "over-run); each would SEGV tracy-capture",
-            orphan_end_count_,
-            orphan_lanes_.size());
-    }
     for (auto& entry : tracy_contexts_) {
         TracyTTDestroy(entry.second);
     }
@@ -72,8 +64,11 @@ TracyTTCtx PerfDebugTracyHandler::GetOrCreateContext(
     // Calibrated variant: marks the context calibrated (calibrationMod=1.0, no calibration events) so the
     // Tracy GUI does NOT show a per-context "Drift (ns/s)/Auto" control under every core. Timestamps are
     // host-rebased, so the anchor mapping is exact and no drift correction is wanted.
-    TracyTTContextPopulateCalibrated(ctx, a.host_start, a.first_timestamp, a.frequency);
-    TracyTTContextName(ctx, name.c_str(), name.size());
+    // LOCK-FREE variants: the context announcement must ride the SAME queue as the zones pushed right
+    // after it (the profiler worker drains the lock-free queue before the serial one, so a serially-
+    // announced context can reach the server AFTER its first lock-free zone and crash it).
+    TracyTTContextPopulateCalibratedLockfree(ctx, a.host_start, a.first_timestamp, a.frequency);
+    TracyTTContextNameLockfree(ctx, name.c_str(), name.size());
     tracy_contexts_[key] = ctx;
     return ctx;
 #else
@@ -95,79 +90,65 @@ void PerfDebugTracyHandler::PreCreateContexts(
 #endif
 }
 
-void PerfDebugTracyHandler::HandleWorkerZone([[maybe_unused]] const perf_debug::WorkerZonePacket& zone) {
+PerfDebugTracyHandler::ZoneSink PerfDebugTracyHandler::GetZoneSink(
+    [[maybe_unused]] uint32_t chip_id, [[maybe_unused]] uint32_t core_noc0_x, [[maybe_unused]] uint32_t core_noc0_y) {
 #if defined(TRACY_ENABLE)
-    // if (!tracy::GetProfiler().IsConnected()) {
-    //     return;
-    // }
-    TracyTTCtx ctx = GetOrCreateContext(
-        zone.chip_id,
-        zone.core_noc0_x,
-        zone.core_noc0_y,
-        fmt::format("Device: {} Physical ({},{})", zone.chip_id, zone.core_noc0_x, zone.core_noc0_y));
-    if (!ctx) {
-        return;
-    }
+    ZoneSink sink;
+    sink.ctx = GetOrCreateContext(
+        chip_id,
+        core_noc0_x,
+        core_noc0_y,
+        fmt::format("Device: {} Physical ({},{})", chip_id, core_noc0_x, core_noc0_y));
+    sink.thread_base = static_cast<uint32_t>(
+        (core_noc0_x << tracy::TTDeviceMarker::CORE_X_BIT_SHIFT) |
+        (core_noc0_y << tracy::TTDeviceMarker::CORE_Y_BIT_SHIFT) | (chip_id << tracy::TTDeviceMarker::CHIP_BIT_SHIFT));
+    return sink;
+#else
+    return {};
+#endif
+}
 
+const void* PerfDebugTracyHandler::InternZoneSrcloc(
+    [[maybe_unused]] uint32_t hash, [[maybe_unused]] uint32_t risc, [[maybe_unused]] std::string_view name) {
+#if defined(TRACY_ENABLE)
+    std::lock_guard<std::mutex> lock(mutex_);
+    const uint64_t key = (static_cast<uint64_t>(hash) << 3) | (risc & 0x7u);
+    if (auto it = srclocs_.find(key); it != srclocs_.end()) {
+        return it->second;
+    }
+    static constexpr tracy::Color::ColorType kRiscColor[5] = {
+        tracy::Color::Orange2,      // BRISC
+        tracy::Color::SeaGreen3,    // NCRISC
+        tracy::Color::SkyBlue3,     // TRISC_0
+        tracy::Color::Turquoise2,   // TRISC_1
+        tracy::Color::CadetBlue1};  // TRISC_2
+    // Leaked on purpose: the server reads the struct and its strings from client memory whenever it
+    // first sees the pointer, which can be after this handler is destroyed.
+    auto* name_str = new std::string(name.empty() ? fmt::format("Zone_{}", hash) : std::string(name));
+    auto* srcloc = new tracy::SourceLocationData{
+        name_str->c_str(), "", "kernel_profiler", 0, static_cast<uint32_t>(kRiscColor[risc % 5])};
+    srclocs_[key] = srcloc;
+    return srcloc;
+#else
+    return nullptr;
+#endif
+}
+
+void PerfDebugTracyHandler::PushWorkerZone(
+    [[maybe_unused]] const ZoneSink& sink,
+    [[maybe_unused]] const void* srcloc,
+    [[maybe_unused]] uint32_t risc,
+    [[maybe_unused]] uint64_t start,
+    [[maybe_unused]] uint64_t end) {
+#if defined(TRACY_ENABLE)
     static constexpr tracy::RiscType kRisc[5] = {
         tracy::RiscType::BRISC,
         tracy::RiscType::NCRISC,
         tracy::RiscType::TRISC_0,
         tracy::RiscType::TRISC_1,
         tracy::RiscType::TRISC_2};
-
-    tracy::TTDeviceMarker marker;
-    marker.chip_id = zone.chip_id;
-    marker.core_x = zone.core_noc0_x;
-    marker.core_y = zone.core_noc0_y;
-    // per-hart lane labels; Tensix RISCs map the 0..4 index through kRisc.
-    marker.risc = kRisc[zone.risc % 5];
-    // MUST be set: PushStartMarker/PushEndMarker derive the zone's gpuTime from this field alone
-    // (round(marker.timestamp / m_frequency)). Leaving it default (INVALID_NUM) gave every zone on every
-    // core the same constant gpuTime, so all durations came out 0 or negative and the GUI nested them
-    // arbitrarily -- the "wrong parent/child, inconsistent durations" symptom.
-    marker.timestamp = zone.timestamp;
-    marker.runtime_host_id = zone.timer_id;
-    marker.marker_type = zone.is_start ? tracy::TTDeviceMarkerType::ZONE_START : tracy::TTDeviceMarkerType::ZONE_END;
-    marker.marker_name = zone.name.empty() ? fmt::format("Zone_{}", zone.timer_id) : std::string(zone.name);
-    marker.file = "kernel_profiler";
-    marker.line = 0;
-    marker.color = zone.color;
-
-    // Mirror Tracy's per-lane GPU zone stack depth; drop an unmatched ZONE_END (would pop an empty
-    // stack -> SEGV in tracy-capture). A never-opened lane's first END is a benign capture-start
-    // straddle (its START predates the drain); an extra END after balanced traffic is a pairing bug.
-    const uint64_t lane_key = (ContextKey(zone.chip_id, zone.core_noc0_x, zone.core_noc0_y) << 3) | (zone.risc & 0x7);
-    // lane_depth_ / orphan_* are SHARED across the (multiple) socket-drain threads that call this. Guard the
-    // read-modify-write: without the lock, concurrent inserts from two drain threads rehash the map and
-    // corrupt an UNRELATED lane's depth, which then spuriously trips the orphan-END drop below and loses a
-    // burst of real ZONE_ENDs -> a deep unclosed-zone staircase on a random single lane (rare, intermittent).
-    // Release before the Tracy push so pushes stay concurrent (a lane is single-threaded, so push order is
-    // preserved regardless; Tracy's serial queue is itself thread-safe).
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (zone.is_start) {
-            lane_depth_[lane_key]++;
-        } else {
-            auto it = lane_depth_.find(lane_key);
-            const int32_t depth = (it == lane_depth_.end()) ? 0 : it->second;
-            if (depth <= 0) {
-                ++orphan_end_count_;
-                orphan_lanes_.insert(lane_key);
-                return;  // orphan END -> drop (lock_guard releases on return)
-            }
-            --it->second;
-        }
-    }
-
-    // (no per-marker zone here: it would emit one CPU zone per device marker -> millions, doubling Tracy load
-    // and distorting the measurement. The steady per-marker push cost is captured by the per-batch tracy-emit
-    // zone's duration; the startup spike is the ctx-create children.)
-    if (zone.is_start) {
-        TracyTTPushStartMarker(ctx, marker);
-    } else {
-        TracyTTPushEndMarker(ctx, marker);
-    }
+    const uint32_t thread = sink.thread_base | static_cast<uint32_t>(static_cast<uint8_t>(kRisc[risc % 5]));
+    TracyTTPushZone(sink.ctx, static_cast<const tracy::SourceLocationData*>(srcloc), thread, start, end);
 #endif
 }
 

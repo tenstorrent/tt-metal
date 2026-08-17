@@ -56,31 +56,51 @@ struct SpscDecodeState;
 // buffer, so the region's size and the ring's size are one knob. See FINDINGS §N+39.
 uint32_t perf_debug_dram_region_bytes_per_risc();
 
-// Decoded device record handed writer -> reader. Packed to 12 B: full device timestamp + meta.
+// Decoded device record handed writer -> reader. 16 B: {start timestamp, duration, meta}.
 //   meta = [31:29] record type | [28:26] device index | [25:16] lane | [15:0] zone srcloc hash / id16
-// Zone records are self-contained. A DATA/EVENT head is followed by EXT (full 20-bit id + word count
-// in ts) then CONT payload pairs in ts -- rare path.
+// A ZONE record is one COMPLETE zone: `ts` is the start, `dur` the length in device cycles. Start/end
+// wire markers are paired in the decode workers (per-lane stacks), so downstream sees half the records
+// and Tracy gets one atomic zone push per zone. dur == UINT32_MAX is the long-zone escape (>~3 s at
+// 1.35 GHz): the REAL end timestamp follows immediately in a kRecExt record's ts, same adjacent-record
+// contract the DATA/EVENT reassembly already relies on. Per-lane, zone records are emitted in zone
+// COMPLETION order (an inner zone precedes the outer one that contains it) -- consumers must not
+// expect start-sorted input.
+// A DATA/EVENT head is followed by EXT (full 20-bit id + word count in ts) then CONT payload pairs
+// in ts -- rare path; those records leave `dur` unused.
 // Per-record `prog` stays dropped (runtime_host_id=0 until a sticky-PROG side channel is restored);
 // timestamps stay full-width -- truncating them is not an acceptable publish-bandwidth cheat.
-struct __attribute__((packed)) PerfDebugRec {
+struct PerfDebugRec {
     uint64_t ts;
+    uint32_t dur;
     uint32_t meta;
 };
-static_assert(sizeof(PerfDebugRec) == 12);
+static_assert(sizeof(PerfDebugRec) == 16);
 static_assert(std::is_trivially_copyable_v<PerfDebugRec>);
 inline constexpr uint32_t kRecTypeShift = 29;
 inline constexpr uint32_t kRecDevShift = 26;
 inline constexpr uint32_t kRecLaneShift = 16;
 inline constexpr uint32_t kRecDevMax = 8;
 inline constexpr uint32_t kRecLaneMax = 1024;
-// Record type codes. START/END equal the wire's PP_ZONE_START/END so the hot emit stores the wire type
-// unmapped; the rest are this stream's own codes (the wire's 5-bit space does not fit 3 bits).
-inline constexpr uint32_t kRecZoneStart = 0;
-inline constexpr uint32_t kRecZoneEnd = 1;
+inline constexpr uint32_t kRecLongZoneDur = 0xFFFFFFFFu;
+// Record type codes (this stream's own -- the wire's 5-bit space does not fit 3 bits).
+inline constexpr uint32_t kRecZone = 2;
 inline constexpr uint32_t kRecData = 3;
 inline constexpr uint32_t kRecEvent = 4;
 inline constexpr uint32_t kRecCont = 5;
 inline constexpr uint32_t kRecExt = 6;
+
+// START/END pairing state, one per lane, written only by the lane's decode worker (lanes shard by
+// core across workers). START pushes a timestamp; END pops and emits one complete kRecZone. An END
+// on an empty stack is a capture-start straddle and is dropped here -- upstream of the ring, so the
+// Tracy handler needs no orphan bookkeeping at all. STARTs past kDepth bump `overflow` so their ENDs
+// are swallowed instead of unwinding an outer frame; STARTs still open at teardown never became a
+// record and vanish with the capture.
+struct PerfDebugLaneZoneStack {
+    static constexpr uint32_t kDepth = 16;
+    uint64_t start_ts[kDepth];
+    uint32_t depth = 0;
+    uint32_t overflow = 0;
+};
 
 // One PerfDebugProfiler per MeshDevice. Constructing it boots the drainer drainer on every eligible local
 // Blackhole device and starts the drain threads; destroying it (or calling stop()) signals P_STOP, joins
@@ -246,7 +266,8 @@ private:
     // Decode-worker fan-out ceiling (TT_METAL_PERF_DEBUG_DECODE_WORKERS picks the actual count, default 3).
     // Cores shard CONTIGUOUSLY across workers (worker = core * N / num_cores), which preserves per-lane
     // record order structurally: a lane never changes worker, and each worker consumes its slots in
-    // stream order. Cap 4: w=3 matches w=4 on marker-wire; w=2 is decode-bound.
+    // stream order. Cap 4: with zone pairing, w=4 is copy-bound (~24 GB/s vs ~22 at w=3); w=2 is
+    // decode-bound.
     static constexpr uint32_t kMaxDecodeWorkers = 4;
     static constexpr uint32_t kNRisc = 5;
     static constexpr uint32_t kNoSocket = 0xFFFFFFFFu;  // DeviceCtx::sock_of for a filler
@@ -298,6 +319,7 @@ private:
         // lane's frames always land on one worker); cur_prog is naturally per-core because each core's
         // BRISC emits its own STICKY_PROG and a core's frames stay on one worker.
         std::unique_ptr<profiler::SpscDecodeState> wdecode[kMaxDecodeWorkers * kNSockets];
+        std::vector<PerfDebugLaneZoneStack> lane_zones;  // size nl; see PerfDebugLaneZoneStack
         bool active = false;
         // --hartzones equivalent (TT_METAL_PERF_DEBUG_HART_ZONES=1): the drain harts inject their own
         // busy/idle spans IN-BAND. {rdcycle, meta} pairs per hart (START,END alternating); each hart is written
