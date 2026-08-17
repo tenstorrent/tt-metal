@@ -1,6 +1,5 @@
 We took Voxtral-TTS, a 4B text to speech model with three stacks, through the whole pipeline on a
-single p150b. Seven things worth fixing. Points 5 and 6 are one line each and would have the most
-effect for the least work.
+single p150b. Seven things worth fixing. Points 5 and 6 are one line each.
 
 1. Check that the model implementation the tool writes actually works
     - When a model is not in HF format the tool writes its own PyTorch version of it, and every later
@@ -76,15 +75,12 @@ effect for the least work.
       instead. Separately, the number reported as per token is really the whole call, so measuring a
       longer and more realistic utterance makes the cost per token look worse.
 
-5. The two accuracy thresholds disagree, and the looser one is what you get
-    - The gate documents 0.99 as required, the command line passes 0.95 and overrides it. Same port,
-      same model, same machine: at 0.95 the score came out 0.9586 and the repair loop stopped on the
-      first round, at 0.99 it came out 0.9986 after real work. The 0.9586 was not a precision limit,
-      it was where the loop stopped because the gate let it. The threshold sets quality here, it does
-      not only report it.
-    - Bring-up prints the next command to run and that command carries no threshold, so copying what
-      the tool just gave you gets the looser one.
-    - Fix: agree on the stricter default, and put the threshold in the command it suggests.
+5. The accuracy target is stated three different ways
+    - The diagram and the getting started page say 0.99, one README line says 0.99 per component and
+      0.95 end to end, and the gate documents 0.99 as required. The command line passes 0.95 and that
+      is the one that wins. Bring-up then prints the next command to run without any threshold, so
+      copying what it just gave you gets 0.95.
+    - Fix: make the docs and the defaults agree, and print the target that was used.
 
 6. The correctness gate accepts values that cannot be correlations
     - It reported a PCC of 33.612 and marked it verified against a threshold of 0.99. Nothing checks
