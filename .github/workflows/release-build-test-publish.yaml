@@ -56,7 +56,6 @@ jobs:
     outputs:
       distro: ${{ steps.parse.outputs.distro }}
       version: ${{ steps.parse.outputs.version }}
-      python-version: ${{ steps.parse.outputs.python-version }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
@@ -111,7 +110,7 @@ jobs:
           fi
 
   release-demo-tests:
-    needs: [check-harbor, build-artifact, determine-test-skus, parse-platform]
+    needs: [check-harbor, build-artifact, determine-test-skus]
     if: ${{ inputs.tag-version != '' }}
     # id-token: write is required by the nested exabox multihost job (multihost-ci runner chart).
     # Job-level permissions replace inherited defaults, so restate the reads the container legs need too.
@@ -130,7 +129,8 @@ jobs:
       tier: "1"
       tests-yaml-gist-url: ${{ inputs.tests-yaml-gist-url }}
       # Manylinux wheel native libs live in the installed package, not the Ubuntu tarball.
-      ld-library-path-multihost: ${{ inputs.ld-library-path-multihost != '' && inputs.ld-library-path-multihost || format('/opt/venv/lib/python{0}/site-packages/ttnn/build/lib', needs.parse-platform.outputs.python-version) }}
+      # Multihost SKUs only run on Ubuntu 22.04 (Python 3.10).
+      ld-library-path-multihost: ${{ inputs.ld-library-path-multihost != '' && inputs.ld-library-path-multihost || '/opt/venv/lib/python3.10/site-packages/ttnn/build/lib' }}
 
   # Run-level aggregate of per-job AI summaries from release-demo-tests-impl.
   # expected-jobs is the union of single-host and exabox multihost legs so a
