@@ -5,8 +5,8 @@
       correct, but we only know that because we compared it against our own reference by hand.
     - Fix: have it write a real check that the model works, and prove the check can fail by breaking
       the model on purpose. Otherwise you get another test that passes whatever happens, like the one
-      in point 4. It already did exactly this for our model, in a comment: it drove the speech path and
-      found that a wrong RoPE gives a buzz that never stops. Make that run.
+      in point 4. It already did exactly this for our model, in a comment: it drove the speech path
+      and found that a wrong RoPE gives a buzz that never stops. Make that run.
 
 2. Fix bring-up from a local folder
     - A folder on disk is not treated like a Hub name. It gets a shallower check and the run dies
