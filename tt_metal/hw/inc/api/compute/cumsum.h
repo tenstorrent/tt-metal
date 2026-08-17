@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_cumsum.h"
@@ -30,9 +31,10 @@ namespace ckernel {
  * | first           | Set true for tiles in the first row                                        | bool     |                                                       | False    |
  */
 // clang-format on
-ALWI void cumsum_tile(uint32_t idst, bool first = true) {
+ALWI void cumsum_tile(std::uint32_t idst, bool first = true) {
+    dest_order::touch_sfpu();
     // There is only non APPROXIMATE implementation; cumsum can only work in RC_custom mode.
-    MATH(SFPU_UNARY_CALL(
+    SFPU(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_cumsum,
@@ -47,7 +49,7 @@ ALWI void cumsum_tile(uint32_t idst, bool first = true) {
  */
 ALWI void cumsum_tile_init() {
     // There is only non APPROXIMATE implementation
-    MATH(SFPU_UNARY_INIT_FN(cumsum, sfpu::cumsum_init, (false /* APPROXIMATE */)));
+    SFPU(SFPU_UNARY_INIT_FN(cumsum, sfpu::cumsum_init, (false /* APPROXIMATE */)));
 }
 
 }  // namespace ckernel

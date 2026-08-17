@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #ifdef ARCH_QUASAR
@@ -52,7 +53,7 @@ namespace detail {
 // brought into scope on the math thread. All callers wrap the invocation in MATH((...)) so the
 // function is never reached on unpack/pack threads.
 template <SfpuType OP, DataFormat data_format>
-ALWI void rel_int_tile_dispatch(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+ALWI void rel_int_tile_dispatch(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
     static_assert(
         data_format == DataFormat::Int32 || data_format == DataFormat::UInt32 || data_format == DataFormat::UInt16,
         "Unsupported data format. Supported: Int32, UInt32, UInt16");
@@ -80,7 +81,7 @@ ALWI void rel_int_tile_dispatch(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 }
 
 template <SfpuType OP, DataFormat data_format>
-ALWI void eq_int_tile_dispatch(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+ALWI void eq_int_tile_dispatch(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
     static_assert(
         data_format == DataFormat::Int32 || data_format == DataFormat::UInt32 || data_format == DataFormat::UInt16,
         "Unsupported data format. Supported: Int32, UInt32, UInt16");
@@ -100,29 +101,30 @@ ALWI void eq_int_tile_dispatch(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 
 #ifndef ARCH_QUASAR
 template <DataFormat data_format>
-ALWI void eq_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+ALWI void eq_int_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
     MATH((detail::eq_int_tile_dispatch<SfpuType::eq, data_format>(idst0, idst1, odst)));
 }
 
 template <DataFormat data_format>
-ALWI void ne_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+ALWI void ne_int_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
     MATH((detail::eq_int_tile_dispatch<SfpuType::ne, data_format>(idst0, idst1, odst)));
 }
 #endif
 
 #ifndef ARCH_QUASAR
 template <DataFormat data_format>
-ALWI void lt_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+ALWI void lt_int_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
     MATH((detail::rel_int_tile_dispatch<SfpuType::lt, data_format>(idst0, idst1, odst)));
 }
 #endif
 
 template <DataFormat data_format>
-ALWI void gt_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+ALWI void gt_int_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
+    dest_order::touch_sfpu();
 #if defined(ARCH_QUASAR)
     // Int8 copy_tile + fp32_dest_acc FPU writes sign-magnitude Int32 into dest.
     // Native Int32 tiles use 2's-comp dest and keep SIGN_MAGNITUDE_FORMAT=false.
-    MATH((llk_math_eltwise_binary_sfpu_gt_int<APPROX, data_format, 8 /*ITERATIONS*/, true /*SIGN_MAGNITUDE_FORMAT*/>(
+    SFPU((llk_math_eltwise_binary_sfpu_gt_int<APPROX, data_format, 8 /*ITERATIONS*/, true /*SIGN_MAGNITUDE_FORMAT*/>(
         idst0, idst1, odst)));
 #else
     MATH((detail::rel_int_tile_dispatch<SfpuType::gt, data_format>(idst0, idst1, odst)));
@@ -131,12 +133,12 @@ ALWI void gt_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 
 #ifndef ARCH_QUASAR
 template <DataFormat data_format>
-ALWI void le_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+ALWI void le_int_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
     MATH((detail::rel_int_tile_dispatch<SfpuType::le, data_format>(idst0, idst1, odst)));
 }
 
 template <DataFormat data_format>
-ALWI void ge_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+ALWI void ge_int_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
     MATH((detail::rel_int_tile_dispatch<SfpuType::ge, data_format>(idst0, idst1, odst)));
 }
 #endif
@@ -151,7 +153,7 @@ ALWI void eq_int_tile_init() {
     static_assert(
         data_format == DataFormat::Int32 || data_format == DataFormat::UInt32 || data_format == DataFormat::UInt16,
         "Unsupported data format for eq_int. Supported data formats are: Int32, UInt32, UInt16");
-    MATH((SFPU_BINARY_INIT(eq_int)));
+    SFPU((SFPU_BINARY_INIT(eq_int)));
 }
 
 template <DataFormat data_format>
@@ -159,7 +161,7 @@ ALWI void ne_int_tile_init() {
     static_assert(
         data_format == DataFormat::Int32 || data_format == DataFormat::UInt32 || data_format == DataFormat::UInt16,
         "Unsupported data format for ne_int. Supported data formats are: Int32, UInt32, UInt16");
-    MATH((SFPU_BINARY_INIT(ne_int)));
+    SFPU((SFPU_BINARY_INIT(ne_int)));
 }
 #endif
 
@@ -169,19 +171,19 @@ ALWI void lt_int_tile_init() {
     static_assert(
         data_format == DataFormat::Int32 || data_format == DataFormat::UInt32 || data_format == DataFormat::UInt16,
         "Unsupported data format for lt_int. Supported data formats are: Int32, UInt32, UInt16");
-    MATH((SFPU_BINARY_INIT(lt_int)));
+    SFPU((SFPU_BINARY_INIT(lt_int)));
 }
 #endif
 
 template <DataFormat data_format>
 ALWI void gt_int_tile_init() {
 #if defined(ARCH_QUASAR)
-    MATH((llk_math_eltwise_binary_sfpu_gt_int_init<APPROX, data_format>()));
+    SFPU((llk_math_eltwise_binary_sfpu_gt_int_init<APPROX, data_format>()));
 #else
     static_assert(
         data_format == DataFormat::Int32 || data_format == DataFormat::UInt32 || data_format == DataFormat::UInt16,
         "Unsupported data format for gt_int. Supported data formats are: Int32, UInt32, UInt16");
-    MATH((SFPU_BINARY_INIT(gt_int)));
+    SFPU((SFPU_BINARY_INIT(gt_int)));
 #endif
 }
 
@@ -191,7 +193,7 @@ ALWI void le_int_tile_init() {
     static_assert(
         data_format == DataFormat::Int32 || data_format == DataFormat::UInt32 || data_format == DataFormat::UInt16,
         "Unsupported data format for le_int. Supported data formats are: Int32, UInt32, UInt16");
-    MATH((SFPU_BINARY_INIT(le_int)));
+    SFPU((SFPU_BINARY_INIT(le_int)));
 }
 
 template <DataFormat data_format>
@@ -199,7 +201,7 @@ ALWI void ge_int_tile_init() {
     static_assert(
         data_format == DataFormat::Int32 || data_format == DataFormat::UInt32 || data_format == DataFormat::UInt16,
         "Unsupported data format for ge_int. Supported data formats are: Int32, UInt32, UInt16");
-    MATH((SFPU_BINARY_INIT(ge_int)));
+    SFPU((SFPU_BINARY_INIT(ge_int)));
 }
 #endif
 

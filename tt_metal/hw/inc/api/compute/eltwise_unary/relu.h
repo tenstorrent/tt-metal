@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #if defined(TRISC_MATH) || defined(TRISC_PACK)
 #include "ckernel_sfpu_relu.h"
@@ -12,7 +13,7 @@
 
 namespace ckernel {
 
-ALWI void relu_tile_init() { MATH(SFPU_UNARY_INIT(relu_min)); }
+ALWI void relu_tile_init() { SFPU(SFPU_UNARY_INIT(relu_min)); }
 
 // clang-format off
 /**
@@ -28,9 +29,10 @@ ALWI void relu_tile_init() { MATH(SFPU_UNARY_INIT(relu_min)); }
  * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void relu_tile(uint32_t idst) {
+ALWI void relu_tile(std::uint32_t idst) {
+    dest_order::touch_sfpu();
 #ifdef ARCH_QUASAR
-    MATH(SFPU_UNARY_CALL(
+    SFPU(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         _relu_min_,
@@ -39,11 +41,11 @@ ALWI void relu_tile(uint32_t idst) {
         VectorMode::RC,
         0 /*threshold*/));
 #else
-    MATH(SFPU_UNARY_CALL(
+    SFPU(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         _relu_min_,
-        (sfpi::vFloat /*VectorType*/, APPROX /*APPROXIMATION_MODE*/, 8 /*ITERATIONS*/, uint32_t /*T*/),
+        (sfpi::vFloat /*VectorType*/, APPROX /*APPROXIMATION_MODE*/, 8 /*ITERATIONS*/, std::uint32_t /*T*/),
         idst,
         VectorMode::RC,
         0 /*threshold*/));
@@ -67,29 +69,31 @@ ALWI void relu_tile(uint32_t idst) {
  */
 // clang-format on
 
-ALWI void relu_max_tile(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_UNARY_CALL(
+ALWI void relu_max_tile(std::uint32_t idst, std::uint32_t param0) {
+    dest_order::touch_sfpu();
+    SFPU(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         _relu_max_,
-        (sfpi::vFloat /*VectorType*/, APPROX /*APPROXIMATION_MODE*/, 8 /*ITERATIONS*/, uint32_t /*T*/),
+        (sfpi::vFloat /*VectorType*/, APPROX /*APPROXIMATION_MODE*/, 8 /*ITERATIONS*/, std::uint32_t /*T*/),
         idst,
         VectorMode::RC,
         param0 /*threshold*/));
 }
-ALWI void relu_max_tile_pack(uint32_t idst, uint32_t param0) {
+ALWI void relu_max_tile_pack(std::uint32_t idst, std::uint32_t param0) {
     PACK(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         _relu_max_,
-        (sfpi::vFloat /*VectorType*/, APPROX /*APPROXIMATION_MODE*/, 8 /*ITERATIONS*/, uint32_t /*T*/),
+        (sfpi::vFloat /*VectorType*/, APPROX /*APPROXIMATION_MODE*/, 8 /*ITERATIONS*/, std::uint32_t /*T*/),
         idst,
         VectorMode::RC,
         param0 /*threshold*/));
 }
 
-ALWI void relu_max_tile_int32(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_UNARY_CALL(
+ALWI void relu_max_tile_int32(std::uint32_t idst, std::uint32_t param0) {
+    dest_order::touch_sfpu();
+    SFPU(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         relu_clamp_int,
@@ -99,8 +103,9 @@ ALWI void relu_max_tile_int32(uint32_t idst, uint32_t param0) {
         param0 /*threshold*/));
 }
 
-ALWI void relu_max_tile_uint32(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_UNARY_CALL(
+ALWI void relu_max_tile_uint32(std::uint32_t idst, std::uint32_t param0) {
+    dest_order::touch_sfpu();
+    SFPU(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         relu_clamp_uint,
@@ -110,8 +115,9 @@ ALWI void relu_max_tile_uint32(uint32_t idst, uint32_t param0) {
         param0 /*threshold*/));
 }
 
-ALWI void relu_max_tile_uint16(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_UNARY_CALL(
+ALWI void relu_max_tile_uint16(std::uint32_t idst, std::uint32_t param0) {
+    dest_order::touch_sfpu();
+    SFPU(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         relu_clamp_uint,
@@ -121,7 +127,7 @@ ALWI void relu_max_tile_uint16(uint32_t idst, uint32_t param0) {
         param0 /*threshold*/));
 }
 
-ALWI void relu_max_tile_init() { MATH(SFPU_UNARY_INIT(relu_max)); }
+ALWI void relu_max_tile_init() { SFPU(SFPU_UNARY_INIT(relu_max)); }
 ALWI void relu_max_tile_init_pack() { PACK(SFPU_UNARY_INIT(relu_max)); }
 
 // clang-format off
@@ -140,19 +146,21 @@ ALWI void relu_max_tile_init_pack() { PACK(SFPU_UNARY_INIT(relu_max)); }
  * | lower_limit    | Upper limit of relu_min                                                    | uint32_t | Greater than 0                                        | True     |
  */
 // clang-format on
-ALWI void relu_min_tile(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_UNARY_CALL(
+ALWI void relu_min_tile(std::uint32_t idst, std::uint32_t param0) {
+    dest_order::touch_sfpu();
+    SFPU(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         _relu_min_,
-        (sfpi::vFloat /*VectorType*/, APPROX /*APPROXIMATION_MODE*/, 8 /*ITERATIONS*/, uint32_t /*T*/),
+        (sfpi::vFloat /*VectorType*/, APPROX /*APPROXIMATION_MODE*/, 8 /*ITERATIONS*/, std::uint32_t /*T*/),
         idst,
         VectorMode::RC,
         param0 /*threshold*/));
 }
 
-ALWI void relu_min_tile_int32(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_UNARY_CALL(
+ALWI void relu_min_tile_int32(std::uint32_t idst, std::uint32_t param0) {
+    dest_order::touch_sfpu();
+    SFPU(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         relu_clamp_int,
@@ -162,8 +170,9 @@ ALWI void relu_min_tile_int32(uint32_t idst, uint32_t param0) {
         param0 /*threshold*/));
 }
 
-ALWI void relu_min_tile_uint32(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_UNARY_CALL(
+ALWI void relu_min_tile_uint32(std::uint32_t idst, std::uint32_t param0) {
+    dest_order::touch_sfpu();
+    SFPU(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         relu_clamp_uint,
@@ -173,8 +182,9 @@ ALWI void relu_min_tile_uint32(uint32_t idst, uint32_t param0) {
         param0 /*threshold*/));
 }
 
-ALWI void relu_min_tile_uint16(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_UNARY_CALL(
+ALWI void relu_min_tile_uint16(std::uint32_t idst, std::uint32_t param0) {
+    dest_order::touch_sfpu();
+    SFPU(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         relu_clamp_uint,
@@ -184,14 +194,15 @@ ALWI void relu_min_tile_uint16(uint32_t idst, uint32_t param0) {
         param0 /*threshold*/));
 }
 
-ALWI void relu_min_tile_init() { MATH(SFPU_UNARY_INIT(relu_min)); }
+ALWI void relu_min_tile_init() { SFPU(SFPU_UNARY_INIT(relu_min)); }
 
-ALWI void relu_tile_int32(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(
+ALWI void relu_tile_int32(std::uint32_t idst) {
+    dest_order::touch_sfpu();
+    SFPU(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         _relu_min_,
-        (sfpi::vInt /*VectorType*/, APPROX /*APPROXIMATION_MODE*/, 8 /*ITERATIONS*/, uint32_t /*T*/),
+        (sfpi::vInt /*VectorType*/, APPROX /*APPROXIMATION_MODE*/, 8 /*ITERATIONS*/, std::uint32_t /*T*/),
         idst,
         VectorMode::RC,
         0 /*threshold*/));
@@ -213,10 +224,11 @@ ALWI void relu_tile_int32(uint32_t idst) {
  * | slope          | slope used in leaky relu - will reinterpret unsigned int to float          | uint32_t | Greater than 0                                        | True     |
  */
 // clang-format on
-ALWI void leaky_relu_tile(uint32_t idst, uint32_t slope = 0) {
-    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_lrelu, (APPROX), idst, VectorMode::RC, slope));
+ALWI void leaky_relu_tile(std::uint32_t idst, std::uint32_t slope = 0) {
+    dest_order::touch_sfpu();
+    SFPU(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_lrelu, (APPROX), idst, VectorMode::RC, slope));
 }
 
-ALWI void leaky_relu_tile_init() { MATH(SFPU_UNARY_INIT(lrelu)); }
+ALWI void leaky_relu_tile_init() { SFPU(SFPU_UNARY_INIT(lrelu)); }
 #endif
 }  // namespace ckernel

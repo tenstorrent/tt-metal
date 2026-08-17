@@ -12,14 +12,6 @@
 
 namespace ckernel
 {
-enum class dest_dvalid_client : std::uint32_t
-{
-    UNPACK = 0,
-    FPU    = 1,
-    SFPU   = 2,
-    PACK   = 3,
-};
-
 struct dest_dvalid_config
 {
     std::uint32_t ctrl_addr32;
@@ -159,6 +151,41 @@ inline void _llk_dest_dvalid_signal_()
     if constexpr (CLIENT == dest_dvalid_client::PACK && DST == DstSync::SyncHalf)
     {
         ckernel::pack::_update_clear_dest_bank_id_();
+    }
+}
+
+template <dest_dvalid_client CLIENT>
+inline void _llk_dest_dvalid_configure_(std::uint32_t ring_mask, std::uint32_t successor_bit, bool is_ring_start)
+{
+    constexpr dest_dvalid_config CFG = dest_dvalid_config_of<CLIENT>;
+
+    dest_dvalid_wait_client_idle<CLIENT>();
+
+    if (is_ring_start)
+    {
+        dest_dvalid_wait_chain_idle();
+    }
+
+    const std::uint32_t wait_mask     = is_ring_start ? ring_mask : CFG.bit;
+    const std::uint32_t wait_polarity = is_ring_start ? 0u : CFG.bit;
+    const std::uint32_t toggle_mask   = CFG.bit | successor_bit;
+
+    const std::uint32_t ctrl = (wait_mask << UNPACK_TO_DEST_DVALID_CTRL_wait_mask_SHAMT) | (wait_polarity << UNPACK_TO_DEST_DVALID_CTRL_wait_polarity_SHAMT) |
+                               (toggle_mask << UNPACK_TO_DEST_DVALID_CTRL_toggle_mask_SHAMT);
+
+    cfg_rmw(CFG.ctrl_addr32, 0, DEST_DVALID_CTRL_MASK, ctrl);
+    TTI_STALLWAIT(p_stall::STALL_THREAD, p_stall::NOTHING, p_stall::CFGEXU, p_stall::TRISC_CFG);
+}
+
+template <dest_dvalid_client CLIENT, DstSync DST>
+inline void _llk_dest_dvalid_passthrough_()
+{
+    constexpr dest_dvalid_config CFG = dest_dvalid_config_of<CLIENT>;
+    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::NOTHING, p_stall::WAIT_SFPU, CFG.drain_res);
+    TTI_CLEARDVALID(0, 0, 0, 0, CFG.bit, 0);
+    if constexpr (DST == DstSync::SyncFull)
+    {
+        TTI_CLEARDVALID(0, 0, 0, CFG.bit, CFG.bit, 0);
     }
 }
 

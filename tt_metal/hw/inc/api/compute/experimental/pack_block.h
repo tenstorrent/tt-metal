@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 
 #ifdef TRISC_PACK
@@ -32,7 +33,7 @@ namespace ckernel {
  * | Function   | ocb  | The identifier of the output circular buffer (CB) | uint32_t | 0 to 31     | True     |
  */
 // clang-format on
-ALWI void pack_block_contiguous_init(uint32_t ocb) { PACK((llk_pack_block_contiguous_mop_config(ocb))); }
+ALWI void pack_block_contiguous_init(std::uint32_t ocb) { PACK((llk_pack_block_contiguous_mop_config(ocb))); }
 
 // clang-format off
 /**
@@ -59,7 +60,8 @@ ALWI void pack_block_contiguous_init(uint32_t ocb) { PACK((llk_pack_block_contig
  * | Function   | num_tiles | Number of tiles to pack from DEST to CB           | uint32_t | 1 to 8                                                 | True     |
  */
 // clang-format on
-ALWI void pack_block_contiguous(uint32_t ifrom_dst, uint32_t ocb, uint32_t num_tiles) {
+ALWI void pack_block_contiguous(std::uint32_t ifrom_dst, std::uint32_t ocb, std::uint32_t num_tiles) {
+    dest_order::touch_pack();
     PACK((llk_pack_block_contiguous<DST_ACCUM_MODE>(ifrom_dst, ocb, num_tiles)));
 }
 

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #ifdef ARCH_QUASAR
@@ -31,8 +32,9 @@ namespace ckernel {
 // clang-format on
 enum { ADD_UNARY = 0, SUB_UNARY = 1, MUL_UNARY = 2, DIV_UNARY = 3, RSUB_UNARY = 4 };
 #ifndef ARCH_QUASAR
-ALWI void add_unary_tile(uint32_t idst, uint32_t param1) {
-    MATH(SFPU_UNARY_CALL(
+ALWI void add_unary_tile(std::uint32_t idst, std::uint32_t param1) {
+    dest_order::touch_sfpu();
+    SFPU(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_binop_with_scalar,
@@ -42,8 +44,9 @@ ALWI void add_unary_tile(uint32_t idst, uint32_t param1) {
         param1));
 }
 
-ALWI void sub_unary_tile(uint32_t idst, uint32_t param1) {
-    MATH(SFPU_UNARY_CALL(
+ALWI void sub_unary_tile(std::uint32_t idst, std::uint32_t param1) {
+    dest_order::touch_sfpu();
+    SFPU(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_binop_with_scalar,
@@ -54,11 +57,12 @@ ALWI void sub_unary_tile(uint32_t idst, uint32_t param1) {
 }
 #endif
 
-ALWI void mul_unary_tile(uint32_t idst, uint32_t param1) {
+ALWI void mul_unary_tile(std::uint32_t idst, std::uint32_t param1) {
+    dest_order::touch_sfpu();
 #ifdef ARCH_QUASAR
-    MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar<APPROX, sfpu::BinopMode::Mul>(idst, param1)));
+    SFPU((llk_math_eltwise_unary_sfpu_binop_with_scalar<APPROX, sfpu::BinopMode::Mul>(idst, param1)));
 #else
-    MATH(SFPU_UNARY_CALL(
+    SFPU(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_binop_with_scalar,
@@ -70,8 +74,9 @@ ALWI void mul_unary_tile(uint32_t idst, uint32_t param1) {
 }
 
 #ifndef ARCH_QUASAR
-ALWI void div_unary_tile(uint32_t idst, uint32_t param1) {
-    MATH(SFPU_UNARY_CALL(
+ALWI void div_unary_tile(std::uint32_t idst, std::uint32_t param1) {
+    dest_order::touch_sfpu();
+    SFPU(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_binop_with_scalar,
@@ -81,8 +86,9 @@ ALWI void div_unary_tile(uint32_t idst, uint32_t param1) {
         param1));
 }
 
-ALWI void rsub_unary_tile(uint32_t idst, uint32_t param1) {
-    MATH(SFPU_UNARY_CALL(
+ALWI void rsub_unary_tile(std::uint32_t idst, std::uint32_t param1) {
+    dest_order::touch_sfpu();
+    SFPU(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_binop_with_scalar,
@@ -107,8 +113,9 @@ ALWI void rsub_unary_tile(uint32_t idst, uint32_t param1) {
 */
 // clang-format on
 
-ALWI void add_unary_tile_int32(uint32_t idst, uint32_t param1) {
-    MATH(SFPU_UNARY_CALL(
+ALWI void add_unary_tile_int32(std::uint32_t idst, std::uint32_t param1) {
+    dest_order::touch_sfpu();
+    SFPU(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_add_int32,
@@ -133,8 +140,9 @@ ALWI void add_unary_tile_int32(uint32_t idst, uint32_t param1) {
 */
 // clang-format on
 
-ALWI void sub_unary_tile_int32(uint32_t idst, uint32_t param1) {
-    MATH(SFPU_UNARY_CALL(
+ALWI void sub_unary_tile_int32(std::uint32_t idst, std::uint32_t param1) {
+    dest_order::touch_sfpu();
+    SFPU(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_sub_int32,
@@ -150,9 +158,9 @@ ALWI void sub_unary_tile_int32(uint32_t idst, uint32_t param1) {
  */
 ALWI void binop_with_scalar_tile_init() {
 #ifdef ARCH_QUASAR
-    MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar_init()));
+    SFPU((llk_math_eltwise_unary_sfpu_binop_with_scalar_init()));
 #else
-    MATH(SFPU_UNARY_INIT(unused));
+    SFPU(SFPU_UNARY_INIT(unused));
 #endif
 }
 

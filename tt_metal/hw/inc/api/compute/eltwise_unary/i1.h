@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_i1.h"
@@ -25,13 +26,14 @@ namespace ckernel {
  * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void i1_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_i1, (APPROX), idst, VectorMode::RC));
+ALWI void i1_tile(std::uint32_t idst) {
+    dest_order::touch_sfpu();
+    SFPU(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_i1, (APPROX), idst, VectorMode::RC));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void i1_tile_init() { MATH(SFPU_UNARY_INIT_FN(i1, sfpu::i1_init, (APPROX))); }
+ALWI void i1_tile_init() { SFPU(SFPU_UNARY_INIT_FN(i1, sfpu::i1_init, (APPROX))); }
 
 }  // namespace ckernel

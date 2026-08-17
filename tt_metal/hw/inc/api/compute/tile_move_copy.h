@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #include "api/compute/sentinel/compute_kernel_sentinel.h"
 #include "sanitizer/api.h"
@@ -31,10 +32,10 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void copy_tile_to_dst_init_short(
-    uint32_t cbid,
-    uint32_t transpose = 0,
-    uint32_t transpose_within_16x16_face = false,
-    uint32_t call_line = __builtin_LINE()) {
+    std::uint32_t cbid,
+    std::uint32_t transpose = 0,
+    std::uint32_t transpose_within_16x16_face = false,
+    std::uint32_t call_line = __builtin_LINE()) {
     LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
     state_configure(cbid, call_line);
@@ -57,7 +58,7 @@ ALWI void copy_tile_to_dst_init_short(
  * Perform a init for the copy tile operation. This calls the short init function and initializes packer dst offset
  * registers.
  */
-ALWI void copy_tile_init(uint32_t cbid, uint32_t call_line = __builtin_LINE()) {
+ALWI void copy_tile_init(std::uint32_t cbid, std::uint32_t call_line = __builtin_LINE()) {
     LLK_SAN_FUNCTION();
     copy_tile_to_dst_init_short(cbid, 0, false, call_line);
 }
@@ -74,7 +75,8 @@ ALWI void copy_tile_init(uint32_t cbid, uint32_t call_line = __builtin_LINE()) {
  */
 // clang-format on
 #ifndef ARCH_QUASAR
-ALWI void copy_tile_to_dst_init_short_with_dt(uint32_t old_cbid, uint32_t new_cbid, uint32_t transpose = 0) {
+ALWI void copy_tile_to_dst_init_short_with_dt(
+    std::uint32_t old_cbid, std::uint32_t new_cbid, std::uint32_t transpose = 0) {
     LLK_SAN_FUNCTION();
     // This reconfig call checks if old operand has different data format to
     // new operand idx, otherwise no reconfig call occurs
@@ -105,7 +107,11 @@ ALWI void copy_tile_to_dst_init_short_with_dt(uint32_t old_cbid, uint32_t new_cb
  * | dst_tile_index | The index of the tile in the DST register         | uint32_t  | Must be less than the size of the DST register (16) | True     |
  * */
 // clang-format on
-ALWI void copy_tile(uint32_t in_cb_id, uint32_t in_tile_index, uint32_t dst_tile_index) {
+ALWI void copy_tile(std::uint32_t in_cb_id, std::uint32_t in_tile_index, std::uint32_t dst_tile_index) {
+    if constexpr (UnpackToDestEn) {
+        dest_order::touch_unpack();
+    }
+    dest_order::touch_fpu();
 #ifndef ARCH_QUASAR
     LLK_SAN_FUNCTION();
 #endif
@@ -140,7 +146,11 @@ ALWI void copy_tile(uint32_t in_cb_id, uint32_t in_tile_index, uint32_t dst_tile
  * | ntiles               | The number of consecutive tiles to copy                    | uint32_t  | start_dst_tile_index + ntiles <= DST register size  | True     |
  * */
 // clang-format on
-ALWI void copy_block(uint32_t in_cb_id, uint32_t start_in_tile_index, uint32_t start_dst_tile_index, uint32_t ntiles) {
+ALWI void copy_block(
+    std::uint32_t in_cb_id,
+    std::uint32_t start_in_tile_index,
+    std::uint32_t start_dst_tile_index,
+    std::uint32_t ntiles) {
 #ifndef ARCH_QUASAR
     LLK_SAN_FUNCTION();
 #endif
@@ -168,7 +178,10 @@ ALWI void copy_block(uint32_t in_cb_id, uint32_t start_in_tile_index, uint32_t s
 // clang-format on
 [[deprecated("Use copy_block(); copy_block_matmul_partials will be removed after August 15th, 2026.")]] ALWI void
 copy_block_matmul_partials(
-    uint32_t in_cb_id, uint32_t start_in_tile_index, uint32_t start_dst_tile_index, uint32_t ntiles) {
+    std::uint32_t in_cb_id,
+    std::uint32_t start_in_tile_index,
+    std::uint32_t start_dst_tile_index,
+    std::uint32_t ntiles) {
     copy_block(in_cb_id, start_in_tile_index, start_dst_tile_index, ntiles);
 }
 

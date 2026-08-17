@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_fmod.h"
@@ -27,17 +28,18 @@ namespace ckernel {
  * | idst           | The index of the tile in DST register buffer to perform fmod operation      | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void fmod_tile(uint32_t idst) {
+ALWI void fmod_tile(std::uint32_t idst) {
+    dest_order::touch_sfpu();
     // The denominator and its reciprocal are loaded once by fmod_tile_init into vConstFloatPrgm0/1;
     // calculate_fmod reads them from there.
-    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_fmod, (APPROX), idst, VectorMode::RC));
+    SFPU(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_fmod, (APPROX), idst, VectorMode::RC));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void fmod_tile_init(uint32_t param0, uint32_t param1) {
-    MATH(SFPU_UNARY_INIT_FN_ARGS(fmod, sfpu::init_fmod, (APPROX), param0, param1));
+ALWI void fmod_tile_init(std::uint32_t param0, std::uint32_t param1) {
+    SFPU(SFPU_UNARY_INIT_FN_ARGS(fmod, sfpu::init_fmod, (APPROX), param0, param1));
 }
 
 }  // namespace ckernel

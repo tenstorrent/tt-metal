@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_rpow.h"
@@ -15,7 +16,7 @@ namespace ckernel {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void rpow_tile_init() { MATH(SFPU_UNARY_INIT_FN(rpow, sfpu::sfpu_binary_pow_init, (APPROX))); }
+ALWI void rpow_tile_init() { SFPU(SFPU_UNARY_INIT_FN(rpow, sfpu::sfpu_binary_pow_init, (APPROX))); }
 // clang-format off
 /**
  * Performs element-wise computation of the rpow on each element of a tile
@@ -32,8 +33,9 @@ ALWI void rpow_tile_init() { MATH(SFPU_UNARY_INIT_FN(rpow, sfpu::sfpu_binary_pow
  * | base_val       | The base value to raise to the power of each element in the tile            | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void rpow_tile(uint32_t idst, uint32_t base_val, VectorMode vector_mode = VectorMode::RC) {
-    MATH(SFPU_UNARY_CALL(
+ALWI void rpow_tile(std::uint32_t idst, std::uint32_t base_val, VectorMode vector_mode = VectorMode::RC) {
+    dest_order::touch_sfpu();
+    SFPU(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_rpow,

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/common.h"
 // Blackhole-only: the add_rsqrt SFPU functor lives only in the Blackhole llk_api tree.
@@ -20,7 +21,7 @@ namespace ckernel {
  * Initialize for add + rsqrt operation: result = rsqrt(x + addend)
  * Useful for operations like RMSNorm: rsqrt(variance + epsilon)
  */
-ALWI void add_rsqrt_tile_init() { MATH(SFPU_UNARY_INIT_FN(rsqrt, sfpu::init_add_rsqrt, (APPROX))); }
+ALWI void add_rsqrt_tile_init() { SFPU(SFPU_UNARY_INIT_FN(rsqrt, sfpu::init_add_rsqrt, (APPROX))); }
 
 /**
  * Perform add + rsqrt operation: result = rsqrt(x + addend)
@@ -29,8 +30,9 @@ ALWI void add_rsqrt_tile_init() { MATH(SFPU_UNARY_INIT_FN(rsqrt, sfpu::init_add_
  * @param addend The bit representation of a float to add before computing rsqrt
  */
 template <bool fast_and_approx = false, VectorMode vec_mode = VectorMode::RC, int ITERATIONS = 8>
-ALWI void add_rsqrt_tile(uint32_t idst, uint32_t addend) {
-    MATH(SFPU_UNARY_CALL(
+ALWI void add_rsqrt_tile(std::uint32_t idst, std::uint32_t addend) {
+    dest_order::touch_sfpu();
+    SFPU(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_add_rsqrt,

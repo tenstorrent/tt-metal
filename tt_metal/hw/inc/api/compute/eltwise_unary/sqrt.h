@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_sqrt.h"
@@ -14,7 +15,7 @@ namespace ckernel {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void sqrt_tile_init() { MATH(SFPU_UNARY_INIT_FN(sqrt, sfpu::sqrt_init, (APPROX))); }
+ALWI void sqrt_tile_init() { SFPU(SFPU_UNARY_INIT_FN(sqrt, sfpu::sqrt_init, (APPROX))); }
 
 // clang-format off
 /**
@@ -31,8 +32,9 @@ ALWI void sqrt_tile_init() { MATH(SFPU_UNARY_INIT_FN(sqrt, sfpu::sqrt_init, (APP
  */
 // clang-format on
 template <bool FAST_APPROX = false>
-ALWI void sqrt_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(
+ALWI void sqrt_tile(std::uint32_t idst) {
+    dest_order::touch_sfpu();
+    SFPU(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_sqrt,

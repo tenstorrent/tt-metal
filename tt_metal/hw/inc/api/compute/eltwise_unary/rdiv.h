@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_rdiv.h"
@@ -15,7 +16,7 @@ namespace ckernel {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void rdiv_tile_init() { MATH(SFPU_UNARY_INIT_FN(rdiv, sfpu::rdiv_init, (APPROX))); }
+ALWI void rdiv_tile_init() { SFPU(SFPU_UNARY_INIT_FN(rdiv, sfpu::rdiv_init, (APPROX))); }
 
 // clang-format off
 /**
@@ -33,8 +34,9 @@ ALWI void rdiv_tile_init() { MATH(SFPU_UNARY_INIT_FN(rdiv, sfpu::rdiv_init, (APP
  */
 // clang-format on
 template <RoundingMode rounding_mode = RoundingMode::None>
-ALWI void rdiv_tile(uint32_t dst_index, uint32_t value, VectorMode vector_mode = VectorMode::RC) {
-    MATH(SFPU_UNARY_CALL(
+ALWI void rdiv_tile(std::uint32_t dst_index, std::uint32_t value, VectorMode vector_mode = VectorMode::RC) {
+    dest_order::touch_sfpu();
+    SFPU(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_rdiv,

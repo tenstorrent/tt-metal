@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/eltwise_binary.h"
 #ifdef TRISC_MATH
 #include "sfpu/ckernel_sfpu_fill.h"  // _calculate_fill_ used by mul_reduce_scalar_tile
@@ -36,7 +37,7 @@ namespace ckernel {
  * Return value: None
  */
 // clang-format on
-ALWI void mul_reduce_scalar_init(uint32_t icb0, uint32_t icb1) {
+ALWI void mul_reduce_scalar_init(std::uint32_t icb0, std::uint32_t icb1) {
     UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(icb0, icb1)));
     MATH((llk_math_eltwise_mul_reduce_scalar_init<MATH_FIDELITY>(icb0, false /*acc_to_dest*/)));
 }
@@ -64,9 +65,11 @@ ALWI void mul_reduce_scalar_init(uint32_t icb0, uint32_t icb1) {
  */
 // clang-format on
 template <PoolType reduce_type = PoolType::SUM>
-ALWI void mul_reduce_scalar_tile(uint32_t icb0, uint32_t icb1, uint32_t ocb, uint32_t num_tiles, float scaler = 1.0f) {
+ALWI void mul_reduce_scalar_tile(
+    std::uint32_t icb0, std::uint32_t icb1, std::uint32_t ocb, std::uint32_t num_tiles, float scaler = 1.0f) {
+    dest_order::touch_sfpu();
     // Step 1: Unpack input tiles from both circular buffers and perform multiplication
-    for (uint32_t i = 0; i < num_tiles; i++) {
+    for (std::uint32_t i = 0; i < num_tiles; i++) {
         UNPACK((llk_unpack_AB(icb0, icb1, i, i)));
         MATH((llk_math_eltwise_mul_reduce_scalar<DST_ACCUM_MODE, MATH_FIDELITY>(i, icb0)));
     }
@@ -82,7 +85,7 @@ ALWI void mul_reduce_scalar_tile(uint32_t icb0, uint32_t icb1, uint32_t ocb, uin
     MATH((llk_math_mul_reduce_scalar_move_dest_to_src<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(0)));
 
     // Populate srcB with the scaler value
-    MATH(SFPU_UNARY_CALL(
+    SFPU(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         _calculate_fill_,
@@ -93,7 +96,7 @@ ALWI void mul_reduce_scalar_tile(uint32_t icb0, uint32_t icb1, uint32_t ocb, uin
     MATH((llk_math_mul_reduce_scalar_move_dest_to_src<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(0)));
 
     // Clear dest[0] - this will accumulate scalar reduction results from all tiles
-    MATH(SFPU_UNARY_CALL(
+    SFPU(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         _calculate_fill_,
@@ -110,7 +113,7 @@ ALWI void mul_reduce_scalar_tile(uint32_t icb0, uint32_t icb1, uint32_t ocb, uin
     MATH((llk_math_mul_reduce_column<MATH_FIDELITY>(0, icb0)));
 
     // Remaining iterations - always move
-    for (uint32_t i = 1; i < num_tiles; i++) {
+    for (std::uint32_t i = 1; i < num_tiles; i++) {
         MATH((llk_math_mul_reduce_scalar_move_dest_to_src<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(i)));
         MATH((llk_math_mul_reduce_column<MATH_FIDELITY>(0, icb0)));
     }

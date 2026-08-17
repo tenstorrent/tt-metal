@@ -34,3 +34,13 @@
 #else
 #define UNPACK(...)
 #endif
+
+#if defined(TRISC_ISOLATE_SFPU)
+#define SFPU(...) __VA_ARGS__
+#elif defined(TRISC_MATH) && !defined(ARCH_QUASAR)
+#define SFPU(...) __VA_ARGS__
+#else
+#define SFPU(...)
+#endif
+
+#include "api/compute/dest_order_api.h"

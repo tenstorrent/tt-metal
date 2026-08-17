@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_identity.h"
@@ -23,15 +24,16 @@ namespace ckernel {
  * | tile_index     | The index of the tile in DST register buffer to perform identity operation | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void identity_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(
+ALWI void identity_tile(std::uint32_t idst) {
+    dest_order::touch_sfpu();
+    SFPU(SFPU_UNARY_CALL(
         DST_SYNC_MODE, DST_ACCUM_MODE, calculate_identity, (APPROX, 8 /*ITERATIONS*/), idst, VectorMode::RC));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void identity_tile_init() { MATH(SFPU_UNARY_INIT(unused)); }
+ALWI void identity_tile_init() { SFPU(SFPU_UNARY_INIT(unused)); }
 
 // clang-format off
 /**
@@ -45,8 +47,9 @@ ALWI void identity_tile_init() { MATH(SFPU_UNARY_INIT(unused)); }
  * | tile_index     | The index of the tile in DST register buffer to perform identity operation | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void identity_tile_uint32(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(
+ALWI void identity_tile_uint32(std::uint32_t idst) {
+    dest_order::touch_sfpu();
+    SFPU(SFPU_UNARY_CALL(
         DST_SYNC_MODE, DST_ACCUM_MODE, calculate_identity_uint, (APPROX, 8 /*ITERATIONS*/), idst, VectorMode::RC));
 }
 

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_logsigmoid.h"
@@ -25,8 +26,9 @@ namespace ckernel {
  * | idst_out       | Index of tile in DST for output                   | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void logsigmoid_tile(uint32_t idst_in0, uint32_t idst_in1, uint32_t idst_out) {
-    MATH((SFPU_BINARY_CALL(
+ALWI void logsigmoid_tile(std::uint32_t idst_in0, std::uint32_t idst_in1, std::uint32_t idst_out) {
+    dest_order::touch_sfpu();
+    SFPU((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_logsigmoid,
@@ -43,6 +45,6 @@ ALWI void logsigmoid_tile(uint32_t idst_in0, uint32_t idst_in1, uint32_t idst_ou
  *
  * Return value: None
  */
-ALWI void logsigmoid_tile_init() { MATH((SFPU_BINARY_INIT(unused))); }
+ALWI void logsigmoid_tile_init() { SFPU((SFPU_BINARY_INIT(unused))); }
 
 }  // namespace ckernel

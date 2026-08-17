@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common.h"
 #include "api/compute/sentinel/compute_kernel_sentinel.h"
 #include "llk_assert.h"
@@ -35,7 +36,7 @@ namespace ckernel {
  * | icb      | The identifier of the circular buffer (CB) containing input | uint32_t | 0 to 31     | True     |
  */
 // clang-format on
-ALWI void transpose_init(uint32_t icb, uint32_t call_line = __builtin_LINE()) {
+ALWI void transpose_init(std::uint32_t icb, std::uint32_t call_line = __builtin_LINE()) {
     LLK_SAN_FUNCTION();
     state_configure(icb, call_line);
 #if defined(TRISC_MATH) || defined(TRISC_UNPACK)
@@ -104,7 +105,8 @@ ALWI void transpose_init(uint32_t icb, uint32_t call_line = __builtin_LINE()) {
  * | idst           | The index of the tile in DST REG for the result B       | uint32_t | Must be less than the acquired size of DST REG | True     |
  */
 // clang-format on
-ALWI void transpose_tile(uint32_t icb, uint32_t itile, uint32_t idst) {
+ALWI void transpose_tile(std::uint32_t icb, std::uint32_t itile, std::uint32_t idst) {
+    dest_order::touch_fpu();
     LLK_SAN_FUNCTION();
 #if defined(TRISC_MATH) || defined(TRISC_UNPACK)
     const std::uint32_t dst_format = get_operand_dst_format(icb);
@@ -117,7 +119,8 @@ ALWI void transpose_tile(uint32_t icb, uint32_t itile, uint32_t idst) {
         UNPACK(
             (llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(icb, itile)));
         UNPACK((llk_unpack_set_srcb_dummy_valid()));
-        MATH((llk_math_eltwise_unary_datacopy<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE, UnpackToDestEn>(idst, icb)));
+        MATH((llk_math_eltwise_unary_datacopy<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE, UnpackToDestEn>(
+            idst, icb)));
         MATH((llk_math_transpose_dest<false, true>(idst)));
     } else {
         UNPACK((llk_unpack_A<BroadcastType::NONE, false>(icb, itile)));
@@ -158,8 +161,9 @@ ALWI void transpose_tile(uint32_t icb, uint32_t itile, uint32_t idst) {
  * | ntiles         | The number of consecutive tiles to transpose                 | uint32_t | start_idst + ntiles <= acquired DST REG size   | True     |
  */
 // clang-format on
-ALWI void transpose_block(uint32_t icb, uint32_t start_itile, uint32_t start_idst, uint32_t ntiles) {
-    for (uint32_t i = 0; i < ntiles; ++i) {
+ALWI void transpose_block(
+    std::uint32_t icb, std::uint32_t start_itile, std::uint32_t start_idst, std::uint32_t ntiles) {
+    for (std::uint32_t i = 0; i < ntiles; ++i) {
         transpose_tile(icb, start_itile + i, start_idst + i);
     }
 }

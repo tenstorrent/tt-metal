@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #if defined(TRISC_MATH) || defined(TRISC_PACK)
 #include "ckernel_sfpu_softplus.h"
@@ -29,8 +30,10 @@ namespace ckernel {
  * | threshold       | Threshold used in softplus calculation                                     | uint32_t | Greater than 0                                        | True     |
  */
 // clang-format on
-ALWI void softplus_tile(uint32_t idst, uint32_t beta, uint32_t beta_reciprocal, uint32_t threshold) {
-    MATH(SFPU_UNARY_CALL(
+ALWI void softplus_tile(
+    std::uint32_t idst, std::uint32_t beta, std::uint32_t beta_reciprocal, std::uint32_t threshold) {
+    dest_order::touch_sfpu();
+    SFPU(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_softplus,
@@ -45,11 +48,12 @@ ALWI void softplus_tile(uint32_t idst, uint32_t beta, uint32_t beta_reciprocal, 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void softplus_tile_init() { MATH(SFPU_UNARY_INIT(softplus)); }
+ALWI void softplus_tile_init() { SFPU(SFPU_UNARY_INIT(softplus)); }
 
 #ifndef ARCH_QUASAR
 // Pack-thread variants: Quasar has no pack-thread SFPU, so these are gated off there.
-ALWI void softplus_tile_pack(uint32_t idst, uint32_t beta, uint32_t beta_reciprocal, uint32_t threshold) {
+ALWI void softplus_tile_pack(
+    std::uint32_t idst, std::uint32_t beta, std::uint32_t beta_reciprocal, std::uint32_t threshold) {
     PACK(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,

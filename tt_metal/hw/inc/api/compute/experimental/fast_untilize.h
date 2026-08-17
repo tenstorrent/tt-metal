@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/pack_untilize.h"
 
 #ifdef ARCH_BLACKHOLE
@@ -40,7 +41,7 @@ namespace ckernel {
 // its exponent section.
 
 template <std::uint32_t full_ct_dim, bool configure_remap>
-ALWI void fast_untilize_init_impl(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
+ALWI void fast_untilize_init_impl(std::uint32_t icb, std::uint32_t ocb, std::uint32_t call_line = __builtin_LINE()) {
     static_assert(full_ct_dim > 0, "fast_untilize full_ct_dim must be greater than 0");
 
 #ifdef ARCH_BLACKHOLE
@@ -84,18 +85,20 @@ ALWI void fast_untilize_init_impl(uint32_t icb, uint32_t ocb, uint32_t call_line
 // Default fast-untilize init configures BH DEST remap. Use the skip-remap variant
 // only when the caller has already configured remap and no intervening op changes it.
 template <std::uint32_t full_ct_dim>
-ALWI void fast_untilize_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
+ALWI void fast_untilize_init(std::uint32_t icb, std::uint32_t ocb, std::uint32_t call_line = __builtin_LINE()) {
     fast_untilize_init_impl<full_ct_dim, true>(icb, ocb, call_line);
 }
 
 template <std::uint32_t full_ct_dim>
-ALWI void fast_untilize_init_skip_remap(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
+ALWI void fast_untilize_init_skip_remap(
+    std::uint32_t icb, std::uint32_t ocb, std::uint32_t call_line = __builtin_LINE()) {
     fast_untilize_init_impl<full_ct_dim, false>(icb, ocb, call_line);
 }
 
 template <std::uint32_t full_ct_dim>
 ALWI void fast_untilize_block(
-    uint32_t icb, uint32_t ocb, uint32_t input_tile_index = 0, uint32_t output_tile_index = 0) {
+    std::uint32_t icb, std::uint32_t ocb, std::uint32_t input_tile_index = 0, std::uint32_t output_tile_index = 0) {
+    dest_order::touch_pack();
     static_assert(full_ct_dim > 0, "fast_untilize full_ct_dim must be greater than 0");
 
 #ifdef ARCH_BLACKHOLE
@@ -151,7 +154,7 @@ ALWI void fast_untilize_block(
 }
 
 template <std::uint32_t full_ct_dim>
-ALWI void fast_untilize_uninit(uint32_t ocb) {
+ALWI void fast_untilize_uninit(std::uint32_t ocb) {
     static_assert(full_ct_dim > 0, "fast_untilize full_ct_dim must be greater than 0");
 
 #ifdef ARCH_BLACKHOLE

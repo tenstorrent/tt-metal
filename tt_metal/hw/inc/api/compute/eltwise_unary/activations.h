@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #if defined(TRISC_MATH) || defined(TRISC_PACK)
 #include "ckernel_sfpu_softsign.h"
@@ -29,8 +30,9 @@ namespace ckernel {
 * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
 */
 // clang-format on
-ALWI void hardsigmoid_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(
+ALWI void hardsigmoid_tile(std::uint32_t idst) {
+    dest_order::touch_sfpu();
+    SFPU(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_activation,
@@ -39,7 +41,7 @@ ALWI void hardsigmoid_tile(uint32_t idst) {
         VectorMode::RC));
 }
 
-ALWI void hardsigmoid_tile_pack(uint32_t idst) {
+ALWI void hardsigmoid_tile_pack(std::uint32_t idst) {
     PACK(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -52,7 +54,7 @@ ALWI void hardsigmoid_tile_pack(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void hardsigmoid_tile_init() { MATH(SFPU_UNARY_INIT_FN(hardsigmoid, sfpu::hardsigmoid_init, (APPROX))); }
+ALWI void hardsigmoid_tile_init() { SFPU(SFPU_UNARY_INIT_FN(hardsigmoid, sfpu::hardsigmoid_init, (APPROX))); }
 
 ALWI void hardsigmoid_tile_init_pack() { PACK(SFPU_UNARY_INIT_FN(hardsigmoid, sfpu::hardsigmoid_init, (APPROX))); }
 
@@ -69,15 +71,16 @@ ALWI void hardsigmoid_tile_init_pack() { PACK(SFPU_UNARY_INIT_FN(hardsigmoid, sf
 * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
 */
 // clang-format on
-ALWI void softsign_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(
+ALWI void softsign_tile(std::uint32_t idst) {
+    dest_order::touch_sfpu();
+    SFPU(SFPU_UNARY_CALL(
         DST_SYNC_MODE, DST_ACCUM_MODE, calculate_softsign, (APPROX, 8 /* ITERATIONS */), idst, VectorMode::RC));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void softsign_tile_init() { MATH(SFPU_UNARY_INIT_FN(softsign, sfpu::init_softsign, (APPROX))); }
+ALWI void softsign_tile_init() { SFPU(SFPU_UNARY_INIT_FN(softsign, sfpu::init_softsign, (APPROX))); }
 
 // clang-format off
 /**
@@ -94,8 +97,9 @@ ALWI void softsign_tile_init() { MATH(SFPU_UNARY_INIT_FN(softsign, sfpu::init_so
 * | alpha_recip     | The reciprocal of the alpha parameter for the CELU function                | uint32_t |                                                       | True     |
 */
 // clang-format on
-ALWI void celu_tile(uint32_t idst, uint32_t alpha, uint32_t alpha_recip) {
-    MATH(SFPU_UNARY_CALL(
+ALWI void celu_tile(std::uint32_t idst, std::uint32_t alpha, std::uint32_t alpha_recip) {
+    dest_order::touch_sfpu();
+    SFPU(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_celu,
@@ -109,7 +113,7 @@ ALWI void celu_tile(uint32_t idst, uint32_t alpha, uint32_t alpha_recip) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void celu_tile_init() { MATH(SFPU_UNARY_INIT(celu)); }
+ALWI void celu_tile_init() { SFPU(SFPU_UNARY_INIT(celu)); }
 
 // clang-format off
  /**
@@ -124,22 +128,23 @@ ALWI void celu_tile_init() { MATH(SFPU_UNARY_INIT(celu)); }
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  * | param0          | The λ value for the Softshrink formulation                                 | uint32   |                                                       | True     |
  */
- // clang-format on
- ALWI void softshrink_tile(uint32_t idst, uint32_t param0) {
-     MATH(SFPU_UNARY_CALL(
-         DST_SYNC_MODE,
-         DST_ACCUM_MODE,
-         calculate_softshrink,
-         (APPROX, 8 /* ITERATIONS */),
-         idst,
-         VectorMode::RC,
-         param0));
+// clang-format on
+ALWI void softshrink_tile(std::uint32_t idst, std::uint32_t param0) {
+    dest_order::touch_sfpu();
+    SFPU(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_softshrink,
+        (APPROX, 8 /* ITERATIONS */),
+        idst,
+        VectorMode::RC,
+        param0));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void softshrink_tile_init() { MATH(SFPU_UNARY_INIT(softshrink)); }
+ALWI void softshrink_tile_init() { SFPU(SFPU_UNARY_INIT(softshrink)); }
 
 // clang-format off
 /**
@@ -158,8 +163,9 @@ ALWI void softshrink_tile_init() { MATH(SFPU_UNARY_INIT(softshrink)); }
 * | param0          | The λ value for the Hardshrink formulation                                 | uint32_t |                                                       | True     |
 */
 // clang-format on
-ALWI void hardshrink_tile(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_UNARY_CALL(
+ALWI void hardshrink_tile(std::uint32_t idst, std::uint32_t param0) {
+    dest_order::touch_sfpu();
+    SFPU(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_hardshrink,
@@ -172,6 +178,6 @@ ALWI void hardshrink_tile(uint32_t idst, uint32_t param0) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void hardshrink_tile_init() { MATH(SFPU_UNARY_INIT(hardshrink)); }
+ALWI void hardshrink_tile_init() { SFPU(SFPU_UNARY_INIT(hardshrink)); }
 
 }  // namespace ckernel

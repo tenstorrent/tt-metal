@@ -22,12 +22,13 @@ namespace ckernel {
     // Init function for max
     template <bool fast_and_approx = true>
     ALWI void binary_max_tile_init() {
-        MATH(SFPU_UNARY_INIT(max));
+        SFPU(SFPU_UNARY_INIT(max));
     }
     // Compute function for max
     template <bool fast_and_approx = true>
     ALWI void binary_max_tile(uint32_t idst) {
-        MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_max, (fast_and_approx), idst, VectorMode::RC));
+        dest_order::touch_sfpu();
+        SFPU(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_max, (fast_and_approx), idst, VectorMode::RC));
     }
 }
 ```
@@ -41,11 +42,12 @@ namespace ckernel {
 namespace ckernel {
     template <bool fast_and_approx = true>
     ALWI void negative_tile_init() {
-        MATH(SFPU_UNARY_INIT(negative));
+        SFPU(SFPU_UNARY_INIT(negative));
     }
     template <bool fast_and_approx = true>
     ALWI void negative_tile(uint32_t idst) {
-        MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_negative, (fast_and_approx), idst, VectorMode::RC));
+        dest_order::touch_sfpu();
+        SFPU(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_negative, (fast_and_approx), idst, VectorMode::RC));
     }
 }
 ```

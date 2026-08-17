@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 
 #if defined(TRISC_MATH) && (defined(ARCH_WORMHOLE) || defined(ARCH_BLACKHOLE))
@@ -32,7 +33,7 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void sfpu_bcast_col_init() {
-    MATH((SFPU_BINARY_INIT_FN(unused, sfpu::_sfpu_binary_bcast_init_, (ckernel::BroadcastType::COL))));
+    SFPU((SFPU_BINARY_INIT_FN(unused, sfpu::_sfpu_binary_bcast_init_, (ckernel::BroadcastType::COL))));
 }
 
 ALWI void sfpu_sub_bcast_col_init() { sfpu_bcast_col_init(); }
@@ -75,8 +76,9 @@ ALWI void sfpu_mul_bcast_col_init() { sfpu_bcast_col_init(); }
 // `_llk_math_eltwise_sfpu_start_(0)` / `_llk_math_eltwise_sfpu_done_()` brackets
 // the standalone helper used to set up by hand, plus the dst-bound LLK_ASSERTs in
 // `_sfpu_binary_check_`.
-ALWI void sfpu_sub_bcast_col(uint32_t dst_data_idx, uint32_t dst_col_vec_idx) {
-    MATH((SFPU_BINARY_CALL(
+ALWI void sfpu_sub_bcast_col(std::uint32_t dst_data_idx, std::uint32_t dst_col_vec_idx) {
+    dest_order::touch_sfpu();
+    SFPU((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         _calculate_sfpu_binary_bcast_full_tile_,
@@ -87,8 +89,9 @@ ALWI void sfpu_sub_bcast_col(uint32_t dst_data_idx, uint32_t dst_col_vec_idx) {
         VectorMode::None)));
 }
 
-ALWI void sfpu_add_bcast_col(uint32_t dst_data_idx, uint32_t dst_col_vec_idx) {
-    MATH((SFPU_BINARY_CALL(
+ALWI void sfpu_add_bcast_col(std::uint32_t dst_data_idx, std::uint32_t dst_col_vec_idx) {
+    dest_order::touch_sfpu();
+    SFPU((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         _calculate_sfpu_binary_bcast_full_tile_,
@@ -99,8 +102,9 @@ ALWI void sfpu_add_bcast_col(uint32_t dst_data_idx, uint32_t dst_col_vec_idx) {
         VectorMode::None)));
 }
 
-ALWI void sfpu_mul_bcast_col(uint32_t dst_data_idx, uint32_t dst_col_vec_idx) {
-    MATH((SFPU_BINARY_CALL(
+ALWI void sfpu_mul_bcast_col(std::uint32_t dst_data_idx, std::uint32_t dst_col_vec_idx) {
+    dest_order::touch_sfpu();
+    SFPU((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         _calculate_sfpu_binary_bcast_full_tile_,
@@ -125,7 +129,7 @@ ALWI void sfpu_mul_bcast_col(uint32_t dst_data_idx, uint32_t dst_col_vec_idx) {
  */
 // clang-format on
 ALWI void sfpu_bcast_row_init() {
-    MATH((SFPU_BINARY_INIT_FN(unused, sfpu::_sfpu_binary_bcast_init_, (ckernel::BroadcastType::ROW))));
+    SFPU((SFPU_BINARY_INIT_FN(unused, sfpu::_sfpu_binary_bcast_init_, (ckernel::BroadcastType::ROW))));
 }
 
 ALWI void sfpu_sub_bcast_row_init() { sfpu_bcast_row_init(); }
@@ -163,8 +167,9 @@ ALWI void sfpu_mul_bcast_row_init() { sfpu_bcast_row_init(); }
  * | dst_row_vec_idx  | The index of the row-vector tile in DST (row 0 is broadcast)        | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void sfpu_sub_bcast_row(uint32_t dst_data_idx, uint32_t dst_row_vec_idx) {
-    MATH((SFPU_BINARY_CALL(
+ALWI void sfpu_sub_bcast_row(std::uint32_t dst_data_idx, std::uint32_t dst_row_vec_idx) {
+    dest_order::touch_sfpu();
+    SFPU((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         _calculate_sfpu_binary_bcast_full_tile_,
@@ -175,8 +180,9 @@ ALWI void sfpu_sub_bcast_row(uint32_t dst_data_idx, uint32_t dst_row_vec_idx) {
         VectorMode::None)));
 }
 
-ALWI void sfpu_add_bcast_row(uint32_t dst_data_idx, uint32_t dst_row_vec_idx) {
-    MATH((SFPU_BINARY_CALL(
+ALWI void sfpu_add_bcast_row(std::uint32_t dst_data_idx, std::uint32_t dst_row_vec_idx) {
+    dest_order::touch_sfpu();
+    SFPU((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         _calculate_sfpu_binary_bcast_full_tile_,
@@ -187,8 +193,9 @@ ALWI void sfpu_add_bcast_row(uint32_t dst_data_idx, uint32_t dst_row_vec_idx) {
         VectorMode::None)));
 }
 
-ALWI void sfpu_mul_bcast_row(uint32_t dst_data_idx, uint32_t dst_row_vec_idx) {
-    MATH((SFPU_BINARY_CALL(
+ALWI void sfpu_mul_bcast_row(std::uint32_t dst_data_idx, std::uint32_t dst_row_vec_idx) {
+    dest_order::touch_sfpu();
+    SFPU((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         _calculate_sfpu_binary_bcast_full_tile_,
@@ -236,7 +243,7 @@ ALWI void sfpu_bcast_init() {
  */
 // clang-format on
 template <BroadcastType Dim, EltwiseBinaryType Op>
-ALWI void sfpu_bcast(uint32_t dst_data_idx, uint32_t dst_bcast_idx) {
+ALWI void sfpu_bcast(std::uint32_t dst_data_idx, std::uint32_t dst_bcast_idx) {
     static_assert(
         Dim == BroadcastType::COL || Dim == BroadcastType::ROW,
         "sfpu_bcast: only BroadcastType::COL / BroadcastType::ROW are supported");

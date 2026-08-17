@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_log1p.h"
@@ -18,7 +19,7 @@ namespace ckernel {
 
 template <bool fast_and_approx = false>
 ALWI void log1p_tile_init() {
-    MATH(SFPU_UNARY_INIT_FN(log1p, sfpu::log1p_init, (APPROX, fast_and_approx, DST_ACCUM_MODE)));
+    SFPU(SFPU_UNARY_INIT_FN(log1p, sfpu::log1p_init, (APPROX, fast_and_approx, DST_ACCUM_MODE)));
 }
 
 // clang-format off
@@ -36,8 +37,9 @@ ALWI void log1p_tile_init() {
  */
 // clang-format on
 template <bool fast_and_approx = false>
-ALWI void log1p_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(
+ALWI void log1p_tile(std::uint32_t idst) {
+    dest_order::touch_sfpu();
+    SFPU(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_log1p,

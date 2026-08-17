@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #ifndef ARCH_QUASAR
@@ -30,13 +31,14 @@ namespace ckernel {
  * | slope          | slope used in elu calculation                                              | uint32_t | Greater than 0                                        | True     |
  */
 // clang-format on
-ALWI void elu_tile(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_UNARY_CALL(
+ALWI void elu_tile(std::uint32_t idst, std::uint32_t param0) {
+    dest_order::touch_sfpu();
+    SFPU(SFPU_UNARY_CALL(
         DST_SYNC_MODE, DST_ACCUM_MODE, calculate_elu, (APPROX, DST_ACCUM_MODE), idst, VectorMode::RC, param0));
 }
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void elu_tile_init() { MATH(SFPU_UNARY_INIT(elu)); }
+ALWI void elu_tile_init() { SFPU(SFPU_UNARY_INIT(elu)); }
 #endif
 }  // namespace ckernel

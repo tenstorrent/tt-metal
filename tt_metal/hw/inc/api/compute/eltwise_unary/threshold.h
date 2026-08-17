@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "sfpu/ckernel_sfpu_threshold.h"
@@ -27,8 +28,9 @@ namespace ckernel {
 * | param1          | The value to replace the input with if it is less than or equal to the threshold    | uint32_t |                                                       | True     |
 */
 // clang-format on
-ALWI void threshold_tile(uint32_t idst, uint32_t param0, uint32_t param1) {
-    MATH(SFPU_UNARY_CALL(
+ALWI void threshold_tile(std::uint32_t idst, std::uint32_t param0, std::uint32_t param1) {
+    dest_order::touch_sfpu();
+    SFPU(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         _calculate_threshold_,
@@ -42,6 +44,6 @@ ALWI void threshold_tile(uint32_t idst, uint32_t param0, uint32_t param1) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void threshold_tile_init() { MATH(SFPU_UNARY_INIT(threshold)); }
+ALWI void threshold_tile_init() { SFPU(SFPU_UNARY_INIT(threshold)); }
 
 }  // namespace ckernel

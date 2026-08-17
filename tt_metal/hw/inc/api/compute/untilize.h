@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common.h"
 #include "api/compute/sentinel/compute_kernel_sentinel.h"
 #ifdef TRISC_MATH
@@ -35,7 +36,7 @@ namespace ckernel {
 // clang-format on
 [[deprecated(
     "unpack-based untilize is deprecated; use pack_untilize instead. Scheduled for removal, see tt-metal#22904.")]]
-ALWI void untilize_init(uint32_t icb, uint32_t call_line = __builtin_LINE()) {
+ALWI void untilize_init(std::uint32_t icb, std::uint32_t call_line = __builtin_LINE()) {
     state_configure(icb, call_line);
     MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE>(icb)));
     UNPACK((llk_unpack_untilize_init(icb)));
@@ -66,17 +67,18 @@ ALWI void untilize_init(uint32_t icb, uint32_t call_line = __builtin_LINE()) {
  * see tt-metal#22904.
  */
 // clang-format on
-template <uint32_t block_ct_dim = 1>
+template <std::uint32_t block_ct_dim = 1>
 [[deprecated(
     "unpack-based untilize is deprecated; use pack_untilize instead. Scheduled for removal, see tt-metal#22904.")]]
-ALWI void untilize_block(uint32_t icb, uint32_t full_ct_dim, uint32_t ocb) {
+ALWI void untilize_block(std::uint32_t icb, std::uint32_t full_ct_dim, std::uint32_t ocb) {
+    dest_order::touch_pack();
     UNPACK((llk_unpack_untilize(icb, full_ct_dim)));
 
-    for (uint32_t t = 0; t < full_ct_dim / block_ct_dim; t++) {
+    for (std::uint32_t t = 0; t < full_ct_dim / block_ct_dim; t++) {
         MATH((llk_math_wait_for_dest_available()));
 
         // Datacopy
-        for (uint32_t reg_id = 0; reg_id < block_ct_dim; reg_id++) {
+        for (std::uint32_t reg_id = 0; reg_id < block_ct_dim; reg_id++) {
             MATH(
                 (llk_math_eltwise_unary_datacopy<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE>(reg_id, icb)));
         }
@@ -86,7 +88,7 @@ ALWI void untilize_block(uint32_t icb, uint32_t full_ct_dim, uint32_t ocb) {
         PACK((llk_packer_wait_for_math_done()));
 
         // Datacopy
-        for (uint32_t reg_id = 0; reg_id < block_ct_dim; reg_id++) {
+        for (std::uint32_t reg_id = 0; reg_id < block_ct_dim; reg_id++) {
             PACK((llk_pack<DST_ACCUM_MODE, false, PackMode::Default>(reg_id, ocb)));
         }
 
@@ -113,7 +115,7 @@ ALWI void untilize_block(uint32_t icb, uint32_t full_ct_dim, uint32_t ocb) {
 // clang-format on
 [[deprecated(
     "unpack-based untilize is deprecated; use pack_untilize instead. Scheduled for removal, see tt-metal#22904.")]]
-ALWI void untilize_uninit(uint32_t icb) {
+ALWI void untilize_uninit(std::uint32_t icb) {
 #ifdef ARCH_BLACKHOLE
     UNPACK((llk_unpack_untilize_uninit(icb)));
 #else

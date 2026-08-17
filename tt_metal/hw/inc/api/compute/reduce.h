@@ -148,6 +148,7 @@ ALWI void reduce_uninit(std::uint32_t icb = 0) {
 template <PoolType reduce_type, ReduceDim reduce_dim>
 ALWI void reduce_tile(
     std::uint32_t icb, std::uint32_t icb_scaler, std::uint32_t itile, std::uint32_t itile_scaler, std::uint32_t idst) {
+    dest_order::touch_fpu();
 #ifndef ARCH_QUASAR
     MATH((llk_math_reduce<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY>(icb, icb_scaler, idst)));
     UNPACK((llk_unpack_AB_reduce<reduce_type, reduce_dim>(icb, icb_scaler, itile, itile_scaler)));
@@ -228,6 +229,7 @@ ALWI void reduce_block(
 // clang-format on
 template <PoolType reduce_type, ReduceDim reduce_dim>
 ALWI void reduce_tile_math(std::uint32_t idst, std::uint32_t num_faces = 4) {
+    dest_order::touch_fpu();
     ASSERT(num_faces > 0 && num_faces <= MAX_NUM_FACES);
     const ckernel::TensorShape tensor_shape = {
         MAX_FACE_R_DIM,
@@ -255,6 +257,7 @@ ALWI void reduce_tile_math(std::uint32_t idst, std::uint32_t num_faces = 4) {
 // clang-format on
 template <PoolType reduce_type, ReduceDim reduce_dim>
 ALWI void reduce_tile_math(std::uint32_t idst, const ckernel::TensorShape& tensor_shape) {
+    dest_order::touch_fpu();
 #ifndef ARCH_QUASAR
     MATH((llk_math_reduce<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY>(idst, tensor_shape)));
 #else

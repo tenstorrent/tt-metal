@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "sfpu/ckernel_sfpu_isinf_isnan.h"
@@ -25,8 +26,9 @@ namespace ckernel {
  * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void isinf_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(
+ALWI void isinf_tile(std::uint32_t idst) {
+    dest_order::touch_sfpu();
+    SFPU(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         _calculate_sfpu_isinf_isnan_,
@@ -38,7 +40,7 @@ ALWI void isinf_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void isinf_tile_init() { MATH(SFPU_UNARY_INIT(isinf)); }
+ALWI void isinf_tile_init() { SFPU(SFPU_UNARY_INIT(isinf)); }
 
 // clang-format off
 /**
@@ -54,8 +56,9 @@ ALWI void isinf_tile_init() { MATH(SFPU_UNARY_INIT(isinf)); }
  * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void isposinf_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(
+ALWI void isposinf_tile(std::uint32_t idst) {
+    dest_order::touch_sfpu();
+    SFPU(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         _calculate_sfpu_isinf_isnan_,
@@ -67,7 +70,7 @@ ALWI void isposinf_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void isposinf_tile_init() { MATH(SFPU_UNARY_INIT(isposinf)); }
+ALWI void isposinf_tile_init() { SFPU(SFPU_UNARY_INIT(isposinf)); }
 
 // clang-format off
 /**
@@ -83,8 +86,9 @@ ALWI void isposinf_tile_init() { MATH(SFPU_UNARY_INIT(isposinf)); }
  * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void isneginf_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(
+ALWI void isneginf_tile(std::uint32_t idst) {
+    dest_order::touch_sfpu();
+    SFPU(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         _calculate_sfpu_isinf_isnan_,
@@ -96,7 +100,7 @@ ALWI void isneginf_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void isneginf_tile_init() { MATH(SFPU_UNARY_INIT(isneginf)); }
+ALWI void isneginf_tile_init() { SFPU(SFPU_UNARY_INIT(isneginf)); }
 
 // clang-format off
 /**
@@ -112,8 +116,9 @@ ALWI void isneginf_tile_init() { MATH(SFPU_UNARY_INIT(isneginf)); }
  * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void isnan_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(
+ALWI void isnan_tile(std::uint32_t idst) {
+    dest_order::touch_sfpu();
+    SFPU(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         _calculate_sfpu_isinf_isnan_,
@@ -125,7 +130,7 @@ ALWI void isnan_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void isnan_tile_init() { MATH(SFPU_UNARY_INIT(isnan)); }
+ALWI void isnan_tile_init() { SFPU(SFPU_UNARY_INIT(isnan)); }
 
 // clang-format off
 /**
@@ -141,8 +146,9 @@ ALWI void isnan_tile_init() { MATH(SFPU_UNARY_INIT(isnan)); }
  * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void isfinite_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(
+ALWI void isfinite_tile(std::uint32_t idst) {
+    dest_order::touch_sfpu();
+    SFPU(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         _calculate_sfpu_isinf_isnan_,
@@ -154,5 +160,5 @@ ALWI void isfinite_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void isfinite_tile_init() { MATH(SFPU_UNARY_INIT(isfinite)); }
+ALWI void isfinite_tile_init() { SFPU(SFPU_UNARY_INIT(isfinite)); }
 }  // namespace ckernel

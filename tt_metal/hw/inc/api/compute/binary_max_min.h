@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #ifdef ARCH_QUASAR
@@ -35,11 +36,12 @@ namespace ckernel {
  * | odst           | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void binary_max_int32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+ALWI void binary_max_int32_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
+    dest_order::touch_sfpu();
 #if defined(ARCH_QUASAR)
-    MATH((llk_math_eltwise_binary_sfpu_binary_max_int32<APPROX>(idst0, idst1, odst)));
+    SFPU((llk_math_eltwise_binary_sfpu_binary_max_int32<APPROX>(idst0, idst1, odst)));
 #else
-    MATH((SFPU_BINARY_CALL(
+    SFPU((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_binary_max_min_int32,
@@ -56,7 +58,7 @@ ALWI void binary_max_int32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
  */
 ALWI void binary_max_int32_tile_init() {
 #if defined(ARCH_QUASAR)
-    MATH((llk_math_eltwise_binary_sfpu_binary_max_min_int32_init()));
+    SFPU((llk_math_eltwise_binary_sfpu_binary_max_min_int32_init()));
 #else
     MATH((
         SFPU_BINARY_INIT_FN(max_int32, sfpu::binary_max_min_int32_init, (true /* IS_MAX */, false /* IS_UNSIGNED */))));
@@ -83,8 +85,9 @@ ALWI void binary_max_int32_tile_init() {
  */
 // clang-format on
 #ifndef ARCH_QUASAR
-ALWI void binary_max_uint32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((SFPU_BINARY_CALL(
+ALWI void binary_max_uint32_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
+    dest_order::touch_sfpu();
+    SFPU((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_binary_max_min_int32,
@@ -123,11 +126,13 @@ ALWI void binary_max_uint32_tile_init() {
  * | odst           | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void binary_max_tile(uint32_t idst0, uint32_t idst1, uint32_t odst, VectorMode vector_mode = VectorMode::RC) {
+ALWI void binary_max_tile(
+    std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst, VectorMode vector_mode = VectorMode::RC) {
+    dest_order::touch_sfpu();
 #if defined(ARCH_QUASAR)
-    MATH((llk_math_eltwise_binary_sfpu_binary_max<APPROX>(idst0, idst1, odst, vector_mode)));
+    SFPU((llk_math_eltwise_binary_sfpu_binary_max<APPROX>(idst0, idst1, odst, vector_mode)));
 #else
-    MATH((SFPU_BINARY_CALL(
+    SFPU((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_binary_max_min,
@@ -144,9 +149,9 @@ ALWI void binary_max_tile(uint32_t idst0, uint32_t idst1, uint32_t odst, VectorM
  */
 ALWI void binary_max_tile_init() {
 #if defined(ARCH_QUASAR)
-    MATH((llk_math_eltwise_binary_sfpu_binary_max_min_init()));
+    SFPU((llk_math_eltwise_binary_sfpu_binary_max_min_init()));
 #else
-    MATH((SFPU_BINARY_INIT_FN(max, sfpu::binary_max_min_init, (true /* IS_MAX */))));
+    SFPU((SFPU_BINARY_INIT_FN(max, sfpu::binary_max_min_init, (true /* IS_MAX */))));
 #endif
 }
 
@@ -169,11 +174,12 @@ ALWI void binary_max_tile_init() {
  * | odst           | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void binary_min_int32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+ALWI void binary_min_int32_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
+    dest_order::touch_sfpu();
 #if defined(ARCH_QUASAR)
-    MATH((llk_math_eltwise_binary_sfpu_binary_min_int32<APPROX>(idst0, idst1, odst)));
+    SFPU((llk_math_eltwise_binary_sfpu_binary_min_int32<APPROX>(idst0, idst1, odst)));
 #else
-    MATH((SFPU_BINARY_CALL(
+    SFPU((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_binary_max_min_int32,
@@ -190,9 +196,9 @@ ALWI void binary_min_int32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
  */
 ALWI void binary_min_int32_tile_init() {
 #if defined(ARCH_QUASAR)
-    MATH((llk_math_eltwise_binary_sfpu_binary_max_min_int32_init()));
+    SFPU((llk_math_eltwise_binary_sfpu_binary_max_min_int32_init()));
 #else
-    MATH((SFPU_BINARY_INIT_FN(
+    SFPU((SFPU_BINARY_INIT_FN(
         min_int32, sfpu::binary_max_min_int32_init, (false /* IS_MAX */, false /* IS_UNSIGNED */))));
 #endif
 }
@@ -217,8 +223,9 @@ ALWI void binary_min_int32_tile_init() {
  */
 // clang-format on
 #ifndef ARCH_QUASAR
-ALWI void binary_min_uint32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((SFPU_BINARY_CALL(
+ALWI void binary_min_uint32_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
+    dest_order::touch_sfpu();
+    SFPU((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_binary_max_min_int32,
@@ -233,7 +240,7 @@ ALWI void binary_min_uint32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) 
  * Please refer to documentation.
  */
 ALWI void binary_min_uint32_tile_init() {
-    MATH((SFPU_BINARY_INIT_FN(
+    SFPU((SFPU_BINARY_INIT_FN(
         min_uint32, sfpu::binary_max_min_int32_init, (false /* IS_MAX */, true /* IS_UNSIGNED */))));
 }
 #endif
@@ -257,11 +264,13 @@ ALWI void binary_min_uint32_tile_init() {
  * | odst           | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void binary_min_tile(uint32_t idst0, uint32_t idst1, uint32_t odst, VectorMode vector_mode = VectorMode::RC) {
+ALWI void binary_min_tile(
+    std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst, VectorMode vector_mode = VectorMode::RC) {
+    dest_order::touch_sfpu();
 #if defined(ARCH_QUASAR)
-    MATH((llk_math_eltwise_binary_sfpu_binary_min<APPROX>(idst0, idst1, odst, vector_mode)));
+    SFPU((llk_math_eltwise_binary_sfpu_binary_min<APPROX>(idst0, idst1, odst, vector_mode)));
 #else
-    MATH((SFPU_BINARY_CALL(
+    SFPU((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_binary_max_min,
@@ -278,9 +287,9 @@ ALWI void binary_min_tile(uint32_t idst0, uint32_t idst1, uint32_t odst, VectorM
  */
 ALWI void binary_min_tile_init() {
 #if defined(ARCH_QUASAR)
-    MATH((llk_math_eltwise_binary_sfpu_binary_max_min_init()));
+    SFPU((llk_math_eltwise_binary_sfpu_binary_max_min_init()));
 #else
-    MATH((SFPU_BINARY_INIT_FN(min, sfpu::binary_max_min_init, (false /* IS_MAX */))));
+    SFPU((SFPU_BINARY_INIT_FN(min, sfpu::binary_max_min_init, (false /* IS_MAX */))));
 #endif
 }
 

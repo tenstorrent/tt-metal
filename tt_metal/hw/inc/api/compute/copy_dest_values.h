@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_copy_dest_values.h"
@@ -30,8 +31,9 @@ namespace ckernel {
  */
 // clang-format on
 template <DataFormat DATA_FORMAT>
-ALWI void copy_dest_values(uint32_t idst_in, uint32_t idst_out) {
-    MATH((SFPU_BINARY_CALL(
+ALWI void copy_dest_values(std::uint32_t idst_in, std::uint32_t idst_out) {
+    dest_order::touch_sfpu();
+    SFPU((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         copy_dest_value,
@@ -58,11 +60,12 @@ ALWI void copy_dest_values(uint32_t idst_in, uint32_t idst_out) {
  */
 // clang-format on
 [[deprecated("Use copy_dest_values<DataFormat> instead")]]
-ALWI void copy_dest_values(uint32_t idst_in, uint32_t idst_out) {
+ALWI void copy_dest_values(std::uint32_t idst_in, std::uint32_t idst_out) {
+    dest_order::touch_sfpu();
     // Routes through the deprecated 1-template-arg `copy_dest_value<APPROXIMATE>` overload in
     // ckernel::sfpu (the format-agnostic sfpi::vFloat path). New code should use the
     // DataFormat-templated overload above.
-    MATH((SFPU_BINARY_CALL(
+    SFPU((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         copy_dest_value,
@@ -73,6 +76,6 @@ ALWI void copy_dest_values(uint32_t idst_in, uint32_t idst_out) {
         VectorMode::RC)));
 }
 
-ALWI void copy_dest_values_init() { MATH((SFPU_BINARY_INIT_FN_NO_ARGS(unused, sfpu::copy_dest_value_init))); }
+ALWI void copy_dest_values_init() { SFPU((SFPU_BINARY_INIT_FN_NO_ARGS(unused, sfpu::copy_dest_value_init))); }
 
 }  // namespace ckernel

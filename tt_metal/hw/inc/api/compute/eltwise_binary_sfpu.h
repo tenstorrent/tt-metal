@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #ifdef ARCH_QUASAR
@@ -38,9 +39,10 @@ namespace ckernel {
  * | odst           | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void div_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+ALWI void div_binary_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
+    dest_order::touch_sfpu();
 #ifdef ARCH_QUASAR
-    MATH((SFPU_BINARY_CALL(
+    SFPU((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_sfpu_binary,
@@ -50,7 +52,7 @@ ALWI void div_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
         odst,
         VectorMode::RC)));
 #else
-    MATH((SFPU_BINARY_CALL(
+    SFPU((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_sfpu_binary_div,
@@ -62,9 +64,10 @@ ALWI void div_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 #endif
 }
 
-ALWI void mul_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+ALWI void mul_binary_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
+    dest_order::touch_sfpu();
 #ifdef ARCH_QUASAR
-    MATH((SFPU_BINARY_CALL(
+    SFPU((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_sfpu_binary,
@@ -74,7 +77,7 @@ ALWI void mul_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
         odst,
         VectorMode::RC)));
 #else
-    MATH((SFPU_BINARY_CALL(
+    SFPU((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_sfpu_binary_mul,
@@ -93,9 +96,10 @@ ALWI void mul_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
  *         apply RNE rounding when narrowing to bf16.
  */
 template <ckernel::DstRoundingMode dst_rounding_mode = ckernel::DstRoundingMode::Default>
-ALWI void add_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+ALWI void add_binary_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
+    dest_order::touch_sfpu();
 #ifdef ARCH_QUASAR
-    MATH((SFPU_BINARY_CALL(
+    SFPU((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_sfpu_binary,
@@ -105,7 +109,7 @@ ALWI void add_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
         odst,
         VectorMode::RC)));
 #else
-    MATH((SFPU_BINARY_CALL(
+    SFPU((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_sfpu_binary,
@@ -119,9 +123,10 @@ ALWI void add_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 
 /// @tparam dst_rounding_mode See add_binary_tile.
 template <ckernel::DstRoundingMode dst_rounding_mode = ckernel::DstRoundingMode::Default>
-ALWI void sub_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+ALWI void sub_binary_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
+    dest_order::touch_sfpu();
 #ifdef ARCH_QUASAR
-    MATH((SFPU_BINARY_CALL(
+    SFPU((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_sfpu_binary,
@@ -131,7 +136,7 @@ ALWI void sub_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
         odst,
         VectorMode::RC)));
 #else
-    MATH((SFPU_BINARY_CALL(
+    SFPU((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_sfpu_binary,
@@ -146,8 +151,9 @@ ALWI void sub_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 #ifndef ARCH_QUASAR
 /// @tparam dst_rounding_mode See add_binary_tile.
 template <ckernel::DstRoundingMode dst_rounding_mode = ckernel::DstRoundingMode::Default>
-ALWI void rsub_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((SFPU_BINARY_CALL(
+ALWI void rsub_binary_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
+    dest_order::touch_sfpu();
+    SFPU((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_sfpu_binary,
@@ -158,8 +164,9 @@ ALWI void rsub_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
         VectorMode::RC)));
 }
 
-ALWI void power_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((SFPU_BINARY_CALL(
+ALWI void power_binary_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
+    dest_order::touch_sfpu();
+    SFPU((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_sfpu_binary_pow,
@@ -170,8 +177,9 @@ ALWI void power_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
         VectorMode::RC)));
 }
 
-ALWI void eq_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((SFPU_BINARY_CALL(
+ALWI void eq_binary_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
+    dest_order::touch_sfpu();
+    SFPU((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_binary_comp_fp32,
@@ -182,8 +190,9 @@ ALWI void eq_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
         VectorMode::RC)));
 }
 
-ALWI void ne_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((SFPU_BINARY_CALL(
+ALWI void ne_binary_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
+    dest_order::touch_sfpu();
+    SFPU((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_binary_comp_fp32,
@@ -194,8 +203,9 @@ ALWI void ne_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
         VectorMode::RC)));
 }
 
-ALWI void lt_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((SFPU_BINARY_CALL(
+ALWI void lt_binary_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
+    dest_order::touch_sfpu();
+    SFPU((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_binary_comp_fp32,
@@ -206,8 +216,9 @@ ALWI void lt_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
         VectorMode::RC)));
 }
 
-ALWI void gt_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((SFPU_BINARY_CALL(
+ALWI void gt_binary_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
+    dest_order::touch_sfpu();
+    SFPU((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_binary_comp_fp32,
@@ -218,8 +229,9 @@ ALWI void gt_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
         VectorMode::RC)));
 }
 
-ALWI void le_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((SFPU_BINARY_CALL(
+ALWI void le_binary_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
+    dest_order::touch_sfpu();
+    SFPU((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_binary_comp_fp32,
@@ -230,8 +242,9 @@ ALWI void le_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
         VectorMode::RC)));
 }
 
-ALWI void ge_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((SFPU_BINARY_CALL(
+ALWI void ge_binary_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
+    dest_order::touch_sfpu();
+    SFPU((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_binary_comp_fp32,
@@ -247,39 +260,39 @@ ALWI void ge_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
  * Please refer to documentation for any_init.
  */
 ALWI void div_binary_tile_init() {
-    MATH((SFPU_BINARY_INIT_FN(unused, sfpu::sfpu_binary_init, (APPROX, ckernel::BinaryOp::DIV))));
+    SFPU((SFPU_BINARY_INIT_FN(unused, sfpu::sfpu_binary_init, (APPROX, ckernel::BinaryOp::DIV))));
 }
 
 ALWI void mul_binary_tile_init() {
-    MATH((SFPU_BINARY_INIT_FN(unused, sfpu::sfpu_binary_init, (APPROX, ckernel::BinaryOp::MUL))));
+    SFPU((SFPU_BINARY_INIT_FN(unused, sfpu::sfpu_binary_init, (APPROX, ckernel::BinaryOp::MUL))));
 }
 
 ALWI void add_binary_tile_init() {
-    MATH((SFPU_BINARY_INIT_FN(unused, sfpu::sfpu_binary_init, (APPROX, ckernel::BinaryOp::ADD))));
+    SFPU((SFPU_BINARY_INIT_FN(unused, sfpu::sfpu_binary_init, (APPROX, ckernel::BinaryOp::ADD))));
 }
 
 ALWI void sub_binary_tile_init() {
-    MATH((SFPU_BINARY_INIT_FN(unused, sfpu::sfpu_binary_init, (APPROX, ckernel::BinaryOp::SUB))));
+    SFPU((SFPU_BINARY_INIT_FN(unused, sfpu::sfpu_binary_init, (APPROX, ckernel::BinaryOp::SUB))));
 }
 
 #ifndef ARCH_QUASAR
 ALWI void rsub_binary_tile_init() {
-    MATH((SFPU_BINARY_INIT_FN(unused, sfpu::sfpu_binary_init, (APPROX, ckernel::BinaryOp::RSUB))));
+    SFPU((SFPU_BINARY_INIT_FN(unused, sfpu::sfpu_binary_init, (APPROX, ckernel::BinaryOp::RSUB))));
 }
 
-ALWI void power_binary_tile_init() { MATH((SFPU_BINARY_INIT_FN(unused, sfpu::sfpu_binary_pow_init, (APPROX)))); }
+ALWI void power_binary_tile_init() { SFPU((SFPU_BINARY_INIT_FN(unused, sfpu::sfpu_binary_pow_init, (APPROX)))); }
 
-ALWI void eq_binary_tile_init() { MATH((SFPU_BINARY_INIT(eq))); }
+ALWI void eq_binary_tile_init() { SFPU((SFPU_BINARY_INIT(eq))); }
 
-ALWI void ne_binary_tile_init() { MATH((SFPU_BINARY_INIT(ne))); }
+ALWI void ne_binary_tile_init() { SFPU((SFPU_BINARY_INIT(ne))); }
 
-ALWI void lt_binary_tile_init() { MATH((SFPU_BINARY_INIT(lt))); }
+ALWI void lt_binary_tile_init() { SFPU((SFPU_BINARY_INIT(lt))); }
 
-ALWI void gt_binary_tile_init() { MATH((SFPU_BINARY_INIT(gt))); }
+ALWI void gt_binary_tile_init() { SFPU((SFPU_BINARY_INIT(gt))); }
 
-ALWI void le_binary_tile_init() { MATH((SFPU_BINARY_INIT(le))); }
+ALWI void le_binary_tile_init() { SFPU((SFPU_BINARY_INIT(le))); }
 
-ALWI void ge_binary_tile_init() { MATH((SFPU_BINARY_INIT(ge))); }
+ALWI void ge_binary_tile_init() { SFPU((SFPU_BINARY_INIT(ge))); }
 #endif
 
 }  // namespace ckernel

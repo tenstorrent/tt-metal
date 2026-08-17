@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_clamp.h"
@@ -27,8 +28,9 @@ namespace ckernel {
  * | param1          | The max value for the clamp function                                       | uint32_t |                                                       | True     |
 */
 // clang-format on
-ALWI void clamp_tile(uint32_t idst, uint32_t param0, uint32_t param1) {
-    MATH(SFPU_UNARY_CALL(
+ALWI void clamp_tile(std::uint32_t idst, std::uint32_t param0, std::uint32_t param1) {
+    dest_order::touch_sfpu();
+    SFPU(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_clamp,
@@ -55,8 +57,9 @@ ALWI void clamp_tile(uint32_t idst, uint32_t param0, uint32_t param1) {
  * | param1          | The max value for the clamp function                                       | uint32_t |                                                       | True     |
  */
 // clang-format on
-ALWI void clamp_tile_int32(uint32_t idst, uint32_t param0, uint32_t param1) {
-    MATH(SFPU_UNARY_CALL(
+ALWI void clamp_tile_int32(std::uint32_t idst, std::uint32_t param0, std::uint32_t param1) {
+    dest_order::touch_sfpu();
+    SFPU(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_clamp_int32,
@@ -71,6 +74,6 @@ ALWI void clamp_tile_int32(uint32_t idst, uint32_t param0, uint32_t param1) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void clamp_tile_init() { MATH(SFPU_UNARY_INIT(clamp)); }
+ALWI void clamp_tile_init() { SFPU(SFPU_UNARY_INIT(clamp)); }
 
 }  // namespace ckernel

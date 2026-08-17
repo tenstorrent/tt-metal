@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "ckernel_reverseops.h"
@@ -35,11 +36,14 @@ namespace ckernel {
  * | param0         | Constant value that is being subtracted from                               | uint32_t |                                                       | True     |
  */
 // clang-format on
-ALWI void rsub_tile(uint32_t idst, uint32_t param0) { MATH((llk_math_eltwise_unary_sfpu_rsub<APPROX>(idst, param0))); }
+ALWI void rsub_tile(std::uint32_t idst, std::uint32_t param0) {
+    dest_order::touch_sfpu();
+    SFPU((llk_math_eltwise_unary_sfpu_rsub<APPROX>(idst, param0)));
+}
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void rsub_tile_init() { MATH(SFPU_UNARY_INIT_FN(unused, sfpu::rsub_init, (APPROX))); }
+ALWI void rsub_tile_init() { SFPU(SFPU_UNARY_INIT_FN(unused, sfpu::rsub_init, (APPROX))); }
 
 }  // namespace ckernel

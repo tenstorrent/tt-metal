@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_snake_beta.h"
@@ -25,8 +26,10 @@ namespace ckernel {
  */
 // clang-format on
 template <DataFormat data_format>
-ALWI void snake_beta_tile(uint32_t idst_x, uint32_t idst_alpha, uint32_t idst_beta, uint32_t idst_out) {
-    MATH((SFPU_TERNARY_CALL(
+ALWI void snake_beta_tile(
+    std::uint32_t idst_x, std::uint32_t idst_alpha, std::uint32_t idst_beta, std::uint32_t idst_out) {
+    dest_order::touch_sfpu();
+    SFPU((SFPU_TERNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_snake_beta,
@@ -41,6 +44,6 @@ ALWI void snake_beta_tile(uint32_t idst_x, uint32_t idst_alpha, uint32_t idst_be
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void snake_beta_tile_init() { MATH((SFPU_TERNARY_INIT_FN(snake_beta, sfpu::snake_beta_init, (APPROX)))); }
+ALWI void snake_beta_tile_init() { SFPU((SFPU_TERNARY_INIT_FN(snake_beta, sfpu::snake_beta_init, (APPROX)))); }
 
 }  // namespace ckernel

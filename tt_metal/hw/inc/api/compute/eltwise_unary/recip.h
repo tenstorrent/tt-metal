@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_recip.h"
@@ -16,7 +17,7 @@ namespace ckernel {
  */
 template <bool legacy_compat = true>
 ALWI void recip_tile_init() {
-    MATH(SFPU_UNARY_INIT_FN(reciprocal, sfpu::recip_init, (APPROX, DST_ACCUM_MODE, legacy_compat)));
+    SFPU(SFPU_UNARY_INIT_FN(reciprocal, sfpu::recip_init, (APPROX, DST_ACCUM_MODE, legacy_compat)));
 }
 // clang-format off
 /**
@@ -35,8 +36,9 @@ ALWI void recip_tile_init() {
  */
 // clang-format on
 template <bool legacy_compat = true>
-ALWI void recip_tile(uint32_t idst, VectorMode vector_mode = VectorMode::RC) {
-    MATH(SFPU_UNARY_CALL(
+ALWI void recip_tile(std::uint32_t idst, VectorMode vector_mode = VectorMode::RC) {
+    dest_order::touch_sfpu();
+    SFPU(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_reciprocal,

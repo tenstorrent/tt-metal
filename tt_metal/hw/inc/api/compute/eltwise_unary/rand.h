@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "ckernel_instr_params.h"
@@ -33,8 +34,9 @@ namespace ckernel {
  * | scale          | FP32 bit pattern producing [from, from + scale], inclusively  | uint32_t | Must be non-negative; zero produces a constant tile   | True      |
  */
 // clang-format on
-ALWI void rand_tile(uint32_t idst, uint32_t from, uint32_t scale) {
-    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, rand, (APPROX), idst, VectorMode::RC, from, scale));
+ALWI void rand_tile(std::uint32_t idst, std::uint32_t from, std::uint32_t scale) {
+    dest_order::touch_sfpu();
+    SFPU(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, rand, (APPROX), idst, VectorMode::RC, from, scale));
 }
 
 /**
@@ -42,9 +44,9 @@ ALWI void rand_tile(uint32_t idst, uint32_t from, uint32_t scale) {
  * 2^32. Distinct stream IDs domain-separate related deterministic work ranges;
  * stream_id=0 leaves the seed unchanged.
  */
-ALWI void rand_tile_init(uint32_t seed = 0, uint32_t stream_id = 0) {
-    constexpr uint32_t stream_seed_multiplier = 0x9E3779B9U;
-    MATH(SFPU_UNARY_INIT_FN_ARGS(unused, sfpu::rand_init, (APPROX), seed + stream_id * stream_seed_multiplier));
+ALWI void rand_tile_init(std::uint32_t seed = 0, std::uint32_t stream_id = 0) {
+    constexpr std::uint32_t stream_seed_multiplier = 0x9E3779B9U;
+    SFPU(SFPU_UNARY_INIT_FN_ARGS(unused, sfpu::rand_init, (APPROX), seed + stream_id * stream_seed_multiplier));
 }
 
 }  // namespace ckernel

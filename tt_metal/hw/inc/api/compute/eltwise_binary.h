@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common.h"
 #include "api/compute/sentinel/compute_kernel_sentinel.h"
 #ifdef TRISC_MATH
@@ -34,7 +35,7 @@ namespace ckernel {
 // clang-format on
 template <bool full_init, EltwiseBinaryType eltwise_binary_type>
 ALWI void binary_tiles_init(
-    uint32_t icb0, uint32_t icb1, bool acc_to_dest = false, uint32_t call_line = __builtin_LINE()) {
+    std::uint32_t icb0, std::uint32_t icb1, bool acc_to_dest = false, std::uint32_t call_line = __builtin_LINE()) {
     state_configure(icb0, icb1, call_line);
 
     MATH((llk_math_eltwise_binary_init<eltwise_binary_type, BroadcastType::NONE, MATH_FIDELITY>(
@@ -52,7 +53,7 @@ namespace detail {
 // at the unpacker), Quasar does not. The public {add,sub,mul}_reuse_dest_init wrappers and the
 // deprecated binary_dest_reuse_tiles_init shim forward here.
 template <EltwiseBinaryType eltwise_binary_type, EltwiseBinaryReuseDestType reuse_dest>
-ALWI void binary_reuse_dest_init(uint32_t icb0, uint32_t call_line) {
+ALWI void binary_reuse_dest_init(std::uint32_t icb0, std::uint32_t call_line) {
     state_configure(icb0, call_line);
 #ifndef ARCH_QUASAR
     UNPACK(constexpr bool acc_to_dest = true);
@@ -84,7 +85,8 @@ ALWI void binary_reuse_dest_init(uint32_t icb0, uint32_t call_line) {
  * | acc_to_dest | If true, operation = A + B + dst_tile_idx of add_tiles   | bool     | 0,1         | False    |
  */
 // clang-format on
-ALWI void add_init(uint32_t icb0, uint32_t icb1, bool acc_to_dest = false, uint32_t call_line = __builtin_LINE()) {
+ALWI void add_init(
+    std::uint32_t icb0, std::uint32_t icb1, bool acc_to_dest = false, std::uint32_t call_line = __builtin_LINE()) {
     binary_tiles_init<true /* full_init */, EltwiseBinaryType::ELWADD>(icb0, icb1, acc_to_dest, call_line);
 }
 
@@ -105,7 +107,7 @@ ALWI void add_init(uint32_t icb0, uint32_t icb1, bool acc_to_dest = false, uint3
  */
 // clang-format on
 template <EltwiseBinaryReuseDestType reuse_dest>
-ALWI void add_reuse_dest_init(uint32_t icb, uint32_t call_line = __builtin_LINE()) {
+ALWI void add_reuse_dest_init(std::uint32_t icb, std::uint32_t call_line = __builtin_LINE()) {
     static_assert(
         reuse_dest != EltwiseBinaryReuseDestType::NONE,
         "reuse_dest must be DEST_TO_SRCA or DEST_TO_SRCB; for the two-operand op call add_init(icb0, icb1).");
@@ -127,7 +129,8 @@ ALWI void add_reuse_dest_init(uint32_t icb, uint32_t call_line = __builtin_LINE(
  * | acc_to_dest | If true, operation = A - B + dst_tile_idx of sub_tiles   | bool     | 0,1         | False    |
  */
 // clang-format on
-ALWI void sub_init(uint32_t icb0, uint32_t icb1, bool acc_to_dest = false, uint32_t call_line = __builtin_LINE()) {
+ALWI void sub_init(
+    std::uint32_t icb0, std::uint32_t icb1, bool acc_to_dest = false, std::uint32_t call_line = __builtin_LINE()) {
     binary_tiles_init<true /* full_init */, EltwiseBinaryType::ELWSUB>(icb0, icb1, acc_to_dest, call_line);
 }
 
@@ -148,7 +151,7 @@ ALWI void sub_init(uint32_t icb0, uint32_t icb1, bool acc_to_dest = false, uint3
  */
 // clang-format on
 template <EltwiseBinaryReuseDestType reuse_dest>
-ALWI void sub_reuse_dest_init(uint32_t icb, uint32_t call_line = __builtin_LINE()) {
+ALWI void sub_reuse_dest_init(std::uint32_t icb, std::uint32_t call_line = __builtin_LINE()) {
     static_assert(
         reuse_dest != EltwiseBinaryReuseDestType::NONE,
         "reuse_dest must be DEST_TO_SRCA or DEST_TO_SRCB; for the two-operand op call sub_init(icb0, icb1).");
@@ -174,7 +177,8 @@ ALWI void sub_reuse_dest_init(uint32_t icb, uint32_t call_line = __builtin_LINE(
  * | acc_to_dest | If true, operation = A * B + dst_tile_idx of mul_tiles   | bool     | 0,1         | False    |
  */
 // clang-format on
-ALWI void mul_init(uint32_t icb0, uint32_t icb1, bool acc_to_dest = true, uint32_t call_line = __builtin_LINE()) {
+ALWI void mul_init(
+    std::uint32_t icb0, std::uint32_t icb1, bool acc_to_dest = true, std::uint32_t call_line = __builtin_LINE()) {
     binary_tiles_init<true /* full_init */, EltwiseBinaryType::ELWMUL>(icb0, icb1, acc_to_dest, call_line);
 }
 
@@ -195,7 +199,7 @@ ALWI void mul_init(uint32_t icb0, uint32_t icb1, bool acc_to_dest = true, uint32
  */
 // clang-format on
 template <EltwiseBinaryReuseDestType reuse_dest>
-ALWI void mul_reuse_dest_init(uint32_t icb, uint32_t call_line = __builtin_LINE()) {
+ALWI void mul_reuse_dest_init(std::uint32_t icb, std::uint32_t call_line = __builtin_LINE()) {
     static_assert(
         reuse_dest != EltwiseBinaryReuseDestType::NONE,
         "reuse_dest must be DEST_TO_SRCA or DEST_TO_SRCB; for the two-operand op call mul_init(icb0, icb1).");
@@ -220,7 +224,9 @@ ALWI void mul_reuse_dest_init(uint32_t icb, uint32_t call_line = __builtin_LINE(
  * | idst           | The index of the tile in DST REG for the result C        | uint32_t | Must be less than the acquired size of DST REG | True     |
  */
 // clang-format on
-ALWI void mul_tiles(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
+ALWI void mul_tiles(
+    std::uint32_t icb0, std::uint32_t icb1, std::uint32_t itile0, std::uint32_t itile1, std::uint32_t idst) {
+    dest_order::touch_fpu();
     // static bool first = true; // TODO(AP): static initializer causes a hang, possibly investigate
     // if (first)
     //  one possible solution is to add a local context in the kernel, pass it around and store init flags in it
@@ -257,7 +263,9 @@ ALWI void mul_tiles(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itil
  * | idst           | The index of the tile in DST REG for the result C        | uint32_t | Must be less than the acquired size of DST REG | True     |
  */
 // clang-format on
-ALWI void add_tiles(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
+ALWI void add_tiles(
+    std::uint32_t icb0, std::uint32_t icb1, std::uint32_t itile0, std::uint32_t itile1, std::uint32_t idst) {
+    dest_order::touch_fpu();
     UNPACK((llk_unpack_AB(icb0, icb1, itile0, itile1)));
     MATH((llk_math_eltwise_binary<
           EltwiseBinaryType::ELWADD,
@@ -285,7 +293,9 @@ ALWI void add_tiles(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itil
  * | idst           | The index of the tile in DST REG for the result C        | uint32_t | Must be less than the acquired size of DST REG | True     |
  */
 // clang-format on
-ALWI void sub_tiles(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
+ALWI void sub_tiles(
+    std::uint32_t icb0, std::uint32_t icb1, std::uint32_t itile0, std::uint32_t itile1, std::uint32_t idst) {
+    dest_order::touch_fpu();
     UNPACK((llk_unpack_AB(icb0, icb1, itile0, itile1)));
     MATH((llk_math_eltwise_binary<
           EltwiseBinaryType::ELWSUB,
@@ -321,8 +331,13 @@ ALWI void sub_tiles(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itil
  */
 // clang-format on
 ALWI void mul_block(
-    uint32_t icb0, uint32_t icb1, uint32_t start_itile0, uint32_t start_itile1, uint32_t start_idst, uint32_t ntiles) {
-    for (uint32_t i = 0; i < ntiles; ++i) {
+    std::uint32_t icb0,
+    std::uint32_t icb1,
+    std::uint32_t start_itile0,
+    std::uint32_t start_itile1,
+    std::uint32_t start_idst,
+    std::uint32_t ntiles) {
+    for (std::uint32_t i = 0; i < ntiles; ++i) {
         mul_tiles(icb0, icb1, start_itile0 + i, start_itile1 + i, start_idst + i);
     }
 }
@@ -353,8 +368,13 @@ ALWI void mul_block(
  */
 // clang-format on
 ALWI void add_block(
-    uint32_t icb0, uint32_t icb1, uint32_t start_itile0, uint32_t start_itile1, uint32_t start_idst, uint32_t ntiles) {
-    for (uint32_t i = 0; i < ntiles; ++i) {
+    std::uint32_t icb0,
+    std::uint32_t icb1,
+    std::uint32_t start_itile0,
+    std::uint32_t start_itile1,
+    std::uint32_t start_idst,
+    std::uint32_t ntiles) {
+    for (std::uint32_t i = 0; i < ntiles; ++i) {
         add_tiles(icb0, icb1, start_itile0 + i, start_itile1 + i, start_idst + i);
     }
 }
@@ -385,8 +405,13 @@ ALWI void add_block(
  */
 // clang-format on
 ALWI void sub_block(
-    uint32_t icb0, uint32_t icb1, uint32_t start_itile0, uint32_t start_itile1, uint32_t start_idst, uint32_t ntiles) {
-    for (uint32_t i = 0; i < ntiles; ++i) {
+    std::uint32_t icb0,
+    std::uint32_t icb1,
+    std::uint32_t start_itile0,
+    std::uint32_t start_itile1,
+    std::uint32_t start_idst,
+    std::uint32_t ntiles) {
+    for (std::uint32_t i = 0; i < ntiles; ++i) {
         sub_tiles(icb0, icb1, start_itile0 + i, start_itile1 + i, start_idst + i);
     }
 }
@@ -397,19 +422,16 @@ namespace detail {
 // The public {add,sub,mul}_reuse_dest_tiles wrappers and the deprecated binary_dest_reuse_tiles shim
 // forward here. Assumes a prior op populated DST[idst], else it reads zeroes.
 template <EltwiseBinaryType eltwise_binary_type, EltwiseBinaryReuseDestType reuse_dest>
-ALWI void binary_reuse_dest_tiles(uint32_t in_cb_id, uint32_t in_tile_index, uint32_t dst_tile_index) {
+ALWI void binary_reuse_dest_tiles(std::uint32_t in_cb_id, std::uint32_t in_tile_index, std::uint32_t dst_tile_index) {
+    dest_order::touch_fpu();
 #ifndef ARCH_QUASAR
     UNPACK(constexpr bool acc_to_dest = true);
 #else
     UNPACK(constexpr bool acc_to_dest = false);
 #endif
     UNPACK((llk_unpack_A<BroadcastType::NONE, acc_to_dest, reuse_dest>(in_cb_id, in_tile_index)));
-    MATH((llk_math_eltwise_binary<
-          eltwise_binary_type,
-          BroadcastType::NONE,
-          DST_ACCUM_MODE,
-          MATH_FIDELITY,
-          reuse_dest>(in_cb_id, in_cb_id, dst_tile_index, true /* clear_fp32_dst_acc */)));
+    MATH((llk_math_eltwise_binary<eltwise_binary_type, BroadcastType::NONE, DST_ACCUM_MODE, MATH_FIDELITY, reuse_dest>(
+        in_cb_id, in_cb_id, dst_tile_index, true /* clear_fp32_dst_acc */)));
 }
 }  // namespace detail
 
@@ -430,7 +452,7 @@ ALWI void binary_reuse_dest_tiles(uint32_t in_cb_id, uint32_t in_tile_index, uin
  */
 // clang-format on
 template <EltwiseBinaryReuseDestType reuse_dest>
-ALWI void add_reuse_dest_tiles(uint32_t in_cb_id, uint32_t in_tile_index, uint32_t dst_tile_index) {
+ALWI void add_reuse_dest_tiles(std::uint32_t in_cb_id, std::uint32_t in_tile_index, std::uint32_t dst_tile_index) {
     detail::binary_reuse_dest_tiles<EltwiseBinaryType::ELWADD, reuse_dest>(in_cb_id, in_tile_index, dst_tile_index);
 }
 
@@ -438,7 +460,7 @@ ALWI void add_reuse_dest_tiles(uint32_t in_cb_id, uint32_t in_tile_index, uint32
 /** Dest-reuse element-wise subtract. See add_reuse_dest_tiles; pair with sub_reuse_dest_init<reuse_dest>. */
 // clang-format on
 template <EltwiseBinaryReuseDestType reuse_dest>
-ALWI void sub_reuse_dest_tiles(uint32_t in_cb_id, uint32_t in_tile_index, uint32_t dst_tile_index) {
+ALWI void sub_reuse_dest_tiles(std::uint32_t in_cb_id, std::uint32_t in_tile_index, std::uint32_t dst_tile_index) {
     detail::binary_reuse_dest_tiles<EltwiseBinaryType::ELWSUB, reuse_dest>(in_cb_id, in_tile_index, dst_tile_index);
 }
 
@@ -446,7 +468,7 @@ ALWI void sub_reuse_dest_tiles(uint32_t in_cb_id, uint32_t in_tile_index, uint32
 /** Dest-reuse element-wise multiply. See add_reuse_dest_tiles; pair with mul_reuse_dest_init<reuse_dest>. */
 // clang-format on
 template <EltwiseBinaryReuseDestType reuse_dest>
-ALWI void mul_reuse_dest_tiles(uint32_t in_cb_id, uint32_t in_tile_index, uint32_t dst_tile_index) {
+ALWI void mul_reuse_dest_tiles(std::uint32_t in_cb_id, std::uint32_t in_tile_index, std::uint32_t dst_tile_index) {
     detail::binary_reuse_dest_tiles<EltwiseBinaryType::ELWMUL, reuse_dest>(in_cb_id, in_tile_index, dst_tile_index);
 }
 
@@ -478,7 +500,8 @@ ALWI void mul_reuse_dest_tiles(uint32_t in_cb_id, uint32_t in_tile_index, uint32
 [[deprecated(
     "Use compute_kernel_hw_startup(icb0, icb1, ocb) once at kernel start, then add_init/sub_init/mul_init(icb0, "
     "icb1). This will be removed after September 15th, 2026.")]] ALWI void
-binary_op_init_common(uint32_t icb0, uint32_t icb1, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
+binary_op_init_common(
+    std::uint32_t icb0, std::uint32_t icb1, std::uint32_t ocb, std::uint32_t call_line = __builtin_LINE()) {
 #ifndef ARCH_QUASAR
     state_configure(icb0, icb1, ocb, call_line);
 
@@ -515,7 +538,7 @@ binary_op_init_common(uint32_t icb0, uint32_t icb1, uint32_t ocb, uint32_t call_
  */
 // clang-format on
 [[deprecated("Renamed to mul_init(). This will be removed after September 15th, 2026.")]] ALWI void mul_tiles_init(
-    uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
+    std::uint32_t icb0, std::uint32_t icb1, std::uint32_t call_line = __builtin_LINE()) {
     // acc_to_dest is unused for WH/BH and accumulation is default behaviour.
     // For back compatibility with Quasar, acc_to_dest=true in this API for all ops.
     // More control is provided with 3-arg version of init API.
@@ -533,7 +556,7 @@ binary_op_init_common(uint32_t icb0, uint32_t icb1, uint32_t ocb, uint32_t call_
  */
 // clang-format on
 [[deprecated("Renamed to mul_init(). This will be removed after September 15th, 2026.")]] ALWI void mul_tiles_init(
-    uint32_t icb0, uint32_t icb1, uint32_t acc_to_dest, uint32_t call_line = __builtin_LINE()) {
+    std::uint32_t icb0, std::uint32_t icb1, std::uint32_t acc_to_dest, std::uint32_t call_line = __builtin_LINE()) {
     mul_init(icb0, icb1, acc_to_dest /* acc_to_dest */, call_line);
 }
 
@@ -549,7 +572,7 @@ binary_op_init_common(uint32_t icb0, uint32_t icb1, uint32_t ocb, uint32_t call_
  */
 // clang-format on
 [[deprecated("Renamed to add_init(). This will be removed after September 15th, 2026.")]] ALWI void add_tiles_init(
-    uint32_t icb0, uint32_t icb1, bool acc_to_dest = false, uint32_t call_line = __builtin_LINE()) {
+    std::uint32_t icb0, std::uint32_t icb1, bool acc_to_dest = false, std::uint32_t call_line = __builtin_LINE()) {
     add_init(icb0, icb1, acc_to_dest /* acc_to_dest */, call_line);
 }
 
@@ -565,7 +588,7 @@ binary_op_init_common(uint32_t icb0, uint32_t icb1, uint32_t ocb, uint32_t call_
  */
 // clang-format on
 [[deprecated("Renamed to sub_init(). This will be removed after September 15th, 2026.")]] ALWI void sub_tiles_init(
-    uint32_t icb0, uint32_t icb1, bool acc_to_dest = false, uint32_t call_line = __builtin_LINE()) {
+    std::uint32_t icb0, std::uint32_t icb1, bool acc_to_dest = false, std::uint32_t call_line = __builtin_LINE()) {
     sub_init(icb0, icb1, acc_to_dest /* acc_to_dest */, call_line);
 }
 
@@ -584,8 +607,9 @@ template <
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
 [[deprecated(
     "Renamed to add_reuse_dest_init / sub_reuse_dest_init / mul_reuse_dest_init<reuse_dest>, e.g. "
-    "add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(in_cb). This will be removed after September 15th, 2026.")]] ALWI void
-binary_dest_reuse_tiles_init(uint32_t icb0, uint32_t call_line = __builtin_LINE()) {
+    "add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(in_cb). This will be removed after September 15th, "
+    "2026.")]] ALWI void
+binary_dest_reuse_tiles_init(std::uint32_t icb0, std::uint32_t call_line = __builtin_LINE()) {
     // Single-operand dest-reuse init path. Kept as a shim so existing callers (and the degenerate
     // binary_reuse_dest == NONE case, e.g. the sentinel test) retain the exact reconfigure behaviour.
     detail::binary_reuse_dest_init<eltwise_binary_type, binary_reuse_dest>(icb0, call_line);
@@ -608,8 +632,9 @@ template <
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
 [[deprecated(
     "Renamed to add_reuse_dest_tiles / sub_reuse_dest_tiles / mul_reuse_dest_tiles<reuse_dest>, e.g. "
-    "add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(in_cb, it, idst). This will be removed after September 15th, 2026.")]] ALWI void
-binary_dest_reuse_tiles(uint32_t in_cb_id, uint32_t in_tile_index, uint32_t dst_tile_index) {
+    "add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(in_cb, it, idst). This will be removed after "
+    "September 15th, 2026.")]] ALWI void
+binary_dest_reuse_tiles(std::uint32_t in_cb_id, std::uint32_t in_tile_index, std::uint32_t dst_tile_index) {
     detail::binary_reuse_dest_tiles<eltwise_binary_type, binary_reuse_dest>(in_cb_id, in_tile_index, dst_tile_index);
 }
 

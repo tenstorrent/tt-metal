@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common.h"
 #include "api/compute/sentinel/compute_kernel_sentinel.h"
 #include "llk_assert.h"
@@ -25,9 +26,10 @@ namespace ckernel {
 // defines the FW-controlled throttle level for block matmul kernels on Blackhole
 #define MM_THROTTLE_MAX 5
 // 4-byte word at MEM_L1_ARC_FW_SCRATCH written by FW - even means no throttle, odd means throttle
-volatile tt_l1_ptr uint32_t* throttle_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MEM_L1_ARC_FW_SCRATCH);
+volatile tt_l1_ptr std::uint32_t* throttle_ptr =
+    reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(MEM_L1_ARC_FW_SCRATCH);
 // tracks the state of the currently programmed matmul MOP (0: default throttle level, 1: max throttle level)
-static uint32_t throttled_mop_status = 0;
+static std::uint32_t throttled_mop_status = 0;
 
 // clang-format off
 /**
@@ -50,12 +52,18 @@ static uint32_t throttled_mop_status = 0;
  */
 // clang-format on
 ALWI void matmul_block_math_dynamic_throttle(
-    uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t idst, const uint32_t transpose, uint32_t ct_dim, uint32_t rt_dim) {
+    std::uint32_t in0_cb_id,
+    std::uint32_t in1_cb_id,
+    std::uint32_t idst,
+    const std::uint32_t transpose,
+    std::uint32_t ct_dim,
+    std::uint32_t rt_dim) {
+    dest_order::touch_fpu();
     LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
     // Dynamic throttling is only available on Blackhole architecture
     // Check firmware-controlled throttle enable flag (even = no throttle, odd = throttle)
-    volatile uint32_t mm_throttle_en = *(throttle_ptr) % 2;
+    volatile std::uint32_t mm_throttle_en = *(throttle_ptr) % 2;
     if (mm_throttle_en) {
         if (throttled_mop_status != 1) {
             MATH((
@@ -98,7 +106,10 @@ ALWI void matmul_block_math_dynamic_throttle(
  */
 // clang-format on
 ALWI void matmul_init(
-    uint32_t in0_cb_id, uint32_t in1_cb_id, const uint32_t transpose = 0, uint32_t call_line = __builtin_LINE()) {
+    std::uint32_t in0_cb_id,
+    std::uint32_t in1_cb_id,
+    const std::uint32_t transpose = 0,
+    std::uint32_t call_line = __builtin_LINE()) {
     LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
     state_configure(in1_cb_id, in0_cb_id, call_line);
@@ -130,7 +141,12 @@ ALWI void matmul_init(
  */
 // clang-format on
 ALWI void matmul_tiles(
-    uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t in0_tile_index, uint32_t in1_tile_index, uint32_t idst) {
+    std::uint32_t in0_cb_id,
+    std::uint32_t in1_cb_id,
+    std::uint32_t in0_tile_index,
+    std::uint32_t in1_tile_index,
+    std::uint32_t idst) {
+    dest_order::touch_fpu();
     LLK_SAN_FUNCTION();
     UNPACK((llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index)));
 #ifndef ARCH_QUASAR
@@ -168,13 +184,13 @@ ALWI void matmul_tiles(
  */
 // clang-format on
 ALWI void matmul_block_init(
-    uint32_t in0_cb_id,
-    uint32_t in1_cb_id,
-    const uint32_t transpose = 0,
-    uint32_t ct_dim = 1,
-    uint32_t rt_dim = 1,
-    uint32_t kt_dim = 1,
-    uint32_t call_line = __builtin_LINE()) {
+    std::uint32_t in0_cb_id,
+    std::uint32_t in1_cb_id,
+    const std::uint32_t transpose = 0,
+    std::uint32_t ct_dim = 1,
+    std::uint32_t rt_dim = 1,
+    std::uint32_t kt_dim = 1,
+    std::uint32_t call_line = __builtin_LINE()) {
     LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
     state_configure(in1_cb_id, in0_cb_id, call_line);
@@ -219,16 +235,17 @@ ALWI void matmul_block_init(
  */
 // clang-format on
 ALWI void matmul_block(
-    uint32_t in0_cb_id,
-    uint32_t in1_cb_id,
-    uint32_t in0_tile_index,
-    uint32_t in1_tile_index,
-    uint32_t idst,
-    const uint32_t transpose,
-    uint32_t ct_dim,
-    uint32_t rt_dim,
-    uint32_t kt_dim,
-    uint32_t call_line = __builtin_LINE()) {
+    std::uint32_t in0_cb_id,
+    std::uint32_t in1_cb_id,
+    std::uint32_t in0_tile_index,
+    std::uint32_t in1_tile_index,
+    std::uint32_t idst,
+    const std::uint32_t transpose,
+    std::uint32_t ct_dim,
+    std::uint32_t rt_dim,
+    std::uint32_t kt_dim,
+    std::uint32_t call_line = __builtin_LINE()) {
+    dest_order::touch_fpu();
     LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
     state_configure(in1_cb_id, in0_cb_id, call_line);

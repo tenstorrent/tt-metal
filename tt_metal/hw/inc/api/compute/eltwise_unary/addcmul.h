@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_addcmul.h"
@@ -38,8 +39,10 @@ namespace ckernel {
  */
 // clang-format on
 template <DataFormat data_format>
-ALWI void addcmul_tile(uint32_t idst0, uint32_t idst1, uint32_t idst2, uint32_t odst, uint32_t value) {
-    MATH((SFPU_TERNARY_CALL(
+ALWI void addcmul_tile(
+    std::uint32_t idst0, std::uint32_t idst1, std::uint32_t idst2, std::uint32_t odst, std::uint32_t value) {
+    dest_order::touch_sfpu();
+    SFPU((SFPU_TERNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_addcmul,
@@ -55,6 +58,6 @@ ALWI void addcmul_tile(uint32_t idst0, uint32_t idst1, uint32_t idst2, uint32_t 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void addcmul_tile_init() { MATH((SFPU_TERNARY_INIT(addcmul))); }
+ALWI void addcmul_tile_init() { SFPU((SFPU_TERNARY_INIT(addcmul))); }
 
 }  // namespace ckernel

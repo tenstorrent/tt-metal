@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #ifdef ARCH_QUASAR
@@ -39,12 +40,13 @@ namespace ckernel {
  */
 // clang-format on
 template <DataFormat data_format>
-ALWI void add_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+ALWI void add_int_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
+    dest_order::touch_sfpu();
 #if defined(ARCH_QUASAR)
     static_assert(data_format == DataFormat::Int32, "Unsupported data format for add_int on Quasar. Supported: Int32");
     // Int8 copy_tile + fp32_dest_acc FPU (through ELWADD) writes sign-magnitude Int32 into dest.
     // Native Int32 tiles use 2's-comp dest and keep SIGN_MAGNITUDE_FORMAT=false.
-    MATH((llk_math_eltwise_binary_sfpu_add_int<APPROX, 8 /*ITERATIONS*/, data_format, true /*SIGN_MAGNITUDE_FORMAT*/>(
+    SFPU((llk_math_eltwise_binary_sfpu_add_int<APPROX, 8 /*ITERATIONS*/, data_format, true /*SIGN_MAGNITUDE_FORMAT*/>(
         idst0, idst1, odst)));
 #else
     static_assert(
@@ -52,7 +54,7 @@ ALWI void add_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
         "Unsupported data format for add_int. Supported data formats are: Int32, UInt32, UInt16");
     constexpr InstrModLoadStore INSTRUCTION_MODE =
         (data_format == DataFormat::UInt16) ? InstrModLoadStore::LO16 : InstrModLoadStore::INT32;
-    MATH((SFPU_BINARY_CALL(
+    SFPU((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         _add_int_,
@@ -69,9 +71,9 @@ ALWI void add_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
  */
 ALWI void add_int_tile_init() {
 #if defined(ARCH_QUASAR)
-    MATH((llk_math_eltwise_binary_sfpu_add_int_init()));
+    SFPU((llk_math_eltwise_binary_sfpu_add_int_init()));
 #else
-    MATH((SFPU_BINARY_INIT(unused)));
+    SFPU((SFPU_BINARY_INIT(unused)));
 #endif
 }
 

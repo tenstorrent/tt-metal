@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #ifdef ARCH_QUASAR
@@ -40,19 +41,20 @@ namespace ckernel {
  */
 // clang-format on
 template <DataFormat data_format>
-ALWI void mul_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+ALWI void mul_int_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
+    dest_order::touch_sfpu();
 #if defined(ARCH_QUASAR)
     static_assert(data_format == DataFormat::Int32, "Unsupported data format for mul_int on Quasar. Supported: Int32");
     // Int8 copy_tile + fp32_dest_acc FPU writes sign-magnitude Int32 into dest.
     // Native Int32 tiles use 2's-comp dest and keep SIGN_MAGNITUDE_FORMAT=false.
-    MATH((llk_math_eltwise_binary_sfpu_mul_int<APPROX, data_format, 8 /*ITERATIONS*/, true /*SIGN_MAGNITUDE_FORMAT*/>(
+    SFPU((llk_math_eltwise_binary_sfpu_mul_int<APPROX, data_format, 8 /*ITERATIONS*/, true /*SIGN_MAGNITUDE_FORMAT*/>(
         idst0, idst1, odst)));
 #else
     static_assert(
         data_format == DataFormat::Int32 || data_format == DataFormat::UInt32 || data_format == DataFormat::UInt16,
         "Unsupported data format for mul_int. Supported data formats are: Int32, UInt32, UInt16");
     if constexpr (data_format == DataFormat::UInt16) {
-        MATH((SFPU_BINARY_CALL(
+        SFPU((SFPU_BINARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             _mul_int_,
@@ -75,15 +77,15 @@ template <DataFormat data_format>
 ALWI void mul_int_tile_init() {
 #if defined(ARCH_QUASAR)
     static_assert(data_format == DataFormat::Int32, "Unsupported data format for mul_int on Quasar. Supported: Int32");
-    MATH((llk_math_eltwise_binary_sfpu_mul_int_init<APPROX, data_format>()));
+    SFPU((llk_math_eltwise_binary_sfpu_mul_int_init<APPROX, data_format>()));
 #else
     static_assert(
         data_format == DataFormat::Int32 || data_format == DataFormat::UInt32 || data_format == DataFormat::UInt16,
         "Unsupported data format for mul_int. Supported data formats are: Int32, UInt32, UInt16");
     if constexpr (data_format == DataFormat::UInt16) {
-        MATH((SFPU_BINARY_INIT_FN(mul_uint16, sfpu::_init_mul_int_, (APPROX))));
+        SFPU((SFPU_BINARY_INIT_FN(mul_uint16, sfpu::_init_mul_int_, (APPROX))));
     } else {
-        MATH((SFPU_BINARY_INIT_FN(mul_int32, sfpu::mul_int32_init, (APPROX))));
+        SFPU((SFPU_BINARY_INIT_FN(mul_int32, sfpu::mul_int32_init, (APPROX))));
     }
 #endif
 }

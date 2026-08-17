@@ -39,7 +39,8 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void polygamma_tile(std::uint32_t idst, std::uint32_t n_packed, std::uint32_t scale_packed) {
-    MATH(SFPU_UNARY_CALL(
+    dest_order::touch_sfpu();
+    SFPU(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_polygamma,
@@ -53,6 +54,6 @@ ALWI void polygamma_tile(std::uint32_t idst, std::uint32_t n_packed, std::uint32
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void polygamma_tile_init() { MATH(SFPU_UNARY_INIT_FN(polygamma, sfpu::polygamma_init, (APPROX, DST_ACCUM_MODE))); }
+ALWI void polygamma_tile_init() { SFPU(SFPU_UNARY_INIT_FN(polygamma, sfpu::polygamma_init, (APPROX, DST_ACCUM_MODE))); }
 
 }  // namespace ckernel

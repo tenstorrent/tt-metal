@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #ifdef TRISC_MATH
@@ -30,8 +31,9 @@ namespace ckernel {
  * | scalar         | Constant value that is being subtracted from                               | uint32_t |                                                       | True     |
  */
 // clang-format on
-ALWI void rsub_tile(uint32_t idst, uint32_t scalar) {
-    MATH(SFPU_UNARY_CALL(
+ALWI void rsub_tile(std::uint32_t idst, std::uint32_t scalar) {
+    dest_order::touch_sfpu();
+    SFPU(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_binop_with_scalar,
@@ -44,7 +46,7 @@ ALWI void rsub_tile(uint32_t idst, uint32_t scalar) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void rsub_tile_init() { MATH(SFPU_UNARY_INIT(unused)); }
+ALWI void rsub_tile_init() { SFPU(SFPU_UNARY_INIT(unused)); }
 
 // clang-format off
 /**
@@ -61,8 +63,9 @@ ALWI void rsub_tile_init() { MATH(SFPU_UNARY_INIT(unused)); }
  * | scalar         | Constant value that is being subtracted from                               | uint32_t |                                                       | True     |
  */
 // clang-format on
-ALWI void rsub_unary_int32_tile(uint32_t idst, uint32_t scalar) {
-    MATH(SFPU_UNARY_CALL(
+ALWI void rsub_unary_int32_tile(std::uint32_t idst, std::uint32_t scalar) {
+    dest_order::touch_sfpu();
+    SFPU(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_rsub_scalar_int32,
@@ -75,6 +78,6 @@ ALWI void rsub_unary_int32_tile(uint32_t idst, uint32_t scalar) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void rsub_unary_int32_tile_init() { MATH(SFPU_UNARY_INIT(unused)); }
+ALWI void rsub_unary_int32_tile_init() { SFPU(SFPU_UNARY_INIT(unused)); }
 
 }  // namespace ckernel

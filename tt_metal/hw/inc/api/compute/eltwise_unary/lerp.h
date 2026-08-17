@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_lerp.h"
@@ -25,8 +26,9 @@ namespace ckernel {
  */
 // clang-format on
 template <DataFormat data_format>
-ALWI void lerp_tile(uint32_t idst0, uint32_t idst1, uint32_t idst2, uint32_t odst) {
-    MATH((SFPU_TERNARY_CALL(
+ALWI void lerp_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t idst2, std::uint32_t odst) {
+    dest_order::touch_sfpu();
+    SFPU((SFPU_TERNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_lerp,
@@ -41,6 +43,6 @@ ALWI void lerp_tile(uint32_t idst0, uint32_t idst1, uint32_t idst2, uint32_t ods
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void lerp_tile_init() { MATH((SFPU_TERNARY_INIT(lerp))); }
+ALWI void lerp_tile_init() { SFPU((SFPU_TERNARY_INIT(lerp))); }
 
 }  // namespace ckernel

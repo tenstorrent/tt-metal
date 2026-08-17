@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_bitwise_not.h"
@@ -26,13 +27,14 @@ namespace ckernel {
  * | idst            | The index of the tile in DST register buffer to modify the computation of  | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void bitwise_not_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_bitwise_not, (APPROX), idst, VectorMode::RC));
+ALWI void bitwise_not_tile(std::uint32_t idst) {
+    dest_order::touch_sfpu();
+    SFPU(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_bitwise_not, (APPROX), idst, VectorMode::RC));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void bitwise_not_tile_init() { MATH(SFPU_UNARY_INIT(bitwise_not)); }
+ALWI void bitwise_not_tile_init() { SFPU(SFPU_UNARY_INIT(bitwise_not)); }
 
 }  // namespace ckernel

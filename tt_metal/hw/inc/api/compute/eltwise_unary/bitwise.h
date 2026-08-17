@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_bitwise.h"
@@ -28,8 +29,9 @@ namespace ckernel {
  */
 // clang-format on
 template <DataFormat data_format>
-ALWI void bitwise_and_tile(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_UNARY_CALL(
+ALWI void bitwise_and_tile(std::uint32_t idst, std::uint32_t param0) {
+    dest_order::touch_sfpu();
+    SFPU(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_sfpu_unary_bitwise,
@@ -55,8 +57,9 @@ ALWI void bitwise_and_tile(uint32_t idst, uint32_t param0) {
  */
 // clang-format on
 template <DataFormat data_format>
-ALWI void bitwise_or_tile(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_UNARY_CALL(
+ALWI void bitwise_or_tile(std::uint32_t idst, std::uint32_t param0) {
+    dest_order::touch_sfpu();
+    SFPU(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_sfpu_unary_bitwise,
@@ -82,8 +85,9 @@ ALWI void bitwise_or_tile(uint32_t idst, uint32_t param0) {
  */
 // clang-format on
 template <DataFormat data_format>
-ALWI void bitwise_xor_tile(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_UNARY_CALL(
+ALWI void bitwise_xor_tile(std::uint32_t idst, std::uint32_t param0) {
+    dest_order::touch_sfpu();
+    SFPU(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_sfpu_unary_bitwise,
@@ -96,16 +100,16 @@ ALWI void bitwise_xor_tile(uint32_t idst, uint32_t param0) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void bitwise_and_tile_init() { MATH(SFPU_UNARY_INIT(bitwise_and)); }
+ALWI void bitwise_and_tile_init() { SFPU(SFPU_UNARY_INIT(bitwise_and)); }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void bitwise_or_tile_init() { MATH(SFPU_UNARY_INIT(bitwise_or)); }
+ALWI void bitwise_or_tile_init() { SFPU(SFPU_UNARY_INIT(bitwise_or)); }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void bitwise_xor_tile_init() { MATH(SFPU_UNARY_INIT(bitwise_xor)); }
+ALWI void bitwise_xor_tile_init() { SFPU(SFPU_UNARY_INIT(bitwise_xor)); }
 
 }  // namespace ckernel

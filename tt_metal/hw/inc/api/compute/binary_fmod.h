@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_binary_fmod.h"
@@ -30,8 +31,9 @@ namespace ckernel {
  * | idst1          | The index of the tile in DST register buffer to use as second operand | uint32_t | Must be less than the size of the DST register buffer | True     |
  * | odst           | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     */
 // clang-format on
-ALWI void fmod_int32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((SFPU_BINARY_CALL(
+ALWI void fmod_int32_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
+    dest_order::touch_sfpu();
+    SFPU((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_fmod_int32,
@@ -45,7 +47,7 @@ ALWI void fmod_int32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 /**
  * Please refer to documentation for fmod_int32_tile.
  */
-ALWI void fmod_int32_tile_init() { MATH((SFPU_BINARY_INIT_FN(fmod_int32, sfpu::fmod_int32_init, (APPROX)))); }
+ALWI void fmod_int32_tile_init() { SFPU((SFPU_BINARY_INIT_FN(fmod_int32, sfpu::fmod_int32_init, (APPROX)))); }
 
 // BF16, FP32
 
@@ -65,8 +67,9 @@ ALWI void fmod_int32_tile_init() { MATH((SFPU_BINARY_INIT_FN(fmod_int32, sfpu::f
  * | idst1          | The index of the tile in DST register buffer to use as second operand | uint32_t | Must be less than the size of the DST register buffer | True     |
  * | odst           | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     */
 // clang-format on
-ALWI void fmod_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((SFPU_BINARY_CALL(
+ALWI void fmod_binary_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
+    dest_order::touch_sfpu();
+    SFPU((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_sfpu_binary_fmod,
@@ -80,6 +83,6 @@ ALWI void fmod_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 /**
  * Please refer to documentation for fmod_binary_tile.
  */
-ALWI void fmod_binary_tile_init() { MATH((SFPU_BINARY_INIT_FN(unused, sfpu::fmod_binary_init, (APPROX)))); }
+ALWI void fmod_binary_tile_init() { SFPU((SFPU_BINARY_INIT_FN(unused, sfpu::fmod_binary_init, (APPROX)))); }
 
 }  // namespace ckernel

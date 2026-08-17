@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_logical_not.h"
@@ -29,7 +30,8 @@ namespace ckernel {
  */
 // clang-format on
 template <DataFormat DATA_FORMAT>
-ALWI void logical_not_tile(uint32_t idst) {
+ALWI void logical_not_tile(std::uint32_t idst) {
+    dest_order::touch_sfpu();
     static_assert(
         DATA_FORMAT == DataFormat::Float32 || DATA_FORMAT == DataFormat::Float16_b ||
             DATA_FORMAT == DataFormat::Int32 || DATA_FORMAT == DataFormat::UInt32 ||
@@ -43,7 +45,7 @@ ALWI void logical_not_tile(uint32_t idst) {
         : (DATA_FORMAT == DataFormat::UInt16)                                     ? InstrModLoadStore::LO16
         : (DATA_FORMAT == DataFormat::Int32 || DATA_FORMAT == DataFormat::UInt32) ? InstrModLoadStore::INT32
                                                                                   : InstrModLoadStore::DEFAULT;
-    MATH(SFPU_UNARY_CALL(
+    SFPU(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_logical_not,
@@ -55,6 +57,6 @@ ALWI void logical_not_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void logical_not_tile_init() { MATH(SFPU_UNARY_INIT(logical_not_unary)); }
+ALWI void logical_not_tile_init() { SFPU(SFPU_UNARY_INIT(logical_not_unary)); }
 
 }  // namespace ckernel

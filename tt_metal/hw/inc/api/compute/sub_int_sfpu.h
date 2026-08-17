@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "sfpu/ckernel_sfpu_sub_int.h"
@@ -36,13 +37,14 @@ namespace ckernel {
  */
 // clang-format on
 template <DataFormat data_format>
-ALWI void sub_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+ALWI void sub_int_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
+    dest_order::touch_sfpu();
     static_assert(
         data_format == DataFormat::Int32 || data_format == DataFormat::UInt32 || data_format == DataFormat::UInt16,
         "Unsupported data format for sub_int. Supported data formats are: Int32, UInt32, UInt16");
     constexpr InstrModLoadStore INSTRUCTION_MODE =
         (data_format == DataFormat::UInt16) ? InstrModLoadStore::LO16 : InstrModLoadStore::INT32;
-    MATH((SFPU_BINARY_CALL(
+    SFPU((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         _sub_int_,
@@ -76,13 +78,14 @@ ALWI void sub_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
  */
 // clang-format on
 template <DataFormat data_format>
-ALWI void rsub_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+ALWI void rsub_int_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
+    dest_order::touch_sfpu();
     static_assert(
         data_format == DataFormat::Int32 || data_format == DataFormat::UInt32 || data_format == DataFormat::UInt16,
         "Unsupported data format for rsub_int. Supported data formats are: Int32, UInt32, UInt16");
     constexpr InstrModLoadStore INSTRUCTION_MODE =
         (data_format == DataFormat::UInt16) ? InstrModLoadStore::LO16 : InstrModLoadStore::INT32;
-    MATH((SFPU_BINARY_CALL(
+    SFPU((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_rsub_int,
@@ -95,8 +98,8 @@ ALWI void rsub_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void sub_int_tile_init() { MATH((SFPU_BINARY_INIT(unused))); }
+ALWI void sub_int_tile_init() { SFPU((SFPU_BINARY_INIT(unused))); }
 
-ALWI void rsub_int_tile_init() { MATH((SFPU_BINARY_INIT(unused))); }
+ALWI void rsub_int_tile_init() { SFPU((SFPU_BINARY_INIT(unused))); }
 
 }  // namespace ckernel

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_xielu.h"
@@ -28,8 +29,9 @@ namespace ckernel {
  * | alpha_n        | alpha negative parameter                                                    | uint32_t |                                                       | True     |
  */
 // clang-format on
-ALWI void xielu_tile(uint32_t idst, uint32_t alpha_p, uint32_t alpha_n) {
-    MATH(SFPU_UNARY_CALL(
+ALWI void xielu_tile(std::uint32_t idst, std::uint32_t alpha_p, std::uint32_t alpha_n) {
+    dest_order::touch_sfpu();
+    SFPU(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_xielu,
@@ -40,6 +42,6 @@ ALWI void xielu_tile(uint32_t idst, uint32_t alpha_p, uint32_t alpha_n) {
         alpha_n));
 }
 
-ALWI void xielu_tile_init() { MATH(SFPU_UNARY_INIT_FN(xielu, sfpu::xielu_init, (APPROX))); }
+ALWI void xielu_tile_init() { SFPU(SFPU_UNARY_INIT_FN(xielu, sfpu::xielu_init, (APPROX))); }
 
 }  // namespace ckernel

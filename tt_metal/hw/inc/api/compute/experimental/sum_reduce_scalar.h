@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/experimental/mul_reduce_scalar.h"
 #include "api/compute/tile_move_copy.h"
 
@@ -25,7 +26,7 @@ namespace ckernel {
  * Return value: None
  */
 // clang-format on
-ALWI void sum_reduce_scalar_init(uint32_t icb) { copy_tile_to_dst_init_short(icb); }
+ALWI void sum_reduce_scalar_init(std::uint32_t icb) { copy_tile_to_dst_init_short(icb); }
 
 // clang-format off
 /**
@@ -66,9 +67,10 @@ ALWI void sum_reduce_scalar_init(uint32_t icb) { copy_tile_to_dst_init_short(icb
  * Return value: None
  */
 // clang-format on
-ALWI void sum_reduce_scalar_tile(uint32_t icb, uint32_t ocb, uint32_t num_tiles, float scaler = 1.0f) {
+ALWI void sum_reduce_scalar_tile(std::uint32_t icb, std::uint32_t ocb, std::uint32_t num_tiles, float scaler = 1.0f) {
+    dest_order::touch_sfpu();
     // Step 1: Copy each input tile into its own DEST slot
-    for (uint32_t i = 0; i < num_tiles; i++) {
+    for (std::uint32_t i = 0; i < num_tiles; i++) {
         copy_tile(icb, i, i);
     }
 
@@ -82,7 +84,7 @@ ALWI void sum_reduce_scalar_tile(uint32_t icb, uint32_t ocb, uint32_t num_tiles,
     MATH((llk_math_mul_reduce_scalar_move_dest_to_src<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(0)));
 
     // Populate srcB with the scaler value
-    MATH(SFPU_UNARY_CALL(
+    SFPU(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         _calculate_fill_,
@@ -93,7 +95,7 @@ ALWI void sum_reduce_scalar_tile(uint32_t icb, uint32_t ocb, uint32_t num_tiles,
     MATH((llk_math_mul_reduce_scalar_move_dest_to_src<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(0)));
 
     // Clear dest[0] - this will accumulate scalar reduction results from all tiles
-    MATH(SFPU_UNARY_CALL(
+    SFPU(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         _calculate_fill_,
@@ -107,7 +109,7 @@ ALWI void sum_reduce_scalar_tile(uint32_t icb, uint32_t ocb, uint32_t num_tiles,
 
     // Step 6: Column-reduce each tile, accumulating into dest[0]
     MATH((llk_math_mul_reduce_column<MATH_FIDELITY>(0, icb)));
-    for (uint32_t i = 1; i < num_tiles; i++) {
+    for (std::uint32_t i = 1; i < num_tiles; i++) {
         MATH((llk_math_mul_reduce_scalar_move_dest_to_src<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(i)));
         MATH((llk_math_mul_reduce_column<MATH_FIDELITY>(0, icb)));
     }

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_reshuffle_rows.h"
@@ -28,14 +29,15 @@ namespace ckernel {
  * | idx_addr        | Address at which array of output row indices is stored                     | uint32_t |                                                       | True     |
  */
 // clang-format on
-ALWI void reshuffle_rows_tile(uint32_t idst, uint32_t idx_addr) {
-    MATH(SFPU_UNARY_CALL(
+ALWI void reshuffle_rows_tile(std::uint32_t idst, std::uint32_t idx_addr) {
+    dest_order::touch_sfpu();
+    SFPU(SFPU_UNARY_CALL(
         DST_SYNC_MODE, DST_ACCUM_MODE, calculate_reshuffle_rows, (APPROX), idst, VectorMode::RC_custom, idx_addr));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void reshuffle_rows_tile_init() { MATH(SFPU_UNARY_INIT(reshuffle_rows)); }
+ALWI void reshuffle_rows_tile_init() { SFPU(SFPU_UNARY_INIT(reshuffle_rows)); }
 
 }  // namespace ckernel

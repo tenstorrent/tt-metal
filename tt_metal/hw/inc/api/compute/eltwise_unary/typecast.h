@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_typecast.h"
@@ -66,8 +67,9 @@ inline constexpr bool _typecast_is_mx_format_(DataFormat fmt) {
  * | OUT_DTYPE      | Desired output data format                                                 | uint32_t | Must be valid tt::DataFormat                          | True     |
  */
 // clang-format on
-template <uint32_t IN_DTYPE, uint32_t OUT_DTYPE>
-ALWI void typecast_tile(uint32_t idst) {
+template <std::uint32_t IN_DTYPE, std::uint32_t OUT_DTYPE>
+ALWI void typecast_tile(std::uint32_t idst) {
+    dest_order::touch_sfpu();
     constexpr DataFormat in_format = static_cast<DataFormat>(IN_DTYPE);
     constexpr DataFormat out_format = static_cast<DataFormat>(OUT_DTYPE);
 
@@ -82,7 +84,7 @@ ALWI void typecast_tile(uint32_t idst) {
         detail::_typecast_is_mx_format_(out_format) ? DataFormat::Float16_b : out_format;
     if constexpr (effective_input_format != effective_output_format) {
         // Single unified Quasar typecast kernel, templated on the effective source/destination formats.
-        MATH(SFPU_UNARY_CALL(
+        SFPU(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_typecast,
@@ -92,7 +94,7 @@ ALWI void typecast_tile(uint32_t idst) {
     }
 #else
     if constexpr (in_format == DataFormat::Float16_b && out_format == DataFormat::UInt16) {
-        MATH(SFPU_UNARY_CALL(
+        SFPU(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_typecast_fp32_to_uint16,
@@ -100,7 +102,7 @@ ALWI void typecast_tile(uint32_t idst) {
             idst,
             VectorMode::RC));
     } else if constexpr (in_format == DataFormat::UInt16 && out_format == DataFormat::Float16_b) {
-        MATH(SFPU_UNARY_CALL(
+        SFPU(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_typecast_uint16_to_fp16b,
@@ -108,7 +110,7 @@ ALWI void typecast_tile(uint32_t idst) {
             idst,
             VectorMode::RC));
     } else if constexpr (in_format == DataFormat::Int32 && out_format == DataFormat::Float16_b) {
-        MATH(SFPU_UNARY_CALL(
+        SFPU(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_typecast_int32_to_fp16b,
@@ -116,7 +118,7 @@ ALWI void typecast_tile(uint32_t idst) {
             idst,
             VectorMode::RC));
     } else if constexpr (in_format == DataFormat::Float16_b && out_format == DataFormat::Int32) {
-        MATH(SFPU_UNARY_CALL(
+        SFPU(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_typecast_fp32_to_int32,
@@ -126,7 +128,7 @@ ALWI void typecast_tile(uint32_t idst) {
     } else if constexpr (in_format == DataFormat::Float16_b && out_format == DataFormat::Float32) {
         // no SFPU kernel needed, handled by packer
     } else if constexpr (in_format == DataFormat::Float32 && out_format == DataFormat::Float16_b) {
-        MATH(SFPU_UNARY_CALL(
+        SFPU(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_typecast_fp32_to_fp16b,
@@ -134,7 +136,7 @@ ALWI void typecast_tile(uint32_t idst) {
             idst,
             VectorMode::RC));
     } else if constexpr (in_format == DataFormat::Float32 && out_format == DataFormat::UInt16) {
-        MATH(SFPU_UNARY_CALL(
+        SFPU(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_typecast_fp32_to_uint16,
@@ -142,7 +144,7 @@ ALWI void typecast_tile(uint32_t idst) {
             idst,
             VectorMode::RC));
     } else if constexpr (in_format == DataFormat::UInt16 && out_format == DataFormat::Float32) {
-        MATH(SFPU_UNARY_CALL(
+        SFPU(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_typecast_uint16_to_fp32,
@@ -150,7 +152,7 @@ ALWI void typecast_tile(uint32_t idst) {
             idst,
             VectorMode::RC));
     } else if constexpr (in_format == DataFormat::Float32 && out_format == DataFormat::Int32) {
-        MATH(SFPU_UNARY_CALL(
+        SFPU(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_typecast_fp32_to_int32,
@@ -158,7 +160,7 @@ ALWI void typecast_tile(uint32_t idst) {
             idst,
             VectorMode::RC));
     } else if constexpr (in_format == DataFormat::Int32 && out_format == DataFormat::Float32) {
-        MATH(SFPU_UNARY_CALL(
+        SFPU(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_typecast_int32_to_fp32,
@@ -166,7 +168,7 @@ ALWI void typecast_tile(uint32_t idst) {
             idst,
             VectorMode::RC));
     } else if constexpr (in_format == DataFormat::Bfp8_b && out_format == DataFormat::UInt16) {
-        MATH(SFPU_UNARY_CALL(
+        SFPU(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_typecast_fp32_to_uint16,
@@ -174,7 +176,7 @@ ALWI void typecast_tile(uint32_t idst) {
             idst,
             VectorMode::RC));
     } else if constexpr (in_format == DataFormat::UInt16 && out_format == DataFormat::Bfp8_b) {
-        MATH(SFPU_UNARY_CALL(
+        SFPU(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_typecast_uint16_to_fp16b,
@@ -182,7 +184,7 @@ ALWI void typecast_tile(uint32_t idst) {
             idst,
             VectorMode::RC));
     } else if constexpr (in_format == DataFormat::Bfp8_b && out_format == DataFormat::Int32) {
-        MATH(SFPU_UNARY_CALL(
+        SFPU(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_typecast_fp32_to_int32,
@@ -190,7 +192,7 @@ ALWI void typecast_tile(uint32_t idst) {
             idst,
             VectorMode::RC));
     } else if constexpr (in_format == DataFormat::Int32 && out_format == DataFormat::Bfp8_b) {
-        MATH(SFPU_UNARY_CALL(
+        SFPU(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_typecast_int32_to_fp16b,
@@ -198,7 +200,7 @@ ALWI void typecast_tile(uint32_t idst) {
             idst,
             VectorMode::RC));
     } else if constexpr (in_format == DataFormat::Float16_b && out_format == DataFormat::UInt32) {
-        MATH(SFPU_UNARY_CALL(
+        SFPU(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_typecast_fp32_to_uint32,
@@ -206,7 +208,7 @@ ALWI void typecast_tile(uint32_t idst) {
             idst,
             VectorMode::RC));
     } else if constexpr (in_format == DataFormat::UInt32 && out_format == DataFormat::Float16_b) {
-        MATH(SFPU_UNARY_CALL(
+        SFPU(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_typecast_uint32_to_fp16b,
@@ -214,7 +216,7 @@ ALWI void typecast_tile(uint32_t idst) {
             idst,
             VectorMode::RC));
     } else if constexpr (in_format == DataFormat::Float32 && out_format == DataFormat::UInt32) {
-        MATH(SFPU_UNARY_CALL(
+        SFPU(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_typecast_fp32_to_uint32,
@@ -222,7 +224,7 @@ ALWI void typecast_tile(uint32_t idst) {
             idst,
             VectorMode::RC));
     } else if constexpr (in_format == DataFormat::UInt32 && out_format == DataFormat::Float32) {
-        MATH(SFPU_UNARY_CALL(
+        SFPU(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_typecast_uint32_to_fp32,
@@ -230,7 +232,7 @@ ALWI void typecast_tile(uint32_t idst) {
             idst,
             VectorMode::RC));
     } else if constexpr (in_format == DataFormat::Bfp8_b && out_format == DataFormat::UInt32) {
-        MATH(SFPU_UNARY_CALL(
+        SFPU(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_typecast_fp32_to_uint32,
@@ -238,7 +240,7 @@ ALWI void typecast_tile(uint32_t idst) {
             idst,
             VectorMode::RC));
     } else if constexpr (in_format == DataFormat::UInt32 && out_format == DataFormat::Bfp8_b) {
-        MATH(SFPU_UNARY_CALL(
+        SFPU(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_typecast_uint32_to_fp16b,
@@ -246,7 +248,7 @@ ALWI void typecast_tile(uint32_t idst) {
             idst,
             VectorMode::RC));
     } else if constexpr (in_format == DataFormat::UInt16 && out_format == DataFormat::UInt32) {
-        MATH(SFPU_UNARY_CALL(
+        SFPU(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_typecast_uint16_to_uint32,
@@ -255,7 +257,7 @@ ALWI void typecast_tile(uint32_t idst) {
             VectorMode::RC));
     } else if constexpr (in_format == DataFormat::UInt16 && out_format == DataFormat::Int32) {
         // Calls same kernel as UInt32 case
-        MATH(SFPU_UNARY_CALL(
+        SFPU(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_typecast_uint16_to_uint32,
@@ -263,7 +265,7 @@ ALWI void typecast_tile(uint32_t idst) {
             idst,
             VectorMode::RC));
     } else if constexpr (in_format == DataFormat::UInt32 && out_format == DataFormat::UInt16) {
-        MATH(SFPU_UNARY_CALL(
+        SFPU(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_typecast_uint32_to_uint16,
@@ -271,7 +273,7 @@ ALWI void typecast_tile(uint32_t idst) {
             idst,
             VectorMode::RC));
     } else if constexpr (in_format == DataFormat::Int32 && out_format == DataFormat::UInt16) {
-        MATH(SFPU_UNARY_CALL(
+        SFPU(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_typecast_int32_to_uint16,
@@ -287,7 +289,7 @@ ALWI void typecast_tile(uint32_t idst) {
     } else if constexpr (in_format == DataFormat::Float32 && out_format == DataFormat::Bfp8_b) {
         // no SFPU kernel needed, handled by packer
     } else if constexpr (in_format == DataFormat::Bfp4_b && out_format == DataFormat::UInt16) {
-        MATH(SFPU_UNARY_CALL(
+        SFPU(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_typecast_fp32_to_uint16,
@@ -295,7 +297,7 @@ ALWI void typecast_tile(uint32_t idst) {
             idst,
             VectorMode::RC));
     } else if constexpr (in_format == DataFormat::UInt16 && out_format == DataFormat::Bfp4_b) {
-        MATH(SFPU_UNARY_CALL(
+        SFPU(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_typecast_uint16_to_fp16b,
@@ -303,7 +305,7 @@ ALWI void typecast_tile(uint32_t idst) {
             idst,
             VectorMode::RC));
     } else if constexpr (in_format == DataFormat::Bfp4_b && out_format == DataFormat::Int32) {
-        MATH(SFPU_UNARY_CALL(
+        SFPU(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_typecast_fp32_to_int32,
@@ -311,7 +313,7 @@ ALWI void typecast_tile(uint32_t idst) {
             idst,
             VectorMode::RC));
     } else if constexpr (in_format == DataFormat::Int32 && out_format == DataFormat::Bfp4_b) {
-        MATH(SFPU_UNARY_CALL(
+        SFPU(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_typecast_int32_to_fp16b,
@@ -319,7 +321,7 @@ ALWI void typecast_tile(uint32_t idst) {
             idst,
             VectorMode::RC));
     } else if constexpr (in_format == DataFormat::Bfp4_b && out_format == DataFormat::UInt32) {
-        MATH(SFPU_UNARY_CALL(
+        SFPU(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_typecast_fp32_to_uint32,
@@ -327,7 +329,7 @@ ALWI void typecast_tile(uint32_t idst) {
             idst,
             VectorMode::RC));
     } else if constexpr (in_format == DataFormat::UInt32 && out_format == DataFormat::Bfp4_b) {
-        MATH(SFPU_UNARY_CALL(
+        SFPU(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_typecast_uint32_to_fp16b,
@@ -350,7 +352,7 @@ ALWI void typecast_tile(uint32_t idst) {
         (in_format == DataFormat::Float32 || in_format == DataFormat::Float16_b || in_format == DataFormat::Bfp8_b ||
          in_format == DataFormat::Bfp4_b) &&
         out_format == DataFormat::UInt8) {
-        MATH(SFPU_UNARY_CALL(
+        SFPU(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_typecast_fp32_to_uint8,
@@ -360,7 +362,7 @@ ALWI void typecast_tile(uint32_t idst) {
     } else if constexpr (
         (in_format == DataFormat::Int32 || in_format == DataFormat::UInt32 || in_format == DataFormat::UInt16) &&
         out_format == DataFormat::UInt8) {
-        MATH(SFPU_UNARY_CALL(
+        SFPU(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_typecast_uint_to_uint8,
@@ -368,7 +370,7 @@ ALWI void typecast_tile(uint32_t idst) {
             idst,
             VectorMode::RC));
     } else if constexpr (in_format == DataFormat::UInt8 && out_format == DataFormat::Float32) {
-        MATH(SFPU_UNARY_CALL(
+        SFPU(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_typecast_uint32_to_fp32,
@@ -378,7 +380,7 @@ ALWI void typecast_tile(uint32_t idst) {
     } else if constexpr (
         in_format == DataFormat::UInt8 &&
         (out_format == DataFormat::Float16_b || out_format == DataFormat::Bfp8_b || out_format == DataFormat::Bfp4_b)) {
-        MATH(SFPU_UNARY_CALL(
+        SFPU(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_typecast_uint32_to_fp16b,
@@ -389,7 +391,7 @@ ALWI void typecast_tile(uint32_t idst) {
         in_format == DataFormat::UInt8 && (out_format == DataFormat::Int32 || out_format == DataFormat::UInt32)) {
         // No SFPU kernel needed.
     } else if constexpr (in_format == DataFormat::UInt8 && out_format == DataFormat::UInt16) {
-        MATH(SFPU_UNARY_CALL(
+        SFPU(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_typecast_uint32_to_uint16,
@@ -403,7 +405,7 @@ ALWI void typecast_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
-template <uint32_t IN_DTYPE, uint32_t OUT_DTYPE>
+template <std::uint32_t IN_DTYPE, std::uint32_t OUT_DTYPE>
 ALWI void typecast_tile_init() {
     constexpr DataFormat in_format = static_cast<DataFormat>(IN_DTYPE);
     constexpr DataFormat out_format = static_cast<DataFormat>(OUT_DTYPE);
@@ -416,60 +418,60 @@ ALWI void typecast_tile_init() {
     constexpr DataFormat effective_output_format =
         detail::_typecast_is_mx_format_(out_format) ? DataFormat::Float16_b : out_format;
     if constexpr (effective_input_format != effective_output_format) {
-        MATH(SFPU_UNARY_INIT(typecast, sfpu::init_typecast));
+        SFPU(SFPU_UNARY_INIT(typecast, sfpu::init_typecast));
     }
 #else
     if constexpr (in_format == DataFormat::Float32 && out_format == DataFormat::Float16_b) {
-        MATH(SFPU_UNARY_INIT_FN(typecast, sfpu::init_typecast_fp32_to_fp16b, (APPROX)));
+        SFPU(SFPU_UNARY_INIT_FN(typecast, sfpu::init_typecast_fp32_to_fp16b, (APPROX)));
     } else if constexpr (
         in_format == DataFormat::UInt16 && (out_format == DataFormat::UInt32 || out_format == DataFormat::Int32)) {
-        MATH(SFPU_UNARY_INIT_FN(typecast, sfpu::init_typecast_uint16_to_uint32, (APPROX)));
+        SFPU(SFPU_UNARY_INIT_FN(typecast, sfpu::init_typecast_uint16_to_uint32, (APPROX)));
     } else if constexpr (in_format == DataFormat::UInt32 && out_format == DataFormat::UInt16) {
-        MATH(SFPU_UNARY_INIT_FN(typecast, sfpu::init_typecast_uint32_to_uint16, (APPROX)));
+        SFPU(SFPU_UNARY_INIT_FN(typecast, sfpu::init_typecast_uint32_to_uint16, (APPROX)));
     } else if constexpr (in_format == DataFormat::Int32 && out_format == DataFormat::UInt16) {
-        MATH(SFPU_UNARY_INIT_FN(typecast, sfpu::init_typecast_int32_to_uint16, (APPROX)));
+        SFPU(SFPU_UNARY_INIT_FN(typecast, sfpu::init_typecast_int32_to_uint16, (APPROX)));
     } else if constexpr (in_format == DataFormat::UInt32 && out_format == DataFormat::Float32) {
-        MATH(SFPU_UNARY_INIT_FN(typecast, sfpu::init_typecast_uint32_to_fp32, (APPROX)));
+        SFPU(SFPU_UNARY_INIT_FN(typecast, sfpu::init_typecast_uint32_to_fp32, (APPROX)));
     } else if constexpr (in_format == DataFormat::Int32 && out_format == DataFormat::Float32) {
-        MATH(SFPU_UNARY_INIT_FN(typecast, sfpu::init_typecast_int32_to_fp32, (APPROX)));
+        SFPU(SFPU_UNARY_INIT_FN(typecast, sfpu::init_typecast_int32_to_fp32, (APPROX)));
     } else if constexpr (in_format == DataFormat::UInt16 && out_format == DataFormat::Float32) {
-        MATH(SFPU_UNARY_INIT_FN(typecast, sfpu::init_typecast_uint16_to_fp32, (APPROX)));
+        SFPU(SFPU_UNARY_INIT_FN(typecast, sfpu::init_typecast_uint16_to_fp32, (APPROX)));
     } else if constexpr (
         in_format == DataFormat::UInt16 &&
         (out_format == DataFormat::Float16_b || out_format == DataFormat::Bfp8_b || out_format == DataFormat::Bfp4_b)) {
-        MATH(SFPU_UNARY_INIT_FN(typecast, sfpu::init_typecast_uint16_to_fp16b, (APPROX)));
+        SFPU(SFPU_UNARY_INIT_FN(typecast, sfpu::init_typecast_uint16_to_fp16b, (APPROX)));
     } else if constexpr (
         in_format == DataFormat::Int32 &&
         (out_format == DataFormat::Float16_b || out_format == DataFormat::Bfp8_b || out_format == DataFormat::Bfp4_b)) {
-        MATH(SFPU_UNARY_INIT_FN(typecast, sfpu::init_typecast_int32_to_fp16b, (APPROX)));
+        SFPU(SFPU_UNARY_INIT_FN(typecast, sfpu::init_typecast_int32_to_fp16b, (APPROX)));
     } else if constexpr (
         in_format == DataFormat::UInt32 &&
         (out_format == DataFormat::Float16_b || out_format == DataFormat::Bfp8_b || out_format == DataFormat::Bfp4_b)) {
-        MATH(SFPU_UNARY_INIT_FN(typecast, sfpu::init_typecast_uint32_to_fp16b, (APPROX)));
+        SFPU(SFPU_UNARY_INIT_FN(typecast, sfpu::init_typecast_uint32_to_fp16b, (APPROX)));
     } else if constexpr (
         (in_format == DataFormat::Float32 || in_format == DataFormat::Float16_b || in_format == DataFormat::Bfp8_b ||
          in_format == DataFormat::Bfp4_b) &&
         out_format == DataFormat::UInt16) {
-        MATH(SFPU_UNARY_INIT_FN(typecast, sfpu::init_typecast_fp32_to_uint16, (APPROX)));
+        SFPU(SFPU_UNARY_INIT_FN(typecast, sfpu::init_typecast_fp32_to_uint16, (APPROX)));
     } else if constexpr (
         (in_format == DataFormat::Float32 || in_format == DataFormat::Float16_b || in_format == DataFormat::Bfp8_b ||
          in_format == DataFormat::Bfp4_b) &&
         out_format == DataFormat::UInt8) {
-        MATH(SFPU_UNARY_INIT_FN(typecast, sfpu::init_typecast_fp32_to_uint8, (APPROX)));
+        SFPU(SFPU_UNARY_INIT_FN(typecast, sfpu::init_typecast_fp32_to_uint8, (APPROX)));
     } else if constexpr (
         (in_format == DataFormat::Int32 || in_format == DataFormat::UInt32 || in_format == DataFormat::UInt16) &&
         out_format == DataFormat::UInt8) {
-        MATH(SFPU_UNARY_INIT_FN(typecast, sfpu::init_typecast_uint_to_uint8, (APPROX)));
+        SFPU(SFPU_UNARY_INIT_FN(typecast, sfpu::init_typecast_uint_to_uint8, (APPROX)));
     } else if constexpr (in_format == DataFormat::UInt8 && out_format == DataFormat::Float32) {
-        MATH(SFPU_UNARY_INIT_FN(typecast, sfpu::init_typecast_uint32_to_fp32, (APPROX)));
+        SFPU(SFPU_UNARY_INIT_FN(typecast, sfpu::init_typecast_uint32_to_fp32, (APPROX)));
     } else if constexpr (
         in_format == DataFormat::UInt8 &&
         (out_format == DataFormat::Float16_b || out_format == DataFormat::Bfp8_b || out_format == DataFormat::Bfp4_b)) {
-        MATH(SFPU_UNARY_INIT_FN(typecast, sfpu::init_typecast_uint32_to_fp16b, (APPROX)));
+        SFPU(SFPU_UNARY_INIT_FN(typecast, sfpu::init_typecast_uint32_to_fp16b, (APPROX)));
     } else if constexpr (in_format == DataFormat::UInt8 && out_format == DataFormat::UInt16) {
-        MATH(SFPU_UNARY_INIT_FN(typecast, sfpu::init_typecast_uint32_to_uint16, (APPROX)));
+        SFPU(SFPU_UNARY_INIT_FN(typecast, sfpu::init_typecast_uint32_to_uint16, (APPROX)));
     } else {
-        MATH(SFPU_UNARY_INIT(typecast));
+        SFPU(SFPU_UNARY_INIT(typecast));
     }
 #endif  // ARCH_QUASAR
 }

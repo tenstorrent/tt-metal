@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #include "llk_math_eltwise_unary_sfpu_macros.h"
 #ifdef TRISC_MATH
@@ -12,8 +13,9 @@
 
 namespace ckernel {
 
-ALWI void tanhshrink_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(
+ALWI void tanhshrink_tile(std::uint32_t idst) {
+    dest_order::touch_sfpu();
+    SFPU(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_tanhshrink,
@@ -22,6 +24,6 @@ ALWI void tanhshrink_tile(uint32_t idst) {
         VectorMode::RC));
 }
 
-ALWI void tanhshrink_tile_init() { MATH(SFPU_UNARY_INIT_FN(unused, sfpu::tanhshrink_init, (APPROX, DST_ACCUM_MODE))); }
+ALWI void tanhshrink_tile_init() { SFPU(SFPU_UNARY_INIT_FN(unused, sfpu::tanhshrink_init, (APPROX, DST_ACCUM_MODE))); }
 
 }  // namespace ckernel

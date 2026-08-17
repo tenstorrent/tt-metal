@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_lgamma.h"
@@ -29,8 +30,9 @@ namespace ckernel {
  */
 
 // clang-format on
-ALWI void lgamma_stirling_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(
+ALWI void lgamma_stirling_tile(std::uint32_t idst) {
+    dest_order::touch_sfpu();
+    SFPU(SFPU_UNARY_CALL(
         DST_SYNC_MODE, DST_ACCUM_MODE, calculate_lgamma_stirling, (APPROX, DST_ACCUM_MODE), idst, VectorMode::RC));
 }
 
@@ -38,7 +40,7 @@ ALWI void lgamma_stirling_tile(uint32_t idst) {
  * Please refer to documentation for any_init.
  */
 ALWI void lgamma_stirling_tile_init() {
-    MATH(SFPU_UNARY_INIT_FN(lgamma, sfpu::lgamma_stirling_init, (APPROX, DST_ACCUM_MODE)));
+    SFPU(SFPU_UNARY_INIT_FN(lgamma, sfpu::lgamma_stirling_init, (APPROX, DST_ACCUM_MODE)));
 }
 
 // clang-format off
@@ -62,8 +64,9 @@ ALWI void lgamma_stirling_tile_init() {
  */
 
 // clang-format on
-ALWI void lgamma_stirling_float_tile(uint32_t idst0, uint32_t idst1, uint32_t idst2) {
-    MATH(SFPU_BINARY_CALL(
+ALWI void lgamma_stirling_float_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t idst2) {
+    dest_order::touch_sfpu();
+    SFPU(SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_lgamma_stirling_fp32,
@@ -78,7 +81,7 @@ ALWI void lgamma_stirling_float_tile(uint32_t idst0, uint32_t idst1, uint32_t id
  * Please refer to documentation for any_init.
  */
 ALWI void lgamma_stirling_float_tile_init() {
-    MATH(SFPU_BINARY_INIT_FN(lgamma, sfpu::lgamma_stirling_init, (APPROX, DST_ACCUM_MODE)));
+    SFPU(SFPU_BINARY_INIT_FN(lgamma, sfpu::lgamma_stirling_init, (APPROX, DST_ACCUM_MODE)));
 }
 
 // clang-format off
@@ -103,8 +106,9 @@ ALWI void lgamma_stirling_float_tile_init() {
  */
 
 // clang-format on
-ALWI void lgamma_adjusted_tile(uint32_t idst0, uint32_t idst1, uint32_t idst2, uint32_t idst3) {
-    MATH(SFPU_TERNARY_CALL(
+ALWI void lgamma_adjusted_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t idst2, std::uint32_t idst3) {
+    dest_order::touch_sfpu();
+    SFPU(SFPU_TERNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_lgamma_adjusted,
@@ -119,6 +123,6 @@ ALWI void lgamma_adjusted_tile(uint32_t idst0, uint32_t idst1, uint32_t idst2, u
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void lgamma_adjusted_tile_init() { MATH(SFPU_TERNARY_INIT(lgamma)); }
+ALWI void lgamma_adjusted_tile_init() { SFPU(SFPU_TERNARY_INIT(lgamma)); }
 
 }  // namespace ckernel

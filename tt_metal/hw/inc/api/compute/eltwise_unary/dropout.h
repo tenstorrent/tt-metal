@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_dropout.h"
@@ -28,16 +29,17 @@ namespace ckernel {
  * | scale_factor    | uint bitwise representation of 32 bit floating point scale factor          | uint32_t |                                                       | True     |
  */
 // clang-format on
-ALWI void dropout_tile(uint32_t idst, uint32_t probability, uint32_t scale_factor) {
-    MATH(SFPU_UNARY_CALL(
+ALWI void dropout_tile(std::uint32_t idst, std::uint32_t probability, std::uint32_t scale_factor) {
+    dest_order::touch_sfpu();
+    SFPU(SFPU_UNARY_CALL(
         DST_SYNC_MODE, DST_ACCUM_MODE, calculate_dropout, (APPROX), idst, VectorMode::RC, probability, scale_factor));
 }
 
 /**
  * This init should be called once in kernel
  */
-ALWI void dropout_kernel_init(uint32_t seed = 0) {
-    MATH(SFPU_UNARY_INIT_FN_ARGS(dropout, sfpu::dropout_init, (APPROX), seed));
+ALWI void dropout_kernel_init(std::uint32_t seed = 0) {
+    SFPU(SFPU_UNARY_INIT_FN_ARGS(dropout, sfpu::dropout_init, (APPROX), seed));
 }
 
 }  // namespace ckernel

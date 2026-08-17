@@ -45,6 +45,8 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/compute_kernel_hw_startup.h
     inc/api/compute/copy_dest_values.h
     inc/api/compute/cumsum.h
+    inc/api/compute/dest_order_api.h
+    inc/api/compute/dest_sync.h
     inc/api/compute/div_int32_floor.h
     inc/api/compute/div_int32_sfpu.h
     inc/api/compute/eltwise_binary.h

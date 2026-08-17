@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #if defined(TRISC_MATH) || defined(TRISC_PACK)
 #include "ckernel_sfpu_exp.h"
@@ -18,7 +19,7 @@ namespace ckernel {
  * None: No input clamping. Faster, but inputs below ~-88.5 will produce incorrect outputs. They
  *     will be guaranteed to be negative, so consider enabling packer ReLU when using this mode.
  */
-enum class InputClamping : uint8_t {
+enum class InputClamping : std::uint8_t {
     ClampToNegative = 1,
     None = 0,
 };
@@ -32,10 +33,10 @@ enum class InputClamping : uint8_t {
  */
 template <
     bool approx = false,
-    uint32_t scale = 0x3F800000,
+    std::uint32_t scale = 0x3F800000,
     InputClamping input_clamping = InputClamping::ClampToNegative>
 ALWI void exp_tile_init() {
-    MATH(SFPU_UNARY_INIT_FN(
+    SFPU(SFPU_UNARY_INIT_FN(
         exponential,
         sfpu::exp_init,
         (approx, scale, (input_clamping == InputClamping::ClampToNegative), DST_ACCUM_MODE)));
@@ -69,8 +70,10 @@ template <
     bool scale_en = false,
     InputClamping input_clamping = InputClamping::ClampToNegative,
     int iterations = 8>
-ALWI void exp_tile(uint32_t idst, VectorMode vector_mode = VectorMode::RC, uint16_t scale = p_sfpu::kCONST_1_FP16B) {
-    MATH(SFPU_UNARY_CALL(
+ALWI void exp_tile(
+    std::uint32_t idst, VectorMode vector_mode = VectorMode::RC, std::uint16_t scale = p_sfpu::kCONST_1_FP16B) {
+    dest_order::touch_sfpu();
+    SFPU(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_exponential,
@@ -88,7 +91,7 @@ ALWI void exp_tile(uint32_t idst, VectorMode vector_mode = VectorMode::RC, uint1
  */
 template <
     bool approx = false,
-    uint32_t scale = 0x3F800000,
+    std::uint32_t scale = 0x3F800000,
     InputClamping input_clamping = InputClamping::ClampToNegative>
 ALWI void exp_packthread_tile_init() {
     PACK(llk_math_eltwise_unary_sfpu_init<SfpuType::exponential>(
@@ -105,7 +108,7 @@ template <
     InputClamping input_clamping = InputClamping::ClampToNegative,
     int iterations = 8>
 ALWI void exp_packthread_tile(
-    uint32_t idst, VectorMode vector_mode = VectorMode::RC, uint16_t scale = p_sfpu::kCONST_1_FP16B) {
+    std::uint32_t idst, VectorMode vector_mode = VectorMode::RC, std::uint16_t scale = p_sfpu::kCONST_1_FP16B) {
     PACK(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,

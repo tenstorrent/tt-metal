@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #if defined(TRISC_MATH) || defined(TRISC_PACK)
 #include "ckernel_sfpu_hardtanh.h"
@@ -28,8 +29,9 @@ namespace ckernel {
 
  */
 // clang-format on
-ALWI void hardtanh_tile(uint32_t idst, uint32_t param0, uint32_t param1) {
-    MATH(SFPU_UNARY_CALL(
+ALWI void hardtanh_tile(std::uint32_t idst, std::uint32_t param0, std::uint32_t param1) {
+    dest_order::touch_sfpu();
+    SFPU(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_hardtanh,
@@ -40,7 +42,7 @@ ALWI void hardtanh_tile(uint32_t idst, uint32_t param0, uint32_t param1) {
         param1));
 }
 
-ALWI void hardtanh_tile_pack(uint32_t idst, uint32_t param0, uint32_t param1) {
+ALWI void hardtanh_tile_pack(std::uint32_t idst, std::uint32_t param0, std::uint32_t param1) {
     PACK(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -55,7 +57,7 @@ ALWI void hardtanh_tile_pack(uint32_t idst, uint32_t param0, uint32_t param1) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void hardtanh_tile_init() { MATH(SFPU_UNARY_INIT(hardtanh)); }
+ALWI void hardtanh_tile_init() { SFPU(SFPU_UNARY_INIT(hardtanh)); }
 
 ALWI void hardtanh_tile_init_pack() { PACK(SFPU_UNARY_INIT(hardtanh)); }
 
