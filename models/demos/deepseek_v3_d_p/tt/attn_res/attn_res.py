@@ -601,6 +601,10 @@ class TtAttnRes(LightweightModule):
             self._exchange_semaphore(),
             site=site,
             cluster_axis=self.tp_axis,
+            # Omitting this leaves the op on the process-wide fabric topology, which the
+            # sealed half's all_reduce does not use: one read would route its two halves
+            # by different rules wherever the two disagree.
+            topology=self.topology[self.tp_axis],
             inv_hidden_size=1.0 / self.hidden_size,
             eps=self.eps,
             pending=pending,
