@@ -940,11 +940,16 @@ def neighborhood_attention_3d_op_sp_w_sharded(
 
         tk, tv = wrow(tk), wrow(tv)
         grid_dev = mesh.compute_with_storage_grid_size()
+        # Larger q_chunk = fewer chunks = the per-chunk fixed overhead (mask-gen + reader/compute setup)
+        # amortizes over more queries. The box grows with q_chunk (its k-tiles are streamed, so L1 is
+        # fine), so this trades a slightly larger box for far fewer chunks. Measured on the 1080p stage-5
+        # grid: 32 -> 5559ms is the min at 128 (64: 6342, 256: 5994 regresses); PCC unchanged (0.9992).
+        # Default 128; DIFFVAE_SDPA_QCHUNK/KCHUNK override for other grids.
         prog_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=(grid_dev.x, grid_dev.y),
             exp_approx_mode=False,
-            q_chunk_size=32,
-            k_chunk_size=32,
+            q_chunk_size=int(os.environ.get("DIFFVAE_SDPA_QCHUNK", 128)),
+            k_chunk_size=int(os.environ.get("DIFFVAE_SDPA_KCHUNK", 32)),
         )
 
     with _sp_w_prof(mesh, "fused-sdpa" if use_fused else "op-sdpa"):
