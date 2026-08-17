@@ -9,3 +9,11 @@ profile_log_device.csv.gz
 
 # Converted-weight cache (also covered by the repo-root *.tensorbin rule)
 weight_cache/
+
+# Raw candidate dumps and advisor pipeline logs: nothing reads them and they are
+# tens of MiB each. The derived tables (report.json/report.txt, ops CSVs,
+# perf_report*, reconciliation JSON) are the evidence and are kept.
+# These were purged from history once after a git add -A re-introduced them;
+# a one-time exclusion is not durable, an ignore rule is.
+**/artifacts/candidates/stack_*_b32.json
+**/shard_advise/*/pipeline.log
