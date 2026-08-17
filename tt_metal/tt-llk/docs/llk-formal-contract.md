@@ -118,7 +118,7 @@ x̂ⱼ ≜ ⟨ σⱼ , xⱼ , y'ⱼ ⟩
 | `xⱼ` | `G::Struct state` | the operation's own fields (§2.6) |
 | `y'ⱼ` | `Operand<i>::Struct snap` | operand snapshot = `maskⱼ(yᵢ)` |
 
-Your `x̂ⱼ = xⱼ × y'ⱼ` leaves out `σⱼ`. Use `x̂ⱼ = σⱼ × xⱼ × y'ⱼ` (a record — all three present).
+If we ignore the `status` for simplicity, we have `x̂ⱼ = xⱼ × y'ⱼ`.
 
 **Mask.** `maskⱼ` is the `known` bits of `snap`. `init` snapshots only the operand fields the
 hook restated; the rest stay `⊥`. So `y'ⱼ` is a partial view of `yᵢ`: the fields operation `j`
