@@ -7,7 +7,7 @@
 Model-agnostic: the model is selected by PREFILL_MODEL and driven through a PrefillModelAdapter
 (see ../adapter.py and ADDING_A_PREFILL_MODEL.md). This driver wires rank topology, input,
 transport, and the per-chunk schedule; the adapter supplies how to build the model, allocate the KV
-cache, run a chunk, and migrate it.
+cache, run a chunk, and describe the cache's layout as a KV-chunk address table.
 
 The model is split across N ranks under tt-run: each rank owns a contiguous layer slice and builds
 the same TtPrefillRuntime (first_layer_idx / is_first_rank / is_last_rank). With >1 rank the cross-rank

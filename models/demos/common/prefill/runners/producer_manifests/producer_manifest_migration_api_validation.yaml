@@ -1,8 +1,8 @@
-# Producer manifest: Python migration API, transport only.
+# Producer manifest: Python migration API.
 #
 # `issue: true` attaches a MigrationLayerClient and calls migrate() + wait_complete() per resident slot,
-# then writes the DONE sentinel. Nothing reads the destination slots back — the signal is that every
-# migrate() completed. Uniform mapping here (dst = src + 2); set `pairs:` instead for an arbitrary mapping.
+# then writes the DONE sentinel. Uniform mapping here (dst = src + 2); set `pairs:` instead for an
+# arbitrary mapping.
 #
 # Requires (a) a running migration_endpoint (prefill_endpoint_id 1) and (b) a single-rank REQUEST-mode
 # runner with migration enabled. Start from
@@ -11,10 +11,12 @@
 #   PREFILL_ENABLE_MIGRATION: "1"     # publish the KV table + reach WORKER_READY
 #   PREFILL_MIGRATION_CMD_QUEUE / _TABLE_QUEUE / _RESP_QUEUE / _TABLE_PATH / _CLIENT_DIR  # match below
 #   PREFILL_MANIFEST + PREFILL_NUM_LAYERS                                    # your model
-# Run:
-#   python -m models.demos.common.prefill.runners.prefill_producer \
+# Run it with migration_driver, NOT prefill_producer — the latter ignores `migration:` entirely, so the
+# scenario this file describes would never be exercised:
+#   python -m models.demos.common.prefill.runners.migration_driver \
 #     --manifest models/demos/common/prefill/runners/producer_manifests/producer_manifest_migration_api_validation.yaml
-# Expect in the producer log: MIGRATE slot ... complete per pair, then the DONE sentinel.
+# Every verdict is logged there — the runner validates nothing. Sources come from check_pcc below,
+# destinations from --verify-migration (default dst-bytes).
 #
 # MODEL-AGNOSTIC: this file describes the migration SCENARIO only, so it works with any prefill model.
 # The model + wire layout are deliberately NOT set here; they must match the runner you launched. Supply
@@ -35,7 +37,7 @@ workload:
   chunks: "11"
   max_requests: 2
   interleave: round_robin
-  check_pcc: true         # source-KV read-back — the only accuracy signal; the dst slots are never read
+  check_pcc: true         # SOURCE-slot golden PCC; --verify-migration covers the destinations
 
 migration:
   issue: true             # <-- the Python Migration API: MigrationLayerClient.migrate()/wait_complete()

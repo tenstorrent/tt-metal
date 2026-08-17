@@ -11,7 +11,7 @@ Assumes the model is already integrated — adapter registered, golden trace sta
 | Gate | What it exercises | Needs |
 |------|-------------------|-------|
 | **1 — mock migration** | Prefill writes correct KV (precondition for everything) and the KV-chunk address table is correct, read device-lessly | tt-metal tree only |
-| **2 — loopback migration** | The real DRAM → transport → DRAM copy completes (transport only — no destination read-back) | + tt-llm-engine binaries |
+| **2 — loopback migration** | The real DRAM → transport → DRAM copy, and the destination slots read back by the driver (`--verify-migration`, default `dst-bytes`) | + tt-llm-engine binaries |
 
 Gate 2 covers the same ground as the harness's own prefill-loopback stage. The difference is only that the
 harness drives it end to end instead of three terminals.
