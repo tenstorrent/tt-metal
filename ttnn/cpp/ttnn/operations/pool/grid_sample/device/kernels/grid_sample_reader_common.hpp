@@ -27,6 +27,26 @@ ALWI bool is_coordinate_valid(int32_t coord, uint32_t max_size) {
     return (coord >= 0) && (coord < static_cast<int32_t>(max_size));
 }
 
+// Round half to even (banker's rounding) to match PyTorch's grid_sample nearest, which uses
+// std::nearbyint under the default FE_TONEAREST mode. Ties (exactly x.5) resolve to the even
+// integer. This matters only for coordinates that land exactly on a half-integer boundary, which is
+// a measure-zero event for fp32 grids but common for bf16 grids, where the coarse coordinate spacing
+// snaps many points onto ties. floor(x+0.5) (round half up) and round() (round half away from zero)
+// would otherwise disagree with PyTorch at those ties and flip which pixel is "nearest".
+ALWI int32_t round_half_to_even(float x) {
+    const float f = floor(x);
+    const float diff = x - f;
+    const int32_t fi = static_cast<int32_t>(f);
+    if (diff < 0.5f) {
+        return fi;
+    }
+    if (diff > 0.5f) {
+        return fi + 1;
+    }
+    // Exact .5 tie: round to the even neighbor.
+    return (fi % 2 == 0) ? fi : fi + 1;
+}
+
 ALWI void fill_four_val(uint32_t begin_addr, uint16_t val, uint16_t val1, uint16_t val2, uint16_t val3) {
     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(begin_addr);
     ptr[0] = (val | (val1 << 16));

@@ -23,6 +23,23 @@ using namespace tt::tt_metal;
 
 namespace {
 
+// Round half to even (banker's rounding), matching PyTorch grid_sample nearest (std::nearbyint under
+// the default FE_TONEAREST mode) and the on-device kernel helper of the same name. Implemented
+// explicitly rather than via std::nearbyint so the host precompute is independent of the process's
+// active floating-point rounding mode and stays bit-identical to the device path.
+inline int32_t round_half_to_even_host(float x) {
+    const float f = std::floor(x);
+    const float diff = x - f;
+    const int32_t fi = static_cast<int32_t>(f);
+    if (diff < 0.5f) {
+        return fi;
+    }
+    if (diff > 0.5f) {
+        return fi + 1;
+    }
+    return (fi % 2 == 0) ? fi : fi + 1;
+}
+
 // Unified helper function for grid preprocessing (both nearest and bilinear modes).
 // Supports batched grids: last_dim = 2K (K coordinate pairs per output point).
 // For nearest mode, output shape is (N, H_out, W_out, 2K) — same as input.
@@ -77,14 +94,11 @@ tt::tt_metal::HostBuffer create_host_buffer_for_grid_preprocessing(
                         float h_coord_image = ((y_coord + 1.0f) * height_scale) + height_offset;
                         float w_coord_image = ((x_coord + 1.0f) * width_scale) + width_offset;
 
-                        int32_t h_nearest, w_nearest;
-                        if (align_corners) {
-                            h_nearest = static_cast<int32_t>(std::round(h_coord_image));
-                            w_nearest = static_cast<int32_t>(std::round(w_coord_image));
-                        } else {
-                            h_nearest = static_cast<int32_t>(std::floor(h_coord_image + 0.5f));
-                            w_nearest = static_cast<int32_t>(std::floor(w_coord_image + 0.5f));
-                        }
+                        // Round half to even (banker's rounding) to match PyTorch grid_sample nearest
+                        // (std::nearbyint) and the on-device kernel (round_half_to_even). Same rule for
+                        // both align_corners modes; only the coordinate transform above differs.
+                        int32_t h_nearest = round_half_to_even_host(h_coord_image);
+                        int32_t w_nearest = round_half_to_even_host(w_coord_image);
 
                         bool h_valid = (h_nearest >= 0) && (h_nearest < static_cast<int32_t>(input_h));
                         bool w_valid = (w_nearest >= 0) && (w_nearest < static_cast<int32_t>(input_w));
