@@ -41,6 +41,12 @@ from models.demos.gemma4.utils.substate import substate
 LM_HEAD_SIGNPOST = "gemma4_lm_head"
 
 
+# Widest per-device vocab shard on-device sampling is verified at (see
+# test_sampling.py, which parametrizes 1x1/1x2/1x4/1x8 over vocab 262144).
+# Raise only alongside a passing test at the new width.
+_MAX_SAMPLING_SHARD_WIDTH = 256 * 1024
+
+
 def _compute_per_device_vocab(vocab_size, num_tp):
     """Per-device vocab width: tile-aligned then rounded to next power of 2.
 
@@ -487,10 +493,19 @@ class Gemma4Model:
         self.sampling_dp = mesh_device.shape[0] if is_mesh else 1
 
         # On-device sampling (greedy/top-k/top-p) — avoids reading full vocab logits to CPU
+        #
+        # The shard cap is a measured device limit, not a design one. TTSampling
+        # already handles wide shards: it switches top-k indices to uint32 above
+        # uint16 range (_select_topk_indices_dtype) and uses the single-device
+        # multi_step_reduction path at tp=1. Greedy / top-k / top-p were verified
+        # exact on WH at tp=1 (shard 262144) and tp=2 (shard 131072) — see
+        # test_sampling.py::test_sampling_*[1x1,1x2]. Previously this was gated to
+        # tp>1 and shard<=64K, which silently dropped every 1x1 and 1x2 run onto
+        # the host path: a full 262144-wide logits row read to CPU per decode step.
         self.sampling = None
-        if is_mesh and tp > 1:
+        if is_mesh:
             per_device_padded = _compute_per_device_vocab(hf_config.vocab_size, tp)
-            if per_device_padded <= 64 * 1024:
+            if per_device_padded <= _MAX_SAMPLING_SHARD_WIDTH:
                 # tt_ccl=None: TopK path does not need AG semaphores. Force-argmax
                 # (allow_force_argmax) was tried with get_tt_ccl but untilize/argmax
                 # TT_FATALs on WH ("CBs clash with L1 buffers" on core [0-0]).

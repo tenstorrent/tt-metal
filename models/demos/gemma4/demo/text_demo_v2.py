@@ -15,11 +15,17 @@ Differences from the Gemma3 demo (Gemma4-specific):
   * Single model instance, no data-parallel submeshes (Gemma4 runs batch=1 per
     submesh today, so the demo focuses on the latency / long-context configs).
   * On-device sampling by default (``GEMMA4_HOST_SAMPLE=0``) whenever the model
-    exposes a sampling module (TP>1, vocab shard ≤64K); otherwise host sampling.
+    exposes a sampling module — every mesh from 1x1 up, since the shard-width cap
+    is now ``_MAX_SAMPLING_SHARD_WIDTH`` (256K) rather than 64K-and-TP>1.
     Host sampling all-gathers the full-vocab logits and reads them to CPU each
-    token, so device sampling is worth ~+29% decode tok/s at batch-1 and ~+18%
-    at 128K, with token-for-token identical output. Set ``GEMMA4_HOST_SAMPLE=1``
+    token: measured 58.12 vs 41.97 ms/token on 31B / WH T3K (~16 ms/step, +38%
+    tok/s) with token-for-token identical output. Set ``GEMMA4_HOST_SAMPLE=1``
     to force the host path.
+  * Decode token reads are pipelined one step deep (``GEMMA4_DECODE_PIPELINE=1``,
+    default): the sampled token's DMA overlaps the next decode submit instead of
+    blocking it. Worth ~0.6 ms/token on 31B — the step is device-bound, so this
+    matters most where the model is small relative to the host round trip.
+    ``GEMMA4_DECODE_PIPELINE=0`` restores the blocking loop.
   * No decode warmup (``warmup_model_decode`` is Gemma3-generator specific); the
     first decode iteration serves as the compile step and is excluded from the
     reported steady-state perf (matching the benchmark warmup convention).
@@ -662,43 +668,101 @@ def test_demo_text(
     iteration = 0
     users_decoding = True
 
-    logger.info("Starting decode loop...")
+    # Pipelined token readback: submit step j+1 before syncing step j's token.
+    # Only possible with device sampling, where the sampled token is written
+    # straight into the trace's token input buffer, so the next submit needs
+    # nothing from host (see Generator._decode_forward_trace_text: reset_inputs
+    # is False once decode is steady). The host loop then sits one step behind
+    # and EOS is seen one step late — that extra token is discarded below, so
+    # the emitted text is unchanged. GEMMA4_DECODE_PIPELINE=0 restores the
+    # blocking loop.
+    pipeline_reads = device_sampling_params is not None and os.environ.get("GEMMA4_DECODE_PIPELINE", "1").lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    pending = []
+
+    def _consume_tokens(host_out, read_events):
+        """Wait for one pipelined read, then fold its tokens into the output."""
+        for event in read_events:
+            ttnn.event_synchronize(event)
+        toks, _ = generator.process_decode_output_host(host_out, is_tokens=True)
+        return _fold_tokens(toks)
+
+    def _fold_tokens(toks):
+        """Fold one step's sampled tokens into the output; True to keep going."""
+        toks = toks.long().view(batch_size, -1)
+        keep_going = True
+        for user in range(batch_size):
+            tok = int(toks[user, 0])
+            if tok not in tokenizer.stop_tokens and not user_done[user]:
+                all_outputs[user].append(tok)
+            elif stop_at_eos:
+                user_done[user] = True
+                if all(user_done):
+                    keep_going = False
+        if not is_ci_env:
+            for user in range(batch_size):
+                # Detokenize the GENERATED slice only. Decoding all_outputs whole
+                # re-detokenized the entire prompt every step — O(prompt) host work
+                # per token, which at long context dominates the decode step itself.
+                text = tokenizer.decode(all_outputs[user][prefill_lens[user] :])
+                text = ("..." + text[-97:]) if len(text) > 100 else text
+                logger.info(f"[User {user}] {text.replace(chr(10), ' ')}")
+        return keep_going
+
+    logger.info(f"Starting decode loop... (pipelined token reads: {pipeline_reads})")
     profiler.start("inference_decode")
     while users_decoding:
-        profiler.start(f"inference_decode_time_{iteration}")
-        decode_out, _ = generator.decode_forward(
+        # One timer per loop pass, closed at the bottom. In the pipelined path a
+        # pass is "submit step j, then sync step j-1", so the window still measures
+        # one token of steady-state wall time. Ending it right after the submit
+        # would time the enqueue only and report a fictitious tok/s.
+        step = iteration
+        profiler.start(f"inference_decode_time_{step}")
+        decode_out = generator.decode_forward(
             out_tok,
             current_pos,
             enable_trace=enable_trace,
             page_table=page_table,
             kv_cache=tt_kv_cache,
             sampling_params=device_sampling_params,
+            read_from_device=not pipeline_reads,
         )
-        if device_sampling_params is not None:
-            out_tok = decode_out.long().view(batch_size, 1)
+
+        if pipeline_reads:
+            # Start the DMA and record an event; do NOT wait on it. The device
+            # already holds the token it needs for the next step.
+            host_out, read_events = generator.read_decode_output(decode_out, async_read=True)
+            pending.append((host_out, read_events))
         else:
-            out_tok = _host_sample(decode_out, temperature, top_p)
-        profiler.end(f"inference_decode_time_{iteration}")
+            decode_out, _ = decode_out
+            if device_sampling_params is not None:
+                out_tok = decode_out.long().view(batch_size, 1)
+            else:
+                out_tok = _host_sample(decode_out, temperature, top_p)
 
         current_pos += 1
-        for user in range(batch_size):
-            tok = int(out_tok[user, 0].item())
-            if tok not in tokenizer.stop_tokens and not user_done[user]:
-                all_outputs[user].append(tok)
-            elif stop_at_eos:
-                user_done[user] = True
-                if all(user_done):
-                    users_decoding = False
-
-        if not is_ci_env:
-            for user in range(batch_size):
-                text = "".join(tokenizer.decode(all_outputs[user]))
-                text = ("..." + text[-97:]) if len(text) > 100 else text
-                logger.info(f"[User {user}] {text.replace(chr(10), ' ')}")
-
         iteration += 1
+
+        if pipeline_reads:
+            # One step of slack: the read issued last iteration has had a full
+            # decode submit to land, so this sync is off the critical path.
+            if len(pending) > 1:
+                users_decoding = _consume_tokens(*pending.pop(0))
+        else:
+            users_decoding = _fold_tokens(out_tok)
+
+        profiler.end(f"inference_decode_time_{step}")
         if iteration >= max_generated_tokens:
             users_decoding = False
+
+    # Drain the in-flight reads so the emitted text holds every submitted step.
+    # Inside the decode timer: this is real work for the tokens being counted.
+    for entry in pending:
+        _consume_tokens(*entry)
+    pending.clear()
     profiler.end("inference_decode")
     profiler.end("run")
 

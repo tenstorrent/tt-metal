@@ -13,13 +13,21 @@ Covers acceptance criteria:
   compares the per-sampled-token logprob returned by the sampling kernel
   against a torch ``log_softmax`` reference.
 
-Decoder shape: vocab=262144 with per-device shard = ``V/TP``. The on-device
-sampling module only requires ``tp > 1``, so the tests parametrize over both
-``(1, 4)`` (Blackhole quietbox, TP=4, shard 65536) and ``(1, 8)`` (T3K, TP=8,
-shard 32768). The host-argmax fallback for TP=1 is covered by ``test_full_model``.
+Decoder shape: vocab=262144 with per-device shard = ``V/TP``. Every mesh the
+model can run on is covered, because ``Gemma4Model`` enables on-device sampling
+at every one of them — the shard width is what varies:
 
-    pytest -k "1x4 and sampling"   # Blackhole quietbox (on-device sampling active)
-    pytest -k "1x8 and sampling"   # T3K (on-device sampling active)
+    1x1 -> 262144   (single-device multi_step_reduction path, uint32 topk indices)
+    1x2 -> 131072   (uint32 topk indices)
+    1x4 ->  65536
+    1x8 ->  32768
+
+1x1 and 1x2 are the load-bearing cases for ``_MAX_SAMPLING_SHARD_WIDTH`` in
+``tt/model.py``: they were previously gated onto the host-argmax path, which read
+a full 262144-wide logits row to CPU every decode step.
+
+    pytest -k "1x1 and sampling"   # single card  (widest shard)
+    pytest -k "1x8 and sampling"   # T3K
 """
 
 import pytest
@@ -143,7 +151,7 @@ def _extract_tokens(tt_tokens, batch_size):
     return ttnn.to_torch(ttnn.get_device_tensors(tt_tokens)[0]).reshape(-1)[:batch_size].tolist()
 
 
-@parametrize_mesh_with_fabric(mesh_shapes=[(1, 4), (1, 8)])
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (1, 2), (1, 4), (1, 8)])
 def test_sampling_greedy_batch32(mesh_device, reset_seeds):
     """Greedy on-device sampling at batch=32 matches CPU argmax exactly.
 
@@ -175,7 +183,7 @@ def test_sampling_greedy_batch32(mesh_device, reset_seeds):
     logger.info(f"Greedy batch=32 sampling matched all {BATCH_SIZE} winners")
 
 
-@parametrize_mesh_with_fabric(mesh_shapes=[(1, 4), (1, 8)])
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (1, 2), (1, 4), (1, 8)])
 def test_sampling_top_k_constrained(mesh_device, reset_seeds):
     """Top-k sampling keeps every drawn token inside the reference top-k set.
 
@@ -214,7 +222,7 @@ def test_sampling_top_k_constrained(mesh_device, reset_seeds):
     logger.info(f"Top-k={top_k} sampling stayed within {expected_set}; sampled {len(seen)} unique tokens")
 
 
-@parametrize_mesh_with_fabric(mesh_shapes=[(1, 4), (1, 8)])
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (1, 2), (1, 4), (1, 8)])
 def test_sampling_top_p_constrained(mesh_device, reset_seeds):
     """Top-p (nucleus) sampling keeps every drawn token inside the reference nucleus.
 
@@ -259,7 +267,7 @@ def test_sampling_top_p_constrained(mesh_device, reset_seeds):
     logger.info(f"Top-p={top_p} sampling stayed within {nucleus_set}; sampled {len(seen)} unique tokens")
 
 
-@parametrize_mesh_with_fabric(mesh_shapes=[(1, 4), (1, 8)])
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (1, 2), (1, 4), (1, 8)])
 def test_sampling_log_probs_pcc(mesh_device, reset_seeds, request):
     """PCC ≥ 0.999 between device-computed log-probs and torch log_softmax reference.
 
