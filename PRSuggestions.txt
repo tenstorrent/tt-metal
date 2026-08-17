@@ -45,13 +45,13 @@
     - Why the shipped one has no cache goes back to bring-up. A component is tested by running the
       real model once, recording the arguments each component was called with, then calling the
       original and the rewrite on those recorded arguments and comparing the results. For attention
-      the recording does include a real cache, but a cache is mutable and attention appends to it, so
-      whichever side runs first leaves an extra entry behind, and the second side then attends over one
-      position too many and looks wrong. Giving each side its own copy is a one line fix. It was
-      dropped instead, and it is also one of the arguments point 3 drops, so it would have arrived
-      empty either way. With no cache the test compares a single value and returns 1.0 whatever the
-      inputs are, so a version that uses the cache and one that ignores it score the same, and the
-      simpler one was accepted.
+      the recording does include a real cache, but a cache is mutable and attention appends to it,
+      so whichever side runs first leaves an extra entry behind, and the second side then attends
+      over one position too many and looks wrong. Giving each side its own copy is a one line fix.
+      It was dropped instead, and it is also one of the arguments point 3 drops, so it would have
+      arrived empty either way. With no cache the test compares a single value and returns 1.0
+      whatever the inputs are, so a version that uses the cache and one that ignores it score the
+      same, and the simpler one was accepted.
     - That then decided the demo, because the demo has to use the components that passed. A component
       that cannot remember anything has to be given the whole prompt plus everything generated so far,
       so every frame re-runs all layers over the entire sequence and keeps only the last position.
