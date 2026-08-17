@@ -424,6 +424,46 @@ class PACK_NUM_TILES(TemplateParameter):
 
 
 @dataclass
+class RMSNORM_DEST_REUSE(TemplateParameter):
+    """Compile-time knobs for ``rmsnorm_bcast_scalar_dest_reuse_test.cpp``.
+
+    All four are template arguments (or a template-fixed runtime argument) on the LLK
+    pair, so none of them can be a runtime parameter:
+
+    ``num_tiles``
+        Outer-loop count of the math MOP *and* the unpack MOP -- one
+        ``_llk_unpack_A_`` call walks this many tiles. Bounded by DEST half-sync capacity.
+    ``num_faces``
+        Runtime argument to both ``_init_``s, but it sizes the MOP loops, so a variant
+        must be built per value. Only 1, 2 and 4 are accepted (``LLK_ASSERT``).
+    ``clear_dest``
+        Template argument on the math execute; gates the ``ZEROACC`` between the MOVD2B
+        and the MOP.
+    ``unpack_full_transpose``
+        Drives both ``transpose_of_faces`` and ``within_face_16x16_transpose`` on the
+        unpack init. This axis exists only because blaze's version of the header won the
+        reconciliation, so it is new reachable surface. Its replay-buffer path is
+        restricted to ``num_tiles == 1`` and ``num_faces == 4`` by ``LLK_ASSERT``.
+    """
+
+    num_tiles: int = 1
+    num_faces: int = 4
+    clear_dest: bool = False
+    unpack_full_transpose: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return "\n".join(
+            [
+                f"constexpr std::uint32_t RMSNORM_NUM_TILES = {self.num_tiles}u;",
+                f"constexpr std::uint32_t RMSNORM_NUM_FACES = {self.num_faces}u;",
+                f"constexpr bool RMSNORM_CLEAR_DEST = {str(self.clear_dest).lower()};",
+                "constexpr bool RMSNORM_UNPACK_FULL_TRANSPOSE = "
+                f"{str(self.unpack_full_transpose).lower()};",
+            ]
+        )
+
+
+@dataclass
 class REDUCE_BLOCK_CT_DIM(TemplateParameter):
     """Compile-time block width (in tiles) for the block-based reduce_block_max_row LLKs.
 
