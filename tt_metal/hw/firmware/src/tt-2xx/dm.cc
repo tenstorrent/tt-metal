@@ -239,8 +239,7 @@ extern "C" uint32_t _start1() {
         do_crt1(__ldm_data_start);
         // Must precede the ready flag below, which releases the other pushers.
         WATCHER_RING_BUFFER_INIT();
-        // Zero out the EXTERNAL down() lock words and the cached-pool seed-protocol words once
-        // at boot; both protocols put their words back to 0 themselves after every use/program.
+        // Zero these words used for semaphores at boot
         for (uint32_t w = 0; w < (MEM_NOC_CAS_RET_SIZE + MEM_NOC_SEM_LOCK_SIZE + MEM_DM_CACHED_SEM_SIZE) / 4; w++) {
             reinterpret_cast<volatile uint32_t*>(MEM_L1_UNCACHED_BASE + MEM_NOC_CAS_RET_BASE)[w] = 0;
         }
