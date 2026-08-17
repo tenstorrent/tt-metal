@@ -231,6 +231,7 @@ ttnn::device_operation::ProgramArtifacts UpsampleMultiCoreInterleavedProgramFact
             KernelSpec compute_g1{
                 .unique_id = INTLV_COMPUTE_G1,
                 .source = std::filesystem::path{UNTILIZE_METAL2_KERNEL},
+                .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
                 .dfb_bindings =
                     {DFBBinding{
                          .dfb_spec_name = INTLV_SRC0,
@@ -259,6 +260,7 @@ ttnn::device_operation::ProgramArtifacts UpsampleMultiCoreInterleavedProgramFact
             KernelSpec compute_g2{
                 .unique_id = INTLV_COMPUTE_G2,
                 .source = std::filesystem::path{UNTILIZE_METAL2_KERNEL},
+                .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
                 .dfb_bindings =
                     {DFBBinding{
                          .dfb_spec_name = INTLV_SRC0,
