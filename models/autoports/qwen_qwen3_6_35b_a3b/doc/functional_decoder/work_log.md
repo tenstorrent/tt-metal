@@ -578,9 +578,20 @@ Local only; nothing pushed.
 
 | SHA | contents |
 |---|---|
-| `12c947d9147670eb0b3a9b23136635b89de709f3` (`12c947d9147`) | the whole stage: `models/autoports/qwen_qwen3_6_35b_a3b/**` plus the `conftest.py` guarded-import fix (§7 item 4 of the README) |
-| `b2bb054161fcde8a1664f848ce0f35ad3f58aeea` (`b2bb054161f`) | this work log's commit table (the SHA above could not be recorded in the commit it names) |
-| `ea58fe8fa7ae1138dbc35a363b6b817faeeed605` (`ea58fe8fa7a`) | **review rounds 1 and 2**: the fixes in §9 and §10, the shipped `decode_sdpa_max_cores_per_head = 1`, the ROW_MAJOR RoPE tables, the per-slot state reset, and every artifact regenerated against this code |
+| `12c947d9147670eb0b3a9b23136635b89de709f3` (`12c947d9147`) | the whole stage: `models/autoports/qwen_qwen3_6_35b_a3b/**` plus the `conftest.py` guarded-import fix (README §7 item 4) |
+| `b2bb054161fcde8a1664f848ce0f35ad3f58aeea` (`b2bb054161f`) | records the SHA above |
+| `ea58fe8fa7ae1138dbc35a363b6b817faeeed605` (`ea58fe8fa7a`) | **review rounds 1 and 2**: the fixes in §9 and §10 — the shipped `decode_sdpa_max_cores_per_head = 1`, ROW_MAJOR RoPE tables, the per-slot state reset — and every artifact regenerated against that code |
+| later commits | documentation only: SHA records and analysis notes that could not be written before the commits they describe |
+
+A table cannot contain its own SHA, so the last rows are deliberately open-ended rather than
+chased with one more commit each time. The authoritative list is:
+
+```bash
+git log --oneline 12c947d9147^..HEAD -- models/autoports/qwen_qwen3_6_35b_a3b
+```
+
+Every commit is local; **nothing was pushed**. Only one file outside the autoport directory was ever
+touched (`conftest.py`, in the first commit).
 
 All evidence was regenerated after the last code change, one hardware command at a time. The
 round-2 pass ran: main suite (gate) -> long-context (5 pytest processes) ->
