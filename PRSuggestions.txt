@@ -32,10 +32,10 @@
       way to add more. One prompt cannot tell a real bug from a lucky guess.
     - The per component tests never use real inputs. Real inputs and outputs are saved for every
       component, and the log says the tests use them, but they do not. The main input is random noise.
-    - Worse, inputs are guessed from the argument names. For our model that gave a wrongly shaped
-      input where a table of rotation values was needed, dropped the mask that stops the model
-      looking ahead (so the reference answer itself became wrong), and passed decimals where whole
-      numbers were needed. These had to be written by hand before the tests meant anything.
+    - Worse, inputs are guessed from the argument names. For our model that passed a 3-D activation
+      where a complex RoPE table was expected, dropped the additive causal mask entirely (so the
+      reference itself became non-causal), and passed floats where integer codebook indices were
+      needed. These had to be written by hand before the tests meant anything.
     - Fix: use the saved inputs and compare against the saved output. Let the end to end test take
       more than one prompt. Make the log say what the test actually used.
 
