@@ -1,0 +1,279 @@
+#!/usr/bin/env python3
+"""
+Generate a monolithic compile-time C++ CFG descriptor reference.
+
+Structure and descriptions come from the register spec (regs.yaml); the exact
+word/shift/mask offsets, the number of sections, and the per-section layout all
+come from cfg_defines.h — the silicon truth. Where the spec and silicon
+disagree (section counts, absent registers), silicon wins and the difference is
+reported.
+
+    python3 gen_cfg_structs.py            # uses sibling regs.yaml and BH cfg_defines.h
+    python3 gen_cfg_structs.py --yaml ... --defines ... --out ...
+
+Section is factored out: a Field carries base / section stride / count and its
+own within-register position, and locates itself with Field::addr32(Sec). The
+stride is stored in bits, so sections that are bit-packed into a single word
+(e.g. RISC_DEST_ACCESS_CTRL) are handled the same as word-strided ones.
+"""
+import argparse
+import os
+import re
+import sys
+
+import yaml
+
+
+# ----------------------------------------------------------- parse cfg_defines
+def parse_defines(path):
+    text = open(path).read()
+    addr, sham, mask = {}, {}, {}
+    for m in re.finditer(r"#define (\w+)_ADDR32 (\d+)", text):
+        n = m.group(1)
+        if not n.endswith("_CFGREG_BASE"):
+            addr[n] = int(m.group(2))
+    for m in re.finditer(r"#define (\w+)_SHAMT (\d+)", text):
+        sham[m.group(1)] = int(m.group(2))
+    for m in re.finditer(r"#define (\w+)_MASK (0x[0-9a-fA-F]+)", text):
+        mask[m.group(1)] = int(m.group(2), 16)
+    return addr, sham, mask
+
+
+# ------------------------------------------------------------------- helpers
+def camel(name):
+    return "".join(
+        p[:1].upper() + p[1:].lower() if not p[0].isdigit() else p
+        for p in name.split("_")
+    )
+
+
+def first_line(s):
+    return (s or "").strip().split("\n")[0]
+
+
+# ---------------------------------------------------------------- build model
+def build(spec, addr, sham, mask):
+    scopes, misses = [], []
+    for scope, body in spec.items():
+        if not isinstance(body, dict) or body.get("Implemented", 1) == 0:
+            continue
+        wbits = 16 if scope == "THREAD" else 32
+        file = "Thread" if scope == "THREAD" else "State"
+        regs = []
+        for rname, rbody in body.items():
+            if rname in ("Reg_size", "Word_size", "Implemented") or not isinstance(
+                rbody, dict
+            ):
+                continue
+            leaves = [
+                (fn, first_line((fb or {}).get("Description", "")))
+                for fn, fb in (rbody.get("Fields") or {}).items()
+                if (fb or {}).get("Implemented", 1) != 0
+            ]
+            if not leaves:
+                continue
+            leaf0 = leaves[0][0]
+
+            # section naming + count come from silicon, not the spec
+            if (rname + "_" + leaf0) in addr:
+                sectioned, count = False, 1
+            elif (rname + "_SEC0_" + leaf0) in addr:
+                sectioned, count = True, 1
+                while ("%s_SEC%d_%s" % (rname, count, leaf0)) in addr:
+                    count += 1
+            else:
+                misses += [rname + "_" + lf for lf, _ in leaves]
+                continue
+
+            def flat(s, lf):
+                return rname + (("_SEC%d" % s) if sectioned else "") + "_" + lf
+
+            fields = []
+            for lf, desc in leaves:
+                n0 = flat(0, lf)
+                if n0 not in addr:
+                    misses.append(n0)
+                    continue
+                fields.append(
+                    dict(
+                        name=lf,
+                        desc=desc,
+                        a0=addr[n0],
+                        shamt=sham[n0],
+                        width=bin(mask[n0]).count("1"),
+                    )
+                )
+            if not fields:
+                continue
+
+            base = min(f["a0"] for f in fields)
+            for f in fields:
+                f["word"] = f["a0"] - base
+
+            sec_bits = 0
+            if count > 1:
+                f0 = fields[0]
+                n1 = flat(1, f0["name"])
+                sec_bits = (addr[n1] * wbits + sham[n1]) - (
+                    f0["a0"] * wbits + f0["shamt"]
+                )
+
+            regs.append(
+                dict(
+                    name=rname,
+                    cpp=camel(rname),
+                    desc=first_line(rbody.get("Description", "")),
+                    file=file,
+                    wbits=wbits,
+                    base=base,
+                    count=count,
+                    sec_bits=sec_bits,
+                    fields=fields,
+                )
+            )
+        if regs:
+            scopes.append((scope, regs))
+    return scopes, misses
+
+
+# ---------------------------------------------------------------- emit C++
+PREAMBLE = """// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+//
+// GENERATED by gen_cfg_structs.py — do not edit by hand.
+// offsets: {defines}
+// structure/descriptions: {yaml}
+#pragma once
+
+#include <cstdint>
+
+namespace hal {{
+namespace cfg {{
+
+enum class RegisterFile : std::uint8_t {{ Thread, State }};
+
+// The section axis, applied via Field::addr32(Sec) / shamt(Sec) / mask(Sec).
+enum class Sec : std::uint8_t {{ S0, S1, S2, S3, S4, S5, S6, S7 }};
+
+// A fully self-contained field descriptor. It carries its register's file, base
+// word, section stride (in bits) and section count, so a field alone locates
+// itself — no register type is named alongside it. Storing the stride in bits
+// lets bit-packed sections (several sections sharing one word) use the same
+// formula as word-strided ones.
+struct Field {{
+    RegisterFile  file;      // Thread = 16-bit thread CFG, State = 32-bit state CFG
+    std::uint32_t wbits;     // config word size: 16 (Thread) or 32 (State)
+    std::uint32_t base;      // SEC0 register base word
+    std::uint32_t word;      // field word within the register (SEC0)
+    std::uint32_t shamt0;    // SEC0 bit shift within the word
+    std::uint32_t width;     // field width in bits
+    std::uint32_t count;     // number of sections
+    std::uint32_t sec_bits;  // section stride, in bits
+
+    constexpr std::uint32_t abs0() const {{ return (base + word) * wbits + shamt0; }}
+    constexpr std::uint32_t addr32(Sec s) const {{
+        return (abs0() + static_cast<std::uint32_t>(s) * sec_bits) / wbits;
+    }}
+    constexpr std::uint32_t shamt(Sec s = Sec::S0) const {{
+        return (abs0() + static_cast<std::uint32_t>(s) * sec_bits) % wbits;
+    }}
+    constexpr std::uint32_t mask(Sec s = Sec::S0) const {{  // valid for width <= 32
+        return width >= 32 ? 0xffffffffu : (((1u << width) - 1u) << shamt(s));
+    }}
+    constexpr std::uint32_t words() const {{ return (shamt0 + width + wbits - 1) / wbits; }}
+}};
+"""
+
+
+def emit(scopes, yaml_path, defines_path):
+    out = [PREAMBLE.format(defines=defines_path, yaml=yaml_path)]
+    nfields = 0
+    for scope, regs in scopes:
+        out.append("\n// " + "=" * 60 + "\n// %s\n// %s\n" % (scope, "=" * 60))
+        for r in regs:
+            hdr = "\nstruct %s {" % r["cpp"]
+            if r["desc"]:
+                hdr += "   // %s" % r["desc"]
+            out.append(hdr)
+            fileenum = "RegisterFile::%s" % r["file"]
+            wname = max(len(f["name"]) for f in r["fields"])
+            for f in r["fields"]:
+                span = (
+                    ""
+                    if f["width"] <= 32
+                    else "  spans %d words" % ((f["shamt"] + f["width"] + 31) // 32)
+                )
+                cmt = (
+                    (" // %s (%db)%s" % (f["desc"], f["width"], span))
+                    if (f["desc"] or span)
+                    else (" // %db" % f["width"])
+                )
+                # Field { file, wbits, base, word, shamt0, width, count, sec_bits }
+                out.append(
+                    "    static constexpr Field %-*s { %s, %2d, %3d, %2d, %2d, %3d, %d, %3d };%s"
+                    % (
+                        wname,
+                        f["name"],
+                        fileenum,
+                        r["wbits"],
+                        r["base"],
+                        f["word"],
+                        f["shamt"],
+                        f["width"],
+                        r["count"],
+                        r["sec_bits"],
+                        cmt,
+                    )
+                )
+                nfields += 1
+            out.append("};")
+    out.append("\n}  // namespace cfg")
+    out.append("}  // namespace hal")
+    return "\n".join(out) + "\n", nfields
+
+
+# ---------------------------------------------------------------- main
+def main():
+    here = os.path.dirname(os.path.abspath(__file__))
+    default_defines = os.path.normpath(
+        os.path.join(here, "../../../../hw/inc/internal/tt-1xx/blackhole/cfg_defines.h")
+    )
+    ap = argparse.ArgumentParser(
+        description="Generate constexpr CFG descriptors from regs.yaml + cfg_defines.h"
+    )
+    ap.add_argument("--yaml", default=os.path.join(here, "regs.yaml"))
+    ap.add_argument("--defines", default=default_defines)
+    # Do not target hal/cfg.h: that file is the public access-interface
+    # umbrella. The split, curated descriptors live under hal/cfg/.
+    ap.add_argument(
+        "--out", default=os.path.join(here, "cfg", "all_registers.generated.h")
+    )
+    a = ap.parse_args()
+
+    if not os.path.exists(a.defines):
+        sys.exit(
+            "error: cfg_defines.h not found at %s\n       pass --defines <path>"
+            % a.defines
+        )
+
+    spec = yaml.safe_load(open(a.yaml))
+    addr, sham, mask = parse_defines(a.defines)
+    scopes, misses = build(spec, addr, sham, mask)
+    text, nfields = emit(scopes, a.yaml, a.defines)
+    open(a.out, "w").write(text)
+
+    print("wrote %s" % a.out)
+    print("  scopes : %s" % ", ".join(s for s, _ in scopes))
+    print("  structs: %d" % sum(len(r) for _, r in scopes))
+    print("  fields : %d" % nfields)
+    print(
+        "  skipped: %d spec fields not present in %s"
+        % (len(misses), a.defines.split("/")[-1])
+    )
+    if misses:
+        print("  e.g.   : %s" % ", ".join(sorted(set(misses))[:6]))
+
+
+if __name__ == "__main__":
+    main()

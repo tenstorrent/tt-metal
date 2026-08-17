@@ -150,11 +150,16 @@ enum class StreamTarget : std::uint8_t
     MessagesReceived
 };
 
-/** @brief Identify a NoC overlay stream by its three-bit group and stream fields. */
+/**
+ * @brief Identify one tile-local NoC overlay stream.
+ *
+ * The hardware stream index is six bits: group supplies the upper three bits,
+ * and number supplies the lower three bits.
+ */
 struct StreamId
 {
     std::uint8_t group;
-    std::uint8_t stream;
+    std::uint8_t number;
 };
 
 inline constexpr SemaphoreMask operator|(const SemaphoreMask lhs, const SemaphoreMask rhs)
@@ -290,12 +295,12 @@ constexpr bool is_valid(const StreamTarget target)
 
 constexpr bool is_valid(const StreamId stream)
 {
-    return stream.group < 8u && stream.stream < 8u;
+    return stream.group < 8u && stream.number < 8u;
 }
 
 constexpr std::uint32_t encode(const StreamId stream)
 {
-    return (static_cast<std::uint32_t>(stream.group) << 3) | stream.stream;
+    return (static_cast<std::uint32_t>(stream.group) << 3) | stream.number;
 }
 
 constexpr std::uint32_t semaphore_bit(const Semaphore semaphore)
@@ -670,6 +675,20 @@ inline __attribute__((always_inline)) void configure_stream(const StreamSlot slo
     }
 }
 
+/**
+ * @brief Program one compile-time-selected STREAM_ID_SYNC slot from a structured NoC stream ID.
+ *
+ * @tparam Slot: Thread-private selector entry, values = <S0/S1/S2/S3>.
+ * @param stream_id: Tile-local stream group and number, each in [0, 7].
+ */
+template <StreamSlot Slot>
+inline __attribute__((always_inline)) void configure_stream(const StreamId stream_id)
+{
+    static_assert(detail::is_valid(Slot), "STREAMWAIT slot must be in [0, 3]");
+    LLK_ASSERT(detail::is_valid(stream_id), "NoC stream group and number must each fit in three bits");
+    cfg::write<cfg::Access::TensixCfgUnit, cfg::StreamIdSync::BankSel, detail::stream_section<Slot>>(detail::encode(stream_id));
+}
+
 /** @brief Program the high bits of a compile-time STREAMWAIT threshold. */
 template <StreamTarget Target, std::uint32_t FullTarget>
 inline __attribute__((always_inline)) void configure_stream_target()
@@ -754,6 +773,24 @@ template <StallTarget Targets, StreamSlot Slot, std::uint32_t Group, std::uint32
 inline __attribute__((always_inline)) void configure_and_wait_stream()
 {
     configure_stream<Slot, Group, Stream>();
+    configure_stream_target<Target, FullTarget>();
+    stall<StallTarget::Sync, StallCondition::ConfigUnitIdle>();
+    stream<Targets, Slot, Target, FullTarget & detail::STREAM_TARGET_LOW_MASK>();
+}
+
+/**
+ * @brief Configure a structured stream ID and full compile-time threshold, then install STREAMWAIT.
+ *
+ * @tparam Targets: Instruction classes to block while the stream condition is unmet.
+ * @tparam Slot: Thread-private selector entry, values = <S0/S1/S2/S3>.
+ * @tparam Target: Counter to compare, values = <Phase/MessagesReceived>.
+ * @tparam FullTarget: Complete phase or message-count threshold.
+ * @param stream_id: Tile-local stream group and number, each in [0, 7].
+ */
+template <StallTarget Targets, StreamSlot Slot, StreamTarget Target, std::uint32_t FullTarget>
+inline __attribute__((always_inline)) void configure_and_wait_stream(const StreamId stream_id)
+{
+    configure_stream<Slot>(stream_id);
     configure_stream_target<Target, FullTarget>();
     stall<StallTarget::Sync, StallCondition::ConfigUnitIdle>();
     stream<Targets, Slot, Target, FullTarget & detail::STREAM_TARGET_LOW_MASK>();

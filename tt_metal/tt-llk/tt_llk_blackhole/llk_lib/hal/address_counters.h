@@ -49,13 +49,12 @@ enum class AddressChannel : std::uint8_t
     Channel1 = 0x2
 };
 
-/**
- * @brief Selects which type of get_operation() method is returning
- */
+/** @brief Select the address-counter operation encoded by get_operation(). */
 enum class GetOpType : std::uint8_t
 {
-    SETTER    = 0x0,
-    INCREMENT = 0x1
+    SETTER            = 0x0,
+    INCREMENT         = 0x1,
+    ADVANCE_AND_RESET = 0x2
 };
 
 /**
@@ -206,6 +205,7 @@ struct AdcGprTarget
  *   - apply()                      — emit the minimal SETADC* instruction sequence that programs the
  *                                    assigned counters for the selected client(s)/channel(s).
  *   - increment()                  — emit the matching INCADC* sequence instead of absolute SETs.
+ *   - advance_and_reset()          — advance each selected carry/reset shadow, then reload its live counter.
  *   - get_operation<GetOpType>()   — return a single encoded instruction word (e.g. to embed in a MOP
  *                                    or replay buffer) rather than issuing it inline.
  *
@@ -451,19 +451,27 @@ private:
     template <GetOpType operation>
     static constexpr std::uint32_t _xy_op()
     {
+        constexpr bool ch0_x              = _is_set(X_CHANNEL0);
+        constexpr bool ch1_x              = _is_set(X_CHANNEL1);
+        constexpr bool ch0_y              = _is_set(Y_CHANNEL0);
+        constexpr bool ch1_y              = _is_set(Y_CHANNEL1);
+        constexpr std::uint8_t write_mask = (ch0_x << 0) | (ch0_y << 1) | (ch1_x << 2) | (ch1_y << 3);
+
         if constexpr (operation == GetOpType::SETTER)
         {
-            constexpr bool ch0_x              = _is_set(X_CHANNEL0);
-            constexpr bool ch1_x              = _is_set(X_CHANNEL1);
-            constexpr bool ch0_y              = _is_set(Y_CHANNEL0);
-            constexpr bool ch1_y              = _is_set(Y_CHANNEL1);
-            constexpr std::uint8_t write_mask = (ch0_x << 0) | (ch0_y << 1) | (ch1_x << 2) | (ch1_y << 3);
-
             return TT_OP_SETADCXY(ClientMask, Y_Channel1, X_Channel1, Y_Channel0, X_Channel0, write_mask);
+        }
+        else if constexpr (operation == GetOpType::INCREMENT)
+        {
+            return TT_OP_INCADCXY(ClientMask, Y_Channel1, X_Channel1, Y_Channel0, X_Channel0);
         }
         else
         {
-            return TT_OP_INCADCXY(ClientMask, Y_Channel1, X_Channel1, Y_Channel0, X_Channel0);
+            static_assert(operation == GetOpType::ADVANCE_AND_RESET, "invalid X/Y address-counter operation");
+            static_assert(
+                TT_ADDRCRXY_VALID(ClientMask, Y_Channel1, X_Channel1, Y_Channel0, X_Channel0, write_mask),
+                "ADDRCRXY increments exceed their encoded field widths");
+            return TT_OP_ADDRCRXY(ClientMask, Y_Channel1, X_Channel1, Y_Channel0, X_Channel0, write_mask);
         }
     }
 
@@ -471,19 +479,27 @@ private:
     template <GetOpType operation>
     static constexpr std::uint32_t _zw_op()
     {
+        constexpr bool ch0_z              = _is_set(Z_CHANNEL0);
+        constexpr bool ch1_z              = _is_set(Z_CHANNEL1);
+        constexpr bool ch0_w              = _is_set(W_CHANNEL0);
+        constexpr bool ch1_w              = _is_set(W_CHANNEL1);
+        constexpr std::uint8_t write_mask = (ch0_z << 0) | (ch0_w << 1) | (ch1_z << 2) | (ch1_w << 3);
+
         if constexpr (operation == GetOpType::SETTER)
         {
-            constexpr bool ch0_z              = _is_set(Z_CHANNEL0);
-            constexpr bool ch1_z              = _is_set(Z_CHANNEL1);
-            constexpr bool ch0_w              = _is_set(W_CHANNEL0);
-            constexpr bool ch1_w              = _is_set(W_CHANNEL1);
-            constexpr std::uint8_t write_mask = (ch0_z << 0) | (ch0_w << 1) | (ch1_z << 2) | (ch1_w << 3);
-
             return TT_OP_SETADCZW(ClientMask, W_Channel1, Z_Channel1, W_Channel0, Z_Channel0, write_mask);
+        }
+        else if constexpr (operation == GetOpType::INCREMENT)
+        {
+            return TT_OP_INCADCZW(ClientMask, W_Channel1, Z_Channel1, W_Channel0, Z_Channel0);
         }
         else
         {
-            return TT_OP_INCADCZW(ClientMask, W_Channel1, Z_Channel1, W_Channel0, Z_Channel0);
+            static_assert(operation == GetOpType::ADVANCE_AND_RESET, "invalid Z/W address-counter operation");
+            static_assert(
+                TT_ADDRCRZW_VALID(ClientMask, W_Channel1, Z_Channel1, W_Channel0, Z_Channel0, write_mask),
+                "ADDRCRZW increments exceed their encoded field widths");
+            return TT_OP_ADDRCRZW(ClientMask, W_Channel1, Z_Channel1, W_Channel0, Z_Channel0, write_mask);
         }
     }
 
@@ -496,26 +512,29 @@ private:
 
 public:
     /**
-     *  Return single instruction for given builder description
-     *  Valid builder groups:
-     *  X or Y, any channel
-     *  Z or W, any channel
-     *  Single counter, single channel (e.g. X counter, Channel 0)
+     * @brief Encode one address-counter instruction without issuing it.
+     *
+     * @tparam operation: Operation to encode, values = <SETTER/INCREMENT/ADVANCE_AND_RESET>.
+     * @note Select either X/Y or Z/W; one encoded word cannot represent both instruction families.
      */
     template <GetOpType operation>
     static constexpr std::uint32_t get_operation()
     {
         _assert_selection();
 
+        constexpr bool is_X   = _is_set(X_CHANNEL0 | X_CHANNEL1);
+        constexpr bool is_Y   = _is_set(Y_CHANNEL0 | Y_CHANNEL1);
+        constexpr bool is_Z   = _is_set(Z_CHANNEL0 | Z_CHANNEL1);
+        constexpr bool is_W   = _is_set(W_CHANNEL0 | W_CHANNEL1);
+        constexpr bool has_xy = is_X || is_Y;
+        constexpr bool has_zw = is_Z || is_W;
+
+        static_assert(has_xy != has_zw, "get_operation() must encode exactly one instruction (select X/Y or Z/W, not both)");
+
         if constexpr (operation == GetOpType::SETTER)
         {
             constexpr bool selected_channel0 = ChannelMask & ckernel::to_underlying(AddressChannel::Channel0);
             constexpr bool selected_channel1 = ChannelMask & ckernel::to_underlying(AddressChannel::Channel1);
-
-            constexpr bool is_X = _is_set(X_CHANNEL0 | X_CHANNEL1);
-            constexpr bool is_Y = _is_set(Y_CHANNEL0 | Y_CHANNEL1);
-            constexpr bool is_Z = _is_set(Z_CHANNEL0 | Z_CHANNEL1);
-            constexpr bool is_W = _is_set(W_CHANNEL0 | W_CHANNEL1);
 
             constexpr bool is_single_counter_op = (selected_channel0 != selected_channel1) && (is_X + is_Y + is_Z + is_W == 1);
             constexpr bool is_xx_op             = is_X && !is_Y && !is_Z && !is_W && selected_channel0 && selected_channel1;
@@ -545,25 +564,15 @@ public:
                     "unsupported selection — matches none of the valid op() patterns (single counter/single channel, X/Y any channel, or Z/W any channel)");
             }
         }
-        else if constexpr (operation == GetOpType::INCREMENT)
+        else if constexpr (operation == GetOpType::INCREMENT || operation == GetOpType::ADVANCE_AND_RESET)
         {
-            constexpr bool is_X = _is_set(X_CHANNEL0 | X_CHANNEL1);
-            constexpr bool is_Y = _is_set(Y_CHANNEL0 | Y_CHANNEL1);
-
-            constexpr bool is_Z = _is_set(Z_CHANNEL0 | Z_CHANNEL1);
-            constexpr bool is_W = _is_set(W_CHANNEL0 | W_CHANNEL1);
-
-            if constexpr (is_X || is_Y)
+            if constexpr (has_xy)
             {
                 return _xy_op<operation>();
             }
-            else if constexpr (is_Z || is_W)
-            {
-                return _zw_op<operation>();
-            }
             else
             {
-                static_assert(dependent_false_v<SetMask>, "misuse - nothing to increment");
+                return _zw_op<operation>();
             }
         }
         else
@@ -643,17 +652,29 @@ public:
         }
     }
 
-    // TT_ADDRCRXY and ADDRCRZW were never used and were removed in later arhitecures
-    // inline __attribute__((always_inline)) void add_and_reset() const
-    // {
-    //     static_assert(ClientMask != 0, "add_and_reset(): no client selected — call client<...>() first");
-    //     static_assert(ChannelMask != 0, "add_and_reset(): no channel selected — call channel<...>() first");
+    /**
+     * @brief Advance selected carry/reset shadows, then reset their live counters to the updated shadows.
+     *
+     * Emits ADDRCRXY for selected X/Y counters and ADDRCRZW for selected Z/W counters.
+     * A zero increment restores the live counter from its unchanged carry/reset shadow.
+     */
+    inline __attribute__((always_inline)) void advance_and_reset() const
+    {
+        _assert_selection();
 
-    //     if constexpr (_is_set(X_SET)) {}
-    //     if constexpr (_is_set(Y_SET)) {}
-    //     if constexpr (_is_set(Z_SET)) {}
-    //     if constexpr (_is_set(W_SET)) {}
-    // }
+        constexpr bool has_xy = _is_set(X_CHANNEL0 | X_CHANNEL1 | Y_CHANNEL0 | Y_CHANNEL1);
+        constexpr bool has_zw = _is_set(Z_CHANNEL0 | Z_CHANNEL1 | W_CHANNEL0 | W_CHANNEL1);
+
+        if constexpr (has_xy)
+        {
+            INSTRUCTION_WORD(_xy_op<GetOpType::ADVANCE_AND_RESET>());
+        }
+
+        if constexpr (has_zw)
+        {
+            INSTRUCTION_WORD(_zw_op<GetOpType::ADVANCE_AND_RESET>());
+        }
+    }
 };
 
 /**
@@ -911,9 +932,8 @@ public:
                 return TT_OP_SETADCZW(ClientMask, w_channel1, z_channel1, w_channel0, z_channel0, write_mask);
             }
         }
-        else
+        else if constexpr (operation == GetOpType::INCREMENT)
         {
-            static_assert(operation == GetOpType::INCREMENT, "invalid operation type");
             if constexpr (has_xy)
             {
                 return TT_OP_INCADCXY(ClientMask, y_channel1, x_channel1, y_channel0, x_channel0);
@@ -921,6 +941,28 @@ public:
             else
             {
                 return TT_OP_INCADCZW(ClientMask, w_channel1, z_channel1, w_channel0, z_channel0);
+            }
+        }
+        else
+        {
+            static_assert(operation == GetOpType::ADVANCE_AND_RESET, "invalid operation type");
+            if constexpr (has_xy)
+            {
+                constexpr std::uint8_t write_mask =
+                    (_is_set(X_CHANNEL0) << 0) | (_is_set(Y_CHANNEL0) << 1) | (_is_set(X_CHANNEL1) << 2) | (_is_set(Y_CHANNEL1) << 3);
+                LLK_ASSERT(
+                    TT_ADDRCRXY_VALID(ClientMask, y_channel1, x_channel1, y_channel0, x_channel0, write_mask),
+                    "ADDRCRXY increments exceed their encoded field widths");
+                return TT_OP_ADDRCRXY(ClientMask, y_channel1, x_channel1, y_channel0, x_channel0, write_mask);
+            }
+            else
+            {
+                constexpr std::uint8_t write_mask =
+                    (_is_set(Z_CHANNEL0) << 0) | (_is_set(W_CHANNEL0) << 1) | (_is_set(Z_CHANNEL1) << 2) | (_is_set(W_CHANNEL1) << 3);
+                LLK_ASSERT(
+                    TT_ADDRCRZW_VALID(ClientMask, w_channel1, z_channel1, w_channel0, z_channel0, write_mask),
+                    "ADDRCRZW increments exceed their encoded field widths");
+                return TT_OP_ADDRCRZW(ClientMask, w_channel1, z_channel1, w_channel0, z_channel0, write_mask);
             }
         }
     }
@@ -992,6 +1034,17 @@ public:
         {
             TT_INCADCZW(ClientMask, w_channel1, z_channel1, w_channel0, z_channel0);
         }
+    }
+
+    /**
+     * @brief Advance selected carry/reset shadows, then reset their live counters to the updated shadows.
+     *
+     * Runtime-valued builders must select either X/Y or Z/W so the terminal emits one instruction.
+     * A zero increment restores the live counter from its unchanged carry/reset shadow.
+     */
+    inline __attribute__((always_inline)) void advance_and_reset() const
+    {
+        ckernel::instrn_buffer[0] = get_operation<GetOpType::ADVANCE_AND_RESET>();
     }
 };
 
