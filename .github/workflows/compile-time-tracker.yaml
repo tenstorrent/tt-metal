@@ -129,8 +129,12 @@ jobs:
           # the conditional include never fires, and push/pull fall back to
           # anonymous HTTPS ("could not read Username for 'https://github.com'").
           # An authenticated remote URL also covers the `git pull --rebase` in the
-          # retry loop below. Same approach as code-coverage.yaml.
-          git clone --branch gh-pages --single-branch \
+          # retry loop below. Same approach as code-coverage.yaml. --depth 1 is
+          # safe here: a shallow clone fetches new remote commits incrementally
+          # just like a full clone when `git pull --rebase` needs them, so it
+          # doesn't affect the retry path, and keeps this daily job from
+          # re-downloading an ever-growing branch history on every run.
+          git clone --branch gh-pages --single-branch --depth 1 \
             "https://x-access-token:${METRICS_PAT}@github.com/tenstorrent/tt-metal-compile-time-tracker.git" \
             /tmp/metrics-repo
 
