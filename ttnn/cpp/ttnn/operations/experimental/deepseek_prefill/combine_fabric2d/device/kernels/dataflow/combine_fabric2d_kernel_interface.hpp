@@ -42,7 +42,7 @@ namespace cmbf2d {
 enum class ProducerCtArg : uint32_t {
     NumL1Slots,
     TokenSizeBytes,
-    SlotTailBytes,
+    ForwardingMetadataSize,
     PeerChipId,
     PeerMeshId,
     RingAddr,
@@ -61,7 +61,7 @@ enum class ProducerCtArg : uint32_t {
 enum class ReaderCtArg : uint32_t {
     NumL1Slots,
     TokenSizeBytes,
-    SlotTailBytes,
+    ForwardingMetadataSize,
     Batch,
     RingAddr,
     FilledAddr,
@@ -112,7 +112,7 @@ constexpr uint32_t SCHED_FWD = 0x80000000u;
 // Ring slot = token + metadata tail. 64 rather than the 32 in use keeps the slot stride DRAM-aligned
 // (14336 + 64 = 64 * 225), which lets a fabric write target a (token_size + 64)-byte forwarding page
 // directly.
-constexpr uint32_t SLOT_TAIL_BYTES = 64;
+constexpr uint32_t FORWARDING_METADATA_SIZE = 64;
 
 // Tail words, as uint64_t indices from (slot_base + token_size_bytes). The reader fills them, the producer
 // consumes them. All uint64_t so the producer needs no sub-word loads.
@@ -140,7 +140,7 @@ constexpr uint64_t SENTINEL_DST_CHIP = UINT64_MAX;
 struct ProducerCtArgs {
     static constexpr uint32_t num_l1_slots = CMBF2D_CT(ProducerCtArg, NumL1Slots);
     static constexpr uint32_t token_size_bytes = CMBF2D_CT(ProducerCtArg, TokenSizeBytes);
-    static constexpr uint32_t slot_tail_bytes = CMBF2D_CT(ProducerCtArg, SlotTailBytes);
+    static constexpr uint32_t forwarding_metadata_size = CMBF2D_CT(ProducerCtArg, ForwardingMetadataSize);
     static constexpr uint32_t peer_chip_id = CMBF2D_CT(ProducerCtArg, PeerChipId);
     static constexpr uint32_t peer_mesh_id = CMBF2D_CT(ProducerCtArg, PeerMeshId);
     static constexpr uint32_t ring_addr = CMBF2D_CT(ProducerCtArg, RingAddr);
@@ -154,7 +154,7 @@ struct ProducerCtArgs {
     static constexpr uint32_t fwd_sem_noc_y = CMBF2D_CT(ProducerCtArg, FwdSemNocY);
     static constexpr uint32_t fwd_sem_addr = CMBF2D_CT(ProducerCtArg, FwdSemAddr);
 
-    static constexpr uint32_t slot_stride = token_size_bytes + slot_tail_bytes;
+    static constexpr uint32_t slot_stride = token_size_bytes + forwarding_metadata_size;
 };
 #endif
 
@@ -162,7 +162,7 @@ struct ProducerCtArgs {
 struct ReaderCtArgs {
     static constexpr uint32_t num_l1_slots = CMBF2D_CT(ReaderCtArg, NumL1Slots);
     static constexpr uint32_t token_size_bytes = CMBF2D_CT(ReaderCtArg, TokenSizeBytes);
-    static constexpr uint32_t slot_tail_bytes = CMBF2D_CT(ReaderCtArg, SlotTailBytes);
+    static constexpr uint32_t forwarding_metadata_size = CMBF2D_CT(ReaderCtArg, ForwardingMetadataSize);
     static constexpr uint32_t batch = CMBF2D_CT(ReaderCtArg, Batch);
     static constexpr uint32_t ring_addr = CMBF2D_CT(ReaderCtArg, RingAddr);
     static constexpr uint32_t filled_addr = CMBF2D_CT(ReaderCtArg, FilledAddr);
@@ -195,7 +195,7 @@ struct ReaderCtArgs {
     static constexpr uint32_t schedule_base = static_cast<uint32_t>(ReaderCtArg::Count);
     static constexpr uint32_t assignment_base = schedule_base + schedule_len;
     static constexpr uint32_t accessor_base = assignment_base + ASSIGNMENT_WORDS * num_assignments;
-    static constexpr uint32_t slot_stride = token_size_bytes + slot_tail_bytes;
+    static constexpr uint32_t slot_stride = token_size_bytes + forwarding_metadata_size;
 };
 #endif
 
@@ -254,7 +254,7 @@ uint32_t num_routed_experts(const CombineFabric2dInputs& tensor_args) {
 }
 
 uint32_t num_dispatch_groups(const CombineFabric2dParams& args, const CombineFabric2dInputs& tensor_args) {
-    return num_routed_experts(tensor_args) / (args.experts_per_chip * args.dispatch_group_size);
+    return num_routed_experts(tensor_args) / (args.experts_per_chip * ring_extent(args));
 }
 
 uint32_t my_row(const CombineFabric2dParams& args, const ttnn::MeshCoordinate& coord) {
@@ -302,7 +302,7 @@ std::vector<uint32_t> pack_producer_args(
     cmbf2d::ProducerCtArgPacker a;
     a[cmbf2d::ProducerCtArg::NumL1Slots] = cmbf2d::NUM_L1_SLOTS;
     a[cmbf2d::ProducerCtArg::TokenSizeBytes] = token_size_bytes(tensor_args);
-    a[cmbf2d::ProducerCtArg::SlotTailBytes] = cmbf2d::SLOT_TAIL_BYTES;
+    a[cmbf2d::ProducerCtArg::ForwardingMetadataSize] = cmbf2d::FORWARDING_METADATA_SIZE;
     a[cmbf2d::ProducerCtArg::PeerChipId] = static_cast<uint32_t>(self.downstream_node.chip_id);
     a[cmbf2d::ProducerCtArg::PeerMeshId] = *self.downstream_node.mesh_id;
     a[cmbf2d::ProducerCtArg::RingAddr] = l1.ring;
@@ -335,7 +335,7 @@ std::vector<uint32_t> pack_reader_args(
     cmbf2d::ReaderCtArgPacker a;
     a[cmbf2d::ReaderCtArg::NumL1Slots] = cmbf2d::NUM_L1_SLOTS;
     a[cmbf2d::ReaderCtArg::TokenSizeBytes] = token_size_bytes(tensor_args);
-    a[cmbf2d::ReaderCtArg::SlotTailBytes] = cmbf2d::SLOT_TAIL_BYTES;
+    a[cmbf2d::ReaderCtArg::ForwardingMetadataSize] = cmbf2d::FORWARDING_METADATA_SIZE;
     a[cmbf2d::ReaderCtArg::Batch] = cmbf2d::BATCH;
     a[cmbf2d::ReaderCtArg::RingAddr] = l1.ring;
     a[cmbf2d::ReaderCtArg::FilledAddr] = plan.ring_filled_addr;
@@ -359,7 +359,7 @@ std::vector<uint32_t> pack_reader_args(
     a[cmbf2d::ReaderCtArg::ExpertsPerChip] = args.experts_per_chip;
     a[cmbf2d::ReaderCtArg::MyExpertBase] = plan.my_expert_base;
     a[cmbf2d::ReaderCtArg::NumExpertsPerTok] = args.num_experts_per_tok;
-    a[cmbf2d::ReaderCtArg::DispatchGroupSize] = args.dispatch_group_size;
+    a[cmbf2d::ReaderCtArg::DispatchGroupSize] = ring_extent(args);
     a[cmbf2d::ReaderCtArg::LocalSplitCount] = stream_count(args.num_links);
     a[cmbf2d::ReaderCtArg::MyRow] = my_row(args, coord);
     a[cmbf2d::ReaderCtArg::ControlAddr] = l1.control;

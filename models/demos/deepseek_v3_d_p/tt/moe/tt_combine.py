@@ -172,7 +172,6 @@ class TtCombineModule(LightweightModule):
                 expert_token_counts,
                 expert_region_offsets,
                 expert_offsets,
-                dispatch_group_size=self.dispatch_group_size,
                 experts_per_chip=self.experts_per_chip,
                 num_experts_per_tok=self.num_experts_per_tok,
                 seq_len_per_chip=tokens_per_chip,
