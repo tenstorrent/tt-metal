@@ -1607,7 +1607,7 @@ def _merge_model_facts(model_root, extra: dict) -> None:
         pass
 
 
-def stage_roots(seq, model_root, model_id: str = "") -> dict:
+def stage_roots(seq, model_root, model_id: str = "", perf_test=None) -> dict:
     """{stage: the top-level module its blocks live under}, or {} when it cannot be established.
 
     THE LINK THE ROOFLINE NEEDED. A stage streams the weights of the subtree it runs and nothing
@@ -1649,6 +1649,54 @@ def stage_roots(seq, model_root, model_id: str = "") -> dict:
                 roots.add(cands[0].split(".", 1)[0])
         if len(roots) == 1:
             out[str(stage)] = roots.pop()
+    return out or _stage_roots_from_generated(secs, perf_test)
+
+
+def _stage_roots_from_generated(secs: dict, perf_test) -> dict:
+    """The same mapping, from the perf test the TOOL generated, when the probe's counts cannot give it.
+
+    THE COUNT JOIN CANNOT FIRE DURING A REAL RUN, and had never fired. It compares the block count
+    the PROBE observed against the depths the checkpoint declares -- but the probe runs
+    depth-capped, by design, so it reports the coverage depth and not the model's:
+
+        stack survey:  audio_tower.layers(32), language_model.model.layers(30)
+        the probe:     TT_PERF_LAYERS={'stack2': 2, 'stack3': 2}
+
+    2 matches no section, and both stacks report the same 2, so even a section of depth 2 would be
+    ambiguous. Measured on voxtral run 5, 2026-08-16: stage_roots returned {}, every stage fell back
+    to the whole-model byte count, and encode -- whose regime the byte model cannot price -- printed
+    "not modelled" beside a 12.80 ms measurement.
+
+    The binding exists elsewhere, written by this tool and not inferred. perf_test_gen indexes the
+    survey's stacks deepest-first and emits `PERF_STACK{i}_LAYERS -> {path}`; the generated test then
+    binds each stage to one of those indices:
+
+        PERF_ENCODE_LAYERS  = _env_layers("TT_PERF_ENCODE_LAYERS",  "TT_PERF_STACK0_LAYERS")
+        PERF_PREFILL_LAYERS = _env_layers("TT_PERF_PREFILL_LAYERS", "TT_PERF_STACK1_LAYERS")
+        PERF_DECODE_LAYERS  = _env_layers("TT_PERF_DECODE_LAYERS",  "TT_PERF_STACK1_LAYERS")
+
+    Ordering the declared sections the same way -- deepest first -- turns index into path: stack0 is
+    the 32-block audio tower, stack1 the 30-block language backbone. Both halves are artifacts this
+    tool produced, so nothing here is a guess about the model.
+
+    TIES ARE REFUSED. Two sections of equal depth cannot be ordered by depth, and an order chosen by
+    name would be a coin toss that silently prices one tower at another's bytes.
+    """
+    if not secs or not perf_test:
+        return {}
+    ordered = sorted(secs.items(), key=lambda kv: (-int(kv[1]), str(kv[0])))
+    depths = [int(c) for _p, c in ordered]
+    if len(set(depths)) != len(depths):
+        return {}
+    try:
+        src = Path(str(perf_test).split("::", 1)[0]).read_text(errors="ignore")
+    except OSError:
+        return {}
+    out: dict = {}
+    for m in re.finditer(r"PERF_([A-Z0-9_]+)_LAYERS\s*=.*?TT_PERF_STACK(\d+)_LAYERS", src):
+        stage, idx = m.group(1).lower(), int(m.group(2))
+        if 0 <= idx < len(ordered):
+            out[stage] = str(ordered[idx][0]).split(".", 1)[0]
     return out
 
 
@@ -2336,7 +2384,7 @@ def _coverage_layers(
                 # leaving that tower with a measurement and no ceiling. Written into the model's own
                 # facts file, which is where the report reads facts from.
                 try:
-                    _roots = stage_roots(seq, _root, _model_id_for_facts(_root))
+                    _roots = stage_roots(seq, _root, _model_id_for_facts(_root), node)
                     if _roots:
                         _merge_model_facts(_root, {"stage_roots": _roots})
                         print("  [optimize/cc] stage subtrees: %s" % _roots, flush=True)

@@ -1537,12 +1537,21 @@ def _roofline_tables(
         # THE HEADLINE BELONGS TO THE RECURRING STAGE -- the one retiring a single item per unit,
         # which is what a per-token/per-step figure measures. Handing it to a prompt-consuming
         # stage would print one stage's measurement under another's heading.
+        # Read BEFORE the fallback below overwrites it: afterwards every stage looks self-timed.
+        _own_ms = _ms is not None
         if _ms is None and per_unit_ms and int((_rf or {}).get("tokens") or 0) == 1:
             _ms = float(per_unit_ms)
-        # The headline RATE describes the recurring stage -- the one retiring a single item per
-        # unit -- which is a property of the stage, not its name.
-        _recurring = int((_rf or {}).get("tokens") or 0) == 1
-        _mrate = measured if (_recurring and measured) else ((1000.0 / _ms) if _ms else None)
+        # THE HEADLINE RATE BELONGS TO THE STAGE THE HEADLINE TIMED, and to no other.
+        #
+        # This asked whether the stage retires ONE item per unit, which is true of a decoded token
+        # and equally true of an encoder pass -- so encode, a stage with its own 12.80 ms in
+        # stage_ms, printed decode's 345.7 tok/s/u. 1000/2.8926 on the encode row: a number from a
+        # different stage, in a unit encode does not use, beside encode's own measured latency.
+        #
+        # The question is not what the stage retires, it is where its milliseconds came from. A
+        # stage the run timed separately has a rate of its own -- 1000/12.80 = 78.1 pass/s -- and
+        # only a stage with no timing of its own falls back to the headline.
+        _mrate = (1000.0 / _ms) if (_own_ms and _ms) else (measured if measured else ((1000.0 / _ms) if _ms else None))
         out.append(
             _row(
                 "%s%s"

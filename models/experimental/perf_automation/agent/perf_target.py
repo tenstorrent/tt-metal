@@ -389,7 +389,26 @@ def _anchor_is_placeholder(anchored_bytes: int, model_facts: dict) -> bool:
     params = ceiling_params(model_facts)
     if not params or not anchored_bytes:
         return False
-    return abs(float(anchored_bytes) - float(params) * _BYTES_PER_PARAM) <= 0.005 * float(params)
+    # ANY params x <A WIDTH>, not just x 1.0.
+    #
+    # This matched 1.0 alone, because that was the only guess that existed when it was written. The
+    # pre-census width then became the model's DECLARED dtype -- correctly, 1.0 was wrong for bf16 --
+    # and the anchor started arriving as params x 2.0. The recogniser did not follow, so the guess
+    # stopped being recognised as a guess and the census could no longer replace it.
+    #
+    # Measured on voxtral, run 5, 2026-08-16: anchor 7.223 GB (3.611e9 x 2.0), census 1.718 GB, and
+    # the report printed a decode floor of 14.11 ms against a 2.89 ms measurement -- 2496.7 GB/s, or
+    # 487% of a 512 GB/s part. Worse than the bug it replaced, and invisible to the suite, because
+    # the test that guards this constructs an anchor of params x 1.0: the value the code no longer
+    # produces. The test encoded the old world and kept passing in the new one.
+    #
+    # What makes an anchor a placeholder is not the number 1.0, it is being PARAMS TIMES A CONSTANT
+    # WIDTH -- a prediction of what the loader would do, made before it did it. Every such product is
+    # superseded by the census; a checkpoint byte total, a measured per-op figure or a previous
+    # census is not one of these products and stays pinned exactly as before.
+    _widths = {float(w) for w in BYTES_PER_ELEM.values()} | {float(w) for w in _KNOWN_SPELLINGS.values()}
+    _widths.add(float(_BYTES_PER_PARAM))
+    return any(abs(float(anchored_bytes) - float(params) * w) <= 0.005 * float(params) * max(w, 1.0) for w in _widths)
 
 
 def bw_fraction(model_facts: dict) -> float:
