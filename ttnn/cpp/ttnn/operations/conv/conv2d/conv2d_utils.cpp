@@ -1038,9 +1038,6 @@ core_count_and_size calculate_L1_usage_for_conv_op(
                                                         : tt::tt_metal::DataType::BFLOAT16;
     const uint32_t input_datum_size = conv_input_dtype == tt::tt_metal::DataType::FLOAT32 ? 4 : 2;
 
-    const bool conv_is_1d_depthwise =
-        is_1d_depthwise_conv(groups, in_channels, out_channels, kernel_size[0], input_height, enable_bias);
-
     const uint32_t input_channels_alignment =
         get_input_channels_alignment(shard_layout, input_layout, false, is_mm_conv, std::nullopt);
     const uint32_t in_channels_aligned = tt::round_up(in_channels, input_channels_alignment);
@@ -1077,6 +1074,16 @@ core_count_and_size calculate_L1_usage_for_conv_op(
         true,
         true,
         conv_config.act_block_h_override);
+
+    // Depthwise L1/CB math must match the program factory that will run this
+    // config: the width sharded factory executes the generic conv path (it
+    // passes is_1d_depthwise_conv=false into get_cb_info), while the sharded
+    // factory (height/block) uses the depthwise path. Estimating depthwise
+    // sizes for a width sharded config produces a CB_allocation_size that
+    // post_conv2d_op_memory_checks_descriptor rejects.
+    const bool conv_is_1d_depthwise =
+        is_1d_depthwise_conv(groups, in_channels, out_channels, kernel_size[0], input_height, enable_bias) &&
+        input_parallel_config.shard_scheme != TensorMemoryLayout::WIDTH_SHARDED;
 
     auto output_compute_grid_size = get_output_compute_grid_size(compute_grid_size, conv_config, input_parallel_config);
     const ParallelConfig output_parallel_config = determine_output_parallel_config(
