@@ -470,6 +470,7 @@ class TtModelArgs:
         max_batch_size=1,
         max_seq_len=1024 * 128,
         optimizations=LlamaOptimizations.accuracy,
+        cache_hf=True,
     ):
         self.num_devices = mesh_device.get_num_devices() if mesh_device else 0
         self.mesh_device = mesh_device
@@ -486,7 +487,11 @@ class TtModelArgs:
         self.hf_config = None  # Populated in _set_hf_params for HF checkpoints
         self.use_hf_rope = False
         self.trust_remote_code_hf = False
-        self.cache_hf_flag = False  # Whether to cache the HF reference model to avoid multiple loads
+        # When True, the real-weight load_state_dict() builds its state dict from the HF reference
+        # model and caches it, so a subsequent reference_*() call reuses that model instead of
+        # loading the 70B checkpoint a second time. Pure-inference consumers that never build a
+        # torch reference (demos, vLLM, accuracy) pass cache_hf=False to keep the lighter loader.
+        self.cache_hf_flag = cache_hf
         self.cached_hf_model = None
         self.fuse_qkv = False
         self.fuse_mlp = False
@@ -2354,9 +2359,11 @@ class TtModelArgs:
     # TODO Update function for large models: For 1 layer tests we only want to load 1 checkpoint file, instead of all.
     def load_state_dict(self):
         """Generate or load state_dict for n_layers of the model"""
-        if self.dummy_weights:
-            # Build the HF reference model from config (random init) and convert its keys to Meta
-            # format, matching the real HF weight-loading path below.
+        if self.dummy_weights or self.cache_hf_flag:
+            # Build the HF reference model and convert its keys to Meta format. For dummy weights
+            # this is a random-init model from config; for real weights reference_transformer()
+            # loads (and, when cache_hf_flag is set, caches) the checkpoint once so a subsequent
+            # reference_*() call reuses the same model instead of loading the 70B checkpoint twice.
             reference_model = self.reference_transformer(wrap=False)
             state_dict = reference_model.state_dict()
             state_dict = standardize_hf_keys(state_dict)
@@ -2810,7 +2817,7 @@ class TtModelArgs:
                 tokenizer.stop_tokens = [tokenizer.eos_token_id]
             return tokenizer
 
-    def encode_prompt(self, prompt_text, system_prompt_text=None, instruct=True):
+    def encode_prompt(self, prompt_text, system_prompt_text=None, instruct=True, add_special_tokens=True):
         if instruct:
             try:
                 return encode_prompt_hf(self.tokenizer, prompt_text, system_prompt_text)
@@ -2820,8 +2827,10 @@ class TtModelArgs:
 
         # add_special_tokens=True prepends the BOS token (Llama HF tokenizers add BOS, not EOS),
         # matching the previous Meta-tokenizer behavior (bos=True, eos=False). Accuracy thresholds
-        # were calibrated with BOS present, so it must not be dropped on the HF path.
-        return self.tokenizer.encode(prompt_text, add_special_tokens=True)
+        # were calibrated with BOS present, so it must not be dropped on the HF path. Callers that
+        # need a raw single-token encoding (e.g. the embedding shape test) can pass
+        # add_special_tokens=False to suppress the BOS token.
+        return self.tokenizer.encode(prompt_text, add_special_tokens=add_special_tokens)
 
 
 def num_to_corerange(x):

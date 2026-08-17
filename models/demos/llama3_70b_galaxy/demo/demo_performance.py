@@ -88,6 +88,7 @@ def run_llama3_decode_performance(
         optimizations=optimizations,
         max_seq_len=max_seq_len,
         dummy_weights=dummy_weights,
+        cache_hf=False,  # Perf demo never builds a torch reference; keep the lighter weight loader.
     )
     model_args.n_layers = layers
 

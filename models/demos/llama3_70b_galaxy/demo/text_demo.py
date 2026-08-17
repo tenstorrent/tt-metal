@@ -209,6 +209,7 @@ def create_tt_model(
         optimizations=optimizations,
         max_seq_len=max_seq_len,
         dummy_weights=dummy_weights,
+        cache_hf=False,  # Demo never builds a torch reference; keep the lighter weight loader.
     )
     # When running running prefill-only profile, run just 1 layer
     tt_model_args.n_layers = num_layers if not prefill_profile else 1
@@ -1721,11 +1722,10 @@ def test_demo_text(
     )
 
     # The ci-eval-1 prompt file pairs its prompts ([A, A, B, B, ...]), so consecutive repeat batches
-    # run identical inputs. State leaking across repeat batches shows up as an *early* divergence,
-    # whereas benign decode non-determinism only diverges deep in the generation. So instead of
-    # requiring byte-identical outputs, gate on the first REPEAT_BATCH_MATCH_TOKENS whitespace tokens
-    # matching (catches state leaks) and log the overall token-overlap ratio for visibility.
-    REPEAT_BATCH_MATCH_TOKENS = 32
+    # run identical inputs. ci-eval-1 runs temperature=0 argmax, so any divergence between paired
+    # batches indicates a real defect (e.g. trace/fabric-CCL buffer corruption), which can first
+    # diverge late in generation. This exact-match gate was purpose-built for that (PR #30739,
+    # issue #27242), so require byte-identical full outputs rather than a token prefix.
     if "ci-eval-1" in test_id:
         # Fail loudly rather than skipping the comparison if any batch failed to record its output
         assert (
@@ -1737,28 +1737,24 @@ def test_demo_text(
             second_idx = first_idx + 1
             first_tokens = repeat_batch_outputs[first_idx].split()
             second_tokens = repeat_batch_outputs[second_idx].split()
-            prefix_matches = first_tokens[:REPEAT_BATCH_MATCH_TOKENS] == second_tokens[:REPEAT_BATCH_MATCH_TOKENS]
             compared = min(len(first_tokens), len(second_tokens))
             matched = sum(1 for a, b in zip(first_tokens, second_tokens) if a == b)
             overlap = matched / compared if compared else 1.0
-            if prefix_matches:
+            if repeat_batch_outputs[first_idx] == repeat_batch_outputs[second_idx]:
                 logger.info(
                     f"Batches {first_idx} and {second_idx} comparison PASSED: "
-                    f"first {REPEAT_BATCH_MATCH_TOKENS} tokens match (overall token overlap {overlap:.1%})"
+                    f"outputs are byte-identical (token overlap {overlap:.1%})"
                 )
             else:
                 logger.warning(
                     f"Batches {first_idx} and {second_idx} comparison FAILED: "
-                    f"first {REPEAT_BATCH_MATCH_TOKENS} tokens differ (overall token overlap {overlap:.1%})"
+                    f"outputs differ (token overlap {overlap:.1%})"
                 )
                 logger.info(f"  Batch {first_idx} output: {repeat_batch_outputs[first_idx][:100]}...")
                 logger.info(f"  Batch {second_idx} output: {repeat_batch_outputs[second_idx][:100]}...")
                 all_matches = False
 
-        assert all_matches, (
-            f"Repeat batch outputs diverge within the first {REPEAT_BATCH_MATCH_TOKENS} tokens, "
-            "indicating state leakage across repeat batches"
-        )
+        assert all_matches, "Repeat batch outputs should be identical"
 
     test_id = request.node.callspec.id
     if "ci-eval-1" in test_id:

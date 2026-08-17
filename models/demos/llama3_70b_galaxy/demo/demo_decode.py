@@ -179,6 +179,7 @@ def run_llama3_demo(
         optimizations=optimizations,
         max_seq_len=max_seq_len,
         dummy_weights=dummy_weights,
+        cache_hf=False,  # Decode demo never builds a torch reference; keep the lighter weight loader.
     )
     model_args.n_layers = layers
 

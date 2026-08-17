@@ -115,7 +115,12 @@ def test_tt_model_acc(
 
     # Load model args and tokenizer
     model_args = TtModelArgs(
-        mesh_device, optimizations=optimizations, max_batch_size=batch_size, max_seq_len=max_seq_len, instruct=True
+        mesh_device,
+        optimizations=optimizations,
+        max_batch_size=batch_size,
+        max_seq_len=max_seq_len,
+        instruct=True,
+        cache_hf=False,  # Accuracy test compares against a reference file, not a torch reference model.
     )
 
     tokenizer = model_args.create_tokenizer()
