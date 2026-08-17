@@ -508,8 +508,8 @@ set_target_properties(
 
 # It's acceptable to use GLOB here because these files are not part of the build and developers aren't generating packages (for now).
 # We may need to revisit later.
-file(GLOB_RECURSE blackhole_kernels ckernels/blackhole/*)
-file(GLOB_RECURSE wormhole_kernels ckernels/wormhole_b0/*)
+file(GLOB_RECURSE blackhole_kernels ckernels/blackhole/*.h)
+file(GLOB_RECURSE wormhole_kernels ckernels/wormhole_b0/*.h)
 
 include(sources.cmake)
 

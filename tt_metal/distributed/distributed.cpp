@@ -10,7 +10,6 @@
 #include "device.hpp"
 #include "mesh_device.hpp"
 #include "mesh_device_impl.hpp"
-#include "mesh_trace.hpp"
 #include "mesh_workload_impl.hpp"
 #include "tt-metalium/program.hpp"
 #include "dispatch/system_memory_manager.hpp"
@@ -18,6 +17,7 @@
 #include "impl/internal/service/service_core_manager_impl.hpp"
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/tt_metal.hpp>
+#include "llrt/tt_cluster.hpp"
 
 namespace tt::tt_metal::distributed {
 
@@ -112,10 +112,17 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
         }
     }
 
-    if (tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
+    auto& ctx = tt::tt_metal::MetalContext::instance();
+    if (ctx.rtoptions().get_fast_dispatch()) {
         mesh_workload.impl().compile(mesh_cq.device());
         mesh_workload.impl().load_binaries(mesh_cq);
         mesh_workload.impl().generate_dispatch_commands(mesh_cq);
+    } else if (ctx.get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+        // Slow dispatch normally JIT-compiles inside LaunchProgram, but the SD mesh CQ
+        // short-circuits for mock devices (no hardware to dispatch to). Compile here so
+        // kernel artifacts are still produced; the SD CQ then no-ops the skipped dispatch.
+        // Mock only, not is_mock_or_emulated(): Emule builds kernels via its own host-JIT path.
+        mesh_workload.impl().compile(mesh_cq.device());
     }
     mesh_cq.enqueue_mesh_workload(mesh_workload, blocking);
 }
@@ -144,26 +151,39 @@ bool EventQuery(const MeshEvent& event) {
     return event_completed;
 }
 
-MeshTraceId BeginTraceCapture(MeshDevice* device, uint8_t cq_id) {
-    auto trace_id = MeshTrace::next_id();
-    device->begin_mesh_trace(cq_id, trace_id);
-    return trace_id;
-}
-
-void Synchronize(MeshDevice* device, std::optional<uint8_t> cq_id, tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    if (!device->is_initialized()) {
+void Synchronize(
+    MeshDevice& device,
+    ttsl::optional_reference<MeshCommandQueue> mesh_cq,
+    ttsl::Span<const SubDeviceId> sub_device_ids) {
+    if (!device.is_initialized()) {
         return;
     }
-    if (cq_id.has_value()) {
-        device->mesh_command_queue(cq_id).finish(sub_device_ids);
+    if (mesh_cq.has_value()) {
+        TT_FATAL(mesh_cq.value().device() == &device, "MeshCommandQueue belongs to a different MeshDevice");
+        mesh_cq.value().finish(sub_device_ids);
     } else {
-        for (uint8_t cq_id = 0; cq_id < device->num_hw_cqs(); ++cq_id) {
-            device->mesh_command_queue(cq_id).finish(sub_device_ids);
+        for (uint8_t cq_id = 0; cq_id < device.num_hw_cqs(); ++cq_id) {
+            device.mesh_command_queue(cq_id).finish(sub_device_ids);
         }
     }
 }
 
-void Finish(MeshCommandQueue& mesh_cq, tt::stl::Span<const SubDeviceId> sub_device_ids) {
+void Synchronize(MeshDevice* device, std::optional<uint8_t> cq_id, ttsl::Span<const SubDeviceId> sub_device_ids) {
+    if (!device->is_initialized()) {
+        return;
+    }
+    if (cq_id.has_value()) {
+        Synchronize(*device, device->mesh_command_queue(cq_id), sub_device_ids);
+    } else {
+        Synchronize(*device, std::nullopt, sub_device_ids);
+    }
+}
+
+MeshTraceId BeginTraceCapture(MeshDevice* device, uint8_t cq_id) {
+    return device->begin_mesh_trace(device->mesh_command_queue(cq_id));
+}
+
+void Finish(MeshCommandQueue& mesh_cq, ttsl::Span<const SubDeviceId> sub_device_ids) {
     mesh_cq.finish(sub_device_ids);
 }
 

@@ -433,6 +433,9 @@ inline void matmul_configure_mop(
         }
     }
 
+    // NOTE: addr_mods live in two banks of 4. A preceding MVMUL whose addr_mod has bias.incr=1 (the ADDR_MOD_3
+    // step above) sets the RWC ExtraAddrModBit, which adds +4 to the *next* instruction's 2-bit addr_mod index.
+    // So the ADDR_MOD_1 encoded below resolves to ADDR_MOD_5 -- reset srca/srcb/dest + increment fidelity phase.
     if constexpr (high_fidelity)
     {
         TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0); // B3A3 or B3A2 // reset srca/srcb/dest, increment phase (addr_mod_5)

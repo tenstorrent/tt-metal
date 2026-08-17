@@ -82,6 +82,7 @@ def test_sparse_sdpa_block_cyclic_sp_multi(mesh_device, nv_fn, nv_id):
         tt_kv,
         tt_idx,
         V_DIM,
+        kv_format=ttnn.transformer.SparseKVFormat.BF16,
         scale=K_DIM**-0.5,
         k_chunk_size=kc,
         block_cyclic_sp_axis=0,  # sp read from mesh axis 0

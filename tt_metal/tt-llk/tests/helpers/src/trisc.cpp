@@ -19,10 +19,11 @@
 
 namespace llk_profiler
 {
-barrier_ptr_t barrier_ptr   = reinterpret_cast<barrier_ptr_t>(BARRIER_START);
-buffer_ptr_t buffer         = reinterpret_cast<buffer_ptr_t>(BUFFERS_START);
-std::uint32_t write_idx     = 0;
-std::uint32_t open_zone_cnt = 0;
+barrier_ptr_t barrier_ptr          = reinterpret_cast<barrier_ptr_t>(BARRIER_START);
+buffer_ptr_t buffer                = reinterpret_cast<buffer_ptr_t>(BUFFERS_START);
+epoch_ptr_t epoch_ptr              = reinterpret_cast<epoch_ptr_t>(EPOCH_ADDR);
+std::uint32_t write_idx            = 0;
+std::uint32_t reserved_words_count = 0;
 
 } // namespace llk_profiler
 

@@ -6,13 +6,14 @@
 
 #include <cstdint>
 
-#include "../../common/tensor_shape.h"
 #include "ckernel_include.h"
 #include "ckernel_ops.h"
 #include "ckernel_template.h"
 #include "cmath_common.h"
 #include "llk_assert.h"
 #include "llk_math_common.h"
+#include "tensor_shape.h"
+#include "tensor_shape_coverage_math.h"
 
 using namespace ckernel;
 
@@ -116,7 +117,7 @@ inline void eltwise_binary_configure_mop_standard(const std::uint32_t acc_to_des
     static_assert(
         math_fidelity == MathFidelity::LoFi || eltwise_binary_type == EltwiseBinaryType::ELWMUL,
         "Math fidelity larger than LoFi only works with Eltwise multiply");
-    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
+    LLK_VALIDATE_TENSOR_SHAPE_MATH("eltwise_binary_configure_mop_standard", tensor_shape);
     const std::uint32_t num_faces       = tensor_shape.total_num_faces();
     const std::uint32_t num_faces_c_dim = tensor_shape.num_faces_c_dim;
     constexpr bool high_fidelity        = is_high_fidelity(math_fidelity);
@@ -202,7 +203,7 @@ inline void eltwise_binary_configure_mop_standard(const std::uint32_t acc_to_des
 template <EltwiseBinaryType eltwise_binary_type, BroadcastType src_b_bcast_type, MathFidelity math_fidelity = MathFidelity::LoFi>
 inline void _llk_math_eltwise_binary_standard_init_(const ckernel::TensorShape &tensor_shape, const std::uint32_t acc_to_dest)
 {
-    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
+    LLK_VALIDATE_TENSOR_SHAPE_MATH("_llk_math_eltwise_binary_standard_init_", tensor_shape);
 
     eltwise_binary_configure_addrmod<eltwise_binary_type, src_b_bcast_type, math_fidelity>();
     eltwise_binary_configure_mop_standard<eltwise_binary_type, src_b_bcast_type, math_fidelity>(acc_to_dest, tensor_shape);
@@ -239,7 +240,7 @@ inline void _llk_math_eltwise_binary_standard_(const ckernel::TensorShape &tenso
         (eltwise_binary_type == EltwiseBinaryType::ELWADD) || (eltwise_binary_type == EltwiseBinaryType::ELWSUB) ||
             (eltwise_binary_type == EltwiseBinaryType::ELWMUL),
         "eltwise_binary_type must be ELWADD, ELWSUB, or ELWMUL");
-    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
+    LLK_VALIDATE_TENSOR_SHAPE_MATH("_llk_math_eltwise_binary_standard_", tensor_shape);
     const std::uint32_t num_faces_r_dim = tensor_shape.num_faces_r_dim;
     constexpr bool high_fidelity        = is_high_fidelity(math_fidelity);
 
@@ -289,8 +290,7 @@ inline void _llk_math_eltwise_binary_standard_(const ckernel::TensorShape &tenso
                     {
                         if (tensor_shape.face_r_dim <= MAX_FPU_ROWS)
                         {
-                            // HiFi: only advance dest register, src was cleared by ADDR_MOD_3
-                            TTI_INCRWC(0, MAX_FPU_ROWS, 0, 0);
+                            TTI_INCRWC(p_setrwc::CR_D, MAX_FPU_ROWS, 0, 0);
                         }
                     }
                     // LoFi: MOP handles face spacing internally via loop_op1, no runtime INCRWC needed
@@ -311,8 +311,7 @@ inline void _llk_math_eltwise_binary_standard_(const ckernel::TensorShape &tenso
                 {
                     if (tensor_shape.face_r_dim <= MAX_FPU_ROWS)
                     {
-                        // HiFi: only advance dest register, src was cleared by ADDR_MOD_3
-                        TTI_INCRWC(0, MAX_FPU_ROWS, 0, 0);
+                        TTI_INCRWC(p_setrwc::CR_D, MAX_FPU_ROWS, 0, 0);
                     }
                 }
                 // LoFi: MOP handles face spacing internally via loop_op1, no runtime INCRWC needed
@@ -367,7 +366,7 @@ inline void eltwise_binary_configure_mop_with_dest_reuse(const std::uint32_t acc
     static_assert(
         math_fidelity == MathFidelity::LoFi || eltwise_binary_type == EltwiseBinaryType::ELWMUL,
         "Math fidelity larger than LoFi only works with Eltwise multiply");
-    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
+    LLK_VALIDATE_TENSOR_SHAPE_MATH("eltwise_binary_configure_mop_with_dest_reuse", tensor_shape);
     constexpr bool high_fidelity    = is_high_fidelity(math_fidelity);
     constexpr std::uint8_t addr_mod = ADDR_MOD_0;
 
@@ -408,11 +407,6 @@ inline void eltwise_binary_configure_mop_with_dest_reuse(const std::uint32_t acc
             tmp.set_last_inner_loop_instr(eltwise_binary_func<EltwiseBinaryType::ELWMUL>(0 /*clr_src*/, 0 /*acc_to_dest*/, broadcast_type, ADDR_MOD_2));
             tmp.set_last_outer_loop_instr(eltwise_binary_func<EltwiseBinaryType::ELWMUL>(CLR_SRC, 0 /*acc_to_dest*/, broadcast_type, ADDR_MOD_3));
 
-            if (tensor_shape.face_r_dim <= MAX_FPU_ROWS)
-            {
-                // HiFi: only advance dest and carry register, src was cleared by ADDR_MOD_3
-                tmp.set_end_op(TT_OP_INCRWC(MAX_FPU_ROWS, MAX_FPU_ROWS, 0, 0));
-            }
             tmp.program();
         }
         else if (tensor_shape.face_r_dim <= MAX_FPU_ROWS)
@@ -455,7 +449,7 @@ template <
 inline void _llk_math_eltwise_binary_with_dest_reuse_init_(const ckernel::TensorShape &tensor_shape, const std::uint32_t acc_to_dest)
 {
     static_assert(binary_reuse_dest != EltwiseBinaryReuseDestType::NONE, "Use _llk_math_eltwise_binary_standard_init_ for no dest reuse");
-    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
+    LLK_VALIDATE_TENSOR_SHAPE_MATH("_llk_math_eltwise_binary_with_dest_reuse_init_", tensor_shape);
 
     eltwise_binary_configure_addrmod<eltwise_binary_type, src_b_bcast_type, math_fidelity>();
     eltwise_binary_configure_mop_with_dest_reuse<eltwise_binary_type, src_b_bcast_type, math_fidelity>(acc_to_dest, tensor_shape);
@@ -470,14 +464,20 @@ inline void _llk_math_eltwise_binary_with_dest_reuse_init_(const ckernel::Tensor
  *
  * @tparam is_fp32_dest_acc_en: Enable FP32 accumulation in the destination register (halves tiles per bank and gates the zero-flag clear).
  * @tparam binary_reuse_dest: Reuse destination as source type, values = <DEST_TO_SRCA/DEST_TO_SRCB>
+ * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
  * @param loop_count: Number of faces to process.
  * @param face_offset: Index of the first face within the tile.
  * @param clear_fp32_dst_acc: Clear the FP32 dest accumulator face when FP32 mode is enabled.
  * @param dst_index: Tile index into the destination register.
+ * @param face_r_dim: Face row dimension; used for HiFi partial-face dest spacing.
  */
-template <bool is_fp32_dest_acc_en, EltwiseBinaryReuseDestType binary_reuse_dest>
+template <bool is_fp32_dest_acc_en, EltwiseBinaryReuseDestType binary_reuse_dest, MathFidelity math_fidelity = MathFidelity::LoFi>
 inline void eltwise_binary_run_with_dest_reuse(
-    const std::uint32_t loop_count, const std::uint32_t face_offset, const bool clear_fp32_dst_acc, const std::uint32_t dst_index)
+    const std::uint32_t loop_count,
+    const std::uint32_t face_offset,
+    const bool clear_fp32_dst_acc,
+    const std::uint32_t dst_index,
+    const std::uint32_t face_r_dim)
 {
     constexpr std::uint32_t ZERO_ACC_MODE = p_zeroacc::CLR_16;
 
@@ -493,6 +493,14 @@ inline void eltwise_binary_run_with_dest_reuse(
         TT_ZEROACC(ZERO_ACC_MODE, clear_fp32, 0, ADDR_MOD_1, get_dest_index_in_faces(local_tile, face_offset + n));
 
         ckernel_template::run();
+
+        if constexpr (is_high_fidelity(math_fidelity))
+        {
+            if (face_r_dim <= MAX_FPU_ROWS)
+            {
+                TTI_INCRWC(p_setrwc::CR_D, MAX_FPU_ROWS, 0, 0);
+            }
+        }
     }
 }
 
@@ -531,7 +539,7 @@ inline void _llk_math_eltwise_binary_with_dest_reuse_(const ckernel::TensorShape
         (eltwise_binary_type == EltwiseBinaryType::ELWADD) || (eltwise_binary_type == EltwiseBinaryType::ELWSUB) ||
             (eltwise_binary_type == EltwiseBinaryType::ELWMUL),
         "eltwise_binary_type must be ELWADD, ELWSUB, or ELWMUL");
-    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
+    LLK_VALIDATE_TENSOR_SHAPE_MATH("_llk_math_eltwise_binary_with_dest_reuse_", tensor_shape);
 
     // Dest counter always jumps by 32x32 tile spacing regardless of actual tile size
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
@@ -580,14 +588,16 @@ inline void _llk_math_eltwise_binary_with_dest_reuse_(const ckernel::TensorShape
             {
                 // face_offset = face_row * num_faces_c_dim (position in face array)
                 const std::uint32_t face_offset = face_row * num_faces_c_dim;
-                eltwise_binary_run_with_dest_reuse<is_fp32_dest_acc_en, binary_reuse_dest>(num_faces_c_dim, face_offset, clear_fp32_dst_acc, dst_index);
+                eltwise_binary_run_with_dest_reuse<is_fp32_dest_acc_en, binary_reuse_dest, math_fidelity>(
+                    num_faces_c_dim, face_offset, clear_fp32_dst_acc, dst_index, tensor_shape.face_r_dim);
                 TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, 0);
             }
         }
         else
         {
             // NONE/ROW/SCALAR: process all faces with ZEROACC
-            eltwise_binary_run_with_dest_reuse<is_fp32_dest_acc_en, binary_reuse_dest>(num_faces, 0 /*face_offset*/, clear_fp32_dst_acc, dst_index);
+            eltwise_binary_run_with_dest_reuse<is_fp32_dest_acc_en, binary_reuse_dest, math_fidelity>(
+                num_faces, 0 /*face_offset*/, clear_fp32_dst_acc, dst_index, tensor_shape.face_r_dim);
 
             if constexpr (src_b_bcast_type == BroadcastType::SCALAR)
             {

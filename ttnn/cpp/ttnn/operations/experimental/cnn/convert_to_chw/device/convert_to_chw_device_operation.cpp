@@ -37,13 +37,13 @@ void ConvertToCHWDeviceOperation::validate_on_program_cache_miss(
         "Output tensor must be width sharded");
 }
 
-TensorSpec ConvertToCHWDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec ConvertToCHWDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& shape = tensor_args.logical_shape();
     const auto B = shape[0];
     const auto HW = shape[2];
     const auto C = shape[3];
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         Shape({B, 1, C, HW}),
         tt::tt_metal::TensorLayout(
             args.dtype, tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR), args.memory_config));

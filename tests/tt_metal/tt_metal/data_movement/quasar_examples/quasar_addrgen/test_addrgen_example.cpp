@@ -43,9 +43,7 @@ bool run_addrgen_test(
             {{"src_stride_en", src_stride_en},
              {"dst_stride_en", dst_stride_en},
              {"num_of_addresses", num_of_addresses}},
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
+        .hw_config = experimental::DataMovementGen2Config{},
     };
 
     experimental::WorkUnitSpec main_wu{

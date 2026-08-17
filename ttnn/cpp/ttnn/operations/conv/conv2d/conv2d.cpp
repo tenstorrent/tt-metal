@@ -125,8 +125,7 @@ Result conv2d_L1(
             input_tensor.layout(),
             input_tensor.dtype(),
             output_dtype,
-            tt::tt_metal::is_device_tensor(input_tensor) ? std::make_optional(input_tensor.memory_config())
-                                                         : std::nullopt,
+            ttnn::is_device_tensor(input_tensor) ? std::make_optional(input_tensor.memory_config()) : std::nullopt,
             kernel_size,
             stride,
             dilation,
@@ -255,7 +254,7 @@ Result conv2d_L1(
     }
 
     // call conv op or matmul micro op
-    bool input_is_on_device = tt::tt_metal::is_device_tensor(input_tensor_post_tm);
+    bool input_is_on_device = ttnn::is_device_tensor(input_tensor_post_tm);
     TT_ASSERT(input_is_on_device);
 
     if (!mm_conv) {
@@ -824,7 +823,7 @@ Result conv2d_DRAM(
         input_tensor_on_device.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "Input Tensor to Conv DRAM should be in Interleaved Memory Layout");
 
-    ttnn::Tensor dram_output_tensor = tt::tt_metal::create_device_tensor(
+    ttnn::Tensor dram_output_tensor = ttnn::create_device_tensor(
         tt::tt_metal::TensorSpec(
             ttnn::Shape({batch_size, output_height, output_width, out_channels}),
             tt::tt_metal::TensorLayout(

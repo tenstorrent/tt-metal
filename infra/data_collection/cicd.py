@@ -9,6 +9,7 @@ from loguru import logger
 from infra.data_collection import pydantic_models
 from infra.data_collection.github.utils import (
     get_data_pipeline_datetime_from_datetime,
+    get_datetime_from_github_datetime,
     get_job_rows_from_github_info,
     get_pipeline_row_from_github_info,
 )
@@ -78,13 +79,16 @@ def create_cicd_json_for_data_analysis(
             logger.info(f"Job id:{github_job_id} is skipped. Skipping job upload.")
             continue
 
+        # Used as the fallback test timestamp when a report carries gtest's not-run epoch sentinel.
+        job_start_timestamp = get_datetime_from_github_datetime(raw_job["job_start_ts"])
+
         test_report_exists = github_job_id in github_job_id_to_test_reports
         if test_report_exists:
             tests = []
             test_reports = github_job_id_to_test_reports[github_job_id]
             for test_report_path in test_reports:
                 logger.info(f"Job id:{github_job_id} Analyzing test report {test_report_path}")
-                tests += get_tests_from_test_report_path(test_report_path)
+                tests += get_tests_from_test_report_path(test_report_path, job_start_timestamp)
             tests = deduplicate_tests_by_full_name(tests)
         else:
             tests = []

@@ -78,7 +78,29 @@ def run(
             partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
         )(shape)
 
-    torch_output_tensor = torch_input_tensor_a + 1
+    # The traced `skip_negative_entries` flag changes the op's semantics: the kernel
+    # increments ONLY entries in [0, INT32_MAX) and leaves negative entries (and
+    # INT32_MAX, which would overflow) unchanged --
+    # see reader_plusone_interleaved.cpp: `if (val < INT32_MAX && val >= 0) val + 1`.
+    # The golden must model that, otherwise every negative entry is off by one.
+    #
+    # On multi-element tensors PCC HIDES the mismatch: an all-negative input is a
+    # uniform +1 offset (perfectly correlated, PCC 1.0) and a mixed-sign input still
+    # scores ~0.99999 against the 0.999 threshold. But on a SINGLE-element tensor PCC
+    # is undefined (zero variance), so comp_pcc falls back to an exact allclose and the
+    # off-by-one surfaces as PCC 0.0. That is the deterministic `(1,)` INT32 failure
+    # seen on every lane (n150/n300/t3k/p100a/p150b/p300a/galaxy) -- with seed 0 the
+    # single element is -56, so the device correctly returns -56 while an unconditional
+    # golden expects -55.
+    if op_kwargs.get("skip_negative_entries", False):
+        _INT32_MAX = 2**31 - 1
+        torch_output_tensor = torch.where(
+            (torch_input_tensor_a >= 0) & (torch_input_tensor_a < _INT32_MAX),
+            torch_input_tensor_a + 1,
+            torch_input_tensor_a,
+        )
+    else:
+        torch_output_tensor = torch_input_tensor_a + 1
 
     is_host = storage_type and "HOST" in str(storage_type)
 

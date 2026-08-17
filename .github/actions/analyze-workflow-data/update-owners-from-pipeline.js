@@ -37,8 +37,8 @@ function normalizeJobName(jobName) {
 /**
  * Extract owner name from comment
  * Examples:
- *   "ULMEPM2MA # Sean Nijjar" -> "Sean Nijjar"
- *   "U045U3DEKM4 # Mohamed Bahnas (Aniruddha Tupe)" -> "Mohamed Bahnas"
+ *   "U06US5C7M7X # Sean Nijjar" -> "Sean Nijjar"
+ *   "U0491KT8MNY # Mohamed Bahnas (Aniruddha Tupe)" -> "Mohamed Bahnas"
  */
 function extractOwnerName(comment) {
   if (!comment) return null;
@@ -54,7 +54,7 @@ function extractOwnerName(comment) {
  * Simple YAML parser for our specific format (array of objects with name and owner_id)
  * Handles the format:
  *   - name: t3k_ttmetal_tests
- *     owner_id: ULMEPM2MA # Sean Nijjar
+ *     owner_id: U06US5C7M7X # Sean Nijjar
  */
 function parseYamlFile(filePath) {
   const content = fs.readFileSync(filePath, 'utf8');

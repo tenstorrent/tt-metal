@@ -10,6 +10,7 @@
 
 // clang-format off: sfpi.h before polyval (polyval uses sfpi_inline); matches blackhole ordering
 #include "sfpi.h"
+#include "llk_math_eltwise_unary_sfpu.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
 // clang-format on
 #include "ckernel_sfpu_recip.h"
@@ -59,8 +60,8 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_unsafe_(sfpi::vFloat val) {
     sfpi::vFloat z = sfpi::as<sfpi::vFloat>(_float_to_int32_for_exp_21f_(xlog2));
 
     sfpi::vInt exponential_part =
-        sfpi::exexp(z, sfpi::ExponentMode::Biased);    // Extract exponent ( = 2**(integer part of val/ln2))
-    sfpi::vMag fractional_part = sfpi::exman(z);       // Extract mantissa ( = leftover part, in [0; 1])
+        sfpi::exexp(z, sfpi::ExponentMode::Biased);  // Extract exponent ( = 2**(integer part of val/ln2))
+    sfpi::vMag fractional_part = sfpi::exman(z);     // Extract mantissa ( = leftover part, in [0; 1])
 
     sfpi::vFloat frac = sfpi::convert<sfpi::vFloat>(fractional_part, sfpi::RoundMode::Nearest);
 
@@ -255,9 +256,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a) {
     return y;
 }
 
-sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_unsafe_(sfpi::vFloat x) {
-    return _sfpu_exp_fp32_accurate_<true>(x);
-}
+sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_unsafe_(sfpi::vFloat x) { return _sfpu_exp_fp32_accurate_<true>(x); }
 
 /*
  * Implementation of _sfpu_exp_21f_bf16_ (same algorithm) with TTI intrinsics
@@ -485,7 +484,7 @@ template <
     bool SCALE_EN = false,
     int ITERATIONS = 8,
     bool CLAMP_NEGATIVE = true>
-void calculate_exponential(const uint exp_base_scale_factor = p_sfpu::kCONST_1_FP16B) {
+void calculate_exponential(const std::uint32_t exp_base_scale_factor = p_sfpu::kCONST_1_FP16B) {
     if constexpr (!APPROXIMATION_MODE) {
         if constexpr (!is_fp32_dest_acc_en) {
             // bfloat16-accurate path: hand-tuned TTI exp_21f kernel.
@@ -707,10 +706,16 @@ constexpr auto hi16 = [](float x) constexpr { return static_cast<std::uint16_t>(
 
 template <
     bool APPROXIMATION_MODE,
-    uint32_t scale = 0x3F800000,
+    std::uint32_t scale = 0x3F800000,
     bool CLAMP_NEGATIVE = true,
     bool is_fp32_dest_acc_en = false>
 void exp_init() {
+    // Common SFPU init inlined (SFPU config register + ADDR_MOD_7 + counter reset), then the op-specific
+    // exp setup below -- one self-contained init, no separate shared-common-init call. Same functionality as
+    // _llk_math_eltwise_unary_sfpu_init_<exponential>() (exp uses only ADDR_MOD_7, no op-specific ADDR_MOD_6).
+    sfpu::_init_sfpu_config_reg();
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
+    math::reset_counters(p_setrwc::SET_ABD_F);
     if constexpr (APPROXIMATION_MODE && CLAMP_NEGATIVE) {
         // Algorithm is adapted from:
         //      A Fast, Compact Approximation of the Exponential Function
@@ -1029,15 +1034,11 @@ void exp_init() {
 #endif
     } else {
         if constexpr (!is_fp32_dest_acc_en) {
-            // LREG12 = 1/ln2
-            TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0x3fb8);
-            TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0xaa3b);
-            TTI_SFPCONFIG(0, p_sfpu::LREG12, 0);
-
-            // LREG13 = c2 = 4.791750143340323e-15f (0x27aca418)
-            TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0x27ac);
-            TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0xa418);
-            TTI_SFPCONFIG(0, p_sfpu::LREG13, 0);
+            // LREG12 = 1/ln2 (0x3fb8aa3b), LREG13 = c2 (0x27aca418), consumed by
+            // _sfpu_exp_21f_bf16_tti_. vConstFloatPrgm0/1 map to LREG12/13 and lower to
+            // the same SFPLOADI+SFPCONFIG pair (verified instruction-identical via disasm).
+            sfpi::vConstFloatPrgm0 = 1.4426950216293334961f;
+            sfpi::vConstFloatPrgm1 = 4.791750143340323e-15f;
         } else {
             // fp32 scalar path (_sfpu_exp_fp32_accurate_) — uses the scalar
             // reciprocal LLK for negative inputs, so its constants must be

@@ -87,6 +87,14 @@ class DataFormat(Enum):
     Fp8_e4m3 = DataFormatInfo("Fp8_e4m3", 1)
 
     @property
+    def cpp_enum_value(self) -> str:
+        return f"DataFormat::{self.name}"
+
+    @property
+    def cpp_underlying_value(self) -> str:
+        return f"ckernel::to_underlying(DataFormat::{self.name})"
+
+    @property
     def size(self) -> Fraction:
         """Returns the byte size of the data format."""
         return self.value.byte_size
@@ -184,6 +192,15 @@ class DataFormat(Enum):
             DataFormat.MxFp8R,
             DataFormat.MxFp8P,
             DataFormat.MxFp4,
+        }
+
+    def is_block_float(self) -> bool:
+        """Checks if the data format is a block float format."""
+        return self in {
+            DataFormat.Bfp8,
+            DataFormat.Bfp8_b,
+            DataFormat.Bfp4_b,
+            DataFormat.Bfp2_b,
         }
 
     def supports_l1_accumulation(self) -> bool:

@@ -30,6 +30,7 @@ uint16_t parse_hex_bitfield(const std::string& str) { return static_cast<uint16_
 
 std::vector<std::string> collect_map_keys(const YAML::Node& map_node) {
     std::vector<std::string> keys;
+    keys.reserve(map_node.size());
     for (auto it = map_node.begin(); it != map_node.end(); ++it) {
         if (it->first.IsScalar()) {
             keys.push_back(it->first.as<std::string>());

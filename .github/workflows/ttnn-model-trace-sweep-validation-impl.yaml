@@ -50,6 +50,7 @@ jobs:
     uses: ./.github/workflows/check-harbor.yaml
   build-artifact:
     needs: check-harbor
+    if: ${{ !cancelled() }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read
@@ -58,7 +59,7 @@ jobs:
     with:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: Release
-      build-wheel: true
+      build-inplace-wheel: true
       platform: Ubuntu 22.04
       enable-lto: false
 
@@ -323,7 +324,7 @@ jobs:
     # Validation stays hardware-grouped, but routing decisions come from the shared
     # CI policy helpers in matrix_runner_config.py rather than workflow-local logic.
     needs: [prepare-validation-inputs, generate-sweeps]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
@@ -401,6 +402,7 @@ jobs:
   run-sweeps-with-tracer:
     name: ${{ matrix.batch_display }}
     needs: [check-harbor, build-artifact, prepare-validation-inputs, generate-sweeps, compute-sweep-matrix]
+    if: ${{ !cancelled() && needs.build-artifact.result == 'success' && needs.prepare-validation-inputs.result == 'success' && needs.generate-sweeps.result == 'success' && needs.compute-sweep-matrix.result == 'success' }}
     strategy:
       fail-fast: false
       matrix:

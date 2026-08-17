@@ -67,7 +67,9 @@ constexpr std::uint32_t PERF_COUNTERS_VALID_COUNT_ADDR  = PERF_COUNTERS_BANK_MAS
 // PerfCounterManager::validate_and_set_enabled().
 constexpr std::uint32_t PERF_COUNTERS_LAYOUT_END = PERF_COUNTERS_VALID_COUNT_ADDR + PERF_COUNTERS_MAX_ZONES * 4;
 
-static_assert(PERF_COUNTERS_LAYOUT_END <= 0x16AFF4u, "Perf counter L1 layout overflows profiler region");
+// Ceiling is the profiler's lowest L1 address — its epoch word at llk_profiler::EPOCH_ADDR (0x16AFF0),
+// added by the sync_point barrier. The counter region must stay strictly below it.
+static_assert(PERF_COUNTERS_LAYOUT_END <= 0x16AFF0u, "Perf counter L1 layout overflows into the profiler region");
 
 } // namespace llk_perf
 
@@ -588,8 +590,8 @@ struct perf_counter_scoped
 
 } // namespace llk_perf
 
-#define PERF_COUNTER_VAR_CONCAT_(a, b)   a##b
-#define PERF_COUNTER_VAR_(line)          PERF_COUNTER_VAR_CONCAT_(_perf_ctr_, line)
+#define PERF_COUNTER_VAR_CONCAT_(a, b) a##b
+#define PERF_COUNTER_VAR_(line)        PERF_COUNTER_VAR_CONCAT_(_perf_ctr_, line)
 #define MEASURE_PERF_COUNTERS(zone_name) \
     const llk_perf::perf_counter_scoped<PERF_RUN_TYPE> PERF_COUNTER_VAR_(__LINE__)(llk_perf::get_zone_id(llk_perf::detail::zone_name_hash(zone_name)));
 

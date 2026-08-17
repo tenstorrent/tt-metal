@@ -155,7 +155,11 @@ an overrun throws, which the host turns into the `[ASAN ERROR] Metadata Overflow
 abort.
 *Diagnostic:* `Metadata Overflow: Program metadata exceeds reserved L1 region`.
 *Exercised by:* `test_metadata_size.cpp` (an overrunning CB death test + a
-fitting-CB positive control).
+fitting-CB positive control, plus a self-calibrating direct test of the emule
+`check_program_metadata_size` throw — it inflates a no-tensor program's static
+config with runtime args to overflow the KERNEL_CONFIG window, and SKIPs on arches
+where that window equals the finalize ring buffer so the check is not
+independently reachable, as on WH/BH today).
 
 ---
 
@@ -199,13 +203,15 @@ false-positives. The non-owning `deallocate()` removes the range under an
 exactly once.
 
 On each access the kernel first **normalizes the address
-to a buffer-relative offset** via `__emule_addr_to_offset` — necessary because
-sharded / CB / `l1_alloc` accesses arrive as absolute bridge pointers, not
-offsets, and a raw absolute value would never match a relative range — then checks
-that offset against the live extents. In none → abort.
+to a buffer-relative offset** via `__emule_addr_to_offset`. Under the L1 offset
+model, sharded / CB / `l1_alloc` accesses already arrive as **0-based offsets**
+(not absolute bridge pointers), so this normalization is now an idempotent guard;
+the resulting offset is checked against the live extents. In none → abort.
 *Diagnostic:* `Out-of-Bounds Write: Attempted to access address 0x… which is not part of any allocated tensor`.
 *Exercised by:* `test_write_outside_tensor.cpp` (L1 + DRAM gap death tests +
-in-bounds L1 and DRAM positive controls).
+in-bounds L1 and DRAM positive controls, a host-poke fallback accept control
+confirming raw L1 the host designated via `WriteToDeviceL1` is not flagged, and a
+just-past-the-poke death test confirming the fallback is not a blanket whitelist).
 
 #### Host-poked L1 regions (false-positive fix)
 The L1 OOB check assumes every legitimately-accessed L1 address ≥ the unreserved
@@ -253,7 +259,7 @@ Two properties make this safe:
   still aborts. Real OOB bugs (e.g. the untilize / repeat / nd_reshard kernel
   overruns) are not masked.
 - **Invisible to Object Intent (§12).** Host-poke ranges live in their own array,
-  are **not** appended to `__emule_l1_resolved_ranges`, and are **not** snapshotted
+  are **not** appended to `__emule_self->san_resolved_log`, and are **not** snapshotted
   by Object Intent — so a host-NOC write into a poked destination can't be
   misread as an "unintended write."
 
@@ -286,14 +292,27 @@ the actual (row-major / tiled face-aware) pad layout before the test is re-enabl
 **Lives in:** `__emule_asan_check_semaphore` in
 `[emule] include/jit_hw/asan/asan_l1_checks.h`; the reserved range is set by the runner
 (`[metal] emulated_program_runner.cpp`).
-**What it catches:** a kernel doing a raw scalar L1 access into the reserved
-semaphore region (semaphores must go through the semaphore API).
+**What it catches:** a kernel access that strays into the reserved semaphore
+region **without semaphore provenance** — a computed offset, an overrun from an
+adjacent region, or a raw address smuggled through a runtime arg.
 **How it works:** the runner passes the semaphore L1 range
 (`__emule_sem_l1_range_start/end`) to the kernel. It's the **first** test in
 `__emule_local_l1_to_ptr`: if the address is in that range, abort.
+Addresses that provably derive from `get_semaphore()` are exempt by
+provenance: the kernel patch pass's S1/S2 rules (`[emule]
+tt_emule/detail/kernel_patcher.hpp`) and the semaphore API's own local-source
+reads (`noc_semaphore_set_remote` / `_set_multicast*`, reached by
+`Semaphore::relay_unicast`/`relay_multicast`) translate via
+`__emule_sem_l1_to_ptr`, which skips only this check and only inside the
+region — raw access to your own semaphore word is legal on silicon (the mcast
+VALID/INVALID payload read, sdpa_decode's packed-nibble poll) and must not
+false-positive. A sem-derived address that leaves the region falls through to
+the full check chain.
 *Diagnostic:* `Illegal Semaphore Access: Offset 0x… is inside the reserved Semaphore region [start, end)`.
-*Exercised by:* `test_semaphore_write.cpp` (an in-region write death test + an
-outside-region positive control).
+*Exercised by:* `test_semaphore_write.cpp` (an in-region stray-write death test,
+an outside-region positive control, raw-`get_semaphore`-cast and
+`relay_unicast` no-violation controls, and a sem-derived-but-out-of-region
+death test guarding that the exemption stays region-bounded).
 
 ### 7. CB Boundary Violation
 **Lives in:** `__emule_asan_cb_resolve` in
@@ -329,7 +348,9 @@ A write *past* the CB's allocated region is caught by the OOB check (§4) instea
 *Diagnostic:* `CB Boundary Violation: Attempted to access CB <id> at offset 0x… outside the write/read window`.
 *Exercised by:* `test_write_beyond_res_pages.cpp` (write side, read side, a
 wraparound positive control + a wraparound violation that confirms the modular
-window stays active through a wrap, and a no-active-window control).
+window stays active through a wrap, a no-active-window control, a produced-region
+reuse control, and a globally-allocated-CB exemption control confirming a
+sharded/global CB accessed outside its nominal window is not flagged).
 
 ### 8. CB Reservation Overflow  *(always on)*
 **Lives in:** `__emule_asan_cb_on_reserve` in `[emule] include/jit_hw/asan/asan_cb.h` (called from `cb_reserve_back`).
@@ -359,8 +380,11 @@ read there is harmless.
 `__emule_pending_noc_reads`; the read barrier clears it. `cb_pop_front` aborts if
 that counter is still > 0 (a barrier was skipped before the pop).
 *Diagnostic:* `Race Condition: cb_pop_front(cb_id=…) called while a NoC read is still pending`.
-*Exercised by:* `test_noc_without_barrier.cpp` (a missing-barrier death test + a
-barrier-present positive control confirming the barrier clears the counter).
+*Exercised by:* `test_noc_without_barrier.cpp` (a missing-barrier death test on
+the raw-read path + a barrier-present positive control, an addrgen-path
+missing-barrier death test via `noc_async_read_page` confirming that increment
+site is covered, and a multi-read/single-barrier control pinning the
+clear-to-zero — not decrement — semantic).
 
 ### 10. NOC Transfer Alignment
 **Lives in:** `__emule_check_noc_read_alignment` / `__emule_check_noc_write_alignment`
@@ -375,7 +399,7 @@ L1 = 16 B; DRAM read = 32 B (WH) / 64 B (BH); DRAM write = 16 B. So a DRAM read
 from a 32-aligned source into a 16-aligned L1 destination is legal even though
 their low bits differ.
 *Diagnostic:* `NOC Transfer Alignment: <L1|DRAM> <source|destination> 0x… must be N-byte aligned`.
-*Exercised by:* `test_alignment_writes.cpp` (4 misalignment death tests + a positive control).
+*Exercised by:* `test_alignment_writes.cpp` (7 misalignment death tests + 3 positive controls), covering each per-side branch: L1 destination/source on read, L1 source/destination on write, DRAM source on read, DRAM destination on write, plus an L1-16B positive control. The DRAM-read tests are split per arch — `_WH` variants bake in the 32 B rule, `_BH` variants the 64 B rule. Each queries `device->arch()` at runtime and `GTEST_SKIP`s when it doesn't match, so the bare `Noc*` filter is safe on either cluster (the wrong-arch DRAM variants skip). The regression runners additionally pre-exclude the wrong-arch variant by filter (`Noc*:-*_BH` on wormhole, `Noc*:-*_WH` on blackhole).
 
 ---
 
@@ -450,7 +474,7 @@ no-violation control, and the per-check opt-out env test).
 ### 12. Object Intent Violation
 **Lives in:** `[metal] tt_metal/impl/emulation/emule_sanitizers.cpp` (the
 pre-launch byte snapshot + post-join `memcmp`); the per-kernel "resolved set"
-(`__emule_l1_resolved_ranges`) is recorded by `__emule_asan_check_oob_tensor`
+(the fiber ctx `__emule_self->san_resolved_log`) is recorded by `__emule_asan_check_oob_tensor`
 (`[emule] include/jit_hw/asan/asan_l1_checks.h`), reached via the
 `__emule_local_l1_to_ptr` chokepoint.
 **What it catches:** a kernel that scribbles on *another* buffer's bytes — valid,
@@ -481,8 +505,11 @@ to it is legitimate. The base address passed as a runtime arg equals the buffer'
 offset (same address space, no normalization), so the match is exact.
 *Diagnostic:* `Object Intent Violation: Attempted to modify memory belonging to an adjacent object context — L1 buffer [start, end) … changed but no pointer was resolved into it`.
 *Exercised by:* `test_valid_mem_wrong_alloc.cpp` (adjacent + non-adjacent
-violations, a resolve-both control, and an I/O-arg-exemption positive control
-that confirms a buffer handed to the kernel via runtime args is NOT flagged).
+violations, a resolve-both control, an I/O-arg-exemption positive control
+that confirms a buffer handed to the kernel via runtime args is NOT flagged, a
+globally-allocated-CB exemption control confirming the kernel's own persistent CB
+is not flagged, and a multi-kernel-core control confirming the check cleanly
+no-ops when a core runs more than one kernel — the single-kernel attribution gate).
 Note: a violation test must pass the victim's *byte offset*, never its absolute
 address — passing the address would exempt the victim as an I/O tensor and mask
 the violation.

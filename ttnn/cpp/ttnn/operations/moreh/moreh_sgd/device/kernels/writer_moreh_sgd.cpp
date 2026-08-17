@@ -5,7 +5,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
@@ -35,27 +35,27 @@ void kernel_main() {
 #endif
 
     Noc noc;
-    CircularBuffer cb_param_out_obj(cb_param_out);
+    DataflowBuffer dfb_param_out_obj(cb_param_out);
     const auto param_out_tile_bytes = get_tile_size(cb_param_out);
 #if defined(MOMENTUM)
-    CircularBuffer cb_momentum_out_obj(cb_momentum_out);
+    DataflowBuffer dfb_momentum_out_obj(cb_momentum_out);
     const auto momentum_out_tile_bytes = get_tile_size(cb_momentum_out);
 #endif
 
     uint32_t tile_idx = tile_offset;
     for (uint32_t i = 0; i < num_tiles; i++) {
 #if defined(MOMENTUM)
-        cb_momentum_out_obj.wait_front(onetile);
+        dfb_momentum_out_obj.wait_front(onetile);
         noc.async_write(
-            cb_momentum_out_obj, momentum_out, momentum_out_tile_bytes, {.offset_bytes = 0}, {.page_id = tile_idx});
+            dfb_momentum_out_obj, momentum_out, momentum_out_tile_bytes, {.offset_bytes = 0}, {.page_id = tile_idx});
         noc.async_write_barrier();
-        cb_momentum_out_obj.pop_front(onetile);
+        dfb_momentum_out_obj.pop_front(onetile);
 #endif
 
-        cb_param_out_obj.wait_front(onetile);
-        noc.async_write(cb_param_out_obj, param_out, param_out_tile_bytes, {.offset_bytes = 0}, {.page_id = tile_idx});
+        dfb_param_out_obj.wait_front(onetile);
+        noc.async_write(dfb_param_out_obj, param_out, param_out_tile_bytes, {.offset_bytes = 0}, {.page_id = tile_idx});
         noc.async_write_barrier();
-        cb_param_out_obj.pop_front(onetile);
+        dfb_param_out_obj.pop_front(onetile);
 
         tile_idx++;
     }

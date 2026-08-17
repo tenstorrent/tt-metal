@@ -111,7 +111,7 @@ void NLPCreateQKVHeadsDecodeDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-std::vector<ttnn::TensorSpec> NLPCreateQKVHeadsDecodeDeviceOperation::compute_output_specs(
+std::vector<tt::tt_metal::TensorSpec> NLPCreateQKVHeadsDecodeDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     using namespace tt::constants;
     const auto& input_tensor = tensor_args.input_tensor;
@@ -168,15 +168,15 @@ std::vector<ttnn::TensorSpec> NLPCreateQKVHeadsDecodeDeviceOperation::compute_ou
         v_shard_spec);
 
     return {
-        TensorSpec(
+        tt::tt_metal::TensorSpec(
             q_output_shape,
             tt::tt_metal::TensorLayout(
                 input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), q_mem_config)),
-        TensorSpec(
+        tt::tt_metal::TensorSpec(
             k_output_shape,
             tt::tt_metal::TensorLayout(
                 input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), k_mem_config)),
-        TensorSpec(
+        tt::tt_metal::TensorSpec(
             v_output_shape,
             tt::tt_metal::TensorLayout(
                 input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), v_mem_config))};

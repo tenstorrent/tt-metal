@@ -169,6 +169,13 @@ else()
     add_subdirectory(tt_metal/third_party SYSTEM)
 endif()
 
+option(TT_METAL_SKIP_LINKING "Replace the linker with a no-op touch for clang-tidy builds" OFF)
+if(TT_METAL_SKIP_LINKING)
+    set(CMAKE_CXX_LINK_EXECUTABLE "cmake -E touch <TARGET>")
+    set(CMAKE_C_LINK_EXECUTABLE "cmake -E touch <TARGET>")
+    set(CMAKE_GTEST_DISCOVER_TESTS_DISCOVERY_MODE PRE_TEST)
+endif()
+
 ############################################################################################################################
 # Constructing interface libs for common compiler flags, header directories, and libraries
 #   These interface libs are linked with PUBLIC scope at lowest common target (tt_metal/common) and at tt_metal_libs level
@@ -248,6 +255,18 @@ string(REPLACE ${PROJECT_NAME} ${PROJECT_NAME_LOWER} CMAKE_INSTALL_DOCDIR ${CMAK
 if(ENABLE_CODE_TIMERS)
     add_compile_definitions(TT_ENABLE_CODE_TIMERS)
 endif()
+
+# Descriptor cache-hit fast-path parity check: on every fast-path hit, rebuild the descriptor and
+# assert the patched runtime args + CB addresses match a full rebuild. A debug/CI regression net for
+# incomplete in-place re-application (SDXL silu / MorehAdamW). OFF by default (per-hit rebuild cost).
+# The check is compiled only in ttnn (mesh_device_operation_adapter.hpp), so the
+# TT_DESCRIPTOR_PATCHING_PARITY_CHECK definition is scoped to the ttnn target in ttnn/CMakeLists.txt
+# rather than applied globally.
+option(
+    ENABLE_DESCRIPTOR_PATCHING_PARITY_CHECK
+    "Assert descriptor cache-hit fast-path parity against a full rebuild (debug/CI)."
+    OFF
+)
 
 add_library(metal_common_pch STATIC)
 add_library(TT::CommonPCH ALIAS metal_common_pch)

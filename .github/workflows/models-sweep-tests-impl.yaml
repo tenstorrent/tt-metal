@@ -35,7 +35,7 @@ on:
 
 jobs:
   load-test-matrix:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       matrix: ${{ steps.apply-filters.outputs.matrix }}
     env:
@@ -73,9 +73,11 @@ jobs:
           MATRIX='${{ steps.build-matrix.outputs.matrix }}'
           # Filter by tier
           FILTERED=$(echo "$MATRIX" | jq -c --argjson tier ${{ inputs.tier }} '[.[] | select(.tier == $tier)]')
-          # Filter by model (substring match, case-insensitive)
+          # Filter by model (substring match, case-insensitive; comma-separated OR-list)
           if [ "${{ inputs.model }}" != "all" ]; then
-            FILTERED=$(echo "$FILTERED" | jq -c --arg m "${{ inputs.model }}" '[.[] | select(.model | test($m; "i"))]')
+            FILTERED=$(echo "$FILTERED" | jq -c --arg m "${{ inputs.model }}" '
+              ($m | ascii_downcase | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))) as $toks
+              | [ .[] | select((.model | ascii_downcase) as $mm | any($toks[]; . as $t | $mm | contains($t))) ]')
           fi
           if [ "$FILTERED" = "[]" ]; then
             echo "::warning::No tests found for tier=${{ inputs.tier }}, model=${{ inputs.model }}. Pipeline will be skipped."

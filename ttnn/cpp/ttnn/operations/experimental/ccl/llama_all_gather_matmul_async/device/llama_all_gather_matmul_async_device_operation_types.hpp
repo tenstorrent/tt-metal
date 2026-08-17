@@ -58,6 +58,7 @@ struct LlamaAllGatherMatmulAsyncParams {
     auto attributes() const {
         using ttsl::reflection::Attribute;
         std::vector<std::tuple<std::string, Attribute>> attrs;
+        attrs.reserve(9);
         attrs.emplace_back("devices", devices);
         attrs.emplace_back("dim", dim);
         attrs.emplace_back("num_links", num_links);
@@ -81,8 +82,8 @@ struct LlamaAllGatherMatmulAsyncResult {
 };
 
 struct LlamaAllGatherMatmulAsyncResultSpec {
-    TensorSpec mm;
-    TensorSpec aggregated;
+    tt::tt_metal::TensorSpec mm;
+    tt::tt_metal::TensorSpec aggregated;
 };
 
 struct LlamaAllGatherMatmulAsyncInputs {

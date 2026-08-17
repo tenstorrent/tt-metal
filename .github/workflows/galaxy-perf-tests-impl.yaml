@@ -22,7 +22,7 @@ on:
 
 jobs:
   load-test-matrix:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       matrix: ${{ steps.apply-model-filter.outputs.matrix }}
     env:
@@ -58,6 +58,16 @@ jobs:
           if [ "${{ inputs.model }}" = "all" ]; then
             echo "matrix<<EOF" >> $GITHUB_OUTPUT
             echo "$MATRIX" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          elif [ "${{ inputs.model }}" = "tt-training-models" ]; then
+            # Selecting tt-training-models will override the model filter to select all the models where team is "train"
+            FILTERED=$(echo "$MATRIX" | jq -c '[.[] | select(.team == "train")]')
+            if [ "$FILTERED" = "[]" ]; then
+              echo "::error::No tests found for team 'train'. Ensure train-team entries exist in the test matrix (TESTS_YAML_PATH=${TESTS_YAML_PATH})."
+              exit 1
+            fi
+            echo "matrix<<EOF" >> $GITHUB_OUTPUT
+            echo "$FILTERED" >> $GITHUB_OUTPUT
             echo "EOF" >> $GITHUB_OUTPUT
           else
             FILTERED=$(echo "$MATRIX" | jq -c --arg m "${{ inputs.model }}" '[.[] | select(.model == $m)]')
@@ -115,6 +125,7 @@ jobs:
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
             -e TT_METAL_HOME=${{ github.workspace }}
+            -e TT_METAL_RUNTIME_ROOT=${{ github.workspace }}
             -e ARCH_NAME=${{ matrix.test-group.arch }}
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -v ${{ contains(matrix.test-group.sku, 'perf') && '/mnt/MLPerf:/mnt/MLPerf:ro' || '/donotmount:/donotmount:ro' }}
@@ -155,7 +166,7 @@ jobs:
           hostname: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
       - name: Check perf report exists
         id: check-perf-report
-        if: ${{ !(matrix.test-group.save-perf-data) && !cancelled() }}
+        if: ${{ !(matrix.test-group.save-perf-data) && !cancelled() && matrix.test-group.team != 'train'}}
         run: |
           TODAY=$(date +%Y_%m_%d)
           PERF_REPORT_FILENAME_MODELS="Models_Perf_${TODAY}.csv"
@@ -200,6 +211,16 @@ jobs:
         with:
           name: perf-report-csv-${{ matrix.test-group.model-type }}-${{ matrix.test-group.arch }}-${{ matrix.test-group.model }}-bare-metal
           path: ${{ steps.check-perf-report.outputs.perf_report_filename_all_gather }}
+      - name: Upload metrics data to AWS SFTP bucket
+        timeout-minutes: 5
+        if: ${{ !cancelled() && matrix.test-group.team == 'train'}}
+        uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
+        with:
+          ssh-private-key: ${{ secrets.TT_TRAIN_AWS_KEY }}
+          sftp-batchfile: .github/actions/upload-data-via-sftp/tt_train_model_metrics.txt
+          username: ${{ secrets.TT_TRAIN_AWS_USERNAME }}
+          hostname: ${{ secrets.TT_TRAIN_AWS_HOSTNAME }}
+          path: ./
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}

@@ -41,3 +41,12 @@ class TensixState:
         msg = f"Assertion FAILED: Tensix state mismatch:\n{''.join(diff)}"
         logger.error(msg)
         raise AssertionError(msg)
+
+    @classmethod
+    def assert_not_equal(cls, left: dict, right: dict) -> None:
+        if left != right:
+            return
+
+        msg = "Assertion FAILED: Tensix states are equal but were expected to differ"
+        logger.error(msg)
+        raise AssertionError(msg)

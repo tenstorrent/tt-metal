@@ -9,6 +9,7 @@
 #include <limits>
 
 #include "ckernel_sfpu_exp.h"
+#include "cmath_common.h"
 #include "sfpi.h"
 
 namespace ckernel::sfpu {
@@ -111,21 +112,29 @@ sfpi_inline sfpi::vFloat _sfpu_exp2_bf16_(sfpi::vFloat x) {
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
 inline void calculate_exp2() {
-    for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat v = sfpi::dst_reg[0];
-
-        if constexpr (is_fp32_dest_acc_en) {
+    if constexpr (is_fp32_dest_acc_en) {
+        // fp32 path is a hand-scheduled ILP-interleaved body — leave it rolled so
+        // the compiler keeps its per-row schedule (unrolling only bloats it).
+        for (int d = 0; d < ITERATIONS; d++) {
+            sfpi::vFloat v = sfpi::dst_reg[0];
             sfpi::dst_reg[0] = _sfpu_exp2_fp32_accurate_(v);
-        } else {
-            sfpi::dst_reg[0] = _sfpu_exp2_bf16_(v);
+            sfpi::dst_reg++;
         }
-
-        sfpi::dst_reg++;
+    } else {
+        // bf16 body is a dependent format-conversion chain (convert/exexp/setexp);
+        // unrolling overlaps independent iterations to hide that latency.
+#pragma GCC unroll 8
+        for (int d = 0; d < ITERATIONS; d++) {
+            sfpi::vFloat v = sfpi::dst_reg[0];
+            sfpi::dst_reg[0] = _sfpu_exp2_bf16_(v);
+            sfpi::dst_reg++;
+        }
     }
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false>
 inline void exp2_init() {
+    math::reset_counters(p_setrwc::SET_ABD_F);
     if constexpr (is_fp32_dest_acc_en) {
         // Coefficients for minimax polynomial.
         sfpi::vConstFloatPrgm0 = 0x1.62e42ep-1f;

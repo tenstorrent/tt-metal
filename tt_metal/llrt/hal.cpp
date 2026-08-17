@@ -64,6 +64,35 @@ uint64_t Hal::get_pcie_addr_lower_bound() const { return pcie_addr_lower_bound_;
 
 uint64_t Hal::get_pcie_addr_upper_bound() const { return pcie_addr_upper_bound_; }
 
+HalCoreInfoType create_unregistered_programmable_core(
+    HalProgrammableCoreType programmable_core_type, const HalCoreInfoType& factory_source) {
+    std::vector<DeviceAddr> mem_map_bases(static_cast<std::size_t>(HalL1MemAddrType::COUNT), 0);
+    std::vector<uint32_t> mem_map_sizes(static_cast<std::size_t>(HalL1MemAddrType::COUNT), 0);
+    std::vector<uint32_t> fw_mailbox_addr(static_cast<std::size_t>(FWMailboxMsg::COUNT), 0);
+    return HalCoreInfoType(
+        programmable_core_type,
+        CoreType::WORKER,
+        {},
+        {},
+        std::move(mem_map_bases),
+        std::move(mem_map_sizes),
+        std::move(fw_mailbox_addr),
+        {},
+        false,
+        false,
+        false,
+        factory_source.get_dev_msgs_factory(),
+        factory_source.get_fabric_telemetry_factory(),
+        factory_source.get_realtime_profiler_msgs_factory());
+}
+
+void ensure_hal_core_info_slots(std::vector<HalCoreInfoType>& core_info, const HalCoreInfoType& factory_source) {
+    while (core_info.size() < static_cast<std::size_t>(HalProgrammableCoreType::COUNT)) {
+        const auto slot = static_cast<HalProgrammableCoreType>(core_info.size());
+        core_info.push_back(create_unregistered_programmable_core(slot, factory_source));
+    }
+}
+
 uint32_t Hal::get_programmable_core_type_index(HalProgrammableCoreType programmable_core_type_index) const {
     uint32_t index = static_cast<uint32_t>(programmable_core_type_index);
 

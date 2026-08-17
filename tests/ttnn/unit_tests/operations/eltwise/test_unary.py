@@ -243,6 +243,178 @@ def test_relu(device, h, w, layout):
     run_unary_test(device, h, w, ttnn.relu, layout=layout, ulp=0)
 
 
+def create_banded_range_tensor(input_shape, value_ranges, dtype=torch.uint32):
+    num_elements = torch.prod(torch.tensor(input_shape)).item()
+    per_range = num_elements // len(value_ranges)
+    remainder = num_elements % len(value_ranges)
+
+    segments = []
+    for i, (low, high) in enumerate(value_ranges):
+        n = per_range + (1 if i < remainder else 0)
+        segments.append(torch.linspace(low, high, steps=n, dtype=torch.float64))
+    return torch.cat(segments).to(dtype).reshape(input_shape)
+
+
+# Shared banded coverage of the full uint32 range, used by the relu-family tests.
+UINT32_BANDED_RANGES = [
+    (0, 300),
+    (300, 1000),
+    (1000, 1e4),
+    (1e4, 1e5),
+    (1e5, 1e6),
+    (1e6, 1e7),
+    (1e7, 1e8),
+    (1e8, 1e9),
+    (1e9, 2147483647),
+    (2147483648, 4294967295),
+]
+
+
+# Shared banded coverage of the full int32 range, used by the relu-family tests.
+INT32_BANDED_RANGES = [
+    (-2147483648, -1e9),
+    (-1e9, -1e7),
+    (-1e7, -1e5),
+    (-1e5, -300),
+    (-300, 0),
+    (0, 300),
+    (300, 1e5),
+    (1e5, 1e7),
+    (1e7, 1e9),
+    (1e9, 2147483647),
+]
+
+
+@pytest.mark.parametrize("input_shapes", [torch.Size([1, 2, 32, 128])])
+@pytest.mark.parametrize("value_ranges", [UINT32_BANDED_RANGES])
+def test_relu_uint32_full_range(device, input_shapes, value_ranges):
+    torch_input_tensor = create_banded_range_tensor(input_shapes, value_ranges, dtype=torch.uint32)
+
+    golden_function = ttnn.get_golden_function(ttnn.relu)
+    torch_output_tensor = golden_function(torch_input_tensor.to(torch.int64), device=device).to(torch.uint32)
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.uint32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    output_tensor = ttnn.to_torch(ttnn.relu(input_tensor), dtype=torch.uint32)
+
+    assert torch.equal(output_tensor, torch_output_tensor)
+
+
+def test_relu_reglu_uint32_edge_cases(device):
+    values = [0, 1, 35, 41, 600, 2147483647, 2147483648, 4294967295]
+    torch_input_tensor = torch.tensor([values], dtype=torch.int64).to(torch.uint32)
+
+    golden_function = ttnn.get_golden_function(ttnn.relu)
+    torch_output_tensor = golden_function(torch_input_tensor.to(torch.int64), device=device).to(torch.uint32)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.uint32, device=device, layout=ttnn.TILE_LAYOUT)
+
+    relu_out = ttnn.to_torch(ttnn.relu(input_tensor), dtype=torch.uint32)
+    assert torch.equal(relu_out, torch_output_tensor)
+
+    chain_out = ttnn.to_torch(
+        ttnn.unary_chain(input_tensor, [ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)]), dtype=torch.uint32
+    )
+
+    assert torch.equal(chain_out, torch_output_tensor)
+
+    multiplier = torch.ones((1, 1, 32, 32), dtype=torch.int64).to(torch.uint32)
+    gate_values = [0, 1, 600, 2147483647, 2147483648, 4294967295]
+    gate = torch.tensor((gate_values * 171)[: 32 * 32], dtype=torch.int64).to(torch.uint32).reshape(1, 1, 32, 32)
+    torch_reglu_input = torch.cat([multiplier, gate], dim=-1)
+
+    reglu_golden = ttnn.get_golden_function(ttnn.reglu)
+    torch_reglu_output = reglu_golden(torch_reglu_input.to(torch.int64), -1).to(torch.uint32)
+
+    reglu_input = ttnn.from_torch(torch_reglu_input, dtype=ttnn.uint32, device=device, layout=ttnn.TILE_LAYOUT)
+    reglu_out = ttnn.to_torch(ttnn.reglu(reglu_input, -1), dtype=torch.uint32)
+
+    assert torch.equal(reglu_out, torch_reglu_output)
+
+
+@pytest.mark.parametrize("input_shapes", [torch.Size([1, 2, 32, 128])])
+@pytest.mark.parametrize("value_ranges", [UINT32_BANDED_RANGES])
+def test_reglu_uint32_full_range(device, input_shapes, value_ranges):
+    gate = create_banded_range_tensor(input_shapes, value_ranges, dtype=torch.uint32)
+    multiplier = (gate.to(torch.int64) // 2).to(torch.uint32)
+    torch_reglu_input = torch.cat([multiplier, gate], dim=-1)
+
+    reglu_golden = ttnn.get_golden_function(ttnn.reglu)
+    torch_reglu_output = (reglu_golden(torch_reglu_input.to(torch.int64), -1) % (2**32)).to(torch.uint32)
+
+    reglu_input = ttnn.from_torch(
+        torch_reglu_input,
+        dtype=ttnn.uint32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    reglu_out = ttnn.to_torch(ttnn.reglu(reglu_input, -1), dtype=torch.uint32)
+
+    assert torch.equal(reglu_out, torch_reglu_output)
+
+
+def test_reglu_uint16_full_range(device):
+    gate = create_banded_range_tensor((1, 1, 256, 256), [(0, 65535)], dtype=torch.uint16)
+    multiplier = (gate.to(torch.int64) // 2).to(torch.uint16)
+    torch_reglu_input = torch.cat([multiplier, gate], dim=-1)
+
+    reglu_golden = ttnn.get_golden_function(ttnn.reglu)
+    torch_reglu_output = (reglu_golden(torch_reglu_input.to(torch.int64), -1) % (2**16)).to(torch.uint16)
+
+    reglu_input = ttnn.from_torch(
+        torch_reglu_input,
+        dtype=ttnn.uint16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    reglu_out = ttnn.to_torch(ttnn.reglu(reglu_input, -1), dtype=torch.uint16)
+
+    assert torch.equal(reglu_out, torch_reglu_output)
+
+
+def test_relu_uint8_full_range(device):
+    torch_input_tensor = create_banded_range_tensor((1, 1, 32, 32), [(0, 255)], dtype=torch.uint8)
+
+    golden_function = ttnn.get_golden_function(ttnn.relu)
+    torch_output_tensor = golden_function(torch_input_tensor.to(torch.int64), device=device).to(torch.uint8)
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.uint8,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    output_tensor = ttnn.to_torch(ttnn.relu(input_tensor), dtype=torch.uint8)
+
+    assert torch.equal(output_tensor, torch_output_tensor)
+
+
+def test_relu_uint16_full_range(device):
+    torch_input_tensor = create_banded_range_tensor((1, 1, 256, 256), [(0, 65535)], dtype=torch.uint16)
+
+    golden_function = ttnn.get_golden_function(ttnn.relu)
+    torch_output_tensor = golden_function(torch_input_tensor.to(torch.int64), device=device).to(torch.uint16)
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.uint16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    output_tensor = ttnn.to_torch(ttnn.relu(input_tensor), dtype=torch.uint16)
+
+    assert torch.equal(output_tensor, torch_output_tensor)
+
+
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
@@ -514,17 +686,11 @@ def test_pow(device, h, w, scalar, layout):
 @pytest.mark.parametrize("lower_limit", [0, 1.0, 2, -5.5])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 def test_relu_min(device, h, w, lower_limit, dtype):
     torch.manual_seed(0)
 
-    if dtype == ttnn.bfloat16:
-        torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
-    elif dtype == ttnn.int32:
-        torch_input_tensor = torch.randint(
-            torch.iinfo(torch.int32).min, torch.iinfo(torch.int32).max, (h, w), dtype=torch.int32
-        )
-        lower_limit = int(lower_limit)
+    torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
 
     golden_function = ttnn.get_golden_function(ttnn.relu_min)
     torch_output_tensor = golden_function(torch_input_tensor, lower_limit=lower_limit)
@@ -539,17 +705,11 @@ def test_relu_min(device, h, w, lower_limit, dtype):
 @pytest.mark.parametrize("upper_limit", [0, 1.0, 2, -5.5])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 def test_relu_max(device, h, w, upper_limit, dtype):
     torch.manual_seed(0)
 
-    if dtype == ttnn.bfloat16:
-        torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
-    elif dtype == ttnn.int32:
-        torch_input_tensor = torch.randint(
-            torch.iinfo(torch.int32).min, torch.iinfo(torch.int32).max, (h, w), dtype=torch.int32
-        )
-        upper_limit = int(upper_limit)
+    torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
 
     golden_function = ttnn.get_golden_function(ttnn.relu_max)
     torch_output_tensor = golden_function(torch_input_tensor, upper_limit=upper_limit)
@@ -561,11 +721,420 @@ def test_relu_max(device, h, w, upper_limit, dtype):
     assert torch.equal(torch_output_tensor, output_tensor)
 
 
-@pytest.mark.parametrize("scalar", [1.5, 2.0])
+@pytest.mark.parametrize("input_shapes", [torch.Size([1, 2, 32, 128])])
+@pytest.mark.parametrize("value_ranges", [INT32_BANDED_RANGES])
+@pytest.mark.parametrize("upper_limit", [-(2**31), -(2**30), -7, 0, 7, 1000, 2**24 + 1, 2**30, 2147483647])
+def test_relu_max_int32_full_range(device, input_shapes, value_ranges, upper_limit):
+    torch_input_tensor = create_banded_range_tensor(input_shapes, value_ranges, dtype=torch.int32)
+
+    golden_function = ttnn.get_golden_function(ttnn.relu_max)
+    torch_output_tensor = golden_function(torch_input_tensor.to(torch.int64), upper_limit).to(torch.int32)
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.int32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    output_tensor = ttnn.to_torch(ttnn.relu_max(input_tensor, upper_limit), dtype=torch.int32)
+
+    assert torch.equal(output_tensor, torch_output_tensor)
+
+
+@pytest.mark.parametrize("input_shapes", [torch.Size([1, 2, 32, 128])])
+@pytest.mark.parametrize("value_ranges", [INT32_BANDED_RANGES])
+@pytest.mark.parametrize("lower_limit", [-(2**31), -(2**30), -7, 0, 7, 1000, 2**24 + 1, 2**30, 2147483647])
+def test_relu_min_int32_full_range(device, input_shapes, value_ranges, lower_limit):
+    torch_input_tensor = create_banded_range_tensor(input_shapes, value_ranges, dtype=torch.int32)
+
+    golden_function = ttnn.get_golden_function(ttnn.relu_min)
+    torch_output_tensor = golden_function(torch_input_tensor.to(torch.int64), lower_limit).to(torch.int32)
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.int32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    output_tensor = ttnn.to_torch(ttnn.relu_min(input_tensor, lower_limit), dtype=torch.int32)
+
+    assert torch.equal(output_tensor, torch_output_tensor)
+
+
+@pytest.mark.parametrize(
+    "op, limit, values",
+    [
+        (ttnn.relu_max, 2**24 + 1, [2**24, 2**24 + 1, 2**24 + 2, 2**26, -5]),
+        (ttnn.relu_max, 2**31 - 1, [2**31 - 3, 2**31 - 2, 2**31 - 1, 0, -5]),
+        (ttnn.relu_min, 2**24 + 1, [2**24, 2**24 + 1, 2**24 + 2, -100, 2**26]),
+        (ttnn.relu_min, 2**31 - 1, [2**31 - 3, 2**31 - 2, 2**31 - 1, -(2**31), 0]),
+    ],
+)
+def test_relu_min_max_int32_edge_cases(device, op, limit, values):
+    n = 32 * 32
+    filled = (values * (n // len(values) + 1))[:n]
+    torch_input_tensor = torch.tensor(filled, dtype=torch.int32).reshape(1, 1, 32, 32)
+
+    golden_function = ttnn.get_golden_function(op)
+    torch_output_tensor = golden_function(torch_input_tensor.to(torch.int64), limit).to(torch.int32)
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.int32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    output_tensor = ttnn.to_torch(op(input_tensor, limit), dtype=torch.int32)
+
+    assert torch.equal(output_tensor, torch_output_tensor)
+
+
+@pytest.mark.parametrize("input_shapes", [torch.Size([1, 2, 32, 128])])
+@pytest.mark.parametrize("value_ranges", [INT32_BANDED_RANGES])
+def test_relu6_int32_full_range(device, input_shapes, value_ranges):
+    torch_input_tensor = create_banded_range_tensor(input_shapes, value_ranges, dtype=torch.int32)
+
+    # torch.nn.functional.relu6 (the ttnn.relu6 golden) has no integer kernel; relu6 clamps to
+    # [0, 6], so compute the golden manually
+    torch_output_tensor = torch.clamp(torch_input_tensor, min=0, max=6)
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.int32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    output_tensor = ttnn.to_torch(ttnn.relu6(input_tensor), dtype=torch.int32)
+
+    assert torch.equal(output_tensor, torch_output_tensor)
+
+
+@pytest.mark.parametrize("input_shapes", [torch.Size([1, 2, 32, 128])])
+@pytest.mark.parametrize("value_ranges", [UINT32_BANDED_RANGES])
+@pytest.mark.parametrize("upper_limit", [6, 100, 2**24 + 1, 2**31, 2**32 - 1])
+def test_relu_max_uint32_full_range(device, input_shapes, value_ranges, upper_limit):
+    torch_input_tensor = create_banded_range_tensor(input_shapes, value_ranges, dtype=torch.uint32)
+
+    golden_function = ttnn.get_golden_function(ttnn.relu_max)
+    torch_output_tensor = golden_function(torch_input_tensor.to(torch.int64), upper_limit).to(torch.uint32)
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.uint32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    output_tensor = ttnn.to_torch(ttnn.relu_max(input_tensor, upper_limit), dtype=torch.uint32)
+
+    assert torch.equal(output_tensor, torch_output_tensor)
+
+
+@pytest.mark.parametrize("upper_limit", [6, 100, 60000])
+def test_relu_max_uint16_full_range(device, upper_limit):
+    torch_input_tensor = create_banded_range_tensor((1, 1, 256, 256), [(0, 65535)], dtype=torch.uint16)
+
+    golden_function = ttnn.get_golden_function(ttnn.relu_max)
+    torch_output_tensor = golden_function(torch_input_tensor.to(torch.int64), upper_limit).to(torch.uint16)
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.uint16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    output_tensor = ttnn.to_torch(ttnn.relu_max(input_tensor, upper_limit), dtype=torch.uint16)
+
+    assert torch.equal(output_tensor, torch_output_tensor)
+
+
+@pytest.mark.parametrize("upper_limit", [6, 100, 200])
+def test_relu_max_uint8_full_range(device, upper_limit):
+    torch_input_tensor = create_banded_range_tensor((1, 1, 32, 32), [(0, 255)], dtype=torch.uint8)
+
+    golden_function = ttnn.get_golden_function(ttnn.relu_max)
+    torch_output_tensor = golden_function(torch_input_tensor.to(torch.int64), upper_limit).to(torch.uint8)
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.uint8,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    output_tensor = ttnn.to_torch(ttnn.relu_max(input_tensor, upper_limit), dtype=torch.uint8)
+
+    assert torch.equal(output_tensor, torch_output_tensor)
+
+
+@pytest.mark.parametrize("input_shapes", [torch.Size([1, 2, 32, 128])])
+@pytest.mark.parametrize("value_ranges", [UINT32_BANDED_RANGES])
+@pytest.mark.parametrize("lower_limit", [0, 7, 1000, 2**24 + 1, 2**31, 2**32 - 1])
+def test_relu_min_uint32_full_range(device, input_shapes, value_ranges, lower_limit):
+    torch_input_tensor = create_banded_range_tensor(input_shapes, value_ranges, dtype=torch.uint32)
+
+    golden_function = ttnn.get_golden_function(ttnn.relu_min)
+    torch_output_tensor = golden_function(torch_input_tensor.to(torch.int64), lower_limit).to(torch.uint32)
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.uint32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    output_tensor = ttnn.to_torch(ttnn.relu_min(input_tensor, lower_limit), dtype=torch.uint32)
+
+    assert torch.equal(output_tensor, torch_output_tensor)
+
+
+@pytest.mark.parametrize("lower_limit", [0, 7, 1000, 60000])
+def test_relu_min_uint16_full_range(device, lower_limit):
+    torch_input_tensor = create_banded_range_tensor((1, 1, 256, 256), [(0, 65535)], dtype=torch.uint16)
+
+    golden_function = ttnn.get_golden_function(ttnn.relu_min)
+    torch_output_tensor = golden_function(torch_input_tensor.to(torch.int64), lower_limit).to(torch.uint16)
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.uint16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    output_tensor = ttnn.to_torch(ttnn.relu_min(input_tensor, lower_limit), dtype=torch.uint16)
+
+    assert torch.equal(output_tensor, torch_output_tensor)
+
+
+@pytest.mark.parametrize("lower_limit", [0, 7, 50, 200])
+def test_relu_min_uint8_full_range(device, lower_limit):
+    torch_input_tensor = create_banded_range_tensor((1, 1, 32, 32), [(0, 255)], dtype=torch.uint8)
+
+    golden_function = ttnn.get_golden_function(ttnn.relu_min)
+    torch_output_tensor = golden_function(torch_input_tensor.to(torch.int64), lower_limit).to(torch.uint8)
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.uint8,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    output_tensor = ttnn.to_torch(ttnn.relu_min(input_tensor, lower_limit), dtype=torch.uint8)
+
+    assert torch.equal(output_tensor, torch_output_tensor)
+
+
+@pytest.mark.parametrize("input_shapes", [torch.Size([1, 2, 32, 128])])
+@pytest.mark.parametrize("value_ranges", [UINT32_BANDED_RANGES])
+def test_relu6_uint32_full_range(device, input_shapes, value_ranges):
+    torch_input_tensor = create_banded_range_tensor(input_shapes, value_ranges, dtype=torch.uint32)
+
+    # torch.nn.functional.relu6 (the ttnn.relu6 golden) has no integer kernel
+    # relu6 clamps to [0, 6], so the golden is min(x, 6) on an int64 view for unsigned inputs.
+    torch_output_tensor = torch.min(torch_input_tensor.to(torch.int64), torch.tensor(6, dtype=torch.int64)).to(
+        torch.uint32
+    )
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.uint32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    output_tensor = ttnn.to_torch(ttnn.relu6(input_tensor), dtype=torch.uint32)
+
+    assert torch.equal(output_tensor, torch_output_tensor)
+
+
+def test_relu6_uint16_full_range(device):
+    torch_input_tensor = create_banded_range_tensor((1, 1, 256, 256), [(0, 65535)], dtype=torch.uint16)
+
+    torch_output_tensor = torch.min(torch_input_tensor.to(torch.int64), torch.tensor(6, dtype=torch.int64)).to(
+        torch.uint16
+    )
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.uint16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    output_tensor = ttnn.to_torch(ttnn.relu6(input_tensor), dtype=torch.uint16)
+
+    assert torch.equal(output_tensor, torch_output_tensor)
+
+
+def test_relu6_uint8_full_range(device):
+    torch_input_tensor = create_banded_range_tensor((1, 1, 32, 32), [(0, 255)], dtype=torch.uint8)
+
+    torch_output_tensor = torch.min(torch_input_tensor.to(torch.int64), torch.tensor(6, dtype=torch.int64)).to(
+        torch.uint8
+    )
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.uint8,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    output_tensor = ttnn.to_torch(ttnn.relu6(input_tensor), dtype=torch.uint8)
+
+    assert torch.equal(output_tensor, torch_output_tensor)
+
+
+@pytest.mark.parametrize("input_shapes", [torch.Size([1, 2, 32, 128])])
+@pytest.mark.parametrize("value_ranges", [UINT32_BANDED_RANGES])
+def test_leaky_relu_uint32_full_range(device, input_shapes, value_ranges):
+    torch_input_tensor = create_banded_range_tensor(input_shapes, value_ranges, dtype=torch.uint32)
+
+    # torch's leaky_relu golden has no integer kernel. But leaky_relu is just identity for unsigned inputs.
+    torch_output_tensor = torch_input_tensor
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.uint32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    output_tensor = ttnn.to_torch(ttnn.leaky_relu(input_tensor, negative_slope=0.1), dtype=torch.uint32)
+
+    assert torch.equal(output_tensor, torch_output_tensor)
+
+
+def test_leaky_relu_uint16_full_range(device):
+    torch_input_tensor = create_banded_range_tensor((1, 1, 256, 256), [(0, 65535)], dtype=torch.uint16)
+
+    torch_output_tensor = torch_input_tensor
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.uint16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    output_tensor = ttnn.to_torch(ttnn.leaky_relu(input_tensor, negative_slope=0.1), dtype=torch.uint16)
+
+    assert torch.equal(output_tensor, torch_output_tensor)
+
+
+def test_leaky_relu_uint8_full_range(device):
+    torch_input_tensor = create_banded_range_tensor((1, 1, 32, 32), [(0, 255)], dtype=torch.uint8)
+
+    torch_output_tensor = torch_input_tensor
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.uint8,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    output_tensor = ttnn.to_torch(ttnn.leaky_relu(input_tensor, negative_slope=0.1), dtype=torch.uint8)
+
+    assert torch.equal(output_tensor, torch_output_tensor)
+
+
+# scalar 3 is an integer literal: with unary_remainder now a ScalarVariant, an int scalar on a
+# bfloat16 input flows as the uint32 variant alternative (not float). It must still take the float
+# reciprocal path (non-UINT32 input) and match the golden.
+@pytest.mark.parametrize("scalar", [1.5, 2.0, 3])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_remainder(device, h, w, scalar):
     run_unary_test_with_float_remainder(device, h, w, scalar, ttnn.remainder)
+
+
+@pytest.mark.parametrize("input_shapes", [torch.Size([1, 2, 32, 128])])
+@pytest.mark.parametrize("value_ranges", [UINT32_BANDED_RANGES])
+@pytest.mark.parametrize("scalar", [1, 2, 7, 255, 65536, 2147483647, 2147483648, 4294967295])
+def test_remainder_uint32_full_range(device, input_shapes, value_ranges, scalar):
+    torch_input_tensor = create_banded_range_tensor(input_shapes, value_ranges, dtype=torch.uint32)
+
+    golden_function = ttnn.get_golden_function(ttnn.remainder)
+    torch_output_tensor = golden_function(torch_input_tensor.to(torch.int64), scalar, device=device).to(torch.uint32)
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.uint32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    output_tensor = ttnn.to_torch(ttnn.remainder(input_tensor, scalar), dtype=torch.uint32)
+
+    assert torch.equal(output_tensor, torch_output_tensor)
+
+
+@pytest.mark.parametrize("values", [[0, 1, 35, 41, 600, 2147483647, 2147483648, 4294967295]])
+@pytest.mark.parametrize("scalar", [1, 3, 41, 256, 2147483647, 2147483648, 4294967295])
+def test_remainder_uint32_scalar_edge_cases(device, values, scalar):
+    torch_input_tensor = torch.tensor([values], dtype=torch.int64).to(torch.uint32)
+
+    golden_function = ttnn.get_golden_function(ttnn.remainder)
+    torch_output_tensor = golden_function(torch_input_tensor.to(torch.int64), scalar, device=device).to(torch.uint32)
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.uint32, device=device, layout=ttnn.TILE_LAYOUT)
+    output_tensor = ttnn.to_torch(ttnn.remainder(input_tensor, scalar), dtype=torch.uint32)
+    assert torch.equal(output_tensor, torch_output_tensor), f"mismatch for divisor {scalar}"
+
+
+@pytest.mark.parametrize("input_shapes", [torch.Size([1, 2, 32, 128])])
+@pytest.mark.parametrize("value_ranges", [UINT32_BANDED_RANGES])
+@pytest.mark.parametrize("scalar", [7, 255, 65536, 2147483648, 4294967295])
+@pytest.mark.parametrize("relu_max_limit", [50, 1000])
+def test_remainder_uint32_with_activations(device, input_shapes, value_ranges, scalar, relu_max_limit):
+    torch_input_tensor = create_banded_range_tensor(input_shapes, value_ranges, dtype=torch.uint32)
+
+    golden_function = ttnn.get_golden_function(ttnn.remainder)
+    torch_remainder = golden_function(torch_input_tensor.to(torch.int64), scalar, device=device)
+    torch_output_tensor = torch.clamp(torch_remainder, max=relu_max_limit).to(torch.uint32)
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.uint32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    output_tensor = ttnn.to_torch(
+        ttnn.remainder(
+            input_tensor,
+            scalar,
+            activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU_MAX, relu_max_limit)],
+        ),
+        dtype=torch.uint32,
+    )
+
+    assert torch.equal(output_tensor, torch_output_tensor)
+
+
+def test_remainder_divisor_guard(device, expect_error):
+    uint32_tensor = ttnn.from_torch(
+        torch.tensor([[5, 7, 10, 100]], dtype=torch.int64).to(torch.uint32),
+        dtype=ttnn.uint32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+    )
+
+    # uint32 requires a positive integer divisor: zero and negative divisors are rejected.
+    for bad_divisor in [0, -5]:
+        with expect_error(RuntimeError, "Divisor must be positive"):
+            ttnn.remainder(uint32_tensor, bad_divisor)
+
+    # a float divisor on a uint32 tensor is rejected (it would silently truncate).
+    with expect_error(RuntimeError, "integer scalar divisor"):
+        ttnn.remainder(uint32_tensor, 3.0)
 
 
 @pytest.mark.parametrize("scalar", [1.5, 2.0])
@@ -1771,33 +2340,6 @@ def test_unary_cbrt_ttnn(input_shapes, torch_dtype, ttnn_dtype, atol, device):
         assert_allclose(ttnn.to_torch(output_tensor), golden_tensor, rtol=1e-05, atol=atol)
 
 
-def test_cbrt_arange(device):
-    # Generate all possible bit patterns for bf16
-    all_bitpatterns = torch.arange(0, 2**16, dtype=torch.int32)
-
-    input_tensor = all_bitpatterns.to(torch.uint16).view(torch.bfloat16)
-    input_tensor = input_tensor.to(torch.float32)
-
-    # Mask subnormals (they get flushed to zero) and NaN (converted to inf for bf16)
-    mask = (((all_bitpatterns >> 7) & 0xFF) == 0) | ((all_bitpatterns & 0x7F) != 0) | torch.isnan(input_tensor)
-    input_tensor[mask] = 1.0
-
-    tt_in = ttnn.from_torch(
-        input_tensor,
-        dtype=ttnn.bfloat16,
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
-    golden_function = ttnn.get_golden_function(ttnn.cbrt)
-    golden = golden_function(input_tensor, device=device)
-
-    tt_result = ttnn.cbrt(tt_in)
-    result = ttnn.to_torch(tt_result)
-    assert_with_ulp(golden, result, 1, allow_nonfinite=True)
-
-
 @pytest.mark.parametrize("ttnn_op", [ttnn.isinf, ttnn.isnan, ttnn.isposinf, ttnn.isneginf, ttnn.isfinite])
 @pytest.mark.parametrize(
     "torch_dtype, ttnn_dtype",
@@ -2242,3 +2784,111 @@ def test_unary_mish(torch_dtype, ttnn_dtype, fast_and_approximate_mode, device):
     golden_tensor = golden_function(in_data)
     golden_tensor = golden_tensor.to(output_tensor.dtype)
     assert_allclose(golden_tensor, output_tensor, rtol=1e-05, atol=0.008)
+
+
+# Kimi K3 up-half beta.
+SOFTCAP_BETA = 25.0
+
+# Accuracy-ratio floor: softcap scales x by 1/beta and again by the Horner chain's leading
+# 5.9e-3, so a normal input can drive a subnormal intermediate the SFPU flushes to zero.
+SOFTCAP_FLUSH_FLOOR = 1e-30
+
+# bf16 output rounds the polynomial's ~2.3e-3 relative error to well under half a bf16 ULP, so
+# accuracy is gated in ULP (measured worst case: 0.35). bfp8_b shares one exponent per 16-element
+# block, so a small element next to a large one in the same block carries tens of bf16 ULP through
+# no fault of the op; that arm is gated by PCC instead, and its near-beta output lands on a coarser
+# grid (hence the wider overshoot margin). Both are the dtypes Kimi K3 actually runs.
+SOFTCAP_ULP = 2
+SOFTCAP_BF16_PCC = 0.9999
+SOFTCAP_BFP8_PCC = 0.999
+# The beta bound is exact in fp32, but the pack rounds to nearest, so a beta that is not
+# bf16-representable can come back up to half a bf16 ULP high. 2**-8 keeps this beta-independent.
+SOFTCAP_BOUND_TOL = {ttnn.bfloat16: 2**-8, ttnn.bfloat8_b: 5e-2}
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="softcap is implemented for Blackhole only")
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([100])),
+        (torch.Size([4, 128, 32])),
+    ),
+)
+@pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+def test_unary_softcap(input_shapes, ttnn_dtype, device):
+    torch.manual_seed(0)
+    if ttnn_dtype == ttnn.bfloat8_b:
+        # bfp8_b shares one exponent per 16-element block, so the full-range stress input
+        # (1e-5 .. 3e38 in a single tile) is neither representable nor a realistic activation.
+        # Use a bounded range that still spans the near-linear and saturated (|x| >> beta) regions.
+        in_data = torch.empty(input_shapes, dtype=torch.bfloat16).uniform_(-100.0, 100.0)
+    else:
+        # No range limiting: x/beta may overflow the polynomial's Horner chain to inf,
+        # but the min(., 1.0) clamp that bounds tanh turns that back into exactly beta.
+        in_data = create_full_range_tensor(input_shapes, torch.bfloat16)
+
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    tt_res = ttnn.to_torch(ttnn.softcap(input_tensor, SOFTCAP_BETA))
+    golden = ttnn.get_golden_function(ttnn.softcap)(in_data, beta=SOFTCAP_BETA, device=device)
+
+    # tanh is bounded by 1, so beta is a hard bound; an overshoot means the polynomial's
+    # saturation clamp is not holding.
+    max_abs = tt_res.to(torch.float32).abs().max().item()
+    bound = SOFTCAP_BETA * (1.0 + SOFTCAP_BOUND_TOL[ttnn_dtype])
+    assert max_abs <= bound, f"softcap overshoot: max |out| {max_abs:.4f} > bound {bound:.4f}"
+
+    if ttnn_dtype == ttnn.bfloat8_b:
+        assert_with_pcc(golden, tt_res, pcc=SOFTCAP_BFP8_PCC)
+    else:
+        assert_with_ulp(golden, tt_res, ulp_threshold=SOFTCAP_ULP)
+        assert_with_pcc(golden, tt_res, pcc=SOFTCAP_BF16_PCC)
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="softcap is implemented for Blackhole only")
+def test_softcap_bfloat16_full_domain(device):
+    """Every representable bfloat16 value.
+
+    The Sollya polynomial tanh carries ~2.3e-3 relative error, which is thousands of
+    fp32 ULP but under half a bf16 ULP, so the bf16 output is gated in ULP. The
+    subnormal-flush region is excluded and checked separately.
+    """
+    all_bitpatterns = torch.arange(0, 2**16, dtype=torch.int32).to(torch.uint16)
+    input_tensor = all_bitpatterns.view(torch.bfloat16)
+
+    # NaN does not propagate through min(., 1.0), so the op returns a finite value where
+    # torch returns NaN. Excluded here.
+    input_tensor = torch.where(torch.isnan(input_tensor), torch.zeros_like(input_tensor), input_tensor)
+
+    tt_in = ttnn.from_torch(
+        input_tensor,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    golden = ttnn.get_golden_function(ttnn.softcap)(input_tensor, beta=SOFTCAP_BETA, device=device)
+    result = ttnn.to_torch(ttnn.softcap(tt_in, SOFTCAP_BETA))
+
+    max_abs = result.to(torch.float32).abs().max().item()
+    fd_bound = SOFTCAP_BETA * (1.0 + SOFTCAP_BOUND_TOL[ttnn.bfloat16])
+    assert max_abs <= fd_bound, f"softcap overshoot: max |out| {max_abs:.4f} > bound {fd_bound:.4f}"
+    assert not torch.isnan(result).any(), "finite input produced NaN"
+
+    mask = golden.abs() > SOFTCAP_FLUSH_FLOOR
+    assert_with_ulp(golden[mask], result[mask], ulp_threshold=SOFTCAP_ULP)
+    assert_with_pcc(golden[mask], result[mask], pcc=SOFTCAP_BF16_PCC)
+
+    tiny_max = result[~mask].to(torch.float32).abs().max().item()
+    assert tiny_max <= 4.0 * SOFTCAP_FLUSH_FLOOR, f"negligible-reference region returned {tiny_max:.4e}"
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="softcap is implemented for Blackhole only")
+def test_softcap_zero_beta_guard(device, expect_error):
+    input_tensor = ttnn.from_torch(
+        torch.zeros([32, 32], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+
+    # 1/beta is precomputed host-side, so a zero beta would reach the SFPU as inf.
+    with expect_error(RuntimeError, "SOFTCAP requires a non-zero beta"):
+        ttnn.softcap(input_tensor, 0.0)

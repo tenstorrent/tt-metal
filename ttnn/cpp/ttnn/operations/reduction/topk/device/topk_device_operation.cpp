@@ -31,7 +31,12 @@ DataType resolve_index_dtype(
         return std::get<1>(tensor_args.preallocated_outputs.value()).dtype();
     }
     const auto input_shape = tensor_args.input.padded_shape();
-    return (input_shape[args.dim] <= std::numeric_limits<uint16_t>::max()) ? DataType::UINT16 : DataType::UINT32;
+    // fp32 input sorts with fp32 dest accumulation, which loads indices as INT32, so it requires
+    // 32-bit indices regardless of dimension size. This must agree with compute_output_specs, or the
+    // index CB format and the single-core cost model describe UInt16 while the output tensor is UINT32.
+    const bool uint16_indices = (input_shape[args.dim] <= std::numeric_limits<uint16_t>::max()) &&
+                                (tensor_args.input.dtype() != DataType::FLOAT32);
+    return uint16_indices ? DataType::UINT16 : DataType::UINT32;
 }
 
 // Maps the resolved index dtype onto the circular-buffer data format used by the sort datapath. 16-bit indices
@@ -160,6 +165,18 @@ void TopKDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(args.k != 0, "K must be non-zero");
 
+    // The stable bitonic network is only implemented in the WH/BH LLKs; the Quasar LLK
+    // static_asserts STABLE_SORT == false. Reject it here so the caller gets an actionable error
+    // instead of a kernel JIT failure.
+    if (args.stable) {
+        const auto arch = input_tensor.device()->arch();
+        TT_FATAL(
+            arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE,
+            "TopK stable=true is not supported on {}: the bitonic top-k LLK only implements the stable "
+            "network on Wormhole and Blackhole",
+            arch);
+    }
+
     {
         const int8_t logical_rank = static_cast<int8_t>(input_tensor.logical_shape().rank());
         const int8_t last_dim = logical_rank - 1;
@@ -181,8 +198,9 @@ void TopKDeviceOperation::validate_on_program_cache_miss(
     // Data type validation
     const auto input_tensor_dtype = input_tensor.dtype();
     TT_FATAL(
-        input_tensor_dtype == DataType::BFLOAT16 || input_tensor_dtype == DataType::BFLOAT8_B,
-        "Input tensor must be BFLOAT16, or BFLOAT8_B, got: {}",
+        input_tensor_dtype == DataType::BFLOAT16 || input_tensor_dtype == DataType::BFLOAT8_B ||
+            input_tensor_dtype == DataType::FLOAT32,
+        "Input tensor must be BFLOAT16, BFLOAT8_B, or FLOAT32, got: {}",
         input_tensor_dtype);
 
     // Optional indices tensor validation (for pre-allocated indices)
@@ -193,6 +211,23 @@ void TopKDeviceOperation::validate_on_program_cache_miss(
                 indices_tensor_dtype == DataType::INT32,
             "Optional input tensor must be UINT16, UINT32, or INT32, got: {}",
             indices_tensor_dtype);
+        // fp32 input forces UINT32 index CBs (see compute_output_specs); UINT16 indices would be wrong.
+        TT_FATAL(
+            !(input_tensor_dtype == DataType::FLOAT32 && indices_tensor_dtype == DataType::UINT16),
+            "Optional indices tensor must be UINT32 when input tensor is FLOAT32, got UINT16");
+        // The reader kernels page a caller-supplied indices tensor with the input's page index
+        // (page_id = i * Wt + j), so the two must describe the same tile grid: same padded width
+        // and same total number of tiles. A narrower indices tensor is read past the end of its
+        // buffer and returns indices that do not belong to the returned values. The composite
+        // topk() front-end checks the logical shapes too, but ttnn::prim::topk is a public entry
+        // point of its own. Ranks may legitimately differ (the front-end normalizes only the input
+        // to 4D), so compare the tile grid rather than the full shape.
+        TT_FATAL(
+            indices_tensor->padded_shape()[-1] == input_tensor.padded_shape()[-1] &&
+                indices_tensor->physical_volume() == input_tensor.physical_volume(),
+            "Optional indices tensor must span the same tile grid as the input tensor, got shape: {}, expected: {}",
+            indices_tensor->padded_shape(),
+            input_tensor.padded_shape());
     }
 
     // Preallocated output tensor validation
@@ -200,8 +235,9 @@ void TopKDeviceOperation::validate_on_program_cache_miss(
         const auto output_tensor0_dtype = std::get<0>(preallocated_outputs.value()).dtype();  // Values tensor
         const auto output_tensor1_dtype = std::get<1>(preallocated_outputs.value()).dtype();  // Indices tensor
         TT_FATAL(
-            output_tensor0_dtype == DataType::BFLOAT16 || output_tensor0_dtype == DataType::BFLOAT8_B,
-            "Preallocated output tensor must be BFLOAT16 or BFLOAT8_B got: {}",
+            output_tensor0_dtype == DataType::BFLOAT16 || output_tensor0_dtype == DataType::BFLOAT8_B ||
+                output_tensor0_dtype == DataType::FLOAT32,
+            "Preallocated output tensor must be BFLOAT16, BFLOAT8_B, or FLOAT32 got: {}",
             output_tensor0_dtype);
         TT_FATAL(
             output_tensor1_dtype == DataType::UINT16 || output_tensor1_dtype == DataType::UINT32 ||
@@ -294,17 +330,20 @@ TopKDeviceOperation::spec_return_value_t TopKDeviceOperation::compute_output_spe
     output_shape[-1] = args.k;  // Set last dimension to K (number of top elements)
 
     ttnn::Shape input_shape = input_tensor.padded_shape();
-    // Choose index data type based on dimension size (16-bit vs 32-bit indices)
-    const bool uint16_output = (input_shape[args.dim] <= std::numeric_limits<uint16_t>::max());  // 65535
+    // Choose index data type based on dimension size (16-bit vs 32-bit indices).
+    // fp32 input sorts with fp32 dest accumulation, which loads indices as INT32, so it
+    // requires 32-bit (UINT32) indices regardless of dimension size.
+    const bool uint16_output = (input_shape[args.dim] <= std::numeric_limits<uint16_t>::max()) &&
+                               (input_tensor.dtype() != DataType::FLOAT32);  // 65535
 
     // Create values tensor specification (same data type as input)
-    const auto values_spec = TensorSpec(
+    const auto values_spec = tt::tt_metal::TensorSpec(
         output_shape, TensorLayout(input_tensor.dtype(), PageConfig(Layout::TILE), args.output_memory_config));
 
     // Create indices tensor specification (integer type based on dimension size)
     const DataType index_dtype = uint16_output ? DataType::UINT16 : DataType::UINT32;
-    const auto index_spec =
-        TensorSpec(output_shape, TensorLayout(index_dtype, PageConfig(Layout::TILE), args.output_memory_config));
+    const auto index_spec = tt::tt_metal::TensorSpec(
+        output_shape, TensorLayout(index_dtype, PageConfig(Layout::TILE), args.output_memory_config));
 
     return {values_spec, index_spec};
 }
@@ -331,6 +370,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> topk(
     int8_t dim,
     bool largest,
     bool sorted,
+    bool stable,
     const tt::tt_metal::MemoryConfig& memory_config,
     const tt::tt_metal::CoreRangeSet& sub_core_grids,
     const std::optional<Tensor>& indices_tensor,
@@ -341,6 +381,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> topk(
             .dim = dim,
             .largest = largest,
             .sorted = sorted,
+            .stable = stable,
             .output_memory_config = memory_config,
             .sub_core_grids = sub_core_grids},
         TopkInputs{

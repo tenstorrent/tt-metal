@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -59,6 +59,7 @@ ttnn_dtype_to_torch_dtype = {
     ttnn.int32: torch.int32,
     ttnn.bfloat16: torch.float32,
     ttnn.bfloat8_b: torch.bfloat16,
+    ttnn.bfloat4_b: torch.bfloat16,
     ttnn.float32: torch.float32,
 }
 
@@ -107,6 +108,15 @@ def test_fill_pad_float(
     assert_quality(padded_torch_tensor, padded_torch_output_tensor)
 
 
+BLOCK_FLOAT_FILL_PAD = {
+    ttnn.bfloat8_b: {"pcc": 0.9999, "fill_values": (1.5, float("inf"), float("-inf"))},
+    ttnn.bfloat4_b: {"pcc": 0.95, "fill_values": (1.5,)},
+}
+BLOCK_FLOAT_FILL_PAD_CASES = [
+    (dtype, fill_value) for dtype, cfg in BLOCK_FLOAT_FILL_PAD.items() for fill_value in cfg["fill_values"]
+]
+
+
 @pytest.mark.parametrize(
     "shape",
     [
@@ -123,13 +133,10 @@ def test_fill_pad_float(
         (1, 2, 3, 2, 1, 2, 97, 96),
     ],
 )
-
-# separate test for bfloat8_b where last dim is tile_width aligned (required for bf8b)
-@pytest.mark.parametrize("fill_value", [1.5, float("inf"), float("-inf")])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b])
+@pytest.mark.parametrize("dtype, fill_value", BLOCK_FLOAT_FILL_PAD_CASES)
 @pytest.mark.parametrize("input_mem_config", [ttnn.DRAM_MEMORY_CONFIG])
 @pytest.mark.parametrize("output_mem_config", [ttnn.DRAM_MEMORY_CONFIG])
-def test_fill_pad_bfloat8_b(
+def test_fill_pad_block_float(
     device,
     shape,
     fill_value,
@@ -148,15 +155,16 @@ def test_fill_pad_bfloat8_b(
     )
 
     output_tensor = ttnn.fill_implicit_tile_padding(input_tensor, fill_value, memory_config=output_mem_config)
-    # Guard against the rank>3 dtype leak: BFLOAT8_B inputs typecast through BFLOAT16 internally,
-    # but the helper must cast back to BFLOAT8_B on every return path (incl. the rank>3 reshape branch).
+    # Guard against the rank>3 dtype leak: block-float inputs typecast through BFLOAT16 internally,
+    # but the helper must cast back to the input dtype on every return path (incl. the rank>3 reshape branch).
     assert (
         output_tensor.dtype == dtype
     ), f"fill_implicit_tile_padding leaked dtype: expected {dtype}, got {output_tensor.dtype}"
     padded_torch_output_tensor = ttnn.from_device(output_tensor).to_torch_with_padded_shape()
 
-    # bfloat8_b is a reduced-precision format; keep PCC-based validation for stability.
-    assert_with_pcc(padded_torch_tensor, padded_torch_output_tensor)
+    # Block-float (bfp8/bfp4) is a reduced-precision format; keep PCC-based validation for stability,
+    # with the per-dtype bound from BLOCK_FLOAT_FILL_PAD.
+    assert_with_pcc(padded_torch_tensor, padded_torch_output_tensor, BLOCK_FLOAT_FILL_PAD[dtype]["pcc"])
 
 
 @pytest.mark.parametrize(

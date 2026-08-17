@@ -83,6 +83,40 @@ void create_tensor_cb(
 
 namespace {
 
+// Pick a routing-plane link index that is VALID for each combine-axis neighbor's own forwarding
+// direction. get_forwarding_link_indices resolves the forwarding direction first and returns links in
+// that direction, so on a ring the wrap-direction neighbor may not share the line direction's valid
+// link index. Broadcasting a single {core_link} to every connection would land the wrap connection on
+// an EDM plane that never services it -> the worker hangs in open_finish. Indexing core_link into each
+// neighbor's own valid-link set keeps the choice valid for that direction while still spreading sender
+// cores across links where more than one plane exists. (Kept file-local because the natural shared
+// home, ccl/common, is outside this op's code ownership.)
+std::vector<uint32_t> compute_per_neighbor_forwarding_links(
+    const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
+    const std::vector<tt::tt_fabric::FabricNodeId>& dst_nodes,
+    uint32_t core_link,
+    const char* axis_label) {
+    std::vector<uint32_t> per_conn_links;
+    per_conn_links.reserve(dst_nodes.size());
+    for (const auto& dst_node : dst_nodes) {
+        const auto links = tt::tt_fabric::get_forwarding_link_indices(src_fabric_node_id, dst_node);
+        TT_FATAL(
+            !links.empty(), "No forwarding links from {} to {} neighbor {}", src_fabric_node_id, axis_label, dst_node);
+        log_debug(
+            tt::LogOp,
+            "FABRIC_2D {} link select: src={} dst={} dir={} core_link={} valid_links={} -> {}",
+            axis_label,
+            src_fabric_node_id,
+            dst_node,
+            tt::tt_fabric::get_eth_forwarding_direction(src_fabric_node_id, dst_node).value(),
+            core_link,
+            links.size(),
+            links[core_link % links.size()]);
+        per_conn_links.push_back(links[core_link % links.size()]);
+    }
+    return per_conn_links;
+}
+
 // Per-coord ProgramDescriptor builder.  The cross-device GlobalSemaphores are
 // allocated once at workload scope in create_workload_descriptor() and passed
 // down by const-reference so every per-coord program references the same
@@ -276,7 +310,9 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     constexpr uint32_t MAX_UNTILIZERS_PER_SENDER = 4;
     {
         std::vector<CoreCoord> trimmed_all_untilizer_cores;
+        trimmed_all_untilizer_cores.reserve(num_cores * MAX_UNTILIZERS_PER_SENDER);
         std::vector<uint32_t> trimmed_untilizer_sender_map;
+        trimmed_untilizer_sender_map.reserve(num_cores * MAX_UNTILIZERS_PER_SENDER);
         for (uint32_t s = 0; s < num_cores; s++) {
             if (sender_untilizer_groups[s].size() > MAX_UNTILIZERS_PER_SENDER) {
                 sender_untilizer_groups[s].resize(MAX_UNTILIZERS_PER_SENDER);
@@ -1056,6 +1092,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
 
     // Pre-compute NOC coordinates for all sender cores (for inter-core barrier signaling)
     std::vector<std::pair<uint32_t, uint32_t>> sender_noc_coords;
+    sender_noc_coords.reserve(sender_cores.size());
     for (const auto& sc : sender_cores) {
         auto noc_coord = mesh_device->virtual_core_from_logical_core(sc, tt::CoreType::WORKER);
         sender_noc_coords.emplace_back(noc_coord.x, noc_coord.y);
@@ -1234,6 +1271,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         if (num_links > 0) {
             // Combine-axis neighbors (each a distinct fabric direction) as fabric nodes.
             std::vector<tt::tt_fabric::FabricNodeId> dst_nodes;
+            dst_nodes.reserve(neighbors.size());
             for (const auto& neighbor_coordinate : neighbors) {
                 if (neighbor_coordinate[0] == mesh_coordinate[0] && neighbor_coordinate[1] == mesh_coordinate[1]) {
                     continue;
@@ -1246,14 +1284,15 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
                 // so traffic forwards across MULTIPLE hops (the legacy fixed-link array connection only
                 // forwards a single hop, deadlocking multi-hop FABRIC_2D — e.g. the 4-device column of a
                 // 4x2 mesh). The writer reads num_connections first, then builds the manager from the
-                // appended args. {core_link} (= core_idx % num_links) is one link index applied to all of
-                // this sender core's connections, spreading sender cores across links (matches the
-                // FABRIC_1D path & broadcast).
+                // appended args. Pick a forwarding link valid for each neighbor's own direction (see
+                // compute_per_neighbor_forwarding_links above) rather than broadcasting one {core_link}.
+                const std::vector<uint32_t> per_conn_links =
+                    compute_per_neighbor_forwarding_links(src_fabric_node_id, dst_nodes, core_link, "combine-axis");
                 writer_runtime_args_raw.push_back(static_cast<uint32_t>(dst_nodes.size()));
                 tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
                     src_fabric_node_id,
                     dst_nodes,
-                    {core_link},
+                    per_conn_links,
                     desc,
                     writer_kernel_id,
                     sender_core,
@@ -1375,7 +1414,7 @@ tt::tt_metal::WorkloadDescriptor CombineProgramFactory::create_workload_descript
         mesh_device, operation_attributes.worker_core_range_set, 0, sem_buffer_type);
     // Cross-device barrier: ensure every device's GlobalSemaphores have been allocated
     // before any kernel reads them.  Mirrors the previous prepare_resources hook.
-    tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, {});
+    tt::tt_metal::distributed::Synchronize(*mesh_device, std::nullopt, {});
 
     tt::tt_metal::WorkloadDescriptor workload_descriptor;
     workload_descriptor.semaphores.push_back(init_barrier_semaphore);

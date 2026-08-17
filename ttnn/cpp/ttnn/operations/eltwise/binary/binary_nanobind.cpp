@@ -58,7 +58,7 @@ constexpr auto kRelationalDtypes =
     "UINT8 "
     "(cast to UINT16)";
 constexpr auto kFloatAndInt32Dtypes = "BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32, INT32";
-constexpr auto kMaximumMinimumDtypes =
+constexpr auto kFloatAndInt32UInt32Dtypes =
     "BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32, INT32, UINT32 (range: [0, 4294967295])";
 constexpr auto kFloatOnlyDtypes = "BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32";
 constexpr auto kBitwiseShiftDtypes = "INT32, UINT16 (range: [0, 65535]), UINT32 (range: [0, 4294967295])";
@@ -834,6 +834,57 @@ void bind_binary_composite(
         fn,
         nb::arg("input_tensor_a"),
         nb::arg("input_tensor_b"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none());
+}
+
+template <ttnn::unique_string Name, typename Fn>
+void bind_situ_glu(nb::module_& mod, const std::string& description, const std::string& math, Fn fn) {
+    auto doc = fmt::format(
+        R"doc(
+        {2}
+
+        .. math::
+            {3}
+
+        Args:
+            gate (ttnn.Tensor): the gate input tensor.
+            up (ttnn.Tensor): the up input tensor.
+            beta1 (float): the softcap beta applied to the gate half. Must be non-zero.
+            beta2 (float): the softcap beta applied to the up half. Must be non-zero.
+
+        Keyword args:
+            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
+        Note:
+            Supported dtypes and layouts:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+               * - BFLOAT16, BFLOAT8_B
+                 - TILE
+
+            Implemented for Blackhole only.
+        )doc",
+        std::string(Name),
+        "ttnn." + std::string(Name),
+        description,
+        math);
+
+    ttnn::bind_function<Name>(
+        mod,
+        doc.c_str(),
+        fn,
+        nb::arg("gate"),
+        nb::arg("up"),
+        nb::arg("beta1"),
+        nb::arg("beta2"),
         nb::kw_only(),
         nb::arg("memory_config") = nb::none());
 }
@@ -1743,12 +1794,12 @@ void py_module(nb::module_& mod) {
     export_enum<BinaryOpType>(mod, "BinaryOpType");
     detail::bind_binary_operation<"remainder">(
         mod,
-        R"doc(Computes the remainder of :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
+        R"doc(Computes the remainder of :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`.)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor\_a}}_i \mod \mathrm{{input\_tensor\_b}}_i)doc",
         static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::remainder),
         static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::remainder),
         R"doc(: :code:`'None'` | :code:`'relu'`. )doc",
-        detail::kFloatAndInt32Dtypes,
+        detail::kFloatAndInt32UInt32Dtypes,
         detail::kSameDtypeRequiredFootnote);
 
     detail::bind_binary_operation<"add">(
@@ -2037,6 +2088,12 @@ void py_module(nb::module_& mod) {
         detail::kFloatOnlyDtypes,
         detail::kSameDtypeRequiredFootnote);
 
+    detail::bind_situ_glu<"situ_glu">(
+        mod,
+        R"doc(Computes Moonshot's SiTU-GLU activation over the pre-split :attr:`gate` and :attr:`up` tensors.)doc",
+        R"doc(\mathrm{output\_tensor}_i = \left(\verb|beta1| \cdot \tanh(\mathrm{gate}_i / \verb|beta1|) \cdot \sigma(\mathrm{gate}_i)\right) \cdot \left(\verb|beta2| \cdot \tanh(\mathrm{up}_i / \verb|beta2|)\right))doc",
+        &ttnn::situ_glu);
+
     detail::bind_binary_composite<"nextafter">(
         mod,
         R"doc(Computes nextafter :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
@@ -2051,7 +2108,7 @@ void py_module(nb::module_& mod) {
         static_cast<detail::BinaryUnaryMaxScalarFn>(&ttnn::minimum),
         static_cast<detail::BinaryUnaryMaxTensorFn>(&ttnn::minimum),
         " ",
-        detail::kMaximumMinimumDtypes);
+        detail::kFloatAndInt32UInt32Dtypes);
 
     detail::bind_binary_composite<"atan2">(
         mod,
@@ -2196,7 +2253,7 @@ void py_module(nb::module_& mod) {
         static_cast<detail::BinaryUnaryMaxScalarFn>(&ttnn::maximum),
         static_cast<detail::BinaryUnaryMaxTensorFn>(&ttnn::maximum),
         R"doc(Supported range for :attr:`input_tensor_b` when its of scalar type is [-16777216, 16777216])doc",
-        detail::kMaximumMinimumDtypes);
+        detail::kFloatAndInt32UInt32Dtypes);
 
     detail::bind_prelu<"prelu">(
         mod,
@@ -2209,10 +2266,10 @@ void py_module(nb::module_& mod) {
 
     detail::bind_binary_composite<"outer">(
         mod,
-        R"doc(Computes outer for :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
+        R"doc(Computes the outer product of :attr:`input_tensor_a` and :attr:`input_tensor_b`. The last dim of each input is treated as the vector; any leading dims are batch dims that are right-aligned and broadcast against each other (missing leading dims are treated as 1, and a dim of size 1 expands to match the other input). For inputs of shape :math:`[\ldots, N]` and :math:`[\ldots, M]` the output has shape :math:`[\ldots, N, M]`, equivalent to ``a.unsqueeze(-1) * b.unsqueeze(-2)``.)doc",
         R"doc(\mathrm{output\_tensor} = \mathrm{input\_tensor\_a} \text{ } \otimes \text{ } \mathrm{input\_tensor\_b})doc",
         &ttnn::outer,
-        R"doc(BFLOAT16, FLOAT32)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT32)doc");
 
     detail::bind_polyval<"polyval">(
         mod,

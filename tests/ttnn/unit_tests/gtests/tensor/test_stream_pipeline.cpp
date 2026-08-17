@@ -81,14 +81,9 @@ using ::tt::tt_metal::BufferType;
 using ::tt::tt_metal::CircularBufferConfig;
 using ::tt::tt_metal::CoreCoord;
 using ::tt::tt_metal::CoreRange;
-using ::tt::tt_metal::create_device_tensor;
 using ::tt::tt_metal::CreateCircularBuffer;
 using ::tt::tt_metal::CreateKernel;
 using ::tt::tt_metal::CreateProgram;
-using ::tt::tt_metal::D2DStreamConfig;
-using ::tt::tt_metal::D2DStreamService;
-using ::tt::tt_metal::D2DStreamServiceReceiver;
-using ::tt::tt_metal::D2DStreamServiceSender;
 using ::tt::tt_metal::DataMovementConfig;
 using ::tt::tt_metal::DataMovementProcessor;
 using ::tt::tt_metal::DataType;
@@ -97,9 +92,7 @@ using ::tt::tt_metal::H2DStreamService;
 using ::tt::tt_metal::Layout;
 using ::tt::tt_metal::NOC;
 using ::tt::tt_metal::SetRuntimeArgs;
-using ::tt::tt_metal::Tensor;
 using ::tt::tt_metal::TensorAccessorArgs;
-using ::tt::tt_metal::TensorSpec;
 using ::tt::tt_metal::distributed::EnqueueMeshWorkload;
 using ::tt::tt_metal::distributed::Finish;
 using ::tt::tt_metal::distributed::MeshCoordinate;
@@ -109,6 +102,11 @@ using ::tt::tt_metal::distributed::MeshMapperConfig;
 using ::tt::tt_metal::distributed::MeshShape;
 using ::tt::tt_metal::distributed::MeshWorkload;
 using ::tt::tt_metal::distributed::SocketMemoryConfig;
+using ttnn::D2DStreamConfig;
+using ttnn::D2DStreamService;
+using ttnn::D2DStreamServiceReceiver;
+using ttnn::D2DStreamServiceSender;
+using ttnn::Tensor;
 
 // FABRIC_2D over the system mesh (D2D needs fabric; H2D is PCIe and unaffected).
 using StreamPipelineTest = ::tt::tt_metal::GenericMeshDeviceFabric2DFixture;
@@ -306,7 +304,7 @@ void run_pipeline(
     std::function<std::vector<uint32_t>(uint32_t iter)> make_metadata = {}) {
     ASSERT_GE(num_stages, 2u);
     auto stages = carve_stages(parent, num_stages);
-    const TensorSpec global_spec = make_spec(global_shape, dtype, layout);
+    const tt::tt_metal::TensorSpec global_spec = make_spec(global_shape, dtype, layout);
     const CoreRange workers = use_all_cores ? all_cores_for(*stages[0]) : kWorkerCores;
     const uint32_t fifo_bytes = fifo_bytes_for(global_spec);
     const bool metadata_enabled = metadata_size_bytes > 0;
@@ -351,7 +349,7 @@ void run_pipeline(
     // Output tensor on the last stage, same per-shard spec/topology as the last D2D
     // receiver backing (so the terminal relay's accessor matches 1:1).
     D2DStreamServiceReceiver& last_recv = *d2d.back().second;
-    Tensor output_tensor = create_device_tensor(
+    Tensor output_tensor = ttnn::create_device_tensor(
         last_recv.get_per_shard_spec(), stages[num_stages - 1].get(), last_recv.get_backing_tensor().tensor_topology());
 
     const uint32_t num_elems = static_cast<uint32_t>(global_shape.volume());
@@ -773,14 +771,17 @@ TEST_F(StreamPipelineTest, EightStageLargeAllCores) {
 // Metadata (uint32, full grid): an inline blob ships with every transfer and is
 // forwarded stage-by-stage; the last iter's blob is verified on every terminal
 // worker core. 1-word (smallest), 3-word triple {-1,0,base}, and a full
-// socket-page iota (4096 B) cover the metadata size range. The 3-stage variant
+// FIFO-sized iota (4096 B) cover the metadata size range. The 3-stage variant
 // proves a middle relay forwards the blob (consume + produce) like the stage-0
 // bridge does.
 // ===========================================================================
 
 constexpr uint32_t kMetadataWord = static_cast<uint32_t>(sizeof(uint32_t));
 constexpr uint32_t kMetadataTriple = 3u * static_cast<uint32_t>(sizeof(uint32_t));
-constexpr uint32_t kMetadataFullPageWords = 1024u;  // 4096 B == one socket page
+// 4096 B == the whole socket FIFO for these specs (fifo_bytes_for), and orders of
+// magnitude larger than the 64 B flow-control socket page: metadata capacity is bounded
+// by the FIFO, not by the socket page.
+constexpr uint32_t kMetadataFullPageWords = 1024u;
 
 // 2 stages, 3-word triple {-1,0,1+iter}: basic end-to-end metadata.
 TEST_F(StreamPipelineTest, MetadataTriple) {
@@ -813,7 +814,8 @@ TEST_F(StreamPipelineTest, MetadataOneWord) {
         [](uint32_t iter) { return std::vector<uint32_t>{1u + iter}; });
 }
 
-// Full socket-page metadata: 1024 uint32 words (4096 B) iota [0..1023].
+// Full-FIFO metadata: 1024 uint32 words (4096 B) iota [0..1023]. Also the regression
+// guard for metadata sized well beyond the 64 B socket page.
 TEST_F(StreamPipelineTest, MetadataFullPage) {
     PIPELINE_GUARD(2);
     run_pipeline<uint32_t>(

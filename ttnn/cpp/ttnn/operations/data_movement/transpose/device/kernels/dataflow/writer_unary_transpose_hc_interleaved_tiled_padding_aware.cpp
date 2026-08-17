@@ -5,7 +5,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
@@ -19,7 +19,7 @@ void kernel_main() {
 
     // Compile-time constants
     constexpr uint32_t element_size = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(1);
+    constexpr uint32_t dfb_id_out0 = get_compile_time_arg_val(1);
     constexpr uint32_t C = get_compile_time_arg_val(2);
     constexpr uint32_t H = get_compile_time_arg_val(3);
     constexpr uint32_t W = get_compile_time_arg_val(4);
@@ -49,8 +49,8 @@ void kernel_main() {
     const auto s = TensorAccessor(dst_args, dst_addr);
 
     Noc noc;
-    CircularBuffer cb(cb_id_out0);
-    CircularBuffer cb_padding(tt::CBIndex::c_1);
+    DataflowBuffer dfb(dfb_id_out0);
+    DataflowBuffer dfb_padding(tt::CBIndex::c_1);
 
     // Calculate actual data height in the last tile
     constexpr uint32_t H_last_tile = H - (H_t - 1) * TILE_HEIGHT;
@@ -92,8 +92,8 @@ void kernel_main() {
         uint32_t output_h = h * TILE_HEIGHT;
 
         // Synchronization and read address retrieval
-        cb.wait_front(1);
-        uint32_t l1_read_addr = cb.get_read_ptr();
+        dfb.wait_front(1);
+        uint32_t l1_read_addr = dfb.get_read_ptr();
 
         // Determine the number of faces in the height dimension
         uint8_t num_faces_h = (h == H_t - 1) ? remainder_faces_h : NUM_FACES_H;
@@ -158,14 +158,14 @@ void kernel_main() {
         noc.async_write_barrier();
 
         // Remove the processed tile from the front of the buffer
-        cb.pop_front(1);
+        dfb.pop_front(1);
     }
 
     // add padding
     if constexpr (needs_padding) {
-        cb_padding.wait_front(1);
+        dfb_padding.wait_front(1);
 
-        uint32_t l1_read_ptr = cb_padding.get_read_ptr();
+        uint32_t l1_read_ptr = dfb_padding.get_read_ptr();
 
         constexpr uint32_t c_t = C_t - 1;
         constexpr uint8_t C_in_tile = C % TILE_HEIGHT;
@@ -200,6 +200,6 @@ void kernel_main() {
             }
         }
         noc.async_write_barrier();
-        cb_padding.pop_front(1);
+        dfb_padding.pop_front(1);
     }
 }

@@ -62,7 +62,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     t6_semaphore_get<>(semaphore::PACK_DONE);
     for (std::uint32_t batch = 0; batch < 1; ++batch)
     {
-        _llk_unpack_AB_reduce_block_max_row_init_<1, false>();
+        _llk_unpack_AB_reduce_block_max_row_init_<1, false>(ckernel::DEFAULT_TENSOR_SHAPE);
         if ((batch * 1 + 0) % 1 == 0)
         {
             _llk_unpack_AB_reduce_block_max_row_(L1_ADDRESS(buffer_A1[batch * 1 + 0]), L1_ADDRESS(buffer_B1[batch * 1 + 0]));
@@ -124,7 +124,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     constexpr DstSync dest_sync0     = DstSync::SyncHalf;
     _llk_math_hw_configure_<false>(math_format0, math_format0);
     _llk_math_pack_sync_init_<dest_sync0, false>();
-    _llk_math_reduce_block_max_row_init_<1, false>();
+    _llk_math_reduce_block_max_row_init_<1, false>(ckernel::DEFAULT_TENSOR_SHAPE);
 
     // Operation 0: Matmul FPU - Using experimental custom no-mop API
     _llk_math_matmul_init_no_mop_<ckernel::MathFidelity::LoFi, 0>(TILE_R_DIM, TILE_C_DIM, TILE_R_DIM, TILE_C_DIM, false, 0, 1, 1);
@@ -145,12 +145,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_pack_sync_init_<dest_sync1, false>();
 
     // Custom addr_mod reinit for reduce_block_max_row (full init done in Operation 0)
-    _llk_math_reduce_block_max_row_reinit_wrapper_<1 /* block_ct_dim */, false /* is_fp32_dest_acc_en */>();
+    _llk_math_reduce_block_max_row_reinit_wrapper_<1 /* block_ct_dim */, false /* is_fp32_dest_acc_en */>(ckernel::DEFAULT_TENSOR_SHAPE);
 
     for (std::uint32_t batch = 0; batch < 1; ++batch)
     {
         _llk_math_wait_for_dest_available_<dest_sync1>();
-        _llk_math_reduce_block_max_row_<1, false>(0);
+        _llk_math_reduce_block_max_row_<1, false>(0, ckernel::DEFAULT_TENSOR_SHAPE);
         _llk_math_dest_section_done_<dest_sync1, false>();
     }
 

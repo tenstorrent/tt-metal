@@ -146,3 +146,12 @@ def test_async_sd_state_preserved_across_fd(mesh_device):
         pass
 
     assert ttnn.device.is_asynchronous_slow_dispatch_enabled(mesh_device)
+
+
+def test_pad_to_tile_shape_removed():
+    """ttnn.pad_to_tile_shape has been removed; verify it is no longer accessible."""
+    assert not hasattr(ttnn, "pad_to_tile_shape"), (
+        "ttnn.pad_to_tile_shape should be removed. "
+        "Use ttnn.to_layout(tensor, ttnn.TILE_LAYOUT) or "
+        "models.common.tensor_utils.align_shape_to_tile instead."
+    )

@@ -2,6 +2,7 @@ set(FABRIC_JIT_API_HEADERS
     hw/inc/tt_fabric_api.h
     hw/inc/tt_fabric_mux.hpp
     hw/inc/tt_fabric_mux_interface.hpp
+    hw/inc/tt_fabric_mux_v2_sender.hpp
     hw/inc/fabric_routing_mode.h
     hw/inc/edm_fabric/edm_fabric_flow_control_helpers.hpp
     hw/inc/edm_fabric/edm_fabric_utils.hpp
@@ -49,6 +50,7 @@ set(FABRIC_SOURCES
     fabric_context.cpp
     fabric_builder_context.cpp
     fabric_mux_config.cpp
+    fabric_mux_v2_config.cpp
     fabric_tensix_builder.cpp
     fabric_tensix_builder_impl.cpp
     fabric_types.cpp

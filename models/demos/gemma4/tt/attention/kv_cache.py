@@ -13,6 +13,12 @@ import torch
 import ttnn
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
 
+# Hot cache blocks held in staging per decode slot for the loop-free packed KV
+# write: a P-token speculative tail (P <= block_size) straddles at most 2 pages,
+# so each slot reserves 2 staging blocks (cur_pos block + spill). Must match the
+# spec-decode driver's staging bookkeeping (see tt/spec_decode.py).
+PV_HOT_BLOCKS = 2
+
 
 def init_kv_cache(
     mesh_device,
@@ -96,3 +102,45 @@ def init_kv_cache(
     )
 
     return [k_cache, v_cache]
+
+
+def init_kv_staging(
+    mesh_device,
+    config,
+    max_batch_size,
+    block_size,
+    blk=PV_HOT_BLOCKS,
+    cache_dtype=ttnn.bfloat16,
+):
+    """Per-layer staging buffers for the loop-free packed-verify KV write.
+
+    Holds, per decode slot, the ``blk`` "hot" cache blocks it is currently
+    appending into (the partial block at cur_pos + one spill block). The
+    packed-verify write merges this resident copy with the step's new K/V and
+    re-fills the committed cache from it — so the committed cache is never read
+    on the hot path (see ``decode.py::_packed_fill_kv_loopfree_embed``).
+
+    Shape ``[1, num_local_kv_heads, max_batch_size*blk*block_size, head_dim]``
+    in TILE/DRAM — same seq layout as the ``paged_fill_cache`` input. Slot ``s``
+    owns seq positions ``[s*blk*block_size, (s+1)*blk*block_size)``; block-slot
+    0 is the cur_pos block, block-slot 1 the spill block.
+
+    Returns ``[k_staging, v_staging]``.
+    """
+    is_mesh = hasattr(mesh_device, "shape")
+    tp = mesh_device.shape[1] if is_mesh else 1
+    num_local_kv_heads = 1 if config.num_key_value_heads < tp else config.num_key_value_heads // tp
+    stage_shape = [1, num_local_kv_heads, max_batch_size * blk * block_size, config.head_dim]
+    mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None
+
+    def _zeros():
+        return ttnn.as_tensor(
+            torch.zeros(stage_shape),
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=cache_dtype,
+            mesh_mapper=mesh_mapper,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    return [_zeros(), _zeros()]

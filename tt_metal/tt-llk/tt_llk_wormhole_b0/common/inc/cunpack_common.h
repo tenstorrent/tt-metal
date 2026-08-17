@@ -197,13 +197,6 @@ inline void wait_for_idle()
     }
 }
 
-inline void enable_int8_fpu_math()
-{
-    alu_config_u alu_payload                     = {.val = 0};
-    alu_payload.f.ALU_ACC_CTRL_INT8_math_enabled = 1;
-    cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_ADDR32, 0, ALU_ACC_CTRL_INT8_math_enabled_MASK>(alu_payload.val);
-}
-
 /**
  * \brief Returns true if unpacker I/O uses 32-bit formats (Int32 or Float32).
  *
@@ -821,11 +814,6 @@ inline void configure_unpack_AB(
 
     // Math ALU_FORMAT_REG
     t6_mutex_acquire(mutex::REG_RMW);
-    std::uint32_t alu_src_format = (0x0 << ALU_FORMAT_SPEC_REG_SrcA_val_SHAMT);
-
-    constexpr std::uint32_t mask0 = (1 << (ALU_FORMAT_SPEC_REG_Dstacc_override_SHAMT + 1)) - 1;
-    cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_val_ADDR32, ALU_FORMAT_SPEC_REG_SrcA_val_SHAMT, mask0>(alu_src_format);
-
     alu_config_u alu_payload = {.val = 0};
 
     constexpr std::uint32_t alu_format_mask = ALU_FORMAT_SPEC_REG0_SrcAUnsigned_MASK | ALU_FORMAT_SPEC_REG0_SrcBUnsigned_MASK;

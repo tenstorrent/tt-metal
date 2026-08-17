@@ -6,7 +6,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
@@ -25,7 +25,7 @@ void kernel_main() {
 
     constexpr uint32_t CH = C * H;
 
-    constexpr auto cb_in0 = tt::CBIndex::c_0;
+    constexpr auto dfb_in0 = tt::CBIndex::c_0;
 
     const uint32_t stick_size_bytes = W_size_bytes;
 
@@ -33,12 +33,12 @@ void kernel_main() {
     const auto s = TensorAccessor(src_args, src_addr);
 
     Noc noc;
-    CircularBuffer cb(cb_in0);
+    DataflowBuffer dfb(dfb_in0);
 
     uint32_t i_stick = start_id;
     for (uint32_t iter = 0; iter < num_sticks_per_core_read; ++iter) {
-        cb.reserve_back(num_read_per_barrier);
-        const uint32_t cb_write_ptr = cb.get_write_ptr();
+        dfb.reserve_back(num_read_per_barrier);
+        const uint32_t cb_write_ptr = dfb.get_write_ptr();
         uint32_t l1_write_offset = 0;
 
         for (uint32_t i = 0; i < num_read_per_barrier; ++i) {
@@ -63,6 +63,6 @@ void kernel_main() {
             }
         }
         noc.async_read_barrier();
-        cb.push_back(num_read_per_barrier);
+        dfb.push_back(num_read_per_barrier);
     }
 }

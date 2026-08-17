@@ -11,6 +11,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -128,7 +129,7 @@ ttnn::device_operation::ProgramArtifacts SliceTileTensorArgsProgramFactory::crea
              TensorBinding{.tensor_parameter_name = END, .accessor_name = "end"}},
         .compile_time_args = {{"num_dims", num_dims}, {"tile_width", tile_width}, {"tile_height", tile_height}},
         .runtime_arg_schema = {.runtime_arg_names = {"start_id", "num_tiles"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER},
+        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
         .advanced_options = {.num_runtime_varargs = num_dims, .num_common_runtime_varargs = 3 * num_dims},
     };
 
@@ -143,13 +144,13 @@ ttnn::device_operation::ProgramArtifacts SliceTileTensorArgsProgramFactory::crea
             .dfb_spec_name = C0, .accessor_name = "cb_out", .endpoint_type = DFBEndpointType::CONSUMER}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "out"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::WRITER},
+        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
     };
 
     // --- Per-core runtime args ---
     constexpr uint32_t start_offset = 0;  // tensor-args path computes the start offset in-kernel
-    Group<KernelRunArgs::NodeRuntimeArgs> reader_node_args;
-    Group<KernelRunArgs::NodeRuntimeArgs> writer_node_args;
+    KernelRunArgs::RuntimeArgValues reader_node_args;
+    KernelRunArgs::RuntimeArgValues writer_node_args;
     AdvancedKernelRunArgs reader_run_advanced;
 
     uint32_t num_tiles_written = 0;
@@ -161,9 +162,21 @@ ttnn::device_operation::ProgramArtifacts SliceTileTensorArgsProgramFactory::crea
             num_tiles_per_core = num_tiles_per_core_group_2;
         } else {
             // no-op core
-            reader_node_args.push_back({.node = core, .args = {{"start_id", 0}, {"num_tiles", 0}}});
+            AddRuntimeArgsForNode(
+                reader_node_args,
+                core,
+                {
+                    {"start_id", 0u},
+                    {"num_tiles", 0u},
+                });
             reader_run_advanced.runtime_varargs.emplace(core, std::vector<uint32_t>(num_dims, 0));
-            writer_node_args.push_back({.node = core, .args = {{"num_pages", 0}, {"start_id", 0}}});
+            AddRuntimeArgsForNode(
+                writer_node_args,
+                core,
+                {
+                    {"num_pages", 0u},
+                    {"start_id", 0u},
+                });
             continue;
         }
 
@@ -177,11 +190,22 @@ ttnn::device_operation::ProgramArtifacts SliceTileTensorArgsProgramFactory::crea
             start_id += id_per_dim[j] * accumulated_total_per_dim[j - 1];
         }
 
-        reader_node_args.push_back({.node = core, .args = {{"start_id", start_id}, {"num_tiles", num_tiles_per_core}}});
+        AddRuntimeArgsForNode(
+            reader_node_args,
+            core,
+            {
+                {"start_id", start_id},
+                {"num_tiles", num_tiles_per_core},
+            });
         reader_run_advanced.runtime_varargs.emplace(core, std::move(id_per_dim));
 
-        writer_node_args.push_back(
-            {.node = core, .args = {{"num_pages", num_tiles_per_core}, {"start_id", num_tiles_written}}});
+        AddRuntimeArgsForNode(
+            writer_node_args,
+            core,
+            {
+                {"num_pages", num_tiles_per_core},
+                {"start_id", num_tiles_written},
+            });
 
         num_tiles_written += num_tiles_per_core;
     }

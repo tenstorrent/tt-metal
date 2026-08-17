@@ -20,7 +20,7 @@ struct GatedDeltaAttnSeqDeviceOperation {
     using tensor_args_t = GatedDeltaAttnSeqInputs;
 
     // Return two Tensors: output [BH, num_chunks, C, Dv] and final_state [BH, Dk, Dv].
-    using spec_return_value_t = std::vector<TensorSpec>;
+    using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
     using tensor_return_value_t = std::vector<Tensor>;
     using program_factory_t = std::variant<GatedDeltaAttnSeqProgramFactory>;
 

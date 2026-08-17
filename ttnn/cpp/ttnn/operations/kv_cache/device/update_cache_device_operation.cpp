@@ -145,7 +145,7 @@ void UpdateKVCacheOperation::validate_on_program_cache_miss(
     }
 }
 
-TensorSpec UpdateKVCacheOperation::compute_output_specs(
+tt::tt_metal::TensorSpec UpdateKVCacheOperation::compute_output_specs(
     const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
     // Do nothing because it's an in-place operation. Cache Tensor is the output tensor.
     return tensor_args.cache.tensor_spec();
