@@ -251,7 +251,7 @@ def _main() -> None:
     add_mesh_device_args(parser)
     args = parser.parse_args()
 
-    mesh_device = open_readiness_mesh_device(args.mesh_device, args.fabric_config)
+    mesh_device = open_readiness_mesh_device(args.mesh_device, args.fabric_config, args.trace_region_size)
     try:
         run_prefill_check(
             model_dir=args.model_dir.resolve(),
