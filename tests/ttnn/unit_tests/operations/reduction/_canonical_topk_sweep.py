@@ -811,6 +811,11 @@ def _build_cell_callable(ttnn, torch, device, cell):
         )
 
         op_kwargs = {}
+        if cell.get("return_values"):
+            # Like-for-like with ttnn.topk consumers that need the top-k
+            # VALUES too (sampling chains, MoE gates): measure the op with
+            # its values output enabled.
+            op_kwargs["return_values"] = True
         if vl is not None:
             op_kwargs["valid_length"] = vl
         if cell.get("num_slices") is not None:
@@ -821,9 +826,12 @@ def _build_cell_callable(ttnn, torch, device, cell):
             return ttnn.experimental.topk_large_indices(x, k=k, **op_kwargs)
 
         def correctness(out):
-            # The op returns uint32 INDICES; validate them by gathering the
-            # input at those indices and comparing (order-insensitively) to
-            # torch.topk over the valid_length-masked input.
+            # The op returns uint32 INDICES (or [indices, values] with
+            # return_values); validate by gathering the input at the indices
+            # and comparing (order-insensitively) to torch.topk over the
+            # valid_length-masked input.
+            if isinstance(out, (list, tuple)):
+                out = out[0]
             idx = ttnn.to_torch(out).to(torch.int64)[..., :k]
             gathered = t.float().gather(-1, idx)
             masked = t.float().clone()
