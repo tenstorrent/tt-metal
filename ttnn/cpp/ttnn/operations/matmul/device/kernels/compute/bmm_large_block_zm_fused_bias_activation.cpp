@@ -239,7 +239,7 @@ void kernel_main() {
     // reading those non-existent (padded) cb_in1 tiles, the compute kernel narrows the matmul_block
     // call on the last in1 subblock to last_subblock_w_valid lanes. When no padding occurs this
     // equals out_subblock_w and the original full-width path is preserved.
-#ifdef MATMUL_DRAM_SHARDED
+#if defined(MATMUL_DRAM_SHARDED) || defined(MATMUL_PADDED_N)
     constexpr uint32_t last_subblock_w_valid = get_named_compile_time_arg_val("last_subblock_w_valid");
 #else
     constexpr uint32_t last_subblock_w_valid = out_subblock_w;

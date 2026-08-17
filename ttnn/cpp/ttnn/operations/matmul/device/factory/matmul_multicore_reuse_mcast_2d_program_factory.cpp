@@ -36,6 +36,39 @@ namespace ttnn::prim {
 
 namespace reuse_mcast_optimized_helpers {
 
+// For BLOCK_SHARDED output per_core_N is the shard width and must not grow, so a width that
+// tiles badly (e.g. prime 13, where out_subblock_w can only be 1) wastes most of dest. Pad the
+// *compute* block width instead: 13 becomes 14 with out_subblock_w = 7 and 6 valid columns in
+// the last subblock. The out CB then stages the padded block in L1 and the writer copies only
+// the valid columns into the shard. Returns the valid column count of the last subblock, or
+// nullopt when the width was left alone. pad_allowed carries the caller-side preconditions.
+std::optional<uint32_t> try_pad_compute_width_for_sharded_out(
+    bool pad_allowed, bool fp32_dest_acc_en, uint32_t per_core_N, uint32_t& out_block_w, uint32_t& out_subblock_w) {
+    if (!pad_allowed || out_block_w != per_core_N) {
+        return std::nullopt;
+    }
+
+    const uint32_t max_subblock_w = fp32_dest_acc_en ? 4 : 8;
+    const uint32_t width_trips = tt::div_up(per_core_N, max_subblock_w);
+    const uint32_t padded_subblock_w = tt::div_up(per_core_N, width_trips);
+    const uint32_t padded_block_w = padded_subblock_w * width_trips;
+    if (padded_block_w == per_core_N) {
+        return std::nullopt;  // the widest useful subblock already tiles per_core_N exactly
+    }
+
+    out_subblock_w = padded_subblock_w;
+    out_block_w = padded_block_w;
+    const uint32_t last_subblock_w_valid = per_core_N - padded_subblock_w * (width_trips - 1);
+    log_debug(
+        tt::LogOp,
+        "Padding block-sharded matmul compute width {} -> {} tiles (out_subblock_w={}, last_subblock_w_valid={})",
+        per_core_N,
+        padded_block_w,
+        padded_subblock_w,
+        last_subblock_w_valid);
+    return last_subblock_w_valid;
+}
+
 static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
     tt::tt_metal::IDevice* device,
     MathFidelity math_fidelity,
@@ -121,6 +154,14 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
     const bool in1_is_height_sharded = in1_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
     const bool in1_is_sharded = in1_is_width_sharded || in1_is_height_sharded;
     const bool output_is_sharded = out_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
+    const auto padded_last_subblock_w = try_pad_compute_width_for_sharded_out(
+        output_is_sharded && !untilize_out && !fuse_op && B == 1 && out_block_h == per_core_M && out_subblock_h == 1,
+        fp32_dest_acc_en,
+        per_core_N,
+        out_block_w,
+        out_subblock_w);
+    // The out CB can only be the shard itself while the compute width still matches the shard width.
+    const bool out_cb_aliases_shard = output_is_sharded && !padded_last_subblock_w.has_value();
 
     // Tiles whose size is not a multiple of the DRAM alignment (e.g. bfp8 32x16 = 544B on
     // Blackhole's 64B alignment) are padded to it in DRAM. The interleaved reader copies tiles at
@@ -145,7 +186,7 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
     uint32_t in0_block_h = out_block_h;
     uint32_t in1_block_w = out_block_w;
     uint32_t in0_num_blocks_y = per_core_M / out_block_h;
-    uint32_t in1_num_blocks_x = per_core_N / out_block_w;
+    uint32_t in1_num_blocks_x = padded_last_subblock_w.has_value() ? 1 : per_core_N / out_block_w;
     uint32_t out_num_blocks_x = in1_num_blocks_x;
     uint32_t out_num_blocks_y = in0_num_blocks_y;
 
@@ -165,7 +206,7 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
     uint32_t out_block_tiles = out_block_h * out_block_w;
     uint32_t out_shard_tiles = per_core_M * per_core_N;
     uint32_t out_CB_tiles = out_block_tiles;  // No double buffer
-    if (output_is_sharded) {
+    if (out_cb_aliases_shard) {
         out_CB_tiles = out_shard_tiles;
     }
     uint32_t out_CB_size = out_CB_tiles * output_single_tile_size;
@@ -643,10 +684,13 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
         }
     }
 
-    if (output_is_sharded) {
+    if (out_cb_aliases_shard) {
         mm_kernel_in1_sender_writer_defines["OUT_SHARDED"] = "1";
         mm_kernel_in1_receiver_writer_defines["OUT_SHARDED"] = "1";
         mm_kernel_in1_receiver_writer_other_noc_setup_defines["OUT_SHARDED"] = "1";
+    }
+    if (padded_last_subblock_w.has_value()) {
+        mm_kernel_defines["MATMUL_PADDED_N"] = "1";
     }
 
     // Intermediate CB read
@@ -928,6 +972,7 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
             {"cb_intermed0", cb_intermed0},
             {"cb_in0_transposed", tt::CBIndex::c_10},
             {"bias_ntiles", in1_per_core_w},
+            {"last_subblock_w_valid", padded_last_subblock_w.value_or(out_subblock_w)},
         };
         if (fused_activation.has_value() && fused_activation.value().op_type != UnaryOpType::RELU) {
             using ttnn::operations::matmul::utilities::get_activation_params;
@@ -1041,7 +1086,7 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
                 .data_format = output_data_format,
                 .page_size = output_single_tile_size,
                 .tile = output_tile_desc});
-            if (output_is_sharded) {
+            if (out_cb_aliases_shard) {
                 cb_desc.tensor = &out_tensor;
             }
             desc.cbs.push_back(std::move(cb_desc));
@@ -1089,7 +1134,7 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
                 .page_size = interm0_single_tile_size,
                 .tile = output_tile_desc});
         }
-        if (output_is_sharded) {
+        if (out_cb_aliases_shard) {
             cb_desc.tensor = &out_tensor;
         }
         desc.cbs.push_back(std::move(cb_desc));
@@ -1349,7 +1394,7 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
                 mm_in1_sender_writer_args.push_back(0u);
                 mm_in1_sender_writer_args.push_back(
                     bias_mesh.has_value() ? (std::uint32_t)per_core_N * in1_idx : 0);  // in1_tensor_start_tile_id
-                if (!output_is_sharded) {
+                if (!out_cb_aliases_shard) {
                     if (in1_idx == in1_end_idx) {  // right cores when no transpose_mcast
                         mm_in1_sender_writer_args.push_back(last_out_num_blocks_w);
                     } else {
@@ -1503,7 +1548,7 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
                     mm_in1_receiver_writer_args.push_back(0);
                     mm_in1_receiver_writer_args.push_back(0);
                 }
-                if (!output_is_sharded) {
+                if (!out_cb_aliases_shard) {
                     if (in1_idx == in1_end_idx and
                         in0_idx == in0_end_idx) {  // bottom-right core when no transpose_mcast
                         mm_in1_receiver_writer_args.push_back(last_out_num_blocks_h);
@@ -1663,12 +1708,20 @@ create_program_mcast_in0_in1(
         B,
         per_core_M * per_core_N,
         B * per_core_M * per_core_N);
+    const auto padded_last_subblock_w = try_pad_compute_width_for_sharded_out(
+        output_is_sharded && !untilize_out && !fuse_op && B == 1 && out_block_h == per_core_M && out_subblock_h == 1,
+        fp32_dest_acc_en,
+        per_core_N,
+        out_block_w,
+        out_subblock_w);
+    // The out CB can only be the shard itself while the compute width still matches the shard width.
+    const bool out_cb_aliases_shard = output_is_sharded && !padded_last_subblock_w.has_value();
     bool do_not_inplace_interm0_out_CB = output_is_sharded && (per_core_M != out_block_h);
 
     uint32_t in0_block_h = out_block_h;
     uint32_t in1_block_w = out_block_w;
     uint32_t in0_num_blocks_y = per_core_M / out_block_h;
-    uint32_t in1_num_blocks_x = per_core_N / out_block_w;
+    uint32_t in1_num_blocks_x = padded_last_subblock_w.has_value() ? 1 : per_core_N / out_block_w;
     uint32_t out_num_blocks_x = in1_num_blocks_x;
     uint32_t out_num_blocks_y = in0_num_blocks_y;
 
@@ -1704,7 +1757,7 @@ create_program_mcast_in0_in1(
     uint32_t out_block_tiles = out_block_h * out_block_w;
     uint32_t out_shard_tiles = per_core_M * per_core_N;
     uint32_t out_CB_tiles = out_block_tiles;  // No double buffer
-    if (output_is_sharded) {
+    if (out_cb_aliases_shard) {
         out_CB_tiles = out_shard_tiles;
     }
     uint32_t out_CB_size = out_CB_tiles * output_single_tile_size;
@@ -2182,10 +2235,13 @@ create_program_mcast_in0_in1(
         }
     }
 
-    if (output_is_sharded) {
+    if (out_cb_aliases_shard) {
         mm_kernel_in1_sender_writer_defines["OUT_SHARDED"] = "1";
         mm_kernel_in1_receiver_writer_defines["OUT_SHARDED"] = "1";
         mm_kernel_in1_receiver_writer_other_noc_setup_defines["OUT_SHARDED"] = "1";
+    }
+    if (padded_last_subblock_w.has_value()) {
+        mm_kernel_defines["MATMUL_PADDED_N"] = "1";
     }
 
     // Intermediate CB read
@@ -2416,6 +2472,7 @@ create_program_mcast_in0_in1(
         {"cb_intermed0", cb_intermed0},
         {"cb_in0_transposed", tt::CBIndex::c_10},
         {"bias_ntiles", in1_per_core_w},
+        {"last_subblock_w_valid", padded_last_subblock_w.value_or(out_subblock_w)},
     };
 
     if (fused_activation.has_value() && fused_activation.value().op_type != UnaryOpType::RELU) {
@@ -2593,7 +2650,7 @@ create_program_mcast_in0_in1(
         }
     }
 
-    if (output_is_sharded) {
+    if (out_cb_aliases_shard) {
         output_cb_config = output_cb_config.set_globally_allocated_address(out_tensor);
     }
     auto cb_output = tt_metal::CreateCircularBuffer(program, CoreRangeSet({all_cores}), output_cb_config);
@@ -2852,7 +2909,7 @@ create_program_mcast_in0_in1(
                 mm_in1_sender_writer_args.push_back(bias_mesh.has_value() ? (std::uint32_t)bias_mesh->address() : 0);
                 mm_in1_sender_writer_args.push_back(
                     bias_mesh.has_value() ? (std::uint32_t)per_core_N * in1_idx : 0);  // in1_tensor_start_tile_id
-                if (!output_is_sharded) {
+                if (!out_cb_aliases_shard) {
                     if (in1_idx == in1_end_idx) {  // right cores when no transpose_mcast
                         mm_in1_sender_writer_args.push_back(last_out_num_blocks_w);
                     } else {
@@ -2998,7 +3055,7 @@ create_program_mcast_in0_in1(
                     mm_in1_receiver_writer_args.push_back(0);
                     mm_in1_receiver_writer_args.push_back(0);
                 }
-                if (!output_is_sharded) {
+                if (!out_cb_aliases_shard) {
                     if (in1_idx == in1_end_idx and
                         in0_idx == in0_end_idx) {  // bottom-right core when no transpose_mcast
                         mm_in1_receiver_writer_args.push_back(last_out_num_blocks_h);
@@ -3050,6 +3107,7 @@ create_program_mcast_in0_in1(
          start_core_x,
          start_core_y,
          transpose_mcast,
+         out_cb_aliases_shard,
          cores}};
 }
 
@@ -3069,6 +3127,7 @@ void override_runtime_arguments_impl(
     auto in1_receiver_other_cores = shared_variables.in1_receiver_other_cores;
     auto cb_src2 = shared_variables.cb_src2;
     auto cb_output = shared_variables.cb_output;
+    const bool out_cb_aliases_shard = shared_variables.out_cb_aliases_shard;
     auto cores = shared_variables.cores;
 
     const auto& input_tensors = tensor_args.input_tensors;
@@ -3089,7 +3148,6 @@ void override_runtime_arguments_impl(
     const auto& out = output_tensors.at(0).mesh_tensor();
 
     bool src0_sharded = input_tensors[0].memory_config().is_sharded();
-    bool out_sharded = output_tensors[0].memory_config().is_sharded();
 
     ttsl::optional_reference<const tt::tt_metal::MeshTensor> bias_mesh;
     if (bias_tensor.has_value()) {
@@ -3133,7 +3191,7 @@ void override_runtime_arguments_impl(
         }
     }
 
-    if (out_sharded) {
+    if (out_cb_aliases_shard) {
         UpdateDynamicCircularBufferAddress(program, cb_output, out);
     }
 }
