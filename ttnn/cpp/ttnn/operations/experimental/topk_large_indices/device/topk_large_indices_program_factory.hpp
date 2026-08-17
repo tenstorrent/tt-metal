@@ -42,15 +42,21 @@ struct TopkLargeIndicesProgramFactory {
 //     so a serving loop growing valid_length reuses one cached program.
 struct ColumnSplitConfig {
     bool enabled = false;
-    // Number of row slices == number of tree cores (each reduces >= 1 chunk).
+    // Number of row slices == number of tree cores PER RECTANGLE (each reduces >= 1 chunk).
     uint32_t num_slices = 0;
-    // The tree cores form the rectangle (0, 0)..(local_grid_x-1, local_grid_y-1)
-    // with num_slices == local_grid_x * local_grid_y. Slice i lives at
-    // (i % local_grid_x, i / local_grid_x); slice 0 is the merge-tree root
-    // (there is no separate final core — the reduction is in place: at tree
+    // Each tree is a local_grid_x x local_grid_y rectangle with
+    // num_slices == local_grid_x * local_grid_y. Within a rectangle, slice i
+    // lives at rectangle-local (i % local_grid_x, i / local_grid_x); slice 0
+    // is that rectangle's merge-tree root (the reduction is in place: at tree
     // level L, core i with i % 2^(L+1) == 0 merges core i + 2^L's survivor).
     uint32_t local_grid_x = 0;
     uint32_t local_grid_y = 0;
+    // Multi-rectangle (rows > 1 with an explicit num_slices): the grid is
+    // tiled with num_rects disjoint rectangles running concurrently, rows
+    // split contiguously across them (runtime args — one cached program
+    // serves any row count with the same rectangle layout). 1 on the
+    // single-row model-selected path; 0 when disabled.
+    uint32_t num_rects = 0;
 };
 
 // num_slices_override: user-requested P (operation_attributes_t::num_slices). Validated loudly
@@ -61,15 +67,18 @@ ColumnSplitConfig compute_column_split_config(
     uint32_t n,
     uint32_t num_rows,
     const CoreCoord& grid,
-    std::optional<uint32_t> num_slices_override = std::nullopt);
+    std::optional<uint32_t> num_slices_override = std::nullopt,
+    bool allow_multi_row = true);
 
 struct TopkLargeIndicesMultiCoreSharedVariables {
     tt::tt_metal::KernelHandle reader_kernel_id{};
     tt::tt_metal::KernelHandle compute_node_kernel_id{};
     tt::tt_metal::KernelHandle compute_root_kernel_id{};
     tt::tt_metal::KernelHandle writer_kernel_id{};
-    // Slice-major (row-major rectangle) core list; cores[0] is the tree root.
-    std::vector<CoreCoord> cores{};
+    // Per-rectangle slice-major (row-major within the rectangle) core lists;
+    // rect_cores[r][0] is rectangle r's tree root. Single-rect programs have
+    // exactly one entry.
+    std::vector<std::vector<CoreCoord>> rect_cores{};
 };
 
 struct TopkLargeIndicesMultiCoreProgramFactory {

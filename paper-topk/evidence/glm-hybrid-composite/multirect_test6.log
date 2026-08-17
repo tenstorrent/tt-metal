@@ -1,0 +1,60 @@
+2026-08-17 16:18:54.458 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/nachiket/.cache/ttnn,model_cache_path=/home/nachiket/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-08-17 16:18:54.496 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-17 16:18:54.496 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-17 16:18:54.496 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-17 16:18:54.496 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-17 16:18:54.497 | warning  |             UMD | Setting power state failed on device 0: Invalid argument (pci_device.cpp:1090)
+2026-08-17 16:18:54.497 | info     |             UMD | Established firmware bundle version: 18.8.0 (topology_discovery.cpp:575)
+2026-08-17 16:18:54.497 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-17 16:18:54.532 | warning  |             UMD | Setting power state failed on device 0: Invalid argument (pci_device.cpp:1090)
+2026-08-17 16:18:54.533 | info     |             UMD | Opening local chip ids/PCIe ids: {0}/[0] and remote chip ids {} (cluster.cpp:173)
+2026-08-17 16:18:54.533 | info     |             UMD | IOMMU: disabled (cluster.cpp:147)
+2026-08-17 16:18:54.533 | info     |             UMD | KMD version: 2.9.0 (cluster.cpp:150)
+2026-08-17 16:18:54.533 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-17 16:18:54.533 | info     |             UMD | Starting devices in cluster (cluster.cpp:1188)
+2026-08-17 16:18:54.628 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1196)
+2026-08-17 16:18:54.744 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-17 16:18:54.744 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-17 16:18:54.744 | warning  |          Always | Unknown motherboard 'ROG STRIX X670E-E GAMING WIFI' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-17 16:18:54.744 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {0:1} (topology_mapper_utils.cpp:3329)
+2026-08-17 16:18:54.744 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {0:1} (topology_mapper_utils.cpp:3337)
+2026-08-17 16:18:54.808 | info     |           Metal | Enabling program cache on MeshDevice 1 (mesh_device.cpp:1066)
+PASS rows=2 W=65536 k=2048 P=2 vl=None rv=False t0
+PASS rows=2 W=65536 k=2048 P=2 vl=None rv=False t1
+PASS rows=4 W=65536 k=2048 P=4 vl=None rv=False t0
+PASS rows=4 W=65536 k=2048 P=4 vl=None rv=False t1
+PASS rows=30 W=65536 k=2048 P=4 vl=None rv=False t0
+PASS rows=30 W=65536 k=2048 P=4 vl=None rv=False t1
+PASS rows=30 W=65536 k=2048 P=4 vl=None rv=True t0
+PASS rows=30 W=65536 k=2048 P=4 vl=None rv=True t1
+PASS rows=30 W=65536 k=2048 P=4 vl=40960 rv=False t0
+PASS rows=30 W=65536 k=2048 P=4 vl=40960 rv=False t1
+PASS rows=60 W=65536 k=2048 P=4 vl=None rv=False t0
+PASS rows=60 W=65536 k=2048 P=4 vl=None rv=False t1
+PASS rows=30 W=65536 k=2048 P=4 vl=None rv=False t0
+PASS rows=30 W=65536 k=2048 P=4 vl=None rv=False t1
+PASS rows=8 W=65536 k=512 P=16 vl=None rv=False t0
+PASS rows=8 W=65536 k=512 P=16 vl=None rv=False t1
+PASS rows=30 W=65536 k=2048 P=None vl=None rv=False t0
+PASS rows=30 W=65536 k=2048 P=None vl=None rv=False t1
+PASS rows=160 W=65536 k=2048 P=None vl=None rv=False t0
+PASS rows=160 W=65536 k=2048 P=None vl=None rv=False t1
+PASS rows=160 W=65536 k=2048 P=None vl=40960 rv=False t0
+PASS rows=160 W=65536 k=2048 P=None vl=40960 rv=False t1
+PASS rows=160 W=65536 k=2048 P=None vl=None rv=True t0
+PASS rows=160 W=65536 k=2048 P=None vl=None rv=True t1
+PASS rows=137 W=65536 k=2048 P=None vl=None rv=False t0
+PASS rows=137 W=65536 k=2048 P=None vl=None rv=False t1
+PASS rows=2 W=3000 k=1536 P=None vl=None rv=False t0
+PASS rows=2 W=3000 k=1536 P=None vl=None rv=False t1
+
+28 passed, 0 failed
+2026-08-17 16:18:56.452 | info     |    BuildKernels | JIT cache stats: 45/45 hits (100.0%) [45 cached, 12 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-17 16:18:56.452 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-17 16:18:56.454 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-17 16:18:56.454 | info     |             UMD | Closing devices in cluster (cluster.cpp:1201)
+2026-08-17 16:18:56.820 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1210)
+2026-08-17 16:18:56.820 | info     |             UMD | Cluster destructor started. (cluster.cpp:916)
+2026-08-17 16:18:56.820 | info     |             UMD | Cluster destructor completed. (cluster.cpp:919)
+2026-08-17 16:18:56.820 | warning  |             UMD | Setting power state failed on device 0: Invalid argument (pci_device.cpp:1090)

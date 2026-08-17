@@ -145,8 +145,12 @@ void set_runtime_args(
     const uint32_t rows_2d = rows_2d_of(input.logical_shape());
     const uint32_t w_tiles = input.padded_shape()[-1] / tt::constants::TILE_WIDTH;
     const auto runtime_args = get_runtime_shape_args(input, llk_target_k, valid_length);
-    const auto work_split = tt::tt_metal::split_work_to_cores(
-        input.device()->compute_with_storage_grid_size(), runtime_args.num_rows, true);
+    // Row window (hybrid wrapper): readers index global input rows from row_base;
+    // writers stay output-relative (the window's output has its own row 0).
+    const uint32_t row_base = attrs.row_start.value_or(0);
+    const uint32_t effective_rows = attrs.row_count.value_or(runtime_args.num_rows);
+    const auto work_split =
+        tt::tt_metal::split_work_to_cores(input.device()->compute_with_storage_grid_size(), effective_rows, true);
     const auto num_active_cores = std::get<0>(work_split);
     const auto& core_group_1 = std::get<2>(work_split);
     const auto& core_group_2 = std::get<3>(work_split);
@@ -164,20 +168,21 @@ void set_runtime_args(
             rows,
             num_rows_per_core_group_1);
 
+        const uint32_t input_row = row_base + start_row;
         if (tile_input) {
             tt::tt_metal::SetRuntimeArgs(
                 program,
                 shared.reader_kernel_id,
                 core,
                 {input.buffer()->address(),
-                 start_row,
+                 input_row,
                  rows,
                  runtime_args.num_chunks,
                  tt::div_up(runtime_args.tail_elements, tt::constants::FACE_WIDTH),
                  w_tiles,
                  rows_2d,
-                 start_row % rows_2d,
-                 start_row / rows_2d,
+                 input_row % rows_2d,
+                 input_row / rows_2d,
                  0 /* start_element */});
         } else {
             tt::tt_metal::SetRuntimeArgs(
@@ -185,7 +190,7 @@ void set_runtime_args(
                 shared.reader_kernel_id,
                 core,
                 {input.buffer()->address(),
-                 start_row,
+                 input_row,
                  rows,
                  runtime_args.num_chunks,
                  runtime_args.input_tail_chunk_bytes,
@@ -219,10 +224,7 @@ void set_runtime_args(
         start_row += rows;
     }
     TT_FATAL(
-        start_row == runtime_args.num_rows,
-        "topk_large_indices assigned {} rows, expected {}",
-        start_row,
-        runtime_args.num_rows);
+        start_row == effective_rows, "topk_large_indices assigned {} rows, expected {}", start_row, effective_rows);
 }
 
 }  // namespace
@@ -468,18 +470,27 @@ uint32_t tree_levels(uint32_t p) {
 }
 
 // The built-in cost-model pick (no user override).
-ColumnSplitConfig compute_model_column_split_config(uint32_t k, uint32_t n, uint32_t num_rows, const CoreCoord& grid) {
+ColumnSplitConfig compute_model_column_split_config(
+    uint32_t k, uint32_t n, uint32_t num_rows, const CoreCoord& grid, bool allow_multi_row) {
     constexpr uint32_t max_slices = max_column_slices;
 
     ColumnSplitConfig config{};
-    // Intra-row parallelism only pays off when rows cannot saturate the grid;
-    // restrict to the single-row case this path is built for. Every other
-    // shape keeps the row-parallel factory (and its shape-free program hash)
-    // unchanged.
-    if (num_rows != 1) {
+    // Intra-row parallelism only pays off when rows cannot saturate the grid.
+    // Single row: the classic tree. Multiple rows (allow_multi_row): the
+    // multi-rectangle form, considered only when EVERY row gets its own
+    // concurrent rectangle (one rect-wave) — then the per-row cost comparison
+    // below is exact and, at any runtime valid_length, the rect's saturating
+    // makespan bounds the loss to one merge term while row-parallel would run
+    // the same single wave. Rows beyond every rectangle capacity keep the
+    // row-parallel factory (and its shape-free program hash) unchanged; the
+    // hybrid wrapper handles those by splitting off a remainder window.
+    if (num_rows != 1 && !allow_multi_row) {
         return config;
     }
     if (static_cast<uint32_t>(grid.x * grid.y) < 2) {
+        return config;
+    }
+    if (num_rows == 0) {
         return config;
     }
 
@@ -512,6 +523,12 @@ ColumnSplitConfig compute_model_column_split_config(uint32_t k, uint32_t n, uint
             if (p < 2 || p > slice_ceiling) {
                 continue;
             }
+            // Multi-row: every row must own a concurrent rectangle, so the
+            // candidate's grid-tiling capacity must cover the row count.
+            const uint32_t capacity = (static_cast<uint32_t>(grid.x) / a) * (static_cast<uint32_t>(grid.y) / b);
+            if (num_rows > capacity) {
+                continue;
+            }
             const uint32_t cost = 2 * tt::div_up(num_chunks, p) + tree_levels(p);
             if (cost < best_cost || (cost == best_cost && p < num_slices)) {
                 best_cost = cost;
@@ -525,8 +542,17 @@ ColumnSplitConfig compute_model_column_split_config(uint32_t k, uint32_t n, uint
         return config;
     }
 
-    const uint32_t cost_row = 2 * num_chunks;  // single row -> single core on the row-parallel path
+    const uint32_t cost_row = 2 * num_chunks;  // one row per core on the row-parallel path (single wave)
     if (best_cost >= cost_row) {
+        return config;
+    }
+    // Multi-row acceptance needs a margin over row-parallel: the only consumer
+    // is the hybrid wrapper's remainder window (the device op itself never
+    // auto-selects multi-row), and its split adds a concat + a second dispatch,
+    // so demand a >= 12.5% modeled win to keep marginal splits from netting
+    // negative. (Was 2x when bare multi-row calls could auto-route; that
+    // routing is gone — see column_split_config_for.)
+    if (num_rows > 1 && best_cost + std::max(2u, cost_row / 8) > cost_row) {
         return config;
     }
 
@@ -534,28 +560,41 @@ ColumnSplitConfig compute_model_column_split_config(uint32_t k, uint32_t n, uint
     config.num_slices = num_slices;
     config.local_grid_x = local_grid_x;
     config.local_grid_y = local_grid_y;
+    // Single row keeps the classic one-rectangle program (byte-identical to
+    // before multi-rect existed). Multi-row tiles at full capacity: rectangles
+    // beyond the runtime row count run zero rows, so the program (and its
+    // hash) is row-count-free within this mode — one cached program serves
+    // any rows in [1, capacity].
+    config.num_rects = (num_rows == 1) ? 1
+                                       : (static_cast<uint32_t>(grid.x) / local_grid_x) *
+                                             (static_cast<uint32_t>(grid.y) / local_grid_y);
     return config;
 }
 
 }  // namespace
 
 ColumnSplitConfig compute_column_split_config(
-    uint32_t k, uint32_t n, uint32_t num_rows, const CoreCoord& grid, std::optional<uint32_t> num_slices_override) {
-    ColumnSplitConfig config = compute_model_column_split_config(k, n, num_rows, grid);
+    uint32_t k,
+    uint32_t n,
+    uint32_t num_rows,
+    const CoreCoord& grid,
+    std::optional<uint32_t> num_slices_override,
+    bool allow_multi_row) {
+    ColumnSplitConfig config = compute_model_column_split_config(k, n, num_rows, grid, allow_multi_row);
     if (!num_slices_override.has_value()) {
         return config;
     }
 
-    // Explicit beats ignored: the override has no meaning on the row-parallel
-    // path, so reject it loudly instead of silently dropping it.
+    // Explicit num_slices selects the tree path directly. Single row: the
+    // classic column-parallel tree. Multiple rows: the multi-rectangle
+    // variant — one P-core tree per rectangle, rows split contiguously across
+    // as many rectangles as tile the grid, all running concurrently. (The
+    // built-in cost model still never auto-selects the multi-row form; the
+    // override is the opt-in.)
     TT_FATAL(
-        config.enabled,
-        "topk_large_indices num_slices={} was given, but the column-parallel path is not selected for this call "
-        "(it requires a single row and a row wide enough to split; got {} rows, last dim {}). Remove num_slices "
-        "or reshape to a single-row call.",
-        *num_slices_override,
-        num_rows,
-        n);
+        static_cast<uint32_t>(grid.x * grid.y) >= 2,
+        "topk_large_indices num_slices={} needs a worker grid of at least 2 cores",
+        *num_slices_override);
 
     const uint32_t requested = *num_slices_override;
     TT_FATAL(
@@ -582,13 +621,23 @@ ColumnSplitConfig compute_column_split_config(
     uint32_t num_slices = 0;
     uint32_t local_grid_x = 0;
     uint32_t local_grid_y = 0;
+    // Among rectangles of equal core count, prefer the shape that tiles the
+    // grid the most times: with rows > 1 the tiling capacity IS the rectangle
+    // concurrency (a 2x2 fit tiles a 13x10 grid 30 times; a 1x4 fit only 26,
+    // silently doubling some rectangles' row load).
+    uint32_t best_capacity = 0;
     for (uint32_t a = 1; a <= static_cast<uint32_t>(grid.x); ++a) {
         for (uint32_t b = 1; b <= static_cast<uint32_t>(grid.y); ++b) {
             const uint32_t p = a * b;
-            if (p <= requested && p > num_slices) {
+            if (p > requested) {
+                continue;
+            }
+            const uint32_t capacity = (static_cast<uint32_t>(grid.x) / a) * (static_cast<uint32_t>(grid.y) / b);
+            if (p > num_slices || (p == num_slices && capacity > best_capacity)) {
                 num_slices = p;
                 local_grid_x = a;
                 local_grid_y = b;
+                best_capacity = capacity;
             }
         }
     }
@@ -605,9 +654,19 @@ ColumnSplitConfig compute_column_split_config(
             local_grid_y);
     }
 
+    config.enabled = true;
     config.num_slices = num_slices;
     config.local_grid_x = local_grid_x;
     config.local_grid_y = local_grid_y;
+    // Single row keeps the classic one-rectangle program; multi-row tiles at
+    // full capacity (rectangles beyond the runtime row count run zero rows):
+    // row distribution is pure runtime args, so one cached program serves any
+    // row count with this layout.
+    config.num_rects =
+        (num_rows == 1)
+            ? 1
+            : std::max(
+                  1u, (static_cast<uint32_t>(grid.x) / local_grid_x) * (static_cast<uint32_t>(grid.y) / local_grid_y));
     return config;
 }
 
@@ -673,7 +732,9 @@ void set_runtime_args_multi_core(
     const uint32_t n = shape[shape.rank() - 1];
     const uint32_t num_rows = flattened_rows_excluding_last_dim(shape);
     const uint32_t input_row_bytes = n * input.element_size();
-    const uint32_t num_slices = static_cast<uint32_t>(shared.cores.size());
+    const uint32_t num_rects = static_cast<uint32_t>(shared.rect_cores.size());
+    TT_FATAL(num_rects >= 1, "topk_large_indices multi-core program has no rectangles");
+    const uint32_t num_slices = static_cast<uint32_t>(shared.rect_cores[0].size());
     const uint32_t num_levels = tree_levels(num_slices);
     TT_FATAL(
         num_levels <= 7, "topk_large_indices merge tree supports at most 7 levels (128 slices), got {}", num_levels);
@@ -684,101 +745,130 @@ void set_runtime_args_multi_core(
     const uint32_t rows_2d = rows_2d_of(shape);
     const uint32_t w_tiles = input.padded_shape()[-1] / tt::constants::TILE_WIDTH;
 
-    for (uint32_t i = 0; i < num_slices; ++i) {
-        const auto& core = shared.cores[i];
-        const auto& slice = slices[i];
-        if (tile_input) {
+    // Rows split contiguously across the leading rectangles (runtime-only,
+    // like valid_length: a different row count reuses this cached program;
+    // rectangles beyond the row count run zero rows and exit immediately).
+    // Row window (hybrid wrapper): readers index global input rows from
+    // row_base; writers stay output-relative.
+    const uint32_t row_base = attrs.row_start.value_or(0);
+    const uint32_t effective_rows = attrs.row_count.value_or(num_rows);
+    const uint32_t rects_used = std::max(1u, std::min(effective_rows, num_rects));
+    const uint32_t base_rows = effective_rows / rects_used;
+    const uint32_t extra_rows = effective_rows % rects_used;
+
+    uint32_t rect_start_row = 0;
+    for (uint32_t r = 0; r < num_rects; ++r) {
+        const auto& rect = shared.rect_cores[r];
+        const uint32_t rect_rows = (r < rects_used) ? base_rows + (r < extra_rows ? 1 : 0) : 0;
+        const uint32_t start_row = rect_start_row;
+        rect_start_row += rect_rows;
+
+        for (uint32_t i = 0; i < num_slices; ++i) {
+            const auto& core = rect[i];
+            const auto& slice = slices[i];
+            const uint32_t input_row = row_base + start_row;
+            if (tile_input) {
+                tt::tt_metal::SetRuntimeArgs(
+                    program,
+                    shared.reader_kernel_id,
+                    core,
+                    {input.buffer()->address(),
+                     input_row,
+                     rect_rows,
+                     slice.num_chunks,
+                     tt::div_up(slice.tail_elements, tt::constants::FACE_WIDTH),
+                     w_tiles,
+                     rows_2d,
+                     input_row % rows_2d,
+                     input_row / rows_2d,
+                     slice.start_element});
+            } else {
+                tt::tt_metal::SetRuntimeArgs(
+                    program,
+                    shared.reader_kernel_id,
+                    core,
+                    {input.buffer()->address(),
+                     input_row,
+                     rect_rows,
+                     slice.num_chunks,
+                     slice.tail_elements * input.element_size(),
+                     input_row_bytes,
+                     slice.start_element * input.element_size()});
+            }
+
+            // Tree schedule for slice i: it wins levels [0, t) where t is the
+            // index of i's lowest set bit (root i=0 wins every level), merging
+            // partner i + 2^level whenever that slice exists (byes otherwise),
+            // then ships its survivor to i with the lowest set bit cleared.
+            const bool is_root = (i == 0);
+            uint32_t winning_levels = num_levels;
+            if (!is_root) {
+                winning_levels = 0;
+                while (((i >> winning_levels) & 1u) == 0) {
+                    ++winning_levels;
+                }
+            }
+            uint32_t num_merges = 0;
+            // 7 (x, y) pairs — must match the writer kernels' partner_x/y[7] and
+            // the positional offsets of the args that follow (do_ship at 16).
+            std::vector<uint32_t> partner_coords(14, 0);
+            for (uint32_t level = 0; level < winning_levels; ++level) {
+                const uint32_t partner = i + (1u << level);
+                if (partner < num_slices) {
+                    const CoreCoord partner_physical = device->worker_core_from_logical_core(rect[partner]);
+                    partner_coords[2 * num_merges] = static_cast<uint32_t>(partner_physical.x);
+                    partner_coords[2 * num_merges + 1] = static_cast<uint32_t>(partner_physical.y);
+                    ++num_merges;
+                }
+            }
+
             tt::tt_metal::SetRuntimeArgs(
                 program,
-                shared.reader_kernel_id,
+                is_root ? shared.compute_root_kernel_id : shared.compute_node_kernel_id,
                 core,
-                {input.buffer()->address(),
-                 0 /* start_row */,
-                 num_rows,
-                 slice.num_chunks,
-                 tt::div_up(slice.tail_elements, tt::constants::FACE_WIDTH),
-                 w_tiles,
-                 rows_2d,
-                 0 /* start_in_slice */,
-                 0 /* start_slice */,
-                 slice.start_element});
-        } else {
-            tt::tt_metal::SetRuntimeArgs(
-                program,
-                shared.reader_kernel_id,
-                core,
-                {input.buffer()->address(),
-                 0 /* start_row */,
-                 num_rows,
-                 slice.num_chunks,
-                 slice.tail_elements * input.element_size(),
-                 input_row_bytes,
-                 slice.start_element * input.element_size()});
-        }
+                {rect_rows, slice.num_chunks, slice.tail_elements, slice.start_chunk, num_merges});
 
-        // Tree schedule for slice i: it wins levels [0, t) where t is the
-        // index of i's lowest set bit (root i=0 wins every level), merging
-        // partner i + 2^level whenever that slice exists (byes otherwise),
-        // then ships its survivor to i with the lowest set bit cleared.
-        const bool is_root = (i == 0);
-        uint32_t winning_levels = num_levels;
-        if (!is_root) {
-            winning_levels = 0;
-            while (((i >> winning_levels) & 1u) == 0) {
-                ++winning_levels;
+            uint32_t winner_x = 0;
+            uint32_t winner_y = 0;
+            if (!is_root) {
+                const uint32_t winner = i & (i - 1);  // clear the lowest set bit
+                const CoreCoord winner_physical = device->worker_core_from_logical_core(rect[winner]);
+                winner_x = static_cast<uint32_t>(winner_physical.x);
+                winner_y = static_cast<uint32_t>(winner_physical.y);
             }
-        }
-        uint32_t num_merges = 0;
-        // 7 (x, y) pairs — must match the writer kernels' partner_x/y[7] and
-        // the positional offsets of the args that follow (do_ship at 16).
-        std::vector<uint32_t> partner_coords(14, 0);
-        for (uint32_t level = 0; level < winning_levels; ++level) {
-            const uint32_t partner = i + (1u << level);
-            if (partner < num_slices) {
-                const CoreCoord partner_physical = device->worker_core_from_logical_core(shared.cores[partner]);
-                partner_coords[2 * num_merges] = static_cast<uint32_t>(partner_physical.x);
-                partner_coords[2 * num_merges + 1] = static_cast<uint32_t>(partner_physical.y);
-                ++num_merges;
+            // A shipping core with an empty slice AND no adopted partners has no
+            // survivor in DST; its writer sends the prefilled -inf sequence.
+            const uint32_t is_empty_ship = (!is_root && slice.num_chunks == 0 && num_merges == 0) ? 1u : 0u;
+
+            std::vector<uint32_t> writer_args;
+            writer_args.reserve(23);
+            writer_args.push_back(rect_rows);
+            writer_args.push_back(num_merges);
+            for (uint32_t v : partner_coords) {
+                writer_args.push_back(v);
             }
+            writer_args.push_back(is_root ? 0u : 1u);  // do_ship
+            writer_args.push_back(winner_x);
+            writer_args.push_back(winner_y);
+            writer_args.push_back(is_empty_ship);
+            writer_args.push_back(indices.buffer()->address());
+            if (return_values) {
+                writer_args.push_back(outputs[1].buffer()->address());
+            } else if (flex_writer) {
+                writer_args.push_back(0);  // flex writer arg-layout parity: unused values address
+            } else {
+                // writer_tree.cpp reads start_row at arg 21 directly after the
+                // indices address; keep the flex/with-values layouts (22) intact.
+            }
+            writer_args.push_back(start_row);
+            tt::tt_metal::SetRuntimeArgs(program, shared.writer_kernel_id, core, writer_args);
         }
-
-        tt::tt_metal::SetRuntimeArgs(
-            program,
-            is_root ? shared.compute_root_kernel_id : shared.compute_node_kernel_id,
-            core,
-            {num_rows, slice.num_chunks, slice.tail_elements, slice.start_chunk, num_merges});
-
-        uint32_t winner_x = 0;
-        uint32_t winner_y = 0;
-        if (!is_root) {
-            const uint32_t winner = i & (i - 1);  // clear the lowest set bit
-            const CoreCoord winner_physical = device->worker_core_from_logical_core(shared.cores[winner]);
-            winner_x = static_cast<uint32_t>(winner_physical.x);
-            winner_y = static_cast<uint32_t>(winner_physical.y);
-        }
-        // A shipping core with an empty slice AND no adopted partners has no
-        // survivor in DST; its writer sends the prefilled -inf sequence.
-        const uint32_t is_empty_ship = (!is_root && slice.num_chunks == 0 && num_merges == 0) ? 1u : 0u;
-
-        std::vector<uint32_t> writer_args;
-        writer_args.reserve(20);
-        writer_args.push_back(num_rows);
-        writer_args.push_back(num_merges);
-        for (uint32_t v : partner_coords) {
-            writer_args.push_back(v);
-        }
-        writer_args.push_back(is_root ? 0u : 1u);  // do_ship
-        writer_args.push_back(winner_x);
-        writer_args.push_back(winner_y);
-        writer_args.push_back(is_empty_ship);
-        writer_args.push_back(indices.buffer()->address());
-        if (return_values) {
-            writer_args.push_back(outputs[1].buffer()->address());
-        } else if (flex_writer) {
-            writer_args.push_back(0);  // flex writer arg-layout parity: unused values address
-        }
-        tt::tt_metal::SetRuntimeArgs(program, shared.writer_kernel_id, core, writer_args);
     }
+    TT_FATAL(
+        rect_start_row == effective_rows,
+        "topk_large_indices multi-rect assigned {} rows, expected {}",
+        rect_start_row,
+        effective_rows);
 }
 
 }  // namespace
@@ -804,36 +894,58 @@ TopkLargeIndicesMultiCoreProgramFactory::cached_program_t TopkLargeIndicesMultiC
 
     const auto& shape = input.logical_shape();
     const uint32_t n = shape[shape.rank() - 1];
-    const uint32_t num_rows = flattened_rows_excluding_last_dim(shape);
+    const uint32_t num_rows = operation_attributes.row_count.value_or(flattened_rows_excluding_last_dim(shape));
     const auto grid = input.device()->compute_with_storage_grid_size();
-    const auto config = compute_column_split_config(k, n, num_rows, grid, operation_attributes.num_slices);
+    const auto config = compute_column_split_config(
+        k, n, num_rows, grid, operation_attributes.num_slices, /*allow_multi_row=*/!tile_output);
     TT_FATAL(config.enabled, "topk_large_indices multi-core factory selected for a shape it does not support");
     const uint32_t num_slices = config.num_slices;
 
-    // The merge tree lives IN PLACE on the slice rectangle: slice i is
-    // rectangle core (i % sx, i / sx) in row-major order; slice 0 (core
-    // (0,0)) is the root and produces the output. Winners keep their
-    // survivor in DST across levels — only the shipped operand crosses the
-    // NoC, once, per losing core.
-    const CoreRange rect({0, 0}, {config.local_grid_x - 1, config.local_grid_y - 1});
-    const CoreRangeSet all_cores(rect);
-    const auto cores = corerange_to_cores(all_cores, std::nullopt, true);
+    // The merge tree lives IN PLACE on each slice rectangle: slice i is
+    // rectangle-local core (i % sx, i / sx) in row-major order; slice 0 (the
+    // rectangle origin) is that tree's root and produces its rows' output.
+    // Winners keep their survivor in DST across levels — only the shipped
+    // operand crosses the NoC, once, per losing core. Multi-rectangle
+    // (num_rects > 1): disjoint rectangles tile the grid and run their trees
+    // concurrently on contiguous row ranges.
+    const uint32_t num_rects = config.num_rects;
+    TT_FATAL(num_rects >= 1, "topk_large_indices multi-core factory needs at least one rectangle");
+    // The TILE-output scatter writes whole 32-row tiles; rectangle row ranges
+    // are not tile-aligned, so the multi-rect form is ROW_MAJOR-output only.
     TT_FATAL(
-        cores.size() == num_slices,
-        "topk_large_indices column split expected {} tree cores, got {}",
-        num_slices,
-        cores.size());
-    const CoreCoord root_core = cores.front();
-    const CoreRangeSet root_core_set(CoreRange(root_core, root_core));
-    // All rectangle cores except the root run the node compute kernel.
+        num_rects == 1 || !tile_output,
+        "topk_large_indices: tile_output is not supported with the multi-rectangle path ({} rectangles); "
+        "drop tile_output or num_slices",
+        num_rects);
+    const uint32_t rects_x = static_cast<uint32_t>(grid.x) / config.local_grid_x;
+    std::vector<CoreRange> all_ranges;
+    std::vector<CoreRange> root_ranges;
     std::vector<CoreRange> node_ranges;
-    if (config.local_grid_x > 1) {
-        node_ranges.emplace_back(CoreCoord(1, 0), CoreCoord(config.local_grid_x - 1, 0));
-    }
-    if (config.local_grid_y > 1) {
-        node_ranges.emplace_back(CoreCoord(0, 1), CoreCoord(config.local_grid_x - 1, config.local_grid_y - 1));
+    std::vector<std::vector<CoreCoord>> rect_cores(num_rects);
+    for (uint32_t r = 0; r < num_rects; ++r) {
+        const uint32_t ox = (r % rects_x) * config.local_grid_x;
+        const uint32_t oy = (r / rects_x) * config.local_grid_y;
+        const CoreRange rect(CoreCoord(ox, oy), CoreCoord(ox + config.local_grid_x - 1, oy + config.local_grid_y - 1));
+        all_ranges.push_back(rect);
+        rect_cores[r] = corerange_to_cores(CoreRangeSet(rect), std::nullopt, true);
+        TT_FATAL(
+            rect_cores[r].size() == num_slices,
+            "topk_large_indices column split expected {} tree cores per rectangle, got {}",
+            num_slices,
+            rect_cores[r].size());
+        root_ranges.emplace_back(rect_cores[r].front(), rect_cores[r].front());
+        // All rectangle cores except the root run the node compute kernel.
+        if (config.local_grid_x > 1) {
+            node_ranges.emplace_back(CoreCoord(ox + 1, oy), CoreCoord(ox + config.local_grid_x - 1, oy));
+        }
+        if (config.local_grid_y > 1) {
+            node_ranges.emplace_back(
+                CoreCoord(ox, oy + 1), CoreCoord(ox + config.local_grid_x - 1, oy + config.local_grid_y - 1));
+        }
     }
     TT_FATAL(!node_ranges.empty(), "topk_large_indices merge tree needs at least 2 slices");
+    const CoreRangeSet all_cores(all_ranges);
+    const CoreRangeSet root_core_set(root_ranges);
     const CoreRangeSet node_cores_set(node_ranges);
 
     constexpr uint32_t cb_in = tt::CBIndex::c_0;
@@ -1066,7 +1178,7 @@ TopkLargeIndicesMultiCoreProgramFactory::cached_program_t TopkLargeIndicesMultiC
         .compute_node_kernel_id = compute_node_kernel,
         .compute_root_kernel_id = compute_root_kernel,
         .writer_kernel_id = writer_kernel,
-        .cores = cores};
+        .rect_cores = std::move(rect_cores)};
     set_runtime_args_multi_core(program, shared, input, tensor_return_value, operation_attributes);
 
     return cached_program_t{std::move(program), std::move(shared)};

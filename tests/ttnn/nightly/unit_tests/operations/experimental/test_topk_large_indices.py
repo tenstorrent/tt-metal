@@ -924,12 +924,17 @@ def test_topk_large_indices_num_slices_non_model_values(device, num_slices):
     assert_equal(actual_values.sort().values, ref_values.sort().values)
 
 
-def test_topk_large_indices_num_slices_rejected_on_row_parallel(device, expect_error):
-    # Multi-row shapes take the row-parallel factory where num_slices has no
-    # meaning: explicit beats ignored.
+def test_topk_large_indices_num_slices_multirow_matches_row_parallel(device):
+    # Explicit num_slices on a multi-row shape opts into the multi-rectangle
+    # tree factory (one P-core tree per row, all concurrent). The exact top-k
+    # value multiset must match the row-parallel default engine bit-for-bit
+    # (index ORDER may differ only on bf16 ties, which _make_bf16_exact_input
+    # rules out by construction).
     torch_input = _make_bf16_exact_input(num_rows=2, n=4096)
-    with expect_error(RuntimeError, "num_slices"):
-        ttnn.experimental.topk_large_indices(_to_device(torch_input, device), k=512, num_slices=4)
+    tt_input = _to_device(torch_input, device)
+    idx_default = ttnn.to_torch(ttnn.experimental.topk_large_indices(tt_input, k=512))
+    idx_rect = ttnn.to_torch(ttnn.experimental.topk_large_indices(tt_input, k=512, num_slices=4))
+    assert_equal(idx_default, idx_rect)
 
 
 @pytest.mark.parametrize(

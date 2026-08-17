@@ -44,7 +44,9 @@ struct TopkLargeIndicesDeviceOperation {
         bool return_values,
         std::optional<uint32_t> num_slices,
         bool tile_output,
-        std::optional<DataType> index_dtype);
+        std::optional<DataType> index_dtype,
+        std::optional<uint32_t> row_start = std::nullopt,
+        std::optional<uint32_t> row_count = std::nullopt);
 };
 
 }  // namespace ttnn::operations::experimental::topk_large_indices
