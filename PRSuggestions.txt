@@ -70,20 +70,19 @@ effect for the least work.
       argument. For the traced version the position is baked in when the run is recorded, so it
       always writes to the same slot; it has to become a tensor on the device.
     - What gets timed is also not inference. The measurement wraps a single decode step in a capture
-      and verify harness, so setup cost is weighted several times over per iteration while the frames
-      that dominate a real utterance enter once. The per call time is also labelled per token.
-    - And check that the code measured for speed is the code that generates speech.
+      and verify harness, so setup cost is weighted several times per iteration while the frames that
+      dominate a real utterance enter once, and the per call time is labelled per token. Check that
+      what is being timed is the code that generates speech.
 
 5. The two accuracy thresholds disagree, and the looser one is what you get
-    - The gate itself documents 0.99 as required. The command line passes 0.95 and overrides it. Same
-      port, same model, same machine: at 0.95 the end to end score came out 0.9586 and the repair loop
-      stopped on the first round, at 0.99 it came out 0.9986 after real work. The 0.9586 was not a
-      precision limit, it was where the loop stopped because the gate let it. A threshold sets quality
-      here, it does not only report it.
-    - Bring-up also prints the next command to run and that command carries no threshold, so copying
-      what the tool just gave you gets the looser one.
-    - Fix: make the two defaults agree on the stricter one, and put the threshold in the command it
-      suggests.
+    - The gate documents 0.99 as required, the command line passes 0.95 and overrides it. Same port,
+      same model, same machine: at 0.95 the score came out 0.9586 and the repair loop stopped on the
+      first round, at 0.99 it came out 0.9986 after real work. The 0.9586 was not a precision limit,
+      it was where the loop stopped because the gate let it. The threshold sets quality here, it does
+      not only report it.
+    - Bring-up prints the next command to run and that command carries no threshold, so copying what
+      the tool just gave you gets the looser one.
+    - Fix: agree on the stricter default, and put the threshold in the command it suggests.
 
 6. The correctness gate accepts values that cannot be correlations
     - It reported a PCC of 33.612 and marked it verified against a threshold of 0.99. Nothing checks
@@ -91,17 +90,17 @@ effect for the least work.
       signal there is. Every optimization the tool keeps rests on that one answer.
     - Fix: check that the value is in range, and use the exit code.
 
-7. Name the optimization steps, so that a good run can be repeated
+7. Name the optimization steps, so a good run can be repeated
     - Every large win came from the structural step, but that step lists only three things to try and
       none of them is what the agent actually did. It improvised the rest, which is why the run was
       good and also why another run would not reproduce it.
-    - Worth naming, each with a condition for when it applies: fold an add into the matmul that
-      consumes it, use in-place variants when an operand dies immediately, try both orders when a
-      projection sits next to a slice or gather, bake a constant scale into the weights at load,
-      concatenate sibling projections that share an input, split a fused op back into primitives once
-      tracing is on, swap a hand rolled interior for a library primitive, and try removing a config
-      applied earlier. We measured all of these. The order one goes both ways, a win in one direction
-      and a loss in the other, so it has to be measured rather than assumed.
+    - Worth naming, each with a condition for when it fires: fold an add into the matmul that consumes
+      it; use in-place variants when an operand dies immediately; try both orders when a projection
+      sits next to a slice or gather; bake a constant scale into the weights at load; concatenate
+      sibling projections that share an input; split a fused op back into primitives once tracing is
+      on; swap a hand rolled interior for a library primitive; try removing a config applied earlier.
+      We measured all of these, and the order one goes both ways, so it has to be measured rather than
+      assumed.
     - Three things the design cannot express. The host is never allowed as a destination, though
       moving one argmax there was among our largest wins and moving our other host work onto the
       device is far slower. Fewer ops is treated as always better, though once tracing removes launch
