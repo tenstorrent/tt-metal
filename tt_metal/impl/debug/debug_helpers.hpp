@@ -442,13 +442,11 @@ inline std::vector<std::string> FormatRingBuffer(
     if (data.empty()) {
         return {};
     }
-    TT_ASSERT(
-        thread_indices.empty() || thread_indices.size() == data.size(),
-        "FormatRingBuffer: thread_indices ({}) must be empty or the same length as data ({})",
-        thread_indices.size(),
-        data.size());
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     const bool is_mpsc = hal.has_mpsc_ring_buffer();
+    TT_ASSERT(
+        !is_mpsc || thread_indices.size() == data.size(),
+        "FormatRingBuffer: MPSC data requires one thread index per entry");
 
     constexpr size_t entries_per_line = 8;
 

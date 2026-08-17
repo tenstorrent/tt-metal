@@ -21,12 +21,14 @@
 #include "risc_common.h"
 #if defined(ARCH_QUASAR)
 #include "tensix_neo_reg.h"
+// NEO cluster semaphore 31 is reserved for the MPSC head; kernels must not use it. The watcher's
+// host reader hardcodes the same register (watcher_device_reader.cpp).
 constexpr uintptr_t watcher_ring_buf_sem = TENSIX_GLOBAL_REGS_SEMAPHORE_REGS_SEMAPHORE_31__REG_ADDR;
 #endif
 
 inline __attribute__((always_inline)) void push_to_ring_buffer(uint32_t val) {
     auto* wrapper = GET_MAILBOX_ADDRESS_DEV(watcher.debug_ring_buf);
-    auto* buf = reinterpret_cast<debug_mpsc_ring_buf_msg_t*>(wrapper->data);
+    auto* buf = reinterpret_cast<debug_mpsc_ring_buf_msg_t tt_l1_ptr*>(wrapper->data);
 
 #if defined(ARCH_QUASAR)
     // A read at +4*(inc+8) posts `inc` and returns the pre-increment value.

@@ -94,7 +94,7 @@
 // Magic sizes must be big enough to hold mailboxes_t.  static_asserts will fire if either is too small.
 // The dispatch engine mailbox is DM-only (8 processors).
 #define MEM_MAILBOX_SIZE 59632
-#define MEM_DISPATCH_MAILBOX_SIZE 22720
+#define MEM_DISPATCH_MAILBOX_SIZE 23616
 #define MEM_MAILBOX_END (MEM_MAILBOX_BASE + MEM_MAILBOX_SIZE)
 #define MEM_DISPATCH_MAILBOX_END (MEM_MAILBOX_BASE + MEM_DISPATCH_MAILBOX_SIZE)
 

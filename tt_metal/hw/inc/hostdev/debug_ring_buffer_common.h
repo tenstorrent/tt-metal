@@ -28,10 +28,6 @@ struct debug_mpsc_ring_buf_slot_t {
     uint32_t write_id;  // thread_idx + 1; 0 means never written
 };
 
-// NEO cluster semaphore reserved for the MPSC head; kernels must not use it. Quasar keeps head here
-// rather than L1 because DM and TRISC atomics run in different coherence domains.
-constexpr uint32_t WATCHER_RING_BUF_SEMAPHORE = 31;
-
 template <int Capacity>
 struct debug_mpsc_ring_buf_msg_tmpl_t {
     uint32_t head;
