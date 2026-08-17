@@ -707,13 +707,23 @@ class DeterministicStages(Module):
         return ttnn.to_layout(ttnn.reshape(full, (t * h * w, ch)), ttnn.TILE_LAYOUT)
 
     def forward(
-        self, x: ttnn.Tensor, *, dims: tuple[int, int, int], drop_leading_frame: bool = True, stages: int | None = None
+        self,
+        x: ttnn.Tensor,
+        *,
+        dims: tuple[int, int, int],
+        drop_leading_frame: bool = True,
+        stages: int | None = None,
+        gather_output: bool = True,
     ) -> tuple[ttnn.Tensor, tuple[int, int, int]]:
         """``x`` is ``(tokens, in_channels)`` channels-last in TILE layout, normalized latent.
 
         Under spatial-W SP the activation is W-sharded from stage 1 on and gathered back to a
-        replicated volume before returning, so ``dims`` here is always the FULL ``(T, H, W)`` and the
-        return is the replicated context -- the stage-5 handoff is unchanged.
+        replicated volume before returning, so ``dims`` here is always the FULL ``(T, H, W)``.
+
+        ``gather_output=False`` skips that final all-gather and returns this chip's W-band
+        ``(T*H*(W/sp), ch)`` instead -- for the W-sharded det->stage-5 handoff, where stage 5 consumes
+        the band directly (same ``sp_axis``, same W order) rather than re-sharding a replicated context.
+        ``dims`` is still the FULL ``(T, H, W)``; the caller derives ``W/sp`` from ``self.sp``.
         """
         x = self.conv_in(x)
         count = len(self.upsamples) if stages is None else stages
@@ -746,7 +756,7 @@ class DeterministicStages(Module):
             log_dram(self.mesh_device, f"det stage {stage} upsampled to {dims} sharded={stage_sharded}")
             stage_time_end(self.mesh_device, f"det stage {stage} -> {dims}", _stage_t0)
 
-        if sharded:
+        if sharded and gather_output:
             x = self._wgather(x, dims)  # W-sharded -> replicated context; stage-5 handoff unchanged
             log_dram(self.mesh_device, f"det gathered to replicated {dims}")
         return x, dims
@@ -835,6 +845,12 @@ class DiffVAEDecoder(Module):
             sp_axis=stage5_sp_axis,
             tp_axis=stage5_tp_axis,
         )
+        # W-sharded det->stage-5 handoff: when BOTH halves W-shard on the same axis, the det stages
+        # hand their context over W-sharded instead of all-gathering it to a replicated volume that
+        # stage 5 would immediately re-shard. Both the det _wgather and stage-5 _wshard_context go away.
+        self._wsharded_handoff = (
+            self.stages._w_sharded and self.stage5._w_sharded and self.stages.sp_axis == self.stage5.sp_axis
+        )
         self.dtype = dtype
 
     def torch_state_from_checkpoint(self, path, *, statistics: bool = True) -> dict[str, torch.Tensor]:
@@ -871,8 +887,15 @@ class DiffVAEDecoder(Module):
         grown = self.time_scale * (padded - 1) + 1
         return max(grown - self.ghost_latent_frames * self.time_scale, self.stage5_kernel[0])
 
-    def forward_context(self, latent: torch.Tensor) -> tuple[ttnn.Tensor, tuple[int, int, int]]:
-        """Deterministic stages on a ``(B, C, T, H, W)`` normalized latent, ghost cropped."""
+    def forward_context(
+        self, latent: torch.Tensor, *, gather_output: bool = True
+    ) -> tuple[ttnn.Tensor, tuple[int, int, int]]:
+        """Deterministic stages on a ``(B, C, T, H, W)`` normalized latent, ghost cropped.
+
+        ``gather_output=False`` returns the context W-sharded (this chip's band), for the W-sharded
+        det->stage-5 handoff. ``dims`` is always the FULL ``(T, H, W)``; the ghost crop is on ``T``,
+        which is orthogonal to the W-shard, so it just uses ``W/sp`` columns per chip when sharded.
+        """
         batch, channels, t, h, w = latent.shape
         assert batch == 1, f"batched decode is not implemented; got batch={batch}"
         assert channels == self.in_channels, f"latent has {channels} channels, expected {self.in_channels}"
@@ -881,17 +904,20 @@ class DiffVAEDecoder(Module):
         tokens = padded.permute(0, 2, 3, 4, 1).reshape(-1, channels).contiguous()
         x = ttnn.from_torch(tokens, device=self.mesh_device, dtype=self.dtype, layout=ttnn.TILE_LAYOUT)
 
-        x, dims = self.stages(x, dims=(padded.shape[2], h, w))
+        x, dims = self.stages(x, dims=(padded.shape[2], h, w), gather_output=gather_output)
+        sharded_out = self.stages._w_sharded and not gather_output
+        w_eff = dims[2] // self.stages.sp if sharded_out else dims[2]  # local W columns per chip
         keep = self.context_frames(t)
         if keep < dims[0]:
             channels_out = self.config["stage_channels"][-1]
             # Each step here allocates a full copy of the uncropped volume, which at 1920x1088 is
-            # 2.7 GB against 31.8 GB of DRAM, so they are freed as they die rather than at GC.
-            frames = ttnn.reshape(ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), (dims[0], dims[1] * dims[2], channels_out))
+            # 2.7 GB against 31.8 GB of DRAM, so they are freed as they die rather than at GC. The
+            # crop is on T (frame axis), which the W-shard leaves untouched -- just use w_eff columns.
+            frames = ttnn.reshape(ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), (dims[0], dims[1] * w_eff, channels_out))
             ttnn.deallocate(x)
-            cropped = ttnn.slice(frames, [0, 0, 0], [keep, dims[1] * dims[2], channels_out])
+            cropped = ttnn.slice(frames, [0, 0, 0], [keep, dims[1] * w_eff, channels_out])
             ttnn.deallocate(frames)
-            x = ttnn.to_layout(ttnn.reshape(cropped, (keep * dims[1] * dims[2], channels_out)), ttnn.TILE_LAYOUT)
+            x = ttnn.to_layout(ttnn.reshape(cropped, (keep * dims[1] * w_eff, channels_out)), ttnn.TILE_LAYOUT)
             ttnn.deallocate(cropped)
             dims = (keep, dims[1], dims[2])
         return x, dims
@@ -911,10 +937,17 @@ class DiffVAEDecoder(Module):
         from .diffvae_ltx_stage5 import Grid
 
         _ctx_t0 = stage_time_start(self.mesh_device)
-        context, dims = self.forward_context(latent)
+        context, dims = self.forward_context(latent, gather_output=not self._wsharded_handoff)
         stage_time_end(self.mesh_device, "det stages TOTAL (forward_context)", _ctx_t0)
         grid = Grid(batch=1, t=dims[0], h=dims[1], w=dims[2])
-        context = ttnn.reshape(context, (1, 1, grid.sites, self.config["stage_channels"][-1]))
+        channels_out = self.config["stage_channels"][-1]
+        # W-sharded handoff: context is this chip's band; reshape to the local site count stage 5's
+        # W-sharded path expects and skip its re-shard (the det->stage-5 all-gather + re-shard both go).
+        if self._wsharded_handoff:
+            w_local = grid.w // self.stages.sp
+            context = ttnn.reshape(context, (1, 1, grid.t * grid.h * w_local, channels_out))
+        else:
+            context = ttnn.reshape(context, (1, 1, grid.sites, channels_out))
 
         if noise is None:
             shape = (1, self.out_channels, grid.t, grid.h * self.patch_size, grid.w * self.patch_size)
@@ -924,7 +957,7 @@ class DiffVAEDecoder(Module):
         timestep = ttnn.from_torch(
             torch.tensor([[[[1.0]]]]), device=self.mesh_device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT
         )
-        return self.stage5.forward(context, noise, timestep, grid)
+        return self.stage5.forward(context, noise, timestep, grid, context_sharded=self._wsharded_handoff)
 
     def forward(
         self,

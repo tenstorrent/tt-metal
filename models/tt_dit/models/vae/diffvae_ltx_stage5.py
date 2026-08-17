@@ -1184,14 +1184,21 @@ class DiffVAEStage5(Module):
         x_t: torch.Tensor,
         timestep: ttnn.Tensor,
         grid: Grid,
+        *,
+        context_sharded: bool = False,
     ) -> torch.Tensor:
         """Return pixels. Valid as the whole decode only for ``model_output_type="x0"``
         with a single inference step, which is what the shipped 2.5 DiffVAE config asks for.
+
+        ``context_sharded=True`` means the det stages already handed the context over W-sharded (this
+        chip's ``(1, 1, T*H*(W/sp), dim)`` band, same ``sp_axis``), so the re-shard is skipped.
         """
         cfg = self.config
         bands = self.bands(grid)
-        if self._w_sharded:
+        if self._w_sharded and not context_sharded:
             context = self._wshard_context(context, grid)
+        elif self._w_sharded:
+            context = ttnn.to_layout(context, ttnn.TILE_LAYOUT)  # already this chip's band; just ensure TILE
         with stage_timer(self.mesh_device, "stage5 diff-blocks (attn+MLP)"):
             out = self.forward_diff_step(context, self.embed_x_t(x_t, bands), timestep, grid, bands)
 

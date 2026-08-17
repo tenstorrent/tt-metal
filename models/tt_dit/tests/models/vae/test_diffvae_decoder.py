@@ -157,9 +157,9 @@ def test_decode_stage5_wsp_matches_replicated(*, mesh_device, sp_axis):
 @pytest.mark.parametrize("sp_axis", [0, 1], ids=["sp_rows", "sp_cols"])
 def test_decode_full_wsp_matches_replicated(*, mesh_device, sp_axis):
     """Full decode with BOTH the deterministic stages and stage 5 W-sharded matches the replicated
-    decode, on shipped weights. The det stages shard from stage 1 (stage 0 replicated) and gather
-    back to a replicated context; stage 5 then W-shards as before. Same latent and seed, so both
-    draw the same x0 noise. This is the end-to-end check of det-stage SP (Path B)."""
+    decode, on shipped weights. The det stages shard from stage 1 (stage 0 replicated) and hand the
+    context to stage 5 W-sharded directly (same sp_axis) -- no gather-to-replicated round trip. Same
+    latent and seed, so both draw the same x0 noise. End-to-end check of det-stage SP + the handoff."""
     from models.tt_dit.parallel.manager import CCLManager
 
     if not CHECKPOINT.exists():
