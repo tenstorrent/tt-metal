@@ -173,12 +173,16 @@ def test_decode_full_wsp_matches_replicated(*, mesh_device, sp_axis):
     pixels_rep = replicated.decode(latent, seed=0)
 
     ccl_manager = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
+    # DIFFVAE_TP_HEADS=1 also enables TP-over-heads on the orthogonal (size-4) axis -- only valid when
+    # W shards the size-8 axis (sp_axis=1), since num_heads=4 must divide the TP axis size.
+    tp_axis = 0 if (os.environ.get("DIFFVAE_TP_HEADS") == "1" and sp_axis == 1) else None
     sharded = DiffVAEDecoder(
         config,
         mesh_device=mesh_device,
         ccl_manager=ccl_manager,
         stage5_na3d_backend="op_sp_w_sharded",
         stage5_sp_axis=sp_axis,
+        stage5_tp_axis=tp_axis,
         stages_na3d_backend="op_sp_w_sharded",
         stages_sp_axis=sp_axis,
     )

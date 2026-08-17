@@ -620,11 +620,26 @@ class _NeighborhoodAttention3D(Module):
         self.tp_axis = tp_axis
         self.scale = config.head_dim**-0.5
 
+        # DIFFVAE_TP_PROJ=1: make the qkv projections COLUMN-PARALLEL over the TP axis (shard the
+        # weight on the head-output dim). Each chip then computes only its heads' q/k/v -- a local
+        # matmul, no comms -- instead of all heads redundantly, and feeds the attention already
+        # head-sharded (its internal head-slice is skipped; the existing head all-gather still runs
+        # before the replicated out-proj). qkv is 3 of the 4 projections, so this reclaims the bulk
+        # of the ~0.9s redundant projection compute without adding an all-reduce.
+        self.tp_proj = tp_axis is not None and os.environ.get("DIFFVAE_TP_PROJ", "1") == "1"
+        tp = int(list(mesh_device.shape)[tp_axis]) if self.tp_proj else 1
+        assert not self.tp_proj or config.num_heads % tp == 0, f"num_heads={config.num_heads} not divisible by tp={tp}"
+        self.heads_local = config.num_heads // tp
+
         linear = {"bias": True, "mesh_device": mesh_device, "dtype": dtype}
-        self.to_q = Linear(config.dim, config.dim, **linear)
-        self.to_k = Linear(config.dim, config.dim, **linear)
-        self.to_v = Linear(config.dim, config.dim, **linear)
-        self.proj = Linear(config.dim, config.dim, **linear)
+        qkv_linear = dict(linear)
+        if self.tp_proj:
+            qkv_linear["weight_mesh_axes"] = [None, tp_axis]  # shard the output (heads) over the TP axis
+            qkv_linear["bias_mesh_axes"] = [None, tp_axis]
+        self.to_q = Linear(config.dim, config.dim, **qkv_linear)
+        self.to_k = Linear(config.dim, config.dim, **qkv_linear)
+        self.to_v = Linear(config.dim, config.dim, **qkv_linear)
+        self.proj = Linear(config.dim, config.dim, **linear)  # out-proj stays replicated (full width in)
 
         norm = {
             "norm_eps": config.norm_eps,
@@ -707,9 +722,12 @@ class _NeighborhoodAttention3D(Module):
             w_local = grid.w
         sites_local = grid.t * grid.h * w_local
         # Frames are a separate axis rather than folded into the rows, which is what lets the RoPE
-        # pieces broadcast: the H/W piece over frames, the T piece over the rows within one.
-        heads_shape = (1, grid.t, grid.h * w_local * cfg.num_heads, cfg.head_dim)
-        volume_shape = (grid.batch, grid.t, grid.h, w_local, cfg.num_heads, cfg.head_dim)
+        # pieces broadcast: the H/W piece over frames, the T piece over the rows within one. Under
+        # column-parallel qkv (tp_proj) the projections already emit only this chip's heads, so the
+        # per-head shapes use the local head count and the attention is told the heads are presharded.
+        heads = self.heads_local
+        heads_shape = (1, grid.t, grid.h * w_local * heads, cfg.head_dim)
+        volume_shape = (grid.batch, grid.t, grid.h, w_local, heads, cfg.head_dim)
 
         def to_volume(x: ttnn.Tensor) -> ttnn.Tensor:
             """Untilize into the volume shape NA3D gathers from, consuming ``x``."""
@@ -737,6 +755,7 @@ class _NeighborhoodAttention3D(Module):
                 ccl_manager=self.ccl_manager,
                 scale=1.0,
                 tp_axis=self.tp_axis,
+                heads_presharded=self.tp_proj,
             )
         else:
             out = neighborhood_attention_3d(
@@ -1017,6 +1036,11 @@ class DiffVAEStage5(Module):
         # W-shard above -- the two use orthogonal mesh axes.
         self.tp_axis = tp_axis
         self._w_sharded = self.na3d_backend == "op_sp_w_sharded"
+        # Under column-parallel qkv (DIFFVAE_TP_PROJ) the q/k carry only heads/tp per chip, so the
+        # shared RoPE tables (which repeat each row per head) must be built for the local head count.
+        _tp_proj = tp_axis is not None and os.environ.get("DIFFVAE_TP_PROJ", "1") == "1"
+        _tp = int(list(mesh_device.shape)[tp_axis]) if _tp_proj else 1
+        self._rope_num_heads = self.config.num_heads // _tp
         if self._w_sharded:
             assert sp_axis is not None, "op_sp_w_sharded needs sp_axis"
             assert ccl_manager is not None, "op_sp_w_sharded needs a ccl_manager"
@@ -1073,7 +1097,7 @@ class DiffVAEStage5(Module):
                 grid,
                 dim_split=self.config.resolved_rope_dim_split,
                 base=self.config.rope_base,
-                num_heads=self.config.num_heads,
+                num_heads=self._rope_num_heads,
                 mesh_device=self.mesh_device,
                 dtype=self.dtype,
                 w_shard=w_shard,

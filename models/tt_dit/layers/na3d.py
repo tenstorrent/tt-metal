@@ -852,6 +852,7 @@ def neighborhood_attention_3d_op_sp_w_sharded(
     ccl_manager,
     scale: float | None = None,
     tp_axis: int | None = None,
+    heads_presharded: bool = False,
 ) -> ttnn.Tensor:
     """SP-over-W with SHARDED input AND output, for full-stage spatial parallelism.
 
@@ -887,14 +888,19 @@ def neighborhood_attention_3d_op_sp_w_sharded(
     # TP-over-heads: partition q/k/v on the head axis across tp_axis. This is a pure per-device slice
     # (each chip selects its head band from the replicated tensor -- no comms), done here before the
     # heads are folded into the sequence so the K/V all-gather below moves only this chip's heads.
+    # heads_presharded=True: the caller (column-parallel qkv) already emitted only this chip's heads,
+    # so skip the slice -- ``heads`` is already local; only the head all-gather below still runs.
     full_heads = heads
     if tp_axis is not None:
         tp = int(list(mesh.shape)[tp_axis])
-        assert heads % tp == 0, f"heads={heads} must split evenly over tp={tp}"
-        q = ttnn.mesh_partition(q, dim=4, cluster_axis=tp_axis)
-        k = ttnn.mesh_partition(k, dim=4, cluster_axis=tp_axis)
-        v = ttnn.mesh_partition(v, dim=4, cluster_axis=tp_axis)
-        heads = heads // tp
+        if heads_presharded:
+            full_heads = heads * tp  # q/k/v arrive already head-sharded; reassemble to this many
+        else:
+            assert heads % tp == 0, f"heads={heads} must split evenly over tp={tp}"
+            q = ttnn.mesh_partition(q, dim=4, cluster_axis=tp_axis)
+            k = ttnn.mesh_partition(k, dim=4, cluster_axis=tp_axis)
+            v = ttnn.mesh_partition(v, dim=4, cluster_axis=tp_axis)
+            heads = heads // tp
 
     width = heads * head_dim
     seq_local = w_local * t_full * h_full  # W-outer flatten of this chip's band

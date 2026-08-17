@@ -80,8 +80,13 @@ class Linear(Module):
         activation_fn=None,
         dtype=ttnn.bfloat16,
         mesh_device=None,
+        weight_mesh_axes=None,
+        bias_mesh_axes=None,
     ):
         super().__init__()
+        # weight_mesh_axes/bias_mesh_axes shard the (replicated-by-default) weight over the mesh, per
+        # tensor dim. For column-parallel (shard the output/heads over a TP axis) pass [None, tp_axis];
+        # the input stays replicated so the matmul is local (no comms) and the output comes out sharded.
 
         self.in_features = in_features
         self.out_features = out_features
@@ -110,8 +115,17 @@ class Linear(Module):
             packer_l1_acc=True,
         )
 
-        self.weight = Parameter(total_shape=[self.in_features, self.out_features], device=mesh_device, dtype=dtype)
-        self.bias = Parameter(total_shape=[1, self.out_features], device=mesh_device, dtype=dtype) if bias else None
+        self.weight = Parameter(
+            total_shape=[self.in_features, self.out_features],
+            mesh_axes=weight_mesh_axes,
+            device=mesh_device,
+            dtype=dtype,
+        )
+        self.bias = (
+            Parameter(total_shape=[1, self.out_features], mesh_axes=bias_mesh_axes, device=mesh_device, dtype=dtype)
+            if bias
+            else None
+        )
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         if "weight" in state:
