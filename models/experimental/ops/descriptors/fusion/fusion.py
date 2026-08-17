@@ -66,6 +66,7 @@ from models.experimental.ops.descriptors.op_descriptor import (
 from models.experimental.ops.descriptors.fusion.common import (
     _SemaphoreSpec,
     _allocate_fusion_semaphore_bank,
+    _cb_has_backing,
     _get_risc_type,
 )
 
@@ -1274,7 +1275,7 @@ def _build_item(item, device):
         cb_source_map = []
         global_cb_source_map = []
         for cb_idx, cb in enumerate(item.descriptor.cbs):
-            if cb.has_buffer():
+            if _cb_has_backing(cb):
                 cb_source_map.append((cb_idx, item, cb_idx))
             if cb.has_global_circular_buffer():
                 global_cb_source_map.append((cb_idx, item, cb_idx))

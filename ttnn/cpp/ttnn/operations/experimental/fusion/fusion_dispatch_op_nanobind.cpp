@@ -8,6 +8,7 @@
 #include <optional>
 
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/optional.h>
 #include <nanobind/stl/vector.h>
 
 #include "device/fusion_dispatch_op_device_operation.hpp"
@@ -208,6 +209,39 @@ void bind_fusion_dispatch_op(nb::module_& mod) {
         If ``sem_addrs`` is provided, runtime arg positions matching those
         addresses are recorded as semaphore slots (patched separately from
         tensor addresses on each dispatch).
+        )doc");
+
+    mod.def(
+        "cb_has_backing",
+        [](const tt::tt_metal::CBDescriptor& descriptor) { return get_cb_backing_buffer(descriptor) != nullptr; },
+        nb::arg("cb_descriptor"),
+        R"doc(
+        Return whether a CBDescriptor has Buffer* or tensor backing.
+        )doc");
+
+    mod.def(
+        "cb_backing_address",
+        [](const tt::tt_metal::CBDescriptor& descriptor) -> std::optional<std::uint32_t> {
+            if (auto* buffer = get_cb_backing_buffer(descriptor); buffer != nullptr) {
+                return buffer->address();
+            }
+            return std::nullopt;
+        },
+        nb::arg("cb_descriptor"),
+        R"doc(
+        L1 address of a CBDescriptor's Buffer* or tensor backing, or None.
+        )doc");
+
+    mod.def(
+        "copy_cb_backing",
+        [](tt::tt_metal::CBDescriptor& dst, const tt::tt_metal::CBDescriptor& src) {
+            dst.buffer = src.buffer;
+            dst.tensor = src.tensor;
+        },
+        nb::arg("dst"),
+        nb::arg("src"),
+        R"doc(
+        Copy Buffer* and tensor backing from one CBDescriptor to another.
         )doc");
 
     mod.def(

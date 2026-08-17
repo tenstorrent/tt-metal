@@ -1968,10 +1968,10 @@ After allocation, `build_merged_cb_descriptors()` constructs the final
    each member's `source_fmt`.
 
 3. **Buffer-backed slots**: If any member of an alias group is buffer-backed
-   (has an L1 Buffer allocation), the merged CBDescriptor inherits the buffer
-   via `set_buffer_from_cb()`. The buffer source is taken from the earliest
-   phase that has a buffer-backed CB in the group, matching the rebind logic
-   which computes address diffs relative to phase 0.
+   (has an L1 Buffer allocation or tensor backing), the merged CBDescriptor
+   inherits that backing via `_copy_cb_backing()`. The source is taken from
+   the earliest phase that has a backed CB in the group, matching the rebind
+   logic which computes address diffs relative to phase 0.
 
 4. **Mutation contract**: The method mutates `source_fmt.buffer_index` on the
    original `CBFormatDescriptor` C++ objects (setting them to the remapped

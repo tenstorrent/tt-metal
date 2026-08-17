@@ -102,6 +102,41 @@ def _allocate_fusion_semaphore_bank(device, sem_specs):
     )
 
 
+def _cb_has_backing(cb_descriptor) -> bool:
+    """True if a CBDescriptor has Buffer* or tensor backing."""
+    try:
+        if isinstance(cb_descriptor, ttnn.CBDescriptor):
+            return ttnn._ttnn.operations.experimental.cb_has_backing(cb_descriptor)
+    except TypeError:
+        pass
+    has_buffer = getattr(cb_descriptor, "has_buffer", False)
+    return has_buffer() if callable(has_buffer) else bool(has_buffer)
+
+
+def _cb_backing_address(cb_descriptor):
+    """L1 address of a CBDescriptor's Buffer* or tensor backing, or None."""
+    try:
+        if isinstance(cb_descriptor, ttnn.CBDescriptor):
+            return ttnn._ttnn.operations.experimental.cb_backing_address(cb_descriptor)
+    except TypeError:
+        pass
+    buffer_address = getattr(cb_descriptor, "buffer_address", None)
+    return buffer_address() if callable(buffer_address) else None
+
+
+def _copy_cb_backing(dst, src) -> None:
+    """Copy Buffer* and tensor backing from one CBDescriptor to another."""
+    try:
+        if isinstance(dst, ttnn.CBDescriptor) and isinstance(src, ttnn.CBDescriptor):
+            ttnn._ttnn.operations.experimental.copy_cb_backing(dst, src)
+            return
+    except TypeError:
+        pass
+    set_buffer = getattr(dst, "set_buffer_from_cb", None)
+    if callable(set_buffer):
+        set_buffer(src)
+
+
 class _BuildResult:
     """Internal intermediate result from building a fused descriptor.
 
