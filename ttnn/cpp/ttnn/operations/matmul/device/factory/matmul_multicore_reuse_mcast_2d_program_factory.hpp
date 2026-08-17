@@ -28,6 +28,7 @@ struct MatmulMultiCoreReuseMcast2DProgramFactory {
         uint32_t start_core_x{};
         uint32_t start_core_y{};
         bool transpose_mcast{};
+        bool out_cb_aliases_shard{};
         std::vector<CoreCoord> cores;
     };
 
