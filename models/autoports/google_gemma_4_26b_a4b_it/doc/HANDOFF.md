@@ -235,3 +235,73 @@ of a few thousand tokens — rather than the 100 used so far — exercises exact
 regime where GPQA fails, needs only this tt-metal branch, and produces a
 first-divergence index. That is the experiment
 `doc/tti_release/AUTODEBUG_GPQA_DIVERGENCE.md` specified and never ran.
+
+---
+
+## QUESTION THE PIPELINE BEFORE THE MODEL — four defects in the grading path
+
+Added 2026-08-17. Across three ports in this fleet the **pipeline has been wrong
+more often than the models**: lm-eval's implicit 256-token cap truncating
+chain-of-thought, TTI's `EXPERIMENTAL` status silently disabling eval
+enforcement, Falcon's IFEval graded against the wrong metric variant of a model
+card (apparent 0.544 "quality failure" that was parity all along),
+`--plugin-config` being stale against current vLLM, and a CCL shape bug invisible
+to a near-square test suite. **Treat the harness as a suspect here too.** Four
+concrete issues in the GPQA grading path, all verifiable from committed
+artifacts:
+
+### 1. `until: ['</s>']` is a stop string from the wrong model family
+
+Both arms ran with `generation_kwargs.until = ['</s>']`. That is the
+Llama/Mistral EOS. **Gemma-4's stop tokens are `<eos>` and ids `[1, 106, 50]`**
+(106 = `<end_of_turn>`), so `</s>` can never appear in its output and that stop
+can never fire. Present in both arms, so probably not the differential — both
+paths likely fall back on the model's own EOS — but it is a real
+task-configuration defect, and it means generation length is governed by
+`max_gen_toks=32768` and EOS handling rather than by the configured stop.
+
+### 2. `strict-match` scores **0.0 in both arms** — the filter never matches
+
+TT strict 0.0 / flexible 0.4; HF strict 0.0 / flexible 1.0. A filter that
+returns zero for a *known-good* reference is not validating anything: the strict
+answer-format extractor does not match this model's output shape at all. The
+entire verdict therefore rests on `flexible-extract` alone. Before concluding
+anything about the model, establish that the extractor is fit for its output
+format.
+
+### 3. No per-sample outputs were captured — the failure cannot be inspected
+
+`log_samples` is `None` in **both** arms, so no generated text was retained.
+There is currently no way to tell whether the six failing documents are *wrong
+answers* or *right answers the extractor missed*. Those are completely different
+defects — one is the model, the other is the pipeline.
+
+### 4. The pass threshold is hostage to a ten-sample control
+
+Acceptance used `floor(10 × 1.0 × 0.95) = 9`, i.e. 9 of 10 required, derived from
+an HF control that happened to score a perfect 10/10 on ten documents. Had the
+control scored 9/10 the bar would have been 8. A single fortunate reference
+document tightens the bar on the port. `flexible-extract` stderr is 0.163.
+
+## Therefore: change the first experiment
+
+**Do not start with the precision A/B.** Start by re-running the *same* eval with
+`--log_samples` and reading the six failures. It is the cheapest step and it
+discriminates pipeline from model:
+
+- answers correct but unextracted → **pipeline defect** (extractor/filter), and
+  the precision A/B would have chased a ghost;
+- answers genuinely wrong → **model defect**, and the ranked hypotheses in
+  `AUTODEBUG_GPQA_DIVERGENCE.md` apply; proceed to the precision A/B;
+- generations truncated at 32,768 with no answer emitted → **stop/EOS handling**,
+  i.e. issue 1 above, and the fix is task configuration.
+
+`experiments/gemma_gpqa_ab.sh` already passes `--log_samples`, so running it once
+against the **unmodified** selected policy gives you the baseline samples the
+original run never kept. Do that before changing any precision.
+
+Also worth re-checking rather than assuming: whether the server-side chat
+template and the HF control's locally-applied template produce the *same* prompt.
+The autoport ships a passthrough compatibility template; if the two arms prompt
+differently, they are not measuring the same task and the 4/10 vs 10/10 gap is
+not attributable to the model at all.
