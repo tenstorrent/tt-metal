@@ -583,6 +583,10 @@ class ttMLA:
                     active_seq_len=self.active_seq_len,
                     slot_num=slot_num,
                     layer_num=self.layer_num,
+                    # Thin-head-shard models (_needs_head_to_seq_reshard, e.g. GLM/DS-V4 64h at tp=4):
+                    # _sparse_mla re-splits the indices over TP anyway, so the indexer skips its TP
+                    # regather and hands back the TP-seq-sharded rows directly (shape guard adapts).
+                    skip_tp_regather=self._needs_head_to_seq_reshard,
                 )
         else:
             self._indexer = NullIndexer()  # dense v3.1: forward calls .forward() -> None (dense path)
