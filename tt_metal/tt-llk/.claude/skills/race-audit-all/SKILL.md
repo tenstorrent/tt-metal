@@ -36,8 +36,9 @@ schema reconciliation):
     # `tt_metal/tt-llk/` prefix; from anywhere else, prefix an absolute repo path.)
     # Invoke it BY PATH and do not `cd` first: loading a skill does NOT change the shell's
     # CWD, so a bare `cd .claude/...` fails from the repo root. No `cd` is needed anyway —
-    # run.sh self-locates and always writes to the tool's own out/, so where you invoke it
-    # from changes nothing about what it does.
+    # run.sh chdirs to its own directory, so where you invoke it from changes nothing.
+    # CONSEQUENCE: every PATH you hand it (an out_dir, `LLK_KT_LOG`) must be ABSOLUTE —
+    # a relative one resolves against the tool dir, NOT your CWD. Use `$PWD/<name>`.
     # PR-scoped sweep: add --changed [BASE] (default main) to scope every check to files changed vs BASE.
     # out/audit.<arch>.json -> .checks[{mmio-race, cfg-word-overlap,
     #                                    semaphore-handshake, reconfig-stall,
@@ -204,9 +205,9 @@ must never read as "all kernels covered").
 1. **Get a build log** carrying the JIT compile commands — either
    `TT_METAL_LOG_KERNELS_COMPILE_COMMANDS=1 <workload> > $PWD/build.log 2>&1` captured on
    hardware once (then audit offline), or let bootstrap run the workload for you.
-2. **Run the tier** — same `run.sh` path as the preflight above, from the repo root.
-   Give `LLK_KT_LOG` an **absolute** path: run.sh chdirs to its own directory, so a
-   relative one resolves against the tool dir, not your CWD, and fails as "not found".
+2. **Run the tier** — same `run.sh` path as the preflight above, from the repo root, and
+   an **absolute** `LLK_KT_LOG` (per the preflight's path rule; a relative one resolves
+   against the tool dir and fails as "not found"):
    `LLK_KT_LOG=$PWD/build.log tt_metal/tt-llk/.claude/tools/llk-audit/run.sh <arch> --full-jit`
    (log path), or the run-a-workload path:
    `LLK_KT_CLEAR_CACHE=1 LLK_KT_WORKLOAD='<cmd>' tt_metal/tt-llk/.claude/tools/llk-audit/run.sh <arch> --full-jit`.

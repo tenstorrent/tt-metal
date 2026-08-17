@@ -2213,8 +2213,8 @@ def test_capture_tu_ledger_one_row_per_tu():
     assert HOLE.search(f"[{status:16}]"), status
 
     # DELIBERATELY NOT a hole: parse errors WITH surviving facts. That envelope IS
-    # written, so its parse_errors reach the audit JSON's top-level `parse_errors` and
-    # run.sh's headline. Marking it too would flag nearly every TU and drown the signal.
+    # written, so its parse_errors are summed into the audit JSON's top-level
+    # `parse_errors`. Marking it would flag nearly every TU and drown the signal.
     kept, status, nf, hl = capture.tu_ledger_status([dev], 5)
     assert nf == 1 and status == "ok(parse_errors)", status
     assert not HOLE.search(f"[{status:16}]"), status
@@ -2227,13 +2227,13 @@ def test_capture_tu_ledger_one_row_per_tu():
 
     # The hole predicate must be the exact negation of the one behind the
     # "ok(parse_errors)" label, so the two can never disagree: whenever the status claims
-    # parse errors, the row is also marked a hole. A JSON-null parse_errors is the case
-    # that separates `pe != 0` from a truthiness test.
-    for bad_pe in (None, -1):
-        kept, status, nf, hl = capture.tu_ledger_status([], bad_pe)
-        assert "ok(parse_errors)" in status, (bad_pe, status)
-        assert status.startswith("PARSE-HOLE:"), (bad_pe, status)
-        assert HOLE.search(f"[{status:16}]"), (bad_pe, status)
+    # parse errors, the row is also counted as a hole. A JSON-null parse_errors is the
+    # one value that tells `pe != 0` apart from a truthiness test (None is falsy but
+    # != 0), and claiming parse errors while skipping the marker is the unsafe direction.
+    kept, status, nf, hl = capture.tu_ledger_status([], None)
+    assert "ok(parse_errors)" in status, status
+    assert status.startswith("PARSE-HOLE:"), status
+    assert HOLE.search(f"[{status:16}]"), status
 
     # Both tripwires at once: one row, both markers retained, hole still detected.
     kept, status, nf, hl = capture.tu_ledger_status([host], 2)
