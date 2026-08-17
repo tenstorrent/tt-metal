@@ -31,6 +31,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 
 #include "device_fixture.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include <umd/device/types/xy_pair.hpp>
 
 // Access to internal API: ProgramImpl::num_kernel, get_kernel
@@ -339,8 +340,7 @@ void verify_core_rt_args(
     const std::vector<uint32_t>& written_args,
     const uint32_t incr_val) {
     std::vector<uint32_t> observed_args;
-    auto* device = mesh_device->get_devices()[0];
-    tt_metal::detail::ReadFromDeviceL1(device, core, base_addr, written_args.size() * sizeof(uint32_t), observed_args);
+    slow_dispatch::ReadFromL1(*mesh_device, core, base_addr, written_args.size() * sizeof(uint32_t), observed_args);
 
     for (size_t i = 0; i < written_args.size(); i++) {
         uint32_t expected_result = written_args.at(i) + incr_val;
@@ -370,12 +370,11 @@ void verify_results(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     const auto& program = workload.get_programs().at(device_range);
-    auto* device = mesh_device->get_devices()[0];
 
     for (size_t kernel_id = 0; kernel_id < program.impl().num_kernels(); kernel_id++) {
         const auto kernel = program.impl().get_kernel(kernel_id);
         auto rt_args_base_addr = get_runtime_arg_addr(
-            device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1),
+            mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1),
             kernel->get_kernel_processor_class(),
             kernel->get_kernel_processor_type(0),
             false);
@@ -393,7 +392,7 @@ void verify_results(
         // Verify common RT Args (same for all cores) if they exist.
         if (!common_rt_args.empty()) {
             auto common_rt_args_base_addr = get_runtime_arg_addr(
-                device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1),
+                mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1),
                 kernel->get_kernel_processor_class(),
                 kernel->get_kernel_processor_type(0),
                 true);
@@ -426,7 +425,6 @@ void verify_quasar_crtas(
     const CoreCoord& core,
     const std::vector<std::vector<uint32_t>>& per_user_dm_crtas,
     bool expect_shared_address) {
-    auto* device = mesh_device->get_devices()[0];
     uint32_t l1_base = mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     uint32_t results_base = get_runtime_arg_addr(l1_base, tt::tt_metal::HalProcessorClassType::DM, 0, true);
     uint32_t max_dms = MetalContext::instance().hal().get_processor_types_count(
@@ -450,7 +448,7 @@ void verify_quasar_crtas(
         uint32_t crta_addr = results_base + ((kCommonRTASeparation + physical_dm_id * num_crtas) * sizeof(uint32_t));
 
         std::vector<uint32_t> observed;
-        tt_metal::detail::ReadFromDeviceL1(device, core, crta_addr, num_crtas * sizeof(uint32_t), observed);
+        slow_dispatch::ReadFromL1(*mesh_device, core, crta_addr, num_crtas * sizeof(uint32_t), observed);
 
         for (size_t j = 0; j < num_crtas; j++) {
             EXPECT_EQ(observed[j], expected_crtas[j]) << "DM" << physical_dm_id << " CRTA[" << j << "]";
@@ -462,7 +460,7 @@ void verify_quasar_crtas(
         uint32_t physical_dm_id = kQuasarFirstUserDm + user_dm_idx;
         uint32_t addr_offset = addr_base + (physical_dm_id * sizeof(uint32_t));
         std::vector<uint32_t> addr;
-        tt_metal::detail::ReadFromDeviceL1(device, core, addr_offset, sizeof(uint32_t), addr);
+        slow_dispatch::ReadFromL1(*mesh_device, core, addr_offset, sizeof(uint32_t), addr);
         crta_addrs.push_back(addr[0]);
     }
 
