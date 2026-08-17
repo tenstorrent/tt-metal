@@ -1,6 +1,7 @@
 name: "LLK bit-exact"
 
 # Manual ttnop sweep on this branch (WH and/or BH, 15 shards each).
+# TEMP: BH only, first 5 of a 15-way split, 5 machines. Restore: uncomment all/wormhole, default all.
 
 on:
   workflow_dispatch:
@@ -8,11 +9,11 @@ on:
       architecture:
         description: "Architecture to run ttnop on"
         required: true
-        default: all
+        default: blackhole # TEMP: was all
         type: choice
         options:
-          - all
-          - wormhole
+          # - all # TEMP restore
+          # - wormhole # TEMP restore
           - blackhole
 
 permissions:
@@ -22,7 +23,8 @@ permissions:
 
 # Cancel a previous in-flight run of the same architecture on this ref.
 concurrency:
-  group: ${{ github.workflow }}-${{ inputs.architecture || 'all' }}-${{
+  # TEMP: fallback was 'all'
+  group: ${{ github.workflow }}-${{ inputs.architecture || 'blackhole' }}-${{
     github.ref_protected && github.run_id || github.ref }}
   cancel-in-progress: true
 
@@ -31,5 +33,5 @@ jobs:
     name: "LLK ttnop tests"
     uses: ./.github/workflows/llk-bit-exact-impl.yaml
     with:
-      architecture: ${{ inputs.architecture || 'all' }}
+      architecture: ${{ inputs.architecture || 'blackhole' }} # TEMP: was 'all'
     secrets: inherit
