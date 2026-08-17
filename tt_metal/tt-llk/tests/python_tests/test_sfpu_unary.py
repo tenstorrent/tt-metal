@@ -548,8 +548,16 @@ _EDGE_SWEEP_OPS = sorted(
 #   the same probe does *not* diverge — two implementations of one function disagreeing at
 #   their shared pole. Nothing in the ISA prescribes either answer.
 #
-#   Erfinv at ±1: golden ∓inf/±inf against a saturated result, on the two fp32-dest
-#   combinations only, so tolerance-shaped rather than semantic.
+# CLOSED:
+#
+#   Erfinv at ±1 returned NaN, not a saturated finite, and it was wrong on all 8
+#   combinations rather than the two the issue scoped it to — the other six narrowed that
+#   NaN to ±inf on the way out and so agreed with the golden by accident. Semantic, not
+#   tolerance-shaped. Root-caused to sfpu_sqrt_custom, not to erfinv: for +inf its
+#   fast-inverse-sqrt seed squares to a denormal, SFPMAD flushes that to +0, and the next
+#   multiply is 0 * -inf = NaN. Fixed by excluding non-finite input from the iteration, so
+#   sqrt_custom(+inf) = +inf and every consumer inherits the repair. See
+#   FIX_PLAN_52930_sqrt_custom_infinity.md.
 _EDGE_KNOWN_DIVERGENCES = {
     MathOperation.Sign: (
         (DataFormat.Float32, DataFormat.Float16_b, DestAccumulation.Yes),
@@ -569,10 +577,6 @@ _EDGE_KNOWN_DIVERGENCES = {
         (DataFormat.Float32, DataFormat.Float32, DestAccumulation.No),
         (DataFormat.Float32, DataFormat.Float32, DestAccumulation.Yes),
     ),
-    MathOperation.Erfinv: (
-        (DataFormat.Float16_b, DataFormat.Float32, DestAccumulation.Yes),
-        (DataFormat.Float32, DataFormat.Float32, DestAccumulation.Yes),
-    ),
 }
 
 
@@ -581,6 +585,7 @@ _EDGE_KNOWN_DIVERGENCES = {
 # axis grows or a delivery measurement is revised.
 #
 #   Reciprocal  every combination carrying specials at all -- 1/NaN is the probe.
+#   SqrtCustom  every combination carrying specials at all -- sqrt_custom(-inf) is the probe.
 #   Sqrt, Rsqrt every combination that also delivers a real -0.0, the strictly smaller
 #               unpack-to-dest set. At dest_acc=No the kernel is handed +0.0 and agrees.
 #
@@ -600,15 +605,21 @@ def _cat_b_divergences(delivers):
 _EDGE_KNOWN_DIVERGENCES.update(
     {
         MathOperation.Reciprocal: _cat_b_divergences(lambda _fmt, _dest_acc: True),
+        MathOperation.SqrtCustom: _cat_b_divergences(lambda _fmt, _dest_acc: True),
         MathOperation.Sqrt: _cat_b_divergences(negative_zero_delivered),
         MathOperation.Rsqrt: _cat_b_divergences(negative_zero_delivered),
     }
 )
 
-# The three whose divergence needs the cat-B probe to be sent. Their xfails are conditional on
+# The four whose divergence needs the cat-B probe to be sent. Their xfails are conditional on
 # specials surviving the NaN-sign gate; see where the marker is applied.
 _CAT_B_DERIVED_DIVERGENCES = frozenset(
-    {MathOperation.Reciprocal, MathOperation.Sqrt, MathOperation.Rsqrt}
+    {
+        MathOperation.Reciprocal,
+        MathOperation.SqrtCustom,
+        MathOperation.Sqrt,
+        MathOperation.Rsqrt,
+    }
 )
 
 _EDGE_DIVERGENCE_REASON = {
@@ -622,12 +633,20 @@ _EDGE_DIVERGENCE_REASON = {
     MathOperation.RsqrtCompat: "rsqrt(0) saturates to 1.7014118e38 (0x7F000000) instead "
     "of inf, while plain Rsqrt does not diverge at the same pole. Not prescribed by the "
     "ISA either way.",
-    MathOperation.Erfinv: "erfinv(±1) saturates instead of returning ±inf.",
     MathOperation.Reciprocal: "1/NaN returns +0: the kernel does not propagate NaN, where "
     "IEEE, torch and the golden all give NaN. Every other special agrees (1/±inf = ±0, "
     "1/±0 = ±inf), so this is the NaN probe alone and it diverges on every combination that "
     "delivers one. Not prescribed by the ISA, which says only that NaN inputs follow 'the "
     "usual IEEE754 rules'.",
+    MathOperation.SqrtCustom: "sqrt_custom(-inf) returns -inf; IEEE and the golden give "
+    "NaN. The non-finite guard added with the sqrt_custom(+inf) fix passes non-finite input "
+    "straight through rather than synthesising a NaN, which is right for +inf and NaN and "
+    "wrong for -inf -- a deliberate limit of the minimal fix, kept out of it because "
+    "returning NaN for negative input is a behaviour change for every consumer (asin/acos "
+    "reach sqrt_custom with a negative argument whenever |v| > 1). Before the fix this "
+    "combination returned +inf, which agreed with the golden by accident: the golden's NaN "
+    "is itself narrowed to inf on a bf16 output. See FIX_PLAN_52930_sqrt_custom_infinity.md "
+    "section 5, and section 10 for the negative-input issue this should be folded into.",
     MathOperation.Sqrt: "sqrt(-0) returns NaN; IEEE and the golden give -0. Scoped to the "
     "unpack-to-dest combinations, the only ones where a real -0.0 reaches the LREG — at "
     "dest_acc=No the kernel is handed +0.0 and agrees, so the probe is not sent there.",
@@ -737,11 +756,11 @@ def test_eltwise_unary_sfpu_edges(
 
     specials = _gate_unspecified_nan_sign(mathop, formats, dest_acc, specials)
 
-    # Marked after the gate, not before, because three of these divergences are cat-B's and the
+    # Marked after the gate, not before, because four of these divergences are cat-B's and the
     # gate can take cat B away: where it has, the probe is not sent, the divergence cannot
-    # occur, and the entry would be a non-strict xfail that XPASSes every run. Sign, Heaviside,
-    # RsqrtCompat and Erfinv are unaffected -- their divergences are cat-A poles and signed
-    # zeros that edge_values() emits with or without specials.
+    # occur, and the entry would be a non-strict xfail that XPASSes every run. Sign,
+    # Heaviside and RsqrtCompat are unaffected -- their divergences are cat-A poles and
+    # signed zeros that edge_values() emits with or without specials.
     diverges_here = (formats.input_format, formats.output_format, dest_acc) in (
         _EDGE_KNOWN_DIVERGENCES.get(mathop, ())
     )
