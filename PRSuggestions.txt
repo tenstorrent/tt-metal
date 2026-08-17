@@ -1,71 +1,42 @@
 1. Check the model implementation the tool writes when a model is not in HF format
-    - For a model transformers cannot load, the tool writes its own PyTorch version of it, and every
-      later test is scored against that version. Ours was right, we hid every PyTorch version of the
-      model on the machine and it still matched our reference on every stage. But the only check on it
-      is a comment. It reasoned well, that this model cannot be checked on text since the text head is
-      unused, so it drove the speech path instead and even tried a wrong RoPE on purpose to show the
-      check catches it. Then it wrote all of that down as prose. Nothing can re-run it, so a slightly
-      wrong version would set every later target wrong and nothing would notice.
-    - Fix: have it write that check as code and run it, keeping the deliberate wrong version, since a
-      check never seen to fail proves little. Cheap additions: every weight in the checkpoint used,
-      the values the checkpoint declares actually built, cached and recomputed paths agreeing, and the
-      same seed giving the same result.
+    - It writes its own PyTorch version of the model, and every later test is scored against that
+      version, but the only check on it is a comment. Ours turned out correct and we verified it
+      ourselves, which means a wrong one would pass the same way.
+    - Fix: write that check as code and run it. It already worked out the right check for this model,
+      and even tried a wrong RoPE on purpose to show the check catches it, so keep that part.
 
-2. Fix the model bring up from local path
-    - A folder on disk behaves differently from a Hub name, and fails later with a confusing error:
-        - a local folder gets a shallower check, and the run dies three stages later pointing at the
-          wrong thing
-        - optimize confuses the folder holding the weights with the folder holding the generated
-          code, so you cannot point it at the model
-        - pointing it at the generated code loses track of which model it came from, so optimize
-          cannot build its own correctness check even though it wrote one. We named it by hand.
+2. Fix bring-up from a local folder
+    - A folder on disk is not treated like a Hub name. It gets a shallower check and the run dies three
+      stages later pointing at the wrong thing. Optimize then confuses the folder holding the weights
+      with the folder holding the generated code, and loses track of which model it came from, so it
+      cannot build its own correctness check. We named it by hand.
     - Fix: accept a folder anywhere a Hub name works, and keep track of both.
-    - Related: models that ship their own code only work if their name is in a hardcoded list, and
-      that list has one entry. Ours passed the early checks, then failed when it ran, blaming the
-      model rather than the loader. Fix: look at the model. Its config already says it ships its own
-      code. We changed this and it worked.
+    - Also, models that ship their own code only work if their name is on a hardcoded list, and that
+      list has one entry. Read the config instead, it already says so. We changed this and it worked.
 
-3. Support multiple input prompts for the tests
-    - The end to end test uses one prompt to decide pass or fail for the whole model, and there is no
-      way to add more. One prompt cannot tell a real bug from a lucky guess.
-    - The per component tests never use real inputs. Real inputs and outputs are saved for every
-      component, and the log says the tests use them, but they do not. The main input is random noise.
-    - Worse, inputs are guessed from the argument names. For our model that passed a 3-D activation
-      where a complex RoPE table was expected, dropped the additive causal mask entirely (so the
-      reference itself became non-causal), and passed floats where integer codebook indices were
-      needed. These had to be written by hand before the tests meant anything.
-    - Fix: use the saved inputs and compare against the saved output. Let the end to end test take
-      more than one prompt. Make the log say what the test actually used.
+3. Use the saved inputs in the tests, and allow more than one prompt
+    - Real inputs and outputs are saved for every component, and the log says the tests use them, but
+      they do not. The main input is random noise and the others are guessed from argument names. For
+      our model that meant a 3-D activation where a complex RoPE table was expected, the additive
+      causal mask dropped so the reference itself became non-causal, and floats where integer codebook
+      indices were needed. We wrote them by hand before the tests meant anything.
+    - The end to end test also decides pass or fail for the whole model from a single prompt.
+    - Fix: use the saved inputs, compare against the saved output, accept more than one prompt, and
+      make the log say what the test actually used.
 
-4. Model has two implementations of decode step, eager one without KV cache and traced one with KV
-   cache:
-    - Both are written when the pipeline is wired together, not during bring-up.
-    - The cache never reaches the component, for two reasons:
-        - the saved example contains a real cache, but the same object is passed to the reference and
-          then to the port. The reference writes into it as it runs, so the port sees one entry too
-          many. The cache is dropped to avoid that, and the tool notes what it costs: with no cache
-          the test compares a single value and returns 1.0 whatever the inputs are.
-        - the test only passes arguments whose names are on a recognised list, and the cache is not on
-          it, so it always arrives empty.
-      A version that uses the cache and one that ignores it therefore score the same, so the simpler
-      one was accepted.
-    - The version that generates speech then has to recompute. It must use the accepted components,
-      and one that ignores the cache can only be given the whole prompt plus everything generated so
-      far, on every frame.
-    - A correct fix will fail two existing checks: the plan expects the model to run once per frame
-      plus once for the prompt, and a second check verifies which components are used. Update both in
-      the same change, or a good fix will look like a regression.
-    - The traced version works at any position when called directly. The problem appears once it is
-      recorded, because the position is baked into the recording, so a recording made at position 200
-      always writes to slot 200. To replay it in a loop the position has to be a tensor on the device.
-    - Speed was measured on the traced version and correctness on the eager one. It reported 17.2%
-      faster; what ships got 13.2% (297.69 to 258.26 ms per audio frame), because most edits touched
-      shared code. The work is not lost, but nothing measured what ships. Our hand written port of
-      the same model on the same board runs at 26.9 ms.
-    - Fix, in order:
-        1. copy the saved inputs before passing them to each side
-        2. add the cache to the recognised list
-        3. let the component use the cache, its signature already has the argument
-        4. update the expected call counts and both checks in the same change
-        5. for the traced version, make the position a tensor on the device
-    - Before measuring speed, check that the code measured is the code that generates speech.
+4. The decode step exists twice, and speed and correctness were measured on different ones
+    - The version that ships has no KV cache, the traced one does. Speed was measured on the traced
+      one, correctness on the other. It reported 17.2% faster; what ships got 13.2%, 297.69 to 258.26
+      ms per audio frame. Our hand written port of the same model on the same board runs at 26.9 ms.
+    - The cache never reaches the component during bring-up. The saved example holds a real cache, but
+      the same object goes to the reference and then to the port, so the port sees one entry too many
+      and the cache is dropped; and the argument name is not on the recognised list, so it arrives
+      empty anyway. With no cache the test compares a single value and returns 1.0 whatever the inputs
+      are, so using the cache and ignoring it score the same. The simpler one was accepted, and the
+      shipped path then recomputes the whole prompt on every frame.
+    - Fix, in order: copy the saved inputs before passing them to each side, add the cache to the
+      recognised list, let the component use it since its signature already has the argument, and
+      update the expected call counts and the component check in the same change, or a correct fix
+      will look like a regression. For the traced version the position is baked into the recording, so
+      it has to become a tensor on the device.
+    - And check that the code measured for speed is the code that generates speech.
