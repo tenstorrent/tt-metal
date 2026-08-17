@@ -1100,11 +1100,13 @@ silently passing -- that is what the emitted test is for.
   other `push` trigger in `.github/workflows` is either pinned to a branch list that excludes these
   refs or filtered to paths a scratch commit does not touch. Worth re-checking if a dispatch ever
   seems to cost more CI than it should.
-- **`.github/scripts/port/shims/` is now unused.** It held stand-ins for `curl` and `netstat`, which
-  the viommu image ships and gh-aw assumes; that mattered only while the agent ran in-cluster. Kept
-  rather than deleted, because it is exactly what would be needed again if the proxy allowlist ever
-  changes and the pipeline collapses back into one in-cluster job. The general lesson from it still
-  applies to that pool: when a gh-aw step fails there, suspect a missing binary before the logic.
+- **When a gh-aw step fails on the viommu pool, suspect a missing binary before the logic.** That pool
+  ships a thinner image than gh-aw assumes. `.github/scripts/port/shims/` once held stand-ins for
+  `curl` and `netstat` for exactly this reason; it was deleted once nothing referenced it, and is
+  recoverable from this branch's history if the pipeline ever collapses back into one in-cluster job.
+  The `netstat` case is worth remembering as a near miss: the missing binary was the visible symptom,
+  but the actual fault was `no_proxy` omitting the loopback addresses, so the shim would have papered
+  over it.
 
 ## If the run fails
 
@@ -1235,3 +1237,63 @@ was never touched. Right now `scaffold.py --resume` copies what is absent, keeps
 reports both, which is the safe two-way behaviour: silence would hide generator changes and
 overwriting would discard verified fixes. Getting the third way needs the workflow to keep the old
 checkout instead of deleting it during the pin swap.
+
+## Why the gates are strict, and what the accepted risk actually is
+
+Condensed from the working notes this harness grew out of, which were deleted once they were
+superseded. The original threat model and decision record are recoverable at
+`agentic-port-gh-aw/NOTES.md` §10–11 in this branch's history; what follows is the part that still
+governs the code.
+
+### The exposure is inherent, and worth stating plainly
+
+You cannot port C++ ops without compiling and executing agent-authored C++. The agent writes a
+program factory, it links into `ttnn`, and a test loads `ttnn` and runs it — at which point
+agent-authored code is a host process with device access. Two things make that broader than it looks:
+`sources.cmake` lives inside each op directory, so any write allowlist scoped to the op necessarily
+includes it, and CMake has `execute_process()`. Build time is in scope, not only test time.
+
+So the security argument was never "the agent is sandboxed." It is that an on-card CI job is already
+an untrusted-code execution context — every card job in tt-metal compiles and runs arbitrary
+repository code, because that is what hardware testing is — and this workflow introduces no new
+capability class. What it introduces is a new *principal* deciding what that code does. The danger is
+therefore set by the trigger surface, which is why the trigger is `workflow_dispatch` and nothing
+else.
+
+### The decision, and what it changed
+
+The accepted posture (Evan, 2026-08-07) is that the agent's output is trusted enough: anyone able to
+run these workflows could already do equivalent damage deliberately, and the ops are code-generated to
+begin with. That was explicitly not a gate on building the thing.
+
+What it changed is *why* the surviving rules exist. Most of them stopped being security controls and
+became **result-integrity** controls, and that reframing is the reason to keep them strict:
+
+- **The write-path allowlist and the generated routing test matter more under this posture, not
+  less.** The threat is no longer an attacker, it is reward hacking. An agent that can edit a test or
+  add one of its own is an agent that can make its own numbers come out right, and the entire product
+  of this pipeline is a performance and correctness *claim*. An unfalsifiable claim is worse than no
+  pipeline. This is the one place worth being unreasonable, and it is why `gate.py` recomputes the
+  diff against the base SHA on every call and re-renders the routing test rather than trusting it.
+- **Budgets and timeouts stay**, as cost and availability controls. Card time is contended and a
+  confused agent can burn a runner for an hour. The attempt cap, the no-progress stop and the
+  two-verifies-per-tree cap are all this rule.
+- **`noop` as a declared safe-output is a functional requirement, not a control.** Without it the
+  agent feels obliged to make some safe-output call and files junk issues — observed twice in probes,
+  and again this month when a diff-free run retried `create_pull_request`.
+
+Two rules the record proposed dropping were reinstated by events. Staging the enforcement outside the
+workspace was called redundant; it is now how the harness works, because the scripts live in
+`$HOME/.port-harness` precisely so a port branch cannot edit the thing grading it. And
+`--network none` was dropped deliberately, since ttnn tests fetch weights and pip dependencies, so
+build and test run in a container for reproducibility rather than for isolation.
+
+### The threat the notes anticipated and update mode made real
+
+T9 in the original table was prompt injection from untrusted trigger content, mitigated at the time by
+allowing human triggers only. Update mode reintroduces the substance of it by a side door: it reads
+review comments off a pull request, which is text anyone able to comment can write, and puts it in
+front of the agent. The trigger is still human, so a person chooses to start the run — but the
+*content* is not. That is why `dispatch.py` frames collected review text in `port-brief.md` as
+quotation rather than as instruction, and it is the reason to be careful about ever widening what
+update mode ingests.
