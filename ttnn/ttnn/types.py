@@ -156,6 +156,7 @@ AdvancedKernelRunArgs = ttnn._ttnn.program_spec.AdvancedKernelRunArgs
 KernelRunArgs = ttnn._ttnn.program_spec.KernelRunArgs
 DFBRunOverrides = ttnn._ttnn.program_spec.DFBRunOverrides
 ProgramRunArgs = ttnn._ttnn.program_spec.ProgramRunArgs
+compute_program_spec_hash = ttnn._ttnn.operations.generic.compute_program_spec_hash
 
 TensorAccessorArgs = ttnn._ttnn.tensor_accessor_args.TensorAccessorArgs
 
