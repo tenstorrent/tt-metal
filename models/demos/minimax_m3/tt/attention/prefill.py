@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import os
+
 import ttnn
 from models.demos.minimax_m3.utils.profiler_utils import FINE, zone
 
@@ -25,6 +27,9 @@ from .operations import (
     split_qkv_heads_prefill,
 )
 from .weights import AttentionWeights
+
+
+
 
 
 def attention_forward(
