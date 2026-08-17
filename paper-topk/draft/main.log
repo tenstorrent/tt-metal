@@ -1,4 +1,4 @@
-This is pdfTeX, Version 3.141592653-2.6-1.40.25 (TeX Live 2023/Debian) (preloaded format=pdflatex 2026.7.11)  17 AUG 2026 13:30
+This is pdfTeX, Version 3.141592653-2.6-1.40.25 (TeX Live 2023/Debian) (preloaded format=pdflatex 2026.7.11)  17 AUG 2026 14:37
 entering extended mode
  restricted \write18 enabled.
  %&-line parsing enabled.
@@ -591,6 +591,11 @@ Underfull \hbox (badness 6658) in paragraph at lines 118--126
  []
 
 [2]) (./sections/03-design-space.tex
+Underfull \hbox (badness 2865) in paragraph at lines 140--7
+[]\OT1/ptm/m/n/10 Exact GPU top-k, by con-trast, is a ma-ture fam-ily,
+ []
+
+
 Underfull \hbox (badness 1953) in paragraph at lines 22--35
 \OT1/ptm/m/n/10 par-i-son net-work --- a fixed, data-oblivious sched-ule of
  []
@@ -657,13 +662,17 @@ LaTeX Font Info:    Font shape `OT1/pcr/m/it' in size <10> not available
 (Font)              Font shape `OT1/pcr/m/sl' tried instead on input line 129.
 LaTeX Font Info:    Font shape `OMS/ptm/m/n' in size <10> not available
 (Font)              Font shape `OMS/cmsy/m/n' tried instead on input line 156.
-) (./sections/06-evaluation.tex [6] [7]
-<fig/fig-e1-pscaling.pdf, id=461, 209.58301pt x 155.38051pt>
+) (./sections/06-evaluation.tex [6]
+<fig/fig-e1-pscaling.pdf, id=454, 209.58301pt x 155.38051pt>
 File: fig/fig-e1-pscaling.pdf Graphic file (type pdf)
 <use fig/fig-e1-pscaling.pdf>
-Package pdftex.def Info: fig/fig-e1-pscaling.pdf  used on input line 215.
+Package pdftex.def Info: fig/fig-e1-pscaling.pdf  used on input line 217.
 (pdftex.def)             Requested size: 209.16046pt x 155.06952pt.
- [8 <./fig/fig-e1-pscaling.pdf>]) (./sections/07-related.tex [9]) (./main.bbl
+ [7] [8 <./fig/fig-e1-pscaling.pdf>]) (./sections/07-related.tex [9]) (./main.b
+bl
+Underfull \vbox (badness 1286) has occurred while \output is active []
+
+
 
 Package balance Warning: You have called \balance in second column
 (balance)                Columns might not be balanced.
@@ -726,7 +735,7 @@ Package rerunfilecheck Info: File `main.out' has not changed.
 Here is how much of TeX's memory you used:
  13200 strings out of 476106
  210461 string characters out of 5793933
- 1972975 words of memory out of 5000000
+ 1971975 words of memory out of 5000000
  34871 multiletter control sequences out of 15000+600000
  608756 words of font info for 140 fonts, out of 8000000 for 9000
  59 hyphenation exceptions out of 8191
@@ -757,7 +766,7 @@ texmf-dist/fonts/type1/urw/times/utmb8a.pfb></usr/share/texlive/texmf-dist/font
 s/type1/urw/times/utmbi8a.pfb></usr/share/texlive/texmf-dist/fonts/type1/urw/ti
 mes/utmr8a.pfb></usr/share/texlive/texmf-dist/fonts/type1/urw/times/utmri8a.pfb
 >
-Output written on main.pdf (12 pages, 479498 bytes).
+Output written on main.pdf (12 pages, 479473 bytes).
 PDF statistics:
  800 PDF objects out of 1000 (max. 8388607)
  664 compressed objects within 7 object streams

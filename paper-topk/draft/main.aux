@@ -74,30 +74,31 @@
 \@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {IV-B}}Cost Model and Rectangle Embedding}{4}{subsection.4.2}\protected@file@percent }
 \newlabel{sec:costmodel}{{\mbox  {IV-B}}{4}{Cost Model and Rectangle Embedding}{subsection.4.2}{}}
 \newlabel{eq:costmodel}{{1}{4}{Cost Model and Rectangle Embedding}{equation.4.1}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {IV-C}}Chunk-Skip: Mechanism and Soundness}{4}{subsection.4.3}\protected@file@percent }
+\newlabel{sec:skip-mech}{{\mbox  {IV-C}}{4}{Chunk-Skip: Mechanism and Soundness}{subsection.4.3}{}}
 \newlabel{fn:clock}{{2}{4}{}{Hfootnote.2}{}}
 \citation{johnson2019billion}
 \citation{gvr2026}
 \citation{jia2019ipu}
-\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {IV-C}}Chunk-Skip: Mechanism and Soundness}{5}{subsection.4.3}\protected@file@percent }
-\newlabel{sec:skip-mech}{{\mbox  {IV-C}}{5}{Chunk-Skip: Mechanism and Soundness}{subsection.4.3}{}}
+\citation{ttisadocs2025}
 \@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {IV-D}}The Skip Law and Its Compile-Time Gate}{5}{subsection.4.4}\protected@file@percent }
 \newlabel{sec:skip-law}{{\mbox  {IV-D}}{5}{The Skip Law and Its Compile-Time Gate}{subsection.4.4}{}}
 \newlabel{eq:skiplaw}{{2}{5}{The Skip Law and Its Compile-Time Gate}{equation.4.2}{}}
-\@writefile{lof}{\contentsline {figure}{\numberline {2}{\ignorespaces Skip law (Eq.~\ref {eq:skiplaw}): exact binomial (solid), $e^{-K/(c+1)}$ (dotted), and measured on-device per-position skip rates (dots: 400 rows, $K{=}32$; \S  \ref {sec:eval-skip}); end-to-end deltas annotated.}}{5}{figure.2}\protected@file@percent }
-\newlabel{fig:skiplaw}{{2}{5}{Skip law (Eq.~\ref {eq:skiplaw}): exact binomial (solid), $e^{-K/(c+1)}$ (dotted), and measured on-device per-position skip rates (dots: 400 rows, $K{=}32$; \S \ref {sec:eval-skip}); end-to-end deltas annotated}{figure.2}{}}
 \@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {IV-E}}Forecast Before Build: The Variant We Did Not Build}{5}{subsection.4.5}\protected@file@percent }
 \newlabel{sec:forecast}{{\mbox  {IV-E}}{5}{Forecast Before Build: The Variant We Did Not Build}{subsection.4.5}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {2}{\ignorespaces Skip law (Eq.~\ref {eq:skiplaw}): exact binomial (solid), $e^{-K/(c+1)}$ (dotted), and measured on-device per-position skip rates (dots: 400 rows, $K{=}32$; \S  \ref {sec:eval-skip}); end-to-end deltas annotated.}}{5}{figure.2}\protected@file@percent }
+\newlabel{fig:skiplaw}{{2}{5}{Skip law (Eq.~\ref {eq:skiplaw}): exact binomial (solid), $e^{-K/(c+1)}$ (dotted), and measured on-device per-position skip rates (dots: 400 rows, $K{=}32$; \S \ref {sec:eval-skip}); end-to-end deltas annotated}{figure.2}{}}
 \@writefile{toc}{\contentsline {section}{\numberline {V}Characterizing the Tensix Datapath for Selection}{5}{section.5}\protected@file@percent }
 \newlabel{sec:characterization}{{V}{5}{Characterizing the Tensix Datapath for Selection}{section.5}{}}
-\citation{ttisadocs2025}
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {V-A}}Numeric semantics}{5}{subsection.5.1}\protected@file@percent }
+\newlabel{sec:char-numerics}{{\mbox  {V-A}}{5}{Numeric semantics}{subsection.5.1}{}}
 \citation{herf2001radix}
 \citation{merrill2011radix}
 \citation{ieee754-2019}
 \citation{ttisadocs2025}
 \citation{ttisadocs2025}
-\citation{tracyprofiler}
-\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {V-A}}Numeric semantics}{6}{subsection.5.1}\protected@file@percent }
-\newlabel{sec:char-numerics}{{\mbox  {V-A}}{6}{Numeric semantics}{subsection.5.1}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {I}{\ignorespaces Measured Tensix datapath laws for selection.}}{6}{table.1}\protected@file@percent }
+\newlabel{tab:characterization}{{I}{6}{Measured Tensix datapath laws for selection}{table.1}{}}
 \@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {V-B}}Packer primitives}{6}{subsection.5.2}\protected@file@percent }
 \newlabel{sec:char-packer}{{\mbox  {V-B}}{6}{Packer primitives}{subsection.5.2}{}}
 \@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {V-C}}Dst window layout and \texttt  {SFPSWAP} operand order}{6}{subsection.5.3}\protected@file@percent }
@@ -106,11 +107,10 @@
 \newlabel{sec:char-floors}{{\mbox  {V-D}}{6}{Measured floors and the co-issue law}{subsection.5.4}{}}
 \@writefile{toc}{\contentsline {section}{\numberline {VI}Evaluation}{6}{section.6}\protected@file@percent }
 \newlabel{sec:evaluation}{{VI}{6}{Evaluation}{section.6}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {VI-A}}Harness and Measurement Methodology}{6}{subsection.6.1}\protected@file@percent }
-\newlabel{sec:eval-method}{{\mbox  {VI-A}}{6}{Harness and Measurement Methodology}{subsection.6.1}{}}
+\citation{tracyprofiler}
 \citation{ttllmperf2026}
-\@writefile{lot}{\contentsline {table}{\numberline {I}{\ignorespaces Measured Tensix datapath laws for selection.}}{7}{table.1}\protected@file@percent }
-\newlabel{tab:characterization}{{I}{7}{Measured Tensix datapath laws for selection}{table.1}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {VI-A}}Harness and Measurement Methodology}{7}{subsection.6.1}\protected@file@percent }
+\newlabel{sec:eval-method}{{\mbox  {VI-A}}{7}{Harness and Measurement Methodology}{subsection.6.1}{}}
 \@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {VI-B}}Competition Across Five Measured Arms}{7}{subsection.6.2}\protected@file@percent }
 \newlabel{sec:eval-competition}{{\mbox  {VI-B}}{7}{Competition Across Five Measured Arms}{subsection.6.2}{}}
 \@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {VI-C}}Strong Scaling Versus the Cost Model}{7}{subsection.6.3}\protected@file@percent }
