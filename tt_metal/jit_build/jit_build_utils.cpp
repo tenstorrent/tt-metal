@@ -13,6 +13,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <string_view>
 #include <mutex>
 #include <random>
 #include <string>
@@ -117,11 +118,152 @@ bool exec_command(const std::vector<std::string>& args, const std::string& worki
         return false;
     }
 
+    // Linux rejects an exec when either the complete argv+environment exceeds
+    // ARG_MAX or one argument exceeds MAX_ARG_STRLEN. Named kernel CT-arg maps
+    // can hit both limits because the whole map is intentionally one -D argv. A
+    // response file gets the driver past execve(), but GCC expands it and passes
+    // the same giant -D to cc1plus, which then fails at the next execve(). Move
+    // oversized macro definitions into a forced-include header first. Keep that
+    // header beside the compile log: GCC records it in the .d file, so it must
+    // remain readable for dependency-hash validation after the compiler exits.
+    constexpr std::size_t max_inline_arg_bytes = 64 * 1024;
+    constexpr std::size_t max_inline_argv_bytes = 512 * 1024;
+    std::size_t argv_bytes = 0;
+    for (const auto& arg : args) {
+        argv_bytes += arg.size() + 1;
+    }
+
+    std::vector<bool> materialize_define(args.size(), false);
+    std::size_t rewritten_argv_bytes = argv_bytes;
+    for (std::size_t i = 1; i < args.size(); ++i) {
+        if (args[i].starts_with("-D") && args[i].size() > max_inline_arg_bytes) {
+            materialize_define[i] = true;
+            rewritten_argv_bytes -= args[i].size() + 1;
+        }
+    }
+    if (rewritten_argv_bytes > max_inline_argv_bytes) {
+        std::vector<std::size_t> define_indices;
+        for (std::size_t i = 1; i < args.size(); ++i) {
+            if (!materialize_define[i] && args[i].starts_with("-D") && args[i].size() > 2) {
+                define_indices.push_back(i);
+            }
+        }
+        std::sort(define_indices.begin(), define_indices.end(), [&args](std::size_t lhs, std::size_t rhs) {
+            return args[lhs].size() > args[rhs].size();
+        });
+        for (const std::size_t i : define_indices) {
+            materialize_define[i] = true;
+            rewritten_argv_bytes -= args[i].size() + 1;
+            if (rewritten_argv_bytes <= max_inline_argv_bytes / 2) {
+                break;
+            }
+        }
+    }
+
+    const bool has_materialized_defines =
+        std::find(materialize_define.begin(), materialize_define.end(), true) != materialize_define.end();
+    std::vector<std::string> rewritten_args;
+    std::filesystem::path defines_path;
+    if (has_materialized_defines) {
+        const std::filesystem::path defines_target =
+            log_file.empty() ? (working_dir.empty() ? std::filesystem::temp_directory_path() / "tt_jit_large_defines.h"
+                                                    : std::filesystem::path(working_dir) / "tt_jit_large_defines.h")
+                             : std::filesystem::path(log_file + ".defines.h");
+        defines_path = FileRenamer::generate_temp_path(defines_target);
+        std::ofstream defines_file(defines_path, std::ios::out | std::ios::trunc);
+        if (!defines_file.is_open()) {
+            log_error(tt::LogBuildKernels, "Failed to create JIT defines file '{}'", defines_path.string());
+            return false;
+        }
+        for (std::size_t i = 1; i < args.size(); ++i) {
+            if (!materialize_define[i]) {
+                continue;
+            }
+            const std::string_view definition(args[i].data() + 2, args[i].size() - 2);
+            const std::size_t equals = definition.find('=');
+            if (equals == std::string_view::npos) {
+                defines_file << "#define " << definition << " 1\n";
+            } else {
+                defines_file << "#define " << definition.substr(0, equals) << ' ' << definition.substr(equals + 1)
+                             << '\n';
+            }
+        }
+        defines_file.close();
+        if (defines_file.fail()) {
+            std::error_code error;
+            std::filesystem::remove(defines_path, error);
+            log_error(tt::LogBuildKernels, "Failed to write JIT defines file '{}'", defines_path.string());
+            return false;
+        }
+
+        rewritten_args.reserve(args.size() + 2);
+        bool inserted_include = false;
+        for (std::size_t i = 0; i < args.size(); ++i) {
+            if (materialize_define[i]) {
+                if (!inserted_include) {
+                    rewritten_args.push_back("-include");
+                    rewritten_args.push_back(defines_path.string());
+                    inserted_include = true;
+                }
+            } else {
+                rewritten_args.push_back(args[i]);
+            }
+        }
+    }
+    const auto& command_args = has_materialized_defines ? rewritten_args : args;
+
+    argv_bytes = 0;
+    bool use_response_file = false;
+    for (const auto& arg : command_args) {
+        argv_bytes += arg.size() + 1;
+        use_response_file |= arg.size() > max_inline_arg_bytes;
+    }
+    use_response_file |= argv_bytes > max_inline_argv_bytes;
+
+    std::vector<std::string> spawn_args;
+    std::filesystem::path response_path;
+    const auto remove_response_file = [&response_path]() {
+        if (!response_path.empty()) {
+            std::error_code error;
+            std::filesystem::remove(response_path, error);
+        }
+    };
+    if (use_response_file) {
+        const std::filesystem::path response_target =
+            log_file.empty() ? (working_dir.empty() ? std::filesystem::temp_directory_path() / "tt_jit_args.rsp"
+                                                    : std::filesystem::path(working_dir) / "tt_jit_args.rsp")
+                             : std::filesystem::path(log_file + ".rsp");
+        response_path = FileRenamer::generate_temp_path(response_target);
+        std::ofstream response(response_path, std::ios::out | std::ios::trunc);
+        if (!response.is_open()) {
+            log_error(tt::LogBuildKernels, "Failed to create JIT response file '{}'", response_path.string());
+            return false;
+        }
+        for (std::size_t i = 1; i < command_args.size(); ++i) {
+            response << '"';
+            for (const char ch : command_args[i]) {
+                if (ch == '\\' || ch == '"') {
+                    response << '\\';
+                }
+                response << ch;
+            }
+            response << "\"\n";
+        }
+        response.close();
+        if (response.fail()) {
+            remove_response_file();
+            log_error(tt::LogBuildKernels, "Failed to write JIT response file '{}'", response_path.string());
+            return false;
+        }
+        spawn_args = {command_args.front(), "@" + response_path.string()};
+    }
+    const auto& effective_args = use_response_file ? spawn_args : command_args;
+
     // Build a null-terminated argv array for posix_spawn.
     std::vector<const char*> argv;
-    argv.reserve(args.size() + 1);
-    for (const auto& a : args) {
-        argv.push_back(a.c_str());
+    argv.reserve(effective_args.size() + 1);
+    for (const auto& arg : effective_args) {
+        argv.push_back(arg.c_str());
     }
     argv.push_back(nullptr);
 
@@ -132,6 +274,7 @@ bool exec_command(const std::vector<std::string>& args, const std::string& worki
     if (!log_file.empty()) {
         log_fd = open(log_file.c_str(), O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0644);
         if (log_fd < 0) {
+            remove_response_file();
             posix_spawn_file_actions_destroy(&file_actions);
             return false;
         }
@@ -153,6 +296,7 @@ bool exec_command(const std::vector<std::string>& args, const std::string& worki
     posix_spawn_file_actions_destroy(&file_actions);
 
     if (spawn_ret != 0) {
+        remove_response_file();
         log_error(tt::LogBuildKernels, "posix_spawnp failed for '{}': {}", argv[0], std::strerror(spawn_ret));
         return false;
     }
@@ -160,10 +304,12 @@ bool exec_command(const std::vector<std::string>& args, const std::string& worki
     int status = 0;
     while (waitpid(pid, &status, 0) < 0) {
         if (errno != EINTR) {
+            remove_response_file();
             log_error(tt::LogBuildKernels, "waitpid failed for '{}': {}", argv[0], std::strerror(errno));
             return false;
         }
     }
+    remove_response_file();
 
     return WIFEXITED(status) && WEXITSTATUS(status) == 0;
 }
