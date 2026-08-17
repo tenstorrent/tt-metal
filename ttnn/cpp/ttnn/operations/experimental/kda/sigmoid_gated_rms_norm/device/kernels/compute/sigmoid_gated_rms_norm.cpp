@@ -129,13 +129,21 @@ void kernel_main() {
     constexpr uint32_t inv_v_bits = get_compile_time_arg_val(2);
     const uint32_t count = get_arg_val<uint32_t>(0);
     compute_kernel_hw_startup(cb_x, cb_scaler, cb_out);
-    CircularBuffer(cb_weight).wait_front(Vt);
-    CircularBuffer(cb_scaler).wait_front(1);
+    CircularBuffer x(cb_x);
+    CircularBuffer gate(cb_gate);
+    CircularBuffer weight(cb_weight);
+    CircularBuffer tmp(cb_tmp);
+    CircularBuffer stats(cb_stats);
+    CircularBuffer inv(cb_inv);
+    CircularBuffer norm(cb_norm);
+    CircularBuffer scaler(cb_scaler);
+    weight.wait_front(Vt);
+    scaler.wait_front(1);
     for (uint32_t i = 0; i < count; i++) {
-        CircularBuffer(cb_x).wait_front(Vt);
-        CircularBuffer(cb_gate).wait_front(Vt);
+        x.wait_front(Vt);
+        gate.wait_front(Vt);
         square(Vt);
-        CircularBuffer(cb_tmp).wait_front(Vt);
+        tmp.wait_front(Vt);
         compute_kernel_lib::reduce<
             ckernel::PoolType::SUM,
             ckernel::ReduceDim::REDUCE_ROW,
@@ -145,23 +153,23 @@ void kernel_main() {
             compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
             compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
             ReduceFp32Mode::Accurate>(compute_kernel_lib::ReduceInputBlockShape::of(1, Vt));
-        CircularBuffer(cb_stats).wait_front(1);
-        CircularBuffer(cb_tmp).pop_front(Vt);
+        stats.wait_front(1);
+        tmp.pop_front(Vt);
         inverse_rms(epsilon_bits, inv_v_bits);
-        CircularBuffer(cb_inv).wait_front(1);
+        inv.wait_front(1);
         normalize(Vt);
-        CircularBuffer(cb_norm).wait_front(Vt);
-        CircularBuffer(cb_x).pop_front(Vt);
-        CircularBuffer(cb_inv).pop_front(1);
-        CircularBuffer(cb_stats).pop_front(1);
+        norm.wait_front(Vt);
+        x.pop_front(Vt);
+        inv.pop_front(1);
+        stats.pop_front(1);
         apply_weight(Vt);
-        CircularBuffer(cb_tmp).wait_front(Vt);
-        CircularBuffer(cb_norm).pop_front(Vt);
+        tmp.wait_front(Vt);
+        norm.pop_front(Vt);
         activate_gate(Vt);
-        CircularBuffer(cb_norm).wait_front(Vt);
-        CircularBuffer(cb_gate).pop_front(Vt);
+        norm.wait_front(Vt);
+        gate.pop_front(Vt);
         multiply_output(Vt);
-        CircularBuffer(cb_tmp).pop_front(Vt);
-        CircularBuffer(cb_norm).pop_front(Vt);
+        tmp.pop_front(Vt);
+        norm.pop_front(Vt);
     }
 }

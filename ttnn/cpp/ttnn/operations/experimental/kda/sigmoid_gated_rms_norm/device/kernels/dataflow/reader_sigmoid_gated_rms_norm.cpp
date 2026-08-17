@@ -40,6 +40,8 @@ void kernel_main() {
     noc.async_read_barrier();
     weight.push_back(Vt);
 
+    CircularBuffer x(0);
+    CircularBuffer gate(1);
     for (uint32_t i = 0; i < wi_count; i++) {
         const uint32_t wi = wi_start + i;
         const uint32_t bh = wi / Mt;
@@ -48,8 +50,6 @@ void kernel_main() {
         const uint32_t h = bh % H;
         const uint32_t x_base = wi * Vt;
         const uint32_t gate_base = (b * Mt + mt) * H * Vt + h * Vt;
-        CircularBuffer x(0);
-        CircularBuffer gate(1);
         x.reserve_back(Vt);
         gate.reserve_back(Vt);
         for (uint32_t vt = 0; vt < Vt; vt++) {
