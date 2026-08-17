@@ -124,3 +124,83 @@ wall.
 `terminal_bench_2` and `swe_bench_verified`** in its earlier Exp19 TTI run, so the
 eval may well run and score zero. The value of unblocking is a real number in
 place of an unknown, not a likely pass.
+
+---
+
+## CORRECTION 2: stage 11 got much further than recorded, and the accuracy question is open
+
+Investigated 2026-08-17 by reading the committed stage-11 artifacts. Two things
+above need revising: how far this stage got, and — more importantly — my framing
+of this port as "functionally complete, blocker is environmental".
+
+### How far it actually got
+
+Not "blocked with the release unstarted". It completed almost the whole workflow:
+
+- **Benchmark sweep across long inputs**, committed under
+  `doc/tti_release/release_cache/.../llm/`: ISL **128, 1024, 2048, 4096, 8192,
+  16384** with OSL 128 and 1024.
+- **Both standard evals executed**, with per-sample records retained:
+  `results_2026-08-15T09-56-41.json` + `samples_ifeval_*.jsonl` and
+  `results_2026-08-15T10-01-21.json` + `samples_gpqa_diamond_cot_zeroshot_*.jsonl`
+  under `release_final3_cache/`.
+- **It reached the agentic stage**: `release_final4_cache/.../agentic/
+  eval_Qwen__Qwen3.6-27B/terminal_bench_2_harbor_config.json` was generated
+  before Docker stopped it, and the Terminal-Bench token budget was repaired
+  (176K input + 80K output = 262,144 exactly, 35 tests passing).
+
+So the block is at the last of six required evals, not at the start.
+
+### The scores, and why they are not yet a verdict
+
+| eval, 5 % subset | result |
+|---|---:|
+| `ifeval` prompt-level strict | **17.86 %** (5/28) |
+| `ifeval` inst-level strict | 34.88 % |
+| `gpqa_diamond_cot_zeroshot` flexible-extract | **0.3 → 3/10** |
+| `gpqa_diamond_cot_zeroshot` strict-match | 0.0 |
+
+**No HF control was ever built on this branch** — zero `hf_reference*` artifacts,
+where the Falcon3-7B and Gemma-4-26B ports both built paired CPU controls. So
+these are uncontrolled numbers, and the honest status of this port's accuracy is
+**unassessed**, not acceptable.
+
+Two comparisons that make the direction hard to ignore:
+
+- On the **identical task and the identical ten documents**, the sibling
+  Gemma-4-26B port scored **4/10 and that was graded a FAIL** against an HF
+  control's 10/10. This port scored **3/10**.
+- `ifeval` prompt-level strict of 17.86 % is base-model territory. The
+  instruction-tuned Gemma port scored **82.62 %** on the same metric against an
+  HF control of 87.04 %.
+
+I am deliberately not calling this a failure: different models legitimately score
+differently, and without a same-command reference there is nothing to divide by.
+That is precisely the defect — the stage blocked on the agentic eval before doing
+the reference work that would have settled it.
+
+### Revised priority for finishing this port
+
+1. **Build the paired HF control first.** `ifeval` and
+   `gpqa_diamond_cot_zeroshot` on the same 5 % subsets, same snapshot, chat
+   template, seed 42, deterministic generation. CPU is sufficient — on the Gemma
+   port the equivalents took about 32 min (IFEval) and 50 min (GPQA). **This
+   needs no Docker at all** and converts two floating numbers into pass/fail.
+2. **Verify the chat template was actually applied.** A 17.86 % prompt-strict
+   IFEval is what a base model *or* a template-less path produces. The shared
+   readiness runner only switched its qualitative check to
+   `/v1/chat/completions` during the Gemma run, and an operator attempt on Gemma
+   using the raw `/v1/completions` backend returned HTTP 400 for exactly this
+   reason. If this port's evals ran through raw completions, the number is an
+   artifact rather than a result.
+3. **Then the agentic evals** — `terminal_bench_2` and `swe_bench_verified`, via
+   the sibling-container route in Correction 1 above.
+
+### What this means for the earlier framing in this document
+
+The section above describing this port as functionally complete with the
+substantive debt being TTFT and the untested long-generation path understates the
+position. Long generation is not merely untested here: the two evals that
+exercise it have already produced low uncontrolled scores, and the sibling port
+that *did* build a control failed on the same task at a higher score than this
+one achieved. Treat accuracy as the open question and TTFT as second.
