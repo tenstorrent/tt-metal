@@ -5,6 +5,7 @@
 #include "tt_metal/fabric/builder/router_wiring_rules.hpp"
 
 #include "tt_metal/fabric/fabric_builder_context.hpp"
+#include "tt_metal/fabric/builder/protected_domain_effect.hpp"
 
 #include <algorithm>
 #include <array>
@@ -85,6 +86,18 @@ void finalize_vc_shape_bases(RouterVcShape& shape) {
         builder_config::num_max_receiver_channels);
 }
 
+// This router's own edge, read off the chip it sits on. A router exists because discovery
+// classified a neighbor in its facing direction, so an absent entry is a caller error rather than
+// a chip without that port.
+EdgeCapability facing_capability_of(const PerDirectionCapabilities& caps, RoutingDirection facing) {
+    const auto& capability = caps.at(facing);
+    TT_FATAL(
+        capability.has_value(),
+        "A router facing {} needs a classified edge in that direction on its own chip",
+        enchantum::to_string(facing));
+    return *capability;
+}
+
 // Downstream capacity canary, read off the emitted VC0 set: the boundary template's target has
 // its own accounting, so the non-express check counts only the ordinary intramesh members,
 // matching each mode's historical convention. Both 2D families run it -- the chord sits exactly
@@ -117,6 +130,7 @@ bool wires_into(
     RoutingDirection producer_direction,
     EdgeCapability producer_capability,
     RoutingDirection egress_direction,
+    std::optional<EdgeCapability> egress_capability,
     ZPortRole chip_z_role,
     bool express_routing_enabled,
     uint32_t vc) {
@@ -128,6 +142,15 @@ bool wires_into(
 
     const TurnRole producer_role = turn_role(producer_direction, producer_capability);
     const bool egress_is_z = (egress_direction == RoutingDirection::Z);
+
+    // Turn sets are emitted per direction letter rather than per discovered neighbor, so a caller
+    // may ask about a direction this chip has no port on. Read that as the ordinary same-mesh edge
+    // the letter implies: the answer is then the one the rule gave before the egress side became
+    // capability-keyed, and no absent port can be mistaken for a seam.
+    const auto resolve_egress_capability = [&]() {
+        return egress_capability.value_or(
+            egress_is_z ? EdgeCapability::INTRAMESH_EXPRESS : EdgeCapability::INTRAMESH_CARDINAL);
+    };
 
     // A boundary producer's feed is VC-shaped in either mode: its VC1 receiver fans out onto every
     // non-self VC1 sender, while its VC0 receiver crosses over onto downstream VC1 senders and
@@ -150,10 +173,17 @@ bool wires_into(
             // Any non-self egress, and Z only when the chip has a Z port.
             return !egress_is_z || chip_z_role != ZPortRole::NONE;
         case TurnRole::X_RING_ONLY:
-            // Dimension order, stated once: an ordinary X producer may only continue around the X
-            // ring. opposite(E/W) is never Z, so this also unwires X -> Y through the chord, with
-            // no second copy of the rule.
-            return egress_direction == get_opposite_direction(producer_direction);
+            // Dimension order, stated as the contract states it (section 4.4): a producer already in
+            // its X phase may not turn back into a protected Y egress. The role above is what
+            // decides the producer is in that phase, so only the egress side is read here.
+            //
+            // Keying that side on capability rather than on the compass letter is what keeps the
+            // mesh seam wired: an INTERMESH egress is the packet leaving the mesh, not a turn back
+            // into the Y rings the ordering protects. Spelling this as "only the opposite X"
+            // instead would drop it, leaving an exit chip's E/W routers with no downstream for the
+            // boundary and silently stranding every intermesh packet whose last intramesh leg is an
+            // X hop.
+            return !is_protected_y_egress(egress_direction, resolve_egress_capability());
         case TurnRole::BOUNDARY: break;  // answered above
     }
     TT_FATAL(false, "unreachable: every TurnRole is handled above");
@@ -182,7 +212,14 @@ uint32_t express_vc0_producer_arity(RoutingDirection direction, const PerDirecti
         if (!capability.has_value()) {
             continue;  // direction absent on this chip: no producer to wire
         }
-        if (wires_into(producer, *capability, direction, chip_z_role, /*express_routing_enabled=*/true, /*vc=*/0)) {
+        if (wires_into(
+                producer,
+                *capability,
+                direction,
+                caps.at(direction),
+                chip_z_role,
+                /*express_routing_enabled=*/true,
+                /*vc=*/0)) {
             ++count;
         }
     }
@@ -211,10 +248,11 @@ uint32_t express_vc1_sender_count() {
 RouterVcShape router_vc_shape(
     Topology topology,
     RoutingDirection facing,
-    EdgeCapability edge_capability,
-    ZPortRole chip_z_role,
+    const PerDirectionCapabilities& chip_capabilities,
     bool express_routing_enabled,
     const IntermeshVCConfig* vc_config) {
+    const auto edge_capability = facing_capability_of(chip_capabilities, facing);
+    const auto chip_z_role = z_role_of(chip_capabilities);
     validate_facing_role_consistency(facing, edge_capability, chip_z_role);
 
     const bool requires_vc1 = vc_config && vc_config->requires_vc1;
@@ -294,12 +332,13 @@ RouterVcShape router_vc_shape(
 RouterTurnSet turn_set_for_router(
     Topology topology,
     RoutingDirection facing,
-    EdgeCapability edge_capability,
-    ZPortRole chip_z_role,
+    const PerDirectionCapabilities& chip_capabilities,
     bool express_routing_enabled,
     const IntermeshVCConfig* vc_config) {
     RouterTurnSet turn_set{};
 
+    const auto edge_capability = facing_capability_of(chip_capabilities, facing);
+    const auto chip_z_role = z_role_of(chip_capabilities);
     validate_facing_role_consistency(facing, edge_capability, chip_z_role);
 
     // The VC facts are read off the same config the shape derivation consumes.
@@ -347,7 +386,8 @@ RouterTurnSet turn_set_for_router(
             express_routing_enabled && is_2D_topology(topology),
             "An express (Z) chord requires 2D Mesh/Torus routing with express routing enabled");
         for (const auto dir : k_cardinal_directions) {
-            if (wires_into(facing, edge_capability, dir, chip_z_role, express_routing_enabled, 0)) {
+            if (wires_into(
+                    facing, edge_capability, dir, chip_capabilities.at(dir), chip_z_role, express_routing_enabled, 0)) {
                 emit_on_enabled_vcs(dir);
             }
         }
@@ -368,14 +408,28 @@ RouterTurnSet turn_set_for_router(
     // remaining cardinals in enum order. Every member is what the primitive wires, so this set
     // and the guard derivation cannot disagree.
     const auto opposite = get_opposite_direction(facing);
-    if (wires_into(facing, edge_capability, opposite, chip_z_role, express_routing_enabled, 0)) {
+    if (wires_into(
+            facing,
+            edge_capability,
+            opposite,
+            chip_capabilities.at(opposite),
+            chip_z_role,
+            express_routing_enabled,
+            0)) {
         emit_on_enabled_vcs(opposite);
     }
     for (const auto candidate : k_cardinal_directions) {
         if (candidate == facing || candidate == opposite) {
             continue;
         }
-        if (wires_into(facing, edge_capability, candidate, chip_z_role, express_routing_enabled, 0)) {
+        if (wires_into(
+                facing,
+                edge_capability,
+                candidate,
+                chip_capabilities.at(candidate),
+                chip_z_role,
+                express_routing_enabled,
+                0)) {
             emit_on_enabled_vcs(candidate);
         }
     }
@@ -384,7 +438,14 @@ RouterTurnSet turn_set_for_router(
     // primitive; how its targets are VC'd comes from the port's role. An intermesh boundary
     // stays on VC0 (VC1 only in pass-through mode); anything else rides every enabled carrier
     // VC -- a landed carrier can still decode a Z action, so there is no VC1->VC0 crossover.
-    if (wires_into(facing, edge_capability, RoutingDirection::Z, chip_z_role, express_routing_enabled, 0)) {
+    if (wires_into(
+            facing,
+            edge_capability,
+            RoutingDirection::Z,
+            chip_capabilities.at(RoutingDirection::Z),
+            chip_z_role,
+            express_routing_enabled,
+            0)) {
         const bool boundary_target = (chip_z_role == ZPortRole::INTERMESH_BOUNDARY);
         turn_set[0].push_back(ConnectionTarget(0, RoutingDirection::Z));
         if (enable_vc1 && (!boundary_target || enable_mesh_pass_through)) {
@@ -401,13 +462,12 @@ RouterTurnSet turn_set_for_router(
 RouterArchetype router_archetype(
     Topology topology,
     RoutingDirection facing,
-    EdgeCapability edge_capability,
-    ZPortRole chip_z_role,
+    const PerDirectionCapabilities& chip_capabilities,
     bool express_routing_enabled,
     const IntermeshVCConfig* vc_config) {
     return RouterArchetype{
-        router_vc_shape(topology, facing, edge_capability, chip_z_role, express_routing_enabled, vc_config),
-        turn_set_for_router(topology, facing, edge_capability, chip_z_role, express_routing_enabled, vc_config)};
+        router_vc_shape(topology, facing, chip_capabilities, express_routing_enabled, vc_config),
+        turn_set_for_router(topology, facing, chip_capabilities, express_routing_enabled, vc_config)};
 }
 
 }  // namespace tt::tt_fabric

@@ -98,6 +98,10 @@ public:
         std::mt19937& gen) const = 0;
     virtual std::unordered_map<RoutingDirection, uint32_t> get_full_mcast_hops(
         const FabricNodeId& src_node_id) const = 0;
+    // The X-only multicast(s) covering the anchor's own row, which get_full_mcast_hops excludes by
+    // construction (codec contract §7.3.1). One entry per pattern needed; empty if the row is width 1.
+    virtual std::vector<std::unordered_map<RoutingDirection, uint32_t>> get_anchor_row_mcast_hops(
+        const FabricNodeId& src_node_id) const = 0;
     virtual uint32_t get_full_line_mcast_hops(RoutingDirection direction) const = 0;
     virtual std::unordered_map<RoutingDirection, uint32_t> get_unidirectional_linear_mcast_hops(
         const FabricNodeId& src_node_id, uint32_t dim) const = 0;

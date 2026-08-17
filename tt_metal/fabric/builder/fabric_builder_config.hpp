@@ -128,6 +128,22 @@ static constexpr uint32_t num_mesh_directions_2d = 4;
 // is the third copy; they have to move together.
 static constexpr uint32_t bubble_flow_control_protected_receiver_min_slots = 2;
 
+// Which VCs actually realize bubble flow control. VC1 carries intermesh traffic, whose dependency
+// graph has no bubble proof for arbitrary cross-mesh patterns, so its senders run unguarded even
+// where the express derivation classifies one as a ring acquisition
+// (GALAXY_BUILDER_ROUTING_CONFIG_CONTRACT.md 3.4, assessment 5.7.5).
+//
+// This is not a preference the call sites may each restate: the injection flags and the
+// protected-receiver slot check both read it, and disagreement between them is a silent
+// miscompile rather than an error.
+//
+// First-level ack is not derived from this, and the two only look coupled by coincidence. The
+// device's static_assert is one-way -- a sender flagged as injection under deadlock avoidance
+// requires first-level ack on its VC, but not the converse -- so an unguarded VC is free to ack
+// early. VC1 does not, for the unrelated reason that the ack paths do not fit in the ACTIVE_ETH
+// kernel config window (see ENABLE_FIRST_LEVEL_ACK_VC1 in erisc_datamover_builder.cpp).
+constexpr bool bubble_flow_control_enabled_on_vc(uint32_t vc) { return vc == 0; }
+
 uint32_t get_sender_channel_count(bool is_2D_routing);
 
 uint32_t get_receiver_channel_count(bool is_2D_routing);
@@ -140,7 +156,7 @@ uint32_t get_downstream_edm_count(bool is_2D_routing);
 
 uint32_t get_vc0_downstream_edm_count(bool is_2D_routing, bool express_routing_enabled = false);
 
-uint32_t get_vc1_downstream_edm_count(bool is_2D_routing);
+uint32_t get_vc1_downstream_edm_count(bool is_2D_routing, bool express_routing_enabled = false);
 
 }  // namespace builder_config
 
