@@ -199,8 +199,15 @@ def render_model_scenarios(rows):
         # what adopting the best number costs, in plain words
         if best is None:
             capture = "\u2014"
-        elif today_e == "op" and best_name == "direct":
-            capture = "nothing \u2014 already on the best engine"
+        elif today_e == best_key:
+            # today already IS the best engine. For routed rows that is the
+            # plain ttnn.topk call: the MoE-gate carve-out (fdb81ed027e)
+            # routes these shapes automatically -- nothing to change.
+            capture = (
+                "nothing \u2014 already on the best engine"
+                if today_e == "op"
+                else "nothing \u2014 the plain ttnn.topk call already routes here (MoE-gate carve-out, fdb81ed027e)"
+            )
         elif best_name == "routed":
             capture = "same API; drop indices_tensor/sub_core_grids/stable from the call"
         elif today_label == "ttnn.topk" and best_name == "direct":

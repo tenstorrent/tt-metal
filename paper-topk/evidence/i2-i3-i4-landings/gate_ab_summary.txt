@@ -1,0 +1,18 @@
+================= GATE A/B SUMMARY (W=65536, 128 chunks) =================
+          cell  div  gate    med_us  spread%    vs /4  skips obs  skips law
+   rows=2 k=32    2    16    151.85      0.0    -0.8%      64.60      65.99
+   rows=2 k=32    4     8    153.00      0.0    +0.0%      65.40      66.62
+   rows=2 k=32    8     4    153.49      0.0    +0.3%      65.50      66.66
+  rows=2 k=512    2   256    280.47      0.0    -0.0%       0.00       0.00
+  rows=2 k=512    4   128    280.48      0.0    +0.0%       0.00       0.00
+  rows=2 k=512    8    64    289.37      0.0    +3.2%       0.20       0.42
+   rows=8 k=32    2    16    176.78      0.0    -0.7%      65.50      65.99
+   rows=8 k=32    4     8    177.97      0.1    +0.0%      66.15      66.62
+   rows=8 k=32    8     4    178.51      0.0    +0.3%      66.20      66.66
+
+Law: P(skip|c) = e^(-USER_K/(c+1)) over tested chunks c in [gate, 128).
+DECISION RULE: change /4 ONLY if some arm improves a k=32 cell by >=5%
+with spread < delta/3, AND k=512 regresses <=0.5%, AND the adversarial
+battery is green on that divisor. Predicted outcome: ties -> KEEP /4 and
+file this table as the paper's gate-sensitivity ablation.
+DONE. Artifacts in /tmp/logs/i4_gate_ab_20260817_120230
