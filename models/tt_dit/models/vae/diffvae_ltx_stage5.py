@@ -62,6 +62,25 @@ def stage_time_end(mesh_device, label: str, t0):
     logger.info(f"[stage-timing] {label:34s} {(time.perf_counter() - t0) * 1000:9.1f} ms")
 
 
+#: Accumulates within-block time by region (attn / mlp / ...) across every block+band, so a single
+#: diff-step run reports where the diff-block stack actually goes. Reset per step, reported at its end.
+_BLOCK_PROF: dict[str, float] = {}
+
+
+@contextlib.contextmanager
+def block_prof(mesh_device, key: str):
+    """Sync + accumulate a diff-block region's time into _BLOCK_PROF[key]. Inert unless timing is on.
+    The syncs serialize the region (so absolute totals inflate a little), but the split is what matters."""
+    if not _STAGE_TIMING:
+        yield
+        return
+    ttnn.synchronize_device(mesh_device)
+    t0 = time.perf_counter()
+    yield
+    ttnn.synchronize_device(mesh_device)
+    _BLOCK_PROF[key] = _BLOCK_PROF.get(key, 0.0) + (time.perf_counter() - t0) * 1000
+
+
 from ...layers.embeddings import TimestepEmbedding, Timesteps
 from ...layers.linear import Linear
 from ...layers.module import Module, ModuleList, Parameter
@@ -855,21 +874,23 @@ class DiffusionNABlock(Module):
             padded = self._padded_rows(live, index, bands, rows)
             interior = ((band.lo - band.pad_lo) * rows, (band.hi - band.pad_lo) * rows)
 
-            context_rows = _slice_rows(context, band.pad_lo * rows, band.pad_hi * rows)
-            injected = self.context_proj(context_rows)
-            if context_rows is not context:
-                ttnn.deallocate(context_rows)
-            xs = ttnn.add(padded, injected)
-            ttnn.deallocate(injected)
-            if padded is not live[index]:
-                ttnn.deallocate(padded)
+            with block_prof(self.mesh_device, "context-inject"):
+                context_rows = _slice_rows(context, band.pad_lo * rows, band.pad_hi * rows)
+                injected = self.context_proj(context_rows)
+                if context_rows is not context:
+                    ttnn.deallocate(context_rows)
+                xs = ttnn.add(padded, injected)
+                ttnn.deallocate(injected)
+                if padded is not live[index]:
+                    ttnn.deallocate(padded)
 
             modulated = _modulate_consuming(self.norm1(xs), scale_msa, shift_msa)
-            attended = self.attn(
-                modulated,
-                Grid(grid.batch, band.pad_frames, grid.h, grid.w),
-                tables[index],
-            )
+            with block_prof(self.mesh_device, "attention"):
+                attended = self.attn(
+                    modulated,
+                    Grid(grid.batch, band.pad_frames, grid.h, grid.w),
+                    tables[index],
+                )
             ttnn.deallocate(modulated)
 
             residual = _slice_rows(xs, *interior)
@@ -881,11 +902,12 @@ class DiffusionNABlock(Module):
             y = _add_consuming(residual, cropped)
 
             modulated = _modulate_consuming(self.norm2(y), scale_mlp, shift_mlp)
-            hidden = self.mlp_gate_up(modulated)
-            ttnn.deallocate(modulated)
-            projected = self.mlp_down(hidden)
-            ttnn.deallocate(hidden)
-            out.append(_add_consuming(y, projected))
+            with block_prof(self.mesh_device, "mlp"):
+                hidden = self.mlp_gate_up(modulated)
+                ttnn.deallocate(modulated)
+                projected = self.mlp_down(hidden)
+                ttnn.deallocate(hidden)
+                out.append(_add_consuming(y, projected))
 
             # A band's input rows are read as halo by its neighbours, so they die a beat after the
             # band itself. Releasing them as soon as no band still to come reaches back that far is
@@ -1139,9 +1161,16 @@ class DiffVAEStage5(Module):
         tables = self.rope_tables(grid)
         band_tables = tuple(tables.frames(band.pad_lo, band.pad_hi) for band in bands)
         log_dram(self.mesh_device, f"stage5 entry ({len(bands)} band(s))")
+        from ...layers.na3d import SP_W_PROF
+
+        _BLOCK_PROF.clear()
+        SP_W_PROF.clear()
         for index, block in enumerate(self.diff_blocks):
             x = block(x, context, modulation, grid, bands, band_tables)
             log_dram(self.mesh_device, f"stage5 block {index}")
+        if _STAGE_TIMING and _BLOCK_PROF:
+            for key, ms in sorted({**_BLOCK_PROF, **SP_W_PROF}.items(), key=lambda kv: -kv[1]):
+                logger.info(f"[block-prof] {key:20s} {ms:9.1f} ms  (all {len(self.diff_blocks)} blocks)")
 
         # The tail runs per band too: its output is a quarter the width of the volume it comes
         # from, so joining after the projection rather than before is the cheap order.

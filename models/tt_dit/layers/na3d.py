@@ -22,8 +22,10 @@ the parity test holds against upstream), and the ttnn executor consumes the same
 
 from __future__ import annotations
 
+import contextlib
 import math
 import os
+import time
 from dataclasses import dataclass
 
 import torch
@@ -31,6 +33,24 @@ import torch
 import ttnn
 
 from ..utils.tensor import from_torch
+
+#: Sub-profile of the W-sharded attention (K/V all-gather vs fused SDPA vs head all-gather), summed
+#: across every call in a diff-step. Gated by DIFFVAE_STAGE_TIMING; stage 5 clears + reports it.
+SP_W_PROF: dict[str, float] = {}
+_SP_W_TIMING = os.environ.get("DIFFVAE_STAGE_TIMING", "") not in ("", "0")
+
+
+@contextlib.contextmanager
+def _sp_w_prof(mesh, key: str):
+    if not _SP_W_TIMING:
+        yield
+        return
+    ttnn.synchronize_device(mesh)
+    t0 = time.perf_counter()
+    yield
+    ttnn.synchronize_device(mesh)
+    SP_W_PROF[key] = SP_W_PROF.get(key, 0.0) + (time.perf_counter() - t0) * 1000
+
 
 # Cap on one tile group's [Nq, Nk] score block. Bounds both the additive mask allocation and
 # the score materialization; the tile search shrinks axes until the product fits.
@@ -898,8 +918,9 @@ def neighborhood_attention_3d_op_sp_w_sharded(
 
     # K/V: gather this chip's W-band into the full W the window needs (chip order = W order, so the
     # concatenation rebuilds the full W-outer sequence). Q stays this chip's W-shard.
-    tk = ccl_manager.all_gather(to_seq(k, w_local), dim=2, mesh_axis=sp_axis, use_hyperparams=False)
-    tv = ccl_manager.all_gather(to_seq(v, w_local), dim=2, mesh_axis=sp_axis, use_hyperparams=False)
+    with _sp_w_prof(mesh, "kv-allgather"):
+        tk = ccl_manager.all_gather(to_seq(k, w_local), dim=2, mesh_axis=sp_axis, use_hyperparams=False)
+        tv = ccl_manager.all_gather(to_seq(v, w_local), dim=2, mesh_axis=sp_axis, use_hyperparams=False)
     tq = to_seq(q, w_local)
 
     offsets = torch.arange(sp, dtype=torch.int32) * seq_local
@@ -926,18 +947,19 @@ def neighborhood_attention_3d_op_sp_w_sharded(
             k_chunk_size=32,
         )
 
-    attended = ttnn.transformer.scaled_dot_product_attention(
-        tq,
-        tk,
-        tv,
-        is_causal=False,
-        neighborhood_3d=(w_full, t_full, h_full, kw, kt, kh),  # grid given W-outer to match the flatten
-        neighborhood_gather=use_fused,
-        scale=scale,
-        windowed_q_token_offset=0,
-        windowed_q_token_offset_tensor=off_tt,
-        program_config=prog_config,
-    )
+    with _sp_w_prof(mesh, "fused-sdpa" if use_fused else "op-sdpa"):
+        attended = ttnn.transformer.scaled_dot_product_attention(
+            tq,
+            tk,
+            tv,
+            is_causal=False,
+            neighborhood_3d=(w_full, t_full, h_full, kw, kt, kh),  # grid given W-outer to match the flatten
+            neighborhood_gather=use_fused,
+            scale=scale,
+            windowed_q_token_offset=0,
+            windowed_q_token_offset_tensor=off_tt,
+            program_config=prog_config,
+        )
     for tensor in (tq, tk, tv):
         ttnn.deallocate(tensor)
 
@@ -945,7 +967,8 @@ def neighborhood_attention_3d_op_sp_w_sharded(
     # rank-4 (all_gather supports rank 4). Device order along tp_axis is head order, so gathering on
     # the head axis rebuilds [head0 | head1 | ...]; downstream sees the full width as without TP.
     if tp_axis is not None:
-        attended = ccl_manager.all_gather(attended, dim=1, mesh_axis=tp_axis, use_hyperparams=False)
+        with _sp_w_prof(mesh, "head-allgather"):
+            attended = ccl_manager.all_gather(attended, dim=1, mesh_axis=tp_axis, use_hyperparams=False)
         heads = full_heads
         width = heads * head_dim
 
