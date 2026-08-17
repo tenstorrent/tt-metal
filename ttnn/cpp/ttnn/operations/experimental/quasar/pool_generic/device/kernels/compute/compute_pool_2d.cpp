@@ -14,6 +14,7 @@
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
+#include "api/debug/dprint.h"  // [#48552 MP-DEBUG] maxpool hang/fault localization
 
 //   0 = production path: narrow pack_untilize straight into the real output CB (out_cb), then DPRINT it.
 //   1 = experiment:      full-tile (32x32) pack of the reduced DEST into the scratch CB, then DPRINT it
@@ -182,6 +183,22 @@ void kernel_main() {
 
     uint32_t tilize_stick_counter = 0;
     uint32_t tilize_stick_total = 0;
+    // [#48552 MP-DEBUG] One-time geometry. num_faces_in_input_tile drives whether the strided reduce-col
+    // unpack takes main's NEW tiny-tile (Nx32, N<=8) path vs the 32x32 path. nsticks = outer loop trip,
+    // irc = inner reduction chunks, nblkc = channel blocks, t2r base = max_tiles_per_iter.
+    DPRINT_UNPACK(
+        "[MP] cfg nblkc{} irc{} maxt2r{} partt{} nfin{} nfout{} inntc{} tiled{} nsticks{} winhw{} lth{}\n",
+        in_nblocks_c,
+        interm_reduction_chunks,
+        max_tiles_per_iter,
+        partial_iter_output_tiles,
+        num_faces_in_input_tile,
+        num_faces_in_output_tile,
+        in_ntiles_c,
+        (uint32_t)is_output_tiled,
+        num_out_sticks_this_core,
+        window_size_hw,
+        last_tile_height);
     for (uint32_t n = 0; n < num_out_sticks_this_core; ++n) {
         const bool reader0 = !(use_split_reader && (n & 0x1));
         const bool use_reader1_scalar = !reader0 && !one_scalar_per_core;
@@ -215,6 +232,9 @@ void kernel_main() {
                  (in_c % TILE_WIDTH == FACE_WIDTH || single_partial_fits_in_face))
                     ? (number_of_tiles - 1) * num_faces_in_output_tile + num_faces_in_last_output_tile
                     : number_of_tiles * num_faces_in_output_tile;
+            // [#48552 MP-DEBUG] Coarse heartbeat (ungated): the LAST line before the hang/fault names the
+            // stick n and channel-block c. t2r = tiles this reduce strides over; of = output faces reserved.
+            DPRINT_UNPACK("[MP] n{} c{} t2r{} of{}\n", n, c_i, tiles_to_reduce, output_faces);
             // [DEBUG pool compute stall] Which call blocks the WFD/UPTW deadlock? Newest ring marker per
 #if PACK_TO_SCRATCH == 0
             if constexpr (!is_output_tiled) {
@@ -229,26 +249,50 @@ void kernel_main() {
             //   (b) tiles_to_reduce changes across c-blocks (e.g. 4 then 2 for 6 tiles / 192c) -- UNPACK and
             //       MATH must both be re-programmed for the new count (PACK is re-init'd via
             //       pack_untilize_dest_init below).
+            if (n == 0) {
+                DPRINT_UNPACK("[MP] pre-init c{} t2r{}\n", c_i, tiles_to_reduce);
+            }
             tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(
                 curr_in_cb_id, curr_scalar_cb_id, tiles_to_reduce);
+            if (n == 0) {
+                DPRINT_UNPACK("[MP] post-init c{}\n", c_i);
+            }
             tile_regs_acquire();
             for (uint32_t chunk = 0; chunk < interm_reduction_chunks; chunk++) {
+                // [#48552 MP-DEBUG] pre-waitin: if this is the last line, the reader never delivered the
+                // input stick (curr_in_cb.wait_front hang). Ungated on n==0 for phase detail.
+                if (n == 0) {
+                    DPRINT_UNPACK("[MP] pre-waitin c{} ch{}\n", c_i, chunk);
+                }
                 curr_in_cb.wait_front(1);
                 // [DIAG] reduce-input geometry (Bug 1 straddle check): rd = strided-read base, esz = bytes
                 // per entry, t2r = tiles this reduce strides over. If the strided row walk for t2r tiles
                 // exceeds esz it reads into the next entry (wrong rows). First few sticks only (flood guard).
+                // [#48552 MP-DEBUG] THE suspect: main rewrote llk_unpack_reduce_col_tilizeA_strided (tiny-tile
+                // Nx32 path + dropped *face_r_dim stride). UNGATED pre/post so the LAST line always shows it:
+                // pre-unpack with no post-unpack => the strided reduce-col unpack faulted/hung (LLK regression).
+                DPRINT_UNPACK("[MP] pre-unpack n{} c{} ch{}\n", n, c_i, chunk);
                 unpack_tilizeA_B_block<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
                     curr_in_cb_id,
                     curr_scalar_cb_id,
                     tiles_to_reduce,
                     0 /*tile idx for Src b is 0 because only 1 tile of constants is loaded*/);
+                DPRINT_UNPACK("[MP] post-unpack n{} c{} ch{}\n", n, c_i, chunk);
                 for (uint32_t math_tile_idx = 0; math_tile_idx < tiles_to_reduce; ++math_tile_idx) {
                     reduce_tile_math<REDUCE_OP, REDUCE_DIM>(math_tile_idx, num_faces_in_input_tile);
+                }
+                if (n == 0) {
+                    DPRINT_MATH("[MP] post-reduce c{} ch{}\n", c_i, chunk);
                 }
                 curr_in_cb.pop_front(1);
             }
             tile_regs_commit();
             tile_regs_wait();
+            // [#48552 MP-DEBUG] Reduce done, MATH committed to DEST. If pre-pack is the last line, the wedge
+            // is on the PACK side (pack_untilize / out_cb), not the strided reduce.
+            if (n == 0) {
+                DPRINT_PACK("[MP] pre-pack c{}\n", c_i);
+            }
             if constexpr (is_output_tiled) {
                 // TILED output: accumulate sticks and perform tilization when needed.
                 // pre_tilize_cb_id / fast_tilize_cb_id are only emitted under OUTPUT_TILED; even
