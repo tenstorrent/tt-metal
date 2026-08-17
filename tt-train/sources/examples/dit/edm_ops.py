@@ -54,9 +54,13 @@ _DP_SIZE_CACHE = None
 
 
 def _dp_size() -> int:
-    """dp-axis size of the open mesh (cached). Activations sharded over dp
-    report their GLOBAL batch in .shape; ops taking explicit scalar dims need
-    the per-shard batch, so every shape-derived b goes through _local_b."""
+    """dp-axis size of the open mesh (cached; mesh must be open before the
+    first forward). Activations sharded over dp report their GLOBAL batch in
+    .shape; ops taking explicit scalar dims / shape targets need the
+    per-shard batch, so every shape-derived b goes through _local_b.
+    Weights/params are replicated across the mesh — never divide those.
+    Per-chip batch must be >= 1 (tile alignment is carried by HW, so b%32
+    is NOT required)."""
     global _DP_SIZE_CACHE
     if _DP_SIZE_CACHE is None:
         m = ttml.maybe_mesh()
@@ -127,35 +131,6 @@ def prof_report(divisor: float = 1.0, header: str = "") -> None:
     for k, v in sorted(rows, key=lambda kv: -kv[1]):
         n = PROF.get(k + ".n", 0)
         print(f"     conv-prof {k:<22s} {v / divisor * 1000:8.1f} ms/step  ({n} calls)", flush=True)
-
-
-# ---------------------------------------------------------------------------
-# DDP: mesh-sharded (dp) activation tensors report the GLOBAL logical shape,
-# but every explicit scalar dim / shape target we hand to ttnn (conv2d
-# batch_size, [1,1,B*HW,C] reshapes, im2col/col2im canvas shapes, batch-sum
-# reshapes) must describe the PER-SHARD tensor. Everywhere batch is derived
-# from an activation's dim 0 it goes through _local_b. Weights/params are
-# replicated across the mesh — never divide those. Per-chip batch must be
-# >= 1 (and ideally tile-friendly, e.g. a multiple of 32 is NOT required —
-# HW carries the tile alignment).
-# ---------------------------------------------------------------------------
-
-_DP_SIZE = None
-
-
-def _dp_size() -> int:
-    """dp-axis size of the open mesh (1 if no mesh / no 'dp' axis). Cached on
-    first use — the mesh must be open before the first forward pass."""
-    global _DP_SIZE
-    if _DP_SIZE is None:
-        m = ttml.maybe_mesh()
-        _DP_SIZE = m.axis_size("dp") if (m is not None and m.has_axis("dp")) else 1
-    return _DP_SIZE
-
-
-def _local_b(shape0: int) -> int:
-    """Per-shard batch from a (possibly dp-sharded) activation's global dim 0."""
-    return shape0 // _dp_size()
 
 
 def _rm(v):
