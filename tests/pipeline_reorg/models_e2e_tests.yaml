@@ -1104,6 +1104,26 @@
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
 
+# ── XTTS-v2 ────────────────────────────────────────────────────────
+# End-to-end voice-cloning TTS: the demo renders the default text with the default reference voice
+# (auto-downloaded) through the fully-traced path and writes generated/xtts_demo/xtts_demo.wav.
+# Blackhole P150 only. Paired with the gated perf baseline, which asserts setup / decode ms-per-code
+# / vocoder ms-per-code / RTF against the measured P150 numbers (see the model's README).
+- name: xtts-v2 e2e tests
+  cmd: |
+    set -e
+    pytest models/experimental/xtts/tests/perf/test_e2e_perf.py --timeout=900
+    python models/experimental/xtts/demo/xtts_demo.py
+  model: xtts-v2
+  model_family: XTTS
+  skus:
+    bh_p150b_civ2:
+      timeout: 25
+      tier: 3
+      release_ready: false
+  owner_id: U087HGJ455E # Sudhanshu Singhal
+  team: shield
+
 # ── Panoptic DeepLab ───────────────────────────────────────────────
 - name: panoptic-deeplab e2e tests
   cmd: TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="10,9" pytest models/experimental/panoptic_deeplab/demo/demo.py::test_panoptic_deeplab_demo_pipeline --timeout=1020
