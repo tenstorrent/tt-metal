@@ -135,7 +135,19 @@ class Qwen36ModelArgs(ModelArgs):
         # Per-device width of the [qkv|z|a|b] fused in-projection: folding the tiny a/b (decay/beta)
         # projection into qkvz removes a whole decode matmul while keeping the (good) K=dim. Default
         # (was QWEN36_GDN_FUSE_AB); gdn/tp.py fuses whenever the qkvz weight is DRAM-sharded.
-        self.gdn_qkvzab_dim_tp = self.gdn_qkvz_dim_tp + 2 * self.gdn_nv_tp
+        #
+        # gdn_ab_gap: zero-column gap inserted between a and b so b starts on a tile boundary
+        # (gdn_nv_tp isn't necessarily one). Splitting the fused ab tensor into a=[0:Nv)/b=[Nv:2*Nv)
+        # forces an Untilize->Slice->TilizeWithValPadding round-trip in _project_qkvzab, because a
+        # ttnn.slice's STARTING offset must be tile-aligned to stay tile-native (a non-tile-aligned
+        # END is free — confirmed empirically: slice[0:24] and slice[32:56] on a TILE tensor both
+        # dispatch as a single SliceDeviceOperation, only slice[24:48] triggers the 3-op
+        # untilize/retilize sequence). Moving b to start at the next tile boundary makes both a and b
+        # single-op tile-native slices with no change to Nv/v/state/conv1d/the GQA ratio anywhere
+        # else — see tests/perf/test_gdn_ab_pad_check.py, which confirmed this padding lands inside
+        # per-core tile capacity already being paid for.
+        self.gdn_ab_gap = -(-self.gdn_nv_tp // 32) * 32 - self.gdn_nv_tp
+        self.gdn_qkvzab_dim_tp = self.gdn_qkvz_dim_tp + 2 * self.gdn_nv_tp + self.gdn_ab_gap
         # NO PAD (was: prefill_kpass_width padded 6176 -> 6912 on Wormhole). Kept at 0 so the weight
         # geometry, cache key and decode progcfgs all use the natural width; see the history below,
         # because the reason this is safe now is NOT the reason it was originally padded.
