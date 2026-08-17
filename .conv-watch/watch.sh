@@ -263,7 +263,7 @@ for entry in "${PIPELINES[@]}"; do
         --jq '.workflow_runs[0]' 2>/dev/null || echo "null")
 
   if [[ -z "$run" || "$run" == "null" ]]; then
-    blocks+=("▸ *$display* — _no runs on $BRANCH_")
+    blocks+=("▸ *$display* — _no runs on ${BRANCH}_")
     log "  no runs found"
     continue
   fi
@@ -320,7 +320,7 @@ for entry in "${PIPELINES[@]}"; do
         log "  no newer completed run — reusing cached summary"
         continue
       fi
-      blocks+=("▸ *$display* — _no completed runs on $BRANCH_")
+      blocks+=("▸ *$display* — _no completed runs on ${BRANCH}_")
       log "  no completed runs and no cache"
       continue
     fi
