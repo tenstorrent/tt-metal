@@ -19,6 +19,11 @@ description: |
 
   V1 scope: one op, one arch (N150), `workflow_dispatch` only.
 
+# Without this the run title is the description's first line, so every run in the Actions list reads
+# identically and the only way to tell which op a run is porting is to open it. `inputs` is empty on
+# a push, so the op falls back to the same default the `env:` block below uses.
+run-name: "port ${{ inputs.op || 'untilize' }}${{ inputs.branch && format(' (continue {0})', inputs.branch) }}"
+
 on:
   # `workflow_dispatch` is how a run is normally started, and it does resolve against the ref it is
   # handed: run 31744036323 ran this file from `ebanerjee/port-untilize` while `main` carried no copy
