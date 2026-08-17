@@ -33,9 +33,9 @@
     - Fix: use the saved inputs and compare against the saved output. Where an input still has to be
       built, let the agent that writes the test build it, since it has read the block and knows what
       each argument is. A fixed list of names can only cover models you have already seen. Right now
-      the seven component tests are the same 746 line file with the name substituted, so nothing in
-      the attention test knows anything about attention. Accept more than one prompt, and make the log
-      say what it used.
+      every component gets the same test file with only the name substituted, though the components
+      differ completely, so the attention test knows nothing about attention. Accept more than one
+      prompt, and make the log say what it used.
 
 4. The decode step exists twice, and speed and correctness were measured on different ones
     - The version that ships has no KV cache, the traced one does. Speed was measured on the traced
