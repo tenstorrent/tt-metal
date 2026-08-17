@@ -17,6 +17,26 @@ on. They are illustrative of the *effect*, not CI bounds.
 
 ---
 
+## ⭐⭐ T2 — [`noc_one_packet`](noc_one_packet/README.md)
+**Concept:** two things about a stream of page writes — (1) the **`max_page_size` template argument**
+on `noc_async_write` (which internal path the compiler picks), and (2) **destination concurrency**
+(how many distinct cores the stream targets).
+**Situation:** you are issuing many page writes in a loop (a gather, a scatter, a shard-to-shard
+copy) and want to know which knob actually moves the cost — the call form, or the traffic shape.
+**Measured win:** the template argument is a **NULL — 1.00× (0.99–1.02×)** at every page size
+64 B → 8 KB (BH p150b, 8 and 16 cores), *including* a runtime-size control where the generic path's
+chunk loop genuinely survives. **Destination spread is the real lever: up to 1.41×** on identical
+bytes and transaction count (BH p150b, 8 cores, ns/write: 4096 B 450→319, 2048 B 229→165,
+1024 B 120→92), inverting to 0.95× below ~256 B.
+**Gist:** do **not** expect `noc_async_write<PAGE_BYTES>(...)` to buy speed — a single-packet write
+spends nearly all its time in `while (!noc_cmd_buf_ready(...))` waiting for the command buffer, not
+in the issue sequence, so a cheaper issue path changes nothing (it is a readability choice, and it
+is free). Instead **aim consecutive writes at different destination cores**: writes to one core
+serialise at that core's receive NIU, writes to different cores drain concurrently. Keep pages
+≥ ~256 B or the extra per-page address computation eats the gain. The transferable rule: a page
+stream is limited by how fast destinations **accept** transfers, not by how cheaply the sender
+**issues** them.
+
 ## ⭐⭐ T2 — [`noc_placement`](noc_placement/README.md)
 **Concept:** two knobs for interleaved-DRAM NoC contention — core **placement** (column/row/diagonal)
 and **NoC selection** (which NoC a read/write stream uses) — as a switchable placement × NoC × op matrix.
