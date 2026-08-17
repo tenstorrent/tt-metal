@@ -283,7 +283,7 @@ class DFlashRunner:
         #: licence: a *growing* drift is a leak and must fail, while a small flat one is
         #: a lazily-created cache that the replay is unlikely to collide with.  Set to 0
         #: to make any drift fatal.
-        self.alloc_drift_budget = 8 * 1024 * 1024
+        self.alloc_drift_budget = 256 * 1024
         #: Lazily captured trace for the verify decode step, with taps armed.  The shipped
         #: decode trace cannot be reused: it is captured *without* hidden-state taps, and
         #: DFlash needs them to build the drafter's context.
@@ -577,6 +577,8 @@ class DFlashRunner:
             mesh_mapper=ttnn.ReplicateTensorToMesh(model.mesh_device),
         )
         ttnn.copy_host_to_device_tensor(host, self._verify_tokens)
+        del host
+        self._alloc_note("A: after stage tokens")
         if self._alloc_baseline is not None:
             live = self._dram_allocated()
             drift = live - self._alloc_baseline
@@ -600,9 +602,11 @@ class DFlashRunner:
         ttnn.execute_trace(model.mesh_device, self._prefill_trace["id"], cq_id=0, blocking=True)
         stats.verify_forward_seconds += time.perf_counter() - t_forward
         stats.target_forwards += 1
+        self._alloc_note("B: after replay")
 
         t_logits = time.perf_counter()
         target_argmax = self._argmax_range(self._prefill_trace["hidden"], anchor_pos, block)
+        self._alloc_note("C: after argmax_range")
         stats.verify_logits_seconds += time.perf_counter() - t_logits
         self._alloc_note("verify replay + argmax")
         return target_argmax, self._prefill_trace["taps"]

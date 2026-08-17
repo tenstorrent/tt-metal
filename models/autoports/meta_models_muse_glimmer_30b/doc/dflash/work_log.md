@@ -663,6 +663,13 @@ That also explains F13's oddity that a 32-row forward measured *slower* than a 1
 one eagerly (65.45 vs 54.74): at 32 rows the decode-grade kernels do less device work but
 cost more host calls, and eagerly the host is the binding constraint.
 
+**Confirmed by building it.**  A traced from-zero verify at `verify_width = 256` works
+and is *correct* -- 0 token mismatches against greedy over 48 tokens, which validates the
+whole capture/replay path including the tapped hidden states as trace outputs -- and it
+is **not faster**: verify 64.2 -> 59.0 ms, with capture amortisation making the iteration
+worse overall.  That is the row-count curve above doing exactly what it says.  The trace
+is not the win; the *32-row* trace is.  `--trace-verify` therefore stays off by default.
+
 **What it would take.**  The verify window must be exactly 32 rows, which means an
 *aligned* window (`page_block_size = 32`, restart at `32*floor(anchor/32)`, draft
 `31 - (anchor mod 32)` candidates -- 15.5 on average, i.e. today's 15 for free).  A
