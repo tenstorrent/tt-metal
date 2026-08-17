@@ -146,7 +146,17 @@ class Qwen36ModelArgs(ModelArgs):
         # single-op tile-native slices with no change to Nv/v/state/conv1d/the GQA ratio anywhere
         # else — see tests/perf/test_gdn_ab_pad_check.py, which confirmed this padding lands inside
         # per-core tile capacity already being paid for.
-        self.gdn_ab_gap = -(-self.gdn_nv_tp // 32) * 32 - self.gdn_nv_tp
+        #
+        # SCOPED TO WORMHOLE 9B (dim 4096). The gap changes gdn_qkvzab_dim_tp, and with it the fused
+        # weight geometry, its cache key and every progcfg derived from that width -- so it is held
+        # to the one config it was measured on. Blackhole keeps its separately tuned decode grid
+        # (num_cores=44) against the unpadded width, and the 27B (dim 5120, gdn_nv=48 so EVERY TP
+        # split is unaligned) keeps its validated geometry. Gate on dim, not model_name: HF_MODEL is
+        # often a hashed snapshot dir -- same reasoning as _qkv_l1_tuned_for_this_model in gdn/tp.py.
+        # 0 restores the pre-gap width exactly, and gdn/tp.py falls back to its enclosing-tile ab
+        # slice dance when the gap is 0.
+        _ab_gap_scoped = (not tpc.is_blackhole()) and self.dim <= 4096
+        self.gdn_ab_gap = (-(-self.gdn_nv_tp // 32) * 32 - self.gdn_nv_tp) if _ab_gap_scoped else 0
         self.gdn_qkvzab_dim_tp = self.gdn_qkvz_dim_tp + 2 * self.gdn_nv_tp + self.gdn_ab_gap
         # NO PAD (was: prefill_kpass_width padded 6176 -> 6912 on Wormhole). Kept at 0 so the weight
         # geometry, cache key and decode progcfgs all use the natural width; see the history below,
