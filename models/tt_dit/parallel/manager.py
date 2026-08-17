@@ -805,7 +805,7 @@ class CCLManager:
     def reduce_scatter_persistent_buffer(
         self, tensor: ttnn.Tensor, /, *, dim: int, mesh_axis: int | None
     ) -> ttnn.Tensor:
-        self.reduce_scatter(tensor, dim=dim, mesh_axis=mesh_axis, use_persistent_buffer=True)
+        return self.reduce_scatter(tensor, dim=dim, mesh_axis=mesh_axis, use_persistent_buffer=True)
 
     def reduce_scatter(
         self,

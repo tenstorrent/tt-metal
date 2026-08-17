@@ -296,3 +296,57 @@ def test_row_parallel_linear(
     )
     for i in range(tt_output.shape[0]):
         assert_quality(torch_output.squeeze(), tt_output[i].squeeze(), pcc=0.999_500)
+
+
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True, ids=["fabric_1d"]
+)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True, ids=["4x8"])
+@pytest.mark.parametrize("input_rank", [2, 3, 4], ids=["rank2", "rank3", "rank4"])
+@pytest.mark.parametrize("use_persistent_buffer", [True, False], ids=["persistent", "own_buffer"])
+def test_row_parallel_linear_input_rank(
+    mesh_device: ttnn.MeshDevice,
+    device_params: dict,
+    input_rank: int,
+    use_persistent_buffer: bool,
+) -> None:
+    """Every rank from 2 up must survive the reduce-scatter, and survive repetition.
+
+    Three iterations rather than one because the manager alternates two cached reduce-scatter
+    buffers: a lifetime error in the persistent path only surfaces once the index cycles back, so a
+    single call cannot see it. The buffer the caller owns is the one it may deallocate.
+    """
+    tp_mesh_axis = 1
+    replicas = tuple(mesh_device.shape)[1 - tp_mesh_axis]
+    M, K, N = 128, 512, 256
+
+    torch_dtype = torch.bfloat16
+    torch_model = torch.nn.Linear(K, N, bias=True).to(dtype=torch_dtype)
+    torch_model.eval()
+
+    ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear)
+    tt_model = RowParallelLinear(
+        K, N, bias=True, mesh_device=mesh_device, mesh_axis=tp_mesh_axis, ccl_manager=ccl_manager
+    )
+    tt_model.load_torch_state_dict(torch_model.state_dict())
+
+    torch_input_tensor = torch.randn([1] * (input_rank - 2) + [M, K], dtype=torch_dtype)
+    with torch.no_grad():
+        torch_output = torch_model(torch_input_tensor).reshape(M, N)
+
+    shard_dims = [None, None]
+    shard_dims[tp_mesh_axis] = -1
+    shard_dims[1 - tp_mesh_axis] = 0
+
+    for _ in range(3):
+        tt_input_tensor = bf16_tensor(torch_input_tensor, device=mesh_device, mesh_axis=tp_mesh_axis, shard_dim=-1)
+        tt_output = tt_model(tt_input_tensor, use_persistent_buffer=use_persistent_buffer)
+        assert len(tt_output.shape) == input_rank, f"rank {input_rank} in, rank {len(tt_output.shape)} out"
+        composed = ttnn.to_torch(
+            tt_output,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=shard_dims, mesh_shape=tuple(mesh_device.shape)),
+        ).reshape(replicas, M, N)
+        for i in range(replicas):
+            assert_quality(torch_output, composed[i], pcc=0.999_500)
+        if not use_persistent_buffer:
+            ttnn.deallocate(tt_output)

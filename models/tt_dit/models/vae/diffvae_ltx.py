@@ -570,9 +570,9 @@ class SwiGLU(Module):
         if self.fused:
             hidden = self.gate_up(x)
             if self.tp_mlp:
-                # RowParallelLinear reduce_scatters on dim 3 and only unsqueezes rank<=3 once, so a
-                # rank-2 activation would land there as rank 3 with dim out of range. The reshape
-                # aliases its input, so the original must outlive it rather than be consumed.
+                # w_down preserves its input rank, and the all_gather below names dim 3 absolutely,
+                # which only holds for a rank-4 tensor. Widen here so the gather stays valid. The
+                # reshape aliases its input, so the original must outlive it rather than be consumed.
                 hidden = ttnn.reshape(hidden, (1, 1, hidden.shape[-2], hidden.shape[-1]))
             # use_persistent_buffer=False: RowParallelLinear otherwise returns the CCL manager's
             # cached reduce-scatter buffer, which the deallocate below would destroy under it.

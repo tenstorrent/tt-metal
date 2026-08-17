@@ -506,6 +506,11 @@ class RowParallelLinear(Module):
         """
         Expects x to be column fractured.
         Return output fractured on columns.
+
+        Under ``use_persistent_buffer`` the result aliases the CCL manager's cached reduce-scatter
+        buffer for this (shape, dim, mesh_axis). Deallocating it leaves that cache entry pointing at
+        freed memory; because the cache alternates two buffers, the corruption surfaces two calls
+        later rather than on the next one. Pass False when the caller owns the result's lifetime.
         """
         if self.fsdp_mesh_axis is not None and self.mesh_device.shape[self.fsdp_mesh_axis] > 1:
             unsqueezed_weight = ttnn.unsqueeze_to_4D(self.weight.data)
@@ -530,16 +535,13 @@ class RowParallelLinear(Module):
         )
 
         if self._mesh_axis_size > 1:
-            needs_reshape = len(output.shape) <= 3
-            if needs_reshape:
-                output = ttnn.unsqueeze(output, 0)
-
+            # reduce_scatter pads rank<4 itself and restores the input rank on the way out, and it
+            # shifts the scatter axis by the same padding. A dim given as 3 is therefore only right
+            # for an already-4D tensor: at rank 3 the shift carries it to 4, off the end. Hand it the
+            # axis relatively and let it do the padding, so every rank from 2 up lands on the last.
             output = self.ccl_manager.reduce_scatter(
-                output, dim=3, mesh_axis=self.mesh_axis, use_persistent_buffer=use_persistent_buffer
+                output, dim=-1, mesh_axis=self.mesh_axis, use_persistent_buffer=use_persistent_buffer
             )
-
-            if needs_reshape:
-                output = ttnn.squeeze(output, 0)
 
         return output
 
@@ -573,9 +575,11 @@ class RowParallelLinear(Module):
         M, K, N = x.padded_shape[-2], x.padded_shape[-1], weight.padded_shape[-1]
         core_grid = self.mesh_device.compute_with_storage_grid_size()
 
-        needs_reshape = len(x.shape) <= 3
-        if needs_reshape:
-            x = ttnn.unsqueeze(x, 0)
+        # The fused op scatters on dim 3, so it needs a genuinely 4D input: one unsqueeze only gets
+        # a rank-3 activation there, and leaves rank 2 a dim short. Pad to 4D whatever the rank and
+        # peel the same number of leading dims back off the result.
+        input_rank = len(x.shape)
+        x = ttnn.unsqueeze_to_4D(x)
         _, output = ttnn.experimental.minimal_matmul_strided_reduce_scatter_async(
             input_tensor=x,
             weight_tensor=weight,
@@ -595,8 +599,8 @@ class RowParallelLinear(Module):
             dtype=dtype,
             mm_progress_counters=self.ccl_manager.get_mm_progress_counters_buffer(),
         )
-        if needs_reshape:
-            output = ttnn.squeeze(output, 0)
+        if input_rank < 4:
+            output = ttnn.reshape(output, list(output.shape)[4 - input_rank :])
         return output
 
 
