@@ -415,10 +415,15 @@ shuts down):
 "What is the capital of France?" -> "Paris."          (streamed token-by-token, stopped on eos id 2)
 ```
 
-Ready in ~60 s from the warm TTNN cache. **Steady state at window 512 is 2.80 s/token (0.36 tok/s).**
-The *first* request of a process is far slower — 90.8 s for 6 tokens — because it pays program
-compilation; that is the same effect that makes a lone `tt_forward` in a fresh process read 32 s
-instead of ~3 s.
+Ready in ~60 s from the warm TTNN cache. **At window 512: ~1.05 s/token, TTFT 979 ms** (17-token
+reply, `"tell me a joke"` → *"Why don't skeletons fight each other? They don't have the guts."*).
+
+The very first run of a *new* serve configuration is much slower — 90.8 s for 6 tokens — because it
+compiles programs. That cost does **not** recur: tt-metal caches JIT artifacts on disk, so later
+processes hit the cache (`JIT cache stats: 134/135 hits`) and answer in under a second. Same reason a
+lone `tt_forward` in a fresh process can read 32 s instead of ~3 s. When you time this, generate
+enough tokens to leave warm-up behind and read the per-token log lines rather than the request mean —
+averaging a 2-token reply once yielded a "2.80 s/token" figure that was nearly 3x the truth.
 
 That the answers are correct is the useful part: it is qualitative evidence that the per-layer PCC
 drift down to ~0.94 is benign at the output, since two factual questions come back right after
@@ -428,13 +433,15 @@ drift down to ~0.94 is benign at the output, since two factual questions come ba
 generates by re-running the whole prefill for every token: `prefill(prompt[0:n])` gives token `n`,
 then `prefill(prompt[0:n+1])` gives token `n+1`. Three consequences worth understanding:
 
-- **Per-token cost is one full prefill of the padded *window*, not of the real tokens** — but
-  **shrinking the window barely helps, which is worth knowing before optimising for it.** Measured
-  steady state: **window 512 → 2.80 s/token, window 1024 → 2.93 s/token.** Halving the window buys
-  4.6%, so at these lengths the cost is dominated by fixed per-op/per-layer overhead across 36
-  layers, not by the sequence-length work. (This also reconciles the `tt_forward ~3.0 s` figure in
-  the table above: it is right for a *warm* forward at 1k — 2.93 s here — and the 32 s I measured was
-  a cold first call paying program compilation.)
+- **Per-token cost is one full prefill of the padded *window*, not of the real tokens.** Measured at
+  window 512 over a 17-token reply: **~1.05 s/token, TTFT 979 ms.**
+- **How the window scales is OPEN — do not trust a short reply to answer it.** An earlier attempt
+  here reported "512 → 2.80 s/token, 1024 → 2.93, so the window barely matters". That was wrong:
+  both numbers averaged **2 tokens**, and the first token of a process pays program compilation, so
+  each average carried seconds of warm-up. Against the ~1.05 s/token measured over 17 tokens at 512
+  and the ~3.0 s warm `tt_forward` at 1k, the window looks like it matters *a lot* — but that
+  comparison mixes sources and is not a measurement either. To settle it, generate 30+ tokens at each
+  window and read the **per-token** log lines, ignoring the first few.
 - **The minimum window is 512, not 256.** Window 256 fails at the MoE, not at attention:
   `TT_FATAL: Token count (32) must be divisible by the 64-core grid used by masked_bincount`. At
   sp=8 a 256 window gives 32 tokens/chip, and `masked_bincount` needs a multiple of **64**. So the

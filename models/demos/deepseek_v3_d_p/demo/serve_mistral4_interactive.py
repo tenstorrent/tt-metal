@@ -33,11 +33,16 @@ logits we read -- can never attend to the pad tail. Stale KV left in the cache b
 SPEED
 -----
 Cost is set by the *padded* window `isl_total`, not by `actual_isl`: every step computes the
-whole window. But **measured, shrinking the window barely helps**: 512 -> 2.80 s/token,
-1024 -> 2.93 s/token, i.e. 4.6% for half the work. At these lengths fixed per-op/per-layer
-cost across 36 layers dominates the sequence-length work, so do not expect a small window to
-buy much. The first request in a process is far slower (90.8 s for 6 tokens) because it pays
-program compilation; the same effect makes a lone `tt_forward` read ~32 s instead of ~3 s.
+whole window. Measured at window 512 over a 17-token reply: **~1.05 s/token, TTFT 979 ms**.
+
+How it scales with the window is **not settled**. Do not repeat the mistake of averaging a
+short reply: the first token of a process pays program compilation, so a 2-token average once
+reported 2.80 s/token when the steady state was ~1.05. Every token's latency is logged
+individually for exactly this reason -- read those lines, discard the first few, and generate
+30+ tokens before comparing two windows.
+
+The compile cost does not recur across processes: tt-metal caches JIT artifacts on disk, so a
+second server on the same configuration answers its first request in under a second.
 
 `PREFILL_SERVE_SEQ_LEN` must be a multiple of `64 * sp_factor`, so **512 is the minimum**.
 Tile alignment alone would permit 256, but the MoE's `masked_bincount` runs on a 64-core grid
@@ -221,6 +226,12 @@ class PrefillTokenGenerator:
             ttnn.synchronize_device(self.mesh_device)
             ttnn.deallocate(tt_tokens)
             dt = time.time() - t0
+            # Log EVERY token's latency, not just the request average. The first token of the first
+            # request in a process pays program compilation and can be seconds slower than the rest,
+            # so an average over a short reply is not a steady-state number -- averaging 2 tokens
+            # once produced a "2.80 s/token" figure when the true steady state was ~1.05 s/token.
+            # Per-token lines make that visible instead of hiding it in the mean.
+            logger.info(f"serve: token {n - len(prompt_ids) + 1} in {dt:.2f}s (actual_isl={n})")
 
             if int(token_id) in self.stop_ids:
                 logger.info(f"serve: stop token {int(token_id)} after {n - len(prompt_ids)} generated tokens")
