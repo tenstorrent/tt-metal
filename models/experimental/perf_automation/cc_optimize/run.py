@@ -1700,6 +1700,25 @@ def _stage_roots_from_generated(secs: dict, perf_test) -> dict:
     return out
 
 
+def _publish_stage_roots(seq, model_root, node) -> dict:
+    """Establish {stage: tower} and write it into the model's facts. Best-effort; never raises.
+
+    Split out so it can be called from one place, unconditionally. Inline inside the signpost branch
+    it inherited that branch's precondition -- a tracy signpost sequence -- which it does not use:
+    the count join needs `seq`, the generated-test join needs only the model root and the perf test.
+    A model without signposts got no mapping at all, and its towers were priced from one whole-model
+    byte count.
+    """
+    try:
+        _roots = stage_roots(seq, model_root, _model_id_for_facts(model_root), node)
+        if _roots:
+            _merge_model_facts(model_root, {"stage_roots": _roots})
+            print("  [optimize/cc] stage subtrees: %s" % _roots, flush=True)
+        return _roots or {}
+    except Exception:  # noqa: BLE001 -- a missing mapping is the old behaviour, not a failure
+        return {}
+
+
 def depth_per_stage(per_stack_cov: dict, seq) -> dict:
     """{stage: depth} -- each stage deep enough for every stack that runs in it.
 
@@ -2345,6 +2364,18 @@ def _coverage_layers(
         # probe above emitted them, so reading them costs nothing. The ladder REBUILDS the model at
         # 2, 4, 8 and 16, up to four extra device probes, each reloading the weights. Running the
         # expensive one first and the free one only as its fallback was backwards.
+        # WHICH SUBTREE EACH STAGE RUNS -- published HERE, not inside the signpost branch below.
+        #
+        # It was written there, beside the per-stage depths, because both are "things learned from
+        # the probe". They are not: the depths need the signpost sequence, and this needs only the
+        # model root and the generated test. Voxtral has no tracy signposts -- "WARN signpost: no
+        # tracy signposts in .../tests -- using default 'start'/'stop'" -- so _signposts_usable(seq)
+        # is False, the whole branch is skipped, and stage_roots was never even attempted. Measured
+        # run 6, 2026-08-17: stage_roots absent from the facts, encode priced at "not modelled".
+        #
+        # Called unconditionally and early, so a mapping that does not depend on the probe does not
+        # inherit the probe's preconditions.
+        _publish_stage_roots(seq, _root, node)
         _signpost = None
         if _signposts_usable(seq):
             per_stack_map, _ = _first_block_map(seq)
@@ -2383,13 +2414,6 @@ def _coverage_layers(
                 # whole-model byte count -- overcharging the backbone for a tower it never reads and
                 # leaving that tower with a measurement and no ceiling. Written into the model's own
                 # facts file, which is where the report reads facts from.
-                try:
-                    _roots = stage_roots(seq, _root, _model_id_for_facts(_root), node)
-                    if _roots:
-                        _merge_model_facts(_root, {"stage_roots": _roots})
-                        print("  [optimize/cc] stage subtrees: %s" % _roots, flush=True)
-                except Exception:  # noqa: BLE001 -- a missing mapping is the old behaviour, not a failure
-                    pass
                 print(
                     "  [optimize/cc] coverage per stack: %s%s"
                     % (

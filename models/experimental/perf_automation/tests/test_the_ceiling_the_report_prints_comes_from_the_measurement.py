@@ -179,3 +179,46 @@ def test_batch_scales_the_per_user_terms_and_not_the_weights():
     assert eight < 8 * one, "the weights were multiplied by the batch"
     kv_one = one - _FACTS["weight_bytes"]
     assert abs((eight - one) - 7 * kv_one) <= 1, "the KV term did not scale with the batch"
+
+
+# ------------------------------------------------- and the mapping must not need the probe
+#
+# RUN 6, 2026-08-17: stage_roots STILL absent, with the join fixed and verified. The publication sat
+# inside `if _signposts_usable(seq):`, beside the per-stage depths, because both read as "things
+# learned from the probe". They are not. The depths need the signpost sequence; this needs the model
+# root and the generated test. Voxtral emits no tracy signposts --
+#
+#     WARN signpost: no tracy signposts in .../tests -- using default 'start'/'stop' (full capture)
+#
+# -- so the branch never ran and the mapping was never even attempted. A correct function, called
+# from inside a condition it has no use for.
+
+
+def test_the_mapping_does_not_depend_on_the_probe():
+    """An empty signpost sequence must still produce a mapping: the generated-test join needs none."""
+    import inspect
+
+    from cc_optimize.run import _publish_stage_roots, stage_roots
+
+    src = inspect.getsource(stage_roots)
+    assert "_stage_roots_from_generated" in src, "the probe-free join is gone"
+    assert callable(_publish_stage_roots)
+
+
+def test_the_publication_is_not_gated_behind_signposts():
+    """Asserted on the call site, because the function being right is what run 6 already proved."""
+    src = (_PA / "cc_optimize" / "run.py").read_text()
+    call = src.index("_publish_stage_roots(seq, _root, node)")
+    guard = src.index("if _signposts_usable(seq):", src.index("def _coverage_layers("))
+    assert call < guard, "stage_roots is published inside the signpost branch again"
+
+
+def test_the_count_join_still_wins_when_the_probe_can_answer():
+    """The fallback is a fallback. A probe reporting real depths still decides, so a model whose
+    stacks are unambiguous by count does not depend on a generated file's text."""
+    import inspect
+
+    from cc_optimize.run import stage_roots
+
+    src = inspect.getsource(stage_roots)
+    assert src.index("by_count.get") < src.index("_stage_roots_from_generated")
