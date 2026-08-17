@@ -258,4 +258,39 @@ passes the spec's `until: []`, whereas a manual invocation inherits the r1 task'
 other model families and are inert for Gemma, but it is the kind of divergence that
 makes the harness run the authoritative one.
 
-`r1_gpqa_diamond` scores are appended below as runs complete.
+### `r1_gpqa_diamond` on the autoport, through TTI
+
+| run | limit | docs | `exact_match,none` | workflow rc | wall time |
+|---|---|---:|---:|---|---:|
+| `--workflow evals` | `smoke-test` | 3 | **1.0 (3/3)** | 0 | 921 s |
+
+Three documents is a plumbing validation, not a graded score — treat it as
+"the release recipe runs end to end on the autoport and the model answers
+correctly in thinking mode", nothing stronger. Generation is long: ~5 min per
+document at ~29 tok/s single-user, because thinking mode plus `until: []` plus a
+32,768-token budget lets the model reason at length. A CI-nightly run (0.2 →
+~40 documents) is therefore a multi-hour job on one host.
+
+### What of CI is reproducible on one host, and what is not
+
+Reproduced locally:
+
+- the eval itself, through TTI's own harness rather than a hand-written `lm_eval`
+  command, so the spec's `gen_kwargs`/`model_kwargs`/`limit_samples_map` and the
+  declared `result_keys` scoring all take effect;
+- the release workflow's venv provisioning, including `EVALS_AGENTIC` (harbor
+  0.6.5 clones and builds without Docker — Docker is only needed to *run* the
+  agentic tasks);
+- the whole serving path with the release spec's server flags.
+
+Not reproducible here, and not claimed:
+
+- **TTI-managed server startup.** TTI has no launcher for `models/autoports/*`, so
+  the autoport can only be tested through the external-server path with a
+  hand-launched server. The startup/warmup/trace-capture path CI exercises is
+  therefore untested for this port by construction, not by omission.
+- **`terminal_bench_2` and `swe_bench_verified`** — the container lacks Docker.
+- **A CI-nightly graded number**, for the runtime reason above.
+
+`--workflow release` additionally requires `HF_TOKEN` in the environment
+(`run.py:841`), which `--workflow evals` does not.
