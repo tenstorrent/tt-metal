@@ -120,7 +120,7 @@ AUDITED_SEEDS = {
     ),
     "metal__ckernel_sfpu_sigmoid_appx": dict(
         semantic_cpp_class="ready",
-        semantic_cpp_blocker="Fresh typed cubic (impl 1) is functionally valid; competitive lowering needs loop-invariant SFPU constant materialization/hoisting, special-register allocation, and counted-loop replay formation. The tree form (impl 2) is the LUT-formation shape; its LUT-ON measurement awaits the post-wave toolchain pin (-mtt-tensix-optimize-lut-select is absent from pinned cc1plus 9827aaacc829 and errors on use).",
+        semantic_cpp_blocker="CLOSED as algorithm choice for the cubic (laneAV verdict 2026-08-17): impl 1's remaining +63.7% vs hand is not a mechanism gap — delivery is already competitive (invariant-hoisted constants + counted-loop replay formed); the loss is execution shape (6 exec slots/row, 5-hop chain vs hand's single-SFPLUT 4-slot row), and after every applicable pipeline mechanism (const-reg 0.5f residency fusing mul+addi->mad; dual-chain interleave) a >=+25% structural floor remains; polynomial->SFPLUTFP32 re-selection is value-changing and refused by charter. The tree form (impl 2) states the PWL dataflow shape, forms the LUT under -mtt-tensix-optimize-lut-select (increment 2: 4-slot row, sgn-retain fold), and is the fair compiler-vs-hand comparison; its +8.9% residual is the per-tile coefficient-rematerialization prefix (AU/AT prefix-hoist / R1-inc3 table-residency class). See sweep_2x2_ops.tsv sigmoidappx / sigmoidappx-tree notes.",
         paired_selector_status="implemented",
         test_status="pass",
         perf_status="measured",
@@ -128,8 +128,8 @@ AUDITED_SEEDS = {
         correctness_threshold="Float16_b rtol=0.05 atol=0.13 plus PCC > 0.99",
         correctness_source="test_sfpu_unary.py::test_sigmoid_appx_fresh_cpp",
         silicon_status="loss",
-        silicon_result="BH MATH_ISOLATE: fresh semantic C++ 446.8515625 cycles vs production 222.8515625 (+100.52%), three fresh samples each.",
-        silicon_source="FRESH_CPP_SILICON_ATTACK.md; sfpu_device_baseline_v1.tsv; audited BH device archive",
+        silicon_result="BH TILE_LOOP mean(MATH_ISOLATE)/tile, p150: cubic (impl 1) 45.598 vs production 27.856 (+63.7% — algorithm-choice verdict, laneAV 2026-08-17); tree (impl 2) 30.348 (+8.9% — per-tile prefix residual). Historical p100a whole-zone record: 446.85 vs 222.85 (+100.52%), three fresh samples each.",
+        silicon_source="FRESH_CPP_SILICON_ATTACK.md; sfpu_device_baseline_p150_v1.tsv; sweep_2x2_ops.tsv sigmoidappx/sigmoidappx-tree notes; ~/sfpi-uplift/laneAV-evidence-20260817",
     ),
     "metal__ckernel_sfpu_signbit": dict(
         semantic_cpp_class="ready",
@@ -367,7 +367,7 @@ AUDITED_SEEDS = {
     ),
     "legacy__ckernel_sfpu_add_int": dict(
         semantic_cpp_class="ready",
-        semantic_cpp_blocker="Fresh typed-C++ Int32 sign-magnitude body is complete and exactly correct (converted; WH+BH CRAQ 16/16 + boundary 4/4, BH p150b silicon exact); the former double-digit LOSS vs the handwritten path was typed-API conversion lowering and is RESOLVED: sfpi d82fb3b (Lane N smag lowering 1d8e037) lowers BH smag_to_int to the single self-inverse SFPCAST mod1=3, making the row CC-free (13->7 issue slots; cc-template-unsupported refusals 64->0). The planner still refuses, now row-opaque-effect/row-not-closed: SFPCAST carries no typed effect attribute yet (planner-lane follow-up; rows otherwise macro-eligible); dst-autoincr fires and carries the causal delta. Evidence: ~/sfpi-uplift/convert-smag-evidence-20260816/ (DejaGnu fail set byte-identical; silicon flips to -34.82% WIN vs hand).",
+        semantic_cpp_blocker="Fresh typed-C++ Int32 sign-magnitude body is complete and exactly correct (converted; WH+BH CRAQ 16/16 + boundary 4/4, BH p150b silicon exact); the former double-digit LOSS vs the handwritten path was typed-API conversion lowering and is RESOLVED: sfpi d82fb3b (Lane N smag lowering 1d8e037) lowers BH smag_to_int to the single self-inverse SFPCAST mod1=3, making the row CC-free (13->7 issue slots; cc-template-unsupported refusals 64->0). The planner still refuses, now row-opaque-effect RESOLVED by Lane Y (sfpi-gcc 0342290a450): the opaque member was SFPIADD, not SFPCAST (attributed since WP5); rows now form regions and refuse downstream by name (sequence-encoding-unproven/event-delay-unproven/descriptor-program-unproven — the timing-calendar proof frontier, no formation, bytes unchanged); dst-autoincr fires and carries the causal delta. Evidence: ~/sfpi-uplift/convert-smag-evidence-20260816/ (DejaGnu fail set byte-identical; silicon flips to -34.82% WIN vs hand).",
         paired_selector_status="implemented",
         test_status="pass",
         perf_status="measured",
@@ -380,7 +380,7 @@ AUDITED_SEEDS = {
     ),
     "legacy__ckernel_sfpu_sub_int": dict(
         semantic_cpp_class="ready",
-        semantic_cpp_blocker="Fresh typed-C++ Int32 sign-magnitude body is complete and exactly correct (converted; WH+BH CRAQ 16/16 + boundary 4/4, BH p150b silicon exact); the former double-digit LOSS vs the handwritten path was typed-API conversion lowering and is RESOLVED: sfpi d82fb3b (Lane N smag lowering 1d8e037) lowers BH smag_to_int to the single self-inverse SFPCAST mod1=3, making the row CC-free (14->7 issue slots — the sub's register-shuffle SFPMOV disappears too, direct subtract imod; cc-template-unsupported refusals 64->0). The planner still refuses, now row-opaque-effect/row-not-closed: SFPCAST carries no typed effect attribute yet (planner-lane follow-up; rows otherwise macro-eligible); dst-autoincr fires and carries the causal delta. Evidence: ~/sfpi-uplift/convert-smag-evidence-20260816/ (DejaGnu fail set byte-identical; silicon flips to -34.83% WIN vs hand).",
+        semantic_cpp_blocker="Fresh typed-C++ Int32 sign-magnitude body is complete and exactly correct (converted; WH+BH CRAQ 16/16 + boundary 4/4, BH p150b silicon exact); the former double-digit LOSS vs the handwritten path was typed-API conversion lowering and is RESOLVED: sfpi d82fb3b (Lane N smag lowering 1d8e037) lowers BH smag_to_int to the single self-inverse SFPCAST mod1=3, making the row CC-free (14->7 issue slots — the sub's register-shuffle SFPMOV disappears too, direct subtract imod; cc-template-unsupported refusals 64->0). The planner still refuses, now row-opaque-effect RESOLVED by Lane Y (sfpi-gcc 0342290a450): the opaque member was SFPIADD, not SFPCAST (attributed since WP5); rows now form regions and refuse downstream by name (sequence-encoding-unproven/event-delay-unproven/descriptor-program-unproven — the timing-calendar proof frontier, no formation, bytes unchanged); dst-autoincr fires and carries the causal delta. Evidence: ~/sfpi-uplift/convert-smag-evidence-20260816/ (DejaGnu fail set byte-identical; silicon flips to -34.83% WIN vs hand).",
         paired_selector_status="implemented",
         test_status="pass",
         perf_status="measured",

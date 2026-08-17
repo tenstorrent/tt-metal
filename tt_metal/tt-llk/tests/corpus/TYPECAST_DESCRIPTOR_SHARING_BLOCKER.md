@@ -92,3 +92,18 @@ Only after that final ELF exists should the lane run WH/BH compilation, QSR
 refusal, paired CRAQ correctness, and then Blackhole silicon.  The current
 failure occurs before functional validation, so it is not a correctness or
 performance claim.
+
+## Status update — impl-1 form adoption (Lane AV, 2026-08-17)
+
+The Lane AK probe structure (`-DTYPECAST_TYPED_RWC_BOUNDARY`: always_inline
+semantic body + typed `lltt::setrwc` face boundaries inside one
+compiler-visible region) was ADOPTED as the impl-1 default in
+`tests/sources/eltwise_unary_typecast_test.cpp` (REDUCE_SDPA typed-boundary
+precedent; silicon 273.33 vs hand 264.67 = +3.27%,
+`~/sfpi-uplift/silicon-promotions-20260817/item2-typecast-probe`).  The
+cross-function descriptor-sharing gap this document describes therefore no
+longer gates the measured sweep row; it remains a real mechanism gap for any
+kernel whose faces are separate out-of-line calls.  The measurable probe for
+it is now the opt-in legacy form `-DTYPECAST_NOINLINE_FACE_BOUNDARY`
+(the old default; the old probe define was retired with the inversion).
+Gates and provenance: `~/sfpi-uplift/laneAV-evidence-20260817`.
