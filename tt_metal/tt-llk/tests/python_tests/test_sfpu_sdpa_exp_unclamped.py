@@ -33,6 +33,19 @@ bfloat16 there (exp(88.7) ~= 3.3e38 vs bf16 max 3.39e38), so that domain is
 deliberately not swept -- there is no well-defined expected value to compare
 against, and the header explicitly scopes itself to val <= 0.
 
+Both kernel selections are swept (the hand/generated selector idiom, matching
+the device-profile node's impl axis): `sdpa_exp_impl=0` drives the handwritten
+production accurate exp (`calculate_exponential<APPROX=false>`, the clamped
+`_sfpu_exp_21f_bf16_tti_` path — the kernel SDPA uses in production today) and
+`sdpa_exp_impl=1` drives the semantic upper-unclamped variant. Every swept
+point sits in the domain where the two are contractually identical (the removed
+clamp is dead there and the surviving lower clamp behaves the same), so both
+impls verify against the same exp() golden: impl 1's cells pin "removing the
+upper clamp changed nothing observable", and impl 0's cells are the hand-corr
+legs that let the 2x2 sweep's hand perf selector carry verified-kernel evidence
+(sweep-hardening defect 2: a perf leg without its own correctness leg is
+withheld).
+
 `_ckernel_sfpu_exp_accurate_upper_unclamped_` static_asserts `!is_fp32_dest_acc_en`
 ("upper-unclamped exp variant implemented for bf16 dest only"), so the DEST is
 always 16-bit: dest_acc=Yes does not compile, and a Float32 input has nowhere to go
@@ -99,8 +112,13 @@ class SdpaExpImplTemplate(TemplateParameter):
     scale_en=[False, True],
     scale=[BF16_ONE, BF16_HALF],
     num_tiles=[1, 2],
+    # 0 = handwritten production exp (clamped accurate 21f), 1 = semantic
+    # upper-unclamped — same axis and meaning as the device-profile node below.
+    sdpa_exp_impl=[0, 1],
 )
-def test_sfpu_sdpa_exp_unclamped(formats, input_range, scale_en, scale, num_tiles):
+def test_sfpu_sdpa_exp_unclamped(
+    formats, input_range, scale_en, scale, num_tiles, sdpa_exp_impl
+):
     if not scale_en and scale != BF16_ONE:
         # The template drops the multiply entirely, so the scale value is dead.
         pytest.skip("scale is not read when SCALE_EN is false")
@@ -125,7 +143,7 @@ def test_sfpu_sdpa_exp_unclamped(formats, input_range, scale_en, scale, num_tile
         "sources/sfpu_sdpa_exp_unclamped_test.cpp",
         formats,
         templates=[
-            SdpaExpImplTemplate(1),
+            SdpaExpImplTemplate(sdpa_exp_impl),
             SFPU_SCALE_EN(scale_en=scale_en),
             SFPU_UNARY_SCALAR(value_bits=scale),
         ],
@@ -167,9 +185,7 @@ def test_sfpu_sdpa_exp_unclamped_device_profile(perf_report, sdpa_exp_impl, labe
     """
     torch.manual_seed(0)
     formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
-    src_A = torch.empty((ELEMENTS_PER_TILE,), dtype=torch.bfloat16).uniform_(
-        -20.0, 0.0
-    )
+    src_A = torch.empty((ELEMENTS_PER_TILE,), dtype=torch.bfloat16).uniform_(-20.0, 0.0)
     src_B = torch.zeros_like(src_A)
 
     configuration = PerfConfig(
@@ -202,6 +218,4 @@ def test_sfpu_sdpa_exp_unclamped_device_profile(perf_report, sdpa_exp_impl, labe
     assert len(rows) == 1, frame.to_string(index=False)
     cycles = float(rows.iloc[0]["mean(MATH_ISOLATE)"])
     assert cycles > 0
-    print(
-        f"SDPA_EXP_UNCLAMPED_DEVICE_PROFILE impl={label} body_cycles={cycles:.2f}"
-    )
+    print(f"SDPA_EXP_UNCLAMPED_DEVICE_PROFILE impl={label} body_cycles={cycles:.2f}")
