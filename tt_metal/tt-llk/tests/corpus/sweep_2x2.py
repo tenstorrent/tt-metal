@@ -137,7 +137,9 @@ OFF_FLAGS = (
     "-mno-tt-tensix-optimize-dst-autoincr "
     "-mno-tt-tensix-optimize-dst-ownership "
     "-mno-tt-tensix-optimize-lut-select "
-    "-mno-tt-tensix-optimize-setexp-fold"
+    "-mno-tt-tensix-optimize-setexp-fold "
+    "-mno-tt-tensix-optimize-prgm-const "
+    "-mno-tt-tensix-optimize-capture-rotation"
 )
 ON_FLAGS = (
     "-mtt-tensix-optimize-latency-schedule "
@@ -150,7 +152,12 @@ ON_FLAGS = (
     "-mtt-tensix-optimize-setexp-fold "
     "-mtt-tensix-macro-planner "
     "-mtt-tensix-macro-planner-replay "
-    "-mtt-tensix-optimize-mop-form"
+    "-mtt-tensix-optimize-mop-form "
+    "-mtt-tensix-optimize-capture-rotation "
+    # M3 fire (pin 9): prgm-const needs the tt-metal ttregion markers compiled
+    # in, and markers without the fire are pure ghost-scheduling ripple (AQ),
+    # so the flag and the define travel together or not at all.
+    "-mtt-tensix-optimize-prgm-const -DLLK_ENABLE_TTREGION_MARKERS"
 )
 REMOVED_FLAGS = ("-mtt-tensix-emit-loadmacro", "-mtt-tensix-analyze-loadmacro")
 # Weekly per-knob attribution: OFF set plus exactly one positive knob.
@@ -166,6 +173,10 @@ KNOBS = {
     "setexp-fold": "-mtt-tensix-optimize-setexp-fold",
     "planner-replay": "-mtt-tensix-macro-planner-replay",
     "mop-form": "-mtt-tensix-optimize-mop-form",
+    "capture-rotation": "-mtt-tensix-optimize-capture-rotation",
+    # The knob leg must carry the marker define for the same reason as the ON
+    # set: prgm-const without ttregion markers cannot fire.
+    "prgm-const": "-mtt-tensix-optimize-prgm-const -DLLK_ENABLE_TTREGION_MARKERS",
 }
 HARNESS_TOOLCHAIN = TESTS / "sfpi"  # untracked symlink the harness hardcodes
 DEVICE_LOCK = "/tmp/tt-device.lock"
