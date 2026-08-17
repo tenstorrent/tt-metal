@@ -26,6 +26,7 @@
 #           combined_bandwidth = total_bytes / wall_clock_time
 #           where wall_clock_time = max(duration) across all cores
 #           Use this for multi-core DRAM tests where cores are synchronized
+#           with a barrier_sync function beforehand
 #
 # Bandwidth unit:
 #   - bandwidth_unit: Unit for bandwidth in plots and reports
@@ -808,7 +809,6 @@ tests:
     memory_type: "l1"
     mechanism: "unicast"
     pattern: "all_to_all"
-    bandwidth_mode: "combined"
 
   320:
     name: "All from All Directed Ideal"
@@ -888,7 +888,6 @@ tests:
     memory_type: "l1"
     mechanism: "unicast"
     pattern: "all_from_all"
-    bandwidth_mode: "combined"
 
   340:
     name: "Atomic Semaphore Adjacent Bandwidth Sweep"

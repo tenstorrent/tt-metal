@@ -1,3 +1,27 @@
+# SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Web Viewer Groups
+#
+# This file defines the test groups, tags, and FAQ content displayed in the
+# data movement web viewer. It is organized into three top-level sections:
+#
+# universal:
+#   - faq: General FAQ entries shown regardless of the selected test group
+#
+# groups:
+#   Each key is a group ID matching a test's group assignment and should match
+#   a directory value in test_information.yaml. Fields:
+#   - name: Display name shown in the web viewer sidebar
+#   - tags: List of descriptive tags (e.g. read, write, unicast, L1, DRAM)
+#   - image: (optional) Path to an SVG diagram illustrating the test pattern
+#   - faq: (optional) FAQ entries shown when this group is selected
+#
+# tags:
+#   Each key is a tag name. Fields:
+#   - faq: FAQ entries shown when any group with this tag is selected
+
 universal:
   faq:
     - q: How are these tests run?
@@ -18,149 +42,134 @@ universal:
         GB/s, multiply by the clock frequency in GHz (Wormhole: 1.0 GHz,
         Blackhole: 1.35 GHz). For example, 32 bytes/cycle on Blackhole =
         32 × 1.35 = 43.2 GB/s.
-    - q: Why do Blackhole and Wormhole results differ for the same test?
-      a: >
-        Blackhole and Wormhole have different NoC architectures, clock speeds,
-        link widths, core counts, and DRAM configurations. Blackhole generally
-        has wider NoC links and higher clock speeds, so it achieves higher
-        absolute bandwidth. Comparing the two reveals which improvements are
-        architectural vs frequency-driven.
     - q: What does "Transaction Size" mean?
       a: >
         Transaction size is the number of bytes sent in a single noc_async_read
-        or noc_async_write call. Larger transactions amortize per-packet overhead
-        and generally achieve higher bandwidth, up to the link-rate ceiling.
+        or noc_async_write call (There are some exceptions which should be noted,
+        but generally this is the case). Larger transactions amortize per-packet
+        overhead and generally achieve higher bandwidth.
     - q: How should I interpret the sweep charts?
       a: >
         Each line in a sweep chart represents a different configuration (e.g. a
-        different virtual channel, grid size, or NoC index). The x-axis is the
+        different number of transactions, grid size, or NoC index). The x-axis is the
         swept parameter, and the y-axis is the measured bandwidth or latency.
-        Look for where lines plateau (hitting a hardware limit), diverge (one
-        config outperforming another), or drop (contention or bottleneck).
+        Look for where lines plateau (hitting a hardware limit) or diverge (one
+        config outperforming another).
+    - q: Why does bandwidth tend to plateau at larger transaction sizes?
+      a: >
+        Data movement performance is capped by the NoC's maximum throughput.
+        At small transaction sizes, per-transaction overhead dominates,
+        so bandwidth is low. Once the payload is large enough to amortize that overhead,
+        you hit the maximum theoretical bandwidth (64 bytes/cycle on BH, 32 bytes/cycle on WH) and the plot flattens.
 
 groups:
   one_from_one:
     name: One from One
     tags: [read, unicast, L1, single_core, virtual_channels]
-    image: web_images/bad-one-from-one.svg
+    image: web_images/one_from_one.svg
     faq:
       - q: What does the One from One test measure?
         a: >
-          It measures the NoC read bandwidth and latency when a single reader core
-          issues noc_async_read calls to pull data from one remote sender core.
-          This isolates unicast read performance with no contention from other cores.
-      - q: Why does bandwidth plateau at larger transaction sizes?
-        a: >
-          The NoC has a fixed link bandwidth (e.g. ~32 bytes/cycle per link on Blackhole).
-          At small transaction sizes, per-transaction overhead (header, handshake) dominates,
-          so bandwidth is low. Once the payload is large enough to amortize that overhead,
-          you hit the link-rate ceiling and bandwidth flattens.
-      - q: What are virtual channels and why do they matter?
-        a: >
-          Virtual channels (VCs) are independent logical lanes on the same physical NoC link.
-          Using different VCs allows independent transactions to make progress without
-          head-of-line blocking. The virtual channel sweep test shows whether changing the VC
-          assignment affects throughput for this single-core-pair scenario.
-      - q: How is "Bandwidth (bytes/cycle)" calculated?
-        a: >
-          Total bytes transferred divided by the elapsed cycle count measured between
-          noc_async_read issue and the corresponding noc_async_read_barrier completion.
-          This is the effective application-visible bandwidth, not raw link rate.
-      - q: What is the difference between One from One and One to One?
-        a: >
-          One from One uses noc_async_read (the reader pulls data from the sender),
-          while One to One uses noc_async_write (the sender pushes data to the receiver).
-          Both are single-source single-destination, but the direction of the initiating
-          transaction differs, which can affect latency and bandwidth characteristics.
-
-  one_to_one:
-    name: One to One
-    tags: [write, unicast, L1, single_core, virtual_channels]
-    faq:
-      - q: What does the One to One test measure?
-        a: >
-          It measures NoC write bandwidth and latency when a single sender core uses
-          noc_async_write to push data to one remote receiver core. This isolates
-          unicast write performance with no contention from other cores.
+          It measures the NoC read bandwidth and latency when a single Tensix core
+          issues async_read calls to pull data from another Tensix core's L1 memory.
       - q: How does One to One performance compare to One from One?
         a: >
           Writes (One to One) are fire-and-forget from the sender's perspective — the sender
           doesn't stall waiting for data to arrive. Reads (One from One) require a round trip.
           This means writes can sometimes show higher apparent throughput, though the NoC
           link bandwidth is the same in both directions.
-      - q: Why does the virtual channel sweep matter for writes?
+
+  one_to_one:
+    name: One to One
+    tags: [write, unicast, L1, single_core, virtual_channels]
+    image: web_images/one_to_one.svg
+    faq:
+      - q: What does the One to One test measure?
         a: >
-          Even in a single-pair write scenario, the VC determines which internal buffer
-          the packet uses. Certain VCs may have deeper buffers or different arbitration
-          priority, which can affect sustained throughput.
+          It measures NoC write bandwidth and latency when a single Tensix core uses
+          async_write to push data to another Tensix core's L1 memory.
+      - q: How does One to One performance compare to One from One?
+        a: >
+          Writes (One to One) are fire-and-forget from the sender's perspective — the sender
+          doesn't stall waiting for data to arrive. Reads (One from One) require a round trip.
+          This means writes can sometimes show higher apparent throughput, though the NoC
+          link bandwidth is the same in both directions.
 
   one_from_all:
     name: One from All
     tags: [read, unicast, L1, single_core, virtual_channels]
+    image: web_images/one_from_all.svg
     faq:
       - q: What does the One from All test measure?
         a: >
-          A single reader core reads data from every other core on the chip. This
-          stresses the NoC's ability to handle many concurrent read requests converging
-          on one destination and measures how read bandwidth scales with source count.
-      - q: Why might throughput drop compared to One from One?
-        a: >
-          All responses converge on a single destination core, creating congestion at
-          the receiver's local router. The destination's receive buffer also becomes a
-          bottleneck as it must absorb traffic from every source simultaneously.
+          It measures the NoC read bandwidth and latency when a single Tensix core issues
+          async_read calls to pull data from every other Tensix core's L1 memory. Here we multiply
+          the number of transactions per core by number of cores on the board to get the total
+          number of transactions for bandwidth calculation.
 
   one_to_all:
     name: One to All
     tags: [write, unicast, multicast, L1, single_core]
+    image: web_images/one_to_all.svg
     faq:
       - q: What is the difference between unicast and multicast One to All?
         a: >
           Unicast One to All sends separate noc_async_write transactions to each
           destination core individually. Multicast One to All uses a single multicast
-          write that the NoC hardware replicates at each router hop, which is
-          significantly more efficient for one-to-many data distribution.
+          write for each transaction, which writes to all destination cores simultaneously.
+      - q: Why does multicast perform worse than unicast?
+        a: >
+      - q: What is loopback?
+        a: >
+          Loopback is when a tensix core writes to its own L1 through the NoC.
+      - q: What is the difference between NoC Index 0 and 1?
+        a: >
       - q: What does "Multicast Linked" mean?
         a: >
           Multicast linked mode sends data to a rectangular grid of cores using a single
           multicast transaction where each receiving core also updates a linked-list
           semaphore. This is the pattern used for tilized data distribution in matmul
           and other collective operations.
-      - q: What are the Multicast Schemes tests?
+      - q: What is the multicast scheme test?
         a: >
-          These tests compare different multicast delivery strategies (e.g. row-first
-          vs column-first routing, different grid shapes) to show which schemes
-          achieve the best bandwidth and lowest latency for a given core layout.
+          This test compares different multicast schemes (location of sender core relative to a destination grid)
+          for various grid sizes. See the One to All readme for an overview of the schemes and the findings.
 
   one_packet:
     name: One Packet
     tags: [read, write, unicast, L1, single_core]
+    image: web_images/one_packet.svg
     faq:
       - q: What does the One Packet test measure?
         a: >
-          It measures the latency and overhead of sending a single NoC packet
-          (one read or one write) between two cores. Unlike the streaming tests,
-          this focuses on per-transaction cost rather than sustained throughput.
-      - q: Why is single-packet latency important?
-        a: >
-          Many real workloads issue small, latency-sensitive transactions (e.g.
-          semaphore updates, control messages, small tensor tile headers). If
-          per-packet overhead is high, these workloads suffer even though the
-          link bandwidth is large.
+          Previously, this test was used to measure bandwidth and latency performance of
+          stateful one_packet APIs, but since migrating to metal 2.0 those APIs are considered deprecated.
+          Now these tests just use standard stateful read/write APIs on transaction sizes not larger than
+          one packet (16kB on BH, 8kB on WH).
 
   all_to_all:
     name: All to All
     tags: [write, unicast, L1, multi_core]
+    image: web_images/all_to_all.svg
     faq:
       - q: What does the All to All test measure?
         a: >
-          Every core writes data to every other core simultaneously. This is the
-          maximum-contention write scenario and measures how the NoC fabric handles
-          full bisection traffic.
-      - q: What does the grid sweep variant test?
+          All to All tests measure bandwidth and latency when multiple cores write to multiple cores.
+          In the packet sizes test, we use every core to write to every core, and in the grid sweep test
+          we vary the number of cores on both the sending and receiving end. Here, since we are running
+          writer kernels on our cores, the senders are the master cores and the receivers are the subordinate cores.
+      - q: How do I interpret number of transactions in the All to All test?
         a: >
-          The grid sweep varies the number of participating cores (e.g. 2x2, 4x4,
-          up to the full grid) to show how all-to-all write bandwidth scales with
-          core count and at what point the NoC becomes saturated.
+          Number of transactions is the total number of writes issued by a writer kernel run on one of the master cores.
+          For example, in the standard full grid packet sizes test on Blackhole, "440 transactions" means that each
+          of the 110 master cores is writing out 4 transactions to each of the 110 subordinate cores,
+          for a total of 440 transactions per master core.
+      - q: What's the difference between bandwidth and combined bandwidth?
+        a: >
+          For tests running multiple kernels on master cores, we have the option of reporting bandwidth or combined bandwidth.
+          Bandwidth is the median measured throughput of all kernels.
+          Combined bandwidth is the "total throughput of the entire system", calculated as the total number of bytes transferred
+          divided by the total number of cycles.
       - q: Why is all-to-all bandwidth lower than one-to-one?
         a: >
           Every router in the mesh is simultaneously sourcing and sinking traffic,
@@ -170,16 +179,30 @@ groups:
   all_from_all:
     name: All from All
     tags: [read, unicast, L1, multi_core]
+    image: web_images/all_from_all.svg
     faq:
       - q: What does the All from All test measure?
         a: >
-          Every core reads data from every other core simultaneously. This is the
-          maximum-contention read scenario and reveals how NoC read bandwidth
-          degrades under full mesh traffic.
+          All from All tests measure bandwidth and latency when multiple cores read from multiple cores.
+          In the packet sizes test, we use every core to read from every core, and in the grid sweep test
+          we vary the number of cores on both the source and destination end. The cores which issue the read
+          instructions are considered the master cores, and the cores which are read from are considered the subordinate cores.
+      - q: How do I interpret number of transactions in the All from All test?
+        a: >
+          Number of transactions is the total number of transactions issued by a reader kernel run on one of the master cores.
+          For example, in the standard full grid packet sizes test on Blackhole, "440 transactions" means that each
+          of the 110 master cores is sending out 4 read requests from each of the 110 subordinate cores,
+          for a total of 440 transactions per master core.
+      - q: What's the difference between bandwidth and combined bandwidth?
+        a: >
+          For tests running multiple kernels on master cores, we have the option of reporting bandwidth or combined bandwidth.
+          Bandwidth is the median measured throughput of all kernels.
+          Combined bandwidth is the "total throughput of the entire system", calculated as the total number of bytes transferred
+          divided by the total number of cycles.
       - q: How does All from All differ from All to All?
         a: >
-          All from All uses noc_async_read (each core pulls from all others), while
-          All to All uses noc_async_write (each core pushes to all others). Reads
+          All from All uses async_read (each core pulls from all others), while
+          All to All uses async_write (each core pushes to all others). Reads
           require a request-response round trip, so All from All typically shows
           higher latency per transaction than All to All.
 
@@ -189,30 +212,37 @@ groups:
     faq:
       - q: What does the Multi Interleaved test measure?
         a: >
-          Multiple cores simultaneously read or write to DRAM using interleaved
-          (page-striped) addressing. This measures how DRAM bandwidth scales when
-          many cores share the DRAM banks through the NoC.
-      - q: What is the difference between the read, write, and combined variants?
+          This test measures DRAM bandwidth when multiple tensix cores simultaneously read and/or write
+          to interleaved DRAM banks. It is a multi-core version of the single-core Interleaved test.
+      - q: What's the difference between bandwidth and combined bandwidth?
         a: >
-          The "Read" variant has all cores reading from DRAM, the "Write" variant
-          has all cores writing to DRAM, and the combined "Sizes" variant has cores
-          doing both. The combined variant shows whether read-write conflicts at the
-          DRAM controller degrade total throughput.
-      - q: What does the grid sweep variant show?
+          For tests running multiple kernels on master cores, we have the option of reporting bandwidth or combined bandwidth.
+          Bandwidth is the median measured throughput of all kernels.
+          Combined bandwidth is the "total throughput of the entire system", calculated as the total number of bytes transferred
+          divided by the total number of cycles.
+      - q: What is the difference between the Multi Interleaved test variants?
         a: >
-          It varies the number of participating cores to reveal the scaling curve —
-          at what core count DRAM bandwidth saturates and whether adding more cores
-          causes contention that reduces per-core throughput.
+          Tensix cores run either a reader or writer kernel (or both if not specified) in this set of tests.
+          Thus, the read test has all cores reading from DRAM, the write test has all cores writing to DRAM,
+          and the combined sizes test has cores doing both. Grid sweep tests vary the number of participating
+          Tensix cores, rather than using the entire grid.
+      - q: What is the meaning of riscv_0 and riscv_1 in the Multi Interleaved test?
+        a: >
+          In this test we use NoC0 (riscv_0) to route read requests from DRAM, and NoC1 (riscv_1) to route write requests to DRAM.
+          This convention is better for performance because it avoids congestion based on the NoC architecture.
+          For the tests which combine reading and writing, we can consider riscv_0 to be the read performance and riscv_1 to be the write performance.
 
   atomics:
     name: Atomic Semaphore
-    tags: [write, unicast, L1, multi_core, atomics]
+    tags: [write, unicast, L1, single_core, atomics]
     faq:
       - q: What does the Atomic Semaphore test measure?
         a: >
-          It measures the bandwidth and latency of atomic semaphore increment
+          It measures performance of atomic semaphore increment
           operations between cores. One core issues atomic increments to a semaphore
           located on another core's L1, and we measure how fast these complete.
+          Note that the "transaction size" in this test actually means the increment amount of each semaphore operation,
+          and has been named this way to fit into the existing data movement test framework.
       - q: What is the difference between adjacent and non-adjacent sweeps?
         a: >
           The adjacent sweep places the source and destination cores next to each
@@ -222,33 +252,34 @@ groups:
   core_bidirectional:
     name: Core Bidirectional
     tags: [read, write, unicast, L1, single_core]
+    image: web_images/core_bidirectional.svg
     faq:
       - q: What does the Core Bidirectional test measure?
         a: >
-          Two cores simultaneously send data to each other, measuring whether
-          full-duplex NoC traffic achieves the expected 2x throughput of a
-          single direction, or whether contention at shared links reduces it.
-      - q: What is the difference between same-kernel and different-kernel variants?
-        a: >
-          The same-kernel variant runs identical code on both cores (symmetric traffic).
-          The different-kernel variant runs different code on each core (asymmetric
-          traffic patterns), which can reveal how the NoC handles imbalanced flows.
+          This test measures bandwidth and latency of a single Tensix core simultaneously reading from and writing to another core's L1.
+          One variant uses the same kernel to perform both read and write, while the other variant uses different kernels for each direction.
+          In the latter case, we write on riscv_0 and read on riscv_1.
 
   direct_write:
     name: Direct Write
     tags: [write, unicast, L1, single_core]
+    image: web_images/direct_write.svg
     faq:
       - q: What is a direct write and how does it differ from noc_async_write?
         a: >
           A direct (inline) write embeds the payload directly in the NoC packet header
           rather than doing a DMA from L1. This avoids the DMA read latency and is
-          faster for very small payloads (typically 16 bytes or fewer), but the maximum
-          payload size is limited by the header capacity.
-      - q: What does the address pattern test show?
+          faster for very small payloads, but the maximum payload size is limited by the header capacity.
+      - q: What is the difference between the Performance Comparison and Address Pattern tests?
         a: >
-          It compares direct write performance across different destination address
-          patterns (sequential, strided, random) to check whether the target address
-          alignment or pattern affects throughput.
+          The Performance Comparison test provides a controlled comparison
+          between stateful and non-stateful approaches. It consistently writes different
+          values to the same destination address, testing both posted and non-posted write
+          modes. This establishes a baseline demonstrating the advantage of address caching
+          in stateful direct writes. The Address Pattern test comprehensively
+          evaluates performance across different usage patterns by testing all combinations
+          of address patterns (same vs different destinations), value patterns (same vs
+          different values), and API approaches (stateful vs non-stateful).
 
   dram_neighbour:
     name: DRAM Neighbour
@@ -270,35 +301,43 @@ groups:
           "One hop" places the reader one NoC hop away from the DRAM controller.
           "Loop back" places the reader as far as possible, routing traffic across the
           full chip. Comparing them shows the NoC distance penalty for DRAM access.
+      - q: What's the difference between bandwidth and combined bandwidth?
+        a: >
+          For tests running multiple kernels on master cores, we have the option of reporting bandwidth or combined bandwidth.
+          Bandwidth is the median measured throughput of all kernels.
+          Combined bandwidth is the "total throughput of the entire system", calculated as the total number of bytes transferred
+          divided by the total number of cycles.
 
   dram_sharded:
     name: DRAM Sharded Read
-    tags: [read, unicast, DRAM, multi_core]
+    tags: [read, unicast, DRAM, single_core]
     faq:
       - q: What does the DRAM Sharded Read test measure?
         a: >
-          It measures read bandwidth when each core reads from a dedicated shard
-          (contiguous region) of DRAM, rather than interleaved pages. This is the
-          access pattern used by sharded tensor layouts.
-      - q: What do the tile number and bank number sweeps show?
+          This test measures the bandwidth and latency of a single Tensix core reading from a sharded DRAM buffer, using stateful APIs.
+      - q: How do I interpret number of transactions and transaction size in the DRAM Sharded Read test?
         a: >
-          The tile number sweep varies how many tiles each core reads per batch.
-          The bank number sweep varies how many DRAM banks each core's shard spans.
-          Together they reveal the optimal sharding granularity for maximum throughput.
+          The sharded DRAM buffer is set up to use a certain number of DRAM banks, with each bank containing a certain number of tiles (32 x 32 datums).
+          The size of each tile is 2048 bytes. In this test, we read all tiles stored in each bank, and each time we do this we consider it 1 transaction.
+          Therefore, the transaction size is the tile size multiplied by the number of tiles per bank, multiplied by the number of banks, and we repeat these reads
+          num_of_transactions times.
+
+      - q: What's the difference between the tile number sweep and the bank number sweep?
+        a: >
+          The tile number sweep varies how many tiles of data are read from each DRAM bank - starting from 1 and going up by multiples of 2.
+          The bank number sweep varies how many DRAM banks are used for the sharded buffer - starting from 1 and increasing by 1 each time up to the maximum available.
 
   dram_unary:
     name: DRAM Unary
     tags: [read, write, unicast, DRAM, single_core]
+    image: web_images/dram_unary.svg
     faq:
       - q: What does the DRAM Unary test measure?
         a: >
-          A single core reads from or writes to DRAM, isolating the baseline
-          DRAM bandwidth achievable by one core with no contention from others.
-      - q: Why is single-core DRAM bandwidth important?
+          This test measures the bandwidth and latency of a single Tensix core reading from and subsequently writing to a DRAM bank.
+      - q: What is the meaning of riscv_0 and riscv_1 in the DRAM unary test?
         a: >
-          It establishes the per-core DRAM bandwidth ceiling. Multi-core DRAM tests
-          can then be compared against this baseline to measure how much contention
-          reduces per-core throughput.
+          In this test, we use NoC0 (riscv_0) to route write requests to DRAM, and NoC1 (riscv_1) to route read requests from DRAM.
 
   interleaved:
     name: Interleaved
@@ -306,209 +345,93 @@ groups:
     faq:
       - q: What does the Interleaved test measure?
         a: >
-          A single core reads or writes using interleaved (page-striped) addressing
-          across DRAM or L1 banks. This measures the throughput of the interleaved
-          memory layout that TT-Metal uses for many tensor storage formats.
-      - q: What is the difference between the DRAM and L1 interleaved variants?
+          This test measures bandwidth and latency of a single Tensix core reading from and writing to an interleaved buffer,
+          either in DRAM or L1 memory.
+      - q: What is the difference between the Interleaved test variants?
         a: >
-          DRAM interleaved stripes pages across DRAM banks (off-chip memory), while
-          L1 interleaved stripes pages across other cores' L1 SRAM (on-chip). L1
-          interleaved typically has lower latency but is limited by L1 capacity.
+          Tensix cores run either a reader or writer kernel (or both if not specified) in this set of tests.
+          Thus, the read test has a Tensix core reading from the buffer, the write test has a Tensix core writing to the buffer,
+          and the combined Page Numbers test has cores doing both. The Interleaved tests are further divided into tests which use
+          a DRAM interleaved buffer and tests which use an L1 interleaved buffer.
+      - q: What is the meaning of riscv_0 and riscv_1 in the Interleaved test?
+        a: >
+          In this test we use NoC1 (riscv_1) to route read requests, and NoC0 (riscv_0) to route write requests.
 
   loopback:
     name: Loopback
     tags: [read, write, unicast, L1, single_core]
+    image: web_images/loopback.svg
     faq:
       - q: What does the Loopback test measure?
         a: >
-          A core reads from or writes to its own L1 through the NoC, routing
-          traffic out of and back into the same core. This measures the minimum
-          NoC round-trip latency and maximum single-core self-bandwidth.
-      - q: Why test loopback if the core could just access L1 directly?
-        a: >
-          Loopback isolates the NoC router and link overhead with zero hop distance.
-          Comparing loopback bandwidth against direct L1 access shows how much overhead
-          the NoC adds for the simplest possible transaction.
+          This test measures the bandwidth and latency of a single Tensix core reading from and writing to its own L1 memory through the NoC.
 
   noc_estimator_tests:
     name: Noc Estimator
     tags: [read, write, unicast, multicast, L1, DRAM, single_core, multi_core]
     faq:
-      - q: What does the Noc Estimator test measure?
+      - q: What are the Noc Estimator tests?
         a: >
-          These tests run real NoC traffic patterns and compare measured bandwidth
-          against the analytical NoC bandwidth estimator model. The goal is to
-          validate that the estimator's predictions match hardware behavior.
-      - q: How are the estimator tests organized?
-        a: >
-          They are organized by memory type (L1 vs DRAM) and traffic pattern
-          (one-to-one, one-from-one, all-to-all, row, column, etc.). Each test
-          runs the pattern on hardware and records both the measured bandwidth
-          and the estimator's prediction for comparison.
-      - q: What do "sharded" vs "interleaved" DRAM estimator tests mean?
-        a: >
-          Sharded tests use a contiguous DRAM region per core (each core owns a shard),
-          while interleaved tests stripe pages across all DRAM banks. The estimator
-          must handle both layouts correctly because they produce different NoC
-          traffic patterns and congestion profiles.
+          These tests represent a set of common data movement patterns which are used as benchmarks from which we can
+          generalize and interpolate to predict NoC performance. They comprehensively sweep over a multitude of parameters.
+          See the noc_estimator and noc_estimator_tests readmes for more details.
 
   pcie_read_bw:
     name: PCIe Read
     tags: [read, unicast, DRAM, single_core]
+    image: web_images/pcie_read.svg
     faq:
       - q: What does the PCIe Read test measure?
         a: >
-          It measures the bandwidth of reading data from the host CPU into the device
-          over the PCIe link. This is the device-to-host (D2H) read path and is
-          typically limited by PCIe gen and lane count.
-      - q: Why is PCIe read bandwidth usually lower than write bandwidth?
-        a: >
-          PCIe reads require a request-completion round trip (the device sends a read
-          request, the host responds with data), while writes are posted (fire-and-forget).
-          The round-trip latency limits outstanding read requests and reduces throughput.
+          It measures the bandwidth of reading from PCIe memory into a Tensix core's L1 memory.
 
   pcie_write_bw:
     name: PCIe Write
     tags: [write, unicast, DRAM, single_core]
+    image: web_images/pcie_write.svg
     faq:
       - q: What does the PCIe Write test measure?
         a: >
-          It measures the bandwidth of writing data from the host CPU to the device
-          over the PCIe link. This is the host-to-device (H2D) write path.
-      - q: How does PCIe write bandwidth relate to model loading performance?
-        a: >
-          Model weights and inputs are typically written from the host to device DRAM
-          via PCIe writes. Higher PCIe write bandwidth means faster model loading
-          and input data staging.
+          It measures the bandwidth of writing from a Tensix core's L1 memory to PCIe memory.
 
   transaction_id:
     name: Transaction ID
     tags: [read, write, unicast, L1, single_core]
+    image: web_images/transaction_id.svg
     faq:
       - q: What does the Transaction ID test measure?
         a: >
-          It measures the overhead and correctness of read-after-write and
-          write-after-read ordering using NoC transaction IDs. Transaction IDs
-          allow the hardware to enforce memory ordering without software barriers.
+          These tests measure the bandwidth performance of using transaction IDs to pipeline read/write requests
+          in an attempt to fully utilize the NoC bandwidth. On each transaction ID (trid) used, we issue a read/write
+          to one core, then the opposite to another core. This way, even if we haven't fully finished reading all data
+          from the first core, we can still begin writing some of that data to the second core, and vice versa.
       - q: What is the difference between the "one packet" and "stateful" variants?
         a: >
-          The "one packet" variant sends a single transaction per ordering point,
-          measuring pure ordering overhead. The "stateful" variant accumulates state
-          across transactions, testing whether the ordering mechanism works correctly
-          under sustained traffic with data dependencies.
-      - q: Why does memory ordering matter for NoC transactions?
+          The "one packet" variants limit their transaction sizes to 1 packet (16kB on BH, 8kB on WH) and use a specific one_packet API for reads/writes.
+          The "stateful" variants use APIs which save certain state registers which can be reused between transactions to increase performance
+          across large numbers of transactions.
+      - q: Why does the bandwidth appear to be higher than the architecture's theoretical maximum for Write After Read?
         a: >
-          Without ordering guarantees, a read issued after a write might return stale
-          data because the write hasn't reached its destination yet. Transaction IDs
-          let the programmer specify which prior writes must complete before a
-          subsequent read is allowed to execute.
+          This test appears to yield between 1.5x and 2x the theoretical bandwidth. This is because the NIU
+          has an input and output port. We have a core that is sending and receiving data at the same time,
+          with packets circulating around the torus. This does not happen in Read After Write tests because
+          the read requests get stuck behind the larger write requests.
+      - q: What does number of transactions mean in the Transaction ID tests?
+        a: >
+          This test sends out 1 read and 1 write per transaction ID (trid) used, for a total of 2 transactions per trid.
+          It sweeps over number of trids used, starting at 1 and increasing by multiples of 2. The total number of transactions is therefore 2 * number of trids.
 
 tags:
-  read:
-    faq:
-      - q: What is a NoC read (noc_async_read)?
-        a: >
-          A NoC read is a pull operation — the initiating core sends a read request
-          to a remote location, and the data is returned via the NoC to the requester's
-          L1. The core must issue noc_async_read_barrier to wait for the data to arrive.
-      - q: How does read latency differ from write latency?
-        a: >
-          Reads require a round trip (request out, data back), so they inherently have
-          higher latency than writes, which are posted (one-way). For bandwidth-bound
-          workloads this matters less, but for latency-sensitive operations reads are
-          typically the slower path.
-
-  write:
-    faq:
-      - q: What is a NoC write (noc_async_write)?
-        a: >
-          A NoC write is a push operation — the initiating core sends data from its L1
-          to a remote destination. Writes are "posted," meaning the sender doesn't wait
-          for an acknowledgment. The sender must issue noc_async_write_barrier to ensure
-          all writes have left the local output buffer.
-      - q: When should I use writes vs reads for data movement?
-        a: >
-          Use writes when the data source knows where data should go (producer-push).
-          Use reads when the data consumer knows what it needs (consumer-pull). Writes
-          have lower latency per transaction but the sender must know all destinations.
-
-  unicast:
-    faq:
-      - q: What is a unicast NoC transaction?
-        a: >
-          A unicast transaction targets a single destination — one specific (x, y) core
-          coordinate. This is the most common transaction type and is used for
-          point-to-point data transfers between cores or between cores and DRAM.
-      - q: How does unicast bandwidth scale with hop count?
-        a: >
-          For a single transaction, bandwidth is roughly constant regardless of hop
-          count because the NoC is pipelined. However, latency increases with hops,
-          which reduces throughput when the sender must wait for completions (e.g. reads)
-          before issuing the next transaction.
-
-  multicast:
-    faq:
-      - q: What is a multicast NoC transaction?
-        a: >
-          A multicast transaction delivers the same data to a rectangular grid of
-          destination cores using a single NoC packet. The hardware replicates the
-          packet at each router, making it much more efficient than sending individual
-          unicast packets to each destination.
-      - q: When is multicast used in real workloads?
-        a: >
-          Multicast is used whenever one core needs to distribute the same data to
-          many cores — for example, broadcasting input activations in matmul, or
-          distributing weight tiles to a row or column of compute cores.
-
-  L1:
-    faq:
-      - q: What is L1 memory in the context of data movement?
-        a: >
-          L1 is the local SRAM on each Tensix core (~1.5 MB on Wormhole, ~1.5 MB on
-          Blackhole). NoC transactions can read from or write to any core's L1,
-          making the aggregate L1 across all cores a large distributed scratchpad.
-      - q: What are the advantages of L1 over DRAM for data movement?
-        a: >
-          L1 has much lower access latency (no DRAM controller overhead) and higher
-          bandwidth per bank. However, total L1 capacity is limited, so large tensors
-          must be stored in DRAM and streamed through L1 in tiles.
-
-  DRAM:
-    faq:
-      - q: How does DRAM access work through the NoC?
-        a: >
-          DRAM banks are connected to the NoC via DRAM controller cores at fixed
-          positions on the chip. A Tensix core accesses DRAM by sending NoC
-          read/write transactions to those controller coordinates. The DRAM controller
-          translates the NoC request into DDR commands.
-      - q: What is the difference between sharded and interleaved DRAM access?
-        a: >
-          Sharded access assigns each core a contiguous region of DRAM, minimizing
-          cross-traffic but potentially causing bank hotspots. Interleaved access
-          stripes pages round-robin across all banks, spreading load evenly but
-          requiring each core to access multiple DRAM controllers.
-
-  single_core:
-    faq:
-      - q: Why test with a single core?
-        a: >
-          Single-core tests isolate the baseline NoC and memory performance without
-          contention. They establish the per-core bandwidth and latency ceiling that
-          multi-core tests can then be compared against to quantify contention effects.
-
   multi_core:
     faq:
-      - q: Why test with multiple cores?
+      - q: What are multi core tests?
         a: >
-          Multi-core tests reveal how bandwidth scales and how contention affects
-          performance when many cores access the NoC simultaneously. Real workloads
-          always use many cores, so these tests reflect production conditions.
-      - q: How should I compare single-core vs multi-core results?
-        a: >
-          Divide the multi-core aggregate bandwidth by the number of cores to get
-          per-core bandwidth, then compare against the single-core baseline. The
-          ratio tells you the scaling efficiency — 1.0 means perfect linear scaling,
-          lower values indicate contention.
+          Multi-core tests run multiple kernels on different Tensix cores simultaneously.
+          Each kernel is responsible for its own data movement, and the reported bandwidth
+          is the median of all cores. Some tests will instead report combined bandwidth,
+          which is the total number of bytes transferred by all cores divided by the total
+          number of cycles over the entire test and represents the aggregate performance of
+          the system.
 
   virtual_channels:
     faq:
@@ -524,18 +447,3 @@ tags:
           useful when you need to separate latency-critical control traffic from
           bulk data traffic, or when routing constraints require specific VC
           assignments to avoid deadlock.
-
-  atomics:
-    faq:
-      - q: What are NoC atomic operations?
-        a: >
-          Atomic operations (e.g. semaphore increment) perform a read-modify-write
-          on a remote L1 address in a single NoC transaction, without the remote core
-          needing to participate. They are used for synchronization — signaling that
-          a data transfer is complete or that a buffer is available.
-      - q: How do atomics affect data movement performance?
-        a: >
-          Atomics are small (typically 4 bytes) but latency-sensitive because the
-          initiator must wait for the operation to complete at the remote core. In
-          data movement pipelines, atomic semaphore overhead can become the bottleneck
-          if tiles are very small or if many synchronization points are required.
