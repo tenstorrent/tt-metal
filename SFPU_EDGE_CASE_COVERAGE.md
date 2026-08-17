@@ -2,13 +2,103 @@
 
 **Issue:** [tenstorrent/tt-metal#49739 — [LLK] SFPU testing edge cases](https://github.com/tenstorrent/tt-metal/issues/49739)
 **Plan for what is left:** [SFPU_EDGE_CASE_EXPANSION_PLAN.md](SFPU_EDGE_CASE_EXPANSION_PLAN.md)
-**Audited:** 2026-07-23 · **Regenerated from code:** 2026-08-13 (revision 15)
+**Audited:** 2026-07-23 · **Regenerated from code:** 2026-08-17 (revision 16), against
+`ldjurovic/sfpu_edge_cases_phase_3` @ `26c61ff80e9`
 **Wormhole measurement:** [WORMHOLE_MEASUREMENT_RESULTS.md](WORMHOLE_MEASUREMENT_RESULTS.md)
-**Scope:** All SFPU LLK kernels in `tt-metal/tt_metal/tt-llk`, audited through the tt-llk Python test
-infra (`tests/python_tests/`). Wormhole B0 and Blackhole share essentially the same SFPU kernel set
-(BH adds only `topk_xl`), so this audit treats them together and notes arch-specific gaps inline.
-Quasar has its own suite under `quasar/` and is **out of scope** — an op driven only from `quasar/`
-counts as untested here.
+**Scope:** every SFPU op reachable from the tt-llk Python test infra
+(`tt_metal/tt-llk/tests/python_tests/`), which is where the suites, the registries and all the gates
+live. Wormhole B0 and Blackhole share essentially the same SFPU op set (BH adds only `topk_xl`), so this
+audit treats them together and notes arch-specific gaps inline. Quasar has its own suite under
+`quasar/` and is **out of scope** — an op driven only from `quasar/` counts as untested here.
+
+> **The op kernels are not in `tt-llk`, and revisions 6–15 said they were.** `helpers/test_config.py`
+> compiles each test with `-I../../hw/ckernels/<arch>/metal/llk_api/llk_sfpu`, and
+> `helpers/include/sfpu_operations.h` — the header that maps a `MathOperation` onto a kernel call —
+> resolves 86 of its includes there. So the arithmetic under test lives in
+> **`tt_metal/hw/ckernels/<arch>/metal/llk_api/llk_sfpu`** (101 kernel headers per arch), while
+> `tt_metal/tt-llk` supplies the LLK plumbing those kernels are driven through
+> (`llk_math_eltwise_{unary,binary,ternary}_sfpu.h`, `llk_math_welfords_sfpu.h`) plus SFPU kernels and
+> helpers of its own — 31 headers in `common/inc/sfpu` on both arches, plus 1 Wormhole and 9 Blackhole
+> `experimental/` ones (`topk`, `topk_xl`, `where`, `welfords`, `ema`, `rsqrt_compat`, `cdf`, `log`,
+> `tanh`, the MoE-gate and `softmax_k` kernels, …). Both trees are in scope here and always were in
+> practice — §2.5's cat-F list has always been mostly `llk_sfpu` kernels — but the old one-line scope
+> statement sent anyone re-auditing it to the wrong directory.
+
+> ### Revision 16 — regenerated against the code branch; the tables held, the prose had drifted
+>
+> Revisions 6–15 were written against `ldjurovic/sfpu_edge_cases_phase_3` but this document lives on a
+> different branch, and the two moved independently. Everything below was re-derived from
+> `26c61ff80e9` (2026-08-14) rather than carried forward, and re-measured on a Wormhole n300 where
+> hardware was needed.
+>
+> **§4 came through clean, and that is the main result.** All 182 `MathOperation` rows, all 97 cat-B
+> markers, every registered singularity and knee, §6's 7-of-50 safe matrix, §2.3's `SHIFT_EDGE_AMOUNTS`,
+> §2.6's 12-narrowed/5-full-range split and §4.6's operand-C probe values were re-derived from the code
+> and match exactly. **The per-op coverage claims in this document are sound.**
+>
+> **The errors were all in the prose summaries, and in every case a table in this same document already
+> contradicted them.** That is the pattern worth acting on: §4 is generated, §1–§3 were hand-maintained,
+> and only the hand-maintained half rotted.
+>
+> - **§2.8's CI finding is retracted, not updated.** Revision 10's headline — "CI runs none of this" —
+>   was wrong on both halves, and `tests/pipeline_reorg/llk_e2e_tests.yaml` now carries the retraction
+>   above the very groups it justified. `llk-e2e` passes `not perf and not quasar and not accuracy`, so
+>   `nightly` is *not* excluded, and no group passes `--coverage`. The broad unary profile was running
+>   nightly on both arches the whole time; the five `llk_e2e_*_nocov` groups per arch are a duplicate
+>   rather than new coverage.
+> - **§5.10's fix has landed — in a different shape from the one §5.10 proposed.** The branch gained
+>   `GENERATED_NAN_SIGN_OPS`, `nan_survives_to_l1()`, `nan_sign_is_unspecified()` and
+>   `specials_after_nan_sign_gate()`, which switch **cat B off** on Wormhole for the 11 ops that
+>   *generate* a NaN whose sign the ISA leaves unspecified. The proposed fix — a golden that accepts
+>   either infinity — is still unwritten and still worth writing: the gate **withdraws an unsound
+>   assertion rather than restoring a sound one**, so it is a coverage loss to recover, not a closed item.
+> - **Cat F is 14 kernels, not 11** (§2.5). `generalized_moe_gate_topk` is covered and comes off — the
+>   revision-15 audit retired `generic_moe_gate_topk`, its near-namesake, and left this one on.
+>   `alt_complex_rotate90`, `bitwise`, `sparse_k_filter` and `zero_pad` were never on the list.
+> - **The scope statement pointed at the wrong tree.** The op kernels compile from
+>   `tt_metal/hw/ckernels/<arch>/metal/llk_api/llk_sfpu`, not from `tt_metal/tt-llk`. See **Scope** above.
+> - **Five stale counts**, each contradicted by a table here: **30** unary ops outside cat B, not 37, and
+>   the split is 23/2/5 rather than 31/6 (§2.1); **12 ops over 70** divergent cells, not "12 over 46"
+>   (§1) or "ten over 42" (§5); `SPECIALS_READY_OPS` is **72**, not 65 (§7); `test_sfpu_domains.py` is
+>   **111** tests, not 107 (§1, §3, §7); 17 of §4.2's remaining 20 are 🟡 and 3 are ⬜, not all 20 🟡.
+>
+> **Wormhole n300, re-measured 2026-08-17 at `26c61ff80e9`.** The revision-15 failures are gone, because
+> the gate above stops sending the probe that produced them:
+>
+> | Suite | Revision 15 (2026-08-13) | Revision 16 (2026-08-17) |
+> |---|---|---|
+> | `test_sfpu_unary.py` | 6034 p · 533 s · **49 failed** · 30 xf · **6 XP** | **6044 p · 573 s · 0 failed · 23 xf · 6 XP** |
+> | `test_sfpu_binary.py` | 865 p · 392 s · 33 xf · **16 XP** · 0 failed | 33 xf · **16 XP** · 0 failed — both confirmed |
+> | `test_sfpu_ternary.py` | 39 p · 25 s · 0 failed | 39 p · 25 s · 0 failed — unchanged |
+> | `test_sfpu_binop_scalar.py` | 67 p · 72 s · **1 failed** | 67 p · **73 s** · **0 failed** |
+>
+> **All 50 failures are gone and not one of them was fixed** — the gate stops sending the probe.
+> `ScalarRsub`'s failure became a *skip*; the unary edge sweep turned 49 failures into 16 passes and 40
+> skips. That is what withdrawing an unsound assertion looks like from the outside, and is why §5.10 is
+> a coverage loss to recover rather than a closed item.
+>
+> **Both surviving XPASS findings reproduce exactly**: §5.11's 6 (approximate exp) and §5.12's 16
+> (signed zero). Neither gate asserts anything on either arch, and both are still open.
+>
+> The 23 xfails are exactly what the code predicts — 14 static + `Reciprocal` 6 + `Sqrt` 2 + `Rsqrt` 1 —
+> so this run agrees with the tables cell for cell, not just in total. See §1 for the derivation and for
+> why revision 15's 30 was measured against a different table.
+>
+> **Two caveats on this re-measurement, both worth knowing before trusting a number here:**
+>
+> - **`test_sfpu_binary_bcast` at `Bfp8_b` wedged the card.** A full `test_sfpu_binary.py` run produced
+>   601 `TENSIX TIMED OUT` failures, all in that one test, after which every later variant failed too.
+>   The card recovered without a reset and the suite re-run with `-k "not bcast"` was clean, which is why
+>   the binary row above reports only the edge-relevant counts. **Seen once and not yet reproduced** — do
+>   not file it on this evidence, but do not assume the binary suite is green on Wormhole either.
+> - **Blackhole was not re-measured** — no Blackhole card on this host. Its table below is from
+>   2026-08-13 and predates `4c80e488c3e` and `f6d15578d73`. Neither should move it (the NaN-sign gate is
+>   explicitly Wormhole-only, and the other is a `golden_generators.py` vectorisation), but treat that row
+>   as **unverified at HEAD** rather than as current.
+>
+> `WORMHOLE_MEASUREMENT_RESULTS.md` is the log of the 2026-08-13 run and has deliberately **not** been
+> rewritten; its numbers are pre-gate by construction. `SFPU_EDGE_CASE_EXPANSION_PLAN.md` §4 (the NaN
+> sign), §5 ("the 11 kernels") and §6 (the nocov timeouts) all need the corrections above applied.
 
 > ### Revision 15 — the suite has run on Wormhole, and one family failed there
 >
@@ -214,20 +304,23 @@ All figures re-derived from the tree on 2026-08-12 (see §7 for the commands).
 | `_OP_EDGE_POINTS` entries | 43, plus `_OP_OPERAND_EDGE_POINTS` for `lerp`'s operand-C knees |
 | `SPECIALS_READY_OPS` (cat B opt-in) | **67 of 97 unary**, plus all **5 scalar binops**; all 30 unary still outside wait on §5.6's two questions or on a harness — none is work this suite can simply do |
 | `(format, dest_acc)` triples that can carry specials | 7 cells of 50, **re-confirmed on Wormhole** (250 variants, 85 failing); **3 of those 7 reachable and confirmed on Blackhole**. Carrying a `-0.0` is a strictly narrower gate — see §5.2 |
-| Ops diverging from their golden at a driven edge | 12 over 46 cells, of which **16 cells now arch-gated to Wormhole**. Down from 13 over 52: `Signbit`'s 6 were a stimulus limitation and are deleted, not xfailed (§5.2) |
-| Host-side guards over the gates and metadata | 107 tests (`test_sfpu_domains.py`) |
+| Ops diverging from their golden at a driven edge | **12 ops over 70 cells** — 7 unary over 24 (`Sign` 2, `Heaviside` 2, `RsqrtCompat` 8, `Erfinv` 2, `Reciprocal` 6, `Sqrt` 2, `Rsqrt` 2) and 5 binary over 46. **16 of the binary cells are arch-gated to Wormhole.** Revisions 12–15 recorded "12 over 46", which was the binary cell count used as the total |
+| Host-side guards over the gates and metadata | **111** tests (`test_sfpu_domains.py`) |
 
 **Category status:** A ✅ closed for every op that has a boundary, unary **and ternary** · B 🟡 live
 for 67 of the 97 unary ops plus all 5 scalar binops; the 30 still outside all wait on §5.6's two
 questions or on a harness · C ✅ closed for the 5 ops whose kernels claim the
 full int32 range · D ✅ closed for all 43 knees, plus `lerp`'s weight boundaries · E ✅ closed, unary
-and binary · F ⬜ 11 kernels untouched.
+and binary · F ⬜ **14** kernels untouched (§2.5 — re-derived in revision 16; was 11).
 
 **So five of the six categories are closed or bounded**, and what is left is one large build (F) and
 two questions someone else has to answer.
 
-**Blackhole status (p300a, 2026-08-13).** All four suites pass, through the two-phase
-compile-producer / compile-consumer flow that CI uses:
+**Blackhole status (p300a, 2026-08-13) — ⚠️ unverified at HEAD.** All four suites passed, through the
+two-phase compile-producer / compile-consumer flow that CI uses. This was measured two commits before
+the current tip and has not been re-run (no Blackhole card on the audit host); neither intervening
+commit should move it, since the NaN-sign gate is Wormhole-only and the other is a golden-generator
+vectorisation.
 
 | Suite | Result |
 |---|---|
@@ -236,19 +329,40 @@ compile-producer / compile-consumer flow that CI uses:
 | `test_sfpu_ternary.py` | 39 passed · 25 skipped · 0 failed |
 | `test_sfpu_binop_scalar.py` | 58 passed · 62 skipped · 0 failed |
 
-**Wormhole status (n300, 2026-08-13)** — the first run of these suites on Wormhole, same flow. Not green,
-and the three differences are findings rather than noise:
+**Wormhole status (n300) — re-measured 2026-08-17 at `26c61ff80e9`.** The 2026-08-13 column is the
+revision-15 run, kept because the difference between the two columns *is* §5.10's gate landing:
 
-| Suite | Result |
-|---|---|
-| `test_sfpu_unary.py` | 6034 passed · 533 skipped · **49 failed** (§5.10) · 30 xfailed · **6 xpassed** (§5.11) |
-| `test_sfpu_binary.py` | 865 passed · 392 skipped · 33 xfailed · **16 xpassed** (§5.12) · 0 failed |
-| `test_sfpu_ternary.py` | 39 passed · 25 skipped · 0 failed |
-| `test_sfpu_binop_scalar.py` | 67 passed · 72 skipped · **1 failed** — `ScalarRsub`, and it is §5.10's cause in a second suite |
+| Suite | 2026-08-13 (revision 15) | 2026-08-17 (revision 16) |
+|---|---|---|
+| `test_sfpu_unary.py` | 6034 passed · 533 skipped · **49 failed** (§5.10) · 30 xfailed · **6 xpassed** (§5.11) | **6044 passed · 573 skipped · 0 failed · 23 xfailed · 6 xpassed** |
+| `test_sfpu_binary.py` | 865 passed · 392 skipped · 33 xfailed · **16 xpassed** (§5.12) · 0 failed | 33 xfailed · **16 xpassed** · 0 failed — see the caveat below |
+| `test_sfpu_ternary.py` | 39 passed · 25 skipped · 0 failed | 39 passed · 25 skipped · 0 failed |
+| `test_sfpu_binop_scalar.py` | 67 passed · 72 skipped · **1 failed** — `ScalarRsub` | 67 passed · **73 skipped · 0 failed** |
 
-Wormhole skips 533 unary variants where Blackhole skips 1600, because `_skip_bh_unless_fp32` collapses the
-whole `dest_acc=No` row there — so Wormhole exercises more of the format matrix, which is part of why this
-run found anything. Full record: [WORMHOLE_MEASUREMENT_RESULTS.md](WORMHOLE_MEASUREMENT_RESULTS.md).
+**All 49 unary failures and the 1 scalar failure are gone, and none of them was fixed** — the gate in
+§5.10 stops sending the probe. In the edge sweep the 752 selected variants went `475 passed · 198
+skipped · 49 failed · 30 xfailed` → `491 passed · 238 skipped · 0 failed · 23 xfailed`: 16 more passes,
+40 more skips. That is the shape of an assertion being withdrawn, not of a bug being fixed.
+
+**The xfail count is exactly what the code predicts, which is worth checking rather than assuming.**
+23 = 14 static (`Sign` 2, `Heaviside` 2, `RsqrtCompat` 8, `Erfinv` 2) + `Reciprocal` 6 + `Sqrt` 2 +
+`Rsqrt` 1 — `Rsqrt`'s second cell, `Float32->Float16_b` at `dest_acc=Yes`, is the single entry the
+NaN-sign gate suppresses, via the `_CAT_B_DERIVED_DIVERGENCES` guard added in `26c61ff80e9` so that a
+gated-off probe cannot leave a non-strict xfail that can never fire. The revision-15 figure of 30 was
+24 + `Signbit`'s 6, which revision 14 deleted *concurrently with* that measurement — so the two runs
+were never against the same table.
+
+**`test_sfpu_binary.py` was not run whole.** A full run wedged the card: 601 `TENSIX TIMED OUT`
+failures, every one in `test_sfpu_binary_bcast` at `Bfp8_b`, with everything after it failing too. The
+card recovered without a reset and `-k "not bcast"` was clean (313 passed · 128 skipped · 33 xfailed ·
+16 xpassed · 0 failed), which is where the edge-relevant counts above come from. **Seen once, not
+reproduced** — do not file it on this evidence, and do not call the binary suite green on Wormhole
+either.
+
+Wormhole skips fewer unary variants than Blackhole's 1601, because `_skip_bh_unless_fp32` collapses the
+whole `dest_acc=No` row there — so Wormhole exercises more of the format matrix, which is part of why
+the first run found anything. Full record of the 2026-08-13 run, unedited:
+[WORMHOLE_MEASUREMENT_RESULTS.md](WORMHOLE_MEASUREMENT_RESULTS.md).
 
 The binary suite's **0 xpassed is the point**: before the signed-zero class was arch-gated it reported
 16, and those 16 cells are now 16 ordinary passes — i.e. assertions rather than tolerated divergences.
@@ -264,10 +378,12 @@ sequences it.
 
 ### 2.1 Cat B — IEEE specials for the other 30 unary ops
 
-**No longer zero.** Nine ops — `Identity`, `Abs`, `Exp`, `Sin`, `Cos`, and now `Neg`, `Reciprocal`,
-`Sqrt` and `Rsqrt` — inject `±inf`, `NaN` and signed zeros through `SPECIALS_READY_OPS` and are green
-on Blackhole across every specials-safe triple the sweep reaches. The mechanism is proven end to end
-on silicon; what remains is per-op work.
+**No longer zero — 67 of the 97 unary ops are enrolled**, plus all 5 scalar binops, so
+`SPECIALS_READY_OPS` has 72 entries. They inject `±inf`, `NaN` and signed zeros across every
+specials-safe triple the sweep reaches. The mechanism is proven end to end on silicon: the first nine
+(`Identity`, `Abs`, `Exp`, `Sin`, `Cos`, `Neg`, `Reciprocal`, `Sqrt`, `Rsqrt`) were verified on
+Blackhole in revisions 7–8, and the tranche of 48 that followed in revision 9 needed no golden change
+at all. What remains is the 30 below, and none of it is per-op work this suite can simply do.
 
 **The second tranche is in, and it was one framework defect wearing four disguises.** Every divergence
 that had been booked against those goldens — `Neg(NaN) → +inf` chief among them — traced to torch's
@@ -288,10 +404,15 @@ delivery rules rather than listed (`_cat_b_divergences` in `test_sfpu_unary.py`)
 `Log` is the only op left out of the tranche, and not for a golden reason: it saturates its input
 (§5.5), which no ISA text prescribes, so §5.6's question has to be answered before it can be enrolled.
 
-**37 unary ops remain outside**, and 31 of them are held there by the two kernel behaviours in §5.8 and
-§5.9 rather than by anything op-specific — so the remaining cat-B work is two answers, not 31
-investigations. The other 6 are the three `TopK*` stages with no golden entry (§2.5), `ReluMin`
-(skipped on tt-llk#1120), `RsqrtCompat` (already fully xfailed), and `I1`.
+**30 unary ops remain outside**, and 25 of them are held there by the two kernel behaviours in §5.8 and
+§5.9 rather than by anything op-specific — so the remaining cat-B work is two answers, not 25
+investigations. The split is exact and re-derivable (`sfpu_unary_ops() - SPECIALS_READY_OPS`): **23 on
+§5.9**, **2 on §5.8** (`Sign`, `Heaviside`), and **5 others** — the three `TopK*` stages with no golden
+entry (§2.5), `ReluMin` (skipped on tt-llk#1120) and `RsqrtCompat` (already fully xfailed).
+
+> Revisions 9–15 said "37 outside, 31 held, other 6" here and counted `I1` among the others. All four
+> figures were stale: the code says 30 / 25 / 5, and `I1` is one of §5.9's 23 — which is where §4.2's
+> row has always put it. §1's table and §4's tables were already right; only this paragraph was not.
 
 `I1` is worth reading closely, because it is the case that keeps the two gates honest: its golden **was**
 wrong and has been fixed, but it stays out of `SPECIALS_READY_OPS` because its *kernel* saturates to
@@ -379,14 +500,41 @@ records the reason — the int32-unary functional sweep is blocked by the fast-t
 tt-llk#495), plus `TopKLocalSort`, `TopKMerge`, `TopKRebuild` (whole-op `topk` is tested, the three
 stages are not).
 
-### 2.5 Cat F — kernels with no `MathOperation` entry (11)
+### 2.5 Cat F — kernels with no `MathOperation` entry (14)
 
-A header exists; nothing in the Python infra can reach them. Confirmed still absent:
-`welfords`, `dropout`, `quant`, `cumsum`, `reshuffle_rows`, `int_sum`, `tiled_prod`,
-`copy_dest_values`, `generalized_moe_gate_topk`, `max_pool_indices`, `rand`.
+A kernel header exists and implements an op; nothing in the Python infra can reach it, because there is
+no `MathOperation` member to dispatch. **Re-derived from the kernel trees rather than carried forward,
+and the list both grew and shrank.**
 
-`generic_moe_gate_topk` has come **off** this list — `test_sfpu_generic_moe_gate_topk.py` and
-`sources/sfpu_generic_moe_gate_topk_test.cpp` both exist.
+In `tt_metal/hw/ckernels/<arch>/metal/llk_api/llk_sfpu` — 11:
+`dropout`, `quant`, `cumsum`, `reshuffle_rows`, `int_sum`, `tiled_prod`, `copy_dest_values`,
+`max_pool_indices`, `rand`, **`alt_complex_rotate90`**, **`bitwise`** (the unary
+bitwise-and/or/xor-with-a-scalar kernel, distinct from the `binary_bitwise` and `bitwise_not` that
+`SfpuBitwiseAnd/Or/Xor` and `BitwiseNot` reach).
+
+In `tt_metal/tt-llk/tt_llk_<arch>/common/inc/sfpu` — 3:
+`welfords` (via `llk_lib/llk_math_welfords_sfpu.h`), and two Blackhole `experimental/` kernels,
+**`sparse_k_filter`** and **`zero_pad`**.
+
+Two corrections to the revision 6–15 list, both found by re-deriving it:
+
+- **`generalized_moe_gate_topk` has come off**, for the same reason `generic_moe_gate_topk` did in
+  revision 15: `sources/generalized_moe_gate_test.cpp` and `test_generalized_moe_gate.py` both exist and
+  drive `experimental/ckernel_sfpu_generalized_moe_gate_topk_single_face.h`. The two names are one
+  character apart and the earlier audit retired the wrong one.
+- **Four kernels were never on the list.** `alt_complex_rotate90`, `bitwise`, `sparse_k_filter` and
+  `zero_pad` have no `MathOperation` entry and no test source that reaches them.
+
+`quant` is on the list for a different reason from the rest: it *is* driven, but only from
+`sfpu_operations_quasar.h` / `test_eltwise_binary_sfpu_quasar.py`, and Quasar is out of scope — see
+**Scope** at the top.
+
+Not cat F, and worth recording so they are not re-filed: `conversions`, `piecewise_rational`,
+`binary_pow`, `cdf`, `polyval`, `converter`, `load_config`, `is_fp16_zero` are **helpers** pulled in
+transitively by kernels that are dispatched, not ops in their own right. `ema` and `reduce` have
+dedicated tests (`test_sfpu_ema.py`, `test_sfpu_reduce.py`). `tt-llk`'s own `ckernel_sfpu_mul_int.h` is
+dead rather than untested — `sfpu_operations.h` includes Metal's `llk_sfpu/ckernel_sfpu_mul_int32.h`
+instead.
 
 ### 2.6 Integer edges that remain out of scope *by kernel design*
 
@@ -431,16 +579,25 @@ mechanism currently prevents this rather than enabling it. Untouched since the o
   reasons depend on the answer.
 - **`WITH_COVERAGE` builds** and **Bfp4_b output formats** (`Float16 -> Bfp4_b` fails 100% at
   `dest_acc=No` on Wormhole and is unexplained; every neighbouring cell is clean).
-- **~~CI runs none of this~~ ✅ closed.** The broad unary profile used to run in no automated job on
-  any arch — every LLK pytest job either excluded `nightly` or ran `--coverage`, under which the broad
-  profile is skipped wholesale, so every gain recorded in this document was unguarded. `llk-e2e` now
-  carries non-coverage companion groups (`llk_e2e_*_nocov`, `split_group` 6–10) that run the same
-  tests without instrumentation. Their timeouts were copied from the instrumented groups and want one
-  nightly's data to tune — plan §6.
-- **Whether the coverage skip is justified at all.** The `BROAD_SWEEP_OPS` skip cited tt-llk#1435,
-  which is about test *ordering*; its one mention of coverage is an observation of the skip's own
-  effect. The citation was circular and is gone, but no recorded rationale replaced it — the exclusion
-  is presumably cost under instrumentation, and nobody has written that down.
+- **~~CI runs none of this~~ — ⚠️ retracted. Revision 10's headline finding was wrong, and the code now
+  says so.** The claim was that every LLK pytest job either excluded the `nightly` marker or ran
+  `--coverage` (under which `_skip_coverage_unsupported` drops the broad profile wholesale), so the
+  broad unary sweep ran in no automated job on any arch. **Both halves fail on inspection:**
+  `.github/workflows/llk-e2e.yaml` passes `pytest-markers: 'not perf and not quasar and not accuracy'`
+  — `nightly` is *not* excluded — and no group in `tests/pipeline_reorg/llk_e2e_tests.yaml` passes
+  `--coverage` on either pytest leg (all four carry `coverage: false`, and `inputs.coverage` gates
+  nothing but the artifact upload). `WITH_COVERAGE` is set solely by that CLI option, so
+  `_skip_coverage_unsupported` was already a no-op in this workflow and **the broad profile already ran
+  nightly on both arches.** The gains recorded in this document were guarded all along.
+  The five `llk_e2e_*_nocov` groups per arch (`split_group` 6–10) added on that premise are therefore a
+  **duplicate rather than new coverage**. They are still in the file, under discussion, with the
+  retraction written at the top of the block that defines them — plan §6.
+- **Whether the `BROAD_SWEEP_OPS` coverage skip is justified at all.** Still open, and now the *only*
+  live question in this area. It cited tt-llk#1435, which is about test *ordering* — an accuracy issue
+  possibly caused by BIT11 leaking between tests — and its one mention of coverage is an observation of
+  the skip's own effect. The circular citation is gone and nothing replaced it. The suggestion on review
+  is to re-run without the skip and either delete it or debug what scrambles the values, rather than
+  route around it.
 
 ---
 
@@ -450,7 +607,7 @@ mechanism currently prevents this rather than enabling it. Untouched since the o
 |---|---|---|
 | 1 | Unary float sweep is positive-only (`uniform(0.1, 1.1)`, no `spec_A`) | ✅ **fixed.** The sweep defaults `spec_A` to the op's registered signed domain, bounded by the narrowest format in the pipeline (`for_op_pipeline` + `exclude_undefined`), and a missing registry entry is a hard `KeyError`. 31 ops gained their `x<0` branch |
 | 2 | Binary / ternary / scalar suites never import `sfpu_domains.py` | 🟡 **closed for binary and for the ternary pole.** 11 of 43 binary ops have a registered domain; the other 32 keep the format default. Ternary now reaches the registry for the operand that matters — `OperandSpecs.spec_C` and `Operand.C` exist, and `addcdiv` / `snake_beta` carry a registered pole (§4.6). Still open: no ternary op has a registered *domain*, and scalar has the plumbing but nothing to read |
-| 3 | IEEE specials injected for exactly one op family | 🟡 **enabled for 6 families of op, gated per op.** No longer "measured and switched off": `SPECIALS_READY_OPS` holds `Identity`, `Abs`, `Exp`, `Sin`, `Cos` alongside the five predicates, all green on Blackhole. The safe `(format, dest_acc)` surface is data (§6) pinned by 107 host-side tests. The remaining 87 ops are gated on their *goldens*, not on the pipeline — §2.1 |
+| 3 | IEEE specials injected for exactly one op family | 🟡 **enabled for 67 of the 97 unary ops plus all 5 scalar binops, gated per op.** No longer "measured and switched off": `SPECIALS_READY_OPS` has 72 entries, and the five isinf/isnan predicates inject specials besides. The safe `(format, dest_acc)` surface is data (§6) pinned by **111** host-side tests. The **30** unary ops still outside are gated on their *goldens*, not on the pipeline — §2.1. (Revisions 7–15 said "6 families … the remaining 87 ops", which was the revision-7 figure) |
 | 4 | Integer sign/extreme edges structurally excluded (`_get_integer_bounds` returns `min+1`) | 🟡 **closed where the kernels allow it.** Extremes go through a raw `src_A_override`; `test_sfpu_binary_int_extremes` drives `{INT32_MIN+1, -1, 0, 1, INT32_MAX}²` over the 5 ops that claim the full range. The other 12 are out of scope by kernel design — §2.6 |
 
 **None of #2–#4 reaches a plain "fixed", and for the same reason each time:** the mechanism was the
@@ -536,7 +693,9 @@ registered domain at all, so neither sweep reaches it and coverage depends on a 
 
 **27 of the 47 now run**, which is the largest single change in this revision: an op here has no knee
 and no pole, so before cat B reached it the edge sweep skipped it outright and its only coverage was
-the random sweep. The remaining 20 are all 🟡 — held by §5.8 or §5.9, not by anything op-specific.
+the random sweep. Of the remaining 20, **17 are 🟡 §5.9** — held by one kernel behaviour, not by
+anything op-specific — and **3 are ⬜**, the `TopK*` stages, which are perf-only and have no golden at
+all (§2.4). Revisions 9–15 said all 20 were 🟡; the three `TopK*` rows below always said otherwise.
 
 | Op | Kernel | Random sweep | Registered domain | Cat B | Edge sweep | Other test |
 |---|---|---|---|---|---|---|
@@ -606,7 +765,7 @@ unreachable, or genuinely uncovered — the last column says which.
 | `Isposinf` | `isposinf` | — | `unary` | ✅ cat B — as `Isinf` |
 | `LeftShift` | `left_shift` | — | `unary` | ✅ cat E — full shift axis via `SFPU_SHIFT_AMOUNT`, in range and out (§2.3) |
 | `LogicalNot` | `logical_not_unary` | `0, -0` | `unary` | ✅ cat D — exact threshold forced by `test_eltwise_unary_sfpu_threshold`, which names it `LogicalNotUnary` |
-| `Relu` | `relu` | — | `plot` | ➖ unreachable by design — applied by the packer (`STACC_RELU`), not a `SfpuType`. The only reference is a plotting script |
+| `Relu` | `relu` | — | `plot` | ➖ unreachable by design — applied by the packer (`STACC_RELU`, `cpack_common.h`), and `sfpu_operations.h` has no `SfpuType::relu` branch. On WH/BH the only reference is a plotting script; the Quasar suite does drive it |
 | `RightShift` | `right_shift` | — | `unary` | ✅ cat E — as `LeftShift` |
 | `SfpuSwiGLU` | `swiglu` | — | **none (WH/BH)** | ⬜ **Quasar-only** — §2.4 |
 | `SubInt32` | `sub_int32` | — | **none (WH/BH)** | ⬜ **perf-only** (tt-llk#495) — §2.4 |
@@ -748,9 +907,21 @@ operand.
 
 ## 5. What driving the edges found
 
-Ten ops over 42 `(op, format, dest_acc)` cells disagree with their golden at the newly driven points
-— 5 unary ops over 20 cells and 5 binary over 22. All are recorded as **non-strict xfails**, so the
-case still executes and reports XPASS if the behaviour changes. Every one is cross-checked against
+**Twelve ops over 70 `(op, format, dest_acc)` cells** disagree with their golden at the newly driven
+points — 7 unary ops over 24 cells (`Sign` 2, `Heaviside` 2, `RsqrtCompat` 8, `Erfinv` 2,
+`Reciprocal` 6, `Sqrt` 2, `Rsqrt` 2) and 5 binary over 46 (`SfpuElwdiv` 8, `SfpuXlogy` 8,
+`SfpuElwpow` 6, `SfpuBinaryFmod` 12, `SfpuBinaryRemainder` 12).
+
+Two things to know before quoting those numbers. A unary cell is an `(op, input, output, dest_acc)`
+variant; a **binary** cell is `(op, edge_class, input, output, dest_acc)`, because the binary sweep
+splits each op's poles into four classes and marks them separately — so the two halves are not counted
+on the same axis. And the three cat-B unary sets are *derived*, not listed: `_cat_b_divergences()`
+computes them from the combinations that actually deliver the probe, so re-derive rather than trusting
+this sentence. (Revisions 8–15 said "ten ops over 42 cells, 5 unary over 20 and 5 binary over 22";
+those were revision-7 figures, and §1's "12 over 46" quoted the binary count as the total.)
+
+All are recorded as **non-strict xfails**, so the case still executes and reports XPASS if the
+behaviour changes. Every one is cross-checked against
 [tt-isa-documentation](https://github.com/tenstorrent/tt-isa-documentation), which splits them
 cleanly. **This split is the practically important part:** half of these are specified hardware
 behaviour and chasing them would be wasted effort.
@@ -1036,13 +1207,45 @@ conversion" — with Blackhole alone carrying "albeit canonical NaNs produced by
 not suffer any truncation". Both functional models keep the sign bit verbatim, which is what
 `convert_nan_to_inf` already models correctly; only the sign it is *fed* is unsound on Wormhole.
 
-**This is golden work, not a kernel divergence, and it needs no xfail.** The fix is in the shared
-machinery: where a golden `NaN` is turned into `±inf` by a Dest write or a pack, accept either infinity,
-and keep asserting the sign only for `_NAN_SIGN_TRANSPARENT_OPS` — a carve-out the ISA backs directly,
-since `SFPABS`'s summary is "-NaN is left as -NaN rather than becoming +NaN" and `Neg` is a sign-bit flip.
-Do **not** arch-key the measured sign instead: a bit the ISA says "might or might not be set" is not a
-fact, and `Cos(+inf)` already gives a positive NaN at a 32-bit Dest and a sign-set one at 16-bit.
-Tracked as [the plan's §4](SFPU_EDGE_CASE_EXPANSION_PLAN.md).
+**This is golden work, not a kernel divergence, and it needs no xfail.** Do **not** arch-key the measured
+sign: a bit the ISA says "might or might not be set" is not a fact, and `Cos(+inf)` already gives a
+positive NaN at a 32-bit Dest and a sign-set one at 16-bit.
+
+> **✅ Landed — but not as the fix this section proposed.** Revision 15 recorded the intended repair as
+> "where a golden `NaN` is turned into `±inf` by a Dest write or a pack, accept either infinity, and keep
+> asserting the sign only for `_NAN_SIGN_TRANSPARENT_OPS`". What is actually on the branch is narrower:
+> a **gate that stops sending the probe**, not a golden that accepts both answers.
+>
+> `sfpu_domains.py` gained `GENERATED_NAN_SIGN_OPS` — the 10 unary ops above plus `ScalarRsub` —
+> together with `nan_survives_to_l1()` (does the pipeline deliver a NaN as a NaN, or as a signed
+> infinity?), `nan_sign_is_unspecified()` (both halves: the op invents the NaN *and* the pipeline makes
+> its sign observable) and `specials_after_nan_sign_gate()`, which switches **cat B off** for exactly
+> those variants when running on Wormhole. It is wired into `test_sfpu_unary.py`
+> (`_gate_unspecified_nan_sign`) and `test_sfpu_binop_scalar.py`.
+>
+> Cat B is switched off rather than the variant skipped, deliberately: `edge_values()` puts the cat-A,
+> cat-D and cat-B probes in one `StimuliSpec.custom`, so dropping the variant would take `Hardmish`'s
+> `(-2.0, 0.0)` knee and `Rsqrt`'s `0.0` pole with it on five of their eight cells each.
+>
+> Membership is **measured, not derived from kernel shape**, and the code says why that distinction is
+> load-bearing: `GeluTanh` and `Xielu` build a NaN through `SFPMAD` in the same `inf + (-inf)` shape as
+> the gated `GeluAppx`, but read back raw at the one cell that carries a NaN to L1 intact they come out
+> `0x7FC00001` (sign clear) where `Cos`, `Mish` and `Silu` come out `0xFFC00001`. Shape alone would have
+> enrolled two ops that agree with the golden.
+>
+> **So the assertion is dropped, not restored** — which is the honest reading of an unspecified bit, but
+> it is less coverage than the proposed golden change would have bought. The code's own note says as
+> much: *"There is nothing to assert here until the golden accepts both infinities on a substituted NaN,
+> which is a change to `convert_nan_to_inf`'s contract rather than to this gate."* That change is still
+> [the plan's §4](SFPU_EDGE_CASE_EXPANSION_PLAN.md), and it is still worth doing.
+>
+> **Consequence for the run tables above, now measured:** the 49 unary failures and the 1 scalar failure
+> recorded for Wormhole on 2026-08-13 are pre-gate numbers and **do not reproduce**. On the same n300 at
+> `26c61ff80e9` the unary suite is `6044 passed · 573 skipped · 0 failed · 23 xfailed · 6 xpassed` and
+> the scalar suite is `67 passed · 73 skipped · 0 failed`. In the edge sweep the 49 failures became
+> 16 passes and 40 skips, and one further xfail (`Rsqrt` at `Float32->Float16_b`, `dest_acc=Yes`) was
+> suppressed by the `_CAT_B_DERIVED_DIVERGENCES` guard, taking 30 xfails to 23. Nothing was fixed; the
+> probe is no longer sent.
 
 **One residue is not explained by any of it:** `Tan(NaN) -> 0.0` on the 16-bit-Dest path — a finite zero
 rather than a substituted infinity. The same op at `Float32->Float16_b`/`dest_acc=Yes` returns a NaN for
@@ -1058,6 +1261,11 @@ on Blackhole and are green there, so this is an arch difference rather than a co
 argument passes ~8, measured on Wormhole"*, and `_APPROX_EXP_XFAIL_IS_WORMHOLE_ONLY` narrows it to Wormhole
 because Blackhole XPASSed all four reachable cells. On a Wormhole n300 **all 6 marked variants XPASS** —
 the gate's entire content, three cells at both tile shapes — so it now asserts nothing on either arch.
+
+> **Re-confirmed 2026-08-17** at `26c61ff80e9` on the same n300: 6 XPASS, unchanged, and they are the
+> only XPASSes in the unary suite (the edge sweep reports 0). The finding stands exactly as written, and
+> the gate is still in the code untouched — `_APPROX_EXP_XFAIL_IS_WORMHOLE_ONLY = True`, with a comment
+> that still reads *"the limit is real on Wormhole"*. Plan §9.1 is unstarted.
 
 Measured over the elements with `x > 8` (`test_sfpu_wh_approx_exp.py`): mean signed relative error
 **+0.75% to +1.05%**, peak **+3.5%**, and **no element of any tile above 5%**. So the direction reproduces
@@ -1084,6 +1292,11 @@ Blackhole p150b, the negative-zero class XPASSed on **all 16** cells it is claim
 arch difference, `SFPMAD` flushing a negative zero on Wormhole and preserving it on Blackhole. On a Wormhole
 n300 **the same 16 XPASS**: `SfpuElwdiv`, `SfpuXlogy`, `SfpuBinaryFmod` and `SfpuBinaryRemainder` at all four
 `(format, dest_acc)` cells, which is again the gate's entire content.
+
+> **Re-confirmed 2026-08-17** at `26c61ff80e9`: the binary edge sweep reports `50 passed · 64 skipped ·
+> 30 xfailed · 16 xpassed`, the same 16. `_WORMHOLE_ONLY_EDGE_CLASSES` is unchanged in the code and
+> still holds only `negative_zero_golden`. Plan §9.2 — the bitwise comparison that would settle whether
+> this is a comparator blind spot or a wrong arch premise — is unstarted.
 
 **A gate that XPASSes on both arches cannot mean "the other arch is better".** The likelier reading is
 already recorded as a trap in §5.2's neighbourhood: `passed_test` compares with `torch.isclose`, a both-NaN
@@ -1217,14 +1430,14 @@ print('singularities', len(_OP_SINGULARITIES), '| edge points', len(_OP_EDGE_POI
 print('unary', len(u), '| with an edge', len(e), '| smooth', len(u) - len(e))
 print('specials-ready', len(SPECIALS_READY_OPS))
 "
-# expect: 21 / 43 / 97 / 50 / 47 / 65
+# expect: 21 / 43 / 97 / 50 / 47 / 72
 # The last number is len(SPECIALS_READY_OPS), which counts the 5 scalar binops as well
-# as the 60 enrolled *unary* ops -- the scalar family is not in sfpu_unary_ops(), so it
-# does not appear in any of the other five figures. Do not read 65 as a unary count.
-# (Revisions before 12 said 19 / ... / 0 here, which contradicted §1's own table: the
-#  singularity count gained the two ternary operand-C poles, and specials-ready has not
-#  been 0 since revision 7.)
-python3 -m pytest test_sfpu_domains.py -q --noconftest   # expect 107 passed
+# as the 67 enrolled *unary* ops -- the scalar family is not in sfpu_unary_ops(), so it
+# does not appear in any of the other five figures. Do not read 72 as a unary count.
+# (Revisions before 12 said 19 / ... / 0 here; revisions 12-15 said 65, which was the
+#  revision-12 figure of 60 unary + 5 scalar left un-regenerated while §1's own table
+#  had moved to 67 + 5. Re-run this rather than trusting either number.)
+python3 -m pytest test_sfpu_domains.py -q --noconftest   # expect 111 passed
 ```
 
 Per-op rows are keyed on `MathOperation` and read `_OP_DOMAIN_REGISTRY`, `_OP_SINGULARITIES`,
