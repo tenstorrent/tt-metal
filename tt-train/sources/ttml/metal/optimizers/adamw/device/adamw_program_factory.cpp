@@ -33,6 +33,9 @@ constexpr uint32_t kGradAddrIdx = 1U;
 constexpr uint32_t kExpAvgAddrIdx = 2U;
 constexpr uint32_t kExpAvgSqAddrIdx = 3U;
 constexpr uint32_t kMaxExpAvgSqAddrIdx = 4U;
+constexpr uint32_t kStepSizeAddrIdx = 5U;
+constexpr uint32_t kInvSqrtBc2AddrIdx = 6U;
+constexpr uint32_t kDecayFactorAddrIdx = 7U;
 // compute runtime args
 constexpr uint32_t kComputeBeta1Idx = 0U;
 constexpr uint32_t kComputeBeta2Idx = 1U;
@@ -54,6 +57,7 @@ constexpr auto kGradCbIndex = tt::CBIndex::c_1;
 constexpr auto kExpAvgCbIndex = tt::CBIndex::c_2;
 constexpr auto kExpAvgSqCbIndex = tt::CBIndex::c_3;
 constexpr auto kMaxExpAvgSqInCbIndex = tt::CBIndex::c_4;
+constexpr auto kScalarsCbIndex = tt::CBIndex::c_5;
 
 constexpr auto kOutputCbIndex = tt::CBIndex::c_16;
 constexpr auto kExpAvgOutCbIndex = tt::CBIndex::c_17;
@@ -113,6 +117,9 @@ void assign_per_core_runtime_args(
     const tt::tt_metal::Buffer* exp_avg_buffer,
     const tt::tt_metal::Buffer* exp_avg_sq_buffer,
     const tt::tt_metal::Buffer* max_exp_avg_sq_buffer,
+    const tt::tt_metal::Buffer* step_size_buffer,
+    const tt::tt_metal::Buffer* inv_sqrt_bc2_buffer,
+    const tt::tt_metal::Buffer* decay_factor_buffer,
     const tt::tt_metal::Buffer* output_buffer,
     const operation_attributes_t& attrs,
     uint32_t num_cores,
@@ -124,11 +131,14 @@ void assign_per_core_runtime_args(
     float one_minus_beta1 = 1.0f - attrs.beta1;
     float one_minus_beta2 = 1.0f - attrs.beta2;
 
-    float bias_correction1 = 1.0f - attrs.beta1_pow;
-    float bias_correction2 = 1.0f - attrs.beta2_pow;
-    float step_size = attrs.lr / bias_correction1;
-    float inv_sqrt_bc2 = 1.0f / std::sqrt(bias_correction2);
-    float decay_factor = 1.0f - attrs.lr * attrs.weight_decay;
+    float step_size = 0.0f;
+    float inv_sqrt_bc2 = 0.0f;
+    float decay_factor = 0.0f;
+    if (step_size_buffer == nullptr) {
+        step_size = attrs.lr / (1.0f - attrs.beta1_pow);
+        inv_sqrt_bc2 = 1.0f / std::sqrt(1.0f - attrs.beta2_pow);
+        decay_factor = 1.0f - attrs.lr * attrs.weight_decay;
+    }
 
     std::vector<uint32_t> seeds = make_stochastic_rounding_seeds(attrs.stochastic_rounding_seed, num_cores);
 
@@ -171,6 +181,9 @@ void assign_per_core_runtime_args(
              exp_avg_buffer->address(),
              exp_avg_sq_buffer->address(),
              max_exp_avg_sq_buffer != nullptr ? max_exp_avg_sq_buffer->address() : 0U,
+             step_size_buffer != nullptr ? step_size_buffer->address() : 0U,
+             inv_sqrt_bc2_buffer != nullptr ? inv_sqrt_bc2_buffer->address() : 0U,
+             decay_factor_buffer != nullptr ? decay_factor_buffer->address() : 0U,
              num_tiles_per_core,
              num_tiles_written});
 
@@ -213,6 +226,7 @@ AdamWProgramFactory::cached_program_t AdamWProgramFactory::create(
     const auto& exp_avg = tensor_args.exp_avg;
     const auto& exp_avg_sq = tensor_args.exp_avg_sq;
     const auto& max_exp_avg_sq_opt = tensor_args.max_exp_avg_sq;
+    const bool scalars_on_device = tensor_args.step_size.has_value();
 
     auto* device = param.device();
 
@@ -311,6 +325,11 @@ AdamWProgramFactory::cached_program_t AdamWProgramFactory::create(
             intermediate_num_tiles);
     }
 
+    if (scalars_on_device) {
+        [[maybe_unused]] auto cb_scalars = create_circular_buffer(
+            program, all_cores, kScalarsCbIndex, intermediate_data_format, float32_single_tile_size_bytes, 3U);
+    }
+
     // Intermediate CBs are always fp32
     [[maybe_unused]] auto cb_momentum = create_circular_buffer(
         program,
@@ -337,10 +356,14 @@ AdamWProgramFactory::cached_program_t AdamWProgramFactory::create(
     auto* exp_avg_buffer = exp_avg.buffer();
     auto* exp_avg_sq_buffer = exp_avg_sq.buffer();
     auto* max_exp_avg_sq_buffer = max_exp_avg_sq_opt.has_value() ? max_exp_avg_sq_opt.value().buffer() : nullptr;
+    auto* step_size_buffer = scalars_on_device ? tensor_args.step_size.value().buffer() : nullptr;
+    auto* inv_sqrt_bc2_buffer = scalars_on_device ? tensor_args.inv_sqrt_bias_correction2.value().buffer() : nullptr;
+    auto* decay_factor_buffer = scalars_on_device ? tensor_args.decay_factor.value().buffer() : nullptr;
     auto* output_buffer = output.buffer();
 
     std::map<std::string, std::string> defines;
     defines["AMSGRAD"] = operation_attributes.amsgrad ? "1" : "0";
+    defines["SCALARS_ON_DEVICE"] = scalars_on_device ? "1" : "0";
     defines["STOCH_ROUND"] = operation_attributes.stochastic_rounding == StochasticRounding::Enabled ? "1" : "0";
 
     AdamWKernels kernels{};
@@ -351,6 +374,9 @@ AdamWProgramFactory::cached_program_t AdamWProgramFactory::create(
     tt::tt_metal::TensorAccessorArgs(exp_avg_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(exp_avg_sq_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(max_exp_avg_sq_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(step_size_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(inv_sqrt_bc2_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(decay_factor_buffer).append_to(reader_compile_time_args);
     kernels.reader = create_reader_kernel(program, all_cores, reader_compile_time_args, defines, kReaderKernelPath);
 
     std::vector<uint32_t> writer_compile_time_args{block_size};
@@ -401,6 +427,9 @@ AdamWProgramFactory::cached_program_t AdamWProgramFactory::create(
         exp_avg_buffer,
         exp_avg_sq_buffer,
         max_exp_avg_sq_buffer,
+        step_size_buffer,
+        inv_sqrt_bc2_buffer,
+        decay_factor_buffer,
         output_buffer,
         operation_attributes,
         num_cores,
@@ -451,6 +480,12 @@ void AdamWProgramFactory::override_runtime_arguments(
     auto* exp_avg_sq_buffer = tensor_args.exp_avg_sq.buffer();
     auto* max_exp_avg_sq_buffer =
         tensor_args.max_exp_avg_sq.has_value() ? tensor_args.max_exp_avg_sq.value().buffer() : nullptr;
+    auto* step_size_buffer = tensor_args.step_size.has_value() ? tensor_args.step_size.value().buffer() : nullptr;
+    auto* inv_sqrt_bc2_buffer = tensor_args.inv_sqrt_bias_correction2.has_value()
+                                    ? tensor_args.inv_sqrt_bias_correction2.value().buffer()
+                                    : nullptr;
+    auto* decay_factor_buffer =
+        tensor_args.decay_factor.has_value() ? tensor_args.decay_factor.value().buffer() : nullptr;
     auto* output_buffer = tensor_return_value.buffer();
 
     // Only address arguments need updating here; tile counts remain the same as in create().
@@ -464,11 +499,14 @@ void AdamWProgramFactory::override_runtime_arguments(
     float one_minus_beta1 = 1.0f - attrs.beta1;
     float one_minus_beta2 = 1.0f - attrs.beta2;
 
-    float bias_correction1 = 1.0f - attrs.beta1_pow;
-    float bias_correction2 = 1.0f - attrs.beta2_pow;
-    float step_size = attrs.lr / bias_correction1;
-    float inv_sqrt_bc2 = 1.0f / std::sqrt(bias_correction2);
-    float decay_factor = 1.0f - attrs.lr * attrs.weight_decay;
+    float step_size = 0.0f;
+    float inv_sqrt_bc2 = 0.0f;
+    float decay_factor = 0.0f;
+    if (step_size_buffer == nullptr) {
+        step_size = attrs.lr / (1.0f - attrs.beta1_pow);
+        inv_sqrt_bc2 = 1.0f / std::sqrt(1.0f - attrs.beta2_pow);
+        decay_factor = 1.0f - attrs.lr * attrs.weight_decay;
+    }
 
     std::vector<uint32_t> seeds = make_stochastic_rounding_seeds(attrs.stochastic_rounding_seed, num_cores);
 
@@ -497,6 +535,9 @@ void AdamWProgramFactory::override_runtime_arguments(
             runtime_args[kExpAvgSqAddrIdx] = exp_avg_sq_buffer->address();
             runtime_args[kMaxExpAvgSqAddrIdx] =
                 max_exp_avg_sq_buffer != nullptr ? max_exp_avg_sq_buffer->address() : 0U;
+            runtime_args[kStepSizeAddrIdx] = step_size_buffer != nullptr ? step_size_buffer->address() : 0U;
+            runtime_args[kInvSqrtBc2AddrIdx] = inv_sqrt_bc2_buffer != nullptr ? inv_sqrt_bc2_buffer->address() : 0U;
+            runtime_args[kDecayFactorAddrIdx] = decay_factor_buffer != nullptr ? decay_factor_buffer->address() : 0U;
         }
         // Update compute kernel args
         {
@@ -504,11 +545,13 @@ void AdamWProgramFactory::override_runtime_arguments(
             runtime_args[kComputeBeta1Idx] = std::bit_cast<uint32_t>(attrs.beta1);
             runtime_args[kComputeBeta2Idx] = std::bit_cast<uint32_t>(attrs.beta2);
             runtime_args[kComputeEpsilonIdx] = std::bit_cast<uint32_t>(attrs.epsilon);
-            runtime_args[kComputeStepSizeIdx] = std::bit_cast<uint32_t>(step_size);
-            runtime_args[kComputeInvSqrtBiasCorrection2Idx] = std::bit_cast<uint32_t>(inv_sqrt_bc2);
+            if (step_size_buffer == nullptr) {
+                runtime_args[kComputeStepSizeIdx] = std::bit_cast<uint32_t>(step_size);
+                runtime_args[kComputeInvSqrtBiasCorrection2Idx] = std::bit_cast<uint32_t>(inv_sqrt_bc2);
+                runtime_args[kComputeDecayFactorIdx] = std::bit_cast<uint32_t>(decay_factor);
+            }
             runtime_args[kComputeOneMinusBeta1Idx] = std::bit_cast<uint32_t>(one_minus_beta1);
             runtime_args[kComputeOneMinusBeta2Idx] = std::bit_cast<uint32_t>(one_minus_beta2);
-            runtime_args[kComputeDecayFactorIdx] = std::bit_cast<uint32_t>(decay_factor);
             runtime_args[kComputeSeedIdx] = seeds[i];
         }
         // Update writer kernel args

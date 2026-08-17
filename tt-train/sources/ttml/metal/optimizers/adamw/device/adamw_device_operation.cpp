@@ -87,6 +87,29 @@ void AdamWDeviceOperation::validate_on_program_cache_miss(
         check_tensor(
             max_exp_avg_sq.value(), "Max Exponential Average Squared Buffer", tt::tt_metal::Layout::TILE, param_dtype);
     }
+
+    const auto& step_size = tensor_args.step_size;
+    const auto& inv_sqrt_bias_correction2 = tensor_args.inv_sqrt_bias_correction2;
+    const auto& decay_factor = tensor_args.decay_factor;
+    TT_FATAL(
+        step_size.has_value() == inv_sqrt_bias_correction2.has_value() &&
+            step_size.has_value() == decay_factor.has_value(),
+        "AdamW requires step_size, inv_sqrt_bias_correction2 and decay_factor to be supplied together");
+
+    if (step_size.has_value()) {
+        auto check_scalar = [&](const ttnn::Tensor& tensor, const std::string& name) {
+            check_tensor(tensor, name, tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::FLOAT32);
+            TT_FATAL(
+                tensor.logical_volume() == 1U,
+                "Tensor '{}' must hold exactly one element, got {}",
+                name,
+                tensor.logical_volume());
+            TT_FATAL(tensor.device() == param.device(), "Tensor '{}' must be on the parameter's device", name);
+        };
+        check_scalar(step_size.value(), "Step Size");
+        check_scalar(inv_sqrt_bias_correction2.value(), "Inverse Sqrt Bias Correction 2");
+        check_scalar(decay_factor.value(), "Decay Factor");
+    }
 }
 
 AdamWDeviceOperation::spec_return_value_t AdamWDeviceOperation::compute_output_specs(
@@ -106,8 +129,14 @@ ttsl::hash::hash_t AdamWDeviceOperation::compute_program_hash(
     auto amsgrad = args.amsgrad;
     auto stochastic_rounding = args.stochastic_rounding;
     auto max_exp_avg_sq_initialized = tensor_args.max_exp_avg_sq.has_value();
+    auto scalars_on_device = tensor_args.step_size.has_value();
     auto hash = tt::tt_metal::operation::hash_operation<AdamWDeviceOperation>(
-        amsgrad, stochastic_rounding, max_exp_avg_sq_initialized, param_tensor.dtype(), param_logical_shape);
+        amsgrad,
+        stochastic_rounding,
+        max_exp_avg_sq_initialized,
+        scalars_on_device,
+        param_tensor.dtype(),
+        param_logical_shape);
 
     return hash;
 }
@@ -131,7 +160,10 @@ ttml::metal::optimizers::adamw::device::AdamWDeviceOperation::tensor_return_valu
     float weight_decay,
     bool amsgrad,
     ttml::metal::StochasticRounding stochastic_rounding,
-    std::optional<uint32_t> stochastic_rounding_seed) {
+    std::optional<uint32_t> stochastic_rounding_seed,
+    const std::optional<ttnn::Tensor>& step_size,
+    const std::optional<ttnn::Tensor>& inv_sqrt_bias_correction2,
+    const std::optional<ttnn::Tensor>& decay_factor) {
     using OperationType = ttml::metal::optimizers::adamw::device::AdamWDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
@@ -152,6 +184,9 @@ ttml::metal::optimizers::adamw::device::AdamWDeviceOperation::tensor_return_valu
         .exp_avg = exp_avg,
         .exp_avg_sq = exp_avg_sq,
         .max_exp_avg_sq = max_exp_avg_sq,
+        .step_size = step_size,
+        .inv_sqrt_bias_correction2 = inv_sqrt_bias_correction2,
+        .decay_factor = decay_factor,
     };
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);

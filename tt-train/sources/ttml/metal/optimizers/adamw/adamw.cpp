@@ -44,4 +44,42 @@ ttnn::Tensor adamw(
         stochastic_rounding_seed);
 }
 
+ttnn::Tensor adamw(
+    const ttnn::Tensor& param_in,
+    const ttnn::Tensor& grad,
+    const ttnn::Tensor& exp_avg,
+    const ttnn::Tensor& exp_avg_sq,
+    const std::optional<ttnn::Tensor>& max_exp_avg_sq,
+    float beta1,
+    float beta2,
+    const ttnn::Tensor& step_size,
+    const ttnn::Tensor& inv_sqrt_bias_correction2,
+    const ttnn::Tensor& decay_factor,
+    float epsilon,
+    StochasticRounding stochastic_rounding,
+    std::optional<uint32_t> stochastic_rounding_seed) {
+    TT_FATAL(
+        (stochastic_rounding == StochasticRounding::Enabled) == stochastic_rounding_seed.has_value(),
+        "a stochastic rounding seed must be supplied iff stochastic rounding is enabled");
+    return ttnn::prim::adamw(
+        param_in,
+        grad,
+        exp_avg,
+        exp_avg_sq,
+        max_exp_avg_sq,
+        0.0F,
+        beta1,
+        beta2,
+        0.0F,
+        0.0F,
+        epsilon,
+        0.0F,
+        max_exp_avg_sq.has_value(),
+        stochastic_rounding,
+        stochastic_rounding_seed,
+        step_size,
+        inv_sqrt_bias_correction2,
+        decay_factor);
+}
+
 }  // namespace ttml::metal

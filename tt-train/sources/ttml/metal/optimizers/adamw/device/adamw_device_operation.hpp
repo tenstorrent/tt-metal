@@ -48,6 +48,9 @@ ttml::metal::optimizers::adamw::device::AdamWDeviceOperation::tensor_return_valu
     float weight_decay,
     bool amsgrad,
     ttml::metal::StochasticRounding stochastic_rounding,
-    std::optional<uint32_t> stochastic_rounding_seed);
+    std::optional<uint32_t> stochastic_rounding_seed,
+    const std::optional<ttnn::Tensor>& step_size = std::nullopt,
+    const std::optional<ttnn::Tensor>& inv_sqrt_bias_correction2 = std::nullopt,
+    const std::optional<ttnn::Tensor>& decay_factor = std::nullopt);
 
 }  // namespace ttnn::prim

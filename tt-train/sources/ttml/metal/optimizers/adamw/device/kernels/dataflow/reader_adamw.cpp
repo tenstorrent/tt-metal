@@ -12,6 +12,7 @@ constexpr auto cb_grad_idx = tt::CBIndex::c_1;
 constexpr auto cb_exp_avg_idx = tt::CBIndex::c_2;
 constexpr auto cb_exp_avg_sq_idx = tt::CBIndex::c_3;
 constexpr auto cb_max_exp_avg_sq_in_idx = tt::CBIndex::c_4;
+constexpr auto cb_scalars_idx = tt::CBIndex::c_5;
 
 constexpr uint32_t block_size = get_compile_time_arg_val(0);
 
@@ -22,6 +23,9 @@ void kernel_main() {
     const uint32_t exp_avg_addr = get_arg_val<uint32_t>(runtime_args_counter++);
     const uint32_t exp_avg_sq_addr = get_arg_val<uint32_t>(runtime_args_counter++);
     const uint32_t max_exp_avg_sq_addr = get_arg_val<uint32_t>(runtime_args_counter++);
+    const uint32_t step_size_addr = get_arg_val<uint32_t>(runtime_args_counter++);
+    const uint32_t inv_sqrt_bc2_addr = get_arg_val<uint32_t>(runtime_args_counter++);
+    const uint32_t decay_factor_addr = get_arg_val<uint32_t>(runtime_args_counter++);
 
     const uint32_t num_tiles_to_process = get_arg_val<uint32_t>(runtime_args_counter++);
     const uint32_t start_tile = get_arg_val<uint32_t>(runtime_args_counter++);
@@ -36,12 +40,32 @@ void kernel_main() {
     constexpr auto exp_avg_args = TensorAccessorArgs<grad_args.next_compile_time_args_offset()>();
     constexpr auto exp_avg_sq_args = TensorAccessorArgs<exp_avg_args.next_compile_time_args_offset()>();
     constexpr auto max_exp_avg_sq_args = TensorAccessorArgs<exp_avg_sq_args.next_compile_time_args_offset()>();
+    constexpr auto step_size_args = TensorAccessorArgs<max_exp_avg_sq_args.next_compile_time_args_offset()>();
+    constexpr auto inv_sqrt_bc2_args = TensorAccessorArgs<step_size_args.next_compile_time_args_offset()>();
+    constexpr auto decay_factor_args = TensorAccessorArgs<inv_sqrt_bc2_args.next_compile_time_args_offset()>();
 
     const auto param_addr_gen = TensorAccessor(param_args, param_addr);
     const auto grad_addr_gen = TensorAccessor(grad_args, grad_addr);
     const auto exp_avg_addr_gen = TensorAccessor(exp_avg_args, exp_avg_addr);
     const auto exp_avg_sq_addr_gen = TensorAccessor(exp_avg_sq_args, exp_avg_sq_addr);
     const auto max_exp_avg_sq_addr_gen = TensorAccessor(max_exp_avg_sq_args, max_exp_avg_sq_addr);
+
+#if SCALARS_ON_DEVICE
+    {
+        const uint32_t scalar_tile_size_bytes = get_tile_size(cb_scalars_idx);
+        const auto step_size_addr_gen = TensorAccessor(step_size_args, step_size_addr);
+        const auto inv_sqrt_bc2_addr_gen = TensorAccessor(inv_sqrt_bc2_args, inv_sqrt_bc2_addr);
+        const auto decay_factor_addr_gen = TensorAccessor(decay_factor_args, decay_factor_addr);
+
+        cb_reserve_back(cb_scalars_idx, 3);
+        const uint32_t l1_write_addr = get_write_ptr(cb_scalars_idx);
+        noc_async_read_tile(0, step_size_addr_gen, l1_write_addr);
+        noc_async_read_tile(0, inv_sqrt_bc2_addr_gen, l1_write_addr + scalar_tile_size_bytes);
+        noc_async_read_tile(0, decay_factor_addr_gen, l1_write_addr + 2 * scalar_tile_size_bytes);
+        noc_async_read_barrier();
+        cb_push_back(cb_scalars_idx, 3);
+    }
+#endif
 
     uint32_t end_tile = start_tile + num_tiles_to_process;
     for (uint32_t tile_idx = start_tile; tile_idx < end_tile; tile_idx += block_size) {

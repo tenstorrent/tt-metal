@@ -33,6 +33,10 @@ struct tensor_args_t {
     const ttnn::Tensor& exp_avg;
     const ttnn::Tensor& exp_avg_sq;
     std::optional<ttnn::Tensor> max_exp_avg_sq = std::nullopt;
+
+    std::optional<ttnn::Tensor> step_size = std::nullopt;
+    std::optional<ttnn::Tensor> inv_sqrt_bias_correction2 = std::nullopt;
+    std::optional<ttnn::Tensor> decay_factor = std::nullopt;
 };
 
 using tensor_return_value_t = ttnn::Tensor;
