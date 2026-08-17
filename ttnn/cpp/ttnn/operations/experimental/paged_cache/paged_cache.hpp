@@ -9,6 +9,13 @@
 
 namespace ttnn::experimental {
 
+std::tuple<ttnn::Tensor, ttnn::Tensor> indexed_fused_update_cache(
+    const Tensor& cache_tensor1,
+    const Tensor& input_tensor1,
+    const Tensor& cache_tensor2,
+    const Tensor& input_tensor2,
+    const Tensor& physical_update_idxs_tensor);
+
 ttnn::Tensor paged_update_cache(
     const Tensor& cache_tensor,
     const Tensor& input_tensor,
