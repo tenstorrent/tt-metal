@@ -1,3 +1,18 @@
+# STATUS — revision 4 (silicon validation + attribution + system-context pass), 2026-08-17
+
+Rev-4 delta (summary: REVISION-4.md; evidence §8 B8–B10): every printed anchor
+replicated on the final landed tree (712.2/33.96/356.43 vs printed
+712.3/34.3/357.0); §6-B's SFPLOADMACRO "worth 5–9%" corrected to the measured
+3.6% (op) / 1.9% (proxy) disable-flag A/B — the win is banked, the proxy
+inherits it (no longer "byte-identical"); §6-E gains the DSA system-context
+lines (top-k ≈0.3% of GLM-5.2 e2e prefill; the live lever is the
+regather/re-partition inverse-pair elision, landed model-side as fe1930d50c2
+pending 8×4 validation); paid by the BUDGET rule-1 §2.3 compression (cites
+kept). Compile clean: 0 errors, 0 overfull, body ends page 10 exactly
+(verified by A/B build against the pre-edit tree).
+
+Previous (revision 3) status follows.
+
 # STATUS — revision 3 (comp4 numbers + TILE-native / carve-out / telemetry landings), 2026-08-17
 
 Supersedes the revision-2 STATUS. Changes this pass (orchestrator-directed

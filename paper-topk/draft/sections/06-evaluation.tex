@@ -89,9 +89,11 @@ $N = 2{,}048$--$262{,}144$ over five measured arms: \emph{pre} --- stock
 including the ${\approx}1.17\times$ replay micro-op win that landed in
 the stock kernels; \emph{routed} --- \ttnntopk through the new routing (the caller
 changes nothing); \emph{op} --- \topkop called directly (columns
-include the SFPLOADMACRO paths, worth 5--9\%); and \emph{proxy} ---
-byte-identical stock bitonic kernels in the operator's row-parallel
-harness, per-row single-core wall time. Three headlines. First, the user-facing anchor: at $k{=}2048$,
+include the SFPLOADMACRO paths: 3.6\% by a disable-flag A/B at the
+anchor); and \emph{proxy} ---
+the stock bitonic kernels in the operator's row-parallel
+harness, per-row single-core wall time (it inherits the shared-header
+micro-op paths: 1.9\% by the same A/B). Three headlines. First, the user-facing anchor: at $k{=}2048$,
 $N{=}65{,}536$, the \emph{pre}$\to$\emph{routed} chain is
 $631{,}506\,\text{\textmu s} \to 51.5$\us{} = $12{,}265\times$ --- with no
 call-site change. Second, the direct-op anchor: the same cell measures
@@ -263,7 +265,15 @@ routed measures $1.00\times$ --- the honest already-fast row (the
 direct op still gains $1.4\times$). The sparse-attention indexer rows
 already call the op by name --- today \emph{is} the op --- and forcing
 them through generic routing
-would cost 22--26\%. The MoE gate rows were shapes the routing
+would cost 22--26\%.
+% Evidence: GH tenstorrent/tt-metal#51331 (GLM-5.2 chunked prefill ~2.6 s/chunk,
+% BH Galaxy 8x4, 21 full-DSA layers); GH #47803 (TP reshard all-gathers ~1 ms/layer/chunk);
+% call-site elision = model-repo commit fe1930d50c2 (skip_tp_regather), pending 8x4 validation.
+Their system context is measured too: top-$k$ is ${\sim}0.3\%$ of this
+family's end-to-end prefill --- one same-layer collective outweighs the
+whole cell --- so the live lever here is eliding the
+regather/re-partition inverse pair that brackets the op.
+The MoE gate rows were shapes the routing
 predicate declined at the study's start (the $W \geq 4{,}096$ floor);
 a measured eligibility carve-out ($k \leq 16$, padded $W \leq 512$,
 $\leq$32 rows) now captures them automatically: $24.2 \to 8.18$\us{}

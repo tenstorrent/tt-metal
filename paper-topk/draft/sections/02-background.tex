@@ -138,13 +138,11 @@ data-oblivious --- one corner of the design space
 Section~\ref{sec:design-space} maps and prices.
 
 Exact GPU top-k, by contrast, is a mature family, each branch leaning
-on a hardware affordance \bh must re-price to import: radix/bucket
-select on 8--12-bit atomic histograms plus scatter
+on an affordance \bh must re-price: radix/bucket select on atomic
+histograms plus scatter
 compaction~\cite{alabi2012kselection,zhang2023paralleltopk,li2024radik};
-WarpSelect on a cheap per-lane running-threshold compare with per-lane
-survivor queues~\cite{johnson2019billion}; threshold-guess decoders on
-cheap counting against a predicted boundary~\cite{gvr2026}; and
-TPU-KNN's escape into matmul-shaped
-approximation~\cite{chern2022tpuknn,twostage2025}. This paper measures
-the exact path anyway: Section~\ref{sec:design-space} prices each
-affordance on silicon.
+WarpSelect's per-lane threshold
+queues~\cite{johnson2019billion}; threshold-guess
+counting~\cite{gvr2026}; TPU-KNN's matmul-shaped
+approximation~\cite{chern2022tpuknn,twostage2025}.
+Section~\ref{sec:design-space} prices each on silicon.

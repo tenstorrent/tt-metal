@@ -89,8 +89,8 @@
     </tbody>
   </table></div>
   <p class="sub">Micro-op layer (PR <span class="prn">①</span>+<span class="prn">②</span>, <span class="commit">d64993c·7257487</span>) is inside the kernels of these columns:
-  <span class="prn">①</span> replay ×1.17 → the stock ttnn.topk column only (631.5 ms is without it; with it: 539.5 ms); <span class="prn">②</span> SFPLOADMACRO ~5–9% → the two ours columns. Factors, not times — already included in the numbers shown.</p>
-  <p class="sub">‡stock topk_large_indices measured as a deterministic competition layer via the rows=2 row-parallel proxy (byte-identical stock kernels, per-row single-core wall time). †blaze runs its fused SDPA+localTopK program at exactly this shape (k=2048, 64K global context) on this box — includes SDPA work the other layers don't, so its row flatters it.</p>
+  <span class="prn">①</span> replay ×1.17 → the stock ttnn.topk column only (631.5 ms is without it; with it: 539.5 ms); <span class="prn">②</span> SFPLOADMACRO → measured by disable-flag A/B on the final tree: 3.6% on the op column, 1.9% on the stock-op proxy (which inherits it via the shared header). Factors, not times — already included in the numbers shown.</p>
+  <p class="sub">‡stock topk_large_indices measured as a deterministic competition layer via the rows=2 row-parallel proxy (identical stock factory; the kernels inherit the shared-header micro-op paths — 1.9% by A/B — so the true as-shipped per-row time is ≈363 µs). †blaze runs its fused SDPA+localTopK program at exactly this shape (k=2048, 64K global context) on this box — includes SDPA work the other layers don't, so its row flatters it.</p>
   <p class="sub"><strong>Applicability boundary of the 10.4× op column</strong> — the anchor is a <em>single row</em>, i.e. a latency
   cell. The tree converts cores into latency at ≈1.0 core-efficiency (P=2 measures 183.0 µs = 366 core-µs/row vs the
   shipped op's 357.0 core-µs on one core, +2.5% — core-time-neutral), so the 10.4× serves latency-bound low-row callers
@@ -305,6 +305,14 @@
     </tbody>
   </table></div>
 <!-- /MODEL_SCENARIOS -->
+  <p class="sub"><strong>GLM/DSA prefill update (2026-08-17, validated):</strong> the dsa_indexer_k2048 cell re-measured
+  712.2 µs on the final landed tree (−0.01% vs the row above). System context: top-k is ~0.3% of GLM-5.2 end-to-end
+  prefill (~2.6 s/chunk baseline, GH #51331) — one TP collective in the same layer (~1 ms, GH #47803) outweighs the
+  whole cell — so the live lever is call-site integration, not kernel speed: the post-op TP regather is the exact
+  inverse of the consumer's re-partition for thin-head-shard models (GLM 64h/tp4, DS-V4; not DS-V3.2 at 128h), and the
+  elision landed model-side as <code>fe1930d50c2</code> (skip_tp_regather), <em>pending 8×4 mesh validation</em> —
+  checklist: paper-topk/evidence/glm-p1-skip-tp-regather.md. Production runs eagerly (sparse/DSA cannot trace; three
+  fail-fast guards), so valid_length-proportional work — already in the op — is live in production.</p>
   </div></details>
 
   <details><summary>Gates, trust-nothing findings, internal alignment, open items</summary><div>
