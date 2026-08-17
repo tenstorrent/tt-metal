@@ -7,7 +7,13 @@ SDPA-related failures and posts a digest to Slack on a cron schedule.
 - **Red pipelines** get a full block: every failing in-scope test, a short cause for each, and a likely-cause commit if attributable.
 - **Out-of-scope failures** (anything not SDPA-related) are completely ignored, no count, no mention.
 
-Currently watches 10 pipelines (see `config.sh`). Cron currently fires every hour.
+Currently watches 9 pipelines (see `config.sh`). Cron currently fires every hour.
+
+> **2026-08-14:** `blackhole-sanity-tests.yaml` was retired upstream (PR #48943, "Pipeline
+> reorg: Migrate Blackhole Sanity into sanity-tests") and its jobs folded into
+> `sanity-tests.yaml`, so the separate *Blackhole Sanity* entry was dropped and its
+> coverage merged into *Sanity* — which now spans the Wormhole, Blackhole and ttsim
+> SKUs plus the QuietBox multi-card SDPA jobs. 10 → 9 pipelines, no loss of coverage.
 
 ---
 
