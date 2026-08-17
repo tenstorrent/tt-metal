@@ -1706,22 +1706,14 @@ MeshGraph TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
         return mesh_graph;
     };
 
-    // get_fabric_type() optimistically returns TORUS_XY for *any* UBB galaxy, but a galaxy whose
-    // cabling only wraps one axis (e.g. WH galaxy with a Y wrap but no X wrap) - or none at all -
-    // cannot realize that torus. Build an ordered list of fabric types from the requested (most
-    // connected) down to the least connected topology the request permits, so we can fall back to the
-    // most connectivity the hardware actually supports instead of silently dropping chips to satisfy
-    // an impossible torus.
+    // Missing wrap-around cabling rules out that axis' torus; try most- to least-connected before dropping chips.
     std::vector<FabricType> fabric_type_candidates;
     fabric_type_candidates.push_back(requested_fabric_type);
     if (has_flag(requested_fabric_type, FabricType::TORUS_XY)) {
-        // TORUS_XY -> try the single-axis toruses first.
         fabric_type_candidates.push_back(FabricType::TORUS_Y);
         fabric_type_candidates.push_back(FabricType::TORUS_X);
     }
-    // A 1D ring needs deadlock-avoidance datelines, which require wrap-around cabling on at least one
-    // axis - plain MESH cannot host it. T3K is the one board with no wrap at all and already resolves
-    // to MESH in get_fabric_type() (see the note there); everywhere else TORUS_X/TORUS_Y is the floor.
+    // T3K cannot support MESH https://github.com/tenstorrent/tt-metal/issues/32146
     const bool ring_requires_torus = (fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D_RING ||
                                       fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D_NEIGHBOR_EXCHANGE) &&
                                      cluster.get_cluster_type() != tt::tt_metal::ClusterType::T3K;
@@ -1729,14 +1721,9 @@ MeshGraph TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
         fabric_type_candidates.push_back(FabricType::MESH);
     }
 
-    // First pass: prefer a full-coverage mapping while keeping the natural (most 2D-balanced) shape
-    // ordering of mesh_shapes_to_try - 1D shapes are deliberately last. For each candidate shape we
-    // try fabric types from most to least connected, so we keep as much torus connectivity as the
-    // hardware actually supports without dropping chips or collapsing to a degenerate 1D mesh (e.g.
-    // returning an 8x4 TORUS_Y rather than a 32x1 ring on a galaxy that only wraps one axis).
     for (const auto& mesh_shape : mesh_shapes_to_try) {
         if (mesh_shape.mesh_size() != total_number_of_chips) {
-            continue;  // only consider full-coverage shapes in this pass
+            continue;
         }
         for (const auto& fabric_type : fabric_type_candidates) {
             if (auto mesh_graph = try_map_shape(fabric_type, mesh_shape)) {
@@ -1755,9 +1742,6 @@ MeshGraph TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
         }
     }
 
-    // Second pass (fallback): no fabric type can map all chips. Preserve the original best-effort
-    // behavior using the requested fabric type, accepting the first shape that maps even if some
-    // physical chips are left unused.
     for (const auto& mesh_shape : mesh_shapes_to_try) {
         if (auto mesh_graph = try_map_shape(requested_fabric_type, mesh_shape)) {
             // Check if the final mesh size doesn't match the number of physical chips
