@@ -7,7 +7,7 @@ file consumed by prepare_test_matrix.py), so this validator never drifts from th
 tests that actually exist. Supported tokens are:
 
   * "all"                -> run every stage
-  * each entry's test_type   (e.g. mla, prefill_block, kimi_moe, ...)
+  * each entry's test_type   (e.g. mla_chunked, glm_moe, kimi_moe, ...)
   * each entry's test_group  (e.g. module -> run every stage in that group)
 
 Selection rules:
@@ -24,7 +24,7 @@ Usage:
     python validate_test_type_selection.py <tests_yaml_path> <selection>
 
 Examples:
-    python validate_test_type_selection.py tests/pipeline_reorg/blaze_models_prefill_tests.yaml "mla,prefill_block"
+    python validate_test_type_selection.py tests/pipeline_reorg/blaze_models_prefill_tests.yaml "mla_chunked,glm_moe"
     python validate_test_type_selection.py tests/pipeline_reorg/blaze_models_prefill_tests.yaml ""        # -> all
     python validate_test_type_selection.py tests/pipeline_reorg/blaze_models_prefill_tests.yaml "all"
 """
