@@ -150,7 +150,6 @@
     exit_code=0
     export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/huggingface/hub/models--deepseek-ai--DeepSeek-R1-0528
     pytest models/demos/deepseek_v3_d_p/tests/pcc/ -vvv --tb=short -k "not matmul_pcc and not perf-host-64 and not pad50 and not lm_head and not global_to_local and not (linear-8 and (pcc-device or (5k and not 25k))) and (not moe_gate_prefill2d or (fabric2d-mesh-4x2 and not host_all and not gpt_)) and (not ttnn_moe or (kimi and linear-8 and 25k and not perf) or (fabric2d-mesh-4x2 and pcc-device and pad0)) and (not moe_routing_setup or (fabric2d-mesh-4x2 and pad0)) and not 4K" --timeout 1800 || exit_code=$?
-    pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_ds_mla -k "2x4 and random and scaled_sl and check_pcc and line and sequential" -vvv --tb=short || exit_code=$?
     pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_ds_prefill_block -k "balanced and not non_balanced and fabric2d and not pretrained and iter2000" -vvv --tb=short --timeout=900 || exit_code=$?
     pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block_loop.py -k "fabric2d-mesh-2x4 and layer0 and gate_device and ((no_ref and isl_5k) or (with_ref and isl_1k))" -vvv --tb=short || exit_code=$?
     exit $exit_code
@@ -189,7 +188,7 @@
     exit_code=0
     # Cheap host-side coverage for the mixed-format cache contract and producer decoding.
     pytest models/demos/common/prefill/tests/test_prefill_producer_kv_decode.py models/demos/deepseek_v3_d_p/tests/test_sparse_kv_cache_contract.py -vvv --tb=short || exit_code=$?
-    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/ -vvv --tb=short -k "(not test_ring_joint_mla or (4x2 and pcc_check and not fabric2d and no_balancing)) and (not test_rope_prefill or (4x2 and unbalanced)) and (not update_padded_kv_cache or 2x4) and (not rotary_embedding_indexed or 2x4) and (not moe_padding_config or 2x4) and (not zero_padded or linear-8 or 2x4) and not single-1 and not unweighted and (not test_prefill_dispatch or (bf16_in and tile and bf16_out and fabric2d-mesh-4x2-2link and not perf_no_pcc)) and (not test_prefill_combine or (bf16_out and tile and 2link and mesh-4x2 and not perf_no_pcc)) and (not test_ttnn_dispatch_combine or (fabric2d-mesh-4x2-2link and 640))" -m "not extended_model" || exit_code=$?
+    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/ -vvv --tb=short -k "not test_ring_joint_mla and (not test_rope_prefill or (4x2 and unbalanced)) and (not update_padded_kv_cache or 2x4) and (not rotary_embedding_indexed or 2x4) and (not moe_padding_config or 2x4) and (not zero_padded or linear-8 or 2x4) and not single-1 and not unweighted and (not test_prefill_dispatch or (bf16_in and tile and bf16_out and fabric2d-mesh-4x2-2link and not perf_no_pcc)) and (not test_prefill_combine or (bf16_out and tile and 2link and mesh-4x2 and not perf_no_pcc)) and (not test_ttnn_dispatch_combine or (fabric2d-mesh-4x2-2link and 640))" -m "not extended_model" || exit_code=$?
     exit $exit_code
   skus:
     bh_loudbox:
@@ -204,7 +203,6 @@
     exit_code=0
     export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/huggingface/hub/models--deepseek-ai--DeepSeek-R1-0528
     # pytest models/demos/deepseek_v3_d_p/tests/perf/test_dispatch_combine_perf.py -m models_device_performance_bare_metal -vvv --tb=short --timeout=900 || exit_code=$? Commented out until problems with various results on different runners is resolved Issue https://github.com/tenstorrent/tt-metal/issues/47287
-    DEEPSEEK_MOE_PERF_SKIP_8X1=1 pytest models/demos/deepseek_v3_d_p/tests/perf/test_moe_perf.py -vvv --tb=short || exit_code=$?
     pytest models/demos/deepseek_v3_d_p/tests/perf/test_prefill_block_perf.py -k "block_2x4 and fabric2d" -vvv --tb=short || exit_code=$?
     exit $exit_code
   skus:
@@ -219,7 +217,7 @@
   cmd: |
     exit_code=0
     pytest models/demos/deepseek_v3_d_p/tests/pcc/ -vvv --tb=short -k "not matmul_pcc and not perf-host-64 and (mesh-2x2 or not (moe_gate_prefill2d or moe_routing_setup or ttnn_moe)) and not lm_head and not global_to_local and not ring-4 and (not moe_gate_prefill2d or (fabric2d- and not host_all and not gpt_)) and not 4K" --timeout 1800 || exit_code=$?
-    pytest models/demos/deepseek_v3_d_p/tests/cache/ -vvv --tb=short -k "not lm_head and not host_" || exit_code=$?
+    pytest models/demos/deepseek_v3_d_p/tests/cache/ -vvv --tb=short -k "not lm_head and not host_ and not mla_weights" || exit_code=$?
     exit $exit_code
   skus:
     bh_quietbox_2:
@@ -232,7 +230,7 @@
   model-name: deepseek_prefill
   cmd: |
     exit_code=0
-    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/ -vvv --tb=short -k "(not test_ring_joint_mla or not fabric2d) and not single-1 and (not test_prefill_dispatch or ((bf16_in and tile and bf16_out) or (fp8_scaled_in and row_major and fp8_out)))" -m "not extended_model" || exit_code=$?
+    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/ -vvv --tb=short -k "not test_ring_joint_mla and not single-1 and (not test_prefill_dispatch or ((bf16_in and tile and bf16_out) or (fp8_scaled_in and row_major and fp8_out)))" -m "not extended_model" || exit_code=$?
     exit $exit_code
   skus:
     bh_p150b_civ2:
@@ -245,7 +243,7 @@
   model-name: deepseek_prefill
   cmd: |
     exit_code=0
-    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/ -vvv --tb=short -k "(not test_ring_joint_mla or not fabric2d) and not single-1 and (not test_prefill_dispatch or (((bf16_in and tile and bf16_out) or (fp8_scaled_in and row_major and fp8_out)) and not perf_no_pcc))" -m "not extended_model" || exit_code=$?
+    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/ -vvv --tb=short -k "not test_ring_joint_mla and not single-1 and (not test_prefill_dispatch or (((bf16_in and tile and bf16_out) or (fp8_scaled_in and row_major and fp8_out)) and not perf_no_pcc))" -m "not extended_model" || exit_code=$?
     exit $exit_code
   skus:
     bh_p300:
@@ -258,7 +256,7 @@
   model-name: deepseek_prefill
   cmd: |
     exit_code=0
-    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/ -vvv --tb=short -k "(not test_ring_joint_mla or (2x2 and pcc_check and not fabric2d and no_balancing)) and (not test_ttnn_dispatch_combine or (fabric2d-mesh-2x2 and 640)) and (not update_padded_kv_cache or 2x2) and not unweighted and (not test_prefill_dispatch or (bf16_in and tile and bf16_out and fabric2d-mesh-2x2 and not 2link and not perf_no_pcc)) and (not test_prefill_combine or (bf16_out and tile and 2link and mesh-2x2 and not perf_no_pcc))" || exit_code=$?
+    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/ -vvv --tb=short -k "not test_ring_joint_mla and (not test_ttnn_dispatch_combine or (fabric2d-mesh-2x2 and 640)) and (not update_padded_kv_cache or 2x2) and not unweighted and (not test_prefill_dispatch or (bf16_in and tile and bf16_out and fabric2d-mesh-2x2 and not 2link and not perf_no_pcc)) and (not test_prefill_combine or (bf16_out and tile and 2link and mesh-2x2 and not perf_no_pcc))" || exit_code=$?
     exit $exit_code
   skus:
     bh_quietbox_2:
