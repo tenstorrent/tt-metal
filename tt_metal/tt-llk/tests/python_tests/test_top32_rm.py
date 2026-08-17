@@ -1,0 +1,316 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+"""
+SFPU top32_rm test (Blackhole): DeepSeek row-major top-32 with paired indices.
+
+This is the sole coverage for the seven promoted experimental wrappers used by the
+DeepSeek top32_rm compute kernels (UNPACK/MATH top32_rm + the bitonic SFPU family),
+and it mirrors the two on-silicon demo kernels:
+  * MODE 0 (row_elements < 1024): the 64-elements-at-a-time path
+      (tests/.../compute/top32_rm_dev_compute.cpp)
+  * MODE 1 (row_elements >= 1024): the whole-1024-chunk pre-sort path
+      (tests/.../compute/top32_rm_dev_compute_v2.cpp)
+which is exactly how the gtest tests/.../llk/test_top32_rm_dev.cpp selects the kernel.
+
+Inputs (one row):
+  buffer_A[i]  = bf16 score of element i        (value stream, Float16_b)
+  buffer_B[i]  = uint32 index of element i = i  (index stream, UInt32)
+
+Output (row 0 of two Dest tiles, packed):
+  buffer_Res[0] = value tile: top-32 scores, packed bf16 -> Float32 (fp32 words)
+  buffer_Res[1] = index tile: top-32 indices, raw uint32 words
+
+GOLDEN (mirrors the gtest reference verify_top32_outputs):
+  Rank the (score, orig_idx) pairs by score DESCENDING, ties broken by smaller
+  orig_idx, take the first 32. Because buffer_B[i] == i, the reported index of a
+  surviving score is its original row-major position. All scores here are exactly
+  representable in bf16, so the sort order matches the fp32 order of the values.
+
+VALIDATED LANES: only the 32 packed top-32 lanes (row 0 of each tile) are defined;
+every other lane in the packed tiles is undefined garbage and is NOT validated.
+The score MULTISET is always checked; the exact index SET is checked only for
+strictly-distinct-score inputs (the sort is not stable across ties, same rule the
+gtest applies when it validates scores but not indices).
+"""
+
+import torch
+from conftest import skip_for_quasar, skip_for_wormhole
+from helpers.format_config import DataFormat, InputOutputFormat
+from helpers.golden_generators import Top32RmGolden, get_golden_generator
+from helpers.llk_params import DestAccumulation, DestSync, format_dict
+from helpers.param_config import parametrize
+from helpers.stimuli_config import StimuliConfig
+from helpers.test_config import TestConfig
+from helpers.test_variant_parameters import DEST_SYNC, TOP32_RM
+from helpers.utils import passed_test
+
+pytestmark = [skip_for_wormhole, skip_for_quasar]
+
+TOP_K = 32
+ELEMENTS_PER_TILE = 1024
+CHUNK_SIZE = 1024
+
+# The packer is set to a single output row (TTI_SETADCXX(PAC, 1-1)) so it writes only
+# the top-32 result row; with a single row the packed elements land contiguously at
+# the start of the tile (words 0..31), exactly as the on-silicon gtest reads out0/out1
+# (it treats the first 32 packed elements as the flat top-32). The rest of the tile is
+# undefined garbage and is NOT validated.
+DEFINED_LANES = list(range(0, TOP_K))
+
+# buffer_A: bf16 scores. buffer_B: uint32 indices. Result tiles are UInt32-sized.
+FORMATS = InputOutputFormat(
+    DataFormat.Float16_b, DataFormat.UInt32, input_format_B=DataFormat.UInt32
+)
+
+
+def _num_input_tiles(row_elements: int) -> int:
+    return (row_elements + ELEMENTS_PER_TILE - 1) // ELEMENTS_PER_TILE
+
+
+def _mode_for(row_elements: int) -> int:
+    # Same split the gtest uses to pick the compute kernel.
+    return 1 if row_elements >= CHUNK_SIZE else 0
+
+
+def _bitcast_float32(words: torch.Tensor) -> torch.Tensor:
+    return words.to(torch.int32).view(torch.float32)
+
+
+def _distinct_bf16_from_hi16(hi16: torch.Tensor) -> torch.Tensor:
+    """Turn uint16 bit patterns into exactly-representable bf16 values as float32."""
+    return _bitcast_float32(hi16.to(torch.int64) << 16)
+
+
+def _make_row(row_elements: int, seed: int, mode: str) -> torch.Tensor:
+    """
+    One row of `row_elements` float32 scores, all exactly representable in bf16.
+
+    mode="shuffled_distinct": a shuffled set of distinct exactly-representable bf16
+                              values (unambiguous top-32; exact index set checkable).
+    mode="presorted":         the gtest's own generator shape — groups of 32 scores
+                              that are monotonically decreasing, spanning negatives
+                              and positives. Distinct within the row.
+    mode="all_ties":          every score identical (every compare-exchange takes the
+                              tie branch and resolves on the index bits).
+    mode="partial_ties":      distinct scores except a block at the top-32 boundary is
+                              tied, so which of the tied elements land in the top-32 is
+                              tie-break dependent.
+    mode="single_finite":     one large finite score, the rest are -inf (bf16), so only
+                              one element is a real top-k member.
+    mode="all_neg_inf":       every score is bf16 -inf (degenerate; the whole row is the
+                              padding sentinel).
+    """
+    gen = torch.Generator().manual_seed(seed)
+
+    if mode == "shuffled_distinct":
+        hi16 = 0x3F80 + torch.randperm(row_elements, generator=gen)  # >= +1.0, distinct
+        return _distinct_bf16_from_hi16(hi16)
+
+    if mode == "presorted":
+        # Mirror make_shuffled_inputs_row_major: value = (j << 4) + r - 256, j counting
+        # down within each group of 32. Quantize to bf16 so every value is exact.
+        vals = torch.empty(row_elements, dtype=torch.float32)
+        for i in range(row_elements):
+            j = TOP_K - (i % TOP_K)
+            r = float((i * 2654435761) % 16)  # deterministic pseudo-jitter in [0,16)
+            vals[i] = float((j << 4)) + r - 256.0
+        return vals.to(torch.bfloat16).float()
+
+    if mode == "all_ties":
+        return torch.full((row_elements,), 3.0, dtype=torch.float32)
+
+    if mode == "partial_ties":
+        hi16 = 0x3F80 + torch.arange(row_elements)
+        vals = _distinct_bf16_from_hi16(hi16)
+        # Tie a run straddling the 32nd-largest value so the top-32 boundary is ambiguous.
+        top = torch.argsort(vals, descending=True)
+        tied_val = float(vals[top[TOP_K - 2]])
+        for t in top[TOP_K - 4 : TOP_K + 4]:
+            vals[t] = tied_val
+        return vals
+
+    if mode == "single_finite":
+        neg_inf = _distinct_bf16_from_hi16(torch.full((row_elements,), 0xFF80))
+        neg_inf[0] = 5.0
+        return neg_inf
+
+    if mode == "all_neg_inf":
+        return _distinct_bf16_from_hi16(torch.full((row_elements,), 0xFF80))
+
+    raise ValueError(f"unknown mode {mode}")
+
+
+def _build_input(row_elements: int, seed: int, mode: str):
+    """
+    Build the flat value/index streams and the per-row score tensor for the golden.
+    Returns (scores_bf16, indices_u32, row_scores_fp32).
+
+    The streams are laid out contiguously across `num_input_tiles` tiles, exactly as
+    the gtest writes them: score i / index i at flat position i, remaining slots 0.
+    """
+    nt = _num_input_tiles(row_elements)
+    total = nt * ELEMENTS_PER_TILE
+
+    row = _make_row(row_elements, seed, mode)
+
+    scores = torch.zeros(total, dtype=torch.float32)
+    scores[:row_elements] = row
+    # buffer_B is UInt32; format_dict[UInt32] is torch.int64 (the packer's expected dtype).
+    indices = torch.zeros(total, dtype=format_dict[DataFormat.UInt32])
+    indices[:row_elements] = torch.arange(row_elements)
+
+    return scores.to(torch.bfloat16), indices, row
+
+
+def _variant(
+    row_elements, seed=12345, mode="shuffled_distinct", dest_sync=DestSync.Full
+):
+    """Build the stimulus and TestConfig for one variant. Returns (config, row_scores)."""
+    nt = _num_input_tiles(row_elements)
+    scores_bf16, indices_u32, row = _build_input(row_elements, seed, mode)
+
+    config = TestConfig(
+        test_name="sources/top32_rm_test.cpp",
+        formats=FORMATS,
+        templates=[
+            DEST_SYNC(dest_sync),
+            TOP32_RM(
+                row_elements=row_elements,
+                mode=_mode_for(row_elements),
+                num_input_tiles=nt,
+            ),
+        ],
+        variant_stimuli=StimuliConfig(
+            scores_bf16,
+            DataFormat.Float16_b,  # buffer_A: bf16 scores
+            indices_u32,
+            DataFormat.UInt32,  # buffer_B: uint32 indices
+            FORMATS.output_format,
+            tile_count_A=nt,
+            tile_count_B=nt,
+            tile_count_res=2,  # value tile + index tile
+        ),
+        dest_acc=DestAccumulation.Yes,  # fp32 dest; the demo kernels use fp32_dest_acc_en=true
+        # The value stream (Float16_b) and index stream (UInt32) live in different
+        # exponent families, which the automatic math-format inference rejects. This
+        # kernel drives the two streams through distinct unpack_A/unpack_B formats by
+        # design (values -> bf16 SrcA path, indices -> raw uint32 path), so pin the
+        # formats explicitly instead of inferring a single shared math format.
+        disable_format_inference=True,
+    )
+    return config, row
+
+
+def _run(row_elements, **kwargs):
+    config, row = _variant(row_elements, **kwargs)
+    return config.run().result, row
+
+
+def _extract_top32(result):
+    """
+    Pull the 32 defined lanes out of the two packed result tiles.
+    Returns (values_float32[32], indices_int[32]).
+    """
+    res = torch.tensor(result, dtype=format_dict[DataFormat.UInt32])
+    assert res.numel() == 2 * ELEMENTS_PER_TILE, f"unexpected result size {res.numel()}"
+
+    value_tile = res[:ELEMENTS_PER_TILE]
+    index_tile = res[ELEMENTS_PER_TILE:]
+
+    lanes = torch.tensor(DEFINED_LANES)
+    values = _bitcast_float32(value_tile[lanes])
+    indices = index_tile[lanes].to(torch.int64)
+    return values, indices
+
+
+def _check(result, row, compare_index_set):
+    """
+    Validate the packed result against the golden.
+
+    Always: the top-32 score multiset matches, and each returned index points at the
+    value returned alongside it (index -> input[index] == value). `compare_index_set`
+    additionally requires the exact top-32 index set (only for strictly-distinct rows).
+    """
+    gold_val, gold_idx = get_golden_generator(Top32RmGolden)(row, TOP_K)
+    hw_val, hw_idx = _extract_top32(result)
+
+    # Score multiset (Dest lane order is internal, so sort both).
+    assert passed_test(
+        torch.sort(gold_val).values,
+        torch.sort(hw_val).values,
+        DataFormat.Float16_b,
+    ), "top-32 value multiset mismatch"
+
+    # Each reported index must actually point at the value returned with it.
+    for idx, val in zip(hw_idx.tolist(), hw_val.tolist()):
+        assert 0 <= idx < row.numel(), f"index {idx} out of range"
+        assert float(row[idx]) == float(
+            val
+        ), f"index {idx} value {val} != input {float(row[idx])}"
+
+    if compare_index_set:
+        assert set(hw_idx.tolist()) == set(
+            gold_idx.tolist()
+        ), "top-32 index set mismatch"
+
+
+# The full row_elements axis from the strategy doc / gtest. < 1024 exercises MODE 0
+# (64-at-a-time), >= 1024 exercises MODE 1 (1024-chunk pre-sort) plus, for the
+# non-multiples, the < 1024 tail loop. 32/64 are the whole-tile boundary cases; 63/65
+# straddle the 64-element group boundary; 3232 is the gtest's large odd size.
+@parametrize(
+    row_elements=[32, 63, 64, 65, 128, 160, 1023, 1024, 1088, 2048, 3232],
+)
+def test_top32_rm(row_elements):
+    (row_elements,) = row_elements
+    result, row = _run(row_elements, mode="shuffled_distinct")
+    _check(result, row, compare_index_set=True)
+
+
+# The gtest's own presorted generator shape (groups of 32 monotone-decreasing scores).
+@parametrize(row_elements=[64, 128, 160, 1024, 3232])
+def test_top32_rm_presorted(row_elements):
+    (row_elements,) = row_elements
+    result, row = _run(row_elements, mode="presorted")
+    _check(result, row, compare_index_set=True)
+
+
+# Degenerate / tie-prone stimuli. Ties make the chosen indices ambiguous, so validate
+# the score multiset (and index->value pairing) only, not the exact index set.
+@parametrize(
+    row_elements=[64, 128, 1024],
+    mode=["all_ties", "partial_ties"],
+)
+def test_top32_rm_ties(row_elements, mode):
+    result, row = _run(row_elements, mode=mode)
+    _check(result, row, compare_index_set=False)
+
+
+# Sentinel-heavy rows: a single finite score with the rest bf16 -inf, and a row that is
+# entirely bf16 -inf. -inf lanes cannot be PCC-compared (constant/nan), so validate only
+# the finite lanes explicitly rather than through the generic multiset check.
+@parametrize(row_elements=[64, 1024], mode=["single_finite", "all_neg_inf"])
+def test_top32_rm_sentinels(row_elements, mode):
+    result, row = _run(row_elements, mode=mode)
+    hw_val, hw_idx = _extract_top32(result)
+
+    finite_mask = torch.isfinite(hw_val)
+    if mode == "single_finite":
+        # Exactly one finite value must come back: the lone real score at index 0.
+        assert (
+            int(finite_mask.sum()) == 1
+        ), "single_finite: expected exactly one finite lane"
+        val = float(hw_val[finite_mask][0])
+        idx = int(hw_idx[finite_mask][0])
+        assert idx == 0 and float(row[0]) == val, "single_finite: wrong lone-score lane"
+    else:  # all_neg_inf
+        # Every returned score is the -inf sentinel; nothing finite survives.
+        assert (
+            int(finite_mask.sum()) == 0
+        ), "all_neg_inf: a finite value leaked into the top-32"
+
+    # Each finite returned index must still point at its value.
+    for idx, val in zip(hw_idx[finite_mask].tolist(), hw_val[finite_mask].tolist()):
+        assert float(row[idx]) == float(
+            val
+        ), f"index {idx} value {val} != input {float(row[idx])}"
