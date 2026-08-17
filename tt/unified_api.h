@@ -52,6 +52,7 @@ struct PhysicalCoord {
 
     // This core's own physical coordinate, on this thread's NOC.
     static PhysicalCoord this_core();
+    static PhysicalCoord origin();
 
     uint64_t get_noc_addr(uintptr_t l1_addr) const;
 
@@ -64,6 +65,7 @@ struct LogicalCoord {
     uint32_t x;
 
     static LogicalCoord this_core();
+    static LogicalCoord origin();
 
     PhysicalCoord to_physical(uint32_t y_offset = 0, uint32_t x_offset = 0) const;
 
@@ -82,6 +84,14 @@ struct Shape {
 struct PhysicalMcast {
     PhysicalCoord start;
     PhysicalCoord end;
+
+    // Declaring any constructor costs PhysicalMcast its aggregate status, so the
+    // two-corner form has to be spelled out rather than left to brace-init.
+    PhysicalMcast(PhysicalCoord start, PhysicalCoord end) : start(start), end(end) {}
+
+    // Implicit: a single core is a 1x1 rectangle, which is what lets the unicast
+    // noc_core_write hand its PhysicalCoord straight to the handle.
+    PhysicalMcast(PhysicalCoord unit) : start(unit), end(unit) {}
 
     uint64_t get_noc_addr(uintptr_t l1_addr) const;
 
@@ -533,8 +543,8 @@ struct NocAsyncReadCoreTx {
 // unicast form, where construction costs only an L1 address.
 template <int thread>
 struct NocAsyncWriteCoreTx {
-    NocAsyncWriteCoreTx(const Storage& dst, const Block& src);
-    NocAsyncWriteCoreTx(const Storage& dst, const Block& src, PhysicalMcast rect, bool receiving);
+    NocAsyncWriteCoreTx(const Storage& dst, const Block& src, PhysicalMcast dst_range, uint32_t semaphore_id);
+    NocAsyncWriteCoreTx(const Storage& dst, const Block& src, bool reader, uint32_t semaphore_id);
 
     NocAsyncWriteCoreTx(const NocAsyncWriteCoreTx&) = delete;
     NocAsyncWriteCoreTx& operator=(const NocAsyncWriteCoreTx&) = delete;
@@ -543,21 +553,17 @@ struct NocAsyncWriteCoreTx {
 
     ~NocAsyncWriteCoreTx();
 
-    Block wait() const;
+    Block wait(uint32_t num_writers) const;
 
     uint32_t dst_cb;
     uint32_t dst_tiles;
     uint32_t src_cb;
     uint32_t src_tiles;
 
-    // Meaningful only when `broadcast`.
-    PhysicalMcast rect{};
-    bool broadcast = false;
-    bool receiving = false;
-
     // mutable: wait() is const across the whole API, and signalling is what a
     // wait on this handle does.
     mutable Semaphore<thread> arrived;
+    bool reader;
 
 #if defined(IS_DM_THREAD) && IS_DM_THREAD && defined(ASSERT_ENABLED) && ASSERT_ENABLED
     mutable bool waited = false;
@@ -679,30 +685,52 @@ NocAsyncWriteTx<thread> noc_store(Block block, Fn fn);
 template <int thread>
 NocAsyncReadCoreTx<thread> noc_core_read(const Storage& dst, Block src, PhysicalCoord coord, uint32_t byte_offset = 0);
 
-template <int thread>
-NocAsyncWriteCoreTx<thread> noc_core_write(
-    const Storage& dst, Block src, PhysicalCoord coord, uint32_t byte_offset = 0);
-
-// Push to a rectangle of peers. EVERY core in the exchange runs this one
-// statement and takes its side from its own coordinate: the core outside `mcast`
-// sends, the cores inside receive. The handshake rides on the handle's own
-// reserved semaphore, so there is nothing to pass and nothing to reset.
+// EVERY core in the exchange runs one statement and takes its side from its own
+// coordinate and predicate:
 //
-// Fixes arrival notification, not addressing: the destination is still computed
-// from the SENDER's local view of `dst`, so a repeated push needs the far-side
-// pointers kept in step (see the NOTE above).
+//   `dst_range`         the cores being written INTO. A core inside it is a
+//                       reader: it takes delivery and publishes its own copy of
+//                       `dst`.
+//   `write_predicate`   whether THIS core writes. Its destinations are `dst_range`.
+//
+// `wait(num_writers)` is the count the reader collects: how many cores had
+// write_predicate true. Nothing checks it against reality -- too high hangs, too
+// low publishes short.
+//
+// WHAT THIS GIVES YOU is arrival notification for ONE push: the writers raise
+// `arrived` after their payload, and the reader will not publish `dst` until it
+// has counted them all. That is the part a write barrier cannot do, since it
+// tells only the writer that its data landed.
+//
+// WHAT IT DOES NOT GIVE YOU is a repeatable channel. Two things are the caller's:
+//
+//   1. dst has to be FREE before the writers write. Nothing here tells a writer
+//      that the reader is done with the previous round's contents, and the
+//      reader's `arrived.set(0)` after collecting is a window in which a writer
+//      already into the next round loses its increment -- which hangs the round
+//      after. Put a synchronize_cores() between pushes, or otherwise establish
+//      that every reader is finished, and both go away.
+//
+//   2. Addressing. The destination is computed from the WRITER's local view of
+//      `dst`, so the copies have to stay in step (see the NOTE above).
 template <int thread>
 NocAsyncWriteCoreTx<thread> noc_core_write(
-    const Storage& dst, Block src, PhysicalMcast mcast, uint32_t byte_offset = 0);
+    const Storage& dst, Block src, PhysicalCoord coord, bool write_predicate, uint32_t byte_offset = 0);
+
+template <int thread>
+NocAsyncWriteCoreTx<thread> noc_core_write(
+    const Storage& dst, Block src, PhysicalMcast dst_range, bool write_predicate, uint32_t byte_offset = 0);
 
 template <int thread>
 NocAsyncReadCoreTx<thread> noc_core_read(const Storage& dst, Block src, LogicalCoord coord, uint32_t byte_offset = 0);
 
 template <int thread>
-NocAsyncWriteCoreTx<thread> noc_core_write(const Storage& dst, Block src, LogicalCoord coord, uint32_t byte_offset = 0);
+NocAsyncWriteCoreTx<thread> noc_core_write(
+    const Storage& dst, Block src, LogicalCoord coord, bool write_predicate, uint32_t byte_offset = 0);
 
 template <int thread>
-NocAsyncWriteCoreTx<thread> noc_core_write(const Storage& dst, Block src, LogicalMcast mcast, uint32_t byte_offset = 0);
+NocAsyncWriteCoreTx<thread> noc_core_write(
+    const Storage& dst, Block src, LogicalMcast dst_range, bool write_predicate, uint32_t byte_offset = 0);
 
 }  // namespace unified
 }  // namespace tt
