@@ -87,4 +87,11 @@ void expect_galaxy_corner_folding_check(const ControlPlane& control_plane);
 // Rank binding order is not checked here (verify visually vs MGD when adding tests).
 void expect_mesh_graph_host_topology_matches_runtime(const ControlPlane& control_plane);
 
+// Write `text_proto` to a temp file named after `name` and return its path. MeshGraph construction is
+// path-based, so edge-case descriptors are written inline rather than added to the shared fixture
+// directory (which is reserved for fixtures several suites share). The name carries the pid: ranks
+// sharing a host would otherwise truncate one file while another reads it, and each rank needs its own
+// local copy because a single writer's temp file is not visible to ranks on other hosts.
+std::string write_temp_descriptor(const std::string& name, const std::string& text_proto);
+
 }  // namespace tt::tt_fabric::fabric_router_tests
