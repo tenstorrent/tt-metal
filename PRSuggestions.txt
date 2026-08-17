@@ -38,17 +38,20 @@
       prompt, and make the log say what it used.
 
 4. The decode step exists twice, and speed and correctness were measured on different ones
-    - There are two versions of the decode pass. The one the demo runs has no KV cache. A second one,
+    - There are two versions of the decode pass. The shipped one has no KV cache. A second one,
       written later so the work could be recorded and replayed on the device, does have a cache.
       Correctness was measured on the first and speed on the second, so the improvement that reaches
       the shipped path is smaller than the one reported, because it is not the same code.
-    - Why the shipped one has no cache goes back to bring-up. The cache is one of the arguments point
-      3 drops, so the component was never tested with one. The saved example does hold a real cache,
-      but the same object is handed to the reference and then to the port, and the reference writes
-      into it as it runs, so the port would see one entry too many. It was dropped instead of copied.
-      With no cache the test compares a single value and returns 1.0 whatever the inputs are, so a
-      version that uses the cache and one that ignores it score the same, and the simpler one was
-      accepted.
+    - Why the shipped one has no cache goes back to bring-up. A component is tested by running the
+      real model once, recording the arguments each component was called with, then calling the
+      original and the rewrite on those recorded arguments and comparing the results. For attention
+      the recording does include a real cache, but a cache is mutable and attention appends to it, so
+      whichever side runs first leaves an extra entry behind, and the second side then attends over one
+      position too many and looks wrong. Giving each side its own copy is a one line fix. It was
+      dropped instead, and it is also one of the arguments point 3 drops, so it would have arrived
+      empty either way. With no cache the test compares a single value and returns 1.0 whatever the
+      inputs are, so a version that uses the cache and one that ignores it score the same, and the
+      simpler one was accepted.
     - That then decided the demo, because the demo has to use the components that passed. A component
       that cannot remember anything has to be given the whole prompt plus everything generated so far,
       so every frame re-runs all layers over the entire sequence and keeps only the last position.
