@@ -155,7 +155,8 @@ ProgramDescriptor EmbeddingBackwardDeviceOperation::create_descriptor(
         (uint32_t)num_embeddings_tiles,
         (uint32_t)index_page_size,
         (uint32_t)(tensor_args.index_tensor.dtype() == DataType::BFLOAT16),
-        (uint32_t)(tensor_return_value.dtype() == DataType::BFLOAT16)};
+        (uint32_t)(tensor_return_value.dtype() == DataType::BFLOAT16),
+        (uint32_t)(tensor_return_value.dtype() == DataType::FLOAT32)};
     TensorAccessorArgs(*grad_tensor_buffer).append_to(reader_compile_time_args);
     TensorAccessorArgs(*index_tensor_buffer).append_to(reader_compile_time_args);
     TensorAccessorArgs(*out_buffer).append_to(reader_compile_time_args);
@@ -174,7 +175,8 @@ ProgramDescriptor EmbeddingBackwardDeviceOperation::create_descriptor(
     compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_desc.core_ranges = all_cores;
     compute_desc.compile_time_args = {max_tiles_per_core, input_height_tiles};
-    compute_desc.config = ComputeConfigDescriptor{};
+    compute_desc.config =
+        ComputeConfigDescriptor{.fp32_dest_acc_en = tensor_return_value.dtype() == DataType::FLOAT32};
 
     ////////////////////////////////////////////////////////////////////////////
     //                 Run-time arguments
