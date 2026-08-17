@@ -79,7 +79,7 @@ def _golden_function(*args, dtype=ttnn.bfloat16, **kwargs):
     kwargs.pop("memory_config", None)
     kwargs.pop("layout", None)
     # Forward all supported range overloads, then cast to the requested TTNN dtype.
-    return torch.arange(*args, **kwargs).to(_to_torch_dtype(dtype))
+    return torch.arange(*args, **kwargs).to(ttnn.ttnn_dtype_to_torch_dtype(dtype))
 
 
 ttnn.attach_golden_function(ttnn.arange, golden_function=_golden_function)
