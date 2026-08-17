@@ -288,10 +288,9 @@ void check_against_reference(
         EXPECT_TRUE(xt::allclose(out_gs, ref_gs, kRtol, kAtol))
             << "grouped_scores allclose failed (rtol=" << kRtol << " atol=" << kAtol << ")";
     }
-    // grouped: only ACTIVE rows (plan[i] != SENTINEL) are guaranteed equal to
-    // dispatched[plan[i]]. Pad rows are not part of the op contract — the
-    // ungroup op skips them via plan[i] == SENTINEL and weights them by 0
-    // grouped_scores, so any value there is harmless.
+    // grouped: active rows (plan[i] != SENTINEL) must equal dispatched[plan[i]];
+    // pad rows (alignment gaps and the tail past offsets[E_local]) must be zero —
+    // the op contract guarantees no uninitialized DRAM for cross-row consumers.
     ASSERT_EQ(out.grouped.size(), ref.grouped.size());
     const uint32_t H = out.H;
     // moe_group only reorders dispatched rows into the grouped layout — no math is
@@ -299,12 +298,14 @@ void check_against_reference(
     // to the bf16-roundtripped dispatched source. EXPECT_FLOAT_EQ is intentional.
     for (uint32_t i = 0; i < ref.t_cap; ++i) {
         const uint32_t src = ref.plan[i];
-        if (src == kSentinel)
-            continue;
         for (uint32_t hh = 0; hh < H; ++hh) {
             const float got = out.grouped[i * H + hh];
-            const float exp = disp_rt.flat(src * H + hh);
-            EXPECT_FLOAT_EQ(got, exp) << "grouped[" << i << ", " << hh << "] (plan=" << src << ")";
+            if (src == kSentinel) {
+                EXPECT_EQ(got, 0.0F) << "pad grouped[" << i << ", " << hh << "] is not zero";
+            } else {
+                const float exp = disp_rt.flat(src * H + hh);
+                EXPECT_FLOAT_EQ(got, exp) << "grouped[" << i << ", " << hh << "] (plan=" << src << ")";
+            }
         }
     }
 }
