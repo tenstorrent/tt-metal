@@ -28,19 +28,20 @@
  *     FabricStream<ConnT>            // OPENED: arm_*(...), drain(), close().
  *          | arm_unicast_write(page_size)             -> UnicastWriteChannel
  *          | arm_scatter_write(chunk, n)              -> ScatterWriteChannel
- *          | arm_inc(val)                             -> AtomicIncChannel
- *          | arm_multicast_inc(mcast_route, val)      -> MulticastIncChannel
+ *          | arm_inc(val)                             -> AtomicIncChannel (unicast, the stream's route)
+ *          | arm_inc(mcast_route, val)                -> AtomicIncChannel (multicast — the N-party barrier)
  *          v
  *     <channel handle>               // ARMED: the issue methods, and nothing else.
- *          write() / write_page() | write_scatter() | inc() | multicast_inc()
+ *          write() / write_page() | write_scatter() | inc()
  *
  *   What this rules out at compile time:
  *     1. arm or issue before open() — arm_* live only on FabricStream, which only open() yields.
  *     2. arm without a route — the route is bound ONCE at open(route) and reused by every arm_*,
  *        so an unrouted send cannot be written and a stream's channels cannot disagree on the
  *        route. A wrong/absent route silently corrupts the packet, so binding it un-omittably at
- *        the stream is the central footgun this API removes. (arm_multicast_inc takes its own
- *        multicast route, since that is a different cast mode than the stream's unicast route.)
+ *        the stream is the central footgun this API removes. (The multicast arm_inc overload takes
+ *        its own multicast route, since that is a different cast mode than the stream's unicast
+ *        route; the cast mode is baked into the armed channel at arm time.)
  *     3. issue before arm — write()/inc()/etc. exist only on the handle arm_* returns; you
  *        cannot name an issue without first holding an armed channel.
  *     4. forgot close()/drain() — close() DRAINS (write + atomic barriers) then closes; it is
@@ -54,9 +55,10 @@
  *
  * @par One-shot convenience — FabricStreamSender::signal().
  *   The common "send exactly one atomic-inc over the fabric, then tear down" (a ready/done
- *   handshake) is a single call: @c signal(route_or_hops, remote_sem_noc_addr) opens, arms the
- *   inc, issues it, and closes — the whole open/arm/issue/close sequence collapsed. Use the staged
- *   open()->arm_*->issue path when a stream issues MANY packets across a loop.
+ *   handshake) is a single call: @c signal(route, remote_sem_noc_addr) opens, arms the
+ *   inc, issues it, and closes — the whole open/arm/issue/close sequence collapsed (build the
+ *   route with @c unicast_route(num_hops)). Use the staged open()->arm_*->issue path when a
+ *   stream issues MANY packets across a loop.
  *
  * @par The armed-channel model — "arm once -> issue many".
  *   A fabric egress is a stateful packet header: arm_* programs its INVARIANT fields once
@@ -73,7 +75,7 @@
  *
  * @par Cross-device coordination is split (intentionally).
  *   The SENDING half of a cross-device sync — a remote atomic-inc — is owned here
- *   (AtomicIncChannel::inc / MulticastIncChannel::multicast_inc). The WAITING half is a plain
+ *   (AtomicIncChannel::inc, armed unicast or multicast). The WAITING half is a plain
  *   local @c noc_semaphore_wait_min(sem, threshold) the op calls directly (1 = handshake,
  *   ring_size-1 = N-party barrier, sem_target = counting) — a stock dataflow call, not renamed.
  *   The receive INGRESS is likewise a local NoC read the op owns; there is no FabricStreamReceiver.
@@ -275,35 +277,25 @@ private:
     uint32_t chunk_size_bytes_;
 };
 
-/// Armed unicast atomic-inc channel: increment a remote semaphore by the armed value over fabric.
-template <typename ConnT>
+/// Cast mode of an armed atomic-inc channel — baked in at arm time (the unicast arm_inc overload
+/// reuses the stream's route; the multicast overload takes its own multicast route).
+enum class IncCast : uint8_t { Unicast, Multicast };
+
+/// Armed atomic-inc channel: increment a remote semaphore by the armed value over fabric — on ONE
+/// peer (IncCast::Unicast: ready / done / counting) or on ALL peers of the armed multicast route
+/// (IncCast::Multicast: the N-party barrier). The matching local wait/reset
+/// (noc_semaphore_wait_min + set 0) stays op-owned. Each arm draws its own pooled header, so a
+/// unicast (counting) and a multicast (barrier) channel may be live at once in any order.
+template <typename ConnT, IncCast CastV = IncCast::Unicast>
 class AtomicIncChannel {
 public:
-    /// Atomic-increment a remote semaphore over the fabric by the armed value (ready / done /
-    /// counting), varying only the semaphore address (with_state).
+    /// Atomic-increment a remote semaphore over the fabric by the armed value, varying only the
+    /// semaphore address (with_state). Unicast or multicast per the channel's armed cast mode.
     FORCE_INLINE void inc(uint64_t remote_sem_noc_addr);
 
 private:
     friend class FabricStream<ConnT>;
     FORCE_INLINE AtomicIncChannel(ConnT* conn, volatile PACKET_HEADER_TYPE* hdr) : conn_(conn), hdr_(hdr) {}
-    ConnT* conn_;
-    volatile PACKET_HEADER_TYPE* hdr_;
-};
-
-/// Armed multicast atomic-inc channel (the N-party barrier): increment a semaphore on all peers
-/// on the armed multicast route by the armed value. The matching local barrier wait/reset
-/// (noc_semaphore_wait_min(sem, ring_size-1) + set 0) stays op-owned. Draws its own pooled header,
-/// independent of the unicast AtomicIncChannel — the two may be live at once in any order.
-template <typename ConnT>
-class MulticastIncChannel {
-public:
-    /// Multicast atomic-increment @c remote_sem_noc_addr to all peers on the armed route by the
-    /// armed value (with_state — varies only the dst address).
-    FORCE_INLINE void multicast_inc(uint64_t remote_sem_noc_addr);
-
-private:
-    friend class FabricStream<ConnT>;
-    FORCE_INLINE MulticastIncChannel(ConnT* conn, volatile PACKET_HEADER_TYPE* hdr) : conn_(conn), hdr_(hdr) {}
     ConnT* conn_;
     volatile PACKET_HEADER_TYPE* hdr_;
 };
@@ -338,16 +330,16 @@ public:
     /// @param num_chunks        Chunks per packet (2..4).
     FORCE_INLINE ScatterWriteChannel<ConnT> arm_scatter_write(uint32_t chunk_size_bytes, uint32_t num_chunks);
 
-    // --- Armed unicast atomic-inc channel --------------------------------------------
-    /// Arm the unicast atomic-inc channel: program the stream's route + increment value (+ flush)
+    // --- Armed atomic-inc channel (unicast or multicast) ------------------------------
+    /// Arm a UNICAST atomic-inc channel: program the stream's route + increment value (+ flush)
     /// onto a pooled header once (set_state, Val|Flush). Returns the channel to issue inc()s.
-    FORCE_INLINE AtomicIncChannel<ConnT> arm_inc(uint32_t val = 1);
+    FORCE_INLINE AtomicIncChannel<ConnT, IncCast::Unicast> arm_inc(uint32_t val = 1);
 
-    // --- Armed multicast atomic-inc channel (the N-party barrier) --------------------
-    /// Arm the multicast atomic-inc channel: program a MULTICAST route (its own, distinct from the
-    /// stream's unicast route) + increment value (+ flush) onto a dedicated pooled header once
-    /// (set_state, Val|Flush). Returns the channel. Independent of arm_inc's header.
-    FORCE_INLINE MulticastIncChannel<ConnT> arm_multicast_inc(
+    /// Arm a MULTICAST atomic-inc channel (the N-party barrier): program a MULTICAST route (its
+    /// own, distinct from the stream's unicast route) + increment value (+ flush) onto a dedicated
+    /// pooled header once (set_state, Val|Flush). Returns the channel; independent of the unicast
+    /// arm_inc's header, so the barrier and a counting inc may coexist.
+    FORCE_INLINE AtomicIncChannel<ConnT, IncCast::Multicast> arm_inc(
         const ccl_routing_utils::line_multicast_route_info_t& route, uint32_t val = 1);
 
     // --- Lifecycle -------------------------------------------------------------------
@@ -382,8 +374,9 @@ public:
     /**
      * @brief Convenience ctor for the default DirectConn policy: build the connection (deferred
      *        open) from runtime args. Advances conn_arg_idx past the fabric block.
-     * @param conn_arg_idx  Index of the fabric arg block produced by
-     *        ttnn::ccl::dataflow::append_ccl_fabric_rt_args; ADVANCED past the block.
+     * @param conn_arg_idx  Cursor at the fabric arg block produced by
+     *        ttnn::ccl::dataflow::build_ccl_fabric_rt_args (the host places the block FIRST in the
+     *        runtime args, so this cursor normally starts at 0); ADVANCED past the block.
      * @param is_forward    Send on the forward (true) or backward (false) connection.
      * @param alignment     L1 alignment used to size the on-wire payload (bytes).
      */
@@ -405,10 +398,6 @@ public:
     /// ready/done handshake. Terminal — do not also call open() on this sender afterwards.
     FORCE_INLINE void signal(
         const ccl_routing_utils::line_unicast_route_info_t& route, uint64_t remote_sem_noc_addr, uint32_t val = 1);
-    /// signal() convenience taking a hop distance instead of a route info.
-    FORCE_INLINE void signal(uint32_t num_hops, uint64_t remote_sem_noc_addr, uint32_t val = 1) {
-        signal(unicast_route(num_hops), remote_sem_noc_addr, val);
-    }
 
     /// Static one-shot: build the (DirectConn) sender from @c conn_arg_idx (advancing it), send one
     /// fabric atomic-inc, and tear down — folds construction + open()->arm_inc()->inc()->close() so
@@ -420,16 +409,6 @@ public:
         const ccl_routing_utils::line_unicast_route_info_t& route,
         uint64_t remote_sem_noc_addr,
         uint32_t val = 1);
-    /// signal_once() convenience taking a hop distance instead of a route info.
-    static FORCE_INLINE void signal_once(
-        size_t& conn_arg_idx,
-        bool is_forward,
-        uint32_t alignment,
-        uint32_t num_hops,
-        uint64_t remote_sem_noc_addr,
-        uint32_t val = 1) {
-        signal_once(conn_arg_idx, is_forward, alignment, unicast_route(num_hops), remote_sem_noc_addr, val);
-    }
 
 private:
     ConnT conn_;
