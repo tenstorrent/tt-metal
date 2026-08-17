@@ -50,6 +50,24 @@ from ttnn.operations import moreh as ttnn_moreh  # not attached to the ttnn name
 
 import ttml
 
+_DP_SIZE_CACHE = None
+
+
+def _dp_size() -> int:
+    """dp-axis size of the open mesh (cached). Activations sharded over dp
+    report their GLOBAL batch in .shape; ops taking explicit scalar dims need
+    the per-shard batch, so every shape-derived b goes through _local_b."""
+    global _DP_SIZE_CACHE
+    if _DP_SIZE_CACHE is None:
+        m = ttml.maybe_mesh()
+        _DP_SIZE_CACHE = m.axis_size("dp") if (m is not None and m.has_axis("dp")) else 1
+    return _DP_SIZE_CACHE
+
+
+def _local_b(shape0: int) -> int:
+    return int(shape0) // _dp_size()
+
+
 # Phase 2: route the conv FORWARD through native ttnn.conv2d (backward stays
 # the im2col composite). Our flat [1,1,9Cin,Cout] TILE bf16 param passes
 # conv2d's is_valid_device_conv_weights shape sniff (rank-4 [1,1,*,>=Cout],
@@ -109,6 +127,35 @@ def prof_report(divisor: float = 1.0, header: str = "") -> None:
     for k, v in sorted(rows, key=lambda kv: -kv[1]):
         n = PROF.get(k + ".n", 0)
         print(f"     conv-prof {k:<22s} {v / divisor * 1000:8.1f} ms/step  ({n} calls)", flush=True)
+
+
+# ---------------------------------------------------------------------------
+# DDP: mesh-sharded (dp) activation tensors report the GLOBAL logical shape,
+# but every explicit scalar dim / shape target we hand to ttnn (conv2d
+# batch_size, [1,1,B*HW,C] reshapes, im2col/col2im canvas shapes, batch-sum
+# reshapes) must describe the PER-SHARD tensor. Everywhere batch is derived
+# from an activation's dim 0 it goes through _local_b. Weights/params are
+# replicated across the mesh — never divide those. Per-chip batch must be
+# >= 1 (and ideally tile-friendly, e.g. a multiple of 32 is NOT required —
+# HW carries the tile alignment).
+# ---------------------------------------------------------------------------
+
+_DP_SIZE = None
+
+
+def _dp_size() -> int:
+    """dp-axis size of the open mesh (1 if no mesh / no 'dp' axis). Cached on
+    first use — the mesh must be open before the first forward pass."""
+    global _DP_SIZE
+    if _DP_SIZE is None:
+        m = ttml.maybe_mesh()
+        _DP_SIZE = m.axis_size("dp") if (m is not None and m.has_axis("dp")) else 1
+    return _DP_SIZE
+
+
+def _local_b(shape0: int) -> int:
+    """Per-shard batch from a (possibly dp-sharded) activation's global dim 0."""
+    return shape0 // _dp_size()
 
 
 def _rm(v):
@@ -317,7 +364,7 @@ class Conv3x3Im2col(ttml.autograd.Function):
     @staticmethod
     def forward(ctx, x, weight, bias, h, w):
         v, wv, bv = x.get_value(), weight.get_value(), bias.get_value()
-        b = v.shape[0]
+        b = _local_b(v.shape[0])
         c = v.shape[-1]
         cout = wv.shape[-1]
         ctx.save_for_backward(x, weight)
@@ -433,7 +480,7 @@ class AvgPool2x2(ttml.autograd.Function):
     @staticmethod
     def forward(ctx, x, h, w):
         v = x.get_value()
-        b, c = v.shape[0], v.shape[-1]
+        b, c = _local_b(v.shape[0]), v.shape[-1]
         ctx.dims = (b, h, w, c)
         s = _sum_pool2x2_rm(_tokens_to_nhwc_rm(v, b, h, w, c), b, h, w, c)
         return ttnn.multiply(_nhwc_rm_to_tokens(s, b, h // 2, w // 2, c), 0.25)
@@ -457,7 +504,7 @@ class UpsampleNearest2(ttml.autograd.Function):
     @staticmethod
     def forward(ctx, x, h, w):
         v = x.get_value()
-        b, c = v.shape[0], v.shape[-1]
+        b, c = _local_b(v.shape[0]), v.shape[-1]
         ctx.dims = (b, h, w, c)
         up = _nearest_up2_rm(_tokens_to_nhwc_rm(v, b, h, w, c), b, h, w, c)
         return _nhwc_rm_to_tokens(up, b, 2 * h, 2 * w, c)
@@ -483,7 +530,7 @@ class GroupNormMoreh(ttml.autograd.Function):
     @staticmethod
     def forward(ctx, x, gamma, beta, num_groups, h, w):
         v = x.get_value()
-        b, c = v.shape[0], v.shape[-1]
+        b, c = _local_b(v.shape[0]), v.shape[-1]
         nhwc = _tokens_to_nhwc_rm(v, b, h, w, c)
         nchw = _tile(ttnn.permute(nhwc, (0, 3, 1, 2)))  # [B,C,H,W]
         out, mean, rstd = ttnn_moreh.group_norm(
@@ -543,7 +590,7 @@ class GroupNormNHWC(ttml.autograd.Function):
     @staticmethod
     def forward(ctx, x, gamma, beta, num_groups, h, w):
         v, gv, bv = x.get_value(), gamma.get_value(), beta.get_value()
-        b, c = v.shape[0], v.shape[-1]
+        b, c = _local_b(v.shape[0]), v.shape[-1]
         hw = h * w
         with _prof("gn_nhwc_fwd"):
             pool = _gn_pool_matrix(c, num_groups, hw)
