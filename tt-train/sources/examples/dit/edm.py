@@ -53,17 +53,21 @@ def sample_sigma(rng: np.random.Generator, batch: int) -> np.ndarray:
     return np.exp(rng.normal(P_MEAN, P_STD, size=batch)).astype(np.float32)
 
 
-def make_edm_batch(
+def make_edm_batch_image(
     images: np.ndarray,  # [B, C, H, W] fp32 in [-1, 1]
     labels: np.ndarray,  # [B] int
-    patch: int,
     model_dim: int,
     rng: np.random.Generator,
     cfg_drop_prob: float = 0.0,
     null_class: int | None = None,
     hflip: bool = False,
 ):
-    """Returns (input_tokens, cnoise_feats, labels_onehot, target_tokens)."""
+    """Unpatchified EDM batch for image-space (UNet) backbones.
+
+    Returns (net_in [B,C,H,W], cnoise_feats [B,1,1,model_dim],
+    labels_onehot [B,1,1,K], target [B,C,H,W]) — same math as
+    make_edm_batch but leaves images in [B,C,H,W].
+    """
     b = images.shape[0]
     if hflip:
         flip = rng.random(b) < 0.5
@@ -85,7 +89,109 @@ def make_edm_batch(
 
     feats = timestep_features(c_noise * CNOISE_FEAT_SCALE, model_dim)
     onehot = one_hot(labels, (null_class if null_class is not None else int(labels.max())) + 1)
-    return patchify(net_in, patch), feats.astype(np.float32), onehot, patchify(target, patch)
+    return net_in.astype(np.float32), feats.astype(np.float32), onehot, target.astype(np.float32)
+
+
+def make_edm_batch(
+    images: np.ndarray,  # [B, C, H, W] fp32 in [-1, 1]
+    labels: np.ndarray,  # [B] int
+    patch: int,
+    model_dim: int,
+    rng: np.random.Generator,
+    cfg_drop_prob: float = 0.0,
+    null_class: int | None = None,
+    hflip: bool = False,
+):
+    """Returns (input_tokens, cnoise_feats, labels_onehot, target_tokens)."""
+    net_in, feats, onehot, target = make_edm_batch_image(
+        images, labels, model_dim, rng, cfg_drop_prob=cfg_drop_prob, null_class=null_class, hflip=hflip
+    )
+    return patchify(net_in, patch), feats, onehot, patchify(target, patch)
+
+
+def nchw_to_nhwc_tokens(x: np.ndarray) -> np.ndarray:
+    """[B,C,H,W] -> [B,1,H*W,C] channels-last tokens (device UNet activation form)."""
+    b, c, h, w = x.shape
+    return np.ascontiguousarray(x.transpose(0, 2, 3, 1)).reshape(b, 1, h * w, c)
+
+
+def nhwc_tokens_to_nchw(t: np.ndarray, h: int, w: int) -> np.ndarray:
+    """[B,1,H*W,C] -> [B,C,H,W]."""
+    b, _, _, c = t.shape
+    return np.ascontiguousarray(t.reshape(b, h, w, c).transpose(0, 3, 1, 2))
+
+
+# ---------------------------------------------------------------------------
+# SongUNet block plan (shared by reference_unet.py and edm_unet.py)
+# ---------------------------------------------------------------------------
+
+
+class BlockSpec:
+    """One residual block of the DDPM++ SongUNet.
+
+    resample: None | 'down' (avgpool 2x2 BEFORE the block) | 'up'
+              (nearest-2x upsample BEFORE the block).
+    skip_in:  channels concatenated from the encoder skip stack before the
+              block (0 = no skip consumed). Decoder only.
+    res:      spatial resolution the block runs at (after any resample).
+    """
+
+    __slots__ = ("cin", "cout", "res", "attn", "resample", "skip_in")
+
+    def __init__(self, cin, cout, res, attn, resample=None, skip_in=0):
+        self.cin, self.cout, self.res = cin, cout, res
+        self.attn, self.resample, self.skip_in = attn, resample, skip_in
+
+    def __repr__(self):
+        return (
+            f"BlockSpec(cin={self.cin}, cout={self.cout}, res={self.res}, "
+            f"attn={self.attn}, resample={self.resample}, skip_in={self.skip_in})"
+        )
+
+
+def build_unet_plan(
+    img_resolution: int = 32,
+    model_channels: int = 128,
+    channel_mult: tuple = (2, 2, 2),
+    num_blocks: int = 4,
+    attn_resolutions: tuple = (16,),
+):
+    """Encoder/decoder block plans for the DDPM++ SongUNet (EDM CIFAR-10 config).
+
+    Mirrors EDM's SongUNet layout with encoder_type/decoder_type='standard':
+    conv_in, then per level: [down-block (levels>0)] + num_blocks blocks;
+    middle pair (attn + plain) at the lowest resolution; decoder per level:
+    [up-block (levels < deepest)] + (num_blocks+1) skip-concat blocks.
+    The skip stack holds conv_in's output plus every encoder block output.
+
+    Returns (enc_specs, dec_specs). conv_in / out_conv are not in the plan.
+    """
+    enc, skips = [], [model_channels]  # conv_in output is the first skip
+    cout = model_channels
+    for level, mult in enumerate(channel_mult):
+        res = img_resolution >> level
+        if level > 0:
+            enc.append(BlockSpec(cout, cout, res, attn=False, resample="down"))
+            skips.append(cout)
+        for _ in range(num_blocks):
+            cin, cout = cout, model_channels * mult
+            enc.append(BlockSpec(cin, cout, res, attn=res in attn_resolutions))
+            skips.append(cout)
+
+    dec = []
+    for level in reversed(range(len(channel_mult))):
+        res = img_resolution >> level
+        if level == len(channel_mult) - 1:
+            dec.append(BlockSpec(cout, cout, res, attn=True))  # middle 'in0'
+            dec.append(BlockSpec(cout, cout, res, attn=False))  # middle 'in1'
+        else:
+            dec.append(BlockSpec(cout, cout, res, attn=False, resample="up"))
+        for _ in range(num_blocks + 1):
+            s = skips.pop()
+            cin, cout = cout + s, model_channels * channel_mult[level]
+            dec.append(BlockSpec(cin, cout, res, attn=res in attn_resolutions, skip_in=s))
+    assert not skips, f"unconsumed encoder skips: {skips}"
+    return enc, dec
 
 
 def sigma_schedule(steps: int = 18) -> np.ndarray:
