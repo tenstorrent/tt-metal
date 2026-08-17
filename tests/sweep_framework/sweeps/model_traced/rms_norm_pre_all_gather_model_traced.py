@@ -188,6 +188,24 @@ def run(
 
     # Parse compute_kernel_config and dtype from traced config via build_op_kwargs
     op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
+
+    # Issue #53094: the op sizes its intermediate CBs (x^2, the fused pre-add, the reduce
+    # scaler) in Float32 whenever fp32_dest_acc_en is set, regardless of the input dtype.
+    # With a bfloat16 input that doubles their footprint and pushes the static allocation
+    # past the per-core L1 budget from hidden == 4096 upwards, which is where the traced
+    # shapes live. Drop the flag so those configs stay runnable.
+    #
+    # Float32 inputs are deliberately left alone: the op hard-rejects them without
+    # fp32_dest_acc_en ("requires fp32_dest_acc_en=true"), so flipping the flag there
+    # would swap an L1 failure for a validation failure.
+    traced_compute_kernel_config = op_kwargs.get("compute_kernel_config")
+    if (
+        traced_compute_kernel_config is not None
+        and input_a_dtype != ttnn.float32
+        and traced_compute_kernel_config.fp32_dest_acc_en
+    ):
+        traced_compute_kernel_config.fp32_dest_acc_en = False
+
     # Ensure dtype has a default
     if "dtype" not in op_kwargs:
         op_kwargs["dtype"] = ttnn.bfloat16
