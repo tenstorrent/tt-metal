@@ -15,7 +15,7 @@ two conv-team-owned models **resnet50** and **stable diffusion 1.4**.
 - **Runtime** = `~/.conv-watch/` — the cron job, cache, secrets, logs. Source of truth.
 - **Repo snapshot** = this dir — a secrets-free copy of the functional files for
   review/porting. Only `config.sh`, `watch.sh`, `agent_prompt.txt`,
-  `ensure-cron.sh` are tracked; `slack_webhook`, `oauth_token`, `state.json`,
+  `ensure-cron.sh`, `dryrun.sh` are tracked; `slack_webhook`, `oauth_token`, `state.json`,
   and `*.log` are runtime-only and never committed.
 
 ## Differences from the SDPA watcher
@@ -23,12 +23,19 @@ two conv-team-owned models **resnet50** and **stable diffusion 1.4**.
 - `watch.sh` is **self-locating** (`SDPA_HOME` derived from `BASH_SOURCE`), so the
   dir is a clean copy — it reads its own `~/.conv-watch/` config/state, never sdpa's.
 - Digest title is "Conv Pipelines"; `agent_prompt.txt` scopes triage to conv/pool.
+- `dryrun.sh <workflow.yaml> <run_id>` previews one run's digest block without
+  posting. Also self-locating, so it reads this dir's config, never sdpa's.
 - Cron fires at **:30** (sdpa is :00) to avoid the shared `~/.claude/.credentials.json`
   OAuth-refresh race. `ensure-cron.sh` MARKER/CRON_LINE point at `.conv-watch`.
-- Watches **15 pipelines** (see `config.sh` `PIPELINES`): 3 sanity gates (Sanity,
-  Blackhole Sanity, Debug Sanity), Merge Gate C++ smoke, L2 Nightly conv/pool +
+- Watches **14 pipelines** (see `config.sh` `PIPELINES`): 2 sanity gates (Sanity,
+  Debug Sanity), Merge Gate C++ smoke, L2 Nightly conv/pool +
   tt-cnn + di/dt, Device Perf, Frequent Models (resnet50 + SD1.4 PCC), Single-card
   Demos, Model Perf, 4× T3K, Galaxy, and conv/pool Sweeps.
+
+  **2026-08-14:** `blackhole-sanity-tests.yaml` was retired upstream (PR #48943) and
+  folded into `sanity-tests.yaml`, so the separate *Blackhole Sanity* entry was dropped;
+  *Sanity* now matches `ttnn conv group [sku]` / `ttnn pool group [sku]` across the
+  Wormhole, Blackhole and ttsim SKUs in one workflow. 15 → 14 pipelines, no loss of coverage.
 
 ## Setup on a new host
 
