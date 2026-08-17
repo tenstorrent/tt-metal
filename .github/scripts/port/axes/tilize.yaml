@@ -1,0 +1,11 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+shape: input_shape
+dtype: input_a_dtype
+layout: input_a_layout
+kwargs:
+  memory_config: output_memory_config
+# Three suites unioned: `nightly` for the shape spread, `codegen_dtype` for the dtype spread, and
+# `broaden_suite` for the sharded axis that neither of the others carries.
+suites: [nightly, codegen_dtype, broaden_suite]

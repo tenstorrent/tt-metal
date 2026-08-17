@@ -391,6 +391,35 @@ frontmatter for every reader of that file. The first symptom was `selftest.py` l
 key three hundred lines from anything related. They are `=== ... ===` now, and a check asserts no line
 inside that frontmatter can be mistaken for its end.
 
+### What the fixed resume actually did, and what it found
+
+Run [31832493570](https://github.com/tenstorrent/tt-metal/actions/runs/31832493570), the first resume
+after the deadlock fix, is the proof the loop works and the first graded verdict `tilize` has ever had.
+
+The baseline build failed exactly as it had for attempt 2 -- same two errors, same step. This time the
+step reported success, the agent started, read the errors out of `port-brief.md`, fixed them, and its
+first build passed. Roughly fifteen minutes from job start to a compiling port, on the branch that
+forty minutes earlier could not be resumed at all. It then ran three builds and two verifies inside its
+budget, which is the throughput the round trip allows.
+
+Both verifies graded 170 of 170 in-scope cases failing, with zero prototype gaps -- the count did not
+move between them. Two causes, and both are host-side translation, not kernels:
+
+- **Nineteen cases: the kernels want *named* compile-time args and the program factory passes
+  positional ones.** `reader_stick_interleaved_unified.cpp` calls
+  `get_named_compile_time_arg_val("elem_size")`, `"tile_height"` and more, so `get_named_ct_arg`
+  reaches `__builtin_unreachable()` during constexpr evaluation and the ncrisc build fails with
+  `Failed to generate binaries`. This is the argument-contract lesson again in a new costume: named CT
+  args are a newer generator API than anything merged `untilize` used, so there is no shipped port to
+  copy the shape from and the builder under `.codegen/ops/tilize/spec.py` is the only source.
+- **Six cases: `supported_by_codegen()` rejects configurations it has to accept.** `tilize.yaml`
+  carries no `port_scope`, so port scope equals codegen scope and *every* ledger case is in scope. A
+  `TT_FATAL` at `tilize.cpp:103` on an in-scope case is the gate being stricter than the manifest.
+
+Worth noting what this unlocks procedurally: a graded count now exists on this branch, so the
+no-progress stop can finally engage. Until this run every attempt published `-1` and the chain's only
+bound was the six-attempt cap.
+
 ### What is still expensive, and the number to beat
 
 The binding constraint is that a compile error costs a round trip to CIv2: fourteen minutes measured,
@@ -404,6 +433,224 @@ card, and it catches every error both of attempt 1's builds were spent on. Wheth
 can do it is unknown, because tt-metal's CI builds inside a container, so there is now a
 `continue-on-error` step that records what the host has -- cmake, ninja, clang++, ccache, docker,
 cores, disk. Read it off the next run before designing against it.
+
+## The generator withdrew the implementation selector, and that is a different kind of drift
+
+On 2026-08-17 the generator landed [#403](https://github.com/tenstorrent/tt-dm-codegen/pull/403) as
+`f744aefb8`, and it removed the thing every leg of this harness used to select an implementation. A
+ported op's public entry now keeps the exact signature it had before the port -- no `implementation`
+kwarg, no selector enum, no `parse_implementation` -- because which prim serves a call is an internal
+decision rather than something a caller expresses. The choice is still checkable through two
+verification-only entries, `<op>_force_native` and `<op>_force_codegen`, bound under
+`ttnn._ttnn.operations.<family>` and deliberately never republished as `ttnn.*` ops.
+
+Worth knowing that #50178 -- merged `untilize` -- shipped the selector to review as a hedge and had
+to remove the whole surface in a follow-up. `origin/main` now carries `untilize_force.hpp`, the
+forced pair in `untilize.cpp`, and their `mod.def` bindings, which makes it the authoritative
+in-tree reference for this shape. Read it rather than reconstructing the rules from the guide.
+
+Two details in it are easy to get wrong and expensive to get wrong. `force_codegen` must `TT_FATAL`
+outside the support scope rather than fall back, because a forced leg that quietly serves native
+turns every bit-exactness and performance number gathered through it into a native-vs-native
+comparison reported as agreement. And it must not consult `is_demoted`, which is the routed entry's
+business alone, so that demoted-but-correct cases are still measurable.
+
+### What this cost on our side, and what it did not
+
+`measure.py` invoked all three legs through the kwarg, so every band was unrunnable. It now resolves
+the two forced entries once from the manifest's `call_parity` and calls the plain public entry for
+the routed leg. A missing `force_codegen` is fatal with a message naming the contract; a missing
+`force_native` degrades to the public entry, because the native baseline is measured on clean main
+where no port exists and the public entry *is* native there. The emitted routing test had the same
+problem and took the same fix: its reference leg calls the forced-native entry, because using the
+public entry for both sides would compare the router against itself and pass wherever it routed.
+
+The port on `origin/ebanerjee/port-tilize` still exposes the old surface -- `tilize.cpp` takes a
+`const std::string& implementation` and the nanobind file advertises it. That is now the whole of
+what stands between that branch and a re-baseline, and it is deliberately still there; see the note
+on update mode below.
+
+### The classifier has to judge the shape, not the field
+
+The first version of `drift.py` treated any `call_parity` change as harness-level and refused. That
+is wrong in a way worth recording, because it is the difference between update mode working and
+update mode being permanently stuck: this field is *expected* to move, and a change to it is only
+beyond an agent when the harness cannot invoke the new shape at all. Once `measure.py` and the
+emitter understood forced entries, the same drift became ordinary transliteration work -- the port
+has to bind two entries it does not have.
+
+So `call_parity` is checked rather than bucketed. A contract naming the routed entry and both forced
+legs, with no field nothing here reads, is `agent` work. An entry that still carries a selector, a
+missing leg, a third leg, or a non-mapping is `refuse`. Today's drift on `tilize` reads as `update`
+because of that check and read as `refuse` before it, and nothing about the manifest changed in
+between.
+
+`invalid_selector_message` is classified as noise for a related reason: it was the error text the
+selector rejected bad values with, nothing in this harness ever read it, and letting its removal
+refuse a run would stop update mode over a field with no reader.
+
+### A generated file is the most likely place to leak a private name
+
+The same commit banned naming the private repository, its manifests, its ledger and its phase
+numbers in anything landed into tt-metal, on the grounds that a public comment pointing at a
+repository the reader cannot open is worse than no comment. The emitted routing test is the one file
+this harness writes wholly by machine, which makes it the one nobody proofreads.
+
+It was carrying four such names. The header said `AUTO-GENERATED`, named a script no tt-metal reader
+can run, and explained itself in terms of a coverage ledger and an `invalidate_vector` that exist
+nowhere in tt-metal. Less obviously, every case comment came from a ledger reason string prefixed
+with the name of the manifest field that rejected it, so the file grouped its cases under
+`port_scope: ...`. Those reasons now state the constraint -- "bfloat8_b is not served by the codegen
+path" -- which reads better internally too.
+
+`scaffold.render_routing_test` now refuses to emit a file containing any of them, which is how the
+`port_scope` leak was found: the guard was written from the checklist and fired on the first
+realistic fixture it saw. `codegen` alone is deliberately not on the list, because `prim::<op>_codegen`
+and `codegen/` are real tt-metal names; what cannot ship is prose about a private generator.
+
+### Kernel templates moved out from under the ports
+
+`f895be71b` moved the shared kernel templates to a shared location, and `origin/main` now globs
+`common/kernels/codegen/*`. Nothing has been done about this yet, and it is the likely first real
+exercise of the re-vendor policy: a port that vendored its own copy of a now-shared template has a
+stale duplicate rather than a compile error, which is the failure mode that is invisible until the
+template's contents diverge.
+
+One operational note that cost some confusion: the local `main` in this checkout was a week stale, so
+`untilize`'s merged port and its forced entries appeared not to exist. Fetch before concluding
+anything about what has landed.
+
+## Update mode is one workflow, not two
+
+Decided 2026-08-17. `port-op.md` serves the full port, the resume and the update, and the only thing
+that distinguishes an update is that someone set a target generator, a PR number or an intent.
+
+The reasoning is that the differences are small and local while the agreement is large. An update run
+needs the credential pre-step, the proxy fix, both generator checkouts, category derivation, resume
+detection, chain-state parsing, the scaffold, the baseline, all three launcher tools, publish and its
+chaining, the artifact preservation and the scratch-ref sweep -- all unchanged. `port-op.md` is 766
+lines of frontmatter to 378 of prompt, and the frontmatter is the part a second workflow would have to
+duplicate or import. Against that, update mode adds a PR-to-branch resolution, a review fetch, a
+target ref and an intent string.
+
+There is also a mechanical reason: the chain re-dispatches itself by workflow filename
+(`PORT_OP_WORKFLOW` in `dispatch.py`) and `workflow_dispatch` resolves the definition from the ref it
+is handed, so two workflows would mean every chained attempt has to know which of the two it is.
+
+And it follows the grain already set by resume, which is *detected, not declared* -- a tracked
+`codegen/` directory is what sets `PORT_RESUME`, and nobody passes a mode flag. Setting a target
+generator is the equivalent declaration for an update.
+
+The cost lands on the prompt, because gh-aw markdown has no conditionals and mode-conditional prose is
+where an agent gets confused. That is paid with `port-brief.md`: it already carries what varies per run
+(baseline, resume work list, inherited diagnostics, drift report) and now also carries the intent and
+the review. The workflow prompt keeps only what is true of every run, plus a short passage saying that
+a brief with an intent or a review section means the port already passes and the job is the smallest
+change that answers what was asked.
+
+### What the three inputs are, and what they are not
+
+`pr`, `codegen-target` and `intent`, all optional and all blank for a port or a resume. They are
+statements of *intent*, which is the line that keeps the "no inputs about previous runs" rule intact:
+the attempt number, the failing counts and the generator pin are still read off the branch's own commit
+trailers, and a person updating a port never has to know what the last run was told.
+
+`pr` resolves to its head branch before the checkout, because everything downstream works in branches
+-- publish pushes to one, the chain re-dispatches with one, the write-path guard diffs against one's
+HEAD -- and a pull request is a view of a branch rather than a separate kind of thing. A closed PR and
+a fork PR are both refused: the fork case matters because publish must be able to push, and the whole
+design rests on work being preserved by the job ending rather than by the agent asking.
+
+The review is fetched from three endpoints, because a review is spread across three and a reviewer's
+actual objection lands in whichever box they were typing in: inline diff comments carry file and line,
+review bodies carry the verdict, issue comments carry the conversation. Inline comments whose `line` is
+null are dropped as outdated -- a demand that was already met reads exactly like one that was not.
+
+Worth being explicit about the security shape, because this is the first untrusted text the pipeline
+feeds an agent. Anyone who can comment on a public pull request can put words in front of an agent that
+can edit this repository. So it is data at every step: `jq` reads and writes it, no shell ever expands
+it, and the brief introduces it as quotation -- comments can be wrong, already answered, or asking for
+things the manifest forbids, and where one conflicts with the agent's rules the rules win and the
+disagreement goes in the PR. Treating review text as instructions-by-default would make the comment box
+a way to drive this pipeline.
+
+### The repin, and the contract it creates
+
+Two halves, and they only make sense together: moving a port to a new generator is the dangerous
+operation, and the regression check is what makes it survivable.
+
+**The repin is a directory swap.** After the drift comparison has run and not refused, `.codegen-target`
+replaces `.codegen` and `PORT_CODEGEN_REF` is updated to the target's sha. From that point the target
+*is* the generator for the run -- kernels are vendored from it, the prototype leg that grades
+correctness is built from it, and the `Port-generator` trailer published at the end names it, so the
+next attempt inherits it as its pin with no further work. Recording the repin is therefore free: the
+trailer already reads `--codegen-ref`, which already reads `PORT_CODEGEN_REF`.
+
+A swap rather than a second path threaded through every consumer, because `.codegen` is what
+`scaffold.py` vendors from, what the manifest is read out of, what the dispatch params name, and what
+the measure job checks out. A run with two generator trees in play is a run where any one of those could
+be reading the wrong one. `PORT_CODEGEN_REF` has to move with the tree because the resolve step asserts
+the two agree, which is exactly the check that would otherwise trip. A target that resolves to the
+commit the port is already pinned to is not an error -- naming a branch that has not moved is the
+ordinary way to discover it has not -- and repins nothing.
+
+**Green-on-entry is measured, not assumed.** `gate.py`'s correctness band now emits `passing_ids`, the
+complete and deliberately untruncated list of in-scope cases a tree got right. The baseline records that
+set on arrival, before the agent exists, because that is the only moment it is true: re-measuring later
+measures the agent's code, and the previous run's artifact may have expired or may never have existed
+for a hand-written branch.
+
+Every later `verify` diffs its passing set against the recorded one. Anything lost is printed *above*
+the verdict, because an agent reads top to bottom and acts on the first thing it sees, and the call
+never exits as a win -- a win is what makes the agent open a pull request. `publish` carries it too, as
+a `Port-regressed` trailer written only when non-zero, and the job summary leads with it and withholds
+the `gh pr create` invitation.
+
+The reason a count could never have caught this: a port can fix three cases and break two, and the
+failure count is identical before and after. Only the identities give it away. Chaining is the one place
+where a regression argues for *continuing* -- stopping would leave the branch worse than it was found,
+so the next attempt inherits the list and its first job is to undo the damage, bounded as ever by the
+attempt cap.
+
+## Four ways the harness misreported its own state, all found in one run
+
+`tilize` attempt 3 is the case study. It inherited a bit-exact port, spent about two hours, and
+produced nothing: no commit, no pull request, no statement. None of that was the port's fault, and all
+four causes were in the reporting rather than in the porting.
+
+**A count belongs to the tree it was measured on.** Attempt 2 stamped `Port-failing: 52` onto a tree
+whose real answer was zero, because the agent kept editing after its last verify and `publish` read
+the newest verdict it could find. The next run reads that number off the branch to judge whether the
+attempt before it made progress, so a stale count can stop a chain that was working or continue one
+that was not. `publish` now compares the worktree's tree hash against the tree the last verify
+recorded, and publishes `-1` -- which already meant "no graded count" -- when they differ. Measuring
+again is not an option there: the agent has ended and the card is gone, so the choice is between the
+truth and a plausible number.
+
+**Progress changes axis when correctness goes green.** The no-progress stop compared failing counts, and
+a correct port's failing count is zero and cannot fall, so every attempt after the first green one read
+as making no progress. `tilize` -- 170 of 170 bit-exact, 19 of 24 configurations too slow -- is half a
+port reported as a dead end. There is now a `Port-slow` trailer alongside `Port-failing`, and once
+`failing` is zero the stop judges the slow count instead. A correctness-green attempt that has never
+managed to grade performance gets exactly one more try, not the whole cap.
+
+**A pull request is made from a diff, so a run that changes nothing cannot open one.** That is the
+ordinary ending of a resumed run whose port is already correct, and the prompt had made it illegal:
+open a PR whenever correctness passes, use the no-op only when it fails. Attempt 3 called
+`create_pull_request` five times, was told `failed to generate patch` five times, and stopped. The
+prompt now routes an empty `git status` to the no-op with the finding in its message -- which is
+published as an issue, so it needs no diff -- and says outright not to retry an output that already
+refused. `publish` also writes a job summary in both cases, including the `gh pr create` command for a
+branch whose port is correct and unreviewed. The pipeline could run that command itself, but whether a
+measured negative result is worth someone's time is a judgement, and it belongs to the person whose
+name goes on the PR.
+
+**Two measurements settle noise; four do not.** `refuse_pointless_dispatch` deliberately allowed
+re-verifying a tree that built, on the grounds that measurement is noisy in a way compilation is not.
+Attempt 3 measured one unchanged tree four times at roughly forty minutes each. The allowance is now
+two per tree *per band* -- per band because `correctness` then `performance` is the ordinary way
+through a run rather than a repeat, and an edit resets the count because the next verify is measuring
+something new.
 
 ## Two things the ledger and the generator were quietly getting wrong
 
@@ -853,11 +1100,13 @@ silently passing -- that is what the emitted test is for.
   other `push` trigger in `.github/workflows` is either pinned to a branch list that excludes these
   refs or filtered to paths a scratch commit does not touch. Worth re-checking if a dispatch ever
   seems to cost more CI than it should.
-- **`.github/scripts/port/shims/` is now unused.** It held stand-ins for `curl` and `netstat`, which
-  the viommu image ships and gh-aw assumes; that mattered only while the agent ran in-cluster. Kept
-  rather than deleted, because it is exactly what would be needed again if the proxy allowlist ever
-  changes and the pipeline collapses back into one in-cluster job. The general lesson from it still
-  applies to that pool: when a gh-aw step fails there, suspect a missing binary before the logic.
+- **When a gh-aw step fails on the viommu pool, suspect a missing binary before the logic.** That pool
+  ships a thinner image than gh-aw assumes. `.github/scripts/port/shims/` once held stand-ins for
+  `curl` and `netstat` for exactly this reason; it was deleted once nothing referenced it, and is
+  recoverable from this branch's history if the pipeline ever collapses back into one in-cluster job.
+  The `netstat` case is worth remembering as a near miss: the missing binary was the visible symptom,
+  but the actual fault was `no_proxy` omitting the loopback addresses, so the shim would have papered
+  over it.
 
 ## If the run fails
 
@@ -873,8 +1122,8 @@ the run with the real error in it, and the launcher's own message is a summary o
 Triage order, cheapest first:
 
 1. Read the `port-measure.yaml` run, not the agent's. The agent job is a client.
-2. Did `ledger.py` report sane counts? Zero in-scope cases means the manifest, the suite names, or
-   `port_scope` disagree with the sweep module.
+2. Did `ledger.py` report sane counts? Zero in-scope cases means the suite names or the declared
+   `scope` in `axes/<op>.yaml` disagree with the sweep module.
 3. Did `Emit the routing test` succeed? A `TypeError: cannot render ...` there means a kwarg holds a
    `ttnn` object that is not reachable as a module-level constant, and `_ttnn_constant_name` needs to
    learn it.
@@ -883,3 +1132,168 @@ Triage order, cheapest first:
    from a run that never reached the agent -- plus a copy of every dispatch's results.
 5. Check for leftover `port-op-scratch/*` branches. The launcher deletes its own and a post-step
    sweeps the rest, but a hard-killed job can still strand one.
+
+## The manifest is gone, and it was never ours
+
+Every per-op fact the harness needed used to come from `agentic_port/manifests/<op>.yaml` in
+tt-dm-codegen. The question that ended that arrangement was simply where those files come from, and
+the answer is in their own schema: "Written by the **classify** stage. Read by the **translate**
+stage, the **review** stage, and the **correctness** and **performance** gates." The directory beside
+them holds `phase1_intake` through `phase8_conclude`.
+
+That is a second agentic porting pipeline, running now, in the generator repository. It shipped
+`untilize` as #50178 and has `tilize` open as #51919. The manifest is the scratch pad its phase 2
+writes for its phase 4, and we were reading over its shoulder — a file nobody maintains on our
+behalf, on a non-default branch, with nothing to tell us when it changes.
+
+### The drift was already there
+
+`tilize.yaml` lists eight `kernel_paths`. `ops/tilize/spec.py` selects kernels conditionally:
+
+    "compute_tilize_typecast.cpp" if numeric_fuse else "compute_tilize.cpp"
+    "writer_blockfloat_rne.cpp" if canonical_blockfloat else "writer_tilize_interleaved.cpp"
+
+Neither `compute_tilize_typecast.cpp` nor `writer_blockfloat_rne.cpp` is in the list. Both exist. So
+a `tilize` port taking the typecast or blockfloat path would reference a kernel that was never
+vendored — which is not a hypothetical, because it already happened to `untilize`: `rm_shard_split.h`
+was missing for exactly this reason and 112 in-scope cases wrote uncorrelated data against a green
+build. We fixed that by copying the header in by hand, which fixed the case and not the cause.
+
+The clincher is what the builder does about kernels: `ensure_symlink(_OP_TEMPLATES, ctx.kernel_dir,
+shared_template_dir=_SHARED_TEMPLATES)`. It exposes two whole directories and never consults a list.
+The generator's own answer to "which kernels does this op need" was never a list of eight paths.
+
+### What replaced it
+
+`discover.py`, which resolves the same facts by looking rather than reading, and fails at second zero
+when a resolution comes back empty:
+
+- **Category** from the operations tree. `untilize` exists twice, and the manifest's `native_entry`
+  was the tiebreaker — but that field only ever encoded mainline versus experimental, which the
+  directory layout already says. Real ambiguity now asks for `--category` instead of being guessed.
+- **Builder** at `ops/<op>/spec.py`, with a search behind it. Six of seven manifests match the
+  convention; `move` is built by `ops/identity/spec.py`, so convention alone would have been wrong.
+- **Kernels** from the op's template directory, plus filenames quoted in builder source, plus the
+  transitive `#include` closure. The closure is the part a list structurally cannot express, and it
+  finds `rm_shard_split.h` for the same reason a compiler would.
+- **Forced entries** built from the op and category. Conventional since the `implementation=` kwarg
+  was removed, and checkable — `measure.py` resolves the path and refuses when it is unbound, which a
+  declaration naming a nonexistent symbol cannot do. That failure mode matters: a `force_codegen` that
+  silently falls back measures native against native and reads as perfect agreement.
+- **Sweep module** at `common.sweeps.codegen_<op>`, which is 7 of 7.
+
+Six fields turned out to be read nowhere outside the drift classifier — `cache_key_fields`, `tier`,
+`layout_split`, `model_traced_module`, `upstream_sweep_module`, `ported_scope_sig` — because they
+serve the other pipeline's translate stage, not ours. `cases` is labelled "documentation only" in its
+own schema. And `coverage` powered a single warning.
+
+### What is still written down, and where
+
+`axes/<op>.yaml`, in this repository, beside the code that reads it. Six lines an op:
+
+    shape: input_shape
+    dtype: input_a_dtype
+    layout: input_a_layout
+    kwargs: {memory_config: output_memory_config}
+    suites: [nightly, codegen_dtype, broaden_suite]
+
+This one cannot be derived. A sweep names its parameters however it likes — `dtype` in
+`codegen_move`, `input_a_dtype` in `codegen_tilize` — and sometimes buries them in a bundled
+parameter, so `ri_specs.shape` has to descend into a value. Nothing about the tree recovers that.
+
+Three optional blocks carry the narrowing that four of the seven ops do not need at all: `scope`
+(only `untilize`), `ungradeable_reasons` (`pad`, `permute`) and `bad_golden` (`pad`). `tilize`
+declares none, so the op in flight migrated with nothing to carry.
+
+`scope` is worth a note, because it is closer to redundant than it looks. `gate.py` already grades
+against the prototype leg: a case the generator itself fails is excused as a prototype gap, not
+counted as failing. So the cases `scope` describes are already excused whether or not anything
+declares them. What it still buys is the routing assertion and a human-readable reason for the
+emitted test — neither of which a measurement produces on its own. Deriving scope entirely from the
+prototype is a real option and a separate piece of work; it would move scope from ledger time to
+grade time, which is a change to what the ledger *is*.
+
+### The classifier had inherited the same bug
+
+`drift.py` compared two manifests, so it could only report drift somebody had remembered to write
+down — the exact staleness it exists to catch. `tilize.yaml` proves it: a commit changing either
+unlisted kernel would have classified as nothing to do.
+
+It compares generator trees now, through the same `discover.py` walk that `scaffold.py` vendors from,
+so a drift report and a vendoring pass cannot disagree about what the port consists of. Kernels are
+keyed by basename, because a basename is the identity a vendored copy has — which lets the
+`f895be71b` shared-template move be reported as a move rather than as one deletion and one addition.
+`blocking` changed meaning too: it is now "the harness cannot describe the op at the target at all",
+which is a real stop, rather than "a manifest key nobody recognised".
+
+`GitSource` grew a `tree()` that extracts a commit with `git archive` into a temp directory, because
+the kernel walk needs to list directories and not just read named paths.
+
+### What is not yet done
+
+The three-way re-vendor. On a repin we can tell an agent's fix from a generator change by comparing
+the vendored copy against the template as it stood at the *old* pin, and overwrite only where the copy
+was never touched. Right now `scaffold.py --resume` copies what is absent, keeps what differs, and
+reports both, which is the safe two-way behaviour: silence would hide generator changes and
+overwriting would discard verified fixes. Getting the third way needs the workflow to keep the old
+checkout instead of deleting it during the pin swap.
+
+## Why the gates are strict, and what the accepted risk actually is
+
+Condensed from the working notes this harness grew out of, which were deleted once they were
+superseded. The original threat model and decision record are recoverable at
+`agentic-port-gh-aw/NOTES.md` §10–11 in this branch's history; what follows is the part that still
+governs the code.
+
+### The exposure is inherent, and worth stating plainly
+
+You cannot port C++ ops without compiling and executing agent-authored C++. The agent writes a
+program factory, it links into `ttnn`, and a test loads `ttnn` and runs it — at which point
+agent-authored code is a host process with device access. Two things make that broader than it looks:
+`sources.cmake` lives inside each op directory, so any write allowlist scoped to the op necessarily
+includes it, and CMake has `execute_process()`. Build time is in scope, not only test time.
+
+So the security argument was never "the agent is sandboxed." It is that an on-card CI job is already
+an untrusted-code execution context — every card job in tt-metal compiles and runs arbitrary
+repository code, because that is what hardware testing is — and this workflow introduces no new
+capability class. What it introduces is a new *principal* deciding what that code does. The danger is
+therefore set by the trigger surface, which is why the trigger is `workflow_dispatch` and nothing
+else.
+
+### The decision, and what it changed
+
+The accepted posture (Evan, 2026-08-07) is that the agent's output is trusted enough: anyone able to
+run these workflows could already do equivalent damage deliberately, and the ops are code-generated to
+begin with. That was explicitly not a gate on building the thing.
+
+What it changed is *why* the surviving rules exist. Most of them stopped being security controls and
+became **result-integrity** controls, and that reframing is the reason to keep them strict:
+
+- **The write-path allowlist and the generated routing test matter more under this posture, not
+  less.** The threat is no longer an attacker, it is reward hacking. An agent that can edit a test or
+  add one of its own is an agent that can make its own numbers come out right, and the entire product
+  of this pipeline is a performance and correctness *claim*. An unfalsifiable claim is worse than no
+  pipeline. This is the one place worth being unreasonable, and it is why `gate.py` recomputes the
+  diff against the base SHA on every call and re-renders the routing test rather than trusting it.
+- **Budgets and timeouts stay**, as cost and availability controls. Card time is contended and a
+  confused agent can burn a runner for an hour. The attempt cap, the no-progress stop and the
+  two-verifies-per-tree cap are all this rule.
+- **`noop` as a declared safe-output is a functional requirement, not a control.** Without it the
+  agent feels obliged to make some safe-output call and files junk issues — observed twice in probes,
+  and again this month when a diff-free run retried `create_pull_request`.
+
+Two rules the record proposed dropping were reinstated by events. Staging the enforcement outside the
+workspace was called redundant; it is now how the harness works, because the scripts live in
+`$HOME/.port-harness` precisely so a port branch cannot edit the thing grading it. And
+`--network none` was dropped deliberately, since ttnn tests fetch weights and pip dependencies, so
+build and test run in a container for reproducibility rather than for isolation.
+
+### The threat the notes anticipated and update mode made real
+
+T9 in the original table was prompt injection from untrusted trigger content, mitigated at the time by
+allowing human triggers only. Update mode reintroduces the substance of it by a side door: it reads
+review comments off a pull request, which is text anyone able to comment can write, and puts it in
+front of the agent. The trigger is still human, so a person chooses to start the run — but the
+*content* is not. That is why `dispatch.py` frames collected review text in `port-brief.md` as
+quotation rather than as instruction, and it is the reason to be careful about ever widening what
+update mode ingests.

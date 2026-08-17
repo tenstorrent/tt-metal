@@ -293,6 +293,26 @@ jobs:
       - name: Prepare the results directory
         run: mkdir -p /tmp/port-results/workspace
 
+      # Resolved once, here, and passed to every consumer below. `discover.py` walks the generator --
+      # the builder, its template directories and their includes -- rather than reading
+      # `agentic_port/manifests/<op>.yaml`, which is the porting orchestrator's own state file in
+      # tt-dm-codegen and is not maintained on this harness's behalf. `tilize.yaml` omits two kernels
+      # its own builder selects, and the same omission on `untilize` left `rm_shard_split.h` unvendored
+      # and 112 cases writing uncorrelated data against a green build.
+      #
+      # Sharing one file rather than resolving per step is what keeps the prototype pass set keyed to
+      # the same surface the correctness band graded.
+      - name: Work out what this port consists of
+        env:
+          PORT_OP: ${{ needs.resolve.outputs.op }}
+          PORT_CATEGORY: ${{ needs.resolve.outputs.category }}
+        run: |
+          python3 .github/scripts/port/discover.py \
+            --op "$PORT_OP" --category "$PORT_CATEGORY" \
+            --repo /work --codegen-root /codegen \
+            --compare-manifest "/codegen/agentic_port/manifests/$PORT_OP.yaml" \
+            --out /tmp/port-descriptor.json
+
       # The routing test is generated rather than written, and rendering it expands the generator's
       # sweep, which imports ttnn -- so it cannot happen on the agent's runner, which has neither a
       # build nor a card. It goes back to the agent in the results artifact.
@@ -307,13 +327,14 @@ jobs:
         run: |
           python3 .github/scripts/port/scaffold.py \
             --op "$PORT_OP" --category "$PORT_CATEGORY" \
+            --descriptor /tmp/port-descriptor.json \
             --ttmetal-home /work --codegen-root /codegen --emit-test-only
 
           rel=$(python3 -c 'import os, sys; sys.path.insert(0, ".github/scripts/port"); import scaffold; print(scaffold.test_path(os.environ["PORT_OP"], os.environ["PORT_CATEGORY"]))')
           mkdir -p "/tmp/port-results/workspace/$(dirname "$rel")"
           cp "$rel" "/tmp/port-results/workspace/$rel"
 
-      # Correctness is graded against a golden resolved generically -- from the manifest if it names
+      # Correctness is graded against a golden resolved generically -- from the op's axis file if it names
       # one, otherwise from whatever reference ttnn registers for the op. Resolving it generically is
       # only safe if something checks the answer, so this compares it against native on in-scope
       # cases. A disagreement here means every later correctness verdict was graded against the wrong
@@ -326,7 +347,7 @@ jobs:
         run: |
           python3 .github/scripts/port/measure.py \
             --op "$PORT_OP" --band golden \
-            --manifest "/codegen/agentic_port/manifests/$PORT_OP.yaml" \
+            --descriptor /tmp/port-descriptor.json \
             --limit "$PORT_LIMIT" --out /tmp/port-results/golden.json
 
           python3 - /tmp/port-results/golden.json <<'PY'
@@ -372,7 +393,7 @@ jobs:
           mkdir -p /tmp/port-prototype
           python3 .github/scripts/port/measure.py \
             --op "$PORT_OP" --band prototype \
-            --manifest "/codegen/agentic_port/manifests/$PORT_OP.yaml" \
+            --descriptor /tmp/port-descriptor.json \
             --out /tmp/port-prototype/prototype.json || true
 
           # Into the results artifact as well, so the agent is handed the must-pass and excused lists
@@ -409,7 +430,7 @@ jobs:
           PORT_LIMIT: ${{ needs.resolve.outputs.perf-limit }}
         run: |
           python3 .github/scripts/port/gate.py \
-            --op "$PORT_OP" --manifest "/codegen/agentic_port/manifests/$PORT_OP.yaml" \
+            --op "$PORT_OP" --descriptor /tmp/port-descriptor.json \
             --category "$PORT_CATEGORY" --band performance --repo /work \
             --work /tmp/port-baseline --limit "$PORT_LIMIT" --skip-write-check \
             > /tmp/port-results/baseline.json || true
@@ -457,7 +478,7 @@ jobs:
           # file in the port differs from this run's base and the guard would refuse the whole thing.
           # It is the right check for grading a run's own edits and the wrong one for reading a branch.
           python3 .github/scripts/port/gate.py \
-            --op "$PORT_OP" --manifest "/codegen/agentic_port/manifests/$PORT_OP.yaml" \
+            --op "$PORT_OP" --descriptor /tmp/port-descriptor.json \
             --category "$PORT_CATEGORY" --band correctness --repo /work \
             --work /tmp/port-incoming --limit "$PORT_LIMIT" --skip-write-check \
             --prototype /tmp/port-prototype/prototype.json \
@@ -495,7 +516,7 @@ jobs:
           PORT_LIMIT: ${{ needs.resolve.outputs.perf-limit }}
         run: |
           python3 .github/scripts/port/gate.py \
-            --op "$PORT_OP" --manifest "/codegen/agentic_port/manifests/$PORT_OP.yaml" \
+            --op "$PORT_OP" --descriptor /tmp/port-descriptor.json \
             --category "$PORT_CATEGORY" --band "$PORT_BAND" --repo /work \
             --base-sha "$PORT_BASE_SHA" --work /tmp/port-gate \
             --limit "$PORT_LIMIT" \

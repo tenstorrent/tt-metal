@@ -5,10 +5,10 @@
 
 """Enumerate the cases a port is graded on, from the generator's own sweep.
 
-The manifest names a `sweep_module` in tt-dm-codegen whose `parameters` grid and
-`invalidate_vector` gate together define the op's supported surface. Expanding that grid and
-classifying each point is what makes the gates falsifiable: the port is judged on the generator's
-declared coverage rather than on cases anyone chose after seeing the results.
+`discover.py` names a `sweep_module` in tt-dm-codegen whose `parameters` grid and `invalidate_vector`
+gate together define the op's supported surface. Expanding that grid and classifying each point is
+what makes the gates falsifiable: the port is judged on the generator's declared coverage rather than
+on cases anyone chose after seeing the results.
 
 Every point lands in exactly one of three buckets:
 
@@ -17,9 +17,13 @@ Every point lands in exactly one of three buckets:
   dropped  no reliable oracle, or not constructible at all -- excluded from grading
 
 `dropped` exists because two situations are genuinely ungradeable rather than merely failing.
-`dropped_codegen_reasons` covers gates that are really native limitations too, so there is no
-working implementation to compare against. `known_bad_golden` covers slices where native itself is
-wrong, where comparing to it would fail a correct port.
+`ungradeable_reasons` covers gates that are really native limitations too, so there is no working
+implementation to compare against. `bad_golden` covers slices where native itself is wrong, where
+comparing to it would fail a correct port.
+
+All three narrowing inputs come from `axes/<op>.yaml` in this repository. They used to come from a
+manifest in tt-dm-codegen, which is a sibling porting pipeline's own state file -- see `discover.py`
+for why reading it was a standing source of silent staleness.
 """
 
 from __future__ import annotations
@@ -32,8 +36,6 @@ import random
 import sys
 from pathlib import Path
 from typing import Any
-
-import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import ttnn_names  # noqa: E402
@@ -56,7 +58,7 @@ def _pluck(vector: dict, path: str) -> Any:
 
 
 def _dtype_name(value: Any) -> str:
-    """ttnn dtype objects stringify as `DataType.BFLOAT16`; manifests use `bfloat16`."""
+    """ttnn dtype objects stringify as `DataType.BFLOAT16`; a case wants `bfloat16`."""
     text = str(value)
     return text.rsplit(".", 1)[-1].lower()
 
@@ -91,18 +93,22 @@ def _outside_port_scope(case: dict, port_scope: dict) -> str | None:
     rather than being dropped: scope=out is exactly what the routing check and the emitted routing
     test are for, and dropping them would retire the evidence that the predicate rejects them.
 
-    Absent from a manifest this narrows nothing, which is why `pad` is unaffected.
+    Absent from `axes/<op>.yaml` this narrows nothing, which is why `pad` and `tilize` are unaffected.
+
+    Worded as the constraint rather than the mechanism, and that is a requirement rather than a
+    preference: these strings are what the emitted routing test groups its cases under, and that
+    file ships to public tt-metal.
     """
     if not port_scope:
         return None
 
     layouts = port_scope.get("layouts")
     if layouts and case["layout"] not in layouts:
-        return f"port_scope: {case['layout']} layout is outside the ported builder"
+        return f"{case['layout']} layout is not served by the codegen path"
 
     dtypes = port_scope.get("dtypes")
     if dtypes and case["dtype"] not in dtypes:
-        return f"port_scope: {case['dtype']} is outside the ported builder"
+        return f"{case['dtype']} is not served by the codegen path"
 
     # Listed dtypes are in scope only on a whole number of tiles; others are in scope either way.
     shape = case.get("shape") or []
@@ -111,7 +117,7 @@ def _outside_port_scope(case: dict, port_scope: dict) -> str | None:
             # Deliberately without the offending dims. The reason is what the routing test groups
             # its cases under, and one that names a shape is unique per case, which turns the
             # grouping into a per-case comment on every line. Each case carries its own shape.
-            return f"port_scope: {case['dtype']} is in scope only on tile-aligned shapes"
+            return f"{case['dtype']} is served by the codegen path only on tile-aligned shapes"
     return None
 
 
@@ -144,41 +150,43 @@ def _seed_shape_sampling(op: str) -> None:
     - `measure.prototype_key`'s `ledger_sig` hashes the case ids, so it cannot notice any of this.
 
     Seeded per op rather than globally so two ops do not draw the same shapes, and derived from the
-    name rather than a stored constant so a manifest needs nothing added to it. `random.seed` before
-    the import is what matters: the sampling happens while `parameters` is being evaluated, so
+    name rather than a stored constant so nothing has to be added to a descriptor. `random.seed`
+    before the import is what matters: the sampling happens while `parameters` is being evaluated, so
     seeding after it is seeding after the draw.
     """
     random.seed(f"port-harness/{op}")
 
 
-def build_ledger(manifest: dict, *, suite: str | None = None) -> list[dict]:
+def build_ledger(descriptor: dict, *, suite: str | None = None) -> list[dict]:
     """Expand the sweep grid and classify every point.
 
-    `sweep_suite` may name one suite or several. Several is a union, deduplicated on the input
-    signature: `untilize` draws tile-aligned bfloat8_b from `broaden_suite` and everything else from
-    `nightly`, and the two grids overlap. Without the dedupe a configuration present in both would be
-    measured twice and counted twice in every coverage figure.
+    `suites` may name one suite or several. Several is a union, deduplicated on the input signature:
+    `untilize` draws tile-aligned bfloat8_b from `broaden_suite` and everything else from `nightly`,
+    and the two grids overlap. Without the dedupe a configuration present in both would be measured
+    twice and counted twice in every coverage figure.
 
     The suites are expanded separately rather than merged, because their grids do not have to share
     keys -- `broaden_suite` carries a `shard_strategy` axis that `nightly` does not -- so there is no
     single product to take.
+
+    Naming no suite enumerates every suite the sweep defines, which is the honest default: the sweep
+    is the authority on what it covers, so taking all of it needs no decision recorded anywhere.
     """
-    module_name = manifest["sweep_module"]
-    requested = suite or manifest.get("sweep_suite")
-    suites = [requested] if isinstance(requested, str) else list(requested)
-    _seed_shape_sampling(manifest["op"])
+    sweep = descriptor.get("sweep") or {}
+    module_name = sweep["module"]
+    _seed_shape_sampling(descriptor["op"])
     module = importlib.import_module(module_name)
+
+    requested = suite or sweep.get("suites") or sorted(module.parameters)
+    suites = [requested] if isinstance(requested, str) else list(requested)
 
     invalidate = getattr(module, "invalidate_vector", None)
 
-    vector_map = manifest.get("vector_map") or {}
-    kwarg_map = vector_map.get("kwargs") or {}
-    coverage = manifest.get("coverage") or {}
-    declared_dtypes = set(coverage.get("dtypes") or [])
-    declared_layouts = set(coverage.get("layouts") or [])
-    dropped_reasons = [r.lower() for r in (manifest.get("dropped_codegen_reasons") or [])]
-    known_bad = manifest.get("known_bad_golden") or []
-    port_scope = manifest.get("port_scope") or {}
+    axes = descriptor.get("axes") or {}
+    kwarg_map = axes.get("kwargs") or {}
+    dropped_reasons = [r.lower() for r in (axes.get("ungradeable_reasons") or [])]
+    known_bad = axes.get("bad_golden") or []
+    port_scope = axes.get("scope") or {}
 
     cases = []
     seen: set[str] = set()
@@ -188,9 +196,9 @@ def build_ledger(manifest: dict, *, suite: str | None = None) -> list[dict]:
         for combo in itertools.product(*(grid[k] for k in keys)):
             vector = dict(zip(keys, combo))
 
-            dtype = _dtype_name(_pluck(vector, vector_map.get("dtype", "dtype")))
-            layout = _layout_name(_pluck(vector, vector_map.get("layout", "layout")))
-            shape = _pluck(vector, vector_map.get("shape", "shape"))
+            dtype = _dtype_name(_pluck(vector, axes.get("dtype", "dtype")))
+            layout = _layout_name(_pluck(vector, axes.get("layout", "layout")))
+            shape = _pluck(vector, axes.get("shape", "shape"))
             kwargs = {name: _pluck(vector, path) for name, path in kwarg_map.items()}
 
             case = {
@@ -218,7 +226,7 @@ def build_ledger(manifest: dict, *, suite: str | None = None) -> list[dict]:
                 continue
 
             if any(_matches_known_bad(e, dtype, layout, kwargs) for e in known_bad):
-                case.update(scope=SCOPE_DROPPED, reason="known_bad_golden: native oracle is wrong here")
+                case.update(scope=SCOPE_DROPPED, reason="the oracle is wrong here, so there is nothing to grade against")
                 cases.append(case)
                 continue
 
@@ -227,29 +235,18 @@ def build_ledger(manifest: dict, *, suite: str | None = None) -> list[dict]:
                 invalid, reason = invalidate(dict(vector))
 
             if not invalid:
-                # The manifest's port_scope is ANDed in here: valid for the op, but still possibly
-                # outside the entry point this port transliterates.
+                # The declared scope is ANDed in here: valid for the op, but still possibly outside
+                # the entry point this port transliterates.
                 outside = _outside_port_scope(case, port_scope)
                 case.update(
                     scope=SCOPE_OUT if outside else SCOPE_IN,
                     reason=outside,
                 )
             elif any(frag in (reason or "").lower() for frag in dropped_reasons):
-                case.update(scope=SCOPE_DROPPED, reason=f"dropped_codegen_reasons: {reason}")
+                case.update(scope=SCOPE_DROPPED, reason=f"no implementation to compare against: {reason}")
             else:
                 case.update(scope=SCOPE_OUT, reason=reason)
             cases.append(case)
-
-    # A declared coverage pair that never appears in scope=in means the manifest promises a surface
-    # the sweep does not actually exercise -- the gates would then silently grade nothing there.
-    covered = {(c["dtype"], c["layout"]) for c in cases if c["scope"] == SCOPE_IN}
-    missing = [(d, l) for d in sorted(declared_dtypes) for l in sorted(declared_layouts) if (d, l) not in covered]
-    if missing:
-        print(
-            "ledger: warning: declared coverage pairs with no scope=in case: "
-            + ", ".join(f"{d}/{l}" for d, l in missing),
-            file=sys.stderr,
-        )
     return cases
 
 
@@ -262,22 +259,22 @@ def summarize(cases: list[dict]) -> dict:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--manifest", required=True)
+    ap.add_argument("--descriptor", required=True, help="JSON written by discover.py")
     ap.add_argument("--suite", default=None)
     ap.add_argument("--scope", default=None, choices=[SCOPE_IN, SCOPE_OUT, SCOPE_DROPPED])
     ap.add_argument("--out", default=None, help="write JSON here instead of stdout")
     args = ap.parse_args()
 
-    manifest = yaml.safe_load(Path(args.manifest).read_text()) or {}
-    cases = build_ledger(manifest, suite=args.suite)
+    descriptor = json.loads(Path(args.descriptor).read_text())
+    cases = build_ledger(descriptor, suite=args.suite)
     if args.scope:
         cases = [c for c in cases if c["scope"] == args.scope]
 
-    payload = {"op": manifest.get("op"), "counts": summarize(cases), "cases": cases}
+    payload = {"op": descriptor.get("op"), "counts": summarize(cases), "cases": cases}
     text = json.dumps(payload, indent=2, default=str)
     if args.out:
         Path(args.out).write_text(text)
-        print(json.dumps({"op": manifest.get("op"), "counts": payload["counts"], "out": args.out}, indent=2))
+        print(json.dumps({"op": descriptor.get("op"), "counts": payload["counts"], "out": args.out}, indent=2))
     else:
         print(text)
     return 0

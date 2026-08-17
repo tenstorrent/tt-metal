@@ -14,8 +14,8 @@ layout. Every gate downstream was working correctly on a sample that could not c
 So the selection is stratified. Cases are partitioned along whichever of their own fields behave
 like discrete axes, the budget is spread across the partitions, and within a partition the picks are
 spread across problem size with both extremes always included. Nothing here knows what op it is
-looking at: the axes are discovered from the ledger, which derives them from the manifest's
-`vector_map`, so an op with different parameters gets different axes for free.
+looking at: the axes are discovered from the ledger, which derives them from the op's axis map, so an
+op with different parameters gets different axes for free.
 
 Two properties are worth stating because the gates depend on them:
 
