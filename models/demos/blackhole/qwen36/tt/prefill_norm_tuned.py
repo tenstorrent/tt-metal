@@ -151,16 +151,30 @@ class PrefillTunedDistributedNorm(DistributedNorm):
         # Upstream's `else` limb of the pre-norm test: no gather, just the memory config. For every
         # non-DECODE mode that is DRAM_MEMORY_CONFIG.
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+
+        # Narrow BEFORE the gather: this collective is bytes-bound on one ETH link, so the dtype is
+        # the only lever that moves it (num_workers_per_link is a wash at TP=8 -- measured
+        # 1201.6/1198.7/1163.7us for wpl 2/4/8). See the module docstring.
+        #
+        # Do it INSIDE the norm rather than with a typecast afterwards: rms_norm_post_all_gather
+        # takes a dtype, so the narrowing costs nothing instead of a separate ~24us op on
+        # [1,1,S,dim/tp]. MEASURED (T3K TP=8, 27B, seq 2048): the typecast disappears AND the norm
+        # itself drops 49 -> 39us because it writes half the bytes = -34us, 10 device ops -> 9.
+        #
+        # It is NOT more accurate, which is the intuition to resist: fewer rounding steps (fp32 acc
+        # -> bf8, vs -> bf16 -> bf8) does not win here, because bf8_b's per-tile shared exponent is
+        # what dominates. MEASURED against an fp32 torch reference on [1,1,2048,640]:
+        #     bf16 then typecast   pcc 0.9999441   max abs err 1.374e-02
+        #     dtype=bf8 in-op      pcc 0.9999407   max abs err 1.654e-02
+        # i.e. a 5th-decimal REGRESSION. Taken anyway because it is far below the bfp4 gate/up
+        # weights that set this MLP's error budget, and it buys a whole op -- but do not repeat the
+        # "one less rounding step" reasoning elsewhere without measuring it.
+        if self.prefill_gather_dtype is not None and self.enable_all_gather:
+            norm_config = {**(norm_config or {}), "distributed_output_dtype": self.prefill_gather_dtype}
+
         x = self.norm(x, mode=mode, in_sharded=False, out_sharded=False, norm_config=norm_config)
         if not self.enable_all_gather:
             return x
-        if self.prefill_gather_dtype is not None and x.dtype != self.prefill_gather_dtype:
-            # Narrow BEFORE the gather: this collective is bytes-bound on one ETH link, so the dtype
-            # is the only lever that moves it (num_workers_per_link is a wash at TP=8 -- measured
-            # 1201.6/1198.7/1163.7us for wpl 2/4/8). See the module docstring.
-            narrowed = ttnn.typecast(x, self.prefill_gather_dtype)
-            ttnn.deallocate(x)
-            x = narrowed
         return ttnn.experimental.all_gather_async(
             x,
             persistent_output_buffer=None,
