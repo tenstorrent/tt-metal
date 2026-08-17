@@ -25,6 +25,11 @@
 //   0        in0 base address
 //   1        in1 base address
 //   2        out base address
+//
+// `out` holds num_blocks x kCoreGridW results of reduced_tiles_per_block tiles
+// each, indexed b * kCoreGridW + column. Every column reduces the same input for
+// now -- the load is indexed by block alone -- so the columns are redundant
+// copies; index the load per column too to make them independent.
 
 #include <tt/unified>
 
@@ -97,7 +102,13 @@ void kernel_main() {
 
         if (this_core == root) {
             u::Block result = out_storage.store(u::reduce_sum<PerColumn, kAxis>(all_per_core_sums, scaler_storage));
-            u::noc_store<0>(std::move(result), out, b);
+            // Every column has a root, and they all finish block b together, so the
+            // block index alone would have them all writing the same pages. Give
+            // each column its own slot: `out` is num_blocks rows of kCoreGridW
+            // results, so column x's reduced_tiles_per_block tiles land contiguously
+            // at b * kCoreGridW + x. The width comes from the harness's core-grid
+            // define, so it costs no compile-time arg.
+            u::noc_store<0>(std::move(result), out, b * u::kCoreGridW + this_core.x);
         }
     }
 }

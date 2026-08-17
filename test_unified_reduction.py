@@ -47,9 +47,11 @@ def run(device, ht=4, wt=4, grid_h=2, grid_w=2, num_blocks=1, seed=0):
     ta = ttnn.from_torch(a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=dram)
     # Unused by the kernel, present so the accessor arg layout matches.
     tb = ttnn.from_torch(a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=dram)
-    # One reduced tile-row per block: only row 0 of each carries the answer.
+    # One reduced tile-row per block, holding every column's result side by side:
+    # column x lands at block index b * grid_w + x. Only row 0 of each carries the
+    # answer. Sized this way so a column writing the wrong slot is visible.
     tout = ttnn.allocate_tensor_on_device(
-        ttnn.Shape([1, 1, num_blocks * TILE, wt * TILE]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, dram
+        ttnn.Shape([1, 1, num_blocks * TILE, grid_w * wt * TILE]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, dram
     )
 
     core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_w - 1, grid_h - 1))])
@@ -91,11 +93,14 @@ def run(device, ht=4, wt=4, grid_h=2, grid_w=2, num_blocks=1, seed=0):
     af = a.to(torch.float32)
     got_rows, want_rows = [], []
     for b in range(num_blocks):
-        # Each core reduces block b down its rows; the column then sums grid_h of
-        # those identical results.
+        # Each core reduces block b down its rows; its column then sums grid_h of
+        # those. Every column reads the same input, so every column's slot must
+        # hold the same answer -- and each must be written, which is what catches
+        # two columns sharing one output slot.
         block = af[0, 0, b * ht * TILE : (b + 1) * ht * TILE, :]
-        want_rows.append(block.sum(dim=0) * grid_h)
-        got_rows.append(got_full[0, 0, b * TILE, :])
+        for x in range(grid_w):
+            want_rows.append(block.sum(dim=0) * grid_h)
+            got_rows.append(got_full[0, 0, b * TILE, x * wt * TILE : (x + 1) * wt * TILE])
 
     # Everything outside row 0 of each block is the packer's zeroing contract.
     masked = torch.cat([got_full[0, 0, b * TILE + 1 : (b + 1) * TILE, :].flatten() for b in range(num_blocks)])
