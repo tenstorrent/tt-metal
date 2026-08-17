@@ -1,0 +1,131 @@
+#!/usr/bin/env python3
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""Enough of curl(1) for a loopback health check, for images that ship no curl.
+
+gh-aw decides whether its MCP servers came up with exactly one shape of call, in
+`start_mcp_scripts_server.sh` and `start_safe_outputs_server.sh`:
+
+    if curl -s -f "http://localhost:$PORT/health" > /dev/null 2>&1; then
+
+Both redirect stderr to /dev/null, so a missing curl is indistinguishable from a server that never
+started: ten silent attempts, then `exit 1` with the server's own log printed above it looking
+perfectly healthy. That is the failure this exists to remove. It is deliberately not a general curl
+-- it covers the flags those two call sites use, and refuses anything it would have to guess at,
+because a shim that quietly does the wrong thing for an unrecognised flag is worse than no shim.
+
+Exit statuses follow curl so the callers' `if` still means what it meant: 0 on success, 22 for an
+HTTP error under `-f`, 7 when the connection could not be made, 6 when the host did not resolve.
+"""
+
+from __future__ import annotations
+
+import socket
+import sys
+import urllib.error
+import urllib.request
+
+EXIT_UNSUPPORTED = 2
+EXIT_RESOLVE = 6
+EXIT_CONNECT = 7
+EXIT_HTTP = 22
+
+# Accepted and ignored. Silence is this shim's only mode, and it follows no redirects because the
+# health endpoints do not issue any.
+IGNORED = {"-s", "--silent", "-S", "--show-error", "-f", "--fail", "-L", "--location", "-k", "--insecure"}
+# Accepted with a value.
+WITH_VALUE = {"-o", "--output", "-m", "--max-time", "--connect-timeout", "-X", "--request", "-H", "--header"}
+
+
+def parse(argv: list[str]) -> tuple[str, str | None, float, str, list[str]]:
+    url = None
+    out = None
+    timeout = 30.0
+    method = "GET"
+    headers: list[str] = []
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        if arg in IGNORED:
+            i += 1
+        elif arg in WITH_VALUE:
+            if i + 1 >= len(argv):
+                sys.exit(f"curl-shim: {arg} needs a value")
+            value = argv[i + 1]
+            if arg in ("-o", "--output"):
+                out = value
+            elif arg in ("-m", "--max-time", "--connect-timeout"):
+                timeout = float(value)
+            elif arg in ("-X", "--request"):
+                method = value
+            else:
+                headers.append(value)
+            i += 2
+        elif arg.startswith("-") and arg != "-":
+            # Refused rather than ignored: an unknown flag may change what the caller is asking for.
+            print(f"curl-shim: unsupported option {arg!r}", file=sys.stderr)
+            sys.exit(EXIT_UNSUPPORTED)
+        else:
+            url = arg
+            i += 1
+    if not url:
+        print("curl-shim: no URL given", file=sys.stderr)
+        sys.exit(EXIT_UNSUPPORTED)
+    return url, out, timeout, method, headers
+
+
+def candidates(url: str) -> list[str]:
+    """The URL, then the loopback literals if it names `localhost`.
+
+    A server bound to the IPv6 wildcard and a `localhost` that resolves to 127.0.0.1 first, or the
+    reverse, is a real way for a health check to fail against a server that is up and listening --
+    and this shim's whole purpose is to stop that ambiguity from presenting as silence. Trying both
+    literals makes the answer depend on whether anything is serving, not on which family the name
+    happened to resolve to. Order is unchanged for any other host.
+    """
+    if "//localhost" not in url:
+        return [url]
+    return [url, url.replace("//localhost", "//127.0.0.1"), url.replace("//localhost", "//[::1]")]
+
+
+def main() -> int:
+    url, out, timeout, method, headers = parse(sys.argv[1:])
+
+    last: Exception | None = None
+    for candidate in candidates(url):
+        request = urllib.request.Request(candidate, method=method)
+        for header in headers:
+            name, _, value = header.partition(":")
+            request.add_header(name.strip(), value.strip())
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                body = response.read()
+            if out:
+                if out == "/dev/null":
+                    pass
+                else:
+                    with open(out, "wb") as fh:
+                        fh.write(body)
+            else:
+                sys.stdout.buffer.write(body)
+            return 0
+        except urllib.error.HTTPError as exc:
+            # An HTTP error means something answered, so the name resolved and the port was open.
+            # Callers pass -f, for which curl reports 22, and no other candidate would say more.
+            print(f"curl-shim: {candidate} returned HTTP {exc.code}", file=sys.stderr)
+            return EXIT_HTTP
+        except (urllib.error.URLError, OSError) as exc:
+            last = exc
+
+    reason = getattr(last, "reason", last)
+    if isinstance(reason, socket.gaierror):
+        print(f"curl-shim: could not resolve host for {url}", file=sys.stderr)
+        return EXIT_RESOLVE
+    print(f"curl-shim: could not connect to {url}: {reason}", file=sys.stderr)
+    return EXIT_CONNECT
+
+
+if __name__ == "__main__":
+    sys.exit(main())

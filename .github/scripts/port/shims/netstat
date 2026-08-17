@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# Enough of netstat(8) to answer "is anything listening on this port", for images that ship no
+# net-tools. gh-aw prints `netstat -tuln | grep <port>` as the diagnostic when its MCP server health
+# check gives up, and on the viommu runner that diagnostic was itself the only error visible:
+#
+#   start_mcp_scripts_server.sh: line 121: netstat: command not found
+#
+# which hid what had actually gone wrong. Output is netstat's column order, one `tcp ... LISTEN` row
+# per listening socket, so a grep for ":<port> " or for LISTEN matches what it would have matched.
+# Flags are accepted and ignored: every caller here wants the listening TCP sockets, which is all
+# this prints.
+set -euo pipefail
+
+echo "Active Internet connections (only servers)"
+echo "Proto Recv-Q Send-Q Local Address           Foreign Address         State"
+# -H suppresses ss's own header; the columns are state/recvq/sendq/local/peer, so $4 and $5 are the
+# two addresses. udp is deliberately not reported even for -u: nothing here asks about it, and a
+# fabricated udp row could only mislead.
+ss -tlnH | awk '{printf "tcp        0      0 %-23s %-23s LISTEN\n", $4, $5}'

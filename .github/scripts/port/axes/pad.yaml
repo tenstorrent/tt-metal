@@ -1,0 +1,27 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+# `pad_specs` is one dict-valued sweep parameter holding both the shape and the padding, so these are
+# dotted paths that descend into it rather than parameter names.
+shape: pad_specs.shape
+dtype: dtype
+layout: layout
+kwargs:
+  padding: pad_specs.padding
+  value: value
+suites: [broaden_suite]
+
+# A sweep rejection matching this is a limitation of the op rather than of codegen, so there is no
+# working implementation to compare against and the case is ungradeable rather than failing.
+ungradeable_reasons:
+  - "TILE front-padding not supported in codegen"
+
+# Native's row-major interleaved pad factory has no FLOAT32 case in its pad-value packing switch and
+# reuses the BFLOAT16 one, corrupting any nonzero float32 fill. A three-way device repro on
+# 2026-07-22 showed this port and the generator both produce the correct value and native is the one
+# that is wrong, so comparing against it here would fail a correct port.
+bad_golden:
+  - dtype: float32
+    layout: row_major
+    nonzero_kwarg: value
+    reason: native's float32 row-major pad corrupts a nonzero fill value
