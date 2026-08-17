@@ -375,6 +375,43 @@ def t_native_conv_parity():
         assert pcc_ng >= 0.999, f"native/golden diverge at C={cin}: PCC={pcc_ng}"
 
 
+@check("native dX: conv2d(dOut, flipT(W)) vs composite col2im vs golden")
+def t_conv_bwd_native():
+    import edm_ops
+    from edm_ops import Conv3x3Im2col
+
+    rng = np.random.default_rng(11)
+    saved_flag = edm_ops.NATIVE_CONV
+    try:
+        for cin, cout, h, w in [(32, 32, 16, 16), (128, 128, 32, 32)]:
+            b = 2
+            x_np = rng.standard_normal((b, h, w, cin)).astype(np.float32)
+            w_np = (rng.standard_normal((9 * cin, cout)) / math.sqrt(9 * cin)).astype(np.float32)
+            b_np = np.zeros(cout, dtype=np.float32)
+            g = mse_grad(np_conv3x3(x_np, w_np, b_np))  # fp32 golden upstream grad
+            rdx, rdw, rdb = np_conv3x3_bwd(x_np, w_np, g)
+
+            dxs = {}
+            for mode, flag in [("native", True), ("composite", False)]:
+                edm_ops.NATIVE_CONV = flag
+                x = from_np(x_np.reshape(b, 1, h * w, cin), requires_grad=True)
+                wt = from_np(w_np.reshape(1, 1, 9 * cin, cout), requires_grad=True)
+                bt = from_np(b_np.reshape(1, 1, 1, cout), requires_grad=True)
+                out = Conv3x3Im2col.apply(x, wt, bt, h, w)
+                loss = ttml.ops.loss.mse_loss(out, from_np(np.zeros((b, 1, h * w, cout), dtype=np.float32)))
+                loss.backward(False)
+                dxs[mode] = untokens(grad_np(x), h, w)
+                assert_close(dxs[mode], rdx, 0.08, 0.05 * abs(rdx).max(), f"{mode} dX C={cin}")
+                assert_close(
+                    grad_np(wt).reshape(9 * cin, cout), rdw, 0.08, 0.05 * abs(rdw).max(), f"{mode} dW C={cin}"
+                )
+                ttml.autograd.AutoContext.get_instance().reset_graph()
+            assert_close(dxs["native"], dxs["composite"], 0.05, 0.03 * abs(rdx).max(), f"native-vs-composite C={cin}")
+            print(f"     C={cin}@{h}x{w}: native dX == composite dX == golden", flush=True)
+    finally:
+        edm_ops.NATIVE_CONV = saved_flag
+
+
 @check("GroupNormMoreh wrapper fwd+bwd on tokens (C=64,16x16,G=16)")
 def t_groupnorm_wrapper():
     from edm_ops import GroupNormMoreh
@@ -397,6 +434,39 @@ def t_groupnorm_wrapper():
     assert_close(untokens(grad_np(x), h, w).transpose(0, 3, 1, 2), rdx, 0.08, 0.05 * abs(rdx).max(), "dx")
     assert_close(grad_np(gt).reshape(-1), rdgamma, 0.08, 0.05 * abs(rdgamma).max(), "dgamma")
     assert_close(grad_np(bt).reshape(-1), rdbeta, 0.08, 0.05 * abs(rdbeta).max(), "dbeta")
+
+
+@check("NHWC GroupNorm (pool-matmul) vs moreh vs numpy, fwd+bwd, 2 shapes")
+def t_nhwc_groupnorm():
+    from edm_ops import GroupNormMoreh, GroupNormNHWC
+
+    rng = np.random.default_rng(12)
+    for b, c, h, w, groups in [(4, 128, 32, 32, 32), (2, 64, 16, 16, 16)]:
+        x_np = rng.standard_normal((b, c, h, w)).astype(np.float32)
+        gamma = (rng.standard_normal(c) * 0.3 + 1.0).astype(np.float32)
+        beta = (rng.standard_normal(c) * 0.1).astype(np.float32)
+        ref, _, _ = np_group_norm(x_np, groups, gamma, beta)
+        g_nchw = untokens(mse_grad(tokens(ref)), h, w).transpose(0, 3, 1, 2)
+        rdx, rdgamma, rdbeta = np_group_norm_bwd(x_np, groups, gamma, g_nchw)
+
+        outs = {}
+        for name, fn in [("nhwc", GroupNormNHWC), ("moreh", GroupNormMoreh)]:
+            x = from_np(tokens(x_np), requires_grad=True)
+            gt = from_np(gamma.reshape(1, 1, 1, c), requires_grad=True)
+            bt = from_np(beta.reshape(1, 1, 1, c), requires_grad=True)
+            y = fn.apply(x, gt, bt, groups, h, w)
+            outs[name] = to_np(y)
+            assert_close(untokens(outs[name], h, w), tokens(ref).reshape(b, h, w, c), 0.03, 0.05, f"{name} fwd C={c}")
+            loss = ttml.ops.loss.mse_loss(y, from_np(np.zeros((b, 1, h * w, c), dtype=np.float32)))
+            loss.backward(False)
+            assert_close(
+                untokens(grad_np(x), h, w).transpose(0, 3, 1, 2), rdx, 0.08, 0.05 * abs(rdx).max(), f"{name} dx C={c}"
+            )
+            assert_close(grad_np(gt).reshape(-1), rdgamma, 0.08, 0.05 * abs(rdgamma).max(), f"{name} dgamma C={c}")
+            assert_close(grad_np(bt).reshape(-1), rdbeta, 0.08, 0.05 * abs(rdbeta).max(), f"{name} dbeta C={c}")
+            ttml.autograd.AutoContext.get_instance().reset_graph()
+        assert_close(outs["nhwc"], outs["moreh"], 0.03, 0.05, f"nhwc-vs-moreh fwd C={c}")
+        print(f"     C={c} G={groups} {h}x{w}: NHWC == moreh == golden (fwd+bwd)", flush=True)
 
 
 @check("ConcatChannels fwd+bwd (skip concat / slice)")
@@ -525,7 +595,9 @@ if __name__ == "__main__":
             t_conv_bwd,
             t_native_conv_probe,
             t_native_conv_parity,
+            t_conv_bwd_native,
             t_groupnorm_wrapper,
+            t_nhwc_groupnorm,
             t_concat_channels,
             t_block_parity,
             t_unet_end2end,

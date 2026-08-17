@@ -71,6 +71,12 @@ NATIVE_CONV = os.environ.get("EDM_NATIVE_CONV", "0") == "1"
 # recomputes (Phase-1 behavior).
 SAVE_PATCHES = os.environ.get("EDM_SAVE_PATCHES", "auto")
 
+# GroupNorm implementation: "1" (default) computes GN directly on the
+# [B,1,HW,C] tokens with row-broadcast ops + a cached group-pooling matmul —
+# no NHWC<->NCHW permutes, no moreh kernels; "0" falls back to the moreh
+# NCHW wrapper (GroupNormMoreh).
+NHWC_GN = os.environ.get("EDM_NHWC_GN", "1") == "1"
+
 # Coarse host-side wall-time buckets around device call groups (enqueue +
 # sync boundaries — good enough to RANK hot spots, not to measure kernels).
 # Enable with EDM_PROFILE_CONV=1 (or set edm_ops.PROFILE_CONV = True).
@@ -149,6 +155,51 @@ def _col2im_sum_matrix(c):
         t = ttml.autograd.Tensor.from_numpy(s).get_value()
         _COL2IM_SUM[c] = t
     return t
+
+
+def _flip_transpose_weight(wv, c, cout):
+    """[1,1,9Cin,Cout] ROW_ORDER -> [1,1,9Cout,Cin]: the weight of the
+    transposed conv computing dInput = conv_s1p1(dOut, flipT(W)).
+
+    Tap flip (kh,kw)->(2-kh,2-kw) is exactly REVERSED block order for a 3x3
+    kernel (k' = 8-k), and each block is channel-transposed [Cin,Cout] ->
+    [Cout,Cin]. Operates on the ~MB-scale weight, all tile-aligned
+    (guarded by Cin%32==0 and Cout%32==0 at the call site).
+    """
+    parts = []
+    for kp in range(9):
+        k = 8 - kp
+        blk = ttnn.slice(wv, [0, 0, k * c, 0], [1, 1, (k + 1) * c, cout])
+        parts.append(ttnn.transpose(blk, -2, -1))
+    return ttnn.concat(parts, dim=2)
+
+
+# Cached [1,1,C,C] group-pooling matrices for NHWC GroupNorm: block-diagonal
+# with 1/(HW*Cg) inside each group's CgxCg block, so
+#   sum_over_rows(x) @ P  ==  per-group mean broadcast to every member
+# channel. For all UNet configs HW, Cg are powers of two, so the scale is
+# exact in bf16. Keyed by (C, groups, HW); P is symmetric (self-transpose),
+# so forward and backward reuse the same tensor.
+_GN_POOL: dict = {}
+
+
+def _gn_pool_matrix(c, groups, hw):
+    key = (c, groups, hw)
+    t = _GN_POOL.get(key)
+    if t is None:
+        cg = c // groups
+        p = np.kron(np.eye(groups, dtype=np.float32), np.full((cg, cg), 1.0 / (hw * cg), dtype=np.float32))
+        t = ttml.autograd.Tensor.from_numpy(p.reshape(1, 1, c, c)).get_value()
+        _GN_POOL[key] = t
+    return t
+
+
+def _sum_over_batch(t, b, c):
+    """[B,1,1,C] -> [1,1,1,C] (param-grad reductions)."""
+    if b == 1:
+        return t
+    r = _tile(ttnn.reshape(_rm(t), (1, 1, b, c)))
+    return ttnn.sum(r, dim=2, keepdim=True)
 
 
 def _im2col(v, b, h, w, c):
@@ -304,10 +355,18 @@ class Conv3x3Im2col(ttml.autograd.Function):
             g = _reshape_rows(grad_output, (1, 1, b * h * w, cout), h * w)
             dw = ttnn.matmul(cols, g, transpose_a=True)  # [1,1,9C,Cout]
             db = ttnn.sum(g, dim=2, keepdim=True)  # [1,1,1,Cout]
-        # dX: col2im of dOut @ W^T. Skipped when the input neither requires
-        # grad nor has upstream graph (e.g. conv_in fed leaf pixels).
+        # dX: skipped when the input neither requires grad nor has upstream
+        # graph (e.g. conv_in fed leaf pixels).
         if not x.get_requires_grad() and x.get_node() is None:
             return None, dw, db
+        # Native dX: dInput = conv_s1p1(dOut, flipT(W)) — one conv2d on the
+        # grad tokens instead of the 170MB col2im canvases. Same guard as the
+        # native forward; composite col2im remains the fallback below.
+        if NATIVE_CONV and c % 32 == 0 and cout % 32 == 0:
+            with _prof("bwd_dx_native"):
+                wflip = _flip_transpose_weight(wv, c, cout)  # [1,1,9Cout,Cin]
+                dx = _conv3x3_native_fwd(grad_output, wflip, b, h, w, cout, c)
+            return dx, dw, db
         with _prof("bwd_col2im"):
             dcols = ttnn.matmul(g, wv, transpose_b=True)  # [1,1,BHW,9C] TILE
             d = ttnn.reshape(_rm(dcols), (b, h, w, 9 * c))
@@ -459,4 +518,62 @@ class GroupNormMoreh(ttml.autograd.Function):
         )
         dx_nhwc = ttnn.permute(_rm(dx_nchw), (0, 2, 3, 1))
         dx = _nhwc_rm_to_tokens(dx_nhwc, b, h, w, c)
+        return dx, dgamma, dbeta
+
+
+class GroupNormNHWC(ttml.autograd.Function):
+    """GroupNorm computed directly on [B,1,HW,C] TILE tokens — no NCHW
+    round-trip, no moreh kernels. Same signature as GroupNormMoreh.
+
+    Group statistics via a cached [1,1,C,C] group-pooling matmul (see
+    _gn_pool_matrix): mean = sum_rows(x) @ P, var = sum_rows((x-mean)^2) @ P
+    (two-pass — numerically safer in bf16 than E[x^2]-mean^2). Everything
+    else is proven row-broadcast binary ops. Backward is the standard GN
+    gradient in the same form:
+        dxhat = dy * gamma
+        dx    = rstd * (dxhat - mean_g(dxhat) - xhat * mean_g(dxhat*xhat))
+        dgamma = sum_{B,HW} dy*xhat,  dbeta = sum_{B,HW} dy
+    with mean_g the same pooling matmul (P is its own transpose).
+    Saves mean/rstd (tiny) and recomputes xhat in backward from the saved
+    input — no extra [B,1,HW,C] tensor kept alive.
+    """
+
+    EPS = 1e-6
+
+    @staticmethod
+    def forward(ctx, x, gamma, beta, num_groups, h, w):
+        v, gv, bv = x.get_value(), gamma.get_value(), beta.get_value()
+        b, c = v.shape[0], v.shape[-1]
+        hw = h * w
+        with _prof("gn_nhwc_fwd"):
+            pool = _gn_pool_matrix(c, num_groups, hw)
+            mean = ttnn.matmul(ttnn.sum(v, dim=2, keepdim=True), pool)  # [B,1,1,C] group means
+            xc = ttnn.subtract(v, mean)
+            var = ttnn.matmul(ttnn.sum(ttnn.multiply(xc, xc), dim=2, keepdim=True), pool)
+            rstd = ttnn.rsqrt(ttnn.add(var, GroupNormNHWC.EPS))
+            xhat = ttnn.multiply(xc, rstd)
+            out = ttnn.add(ttnn.multiply(xhat, gv), bv)
+        ctx.save_for_backward(x, gamma)
+        ctx.mean, ctx.rstd = mean, rstd
+        ctx.dims = (b, hw, c)
+        ctx.num_groups = num_groups
+        return out
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        x, gamma = ctx.saved_tensors
+        b, hw, c = ctx.dims
+        with _prof("gn_nhwc_bwd"):
+            v, gv = x.get_value(), gamma.get_value()
+            pool = _gn_pool_matrix(c, ctx.num_groups, hw)
+            xhat = ttnn.multiply(ttnn.subtract(v, ctx.mean), ctx.rstd)  # recompute
+            dy = grad_output
+            dgamma = _sum_over_batch(ttnn.sum(ttnn.multiply(dy, xhat), dim=2, keepdim=True), b, c)
+            dbeta = _sum_over_batch(ttnn.sum(dy, dim=2, keepdim=True), b, c)
+            dxhat = ttnn.multiply(dy, gv)
+            m1 = ttnn.matmul(ttnn.sum(dxhat, dim=2, keepdim=True), pool)
+            m2 = ttnn.matmul(ttnn.sum(ttnn.multiply(dxhat, xhat), dim=2, keepdim=True), pool)
+            dx = ttnn.multiply(
+                ttnn.subtract(ttnn.subtract(dxhat, m1), ttnn.multiply(xhat, m2)), ctx.rstd
+            )
         return dx, dgamma, dbeta

@@ -32,7 +32,8 @@ from ttml.modules import AbstractModuleBase, LinearLayer, Parameter, RunMode
 from ttml.modules.module_base import ModuleList
 
 from edm import build_unet_plan
-from edm_ops import AvgPool2x2, ConcatChannels, Conv3x3Im2col, GroupNormMoreh, Scale, UpsampleNearest2
+import edm_ops
+from edm_ops import AvgPool2x2, ConcatChannels, Conv3x3Im2col, GroupNormMoreh, GroupNormNHWC, Scale, UpsampleNearest2
 
 SKIP_SCALE = math.sqrt(0.5)
 
@@ -66,7 +67,8 @@ class GroupNorm(AbstractModuleBase):
         self.beta = Parameter(ttml.init.zeros()((1, 1, 1, channels)))
 
     def forward(self, x, h: int, w: int):
-        return GroupNormMoreh.apply(x, self.gamma.tensor, self.beta.tensor, self.num_groups, h, w)
+        fn = GroupNormNHWC if edm_ops.NHWC_GN else GroupNormMoreh  # EDM_NHWC_GN
+        return fn.apply(x, self.gamma.tensor, self.beta.tensor, self.num_groups, h, w)
 
 
 class UNetAttention(AbstractModuleBase):

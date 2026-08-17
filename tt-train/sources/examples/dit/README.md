@@ -83,6 +83,12 @@ forward for backward's dW vs recompute — memory/speed trade),
 `smoke_unet_train.py --probe` phase breakdown). Backward's col2im sums its
 9 shifted tap blocks with one cached stacked-identity matmul, and dX is
 skipped for the pixel-fed `conv_in` when inputs are created without grad.
+With `EDM_NATIVE_CONV=1`, dX also goes native: `dInput = conv2d(dOut,
+flipT(W))` where `flipT` (9 tile-aligned slice+transpose on the ~MB weight)
+reverses the tap blocks and transposes each — the composite col2im remains
+the fallback. `EDM_NHWC_GN=1` (default) computes GroupNorm directly on the
+`[B,1,HW,C]` tokens via a cached group-pooling matmul — no NHWC↔NCHW
+permutes, no moreh kernels; `=0` restores the moreh wrapper.
 
 ## Design notes (framework workarounds, kept intentionally visible)
 
