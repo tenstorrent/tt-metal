@@ -152,7 +152,11 @@ ttnn::device_operation::ProgramArtifacts GeluBackwardProgramFactory::create_prog
     // at its default: ComputeGen1Config's defaults coincide with the legacy descriptor's
     // (math_approx_mode=false -> sfpu_precision_mode=Precise, dst_full_sync_en=false ->
     // double_buffer_dest=true, bfp8_pack_precise=false -> bfp_pack_precision_mode=Approximate).
-    bool fp32_dest_acc_en = (dst_cb_data_format == DataFormat::Float32) || (dst_cb_data_format == DataFormat::Int32) ||
+    // The migrated chain computes through DEST, so Float32 inputs also require a 32-bit DEST even
+    // when the output format is narrower.
+    bool fp32_dest_acc_en = (src0_cb_data_format == DataFormat::Float32) ||
+                            (src1_cb_data_format == DataFormat::Float32) ||
+                            (dst_cb_data_format == DataFormat::Float32) || (dst_cb_data_format == DataFormat::Int32) ||
                             (dst_cb_data_format == DataFormat::UInt32);
 
     // Legacy asked for UnpackToDestFp32 on both operand CBs unconditionally, but the legacy lowering

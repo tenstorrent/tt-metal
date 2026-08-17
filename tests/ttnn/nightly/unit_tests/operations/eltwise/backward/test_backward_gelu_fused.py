@@ -57,6 +57,19 @@ def test_bw_gelu(input_shapes, approximate, device):
     assert comp_pass
 
 
+def test_bw_gelu_tanh_float32_uses_four_dest_slots(device):
+    """Float32 exposes four DEST tile slots, so tanh GELU backward must use its four-slot schedule."""
+    input_data = torch.linspace(-3.0, 3.0, 32 * 32, dtype=torch.float32).reshape(1, 1, 32, 32).requires_grad_()
+    grad_data = torch.linspace(0.25, 1.25, 32 * 32, dtype=torch.float32).reshape(1, 1, 32, 32)
+    input_tensor = ttnn.from_torch(input_data, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    grad_tensor = ttnn.from_torch(grad_data, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    result = ttnn.experimental.gelu_bw(grad_tensor, input_tensor, approximate="tanh")
+    golden = ttnn.get_golden_function(ttnn.experimental.gelu_bw)(grad_data, input_data)
+
+    assert compare_pcc([result], golden)
+
+
 @pytest.mark.parametrize(
     "input_shapes",
     INPUT_SHAPES,
