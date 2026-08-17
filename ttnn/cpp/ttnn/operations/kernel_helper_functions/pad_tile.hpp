@@ -335,6 +335,7 @@ void fill_pad_tile_blockfloat(uint32_t l1_tile_ptr) {
  */
 template <DataFormat data_format>
 constexpr uint32_t blockfloat_mantissa_bits() {
+#ifndef ARCH_QUASAR
     if constexpr (data_format == DataFormat::Bfp8 || data_format == DataFormat::Bfp8_b) {
         return 8;
     } else if constexpr (data_format == DataFormat::Bfp4 || data_format == DataFormat::Bfp4_b) {
@@ -344,6 +345,12 @@ constexpr uint32_t blockfloat_mantissa_bits() {
     } else {
         return 0;
     }
+#else
+    // Quasar's DataFormat enum has no block-float formats (Bfp8/Bfp4/Bfp2 and their _b variants), so no
+    // format here can be block-float: report 0 mantissa bits (same result as the non-block-float branch on
+    // WH/BH). The block-float pad accounting in the callers below is a no-op on Quasar as a result.
+    return 0;
+#endif
 }
 
 /**
