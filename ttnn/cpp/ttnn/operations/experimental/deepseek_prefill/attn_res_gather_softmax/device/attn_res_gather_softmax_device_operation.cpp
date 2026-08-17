@@ -5,6 +5,8 @@
 #include "attn_res_gather_softmax_device_operation.hpp"
 
 #include <array>
+#include <utility>
+#include <vector>
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
@@ -22,6 +24,41 @@ namespace ttnn::experimental::prim {
 using namespace tt::constants;
 
 namespace {
+
+std::vector<std::pair<const ttnn::Tensor*, const char*>> named_operands(const AttnResGatherSoftmaxInputs& tensor_args) {
+    std::vector<std::pair<const ttnn::Tensor*, const char*>> operands = {
+        {&tensor_args.partial, "partial"},
+        {&tensor_args.running_sum, "running_sum"},
+        {&tensor_args.shift, "shift"},
+        {&tensor_args.mass, "mass"},
+        {&tensor_args.q, "q"},
+        {&tensor_args.stats, "stats"},
+    };
+    if (tensor_args.pending.has_value()) {
+        operands.emplace_back(&tensor_args.pending.value(), "pending");
+    }
+    return operands;
+}
+
+// An operand's spec is part of the program cache key but its device is not — device
+// storage contributes no attributes at all — while every dispatch patches the operand's
+// raw address into the program. So an operand from another mesh reaches a cached program
+// as a local address holding something else, which is why this belongs on the hit path as
+// much as the miss path. The program itself runs on `partial`'s device: that is the
+// tensor the dispatch takes the mesh from.
+void validate_device_affinity(const AttnResGatherSoftmaxInputs& tensor_args) {
+    for (const auto& [tensor, name] : named_operands(tensor_args)) {
+        TT_FATAL(
+            tensor->storage_type() == StorageType::DEVICE,
+            "AttnResGatherSoftmax requires {} on device, got {}",
+            name,
+            tensor->storage_type());
+        TT_FATAL(
+            tensor->device() == tensor_args.partial.device(),
+            "AttnResGatherSoftmax requires {} on the same device as partial",
+            name);
+    }
+}
 
 // `site` selects a plane of every batched operand, and the factory turns it into page
 // offsets with no further checking, so a value past the batch reads whatever follows
@@ -72,6 +109,7 @@ void validate_semaphore(const AttnResGatherSoftmaxParams& args, const AttnResGat
 
 void AttnResGatherSoftmaxDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    validate_device_affinity(tensor_args);
     validate_site(args, tensor_args);
     validate_semaphore(args, tensor_args);
 }
@@ -112,27 +150,8 @@ void AttnResGatherSoftmaxDeviceOperation::validate_on_program_cache_miss(
             tensor_args.shift.dtype());
     }
 
-    std::vector<std::pair<const ttnn::Tensor*, const char*>> operands = {
-        {&partial, "partial"},
-        {&running_sum, "running_sum"},
-        {&tensor_args.shift, "shift"},
-        {&tensor_args.mass, "mass"},
-        {&tensor_args.q, "q"},
-        {&stats, "stats"},
-    };
-    if (tensor_args.pending.has_value()) {
-        operands.emplace_back(&tensor_args.pending.value(), "pending");
-    }
-    for (const auto& [tensor, name] : operands) {
-        TT_FATAL(
-            tensor->storage_type() == StorageType::DEVICE,
-            "AttnResGatherSoftmax requires {} on device, got {}",
-            name,
-            tensor->storage_type());
-        TT_FATAL(
-            tensor->device() == partial.device(),
-            "AttnResGatherSoftmax requires {} on the same device as partial",
-            name);
+    validate_device_affinity(tensor_args);
+    for (const auto& [tensor, name] : named_operands(tensor_args)) {
         TT_FATAL(tensor->layout() == Layout::TILE, "AttnResGatherSoftmax requires TILE layout for {}", name);
         TT_FATAL(
             !tensor->memory_config().is_sharded(), "AttnResGatherSoftmax supports interleaved operands only, {}", name);
