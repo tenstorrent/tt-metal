@@ -25,9 +25,9 @@
       cannot be checked by having it continue text, because the text head is unused and all three RoPE
       conventions score the same on it. So it drove the speech path instead, and confirmed the model
       stops on its own at a length that tracks the text, with the pitch of the requested voice. It
-      even tried a wrong RoPE on purpose and got a buzz that never stops. All of that is a paragraph in a
-      comment. Nothing can run it, and nothing downstream knows whether it happened, on this model or
-      the next one where the same paragraph gets written without the work behind it.
+      even tried a wrong RoPE on purpose and got a buzz that never stops. All of that is a paragraph
+      in a comment. Nothing can run it, and nothing downstream knows whether it happened, on this
+      model or the next one where the same paragraph gets written without the work behind it.
     - This matters because that file becomes what every later test is scored against. Ours was
       correct. A slightly wrong one, one RoPE convention or one norm epsilon, would set every
       component's target wrong and nothing in the run could tell.
