@@ -59,31 +59,45 @@ The concurrency-32 point: 256 requests, 333.79 tok/s output throughput, 576 peak
 
 ## Self-audit: did any change of mine manufacture this pass?
 
-### Yes, one change reduces coverage: the hang watchdog is off
+### The hang watchdog was off for this run — RESOLVED 2026-08-17
 
-`DISABLE_METAL_OP_TIMEOUT=1` in the device spec disables
+**This section describes run 31858340006 as it was. The disable has since been
+removed; see the resolution at the end.**
+
+`DISABLE_METAL_OP_TIMEOUT=1` in the device spec disabled
 `TT_METAL_OPERATION_TIMEOUT_SECONDS=5.0`, tt-inference-server's automatic hang
 detector, which normally triggers tt-triage capture.
 
-It is **load-bearing for this pass**: the successful run's JIT cache was
+It was **load-bearing for that pass**: the successful run's JIT cache was
 `0/1836 hits (0.0%)` with 72.90 s engine init, the same cold-cache conditions
 under which run 31824560569 was aborted by that watchdog inside
-`ttnn.linear(activated, self.down_prefill)`. Without the flag this run would very
+`ttnn.linear(activated, self.down_prefill)`. Without the flag that run would very
 likely have aborted the same way.
 
-Honest consequences:
+Consequences while it was set:
 
-- A **genuine** hang in this model will no longer abort quickly with triage
-  output. It will present as a stall until some outer timeout fires. That is a
-  real loss of diagnostic coverage, accepted deliberately.
-- The justification is that the abort was a false positive, supported by: the
-  cold-cache numbers above, and the same commit, hardware class and benchmark
-  shapes completing repeatedly on a local host with the watchdog absent.
-- **This is not proof no hang exists.** Disabling a detector cannot establish
-  that.
-- Better long-term fix than a permanent disable: raise the timeout for this model
-  rather than remove it, or warm the JIT cache in the image so the first-compile
-  path is not on the measured/guarded path.
+- A **genuine** hang would no longer abort quickly with triage output; it would
+  present as a stall until some outer timeout fired.
+- **It was never proof that no hang exists.** Disabling a detector cannot
+  establish that. Any claim resting on run 31858340006 inherits this limit.
+
+**Resolution.** The spec now sets `TT_METAL_OPERATION_TIMEOUT_SECONDS: "120"`
+instead, and sets no `DISABLE_METAL_OP_TIMEOUT`. Detection is fully restored: a
+wedged device never completes, so the watchdog still trips and still runs
+tt-triage through `TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE`, which the
+disable had suppressed. No tt-inference-server code change was required, because
+`set_runtime_env_vars` applies spec `env_vars` *after*
+`set_metal_timeout_env_vars`, so the spec value wins while the triage hook stays
+wired. 120 s is the value `tt-media-server/scripts/sp_env_sample.sh` already
+ships.
+
+The threshold was measured, not guessed. On QB2 p300x2 with `TT_METAL_CACHE`
+pointed at an empty directory (`JIT cache stats: 0/829 hits`), the multichip
+prefill+decode layer bench completed **at the stock 5.0 s limit with no timeout**,
+twice — 124 s and 125 s wall. So the cold-compile cost is bounded at layer scale
+and the raise is headroom for the full 60-layer, 1836-kernel first compile, not a
+blanket escape. `tests/test_gemma4_31b_autoport_spec.py` in tt-inference-server
+asserts the disable cannot silently return.
 
 ### Yes, one change alters what is being tested: the chat template
 
@@ -100,13 +114,53 @@ instruct format — and it is the same file the recorded Stage 09 serving run us
 But anyone reading these numbers should know the prompts were not formatted by a
 real chat template.
 
-### Yes, the lane tested is narrower than release
+### Yes, the lane tested is narrower than release — and release is the intended one
 
-The passing workflow is `benchmarks`. That excludes evals, API conformance, and
-the release report. `spec_tests` was tried first and cannot pass for any Gemma
-variant, because `test_module/test_suites/llm.json` defines suites only for
-`qwen3_32b`, `llama_3_1_8b`, `llama_70b_family` and `gpt_oss_20b` — so skipping it
-did not skip applicable coverage, but `benchmarks` alone is not `release`.
+The passing workflow is `benchmarks`. That excludes evals and the release report.
+`spec_tests` was tried first and cannot pass for any Gemma variant, because
+`test_module/test_suites/llm.json` defines suites only for `qwen3_32b`,
+`llama_3_1_8b`, `llama_70b_family` and `gpt_oss_20b` — so skipping it did not skip
+applicable coverage.
+
+**What was not understood at the time:** `benchmarks` is not merely narrower than
+`release`, it is narrower than what this model is *registered for*.
+`on-nightly.yml` sets `setup-vars.outputs.workflow: "release"` and passes
+`schedule: "nightly"`, so a model listed under `ci.nightly` in
+`models-ci-config.json` is scheduled by the nightly cron and that cron dispatches
+the **`release`** workflow. Our registration (`gemma-4-31B`,
+`ci.nightly.devices: [P300X2]`, `inference_engine: vLLM`) mirrors the stock
+`gemma-4-31B-it` entry exactly, so `release` on P300X2 is precisely this model's
+intended coverage.
+
+`release` runs **evals plus benchmarks** (`workflow_dispatch.py`:
+`_ENGINE_EVAL_WORKFLOWS` and `_ENGINE_BENCHMARK_WORKFLOWS` both contain
+`WorkflowType.RELEASE`). So run 31858340006 covered **half** the intended lane,
+and the eval half could not have run at all: `gemma-4-31B` had no `EVAL_CONFIGS`
+entry. One has since been added — see below.
+
+### The eval half now has a config, deliberately ungraded
+
+An earlier version of this audit stated that tt-inference-server has no LLM eval
+entries that avoid a chat template. **That was wrong.** `meta_ifeval`,
+`meta_gpqa_cot`, `meta_gpqa` and `meta_math` all appear with
+`apply_chat_template=False`, and `EvalTask` defaults to
+`eval_class="local-completions"` with `use_chat_api=False`, so the default eval
+path already targets `/v1/completions` and needs no chat template at all.
+
+`reference_config/evals/eval_config.py` now carries a `google/gemma-4-31B` entry:
+`mmlu_generative` and `gpqa_diamond_generative_n_shot`, both 5-shot with
+`apply_chat_template=False` and greedy generation, and deliberately **no**
+`ifeval`/`meta_ifeval` — an instruction-following eval on a checkpoint that was
+never instruction-tuned would measure the absence of instruction tuning, not the
+correctness of the port.
+
+Its scores are deliberately unreferenced (`gpu_reference_score_ref="TBD"`, the
+same pattern `Qwen/Qwen3-4B` already uses). Google publishes benchmark numbers for
+the instruction-tuned Gemma 4 models only and the base revision's HF API reports
+`model-index: null`, so there is no honest published base figure, and
+back-filling one from our own run would make the check circular. **These tasks run
+and report but do not gate.** That is a real increase in executed coverage over
+having no eval entry, and an explicit remaining gap on grading.
 
 ### The most important gap: nothing was graded
 
