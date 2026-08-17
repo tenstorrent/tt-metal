@@ -85,6 +85,10 @@ set(TTNNCPP_SRCS
     cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/unified_routed_expert_ffn.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_device_operation.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp
+    cpp/ttnn/operations/experimental/deepseek_prefill/moe_fused_swiglu/moe_fused_swiglu.cpp
+    cpp/ttnn/operations/experimental/deepseek_prefill/moe_fused_swiglu/device/moe_fused_swiglu_device_operation.cpp
+    cpp/ttnn/operations/experimental/deepseek_prefill/moe_fused_swiglu/device/moe_fused_swiglu_geometry.cpp
+    cpp/ttnn/operations/experimental/deepseek_prefill/moe_fused_swiglu/device/moe_fused_swiglu_program_factory.cpp
     cpp/ttnn/operations/experimental/test/hang_device/hang_device_program_factory.cpp
     cpp/ttnn/operations/normalization/rmsnorm_distributed/rmsnorm_pre_all_gather.cpp
     cpp/ttnn/operations/normalization/rmsnorm_distributed/rmsnorm_post_all_gather.cpp
@@ -104,6 +108,7 @@ set(TTNN_SRC_PYBIND
     core/graph/graph_nanobind.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/routed_expert_ffn/routed_expert_ffn_nanobind.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/unified_routed_expert_ffn_nanobind.cpp
+    cpp/ttnn/operations/experimental/deepseek_prefill/moe_fused_swiglu/moe_fused_swiglu_nanobind.cpp
     cpp/ttnn/operations/experimental/experimental_nanobind.cpp
     cpp/ttnn/operations/experimental/fusion/fusion_dispatch_op_nanobind.cpp
     cpp/ttnn/operations/generic/generic_op_nanobind.cpp
