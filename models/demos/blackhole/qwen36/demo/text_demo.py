@@ -38,7 +38,9 @@ from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.generator import Generator
 from models.tt_transformers.tt.model_config import determine_device_name
 
-_MESH_SHAPE = {"P150": (1, 1), "P150x4": (1, 4), "P150x8": (1, 8)}.get(os.environ.get("MESH_DEVICE"), (1, 4))
+_MESH_SHAPE = {"P150": (1, 1), "P150x4": (1, 4), "P150x8": (1, 8), "P300": (1, 2)}.get(
+    os.environ.get("MESH_DEVICE"), (1, 4)
+)
 _MULTI = _MESH_SHAPE != (1, 1)
 _TP_TRACE_REGION_SIZE = 1024 * 1024 * 1024
 DEVICE_PARAMS = [
