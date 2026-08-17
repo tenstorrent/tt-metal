@@ -338,11 +338,11 @@ TEST(UnwindOpenFunctions, ReachesEveryProcessorWithTheReason) {
     const ScopedProcessor registration(processor);
 
     GraphTracker::instance().track_function_start("op that never ends");
-    GraphTracker::instance().unwind_open_functions("closed when 'ttnn.add' started");
+    GraphTracker::instance().unwind_open_functions("closed when 'next op' started");
 
     EXPECT_EQ(processor->function_ends.load(), 0);
     ASSERT_EQ(processor->unwinds.load(), 1);
-    EXPECT_EQ(processor->unwind_reasons.front(), "closed when 'ttnn.add' started");
+    EXPECT_EQ(processor->unwind_reasons.front(), "closed when 'next op' started");
 }
 
 // Processors are thread_local, so an unwind on one thread must leave another thread's capture
