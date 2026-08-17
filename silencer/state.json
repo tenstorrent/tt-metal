@@ -21,7 +21,8 @@
     "31362719766",
     "31229899895",
     31566814739,
-    31596449343
+    31596449343,
+    "32028413134"
   ],
   "workflows_sampled": [
     "merge-gate.yaml",
@@ -41,7 +42,8 @@
     "t3000-e2e-tests.yaml",
     "galaxy-e2e-tests.yaml",
     "runtime-integration-tests.yaml",
-    "models-t2-unit-tests.yaml"
+    "models-t2-unit-tests.yaml",
+    "t3000-perf-tests.yaml"
   ],
   "in_flight_prs": [
     {
@@ -140,13 +142,23 @@
     },
     {
       "branch": "silencer/groupnorm-unused-var-warning",
+      "number": 53024,
+      "status": "reported-no-ci-run-found",
+      "note": "No CI run found on branch for models-t2-unit-tests; posted status comment and marked ready for review on 2026-08-17. Awaiting maintainer/CI action."
+    },
+    {
       "number": null,
+      "branch": "silencer/permute-writer-unused-vars",
+      "pattern": "-Wunused-but-set-variable: input_padded_shape / output_tiled_shape in writer_permute_interleaved_tiled_row_invariant.cpp",
       "status": "pr_opened_pending_ci",
-      "note": "Removed unused out_block_hw_actual local var (3 call sites) in ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm.cpp -- GCC -Wunused-but-set-variable fired 18x in one sampled models-t2-unit-tests job (run 31596449343, job 94201855345, SDXL base unet-loop unit tests [wh_n150]). Dispatched models-t2-unit-tests (ref=silencer/groupnorm-unused-var-warning, model=sdxl) for validation; awaiting PR number assignment and CI outcome."
+      "source_run_id": "32028413134",
+      "source_job_id": "95391393492",
+      "workflow": "t3000-perf-tests.yaml",
+      "note": "Dispatched t3000-perf-tests (model=qwenimage) on this branch this run to validate warnings gone."
     }
   ],
   "backlog_cursor": {
-    "next_category": 6,
-    "note": "2026-08-13: Phase A resolved PR #52807 (fabric Rx-log demotion) -- validation run 31476262556 job 93734020681 success, re-grep confirmed 0 occurrences of demoted lines; commented + marked ready for review. PR #52996 (eth-buffer-movement) still has no findable CI run on runtime-integration-tests.yaml for its branch; left as draft with an interim comment, will re-check next run. Phase B: sampled models-t2-unit-tests.yaml run 31596449343 job 94201855345 (SDXL base unet-loop unit tests wh_n150) -- spdlog histogram was mostly benign UMD/Op lifecycle lines (30x info/UMD, 8x throttle-matmul), but a genuine compiler warning '-Wunused-but-set-variable' for out_block_hw_actual in groupnorm.cpp fired 18x. Fixed via silencer/groupnorm-unused-var-warning (dead-variable removal, 3 call sites); dispatched models-t2-unit-tests(sdxl) for validation. Next run: check this PR's CI outcome, and continue rotating through un-sampled workflows (models-t1-e2e-tests, models-t3-*, single-card-*, t3000-*, tt-metal-l2-nightly, perf-device-models, runtime-perf-tests, runtime-sanity-tests, pipeline-select-profiler not yet in workflows_sampled)."
+    "next_category": "continue backlog: models-t1-e2e-tests, models-t3-*, single-card-*, tt-metal-l2-nightly, perf-device-models, runtime-perf-tests, runtime-sanity-tests, pipeline-select-profiler",
+    "note": "t3000-perf-tests.yaml sampled this run (run 32028413134, jobs 95391393490/95391393492). BuildKernels info-level compile-time logs found but are an intentional documented opt-in (TT_METAL_LOG_KERNEL_COMPILE set by tt_dit/models/__init__.py) - not a fix target. Found and fixed 2 -Wunused-but-set-variable warnings in permute writer kernel."
   }
 }
