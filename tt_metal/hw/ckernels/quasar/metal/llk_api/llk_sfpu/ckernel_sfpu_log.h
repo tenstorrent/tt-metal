@@ -6,6 +6,9 @@
 
 #include <cstdint>
 
+#include "ckernel.h"
+#include "ckernel_defs.h"
+#include "cmath_common.h"
 #include "sfpi.h"
 
 namespace ckernel {
@@ -84,6 +87,34 @@ sfpi_inline sfpi::vFloat _calculate_log_body_no_init_(sfpi::vFloat base) {
     v_endif;
 
     return log_result;
+}
+
+// Blackhole-compatible SFPI helper surface. Kernels shared between the two
+// architectures use this form directly, while Quasar's existing log tile op
+// continues to use the underscored implementation above.
+template <bool FAST_APPROX, bool HAS_BASE_SCALING, bool is_fp32_dest_acc_en>
+sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat a, const std::uint32_t log_base_scale_factor) {
+    sfpi::vFloat result = _calculate_log_body_no_init_(a);
+    if constexpr (HAS_BASE_SCALING) {
+        result *= sfpi::as<sfpi::vFloat>(sfpi::vUInt(log_base_scale_factor));
+    }
+    return result;
+}
+
+template <bool APPROXIMATION_MODE, bool FAST_APPROX, bool is_fp32_dest_acc_en>
+inline void log_init() {
+    math::_reset_counters_<p_setrwc::SET_ABD_F>();
+    const float LOG_TWO = 0.693147182f;
+    const float TWO_TO_M23 = 1.19209290e-7f;
+    sfpi::vConstFloatPrgm0 = LOG_TWO * TWO_TO_M23;
+
+    if constexpr (is_fp32_dest_acc_en) {
+        sfpi::vConstFloatPrgm1 = -0x1.00001ap-2f;
+        sfpi::vConstFloatPrgm2 = 0x1.555572p-2f;
+    } else {
+        sfpi::vConstFloatPrgm1 = 0x1.744p-2f;
+        sfpi::vConstFloatPrgm2 = -0x1.008p-1f;
+    }
 }
 
 template <bool APPROXIMATION_MODE, bool HAS_BASE_SCALING, int ITERATIONS>

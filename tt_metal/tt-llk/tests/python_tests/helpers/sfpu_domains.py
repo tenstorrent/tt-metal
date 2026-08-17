@@ -497,6 +497,12 @@ _OP_DOMAIN_REGISTRY: Dict[
     MathOperation.UnaryLe: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-2.0, high=2.0)
     ),
+    MathOperation.UnaryNe: OperandSpecs(
+        spec_A=StimuliSpec.custom(values=[-2.0, -1.0, 0.0, 0.5, 1.0, 2.0], seed=0)
+    ),
+    MathOperation.UnaryEq: OperandSpecs(
+        spec_A=StimuliSpec.custom(values=[-2.0, -1.0, 0.0, 0.5, 1.0, 2.0], seed=0)
+    ),
     # unary max/min against value 0.0; span both signs
     MathOperation.UnaryMax: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)

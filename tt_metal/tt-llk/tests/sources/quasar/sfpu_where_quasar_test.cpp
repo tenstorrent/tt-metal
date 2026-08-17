@@ -81,6 +81,10 @@ const bool is_int_fpu_en = false;
 #include "cmath_common.h"
 #include "llk_math_common.h"
 #include "llk_math_eltwise_unary_datacopy.h"
+#include "llk_sfpu/ckernel_sfpu_addcdiv.h"
+#include "llk_sfpu/ckernel_sfpu_addcmul.h"
+#include "llk_sfpu/ckernel_sfpu_lerp.h"
+#include "llk_sfpu/ckernel_sfpu_snake_beta.h"
 #include "llk_sfpu/ckernel_sfpu_where.h"
 #include "llk_sfpu/llk_math_eltwise_ternary_sfpu_macros.h"
 #include "params.h"
@@ -120,22 +124,86 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
     }
 
-    _llk_math_eltwise_ternary_sfpu_init_<SfpuType::where>();
+    _llk_math_eltwise_ternary_sfpu_init_<SFPU_TERNARY_OPERATION>();
 
-    // Runs calculate_where over the faces selected by VECTOR_MODE: cond=base+0,
-    // true_val=base+1, false_val=base+2, result written to base+0. Faces
-    // outside the selected set keep whatever the producer wrote into Dest before
-    // SFPU ran (the cond tile, here), so Python asserts only processed faces.
-    SFPU_TERNARY_CALL(
-        dest_sync,
-        is_fp32_dest_acc_en,
-        calculate_where,
-        (false /*APPROXIMATION_MODE*/),
-        params.DST_INDEX + 0u /*DST_IN0*/,
-        params.DST_INDEX + 1u /*DST_IN1*/,
-        params.DST_INDEX + 2u /*DST_IN2*/,
-        params.DST_INDEX + 0u /*DST_OUT*/,
-        VECTOR_MODE);
+    if constexpr (SFPU_TERNARY_OPERATION == SfpuType::addcdiv)
+    {
+        init_addcdiv<false /*APPROXIMATION_MODE*/>();
+    }
+    else if constexpr (SFPU_TERNARY_OPERATION == SfpuType::snake_beta)
+    {
+        snake_beta_init<false /*APPROXIMATION_MODE*/>();
+    }
+
+    if constexpr (SFPU_TERNARY_OPERATION == SfpuType::addcmul)
+    {
+        SFPU_TERNARY_CALL(
+            dest_sync,
+            is_fp32_dest_acc_en,
+            calculate_addcmul,
+            (false, is_fp32_dest_acc_en, DataFormat::Float16_b, SFPU_ITERATIONS),
+            params.DST_INDEX + 0u,
+            params.DST_INDEX + 1u,
+            params.DST_INDEX + 2u,
+            params.DST_INDEX + 0u,
+            VectorMode::RC,
+            0x40000000u);
+    }
+    else if constexpr (SFPU_TERNARY_OPERATION == SfpuType::addcdiv)
+    {
+        SFPU_TERNARY_CALL(
+            dest_sync,
+            is_fp32_dest_acc_en,
+            calculate_addcdiv,
+            (false, is_fp32_dest_acc_en, DataFormat::Float16_b, SFPU_ITERATIONS),
+            params.DST_INDEX + 0u,
+            params.DST_INDEX + 1u,
+            params.DST_INDEX + 2u,
+            params.DST_INDEX + 0u,
+            VectorMode::RC,
+            0x40000000u);
+    }
+    else if constexpr (SFPU_TERNARY_OPERATION == SfpuType::lerp)
+    {
+        SFPU_TERNARY_CALL(
+            dest_sync,
+            is_fp32_dest_acc_en,
+            calculate_lerp,
+            (false, is_fp32_dest_acc_en, DataFormat::Float16_b, SFPU_ITERATIONS),
+            params.DST_INDEX + 0u,
+            params.DST_INDEX + 1u,
+            params.DST_INDEX + 2u,
+            params.DST_INDEX + 0u,
+            VectorMode::RC);
+    }
+    else if constexpr (SFPU_TERNARY_OPERATION == SfpuType::snake_beta)
+    {
+        SFPU_TERNARY_CALL(
+            dest_sync,
+            is_fp32_dest_acc_en,
+            calculate_snake_beta,
+            (false, is_fp32_dest_acc_en, DataFormat::Float16_b, SFPU_ITERATIONS),
+            params.DST_INDEX + 0u,
+            params.DST_INDEX + 1u,
+            params.DST_INDEX + 2u,
+            params.DST_INDEX + 0u,
+            VectorMode::RC);
+    }
+    else
+    {
+        // Runs calculate_where over the faces selected by VECTOR_MODE: cond=base+0,
+        // true_val=base+1, false_val=base+2, result written to base+0.
+        SFPU_TERNARY_CALL(
+            dest_sync,
+            is_fp32_dest_acc_en,
+            calculate_where,
+            (false /*APPROXIMATION_MODE*/),
+            params.DST_INDEX + 0u /*DST_IN0*/,
+            params.DST_INDEX + 1u /*DST_IN1*/,
+            params.DST_INDEX + 2u /*DST_IN2*/,
+            params.DST_INDEX + 0u /*DST_OUT*/,
+            VECTOR_MODE);
+    }
 
     _llk_math_set_dvalid_<p_cleardvalid::SFPU, dest_sync>();
 }

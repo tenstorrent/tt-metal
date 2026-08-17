@@ -13,6 +13,7 @@ from .llk_params import (
     FPU_BINARY_OPERATIONS,
     REDUCE_OPERATIONS,
     SFPU_BINARY_OPERATIONS,
+    SFPU_TERNARY_OPERATIONS,
     SFPU_UNARY_OPERATIONS,
     ApproximationMode,
     BroadcastType,
@@ -172,6 +173,10 @@ def _generate_operation_constants(mathop: MathOperation) -> list[str]:
     elif mathop in SFPU_BINARY_OPERATIONS:
         constants.append(
             f"constexpr auto SFPU_BINARY_OPERATION = ckernel::BinaryOp::{mathop.cpp_enum_value};"
+        )
+    elif mathop in SFPU_TERNARY_OPERATIONS:
+        constants.append(
+            f"constexpr auto SFPU_TERNARY_OPERATION = SfpuType::{mathop.cpp_enum_value};"
         )
     elif mathop in FPU_BINARY_OPERATIONS:
         constants.append(

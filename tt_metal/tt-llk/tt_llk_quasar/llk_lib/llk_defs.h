@@ -120,6 +120,51 @@ enum class SfpuType : std::uint32_t
     greater_than_zero,
     less_than_equal_zero,
     greater_than_equal_zero,
+    add1,
+    bitwise_not,
+    cast_fp32_to_fp16a,
+    cbrt,
+    celu,
+    digamma,
+    elu,
+    erfc,
+    erfinv,
+    exp2,
+    fmod,
+    hardmish,
+    hardshrink,
+    i0,
+    identity,
+    lgamma,
+    polygamma,
+    prelu,
+    rpow,
+    selu,
+    softshrink,
+    softsign,
+    tanhshrink,
+    unary_gt,
+    unary_ne,
+    unary_eq,
+    unary_lt,
+    unary_ge,
+    unary_le,
+    power,
+    left_shift,
+    right_shift,
+    hardsigmoid,
+    unary_bitwise_and,
+    unary_bitwise_or,
+    unary_bitwise_xor,
+    rdiv,
+    remainder,
+    alt_complex_rotate90,
+    addcmul,
+    addcdiv,
+    lerp,
+    snake_beta,
+    int_sum_col,
+    int_sum_row,
 };
 
 enum class DstSync : std::uint8_t
@@ -150,6 +195,30 @@ enum class PackMode : std::uint8_t
     Untilize = 1,
     Tilize   = 2,
 };
+
+// Compatibility selector used by SFPI kernels whose load/store layout is
+// chosen at compile time. Quasar kernels map these values to sfpi::DataLayout;
+// the Blackhole instruction encodings are never emitted on Quasar.
+enum class InstrModLoadStore
+{
+    DEFAULT       = 0,
+    FP16A         = 1,
+    FP16B         = 2,
+    FP32          = 3,
+    INT32         = 4,
+    INT8          = 5,
+    LO16          = 6,
+    HI16          = 7,
+    INT32_2S_COMP = 12,
+    INT8_2S_COMP  = 13,
+    LO16_ONLY     = 14,
+    HI16_ONLY     = 15,
+};
+
+inline constexpr bool is_valid_instruction_mode(const InstrModLoadStore mode)
+{
+    return mode == InstrModLoadStore::INT32_2S_COMP || mode == InstrModLoadStore::INT32 || mode == InstrModLoadStore::LO16;
+}
 
 // Packer ReLU modes; encoding matches RELU_MODE (2 bits) in HW.
 enum class ReluType : std::uint8_t

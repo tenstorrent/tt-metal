@@ -27,6 +27,7 @@ from helpers.param_config import (
     runtime,
 )
 from helpers.perf.core import create_test_or_perf_config
+from helpers.sfpu_domains import exclude_undefined, for_op_pipeline
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import (
     StimuliSpec,
@@ -50,6 +51,7 @@ from helpers.test_variant_parameters import (
     UNPACKER_ENGINE_SEL,
 )
 from helpers.tile_constants import MAX_NUM_FACES
+from helpers.tilize_untilize import untilize
 from helpers.utils import passed_test
 
 
@@ -953,3 +955,261 @@ def test_eltwise_unary_sfpu_quasar(
         res_tensor,
         formats.output_format,
     ), "Assert against golden failed"
+
+
+# Omitted operations are intentional and reported with architecture-specific
+# reasons in the coverage report; keeping them out prevents known-invalid QSR
+# behavior from masquerading as passing coverage.
+EXTENDED_SFPU_UNARY_CASES = (
+    MathOperation.Add1,
+    MathOperation.BitwiseNot,
+    MathOperation.CastFp32ToFp16a,
+    MathOperation.Cbrt,
+    MathOperation.Celu,
+    MathOperation.Digamma,
+    MathOperation.Elu,
+    MathOperation.Erfc,
+    MathOperation.Erfinv,
+    MathOperation.Exp2,
+    MathOperation.Fmod,
+    MathOperation.Hardmish,
+    MathOperation.Hardshrink,
+    MathOperation.I0,
+    MathOperation.Identity,
+    MathOperation.Lgamma,
+    MathOperation.Polygamma,
+    MathOperation.Prelu,
+    MathOperation.Rpow,
+    MathOperation.Selu,
+    MathOperation.Softshrink,
+    MathOperation.Softsign,
+    MathOperation.Tanhshrink,
+    MathOperation.UnaryGt,
+    MathOperation.UnaryNe,
+    MathOperation.UnaryEq,
+    MathOperation.UnaryLt,
+    MathOperation.UnaryGe,
+    MathOperation.UnaryLe,
+    MathOperation.UnaryPower,
+    MathOperation.LeftShift,
+    MathOperation.RightShift,
+    MathOperation.Hardsigmoid,
+    MathOperation.UnaryBitwiseAnd,
+    MathOperation.UnaryBitwiseOr,
+    MathOperation.UnaryBitwiseXor,
+    MathOperation.Rdiv,
+    MathOperation.Remainder,
+    MathOperation.AltComplexRotate90,
+    MathOperation.IntSumCol,
+    MathOperation.IntSumRow,
+)
+
+EXTENDED_INTEGER_OPS = {
+    MathOperation.BitwiseNot,
+    MathOperation.UnaryBitwiseAnd,
+    MathOperation.UnaryBitwiseOr,
+    MathOperation.UnaryBitwiseXor,
+    MathOperation.LeftShift,
+    MathOperation.RightShift,
+    MathOperation.IntSumCol,
+    MathOperation.IntSumRow,
+}
+
+
+def _extended_formats_for(mathop):
+    if mathop in EXTENDED_INTEGER_OPS:
+        return InputOutputFormat(DataFormat.Int32, DataFormat.Int32)
+    if mathop == MathOperation.CastFp32ToFp16a:
+        # The SFPI conversion narrows mantissa precision in an FP32 LReg; keeping
+        # FP32 output makes that conversion directly observable.
+        return InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
+    return InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
+
+
+def _extended_stimuli_for(mathop, formats):
+    if mathop in {
+        MathOperation.BitwiseNot,
+        MathOperation.UnaryBitwiseAnd,
+        MathOperation.UnaryBitwiseOr,
+        MathOperation.UnaryBitwiseXor,
+    }:
+        return StimuliSpec.uniform(low=-(2**30), high=2**30 - 1)
+    if mathop in (MathOperation.LeftShift, MathOperation.RightShift):
+        # Keep left-shift-by-three in signed int32 range.
+        return StimuliSpec.uniform(low=-(2**27), high=2**27 - 1)
+    if mathop in {MathOperation.IntSumCol, MathOperation.IntSumRow}:
+        # Keep the 32-element reduction far from int32 overflow while spanning
+        # both signs and every face of the tile.
+        return StimuliSpec.uniform(low=-1_000_000, high=1_000_000)
+    if mathop == MathOperation.AltComplexRotate90:
+        return StimuliSpec.uniform(low=-4.0, high=4.0)
+    return exclude_undefined(
+        mathop,
+        for_op_pipeline(mathop, formats.input_format, formats.output_format).spec_A,
+    )
+
+
+@pytest.mark.quasar
+@pytest.mark.parametrize(
+    "mathop",
+    EXTENDED_SFPU_UNARY_CASES,
+    ids=[mathop.name for mathop in EXTENDED_SFPU_UNARY_CASES],
+)
+def test_eltwise_unary_sfpu_extended_quasar(mathop):
+    torch.manual_seed(0)
+
+    formats = _extended_formats_for(mathop)
+    input_dimensions = [32, 32]
+    dest_acc = (
+        DestAccumulation.Yes
+        if formats.input_format.is_32_bit()
+        else DestAccumulation.No
+    )
+    unpack_to_dest = formats.input_format.is_32_bit()
+
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
+        spec_A=_extended_stimuli_for(mathop, formats),
+    )
+
+    # Pin discontinuities and previously uncovered branches into every run.
+    flat = src_A.flatten()
+    if mathop in {
+        MathOperation.Sign,
+        MathOperation.Heaviside,
+        MathOperation.UnaryGt,
+        MathOperation.UnaryNe,
+        MathOperation.UnaryEq,
+        MathOperation.UnaryLt,
+        MathOperation.UnaryGe,
+        MathOperation.UnaryLe,
+    }:
+        flat[:6] = torch.tensor([-1.0, -0.0, 0.0, 0.5, 1.0, 2.0], dtype=flat.dtype)
+    elif mathop == MathOperation.I1:
+        # Blackhole's existing sweep only reaches the central polynomial. These
+        # lanes also exercise both signs of the asymptotic helper path.
+        flat[:6] = torch.tensor([-20.0, -10.0, -4.0, 4.0, 10.0, 20.0], dtype=flat.dtype)
+
+    if mathop == MathOperation.BitwiseNot:
+        golden_tensor = torch.bitwise_not(src_A.to(torch.int32)).flatten()
+    elif mathop == MathOperation.UnaryBitwiseAnd:
+        golden_tensor = torch.bitwise_and(
+            src_A.to(torch.int32), torch.tensor(0x55555555, dtype=torch.int32)
+        ).flatten()
+    elif mathop == MathOperation.UnaryBitwiseOr:
+        golden_tensor = torch.bitwise_or(
+            src_A.to(torch.int32), torch.tensor(0x55555555, dtype=torch.int32)
+        ).flatten()
+    elif mathop == MathOperation.UnaryBitwiseXor:
+        golden_tensor = torch.bitwise_xor(
+            src_A.to(torch.int32), torch.tensor(0x55555555, dtype=torch.int32)
+        ).flatten()
+    elif mathop == MathOperation.AltComplexRotate90:
+        golden_tensor = src_A.clone()
+        golden_tensor[0::2] = -src_A[1::2]
+        golden_tensor[1::2] = src_A[0::2]
+        golden_tensor = golden_tensor.flatten()
+    elif mathop in {MathOperation.IntSumCol, MathOperation.IntSumRow}:
+        # int_sum reduces the SFPU's row/column lane groups, producing partial
+        # reductions in a subset of DEST. Convert the face-tilized input back
+        # to row-major before calculating those groups.
+        input_matrix = (
+            untilize(src_A, stimuli_format=DataFormat.Int32)
+            .reshape(32, 32)
+            .to(torch.int64)
+        )
+        if mathop == MathOperation.IntSumCol:
+            golden_tensor = torch.stack(
+                [input_matrix[row::4, :].sum(dim=0) for row in range(4)]
+            ).to(torch.int32)
+        else:
+            golden_tensor = (
+                input_matrix[:, 0:16:2]
+                + input_matrix[:, 1:16:2]
+                + input_matrix[:, 16:32:2]
+                + input_matrix[:, 17:32:2]
+            ).to(torch.int32)
+    else:
+        generate_golden = get_golden_generator(UnarySFPUGolden)
+        golden_tensor = generate_golden(
+            mathop,
+            src_A,
+            formats.output_format,
+            dest_acc,
+            formats.input_format,
+            input_dimensions,
+        )
+
+    test_config_kwargs = {
+        "test_name": "sources/quasar/eltwise_unary_sfpu_quasar_test.cpp",
+        "formats": formats,
+        "templates": [
+            MATH_OP(mathop=mathop),
+            APPROX_MODE(
+                ApproximationMode.Yes
+                if mathop == MathOperation.I1
+                else ApproximationMode.No
+            ),
+            IMPLIED_MATH_FORMAT(ImpliedMathFormat.Yes),
+            DATA_COPY_TYPE(DataCopyType.A2D),
+            UNPACKER_ENGINE_SEL(
+                UnpackerEngine.UnpDest if unpack_to_dest else UnpackerEngine.UnpA
+            ),
+            DEST_SYNC(DestSync.Half),
+            TYPECAST_FORMATS(),
+        ],
+        "runtimes": [
+            TILE_COUNT(tile_cnt_A),
+            NUM_FACES(MAX_NUM_FACES),
+            TEST_FACE_DIMS(),
+            DEST_INDEX(0),
+            LOOP_FACTOR(1),
+        ],
+        "variant_stimuli": StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt_A,
+            tile_count_B=tile_cnt_B,
+            tile_count_res=tile_cnt_A,
+            num_faces=MAX_NUM_FACES,
+            twos_complement=formats.input_format.is_integer(),
+        ),
+        "unpack_to_dest": unpack_to_dest,
+        "dest_acc": dest_acc,
+    }
+
+    configuration = create_test_or_perf_config(
+        is_perf=False,
+        run_types=(PerfRunType.L1_TO_L1,),
+        test_config_kwargs=test_config_kwargs,
+    )
+    result = configuration.run().result
+
+    result_tensor = torch.tensor(result, dtype=format_dict[formats.output_format])
+    if mathop == MathOperation.IntSumCol:
+        result_matrix = untilize(
+            result_tensor, stimuli_format=DataFormat.Int32
+        ).reshape(32, 32)
+        reduced_result = result_matrix[:4, :]
+        assert torch.equal(golden_tensor, reduced_result), (
+            f"int_sum_col mismatch: expected={golden_tensor.tolist()}, "
+            f"actual={reduced_result.tolist()}"
+        )
+    elif mathop == MathOperation.IntSumRow:
+        result_matrix = untilize(
+            result_tensor, stimuli_format=DataFormat.Int32
+        ).reshape(32, 32)
+        reduced_result = result_matrix[:, 0:16:2]
+        assert torch.equal(golden_tensor, reduced_result), (
+            f"int_sum_row mismatch: expected={golden_tensor.tolist()}, "
+            f"actual={reduced_result.tolist()}"
+        )
+    else:
+        assert len(result_tensor) == len(golden_tensor)
+        assert passed_test(golden_tensor, result_tensor, formats.output_format)

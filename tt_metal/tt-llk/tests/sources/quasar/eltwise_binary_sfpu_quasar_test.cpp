@@ -219,7 +219,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // ADDR_MOD_0/1 or bank-0 programming, so both initializers can remain in
         // the INIT zone before the measured TILE_LOOP.
         _llk_math_eltwise_sfpu_init_();
-        test_utils::init_binary_sfpu_operation_quasar<SFPU_BINARY_OP, SFPU_SIGN_MAGNITUDE>(params.ZERO_POINT);
+        test_utils::init_binary_sfpu_operation_quasar<SFPU_BINARY_OP, SFPU_SIGN_MAGNITUDE, is_fp32_dest_acc_en>(params.ZERO_POINT);
         PROFILER_SYNC();
     }
     {
@@ -289,7 +289,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t DST_TILE_IDX    = params.DST_TILE_IDX;
     const Operand& buffer_Res           = params.buffer_Res;
 #endif
-    std::uint32_t const buf_desc_id        = 8;
+    const std::uint32_t buf_desc_id        = 8;
     const std::uint32_t num_tiles_per_pack = 1; // only the SFPU result tile is packed
 
     {
