@@ -39,7 +39,12 @@ import torch
 from conftest import skip_for_quasar, skip_for_wormhole
 from helpers.format_config import DataFormat
 from helpers.golden_generators import round_to_dest_width
-from helpers.llk_params import ApproximationMode, DestAccumulation, format_dict
+from helpers.llk_params import (
+    ApproximationMode,
+    DestAccumulation,
+    VectorMode,
+    format_dict,
+)
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
@@ -50,7 +55,6 @@ from helpers.test_variant_parameters import (
     SFPU_UNARY_SCALAR,
     VECTOR_MODE,
 )
-from helpers.llk_params import VectorMode
 from helpers.utils import passed_test
 
 pytestmark = [skip_for_wormhole, skip_for_quasar]
