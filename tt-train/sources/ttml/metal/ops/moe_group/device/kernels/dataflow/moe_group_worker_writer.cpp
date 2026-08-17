@@ -48,6 +48,14 @@ constexpr uint32_t stride = get_compile_time_arg_val(5);
 constexpr uint32_t plan_ready_sem_id = get_compile_time_arg_val(6);
 constexpr auto grouped_args = TensorAccessorArgs<7>();
 constexpr auto offsets_args = TensorAccessorArgs<grouped_args.next_compile_time_args_offset()>();
+// The accessor chain must consume the host's CT-arg stream exactly. If the
+// host was built against a different arg table (scalar added/removed, accessor
+// reordered), every accessor base shifts — and when the stray word still
+// parses as a config word, the kernel compiles and reads garbage addresses.
+static_assert(
+    offsets_args.next_compile_time_args_offset() == kernel_compile_time_args.size(),
+    "moe_group_worker_writer: compile-time arg count differs from host emission — "
+    "rebuild the ttml host library to match this kernel source");
 
 void kernel_main() {
     const uint32_t grouped_addr = get_arg_val<uint32_t>(0);
