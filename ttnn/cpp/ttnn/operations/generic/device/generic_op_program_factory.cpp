@@ -14,7 +14,7 @@ tt::tt_metal::ProgramDescriptor GenericMeshDescriptorFactory::create_descriptor(
     const tensor_args_t& /*tensor_args*/,
     tensor_return_value_t& /*tensor_return_value*/,
     const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
-    const auto& mesh_programs = operation_attributes.mesh_programs;
+    const auto& mesh_programs = operation_attributes.mesh_program_descriptor().mesh_programs;
     TT_FATAL(!mesh_programs.empty(), "generic_op: MeshProgramDescriptor.mesh_programs must not be empty");
 
     if (mesh_dispatch_coordinate.has_value()) {

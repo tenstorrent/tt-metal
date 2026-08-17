@@ -10,7 +10,8 @@ namespace ttnn {
 Tensor generic_op(
     const std::vector<Tensor>& io_tensors,
     const tt::tt_metal::experimental::MeshProgramDescriptor& mesh_program_descriptor) {
-    return ttnn::prim::generic_op(io_tensors, mesh_program_descriptor);
+    return ttnn::prim::generic_op(
+        io_tensors, ttnn::operations::generic::operation_attributes_t{.program = mesh_program_descriptor});
 }
 
 Tensor generic_op(const std::vector<Tensor>& io_tensors, const tt::tt_metal::ProgramDescriptor& program_descriptor) {
@@ -24,6 +25,18 @@ Tensor generic_op(const std::vector<Tensor>& io_tensors, const tt::tt_metal::Pro
         ttnn::MeshCoordinateRange(mesh_device->shape()), program_descriptor);
 
     return generic_op(io_tensors, mesh_program_descriptor);
+}
+
+Tensor generic_op(
+    const std::vector<Tensor>& io_tensors,
+    const tt::tt_metal::experimental::ProgramSpec& spec,
+    const tt::tt_metal::experimental::ProgramRunArgs& run_args,
+    const tt::tt_metal::experimental::Table<tt::tt_metal::experimental::TensorParamName, uint32_t>& tensor_args) {
+    return ttnn::prim::generic_op(
+        io_tensors,
+        ttnn::operations::generic::operation_attributes_t{
+            .program = ttnn::operations::generic::SpecProgram{
+                .spec = spec, .run_args = run_args, .tensor_arg_indices = tensor_args}});
 }
 
 }  // namespace ttnn
