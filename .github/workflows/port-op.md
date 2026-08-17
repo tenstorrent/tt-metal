@@ -36,20 +36,38 @@ on:
   push:
     branches: [ebanerjee/port-op-dryrun]
   workflow_dispatch:
-    # Two inputs, and deliberately only two. Everything a run needs beyond the op and where to
-    # continue from is either derivable from the branch or a property of the harness, and asking for
-    # it would mean a person resuming a half-finished port has to know what the last run was told --
-    # or that there was a last run at all. `category` is globbed from the op directory below,
-    # `perf-limit` and `runner-label` are harness tuning rather than user intent and live in the
-    # `env:` block, and the generator ref is a constant there for the same reason.
+    # Nothing here asks about a previous run. Everything a port or a resume needs beyond the op and
+    # where to continue from is either derivable from the branch or a property of the harness:
+    # `category` is derived from the operations tree below, the attempt number and failing counts are read
+    # off the branch's own commit trailers, and `perf-limit`, `runner-label` and the generator ref are
+    # harness tuning rather than user intent, so they live in the `env:` block.
+    #
+    # The last three are what an update run adds, and they are all statements of intent rather than
+    # run state -- which generator to move a finished port to, which review to answer, and what the
+    # person wants. A full port and a resume leave all three blank and behave exactly as before.
     inputs:
       op:
-        description: "Op to port; must have a manifest at agentic_port/manifests/<op>.yaml"
+        description: "Op to port; must have an axis file at .github/scripts/port/axes/<op>.yaml"
         required: true
         type: string
         default: untilize
       branch:
         description: "Existing branch to continue a half-finished port on; blank starts a fresh port"
+        required: false
+        type: string
+        default: ""
+      pr:
+        description: "PR number to update instead of a branch; its head branch becomes the work branch"
+        required: false
+        type: string
+        default: ""
+      codegen-target:
+        description: "Generator commit or ref to bring a finished port up to; blank holds it still"
+        required: false
+        type: string
+        default: ""
+      intent:
+        description: "What to change about a port that already works, in your words"
         required: false
         type: string
         default: ""
@@ -64,6 +82,10 @@ on:
 permissions:
   contents: read
   copilot-requests: write
+  # Read-only, and only an update run uses it: resolving a pull request number to its head branch and
+  # reading back what the reviewers asked for. Nothing in this job writes to a pull request -- the
+  # draft PR is opened by gh-aw's safe-output job, which holds its own token.
+  pull-requests: read
 
 # The MCP gateway cancels a tool call after its own deadline, independent of the per-tool `timeout`
 # values further down -- those bound the handler process, this bounds the request. It defaults to 60
@@ -122,6 +144,21 @@ env:
   # different clock, and a different case count is a different measurement. They are values the
   # harness owns, so they are set where the harness is edited.
   PORT_CODEGEN_REF: codegen_agentic_port
+
+  # The generator commit to bring an existing port *up to*, as opposed to the one it was written
+  # against. Empty for a full port and for a resume, and that is the whole difference: those two
+  # modes deliberately hold the generator still, because re-pinning mid-chain changes the kernel
+  # contract underneath a port that is already half-written. Only an update run sets this, and
+  # setting it is what asks for the drift comparison below.
+  PORT_CODEGEN_TARGET: ${{ inputs.codegen-target || '' }}
+
+  # The other two halves of an update run's brief. A pull request number is resolved to its head
+  # branch below, which is what makes `PORT_BRANCH` the single thing the rest of the pipeline reads --
+  # publish pushes to a branch, and a PR is a view of one. The number is kept because the review
+  # comments are fetched from it, and because the agent should know it is answering a review.
+  PORT_PR: ${{ inputs.pr || '' }}
+  PORT_INTENT: ${{ inputs.intent || '' }}
+
   PORT_LIMIT: "24"
   PORT_RUNNER_LABEL: '["tt-ubuntu-2204-N150-viommu-stable"]'
 
@@ -213,6 +250,95 @@ pre-steps:
       echo "credential placed, $(wc -c < "$HOME/.port-dispatch/token") bytes"
 
 steps:
+  # An update run names a pull request; everything downstream of here works in branches. Resolving
+  # one to the other first is what keeps that difference from spreading: `publish` pushes to a branch,
+  # the chain re-dispatches with a branch, the write-path guard diffs against a branch's HEAD, and a
+  # pull request is a view of a branch rather than a separate kind of thing.
+  #
+  # Before the checkout because the checkout is what consumes `PORT_BRANCH`. A `$GITHUB_ENV` write is
+  # visible to every later step's `env:` context, so this can set the ref the next step clones.
+  - name: Resolve a pull request to the branch behind it
+    if: env.PORT_PR != '' || env.PORT_CODEGEN_TARGET != '' || env.PORT_INTENT != ''
+    env:
+      GH_TOKEN: ${{ github.token }}
+    run: |
+      set -euo pipefail
+
+      # Two ways of naming the same thing, and no way to tell which was meant.
+      if [ -n "${PORT_PR:-}" ] && [ -n "${PORT_BRANCH:-}" ]; then
+        echo "::error::pass either pr or branch, not both -- a PR already names its branch"
+        exit 1
+      fi
+
+      if [ -n "$PORT_PR" ]; then
+        case "$PORT_PR" in
+          ''|*[!0-9]*) echo "::error::pr must be a number, got '$PORT_PR'"; exit 1 ;;
+        esac
+        # `--repo` explicitly rather than relying on the checkout, because there is no checkout yet.
+        pr_json=$(gh pr view "$PORT_PR" --repo "$GITHUB_REPOSITORY" \
+          --json headRefName,headRepositoryOwner,state,isCrossRepository,title)
+        state=$(printf '%s' "$pr_json" | jq -r .state)
+        if [ "$state" != "OPEN" ]; then
+          echo "::error::PR #$PORT_PR is $state; there is nothing to update on a closed review"
+          exit 1
+        fi
+        # A fork's head branch is not pushable from here, and publish must be able to push: the whole
+        # design rests on the work being preserved by the job ending rather than by the agent asking.
+        if [ "$(printf '%s' "$pr_json" | jq -r .isCrossRepository)" = "true" ]; then
+          echo "::error::PR #$PORT_PR is from a fork, so its branch cannot be published to"
+          exit 1
+        fi
+        branch=$(printf '%s' "$pr_json" | jq -r .headRefName)
+        echo "PORT_BRANCH=$branch" >> $GITHUB_ENV
+        echo "PR #$PORT_PR -> $branch ($(printf '%s' "$pr_json" | jq -r .title))"
+      fi
+
+      # There is nothing to bring up to date without a port to bring, and a run that silently ignored
+      # this would look like an update and behave like a fresh port.
+      if [ -z "${branch:-}${PORT_BRANCH:-}" ]; then
+        [ -z "${PORT_CODEGEN_TARGET:-}" ] || { echo "::error::codegen-target needs a pr or a branch holding the port to update"; exit 1; }
+        [ -z "${PORT_INTENT:-}" ] || { echo "::error::intent needs a pr or a branch holding the port to change"; exit 1; }
+      fi
+
+  # What the reviewers actually said, collected before the agent starts because it is the substance of
+  # an update run and there is no other way for it to arrive: the agent has no network and no `gh`.
+  #
+  # Three endpoints because a review is spread across three. Inline diff comments carry the file and
+  # line, review bodies carry the summary verdict, and issue comments carry the conversation -- and a
+  # reviewer's actual objection lands in whichever one they happened to be typing in.
+  #
+  # Written to a file and never interpolated into a command. This is text from anyone who can comment
+  # on a public pull request, on its way to an agent that can edit a repository, so it is treated as
+  # data at every step: jq reads and writes it, the shell never expands it, and the brief that carries
+  # it to the agent says plainly that it is a quotation rather than an instruction.
+  - name: Collect what the review asked for
+    if: env.PORT_PR != ''
+    env:
+      GH_TOKEN: ${{ github.token }}
+    run: |
+      set -euo pipefail
+      install -d -m 755 "$HOME/.port-dispatch"
+      out="$HOME/.port-dispatch/review.json"
+
+      # `--paginate` with a cap: a long-running port's PR can carry hundreds of comments, and the
+      # brief has to stay something an agent reads rather than skims.
+      api() { gh api --paginate "repos/$GITHUB_REPOSITORY/$1" 2>/dev/null || echo '[]'; }
+
+      # Outdated inline comments -- `line` null, meaning the code they point at has already changed --
+      # are dropped. They are the most misleading thing in the set: a demand that was already met
+      # reads exactly like one that was not.
+      jq -n \
+        --slurpfile inline <(api "pulls/$PORT_PR/comments" | jq -s add) \
+        --slurpfile reviews <(api "pulls/$PORT_PR/reviews" | jq -s add) \
+        --slurpfile issue <(api "issues/$PORT_PR/comments" | jq -s add) \
+        '{
+          inline: [($inline[0] // [])[] | select(.line != null) | {author: .user.login, path, line, body}],
+          reviews: [($reviews[0] // [])[] | select((.body // "") != "") | {author: .user.login, state, body}],
+          conversation: [($issue[0] // [])[] | {author: .user.login, body}]
+        } | with_entries(.value |= .[-40:])' > "$out"
+
+      jq -r '"collected \(.inline|length) inline, \(.reviews|length) review and \(.conversation|length) conversation comments"' "$out"
+
   # Checked out at the workspace root, not a subdirectory: gh-aw's own later steps assume the
   # workspace root is the repository, and a subdirectory checkout fails them.
   - name: Checkout tt-metal
@@ -308,6 +434,103 @@ steps:
       persist-credentials: false
       path: .codegen
 
+  # What moved in the generator since this port was written, and whether an agent can act on it.
+  #
+  # Skipped entirely unless an update run asked for a target, because a full port and a resume both
+  # hold the generator at the pin and so have no drift by construction.
+  #
+  # The refusal is the point of running this before the agent rather than telling the agent about it.
+  # `f744aefb8` forbade the `implementation=` kwarg, which is how `measure.py` invokes every leg and
+  # what `scaffold.py` writes into the routing test -- a change no C++ on a port branch can reach. An
+  # agent started against that drift would read a brief describing a problem outside its reach, write
+  # something plausible, and burn a card for an hour to fail. Better to stop with the report.
+  # A second checkout rather than fetching the target commit into the first. The first is shallow
+  # and single-branch, so it does not have the target, and authenticating a fetch would mean a
+  # secret in a `run:` step -- which this repo's workflow linter refuses outright, on the grounds
+  # that anything in a `run:` step in this section is reachable from the agent job. `with: token:`
+  # on a `uses:` step is the sanctioned form, so the comparison is given two trees instead of two
+  # refs and needs no credential of its own.
+  - name: Checkout the generator again at the target commit
+    if: env.PORT_CODEGEN_TARGET != ''
+    uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+    with:
+      repository: tenstorrent/tt-dm-codegen
+      ref: ${{ env.PORT_CODEGEN_TARGET }}
+      token: ${{ secrets.CODEGEN_REPO_TOKEN }}
+      persist-credentials: false
+      path: .codegen-target
+
+  - name: Classify what moved in the generator
+    if: env.PORT_CODEGEN_TARGET != ''
+    run: |
+      set -euo pipefail
+
+      # Excluded for the same reason `.codegen` is: an unignored checkout inside the workspace reads
+      # as a few thousand untracked files, and the write-path guard counts untracked files.
+      echo ".codegen-target/" >> .git/info/exclude
+
+      # Into the work directory, which is where dispatch.py reads it from when it writes the brief.
+      # Not the worktree: this describes the port's relationship to the generator rather than being
+      # part of the port, and the worktree is what gets committed.
+      install -d -m 755 "$HOME/.port-dispatch"
+      report="$HOME/.port-dispatch/drift.json"
+      python3 "$HOME/.port-harness/drift.py" --op "$PORT_OP" \
+        --from-tree .codegen --to-tree .codegen-target --out "$report"
+
+      verdict=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["verdict"])' "$report")
+      echo "drift verdict: $verdict"
+      if [ "$verdict" = "refuse" ]; then
+        {
+          echo "## This port cannot be updated to $PORT_CODEGEN_TARGET by an agent"
+          echo
+          python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["report"])' "$report"
+          echo
+          echo "No agent was started. The harness itself reads the fields listed above, so the"
+          echo "migration is a change to this repository's Python rather than to the port."
+        } >> "$GITHUB_STEP_SUMMARY"
+        echo "::error::generator drift is harness-level; migrate the harness before updating this port"
+        exit 1
+      fi
+
+  # The repin itself, and the only place in the pipeline where a port's generator moves.
+  #
+  # Past this point the target *is* the generator for this run: the kernels are re-vendored from it,
+  # the prototype leg that grades correctness is built from it, and the trailer this run publishes
+  # names it, so the next attempt inherits it as its pin. The old pin's entire remaining job was to be
+  # the left-hand side of the comparison above, and that has already happened.
+  #
+  # Which is why it is a directory swap rather than a second path threaded through every consumer.
+  # `.codegen` is what `scaffold.py` vendors kernels from, what `discover.py` resolves against, what the
+  # dispatch params name, and what the measure job checks out; a run with two generator trees in play
+  # is a run where any one of those could be reading the wrong one. There is one tree, and after this
+  # step it holds the target.
+  #
+  # `PORT_CODEGEN_REF` is updated with it because the resolve step below asserts the two agree -- a
+  # pin naming one commit while the tree holds another is exactly the condition that check exists to
+  # catch, and swapping the tree without the pin would trip it.
+  - name: Move the pin to the target
+    if: env.PORT_CODEGEN_TARGET != ''
+    run: |
+      set -euo pipefail
+      was=$(git -C .codegen rev-parse HEAD)
+      now=$(git -C .codegen-target rev-parse HEAD)
+
+      if [ "$was" = "$now" ]; then
+        # An update asked for a target the port is already on. Not an error -- naming a branch that
+        # has not moved is the ordinary way to find that out -- but there is nothing to repin.
+        rm -rf .codegen-target
+        echo "the target resolves to $now, which is already this port's pin; nothing to repin"
+        exit 0
+      fi
+
+      rm -rf .codegen
+      mv .codegen-target .codegen
+      echo "PORT_CODEGEN_REF=$now" >> $GITHUB_ENV
+      # Kept for the brief and the pull request body: an update run has to be able to say what it
+      # moved from, and after the swap nothing else remembers.
+      echo "PORT_REPIN_FROM=$was" >> $GITHUB_ENV
+      echo "generator repinned from $was to $now"
+
   # Everything about this run that is a fact rather than a setting: where the op lives, whether there
   # is already a port here to continue, and what the last attempt on this branch achieved. All of it
   # was once something a person had to type, and every one of those was a chance to describe the run
@@ -351,55 +574,24 @@ steps:
       fi
 
       # `category` was an input with a default of `data_movement`, which is right for one op. It is not
-      # a choice: the op's directory is already in the tree, and the manifest already says which one.
+      # a choice: the op's directory is already in the tree.
       #
       # Naively globbing for the op's name is not enough, and `untilize` is the proof -- there are two,
       # `data_movement/untilize` and `experimental/quasar/untilize`, structurally identical down to the
-      # filenames. The manifest's `native_entry` is the tiebreaker and it is authoritative: it names the
-      # ttnn symbol this port replaces. `ttnn.untilize` is the mainline op; a quasar port would say
-      # `ttnn.experimental.quasar.untilize`. So the namespace between `ttnn.` and the op name is the
-      # category path, and its absence means the op is not under `experimental/` at all.
+      # filenames. This used to be settled by the manifest's `native_entry`, but that field only ever
+      # encoded whether the op is mainline or experimental, which the tree already says: the mainline
+      # one is the one not under `experimental/`. So the tiebreak needs no declaration, and dropping it
+      # removes one more reason to read a file this harness does not own.
       #
-      # Read with sed rather than a YAML parser because this step runs before PyYAML is installed, and
-      # `native_entry` is a top-level scalar. Depth 3 so a nested category like `eltwise/binary`
-      # resolves; `scaffold.py` joins it with a slash either way. Pruning `codegen` keeps the port's own
-      # subdirectory from matching when an op is named after its parent.
-      manifest=".codegen/agentic_port/manifests/${PORT_OP}.yaml"
-      entry=$(sed -n 's/^native_entry:[[:space:]]*//p' "$manifest" | head -1)
-      [ -n "$entry" ] || { echo "::error::$manifest names no native_entry"; exit 1; }
-      # `ttnn.experimental.quasar.untilize` -> `experimental/quasar`; `ttnn.untilize` -> empty. The case
-      # statement is what makes the second one empty: after dropping `ttnn.`, a remainder with no dot
-      # left in it is the bare op name, so there is no namespace. Doing this with one sed chain instead
-      # silently yields `untilize` as the namespace, which then matches no directory at all.
-      rest=${entry#ttnn.}
-      case "$rest" in
-        *.*) namespace=$(printf '%s\n' "$rest" | sed 's/\.[^.]*$//; s/\./\//g') ;;
-        *) namespace="" ;;
-      esac
-      # A manifest whose entry point is a different op than the one being ported is a mismatch worth
-      # stopping on, not working around.
-      if [ "${rest##*.}" != "$PORT_OP" ]; then
-        echo "::error::$manifest is for $PORT_OP but its native_entry is $entry"
-        exit 1
-      fi
-
-      all=$(find ttnn/cpp/ttnn/operations -mindepth 2 -maxdepth 3 -type d -name "$PORT_OP" \
-        -not -path '*/codegen/*' | sed 's|^ttnn/cpp/ttnn/operations/||; s|/'"$PORT_OP"'$||' | sort -u)
-      if [ -n "$namespace" ]; then
-        matches=$(printf '%s\n' "$all" | grep -x "$namespace" || true)
-      else
-        # A mainline entry point cannot live under `experimental/`, which is the directory carrying the
-        # `ttnn.experimental` namespace. Anything else is a real ambiguity and stops the run.
-        matches=$(printf '%s\n' "$all" | grep -v '^experimental/' || true)
-      fi
-      count=$(printf '%s\n' "$matches" | grep -c . || true)
-      if [ "$count" -ne 1 ]; then
-        echo "::error::$entry should name exactly one of these $PORT_OP directories, matched $count:"
-        printf '%s\n' "$all" | sed 's/^/  candidate: /'
-        exit 1
-      fi
-      echo "PORT_CATEGORY=$matches" >> $GITHUB_ENV
-      echo "category resolved to $matches, from native_entry $entry"
+      # Ambiguity that survives that rule stops the run and asks for `--category`, rather than being
+      # guessed at -- guessing wrong scaffolds a port into a directory nobody is looking at.
+      #
+      # `--category-only` so this needs nothing but the tt-metal tree: it runs before PyYAML is
+      # installed, and the full descriptor needs both a parser and the generator checkout.
+      category=$(python3 .github/scripts/port/discover.py \
+        --op "$PORT_OP" --repo . --category-only ${PORT_CATEGORY:+--category "$PORT_CATEGORY"}) || exit 1
+      echo "PORT_CATEGORY=$category" >> $GITHUB_ENV
+      echo "category resolved to $category, from the operations tree"
 
       # Resume is detected, not declared, so the same workflow serves a fresh port and a half-finished
       # one and there is no mode flag to get wrong. The signal is a *tracked* codegen directory: a
@@ -424,9 +616,14 @@ steps:
       trailers=$(git log -1 --format='%(trailers:only=true,unfold=true)' 2>/dev/null || true)
       prev_attempt=$(printf '%s\n' "$trailers" | sed -n 's/^Port-attempt:[[:space:]]*//p' | head -1)
       prev_failing=$(printf '%s\n' "$trailers" | sed -n 's/^Port-failing:[[:space:]]*//p' | head -1)
+      # The performance count too, because it is what progress means once correctness is green: a
+      # correct port's failing count is zero and cannot fall, so judging by it alone reads every
+      # further attempt as making no progress and stops a port halfway.
+      prev_slow=$(printf '%s\n' "$trailers" | sed -n 's/^Port-slow:[[:space:]]*//p' | head -1)
       echo "PORT_ATTEMPT=$(( ${prev_attempt:-0} + 1 ))" >> $GITHUB_ENV
       echo "PORT_PREV_FAILING=${prev_failing:--1}" >> $GITHUB_ENV
-      echo "attempt $(( ${prev_attempt:-0} + 1 )), previous failing count ${prev_failing:-none}"
+      echo "PORT_PREV_SLOW=${prev_slow:--1}" >> $GITHUB_ENV
+      echo "attempt $(( ${prev_attempt:-0} + 1 )), previous failing count ${prev_failing:-none}, previous slow count ${prev_slow:-none}"
 
       # What the previous attempt's last build objected to, carried in its commit message between two
       # fences. The `tilize` port is why: attempt 1 ended with two compiler errors outstanding, and
@@ -471,7 +668,7 @@ steps:
   - name: Scaffold the port
     run: |
       # `--resume` on a branch that already carries a port, so the pass adds what is missing without
-      # overwriting what is there. It is not a no-op even then: a manifest that gained a kernel header
+      # overwriting what is there. It is not a no-op even then: a generator that gained a kernel header
       # between attempts is exactly how the last port lost all 112 of its in-scope cases, and this is
       # the pass that copies it in.
       resume=""
@@ -639,7 +836,9 @@ mcp-scripts:
       against native and against the tt-dm-codegen prototype. Refuses to run if the working tree has
       changed outside the port's own files. You cannot change what it measures or where the
       thresholds sit. It builds before it measures, so it takes about forty minutes to come back; you
-      can afford a handful of these in a whole run.
+      can afford a handful of these in a whole run. A given band will measure the same unchanged tree
+      twice, which is enough to tell a marginal number from a noisy one, and refuse a third: edit the
+      port and measure the new tree, or take the verdict you have.
     timeout: 540
     inputs:
       band:
@@ -682,9 +881,14 @@ safe-outputs:
     labels: [codegen-port, gh-aw]
   # Without a no-op the agent has only one way to end, and an agent with a single available action
   # will take it -- filing a PR for a port it knows does not work. This makes stopping expressible.
-  # It is now reserved for a port that is not correct or a harness that could not run: a correct port
-  # that lost on performance is a reviewable finding, and the prompt sends that to a draft PR.
+  #
+  # `report-as-issue` is what makes it a reporting channel rather than a silence, and that is
+  # load-bearing for the one ending a pull request cannot express: a run that changed no files. The PR
+  # output builds its branch from the agent's diff, so an empty diff cannot produce one at all --
+  # which is the ending of every resumed run whose port was already correct. The no-op message is the
+  # only place such a run can say what it found.
   noop:
+    report-as-issue: true
 ---
 
 # Port a codegen op to a C++ program factory
@@ -699,14 +903,30 @@ baseline has been measured on real hardware. Your job is to fill in those stubs 
 **Read `port-brief.md` in the repository root before you do anything else.** It is written by the
 harness before you start and it is the only place some of this run's facts appear: the native
 baseline, whether you are continuing a port someone else left and the measured list of cases it
-currently fails, and any compiler errors the previous attempt ended with. None of that is guessable
-from the tree, and every item in it is something you would otherwise spend a build or a verify
-learning. It is excluded from git on purpose -- do not commit it, and do not edit it.
+currently fails, any compiler errors the previous attempt ended with, what moved in the generator
+since this port was written, and -- if someone asked for a change to a port that already works -- what
+they asked for and what a review said. None of that is guessable from the tree, and every item in it
+is something you would otherwise spend a build or a verify learning. It is excluded from git on
+purpose -- do not commit it, and do not edit it.
 
-The brief also overrides the paragraph above when the two disagree. If it tells you the port already
-here does not compile, then no baseline was measured and no case list exists this run, because
-measuring needs a binary; the compiler errors it lists are the whole of your work list, and the
-shortest path through this run is to fix precisely those and build.
+The brief also overrides the paragraph above when the two disagree, and there are two ways it will.
+
+If it tells you the port already here does not compile, then no baseline was measured and no case list
+exists this run, because measuring needs a binary; the compiler errors it lists are the whole of your
+work list, and the shortest path through this run is to fix precisely those and build.
+
+And if it has a section saying what you were asked to change, or what a review said, then this is not
+a port at all: the code is already here, it already passes, and someone wants it different. That
+changes the job in one specific way, and the brief states it as a number: **the cases this port passed
+before you started must still pass when you are done.** That is checked, not requested. Every `verify`
+compares against the set measured on arrival and reports any case you have lost *above* the verdict,
+and a run that ends having lost one has failed no matter what the performance numbers say.
+
+So the smallest change that answers what was asked is the right change, every time. Keep your hands off
+code nobody objected to. If the brief also reports generator drift, treat the drift and the request as
+one job -- both are reasons this port no longer matches the world it was written against -- and
+re-transliterate only what the drift report actually names, because a file it does not mention is a file
+whose source did not move.
 
 ## Your tools run somewhere else, and they are slow
 
@@ -778,24 +998,30 @@ All paths below are relative to your working directory.
 | The op you are porting | `ttnn/cpp/ttnn/operations/${{ env.PORT_CATEGORY }}/${{ env.PORT_OP }}/` |
 | Your stubs to fill in | `.../${{ env.PORT_OP }}/codegen/` |
 | tt-dm-codegen (read-only) | `.codegen/` |
-| The manifest — source of truth | `.codegen/agentic_port/manifests/${{ env.PORT_OP }}.yaml` |
 | The porting guide — read this first | `.codegen/agentic_port/knowledge/porting-guide.md` |
-| The generator you are transliterating | the manifest's `codegen_builder` path, under `.codegen/` |
+| The generator you are transliterating — source of truth | the `builder` path named in `port-brief.md`, under `.codegen/` |
 | **A finished, merged port to imitate** | `ttnn/cpp/ttnn/operations/data_movement/repeat/codegen/` |
 
-Read the manifest and the porting guide in full before you write anything. The merged `repeat`
+Read the generator's builder and the porting guide in full before you write anything. The builder is
+the source of truth for this port: it is the code you are transliterating, and every fact about the
+op — its kernels, its cache key, the shapes it splits work over — is in it or in the templates it
+selects. There is a manifest beside it in `.codegen/agentic_port/manifests/`, and it is *not* the
+source of truth: it belongs to a different porting pipeline, it is not maintained for this one, and it
+is known to be incomplete — `tilize.yaml` omits two kernels its own builder selects. Read the builder.
+
+The merged `repeat`
 port is the single most useful thing here: it is a complete, reviewed example of exactly the
 deliverable you are producing, including its routing in `repeat/repeat.cpp`. Follow its structure.
 
 ## What to write
 
-**A. Program factory.** Transliterate the manifest's `codegen_builder` into a declarative
-`create_descriptor` in `codegen/${{ env.PORT_OP }}_codegen_program_factory.cpp`, per the porting
-guide's factory-translation section. Wire real circular-buffer and kernel args from the manifest's
-`cache_key_fields`, not placeholders.
+**A. Program factory.** Transliterate the builder into a declarative `create_descriptor` in
+`codegen/${{ env.PORT_OP }}_codegen_program_factory.cpp`, per the porting guide's factory-translation
+section. Wire real circular-buffer and kernel args from the builder's own host section — the
+host-computed parameters that distinguish two programs are the attributes struct — not placeholders.
 
 Every literal you write — CB sizing, work-split math, compile-time args, routing constants — must
-trace to a manifest field, a builder constant, a device query, or a tensor property. A number that
+trace to a builder constant, a device query, or a tensor property. A number that
 merely happens to make one case pass is a defect even when the case passes.
 
 **B. Routing.** All four pieces, in the shared files, not in new ones:
@@ -813,14 +1039,14 @@ merely happens to make one case pass is a defect even when the case passes.
      predicate derived from it silently claims every size, and `auto` then fails allocation on a
      config the predicate advertised instead of falling back to native. The porting guide works
      this through for circular buffers, which is the instance you will meet first.
-   - **Transcribe general conditions, not example shapes.** Each `scope: out` case in the manifest
+   - **Transcribe general conditions, not example shapes.** Each `scope: out` case in the ledger
      is one representative of a general condition stated in its `note`. Write the condition (e.g.
      `logical[-2] % TILE_H != 0`), never an exact-match on the tuple. An exact-match lets every
      other shape meeting the same condition wrongly reach codegen, and it will be rejected on
      review. If you cannot name the general condition from the `note`, read the op-orchestration
      source's own guard and transcribe that.
 
-   It must agree with the manifest: every `scope: in` case returns `true`, every `scope: out` case
+   It must agree with the ledger: every `scope: in` case returns `true`, every `scope: out` case
    returns `false`.
 
 2. `is_demoted()` in the same files. This is the performance routing gate, consulted **only** by
@@ -877,7 +1103,7 @@ DeviceOp hooks per the porting guide's checklist for this op's tier.
 
 ## How to iterate
 
-1. Read everything first: the manifest, the porting guide, the generator's builder, the `repeat`
+1. Read everything first: the porting guide, the generator's builder and its templates, the `repeat`
    port. This costs you nothing and every mistake it prevents costs twenty minutes.
 2. Write the whole port — factory, all four routing pieces, the remaining hooks. Then re-read it.
 3. Call **`build`**, then **`wait`** until it returns. Fix everything it reports in one pass, then
@@ -917,7 +1143,7 @@ needs changing, not that the measurement was unlucky. Read `failing`,
 **Do not go looking for a prior implementation of this op outside this branch.** No `git branch`
 spelunking, no diffing against other branches, no reading a port from another checkout. Anything you
 find that way is stale scratch work, not a reference, and using it invalidates this run. Build the
-port from the manifest, the generator source, the porting guide, the merged codegen ports already in
+port from the generator source, the porting guide, the merged codegen ports already in
 your checkout, the code already in your own worktree, and nothing else.
 
 **The merged ports are a reference for shape, never for kernel arguments.** Search
@@ -1010,8 +1236,26 @@ result is a finding worth keeping rather than a reason to throw the port away. R
 184 out of 184 bit-exact cases, never reached `win`, opened nothing, and left nothing behind but a log
 line. That is the outcome this rule exists to prevent.
 
-Use the no-op output only when correctness fails or the verdict is `blocked` — there is nothing to
-review in a port that does not work.
+**Except when you have written nothing.** A pull request is made from your diff, so a run in which
+you changed no files has nothing to make one from — and this is a real ending, not a mistake. It is
+what happens when you resume a branch whose port is already correct: the code is there, the previous
+attempt committed it, and your honest conclusion is that no change is needed. Attempt 3 of the
+`tilize` port ended exactly here, called this output five times, was told
+`failed to generate patch` five times, and finished having said nothing anywhere.
+
+So: **if `git status --porcelain` is empty, do not open a pull request.** Use the no-op output and put
+the whole finding in its message — the verdict, the numbers behind it, and why the code did not need
+to change. That message is published as an issue, which is a durable channel that needs no diff, and
+the branch is already pushed by the time you are reading this. A human decides whether a correct port
+with a losing performance verdict is worth reviewing, and the job summary tells them the one command
+that opens it.
+
+Use the no-op output, then, for any run that is not opening a pull request: correctness failed, the
+verdict is `blocked`, or there was nothing to change.
+
+**Never call the same output twice after it fails.** A safe output that reports a failure has told you
+something about this run, not about your phrasing, and calling it again spends minutes to be told the
+same thing. Read the error, pick the other ending, and stop.
 
 Put the performance verdict in the title after the op name, in brackets: `[win]`,
 `[not-a-candidate]`, or `[back-to-translate]`. A reviewer must not have to read the body to find out
@@ -1039,7 +1283,7 @@ Open it as a draft, describing:
   Separate the `supported_by_codegen()` conditions from the `is_demoted()` ones, and for demotion
   give the measurement that motivated each condition. List `routing.demoted` and
   `routing.demoted_fraction`.
-- **Known gaps** — anything you could not resolve, and anything the manifest asserts that the
+- **Known gaps** — anything you could not resolve, and anything the generator implies that the
   hardware contradicted. Say so plainly rather than quietly working around it. Include every entry
   in the verdict's `notes`, and `routing.demoted_but_faster` if it is non-empty.
 

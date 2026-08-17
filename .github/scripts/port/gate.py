@@ -121,7 +121,7 @@ def allowed_prefixes(op: str, category: str) -> list[str]:
     ]
 
 
-def check_routing_test(manifest: str, op: str, category: str, repo: Path) -> str | None:
+def check_routing_test(descriptor_path: str, op: str, category: str, repo: Path) -> str | None:
     """Re-render the routing test and report how the tree's copy differs, if it does.
 
     The write-path guard alone cannot protect this file, because the file has to be writable for the
@@ -140,12 +140,14 @@ def check_routing_test(manifest: str, op: str, category: str, repo: Path) -> str
 
     # Local: building the ledger imports the generator's sweep module, which is only importable in
     # the built container, and gate.py is imported by its own tests outside one.
-    import yaml
-
     import ledger
 
-    cases = ledger.build_ledger(yaml.safe_load(Path(manifest).read_text()) or {})
-    expected = scaffold.render_routing_test(op, category, cases)
+    descriptor = json.loads(Path(descriptor_path).read_text())
+    cases = ledger.build_ledger(descriptor)
+    # The same descriptor the emitter was given, because the forced-entry path the test calls is
+    # resolved there. Re-rendering without it would compare against a different file and report
+    # drift on a tree nobody touched.
+    expected = scaffold.render_routing_test(op, category, cases, descriptor)
 
     def normalise(text: str) -> str:
         return re.sub(r"(SPDX-FileCopyrightText: © )\d{4}", r"\g<1>YYYY", text)
@@ -218,26 +220,26 @@ def run(cmd: list[str], cwd: Path, env: dict | None = None) -> subprocess.Comple
     return subprocess.run(cmd, cwd=cwd, env={**os.environ, **(env or {})}, capture_output=True, text=True)
 
 
-def build_ledger(manifest: str, out: Path, repo: Path) -> dict:
-    proc = run([sys.executable, str(SCRIPTS / "ledger.py"), "--manifest", manifest, "--out", str(out)], repo)
+def build_ledger(descriptor: str, out: Path, repo: Path) -> dict:
+    proc = run([sys.executable, str(SCRIPTS / "ledger.py"), "--descriptor", descriptor, "--out", str(out)], repo)
     if proc.returncode != 0:
         raise RuntimeError(f"ledger failed: {proc.stderr[-2000:]}")
     return json.loads(out.read_text())
 
 
 def run_measure(
-    op: str, manifest: str, band: str, out: Path, repo: Path, extra: list[str], env: dict | None = None
+    op: str, descriptor: str, band: str, out: Path, repo: Path, extra: list[str], env: dict | None = None
 ) -> dict:
     cmd = [
         sys.executable,
         str(SCRIPTS / "measure.py"),
         "--op",
         op,
-        # The manifest, not the ledger JSON written beside it: a case's kwargs can hold live ttnn
+        # The descriptor, not the ledger JSON written beside it: a case's kwargs can hold live ttnn
         # objects that JSON flattens to strings, so measure.py re-expands the sweep in process. See
         # the note at the top of its `main`.
-        "--manifest",
-        manifest,
+        "--descriptor",
+        descriptor,
         "--band",
         band,
         "--out",
@@ -251,7 +253,7 @@ def run_measure(
 
 
 def run_device_band(
-    op: str, manifest: str, out: Path, repo: Path, limit: int, reps: int, reports: Path, select: str
+    op: str, descriptor: str, out: Path, repo: Path, limit: int, reps: int, reports: Path, select: str
 ) -> dict:
     """Device timings need a tracy-enabled build, so this leg runs under `python3 -m tracy`, which
     sets TT_METAL_DEVICE_PROFILER and post-processes the device logs into an ops report.
@@ -272,8 +274,8 @@ def run_device_band(
             str(SCRIPTS / "measure.py"),
             "--op",
             op,
-            "--manifest",
-            manifest,
+            "--descriptor",
+            descriptor,
             "--band",
             "device",
             "--out",
@@ -572,7 +574,7 @@ def grade(wall: dict, device_samples: dict, cases: list[dict], selection: dict |
         "routing": {
             # What the port must either fix or route away. Derived from measurement rather than
             # asserted in advance, which is the only way to know it: the sweep's `invalidate_vector`
-            # says what codegen *can* serve, and nothing in the manifest says what it serves *well*.
+            # says what codegen *can* serve, and nothing declared anywhere says what it serves *well*.
             # Per-case failures, plus the cases responsible for an aggregate failure. Without the
             # second half a port can be refused for a whole class being marginal while both `failing`
             # and this list come back empty, which tells the agent to fix something and does not say
@@ -629,7 +631,7 @@ def grade(wall: dict, device_samples: dict, cases: list[dict], selection: dict |
     }
 
 
-def expected_prototype_key(manifest_path: str, cases: list[dict]) -> dict:
+def expected_prototype_key(descriptor_path: str, cases: list[dict]) -> dict:
     """The two fields of a prototype pass set's key that the grader can verify on its own.
 
     The counterpart of `measure.py::prototype_key`, and it must hash the same things the same way.
@@ -640,12 +642,12 @@ def expected_prototype_key(manifest_path: str, cases: list[dict]) -> dict:
     """
     ids = "\n".join(c["case_id"] for c in cases if c.get("scope") == "in")
     return {
-        "manifest_sha256": hashlib.sha256(Path(manifest_path).read_bytes()).hexdigest()[:16],
+        "descriptor_sha256": hashlib.sha256(Path(descriptor_path).read_bytes()).hexdigest()[:16],
         "ledger_sig": hashlib.sha256(ids.encode()).hexdigest()[:16],
     }
 
 
-def load_prototype(path: str | None, manifest_path: str, cases: list[dict]) -> dict:
+def load_prototype(path: str | None, descriptor_path: str, cases: list[dict]) -> dict:
     """The set of in-scope cases the generator itself gets right, or an honest refusal to claim one.
 
     Read from a file the agent cannot write. The measure job downloads it into `port-inputs/`, outside
@@ -675,14 +677,14 @@ def load_prototype(path: str | None, manifest_path: str, cases: list[dict]) -> d
             "note": data.get("unavailable_reason", "the prototype leg did not run"),
         }
 
-    expected = expected_prototype_key(manifest_path, cases)
+    expected = expected_prototype_key(descriptor_path, cases)
     recorded = data.get("key") or {}
     stale = {k: (recorded.get(k), v) for k, v in expected.items() if recorded.get(k) != v}
     if stale:
         return {
             "status": "stale",
             "pass_ids": None,
-            "note": "measured against a different manifest or ledger: "
+            "note": "measured against a different descriptor or ledger: "
             + ", ".join(f"{k} was {was} not {now}" for k, (was, now) in stale.items()),
         }
 
@@ -759,6 +761,11 @@ def grade_correctness(results: list[dict], prototype: dict | None = None) -> dic
             for r in blocking[:25]
         ],
         "failure_count": len(blocking),
+        # Every in-scope case this tree got right, in full and deliberately not truncated. The lists
+        # above are for a person reading a report and are cut at 25; this one is read by the machine
+        # that decides whether an update lost ground, so a truncated version of it would silently
+        # excuse the regressions that fell off the end.
+        "passing_ids": sorted(r["case_id"] for r in in_scope if not wrong(r)),
         "prototype_gaps": gaps[:25],
         "prototype_gap_count": len(gaps),
         "diverges_from_prototype": diverges[:25],
@@ -778,7 +785,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--op", required=True)
     ap.add_argument("--band", default="both", choices=["correctness", "performance", "both"])
-    ap.add_argument("--manifest", required=True)
+    ap.add_argument("--descriptor", required=True, help="JSON from discover.py")
     ap.add_argument("--repo", default=".")
     ap.add_argument("--category", default="data_movement")
     ap.add_argument("--base-sha", default=os.environ.get("PORT_BASE_SHA", ""))
@@ -834,7 +841,7 @@ def main() -> int:
         # After the guard, deliberately: the guard is what establishes that the emitter itself is
         # unmodified, which is what makes re-rendering a meaningful comparison.
         try:
-            drift = check_routing_test(args.manifest, args.op, args.category, repo)
+            drift = check_routing_test(args.descriptor, args.op, args.category, repo)
         except Exception as exc:  # noqa: BLE001
             drift = f"could not verify the routing test: {type(exc).__name__}: {exc}"
         if drift:
@@ -843,20 +850,20 @@ def main() -> int:
 
     try:
         ledger_path = work / f"{args.op}_ledger.json"
-        ledger = build_ledger(args.manifest, ledger_path, repo)
+        ledger = build_ledger(args.descriptor, ledger_path, repo)
         report["ledger_counts"] = ledger["counts"]
 
         if args.band in ("correctness", "both"):
             out = work / f"{args.op}_correctness.json"
-            data = run_measure(args.op, args.manifest, "correctness", out, repo, [])
-            prototype = load_prototype(args.prototype, args.manifest, ledger["cases"])
+            data = run_measure(args.op, args.descriptor, "correctness", out, repo, [])
+            prototype = load_prototype(args.prototype, args.descriptor, ledger["cases"])
             report["correctness"] = grade_correctness(data["results"], prototype)
             report["correctness"]["golden"] = data.get("golden")
 
         if args.band in ("performance", "both"):
             wall = run_measure(
                 args.op,
-                args.manifest,
+                args.descriptor,
                 "wall",
                 work / f"{args.op}_wall.json",
                 repo,
@@ -867,7 +874,7 @@ def main() -> int:
                 reports = work / f"{args.op}_profiler"
                 dev = run_device_band(
                     args.op,
-                    args.manifest,
+                    args.descriptor,
                     work / f"{args.op}_device.json",
                     repo,
                     args.limit,

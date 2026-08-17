@@ -1,0 +1,14 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+shape: input_shape
+dtype: input_a_dtype
+layout: input_a_layout
+kwargs:
+  dims: permute_spec
+suites: [rm_broaden]
+
+# A rank mismatch is invalid input to the op itself, not a codegen limitation, so there is nothing to
+# grade the port against.
+ungradeable_reasons:
+  - "Length of the permutation vector must match the rank of the input tensor"

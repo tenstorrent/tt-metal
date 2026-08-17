@@ -10,8 +10,10 @@ host files, the build registration, and the routing test. Running this before th
 means the agent only ever edits the *contents* of files that already exist and are already
 registered, so every rebuild it triggers is a plain incremental compile with no CMake re-configure.
 
-The kernel set is read from the port manifest's `kernel_paths`, which is authoritative -- it names
-exactly the tt-dm-codegen templates the generator actually uses, so nothing here has to guess.
+The kernel set comes from `discover.py`, which walks the builder's own template directories and
+follows their includes rather than trusting a written list. A list cannot name a header that is only
+reachable because another kernel includes it, and that omission is not theoretical: it is how
+`rm_shard_split.h` went unvendored and left 112 `untilize` cases writing uncorrelated data.
 
 The routing test is generated rather than written, for the same reason the gates are not the agent's
 to edit. Every out-of-scope case in the coverage ledger has to fall back to native under `auto`, that
@@ -91,26 +93,33 @@ def stamp_spdx(path: Path) -> None:
     path.write_text(f"{spdx_header()}\n{text}")
 
 
-def copy_kernels(manifest: dict, codegen_root: Path, op_dir: Path, resume: bool = False) -> list[Path]:
-    """Copy the manifest's kernel templates into `<op>/codegen/kernels/`.
+def copy_kernels(descriptor: dict, codegen_root: Path, op_dir: Path, resume: bool = False) -> list[Path]:
+    """Copy the op's kernel templates into `<op>/codegen/kernels/`.
 
     A native kernel sharing a basename would leave two indistinguishable files in the op's working
     set, so colliding copies are prefixed and quoted includes among the copied set are repointed.
-    """
-    entries = manifest.get("kernel_paths") or []
-    if not entries:
-        sys.exit("scaffold: manifest has no kernel_paths")
 
-    # Manifest entries may carry a trailing `# comment`; yaml keeps those out, but be defensive.
-    sources = [codegen_root / str(e).split("#")[0].strip() for e in entries]
+    The set comes from `discover.py`, which walks the builder's template directories and follows
+    includes. It used to come from a manifest's `kernel_paths`, and the difference is not cosmetic: a
+    hand-maintained list cannot express a header that is reachable only because another kernel
+    includes it, which is how `rm_shard_split.h` went unvendored and left 112 `untilize` cases writing
+    uncorrelated data against a green build.
+    """
+    entries = descriptor.get("kernels") or []
+    if not entries:
+        sys.exit("scaffold: the descriptor names no kernels")
+
+    sources = [codegen_root / str(e).strip() for e in entries]
     missing = [s for s in sources if not s.is_file()]
     if missing:
-        sys.exit("scaffold: manifest kernel source missing: " + ", ".join(map(str, missing)))
+        sys.exit("scaffold: kernel source missing: " + ", ".join(map(str, missing)))
 
     names = [s.name for s in sources]
     dupes = sorted({n for n in names if names.count(n) > 1})
     if dupes:
-        sys.exit("scaffold: duplicate manifest basenames: " + ", ".join(dupes))
+        # Two template directories holding the same basename cannot both be vendored, and picking one
+        # silently would compile the wrong kernel.
+        sys.exit("scaffold: two templates share a basename: " + ", ".join(dupes))
 
     device_kernels = op_dir / "device" / "kernels"
     native_names = set()
@@ -124,13 +133,14 @@ def copy_kernels(manifest: dict, codegen_root: Path, op_dir: Path, resume: bool 
 
     kernels_dir = op_dir / "codegen" / "kernels"
     kernels_dir.mkdir(parents=True, exist_ok=True)
-    # Two lists, because they answer different questions. `expected` is every kernel the manifest says
-    # must be here, and it is what `verify()` checks -- a resume that kept ten files and copied one
-    # still has to prove all eleven exist. `copied` is only the files this pass wrote, and it is what
-    # the include rewrite below may touch, because rewriting a kernel the agent edited would be the
-    # overwrite this is avoiding.
+    # Two lists, because they answer different questions. `expected` is every kernel that must be
+    # here, and it is what `verify()` checks -- a resume that kept ten files and copied one still has
+    # to prove all eleven exist. `copied` is only the files this pass wrote, and it is what the include
+    # rewrite below may touch, because rewriting a kernel the agent edited would be the overwrite this
+    # is avoiding.
     expected = []
     copied = []
+    kept = []
     for source in sources:
         dest = kernels_dir / renames.get(source.name, source.name)
         expected.append(dest)
@@ -140,11 +150,11 @@ def copy_kernels(manifest: dict, codegen_root: Path, op_dir: Path, resume: bool 
         # would silently discard the fix that a run just spent forty minutes verifying.
         #
         # Absent files are still copied, which is the point of running this pass at all on a resume: a
-        # manifest that gained a header between attempts is how the previous port lost every in-scope
+        # generator that gained a header between attempts is how the previous port lost every in-scope
         # case at runtime, with a green build.
         if resume and dest.exists():
             if dest.read_bytes() != source.read_bytes():
-                print(f"scaffold: keeping edited {dest.relative_to(op_dir)} (differs from its template)")
+                kept.append(dest)
             continue
         shutil.copy2(source, dest)
         stamp_spdx(dest)
@@ -157,6 +167,16 @@ def copy_kernels(manifest: dict, codegen_root: Path, op_dir: Path, resume: bool 
             rewritten = rewritten.replace(f'#include "{old}"', f'#include "{new}"')
         if rewritten != text:
             path.write_text(rewritten)
+
+    # Reported rather than resolved, and deliberately so. A vendored kernel that differs from its
+    # template is either a fix the port needs or a change the generator made since, and telling those
+    # apart needs the template as it stood when the port was written -- which only a repin has. Until
+    # then, silence would hide generator changes and overwriting would discard verified fixes, so the
+    # divergence is named and left alone.
+    for path in kept:
+        print(f"scaffold: kept {path.relative_to(op_dir)}, which differs from its template")
+    if kept and copied:
+        print(f"scaffold: vendored {len(copied)} new kernel(s) alongside {len(kept)} kept")
     return expected
 
 
@@ -276,13 +296,13 @@ def register_kernel_globs(category_dir: Path, op: str, kernels_dir: Path) -> lis
 # Standalone on purpose. This file ships to nightly CI and runs there with no part of the porting
 # harness present, so it repeats a few lines of input construction rather than importing them.
 _TEMPLATE = """{spdx}
-# AUTO-GENERATED by .github/scripts/port/scaffold.py. Do not edit: `verify` re-renders this file and
-# refuses to measure a tree where it has drifted. Change the emitter instead.
+# Generated in full from this op's coverage data and replaced whenever that data changes, so edits
+# made here do not survive.
 #
-# Every case below is one the coverage ledger marks out of scope -- the generator's own
-# `invalidate_vector`, or a manifest guard, says codegen cannot serve it. So `ttnn.{op}` under
-# `implementation="auto"` must fall back to the native implementation for all {count} of them, and
-# must produce what native produces. The cases are grouped by the condition that rejects them.
+# Every one of these {count} cases is outside what the codegen path supports. `ttnn.{op}` decides
+# internally which implementation serves a call, so each case must be served natively and must
+# produce exactly what the native path produces. They are grouped by the condition that rejects
+# them.
 
 import pytest
 import torch
@@ -327,17 +347,20 @@ def test_{op}_codegen_routing(device, dtype, layout, shape, kwargs):
     torch_input = _make_input(shape, dtype)
     tt_input = ttnn.from_torch(torch_input, dtype=_DTYPES[dtype], layout=_LAYOUTS[layout], device=device)
 
-    golden = ttnn.to_torch(ttnn.{op}(tt_input, **kwargs, implementation="native"))
+    # The forced-native entry rather than `ttnn.{op}` itself: the public entry is the thing under
+    # test here, so using it to produce the reference would compare it against itself and pass no
+    # matter where it routed.
+    golden = ttnn.to_torch({force_native}(tt_input, **kwargs))
     # The native call above compiled and cached its program, so a correct fallback reuses it and
     # leaves the cache flat. Only a mis-route to codegen compiles something new. Taking the
     # snapshot after the native call is what makes the two distinguishable -- before it, both a
     # fallback and a mis-route add exactly one entry.
     entries_before = device.num_program_cache_entries()
-    routed = ttnn.to_torch(ttnn.{op}(tt_input, **kwargs, implementation="auto"))
+    routed = ttnn.to_torch(ttnn.{op}(tt_input, **kwargs))
 
     assert_equal(golden, routed)
     assert device.num_program_cache_entries() == entries_before, (
-        "auto routed an out-of-scope case to codegen (the program cache grew); expected native fallback"
+        "an unsupported case routed to the codegen path (the program cache grew); expected native"
     )
 """
 
@@ -382,11 +405,66 @@ def _literal(value) -> str:
     raise TypeError(f"cannot render {kind.__name__} from {module!r} as a literal: {value!r}")
 
 
-def render_routing_test(op: str, category: str, cases: list[dict], year: int | None = None) -> str:
+# Names that exist only in the private repository this port was generated from. tt-metal is public,
+# so each of these in a landed diff points a maintainer at something they cannot open -- and the
+# emitted test is the one file here written wholly by machine, which makes it the one most likely to
+# carry them without anyone reading it first. The header this replaced said "AUTO-GENERATED", named a
+# script no tt-metal reader can run, and explained itself in terms of a coverage ledger and an
+# `invalidate_vector` that are not in this repository either.
+#
+# `codegen` alone is deliberately absent: `prim::<op>_codegen` and `codegen/` are real tt-metal
+# names. What cannot ship is prose about the generator, not the word itself.
+PRIVATE_NAMES = (
+    r"tt-dm-codegen",
+    r"AUTO-GENERATED",
+    r"invalidate_vector",
+    r"coverage ledger",
+    r"port_scope",
+    r"builder_utils",
+    r"spec\.py",
+    r"porting guide",
+    r"scope:(?:in|out)",
+    r"phase \d",
+    r"\bmanifests?\b",
+)
+
+
+def private_names(text: str) -> list[str]:
+    """Which private-repo names a would-be public file carries, in the order they appear."""
+    found = []
+    for pattern in PRIVATE_NAMES:
+        hit = re.search(pattern, text, re.IGNORECASE)
+        if hit and hit.group(0) not in found:
+            found.append(hit.group(0))
+    return found
+
+
+def forced_entry(op: str, descriptor: dict | None, which: str) -> str:
+    """The dotted path of a forced entry.
+
+    `discover.py` builds this from the op and its category, since the public op stopped taking an
+    `implementation` argument and the two private names became conventional. The convention is
+    checkable and is checked: `measure.py` resolves the same path against the built ttnn and fails
+    loudly when it is not bound, which is the failure a wrong path should produce. What it must never
+    do is resolve to something plausible -- a forced-codegen name that falls back to the public op
+    measures native against native and reads as a port in perfect agreement with itself.
+    """
+    resolved = (descriptor or {}).get(which)
+    if resolved:
+        return resolved
+    sys.exit(
+        f"scaffold: no {which} entry was resolved for {op}, so the routing test has no way to reach "
+        f"the native path except through the public entry it is meant to be testing"
+    )
+
+
+def render_routing_test(
+    op: str, category: str, cases: list[dict], descriptor: dict | None = None, year: int | None = None
+) -> str:
     """Build the routing test source for every out-of-scope case in the ledger.
 
-    Pure function of the ledger and the op, so `gate.py` can re-render it and compare. Anything
-    time- or environment-dependent in here would turn that comparison into a flake.
+    Pure function of its arguments, so `gate.py` can re-render it and compare. Anything time- or
+    environment-dependent in here would turn that comparison into a flake.
     """
     out_of_scope = [c for c in cases if c.get("scope") == "out"]
     # Grouped by the condition that rejects them, so the file reads as a list of reasons rather than
@@ -413,20 +491,32 @@ def render_routing_test(op: str, category: str, cases: list[dict], year: int | N
             args = "|".join(f"{key}={_literal(value)}" for key, value in sorted(kwargs.items()))
             label = f"{case['case_id']}|{case['dtype']}|{case['layout']}|{shape}"
             ids.append(f"    {_literal(f'{label}|{args}' if args else label)},")
-    return _TEMPLATE.format(
+    text = _TEMPLATE.format(
         spdx=SPDX_PY.format(year=year if year is not None else datetime.now(timezone.utc).year),
         op=op,
         category=category,
         count=len(out_of_scope),
         rows="\n".join(rows),
         ids="\n".join(ids),
+        force_native=forced_entry(op, descriptor, "force_native"),
     )
+    leaked = private_names(text)
+    if leaked:
+        sys.exit(
+            f"scaffold: the emitted routing test names {', '.join(leaked)}, which cannot ship. "
+            f"tt-metal is public and the repository this port was generated from is not, so a "
+            f"reader following that reference has nowhere to go. State the constraint, not where "
+            f"it came from."
+        )
+    return text
 
 
-def emit_routing_test(ttmetal: Path, op: str, category: str, cases: list[dict]) -> dict:
+def emit_routing_test(
+    ttmetal: Path, op: str, category: str, cases: list[dict], descriptor: dict | None = None
+) -> dict:
     path = ttmetal / test_path(op, category)
     path.parent.mkdir(parents=True, exist_ok=True)
-    text = render_routing_test(op, category, cases)
+    text = render_routing_test(op, category, cases, descriptor)
     path.write_text(text)
     return {
         "path": test_path(op, category),
@@ -477,12 +567,12 @@ def main() -> int:
     ap.add_argument("--op", required=True)
     ap.add_argument("--ttmetal-home", default=".")
     ap.add_argument("--codegen-root", required=True, help="tt-dm-codegen checkout root")
-    ap.add_argument("--manifest", default=None, help="defaults to <codegen-root>/agentic_port/manifests/<op>.yaml")
+    ap.add_argument("--descriptor", default=None, help="JSON from discover.py; resolved here if absent")
     ap.add_argument("--category", default=None, help="operations/<category>/<op>, when the name is ambiguous")
     ap.add_argument(
         "--resume",
         action="store_true",
-        help="an existing port is on this branch: add what the manifest gained, keep what is already "
+        help="an existing port is on this branch: add what the generator gained, keep what is already "
         "there. Without it, kernels are copied over unconditionally, which discards hand-written fixes.",
     )
     ap.add_argument(
@@ -494,27 +584,33 @@ def main() -> int:
 
     ttmetal = Path(args.ttmetal_home).resolve()
     codegen_root = Path(args.codegen_root).resolve()
-    manifest_path = (
-        Path(args.manifest) if args.manifest else codegen_root / "agentic_port/manifests" / f"{args.op}.yaml"
-    )
-    if not manifest_path.is_file():
-        sys.exit(f"scaffold: manifest not found: {manifest_path}")
 
-    manifest = yaml.safe_load(manifest_path.read_text()) or {}
-    op_dir = find_op_dir(ttmetal, args.op, args.category)
+    # Resolved here when the caller has not already done it, so this stays runnable by hand. The
+    # workflow passes `--descriptor` so that one resolution is shared by every step of a run and no
+    # two steps can disagree about what the port consists of.
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import discover
+
+    if args.descriptor:
+        descriptor = json.loads(Path(args.descriptor).read_text())
+    else:
+        descriptor = discover.describe(ttmetal, codegen_root, args.op, args.category)
+
+    op_dir = find_op_dir(ttmetal, args.op, args.category or descriptor.get("category"))
 
     if args.emit_test_only:
         # Imported here rather than at module scope: building the ledger imports the generator's
         # sweep module and therefore ttnn, which does not exist yet during the pre-build pass.
-        sys.path.insert(0, str(Path(__file__).resolve().parent))
         import ledger
 
         category = op_dir.parent.name
-        emitted = emit_routing_test(ttmetal, args.op, category, ledger.build_ledger(manifest))
+        emitted = emit_routing_test(
+            ttmetal, args.op, category, ledger.build_ledger(descriptor), descriptor
+        )
         print(json.dumps({"op": args.op, "category": category, **emitted}, indent=2))
         return 0
 
-    kernels = copy_kernels(manifest, codegen_root, op_dir, resume=args.resume)
+    kernels = copy_kernels(descriptor, codegen_root, op_dir, resume=args.resume)
     stubs = write_stubs(op_dir, args.op)
     sources_added = register_sources(op_dir.parent, args.op)
     globs_added = register_kernel_globs(op_dir.parent, args.op, op_dir / "codegen" / "kernels")
@@ -523,7 +619,7 @@ def main() -> int:
     result = {
         "op": args.op,
         "op_dir": str(op_dir.relative_to(ttmetal)),
-        "manifest": str(manifest_path),
+        "builder": descriptor.get("builder"),
         "kernels_copied": [str(p.relative_to(ttmetal)) for p in kernels],
         "stubs_written": [str(p.relative_to(ttmetal)) for p in stubs],
         "sources_cmake_added": sources_added,

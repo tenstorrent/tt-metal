@@ -98,18 +98,18 @@ def random_torch_tensor(dtype: str, shape):
     return torch.rand(shape).bfloat16().float()
 
 
-def resolve_golden(op: str, manifest: dict | None):
+def resolve_golden(op: str, descriptor: dict | None):
     """Find a host reference for `op`, preferring the most specific source available.
 
     The correctness band wants a host golden rather than native output, because native is sometimes
-    the thing that is wrong -- that is what the manifest's `known_bad_golden` entries record. What it
+    the thing that is wrong -- that is what `axes/<op>.yaml`'s `bad_golden` entries record. What it
     must not have is a table of per-op goldens living in this file: one entry per ported op in the
     shared harness is how a pipeline grows a maintenance surface proportional to its own success.
 
     So op-specific knowledge is resolved from where op-specific knowledge belongs:
 
-      1. the manifest's `golden_callable`, a dotted path, for an op whose reference is neither of the
-         below;
+      1. an explicit `golden_callable` dotted path in the op's axis file, for an op whose reference is
+         neither of the below;
       2. `ttnn.get_golden_function`, which returns the reference ttnn itself already registers for
          the op -- note it returns the *raw* golden, without the pre/postprocessing that
          `get_fallback_function` layers on, so it takes a torch tensor and the op's own kwargs;
@@ -117,10 +117,10 @@ def resolve_golden(op: str, manifest: dict | None):
 
     Returns `(callable(torch_input, **kwargs), source)`, or `(None, "native")`.
     """
-    path = (manifest or {}).get("golden_callable")
+    path = ((descriptor or {}).get("axes") or {}).get("golden_callable")
     if path:
         module_name, _, attr = str(path).replace(":", ".").rpartition(".")
-        return getattr(importlib.import_module(module_name), attr), f"manifest:{path}"
+        return getattr(importlib.import_module(module_name), attr), f"declared:{path}"
 
     try:
         return ttnn.get_golden_function(getattr(ttnn, op)), f"ttnn.get_golden_function(ttnn.{op})"
@@ -134,25 +134,73 @@ def resolve_golden(op: str, manifest: dict | None):
 # --------------------------------------------------------------------------------------------
 
 
-def call_ttnn(op: str, tensor, kwargs: dict, implementation: str | None):
-    """Invoke `ttnn.<op>`, tolerating a tree where the `implementation` kwarg does not exist yet.
+class Legs:
+    """The three ways to invoke a ported op, resolved once against the build under test.
 
-    The pre-port baseline is measured against clean main, where the selector has not been added,
-    so asking for it there must degrade to a plain native call rather than fail the run.
+    A ported op's public entry keeps the signature it always had: which implementation serves a call
+    is not something a caller chooses. So the routed leg is just `ttnn.<op>`, and forcing either
+    side means calling a separate private entry that the port binds under
+    `ttnn._ttnn.operations.<category>.<op>_force_{native,codegen}`.
+
+    This replaced an `implementation=` kwarg on the public entry. Two reasons it is worth knowing
+    that, rather than reading the current shape as the only one there ever was. It is why a port
+    written before the change measures as completely unwired rather than as subtly wrong -- the
+    kwarg is gone, not renamed. And it is why the forced entries must stay under the private module:
+    binding them as `ttnn.*` operations would rebuild exactly the public selector surface the change
+    removed, while passing every check here.
+
+    Resolved once at startup rather than per call because a missing forced entry is a fact about the
+    build, and rediscovering it inside a hot measurement loop would mean a per-case `getattr` and a
+    per-case decision about what its absence means.
     """
-    fn = getattr(ttnn, op)
-    if implementation is None:
-        return fn(tensor, **kwargs)
-    try:
-        return fn(tensor, **kwargs, implementation=implementation)
-    except TypeError as exc:
-        if "implementation" not in str(exc):
-            raise
-        if implementation in ("codegen",):
-            raise RuntimeError(
-                f"ttnn.{op} has no `implementation` kwarg in this build -- the port is not wired up"
-            ) from exc
-        return fn(tensor, **kwargs)
+
+    def __init__(self, op: str, descriptor: dict | None):
+        self.op = op
+        self.routed = getattr(ttnn, op)
+        entries = descriptor or {}
+        self.forced = {
+            "native": self._resolve(entries.get("force_native")),
+            "codegen": self._resolve(entries.get("force_codegen")),
+        }
+
+    @staticmethod
+    def _resolve(dotted: str | None):
+        """The callable a dotted path names, or None if this build does not have it.
+
+        None is an ordinary answer twice over. The native baseline is measured on clean main, where
+        no forced entry exists yet, and a port under construction may have bound one and not the
+        other.
+        """
+        if not dotted:
+            return None
+        found = sys.modules.get(dotted.split(".")[0])
+        for part in dotted.split(".")[1:]:
+            found = getattr(found, part, None)
+            if found is None:
+                return None
+        return found if callable(found) else None
+
+    def __call__(self, leg: str | None, tensor, kwargs: dict):
+        if leg is None or leg == "auto":
+            # The routed entry, which is the public op. Whether it lands on native or codegen is
+            # what the routing checks are measuring, so it must not be forced either way.
+            return self.routed(tensor, **kwargs)
+
+        forced = self.forced.get(leg)
+        if forced is not None:
+            return forced(tensor, **kwargs)
+
+        if leg == "native":
+            # Clean main has no forced entries and its public entry *is* native, so this is the
+            # pre-port baseline working as intended rather than a degraded measurement.
+            return self.routed(tensor, **kwargs)
+
+        raise RuntimeError(
+            f"this build has no forced-codegen entry for {self.op}, so there is nothing to measure. "
+            f"The port must bind {self.op}_force_codegen under ttnn._ttnn.operations.<category>. "
+            f"An `implementation=` kwarg on ttnn.{self.op} is the superseded contract and is not "
+            f"accepted here."
+        )
 
 
 def resolve_generic(op: str, device):
@@ -218,7 +266,7 @@ def make_input(case, device):
     return torch_input, tt_input
 
 
-def run_correctness(op: str, cases: list[dict], device, golden_fn, golden_source: str) -> list[dict]:
+def run_correctness(call: Legs, cases: list[dict], device, golden_fn, golden_source: str) -> list[dict]:
     results = []
     for case in cases:
         record = {"case_id": case["case_id"], "scope": case["scope"]}
@@ -227,12 +275,12 @@ def run_correctness(op: str, cases: list[dict], device, golden_fn, golden_source
             kwargs = case["kwargs"]
 
             if case["scope"] == "in":
-                got = ttnn.to_torch(call_ttnn(op, tt_input, kwargs, "codegen"))
+                got = ttnn.to_torch(call("codegen", tt_input, kwargs))
                 if golden_fn is not None:
                     want = golden_fn(torch_input, **kwargs)
                     source = golden_source
                 else:
-                    want = ttnn.to_torch(call_ttnn(op, tt_input, kwargs, "native"))
+                    want = ttnn.to_torch(call("native", tt_input, kwargs))
                     source = "native"
                 record.update(
                     golden=source,
@@ -255,9 +303,9 @@ def run_correctness(op: str, cases: list[dict], device, golden_fn, golden_source
                 # the whole check on `is_demoted()` and `supported_by_codegen()` falling back has
                 # never once failed. `==` is the assertion that was meant, and it is the same one
                 # the emitted routing test makes.
-                native = ttnn.to_torch(call_ttnn(op, tt_input, kwargs, "native"))
+                native = ttnn.to_torch(call("native", tt_input, kwargs))
                 before = program_cache_entries(device)
-                routed = ttnn.to_torch(call_ttnn(op, tt_input, kwargs, "auto"))
+                routed = ttnn.to_torch(call("auto", tt_input, kwargs))
                 after = program_cache_entries(device)
                 record.update(
                     equal=bool(torch.equal(native, routed)),
@@ -275,7 +323,9 @@ def run_correctness(op: str, cases: list[dict], device, golden_fn, golden_source
     return results
 
 
-def run_prototype(op: str, cases: list[dict], device, generic, golden_fn, golden_source: str) -> list[dict]:
+def run_prototype(
+    op: str, call: Legs, cases: list[dict], device, generic, golden_fn, golden_source: str
+) -> list[dict]:
     """Which in-scope cases the tt-dm-codegen prototype itself gets right.
 
     This is the bar the port is actually held to. The port transliterates the generator; it ships the
@@ -303,7 +353,7 @@ def run_prototype(op: str, cases: list[dict], device, generic, golden_fn, golden
                 want = golden_fn(torch_input, **kwargs)
                 source = golden_source
             else:
-                want = ttnn.to_torch(call_ttnn(op, tt_input, kwargs, "native"))
+                want = ttnn.to_torch(call("native", tt_input, kwargs))
                 source = "native"
             record.update(
                 golden=source,
@@ -317,13 +367,13 @@ def run_prototype(op: str, cases: list[dict], device, generic, golden_fn, golden
     return results
 
 
-def prototype_key(manifest_path: str | None, cases: list[dict]) -> dict:
+def prototype_key(descriptor_path: str | None, cases: list[dict]) -> dict:
     """What a prototype pass is a measurement *of*, so a stale one cannot pass for a fresh one.
 
     Measuring once and reusing the answer is only sound while the three things it depends on are
-    unchanged: the generator's code, the manifest that defines scope, and the ledger the manifest
-    expands to. gate.py compares this against the pass set it is handed and recomputes on a mismatch,
-    which is the whole reason the key travels with the data instead of being assumed.
+    unchanged: the generator's code, the descriptor that defines the port's surface, and the ledger
+    that descriptor expands to. gate.py compares this against the pass set it is handed and recomputes
+    on a mismatch, which is the whole reason the key travels with the data instead of being assumed.
 
     Deliberately not keyed on the port. The prototype leg never touches it, and keying on it would
     throw the result away on every edit -- turning a once-per-baseline cost into a per-verify one.
@@ -333,7 +383,7 @@ def prototype_key(manifest_path: str | None, cases: list[dict]) -> dict:
         return hashlib.sha256(data).hexdigest()[:16]
 
     key = {
-        "manifest_sha256": _sha(Path(manifest_path).read_bytes()) if manifest_path else None,
+        "descriptor_sha256": _sha(Path(descriptor_path).read_bytes()) if descriptor_path else None,
         "ledger_sig": _sha("\n".join(c["case_id"] for c in cases).encode()),
         "codegen_sha": None,
     }
@@ -353,7 +403,7 @@ def prototype_key(manifest_path: str | None, cases: list[dict]) -> dict:
     return key
 
 
-def run_golden_check(op: str, cases: list[dict], device, golden_fn, golden_source: str) -> list[dict]:
+def run_golden_check(call: Legs, cases: list[dict], device, golden_fn, golden_source: str) -> list[dict]:
     """Check the resolved golden against native, before there is a port to blame.
 
     Resolving the golden generically is only safe if something checks that what came back is actually
@@ -367,7 +417,7 @@ def run_golden_check(op: str, cases: list[dict], device, golden_fn, golden_sourc
         record = {"case_id": case["case_id"], "golden": golden_source, "dtype": case["dtype"]}
         try:
             torch_input, tt_input = make_input(case, device)
-            native = ttnn.to_torch(call_ttnn(op, tt_input, case["kwargs"], "native"))
+            native = ttnn.to_torch(call("native", tt_input, case["kwargs"]))
             want = golden_fn(torch_input, **case["kwargs"])
             record.update(
                 equal=bool(torch.equal(want.to(native.dtype), native)),
@@ -380,14 +430,14 @@ def run_golden_check(op: str, cases: list[dict], device, golden_fn, golden_sourc
     return results
 
 
-def run_wall(op: str, cases: list[dict], device, generic, iters: int) -> list[dict]:
+def run_wall(op: str, call: Legs, cases: list[dict], device, generic, iters: int) -> list[dict]:
     results = []
     for case in cases:
         record = {"case_id": case["case_id"]}
         try:
             _, tt_input = make_input(case, device)
             kwargs = case["kwargs"]
-            record["native_us"] = bench_sync(device, lambda: call_ttnn(op, tt_input, kwargs, "native"), iters=iters)
+            record["native_us"] = bench_sync(device, lambda: call("native", tt_input, kwargs), iters=iters)
 
             # Which way `auto` actually routes this case, observed rather than assumed. The native
             # timing above has already compiled and cached the native program, so a flat cache across
@@ -399,11 +449,11 @@ def run_wall(op: str, cases: list[dict], device, generic, iters: int) -> list[di
             # band was going to run anyway. gate.py uses it to decide which cases the port has taken
             # responsibility for and which it has handed back to native.
             before = program_cache_entries(device)
-            call_ttnn(op, tt_input, kwargs, "auto")
+            call("auto", tt_input, kwargs)
             after = program_cache_entries(device)
             record["routes_to"] = None if before < 0 else ("native" if after == before else "codegen")
 
-            record["ported_us"] = bench_sync(device, lambda: call_ttnn(op, tt_input, kwargs, "codegen"), iters=iters)
+            record["ported_us"] = bench_sync(device, lambda: call("codegen", tt_input, kwargs), iters=iters)
             if generic is not None:
                 record["generic_us"] = bench_sync(
                     device, lambda: call_generic(generic, op, tt_input, kwargs), iters=iters
@@ -415,7 +465,7 @@ def run_wall(op: str, cases: list[dict], device, generic, iters: int) -> list[di
     return results
 
 
-def run_device(op: str, cases: list[dict], device, generic, reps: int) -> list[dict]:
+def run_device(op: str, call: Legs, cases: list[dict], device, generic, reps: int) -> list[dict]:
     """Dispatch interleaved reps under the profiler and record the exact dispatch order.
 
     Reps are interleaved across legs rather than run leg-by-leg so that thermal or clock drift hits
@@ -432,8 +482,8 @@ def run_device(op: str, cases: list[dict], device, generic, reps: int) -> list[d
         kwargs = case["kwargs"]
 
         legs = [
-            ("native", lambda: call_ttnn(op, tt_input, kwargs, "native")),
-            ("ported", lambda: call_ttnn(op, tt_input, kwargs, "codegen")),
+            ("native", lambda: call("native", tt_input, kwargs)),
+            ("ported", lambda: call("codegen", tt_input, kwargs)),
         ]
         if generic is not None:
             legs.append(("generic", lambda: call_generic(generic, op, tt_input, kwargs)))
@@ -469,12 +519,12 @@ def run_device(op: str, cases: list[dict], device, generic, reps: int) -> list[d
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--op", required=True)
-    ap.add_argument("--ledger", default=None, help="JSON from ledger.py; only used without --manifest")
+    ap.add_argument("--ledger", default=None, help="JSON from ledger.py; only used without --descriptor")
     ap.add_argument("--band", required=True, choices=["correctness", "prototype", "wall", "device", "golden"])
     ap.add_argument(
-        "--manifest",
+        "--descriptor",
         default=None,
-        help="port manifest; preferred over --ledger because it keeps ttnn objects in kwargs live",
+        help="JSON from discover.py; preferred over --ledger because it keeps ttnn objects in kwargs live",
     )
     ap.add_argument("--out", required=True)
     ap.add_argument("--limit", type=int, default=0, help="cap the number of cases (perf bands)")
@@ -488,29 +538,27 @@ def main() -> int:
         help="how the perf bands spend their case budget; `prefix` is the old flat slice",
     )
     args = ap.parse_args()
-    if not args.manifest and not args.ledger:
-        ap.error("one of --manifest or --ledger is required")
+    if not args.descriptor and not args.ledger:
+        ap.error("one of --descriptor or --ledger is required")
 
-    manifest = None
-    if args.manifest:
-        import yaml
+    descriptor = None
+    if args.descriptor:
+        descriptor = json.loads(Path(args.descriptor).read_text())
 
-        manifest = yaml.safe_load(Path(args.manifest).read_text()) or {}
-
-    if manifest is not None:
+    if descriptor is not None:
         # Expanded here rather than read from the ledger JSON, because a case's kwargs can hold live
         # ttnn objects and JSON cannot carry them. `ledger.py --out` serialises with `default=str`, so
         # `untilize`'s `memory_config=ttnn.DRAM_MEMORY_CONFIG` arrives as the *string*
         # "MemoryConfig(...)" and every `ttnn.untilize(x, memory_config=...)` call raises. pad never
         # showed this: its kwargs are a list and a number, which survive the round trip intact.
         #
-        # `build_ledger` is a deterministic function of the manifest and the sweep module, so
+        # `build_ledger` is a deterministic function of the descriptor and the sweep module, so
         # expanding it again here yields the same cases in the same order, with the same ids, that
         # gate.py grades against. Re-expanding costs a module import; encoding every ttnn type into
         # JSON and back would cost a codec that has to keep up with ttnn.
         import ledger as ledger_module
 
-        cases = ledger_module.build_ledger(manifest)
+        cases = ledger_module.build_ledger(descriptor)
     else:
         cases = json.loads(Path(args.ledger).read_text())["cases"]
 
@@ -547,6 +595,9 @@ def main() -> int:
 
     device = ttnn.open_device(device_id=0)
     generic = None
+    # Resolved before the device is touched so that a port missing its forced entries fails while
+    # the message is still about the port, rather than a hundred cases into a band.
+    call = Legs(args.op, descriptor)
     try:
         if not args.no_generic and args.band in ("prototype", "wall", "device"):
             try:
@@ -555,13 +606,13 @@ def main() -> int:
                 print(f"measure: generic_op leg unavailable: {exc}", file=sys.stderr)
 
         if args.band in ("correctness", "prototype", "golden"):
-            golden_fn, golden_source = resolve_golden(args.op, manifest)
+            golden_fn, golden_source = resolve_golden(args.op, descriptor)
 
         if args.band == "correctness":
             payload = {
                 "band": "correctness",
                 "golden": golden_source,
-                "results": run_correctness(args.op, selected, device, golden_fn, golden_source),
+                "results": run_correctness(call, selected, device, golden_fn, golden_source),
             }
         elif args.band == "prototype":
             # An unavailable prototype is reported, never inferred. gate.py must be able to tell "the
@@ -571,8 +622,8 @@ def main() -> int:
                 "band": "prototype",
                 "golden": golden_source,
                 "available": generic is not None,
-                "key": prototype_key(args.manifest, selected),
-                "results": run_prototype(args.op, selected, device, generic, golden_fn, golden_source)
+                "key": prototype_key(args.descriptor, selected),
+                "results": run_prototype(args.op, call, selected, device, generic, golden_fn, golden_source)
                 if generic is not None
                 else [],
             }
@@ -591,19 +642,19 @@ def main() -> int:
                 payload = {
                     "band": "golden",
                     "golden": golden_source,
-                    "results": run_golden_check(args.op, selected, device, golden_fn, golden_source),
+                    "results": run_golden_check(call, selected, device, golden_fn, golden_source),
                 }
         elif args.band == "wall":
             payload = {
                 "band": "wall",
                 "iters": args.iters,
-                "results": run_wall(args.op, selected, device, generic, args.iters),
+                "results": run_wall(args.op, call, selected, device, generic, args.iters),
             }
         else:
             payload = {
                 "band": "device",
                 "reps": args.reps,
-                "order": run_device(args.op, selected, device, generic, args.reps),
+                "order": run_device(args.op, call, selected, device, generic, args.reps),
             }
     finally:
         ttnn.close_device(device)

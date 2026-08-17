@@ -1,0 +1,9 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+shape: shape
+dtype: dtype
+layout: layout
+kwargs:
+  repeat_dims: repeat_shape
+suites: [nightly]

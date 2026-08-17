@@ -1,0 +1,11 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+# `ri_specs` bundles the shape with the repeat count and dim, so these descend into it.
+shape: ri_specs.shape
+dtype: dtype
+layout: layout
+kwargs:
+  repeats: ri_specs.repeats
+  dim: ri_specs.dim
+suites: [nightly]

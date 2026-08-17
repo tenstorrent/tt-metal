@@ -1,0 +1,19 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+shape: input_shape
+dtype: input_a_dtype
+layout: input_a_layout
+kwargs:
+  memory_config: output_memory_config
+# Tile-aligned bfloat8_b comes only from `broaden_suite`; everything else from `nightly`. The grids
+# overlap, so the union is deduplicated on the input signature.
+suites: [nightly, broaden_suite]
+
+# The ported entry point covers the interleaved tile path plus bfloat16 unpadding. Non-tile-aligned
+# bfloat8_b reaches the generic only through a typecast step that lives in no ported builder, so
+# those points must route to native rather than being served here.
+scope:
+  layouts: [tile]
+  dtypes: [bfloat16, bfloat8_b]
+  tile_aligned: [bfloat8_b]
