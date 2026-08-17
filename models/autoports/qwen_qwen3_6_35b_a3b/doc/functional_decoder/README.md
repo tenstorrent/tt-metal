@@ -65,9 +65,14 @@ decode_forward(x, *, current_pos=None, page_table=None) -> ttnn.Tensor
                  full_attention; linear_attention ignores it (its recurrence carries no
                  position), so it may be omitted for those layers.
                  Valid range is -1 or 0 .. supported_context-1. The upper bound is the
-                 caller's responsibility: the value lives in device memory, so checking it
-                 here would need a host read, which the runtime path forbids (§3.7). A value
-                 >= supported_context indexes past the page-table row and the RoPE table.
+                 caller's responsibility. A value >= supported_context indexes past the
+                 page-table row and the RoPE table. Note the honest form of the reason: an
+                 exact *rejection* would need a host read, which the runtime path forbids
+                 (§3.7) -- but a device-side clamp would not, and the RoPE lookup already
+                 clamps the other end (`ttnn.maximum(idx, 0)`, §7 item 6, measured below
+                 run-to-run noise). So the upper bound is unchecked because nothing has
+                 needed it yet, not because it is impossible; a serving stage that wants
+                 defence in depth can add the symmetric `ttnn.minimum` for the RoPE half.
     page_table   same tensor as prefill.
     returns      [1, 1, max_batch, 2048]
 ```
@@ -123,7 +128,7 @@ slots.
 Commands (all from `$TT_METAL_HOME`):
 
 ```bash
-# what logs/test_suite_main.log is: both files in one invocation (107 items)
+# what logs/test_suite_main.log is: both files in one invocation (109 items)
 python -m pytest \
   models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py \
   models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py \
@@ -137,13 +142,13 @@ pytest models/autoports/qwen_qwen3_6_35b_a3b/tests/test_long_context.py -m slow
 ```
 
 Logs: `logs/test_suite_main.log` (the CPU algebra tests + the whole device suite, including the
-real-weight cases — **106 passed, 0 failed** of 107 collected (the 1 skipped is `test_docs_match_artifacts`, which defers until the docs are rendered from this run's artifacts; `logs/test_docs.log` records it passing after that): 32 CPU-only + 75 device cases),
+real-weight cases — **108 passed, 0 failed** of 109 collected (the 1 skipped is `test_docs_match_artifacts`, which defers until the docs are rendered from this run's artifacts; `logs/test_docs.log` records it passing after that): 32 CPU-only + 77 device cases),
 `logs/test_suite_gate.log` (the same command run *before* the rest of the evidence pass, as a
 regression gate on the shipped code — the authoritative run is `test_suite_main.log`, which is last),
 `logs/long_*.log` (one per advertised-context case, **6 passed**), `logs/diag_*.txt` (the §3.8
 diagnostics and the §3.2 classification), `watcher/pytest.log` (**8 passed**). The suite is fast on a warm kernel cache
 because `conftest.py` caches layer pairs per (kind, batch, context, weights) for the session:
-building one costs ~1.5 GiB of weight conversion, and the 75 device cases share 18 of them.
+building one costs ~1.5 GiB of weight conversion, and the 77 device cases share 18 of them.
 Machine-readable PCC rows: `pcc.jsonl` (276), `pcc_real_weights.jsonl` (6),
 `long_context.jsonl` (8). Every number quoted below is re-derivable from those files —
 `tests/render_docs.py` regenerates the derived sections (§3.1, §3.8, §5 and the scattered
@@ -172,8 +177,8 @@ a partial run can neither mix rows in nor delete them:
 | `decode-ragged` (per-slot positions) | 4 | 0.9999937 | user=0, pos=128 |
 | `decode-active-slot` (with `current_pos=-1` peers) | 2 | 0.9999931 | user=2 |
 | `decode-seeded-state` (random DeltaNet state) | 1 | 0.9999720 |  |
-| `traced-decode[linear]` | 2 | 0.9999891 | pos=257, batch=8 |
-| `traced-decode[full]` | 2 | 0.9999943 | pos=256, batch=8 |
+| `traced-decode[linear]` | 2 | 0.9999887 | pos=512, batch=8 |
+| `traced-decode[full]` | 2 | 0.9999952 | pos=512, batch=8 |
 | `paged-kv` cache contents | 2 | 0.9999835 | keys |
 | `linear` conv/recurrent state | 2 | 0.9999450 | recurrent_state |
 
@@ -427,7 +432,7 @@ is 8192 sequential accumulation steps and 512 is 512:
 |---|---|---|---|---|---|---|---|---|
 | 32 | 0.9998 | 0.9998 | 0.9995 | 0.9875 | 0.9170 | 0.7664 | **27.37 ms** | the op's own default -- worst measured |
 | 64 | 0.9998 | 0.9998 | 0.9997 | 0.9939 | 0.9707 | 0.9179 | -- |  |
-| 128 | 0.9998 | 0.9998 | 0.9998 | 0.9980 | 0.9839 | 0.9704 | **11.54 ms** | what `k_chunk_size=0` resolves to; shipped in round 2 |
+| 128 | 0.9998 | 0.9998 | 0.9998 | 0.9980 | 0.9839 | 0.9704 | **11.53 ms** | what `k_chunk_size=0` resolves to; shipped in round 2 |
 | 256 | 0.9998 | 0.9998 | 0.9998 | 0.9989 | 0.9857 | 0.9809 | **8.73 ms** |  |
 | **512** | 0.9998 | 0.9998 | 0.9998 | 0.9997 | 0.9977 | 0.9825 | **7.45 ms** | **ships**; largest legal chunk |
 | 1024 | L1 | L1 | L1 | L1 | L1 | L1 | -- | exceeds L1 (see below) |
@@ -464,13 +469,13 @@ core/head equals `11x10` at 1 core/head to the last digit, so neither is the var
 
 | setting | op time @262144 | op PCC @262143 | |
 |---|---|---|---|
-| `no config` | **28.191 ms** | 0.7664 | = k32, 1 core -- what the layer ran before any sweep |
-| `op default (k32, 1 core)` | **27.367 ms** | 0.7664 | the substituted default, spelled out |
-| `k0 dynamic, 1 core` | **11.539 ms** | 0.9704 | k128; shipped in round 2 |
-| `k256, 1 core` | **8.732 ms** | 0.9809 |  |
+| `no config` | **28.194 ms** | 0.7664 | = k32, 1 core -- what the layer ran before any sweep |
+| `op default (k32, 1 core)` | **27.368 ms** | 0.7664 | the substituted default, spelled out |
+| `k0 dynamic, 1 core` | **11.533 ms** | 0.9704 | k128; shipped in round 2 |
+| `k256, 1 core` | **8.727 ms** | 0.9809 |  |
 | `k512, 1 core` | **7.453 ms** | 0.9825 | **ships** |
-| `k256, 16 cores` | **1.388 ms** | 0.9997 | fastest overall -- and unshippable, see above |
-| `k32, 16 cores` | **1.919 ms** | 0.0000 | the op default's chunk at 16 cores |
+| `k256, 16 cores` | **1.385 ms** | 0.9997 | fastest overall -- and unshippable, see above |
+| `k32, 16 cores` | **1.885 ms** | 0.0000 | the op default's chunk at 16 cores |
 
 There is **no accuracy/latency trade-off inside the safe family**: bigger chunks are both faster and
 more accurate, so the largest legal chunk wins on both counts. The genuinely fastest setting in the
@@ -534,15 +539,15 @@ Selection deliberately spans both layer kinds and every device-facing mechanism 
 traced decode capture+replay, chunked prefill continuation, ragged per-slot `current_pos`,
 `current_pos = -1` slot skipping, the paged-cache write path and the linear-attention state.
 
-Result: **8 passed, 0 failed** (`watcher/pytest.log`), watcher log 5406 lines / 366146 bytes raw
+Result: **8 passed, 0 failed** (`watcher/pytest.log`), watcher log 6483 lines / 439253 bytes raw
 (`watcher/generated/watcher/watcher.log.gz`, 15.7 KB gzipped — gzipped so the artifact stays under
 this repo's 500 KB committed-file limit regardless of run length; inspect with `zless`/`zgrep`),
 and **no fatal, sanitize, out-of-bounds, stack/L1 overflow, invalid-NOC, CB-overrun or
 watcher-assert findings** — the automated grep in `run_watcher.sh` writes any hit to
 `watcher/watcher_hits.txt`, which is empty.
 
-The log's content is the expected benign mix: 10 periodic core-status dumps (`Dump #` blocks)
-holding 2640 `Device ...` core-state rows and 2641 `k_ids:` kernel-id lines, stack-usage
+The log's content is the expected benign mix: 12 periodic core-status dumps (`Dump #` blocks)
+holding 3168 `Device ...` core-state rows and 3169 `k_ids:` kernel-id lines, stack-usage
 summaries, a legend and attach/detach lines — no diagnostic classes. The line count is a function
 of how many 10-second polls the run spans, not of correctness, so it varies between runs of the
 same selector depending on how much kernel compilation is cached.
@@ -609,7 +614,7 @@ mode/kind — see `work_log.md` §7). Artifacts per case in `tracy/<kind>_<mode>
 | `<mode>_perf_report.csv` | the same rows as CSV, signpost-filtered (`--csv`) |
 | `<mode>_perf_report.console.log` | `--csv`-run stdout, kept for provenance |
 | `<mode>_perf_report_stacked.csv` / `.png` | tt-perf-report's stacked breakdown |
-| `<mode>_ops.csv.gz` | the raw post-processed Tracy ops CSV the report was built from (1.2-21 MB raw; `run_perf.sh` gzips it after the reports, so `gunzip -k` before re-running `tt-perf-report`). The two **decode** CSVs exceed this repo's 500 KB committed-file limit even gzipped (1.72 MB / 730 KB) and are excluded by `tracy/.gitignore`; both prefill CSVs (432 KB / 151 KB) are committed — see `tracy/README.md` |
+| `<mode>_ops.csv.gz` | the raw post-processed Tracy ops CSV the report was built from (1.2-21 MB raw; `run_perf.sh` gzips it after the reports, so `gunzip -k` before re-running `tt-perf-report`). The two **decode** CSVs exceed this repo's 500 KB committed-file limit even gzipped (1.72 MB / 731 KB) and are excluded by `tracy/.gitignore`; both prefill CSVs (432 KB / 151 KB) are committed — see `tracy/README.md` |
 | `tracy_run.log.gz` | full Tracy + pytest transcript (gzipped) |
 
 Plus `perf_host_summary.jsonl` (host wall-clock rows) and `perf_summary.json` (reduced table,
@@ -638,12 +643,14 @@ that is easy to assert and easy to break:
     ! -newer models/autoports/qwen_qwen3_6_35b_a3b/tt/functional_decoder.py
   ```
 
-  It currently lists exactly these, and each is explained:
+  <!-- render_docs: freshness list (generated) -->
+It currently lists exactly these, and each is explained:
 
 * `.gitignore`
 * `functional_decoder/logs/measure_expert_union.log`
 * `functional_decoder/logs/probe_dram_capacity.log`
 * `functional_decoder/tracy/.gitignore`
+* `functional_decoder/triage/README.md`
 * `functional_decoder/triage/tt-triage-perf-hang.txt`
 * `functional_decoder/triage/tt-triage.txt`
 * `functional_decoder/weight_stats/layer_00.json`
@@ -656,6 +663,7 @@ expert-union and DRAM-capacity probes, neither of which imports `functional_deco
 generated by `tests/render_docs.py`, which excludes only the three logs the pass writes *after*
 rendering (`render_docs.log`, `render_docs_check.log`, `test_docs.log`) -- running the raw command
 may show those, and their age says nothing about the layer.
+<!-- /render_docs -->
 
   If a later source edit adds a hit, prefer re-running the affected artifact over arguing about it;
   `git diff` tells you whether the edit could change behaviour at all (a docstring or comment cannot,
@@ -678,13 +686,13 @@ those columns and divides by the iteration count.
 
 | case | shape | ops in window | device kernel / iter | op-to-op gap / iter | host wall / iter |
 |---|---|---|---|---|---|
-| prefill `linear` | seq 2048, batch 1 | 1750 (2 iters) | **342.05 ms** | 0.882 ms | 343.36 ms |
-| prefill `full` | seq 2048, batch 1 | 392 (2 iters) | **281.61 ms** | 0.137 ms | 282.06 ms |
-| decode `linear` (traced) | batch 32, `cur_pos` 4095 | 968 (8 iters) | **57.89 ms** | 0.089 ms | 58.01 ms |
-| decode `full` (traced) | batch 32, `cur_pos` 4095 | 872 (8 iters) | **50.18 ms** | 0.236 ms | 50.45 ms |
+| prefill `linear` | seq 2048, batch 1 | 1750 (2 iters) | **341.85 ms** | 0.875 ms | 343.16 ms |
+| prefill `full` | seq 2048, batch 1 | 392 (2 iters) | **281.30 ms** | 0.121 ms | 281.73 ms |
+| decode `linear` (traced) | batch 32, `cur_pos` 4095 | 968 (8 iters) | **57.86 ms** | 0.089 ms | 57.98 ms |
+| decode `full` (traced) | batch 32, `cur_pos` 4095 | 872 (8 iters) | **49.99 ms** | 0.236 ms | 50.26 ms |
 
 As single-layer host throughput (`perf_host_summary.jsonl`, `tokens_per_s_host`): prefill
-**7261 tok/s** (`full`) / **5965 tok/s** (`linear`) at seq 2048 batch 1, and decode **634 tok/s**
+**7269 tok/s** (`full`) / **5968 tok/s** (`linear`) at seq 2048 batch 1, and decode **637 tok/s**
 (`full`) / **552 tok/s** (`linear`) aggregated across the 32-slot batch (i.e. 32 tokens per
 ~50/58 ms traced iteration; `iters * batch / elapsed`, `test_perf.py:163`). These are *per layer*; a 40-layer model at this
 per-layer cost would be far too slow to serve, which is what the `optimize` stage exists for and
@@ -697,10 +705,10 @@ iteration, i.e. `post_attention_layernorm` — rather than by hand:
 
 | case | token mixer | expert matmuls | MoE dense-intermediate elementwise | total |
 |---|---|---|---|---|
-| prefill `linear` | 63.62 ms (18.6%) | 227.25 ms (66.4%) | 51.19 ms (15.0%) | 342.05 ms |
-| prefill `full` | 3.81 ms (1.4%) | 226.67 ms (80.5%) | 51.12 ms (18.2%) | 281.61 ms |
-| decode `linear` | 8.83 ms (15.3%) | 18.57 ms (32.1%) | 30.49 ms (52.7%) | 57.89 ms |
-| decode `full` | 1.05 ms (2.1%) | 18.56 ms (37.0%) | 30.56 ms (60.9%) | 50.18 ms |
+| prefill `linear` | 63.55 ms (18.6%) | 227.24 ms (66.5%) | 51.06 ms (14.9%) | 341.85 ms |
+| prefill `full` | 3.81 ms (1.4%) | 226.57 ms (80.5%) | 50.91 ms (18.1%) | 281.30 ms |
+| decode `linear` | 8.82 ms (15.2%) | 18.58 ms (32.1%) | 30.46 ms (52.6%) | 57.86 ms |
+| decode `full` | 1.05 ms (2.1%) | 18.57 ms (37.1%) | 30.37 ms (60.8%) | 49.99 ms |
 
 * **At the profiled shape the MoE is the whole cost.** (Only at the profiled shape — see the
   position-dependence table below, which is the part that matters for the advertised context.)
@@ -709,14 +717,14 @@ iteration, i.e. `post_attention_layernorm` — rather than by hand:
   2.1% of decode. At *this* shape the
   optimisation budget belongs to expert routing, and — less obviously — to the **elementwise work over the
   dense-over-256-expert intermediates**, which is
-  18.2% of prefill and
-  60.9% of decode, i.e. larger than
+  18.1% of prefill and
+  60.8% of decode, i.e. larger than
   the expert matmuls themselves in decode. `linear` layers add the gated delta rule on top: mixer
   18.6% of prefill and
-  15.3% of decode.
-* **Device-bound, not dispatch-bound.** Op-to-op gap is 0.05-0.47% of device
-  time (`gap/device` = 0.258% / 0.049% / 0.154% / 0.470% for the four rows in table order), and
-  host wall-clock exceeds device kernel time by 0.16-0.52%. The traced decode
+  15.2% of decode.
+* **Device-bound, not dispatch-bound.** Op-to-op gap is 0.04-0.47% of device
+  time (`gap/device` = 0.256% / 0.043% / 0.154% / 0.472% for the four rows in table order), and
+  host wall-clock exceeds device kernel time by 0.15-0.53%. The traced decode
   has essentially no dispatch overhead left to remove.
 
 **These rows are measured at `supported_context = 8192`, not the advertised 262144**
@@ -735,15 +743,23 @@ with `linear` as the control — its mixer is position-independent, so its extra
 
 | kind | per chunk | x 128 chunks | measured | unexplained by the position-independent model |
 |---|---|---|---|---|
-| `linear` (control) | 342.05 ms | 43.78 s | 43.872 s | +0.09 s |
-| `full` | 281.61 ms | 36.05 s | 48.837 s | **+12.79 s** |
+| `linear` (control) | 341.85 ms | 43.76 s | 43.876 s | +0.12 s |
+| `full` | 281.30 ms | 36.01 s | 48.832 s | **+12.83 s** |
 
-The control lands within 0.09 s (0.2%), which is what makes the `full` row
+The control lands within 0.12 s (0.3%), which is what makes the `full` row
 readable: **12.8 s, 26% of that prefill, is not explained by position-independent
 work**, and the only structural difference between the two kinds is the token mixer. So the `full`
 attention path is on the order of **27% of an advertised-context prefill**, not the
-1.4% the profiled row shows. (Part of the excess is per-chunk program creation for
-128 distinct `chunk_start_idx` values — §6 limitation 6 — which is also attention-path cost.)
+1.4% the profiled row shows.
+
+That excess splits into two costs with **different fixes**, and the committed CSV separates them.
+Chunked SDPA scales with `Sk = chunk_start_idx + Sq`, so chunk *i* costs `(i+1)x` the first chunk's
+`SDPAOperation` (0.870 ms here); summing over 128 chunks gives
+**~7.2 s of device attention** (15% of the prefill), leaving
+~5.6 s of per-chunk **program creation** for 128 distinct
+`chunk_start_idx` values (§6 limitation 6). The first wants a better SDPA configuration; the second
+wants the device-tensor offset form, which `probe_ttnn_ops.py` shows works on this build. Quoting only
+the combined figure would hand `optimize` one problem where there are two.
 These are cold single-process wall times, not warmed latencies, so treat the 128x figures as an
 order-of-magnitude split rather than a benchmark. `optimize` should not read the 1.3% row as
 permission to skip prefill attention.
@@ -772,9 +788,9 @@ belong to the `optimize` stage, not here.
    checkable against `tracy/full_prefill/prefill_perf_report.csv`, where the row
    `SparseMatmulDeviceOperation active=?/4096 x 32 x 2048 x 1024` appears **8 times** with
    `Cores` 32.0 — issued 4x per prefill iteration (512 tokens = 16 tile-groups per call,
-   `4096 = 16 groups x 256 experts`) over a 2-iteration window. Those rows sum to 294.15 ms,
-   i.e. 36.77 ms per call and 147.08 ms per iteration, which is the §5 figure. Then
-   `16 groups x 162.3 experts x (32 x 2048 x 1024 x 2) FLOP / 36.77 ms ~= 9.5 TFLOP/s`.
+   `4096 = 16 groups x 256 experts`) over a 2-iteration window. Those rows sum to 294.02 ms,
+   i.e. 36.75 ms per call and 147.01 ms per iteration, which is the §5 figure. Then
+   `16 groups x 162.3 experts x (32 x 2048 x 1024 x 2) FLOP / 36.75 ms ~= 9.5 TFLOP/s`.
    Passing `tt-perf-report --active-experts 162` would make the tool report the utilization
    directly instead; the hand derivation is kept because it is the number quoted here.
 2. **`nnz` is left inferred** for every `sparse_matmul`. A static count that disagrees with
@@ -798,7 +814,7 @@ belong to the `optimize` stage, not here.
    program is compiled per distinct prefill-chunk offset — 128 of them for a full-context prefill
    (262144 / 2048). The op's device-tensor form (`chunk_start_idx_tensor`) would make the offset a
    runtime argument and collapse that to one program; `probe_ttnn_ops.py` confirms it works on this
-   build (PCC 0.999778). It is not used here only because feeding it without a host write needs a
+   build (PCC 0.999777). It is not used here only because feeding it without a host write needs a
    setup-time offsets table plus a per-chunk device slice, which is program-cache tuning rather
    than correctness — exactly the `optimize` stage's job. Nothing about the current path is wrong,
    it just compiles more programs than it needs to.
@@ -853,7 +869,7 @@ belong to the `optimize` stage, not here.
    clamped row is discarded because SDPA skips that slot. `test_decode_skips_inactive_slots_with_negative_position`
    now also asserts the inactive rows are finite. Cost: exactly one extra device op per traced
    `full` decode iteration — the scalar `maximum` lowers to a `UnaryDeviceOperation`, so the report
-   shows 12 unary ops/iteration instead of 11 with the group total unchanged at 10.46 ms/iter, i.e.
+   shows 12 unary ops/iteration instead of 11 with the group total unchanged at 10.39 ms/iter, i.e.
    below run-to-run noise at this resolution.
 7. **The RoPE tables were in the wrong layout, and it cost an O(context) op per decode step.**
    `ttnn.embedding` converts a TILE-layout weight to ROW_MAJOR **on every call**
@@ -887,11 +903,12 @@ belong to the `optimize` stage, not here.
 
 10. **A `start_pos` alignment "fix" that widened the contract into a silent page-write bug.** Trying to
     make `sdpa_chunk` an actual lever (review round 5), the check became `start_pos % cfg.sdpa_chunk`
-    instead of `start_pos % PREFILL_ALIGN`. That closed a real hole — `sdpa_chunk = 256` had been
-    accepting `start_pos = 128`, which the op turns into chunk index `128 // 256 == 0` — but opened a
-    worse one downwards: at `sdpa_chunk = 32` a `start_pos` of 32 passed, and the paged fill computes
-    its block offset as `abs_pos // block_size = 32 // 64 = 0`, writing the chunk into the wrong page
-    while the SDPA masks as if it were elsewhere. No error either way. The lesson is that `start_pos`
+    instead of `start_pos % PREFILL_ALIGN`. The hole it was aimed at was smaller than believed —
+    `sdpa_chunk = 256` did accept `start_pos = 128`, but the op *rejects* that loudly
+    (`sdpa_device_operation.cpp:277-292`), so it would have been a crash, not a wrong answer — and it
+    opened a genuinely silent one downwards: at `sdpa_chunk = 32` a `start_pos` of 32 passed, and the
+    paged fill computes its block offset as `abs_pos // block_size = 32 // 64 = 0`, writing the chunk
+    into the wrong page with nothing to complain. The lesson is that `start_pos`
     has **three** consumers with independent alignment requirements (SDPA chunk index, paged block
     offset, padding bound) and the accepted value is the maximum, not any one of them. Now:
     `PREFILL_ALIGN` is the single runtime bound, `__post_init__` asserts it is a multiple of both
@@ -931,10 +948,15 @@ One repo file outside the autoport directory was touched: `conftest.py` (§7 ite
   `ttnn/cpp/ttnn/operations/transformer/sdpa/device/sdpa_program_factory.cpp:133` for the scalar
   offset, and the same expression at
   `.../sdpa/device/kernels/dataflow/reader_interleaved.cpp:260` for the device-tensor
-  (`chunk_start_idx_tensor`) offset. A misaligned offset places the causal-mask diagonal in the
-  wrong tile and returns *silently* wrong values — the op validates only
-  `chunk_start_idx >= 0` (`sdpa_device_operation.cpp:187`) — so `prefill_forward` rejects it
-  rather than rounding. Consequences for later stages: a chunked-prefill or prefix-cache boundary
+  (`chunk_start_idx_tensor`) offset. **For the path this layer takes the op validates that itself**:
+  with an explicit `program_config` and the scalar offset, `sdpa_device_operation.cpp:277-292`
+  `TT_FATAL`s on `chunk_start_idx % q_chunk_size` and `% k_chunk_size`, so a misaligned offset is
+  loud, not silent. (Only the device-tensor form skips those checks, and this layer does not use it.
+  An earlier version of this section cited `sdpa_device_operation.cpp:187`'s `>= 0` as if it were the
+  only validation, which was wrong.) The consumer that really is silent is the **paged fill**:
+  `abs_pos // block_size` truncates and writes the chunk into the wrong page without complaint. That
+  is what `prefill_forward`'s check is protecting, and why its bound is `PREFILL_ALIGN` — a multiple
+  of `block_size` — rather than the SDPA chunk alone. Consequences for later stages: a chunked-prefill or prefix-cache boundary
   that is page-aligned (64) but not 128-aligned is not usable as a `start_pos`, and **no knob changes
   that.** The accepted alignment is the *maximum* of three independent constraints — the SDPA chunk
   index (`sdpa_chunk`), the paged fill's block offset (`block_size` = 64), and the padding, which
@@ -957,9 +979,14 @@ One repo file outside the autoport directory was touched: `conftest.py` (§7 ite
   the best one that is correct at *every* context. The fastest one is 5.4x quicker and wrong below
   ~4096 keys, so taking it means bucketing traces per context range and proving the boundary — the
   knobs are `decode_sdpa_k_chunk_size` / `decode_sdpa_max_cores_per_head` /
-  `decode_sdpa_program_config`, and `diag_sdpa_decode.py` is the harness. Note that the *accuracy*
-  question is closed: at the advertised context the shipped setting reaches 0.9999939 on-model, in
-  line with every other context, so this is now purely a latency trade.
+  `decode_sdpa_program_config`, and `diag_sdpa_decode.py` is the harness. The accuracy question is
+  closed **at the layer contract** — at the advertised context the shipped setting reaches 0.9999939
+  on-model, in line with every other context — but not at model level, and the distinction matters
+  here. The *attention branch alone* is 0.987 at 262144 keys against both fp32 and an exact-bf16
+  control (§3.8 step 1); the layer reads 0.9999939 because attention is one of two summed
+  contributions and the residual dominates. That dilution is per layer and does not compound the way
+  the error itself might across 10 `full` layers, so **stage 5 should measure it end to end rather
+  than inherit "closed"**.
 * **`max_cores_per_head_batch` interacts with the decode batch.** The factory divides the core
   budget by the batch (`sdpa_decode_program_factory.cpp:195-196`), so a stage that changes the decode
   batch — or adds continuous batching where the active-slot count varies per step — changes the

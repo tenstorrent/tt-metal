@@ -270,7 +270,7 @@
 {"label": "linear conv_state", "pcc": 0.9999870619451352, "maxabs": 0.026322364807128906, "rel_rms": 0.007781242020428181}
 {"label": "linear recurrent_state", "pcc": 0.9999449554886852, "maxabs": 0.0011434052139520645, "rel_rms": 0.01191785279661417}
 {"label": "decode-seeded-state", "pcc": 0.9999720344745742, "maxabs": 0.03385007381439209, "rel_rms": 0.00757239805534482}
-{"label": "traced-decode[linear] pos=256 batch=8", "pcc": 0.9999895496485854, "maxabs": 0.025272130966186523, "rel_rms": 0.004591795615851879}
-{"label": "traced-decode[linear] pos=257 batch=8", "pcc": 0.9999891194053129, "maxabs": 0.027921438217163086, "rel_rms": 0.004683281760662794}
-{"label": "traced-decode[full] pos=256 batch=8", "pcc": 0.999994254080921, "maxabs": 0.023062705993652344, "rel_rms": 0.00346907926723361}
-{"label": "traced-decode[full] pos=257 batch=8", "pcc": 0.9999944434393734, "maxabs": 0.0240478515625, "rel_rms": 0.0034097027964890003}
+{"label": "traced-decode[linear] pos=511 batch=8", "pcc": 0.9999892158081422, "maxabs": 0.026685714721679688, "rel_rms": 0.004652639850974083}
+{"label": "traced-decode[linear] pos=512 batch=8", "pcc": 0.9999887320144984, "maxabs": 0.02660226821899414, "rel_rms": 0.004757716786116362}
+{"label": "traced-decode[full] pos=511 batch=8", "pcc": 0.9999951774765552, "maxabs": 0.02337169647216797, "rel_rms": 0.0031920333858579397}
+{"label": "traced-decode[full] pos=512 batch=8", "pcc": 0.9999951525198453, "maxabs": 0.021674394607543945, "rel_rms": 0.00318715488538146}

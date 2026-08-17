@@ -14,7 +14,7 @@ One directory per measured case (`<layer kind>_<mode>`), produced by
 
 This repository's `check-large-files` pre-commit hook rejects committed files over 500 KB, and
 the two decode ops CSVs exceed it even gzipped (`linear_decode` 1.72 MB,
-`full_decode` 730 KB — one traced decode of this layer records 109 (full) /
+`full_decode` 731 KB — one traced decode of this layer records 109 (full) /
 121 (linear) ops per iteration and the committed window holds 8 iterations). They are therefore
 excluded by `.gitignore` in this directory; the two prefill ops CSVs
 (`full_prefill` 151 KB, `linear_prefill` 432 KB)

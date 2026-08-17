@@ -205,7 +205,7 @@ re-discover them.
 | `ttnn.softplus` | fp32 relmax 3.4e-4, bf16 relmax 3.2e-2 | the `a + dt_bias` path is forced to fp32 (`dt_bias` reaches +15.6) | no — development finding |
 | `ttnn.exp` with a `-1e30` additive mask | -> 0, no NaN | decay masks are added **before** `exp`; cumulative gates reach ~-1e5 so `exp` of the unmasked upper triangle would overflow to `inf` and produce `0*inf = NaN` | no — development finding; the behaviour it justifies is exercised by every `linear` test |
 | `ttnn.permute` `(0,3,2,1)` / `(2,3,0,1)` | ok | gets `beta`/`g` from `[1,1,T,32]` into the `[.., heads, .., 1]` broadcast layout without a relayout | no — development finding; exercised by every `linear` test |
-| `chunked_scaled_dot_product_attention` with `chunk_start_idx_tensor` | ok, pcc 0.999778 | the device-tensor offset form **works** on this build; not adopted because feeding it without a host write needs a setup-time offsets table plus a per-chunk device slice, and its only benefit is one program instead of 128 for a full-context prefill (README §6 limitation 6, handed to `optimize`) | yes |
+| `chunked_scaled_dot_product_attention` with `chunk_start_idx_tensor` | ok, pcc 0.999777 | the device-tensor offset form **works** on this build; not adopted because feeding it without a host write needs a setup-time offsets table plus a per-chunk device slice, and its only benefit is one program instead of 128 for a full-context prefill (README §6 limitation 6, handed to `optimize`) | yes |
 
 Three further aliasing facts were **not** established by `probe_ttnn_ops.py` (which only checks
 buffer addresses for the in-place case, `p_inplace`) but by ad-hoc buffer-address comparisons while
@@ -612,7 +612,7 @@ evidence in `doc/functional_decoder/` was produced by one serialized pass in the
 |---|---|
 | `tt/functional_decoder.py` with documented prefill/decode contract for both layer kinds | module docstring + README §2; `test_config_matches_hf`, `test_layer_kinds_cover_the_whole_model` |
 | decode runs fully under traced execution | `test_traced_decode_pcc` (PCC from replay), `test_traced_decode_matches_eager` (bit-identical) |
-| every layer kind, real config shapes, paged prefill/decode, page table, current position | README §3.1/§3.4; 276 PCC rows in `pcc.jsonl` (106 tests: 32 CPU-only + 75 device) |
+| every layer kind, real config shapes, paged prefill/decode, page table, current position | README §3.1/§3.4; 276 PCC rows in `pcc.jsonl` (108 tests: 32 CPU-only + 77 device) |
 | longest feasible seq/context | 262143-token prefill and position-262143 decode for both kinds (`long_context.jsonl`) |
 | non-aligned lengths around chunk/page/tile boundaries | 1/32/33/64/65/128/129/1024/1025/2048/2049/3000/4096 + 262143 per kind |
 | `doc/context_contract.json` | derived from evidence by `tests/write_context_contract.py`, re-checked by `test_context_contract_file_is_consistent`; **no capability reduction** |
@@ -621,7 +621,7 @@ evidence in `doc/functional_decoder/` was produced by one serialized pass in the
 | warmed prefill + traced warmed decode perf with tt-perf-report tables + CSV/provenance | `tracy/<kind>_<mode>/`, `perf_summary.json`, README §5 |
 | runtime fallback audit clean | `test_no_runtime_host_fallback` (static: 26 runtime methods plus every module-level helper, the helper list derived from the module rather than hand-written) + `test_no_host_ops_during_forward` (dynamic: ttnn host bridges monkeypatched to raise) |
 | determinism / repeated input | `test_prefill_determinism`, `test_decode_determinism` (bit-identical over 3 repeats) |
-| watcher-clean run | `watcher/` — 8 passed, 5406-line log (10 dumps), `watcher_hits.txt` empty (README §3.9) |
+| watcher-clean run | `watcher/` — 8 passed, 6483-line log (12 dumps), `watcher_hits.txt` empty (README §3.9) |
 | README + work log with commands, PCC, perf, limitations, artifacts | this file + `README.md` |
 
 ## 9. Independent stage review (round 1) and the work it produced
@@ -779,52 +779,24 @@ Acted on from the same review's "Other Concerns":
 | `triage/README.md` explained only the first empty triage capture; README §8 described the directory in the singular | Both cover the second occurrence now. |
 | README §3's count sentence read "106 passed ... 32 CPU-only + 75 device" without saying 107 were collected | The generated line now states the collected total and names the one skip. |
 
-## 15. Commits
+## 15. Independent stage review (round 7) and the work it produced
 
-Local only; nothing pushed.
+`$stage-review` returned **more-work-needed** a seventh time. No P1, and it re-derived the substance
+of the stage independently — §3.1, §3.2, §4, §5's four perf rows and the sparse derivation, §3.8's
+identity control and all four tables, the watcher log, 24/24 probes — and confirmed the `start_pos`
+contract is now correct against every consumer. Four findings, two of which were mechanisms this
+stage had added and which were not actually working.
 
-| SHA | contents |
+| finding | outcome |
 |---|---|
-| `12c947d9147670eb0b3a9b23136635b89de709f3` (`12c947d9147`) | the whole stage: `models/autoports/qwen_qwen3_6_35b_a3b/**` plus the `conftest.py` guarded-import fix (README §7 item 4) |
-| `b2bb054161fcde8a1664f848ce0f35ad3f58aeea` (`b2bb054161f`) | records the SHA above |
-| `ea58fe8fa7ae1138dbc35a363b6b817faeeed605` (`ea58fe8fa7a`) | **review rounds 1 and 2**: the fixes in §9 and §10 — ROW_MAJOR RoPE tables, the per-slot state reset, and the `decode_sdpa_max_cores_per_head = 1` config whose *rationale* round 4 later overturned — and every artifact regenerated against that code |
-| `b5c71c62624f984353960c1d6c266dc2fbd428d2` (`b5c71c62624`) | **review round 3** (§11): the classified real-weight maxabs anomaly, `_zero_`, `_tilized`, the provenance-log reset rule, and two new tests |
-| `60e2a90711448a9fd48366919a17f61a37026153` (`60e2a907114`) | **review round 4** (§12): the corrected decode-SDPA root cause and the shipped `decode_sdpa_k_chunk_size = 512`, the 2-D sweep with its identity control, `_zero_` via `ttnn.fill`, the ragged tail-reference cases, three new op probes, the extended maxabs sweep, and every artifact regenerated against that code |
-| `a08c264e60011b92fadb6f88d6b46660a9645888` (`a08c264e600`) | **review round 5** (§13): the `sdpa_chunk` alignment fix, the position-dependence correction to §5, the committed `tests/render_docs.py` + `test_docs_match_artifacts`, the corrected `exp_approx_mode` derivations, and every artifact regenerated against that code |
-| `e1c0248979bb56d154a3c2a8bdea99873266e501` (`e1c0248979b`) | **review round 6** (§14): the `start_pos` alignment fix (§7 item 10), the corrected evidence-pass ordering, §3.2 + the work-log counts + the freshness list moved into `render_docs.py`, `_row_major`, the `run_perf.sh` partial-run guard, and every artifact regenerated against that code |
-| later commits | documentation only: SHA records and analysis notes that could not be written before the commits they describe |
-
-A table cannot contain its own SHA, so the last rows are deliberately open-ended rather than
-chased with one more commit each time. The authoritative list is:
-
-```bash
-git log --oneline 12c947d9147^..HEAD -- models/autoports/qwen_qwen3_6_35b_a3b
-```
-
-Every commit is local; **nothing was pushed**. Only one file outside the autoport directory was ever
-touched (`conftest.py`, in the first commit).
-
-All evidence was regenerated after the last change to the shipped layer, one hardware command at a
-time. The round-4 pass ran in the order `/tmp/rev14.sh` records: main suite (gate) -> long-context
-(6 pytest processes) -> `write_context_contract.py` -> contract test -> op probes -> long-decode
-diagnostic -> real-weight maxabs diagnostic -> watcher -> Tracy perf (4 cases) ->
-`summarize_perf.py` -> main suite again, so `pcc.jsonl` is from the shipped code. The two SDPA
-sweeps ran *before* that pass, because their result is what selected the shipped configuration.
-
-Check it rather than trust it — but check it against the right reference. The shipped layer is
-`tt/functional_decoder.py`:
-
-```bash
-find models/autoports/qwen_qwen3_6_35b_a3b/doc -type f \
-  ! -newer models/autoports/qwen_qwen3_6_35b_a3b/tt/functional_decoder.py
-```
-
+| **P2 — the freshness-list generator was self-disabling.** Its anchor regex required the block to *end* on the line `` `functional_decoder`. ``, but the block it writes continues past that sentence — so it could rewrite the block exactly once and never match again. It reported `WARN`, which (unlike `MISS`) does not fail the run, while both documents asserted "the list is generated ... so it cannot describe a different set than the command returns" | **Fixed and negative-tested.** The block is delimited by explicit `<!-- render_docs: freshness list (generated) -->
 It currently lists exactly these, and each is explained:
 
 * `.gitignore`
 * `functional_decoder/logs/measure_expert_union.log`
 * `functional_decoder/logs/probe_dram_capacity.log`
 * `functional_decoder/tracy/.gitignore`
+* `functional_decoder/triage/README.md`
 * `functional_decoder/triage/tt-triage-perf-hang.txt`
 * `functional_decoder/triage/tt-triage.txt`
 * `functional_decoder/weight_stats/layer_00.json`
@@ -837,6 +809,7 @@ expert-union and DRAM-capacity probes, neither of which imports `functional_deco
 generated by `tests/render_docs.py`, which excludes only the three logs the pass writes *after*
 rendering (`render_docs.log`, `render_docs_check.log`, `test_docs.log`) -- running the raw command
 may show those, and their age says nothing about the layer.
+<!-- /render_docs -->
 
 **That command deliberately does not use the newest file under `tests/`, and round 4 was right to
 flag the earlier wording for glossing over it.** Test and harness files are edited after the layer

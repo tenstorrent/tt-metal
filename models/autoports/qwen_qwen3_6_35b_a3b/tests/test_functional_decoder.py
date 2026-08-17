@@ -548,12 +548,18 @@ def test_traced_decode_pcc(layer_pairs, kind):
     warmup forward and so perturbs the state), the state is rewound, and only then is the
     replay compared against HF. Two different positions are replayed through the same
     captured trace to prove ``current_pos`` is read from device memory.
+
+    The two positions straddle a **decode-SDPA k-chunk boundary** on purpose. The shipped
+    ``decode_sdpa_k_chunk_size`` is 512, so replaying at 511 and 512 changes the number of k-chunks
+    the op walks (1 -> 2) while the captured program stays the same. An earlier version replayed at
+    256/257, both inside the first chunk, which could not have caught a chunk count baked in at
+    capture time. 511 is also a non-aligned prefill length, so the padded-tail path is in the mix.
     """
     pair = layer_pairs(kind, max_batch_size=8, supported_context=2048)
     pair.tt.reset_state()
     cfg = pair.cfg
     batch = cfg.max_batch_size
-    prefill_len = 256
+    prefill_len = 511
 
     hf_caches = []
     for user_id in range(batch):
@@ -1041,9 +1047,10 @@ def test_sdpa_chunk_and_start_pos_alignment_agree(expect_error):
     """``sdpa_chunk`` is the prefill SDPA's ``q_chunk_size``, and it must stay compatible with the
     ``start_pos`` check that guards the op's integer-division contract.
 
-    The op converts an absolute offset to a chunk index by dividing by ``q_chunk_size`` and validates
-    only ``>= 0``, so a ``start_pos`` that is not a multiple of ``sdpa_chunk`` is *silently* wrong
-    (README §3.8's sibling trap, §7 item 8). The check used to be against the module constant
+    The op converts an absolute offset to a chunk index by dividing by ``q_chunk_size``. For the path
+    this layer takes it *validates* that (``sdpa_device_operation.cpp:277-292``), so misalignment is
+    loud there; the silent consumer is the paged fill's ``abs_pos // block_size``, which truncates.
+    The check used to be against the module constant
     ``PREFILL_ALIGN`` while the op received ``cfg.sdpa_chunk``, so the two could disagree:
     ``sdpa_chunk=256`` accepted ``start_pos=128`` and computed chunk index ``128 // 256 == 0``. This
     pins both halves of the fix — the construction-time validation, and that the runtime check reads
@@ -1079,3 +1086,57 @@ def test_sdpa_chunk_and_start_pos_alignment_agree(expect_error):
     source = inspect.getsource(fd.FunctionalDecoder.prefill_forward)
     assert "start_pos % PREFILL_ALIGN" in source, "prefill_forward no longer bounds start_pos by PREFILL_ALIGN"
     assert "padded seq_len" in source, "prefill_forward no longer checks start_pos + padded_len"
+
+
+@pytest.mark.parametrize("kind", KINDS)
+def test_prefill_continuation_must_be_contiguous(layer_pairs, expect_error, kind):
+    """A continued prefill has to resume exactly where the previous one ended.
+
+    The hazard this guards is specific and silent. `prefill_forward` pads its input up to
+    `PREFILL_ALIGN`, and for `full_attention` the paged fill writes the **padded** K/V into the cache
+    because it works in whole `block_size` pages. Those rows are exactly zero (`rms_norm(0) = 0`,
+    bias-free projections, `RoPE(0) = 0`), which is harmless inside the call — causal masking and the
+    output slice discard them — but a later chunk attending over them scores `q . 0 = 0`, gets
+    `exp(0) = 1` of softmax weight per padded slot and contributes zero value, i.e. a diluted result
+    with no error raised.
+
+    And because `start_pos` must itself be `PREFILL_ALIGN`-aligned, a chunk whose `seq_len` is not a
+    multiple of `PREFILL_ALIGN` has **no** legal continuation at all: rounding up to the next multiple
+    both skips the tokens in between and reads the padded zeros. So the contract is contiguity, and
+    this test pins it rather than leaving it as an undocumented precondition on the callers that are
+    most likely to hit it (chunked prefill and prefix caching, in the full-model and vLLM stages).
+    """
+    # Reuse an existing (kind, 2, 1024) pair: a fresh key costs ~1.5 GiB for the whole session and
+    # nothing evicts, which is what `conftest.py` logs every new key for. 1000 pads to exactly 1024,
+    # and the legal 512+512 continuation ends exactly at the context, so this shape is enough.
+    pair = layer_pairs(kind, max_batch_size=2, supported_context=1024)
+    pair.tt.reset_state()
+    device = pair.tt.cfg.mesh_device
+
+    # a non-aligned first chunk is fine on its own ... (500 pads to 512, leaving headroom so the
+    # illegal continuation below is rejected for *continuity*, not for exceeding the context)
+    x = ref.synthetic_hidden_states(pair.hf_config, 1, 500, seed=4)
+    tt_x = to_tt_prefill(device, x)
+    ttnn.deallocate(pair.tt.prefill_forward(tt_x, user_id=0, page_table=pair.page_table))
+    ttnn.deallocate(tt_x)
+
+    # ... but it cannot be continued: 500 is not a legal start_pos, and 512 -- the only aligned
+    # offset on offer -- would skip tokens 500..511 and read the padded tail this call just wrote.
+    nxt = ref.synthetic_hidden_states(pair.hf_config, 1, 128, seed=5)
+    tt_next = to_tt_prefill(device, nxt)
+    with expect_error(ValueError, "multiple of"):
+        pair.tt.prefill_forward(tt_next, user_id=0, page_table=pair.page_table, start_pos=500)
+    with expect_error(ValueError, "must continue from"):
+        pair.tt.prefill_forward(tt_next, user_id=0, page_table=pair.page_table, start_pos=512)
+
+    # an aligned chunk continues exactly where it ended, on the same slot, and a different slot keeps
+    # its own high-water mark
+    pair.tt.reset_state()
+    aligned = ref.synthetic_hidden_states(pair.hf_config, 1, 512, seed=6)
+    tt_aligned = to_tt_prefill(device, aligned)
+    ttnn.deallocate(pair.tt.prefill_forward(tt_aligned, user_id=0, page_table=pair.page_table))
+    ttnn.deallocate(pair.tt.prefill_forward(tt_aligned, user_id=0, page_table=pair.page_table, start_pos=512))
+    with expect_error(ValueError, "must continue from"):
+        pair.tt.prefill_forward(tt_aligned, user_id=1, page_table=pair.page_table, start_pos=512)
+    ttnn.deallocate(tt_aligned)
+    ttnn.deallocate(tt_next)

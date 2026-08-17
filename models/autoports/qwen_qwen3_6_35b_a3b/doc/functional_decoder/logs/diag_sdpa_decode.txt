@@ -1,182 +1,182 @@
-2026-08-17 22:16:53.999 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+2026-08-17 23:28:21.360 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
 Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
-2026-08-17 22:16:54.128 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
-2026-08-17 22:16:54.128 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
-2026-08-17 22:16:54.128 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
-2026-08-17 22:16:54.128 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
-2026-08-17 22:16:54.129 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:569)
-2026-08-17 22:16:54.129 | info     |             UMD | Firmware bundle version 19.9.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
-2026-08-17 22:16:54.133 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
-2026-08-17 22:16:54.355 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:168)
-2026-08-17 22:16:54.355 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
-2026-08-17 22:16:54.355 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:145)
-2026-08-17 22:16:54.355 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
-2026-08-17 22:16:54.356 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
-2026-08-17 22:16:54.636 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
-2026-08-17 22:16:54.750 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
-2026-08-17 22:16:54.750 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
-2026-08-17 22:16:54.750 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
-2026-08-17 22:16:54.750 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
-2026-08-17 22:16:54.750 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
-2026-08-17 22:16:54.750 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
-2026-08-17 22:16:54.750 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
-2026-08-17 22:16:54.750 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
-2026-08-17 22:16:54.750 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
-2026-08-17 22:16:54.750 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
-2026-08-17 22:16:54.750 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
-2026-08-17 22:16:54.750 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
-2026-08-17 22:16:54.750 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
-2026-08-17 22:16:54.750 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
-2026-08-17 22:16:54.755 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
-2026-08-17 22:16:54.755 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
-2026-08-17 22:16:54.755 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
-2026-08-17 22:16:54.755 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
-2026-08-17 22:16:54.783 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
-2026-08-17 22:16:54.821 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681929248_memory' (shm_resource_tracker.cpp:282)
-2026-08-17 22:16:55.399 | info     |           Metal | [Real-time profiler] Device 3 sync complete: 100 samples, frequency=1.350023 GHz, device_time_at_sync=252186936567115 cycles (realtime_profiler_manager.cpp:1127)
-2026-08-17 22:16:58.993 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1843072 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:58.994 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1843072 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:58.995 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1843072 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:58.996 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1843072 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:58.997 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1843072 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:58.997 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1843072 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:58.998 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1843072 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:58.999 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1843072 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.000 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1843072 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.000 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1843072 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.001 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1843072 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.004 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2371456 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.005 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2371456 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.006 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2371456 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.007 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2371456 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.007 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2371456 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.008 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2371456 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.009 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2371456 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.009 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2371456 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.010 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2371456 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.011 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2371456 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.011 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2371456 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.014 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2381696 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.015 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2381696 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.015 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2381696 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.016 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2381696 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.017 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2381696 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.018 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2381696 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.018 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2381696 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.019 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2381696 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.020 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2381696 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.020 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2381696 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.021 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2381696 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.024 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2402176 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.024 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2402176 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.025 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2402176 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.026 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2402176 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.027 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2402176 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.027 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2402176 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.028 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2402176 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.029 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2402176 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.029 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2402176 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.030 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2402176 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.031 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2402176 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.034 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2443136 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.034 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2443136 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.035 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2443136 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.036 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2443136 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.037 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2443136 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.037 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2443136 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.038 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2443136 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.039 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2443136 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.039 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2443136 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.040 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2443136 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.041 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2443136 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.044 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2525056 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.044 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2525056 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.045 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2525056 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.046 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2525056 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.047 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2525056 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.047 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2525056 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.048 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2525056 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.049 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2525056 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.049 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2525056 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.050 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2525056 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.051 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2525056 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.054 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2924416 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.054 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2924416 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.055 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2924416 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.056 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2924416 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.057 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2924416 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.058 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2924416 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.058 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2924416 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.059 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2924416 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.060 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2924416 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.061 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2924416 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.061 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2924416 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.064 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4534144 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.065 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4534144 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.066 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4534144 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.066 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4534144 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.067 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4534144 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.068 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4534144 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.069 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4534144 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.069 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4534144 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.070 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4534144 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.071 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4534144 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.071 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4534144 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.074 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4544384 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.075 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4544384 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.076 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4544384 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.076 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4544384 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.077 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4544384 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.078 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4544384 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.079 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4544384 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.079 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4544384 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.080 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4544384 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.081 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4544384 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.081 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4544384 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.084 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4564864 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.085 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4564864 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.086 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4564864 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.086 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4564864 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.087 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4564864 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.088 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4564864 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.088 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4564864 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.089 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4564864 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.090 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4564864 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.090 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4564864 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.091 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4564864 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.094 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4605824 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.095 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4605824 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.095 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4605824 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.096 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4605824 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.097 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4605824 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.098 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4605824 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.098 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4605824 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.099 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4605824 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.100 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4605824 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.100 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4605824 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.101 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4605824 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.104 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4687744 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.105 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4687744 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.105 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4687744 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.106 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4687744 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.107 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4687744 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.107 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4687744 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.108 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4687744 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.109 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4687744 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.110 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4687744 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.110 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4687744 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.111 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4687744 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.114 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 5087104 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.115 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 5087104 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.116 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 5087104 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.117 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 5087104 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.118 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 5087104 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.118 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 5087104 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.119 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 5087104 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.120 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 5087104 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.121 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 5087104 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.121 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 5087104 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
-2026-08-17 22:16:59.122 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 5087104 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:21.481 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-17 23:28:21.481 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-08-17 23:28:21.481 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-08-17 23:28:21.481 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-08-17 23:28:21.482 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:569)
+2026-08-17 23:28:21.482 | info     |             UMD | Firmware bundle version 19.9.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-08-17 23:28:21.486 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-08-17 23:28:21.709 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:168)
+2026-08-17 23:28:21.709 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-08-17 23:28:21.709 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:145)
+2026-08-17 23:28:21.709 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-08-17 23:28:21.710 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-08-17 23:28:22.030 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+2026-08-17 23:28:22.147 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-08-17 23:28:22.147 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-08-17 23:28:22.147 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-08-17 23:28:22.147 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-08-17 23:28:22.147 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-17 23:28:22.147 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-17 23:28:22.147 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-17 23:28:22.147 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-17 23:28:22.147 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-17 23:28:22.147 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-17 23:28:22.147 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-17 23:28:22.147 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-17 23:28:22.147 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-08-17 23:28:22.147 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-08-17 23:28:22.152 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-17 23:28:22.152 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-17 23:28:22.152 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-17 23:28:22.152 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-17 23:28:22.180 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-08-17 23:28:22.219 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681929248_memory' (shm_resource_tracker.cpp:282)
+2026-08-17 23:28:22.797 | info     |           Metal | [Real-time profiler] Device 3 sync complete: 100 samples, frequency=1.349936 GHz, device_time_at_sync=256568725175724 cycles (realtime_profiler_manager.cpp:1127)
+2026-08-17 23:28:26.307 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1843072 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.308 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1843072 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.309 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1843072 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.310 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1843072 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.311 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1843072 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.311 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1843072 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.312 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1843072 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.313 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1843072 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.314 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1843072 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.314 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1843072 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.315 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1843072 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.318 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2371456 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.319 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2371456 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.320 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2371456 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.320 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2371456 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.321 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2371456 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.322 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2371456 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.322 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2371456 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.323 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2371456 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.324 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2371456 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.325 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2371456 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.325 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2371456 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.328 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2381696 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.329 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2381696 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.330 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2381696 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.331 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2381696 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.331 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2381696 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.332 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2381696 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.333 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2381696 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.333 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2381696 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.334 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2381696 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.335 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2381696 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.335 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2381696 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.338 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2402176 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.339 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2402176 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.340 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2402176 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.340 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2402176 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.341 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2402176 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.342 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2402176 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.342 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2402176 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.343 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2402176 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.344 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2402176 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.345 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2402176 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.345 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2402176 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.348 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2443136 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.349 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2443136 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.350 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2443136 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.350 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2443136 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.351 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2443136 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.352 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2443136 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.352 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2443136 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.353 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2443136 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.354 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2443136 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.354 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2443136 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.355 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2443136 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.358 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2525056 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.359 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2525056 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.359 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2525056 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.360 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2525056 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.361 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2525056 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.362 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2525056 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.362 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2525056 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.363 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2525056 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.364 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2525056 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.364 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2525056 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.365 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2525056 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.368 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2924416 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.369 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2924416 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.370 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2924416 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.370 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2924416 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.371 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2924416 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.372 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2924416 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.373 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2924416 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.373 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2924416 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.374 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2924416 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.375 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2924416 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.376 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2924416 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.378 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4534144 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.379 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4534144 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.380 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4534144 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.381 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4534144 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.381 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4534144 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.382 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4534144 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.383 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4534144 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.383 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4534144 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.384 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4534144 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.385 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4534144 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.385 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4534144 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.388 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4544384 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.389 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4544384 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.390 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4544384 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.390 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4544384 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.391 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4544384 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.392 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4544384 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.392 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4544384 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.393 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4544384 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.394 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4544384 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.394 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4544384 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.395 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4544384 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.398 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4564864 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.399 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4564864 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.400 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4564864 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.400 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4564864 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.401 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4564864 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.402 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4564864 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.402 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4564864 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.403 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4564864 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.404 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4564864 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.404 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4564864 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.405 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4564864 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.408 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4605824 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.409 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4605824 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.409 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4605824 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.410 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4605824 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.411 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4605824 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.411 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4605824 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.412 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4605824 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.413 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4605824 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.413 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4605824 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.414 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4605824 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.415 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4605824 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.418 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4687744 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.418 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4687744 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.419 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4687744 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.420 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4687744 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.421 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4687744 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.421 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4687744 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.422 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4687744 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.423 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4687744 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.423 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4687744 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.424 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4687744 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.425 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4687744 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.428 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 5087104 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.429 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 5087104 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.429 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 5087104 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.430 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 5087104 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.431 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 5087104 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.432 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 5087104 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.432 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 5087104 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.433 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 5087104 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.434 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 5087104 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.435 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 5087104 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:26.435 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 5087104 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
 DIAG2 --- identity control: no config vs the substituted default (must be exact) ---
 DIAG2 IDENT ctx=      1  bit_identical= True  max_abs_diff=0.000e+00
 DIAG2 IDENT ctx=     32  bit_identical= True  max_abs_diff=0.000e+00
@@ -250,7 +250,7 @@ DIAG2 dynamic       4     0.25     0.25     0.25     0.25     0.75     2.00     
 DIAG2 dynamic       8     0.12     0.12     0.12     0.12     0.38     1.00     4.00    32.00   128.00   256.00   256.00
 DIAG2 dynamic      16     0.06     0.06     0.06     0.06     0.19     0.50     2.00    16.00    64.00   128.00   128.00
 DIAG2 dynamic      55     0.02     0.02     0.02     0.02     0.05     0.15     0.58     4.65    18.62    37.24    37.24
-DIAG2      32       1     1.00     1.00     2.00     4.00     9.00    32.00   128.00  1024.00  4096.00  8192.00  8192.002026-08-17 22:17:01.444 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2371456 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+DIAG2      32       1     1.00     1.00     2.00     4.00     9.00    32.00   128.00  1024.00  4096.00  8192.00  8192.002026-08-17 23:28:28.752 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2371456 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
 
 DIAG2      32       2     0.50     0.50     1.00     2.00     4.50    16.00    64.00   512.00  2048.00  4096.00  4096.00
 DIAG2      32       4     0.25     0.25     0.50     1.00     2.25     8.00    32.00   256.00  1024.00  2048.00  2048.00
@@ -302,30 +302,30 @@ DIAG2 HELD   exp approx, 16 cores   1.0000   0.9998   0.9998   0.6396   0.4189  
 DIAG2 HELD          max_cores 110   1.0000   0.9998   0.9998   0.6797   0.4461   0.2344   0.1026   0.0565   0.0437   0.0449   0.0449
 
 DIAG2 timing at context 262144, 20 warmed iterations
-DIAG2 TIME op default (k32, 1 core)    27.367 ms/call   pcc 0.7664
-DIAG2 TIME                no config    28.191 ms/call   pcc 0.7664
-DIAG2 TIME       k0 dynamic, 1 core    11.539 ms/call   pcc 0.9704
-DIAG2 TIME             k32, 4 cores     6.890 ms/call   pcc 0.2366
-DIAG2 TIME            k32, 16 cores     1.919 ms/call   pcc 0.0000
-DIAG2 TIME            k32, 55 cores     1.386 ms/call   pcc 0.0449
-DIAG2 TIME             k256, 1 core     8.732 ms/call   pcc 0.9809
+DIAG2 TIME op default (k32, 1 core)    27.368 ms/call   pcc 0.7664
+DIAG2 TIME                no config    28.194 ms/call   pcc 0.7664
+DIAG2 TIME       k0 dynamic, 1 core    11.533 ms/call   pcc 0.9704
+DIAG2 TIME             k32, 4 cores     6.886 ms/call   pcc 0.2366
+DIAG2 TIME            k32, 16 cores     1.885 ms/call   pcc 0.0000
+DIAG2 TIME            k32, 55 cores     1.388 ms/call   pcc 0.0449
+DIAG2 TIME             k256, 1 core     8.727 ms/call   pcc 0.9809
 DIAG2 TIME             k512, 1 core     7.453 ms/call   pcc 0.9825
 DIAG2 TIME            k1024, 1 core  ERR:RuntimeError: TT_THROW @ /localdev/vkovacevic/tt-metal/tt_metal/impl/program/program.cpp:1492: tt::exception
 info:
 Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2371456 B which is beyond max L1 size of 1572864 B
 backtrace:
- --- /localdev/vkovacevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x164ed5a) [0x7324fbe4ed5a]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x164ed5a) [0x71f93784ed5a]
  --- tt::tt_metal::detail::ProgramImpl::validate_circular_buffer_region(tt::tt_metal::IDevice const*)
  --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)
  --- tt::tt_metal::distributed::EnqueueMeshWorkload(tt::tt_metal::distributed::MeshCommandQueue&, tt::tt_metal::distributed::MeshWorkload&, bool)
- --- /localdev/vkovacevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail21enqueue_mesh_workloadITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim25SdpaDecodeDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSI_12MeshWorkloadEb+0x37e) [0x7324fc34365e]
- --- /localdev/vkovacevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim25SdpaDecodeDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x1aa) [0x7324fc34089a]
- --- /localdev/vkovacevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim25SdpaDecodeDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x2db) [0x7324fc3279db]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail21enqueue_mesh_workloadITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim25SdpaDecodeDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSI_12MeshWorkloadEb+0x37e) [0x71f937d4365e]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim25SdpaDecodeDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x1aa) [0x71f937d4089a]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim25SdpaDecodeDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x2db) [0x71f937d279db]
  --- ttnn::prim::sdpa_decode(tt::tt_metal::Tensor const&, tt::tt_metal::Tensor const&, std::optional<tt::tt_metal::Tensor const> const&, std::optional<tt::tt_metal::Tensor const> const&, std::optional<tt::tt_metal::Tensor const> const&, std::optional<tt::tt_metal::Tensor const> const&, std::optional<tt::tt_metal::Tensor const> const&, bool, bool, std::vector<unsigned int, std::allocator<unsigned int> > const&, std::optional<float>, std::optional<unsigned int>, tt::tt_metal::MemoryConfig const&, std::optional<ttnn::operations::transformer::SDPAProgramConfig> const&, ttnn::ComputeKernelConfig, unsigned int, std::optional<bool>, std::optional<bool>, std::optional<unsigned int>, std::optional<unsigned int>, std::optional<unsigned int>, std::optional<unsigned int>)
  --- ttnn::transformer::paged_scaled_dot_product_attention_decode(tt::tt_metal::Tensor const&, tt::tt_metal::Tensor const&, tt::tt_metal::Tensor const&, tt::tt_metal::Tensor const&, bool, std::optional<tt::tt_metal::Tensor const> const&, std::optional<tt::tt_metal::Tensor const> const&, std::optional<tt::tt_metal::Tensor const> const&, std::optional<float>, std::optional<unsigned int>, std::optional<tt::tt_metal::MemoryConfig> const&, std::optional<ttnn::operations::transformer::SDPAProgramConfig>, std::optional<ttnn::ComputeKernelConfig>, std::optional<unsigned int>, std::optional<unsigned int>, std::optional<unsigned int>)
- --- /localdev/vkovacevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x4577f3) [0x7324fca577f3]
- --- /localdev/vkovacevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x4574b0) [0x7324fca574b0]
- --- /localdev/vkovacevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x3155d5) [0x7324fc9155d5]
+ --- /localdev/vkovacevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x4577f3) [0x71f9384577f3]
+ --- /localdev/vkovacevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x4574b0) [0x71f9384574b0]
+ --- /localdev/vkovacevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x3155d5) [0x71f9383155d5]
  --- python() [0x1876122]
  --- python() [0x1686e59]
  --- python(_PyEval_EvalFrameDefault+0xe920) [0x1621aa0]
@@ -342,27 +342,27 @@ backtrace:
  --- python(Py_RunMain+0x2e5) [0x171f33b]
  --- python() [0x17406fa]
  --- python() [0x17404ed]
- --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x73254102a1ca]
- --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x73254102a28b]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x71f97c62a1ca]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x71f97c62a28b]
  --- python(_start+0x29) [0x1795ced]
-2026-08-17 22:17:01.445 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4534144 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-08-17 23:28:28.753 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4534144 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
 
 DIAG2 TIME            k2048, 1 core  ERR:RuntimeError: TT_THROW @ /localdev/vkovacevic/tt-metal/tt_metal/impl/program/program.cpp:1492: tt::exception
 info:
 Statically allocated circular buffers on core range [0-0 - 10-9] grow to 4534144 B which is beyond max L1 size of 1572864 B
 backtrace:
- --- /localdev/vkovacevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x164ed5a) [0x7324fbe4ed5a]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x164ed5a) [0x71f93784ed5a]
  --- tt::tt_metal::detail::ProgramImpl::validate_circular_buffer_region(tt::tt_metal::IDevice const*)
  --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)
  --- tt::tt_metal::distributed::EnqueueMeshWorkload(tt::tt_metal::distributed::MeshCommandQueue&, tt::tt_metal::distributed::MeshWorkload&, bool)
- --- /localdev/vkovacevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail21enqueue_mesh_workloadITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim25SdpaDecodeDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSI_12MeshWorkloadEb+0x37e) [0x7324fc34365e]
- --- /localdev/vkovacevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim25SdpaDecodeDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x1aa) [0x7324fc34089a]
- --- /localdev/vkovacevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim25SdpaDecodeDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x2db) [0x7324fc3279db]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail21enqueue_mesh_workloadITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim25SdpaDecodeDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSI_12MeshWorkloadEb+0x37e) [0x71f937d4365e]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim25SdpaDecodeDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x1aa) [0x71f937d4089a]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim25SdpaDecodeDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x2db) [0x71f937d279db]
  --- ttnn::prim::sdpa_decode(tt::tt_metal::Tensor const&, tt::tt_metal::Tensor const&, std::optional<tt::tt_metal::Tensor const> const&, std::optional<tt::tt_metal::Tensor const> const&, std::optional<tt::tt_metal::Tensor const> const&, std::optional<tt::tt_metal::Tensor const> const&, std::optional<tt::tt_metal::Tensor const> const&, bool, bool, std::vector<unsigned int, std::allocator<unsigned int> > const&, std::optional<float>, std::optional<unsigned int>, tt::tt_metal::MemoryConfig const&, std::optional<ttnn::operations::transformer::SDPAProgramConfig> const&, ttnn::ComputeKernelConfig, unsigned int, std::optional<bool>, std::optional<bool>, std::optional<unsigned int>, std::optional<unsigned int>, std::optional<unsigned int>, std::optional<unsigned int>)
  --- ttnn::transformer::paged_scaled_dot_product_attention_decode(tt::tt_metal::Tensor const&, tt::tt_metal::Tensor const&, tt::tt_metal::Tensor const&, tt::tt_metal::Tensor const&, bool, std::optional<tt::tt_metal::Tensor const> const&, std::optional<tt::tt_metal::Tensor const> const&, std::optional<tt::tt_metal::Tensor const> const&, std::optional<float>, std::optional<unsigned int>, std::optional<tt::tt_metal::MemoryConfig> const&, std::optional<ttnn::operations::transformer::SDPAProgramConfig>, std::optional<ttnn::ComputeKernelConfig>, std::optional<unsigned int>, std::optional<unsigned int>, std::optional<unsigned int>)
- --- /localdev/vkovacevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x4577f3) [0x7324fca577f3]
- --- /localdev/vkovacevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x4574b0) [0x7324fca574b0]
- --- /localdev/vkovacevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x3155d5) [0x7324fc9155d5]
+ --- /localdev/vkovacevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x4577f3) [0x71f9384577f3]
+ --- /localdev/vkovacevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x4574b0) [0x71f9384574b0]
+ --- /localdev/vkovacevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x3155d5) [0x71f9383155d5]
  --- python() [0x1876122]
  --- python() [0x1686e59]
  --- python(_PyEval_EvalFrameDefault+0xe920) [0x1621aa0]
@@ -379,15 +379,15 @@ backtrace:
  --- python(Py_RunMain+0x2e5) [0x171f33b]
  --- python() [0x17406fa]
  --- python() [0x17404ed]
- --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x73254102a1ca]
- --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x73254102a28b]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x71f97c62a1ca]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x71f97c62a28b]
  --- python(_start+0x29) [0x1795ced]
 
-DIAG2 TIME           k256, 16 cores     1.388 ms/call   pcc 0.9997
-DIAG2 TIME     k0 dynamic, 16 cores     1.411 ms/call   pcc 0.9996
+DIAG2 TIME           k256, 16 cores     1.385 ms/call   pcc 0.9997
+DIAG2 TIME     k0 dynamic, 16 cores     1.413 ms/call   pcc 0.9996
 nanobind: leaked 2 instances!
- - leaked instance 0x7324a9c5b6d8 of type "ttnn._ttnn.tensor.CoreRangeSet"
- - leaked instance 0x7324a9d6f6d8 of type "ttnn._ttnn.device.DispatchCoreConfig"
+ - leaked instance 0x71f8e531f708 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x71f8e5433978 of type "ttnn._ttnn.device.DispatchCoreConfig"
 nanobind: leaked 41 types!
  - leaked type "DispatchCoreAxis"
  - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
@@ -401,22 +401,22 @@ nanobind: leaked 41 types!
  - leaked type "Layout"
  - ... skipped remainder
 nanobind: leaked 341 functions!
- - leaked function "__init__"
+ - leaked function "create_output_tensors"
+ - leaked function "to_json"
+ - leaked function "__eq__"
+ - leaked function "sfpu_eps"
  - leaked function ""
- - leaked function "num_program_cache_entries"
+ - leaked function "to_json"
  - leaked function ""
- - leaked function "get_dtype"
  - leaked function ""
- - leaked function "host_buffer"
  - leaked function ""
- - leaked function "to_torch"
- - leaked function "devices"
+ - leaked function "pop_current_command_queue_id_for_thread"
  - ... skipped remainder
 nanobind: this is likely caused by a reference counting issue in the binding code.
-See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-17 22:17:02.076 | info     |    BuildKernels | JIT cache stats: 254/254 hits (100.0%) [254 cached, 13 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
-2026-08-17 22:17:02.076 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
-2026-08-17 22:17:02.088 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
-2026-08-17 22:17:02.088 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
-2026-08-17 22:17:02.596 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
-2026-08-17 22:17:02.596 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
-2026-08-17 22:17:02.596 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-17 23:28:29.333 | info     |    BuildKernels | JIT cache stats: 254/254 hits (100.0%) [254 cached, 13 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-17 23:28:29.333 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-17 23:28:29.344 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-08-17 23:28:29.344 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-08-17 23:28:29.883 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-08-17 23:28:29.883 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-08-17 23:28:29.883 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)

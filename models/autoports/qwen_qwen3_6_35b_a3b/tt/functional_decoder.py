@@ -203,6 +203,14 @@ class DecoderConfig:
         # either constant finds out here rather than through a mis-paged cache write.
         if PREFILL_ALIGN % self.block_size:
             raise ValueError(f"block_size must divide PREFILL_ALIGN ({PREFILL_ALIGN}), got {self.block_size}")
+        # The third leg of the same triangle, and the one `PREFILL_ALIGN`'s own docstring names.
+        # A `delta_chunk_size` that does not divide it makes a short prefill reach `n_chunks == 0`
+        # and reshape to a zero-length dimension; that crashes rather than being silently wrong, but
+        # it should crash here with a reason.
+        if self.is_linear and PREFILL_ALIGN % self.delta_chunk_size:
+            raise ValueError(
+                f"delta_chunk_size must divide PREFILL_ALIGN ({PREFILL_ALIGN}), got {self.delta_chunk_size}"
+            )
         # Q/K of the delta rule are repeat_interleaved from key heads up to value heads. The
         # duplication is folded into the projection and conv weights at load time so the
         # runtime path never needs a repeat_interleave (see from_state_dict).
@@ -563,6 +571,10 @@ class FunctionalDecoder(LightweightModule):
         self.compute_config = _hifi_config(cfg.mesh_device)
         self.decode_sdpa_config = _decode_sdpa_program_config(cfg)
         self.w: dict[str, ttnn.Tensor] = {}
+        #: Per-slot logical end of what prefill has written, so a *continued* prefill can be checked
+        #: for contiguity. Host-side bookkeeping only -- an int per slot, never a tensor and never
+        #: read by the device path -- so it does not touch the fallback audit or trace safety.
+        self._prefill_end: dict[int, int] = {}
 
     # -----------------------------------------------------------------------------------
     # construction
@@ -682,6 +694,7 @@ class FunctionalDecoder(LightweightModule):
         All slots. There is deliberately no per-slot variant: a slot is handed to a new sequence by
         prefilling it from ``start_pos = 0``, which zeroes that slot's carry on its own.
         """
+        self._prefill_end.clear()
         if self.cfg.is_linear:
             _zero_(self.recurrent_state)
             for tap in self.conv_state:
@@ -708,12 +721,17 @@ class FunctionalDecoder(LightweightModule):
         seq_len = int(x.shape[-2])
         if seq_len < 1:
             raise ValueError("prefill needs seq_len >= 1")
-        # Op contract, not a shortcut: chunked SDPA converts the absolute offset to a chunk index by
-        # integer division by `q_chunk_size`, in both entry points this checkout offers --
-        # sdpa_program_factory.cpp:133 (`chunk_start_idx / q_chunk_size`, scalar offset) and
-        # kernels/dataflow/reader_interleaved.cpp:260 (same expression, device-tensor offset). A
-        # misaligned offset therefore places the causal-mask diagonal in the wrong tile and returns
-        # silently wrong values, so reject it instead of rounding.
+        # Op contract, not a shortcut. Chunked SDPA converts the absolute offset to a chunk index by
+        # integer division by `q_chunk_size` (sdpa_program_factory.cpp:133 for the scalar offset,
+        # kernels/dataflow/reader_interleaved.cpp:260 for the device-tensor one). For the path this
+        # layer takes -- explicit `program_config`, scalar `chunk_start_idx` -- the op *validates*
+        # that: `sdpa_device_operation.cpp:277-292` TT_FATALs on `chunk_start_idx % q_chunk_size` and
+        # `% k_chunk_size`. So a misaligned offset is loud there, not silent.
+        #
+        # The consumer that *is* silent is the paged fill below: `abs_pos // cfg.block_size` just
+        # truncates, writing the chunk into the wrong page with no complaint. That is the reason this
+        # check exists, and it is why the bound is `PREFILL_ALIGN` (a multiple of `block_size`) rather
+        # than the SDPA chunk alone.
         #
         # `PREFILL_ALIGN` is the bound because **three** consumers constrain `start_pos`, not one,
         # and it is a multiple of all of them (`__post_init__` checks that, so this single test is
@@ -745,6 +763,27 @@ class FunctionalDecoder(LightweightModule):
                 f"{math.ceil(seq_len / PREFILL_ALIGN) * PREFILL_ALIGN} exceeds supported context "
                 f"{cfg.supported_context}"
             )
+        # A continued prefill must resume exactly where the previous one ended. This is not
+        # bookkeeping pedantry: a prefill pads its input up to `PREFILL_ALIGN` and, for
+        # `full_attention`, writes the **padded** K/V into the paged cache (the fill works in whole
+        # `block_size` pages). Those padded rows are exactly zero, which is harmless inside the call
+        # -- causal masking plus the output slice discard them -- but a later chunk attending over
+        # them sees `exp(q . 0) = 1` per slot and gets a silently diluted result. Since `start_pos`
+        # must also be `PREFILL_ALIGN`-aligned, a non-aligned first chunk has *no* legal
+        # continuation, and rounding up to the next multiple both skips tokens and reads the zeros.
+        # So the only safe continuation is the contiguous one, and that is now enforced rather than
+        # assumed. `start_pos == 0` starts a fresh sequence and is always allowed.
+        if start_pos:
+            written = self._prefill_end.get(user_id, 0)
+            if start_pos != written:
+                raise ValueError(
+                    f"prefill for slot {user_id} must continue from {written}, got start_pos={start_pos}. "
+                    "A continued prefill has to resume exactly where the previous one ended; in "
+                    "particular a chunk whose seq_len is not a multiple of "
+                    f"{PREFILL_ALIGN} cannot be continued, because its padded tail is already in the "
+                    "cache. Start a new sequence with start_pos=0, or chunk on "
+                    f"{PREFILL_ALIGN}-token boundaries."
+                )
         if not cfg.is_linear and page_table is None:
             raise ValueError("full_attention prefill requires a page_table")
         if user_id >= cfg.max_batch_size:
@@ -756,6 +795,8 @@ class FunctionalDecoder(LightweightModule):
 
         # linear-attention layers thread the conv left-context and the recurrent state
         # across the internal chunks of this call.
+        self._prefill_end[user_id] = start_pos + seq_len
+
         carry = self._load_linear_carry(user_id) if cfg.is_linear else None
         if carry is not None and start_pos == 0:
             # `start_pos == 0` means this slot is starting a new sequence, so the carry must not
