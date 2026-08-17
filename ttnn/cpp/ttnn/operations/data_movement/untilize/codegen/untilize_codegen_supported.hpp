@@ -17,10 +17,17 @@ class IDevice;
 
 namespace ttnn::operations::data_movement::untilize_codegen {
 
-// The CB budget the codegen program factory plans against.
-// Queried from the device's actual L1 budget (total L1 minus the allocator's reserved base)
-// rather than a hardcoded constant, so the gate and the factory can never disagree with what
-// the allocator will actually hand out. Shared between the two so they stay in lockstep.
+// Mirrors codegen builder_utils.USABLE_L1: the CB budget every codegen builder plans against.
+// Queried from the device's *live* L1 occupancy rather than a hardcoded constant, so the gate
+// and the factory can never disagree with what the allocator will actually hand out. Shared
+// between the two so they stay in lockstep.
+//
+// Statically allocated CBs grow upward from the allocator's base L1 address; L1 tensors are
+// allocated downward from the top of L1. The budget is therefore the gap between the two, i.e.
+// lowest_occupied_compute_l1_address() - base -- the exact quantity
+// ProgramImpl::validate_circular_buffer_region() checks the CB region end against. Budgeting
+// against total L1 instead would ignore buffers already resident in L1 (model weights, trace
+// buffers) and plan a CB region that provably clashes with them.
 uint32_t usable_l1_bytes(const tt::tt_metal::IDevice* device);
 
 // Correctness-only: true iff the codegen path can produce a bit-exact result for this

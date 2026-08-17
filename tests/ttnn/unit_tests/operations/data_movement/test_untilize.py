@@ -3054,3 +3054,73 @@ def test_untilize_sub_core_grids_single_tile_height(device):
     sub_core_grids = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))})
     output = ttnn.untilize(input_ttnn, use_multicore=True, sub_core_grids=sub_core_grids)
     assert_equal(input_torch, ttnn.to_torch(output))
+def test_untilize_codegen_with_resident_l1_buffers(device):
+    """Regression: the codegen CB plan must be budgeted against LIVE L1 occupancy.
+
+    Statically allocated CBs grow upward from the allocator's base L1 address while L1 tensors are
+    allocated downward from the top of L1, so the space actually available to a program's CBs is
+    lowest_occupied_compute_l1_address() - base, not the whole of L1. The codegen path originally
+    planned against the whole of L1, which is only correct on an otherwise-idle device; with a
+    model's weights/trace buffers resident in L1 it planned a CB region that overlapped them and
+    ProgramImpl::validate_circular_buffer_region() aborted the run with
+
+        Statically allocated circular buffers in program N clash with L1 buffers on core range ...
+
+    rather than degrading to a shallower CB plan (or falling back to native). Seen end-to-end on
+    Gemma-3-4B in trace mode; reproduced here at the op level by pinning a persistent interleaved
+    L1 tensor before untilizing.
+    """
+    torch.manual_seed(42)
+
+    TILE_BYTES = 2048  # bfloat16 tile
+    info = ttnn._ttnn.reports.get_device_info(device)
+
+    # Wt wide enough that the whole-of-L1 budget selects a double-buffered CB plan, but still
+    # inside the gate's wide-chunk threshold (2 * Wt * 2048 <= 800_000 => Wt <= 195). Two tile
+    # rows keep this on the row-parallel writer, whose CB plan is sized by Wt.
+    wt = 192
+    height_tiles = 2
+    single_buffer_bytes = 2 * wt * TILE_BYTES  # cb_in + cb_out, one slot each
+    double_in_bytes = 3 * wt * TILE_BYTES  # 2x cb_in + 1x cb_out
+
+    # cb_limit is exactly the whole-of-L1 budget the buggy plan used: worker L1 minus the base.
+    if info.cb_limit < double_in_bytes:
+        pytest.skip(f"needs at least {double_in_bytes} B of CB space, device offers {info.cb_limit} B")
+
+    # Leave a headroom window that fits the single-buffer plan but NOT the double-buffered one, so
+    # the only non-clashing plan is unambiguous and an unbudgeted build provably overruns it.
+    headroom_target = single_buffer_bytes + 64 * 1024
+    tiles_per_bank = (info.cb_limit - headroom_target) // TILE_BYTES
+    if tiles_per_bank <= 0:
+        pytest.skip("device L1 is too small to leave a meaningful headroom window")
+
+    # Built before the L1 reservation so that any device-side tilize in from_torch runs with the
+    # usual amount of L1 available; only the untilize under test should see the pressure.
+    # untilize only relayouts values, so the input is its own golden.
+    input_torch_tensor = torch.randn([1, 1, 32 * height_tiles, 32 * wt], dtype=torch.bfloat16)
+    input_ttnn_tensor = ttnn.from_torch(input_torch_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    # Interleaved L1 spreads pages round-robin over every bank, so tiles_per_bank tiles per bank
+    # pushes the lowest occupied L1 address down on all of them. Allocated directly on device: the
+    # contents are irrelevant, only the occupancy matters.
+    resident = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, 1, 32 * tiles_per_bank, 32 * info.l1_num_banks]),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        device,
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+    )
+    try:
+        # Guard against a vacuous pass: if the reservation did not land where intended there is no
+        # L1 pressure left to regress against.
+        actual_headroom = resident.buffer_address() - info.address_at_first_l1_cb_buffer
+        assert single_buffer_bytes <= actual_headroom < double_in_bytes, (
+            f"resident L1 buffer left {actual_headroom} B above the CB base; the test needs it in "
+            f"[{single_buffer_bytes}, {double_in_bytes}) so that only the single-buffer CB plan fits"
+        )
+
+        output = ttnn.untilize(input_ttnn_tensor)
+
+        assert_equal(input_torch_tensor, ttnn.to_torch(output))
+    finally:
+        ttnn.deallocate(resident)
