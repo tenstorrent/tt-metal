@@ -682,27 +682,20 @@ inline void matmul_configure_mop_throttled(
     const bool reuse_a        = ct_dim >= rt_dim;
     const std::uint32_t t_dim = reuse_a ? rt_dim : ct_dim;
 
-    const bool is_in0_16x32 = (in0_tile_r_dim <= FACE_R_DIM) && (in0_tile_c_dim > FACE_C_DIM);
-    const bool is_in1_32x16 = (in1_tile_r_dim > FACE_R_DIM) && (in1_tile_c_dim <= FACE_C_DIM);
-    const bool is_in0_32x16 = (in0_tile_r_dim > FACE_R_DIM) && (in0_tile_c_dim <= FACE_C_DIM);
-    const bool is_in1_16x32 = (in1_tile_r_dim <= FACE_R_DIM) && (in1_tile_c_dim > FACE_C_DIM);
-
-    constexpr std::uint32_t replay_buff_len_throttle = (THROTTLE_LEVEL > 3) ? (16) : ((THROTTLE_LEVEL > 1) ? (3 + THROTTLE_LEVEL * 4) : 10);
-    const std::uint32_t replay_buf_len =
-        (is_in0_16x32 && is_in1_32x16) ? 4
-                                       : ((is_in0_16x32 || is_in1_32x16 || is_in0_32x16 || is_in1_16x32) ? (partial_face ? 4 : 8) : replay_buff_len_throttle);
+    // Exactly what run_throttled_sequence<THROTTLE_LEVEL, high_fidelity> emits.
+    // A record that declares a longer window captures the instructions that
+    // follow it, which are then never executed.
+    constexpr std::uint32_t replay_buf_len = (THROTTLE_LEVEL > 3) ? (16) : ((THROTTLE_LEVEL > 1) ? (3 + THROTTLE_LEVEL * 4) : 10);
 
     lltt::record(ckernel::math::replay_buf_offset, replay_buf_len);
-    if (!is_in1_32x16 && !is_in1_16x32 && !is_in0_32x16 && !is_in0_16x32)
-    {
-        run_throttled_sequence<THROTTLE_LEVEL, high_fidelity>(t_dim, reuse_a);
-    }
+    run_throttled_sequence<THROTTLE_LEVEL, high_fidelity>(t_dim, reuse_a);
+    lltt::record_end();
 
     constexpr std::uint32_t outer_loops        = (THROTTLE_LEVEL > 3) ? 2 : (high_fidelity ? to_underlying(math_fidelity) : 1);
-    const std::uint32_t inner_loops            = (!is_in1_16x32) ? 2 : 1;
+    constexpr std::uint32_t inner_loops        = 2;
     constexpr std::uint32_t loop_instruction_0 = (THROTTLE_LEVEL == 5)   ? lltt::replay_insn(ckernel::math::replay_buf_offset + 1, 8)
                                                  : (THROTTLE_LEVEL == 4) ? lltt::replay_insn(ckernel::math::replay_buf_offset + 2, 6)
-                                                                         : lltt::replay_insn(ckernel::math::replay_buf_offset, replay_buff_len_throttle);
+                                                                         : lltt::replay_insn(ckernel::math::replay_buf_offset, replay_buf_len);
     constexpr std::uint32_t loop_instruction_1 = (THROTTLE_LEVEL == 5)   ? lltt::replay_insn(ckernel::math::replay_buf_offset + 9, 4)
                                                  : (THROTTLE_LEVEL == 4) ? lltt::replay_insn(ckernel::math::replay_buf_offset + 8, 4)
                                                                          : TT_OP_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);

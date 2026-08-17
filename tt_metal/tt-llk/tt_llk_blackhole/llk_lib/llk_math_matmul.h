@@ -582,30 +582,15 @@ inline void matmul_configure_mop_throttled(
 
     const bool reuse_a = ct_dim >= rt_dim;
 
-    const bool is_in0_16x32 = (in0_tile_r_dim <= FACE_R_DIM) && (in0_tile_c_dim > FACE_C_DIM);
-    const bool is_in1_32x16 = (in1_tile_r_dim > FACE_R_DIM) && (in1_tile_c_dim <= FACE_C_DIM);
-    const bool is_in0_32x16 = (in0_tile_r_dim > FACE_R_DIM) && (in0_tile_c_dim <= FACE_C_DIM);
-    const bool is_in1_16x32 = (in1_tile_r_dim <= FACE_R_DIM) && (in1_tile_c_dim > FACE_C_DIM);
+    // Exactly what run_throttled_sequence<THROTTLE_LEVEL> emits.  A record that
+    // declares a longer window captures the instructions that follow it, which
+    // are then never executed.
+    constexpr std::uint32_t replay_buf_len = (THROTTLE_LEVEL > 3) ? (1 + THROTTLE_LEVEL * 2) : ((THROTTLE_LEVEL > 1) ? (3 + THROTTLE_LEVEL * 4) : 10);
 
-    constexpr std::uint32_t replay_buff_len_throttle = (THROTTLE_LEVEL > 3) ? (1 + THROTTLE_LEVEL * 2) : ((THROTTLE_LEVEL > 1) ? (3 + THROTTLE_LEVEL * 4) : 10);
-    const std::uint32_t replay_buf_len =
-        (is_in0_16x32 && is_in1_32x16) ? 4
-                                       : ((is_in0_16x32 || is_in1_32x16 || is_in0_32x16 || is_in1_16x32) ? (partial_face ? 4 : 8) : replay_buff_len_throttle);
-
-    load_replay_buf(
-        ckernel::math::replay_buf_offset,
-        replay_buf_len,
-        // Lambda function to load reply buffer
-        [is_in1_32x16, is_in1_16x32, is_in0_32x16, is_in0_16x32]
-        {
-            if (!is_in1_32x16 && !is_in1_16x32 && !is_in0_32x16 && !is_in0_16x32)
-            {
-                run_throttled_sequence<THROTTLE_LEVEL>();
-            }
-        });
+    load_replay_buf(ckernel::math::replay_buf_offset, replay_buf_len, [] { run_throttled_sequence<THROTTLE_LEVEL>(); });
 
     constexpr std::uint32_t outer_loops        = (THROTTLE_LEVEL > 3) ? 2 : (high_fidelity ? to_underlying(math_fidelity) : 1);
-    const std::uint32_t inner_loops            = (!is_in1_16x32) ? 2 : 1;
+    constexpr std::uint32_t inner_loops        = 2;
     constexpr std::uint8_t addr_mod_inner_loop = (THROTTLE_LEVEL > 3) ? ADDR_MOD_2 : ADDR_MOD_4;
     ckernel_template tmp(
         outer_loops,
@@ -613,26 +598,23 @@ inline void matmul_configure_mop_throttled(
         lltt::replay_insn(ckernel::math::replay_buf_offset, replay_buf_len),
         TT_OP_MVMUL(p_setrwc::CLR_NONE, 0, addr_mod_inner_loop, 0));
 
-    if (!is_in1_32x16 && !is_in1_16x32 && !is_in0_32x16 && !is_in0_16x32)
+    if constexpr (high_fidelity && THROTTLE_LEVEL > 3)
     {
-        if constexpr (high_fidelity && THROTTLE_LEVEL > 3)
+        tmp.set_last_inner_loop_instr(TT_OP_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_4, 0));
+        tmp.set_last_outer_loop_instr(TT_OP_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_5, 0));
+    }
+    else if constexpr (high_fidelity)
+    {
+        tmp.set_last_inner_loop_instr(TT_OP_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_5, 0));
+        tmp.set_last_outer_loop_instr(TT_OP_MVMUL(reuse_a ? p_setrwc::CLR_A : p_setrwc::CLR_B, 0, ADDR_MOD_6, 0));
+    }
+    else
+    {
+        if constexpr (THROTTLE_LEVEL > 3)
         {
             tmp.set_last_inner_loop_instr(TT_OP_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_4, 0));
-            tmp.set_last_outer_loop_instr(TT_OP_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_5, 0));
         }
-        else if constexpr (high_fidelity)
-        {
-            tmp.set_last_inner_loop_instr(TT_OP_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_5, 0));
-            tmp.set_last_outer_loop_instr(TT_OP_MVMUL(reuse_a ? p_setrwc::CLR_A : p_setrwc::CLR_B, 0, ADDR_MOD_6, 0));
-        }
-        else
-        {
-            if constexpr (THROTTLE_LEVEL > 3)
-            {
-                tmp.set_last_inner_loop_instr(TT_OP_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_4, 0));
-            }
-            tmp.set_last_outer_loop_instr(TT_OP_MVMUL(reuse_a ? p_setrwc::CLR_A : p_setrwc::CLR_B, 0, ADDR_MOD_5, 0));
-        }
+        tmp.set_last_outer_loop_instr(TT_OP_MVMUL(reuse_a ? p_setrwc::CLR_A : p_setrwc::CLR_B, 0, ADDR_MOD_5, 0));
     }
 
     tmp.program();
