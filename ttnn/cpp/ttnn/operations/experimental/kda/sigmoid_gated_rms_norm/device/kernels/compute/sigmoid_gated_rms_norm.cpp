@@ -148,7 +148,7 @@ void kernel_main() {
             cb_stats,
             compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
             compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
-            ReduceFp32Mode::Accurate>(compute_kernel_lib::ReduceInputBlockShape::of(1, Vt));
+            ReduceFp32Mode::Fast>(compute_kernel_lib::ReduceInputBlockShape::of(1, Vt));
         stats.wait_front(1);
         inverse_rms(epsilon_bits, inv_v_bits);
         inv.wait_front(1);
