@@ -135,12 +135,19 @@ class DecoderConfig:
     delta_chunk_size: int = 64
     moe_prefill_chunk_tokens: int = 512
     sdpa_chunk: int = 128
-    #: Cores the decode SDPA splits each KV head's keys across. This is the variable behind the
-    #: long-context decode accuracy (README section 3.8): accuracy rises with it at long context
-    #: and *breaks structurally* below some context that grows with it, so 1 is the only value
-    #: measured correct at every ``cur_pos``. Leaving it unset is not neutral -- the op then uses
-    #: ``num_cores_available`` (55 per head here), which scores 0.9986 at the advertised context
-    #: against 0.9998 for 1 core/head. ``None`` means "pass no program config at all".
+    #: Keys per k-chunk for the decode SDPA. **This is the variable behind long-context decode
+    #: accuracy** (README section 3.8): each chunk is one sequential bf16 accumulation step, so a
+    #: bigger chunk means a shallower accumulation over the same keys. At 262144 keys and 1 core
+    #: per head the op PCC is 0.7664 at 32 (the op's own default), 0.9704 at 128, 0.9809 at 256 and
+    #: 0.9825 at 512. 512 is the **largest legal value**: 1024 needs 2371456 B of statically
+    #: allocated circular buffers against a 1572864 B L1 limit.
+    decode_sdpa_k_chunk_size: int = 512
+    #: Cores the decode SDPA splits each KV head's keys across. 1 is both the op's own default for
+    #: the paged variant (``sdpa_decode.cpp:122-129``) and the only value measured correct at every
+    #: ``cur_pos``: every value above 1 returns a silently wrong answer below some context that
+    #: grows with it (README section 3.8). It is pinned rather than left implicit so that a later
+    #: stage changing it has to read why. ``None`` means "pass no program config at all", which is
+    #: *not* neutral -- it selects ``k_chunk_size=32``, the worst measured setting.
     decode_sdpa_max_cores_per_head: int | None = 1
     #: Escape hatch: a fully-specified ``ttnn.SDPAProgramConfig`` for the decode SDPA, used
     #: verbatim and overriding ``decode_sdpa_max_cores_per_head``. For sweeps in later stages.
@@ -278,17 +285,24 @@ def _sdpa_program_config(chunk: int) -> ttnn.SDPAProgramConfig:
 def _decode_sdpa_program_config(cfg: DecoderConfig):
     """The decode SDPA program config, built once at setup.
 
-    ``cfg.decode_sdpa_program_config`` wins if given. Otherwise
-    ``cfg.decode_sdpa_max_cores_per_head`` selects how many cores the op splits each KV head's keys
-    across -- the variable behind long-context decode accuracy (README section 3.8) -- and ``None``
-    means "pass no program config", which lets the op use every available core per head.
+    ``cfg.decode_sdpa_program_config`` wins if given. Otherwise the two knobs that matter are
+    ``cfg.decode_sdpa_k_chunk_size`` (accumulation depth -- the accuracy/latency lever) and
+    ``cfg.decode_sdpa_max_cores_per_head`` (parallel decomposition, which must stay 1). See README
+    section 3.8 for the 2-D sweep both come from.
 
-    Everything else here is chosen to be the op's own behaviour rather than a second variable:
-    the device grid, ``k_chunk_size=0`` (the dynamic chunk path, identical to the no-config
-    default), and ``exp_approx_mode=False`` -- spelled out because the op's default is ``true``
-    (``sdpa_decode_program_factory.cpp:211-213``) and this is the exact config the on-model
-    comparison measured. The sweep shows the two are bit-identical, so this pins provenance rather
-    than accuracy. ``q_chunk_size`` is unused by the decode factory but the struct requires a value.
+    **Passing no config is not neutral.** The paged entry point substitutes its own config before
+    the device op sees one (``sdpa_decode.cpp:122-129``): device grid, ``q_chunk_size=32``,
+    ``k_chunk_size=32``, ``exp_approx_mode`` unset, ``max_cores_per_head_batch=1``. So the factory's
+    ``program_config.has_value() ? max_cores_per_head_batch : num_cores_available`` branch
+    (``sdpa_decode_program_factory.cpp:192-193``) is unreachable from here, the struct default of 16
+    (``sdpa_config.hpp:18``) is unreachable, and "no config" means ``k_chunk_size=32`` -- the worst
+    setting measured. ``diag_sdpa_decode.py``'s identity control proves this: no config and an
+    explicit config spelling out that substitution are bit-identical at all 11 contexts.
+
+    ``exp_approx_mode=False`` matches what the substituted config resolves to (``nullopt`` ->
+    ``false``, ``sdpa_decode_program_factory.cpp:211-212``) and is spelled out only for provenance;
+    the sweep shows approx and exact are bit-identical. ``q_chunk_size`` is unused by the decode
+    factory but the struct requires a value.
     """
     if cfg.decode_sdpa_program_config is not None:
         return cfg.decode_sdpa_program_config
@@ -298,7 +312,7 @@ def _decode_sdpa_program_config(cfg: DecoderConfig):
     return ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=ttnn.CoreCoord(grid.x, grid.y),
         q_chunk_size=32,
-        k_chunk_size=0,
+        k_chunk_size=cfg.decode_sdpa_k_chunk_size,
         exp_approx_mode=False,
         max_cores_per_head_batch=cfg.decode_sdpa_max_cores_per_head,
     )
@@ -318,15 +332,23 @@ def _tilized(tensor):
 def _zero_(tensor) -> None:
     """Zero ``tensor`` in place, keeping its buffer address (so it stays trace-safe).
 
-    Deliberately **not** ``ttnn.mul(t, 0.0, output_tensor=t)``: ``0 * NaN`` and ``0 * Inf`` are
-    ``NaN``, so a multiply cannot clear a poisoned buffer. That matters because zeroing is how a
-    slot is handed to a new sequence -- see ``reset_state`` and ``prefill_forward``'s
-    ``start_pos == 0`` path -- and the contract in the README says a reused slot starts clean
-    unconditionally. ``ttnn.zeros_like`` + ``ttnn.copy`` writes the value rather than scaling it.
+    ``ttnn.fill`` with ``output_tensor=tensor`` is the right primitive for two independent reasons,
+    both measured by ``probe_ttnn_ops.py``:
+
+    * **It writes rather than scales.** Zeroing is how a slot is handed to a new sequence (see
+      ``reset_state`` and ``prefill_forward``'s ``start_pos == 0`` path) and the README contract says
+      a reused slot starts clean *unconditionally*, so the operation must not depend on what the
+      buffer currently holds. ``fill`` clears NaN and Inf. (An earlier version used
+      ``ttnn.zeros_like`` + ``ttnn.copy`` and justified it by "``0 * NaN`` is ``NaN``, so a multiply
+      cannot clear a poisoned buffer". That is true in IEEE arithmetic but **not** what this build's
+      ``ttnn.mul(t, 0.0)`` does -- the probe shows it zeroes a NaN too. The stated reason was wrong;
+      the preference for a write still stands, on the weaker ground that it cannot depend on kernel
+      details.)
+    * **It allocates nothing.** ``zeros_like`` materialises a full-size peer, which at the shape the
+      capability contract certifies -- batch 32 at 262144 context, 8 GiB per K/V cache -- is a
+      transient 8 GiB on top of the 16 GiB already held. ``fill`` writes into the existing buffer.
     """
-    zeros = ttnn.zeros_like(tensor)
-    ttnn.copy(zeros, tensor)
-    ttnn.deallocate(zeros)
+    ttnn.fill(tensor, 0.0, output_tensor=tensor)
 
 
 def _dealloc(*tensors) -> None:

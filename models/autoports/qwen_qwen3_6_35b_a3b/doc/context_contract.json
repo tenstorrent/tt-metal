@@ -19,14 +19,14 @@
         "aligned_to_prefill_align_128": false,
         "hf_pcc": 0.9999742,
         "hf_reference": "exact tail reference over the last 128 query positions",
-        "device_wall_seconds": 43.876
+        "device_wall_seconds": 43.873
       },
       "full_attention": {
         "seq_len": 262143,
         "aligned_to_prefill_align_128": false,
         "hf_pcc": 0.9999891,
         "hf_reference": "exact tail reference over the last 128 query positions",
-        "device_wall_seconds": 48.843
+        "device_wall_seconds": 48.839
       }
     },
     "decode": {
@@ -35,14 +35,14 @@
         "context_entries": 262144,
         "hf_pcc": 0.999986,
         "state_source": "262143-token prefill through this layer",
-        "device_wall_seconds": 0.042
+        "device_wall_seconds": 0.043
       },
       "full_attention": {
         "position": 262143,
         "context_entries": 262144,
-        "hf_pcc": 0.9997685,
+        "hf_pcc": 0.9999939,
         "state_source": "262143-token prefill through this layer",
-        "device_wall_seconds": 0.046
+        "device_wall_seconds": 0.047
       }
     }
   },

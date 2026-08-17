@@ -543,7 +543,7 @@ def reset_log(name: str) -> None:
       theirs before looping.
     * **Only for a whole-file run of the suite that owns the log.** A filtered run
       (``pytest -k context_contract``) collects a couple of tests that write no PCC rows, so
-      truncating would replace 274 rows of committed evidence with nothing. ``conftest.py`` puts the
+      truncating would replace every row of committed evidence with nothing. ``conftest.py`` puts the
       main suite's logs in ``PARTIAL_LOGS`` for filtered sessions and those rows land in
       ``*_partial.jsonl``, which ``doc/.gitignore`` keeps out of the commit. Only those names are
       diverted -- ``long_context.jsonl`` is *always* written by filtered runs and must not be.

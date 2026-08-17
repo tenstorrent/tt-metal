@@ -1,25 +1,31 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""On-model control for the decode-SDPA parallel decomposition (README section 3.8).
+"""On-model control for the decode-SDPA chunk/decomposition choice (README section 3.8).
 
-`diag_sdpa_decode.py` measures the op in isolation with random K/V and shows that decode accuracy
-at long context is governed by `SDPAProgramConfig::max_cores_per_head_batch` -- the number of cores
-the op splits each KV head's keys across. This script re-measures the candidate settings on the
-**whole decoder layer** against HF, with a real prefilled cache, so the shipping decision rests on
-the real path:
+`diag_sdpa_decode.py` measures the op in isolation with random K/V over a 2-D
+(`k_chunk_size` x `max_cores_per_head_batch`) grid, and shows that long-context decode accuracy is
+governed by **`k_chunk_size`** -- the bf16 accumulation depth -- while `max_cores_per_head_batch`
+must stay at 1 because every larger value is silently wrong below some context. This script
+re-measures the candidates on the **whole decoder layer** against HF, off a real prefilled cache, so
+the shipping decision rests on the real path:
 
-    A  no program config             -- the factory then uses `num_cores_available`, i.e. 55
-                                        cores/head on this part. What the layer shipped before
-                                        this sweep existed.
-    B  explicit config, struct default (`max_cores_per_head_batch = 16`)
-    C  explicit config, 1 core/head  -- the only setting the op sweep finds correct at *every*
-                                        context, and **what the layer now ships**
-                                        (`DecoderConfig.decode_sdpa_max_cores_per_head = 1`)
+    A  no program config     -- *not* neutral: the paged op substitutes `k_chunk_size=32`,
+                                1 core/head (`sdpa_decode.cpp:122-129`), the worst measured
+                                setting. This is what the layer ran before any sweep existed.
+    B  k_chunk 128, 1 core   -- what `k_chunk_size=0` (dynamic) resolves to here. The setting the
+                                previous, wrongly-attributed review round shipped.
+    C  k_chunk 512, 1 core   -- **what the layer now ships**
+                                (`DecoderConfig.decode_sdpa_k_chunk_size = 512`). Largest legal
+                                chunk: 1024 exceeds L1.
+    D  k_chunk 256, 16 cores -- the fastest setting in the whole op sweep (1.39 ms/call vs C's
+                                7.45) and the most accurate at the advertised context. Included to
+                                measure on-model what the op sweep says is unshippable: it is
+                                silently wrong at 257, 1024 and 4096 keys.
 
-One layer is built per context and prefilled **once**; the three settings then decode from that
-same cache, so the comparison is same-input (an earlier version of this script compared across
-processes with different seeds, which was weaker).
+One layer is built per context and prefilled **once**; every setting then decodes from that same
+cache, so the comparison is same-input (an earlier version compared across processes with different
+seeds, which was weaker).
 
     python models/autoports/qwen_qwen3_6_35b_a3b/tests/diag_decode_sdpa_onmodel.py
 """
@@ -45,19 +51,20 @@ def settings(device):
     """(label, SDPAProgramConfig or None) for each candidate."""
     grid = device.compute_with_storage_grid_size()
 
-    def cfg(max_cores):
+    def cfg(k_chunk, max_cores):
         return ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=ttnn.CoreCoord(grid.x, grid.y),
             q_chunk_size=32,
-            k_chunk_size=0,  # dynamic, same as the no-config path
+            k_chunk_size=k_chunk,
             exp_approx_mode=False,
             max_cores_per_head_batch=max_cores,
         )
 
     return [
-        ("A no-config (55 cores/head)", None),
-        ("B explicit, default 16/head", cfg(16)),
-        ("C explicit, 1 core/head", cfg(1)),
+        ("A no-config (k32, 1 core)", None),
+        ("B k128, 1 core", cfg(128, 1)),
+        ("C k512, 1 core (shipped)", cfg(512, 1)),
+        ("D k256, 16 cores (fastest)", cfg(256, 16)),
     ]
 
 

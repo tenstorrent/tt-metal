@@ -51,8 +51,8 @@ DECODE_ITERS = int(os.environ.get("QWEN36_PERF_DECODE_ITERS", 8))
 #: (see `test_long_context.py::test_max_batch_full_context_capacity`), which leaves no room for a
 #: profiler buffer; and decode cost grows with `cur_pos`, so a fixed 4095 is what makes the
 #: prefill/decode rows comparable across runs. It does mean the decode rows are *not* the
-#: advertised-context latency: the decode SDPA alone is 11.5 ms/call at 262144 keys against ~1 ms
-#: here (`logs/diag_sdpa_decode.txt`), so the advertised-context step is ~10 ms slower than the
+#: advertised-context latency: the decode SDPA alone is 7.45 ms/call at 262144 keys against ~1 ms
+#: here (`logs/diag_sdpa_decode.txt`), so the advertised-context step is ~6 ms slower than the
 #: table shows. Override with QWEN36_PERF_CONTEXT / QWEN36_PERF_DECODE_POS to measure elsewhere.
 PERF_CONTEXT = int(os.environ.get("QWEN36_PERF_CONTEXT", 8192))
 

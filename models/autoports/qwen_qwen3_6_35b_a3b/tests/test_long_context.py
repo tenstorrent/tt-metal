@@ -139,17 +139,20 @@ def test_longest_decode_context(long_device, kind):
     and the HF side advances its own cache/state over the same tokens in O(seq), so this is the
     contract's own path rather than a synthetic cache.
 
-    This case's full-attention decode PCC is **0.9997685** — the lowest number in the stage, and
-    the one that drove README section 3.8. That investigation traced it to the decode SDPA op's
-    parallel decomposition (``SDPAProgramConfig::max_cores_per_head_batch``), reproduced with no
-    model code at all in ``tests/diag_sdpa_decode.py`` and settled on the real layer in
-    ``tests/diag_decode_sdpa_onmodel.py``; the fix — 1 core per (slot, KV head) — ships, and is why
-    this reads 0.9997685 rather than the **0.9986** the previous default gave. The defect only
-    existed at small batch, which is why this batch-1 test is the one that saw it;
-    ``test_longest_decode_context_batched`` covers batch 2 at the same context.
+    This case's full-attention decode PCC drove README section 3.8: it was the one number in the
+    stage materially below the rest. That investigation ended at ``SDPAProgramConfig::k_chunk_size``
+    — the decode SDPA's bf16 accumulation depth — reproduced with no model code at all in
+    ``tests/diag_sdpa_decode.py`` and settled on the real layer in
+    ``tests/diag_decode_sdpa_onmodel.py``. Shipping the largest legal chunk (512) took this case from
+    **0.9986** (the op's own default, ``k_chunk_size=32``) through 0.9997685 (128) to
+    **0.9999939**, in line with every other context, while also being 3.8x faster than the op
+    default and 1.55x faster than 128.
 
-    Two earlier explanations in this docstring were wrong and are gone: the conditioning of random
-    K/V, and (later) 0.9986 quoted as if it were the current value.
+    Three earlier explanations in this docstring were wrong and are gone: the conditioning of random
+    K/V; 0.9986 quoted as if it were the current value; and ``max_cores_per_head_batch`` named as the
+    variable, which it is not — the paged op already defaults to 1 core/head, so it never differed
+    between the settings being compared (``tt/functional_decoder.py`` ->
+    ``_decode_sdpa_program_config``).
     """
     position = LONG_CONTEXT - 1
     pair = build_layer_pair(long_device, kind=kind, max_batch_size=1, supported_context=LONG_CONTEXT)
@@ -194,12 +197,13 @@ def test_longest_decode_context(long_device, kind):
 def test_longest_decode_context_batched(long_device):
     """The advertised context decoded with **two** slots live, not one.
 
-    Why this exists: the decode-SDPA fix in README section 3.8 pins the op to 1 core per
-    (slot, KV head), and how many cores the op would otherwise use depends on the decode batch
-    (``max_cores_per_head_batch`` is divided by it) -- 55/head at batch 1 down to 1/head at batch 32.
-    Every other measurement behind that fix is batch 1, so without this the batch-independence of the
-    shipped decomposition would be a source-level argument rather than a measurement. ``full`` only:
-    the linear recurrence has no cross-slot coupling and no SDPA.
+    Why this exists: every measurement behind the README section 3.8 decode-SDPA choice is batch 1 —
+    the op sweep, the on-model comparison and the sibling test above. The shipped config pins both
+    ``k_chunk_size`` and ``max_cores_per_head_batch``, and the factory divides the core budget by the
+    batch (``sdpa_decode_program_factory.cpp:195-196``), so decoding at batch > 1 is a different
+    program. Without this case, that the choice still holds above one slot would be a source-level
+    argument rather than a measurement. ``full`` only: the linear recurrence has no cross-slot
+    coupling and no SDPA.
 
     Slot 1 holds the advertised context and is the one compared; slot 0 holds a shorter sequence with
     a different seed and decodes with ``current_pos = -1``, so the two slots hold genuinely different

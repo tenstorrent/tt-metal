@@ -94,27 +94,27 @@
 {"label": "prefill-slot[full] user=31", "pcc": 0.9999909148368255, "maxabs": 0.0320277214050293, "rel_rms": 0.00429631769657135, "user_id": 31}
 {"label": "prefill[full] seq=1024 start=0 user=0", "pcc": 0.9999918552237481, "maxabs": 0.042973995208740234, "rel_rms": 0.004078803118318319, "seq_len": 1024, "start_pos": 0, "user_id": 0}
 {"label": "prefill[full] seq=1000 start=0 user=0", "pcc": 0.9999920321225853, "maxabs": 0.041356563568115234, "rel_rms": 0.004035325720906258, "seq_len": 1000, "start_pos": 0, "user_id": 0}
-{"label": "decode[full] pos=1000 batch=1", "pcc": 0.9999951867069419, "maxabs": 0.022042036056518555, "rel_rms": 0.003144809976220131, "pos": 1000, "batch": 1}
+{"label": "decode[full] pos=1000 batch=1", "pcc": 0.9999957570702264, "maxabs": 0.02144312858581543, "rel_rms": 0.002969080815091729, "pos": 1000, "batch": 1}
 {"label": "prefill-fresh-slot[linear] seq=640", "pcc": 0.9999823980132174, "maxabs": 0.039098501205444336, "rel_rms": 0.0059365215711295605}
 {"label": "prefill-fresh-slot[full] seq=640", "pcc": 0.9999910231975531, "maxabs": 0.039389848709106445, "rel_rms": 0.004272517282515764}
 {"label": "decode[linear] pos=256 batch=1", "pcc": 0.9999886241550757, "maxabs": 0.01959538459777832, "rel_rms": 0.004787641577422619, "pos": 256, "batch": 1}
 {"label": "decode[linear] pos=257 batch=1", "pcc": 0.9999885453560632, "maxabs": 0.024614810943603516, "rel_rms": 0.004793931730091572, "pos": 257, "batch": 1}
 {"label": "decode[linear] pos=258 batch=1", "pcc": 0.9999919068570112, "maxabs": 0.022608041763305664, "rel_rms": 0.004047342576086521, "pos": 258, "batch": 1}
-{"label": "decode[full] pos=256 batch=1", "pcc": 0.9999940643946192, "maxabs": 0.016921043395996094, "rel_rms": 0.003519597230479121, "pos": 256, "batch": 1}
-{"label": "decode[full] pos=257 batch=1", "pcc": 0.9999948193015524, "maxabs": 0.021381378173828125, "rel_rms": 0.0032870627474039793, "pos": 257, "batch": 1}
-{"label": "decode[full] pos=258 batch=1", "pcc": 0.9999948921862504, "maxabs": 0.019494295120239258, "rel_rms": 0.0032708386424928904, "pos": 258, "batch": 1}
+{"label": "decode[full] pos=256 batch=1", "pcc": 0.9999943338631775, "maxabs": 0.016921043395996094, "rel_rms": 0.0034354401286691427, "pos": 256, "batch": 1}
+{"label": "decode[full] pos=257 batch=1", "pcc": 0.9999949461310501, "maxabs": 0.021381378173828125, "rel_rms": 0.0032478661742061377, "pos": 257, "batch": 1}
+{"label": "decode[full] pos=258 batch=1", "pcc": 0.9999953207605049, "maxabs": 0.019494295120239258, "rel_rms": 0.00313583598472178, "pos": 258, "batch": 1}
 {"label": "decode[linear] pos=256 batch=8", "pcc": 0.9999887862440829, "maxabs": 0.025523662567138672, "rel_rms": 0.0047489251010119915, "pos": 256, "batch": 8}
 {"label": "decode[linear] pos=257 batch=8", "pcc": 0.999989720786543, "maxabs": 0.023460030555725098, "rel_rms": 0.004551037680357695, "pos": 257, "batch": 8}
 {"label": "decode[linear] pos=258 batch=8", "pcc": 0.9999885833133759, "maxabs": 0.02968287467956543, "rel_rms": 0.004786890931427479, "pos": 258, "batch": 8}
-{"label": "decode[full] pos=256 batch=8", "pcc": 0.9999921913282936, "maxabs": 0.022398948669433594, "rel_rms": 0.003996767103672028, "pos": 256, "batch": 8}
-{"label": "decode[full] pos=257 batch=8", "pcc": 0.9999932788385405, "maxabs": 0.0235595703125, "rel_rms": 0.00373339862562716, "pos": 257, "batch": 8}
-{"label": "decode[full] pos=258 batch=8", "pcc": 0.9999929959805731, "maxabs": 0.02332472801208496, "rel_rms": 0.003790301503613591, "pos": 258, "batch": 8}
+{"label": "decode[full] pos=256 batch=8", "pcc": 0.9999924245162977, "maxabs": 0.023020267486572266, "rel_rms": 0.003945278935134411, "pos": 256, "batch": 8}
+{"label": "decode[full] pos=257 batch=8", "pcc": 0.9999937357371166, "maxabs": 0.02274775505065918, "rel_rms": 0.0036053000949323177, "pos": 257, "batch": 8}
+{"label": "decode[full] pos=258 batch=8", "pcc": 0.999993458199466, "maxabs": 0.02332472801208496, "rel_rms": 0.003670740406960249, "pos": 258, "batch": 8}
 {"label": "decode[linear] pos=256 batch=32", "pcc": 0.9999895181217126, "maxabs": 0.029524803161621094, "rel_rms": 0.0045943777076900005, "pos": 256, "batch": 32}
 {"label": "decode[linear] pos=257 batch=32", "pcc": 0.9999897006784421, "maxabs": 0.028097152709960938, "rel_rms": 0.004550784360617399, "pos": 257, "batch": 32}
 {"label": "decode[linear] pos=258 batch=32", "pcc": 0.9999895351680174, "maxabs": 0.02867722511291504, "rel_rms": 0.004586538765579462, "pos": 258, "batch": 32}
-{"label": "decode[full] pos=256 batch=32", "pcc": 0.9999940287377891, "maxabs": 0.023870468139648438, "rel_rms": 0.003521053120493889, "pos": 256, "batch": 32}
-{"label": "decode[full] pos=257 batch=32", "pcc": 0.9999936001592907, "maxabs": 0.03675413131713867, "rel_rms": 0.003637203946709633, "pos": 257, "batch": 32}
-{"label": "decode[full] pos=258 batch=32", "pcc": 0.9999939793161504, "maxabs": 0.02576613426208496, "rel_rms": 0.0035289672669023275, "pos": 258, "batch": 32}
+{"label": "decode[full] pos=256 batch=32", "pcc": 0.9999943141375928, "maxabs": 0.025265216827392578, "rel_rms": 0.0034431570675224066, "pos": 256, "batch": 32}
+{"label": "decode[full] pos=257 batch=32", "pcc": 0.9999940105188834, "maxabs": 0.03675413131713867, "rel_rms": 0.0035285891499370337, "pos": 257, "batch": 32}
+{"label": "decode[full] pos=258 batch=32", "pcc": 0.999994409960614, "maxabs": 0.02576613426208496, "rel_rms": 0.0034075810108333826, "pos": 258, "batch": 32}
 {"label": "decode[linear] pos=128 batch=1", "pcc": 0.9999894990140041, "maxabs": 0.022663354873657227, "rel_rms": 0.004591154400259256, "pos": 128, "batch": 1}
 {"label": "decode[linear] pos=129 batch=1", "pcc": 0.999990384983613, "maxabs": 0.02249002456665039, "rel_rms": 0.004440754186362028, "pos": 129, "batch": 1}
 {"label": "decode[linear] pos=130 batch=1", "pcc": 0.9999910939824447, "maxabs": 0.02250981330871582, "rel_rms": 0.004243067465722561, "pos": 130, "batch": 1}
@@ -179,92 +179,92 @@
 {"label": "decode[linear] pos=189 batch=1", "pcc": 0.9999889254728538, "maxabs": 0.020498275756835938, "rel_rms": 0.004719333723187447, "pos": 189, "batch": 1}
 {"label": "decode[linear] pos=190 batch=1", "pcc": 0.9999908198468885, "maxabs": 0.021461963653564453, "rel_rms": 0.0042929258197546005, "pos": 190, "batch": 1}
 {"label": "decode[linear] pos=191 batch=1", "pcc": 0.9999884802789027, "maxabs": 0.020702123641967773, "rel_rms": 0.004828508011996746, "pos": 191, "batch": 1}
-{"label": "decode[full] pos=128 batch=1", "pcc": 0.999993753003802, "maxabs": 0.022246360778808594, "rel_rms": 0.0035896834451705217, "pos": 128, "batch": 1}
-{"label": "decode[full] pos=129 batch=1", "pcc": 0.999993439589878, "maxabs": 0.020427942276000977, "rel_rms": 0.003675889689475298, "pos": 129, "batch": 1}
-{"label": "decode[full] pos=130 batch=1", "pcc": 0.999992119406919, "maxabs": 0.022869586944580078, "rel_rms": 0.00400838628411293, "pos": 130, "batch": 1}
-{"label": "decode[full] pos=131 batch=1", "pcc": 0.9999929293295258, "maxabs": 0.020029306411743164, "rel_rms": 0.0037856113631278276, "pos": 131, "batch": 1}
-{"label": "decode[full] pos=132 batch=1", "pcc": 0.9999943605459674, "maxabs": 0.02401876449584961, "rel_rms": 0.003446341725066304, "pos": 132, "batch": 1}
-{"label": "decode[full] pos=133 batch=1", "pcc": 0.9999902418325679, "maxabs": 0.02318572998046875, "rel_rms": 0.0044473144225776196, "pos": 133, "batch": 1}
-{"label": "decode[full] pos=134 batch=1", "pcc": 0.9999936233250218, "maxabs": 0.019219398498535156, "rel_rms": 0.0036249186377972364, "pos": 134, "batch": 1}
-{"label": "decode[full] pos=135 batch=1", "pcc": 0.9999934042722275, "maxabs": 0.02209186553955078, "rel_rms": 0.0036622879561036825, "pos": 135, "batch": 1}
-{"label": "decode[full] pos=136 batch=1", "pcc": 0.9999933877141978, "maxabs": 0.019749879837036133, "rel_rms": 0.0036810622550547123, "pos": 136, "batch": 1}
-{"label": "decode[full] pos=137 batch=1", "pcc": 0.9999929011311495, "maxabs": 0.02378082275390625, "rel_rms": 0.0038021451327949762, "pos": 137, "batch": 1}
-{"label": "decode[full] pos=138 batch=1", "pcc": 0.9999934178687859, "maxabs": 0.022127151489257812, "rel_rms": 0.003682049224153161, "pos": 138, "batch": 1}
-{"label": "decode[full] pos=139 batch=1", "pcc": 0.9999939513523594, "maxabs": 0.02116680145263672, "rel_rms": 0.003542494960129261, "pos": 139, "batch": 1}
-{"label": "decode[full] pos=140 batch=1", "pcc": 0.9999941369970549, "maxabs": 0.01781463623046875, "rel_rms": 0.003491602372378111, "pos": 140, "batch": 1}
-{"label": "decode[full] pos=141 batch=1", "pcc": 0.9999936675496622, "maxabs": 0.021607160568237305, "rel_rms": 0.003602409502491355, "pos": 141, "batch": 1}
-{"label": "decode[full] pos=142 batch=1", "pcc": 0.9999894251204854, "maxabs": 0.022426366806030273, "rel_rms": 0.0046236757189035416, "pos": 142, "batch": 1}
-{"label": "decode[full] pos=143 batch=1", "pcc": 0.9999929394270464, "maxabs": 0.01954030990600586, "rel_rms": 0.003785006469115615, "pos": 143, "batch": 1}
-{"label": "decode[full] pos=144 batch=1", "pcc": 0.9999940115208645, "maxabs": 0.018001079559326172, "rel_rms": 0.003503135871142149, "pos": 144, "batch": 1}
-{"label": "decode[full] pos=145 batch=1", "pcc": 0.9999931046599186, "maxabs": 0.017867326736450195, "rel_rms": 0.0037569093983620405, "pos": 145, "batch": 1}
-{"label": "decode[full] pos=146 batch=1", "pcc": 0.9999931552851749, "maxabs": 0.02366781234741211, "rel_rms": 0.0037530246190726757, "pos": 146, "batch": 1}
-{"label": "decode[full] pos=147 batch=1", "pcc": 0.9999938178885703, "maxabs": 0.018790721893310547, "rel_rms": 0.003567338455468416, "pos": 147, "batch": 1}
-{"label": "decode[full] pos=148 batch=1", "pcc": 0.9999935116936647, "maxabs": 0.017639875411987305, "rel_rms": 0.003624160075560212, "pos": 148, "batch": 1}
-{"label": "decode[full] pos=149 batch=1", "pcc": 0.9999849281123039, "maxabs": 0.02693033218383789, "rel_rms": 0.005504040978848934, "pos": 149, "batch": 1}
-{"label": "decode[full] pos=150 batch=1", "pcc": 0.9999935685968601, "maxabs": 0.019347190856933594, "rel_rms": 0.0036377764772623777, "pos": 150, "batch": 1}
-{"label": "decode[full] pos=151 batch=1", "pcc": 0.9999942357830274, "maxabs": 0.019046306610107422, "rel_rms": 0.003425197908654809, "pos": 151, "batch": 1}
-{"label": "decode[full] pos=152 batch=1", "pcc": 0.9999934251932892, "maxabs": 0.018318653106689453, "rel_rms": 0.003674119710922241, "pos": 152, "batch": 1}
-{"label": "decode[full] pos=153 batch=1", "pcc": 0.9999928574430393, "maxabs": 0.021121978759765625, "rel_rms": 0.003840723540633917, "pos": 153, "batch": 1}
-{"label": "decode[full] pos=154 batch=1", "pcc": 0.9999931241632037, "maxabs": 0.020240068435668945, "rel_rms": 0.0037542497739195824, "pos": 154, "batch": 1}
-{"label": "decode[full] pos=155 batch=1", "pcc": 0.9999933436066982, "maxabs": 0.017966032028198242, "rel_rms": 0.0037142294459044933, "pos": 155, "batch": 1}
-{"label": "decode[full] pos=156 batch=1", "pcc": 0.9999926599669765, "maxabs": 0.019408464431762695, "rel_rms": 0.0038776190485805273, "pos": 156, "batch": 1}
-{"label": "decode[full] pos=157 batch=1", "pcc": 0.9999943459281162, "maxabs": 0.016372203826904297, "rel_rms": 0.0034152057487517595, "pos": 157, "batch": 1}
-{"label": "decode[full] pos=158 batch=1", "pcc": 0.9999934925484718, "maxabs": 0.01957988739013672, "rel_rms": 0.0036439287941902876, "pos": 158, "batch": 1}
-{"label": "decode[full] pos=159 batch=1", "pcc": 0.9999941838887388, "maxabs": 0.027159690856933594, "rel_rms": 0.003454647259786725, "pos": 159, "batch": 1}
-{"label": "decode[full] pos=160 batch=1", "pcc": 0.9999937673995174, "maxabs": 0.0227353572845459, "rel_rms": 0.00359899178147316, "pos": 160, "batch": 1}
-{"label": "decode[full] pos=161 batch=1", "pcc": 0.9999880682131842, "maxabs": 0.02208113670349121, "rel_rms": 0.004937523975968361, "pos": 161, "batch": 1}
-{"label": "decode[full] pos=162 batch=1", "pcc": 0.9999934317687214, "maxabs": 0.019689083099365234, "rel_rms": 0.003700295463204384, "pos": 162, "batch": 1}
-{"label": "decode[full] pos=163 batch=1", "pcc": 0.9999938864595723, "maxabs": 0.022567033767700195, "rel_rms": 0.0035448947455734015, "pos": 163, "batch": 1}
-{"label": "decode[full] pos=164 batch=1", "pcc": 0.9999937280088209, "maxabs": 0.02010035514831543, "rel_rms": 0.0035656511317938566, "pos": 164, "batch": 1}
-{"label": "decode[full] pos=165 batch=1", "pcc": 0.9999942814295949, "maxabs": 0.01972222328186035, "rel_rms": 0.0034145184326916933, "pos": 165, "batch": 1}
-{"label": "decode[full] pos=166 batch=1", "pcc": 0.9999937427091489, "maxabs": 0.020410537719726562, "rel_rms": 0.0035949712619185448, "pos": 166, "batch": 1}
-{"label": "decode[full] pos=167 batch=1", "pcc": 0.9999934786123251, "maxabs": 0.022939682006835938, "rel_rms": 0.003671474289149046, "pos": 167, "batch": 1}
-{"label": "decode[full] pos=168 batch=1", "pcc": 0.9999939311880489, "maxabs": 0.024128437042236328, "rel_rms": 0.003529941663146019, "pos": 168, "batch": 1}
-{"label": "decode[full] pos=169 batch=1", "pcc": 0.9999939451266413, "maxabs": 0.022771596908569336, "rel_rms": 0.0035399585030972958, "pos": 169, "batch": 1}
-{"label": "decode[full] pos=170 batch=1", "pcc": 0.9999939286869789, "maxabs": 0.018642663955688477, "rel_rms": 0.003522460348904133, "pos": 170, "batch": 1}
-{"label": "decode[full] pos=171 batch=1", "pcc": 0.9999931284354716, "maxabs": 0.02372121810913086, "rel_rms": 0.0037861799355596304, "pos": 171, "batch": 1}
-{"label": "decode[full] pos=172 batch=1", "pcc": 0.9999932568033704, "maxabs": 0.017200231552124023, "rel_rms": 0.0037218048237264156, "pos": 172, "batch": 1}
-{"label": "decode[full] pos=173 batch=1", "pcc": 0.9999911915270816, "maxabs": 0.023244380950927734, "rel_rms": 0.004244184121489525, "pos": 173, "batch": 1}
-{"label": "decode[full] pos=174 batch=1", "pcc": 0.9999942028024775, "maxabs": 0.020850181579589844, "rel_rms": 0.0034599595237523317, "pos": 174, "batch": 1}
-{"label": "decode[full] pos=175 batch=1", "pcc": 0.9999924327830497, "maxabs": 0.030111312866210938, "rel_rms": 0.003916031681001186, "pos": 175, "batch": 1}
-{"label": "decode[full] pos=176 batch=1", "pcc": 0.9999931606106957, "maxabs": 0.021238327026367188, "rel_rms": 0.0037562272045761347, "pos": 176, "batch": 1}
-{"label": "decode[full] pos=177 batch=1", "pcc": 0.9999946413976035, "maxabs": 0.02006697654724121, "rel_rms": 0.0033412787597626448, "pos": 177, "batch": 1}
-{"label": "decode[full] pos=178 batch=1", "pcc": 0.9999934430309269, "maxabs": 0.018555641174316406, "rel_rms": 0.0036503374576568604, "pos": 178, "batch": 1}
-{"label": "decode[full] pos=179 batch=1", "pcc": 0.9999931928518879, "maxabs": 0.02404022216796875, "rel_rms": 0.003768730442970991, "pos": 179, "batch": 1}
-{"label": "decode[full] pos=180 batch=1", "pcc": 0.9999946065253174, "maxabs": 0.0174105167388916, "rel_rms": 0.0032963124103844166, "pos": 180, "batch": 1}
-{"label": "decode[full] pos=181 batch=1", "pcc": 0.999992901845342, "maxabs": 0.019251108169555664, "rel_rms": 0.0037958372849971056, "pos": 181, "batch": 1}
-{"label": "decode[full] pos=182 batch=1", "pcc": 0.9999934852743757, "maxabs": 0.021228313446044922, "rel_rms": 0.003666479606181383, "pos": 182, "batch": 1}
-{"label": "decode[full] pos=183 batch=1", "pcc": 0.9999933690853604, "maxabs": 0.023058176040649414, "rel_rms": 0.003678065026178956, "pos": 183, "batch": 1}
-{"label": "decode[full] pos=184 batch=1", "pcc": 0.9999942889641943, "maxabs": 0.017238140106201172, "rel_rms": 0.0034240991808474064, "pos": 184, "batch": 1}
-{"label": "decode[full] pos=185 batch=1", "pcc": 0.9999935292137214, "maxabs": 0.017357826232910156, "rel_rms": 0.0036523384042084217, "pos": 185, "batch": 1}
-{"label": "decode[full] pos=186 batch=1", "pcc": 0.9999942511192207, "maxabs": 0.020626306533813477, "rel_rms": 0.0034502153284847736, "pos": 186, "batch": 1}
-{"label": "decode[full] pos=187 batch=1", "pcc": 0.9999922692326636, "maxabs": 0.03532123565673828, "rel_rms": 0.00397553900256753, "pos": 187, "batch": 1}
-{"label": "decode[full] pos=188 batch=1", "pcc": 0.99999390341244, "maxabs": 0.019298791885375977, "rel_rms": 0.0036198818124830723, "pos": 188, "batch": 1}
-{"label": "decode[full] pos=189 batch=1", "pcc": 0.9999929979589954, "maxabs": 0.022909164428710938, "rel_rms": 0.0037998377811163664, "pos": 189, "batch": 1}
-{"label": "decode[full] pos=190 batch=1", "pcc": 0.9999939972054999, "maxabs": 0.018843650817871094, "rel_rms": 0.0034954368602484465, "pos": 190, "batch": 1}
-{"label": "decode[full] pos=191 batch=1", "pcc": 0.999993235539067, "maxabs": 0.019062042236328125, "rel_rms": 0.003708524163812399, "pos": 191, "batch": 1}
+{"label": "decode[full] pos=128 batch=1", "pcc": 0.9999940469669566, "maxabs": 0.022246360778808594, "rel_rms": 0.003513095434755087, "pos": 128, "batch": 1}
+{"label": "decode[full] pos=129 batch=1", "pcc": 0.9999933730367688, "maxabs": 0.02360677719116211, "rel_rms": 0.0036950341891497374, "pos": 129, "batch": 1}
+{"label": "decode[full] pos=130 batch=1", "pcc": 0.9999926623929193, "maxabs": 0.021172761917114258, "rel_rms": 0.0038669740315526724, "pos": 130, "batch": 1}
+{"label": "decode[full] pos=131 batch=1", "pcc": 0.9999932008259915, "maxabs": 0.020029306411743164, "rel_rms": 0.0037179174832999706, "pos": 131, "batch": 1}
+{"label": "decode[full] pos=132 batch=1", "pcc": 0.9999947002440736, "maxabs": 0.02401876449584961, "rel_rms": 0.0033447719179093838, "pos": 132, "batch": 1}
+{"label": "decode[full] pos=133 batch=1", "pcc": 0.9999910833430142, "maxabs": 0.02318572998046875, "rel_rms": 0.004256377927958965, "pos": 133, "batch": 1}
+{"label": "decode[full] pos=134 batch=1", "pcc": 0.9999937816656099, "maxabs": 0.019219398498535156, "rel_rms": 0.0035879306960850954, "pos": 134, "batch": 1}
+{"label": "decode[full] pos=135 batch=1", "pcc": 0.9999937845178754, "maxabs": 0.02209186553955078, "rel_rms": 0.003566034371033311, "pos": 135, "batch": 1}
+{"label": "decode[full] pos=136 batch=1", "pcc": 0.99999364647172, "maxabs": 0.019749879837036133, "rel_rms": 0.0036086745094507933, "pos": 136, "batch": 1}
+{"label": "decode[full] pos=137 batch=1", "pcc": 0.9999929762675255, "maxabs": 0.02378082275390625, "rel_rms": 0.00379885733127594, "pos": 137, "batch": 1}
+{"label": "decode[full] pos=138 batch=1", "pcc": 0.999993899497183, "maxabs": 0.022127151489257812, "rel_rms": 0.0035266040358692408, "pos": 138, "batch": 1}
+{"label": "decode[full] pos=139 batch=1", "pcc": 0.9999939980209227, "maxabs": 0.02116680145263672, "rel_rms": 0.0035289262887090445, "pos": 139, "batch": 1}
+{"label": "decode[full] pos=140 batch=1", "pcc": 0.9999870725641155, "maxabs": 0.026903390884399414, "rel_rms": 0.005127379670739174, "pos": 140, "batch": 1}
+{"label": "decode[full] pos=141 batch=1", "pcc": 0.9999940154151078, "maxabs": 0.021607160568237305, "rel_rms": 0.003503885120153427, "pos": 141, "batch": 1}
+{"label": "decode[full] pos=142 batch=1", "pcc": 0.9999896213475064, "maxabs": 0.022426366806030273, "rel_rms": 0.004591570235788822, "pos": 142, "batch": 1}
+{"label": "decode[full] pos=143 batch=1", "pcc": 0.9999933018169325, "maxabs": 0.021369218826293945, "rel_rms": 0.0036852655466645956, "pos": 143, "batch": 1}
+{"label": "decode[full] pos=144 batch=1", "pcc": 0.999994087329472, "maxabs": 0.018001079559326172, "rel_rms": 0.0034892598632723093, "pos": 144, "batch": 1}
+{"label": "decode[full] pos=145 batch=1", "pcc": 0.9999932779736022, "maxabs": 0.017867326736450195, "rel_rms": 0.0037124324589967728, "pos": 145, "batch": 1}
+{"label": "decode[full] pos=146 batch=1", "pcc": 0.9999935538843182, "maxabs": 0.02366781234741211, "rel_rms": 0.00365590862929821, "pos": 146, "batch": 1}
+{"label": "decode[full] pos=147 batch=1", "pcc": 0.9999940516468919, "maxabs": 0.018790721893310547, "rel_rms": 0.0035006070975214243, "pos": 147, "batch": 1}
+{"label": "decode[full] pos=148 batch=1", "pcc": 0.9999935788832568, "maxabs": 0.017639875411987305, "rel_rms": 0.0036064230371266603, "pos": 148, "batch": 1}
+{"label": "decode[full] pos=149 batch=1", "pcc": 0.9999946673579837, "maxabs": 0.019541263580322266, "rel_rms": 0.003308078972622752, "pos": 149, "batch": 1}
+{"label": "decode[full] pos=150 batch=1", "pcc": 0.9999938043534203, "maxabs": 0.019347190856933594, "rel_rms": 0.0035717017017304897, "pos": 150, "batch": 1}
+{"label": "decode[full] pos=151 batch=1", "pcc": 0.999994656508699, "maxabs": 0.019046306610107422, "rel_rms": 0.003323060693219304, "pos": 151, "batch": 1}
+{"label": "decode[full] pos=152 batch=1", "pcc": 0.9999937566727728, "maxabs": 0.018318653106689453, "rel_rms": 0.0035874005407094955, "pos": 152, "batch": 1}
+{"label": "decode[full] pos=153 batch=1", "pcc": 0.9999930846981696, "maxabs": 0.021121978759765625, "rel_rms": 0.003773357253521681, "pos": 153, "batch": 1}
+{"label": "decode[full] pos=154 batch=1", "pcc": 0.9999936050217798, "maxabs": 0.01931023597717285, "rel_rms": 0.003635319182649255, "pos": 154, "batch": 1}
+{"label": "decode[full] pos=155 batch=1", "pcc": 0.9999937769279189, "maxabs": 0.017966032028198242, "rel_rms": 0.0035960909444838762, "pos": 155, "batch": 1}
+{"label": "decode[full] pos=156 batch=1", "pcc": 0.9999931684664796, "maxabs": 0.019408464431762695, "rel_rms": 0.0037431467790156603, "pos": 156, "batch": 1}
+{"label": "decode[full] pos=157 batch=1", "pcc": 0.9999945149682385, "maxabs": 0.016372203826904297, "rel_rms": 0.0033838870003819466, "pos": 157, "batch": 1}
+{"label": "decode[full] pos=158 batch=1", "pcc": 0.9999937085267292, "maxabs": 0.01957988739013672, "rel_rms": 0.003586484119296074, "pos": 158, "batch": 1}
+{"label": "decode[full] pos=159 batch=1", "pcc": 0.9999941273154834, "maxabs": 0.027159690856933594, "rel_rms": 0.0034881634637713432, "pos": 159, "batch": 1}
+{"label": "decode[full] pos=160 batch=1", "pcc": 0.9999942042044992, "maxabs": 0.01866436004638672, "rel_rms": 0.003488448914140463, "pos": 160, "batch": 1}
+{"label": "decode[full] pos=161 batch=1", "pcc": 0.9999883809536043, "maxabs": 0.024276256561279297, "rel_rms": 0.004882370587438345, "pos": 161, "batch": 1}
+{"label": "decode[full] pos=162 batch=1", "pcc": 0.9999935849989545, "maxabs": 0.019689083099365234, "rel_rms": 0.003666394157335162, "pos": 162, "batch": 1}
+{"label": "decode[full] pos=163 batch=1", "pcc": 0.9999938943709273, "maxabs": 0.022567033767700195, "rel_rms": 0.003555519273504615, "pos": 163, "batch": 1}
+{"label": "decode[full] pos=164 batch=1", "pcc": 0.9999938814677285, "maxabs": 0.02010035514831543, "rel_rms": 0.0035187103785574436, "pos": 164, "batch": 1}
+{"label": "decode[full] pos=165 batch=1", "pcc": 0.999994694161866, "maxabs": 0.01972222328186035, "rel_rms": 0.0032892345916479826, "pos": 165, "batch": 1}
+{"label": "decode[full] pos=166 batch=1", "pcc": 0.999994030749245, "maxabs": 0.020410537719726562, "rel_rms": 0.0035151923075318336, "pos": 166, "batch": 1}
+{"label": "decode[full] pos=167 batch=1", "pcc": 0.9999940224913871, "maxabs": 0.022116661071777344, "rel_rms": 0.003530894173309207, "pos": 167, "batch": 1}
+{"label": "decode[full] pos=168 batch=1", "pcc": 0.9999942983183245, "maxabs": 0.024128437042236328, "rel_rms": 0.0034356226678937674, "pos": 168, "batch": 1}
+{"label": "decode[full] pos=169 batch=1", "pcc": 0.9999944778000827, "maxabs": 0.022771596908569336, "rel_rms": 0.003395811887457967, "pos": 169, "batch": 1}
+{"label": "decode[full] pos=170 batch=1", "pcc": 0.999994050771961, "maxabs": 0.018642663955688477, "rel_rms": 0.0034929635003209114, "pos": 170, "batch": 1}
+{"label": "decode[full] pos=171 batch=1", "pcc": 0.9999936763613013, "maxabs": 0.02372121810913086, "rel_rms": 0.0036365340929478407, "pos": 171, "batch": 1}
+{"label": "decode[full] pos=172 batch=1", "pcc": 0.9999931513538312, "maxabs": 0.017200231552124023, "rel_rms": 0.003731523174792528, "pos": 172, "batch": 1}
+{"label": "decode[full] pos=173 batch=1", "pcc": 0.9999918658468002, "maxabs": 0.023244380950927734, "rel_rms": 0.004092048853635788, "pos": 173, "batch": 1}
+{"label": "decode[full] pos=174 batch=1", "pcc": 0.9999944941259843, "maxabs": 0.020850181579589844, "rel_rms": 0.003371256170794368, "pos": 174, "batch": 1}
+{"label": "decode[full] pos=175 batch=1", "pcc": 0.9999929837540945, "maxabs": 0.030111312866210938, "rel_rms": 0.0037723444402217865, "pos": 175, "batch": 1}
+{"label": "decode[full] pos=176 batch=1", "pcc": 0.9999934592125702, "maxabs": 0.021238327026367188, "rel_rms": 0.0036737779155373573, "pos": 176, "batch": 1}
+{"label": "decode[full] pos=177 batch=1", "pcc": 0.9999946980038519, "maxabs": 0.02006697654724121, "rel_rms": 0.003325112396851182, "pos": 177, "batch": 1}
+{"label": "decode[full] pos=178 batch=1", "pcc": 0.9999936251978008, "maxabs": 0.018555641174316406, "rel_rms": 0.0035967514850199223, "pos": 178, "batch": 1}
+{"label": "decode[full] pos=179 batch=1", "pcc": 0.9999933219315192, "maxabs": 0.02404022216796875, "rel_rms": 0.003742536297068, "pos": 179, "batch": 1}
+{"label": "decode[full] pos=180 batch=1", "pcc": 0.999994704705977, "maxabs": 0.0174105167388916, "rel_rms": 0.0032731471583247185, "pos": 180, "batch": 1}
+{"label": "decode[full] pos=181 batch=1", "pcc": 0.9999932195697624, "maxabs": 0.019251108169555664, "rel_rms": 0.003722857218235731, "pos": 181, "batch": 1}
+{"label": "decode[full] pos=182 batch=1", "pcc": 0.999993948734151, "maxabs": 0.021228313446044922, "rel_rms": 0.003537556389346719, "pos": 182, "batch": 1}
+{"label": "decode[full] pos=183 batch=1", "pcc": 0.9999936997688968, "maxabs": 0.023058176040649414, "rel_rms": 0.0035951482132077217, "pos": 183, "batch": 1}
+{"label": "decode[full] pos=184 batch=1", "pcc": 0.9999946026043213, "maxabs": 0.017035365104675293, "rel_rms": 0.0033204799983650446, "pos": 184, "batch": 1}
+{"label": "decode[full] pos=185 batch=1", "pcc": 0.9999939705987023, "maxabs": 0.019440174102783203, "rel_rms": 0.0035423901863396168, "pos": 185, "batch": 1}
+{"label": "decode[full] pos=186 batch=1", "pcc": 0.9999948030289494, "maxabs": 0.018346309661865234, "rel_rms": 0.0032758868765085936, "pos": 186, "batch": 1}
+{"label": "decode[full] pos=187 batch=1", "pcc": 0.9999928638367755, "maxabs": 0.03532123565673828, "rel_rms": 0.003820642363280058, "pos": 187, "batch": 1}
+{"label": "decode[full] pos=188 batch=1", "pcc": 0.9999942015667593, "maxabs": 0.019298791885375977, "rel_rms": 0.0035317109432071447, "pos": 188, "batch": 1}
+{"label": "decode[full] pos=189 batch=1", "pcc": 0.9999931622109073, "maxabs": 0.022909164428710938, "rel_rms": 0.0037784287706017494, "pos": 189, "batch": 1}
+{"label": "decode[full] pos=190 batch=1", "pcc": 0.9999944409799937, "maxabs": 0.015804767608642578, "rel_rms": 0.0033619673922657967, "pos": 190, "batch": 1}
+{"label": "decode[full] pos=191 batch=1", "pcc": 0.9999937318685719, "maxabs": 0.019062042236328125, "rel_rms": 0.0035866734106093645, "pos": 191, "batch": 1}
 {"label": "decode[linear] pos=65 batch=1", "pcc": 0.9999899889374861, "maxabs": 0.023380517959594727, "rel_rms": 0.004487795755267143, "pos": 65, "batch": 1}
 {"label": "decode[linear] pos=66 batch=1", "pcc": 0.9999927197198069, "maxabs": 0.02095651626586914, "rel_rms": 0.003826428670436144, "pos": 66, "batch": 1}
 {"label": "decode[full] pos=65 batch=1", "pcc": 0.9999927958148466, "maxabs": 0.019458293914794922, "rel_rms": 0.0038180595729500055, "pos": 65, "batch": 1}
 {"label": "decode[full] pos=66 batch=1", "pcc": 0.9999933501296504, "maxabs": 0.024421215057373047, "rel_rms": 0.0037015227135270834, "pos": 66, "batch": 1}
 {"label": "decode[linear] pos=129 batch=1", "pcc": 0.9999856878240261, "maxabs": 0.021909713745117188, "rel_rms": 0.0053589604794979095, "pos": 129, "batch": 1}
 {"label": "decode[linear] pos=130 batch=1", "pcc": 0.9999900855035168, "maxabs": 0.02104330062866211, "rel_rms": 0.004472029861062765, "pos": 130, "batch": 1}
-{"label": "decode[full] pos=129 batch=1", "pcc": 0.9999927104820396, "maxabs": 0.024868249893188477, "rel_rms": 0.0038486148696392775, "pos": 129, "batch": 1}
-{"label": "decode[full] pos=130 batch=1", "pcc": 0.9999875633626163, "maxabs": 0.023894548416137695, "rel_rms": 0.005006301682442427, "pos": 130, "batch": 1}
+{"label": "decode[full] pos=129 batch=1", "pcc": 0.9999931783994894, "maxabs": 0.024868249893188477, "rel_rms": 0.0037183493841439486, "pos": 129, "batch": 1}
+{"label": "decode[full] pos=130 batch=1", "pcc": 0.9999879015885184, "maxabs": 0.023894548416137695, "rel_rms": 0.0049453298561275005, "pos": 130, "batch": 1}
 {"label": "decode[linear] pos=320 batch=1", "pcc": 0.9999891113574354, "maxabs": 0.017213821411132812, "rel_rms": 0.00468008778989315, "pos": 320, "batch": 1}
 {"label": "decode[linear] pos=321 batch=1", "pcc": 0.9999877283351104, "maxabs": 0.02368021011352539, "rel_rms": 0.004961109720170498, "pos": 321, "batch": 1}
-{"label": "decode[full] pos=320 batch=1", "pcc": 0.9999937410887468, "maxabs": 0.01902318000793457, "rel_rms": 0.003586153034120798, "pos": 320, "batch": 1}
-{"label": "decode[full] pos=321 batch=1", "pcc": 0.9999949567532139, "maxabs": 0.020296812057495117, "rel_rms": 0.0032691750675439835, "pos": 321, "batch": 1}
+{"label": "decode[full] pos=320 batch=1", "pcc": 0.9999945294196229, "maxabs": 0.01902318000793457, "rel_rms": 0.003362443996593356, "pos": 320, "batch": 1}
+{"label": "decode[full] pos=321 batch=1", "pcc": 0.9999952349101915, "maxabs": 0.020296812057495117, "rel_rms": 0.0031737210229039192, "pos": 321, "batch": 1}
 {"label": "decode[linear] pos=1000 batch=1", "pcc": 0.9999862367180478, "maxabs": 0.023022174835205078, "rel_rms": 0.005250950343906879, "pos": 1000, "batch": 1}
 {"label": "decode[linear] pos=1001 batch=1", "pcc": 0.9999881923129904, "maxabs": 0.02343463897705078, "rel_rms": 0.004879816435277462, "pos": 1001, "batch": 1}
-{"label": "decode[full] pos=1000 batch=1", "pcc": 0.9999946629088049, "maxabs": 0.023235797882080078, "rel_rms": 0.0033357711508870125, "pos": 1000, "batch": 1}
-{"label": "decode[full] pos=1001 batch=1", "pcc": 0.9999956569931571, "maxabs": 0.020515918731689453, "rel_rms": 0.0030011972412467003, "pos": 1001, "batch": 1}
-{"label": "decode-ragged user=0 pos=128", "pcc": 0.9999933484029755, "maxabs": 0.01873040199279785, "rel_rms": 0.003698387648910284}
-{"label": "decode-ragged user=1 pos=256", "pcc": 0.9999943014532088, "maxabs": 0.017784833908081055, "rel_rms": 0.003413685830309987}
-{"label": "decode-ragged user=2 pos=384", "pcc": 0.9999943489028451, "maxabs": 0.023614883422851562, "rel_rms": 0.0034413549583405256}
-{"label": "decode-ragged user=3 pos=640", "pcc": 0.999995011542486, "maxabs": 0.023869037628173828, "rel_rms": 0.0032358760945498943}
-{"label": "decode-active-slot user=0", "pcc": 0.9999934349982926, "maxabs": 0.018620967864990234, "rel_rms": 0.003716791747137904}
-{"label": "decode-active-slot user=2", "pcc": 0.9999930319725941, "maxabs": 0.021465063095092773, "rel_rms": 0.00376801285892725}
+{"label": "decode[full] pos=1000 batch=1", "pcc": 0.9999947743102823, "maxabs": 0.023235797882080078, "rel_rms": 0.003307575359940529, "pos": 1000, "batch": 1}
+{"label": "decode[full] pos=1001 batch=1", "pcc": 0.9999957180663058, "maxabs": 0.01945638656616211, "rel_rms": 0.0029822455253452063, "pos": 1001, "batch": 1}
+{"label": "decode-ragged user=0 pos=128", "pcc": 0.9999936847934034, "maxabs": 0.01873040199279785, "rel_rms": 0.003607127582654357}
+{"label": "decode-ragged user=1 pos=256", "pcc": 0.9999943734810685, "maxabs": 0.017784833908081055, "rel_rms": 0.0034141060896217823}
+{"label": "decode-ragged user=2 pos=384", "pcc": 0.9999945964810866, "maxabs": 0.023614883422851562, "rel_rms": 0.0033978992141783237}
+{"label": "decode-ragged user=3 pos=640", "pcc": 0.9999954106907636, "maxabs": 0.023869037628173828, "rel_rms": 0.003128777025267482}
+{"label": "decode-active-slot user=0", "pcc": 0.9999935372550134, "maxabs": 0.017357349395751953, "rel_rms": 0.0036819400265812874}
+{"label": "decode-active-slot user=2", "pcc": 0.9999930745476814, "maxabs": 0.01983332633972168, "rel_rms": 0.003754378529265523}
 {"label": "paged-kv keys", "pcc": 0.9999834640296369, "maxabs": 0.07382392883300781, "rel_rms": 0.005758633837103844}
 {"label": "paged-kv values", "pcc": 0.999987258875504, "maxabs": 0.024494171142578125, "rel_rms": 0.007817909121513367}
 {"label": "linear conv_state", "pcc": 0.9999870619451352, "maxabs": 0.026322364807128906, "rel_rms": 0.007781242020428181}
@@ -272,5 +272,5 @@
 {"label": "decode-seeded-state", "pcc": 0.9999720344745742, "maxabs": 0.03385007381439209, "rel_rms": 0.00757239805534482}
 {"label": "traced-decode[linear] pos=256 batch=8", "pcc": 0.9999895496485854, "maxabs": 0.025272130966186523, "rel_rms": 0.004591795615851879}
 {"label": "traced-decode[linear] pos=257 batch=8", "pcc": 0.9999891194053129, "maxabs": 0.027921438217163086, "rel_rms": 0.004683281760662794}
-{"label": "traced-decode[full] pos=256 batch=8", "pcc": 0.9999945171783569, "maxabs": 0.023062705993652344, "rel_rms": 0.0033921163994818926}
-{"label": "traced-decode[full] pos=257 batch=8", "pcc": 0.999993988237868, "maxabs": 0.0240478515625, "rel_rms": 0.003531597787514329}
+{"label": "traced-decode[full] pos=256 batch=8", "pcc": 0.999994254080921, "maxabs": 0.023062705993652344, "rel_rms": 0.00346907926723361}
+{"label": "traced-decode[full] pos=257 batch=8", "pcc": 0.9999944434393734, "maxabs": 0.0240478515625, "rel_rms": 0.0034097027964890003}

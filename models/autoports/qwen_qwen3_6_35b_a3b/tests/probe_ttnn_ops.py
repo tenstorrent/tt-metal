@@ -230,6 +230,99 @@ def p_sparse_decode(device):
     return f"out {tuple(out.shape)} pcc {pcc(got, ref):.6f}"
 
 
+@probe("sparse_matmul: an unselected expert's output tile is finite, not garbage")
+def p_sparse_unselected_is_finite(device):
+    """The MoE sums over all 256 experts and relies on the router weight being exactly 0 for the
+    248 it did not pick (``_experts``). ``0 * NaN = NaN``, so if a skipped expert's output tile held
+    uninitialised memory a single token would be poisoned -- the same semantics that made
+    ``ttnn.mul(x, 0.0)`` unusable for clearing state (see ``_zero_``). PCC over selected experts
+    cannot see this, because the poisoned tile is one the reference never reads.
+    """
+    b, e, k, n, topk = 4, 256, 2048, 512, 8
+    a = torch.randn(1, b, 1, k)
+    w = torch.randn(1, e, k, n) * 0.02
+    mask = torch.zeros(1, b, 1, e)
+    sel = torch.stack([torch.randperm(e)[:topk] for _ in range(b)])
+    for i in range(b):
+        mask[0, i, 0, sel[i]] = 1.0
+    out = ttnn.sparse_matmul(
+        tt(a, device),
+        tt(w, device),
+        sparsity=tt(mask, device, layout=ttnn.ROW_MAJOR_LAYOUT),
+        nnz=b * topk,
+        program_config=sparse_pcfg((8, 8), 1, n, k),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    got = ttnn.to_torch(out).reshape(b, e, n)
+    unselected = torch.ones(b, e, dtype=torch.bool)
+    for i in range(b):
+        unselected[i, sel[i]] = False
+    skipped = got[unselected]
+    finite = bool(torch.isfinite(skipped).all())
+    if not finite:
+        raise AssertionError(f"{int((~torch.isfinite(skipped)).sum())} non-finite values in skipped-expert tiles")
+    # Also record whether they are actually zero; the model only needs finite, but "zero" would mean
+    # the weighted sum is exact rather than merely well-conditioned.
+    return (
+        f"{skipped.numel()} skipped values, all finite; max_abs {float(skipped.abs().max()):.3e}, "
+        f"all_zero {bool((skipped == 0).all())}"
+    )
+
+
+@probe("fill(output_tensor=input) zeroes in place, clears NaN/Inf, allocates nothing")
+def p_fill_in_place(device):
+    """`_zero_`'s primitive. Two properties matter and both are measured here rather than assumed:
+    the buffer address must survive (the state tensors are baked into a trace) and the result must
+    not depend on what the buffer held (a poisoned slot must come out clean).
+
+    Also records what `ttnn.mul(t, 0.0)` does on this build, because an earlier revision of `_zero_`
+    justified itself with "`0 * NaN` is `NaN`". In IEEE arithmetic that is true; this kernel does not
+    do it, so the claim was wrong even though the code was harmless.
+    """
+    x = torch.tensor([[float("nan"), float("inf"), float("-inf"), -1.5]] * 32).reshape(1, 1, 32, 4)
+    t = tt(x, device)
+    before = t.buffer_address()
+    out = ttnn.fill(t, 0.0, output_tensor=t)
+    got = ttnn.to_torch(out).float()
+    if out.buffer_address() != before:
+        raise AssertionError(f"fill moved the buffer: {before} -> {out.buffer_address()}")
+    if not bool((got == 0).all()):
+        raise AssertionError(f"fill left {int((got != 0).sum())} non-zero values")
+    mul_clears = not bool(torch.isnan(ttnn.to_torch(ttnn.mul(tt(x, device), 0.0)).float()).any())
+    return (
+        f"in place at {before}, NaN/Inf cleared; for the record `mul(t, 0.0)` "
+        f"{'also clears' if mul_clears else 'preserves'} NaN on this build"
+    )
+
+
+@probe("scatter is out-of-place: two scatters over one source do not alias it")
+def p_scatter_not_aliased(device):
+    """``_router`` builds the dense score tensor and the expert mask with two ``ttnn.scatter`` calls
+    over the *same* ``zeros`` tensor, then deallocates ``zeros``. If ``scatter`` ever returned its
+    input (the way ``to_memory_config`` / ``to_layout`` / whole-tensor ``slice`` do), the two results
+    would alias each other and be freed underneath the caller. Every other such site in
+    ``functional_decoder.py`` goes through an ownership helper; this asserts the property instead.
+    """
+    b, e, topk = 4, 256, 8
+    zeros = tt(torch.zeros(1, 1, b, e), device)
+    # index must be an integer dtype (scatter_device_operation.cpp:43); `_router` gets one from
+    # `ttnn.topk`, so build it the same way here rather than through the bf16 default of `tt()`.
+    idx = tt(
+        torch.stack([torch.randperm(e)[:topk] for _ in range(b)]).reshape(1, 1, b, topk).int(),
+        device,
+        dtype=ttnn.int32,
+    )
+    a = ttnn.scatter(zeros, dim=3, index=idx, src=tt(torch.rand(1, 1, b, topk), device))
+    c = ttnn.scatter(zeros, dim=3, index=idx, src=tt(torch.ones(1, 1, b, topk), device))
+    addrs = (zeros.buffer_address(), a.buffer_address(), c.buffer_address())
+    if len(set(addrs)) != 3:
+        raise AssertionError(f"aliasing: zeros/a/c buffer addresses {addrs}")
+    # and the source really is untouched
+    if float(ttnn.to_torch(zeros).abs().max()) != 0.0:
+        raise AssertionError("scatter mutated its source tensor in place")
+    return f"3 distinct buffers {addrs}, source still all-zero"
+
+
 @probe("sparse_matmul mode (True,False) down: a[A,E,M,K] b[1,E,K,N] sparsity[1,1,A,E]")
 def p_sparse_down(device):
     a_dim, e, m, k, n, topk = 4, 256, 32, 512, 2048, 8
@@ -468,6 +561,9 @@ def main():
             p_create_heads,
             p_create_heads_decode,
             p_sparse_decode,
+            p_sparse_unselected_is_finite,
+            p_fill_in_place,
+            p_scatter_not_aliased,
             p_sparse_down,
             p_sparse_prefill,
             p_batched_mm,

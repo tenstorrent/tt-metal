@@ -2,29 +2,29 @@
   {
     "kind": "linear",
     "mode": "prefill",
-    "ops_in_window": 1754,
+    "ops_in_window": 1750,
     "iters": 2,
-    "device_kernel_ms_per_iter": 341.71,
-    "op_to_op_gap_ms_per_iter": 0.898,
-    "host_wall_ms_per_iter": 343.032,
+    "device_kernel_ms_per_iter": 342.046,
+    "op_to_op_gap_ms_per_iter": 0.883,
+    "host_wall_ms_per_iter": 343.39,
     "seq_len": 2048,
     "batch": 1,
     "current_pos": null,
     "traced": false,
     "supported_context": 8192,
     "top_ops_device_ms_per_iter": {
-      "SparseMatmulDeviceOperation active=?/4096 x 32 x 2048 x 1024": 147.407,
-      "SparseMatmulDeviceOperation active=?/4096 x 32 x 512 x 2048": 79.835,
-      "BinaryNgDeviceOperation": 25.307,
-      "UnaryDeviceOperation": 21.578,
-      "MatmulDeviceOperation b={1024} x 64 x 64 x 64": 19.188
+      "SparseMatmulDeviceOperation active=?/4096 x 32 x 2048 x 1024": 147.421,
+      "SparseMatmulDeviceOperation active=?/4096 x 32 x 512 x 2048": 79.803,
+      "BinaryNgDeviceOperation": 25.311,
+      "UnaryDeviceOperation": 21.814,
+      "MatmulDeviceOperation b={1024} x 64 x 64 x 64": 19.184
     },
     "blocks": {
       "iterations_identical": true,
-      "boundary_op_index_in_iteration": 689,
-      "mixer_ms_per_iter": 63.505,
-      "expert_matmul_ms_per_iter": 227.242,
-      "moe_elementwise_ms_per_iter": 50.963
+      "boundary_op_index_in_iteration": 687,
+      "mixer_ms_per_iter": 63.588,
+      "expert_matmul_ms_per_iter": 227.224,
+      "moe_elementwise_ms_per_iter": 51.234
     }
   },
   {
@@ -32,27 +32,27 @@
     "mode": "prefill",
     "ops_in_window": 392,
     "iters": 2,
-    "device_kernel_ms_per_iter": 281.496,
-    "op_to_op_gap_ms_per_iter": 0.125,
-    "host_wall_ms_per_iter": 281.957,
+    "device_kernel_ms_per_iter": 281.623,
+    "op_to_op_gap_ms_per_iter": 0.136,
+    "host_wall_ms_per_iter": 282.143,
     "seq_len": 2048,
     "batch": 1,
     "current_pos": null,
     "traced": false,
     "supported_context": 8192,
     "top_ops_device_ms_per_iter": {
-      "SparseMatmulDeviceOperation active=?/4096 x 32 x 2048 x 1024": 147.045,
-      "SparseMatmulDeviceOperation active=?/4096 x 32 x 512 x 2048": 79.588,
-      "UnaryDeviceOperation": 21.169,
-      "BinaryNgDeviceOperation": 16.11,
-      "FastReduceNCDeviceOperation": 6.416
+      "SparseMatmulDeviceOperation active=?/4096 x 32 x 2048 x 1024": 147.102,
+      "SparseMatmulDeviceOperation active=?/4096 x 32 x 512 x 2048": 79.598,
+      "UnaryDeviceOperation": 21.176,
+      "BinaryNgDeviceOperation": 16.101,
+      "FastReduceNCDeviceOperation": 6.48
     },
     "blocks": {
       "iterations_identical": true,
       "boundary_op_index_in_iteration": 28,
-      "mixer_ms_per_iter": 3.807,
-      "expert_matmul_ms_per_iter": 226.633,
-      "moe_elementwise_ms_per_iter": 51.056
+      "mixer_ms_per_iter": 3.8,
+      "expert_matmul_ms_per_iter": 226.7,
+      "moe_elementwise_ms_per_iter": 51.123
     }
   },
   {
@@ -60,27 +60,27 @@
     "mode": "decode",
     "ops_in_window": 968,
     "iters": 8,
-    "device_kernel_ms_per_iter": 57.844,
+    "device_kernel_ms_per_iter": 57.951,
     "op_to_op_gap_ms_per_iter": 0.089,
-    "host_wall_ms_per_iter": 57.961,
+    "host_wall_ms_per_iter": 58.065,
     "seq_len": 1,
     "batch": 32,
     "current_pos": 4095,
     "traced": true,
     "supported_context": 8192,
     "top_ops_device_ms_per_iter": {
-      "UnaryDeviceOperation": 10.509,
-      "BinaryNgDeviceOperation": 9.513,
-      "SparseMatmulDeviceOperation active=?/8192 x 32 x 512 x 2048": 9.467,
-      "SparseMatmulDeviceOperation active=?/8192 x 32 x 2048 x 1024": 9.11,
-      "FillPadDeviceOperation": 5.741
+      "UnaryDeviceOperation": 10.531,
+      "BinaryNgDeviceOperation": 9.514,
+      "SparseMatmulDeviceOperation active=?/8192 x 32 x 512 x 2048": 9.469,
+      "SparseMatmulDeviceOperation active=?/8192 x 32 x 2048 x 1024": 9.111,
+      "FillPadDeviceOperation": 5.736
     },
     "blocks": {
       "iterations_identical": true,
       "boundary_op_index_in_iteration": 68,
-      "mixer_ms_per_iter": 8.829,
-      "expert_matmul_ms_per_iter": 18.577,
-      "moe_elementwise_ms_per_iter": 30.438
+      "mixer_ms_per_iter": 8.828,
+      "expert_matmul_ms_per_iter": 18.579,
+      "moe_elementwise_ms_per_iter": 30.544
     }
   },
   {
@@ -88,27 +88,27 @@
     "mode": "decode",
     "ops_in_window": 872,
     "iters": 8,
-    "device_kernel_ms_per_iter": 50.106,
-    "op_to_op_gap_ms_per_iter": 0.239,
-    "host_wall_ms_per_iter": 50.371,
+    "device_kernel_ms_per_iter": 50.061,
+    "op_to_op_gap_ms_per_iter": 0.236,
+    "host_wall_ms_per_iter": 50.321,
     "seq_len": 1,
     "batch": 32,
     "current_pos": 4095,
     "traced": true,
     "supported_context": 8192,
     "top_ops_device_ms_per_iter": {
-      "UnaryDeviceOperation": 10.41,
-      "SparseMatmulDeviceOperation active=?/8192 x 32 x 512 x 2048": 9.457,
+      "UnaryDeviceOperation": 10.396,
+      "SparseMatmulDeviceOperation active=?/8192 x 32 x 512 x 2048": 9.456,
       "SparseMatmulDeviceOperation active=?/8192 x 32 x 2048 x 1024": 9.111,
-      "BinaryNgDeviceOperation": 7.888,
-      "FillPadDeviceOperation": 5.567
+      "BinaryNgDeviceOperation": 7.893,
+      "FillPadDeviceOperation": 5.562
     },
     "blocks": {
       "iterations_identical": true,
       "boundary_op_index_in_iteration": 56,
-      "mixer_ms_per_iter": 1.05,
+      "mixer_ms_per_iter": 1.055,
       "expert_matmul_ms_per_iter": 18.567,
-      "moe_elementwise_ms_per_iter": 30.489
+      "moe_elementwise_ms_per_iter": 30.44
     }
   }
 ]

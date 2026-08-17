@@ -306,11 +306,31 @@ def test_l2norm_as_rms_norm():
 # the tail. If that split were not exact, every advertised-context PCC in the stage would be
 # measured against the wrong golden and still look fine. These two tests close that gap at a
 # length where the full reference *is* affordable, so the comparison is direct.
-@pytest.mark.parametrize("kind,layer_idx", [("linear", 0), ("full", 3)])
-def test_tail_reference_matches_full_prefill(kind, layer_idx):
+#
+# The parametrisation matters as much as the test. `delta_chunk_size` is 64, so a case whose head
+# and chunk lengths are all multiples of 64 exercises none of the interesting arithmetic: the
+# advertised-context run is `seq=262143, tail=128, chunk=2048`, i.e. head 262015, whose final
+# chunked piece is 1919 tokens (63 mod 64, so HF's internal `pad_size` branch in
+# `torch_chunk_gated_delta_rule` fires) and whose tail starts 63 off the global 64-chunk grid.
+# The `ragged` cases below reproduce both conditions; the aligned case is kept because it is the
+# one that isolates a plain reassociation error from a boundary error.
+@pytest.mark.parametrize(
+    "kind,layer_idx,seq,tail,chunk,label",
+    [
+        ("linear", 0, 512, 128, 128, "aligned"),
+        ("full", 3, 512, 128, 128, "aligned"),
+        # head 447 = 6*64 + 63: the last chunked piece is short *and* not a multiple of 64, and the
+        # tail starts at 447 = 63 (mod 64).
+        ("linear", 0, 575, 128, 150, "ragged-head"),
+        ("full", 3, 575, 128, 150, "ragged-head"),
+        # tail itself not a multiple of 64, on top of a ragged head
+        ("linear", 0, 575, 129, 150, "ragged-head-and-tail"),
+        ("full", 3, 575, 129, 150, "ragged-head-and-tail"),
+    ],
+)
+def test_tail_reference_matches_full_prefill(kind, layer_idx, seq, tail, chunk, label):
     cfg = load_hf_text_config()
     layer = ref.build_hf_layer(cfg, layer_idx, ref.synthetic_layer_state_dict(layer_idx))
-    seq, tail = 512, 128
     x = ref.synthetic_hidden_states(cfg, 1, seq, seed=91)
 
     full = ref.hf_prefill(layer, cfg, x, start_pos=0, cache=ref.make_cache(cfg)).output[:, -tail:]
@@ -318,8 +338,8 @@ def test_tail_reference_matches_full_prefill(kind, layer_idx):
         got = ref.hf_prefill_tail(layer, cfg, x, tail=tail)
     else:
         # chunk smaller than the head so the chunked state advance is actually exercised
-        got, _ = ref.hf_linear_prefill_tail(layer, cfg, x, tail=tail, chunk=128)
+        got, _ = ref.hf_linear_prefill_tail(layer, cfg, x, tail=tail, chunk=chunk)
 
     assert got.shape == full.shape, (got.shape, full.shape)
     # Same math, same dtype (fp32), so this is a tolerance on reassociation only.
-    assert torch.allclose(got, full, atol=2e-4), (got - full).abs().max()
+    assert torch.allclose(got, full, atol=2e-4), (label, float((got - full).abs().max()))

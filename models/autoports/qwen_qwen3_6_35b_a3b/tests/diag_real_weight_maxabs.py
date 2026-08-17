@@ -33,14 +33,21 @@ SEED = 55  # the seed test_real_weights_prefill_and_decode uses, so this is the 
 #: `delta_chunk_size`=64 chunks, so if the outlier is state accumulation the error must grow with
 #: sequence length; at seq 64 there is exactly one chunk and no carry at all. `full` is the
 #: no-recurrence control at the same weights and length.
-SEQ_SWEEP = [64, 128, 256, 512, 1024]
+#: 2048 and 4096 are the ones that test *boundedness* rather than growth: if the error kept
+#: compounding with chunk count the maxabs would keep climbing past 1024's 1.27, whereas a decaying
+#: recurrence ages old error out and the curve flattens. The earlier write-up argued boundedness from
+#: a *synthetic*-weight 262143-token tail number, which is a different weight set and a different
+#: comparison window, so it did not support the claim.
+SEQ_SWEEP = [64, 128, 256, 512, 1024, 2048, 4096]
 
 
 def main():
     torch.set_num_threads(16)
     device = ttnn.open_mesh_device(ttnn.MeshShape(1, 1))
     try:
-        pair = build_layer_pair(device, kind="linear", max_batch_size=2, supported_context=2048, real_weights=True)
+        pair = build_layer_pair(
+            device, kind="linear", max_batch_size=2, supported_context=max(SEQ_SWEEP), real_weights=True
+        )
         pair.tt.reset_state()
         x = ref.synthetic_hidden_states(pair.hf_config, 1, SEQ, seed=SEED)
 
@@ -129,7 +136,9 @@ def main():
         pair.tt.release()
 
         # the no-recurrence control at the same weights/length
-        fpair = build_layer_pair(device, kind="full", max_batch_size=2, supported_context=2048, real_weights=True)
+        fpair = build_layer_pair(
+            device, kind="full", max_batch_size=2, supported_context=max(SEQ_SWEEP), real_weights=True
+        )
         fpair.tt.reset_state()
         tt_fx = to_tt_prefill(device, x)
         o = fpair.tt.prefill_forward(tt_fx, user_id=0, page_table=fpair.page_table)

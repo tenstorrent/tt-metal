@@ -9,8 +9,9 @@ kinds, validated against HF on a single 1x1 Blackhole mesh.
 * HF reference: `transformers` 5.10.2 `Qwen3_5MoeDecoderLayer`, **float32**.
 * Acceptance bar: **PCC >= 0.995** (skill default; no model-specific exception needed).
 * Worst PCC in the main suite: **0.9999450** (§3.1). Worst anywhere including the 262144-token
-  advertised-context cases: **0.9997685** — the long-context decode-SDPA anomaly was root-caused
-  to one `SDPAProgramConfig` field and **fixed**, not waived (§3.8).
+  advertised-context cases: **0.9998960** (`longest-prefill state recurrent`). The long-context
+  decode-SDPA anomaly was root-caused to one `SDPAProgramConfig` field and **fixed**, not waived, and
+  after that fix advertised-context decode is 0.9999939 — in line with every other context (§3.8).
 * Context: full HF-advertised **262144**, no capability reduction (§4).
 * Warmed prefill and **traced** warmed decode measured with `tt-perf-report` (§5).
 * Watcher-clean, determinism and runtime-fallback evidence: §3.6, §3.7, §3.9.
@@ -89,9 +90,11 @@ continue the previous occupant's sequence. Two consequences for a serving caller
   that slot (the recurrence is per-slot), its output row is discarded by the caller, and the next
   `start_pos = 0` prefill clears it — so it is self-healing rather than corrupting, but a caller
   must not read an inactive slot's output. The clearing is unconditional: zeroing goes through
-  `_zero_` (`ttnn.zeros_like` + `ttnn.copy`), **not** `ttnn.mul(x, 0.0)`, because `0 * NaN` is
-  `NaN` and a multiply cannot clear a poisoned buffer. The layer's own math cannot produce one
-  (`g <= 0`, so the recurrence decays), but a caller's input row could.
+  `_zero_`, which is `ttnn.fill(t, 0.0, output_tensor=t)` — it *writes* the value, so the result
+  cannot depend on what the buffer held, and it writes into the existing buffer rather than
+  materialising a full-size peer (which at the certified batch-32 / 262144 shape would be a
+  transient 8 GiB per cache). `probe_ttnn_ops.py` measures both properties. The layer's own math
+  cannot produce a NaN (`g <= 0`, so the recurrence decays), but a caller's input row could.
 
 **Decode batch is fixed at `max_batch_size`.** The linear-attention conv and recurrent state
 buffers are updated whole-tensor and in place, which is what lets one captured trace be
@@ -111,7 +114,8 @@ slots.
 | `sdpa_chunk` | 128 | prefill SDPA q/k chunk. Also **is** `PREFILL_ALIGN`: it is the modulus `start_pos` must satisfy, because chunked SDPA divides the offset by `q_chunk_size` (§9) |
 | `activation_dtype` / `weight_dtype` / `kv_cache_dtype` | `bfloat16` | |
 | `delta_dtype` | `float32` | HF pins the SSM state to fp32 (`mamba_ssm_dtype`) |
-| `decode_sdpa_max_cores_per_head` | 1 | cores the decode SDPA splits each KV head's keys across. **The variable behind long-context decode accuracy** (§3.8); 1 is the only value correct at every `cur_pos`. `None` = pass no program config, which lets the op use all 55/head and costs accuracy at long context |
+| `decode_sdpa_k_chunk_size` | 512 | keys per k-chunk in the decode SDPA, i.e. the bf16 accumulation depth. **The variable behind long-context decode accuracy** (§3.8). 512 is the largest value L1 allows |
+| `decode_sdpa_max_cores_per_head` | 1 | cores the decode SDPA splits each KV head's keys across. Also the op's own default for the paged variant; pinned because every larger value is silently wrong below some context (§3.8). `None` = pass no program config, which is *not* neutral — it selects `k_chunk_size=32`, the worst measured setting |
 | `decode_sdpa_program_config` | `None` | escape hatch: a full `ttnn.SDPAProgramConfig` used verbatim, overriding the row above. For sweeps in later stages |
 
 ## 3. Correctness evidence
@@ -134,7 +138,7 @@ pytest models/autoports/qwen_qwen3_6_35b_a3b/tests/test_long_context.py -m slow
 
 Logs: `logs/test_suite_main.log` (the CPU algebra tests + the whole device suite, including the
 real-weight cases — **101 passed, 0 failed**: 28 CPU-only + 73 device cases),
-`logs/long_*.log` (one per advertised-context case, **5 passed**), `logs/diag_*.txt` (the §3.8
+`logs/long_*.log` (one per advertised-context case, **6 passed**), `logs/diag_*.txt` (the §3.8
 diagnostics), `watcher/pytest.log` (**8 passed**). The suite is fast on a warm kernel cache
 because `conftest.py` caches layer pairs per (kind, batch, context, weights) for the session:
 building one costs ~1.5 GiB of weight conversion, and the 73 device cases share about a dozen.
@@ -200,14 +204,22 @@ shown by two controls —
 | `linear` seq 256 | 4 | 0.1910 | 0.9999862 |
 | `linear` seq 512 | 8 | 0.4420 | 0.9999589 |
 | `linear` seq 1024 | 16 | 1.2687 | 0.9999435 |
+| `linear` seq 2048 | 32 | 1.9178 | 0.9999036 |
+| `linear` seq 4096 | 64 | **1.9178** | 0.9998920 |
 | **`full` seq 1024** | **none** | **0.1367** | 0.9999796 |
 
 At one chunk the error is 0.063 — the same order as the synthetic-weight and HF-bf16 controls — and
-it roughly doubles per doubling of sequence, while the no-recurrence `full` layer at the same
-weights and length stays at 0.137. It is **bounded, not divergent**: the delta rule's decay
-(`g <= 0`, so `exp(g) <= 1`) ages old contributions out, which is why the 262143-token prefill is
-*not* worse (0.9999742, §4) despite 4096 chunks. The error also stays localized — 145 of 2.1M
-elements exceed 0.2 abs, across 43 of 1024 tokens. Consistent with the stage's other evidence that
+it roughly doubles per doubling of sequence up to 16 chunks, while the no-recurrence `full` layer at
+the same weights and length stays at 0.137. Then it **stops growing**: 32 and 64 chunks give the
+*same* max abs error to four decimals (1.9178), i.e. the worst element is the same one and doubling
+the sequence again adds nothing to it. That is the measured form of **bounded, not divergent** — the
+delta rule's decay (`g <= 0`, so `exp(g) <= 1`) ages old contributions out, so error cannot
+accumulate indefinitely, which is also why the 262143-token prefill is not worse (0.9999742, §4)
+despite 4096 chunks. An earlier version of this paragraph asserted boundedness by comparing a
+*synthetic*-weight 262143-token tail number against this *real*-weight 1024-token one — different
+weights and a different comparison window, so it did not support the claim; the rows above are one
+curve at fixed weights and seed. The error also stays localized — 145 of 2.1M elements exceed 0.2
+abs, across 43 of 1024 tokens. Consistent with the stage's other evidence that
 the recurrent state is its least accurate tensor: `linear recurrent_state` is the worst PCC in the
 suite (0.9999450) and `longest-prefill state recurrent` is 0.9998960.
 
@@ -315,155 +327,188 @@ input construction and PCC comparison are the other explicit boundaries.
 
 `test_longest_decode_context[full]` was the one number in the stage materially below the rest.
 Three diagnostics, all kept in `tests/` with their output in `logs/`. The short version: the
-variable is **how many cores the decode SDPA splits each KV head's keys across**, an
-`SDPAProgramConfig` field, and selecting it explicitly fixes most of the gap.
+variable is **`SDPAProgramConfig::k_chunk_size`** -- how many keys the decode SDPA accumulates per
+chunk, i.e. the depth of the sequential bf16 accumulation -- and shipping the largest chunk the L1
+allows fixes it, while also making the op 3.8x faster than the op's own default.
 
-**Step 1 — localise it (`diag_long_decode.py` -> `logs/diag_long_decode.txt`).** Sweep the decode
+**Read this first: "pass no program config" is not a neutral choice.** The paged decode entry point
+substitutes a full config of its own before the device op ever sees one
+(`ttnn/cpp/ttnn/operations/transformer/sdpa_decode/sdpa_decode.cpp:122-129`):
+
+```cpp
+if (!program_config.has_value()) {
+    program_config = SDPAProgramConfig{
+        input_tensor_q.device()->compute_with_storage_grid_size(),
+        std::nullopt,                    // sub_core_grids
+        kDefaultDecodeChunkSize,         // q_chunk_size = 32
+        kDefaultDecodeChunkSize,         // k_chunk_size = 32
+        std::nullopt,                    // exp_approx_mode -> resolved to false
+        kDefaultMaxCoresPerHeadBatch};  // max_cores_per_head_batch = 1
+```
+
+Three consequences, all of which invalidate an earlier version of this section:
+
+* the factory's `program_config.has_value() ? max_cores_per_head_batch : num_cores_available`
+  (`sdpa_decode_program_factory.cpp:192-193`) is **unreachable from this op**, so the op never runs
+  at 55 cores/head no matter what;
+* the struct default of 16 (`sdpa_config.hpp:18`) is unreachable too;
+* "no config" specifically means **`k_chunk_size = 32`**, which the sweep below shows is the *worst*
+  setting measured at long context.
+
+Only the non-paged `scaled_dot_product_attention_decode` leaves the config empty and can reach the
+`num_cores_available` branch. This layer calls the paged variant.
+
+`diag_sdpa_decode.py` opens with the identity control that pins this down: no config versus an
+explicit config spelling out the substitution above. They are **bit-identical at all 11
+contexts** (`all contexts bit-identical: True`, max abs diff 0.0 everywhere) -- so the two are
+the same program, and any difference measured against "no config" is attributable to the fields that
+actually differ.
+
+**Step 1 -- localise it (`diag_long_decode.py` -> `logs/diag_long_decode.txt`).** Sweep the decode
 position over one cache and isolate the **attention branch** (the only position-dependent part of
 the layer) by driving the TTNN and HF mixers directly. This is what said the loss is inside
-attention rather than in the MoE, the residual or the cache read, and — via the control column —
+attention rather than in the MoE, the residual or the cache read, and -- via the control column --
 that it is not operand precision:
 
 | decode position (context) | layer PCC | TTNN attn vs fp32 HF | TTNN attn vs **bf16-operand HF control** | **control vs fp32 HF** | attn RMS |
 |---|---|---|---|---|---|
-| 1023 (1024) | 0.9999957 | 0.9997080 | 0.9997110 | 0.9999980 | 0.03327 |
-| 8191 (8192) | 0.9999957 | 0.9996131 | 0.9996123 | 0.9999977 | 0.01292 |
-| 32767 (32768) | 0.9999956 | 0.9986712 | 0.9986665 | 0.9999973 | 0.00639 |
-| 131071 (131072) | 0.9999880 | 0.9864572 | 0.9864611 | 0.9999973 | 0.00306 |
-| 262143 (262144) | 0.9999551 | 0.9702506 | 0.9702557 | 0.9999976 | 0.00221 |
+| 1023 (1024) | 0.9999957 | 0.9997105 | 0.9997119 | 0.9999980 | 0.03327 |
+| 8191 (8192) | 0.9999957 | 0.9997094 | 0.9997056 | 0.9999977 | 0.01292 |
+| 32767 (32768) | 0.9999956 | 0.9996224 | 0.9996186 | 0.9999973 | 0.00639 |
+| 131071 (131072) | 0.9999960 | 0.9977048 | 0.9977087 | 0.9999973 | 0.00306 |
+| 262143 (262144) | 0.9999961 | 0.9874978 | 0.9874848 | 0.9999976 | 0.00221 |
 
 The last column is a control: HF's own attention math with q/k/v rounded to bf16 and exact
-accumulation matches fp32 to 2.4e-6 at **every** context. So **operand precision is not the
-cause** — the device diverges from an exact bf16 reference (column 4) by exactly as much as from
-fp32 (column 3), to 5 decimal places, at every context.
+accumulation matches fp32 at **every** context. So **operand precision is not the cause** -- the
+device diverges from an exact bf16 reference (column 4) by the same amount as from fp32 (column 3)
+at every context.
 
-These are the numbers *after* the fix in step 3. The attention branch still loses accuracy as the
-key count grows — 0.9997 at 1024 keys to 0.9703 at 262144 — but that residual is now a plain
-accumulation floor rather than a decomposition bug: at 1 core per head there is no cross-core
-reduction left, so what remains is bf16 accumulation over 262144 keys in a single pass, and the
-control shows an exact-bf16 reference does not lose it. It dilutes to **0.9999551** at the layer
-level here because the attention branch is one of two summed contributions and the residual
-dominates. For reference, the same columns before the fix read 0.9990 / 0.9924 / 0.9188 / **0.7687**
-at 8192 / 32768 / 131072 / 262144 keys.
+These are the numbers *after* the fix in step 4. The attention branch still loses accuracy as the
+key count grows, but that residual is now a plain accumulation floor rather than a decomposition
+bug: at 1 core per head there is no cross-core reduction at all, and the control shows an exact-bf16
+reference does not lose it. It dilutes to 0.9999961 at the layer level because the attention
+branch is one of two summed contributions and the residual dominates.
 
-The `layer PCC` column is not directly comparable to the headline number: this diagnostic seeds
-its own cache and token (so it can sweep five positions over one cache in one run) while
+The `layer PCC` column is not directly comparable to the headline number: this diagnostic seeds its
+own cache and token, so it can sweep five positions over one cache in one run, while
 `test_longest_decode_context[full]` decodes off a cache built by a real 262143-token prefill.
-Different inputs, so different values. What the sweep is for is the *shape* of the curve and the
+Different inputs, so different values; what the sweep is for is the *shape* of the curve and the
 control column, both of which are input-independent.
 
-(The file's final `token*8` row is a residual-dilution sensitivity check only, and it is the
-cleanest demonstration that the layer number is dilution rather than accuracy: `input_layernorm` is
-an RMS norm, so scaling the input token leaves the attention branch **bit-identical** — all three
-attention columns repeat to the last digit — while the layer PCC moves 0.9999551 -> 0.9999970
-purely because the residual got 8x larger. It is *not* a softmax-peaking control.)
+(The file's final `token*8` row is a residual-dilution sensitivity check, and it is the cleanest
+demonstration that the layer number is dilution rather than accuracy: `input_layernorm` is an RMS
+norm, so scaling the input token leaves the attention branch **bit-identical** -- all three attention
+columns repeat to the last digit -- while the layer PCC moves 0.9999961 ->
+0.9999976 purely because the residual got 8x larger. It is *not* a
+softmax-peaking control.)
 
-**Step 2 — find the variable (`diag_sdpa_decode.py` -> `logs/diag_sdpa_decode.txt`).** Drive
+**Step 2 -- the 2-D sweep (`diag_sdpa_decode.py` -> `logs/diag_sdpa_decode.txt`).** Drive
 `paged_scaled_dot_product_attention_decode` alone (no projections, RoPE, gate, o_proj or MoE) with
-random K/V over a paged cache. Passing no program config changes **four** things at once, so all
-four are swept independently: the core grid, `k_chunk_size`, `exp_approx_mode`, and — the one that
-is easy to miss — `max_cores_per_head_batch`.
+random K/V over a paged cache, and sweep `k_chunk_size` **x** `max_cores_per_head_batch` as a grid
+rather than one axis at a time. The grid matters: the two interact, because more cores per head
+means fewer chunks per core, and an earlier one-axis-at-a-time sweep at a single chunk size is
+exactly how this section previously reached the wrong conclusion.
 
-That last field is a *struct default* (`ttnn/cpp/ttnn/operations/transformer/sdpa_config.hpp:18`,
-value 16) and the factory reads
-`program_config.has_value() ? program_config->max_cores_per_head_batch : num_cores_available`
-(`.../sdpa_decode/device/sdpa_decode_program_factory.cpp:192-193`). On this 11x10 part with batch 1
-and 2 KV heads that means **no config gives 55 cores per head, while any explicit config defaults
-to 16** — so "I passed a program config" and "the op runs on a different number of cores" are the
-same event unless the field is set deliberately.
+At 1 core per head -- the op's own decomposition -- accuracy is monotone in chunk size at long
+context, which is what an accumulation-depth mechanism predicts. At 262144 keys, `k_chunk_size=32`
+is 8192 sequential accumulation steps and 512 is 512:
 
-Sweeping it (device grid, `k_chunk_size=0`, exact `exp`) gives a clean ordering — the numbers are
-op-level PCC against fp32 `scaled_dot_product_attention`:
+| `k_chunk_size` | 257 | 1024 | 4096 | 32768 | 131072 | 262143 | op time @262144 | verdict |
+|---|---|---|---|---|---|---|---|---|
+| 32 | 0.9998 | 0.9998 | 0.9995 | 0.9875 | 0.9170 | 0.7664 | **27.38 ms** | the op's own default -- worst measured |
+| 64 | 0.9998 | 0.9998 | 0.9997 | 0.9939 | 0.9707 | 0.9179 | -- |  |
+| 128 | 0.9998 | 0.9998 | 0.9998 | 0.9980 | 0.9839 | 0.9704 | **11.53 ms** | what `k_chunk_size=0` resolves to; shipped in round 2 |
+| 256 | 0.9998 | 0.9998 | 0.9998 | 0.9989 | 0.9857 | 0.9809 | **8.73 ms** |  |
+| **512** | 0.9998 | 0.9998 | 0.9998 | 0.9997 | 0.9977 | 0.9825 | **7.45 ms** | **ships**; largest legal chunk |
+| 1024 | L1 | L1 | L1 | L1 | L1 | L1 | -- | exceeds L1 (see below) |
+| 2048 | L1 | L1 | L1 | L1 | L1 | L1 | -- | exceeds L1 (see below) |
 
-| cores/head | 257 | 1024 | 4096 | 32768 | 131072 | 262143 |
-|---|---|---|---|---|---|---|
-| **1** | **0.9998** | **0.9998** | **0.9998** | **0.9980** | **0.9839** | **0.9704** |
-| 2 | 0.1528 | 0.9998 | 0.9998 | 0.9995 | 0.9942 | 0.9891 |
-| 4 | 0.1621 | 0.9998 | 0.9998 | 0.9997 | 0.9988 | 0.9973 |
-| 8 | 0.1621 | 0.3721 | 0.9998 | 0.9998 | 0.9996 | 0.9991 |
-| 16 (explicit default) | 0.1621 | 0.3721 | 0.9998 | 0.9998 | 0.9997 | 0.9996 |
-| 32 | 0.1621 | 0.3721 | 0.1637 | 0.9998 | 0.9998 | 0.9997 |
-| 55 (explicit) | 0.6959 | 0.5607 | 0.2024 | 0.0997 | 0.0638 | 0.0534 |
-| 55 (**no config**) | 0.9998 | 0.9998 | 0.9995 | 0.9875 | 0.9170 | 0.7664 |
+`k_chunk_size` must be a power of two and a multiple of 32 (`sdpa_decode.cpp:146-151`), and **512 is
+the largest legal value here**: 1024 fails to build with
+`Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2,371,456 B which is
+beyond max L1 size of 1,572,864 B`, and 2048 the same at 4,534,144 B. That is
+an op-contract blocker on going further, not a choice.
 
-Three things fall out, and one open question:
+**Nothing above 1 core per head is usable at every context.** More cores is *more* accurate at long
+context and silently wrong at some shorter context, and the boundary moves with the chunk size:
 
-* **More cores per head is more accurate at long context and *breaks* at short context.** Every
-  setting from 2 upwards is structurally wrong below some context, and the threshold rises with the
-  core count (2-4 break at 257; 8-16 at 1024; 32 at 4096). **1 core per head is the only setting
-  correct at every context.**
-* **`exp_approx_mode` is bit-identically irrelevant** — the approx and exact rows match to the last
-  digit at 16 and at 110 cores. (The in-source comment at
-  `.../sdpa_decode/device/kernels/rt_args_common.hpp:104` warns the dynamic chunk path is
-  PCC-sensitive; that is not what this is.)
-* **Neither the grid nor the chunk policy is the variable.** `8x8` at 16 cores/head equals `11x10`
-  at 16 cores/head exactly; `k_chunk_size` 0/128 at 16 cores/head are identical. `k_chunk_size=512`
-  merely *moves* the breakage (fine at 257, broken at 1024 and 4096). The cleanest cross-check is
-  that the small-grid rows kept from the earlier sweep agree: a `1x1` or `2x1` grid *derives*
-  1 core/head, and those rows match the explicit `max_cores_per_head_batch=1` row to the last
-  digit at every context — the grid only ever mattered through the cores/head it implies.
-* **Open, and reported rather than explained:** an explicit config with `max_cores=110` derives the
-  same 55 cores/head as no config at all — same grid, same chunk policy, same `exp` — yet scores
-  0.0534 against 0.7664. Everything the factory reads from the config is identical between those
-  two rows (grid, `max_cores_per_head`, `exp_approx_mode`; `sub_core_grids` is unset in both), so
-  this stage cannot account for the difference from the source. Both settings are rejected anyway,
-  so it does not affect the decision, but it is a concrete two-config reproducer worth an upstream
-  issue — as is a device op silently returning PCC 0.16 at context 257.
+| `k_chunk_size` | cores/head | 257 | 1024 | 4096 | 32768 | 131072 | 262143 |
+|---|---|---|---|---|---|---|---|
+| 256 | 1 | 0.9998 | 0.9998 | 0.9998 | 0.9989 | 0.9857 | 0.9809 |
+| 256 | 2 | **0.1538** | 0.9998 | 0.9998 | 0.9997 | 0.9986 | 0.9913 |
+| 256 | 8 | **0.1538** | **0.4997** | 0.9998 | 0.9998 | 0.9997 | 0.9995 |
+| 256 | 16 | **0.1538** | **0.4997** | **0.1693** | 0.9998 | 0.9998 | 0.9997 |
+| 512 | 1 | 0.9998 | 0.9998 | 0.9998 | 0.9997 | 0.9977 | 0.9825 |
+| 512 | 2 | 0.9998 | **0.6918** | 0.9998 | 0.9998 | 0.9993 | 0.9977 |
+| 512 | 8 | 0.9998 | **0.6918** | **0.2514** | 0.9998 | 0.9998 | 0.9997 |
+| 512 | 16 | 0.9998 | **0.6918** | **0.2514** | 0.9998 | 0.9998 | 0.9998 |
 
-**Step 3 — the on-model decision (`diag_decode_sdpa_onmodel.py` ->
-`logs/diag_decode_sdpa_onmodel.txt`).** The op sweep uses random K/V, so the three candidates are
-re-measured on the **whole decoder layer** against HF, off a real prefilled cache, at five
-contexts. One layer is built per context and prefilled once, so all three settings decode from the
-same cache and the comparison is same-input:
+Bold cells are silently wrong answers -- no error, no warning, just a wrong tensor. The unbolded
+0.98-0.999 values in the 1-core rows are the accumulation floor, not wrongness. `1` is the only
+`max_cores_per_head_batch` value with no such cell anywhere in the grid, and it is also what the op
+already does by default; the config pins it so that a later stage has to read why before changing
+it. `exp_approx_mode` is bit-identically irrelevant (held-axis rows), and an `8x8` grid at 1
+core/head equals `11x10` at 1 core/head to the last digit, so neither is the variable.
 
-| context | A: no config (55/head) | B: explicit, default 16/head | C: explicit, **1 core/head** |
+**Step 3 -- the cost, measured on the same op** (20 warmed calls at 262144 keys):
+
+| setting | op time @262144 | op PCC @262143 | |
 |---|---|---|---|
-| 258 | 0.9999950 | **0.4791771** | 0.9999949 |
-| 1024 | 0.9999954 | **0.0304429** | 0.9999953 |
-| 4096 | 0.9999954 | 0.9999958 | 0.9999957 |
-| 32768 | 0.9999714 | 0.9999960 | 0.9999958 |
-| 262144 | 0.9985674 | 0.9999958 | **0.9997685** |
-| **worst over contexts** | 0.9985674 | 0.0304429 | **0.9997685** |
+| `no config` | **28.225 ms** | 0.7664 | = k32, 1 core -- what the layer ran before any sweep |
+| `op default (k32, 1 core)` | **27.377 ms** | 0.7664 | the substituted default, spelled out |
+| `k0 dynamic, 1 core` | **11.534 ms** | 0.9704 | k128; shipped in round 2 |
+| `k256, 1 core` | **8.732 ms** | 0.9809 |  |
+| `k512, 1 core` | **7.453 ms** | 0.9825 | **ships** |
+| `k256, 16 cores` | **1.389 ms** | 0.9997 | fastest overall -- and unshippable, see above |
+| `k32, 16 cores` | **1.934 ms** | 0.0000 | the op default's chunk at 16 cores |
 
-**Step 4 — the cost, measured on the same op** (`logs/diag_sdpa_decode.txt`, 20 warmed calls at
-262144 keys):
+There is **no accuracy/latency trade-off inside the safe family**: bigger chunks are both faster and
+more accurate, so the largest legal chunk wins on both counts. The genuinely fastest setting in the
+whole grid is `k256, 16 cores` at 1.39 ms -- 5.4x faster than what
+ships -- and it is unshippable because it returns a wrong answer at 257, 1024 and 4096 keys.
 
-| setting | cores/head | op time | op PCC @262143 |
-|---|---|---|---|
-| A no config | 55 | **28.166 ms** | 0.7664 |
-| B explicit default | 16 | **1.403 ms** | 0.9996 |
-| — | 4 | 2.898 ms | 0.9973 |
-| **C shipped** | **1** | **11.519 ms** | 0.9704 |
+**Step 4 -- the on-model decision (`diag_decode_sdpa_onmodel.py` ->
+`logs/diag_decode_sdpa_onmodel.txt`).** The op sweep uses random K/V, so the candidates are
+re-measured on the **whole decoder layer** against HF, off a real prefilled cache, at five contexts.
+One layer is built per context and prefilled once, so every setting decodes from the same cache and
+the comparison is same-input:
 
-There is **no accuracy/latency trade-off to make**: 1 core/head is 2.4x *faster* than the
-no-config path as well as more accurate. Using 55 of 55 cores per head is both the slowest and the
-least accurate setting measured — consistent with a decomposition that spends everything on
-cross-core reduction. (16 cores/head is 8x faster again, and unusable below ~4096 keys.)
+| context | A no-config (k32, 1 core) | B k128, 1 core | C k512, 1 core (shipped) | D k256, 16 cores (fastest) |
+|---|---|---|---|---|
+| 258 | 0.9999950 | 0.9999949 | 0.9999952 | **0.9696619** |
+| 1024 | 0.9999954 | 0.9999953 | 0.9999954 | **0.2759429** |
+| 4096 | 0.9999954 | 0.9999957 | 0.9999958 | **0.0383414** |
+| 32768 | 0.9999714 | 0.9999958 | 0.9999960 | 0.9999960 |
+| 262144 | 0.9985674 | 0.9997685 | 0.9999939 | 0.9999958 |
+| **worst over contexts** | **0.9985674** | **0.9997685** | **0.9999939** | **0.0383414** |
 
-**C ships** (`DecoderConfig.decode_sdpa_max_cores_per_head = 1`): correct at every context, 6.2x closer
-to HF than A at the advertised context (`1 - PCC` 2.32e-4 vs 1.43e-3) while matching it to the 7th
-decimal everywhere else, and 2.4x faster there.
+D is the fastest setting in the op sweep and it is confirmed unshippable on the real layer, not just
+on random K/V. C ships.
 
-**Where it actually matters: small batch.** The field is `max_cores_per_head_*batch*`, and the
-factory divides by the batch, so the *old* default's cores/head depends on how many slots decode
-together — `min(110, 110 * B * 2) / B / 2` on this part:
+**What ships** (`DecoderConfig.decode_sdpa_k_chunk_size = 512`,
+`decode_sdpa_max_cores_per_head = 1`): correct at every context measured, best-in-family at the
+advertised context, 3.8x faster than the op default and
+1.55x faster than the round-2 setting. At the layer level the advertised-context
+decode PCC is now **0.9999939**, in line with every other
+context, against 0.9985674 for the op default and
+0.9997685 for round 2's.
 
-| decode batch | 1 | 2 | 4 | 8 | 16 | 32 |
-|---|---|---|---|---|---|---|
-| cores/head with **no** config | 55 | 27 | 13 | 6 | 3 | **1** |
-| cores/head with the shipped config | 1 | 1 | 1 | 1 | 1 | 1 |
+**Correction, and what it cost.** Two earlier versions of this section were wrong about the
+mechanism. The first blamed "whether a program config is passed at all" and handed `optimize` a
+per-position config selection. The second blamed `max_cores_per_head_batch` -- a field that does not
+differ between the settings it was comparing, because the op already defaults it to 1. That round
+even wrote down the disproof and filed it as someone else's bug: its declared control row
+("`max_cores=110` should reproduce the no-config row exactly") did *not* reproduce it, and instead of
+falsifying the hypothesis the mismatch was recorded as an upstream reproducer. It is fully explained
+by the substitution above -- no config is `k32` at **1** core/head, while explicit `max_cores=110`
+derives 55, so the two rows differ in cores, not in nothing. The lesson worth carrying: a control
+that fails is evidence about your own model first.
 
-So at batch 32 the two settings are *identical*, which is why the batch-32 decode tests never caught
-this and why the §5 perf table barely moved (50.15 -> 50.08 ms). The bug lived in **small-batch,
-long-context decode** — one or a few long requests, which is exactly the serving case and exactly
-what `test_longest_decode_context` (batch 1) measures. The shipped config makes the decomposition
-batch-independent: 1 core per (slot, KV head), so 2 cores at batch 1 and 64 at batch 32, and no
-cross-core reduction inside a head at any batch. Batch 32 accuracy is unaffected and separately
-covered — the `decode[full]` family's 82 rows include batch 32 at worst 0.9999849. B is the most accurate at long context but destroys a 1024-token decode,
-so it is unshippable at any single setting — which is what made A look forced before this sweep
-existed. An earlier version of this section claimed "whether a program config is passed at all" was
-the discriminator and handed `optimize` a per-position config selection; both were wrong, and the
-`max_cores_per_head_batch` axis is why.
+**Still worth an upstream issue**, and independent of the above: every `max_cores_per_head_batch`
+above 1 makes this op return a **silently wrong** result below some context -- PCC as low as 0.0000
+(`k32`, 16 cores/head, 262143 keys) -- rather than refusing to run. `diag_sdpa_decode.py` is a
+self-contained reproducer with no model code, and the k-chunks-per-core table it prints alongside the
+grid is the starting point for narrowing it.
 
 ### 3.9 Watcher-clean run
 
@@ -507,19 +552,19 @@ each of these — the largest allocations in the stage — starts from empty dev
 | `longest-prefill[linear]` carried conv state | after 262143 tokens | 0.9999698 | |
 | `longest-prefill[linear]` carried recurrent state | after 262143 tokens | 0.9998960 | |
 | `longest-decode[linear]` | position **262143** after a 262143-token prefill | 0.9999860 | 0.04 s |
-| `longest-decode[full]` | position **262143** after a 262143-token prefill | 0.9997685 | 0.05 s |
-| `batched-longest-decode[full]` | position **262143**, **batch 2**, slot 1 compared while slot 0 sits at `current_pos = -1` | 0.9997685 | |
+| `longest-decode[full]` | position **262143** after a 262143-token prefill | 0.9999939 | 0.05 s |
+| `batched-longest-decode[full]` | position **262143**, **batch 2**, slot 1 compared while slot 0 sits at `current_pos = -1` | 0.9999939 | |
 | batch-32 full-context paged KV | 131072 blocks, 2 x 8 GiB, **allocated on device** | n/a | |
 
-`longest-decode[full]` is still the lowest number in the table, and §3.8 explains why in full: it
-is the decode SDPA op's parallel decomposition, reproduced with **no model code** by
-`diag_sdpa_decode.py`, and it is *not* operand precision, *not* `exp_approx_mode`, *not* the grid
-and *not* the chunk policy — it is `max_cores_per_head_batch`, i.e. how many cores the op splits
-each KV head's keys across. This stage **fixed** it rather than waiving it: shipping 1 core/head
-took the advertised-context decode from 0.9985674 to the value in the table above and made every
-context correct, while also being 2.4x faster at that context. What remains available to
-`optimize` is 0.9999958 from 16 cores/head, which is unusable below ~4096 keys and therefore needs
-per-context trace bucketing.
+Every row is now in line with the rest of the stage. `longest-decode[full]` used to be the one
+number materially below the others, and §3.8 explains what it was: the decode SDPA's
+**`k_chunk_size`** — the depth of its sequential bf16 accumulation — reproduced with **no model
+code** by `diag_sdpa_decode.py`. It is *not* operand precision, *not* `exp_approx_mode`, *not* the
+grid, and *not* the parallel decomposition (the paged op already runs 1 core per head by default, so
+that field never differed between the settings being compared). This stage **fixed** it rather than
+waiving it: shipping the largest chunk L1 allows made every context correct *and* the op 3.8x faster
+than its own default. What remains available to `optimize` is a genuinely faster multi-core setting
+that is unusable below ~4096 keys and therefore needs per-context trace bucketing.
 
 See `../context_contract.json` for the machine-readable version (regenerate with
 `python models/autoports/qwen_qwen3_6_35b_a3b/tests/write_context_contract.py`; the contract is
@@ -554,7 +599,7 @@ mode/kind — see `work_log.md` §7). Artifacts per case in `tracy/<kind>_<mode>
 | `<mode>_perf_report.csv` | the same rows as CSV, signpost-filtered (`--csv`) |
 | `<mode>_perf_report.console.log` | `--csv`-run stdout, kept for provenance |
 | `<mode>_perf_report_stacked.csv` / `.png` | tt-perf-report's stacked breakdown |
-| `<mode>_ops.csv.gz` | the raw post-processed Tracy ops CSV the report was built from (1.2-21 MB raw; `run_perf.sh` gzips it after the reports, so `gunzip -k` before re-running `tt-perf-report`). The two **decode** CSVs exceed this repo's 500 KB committed-file limit even gzipped (1.72 MB / 731 KB) and are excluded by `tracy/.gitignore`; both prefill CSVs (434 KB / 151 KB) are committed — see `tracy/README.md` |
+| `<mode>_ops.csv.gz` | the raw post-processed Tracy ops CSV the report was built from (1.2-21 MB raw; `run_perf.sh` gzips it after the reports, so `gunzip -k` before re-running `tt-perf-report`). The two **decode** CSVs exceed this repo's 500 KB committed-file limit even gzipped (1.72 MB / 731 KB) and are excluded by `tracy/.gitignore`; both prefill CSVs (432 KB / 151 KB) are committed — see `tracy/README.md` |
 | `tracy_run.log.gz` | full Tracy + pytest transcript (gzipped) |
 
 Plus `perf_host_summary.jsonl` (host wall-clock rows) and `perf_summary.json` (reduced table,
@@ -604,14 +649,14 @@ those columns and divides by the iteration count.
 
 | case | shape | ops in window | device kernel / iter | op-to-op gap / iter | host wall / iter |
 |---|---|---|---|---|---|
-| prefill `linear` | seq 2048, batch 1 | 1754 (2 iters) | **341.71 ms** | 0.898 ms | 343.03 ms |
-| prefill `full` | seq 2048, batch 1 | 392 (2 iters) | **281.50 ms** | 0.125 ms | 281.96 ms |
-| decode `linear` (traced) | batch 32, `cur_pos` 4095 | 968 (8 iters) | **57.84 ms** | 0.089 ms | 57.96 ms |
-| decode `full` (traced) | batch 32, `cur_pos` 4095 | 872 (8 iters) | **50.11 ms** | 0.239 ms | 50.37 ms |
+| prefill `linear` | seq 2048, batch 1 | 1750 (2 iters) | **342.05 ms** | 0.883 ms | 343.39 ms |
+| prefill `full` | seq 2048, batch 1 | 392 (2 iters) | **281.62 ms** | 0.136 ms | 282.14 ms |
+| decode `linear` (traced) | batch 32, `cur_pos` 4095 | 968 (8 iters) | **57.95 ms** | 0.089 ms | 58.06 ms |
+| decode `full` (traced) | batch 32, `cur_pos` 4095 | 872 (8 iters) | **50.06 ms** | 0.236 ms | 50.32 ms |
 
 As single-layer host throughput (`perf_host_summary.jsonl`, `tokens_per_s_host`): prefill
-**7264 tok/s** (`full`) / **5970 tok/s** (`linear`) at seq 2048 batch 1, and decode **635 tok/s**
-(`full`) / **552 tok/s** (`linear`) aggregated across the 32-slot batch (i.e. 32 tokens per
+**7259 tok/s** (`full`) / **5964 tok/s** (`linear`) at seq 2048 batch 1, and decode **636 tok/s**
+(`full`) / **551 tok/s** (`linear`) aggregated across the 32-slot batch (i.e. 32 tokens per
 ~50/58 ms traced iteration; `iters * batch / elapsed`, `test_perf.py:163`). These are *per layer*; a 40-layer model at this
 per-layer cost would be far too slow to serve, which is what the `optimize` stage exists for and
 what the two observations below point at.
@@ -623,35 +668,30 @@ iteration, i.e. `post_attention_layernorm` — rather than by hand:
 
 | case | token mixer | expert matmuls | MoE dense-intermediate elementwise | total |
 |---|---|---|---|---|
-| prefill `linear` | 63.51 ms (18.6%) | 227.24 ms (66.5%) | 50.96 ms (14.9%) | 341.71 ms |
-| prefill `full` | 3.81 ms (1.4%) | 226.63 ms (80.5%) | 51.06 ms (18.1%) | 281.50 ms |
-| decode `linear` | 8.83 ms (15.3%) | 18.58 ms (32.1%) | 30.44 ms (52.6%) | 57.84 ms |
-| decode `full` | 1.05 ms (2.1%) | 18.57 ms (37.1%) | 30.49 ms (60.8%) | 50.11 ms |
-
-The third column is "the MoE minus its expert matmuls", not "elementwise ops": besides the
-elementwise/layout work over the dense-over-256-expert intermediates it also holds the router
-matmul, the four shared-expert matmuls, `topk`, both scatters and the final residual add. Those are
-small against the intermediates, but the label is a bucket name, not a claim about op types.
+| prefill `linear` | 63.59 ms (18.6%) | 227.22 ms (66.4%) | 51.23 ms (15.0%) | 342.05 ms |
+| prefill `full` | 3.80 ms (1.3%) | 226.70 ms (80.5%) | 51.12 ms (18.2%) | 281.62 ms |
+| decode `linear` | 8.83 ms (15.2%) | 18.58 ms (32.1%) | 30.54 ms (52.7%) | 57.95 ms |
+| decode `full` | 1.05 ms (2.1%) | 18.57 ms (37.1%) | 30.44 ms (60.8%) | 50.06 ms |
 
 * **The MoE is the whole cost; attention is rounding error.** For `full` layers the token mixer is
-  1.4% of prefill and
+  1.3% of prefill and
   2.1% of decode. The optimisation
-  budget belongs to expert routing, and — less obviously — to the **rest of the MoE block**
-  (dominated by elementwise/layout work over the dense-over-256-expert intermediates), which is
-  18.1% of prefill and
+  budget belongs to expert routing, and — less obviously — to the **elementwise work over the
+  dense-over-256-expert intermediates**, which is
+  18.2% of prefill and
   60.8% of decode, i.e. larger than
   the expert matmuls themselves in decode. `linear` layers add the gated delta rule on top: mixer
   18.6% of prefill and
   15.2% of decode.
-* **Device-bound, not dispatch-bound.** Op-to-op gap is 0.04-0.48% of device
-  time (`gap/device` = 0.252% / 0.048% / 0.154% / 0.475% for the four rows in table order), and
-  host wall-clock exceeds device kernel time by 0.16-0.53%. The traced decode
+* **Device-bound, not dispatch-bound.** Op-to-op gap is 0.05-0.47% of device
+  time (`gap/device` = 0.258% / 0.048% / 0.154% / 0.471% for the four rows in table order), and
+  host wall-clock exceeds device kernel time by 0.18-0.52%. The traced decode
   has essentially no dispatch overhead left to remove.
 
 **These rows are measured at `supported_context = 8192`, not the advertised 262144**
 (`perf_summary.json` records it per row). Decode cost grows with `cur_pos`: the decode SDPA alone is
-11.5 ms/call at 262144 keys versus ~1 ms here (§3.8), so an advertised-context decode step is
-roughly 10 ms slower than the table shows. `test_perf.py` explains why the profiled shape is what it
+7.45 ms/call at 262144 keys versus ~1 ms here (§3.8), so an advertised-context decode step is
+roughly 6 ms slower than the table shows. `test_perf.py` explains why the profiled shape is what it
 is — batch 32 at the full context needs 16 GiB of paged K/V, leaving no room for a profiler buffer.
 
 `linear` prefill issues 4.5x more ops than `full` (1750 vs 392 in the same window) for the same token count: the gated delta rule contributes a 32-step Python-driven chunk scan plus the UT transform per
@@ -678,9 +718,9 @@ belong to the `optimize` stage, not here.
    checkable against `tracy/full_prefill/prefill_perf_report.csv`, where the row
    `SparseMatmulDeviceOperation active=?/4096 x 32 x 2048 x 1024` appears **8 times** with
    `Cores` 32.0 — issued 4x per prefill iteration (512 tokens = 16 tile-groups per call,
-   `4096 = 16 groups x 256 experts`) over a 2-iteration window. Those rows sum to 294.09 ms,
-   i.e. 36.76 ms per call and 147.04 ms per iteration, which is the §5 figure. Then
-   `16 groups x 162.3 experts x (32 x 2048 x 1024 x 2) FLOP / 36.76 ms ~= 9.5 TFLOP/s`.
+   `4096 = 16 groups x 256 experts`) over a 2-iteration window. Those rows sum to 294.20 ms,
+   i.e. 36.78 ms per call and 147.10 ms per iteration, which is the §5 figure. Then
+   `16 groups x 162.3 experts x (32 x 2048 x 1024 x 2) FLOP / 36.78 ms ~= 9.5 TFLOP/s`.
    Passing `tt-perf-report --active-experts 162` would make the tool report the utilization
    directly instead; the hand derivation is kept because it is the number quoted here.
 2. **`nnz` is left inferred** for every `sparse_matmul`. A static count that disagrees with
@@ -708,13 +748,15 @@ belong to the `optimize` stage, not here.
    setup-time offsets table plus a per-chunk device slice, which is program-cache tuning rather
    than correctness — exactly the `optimize` stage's job. Nothing about the current path is wrong,
    it just compiles more programs than it needs to.
-7. **Decode SDPA runs 1 core per KV head** (`decode_sdpa_max_cores_per_head = 1`). That is the
-   only value correct at every `cur_pos` (§3.8), but it is a *serial* pass over the keys: at the
-   advertised context the op alone is the dominant decode cost. More cores per head are more
-   accurate at long context and structurally wrong below a context that grows with the core count,
-   so `optimize` can only beat this by bucketing traces per context range — with the accuracy
-   ceiling measured (16 cores/head reaches 0.9999958 at 262144 but 0.03 at 1024). §5 records what
-   the serial pass costs.
+7. **Decode SDPA runs 1 core per KV head at `k_chunk_size = 512`.** 1 core/head is the op's own
+   default for the paged variant and the only value correct at every `cur_pos`; 512 is the largest
+   chunk L1 allows (1024 needs 2371456 B against a 1572864 B limit). Together they are the best
+   setting measured that is correct everywhere — but the keys are still traversed by one core per
+   head, so at the advertised context this op alone is the dominant decode cost. A materially faster
+   setting exists (`k_chunk 256`, 16 cores/head: 5.4x faster than shipped, and more accurate at
+   262144) and is unshippable as a static choice because it is silently wrong at 257, 1024 and 4096
+   keys — measured on the real layer, not just on random K/V. So `optimize` can only take it with
+   per-context trace bucketing. §3.8 has the 2-D sweep and §5 what the shipped pass costs.
 
 ## 7. Bugs found and fixed during bringup
 
@@ -777,14 +819,17 @@ belong to the `optimize` stage, not here.
    not. Invisible to every existing test because the comparison helper called `reset_state()` first.
    Now zeroed at `start_pos == 0`, with `test_prefill_resets_linear_state_for_new_sequence`
    deliberately bypassing that helper. Found by the round-2 review.
-9. **The decode SDPA's parallel decomposition, not a program-config presence.** The op is far less
-   accurate at long context when it splits a KV head's keys across many cores, and *structurally
-   wrong* at short context above 1 core/head. This was misdiagnosed twice (first as the dynamic
-   `k_chunk_size` path, then as "whether a program config is passed at all") before the
-   `max_cores_per_head_batch` axis was swept. Now fixed and shipped — §3.8 has the sweep, the
-   on-model comparison and the timing. The in-source comment at
-   `ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp:104` flags the
-   dynamic chunk path as PCC-sensitive; that is not what this was.
+9. **The decode SDPA's `k_chunk_size`, i.e. its bf16 accumulation depth.** At 262144 keys and one
+   core per head the op scores 0.7664 at `k_chunk_size=32` and 0.9825 at 512, monotonically; the
+   layer-level advertised-context decode PCC follows from 0.9985674 to 0.9999939. This took **three**
+   attributions to get right: first the dynamic `k_chunk_size` path, then "whether a program config
+   is passed at all", then `max_cores_per_head_batch` — a field that never differed between the
+   settings being compared, because the paged entry point already substitutes 1 core/head
+   (`sdpa_decode.cpp:122-129`). What finally settled it was sweeping the two axes as a **grid** plus
+   an identity control proving what "no config" resolves to. §3.8 has all of it. The in-source
+   comment at `.../sdpa_decode/device/kernels/rt_args_common.hpp:104` flags the dynamic chunk path as
+   PCC-sensitive, which is adjacent but not this: dynamic resolves to 128 here and is *better* than
+   the op's static default of 32.
 
 ## 8. Repository files this stage owns
 
@@ -834,22 +879,25 @@ One repo file outside the autoport directory was touched: `conftest.py` (§7 ite
   linear-attention decode comparison above batch 2**. The DeltaNet recurrence is per-slot and the
   state is updated whole-tensor in place, so a slot-indexing error there would show as one bad row
   diluted into a batch average. A full-model stage adding batched paths should add that comparison.
-* **The §3.8 fix is batch-dependent, and later stages decode at many batch sizes.** The old
-  default was only wrong at small batch (55 cores/head at batch 1 down to 1 at batch 32 — §3.8 has
-  the table); the shipped config pins 1 core per (slot, KV head) at every batch. A stage that
-  changes the decode batch, or adds continuous batching where the active-slot count varies per step,
-  inherits a *fixed* decomposition rather than one that silently changes with occupancy. That is the
-  property to preserve.
-* **The §3.8 handoff is a *latency* question now, not an accuracy one.** Shipping 1 core/head
-  took the advertised-context decode from 0.9986 to 0.9997685 and made every context correct; what
-  remains on the table is (a) 0.9999958 at 262144 from 16 cores/head, which is unusable below
-  ~4096, and (b) the latency of the serial pass. Both are per-context-range choices, so they need
-  trace bucketing; `decode_sdpa_max_cores_per_head` / `decode_sdpa_program_config` are the knobs.
-* **Two upstream reproducers came out of §3.8** and are worth filing: an explicit
-  `max_cores_per_head_batch=110` config scores 0.0534 where no config at all (same derived 55
-  cores/head, same grid, same chunk policy, same `exp`) scores 0.7664; and every setting above 1
-  core/head returns PCC ~0.16-0.37 at some short context instead of failing loudly. Both are one
-  command to reproduce: `python tests/diag_sdpa_decode.py`.
+* **The §3.8 choice is context-dependent, and that is the whole handoff.** The shipped setting is
+  the best one that is correct at *every* context. The fastest one is 5.4x quicker and wrong below
+  ~4096 keys, so taking it means bucketing traces per context range and proving the boundary — the
+  knobs are `decode_sdpa_k_chunk_size` / `decode_sdpa_max_cores_per_head` /
+  `decode_sdpa_program_config`, and `diag_sdpa_decode.py` is the harness. Note that the *accuracy*
+  question is closed: at the advertised context the shipped setting reaches 0.9999939 on-model, in
+  line with every other context, so this is now purely a latency trade.
+* **`max_cores_per_head_batch` interacts with the decode batch.** The factory divides the core
+  budget by the batch (`sdpa_decode_program_factory.cpp:195-196`), so a stage that changes the decode
+  batch — or adds continuous batching where the active-slot count varies per step — changes the
+  program even with the config pinned. `test_longest_decode_context_batched` measures batch 2 at the
+  advertised context; anything beyond that is unmeasured here.
+* **One upstream reproducer came out of §3.8** and is worth filing: every `max_cores_per_head_batch`
+  above 1 makes the paged decode SDPA return a **silently wrong** result below some context — PCC as
+  low as 0.0000 — instead of failing loudly. One command to reproduce:
+  `python tests/diag_sdpa_decode.py`. (A second candidate reproducer from the previous round, an
+  explicit `max_cores=110` config disagreeing with no config at all, turned out to be *this stage's*
+  misreading of the op and is withdrawn: no config is `k32` at 1 core/head, so the two configs differ
+  in cores and the disagreement is expected.)
 * **A slot reused for a new sequence is safe, but only via `start_pos = 0`.** §2 has the contract;
   the mechanism is that `prefill_forward` zeroes the slot's DeltaNet carry there. There is no
   per-slot reset API, and `reset_state()` is all-slots, so a serving stage that wants to evict one

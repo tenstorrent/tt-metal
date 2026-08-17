@@ -2,5 +2,5 @@
 {"label": "decode[linear] pos=512 batch=2", "pcc": 0.9999833592983952, "maxabs": 0.03933155536651611, "rel_rms": 0.005795711185783148, "pos": 512, "batch": 2}
 {"label": "decode[linear] pos=513 batch=2", "pcc": 0.9999945565467006, "maxabs": 0.0215451717376709, "rel_rms": 0.0033588199876248837, "pos": 513, "batch": 2}
 {"label": "prefill[full] seq=1024 start=0 user=0", "pcc": 0.9999796048293254, "maxabs": 0.13674664497375488, "rel_rms": 0.006409341469407082, "seq_len": 1024, "start_pos": 0, "user_id": 0}
-{"label": "decode[full] pos=512 batch=2", "pcc": 0.999985624969251, "maxabs": 0.040143728256225586, "rel_rms": 0.005378320347517729, "pos": 512, "batch": 2}
-{"label": "decode[full] pos=513 batch=2", "pcc": 0.99999078694995, "maxabs": 0.02567124366760254, "rel_rms": 0.004352524410933256, "pos": 513, "batch": 2}
+{"label": "decode[full] pos=512 batch=2", "pcc": 0.9999863702203194, "maxabs": 0.03785651922225952, "rel_rms": 0.005242644343525171, "pos": 512, "batch": 2}
+{"label": "decode[full] pos=513 batch=2", "pcc": 0.9999910904181172, "maxabs": 0.02567124366760254, "rel_rms": 0.004285789094865322, "pos": 513, "batch": 2}

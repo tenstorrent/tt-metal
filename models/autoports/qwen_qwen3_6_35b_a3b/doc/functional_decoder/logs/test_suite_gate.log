@@ -1,4 +1,4 @@
-2026-08-17 19:47:21.389 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+2026-08-17 19:32:21.214 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
 Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
 ============================= test session starts ==============================
 collecting ... collected 105 items
@@ -39,40 +39,40 @@ models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_tail_re
 models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_tail_reference_matches_full_prefill[full-3-575-129-150-ragged-head-and-tail] PASSED
 models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_layer_kinds_cover_the_whole_model PASSED
 models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_config_matches_hf PASSED
-models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[1-linear] 2026-08-17 19:47:50.846 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
-2026-08-17 19:47:50.846 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
-2026-08-17 19:47:50.846 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
-2026-08-17 19:47:50.846 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
-2026-08-17 19:47:50.848 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:569)
-2026-08-17 19:47:50.848 | info     |             UMD | Firmware bundle version 19.9.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
-2026-08-17 19:47:50.852 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
-2026-08-17 19:47:51.076 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:168)
-2026-08-17 19:47:51.076 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
-2026-08-17 19:47:51.076 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:145)
-2026-08-17 19:47:51.076 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
-2026-08-17 19:47:51.078 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
-2026-08-17 19:47:51.292 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
-2026-08-17 19:47:51.409 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
-2026-08-17 19:47:51.409 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
-2026-08-17 19:47:51.409 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
-2026-08-17 19:47:51.409 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
-2026-08-17 19:47:51.409 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
-2026-08-17 19:47:51.409 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
-2026-08-17 19:47:51.409 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
-2026-08-17 19:47:51.409 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
-2026-08-17 19:47:51.409 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
-2026-08-17 19:47:51.409 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
-2026-08-17 19:47:51.409 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
-2026-08-17 19:47:51.409 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
-2026-08-17 19:47:51.410 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
-2026-08-17 19:47:51.410 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
-2026-08-17 19:47:51.414 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
-2026-08-17 19:47:51.414 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
-2026-08-17 19:47:51.414 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
-2026-08-17 19:47:51.414 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
-2026-08-17 19:47:51.443 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
-2026-08-17 19:47:51.481 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681929248_memory' (shm_resource_tracker.cpp:282)
-2026-08-17 19:47:52.059 | info     |           Metal | [Real-time profiler] Device 3 sync complete: 100 samples, frequency=1.349991 GHz, device_time_at_sync=242495950586255 cycles (realtime_profiler_manager.cpp:1127)
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[1-linear] 2026-08-17 19:32:50.219 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-17 19:32:50.219 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-08-17 19:32:50.219 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-08-17 19:32:50.219 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-08-17 19:32:50.221 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:569)
+2026-08-17 19:32:50.221 | info     |             UMD | Firmware bundle version 19.9.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-08-17 19:32:50.225 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-08-17 19:32:50.446 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:168)
+2026-08-17 19:32:50.446 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-08-17 19:32:50.446 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:145)
+2026-08-17 19:32:50.446 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-08-17 19:32:50.448 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-08-17 19:32:50.687 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+2026-08-17 19:32:50.802 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-08-17 19:32:50.803 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-08-17 19:32:50.803 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-08-17 19:32:50.803 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-08-17 19:32:50.803 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-17 19:32:50.803 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-17 19:32:50.803 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-17 19:32:50.803 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-17 19:32:50.803 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-17 19:32:50.803 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-17 19:32:50.803 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-17 19:32:50.803 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-17 19:32:50.803 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-08-17 19:32:50.803 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-08-17 19:32:50.808 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-17 19:32:50.808 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-17 19:32:50.808 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-17 19:32:50.808 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-17 19:32:50.836 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-08-17 19:32:50.874 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681929248_memory' (shm_resource_tracker.cpp:282)
+2026-08-17 19:32:51.451 | info     |           Metal | [Real-time profiler] Device 3 sync complete: 100 samples, frequency=1.349986 GHz, device_time_at_sync=241376703649038 cycles (realtime_profiler_manager.cpp:1127)
 [layer_pairs] building ('linear', 1, 8192, False, ()) (live pairs: 0)
 PASSED
 models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[1-full] [layer_pairs] building ('full', 1, 8192, False, ()) (live pairs: 1)
@@ -113,20 +113,20 @@ models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_pre
 PASSED
 models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_resets_linear_state_for_new_sequence[full] [layer_pairs] building ('full', 2, 1024, False, ()) (live pairs: 6)
 PASSED
-models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_forward_rejects_out_of_contract_inputs 2026-08-17 19:49:00.387 | INFO     | conftest:expect_error_:883 - [EXPECTED_ERROR BEGIN] ValueError message="page_table"
-2026-08-17 19:49:00.387 | INFO     | conftest:expect_error_:888 - [EXPECTED_ERROR END] ValueError message="page_table"
-2026-08-17 19:49:00.387 | INFO     | conftest:expect_error_:883 - [EXPECTED_ERROR BEGIN] ValueError message="current_pos"
-2026-08-17 19:49:00.387 | INFO     | conftest:expect_error_:888 - [EXPECTED_ERROR END] ValueError message="current_pos"
-2026-08-17 19:49:00.388 | INFO     | conftest:expect_error_:883 - [EXPECTED_ERROR BEGIN] ValueError message="max_batch_size"
-2026-08-17 19:49:00.388 | INFO     | conftest:expect_error_:888 - [EXPECTED_ERROR END] ValueError message="max_batch_size"
-2026-08-17 19:49:00.388 | INFO     | conftest:expect_error_:883 - [EXPECTED_ERROR BEGIN] ValueError message="multiple of"
-2026-08-17 19:49:00.388 | INFO     | conftest:expect_error_:888 - [EXPECTED_ERROR END] ValueError message="multiple of"
-2026-08-17 19:49:00.388 | INFO     | conftest:expect_error_:883 - [EXPECTED_ERROR BEGIN] ValueError message="exceeds supported context"
-2026-08-17 19:49:00.389 | INFO     | conftest:expect_error_:888 - [EXPECTED_ERROR END] ValueError message="exceeds supported context"
-2026-08-17 19:49:00.389 | INFO     | conftest:expect_error_:883 - [EXPECTED_ERROR BEGIN] ValueError message="user_id"
-2026-08-17 19:49:00.389 | INFO     | conftest:expect_error_:888 - [EXPECTED_ERROR END] ValueError message="user_id"
-2026-08-17 19:49:00.389 | INFO     | conftest:expect_error_:883 - [EXPECTED_ERROR BEGIN] ValueError message="page_table"
-2026-08-17 19:49:00.389 | INFO     | conftest:expect_error_:888 - [EXPECTED_ERROR END] ValueError message="page_table"
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_forward_rejects_out_of_contract_inputs 2026-08-17 19:33:59.280 | INFO     | conftest:expect_error_:883 - [EXPECTED_ERROR BEGIN] ValueError message="page_table"
+2026-08-17 19:33:59.280 | INFO     | conftest:expect_error_:888 - [EXPECTED_ERROR END] ValueError message="page_table"
+2026-08-17 19:33:59.280 | INFO     | conftest:expect_error_:883 - [EXPECTED_ERROR BEGIN] ValueError message="current_pos"
+2026-08-17 19:33:59.280 | INFO     | conftest:expect_error_:888 - [EXPECTED_ERROR END] ValueError message="current_pos"
+2026-08-17 19:33:59.280 | INFO     | conftest:expect_error_:883 - [EXPECTED_ERROR BEGIN] ValueError message="max_batch_size"
+2026-08-17 19:33:59.280 | INFO     | conftest:expect_error_:888 - [EXPECTED_ERROR END] ValueError message="max_batch_size"
+2026-08-17 19:33:59.281 | INFO     | conftest:expect_error_:883 - [EXPECTED_ERROR BEGIN] ValueError message="multiple of"
+2026-08-17 19:33:59.281 | INFO     | conftest:expect_error_:888 - [EXPECTED_ERROR END] ValueError message="multiple of"
+2026-08-17 19:33:59.281 | INFO     | conftest:expect_error_:883 - [EXPECTED_ERROR BEGIN] ValueError message="exceeds supported context"
+2026-08-17 19:33:59.281 | INFO     | conftest:expect_error_:888 - [EXPECTED_ERROR END] ValueError message="exceeds supported context"
+2026-08-17 19:33:59.281 | INFO     | conftest:expect_error_:883 - [EXPECTED_ERROR BEGIN] ValueError message="user_id"
+2026-08-17 19:33:59.281 | INFO     | conftest:expect_error_:888 - [EXPECTED_ERROR END] ValueError message="user_id"
+2026-08-17 19:33:59.281 | INFO     | conftest:expect_error_:883 - [EXPECTED_ERROR BEGIN] ValueError message="page_table"
+2026-08-17 19:33:59.281 | INFO     | conftest:expect_error_:888 - [EXPECTED_ERROR END] ValueError message="page_table"
 PASSED
 models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_pcc_batches[1-linear] [layer_pairs] building ('linear', 1, 2048, False, ()) (live pairs: 7)
 PASSED
@@ -158,7 +158,7 @@ models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_pag
 models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_linear_state_matches_hf PASSED
 models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_from_seeded_random_linear_state PASSED
 models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_page_table_permutation_is_respected PASSED
-models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_traced_decode_pcc[linear] 2026-08-17 19:50:03.279 | warning  |           Metal | Allocating device buffers is unsafe due to the existence of an active trace. These buffers may be corrupted once a trace is executed. (allocator.cpp:110)
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_traced_decode_pcc[linear] 2026-08-17 19:35:01.660 | warning  |           Metal | Allocating device buffers is unsafe due to the existence of an active trace. These buffers may be corrupted once a trace is executed. (allocator.cpp:110)
 PASSED
 models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_traced_decode_pcc[full] PASSED
 models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_traced_decode_matches_eager[linear] [layer_pairs] building ('linear', 4, 1024, False, ()) (live pairs: 15)
@@ -189,201 +189,200 @@ models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_con
 ==================================== PASSES ====================================
 - generated xml file: /localdev/vkovacevic/tt-metal/generated/test_reports/most_recent_tests.xml -
 ============================== slowest durations ===============================
-12.53s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_pcc_batches[32-linear]
-11.94s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_per_user_slots[linear]
-11.05s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_pcc_batches[32-full]
-10.73s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_per_user_slots[full]
-5.64s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_pcc_batches[8-linear]
-5.50s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_pcc_batches[8-full]
-4.84s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_covering_whole_context_does_not_free_weights
-4.41s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_ragged_current_positions
-4.06s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_skips_inactive_slots_with_negative_position
-4.01s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_resets_linear_state_for_new_sequence[linear]
-3.99s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[1-linear]
-3.95s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_resets_linear_state_for_new_sequence[full]
-3.81s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_pcc_batches[1-linear]
-3.67s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_pcc_batches[1-full]
-3.64s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_traced_decode_matches_eager[linear]
-3.63s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[1-full]
-3.56s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_tail_reference_matches_full_prefill[linear-0-512-128-128-aligned]
-3.50s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_tail_reference_matches_full_prefill[linear-0-575-129-150-ragged-head-and-tail]
-3.49s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_tail_reference_matches_full_prefill[linear-0-575-128-150-ragged-head]
-3.41s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_tail_reference_matches_full_prefill[full-3-512-128-128-aligned]
-3.36s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_tail_reference_matches_full_prefill[full-3-575-128-150-ragged-head]
-3.35s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_tail_reference_matches_full_prefill[full-3-575-129-150-ragged-head-and-tail]
-3.22s teardown models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_context_contract_file_is_consistent
-2.61s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_real_weights_prefill_and_decode[linear]
-2.47s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[4096-linear]
-2.39s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_real_weights_prefill_and_decode[full]
-1.90s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_traced_decode_pcc[linear]
-1.90s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[4096-full]
-1.77s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_traced_decode_pcc[full]
-1.58s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[3000-linear]
-1.57s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_weight_stats_match_real_checkpoint
-1.45s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_many_steps_no_drift[linear]
-1.44s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[3000-full]
-1.43s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[1-linear]
-1.25s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_many_steps_no_drift[full]
-1.20s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[2049-linear]
-1.19s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[2048-linear]
-1.08s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[2048-full]
-1.00s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[2049-full]
-0.81s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_chunk_continuation[linear]
-0.76s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[1024-linear]
-0.68s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_chunk_continuation[full]
+12.24s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_pcc_batches[32-linear]
+11.75s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_per_user_slots[linear]
+10.86s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_pcc_batches[32-full]
+10.67s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_per_user_slots[full]
+5.68s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_pcc_batches[8-linear]
+5.55s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_pcc_batches[8-full]
+4.82s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_covering_whole_context_does_not_free_weights
+4.43s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_ragged_current_positions
+4.10s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_skips_inactive_slots_with_negative_position
+4.07s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_resets_linear_state_for_new_sequence[linear]
+3.97s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[1-linear]
+3.96s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_resets_linear_state_for_new_sequence[full]
+3.78s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_pcc_batches[1-linear]
+3.71s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[1-full]
+3.63s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_pcc_batches[1-full]
+3.63s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_traced_decode_matches_eager[linear]
+3.51s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_tail_reference_matches_full_prefill[linear-0-575-128-150-ragged-head]
+3.49s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_tail_reference_matches_full_prefill[linear-0-512-128-128-aligned]
+3.43s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_tail_reference_matches_full_prefill[linear-0-575-129-150-ragged-head-and-tail]
+3.40s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_tail_reference_matches_full_prefill[full-3-575-129-150-ragged-head-and-tail]
+3.35s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_tail_reference_matches_full_prefill[full-3-512-128-128-aligned]
+3.33s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_tail_reference_matches_full_prefill[full-3-575-128-150-ragged-head]
+3.00s teardown models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_context_contract_file_is_consistent
+2.58s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_real_weights_prefill_and_decode[linear]
+2.31s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[4096-linear]
+2.27s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_real_weights_prefill_and_decode[full]
+2.06s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_traced_decode_pcc[linear]
+1.98s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[4096-full]
+1.73s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_traced_decode_pcc[full]
+1.68s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[3000-linear]
+1.46s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[3000-full]
+1.46s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[1-linear]
+1.37s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_many_steps_no_drift[linear]
+1.36s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_weight_stats_match_real_checkpoint
+1.23s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[2048-linear]
+1.19s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_many_steps_no_drift[full]
+1.19s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[2049-linear]
+0.97s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[2049-full]
+0.96s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[2048-full]
+0.77s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_chunk_continuation[linear]
+0.67s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_chunk_continuation[full]
 0.65s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[1025-linear]
-0.61s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[1024-full]
-0.56s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[1025-full]
-0.50s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_after_non_aligned_prefill[1000-linear]
-0.43s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_after_non_aligned_prefill[1000-full]
-0.34s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_after_non_aligned_prefill[320-full]
+0.61s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[1024-linear]
+0.54s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[1024-full]
+0.52s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[1025-full]
+0.46s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_after_non_aligned_prefill[1000-linear]
+0.38s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_after_non_aligned_prefill[1000-full]
 0.30s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_after_non_aligned_prefill[320-linear]
-0.27s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_linear_state_matches_hf
-0.25s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[129-linear]
-0.23s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_paged_kv_cache_contents_match_hf
-0.22s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_traced_decode_matches_eager[linear]
-0.22s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_determinism[linear]
-0.22s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_restructured_chunk_rule_matches_hf[3-128]
-0.22s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_after_non_aligned_prefill[320-linear]
-0.22s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[32-full]
-0.22s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[128-linear]
-0.22s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_after_non_aligned_prefill[129-linear]
-0.22s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_many_steps_no_drift[full]
-0.22s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[64-linear]
-0.22s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_pcc_batches[32-linear]
+0.30s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_paged_kv_cache_contents_match_hf
+0.29s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_after_non_aligned_prefill[320-full]
+0.28s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[129-linear]
+0.23s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_linear_state_matches_hf
+0.22s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[128-linear]
+0.22s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_resets_linear_state_for_new_sequence[linear]
 0.22s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_linear_state_matches_hf
-0.22s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_layer_kinds_cover_the_whole_model
+0.22s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_pcc_batches[1-full]
+0.22s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_covering_whole_context_does_not_free_weights
 0.22s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_determinism[linear]
-0.22s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_paged_kv_cache_contents_match_hf
-0.22s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[2048-linear]
-0.22s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_weight_stats_match_real_checkpoint
-0.22s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[1-full]
-0.22s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_config_matches_hf
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_chunk_continuation[full]
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[33-full]
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_pcc_batches[1-linear]
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_skips_inactive_slots_with_negative_position
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_pcc_batches[1-full]
+0.22s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_pcc_batches[8-linear]
+0.22s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[4096-full]
+0.22s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[1025-linear]
+0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_paged_kv_cache_contents_match_hf
+0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_real_weights_prefill_and_decode[full]
+0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_layer_kinds_cover_the_whole_model
+0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_restructured_chunk_rule_matches_hf[3-256]
+0.21s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_after_non_aligned_prefill[129-linear]
+0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_restructured_chunk_rule_matches_hf[1-256]
+0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_determinism[full]
+0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[1-full]
+0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_traced_decode_pcc[full]
+0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_after_non_aligned_prefill[320-linear]
+0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_pcc_batches[8-full]
+0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_weight_stats_match_real_checkpoint
 0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_after_non_aligned_prefill[65-full]
+0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_pcc_batches[32-linear]
+0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_traced_decode_matches_eager[linear]
+0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_after_non_aligned_prefill[1000-linear]
+0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[129-full]
+0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[128-full]
+0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_pcc_batches[32-full]
+0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_resets_linear_state_for_new_sequence[full]
+0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_from_seeded_random_linear_state
+0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_determinism[full]
+0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[2048-linear]
+0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_after_non_aligned_prefill[65-linear]
+0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_determinism[linear]
+0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_page_table_permutation_is_respected
+0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_ragged_current_positions
+0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_determinism[linear]
 0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_no_runtime_host_fallback
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_ut_transform_squaring_matches_serial[1.0-64]
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_traced_decode_matches_eager[full]
 0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[65-linear]
+0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[32-full]
+0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[128-linear]
+0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_after_non_aligned_prefill[129-full]
+0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[64-linear]
+0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_ut_transform_squaring_matches_serial[1.0-32]
+0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_chunk_continuation[full]
+0.21s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_after_non_aligned_prefill[65-full]
+0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[33-full]
+0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_tail_reference_matches_full_prefill[linear-0-512-128-128-aligned]
+0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[129-linear]
+0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_many_steps_no_drift[full]
+0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_per_user_slots[linear]
 0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_many_steps_no_drift[linear]
 0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[32-linear]
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_after_non_aligned_prefill[1000-full]
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[1024-full]
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[2049-full]
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[1025-linear]
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_tail_reference_matches_full_prefill[linear-0-575-129-150-ragged-head-and-tail]
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_restructured_chunk_rule_matches_hf[1-128]
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[65-full]
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_pcc_batches[8-linear]
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[4096-full]
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_pcc_batches[32-full]
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_after_non_aligned_prefill[1000-linear]
+0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_after_non_aligned_prefill[129-linear]
 0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[4096-linear]
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_hf_conv_state_oldest_column_is_dead
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_ut_transform_squaring_is_the_inverse[32]
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[1025-full]
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_per_user_slots[full]
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_resets_linear_state_for_new_sequence[linear]
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_conv1d_shifted_mac_matches_hf_with_left_context
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_chunk_continuation[linear]
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_recurrent_step_matches_hf_single_token
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[129-full]
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_after_non_aligned_prefill[320-full]
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_tail_reference_matches_full_prefill[full-3-575-129-150-ragged-head-and-tail]
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[33-linear]
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_real_weights_prefill_and_decode[full]
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_pcc_batches[8-full]
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[2048-full]
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_ragged_current_positions
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_forward_rejects_out_of_contract_inputs
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[3000-linear]
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[3000-full]
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[1024-linear]
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_determinism[full]
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_after_non_aligned_prefill[65-linear]
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[128-full]
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[129-linear]
 0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_restructured_chunk_rule_is_chunk_splittable
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_tail_reference_matches_full_prefill[full-3-575-128-150-ragged-head]
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_real_weights_prefill_and_decode[linear]
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_restructured_chunk_rule_matches_hf[3-64]
+0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_chunk_continuation[linear]
+0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[3000-full]
+0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_tail_reference_matches_full_prefill[full-3-575-129-150-ragged-head-and-tail]
+0.21s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[32-linear]
 0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_context_contract_file_is_consistent
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[2049-linear]
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_mrope_text_only_is_standard_rope
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[64-full]
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_l2norm_as_rms_norm
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_after_non_aligned_prefill[129-full]
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_per_user_slots[linear]
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_traced_decode_pcc[full]
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_page_table_permutation_is_respected
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_traced_decode_pcc[linear]
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_tail_reference_matches_full_prefill[full-3-512-128-128-aligned]
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_conv1d_shifted_mac_matches_hf_prefill[1]
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_restructured_chunk_rule_matches_hf[3-256]
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_tail_reference_matches_full_prefill[linear-0-512-128-128-aligned]
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_ut_transform_squaring_matches_serial[1.0-128]
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_ut_transform_squaring_matches_serial[0.1-64]
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_tail_reference_matches_full_prefill[linear-0-575-128-150-ragged-head]
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_ut_transform_squaring_matches_serial[0.1-32]
-0.21s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_after_non_aligned_prefill[129-full]
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_no_host_ops_during_forward[linear]
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_from_seeded_random_linear_state
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_covering_whole_context_does_not_free_weights
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_determinism[full]
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_resets_linear_state_for_new_sequence[full]
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_no_host_ops_during_forward[full]
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_restructured_chunk_rule_matches_hf[1-256]
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_ut_transform_squaring_matches_serial[1.0-32]
-0.20s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_conv1d_shifted_mac_matches_hf_prefill[4]
-0.20s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_ut_transform_squaring_is_the_inverse[128]
-0.20s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_conv1d_shifted_mac_matches_hf_prefill[64]
-0.20s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_restructured_chunk_rule_matches_hf[1-64]
-0.20s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_determinism[linear]
-0.20s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[128-linear]
-0.20s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_ut_transform_squaring_matches_serial[0.1-128]
-0.20s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_ut_transform_squaring_is_the_inverse[64]
+0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_after_non_aligned_prefill[1000-full]
+0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_tail_reference_matches_full_prefill[linear-0-575-129-150-ragged-head-and-tail]
+0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_after_non_aligned_prefill[320-full]
+0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_skips_inactive_slots_with_negative_position
+0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_restructured_chunk_rule_matches_hf[1-128]
+0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[1024-linear]
+0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_restructured_chunk_rule_matches_hf[3-128]
+0.20s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_conv1d_shifted_mac_matches_hf_prefill[1]
+0.20s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_tail_reference_matches_full_prefill[full-3-575-128-150-ragged-head]
+0.20s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[2049-full]
+0.20s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_traced_decode_pcc[linear]
+0.20s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_tail_reference_matches_full_prefill[full-3-512-128-128-aligned]
+0.20s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_traced_decode_matches_eager[full]
+0.20s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[64-full]
+0.20s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[3000-linear]
+0.20s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_forward_rejects_out_of_contract_inputs
+0.20s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_ut_transform_squaring_matches_serial[0.1-32]
+0.20s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[2048-full]
+0.20s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_tail_reference_matches_full_prefill[linear-0-575-128-150-ragged-head]
+0.20s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_real_weights_prefill_and_decode[linear]
+0.20s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[1025-full]
+0.20s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_l2norm_as_rms_norm
+0.20s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[33-linear]
+0.20s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_ut_transform_squaring_is_the_inverse[32]
+0.20s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_restructured_chunk_rule_matches_hf[3-64]
+0.20s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[1024-full]
+0.20s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_per_user_slots[full]
+0.20s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[2049-linear]
+0.20s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_recurrent_step_matches_hf_single_token
+0.20s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[65-full]
+0.20s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_ut_transform_squaring_matches_serial[1.0-128]
+0.20s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_ut_transform_squaring_matches_serial[1.0-64]
+0.20s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_no_host_ops_during_forward[full]
+0.20s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_pcc_batches[1-linear]
 0.20s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_conv1d_shifted_mac_matches_hf_prefill[3]
-0.20s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_conv1d_shifted_mac_matches_hf_prefill[17]
-0.20s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_after_non_aligned_prefill[129-linear]
-0.19s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[64-full]
+0.20s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_ut_transform_squaring_is_the_inverse[64]
+0.20s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_ut_transform_squaring_matches_serial[0.1-64]
+0.19s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_no_host_ops_during_forward[linear]
 0.19s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[129-full]
+0.19s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[32-full]
+0.19s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_config_matches_hf
+0.19s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_conv1d_shifted_mac_matches_hf_prefill[64]
+0.19s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_restructured_chunk_rule_matches_hf[1-64]
+0.19s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_ut_transform_squaring_is_the_inverse[128]
+0.19s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_ut_transform_squaring_matches_serial[0.1-128]
+0.19s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_conv1d_shifted_mac_matches_hf_prefill[4]
+0.19s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_conv1d_shifted_mac_matches_hf_prefill[17]
+0.19s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_conv1d_shifted_mac_matches_hf_with_left_context
+0.19s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_mrope_text_only_is_standard_rope
+0.18s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_after_non_aligned_prefill[129-full]
+0.18s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_hf_conv_state_oldest_column_is_dead
 0.18s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_after_non_aligned_prefill[65-linear]
-0.18s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[65-full]
-0.17s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[65-linear]
+0.18s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[65-linear]
+0.18s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[33-linear]
 0.17s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[128-full]
 0.17s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_determinism[full]
-0.16s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_after_non_aligned_prefill[65-full]
-0.16s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[64-linear]
-0.15s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[32-linear]
-0.14s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[32-full]
-0.14s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[33-linear]
+0.17s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[64-linear]
+0.16s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[64-full]
+0.16s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[65-full]
 0.13s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_determinism[linear]
-0.12s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[33-full]
 0.12s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_traced_decode_matches_eager[full]
+0.12s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_pcc_sequence_lengths[33-full]
 0.11s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_determinism[full]
-0.10s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_restructured_chunk_rule_matches_hf[3-256]
+0.11s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_restructured_chunk_rule_matches_hf[3-256]
 0.09s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_page_table_permutation_is_respected
-0.08s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_from_seeded_random_linear_state
-0.05s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_restructured_chunk_rule_is_chunk_splittable
+0.07s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_from_seeded_random_linear_state
+0.06s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_restructured_chunk_rule_is_chunk_splittable
 0.05s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_restructured_chunk_rule_matches_hf[3-128]
-0.03s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_restructured_chunk_rule_matches_hf[1-256]
 0.03s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_restructured_chunk_rule_matches_hf[3-64]
+0.03s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_restructured_chunk_rule_matches_hf[1-256]
 0.03s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_no_host_ops_during_forward[full]
-0.02s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_restructured_chunk_rule_matches_hf[1-128]
+0.01s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_restructured_chunk_rule_matches_hf[1-128]
 0.01s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_no_host_ops_during_forward[linear]
+0.01s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_recurrent_step_matches_hf_single_token
 0.01s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_forward_rejects_out_of_contract_inputs
 0.01s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_no_runtime_host_fallback
 0.01s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_restructured_chunk_rule_matches_hf[1-64]
-0.01s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_recurrent_step_matches_hf_single_token
-0.01s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_ut_transform_squaring_matches_serial[1.0-128]
 0.01s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_ut_transform_squaring_matches_serial[0.1-128]
-0.01s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_mrope_text_only_is_standard_rope
+0.01s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_ut_transform_squaring_matches_serial[1.0-128]
 
-(122 durations < 0.005s hidden.  Use -vv to show these durations.)
+(123 durations < 0.005s hidden.  Use -vv to show these durations.)
 =========================== short test summary info ============================
 PASSED models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_ut_transform_squaring_matches_serial[1.0-32]
 PASSED models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py::test_ut_transform_squaring_matches_serial[1.0-64]
@@ -490,10 +489,10 @@ PASSED models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::t
 PASSED models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_real_weights_prefill_and_decode[full]
 PASSED models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_weight_stats_match_real_checkpoint
 PASSED models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_context_contract_file_is_consistent
-================= 105 passed, 2 warnings in 179.87s (0:02:59) ==================
+================= 105 passed, 2 warnings in 177.69s (0:02:57) ==================
 sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
 nanobind: leaked 1 instances!
- - leaked instance 0x7ab0082b9698 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x70d450275728 of type "ttnn._ttnn.tensor.CoreRangeSet"
 nanobind: leaked 13 types!
  - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
  - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
@@ -508,21 +507,21 @@ nanobind: leaked 13 types!
  - ... skipped remainder
 nanobind: leaked 199 functions!
  - leaked function ""
- - leaked function "device"
- - leaked function "buffer_aligned_page_size"
- - leaked function "default_core_range"
- - leaked function "to_torch"
+ - leaked function "__init__"
  - leaked function ""
- - leaked function "__repr__"
- - leaked function "is_allocated"
+ - leaked function "create_output_tensors"
+ - leaked function ""
+ - leaked function "__eq__"
+ - leaked function "contains"
+ - leaked function "__init__"
  - leaked function ""
  - leaked function ""
  - ... skipped remainder
 nanobind: this is likely caused by a reference counting issue in the binding code.
-See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-17 19:50:24.397 | info     |    BuildKernels | JIT cache stats: 2361/2361 hits (100.0%) [2361 cached, 3581 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
-2026-08-17 19:50:24.397 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
-2026-08-17 19:50:24.433 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
-2026-08-17 19:50:24.433 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
-2026-08-17 19:50:24.992 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
-2026-08-17 19:50:24.992 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
-2026-08-17 19:50:24.992 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-17 19:35:21.966 | info     |    BuildKernels | JIT cache stats: 2361/2361 hits (100.0%) [2361 cached, 3581 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-17 19:35:21.966 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-17 19:35:21.991 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-08-17 19:35:21.991 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-08-17 19:35:22.489 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-08-17 19:35:22.489 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-08-17 19:35:22.490 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)
