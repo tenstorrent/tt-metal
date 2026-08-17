@@ -1,5 +1,5 @@
 We took Voxtral-TTS, a 4B text to speech model with three stacks, through the whole pipeline on a
-single p150b. Seven things worth fixing. Point 3 is the root of point 4, so they are one job and the
+single p150b. Eight things worth fixing. Point 3 is the root of point 4, so they are one job and the
 place to start. Points 5 and 6 are one line each.
 
 1. Check that the model implementation the tool writes actually works
@@ -126,6 +126,22 @@ place to start. Points 5 and 6 are one line each.
       tracing removes launch cost the opposite can win; and correctness is checked at one sequence
       length, so a change can be right there and wrong further along, and since each frame feeds the
       next, one flipped choice changes everything after it.
+
+8. PCC alone cannot judge a speech model
+    - PCC is right for a component against its reference, but not as the end to end verdict. The
+      model emits discrete codes and feeds them back, so a change can score near perfect on tensors
+      while the codes diverge, and one flipped code redirects the rest of the utterance.
+    - What worked for us, cheapest first. Pin the random draw the model makes each frame, so two
+      runs of the same code produce the same audio and can be compared at all. Then count how many
+      emitted codes exactly match the reference's, which is free and far stricter than a
+      correlation. Each frame is generated from the ones before it, so one early difference
+      compounds until the two outputs are unrelated; feeding the reference's own frames in at every
+      step instead, teacher forcing, removes that, and any difference left is caused by the change
+      itself. After that, word error rate over a long transcript, and whether every prompt ends on
+      its own. Anything that changes what the model produces needs a listening pass.
+    - One warning, because we lost time to it: free running word error rate cannot separate two
+      builds. The same code across three seeds spanned 0.88% to 2.06%, wider than most changes worth
+      measuring. Only the long form aggregate was stable, 1 wrong word in 894 over three seeds.
 
 We have the logs and the measurements behind all of this, and can open an issue per point if that
 is easier.
