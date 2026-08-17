@@ -57,8 +57,8 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     SAMPLING_LEGACY_COMPAT,
-    SAMPLING_PRGM0_HAZARD,
     SAMPLING_OP,
+    SAMPLING_PRGM0_HAZARD,
     SFPU_UNARY_SCALAR,
     VECTOR_MODE,
 )
@@ -493,8 +493,7 @@ def test_sfpu_sampling_recip_prgm0_hazard(
     # distinguishable and a strict assertion would be measuring the packer, not the hazard.
     _STRICT_REL = 1e-3
     strict_cell = (
-        dest_acc == DestAccumulation.No
-        or formats.output_format == DataFormat.Float32
+        dest_acc == DestAccumulation.No or formats.output_format == DataFormat.Float32
     )
 
     expect_correct = legacy_compat or not skip_init
