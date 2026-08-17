@@ -674,25 +674,51 @@ int main(int argc, char** argv) {
             } else {
                 // --all-solutions: one artifact set per solution in a content-hash subdirectory, plus a
                 // top-level solutions_index.yaml summarizing them all.
-                log_info(tt::LogFabric, "Stage: Enumerating all topology mapping solutions...");
+                log_info(tt::LogFabric, "Stage: Enumerating all topology mapping solutions (streaming)...");
                 // Solver-level unique_shapes dedup is ALWAYS ON (collapses automorphic physical footprints);
                 // only the hidden --allow-shape-permutations turns it off.
                 const bool unique_shapes = !args.allow_shape_permutations;
-                std::vector<TopologyMappingResult> results =
-                    run_topology_mapping_n(psd, pgd, mgd, mgd_path, args.max_solutions, unique_shapes);
-                log_info(tt::LogFabric, "Enumerated {} solution(s)", results.size());
-
                 const std::string enumeration_mode = args.distinct_host_sets ? "distinct-host-sets" : "all";
+
+                // Pull-based streaming enumeration: ask the enumerator for ONE solution at a time and write it +
+                // rewrite solutions_index.yaml immediately, instead of collecting every solution before writing any.
+                // A consumer can pick up / test solution k while solution k+1 is still being searched for, and a
+                // crash/timeout leaves a valid index for every solution already written. Selection is IDENTICAL to
+                // the batch run_topology_mapping_n path (same session, constraints, unique_shapes, signature dedup).
+                auto inputs = build_topology_mapping_inputs(psd, pgd, mgd, mgd_path);
+                MultiMeshSolutionEnumerator enumerator(
+                    inputs.logical_graph,
+                    inputs.physical_graph,
+                    inputs.config,
+                    unique_shapes,
+                    inputs.asic_id_to_mesh_rank,
+                    inputs.fabric_node_id_to_mesh_rank);
+
                 std::vector<SolutionIndexEntry> index_entries;
 
                 // --distinct-host-sets: dedup written solutions by their resolved set of HOSTS. This is coarser
                 // than the solver's unique_shapes (which dedups by physical-mesh footprint): for sub-host meshes,
                 // several shape-distinct solutions can share one host set, and this keeps only the first.
                 std::set<std::set<std::string>> seen_host_sets;
+                const std::filesystem::path index_path = output_dir / "solutions_index.yaml";
 
-                for (const auto& mapping_result : results) {
-                    std::vector<RankBindingConfig> rank_bindings =
-                        extract_rank_bindings(psd, mapping_result, mesh_graph);
+                // emitted counts solutions returned by the enumerator (matches the batch --max-solutions cap
+                // semantics, which bound the enumeration before host-set dedup); cap_reached distinguishes
+                // "stopped at the cap (more may exist)" from "enumeration genuinely exhausted".
+                std::size_t emitted = 0;
+                bool cap_reached = false;
+                while (true) {
+                    if (args.max_solutions != 0 && emitted >= args.max_solutions) {
+                        cap_reached = true;
+                        break;
+                    }
+                    std::optional<TopologyMappingResult> solution = enumerator.next();
+                    if (!solution.has_value()) {
+                        break;  // enumeration exhausted (genuine UNSAT -- no budget give-up)
+                    }
+                    ++emitted;
+
+                    std::vector<RankBindingConfig> rank_bindings = extract_rank_bindings(psd, *solution, mesh_graph);
 
                     const std::set<std::string> hosts = solution_host_set(rank_bindings);
                     if (args.distinct_host_sets && !seen_host_sets.insert(hosts).second) {
@@ -726,11 +752,26 @@ int main(int argc, char** argv) {
                     entry.num_hosts = static_cast<int>(hosts.size());
                     entry.host_set.assign(hosts.begin(), hosts.end());
                     index_entries.push_back(std::move(entry));
+
+                    // Rewrite the index after every solution so the on-disk index always reflects everything written
+                    // so far (crash/timeout resilient). While streaming we mark truncated=true (more may still come);
+                    // the definitive flag is written after the enumeration ends below. The consumer keys off the
+                    // producer's liveness, not this flag, to decide whether more solutions are pending.
+                    write_solutions_index_yaml(
+                        args.mesh_graph_descriptor_path,
+                        enumeration_mode,
+                        args.max_solutions,
+                        /*truncated=*/true,
+                        index_entries,
+                        index_path.string());
+                    fsync_path(index_path);
+                    log_info(
+                        tt::LogFabric, "Streamed solution {} ({} written so far)", solution_id, index_entries.size());
                 }
 
-                // truncated == true when a positive cap bounded the output (more solutions may exist).
-                const bool truncated = args.max_solutions != 0 && results.size() >= args.max_solutions;
-                const std::filesystem::path index_path = output_dir / "solutions_index.yaml";
+                // Final index rewrite with the definitive truncated flag: true only if a positive cap bounded the
+                // output (more solutions may exist), false once the enumeration is genuinely exhausted.
+                const bool truncated = cap_reached;
                 write_solutions_index_yaml(
                     args.mesh_graph_descriptor_path,
                     enumeration_mode,
