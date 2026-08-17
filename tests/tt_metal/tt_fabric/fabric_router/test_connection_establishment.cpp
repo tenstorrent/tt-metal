@@ -94,12 +94,27 @@ protected:
     IntermeshVCConfig vc1_config_ = IntermeshVCConfig::full_mesh();
     ConnectionRegistry registry_;
 
+    // The chip a router sits on, named by what its Z port is for. Cardinals are ordinary same-mesh
+    // edges; the derivations read this router's own capability and the chip's Z role off the set.
+    static PerDirectionCapabilities chip_with_z_role(ZPortRole chip_z_role) {
+        PerDirectionCapabilities caps;
+        for (const auto direction :
+             {RoutingDirection::N, RoutingDirection::E, RoutingDirection::S, RoutingDirection::W}) {
+            caps.at(direction) = EdgeCapability::INTRAMESH_CARDINAL;
+        }
+        switch (chip_z_role) {
+            case ZPortRole::INTERMESH_BOUNDARY: caps.at(RoutingDirection::Z) = EdgeCapability::INTERMESH; break;
+            case ZPortRole::EXPRESS_CHORD: caps.at(RoutingDirection::Z) = EdgeCapability::INTRAMESH_EXPRESS; break;
+            case ZPortRole::NONE: break;
+        }
+        return caps;
+    }
+
     HostRouter make_mesh_router(RoutingDirection facing, uint32_t id, ZPortRole chip_role, bool enable_vc1) {
         const auto archetype = router_archetype(
             Topology::Mesh,
             facing,
-            EdgeCapability::INTRAMESH_CARDINAL,
-            chip_role,
+            chip_with_z_role(chip_role),
             /*express_routing_enabled=*/false,
             enable_vc1 ? &vc1_config_ : nullptr);
         return HostRouter{FabricNodeId(MeshId{0}, id), facing, archetype.shape, archetype.turns};
@@ -109,8 +124,7 @@ protected:
         const auto archetype = router_archetype(
             Topology::Mesh,
             RoutingDirection::Z,
-            EdgeCapability::INTERMESH,
-            ZPortRole::INTERMESH_BOUNDARY,
+            chip_with_z_role(ZPortRole::INTERMESH_BOUNDARY),
             /*express_routing_enabled=*/false,
             &vc1_config_);
         return HostRouter{FabricNodeId(MeshId{0}, id), RoutingDirection::Z, archetype.shape, archetype.turns};
@@ -120,8 +134,7 @@ protected:
         const auto archetype = router_archetype(
             Topology::Torus,
             facing,
-            EdgeCapability::INTRAMESH_CARDINAL,
-            ZPortRole::EXPRESS_CHORD,
+            chip_with_z_role(ZPortRole::EXPRESS_CHORD),
             /*express_routing_enabled=*/true,
             nullptr);
         return HostRouter{FabricNodeId(MeshId{0}, id), facing, archetype.shape, archetype.turns};
@@ -131,8 +144,7 @@ protected:
         const auto archetype = router_archetype(
             Topology::Torus,
             RoutingDirection::Z,
-            EdgeCapability::INTRAMESH_EXPRESS,
-            ZPortRole::EXPRESS_CHORD,
+            chip_with_z_role(ZPortRole::EXPRESS_CHORD),
             /*express_routing_enabled=*/true,
             nullptr);
         return HostRouter{FabricNodeId(MeshId{0}, id), RoutingDirection::Z, archetype.shape, archetype.turns};

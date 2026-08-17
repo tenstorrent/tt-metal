@@ -59,6 +59,7 @@
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include "tt_metal/fabric/physical_system_discovery.hpp"
 #include "tt_metal/fabric/express_ring_topology.hpp"
+#include "tt_metal/fabric/mcast_reverse_tree.hpp"
 #include "tt_metal/fabric/serialization/port_descriptor_serialization.hpp"
 #include "tt_metal/fabric/serialization/intermesh_connections_serialization.hpp"
 #include <tt-metalium/experimental/fabric/topology_mapper.hpp>
@@ -1978,6 +1979,36 @@ void ControlPlane::compute_and_embed_2d_routing_path_table(
     if (this->express_routing_enabled(mesh_id)) {
         indexed_route_vectors_t indexed_vectors;
         indexed_vectors.calculate_chip_to_all_routing_fields(FabricNodeId(mesh_id, chip_id), num_chips);
+
+        // Hybrid layout (codec contract 6.2): the unicast vectors above are mesh-identical, so they
+        // are regenerated identically for every chip; the reverse trees are not, so this chip gets
+        // T(its own row) and T(its own column) only, written into the tail of the same slot.
+        const auto* y_rings = this->ring_for_direction(mesh_id, RoutingDirection::N);
+        const auto* x_rings = this->ring_for_direction(mesh_id, RoutingDirection::E);
+        if (y_rings != nullptr && x_rings != nullptr) {
+            const auto coord = this->get_mesh_graph().chip_to_coordinate(mesh_id, chip_id);
+            std::string failure;
+            if (!embed_mcast_reverse_trees(
+                    this->get_mesh_graph(),
+                    mesh_id,
+                    *y_rings,
+                    *x_rings,
+                    static_cast<int>(coord[0]),
+                    static_cast<int>(coord[1]),
+                    indexed_vectors.data,
+                    &failure)) {
+                // Rejects reverse-tree multicast for this mesh rather than the mesh itself (contract
+                // 6.1: a root failure has no alternate mcast artifact in V1). Unicast is unaffected,
+                // and the region stays zeroed. The multicast producer must refuse to encode against a
+                // mesh that lands here.
+                log_warning(
+                    tt::LogFabric,
+                    "mesh {}: no multicast reverse trees, express multicast unavailable: {}",
+                    *mesh_id,
+                    failure);
+            }
+        }
+
         std::memcpy(&routing_info.indexed_route_vectors, &indexed_vectors, sizeof(indexed_route_vectors_t));
     } else {
         intra_mesh_routing_path_t<2, true> routing_path_2d;

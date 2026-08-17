@@ -316,6 +316,59 @@ struct IndexedMeshRoutingFields {
         return table_bytes(y_size) + table_bytes(x_size);
     }
 
+    // ---- Multicast reverse-tree region (contract 5.7.1 storage, 6.2 placement) --
+    // The hybrid layout: the destination-major vectors, then this chip's own reverse trees. The
+    // vectors are mesh-identical, the trees are not -- each chip carries only T(its own row) and
+    // T(its own column), so this region's contents differ per chip while its geometry does not.
+    //
+    // Placed at a shape-derived offset rather than a fixed one because the vectors are packed to the
+    // live shape, so a fixed offset would either waste the [64,4] bound on every mesh or collide.
+    // Both sides compute the offset the same way from the shape they already hold.
+    static constexpr uint32_t MCAST_TREE_EDGE_BYTES = 2;
+    // An arborescence over n rows has n-1 edges; a single-row axis has none.
+    static constexpr uint32_t mcast_tree_edge_count(uint32_t axis_size) { return axis_size > 1 ? axis_size - 1 : 0; }
+    static constexpr uint32_t mcast_tree_region_bytes(uint32_t y_size, uint32_t x_size) {
+        return MCAST_TREE_EDGE_BYTES * (mcast_tree_edge_count(y_size) + mcast_tree_edge_count(x_size));
+    }
+    static constexpr uint32_t mcast_tree_offset_bytes(uint32_t y_size, uint32_t x_size) {
+        return (vectors_region_bytes(y_size, x_size) + 3u) & ~3u;
+    }
+    // Whether vectors plus trees fit the existing union slot. False is not a defect: [64,4] needs the
+    // struct growth recorded in contract 6.2, and the caller is expected to say so rather than pack
+    // over the end of the slot.
+    static constexpr bool hybrid_region_fits(uint32_t y_size, uint32_t x_size) {
+        return mcast_tree_offset_bytes(y_size, x_size) + mcast_tree_region_bytes(y_size, x_size) <=
+               INDEXED_VECTOR_TABLE_BYTES;
+    }
+
+    static constexpr uint32_t mcast_tree_y_offset(uint32_t y_size, uint32_t x_size) {
+        return mcast_tree_offset_bytes(y_size, x_size);
+    }
+    static constexpr uint32_t mcast_tree_x_offset(uint32_t y_size, uint32_t x_size) {
+        return mcast_tree_offset_bytes(y_size, x_size) + MCAST_TREE_EDGE_BYTES * mcast_tree_edge_count(y_size);
+    }
+
+    // Packed edge fields (contract 5.7.1). The Y <= 64 bound is what fixes the two 6-bit row fields;
+    // parent_output holds this axis's 2-bit vector code, the same encoding a unicast vector uses, so
+    // it widens through widen_y / widen_x rather than a private table.
+    static constexpr int mcast_edge_child(std::uint16_t packed) { return packed & 0x3F; }
+    static constexpr int mcast_edge_parent(std::uint16_t packed) { return (packed >> 6) & 0x3F; }
+    static constexpr std::uint8_t mcast_edge_output(std::uint16_t packed) {
+        return static_cast<std::uint8_t>((packed >> 12) & 0x3);
+    }
+
+    // Byte-wise so neither side has to reason about halfword alignment inside a packed union.
+    static inline std::uint16_t get_mcast_tree_edge(const std::uint8_t* region, uint32_t index) {
+        const uint32_t byte_index = index * MCAST_TREE_EDGE_BYTES;
+        return static_cast<std::uint16_t>(
+            region[byte_index] | (static_cast<std::uint16_t>(region[byte_index + 1]) << 8));
+    }
+    static inline void set_mcast_tree_edge(std::uint8_t* region, uint32_t index, std::uint16_t packed_edge) {
+        const uint32_t byte_index = index * MCAST_TREE_EDGE_BYTES;
+        region[byte_index] = static_cast<std::uint8_t>(packed_edge & 0xFF);
+        region[byte_index + 1] = static_cast<std::uint8_t>((packed_edge >> 8) & 0xFF);
+    }
+
     static inline std::uint8_t* y_row(std::uint8_t* table, uint32_t y_size, uint32_t dst_y) {
         return table + dst_y * row_bytes(y_size);
     }
@@ -495,6 +548,177 @@ static_assert(
         (IndexedMeshRoutingFields::ACTION_VALID_MASK & IndexedMeshRoutingFields::ACTION_RESERVED_MASK) == 0,
     "indexed action byte valid/reserved masks must partition the byte");
 static_assert(IndexedMeshRoutingFields::INDEXED_VECTOR_TABLE_BYTES == 1028, "indexed vector table must be 1028 B");
+
+// Contract 6.2 hybrid footprints: [32,4] is 260 B of vectors plus a 68 B tree region and fits the
+// existing slot; [64,4] is 1160 B and does not, which is the documented growth boundary.
+static_assert(
+    IndexedMeshRoutingFields::vectors_region_bytes(32, 4) == 260 &&
+        IndexedMeshRoutingFields::mcast_tree_region_bytes(32, 4) == 68 &&
+        IndexedMeshRoutingFields::hybrid_region_fits(32, 4),
+    "[32,4] hybrid layout must fit the 2D union slot");
+static_assert(
+    !IndexedMeshRoutingFields::hybrid_region_fits(64, 4),
+    "[64,4] hybrid layout is expected to exceed the slot until routing_l1_info_t grows (contract 6.2)");
+static_assert(
+    IndexedMeshRoutingFields::mcast_tree_x_offset(32, 4) == IndexedMeshRoutingFields::mcast_tree_y_offset(32, 4) + 62,
+    "X tree must follow the Y tree's y_size-1 edges");
+
+// ============================================================================
+// Indexed multicast encode (contract 5.5 / 5.6 / 5.7.1)
+// ============================================================================
+// Shared by the worker producer and host validation so both run the identical arithmetic; the host
+// test can then check it against the independent 5.6 path-trace reference without a device.
+//
+// No STL, no allocation, no Z-neighbor lookup: the reverse tree carries both endpoints and the
+// parent's command, so encoding never follows a Z edge forward.
+
+// Row bitmaps at the Y <= 64 bound.
+inline constexpr std::uint32_t MCAST_ROW_BITS_WORDS = 2;
+
+inline void mcast_set_row_bit(std::uint32_t* bits, std::uint32_t row) { bits[row >> 5] |= 1u << (row & 31); }
+inline bool mcast_test_row_bit(const std::uint32_t* bits, std::uint32_t row) {
+    return ((bits[row >> 5] >> (row & 31)) & 1u) != 0;
+}
+
+// One axis of the 5.7.1 reverse pass. `needed` enters holding the requested targets and leaves
+// holding those plus every transit parent; an edge is taken exactly when its child subtree still
+// holds something needed, which is what makes the result union(R(root, target)).
+//
+// LOCAL_DELIVER is deliberately not set here: 5.7.1 forbids deriving it from the expanded `needed`
+// set, because a row can be needed purely as a transit parent.
+inline void mcast_prune_axis(
+    std::uint8_t* out_actions,
+    const std::uint8_t* tree_region,
+    std::uint32_t axis_len,
+    std::uint32_t* needed,
+    bool is_y_axis) {
+    const std::uint32_t edge_count = IndexedMeshRoutingFields::mcast_tree_edge_count(axis_len);
+    for (std::uint32_t i = 0; i < edge_count; ++i) {
+        const std::uint16_t edge = IndexedMeshRoutingFields::get_mcast_tree_edge(tree_region, i);
+        const std::uint32_t child = static_cast<std::uint32_t>(IndexedMeshRoutingFields::mcast_edge_child(edge));
+        if (!mcast_test_row_bit(needed, child)) {
+            continue;
+        }
+        const std::uint32_t parent = static_cast<std::uint32_t>(IndexedMeshRoutingFields::mcast_edge_parent(edge));
+        const std::uint8_t code = IndexedMeshRoutingFields::mcast_edge_output(edge);
+        out_actions[parent] |=
+            is_y_axis ? IndexedMeshRoutingFields::widen_y(code) : IndexedMeshRoutingFields::widen_x(code);
+        mcast_set_row_bit(needed, parent);
+    }
+}
+
+// Fills route_buffer[0..y_size) with route_buffer_y and route_buffer[y_size..y_size+x_size) with
+// route_buffer_x, from the reverse trees embedded in this chip's `vectors` table.
+//
+// Contract §5.0 keeps two chips apart that a same-mesh send lets you conflate:
+//
+//   anchor_{y,x}   the chip the client's N/S/E/W extents are measured from (range_anchor)
+//   encode_root_x  the column where path tracing begins, which owns `vectors`
+//
+// They coincide for a worker sending inside its own mesh, and the overload below is that case. They
+// differ at a destination-mesh landing, where the tree is T(landing) but the rectangle is still the
+// one the original client asked for around the retained range_anchor. Passing the anchor where the
+// encode root belongs would read the teeth off the wrong column and, when the two columns differ,
+// silently drop LOCAL_DELIVER from every target row.
+//
+// There is no encode_root_y parameter because none is needed: the Y tree in `vectors` is already
+// rooted at the encode root, and pruning walks from the targets up to it.
+//
+// N walks toward decreasing y and S toward increasing y, both modular: the axis is a ring, and an
+// extent that wraps is a legal request rather than a clamped one.
+//
+// The anchor row is not itself a Y target -- an N/S range names the rows around the anchor, not the
+// anchor -- but with no Y extent at all the operation is X-only and the anchor row is where the
+// teeth attach, so it stands in as the single target row.
+inline void encode_indexed_mcast_maps(
+    std::uint8_t* route_buffer,
+    const std::uint8_t* vectors,
+    std::uint32_t y_size,
+    std::uint32_t x_size,
+    std::uint32_t anchor_y,
+    std::uint32_t anchor_x,
+    std::uint32_t encode_root_x,
+    std::uint32_t n_hops,
+    std::uint32_t s_hops,
+    std::uint32_t e_hops,
+    std::uint32_t w_hops) {
+    const std::uint32_t root_y = anchor_y;
+    const std::uint32_t root_x = anchor_x;
+    std::uint8_t* out_y = route_buffer;
+    std::uint8_t* out_x = route_buffer + y_size;
+    for (std::uint32_t i = 0; i < y_size + x_size; ++i) {
+        route_buffer[i] = 0;
+    }
+
+    std::uint32_t y_targets[MCAST_ROW_BITS_WORDS] = {0, 0};
+    std::uint32_t x_targets[MCAST_ROW_BITS_WORDS] = {0, 0};
+
+    if (n_hops == 0 && s_hops == 0) {
+        mcast_set_row_bit(y_targets, root_y);
+    } else {
+        for (std::uint32_t k = 1; k <= n_hops; ++k) {
+            mcast_set_row_bit(y_targets, (root_y + y_size - (k % y_size)) % y_size);
+        }
+        for (std::uint32_t k = 1; k <= s_hops; ++k) {
+            mcast_set_row_bit(y_targets, (root_y + k) % y_size);
+        }
+    }
+
+    // The anchor column is always a target: the spine rows deliver, not merely forward.
+    mcast_set_row_bit(x_targets, root_x);
+    for (std::uint32_t k = 1; k <= e_hops; ++k) {
+        mcast_set_row_bit(x_targets, (root_x + k) % x_size);
+    }
+    for (std::uint32_t k = 1; k <= w_hops; ++k) {
+        mcast_set_row_bit(x_targets, (root_x + x_size - (k % x_size)) % x_size);
+    }
+
+    const std::uint8_t* tree_y = vectors + IndexedMeshRoutingFields::mcast_tree_y_offset(y_size, x_size);
+    const std::uint8_t* tree_x = vectors + IndexedMeshRoutingFields::mcast_tree_x_offset(y_size, x_size);
+
+    std::uint32_t needed_x[MCAST_ROW_BITS_WORDS] = {x_targets[0], x_targets[1]};
+    mcast_prune_axis(out_x, tree_x, x_size, needed_x, /*is_y_axis=*/false);
+    for (std::uint32_t x = 0; x < x_size; ++x) {
+        if (mcast_test_row_bit(x_targets, x)) {
+            out_x[x] |= IndexedMeshRoutingFields::ACTION_LOCAL_DELIVER;
+        }
+    }
+
+    std::uint32_t needed_y[MCAST_ROW_BITS_WORDS] = {y_targets[0], y_targets[1]};
+    mcast_prune_axis(out_y, tree_y, y_size, needed_y, /*is_y_axis=*/true);
+
+    // Contract 5.5: every target row carries the ENCODE ROOT column's own E/W teeth, and delivers
+    // only if that column is itself a target column. Read after the LOCAL_DELIVER pass above, which
+    // is what makes that condition true when it should be. Indexed by encode_root_x and not by the
+    // anchor: the teeth are what this chip has to launch, and at a landing this chip is not the
+    // anchor.
+    const std::uint8_t x_root_action = out_x[encode_root_x];
+    const std::uint8_t teeth =
+        x_root_action & (IndexedMeshRoutingFields::ACTION_EAST | IndexedMeshRoutingFields::ACTION_WEST);
+    const std::uint8_t deliver = x_root_action & IndexedMeshRoutingFields::ACTION_LOCAL_DELIVER;
+    for (std::uint32_t y = 0; y < y_size; ++y) {
+        if (mcast_test_row_bit(y_targets, y)) {
+            out_y[y] |= teeth | deliver;
+        }
+    }
+}
+
+// Same-mesh source: the client's rectangle is measured from the very chip that roots the trees, so
+// the anchor and the encode root are one chip and callers need not distinguish them.
+inline void encode_indexed_mcast_maps(
+    std::uint8_t* route_buffer,
+    const std::uint8_t* vectors,
+    std::uint32_t y_size,
+    std::uint32_t x_size,
+    std::uint32_t root_y,
+    std::uint32_t root_x,
+    std::uint32_t n_hops,
+    std::uint32_t s_hops,
+    std::uint32_t e_hops,
+    std::uint32_t w_hops) {
+    encode_indexed_mcast_maps(
+        route_buffer, vectors, y_size, x_size, root_y, root_x, root_x, n_hops, s_hops, e_hops, w_hops);
+}
 
 // FWD_DIRS slot order: base {E, W, N, S, Z} with the self direction removed.
 static_assert(

@@ -138,4 +138,13 @@ std::optional<EdgeCapability> capability_in_direction(
     return std::nullopt;
 }
 
+PerDirectionCapabilities chip_capabilities_of(const ControlPlane& control_plane, FabricNodeId local) {
+    PerDirectionCapabilities caps;
+    for (const auto direction :
+         {RoutingDirection::N, RoutingDirection::E, RoutingDirection::S, RoutingDirection::W, RoutingDirection::Z}) {
+        caps.at(direction) = capability_in_direction(control_plane, local, direction);
+    }
+    return caps;
+}
+
 }  // namespace tt::tt_fabric

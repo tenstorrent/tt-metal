@@ -44,7 +44,9 @@ struct LocalArgsBuffer {
         static_assert("Error: only 4B args are supported" && sizeof(T) == 4);
 
         uint32_t current_offset = arg_idx * sizeof(T);
-        ASSERT(current_offset + sizeof(T) <= end_address);  // Check bounds
+        // Against the buffer's size, not its end address: current_offset is an offset, so comparing it
+        // to an absolute L1 address made this guard unfireable.
+        ASSERT(current_offset + sizeof(T) <= buffer_size);
 
         tt_l1_ptr T* local_args_ptr = reinterpret_cast<tt_l1_ptr T*>(base_address);
         return local_args_ptr[arg_idx];
@@ -741,22 +743,42 @@ struct FabricConnectionArray {
     }
 };
 
-// Line sync for each fabric connection (used by SyncKernelConfig)
+// Copies a single traffic config may inject into the fabric, one per canonical root output of an
+// express multicast. Codec contract §7.3.1 bounds the source outputs to N/S/Z, which the four-slot
+// connection manager is sized for. Must match MAX_MCAST_INJECTIONS on the host
+// (tt_fabric_test_device_setup.hpp).
+constexpr uint8_t MAX_MCAST_INJECTIONS = 4;
+static_assert(
+    MAX_MCAST_INJECTIONS <= MAX_NUM_FABRIC_CONNECTIONS,
+    "a single traffic config cannot claim more connections than the core's whole array holds");
+
+// Line sync for one sync config (used by SyncKernelConfig). Usually one connection. A sync multicast
+// is encoded by the same codec as test traffic, so on an express mesh its canonical root action can
+// name several output edges, and then the sync packet has to go out all of them: injection bypasses
+// the source RX that lets a transit router clone, so nothing downstream can split it for us
+// (codec contract §7.3.1). Miss one and the subtree behind it never increments its sync semaphore,
+// which is a hang before the first test packet rather than a wrong result.
 template <typename EdmSenderT = WorkerToFabricEdmSender>
 struct LineSyncConfig {
     LineSyncConfig(
         FabricConnectionArray<EdmSenderT>* connection_array,
-        uint8_t connection_idx,
+        const uint8_t* connection_indices,
+        uint8_t num_connections,
         const uint32_t packet_header_address,
         const uint32_t line_sync_val) :
-        connection_manager_(connection_array), connection_idx_(connection_idx), line_sync_val(line_sync_val) {
+        connection_manager_(connection_array), num_connections_(num_connections), line_sync_val(line_sync_val) {
         packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(packet_header_address);
 
-        // Cache connection pointer during initialization
-        if (connection_manager_->is_mux[connection_idx_]) {
-            connection_ptr_ = &connection_manager_->get_mux_connection(connection_idx_);
-        } else {
-            connection_ptr_ = &connection_manager_->get_fabric_connection(connection_idx_);
+        // Cache connection pointers during initialization
+        ASSERT(num_connections_ > 0 && num_connections_ <= MAX_MCAST_INJECTIONS);
+        for (uint8_t i = 0; i < num_connections_; i++) {
+            const uint8_t idx = connection_indices[i];
+            connection_indices_[i] = idx;
+            if (connection_manager_->is_mux[idx]) {
+                connection_ptrs_[i] = &connection_manager_->get_mux_connection(idx);
+            } else {
+                connection_ptrs_[i] = &connection_manager_->get_fabric_connection(idx);
+            }
         }
     }
 
@@ -775,9 +797,11 @@ struct LineSyncConfig {
     }
 
     void global_sync_start() {
-        connection_manager_->template wait_for_empty_write_slot<false>(connection_ptr_, connection_idx_);
-        connection_manager_->template send_header_non_blocking<false>(
-            connection_ptr_, connection_idx_, (uint32_t)packet_header);
+        for (uint8_t i = 0; i < num_connections_; i++) {
+            connection_manager_->template wait_for_empty_write_slot<false>(connection_ptrs_[i], connection_indices_[i]);
+            connection_manager_->template send_header_non_blocking<false>(
+                connection_ptrs_[i], connection_indices_[i], (uint32_t)packet_header);
+        }
     }
 
     void global_sync_finish(uint8_t sync_iter) {
@@ -787,8 +811,13 @@ struct LineSyncConfig {
 
 private:
     FabricConnectionArray<EdmSenderT>* connection_manager_;
-    void* connection_ptr_;    // Cached connection pointer
-    uint8_t connection_idx_;  // Index into the connection array
+
+    // Every connection this sync config injects into. Length 1 unless this is an express multicast
+    // root whose canonical action names more than one output edge.
+    void* connection_ptrs_[MAX_MCAST_INJECTIONS];
+    uint8_t connection_indices_[MAX_MCAST_INJECTIONS];
+    uint8_t num_connections_;
+
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header;
     volatile tt_l1_ptr uint32_t* line_sync_ptr;
     uint32_t line_sync_val;
@@ -986,22 +1015,31 @@ template <typename EdmSenderT>
 struct SenderKernelTrafficConfig {
     SenderKernelTrafficConfig(
         FabricConnectionArray<EdmSenderT>* connection_array,
-        uint8_t connection_idx,
+        const uint8_t* connection_indices,
+        uint8_t num_connections,
         const SenderTrafficConfigMetadata& metadata,
         const uint32_t packet_header_address) :
         connection_manager_(connection_array),
-        connection_idx_(connection_idx),
+        num_connections_(num_connections),
         metadata(metadata),
         noc_send_type_(static_cast<NocSendType>(0)),
         payload_buffer_(nullptr) {
         packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(packet_header_address);
 
-        // Cache connection pointer during initialization
-        if (connection_manager_->is_mux[connection_idx_]) {
-            connection_ptr_ = &connection_manager_->get_mux_connection(connection_idx_);
-        } else {
-            connection_ptr_ = &connection_manager_->get_fabric_connection(connection_idx_);
+        // Cache connection pointers during initialization. Usually one; an express multicast root that
+        // leaves on several edges gets one per edge and every packet goes out all of them.
+        ASSERT(num_connections_ > 0 && num_connections_ <= MAX_MCAST_INJECTIONS);
+        for (uint8_t i = 0; i < num_connections_; i++) {
+            const uint8_t idx = connection_indices[i];
+            connection_indices_[i] = idx;
+            if (connection_manager_->is_mux[idx]) {
+                connection_ptrs_[i] = &connection_manager_->get_mux_connection(idx);
+            } else {
+                connection_ptrs_[i] = &connection_manager_->get_fabric_connection(idx);
+            }
         }
+        connection_idx_ = connection_indices_[0];
+        connection_ptr_ = connection_ptrs_[0];
 
         // Initialize function pointers to null (will be set in parse_and_setup_noc_send_type)
         noc_ops_.parse_and_setup = nullptr;
@@ -1075,6 +1113,9 @@ struct SenderKernelTrafficConfig {
     template <bool BENCHMARK_MODE>
     FORCE_INLINE void send_packets_stateful(const uint32_t num_packets, const uint32_t num_warmup) {
         ASSERT(connection_ptr_ != nullptr);
+        // The stateful path holds NOC state for one connection, so it cannot fan a packet out to
+        // several. Only benchmark flows take it, and those are unicast.
+        ASSERT(num_connections_ == 1);
         auto* conn = static_cast<EdmSenderT*>(connection_ptr_);
 
         // Perform stateful noc send by filling buffers with headers, first, then performing credit-only NOC sends
@@ -1114,18 +1155,29 @@ struct SenderKernelTrafficConfig {
                 fabric_detail::update_credits_and_slots<STATEFUL_NOC>(conn);
             }
         } else {
-            connection_manager_->template wait_for_empty_write_slot<BENCHMARK_MODE>(connection_ptr_, connection_idx_);
-            // STEP 3: Send packet
-            if (payload_size_bytes > 0 && payload_buffer_) {
+            const bool has_payload = payload_size_bytes > 0 && payload_buffer_;
+            if (has_payload) {
                 payload_buffer_->fill_data(metadata.seed);
-
-                // Send payload without header
-                connection_manager_->template send_payload_without_header<BENCHMARK_MODE>(
-                    connection_ptr_, connection_idx_, payload_buffer_->get_physical_address(), payload_size_bytes);
             }
-            // Send header
-            connection_manager_->template send_header_non_blocking<BENCHMARK_MODE>(
-                connection_ptr_, connection_idx_, (uint32_t)packet_header);
+            // STEP 3: Send packet, once per connection. A multi-output multicast root has to launch
+            // each of its subtrees itself: a transit router clones through its source RX, but a worker
+            // injecting from L1 has no such thing, so one copy per canonical output is the split.
+            // Identical header and payload every time -- the routers decide who gets what.
+            for (uint8_t i = 0; i < num_connections_; i++) {
+                connection_manager_->template wait_for_empty_write_slot<BENCHMARK_MODE>(
+                    connection_ptrs_[i], connection_indices_[i]);
+                if (has_payload) {
+                    // Send payload without header
+                    connection_manager_->template send_payload_without_header<BENCHMARK_MODE>(
+                        connection_ptrs_[i],
+                        connection_indices_[i],
+                        payload_buffer_->get_physical_address(),
+                        payload_size_bytes);
+                }
+                // Send header
+                connection_manager_->template send_header_non_blocking<BENCHMARK_MODE>(
+                    connection_ptrs_[i], connection_indices_[i], (uint32_t)packet_header);
+            }
         }
 
         // STEP 4: Update state (after successful send)
@@ -1178,8 +1230,14 @@ private:
 
 public:
     FabricConnectionArray<EdmSenderT>* connection_manager_;
-    void* connection_ptr_;    // Cached connection pointer
-    uint8_t connection_idx_;  // Index into the connection array
+    void* connection_ptr_;    // Cached connection pointer (== connection_ptrs_[0])
+    uint8_t connection_idx_;  // Index into the connection array (== connection_indices_[0])
+
+    // Every connection this config injects into. Length 1 unless this is an express multicast root
+    // whose canonical action names more than one output edge.
+    void* connection_ptrs_[MAX_MCAST_INJECTIONS];
+    uint8_t connection_indices_[MAX_MCAST_INJECTIONS];
+    uint8_t num_connections_;
 
     SenderTrafficConfigMetadata metadata;
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header;
@@ -1624,7 +1682,10 @@ struct SenderKernelConfig {
 
     alignas(LocalSyncConfig<MASTER_SYNC_CORE, NUM_LOCAL_SYNC_CORES>)
         std::array<char, sizeof(LocalSyncConfig<MASTER_SYNC_CORE, NUM_LOCAL_SYNC_CORES>)> local_sync_config_storage;
-    std::array<uint8_t, NUM_TRAFFIC_CONFIGS> traffic_config_to_fabric_connection_map;
+    // Connections per traffic config, laid out MAX_MCAST_INJECTIONS-strided so config i owns
+    // [i * MAX_MCAST_INJECTIONS, i * MAX_MCAST_INJECTIONS + count). Only the first `count` are valid.
+    std::array<uint8_t, NUM_TRAFFIC_CONFIGS> traffic_config_connection_counts;
+    std::array<uint8_t, NUM_TRAFFIC_CONFIGS * MAX_MCAST_INJECTIONS> traffic_config_to_fabric_connection_map;
 
     using TrafficConfigType = SenderKernelTrafficConfig<EdmSenderT>;
 
@@ -1674,7 +1735,13 @@ private:
             local_sync_config().setup_core_coordinates(local_args_idx);
         }
         for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
-            traffic_config_to_fabric_connection_map[i] = get_local_arg_val<uint32_t>(local_args_idx++);
+            const uint8_t num_conns = get_local_arg_val<uint32_t>(local_args_idx++);
+            ASSERT(num_conns > 0 && num_conns <= MAX_MCAST_INJECTIONS);
+            traffic_config_connection_counts[i] = num_conns;
+            for (uint8_t j = 0; j < num_conns; j++) {
+                traffic_config_to_fabric_connection_map[i * MAX_MCAST_INJECTIONS + j] =
+                    get_local_arg_val<uint32_t>(local_args_idx++);
+            }
         }
 
         // Initialize traffic config pointers
@@ -1684,8 +1751,12 @@ private:
 
         for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
             auto metadata = SenderTrafficConfigMetadata::build_from_args(local_args_idx);
-            const auto fabric_connection_idx = traffic_config_to_fabric_connection_map[i];
-            ASSERT(fabric_connection_idx < connections.num_connections);
+            const uint8_t num_conns = traffic_config_connection_counts[i];
+            const uint8_t* fabric_connection_indices =
+                &traffic_config_to_fabric_connection_map[i * MAX_MCAST_INJECTIONS];
+            for (uint8_t j = 0; j < num_conns; j++) {
+                ASSERT(fabric_connection_indices[j] < connections.num_connections);
+            }
 
             uint32_t packet_header_address = this->memory_map.get_packet_header_address();
 
@@ -1693,8 +1764,9 @@ private:
             TrafficConfigType* config_ptr = traffic_configs(i);
             traffic_config_ptrs[i] = config_ptr;
 
-            // Initialize traffic config with connection array pointer and index
-            new (config_ptr) TrafficConfigType(&connections, fabric_connection_idx, metadata, packet_header_address);
+            // Initialize traffic config with connection array pointer and indices
+            new (config_ptr)
+                TrafficConfigType(&connections, fabric_connection_indices, num_conns, metadata, packet_header_address);
 
             traffic_config_ptrs[i]->template parse_and_setup_chip_send_type<IS_2D_FABRIC>(
                 local_args_idx, packet_header_address);
@@ -2213,11 +2285,16 @@ private:
 /* ********************
  * SyncKernelConfig   *
  **********************/
+// NUM_SYNC_CONFIGS and NUM_SYNC_FABRIC_CONNECTIONS are no longer the same number. One sync config is
+// one multicast pattern, and an express root can inject a pattern into several edges at once, so a
+// config owns between one and MAX_MCAST_INJECTIONS connections. Connections are also deduped across
+// configs when two of them leave on the same eth chan.
 template <
     uint8_t NUM_SYNC_FABRIC_CONNECTIONS,
     bool IS_2D_FABRIC,
     uint8_t NUM_LOCAL_SYNC_CORES,
-    bool USE_UNICAST_SYNC_PACKETS>
+    bool USE_UNICAST_SYNC_PACKETS,
+    uint8_t NUM_SYNC_CONFIGS>
 struct SyncKernelConfig {
     static SyncKernelConfig build_from_args(
         const CommonMemoryMap& common_map, size_t& rt_args_idx, size_t& local_args_idx) {
@@ -2229,7 +2306,7 @@ struct SyncKernelConfig {
         sync_connections.open_all();
 
         // Send sync start packets
-        for (uint8_t i = 0; i < NUM_SYNC_FABRIC_CONNECTIONS; i++) {
+        for (uint8_t i = 0; i < NUM_SYNC_CONFIGS; i++) {
             line_sync_configs()[i].global_sync_start();
         }
 
@@ -2251,13 +2328,15 @@ struct SyncKernelConfig {
     FabricConnectionArray<> sync_connections;
 
     using LineSyncConfigType = LineSyncConfig<>;
-    alignas(LineSyncConfigType)
-        std::array<char, NUM_SYNC_FABRIC_CONNECTIONS * sizeof(LineSyncConfigType)> line_sync_configs_storage;
+    alignas(
+        LineSyncConfigType) std::array<char, NUM_SYNC_CONFIGS * sizeof(LineSyncConfigType)> line_sync_configs_storage;
     alignas(LocalSyncConfig<true, NUM_LOCAL_SYNC_CORES>)
         std::array<char, sizeof(LocalSyncConfig<true, NUM_LOCAL_SYNC_CORES>)> local_sync_config_storage;
 
-    // Mapping from sync config index to fabric connection index (same pattern as sender)
-    std::array<uint8_t, NUM_SYNC_FABRIC_CONNECTIONS> sync_config_to_fabric_connection_map;
+    // Connections per sync config, laid out MAX_MCAST_INJECTIONS-strided so config i owns
+    // [i * MAX_MCAST_INJECTIONS, i * MAX_MCAST_INJECTIONS + count). Only the first `count` are valid.
+    std::array<uint8_t, NUM_SYNC_CONFIGS> sync_config_connection_counts;
+    std::array<uint8_t, NUM_SYNC_CONFIGS * MAX_MCAST_INJECTIONS> sync_config_to_fabric_connection_map;
 
     // Helper accessors
     LineSyncConfigType* line_sync_configs() {
@@ -2280,15 +2359,25 @@ private:
         uint32_t line_sync_val = get_local_arg_val<uint32_t>(local_args_idx++);
 
         // Parse sync config to fabric connection mapping (same pattern as sender traffic configs)
-        for (uint8_t i = 0; i < NUM_SYNC_FABRIC_CONNECTIONS; i++) {
-            sync_config_to_fabric_connection_map[i] = get_local_arg_val<uint32_t>(local_args_idx++);
+        for (uint8_t i = 0; i < NUM_SYNC_CONFIGS; i++) {
+            const uint8_t num_conns = get_local_arg_val<uint32_t>(local_args_idx++);
+            ASSERT(num_conns > 0 && num_conns <= MAX_MCAST_INJECTIONS);
+            sync_config_connection_counts[i] = num_conns;
+            for (uint8_t j = 0; j < num_conns; j++) {
+                sync_config_to_fabric_connection_map[i * MAX_MCAST_INJECTIONS + j] =
+                    get_local_arg_val<uint32_t>(local_args_idx++);
+            }
         }
 
-        for (uint8_t i = 0; i < NUM_SYNC_FABRIC_CONNECTIONS; i++) {
+        for (uint8_t i = 0; i < NUM_SYNC_CONFIGS; i++) {
             uint32_t packet_header_address = this->memory_map.get_packet_header_address();
-            uint8_t connection_idx = sync_config_to_fabric_connection_map[i];
-            new (&line_sync_configs()[i])
-                LineSyncConfigType(&sync_connections, connection_idx, packet_header_address, line_sync_val);
+            const uint8_t num_conns = sync_config_connection_counts[i];
+            const uint8_t* connection_indices = &sync_config_to_fabric_connection_map[i * MAX_MCAST_INJECTIONS];
+            for (uint8_t j = 0; j < num_conns; j++) {
+                ASSERT(connection_indices[j] < sync_connections.num_connections);
+            }
+            new (&line_sync_configs()[i]) LineSyncConfigType(
+                &sync_connections, connection_indices, num_conns, packet_header_address, line_sync_val);
 
             // setup packet header fields
             constexpr ChipSendType CHIP_SEND_TYPE =

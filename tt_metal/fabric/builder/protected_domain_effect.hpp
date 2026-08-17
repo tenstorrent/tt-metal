@@ -13,9 +13,18 @@ namespace tt::tt_fabric {
 
 class ControlPlane;
 
+// Is this egress one of the Y resources dimension order protects?
+//
+// The Y phase of a route runs on same-mesh N/S edges and on the express chord, so those are the
+// egresses an X-phase packet may not turn back into. An INTERMESH egress is the packet leaving the
+// mesh entirely rather than re-entering a Y ring, so it is not one of them whatever compass letter
+// discovery put the seam on -- which is what keeps an exit chip's E/W routers wired to the
+// boundary (builder contract section 4.4).
+bool is_protected_y_egress(RoutingDirection egress, EdgeCapability egress_capability);
+
 // Would forwarding from `ingress` to `egress` violate the fixed Y-before-X dimension order?
 //
-// True only for an ordinary same-mesh X ingress turning back into an intramesh Y egress. Dimension
+// True only for an ordinary same-mesh X ingress turning back into a protected Y egress. Dimension
 // order is what keeps X resources from ever waiting on Y ones, which the deadlock-freedom argument
 // relies on, so such a producer is never wired.
 //

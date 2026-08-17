@@ -79,8 +79,17 @@ struct DynamicMemoryRegion {
  */
 struct CommonMemoryMap {
     // Constants for memory region sizes
-    static constexpr uint32_t RESULT_BUFFER_SIZE = 0x1000;          // 4KB
-    static constexpr uint32_t LOCAL_ARGS_BUFFER_SIZE = 0x4000;      // 16KB
+    static constexpr uint32_t RESULT_BUFFER_SIZE = 0x1000;  // 4KB
+    // 32KB. Sized by the widest sender a whole-system one_to_all produces: on a 256-device fabric the
+    // source chip owns 255 destinations per link, and one 2D unicast write config costs 16 words of
+    // args plus 2 more in the connection-mapping pass, so 5 + 2(255) + 16(255) = 4595 words = 18KB.
+    // At the old 16KB that overflowed into the result buffer, which the kernel then zeroed on startup,
+    // leaving the last ~31 configs with num_packets = 0: they were skipped by the round-robin send
+    // loop forever and their receivers waited on packets nobody was ever going to send. Nothing
+    // reported it, which is why it read as a fabric hang localized to the highest destination chip ids
+    // (the tail of the config list). create_kernel now bounds-checks the write, so the next system
+    // wide enough to outgrow even this gets a fatal error naming the numbers instead of a hang.
+    static constexpr uint32_t LOCAL_ARGS_BUFFER_SIZE = 0x8000;
     static constexpr uint32_t KERNEL_CONFIG_BUFFER_SIZE = 0x10000;  // 64KB (to accommodate big meshes)
     static constexpr uint32_t MUX_LOCAL_ADDRESSES_SIZE = 0x400;     // 1KB
     static constexpr uint32_t MUX_TERMINATION_SYNC_SIZE = 64;       // Single semaphore with padding
@@ -339,7 +348,10 @@ struct SenderMemoryMap {
 struct ReceiverMemoryMap {
     // Constants for memory region sizes
     static constexpr uint32_t ATOMIC_COUNTER_BUFFER_SIZE = 0x1000;  // 4KB
-    static constexpr uint32_t CREDIT_HEADER_BUFFER_SIZE = 0x400;    // 1KB reserved for credit headers
+    // The widest PACKET_HEADER_TYPE any routing mode selects: HybridMeshPacketHeaderT<67> is 128B,
+    // and the 2D low-latency default HybridMeshPacketHeaderT<35> is 96B. Kept as a host-side number
+    // because the memory map is built on the host, where PACKET_HEADER_TYPE is not in scope.
+    static constexpr uint32_t MAX_PACKET_HEADER_SIZE_BYTES = 128;
 
     // Encapsulated common memory map
     CommonMemoryMap common;
@@ -380,10 +392,21 @@ struct ReceiverMemoryMap {
         current_addr += ATOMIC_COUNTER_BUFFER_SIZE;
         atomic_counters = BaseMemoryRegion(atomic_counter_base, ATOMIC_COUNTER_BUFFER_SIZE);
 
-        // Credit headers - reserved space for credit return packet headers
+        // Credit headers - one credit-return packet header per config on the core.
+        // This was a flat 1KB, which at the 96B 2D header held 10. compute_policy sets
+        // max_configs_per_core from the mux cap, ceil(receivers_per_link /
+        // MAX_RECV_CORES_PER_LINK_WITH_MUX), so a 256-device all_to_all with 2 links asks for
+        // ceil(255/20) = 13 and the last three configs took header addresses past the region.
+        // payload_chunks follows immediately, so those headers landed in payload memory: the credit
+        // returns went out with garbage routing and scribbled on the data being validated, senders
+        // never got credits back, and every flow stalled once its initial allowance ran out with
+        // nothing logged. The kernel-side bound in get_credit_header_address is an ASSERT, which is
+        // compiled out of release kernels, so it never fired. Each half of that run (intra-mesh or
+        // inter-mesh alone) needs only 7 and fit, which is why only the two together failed.
         uint32_t credit_header_base = current_addr;
-        current_addr += CREDIT_HEADER_BUFFER_SIZE;
-        credit_headers = BaseMemoryRegion(credit_header_base, CREDIT_HEADER_BUFFER_SIZE);
+        uint32_t credit_header_size_total = MAX_PACKET_HEADER_SIZE_BYTES * num_configs;
+        current_addr += credit_header_size_total;
+        credit_headers = BaseMemoryRegion(credit_header_base, credit_header_size_total);
 
         // Payload chunks - receivers need configurable chunk size based on number of configs
         uint32_t payload_chunk_base = current_addr;

@@ -223,6 +223,12 @@ public:
     // Whether the edge leaving `local` in `egress` belongs to a protected ring.
     bool is_protected_ring_edge(FabricNodeId local, RoutingDirection egress) const;
 
+    // The ring a direction rides: the express decomposition for an axis hop, the ordinary X ring for
+    // E/W. Null when the mesh has no such ring. Public because the multicast reverse trees are built
+    // from it off the control plane -- a host that must open one connection per canonical root output
+    // has to run the same encoder the worker runs, and that needs this topology.
+    const ExpressRingTopology* ring_for_direction(MeshId mesh_id, RoutingDirection direction) const;
+
     // For traffic arriving at `local` from its `ingress` neighbor and leaving toward its `egress` one,
     // whether both hops ride one oriented view of the same ring, i.e. it stays on the ring it is on.
     bool are_same_directed_ring_edges(FabricNodeId local, RoutingDirection ingress, RoutingDirection egress) const;
@@ -399,8 +405,6 @@ private:
     tt_fabric::FabricRouterConfig fabric_router_config_ = tt_fabric::FabricRouterConfig{};
     tt_fabric::FabricManagerMode fabric_manager_ = tt_fabric::FabricManagerMode::DEFAULT;
 
-    // The ring a direction rides: the express decomposition for an axis hop, the ordinary X ring for E/W.
-    const ExpressRingTopology* ring_for_direction(MeshId mesh_id, RoutingDirection direction) const;
     // Coordinate along that ring's axis of the neighbor reached by `direction`.
     std::optional<int> ring_coord_of_neighbor(
         const ExpressRingTopology& rings, FabricNodeId local, RoutingDirection direction) const;

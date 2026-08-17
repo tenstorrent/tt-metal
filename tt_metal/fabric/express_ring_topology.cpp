@@ -22,6 +22,15 @@
 
 namespace tt::tt_fabric {
 
+std::optional<RoutingDirection> axis_edge_direction(
+    const MeshGraph& mesh_graph, MeshId mesh_id, int axis, int ortho, int row_a, int row_b) {
+    const auto coord = [&](int row) { return axis == 0 ? MeshCoordinate(row, ortho) : MeshCoordinate(ortho, row); };
+    const auto& conn = mesh_graph.get_intra_mesh_connectivity()[*mesh_id];
+    const ChipId chip_a = mesh_graph.coordinate_to_chip(mesh_id, coord(row_a));
+    const auto it = conn[chip_a].find(mesh_graph.coordinate_to_chip(mesh_id, coord(row_b)));
+    return it == conn[chip_a].end() ? std::nullopt : std::optional{it->second.port_direction};
+}
+
 namespace {
 
 constexpr int kNone = ExpressRingTopology::kNone;
@@ -97,23 +106,13 @@ std::vector<Pattern> read_patterns(const MeshGraph& mesh_graph, MeshId mesh_id, 
     return patterns;
 }
 
-// port_direction of the axis edge between two rows of one line, or nullopt when there is none.
-std::optional<RoutingDirection> edge_dir(
-    const MeshGraph& mesh_graph, MeshId mesh_id, int axis, int ortho, int row_a, int row_b) {
-    const auto coord = [&](int row) { return axis == 0 ? MeshCoordinate(row, ortho) : MeshCoordinate(ortho, row); };
-    const auto& conn = mesh_graph.get_intra_mesh_connectivity()[*mesh_id];
-    const ChipId chip_a = mesh_graph.coordinate_to_chip(mesh_id, coord(row_a));
-    const auto it = conn[chip_a].find(mesh_graph.coordinate_to_chip(mesh_id, coord(row_b)));
-    return it == conn[chip_a].end() ? std::nullopt : std::optional{it->second.port_direction};
-}
-
 // Whether the axis closes at the mesh level. Only an ORDINARY end edge counts: a chord may also join
 // the first and last row (a block of width len does exactly that) and that is not a cardinal wrap.
 bool axis_wraps(const MeshGraph& mesh_graph, MeshId mesh_id, int axis, int len) {
     if (len <= 2) {
         return false;
     }
-    const auto dir = edge_dir(mesh_graph, mesh_id, axis, 0, 0, len - 1);
+    const auto dir = axis_edge_direction(mesh_graph, mesh_id, axis, 0, 0, len - 1);
     return dir.has_value() && *dir != RoutingDirection::Z;
 }
 
@@ -496,7 +495,7 @@ std::optional<ExpressRingTopology> derive_express_ring_topology(const MeshGraph&
     // the edges it implies -- on every line, which is also the row/column uniformity precondition.
     const auto require_edge = [&](int ortho, int row_a, int row_b, const char* what) {
         TT_FATAL(
-            edge_dir(mesh_graph, mesh_id, axis, ortho, row_a, row_b).has_value(),
+            axis_edge_direction(mesh_graph, mesh_id, axis, ortho, row_a, row_b).has_value(),
             "ExpressRingTopology: mesh M{} line {} is missing the {} edge {}-{}",
             *mesh_id,
             ortho,
@@ -527,7 +526,7 @@ std::optional<ExpressRingTopology> derive_express_ring_topology(const MeshGraph&
         int chords = 0;
         for (int row = 0; row < len; row++) {
             for (int peer = row + 1; peer < len; peer++) {
-                const auto dir = edge_dir(mesh_graph, mesh_id, axis, ortho, row, peer);
+                const auto dir = axis_edge_direction(mesh_graph, mesh_id, axis, ortho, row, peer);
                 if (dir.has_value() && *dir == RoutingDirection::Z) {
                     chords++;
                 }
@@ -570,7 +569,7 @@ std::optional<ExpressRingTopology> derive_ordinary_ring_topology(
         for (int coord = 0; coord < len; coord++) {
             const int next = (coord + 1) % len;
             TT_FATAL(
-                edge_dir(mesh_graph, mesh_id, axis, ortho, coord, next).has_value(),
+                axis_edge_direction(mesh_graph, mesh_id, axis, ortho, coord, next).has_value(),
                 "Mesh M{} dim {} line {} is missing the ordinary edge {}-{}",
                 *mesh_id,
                 axis,
