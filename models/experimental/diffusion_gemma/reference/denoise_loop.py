@@ -77,8 +77,8 @@ def denoise_block(
     ``init_canvas`` is ``[B, L]`` (random token ids — the diffusion prior).
     ``sampler`` is ``"multinomial"`` (HF-faithful oracle, default) or ``"gumbel"``
     (device path). Optional ``gumbel_noise_fn(step)`` / ``noise_tokens_fn(step)``
-    inject the torch run's exact noise for token-for-token PCC determinism (R5,
-    forces the gumbel path); ``generator`` seeds regenerated noise otherwise so a
+    inject the torch run's exact noise for token-for-token PCC determinism
+    (forces the gumbel path); ``generator`` seeds regenerated noise otherwise so a
     single seeded generator reproduces the whole trajectory.
     """
     canvas = init_canvas
@@ -93,7 +93,7 @@ def denoise_block(
     # criterion, vs HF's PER-EXAMPLE finished-masking (a finished row is frozen and
     # padded while others continue). Equivalent for batch=1 (the current scope);
     # per-request halting/freezing for batch>1 is #47557. Parity vs the exact HF
-    # criterion is locked by tests/test_upstream_parity (batch-1).
+    # criterion is locked by tests/test_model (batch-1).
     n_stable = config.stable_steps_to_halt
     argmax_history: List[torch.Tensor] = []
 
