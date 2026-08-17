@@ -1,8 +1,8 @@
 % Introduction — owned by briefs/01-intro.md.
-% Evidence trace: hook = scenarios1_table.csv row sampling_qwen36_tp4 (9,596.29 us,
-% k=32, N=65,536, 1 core) + H6 (~137 ns/elem linear factory); thesis = H1
-% (631.5 ms -> 63.4 us, 9,956x, prebranch->routed chain); contributions C1-C4
-% carry their evidence.md anchors. Chains never mixed: 9,956x is
+% Evidence trace: hook = comp4/scenarios7_table.csv row sampling_qwen36_tp4
+% (9,586.87 us, k=32, N=65,536, 1 core) + H6 (~137 ns/elem linear factory);
+% thesis = H1 (631.5 ms -> 51.5 us, 12,265x, prebranch->routed chain, comp4);
+% contributions C1-C4 carry their evidence.md anchors. Chains never mixed: 12,265x is
 % prebranch->routed (ttnn.topk); 18,401x is prebranch->op. No roofline-v2
 % claim (G6 unresolved); blaze absent; no repo URLs/hashes (double-anonymous).
 % All us values Tracy-measured (no 1.35 GHz caveat needed); cycles stay cycles.
@@ -14,12 +14,12 @@ Tenstorrent \bh \pca, Qwen3 decode sampling under tensor parallelism~4 shards
 a 151{,}936-entry vocabulary into 37{,}984 logits per device and pads the
 shard to 65{,}536---the one power-of-two width that fails the shipping
 bitonic engine's $W{<}65{,}535$ routing gate. The call lands on a single-core
-linear factory that walks logits at ${\approx}137$\,ns/element: 9{,}596\us
+linear factory that walks logits at ${\approx}137$\,ns/element: 9{,}587\us
 per sampled token for a $k{=}32$ selection, while the other 129 cores idle.
 The cliff is not a corner case. At the sparse-attention indexer shape
 $k{=}2048$, $N{=}65{,}536$ (bf16), the stock \ttnntopk path measured
 631.5\,ms per call at the start of this study; the same call on the same
-silicon now measures 63.4\us---9{,}956$\times$---with no new hardware. This
+silicon now measures 51.5\us---12{,}265$\times$---with no new hardware. This
 paper argues one sentence: exact top-$k$ on a commercial NoC-mesh dataflow
 chip sat four orders of magnitude off its achievable floor, and a measured
 design-space study---not a clever new algorithm---closed the gap.

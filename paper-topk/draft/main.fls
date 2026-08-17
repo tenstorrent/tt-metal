@@ -297,6 +297,7 @@ INPUT ./fig/fig-s2-skip-law.pdf
 INPUT ./fig/fig-s2-skip-law.pdf
 INPUT ./fig/fig-s2-skip-law.pdf
 INPUT ./fig/fig-s2-skip-law.pdf
+INPUT /usr/share/texlive/texmf-dist/fonts/tfm/adobe/times/ptmr8c.tfm
 INPUT ./sections/05-characterization.tex
 INPUT ./sections/05-characterization.tex
 INPUT ./sections/05-characterization.tex
@@ -307,6 +308,7 @@ INPUT /usr/share/texlive/texmf-dist/fonts/tfm/adobe/courier/pcrr7t.tfm
 INPUT /usr/share/texlive/texmf-dist/tex/latex/psnfss/omsptm.fd
 INPUT /usr/share/texlive/texmf-dist/tex/latex/psnfss/omsptm.fd
 INPUT /usr/share/texlive/texmf-dist/tex/latex/psnfss/omsptm.fd
+INPUT /usr/share/texlive/texmf-dist/fonts/vf/adobe/times/ptmr8c.vf
 INPUT /usr/share/texlive/texmf-dist/fonts/tfm/adobe/courier/pcrro7t.tfm
 INPUT ./sections/06-evaluation.tex
 INPUT ./sections/06-evaluation.tex
@@ -342,12 +344,10 @@ INPUT main.bbl
 INPUT /usr/share/texlive/texmf-dist/fonts/tfm/public/cm/cmbx8.tfm
 INPUT /usr/share/texlive/texmf-dist/fonts/tfm/public/cm/cmbx6.tfm
 INPUT /usr/share/texlive/texmf-dist/fonts/tfm/adobe/courier/pcrr7t.tfm
-INPUT /usr/share/texlive/texmf-dist/fonts/tfm/adobe/times/ptmr8c.tfm
 INPUT /usr/share/texlive/texmf-dist/fonts/vf/adobe/times/ptmri7t.vf
 INPUT /usr/share/texlive/texmf-dist/fonts/tfm/adobe/times/ptmri8r.tfm
 INPUT /usr/share/texlive/texmf-dist/fonts/vf/adobe/courier/pcrr7t.vf
 INPUT /usr/share/texlive/texmf-dist/fonts/tfm/adobe/courier/pcrr8r.tfm
-INPUT /usr/share/texlive/texmf-dist/fonts/vf/adobe/times/ptmr8c.vf
 INPUT main.aux
 INPUT ./main.out
 INPUT ./main.out

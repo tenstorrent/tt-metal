@@ -1,118 +1,110 @@
-# STATUS — revision 2 (why-we-win attribution + pseudocode + Tufte figures), 2026-08-17
+# STATUS — revision 3 (comp4 numbers + TILE-native / carve-out / telemetry landings), 2026-08-17
 
-Supersedes the revision-1 STATUS. Changes this pass (owner-directed
-"explain why we win" + "pseudocode and Tufte diagrams, no slop"):
-(1) new §6-F "Attribution: Where the Speedup Comes From" — the explicit,
-measured decomposition (routing escape × algorithm × architecture fit ×
-limits × dispatch layer), with intro/conclusion pointer sentences;
-(2) Algorithm 1 (log-tree + dominance-skip guard pseudocode) and Eq. 1
-extended to the argmin-with-embedding form; (3) all three figures
-regenerated as grayscale Times-matched Tufte redesigns from committed
-CSVs (fig/src/make_whywin_figs.py), Fig. 2 (skip law) re-added, Fig. 3
-now the model-vs-silicon money figure with chosen-P* deviations and the
-P≥2 factory floor; (4) ~1.7 col of additions paid by cutting old Tab. I
-(ingredients; all cells survive in §3-B prose) and old Fig. E2 (skip
-A/B; all cells in §6-D prose), merging §2-D into §2-C, and ~45 dedup
-trims. Full ledger: TRIMLOG.md "revision 2". Summary: REVISION-2.md.
+Supersedes the revision-2 STATUS. Changes this pass (orchestrator-directed
+"paper update for the three landed wins"): (1) Table II routed column + all
+routed speedups re-pointed at `baselines/comp4/` (routed re-measured on the
+landed tree; anchor 63.4 → 51.5 µs, 9,956× → 12,265×, swept through
+abstract/§1/§6/§9); (2) §6-D chunk-skip epistemic limit CLOSED by on-device
+telemetry (400 rows, law matched at all 120 positions, −2.3% aggregate) +
+gate-constant ablation (K/4 stands); (3) Fig. 2 upgraded from model-only to
+model + measured silicon dots (g4_curve.csv); (4) Table III fully re-sourced
+from comp4/scenarios7 — MoE gates now captured automatically by the route
+carve-out (24.2→8.18 µs, 77.4→8.34 µs; 2.96×/9.29×, zero model-code changes);
+(5) §6-F envelope limb rewritten: the 46%-envelope lever is now BANKED
+(TILE-native landing; k=2048 keeps the tilize chain by measured policy);
+(6) new §6-B TILE-native paragraph; (7) coordinator-directed §6-F tree-limb
+applicability boundary — the tree buys latency at ≈1.0 core-efficiency
+(P=2: 366 core-µs/row vs 357.0 on one core, +2.5%), so 10.4× serves
+latency-bound low-row callers while the 160-row indexer (712.3 µs ≈ two
+row-waves of 357.0) is already core-optimal, guarding the "GLM prefill got
+10× faster" misread (evidence B7). Additions ≈1.2 col paid by TRIMLOG
+"revision 3" + "post-pass addition" dedup trims. Summary: REVISION-3.md.
 
 ## Compile
 
-- **Clean.** `latexmk -pdf` from scratch: 0 errors, 0 overfull hboxes,
-  0 undefined `\cite`/`\ref`, no duplicate labels. Three vbox warnings
-  ≤1.7 pt on float/refs pages (sub-visible; introduced by the new float
-  set; noted, not hidden).
+- **Clean.** `latexmk -pdf`: 0 errors, 0 overfull hboxes, 0 undefined
+  `\cite`/`\ref`, no duplicate labels. Same 3 sub-visible vbox warnings
+  ≤1.7 pt as rev-2 (float/refs pages).
 - **Pages: 12 total = 10.0 body + 2 references.** Body ends on page 10;
   references begin at the top of page 11 — the 10-page IPDPS body limit
   is met exactly.
-- Bibliography: 60 entries, **52 cited** (unchanged — no cites orphaned
-  by the trims, verified per key). UNVERIFIED items unchanged (resolve
-  before camera-ready).
+- Bibliography: 60 entries, 52 cited (unchanged; no cites orphaned by the
+  rev-3 trims). UNVERIFIED items unchanged (resolve before camera-ready).
 
-## What changed (revision 2)
+## What changed (revision 3)
 
-- **§6-F Attribution** (replaces the roofline subsection, which it
-  absorbs intact incl. the G6 \missing flag): the 18,401× anchor chain
-  factored exactly on Table II's own arms (1.17× micro-op × 1,511×
-  single-core proxy × 10.4× tree-on-32-cores); TP=8 honest 1.4×;
-  core-for-core ≈1.5× at k=32 (49.5× = 32× × 1.5×); itemized algorithm
-  terms with owners; one-sentence §3 verdict; roofline gap + the two
-  measured next levers (envelope 46%, blaze fusion 1.4×) vs the 5–24%
-  compare-kernel headroom; the dispatch layer as the highest-return arm
-  with the i5 bit-exactness audit (27,756 diffs all proven ties over
-  3,200 rows, pow2 control bit-identical).
-- **Algorithm 1 + argmin Eq. 1** (§4): control flow incl. the
-  max(2,K/4)-gated dominance skip and the P−1-window NoC-traffic
-  comments; the routing predicate deliberately left as prose.
-- **Figures** (fig/src/make_whywin_figs.py; 6 critique roundtrips +
-  2 clean in-context inspections — log in REVISION-2.md): Fig. 1
-  operator bracket-tree schematic; Fig. 2 skip-law (model curves +
-  measured −45.1%/−36.3% callouts, caption says model); Fig. 3 P-sweep
-  vs unfitted model (per-point fit table printed by the script).
-- **evidence.md §6** appended (rows A1–A7) covering every new number.
+- **Numbers**: every routed cell of Table II (24) + pre→routed column
+  (span 329×–31,905×); every row of Table III (scenarios7); headline chain
+  631.5 ms → 51.5 µs = 12,265×; intro hook 9,587 µs; DSA routing cost
+  22–26%; §6-F sampling wins 44.9×/42.3× and core-for-core 9,586.9/32.
+  Sources: `baselines/comp4/{competition_table,scenarios7_table}.csv`,
+  `paper-topk/evidence/i2-i3-i4-landings/*` — evidence.md §7 rows B1–B6.
+- **§6-D**: telemetry (byte-identical disabled path via ELF-diff; per-position
+  law match; E[skips]/row 65.11 vs 66.62) + divisor ablation (2/4/8 ties,
+  /8 regresses k=512 +3.2% exactly as the law predicts) → K/4 stands.
+- **Fig. 2**: 120 measured per-position skip rates overlaid as open circles
+  (2 critique roundtrips + in-context print-size check; caption no longer
+  claims the curves are the only model content — the dots are silicon).
+- **§6-E/Table III gate rows**: today = routed (carve-out fires
+  automatically, TP=8-row pattern); footnote carries the 24.2/77.4 before;
+  pending-A/B language deleted (the A/B ran and passed both cells).
+- **§6-F**: envelope limb = banked lever (deleted at k_rounded ≤ 1024;
+  anchor −19%; residual 9.8 op-internal + 7.4 kept-tilize); fusion
+  (blaze 24.4 µs) is the remaining lever; dispatch limb gains the carve-out.
 
-## Consistency pass (re-run this pass, on the rev-2 PDF)
+## Consistency pass (re-run this pass, on the rev-3 PDF)
 
-- Engine vocabulary unchanged and consistent (stock `ttnn.topk` /
-  `topk_large_indices` / routed; five arms defined once in §6-B).
-- 34.3 vs 34.4 µs anchor-twin discipline re-verified by grep: every 34.3 is
-  competition-context, every 34.4 is re-pin/P-sweep/stop-rule-context; the
-  §6-A disclosure stands.
-- Scenario numbers: single source is the post-audit
-  `baselines/comp3/scenarios1_table.csv` (now Table III after the
-  ingredients-table cut; characterization = Table I, competition =
-  Table II — all `\ref`-driven, no hardcoded numbers).
-- New §6-F numbers are arithmetic on printed table cells or evidence-pack
-  artifacts (trace in the 06-evaluation.tex header comment + evidence.md
-  §6 rows A1–A7); the factor chain composes exactly (1.17 × 1,511 × 10.4
-  = 18,401).
-- 1.35 GHz busy-clock caveat: §6-A full statement + §3/§4 footnotes — all
-  intact (never-cut).
-- `\ref` targets for the new label `sec:bg-problem`: 5 references, all
-  resolve; no duplicate labels.
-- Double-anonymity grep: clean (no names, repo URLs, branch names, hashes;
-  new bib URLs are vendor/third-party artifacts).
-- LLM-ism grep: clean. `×` 153+/0 over `x`; `≈` over `~` maintained.
-- Abstract: 320 words (unchanged — house style).
+- Stale-number grep on the final PDF: 9,956 / 91.7-routed / 134.2 / 9,596 /
+  217.0 / 215.2 / 22,481 / 44.2× / 41.5× / 5.9×(gate) / 19.2× / 77.5 — all
+  gone; the one surviving "63.4" is §6-F's intentional before→after.
+- 34.3 vs 34.4 anchor-twin discipline: untouched by this pass; §6-A
+  disclosure stands. Factor chain 1.17 × 1,511 × 10.4 = 18,401 unchanged
+  (those arms are pinned comp3 cells, byte-identical in comp4).
+- §6-F residual arithmetic checks: 51.5 − 34.3 = 17.2 = 9.8 + 7.4.
+- Scenario numbers: single source is now `baselines/comp4/scenarios7_table.csv`
+  (provenance-stamped, uniform head/tree/so hashes).
+- 1.35 GHz busy-clock caveat: §6-A full statement + §3/§4 footnotes intact
+  (never-cut). Blaze caveats, canonical-form caveat, reopening conditions,
+  forecast no-go story: intact.
+- Double-anonymity grep: clean (landing commit hashes appear only in .tex
+  comments / evidence pack, never rendered).
 
 ## Missing-evidence flags
 
-**1 remaining** (unchanged): roofline-v2 derivation artifact (G6), now
-flagged inside §6-F's roofline paragraph.
-Adjacent disclosed-not-flagged items unchanged (G4 skip telemetry, G8 blaze
-breakdown, cost-model overlay arithmetic).
+**1 remaining** (unchanged, by design): roofline-v2 derivation artifact (G6),
+flagged inside §6-F's roofline paragraph. G4 (skip telemetry) is now CLOSED —
+removed from the disclosed-not-flagged list; adjacent items G8 (blaze
+breakdown) and the cost-model overlay arithmetic unchanged.
 
 ## Top-10 reviewer attack surfaces (updated)
 
-Two attacks from the previous list are now materially blunted:
+Two more attacks materially blunted this pass:
 
-- ~~"The problem is never crisply stated / what exactly does the op
-  promise?"~~ — **removed** by §2-A: formal contract, tie semantics, data
-  provenance/destination, and the CPU/GPU/this-machine delta now live in one
-  place, evidence-grounded in the contract suite.
-- **"Production wins are conditional / cherry-picked synthetic shapes"** —
-  **substantially blunted**: Table IV now carries post-audit numbers with
-  values output included (the "indices-only benchmarking" objection is
-  pre-empted by the ≤0.2%/≈6% footnote), launched-vs-active core counts
-  disclosed, and its own no-change controls. What remains of the attack is
-  honest and stated: the call-site change is required (three disqualifiers
-  named) and end-to-end tokens/s is unmeasured (G12) — an attacker can still
-  ask for the tokens/s demo, but not for hidden conditions.
+- ~~"No on-device skip-rate telemetry — the skip story is inference from
+  end-to-end time" (old #6/G4)~~ — **removed**: measured per-position curve,
+  byte-identity proof for the disabled path, and a gate-constant ablation.
+- **"The user-facing win depends on layout conversions you don't own"** —
+  **substantially blunted**: the envelope is deleted at k_rounded ≤ 1024 and
+  the k=2048 keep-the-tilize decision is a measured per-shape policy, which
+  also strengthens the methodology story.
 
-Still standing (renumbered): 1 variance/one-board-one-day (G3); 2 unverified
-busy clock (G9 — capture AICLK before submission if possible); 3 n=1 chip
-generality (G1); 4 no measured GPU side-by-side anchor; 5 roofline gap
-readable as "still 10–30× off" while G6 unresolved; 6 no on-device skip-rate
-telemetry (G4); 7 blaze per-core breakdown (G8); 8 tokens/s unmeasured
-(G12, above); 9 LLM-agent methodology discount risk; 10 novelty surface
-(measurement-first framing must carry it). New minor surface: two UNVERIFIED
-CPU-selection bib entries added for §2-A — verify before camera-ready or a
-bibliography-checking reviewer will flag them.
+Still standing (renumbered): 1 variance/one-board-one-day (G3; comp4 routed
+re-measure is same-board, same-day-class); 2 unverified busy clock (G9);
+3 n=1 chip generality (G1); 4 no measured GPU side-by-side anchor; 5 roofline
+gap while G6 unresolved; 6 blaze per-core breakdown (G8); 7 tokens/s
+unmeasured (G12 — sampling call sites still pass disqualifying args);
+8 LLM-agent methodology discount risk; 9 novelty surface; 10 (new, minor)
+mixed-provenance Table II — comp3 pinned arms + comp4 routed column — is
+disclosed in the caption, but a reviewer can ask why the whole grid wasn't
+re-run; the answer (pinned arms byte-identical, only the routed path changed)
+is in evidence.md §7 B1.
 
 ## Files
 
-- `main.pdf` (12 pp), `main.tex`, `sections/*.tex` (8), `refs.bib` (60
-  entries), `refs.bib.bak`, `fig/src/make_whywin_figs.py` (+ regenerated
-  fig-s1/e1/s2 PDFs, updated fig/README.md), `TRIMLOG.md` (integration +
-  revision-1 + revision-2 sections), `STATUS.md` (this file),
-  `REVISION-1.md`, `REVISION-2.md`.
-- All changes uncommitted per instruction; nothing run on device.
+- `main.pdf` (12 pp), `sections/{00,01,04,05,06,07}` (02/03 untouched),
+  `fig/src/make_whywin_figs.py` (+ regenerated fig-s1/e1/s2 PDFs; s1/e1
+  content-identical), `fig/README.md`, `TRIMLOG.md` (adds "revision 3"),
+  `REVISION-3.md`, `STATUS.md` (this file),
+  `../evidence/paper/evidence.md` (§7 + G4-closed + supersede notes).
+- All changes uncommitted per instruction; nothing run on device; no
+  tt-metal builds.

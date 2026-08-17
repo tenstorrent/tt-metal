@@ -12,8 +12,11 @@ Every number is read from committed artifacts -- never typed from memory:
   merge units    : forecast.md section 3 constants (1.46 / 5.51 us), the same
                    two constants section 4-B of the paper quotes
   skip A/B       : paper-topk/evidence/tileskip/{baseline,skipgated}.csv
-  skip law       : Eq. 2 computed exactly (log-gamma) at integer c -- no
-                   sampled skip-rate points exist on device (paper 6-D)
+  skip law       : Eq. 2 computed exactly (log-gamma) at integer c
+  skip telemetry : paper-topk/evidence/i2-i3-i4-landings/g4_curve.csv --
+                   measured per-position P(skip|c) from on-device MATH-side
+                   telemetry (400 iid rows, K=32, W=65536, 128 chunks; the
+                   I4 landing closed the old G4 epistemic limit, paper 6-D)
 
 Figures are designed AT their final rendered width (inches below == print
 inches), so the font sizes below are the printed font sizes.
@@ -33,6 +36,7 @@ from matplotlib.patches import Rectangle
 REPO = "/home/nachiket/tt-metal"
 BASE = f"{REPO}/tests/ttnn/unit_tests/operations/reduction/baselines"
 TILESKIP = f"{REPO}/paper-topk/evidence/tileskip"
+G4CURVE = f"{REPO}/paper-topk/evidence/i2-i3-i4-landings/g4_curve.csv"
 FIGDIR = f"{REPO}/paper-topk/draft/fig"
 
 plt.rcParams.update(
@@ -295,7 +299,8 @@ for row in report:
     print("  ", row)
 
 # =====================================================================
-# F3 -- fig-s2-skip-law: Eq. 2 curves + measured end-to-end callouts
+# F3 -- fig-s2-skip-law: Eq. 2 curves + measured on-device skip rates
+# (g4_curve.csv telemetry overlay) + measured end-to-end callouts
 # =====================================================================
 M = 512  # LLK window for both regimes shown (K=32 -> M=512; K=512 -> M=512)
 
@@ -331,6 +336,34 @@ for K, color in [(32, INK), (512, GRAY45)]:
     xa = [c for c in cints if math.exp(-K / (c + 1)) >= FLOOR]
     ax.plot(xa, [math.exp(-K / (c + 1)) for c in xa], ":", color=color, lw=0.8, zorder=2)
 
+# measured on-device per-position skip rates (I4 telemetry, K=32): open
+# circles over the K=32 curves; zero-skip positions cannot render on a log
+# axis and are excluded (none occur above the gate in this dataset)
+g4_all = read_csv(G4CURVE)
+g4 = [r for r in g4_all if r["c"] != "TOTAL"]
+g4_total = next(r for r in g4_all if r["c"] == "TOTAL")
+gx = [int(r["c"]) for r in g4]
+gobs = [float(r["p_obs"]) for r in g4]
+glaw = [float(r["p_law"]) for r in g4]
+ax.plot(
+    [c for c, p in zip(gx, gobs) if p > 0],
+    [p for p in gobs if p > 0],
+    "o",
+    color=INK,
+    ms=1.7,
+    mfc="none",
+    mew=0.45,
+    lw=0,
+    zorder=4,
+)
+n_obs = sum(int(r["tested"]) for r in g4) // len(g4)  # rows per position
+e_obs, e_law = float(g4_total["p_obs"]), float(g4_total["p_law"])
+print(
+    f"F3 telemetry overlay: {len(gx)} positions (c={min(gx)}..{max(gx)}), "
+    f"{n_obs} rows/position; E[skips]/row obs {e_obs:.2f} vs law {e_law:.2f} "
+    f"({100*(e_obs-e_law)/e_law:+.1f}%)"
+)
+
 # regime shading: column-parallel streams are 1-5 chunks (no payoff)
 ax.axvspan(1, 5, color="#dcdcdc", alpha=0.55, lw=0, zorder=1)
 ax.text(
@@ -363,11 +396,19 @@ for K, c, color, dx, dy, txt in [
     ax.annotate(lbl, xy=(c, y), xytext=(c * dx, y * dy), fontsize=6.3, color=color)
 
 # curve identity labels
-ax.text(7.2, 0.42, "$K$=32", fontsize=6.8, color=INK, ha="right")
+ax.text(11.5, 0.33, "$K$=32", fontsize=6.8, color=INK, ha="left")
 ax.text(52, 8e-7, "$K$=512", fontsize=6.8, color=GRAY45, ha="left")
-ax.text(1.13, 0.055, "exact (solid),\n$e^{-K/(c+1)}$ (dotted)", fontsize=5.9, color=INK, style="italic", ha="left")
+ax.text(
+    1.13,
+    0.030,
+    "exact (solid),\n$e^{-K/(c+1)}$ (dotted),\nsilicon ($\\circ$, 400 rows)",
+    fontsize=5.9,
+    color=INK,
+    style="italic",
+    ha="left",
+)
 
-# measured end-to-end callout (the only silicon numbers on this plot)
+# measured end-to-end callout
 ax.text(
     272,
     1.1e-5,

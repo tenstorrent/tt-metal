@@ -234,3 +234,144 @@ semantics survive in §3-B/§9 framing), forecast no-go story (§4-E).
   — evidence/i5-sampling-relaxation/i5-landing-report.md §3.
 - P≥2 factory-validation floor (§6-C + Fig. 3 axis) — program factory
   :443 TT_FATAL + psweep_p1 UNSUPPORTED cells.
+
+# TRIMLOG — revision 3 (2026-08-17, comp4 re-measure + TILE-native / carve-out / telemetry landings)
+
+Context: three landed wins re-measured (comp4) added ~1.0 col of required new
+content (§6-B TILE-native paragraph, §6-D telemetry + gate ablation, §6-E
+carve-out rewrite, §6-F envelope-limb rewrite, Table II/III refresh, Fig. 2
+measured overlay). Paid in full below — body ends on page 10 exactly (12 pp =
+10.0 body + 2 refs, 0 overfull hboxes, same 3 sub-visible vbox warnings ≤1.7 pt).
+
+## Superseded numbers (replaced, not trimmed — all from baselines/comp4/)
+
+- Tab. II routed column, all 24 cells (comp3 → comp4; e.g. anchor 63.4 → 51.5,
+  k512@65536 91.7 → 20.9, k1024@2048 134.2 → 21.3) + pre→routed speedups
+  (span 56×–22,481× → 329×–31,905×; anchor 9,956× → 12,265×). Swept through
+  abstract, §1 (hook 9,596 → 9,587 µs; thesis 63.4/9,956 → 51.5/12,265), §6-B,
+  §9.
+- Tab. III, all rows (scenarios1/comp3 → scenarios7/comp4): sampling
+  9,596.3/217.0/193.8 → 9,586.9/213.6/193.6 (44.2×/49.5× → 44.9×/49.5×);
+  split-vocab 8,923.6/215.2/188.1 → 8,924.0/210.9/188.0 (41.5×/47.4× →
+  42.3×/47.5×); TP=8 171.4/171.3/121.0 → 171.2/171.2/120.8; DSA routed
+  892.7/691.1 → 895.3/682.2 (routing cost 20–25% → 22–26%); MSA routed
+  116.1 → 114.2; gate rows restructured: today = routed 8.18/8.34 (130)
+  (carve-out landed; was 24.2/77.5 single-core with op-only 5.9×/19.2×);
+  §6-F core-for-core arithmetic 9,596.3/32 → 9,586.9/32.
+- §6-D epistemic-limit sentence ("no on-device skip-rate telemetry ... law →
+  simulated skip → predicted time → measured time") DELETED — replaced by the
+  measured telemetry + gate-ablation result (G4 closed). Fig. 2 caption's
+  "the only silicon numbers are the annotated end-to-end deltas" DELETED
+  (now false — the dots are silicon).
+- §6-F envelope limb rewritten: "envelope = 46% ... the next lever" →
+  "named lever now banked" (deleted at k_rounded ≤ 1024, anchor −19%,
+  residual 9.8 op-internal + 7.4 kept-tilize); fusion (blaze 24.4 µs, 1.4×)
+  remains the open lever.
+
+## Cuts (dedup-only; survival location per item)
+
+- §6-A: routed re-measure sentence — survives verbatim-in-substance in the
+  Tab. II caption ("re-measured on the final tree ... 5-iteration medians,
+  0 wrong"); single carrier now.
+- §6-A: "(e.g., 9,492,327 ± 1,391 ns at N=65,534)" → dropped the cell tag
+  (value kept; full row in scope51 CSV / evidence H6). "taken at operator
+  granularity" → "at operator granularity"; "runs at a time" → "at a time";
+  "cannot leak between cells" → "cannot leak".
+- §6-B small-k: middle example (9.50 ms → 38.5 µs at W=65,534, 247×) cut —
+  BUDGET rule 2 direction; endpoints kept (40× and 423×); full 18-cell grid
+  in baselines/smallk_routefix/. Proxy footnote tightened (same content).
+- §6-B TILE paragraph: BH DRAM alignment parenthetical (16 B writes /
+  64 B-congruent staged reads) cut per the "only if budget allows" rule —
+  survives in evidence.md §7 B2 + the 06-evaluation.tex header comment +
+  i2-tile-native-report.md.
+- §6-C: "the sweep starts at P=2 because the factory refuses P=1" →
+  parenthesized; bump's "(measured 42.8 vs. 39.0 µs; model 44.1 vs. 38.6 µs)"
+  cut — numbers survive in the fig-script fit table printed on every
+  regeneration + evidence A6; "— the property the log-tree bought (§4)" →
+  "(§4)" (§4-A owns the claim); "— the limit is the ⌈C/P⌉ work term itself"
+  cut (the model paragraph carries it).
+- §6-D: gated no-win cells "+0.04% and +0.11% sit within the sub-0.1% spread,
+  and the largest residual +0.51% ..." → "+0.04% to +0.51%, the largest being
+  gate-off loop-code growth" (all three values in tileskip CSVs + C3-4);
+  "three arms each: baseline, skip ungated, and skip with the compile-time
+  K/4 gate" → "(baseline, ungated, gated)"; second "279.14 →" dropped.
+- §6-E: "at real shapes" (dup of "call-site shapes"); "on a single chip";
+  "row-parallel with the chunk skip live" (survives in Tab. III caption);
+  "landed under a pre-registered rule (routed×1.05 ≤ stock at both cells)"
+  → evidence.md §7 B5 carries the rule; "k rounded up to 16 and sliced, the
+  route's own internal mechanism" → Tab. III footnote carries it.
+- §6-F: "(routed −67 to −84%, Table II)" in the envelope limb (dup of the
+  §6-B TILE paragraph, which owns it); "because the native k=2048 scatter
+  measured slower" (same dup); "stock bitonic kernels streaming the row"
+  (dup of arm definition + † footnote); "9.7×–21.1× at N ≥ 32,768" secondary
+  roofline stat (24-cell span kept); "in one sentence" / "not merely the
+  incumbent one" (verdict sentence tightened).
+- §4-C: threefold WarpSelect/GVR contrast tightened to point at §7 (which
+  keeps the full contrast); "that neither GPU mechanism has" absorbed.
+- §4-D: "consistent with the 81-cycle rendezvous plus fold components of §3
+  (footnote 1)" cut — §3-D states the same link ("the rendezvous and fold
+  primitives price §4's chunk-skip decision").
+- §4-E: guard-cell sentence → pointer ("Section 6-D quotes the A/B, the
+  guard cell, and the on-device telemetry"); §6-D owns the numbers.
+- §5 intro: "Every cycle figure is a two-point slope measurement with a
+  2.000× control tripwire" → "Cycle figures are slope-measured with a 2.000×
+  control tripwire" (§6-A owns the full method sentence).
+- §7-a: "(Section 4 instantiates the mesh bound with measured constants)"
+  cut — §4-B states it ("mesh-selection theory's multi-packet regime with
+  measured constants").
+- §7-d: "— itself an argument for archival characterization" cut.
+- §8: contract gate "(semantics and harness pinned first)" cut (§2-A/§6-A
+  enact it); forecast sentence's "the redirect measured 1.82×" cut (§6-D/§9
+  carry 1.82×); vendor-bug parenthetical "(a stimuli configuration never
+  written; a semaphore leak that deadlocks later tests)" cut — evidence C4-9
+  carries it; "re-adjudicated disputed figures on fresh silicon" → "…disputed
+  figures"; "both are logged;" cut.
+- §9: "from chunk-skipping in the forecast-selected row-parallel regime" →
+  "from forecast-selected chunk-skipping" (§4-E owns the regime); "--- the
+  weak form of (D) ---" → "(weak-form (D))".
+
+## Additions (for the record)
+
+- §6-B: TILE-native I/O paragraph (landing summary + per-shape measured
+  policy) — the §4 "one tight paragraph" option was declined for budget; §6-B
+  sentence form used instead, per the mission's fallback.
+- §6-D: on-device telemetry (400 rows, 120 positions, E[skips] 65.11 vs 66.62,
+  −2.3%; ELF-diff byte-identity) + gate-constant ablation (2/4/8; keep /4).
+- §6-E/§6-F: MoE-gate carve-out (24.2→8.18, 77.4→8.34; 2.96×/9.29×, zero
+  model-code changes).
+- Fig. 2: measured per-position skip-rate overlay (g4_curve.csv) + caption
+  rewrite; Tab. II caption: routed re-measure provenance note.
+
+## Post-pass addition (coordinator-directed): §6-F tree-limb applicability boundary
+
+Added (2 sentences, evidence row B7 — arithmetic on printed cells): the tree
+converts cores into latency at ≈1.0 core-efficiency (P=2 = 183.0 µs = 366
+core-µs/row vs the per-row kernel's 357.0 µs, +2.5%), so 10.4× serves
+latency-bound low-row callers; rows ≥ grid callers are already core-optimal
+(160-row indexer 712.3 µs ≈ 2 × 357.0 row-waves, Tab. III 1.00×/0.80×);
+per-core work there = the fusion lever. Paid by (all dedup/compression;
+survival locations noted):
+
+- §6-F structural term compressed to a Fig. 1/§4-A pointer ("selection,
+  never sorting — only M-wide windows cross the NoC, P−1 in total") — the
+  full statement lives in §4-A + Fig. 1's edge annotation.
+- §6-F roofline contributors parenthetical "(leaf critical path, tree
+  levels, unpack floors)" → section pointer only (§3–§5 own them).
+- §6-E: "The residual over the bare op (4.07/4.04 µs) is the composite
+  launch envelope at these tiny shapes" CUT — survives in evidence §7 B5
+  (~4.2 µs composite envelope); op cells + footnote still printed. "The
+  table carries its own controls as features" frame sentence CUT (the
+  controls speak). Carve-out "of any kind" dropped.
+- §6-C: "(+33% at P=2; the flat two-units-per-chunk charge is conservative
+  on long streams)" → "(+33% at P=2, Fig. 3)" — Fig. 3 carries the full
+  note in its annotation. "by validation" dropped from the P=1 refusal.
+- §6-D: "on the in-order RISCs" dropped from the gate-off growth clause;
+  ": the tree path is untouched" dropped (byte-identical kernels states it).
+- §6-A: seed-0 chunk-skip detail dropped (C3-4 owns it); "(counting)/(RISC
+  scan)" labels folded to a trailing parenthetical; "report medians of"
+  dedup in the chunk-skip clause.
+- Tab. II † footnote: "byte-identical stock bitonic kernels in the
+  operator's row-parallel harness" → pointer to the §6-B arm definition
+  (verbatim dup).
+
+Body still ends page 10 exactly; 0 overfull hboxes.

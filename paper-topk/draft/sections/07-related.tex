@@ -22,9 +22,8 @@ multi-packet regime our $\lceil C/P\rceil$ leaf term
 inhabits~\cite{multipacket1992}. The theory assumed unit-cost neighbor
 communication and returned the $k$-th element alone: no
 values-and-indices top-$k$ set, no real NoC costs, no measurement. We therefore claim the first \emph{measured,
-cost-modeled} full top-$k$ on commercial NoC-mesh silicon
-(Section~\ref{sec:system} instantiates the mesh bound with measured
-constants). Fagin-style distributed threshold
+cost-modeled} full top-$k$ on commercial NoC-mesh silicon.
+Fagin-style distributed threshold
 algorithms~\cite{fagin2003optimal,cao2004tput,michel2005klee} merge
 per-node top-$k$ lists --- the same tournament at datacenter round-trip
 costs.
@@ -63,8 +62,7 @@ FFT~\cite{brown2025fft}, stencils~\cite{stencil2026wormhole}, numerical
 kernels~\cite{numkernels2026wormhole}, operator
 fusion~\cite{fusion2026tensix}, and N-body~\cite{amati2025nbody} on
 Wormhole. An informal 2025 Blackhole microbenchmark report has a dead link and
-no archive~\cite{blackholemicrobench2025} --- itself an argument for
-archival characterization. None covers datapath numerics or selection
+no archive~\cite{blackholemicrobench2025}. None covers datapath numerics or selection
 primitives; Section~\ref{sec:characterization} owns that delta.
 
 \paragraph{The class-wide gap}
@@ -105,48 +103,47 @@ silicon; we claim no first-ness, only the record.
 % \end{table}
 
 The campaign ran as research~$\rightarrow$~implement~$\rightarrow$~validate
-gates with pre-registered stop rules --- a contract gate (semantics
-and harness pinned first), a materialization gate (no emit path with
+gates with pre-registered stop rules --- a contract gate, a
+materialization gate (no emit path with
 headroom $\Rightarrow$ stop), and an engine shootout; the radix track
 died by its own rule (Section~\ref{sec:dspace-closure}).
 
 The most transferable instrument was forecast-before-build
-(Section~\ref{sec:forecast}): the no-go'd variant was never built; the
-redirect measured 1.82$\times$ (\S\ref{sec:eval-skip}).
+(Section~\ref{sec:forecast}): the no-go'd variant was never built
+(\S\ref{sec:eval-skip}).
 
 Agent-generated numbers earn trust only under adversarial audit: one
 re-verified the working notes' citations
 ($\approx$55 of 60 exact, none fabricated), re-adjudicated disputed
-figures on fresh silicon, and caught a
+figures, and caught a
 faster-and-wrong kernel class with schedule-mutation controls --- the
 reward-hacking failure mode~\cite{sakana2025aicuda}. Correctness gates
 make the audit decidable:
 every cell fails closed against a bit-exact golden
 (\S\ref{sec:eval-method}). The
 campaign also surfaced, and reported upstream, two vendor perf-harness
-bugs (a stimuli configuration never written; a semaphore leak that
-deadlocks later tests).
+bugs.
 
 The process also failed in ordinary ways: the a-priori Dst-layout
 derivation was wrong until calibration dumps replaced it
 (\S\ref{sec:char-dst}), and one working-note figure was invented
-outright until the audit deleted it; both are logged; neither reached a
+outright until the audit deleted it; neither reached a
 measured claim.
 
 \section{Conclusion}
 \label{sec:conclusion}
 
 We measured exact top-$k$ across its design space on a \bh \pca and
-closed a four-orders-of-magnitude gap: 631.5\,ms $\to$ 63.4\us{}
-(9{,}956$\times$) at the anchor shape, 23.3\us{} at the 1M-context
-shape, 1.82$\times$ more from chunk-skipping in the forecast-selected
-row-parallel regime --- attributed honestly in
+closed a four-orders-of-magnitude gap: 631.5\,ms $\to$ 51.5\us{}
+(12{,}265$\times$) at the anchor shape, 23.3\us{} at the 1M-context
+shape, 1.82$\times$ more from forecast-selected chunk-skipping ---
+attributed honestly in
 \S\ref{sec:eval-attribution}: routing supplies the orders of
 magnitude; the algorithm, 1.4$\times$ over the strongest eligible
 baseline plus its tree, placement, and skip terms. The design-space answer: on a NoC mesh
 without scatter, the winning economics are parallelized comparison
-networks (A) plus sound rank-statistic skipping --- the weak form of
-(D) --- which is Floyd--Rivest's lesson~\cite{floydrivest1975}, not
+networks (A) plus sound rank-statistic skipping (weak-form (D)) ---
+Floyd--Rivest's lesson~\cite{floydrivest1975}, not
 radix's.
 
 The negative result ships with expiry conditions --- the counting

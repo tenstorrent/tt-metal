@@ -1,4 +1,4 @@
-This is pdfTeX, Version 3.141592653-2.6-1.40.25 (TeX Live 2023/Debian) (preloaded format=pdflatex 2026.7.11)  17 AUG 2026 08:27
+This is pdfTeX, Version 3.141592653-2.6-1.40.25 (TeX Live 2023/Debian) (preloaded format=pdflatex 2026.7.11)  17 AUG 2026 13:30
 entering extended mode
  restricted \write18 enabled.
  %&-line parsing enabled.
@@ -604,13 +604,13 @@ File: fig/fig-s1-operator.pdf Graphic file (type pdf)
 Package pdftex.def Info: fig/fig-s1-operator.pdf  used on input line 83.
 (pdftex.def)             Requested size: 226.79846pt x 156.9935pt.
  [4 <./fig/fig-s1-operator.pdf>]
-<fig/fig-s2-skip-law.pdf, id=337, 209.58301pt x 151.767pt>
+<fig/fig-s2-skip-law.pdf, id=338, 209.58301pt x 151.767pt>
 File: fig/fig-s2-skip-law.pdf Graphic file (type pdf)
 <use fig/fig-s2-skip-law.pdf>
-Package pdftex.def Info: fig/fig-s2-skip-law.pdf  used on input line 183.
+Package pdftex.def Info: fig/fig-s2-skip-law.pdf  used on input line 182.
 (pdftex.def)             Requested size: 209.16046pt x 151.46324pt.
 )
-(./sections/05-characterization.tex [5 <./fig/fig-s2-skip-law.pdf>]
+(./sections/05-characterization.tex
 Underfull \hbox (badness 6893) in paragraph at lines 27--27
 []\OT1/ptm/m/n/7 bf16 canon-i-cal-iza-
  []
@@ -652,29 +652,17 @@ File: omsptm.fd
 )
 LaTeX Font Info:    Font shape `OMS/ptm/m/n' in size <7> not available
 (Font)              Font shape `OMS/cmsy/m/n' tried instead on input line 87.
+ [5 <./fig/fig-s2-skip-law.pdf>]
 LaTeX Font Info:    Font shape `OT1/pcr/m/it' in size <10> not available
 (Font)              Font shape `OT1/pcr/m/sl' tried instead on input line 129.
 LaTeX Font Info:    Font shape `OMS/ptm/m/n' in size <10> not available
 (Font)              Font shape `OMS/cmsy/m/n' tried instead on input line 156.
-)
-(./sections/06-evaluation.tex [6] [7]
-<fig/fig-e1-pscaling.pdf, id=455, 209.58301pt x 155.38051pt>
+) (./sections/06-evaluation.tex [6] [7]
+<fig/fig-e1-pscaling.pdf, id=461, 209.58301pt x 155.38051pt>
 File: fig/fig-e1-pscaling.pdf Graphic file (type pdf)
 <use fig/fig-e1-pscaling.pdf>
-Package pdftex.def Info: fig/fig-e1-pscaling.pdf  used on input line 199.
+Package pdftex.def Info: fig/fig-e1-pscaling.pdf  used on input line 215.
 (pdftex.def)             Requested size: 209.16046pt x 155.06952pt.
-
-Underfull \hbox (badness 5050) in paragraph at lines 207--221
-\OT1/ptm/m/n/10 ($\OMS/cmsy/m/n/10 ^^@\OT1/cmr/m/n/10 45\OML/cmm/m/it/10 :\OT1/
-cmr/m/n/10 1%$\OT1/ptm/m/n/10 , $\OT1/cmr/m/n/10 1\OML/cmm/m/it/10 :\OT1/cmr/m/
-n/10 82\OMS/cmsy/m/n/10 ^^B$\OT1/ptm/m/n/10 ) at rows$[]\OT1/cmr/m/n/10 2$\OT1/
-ptm/m/n/10 , $\OML/cmm/m/it/10 k[]\OT1/cmr/m/n/10 32$\OT1/ptm/m/n/10 , $\OML/cm
-m/m/it/10 N[]\OT1/cmr/m/n/10 65[]536$\OT1/ptm/m/n/10 , and
- []
-
-
-Underfull \vbox (badness 10000) has occurred while \output is active []
-
  [8 <./fig/fig-e1-pscaling.pdf>]) (./sections/07-related.tex [9]) (./main.bbl
 
 Package balance Warning: You have called \balance in second column
@@ -738,7 +726,7 @@ Package rerunfilecheck Info: File `main.out' has not changed.
 Here is how much of TeX's memory you used:
  13200 strings out of 476106
  210461 string characters out of 5793933
- 1971975 words of memory out of 5000000
+ 1972975 words of memory out of 5000000
  34871 multiletter control sequences out of 15000+600000
  608756 words of font info for 140 fonts, out of 8000000 for 9000
  59 hyphenation exceptions out of 8191
@@ -769,9 +757,9 @@ texmf-dist/fonts/type1/urw/times/utmb8a.pfb></usr/share/texlive/texmf-dist/font
 s/type1/urw/times/utmbi8a.pfb></usr/share/texlive/texmf-dist/fonts/type1/urw/ti
 mes/utmr8a.pfb></usr/share/texlive/texmf-dist/fonts/type1/urw/times/utmri8a.pfb
 >
-Output written on main.pdf (12 pages, 474911 bytes).
+Output written on main.pdf (12 pages, 479498 bytes).
 PDF statistics:
- 789 PDF objects out of 1000 (max. 8388607)
- 655 compressed objects within 7 object streams
+ 800 PDF objects out of 1000 (max. 8388607)
+ 664 compressed objects within 7 object streams
  113 named destinations out of 1000 (max. 500000)
  272 words of extra memory for PDF output out of 10000 (max. 10000000)

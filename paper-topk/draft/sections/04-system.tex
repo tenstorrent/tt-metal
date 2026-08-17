@@ -144,15 +144,14 @@ any member $x$ of an exact top-$K$ set satisfies $x \ge v_K \ge T$, so
 the strict test never fires on $x$'s chunk, and $x$, sitting within the
 top-$K \le$ top-$M$, survives every $M$-wide merge to the root. The
 released kernel source carries the full 288-line proof as a header
-comment. The contrast with the GPU running-threshold family is
-threefold: WarpSelect thresholds per element, with no analytic skip
-law~\cite{johnson2019billion}; GVR guesses its threshold from the
-previous decode step and must count, verify, and refine after a
-misprediction~\cite{gvr2026}; chunk-skip prunes at $M$-element
-granularity, sound by construction --- no verification pass exists to
-pay for --- with a distribution-free law and compile-time gate
-(\S\ref{sec:skip-law}) and a pre-build forecast (\S\ref{sec:forecast})
-that neither GPU mechanism has. Adversarial validation
+comment. The GPU running-threshold family contrasts on all three
+counts (\S\ref{sec:related}): WarpSelect is element-granular with no
+analytic law~\cite{johnson2019billion}; GVR must count, verify, and
+refine after a misprediction~\cite{gvr2026}; chunk-skip prunes at
+$M$-element granularity, sound by construction --- no verification
+pass exists to pay for --- with a distribution-free law, compile-time
+gate (\S\ref{sec:skip-law}), and pre-build forecast
+(\S\ref{sec:forecast}). Adversarial validation
 backs the proof: a 36-check battery (all-equal, ascending, last-chunk
 winners, replicated boundary ties) is bit-exact gated and ungated, and
 a 20-launch hang battery passed twice.
@@ -181,8 +180,10 @@ $c{=}128$.
 \begin{figure}[t]
 \centering
 \includegraphics[width=0.83\columnwidth]{fig-s2-skip-law}
-\caption{Skip law (Eq.~\ref{eq:skiplaw}, model curves); the only
-silicon numbers are the annotated end-to-end deltas.}
+\caption{Skip law (Eq.~\ref{eq:skiplaw}): exact binomial (solid),
+$e^{-K/(c+1)}$ (dotted), and measured on-device per-position skip
+rates (dots: 400 rows, $K{=}32$; \S\ref{sec:eval-skip}); end-to-end
+deltas annotated.}
 \label{fig:skiplaw}
 \end{figure}
 
@@ -196,9 +197,7 @@ $K{=}512$ over 128 chunks, $+1.8\%$ at $K{=}1536$ over 25 chunks) while
 forfeiting under one expected skip per row. The decision itself is cheap:
 $\approx$150\,ns per tested chunk at $M{=}512$ and $\approx$350\,ns at
 $M{=}2048$, derived from the ungated A/B (126 tested chunks cost
-$+18.9$\us) and consistent with the 81-cycle rendezvous plus fold
-components of Section~\ref{sec:design-space}
-(footnote~\ref{fn:clock}) --- against $\approx$2.0\us{} and
+$+18.9$\us) --- against $\approx$2.0\us{} and
 $\approx$5.4\us{} saved per skipped chunk.
 
 \subsection{Forecast Before Build: The Variant We Did Not Build}
@@ -223,8 +222,7 @@ exactly the shapes the stock small-$k$ routing ships here. The forecast's redire
 time falls 1.82$\times$ ($-45.1\%$), and at rows${=}8$ by 1.57$\times$
 ($-36.3\%$) --- both on 130-core programs whose active cores number
 $\min(\text{rows}, 130)$, so the rows${=}2$ cell exercises two cores, not
-the grid. Cells where the law forbids a win are protected by the gate, and the
-column-parallel guard cell holds with byte-identical tree kernels
-(Section~\ref{sec:eval-skip} quotes the A/B and guard numbers and
-carries the epistemic caveat). The forecast said no;
+the grid. Cells where the law forbids a win are gate-protected;
+Section~\ref{sec:eval-skip} quotes the A/B, the guard cell, and the
+on-device telemetry that confirms the law. The forecast said no;
 we did not build that variant.

@@ -1,6 +1,6 @@
 % Abstract — owned by briefs/01-intro.md.
 % Every number traces to paper-topk/evidence/paper/evidence.md:
-%   H1 (9,956x), H2 (34.3us@32c, 18,401x), H3 (23.3us@104c), H4 (9.7-29.9x),
+%   H1 (comp4: 12,265x), H2 (34.3us@32c, 18,401x), H3 (23.3us@104c), H4 (9.7-29.9x),
 %   C1-1/C1-3/C1-5 (counting/decision/materialization), C2-1 (cost model),
 %   C3-1/C3-4 (skip law, 1.82x), C4-1..C4-3 (characterization), C1-6 (honest frame).
 % All microsecond values here are Tracy-measured at op level (no cycle
@@ -29,7 +29,7 @@ $k{=}512$, $N{=}262{,}144$ on 104 cores. A distribution-free chunk-skip law
 $P(\mathrm{skip}) \approx e^{-K/(c+1)}$ with a compile-time $K/4$ gate adds
 1.82$\times$ ($-45.1\%$) at $k{=}32$, $N{=}65{,}536$. End to end, the
 user-facing \ttnntopk call at $k{=}2048$, $N{=}65{,}536$ improves from
-631.5\,ms to 63.4\us---9,956$\times$---and the surviving gap to the vendor
+631.5\,ms to 51.5\us---12,265$\times$---and the surviving gap to the vendor
 roofline spans 9.7--29.9$\times$ across all 24 measured cells. The study is
 honest about its own dynamics: the incumbent bitonic engine absorbed the
 study's routing and placement fixes and outran the radix-select model it was
