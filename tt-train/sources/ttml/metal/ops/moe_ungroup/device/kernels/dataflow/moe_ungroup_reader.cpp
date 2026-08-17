@@ -43,6 +43,13 @@ constexpr uint32_t Wt = get_compile_time_arg_val(17);
 
 constexpr auto expert_out_args = TensorAccessorArgs<18>();
 constexpr auto offsets_args = TensorAccessorArgs<expert_out_args.next_compile_time_args_offset()>();
+// The accessor chain must consume the host's CT-arg stream exactly; a host
+// built against a different arg table shifts every accessor base and can
+// silently parse page sizes as config words.
+static_assert(
+    offsets_args.next_compile_time_args_offset() == kernel_compile_time_args.size(),
+    "moe_ungroup_reader: compile-time arg count differs from host emission — "
+    "rebuild the ttml host library to match this kernel source");
 
 constexpr uint32_t TILE_BYTES = tt::constants::TILE_HW * 2U;  // bf16 tile
 

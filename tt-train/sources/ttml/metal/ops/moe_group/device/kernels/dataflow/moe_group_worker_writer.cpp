@@ -3,9 +3,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Worker writer: drains cb_out tiled pages to grouped DRAM.
-// - Active tile_rows (< offsets[E_local]/32) are written from cb_out.
-// - Tail tile_rows [offsets[E_local]/32, T_cap/32) are zero-filled so grouped
-//   holds no uninitialized DRAM for cross-row consumers downstream.
+// - Skips DRAM writes for tile_rows >= offsets[E_local]/32. `grouped` is NOT
+//   pre-zeroed (it comes from a plain create_device_tensor), so those tail rows
+//   hold whatever the allocator handed us. That is deliberate: pad rows are not
+//   part of the op contract. moe_ffn_swiglu reads `grouped` only through
+//   per-expert slices [offsets[e], offsets[e+1]) and synthesizes its own zeros
+//   for the trailing slack; moe_ungroup never receives `grouped` at all (it
+//   takes expert_out/plan/offsets/grouped_scores) and skips pad slots via
+//   plan[i] == SENTINEL. Zeroing the tail here would be dead DRAM traffic on
+//   every step, proportional to the capacity slack. If a future consumer ever
+//   reads `grouped` densely over T_cap rows, zero it at that boundary instead.
 // - In the last chunk per tile-row, writes only last_chunk_tiles tiles
 //   (the remaining are zero-pad from the reader).
 // Always pops cb_out to keep the pipeline flowing.
@@ -18,8 +25,7 @@
 //   4: last_chunk_tiles   (tiles in final chunk; <= tiles_per_chunk)
 //   5: stride             (= num_workers; interleaved tile_row step)
 //   6: plan_ready_sem_id
-//   7: total_tile_rows    (= T_cap / TILE_HEIGHT)
-//   8+: TensorAccessorArgs for grouped
+//   7+: TensorAccessorArgs for grouped
 //   next+: TensorAccessorArgs for offsets
 //
 // Runtime args:
@@ -40,9 +46,16 @@ constexpr uint32_t e_local = get_compile_time_arg_val(3);
 constexpr uint32_t last_chunk_tiles = get_compile_time_arg_val(4);
 constexpr uint32_t stride = get_compile_time_arg_val(5);
 constexpr uint32_t plan_ready_sem_id = get_compile_time_arg_val(6);
-constexpr uint32_t total_tile_rows = get_compile_time_arg_val(7);
-constexpr auto grouped_args = TensorAccessorArgs<8>();
+constexpr auto grouped_args = TensorAccessorArgs<7>();
 constexpr auto offsets_args = TensorAccessorArgs<grouped_args.next_compile_time_args_offset()>();
+// The accessor chain must consume the host's CT-arg stream exactly. If the
+// host was built against a different arg table (scalar added/removed, accessor
+// reordered), every accessor base shifts — and when the stray word still
+// parses as a config word, the kernel compiles and reads garbage addresses.
+static_assert(
+    offsets_args.next_compile_time_args_offset() == kernel_compile_time_args.size(),
+    "moe_group_worker_writer: compile-time arg count differs from host emission — "
+    "rebuild the ttml host library to match this kernel source");
 
 void kernel_main() {
     const uint32_t grouped_addr = get_arg_val<uint32_t>(0);
@@ -94,29 +107,5 @@ void kernel_main() {
             noc_async_write_barrier();
             cb_pop_front(cb_out, tiles_per_chunk);
         }
-    }
-
-    // Zero the tail tile_rows this core owns past the active range. my_count
-    // is a uniform worst-case bound, so clamp to total_tile_rows.
-    if (my_active_count < my_count && tile_row < total_tile_rows) {
-        Noc noc;
-        CircularBuffer out_cb(cb_out);
-        // async_write_zeros streams the scratch page from cb_out's READ pointer,
-        // so the zeros must be placed there. This side is the CB consumer: its
-        // local write pointer never leaves the CB base (only the producer pushes),
-        // while the read pointer sits (pages_popped % capacity) pages past it —
-        // fill_zeros_async targets the write pointer, so bridge the gap with an
-        // explicit offset or the streamed "zeros" are stale tile bytes. cb_out is
-        // drained (pushes == pops) and the producer has exited, so the page at
-        // the read pointer is free to reuse as scratch.
-        fill_zeros_async(noc, cb_out, tile_bytes, out_cb.get_read_ptr() - out_cb.get_write_ptr());
-        noc.write_zeros_l1_barrier();
-        for (uint32_t step = my_active_count; step < my_count && tile_row < total_tile_rows;
-             ++step, tile_row += stride) {
-            for (uint32_t t = 0; t < Wt; ++t) {
-                noc.async_write_zeros(grouped_addrgen, tile_bytes, {.page_id = tile_row * Wt + t}, out_cb);
-            }
-        }
-        noc.write_zeros_dram_barrier();
     }
 }

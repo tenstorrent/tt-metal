@@ -100,6 +100,13 @@ constexpr auto leids_args = TensorAccessorArgs<offsets_args.next_compile_time_ar
 constexpr auto scores_args = TensorAccessorArgs<leids_args.next_compile_time_args_offset()>();
 constexpr auto gs_args = TensorAccessorArgs<scores_args.next_compile_time_args_offset()>();
 constexpr auto ks_args = TensorAccessorArgs<gs_args.next_compile_time_args_offset()>();
+// The accessor chain must consume the host's CT-arg stream exactly; a host
+// built against a different arg table shifts every accessor base and can
+// silently parse page sizes as config words.
+static_assert(
+    ks_args.next_compile_time_args_offset() == kernel_compile_time_args.size(),
+    "moe_group_combined_kernel: compile-time arg count differs from host emission — "
+    "rebuild the ttml host library to match this kernel source");
 
 constexpr uint32_t md_aligned_page = decltype(metadata_args)::AlignedPageSize;
 constexpr uint32_t sc_aligned_page = decltype(scores_args)::AlignedPageSize;

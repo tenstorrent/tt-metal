@@ -296,9 +296,8 @@ MoeGroupProgramFactory::cached_program_t MoeGroupProgramFactory::create(
         Wt,
         e_local,
         last_chunk_tiles,
-        num_total_cores,    // 5 — stride (= num_workers)
-        plan_ready_sem_id,  // 6
-        total_tiles};       // 7 — total_tile_rows (= t_cap / TILE_HEIGHT)
+        num_total_cores,     // 5 — stride (= num_workers)
+        plan_ready_sem_id};  // 6
     tt::tt_metal::TensorAccessorArgs(grouped_buf).append_to(writer_ct_args);
     tt::tt_metal::TensorAccessorArgs(offsets_buf).append_to(writer_ct_args);
 
