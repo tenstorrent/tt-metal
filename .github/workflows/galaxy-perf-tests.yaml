@@ -54,6 +54,7 @@ jobs:
 
   build-artifact-profiler:
     needs: check-harbor
+    if: ${{ !cancelled() }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read
@@ -69,6 +70,7 @@ jobs:
       enable-lto: ${{ inputs.enable-lto || false }}
   galaxy-perf-tests:
     needs: [check-harbor, build-artifact-profiler]
+    if: ${{ !cancelled() && needs.build-artifact-profiler.result == 'success' }}
     secrets: inherit
     uses: ./.github/workflows/galaxy-perf-tests-impl.yaml
     with:
