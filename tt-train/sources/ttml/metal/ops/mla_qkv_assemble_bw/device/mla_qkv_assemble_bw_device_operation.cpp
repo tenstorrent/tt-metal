@@ -52,9 +52,6 @@ void MLAQKVAssembleBwDeviceOperation::validate_on_program_cache_miss(
         dQ.device() == dK.device() && dK.device() == dV.device(),
         "MLAQKVAssembleBw: dQ, dK, and dV must be on the same device.");
 
-    // compute_output_specs derives each output layout from one input; the outputs are only
-    // interchangeable if every input shares the same placement.
-
     const auto dQ_shape = dQ.padded_shape();
     const auto dK_shape = dK.padded_shape();
     const auto dV_shape = dV.padded_shape();
@@ -135,8 +132,9 @@ MLAQKVAssembleBwDeviceOperation::spec_return_value_t MLAQKVAssembleBwDeviceOpera
     const ttnn::Shape dkv_up_shape({B, 1U, S, args.n_heads * (args.qk_nope_dim + args.v_dim)});
     const ttnn::Shape dk_pe_shape({B, 1U, S, args.qk_rope_dim});
 
-    // Each output inherits from its primary input source. Validation requires all three
-    // inputs share dtype + memory_config, so these layouts are equal in practice.
+    // dq_pre inherits dQ's placement; dkv_up and dk_pe inherit dK's. Inputs may
+    // sit in different memory configs (only interleaved is required); the program
+    // hash keys each input's memory config independently.
     auto dq_layout = tt::tt_metal::TensorLayout(dQ.dtype(), tt::tt_metal::Layout::TILE, dQ.memory_config());
     auto dk_layout = tt::tt_metal::TensorLayout(dK.dtype(), tt::tt_metal::Layout::TILE, dK.memory_config());
     output_specs.emplace_back(dq_pre_shape, dq_layout);
