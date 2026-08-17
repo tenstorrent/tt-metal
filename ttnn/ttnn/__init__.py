@@ -353,6 +353,7 @@ from ttnn.types import (
     KernelRunArgs,
     DFBRunOverrides,
     ProgramRunArgs,
+    compute_program_spec_hash,
     TensorAccessorArgs,
     Mcast1D,
     Mcast1DShape,
