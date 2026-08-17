@@ -10,7 +10,12 @@ from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.common.sampling._utils import is_default_value, is_power_of_2, upper_power_of_2
+from models.common.sampling._utils import (
+    is_default_value,
+    is_power_of_2,
+    topk_would_route_to_large_indices,
+    upper_power_of_2,
+)
 from models.common.sampling.tt_log_probs import LogProbsCalculator
 from models.common.sampling.vocab_padding import (
     build_invalid_vocab_mask,
@@ -803,21 +808,61 @@ class TTSampling(LightweightModule):
             topk_values_list = []
             topk_indices_list = []
 
+            # Drop indices_tensor/stable ONLY when ttnn.topk would take the Blackhole
+            # topk_large_indices composite for these halves once those args are absent
+            # (topk_would_route_to_large_indices mirrors should_route_to_topk_large_indices,
+            # ttnn/cpp/ttnn/operations/reduction/topk/topk.cpp:258-320). Calls that would
+            # not route keep today's arguments bit-for-bit. The sub_core_grid_topk gate
+            # preserves the core-grid surface exactly: the routed composite ignores custom
+            # grids, so a call the model constrained to a sub-grid is never relaxed.
+            use_routed_topk = self.sub_core_grid_topk is None and topk_would_route_to_large_indices(
+                x_bf16_list[0], self.max_top_k, self.mesh_device
+            )
+
             for i in range(len(x_bf16_list)):
-                topk_values, topk_indices = ttnn.topk(
-                    x_bf16_list[i],
-                    k=self.max_top_k,
-                    dim=-1,
-                    sub_core_grids=self.sub_core_grid_topk,
-                    indices_tensor=indices_tensor_list[i],
-                    # Break exact-value ties by lowest index instead of array position, so which
-                    # of a set of tied candidates enters the top-k does not depend on placement.
-                    # Best effort only, and only where the LLK has the network at all (see
-                    # self._topk_stable) -- the stable bitonic network is an open LLK issue
-                    # (tenstorrent/tt-metal#33492); _adjust_values_for_tiebreak is what actually
-                    # guarantees the greedy pick.
-                    stable=self._topk_stable,
-                )
+                if use_routed_topk:
+                    # indices_tensor dropped: the stock single-core factory -- the factory
+                    # every relaxed shape hits today -- never reads the supplied indices
+                    # tensor (GENERATE_INDICES is pinned on, GH #36329; see
+                    # topk_single_core_program_factory.cpp:185-195), so today's call already
+                    # returns 0-based per-half positions, and the routed composite returns
+                    # the same 0-based positions. NO half offset is applied here:
+                    # globalization is owned downstream by the tt_indices_device_offsets add
+                    # (+0 for half 0 slots, +padded_per_device for half 1 slots), identically
+                    # for both halves -- verified bit-exact old-vs-new on device.
+                    # stable dropped: best-effort/broken anyway (tenstorrent/tt-metal#33492);
+                    # _adjust_values_for_tiebreak guarantees the greedy pick after the gather
+                    # regardless of per-device tie order (see its docstring).
+                    topk_values, topk_indices = ttnn.topk(
+                        x_bf16_list[i],
+                        k=self.max_top_k,
+                        dim=-1,
+                    )
+                    expected_index_dtype = self.tt_indices_tensor.dtype
+                    if topk_indices.dtype != expected_index_dtype:
+                        # The route emits uint16 iff the padded row fits 16 bits and uint32
+                        # otherwise (topk.cpp:338-343, same contract as the stock op's
+                        # compute_output_specs); normalize to the stock indices dtype so the
+                        # concat below always sees one dtype across halves. Winning indices
+                        # are < the real half width, so any narrowing cast is value-exact.
+                        topk_indices_cast = ttnn.typecast(topk_indices, expected_index_dtype)
+                        ttnn.deallocate(topk_indices)
+                        topk_indices = topk_indices_cast
+                else:
+                    topk_values, topk_indices = ttnn.topk(
+                        x_bf16_list[i],
+                        k=self.max_top_k,
+                        dim=-1,
+                        sub_core_grids=self.sub_core_grid_topk,
+                        indices_tensor=indices_tensor_list[i],
+                        # Break exact-value ties by lowest index instead of array position, so which
+                        # of a set of tied candidates enters the top-k does not depend on placement.
+                        # Best effort only, and only where the LLK has the network at all (see
+                        # self._topk_stable) -- the stable bitonic network is an open LLK issue
+                        # (tenstorrent/tt-metal#33492); _adjust_values_for_tiebreak is what actually
+                        # guarantees the greedy pick.
+                        stable=self._topk_stable,
+                    )
                 topk_values_list.append(topk_values)
                 topk_indices_list.append(topk_indices)
                 x_bf16_list[i].deallocate()
@@ -843,21 +888,49 @@ class TTSampling(LightweightModule):
                     value=-sys.float_info.max,
                     sub_core_grids=self.sub_core_grids,
                 )
-            # Perform local top-k on each device
-            topk_values, topk_indices = ttnn.topk(
-                x_bf16,
-                k=self.max_top_k,
-                dim=-1,
-                sub_core_grids=self.sub_core_grid_topk,
-                indices_tensor=self.tt_indices_tensor,
-                # Break exact-value ties by lowest index instead of array position, so which
-                # of a set of tied candidates enters the top-k does not depend on placement.
-                # Best effort only, and only where the LLK has the network at all (see
-                # self._topk_stable) -- the stable bitonic network is an open LLK issue
-                # (tenstorrent/tt-metal#33492); _adjust_values_for_tiebreak is what actually
-                # guarantees the greedy pick.
-                stable=self._topk_stable,
-            )
+            # Perform local top-k on each device. Drop indices_tensor/stable ONLY when
+            # ttnn.topk would take the Blackhole topk_large_indices composite with those
+            # args absent (topk_would_route_to_large_indices mirrors
+            # should_route_to_topk_large_indices, topk.cpp:258-320); every other shape
+            # keeps today's call bit-for-bit. The sub_core_grid_topk gate preserves the
+            # core-grid surface: the routed composite ignores custom grids.
+            if self.sub_core_grid_topk is None and topk_would_route_to_large_indices(
+                x_bf16, self.max_top_k, self.mesh_device
+            ):
+                # indices_tensor dropped: tt_indices_tensor is the identity iota over the
+                # padded row, and the routed op returns the actual row positions -- the
+                # same values (winning lanes never land in the -1/-float_max padding).
+                # stable dropped: best-effort/broken anyway (tenstorrent/tt-metal#33492);
+                # _adjust_values_for_tiebreak guarantees the greedy pick after the gather
+                # regardless of per-device tie order (see its docstring).
+                topk_values, topk_indices = ttnn.topk(
+                    x_bf16,
+                    k=self.max_top_k,
+                    dim=-1,
+                )
+                if topk_indices.dtype != self.tt_indices_tensor.dtype:
+                    # The route emits uint32 when the padded row exceeds 65535 (e.g. the
+                    # 65536-wide qwen36 TP=4 shard); the gather below is pinned to the
+                    # stock dtype. Winning indices are < the real shard width, so the
+                    # narrowing cast is value-exact.
+                    topk_indices_cast = ttnn.typecast(topk_indices, self.tt_indices_tensor.dtype)
+                    ttnn.deallocate(topk_indices)
+                    topk_indices = topk_indices_cast
+            else:
+                topk_values, topk_indices = ttnn.topk(
+                    x_bf16,
+                    k=self.max_top_k,
+                    dim=-1,
+                    sub_core_grids=self.sub_core_grid_topk,
+                    indices_tensor=self.tt_indices_tensor,
+                    # Break exact-value ties by lowest index instead of array position, so which
+                    # of a set of tied candidates enters the top-k does not depend on placement.
+                    # Best effort only, and only where the LLK has the network at all (see
+                    # self._topk_stable) -- the stable bitonic network is an open LLK issue
+                    # (tenstorrent/tt-metal#33492); _adjust_values_for_tiebreak is what actually
+                    # guarantees the greedy pick.
+                    stable=self._topk_stable,
+                )
 
             # For 1D meshes use `cluster_axis=None`. For 2D meshes, use the configured gather axis.
             sampling_cluster_axis = self._get_sampling_cluster_axis()

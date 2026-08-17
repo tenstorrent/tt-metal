@@ -23,6 +23,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.modules.lazy_buffer import LazyBuffer, resolve_lazy_buffer
 from models.common.modules.tt_ccl import default_topology, get_tt_ccl
+from models.common.sampling._utils import topk_would_route_to_large_indices
 from models.common.sampling.vocab_padding import (
     build_invalid_vocab_mask,
     build_tail_invalid_vocab_mask,
@@ -526,14 +527,39 @@ class Sampling1D(LightweightModule):
 
         values_parts = []
         indices_parts = []
+        # Drop indices_tensor ONLY when ttnn.topk would take the Blackhole
+        # topk_large_indices composite with it absent (topk_would_route_to_large_indices
+        # mirrors should_route_to_topk_large_indices, ttnn/cpp/ttnn/operations/reduction/
+        # topk/topk.cpp:258-320); otherwise keep today's call bit-for-bit. Unlike
+        # tt_sampling.py, BOTH halves of _local_indices here are the same 0-based range
+        # (see _make_local_indices: cat([r, r]) -- globalization happens downstream via
+        # index_offsets), so the routed op's 0-based positions are value-identical for
+        # every half and no offset restore is needed.
+        use_routed_topk = cfg.sub_core_grid_topk is None and topk_would_route_to_large_indices(
+            x_list[0], cfg.max_top_k, cfg.mesh_device
+        )
         for i in range(len(x_list)):
-            vals, idxs = ttnn.topk(
-                x_list[i],
-                k=cfg.max_top_k,
-                dim=-1,
-                sub_core_grids=cfg.sub_core_grid_topk,
-                indices_tensor=indices_list[i],
-            )
+            if use_routed_topk:
+                vals, idxs = ttnn.topk(
+                    x_list[i],
+                    k=cfg.max_top_k,
+                    dim=-1,
+                )
+                if idxs.dtype != self._local_indices.dtype:
+                    # Route emits uint16 iff the padded row fits 16 bits, uint32 otherwise
+                    # (topk.cpp:338-343); pin the stock dtype (uint16) for the concat and
+                    # the downstream index math. Winners are < the half width, value-exact.
+                    idxs_cast = ttnn.typecast(idxs, self._local_indices.dtype)
+                    ttnn.deallocate(idxs)
+                    idxs = idxs_cast
+            else:
+                vals, idxs = ttnn.topk(
+                    x_list[i],
+                    k=cfg.max_top_k,
+                    dim=-1,
+                    sub_core_grids=cfg.sub_core_grid_topk,
+                    indices_tensor=indices_list[i],
+                )
             values_parts.append(vals)
             indices_parts.append(idxs)
             x_list[i].deallocate()
@@ -565,13 +591,33 @@ class Sampling1D(LightweightModule):
                 sub_core_grids=cfg.sub_core_grids,
             )
 
-        topk_values, topk_indices = ttnn.topk(
-            x_bf16,
-            k=cfg.max_top_k,
-            dim=-1,
-            sub_core_grids=cfg.sub_core_grid_topk,
-            indices_tensor=self._local_indices,
-        )
+        # Drop indices_tensor ONLY when ttnn.topk would take the Blackhole
+        # topk_large_indices composite with it absent (mirror of
+        # should_route_to_topk_large_indices, topk.cpp:258-320); every other shape keeps
+        # today's call bit-for-bit. _local_indices is the identity iota over the padded
+        # shard, and the routed op returns the actual row positions -- the same values
+        # (winning lanes never land in the -1/-float_max padding).
+        if cfg.sub_core_grid_topk is None and topk_would_route_to_large_indices(x_bf16, cfg.max_top_k, cfg.mesh_device):
+            topk_values, topk_indices = ttnn.topk(
+                x_bf16,
+                k=cfg.max_top_k,
+                dim=-1,
+            )
+            if topk_indices.dtype != self._local_indices.dtype:
+                # Route emits uint32 when the padded row exceeds 65535 (e.g. a 65536-wide
+                # pow2-padded shard); the indices all_gather below is pinned to uint16.
+                # Winning indices are < the real shard width, so the cast is value-exact.
+                topk_indices_cast = ttnn.typecast(topk_indices, self._local_indices.dtype)
+                ttnn.deallocate(topk_indices)
+                topk_indices = topk_indices_cast
+        else:
+            topk_values, topk_indices = ttnn.topk(
+                x_bf16,
+                k=cfg.max_top_k,
+                dim=-1,
+                sub_core_grids=cfg.sub_core_grid_topk,
+                indices_tensor=self._local_indices,
+            )
 
         # For 1D meshes use cluster_axis=None
         sampling_cluster_axis = None if 1 in cluster_shape else 0
