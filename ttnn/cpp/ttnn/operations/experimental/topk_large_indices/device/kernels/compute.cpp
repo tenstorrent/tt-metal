@@ -164,6 +164,9 @@ void kernel_main() {
 
     for (uint32_t row = 0; row < num_rows; ++row) {
         tile_regs_acquire();
+#ifdef CHUNK_SKIP_TELEMETRY
+        skip::telemetry_row_begin(num_chunks);
+#endif
 
         topk_xl_separate_indices_row_major_init_static<0, 0>();
 
@@ -180,6 +183,19 @@ void kernel_main() {
             copy_chunk<K>(input_cb_obj, slot1, active_elements);
 
             if constexpr (kChunkSkipEnable) {
+#ifdef CHUNK_SKIP_TELEMETRY
+                // Telemetry variant: identical gate predicate and identical
+                // per-chunk mailbox traffic on every TRISC; the decision is
+                // recorded (MATH only) before the skip acts.
+                if (chunk >= skip::first_tested_chunk<USER_K>()) {
+                    const bool skipped = skip::chunk_skip_decide<K, USER_K>(slot1);
+                    skip::telemetry_record(chunk, skipped);
+                    if (skipped) {
+                        topk_xl_separate_indices_row_major_advance_chunk_base<K>();
+                        continue;
+                    }
+                }
+#else
                 // Gated start: chunk >= max(2, USER_K/4). The floor of 2 is a
                 // layout requirement (threshold address valid only after the
                 // first merge+rebuild); USER_K/4 amortizes the test to where
@@ -191,6 +207,7 @@ void kernel_main() {
                     topk_xl_separate_indices_row_major_advance_chunk_base<K>();
                     continue;
                 }
+#endif
             }
 
             finish_chunk<K>(slot1, true);
@@ -199,6 +216,9 @@ void kernel_main() {
             topk_xl_merge<K, false>(slot0);
             topk_xl_rebuild<K, false>(slot0, false);
         }
+#ifdef CHUNK_SKIP_TELEMETRY
+        skip::telemetry_row_end<USER_K>(row, num_chunks);
+#endif
 
 #if defined(CHUNK_SKIP_DIAG) && defined(TRISC_MATH)
         // Calibration dump: raw post-rebuild values-region words of slot0.

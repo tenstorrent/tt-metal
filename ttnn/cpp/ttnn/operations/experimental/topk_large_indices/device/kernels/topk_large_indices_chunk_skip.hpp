@@ -111,6 +111,20 @@
 #include "api/debug/dprint.h"
 #endif
 
+// Skip-rate telemetry (paper gap G4): per-row skipped-chunk count plus a
+// per-position skip bitmask, emitted by MATH over DPRINT once per row,
+// OUTSIDE the chunk loop. Observation only -- outputs must stay bit-exact.
+// DPRINT serializes: never enable together with perf runs or the device
+// profiler, and always run with the DPRINT server up (TT_METAL_DPRINT_CORES
+// set), otherwise the kernel-side writer stalls. When left undefined (the
+// default) every telemetry token preprocesses away and the compiled kernels
+// are byte-identical to the pre-telemetry binaries (same guarantee class as
+// CHUNK_SKIP_DEBUG).
+// #define CHUNK_SKIP_TELEMETRY 1
+#if defined(CHUNK_SKIP_TELEMETRY) && defined(TRISC_MATH)
+#include "api/debug/dprint.h"
+#endif
+
 namespace topk_large_indices_chunk_skip {
 
 // First chunk index eligible for the skip test.
@@ -126,10 +140,19 @@ namespace topk_large_indices_chunk_skip {
 // chunks, +1.8% at user_k=1536@25 chunks, while forfeiting < 1 expected skip
 // per row). The gate is a compile-time function of USER_K only, so all
 // TRISCs derive the identical tested-chunk set.
+//
+// Gate-divisor A/B knob: default 4 == the shipping USER_K/4 constant (the
+// default compiles to identical code). Swept in-source by
+// tests/.../_topk_large_indices_gate_ab.sh, which sed-edits the value per
+// arm (JIT rehash, no host rebuild). Do NOT change the default without the
+// full A/B evidence + guard battery (see the harness header + RUN_PLAN).
+#ifndef CHUNK_SKIP_GATE_DIVISOR
+#define CHUNK_SKIP_GATE_DIVISOR 4
+#endif
 template <uint32_t USER_K>
 constexpr uint32_t first_tested_chunk() {
     constexpr uint32_t layout_floor = 2;
-    constexpr uint32_t amortization_floor = USER_K / 4;
+    constexpr uint32_t amortization_floor = USER_K / CHUNK_SKIP_GATE_DIVISOR;
     return amortization_floor > layout_floor ? amortization_floor : layout_floor;
 }
 
@@ -284,5 +307,65 @@ inline bool chunk_skip_decide(uint32_t slot1) {
     return false;
 #endif
 }
+
+// ---------------------------------------------------------------------------
+// Telemetry recorder (CHUNK_SKIP_TELEMETRY builds only). MATH records the
+// decisions it already owns; UNPACK/PACK get no-op stubs so the shared call
+// sites in compute.cpp / compute_with_values.cpp compile on all three TRISC
+// builds. The recorder adds NO mailbox traffic and keeps the tested-chunk
+// predicate identical on all TRISCs, so the T1->T0 FIFO occupancy analysis
+// above (worst case 3 <= depth 4) is unchanged. The tested-chunk count is
+// compile-time deterministic (num_chunks - first_tested_chunk), so only the
+// data-dependent SKIPS are recorded. Emission, once per row (parsed by
+// tests/.../_topk_large_indices_skip_telemetry_parse.py):
+//   CSTL r <row> n <num_chunks> f <first_tested> s <skipped>
+//   CSTLM <word_idx> <mask_word>     (ceil(num_chunks/32) lines per row)
+// ---------------------------------------------------------------------------
+#ifdef CHUNK_SKIP_TELEMETRY
+#ifdef TRISC_MATH
+
+// Route width ceiling 2^19 / min llk window 512 = 1024 chunks max -> 32
+// words. File-scope inline arrays land in TRISC1 local-memory .bss, not the
+// stack.
+inline constexpr uint32_t kTelemetryMaxChunkWords = 32;
+inline uint32_t g_telemetry_skip_mask[kTelemetryMaxChunkWords];
+inline uint32_t g_telemetry_row_skipped;
+
+inline void telemetry_row_begin(uint32_t num_chunks) {
+    const uint32_t words = (num_chunks + 31) / 32;
+    for (uint32_t w = 0; w < words && w < kTelemetryMaxChunkWords; ++w) {
+        g_telemetry_skip_mask[w] = 0;
+    }
+    g_telemetry_row_skipped = 0;
+}
+
+inline void telemetry_record(uint32_t chunk, bool skipped) {
+    if (skipped) {
+        ++g_telemetry_row_skipped;
+        const uint32_t w = chunk / 32;
+        if (w < kTelemetryMaxChunkWords) {
+            g_telemetry_skip_mask[w] |= (1u << (chunk % 32));
+        }
+    }
+}
+
+// Runs between FPU phases on the MATH RISC, after all of the row's skip
+// decisions have completed -- it cannot interleave with the decision mailbox.
+template <uint32_t USER_K>
+inline void telemetry_row_end(uint32_t row, uint32_t num_chunks) {
+    DPRINT("CSTL r {} n {} f {} s {}\n", row, num_chunks, first_tested_chunk<USER_K>(), g_telemetry_row_skipped);
+    const uint32_t words = (num_chunks + 31) / 32;
+    for (uint32_t w = 0; w < words && w < kTelemetryMaxChunkWords; ++w) {
+        DPRINT("CSTLM {} {}\n", w, g_telemetry_skip_mask[w]);
+    }
+}
+
+#else   // CHUNK_SKIP_TELEMETRY on UNPACK/PACK: observe nothing.
+inline void telemetry_row_begin(uint32_t) {}
+inline void telemetry_record(uint32_t, bool) {}
+template <uint32_t USER_K>
+inline void telemetry_row_end(uint32_t, uint32_t) {}
+#endif  // TRISC_MATH
+#endif  // CHUNK_SKIP_TELEMETRY
 
 }  // namespace topk_large_indices_chunk_skip

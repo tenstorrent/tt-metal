@@ -97,6 +97,9 @@ void kernel_main() {
 
     for (uint32_t row = 0; row < num_rows; ++row) {
         tile_regs_acquire();
+#ifdef CHUNK_SKIP_TELEMETRY
+        skip::telemetry_row_begin(num_chunks);
+#endif
 
         topk_xl_separate_indices_row_major_init_static<0, 0>();
 
@@ -113,10 +116,23 @@ void kernel_main() {
             copy_chunk_only<K>(input_cb_obj, slot1, active_elements);
 
             if constexpr (kChunkSkipEnable) {
+#ifdef CHUNK_SKIP_TELEMETRY
+                // Telemetry variant: identical gate predicate and identical
+                // per-chunk mailbox traffic on every TRISC (see compute.cpp).
+                if (chunk >= skip::first_tested_chunk<USER_K>()) {
+                    const bool skipped = skip::chunk_skip_decide<K, USER_K>(slot1);
+                    skip::telemetry_record(chunk, skipped);
+                    if (skipped) {
+                        topk_xl_separate_indices_row_major_advance_chunk_base<K>();
+                        continue;
+                    }
+                }
+#else
                 if (chunk >= skip::first_tested_chunk<USER_K>() && skip::chunk_skip_decide<K, USER_K>(slot1)) {
                     topk_xl_separate_indices_row_major_advance_chunk_base<K>();
                     continue;
                 }
+#endif
             }
 
             finish_chunk_only<K>(slot1, true);
@@ -125,6 +141,9 @@ void kernel_main() {
             topk_xl_merge<K, false>(slot0);
             topk_xl_rebuild<K, false>(slot0, false);
         }
+#ifdef CHUNK_SKIP_TELEMETRY
+        skip::telemetry_row_end<USER_K>(row, num_chunks);
+#endif
 
         mark_neginf_indices<K>(slot0);
         materialize_index_rank_order<K>(slot0, indices_cb);
