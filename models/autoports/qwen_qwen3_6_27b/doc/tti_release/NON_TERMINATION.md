@@ -342,3 +342,59 @@ Incidental note from the same log line: with tokenised requests disabled, lm-eva
 does **not** check that prompt plus generation fits the context window. Harmless at
 this model's 262,144-token context, but worth knowing for a model where it would not
 be.
+
+---
+
+## Practical consequence: thinking-mode GPQA is barely runnable at this decode speed
+
+Independent of whether the reasoning converges, the arithmetic is worth stating,
+because it connects the accuracy investigation to the performance work.
+
+At the measured **56 ms/token** (17.8 tok/s, matching the recorded ITL) and a
+32,768-token budget:
+
+| scope | sequential wall clock |
+|---|---:|
+| one document at the cap | **~31 min** (measured: 1,887.95 s) |
+| the 5% CI subset, 10 documents | **~5.2 h** |
+| the full Diamond set, 198 documents | **~102 h** |
+
+So even the CI subset costs a fifth of a day per attempt, and the full set is not
+runnable. Any iteration on thinking-mode GPQA — a precision change, a policy change,
+a re-measurement — pays that cost each time. That is a serious obstacle to the very
+reference baseline `AUTOFIX.md` says is required.
+
+### Two ways to make it tractable, both already evidenced on this branch
+
+1. **Run the eval concurrently.** The evals ran at `num_concurrent=1` against a
+   `max_num_seqs=1` server, so exactly one slot was ever busy. The recorded burst
+   profile shows `ITL P50 244.0 ms` at `max_num_seqs=32` with 32 requests in flight —
+   i.e. **7.6 ms/token/user**. Ten documents served concurrently would cost roughly
+   `32,768 x 244 ms ~= 2.2 h` for the whole subset instead of 5.2 h sequentially,
+   because the ten generations overlap. This needs no model change, only
+   `--max_num_seqs 32` on the server and `num_concurrent=10` in the invocation.
+
+   Caveat that must be respected: this changes the serving configuration, so it is
+   valid for *measuring accuracy* but the resulting latency numbers are not the
+   single-user ones. Keep the two purposes separate.
+
+2. **Disable thinking for the graded run.** `chat_template_kwargs:
+   {"enable_thinking": false}` collapses the budget requirement to hundreds of tokens.
+   This produces a different and weaker benchmark condition, not comparable to a
+   published thinking-mode score, so it is a legitimate configuration only if it is
+   labelled as such.
+
+### Why an HF reference was not attempted here
+
+`AUTOFIX.md` identifies the missing input as "matched Qwen GPU/control baselines". A
+CPU reference on this host is not a sensible substitute: 249 GB total RAM but only
+**61 GB available** with the device server resident, against ~54 GB for 27B in bf16,
+on 16 cores. Even one document would take hours while competing for memory with the
+TT server, and it would still not be the GPU reference the config wants. Recorded as
+a follow-up for a GPU host rather than attempted badly here.
+
+The comparison that reference would settle is specific and worth stating so it can be
+run cheaply when a GPU is available: **does HF, in thinking mode, converge on Diamond
+row 0 within 32,768 tokens?** If it does and this port does not, the divergence is
+port-side and the numerical policy is implicated. If neither converges, it is a model
+property and the benchmark configuration is what needs to change.
