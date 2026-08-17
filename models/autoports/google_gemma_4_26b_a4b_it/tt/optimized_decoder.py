@@ -1013,7 +1013,6 @@ class OptimizedDecoder(FunctionalDecoder):
             user_id=user_id,
             logical_seq_len=logical_seq_len,
             cache_position_modulo=cache_position_modulo,
-            fill_kwargs=self._cache_view_kwargs(prefill=True),
         )
 
         from models.autoports.google_gemma_4_26b_a4b_it.tt.functional_decoder import _prefill_attention_path
@@ -1119,22 +1118,20 @@ class OptimizedDecoder(FunctionalDecoder):
             k_heads = ttnn.experimental.rotary_embedding_hf(k_heads, position_cos, position_sin, is_decode_mode=True)
 
         key_cache, value_cache = kv_cache
-        update_kwargs = self._cache_view_kwargs(prefill=False)
-        if cache_position_modulo is not None:
-            update_kwargs["cache_position_modulo"] = cache_position_modulo
+        cache_view = self._cache_view_kwargs(prefill=False, cache_position_modulo=cache_position_modulo)
         ttnn.experimental.paged_update_cache(
             key_cache,
             k_heads,
             update_idxs_tensor=current_pos,
             page_table=page_table,
-            **update_kwargs,
+            **cache_view,
         )
         ttnn.experimental.paged_update_cache(
             value_cache,
             v_heads,
             update_idxs_tensor=current_pos,
             page_table=page_table,
-            **update_kwargs,
+            **cache_view,
         )
         attn_out = ttnn.transformer.paged_scaled_dot_product_attention_decode(
             q_heads,
@@ -1146,11 +1143,7 @@ class OptimizedDecoder(FunctionalDecoder):
             sliding_window_size=kind.sliding_window,
             program_config=self.sdpa_program_config,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            # Same cache view as the update above, including cache_position_modulo:
-            # the read side must wrap its page-table lookups exactly like the write
-            # side, or positions past the bounded sliding capacity fold onto physical
-            # block 0 and attend to the wrong tokens.
-            **update_kwargs,
+            **cache_view,
         )
         concat_mem_config = _make_decode_height_sharded_memory_config(self.mesh_device, batch, kind.head_dim)
         if sharded_residual:
@@ -1296,7 +1289,6 @@ class OptimizedDecoder(FunctionalDecoder):
         user_id: int,
         logical_seq_len: int,
         cache_position_modulo: int | None,
-        fill_kwargs: dict[str, int],
     ) -> None:
         """Allow low-precision cache trials without changing update semantics.
 
@@ -1306,17 +1298,11 @@ class OptimizedDecoder(FunctionalDecoder):
         Non-aligned tails retain the functional BF16 update path.
         """
         if logical_seq_len % TILE_SIZE == 0 and k_heads.dtype != key_cache.dtype:
+            fill_kwargs = self._cache_view_kwargs(prefill=True, cache_position_modulo=cache_position_modulo)
             k_fill = ttnn.typecast(k_heads, key_cache.dtype)
             v_fill = ttnn.typecast(v_heads, value_cache.dtype)
-            modulo_kwargs = (
-                {"cache_position_modulo": cache_position_modulo} if cache_position_modulo is not None else {}
-            )
-            ttnn.experimental.paged_fill_cache(
-                key_cache, k_fill, page_table, batch_idx=user_id, **fill_kwargs, **modulo_kwargs
-            )
-            ttnn.experimental.paged_fill_cache(
-                value_cache, v_fill, page_table, batch_idx=user_id, **fill_kwargs, **modulo_kwargs
-            )
+            ttnn.experimental.paged_fill_cache(key_cache, k_fill, page_table, batch_idx=user_id, **fill_kwargs)
+            ttnn.experimental.paged_fill_cache(value_cache, v_fill, page_table, batch_idx=user_id, **fill_kwargs)
             k_fill.deallocate(True)
             v_fill.deallocate(True)
             return
@@ -1329,7 +1315,6 @@ class OptimizedDecoder(FunctionalDecoder):
             user_id=user_id,
             logical_seq_len=logical_seq_len,
             cache_position_modulo=cache_position_modulo,
-            fill_kwargs=fill_kwargs,
         )
 
     def _moe_prefill(self, hidden_states: ttnn.Tensor, routing_weights: ttnn.Tensor) -> ttnn.Tensor:

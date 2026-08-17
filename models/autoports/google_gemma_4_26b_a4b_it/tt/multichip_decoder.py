@@ -566,12 +566,19 @@ class MultichipDecoder(OptimizedDecoder):
         finally:
             self.multichip_execution_phase = "idle"
 
-    def _cache_view_kwargs(self, *, prefill: bool) -> dict[str, int]:
-        if self.layer_kind.name != "full_attention":
-            return {}
-        kwargs = {"block_size": self.layer_kind.block_size}
-        if not prefill:
-            kwargs["num_kv_heads"] = 1
+    def _cache_view_kwargs(self, *, prefill: bool, cache_position_modulo: int | None = None) -> dict[str, int]:
+        """Tensor-parallel cache view; see ``FunctionalDecoder._cache_view_kwargs``.
+
+        Each rank owns one local KV head of a full-attention layer, so this
+        override differs only in ``num_kv_heads``.
+        """
+        kwargs: dict[str, int] = {}
+        if self.layer_kind.name == "full_attention":
+            kwargs["block_size"] = self.layer_kind.block_size
+            if not prefill:
+                kwargs["num_kv_heads"] = 1
+        if cache_position_modulo is not None:
+            kwargs["cache_position_modulo"] = cache_position_modulo
         return kwargs
 
     def _fill_prefill_cache(
@@ -585,21 +592,16 @@ class MultichipDecoder(OptimizedDecoder):
         user_id,
         logical_seq_len,
         cache_position_modulo,
-        fill_kwargs,
     ) -> None:
         """Modulo-safe cache fill using TP-local, rather than global, KV heads."""
+        fill_kwargs = self._cache_view_kwargs(prefill=True, cache_position_modulo=cache_position_modulo)
         if k_heads.dtype != key_cache.dtype:
             k_heads = ttnn.typecast(k_heads, key_cache.dtype, memory_config=k_heads.memory_config())
         if v_heads.dtype != value_cache.dtype:
             v_heads = ttnn.typecast(v_heads, value_cache.dtype, memory_config=v_heads.memory_config())
         if cache_position_modulo is None or logical_seq_len % TILE_SIZE == 0:
-            modulo = {"cache_position_modulo": cache_position_modulo} if cache_position_modulo is not None else {}
-            ttnn.experimental.paged_fill_cache(
-                key_cache, k_heads, page_table, batch_idx=user_id, **fill_kwargs, **modulo
-            )
-            ttnn.experimental.paged_fill_cache(
-                value_cache, v_heads, page_table, batch_idx=user_id, **fill_kwargs, **modulo
-            )
+            ttnn.experimental.paged_fill_cache(key_cache, k_heads, page_table, batch_idx=user_id, **fill_kwargs)
+            ttnn.experimental.paged_fill_cache(value_cache, v_heads, page_table, batch_idx=user_id, **fill_kwargs)
             return
         aligned_prefix, tail_positions = _bounded_cache_fill_plan(logical_seq_len)
         if aligned_prefix:
@@ -610,7 +612,6 @@ class MultichipDecoder(OptimizedDecoder):
                 k_prefix,
                 page_table,
                 batch_idx=user_id,
-                cache_position_modulo=cache_position_modulo,
                 **fill_kwargs,
             )
             ttnn.experimental.paged_fill_cache(
@@ -618,7 +619,6 @@ class MultichipDecoder(OptimizedDecoder):
                 v_prefix,
                 page_table,
                 batch_idx=user_id,
-                cache_position_modulo=cache_position_modulo,
                 **fill_kwargs,
             )
             k_prefix.deallocate(True)
@@ -629,8 +629,7 @@ class MultichipDecoder(OptimizedDecoder):
             page_table_row = ttnn.slice(page_table, [user_id, 0], [user_id + 1, page_table.shape[1]])
             owns_page_table_row = True
         update_mem = _make_single_user_cache_update_memory_config(self.mesh_device, self.layer_kind.head_dim)
-        update_kwargs = self._cache_view_kwargs(prefill=False)
-        update_kwargs["cache_position_modulo"] = cache_position_modulo
+        update_kwargs = self._cache_view_kwargs(prefill=False, cache_position_modulo=cache_position_modulo)
         local_kv_heads = k_heads.shape[1]
         for position in tail_positions:
             k_token = ttnn.slice(k_heads, [0, 0, position, 0], [1, local_kv_heads, position + 1, k_heads.shape[3]])
@@ -705,7 +704,6 @@ class MultichipDecoder(OptimizedDecoder):
             user_id=call["user_id"],
             logical_seq_len=call["logical_seq_len"],
             cache_position_modulo=call.get("cache_position_modulo"),
-            fill_kwargs=self._cache_view_kwargs(prefill=True),
         )
         attention_path = _prefill_attention_path(
             seq_len,
@@ -872,16 +870,14 @@ class MultichipDecoder(OptimizedDecoder):
             k_heads = ttnn.typecast(k_heads, ttnn.bfloat16, memory_config=k_heads.memory_config())
         if v_heads.dtype != ttnn.bfloat16:
             v_heads = ttnn.typecast(v_heads, ttnn.bfloat16, memory_config=v_heads.memory_config())
-        update_kwargs = self._cache_view_kwargs(prefill=False)
-        if call.get("cache_position_modulo") is not None:
-            update_kwargs["cache_position_modulo"] = call["cache_position_modulo"]
+        cache_view = self._cache_view_kwargs(prefill=False, cache_position_modulo=call.get("cache_position_modulo"))
         for cache, value in ((key_cache, k_heads), (value_cache, v_heads)):
             ttnn.experimental.paged_update_cache(
                 cache,
                 value,
                 update_idxs_tensor=call["current_pos"],
                 page_table=call["page_table"],
-                **update_kwargs,
+                **cache_view,
             )
         attn_out = ttnn.transformer.paged_scaled_dot_product_attention_decode(
             q_heads,
@@ -893,11 +889,7 @@ class MultichipDecoder(OptimizedDecoder):
             sliding_window_size=kind.sliding_window,
             program_config=self.sdpa_program_config,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            # Same cache view as the update above, including cache_position_modulo:
-            # the read side must wrap its page-table lookups exactly like the write
-            # side, or positions past the bounded sliding capacity fold onto physical
-            # block 0 and attend to the wrong tokens.
-            **update_kwargs,
+            **cache_view,
         )
         attn_out = ttnn.to_memory_config(attn_out, head_mem, dtype=attn_out.dtype)
         attn_out = ttnn.experimental.nlp_concat_heads_decode(attn_out, num_heads=LOCAL_Q_HEADS)

@@ -311,3 +311,12 @@ and is reported at handoff.
 
 The persistent `/dev/shm` warning did not abort any gate. All evidence above
 was regenerated from base `bae72d8aa452c8bcdf2d8d70216de58a1fb32c25`.
+
+## Post-stage defect: bounded sliding-cache read wrap
+
+The decode path in this stage carried the same defect as the functional decoder:
+`cache_position_modulo` reached `paged_update_cache` but not
+`paged_scaled_dot_product_attention_decode`, so decode past absolute position
+1024 attended to folded cache blocks. Fixed by routing every paged-cache op
+through `_cache_view_kwargs`. Analysis, measurements and before/after generation
+artifacts: `doc/tti_release/AUTOFIX_SLIDING_CACHE_READ_WRAP.md`.

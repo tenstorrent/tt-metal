@@ -139,3 +139,33 @@ and the narrowed QKV evidence claim. The local checkpoint SHA is recorded
 below after commit. No push is performed.
 
 Stage checkpoint commit: `b46b2396bd2` (`Add Gemma 4 26B functional decoder`).
+
+## Post-stage defect: the bounded sliding cache was read without the modulo
+
+Found 2026-08-17 while debugging the Stage 11 GPQA blocker from a second
+machine. Full analysis: `doc/tti_release/AUTOFIX_SLIDING_CACHE_READ_WRAP.md`.
+
+This stage validated the bounded sliding cache on the **write** side only.
+`test_bounded_modulo_prefill_tail_cache_integrity` fills at logical lengths 1024
+and 1025 and PCCs the resulting *cache contents*; `paged_update_cache` and
+`paged_fill_cache` were correctly given `cache_position_modulo=1024`. But
+`paged_scaled_dot_product_attention_decode` — the read — was never given it, so
+every decode at an absolute position past 1024 folded its page-table lookups
+onto physical block 0. Nothing in this stage read the cache back through decode
+attention across the boundary, so the gate could not see it.
+
+Two changes:
+
+- `_cache_view_kwargs` now takes `cache_position_modulo` and returns the
+  *complete* cache view, and every op that touches the paged cache (fill, update
+  and both SDPA reads) takes its view from it. Previously each call site
+  assembled its own view and bolted the modulo on separately, which is how the
+  read came to be missing it. `_fill_prefill_cache` no longer accepts a
+  caller-built `fill_kwargs` for the same reason.
+- New `test_bounded_modulo_decode_reads_across_wrap`: decodes
+  `sliding_window + 80` positions through a bounded 1024-token cache and through
+  an unbounded cache, and requires equal attention output at 1023/1024/1025 and
+  the final position. The sliding window makes both attend to the same 1024 keys,
+  so any read-side wrap error shows up immediately. Passes on the fix; fails at
+  the first probe past the window without it. Evidence:
+  `bounded_modulo_decode_across_wrap.json`.

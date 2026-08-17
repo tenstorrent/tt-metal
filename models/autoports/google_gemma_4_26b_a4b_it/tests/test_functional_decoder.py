@@ -36,6 +36,7 @@ from models.autoports.google_gemma_4_26b_a4b_it.tt.functional_decoder import (
     SLIDING_HEAD_DIM,
     SLIDING_KIND,
     SLIDING_NUM_KV_HEADS,
+    SLIDING_WINDOW,
     FunctionalDecoder,
     _bounded_cache_fill_plan,
     _make_correctness_compute_config,
@@ -1291,6 +1292,109 @@ def test_bounded_modulo_prefill_tail_cache_integrity(mesh_device, device_params)
         preserved, preserved_pcc = comp_pcc(baseline[:, 1:], wrapped[:, 1:], 0.9999)
         assert preserved, preserved_pcc
         assert not torch.equal(baseline[:, 0], wrapped[:, 0])
+
+
+@pytest.mark.timeout(3600)
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 0}], indirect=True)
+def test_bounded_modulo_decode_reads_across_wrap(mesh_device, device_params):
+    """Sustained decode past the sliding window must read the ring, not block 0.
+
+    The read-side counterpart of ``test_bounded_modulo_prefill_tail_cache_integrity``,
+    which asserts only what the write path stored. A bounded 1024-token cache
+    driven with ``cache_position_modulo`` must produce the same attention output
+    as an unbounded cache that holds every position, because ``sliding_window``
+    makes both attend to the same 1024 keys. Without the modulo on the SDPA read,
+    positions past the bounded capacity fold onto physical block 0 and this
+    diverges as soon as the first wrap is crossed.
+    """
+    cfg = _load_text_config()
+    layer_idx = 0  # sliding_attention: 25 of 30 layers, and the only bounded cache
+    total_steps = SLIDING_WINDOW + 80
+    probe_positions = (SLIDING_WINDOW - 1, SLIDING_WINDOW, SLIDING_WINDOW + 1, total_steps - 1)
+    state = _load_layer_state(layer_idx)
+    decoder = FunctionalDecoder.from_state_dict(
+        state,
+        hf_config=cfg,
+        layer_idx=layer_idx,
+        mesh_device=mesh_device,
+    )
+
+    torch.manual_seed(7311)
+    hidden_all = torch.randn(1, total_steps, HIDDEN_SIZE, dtype=torch.bfloat16)
+    rotary = Gemma4TextRotaryEmbedding(cfg)
+    cos_all, sin_all = rotary(
+        hidden_all,
+        torch.arange(total_steps).unsqueeze(0),
+        layer_type="sliding_attention",
+    )
+
+    def decode_all_positions(*, token_capacity: int, cache_position_modulo: int | None):
+        cache_shape = _cache_shape("sliding_attention", shared_physical=False, token_capacity=token_capacity)
+        kv_cache = (
+            _as_tt(mesh_device, torch.zeros(cache_shape, dtype=torch.bfloat16)),
+            _as_tt(mesh_device, torch.zeros(cache_shape, dtype=torch.bfloat16)),
+        )
+        page_table = _as_tt(
+            mesh_device,
+            _page_table("sliding_attention", shared_physical=False, token_capacity=token_capacity),
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+        probes = {}
+        for position in range(total_steps):
+            x = _as_tt(mesh_device, hidden_all[:, position : position + 1].unsqueeze(1))
+            x = decoder._rms_norm(x, decoder.weights.input_ln)
+            attn_out = decoder._attention_decode(
+                x,
+                position_cos=_as_tt(mesh_device, cos_all[:, position : position + 1].unsqueeze(1)),
+                position_sin=_as_tt(mesh_device, sin_all[:, position : position + 1].unsqueeze(1)),
+                current_pos=_as_tt(
+                    mesh_device,
+                    torch.tensor([position], dtype=torch.int32),
+                    dtype=ttnn.int32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                ),
+                page_table=page_table,
+                kv_cache=kv_cache,
+                cache_position_modulo=cache_position_modulo,
+            )
+            if position in probe_positions:
+                probes[position] = _to_torch(mesh_device, attn_out)
+            attn_out.deallocate(True)
+        return probes
+
+    bounded = decode_all_positions(token_capacity=SLIDING_WINDOW, cache_position_modulo=SLIDING_WINDOW)
+    unbounded = decode_all_positions(token_capacity=total_steps, cache_position_modulo=None)
+
+    results = {}
+    for position in probe_positions:
+        matches, pcc = comp_pcc(unbounded[position], bounded[position], 0.999)
+        results[str(position)] = pcc
+        assert torch.isfinite(bounded[position]).all(), f"position {position} produced non-finite output"
+        assert matches, f"bounded and unbounded decode diverge at position {position}: {pcc}"
+
+    ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
+    (ARTIFACT_DIR / "bounded_modulo_decode_across_wrap.json").write_text(
+        json.dumps(
+            {
+                "model_id": MODEL_ID,
+                "layer_idx": layer_idx,
+                "sliding_window": SLIDING_WINDOW,
+                "total_steps": total_steps,
+                "probe_positions": list(probe_positions),
+                "bounded_vs_unbounded_pcc": results,
+                "provenance": _evidence_provenance(
+                    mesh_device,
+                    "pytest models/autoports/google_gemma_4_26b_a4b_it/tests/test_functional_decoder.py "
+                    "-k bounded_modulo_decode_reads_across_wrap",
+                ),
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n"
+    )
 
 
 @pytest.mark.timeout(1800)

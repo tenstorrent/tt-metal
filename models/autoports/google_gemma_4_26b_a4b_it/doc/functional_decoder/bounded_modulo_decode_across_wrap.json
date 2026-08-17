@@ -1,0 +1,38 @@
+{
+  "bounded_vs_unbounded_pcc": {
+    "1023": 1.0,
+    "1024": 1.0,
+    "1025": 1.0,
+    "1103": 1.0
+  },
+  "layer_idx": 0,
+  "model_id": "google/gemma-4-26B-A4B-it",
+  "probe_positions": [
+    1023,
+    1024,
+    1025,
+    1103
+  ],
+  "provenance": {
+    "artifact_dir": "models/autoports/google_gemma_4_26b_a4b_it/doc/functional_decoder",
+    "checkout_git_sha": "d5e4b9453fb31645836a2b6e332f363417549723",
+    "exact_command": "pytest models/autoports/google_gemma_4_26b_a4b_it/tests/test_functional_decoder.py -k bounded_modulo_decode_reads_across_wrap",
+    "functional_decoder_sha256": "61dd3e9a2809c2ee4337af9707ef45c2c24bde70855667abc8468d5642f93597",
+    "gemma4_environment": {},
+    "hardware": {
+      "arch": "Arch.BLACKHOLE",
+      "device_ids": [
+        3
+      ],
+      "platform": "Linux-6.17.0-40-generic-x86_64-with-glibc2.35"
+    },
+    "measured_decoder_path": "/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tt/functional_decoder.py",
+    "measured_decoder_sha256": "61dd3e9a2809c2ee4337af9707ef45c2c24bde70855667abc8468d5642f93597",
+    "multichip_test_sha256": "f1579fa50beb609c884ee04495ee3281a2d2d1f9bc7cd6728b48d2fcbaa07a69",
+    "test_sha256": "c5235aeaa529fbb3f160a97b3d06fdc9195dd76986e17a8abc668f061a7c6197",
+    "ttnn_extension_path": "/home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so",
+    "ttnn_extension_sha256": "afc66331e82642c313cb3ac799a0f58256c957d798fcc6e36194d0e60b4a62c2"
+  },
+  "sliding_window": 1024,
+  "total_steps": 1104
+}

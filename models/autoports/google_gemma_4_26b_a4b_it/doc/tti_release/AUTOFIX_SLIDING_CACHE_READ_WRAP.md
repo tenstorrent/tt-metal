@@ -31,9 +31,40 @@ Sites (all three decode paths had it):
 | `tt/multichip_decoder.py:875` / `:886` | yes | **no** |
 | `tt/functional_decoder.py:921` / `:938` | yes | **no** |
 
-Fix: pass the same `update_kwargs` the write side already builds to the SDPA
-decode call. `cache_position_modulo=1024` satisfies the op's constraints — it is
-a multiple of the sliding block size (64) and `>= sliding_window_size` (1024).
+### The fix, in the shape the code already had
+
+The reason the read drifted from the write is that **each call site assembled its
+own cache view**: `_cache_view_kwargs(prefill=...)` returned the block-size view,
+and every caller then bolted `cache_position_modulo` on separately — so one
+caller could simply not do it.
+
+So the modulo moves into that accessor, which now returns the complete view:
+
+```python
+def _cache_view_kwargs(self, *, prefill: bool, cache_position_modulo: int | None = None) -> dict[str, int]:
+    """Every op that touches the paged cache takes its view from here."""
+```
+
+and every paged-cache op — `paged_fill_cache`, `paged_update_cache`, and both
+SDPA reads — now takes `**cache_view` from a single call per decode/prefill.
+`_fill_prefill_cache` no longer accepts a caller-built `fill_kwargs` either; it
+derives the view itself from the modulo it is already given. After this, the
+write and the read of a given call cannot disagree, in any of the three decoders.
+
+`cache_position_modulo=1024` satisfies the op's constraints — it is a multiple of
+the sliding block size (64) and `>= sliding_window_size` (1024).
+
+### Regression test
+
+`tests/test_functional_decoder.py::test_bounded_modulo_decode_reads_across_wrap`
+is the read-side counterpart of the stage-04 write-side test. It decodes
+`sliding_window + 80` positions twice — once through a bounded 1024-token cache
+with the modulo, once through an unbounded cache without it — and requires equal
+attention output at positions 1023, 1024, 1025 and the last step. Because
+`sliding_window` makes both configurations attend to the same 1024 keys, any
+read-side wrap error appears at the first probe past the window. 13 s on one
+Blackhole chip. Evidence:
+`doc/functional_decoder/bounded_modulo_decode_across_wrap.json`.
 
 The shared `models/common/modules/attention/attention_1d.py` is **not** affected:
 it rejects `sliding_window` together with paged attention outright

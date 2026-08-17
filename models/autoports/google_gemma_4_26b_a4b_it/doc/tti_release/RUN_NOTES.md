@@ -101,3 +101,28 @@ The embedded runtime spec—not command-line overrides alone—sets `docker_serv
 - Stage review: **more-work-needed**; see `stage_review.md`. A clean-pass rereview is not possible while the unwaived mandatory GPQA gate fails.
 - Autofix terminal state: **FAILED** after exhausting isolated decode precision/op-path candidates without reaching 9/10. Per the stage goal, work stops at this terminal condition rather than weakening the task or context contract.
 - Cleanup/final hardware health: **PASS**. The TTI runner and autoport vLLM tmux sessions exited, no serving/engine process or container remains, `tt-smi -ls --local` reports all four P300C devices, and a post-run `ttnn.MeshShape(1, 4)` open/close passed. Transient workflow caches and raw sample dumps were removed after compact evidence was copied.
+
+## Status update 2026-08-17: the accuracy blocker is fixed
+
+The `meta_gpqa_cot` failure recorded above was a functional decode defect, not
+the numerical policy: `cache_position_modulo` reached the bounded sliding
+cache's writes but not its SDPA reads, so every generation crossing absolute
+position 1024 attended to folded cache blocks. See
+`AUTOFIX_SLIDING_CACHE_READ_WRAP.md` for the analysis, the position-dependence
+control, and the before/after generations.
+
+Consequences for the numbers above:
+
+- "Model-path Autofix localized the failure to iterative TT decode numerical
+  drift" is superseded. The index-15 divergence it cites is near-tie noise; the
+  precision ladder it drove (2/10 … 4/10 at 1,024 generated tokens) was
+  measuring corrupted generations, since 1,024 generated tokens crosses the
+  wrap for any prompt.
+- `meta_ifeval` passed partly because its TT run recorded no `max_gen_toks`, so
+  lm-eval's 256-token API default applied against the control's 1,280. Short
+  answers never reach position 1024. Set it explicitly on the rerun.
+
+Required before Stage 11 can be reclassified: rerun both mandatory evals with
+the fix and with IFEval's completion budget matched to its control. Not done on
+the debugging machine — it has no vLLM checkout, and the GPQA documents come
+from the gated `Idavidrein/gpqa` dataset.

@@ -589,7 +589,6 @@ class FunctionalDecoder(LightweightModule):
 
         key_cache, value_cache = kv_cache
         fill_table = chunk_page_table if chunk_page_table is not None else page_table
-        fill_kwargs = self._cache_view_kwargs(prefill=True)
         self._fill_prefill_cache(
             key_cache,
             value_cache,
@@ -599,7 +598,6 @@ class FunctionalDecoder(LightweightModule):
             user_id=user_id,
             logical_seq_len=logical_seq_len,
             cache_position_modulo=cache_position_modulo,
-            fill_kwargs=fill_kwargs,
         )
 
         attention_path = _prefill_attention_path(
@@ -647,19 +645,12 @@ class FunctionalDecoder(LightweightModule):
         user_id: int,
         logical_seq_len: int,
         cache_position_modulo: int | None,
-        fill_kwargs: dict[str, int],
     ) -> None:
         """Fill paged K/V without allowing padded rows to wrap over live data."""
+        fill_kwargs = self._cache_view_kwargs(prefill=True, cache_position_modulo=cache_position_modulo)
         if cache_position_modulo is None or logical_seq_len % TILE_SIZE == 0:
-            modulo_kwargs = (
-                {"cache_position_modulo": cache_position_modulo} if cache_position_modulo is not None else {}
-            )
-            ttnn.experimental.paged_fill_cache(
-                key_cache, k_heads, page_table, batch_idx=user_id, **fill_kwargs, **modulo_kwargs
-            )
-            ttnn.experimental.paged_fill_cache(
-                value_cache, v_heads, page_table, batch_idx=user_id, **fill_kwargs, **modulo_kwargs
-            )
+            ttnn.experimental.paged_fill_cache(key_cache, k_heads, page_table, batch_idx=user_id, **fill_kwargs)
+            ttnn.experimental.paged_fill_cache(value_cache, v_heads, page_table, batch_idx=user_id, **fill_kwargs)
             return
 
         aligned_prefix, tail_positions = _bounded_cache_fill_plan(logical_seq_len)
@@ -679,7 +670,6 @@ class FunctionalDecoder(LightweightModule):
                 k_prefix,
                 page_table,
                 batch_idx=user_id,
-                cache_position_modulo=cache_position_modulo,
                 **fill_kwargs,
             )
             ttnn.experimental.paged_fill_cache(
@@ -687,7 +677,6 @@ class FunctionalDecoder(LightweightModule):
                 v_prefix,
                 page_table,
                 batch_idx=user_id,
-                cache_position_modulo=cache_position_modulo,
                 **fill_kwargs,
             )
             k_prefix.deallocate(True)
@@ -707,8 +696,7 @@ class FunctionalDecoder(LightweightModule):
             )
             owns_page_table_row = True
         update_mem_config = _make_single_user_cache_update_memory_config(self.mesh_device, self.layer_kind.head_dim)
-        update_kwargs = self._cache_view_kwargs(prefill=False)
-        update_kwargs["cache_position_modulo"] = cache_position_modulo
+        update_kwargs = self._cache_view_kwargs(prefill=False, cache_position_modulo=cache_position_modulo)
         for position in tail_positions:
             k_token = ttnn.slice(
                 k_heads,
@@ -916,29 +904,22 @@ class FunctionalDecoder(LightweightModule):
             k_heads = ttnn.experimental.rotary_embedding_hf(k_heads, position_cos, position_sin, is_decode_mode=True)
 
         key_cache, value_cache = kv_cache
-        update_kwargs = self._cache_view_kwargs(prefill=False)
-        if cache_position_modulo is not None:
-            update_kwargs["cache_position_modulo"] = cache_position_modulo
+        cache_view = self._cache_view_kwargs(prefill=False, cache_position_modulo=cache_position_modulo)
         ttnn.experimental.paged_update_cache(
             key_cache,
             k_heads,
             update_idxs_tensor=current_pos,
             page_table=page_table,
-            **update_kwargs,
+            **cache_view,
         )
         ttnn.experimental.paged_update_cache(
             value_cache,
             v_heads,
             update_idxs_tensor=current_pos,
             page_table=page_table,
-            **update_kwargs,
+            **cache_view,
         )
 
-        # Same cache view as the updates above, including cache_position_modulo: the
-        # read side must wrap its page-table lookups exactly like the write side, or
-        # positions past the bounded sliding capacity fold onto physical block 0 and
-        # attend to the wrong tokens.
-        sdpa_kwargs = update_kwargs
         attn_out = ttnn.transformer.paged_scaled_dot_product_attention_decode(
             q_heads,
             key_cache,
@@ -949,7 +930,7 @@ class FunctionalDecoder(LightweightModule):
             sliding_window_size=kind.sliding_window,
             program_config=self.sdpa_program_config,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            **sdpa_kwargs,
+            **cache_view,
         )
         concat_mem_config = _make_decode_height_sharded_memory_config(
             self.mesh_device,
@@ -975,12 +956,22 @@ class FunctionalDecoder(LightweightModule):
             )
         return attn_out
 
-    def _cache_view_kwargs(self, *, prefill: bool) -> dict[str, int]:
-        if self.layer_kind.name != "full_attention":
-            return {}
-        kwargs = {"block_size": self.layer_kind.block_size}
-        if not prefill:
-            kwargs["num_kv_heads"] = self.layer_kind.num_kv_heads
+    def _cache_view_kwargs(self, *, prefill: bool, cache_position_modulo: int | None = None) -> dict[str, int]:
+        """Return the complete paged-cache view for one call.
+
+        Every op that touches the paged cache — ``paged_fill_cache``,
+        ``paged_update_cache`` and the SDPA reads — takes its view from here.
+        A write and a read that build the view separately can drift apart, and a
+        read missing ``cache_position_modulo`` folds every position past the
+        bounded sliding capacity onto physical block 0.
+        """
+        kwargs: dict[str, int] = {}
+        if self.layer_kind.name == "full_attention":
+            kwargs["block_size"] = self.layer_kind.block_size
+            if not prefill:
+                kwargs["num_kv_heads"] = self.layer_kind.num_kv_heads
+        if cache_position_modulo is not None:
+            kwargs["cache_position_modulo"] = cache_position_modulo
         return kwargs
 
     def _dense_mlp(self, x: ttnn.Tensor) -> ttnn.Tensor:
