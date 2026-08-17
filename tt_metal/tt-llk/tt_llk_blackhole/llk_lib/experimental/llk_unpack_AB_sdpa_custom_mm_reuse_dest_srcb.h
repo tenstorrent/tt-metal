@@ -36,7 +36,8 @@ using namespace ckernel::unpacker;
 // - nt_dim: 1 to 16
 // - kt_dim: even number from 2 to 256 (inclusive)
 // - kernel_broadcast_a = 0, kernel_broadcast_b = 0
-inline void _llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_mop_config_(const std::uint32_t nt_dim) {
+inline void _llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_mop_config_(const std::uint32_t nt_dim)
+{
     // Replay buffer layout (30 instructions):
     //   [0-26]:  9 reuse blocks with block_increment (3 insns each)
     //   [27-29]: 1 final reuse block with inner_increment (3 insns)
@@ -49,16 +50,21 @@ inline void _llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_mop_config_(const std:
     // Practical limit is 16 due to dst size.
 
     constexpr std::uint32_t REPLAY_BUF_LEN = 30;
-    load_replay_buf(0, REPLAY_BUF_LEN, [] {
-        for (std::uint32_t i = 0; i < 9; i++) {
+    load_replay_buf(
+        0,
+        REPLAY_BUF_LEN,
+        []
+        {
+            for (std::uint32_t i = 0; i < 9; i++)
+            {
+                TTI_UNPACR_COMMON(SrcA, 0b00000000, 1);
+                TTI_CFGSHIFTMASK(1, 3, 32 - 1, 0, 0, THCON_SEC0_REG3_Base_address_ADDR32);
+                TTI_NOP;
+            }
             TTI_UNPACR_COMMON(SrcA, 0b00000000, 1);
-            TTI_CFGSHIFTMASK(1, 3, 32 - 1, 0, 0, THCON_SEC0_REG3_Base_address_ADDR32);
+            TTI_CFGSHIFTMASK(1, 3, 32 - 1, 0, 1, THCON_SEC0_REG3_Base_address_ADDR32);
             TTI_NOP;
-        }
-        TTI_UNPACR_COMMON(SrcA, 0b00000000, 1);
-        TTI_CFGSHIFTMASK(1, 3, 32 - 1, 0, 1, THCON_SEC0_REG3_Base_address_ADDR32);
-        TTI_NOP;
-    });
+        });
 
     // Mop covers two k-rows per iteration, allowing up to 256 kt_dim with 128 MOP iterations.
     // zmask is always 0 (skip path never used), which is required for iterations beyond 32.
@@ -75,10 +81,10 @@ inline void _llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_mop_config_(const std:
     // nt_dim == 1: B-mode (A0 + B), both pointing to the inner_increment block
     // nt_dim >= 2: Halo-mode (A0, A1, A2, A3), alternating first_half/second_half
 
-    const std::uint32_t first_half_iters = (nt_dim + 1) >> 1;
+    const std::uint32_t first_half_iters  = (nt_dim + 1) >> 1;
     const std::uint32_t second_half_iters = nt_dim >> 1;
 
-    const std::uint32_t first_half = lltt::replay_insn(0, first_half_iters * 3);
+    const std::uint32_t first_half  = lltt::replay_insn(0, first_half_iters * 3);
     const std::uint32_t second_half = lltt::replay_insn(REPLAY_BUF_LEN - second_half_iters * 3, second_half_iters * 3);
 
     // For nt_dim == 1: only inner_increment block is needed, use B-mode
@@ -87,15 +93,15 @@ inline void _llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_mop_config_(const std:
     const std::uint32_t single_tile = lltt::replay_insn(REPLAY_BUF_LEN - 3, 3);
 
     ckernel_unpack_template tmp = ckernel_unpack_template(
-        nt_dim == 1,                             // B-mode when single tile per k-row
-        nt_dim != 1,                             // Halo-mode when multiple tiles per k-row
-        nt_dim == 1 ? single_tile : first_half,  // A0
-        second_half,                             // A1
-        nt_dim == 1 ? single_tile : first_half,  // A2
-        second_half,                             // A3
-        0,                                       // Skip A (unused, zmask always 0)
-        single_tile,                             // B (used in B-mode for nt_dim==1)
-        0                                        // Skip B (unused)
+        nt_dim == 1,                            // B-mode when single tile per k-row
+        nt_dim != 1,                            // Halo-mode when multiple tiles per k-row
+        nt_dim == 1 ? single_tile : first_half, // A0
+        second_half,                            // A1
+        nt_dim == 1 ? single_tile : first_half, // A2
+        second_half,                            // A3
+        0,                                      // Skip A (unused, zmask always 0)
+        single_tile,                            // B (used in B-mode for nt_dim==1)
+        0                                       // Skip B (unused)
     );
 
     tmp.program();
@@ -103,12 +109,11 @@ inline void _llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_mop_config_(const std:
 }
 
 __attribute__((always_inline)) inline void _llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_init_(
-    const std::uint32_t nt_dim = 1,
-    const std::uint32_t unpA_face_r_dim = FACE_R_DIM,
-    const std::uint32_t unpA_num_faces = 4) {
+    const std::uint32_t nt_dim = 1, const std::uint32_t unpA_face_r_dim = FACE_R_DIM, const std::uint32_t unpA_num_faces = 4)
+{
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0);
 
-    const uint32_t unpA_x_end = unpA_num_faces * unpA_face_r_dim * FACE_C_DIM - 1;
+    const std::uint32_t unpA_x_end = unpA_num_faces * unpA_face_r_dim * FACE_C_DIM - 1;
     TT_SETADCXX(p_setadc::UNP_A, unpA_x_end, 0x0);
 
     _llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_mop_config_(nt_dim);
@@ -126,12 +131,13 @@ inline void _llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_(
     const std::uint32_t base_address_a,
     const std::uint32_t tile_index_a,
     const std::uint32_t tile_size_a,
-    const std::uint32_t kt_dim = 1,
-    const std::uint32_t nt_dim = 1,
-    const std::uint32_t in1_k_stride = 1) {
-    volatile uint* cfg = get_cfg_pointer();
+    const std::uint32_t kt_dim       = 1,
+    const std::uint32_t nt_dim       = 1,
+    const std::uint32_t in1_k_stride = 1)
+{
+    volatile std::uint32_t* cfg = get_cfg_pointer();
 
-    const std::uint32_t address_a = base_address_a + tile_size_a * tile_index_a;
+    const std::uint32_t address_a       = base_address_a + tile_size_a * tile_index_a;
     const std::uint32_t block_increment = tile_size_a;
     // inner_increment: after (nt_dim-1) block_increments we're at the last tile of the k-row.
     // We need to jump to the first tile of the next k-row.
@@ -145,8 +151,8 @@ inline void _llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_(
     reset_config_context();
 
     cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address_a;
-    cfg[SCRATCH_SEC0_val_ADDR32] = block_increment;
-    cfg[SCRATCH_SEC1_val_ADDR32] = inner_increment;
+    cfg[SCRATCH_SEC0_val_ADDR32]             = block_increment;
+    cfg[SCRATCH_SEC1_val_ADDR32]             = inner_increment;
 
     semaphore_post(semaphore::UNPACK_SYNC);
 

@@ -3,7 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include "../../../../../third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb.h"
+#include <cstdint>
+#include "experimental/llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb.h"
 #include "llk_unpack_common_api.h"
 
 /*************************************************************************
@@ -25,8 +26,8 @@ __attribute__((always_inline)) inline void llk_unpack_AB_sdpa_custom_mm_reuse_de
     const std::uint32_t nt_dim = 1) {
     const std::uint32_t operandA_id = get_operand_id(operand1);
 
-    const uint32_t unpA_face_r_dim = get_operand_face_r_dim(operandA_id);
-    const uint32_t unpA_num_faces = get_operand_num_faces(operandA_id);
+    const std::uint32_t unpA_face_r_dim = get_operand_face_r_dim(operandA_id);
+    const std::uint32_t unpA_num_faces = get_operand_num_faces(operandA_id);
 
     _llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_init_(nt_dim, unpA_face_r_dim, unpA_num_faces);
 }

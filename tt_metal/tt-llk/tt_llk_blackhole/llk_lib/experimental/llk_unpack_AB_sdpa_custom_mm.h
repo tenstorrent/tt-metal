@@ -28,8 +28,9 @@ inline void _llk_unpack_AB_sdpa_custom_mm_(
     const std::uint32_t tile_size_b,
     const std::uint32_t kt_dim,
     const std::uint32_t ct_dim = 1,
-    const bool mask_chunk = false) {
-    volatile uint* cfg = get_cfg_pointer();
+    const bool mask_chunk      = false)
+{
+    volatile std::uint32_t* cfg         = get_cfg_pointer();
     const std::uint32_t block_increment = read_transposed ? kt_dim * tile_size_a : tile_size_a;
     const std::uint32_t inner_increment = read_transposed ? -(((ct_dim - 1) * kt_dim) - 1) * tile_size_a : tile_size_a;
 
@@ -40,7 +41,8 @@ inline void _llk_unpack_AB_sdpa_custom_mm_(
     wait_for_next_context(1);
     reset_config_context();
 
-    if (mask_chunk) {
+    if (mask_chunk)
+    {
         cfg[THCON_SEC1_REG3_Base_cntx1_address_ADDR32] = base_address_mask;
         TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
         TTI_UNPACR_COMMON_EXPLICIT_CONTEXT(SrcB, 0b00000000, 1, 1);
