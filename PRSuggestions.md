@@ -1,4 +1,4 @@
-# Voxtral-TTS pipeline run: eight things worth fixing
+# Pipeline improvement proposals
 
 We took Voxtral-TTS, a 4B text to speech model with three stacks, through the whole pipeline on a
 single p150b. Eight things worth fixing. Point 3 is the root of point 4, so they are one job and the
