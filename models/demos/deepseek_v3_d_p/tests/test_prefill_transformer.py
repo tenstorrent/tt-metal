@@ -1217,12 +1217,33 @@ def test_glm_prefill_transformer(
         # Loading is layer-by-layer, so host memory stays flat regardless of num_layers.
         ("random", False, True),
         ("json_prompts", False, True),
+        # Full-model PCC against the layer-by-layer CPU reference. No golden trace needed:
+        # find_trace_dir returns None for this input_source, so run_model falls through to
+        # computing the reference itself (load_and_compute_layer_by_layer(compute_reference=True)),
+        # which is memory-flat. This is the only full-model NUMERICAL check available for Mistral
+        # until a golden trace exists -- the smoke rows above prove wiring, not numerics.
+        #
+        # CURRENTLY XFAIL, with two distinct causes that must not be conflated:
+        #   1. REAL: per-layer PCC decays monotonically 0.9993 (layer_0) -> 0.9747 (layer_15) ->
+        #      ~0.9415 (layer_27), i.e. a small per-layer error that compounds and drops below the
+        #      0.97 bar from layer_16 on. Prime suspect is the BFLOAT4_B expert weight dtype: Mistral
+        #      activates only 4 of 128 experts at moe_intermediate 2048, so 4-bit expert error is
+        #      diluted less than it is for DeepSeek/Kimi. Try a higher-precision expert dtype first.
+        #   2. LIKELY ARTIFACT: layer_32..34 read 0.17-0.21 and layer_35 0.46, which is inconsistent
+        #      with `norm` at 0.959, `lm_head` at 0.962, and an EXACT first-token match against the
+        #      reference. norm is computed from layer_35's output, so hidden states really at 0.2
+        #      could not yield a 0.96 norm and the same argmax token. Isolate the comparison for the
+        #      tail layers before treating these as a numerics bug.
+        # Every `*_kvpe_*` entry reports -1.0, which `_compare_intermediate_pcc` returns for
+        # "missing from TT intermediates" -- a harness gap for this variant, not a device result.
+        pytest.param("json_prompts", True, True, marks=pytest.mark.xfail(reason="see comment above", strict=False)),
     ],
     ids=[
         "smoke-random-random",
         "smoke-json_prompts-random",
         "smoke-random-pretrained",
         "smoke-json_prompts-pretrained",
+        "pcc-json_prompts-pretrained",
     ],
 )
 @pytest.mark.parametrize("is_balanced", [False], ids=["non_balanced"])

@@ -65,8 +65,35 @@ lm_head -> sample, at production shapes on 32 chips. Measured so far, all at `(8
 | transformer, 2 layers, **real checkpoint** | passed |
 | **transformer, all 36 layers, real checkpoint** | **passed** — 870 s cold (builds the cache), **54 s warm**, `tt_forward` ~3.0 s |
 
-Treat these as the regression baseline, not as proof the model is right — none of them is a
-tight-tolerance comparison against a captured golden.
+### ⚠ Full-model numerics: measured, and NOT yet correct
+
+The rows above are **smoke** runs — they prove wiring, not numerics. The full-model PCC check now
+exists (`pcc-json_prompts-pretrained`, no golden trace needed — the reference is computed
+layer-by-layer) and it **fails**. Two separate things in that failure:
+
+**Real:** per-layer PCC decays monotonically and compounds.
+
+```
+embed    1.000000     layer_11 0.992188     layer_20 0.946975     layer_28 0.904723
+layer_0  0.999347     layer_13 0.983110     layer_23 0.942357     layer_31 0.905825
+layer_5  0.998855     layer_15 0.974683 ←   layer_27 0.941491     norm     0.959047
+layer_9  0.996916     layer_16 0.965732 ✗   (last PASS at 15)     lm_head  0.962114
+```
+
+Bar is 0.97, so it drops out from layer_16 on. Prime suspect: expert weights are stored
+**`BFLOAT4_B`** and Mistral activates only 4 of 128 experts at `moe_intermediate 2048`, so 4-bit
+expert error is diluted less here than for DeepSeek/Kimi. **Try a higher-precision expert dtype
+first.**
+
+**Likely an artifact, do not chase as numerics:** `layer_32..34` read 0.17–0.21 and `layer_35` 0.46,
+which cannot be reconciled with `norm` 0.959, `lm_head` 0.962, and an **exact first-token match**
+against the reference. `norm` is computed from `layer_35`'s output. Isolate the tail-layer comparison
+before believing those four numbers. Likewise every `*_kvpe_*` entry reports `-1.0`, which is
+`_compare_intermediate_pcc`'s "missing from TT intermediates" — a harness gap for this variant.
+
+**The one unambiguously good number:** the full 36-layer model with real weights picks the **same
+next token as the HF reference** — `ID=2 ['</s>']` at position 1023, `TT==HF match: True`. So the
+output token is right even though the intermediate hidden states drift.
 
 Two things to know about the adapter as written:
 

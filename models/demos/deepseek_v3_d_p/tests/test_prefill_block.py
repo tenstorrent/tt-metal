@@ -13,7 +13,6 @@ randomly-initialized HF reference layer so the test still runs without weights.
 """
 
 import copy
-import inspect
 import json
 import os
 from dataclasses import dataclass
@@ -338,20 +337,9 @@ def run_model(
             #     REQUIRE `position_embeddings`, because rope moved up to the model level. Omitting
             #     it is a `cannot unpack non-iterable NoneType` inside the attention, and passing the
             #     singular cache name silently lands in **kwargs so no KV is ever captured.
-            layer_fwd_params = inspect.signature(hf_model.layers[layer_idx].forward).parameters
-            layer_kwargs = {
-                "attention_mask": attention_mask,
-                "position_ids": position_ids,
-                "use_cache": True,
-            }
-            layer_kwargs["past_key_values" if "past_key_values" in layer_fwd_params else "past_key_value"] = ref_cache
-            if "position_embeddings" in layer_fwd_params:
-                rotary_emb = getattr(hf_model, "rotary_emb", None)
-                assert rotary_emb is not None, (
-                    f"{type(hf_model).__name__}.layers[{layer_idx}] wants position_embeddings but the "
-                    "model exposes no rotary_emb to build them from"
-                )
-                layer_kwargs["position_embeddings"] = rotary_emb(torch_input, position_ids)
+            layer_kwargs = decoder_layer_kwargs(
+                hf_model.layers[layer_idx], hf_model, torch_input, attention_mask, position_ids, ref_cache
+            )
             with torch.no_grad():
                 layer_out = hf_model.layers[layer_idx](torch_input, **layer_kwargs)
                 torch_output = layer_out[0] if isinstance(layer_out, (tuple, list)) else layer_out

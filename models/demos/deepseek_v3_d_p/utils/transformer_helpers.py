@@ -13,6 +13,7 @@ Provides:
 """
 
 import gc
+import inspect
 import json
 import os
 from copy import deepcopy
@@ -211,6 +212,43 @@ def create_hf_model(variant, config, num_layers, n_routed_experts=None):
 
     model = variant.reference_model_cls(test_config)
     return model.eval().to(torch.bfloat16)
+
+
+def decoder_layer_kwargs(hf_layer, hf_model, hidden_states, attention_mask, position_ids, cache, use_cache=True):
+    """Keyword arguments for calling one reference decoder layer, bound to ITS OWN signature.
+
+    Reference layers differ across transformers generations and getting it wrong fails in two
+    distinct ways, neither of which points at the cause:
+
+      * the cache kwarg is ``past_key_value`` on the vendored DeepSeek/Kimi layers and
+        ``past_key_values`` on transformers >= 5. The wrong name lands silently in ``**kwargs``, so
+        no KV is ever captured and a later cache comparison comes up empty or mis-shaped;
+      * transformers >= 5 moved rope to the MODEL level and made ``position_embeddings`` required, so
+        omitting it raises ``TypeError: cannot unpack non-iterable NoneType`` from inside attention.
+
+    Rope is built and evaluated in FLOAT32 and cast down. Computing it in bf16 loses the low bits of
+    ``position * inv_freq``, so the phase error grows with position -- measured on Mistral at
+    qk_rope_head_dim=64 it holds to ~2k tokens then falls off (0.99997 at seq 512, 0.958 at 5120),
+    which reads exactly like a device bug and is not one.
+    """
+    params = inspect.signature(hf_layer.forward).parameters
+    kwargs = {
+        "attention_mask": attention_mask,
+        "position_ids": position_ids,
+        "use_cache": use_cache,
+    }
+    kwargs["past_key_values" if "past_key_values" in params else "past_key_value"] = cache
+    if "position_embeddings" in params:
+        rotary = getattr(hf_model, "rotary_emb", None)
+        assert rotary is not None, (
+            f"{type(hf_layer).__name__} requires position_embeddings but "
+            f"{type(hf_model).__name__} exposes no rotary_emb to build them from"
+        )
+        rotary_f32 = deepcopy(rotary).float()
+        with torch.no_grad():
+            cos, sin = rotary_f32(hidden_states.float(), position_ids)
+        kwargs["position_embeddings"] = (cos.to(hidden_states.dtype), sin.to(hidden_states.dtype))
+    return kwargs
 
 
 def _extract_routed_experts_flat(layer_sd, n_routed):
@@ -665,12 +703,11 @@ def load_and_compute_layer_by_layer(
             with torch.no_grad():
                 layer_out = hf_model.layers[i](
                     h_ref,
-                    attention_mask=attention_mask,
-                    position_ids=position_ids,
-                    past_key_value=ref_cache,
-                    use_cache=True,
+                    **decoder_layer_kwargs(
+                        hf_model.layers[i], hf_model, h_ref, attention_mask, position_ids, ref_cache
+                    ),
                 )
-                h_ref = layer_out[0]
+                h_ref = layer_out[0] if isinstance(layer_out, (tuple, list)) else layer_out
             ref_snapshots.append(h_ref)
 
             # Clear layer weights from hf_model
