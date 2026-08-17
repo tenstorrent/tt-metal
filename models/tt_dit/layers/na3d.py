@@ -908,10 +908,20 @@ def neighborhood_attention_3d_op_sp_w_sharded(
 
     # Flatten W-outer so a contiguous sequence is a W-band; heads merged then re-split so the spatial
     # reorder is one 5D permute. ``w_`` is this chip's W extent (K/V and Q are the same shard here).
+    #
+    # DIFFVAE_SP_TINNER=1 makes T (the smallest axis — band frames) the INNERMOST flatten axis instead
+    # of H. The fused kernel's conservative box blows up along whichever axis a q_chunk spans, so a
+    # 128-query chunk over H (272) is a 128-tall strip (box_h = kh+127) while over T (~4-8) it wraps
+    # into a compact (H-span x T) patch (box ~ kw x (kh+H_span-1) x t_full) -- ~7x fewer box keys at
+    # 1080p. W stays outermost so the SP all-gather still rebuilds the full W-outer sequence. This is
+    # a pure host reorder: the op decodes coords from the grid arg, agnostic to which axis is which.
+    t_inner = os.environ.get("DIFFVAE_SP_TINNER", "1") == "1"
+
     def to_seq(x: ttnn.Tensor, w_: int) -> ttnn.Tensor:
         x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
         x = ttnn.reshape(x, (batch, t_full, h_full, w_, width))
-        x = ttnn.permute(x, (0, 3, 1, 2, 4))  # (B, w_, T, H, width)
+        # (B, w_, H, T, width) [T innermost] or (B, w_, T, H, width) [H innermost].
+        x = ttnn.permute(x, (0, 3, 2, 1, 4) if t_inner else (0, 3, 1, 2, 4))
         x = ttnn.reshape(x, (batch, w_ * t_full * h_full, heads, head_dim))
         x = ttnn.permute(x, (0, 2, 1, 3))  # (B, NH, S, HD)
         return ttnn.to_layout(x, ttnn.TILE_LAYOUT)
@@ -936,6 +946,9 @@ def neighborhood_attention_3d_op_sp_w_sharded(
 
         def wrow(x: ttnn.Tensor) -> ttnn.Tensor:
             x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+            # Page = the innermost-axis row: (w,h)-paged T-rows when t_inner, else (w,t)-paged H-rows.
+            if t_inner:
+                return ttnn.reshape(x, (batch, heads, w_full * h_full, t_full * head_dim))
             return ttnn.reshape(x, (batch, heads, w_full * t_full, h_full * head_dim))
 
         tk, tv = wrow(tk), wrow(tv)
@@ -958,7 +971,8 @@ def neighborhood_attention_3d_op_sp_w_sharded(
             tk,
             tv,
             is_causal=False,
-            neighborhood_3d=(w_full, t_full, h_full, kw, kt, kh),  # grid given W-outer to match the flatten
+            # Grid axis order must match the flatten (innermost last): (w,h,t) when t_inner else (w,t,h).
+            neighborhood_3d=((w_full, h_full, t_full, kw, kh, kt) if t_inner else (w_full, t_full, h_full, kw, kt, kh)),
             neighborhood_gather=use_fused,
             scale=scale,
             windowed_q_token_offset=0,
@@ -977,9 +991,13 @@ def neighborhood_attention_3d_op_sp_w_sharded(
         heads = full_heads
         width = heads * head_dim
 
-    # (B, NH, seq_local, HD) -> W-outer (B, W_local, T, H, width) -> (B, T, H, W_local, width), sharded.
+    # (B, NH, seq_local, HD) -> W-outer volume -> (B, T, H, W_local, width), sharded. The un-flatten
+    # must mirror to_seq's axis order: (w,h,t) when t_inner, else (w,t,h).
     attended = ttnn.to_layout(attended, ttnn.ROW_MAJOR_LAYOUT)
-    attended = ttnn.permute(attended, (0, 2, 1, 3))
+    attended = ttnn.permute(attended, (0, 2, 1, 3))  # (B, seq_local, NH, HD)
+    if t_inner:
+        attended = ttnn.reshape(attended, (batch, w_local, h_full, t_full, width))
+        return ttnn.permute(attended, (0, 3, 2, 1, 4))  # (B, T, H, W_local, width)
     attended = ttnn.reshape(attended, (batch, w_local, t_full, h_full, width))
     return ttnn.permute(attended, (0, 2, 3, 1, 4))  # (B, T, H, W_local, width)
 
