@@ -306,22 +306,23 @@ def test_layer_forward_real_weights(batch_size, seq_len, layer_idx, mesh_device,
 # ── Decode Layer Test (fully on device) ───────────────────────────────────
 
 
-@parametrize_mesh_with_fabric()
-@pytest.mark.parametrize("layer_idx", [0], ids=["sliding"])
-def test_layer_forward_decode(layer_idx, mesh_device, reset_seeds, request):
-    """
-    Full decoder layer decode test (seq_len=1, fully on device).
+def _run_layer_decode(layer_idx, mesh_device, request, real_weights, label):
+    """Decode-layer PCC body, shared by the random-init and real-weight tests.
 
-    Uses KV cache pre-filled with random data, then decodes one token.
-    Compares against HF reference with same KV cache state.
+    Split out rather than parametrized on a ``weights`` axis: an extra axis
+    would rename the existing ``test_layer_forward_decode`` nodes and strand
+    their pcc_thresholds.json entries on the 0.99 default.
     """
     from transformers.cache_utils import DynamicCache
     from transformers.models.gemma4.modeling_gemma4 import Gemma4TextRotaryEmbedding
 
     from models.demos.gemma4.tt.attention import Gemma4AttentionConfig
 
-    hf_text_config = _create_hf_text_config(num_experts=4, top_k=2)
+    hf_text_config = _create_hf_text_config() if real_weights else _create_hf_text_config(num_experts=4, top_k=2)
     hf_layer = _create_hf_reference_layer(hf_text_config, layer_idx)
+    if real_weights:
+        load_real_weights_into(hf_layer, f"layers.{layer_idx}")
+        hf_layer.eval()
     hf_state = hf_layer.state_dict()
     tt_state = _hf_state_to_tt_state(hf_state, layer_idx)
     model_args = _create_gemma4_model_args(hf_text_config)
@@ -455,4 +456,33 @@ def test_layer_forward_decode(layer_idx, mesh_device, reset_seeds, request):
 
     # Relaxed threshold for decode: MoE router bf16 topk can pick different experts
     passing, pcc_msg = compare_tensors(tt_output_torch, hf_output, pcc_threshold=get_pcc_threshold(request))
-    assert passing, f"Full layer decode (layer_idx={layer_idx}, tp={tp}) PCC too low: {pcc_msg}"
+    assert passing, f"Full layer decode {label} (layer_idx={layer_idx}, tp={tp}) PCC too low: {pcc_msg}"
+
+
+@parametrize_mesh_with_fabric()
+@pytest.mark.parametrize("layer_idx", [0], ids=["sliding"])
+def test_layer_forward_decode(layer_idx, mesh_device, reset_seeds, request):
+    """
+    Full decoder layer decode test (seq_len=1, fully on device).
+
+    Uses KV cache pre-filled with random data, then decodes one token.
+    Compares against HF reference with same KV cache state.
+    """
+    _run_layer_decode(layer_idx, mesh_device, request, real_weights=False, label="random-init")
+
+
+@parametrize_mesh_with_fabric()
+@pytest.mark.parametrize("layer_idx", [0], ids=["sliding"])
+def test_layer_forward_decode_real_weights(layer_idx, mesh_device, reset_seeds, request):
+    """Full decoder layer decode on the checkpoint's trained weights.
+
+    The decode counterpart to ``test_layer_forward_real_weights``: same layer,
+    same real norms and projections, but through the seq_len=1 path with a
+    pre-filled KV cache — so the input LayerNorm's real scale (up to ~190 on 12B
+    layer 0) drives the decode QKV and the residual adds, which the prefill test
+    never reaches.
+
+    Unlike the random-init test this cannot reduce the expert count on a MoE
+    variant, since the real weights carry the real one.
+    """
+    _run_layer_decode(layer_idx, mesh_device, request, real_weights=True, label="real-weights")
