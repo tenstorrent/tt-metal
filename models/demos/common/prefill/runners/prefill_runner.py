@@ -731,12 +731,6 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     d2h_service = None
     layer_ack_service = None
     producer = None
-    # Completion checking (master rank only, test-only): a consumer that stands in for the scheduler
-    # on the master's counter channel, to verify aggregated per-(chunk, layer) completions. See
-    # scheduler_standins.CompletionCheckConsumer. Gated by PREFILL_CHECK_COMPLETIONS=1 so it never competes with a real
-    # scheduler consuming the same channel in production.
-    completion_check = None
-    check_completions = os.environ.get("PREFILL_CHECK_COMPLETIONS", "0") == "1"
     # The single-rank LayerAck channel is the scheduler's per-layer signal (it drives migration).
     # Opt-in: creating it unconditionally makes two concurrent single-rank runs sharing a service_id
     # collide on the same /dev/shm segment. Defaults on when migration is enabled (its only consumer);
@@ -1064,11 +1058,6 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             f"ring={ring_shm_name} source={source_desc} "
             + (f"(owns scheduler channel {ack_shm_name})" if rank == master_rank else "(subordinate -> master)")
         )
-
-        if rank == master_rank and check_completions:
-            from models.demos.common.prefill.runners.scheduler_standins import CompletionCheckConsumer
-
-            completion_check = CompletionCheckConsumer(ack_shm_name, num_layers=NUM_LAYERS)
     elif single_rank and enable_layer_ack:
         # Single-rank non-D2H direct path: the runtime owns + inject()s the scheduler counter channel
         # directly (on_layer_complete fires per layer inside the model). Works traced or untraced.
@@ -1121,12 +1110,6 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             producer.shutdown()
         if router is not None:
             router.stop()  # joins the listener; the master's final ring-drain + inject happens HERE
-        if completion_check is not None:
-            # Tally AFTER router.stop(): the master injects its own trailing completions during the
-            # listener's final drain (inside stop()). The consumer's mapping survives the owner's
-            # shm_unlink (POSIX), so it still reads those — tallying earlier would miss them and
-            # falsely report "count short". router.stop() unlinks the channel on the master.
-            completion_check.stop_and_report()
         if ack_channel is not None:
             ack_channel.shutdown()  # munmap + shm_unlink
             ack_channel = None
