@@ -44,8 +44,8 @@ from ....utils.tracing import Tracer
 )
 @pytest.mark.parametrize(
     "device_params",
-    # 60MB covers the 2x2 mesh, whose trace measured 47636480B in run 31911772448 —
-    # fewer chips means more of the model per device, so a bigger trace than 2x4/4x8 need.
+    # 60MB covers the 2x2 mesh, whose trace measured 47636480B in run 31911772448.
+    # Larger meshes don't actually need this much memory but just keep the size the same for simplicity.
     [{**line_params_req_exact_devices, "trace_region_size": 60000000}],
     ids=["line"],
     indirect=True,
