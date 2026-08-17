@@ -303,6 +303,7 @@ NB_MODULE(_ttnn, mod) {
     ttnn::mesh_socket::py_module_types(m_mesh_socket);
     ttnn::reports::py_module_types(m_reports);
     ttnn::program_descriptors::py_module_types(m_program_descriptors);
+    ttnn::program_specs::py_module_types(m_program_specs);
     ttnn::tensor_accessor_args::py_module_types(m_tensor_accessor_args);
     ttnn::mcast_host::py_module_types(m_mcast_host);
 
