@@ -17,7 +17,7 @@ namespace ttnn::operations::experimental::deepseek_prefill::combine_fabric2d {
 // with the same id continues in the same direction on the same plane.
 using StreamId = uint32_t;
 
-constexpr StreamId make_stream_id(uint32_t link_idx, bool forward) { return link_idx * 2 + (forward ? 0u : 1u); }
+constexpr StreamId make_stream_id(uint32_t link_idx, bool is_cw) { return link_idx * 2 + (is_cw ? 0u : 1u); }
 constexpr uint32_t stream_count(uint32_t num_links) { return num_links * 2; }
 
 struct StreamPlacement {

@@ -39,7 +39,6 @@ namespace {
 constexpr uint32_t PKT_HDR_DRAIN_OFF = 0x0000;
 constexpr uint32_t DRAIN_SINK_OFF = 0x0400;
 constexpr uint32_t PROD_BUF_OFF = 0x1000;
-constexpr uint32_t L1_SLACK = 0x1000;
 static_assert(PKT_HDR_DRAIN_OFF < DRAIN_SINK_OFF, "drain sink overlaps the drain packet header");
 static_assert(DRAIN_SINK_OFF < PROD_BUF_OFF, "drain sink overlaps the token ring");
 
@@ -56,9 +55,9 @@ uint32_t fwd_pages_per_chunk(
     uint32_t seq_len_per_chip,
     uint32_t num_experts_per_tok,
     uint32_t num_dispatch_groups,
-    uint32_t dispatch_group_size,
+    uint32_t ring_extent,
     uint32_t num_links) {
-    const uint32_t denom = num_dispatch_groups * dispatch_group_size * num_links;
+    const uint32_t denom = num_dispatch_groups * ring_extent * num_links;
     const uint32_t mean = (seq_len_per_chip * num_experts_per_tok + denom - 1) / denom;
     return 4 * mean + 1;
 }
@@ -76,7 +75,7 @@ L1Layout compute_l1_layout(
     l.drain_sink = base + DRAIN_SINK_OFF;
     l.ring = base + PROD_BUF_OFF;
     // One prebuilt header per ring slot, past the ring itself. A slot is the token plus its metadata tail.
-    l.pkt_hdr_ring = l.ring + num_l1_slots * (token_size_bytes + cmbf2d::SLOT_TAIL_BYTES);
+    l.pkt_hdr_ring = l.ring + num_l1_slots * (token_size_bytes + cmbf2d::FORWARDING_METADATA_SIZE);
     const uint32_t hdr_ring_bytes =
         num_l1_slots * static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_packet_header_size_bytes());
     // 64-byte aligned: DRAM reads need a DRAM_ALIGNMENT-aligned L1 destination on Blackhole
@@ -84,7 +83,7 @@ L1Layout compute_l1_layout(
     l.control = (l.pkt_hdr_ring + hdr_ring_bytes + 63u) & ~63u;
     const uint32_t end = l.control + control_bytes;
     TT_FATAL(
-        end + L1_SLACK <= sem_floor,
+        end <= sem_floor,
         "combine_fabric2d: L1 layout needs {} B (ends at 0x{:x}) but the global-semaphore region starts at "
         "0x{:x}. Reduce num_l1_slots ({}) or the token page ({} B).",
         end - base,
@@ -182,13 +181,11 @@ ForwardingBuffer allocate_forwarding_buffer(
         args.seq_len_per_chip,
         args.num_experts_per_tok,
         num_dispatch_groups(args, tensor_args),
-        args.dispatch_group_size,
+        ring_extent(args),
         args.num_links);
-    const uint32_t page_bytes = token_size_bytes(tensor_args) + cmbf2d::SLOT_TAIL_BYTES;
+    const uint32_t page_bytes = token_size_bytes(tensor_args) + cmbf2d::FORWARDING_METADATA_SIZE;
     TT_FATAL(
-        page_bytes % sizeof(uint32_t) == 0,
-        "combine_fabric2d: forwarding page {} B must be a multiple of 4",
-        page_bytes);
+        page_bytes % 64 == 0, "combine_fabric2d: forwarding page {} B must be 64-byte aligned for DRAM", page_bytes);
     const uint32_t pages = relay_chunks_per_mesh(ring_extent(args), args.num_links) * fwd.pages_per_chunk;
     const tt::tt_metal::TensorSpec spec(
         ttnn::Shape({pages, page_bytes / static_cast<uint32_t>(sizeof(uint32_t))}),
@@ -206,7 +203,7 @@ ForwardingBuffer allocate_forwarding_buffer(
         "The token page + {} must be a multiple of the DRAM alignment.",
         fwd.buffer->aligned_page_size(),
         page_bytes,
-        cmbf2d::SLOT_TAIL_BYTES);
+        cmbf2d::FORWARDING_METADATA_SIZE);
     return fwd;
 }
 
@@ -224,7 +221,7 @@ KernelPlan make_kernel_plan(
     // Which of the `num_routed_experts` columns this chip hosts. The dispatch group is this device's position
     // on the OTHER mesh axis; with one group per column of a 2D mesh that is just the other coordinate. Same
     // derivation as the production reader's compile-time `offset`.
-    const uint32_t experts_per_group = args.experts_per_chip * args.dispatch_group_size;
+    const uint32_t experts_per_group = args.experts_per_chip * ring_extent(args);
     const uint32_t my_group = args.device->shape().dims() > 1 ? coord[static_cast<int32_t>(args.axis == 0 ? 1 : 0)] %
                                                                     num_dispatch_groups(args, tensor_args)
                                                               : 0u;
@@ -239,7 +236,7 @@ KernelPlan make_kernel_plan(
 // token_size, and its free half is only 32-byte aligned).
 uint32_t control_region_bytes(const CombineFabric2dParams& args, const CombineFabric2dInputs& tensor_args) {
     return cmbf2d::META_PREFETCH * cmbf2d::META_PAD_STRIDE +
-           static_cast<uint32_t>(sizeof(uint32_t)) * num_routed_experts(tensor_args) * (args.dispatch_group_size + 2);
+           static_cast<uint32_t>(sizeof(uint32_t)) * num_routed_experts(tensor_args) * (ring_extent(args) + 2);
 }
 
 tt::tt_metal::ProgramDescriptor build_program_for_coord(

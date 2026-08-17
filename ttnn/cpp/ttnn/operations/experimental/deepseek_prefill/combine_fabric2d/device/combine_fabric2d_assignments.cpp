@@ -72,12 +72,12 @@ std::map<StreamId, std::vector<Assignment>> generate_assignments(
 
     std::map<StreamId, std::vector<Assignment>> per_stream;
     for (uint32_t link = 0; link < num_links; link++) {
-        for (bool forward : {true, false}) {
-            const StreamId stream = make_stream_id(link, forward);
+        for (bool is_cw : {true, false}) {
+            const StreamId stream = make_stream_id(link, is_cw);
             auto& list = per_stream[stream];
 
             auto own = [&](uint32_t distance, uint32_t split_idx, uint32_t split_count) {
-                const uint32_t row = (my_row + (forward ? distance : extent - distance)) % extent;
+                const uint32_t row = (my_row + (is_cw ? distance : extent - distance)) % extent;
                 list.push_back(Assignment{
                     .dst_chip_id = ring_chip_ids[row],
                     .dst_row = row,

@@ -44,7 +44,6 @@ void bind_experimental_combine_fabric2d_operation(nb::module_& mod) {
         nb::arg("expert_token_counts"),
         nb::arg("expert_region_offsets"),
         nb::arg("expert_offsets"),
-        nb::arg("dispatch_group_size"),
         nb::arg("experts_per_chip"),
         nb::arg("num_experts_per_tok"),
         nb::arg("seq_len_per_chip"),
