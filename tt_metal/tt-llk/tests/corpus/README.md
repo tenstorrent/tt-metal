@@ -326,7 +326,13 @@ gate can never bless a sweep:
    verifies the libttsim sha256 at preflight and every phase entry
    (`--sim-bh-sha`/`--sim-wh-sha` from the wrappers).  A pinned-but-missing
    simulator refuses loudly instead of degrading to SKIP_NO_SIMULATOR.
-5. **Measured rows stay wired (R7, Lane AZ corpus expansion)** — `conf_lint.sh`
+5. **LLK-pristine (R7, owner ruling 2026-08-17)** — `conf_lint.sh` refuses when
+   the `tt_llk_*` library trees differ from the reviewed upstream base commit
+   (`_REVIEWED_LLK_UPSTREAM_BASE` in `sweep_2x2.conf`): the compiler proves
+   effects algorithmically; no trusted markers, typed shims, or any other
+   source edit in the consumed library — semantic rewrites live under
+   `tests/` only.
+6. **Measured rows stay wired (R8, Lane AZ corpus expansion)** — `conf_lint.sh`
    additionally refuses when any corpus manifest row with
    `perf_status=measured` has no `sweep_2x2_ops.tsv` row for its corpus id
    (the omission class that kept welford/recip/binary-bcast/mul_int measured

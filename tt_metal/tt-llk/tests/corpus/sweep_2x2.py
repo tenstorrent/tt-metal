@@ -137,7 +137,9 @@ OFF_FLAGS = (
     "-mno-tt-tensix-optimize-dst-autoincr "
     "-mno-tt-tensix-optimize-dst-ownership "
     "-mno-tt-tensix-optimize-lut-select "
-    "-mno-tt-tensix-optimize-setexp-fold"
+    "-mno-tt-tensix-optimize-setexp-fold "
+    "-mno-tt-tensix-optimize-prgm-const "
+    "-mno-tt-tensix-optimize-capture-rotation"
 )
 ON_FLAGS = (
     "-mtt-tensix-optimize-latency-schedule "
@@ -150,7 +152,14 @@ ON_FLAGS = (
     "-mtt-tensix-optimize-setexp-fold "
     "-mtt-tensix-macro-planner "
     "-mtt-tensix-macro-planner-replay "
-    "-mtt-tensix-optimize-mop-form"
+    "-mtt-tensix-optimize-mop-form "
+    "-mtt-tensix-optimize-capture-rotation"
+    # M3/prgm-const is NOT in the ON set (un-shipped after pin 9's nightly):
+    # its only engagement channel was the trusted TTREGION source markers in
+    # the LLK headers, and trusted source annotation of the consumed library
+    # is rejected at the design level (LLK-pristine rule, conf R7).  The flag
+    # returns when the compiler PROVES region effects algorithmically
+    # (mop_cfg template-programming dataflow derivation — Lane BC).
 )
 REMOVED_FLAGS = ("-mtt-tensix-emit-loadmacro", "-mtt-tensix-analyze-loadmacro")
 # Weekly per-knob attribution: OFF set plus exactly one positive knob.
@@ -166,6 +175,7 @@ KNOBS = {
     "setexp-fold": "-mtt-tensix-optimize-setexp-fold",
     "planner-replay": "-mtt-tensix-macro-planner-replay",
     "mop-form": "-mtt-tensix-optimize-mop-form",
+    "capture-rotation": "-mtt-tensix-optimize-capture-rotation",
 }
 HARNESS_TOOLCHAIN = TESTS / "sfpi"  # untracked symlink the harness hardcodes
 DEVICE_LOCK = "/tmp/tt-device.lock"

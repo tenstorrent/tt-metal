@@ -12,8 +12,9 @@
 #   7. missing/short sim pin value -> RED;
 #   8. THE CHECKED-IN conf + p150 baseline lint GREEN (the shipping state
 #      must satisfy its own gate);
-#   9. (R7) a measured corpus row wired into the ops TSV -> GREEN;
-#  10. (R7) a measured corpus row with NO ops TSV row -> RED (the
+#   9. (R7) a bogus LLK upstream base -> RED (LLK-pristine rule);
+#  10. (R8) a measured corpus row wired into the ops TSV -> GREEN;
+#  11. (R8) a measured corpus row with NO ops TSV row -> RED (the
 #      welford/recip/bcast/mul_int omission class).
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -40,8 +41,12 @@ _REVIEWED_CC1PLUS_SHA256=$cc1
 _REVIEWED_COMPILER_SHA256=$drv
 _REVIEWED_SIM_BH_SHA256=$sbh
 _REVIEWED_SIM_WH_SHA256=$swh
+_REVIEWED_LLK_UPSTREAM_BASE=${LLK_BASE_FOR_FIXTURES}
 EOF
 }
+# R7 fixtures inherit the real conf's reviewed upstream base (the repo's LLK
+# trees are pristine against it, so GREEN fixtures stay GREEN).
+LLK_BASE_FOR_FIXTURES=$(sed -n 's/^_REVIEWED_LLK_UPSTREAM_BASE=//p' "$(dirname "$0")/sweep_2x2.conf")
 
 write_baseline() { # write_baseline <file> <cc1-prefix> <sbh-prefix>
   cat > "$1" <<EOF
@@ -108,7 +113,14 @@ check "non-64-hex sim pin refuses RED" 1 $?
 check "checked-in conf+baseline lint GREEN" 0 $?
 grep -q "conf-lint: GREEN" "$TMP/out8.log" || { echo "SELFTEST FAIL: shipping-state lint did not report GREEN"; overall=1; }
 
-# R7 fixtures: a two-row manifest (one measured, one not_run) and an ops TSV.
+# 9. R7 LLK-pristine: a bogus upstream base -> RED (base must be a real commit)
+sed 's/^_REVIEWED_LLK_UPSTREAM_BASE=.*/_REVIEWED_LLK_UPSTREAM_BASE=1111111111111111111111111111111111111111/' \
+  "$TMP/ok.conf" > "$TMP/badllkbase.conf"
+"$LINT" "$TMP/badllkbase.conf" "$TMP/ok.tsv" > "$TMP/out9.log" 2>&1
+check "R7 bogus LLK upstream base refuses RED" 1 $?
+grep -q "R7" "$TMP/out9.log" || { echo "SELFTEST FAIL: bogus-base RED is not attributed to R7"; overall=1; }
+
+# R8 fixtures: a two-row manifest (one measured, one not_run) and an ops TSV.
 write_manifest() { # write_manifest <file>
   cat > "$1" <<'EOF'
 # fixture corpus manifest
@@ -126,20 +138,20 @@ EOF
 }
 write_manifest "$TMP/man.tsv"
 
-# 9. measured row wired -> GREEN
+# 10. (R8) measured row wired -> GREEN
 write_ops "$TMP/ops-ok.tsv" fixture__op_measured
-"$LINT" "$TMP/ok.conf" "$TMP/ok.tsv" "$TMP/man.tsv" "$TMP/ops-ok.tsv" > "$TMP/out9.log" 2>&1
-check "R7 measured-row-wired lints GREEN" 0 $?
+"$LINT" "$TMP/ok.conf" "$TMP/ok.tsv" "$TMP/man.tsv" "$TMP/ops-ok.tsv" > "$TMP/out10.log" 2>&1
+check "R8 measured-row-wired lints GREEN" 0 $?
 
-# 10. measured row NOT wired -> RED naming the missing id
+# 11. (R8) measured row NOT wired -> RED naming the missing id
 write_ops "$TMP/ops-miss.tsv" fixture__op_idle
-"$LINT" "$TMP/ok.conf" "$TMP/ok.tsv" "$TMP/man.tsv" "$TMP/ops-miss.tsv" > "$TMP/out10.log" 2>&1
-check "R7 measured-row-unwired refuses RED" 1 $?
-grep -q "\[R7\]" "$TMP/out10.log" || { echo "SELFTEST FAIL: R7 RED lacks the rule tag"; overall=1; }
-grep -q "fixture__op_measured" "$TMP/out10.log" || { echo "SELFTEST FAIL: R7 RED does not name the missing corpus id"; overall=1; }
+"$LINT" "$TMP/ok.conf" "$TMP/ok.tsv" "$TMP/man.tsv" "$TMP/ops-miss.tsv" > "$TMP/out11.log" 2>&1
+check "R8 measured-row-unwired refuses RED" 1 $?
+grep -q "\[R8\]" "$TMP/out11.log" || { echo "SELFTEST FAIL: R8 RED lacks the rule tag"; overall=1; }
+grep -q "fixture__op_measured" "$TMP/out11.log" || { echo "SELFTEST FAIL: R8 RED does not name the missing corpus id"; overall=1; }
 
 if [ "$overall" -eq 0 ]; then
-  echo "conf-lint self-test: ALL GREEN (coherent->GREEN, stale-prose->RED, stale-(CURRENT)->RED, dup-(CURRENT)->RED, stale-anchor->RED, no-anchor->RED, bad-sim-pin->RED, shipping-state->GREEN, R7-wired->GREEN, R7-unwired->RED)"
+  echo "conf-lint self-test: ALL GREEN (coherent->GREEN, stale-prose->RED, stale-(CURRENT)->RED, dup-(CURRENT)->RED, stale-anchor->RED, no-anchor->RED, bad-sim-pin->RED, shipping-state->GREEN, bogus-llk-base->RED, R8-wired->GREEN, R8-unwired->RED)"
 else
   echo "conf-lint self-test: FAILED"
 fi

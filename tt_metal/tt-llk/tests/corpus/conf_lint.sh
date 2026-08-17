@@ -24,7 +24,13 @@
 #   R6  the baseline TSV header names the conf's BH sim pin as CURRENT via
 #       the anchor "CURRENT sweep_2x2.conf PINNED_SIM_BH_SHA256" (the
 #       corrected-sim pairing is part of the measurement identity);
-#   R7  (Lane AZ corpus expansion) every corpus manifest row with
+#   R7  LLK-PRISTINE (owner ruling 2026-08-17): the tt_llk_* library trees in
+#       the worktree are byte-identical to the reviewed upstream base commit
+#       (_REVIEWED_LLK_UPSTREAM_BASE in the conf) — the compiler proves
+#       effects algorithmically; no trusted markers, typed shims, or any
+#       other source edit in the consumed library; semantic rewrites live
+#       under tests/ only;
+#   R8  (Lane AZ corpus expansion) every corpus manifest row with
 #       perf_status=measured has at least one sweep_2x2_ops.tsv row carrying
 #       its corpus_id — a measured op that silently drops out of the sweep
 #       surface is the omission class that hid welford/recip/bcast/mul_int
@@ -161,13 +167,39 @@ anchor_check() { # anchor_check <rule> <anchor-text> <expected-64hex> <what>
 [ -n "$CC1" ] && anchor_check R5 "CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256" "$CC1" "cc1plus"
 [ -n "$SBH" ] && anchor_check R6 "CURRENT sweep_2x2.conf PINNED_SIM_BH_SHA256" "$SBH" "BH sim"
 
-# ---- R7: every perf_status=measured corpus row is wired into the sweep ----
-if [ ! -f "$MANIFEST" ]; then
-  fail R7 "corpus manifest not found: $MANIFEST"
-elif [ ! -f "$OPS" ]; then
-  fail R7 "sweep ops TSV not found: $OPS"
+# ---- R7: LLK-pristine (owner ruling 2026-08-17) ----
+# The tt_llk_* library trees must be byte-identical to the reviewed upstream
+# base: the compiler proves effects algorithmically — no trusted markers,
+# typed shims, or any other source edit in the consumed library.  Semantic
+# rewrites live under tests/ only.
+LLKBASE=$(sed -n 's/^_REVIEWED_LLK_UPSTREAM_BASE=//p' "$CONF")
+if [ -n "$LLKBASE" ]; then
+  # Anchor repo discovery at this script's own checkout (fixture confs live
+  # in temp dirs outside any repo; the LLK trees under test are always ours).
+  REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")" && git rev-parse --show-toplevel 2>/dev/null)
+  if [ -n "$REPO_ROOT" ] && git -C "$REPO_ROOT" cat-file -e "$LLKBASE^{commit}" 2>/dev/null; then
+    # Diff the WORKTREE against the base (not HEAD) so an uncommitted edit —
+    # or an uncommitted revert — is judged by what would actually compile.
+    LLK_DIRT=$(git -C "$REPO_ROOT" diff --name-only "$LLKBASE" -- \
+      tt_metal/tt-llk/tt_llk_blackhole tt_metal/tt-llk/tt_llk_wormhole_b0 tt_metal/tt-llk/tt_llk_quasar)
+    if [ -n "$LLK_DIRT" ]; then
+      fail R7 "LLK library trees differ from the reviewed upstream base $LLKBASE (LLK-pristine rule: no edits to consumed LLK headers, ever):"
+      printf '%s\n' "$LLK_DIRT" | sed 's|^|    |'
+    fi
+  else
+    fail R7 "reviewed LLK upstream base $LLKBASE is not a commit in this repo (rebase without updating _REVIEWED_LLK_UPSTREAM_BASE?)"
+  fi
 else
-  R7_OUT=$(awk -F'\t' '
+  fail R7 "conf lacks _REVIEWED_LLK_UPSTREAM_BASE (the LLK-pristine rule is unenforceable without it)"
+fi
+
+# ---- R8: every perf_status=measured corpus row is wired into the sweep ----
+if [ ! -f "$MANIFEST" ]; then
+  fail R8 "corpus manifest not found: $MANIFEST"
+elif [ ! -f "$OPS" ]; then
+  fail R8 "sweep ops TSV not found: $OPS"
+else
+  R8_OUT=$(awk -F'\t' '
     FNR==1 { fileno++ }
     /^#/ { next }
     fileno==1 {
@@ -188,16 +220,16 @@ else
       }
       if ($pi=="measured" && !($idi in wired)) print $idi
     }' "$OPS" "$MANIFEST")
-  if printf '%s' "$R7_OUT" | grep -q '^HDRFAIL'; then
-    fail R7 "cannot evaluate: $R7_OUT (manifest $MANIFEST, ops $OPS)"
-  elif [ -n "$R7_OUT" ]; then
-    fail R7 "corpus rows with perf_status=measured have NO sweep_2x2_ops.tsv row (a measured op silently absent from the sweep surface — wire a row, or a machine-readable kind=skip row with the reason):"
-    printf '%s\n' "$R7_OUT" | sed "s|^|    $MANIFEST: id |"
+  if printf '%s' "$R8_OUT" | grep -q '^HDRFAIL'; then
+    fail R8 "cannot evaluate: $R8_OUT (manifest $MANIFEST, ops $OPS)"
+  elif [ -n "$R8_OUT" ]; then
+    fail R8 "corpus rows with perf_status=measured have NO sweep_2x2_ops.tsv row (a measured op silently absent from the sweep surface — wire a row, or a machine-readable kind=skip row with the reason):"
+    printf '%s\n' "$R8_OUT" | sed "s|^|    $MANIFEST: id |"
   fi
 fi
 
 if [ "$RED" -eq 0 ]; then
-  echo "conf-lint: GREEN — pin values ↔ conf prose ↔ PIN HISTORY (CURRENT) ↔ baseline header all agree (cc1plus ${CC1:0:12}…, driver ${DRV:0:12}…, sim bh ${SBH:0:12}…, sim wh ${SWH:0:12}…); every measured corpus row is wired into the sweep (R7)"
+  echo "conf-lint: GREEN — pin values ↔ conf prose ↔ PIN HISTORY (CURRENT) ↔ baseline header all agree (cc1plus ${CC1:0:12}…, driver ${DRV:0:12}…, sim bh ${SBH:0:12}…, sim wh ${SWH:0:12}…); LLK trees pristine vs the reviewed upstream base (R7); every measured corpus row is wired into the sweep (R8)"
   exit 0
 fi
 echo "conf-lint: FAILED — the pin audit trail disagrees with itself; fix the prose/header IN THE SAME COMMIT as any pin change (see rules in this script's header)"

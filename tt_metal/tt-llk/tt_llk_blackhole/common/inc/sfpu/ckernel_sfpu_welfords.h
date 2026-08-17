@@ -68,9 +68,6 @@ sfpi_inline void _welfords_load_block_()
     TTI_SFPLOAD(ckernel::p_sfpu::LREG2, sfpi::SFPLOAD_MOD0_FMT_SRCB, ckernel::ADDR_MOD_7, offset2);
     TTI_SFPLOAD(ckernel::p_sfpu::LREG3, sfpi::SFPLOAD_MOD0_FMT_SRCB, ckernel::ADDR_MOD_7, offset3);
     TTI_SFPTRANSP(0, 0, 0, 0);
-    // The preceding raw TTI SFPLOADs define architectural L0--L3.  Make that
-    // contract visible to the SFPI compiler until their explicit consumers.
-    __builtin_rvtt_sfprawlreg_access(0, 0x0f);
 }
 
 /**

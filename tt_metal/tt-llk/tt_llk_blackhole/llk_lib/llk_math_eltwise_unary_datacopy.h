@@ -17,26 +17,6 @@
 
 using namespace ckernel;
 
-// Typed-region declaration markers (compiler prgm-const freedom proof; trusted
-// like sfprawlreg_access, CRAQ is the check).  The markers emit no instruction
-// word, but they live in the IR as volatile ghosts and can shift surrounding
-// scalar scheduling, so they are opt-in: builds that enable the prgm-const
-// optimization define LLK_ENABLE_TTREGION_MARKERS next to the -m flag; every
-// other build (and any toolchain without the builtins) compiles the plain
-// unmarked code, byte-identically.
-#ifndef TT_LLK_TTREGION_BEGIN
-#if defined(LLK_ENABLE_TTREGION_MARKERS) && defined(__has_builtin)
-#if __has_builtin(__builtin_rvtt_ttregion_begin)
-#define TT_LLK_TTREGION_BEGIN(config_write_mask, reserved) __builtin_rvtt_ttregion_begin((config_write_mask), (reserved))
-#define TT_LLK_TTREGION_END()                              __builtin_rvtt_ttregion_end()
-#endif
-#endif
-#ifndef TT_LLK_TTREGION_BEGIN
-#define TT_LLK_TTREGION_BEGIN(config_write_mask, reserved)
-#define TT_LLK_TTREGION_END()
-#endif
-#endif
-
 // local function declarations
 inline void eltwise_unary_configure_addrmod(const std::uint32_t dst_format);
 
@@ -309,11 +289,6 @@ inline void _llk_math_eltwise_unary_datacopy_(
             }
         }
 
-        // Typed effects declaration for the datacopy MOP run: the MOP template
-        // programmed by eltwise_unary_configure_mop expands FPU datacopy ops
-        // (MOVA2D/MOVB2D/ELWADD) only -- it writes no SFPCONFIG destination, no
-        // PRGM register, and no LaneConfig (mask 0).
-        TT_LLK_TTREGION_BEGIN(0, 0);
         if constexpr (type == DataCopyType::A2D)
         {
             ckernel_template::run();
@@ -333,7 +308,6 @@ inline void _llk_math_eltwise_unary_datacopy_(
                 ckernel_template::run();
             }
         }
-        TT_LLK_TTREGION_END();
 
         if constexpr (is_fp32_dest_acc_en && src_b_bcast_type != BroadcastType::NONE)
         {
