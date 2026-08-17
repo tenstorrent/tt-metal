@@ -45,7 +45,9 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--prompt", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--prompt-tokens", type=int, default=128)
+    parser.add_argument("--prompt-tokens", type=str, default="128",
+                        help="comma-separated prompt lengths, all measured from one weight load")
+    parser.add_argument("--max-context", type=int, default=512)
     parser.add_argument("--decode-tokens", type=int, default=128)
     parser.add_argument("--prefill-iters", type=int, default=6)
     parser.add_argument("--label", type=str, default="")
@@ -54,12 +56,17 @@ def main() -> None:
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING)
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 4), trace_region_size=300_000_000)
     generator = None
-    result = {"label": args.label, "prefill_iters": args.prefill_iters}
+    from models.autoports.qwen_qwen3_6_27b.tt.functional_decoder import LINEAR_PREFILL_CHUNK_SIZE
+    result = {
+        "label": args.label,
+        "prefill_iters": args.prefill_iters,
+        "linear_prefill_chunk_size": LINEAR_PREFILL_CHUNK_SIZE,
+    }
     try:
         generator = build_generator(
             model_dir=Path("models/autoports/qwen_qwen3_6_27b"),
             mesh_device=mesh,
-            max_context=512,
+            max_context=args.max_context,
             batch=1,
         )
         rendered = generator.tokenizer.apply_chat_template(
@@ -67,45 +74,60 @@ def main() -> None:
             tokenize=False,
             add_generation_prompt=True,
         )
-        token_ids = generator.tokenizer.encode(rendered, add_special_tokens=False)
-        token_ids = token_ids[: args.prompt_tokens]
-        tokens = torch.tensor([token_ids], dtype=torch.long)
+        all_ids = generator.tokenizer.encode(rendered, add_special_tokens=False)
+        lengths = [int(x) for x in args.prompt_tokens.split(",") if x.strip()]
 
-        # ---- cold + warm prefill -------------------------------------------
+        # ---- cold + warm prefill, per requested length ----------------------
         # Identical call each iteration; reset() restores cache and releases
         # traces so every iteration prefills the same prompt from a clean slot.
-        # Only the program cache persists across iterations, which is exactly
-        # the variable under test.
-        ttft_ms = []
+        # Only the program cache persists across iterations, which is exactly the
+        # variable under test. Several lengths share one weight load because the
+        # load, not the prefill, dominates wall clock.
+        per_length = {}
         logits = None
-        for i in range(args.prefill_iters):
-            generator.reset()
-            ttnn.synchronize_device(mesh)
-            started = time.perf_counter()
-            logits = generator.prefill_forward(
-                tokens,
-                page_table=generator._page_table,
-                kv_cache=generator.kv_cache,
-                prompt_lens=[len(token_ids)],
-            )
-            ttnn.synchronize_device(mesh)
-            elapsed = 1000 * (time.perf_counter() - started)
-            ttft_ms.append(elapsed)
-            print(f"  prefill iter {i}: {elapsed:.2f} ms" + ("  (cold)" if i == 0 else ""), flush=True)
-
-        warm = ttft_ms[1:]
-        result.update(
-            {
-                "prompt_tokens": len(token_ids),
+        token_ids = None
+        for length in lengths:
+            if length > len(all_ids):
+                print(f"  SKIP {length}: prompt has only {len(all_ids)} tokens", flush=True)
+                continue
+            if length > args.max_context:
+                print(f"  SKIP {length}: exceeds --max-context {args.max_context}", flush=True)
+                continue
+            token_ids = all_ids[:length]
+            tokens = torch.tensor([token_ids], dtype=torch.long)
+            ttft_ms = []
+            for i in range(args.prefill_iters):
+                generator.reset()
+                ttnn.synchronize_device(mesh)
+                started = time.perf_counter()
+                logits = generator.prefill_forward(
+                    tokens,
+                    page_table=generator._page_table,
+                    kv_cache=generator.kv_cache,
+                    prompt_lens=[len(token_ids)],
+                )
+                ttnn.synchronize_device(mesh)
+                elapsed = 1000 * (time.perf_counter() - started)
+                ttft_ms.append(elapsed)
+                print(f"  S={length} iter {i}: {elapsed:.2f} ms" + ("  (cold)" if i == 0 else ""), flush=True)
+            warm = ttft_ms[1:]
+            per_length[str(length)] = {
                 "ttft_ms_all": ttft_ms,
                 "ttft_ms_cold": ttft_ms[0],
                 "ttft_ms_warm_median": statistics.median(warm) if warm else None,
                 "ttft_ms_warm_min": min(warm) if warm else None,
                 "ttft_ms_warm_max": max(warm) if warm else None,
-                # how much of the recorded cold number was one-time program build
+                # one-time program-build cost isolated
                 "cold_overhead_ms": (ttft_ms[0] - statistics.median(warm)) if warm else None,
             }
-        )
+
+        result["per_length"] = per_length
+        if not per_length:
+            raise SystemExit("no prompt length was measurable")
+        # keep the flat keys for the shortest length so existing readers work
+        first = per_length[str(sorted(int(k) for k in per_length)[0])]
+        result.update({k: v for k, v in first.items()})
+        result["prompt_tokens"] = len(token_ids)
 
         # ---- canonical split-trace token-out (mirrors full_model_perf.py) ---
         first_token = int(torch.argmax(logits[0, 0]).item())

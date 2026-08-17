@@ -22,6 +22,7 @@ parameters are offsets and therefore become ``1 + weight`` during setup.
 
 from __future__ import annotations
 
+import os
 from collections.abc import Mapping
 
 import ttnn
@@ -31,7 +32,40 @@ MODEL_ID = "Qwen/Qwen3.6-27B"
 MODEL_REVISION = "6a9e13bd6fc8f0983b9b99948120bc37f49c13e9"
 ADVERTISED_CONTEXT = 262_144
 REPRESENTATIVE_LAYERS = {"linear_attention": 0, "full_attention": 3}
-LINEAR_PREFILL_CHUNK_SIZE = 32
+
+
+def _linear_prefill_chunk_size() -> int:
+    """Tunable prefill scan chunk, default unchanged at 32.
+
+    The chunk is scanned with a Hillis-Steele affine scan costing ``log2(chunk)``
+    batched matmuls, so a sequence of length ``S`` needs ``(S/chunk) *
+    log2(chunk)`` sequential scan steps -- a *decreasing* function of chunk. At
+    S=128 that is 4x5=20 steps at chunk 32 but 1x7=7 at chunk 128. Each chunk
+    also costs five host uploads (one sequence mask, four conv-state lane
+    selectors), so uploads scale as ``5 * ceil(S/chunk)``.
+
+    Larger chunks therefore reduce both sequential depth and host traffic, and
+    cost memory: the scan materialises ``[groups, chunk, ...]`` intermediates, so
+    footprint grows linearly with the chunk. 32 is the value the port was
+    validated at; this hook exists so the trade can be measured instead of
+    assumed. Everything inside the chunk derives from the chunk's actual
+    ``sequence`` extent (the scan loop is ``while distance < sequence``), so no
+    other constant has to move.
+
+    Must be a multiple of the 32-element tile. ``model.py`` ties the streaming
+    prefill quantum to ``lcm(page_size, chunk)``, so changing this changes that
+    quantum too.
+    """
+    raw = os.environ.get("QWEN36_LINEAR_PREFILL_CHUNK_SIZE")
+    if raw is None:
+        return 32
+    value = int(raw)
+    if value < 32 or value % 32:
+        raise ValueError(f"QWEN36_LINEAR_PREFILL_CHUNK_SIZE must be a multiple of 32, got {value}")
+    return value
+
+
+LINEAR_PREFILL_CHUNK_SIZE = _linear_prefill_chunk_size()
 
 
 def _candidate_keys(layer_idx: int, suffix: str) -> tuple[str, ...]:
