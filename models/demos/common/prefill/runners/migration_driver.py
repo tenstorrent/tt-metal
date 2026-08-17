@@ -562,15 +562,51 @@ def _dump_src_kv(dump_dir: str, table, stats, slot_traces: dict, layers) -> None
                 decoded_rows.append(producer._decode_kv_chunk(raw, head_dim))
             device_kv = torch.cat(decoded_rows, dim=0)[:real_len]  # natural order (the table un-rotates)
             ref_kvpe_list[layer] = device_kv.unsqueeze(0).unsqueeze(0)
+
+        # config 1 (the DSA lightning-indexer key cache), when the table carries it. Without this the
+        # decode side has no indexer reference and check 2 covers config 0 only -- the KVPE cache can
+        # be bit-perfect while the index cache migrates the wrong layer entirely.
+        #
+        # Config 1's LAYER AXIS IS THE FULL-INDEXER RANK, not the global layer: GLM-5.2 compacts the
+        # IndexShare consumers out of the cache. So look up by rank, but store BY GLOBAL LAYER, so the
+        # decode side can index ref_index_k_list[its own layer id] exactly like ref_kvpe_list.
+        # Consumer layers own no keys of their own and stay None.
+        ref_index_k_list = None
+        if table.num_configs() > 1:
+            full_layers = producer._full_indexer_layer_indices(producer.NUM_LAYERS)
+            rank_of_layer = {lid: r for r, lid in enumerate(full_layers)} if full_layers else None
+            index_head_dim = producer.ADAPTER.model_config.INDEX_HEAD_DIM
+            ref_index_k_list = [None] * producer.NUM_LAYERS
+            for layer in sorted(wanted):
+                rank = layer if rank_of_layer is None else rank_of_layer.get(layer)
+                if rank is None:
+                    continue  # IndexShare consumer: no indexer keys of its own
+                idx_rows = []
+                for pos in range(0, read_len, tokens_per_block):
+                    loc = table.lookup(rank, pos, slot_id, 1)  # config 1, keyed by rank
+                    unique_id = producer._resolve_unique_id(
+                        table.get_device_group(loc.device_group_index).fabric_node_ids, device_map
+                    )
+                    raw = ttnn.experimental.disaggregation.read_dram_umd(unique_id, loc.noc_addr, loc.size_bytes)
+                    # Same byte-size-driven dispatch as config 0; a 128-wide bfp8 index chunk lands
+                    # on the bfp8 tile branch.
+                    idx_rows.append(producer._decode_kv_chunk(raw, index_head_dim))
+                ref_index_k_list[layer] = torch.cat(idx_rows, dim=0)[:real_len].unsqueeze(0).unsqueeze(0)
+
         # dump_dir is the safelisted base; only the derived basename varies. Confirm the join stays inside
         # it before writing.
         out = os.path.abspath(os.path.join(base_dir, f"src_slot{int(slot_id)}.pt"))
         if not out.startswith(base_dir + os.sep):
             raise ValueError(f"src-KV dump path {out!r} escapes its base directory {base_dir!r}")
-        torch.save({"ref_kvpe_list": ref_kvpe_list}, out)
+        blob = {"ref_kvpe_list": ref_kvpe_list}
+        if ref_index_k_list is not None:
+            blob["ref_index_k_list"] = ref_index_k_list
+        torch.save(blob, out)
+        n_index = 0 if ref_index_k_list is None else sum(t is not None for t in ref_index_k_list)
         logger.success(
             f"[migration_driver] slot {slot_id} src KV dumped -> {out} "
-            f"(layers {sorted(wanted)}, positions [0,{real_len}))"
+            f"(layers {sorted(wanted)}, positions [0,{real_len}), "
+            f"{n_index} indexer layer(s))"
         )
 
 
