@@ -74,25 +74,6 @@ default fills ≤ 1/K of the grid"); when the gate doesn't trip the default path
 shapes it already handled cannot regress. Same kernels; only the per-core tile rectangle / active-core
 count change.
 
-## ⭐⭐ T2 — [`dram_saturation`](dram_saturation/README.md)
-**Concept:** the core-count sweet spot for a **DRAM-bound** op — achieved bandwidth saturates as you
-add cores, so more cores stop paying; and placement decides where the knee falls.
-**Situation:** you have a data-movement-bound op and reflexively launch on the whole grid. "More cores
-= faster" only holds until the DRAM interface saturates; past that knee the extra cores add no
-bandwidth (wasted) and, if stacked onto shared NoC links, congest.
-**Measured win (the exploit):** a pure DRAM→DRAM copy (no compute) of 8.4 MB bf16, swept over core count
-(WH B0): `spread` rises ~linearly (~21.7 GB/s/core) then **plateaus at ~191–195 GB/s from ~16 cores**.
-The exploit: **cap the op at the ~16-core knee → full bandwidth on 1/4 of the grid, ~48 cores freed at
-~0% cost** (16 c @ 191.9 GB/s vs 64 c @ 192.7; `sweet_spot_cores()` derives the knee from the sweep).
-16 → 64 cores is 4× the cores for <2%, and GB/s/core collapses 21.7 → 3.0. Placement moves the knee:
-`stacked` (piled on one column) does **71.8 GB/s at 8 cores vs spread's 146.3**, needing ~48 cores to
-reach what spread hits at 16. (No hard slower-with-more rollover on this shape — the cost of
-over-subscribing here is wasted cores, not a slowdown.)
-**Gist:** classify the bound first; if DRAM-bandwidth-bound, don't fill the grid — sweep core count,
-find the bandwidth plateau, and use the **minimum well-placed cores that reach it** (spread across the
-DRAM-facing axis). Cores past the knee add nothing. Only a *non*-bandwidth-bound op (compute/latency, or
-grid not yet full of independent work) keeps paying for more cores — the `width_split` grid-filling regime.
-
 ## ⭐⭐ T2 — [`double_buffer`](double_buffer/README.md)
 **Concept:** keeping bytes in flight on the NoC for a DRAM reader→compute→writer pipeline, via three
 levers — outstanding reads per barrier (`block`), double-buffered CBs, and transfer size (dtype).
@@ -109,15 +90,6 @@ and size each CB to `2 * block` tiles (double-buffered). Small sweet spot (~4–
 Use the smallest dtype your accuracy allows. Skip all of it if you're already bandwidth-bound (enough
 cores) or compute-bound.
 
-## ⭐⭐ T2 — [`tile_reorder`](tile_reorder/README.md)
-**Concept:** transfer coalescing on a DRAM-bandwidth-bound move.
-**Situation:** a whole-tile relocation (permute / transpose-of-tiles) written the generic way —
-as many small sub-tile (face) writes with a barrier each.
-**Measured win:** relocating each **whole 2 KB tile in one NoC write** is at least as fast as, and
-on this move faster than, writing it as 4 × 512 B faces — bigger coalesced transactions hit higher
-achieved DRAM bandwidth. Reader on NoC0, writer on NoC1 to overlap.
-**Gist:** on a DRAM-bound move, move whole pages and batch barriers; don't scatter sub-tile faces.
-
 ## ⭐⭐ T2 — [`split_reader`](split_reader/README.md)
 **Concept:** when a *single* data-movement RISC-V is the bottleneck — saturated **issuing** NoC read
 transactions — split those independent reads across both data-movement RISC-Vs (NCRISC + BRISC) so
@@ -131,22 +103,6 @@ data-movement RISC-V is itself the bottleneck. First confirm you are RISC-V-issu
 role. The example shrinks the NoC transaction size only to *create* that bottleneck and expose the
 effect (up to ~1.7×, Wormhole B0; see [`report.md`](split_reader/report.md)) — transaction size is
 the knob, not the point.
-
-## ⭐⭐ T2 — [`zero_copy_fold`](zero_copy_fold/README.md)
-**Concept:** program structure — folding the reader + writer into the compute kernel is **slower**,
-not faster, because the dataflow reader/writer run on their own RISC-Vs (NCRISC/BRISC) and arm/drain
-the CBs *concurrently* with compute on TRISC; folding serializes that onto the compute thread.
-**Situation:** you are tempted to merge dataflow kernels into compute ("fewer kernels = less
-overhead") — especially on a resident/zero-copy op where the reader/writer do no NoC work, just CB
-arm/drain.
-**Does NOT solve:** this is not a "make the kernel faster" trick; it only governs how arm/drain
-overlaps compute. The fixed per-launch cost it exposes dominates only on **small work-per-core** and
-amortizes as tiles/core grows.
-**Gist:** keep reader/compute/writer separate unless you have measured the dataflow RISCs are idle
-*and* the handshake dominates. The payload (a same-spec zero-copy sharded tilize, CBs aliased onto the
-resident L1 shards → no DRAM/NoC) is incidental — chosen only to isolate pure program structure; any
-reader/compute/writer op shows the same effect (~0.74× at 2 tiles/core → ~0.95× at 64, WH B0; see
-[`report.md`](zero_copy_fold/report.md)).
 
 ## ⭐⭐ T2 — [`matmul_output_subblock`](matmul_output_subblock/README.md)
 **Concept:** matmul output-subblock shape → SRC-register operand reuse (via the `matmul_block` helper).
@@ -351,7 +307,7 @@ The criterion:
 - **interleaved** → `active_cores == min(grid, total_tiles, bandwidth_knee)` — **but classify the bound
   FIRST**, because the knee only exists for a **bandwidth-bound** op:
   - **Bandwidth-bound** (big pages / coalesced reads that actually saturate DRAM/L1 BW) → the knee is a
-    **hard ceiling**: once achieved bandwidth plateaus (see `dram_saturation`, `sweet_spot_cores()`),
+    **hard ceiling**: once achieved bandwidth plateaus,
     extra cores add no bandwidth and only add dispatch/NoC overhead. If the knee is **below**
     `total_tiles`, stop at the knee — more cores past it can be *slower*, not just wasteful.
   - **Read/write-transaction-rate bound** (small pages — e.g. a 32-row stick at ≤128 B/page, the
@@ -379,8 +335,6 @@ happened to develop on.
   `untilize/device/factories/untilize_multi_core_program_factory.cpp:330`.
 - **A3. Reader adjacent to its DRAM bank; one reader ↔ one bank** — one NoC hop, disjoint routes;
   multiple readers stacked on one axis congest. `Saturating_DRAM_bandwidth.md:4-13`.
-  **→ example: `dram_saturation`** (the `stacked`-vs-`spread` core sweep shows the congestion and the
-  bandwidth-saturation knee).
 - **A4. Cliff-core specialization** *(proposition)* — split into full cores + one remainder core; skip
   the cliff kernel when empty. `work_split.hpp:46`; `untilize_multi_core_program_factory.cpp:132,396-400`.
 
@@ -397,7 +351,7 @@ ones. "Missed lever" (Mode D) is real headroom **only in the regime the lever wo
 gate it on a work-per-core threshold rather than applying it globally.
 
 - **B5. Coalesce into whole-page transactions; don't scatter sub-tile faces** — bigger transactions hit
-  higher achieved BW. `dataflow_api.h:566`. **→ example: `tile_reorder`**.
+  higher achieved BW. `dataflow_api.h:566`..
 - **B6. Hit the one-packet fast path** — transfers ≤ `NOC_MAX_BURST_SIZE` (**512 B** on WH) take the
   cheap single-packet path. `dataflow_api.h:551,566`; `noc_parameters.h:219`. **→ example: `double_buffer`**
   (transfer-size lever).
@@ -427,7 +381,7 @@ gate it on a work-per-core threshold rather than applying it globally.
 - **C14. Zero-copy: alias the circular buffer directly onto the shard buffer (L1↔L1)** *(proposition)* —
   the reader "just pushes"; requires input *and* output in L1.
   `untilize_multi_core_program_factory.cpp:103-116`; `tilize/device/tilize_device_operation.cpp:22`.
-  **→ example: `zero_copy_fold`** (kernel-fold vs. separate reader/compute/writer). Aliasing has two
+  Aliasing has two
   degrees: removing the *NoC traffic* (the CB is the shard) and removing the *kernel* (fold the
   dataflow away entirely, so the program is compute-only). The second is a separate, measurable step
   — a resident path whose reader still exists to run the CB handshake has taken only the first.
