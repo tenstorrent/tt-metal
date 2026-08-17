@@ -85,11 +85,23 @@ constexpr int iterations = 8;
 // names no physical LREG, raw instruction, replay range, or load-macro
 // schedule.  The typed Dst layout is the architectural boundary; allocation,
 // conversion scheduling, and any future macro formation belong to GCC.
+//
+// Default impl-1 form (Lane AV adoption, 2026-08-17): the body inlines into
+// run_kernel and face traversal stays at typed setrwc boundaries, so the
+// compiler's loop-scoped config-ownership window forms (one descriptor
+// config per tile).  This is the probe form Lane AK proved on silicon
+// (-DTYPECAST_TYPED_RWC_BOUNDARY, +3.27% vs hand, from +22.6% for the
+// noinline form; silicon-promotions-20260817/item2), adopted as the default
+// per the REDUCE_SDPA typed-boundary precedent.  The former noinline
+// per-face-call form is kept reachable behind
+// -DTYPECAST_NOINLINE_FACE_BOUNDARY as the measurable probe for the
+// cross-function descriptor-sharing mechanism gap (IPA-lite; see
+// corpus/TYPECAST_DESCRIPTOR_SHARING_BLOCKER.md).
 template <int ITERATIONS>
-#ifdef TYPECAST_TYPED_RWC_BOUNDARY
-__attribute__((always_inline)) inline void calculate_typecast_uint16_to_fp16b_semantic()
-#else
+#ifdef TYPECAST_NOINLINE_FACE_BOUNDARY
 __attribute__((noinline)) void calculate_typecast_uint16_to_fp16b_semantic()
+#else
+__attribute__((always_inline)) inline void calculate_typecast_uint16_to_fp16b_semantic()
 #endif
 {
     // Establish a local typed all-lanes boundary. The compiler-owned macro
@@ -155,11 +167,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 START_PERF_MEASURE("TYPECAST_BODY")
             if constexpr (TYPECAST_IMPL == 1)
             {
-#ifdef TYPECAST_TYPED_RWC_BOUNDARY
-                // Compiler-visible discriminator for descriptor ownership
-                // across the four architectural RC faces.  Keep the default
-                // selector on the established LLK wrapper until the compiler
-                // also owns its address-modifier state.
+#ifdef TYPECAST_NOINLINE_FACE_BOUNDARY
+                // Legacy noinline form: the semantic body describes one
+                // 8-row face behind an out-of-line call per face, so the
+                // descriptor configuration re-executes per face — the
+                // measurable probe for the cross-function descriptor-sharing
+                // mechanism gap (IPA-lite).
+                _llk_math_eltwise_unary_sfpu_params_(calculate_typecast_uint16_to_fp16b_semantic<iterations>, block_tile, VectorMode::RC);
+#else
+                // Default (adopted probe form): compiler-visible face
+                // traversal at typed setrwc boundaries.  The whole tile is
+                // one compiler-visible region, so descriptor ownership is
+                // provable across the four architectural RC faces and the
+                // loop-scoped config window forms once per tile.
                 _llk_math_eltwise_sfpu_start_(block_tile);
 #pragma GCC unroll 0
                 for (int face = 0; face < 4; ++face)
@@ -169,14 +189,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     lltt::setrwc<0, 4, 8, 0, 0, 4>();
                 }
                 _llk_math_eltwise_sfpu_done_();
-#else
-                // The semantic body describes one 8-row face.  Keep tile
-                // addressing and face traversal at the existing typed LLK
-                // boundary rather than baking physical offsets into the body.
-                _llk_math_eltwise_unary_sfpu_params_(
-                    calculate_typecast_uint16_to_fp16b_semantic<iterations>,
-                    block_tile,
-                    VectorMode::RC);
 #endif
             }
             else
