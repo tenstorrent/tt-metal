@@ -560,6 +560,22 @@ public:
         auto sliced_input_tensor_memory_config = get_input_memory_config(output_slice_start, output_slice_end);
         if (!conv_config.shard_layout.has_value()) {
             conv_config.shard_layout = sliced_input_tensor_memory_config.memory_layout();
+        } else {
+            // A pinned shard layout that cannot fit in L1 cannot be rescued by
+            // width-slicing when the output width is below one tile; resolve it
+            // here so planning and the run agree (see resolve_pinned_shard_layout).
+            auto resolved = resolve_pinned_shard_layout(
+                input_slice_height,
+                input_slice_width,
+                output_slice_height,
+                output_slice_width,
+                slice_padding,
+                sliced_input_tensor_memory_config,
+                conv_config.shard_layout.value());
+            conv_config.shard_layout = resolved.layout;
+            if (resolved.input_memory_config.has_value()) {
+                sliced_input_tensor_memory_config = resolved.input_memory_config.value();
+            }
         }
         auto conv_L1_usage = calculate_L1_usage_for_conv_op(
             batch_size,
@@ -675,6 +691,21 @@ public:
 
         if (!conv_config.shard_layout.has_value() && sliced_input_tensor.is_sharded()) {
             conv_config.shard_layout = sliced_input_tensor.memory_config().memory_layout();
+        } else if (conv_config.shard_layout.has_value()) {
+            // Keep the run consistent with what slice planning accepted: honor a
+            // pinned layout only while it fits (or width-slicing can still reduce
+            // L1 usage); otherwise fall back to the natural auto-shard layout.
+            uint32_t output_slice_height = std::get<0>(output_slice_end) - std::get<0>(output_slice_start);
+            uint32_t output_slice_width = std::get<1>(output_slice_end) - std::get<1>(output_slice_start);
+            conv_config.shard_layout = resolve_pinned_shard_layout(
+                                           input_slice_height,
+                                           input_slice_width,
+                                           output_slice_height,
+                                           output_slice_width,
+                                           this_op_padding,
+                                           get_input_memory_config(output_slice_start, output_slice_end),
+                                           conv_config.shard_layout.value())
+                                           .layout;
         }
         auto conv_config_l1 = conv_config;
 
@@ -708,6 +739,133 @@ public:
             bias_tensor->get() = std::get<4>(conv2d_result).value();
         }
         return {std::get<0>(conv2d_result)};
+    }
+
+private:
+    struct ResolvedShardLayout {
+        TensorMemoryLayout layout;
+        std::optional<tt::tt_metal::MemoryConfig> input_memory_config;
+    };
+
+    // Resolve a user-pinned shard layout for DRAM slicing. Keeps the pinned
+    // layout when it fits in L1, or when the output width spans at least one
+    // tile (width-slicing can still reduce per-slice L1 usage). When the pinned
+    // layout cannot fit and width-slicing structurally cannot apply (output
+    // width below one tile), falls back to the natural auto-shard layout if
+    // that fits — mirroring the width<->height slice-type fallback in
+    // op_slicing.cpp. If nothing fits, the pinned layout is returned unchanged
+    // so genuinely-unsliceable configs still fail in the slicer.
+    ResolvedShardLayout resolve_pinned_shard_layout(
+        uint32_t input_slice_height,
+        uint32_t input_slice_width,
+        uint32_t output_slice_height,
+        uint32_t output_slice_width,
+        const std::array<uint32_t, 4>& slice_padding,
+        const tt::tt_metal::MemoryConfig& pinned_input_memory_config,
+        TensorMemoryLayout pinned_layout) const {
+        if (output_slice_width >= tt::constants::TILE_WIDTH) {
+            return {pinned_layout, pinned_input_memory_config};
+        }
+        auto compute_grid = device->compute_with_storage_grid_size();
+        auto l1_estimate = [&](TensorMemoryLayout layout,
+                               const tt::tt_metal::MemoryConfig& input_memory_config) -> uint64_t {
+            auto conv_config_for_estimate = conv_config;
+            conv_config_for_estimate.shard_layout = layout;
+            auto usage = calculate_L1_usage_for_conv_op(
+                batch_size,
+                input_channels,
+                output_channels,
+                input_slice_height,
+                input_slice_width,
+                output_slice_height,
+                output_slice_width,
+                kernel_size,
+                stride,
+                slice_padding,
+                dilation,
+                groups,
+                bias_tensor.has_value(),
+                input_dtype,
+                output_dtype,
+                input_layout,
+                compute_grid,
+                false,
+                layout,
+                compute_config,
+                conv_config_for_estimate,
+                input_memory_config);
+            return std::max<uint64_t>(
+                static_cast<uint64_t>(usage.halo_input_size) + usage.halo_output_size, usage.total_size);
+        };
+        const uint64_t l1_available =
+            device->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_free_bytes;
+        const uint64_t pinned_usage = l1_estimate(pinned_layout, pinned_input_memory_config);
+        if (pinned_usage <= l1_available) {
+            return {pinned_layout, pinned_input_memory_config};
+        }
+
+        // Pinned layout cannot fit and width-slicing cannot reduce L1 usage:
+        // try the natural (auto-shard) layout.
+        auto conv_config_auto = conv_config;
+        conv_config_auto.shard_layout = std::nullopt;
+        conv_config_auto = determine_conv_config_for_auto_shard(
+            conv_config_auto,
+            false,
+            batch_size,
+            input_channels,
+            output_channels,
+            output_slice_height,
+            output_slice_width,
+            weight_tensor.logical_shape()[3],
+            input_slice_height,
+            input_slice_width,
+            compute_grid,
+            input_layout,
+            input_dtype,
+            output_dtype,
+            std::nullopt,
+            kernel_size,
+            stride,
+            dilation,
+            padding_n4,
+            groups,
+            bias_tensor.has_value(),
+            compute_config);
+        TT_FATAL(
+            conv_config_auto.shard_layout.has_value(),
+            "Auto-shard layout must be resolved by determine_conv_config_for_auto_shard.");
+        const auto natural_layout = conv_config_auto.shard_layout.value();
+        if (natural_layout == pinned_layout) {
+            return {pinned_layout, pinned_input_memory_config};
+        }
+        ShardOrientation shard_orientation =
+            conv_config.transpose_shards ? ShardOrientation::COL_MAJOR : ShardOrientation::ROW_MAJOR;
+        bool single_slice =
+            (input_slice_height == std::get<0>(input_shape)) && (input_slice_width == std::get<1>(input_shape));
+        auto natural_input_memory_config = std::get<1>(determine_input_memory_config(
+            natural_layout,
+            shard_orientation,
+            batch_size,
+            ttnn::Shape({batch_size, input_slice_height, input_slice_width, input_channels}),
+            ttnn::Shape({batch_size, output_slice_height, output_slice_width, output_channels}),
+            false,
+            compute_grid,
+            input_layout,
+            single_slice ? BufferType::L1 : BufferType::DRAM));
+        if (l1_estimate(natural_layout, natural_input_memory_config) <= l1_available) {
+            log_warning(
+                tt::LogOp,
+                "Conv2D DRAM slicing: pinned shard layout {} does not fit in L1 ({} bytes needed, {} available) and "
+                "output width {} is below one tile, so width-slicing cannot reduce L1 usage. Falling back to the "
+                "auto-shard layout {}.",
+                pinned_input_memory_config,
+                pinned_usage,
+                l1_available,
+                output_slice_width,
+                natural_input_memory_config);
+            return {natural_layout, natural_input_memory_config};
+        }
+        return {pinned_layout, pinned_input_memory_config};
     }
 };
 
