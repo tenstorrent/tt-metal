@@ -39,15 +39,25 @@ tt::tt_metal::ProgramDescriptor SigmoidGatedRmsNormProgramFactory::create_descri
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(idx), .data_format = format, .page_size = tile_size}}}});
     };
-    add_cb(0, Vt, datatype_to_dataformat_converter(in.input.dtype()));
-    add_cb(1, Vt, tt::DataFormat::Float16_b);
-    add_cb(2, Vt, tt::DataFormat::Float16_b);
-    add_cb(3, Vt, tt::DataFormat::Float32);
-    add_cb(4, 1, tt::DataFormat::Float32);
-    add_cb(5, 1, tt::DataFormat::Float32);
-    add_cb(6, Vt, tt::DataFormat::Float32);
-    add_cb(7, Vt, datatype_to_dataformat_converter(attrs.output_dtype), 2);
-    add_cb(8, 1, tt::DataFormat::Float32);
+    uint32_t next_cb_index = 0;
+    const uint32_t cb_x = next_cb_index++;
+    const uint32_t cb_gate = next_cb_index++;
+    const uint32_t cb_weight = next_cb_index++;
+    const uint32_t cb_tmp = next_cb_index++;
+    const uint32_t cb_stats = next_cb_index++;
+    const uint32_t cb_inv = next_cb_index++;
+    const uint32_t cb_norm = next_cb_index++;
+    const uint32_t cb_out = next_cb_index++;
+    const uint32_t cb_scaler = next_cb_index++;
+    add_cb(cb_x, Vt, datatype_to_dataformat_converter(in.input.dtype()));
+    add_cb(cb_gate, Vt, tt::DataFormat::Float16_b);
+    add_cb(cb_weight, Vt, tt::DataFormat::Float16_b);
+    add_cb(cb_tmp, Vt, tt::DataFormat::Float32);
+    add_cb(cb_stats, 1, tt::DataFormat::Float32);
+    add_cb(cb_inv, 1, tt::DataFormat::Float32);
+    add_cb(cb_norm, Vt, tt::DataFormat::Float32);
+    add_cb(cb_out, Vt, datatype_to_dataformat_converter(attrs.output_dtype), 2);
+    add_cb(cb_scaler, 1, tt::DataFormat::Float32);
 
     uint32_t eps_bits = 0;
     uint32_t inv_v_bits = 0;
