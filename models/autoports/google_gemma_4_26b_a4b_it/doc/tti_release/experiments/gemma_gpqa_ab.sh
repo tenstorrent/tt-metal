@@ -15,6 +15,7 @@ cd "$HOME/tt-metal"
 source python_env/bin/activate
 export PYTHONPATH="$HOME/vllm:$HOME/tt-metal:${PYTHONPATH:-}"
 export VLLM_PLUGINS=tt,tt_model_registry
+export EXTRA_MODELS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/extra_models_dir"
 export HF_MODEL=google/gemma-4-26B-A4B-it
 [ "$CFG" != "BASELINE" ] && export GEMMA4_PRECISION_CONFIG="$CFG"
 

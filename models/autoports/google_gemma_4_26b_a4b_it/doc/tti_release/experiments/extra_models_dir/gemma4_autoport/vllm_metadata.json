@@ -1,0 +1,5 @@
+{
+  "arch": "Gemma4ForConditionalGeneration",
+  "main_class": "models.autoports.google_gemma_4_26b_a4b_it.tt.generator_vllm:Gemma4ForCausalLM",
+  "_note": "Drop-in bundle for the TT vLLM plugin. Set EXTRA_MODELS_DIR to the parent extra_models_dir/. register_tt_models() calls _register_models_from_extra_dir() FIRST, and the builtin map then uses _register_model_if_missing, so this wins without editing platform.py. The hook TT-prefixes the arch, giving TTGemma4ForConditionalGeneration."
+}

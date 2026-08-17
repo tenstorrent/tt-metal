@@ -1,0 +1,2606 @@
+From ca152fe223227f85f1a0d86cef7d372023b9de77 Mon Sep 17 00:00:00 2001
+From: mvasiljevic <mvasiljevic@tenstorrent.com>
+Date: Wed, 12 Aug 2026 23:17:39 +0000
+Subject: [PATCH 1/4] Support autoport external-server release specs
+
+---
+ AUTODEBUG.md                                  | 135 +++++++++++++
+ AUTODEBUG_NESTED.md                           | 122 ++++++++++++
+ AUTODEBUG_RELEASE_ACCURACY.md                 | 187 ++++++++++++++++++
+ AUTODEBUG_RELEASE_EVAL_READINESS.md           | 112 +++++++++++
+ AUTODEBUG_SMOKE_RUNTIME.md                    | 142 +++++++++++++
+ AUTOFIX.md                                    | 117 +++++++++++
+ reference_config/evals/eval_config.py         |  56 ++++++
+ report_module/acceptance_criteria.py          |  10 +-
+ run.py                                        |  48 +++--
+ run_workflows.py                              |  46 ++++-
+ test_module/llm_tests/llm_eval_tests.py       |   2 +-
+ .../llm_tests/llm_performance_tests.py        |  15 +-
+ .../report_module/test_acceptance_criteria.py |  37 +++-
+ .../llm_tests/test_llm_eval_tests.py          |  44 +++++
+ .../llm_tests/test_llm_performance_tests.py   | 116 +++++++++++
+ tests/test_run_arguments.py                   | 109 +++++++++-
+ tests/test_run_workflows_arguments.py         | 138 +++++++++++++
+ 17 files changed, 1398 insertions(+), 38 deletions(-)
+ create mode 100644 AUTODEBUG.md
+ create mode 100644 AUTODEBUG_NESTED.md
+ create mode 100644 AUTODEBUG_RELEASE_ACCURACY.md
+ create mode 100644 AUTODEBUG_RELEASE_EVAL_READINESS.md
+ create mode 100644 AUTODEBUG_SMOKE_RUNTIME.md
+ create mode 100644 AUTOFIX.md
+ create mode 100644 tests/test_module/llm_tests/test_llm_performance_tests.py
+ create mode 100644 tests/test_run_workflows_arguments.py
+
+diff --git a/AUTODEBUG.md b/AUTODEBUG.md
+new file mode 100644
+index 00000000..eb1964f6
+--- /dev/null
++++ b/AUTODEBUG.md
+@@ -0,0 +1,135 @@
++# AutoDebug: custom runtime spec is rejected without `--model`
++
++## Scope and evidence
++
++This is a source-only investigation of `run.py` at TTI commit
++`c8509ac20b4cf179710caba94ba34ed54abc6c00`. No implementation code was
++changed and no hardware-dependent workflow was run.
++
++The reported invocation was reproduced locally with `--workflow benchmarks`
++and only
++`--runtime-model-spec-json /home/mvasiljevic/tt-metal/models/autoports/tiiuae_falcon3_7b_base/doc/tti_release/autoport_smoke_spec.json`
++as its model selection. It exits 2 with:
++
++```text
++run.py: error: the following arguments are required: --model (optional only for --workflow prefill_decode).
++```
++
++Loading that JSON directly with `ModelSpec.from_json()` succeeds and yields:
++
++- `model_name`: `Falcon3-7B-Base`
++- `device_type`: `p300x2`
++- `impl_id`: `autoport_falcon3_7b_base`
++- `impl.code_path`: `models/autoports/tiiuae_falcon3_7b_base`
++
++## Headline finding: unconditional pre-resolution validation makes the custom-spec path unreachable
++
++The immediate failure is a manual validation bug, not an argparse declaration
++requirement and not malformed JSON.
++
++1. `run.py:642` completes `parser.parse_args()`; `--model` itself is optional.
++2. `run.py:669-674` rejects every missing `args.model` unless the workflow is
++   `prefill_decode`.
++3. `main()` does not call `resolve_runtime(args)` until after parsing
++   (`run.py:975`, then later runtime resolution).
++4. The custom JSON is first opened by `ModelSpec.from_json()` only in
++   `resolve_runtime()` at `run.py:937-943`.
++
++Therefore a valid `--runtime-model-spec-json` cannot supply model identity to
++this command: the parser errors before the spec-loading branch can run. This
++fully predicts the observed exit code and message.
++
++`--model` is not intrinsically required to identify the custom model. The
++serialized `ModelSpec` already carries the Base model name, device, inference
++engine, and generated autoport implementation path. Requiring a catalog model
++label in addition defeats the documented custom-spec precedence at
++`run.py:932-943` (the JSON "wins outright").
++
++## Second finding: merely exempting the parser error is insufficient
++
++The minimal parser exemption alone would allow the JSON to load, but it would
++leave runtime selection fields inconsistent:
++
++- `run.py:688-690` calls `infer_default_device(args.model, args.engine)` before
++  loading the spec when no CLI device was supplied. With `args.model is None`,
++  this lookup is invalid or catalog-dependent.
++- The custom-spec branch builds `RuntimeConfig` exclusively from CLI args at
++  `run.py:942-943`; `RuntimeConfig.from_args()` copies `args.model`,
++  `args.device`, `args.impl`, and `args.engine` at
++  `workflows/runtime_config.py:142-147`.
++- `populate_model_spec_cli_args()` then clears the embedded spec `cli_args` and
++  replaces them with that `RuntimeConfig` at `run.py:911-924`. Thus a simple
++  parser exemption can erase the JSON's correct `model: Falcon3-7B-Base` from
++  the legacy compatibility view and replace it with `None`.
++
++This matters even for an external server: reporting, validation, workflow
++dispatch, and compatibility consumers use `RuntimeConfig` and/or
++`model_spec.cli_args`. The JSON must remain the authoritative identity source.
++
++## Recommended fix shape
++
++Treat `--runtime-model-spec-json` as a complete model-selection source:
++
++1. In `parse_arguments()`, allow missing `--model` when a runtime spec JSON is
++   present, as well as for the existing `prefill_decode` exception.
++2. Do not infer the device from a missing catalog model before the JSON loads.
++3. In `resolve_runtime()`, load the `ModelSpec` first and hydrate absent
++   selection fields from it before constructing `RuntimeConfig`:
++   `model_spec.model_name`, `model_spec.device_type`,
++   `model_spec.inference_engine`, and `model_spec.impl.impl_id` (using the
++   representations expected by `RuntimeConfig`). Explicit workflow/server
++   controls remain CLI/runtime controls.
++4. Only after that, backfill `model_spec.cli_args`, so it records
++   `Falcon3-7B-Base` and the resolved custom implementation rather than `None`
++   or an unrelated catalog alias.
++
++The exact implementation can either mutate the namespace before
++`RuntimeConfig.from_args()` or add a constructor that merges a `ModelSpec` with
++CLI runtime controls. The invariant is more important than the mechanism:
++custom-spec identity and implementation selection must come from the loaded
++spec, while workflow/server settings come from the intended runtime command.
++
++## Rejected workaround
++
++Do not pass `--model Falcon3-7B-Instruct` just to clear the parser gate. That
++catalog label contradicts the requested Base model. In the custom-spec branch
++the JSON `ModelSpec` would still describe Base/autoport while `RuntimeConfig`
++and the regenerated legacy `cli_args` would describe Instruct, creating an
++internally inconsistent and invalid release record.
++
++## Minimal isolated experiments
++
++All experiments are hardware-free.
++
++1. **Regression test of the current parser:** invoke `run.py` with a valid
++   runtime JSON and no `--model`; assert the current exit is 2 at the manual
++   parser error.
++2. **Spec authority test:** deserialize the Falcon JSON and assert the exact
++   Base model name, `p300x2`, autoport impl ID, and autoport `code_path` above.
++3. **Post-fix resolution unit test:** parse/resolve the same arguments without
++   starting a server; assert both `RuntimeConfig` and `ModelSpec` agree on Base,
++   device, engine, and autoport implementation.
++4. **Legacy backfill test:** after `populate_model_spec_cli_args()`, assert
++   `model_spec.cli_args["model"] == "Falcon3-7B-Base"` and that server mode,
++   service port, workflow, and trace-capture values match the supplied runtime
++   controls/spec contract.
++5. **Catalog-independence test:** temporarily use a valid custom model name
++   absent from `MODEL_SPECS`; resolution should still pass without any catalog
++   lookup. This falsifies accidental dependence on an Instruct catalog alias.
++6. **Negative tests:** neither `--model` nor runtime JSON should retain the
++   existing error; malformed/missing JSON should reach `ModelSpec.from_json()`
++   and fail clearly; conflicting explicit selection overrides should either be
++   rejected or obey a documented precedence rather than silently mixing IDs.
++
++## Self-review / remaining uncertainty
++
++The headline causal chain is directly confirmed by the current source and the
++hardware-free reproduction. The downstream inconsistency is also source-proven:
++the current custom branch constructs runtime identity from CLI args and then
++overwrites embedded `cli_args` with it.
++
++No claim is made here that one particular merge API is uniquely correct, or
++that all downstream workflow behaviors are covered without running their test
++suite. Those are implementation decisions to validate with the isolated tests
++above. No hardware evidence is needed to establish or repair the parser and
++runtime-spec ownership bug.
+diff --git a/AUTODEBUG_NESTED.md b/AUTODEBUG_NESTED.md
+new file mode 100644
+index 00000000..a17449d2
+--- /dev/null
++++ b/AUTODEBUG_NESTED.md
+@@ -0,0 +1,122 @@
++# AutoDebug: nested workflow parser rejects a valid custom-spec model
++
++## Scope and evidence
++
++This is an inspection-only follow-up after the outer custom-runtime parser fix.
++No implementation code was edited for this pass. Evidence inspected:
++
++- Smoke log:
++  `run_2026-08-12_22-20-13_id_autoport-Falcon3-7B-Base_p300x2_benchmarks_Vn5ElCm5.log`
++- Combined runtime spec:
++  `runtime_model_spec_2026-08-12_22-20-13_id_autoport-Falcon3-7B-Base_p300x2_dUnTFxKu.json`
++- `workflows/workflow_dispatch.py`, `launchers/run_llm_bench.py`,
++  `run_workflows.py`, and `workflow_module/command_factory.py`
++
++The combined JSON is valid and internally consistent:
++
++- static model: `Falcon3-7B-Base`
++- implementation: `autoport-falcon3-7b-base`
++- code path: `models/autoports/tiiuae_falcon3_7b_base`
++- device/engine: `P300X2` / `vLLM`
++- runtime identity: `Falcon3-7B-Base`, `autoport-falcon3-7b-base`,
++  `p300x2`, `vLLM`
++
++## Headline finding: the nested parser validates catalog membership before loading the runtime spec
++
++The failure is a second, independent catalog gate in `run_workflows.py`.
++
++1. The outer runtime is correctly resolved as Base/autoport. The smoke log's
++   CLI summary records `Falcon3-7B-Base`, `autoport-falcon3-7b-base`, and
++   `p300x2`.
++2. `_base_engine_argv()` in `workflows/workflow_dispatch.py:392-415` constructs
++   the LLM launcher command with `--model model_spec.model_name` and the saved
++   `--runtime-model-spec-json`. The observed command exactly matches that
++   construction.
++3. `launchers/run_llm_bench.py:37-51` parses only `--tools`, then re-executes
++   `run_workflows.py` while forwarding all other arguments verbatim. It does not
++   rewrite model identity or consume the runtime spec.
++4. `run_workflows.py:69-85` builds `valid_models` solely from the imported
++   `MODEL_SPECS` catalog and declares `--model` with
++   `choices=valid_models`.
++5. `parser.parse_args()` runs at `run_workflows.py:449`. The combined JSON is
++   not loaded until after parsing, through `CommandFactory.build(args)` from
++   `main()` at lines 512-520.
++6. The smoke therefore exits 2 at argparse with Base absent from the catalog,
++   before `workflow_module.command_factory._load_model_spec_override()` can
++   call `ModelSpec.from_json()` at lines 116-146.
++
++This chain exactly predicts the log: the launcher starts, the nested usage text
++lists `Falcon3-7B-Instruct` but not Base, and argparse rejects Base. Nothing in
++the log indicates a malformed spec, server failure, benchmark failure, or
++autoport import failure; execution never reaches those layers.
++
++## Identity ownership
++
++The runtime spec is already designed to override catalog resolution.
++`_load_model_spec_override()` explicitly says it prefers the already-resolved
++runtime spec, and `_build_context()` falls back to
++`get_runtime_model_spec(model=args.model, device=args.device)` only when the
++override cannot be loaded (`workflow_module/command_factory.py:116-152`).
++
++The nested parser contradicts that ownership model by insisting that the same
++model also exist in the catalog. Adding `Falcon3-7B-Base` to the catalog, or
++passing `Falcon3-7B-Instruct`, would hide the parser defect and would not prove
++that arbitrary generated autoports work. The Instruct alias would additionally
++corrupt the required Base release identity.
++
++## Minimal fix boundary
++
++Fix `run_workflows.parse_args()` so catalog validation is conditional on the
++absence of `--runtime-model-spec-json`, rather than expressed as unconditional
++argparse `choices`.
++
++A robust sequence is:
++
++1. Parse `--model` as a string (it can remain required for this nested CLI).
++2. When no runtime JSON is supplied, retain the current catalog-membership
++   error and available-model diagnostics.
++3. When runtime JSON is supplied, load the combined spec early enough to
++   validate that its `runtime_model_spec.model_name` and
++   `runtime_config.model` agree with `args.model`, and likewise validate device
++   if desired. Reject contradictory identities; do not silently substitute a
++   catalog model.
++4. Continue to let `CommandFactory` consume the same runtime JSON as the
++   authoritative implementation source.
++
++An argparse pre-scan that merely appends the JSON model to `choices` could
++unblock this exact command, but it duplicates spec parsing and is weaker unless
++it also validates the combined static/runtime identities. Post-parse
++conditional validation is simpler and matches the established override/fallback
++contract.
++
++## Focused verify/refute experiments
++
++All experiments are hardware-free.
++
++1. Reproduce `parse_args()` with Base plus the observed combined JSON; current
++   code must exit 2 before any JSON loader is called.
++2. After the fix, use a valid custom model absent from `MODEL_SPECS`; assert
++   parse and `CommandFactory` context construction succeed and preserve its
++   custom `impl.code_path`.
++3. Spy on `get_runtime_model_spec`; assert it is not called for a valid runtime
++   override.
++4. Without runtime JSON, assert a non-catalog model is still rejected and the
++   catalog path behaves unchanged.
++5. Supply a combined JSON whose static model, runtime model, and CLI model do
++   not all agree; assert a clear identity-mismatch error rather than catalog
++   fallback or silent substitution.
++6. Exercise the thin launcher with a mocked re-exec and assert it forwards
++   Base and the JSON path byte-for-byte. This confirms the launcher needs no
++   identity rewrite.
++
++## Self-review and remaining uncertainty
++
++The headline cause is source- and log-proven: argparse rejects the value before
++the existing runtime-spec override loader is reachable. The launcher is not a
++cause; its verbatim forwarding is confirmed by source and the observed command.
++
++The exact placement and exception wording for early identity validation are an
++implementation choice. Downstream benchmark behavior remains untested by this
++inspection-only pass; after focused parser/CommandFactory tests, the same tiny
++no-hardware TTI client smoke should be rerun against the existing server to
++expose the next real layer, if any.
+diff --git a/AUTODEBUG_RELEASE_ACCURACY.md b/AUTODEBUG_RELEASE_ACCURACY.md
+new file mode 100644
+index 00000000..077a7a91
+--- /dev/null
++++ b/AUTODEBUG_RELEASE_ACCURACY.md
+@@ -0,0 +1,187 @@
++# AutoDebug: Falcon3 Base release accuracy and acceptance failures
++
++## Scope and evidence
++
++This is an inspection-only diagnosis of the unrestricted release report
++`report_tiiuae__Falcon3-7B-Base_2026-08-12T225815+0000.md`, its small report
++JSON/runtime metadata, the eval command log, current eval configuration, and
++report acceptance code. No implementation code, credentials, dataset examples,
++or generated samples are included here.
++
++Direct observations:
++
++- IFEval completed on all 541 prompts with lm-eval's stock `ifeval` task.
++- Metrics were prompt strict 18.669%, instruction strict 30.935%, prompt loose
++  19.963%, and instruction loose 32.494%.
++- The report selected prompt-level strict and compared 18.67 to 34.3.
++- GPQA exited 1 before evaluation because `Idavidrein/gpqa` file access was
++  denied by its Hub gate; no result file was available.
++- Both eval blocks are visibly `FAIL`, but report acceptance says `PASS`,
++  labels both failures “waived,” and declares no blockers.
++- The runtime spec contains no matching known-issue waiver.
++
++## 1. IFEval: the measured key and raw-prompt shape are defensible, but the 34.3 methodology is not independently reproduced
++
++### What is confirmed
++
++The publisher's Falcon3 Base card states only that its internal pipeline used
++lm-evaluation-harness, reported raw scores, and obtained IFEval 34.3. It does
++not state the harness revision, IFEval metric column, tokenizer/BOS policy, or
++generation details.
++
++The TTI invocation uses the stock lm-eval IFEval configuration found in the
++actual eval venv:
++
++- dataset `google/IFEval`, train split, 0-shot;
++- `doc_to_text: prompt`;
++- deterministic generation, temperature 0, maximum 1280 tokens;
++- the four standard prompt/instruction strict/loose metrics.
++
++Falcon3-7B-Base is a raw pretrained model. Its card demonstrates ordinary text
++completion, and its tokenizer has no chat template. TTI's
++`apply_chat_template=False`, completions API, and raw prompt are therefore the
++correct default; substituting the Instruct model or inventing a chat wrapper
++would be methodologically wrong.
++
++`score_task_single_key()` always uses only `result_keys[0]`. The Base config's
++first key is `prompt_level_strict_acc,none`, so 18.67 is not an accidental
++average or parser error. Prompt-level strict is also the most common single
++IFEval headline metric in lm-eval leaderboard usage. The result JSON contains
++the expected key, full prompt count, and stock task version 4.0.
++
++### What is not proven
++
++The configuration incorrectly calls the publisher's 34.3 a
++`gpu_reference_score` while linking only to the publisher card. It is not an
++independently measured same-command GPU reference. Because the card does not
++identify which of the four IFEval metrics produced 34.3, exact apples-to-apples
++comparison is unproven. Notably, this run's instruction-level scores (30.94
++strict, 32.49 loose) are numerically much closer to 34.3 than prompt strict.
++That is a methodology ambiguity, not evidence that either alternative is the
++publisher's intended metric.
++
++Changing the result key merely to make the row pass is invalid. Even the best
++observed metric remains below 34.3, and the four metrics consistently show
++weak instruction following. The small result metadata plus qualitative shape
++of failures indicates severe repetitive/degenerate completion behavior, but a
++TT-vs-reference attribution cannot be made from a publisher number alone.
++
++### Verdict and decisive experiment
++
++- **Metric parser bug:** refuted. It deliberately reports prompt strict.
++- **Obvious chat-template bug:** refuted for this Base model.
++- **Reference methodology mismatch:** still possible and must be resolved.
++- **TT model correctness regression:** plausible, but not proven without an
++  identical GPU/HF run.
++
++Run the exact same eval venv, task revision, raw completions mode, tokenizer,
++seed, generation settings, and model revision against a trusted HF/GPU vLLM
++server. Record all four aggregate metrics, not samples. Then:
++
++- if GPU prompt strict is near 34.3, retain prompt strict as the score and use
++  that measured GPU result as the real reference; investigate TT model output;
++- if GPU reproduces ~18.67, the TT path is exonerated and the publisher number
++  is methodology-incompatible; identify the publisher recipe before changing
++  the configured key/reference;
++- if GPU aligns only on another metric, document that methodology explicitly
++  and change both score key and reference provenance together.
++
++An optional CPU/HF shifted-left accuracy comparison or deterministic prompt
++subset can localize a TT correctness issue, but it must use the same raw prompt
++and may not expose samples in release artifacts.
++
++## 2. GPQA: authentication is present, but the token's user lacks gated-file authorization
++
++The failure is authorization, not absence of a token and not a model/server
++failure. `Idavidrein/gpqa` is publicly discoverable but gated: unauthenticated
++or unauthorized users can view repository metadata/file names while content
++downloads remain denied. Therefore an authenticated metadata API response 200
++does not prove access to `gpqa_diamond.csv`.
++
++Hugging Face grants gated-dataset access to an individual user account after
++that user accepts the dataset conditions (or is approved). A token can only
++exercise access already granted to its owning user, and a fine-grained token
++must also include read access to that dataset. The direct `load_dataset` denial
++inside the exact eval venv shows this is not merely TTI failing to forward the
++outer environment.
++
++Safe actionable path:
++
++1. Identify the token owner without printing the token.
++2. While logged in as that same individual, visit `Idavidrein/gpqa`, accept the
++   gate/conditions, and wait for approval if required.
++3. Ensure the CI token is a read token, or a fine-grained token explicitly
++   permitted to read this dataset. Organization membership alone is not a
++   substitute for individual gated access.
++4. Validate access with a metadata/file download probe or `load_dataset` in the
++   eval venv while suppressing credential and sample output.
++5. Cache the authorized dataset in the intended HF cache and rerun GPQA with
++   the same task. Do not copy dataset content into release artifacts or bypass
++   the gate with an alternate dataset mirror.
++
++If policy prevents accepting the gate, GPQA cannot be claimed as passed. It
++must remain a blocking missing eval unless a real, issue-linked waiver is
++explicitly approved; this release's requirements disallow silently waiving it.
++
++## 3. Acceptance: EXPERIMENTAL status is being treated as an implicit eval waiver
++
++This is a source-confirmed reporting bug relative to the release contract.
++
++`report_module/acceptance_criteria.py` derives eval enforcement from
++`ModelStatusTypes.evals_enforced`. `ModelStatusTypes.EXPERIMENTAL` has no
++required benchmark tiers, and `evals_enforced` reuses that emptiness, returning
++false. In `_check_evals()`:
++
++1. each FAIL block produces `"Accuracy check failed."`;
++2. `_find_waiver()` correctly finds no known issue;
++3. because `evals_enforced` is false, lines 434-436 place the failure into the
++   category's `waived` dictionary anyway, with an “informational: model
++   status=EXPERIMENTAL” suffix;
++4. `failed` remains zero, category status becomes PASS, and top-level blockers
++   stay empty;
++5. `CategoryResult.passed` subtracts the two `waived` entries, yielding the
++   misleading `0/2 passed, 2 waived` summary.
++
++This conflates two distinct policies:
++
++- performance target tiers above a model's maturity status may be
++  informational;
++- failed accuracy/eval tasks require explicit enforcement or a declared,
++  issue-linked known-issue waiver.
++
++No waiver exists here. Model maturity is not a waiver record, and unrestricted
++release requirements explicitly make unwaived IFEval/GPQA failures blocking.
++
++### Smallest fix and tests
++
++Make eval failures enforced for every recognized model status. Keep
++status-tier relaxation only in `_check_benchmarks()`. In practical terms,
++`_evals_enforced()` should not return false for EXPERIMENTAL (or
++`ModelStatusTypes.evals_enforced` should always be true if no other caller
++needs the old policy). Continue to demote an eval only when `_find_waiver()`
++matches a real `known_issues` entry.
++
++Focused tests:
++
++1. Parameterize EXPERIMENTAL/FUNCTIONAL/COMPLETE/TOP_PERF with an eval FAIL and
++   no known issues; every case must produce category FAIL, a blocker, zero
++   waived entries, and top-level acceptance FAIL.
++2. Add a matching EVALS known issue; verify exactly that task is waived and the
++   serialized reason is preserved.
++3. Use two failures (one accuracy failure, one explicit task/rc failure) and no
++   waiver; assert summary says `0/2 passed, 2 failed`, never `2 waived`.
++4. Verify EXPERIMENTAL benchmark tiers remain informational so this fix does
++   not change performance-maturity policy.
++5. Regenerate acceptance from the existing small report schema and assert both
++   IFEval and GPQA appear as blockers.
++
++## Final status
++
++- The existing report's top-level PASS is invalid and must not be used as a
++  release handoff.
++- GPQA is blocked on user-level gated-dataset authorization.
++- IFEval is a real failed row under the configured prompt-strict methodology;
++  whether it is a TT regression or publisher-method mismatch requires the
++  identical HF/GPU control above.
++- No accuracy failure may be removed, re-keyed, prompt-aligned, context-capped,
++  or relabeled merely to make release acceptance pass.
+diff --git a/AUTODEBUG_RELEASE_EVAL_READINESS.md b/AUTODEBUG_RELEASE_EVAL_READINESS.md
+new file mode 100644
+index 00000000..62655c94
+--- /dev/null
++++ b/AUTODEBUG_RELEASE_EVAL_READINESS.md
+@@ -0,0 +1,112 @@
++# AutoDebug: unrestricted release eval readiness drops the external port
++
++## Scope
++
++This is a fresh source-only investigation of the interrupted unrestricted
++release eval readiness wait. No implementation code or hardware state was
++changed.
++
++Direct observations supplied by the run are:
++
++- the eval path waits inside remote OpenAI readiness;
++- `http://127.0.0.1:8000/v1/models` remains healthy;
++- the configured endpoint is represented as host-only
++  `server_url=http://127.0.0.1` plus `service_port=8000`.
++
++## Root cause
++
++`run_llm_eval()` uses inconsistent URL ownership between its remote and local
++branches (`test_module/llm_tests/llm_eval_tests.py:360-395`):
++
++- remote: `RemoteOpenAIController(base_url=ctx.server_url)`;
++- local: `HttpServerController(base_url=ctx.server_host,
++  service_port=ctx.server_port)`.
++
++For this release run, `ctx.server_url` is only `http://127.0.0.1`. The separate
++port is never supplied to `RemoteOpenAIController`. Its readiness properties
++append `/v1/models` directly to that base (`llm_module/server_control.py:127-147`),
++so it polls `http://127.0.0.1/v1/models` on the default HTTP port rather than
++the healthy `http://127.0.0.1:8000/v1/models` endpoint.
++
++The controller then delegates that same API base to
++`_wait_for_remote_openai_ready()` (`server_control.py:149-165`), explaining the
++observed wait. The failure occurs before eval task execution and does not
++implicate model accuracy, Base/autoport identity, the eval datasets, or the
++server at port 8000.
++
++## Existing canonical contract
++
++`MediaContext` already owns endpoint composition:
++
++- `ctx.base_url` uses `build_base_url(ctx._deploy_url, ctx.service_port)`;
++- a URL with an explicit port keeps that port;
++- a host-only URL receives the separate service port;
++- `ctx.server_host` and `ctx.server_port` provide the split form for local
++  controllers (`test_module/context.py:49-69`).
++
++The remote eval branch bypasses `ctx.base_url`, which is the precise ownership
++error. This is the same class of boundary issue recently fixed in the LLM
++performance caller, but the eval path constructs its own controller and thus
++requires its own correction.
++
++## Smallest fix
++
++Change only the remote branch of `run_llm_eval()` to construct:
++
++```python
++RemoteOpenAIController(base_url=ctx.base_url, auth_token=auth_token)
++```
++
++Leave the local `HttpServerController(base_url=ctx.server_host,
++service_port=ctx.server_port, ...)` branch unchanged.
++
++This preserves all required behavior:
++
++- host-only `http://127.0.0.1` plus port 8000 becomes
++  `http://127.0.0.1:8000`;
++- an explicit URL port wins over `service_port` and is not duplicated;
++- URLs already ending in `/v1` remain compatible with
++  `RemoteOpenAIController.api_base_url`;
++- local split host/port behavior is unchanged;
++- no catalog/model alias or release context change is involved.
++
++Do not hard-code 8000 or change `RemoteOpenAIController` globally for this
++repair. The bug is that this caller ignored the existing canonical context
++property; fixing the caller is the narrowest intervention with the smallest
++cross-workflow risk.
++
++## Focused hardware-free tests
++
++Extend `tests/test_module/llm_tests/test_llm_eval_tests.py` at the
++`run_llm_eval()` orchestration boundary:
++
++1. **Remote host plus separate port:** set `ctx.remote_server=True`,
++   `ctx.server_url="http://127.0.0.1"`, `ctx.service_port/server_port=8123`,
++   and patch `RemoteOpenAIController`; assert constructor `base_url` is
++   `http://127.0.0.1:8123` and the local controller is not called.
++2. **Explicit port precedence:** use
++   `ctx.server_url="http://127.0.0.1:9000"` with service port 8123; assert the
++   remote controller receives `http://127.0.0.1:9000`, not a double port or
++   8123.
++3. **Local regression:** set `remote_server=False`; assert the existing local
++   controller still receives host-only `ctx.server_host` and separate
++   `ctx.server_port`.
++4. Have the mocked controller report healthy and stub the eval task/result
++   path, proving construction proceeds without network access. An optional
++   controller unit assertion can confirm the resulting remote `models_url` is
++   exactly `<canonical-base>/v1/models`.
++
++The current orchestration tests patch only `HttpServerController` and create a
++local context, so they do not cover this remote constructor boundary.
++
++## Self-review and remaining uncertainty
++
++The causal chain is source-complete and predicts the exact wrong and healthy
++URLs. No evidence suggests another readiness mechanism changes the endpoint
++after controller construction: the controller exposes its `api_base_url`
++directly to the readiness adapter.
++
++After the focused tests, the unrestricted client release should be resumed
++against the already-running server to prove the eval virtual environment uses
++the corrected endpoint. That integration check is outside this inspection-only
++pass.
+diff --git a/AUTODEBUG_SMOKE_RUNTIME.md b/AUTODEBUG_SMOKE_RUNTIME.md
+new file mode 100644
+index 00000000..2037c3ed
+--- /dev/null
++++ b/AUTODEBUG_SMOKE_RUNTIME.md
+@@ -0,0 +1,142 @@
++# AutoDebug: LLM smoke runtime loses the external port and runtime controls
++
++## Scope and direct evidence
++
++This inspection-only pass examined the latest smoke log,
++`run_2026-08-12_22-29-24_id_autoport-Falcon3-7B-Base_p300x2_benchmarks_2cD4WPKa.log`,
++and the current TTI source. No implementation code was edited.
++
++The log proves the previous parser layers are cleared:
++
++- runtime identity is `Falcon3-7B-Base`, autoport implementation, `p300x2`;
++- `service_port=8000` and `disable_trace_capture=True` are present;
++- the workflow reaches the LLM benchmark and expands eight sweep points;
++- execution blocks in `RemoteOpenAIController.wait_for_healthy()` until it is
++  interrupted.
++
++The corresponding combined spec has one performance-reference target
++(`isl=8`, `osl=8`, concurrency 1, one prompt), `limit_samples_mode=None`, and
++`disable_trace_capture=True`.
++
++## Finding 1: remote URL construction drops a separately supplied service port
++
++The initial report wording is slightly stale: current
++`llm_performance_tests.py:63-80` does not pass `ctx.server_url` directly to the
++controller. It creates:
++
++1. `server_base_url = ctx.server_url` for a remote run;
++2. `ServerConnection(base_url=server_base_url, service_port=ctx.server_port,
++   is_remote=True)`;
++3. `RemoteOpenAIController(base_url=server.url_with_port)`.
++
++However, `ServerConnection.url_with_port` returns the bare `base_url` whenever
++`is_remote` is true (`llm_module/config.py:69-77`). Because the smoke supplied
++`--server-url http://127.0.0.1` separately from `--service-port 8000`, the
++result remains `http://127.0.0.1`, not `http://127.0.0.1:8000`.
++`RemoteOpenAIController.models_url` consequently becomes
++`http://127.0.0.1/v1/models` (`llm_module/server_control.py:127-147`). This
++fully predicts a readiness wait while the verified endpoint at port 8000 is
++healthy.
++
++The same `ServerConnection` is passed to the benchmark driver, so this is not
++only a readiness-probe concern: a remote driver that consumes
++`server.url_with_port` can also target the wrong port after readiness is fixed.
++
++### Fix boundary
++
++Use the already canonical `MediaContext.base_url`, which calls
++`build_base_url(_deploy_url, service_port)` and preserves an explicit URL port
++while otherwise appending the separate service port
++(`test_module/context.py:49-69`). Construct the remote `ServerConnection` and
++controller from that canonical URL, or change `ServerConnection.url_with_port`
++so `is_remote` does not suppress a missing service port. The former is the
++narrower caller-boundary fix; the latter needs broader driver regression tests.
++
++Do not hard-code 8000. Tests must cover a host-only URL plus non-default port,
++an explicitly ported URL whose port wins, and local split host/port behavior.
++
++## Finding 2: `disable_trace_capture` reaches the context but is not passed to the runner
++
++The combined runtime config carries `disable_trace_capture=True`, and
++`CommandFactory._build_context()` places that `RuntimeConfig` on
++`MediaContext`. `LLMPerformanceRunner.run()` exposes the relevant contract as
++`skip_trace_capture=False`; it calls `capture_traces()` when false and sweep
++shapes exist (`llm_module/runner.py:72-101`).
++
++`run_llm_performance()` currently calls
++`runner.run(configs, server, context)` without the keyword
++(`test_module/llm_tests/llm_performance_tests.py:88-92`). Therefore the runtime
++flag is semantically dropped.
++
++The live remote controller's `capture_traces()` is presently a no-op, so this
++omission did not cause the readiness hang. It is still a real contract bug: it
++will enable capture for another controller or after remote capture gains an
++implementation, contrary to the requested release spec.
++
++### Fix boundary
++
++Derive `skip_trace_capture` from
++`ctx.runtime_config.disable_trace_capture` (false when no runtime config) in
++`run_llm_performance()` and pass it explicitly to `runner.run()`. A focused
++mock-runner test should prove true and false propagation independently of the
++controller's current no-op behavior.
++
++## Finding 3: eight points are expected when neither smoke selection nor target-only mode is active
++
++`run_llm_bench()` obtains `limit_samples_mode` from the runtime config and calls
++`get_llm_configs()` (`test_module/llm_tests/llm_benchmark_tests.py:97-106`).
++The smoke's runtime value is `None`, so `get_llm_configs()` does not call
++`select_smoke_test_benchmark_config()`.
++
++`build_benchmark_config()` always starts with the model's performance-reference
++task, then appends generated benchmark sweep tasks unless the environment
++variable `ONLY_BENCHMARK_TARGETS` is non-empty
++(`reference_config/benchmarking/benchmark_config.py:614-617`). The model has
++one target, but the generated valid text shapes/concurrencies expand the final
++deduplicated list to the eight points logged. The count is therefore selection
++behavior, not evidence that the custom spec was ignored.
++
++### Supported one-target controls
++
++- Preferred CLI/runtime smoke control: pass outer
++  `--limit-samples-mode smoke-test`. It is serialized into the combined
++  `RuntimeConfig`; `get_llm_configs()` then selects only the first task, which
++  is the one-entry performance-reference task for this spec.
++- Narrow environment control: `ONLY_BENCHMARK_TARGETS=1` suppresses generated
++  sweeps and retains performance targets. This is appropriate for a targeted
++  harness invocation, but note that the implementation treats *any* non-empty
++  value, including `"0"`, as enabled.
++
++Neither control should become a release default. The tiny pre-release smoke
++may select one target; nightly/full release must retain its intended sweep.
++
++## Focused experiments
++
++1. Build a remote `MediaContext(server_url="http://127.0.0.1",
++   service_port=8123)` and spy on `RemoteOpenAIController`; assert readiness and
++   driver connection both use `http://127.0.0.1:8123`.
++2. Repeat with `server_url="http://127.0.0.1:9000"`; assert 9000 wins over the
++   separate service port and is not duplicated.
++3. Mock `LLMPerformanceRunner.run`; assert runtime
++   `disable_trace_capture=True/False` maps to
++   `skip_trace_capture=True/False`.
++4. Use the Falcon custom spec with no selection control and assert the current
++   eight configs, showing that the runtime spec is honored but sweeps append.
++5. Set `limit_samples_mode="smoke-test"`; assert exactly its one performance
++   target remains. Independently set `ONLY_BENCHMARK_TARGETS=1` and assert the
++   same one target for this spec.
++6. After fixes, rerun only the tiny client smoke against the existing server;
++   verify `/v1/models` polling includes port 8000, trace capture is skipped,
++   and exactly one benchmark command starts.
++
++## Self-review and remaining uncertainty
++
++The port-loss and trace-flag findings are source-proven, and the observed hang
++and eight-point count match their predictions. The claim that the controller
++was directly constructed from `ctx.server_url` was corrected after inspecting
++current source: the loss occurs one layer later in
++`ServerConnection.url_with_port` because `is_remote=True`.
++
++No hardware or live request was issued in this pass. After the focused unit
++tests, the existing server smoke remains necessary to prove the complete URL
++and driver path in the workflow virtual environment.
+diff --git a/AUTOFIX.md b/AUTOFIX.md
+new file mode 100644
+index 00000000..5fdeba89
+--- /dev/null
++++ b/AUTOFIX.md
+@@ -0,0 +1,117 @@
++# AutoFix Report
++
++## Starting Evidence
++
++- Source: `AUTODEBUG.md` at TTI commit `c8509ac20b4cf179710caba94ba34ed54abc6c00`.
++- Original failure: a valid `--runtime-model-spec-json` without `--model`
++  exited 2 before the spec was loaded.
++
++## Hypothesis Experiment
++
++- **Hypothesis:** catalog-only model validation and device inference run before
++  custom-spec resolution; after bypassing them, selection identity must be
++  hydrated from the `ModelSpec` before building `RuntimeConfig`.
++- **Experiment:** add a custom JSON fixture whose model and implementation are
++  absent from `MODEL_SPECS`; parse and resolve it without `--model`, spy on the
++  catalog lookup, and inspect both `RuntimeConfig` and legacy `cli_args`.
++- **Result:** verified. The fixed path resolves the custom identity without a
++  catalog lookup, preserves caller workflow/server controls, and backfills
++  consistent legacy arguments. Missing both selection sources still exits 2.
++- **Fix:** accept a runtime spec as a complete model-selection source, skip
++  pre-load device inference for that path, and fill absent model/device/engine/
++  impl fields from the loaded `ModelSpec` before `RuntimeConfig.from_args()`.
++- **Verification:**
++  - Focused: `4 passed, 86 deselected`.
++  - Full `tests/test_run_arguments.py`: `90 passed`.
++
++## Final Status
++
++Fixed with hardware-free parser and resolution evidence. No hardware or live
++server workflow was run. Remaining integration risk is limited to downstream
++workflows outside `tests/test_run_arguments.py`; the live TTI smoke remains the
++release owner's next proof point.
++
++## Nested Workflow Parser Follow-up
++
++- **Starting evidence:** `AUTODEBUG_NESTED.md` and the TTI smoke log showed
++  `run_workflows.py` rejecting `Falcon3-7B-Base` through catalog-only argparse
++  choices before `CommandFactory` could load the valid combined runtime spec.
++- **Hypothesis:** nested catalog membership must be conditional on the absence
++  of a runtime spec; custom runs must validate CLI/static/runtime identities and
++  fail closed on an unreadable spec.
++- **Experiment:** use a deliberately non-catalog model and autoport path in a
++  combined JSON, parse it through `run_workflows`, build its context while
++  spying on catalog resolution, and separately corrupt every identity source
++  and the JSON path/content.
++- **Result:** verified. The valid custom model parses, preserves its autoport
++  path, and never calls catalog resolution. Missing/malformed JSON and each
++  CLI/static/runtime model/device mismatch exit 2 with a targeted parser error.
++- **Fix:** `run_workflows.py` now parses model as a string; validates catalog
++  membership only without a runtime spec; and, with a runtime spec, loads both
++  `ModelSpec` and `RuntimeConfig` and requires their model/device identities to
++  agree with the CLI before workflow construction.
++- **Verification:** focused nested tests: `8 passed`; relevant parser,
++  command-factory, dispatch, and workflow suites: `279 passed`.
++- **Remaining risk:** no live benchmark or hardware workflow was run in this
++  experiment. The same tiny TTI client smoke is the next integration proof.
++
++## LLM Smoke Runtime Follow-up
++
++- **Starting evidence:** `AUTODEBUG_SMOKE_RUNTIME.md` and the latest smoke log
++  showed readiness polling without the separately configured service port;
++  runtime trace disable was also present but not passed to the runner.
++- **Hypothesis:** the LLM performance caller must use `MediaContext.base_url`
++  for remote connections and explicitly map runtime
++  `disable_trace_capture` to runner `skip_trace_capture`.
++- **Experiment:** mock the controllers and runner at the caller boundary, then
++  exercise a remote host-only URL plus non-default port, a remote explicitly
++  ported URL, unchanged local split host/port behavior, and both trace-flag
++  values.
++- **Result:** verified. Remote host-only URLs now include the service port,
++  explicit URL ports win without duplication, local connection/controller
++  inputs are unchanged, and true/false trace values propagate exactly.
++- **Fix:** `run_llm_performance()` constructs remote `ServerConnection` from
++  canonical `ctx.base_url` and calls `runner.run(...,
++  skip_trace_capture=bool(ctx.runtime_config.disable_trace_capture))`, with a
++  safe false default when runtime config or the field is absent.
++- **Verification:** focused caller tests: `5 passed`; relevant LLM module,
++  benchmark bridge, command-factory, and nested-parser suites: `331 passed`.
++- **Remaining risk:** no live server or hardware request was run. Sweep defaults
++  were intentionally unchanged; the next smoke must select one target through
++  outer `--limit-samples-mode smoke-test`.
++
++## Release Eval Readiness Follow-up
++
++- **Starting evidence:** `AUTODEBUG_RELEASE_EVAL_READINESS.md` and the
++  interrupted unrestricted release stack showed remote readiness waiting on a
++  host-only URL while the configured port 8000 remained healthy.
++- **Hypothesis:** the standard eval caller bypasses `MediaContext.base_url` and
++  therefore drops a separately supplied service port.
++- **Experiment:** mock the readiness controllers at the eval orchestration
++  boundary for a host-only URL plus port 8123 and for an explicitly ported URL.
++- **Result:** verified. Canonical context composition supplies 8123 in the
++  split case and preserves explicit port 9000 without duplication.
++- **Fix:** `run_llm_eval()` now passes `ctx.base_url` to the remote controller;
++  the local split host/port path remains unchanged.
++- **Verification:** focused eval and performance caller suites: `27 passed`.
++- **Remaining risk:** the unrestricted release must be rerun against the live
++  autoport server to validate the corrected eval environment end to end.
++
++## Release Accuracy Acceptance Follow-up
++
++- **Starting evidence:** `AUTODEBUG_RELEASE_ACCURACY.md` and the unrestricted
++  report showed two failed eval rows converted to `2 waived` and a top-level
++  PASS solely because the model status was EXPERIMENTAL.
++- **Hypothesis:** model maturity is incorrectly serving as an implicit eval
++  waiver; only a matching declared known issue may waive an accuracy failure.
++- **Experiment:** exercise failed accuracy and explicit-error blocks across all
++  four model statuses, plus the existing explicit known-issue path.
++- **Result:** verified. Before the fix EXPERIMENTAL accepted failures with no
++  issue; after the fix all statuses block, while a matching EVALS known issue
++  remains the only waiver mechanism and benchmark maturity policy is unchanged.
++- **Fix:** eval enforcement is unconditional in release acceptance; status-tier
++  relaxation remains confined to benchmarks.
++- **Verification:** report acceptance suite: `50 passed`.
++- **Remaining blockers:** IFEval needs an identical HF/GPU reference to resolve
++  methodology versus TT correctness; GPQA requires authorized gated-dataset
++  access. The existing report PASS is invalid.
+diff --git a/reference_config/evals/eval_config.py b/reference_config/evals/eval_config.py
+index a6d21475..b21fed4b 100644
+--- a/reference_config/evals/eval_config.py
++++ b/reference_config/evals/eval_config.py
+@@ -4412,6 +4412,58 @@ _eval_config_list = [
+             ),
+         ],
+     ),
++    EvalConfig(
++        hf_model_repo="tiiuae/Falcon3-7B-Base",
++        tasks=[
++            EvalTask(
++                task_name="ifeval",
++                apply_chat_template=False,
++                score=EvalTaskScore(
++                    published_score=34.3,
++                    published_score_ref="https://huggingface.co/tiiuae/Falcon3-7B-Base#benchmarks",
++                    # The model card does not publish the exact harness
++                    # revision/metric recipe, so this is not an independent
++                    # same-command GPU reference.
++                    gpu_reference_score=None,
++                    gpu_reference_score_ref=None,
++                    score_func=score_task_single_key,
++                    score_func_kwargs={
++                        "result_keys": [
++                            "prompt_level_strict_acc,none",
++                            "inst_level_strict_acc,none",
++                        ],
++                        "unit": "percent",
++                    },
++                ),
++                limit_samples_map={
++                    EvalLimitMode.CI_NIGHTLY: 0.05,
++                    EvalLimitMode.SMOKE_TEST: 0.01,
++                },
++            ),
++            EvalTask(
++                task_name="gpqa_diamond_generative_n_shot",
++                num_fewshot=0,
++                apply_chat_template=False,
++                score=EvalTaskScore(
++                    published_score=35.5,
++                    published_score_ref="https://huggingface.co/tiiuae/Falcon3-7B-Base#benchmarks",
++                    gpu_reference_score=None,
++                    gpu_reference_score_ref=None,
++                    score_func=score_task_single_key,
++                    score_func_kwargs={
++                        "result_keys": [
++                            "exact_match,flexible-extract",
++                        ],
++                        "unit": "percent",
++                    },
++                ),
++                limit_samples_map={
++                    EvalLimitMode.CI_NIGHTLY: 0.05,
++                    EvalLimitMode.SMOKE_TEST: 0.01,
++                },
++            ),
++        ],
++    ),
+     # =========================================================================
+     # Gemma 4 family - GPU reference eval configs.
+     #
+@@ -5258,3 +5310,7 @@ EVAL_CONFIGS = {
+     for _, model_spec in MODEL_SPECS.items()
+     if model_spec.hf_model_repo in _eval_config_map
+ }
++# Runtime autoport specs are intentionally absent from MODEL_SPECS. Keep the
++# checkpoint-native Base recipe addressable by its model_name so custom specs
++# can run evals/release without borrowing the Instruct catalog identity.
++EVAL_CONFIGS["Falcon3-7B-Base"] = _eval_config_map["tiiuae/Falcon3-7B-Base"]
+diff --git a/report_module/acceptance_criteria.py b/report_module/acceptance_criteria.py
+index 60c2c970..bddd0506 100644
+--- a/report_module/acceptance_criteria.py
++++ b/report_module/acceptance_criteria.py
+@@ -41,9 +41,13 @@ def _enforced_benchmark_tiers(model_status: Optional[str]) -> Tuple[str, ...]:
+ 
+ 
+ def _evals_enforced(model_status: Optional[str]) -> bool:
+-    """Whether eval accuracy failures block acceptance for this model status."""
+-    status = ModelStatusTypes.resolve(model_status)
+-    return True if status is None else status.evals_enforced
++    """Eval failures always block unless an explicit known-issue waiver matches.
++
++    Model maturity relaxes benchmark target tiers only.  Treating an
++    EXPERIMENTAL model as an implicit eval waiver can turn failed or missing
++    accuracy rows into a release PASS without a declared issue.
++    """
++    return True
+ 
+ 
+ def _informational_suffix(model_status: Optional[str]) -> str:
+diff --git a/run.py b/run.py
+index bd1dfcbf..26ff7f52 100644
+--- a/run.py
++++ b/run.py
+@@ -663,29 +663,31 @@ def parse_arguments():
+     args.engine = (
+         InferenceEngine.from_string(args.engine).value if args.engine else None
+     )
+-    # --model and --device are optional only for prefill_decode (the mock stack
+-    # serves --served-model, not the catalog model). Inject a placeholder spec
+-    # so the rest of run.py resolves normally.
++    # A runtime model spec is a complete model-selection source; its identity is
++    # loaded atomically in resolve_runtime().  prefill_decode is the other path
++    # where the catalog model may be omitted.
+     if args.model is None:
+-        if args.workflow != "prefill_decode":
++        if not args.runtime_model_spec_json and args.workflow != "prefill_decode":
+             parser.error(
+                 "the following arguments are required: --model "
+-                "(optional only for --workflow prefill_decode)."
++                "(optional with --runtime-model-spec-json or only for "
++                "--workflow prefill_decode)."
+             )
+-        if not args.served_model:
+-            parser.error(
+-                "--workflow prefill_decode without --model requires --served-model "
+-                "(the HF repo the mock stack should serve); --model alone is only a "
+-                "placeholder spec."
+-            )
+-        placeholder = _placeholder_llm(args.device)
+-        if placeholder is None:
+-            parser.error(
+-                "could not auto-pick a placeholder --model for "
+-                f"--device {args.device!r}; pass --model explicitly."
+-            )
+-        args.model, args.device = placeholder
+-    if not args.device:
++        if args.workflow == "prefill_decode" and not args.runtime_model_spec_json:
++            if not args.served_model:
++                parser.error(
++                    "--workflow prefill_decode without --model requires --served-model "
++                    "(the HF repo the mock stack should serve); --model alone is only a "
++                    "placeholder spec."
++                )
++            placeholder = _placeholder_llm(args.device)
++            if placeholder is None:
++                parser.error(
++                    "could not auto-pick a placeholder --model for "
++                    f"--device {args.device!r}; pass --model explicitly."
++                )
++            args.model, args.device = placeholder
++    if not args.device and not args.runtime_model_spec_json:
+         args.device = infer_default_device(args.model, args.engine)
+     args.tt_device = args.device
+ 
+@@ -940,6 +942,14 @@ def resolve_runtime(args):
+             f"{args.runtime_model_spec_json}"
+         )
+         model_spec = ModelSpec.from_json(args.runtime_model_spec_json)
++        # The external spec is the source of truth for model selection.  Fill
++        # only absent CLI fields so workflow and server controls remain exactly
++        # as requested by the caller.
++        args.model = args.model or model_spec.model_name
++        args.device = args.device or model_spec.device_type.name.lower()
++        args.tt_device = args.device
++        args.engine = args.engine or model_spec.inference_engine
++        args.impl = args.impl or model_spec.impl.impl_name
+         runtime_config = RuntimeConfig.from_args(args)
+     else:
+         model_spec, resolved_impl, resolved_engine = get_runtime_model_spec(
+diff --git a/run_workflows.py b/run_workflows.py
+index 6058ca19..9c5051e3 100644
+--- a/run_workflows.py
++++ b/run_workflows.py
+@@ -43,6 +43,7 @@ Speculative-decoding benchmark (LLM-only, --workflow benchmarks):
+ from __future__ import annotations
+ 
+ import argparse
++import json
+ import logging
+ import sys
+ from pathlib import Path
+@@ -51,7 +52,8 @@ _REPO_ROOT = Path(__file__).resolve().parent
+ if str(_REPO_ROOT) not in sys.path:
+     sys.path.insert(0, str(_REPO_ROOT))
+ 
+-from workflows.model_spec import MODEL_SPECS  # noqa: E402
++from workflows.model_spec import MODEL_SPECS, ModelSpec  # noqa: E402
++from workflows.runtime_config import RuntimeConfig  # noqa: E402
+ from workflows.workflow_types import DeviceTypes  # noqa: E402
+ 
+ from workflow_module import CommandFactory, WorkflowRunner  # noqa: E402
+@@ -82,7 +84,7 @@ def parse_args() -> argparse.Namespace:
+         epilog="Available models:\n  " + "\n  ".join(valid_models),
+         formatter_class=argparse.RawTextHelpFormatter,
+     )
+-    parser.add_argument("--model", required=True, choices=valid_models)
++    parser.add_argument("--model", required=True)
+     parser.add_argument("--workflow", required=True, choices=valid_workflows)
+     parser.add_argument("--device", required=True, choices=valid_devices)
+     parser.add_argument("--service-port", type=int, default=8000)
+@@ -447,6 +449,46 @@ def parse_args() -> argparse.Namespace:
+     )
+ 
+     args = parser.parse_args()
++    if args.runtime_model_spec_json:
++        try:
++            model_spec = ModelSpec.from_json(args.runtime_model_spec_json)
++            runtime_config = RuntimeConfig.from_json(args.runtime_model_spec_json)
++        except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError) as e:
++            parser.error(
++                "could not load --runtime-model-spec-json "
++                f"{args.runtime_model_spec_json!r}: {e}"
++            )
++
++        expected_device = model_spec.device_type.name.lower()
++        identity_mismatches = []
++        if args.model != model_spec.model_name:
++            identity_mismatches.append(
++                f"CLI model={args.model!r} != model spec model={model_spec.model_name!r}"
++            )
++        if runtime_config.model != model_spec.model_name:
++            identity_mismatches.append(
++                "runtime config model="
++                f"{runtime_config.model!r} != model spec model={model_spec.model_name!r}"
++            )
++        if args.device != expected_device:
++            identity_mismatches.append(
++                f"CLI device={args.device!r} != model spec device={expected_device!r}"
++            )
++        if runtime_config.device != expected_device:
++            identity_mismatches.append(
++                "runtime config device="
++                f"{runtime_config.device!r} != model spec device={expected_device!r}"
++            )
++        if identity_mismatches:
++            parser.error(
++                "--runtime-model-spec-json identity mismatch: "
++                + "; ".join(identity_mismatches)
++            )
++    elif args.model not in valid_models:
++        parser.error(
++            f"argument --model: invalid choice: {args.model!r} "
++            f"(choose from {', '.join(repr(model) for model in valid_models)})"
++        )
+     if args.repeat < 1:
+         parser.error("--repeat must be >= 1")
+     if args.server_url:
+diff --git a/test_module/llm_tests/llm_eval_tests.py b/test_module/llm_tests/llm_eval_tests.py
+index c08459dc..0035cc61 100644
+--- a/test_module/llm_tests/llm_eval_tests.py
++++ b/test_module/llm_tests/llm_eval_tests.py
+@@ -375,7 +375,7 @@ def run_llm_eval(ctx: MediaContext, *, auth_token: str = "") -> List[Block]:
+ 
+     if ctx.remote_server:
+         server = RemoteOpenAIController(
+-            base_url=ctx.server_url,
++            base_url=ctx.base_url,
+             auth_token=auth_token,
+         )
+     else:
+diff --git a/test_module/llm_tests/llm_performance_tests.py b/test_module/llm_tests/llm_performance_tests.py
+index 85ca2c81..f7bbc88e 100644
+--- a/test_module/llm_tests/llm_performance_tests.py
++++ b/test_module/llm_tests/llm_performance_tests.py
+@@ -60,7 +60,10 @@ def run_llm_performance(
+     ``auth_token`` is sent to the inference server (e.g. a minted JWT
+     exported as the bearer token); empty string disables auth.
+     """
+-    server_base_url = ctx.server_url if ctx.remote_server else ctx.server_host
++    # Remote endpoints may supply host and port separately.  MediaContext owns
++    # the explicit-port-wins rule, so use its canonical URL rather than letting
++    # ServerConnection's remote mode drop the separate service port.
++    server_base_url = ctx.base_url if ctx.remote_server else ctx.server_host
+     server = ServerConnection(
+         base_url=server_base_url,
+         service_port=ctx.server_port,
+@@ -89,7 +92,15 @@ def run_llm_performance(
+         driver=driver,
+         server_controller=server_controller,
+     )
+-    result = runner.run(configs, server, context)
++    skip_trace_capture = bool(
++        getattr(ctx.runtime_config, "disable_trace_capture", False)
++    )
++    result = runner.run(
++        configs,
++        server,
++        context,
++        skip_trace_capture=skip_trace_capture,
++    )
+ 
+     if result.return_codes and not result.ok:
+         logger.warning(
+diff --git a/tests/report_module/test_acceptance_criteria.py b/tests/report_module/test_acceptance_criteria.py
+index 229a92ff..0c74af02 100644
+--- a/tests/report_module/test_acceptance_criteria.py
++++ b/tests/report_module/test_acceptance_criteria.py
+@@ -10,6 +10,8 @@ runners emit; these tests assert against that shape directly.
+ 
+ from __future__ import annotations
+ 
++import pytest
++
+ from report_module.acceptance_criteria import (
+     CATEGORY_BENCHMARKS,
+     CATEGORY_EVALS,
+@@ -283,14 +285,19 @@ def test_benchmark_unrecognized_status_falls_back_to_fully_enforced():
+     assert "benchmarks:B.target.ttft_check" in blockers
+ 
+ 
+-def test_eval_accuracy_check_fail_informational_at_experimental_status():
++@pytest.mark.parametrize(
++    "model_status", ["EXPERIMENTAL", "FUNCTIONAL", "COMPLETE", "TOP_PERF"]
++)
++def test_eval_accuracy_check_fail_blocks_at_every_model_status(model_status):
+     schema = _schema(_eval({"accuracy_check": 3}))
+     accepted, blockers, cats = acceptance_criteria_check(
+-        schema, model_status="EXPERIMENTAL"
++        schema, model_status=model_status
+     )
+     by_name = {c.name: c for c in cats}
+-    assert accepted is True and blockers == {}
+-    assert "evals:E" in by_name[CATEGORY_EVALS].waived
++    assert accepted is False
++    assert "Accuracy check failed" in blockers["evals:E"]
++    assert by_name[CATEGORY_EVALS].failed == 1
++    assert by_name[CATEGORY_EVALS].waived == {}
+ 
+ 
+ def test_eval_accuracy_check_fail_still_blocks_at_functional_status():
+@@ -300,19 +307,29 @@ def test_eval_accuracy_check_fail_still_blocks_at_functional_status():
+     assert "Accuracy check failed" in blockers["evals:E"]
+ 
+ 
+-def test_eval_explicit_error_informational_at_experimental_status():
+-    schema = _schema(_eval({"status": "error", "attempts": 2}))
++def test_eval_explicit_error_blocks_at_experimental_status():
++    schema = _schema(
++        _eval({"task_name": "ifeval", "accuracy_check": 3}),
++        Block(
++            kind="evals",
++            task_type="llm",
++            title="E2",
++            data={"task_name": "gpqa", "status": "error", "attempts": 2},
++        ),
++    )
+     accepted, blockers, cats = acceptance_criteria_check(
+         schema, model_status="EXPERIMENTAL"
+     )
+     by_name = {c.name: c for c in cats}
+-    assert accepted is True and blockers == {}
+-    assert "evals:E" in by_name[CATEGORY_EVALS].waived
++    assert accepted is False
++    assert len(blockers) == 2
++    assert by_name[CATEGORY_EVALS].failed == 2
++    assert by_name[CATEGORY_EVALS].passed == 0
++    assert by_name[CATEGORY_EVALS].waived == {}
+ 
+ 
+ def test_eval_known_issue_waiver_takes_precedence_over_status_message():
+-    # Both an EXPERIMENTAL status and a known_issues waiver would mask this --
+-    # the known_issue reason should still be the one recorded.
++    # Model status never masks evals; a matching known issue still may.
+     schema = _schema(_eval({"task_name": "ifeval", "accuracy_check": 3}))
+     known_issues = [
+         {"workflow_type": "EVALS", "task_name": "ifeval", "reason": "tracked in #4733"}
+diff --git a/tests/test_module/llm_tests/test_llm_eval_tests.py b/tests/test_module/llm_tests/test_llm_eval_tests.py
+index 0d2487f8..9dcc7550 100644
+--- a/tests/test_module/llm_tests/test_llm_eval_tests.py
++++ b/tests/test_module/llm_tests/test_llm_eval_tests.py
+@@ -64,6 +64,7 @@ def _ctx(max_context=131072):
+     ctx.server_url = None
+     ctx.remote_server = False
+     ctx.server_port = 8000
++    ctx.base_url = "http://127.0.0.1:8000"
+     ctx.output_path = "/tmp/out"
+     ctx.runtime_config = None
+     return ctx
+@@ -223,6 +224,49 @@ class TestRunLLMEval:
+         run_task.assert_called_once()
+         accept.assert_called_once()
+ 
++    def test_remote_server_uses_canonical_base_url(self):
++        ctx = _ctx()
++        ctx.remote_server = True
++        ctx.server_url = "http://127.0.0.1"
++        ctx.server_port = 8123
++        ctx.base_url = "http://127.0.0.1:8123"
++        server = MagicMock()
++        server.wait_for_healthy.return_value = True
++        server.get_health.return_value = SimpleNamespace(status_code=200)
++        with patch(f"{_MOD}.get_llm_eval_tasks", return_value=[_task()]), patch(
++            f"{_MOD}.RemoteOpenAIController", return_value=server
++        ) as remote, patch(f"{_MOD}.HttpServerController") as local, patch(
++            f"{_MOD}._run_eval_task", return_value=0
++        ), patch(f"{_MOD}.discover_eval_results", return_value=[]), patch(
++            f"{_MOD}.accept_blocks"
++        ):
++            mod.run_llm_eval(ctx)
++
++        remote.assert_called_once_with(
++            base_url="http://127.0.0.1:8123", auth_token=""
++        )
++        local.assert_not_called()
++
++    def test_remote_server_preserves_explicit_port(self):
++        ctx = _ctx()
++        ctx.remote_server = True
++        ctx.server_url = "http://127.0.0.1:9000"
++        ctx.server_port = 8123
++        ctx.base_url = "http://127.0.0.1:9000"
++        server = MagicMock()
++        server.wait_for_healthy.return_value = True
++        server.get_health.return_value = SimpleNamespace(status_code=200)
++        with patch(f"{_MOD}.get_llm_eval_tasks", return_value=[_task()]), patch(
++            f"{_MOD}.RemoteOpenAIController", return_value=server
++        ) as remote, patch(f"{_MOD}._run_eval_task", return_value=0), patch(
++            f"{_MOD}.discover_eval_results", return_value=[]
++        ), patch(f"{_MOD}.accept_blocks"):
++            mod.run_llm_eval(ctx)
++
++        remote.assert_called_once_with(
++            base_url="http://127.0.0.1:9000", auth_token=""
++        )
++
+     def test_no_tasks(self):
+         out, run_task, accept = self._run([])
+         assert out == []
+diff --git a/tests/test_module/llm_tests/test_llm_performance_tests.py b/tests/test_module/llm_tests/test_llm_performance_tests.py
+new file mode 100644
+index 00000000..82043fe9
+--- /dev/null
++++ b/tests/test_module/llm_tests/test_llm_performance_tests.py
+@@ -0,0 +1,116 @@
++# SPDX-License-Identifier: Apache-2.0
++#
++# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
++
++from types import SimpleNamespace
++
++import pytest
++
++from llm_module.runner import RunnerResult
++from test_module.context import MediaContext
++from test_module.llm_tests import llm_performance_tests as performance
++
++
++def _context(*, server_url, service_port, remote_server, disable_trace_capture=False):
++    return MediaContext(
++        all_params=[],
++        model_spec=SimpleNamespace(hf_model_repo="custom/model"),
++        device=SimpleNamespace(name="P300X2"),
++        output_path="/tmp/llm-performance-test",
++        service_port=service_port,
++        runtime_config=SimpleNamespace(
++            disable_trace_capture=disable_trace_capture,
++        ),
++        server_url=server_url,
++        remote_server=remote_server,
++    )
++
++
++def _run_and_capture(monkeypatch, ctx):
++    captured = {}
++
++    class FakeRemoteController:
++        def __init__(self, **kwargs):
++            captured["remote_controller"] = kwargs
++
++    class FakeHttpController:
++        def __init__(self, **kwargs):
++            captured["http_controller"] = kwargs
++
++    class FakeRunner:
++        def __init__(self, *, driver, server_controller):
++            captured["server_controller"] = server_controller
++
++        def run(self, configs, server, context, **kwargs):
++            captured["server"] = server
++            captured["runner_kwargs"] = kwargs
++            return RunnerResult()
++
++    monkeypatch.setattr(performance, "RemoteOpenAIController", FakeRemoteController)
++    monkeypatch.setattr(performance, "HttpServerController", FakeHttpController)
++    monkeypatch.setattr(performance, "LLMPerformanceRunner", FakeRunner)
++    monkeypatch.setattr(performance, "accept_blocks", lambda *args, **kwargs: None)
++
++    performance.run_llm_performance(
++        ctx,
++        driver=object(),
++        configs=[SimpleNamespace(isl=8, osl=8)],
++    )
++    return captured
++
++
++def test_remote_host_only_url_includes_service_port(monkeypatch):
++    captured = _run_and_capture(
++        monkeypatch,
++        _context(
++            server_url="http://127.0.0.1",
++            service_port=8123,
++            remote_server=True,
++        ),
++    )
++
++    assert captured["server"].base_url == "http://127.0.0.1:8123"
++    assert captured["server"].url_with_port == "http://127.0.0.1:8123"
++    assert captured["remote_controller"]["base_url"] == "http://127.0.0.1:8123"
++
++
++def test_remote_explicit_port_wins_over_service_port(monkeypatch):
++    captured = _run_and_capture(
++        monkeypatch,
++        _context(
++            server_url="http://127.0.0.1:9000",
++            service_port=8123,
++            remote_server=True,
++        ),
++    )
++
++    assert captured["server"].url_with_port == "http://127.0.0.1:9000"
++    assert captured["remote_controller"]["base_url"] == "http://127.0.0.1:9000"
++
++
++def test_local_connection_preserves_split_host_and_port(monkeypatch):
++    captured = _run_and_capture(
++        monkeypatch,
++        _context(server_url=None, service_port=8123, remote_server=False),
++    )
++
++    assert captured["server"].base_url == "http://127.0.0.1"
++    assert captured["server"].service_port == 8123
++    assert captured["server"].url_with_port == "http://127.0.0.1:8123"
++    assert captured["http_controller"]["base_url"] == "http://127.0.0.1"
++    assert captured["http_controller"]["service_port"] == 8123
++
++
++@pytest.mark.parametrize("disabled", [False, True])
++def test_disable_trace_capture_propagates_to_runner(monkeypatch, disabled):
++    captured = _run_and_capture(
++        monkeypatch,
++        _context(
++            server_url="http://127.0.0.1",
++            service_port=8123,
++            remote_server=True,
++            disable_trace_capture=disabled,
++        ),
++    )
++
++    assert captured["runner_kwargs"]["skip_trace_capture"] is disabled
+diff --git a/tests/test_run_arguments.py b/tests/test_run_arguments.py
+index 895b0f87..bbcd058a 100644
+--- a/tests/test_run_arguments.py
++++ b/tests/test_run_arguments.py
+@@ -5,6 +5,7 @@
+ 
+ import pytest
+ import argparse
++import json
+ import os
+ import sys
+ import subprocess
+@@ -20,13 +21,14 @@ from run import (
+     handle_secrets,
+     get_current_commit_sha,
+     populate_model_spec_cli_args,
++    resolve_runtime,
+ )
+ from workflows.validate_setup import (
+     validate_runtime_args,
+     validate_local_setup,
+ )
+ from workflows.device_utils import _get_tt_smi_board_type_counts, infer_default_device
+-from workflows.model_spec import get_runtime_model_spec
++from workflows.model_spec import MODEL_SPECS, get_runtime_model_spec
+ from workflows.run_docker_server import (
+     generate_docker_run_command,
+     get_media_server_docker_env_vars,
+@@ -146,6 +148,111 @@ class TestArgumentParsing:
+         assert args.device == "n150"
+         assert args.tt_device == "n150"
+ 
++    @staticmethod
++    def _write_custom_runtime_spec(tmp_path):
++        spec = next(iter(MODEL_SPECS.values())).get_serialized_dict()
++        spec["model_id"] = "id_custom_Custom-Base_Model_custom-device"
++        spec["model_name"] = "Custom-Base-Model-Not-In-Catalog"
++        spec["impl"] = {
++            "impl_id": "custom_autoport",
++            "impl_name": "custom-autoport",
++            "repo_url": "https://example.invalid/custom",
++            "code_path": "models/autoports/custom_base_model",
++        }
++        spec["cli_args"] = {
++            "model": spec["model_name"],
++            "workflow": "stale-workflow",
++            "service_port": "9999",
++        }
++        path = tmp_path / "custom_runtime_spec.json"
++        path.write_text(json.dumps(spec), encoding="utf-8")
++        return path, spec
++
++    def test_runtime_spec_without_model_parses_and_resolves(self, tmp_path):
++        spec_path, raw_spec = self._write_custom_runtime_spec(tmp_path)
++        argv = [
++            "run.py",
++            "--workflow",
++            "benchmarks",
++            "--runtime-model-spec-json",
++            str(spec_path),
++            "--server-url",
++            "http://127.0.0.1:8123",
++            "--service-port",
++            "8123",
++            "--disable-trace-capture",
++        ]
++
++        with patch("sys.argv", argv):
++            args = parse_arguments()
++        runtime_config, model_spec = resolve_runtime(args)
++
++        assert runtime_config.model == raw_spec["model_name"]
++        assert runtime_config.device == model_spec.device_type.name.lower()
++        assert runtime_config.engine == model_spec.inference_engine
++        assert runtime_config.impl == "custom-autoport"
++        assert runtime_config.workflow == "benchmarks"
++        assert runtime_config.server_url == "http://127.0.0.1:8123"
++        assert runtime_config.service_port == "8123"
++        assert runtime_config.disable_trace_capture is True
++
++    def test_runtime_spec_backfills_legacy_cli_args_from_resolved_identity(
++        self, tmp_path
++    ):
++        spec_path, raw_spec = self._write_custom_runtime_spec(tmp_path)
++        with patch(
++            "sys.argv",
++            [
++                "run.py",
++                "--workflow",
++                "benchmarks",
++                "--runtime-model-spec-json",
++                str(spec_path),
++                "--service-port",
++                "8123",
++            ],
++        ):
++            args = parse_arguments()
++        _, model_spec = resolve_runtime(args)
++
++        assert model_spec.cli_args["model"] == raw_spec["model_name"]
++        assert model_spec.cli_args["device"] == model_spec.device_type.name.lower()
++        assert model_spec.cli_args["engine"] == model_spec.inference_engine
++        assert model_spec.cli_args["impl"] == "custom-autoport"
++        assert model_spec.cli_args["workflow"] == "benchmarks"
++        assert model_spec.cli_args["service_port"] == "8123"
++
++    def test_runtime_spec_resolution_does_not_consult_catalog(self, tmp_path):
++        spec_path, raw_spec = self._write_custom_runtime_spec(tmp_path)
++        with patch(
++            "sys.argv",
++            [
++                "run.py",
++                "--workflow",
++                "benchmarks",
++                "--runtime-model-spec-json",
++                str(spec_path),
++            ],
++        ):
++            args = parse_arguments()
++
++        with patch("run.get_runtime_model_spec") as catalog_lookup:
++            runtime_config, model_spec = resolve_runtime(args)
++
++        catalog_lookup.assert_not_called()
++        assert runtime_config.model == raw_spec["model_name"]
++        assert model_spec.impl.code_path == "models/autoports/custom_base_model"
++
++    def test_missing_model_and_runtime_spec_is_still_rejected(self, capsys):
++        with patch("sys.argv", ["run.py", "--workflow", "benchmarks"]):
++            with pytest.raises(SystemExit) as exc_info:
++                parse_arguments()
++
++        assert exc_info.value.code == 2
++        assert (
++            "the following arguments are required: --model" in capsys.readouterr().err
++        )
++
+     @pytest.mark.parametrize(
+         "missing_arg,remaining_args",
+         [
+diff --git a/tests/test_run_workflows_arguments.py b/tests/test_run_workflows_arguments.py
+new file mode 100644
+index 00000000..c69af6bf
+--- /dev/null
++++ b/tests/test_run_workflows_arguments.py
+@@ -0,0 +1,138 @@
++# SPDX-License-Identifier: Apache-2.0
++#
++# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
++
++from __future__ import annotations
++
++import json
++from unittest.mock import patch
++
++import pytest
++
++import run_workflows
++from workflow_module import command_factory
++from workflows.model_spec import MODEL_SPECS
++from workflows.runtime_config import RuntimeConfig
++
++
++def _write_combined_custom_spec(tmp_path, *, runtime_model=None, runtime_device=None):
++    model_spec = next(iter(MODEL_SPECS.values())).get_serialized_dict()
++    model_spec["model_id"] = "id_custom_Custom-Base-Model_custom-device"
++    model_spec["model_name"] = "Custom-Base-Model-Not-In-Catalog"
++    model_spec["impl"] = {
++        "impl_id": "custom_autoport",
++        "impl_name": "custom-autoport",
++        "repo_url": "https://example.invalid/custom",
++        "code_path": "models/autoports/custom_base_model",
++    }
++    device = model_spec["device_type"].lower()
++    runtime_config = RuntimeConfig(
++        model=runtime_model or model_spec["model_name"],
++        workflow="benchmarks",
++        device=runtime_device or device,
++        impl="custom-autoport",
++        engine=model_spec["inference_engine"],
++        server_url="http://127.0.0.1",
++    ).to_dict()
++    path = tmp_path / "combined_runtime_spec.json"
++    path.write_text(
++        json.dumps(
++            {
++                "runtime_model_spec": model_spec,
++                "runtime_config": runtime_config,
++            }
++        ),
++        encoding="utf-8",
++    )
++    return path, model_spec, runtime_config
++
++
++def _argv(spec_path, model="Custom-Base-Model-Not-In-Catalog", device=None):
++    if device is None:
++        data = json.loads(spec_path.read_text(encoding="utf-8"))
++        device = data["runtime_model_spec"]["device_type"].lower()
++    return [
++        "run_workflows.py",
++        "--model",
++        model,
++        "--workflow",
++        "benchmarks",
++        "--device",
++        device,
++        "--runtime-model-spec-json",
++        str(spec_path),
++    ]
++
++
++def test_custom_runtime_spec_bypasses_catalog_and_preserves_autoport(tmp_path):
++    spec_path, model_spec, _ = _write_combined_custom_spec(tmp_path)
++    with patch("sys.argv", _argv(spec_path)):
++        args = run_workflows.parse_args()
++
++    with patch.object(command_factory, "get_runtime_model_spec") as catalog_lookup:
++        context = command_factory._build_context(args)
++
++    catalog_lookup.assert_not_called()
++    assert context.model_spec.model_name == model_spec["model_name"]
++    assert context.model_spec.impl.code_path == "models/autoports/custom_base_model"
++    assert context.runtime_config.model == model_spec["model_name"]
++
++
++def test_non_catalog_model_without_runtime_spec_is_rejected(capsys):
++    argv = [
++        "run_workflows.py",
++        "--model",
++        "Custom-Base-Model-Not-In-Catalog",
++        "--workflow",
++        "benchmarks",
++        "--device",
++        "p300x2",
++    ]
++    with patch("sys.argv", argv), pytest.raises(SystemExit) as exc_info:
++        run_workflows.parse_args()
++
++    assert exc_info.value.code == 2
++    assert "argument --model: invalid choice" in capsys.readouterr().err
++
++
++@pytest.mark.parametrize("kind", ["missing", "malformed"])
++def test_invalid_runtime_spec_errors_without_catalog_fallback(tmp_path, capsys, kind):
++    spec_path = tmp_path / "runtime.json"
++    if kind == "malformed":
++        spec_path.write_text("{not-json", encoding="utf-8")
++
++    with patch("sys.argv", _argv(spec_path, device="p300x2")):
++        with pytest.raises(SystemExit) as exc_info:
++            run_workflows.parse_args()
++
++    assert exc_info.value.code == 2
++    assert "could not load --runtime-model-spec-json" in capsys.readouterr().err
++
++
++@pytest.mark.parametrize(
++    "cli_model,cli_device,runtime_model,runtime_device",
++    [
++        ("Wrong-Model", None, None, None),
++        (None, "cpu", None, None),
++        (None, None, "Wrong-Model", None),
++        (None, None, None, "cpu"),
++    ],
++)
++def test_runtime_spec_identity_mismatch_is_rejected(
++    tmp_path, capsys, cli_model, cli_device, runtime_model, runtime_device
++):
++    spec_path, model_spec, _ = _write_combined_custom_spec(
++        tmp_path,
++        runtime_model=runtime_model,
++        runtime_device=runtime_device,
++    )
++    argv = _argv(
++        spec_path,
++        model=cli_model or model_spec["model_name"],
++        device=cli_device,
++    )
++    with patch("sys.argv", argv), pytest.raises(SystemExit) as exc_info:
++        run_workflows.parse_args()
++
++    assert exc_info.value.code == 2
++    assert "identity mismatch" in capsys.readouterr().err
+-- 
+2.43.0
+
+
+From bd15f1cdcf1bbb12187bd68b120e814b7e8a1e83 Mon Sep 17 00:00:00 2001
+From: mvasiljevic <mvasiljevic@tenstorrent.com>
+Date: Thu, 13 Aug 2026 10:40:34 +0000
+Subject: [PATCH 2/4] Add Falcon3 Base nightly eval references
+
+---
+ AUTODEBUG_RELEASE_ACCURACY_RESUME.md  | 182 ++++++++++++++++++++++++++
+ AUTOFIX.md                            |  27 ++++
+ reference_config/evals/eval_config.py |  21 +++
+ 3 files changed, 230 insertions(+)
+ create mode 100644 AUTODEBUG_RELEASE_ACCURACY_RESUME.md
+
+diff --git a/AUTODEBUG_RELEASE_ACCURACY_RESUME.md b/AUTODEBUG_RELEASE_ACCURACY_RESUME.md
+new file mode 100644
+index 00000000..5e130fe4
+--- /dev/null
++++ b/AUTODEBUG_RELEASE_ACCURACY_RESUME.md
+@@ -0,0 +1,182 @@
++# AutoDebug: Falcon3 Base release accuracy resume
++
++## Scope and current evidence
++
++This is an inspection-only follow-up to `AUTODEBUG_RELEASE_ACCURACY.md` at
++TTI commit `ca152fe223227f85f1a0d86cef7d372023b9de77`.  No implementation or
++eval configuration was edited, no server was started, and no TT device was
++opened.
++
++New evidence changes one earlier conclusion: the active Hugging Face identity
++can now load all 198 rows of `Idavidrein/gpqa` `gpqa_diamond`, so the old 403
++is no longer a blocker.  The release's IFEval result and methodology ambiguity
++are unchanged.  `IFEVAL_VARIANT_ANALYSIS.md` correctly shows that all four
++metrics exist but does not prove which metric the publisher's bare 34.3 means.
++
++The exact release environment is:
++
++- lm-eval executable:
++  `/home/mvasiljevic/tt-inference-server/.workflow_venvs/.venv_evals_common/bin/lm_eval`
++- lm-eval: `0.4.10.dev0`; task `ifeval` metadata version `4.0`
++- transformers: `5.15.0`; torch: `2.13.0+cpu`
++- model/tokenizer snapshot:
++  `/home/mvasiljevic/hf-cache/hub/models--tiiuae--Falcon3-7B-Base/snapshots/bf3d7ed586cb22a921520e2d681a9d3d7642cde8`
++- checkpoint dtype: BF16; host CPU advertises AVX512 and about 118 GiB
++  currently available, so loading the 7B BF16 checkpoint is feasible
++- release task: raw `prompt`, no chat template, 0-shot, deterministic greedy
++  generation, `max_gen_toks: 1280`, seed 42
++
++## Hypothesis 1: a same-snapshot CPU HF control can resolve IFEval attribution
++
++**Prediction.** Running the stock `hf` backend with the exact snapshot,
++tokenizer, task installation, raw prompt, BF16 weights, seed, and sample order
++will produce all four IFEval aggregates without involving TT.  Agreement with
++the TT run attributes the apparent shortfall to the reference recipe;
++disagreement attributes it to the served TT/adapter path (subject to a
++sample-output comparison).
++
++**Verdict:** verified as a valid experiment design; not yet executed.  A GPU is
++not required for this control.  CPU is slow, especially because IFEval allows
++up to 1280 generated tokens, but the one-sample probe and 5% subset are
++tractable enough to attempt in sequence.
++
++### Exact one-sample command
++
++Run from `/home/mvasiljevic/tt-inference-server`:
++
++```bash
++HF_CONTROL_ROOT=/home/mvasiljevic/tti-release-cache/falcon3-base-hf-control
++FALCON_SNAPSHOT=/home/mvasiljevic/hf-cache/hub/models--tiiuae--Falcon3-7B-Base/snapshots/bf3d7ed586cb22a921520e2d681a9d3d7642cde8
++mkdir -p "$HF_CONTROL_ROOT/ifeval-one"
++TOKENIZERS_PARALLELISM=false \
++  .workflow_venvs/.venv_evals_common/bin/lm_eval run \
++  --tasks ifeval \
++  --model hf \
++  --model_args "pretrained=$FALCON_SNAPSHOT,tokenizer=$FALCON_SNAPSHOT,dtype=bfloat16" \
++  --device cpu \
++  --output_path "$HF_CONTROL_ROOT/ifeval-one" \
++  --seed 42 \
++  --num_fewshot 0 \
++  --batch_size 1 \
++  --limit 1 \
++  --log_samples \
++  --show_config \
++  --trust_remote_code \
++  --confirm_run_unsafe_code
++```
++
++The one-sample run is a load/tokenization/generation probe, not accuracy
++evidence.  Confirm in its saved config that `apply_chat_template` is false,
++task version is 4.0, model/tokenizer paths resolve to the snapshot above,
++`do_sample=false`, temperature is 0, and `max_gen_toks=1280`.
++
++### Exact CI-nightly (5%) command
++
++Only after the one-sample probe succeeds:
++
++```bash
++HF_CONTROL_ROOT=/home/mvasiljevic/tti-release-cache/falcon3-base-hf-control
++FALCON_SNAPSHOT=/home/mvasiljevic/hf-cache/hub/models--tiiuae--Falcon3-7B-Base/snapshots/bf3d7ed586cb22a921520e2d681a9d3d7642cde8
++mkdir -p "$HF_CONTROL_ROOT/ifeval-ci-nightly"
++TOKENIZERS_PARALLELISM=false \
++  .workflow_venvs/.venv_evals_common/bin/lm_eval run \
++  --tasks ifeval \
++  --model hf \
++  --model_args "pretrained=$FALCON_SNAPSHOT,tokenizer=$FALCON_SNAPSHOT,dtype=bfloat16" \
++  --device cpu \
++  --output_path "$HF_CONTROL_ROOT/ifeval-ci-nightly" \
++  --seed 42 \
++  --num_fewshot 0 \
++  --batch_size 1 \
++  --limit 0.05 \
++  --log_samples \
++  --show_config \
++  --trust_remote_code \
++  --confirm_run_unsafe_code
++```
++
++This is the same 5% limit that `EvalLimitMode.CI_NIGHTLY` maps to.  It should
++select the first 5% of the deterministic 541-row task (normally 28 rows in
++lm-eval after fractional-limit rounding).  Compare it only with a TT run using
++the same `--limit 0.05`, task install, snapshot tokenizer, and seed.  Do not
++compare the subset percentage directly with the full 541-row publisher score.
++Save all four aggregates and task/config metadata; raw samples need not be
++copied into the release handoff.
++
++The HF command intentionally omits the release command's
++`--gen_kwargs stream=False,seed=42`: `stream` is an OpenAI transport option,
++not an HF generation option, and the HF model does not accept it.  The same
++semantic seed is supplied through lm-eval's global `--seed 42`; IFEval already
++defines greedy `do_sample: false`, temperature 0, and max generation length in
++its task YAML.
++
++### Decision rule
++
++1. First compare per-sample prompt text/token IDs and deterministic completion
++   for the same selected document, without publishing raw content.
++2. If HF and TT completions/metrics agree on the 5% subset, the TT autoport is
++   controlled; the card's 34.3 remains methodology-incompatible and cannot be
++   used as a prompt-strict GPU reference.
++3. If they differ materially, run a small sample-by-sample diff and localize
++   the first divergence in BOS/tokenization, stop handling, generation length,
++   or model logits before changing the score key.
++4. Even perfect subset agreement does not establish unrestricted readiness;
++   either run the full CPU control or explicitly report CI-subset readiness.
++
++## Hypothesis 2: the current GPQA task is methodologically interchangeable with the card's “GPQA 0-shot”
++
++**Evidence.** Current TTI config runs
++`gpqa_diamond_generative_n_shot` with `num_fewshot=0`, raw prompts, and scores
++`exact_match,flexible-extract`.  In this installed harness that task:
++
++- uses `output_type: generate_until`;
++- formats choices as A-D and asks the model to generate an answer;
++- stops at `</s>`, `Question:`, or `<|im_end|>`;
++- extracts a generated multiple-choice letter and reports exact match;
++- has task metadata version 2.0.
++
++The separately installed `gpqa_diamond_zeroshot` task instead uses
++`output_type: multiple_choice`, computes choice likelihoods, and reports
++`acc`/`acc_norm` (task version 1.0).  Both are zero-shot when the former is
++overridden to zero examples, but they are not the same evaluation protocol.
++The Falcon card gives only “GPQA (0-shot) = 35.5”; it does not identify the
++task name, harness revision, prompt, generation versus likelihood scoring, or
++metric.
++
++**Verdict:** refuted as a claim of proven compatibility.  The shot count is
++nominally compatible, so the `generative_n_shot` name alone is not proof of an
++error.  However, 35.5 cannot faithfully serve as the reference for generative
++flexible exact match without recipe provenance or a same-command control.
++
++### Decisive GPQA experiments
++
++1. Now that access works, run the release's exact task first, one sample and
++   then `--limit 0.05`, against TT and the same CPU HF snapshot.  Keep
++   `--num_fewshot 0`, seed 42, raw prompts, and the installed task version.
++   This establishes autoport parity for the actual release row.
++2. As a methodology A/B (not as a quiet replacement), run
++   `gpqa_diamond_zeroshot` with the same snapshot/seed/subset and record both
++   `acc` and `acc_norm`.  A difference demonstrates the practical impact of
++   the unspecified protocol.
++3. Do not compare either 5% result directly to 35.5.  Use a full 198-row HF
++   same-command result as the reference for the chosen task, or obtain the
++   publisher's exact recipe and select the corresponding task/metric.
++4. If the release contract specifically requires a generative/COT GPQA gate,
++   do not substitute the likelihood-based zeroshot task merely because it is
++   closer to 35.5.  Define and measure the required generative/COT protocol on
++   both HF and TT.
++
++Note that the generative GPQA preprocessing calls `random.shuffle` on answer
++choices.  Reusing the same harness revision and `--seed 42` is therefore
++essential for a paired comparison; task names and aggregate percentages alone
++are insufficient.
++
++## Final status
++
++- The GPQA authorization blocker is cleared.
++- A faithful CPU HF IFEval control is available with the commands above; no
++  GPU is needed, though runtime may be substantial.
++- Current IFEval and GPQA publisher-reference rows remain methodologically
++  unproven until same-command controls or exact publisher recipes exist.
++- No score key, task variant, reference value, or acceptance status should be
++  changed solely to produce a pass.
+diff --git a/AUTOFIX.md b/AUTOFIX.md
+index 5fdeba89..19307480 100644
+--- a/AUTOFIX.md
++++ b/AUTOFIX.md
+@@ -115,3 +115,30 @@ release owner's next proof point.
+ - **Remaining blockers:** IFEval needs an identical HF/GPU reference to resolve
+   methodology versus TT correctness; GPQA requires authorized gated-dataset
+   access. The existing report PASS is invalid.
++
++## Release Accuracy Paired-Control Resume
++
++- **Starting evidence:** `AUTODEBUG_RELEASE_ACCURACY_RESUME.md`; GPQA access
++  was restored, while the model-card IFEval and GPQA numbers remained
++  methodologically incompatible with the installed release tasks.
++- **Hypothesis:** exact-snapshot CPU Hugging Face controls on the deterministic
++  CI-nightly documents can provide mode-specific references without weakening
++  unrestricted release criteria.
++- **Experiment:** run BF16 Hugging Face and TT OpenAI-completions controls with
++  the same snapshot, lm-eval installation, raw prompts, seed 42, task versions,
++  zero-shot settings, and first-5% document selection. Transport-only
++  `stream=False,seed=42` kwargs were omitted from the Hugging Face backend after
++  a one-sample probe proved Transformers rejects them; global seed and greedy
++  task generation preserve the intended semantics. A proposed CPU batch-size-4
++  speedup was also refuted and discarded because it was slower than batch 1.
++- **Result:** IFEval prompt-strict was HF 5/28 (17.857%) versus TT 4/28
++  (14.286%); generative GPQA flexible-extract was HF 5/10 (50%) versus TT 6/10
++  (60%). Each difference is exactly one item. The existing mode-aware,
++  effective-sample-count acceptance policy is designed to tolerate one-item
++  quantization on these small subsets.
++- **Fix:** add `CI_NIGHTLY` `ModeReferenceScore` entries for these exact paired
++  controls. Keep the publisher values as provenance, leave unrestricted GPU
++  references unset, and do not substitute another GPQA task or IFEval metric.
++- **Verification:** mode-reference/sample-count focused tests: `9 passed, 22
++  deselected`. A live CI-nightly TTI rerun and the combined release report are
++  the remaining integration checks.
+diff --git a/reference_config/evals/eval_config.py b/reference_config/evals/eval_config.py
+index b21fed4b..fdff60de 100644
+--- a/reference_config/evals/eval_config.py
++++ b/reference_config/evals/eval_config.py
+@@ -4426,6 +4426,16 @@ _eval_config_list = [
+                     # same-command GPU reference.
+                     gpu_reference_score=None,
+                     gpu_reference_score_ref=None,
++                    mode_reference_scores={
++                        EvalLimitMode.CI_NIGHTLY: ModeReferenceScore(
++                            score=17.8571428571,
++                            ref=(
++                                "paired CPU HF control: exact Falcon3-7B-Base "
++                                "snapshot bf3d7ed, lm-eval ifeval v4, raw prompts, "
++                                "seed 42, doc_ids 0-27 (5/28), 2026-08-13"
++                            ),
++                        ),
++                    },
+                     score_func=score_task_single_key,
+                     score_func_kwargs={
+                         "result_keys": [
+@@ -4449,6 +4459,17 @@ _eval_config_list = [
+                     published_score_ref="https://huggingface.co/tiiuae/Falcon3-7B-Base#benchmarks",
+                     gpu_reference_score=None,
+                     gpu_reference_score_ref=None,
++                    mode_reference_scores={
++                        EvalLimitMode.CI_NIGHTLY: ModeReferenceScore(
++                            score=50.0,
++                            ref=(
++                                "paired CPU HF control: exact Falcon3-7B-Base "
++                                "snapshot bf3d7ed, lm-eval "
++                                "gpqa_diamond_generative_n_shot v2, raw prompts, "
++                                "0-shot, seed 42, doc_ids 0-9 (5/10), 2026-08-13"
++                            ),
++                        ),
++                    },
+                     score_func=score_task_single_key,
+                     score_func_kwargs={
+                         "result_keys": [
+-- 
+2.43.0
+
+
+From e26e723bf0266cde85f674e381fbee10068ae0ec Mon Sep 17 00:00:00 2001
+From: mvasiljevic <mvasiljevic@tenstorrent.com>
+Date: Thu, 13 Aug 2026 10:45:49 +0000
+Subject: [PATCH 3/4] Propagate model context to API evals
+
+---
+ AUTOFIX.md                            | 24 ++++++++++
+ llm_module/eval_command.py            | 19 +++++++-
+ tests/llm_module/test_eval_command.py | 69 +++++++++++++++++++++++++++
+ 3 files changed, 111 insertions(+), 1 deletion(-)
+ create mode 100644 tests/llm_module/test_eval_command.py
+
+diff --git a/AUTOFIX.md b/AUTOFIX.md
+index 19307480..2af6c5c6 100644
+--- a/AUTOFIX.md
++++ b/AUTOFIX.md
+@@ -142,3 +142,27 @@ release owner's next proof point.
+ - **Verification:** mode-reference/sample-count focused tests: `9 passed, 22
+   deselected`. A live CI-nightly TTI rerun and the combined release report are
+   the remaining integration checks.
++
++## Eval Context Propagation Follow-up
++
++- **Starting evidence:** the live Falcon autoport eval logged `Using max length
++  2048 - 1` even though its loaded `DeviceModelSpec.max_context` is 32768.
++- **Hypothesis:** TTI never passes the spec context to lm-eval's
++  `local-completions` adapter, leaving that adapter's independent 2048 default
++  to truncate prompts client-side before the server sees them.
++- **Experiment:** inspect the built `--model_args` for a 32768-context custom
++  spec and compare it with the installed lm-eval API constructor. The command
++  contained concurrency but no `max_length`; the installed backend declares
++  `max_length=2048` and assigns its client truncation boundary from it.
++- **Result:** verified. Focused command-builder tests now prove the selected
++  spec emits `max_length=32768`, overrides a stale task-level value without
++  mutating the frozen task, and retains a legacy task value only when the spec
++  has no context declaration.
++- **Fix:** propagate `device_model_spec.max_context` as the API adapter's
++  `max_length`. The spec is authoritative for total prompt plus completion
++  length, so lm-eval no longer silently substitutes its 2048 client default.
++- **Verification:** `python -m pytest -q
++  tests/llm_module/test_eval_command.py
++  tests/test_module/llm_tests/test_llm_eval_tests.py` -> `25 passed` (one
++  pre-existing collection warning). A live rerun should log `Using max length
++  32768 - 1`.
+diff --git a/llm_module/eval_command.py b/llm_module/eval_command.py
+index 7cab3f3c..cf8a283b 100644
+--- a/llm_module/eval_command.py
++++ b/llm_module/eval_command.py
+@@ -241,6 +241,20 @@ def build_eval_command(
+     optional_model_args = []
+     if effective_max_concurrent:
+         optional_model_args.append(f"num_concurrent={effective_max_concurrent}")
++
++    # lm-eval's local completion backends default to max_length=2048.  That
++    # value controls client-side prompt truncation before a request ever
++    # reaches the server, so leaving the default in place silently evaluates a
++    # different context contract than the selected DeviceModelSpec.  The
++    # server/model spec is the authority for total prompt + completion length.
++    # Override any legacy task-level value when the spec supplies one; retain
++    # the task value only for older specs without a context declaration.
++    is_text_api_eval = task.workflow_venv_type not in (
++        WorkflowVenvType.EVALS_VISION,
++        WorkflowVenvType.EVALS_AUDIO,
++    )
++    if device_max_context and is_text_api_eval:
++        optional_model_args.append(f"max_length={device_max_context}")
+     # Fast-fail 4xx when DeviceModelSpec opts in (forge LLMs at tight
+     # max_context). EVALS_COMMON only: lm-eval 0.4.3 in EVALS_META rejects
+     # the kwarg.
+@@ -277,7 +291,10 @@ def build_eval_command(
+     else:
+         lm_eval_exec = task_venv_config.venv_path / "bin" / "lm_eval"
+ 
+-    model_kwargs_list = [f"{k}={v}" for k, v in task.model_kwargs.items()]
++    model_kwargs = dict(task.model_kwargs)
++    if device_max_context and is_text_api_eval:
++        model_kwargs.pop("max_length", None)
++    model_kwargs_list = [f"{k}={v}" for k, v in model_kwargs.items()]
+     model_kwargs_list += optional_model_args
+     model_kwargs_str = ",".join(model_kwargs_list)
+ 
+diff --git a/tests/llm_module/test_eval_command.py b/tests/llm_module/test_eval_command.py
+new file mode 100644
+index 00000000..85003427
+--- /dev/null
++++ b/tests/llm_module/test_eval_command.py
+@@ -0,0 +1,69 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
++
++from types import SimpleNamespace
++
++from llm_module.eval_command import build_eval_command
++from reference_config.evals.eval_config import EvalTask
++
++
++def _model_spec(max_context):
++    return SimpleNamespace(
++        hf_model_repo="org/model",
++        model_id="model-id",
++        device_model_spec=SimpleNamespace(
++            max_context=max_context,
++            max_concurrency=32,
++            eval_max_retries=None,
++        ),
++    )
++
++
++def _model_args(command):
++    return command[command.index("--model_args") + 1]
++
++
++def test_local_completions_uses_device_spec_max_context():
++    command = build_eval_command(
++        EvalTask(task_name="ifeval", apply_chat_template=False),
++        _model_spec(32768),
++        "p300x2",
++        "/tmp/evals",
++        8000,
++    )
++
++    assert "max_length=32768" in _model_args(command).split(",")
++
++
++def test_device_spec_overrides_legacy_task_max_length_without_mutation():
++    task = EvalTask(
++        task_name="ifeval",
++        apply_chat_template=False,
++        model_kwargs={"max_length": "2048", "add_bos_token": "True"},
++    )
++
++    command = build_eval_command(
++        task, _model_spec(32768), "p300x2", "/tmp/evals", 8000
++    )
++    model_args = _model_args(command).split(",")
++
++    assert "max_length=32768" in model_args
++    assert "max_length=2048" not in model_args
++    assert "add_bos_token=True" in model_args
++    assert task.model_kwargs["max_length"] == "2048"
++
++
++def test_legacy_task_max_length_is_retained_when_spec_has_none():
++    command = build_eval_command(
++        EvalTask(
++            task_name="ifeval",
++            apply_chat_template=False,
++            model_kwargs={"max_length": "4096"},
++        ),
++        _model_spec(None),
++        "p300x2",
++        "/tmp/evals",
++        8000,
++    )
++
++    assert "max_length=4096" in _model_args(command).split(",")
+-- 
+2.43.0
+
+
+From b9a18e8fe8ebd648f1362d0ea5df9f143c07944d Mon Sep 17 00:00:00 2001
+From: mvasiljevic <mvasiljevic@tenstorrent.com>
+Date: Mon, 17 Aug 2026 10:07:58 +0000
+Subject: [PATCH 4/4] Qwen3.6-27B: eval config, terminal-bench token budget,
+ external-chat meta evals
+
+Uncommitted stage-11 work from the Qwen3.6-27B autoport release run, preserved.
++224 lines across eval_config.py, llm_eval_tests.py, agentic_eval_tests.py and
+four test files.
+
+Includes the Qwen3.6-27B release eval entry, the Terminal-Bench token-budget
+constraint (176K input + 80K output == 262144 exactly, so the advertised context
+is not capped), and meta evals routed through external chat completions at full
+context. Tests added: qwen36_terminal_bench_token_budget_matches_full_context,
+qwen36_release_meta_evals_use_external_chat_and_full_context,
+qwen_spec_without_targets_runs_standard_nightly_matrix.
+
+Committed by the operator after the stage blocked without committing. NOT pushed:
+this repo has no operator-owned remote branch yet.
+---
+ llm_module/eval_command.py                    | 10 ++--
+ reference_config/evals/eval_config.py         | 57 ++++++++++++++++++-
+ test_module/llm_tests/agentic_eval_tests.py   |  2 +-
+ test_module/llm_tests/llm_eval_tests.py       | 23 ++++++--
+ tests/llm_module/test_benchmark_configs.py    | 30 ++++++++++
+ tests/llm_module/test_eval_command.py         | 44 ++++++++++++++
+ .../llm_tests/test_agentic_eval_tests.py      | 53 ++++++++++++++++-
+ .../llm_tests/test_llm_eval_tests.py          | 19 ++++++-
+ 8 files changed, 224 insertions(+), 14 deletions(-)
+
+diff --git a/llm_module/eval_command.py b/llm_module/eval_command.py
+index cf8a283b..0902457a 100644
+--- a/llm_module/eval_command.py
++++ b/llm_module/eval_command.py
+@@ -168,7 +168,8 @@ def _resolve_eval_samples(task: "EvalTask", runtime_config) -> Optional[str]:
+         task.task_name,
+         len(indices),
+     )
+-    return json.dumps({task.task_name: list(indices)})
++    eval_task_name = getattr(task, "eval_task_name", None) or task.task_name
++    return json.dumps({eval_task_name: list(indices)})
+ 
+ 
+ def build_eval_command(
+@@ -195,6 +196,7 @@ def build_eval_command(
+     else:
+         base_url = f"{host_with_port}/v1"
+     eval_class = task.eval_class
++    eval_task_name = getattr(task, "eval_task_name", None) or task.task_name
+     task_venv_config = VENV_CONFIGS[task.workflow_venv_type]
+     if task.use_chat_api:
+         api_url = f"{base_url}/chat/completions"
+@@ -310,7 +312,7 @@ def build_eval_command(
+     if task.workflow_venv_type == WorkflowVenvType.EVALS_VISION:
+         cmd = [
+             str(lm_eval_exec),
+-            "--tasks", task.task_name,
++            "--tasks", eval_task_name,
+             "--model", eval_class,
+             "--model_args", (
+                 f"model_version={model_spec.hf_model_repo},"
+@@ -335,7 +337,7 @@ def build_eval_command(
+                 f"base_url={base_url},"
+                 f"{model_kwargs_str}"
+             ),
+-            "--tasks", task.task_name,
++            "--tasks", eval_task_name,
+             "--batch_size", str(effective_batch_size),
+             "--output_path", str(output_dir_path),
+             "--log_samples",
+@@ -343,7 +345,7 @@ def build_eval_command(
+     else:
+         cmd = [
+             str(lm_eval_exec),
+-            "--tasks", task.task_name,
++            "--tasks", eval_task_name,
+             "--model", eval_class,
+             "--model_args", (
+                 f"model={model_spec.hf_model_repo},"
+diff --git a/reference_config/evals/eval_config.py b/reference_config/evals/eval_config.py
+index fdff60de..a2f3d39a 100644
+--- a/reference_config/evals/eval_config.py
++++ b/reference_config/evals/eval_config.py
+@@ -182,6 +182,9 @@ class SWEbenchEvalConfig:
+ @dataclass(frozen=True)
+ class EvalTask:
+     task_name: str
++    # Optional lm-eval registry name when the release/report row intentionally
++    # uses a stable contract name different from the public harness task.
++    eval_task_name: Optional[str] = None
+     score: EvalTaskScore = None
+     workflow_venv_type: WorkflowVenvType = WorkflowVenvType.EVALS_COMMON
+     eval_class: str = "local-completions"
+@@ -1262,6 +1265,56 @@ _eval_config_list = [
+     EvalConfig(
+         hf_model_repo="Qwen/Qwen3.6-27B",
+         tasks=[
++            EvalTask(
++                task_name="meta_ifeval",
++                eval_task_name="ifeval",
++                workflow_venv_type=WorkflowVenvType.EVALS_COMMON,
++                # For non-tokenized local-chat-completions, lm-eval's
++                # --apply_chat_template serializes task text as message dicts;
++                # the OpenAI server still performs the only token rendering.
++                use_chat_api=True,
++                apply_chat_template=True,
++                score=EvalTaskScore(
++                    published_score=None,
++                    published_score_ref=None,
++                    score_func=score_task_keys_mean,
++                    score_func_kwargs={
++                        "result_keys": [
++                            "prompt_level_strict_acc,none",
++                            "inst_level_strict_acc,none",
++                            "prompt_level_loose_acc,none",
++                            "inst_level_loose_acc,none",
++                        ],
++                        "unit": "percent",
++                    },
++                ),
++                limit_samples_map={
++                    EvalLimitMode.CI_NIGHTLY: 0.05,
++                    EvalLimitMode.SMOKE_TEST: 0.01,
++                },
++            ),
++            EvalTask(
++                task_name="meta_gpqa_cot",
++                eval_task_name="gpqa_diamond_cot_zeroshot",
++                workflow_venv_type=WorkflowVenvType.EVALS_COMMON,
++                use_chat_api=True,
++                apply_chat_template=True,
++                score=EvalTaskScore(
++                    published_score=None,
++                    published_score_ref=None,
++                    score_func=score_task_single_key,
++                    score_func_kwargs={
++                        "result_keys": [
++                            "exact_match,flexible-extract",
++                        ],
++                        "unit": "percent",
++                    },
++                ),
++                limit_samples_map={
++                    EvalLimitMode.CI_NIGHTLY: 0.05,
++                    EvalLimitMode.SMOKE_TEST: 0.01,
++                },
++            ),
+             EvalTask(
+                 task_name="terminal_bench_2",
+                 workflow_venv_type=WorkflowVenvType.EVALS_AGENTIC,
+@@ -1289,7 +1342,9 @@ _eval_config_list = [
+                         "parser_name": "json",
+                         "temperature": 1.0,
+                         "model_info": {
+-                            "max_input_tokens": 256 * 1024,
++                            # Preserve the full 256K context and 80K completion
++                            # while keeping every request mathematically valid.
++                            "max_input_tokens": 176 * 1024,
+                             "max_output_tokens": 80 * 1024,
+                         },
+                         "llm_kwargs": {
+diff --git a/test_module/llm_tests/agentic_eval_tests.py b/test_module/llm_tests/agentic_eval_tests.py
+index 820284b8..f96bb4eb 100644
+--- a/test_module/llm_tests/agentic_eval_tests.py
++++ b/test_module/llm_tests/agentic_eval_tests.py
+@@ -116,7 +116,7 @@ def _require_openai_server(ctx: MediaContext) -> None:
+     auth_token = os.getenv("OPENAI_API_KEY") or os.getenv("API_KEY") or ""
+     if ctx.remote_server:
+         controller = RemoteOpenAIController(
+-            base_url=ctx.server_url,
++            base_url=ctx.base_url,
+             auth_token=auth_token,
+         )
+     else:
+diff --git a/test_module/llm_tests/llm_eval_tests.py b/test_module/llm_tests/llm_eval_tests.py
+index 0035cc61..b61e09fb 100644
+--- a/test_module/llm_tests/llm_eval_tests.py
++++ b/test_module/llm_tests/llm_eval_tests.py
+@@ -141,9 +141,10 @@ def collect_sample_counts(files) -> dict:
+ 
+ 
+ def _target_keys(task, results: dict) -> List[str]:
+-    if task.task_name in results:
+-        return [task.task_name]
+-    prefix = f"{task.task_name}_"
++    eval_task_name = getattr(task, "eval_task_name", None) or task.task_name
++    if eval_task_name in results:
++        return [eval_task_name]
++    prefix = f"{eval_task_name}_"
+     return sorted(k for k in results if k.startswith(prefix))
+ 
+ 
+@@ -243,20 +244,30 @@ def blocks_for_task(
+         score, ratio_pub, ratio_ref, accuracy_check = _score_one(
+             task, results, t_key, ref, n_total=sample_counts.get(t_key)
+         )
++        report_task_name = (
++            task.task_name if getattr(task, "eval_task_name", None) else t_key
++        )
++        task_provenance = (
++            {"eval_task_name": t_key}
++            if getattr(task, "eval_task_name", None)
++            else {}
++        )
+         blocks.append(
+             Block(
+                 kind="evals",
+                 task_type="llm",
+-                title=f"LLM Eval — {t_key}",
++                title=f"LLM Eval — {report_task_name}",
+                 id=block_id(ctx) or None,
+                 targets={
+-                    "task_name": t_key,
++                    "task_name": report_task_name,
++                    **task_provenance,
+                     "tolerance": ref["tolerance"],
+                     "published_score": task.score.published_score,
+                     "published_score_ref": task.score.published_score_ref,
+                 },
+                 data={
+-                    "task_name": t_key,
++                    "task_name": report_task_name,
++                    **task_provenance,
+                     "tolerance": ref["tolerance"],
+                     "published_score": task.score.published_score,
+                     "published_score_ref": task.score.published_score_ref,
+diff --git a/tests/llm_module/test_benchmark_configs.py b/tests/llm_module/test_benchmark_configs.py
+index 2ede3fc8..d72860d7 100644
+--- a/tests/llm_module/test_benchmark_configs.py
++++ b/tests/llm_module/test_benchmark_configs.py
+@@ -8,6 +8,7 @@ while VLM image/text perf is driven separately by the guidellm ``omni_modal_imag
+ from __future__ import annotations
+ 
+ import pytest
++from dataclasses import replace
+ 
+ from reference_config.benchmarking.benchmark_config import get_benchmark_config
+ from llm_module.benchmark_configs import get_llm_configs
+@@ -140,5 +141,34 @@ def test_configs_stay_hashable_with_targets_attached():
+     )
+ 
+ 
++def test_runtime_style_qwen_spec_without_targets_runs_standard_nightly_matrix(monkeypatch):
++    monkeypatch.delenv("ONLY_BENCHMARK_TARGETS", raising=False)
++    catalog_spec = next(
++        spec
++        for spec in MODEL_SPECS.values()
++        if spec.model_name == "Qwen3.6-27B" and spec.device_type.name == "P300X2"
++    )
++    runtime_spec = replace(
++        catalog_spec,
++        model_id="id_autoport_Qwen3.6-27B_p300x2_release",
++        device_model_spec=replace(catalog_spec.device_model_spec, perf_reference=[]),
++    )
++
++    configs = get_llm_configs(runtime_spec, runtime_spec.device_type, limit_samples_mode="ci-nightly")
++    assert [(cfg.isl, cfg.osl, cfg.max_concurrency) for cfg in configs] == [
++        (128, 128, 1),
++        (128, 1024, 1),
++        (1024, 128, 1),
++        (2048, 128, 1),
++        (4096, 128, 1),
++        (8192, 128, 1),
++        (16384, 128, 1),
++        (32768, 128, 1),
++        (65536, 128, 1),
++        (131072, 128, 1),
++    ]
++    assert all(cfg.isl + cfg.osl <= 262144 for cfg in configs)
++
++
+ if __name__ == "__main__":
+     raise SystemExit(pytest.main([__file__, "-q"]))
+diff --git a/tests/llm_module/test_eval_command.py b/tests/llm_module/test_eval_command.py
+index 85003427..27d6327d 100644
+--- a/tests/llm_module/test_eval_command.py
++++ b/tests/llm_module/test_eval_command.py
+@@ -4,7 +4,9 @@
+ from types import SimpleNamespace
+ 
+ from llm_module.eval_command import build_eval_command
++from llm_module.eval_configs import get_llm_eval_tasks
+ from reference_config.evals.eval_config import EvalTask
++from workflows.workflow_types import EvalLimitMode, WorkflowVenvType
+ 
+ 
+ def _model_spec(max_context):
+@@ -67,3 +69,45 @@ def test_legacy_task_max_length_is_retained_when_spec_has_none():
+     )
+ 
+     assert "max_length=4096" in _model_args(command).split(",")
++
++
++def test_qwen36_release_meta_evals_use_external_chat_and_full_context():
++    runtime = SimpleNamespace(eval_samples=None, limit_samples_mode="ci-nightly")
++    selection_spec = SimpleNamespace(model_name="Qwen3.6-27B")
++    tasks = get_llm_eval_tasks(selection_spec, runtime)
++
++    assert [task.task_name for task in tasks] == ["meta_ifeval", "meta_gpqa_cot"]
++    assert all(task.workflow_venv_type == WorkflowVenvType.EVALS_COMMON for task in tasks)
++    assert [task.eval_task_name for task in tasks] == [
++        "ifeval",
++        "gpqa_diamond_cot_zeroshot",
++    ]
++    assert all(task.use_chat_api for task in tasks)
++    assert all(task.apply_chat_template for task in tasks)
++    assert all(EvalLimitMode.CI_NIGHTLY in task.limit_samples_map for task in tasks)
++
++    model_spec = SimpleNamespace(
++        hf_model_repo="Qwen/Qwen3.6-27B",
++        model_name="Qwen3.6-27B",
++        model_id="id_autoport_Qwen3.6-27B_p300x2_release",
++        device_model_spec=SimpleNamespace(
++            max_context=262144,
++            max_concurrency=1,
++            eval_max_retries=None,
++        ),
++    )
++    for task in tasks:
++        command = build_eval_command(
++            task,
++            model_spec,
++            "p300x2",
++            "/tmp/evals",
++            8000,
++            runtime_config=runtime,
++            deploy_url="http://127.0.0.1",
++        )
++        assert "max_length=262144" in _model_args(command).split(",")
++        assert "base_url=http://127.0.0.1:8000/v1/chat/completions" in _model_args(command)
++        assert command[command.index("--tasks") + 1] == task.eval_task_name
++        assert "--apply_chat_template" in command
++        assert command[command.index("--limit") + 1] == "0.05"
+diff --git a/tests/test_module/llm_tests/test_agentic_eval_tests.py b/tests/test_module/llm_tests/test_agentic_eval_tests.py
+index 1f8d031a..a32d1c98 100644
+--- a/tests/test_module/llm_tests/test_agentic_eval_tests.py
++++ b/tests/test_module/llm_tests/test_agentic_eval_tests.py
+@@ -31,7 +31,10 @@ from llm_module.parsers.agentic import (
+     compute_accuracy_check,
+     extract_harbor_metrics,
+ )
+-from test_module.llm_tests.agentic_eval_tests import _select_agentic_tasks
++from test_module.llm_tests.agentic_eval_tests import (
++    _require_openai_server,
++    _select_agentic_tasks,
++)
+ from workflows.workflow_types import EvalLimitMode, ReportCheckTypes, WorkflowVenvType
+ 
+ 
+@@ -155,6 +158,24 @@ HARBOR_RESULT_FIXTURE = {
+ }
+ 
+ 
++def test_qwen36_terminal_bench_token_budget_matches_full_context():
++    from reference_config.evals.eval_config import EVAL_CONFIGS
++
++    task = next(
++        task
++        for task in EVAL_CONFIGS["Qwen3.6-27B"].tasks
++        if task.task_name == "terminal_bench_2"
++    )
++    kwargs = task.agentic_eval_config.agent_kwargs
++    max_input = kwargs["model_info"]["max_input_tokens"]
++    max_output = kwargs["model_info"]["max_output_tokens"]
++
++    assert max_input == 176 * 1024
++    assert max_output == 80 * 1024
++    assert kwargs["llm_kwargs"]["max_tokens"] == max_output
++    assert max_input + max_output == 262144
++
++
+ class TestAgenticParser:
+     def test_parse_harbor_result_to_evals_block(self):
+         parser = AgenticEvalParser(task_name="terminal_bench_2", score=FakeScore())
+@@ -719,6 +740,36 @@ class TestSelectAgenticTasks:
+ 
+ 
+ class TestAgenticBridge:
++    def test_remote_readiness_uses_canonical_base_url_with_service_port(self):
++        ctx = MagicMock()
++        ctx.remote_server = True
++        ctx.server_url = "http://127.0.0.1"
++        ctx.server_port = 8000
++        ctx.base_url = "http://127.0.0.1:8000"
++        controller = MagicMock()
++        controller.wait_for_healthy.return_value = True
++        with patch(
++            "test_module.llm_tests.agentic_eval_tests.RemoteOpenAIController",
++            return_value=controller,
++        ) as remote:
++            _require_openai_server(ctx)
++        remote.assert_called_once_with(base_url="http://127.0.0.1:8000", auth_token="")
++
++    def test_remote_readiness_preserves_explicit_server_url_port(self):
++        ctx = MagicMock()
++        ctx.remote_server = True
++        ctx.server_url = "http://127.0.0.1:9000"
++        ctx.server_port = 8000
++        ctx.base_url = "http://127.0.0.1:9000"
++        controller = MagicMock()
++        controller.wait_for_healthy.return_value = True
++        with patch(
++            "test_module.llm_tests.agentic_eval_tests.RemoteOpenAIController",
++            return_value=controller,
++        ) as remote:
++            _require_openai_server(ctx)
++        remote.assert_called_once_with(base_url="http://127.0.0.1:9000", auth_token="")
++
+     def test_bridge_delegates_to_driver_and_accepts_blocks(self):
+         from test_module.llm_tests.agentic_eval_tests import run_llm_agentic_eval
+ 
+diff --git a/tests/test_module/llm_tests/test_llm_eval_tests.py b/tests/test_module/llm_tests/test_llm_eval_tests.py
+index 9dcc7550..adead24f 100644
+--- a/tests/test_module/llm_tests/test_llm_eval_tests.py
++++ b/tests/test_module/llm_tests/test_llm_eval_tests.py
+@@ -46,9 +46,10 @@ def _score(
+     )
+ 
+ 
+-def _task(task_name="gpqa", score=None, min_context_required=None):
++def _task(task_name="gpqa", score=None, min_context_required=None, eval_task_name=None):
+     return SimpleNamespace(
+         task_name=task_name,
++        eval_task_name=eval_task_name,
+         score=score,
+         min_context_required=min_context_required,
+     )
+@@ -121,6 +122,22 @@ class TestBlocksForTask:
+         names = sorted(b.data["task_name"] for b in blocks)
+         assert names == ["longbench_2wikimqa", "longbench_hotpotqa"]
+ 
++    def test_public_harness_task_reports_stable_release_row_name(self):
++        (block,) = self._blocks(
++            _task(
++                "meta_gpqa_cot",
++                _score(published=None, reference=None),
++                eval_task_name="gpqa_diamond_cot_zeroshot",
++            ),
++            {"gpqa_diamond_cot_zeroshot": {"acc,none": 0.75}},
++        )
++        assert block.title == "LLM Eval — meta_gpqa_cot"
++        assert block.targets["task_name"] == "meta_gpqa_cot"
++        assert block.targets["eval_task_name"] == "gpqa_diamond_cot_zeroshot"
++        assert block.data["task_name"] == "meta_gpqa_cot"
++        assert block.data["eval_task_name"] == "gpqa_diamond_cot_zeroshot"
++        assert block.data["score"] == 75.0
++
+     def test_wer_is_inverted(self):
+         def wer_func(results, task_name, kwargs):
+             return results[task_name]["wer,none"]
+-- 
+2.43.0
+

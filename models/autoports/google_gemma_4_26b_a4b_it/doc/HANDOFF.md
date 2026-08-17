@@ -175,3 +175,63 @@ The precision A/B in `doc/tti_release/experiments/` needs only the tt-metal bran
 plus the vllm Gemma registration — it does not need tt-inference-server, since it
 drives `lm_eval` directly against the server rather than through the release
 workflow.
+
+---
+
+## RESOLVED: this branch is now self-sufficient. No other repo push is required.
+
+Supersedes the correction above. Everything a second machine needs is on this
+branch. Tested 2026-08-17.
+
+### tenstorrent/vllm is no longer a dependency — use the bundle
+
+Upstream `dev` **already registers all six Gemma-4 arch names**; the local commit
+was only a one-line retarget of `_gemma4_target` from
+`models.demos.gemma4...` to the autoport. The plugin has a designed hook for
+supplying a model without editing it — `_register_models_from_extra_dir()`, whose
+own docstring says it "runs first so a distributed bundle can supply a model
+without touching this file", and the builtin map that follows uses
+`_register_model_if_missing`, so the bundle wins.
+
+So: run **upstream `tenstorrent/vllm` at `dev`, unmodified**, and set
+
+```bash
+export EXTRA_MODELS_DIR=<repo>/models/autoports/google_gemma_4_26b_a4b_it/doc/tti_release/experiments/extra_models_dir
+```
+
+`extra_models_dir/gemma4_autoport/vllm_metadata.json` is committed here. The hook
+TT-prefixes the arch, yielding `TTGemma4ForConditionalGeneration`.
+
+### tt-inference-server is not needed to debug this
+
+The precision A/B drives `lm_eval` **directly against the vLLM server**, not
+through the release workflow, so tt-inference-server is required only to reproduce
+the *release verdict* — not to localise the defect. Note if you do run the release
+workflow from upstream: without `ca152fe2` its `EXPERIMENTAL` status silently
+disables eval enforcement, so a failed or missing accuracy row still reports
+PASS.
+
+### And nothing is stranded anyway — the patches are committed
+
+`experiments/patches/` carries both sets of local commits as `git am`-able
+patches, so they can be reproduced exactly without access to the originating host:
+
+- `vllm-dev-4-commits.patch` (22 KiB) — Gemma-4 retarget, async host-sampling RNG
+  isolation fix, Qwen3.6 and Falcon3 registrations. Base: `dev` @ `7c99bd3b8`.
+- `tt-inference-server-main-4-commits.patch` (114 KiB) — autoport external-server
+  release specs **including the EXPERIMENTAL eval-enforcement fix**, Falcon3 Base
+  nightly eval references, model-context propagation to API evals, and the
+  Qwen3.6 eval config / Terminal-Bench token budget. Base: `main` @ `c8509ac2`.
+
+Apply with `git am < …patch` on the stated base, or cherry-pick what you need.
+
+### The lowest-dependency way to attack the failure
+
+The precision A/B needs a vLLM server. **The hypothesis can be tested with no
+vLLM at all**: `models.common.readiness_check.run_teacher_forcing` and
+`run_autoregressive` drive `tt/generator.py` directly, and that is how stages 06
+and 07 produced their AIME24 top-k numbers. Running either at a generation length
+of a few thousand tokens — rather than the 100 used so far — exercises exactly the
+regime where GPQA fails, needs only this tt-metal branch, and produces a
+first-divergence index. That is the experiment
+`doc/tti_release/AUTODEBUG_GPQA_DIVERGENCE.md` specified and never ran.
