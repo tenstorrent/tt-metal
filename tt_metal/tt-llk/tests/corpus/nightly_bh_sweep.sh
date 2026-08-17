@@ -63,6 +63,56 @@ if [ "$GATE_SELFTEST_RC" -ne 0 ]; then
   exit 2
 fi
 
+# Corpus compile gate (coverage-parity plan item 1): every mapped corpus row
+# (109 functional-module-mapped rows) must COMPILE green on BH with the pinned
+# toolchain before any 2x2 phase runs — `--require-executed-mapped` turns a
+# single non-PASS mapped row into a nonzero exit (RED).  The gate is
+# compile-mode only (no simulator, no device), so it is safe to run before the
+# flocked phases.  SKIP-with-reason when the env preconditions are absent
+# (recorded in the report, never silent); a completed PASS gate for the same
+# SWEEP_DATE is reused (idempotent resume, matching the per-row discipline).
+# A --dry-run wrapper invocation prints the real gate command and proves the
+# wiring with a plan-only pass instead of the full compile.
+GATE_STATUS="" GATE_REASON=""
+GATE_ROOT="$EV/corpus-compile-gate"
+GATE_DRY=0
+for _a in "$@"; do [ "$_a" = "--dry-run" ] && GATE_DRY=1; done
+GATE_PY="$HERE/../python_tests/.venv/bin/python"
+GATE_CXX="$HERE/../sfpi/compiler/bin/riscv-tt-elf-g++"
+GATE_CMD=(python3 "$HERE/sfpu_corpus.py" --mode compile --arch bh --execute --require-executed-mapped)
+if [ ! -x "$GATE_PY" ]; then
+  GATE_STATUS=SKIP GATE_REASON="missing tt-llk venv ($GATE_PY)"
+elif [ ! -x "$GATE_CXX" ]; then
+  GATE_STATUS=SKIP GATE_REASON="missing pinned SFPI toolchain ($GATE_CXX)"
+elif [ "$GATE_DRY" = 1 ]; then
+  echo "nightly: corpus compile gate DRY-RUN — real command would be:"
+  echo "  ${GATE_CMD[*]} --run-root $GATE_ROOT"
+  rm -rf "$GATE_ROOT.dry"
+  if python3 "$HERE/sfpu_corpus.py" --mode compile --arch bh \
+       --run-root "$GATE_ROOT.dry" > "$EV/corpus-compile-gate-dry.log" 2>&1; then
+    GATE_STATUS=DRY_RUN GATE_REASON="plan-only wiring proof (no --execute); see $GATE_ROOT.dry"
+  else
+    echo "RED: corpus compile gate dry-run (plan-only) failed (see $EV/corpus-compile-gate-dry.log)"
+    exit 1
+  fi
+elif [ -f "$GATE_ROOT/results.json" ] && \
+     python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1]))["provenance"].get("executed_mapped_gate")=="PASS" else 1)' \
+       "$GATE_ROOT/results.json" 2>/dev/null; then
+  GATE_STATUS=PASS GATE_REASON="reused: executed_mapped_gate already PASS for $DATE"
+else
+  # sfpu_corpus.py refuses a pre-existing --run-root; rotate a stale/failed one.
+  [ -e "$GATE_ROOT" ] && mv "$GATE_ROOT" "$GATE_ROOT.retry-$(date +%H%M%S)"
+  if "${GATE_CMD[@]}" --run-root "$GATE_ROOT" > "$EV/corpus-compile-gate.log" 2>&1; then
+    GATE_STATUS=PASS GATE_REASON="all mapped rows compiled PASS ($GATE_ROOT/results.tsv)"
+  else
+    echo "RED: corpus compile gate FAILED — a mapped corpus row did not compile PASS"
+    echo "     (see $GATE_ROOT/results.tsv and $EV/corpus-compile-gate.log)"
+    echo "corpus-compile-gate: RED" > "$EV/corpus-compile-gate-status.txt"
+    exit 1
+  fi
+fi
+echo "corpus-compile-gate: $GATE_STATUS — $GATE_REASON" | tee "$EV/corpus-compile-gate-status.txt"
+
 # sweep_2x2.py preflight enforces: cc1plus sha256 == PRIMARY pin (resolved
 # via g++ -print-prog-name=cc1plus; the driver sha is a secondary check —
 # the driver is byte-identical across cc1plus-only changes), removed
@@ -96,6 +146,7 @@ if [ -f "$EV/REPORT.md" ]; then
     echo '```'
     tail -n 3 "$EV/selftest-report-gate.txt"
     tail -n 1 "$EV/selftest-dejagnu-gate.txt"
+    cat "$EV/corpus-compile-gate-status.txt" 2>/dev/null || echo "corpus-compile-gate: (no status recorded)"
     echo '```'
   } >> "$EV/REPORT.md"
 fi
