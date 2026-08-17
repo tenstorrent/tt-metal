@@ -2751,6 +2751,12 @@ void DeviceProfiler::pushTracyDeviceResults(
             TracyTTPushStartMarker(device_tracy_contexts[device_core], marker_to_push);
         } else if (marker_to_push.marker_type == tracy::TTDeviceMarkerType::ZONE_END) {
             TracyTTPushEndMarker(device_tracy_contexts[device_core], marker_to_push);
+        } else if (
+            marker_to_push.marker_type == tracy::TTDeviceMarkerType::TS_EVENT ||
+            marker_to_push.marker_type == tracy::TTDeviceMarkerType::TS_DATA ||
+            marker_to_push.marker_type == tracy::TTDeviceMarkerType::TS_DATA_16B) {
+            // Point-in-time device events; they render as markers on the RISC lane rather than zones.
+            TracyTTPushMarker(device_tracy_contexts[device_core], marker_to_push);
         }
     }
 #endif
@@ -3156,6 +3162,26 @@ void DeviceProfiler::pollDebugDumpResults(
 #endif
 }
 
+// When an external streaming consumer OWNS the worker profiler rings and drains them continuously, the
+// standard DRAM device profiler must stand down -- its per-program control-buffer reset (see the readback
+// path) rewinds the ring TAIL and breaks the continuous drain (~30x duplicate zones).
+//
+// Two such consumers exist and both are affected identically, because the hazard is the rewind, not who
+// is reading: TT_METAL_PERF_DEBUG_PROFILER (the DRISC drainer) and TT_METAL_DRISC_PROFILER (the
+// DRISC drainer). Read once.
+static bool external_ring_drainer_active() {
+    static const bool active = [] {
+        for (const char* var : {"TT_METAL_PERF_DEBUG_PROFILER", "TT_METAL_DRISC_PROFILER"}) {
+            const char* s = std::getenv(var);
+            if (s != nullptr && *s != '\0' && *s != '0') {
+                return true;
+            }
+        }
+        return false;
+    }();
+    return active;
+}
+
 bool getDeviceProfilerState(ContextId context_id) {
     auto& ctx = MetalContext::instance(context_id);
 
@@ -3164,7 +3190,10 @@ bool getDeviceProfilerState(ContextId context_id) {
         return false;
     }
 
-    return ctx.rtoptions().get_profiler_enabled();
+    // NOTE: PROFILE_KERNEL (marker emission) keys off get_profiler_enabled()
+    // DIRECTLY (build.cpp / build_env_manager.cpp), so disabling the DRAM profiler here does NOT stop the
+    // kernels emitting markers -- it only stands down the DRAM readback/reset.
+    return ctx.rtoptions().get_profiler_enabled() && !external_ring_drainer_active();
 }
 
 bool getDeviceDebugDumpEnabled(ContextId context_id) {
