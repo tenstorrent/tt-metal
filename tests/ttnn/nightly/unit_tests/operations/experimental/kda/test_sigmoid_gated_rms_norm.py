@@ -43,15 +43,15 @@ _PRODUCTION_INPUT_DTYPE = ttnn.bfloat16
 _PRODUCTION_OUTPUT_DTYPE = ttnn.bfloat16
 _PRODUCTION_PERF_MARGIN = 0.05
 
-# Calibrated 2026-08-13 on bh_loudbox host bh-lb-42, P150b firmware 19.5.0.0,
-# operation commit 012a3aef206. Seven samples per case produced ranges
-# 186342-188082 ns, 186847-187676 ns, and 186821-187901 ns respectively; the
+# Calibrated 2026-08-17 on bh_loudbox host bh-lb-42, P150b firmware 19.5.0.0,
+# with Fast reduction and x/gate/output double buffering. Seven samples produced ranges
+# 166659-167124 ns, 167176-167524 ns, and 166987-167336 ns respectively; the
 # inline references are their medians. The 5% symmetric margin covers the <1%
 # observed spread plus board/thermal variance while still guarding regressions.
 _PRODUCTION_CASES = (
-    _ProductionCase("sp1-tp8-local", num_heads=12, sequence=5120, expected_duration_ns=187_149),
-    _ProductionCase("sp2-tp4-local", num_heads=24, sequence=2560, expected_duration_ns=187_277),
-    _ProductionCase("sp4-tp2-local", num_heads=48, sequence=1280, expected_duration_ns=186_913),
+    _ProductionCase("sp1-tp8-local", num_heads=12, sequence=5120, expected_duration_ns=166_947),
+    _ProductionCase("sp2-tp4-local", num_heads=24, sequence=2560, expected_duration_ns=167_323),
+    _ProductionCase("sp4-tp2-local", num_heads=48, sequence=1280, expected_duration_ns=167_172),
 )
 
 

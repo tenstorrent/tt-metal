@@ -49,8 +49,8 @@ tt::tt_metal::ProgramDescriptor SigmoidGatedRmsNormProgramFactory::create_descri
     const uint32_t cb_norm = next_cb_index++;
     const uint32_t cb_out = next_cb_index++;
     const uint32_t cb_scaler = next_cb_index++;
-    add_cb(cb_x, Vt, datatype_to_dataformat_converter(in.input.dtype()));
-    add_cb(cb_gate, Vt, tt::DataFormat::Float16_b);
+    add_cb(cb_x, Vt, datatype_to_dataformat_converter(in.input.dtype()), 2);
+    add_cb(cb_gate, Vt, tt::DataFormat::Float16_b, 2);
     add_cb(cb_weight, Vt, tt::DataFormat::Float16_b);
     add_cb(cb_tmp, Vt, tt::DataFormat::Float32);
     add_cb(cb_stats, 1, tt::DataFormat::Float32);
