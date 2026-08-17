@@ -825,6 +825,24 @@ ALWI void topk_rebuild(uint32_t idst, bool idir, int m_iter, int k, int logk, in
  */
 ALWI void topk_tile_init() { MATH(SFPU_UNARY_INIT_FN(topk_local_sort, sfpu::topk_init, (true /* APPROXIMATE */))); }
 
+// clang-format off
+/**
+ * Sets the tie-break polarity used by the stable TopK comparator. Required once per compute
+ * kernel, after topk_tile_init, when any TopK call uses stable_sort=true. The polarity encodes
+ * the requested GLOBAL sort order and must not follow the per-call sort direction (idir), which
+ * may alternate to build bitonic sequences.
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | descending      | The requested global sort order (true = largest-first / descending)        | bool     | true, false                                           | True     |
+ */
+// clang-format on
+ALWI void topk_set_stable_descending_mode(bool descending) {
+    MATH((ckernel::sfpu::set_topk_stable_descending_mode(descending)));
+}
+
 /**
  * UInt16 values in 32-bit DEST: move cleaned values into the packer-visible high half (SFPSTORE mode 9).
  * No-op unless the compute kernel was built with TOPK_UINT16_FP32_DEST. Must run on MATH while DEST is
