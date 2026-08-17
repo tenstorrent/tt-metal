@@ -14,6 +14,8 @@ Ported/adapted from the Qwen3.6 Blackhole TP path (tp_common.py).
 import math
 import os
 
+from loguru import logger
+
 import ttnn
 from models.common.utility_functions import is_blackhole
 
@@ -116,6 +118,69 @@ def in_prefill_l1_matmul_band(m: int) -> bool:
     """True for short prefill row counts where L1 in0 hoists are wired (32 < M <= cutoff)."""
     m = int(m)
     return TILE_SIZE < m <= _PREFILL_CUTOFF
+
+
+# Matmul shapes (M, K, N) whose tuned prefill program config does not fit this
+# device's L1. Populated on the first attempt, then consulted to skip straight to
+# auto — see ``linear_l1_safe``. Exposed for tests, which assert it stays EMPTY
+# on the shipped meshes.
+_L1_FALLBACK_SHAPES: set = set()
+
+
+def l1_fallback_shapes():
+    """(M, K, N) shapes that fell back from a tuned prefill config to ttnn auto."""
+    return frozenset(_L1_FALLBACK_SHAPES)
+
+
+def reset_l1_fallback_shapes():
+    """Forget every cached fallback verdict, so the next call re-attempts the tuned
+    config. For tests that must observe the attempt rather than a cached skip."""
+    _L1_FALLBACK_SHAPES.clear()
+
+
+def linear_l1_safe(x, weight, *, program_config=None, memory_config=None, compute_kernel_config=None):
+    """``ttnn.linear`` that falls back to ttnn auto when the tuned program config's
+    statically allocated CBs do not fit this device's L1.
+
+    The tuned prefill configs in this module were swept at the shipped tensor
+    parallelism (``interleaved_gate_up_prefill_config``: "M=128 K=5376 N=5376 at
+    TP=8"), and their gate is a row-count band — nothing checks the resulting L1
+    footprint. At TP=1/2 the weight is not fractured, so N is up to 8x wider and
+    the same block sizes demand 1.7-4.3 MB against Wormhole's 1.46 MB L1: the op
+    throws ``Statically allocated circular buffers ... beyond max L1 size``
+    before computing anything.
+
+    Deciding by *fit* rather than by TP is deliberate — the same configs DO fit a
+    single Blackhole P150 (130 cores vs Wormhole's 64), which is a shipped 12B
+    configuration whose perf must not change. When the tuned config fits, this is
+    the identical ``ttnn.linear`` call it always was, so 1x4/1x8 programs — and
+    their perf — are untouched by construction.
+
+    The verdict is cached per (M, K, N): the fallback costs one failed program
+    build per shape, not one per call.
+    """
+    if program_config is None:
+        return ttnn.linear(x, weight, memory_config=memory_config, compute_kernel_config=compute_kernel_config)
+
+    key = (matmul_rows(x), int(x.shape[-1]), int(weight.shape[-1]))
+    if key not in _L1_FALLBACK_SHAPES:
+        try:
+            return ttnn.linear(
+                x,
+                weight,
+                program_config=program_config,
+                memory_config=memory_config,
+                compute_kernel_config=compute_kernel_config,
+            )
+        except RuntimeError as e:
+            if "circular buffer" not in str(e).lower():
+                raise
+            _L1_FALLBACK_SHAPES.add(key)
+            logger.warning(
+                f"Tuned prefill matmul config for (M,K,N)={key} overflows L1 on this device "
+                f"({x.device().arch()}); falling back to ttnn auto for this shape."
+            )
+    return ttnn.linear(x, weight, memory_config=memory_config, compute_kernel_config=compute_kernel_config)
 
 
 def prefill_long_2d_enabled() -> bool:
@@ -419,7 +484,7 @@ def prefill_linear_above_cutoff(x, weight, *, out_memory_config=None):
     x_r = ttnn.reshape(x_work, (1, batch, _PREFILL_CUTOFF, n_in))
     pc = prefill_progcfg(_PREFILL_CUTOFF, n_in, n_out)
     ckc = prefill_lofi_ckc() if prefill_matmul_lofi_enabled(m) else _prefill_hifi2_ckc()
-    out_r = ttnn.linear(x_r, weight, program_config=pc, compute_kernel_config=ckc, memory_config=out_mc)
+    out_r = linear_l1_safe(x_r, weight, program_config=pc, compute_kernel_config=ckc, memory_config=out_mc)
     return _restore(ttnn.reshape(out_r, (1, 1, m, int(out_r.shape[-1]))))
 
 

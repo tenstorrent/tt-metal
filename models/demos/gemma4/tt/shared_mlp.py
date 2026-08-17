@@ -27,6 +27,7 @@ from models.demos.gemma4.tt.dram_sharded import (
     decode_in0_l1_enabled,
     interleaved_down_proj_prefill_config,
     interleaved_gate_up_prefill_config,
+    linear_l1_safe,
     matmul_rows,
     prefill_linear_above_cutoff,
     prefill_lofi_ckc,
@@ -288,7 +289,7 @@ class SharedMLP:
                 program_config = matched
             else:
                 act = ttnn.sharded_to_interleaved(hidden_states, ttnn.L1_MEMORY_CONFIG)
-                gate_up = ttnn.linear(
+                gate_up = linear_l1_safe(
                     act,
                     self.gate_up_proj,
                     program_config=program_config,
@@ -298,7 +299,7 @@ class SharedMLP:
                 act.deallocate(True)
                 return gate_up
         act, owned = self._prepare_prefill_act(hidden_states, program_config)
-        gate_up = ttnn.linear(
+        gate_up = linear_l1_safe(
             act,
             self.gate_up_proj,
             program_config=program_config,
@@ -332,7 +333,7 @@ class SharedMLP:
         if out_memcfg is None and m <= TILE_SIZE:
             out_memcfg = ttnn.L1_MEMORY_CONFIG
         act, owned = self._prepare_prefill_act(hidden, program_config)
-        output = ttnn.linear(
+        output = linear_l1_safe(
             act,
             self.down_proj,
             program_config=program_config,
