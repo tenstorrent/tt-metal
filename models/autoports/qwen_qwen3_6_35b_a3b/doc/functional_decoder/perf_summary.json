@@ -4,27 +4,27 @@
     "mode": "prefill",
     "ops_in_window": 1750,
     "iters": 2,
-    "device_kernel_ms_per_iter": 342.046,
-    "op_to_op_gap_ms_per_iter": 0.883,
-    "host_wall_ms_per_iter": 343.39,
+    "device_kernel_ms_per_iter": 341.904,
+    "op_to_op_gap_ms_per_iter": 0.963,
+    "host_wall_ms_per_iter": 343.281,
     "seq_len": 2048,
     "batch": 1,
     "current_pos": null,
     "traced": false,
     "supported_context": 8192,
     "top_ops_device_ms_per_iter": {
-      "SparseMatmulDeviceOperation active=?/4096 x 32 x 2048 x 1024": 147.421,
-      "SparseMatmulDeviceOperation active=?/4096 x 32 x 512 x 2048": 79.803,
-      "BinaryNgDeviceOperation": 25.311,
-      "UnaryDeviceOperation": 21.814,
-      "MatmulDeviceOperation b={1024} x 64 x 64 x 64": 19.184
+      "SparseMatmulDeviceOperation active=?/4096 x 32 x 2048 x 1024": 147.399,
+      "SparseMatmulDeviceOperation active=?/4096 x 32 x 512 x 2048": 79.835,
+      "BinaryNgDeviceOperation": 25.323,
+      "UnaryDeviceOperation": 21.749,
+      "MatmulDeviceOperation b={1024} x 64 x 64 x 64": 19.185
     },
     "blocks": {
       "iterations_identical": true,
       "boundary_op_index_in_iteration": 687,
-      "mixer_ms_per_iter": 63.588,
-      "expert_matmul_ms_per_iter": 227.224,
-      "moe_elementwise_ms_per_iter": 51.234
+      "mixer_ms_per_iter": 63.583,
+      "expert_matmul_ms_per_iter": 227.234,
+      "moe_elementwise_ms_per_iter": 51.087
     }
   },
   {
@@ -32,27 +32,27 @@
     "mode": "prefill",
     "ops_in_window": 392,
     "iters": 2,
-    "device_kernel_ms_per_iter": 281.623,
-    "op_to_op_gap_ms_per_iter": 0.136,
-    "host_wall_ms_per_iter": 282.143,
+    "device_kernel_ms_per_iter": 281.739,
+    "op_to_op_gap_ms_per_iter": 0.145,
+    "host_wall_ms_per_iter": 282.304,
     "seq_len": 2048,
     "batch": 1,
     "current_pos": null,
     "traced": false,
     "supported_context": 8192,
     "top_ops_device_ms_per_iter": {
-      "SparseMatmulDeviceOperation active=?/4096 x 32 x 2048 x 1024": 147.102,
-      "SparseMatmulDeviceOperation active=?/4096 x 32 x 512 x 2048": 79.598,
-      "UnaryDeviceOperation": 21.176,
-      "BinaryNgDeviceOperation": 16.101,
-      "FastReduceNCDeviceOperation": 6.48
+      "SparseMatmulDeviceOperation active=?/4096 x 32 x 2048 x 1024": 147.096,
+      "SparseMatmulDeviceOperation active=?/4096 x 32 x 512 x 2048": 79.677,
+      "UnaryDeviceOperation": 21.255,
+      "BinaryNgDeviceOperation": 16.107,
+      "FastReduceNCDeviceOperation": 6.427
     },
     "blocks": {
       "iterations_identical": true,
       "boundary_op_index_in_iteration": 28,
-      "mixer_ms_per_iter": 3.8,
-      "expert_matmul_ms_per_iter": 226.7,
-      "moe_elementwise_ms_per_iter": 51.123
+      "mixer_ms_per_iter": 3.809,
+      "expert_matmul_ms_per_iter": 226.773,
+      "moe_elementwise_ms_per_iter": 51.157
     }
   },
   {
@@ -60,27 +60,27 @@
     "mode": "decode",
     "ops_in_window": 968,
     "iters": 8,
-    "device_kernel_ms_per_iter": 57.951,
+    "device_kernel_ms_per_iter": 57.923,
     "op_to_op_gap_ms_per_iter": 0.089,
-    "host_wall_ms_per_iter": 58.065,
+    "host_wall_ms_per_iter": 58.039,
     "seq_len": 1,
     "batch": 32,
     "current_pos": 4095,
     "traced": true,
     "supported_context": 8192,
     "top_ops_device_ms_per_iter": {
-      "UnaryDeviceOperation": 10.531,
-      "BinaryNgDeviceOperation": 9.514,
-      "SparseMatmulDeviceOperation active=?/8192 x 32 x 512 x 2048": 9.469,
+      "UnaryDeviceOperation": 10.507,
+      "BinaryNgDeviceOperation": 9.503,
+      "SparseMatmulDeviceOperation active=?/8192 x 32 x 512 x 2048": 9.468,
       "SparseMatmulDeviceOperation active=?/8192 x 32 x 2048 x 1024": 9.111,
-      "FillPadDeviceOperation": 5.736
+      "FillPadDeviceOperation": 5.733
     },
     "blocks": {
       "iterations_identical": true,
       "boundary_op_index_in_iteration": 68,
       "mixer_ms_per_iter": 8.828,
       "expert_matmul_ms_per_iter": 18.579,
-      "moe_elementwise_ms_per_iter": 30.544
+      "moe_elementwise_ms_per_iter": 30.516
     }
   },
   {
@@ -88,27 +88,27 @@
     "mode": "decode",
     "ops_in_window": 872,
     "iters": 8,
-    "device_kernel_ms_per_iter": 50.061,
+    "device_kernel_ms_per_iter": 50.136,
     "op_to_op_gap_ms_per_iter": 0.236,
-    "host_wall_ms_per_iter": 50.321,
+    "host_wall_ms_per_iter": 50.402,
     "seq_len": 1,
     "batch": 32,
     "current_pos": 4095,
     "traced": true,
     "supported_context": 8192,
     "top_ops_device_ms_per_iter": {
-      "UnaryDeviceOperation": 10.396,
-      "SparseMatmulDeviceOperation active=?/8192 x 32 x 512 x 2048": 9.456,
-      "SparseMatmulDeviceOperation active=?/8192 x 32 x 2048 x 1024": 9.111,
-      "BinaryNgDeviceOperation": 7.893,
-      "FillPadDeviceOperation": 5.562
+      "UnaryDeviceOperation": 10.432,
+      "SparseMatmulDeviceOperation active=?/8192 x 32 x 512 x 2048": 9.457,
+      "SparseMatmulDeviceOperation active=?/8192 x 32 x 2048 x 1024": 9.109,
+      "BinaryNgDeviceOperation": 7.883,
+      "FillPadDeviceOperation": 5.563
     },
     "blocks": {
       "iterations_identical": true,
       "boundary_op_index_in_iteration": 56,
       "mixer_ms_per_iter": 1.055,
       "expert_matmul_ms_per_iter": 18.567,
-      "moe_elementwise_ms_per_iter": 30.44
+      "moe_elementwise_ms_per_iter": 30.515
     }
   }
 ]

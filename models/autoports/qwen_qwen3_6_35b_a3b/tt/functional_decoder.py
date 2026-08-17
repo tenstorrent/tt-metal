@@ -185,6 +185,18 @@ class DecoderConfig:
             raise ValueError("delta_chunk_size must be a power of two")
         if self.moe_prefill_chunk_tokens % TILE:
             raise ValueError("moe_prefill_chunk_tokens must be a multiple of 32")
+        # `sdpa_chunk` is the prefill SDPA's `q_chunk_size`, and the op converts an absolute
+        # `start_pos` to a chunk index by *integer division* by it (see `prefill_forward`). So the
+        # value that makes a `start_pos` legal is `sdpa_chunk`, not the padding constant. These two
+        # checks are what let `prefill_forward` reject exactly the misaligned offsets the op would
+        # silently mis-handle: keep `sdpa_chunk` a tile multiple, and keep it dividing the padding
+        # alignment so that a `PREFILL_ALIGN`-aligned chunk boundary is always `sdpa_chunk`-aligned
+        # too. Without the second check, `sdpa_chunk = 256` would accept `start_pos = 128` and
+        # compute chunk index 128/256 = 0.
+        if self.sdpa_chunk % TILE or self.sdpa_chunk < TILE:
+            raise ValueError(f"sdpa_chunk must be a multiple of {TILE} and at least {TILE}")
+        if PREFILL_ALIGN % self.sdpa_chunk:
+            raise ValueError(f"sdpa_chunk must divide PREFILL_ALIGN ({PREFILL_ALIGN}), got {self.sdpa_chunk}")
         # Q/K of the delta rule are repeat_interleaved from key heads up to value heads. The
         # duplication is folded into the projection and conv weights at load time so the
         # runtime path never needs a repeat_interleave (see from_state_dict).
@@ -299,10 +311,11 @@ def _decode_sdpa_program_config(cfg: DecoderConfig):
     setting measured. ``diag_sdpa_decode.py``'s identity control proves this: no config and an
     explicit config spelling out that substitution are bit-identical at all 11 contexts.
 
-    ``exp_approx_mode=False`` matches what the substituted config resolves to (``nullopt`` ->
-    ``false``, ``sdpa_decode_program_factory.cpp:211-212``) and is spelled out only for provenance;
-    the sweep shows approx and exact are bit-identical. ``q_chunk_size`` is unused by the decode
-    factory but the struct requires a value.
+    ``exp_approx_mode=False`` is a **deliberate difference** from the substituted default, which
+    leaves the field unset; the factory resolves a missing value to ``true``, not false
+    (``sdpa_decode_program_factory.cpp:211-213``). Exact is chosen because it is the conservative
+    option, and it costs nothing: the sweep's held-axis rows show approx and exact are bit-identical
+    for this shape. ``q_chunk_size`` is unused by the decode factory but the struct requires a value.
     """
     if cfg.decode_sdpa_program_config is not None:
         return cfg.decode_sdpa_program_config
@@ -676,15 +689,22 @@ class FunctionalDecoder(LightweightModule):
         seq_len = int(x.shape[-2])
         if seq_len < 1:
             raise ValueError("prefill needs seq_len >= 1")
-        if start_pos % PREFILL_ALIGN:
-            # Op contract, not a shortcut: chunked SDPA converts the absolute offset to a chunk
-            # index by integer division, in both entry points this checkout offers --
-            # sdpa_program_factory.cpp:133 (`chunk_start_idx / q_chunk_size`, scalar offset) and
-            # kernels/dataflow/reader_interleaved.cpp:260 (same expression, device-tensor offset).
-            # A misaligned offset therefore places the causal-mask diagonal in the wrong tile and
-            # returns silently wrong values, so reject it instead of rounding. `sdpa_chunk` is the
-            # knob: it sets q_chunk_size == PREFILL_ALIGN, and TILE (32) is the floor.
-            raise ValueError(f"start_pos must be a multiple of {PREFILL_ALIGN}, got {start_pos}")
+        # Op contract, not a shortcut: chunked SDPA converts the absolute offset to a chunk index by
+        # integer division by `q_chunk_size`, in both entry points this checkout offers --
+        # sdpa_program_factory.cpp:133 (`chunk_start_idx / q_chunk_size`, scalar offset) and
+        # kernels/dataflow/reader_interleaved.cpp:260 (same expression, device-tensor offset). A
+        # misaligned offset therefore places the causal-mask diagonal in the wrong tile and returns
+        # silently wrong values, so reject it instead of rounding.
+        #
+        # The divisor is `cfg.sdpa_chunk`, which is what `_sdpa_program_config` passes as
+        # `q_chunk_size` -- *not* `PREFILL_ALIGN`, which is the padding/page alignment. They are equal
+        # at the default (both 128) and `__post_init__` keeps `sdpa_chunk` dividing `PREFILL_ALIGN`,
+        # so this bound is never looser than the padding one. Checking the op's own divisor is what
+        # makes lowering `sdpa_chunk` an actual lever: at `sdpa_chunk = 32` a `start_pos` of 32 is
+        # legal here, and at 256 it would not be -- which the validation now rules out anyway.
+        align = cfg.sdpa_chunk if not cfg.is_linear else PREFILL_ALIGN
+        if start_pos % align:
+            raise ValueError(f"start_pos must be a multiple of {align}, got {start_pos}")
         if start_pos + seq_len > cfg.supported_context:
             raise ValueError(
                 f"start_pos + seq_len = {start_pos + seq_len} exceeds supported context " f"{cfg.supported_context}"

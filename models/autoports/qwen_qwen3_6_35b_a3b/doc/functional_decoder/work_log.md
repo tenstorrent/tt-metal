@@ -205,7 +205,7 @@ re-discover them.
 | `ttnn.softplus` | fp32 relmax 3.4e-4, bf16 relmax 3.2e-2 | the `a + dt_bias` path is forced to fp32 (`dt_bias` reaches +15.6) | no — development finding |
 | `ttnn.exp` with a `-1e30` additive mask | -> 0, no NaN | decay masks are added **before** `exp`; cumulative gates reach ~-1e5 so `exp` of the unmasked upper triangle would overflow to `inf` and produce `0*inf = NaN` | no — development finding; the behaviour it justifies is exercised by every `linear` test |
 | `ttnn.permute` `(0,3,2,1)` / `(2,3,0,1)` | ok | gets `beta`/`g` from `[1,1,T,32]` into the `[.., heads, .., 1]` broadcast layout without a relayout | no — development finding; exercised by every `linear` test |
-| `chunked_scaled_dot_product_attention` with `chunk_start_idx_tensor` | ok, pcc 0.999790 | the device-tensor offset form **works** on this build; not adopted because feeding it without a host write needs a setup-time offsets table plus a per-chunk device slice, and its only benefit is one program instead of 128 for a full-context prefill (README §6 limitation 6, handed to `optimize`) | yes |
+| `chunked_scaled_dot_product_attention` with `chunk_start_idx_tensor` | ok, pcc 0.999775 | the device-tensor offset form **works** on this build; not adopted because feeding it without a host write needs a setup-time offsets table plus a per-chunk device slice, and its only benefit is one program instead of 128 for a full-context prefill (README §6 limitation 6, handed to `optimize`) | yes |
 
 Three further aliasing facts were **not** established by `probe_ttnn_ops.py` (which only checks
 buffer addresses for the in-place case, `p_inplace`) but by ad-hoc buffer-address comparisons while
@@ -287,7 +287,9 @@ was fair. Measured with `tests/diag_real_weight_maxabs.py`
   at 0.1367. At one chunk — no carry at all — the error is the same order as both controls.
 * **Bounded, not divergent — now measured on one curve.** Extending the same sweep: 32 chunks give
   1.9178 and 64 chunks give **1.9178**, identical to four decimals, so the growth flattens rather
-  than compounding (PCC moves only 0.9999036 -> 0.9998920 over that doubling). The mechanism is the
+  than compounding. Note what is bounded: the **max-abs**. PCC still declines slowly across the same
+  doubling (0.9999036 -> 0.9998920), so the worst element stops getting worse while more elements
+  pick up small error — round 5 was right to want that distinction stated. The mechanism is the
   decay: `g <= 0` so `exp(g) <= 1`, and old error ages out. This is why the 262143-token prefill
   (4096 chunks) is *not* worse at 0.9999742. Round 4 was right that the earlier version of this
   bullet did not support its own claim: it compared a synthetic-weight 262143-token *tail* maxabs
@@ -512,6 +514,47 @@ sequence opened the mesh cleanly. Recorded so it is not mistaken for a leak.
 * Recorded because a killed device job is worth an audit trail even when it was self-inflicted and
   recovered cleanly.
 
+**2026-08-17 ~20:30 — I edited a shell script while bash was executing it (self-inflicted, no
+hardware fault).** The round-5 evidence pass was running from `/tmp/rev16.sh` when I appended two
+steps to that same file. Bash reads a script incrementally and remembers a byte offset, so shifting
+the offsets underneath a running interpreter can make it resume mid-statement and execute garbage.
+Nothing had visibly gone wrong yet, but the run could not be trusted, so I stopped it rather than
+finish it:
+
+* killed by **explicit pid**, innermost child first (`245286` pytest -> `245285` timeout ->
+  `245279` runner -> `238598` shell), `TERM` then `KILL` after 20 s. Never `pkill -f` — earlier in
+  this stage a `pkill -f <pattern>` matched its own invoking command line and killed my shell;
+* `timeout 60 tt-smi -ls --local` -> all 4 p300c chips present; mesh smoke -> `MESH_SMOKE_OK`.
+  **No reset needed**, so none was run;
+* relaunched from a copy made read-only (`chmod a-w`) so the same mistake cannot repeat.
+
+Cost: ~20 minutes of redone gate and long-context work. Worth recording because the failure mode is
+silent — a corrupted script does not announce itself, it just runs the wrong thing.
+
+**2026-08-17 ~20:47 — device-profiler abort plus a hung `tracy-capture`, for the second time
+(infrastructure, not a model result).** The round-5 perf pass crashed on its third Tracy case:
+
+* Signature: `TT_FATAL: End marker found without a corresponding start marker`
+  (`tt_metal/impl/profiler/profiler.cpp:2089`) -> `Fatal Python error: Aborted`, raised **after** the
+  test itself reported `PASSED`, so it is a profiler-teardown failure rather than a model failure.
+  `tracy-capture` then sat holding the device for 40 minutes.
+* `tools/tt-triage.py` hung again (`timeout 180` -> rc 124, 0 bytes written), exactly as in the
+  first occurrence, so there is still no triage capture for this failure mode. Recorded as a gap
+  rather than glossed over: while a hung `tracy-capture` holds the device, triage cannot run.
+* Recovery, in this order: killed the 8-process tree by **explicit pid**, innermost first
+  (`tracy --no-capture-tool` -> `tracy-capture` -> its `sh` wrappers -> `tee` -> the `tracy` parent ->
+  `run_perf.sh` -> the pass shell), `TERM` then `KILL` after 20 s; `tt-smi -ls --local` -> all 4
+  p300c chips present; **`generated/profiler/` had grown to 20 GB and was cleared** (it is scratch —
+  the committed evidence is the copied ops CSVs under `tracy/`); mesh smoke -> `MESH_SMOKE_OK`.
+  **No reset was needed, so none was run.**
+* Then re-ran **all four** Tracy cases rather than only the two that were missing, so the §5 table
+  comes from one coherent run instead of being spliced across a crash.
+
+The first occurrence (same signature, same 11 GB-scale profiler tree, same triage hang) is the reason
+the profiler tree is now cleared as part of recovery. Two data points is enough to say the pattern is
+a large accumulated `generated/profiler/` tree plus repeated Tracy runs in one session, not anything
+this stage's kernels do.
+
 ## 7. Commands
 
 ```bash
@@ -569,7 +612,7 @@ evidence in `doc/functional_decoder/` was produced by one serialized pass in the
 |---|---|
 | `tt/functional_decoder.py` with documented prefill/decode contract for both layer kinds | module docstring + README §2; `test_config_matches_hf`, `test_layer_kinds_cover_the_whole_model` |
 | decode runs fully under traced execution | `test_traced_decode_pcc` (PCC from replay), `test_traced_decode_matches_eager` (bit-identical) |
-| every layer kind, real config shapes, paged prefill/decode, page table, current position | README §3.1/§3.4; 276 PCC rows in `pcc.jsonl` (101 tests: 28 CPU-only + 73 device) |
+| every layer kind, real config shapes, paged prefill/decode, page table, current position | README §3.1/§3.4; 276 PCC rows in `pcc.jsonl` (106 tests: 32 CPU-only + 75 device) |
 | longest feasible seq/context | 262143-token prefill and position-262143 decode for both kinds (`long_context.jsonl`) |
 | non-aligned lengths around chunk/page/tile boundaries | 1/32/33/64/65/128/129/1024/1025/2048/2049/3000/4096 + 262143 per kind |
 | `doc/context_contract.json` | derived from evidence by `tests/write_context_contract.py`, re-checked by `test_context_contract_file_is_consistent`; **no capability reduction** |
@@ -684,7 +727,36 @@ Acted on from the same review's "Other Concerns" and "Hard-Check Gaps", none of 
 | nothing asserted that a *skipped* expert's `sparse_matmul` output tile is finite, even though the MoE relies on `0 * garbage` | New probe reads the 248 unselected experts' tiles and asserts all finite, recording whether they are exactly zero: they are **all exactly 0.0**, so the weighted sum is exact rather than merely well-conditioned. A second probe pins `_zero_`'s primitive (in-place, address-preserving, NaN-clearing). |
 | the narrated evidence order in §7/§13 disagreed with artifact mtimes again | §13 now states the order the runner script actually ran and says which reference the freshness check uses and why — including that test-file edits after the layer is frozen are expected, so the honest claim is about the shipped layer, not about every file. |
 
-## 13. Commits
+## 13. Independent stage review (round 5) and the work it produced
+
+`$stage-review` returned **more-work-needed** a fifth time. No P1, and it independently corroborated
+round 4's mechanism from a direction this stage had not looked at: `sdpa_decode_program_factory.cpp`
+hard-codes `im_df = stats_df = Float16_b`, so the flash-decode running output and running max/sum are
+bf16 CBs regardless of `fp32_dest_acc_en` — which is *why* the k-chunk count is the only user-visible
+lever. Seven P2s, one of them a latent correctness defect in a configuration the docs advertise.
+
+| finding | outcome |
+|---|---|
+| **P2 — `sdpa_chunk` was disconnected from the alignment check it is documented to control.** `prefill_forward` rejected `start_pos % PREFILL_ALIGN` (a module constant, 128) while the op received `cfg.sdpa_chunk` as `q_chunk_size`. So `sdpa_chunk=256` accepted `start_pos=128` and the op computed chunk index `128 // 256 == 0` — the silently-wrong causal-mask placement the check exists to prevent — and `sdpa_chunk=32`, documented as "the lever", changed nothing | **Fixed in code.** The runtime check now divides by `cfg.sdpa_chunk` (the value the op actually gets), and `__post_init__` requires `sdpa_chunk` to be a tile multiple that divides `PREFILL_ALIGN`, so the 256 case is rejected at construction instead of being silently wrong. `test_sdpa_chunk_and_start_pos_alignment_agree` pins both halves plus the divisor the runtime path reads. CPU-only. |
+| **P2 — README §5's "attention is rounding error" is true only of the profiled shape**, and it is the stage's main handoff to `optimize`. Chunked SDPA's key length is `chunk_start_idx + Sq`, so `full`'s per-chunk mixer cost grows with position while the MoE's does not; the table is one chunk at `abs_pos = 0` | **Quantified from artifacts already committed, no new hardware.** Extrapolating the per-chunk cost to the 128 chunks of a 262143-token prefill: `linear`, whose mixer is position-independent, lands within 0.09 s (0.2%) of its measured run — which is the control that makes the `full` row readable, and `full` is **12.8 s / 26% short**. So the `full` attention path is ~27% of an advertised-context prefill, not 1.3%. §5 now carries that table, the bullet is scoped to the shape it was measured at, and the derivation is generated so it cannot drift. |
+| P2 — three rows of README §3.1, the headline PCC table, disagreed with `pcc.jsonl` (`decode[full]` 0.9999849/pos=149 vs 0.9999871/pos=140; `decode-ragged`; `traced-decode[full]`). The table was generated against the gate run, not the committed final one | **Closed as a class, not an instance** — see below. §3.1 is now generated, and a test fails on drift. |
+| P2 — four more counts stale after round 4 grew the suite: "99 items"/"101 passed"/"28 CPU-only" (105/105/32), "21 device op-behaviour probes" (24), the chunked-SDPA probe PCC (0.999790 vs 0.999780) | All derived from the committed logs now. |
+| P2 — the committed SDPA diagnostic **asserted a mechanism its own grid refutes**: "values < 1 chunk per core are where the op goes silently wrong". Counter-examples in the same log run both ways — `k32`/2 cores at context 128 has 2.00 chunks per core and is wrong (0.7250), `k512`/2 cores at 257 has 0.50 and is fine | Removed. The table is now labelled raw data for narrowing, with the counter-examples named in the docstring. This is the same class round 2 caught ("refuted explanations still living in committed code and in a regenerated artifact") and I reintroduced it, which is worth recording. |
+| P2 — two committed derivations claimed `exp_approx_mode = nullopt` resolves to **false**; `sdpa_decode_program_factory.cpp:211-213` resolves it to **true**. So the identity control was not literally "the substituted default spelled out", even though it came out bit-identical | Both corrected. `OP_DEFAULT` now passes `exp_approx_mode=None`, so the control *is* the substituted config, and a new held-axis row measures the unset case. The shipped config keeps `False` deliberately, which the docstring now says is a difference from the default rather than a match. |
+| P2 — the freshness command in README §5 / work_log §13 did not produce the result it claimed, and `diag_decode_sdpa_onmodel.txt` — the artifact that *selected* the shipped config — predated the final layer source | Removed the exception rather than documenting it: the round-4 evidence pass now re-runs **both** SDPA sweeps inside the pass, after the last source edit. The freshness wording no longer names a file that changes every round. |
+
+Acted on from the same review's "Other Concerns" and "Hard-Check Gaps":
+
+| concern | outcome |
+|---|---|
+| **the renderers lived in `/tmp`**, so "generated, cannot drift" was not reproducible from a checkout | The real fix for five rounds of number drift: `tests/render_docs.py` is committed, and it owns §3.1, §3.8, §5 and the scattered counts. It also refuses to run when a provenance log is missing — rendering during an in-flight suite reads a half-written `pcc.jsonl`, which happened once while fixing this round. |
+| nothing *checked* the hand-written doc numbers | `test_docs_match_artifacts` (CPU-only, in the main suite) re-derives §3.1's per-family `n` and worst PCC, the three evidence row counts, the suite and probe counts, and every PCC quoted in §4, and fails on any mismatch. Negative-tested: reverting `decode[full]` to the stale 0.9999849 makes it fail with exactly that diff. |
+| "3.8x faster than the op default" used the `no config` timing row, not the `op default` row | The ratio now comes from the row it names, and both are quoted so the run-to-run spread is visible. |
+| `p_fill_in_place` covered one small bf16 tensor, while `_zero_` is also applied to the fp32 recurrent state and to 8 GiB paged caches | Extended to bf16 **and** fp32 over a multi-tile shape. |
+| `logs/test_suite_gate.log` was committed but unlisted; §7 item 6's unary group total was quoted as an exact figure; the 7.45 ms decode-SDPA figure is batch 1 against a batch-32 profiled row | All three fixed: the gate log is described (and marked as not the authoritative run), the unary total is derived, and both batches are now named where the comparison is made. |
+| `_record_contract` is a one-way `max()` ratchet in a file the stage treats as derived | Documented as a convenience writer, with the two things that stop it going stale: the file is regenerated from `long_context.jsonl`, and the contract test asserts *equality* against the evidence rows, so an inflated field fails. |
+
+## 14. Commits
 
 Local only; nothing pushed.
 
@@ -736,11 +808,14 @@ audit the rest, list what predates the newest source file of any kind and check 
 find models/autoports/qwen_qwen3_6_35b_a3b/{tt,tests} -name '*.py' -o -name '*.sh' | xargs ls -t | head -1
 ```
 
-For this commit that file is `tests/harness.py` and the only change in it is a docstring; the two
-changes before it (`tests/conftest.py`'s reset rule, `tests/test_reference_math.py`'s new ragged
-parameters) cannot alter a device measurement either — the reset rule governs only which of
-`pcc.jsonl` / `pcc_real_weights.jsonl` a session may replace, both of which are rewritten by the
-final main-suite run, and the standalone `diag_*.py` scripts do not load `conftest.py` at all.
+Deliberately not naming the file here, because it changes every round and the last three write-ups
+went stale doing exactly that. What matters is the rule for reading the result: a hit under `tests/`
+is expected and benign when the change is a docstring, a new test parameter, or the provenance-log
+reset rule (which governs only which of `pcc.jsonl` / `pcc_real_weights.jsonl` a session may replace
+— both rewritten by the final main-suite run — and which the standalone `diag_*.py` scripts do not
+load at all). A hit that a change to `tt/functional_decoder.py` could explain is a real staleness
+finding, and there are none: the round-4 pass re-ran both SDPA sweeps *after* the last edit to the
+shipped layer, so no decision artifact predates it.
 
 Three numbers reproduced **bit-identically** across independent re-runs, which is worth recording
 because it makes the determinism claim concrete: the advertised-context PCCs, the on-model

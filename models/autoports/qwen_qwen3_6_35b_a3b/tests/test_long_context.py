@@ -60,6 +60,16 @@ def _long_hidden(hf_config, seq_len, seed):
 
 
 def _record_contract(key, value):
+    """Note the length this case reached, so a partially-run set still leaves a usable contract.
+
+    ``max`` because the six cases run as six separate processes and each only knows its own length.
+    That makes this a one-way ratchet, which would be a staleness hazard on its own -- a contract
+    field that can only grow could outlive the run that justified it. Two things stop that: the file
+    is *regenerated* from ``long_context.jsonl`` by ``write_context_contract.py`` at the end of every
+    evidence pass, and ``test_context_contract_file_is_consistent`` fails if either field exceeds
+    what the recorded evidence rows actually reached. So this writer is a convenience, not the source
+    of truth; treat the JSON as derived.
+    """
     path = ARTIFACT_DIR.parent / "context_contract.json"
     contract = json.loads(path.read_text())
     contract[key] = max(contract.get(key) or 0, value)

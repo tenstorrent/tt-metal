@@ -279,19 +279,30 @@ def p_fill_in_place(device):
     justified itself with "`0 * NaN` is `NaN`". In IEEE arithmetic that is true; this kernel does not
     do it, so the claim was wrong even though the code was harmless.
     """
+    # Both dtypes `_zero_` is actually applied to: bf16 for the paged K/V caches and the conv taps,
+    # fp32 for the DeltaNet recurrent state (`delta_dtype`). And a shape wide enough to span more
+    # than one tile column, since a single 32x4 tile would not catch a per-tile addressing bug.
+    checked = []
+    for dtype, label in ((ttnn.bfloat16, "bf16"), (ttnn.float32, "fp32")):
+        x = torch.full((1, 2, 64, 128), -1.5)
+        x[0, 0, 0, 0] = float("nan")
+        x[0, 0, 1, 1] = float("inf")
+        x[0, 1, 2, 2] = float("-inf")
+        t = tt(x, device, dtype=dtype)
+        before = t.buffer_address()
+        out = ttnn.fill(t, 0.0, output_tensor=t)
+        got = ttnn.to_torch(out).float()
+        if out.buffer_address() != before:
+            raise AssertionError(f"{label}: fill moved the buffer: {before} -> {out.buffer_address()}")
+        if not bool((got == 0).all()):
+            raise AssertionError(f"{label}: fill left {int((got != 0).sum())} non-zero values")
+        checked.append(f"{label}@{before}")
+        ttnn.deallocate(out)
     x = torch.tensor([[float("nan"), float("inf"), float("-inf"), -1.5]] * 32).reshape(1, 1, 32, 4)
-    t = tt(x, device)
-    before = t.buffer_address()
-    out = ttnn.fill(t, 0.0, output_tensor=t)
-    got = ttnn.to_torch(out).float()
-    if out.buffer_address() != before:
-        raise AssertionError(f"fill moved the buffer: {before} -> {out.buffer_address()}")
-    if not bool((got == 0).all()):
-        raise AssertionError(f"fill left {int((got != 0).sum())} non-zero values")
     mul_clears = not bool(torch.isnan(ttnn.to_torch(ttnn.mul(tt(x, device), 0.0)).float()).any())
     return (
-        f"in place at {before}, NaN/Inf cleared; for the record `mul(t, 0.0)` "
-        f"{'also clears' if mul_clears else 'preserves'} NaN on this build"
+        f"in place, NaN/Inf cleared, address preserved ({', '.join(checked)}); for the record "
+        f"`mul(t, 0.0)` {'also clears' if mul_clears else 'preserves'} NaN on this build"
     )
 
 

@@ -20,7 +20,7 @@ default before the device op ever sees it (``sdpa_decode.cpp:122-129``)::
             std::nullopt,                               // sub_core_grids
             kDefaultDecodeChunkSize,                    // q_chunk_size = 32
             kDefaultDecodeChunkSize,                    // k_chunk_size = 32
-            std::nullopt,                               // exp_approx_mode -> false
+            std::nullopt,                               // exp_approx_mode -> resolves to *true*
             kDefaultMaxCoresPerHeadBatch};              // max_cores_per_head_batch = 1
 
 So ``program_config.has_value()`` is already true inside the factory, and the branch
@@ -40,9 +40,11 @@ accumulation steps for the op default against 2048 for dynamic: a 4x difference 
 depth on one core, in the direction that predicts both the accuracy and the latency gap.
 
 So the sweep is a **2-D grid over (max_cores_per_head_batch, k_chunk_size)**, because those two
-interact: more cores per head means fewer chunks per core, and below one chunk per core the op
-returns a silently wrong answer. Sweeping cores at a single chunk size -- which an earlier version
-of this file did -- cannot separate the two and is what made the previous conclusion wrong.
+interact: the context at which more-than-one-core-per-head starts returning a silently wrong answer
+moves with the chunk size. Sweeping cores at a single chunk size -- which an earlier version of this
+file did -- cannot separate the two and is what made the previous conclusion wrong. The grid does
+*not* identify the mechanism behind the wrong cells; see ``chunks_per_core`` for the one candidate
+this script can already refute.
 
 Row 0 is the **identity control**: no config versus an explicit config spelling out the substituted
 default. It must be *bit*-identical, not merely close. If it is not, the model of the op above is
@@ -64,10 +66,14 @@ MAX_CONTEXT = 262144
 #: contexts chosen to include tiny, tile/block boundaries, non-multiples and the advertised max
 CONTEXTS = [1, 32, 64, 128, 257, 1024, 4096, 32768, 131072, 262143, 262144]
 
-#: The op's substituted default, spelled out (``sdpa_decode.cpp:122-129``). ``exp_approx_mode``
-#: arrives as ``nullopt`` and the factory resolves that to ``false``
-#: (``sdpa_decode_program_factory.cpp:211-212``), so ``False`` here is the same program.
-OP_DEFAULT = dict(k_chunk=32, exp=False, max_cores=1)
+#: The op's substituted default, spelled out (``sdpa_decode.cpp:122-129``). ``exp_approx_mode`` is
+#: ``None`` here, not ``False``, because that is what the substitution passes -- and the factory
+#: resolves a missing ``exp_approx_mode`` to **true**, not false
+#: (``sdpa_decode_program_factory.cpp:211-213``). An earlier version of this file used ``False`` and
+#: claimed it was the same program; it is not, and the identity control has to be literally the
+#: substituted config or it proves nothing. (The held-axis rows show approx and exact are
+#: bit-identical for this shape, which is why the earlier control still came out identical.)
+OP_DEFAULT = dict(k_chunk=32, exp=None, max_cores=1)
 
 #: ``(k_chunk_size, max_cores_per_head_batch)``. ``k_chunk_size=0`` is the dynamic chunk path and is
 #: legal for the paged *causal* op (only the non-causal branch requires > 0,
@@ -79,6 +85,7 @@ MAX_CORES = [1, 2, 4, 8, 16, 55]
 HELD = [
     ("grid 8x8", dict(grid=(8, 8), k_chunk=32, exp=False, max_cores=1)),
     ("exp approx", dict(k_chunk=32, exp=True, max_cores=1)),
+    ("exp unset -> true", dict(k_chunk=32, exp=None, max_cores=1)),
     ("exp approx, 16 cores", dict(k_chunk=32, exp=True, max_cores=16)),
     ("max_cores 110", dict(k_chunk=32, exp=False, max_cores=110)),
 ]
@@ -111,10 +118,16 @@ def cores_per_head(max_cores, grid_cores, batch=1, num_kv_heads=NKV):
 
 
 def chunks_per_core(ctx, k_chunk, per_head):
-    """How many k-chunks each active core gets. Below 1 the op returns a silently wrong answer."""
-    if k_chunk == 0:  # dynamic: nearest power of 2 up to 8 tiles
-        tiles = ctx // 32 + 1
-        k_chunk = 32 * min(8, 1 << max(0, (tiles).bit_length() - 1))
+    """How many k-chunks each active core gets.
+
+    Printed next to the PCC grid as raw data for whoever narrows the upstream bug, **not** as an
+    explanation. "Fewer than one chunk per core" is refuted by this script's own grid: `k32` at
+    2 cores/head and context 128 has 2.00 chunks per core and is still wrong (0.7250), while `k512`
+    at 2 cores/head and context 257 has 0.50 and is fine (0.9998). Whatever the mechanism is, this
+    ratio alone does not predict it.
+    """
+    if k_chunk == 0:  # dynamic; empirically 128 keys on this shape (see the grid)
+        k_chunk = 128
     return -(-ctx // k_chunk) / per_head
 
 
@@ -252,7 +265,7 @@ def main():
 
         # ---- chunks per core, to show where the silent-wrong-answer boundary is ----
         print()
-        print("DIAG2 --- k-chunks per active core (values < 1 are where the op goes silently wrong) ---")
+        print("DIAG2 --- k-chunks per active core (raw data for narrowing; does NOT predict the wrong cells) ---")
         print("DIAG2 " + f"{'kchunk':>7} {'maxcore':>7} " + " ".join(f"{c:>8}" for c in CONTEXTS))
         for kc in K_CHUNKS:
             for mc in MAX_CORES:

@@ -1,4 +1,4 @@
-{"mode": "decode", "kind": "full", "seq_len": 1, "current_pos": 4095, "batch": 32, "iters": 8, "traced": true, "host_wall_s_total": 0.402568, "host_wall_ms_per_iter": 50.321, "tokens_per_s_host": 635.9, "supported_context": 8192}
-{"mode": "decode", "kind": "linear", "seq_len": 1, "current_pos": 4095, "batch": 32, "iters": 8, "traced": true, "host_wall_s_total": 0.464519, "host_wall_ms_per_iter": 58.065, "tokens_per_s_host": 551.1, "supported_context": 8192}
-{"mode": "prefill", "kind": "full", "seq_len": 2048, "batch": 1, "iters": 2, "host_wall_s_total": 0.564286, "host_wall_ms_per_iter": 282.143, "tokens_per_s_host": 7258.7, "supported_context": 8192}
-{"mode": "prefill", "kind": "linear", "seq_len": 2048, "batch": 1, "iters": 2, "host_wall_s_total": 0.68678, "host_wall_ms_per_iter": 343.39, "tokens_per_s_host": 5964.1, "supported_context": 8192}
+{"mode": "decode", "kind": "full", "seq_len": 1, "current_pos": 4095, "batch": 32, "iters": 8, "traced": true, "host_wall_s_total": 0.403212, "host_wall_ms_per_iter": 50.402, "tokens_per_s_host": 634.9, "supported_context": 8192}
+{"mode": "decode", "kind": "linear", "seq_len": 1, "current_pos": 4095, "batch": 32, "iters": 8, "traced": true, "host_wall_s_total": 0.464308, "host_wall_ms_per_iter": 58.039, "tokens_per_s_host": 551.4, "supported_context": 8192}
+{"mode": "prefill", "kind": "full", "seq_len": 2048, "batch": 1, "iters": 2, "host_wall_s_total": 0.564608, "host_wall_ms_per_iter": 282.304, "tokens_per_s_host": 7254.6, "supported_context": 8192}
+{"mode": "prefill", "kind": "linear", "seq_len": 2048, "batch": 1, "iters": 2, "host_wall_s_total": 0.686563, "host_wall_ms_per_iter": 343.281, "tokens_per_s_host": 5966.0, "supported_context": 8192}

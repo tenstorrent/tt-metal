@@ -929,3 +929,119 @@ def test_context_contract_file_is_consistent():
     match = re.search(r"^CAP allocated .*? = (\d+) bytes", probe, re.M)
     assert match, "logs/probe_dram_capacity.log has no CAP line — run tests/probe_dram_capacity.py"
     assert contract["device_capacity_evidence"]["usable_dram_bytes"] == int(match.group(1))
+
+
+def test_docs_match_artifacts():
+    """The README's mechanical numbers agree with the artifacts they are derived from.
+
+    Five review rounds in a row found hand-copied doc numbers that disagreed with their own
+    evidence: a stale worst-case PCC, a superseded test count, a probe PCC off by one digit. Fixing
+    each instance did not stop the next one, so this closes the class instead: ``render_docs.py``
+    generates those numbers, and this test fails if the committed docs and the committed artifacts
+    have drifted apart. CPU-only, no device, so it runs in every session.
+
+    Deliberately narrow. It checks the values that are pure functions of an artifact, not prose.
+
+    **Ordering.** An evidence pass rewrites the provenance logs *before* ``render_docs.py`` can read
+    them, so between those two steps the docs legitimately disagree with the artifacts. Rather than
+    let that make the authoritative run red for a benign reason, the check stands down when the
+    artifacts are newer than the README -- i.e. when the docs have not been rendered for this evidence
+    yet -- and the pass runs ``render_docs.py --check`` after rendering to cover exactly that window.
+    In a committed tree the README is always the newer file, so the check is live where it matters.
+    """
+    readme_path = harness.ARTIFACT_DIR / "README.md"
+    evidence = ("pcc.jsonl", "pcc_real_weights.jsonl", "long_context.jsonl")
+    # A provenance log is *absent*, not merely stale, while the run that rewrites it is in flight
+    # (``harness.reset_log`` unlinks first). Skip rather than error on that window, the same way as
+    # for the stale case; the pass re-checks after rendering.
+    absent = [name for name in evidence if not (harness.ARTIFACT_DIR / name).exists()]
+    if absent:
+        pytest.skip(f"evidence being regenerated ({', '.join(absent)} absent)")
+    newer = [name for name in evidence if (harness.ARTIFACT_DIR / name).stat().st_mtime > readme_path.stat().st_mtime]
+    if newer:
+        pytest.skip(f"docs not rendered for this evidence yet ({', '.join(newer)} newer than README.md)")
+    readme = readme_path.read_text()
+
+    # --- section 3.1: every family's n and worst PCC, straight out of pcc.jsonl ---
+    rows = [json.loads(line) for line in (harness.ARTIFACT_DIR / "pcc.jsonl").read_text().splitlines() if line.strip()]
+    assert rows, "pcc.jsonl is empty"
+    families: dict = {}
+    for row in rows:
+        families.setdefault(row["label"].split(" ")[0], []).append(row)
+    # Scope to section 3.1's table: family names like `linear` also head rows in other tables.
+    block = re.search(r"\| family \| n \| worst PCC \| worst case \|\n\|---\|---\|---\|---\|\n((?:\|.*\n)+)", readme)
+    assert block, "README section 3.1 table not found"
+    table = {m[0]: (m[1], m[2]) for m in re.findall(r"^\| `([^`]+)`[^|]*\| (\d+) \| ([\d.]+) \|", block.group(1), re.M)}
+    for family, frows in families.items():
+        assert family in table, f"README section 3.1 has no row for family {family!r}"
+        n_doc, pcc_doc = table[family]
+        assert int(n_doc) == len(frows), f"{family}: README says n={n_doc}, pcc.jsonl has {len(frows)}"
+        worst = min(r["pcc"] for r in frows)
+        assert pcc_doc == f"{worst:.7f}", f"{family}: README says {pcc_doc}, pcc.jsonl worst is {worst:.7f}"
+    overall = min(r["pcc"] for r in rows)
+    assert f"**Overall minimum: {overall:.7f}**" in readme, f"README overall minimum is not {overall:.7f}"
+
+    # --- evidence row counts ---
+    real_n = len([l for l in (harness.ARTIFACT_DIR / "pcc_real_weights.jsonl").read_text().splitlines() if l.strip()])
+    long_n = len([l for l in (harness.ARTIFACT_DIR / "long_context.jsonl").read_text().splitlines() if l.strip()])
+    assert f"`pcc.jsonl` ({len(rows)})" in readme
+    assert f"`pcc_real_weights.jsonl` ({real_n})" in readme
+    assert f"`long_context.jsonl` ({long_n})" in readme
+
+    # --- suite and probe counts, from the committed logs ---
+    logs = harness.ARTIFACT_DIR / "logs"
+    main_log = (logs / "test_suite_main.log").read_text()
+    passed = re.search(r"(\d+) passed", main_log)
+    assert passed, "logs/test_suite_main.log has no pass count"
+    assert (
+        f"**{passed.group(1)} passed, 0 failed**" in readme
+    ), f"README disagrees with the log's {passed.group(1)} passed"
+    probes = re.search(r"PROBE SUMMARY (\d+)/(\d+) ok", (logs / "probe_ttnn_ops.log").read_text())
+    assert probes and probes.group(1) == probes.group(2), "op probes are not all passing"
+    assert f"| {probes.group(2)} device op-behaviour probes" in readme
+
+    # --- the advertised-context table cannot quote a PCC that long_context.jsonl does not hold ---
+    recorded = {
+        f"{json.loads(l)['pcc']:.7f}"
+        for l in (harness.ARTIFACT_DIR / "long_context.jsonl").read_text().splitlines()
+        if l.strip() and json.loads(l).get("pcc")
+    }
+    section4 = readme.split("## 4.")[1].split("## 5.")[0]
+    for quoted in re.findall(r"\| (0\.9\d{6}) \|", section4):
+        assert quoted in recorded, f"section 4 quotes PCC {quoted}, which is not in long_context.jsonl"
+
+
+def test_sdpa_chunk_and_start_pos_alignment_agree(expect_error):
+    """``sdpa_chunk`` is the prefill SDPA's ``q_chunk_size``, and it must stay compatible with the
+    ``start_pos`` check that guards the op's integer-division contract.
+
+    The op converts an absolute offset to a chunk index by dividing by ``q_chunk_size`` and validates
+    only ``>= 0``, so a ``start_pos`` that is not a multiple of ``sdpa_chunk`` is *silently* wrong
+    (README §3.8's sibling trap, §7 item 8). The check used to be against the module constant
+    ``PREFILL_ALIGN`` while the op received ``cfg.sdpa_chunk``, so the two could disagree:
+    ``sdpa_chunk=256`` accepted ``start_pos=128`` and computed chunk index ``128 // 256 == 0``. This
+    pins both halves of the fix — the construction-time validation, and that the runtime check reads
+    the same value the op gets.
+
+    CPU-only: ``DecoderConfig`` needs no device. The positive path (a 32-aligned ``start_pos`` being
+    accepted at ``sdpa_chunk=32``) is not exercised on device because a distinct ``sdpa_chunk`` is a
+    distinct ``layer_pairs`` key and each one costs ~1.5 GiB for the session; the code path is shared
+    with the covered default, and the divisor it uses is asserted below.
+    """
+    hf_config = ref.load_hf_text_config()
+
+    for good in (32, 64, 128):
+        cfg = fd.DecoderConfig.from_hf(hf_config, 3, None, sdpa_chunk=good)
+        assert cfg.sdpa_chunk == good
+        # PREFILL_ALIGN-aligned offsets stay legal at every accepted value, so lowering the knob can
+        # only widen what prefill accepts, never narrow it.
+        assert fd.PREFILL_ALIGN % cfg.sdpa_chunk == 0
+
+    # 256 is the case that used to be accepted and silently wrong; 48 and 16 are not tile multiples.
+    for bad in (256, 512, 48, 16, 0):
+        with expect_error(ValueError, "sdpa_chunk"):
+            fd.DecoderConfig.from_hf(hf_config, 3, None, sdpa_chunk=bad)
+
+    # And the runtime check divides by the op's divisor, not by the padding constant.
+    source = inspect.getsource(fd.FunctionalDecoder.prefill_forward)
+    assert "cfg.sdpa_chunk if not cfg.is_linear" in source, "prefill_forward no longer aligns to cfg.sdpa_chunk"

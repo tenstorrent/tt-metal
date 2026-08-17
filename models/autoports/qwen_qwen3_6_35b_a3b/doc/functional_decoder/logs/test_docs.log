@@ -1,9 +1,9 @@
-2026-08-17 20:42:55.226 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+2026-08-17 21:34:15.616 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
 Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
 ============================= test session starts ==============================
 collecting ... collected 75 items / 74 deselected / 1 selected
 
-models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_context_contract_file_is_consistent PASSED
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_docs_match_artifacts PASSED
 
 =============================== warnings summary ===============================
 <frozen importlib._bootstrap>:488
@@ -16,15 +16,15 @@ models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_con
 ==================================== PASSES ====================================
 - generated xml file: /localdev/vkovacevic/tt-metal/generated/test_reports/most_recent_tests.xml -
 ============================== slowest durations ===============================
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_context_contract_file_is_consistent
+0.20s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_docs_match_artifacts
 
 (2 durations < 0.005s hidden.  Use -vv to show these durations.)
 =========================== short test summary info ============================
-PASSED models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_context_contract_file_is_consistent
-================= 1 passed, 74 deselected, 2 warnings in 0.23s =================
+PASSED models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_docs_match_artifacts
+================= 1 passed, 74 deselected, 2 warnings in 0.21s =================
 sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
 nanobind: leaked 1 instances!
- - leaked instance 0x78ceef0f0528 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x7eede6b21668 of type "ttnn._ttnn.tensor.CoreRangeSet"
 nanobind: leaked 13 types!
  - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
  - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
@@ -41,12 +41,12 @@ nanobind: leaked 199 functions!
  - leaked function ""
  - leaked function ""
  - leaked function ""
- - leaked function "__init__"
- - leaked function "matmul_select_program_factory"
  - leaked function ""
  - leaked function ""
  - leaked function ""
  - leaked function ""
+ - leaked function "item"
+ - leaked function "__repr__"
  - leaked function ""
  - ... skipped remainder
 nanobind: this is likely caused by a reference counting issue in the binding code.
