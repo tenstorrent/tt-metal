@@ -1,0 +1,72 @@
+{
+  "hf_model_id": "Qwen/Qwen3.6-35B-A3B",
+  "stage": "functional-decoder",
+  "hf_advertised_context": 262144,
+  "hf_advertised_context_source": "config.json -> text_config.max_position_embeddings",
+  "supported_context": 262144,
+  "capability_reduction": null,
+  "capability_reduction_reason": null,
+  "largest_prefill_tested": 262143,
+  "largest_decode_context_tested": 262144,
+  "layer_kinds_covered": [
+    "full_attention",
+    "linear_attention"
+  ],
+  "tested": {
+    "prefill": {
+      "linear_attention": {
+        "seq_len": 262143,
+        "tile_aligned": false,
+        "hf_pcc": 0.9999742,
+        "hf_reference": "exact tail reference over the last 128 query positions",
+        "device_wall_seconds": 43.875
+      },
+      "full_attention": {
+        "seq_len": 262143,
+        "tile_aligned": false,
+        "hf_pcc": 0.9999891,
+        "hf_reference": "exact tail reference over the last 128 query positions",
+        "device_wall_seconds": 48.828
+      }
+    },
+    "decode": {
+      "linear_attention": {
+        "position": 262143,
+        "context_entries": 262144,
+        "hf_pcc": 0.999986,
+        "state_source": "262143-token prefill through this layer",
+        "device_wall_seconds": 0.042
+      },
+      "full_attention": {
+        "position": 262143,
+        "context_entries": 262144,
+        "hf_pcc": 0.9985674,
+        "state_source": "262143-token prefill through this layer",
+        "device_wall_seconds": 0.053
+      }
+    }
+  },
+  "device_capacity_evidence": {
+    "device": "1x Blackhole p300c chip, 1x1 mesh",
+    "usable_dram_bytes": 33822867456,
+    "usable_dram_probe": "allocated 512 MiB DRAM tensors until the bank manager refused: 31.5 GiB (doc/functional_decoder/work_log.md section 1)",
+    "paged_kv_bytes_batch32_full_context": 17179869184,
+    "paged_kv_blocks_batch32_full_context": 131072,
+    "paged_kv_allocated_on_device": true,
+    "moe_weight_bytes_per_layer_bf16": 2147483648,
+    "note": "batch 32 at the full advertised context needs 2 x 8 GiB of paged K/V (17.18 GB total), which was actually allocated on device by tests/test_long_context.py::test_max_batch_full_context_capacity. Together with ~2.15 GB of MoE weights per layer this fits the 31.5 GiB part, so no capability reduction is required at the decoder-layer level."
+  },
+  "prefill_input_contract": {
+    "accepts_any_logical_seq_len": true,
+    "internal_alignment": 128,
+    "note": "prefill_forward pads to a multiple of PREFILL_ALIGN=128 internally, masks the padded tokens out of the linear-attention recurrence, and slices the output back to the logical length. Non-aligned lengths 1/33/65/129/1025/2049/3000/262143 are covered by tests.",
+    "start_pos_alignment": 128
+  },
+  "evidence": {
+    "long_context_rows": "doc/functional_decoder/long_context.jsonl",
+    "pcc_rows": "doc/functional_decoder/pcc.jsonl",
+    "real_weight_rows": "doc/functional_decoder/pcc_real_weights.jsonl",
+    "logs": "doc/functional_decoder/logs/",
+    "readme": "doc/functional_decoder/README.md"
+  }
+}

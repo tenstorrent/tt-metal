@@ -17,8 +17,17 @@ import pytest
 import torch
 from loguru import logger
 
-from models.tt_transformers.demo.trace_region_config import get_supported_trace_region_size
 from tests.scripts.common import get_updated_device_params, run_process_and_get_result
+
+try:
+    from models.tt_transformers.demo.trace_region_config import get_supported_trace_region_size
+except ModuleNotFoundError:
+    # models/tt_transformers was removed from this checkout. The override was an opt-in
+    # per-test trace-region hint used only by that model's demos; without it every test
+    # keeps ttnn's auto-detected trace region.
+    def get_supported_trace_region_size(request, param):
+        return None
+
 
 # Constants for device configurations
 SIX_U_NUM_PCIE_DEVICES = 32

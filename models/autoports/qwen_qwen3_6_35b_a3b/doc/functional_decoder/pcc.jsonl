@@ -1,0 +1,542 @@
+{"label": "prefill[linear] seq=1 start=0 user=0", "pcc": 0.9999957945532303, "maxabs": 0.018932104110717773, "rel_rms": 0.0030266037210822105, "seq_len": 1, "start_pos": 0, "user_id": 0}
+{"label": "prefill[full] seq=1 start=0 user=0", "pcc": 0.9999791747267937, "maxabs": 0.026882052421569824, "rel_rms": 0.006457542069256306, "seq_len": 1, "start_pos": 0, "user_id": 0}
+{"label": "prefill[linear] seq=32 start=0 user=0", "pcc": 0.9999929096656307, "maxabs": 0.02948737144470215, "rel_rms": 0.0038042874075472355, "seq_len": 32, "start_pos": 0, "user_id": 0}
+{"label": "prefill[full] seq=32 start=0 user=0", "pcc": 0.9999862652197017, "maxabs": 0.03177309036254883, "rel_rms": 0.005247205961495638, "seq_len": 32, "start_pos": 0, "user_id": 0}
+{"label": "prefill[linear] seq=33 start=0 user=0", "pcc": 0.9999930361581201, "maxabs": 0.030202865600585938, "rel_rms": 0.003765162779018283, "seq_len": 33, "start_pos": 0, "user_id": 0}
+{"label": "prefill[full] seq=33 start=0 user=0", "pcc": 0.9999859393105696, "maxabs": 0.031217575073242188, "rel_rms": 0.005310576409101486, "seq_len": 33, "start_pos": 0, "user_id": 0}
+{"label": "prefill[linear] seq=64 start=0 user=0", "pcc": 0.9999919995912683, "maxabs": 0.03245973587036133, "rel_rms": 0.004029287025332451, "seq_len": 64, "start_pos": 0, "user_id": 0}
+{"label": "prefill[full] seq=64 start=0 user=0", "pcc": 0.9999884485982274, "maxabs": 0.037837982177734375, "rel_rms": 0.004823929630219936, "seq_len": 64, "start_pos": 0, "user_id": 0}
+{"label": "prefill[linear] seq=65 start=0 user=0", "pcc": 0.9999920161245439, "maxabs": 0.026805400848388672, "rel_rms": 0.004028964322060347, "seq_len": 65, "start_pos": 0, "user_id": 0}
+{"label": "prefill[full] seq=65 start=0 user=0", "pcc": 0.9999878112920108, "maxabs": 0.02993297576904297, "rel_rms": 0.004950525239109993, "seq_len": 65, "start_pos": 0, "user_id": 0}
+{"label": "prefill[linear] seq=128 start=0 user=0", "pcc": 0.9999910312154393, "maxabs": 0.031015396118164062, "rel_rms": 0.004257477819919586, "seq_len": 128, "start_pos": 0, "user_id": 0}
+{"label": "prefill[full] seq=128 start=0 user=0", "pcc": 0.9999892993070398, "maxabs": 0.03457498550415039, "rel_rms": 0.004650958813726902, "seq_len": 128, "start_pos": 0, "user_id": 0}
+{"label": "prefill[linear] seq=129 start=0 user=0", "pcc": 0.9999909763802263, "maxabs": 0.035849571228027344, "rel_rms": 0.004271454177796841, "seq_len": 129, "start_pos": 0, "user_id": 0}
+{"label": "prefill[full] seq=129 start=0 user=0", "pcc": 0.9999900961242711, "maxabs": 0.02943277359008789, "rel_rms": 0.004473591223359108, "seq_len": 129, "start_pos": 0, "user_id": 0}
+{"label": "prefill[linear] seq=1024 start=0 user=0", "pcc": 0.999981848467497, "maxabs": 0.04493856430053711, "rel_rms": 0.006027978844940662, "seq_len": 1024, "start_pos": 0, "user_id": 0}
+{"label": "prefill[full] seq=1024 start=0 user=0", "pcc": 0.9999920378781081, "maxabs": 0.03941318392753601, "rel_rms": 0.004034749232232571, "seq_len": 1024, "start_pos": 0, "user_id": 0}
+{"label": "prefill[linear] seq=1025 start=0 user=0", "pcc": 0.9999821132996619, "maxabs": 0.04286694526672363, "rel_rms": 0.005983708426356316, "seq_len": 1025, "start_pos": 0, "user_id": 0}
+{"label": "prefill[full] seq=1025 start=0 user=0", "pcc": 0.9999910565140531, "maxabs": 0.0501556396484375, "rel_rms": 0.0042677330784499645, "seq_len": 1025, "start_pos": 0, "user_id": 0}
+{"label": "prefill[linear] seq=2048 start=0 user=0", "pcc": 0.9999738011375192, "maxabs": 0.047882080078125, "rel_rms": 0.007238567806780338, "seq_len": 2048, "start_pos": 0, "user_id": 0}
+{"label": "prefill[full] seq=2048 start=0 user=0", "pcc": 0.9999925262677243, "maxabs": 0.043753623962402344, "rel_rms": 0.0039144232869148254, "seq_len": 2048, "start_pos": 0, "user_id": 0}
+{"label": "prefill[linear] seq=2049 start=0 user=0", "pcc": 0.9999740621242996, "maxabs": 0.04347431659698486, "rel_rms": 0.007202476263046265, "seq_len": 2049, "start_pos": 0, "user_id": 0}
+{"label": "prefill[full] seq=2049 start=0 user=0", "pcc": 0.9999924910816409, "maxabs": 0.043192386627197266, "rel_rms": 0.00392382126301527, "seq_len": 2049, "start_pos": 0, "user_id": 0}
+{"label": "prefill[linear] seq=3000 start=0 user=0", "pcc": 0.9999762285519695, "maxabs": 0.04750871658325195, "rel_rms": 0.0068952301517128944, "seq_len": 3000, "start_pos": 0, "user_id": 0}
+{"label": "prefill[full] seq=3000 start=0 user=0", "pcc": 0.9999930231714808, "maxabs": 0.05116903781890869, "rel_rms": 0.0037889836821705103, "seq_len": 3000, "start_pos": 0, "user_id": 0}
+{"label": "prefill[linear] seq=4096 start=0 user=0", "pcc": 0.9999737318973171, "maxabs": 0.04752922058105469, "rel_rms": 0.007248010952025652, "seq_len": 4096, "start_pos": 0, "user_id": 0}
+{"label": "prefill[full] seq=4096 start=0 user=0", "pcc": 0.9999934142837509, "maxabs": 0.04930543899536133, "rel_rms": 0.003685783129185438, "seq_len": 4096, "start_pos": 0, "user_id": 0}
+{"label": "prefill-cont[linear] start=0", "pcc": 0.9999826443064952, "maxabs": 0.036928415298461914, "rel_rms": 0.005895072594285011, "start_pos": 0}
+{"label": "prefill-cont[linear] start=512", "pcc": 0.9999811871597812, "maxabs": 0.039742469787597656, "rel_rms": 0.0061358194798231125, "start_pos": 512}
+{"label": "prefill-cont[full] start=0", "pcc": 0.9999902596082587, "maxabs": 0.03908109664916992, "rel_rms": 0.004445540253072977, "start_pos": 0}
+{"label": "prefill-cont[full] start=512", "pcc": 0.9999935117691032, "maxabs": 0.0320277214050293, "rel_rms": 0.003659466514363885, "start_pos": 512}
+{"label": "prefill-slot[linear] user=0", "pcc": 0.9999902649213478, "maxabs": 0.0440983772277832, "rel_rms": 0.0044338819570839405, "user_id": 0}
+{"label": "prefill-slot[linear] user=1", "pcc": 0.9999903459305628, "maxabs": 0.03720808029174805, "rel_rms": 0.00441208528354764, "user_id": 1}
+{"label": "prefill-slot[linear] user=2", "pcc": 0.9999903538487479, "maxabs": 0.03167009353637695, "rel_rms": 0.00441212160512805, "user_id": 2}
+{"label": "prefill-slot[linear] user=3", "pcc": 0.999990404439606, "maxabs": 0.03413534164428711, "rel_rms": 0.004402377177029848, "user_id": 3}
+{"label": "prefill-slot[linear] user=4", "pcc": 0.9999902436528452, "maxabs": 0.03183460235595703, "rel_rms": 0.0044380598701536655, "user_id": 4}
+{"label": "prefill-slot[linear] user=5", "pcc": 0.9999902179761999, "maxabs": 0.04434061050415039, "rel_rms": 0.004441183991730213, "user_id": 5}
+{"label": "prefill-slot[linear] user=6", "pcc": 0.9999901916246783, "maxabs": 0.042746543884277344, "rel_rms": 0.004449143540114164, "user_id": 6}
+{"label": "prefill-slot[linear] user=7", "pcc": 0.9999901238218191, "maxabs": 0.03311443328857422, "rel_rms": 0.004464179277420044, "user_id": 7}
+{"label": "prefill-slot[linear] user=8", "pcc": 0.9999903681089847, "maxabs": 0.030298233032226562, "rel_rms": 0.004409114830195904, "user_id": 8}
+{"label": "prefill-slot[linear] user=9", "pcc": 0.9999903085328739, "maxabs": 0.032346248626708984, "rel_rms": 0.0044231354258954525, "user_id": 9}
+{"label": "prefill-slot[linear] user=10", "pcc": 0.9999902611424077, "maxabs": 0.033026695251464844, "rel_rms": 0.004432523623108864, "user_id": 10}
+{"label": "prefill-slot[linear] user=11", "pcc": 0.9999902955162355, "maxabs": 0.03439188003540039, "rel_rms": 0.00442537572234869, "user_id": 11}
+{"label": "prefill-slot[linear] user=12", "pcc": 0.9999902798590418, "maxabs": 0.04136085510253906, "rel_rms": 0.00442938506603241, "user_id": 12}
+{"label": "prefill-slot[linear] user=13", "pcc": 0.9999902417822947, "maxabs": 0.0390162467956543, "rel_rms": 0.0044372244738042355, "user_id": 13}
+{"label": "prefill-slot[linear] user=14", "pcc": 0.9999901766806983, "maxabs": 0.029896974563598633, "rel_rms": 0.0044502196833491325, "user_id": 14}
+{"label": "prefill-slot[linear] user=15", "pcc": 0.9999902756296402, "maxabs": 0.03587627410888672, "rel_rms": 0.004428759682923555, "user_id": 15}
+{"label": "prefill-slot[linear] user=16", "pcc": 0.9999902056027916, "maxabs": 0.03263282775878906, "rel_rms": 0.004444796591997147, "user_id": 16}
+{"label": "prefill-slot[linear] user=17", "pcc": 0.9999902068247257, "maxabs": 0.03776216506958008, "rel_rms": 0.004444447346031666, "user_id": 17}
+{"label": "prefill-slot[linear] user=18", "pcc": 0.9999902664891416, "maxabs": 0.039797306060791016, "rel_rms": 0.004432497546076775, "user_id": 18}
+{"label": "prefill-slot[linear] user=19", "pcc": 0.9999901851946894, "maxabs": 0.043897151947021484, "rel_rms": 0.004450570791959763, "user_id": 19}
+{"label": "prefill-slot[linear] user=20", "pcc": 0.9999903973749363, "maxabs": 0.04697418212890625, "rel_rms": 0.004403207916766405, "user_id": 20}
+{"label": "prefill-slot[linear] user=21", "pcc": 0.9999902313544514, "maxabs": 0.03079533576965332, "rel_rms": 0.004439064301550388, "user_id": 21}
+{"label": "prefill-slot[linear] user=22", "pcc": 0.9999902506262456, "maxabs": 0.03304481506347656, "rel_rms": 0.00443686731159687, "user_id": 22}
+{"label": "prefill-slot[linear] user=23", "pcc": 0.9999901823886345, "maxabs": 0.034796714782714844, "rel_rms": 0.004451710265129805, "user_id": 23}
+{"label": "prefill-slot[linear] user=24", "pcc": 0.999990401108453, "maxabs": 0.032631874084472656, "rel_rms": 0.004401835147291422, "user_id": 24}
+{"label": "prefill-slot[linear] user=25", "pcc": 0.9999903631252806, "maxabs": 0.04069948196411133, "rel_rms": 0.004409500397741795, "user_id": 25}
+{"label": "prefill-slot[linear] user=26", "pcc": 0.999990071586383, "maxabs": 0.029133319854736328, "rel_rms": 0.00447522196918726, "user_id": 26}
+{"label": "prefill-slot[linear] user=27", "pcc": 0.9999903997170853, "maxabs": 0.0324254035949707, "rel_rms": 0.004402007441967726, "user_id": 27}
+{"label": "prefill-slot[linear] user=28", "pcc": 0.9999902105744108, "maxabs": 0.03957557678222656, "rel_rms": 0.00444479426369071, "user_id": 28}
+{"label": "prefill-slot[linear] user=29", "pcc": 0.9999901632119637, "maxabs": 0.03562116622924805, "rel_rms": 0.004454275127500296, "user_id": 29}
+{"label": "prefill-slot[linear] user=30", "pcc": 0.9999903041605637, "maxabs": 0.03592348098754883, "rel_rms": 0.004423161968588829, "user_id": 30}
+{"label": "prefill-slot[linear] user=31", "pcc": 0.9999902760489403, "maxabs": 0.03313493728637695, "rel_rms": 0.004429996944963932, "user_id": 31}
+{"label": "prefill-slot[full] user=0", "pcc": 0.9999910020997891, "maxabs": 0.04208230972290039, "rel_rms": 0.004277628846466541, "user_id": 0}
+{"label": "prefill-slot[full] user=1", "pcc": 0.9999911804910546, "maxabs": 0.03266024589538574, "rel_rms": 0.004232865758240223, "user_id": 1}
+{"label": "prefill-slot[full] user=2", "pcc": 0.9999909118154678, "maxabs": 0.036149024963378906, "rel_rms": 0.0042983959428966045, "user_id": 2}
+{"label": "prefill-slot[full] user=3", "pcc": 0.9999907782742862, "maxabs": 0.038599491119384766, "rel_rms": 0.004329129587858915, "user_id": 3}
+{"label": "prefill-slot[full] user=4", "pcc": 0.9999911669675213, "maxabs": 0.03050708770751953, "rel_rms": 0.004239309579133987, "user_id": 4}
+{"label": "prefill-slot[full] user=5", "pcc": 0.9999911907560719, "maxabs": 0.03151106834411621, "rel_rms": 0.004230629652738571, "user_id": 5}
+{"label": "prefill-slot[full] user=6", "pcc": 0.9999910569001766, "maxabs": 0.05092668533325195, "rel_rms": 0.004263596143573523, "user_id": 6}
+{"label": "prefill-slot[full] user=7", "pcc": 0.9999909966558429, "maxabs": 0.03564929962158203, "rel_rms": 0.004278181120753288, "user_id": 7}
+{"label": "prefill-slot[full] user=8", "pcc": 0.9999911155098054, "maxabs": 0.03855276107788086, "rel_rms": 0.004249996971338987, "user_id": 8}
+{"label": "prefill-slot[full] user=9", "pcc": 0.9999911143655971, "maxabs": 0.04090452194213867, "rel_rms": 0.004250633995980024, "user_id": 9}
+{"label": "prefill-slot[full] user=10", "pcc": 0.999990697846003, "maxabs": 0.03685903549194336, "rel_rms": 0.004346813075244427, "user_id": 10}
+{"label": "prefill-slot[full] user=11", "pcc": 0.9999911701814718, "maxabs": 0.04330873489379883, "rel_rms": 0.004235627595335245, "user_id": 11}
+{"label": "prefill-slot[full] user=12", "pcc": 0.999991009357501, "maxabs": 0.03702259063720703, "rel_rms": 0.004272794350981712, "user_id": 12}
+{"label": "prefill-slot[full] user=13", "pcc": 0.999991090172823, "maxabs": 0.034703731536865234, "rel_rms": 0.004255769774317741, "user_id": 13}
+{"label": "prefill-slot[full] user=14", "pcc": 0.9999910172406571, "maxabs": 0.04098176956176758, "rel_rms": 0.004271752666682005, "user_id": 14}
+{"label": "prefill-slot[full] user=15", "pcc": 0.9999910485598974, "maxabs": 0.03163003921508789, "rel_rms": 0.0042653996497392654, "user_id": 15}
+{"label": "prefill-slot[full] user=16", "pcc": 0.9999908498315009, "maxabs": 0.03603792190551758, "rel_rms": 0.004310925956815481, "user_id": 16}
+{"label": "prefill-slot[full] user=17", "pcc": 0.999991270027289, "maxabs": 0.03987312316894531, "rel_rms": 0.004211848136037588, "user_id": 17}
+{"label": "prefill-slot[full] user=18", "pcc": 0.9999911618296322, "maxabs": 0.038698673248291016, "rel_rms": 0.004238472785800695, "user_id": 18}
+{"label": "prefill-slot[full] user=19", "pcc": 0.9999910469551129, "maxabs": 0.03781461715698242, "rel_rms": 0.004265384282916784, "user_id": 19}
+{"label": "prefill-slot[full] user=20", "pcc": 0.9999910236120972, "maxabs": 0.04196023941040039, "rel_rms": 0.004271318670362234, "user_id": 20}
+{"label": "prefill-slot[full] user=21", "pcc": 0.9999909929125893, "maxabs": 0.029317617416381836, "rel_rms": 0.00427596177905798, "user_id": 21}
+{"label": "prefill-slot[full] user=22", "pcc": 0.9999911418005794, "maxabs": 0.033846139907836914, "rel_rms": 0.00424263346940279, "user_id": 22}
+{"label": "prefill-slot[full] user=23", "pcc": 0.9999911805251451, "maxabs": 0.03347134590148926, "rel_rms": 0.004237139131873846, "user_id": 23}
+{"label": "prefill-slot[full] user=24", "pcc": 0.9999910127565675, "maxabs": 0.043035030364990234, "rel_rms": 0.004271685611456633, "user_id": 24}
+{"label": "prefill-slot[full] user=25", "pcc": 0.9999910508600971, "maxabs": 0.038828372955322266, "rel_rms": 0.00426480732858181, "user_id": 25}
+{"label": "prefill-slot[full] user=26", "pcc": 0.9999912365008891, "maxabs": 0.03650808334350586, "rel_rms": 0.004220577422529459, "user_id": 26}
+{"label": "prefill-slot[full] user=27", "pcc": 0.9999911687563723, "maxabs": 0.04039573669433594, "rel_rms": 0.004235817585140467, "user_id": 27}
+{"label": "prefill-slot[full] user=28", "pcc": 0.9999913061205933, "maxabs": 0.03475046157836914, "rel_rms": 0.00420551560819149, "user_id": 28}
+{"label": "prefill-slot[full] user=29", "pcc": 0.9999907419680789, "maxabs": 0.041001319885253906, "rel_rms": 0.004335671663284302, "user_id": 29}
+{"label": "prefill-slot[full] user=30", "pcc": 0.9999910717471316, "maxabs": 0.03428840637207031, "rel_rms": 0.004260119050741196, "user_id": 30}
+{"label": "prefill-slot[full] user=31", "pcc": 0.9999909148368255, "maxabs": 0.0320277214050293, "rel_rms": 0.00429631769657135, "user_id": 31}
+{"label": "decode[linear] pos=256 batch=1", "pcc": 0.9999886241550757, "maxabs": 0.01959538459777832, "rel_rms": 0.004787641577422619, "pos": 256, "batch": 1}
+{"label": "decode[linear] pos=257 batch=1", "pcc": 0.9999885453560632, "maxabs": 0.024614810943603516, "rel_rms": 0.004793931730091572, "pos": 257, "batch": 1}
+{"label": "decode[linear] pos=258 batch=1", "pcc": 0.9999919068570112, "maxabs": 0.022608041763305664, "rel_rms": 0.004047342576086521, "pos": 258, "batch": 1}
+{"label": "decode[full] pos=256 batch=1", "pcc": 0.9999937169967887, "maxabs": 0.016921043395996094, "rel_rms": 0.0035983012057840824, "pos": 256, "batch": 1}
+{"label": "decode[full] pos=257 batch=1", "pcc": 0.99999449940949, "maxabs": 0.021381378173828125, "rel_rms": 0.0033701052889227867, "pos": 257, "batch": 1}
+{"label": "decode[full] pos=258 batch=1", "pcc": 0.9999946427170403, "maxabs": 0.019494295120239258, "rel_rms": 0.0033383253030478954, "pos": 258, "batch": 1}
+{"label": "decode[linear] pos=256 batch=8", "pcc": 0.9999887862440829, "maxabs": 0.025523662567138672, "rel_rms": 0.0047489251010119915, "pos": 256, "batch": 8}
+{"label": "decode[linear] pos=257 batch=8", "pcc": 0.999989720786543, "maxabs": 0.023460030555725098, "rel_rms": 0.004551037680357695, "pos": 257, "batch": 8}
+{"label": "decode[linear] pos=258 batch=8", "pcc": 0.9999885833133759, "maxabs": 0.02968287467956543, "rel_rms": 0.004786890931427479, "pos": 258, "batch": 8}
+{"label": "decode[full] pos=256 batch=8", "pcc": 0.9999930028176974, "maxabs": 0.022398948669433594, "rel_rms": 0.003789360634982586, "pos": 256, "batch": 8}
+{"label": "decode[full] pos=257 batch=8", "pcc": 0.9999929937994659, "maxabs": 0.0235595703125, "rel_rms": 0.003802821272984147, "pos": 257, "batch": 8}
+{"label": "decode[full] pos=258 batch=8", "pcc": 0.9999927863878417, "maxabs": 0.025116443634033203, "rel_rms": 0.0038469815626740456, "pos": 258, "batch": 8}
+{"label": "decode[linear] pos=256 batch=32", "pcc": 0.9999895181217126, "maxabs": 0.029524803161621094, "rel_rms": 0.0045943777076900005, "pos": 256, "batch": 32}
+{"label": "decode[linear] pos=257 batch=32", "pcc": 0.9999897006784421, "maxabs": 0.028097152709960938, "rel_rms": 0.004550784360617399, "pos": 257, "batch": 32}
+{"label": "decode[linear] pos=258 batch=32", "pcc": 0.9999895351680174, "maxabs": 0.02867722511291504, "rel_rms": 0.004586538765579462, "pos": 258, "batch": 32}
+{"label": "decode[full] pos=256 batch=32", "pcc": 0.999993574259665, "maxabs": 0.025265216827392578, "rel_rms": 0.0036425909493118525, "pos": 256, "batch": 32}
+{"label": "decode[full] pos=257 batch=32", "pcc": 0.9999933700225231, "maxabs": 0.03675413131713867, "rel_rms": 0.0036968460772186518, "pos": 257, "batch": 32}
+{"label": "decode[full] pos=258 batch=32", "pcc": 0.9999937049906085, "maxabs": 0.02576613426208496, "rel_rms": 0.003602877026423812, "pos": 258, "batch": 32}
+{"label": "decode[linear] pos=128 batch=1", "pcc": 0.9999894990140041, "maxabs": 0.022663354873657227, "rel_rms": 0.004591154400259256, "pos": 128, "batch": 1}
+{"label": "decode[linear] pos=129 batch=1", "pcc": 0.999990384983613, "maxabs": 0.02249002456665039, "rel_rms": 0.004440754186362028, "pos": 129, "batch": 1}
+{"label": "decode[linear] pos=130 batch=1", "pcc": 0.9999910939824447, "maxabs": 0.02250981330871582, "rel_rms": 0.004243067465722561, "pos": 130, "batch": 1}
+{"label": "decode[linear] pos=131 batch=1", "pcc": 0.9999914115070512, "maxabs": 0.022424936294555664, "rel_rms": 0.004160957410931587, "pos": 131, "batch": 1}
+{"label": "decode[linear] pos=132 batch=1", "pcc": 0.9999885460973739, "maxabs": 0.02353978157043457, "rel_rms": 0.004796880297362804, "pos": 132, "batch": 1}
+{"label": "decode[linear] pos=133 batch=1", "pcc": 0.9999906064492746, "maxabs": 0.022911787033081055, "rel_rms": 0.0043584369122982025, "pos": 133, "batch": 1}
+{"label": "decode[linear] pos=134 batch=1", "pcc": 0.9999910776196682, "maxabs": 0.018370628356933594, "rel_rms": 0.004253285005688667, "pos": 134, "batch": 1}
+{"label": "decode[linear] pos=135 batch=1", "pcc": 0.9999901560793822, "maxabs": 0.02204418182373047, "rel_rms": 0.0044829160906374454, "pos": 135, "batch": 1}
+{"label": "decode[linear] pos=136 batch=1", "pcc": 0.9999906795108077, "maxabs": 0.0201873779296875, "rel_rms": 0.004337767604738474, "pos": 136, "batch": 1}
+{"label": "decode[linear] pos=137 batch=1", "pcc": 0.9999910201075608, "maxabs": 0.02248072624206543, "rel_rms": 0.004266785457730293, "pos": 137, "batch": 1}
+{"label": "decode[linear] pos=138 batch=1", "pcc": 0.9999910897951267, "maxabs": 0.025295019149780273, "rel_rms": 0.0042367978021502495, "pos": 138, "batch": 1}
+{"label": "decode[linear] pos=139 batch=1", "pcc": 0.9999893645782648, "maxabs": 0.020546674728393555, "rel_rms": 0.004615161567926407, "pos": 139, "batch": 1}
+{"label": "decode[linear] pos=140 batch=1", "pcc": 0.9999901266735597, "maxabs": 0.019802093505859375, "rel_rms": 0.004471674095839262, "pos": 140, "batch": 1}
+{"label": "decode[linear] pos=141 batch=1", "pcc": 0.9999872547548493, "maxabs": 0.02137279510498047, "rel_rms": 0.005049817729741335, "pos": 141, "batch": 1}
+{"label": "decode[linear] pos=142 batch=1", "pcc": 0.9999914644917421, "maxabs": 0.018754005432128906, "rel_rms": 0.004184568300843239, "pos": 142, "batch": 1}
+{"label": "decode[linear] pos=143 batch=1", "pcc": 0.9999906375349358, "maxabs": 0.021112561225891113, "rel_rms": 0.004349140916019678, "pos": 143, "batch": 1}
+{"label": "decode[linear] pos=144 batch=1", "pcc": 0.9999896450955218, "maxabs": 0.024979591369628906, "rel_rms": 0.004582482390105724, "pos": 144, "batch": 1}
+{"label": "decode[linear] pos=145 batch=1", "pcc": 0.9999898019802371, "maxabs": 0.019379854202270508, "rel_rms": 0.004540303722023964, "pos": 145, "batch": 1}
+{"label": "decode[linear] pos=146 batch=1", "pcc": 0.9999902303043516, "maxabs": 0.024329662322998047, "rel_rms": 0.004434258211404085, "pos": 146, "batch": 1}
+{"label": "decode[linear] pos=147 batch=1", "pcc": 0.9999910006529089, "maxabs": 0.02204585075378418, "rel_rms": 0.004277376923710108, "pos": 147, "batch": 1}
+{"label": "decode[linear] pos=148 batch=1", "pcc": 0.9999883532446671, "maxabs": 0.02172374725341797, "rel_rms": 0.004851141013205051, "pos": 148, "batch": 1}
+{"label": "decode[linear] pos=149 batch=1", "pcc": 0.9999908334472916, "maxabs": 0.01818394660949707, "rel_rms": 0.004289866425096989, "pos": 149, "batch": 1}
+{"label": "decode[linear] pos=150 batch=1", "pcc": 0.9999890970677529, "maxabs": 0.020134687423706055, "rel_rms": 0.004684015642851591, "pos": 150, "batch": 1}
+{"label": "decode[linear] pos=151 batch=1", "pcc": 0.9999908597313305, "maxabs": 0.02378082275390625, "rel_rms": 0.0043066563084721565, "pos": 151, "batch": 1}
+{"label": "decode[linear] pos=152 batch=1", "pcc": 0.9999894997041975, "maxabs": 0.023741960525512695, "rel_rms": 0.00458477484062314, "pos": 152, "batch": 1}
+{"label": "decode[linear] pos=153 batch=1", "pcc": 0.9999898983696346, "maxabs": 0.02511119842529297, "rel_rms": 0.0045153978280723095, "pos": 153, "batch": 1}
+{"label": "decode[linear] pos=154 batch=1", "pcc": 0.9999896944783226, "maxabs": 0.021733760833740234, "rel_rms": 0.004559523891657591, "pos": 154, "batch": 1}
+{"label": "decode[linear] pos=155 batch=1", "pcc": 0.9999909867953666, "maxabs": 0.020995140075683594, "rel_rms": 0.004265601746737957, "pos": 155, "batch": 1}
+{"label": "decode[linear] pos=156 batch=1", "pcc": 0.9999895723856724, "maxabs": 0.025262117385864258, "rel_rms": 0.004589186515659094, "pos": 156, "batch": 1}
+{"label": "decode[linear] pos=157 batch=1", "pcc": 0.9999892154374758, "maxabs": 0.019260168075561523, "rel_rms": 0.004666656721383333, "pos": 157, "batch": 1}
+{"label": "decode[linear] pos=158 batch=1", "pcc": 0.9999891834203501, "maxabs": 0.023363828659057617, "rel_rms": 0.004652659874409437, "pos": 158, "batch": 1}
+{"label": "decode[linear] pos=159 batch=1", "pcc": 0.9999877031863375, "maxabs": 0.02264261245727539, "rel_rms": 0.004965975880622864, "pos": 159, "batch": 1}
+{"label": "decode[linear] pos=160 batch=1", "pcc": 0.999990237944902, "maxabs": 0.023380279541015625, "rel_rms": 0.004423750098794699, "pos": 160, "batch": 1}
+{"label": "decode[linear] pos=161 batch=1", "pcc": 0.9999901769152789, "maxabs": 0.018785953521728516, "rel_rms": 0.004437788389623165, "pos": 161, "batch": 1}
+{"label": "decode[linear] pos=162 batch=1", "pcc": 0.9999869035790409, "maxabs": 0.019865989685058594, "rel_rms": 0.005128276068717241, "pos": 162, "batch": 1}
+{"label": "decode[linear] pos=163 batch=1", "pcc": 0.9999907133573936, "maxabs": 0.021619796752929688, "rel_rms": 0.0043527549132704735, "pos": 163, "batch": 1}
+{"label": "decode[linear] pos=164 batch=1", "pcc": 0.9999909373341809, "maxabs": 0.020735979080200195, "rel_rms": 0.004257610067725182, "pos": 164, "batch": 1}
+{"label": "decode[linear] pos=165 batch=1", "pcc": 0.9999915458430245, "maxabs": 0.017152070999145508, "rel_rms": 0.0041417451575398445, "pos": 165, "batch": 1}
+{"label": "decode[linear] pos=166 batch=1", "pcc": 0.9999895128102594, "maxabs": 0.023270130157470703, "rel_rms": 0.004592647310346365, "pos": 166, "batch": 1}
+{"label": "decode[linear] pos=167 batch=1", "pcc": 0.9999908092675373, "maxabs": 0.01904773712158203, "rel_rms": 0.0043408507481217384, "pos": 167, "batch": 1}
+{"label": "decode[linear] pos=168 batch=1", "pcc": 0.9999896295789779, "maxabs": 0.025087594985961914, "rel_rms": 0.004568477161228657, "pos": 168, "batch": 1}
+{"label": "decode[linear] pos=169 batch=1", "pcc": 0.9999901636859277, "maxabs": 0.021209239959716797, "rel_rms": 0.00446486659348011, "pos": 169, "batch": 1}
+{"label": "decode[linear] pos=170 batch=1", "pcc": 0.999990658041424, "maxabs": 0.02078390121459961, "rel_rms": 0.004355831537395716, "pos": 170, "batch": 1}
+{"label": "decode[linear] pos=171 batch=1", "pcc": 0.999989790264716, "maxabs": 0.022272109985351562, "rel_rms": 0.004545125178992748, "pos": 171, "batch": 1}
+{"label": "decode[linear] pos=172 batch=1", "pcc": 0.9999911533062467, "maxabs": 0.027680635452270508, "rel_rms": 0.004219414666295052, "pos": 172, "batch": 1}
+{"label": "decode[linear] pos=173 batch=1", "pcc": 0.9999883331775251, "maxabs": 0.023672819137573242, "rel_rms": 0.004837688524276018, "pos": 173, "batch": 1}
+{"label": "decode[linear] pos=174 batch=1", "pcc": 0.9999910349547299, "maxabs": 0.019399523735046387, "rel_rms": 0.004260838497430086, "pos": 174, "batch": 1}
+{"label": "decode[linear] pos=175 batch=1", "pcc": 0.9999895881384598, "maxabs": 0.02289438247680664, "rel_rms": 0.004568913485854864, "pos": 175, "batch": 1}
+{"label": "decode[linear] pos=176 batch=1", "pcc": 0.9999912177576624, "maxabs": 0.020678997039794922, "rel_rms": 0.004211972467601299, "pos": 176, "batch": 1}
+{"label": "decode[linear] pos=177 batch=1", "pcc": 0.999990201845224, "maxabs": 0.021219849586486816, "rel_rms": 0.004446928855031729, "pos": 177, "batch": 1}
+{"label": "decode[linear] pos=178 batch=1", "pcc": 0.9999905361390262, "maxabs": 0.01638317108154297, "rel_rms": 0.004384877625852823, "pos": 178, "batch": 1}
+{"label": "decode[linear] pos=179 batch=1", "pcc": 0.9999903719599275, "maxabs": 0.022876977920532227, "rel_rms": 0.004415006376802921, "pos": 179, "batch": 1}
+{"label": "decode[linear] pos=180 batch=1", "pcc": 0.9999898665983131, "maxabs": 0.019612550735473633, "rel_rms": 0.004507374484091997, "pos": 180, "batch": 1}
+{"label": "decode[linear] pos=181 batch=1", "pcc": 0.9999900775093344, "maxabs": 0.021210432052612305, "rel_rms": 0.004466269630938768, "pos": 181, "batch": 1}
+{"label": "decode[linear] pos=182 batch=1", "pcc": 0.999990599385384, "maxabs": 0.030414581298828125, "rel_rms": 0.004355661105364561, "pos": 182, "batch": 1}
+{"label": "decode[linear] pos=183 batch=1", "pcc": 0.9999915995463481, "maxabs": 0.022916555404663086, "rel_rms": 0.004120462574064732, "pos": 183, "batch": 1}
+{"label": "decode[linear] pos=184 batch=1", "pcc": 0.9999899387742568, "maxabs": 0.021395206451416016, "rel_rms": 0.004511229693889618, "pos": 184, "batch": 1}
+{"label": "decode[linear] pos=185 batch=1", "pcc": 0.9999900544108619, "maxabs": 0.019537687301635742, "rel_rms": 0.004484312608838081, "pos": 185, "batch": 1}
+{"label": "decode[linear] pos=186 batch=1", "pcc": 0.999990874425001, "maxabs": 0.02153611183166504, "rel_rms": 0.004298153333365917, "pos": 186, "batch": 1}
+{"label": "decode[linear] pos=187 batch=1", "pcc": 0.9999894714618106, "maxabs": 0.018369436264038086, "rel_rms": 0.004608420189470053, "pos": 187, "batch": 1}
+{"label": "decode[linear] pos=188 batch=1", "pcc": 0.9999916714485252, "maxabs": 0.022251605987548828, "rel_rms": 0.004099234472960234, "pos": 188, "batch": 1}
+{"label": "decode[linear] pos=189 batch=1", "pcc": 0.9999889254728538, "maxabs": 0.020498275756835938, "rel_rms": 0.004719333723187447, "pos": 189, "batch": 1}
+{"label": "decode[linear] pos=190 batch=1", "pcc": 0.9999908198468885, "maxabs": 0.021461963653564453, "rel_rms": 0.0042929258197546005, "pos": 190, "batch": 1}
+{"label": "decode[linear] pos=191 batch=1", "pcc": 0.9999884802789027, "maxabs": 0.020702123641967773, "rel_rms": 0.004828508011996746, "pos": 191, "batch": 1}
+{"label": "decode[full] pos=128 batch=1", "pcc": 0.9999934867364811, "maxabs": 0.022246360778808594, "rel_rms": 0.003661251626908779, "pos": 128, "batch": 1}
+{"label": "decode[full] pos=129 batch=1", "pcc": 0.9999927145721502, "maxabs": 0.02360677719116211, "rel_rms": 0.003878250252455473, "pos": 129, "batch": 1}
+{"label": "decode[full] pos=130 batch=1", "pcc": 0.9999918620994949, "maxabs": 0.022869586944580078, "rel_rms": 0.00407008733600378, "pos": 130, "batch": 1}
+{"label": "decode[full] pos=131 batch=1", "pcc": 0.9999923162006616, "maxabs": 0.020029306411743164, "rel_rms": 0.0039451224729418755, "pos": 131, "batch": 1}
+{"label": "decode[full] pos=132 batch=1", "pcc": 0.999993768541112, "maxabs": 0.02401876449584961, "rel_rms": 0.003614111104980111, "pos": 132, "batch": 1}
+{"label": "decode[full] pos=133 batch=1", "pcc": 0.9999897261147302, "maxabs": 0.02318572998046875, "rel_rms": 0.004570928402245045, "pos": 133, "batch": 1}
+{"label": "decode[full] pos=134 batch=1", "pcc": 0.9999930235074597, "maxabs": 0.019219398498535156, "rel_rms": 0.0037811859510838985, "pos": 134, "batch": 1}
+{"label": "decode[full] pos=135 batch=1", "pcc": 0.9999925738582741, "maxabs": 0.02209186553955078, "rel_rms": 0.003891169559210539, "pos": 135, "batch": 1}
+{"label": "decode[full] pos=136 batch=1", "pcc": 0.9999934264810336, "maxabs": 0.019749879837036133, "rel_rms": 0.0036880115512758493, "pos": 136, "batch": 1}
+{"label": "decode[full] pos=137 batch=1", "pcc": 0.9999922212889127, "maxabs": 0.02378082275390625, "rel_rms": 0.003970679361373186, "pos": 137, "batch": 1}
+{"label": "decode[full] pos=138 batch=1", "pcc": 0.9999929499981284, "maxabs": 0.022127151489257812, "rel_rms": 0.003792544361203909, "pos": 138, "batch": 1}
+{"label": "decode[full] pos=139 batch=1", "pcc": 0.9999937487597133, "maxabs": 0.02116680145263672, "rel_rms": 0.003573226509615779, "pos": 139, "batch": 1}
+{"label": "decode[full] pos=140 batch=1", "pcc": 0.9999937799324308, "maxabs": 0.01781463623046875, "rel_rms": 0.0035950203891843557, "pos": 140, "batch": 1}
+{"label": "decode[full] pos=141 batch=1", "pcc": 0.9999935286685337, "maxabs": 0.021607160568237305, "rel_rms": 0.0036392249166965485, "pos": 141, "batch": 1}
+{"label": "decode[full] pos=142 batch=1", "pcc": 0.9999890281522988, "maxabs": 0.022426366806030273, "rel_rms": 0.00471584964543581, "pos": 142, "batch": 1}
+{"label": "decode[full] pos=143 batch=1", "pcc": 0.9999931561360158, "maxabs": 0.021369218826293945, "rel_rms": 0.0037313206121325493, "pos": 143, "batch": 1}
+{"label": "decode[full] pos=144 batch=1", "pcc": 0.9999935004109609, "maxabs": 0.018001079559326172, "rel_rms": 0.003651013830676675, "pos": 144, "batch": 1}
+{"label": "decode[full] pos=145 batch=1", "pcc": 0.9999929129205155, "maxabs": 0.017867326736450195, "rel_rms": 0.0038041796069592237, "pos": 145, "batch": 1}
+{"label": "decode[full] pos=146 batch=1", "pcc": 0.9999929301265676, "maxabs": 0.02366781234741211, "rel_rms": 0.003803674364462495, "pos": 146, "batch": 1}
+{"label": "decode[full] pos=147 batch=1", "pcc": 0.9999934936815614, "maxabs": 0.018790721893310547, "rel_rms": 0.003657424356788397, "pos": 147, "batch": 1}
+{"label": "decode[full] pos=148 batch=1", "pcc": 0.9999930252784172, "maxabs": 0.017639875411987305, "rel_rms": 0.0037639429792761803, "pos": 148, "batch": 1}
+{"label": "decode[full] pos=149 batch=1", "pcc": 0.999994383604168, "maxabs": 0.019541263580322266, "rel_rms": 0.0033785561099648476, "pos": 149, "batch": 1}
+{"label": "decode[full] pos=150 batch=1", "pcc": 0.9999932735385447, "maxabs": 0.019347190856933594, "rel_rms": 0.0037166038528084755, "pos": 150, "batch": 1}
+{"label": "decode[full] pos=151 batch=1", "pcc": 0.9999937701254248, "maxabs": 0.019046306610107422, "rel_rms": 0.0035582981072366238, "pos": 151, "batch": 1}
+{"label": "decode[full] pos=152 batch=1", "pcc": 0.999993038397658, "maxabs": 0.019121170043945312, "rel_rms": 0.003776073455810547, "pos": 152, "batch": 1}
+{"label": "decode[full] pos=153 batch=1", "pcc": 0.9999920668846876, "maxabs": 0.021121978759765625, "rel_rms": 0.004027890507131815, "pos": 153, "batch": 1}
+{"label": "decode[full] pos=154 batch=1", "pcc": 0.9999928119781478, "maxabs": 0.02413630485534668, "rel_rms": 0.003843358950689435, "pos": 154, "batch": 1}
+{"label": "decode[full] pos=155 batch=1", "pcc": 0.9999933071620848, "maxabs": 0.017966032028198242, "rel_rms": 0.0037282328121364117, "pos": 155, "batch": 1}
+{"label": "decode[full] pos=156 batch=1", "pcc": 0.9999922735202942, "maxabs": 0.019408464431762695, "rel_rms": 0.003970667719841003, "pos": 156, "batch": 1}
+{"label": "decode[full] pos=157 batch=1", "pcc": 0.9999939764600491, "maxabs": 0.016372203826904297, "rel_rms": 0.003523450344800949, "pos": 157, "batch": 1}
+{"label": "decode[full] pos=158 batch=1", "pcc": 0.9999934115200159, "maxabs": 0.01957988739013672, "rel_rms": 0.0036587172653526068, "pos": 158, "batch": 1}
+{"label": "decode[full] pos=159 batch=1", "pcc": 0.9999935662512458, "maxabs": 0.027159690856933594, "rel_rms": 0.003632914274930954, "pos": 159, "batch": 1}
+{"label": "decode[full] pos=160 batch=1", "pcc": 0.9999933254265451, "maxabs": 0.0227353572845459, "rel_rms": 0.0037290710024535656, "pos": 160, "batch": 1}
+{"label": "decode[full] pos=161 batch=1", "pcc": 0.9999875424402714, "maxabs": 0.02284407615661621, "rel_rms": 0.005038439761847258, "pos": 161, "batch": 1}
+{"label": "decode[full] pos=162 batch=1", "pcc": 0.9999931414436144, "maxabs": 0.019689083099365234, "rel_rms": 0.0037675946950912476, "pos": 162, "batch": 1}
+{"label": "decode[full] pos=163 batch=1", "pcc": 0.9999932419617622, "maxabs": 0.022567033767700195, "rel_rms": 0.0037147668190300465, "pos": 163, "batch": 1}
+{"label": "decode[full] pos=164 batch=1", "pcc": 0.9999931892659406, "maxabs": 0.02204728126525879, "rel_rms": 0.0037123083602637053, "pos": 164, "batch": 1}
+{"label": "decode[full] pos=165 batch=1", "pcc": 0.9999937896382582, "maxabs": 0.01972222328186035, "rel_rms": 0.003548060078173876, "pos": 165, "batch": 1}
+{"label": "decode[full] pos=166 batch=1", "pcc": 0.9999933943401679, "maxabs": 0.020410537719726562, "rel_rms": 0.003710839431732893, "pos": 166, "batch": 1}
+{"label": "decode[full] pos=167 batch=1", "pcc": 0.999993459713329, "maxabs": 0.022116661071777344, "rel_rms": 0.0036817986983805895, "pos": 167, "batch": 1}
+{"label": "decode[full] pos=168 batch=1", "pcc": 0.9999933718970643, "maxabs": 0.024128437042236328, "rel_rms": 0.003668287070468068, "pos": 168, "batch": 1}
+{"label": "decode[full] pos=169 batch=1", "pcc": 0.9999936982051099, "maxabs": 0.022771596908569336, "rel_rms": 0.00359553680755198, "pos": 169, "batch": 1}
+{"label": "decode[full] pos=170 batch=1", "pcc": 0.9999933196463626, "maxabs": 0.018642663955688477, "rel_rms": 0.003696608357131481, "pos": 170, "batch": 1}
+{"label": "decode[full] pos=171 batch=1", "pcc": 0.9999930138839764, "maxabs": 0.01838064193725586, "rel_rms": 0.003810964059084654, "pos": 171, "batch": 1}
+{"label": "decode[full] pos=172 batch=1", "pcc": 0.9999930098733129, "maxabs": 0.018483638763427734, "rel_rms": 0.0037882281467318535, "pos": 172, "batch": 1}
+{"label": "decode[full] pos=173 batch=1", "pcc": 0.9999907137825399, "maxabs": 0.023244380950927734, "rel_rms": 0.004354092292487621, "pos": 173, "batch": 1}
+{"label": "decode[full] pos=174 batch=1", "pcc": 0.9999937346469517, "maxabs": 0.02141094207763672, "rel_rms": 0.0035970257595181465, "pos": 174, "batch": 1}
+{"label": "decode[full] pos=175 batch=1", "pcc": 0.999991801649992, "maxabs": 0.030111312866210938, "rel_rms": 0.0040753986686468124, "pos": 175, "batch": 1}
+{"label": "decode[full] pos=176 batch=1", "pcc": 0.9999927865340594, "maxabs": 0.021238327026367188, "rel_rms": 0.0038471100851893425, "pos": 176, "batch": 1}
+{"label": "decode[full] pos=177 batch=1", "pcc": 0.9999943817272511, "maxabs": 0.02006697654724121, "rel_rms": 0.0034070380497723818, "pos": 177, "batch": 1}
+{"label": "decode[full] pos=178 batch=1", "pcc": 0.9999931677302407, "maxabs": 0.018555641174316406, "rel_rms": 0.003718371968716383, "pos": 178, "batch": 1}
+{"label": "decode[full] pos=179 batch=1", "pcc": 0.999992709132279, "maxabs": 0.02404022216796875, "rel_rms": 0.003897001501172781, "pos": 179, "batch": 1}
+{"label": "decode[full] pos=180 batch=1", "pcc": 0.9999939587176746, "maxabs": 0.0174105167388916, "rel_rms": 0.0034965311642736197, "pos": 180, "batch": 1}
+{"label": "decode[full] pos=181 batch=1", "pcc": 0.9999926221462426, "maxabs": 0.01636958122253418, "rel_rms": 0.003872431581839919, "pos": 181, "batch": 1}
+{"label": "decode[full] pos=182 batch=1", "pcc": 0.9999925219106709, "maxabs": 0.021228313446044922, "rel_rms": 0.0039161513559520245, "pos": 182, "batch": 1}
+{"label": "decode[full] pos=183 batch=1", "pcc": 0.9999931862715475, "maxabs": 0.023058176040649414, "rel_rms": 0.003733566729351878, "pos": 183, "batch": 1}
+{"label": "decode[full] pos=184 batch=1", "pcc": 0.9999940890444372, "maxabs": 0.017457008361816406, "rel_rms": 0.0034792001824826, "pos": 184, "batch": 1}
+{"label": "decode[full] pos=185 batch=1", "pcc": 0.9999927155609706, "maxabs": 0.021717309951782227, "rel_rms": 0.0038802113849669695, "pos": 185, "batch": 1}
+{"label": "decode[full] pos=186 batch=1", "pcc": 0.9999937695506694, "maxabs": 0.021620988845825195, "rel_rms": 0.0035923433024436235, "pos": 186, "batch": 1}
+{"label": "decode[full] pos=187 batch=1", "pcc": 0.9999915873218674, "maxabs": 0.03532123565673828, "rel_rms": 0.004128716420382261, "pos": 187, "batch": 1}
+{"label": "decode[full] pos=188 batch=1", "pcc": 0.9999933067062734, "maxabs": 0.01893901824951172, "rel_rms": 0.0037573860026896, "pos": 188, "batch": 1}
+{"label": "decode[full] pos=189 batch=1", "pcc": 0.9999927570533825, "maxabs": 0.022909164428710938, "rel_rms": 0.003862291108816862, "pos": 189, "batch": 1}
+{"label": "decode[full] pos=190 batch=1", "pcc": 0.9999938405897931, "maxabs": 0.018616437911987305, "rel_rms": 0.003537053009495139, "pos": 190, "batch": 1}
+{"label": "decode[full] pos=191 batch=1", "pcc": 0.9999928756853828, "maxabs": 0.019062042236328125, "rel_rms": 0.003808022243902087, "pos": 191, "batch": 1}
+{"label": "decode[linear] pos=65 batch=1", "pcc": 0.9999899889374861, "maxabs": 0.023380517959594727, "rel_rms": 0.004487795755267143, "pos": 65, "batch": 1}
+{"label": "decode[linear] pos=66 batch=1", "pcc": 0.9999927197198069, "maxabs": 0.02095651626586914, "rel_rms": 0.003826428670436144, "pos": 66, "batch": 1}
+{"label": "decode[full] pos=65 batch=1", "pcc": 0.9999919042589861, "maxabs": 0.019458293914794922, "rel_rms": 0.004047221038490534, "pos": 65, "batch": 1}
+{"label": "decode[full] pos=66 batch=1", "pcc": 0.9999922649971522, "maxabs": 0.024421215057373047, "rel_rms": 0.003969473298639059, "pos": 66, "batch": 1}
+{"label": "decode[linear] pos=129 batch=1", "pcc": 0.9999856878240261, "maxabs": 0.021909713745117188, "rel_rms": 0.0053589604794979095, "pos": 129, "batch": 1}
+{"label": "decode[linear] pos=130 batch=1", "pcc": 0.9999900855035168, "maxabs": 0.02104330062866211, "rel_rms": 0.004472029861062765, "pos": 130, "batch": 1}
+{"label": "decode[full] pos=129 batch=1", "pcc": 0.9999920263061323, "maxabs": 0.024868249893188477, "rel_rms": 0.004012808669358492, "pos": 129, "batch": 1}
+{"label": "decode[full] pos=130 batch=1", "pcc": 0.9999869623380757, "maxabs": 0.023894548416137695, "rel_rms": 0.005137739237397909, "pos": 130, "batch": 1}
+{"label": "decode[linear] pos=320 batch=1", "pcc": 0.9999891113574354, "maxabs": 0.017213821411132812, "rel_rms": 0.00468008778989315, "pos": 320, "batch": 1}
+{"label": "decode[linear] pos=321 batch=1", "pcc": 0.9999877283351104, "maxabs": 0.02368021011352539, "rel_rms": 0.004961109720170498, "pos": 321, "batch": 1}
+{"label": "decode[full] pos=320 batch=1", "pcc": 0.9999939307677312, "maxabs": 0.015819072723388672, "rel_rms": 0.0035293514374643564, "pos": 320, "batch": 1}
+{"label": "decode[full] pos=321 batch=1", "pcc": 0.9999948000906458, "maxabs": 0.02116537094116211, "rel_rms": 0.0032956183422356844, "pos": 321, "batch": 1}
+{"label": "decode[linear] pos=1000 batch=1", "pcc": 0.9999862367180478, "maxabs": 0.023022174835205078, "rel_rms": 0.005250950343906879, "pos": 1000, "batch": 1}
+{"label": "decode[linear] pos=1001 batch=1", "pcc": 0.9999881923129904, "maxabs": 0.02343463897705078, "rel_rms": 0.004879816435277462, "pos": 1001, "batch": 1}
+{"label": "decode[full] pos=1000 batch=1", "pcc": 0.9999945066400465, "maxabs": 0.023235797882080078, "rel_rms": 0.003379157977178693, "pos": 1000, "batch": 1}
+{"label": "decode[full] pos=1001 batch=1", "pcc": 0.9999954304474777, "maxabs": 0.020515918731689453, "rel_rms": 0.003068981459364295, "pos": 1001, "batch": 1}
+{"label": "decode-ragged user=0 pos=128", "pcc": 0.999992996351566, "maxabs": 0.0214385986328125, "rel_rms": 0.0037871836684644222}
+{"label": "decode-ragged user=1 pos=256", "pcc": 0.9999936486197218, "maxabs": 0.017784833908081055, "rel_rms": 0.0036064281594008207}
+{"label": "decode-ragged user=2 pos=384", "pcc": 0.9999941797674798, "maxabs": 0.023614883422851562, "rel_rms": 0.0034926775842905045}
+{"label": "decode-ragged user=3 pos=640", "pcc": 0.9999947908418639, "maxabs": 0.023869037628173828, "rel_rms": 0.0032910325098782778}
+{"label": "decode-active-slot user=0", "pcc": 0.9999927365068892, "maxabs": 0.017357349395751953, "rel_rms": 0.003890924621373415}
+{"label": "decode-active-slot user=2", "pcc": 0.9999928922957556, "maxabs": 0.021465063095092773, "rel_rms": 0.003806730965152383}
+{"label": "paged-kv keys", "pcc": 0.9999834640296369, "maxabs": 0.07382392883300781, "rel_rms": 0.005758633837103844}
+{"label": "paged-kv values", "pcc": 0.999987258875504, "maxabs": 0.024494171142578125, "rel_rms": 0.007817909121513367}
+{"label": "linear conv_state", "pcc": 0.9999870619451352, "maxabs": 0.026322364807128906, "rel_rms": 0.007781242020428181}
+{"label": "linear recurrent_state", "pcc": 0.9999449554886852, "maxabs": 0.0011434052139520645, "rel_rms": 0.01191785279661417}
+{"label": "decode-seeded-state", "pcc": 0.9999720344745742, "maxabs": 0.03385007381439209, "rel_rms": 0.00757239805534482}
+{"label": "traced-decode[linear] pos=256 batch=8", "pcc": 0.9999895496485854, "maxabs": 0.025272130966186523, "rel_rms": 0.004591795615851879}
+{"label": "traced-decode[linear] pos=257 batch=8", "pcc": 0.9999891194053129, "maxabs": 0.027921438217163086, "rel_rms": 0.004683281760662794}
+{"label": "traced-decode[full] pos=256 batch=8", "pcc": 0.9999935972332211, "maxabs": 0.023062705993652344, "rel_rms": 0.0036507912445813417}
+{"label": "traced-decode[full] pos=257 batch=8", "pcc": 0.9999937285310204, "maxabs": 0.0240478515625, "rel_rms": 0.0035955074708908796}
+{"label": "prefill[linear] seq=1 start=0 user=0", "pcc": 0.9999957945532303, "maxabs": 0.018932104110717773, "rel_rms": 0.0030266037210822105, "seq_len": 1, "start_pos": 0, "user_id": 0}
+{"label": "prefill[full] seq=1 start=0 user=0", "pcc": 0.9999791747267937, "maxabs": 0.026882052421569824, "rel_rms": 0.006457542069256306, "seq_len": 1, "start_pos": 0, "user_id": 0}
+{"label": "prefill[linear] seq=32 start=0 user=0", "pcc": 0.9999929096656307, "maxabs": 0.02948737144470215, "rel_rms": 0.0038042874075472355, "seq_len": 32, "start_pos": 0, "user_id": 0}
+{"label": "prefill[full] seq=32 start=0 user=0", "pcc": 0.9999862652197017, "maxabs": 0.03177309036254883, "rel_rms": 0.005247205961495638, "seq_len": 32, "start_pos": 0, "user_id": 0}
+{"label": "prefill[linear] seq=33 start=0 user=0", "pcc": 0.9999930361581201, "maxabs": 0.030202865600585938, "rel_rms": 0.003765162779018283, "seq_len": 33, "start_pos": 0, "user_id": 0}
+{"label": "prefill[full] seq=33 start=0 user=0", "pcc": 0.9999859393105696, "maxabs": 0.031217575073242188, "rel_rms": 0.005310576409101486, "seq_len": 33, "start_pos": 0, "user_id": 0}
+{"label": "prefill[linear] seq=64 start=0 user=0", "pcc": 0.9999919995912683, "maxabs": 0.03245973587036133, "rel_rms": 0.004029287025332451, "seq_len": 64, "start_pos": 0, "user_id": 0}
+{"label": "prefill[full] seq=64 start=0 user=0", "pcc": 0.9999884485982274, "maxabs": 0.037837982177734375, "rel_rms": 0.004823929630219936, "seq_len": 64, "start_pos": 0, "user_id": 0}
+{"label": "prefill[linear] seq=65 start=0 user=0", "pcc": 0.9999920161245439, "maxabs": 0.026805400848388672, "rel_rms": 0.004028964322060347, "seq_len": 65, "start_pos": 0, "user_id": 0}
+{"label": "prefill[full] seq=65 start=0 user=0", "pcc": 0.9999878112920108, "maxabs": 0.02993297576904297, "rel_rms": 0.004950525239109993, "seq_len": 65, "start_pos": 0, "user_id": 0}
+{"label": "prefill[linear] seq=128 start=0 user=0", "pcc": 0.9999910312154393, "maxabs": 0.031015396118164062, "rel_rms": 0.004257477819919586, "seq_len": 128, "start_pos": 0, "user_id": 0}
+{"label": "prefill[full] seq=128 start=0 user=0", "pcc": 0.9999892993070398, "maxabs": 0.03457498550415039, "rel_rms": 0.004650958813726902, "seq_len": 128, "start_pos": 0, "user_id": 0}
+{"label": "prefill[linear] seq=129 start=0 user=0", "pcc": 0.9999909763802263, "maxabs": 0.035849571228027344, "rel_rms": 0.004271454177796841, "seq_len": 129, "start_pos": 0, "user_id": 0}
+{"label": "prefill[full] seq=129 start=0 user=0", "pcc": 0.9999900961242711, "maxabs": 0.02943277359008789, "rel_rms": 0.004473591223359108, "seq_len": 129, "start_pos": 0, "user_id": 0}
+{"label": "prefill[linear] seq=1024 start=0 user=0", "pcc": 0.999981848467497, "maxabs": 0.04493856430053711, "rel_rms": 0.006027978844940662, "seq_len": 1024, "start_pos": 0, "user_id": 0}
+{"label": "prefill[full] seq=1024 start=0 user=0", "pcc": 0.9999920378781081, "maxabs": 0.03941318392753601, "rel_rms": 0.004034749232232571, "seq_len": 1024, "start_pos": 0, "user_id": 0}
+{"label": "prefill[linear] seq=1025 start=0 user=0", "pcc": 0.9999821132996619, "maxabs": 0.04286694526672363, "rel_rms": 0.005983708426356316, "seq_len": 1025, "start_pos": 0, "user_id": 0}
+{"label": "prefill[full] seq=1025 start=0 user=0", "pcc": 0.9999910565140531, "maxabs": 0.0501556396484375, "rel_rms": 0.0042677330784499645, "seq_len": 1025, "start_pos": 0, "user_id": 0}
+{"label": "prefill[linear] seq=2048 start=0 user=0", "pcc": 0.9999738011375192, "maxabs": 0.047882080078125, "rel_rms": 0.007238567806780338, "seq_len": 2048, "start_pos": 0, "user_id": 0}
+{"label": "prefill[full] seq=2048 start=0 user=0", "pcc": 0.9999925262677243, "maxabs": 0.043753623962402344, "rel_rms": 0.0039144232869148254, "seq_len": 2048, "start_pos": 0, "user_id": 0}
+{"label": "prefill[linear] seq=2049 start=0 user=0", "pcc": 0.9999740621242996, "maxabs": 0.04347431659698486, "rel_rms": 0.007202476263046265, "seq_len": 2049, "start_pos": 0, "user_id": 0}
+{"label": "prefill[full] seq=2049 start=0 user=0", "pcc": 0.9999924910816409, "maxabs": 0.043192386627197266, "rel_rms": 0.00392382126301527, "seq_len": 2049, "start_pos": 0, "user_id": 0}
+{"label": "prefill[linear] seq=3000 start=0 user=0", "pcc": 0.9999762285519695, "maxabs": 0.04750871658325195, "rel_rms": 0.0068952301517128944, "seq_len": 3000, "start_pos": 0, "user_id": 0}
+{"label": "prefill[full] seq=3000 start=0 user=0", "pcc": 0.9999930231714808, "maxabs": 0.05116903781890869, "rel_rms": 0.0037889836821705103, "seq_len": 3000, "start_pos": 0, "user_id": 0}
+{"label": "prefill[linear] seq=4096 start=0 user=0", "pcc": 0.9999737318973171, "maxabs": 0.04752922058105469, "rel_rms": 0.007248010952025652, "seq_len": 4096, "start_pos": 0, "user_id": 0}
+{"label": "prefill[full] seq=4096 start=0 user=0", "pcc": 0.9999934142837509, "maxabs": 0.04930543899536133, "rel_rms": 0.003685783129185438, "seq_len": 4096, "start_pos": 0, "user_id": 0}
+{"label": "prefill-cont[linear] start=0", "pcc": 0.9999826443064952, "maxabs": 0.036928415298461914, "rel_rms": 0.005895072594285011, "start_pos": 0}
+{"label": "prefill-cont[linear] start=512", "pcc": 0.9999811871597812, "maxabs": 0.039742469787597656, "rel_rms": 0.0061358194798231125, "start_pos": 512}
+{"label": "prefill-cont[full] start=0", "pcc": 0.9999902596082587, "maxabs": 0.03908109664916992, "rel_rms": 0.004445540253072977, "start_pos": 0}
+{"label": "prefill-cont[full] start=512", "pcc": 0.9999935117691032, "maxabs": 0.0320277214050293, "rel_rms": 0.003659466514363885, "start_pos": 512}
+{"label": "prefill-slot[linear] user=0", "pcc": 0.9999902649213478, "maxabs": 0.0440983772277832, "rel_rms": 0.0044338819570839405, "user_id": 0}
+{"label": "prefill-slot[linear] user=1", "pcc": 0.9999903459305628, "maxabs": 0.03720808029174805, "rel_rms": 0.00441208528354764, "user_id": 1}
+{"label": "prefill-slot[linear] user=2", "pcc": 0.9999903538487479, "maxabs": 0.03167009353637695, "rel_rms": 0.00441212160512805, "user_id": 2}
+{"label": "prefill-slot[linear] user=3", "pcc": 0.999990404439606, "maxabs": 0.03413534164428711, "rel_rms": 0.004402377177029848, "user_id": 3}
+{"label": "prefill-slot[linear] user=4", "pcc": 0.9999902436528452, "maxabs": 0.03183460235595703, "rel_rms": 0.0044380598701536655, "user_id": 4}
+{"label": "prefill-slot[linear] user=5", "pcc": 0.9999902179761999, "maxabs": 0.04434061050415039, "rel_rms": 0.004441183991730213, "user_id": 5}
+{"label": "prefill-slot[linear] user=6", "pcc": 0.9999901916246783, "maxabs": 0.042746543884277344, "rel_rms": 0.004449143540114164, "user_id": 6}
+{"label": "prefill-slot[linear] user=7", "pcc": 0.9999901238218191, "maxabs": 0.03311443328857422, "rel_rms": 0.004464179277420044, "user_id": 7}
+{"label": "prefill-slot[linear] user=8", "pcc": 0.9999903681089847, "maxabs": 0.030298233032226562, "rel_rms": 0.004409114830195904, "user_id": 8}
+{"label": "prefill-slot[linear] user=9", "pcc": 0.9999903085328739, "maxabs": 0.032346248626708984, "rel_rms": 0.0044231354258954525, "user_id": 9}
+{"label": "prefill-slot[linear] user=10", "pcc": 0.9999902611424077, "maxabs": 0.033026695251464844, "rel_rms": 0.004432523623108864, "user_id": 10}
+{"label": "prefill-slot[linear] user=11", "pcc": 0.9999902955162355, "maxabs": 0.03439188003540039, "rel_rms": 0.00442537572234869, "user_id": 11}
+{"label": "prefill-slot[linear] user=12", "pcc": 0.9999902798590418, "maxabs": 0.04136085510253906, "rel_rms": 0.00442938506603241, "user_id": 12}
+{"label": "prefill-slot[linear] user=13", "pcc": 0.9999902417822947, "maxabs": 0.0390162467956543, "rel_rms": 0.0044372244738042355, "user_id": 13}
+{"label": "prefill-slot[linear] user=14", "pcc": 0.9999901766806983, "maxabs": 0.029896974563598633, "rel_rms": 0.0044502196833491325, "user_id": 14}
+{"label": "prefill-slot[linear] user=15", "pcc": 0.9999902756296402, "maxabs": 0.03587627410888672, "rel_rms": 0.004428759682923555, "user_id": 15}
+{"label": "prefill-slot[linear] user=16", "pcc": 0.9999902056027916, "maxabs": 0.03263282775878906, "rel_rms": 0.004444796591997147, "user_id": 16}
+{"label": "prefill-slot[linear] user=17", "pcc": 0.9999902068247257, "maxabs": 0.03776216506958008, "rel_rms": 0.004444447346031666, "user_id": 17}
+{"label": "prefill-slot[linear] user=18", "pcc": 0.9999902664891416, "maxabs": 0.039797306060791016, "rel_rms": 0.004432497546076775, "user_id": 18}
+{"label": "prefill-slot[linear] user=19", "pcc": 0.9999901851946894, "maxabs": 0.043897151947021484, "rel_rms": 0.004450570791959763, "user_id": 19}
+{"label": "prefill-slot[linear] user=20", "pcc": 0.9999903973749363, "maxabs": 0.04697418212890625, "rel_rms": 0.004403207916766405, "user_id": 20}
+{"label": "prefill-slot[linear] user=21", "pcc": 0.9999902313544514, "maxabs": 0.03079533576965332, "rel_rms": 0.004439064301550388, "user_id": 21}
+{"label": "prefill-slot[linear] user=22", "pcc": 0.9999902506262456, "maxabs": 0.03304481506347656, "rel_rms": 0.00443686731159687, "user_id": 22}
+{"label": "prefill-slot[linear] user=23", "pcc": 0.9999901823886345, "maxabs": 0.034796714782714844, "rel_rms": 0.004451710265129805, "user_id": 23}
+{"label": "prefill-slot[linear] user=24", "pcc": 0.999990401108453, "maxabs": 0.032631874084472656, "rel_rms": 0.004401835147291422, "user_id": 24}
+{"label": "prefill-slot[linear] user=25", "pcc": 0.9999903631252806, "maxabs": 0.04069948196411133, "rel_rms": 0.004409500397741795, "user_id": 25}
+{"label": "prefill-slot[linear] user=26", "pcc": 0.999990071586383, "maxabs": 0.029133319854736328, "rel_rms": 0.00447522196918726, "user_id": 26}
+{"label": "prefill-slot[linear] user=27", "pcc": 0.9999903997170853, "maxabs": 0.0324254035949707, "rel_rms": 0.004402007441967726, "user_id": 27}
+{"label": "prefill-slot[linear] user=28", "pcc": 0.9999902105744108, "maxabs": 0.03957557678222656, "rel_rms": 0.00444479426369071, "user_id": 28}
+{"label": "prefill-slot[linear] user=29", "pcc": 0.9999901632119637, "maxabs": 0.03562116622924805, "rel_rms": 0.004454275127500296, "user_id": 29}
+{"label": "prefill-slot[linear] user=30", "pcc": 0.9999903041605637, "maxabs": 0.03592348098754883, "rel_rms": 0.004423161968588829, "user_id": 30}
+{"label": "prefill-slot[linear] user=31", "pcc": 0.9999902760489403, "maxabs": 0.03313493728637695, "rel_rms": 0.004429996944963932, "user_id": 31}
+{"label": "prefill-slot[full] user=0", "pcc": 0.9999910020997891, "maxabs": 0.04208230972290039, "rel_rms": 0.004277628846466541, "user_id": 0}
+{"label": "prefill-slot[full] user=1", "pcc": 0.9999911804910546, "maxabs": 0.03266024589538574, "rel_rms": 0.004232865758240223, "user_id": 1}
+{"label": "prefill-slot[full] user=2", "pcc": 0.9999909118154678, "maxabs": 0.036149024963378906, "rel_rms": 0.0042983959428966045, "user_id": 2}
+{"label": "prefill-slot[full] user=3", "pcc": 0.9999907782742862, "maxabs": 0.038599491119384766, "rel_rms": 0.004329129587858915, "user_id": 3}
+{"label": "prefill-slot[full] user=4", "pcc": 0.9999911669675213, "maxabs": 0.03050708770751953, "rel_rms": 0.004239309579133987, "user_id": 4}
+{"label": "prefill-slot[full] user=5", "pcc": 0.9999911907560719, "maxabs": 0.03151106834411621, "rel_rms": 0.004230629652738571, "user_id": 5}
+{"label": "prefill-slot[full] user=6", "pcc": 0.9999910569001766, "maxabs": 0.05092668533325195, "rel_rms": 0.004263596143573523, "user_id": 6}
+{"label": "prefill-slot[full] user=7", "pcc": 0.9999909966558429, "maxabs": 0.03564929962158203, "rel_rms": 0.004278181120753288, "user_id": 7}
+{"label": "prefill-slot[full] user=8", "pcc": 0.9999911155098054, "maxabs": 0.03855276107788086, "rel_rms": 0.004249996971338987, "user_id": 8}
+{"label": "prefill-slot[full] user=9", "pcc": 0.9999911143655971, "maxabs": 0.04090452194213867, "rel_rms": 0.004250633995980024, "user_id": 9}
+{"label": "prefill-slot[full] user=10", "pcc": 0.999990697846003, "maxabs": 0.03685903549194336, "rel_rms": 0.004346813075244427, "user_id": 10}
+{"label": "prefill-slot[full] user=11", "pcc": 0.9999911701814718, "maxabs": 0.04330873489379883, "rel_rms": 0.004235627595335245, "user_id": 11}
+{"label": "prefill-slot[full] user=12", "pcc": 0.999991009357501, "maxabs": 0.03702259063720703, "rel_rms": 0.004272794350981712, "user_id": 12}
+{"label": "prefill-slot[full] user=13", "pcc": 0.999991090172823, "maxabs": 0.034703731536865234, "rel_rms": 0.004255769774317741, "user_id": 13}
+{"label": "prefill-slot[full] user=14", "pcc": 0.9999910172406571, "maxabs": 0.04098176956176758, "rel_rms": 0.004271752666682005, "user_id": 14}
+{"label": "prefill-slot[full] user=15", "pcc": 0.9999910485598974, "maxabs": 0.03163003921508789, "rel_rms": 0.0042653996497392654, "user_id": 15}
+{"label": "prefill-slot[full] user=16", "pcc": 0.9999908498315009, "maxabs": 0.03603792190551758, "rel_rms": 0.004310925956815481, "user_id": 16}
+{"label": "prefill-slot[full] user=17", "pcc": 0.999991270027289, "maxabs": 0.03987312316894531, "rel_rms": 0.004211848136037588, "user_id": 17}
+{"label": "prefill-slot[full] user=18", "pcc": 0.9999911618296322, "maxabs": 0.038698673248291016, "rel_rms": 0.004238472785800695, "user_id": 18}
+{"label": "prefill-slot[full] user=19", "pcc": 0.9999910469551129, "maxabs": 0.03781461715698242, "rel_rms": 0.004265384282916784, "user_id": 19}
+{"label": "prefill-slot[full] user=20", "pcc": 0.9999910236120972, "maxabs": 0.04196023941040039, "rel_rms": 0.004271318670362234, "user_id": 20}
+{"label": "prefill-slot[full] user=21", "pcc": 0.9999909929125893, "maxabs": 0.029317617416381836, "rel_rms": 0.00427596177905798, "user_id": 21}
+{"label": "prefill-slot[full] user=22", "pcc": 0.9999911418005794, "maxabs": 0.033846139907836914, "rel_rms": 0.00424263346940279, "user_id": 22}
+{"label": "prefill-slot[full] user=23", "pcc": 0.9999911805251451, "maxabs": 0.03347134590148926, "rel_rms": 0.004237139131873846, "user_id": 23}
+{"label": "prefill-slot[full] user=24", "pcc": 0.9999910127565675, "maxabs": 0.043035030364990234, "rel_rms": 0.004271685611456633, "user_id": 24}
+{"label": "prefill-slot[full] user=25", "pcc": 0.9999910508600971, "maxabs": 0.038828372955322266, "rel_rms": 0.00426480732858181, "user_id": 25}
+{"label": "prefill-slot[full] user=26", "pcc": 0.9999912365008891, "maxabs": 0.03650808334350586, "rel_rms": 0.004220577422529459, "user_id": 26}
+{"label": "prefill-slot[full] user=27", "pcc": 0.9999911687563723, "maxabs": 0.04039573669433594, "rel_rms": 0.004235817585140467, "user_id": 27}
+{"label": "prefill-slot[full] user=28", "pcc": 0.9999913061205933, "maxabs": 0.03475046157836914, "rel_rms": 0.00420551560819149, "user_id": 28}
+{"label": "prefill-slot[full] user=29", "pcc": 0.9999907419680789, "maxabs": 0.041001319885253906, "rel_rms": 0.004335671663284302, "user_id": 29}
+{"label": "prefill-slot[full] user=30", "pcc": 0.9999910717471316, "maxabs": 0.03428840637207031, "rel_rms": 0.004260119050741196, "user_id": 30}
+{"label": "prefill-slot[full] user=31", "pcc": 0.9999909148368255, "maxabs": 0.0320277214050293, "rel_rms": 0.00429631769657135, "user_id": 31}
+{"label": "decode[linear] pos=256 batch=1", "pcc": 0.9999886241550757, "maxabs": 0.01959538459777832, "rel_rms": 0.004787641577422619, "pos": 256, "batch": 1}
+{"label": "decode[linear] pos=257 batch=1", "pcc": 0.9999885453560632, "maxabs": 0.024614810943603516, "rel_rms": 0.004793931730091572, "pos": 257, "batch": 1}
+{"label": "decode[linear] pos=258 batch=1", "pcc": 0.9999919068570112, "maxabs": 0.022608041763305664, "rel_rms": 0.004047342576086521, "pos": 258, "batch": 1}
+{"label": "decode[full] pos=256 batch=1", "pcc": 0.9999937169967887, "maxabs": 0.016921043395996094, "rel_rms": 0.0035983012057840824, "pos": 256, "batch": 1}
+{"label": "decode[full] pos=257 batch=1", "pcc": 0.99999449940949, "maxabs": 0.021381378173828125, "rel_rms": 0.0033701052889227867, "pos": 257, "batch": 1}
+{"label": "decode[full] pos=258 batch=1", "pcc": 0.9999946427170403, "maxabs": 0.019494295120239258, "rel_rms": 0.0033383253030478954, "pos": 258, "batch": 1}
+{"label": "decode[linear] pos=256 batch=8", "pcc": 0.9999887862440829, "maxabs": 0.025523662567138672, "rel_rms": 0.0047489251010119915, "pos": 256, "batch": 8}
+{"label": "decode[linear] pos=257 batch=8", "pcc": 0.999989720786543, "maxabs": 0.023460030555725098, "rel_rms": 0.004551037680357695, "pos": 257, "batch": 8}
+{"label": "decode[linear] pos=258 batch=8", "pcc": 0.9999885833133759, "maxabs": 0.02968287467956543, "rel_rms": 0.004786890931427479, "pos": 258, "batch": 8}
+{"label": "decode[full] pos=256 batch=8", "pcc": 0.9999930028176974, "maxabs": 0.022398948669433594, "rel_rms": 0.003789360634982586, "pos": 256, "batch": 8}
+{"label": "decode[full] pos=257 batch=8", "pcc": 0.9999929937994659, "maxabs": 0.0235595703125, "rel_rms": 0.003802821272984147, "pos": 257, "batch": 8}
+{"label": "decode[full] pos=258 batch=8", "pcc": 0.9999927863878417, "maxabs": 0.025116443634033203, "rel_rms": 0.0038469815626740456, "pos": 258, "batch": 8}
+{"label": "decode[linear] pos=256 batch=32", "pcc": 0.9999895181217126, "maxabs": 0.029524803161621094, "rel_rms": 0.0045943777076900005, "pos": 256, "batch": 32}
+{"label": "decode[linear] pos=257 batch=32", "pcc": 0.9999897006784421, "maxabs": 0.028097152709960938, "rel_rms": 0.004550784360617399, "pos": 257, "batch": 32}
+{"label": "decode[linear] pos=258 batch=32", "pcc": 0.9999895351680174, "maxabs": 0.02867722511291504, "rel_rms": 0.004586538765579462, "pos": 258, "batch": 32}
+{"label": "decode[full] pos=256 batch=32", "pcc": 0.999993574259665, "maxabs": 0.025265216827392578, "rel_rms": 0.0036425909493118525, "pos": 256, "batch": 32}
+{"label": "decode[full] pos=257 batch=32", "pcc": 0.9999933700225231, "maxabs": 0.03675413131713867, "rel_rms": 0.0036968460772186518, "pos": 257, "batch": 32}
+{"label": "decode[full] pos=258 batch=32", "pcc": 0.9999937049906085, "maxabs": 0.02576613426208496, "rel_rms": 0.003602877026423812, "pos": 258, "batch": 32}
+{"label": "decode[linear] pos=128 batch=1", "pcc": 0.9999894990140041, "maxabs": 0.022663354873657227, "rel_rms": 0.004591154400259256, "pos": 128, "batch": 1}
+{"label": "decode[linear] pos=129 batch=1", "pcc": 0.999990384983613, "maxabs": 0.02249002456665039, "rel_rms": 0.004440754186362028, "pos": 129, "batch": 1}
+{"label": "decode[linear] pos=130 batch=1", "pcc": 0.9999910939824447, "maxabs": 0.02250981330871582, "rel_rms": 0.004243067465722561, "pos": 130, "batch": 1}
+{"label": "decode[linear] pos=131 batch=1", "pcc": 0.9999914115070512, "maxabs": 0.022424936294555664, "rel_rms": 0.004160957410931587, "pos": 131, "batch": 1}
+{"label": "decode[linear] pos=132 batch=1", "pcc": 0.9999885460973739, "maxabs": 0.02353978157043457, "rel_rms": 0.004796880297362804, "pos": 132, "batch": 1}
+{"label": "decode[linear] pos=133 batch=1", "pcc": 0.9999906064492746, "maxabs": 0.022911787033081055, "rel_rms": 0.0043584369122982025, "pos": 133, "batch": 1}
+{"label": "decode[linear] pos=134 batch=1", "pcc": 0.9999910776196682, "maxabs": 0.018370628356933594, "rel_rms": 0.004253285005688667, "pos": 134, "batch": 1}
+{"label": "decode[linear] pos=135 batch=1", "pcc": 0.9999901560793822, "maxabs": 0.02204418182373047, "rel_rms": 0.0044829160906374454, "pos": 135, "batch": 1}
+{"label": "decode[linear] pos=136 batch=1", "pcc": 0.9999906795108077, "maxabs": 0.0201873779296875, "rel_rms": 0.004337767604738474, "pos": 136, "batch": 1}
+{"label": "decode[linear] pos=137 batch=1", "pcc": 0.9999910201075608, "maxabs": 0.02248072624206543, "rel_rms": 0.004266785457730293, "pos": 137, "batch": 1}
+{"label": "decode[linear] pos=138 batch=1", "pcc": 0.9999910897951267, "maxabs": 0.025295019149780273, "rel_rms": 0.0042367978021502495, "pos": 138, "batch": 1}
+{"label": "decode[linear] pos=139 batch=1", "pcc": 0.9999893645782648, "maxabs": 0.020546674728393555, "rel_rms": 0.004615161567926407, "pos": 139, "batch": 1}
+{"label": "decode[linear] pos=140 batch=1", "pcc": 0.9999901266735597, "maxabs": 0.019802093505859375, "rel_rms": 0.004471674095839262, "pos": 140, "batch": 1}
+{"label": "decode[linear] pos=141 batch=1", "pcc": 0.9999872547548493, "maxabs": 0.02137279510498047, "rel_rms": 0.005049817729741335, "pos": 141, "batch": 1}
+{"label": "decode[linear] pos=142 batch=1", "pcc": 0.9999914644917421, "maxabs": 0.018754005432128906, "rel_rms": 0.004184568300843239, "pos": 142, "batch": 1}
+{"label": "decode[linear] pos=143 batch=1", "pcc": 0.9999906375349358, "maxabs": 0.021112561225891113, "rel_rms": 0.004349140916019678, "pos": 143, "batch": 1}
+{"label": "decode[linear] pos=144 batch=1", "pcc": 0.9999896450955218, "maxabs": 0.024979591369628906, "rel_rms": 0.004582482390105724, "pos": 144, "batch": 1}
+{"label": "decode[linear] pos=145 batch=1", "pcc": 0.9999898019802371, "maxabs": 0.019379854202270508, "rel_rms": 0.004540303722023964, "pos": 145, "batch": 1}
+{"label": "decode[linear] pos=146 batch=1", "pcc": 0.9999902303043516, "maxabs": 0.024329662322998047, "rel_rms": 0.004434258211404085, "pos": 146, "batch": 1}
+{"label": "decode[linear] pos=147 batch=1", "pcc": 0.9999910006529089, "maxabs": 0.02204585075378418, "rel_rms": 0.004277376923710108, "pos": 147, "batch": 1}
+{"label": "decode[linear] pos=148 batch=1", "pcc": 0.9999883532446671, "maxabs": 0.02172374725341797, "rel_rms": 0.004851141013205051, "pos": 148, "batch": 1}
+{"label": "decode[linear] pos=149 batch=1", "pcc": 0.9999908334472916, "maxabs": 0.01818394660949707, "rel_rms": 0.004289866425096989, "pos": 149, "batch": 1}
+{"label": "decode[linear] pos=150 batch=1", "pcc": 0.9999890970677529, "maxabs": 0.020134687423706055, "rel_rms": 0.004684015642851591, "pos": 150, "batch": 1}
+{"label": "decode[linear] pos=151 batch=1", "pcc": 0.9999908597313305, "maxabs": 0.02378082275390625, "rel_rms": 0.0043066563084721565, "pos": 151, "batch": 1}
+{"label": "decode[linear] pos=152 batch=1", "pcc": 0.9999894997041975, "maxabs": 0.023741960525512695, "rel_rms": 0.00458477484062314, "pos": 152, "batch": 1}
+{"label": "decode[linear] pos=153 batch=1", "pcc": 0.9999898983696346, "maxabs": 0.02511119842529297, "rel_rms": 0.0045153978280723095, "pos": 153, "batch": 1}
+{"label": "decode[linear] pos=154 batch=1", "pcc": 0.9999896944783226, "maxabs": 0.021733760833740234, "rel_rms": 0.004559523891657591, "pos": 154, "batch": 1}
+{"label": "decode[linear] pos=155 batch=1", "pcc": 0.9999909867953666, "maxabs": 0.020995140075683594, "rel_rms": 0.004265601746737957, "pos": 155, "batch": 1}
+{"label": "decode[linear] pos=156 batch=1", "pcc": 0.9999895723856724, "maxabs": 0.025262117385864258, "rel_rms": 0.004589186515659094, "pos": 156, "batch": 1}
+{"label": "decode[linear] pos=157 batch=1", "pcc": 0.9999892154374758, "maxabs": 0.019260168075561523, "rel_rms": 0.004666656721383333, "pos": 157, "batch": 1}
+{"label": "decode[linear] pos=158 batch=1", "pcc": 0.9999891834203501, "maxabs": 0.023363828659057617, "rel_rms": 0.004652659874409437, "pos": 158, "batch": 1}
+{"label": "decode[linear] pos=159 batch=1", "pcc": 0.9999877031863375, "maxabs": 0.02264261245727539, "rel_rms": 0.004965975880622864, "pos": 159, "batch": 1}
+{"label": "decode[linear] pos=160 batch=1", "pcc": 0.999990237944902, "maxabs": 0.023380279541015625, "rel_rms": 0.004423750098794699, "pos": 160, "batch": 1}
+{"label": "decode[linear] pos=161 batch=1", "pcc": 0.9999901769152789, "maxabs": 0.018785953521728516, "rel_rms": 0.004437788389623165, "pos": 161, "batch": 1}
+{"label": "decode[linear] pos=162 batch=1", "pcc": 0.9999869035790409, "maxabs": 0.019865989685058594, "rel_rms": 0.005128276068717241, "pos": 162, "batch": 1}
+{"label": "decode[linear] pos=163 batch=1", "pcc": 0.9999907133573936, "maxabs": 0.021619796752929688, "rel_rms": 0.0043527549132704735, "pos": 163, "batch": 1}
+{"label": "decode[linear] pos=164 batch=1", "pcc": 0.9999909373341809, "maxabs": 0.020735979080200195, "rel_rms": 0.004257610067725182, "pos": 164, "batch": 1}
+{"label": "decode[linear] pos=165 batch=1", "pcc": 0.9999915458430245, "maxabs": 0.017152070999145508, "rel_rms": 0.0041417451575398445, "pos": 165, "batch": 1}
+{"label": "decode[linear] pos=166 batch=1", "pcc": 0.9999895128102594, "maxabs": 0.023270130157470703, "rel_rms": 0.004592647310346365, "pos": 166, "batch": 1}
+{"label": "decode[linear] pos=167 batch=1", "pcc": 0.9999908092675373, "maxabs": 0.01904773712158203, "rel_rms": 0.0043408507481217384, "pos": 167, "batch": 1}
+{"label": "decode[linear] pos=168 batch=1", "pcc": 0.9999896295789779, "maxabs": 0.025087594985961914, "rel_rms": 0.004568477161228657, "pos": 168, "batch": 1}
+{"label": "decode[linear] pos=169 batch=1", "pcc": 0.9999901636859277, "maxabs": 0.021209239959716797, "rel_rms": 0.00446486659348011, "pos": 169, "batch": 1}
+{"label": "decode[linear] pos=170 batch=1", "pcc": 0.999990658041424, "maxabs": 0.02078390121459961, "rel_rms": 0.004355831537395716, "pos": 170, "batch": 1}
+{"label": "decode[linear] pos=171 batch=1", "pcc": 0.999989790264716, "maxabs": 0.022272109985351562, "rel_rms": 0.004545125178992748, "pos": 171, "batch": 1}
+{"label": "decode[linear] pos=172 batch=1", "pcc": 0.9999911533062467, "maxabs": 0.027680635452270508, "rel_rms": 0.004219414666295052, "pos": 172, "batch": 1}
+{"label": "decode[linear] pos=173 batch=1", "pcc": 0.9999883331775251, "maxabs": 0.023672819137573242, "rel_rms": 0.004837688524276018, "pos": 173, "batch": 1}
+{"label": "decode[linear] pos=174 batch=1", "pcc": 0.9999910349547299, "maxabs": 0.019399523735046387, "rel_rms": 0.004260838497430086, "pos": 174, "batch": 1}
+{"label": "decode[linear] pos=175 batch=1", "pcc": 0.9999895881384598, "maxabs": 0.02289438247680664, "rel_rms": 0.004568913485854864, "pos": 175, "batch": 1}
+{"label": "decode[linear] pos=176 batch=1", "pcc": 0.9999912177576624, "maxabs": 0.020678997039794922, "rel_rms": 0.004211972467601299, "pos": 176, "batch": 1}
+{"label": "decode[linear] pos=177 batch=1", "pcc": 0.999990201845224, "maxabs": 0.021219849586486816, "rel_rms": 0.004446928855031729, "pos": 177, "batch": 1}
+{"label": "decode[linear] pos=178 batch=1", "pcc": 0.9999905361390262, "maxabs": 0.01638317108154297, "rel_rms": 0.004384877625852823, "pos": 178, "batch": 1}
+{"label": "decode[linear] pos=179 batch=1", "pcc": 0.9999903719599275, "maxabs": 0.022876977920532227, "rel_rms": 0.004415006376802921, "pos": 179, "batch": 1}
+{"label": "decode[linear] pos=180 batch=1", "pcc": 0.9999898665983131, "maxabs": 0.019612550735473633, "rel_rms": 0.004507374484091997, "pos": 180, "batch": 1}
+{"label": "decode[linear] pos=181 batch=1", "pcc": 0.9999900775093344, "maxabs": 0.021210432052612305, "rel_rms": 0.004466269630938768, "pos": 181, "batch": 1}
+{"label": "decode[linear] pos=182 batch=1", "pcc": 0.999990599385384, "maxabs": 0.030414581298828125, "rel_rms": 0.004355661105364561, "pos": 182, "batch": 1}
+{"label": "decode[linear] pos=183 batch=1", "pcc": 0.9999915995463481, "maxabs": 0.022916555404663086, "rel_rms": 0.004120462574064732, "pos": 183, "batch": 1}
+{"label": "decode[linear] pos=184 batch=1", "pcc": 0.9999899387742568, "maxabs": 0.021395206451416016, "rel_rms": 0.004511229693889618, "pos": 184, "batch": 1}
+{"label": "decode[linear] pos=185 batch=1", "pcc": 0.9999900544108619, "maxabs": 0.019537687301635742, "rel_rms": 0.004484312608838081, "pos": 185, "batch": 1}
+{"label": "decode[linear] pos=186 batch=1", "pcc": 0.999990874425001, "maxabs": 0.02153611183166504, "rel_rms": 0.004298153333365917, "pos": 186, "batch": 1}
+{"label": "decode[linear] pos=187 batch=1", "pcc": 0.9999894714618106, "maxabs": 0.018369436264038086, "rel_rms": 0.004608420189470053, "pos": 187, "batch": 1}
+{"label": "decode[linear] pos=188 batch=1", "pcc": 0.9999916714485252, "maxabs": 0.022251605987548828, "rel_rms": 0.004099234472960234, "pos": 188, "batch": 1}
+{"label": "decode[linear] pos=189 batch=1", "pcc": 0.9999889254728538, "maxabs": 0.020498275756835938, "rel_rms": 0.004719333723187447, "pos": 189, "batch": 1}
+{"label": "decode[linear] pos=190 batch=1", "pcc": 0.9999908198468885, "maxabs": 0.021461963653564453, "rel_rms": 0.0042929258197546005, "pos": 190, "batch": 1}
+{"label": "decode[linear] pos=191 batch=1", "pcc": 0.9999884802789027, "maxabs": 0.020702123641967773, "rel_rms": 0.004828508011996746, "pos": 191, "batch": 1}
+{"label": "decode[full] pos=128 batch=1", "pcc": 0.9999934867364811, "maxabs": 0.022246360778808594, "rel_rms": 0.003661251626908779, "pos": 128, "batch": 1}
+{"label": "decode[full] pos=129 batch=1", "pcc": 0.9999927145721502, "maxabs": 0.02360677719116211, "rel_rms": 0.003878250252455473, "pos": 129, "batch": 1}
+{"label": "decode[full] pos=130 batch=1", "pcc": 0.9999918620994949, "maxabs": 0.022869586944580078, "rel_rms": 0.00407008733600378, "pos": 130, "batch": 1}
+{"label": "decode[full] pos=131 batch=1", "pcc": 0.9999923162006616, "maxabs": 0.020029306411743164, "rel_rms": 0.0039451224729418755, "pos": 131, "batch": 1}
+{"label": "decode[full] pos=132 batch=1", "pcc": 0.999993768541112, "maxabs": 0.02401876449584961, "rel_rms": 0.003614111104980111, "pos": 132, "batch": 1}
+{"label": "decode[full] pos=133 batch=1", "pcc": 0.9999897261147302, "maxabs": 0.02318572998046875, "rel_rms": 0.004570928402245045, "pos": 133, "batch": 1}
+{"label": "decode[full] pos=134 batch=1", "pcc": 0.9999930235074597, "maxabs": 0.019219398498535156, "rel_rms": 0.0037811859510838985, "pos": 134, "batch": 1}
+{"label": "decode[full] pos=135 batch=1", "pcc": 0.9999925738582741, "maxabs": 0.02209186553955078, "rel_rms": 0.003891169559210539, "pos": 135, "batch": 1}
+{"label": "decode[full] pos=136 batch=1", "pcc": 0.9999934264810336, "maxabs": 0.019749879837036133, "rel_rms": 0.0036880115512758493, "pos": 136, "batch": 1}
+{"label": "decode[full] pos=137 batch=1", "pcc": 0.9999922212889127, "maxabs": 0.02378082275390625, "rel_rms": 0.003970679361373186, "pos": 137, "batch": 1}
+{"label": "decode[full] pos=138 batch=1", "pcc": 0.9999929499981284, "maxabs": 0.022127151489257812, "rel_rms": 0.003792544361203909, "pos": 138, "batch": 1}
+{"label": "decode[full] pos=139 batch=1", "pcc": 0.9999937487597133, "maxabs": 0.02116680145263672, "rel_rms": 0.003573226509615779, "pos": 139, "batch": 1}
+{"label": "decode[full] pos=140 batch=1", "pcc": 0.9999937799324308, "maxabs": 0.01781463623046875, "rel_rms": 0.0035950203891843557, "pos": 140, "batch": 1}
+{"label": "decode[full] pos=141 batch=1", "pcc": 0.9999935286685337, "maxabs": 0.021607160568237305, "rel_rms": 0.0036392249166965485, "pos": 141, "batch": 1}
+{"label": "decode[full] pos=142 batch=1", "pcc": 0.9999890281522988, "maxabs": 0.022426366806030273, "rel_rms": 0.00471584964543581, "pos": 142, "batch": 1}
+{"label": "decode[full] pos=143 batch=1", "pcc": 0.9999931561360158, "maxabs": 0.021369218826293945, "rel_rms": 0.0037313206121325493, "pos": 143, "batch": 1}
+{"label": "decode[full] pos=144 batch=1", "pcc": 0.9999935004109609, "maxabs": 0.018001079559326172, "rel_rms": 0.003651013830676675, "pos": 144, "batch": 1}
+{"label": "decode[full] pos=145 batch=1", "pcc": 0.9999929129205155, "maxabs": 0.017867326736450195, "rel_rms": 0.0038041796069592237, "pos": 145, "batch": 1}
+{"label": "decode[full] pos=146 batch=1", "pcc": 0.9999929301265676, "maxabs": 0.02366781234741211, "rel_rms": 0.003803674364462495, "pos": 146, "batch": 1}
+{"label": "decode[full] pos=147 batch=1", "pcc": 0.9999934936815614, "maxabs": 0.018790721893310547, "rel_rms": 0.003657424356788397, "pos": 147, "batch": 1}
+{"label": "decode[full] pos=148 batch=1", "pcc": 0.9999930252784172, "maxabs": 0.017639875411987305, "rel_rms": 0.0037639429792761803, "pos": 148, "batch": 1}
+{"label": "decode[full] pos=149 batch=1", "pcc": 0.999994383604168, "maxabs": 0.019541263580322266, "rel_rms": 0.0033785561099648476, "pos": 149, "batch": 1}
+{"label": "decode[full] pos=150 batch=1", "pcc": 0.9999932735385447, "maxabs": 0.019347190856933594, "rel_rms": 0.0037166038528084755, "pos": 150, "batch": 1}
+{"label": "decode[full] pos=151 batch=1", "pcc": 0.9999937701254248, "maxabs": 0.019046306610107422, "rel_rms": 0.0035582981072366238, "pos": 151, "batch": 1}
+{"label": "decode[full] pos=152 batch=1", "pcc": 0.999993038397658, "maxabs": 0.019121170043945312, "rel_rms": 0.003776073455810547, "pos": 152, "batch": 1}
+{"label": "decode[full] pos=153 batch=1", "pcc": 0.9999920668846876, "maxabs": 0.021121978759765625, "rel_rms": 0.004027890507131815, "pos": 153, "batch": 1}
+{"label": "decode[full] pos=154 batch=1", "pcc": 0.9999928119781478, "maxabs": 0.02413630485534668, "rel_rms": 0.003843358950689435, "pos": 154, "batch": 1}
+{"label": "decode[full] pos=155 batch=1", "pcc": 0.9999933071620848, "maxabs": 0.017966032028198242, "rel_rms": 0.0037282328121364117, "pos": 155, "batch": 1}
+{"label": "decode[full] pos=156 batch=1", "pcc": 0.9999922735202942, "maxabs": 0.019408464431762695, "rel_rms": 0.003970667719841003, "pos": 156, "batch": 1}
+{"label": "decode[full] pos=157 batch=1", "pcc": 0.9999939764600491, "maxabs": 0.016372203826904297, "rel_rms": 0.003523450344800949, "pos": 157, "batch": 1}
+{"label": "decode[full] pos=158 batch=1", "pcc": 0.9999934115200159, "maxabs": 0.01957988739013672, "rel_rms": 0.0036587172653526068, "pos": 158, "batch": 1}
+{"label": "decode[full] pos=159 batch=1", "pcc": 0.9999935662512458, "maxabs": 0.027159690856933594, "rel_rms": 0.003632914274930954, "pos": 159, "batch": 1}
+{"label": "decode[full] pos=160 batch=1", "pcc": 0.9999933254265451, "maxabs": 0.0227353572845459, "rel_rms": 0.0037290710024535656, "pos": 160, "batch": 1}
+{"label": "decode[full] pos=161 batch=1", "pcc": 0.9999875424402714, "maxabs": 0.02284407615661621, "rel_rms": 0.005038439761847258, "pos": 161, "batch": 1}
+{"label": "decode[full] pos=162 batch=1", "pcc": 0.9999931414436144, "maxabs": 0.019689083099365234, "rel_rms": 0.0037675946950912476, "pos": 162, "batch": 1}
+{"label": "decode[full] pos=163 batch=1", "pcc": 0.9999932419617622, "maxabs": 0.022567033767700195, "rel_rms": 0.0037147668190300465, "pos": 163, "batch": 1}
+{"label": "decode[full] pos=164 batch=1", "pcc": 0.9999931892659406, "maxabs": 0.02204728126525879, "rel_rms": 0.0037123083602637053, "pos": 164, "batch": 1}
+{"label": "decode[full] pos=165 batch=1", "pcc": 0.9999937896382582, "maxabs": 0.01972222328186035, "rel_rms": 0.003548060078173876, "pos": 165, "batch": 1}
+{"label": "decode[full] pos=166 batch=1", "pcc": 0.9999933943401679, "maxabs": 0.020410537719726562, "rel_rms": 0.003710839431732893, "pos": 166, "batch": 1}
+{"label": "decode[full] pos=167 batch=1", "pcc": 0.999993459713329, "maxabs": 0.022116661071777344, "rel_rms": 0.0036817986983805895, "pos": 167, "batch": 1}
+{"label": "decode[full] pos=168 batch=1", "pcc": 0.9999933718970643, "maxabs": 0.024128437042236328, "rel_rms": 0.003668287070468068, "pos": 168, "batch": 1}
+{"label": "decode[full] pos=169 batch=1", "pcc": 0.9999936982051099, "maxabs": 0.022771596908569336, "rel_rms": 0.00359553680755198, "pos": 169, "batch": 1}
+{"label": "decode[full] pos=170 batch=1", "pcc": 0.9999933196463626, "maxabs": 0.018642663955688477, "rel_rms": 0.003696608357131481, "pos": 170, "batch": 1}
+{"label": "decode[full] pos=171 batch=1", "pcc": 0.9999930138839764, "maxabs": 0.01838064193725586, "rel_rms": 0.003810964059084654, "pos": 171, "batch": 1}
+{"label": "decode[full] pos=172 batch=1", "pcc": 0.9999930098733129, "maxabs": 0.018483638763427734, "rel_rms": 0.0037882281467318535, "pos": 172, "batch": 1}
+{"label": "decode[full] pos=173 batch=1", "pcc": 0.9999907137825399, "maxabs": 0.023244380950927734, "rel_rms": 0.004354092292487621, "pos": 173, "batch": 1}
+{"label": "decode[full] pos=174 batch=1", "pcc": 0.9999937346469517, "maxabs": 0.02141094207763672, "rel_rms": 0.0035970257595181465, "pos": 174, "batch": 1}
+{"label": "decode[full] pos=175 batch=1", "pcc": 0.999991801649992, "maxabs": 0.030111312866210938, "rel_rms": 0.0040753986686468124, "pos": 175, "batch": 1}
+{"label": "decode[full] pos=176 batch=1", "pcc": 0.9999927865340594, "maxabs": 0.021238327026367188, "rel_rms": 0.0038471100851893425, "pos": 176, "batch": 1}
+{"label": "decode[full] pos=177 batch=1", "pcc": 0.9999943817272511, "maxabs": 0.02006697654724121, "rel_rms": 0.0034070380497723818, "pos": 177, "batch": 1}
+{"label": "decode[full] pos=178 batch=1", "pcc": 0.9999931677302407, "maxabs": 0.018555641174316406, "rel_rms": 0.003718371968716383, "pos": 178, "batch": 1}
+{"label": "decode[full] pos=179 batch=1", "pcc": 0.999992709132279, "maxabs": 0.02404022216796875, "rel_rms": 0.003897001501172781, "pos": 179, "batch": 1}
+{"label": "decode[full] pos=180 batch=1", "pcc": 0.9999939587176746, "maxabs": 0.0174105167388916, "rel_rms": 0.0034965311642736197, "pos": 180, "batch": 1}
+{"label": "decode[full] pos=181 batch=1", "pcc": 0.9999926221462426, "maxabs": 0.01636958122253418, "rel_rms": 0.003872431581839919, "pos": 181, "batch": 1}
+{"label": "decode[full] pos=182 batch=1", "pcc": 0.9999925219106709, "maxabs": 0.021228313446044922, "rel_rms": 0.0039161513559520245, "pos": 182, "batch": 1}
+{"label": "decode[full] pos=183 batch=1", "pcc": 0.9999931862715475, "maxabs": 0.023058176040649414, "rel_rms": 0.003733566729351878, "pos": 183, "batch": 1}
+{"label": "decode[full] pos=184 batch=1", "pcc": 0.9999940890444372, "maxabs": 0.017457008361816406, "rel_rms": 0.0034792001824826, "pos": 184, "batch": 1}
+{"label": "decode[full] pos=185 batch=1", "pcc": 0.9999927155609706, "maxabs": 0.021717309951782227, "rel_rms": 0.0038802113849669695, "pos": 185, "batch": 1}
+{"label": "decode[full] pos=186 batch=1", "pcc": 0.9999937695506694, "maxabs": 0.021620988845825195, "rel_rms": 0.0035923433024436235, "pos": 186, "batch": 1}
+{"label": "decode[full] pos=187 batch=1", "pcc": 0.9999915873218674, "maxabs": 0.03532123565673828, "rel_rms": 0.004128716420382261, "pos": 187, "batch": 1}
+{"label": "decode[full] pos=188 batch=1", "pcc": 0.9999933067062734, "maxabs": 0.01893901824951172, "rel_rms": 0.0037573860026896, "pos": 188, "batch": 1}
+{"label": "decode[full] pos=189 batch=1", "pcc": 0.9999927570533825, "maxabs": 0.022909164428710938, "rel_rms": 0.003862291108816862, "pos": 189, "batch": 1}
+{"label": "decode[full] pos=190 batch=1", "pcc": 0.9999938405897931, "maxabs": 0.018616437911987305, "rel_rms": 0.003537053009495139, "pos": 190, "batch": 1}
+{"label": "decode[full] pos=191 batch=1", "pcc": 0.9999928756853828, "maxabs": 0.019062042236328125, "rel_rms": 0.003808022243902087, "pos": 191, "batch": 1}
+{"label": "decode[linear] pos=65 batch=1", "pcc": 0.9999899889374861, "maxabs": 0.023380517959594727, "rel_rms": 0.004487795755267143, "pos": 65, "batch": 1}
+{"label": "decode[linear] pos=66 batch=1", "pcc": 0.9999927197198069, "maxabs": 0.02095651626586914, "rel_rms": 0.003826428670436144, "pos": 66, "batch": 1}
+{"label": "decode[full] pos=65 batch=1", "pcc": 0.9999919042589861, "maxabs": 0.019458293914794922, "rel_rms": 0.004047221038490534, "pos": 65, "batch": 1}
+{"label": "decode[full] pos=66 batch=1", "pcc": 0.9999922649971522, "maxabs": 0.024421215057373047, "rel_rms": 0.003969473298639059, "pos": 66, "batch": 1}
+{"label": "decode[linear] pos=129 batch=1", "pcc": 0.9999856878240261, "maxabs": 0.021909713745117188, "rel_rms": 0.0053589604794979095, "pos": 129, "batch": 1}
+{"label": "decode[linear] pos=130 batch=1", "pcc": 0.9999900855035168, "maxabs": 0.02104330062866211, "rel_rms": 0.004472029861062765, "pos": 130, "batch": 1}
+{"label": "decode[full] pos=129 batch=1", "pcc": 0.9999920263061323, "maxabs": 0.024868249893188477, "rel_rms": 0.004012808669358492, "pos": 129, "batch": 1}
+{"label": "decode[full] pos=130 batch=1", "pcc": 0.9999869623380757, "maxabs": 0.023894548416137695, "rel_rms": 0.005137739237397909, "pos": 130, "batch": 1}
+{"label": "decode[linear] pos=320 batch=1", "pcc": 0.9999891113574354, "maxabs": 0.017213821411132812, "rel_rms": 0.00468008778989315, "pos": 320, "batch": 1}
+{"label": "decode[linear] pos=321 batch=1", "pcc": 0.9999877283351104, "maxabs": 0.02368021011352539, "rel_rms": 0.004961109720170498, "pos": 321, "batch": 1}
+{"label": "decode[full] pos=320 batch=1", "pcc": 0.9999939307677312, "maxabs": 0.015819072723388672, "rel_rms": 0.0035293514374643564, "pos": 320, "batch": 1}
+{"label": "decode[full] pos=321 batch=1", "pcc": 0.9999948000906458, "maxabs": 0.02116537094116211, "rel_rms": 0.0032956183422356844, "pos": 321, "batch": 1}
+{"label": "decode[linear] pos=1000 batch=1", "pcc": 0.9999862367180478, "maxabs": 0.023022174835205078, "rel_rms": 0.005250950343906879, "pos": 1000, "batch": 1}
+{"label": "decode[linear] pos=1001 batch=1", "pcc": 0.9999881923129904, "maxabs": 0.02343463897705078, "rel_rms": 0.004879816435277462, "pos": 1001, "batch": 1}
+{"label": "decode[full] pos=1000 batch=1", "pcc": 0.9999945066400465, "maxabs": 0.023235797882080078, "rel_rms": 0.003379157977178693, "pos": 1000, "batch": 1}
+{"label": "decode[full] pos=1001 batch=1", "pcc": 0.9999954304474777, "maxabs": 0.020515918731689453, "rel_rms": 0.003068981459364295, "pos": 1001, "batch": 1}
+{"label": "decode-ragged user=0 pos=128", "pcc": 0.999992996351566, "maxabs": 0.0214385986328125, "rel_rms": 0.0037871836684644222}
+{"label": "decode-ragged user=1 pos=256", "pcc": 0.9999936486197218, "maxabs": 0.017784833908081055, "rel_rms": 0.0036064281594008207}
+{"label": "decode-ragged user=2 pos=384", "pcc": 0.9999941797674798, "maxabs": 0.023614883422851562, "rel_rms": 0.0034926775842905045}
+{"label": "decode-ragged user=3 pos=640", "pcc": 0.9999947908418639, "maxabs": 0.023869037628173828, "rel_rms": 0.0032910325098782778}
+{"label": "decode-active-slot user=0", "pcc": 0.9999927365068892, "maxabs": 0.017357349395751953, "rel_rms": 0.003890924621373415}
+{"label": "decode-active-slot user=2", "pcc": 0.9999928922957556, "maxabs": 0.021465063095092773, "rel_rms": 0.003806730965152383}
+{"label": "paged-kv keys", "pcc": 0.9999834640296369, "maxabs": 0.07382392883300781, "rel_rms": 0.005758633837103844}
+{"label": "paged-kv values", "pcc": 0.999987258875504, "maxabs": 0.024494171142578125, "rel_rms": 0.007817909121513367}
+{"label": "linear conv_state", "pcc": 0.9999870619451352, "maxabs": 0.026322364807128906, "rel_rms": 0.007781242020428181}
+{"label": "linear recurrent_state", "pcc": 0.9999449554886852, "maxabs": 0.0011434052139520645, "rel_rms": 0.01191785279661417}
+{"label": "decode-seeded-state", "pcc": 0.9999720344745742, "maxabs": 0.03385007381439209, "rel_rms": 0.00757239805534482}
+{"label": "traced-decode[linear] pos=256 batch=8", "pcc": 0.9999895496485854, "maxabs": 0.025272130966186523, "rel_rms": 0.004591795615851879}
+{"label": "traced-decode[linear] pos=257 batch=8", "pcc": 0.9999891194053129, "maxabs": 0.027921438217163086, "rel_rms": 0.004683281760662794}
+{"label": "traced-decode[full] pos=256 batch=8", "pcc": 0.9999935972332211, "maxabs": 0.023062705993652344, "rel_rms": 0.0036507912445813417}
+{"label": "traced-decode[full] pos=257 batch=8", "pcc": 0.9999937285310204, "maxabs": 0.0240478515625, "rel_rms": 0.0035955074708908796}

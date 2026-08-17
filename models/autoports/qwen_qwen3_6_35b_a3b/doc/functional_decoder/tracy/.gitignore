@@ -1,0 +1,4 @@
+# Raw Tracy ops CSVs above this repo's 500 KB committed-file limit; see README.md in this
+# directory for how to regenerate them. Everything tt-perf-report derives from them is committed.
+linear_decode/decode_ops.csv.gz
+full_decode/decode_ops.csv.gz

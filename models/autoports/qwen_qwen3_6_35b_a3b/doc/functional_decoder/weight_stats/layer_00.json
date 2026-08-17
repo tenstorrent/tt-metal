@@ -1,0 +1,220 @@
+{
+  "hf_model_id": "Qwen/Qwen3.6-35B-A3B",
+  "layer_idx": 0,
+  "tensors": {
+    "input_layernorm.weight": {
+      "shape": [
+        2048
+      ],
+      "dtype": "float32",
+      "mean": 0.03111056424677372,
+      "std": 0.04899001494050026,
+      "min": -0.080078125,
+      "max": 0.330078125,
+      "numel": 2048
+    },
+    "linear_attn.A_log": {
+      "shape": [
+        32
+      ],
+      "dtype": "float32",
+      "mean": -1.78857421875,
+      "std": 2.879836320877075,
+      "min": -3.984375,
+      "max": 4.28125,
+      "numel": 32
+    },
+    "linear_attn.conv1d.weight": {
+      "shape": [
+        8192,
+        1,
+        4
+      ],
+      "dtype": "float32",
+      "mean": -0.00018313703185413033,
+      "std": 0.033497683703899384,
+      "min": -0.40625,
+      "max": 0.388671875,
+      "numel": 32768
+    },
+    "linear_attn.dt_bias": {
+      "shape": [
+        32
+      ],
+      "dtype": "float32",
+      "mean": -0.6859588623046875,
+      "std": 5.1799492835998535,
+      "min": -5.28125,
+      "max": 15.5625,
+      "numel": 32
+    },
+    "linear_attn.in_proj_a.weight": {
+      "shape": [
+        32,
+        2048
+      ],
+      "dtype": "float32",
+      "mean": 0.00015549067757092416,
+      "std": 0.02214866876602173,
+      "min": -0.1318359375,
+      "max": 0.1181640625,
+      "numel": 65536
+    },
+    "linear_attn.in_proj_b.weight": {
+      "shape": [
+        32,
+        2048
+      ],
+      "dtype": "float32",
+      "mean": -0.00011336299940012395,
+      "std": 0.010841616429388523,
+      "min": -0.07861328125,
+      "max": 0.0751953125,
+      "numel": 65536
+    },
+    "linear_attn.in_proj_qkv.weight": {
+      "shape": [
+        8192,
+        2048
+      ],
+      "dtype": "float32",
+      "mean": 6.252443654375384e-06,
+      "std": 0.015205434523522854,
+      "min": -0.267578125,
+      "max": 0.384765625,
+      "numel": 16777216
+    },
+    "linear_attn.in_proj_z.weight": {
+      "shape": [
+        4096,
+        2048
+      ],
+      "dtype": "float32",
+      "mean": -2.188211328757461e-05,
+      "std": 0.01685725711286068,
+      "min": -0.287109375,
+      "max": 0.177734375,
+      "numel": 8388608
+    },
+    "linear_attn.norm.weight": {
+      "shape": [
+        128
+      ],
+      "dtype": "float32",
+      "mean": 0.8841552734375,
+      "std": 0.05314869061112404,
+      "min": 0.5234375,
+      "max": 0.95703125,
+      "numel": 128
+    },
+    "linear_attn.out_proj.weight": {
+      "shape": [
+        2048,
+        4096
+      ],
+      "dtype": "float32",
+      "mean": -3.400362857064465e-06,
+      "std": 0.015313641168177128,
+      "min": -0.427734375,
+      "max": 0.337890625,
+      "numel": 8388608
+    },
+    "mlp.experts.down_proj": {
+      "shape": [
+        256,
+        2048,
+        512
+      ],
+      "dtype": "float32",
+      "mean": 3.8341110553119506e-07,
+      "std": 0.00750607019290328,
+      "min": -0.17578125,
+      "max": 0.1923828125,
+      "numel": 268435456
+    },
+    "mlp.experts.gate_up_proj": {
+      "shape": [
+        256,
+        1024,
+        2048
+      ],
+      "dtype": "float32",
+      "mean": -9.989851150749018e-07,
+      "std": 0.006783876568078995,
+      "min": -0.1455078125,
+      "max": 0.1279296875,
+      "numel": 536870912
+    },
+    "mlp.gate.weight": {
+      "shape": [
+        256,
+        2048
+      ],
+      "dtype": "float32",
+      "mean": -0.00010677721002139151,
+      "std": 0.023365553468465805,
+      "min": -0.275390625,
+      "max": 0.296875,
+      "numel": 524288
+    },
+    "mlp.shared_expert.down_proj.weight": {
+      "shape": [
+        2048,
+        512
+      ],
+      "dtype": "float32",
+      "mean": -4.110693680559052e-06,
+      "std": 0.010790481232106686,
+      "min": -0.27734375,
+      "max": 0.3125,
+      "numel": 1048576
+    },
+    "mlp.shared_expert.gate_proj.weight": {
+      "shape": [
+        512,
+        2048
+      ],
+      "dtype": "float32",
+      "mean": -3.147034294670448e-05,
+      "std": 0.01228112168610096,
+      "min": -0.2041015625,
+      "max": 0.189453125,
+      "numel": 1048576
+    },
+    "mlp.shared_expert.up_proj.weight": {
+      "shape": [
+        512,
+        2048
+      ],
+      "dtype": "float32",
+      "mean": -1.0152365575777367e-05,
+      "std": 0.010647103190422058,
+      "min": -0.1357421875,
+      "max": 0.09716796875,
+      "numel": 1048576
+    },
+    "mlp.shared_expert_gate.weight": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "float32",
+      "mean": 2.2881562472321093e-05,
+      "std": 0.00614991644397378,
+      "min": -0.047119140625,
+      "max": 0.051025390625,
+      "numel": 2048
+    },
+    "post_attention_layernorm.weight": {
+      "shape": [
+        2048
+      ],
+      "dtype": "float32",
+      "mean": -0.10491395741701126,
+      "std": 0.15734702348709106,
+      "min": -0.8125,
+      "max": 0.474609375,
+      "numel": 2048
+    }
+  }
+}

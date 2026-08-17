@@ -1,0 +1,184 @@
+{
+  "hf_model_id": "Qwen/Qwen3.6-35B-A3B",
+  "layer_idx": 3,
+  "tensors": {
+    "input_layernorm.weight": {
+      "shape": [
+        2048
+      ],
+      "dtype": "float32",
+      "mean": -0.07978172600269318,
+      "std": 0.12160459160804749,
+      "min": -0.298828125,
+      "max": 0.66015625,
+      "numel": 2048
+    },
+    "mlp.experts.down_proj": {
+      "shape": [
+        256,
+        2048,
+        512
+      ],
+      "dtype": "float32",
+      "mean": -9.655101393946097e-07,
+      "std": 0.010158455930650234,
+      "min": -0.51953125,
+      "max": 0.294921875,
+      "numel": 268435456
+    },
+    "mlp.experts.gate_up_proj": {
+      "shape": [
+        256,
+        1024,
+        2048
+      ],
+      "dtype": "float32",
+      "mean": -1.9219110072299372e-06,
+      "std": 0.010012333281338215,
+      "min": -0.216796875,
+      "max": 0.216796875,
+      "numel": 536870912
+    },
+    "mlp.gate.weight": {
+      "shape": [
+        256,
+        2048
+      ],
+      "dtype": "float32",
+      "mean": 0.00022732687648385763,
+      "std": 0.02404581569135189,
+      "min": -0.345703125,
+      "max": 0.302734375,
+      "numel": 524288
+    },
+    "mlp.shared_expert.down_proj.weight": {
+      "shape": [
+        2048,
+        512
+      ],
+      "dtype": "float32",
+      "mean": -1.3796836356050335e-05,
+      "std": 0.01082582026720047,
+      "min": -0.333984375,
+      "max": 0.419921875,
+      "numel": 1048576
+    },
+    "mlp.shared_expert.gate_proj.weight": {
+      "shape": [
+        512,
+        2048
+      ],
+      "dtype": "float32",
+      "mean": 1.3633387425215915e-05,
+      "std": 0.010524730198085308,
+      "min": -0.16015625,
+      "max": 0.1982421875,
+      "numel": 1048576
+    },
+    "mlp.shared_expert.up_proj.weight": {
+      "shape": [
+        512,
+        2048
+      ],
+      "dtype": "float32",
+      "mean": 3.6900019040331244e-06,
+      "std": 0.01098870113492012,
+      "min": -0.1162109375,
+      "max": 0.1337890625,
+      "numel": 1048576
+    },
+    "mlp.shared_expert_gate.weight": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "float32",
+      "mean": -9.329029126092792e-06,
+      "std": 0.006727834697812796,
+      "min": -0.0498046875,
+      "max": 0.056640625,
+      "numel": 2048
+    },
+    "post_attention_layernorm.weight": {
+      "shape": [
+        2048
+      ],
+      "dtype": "float32",
+      "mean": 0.1353570818901062,
+      "std": 0.14343823492527008,
+      "min": -0.9921875,
+      "max": 0.279296875,
+      "numel": 2048
+    },
+    "self_attn.k_norm.weight": {
+      "shape": [
+        256
+      ],
+      "dtype": "float32",
+      "mean": 0.314066082239151,
+      "std": 0.1625027358531952,
+      "min": -0.392578125,
+      "max": 1.1328125,
+      "numel": 256
+    },
+    "self_attn.k_proj.weight": {
+      "shape": [
+        512,
+        2048
+      ],
+      "dtype": "float32",
+      "mean": -1.4102683053351939e-05,
+      "std": 0.016660764813423157,
+      "min": -0.1884765625,
+      "max": 0.1494140625,
+      "numel": 1048576
+    },
+    "self_attn.o_proj.weight": {
+      "shape": [
+        2048,
+        4096
+      ],
+      "dtype": "float32",
+      "mean": -5.355575467547169e-06,
+      "std": 0.014321504160761833,
+      "min": -0.5703125,
+      "max": 0.5859375,
+      "numel": 8388608
+    },
+    "self_attn.q_norm.weight": {
+      "shape": [
+        256
+      ],
+      "dtype": "float32",
+      "mean": 0.3254852294921875,
+      "std": 0.09960927814245224,
+      "min": -0.31640625,
+      "max": 0.8828125,
+      "numel": 256
+    },
+    "self_attn.q_proj.weight": {
+      "shape": [
+        8192,
+        2048
+      ],
+      "dtype": "float32",
+      "mean": -6.525668140966445e-05,
+      "std": 0.016349494457244873,
+      "min": -0.341796875,
+      "max": 0.30859375,
+      "numel": 16777216
+    },
+    "self_attn.v_proj.weight": {
+      "shape": [
+        512,
+        2048
+      ],
+      "dtype": "float32",
+      "mean": -1.300511030422058e-05,
+      "std": 0.012547198683023453,
+      "min": -0.1484375,
+      "max": 0.15234375,
+      "numel": 1048576
+    }
+  }
+}

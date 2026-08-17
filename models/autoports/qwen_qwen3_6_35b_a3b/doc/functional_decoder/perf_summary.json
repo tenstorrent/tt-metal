@@ -1,0 +1,82 @@
+[
+  {
+    "kind": "linear",
+    "mode": "prefill",
+    "ops_in_window": 1746,
+    "iters": 2,
+    "device_kernel_ms_per_iter": 342.063,
+    "op_to_op_gap_ms_per_iter": 0.813,
+    "host_wall_ms_per_iter": 343.325,
+    "seq_len": 2048,
+    "batch": 1,
+    "current_pos": null,
+    "traced": false,
+    "top_ops_device_ms_per_iter": {
+      "SparseMatmulDeviceOperation active=?/4096 x 32 x 2048 x 1024": 147.47,
+      "SparseMatmulDeviceOperation active=?/4096 x 32 x 512 x 2048": 79.816,
+      "BinaryNgDeviceOperation": 25.32,
+      "UnaryDeviceOperation": 21.82,
+      "MatmulDeviceOperation b={1024} x 64 x 64 x 64": 19.178
+    }
+  },
+  {
+    "kind": "full",
+    "mode": "prefill",
+    "ops_in_window": 388,
+    "iters": 2,
+    "device_kernel_ms_per_iter": 281.56,
+    "op_to_op_gap_ms_per_iter": 0.133,
+    "host_wall_ms_per_iter": 282.051,
+    "seq_len": 2048,
+    "batch": 1,
+    "current_pos": null,
+    "traced": false,
+    "top_ops_device_ms_per_iter": {
+      "SparseMatmulDeviceOperation active=?/4096 x 32 x 2048 x 1024": 147.077,
+      "SparseMatmulDeviceOperation active=?/4096 x 32 x 512 x 2048": 79.623,
+      "UnaryDeviceOperation": 21.233,
+      "BinaryNgDeviceOperation": 16.092,
+      "FastReduceNCDeviceOperation": 6.378
+    }
+  },
+  {
+    "kind": "linear",
+    "mode": "decode",
+    "ops_in_window": 968,
+    "iters": 8,
+    "device_kernel_ms_per_iter": 57.99,
+    "op_to_op_gap_ms_per_iter": 0.089,
+    "host_wall_ms_per_iter": 58.11,
+    "seq_len": 1,
+    "batch": 32,
+    "current_pos": 4095,
+    "traced": true,
+    "top_ops_device_ms_per_iter": {
+      "UnaryDeviceOperation": 10.539,
+      "BinaryNgDeviceOperation": 9.507,
+      "SparseMatmulDeviceOperation active=?/8192 x 32 x 512 x 2048": 9.467,
+      "SparseMatmulDeviceOperation active=?/8192 x 32 x 2048 x 1024": 9.11,
+      "FillPadDeviceOperation": 5.744
+    }
+  },
+  {
+    "kind": "full",
+    "mode": "decode",
+    "ops_in_window": 880,
+    "iters": 8,
+    "device_kernel_ms_per_iter": 50.157,
+    "op_to_op_gap_ms_per_iter": 0.228,
+    "host_wall_ms_per_iter": 50.417,
+    "seq_len": 1,
+    "batch": 32,
+    "current_pos": 4095,
+    "traced": true,
+    "top_ops_device_ms_per_iter": {
+      "UnaryDeviceOperation": 10.445,
+      "SparseMatmulDeviceOperation active=?/8192 x 32 x 512 x 2048": 9.457,
+      "SparseMatmulDeviceOperation active=?/8192 x 32 x 2048 x 1024": 9.11,
+      "BinaryNgDeviceOperation": 7.889,
+      "FillPadDeviceOperation": 5.569
+    }
+  }
+]
