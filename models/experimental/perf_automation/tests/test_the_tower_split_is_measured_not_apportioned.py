@@ -38,6 +38,7 @@ root is the whole model and the share was already 1.0.
 """
 
 import json
+import struct
 import sys
 from pathlib import Path
 
@@ -280,3 +281,123 @@ def test_a_run_with_no_census_is_unchanged():
     """Every model that never produced a census keeps exactly the ceiling it had before."""
     mf = {"stage_roots": {"decode": "language_model"}}
     assert _share(mf) > 0.0
+
+
+# ------------------------------------------------- and it must answer in the CALLER's vocabulary
+#
+# THE FIRST VERSION MEASURED THE RIGHT THING AND WAS NEVER READ. Run 5, 2026-08-16: the census
+# recorded 19 subtrees of the built voxtral model --
+#
+#     _inner 93.8%  embed 46.9%  lm_layers 13.2%  lm_head 13.2%  enc_a 5.4%  enc_b 5.4%  ...
+#
+# -- and every consumer asks by CHECKPOINT SECTION, because that is what stage_roots establishes:
+# `language_model`, `audio_tower`. Not one name in common. `_stage_share` looked up `language_model`,
+# found nothing, and fell back to the disk ratio it was written to replace. The whole change was
+# inert on the run that was supposed to prove it.
+#
+# Translating names afterwards is not available. A tower is renamed, re-nested and wrapped on its way
+# into a TT model -- and worse, `encode` and `prefill` DO exist as device attributes while being 1 MB
+# state objects, so a name match would have priced the audio stage at a megabyte.
+#
+# An element count survives all of it: transposed, tile-padded, sharded, re-quantised, a tensor keeps
+# the numel the file recorded. That is already how checkpoint_numels tells a weight from a runtime
+# buffer, so the join reuses a property the module already trusts.
+
+
+def _write_ckpt(d, tensors):
+    """A minimal safetensors header: 8-byte little-endian length, then JSON. No tensor data."""
+    hdr = {n: {"dtype": "BF16", "shape": list(s), "data_offsets": [0, 0]} for n, s in tensors.items()}
+    raw = json.dumps(hdr).encode()
+    with open(Path(d) / "model.safetensors", "wb") as fh:
+        fh.write(struct.pack("<Q", len(raw)))
+        fh.write(raw)
+    return str(d)
+
+
+_VOXTRAL_SHAPED = {
+    "audio_tower.layers.0.w": (1000,),
+    "audio_tower.layers.1.w": (1001,),
+    "language_model.embed.w": (5000,),
+    "language_model.layers.0.w": (5001,),
+}
+
+
+def _built_under_other_names():
+    """The same four tensors as the TT model actually exposes them -- no name in common."""
+    return _M(_inner=_M(enc_a=_M(w=_T(1000)), enc_b=_M(w=_T(1001)), embed=_M(w=_T(5000)), lm_layers=_M(w=_T(5001))))
+
+
+def test_the_split_is_reported_by_checkpoint_section(tmp_path):
+    """THE FIX. The caller asks `language_model`; the built model has never heard the word."""
+    from agent.weight_census import census
+
+    c = census(_built_under_other_names(), checkpoint=_write_ckpt(tmp_path, _VOXTRAL_SHAPED))
+    assert c["sections"]["language_model"] == 20002  # (5000 + 5001) x 2.0
+    assert c["sections"]["audio_tower"] == 4002  # (1000 + 1001) x 2.0
+
+
+def test_the_attribute_view_is_kept_alongside_it():
+    """It is the only view when there is no checkpoint to match against, and it costs nothing."""
+    from agent.weight_census import census
+
+    c = census(_built_under_other_names())
+    assert c["sections"]["enc_a"] == 2000 and c["sections"]["lm_layers"] == 10002
+    assert "language_model" not in c["sections"], "a section was invented with no checkpoint to read"
+
+
+def test_a_size_used_by_two_towers_is_not_attributed(tmp_path):
+    """AMBIGUITY IS DROPPED, NOT GUESSED. Picking one would move bytes between towers silently, and
+    a share is exactly the thing nobody can check by eye."""
+    from agent.weight_census import census, checkpoint_section_numels
+
+    ckpt = _write_ckpt(tmp_path, {"audio_tower.a": (4096,), "language_model.b": (4096,)})
+    assert 4096 not in checkpoint_section_numels(ckpt)
+
+    c = census(_M(x=_M(w=_T(4096))), checkpoint=ckpt)
+    assert c["sections"].get("unmatched") == 8192
+    assert "language_model" not in c["sections"] and "audio_tower" not in c["sections"]
+
+
+def test_unmatched_bytes_are_reported_rather_than_dropped(tmp_path):
+    """A reader comparing a stage against the total has to be able to see what is unaccounted for.
+
+    Unmatched means AMBIGUOUS, not absent: a tensor the checkpoint never had is a runtime buffer and
+    is already excluded from the byte total, so it is not a tower with an unknown name."""
+    from agent.weight_census import census
+
+    ckpt = _write_ckpt(tmp_path, {"language_model.w": (5000,), "audio_tower.x": (77,), "language_model.y": (77,)})
+    c = census(_M(a=_M(w=_T(5000)), b=_M(w=_T(77))), checkpoint=ckpt)
+    assert c["sections"]["language_model"] == 10000
+    assert c["sections"]["unmatched"] == 154
+    assert c["sections"]["language_model"] + c["sections"]["unmatched"] == c["weight_bytes"]
+
+
+def test_a_checkpoint_section_wins_a_name_collision(tmp_path):
+    """Both vocabularies can say `layers`. Adding the two rules into one key yields a number that is
+    neither -- so they are accumulated apart and the checkpoint's answer is the one published."""
+    from agent.weight_census import census
+
+    ckpt = _write_ckpt(tmp_path, {"layers.w": (700,)})
+    c = census(_M(layers=_M(w=_T(700))), checkpoint=ckpt)
+    assert c["sections"]["layers"] == 1400, c["sections"]
+
+
+def test_a_tensor_the_checkpoint_never_had_is_not_a_tower(tmp_path):
+    """Runtime buffers are already excluded from the byte total; they must not appear as a section
+    either, or a stage's share would be measured against a denominator that includes scratch."""
+    from agent.weight_census import census
+
+    ckpt = _write_ckpt(tmp_path, {"language_model.w": (5000,)})
+    c = census(_M(w=_M(x=_T(5000)), kv=_M(cache=_T(999999))), checkpoint=ckpt)
+    assert c["weight_bytes"] == 10000, "a runtime buffer was counted as a weight"
+    assert c["sections"]["language_model"] == 10000
+    assert 999999 * 2 not in c["sections"].values()
+
+
+def test_an_unreadable_checkpoint_leaves_the_attribute_view_intact(tmp_path):
+    """The join is best-effort; losing it must cost the section names, not the census."""
+    from agent.weight_census import census
+
+    (tmp_path / "model.safetensors").write_bytes(b"not a safetensors file at all")
+    c = census(_M(tower=_M(w=_T(100))), checkpoint=str(tmp_path))
+    assert c["weight_bytes"] == 200 and c["sections"]["tower"] == 200

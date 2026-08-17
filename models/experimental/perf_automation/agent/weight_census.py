@@ -31,8 +31,21 @@ one stage's read set. That split used to be left to the caller, which had only t
 apportion it by -- disk proportions, measured at disk precision. The loader does not quantise every
 tower alike, so the ratio does not transfer, and the whole error lands on the stage's ceiling: on
 voxtral the language tower is 85.8% of the bf16 FILE, and nothing says it is 85.8% of the 1.72 GB
-actually resident. `sections` answers it from the same walk -- bytes credited to every attribute name
-on the path in, so a caller asks by the name the model itself declared, at whatever depth it sits.
+actually resident. `sections` answers it from the same walk, in TWO vocabularies:
+
+    by CHECKPOINT SECTION   language_model, audio_tower -- each resident tensor attributed to the
+                            section whose file recorded its element count. This is the one every
+                            consumer asks in, because it is what stage_roots establishes.
+    by ATTRIBUTE            _inner, enc_a, lm_layers -- where the walk FOUND it. The only view
+                            available when there is no checkpoint to match against.
+
+The first version had only the second, and was inert for it: 19 subtrees recorded on voxtral and not
+one name in common with the two the caller wanted, so the split was measured and never read. Names
+cannot bridge that -- a tower is renamed, re-nested and wrapped on its way into a TT model, and
+`encode`/`prefill` exist as device attributes while being 1 MB state objects, so a name match would
+price the audio stage at a megabyte. An element count survives transposition, tile-padding, sharding
+and re-quantisation, which is why the join is on numels, as checkpoint_numels already is.
+
 `scope` still records which subtree was walked.
 """
 
@@ -182,6 +195,76 @@ def _walkable(obj) -> bool:
 _FAILED_CHECKPOINT: list = []
 
 
+_AMBIGUOUS = "\x00ambiguous"
+
+
+def checkpoint_section_numels(model_id_or_dir) -> dict:
+    """{element count: the checkpoint section that tensor belongs to}. Empty when unreadable.
+
+    THE JOIN THE SPLIT WAS MISSING, AND WHY IT IS NUMELS. The census names each resident subtree by
+    the ATTRIBUTE it was reached through -- `enc_a`, `lm_layers`, `embed` -- because that is all the
+    built model tells it. Every consumer asks by CHECKPOINT SECTION -- `audio_tower`,
+    `language_model` -- because that is what stage_roots establishes and what the roofline divides
+    by. Measured 2026-08-16 on voxtral: 19 subtrees recorded, and not one name in common with the
+    two the caller wanted, so a correct measurement was written and never read.
+
+    Translating names afterwards cannot work: a tower is renamed, re-nested and wrapped on its way
+    into a TT model, and `encode`/`prefill` DO appear as device attributes while being 1 MB state
+    objects rather than towers -- so a name match would have priced the audio stage at a megabyte.
+
+    An element count survives all of it. The tensor is transposed, tile-padded, sharded and
+    re-quantised, and its numel is still the numel the file recorded -- the same property
+    checkpoint_numels already relies on to tell a weight from a runtime buffer.
+
+    AMBIGUITY IS DROPPED, NOT GUESSED. A count appearing in two sections cannot attribute a tensor,
+    and picking one would silently move bytes between towers. Those tensors land in "unmatched",
+    which the caller can see and weigh, rather than in whichever section came first in the file.
+    """
+    seen: dict = {}
+    for numel, section in _checkpoint_tensor_sections(model_id_or_dir):
+        prev = seen.get(numel)
+        if prev is None:
+            seen[numel] = section
+        elif prev != section:
+            seen[numel] = _AMBIGUOUS
+    return {n: s for n, s in seen.items() if s != _AMBIGUOUS}
+
+
+def _checkpoint_tensor_sections(model_id_or_dir):
+    """(numel, top-level section) for every tensor in the checkpoint. Silent on any failure.
+
+    The section is the first dotted component of the tensor's name, which is what declared_sections
+    and stage_roots both key on -- one definition of "which tower", not a second one that can drift.
+    """
+    try:
+        pats = [str(model_id_or_dir)]
+        if not str(model_id_or_dir).endswith(".safetensors"):
+            pats = [
+                str(Path(model_id_or_dir) / "*.safetensors"),
+                str(Path(model_id_or_dir) / "snapshots" / "*" / "*.safetensors"),
+            ]
+        for f in sorted({f for p in pats for f in glob.glob(p)}):
+            with open(f, "rb") as fh:
+                n = struct.unpack("<Q", fh.read(8))[0]
+                if n <= 0 or n > 200_000_000:
+                    continue
+                hdr = json.loads(fh.read(n))
+            for name, meta in hdr.items():
+                if name == "__metadata__" or not isinstance(meta, dict):
+                    continue
+                shape = meta.get("shape") or []
+                if not shape:
+                    continue
+                numel = 1
+                for d in shape:
+                    numel *= int(d)
+                if numel > 0 and "." in str(name):
+                    yield numel, str(name).split(".", 1)[0]
+    except Exception as exc:  # noqa: BLE001
+        _FAILED_CHECKPOINT.append("%s: %s" % (type(exc).__name__, str(exc)[:100]))
+        return
+
+
 def checkpoint_numels(model_id_or_dir) -> set:
     """Element counts of every tensor in the model's checkpoint. Empty when it cannot be read.
 
@@ -256,6 +339,16 @@ def census(root, scope: str = "model", max_nodes: int = 2_000_000, checkpoint=No
     # accumulator, staging copy. Only weights belong in the width the ceiling multiplies by a PARAM
     # count -- mixing the two is averaging apples and oranges then multiplying by the apples.
     ckpt = checkpoint_numels(checkpoint) if checkpoint else set()
+    # WHICH TOWER, in the vocabulary the caller asks in. The attribute names below say where a tensor
+    # was FOUND; this says which checkpoint section it CAME FROM, and only the second one can be
+    # looked up by a stage_roots entry. Both are recorded: the attribute view is the only one
+    # available when there is no checkpoint to match against.
+    _ckpt_sec = checkpoint_section_numels(checkpoint) if checkpoint else {}
+    # GUARDED ON THE CHECKPOINT, NOT ON THE MAP. `_ckpt_sec` is empty both when no checkpoint was
+    # read and when every size in it was ambiguous -- and those need opposite answers. Keying the
+    # attribution on the map skipped it entirely in the second case, so a model whose sizes all
+    # collide reported no unmatched bytes at all, which reads as "fully attributed".
+    _have_ckpt = bool(ckpt)
     seen: set = set()
     tensors: list = []
     scratch: list = []
@@ -269,6 +362,7 @@ def census(root, scope: str = "model", max_nodes: int = 2_000_000, checkpoint=No
     # A tuple of attribute names, not a full path string: only the names are ever matched against,
     # list indices carry no meaning, and a tuple of interned strings costs nothing to copy.
     sections: dict = {}
+    ckpt_sections: dict = {}
     queue = [(root, ())]
     nodes = 0
     while queue and nodes < max_nodes:
@@ -298,6 +392,16 @@ def census(root, scope: str = "model", max_nodes: int = 2_000_000, checkpoint=No
                     _b = int(n) * bytes_per_elem(name)
                     for seg in set(path[:-1]):
                         sections[seg] = sections.get(seg, 0.0) + _b
+                    if _have_ckpt:
+                        # KEPT APART, because the two vocabularies can collide -- a checkpoint
+                        # section and an attribute can both be called `layers`, and adding both
+                        # rules into one key would produce a number that is neither.
+                        #
+                        # "unmatched" is a real answer, not a gap to hide: it is the share of the
+                        # model whose tower could not be established, and a reader comparing a
+                        # stage's bytes against the total deserves to know how much is unaccounted.
+                        _sec = _ckpt_sec.get(int(n)) or "unmatched"
+                        ckpt_sections[_sec] = ckpt_sections.get(_sec, 0.0) + _b
                 else:
                     scratch.append(entry)
             else:
@@ -339,7 +443,15 @@ def census(root, scope: str = "model", max_nodes: int = 2_000_000, checkpoint=No
     return {
         "weight_tensors": tensors,
         "weight_bytes": int(round(total)),
-        "sections": {k: int(round(v)) for k, v in sections.items() if v > 0},
+        # CHECKPOINT SECTIONS WIN on a name collision: they are the vocabulary every consumer asks
+        # in, and an attribute that happens to share the name is the weaker claim.
+        "sections": {
+            k: int(round(v))
+            for k, v in {
+                **{a: b for a, b in sections.items() if b > 0},
+                **{a: b for a, b in ckpt_sections.items() if b > 0},
+            }.items()
+        },
         "scope": scope,
         "bytes_per_param": round(per_param, 6),
         "resident_elems": int(elems),
