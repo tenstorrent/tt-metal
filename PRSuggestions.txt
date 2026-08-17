@@ -110,9 +110,16 @@ single p150b. Seven things worth fixing. Points 5 and 6 are one line each.
           so it has to be measured rather than assumed
         - chunk attention above a measured length when the window is bounded, rather than building
           the whole score matrix and masking most of it away
+        - pad a varying input to a few sizes chosen for the model's own range, so that few kernel
+          sets get compiled. A ladder tuned for long context serving would have sent our longest
+          prompt from 357 to 1024, seven times the quadratic work
         - split a fused op into primitives once tracing is on
         - swap a hand rolled interior for a library primitive
         - try removing a config applied earlier
+    - Also worth building in: when a change removes a cost, re-open the levers that were rejected
+      because of that cost. Tracing was on our own rejected list, became the single biggest win on the
+      branch, and then reversed five earlier rejections whose reasoning rested on per op launch cost.
+      Keeping each rejection together with the reason for it makes that automatic rather than lucky.
     - Three things it cannot express: the host is never a valid destination, though moving one
       argmax there was among our largest wins; fewer ops is treated as always better, though once
       tracing removes launch cost the opposite can win; and correctness is checked at one sequence
