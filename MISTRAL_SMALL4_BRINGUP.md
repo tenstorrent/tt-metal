@@ -9,7 +9,7 @@ Bring up `mistralai/Mistral-Small-4-119B-2603` prefill by **reusing `ttMLA` and 
 `deepseek_v3_d_p`**, not by writing a new model. Mistral is in-family — DeepSeek-style MLA attention
 with identical weight naming, plus GPT-OSS-style MoE routing.
 
-Order (from Marko): chunked MLA → MoE → weight loading → transformer test = "something functional".
+Order (from the prefill framework owner): chunked MLA → MoE → weight loading → transformer test = "something functional".
 **Runner integration comes last** — no block test needs it.
 
 ## Environment
@@ -191,6 +191,52 @@ Each of these was checked against the code or the checkpoint.
 - **`embed_tokens` and `lm_head` are unquantized bf16** with no scale tensors — the only large
   matmul weights that are. Norms and the router gate are unquantized too; everything else is fp8.
 
+## Debugging numerics here — four things that cost real time
+
+These are generic to onboarding a model into this package, not specific to Mistral. Each is a
+CPU-only check that runs in about a minute, and each one, skipped, produced a number that looked
+exactly like a device bug and was not one.
+
+**1. A green PCC only means the device agrees with the reference you picked.**
+Two CPU references can both look reasonable and disagree with each other. Before spending galaxy
+time, forward both on identical weights and compare them to each other. Onboarding a model whose
+reference comes from current `transformers`, into a package whose other references are vendored
+copies, is exactly when they diverge — the vendored DeepSeek reference folds a YaRN `mscale**2` into
+the softmax scale, `Mistral4Attention` does not, and the gap was a 2.2058x multiplier on the
+attention logits with no crash to reveal it (references at 0.948; 0.99999 once reconciled).
+
+**2. Build rope tables in fp32, always.**
+`position * inv_freq` in bf16 loses its low bits, so phase error grows with position. A bf16 rotary
+holds to roughly 2k tokens and then falls off a cliff — measured at `qk_rope_head_dim = 64`: PCC
+0.99997 at seq 512, 0.99980 at 2048, **0.958 at 5120**. Monotonic degradation with sequence length is
+the signature. Two checks separate it from a real fault: compare the rope *tables* directly (they
+should be bit-identical, max abs diff 0.0), and re-run in fp32 (the absorbed and unabsorbed MLA
+formulations agree to 1.0000000 there).
+
+**3. A disk-cached reference is only as good as its key's field list.**
+`cpu_mla_reference` and the transformer reference cache both hash a chosen set of "math-affecting"
+config fields. A field you added that moves the reference, but did not add to the hash, does **not**
+fail loudly — it serves a stale ground truth, and the discrepancy appears to be in whatever you
+changed. This cost a 0.829 that read as a device regression. If you add a config field that changes
+reference output, add it to the hash in the same commit.
+
+**4. Beware checks that cannot fail.**
+Comparing rope tables at position 0 only shows all-ones on both sides, always. Compare full tables,
+and prefer PCC over `allclose` on a single row. Same class: `load_state_dict(..., strict=False)`
+silently leaves a missing weight at its random init — check `missing_keys` / `unexpected_keys` rather
+than assuming the load worked.
+
+**And two harness-level traps in this package specifically:**
+
+* Reference decoder layers differ by `transformers` generation. Bind by signature — use
+  `decoder_layer_kwargs` in `utils/transformer_helpers.py` rather than hand-writing the call. The
+  cache kwarg is `past_key_value` on the vendored layers and `past_key_values` on `transformers >= 5`
+  (wrong name lands silently in `**kwargs`, so no KV is captured), and `position_embeddings` is
+  required on `>= 5` (omitting it raises `cannot unpack non-iterable NoneType` from inside attention).
+* A comparison that reports `-1.0` did not measure anything — that is
+  `_compare_intermediate_pcc`'s value for "missing from TT intermediates" or a raised exception.
+  Treat it as no coverage, not as a bad score.
+
 ## Gotchas
 
 - **A mesh mismatch is a SKIP, not a failure.** Several block tests are parametrised for meshes
@@ -220,6 +266,7 @@ Each of these was checked against the code or the checkpoint.
   every other resident's lives under `/mnt/models/deepseek-prefill-cache/golden/`. Capturing one is
   wall-clock work that nothing else shortens.
 
-## Contacts
+## Who to ask
 
-MLA — Iva Potkonjak, Pavle Popovic · MoE — Danilo Djekic, Kosta Grujcic · runner — Jaksa Jovicic
+Per-area owners for MLA, MoE and the prefill runner are listed in the internal bring-up channel;
+ask there rather than in this file, so the routing stays current as people move around.
