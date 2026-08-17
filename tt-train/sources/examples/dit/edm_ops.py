@@ -31,14 +31,20 @@ CONV WEIGHT ROW_ORDER (must match reference_unet.py exactly):
     patches @ W_flat == conv2d(x, W_flat.view(3,3,Ci,Co).permute(3,2,0,1),
     padding=1). Weight-gradient rows land in the same order.
 
-MEMORY POLICY: conv backward recomputes im2col from the saved input rather
-than saving the 9x-wider patch tensor.
+MEMORY POLICY: conv backward needs the im2col patch tensor for dW. By
+default (EDM_SAVE_PATCHES=auto) it is saved from forward when forward
+already computed it (im2col mode) and recomputed in native-conv mode;
+"1" always saves (native fwd computes it just for backward), "0" always
+recomputes (lowest memory, Phase-1 behavior).
 """
 
 from __future__ import annotations
 
 import os
+import time
+from contextlib import contextmanager
 
+import numpy as np
 import ttnn
 from ttnn.operations import moreh as ttnn_moreh  # not attached to the ttnn namespace in all builds
 
@@ -57,6 +63,47 @@ import ttml
 # probe + parity gate that decides the question on hardware.
 NATIVE_CONV = os.environ.get("EDM_NATIVE_CONV", "0") == "1"
 
+# Conv backward memory/speed policy. "auto" saves the im2col patch tensor in
+# ctx when the forward already computed it (im2col fwd mode) and recomputes
+# it in native-fwd mode; "1" always saves (native fwd additionally computes
+# patches just for backward — trades DRAM for the 9-slice+concat recompute,
+# roughly 9x the activation per conv while the graph is alive); "0" always
+# recomputes (Phase-1 behavior).
+SAVE_PATCHES = os.environ.get("EDM_SAVE_PATCHES", "auto")
+
+# Coarse host-side wall-time buckets around device call groups (enqueue +
+# sync boundaries — good enough to RANK hot spots, not to measure kernels).
+# Enable with EDM_PROFILE_CONV=1 (or set edm_ops.PROFILE_CONV = True).
+PROFILE_CONV = os.environ.get("EDM_PROFILE_CONV", "0") == "1"
+PROF: dict = {}
+
+
+@contextmanager
+def _prof(bucket):
+    if not PROFILE_CONV:
+        yield
+        return
+    t0 = time.perf_counter()
+    try:
+        yield
+    finally:
+        PROF[bucket] = PROF.get(bucket, 0.0) + (time.perf_counter() - t0)
+        PROF[bucket + ".n"] = PROF.get(bucket + ".n", 0) + 1
+
+
+def prof_reset():
+    PROF.clear()
+
+
+def prof_report(divisor: float = 1.0, header: str = "") -> None:
+    """Print accumulated buckets (seconds/divisor as ms), largest first."""
+    rows = [(k, v) for k, v in PROF.items() if not k.endswith(".n")]
+    if header:
+        print(header, flush=True)
+    for k, v in sorted(rows, key=lambda kv: -kv[1]):
+        n = PROF.get(k + ".n", 0)
+        print(f"     conv-prof {k:<22s} {v / divisor * 1000:8.1f} ms/step  ({n} calls)", flush=True)
+
 
 def _rm(v):
     return ttnn.to_layout(v, ttnn.ROW_MAJOR_LAYOUT)
@@ -74,6 +121,34 @@ def _tokens_to_nhwc_rm(v, b, h, w, c):
 def _nhwc_rm_to_tokens(v, b, h, w, c):
     """ROW_MAJOR [B,H,W,C] -> TILE [B,1,HW,C]."""
     return _tile(ttnn.reshape(v, (b, 1, h * w, c)))
+
+
+def _reshape_rows(v, shape, hw):
+    """Merge/split the row dims between [B,1,HW,C] and [1,1,BHW,C].
+
+    When HW is tile-aligned (every UNet resolution: 1024/256/64) and the
+    tensor is TILE, tile rows don't straddle the merged boundary, so a direct
+    TILE reshape works (view / on-device repack) — no RM bounce. Otherwise
+    fall back to the ROW_MAJOR roundtrip.
+    """
+    if hw % 32 == 0 and v.layout == ttnn.TILE_LAYOUT:
+        return ttnn.reshape(v, shape)
+    return _tile(ttnn.reshape(_rm(v), shape))
+
+
+# Cached [1,1,9C,C] TILE matrices of 9 vertically-stacked identities: col2im's
+# sum over the 9 taps becomes ONE matmul (fp32 accumulation) instead of a
+# chain of 8 TILE adds with 9 tilize conversions. Keyed by C; ~1-5 MB each.
+_COL2IM_SUM: dict = {}
+
+
+def _col2im_sum_matrix(c):
+    t = _COL2IM_SUM.get(c)
+    if t is None:
+        s = np.tile(np.eye(c, dtype=np.float32), (9, 1)).reshape(1, 1, 9 * c, c)
+        t = ttml.autograd.Tensor.from_numpy(s).get_value()
+        _COL2IM_SUM[c] = t
+    return t
 
 
 def _im2col(v, b, h, w, c):
@@ -173,7 +248,7 @@ def _conv3x3_native_fwd(v, wv, b, h, w, c, cout):
     )
     if out.memory_config().is_sharded():
         out = ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG)
-    return _tile(ttnn.reshape(_rm(out), (b, 1, h * w, cout)))
+    return _reshape_rows(out, (b, 1, h * w, cout), h * w)
 
 
 class Conv3x3Im2col(ttml.autograd.Function):
@@ -182,9 +257,10 @@ class Conv3x3Im2col(ttml.autograd.Function):
     apply(x [B,1,HW,Cin], weight, bias [1,1,1,Cout], H, W) -> [B,1,HW,Cout].
     Forward: im2col + matmul composite, or native ttnn.conv2d when
     EDM_NATIVE_CONV=1 and Cin/Cout are tile-aligned (see NATIVE_CONV note).
-    Backward (always im2col composite): dW = im2col(x)^T @ dOut (im2col
-    recomputed), db = sum_BHW dOut, dX = col2im(dOut @ W^T) via 9 pad-shift
-    adds.
+    Backward (always composite): dW = im2col(x)^T @ dOut (patches saved or
+    recomputed per SAVE_PATCHES), db = sum_BHW dOut, dX = col2im(dOut @ W^T)
+    via 9 pad-shifted channel blocks summed by one stacked-identity matmul.
+    dX is skipped entirely for no-grad leaf inputs (conv_in on pixels).
     """
 
     @staticmethod
@@ -195,38 +271,62 @@ class Conv3x3Im2col(ttml.autograd.Function):
         cout = wv.shape[-1]
         ctx.save_for_backward(x, weight)
         ctx.dims = (b, h, w, c, cout)
-        if NATIVE_CONV and c % 32 == 0 and cout % 32 == 0:
-            out = _conv3x3_native_fwd(v, wv, b, h, w, c, cout)
-            return ttnn.add(out, bv)  # [B,1,HW,Cout] + [1,1,1,Cout]
-        cols = _im2col(v, b, h, w, c)  # [1,1,BHW,9C]
-        out = ttnn.matmul(cols, wv)  # [1,1,BHW,Cout]
-        out = ttnn.add(out, bv)
-        return _tile(ttnn.reshape(_rm(out), (b, 1, h * w, cout)))
+        ctx.cols = None
+        use_native = NATIVE_CONV and c % 32 == 0 and cout % 32 == 0
+        if use_native:
+            with _prof("fwd_native"):
+                out = _conv3x3_native_fwd(v, wv, b, h, w, c, cout)
+                out = ttnn.add(out, bv)  # [B,1,HW,Cout] + [1,1,1,Cout]
+            if SAVE_PATCHES == "1":  # precompute for backward (DRAM for speed)
+                with _prof("fwd_im2col"):
+                    ctx.cols = _im2col(v, b, h, w, c)
+            return out
+        with _prof("fwd_im2col"):
+            cols = _im2col(v, b, h, w, c)  # [1,1,BHW,9C]
+            out = ttnn.matmul(cols, wv)  # [1,1,BHW,Cout]
+            out = ttnn.add(out, bv)
+            out = _reshape_rows(out, (b, 1, h * w, cout), h * w)
+        if SAVE_PATCHES != "0":  # "auto"/"1": already computed, keep for bwd
+            ctx.cols = cols
+        return out
 
     @staticmethod
     def backward(ctx, grad_output):
         x, weight = ctx.saved_tensors
         b, h, w, c, cout = ctx.dims
         wv = weight.get_value()
-        g = _tile(ttnn.reshape(_rm(grad_output), (1, 1, b * h * w, cout)))
         # dW / db
-        cols = _im2col(x.get_value(), b, h, w, c)  # recompute (memory policy)
-        dw = ttnn.matmul(cols, g, transpose_a=True)  # [1,1,9C,Cout]
-        db = ttnn.sum(g, dim=2, keepdim=True)  # [1,1,1,Cout]
-        # dX: col2im of dOut @ W^T
-        dcols = ttnn.matmul(g, wv, transpose_b=True)  # [1,1,BHW,9C]
-        d = ttnn.reshape(_rm(dcols), (b, h, w, 9 * c))
-        acc = None
-        for kh in range(3):
-            for kw in range(3):
-                k = kh * 3 + kw
-                part = ttnn.slice(d, [0, 0, 0, k * c], [b, h, w, (k + 1) * c])
-                shifted = ttnn.pad(part, [(0, 0), (kh, 2 - kh), (kw, 2 - kw), (0, 0)], 0.0)
-                shifted = _tile(shifted)  # elementwise add on TILE
-                acc = shifted if acc is None else ttnn.add(acc, shifted)
-        dp = _rm(acc)  # [B,H+2,W+2,C]
-        dx = ttnn.slice(dp, [0, 1, 1, 0], [b, h + 1, w + 1, c])
-        dx = _nhwc_rm_to_tokens(dx, b, h, w, c)
+        cols = ctx.cols
+        if cols is None:
+            with _prof("bwd_im2col_recompute"):
+                cols = _im2col(x.get_value(), b, h, w, c)
+        with _prof("bwd_matmuls"):
+            g = _reshape_rows(grad_output, (1, 1, b * h * w, cout), h * w)
+            dw = ttnn.matmul(cols, g, transpose_a=True)  # [1,1,9C,Cout]
+            db = ttnn.sum(g, dim=2, keepdim=True)  # [1,1,1,Cout]
+        # dX: col2im of dOut @ W^T. Skipped when the input neither requires
+        # grad nor has upstream graph (e.g. conv_in fed leaf pixels).
+        if not x.get_requires_grad() and x.get_node() is None:
+            return None, dw, db
+        with _prof("bwd_col2im"):
+            dcols = ttnn.matmul(g, wv, transpose_b=True)  # [1,1,BHW,9C] TILE
+            d = ttnn.reshape(_rm(dcols), (b, h, w, 9 * c))
+            # Shift each tap's channel block onto the padded canvas, then sum
+            # all 9 blocks with ONE matmul against the cached stacked-identity
+            # matrix (fp32 accumulation) instead of 9 tilize + 8 add ops.
+            parts = []
+            for kh in range(3):
+                for kw in range(3):
+                    k = kh * 3 + kw
+                    part = ttnn.slice(d, [0, 0, 0, k * c], [b, h, w, (k + 1) * c])
+                    parts.append(ttnn.pad(part, [(0, 0), (kh, 2 - kh), (kw, 2 - kw), (0, 0)], 0.0))
+            p = ttnn.concat(parts, dim=-1)  # RM [B,H+2,W+2,9C]
+            rows = b * (h + 2) * (w + 2)
+            p = _tile(ttnn.reshape(p, (1, 1, rows, 9 * c)))
+            dsum = ttnn.matmul(p, _col2im_sum_matrix(c))  # [1,1,rows,C]
+            dp = ttnn.reshape(_rm(dsum), (b, h + 2, w + 2, c))
+            dx = ttnn.slice(dp, [0, 1, 1, 0], [b, h + 1, w + 1, c])
+            dx = _nhwc_rm_to_tokens(dx, b, h, w, c)
         return dx, dw, db
 
 

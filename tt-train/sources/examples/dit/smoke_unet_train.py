@@ -8,10 +8,17 @@
         [--steps 300] [--batch 32] [--probe] [--native-conv]
 
 --probe: 30 timed steps after warmup, prints img/s (use with --model cifar
-to size the full EDM run).
+to size the full EDM run), plus a phase breakdown on a fixed batch:
+fwd-only / fwd+bwd / full-step ms (each synced by a device read), with the
+bwd-only and optimizer-only components derived.
 --native-conv (or env EDM_NATIVE_CONV=1): conv FORWARD via native
 ttnn.conv2d consuming the flat weight in place (backward stays im2col).
 Run the probe once with and once without to compare paths.
+
+Env knobs (see edm_ops.py): EDM_PROFILE_CONV=1 prints cumulative per-bucket
+conv timings (fwd_native/fwd_im2col/bwd_im2col_recompute/bwd_col2im/
+bwd_matmuls) per probe phase; EDM_SAVE_PATCHES=auto|1|0 sets the conv
+backward memory/speed policy.
 """
 
 from __future__ import annotations
@@ -31,6 +38,69 @@ from train_dit_cifar import load_cifar10
 
 def from_np(a):
     return ttml.autograd.Tensor.from_numpy(np.ascontiguousarray(a, dtype=np.float32))
+
+
+def from_np_input(a):
+    """Model inputs: no grad needed — lets conv_in skip its dX col2im."""
+    t = from_np(a)
+    t.set_requires_grad(False)
+    return t
+
+
+def read_scalar(t):
+    """Device-sync by pulling one value to host (NATIVE precision: no caching)."""
+    return float(t.to_numpy(None, None, ttml.autograd.PreferredPrecision.NATIVE).astype(np.float32).reshape(-1)[0])
+
+
+def phase_breakdown(model, opt, ctx, batch_np):
+    """Time fwd / fwd+bwd / full-step on one fixed batch; print components."""
+    import edm_ops
+
+    net_in, feats, onehot, target = batch_np
+    x_np, t_np = nchw_to_nhwc_tokens(net_in), nchw_to_nhwc_tokens(target)
+
+    def fwd():
+        pred = model(from_np_input(x_np), from_np_input(feats), from_np_input(onehot))
+        return ttml.ops.loss.mse_loss(pred, from_np_input(t_np))
+
+    def phase_fwd():
+        loss = fwd()
+        read_scalar(loss)  # sync
+        ctx.reset_graph()
+
+    def phase_fwd_bwd():
+        opt.zero_grad()
+        loss = fwd()
+        loss.backward(False)
+        read_scalar(model.out_conv.weight.tensor.get_grad_tensor())  # sync on a grad
+        ctx.reset_graph()
+
+    def phase_full():
+        opt.zero_grad()
+        loss = fwd()
+        loss.backward(False)
+        opt.step()
+        read_scalar(loss)  # sync
+        ctx.reset_graph()
+
+    results = {}
+    for name, fn in [("fwd", phase_fwd), ("fwd+bwd", phase_fwd_bwd), ("full-step", phase_full)]:
+        fn()
+        fn()  # warmup x2 (program caches)
+        edm_ops.prof_reset()
+        n = 10
+        t0 = time.time()
+        for _ in range(n):
+            fn()
+        results[name] = (time.time() - t0) / n * 1000
+        print(f"PHASE {name:<9s} {results[name]:8.1f} ms", flush=True)
+        if edm_ops.PROFILE_CONV:
+            edm_ops.prof_report(divisor=n)
+    print(
+        f"PHASE derived: bwd-only {results['fwd+bwd'] - results['fwd']:.1f} ms, "
+        f"opt-only {results['full-step'] - results['fwd+bwd']:.1f} ms",
+        flush=True,
+    )
 
 
 def main():
@@ -64,6 +134,14 @@ def main():
     emb_feat_dim = model.emb_dim  # host timestep_features dim == emb_dim
 
     model.train()
+
+    if args.probe:  # phase breakdown on one fixed batch, before the img/s loop
+        idx = rng.integers(0, images.shape[0], size=args.batch)
+        batch_np = make_edm_batch_image(
+            images[idx], labels[idx], emb_feat_dim, rng, cfg_drop_prob=0.0, null_class=10
+        )
+        phase_breakdown(model, opt, ctx, batch_np)
+
     t0 = time.time()
     warmup = 5 if args.probe else 0
     n_steps = (warmup + 30) if args.probe else args.steps
@@ -73,8 +151,8 @@ def main():
             images[idx], labels[idx], emb_feat_dim, rng, cfg_drop_prob=0.0, null_class=10, hflip=True
         )
         opt.zero_grad()
-        pred = model(from_np(nchw_to_nhwc_tokens(net_in)), from_np(feats), from_np(onehot))
-        loss = ttml.ops.loss.mse_loss(pred, from_np(nchw_to_nhwc_tokens(target)))
+        pred = model(from_np_input(nchw_to_nhwc_tokens(net_in)), from_np_input(feats), from_np_input(onehot))
+        loss = ttml.ops.loss.mse_loss(pred, from_np_input(nchw_to_nhwc_tokens(target)))
         loss.backward(False)
         opt.step()
         loss_val = float(loss.to_numpy(None, None, ttml.autograd.PreferredPrecision.NATIVE).astype(np.float32).reshape(-1)[0])

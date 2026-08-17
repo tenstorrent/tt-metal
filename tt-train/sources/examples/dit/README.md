@@ -77,6 +77,13 @@ ROW_ORDER at every shape). Backward stays the im2col composite. Gated by the
 `native conv2d probe`/`parity` checks in `test_edm_primitives.py`; only
 convs with `Cin % 32 == 0` take the native path (`conv_in` keeps im2col).
 
+Perf knobs: `EDM_SAVE_PATCHES=auto|1|0` (save the im2col patch tensor from
+forward for backward's dW vs recompute — memory/speed trade),
+`EDM_PROFILE_CONV=1` (per-bucket conv timings in the
+`smoke_unet_train.py --probe` phase breakdown). Backward's col2im sums its
+9 shifted tap blocks with one cached stacked-identity matmul, and dX is
+skipped for the pixel-fed `conv_in` when inputs are created without grad.
+
 ## Design notes (framework workarounds, kept intentionally visible)
 
 - **Patchify lives on the host.** There is no autograd permute/transpose, only
