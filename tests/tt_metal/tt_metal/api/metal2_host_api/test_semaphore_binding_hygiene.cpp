@@ -435,8 +435,9 @@ TEST(Metal2SemaphoreHygiene, NoRawSemaphoreAccessInMetal2Kernels) {
     // whole op tree; is_kernel_source narrows per file.
     const std::vector<std::filesystem::path> scan_roots = {
         root / "tests",
-        // Adjacent-literal split: CI budgets whole-word 'ttnn' mentions under tests/tt_metal
-        // (layering lint); this is a scan PATH, not a layering violation, so keep it off budget.
+        // Adjacent-literal split: the CI layering lint caps whole-word mentions of this
+        // namespace under tests/tt_metal; a scan PATH is not a layering violation, so keep it
+        // (and this comment) off that budget.
         root / "tt" "nn",
     };
 
