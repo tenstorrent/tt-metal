@@ -340,17 +340,41 @@ Result conv2d_DRAM(
 static ttnn::Tensor fix_conv_output_logical_nhw(
     const ttnn::Tensor& out, uint32_t batch_size, uint32_t output_height, uint32_t output_width) {
     const auto& logical = out.logical_shape();
+    const uint32_t true_nhw = batch_size * output_height * output_width;
+    // [#48552 STEM-DEBUG] Report whether this relabel fires for the caller's geometry.
+    log_warning(
+        tt::LogOp,
+        "[#48552 STEM-DEBUG] fix_conv_output_logical_nhw: in logical={}, padded={}, rank={}; "
+        "N={} oh={} ow={} -> true_nhw={} (logical[2]={})",
+        logical,
+        out.padded_shape(),
+        logical.rank(),
+        batch_size,
+        output_height,
+        output_width,
+        true_nhw,
+        logical.rank() == 4 ? static_cast<uint32_t>(logical[2]) : 0u);
     // Only the flattened conv-as-matmul output form [1, 1, NHW, C] is over-counted here; leave anything else
     // (already-unflattened, rank != 4, or batch/H folded differently) untouched to avoid mislabeling a real
     // spatial dim as NHW.
     if (logical.rank() != 4 || logical[0] != 1 || logical[1] != 1) {
+        log_warning(tt::LogOp, "[#48552 STEM-DEBUG] fix_conv_output_logical_nhw: BAILED (not [1,1,NHW,C] form)");
         return out;
     }
-    const uint32_t true_nhw = batch_size * output_height * output_width;
     if (static_cast<uint32_t>(logical[2]) == true_nhw || static_cast<uint32_t>(logical[2]) < true_nhw) {
         // Already correct, or somehow smaller (never over-count) -- do not touch.
+        log_warning(
+            tt::LogOp,
+            "[#48552 STEM-DEBUG] fix_conv_output_logical_nhw: NO-OP (logical[2]={} <= true_nhw={})",
+            static_cast<uint32_t>(logical[2]),
+            true_nhw);
         return out;
     }
+    log_warning(
+        tt::LogOp,
+        "[#48552 STEM-DEBUG] fix_conv_output_logical_nhw: RELABEL logical[2] {}->{}",
+        static_cast<uint32_t>(logical[2]),
+        true_nhw);
     ttnn::SmallVector<uint32_t> new_logical{
         static_cast<uint32_t>(logical[0]),
         static_cast<uint32_t>(logical[1]),
