@@ -331,3 +331,59 @@ One provenance defect worth fixing in the spec: the report's metadata prints
 verbatim from the spec JSON and describe the *old* Stage 11 run — not the code that
 actually produced this report. A runtime spec that hard-codes commit fields will
 mislabel every future run.
+
+### How much of this is "as CI would run it" — and two rows CI cannot grade yet
+
+The benchmark PASS above was graded against the **autoport spec's own** tiers
+(functional 1000 ms/10 TPS, complete 500/20, target 300/26), which the Stage 11
+author wrote. The release branch declares something different for this model in
+`reference_config/benchmarking/benchmark_targets/model_performance_reference.json`:
+
+```
+gemma-4-26B-A4B-it / p300x2, isl 128 / osl 128 / concurrency 1:
+  targets: { theoretical: { ttft_ms: 76.0, tput_user: 43.0, tput: 43.0 } }
+  _comment: "ASSUMED, NOT VALIDATED … inferred from gemma-3-27b-it t3k …
+             LIKELY PESSIMISTIC BY A LARGE MARGIN"
+```
+
+Re-running the benchmark workflow with exactly those targets substituted produces:
+
+> Note: No perf targets are configured for these sweep points, so these rows are
+> reported for information only and are not graded.
+
+because the grader only recognises `functional` / `complete` / `target`
+(`workflows/acceptance_criteria.py:14`, `llm_module/target_checks.py:30`), and
+`theoretical` is consumed by a different reader (`workflows/utils_report.py:45`).
+No `dev/llm.yaml` entry carries tiered targets at all, and the gemma-4-26B entry
+carries no perf block. So as drafted:
+
+- the **accuracy** row grades `NA` — no published or GPU reference;
+- the **benchmark** row is **ungraded** — only a `theoretical` tier exists;
+- the **agentic** rows need Docker.
+
+That is consistent with the commit calling itself an "initial draft". For the
+autoport specifically, the measured 261.2 ms TTFT / 26.7 TPS would *miss* the
+assumed 76 ms / 43 TPS by 3.4× and 0.62× if those numbers were ever graded — worth
+knowing, but the comment in that file predicts real MoE throughput should exceed
+43, so the assumption itself is the thing to validate first.
+
+Finally, `workflows/model_spec.py` in the same commit shows the release flow can
+carry an autoport directly: `muse_glimmer_impl` uses
+`code_path="models/autoports/meta_models_muse_glimmer_30b"`. Giving this port its
+own `ImplSpec` would let TTI launch and grade it the way CI will, instead of
+requiring the hand-launched external-server path used here.
+
+### Not tested here, explicitly
+
+1. **CI-nightly limits.** Everything above used `smoke-test` (3 documents for
+   `r1_gpqa_diamond`). The graded limit is 0.2 (~40 documents) — roughly 3–4 hours
+   at ~5 min/document in thinking mode.
+2. **TTI-launched server**, for the reason above.
+3. **`terminal_bench_2` / `swe_bench_verified`** — no Docker in this container.
+4. **`spec_tests`** — no mapping for this model; the step is a no-op.
+5. **The catalog path** (`impl: tt_transformers` → `models/demos/gemma4`), which is
+   what CI would serve for the entry as drafted, rather than this autoport.
+6. **The decoder unit suites** after the cache-view refactor — only the new
+   read-wrap test was run; the device has been occupied by these evals.
+7. **`MESH_DEVICE=P150x4` vs `P300x2` decode-logit corruption**, which the release
+   spec asserts and no measurement on this branch has checked.
