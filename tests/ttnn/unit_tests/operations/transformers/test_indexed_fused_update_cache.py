@@ -140,6 +140,67 @@ def test_indexed_fused_update_cache_program_cache_reuses_runtime_positions(devic
         device.disable_and_clear_program_cache()
 
 
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 200000}], indirect=True)
+def test_indexed_fused_update_cache_trace_replay(device):
+    torch.manual_seed(27)
+    cache_shape = (2, 2, 64, 64)
+    input_shape = (1, 2, 5, 64)
+
+    cache1_tt = _device_tensor(torch.zeros(cache_shape, dtype=torch.bfloat16), device)
+    cache2_tt = _device_tensor(torch.zeros(cache_shape, dtype=torch.bfloat16), device)
+    input1_tt = _device_tensor(torch.zeros(input_shape, dtype=torch.bfloat16), device)
+    input2_tt = _device_tensor(torch.zeros(input_shape, dtype=torch.bfloat16), device)
+    positions_tt = _device_tensor(
+        torch.zeros((1, input_shape[2]), dtype=torch.int32),
+        device,
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
+
+    # Compile before capture. Trace replay must subsequently use the same device
+    # buffers while observing newly copied inputs and physical positions.
+    ttnn.experimental.indexed_fused_update_cache(cache1_tt, input1_tt, cache2_tt, input2_tt, positions_tt)
+
+    trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+    output1_tt, output2_tt = ttnn.experimental.indexed_fused_update_cache(
+        cache1_tt, input1_tt, cache2_tt, input2_tt, positions_tt
+    )
+    ttnn.end_trace_capture(device, trace_id, cq_id=0)
+
+    try:
+        for positions in ([0, 31, 32, -1, 128], [2, 63, 64, 65, 66]):
+            input1 = torch.randn(input_shape, dtype=torch.bfloat16)
+            input2 = torch.randn(input_shape, dtype=torch.bfloat16)
+            cache1 = torch.zeros(cache_shape, dtype=torch.bfloat16)
+            cache2 = torch.zeros(cache_shape, dtype=torch.bfloat16)
+
+            for host_tensor, device_tensor, dtype, layout in (
+                (cache1, cache1_tt, ttnn.bfloat16, ttnn.TILE_LAYOUT),
+                (cache2, cache2_tt, ttnn.bfloat16, ttnn.TILE_LAYOUT),
+                (input1, input1_tt, ttnn.bfloat16, ttnn.TILE_LAYOUT),
+                (input2, input2_tt, ttnn.bfloat16, ttnn.TILE_LAYOUT),
+                (
+                    torch.tensor([positions], dtype=torch.int32),
+                    positions_tt,
+                    ttnn.int32,
+                    ttnn.ROW_MAJOR_LAYOUT,
+                ),
+            ):
+                ttnn.copy_host_to_device_tensor(
+                    ttnn.from_torch(host_tensor, dtype=dtype, layout=layout),
+                    device_tensor,
+                )
+
+            ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
+
+            assert output1_tt.buffer_address() == cache1_tt.buffer_address()
+            assert output2_tt.buffer_address() == cache2_tt.buffer_address()
+            assert torch.equal(ttnn.to_torch(output1_tt), _apply_reference(cache1, input1, positions))
+            assert torch.equal(ttnn.to_torch(output2_tt), _apply_reference(cache2, input2, positions))
+    finally:
+        ttnn.release_trace(device, trace_id)
+
+
 def test_indexed_fused_update_cache_multi_tile_rows_and_worker_stride(device):
     torch.manual_seed(29)
     # 8 heads * 16 width tiles = 128 workers. This is larger than the 12x10
@@ -199,7 +260,7 @@ def test_indexed_fused_update_cache_golden_function():
         ("too_many_source_rows", "input_tensor1 supports at most 256 source rows"),
     ],
 )
-def test_indexed_fused_update_cache_validation(device, invalid_case, expected_message):
+def test_indexed_fused_update_cache_validation(device, invalid_case, expected_message, expect_error):
     cache_shape = (2, 2, 64, 64)
     input_shape = (1, 2, 4, 64)
     cache1 = _device_tensor(torch.zeros(cache_shape, dtype=torch.bfloat16), device)
@@ -253,7 +314,7 @@ def test_indexed_fused_update_cache_validation(device, invalid_case, expected_me
             layout=ttnn.ROW_MAJOR_LAYOUT,
         )
 
-    with pytest.raises(RuntimeError, match=expected_message):
+    with expect_error(RuntimeError, expected_message):
         ttnn.experimental.indexed_fused_update_cache(cache1, input1, cache2, input2, positions)
 
 
@@ -290,7 +351,7 @@ def test_indexed_fused_update_cache_replicated_mesh(mesh_device):
 
 
 @pytest.mark.parametrize("mesh_device", [2], indirect=True)
-def test_indexed_fused_update_cache_rejects_sharded_mesh(mesh_device):
+def test_indexed_fused_update_cache_rejects_sharded_mesh(mesh_device, expect_error):
     cache_shape = (2, 2, 64, 64)
     input_shape = (1, 2, 4, 64)
     positions = torch.arange(input_shape[2], dtype=torch.int32).reshape(1, -1)
@@ -308,5 +369,5 @@ def test_indexed_fused_update_cache_rejects_sharded_mesh(mesh_device):
         mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=1),
     )
 
-    with pytest.raises(RuntimeError, match="must use replicated mesh placement"):
+    with expect_error(RuntimeError, "must use replicated mesh placement"):
         ttnn.experimental.indexed_fused_update_cache(cache1, input1, cache2, input2, sharded_positions)
