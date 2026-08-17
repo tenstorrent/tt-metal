@@ -187,9 +187,34 @@ private:
         }
     };
 
+    struct DirectSpecFactory {
+        static ProgramArtifacts create_program_artifacts(
+            const operation_attributes_t& attrs,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value) {
+            return DeviceOperation::create_program_artifacts(attrs, tensor_args, tensor_return_value);
+        }
+    };
+
+    // Separate type, not a guarded member: CustomProgramSpecFactoryConcept keys on
+    // decltype(&T::override_runtime_arguments), which a guarded member does not satisfy.
+    struct DirectCustomSpecFactory : DirectSpecFactory {
+        static tt::tt_metal::experimental::ProgramRunArgs override_runtime_arguments(
+            const operation_attributes_t& attrs,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value,
+            const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt) {
+            return DeviceOperation::override_runtime_arguments(
+                attrs, tensor_args, tensor_return_value, mesh_dispatch_coordinate);
+        }
+    };
+
     template <typename T, typename = void>
     struct resolve_program_factory {
-        using type = std::variant<DirectDescriptorFactory>;
+        using type = std::variant<std::conditional_t<
+            HasDirectSpec<T>,
+            std::conditional_t<detail::HasSpecRuntimeArgsOverride<T>, DirectCustomSpecFactory, DirectSpecFactory>,
+            DirectDescriptorFactory>>;
     };
     template <typename T>
     struct resolve_program_factory<T, std::void_t<typename T::program_factory_t>> {
@@ -198,6 +223,11 @@ private:
 
 public:
     using program_factory_t = typename resolve_program_factory<DeviceOperation>::type;
+
+    static_assert(
+        !(HasDirectDescriptor<DeviceOperation> && HasDirectSpec<DeviceOperation>),
+        "A DeviceOperation must not define both create_descriptor and create_program_artifacts directly; "
+        "declare a program_factory_t variant instead.");
 
     static_assert(
         HasDirectDescriptor<DeviceOperation> || HasSelectProgramFactory<DeviceOperation> ||

@@ -183,6 +183,117 @@ TEST(LaunchOperationTest, ProgramSpecAdapterCompiles) {
     SUCCEED();
 }
 
+// HasDirectSpec: create_program_artifacts on the operation struct itself, the spec analog of
+// HasDirectDescriptor. The adapter wraps it in a factory the concepts must classify correctly.
+namespace direct_spec_test {
+
+struct DirectSpecOp {
+    using operation_attributes_t = OperationAttributes;
+    using tensor_args_t = Tensor;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
+    using tensor_return_value_t = Tensor;
+
+    static inline int create_calls = 0;
+
+    static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&) {}
+
+    static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&) {
+        return spec_return_value_t(
+            ttnn::Shape{1, 1, 32, 32}, tt::tt_metal::TensorLayout(DataType::FLOAT32, Layout::TILE, MemoryConfig{}));
+    }
+
+    static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&) {
+        return Tensor();
+    }
+
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+        const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&) {
+        ++create_calls;
+        return {};
+    }
+};
+
+struct DirectCustomSpecOp : DirectSpecOp {
+    static inline int override_calls = 0;
+
+    static tt::tt_metal::experimental::ProgramRunArgs override_runtime_arguments(
+        const operation_attributes_t&,
+        const tensor_args_t&,
+        tensor_return_value_t&,
+        const std::optional<ttnn::MeshCoordinate>& = std::nullopt) {
+        ++override_calls;
+        return {};
+    }
+};
+
+// An op that keeps its program_factory_t must be unaffected by the shortcut.
+struct WrappedSpecOp : DirectSpecOp {
+    using program_factory_t = std::variant<ProgramSpecFactory>;
+};
+
+template <typename Op>
+using factory_of =
+    std::variant_alternative_t<0, typename device_operation::MeshDeviceOperationAdapter<Op>::program_factory_t>;
+
+static_assert(device_operation::HasDirectSpec<DirectSpecOp>);
+static_assert(!device_operation::HasDirectDescriptor<DirectSpecOp>);
+static_assert(device_operation::DeviceOperationConcept<DirectSpecOp>);
+static_assert(device_operation::ProgramSpecFactoryConcept<factory_of<DirectSpecOp>>);
+static_assert(!device_operation::CustomProgramSpecFactoryConcept<factory_of<DirectSpecOp>>);
+
+// The op's override_runtime_arguments must carry through to the wrapper, or the cache hit would
+// silently degrade to the base concept's tensor-binding-only refresh.
+static_assert(device_operation::HasDirectSpec<DirectCustomSpecOp>);
+static_assert(device_operation::DeviceOperationConcept<DirectCustomSpecOp>);
+static_assert(device_operation::CustomProgramSpecFactoryConcept<factory_of<DirectCustomSpecOp>>);
+static_assert(!device_operation::ProgramSpecFactoryConcept<factory_of<DirectCustomSpecOp>>);
+
+static_assert(!device_operation::HasDirectSpec<WrappedSpecOp>);
+static_assert(std::same_as<factory_of<WrappedSpecOp>, ProgramSpecFactory>);
+
+}  // namespace direct_spec_test
+
+TEST(LaunchOperationTest, DirectSpecFactoryForwardsToOperation) {
+    using direct_spec_test::DirectSpecOp;
+    using Factory = direct_spec_test::factory_of<DirectSpecOp>;
+
+    Tensor input;
+    Tensor output;
+    auto factory = device_operation::MeshDeviceOperationAdapter<DirectSpecOp>::select_program_factory(
+        OperationAttributes{}, input);
+    EXPECT_TRUE(std::holds_alternative<Factory>(factory));
+
+    DirectSpecOp::create_calls = 0;
+    Factory::create_program_artifacts(OperationAttributes{}, input, output);
+    EXPECT_EQ(DirectSpecOp::create_calls, 1);
+}
+
+TEST(LaunchOperationTest, DirectCustomSpecFactoryForwardsOverride) {
+    using direct_spec_test::DirectCustomSpecOp;
+    using Factory = direct_spec_test::factory_of<DirectCustomSpecOp>;
+
+    Tensor input;
+    Tensor output;
+    DirectCustomSpecOp::override_calls = 0;
+    Factory::override_runtime_arguments(OperationAttributes{}, input, output);
+    EXPECT_EQ(DirectCustomSpecOp::override_calls, 1);
+}
+
+TEST(LaunchOperationTest, DirectSpecAdapterCompiles) {
+    using direct_spec_test::DirectSpecOp;
+    using Adapter = device_operation::MeshDeviceOperationAdapter<DirectSpecOp>::ProgramSpecMeshWorkloadFactoryAdapter<
+        direct_spec_test::factory_of<DirectSpecOp>>;
+    [[maybe_unused]] auto create = &Adapter::create_mesh_workload;
+    [[maybe_unused]] auto apply = &Adapter::apply_descriptor;
+
+    using direct_spec_test::DirectCustomSpecOp;
+    using CustomAdapter =
+        device_operation::MeshDeviceOperationAdapter<DirectCustomSpecOp>::CustomProgramSpecMeshWorkloadFactoryAdapter<
+            direct_spec_test::factory_of<DirectCustomSpecOp>>;
+    [[maybe_unused]] auto capply = &CustomAdapter::apply_descriptor;
+    SUCCEED();
+}
+
 // SupportsPerCoreAllocation gates whether launch() will accept a per-core allocated tensor. No op
 // declares supports_per_core_allocation today, so the accept path is otherwise never exercised --
 // a concept that could never match would look identical at runtime. Pin all three directions here:

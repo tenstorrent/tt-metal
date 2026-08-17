@@ -138,6 +138,10 @@ concept CustomProgramSpecFactoryConcept =
 template <typename T>
 concept HasDirectDescriptor = requires { &T::create_descriptor; } && !requires { typename T::program_factory_t; };
 
+// Same shortcut for single-spec operations: create_program_artifacts directly on the operation struct.
+template <typename T>
+concept HasDirectSpec = requires { &T::create_program_artifacts; } && !requires { typename T::program_factory_t; };
+
 template <typename device_operation_t>
 concept HasComputeOutputSpecs = requires(
     device_operation_t op,
@@ -204,7 +208,7 @@ concept DeviceOperationConcept =
                           tensor_return_value_t>);
         };
     } && HasComputeOutputSpecs<device_operation_t> &&
-    (HasDirectDescriptor<device_operation_t> ||
+    (HasDirectDescriptor<device_operation_t> || HasDirectSpec<device_operation_t> ||
      (HasProgramFactoryType<device_operation_t> && AllFactoriesValid<typename device_operation_t::program_factory_t>));
 
 template <typename device_operation_t>
