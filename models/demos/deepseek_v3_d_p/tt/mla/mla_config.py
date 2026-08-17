@@ -4,7 +4,7 @@
 """
 Optimal matmul and SDPA configurations for the MLA module, keyed by local sequence length
 (per-device after SP sharding). Configs sourced from op_unit_tests/test_mla_matmuls.py
-and op_unit_tests/test_ring_joint_mla.py.
+and ring-joint SDPA tuning.
 
 Production local seq_len values:
   - 128k total / 8 SP devices = 16384 per device

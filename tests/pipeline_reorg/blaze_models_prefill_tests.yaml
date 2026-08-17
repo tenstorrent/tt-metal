@@ -35,79 +35,9 @@
   team: models
   sp_config: sc1
 
-- name: "Blaze - MLA"
-  cmd: |
-    export DEEPSEEK_V3_HF_MODEL=/mnt/models/DeepSeek-R1-0528-fp8-4236a6af/
-    export DEEPSEEK_V3_CACHE=/mnt/models/DeepSeek-R1-0528-Cache/CI
-    export TT_DS_PREFILL_TTNN_CACHE=/mnt/models/DeepSeek-R1-0528-Cache/DeepSeek-R1-0528-Cache-prefill_secure
-    export TT_DS_PREFILL_HOST_REF_CACHE=/mnt/models/deepseek-prefill-cache/golden/
-    export DEEPSEEK_V3_TRACE_DIR=/mnt/models/deepseek-prefill-cache
-    export DEEPSEEK_V3_MLA_REF_CACHE=/mnt/models/deepseek-prefill-cache/test_mla_output
 
-    mpirun --bind-to none --pernode --tag-output bash -lc '
-      export OMP_NUM_THREADS=$(nproc)
-      uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_ds_mla -k "8x4 and random and max_sl and check_pcc and balanced and fabric2d" -vvv --tb=short
-    '
-  test_type: mla
-  test_group: module
-  skus:
-    bh_sc1:
-      timeout: 16
-  owner_id: U08RL15T4N8
-  team: models
-  sp_config: sc1
 
-- name: "Blaze - MLA Chunked"
-  cmd: |
 
-    mpirun --bind-to none --pernode --tag-output bash -lc '
-      export OMP_NUM_THREADS=$(nproc)
-      uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k "maxedge-1u and cpu and 8x4 and fabric2d and (dsv3 or kimi) and no_determinism" -vvv --tb=short
-    '
-  test_type: mla_chunked
-  test_group: module
-  skus:
-    bh_sc1:
-      timeout: 8
-  owner_id: U07N3CUUN05  # Iva Potkonjak
-  team: models
-  sp_config: sc1
-
-- name: "Blaze - K3 MLA"
-  cmd: |
-
-    mpirun --bind-to none --pernode --tag-output bash -lc '
-      export OMP_NUM_THREADS=$(nproc)
-      uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k "k3 and 8x4 and fabric2d and scalar and ((maxedge-1u and cpu and no_determinism) or (plain-5k and func and with_determinism))" -vvv --tb=short
-    '
-  test_type: k3_mla
-  test_group: module
-  skus:
-    bh_sc1:
-      timeout: 6
-  owner_id: U07N3CUUN05  # Iva Potkonjak
-  team: models
-  sp_config: sc1
-
-- name: "Blaze - K3 MLA perf"
-  cmd: |
-
-    mpirun --bind-to none --pernode --tag-output bash -lc '
-      export OMP_NUM_THREADS=$(nproc)
-      uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_perf_check -k "k3 and 8x4 and fabric2d" -vvv --tb=short
-    '
-  test_type: k3_mla_perf
-  test_group: module
-  skus:
-    bh_sc1_high_power:
-      timeout: 5
-  owner_id: U07N3CUUN05  # Iva Potkonjak
-  team: models
-  sp_config: sc1
 
 - name: "Blaze - KV cache table"
   cmd: |
@@ -205,22 +135,6 @@
   team: models
   sp_config: sc1
 
-- name: "Blaze - Kimi MLA"
-  cmd: |
-    export KIMI_MLA_REF_CACHE=/mnt/models/kimi-prefill-cache/test_mla_output
-
-    mpirun --bind-to none --pernode --tag-output bash -lc '
-      export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_kimi_mla -k "8x4 and random and max_sl and check_pcc and sequential and line and (seq5k or seq25k)" -vvv --tb=short
-    '
-  test_type: kimi_mla
-  test_group: module
-  skus:
-    bh_sc1:
-      timeout: 7
-  owner_id: U08RL15T4N8
-  team: models
-  sp_config: sc1
 
 - name: "Blaze - DSA MLA (V3.2)"
   cmd: |

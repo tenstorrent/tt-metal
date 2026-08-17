@@ -58,7 +58,7 @@ def test_rope_prefill(
     production_mesh = [32, 4]
     mesh_shape = list(mesh_device.shape)
 
-    # Scale sequence length to match device mesh (same as test_mla)
+    # Scale sequence length to match device mesh (same as the MLA prefill tests)
     seq_len = (seq_len // production_mesh[sp_axis]) * mesh_shape[sp_axis]
     config.max_seq_len = seq_len
 

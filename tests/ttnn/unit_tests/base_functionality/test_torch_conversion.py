@@ -932,7 +932,7 @@ def test_from_torch_zero_sized_dimension(mesh_device, shape, ttnn_dtype, ttnn_la
     Regression test: from_torch with a mesh_mapper must handle tensors where
     one logical dimension is zero (e.g. shape (1, 64, 0, 576)).
 
-    Reproduces the failure from ring-joint MLA (test_mla_sdpa) where
+    Reproduces the failure from ring-joint MLA where
     joint_seq_len == 0 creates dummy tensors with a zero sequence dimension.
     The sub_device_manager loaded onto the submesh changes device operation
     behavior, exposing the zero-volume bug in to_layout / typecast on device.

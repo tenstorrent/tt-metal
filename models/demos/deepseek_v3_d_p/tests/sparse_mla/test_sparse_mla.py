@@ -3,7 +3,7 @@
 
 """Sparse MLA / DSA tests for DeepSeek V3.2-family variants.
 
-Dense MLA coverage lives in test_mla.py. This file keeps the sparse reference
+Dense MLA coverage lives in the prefill-block tests. This file keeps the sparse reference
 path separate while reusing the same TT execution helper and the production mesh
 / fabric axes from the dense MLA tests.
 """
@@ -25,7 +25,7 @@ from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_reference import (
     run_cpu_reference,
     run_cpu_reference_chunked,
 )
-from models.demos.deepseek_v3_d_p.tests.test_mla import run_mla_inference
+from models.demos.deepseek_v3_d_p.tests.mla_inference_utils import run_mla_inference
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import num_full_indexer_layers
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup, interleaved_to_halfsplit_perm
@@ -577,7 +577,7 @@ def run_sparse_mla_kv_only_case(variant, config, mesh_device, seq_len, chunk, ds
 def run_sparse_mla_rotated_case(
     variant, config, mesh_device, iters_isl, chunk_size_global, ds_layer, ds_checkpoint, ds_repo
 ):
-    """Rotation/padding scenario (sparse analogue of test_mla._run_chunked_prefill): one DENSE sequence
+    """Rotation/padding scenario (sparse analogue of the dense chunked-prefill driver): one DENSE sequence
     chunked VARIABLY by iters_isl (per-iter valid token counts). Each iter's real tokens are rotated to
     start at the previous iter's real end (actual_start=kv_actual, tile-aligned); the fixed-width chunk's
     non-valid rows are zeroed. This exercises: partial chunks, rotated (mid-slab) chunk_start, and — the

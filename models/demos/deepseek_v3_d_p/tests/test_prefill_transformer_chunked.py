@@ -340,7 +340,7 @@ def _preload_kvpe_prefix_from_trace(
 ):
     """Preload the first `preload_isl` tokens of each layer's prior KV into the block-cyclic device KVPE
     cache, so a chunk measured at KV depth preload_isl attends to REAL prior KV (representative MoE routing)
-    instead of the zero-init prefix. Mirrors test_mla.py's chunked preload: per layer read the natural-order
+    instead of the zero-init prefix. Mirrors the MLA chunked-prefill test's chunked preload: per layer read the natural-order
     prior KV from the trace's kv_post_transform, re-interleave the k_pe slice (the trace stores HF half-split;
     the device cache is Meta interleaved), lay it out block-cyclic, and copy host->device.
 

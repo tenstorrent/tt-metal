@@ -6,7 +6,7 @@ Pytest plugin for the sparse-MLA (DSA) tests — DeepSeek V3.2 & GLM-5.1.
 
 This is a real plugin module (NOT a conftest), registered via ``pytest_plugins`` in this package's
 conftest (``tests/sparse_mla/conftest.py``). Living under the sparse_mla/ subtree scopes its options
-and markers: they register only when these sparse tests are collected, so dense runs (tests/test_mla.py)
+and markers: they register only when these sparse tests are collected, so dense runs (tests/test_prefill_block.py)
 never see them. Because it is referenced by its dotted name and never auto-loaded as a conftest, pytest
 registers it exactly once.
 

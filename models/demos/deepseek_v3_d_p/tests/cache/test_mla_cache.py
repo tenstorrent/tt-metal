@@ -120,7 +120,7 @@ def test_mla_weights_cold_warm_cache(mesh_device, device_params, config_only, va
         ).to(torch.bfloat16)
 
     # Create input (full tensor - mesh_mapper will shard automatically)
-    # Following pattern from test_mla.py: create full tensor, let TTNN shard it
+    # Pattern: create full tensor, let TTNN shard it
     x = torch.randn(1, 1, seq_len, config.hidden_size, dtype=torch.float32)
     x_tt = ttnn.from_torch(
         x,

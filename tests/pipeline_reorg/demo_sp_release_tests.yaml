@@ -48,8 +48,6 @@
     EXPECT_NUM_TESTS=1 TT_DS_PREFILL_HOST_REF_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-prefill-golden pytest models/demos/deepseek_v3_d_p/tests/perf/test_prefill_block_perf.py -k "block_8x4 and fabric2d and layer3" -vvv --tb=short
     EXPECT_NUM_TESTS=1 pytest models/demos/deepseek_v3_d_p/tests/perf/test_moe_perf.py::test_deepseek_v3_moe_perf_galaxy -vvv --tb=short
     EXPECT_NUM_TESTS=1 pytest models/demos/deepseek_v3_d_p/tests/perf/test_moe_perf.py::test_deepseek_v3_moe_perf_galaxy_pad50 -vvv --tb=short
-    EXPECT_NUM_TESTS=1 pytest models/demos/deepseek_v3_d_p/tests/perf/test_mla_perf.py::test_deepseek_v3_mla_perf_galaxy -vvv --tb=short
-    EXPECT_NUM_TESTS=1 pytest models/demos/deepseek_v3_d_p/tests/perf/test_mla_perf.py::test_kimi_mla_chunked_perf_galaxy -vvv --tb=short
   model: deepseek_prefill
   skus:
     bh_galaxy:
@@ -59,11 +57,6 @@
 
 - name: "(bh loudbox) DeepSeek Prefill modules"
   cmd: |
-    # deepseek and kimi prefill on 2x4 mesh
-    EXPECT_NUM_TESTS=2 pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_ds_mla -k "2x4 and not 32x4 and random and scaled_sl and check_pcc and 100k and fabric2d" -vvv --tb=short
-    EXPECT_NUM_TESTS=1 pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_kimi_mla -k "2x4 and random and scaled_sl and check_pcc and seq5k and fabric2d" -vvv --tb=short
-    EXPECT_NUM_TESTS=1 python -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k 'maxedge-1u and kimi and cpu and 2x4 and fabric2d and no_determinism'
-    EXPECT_NUM_TESTS=1 python -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k 'maxedge-1u and ds and cpu and 2x4 and fabric2d and no_determinism'
     # deepseek and kimi moe blocks. NOTE: pcc-device-256 (DSv3) is pinned exact + `not pad50` so it stays
     # 1 test — bare `pcc-device` would substring-match `pcc-device-glm-256` and inflate the count.
     EXPECT_NUM_TESTS=1 pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_ds_moe -k "linear-8 and pcc-device-256 and not pad50" -vvv --tb=short --timeout=1800

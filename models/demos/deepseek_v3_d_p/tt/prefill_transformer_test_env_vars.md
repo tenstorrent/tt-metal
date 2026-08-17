@@ -171,7 +171,7 @@ Per-stage dump dir for `save_intermediate_output` — e.g. `NORM_OUTPUT_DIR`,
 `LM_HEAD_OUTPUT_DIR`. Default `/tmp/{name}_outputs`.
 
 ### `DEEPSEEK_V3_MLA_REF_CACHE`  (`variant.mla_ref_cache_env`)
-MLA-layer reference cache dir. Primarily exercised by `test_mla.py`, defined on the variant.
+MLA-layer reference cache dir. Defined on the variant; was exercised by the removed dense MLA test.
 
 ---
 

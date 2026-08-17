@@ -55,7 +55,7 @@ CHUNK = 5 * 1024  # 5120 tokens per chunk
 SEQ_CACHE = 55 * 1024  # 56320 KV cache length (1 user)
 # Full 55k (56320) sequence in varied chunks: the requested prefix [1k,2k,3k,4k,5k,3k,2k,5k] (=25600),
 # then a varied tail (=30720) of non-1024-aligned sizes that exercise mid-tile rotation offsets (e.g.
-# 2592 -> 1-tile straddle, like test_mla's padded_partial). Every split is a multiple of 32 and <= CHUNK.
+# 2592 -> 1-tile straddle, like the padded_partial scenarios). Every split is a multiple of 32 and <= CHUNK.
 _PADDED_FULL_55K = [
     1024,
     2048,

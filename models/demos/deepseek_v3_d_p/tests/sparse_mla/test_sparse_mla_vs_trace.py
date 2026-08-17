@@ -4,7 +4,7 @@
 """
 DeepSeek V3.2 MLA/indexer/KV-cache vs the OFFICIAL reference values.
 
-Unlike test_mla.py (whose truth is the in-repo MLACPU model), the truth here is
+Unlike the dense MLA tests (whose truth is the in-repo MLACPU model), the truth here is
 the recorded output of the official DeepSeek-V3.2 CUDA stack, captured from a
 vLLM run (a single 5120-token prefill) and stored as safetensors streams.
 Reference layers available: 0, 30, 60.
@@ -304,7 +304,7 @@ def _skip_unsupported(model: str, mesh_device) -> None:
 
 
 def _make_mla(model, config, layer, mesh_device, is_chunked=False):
-    config.max_seq_len = SEQ_LEN  # rope-table length (same hack as v3 run_model / test_mla)
+    config.max_seq_len = SEQ_LEN  # rope-table length (same hack as v3 run_model)
     weights = _weights_for(model, config, layer)  # canonical dict — same tensors the CPU truth uses
     return ttMLA(
         config,

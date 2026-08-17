@@ -212,7 +212,7 @@ def _build_mla(config, state_dict, mesh_device, weight_cache_path):
         weight_cache_path=weight_cache_path,
         # Single-shot folds onto block-cyclic: the sparse indexer/KVPE write goes through
         # update_padded_kv_cache (num_slots = cache_batch / layer_num). The test caches are 1 layer / 1 user,
-        # so layer_num must be 1 (matches test_mla.py) or num_slots collapses to 0 and the write asserts.
+        # so layer_num must be 1 (matches mla_inference_utils.run_mla_inference) or num_slots collapses to 0 and the write asserts.
         layer_num=1,
     )
 

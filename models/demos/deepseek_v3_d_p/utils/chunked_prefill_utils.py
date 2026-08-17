@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Test helpers for the unified chunked-prefill MLA test (test_mla.py::test_mla_chunked_prefill):
+"""Test helpers for the unified chunked-prefill MLA flow:
 GPU-trace discovery/loading, multi-user iteration partitioning, and the CPU torch MLA reference.
 
 Kept out of tt/mla/utils.py on purpose: these pull the reference model + safetensors, which should
@@ -24,7 +24,7 @@ from models.demos.deepseek_v3_d_p.reference.mla_reference import create_mla_refe
 # On-disk cache for the CPU torch MLA reference. The reference is quadratic in sequence length and
 # host-bound: measured on a 16-core EPYC (AVX-512, no AMX) it is ~4.4 s at 3840 tokens but ~7 min at
 # the 56320-token production depth, and it was recomputed on every single run. run_model already
-# caches its single-shot reference (test_mla.py, variant.mla_ref_cache_env); this is the chunked
+# caches its single-shot reference (the dense MLA tests, variant.mla_ref_cache_env); this is the chunked
 # equivalent, so depth verification and config bisects cost device time only after the first pass.
 _REF_CACHE_ENV = "MLA_CHUNKED_REF_CACHE"
 _REF_CACHE_DEFAULT = "/tmp/mla_chunked_ref_cache"
@@ -71,7 +71,7 @@ def discover_traces(root, num_users, variant_name=None):
 
     NOTE the filter is a substring test and so cannot separate two variants of the same family: every
     kimi_* variant selects the same dirs. It is therefore only safe for variants that actually have
-    recorded traces. Callers must reject the others *before* getting here -- test_mla.py's
+    recorded traces. Callers must reject the others *before* getting here -- the chunked-prefill driver's
     _run_chunked_prefill asserts on ``variant.supports_pretrained``, since a trace is recorded from a
     real checkpoint and a variant without one (kimi_k3, sparse_mla) would otherwise be handed
     Kimi-K2.6's traces and silently compared across architectures.
