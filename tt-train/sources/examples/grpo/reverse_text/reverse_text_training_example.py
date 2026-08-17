@@ -13,7 +13,6 @@ Run:
 """
 
 import argparse
-import csv
 import logging
 import os
 import random
@@ -88,7 +87,8 @@ def similarity_reward(completions, answer, **kwargs):
 
     This is the only weighted reward in the TRL reference run; exact-match and
     format rates are logged as diagnostics so the trailing signals stay visible
-    without entering the objective.
+    without entering the objective. Per-completion samples are printed by the
+    built-in ``GRPOMonitor`` when ``log_completions=True`` in the YAML config.
     """
     parsed = [parse_reversed_text(c) for c in completions]
     rewards = [SequenceMatcher(None, got, truth).ratio() for got, truth in zip(parsed, answer)]
@@ -102,12 +102,6 @@ def similarity_reward(completions, answer, **kwargs):
         frac_exact,
         frac_format,
     )
-    # Log the first generation for the FIRST prompt.
-    if completions:
-        logging.info("[reward] first-prompt answer=%r", answer[0])
-        preview = completions[0].strip().replace("\n", " ")[:300]
-        logging.info("[reward]   gen[0] = %r", preview)
-
     return rewards
 
 
@@ -117,21 +111,31 @@ class EvalCallback(TrainerCallback):
     Generation parameters live on the shared ``Qwen3CompletionCtx``, so greedy
     decoding is a temporary mutation of that context: ``temperature == 0.0``
     takes the pure-argmax path in ``ttnn_fixed::sample``.
+
+    Writes the three eval scalars (``eval_similarity`` / ``eval_chars`` /
+    ``eval_format``) into ``trainer.metrics`` so the built-in ``GRPOMonitor``
+    picks them up as CSV columns in the same step's row.
     """
 
-    def __init__(self, completer, ctx, dataset, num_examples, eval_state):
+    def __init__(self, completer, ctx, dataset, num_examples):
         rows = dataset.select(range(min(num_examples, len(dataset))))
         self.completer = completer
         self.ctx = ctx
         self.prompts = list(rows["prompt"])
         self.answers = list(rows["answer"])
-        self.eval_state = eval_state
+        self.latest: dict[str, float] = {}
 
     def on_train_begin(self, trainer):
+        # Populate the eval scalars once at train-begin so the built-in
+        # GRPOMonitor sees the keys when it snapshots the CSV column set
+        # (its `on_train_begin` runs after this callback because the trainer
+        # auto-appends the monitor at the end of the callback list).
         self._evaluate(0)
+        trainer.metrics.update(self.latest)
 
     def on_step_end(self, trainer, step, **kwargs):
         self._evaluate(step)
+        trainer.metrics.update(self.latest)
 
     def _evaluate(self, step):
         saved = (self.ctx.temperature, self.ctx.completions_per_prompt)
@@ -151,84 +155,18 @@ class EvalCallback(TrainerCallback):
             formats.append(1.0 if got else 0.0)
 
         n = max(len(similarities), 1)
-        self.eval_state.update(
-            {
-                "similarity": sum(similarities) / n,
-                "chars": sum(char_fracs) / n,
-                "format": sum(formats) / n,
-            }
-        )
+        self.latest = {
+            "eval_similarity": sum(similarities) / n,
+            "eval_chars": sum(char_fracs) / n,
+            "eval_format": sum(formats) / n,
+        }
         logging.info(
             "[eval] step %d | similarity %.3f | chars %.1f%% | format %.1f%%",
             step,
-            self.eval_state["similarity"],
-            100.0 * self.eval_state["chars"],
-            100.0 * self.eval_state["format"],
+            self.latest["eval_similarity"],
+            100.0 * self.latest["eval_chars"],
+            100.0 * self.latest["eval_format"],
         )
-
-
-class GRPOMonitor(TrainerCallback):
-    """Per-step console + CSV logging.
-
-    ``eval_state`` is the dict :class:`EvalCallback` refreshes; register the eval
-    callback FIRST so each row carries the current step's eval numbers.
-    """
-
-    def __init__(self, output_dir, eval_state):
-        self.file_path = os.path.join(output_dir, "grpo_metrics.csv")
-        self.eval_state = eval_state
-        os.makedirs(output_dir, exist_ok=True)
-        with open(self.file_path, mode="w", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow(
-                [
-                    "step",
-                    "reward",
-                    "avg_length",
-                    "step_time_s",
-                    "generation_time_s",
-                    "eval_similarity",
-                    "eval_chars",
-                    "eval_format",
-                ]
-            )
-
-    def on_step_end(self, trainer, step, **kwargs):
-        reward = kwargs["reward_mean"]
-        length = kwargs["mean_completion_len"]
-        min_length = kwargs["min_completion_len"]
-        max_length = kwargs["max_completion_len"]
-        step_time_s = kwargs.get("step_time_s", float("nan"))
-        generation_time_s = kwargs.get("generation_time_s", float("nan"))
-        # The logging format already prepends a timestamp (%(asctime)s).
-        logging.info(
-            "Step %d | Reward: %.4f | Len: %.2f (min %d, max %d) tokens | Step: %.2fs | Gen: %.2fs",
-            step,
-            reward,
-            length,
-            min_length,
-            max_length,
-            step_time_s,
-            generation_time_s,
-        )
-        nan = float("nan")
-        with open(self.file_path, mode="a", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow(
-                [
-                    step,
-                    reward,
-                    length,
-                    step_time_s,
-                    generation_time_s,
-                    self.eval_state.get("similarity", nan),
-                    self.eval_state.get("chars", nan),
-                    self.eval_state.get("format", nan),
-                ]
-            )
-
-    def on_train_end(self, trainer):
-        logging.info("Training complete.")
 
 
 def parse_args():
@@ -341,17 +279,16 @@ if __name__ == "__main__":
         memory_efficient=args.memory_efficient,
     )
 
-    eval_state = {}
     grpo_trainer = GRPOTrainer(
         completer=completer,
         dataset=train_dataset,
         config=grpo_config,
         reward_func=similarity_reward,
         optimizer_dict=optimizer_dict,
-        callbacks=[
-            EvalCallback(completer, completion_ctx, eval_dataset, args.eval_examples, eval_state),
-            GRPOMonitor(output_dir, eval_state),
-        ],
+        # EvalCallback injects `eval_similarity`/`eval_chars`/`eval_format`
+        # into `trainer.metrics`; the built-in GRPOMonitor (auto-appended by
+        # GRPOTrainer from grpo_config) writes them into grpo_metrics.csv.
+        callbacks=[EvalCallback(completer, completion_ctx, eval_dataset, args.eval_examples)],
         model_source=args.model_source,
     )
     grpo_trainer.train()

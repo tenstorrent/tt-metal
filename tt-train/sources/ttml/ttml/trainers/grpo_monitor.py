@@ -83,7 +83,22 @@ class GRPOMonitor(TrainerCallback):
         # header lists a ``<ClassName>_time_s`` column per callback. Callbacks
         # added or removed mid-training won't grow the header.
         callback_time_columns = [f"{type(cb).__name__}_time_s" for cb in trainer.callbacks]
-        self._columns = list(_BASE_COLUMNS) + callback_time_columns
+
+        # Fold in any scalar columns callbacks already wrote to
+        # ``trainer.metrics`` in their own ``on_train_begin`` (e.g. an eval
+        # callback seeding ``eval_similarity``). The trainer inits
+        # ``self.metrics`` to ``{}`` in ``__init__``, so this is a no-op when
+        # no earlier callback populated it. Ordering guarantee: the trainer
+        # calls callbacks in list order and auto-appends the monitor last, so
+        # user callbacks always get first dibs on ``trainer.metrics``.
+        preseeded: list[str] = []
+        seen = set(_BASE_COLUMNS) | set(callback_time_columns) | _NON_CSV_KEYS
+        for key in getattr(trainer, "metrics", {}) or {}:
+            if key not in seen:
+                preseeded.append(key)
+                seen.add(key)
+
+        self._columns = list(_BASE_COLUMNS) + callback_time_columns + preseeded
 
         if self._csv_path is not None:
             os.makedirs(self._output_dir, exist_ok=True)
