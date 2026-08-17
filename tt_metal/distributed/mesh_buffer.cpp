@@ -235,14 +235,13 @@ bool MeshBuffer::is_allocated() const {
 MeshBuffer::~MeshBuffer() { deallocate(); }
 
 MeshBuffer::MeshBuffer(MeshBuffer&& other) noexcept :
-    config_(other.config_),
+    config_(Inspector::mesh_buffer_deallocated(&other), other.config_),
     device_local_config_(std::move(other.device_local_config_)),
     mesh_device_(std::move(other.mesh_device_)),
     address_(other.address_),
     device_local_size_(other.device_local_size_),
     buffers_(std::move(other.buffers_)),
     state_(std::move(other.state_)) {
-    Inspector::mesh_buffer_deallocated(&other);
     other.state_ = DeallocatedState{};
     other.address_ = 0;
     other.device_local_size_ = 0;
@@ -252,6 +251,7 @@ MeshBuffer::MeshBuffer(MeshBuffer&& other) noexcept :
 MeshBuffer& MeshBuffer::operator=(MeshBuffer&& other) noexcept {
     if (this != &other) {
         deallocate();
+        Inspector::mesh_buffer_deallocated(&other);
         config_ = other.config_;
         device_local_config_ = std::move(other.device_local_config_);
         mesh_device_ = std::move(other.mesh_device_);
@@ -260,7 +260,6 @@ MeshBuffer& MeshBuffer::operator=(MeshBuffer&& other) noexcept {
         buffers_ = std::move(other.buffers_);
         state_ = std::move(other.state_);
 
-        Inspector::mesh_buffer_deallocated(&other);
         other.state_ = DeallocatedState{};
         other.address_ = 0;
         other.device_local_size_ = 0;

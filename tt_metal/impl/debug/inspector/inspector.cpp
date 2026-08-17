@@ -305,11 +305,11 @@ void Inspector::mesh_buffer_allocated(const distributed::MeshBuffer* mesh_buffer
         return;
     }
     try {
-        std::lock_guard<std::mutex> lock(data->mesh_buffers_mutex);
-        data->mesh_buffers_data.insert(mesh_buffer);
         if (data->mesh_buffer_logging_enabled) {
             data->logger.log_mesh_buffer_allocated(mesh_buffer);
         }
+        std::lock_guard<std::mutex> lock(data->mesh_buffers_mutex);
+        data->mesh_buffers_data.insert(mesh_buffer);
     } catch (const std::exception& e) {
         TT_INSPECTOR_LOG("Failed to log mesh buffer allocated: {}", e.what());
     }
@@ -324,11 +324,11 @@ void Inspector::mesh_buffer_deallocated(const distributed::MeshBuffer* mesh_buff
         return;
     }
     try {
-        std::lock_guard<std::mutex> lock(data->mesh_buffers_mutex);
-        data->mesh_buffers_data.erase(mesh_buffer);
         if (data->mesh_buffer_logging_enabled) {
             data->logger.log_mesh_buffer_deallocated(mesh_buffer);
         }
+        std::lock_guard<std::mutex> lock(data->mesh_buffers_mutex);
+        data->mesh_buffers_data.erase(mesh_buffer);
     } catch (const std::exception& e) {
         TT_INSPECTOR_LOG("Failed to log mesh buffer deallocated: {}", e.what());
     }
