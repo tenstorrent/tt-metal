@@ -38,18 +38,29 @@
       prompt, and make the log say what it used.
 
 4. The decode step exists twice, and speed and correctness were measured on different ones
-    - The version that ships has no KV cache, the traced one does. Speed was measured on the traced
-      one, correctness on the other. It reported 17.2% faster; what ships got 13.2%, 297.69 to 258.26
-      ms per audio frame. Our hand written port of the same model on the same board runs at 26.9 ms.
-    - The cache never reaches the component during bring-up. It is one of the arguments point 3 drops,
-      and separately the saved example holds a real one but the same object goes to the reference and
-      then to the port, so the port sees one entry too many and it is dropped to avoid that. With no
-      cache the test compares a single value and returns 1.0 whatever the inputs are, so using the
-      cache and ignoring it score the same. The simpler one was accepted, and the shipped path then
-      recomputes the whole prompt on every frame.
-    - Fix, in order: copy the saved inputs before passing them to each side, add the cache to the
-      recognised list, let the component use it since its signature already has the argument, and
-      update the expected call counts and the component check in the same change, or a correct fix
-      will look like a regression. For the traced version the position is baked into the recording, so
-      it has to become a tensor on the device.
+    - Speech is generated one audio frame at a time, and every frame needs a pass through the
+      backbone. The generated code ends up with two versions of that pass. The one the demo runs has
+      no KV cache. A second one, written later so the work could be recorded and replayed on the
+      device, does have a cache. Correctness was measured on the first, speed on the second. It
+      reported 17.2% faster; what ships got 13.2%, 297.69 to 258.26 ms per audio frame. Our hand
+      written port of the same model on the same board runs at 26.9 ms.
+    - Why the shipped one has no cache goes back to bring-up. The cache is one of the arguments point
+      3 drops, so the component was never tested with one. The saved example does hold a real cache,
+      but the same object is handed to the reference and then to the port, and the reference writes
+      into it as it runs, so the port would see one entry too many. It was dropped instead of copied.
+      With no cache the test compares a single value and returns 1.0 whatever the inputs are, so a
+      version that uses the cache and one that ignores it score the same, and the simpler one was
+      accepted.
+    - That then decided the demo, because the demo has to use the components that passed. A component
+      that cannot remember anything has to be given the whole prompt plus everything generated so far,
+      so every frame re-runs all layers over the entire sequence and keeps only the last position.
+    - A correct fix will fail two checks that were written around the current behaviour: the plan
+      expects the backbone to run once per frame plus once for the prompt, which only a recomputing
+      version does, and another check verifies which components the demo uses. Change both in the same
+      commit, or the fix will look like a regression.
+    - Fix: as in point 3, let the agent build the cache input rather than relying on a list of names.
+      Copy the saved inputs before passing them to each side, so the reference cannot write into what
+      the port is about to read. Then let the component use the cache, its signature already has the
+      argument. For the traced version the position is baked in when the run is recorded, so it always
+      writes to the same slot; it has to become a tensor on the device.
     - And check that the code measured for speed is the code that generates speech.
