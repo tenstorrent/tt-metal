@@ -140,6 +140,8 @@ class DFlashRunner:
         aligned_verify: bool = True,
         uncapped_argmax: bool = True,
         verify_mode: str = "prefill",
+        trace_verify: bool = False,
+        verify_width: int = 256,
     ) -> None:
         self.generator = generator
         self.model = generator.model
@@ -230,6 +232,35 @@ class DFlashRunner:
         #: running the decode twice without re-seeding does the same to the second run.
         #: ``tests/dflash_decode_verify_probe.py`` re-seeds before every measurement.
         self.verify_mode = str(verify_mode)
+        #: Capture the verify forward once as a trace and replay it, instead of issuing it
+        #: eagerly every iteration.  **Default off: it does not work in this loop.**
+        #:
+        #: The reasoning is sound and the shape trick is real.  A prefill forward costs
+        #: 55-67 ms *flat* from 32 to 256 rows because it is host-dispatch bound, and flat
+        #: cost means a **fixed-width** verify is free -- so padding every from-zero verify
+        #: to ``verify_width`` with ``start_pos = 0`` makes the whole thing one static
+        #: graph, capturable as a single trace.  Tracing is the only mechanism that removes
+        #: host issue here, and the port measured a warmed prefill replay at 44.96 ms
+        #: against 59.80 ms eager.
+        #:
+        #: What stops it is the rest of the loop.  A live trace requires that nothing else
+        #: allocate device buffers -- ttnn warns "Allocating device buffers is unsafe due to
+        #: the existence of an active trace. These buffers may be corrupted once a trace is
+        #: executed" -- and DFlash allocates on every iteration: the drafter's activations,
+        #: the context upload, the noise embeddings, the logits tiles.  With the trace live
+        #: the run wedged rather than returning.  The shipped decode trace coexists with its
+        #: loop only because that loop allocates *nothing*: four persistent inputs, one
+        #: persistent logits output.
+        #:
+        #: So this is worth roughly 15 ms/iteration and needs the DFlash loop converted to
+        #: persistent buffers throughout first -- drafter activations included -- which is a
+        #: larger change than the trace itself.
+        self.trace_verify = bool(trace_verify)
+        #: Padded row count of the traced verify.  The whole sequence must fit, which the
+        #: ``max_verify_rows`` guard enforces; making it larger costs nothing on device but
+        #: does retain a wider hidden/tap set.
+        self.verify_width = int(verify_width)
+        self._prefill_trace: dict | None = None
         #: Lazily captured trace for the verify decode step, with taps armed.  The shipped
         #: decode trace cannot be reused: it is captured *without* hidden-state taps, and
         #: DFlash needs them to build the drafter's context.
@@ -353,6 +384,101 @@ class DFlashRunner:
             host = host.reshape(1, -1, self.config.hidden_size)[:, offset : offset + num_rows, :]
             pieces.append(host.to(torch.bfloat16))
         return torch.cat(pieces, dim=-1)
+
+    def _ensure_prefill_verify_trace(self) -> None:
+        """Capture the fixed-width, from-zero verify forward once, with taps armed.
+
+        Warm-compile first (it executes, so it must not be the capture), then capture
+        ``embed_prefill`` + ``prefill_forward`` reading the persistent token buffer.  The
+        hidden state and the five taps are the graph's own outputs, so their addresses are
+        baked in and every replay refreshes them in place -- nothing here may free them.
+        """
+        if self._prefill_trace is not None:
+            return
+        model = self.model
+        tap_layers = self._tap_layers()
+        tokens = self._verify_tokens
+        page_table = self._verify_page_table
+
+        model.arm_hidden_state_taps(tap_layers)
+        model.release_sliding_tails()
+        warm_embedded = model.embed_prefill(tokens)
+        warm = model.prefill_forward(warm_embedded, page_table=page_table, user_id=0, start_pos=0)
+        ttnn.deallocate(warm)
+        for tensor in model.take_hidden_state_taps().values():
+            ttnn.deallocate(tensor)
+        ttnn.synchronize_device(model.mesh_device)
+
+        model.release_sliding_tails()
+        trace_id = ttnn.begin_trace_capture(model.mesh_device, cq_id=0)
+        model.arm_hidden_state_taps(tap_layers)
+        embedded = model.embed_prefill(tokens)
+        hidden = model.prefill_forward(embedded, page_table=page_table, user_id=0, start_pos=0)
+        taps = model.take_hidden_state_taps()
+        ttnn.end_trace_capture(model.mesh_device, trace_id, cq_id=0)
+        ttnn.synchronize_device(model.mesh_device)
+        model.note_trace_captured()
+        self._prefill_trace = {"id": trace_id, "hidden": hidden, "taps": taps}
+
+    def _argmax_range(self, hidden: ttnn.Tensor, start_row: int, count: int) -> list[int]:
+        """Argmax for ``[start_row, start_row + count)`` of a prefill hidden state.
+
+        Only the one or two 32-row tiles that actually cover the block are projected, so
+        the 202k-wide head runs twice at most however wide the traced forward is.
+        """
+        model = self.model
+        out: list[int] = []
+        first_tile = start_row // TILE_ROWS
+        last_tile = (start_row + count - 1) // TILE_ROWS
+        for tile in range(first_tile, last_tile + 1):
+            row = model._slice_rows(hidden, tile * TILE_ROWS, aligned=True)
+            normed = model.final_norm.forward(row)
+            ttnn.deallocate(row)
+            logits = model.lm_head.forward(normed, apply_softcap=not self.uncapped_argmax)
+            ttnn.deallocate(normed)
+            ids = self._argmax_rows(logits, TILE_ROWS)
+            ttnn.deallocate(logits)
+            for index, value in enumerate(ids):
+                absolute = tile * TILE_ROWS + index
+                if start_row <= absolute < start_row + count:
+                    out.append(value)
+        return out
+
+    def _verify_prefill_traced(self, full_sequence, candidates, anchor_pos: int, stats):
+        """Replay the fixed-width verify trace, then read the block's rows.
+
+        ``full_sequence[:anchor_pos] + [anchor] + candidates`` is padded to
+        ``verify_width``; row index therefore *is* absolute position, which is what makes
+        the tap offset and the logits range plain slices.
+        """
+        model = self.model
+        block = self.config.block_size
+        ids = list(full_sequence[:anchor_pos]) + [full_sequence[anchor_pos]] + list(candidates)
+        if len(ids) > self.verify_width:
+            raise NotImplementedError(
+                f"traced verify is fixed at {self.verify_width} rows and this sequence needs "
+                f"{len(ids)}; raise verify_width (device cost is flat in rows) or fall back to "
+                "the eager verify"
+            )
+
+        t_forward = time.perf_counter()
+        host_ids = torch.full((1, self.verify_width), model.embed_pad_id, dtype=torch.int32)
+        host_ids[0, : len(ids)] = torch.tensor(ids, dtype=torch.int32)
+        host = ttnn.from_torch(
+            host_ids,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.uint32,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(model.mesh_device),
+        )
+        ttnn.copy_host_to_device_tensor(host, self._verify_tokens)
+        ttnn.execute_trace(model.mesh_device, self._prefill_trace["id"], cq_id=0, blocking=True)
+        stats.verify_forward_seconds += time.perf_counter() - t_forward
+        stats.target_forwards += 1
+
+        t_logits = time.perf_counter()
+        target_argmax = self._argmax_range(self._prefill_trace["hidden"], anchor_pos, block)
+        stats.verify_logits_seconds += time.perf_counter() - t_logits
+        return target_argmax, self._prefill_trace["taps"]
 
     def _ensure_verify_trace(self) -> None:
         """Capture the verify decode step once, with taps armed.
@@ -572,6 +698,18 @@ class DFlashRunner:
         self.generator._stage(page_table=table)
         slot_row = model.page_table_row(table, 0)
         tt_page_table = model.page_table_row_to_device(slot_row)
+        if self.trace_verify and not self.verify_mode.startswith("decode"):
+            host_ids = torch.full((1, self.verify_width), model.embed_pad_id, dtype=torch.int32)
+            self._verify_tokens = ttnn.from_torch(
+                host_ids,
+                device=model.mesh_device,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                dtype=ttnn.uint32,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(model.mesh_device),
+            )
+            self._verify_page_table = tt_page_table
+            self._ensure_prefill_verify_trace()
         if self.verify_mode.startswith("decode"):
             # Every verify row addresses the SAME sequence: they write different positions
             # inside slot 0, which is what makes a batched decode step a block verify.
@@ -694,7 +832,14 @@ class DFlashRunner:
 
             # ------------------------------------------------------ verify
             t0 = time.perf_counter()
-            if self.verify_mode.startswith("decode"):
+            if self.trace_verify and not self.verify_mode.startswith("decode"):
+                target_argmax, verify_taps = self._verify_prefill_traced(
+                    prompt + produced, candidates, anchor_pos, stats
+                )
+                # Row index is absolute position on the from-zero path, so the block's
+                # tapped rows start exactly at the anchor.
+                lead, hidden = anchor_pos, None
+            elif self.verify_mode.startswith("decode"):
                 # One traced decode step over the block: the anchor and its candidates at
                 # absolute positions anchor_pos..anchor_pos+block-1, all sharing slot 0's
                 # page-table row.  Nothing is re-forwarded -- the prefix is already in the
@@ -725,9 +870,8 @@ class DFlashRunner:
             num = result.n_matches + 1
             t_taps = time.perf_counter()
             if verify_taps is not None:
-                # Trace outputs: read, never drain.  Row u already *is* position
-                # anchor_pos + u, so there is no lead to skip.
-                context_host = self._taps_from(verify_taps, num, offset=0)
+                # Trace outputs: read, never drain.
+                context_host = self._taps_from(verify_taps, num, offset=lead)
             else:
                 context_host = self._taps_to_host(num, offset=lead)
             stats.taps_seconds += time.perf_counter() - t_taps

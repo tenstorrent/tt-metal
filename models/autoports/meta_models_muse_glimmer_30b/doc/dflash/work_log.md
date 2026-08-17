@@ -4,12 +4,22 @@ Goal: implement the DFlash drafter Muse-Glimmer-30B ships with, and win decode
 t/s/u at batch 1.  The model card advertises **3.1× on an RTX 5090** (74.9 →
 233.4 tok/s) from this feature, and no stage of the original bring-up ported it.
 
-Status: **end to end on device and 5.5× faster than the first working run, but
-still 0.47× of non-speculative decode.**  19.95 t/s/u against a 42.88 t/s/u
-baseline at ISL 67 / OSL 128, warm program cache.  The drafter is no longer the
-bottleneck — the verify forward is 68 % of the iteration.  F9 has the arithmetic,
-F10 has the measured acceptance rate that bounds the whole feature, and F11 an
-attempt at the verify fix that is scaffolded but not yet working.
+Status: **7.3× faster than the first working run; ahead of non-speculative decode
+on the highest-acceptance prompt and behind it on the rest.**  26.2 t/s/u against a
+42.9 t/s/u baseline at ISL 67 / OSL 128, and 25.4–44.2 t/s/u across six prompts
+(mean 32.6, up from 22.0) where one prompt reaches **1.03×**.
+
+Two independent things cap it, both now measured rather than assumed:
+
+* **one target forward costs 55–67 ms whatever it computes** (F13), because the
+  prefill path is host-dispatch bound — so the verify cannot be made cheaper by
+  verifying fewer rows, and it alone exceeds the break-even budget;
+* **acceptance is capped by the target port, not the drafter** (F15) — the real HF
+  drafter scores no better against this target — so the CPU oracle's 4.41
+  accepted/forward is not reachable here.
+
+F16 records three redesigns that would each have closed the gap and did not
+survive measurement.
 
 ---
 
@@ -478,6 +488,111 @@ from a wheel that no longer exists, backed up under `vendor/`, so nothing may be
 pip-installed over it.  `tests/dflash_checkpoint.py` reads config + weights straight
 from the snapshot so perf work does not depend on it at all.
 
+### F13 — A prefill forward costs the same whatever it computes
+
+Measured directly (`tests/dflash_verify_cost.py`, warm medians), which every
+end-to-end comparison had been confounding:
+
+| start_pos | 32 rows | 64 rows | 128 rows | 256 rows |
+|---|---|---|---|---|
+| 0 (plain SDPA) | 65.5 | 60.6 | 54.7 | 57.5 |
+| 64 – 1024 (chunked SDPA over the paged cache) | 66–67 | 57–61 | — | — |
+
+**Flat**, and 32 rows costs *more* than 128.  So the forward is host-dispatch bound,
+not work bound, and three things follow at once.  Re-forwarding fewer committed rows
+saves nothing, so the aligned restart's value is not the shorter forward.  The
+chunked paged path costs the same as the plain one, so continuing at an offset is
+free.  And at 64.2 ms one forward already exceeds the entire break-even budget of
+2.72 tokens × 23.31 ms = 63.4 ms — no drafter or I/O work can win without changing
+the forward itself.
+
+Corollary worth keeping: the aligned verify's real benefit was never the forward, it
+was running the 202k-wide LM head over 2 tiles instead of 7.  Device-side argmax got
+most of that back on *both* paths.
+
+### F14 — Nothing needed a sliding K/V tail
+
+The `first working end-to-end run` commit recorded two reasons the verify had to
+start at position 0, and neither binds.  `FunctionalDecoder._chunk_page_table`
+already shifts the page-table row by `start_pos / block_size`, which is the whole of
+the `paged_fill_cache` constraint.  And a sliding layer needs the previous call's K/V
+tail only because `chunked_scaled_dot_product_attention` has no sliding-window mask —
+but **while the sequence fits inside the 2048 window the mask is vacuous**: query `i`
+attends `(i - w, i]`, and if the last query is below `w` the lower bound clips
+nothing, so the layer *is* a full-attention layer over the chunk and the paged path is
+exact.  `FunctionalDecoder.sliding_window_is_inert` says so and routes it.
+
+An earlier version did thread tails via `trim_sliding_tails`.  It was both slower —
+39 of the target's 52 layers are sliding, so trimming cost **78 device slices per
+iteration** and took verify from 106.8 to 157 ms — and it appeared to produce a wrong
+token, which was itself a mis-diagnosis: gating on token equality with greedy is
+invalid (F2), and `tests/dflash_verify_probe.py` shows the aligned continuation
+matches a from-zero prefill at 3 differences in 72 positions, **all** at near-ties
+(gaps 0.0625–0.1875), none wide.
+
+### F15 — Acceptance is capped by the *target* port, and the drafter is exonerated
+
+The device accepts 2.72 tokens per target forward where the CPU oracle accepts 4.41
+on the identical prompt and length.  `tests/dflash_acceptance_probe.py` drafts every
+block twice from byte-identical inputs — once with the TTNN drafter, once with the
+**real HF drafter on CPU** — and scores both against the same device target:
+
+| | accepted per block |
+|---|---|
+| device drafter | 2.50 |
+| HF drafter, same target | **2.57** |
+| candidate agreement | 0.900 per position |
+
+Swapping in the genuine drafter buys **nothing**.  So what limits acceptance is that
+the port's target argmax differs from the model the drafter was trained against: a
+faithful prediction gets marked wrong.  That closes four avenues at once, all of which
+were tried and moved acceptance by ~0: drafter math fidelity (F8), drafter weight
+dtype (BFP8 2.72 vs BF16 2.78, at 4× the drafter cost), the LM head's tanh softcap,
+and the padded-context rewrite (F7).
+
+It also means the card's 3.1× is not reachable by optimising DFlash.  Raising it
+requires raising the *target's* numerical fidelity, which trades directly against the
+decode speed DFlash is being compared to.
+
+### F16 — Three redesigns that would have closed the gap, and why each failed
+
+Recorded in full because each is the obvious next idea.
+
+**Verify as one batched decode step.**  The strongest of the three.  A *traced* decode
+step costs 23.3 ms against 64.5 ms for any prefill, and decode cost is independent of
+how many rows are active (70.35 ms at 16 active against 72.12 at 1, measured), so the
+16 verify positions should verify for the price of one decode step — exactly the
+break-even gap.  It is **unsound**: decode rows do not reliably observe each other's
+same-step K/V writes.  Two runs of the identical step, each from a freshly re-seeded
+cache, disagreed at row 14, and the winner differed from the prefill reference by a
+**0.59** logit gap — far outside the near-tie floor.  End to end it produced degenerate
+output (one token repeated) whose acceptance *looked* excellent, 15/15 blocks, because
+repetition is trivial to draft.
+
+Two traps made it look correct first, and both are easy to repeat: running the prefill
+reference *before* the decode step pre-warms the cache for exactly those positions, so
+the decode never has to chain; and running the decode twice without re-seeding does
+the same to the second run.  `tests/dflash_decode_verify_probe.py` now re-seeds before
+every measurement.
+
+**Tracing the verify forward.**  Flat cost (F13) means a *fixed-width* verify is free,
+and fixed width with `start_pos = 0` is one static graph — so the whole verify should
+capture as a single trace, worth ~15 ms/iteration.  It wedges: a live trace requires
+that nothing else allocate device buffers (`"Allocating device buffers is unsafe due
+to the existence of an active trace"`), and DFlash allocates on every iteration — the
+drafter's activations, the context upload, the logits tiles.  The shipped decode trace
+coexists with its loop only because that loop allocates *nothing*.  Doing this needs
+the DFlash loop converted to persistent buffers throughout, which is a larger change
+than the trace.  The attempt also wedged the board and needed `tt-smi -r`.
+
+**GQA by grouping queries instead of copying K/V.**  Reshaping `[1, 32, block, d]` to
+`[1, 8, 4*block, d]` serves 32 query heads from 8 K/V heads with no `repeat_interleave`
+and is exactly equivalent on paper.  Wrong here: TILE layout pads the `-2` dimension to
+32, so at `block_size` 16 every head owns a 32-row tile that is half padding, and a
+reshape folding heads into the row axis crosses it.  15 of 25 drafter tests fail while
+the encoder tests, which touch no head dimension, still pass.  It would be valid at
+`block_size >= 32`.
+
 ## Artifacts
 
 | file | what |
@@ -498,28 +613,27 @@ from the snapshot so perf work does not depend on it at all.
 
 ## Next
 
-In impact order, with the arithmetic in F9:
+In impact order, with the arithmetic in F13 and F15:
 
-1. **Finish the aligned verify** (F10) — the only change that can flip DFlash to a
-   win, since verify is 106.8 ms of a 72.7 ms break-even budget.  The scaffold exists
-   and runs; it needs (a) a borrow mode on `prefill_forward` so the sliding tail is
-   not consumed, which removes 78 slices per iteration, and (b) the one-wrong-token
-   bug found.  Gate it on **token equality with `--verify from-zero`**, not on
-   acceptance rate: the bug moved acceptance by 0.2 and moved tokens outright.
-2. **The drafter's constant-shape floor** — 14.3 ms measured, 120 ms today.  Wants
-   the *incremental* cache made shape-stable through in-place writes at fixed
-   capacity, so it is O(delta) *and* one program, rather than the bucketed
-   whole-prefix recompute that trades O(bucket) work for shape stability.
-3. **Acceptance** — now measured at 2.26 matches per block of 15 pooled over 234
-   blocks (F10), so this is no longer an unknown but a bound: it is what limits the
-   whole feature to ~1.4x even with every op fixed, and t/s/u tracks it almost
-   linearly.  Per F8 it is *not* explained by drafter numerical fidelity, so the
-   candidates are conditioning (taps, context assembly, positions) and the drafter
-   itself.  Highest value, least explored.
-4. Cheaper follow-ons, all inside the 120 ms draft figure: device-side argmax instead
-   of gathering a 202k-wide logits tile to host each iteration, and skipping the
-   mask entirely below position 2033, where it is uniformly permissive.
+1. **Make one target forward cheaper.**  It is 64.2 ms of a 104 ms iteration and, at
+   2.72 tokens per iteration, exceeds the 63.4 ms break-even budget on its own.  It is
+   host-dispatch bound, so the only mechanism is tracing — which needs the DFlash loop
+   converted to persistent buffers first, because a live trace forbids concurrent
+   device allocation (F16).  Worth ~15 ms.
+2. **Persistent buffers for the drafter too.**  Its forward is 16.3 ms for 5 layers —
+   3.3 ms/layer against the target's 1.15 — for the same reason, and its shapes are
+   already static per bucket, so it is the easier of the two to trace.  Worth ~12 ms.
+3. **Cheaper candidates and taps** — 9.6 ms goes on the LM head plus an all-gather of
+   32x202752, and 8.5 ms on moving tapped hidden states host-ward and back.  A
+   per-shard argmax avoids the gather; assembling the context on device avoids the
+   round trip.  Worth ~12 ms together.
 
-Not worth pursuing on current evidence: drafter weight dtype (bf16 measured *worse*
-than BFP8 on acceptance, and both are within F7's noise band), and further drafter
-math fidelity (F8 moved PCC 5–10× and acceptance not at all).
+Together those are ~39 ms of a 104 ms iteration, which reaches break-even on the
+median prompt and a clear win on the better half.  Beyond that the ceiling is
+acceptance (F15), and that is a property of the target port's fidelity rather than
+of DFlash.
+
+Not worth pursuing on current evidence: drafter weight dtype, drafter math fidelity,
+the LM head softcap, and the padded-context rewrite — all measured, all moved
+acceptance by ~0 (F15).  And verify as a batched decode step is unsound, not merely
+unfinished (F16).
