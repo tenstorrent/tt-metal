@@ -241,8 +241,8 @@
   <strong>today</strong> = the engine the model hits pre-branch, measured as <code>ttnn.topk largest=False</code>
   (the stock-factory proxy: <code>largest</code> is only the router on this branch, and pre-branch both
   largest values hit the same stock factory) — except the <code>topk_large_indices</code> callers, whose
-  today is the op itself. <strong>ttnn.topk (this branch)</strong> = <code>ttnn.topk largest=True</code> with
-  no extra arguments; <strong>op direct</strong> = <code>topk_large_indices</code> called by name.
+  today is the op itself. <strong>ttnn.topk (our routing)</strong> = <code>ttnn.topk largest=True</code> with
+  no extra arguments; <strong>topk_large_indices (our multi-core)</strong> = the op called by name.
   † = linear-model estimate (cell too slow for the watchdog), not a measurement; — = engine not applicable.</p>
   <p class="sub">Two structural findings this table has to carry honestly. <strong>(1)</strong> Every production
   <em>sampling</em> call site passes <code>indices_tensor=</code> and usually <code>sub_core_grids=</code>
@@ -255,7 +255,7 @@
   linear single-core factory in production today.</p>
 <!-- MODEL_SCENARIOS -->
   <div class="tablewrap"><table>
-    <thead><tr><th>scenario</th><th>model + callsite</th><th class="n">shape (rows×N, k)</th><th class="n">today: engine</th><th class="n">today µs</th><th class="n ours">ttnn.topk (this branch)</th><th class="n ours">op direct</th><th class="n">best speedup</th><th>note</th></tr></thead>
+    <thead><tr><th>scenario</th><th>model + callsite</th><th class="n">shape (rows×N, k)</th><th class="n">today: engine</th><th class="n">today µs</th><th class="n ours">ttnn.topk (our routing)</th><th class="n ours">topk_large_indices (our multi-core)</th><th class="n">best speedup</th><th>note</th></tr></thead>
     <tbody>
       <tr><td>sampling_qwen36_tp4</td><td>Qwen3 decode sampling, BH p150 TP=4 (vocab 151936 -&gt; 37984/dev -&gt; pad 65536)<br><code>models/common/sampling/tt_sampling.py:847 (shard: models/demos/blackhole/qwen36/tt/model.py:43-61)</code></td><td class="n">32×65,536, k=32</td><td class="n">stocknow</td><td class="n">9,596.3</td><td class="n win">217.0</td><td class="n win">193.6</td><td class="n win">49.6×</td><td>65536 is the one pow2 width that fails the bitonic W&lt;65535 gate -&gt; linear single-core in production today; prod call passes indices_tensor+sub_core_grids+stable=True, so the routed column is the CANONICAL form (args dropped), not a free win <span class="flat">[1x/token/device]</span></td></tr>
       <tr><td>sampling_tp8_pow2</td><td>Qwen2.5-72B / gpt-oss / MiniMax-M3 decode sampling, TP=8 (pad 32768)<br><code>models/common/sampling/tt_sampling.py:847 / models/common/modules/sampling/sampling_1d.py:568</code></td><td class="n">32×32,768, k=32</td><td class="n">stocknow</td><td class="n">171.3</td><td class="n win">171.3</td><td class="n win">120.7</td><td class="n win">1.4×</td><td>today IS the multi-core bitonic (pow2, 8192&lt;=W&lt;65535, k&lt;=64) -- the honest already-fast row; routing does not engage here, so routed measures the same bitonic <span class="flat">[1x/token/device]</span></td></tr>

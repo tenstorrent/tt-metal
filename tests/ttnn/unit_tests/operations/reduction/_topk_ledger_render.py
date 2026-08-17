@@ -175,7 +175,7 @@ def render_model_scenarios(rows):
     head = (
         '<thead><tr><th>scenario</th><th>model + callsite</th><th class="n">shape (rows×N, k)</th>'
         '<th class="n">today: engine</th><th class="n">today µs</th>'
-        '<th class="n ours">ttnn.topk (this branch)</th><th class="n ours">op direct</th>'
+        '<th class="n ours">ttnn.topk (our routing)</th><th class="n ours">topk_large_indices (our multi-core)</th>'
         '<th class="n">best speedup</th><th>note</th></tr></thead>'
     )
     return (
