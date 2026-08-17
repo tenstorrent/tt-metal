@@ -51,14 +51,28 @@ void SelectTargetLogitDeviceOperation::validate_on_program_cache_miss(
         "SelectTargetLogit: logit must be rank 4, got rank {}",
         tensor_args.logit.logical_shape().rank());
 
-    // The reader sizes its target-page reads from the target's inner dim, but the program cache
-    // is keyed on the logit shape alone; this tie keeps a cached program valid for the target
+    // The reader walks one row-major target page per batch-channel slice of the logit
+    // (page = tile_row / Ht over NC * Ht rows) and sizes each page read from the target's
+    // inner dim, while the program cache is keyed on the logit shape alone. Pinning both the
+    // target's page width and its page count to the logit keeps every page index the reader
+    // can form inside the target allocation, and keeps a cached program valid for the target
     // tensor it runs with.
+    const auto& target_shape = tensor_args.target.logical_shape();
     TT_FATAL(
-        tensor_args.target.logical_shape()[-1] == tensor_args.logit.logical_shape()[-2],
+        target_shape[-1] == tensor_args.logit.logical_shape()[-2],
         "SelectTargetLogit: target inner dim ({}) must equal logit sequence dim ({})",
-        tensor_args.target.logical_shape()[-1],
+        target_shape[-1],
         tensor_args.logit.logical_shape()[-2]);
+    const auto& logit_padded_shape = tensor_args.logit.padded_shape();
+    const uint64_t logit_nc_pages =
+        logit_padded_shape.volume() / (static_cast<uint64_t>(logit_padded_shape[-2]) * logit_padded_shape[-1]);
+    const uint64_t target_pages = target_shape.volume() / target_shape[-1];
+    TT_FATAL(
+        target_pages == logit_nc_pages,
+        "SelectTargetLogit: target must supply one page per logit batch-channel slice, got {} page(s) for {} "
+        "slice(s)",
+        target_pages,
+        logit_nc_pages);
 
     TT_FATAL(args.local_V > 0U, "SelectTargetLogit: local_V must be > 0");
 
