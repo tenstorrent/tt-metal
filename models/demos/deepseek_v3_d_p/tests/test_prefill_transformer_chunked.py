@@ -634,6 +634,14 @@ def run_chunked_transformer(
     emb_dim = config.hidden_size
     kvpe_dim = config.qk_rope_head_dim + config.kv_lora_rank
     config.max_seq_len = SEQ_CACHE
+    # Keep rope_scaling CONSISTENT with the length we actually run. config_builder() is called with no
+    # args, so original_max_position_embeddings stays at its 8192 default while max_seq_len is mutated to
+    # 56320 here -- and the runner, which passes PREFILL_MAX_SEQ_LEN, gets 56320 for both. factor=1.0 is
+    # documented as "disables YaRN", but the implementation does not fully short-circuit: the two configs
+    # produce cos/sin tables differing by up to 3.8e-6, which is exactly why this test and the runner
+    # reported slightly different KV PCC (0.861237 vs 0.860911) on identical tokens and identical goldens.
+    if isinstance(getattr(config, "rope_scaling", None), dict):
+        config.rope_scaling["original_max_position_embeddings"] = SEQ_CACHE
 
     logger.info(
         f"chunked transformer: num_layers={num_layers} mesh={mesh_shape} n_chunks={n_chunks} "
