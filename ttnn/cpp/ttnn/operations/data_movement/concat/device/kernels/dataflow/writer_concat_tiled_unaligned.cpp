@@ -15,8 +15,8 @@
 //
 // Per band, cb_rm holds one untilized 32x32 block per input tile (pushed input-major, in read
 // order). Each block's row r starts at r * tile_row_bytes. This kernel gathers the logical
-// (unpadded) row segments of every input into one contiguous row-major band in cb_asm — an
-// arbitrary-byte-offset copy no NoC or LLK path can do, hence the CPU memmove — zero-fills the
+// (unpadded) row segments of every input into one contiguous row-major band in cb_asm -- an
+// arbitrary-byte-offset copy no NoC or LLK path can do, hence the CPU memmove -- zero-fills the
 // output's width padding, and after the compute kernel retilizes the band, writes the output
 // tiles to the interleaved output buffer.
 void kernel_main() {
