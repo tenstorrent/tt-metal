@@ -142,12 +142,19 @@ def render_model_scenarios(rows):
         today_label = {"stocknow": "ttnn.topk", "routed": "ttnn.topk", "op": "topk_large_indices"}.get(today_e, today_e)
         today = fnum(r.get("today_us"))
         ro, op = fnum(r.get("routed_us")), fnum(r.get("op_us"))
+        today_cores = r.get(f"{today_e}_cores", "")
+        if today is not None and today_cores:
+            today_td = f'<td class="n">{today:,.1f} <span class="flat">@{today_cores}c</span></td>'
+        else:
+            today_td = us_fmt(today)
 
-        # best ours: the cheaper measured variant
-        cands = [(v, n) for v, n in ((ro, "routed ttnn.topk"), (op, "direct op")) if v is not None]
+        # best ours: the cheaper measured variant, with its core count
+        cands = [(v, n, r.get(f"{key}_cores", "")) for v, n, key in
+                 ((ro, "routed ttnn.topk", "routed"), (op, "direct op", "op")) if v is not None]
         if cands:
-            best, best_name = min(cands)
-            best_td = f'<td class="n ours">{best:,.1f} <span class="flat">({best_name})</span></td>'
+            best, best_name, best_cores = min(cands)
+            bc = f" @{best_cores}c" if best_cores else ""
+            best_td = f'<td class="n ours">{best:,.1f}{bc} <span class="flat">({best_name})</span></td>'
         else:
             best, best_name, best_td = None, None, '<td class="n flat">not run</td>'
 
@@ -185,7 +192,7 @@ def render_model_scenarios(rows):
             f'      <tr><td>{esc(r["scenario"])}</td>'
             f'<td>{esc(r.get("model", ""))}<br><code>{esc(r.get("callsite", ""))}</code></td>'
             f'<td class="n">{shape}</td>'
-            f'<td class="n">{esc(today_label)}</td>{us_fmt(today)}'
+            f'<td class="n">{esc(today_label)}</td>{today_td}'
             f"{best_td}{sp}"
             f"<td>{capture}</td>"
             f"<td>{note}</td></tr>"
