@@ -5076,3 +5076,62 @@ class SamplingGolden:
         if op in self.ROUND_TO_NEAREST_OPS:
             return values.to(torch.bfloat16).to(torch.float32)
         return truncate_to_bfloat16(values)
+
+
+def rope_bands(
+    ht: int,
+    wt: int,
+    x_base: int,
+    x_stride: int,
+    cos_base: int,
+    sin_base: int,
+    cs_stride: int,
+):
+    """(x_row, cos_row, sin_row) for every vector sfpu_rope_all_rows issues."""
+    for w in range(wt):
+        for face in range(2):
+            cs_offset = w * cs_stride + face * FACE_DIM
+            for head in range(ht):
+                x_row = x_base + w * x_stride + face * FACE_DIM + head * wt * x_stride
+                yield x_row, cos_base + cs_offset, sin_base + cs_offset
+
+
+def rope_rotated_rows(**geometry) -> list[int]:
+    """Every Dest row the rotation writes, ascending."""
+    return sorted(
+        x_row + i for x_row, _, _ in rope_bands(**geometry) for i in range(4)  # rows
+    )
+
+
+@register_golden
+class RopeGolden:
+    """
+    Adjacent columns of a Dest row contain these pairs:
+        x'_even = cos*x_even - sin*x_odd
+        x'_odd  = sin*x_even + cos*x_odd
+    The golden returns the entire Dest register.
+    """
+
+    def __call__(
+        self, dest: torch.Tensor, scale: float = None, **geometry
+    ) -> torch.Tensor:
+        source = dest.to(torch.float32)
+        golden = source.clone()
+
+        even = torch.arange(0, source.shape[1], 2)
+        odd = even + 1
+        factor = 1.0 if scale is None else scale
+
+        for x_row, cos_row, sin_row in rope_bands(**geometry):
+            for i in range(4):  # rows
+                cos = source[cos_row + i, even] * factor
+                sin = source[sin_row + i, even] * factor
+                x_even = source[x_row + i, even]
+                x_odd = source[x_row + i, odd]
+                golden[x_row + i, even] = truncate_to_bfloat16(
+                    cos * x_even - sin * x_odd
+                )
+                golden[x_row + i, odd] = truncate_to_bfloat16(
+                    sin * x_even + cos * x_odd
+                )
+        return golden
