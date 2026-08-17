@@ -5,25 +5,8 @@
 
 #include <algorithm>
 #include <set>
-#include <tuple>
 
 namespace ttnn::experimental::prim::kda_factory_detail {
-
-tt::tt_metal::ComputeConfigDescriptor kda_compute_cfg(
-    tt::ARCH arch, const DeviceComputeKernelConfig& config, bool honor_caller_config) {
-    if (!honor_caller_config) {
-        return tt::tt_metal::ComputeConfigDescriptor{
-            .math_fidelity = tt::tt_metal::MathFidelity::HiFi4, .fp32_dest_acc_en = true, .math_approx_mode = false};
-    }
-    const auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(arch, config);
-    (void)packer_l1_acc;
-    return tt::tt_metal::ComputeConfigDescriptor{
-        .math_fidelity = math_fidelity,
-        .fp32_dest_acc_en = fp32_dest_acc_en,
-        .dst_full_sync_en = dst_full_sync_en,
-        .math_approx_mode = math_approx_mode};
-}
 
 KdaPrepWorkDist distribute_prep(tt::tt_metal::CoreCoord grid, uint32_t total, uint32_t core_cap) {
     const uint32_t max_cores = std::min<uint32_t>(grid.x * grid.y, core_cap);

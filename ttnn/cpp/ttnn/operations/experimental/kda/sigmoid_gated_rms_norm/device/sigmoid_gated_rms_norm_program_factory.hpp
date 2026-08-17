@@ -4,11 +4,12 @@
 #pragma once
 
 #include "sigmoid_gated_rms_norm_device_operation_types.hpp"
+#include "ttnn/metal_v2_artifacts.hpp"
 
 namespace ttnn::experimental::prim {
 
 struct SigmoidGatedRmsNormProgramFactory {
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const SigmoidGatedRmsNormParams&, const SigmoidGatedRmsNormInputs&, std::vector<Tensor>&);
 };
 

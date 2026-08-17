@@ -3,45 +3,32 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 
-void kernel_main() {
-    constexpr uint32_t Vt = get_compile_time_arg_val(0);
-    constexpr uint32_t H = get_compile_time_arg_val(1);
-    constexpr uint32_t Mt = get_compile_time_arg_val(2);
-    constexpr auto x_a = TensorAccessorArgs<3>();
-    constexpr auto g_a = TensorAccessorArgs<x_a.next_compile_time_args_offset()>();
-    constexpr auto w_a = TensorAccessorArgs<g_a.next_compile_time_args_offset()>();
-
-    const uint32_t wi_start = get_arg_val<uint32_t>(0);
-    const uint32_t wi_count = get_arg_val<uint32_t>(1);
-    const uint32_t x_addr = get_arg_val<uint32_t>(2);
-    const uint32_t g_addr = get_arg_val<uint32_t>(3);
-    const uint32_t w_addr = get_arg_val<uint32_t>(4);
-
-    const uint32_t tx = get_tile_size(0);
-    const uint32_t tg = get_tile_size(1);
-    const uint32_t tw = get_tile_size(2);
-    const auto x_acc = TensorAccessor(x_a, x_addr, tx);
-    const auto g_acc = TensorAccessor(g_a, g_addr, tg);
-    const auto w_acc = TensorAccessor(w_a, w_addr, tw);
+template <uint32_t Vt, uint32_t H, uint32_t Mt>
+TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
+    const auto x_acc = TensorAccessor(tensor::input);
+    const auto g_acc = TensorAccessor(tensor::gate);
+    const auto w_acc = TensorAccessor(tensor::weight);
+    DataflowBuffer x(dfb::x);
+    DataflowBuffer gate(dfb::gate);
+    DataflowBuffer weight(dfb::weight);
     Noc noc;
 
     dataflow_kernel_lib::
-        calculate_and_prepare_reduce_scaler<8, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
+        calculate_and_prepare_reduce_scaler<dfb::scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
 
-    CircularBuffer weight(2);
     weight.reserve_back(Vt);
     for (uint32_t vt = 0; vt < Vt; vt++) {
-        noc.async_read(w_acc, weight, tw, {.page_id = vt}, {.offset_bytes = vt * tw});
+        noc.async_read(
+            w_acc, weight, weight.get_entry_size(), {.page_id = vt}, {.offset_bytes = vt * weight.get_entry_size()});
     }
     noc.async_read_barrier();
     weight.push_back(Vt);
 
-    CircularBuffer x(0);
-    CircularBuffer gate(1);
     for (uint32_t i = 0; i < wi_count; i++) {
         const uint32_t wi = wi_start + i;
         const uint32_t bh = wi / Mt;
@@ -53,8 +40,14 @@ void kernel_main() {
         x.reserve_back(Vt);
         gate.reserve_back(Vt);
         for (uint32_t vt = 0; vt < Vt; vt++) {
-            noc.async_read(x_acc, x, tx, {.page_id = x_base + vt}, {.offset_bytes = vt * tx});
-            noc.async_read(g_acc, gate, tg, {.page_id = gate_base + vt}, {.offset_bytes = vt * tg});
+            noc.async_read(
+                x_acc, x, x.get_entry_size(), {.page_id = x_base + vt}, {.offset_bytes = vt * x.get_entry_size()});
+            noc.async_read(
+                g_acc,
+                gate,
+                gate.get_entry_size(),
+                {.page_id = gate_base + vt},
+                {.offset_bytes = vt * gate.get_entry_size()});
         }
         noc.async_read_barrier();
         x.push_back(Vt);

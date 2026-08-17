@@ -11,38 +11,36 @@
 #include "api/compute/bcast.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/reconfig_data_format.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
-constexpr uint32_t cb_x = 0, cb_gate = 1, cb_weight = 2, cb_tmp = 3;
-constexpr uint32_t cb_stats = 4, cb_inv = 5, cb_norm = 6, cb_out = 7, cb_scaler = 8;
-
-void square(uint32_t n) {
-    cb_reserve_back(cb_tmp, n);
-    pack_reconfig_data_format(cb_tmp);
-    reconfig_data_format_srca(cb_x);
-    copy_tile_to_dst_init_short(cb_x);
+void square(uint32_t n, DataflowBuffer& tmp) {
+    tmp.reserve_back(n);
+    pack_reconfig_data_format(dfb::tmp);
+    reconfig_data_format_srca(dfb::x);
+    copy_tile_to_dst_init_short(dfb::x);
     for (uint32_t i = 0; i < n; i++) {
         tile_regs_acquire();
-        copy_tile(cb_x, i, 0);
-        copy_tile(cb_x, i, 1);
+        copy_tile(dfb::x, i, 0);
+        copy_tile(dfb::x, i, 1);
         mul_binary_tile_init();
         mul_binary_tile(0, 1, 0);
         tile_regs_commit();
         tile_regs_wait();
-        pack_tile(0, cb_tmp, i);
+        pack_tile(0, dfb::tmp, i);
         tile_regs_release();
     }
-    cb_push_back(cb_tmp, n);
+    tmp.push_back(n);
 }
 
-void inverse_rms(uint32_t epsilon_bits, uint32_t inv_v_bits) {
-    cb_reserve_back(cb_inv, 1);
-    pack_reconfig_data_format(cb_inv);
-    reconfig_data_format_srca(cb_stats);
-    copy_tile_to_dst_init_short(cb_stats);
+void inverse_rms(uint32_t epsilon_bits, uint32_t inv_v_bits, DataflowBuffer& inv) {
+    inv.reserve_back(1);
+    pack_reconfig_data_format(dfb::inv);
+    reconfig_data_format_srca(dfb::stats);
+    copy_tile_to_dst_init_short(dfb::stats);
     tile_regs_acquire();
-    copy_tile(cb_stats, 0, 0);
+    copy_tile(dfb::stats, 0, 0);
     binop_with_scalar_tile_init();
     mul_unary_tile(0, inv_v_bits);
     add_unary_tile(0, epsilon_bits);
@@ -50,113 +48,113 @@ void inverse_rms(uint32_t epsilon_bits, uint32_t inv_v_bits) {
     rsqrt_tile(0);
     tile_regs_commit();
     tile_regs_wait();
-    pack_tile(0, cb_inv, 0);
+    pack_tile(0, dfb::inv, 0);
     tile_regs_release();
-    cb_push_back(cb_inv, 1);
+    inv.push_back(1);
 }
 
-void scale_by_inverse_rms(uint32_t Vt) {
-    cb_reserve_back(cb_norm, Vt);
-    pack_reconfig_data_format(cb_norm);
-    reconfig_data_format(cb_x, cb_inv);
-    mul_bcast_cols_init(cb_x, cb_inv);
+void scale_by_inverse_rms(uint32_t Vt, DataflowBuffer& norm) {
+    norm.reserve_back(Vt);
+    pack_reconfig_data_format(dfb::norm);
+    reconfig_data_format(dfb::x, dfb::inv);
+    mul_bcast_cols_init(dfb::x, dfb::inv);
     for (uint32_t i = 0; i < Vt; i++) {
         tile_regs_acquire();
-        mul_tiles_bcast_cols(cb_x, cb_inv, i, 0, 0);
+        mul_tiles_bcast_cols(dfb::x, dfb::inv, i, 0, 0);
         tile_regs_commit();
         tile_regs_wait();
-        pack_tile(0, cb_norm, i);
+        pack_tile(0, dfb::norm, i);
         tile_regs_release();
     }
-    cb_push_back(cb_norm, Vt);
+    norm.push_back(Vt);
 }
 
-void apply_weight(uint32_t Vt) {
-    cb_reserve_back(cb_tmp, Vt);
-    pack_reconfig_data_format(cb_tmp);
-    reconfig_data_format(cb_norm, cb_weight);
-    mul_bcast_rows_init(cb_norm, cb_weight);
+void apply_weight(uint32_t Vt, DataflowBuffer& tmp) {
+    tmp.reserve_back(Vt);
+    pack_reconfig_data_format(dfb::tmp);
+    reconfig_data_format(dfb::norm, dfb::weight);
+    mul_bcast_rows_init(dfb::norm, dfb::weight);
     for (uint32_t i = 0; i < Vt; i++) {
         tile_regs_acquire();
-        mul_tiles_bcast_rows(cb_norm, cb_weight, i, i, 0);
+        mul_tiles_bcast_rows(dfb::norm, dfb::weight, i, i, 0);
         tile_regs_commit();
         tile_regs_wait();
-        pack_tile(0, cb_tmp, i);
+        pack_tile(0, dfb::tmp, i);
         tile_regs_release();
     }
-    cb_push_back(cb_tmp, Vt);
+    tmp.push_back(Vt);
 }
 
-void activate_gate(uint32_t Vt) {
-    cb_reserve_back(cb_norm, Vt);
-    pack_reconfig_data_format(cb_norm);
-    reconfig_data_format_srca(cb_gate);
-    copy_tile_to_dst_init_short(cb_gate);
+void activate_gate(uint32_t Vt, DataflowBuffer& norm) {
+    norm.reserve_back(Vt);
+    pack_reconfig_data_format(dfb::norm);
+    reconfig_data_format_srca(dfb::gate);
+    copy_tile_to_dst_init_short(dfb::gate);
     sigmoid_tile_init();
     for (uint32_t i = 0; i < Vt; i++) {
         tile_regs_acquire();
-        copy_tile(cb_gate, i, 0);
+        copy_tile(dfb::gate, i, 0);
         sigmoid_tile(0);
         tile_regs_commit();
         tile_regs_wait();
-        pack_tile(0, cb_norm, i);
+        pack_tile(0, dfb::norm, i);
         tile_regs_release();
     }
-    cb_push_back(cb_norm, Vt);
+    norm.push_back(Vt);
 }
 
-void multiply_output(uint32_t Vt) {
-    cb_reserve_back(cb_out, Vt);
-    pack_reconfig_data_format(cb_out);
-    reconfig_data_format(cb_tmp, cb_norm);
-    mul_init(cb_tmp, cb_norm);
+void multiply_output(uint32_t Vt, DataflowBuffer& out) {
+    out.reserve_back(Vt);
+    pack_reconfig_data_format(dfb::out);
+    reconfig_data_format(dfb::tmp, dfb::norm);
+    mul_init(dfb::tmp, dfb::norm);
     for (uint32_t i = 0; i < Vt; i++) {
         tile_regs_acquire();
-        mul_tiles(cb_tmp, cb_norm, i, i, 0);
+        mul_tiles(dfb::tmp, dfb::norm, i, i, 0);
         tile_regs_commit();
         tile_regs_wait();
-        pack_tile(0, cb_out, i);
+        pack_tile(0, dfb::out, i);
         tile_regs_release();
     }
-    cb_push_back(cb_out, Vt);
+    out.push_back(Vt);
 }
-void kernel_main() {
-    constexpr uint32_t Vt = get_compile_time_arg_val(0);
-    constexpr uint32_t epsilon_bits = get_compile_time_arg_val(1);
-    constexpr uint32_t inv_v_bits = get_compile_time_arg_val(2);
-    const uint32_t count = get_arg_val<uint32_t>(0);
-    compute_kernel_hw_startup(cb_x, cb_scaler, cb_out);
-    CircularBuffer x(cb_x);
-    CircularBuffer gate(cb_gate);
-    CircularBuffer weight(cb_weight);
-    CircularBuffer tmp(cb_tmp);
-    CircularBuffer stats(cb_stats);
-    CircularBuffer inv(cb_inv);
-    CircularBuffer norm(cb_norm);
-    CircularBuffer scaler(cb_scaler);
+
+template <uint32_t Vt, uint32_t epsilon_bits, uint32_t inv_v_bits>
+TT_KERNEL void compute(uint32_t wi_count) {
+    compute_kernel_hw_startup(dfb::x, dfb::scaler, dfb::out);
+    DataflowBuffer x(dfb::x);
+    DataflowBuffer gate(dfb::gate);
+    DataflowBuffer weight(dfb::weight);
+    DataflowBuffer tmp(dfb::tmp);
+    DataflowBuffer stats(dfb::stats);
+    DataflowBuffer inv(dfb::inv);
+    DataflowBuffer norm(dfb::norm);
+    DataflowBuffer out(dfb::out);
+    DataflowBuffer scaler(dfb::scaler);
     weight.wait_front(Vt);
     scaler.wait_front(1);
-    for (uint32_t i = 0; i < count; i++) {
+    for (uint32_t i = 0; i < wi_count; i++) {
         x.wait_front(Vt);
         gate.wait_front(Vt);
-        square(Vt);
-        compute_kernel_lib::reduce<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW, cb_tmp, cb_scaler, cb_stats>(
-            compute_kernel_lib::ReduceInputBlockShape::of(1, Vt));
+        square(Vt, tmp);
+        compute_kernel_lib::
+            reduce<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW, dfb::tmp, dfb::scaler, dfb::stats>(
+                compute_kernel_lib::ReduceInputBlockShape::of(1, Vt));
         stats.wait_front(1);
-        inverse_rms(epsilon_bits, inv_v_bits);
+        inverse_rms(epsilon_bits, inv_v_bits, inv);
         inv.wait_front(1);
-        scale_by_inverse_rms(Vt);
+        scale_by_inverse_rms(Vt, norm);
         norm.wait_front(Vt);
         x.pop_front(Vt);
         inv.pop_front(1);
         stats.pop_front(1);
-        apply_weight(Vt);
+        apply_weight(Vt, tmp);
         tmp.wait_front(Vt);
         norm.pop_front(Vt);
-        activate_gate(Vt);
+        activate_gate(Vt, norm);
         norm.wait_front(Vt);
         gate.pop_front(Vt);
-        multiply_output(Vt);
+        multiply_output(Vt, out);
         tmp.pop_front(Vt);
         norm.pop_front(Vt);
     }

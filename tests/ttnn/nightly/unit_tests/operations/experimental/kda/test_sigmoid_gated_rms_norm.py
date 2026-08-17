@@ -374,6 +374,46 @@ def test_sigmoid_gated_rms_norm_program_key_includes_epsilon(device: ttnn.Device
     assert device.num_program_cache_entries() == entries + 1
 
 
+def test_sigmoid_gated_rms_norm_cache_hit_rebinds_fresh_tensors(device: ttnn.Device) -> None:
+    host_a, device_inputs_a = _device_inputs(device, batch=1, sequence=32, num_heads=2, value_dim=64, seed=1911)
+    host_b, device_inputs_b = _device_inputs(device, batch=1, sequence=32, num_heads=2, value_dim=64, seed=1912)
+
+    output_a = _run(*device_inputs_a, num_heads=2)
+    ttnn.synchronize_device(device)
+    entries = device.num_program_cache_entries()
+    output_b = _run(*device_inputs_b, num_heads=2)
+    ttnn.synchronize_device(device)
+
+    assert device.num_program_cache_entries() == entries
+    assert all(
+        tensor_a.buffer_address() != tensor_b.buffer_address()
+        for tensor_a, tensor_b in zip(device_inputs_a, device_inputs_b, strict=True)
+    )
+    assert output_a.buffer_address() != output_b.buffer_address()
+
+    expected_a = _reference(
+        host_a,
+        batch=1,
+        sequence=32,
+        num_heads=2,
+        value_dim=64,
+        output_dtype=ttnn.float32,
+    )
+    expected_b = _reference(
+        host_b,
+        batch=1,
+        sequence=32,
+        num_heads=2,
+        value_dim=64,
+        output_dtype=ttnn.float32,
+    )
+    actual_a = ttnn.to_torch(output_a)
+    actual_b = ttnn.to_torch(output_b)
+    assert_accurate(expected_a, actual_a, name="cache miss tensors", pcc_threshold=0.999)
+    assert_accurate(expected_b, actual_b, name="cache hit fresh tensors", pcc_threshold=0.999)
+    assert not torch.equal(actual_a, actual_b)
+
+
 def test_sigmoid_gated_rms_norm_default_compute_config_matches_explicit_defaults(device: ttnn.Device) -> None:
     _, (input_tt, gate_tt, weight_tt) = _device_inputs(device, seed=817)
     implicit = ttnn.to_torch(_run(input_tt, gate_tt, weight_tt))

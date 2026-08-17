@@ -6,58 +6,85 @@
 #include <cstring>
 #include <vector>
 
-#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
 
 #include "ttnn/operations/experimental/kda/factory/kda_factory_utils.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt::tt_metal;
 using namespace tt::constants;
 
 namespace ttnn::experimental::prim {
 
-tt::tt_metal::ProgramDescriptor SigmoidGatedRmsNormProgramFactory::create_descriptor(
+namespace m2 = tt::tt_metal::experimental;
+
+ttnn::device_operation::ProgramArtifacts SigmoidGatedRmsNormProgramFactory::create_program_artifacts(
     const SigmoidGatedRmsNormParams& attrs, const SigmoidGatedRmsNormInputs& in, std::vector<Tensor>& outputs) {
+    const auto& input = in.input.mesh_tensor();
+    const auto& gate = in.gate.mesh_tensor();
+    const auto& weight = in.weight.mesh_tensor();
+    const auto& output = outputs[0].mesh_tensor();
+    const auto& device = input.device();
+    const auto arch = device.arch();
+
     const uint32_t Mt = attrs.sequence / TILE_HEIGHT;
     const uint32_t Vt = attrs.value_dim / TILE_WIDTH;
     const uint32_t total = attrs.batch * attrs.num_heads * Mt;
     // Use the fewest workers that preserve the all-core maximum items/worker.
-    const auto grid = in.input.device()->compute_with_storage_grid_size();
+    const auto grid = device.compute_with_storage_grid_size();
     const uint32_t max_items_per_core = tt::div_up(total, grid.x * grid.y);
     const uint32_t rms_core_limit = tt::div_up(total, max_items_per_core);
-    auto dist =
-        kda_factory_detail::distribute_prep(in.input.device()->compute_with_storage_grid_size(), total, rms_core_limit);
+    auto dist = kda_factory_detail::distribute_prep(grid, total, rms_core_limit);
     const auto& cores = dist.core_set;
 
-    ProgramDescriptor desc;
-    auto add_cb = [&](uint32_t idx, uint32_t tiles, tt::DataFormat format, uint32_t buffers = 1) {
-        const uint32_t tile_size = tt::tile_size(format);
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = tiles * buffers * tile_size,
-            .core_ranges = cores,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(idx), .data_format = format, .page_size = tile_size}}}});
+    const m2::KernelSpecName READER{"reader"};
+    const m2::KernelSpecName WRITER{"writer"};
+    const m2::KernelSpecName COMPUTE{"compute"};
+
+    const m2::DFBSpecName X_DFB{"x"};
+    const m2::DFBSpecName GATE_DFB{"gate"};
+    const m2::DFBSpecName WEIGHT_DFB{"weight"};
+    const m2::DFBSpecName TMP_DFB{"tmp"};
+    const m2::DFBSpecName STATS_DFB{"stats"};
+    const m2::DFBSpecName INV_DFB{"inv"};
+    const m2::DFBSpecName NORM_DFB{"norm"};
+    const m2::DFBSpecName OUT_DFB{"out"};
+    const m2::DFBSpecName SCALER_DFB{"scaler"};
+
+    const m2::TensorParamName INPUT{"input"};
+    const m2::TensorParamName GATE{"gate"};
+    const m2::TensorParamName WEIGHT{"weight"};
+    const m2::TensorParamName OUTPUT{"output"};
+
+    const auto input_format = datatype_to_dataformat_converter(input.dtype());
+    const auto output_format = datatype_to_dataformat_converter(attrs.output_dtype);
+
+    auto make_dfb = [](const m2::DFBSpecName& name, uint32_t tiles, tt::DataFormat format) {
+        return m2::DataflowBufferSpec{
+            .unique_id = name,
+            .entry_size = tt::tile_size(format),
+            .num_entries = tiles,
+            .data_format_metadata = format,
+        };
     };
-    uint32_t next_cb_index = 0;
-    const uint32_t cb_x = next_cb_index++;
-    const uint32_t cb_gate = next_cb_index++;
-    const uint32_t cb_weight = next_cb_index++;
-    const uint32_t cb_tmp = next_cb_index++;
-    const uint32_t cb_stats = next_cb_index++;
-    const uint32_t cb_inv = next_cb_index++;
-    const uint32_t cb_norm = next_cb_index++;
-    const uint32_t cb_out = next_cb_index++;
-    const uint32_t cb_scaler = next_cb_index++;
-    add_cb(cb_x, Vt, datatype_to_dataformat_converter(in.input.dtype()), 2);
-    add_cb(cb_gate, Vt, tt::DataFormat::Float16_b, 2);
-    add_cb(cb_weight, Vt, tt::DataFormat::Float16_b);
-    add_cb(cb_tmp, Vt, tt::DataFormat::Float32);
-    add_cb(cb_stats, 1, tt::DataFormat::Float32);
-    add_cb(cb_inv, 1, tt::DataFormat::Float32);
-    add_cb(cb_norm, Vt, tt::DataFormat::Float32);
-    add_cb(cb_out, Vt, datatype_to_dataformat_converter(attrs.output_dtype), 2);
-    add_cb(cb_scaler, 1, tt::DataFormat::Float32);
+
+    m2::Group<m2::DataflowBufferSpec> dfbs = {
+        make_dfb(X_DFB, 2 * Vt, input_format),
+        make_dfb(GATE_DFB, 2 * Vt, tt::DataFormat::Float16_b),
+        make_dfb(WEIGHT_DFB, Vt, tt::DataFormat::Float16_b),
+        make_dfb(TMP_DFB, Vt, tt::DataFormat::Float32),
+        make_dfb(STATS_DFB, 1, tt::DataFormat::Float32),
+        make_dfb(INV_DFB, 1, tt::DataFormat::Float32),
+        make_dfb(NORM_DFB, Vt, tt::DataFormat::Float32),
+        make_dfb(OUT_DFB, 2 * Vt, output_format),
+        make_dfb(SCALER_DFB, 1, tt::DataFormat::Float32),
+    };
 
     uint32_t eps_bits = 0;
     uint32_t inv_v_bits = 0;
@@ -65,56 +92,128 @@ tt::tt_metal::ProgramDescriptor SigmoidGatedRmsNormProgramFactory::create_descri
     std::memcpy(&eps_bits, &attrs.epsilon, sizeof(float));
     std::memcpy(&inv_v_bits, &inv_v, sizeof(float));
 
-    std::vector<uint32_t> reader_ct = {Vt, attrs.num_heads, Mt};
-    TensorAccessorArgs(*in.input.buffer()).append_to(reader_ct);
-    TensorAccessorArgs(*in.gate.buffer()).append_to(reader_ct);
-    TensorAccessorArgs(*in.weight.buffer()).append_to(reader_ct);
-    std::vector<uint32_t> writer_ct = {Vt, attrs.num_heads, Mt};
-    TensorAccessorArgs(*outputs[0].buffer()).append_to(writer_ct);
+    m2::KernelSpec reader{
+        .unique_id = READER,
+        .source =
+            "ttnn/cpp/ttnn/operations/experimental/kda/sigmoid_gated_rms_norm/device/kernels/dataflow/"
+            "reader_sigmoid_gated_rms_norm.cpp",
+        .dfb_bindings =
+            {
+                m2::DFBBinding{X_DFB, "x", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{GATE_DFB, "gate", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{WEIGHT_DFB, "weight", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{SCALER_DFB, "scaler", m2::DFBEndpointType::PRODUCER},
+            },
+        .tensor_bindings =
+            {
+                m2::TensorBinding{INPUT, "input"},
+                m2::TensorBinding{GATE, "gate"},
+                m2::TensorBinding{WEIGHT, "weight"},
+            },
+        .compile_time_args = {{"Vt", Vt}, {"H", attrs.num_heads}, {"Mt", Mt}},
+        .runtime_arg_schema = {.runtime_arg_names = {"wi_start", "wi_count"}},
+        .hw_config = ttnn::create_reader_datamovement_config(arch),
+    };
 
-    KernelDescriptor reader;
-    reader.kernel_source =
-        "ttnn/cpp/ttnn/operations/experimental/kda/sigmoid_gated_rms_norm/device/kernels/dataflow/"
-        "reader_sigmoid_gated_rms_norm.cpp";
-    reader.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader.core_ranges = cores;
-    reader.compile_time_args = reader_ct;
-    reader.config = ReaderConfigDescriptor{};
+    m2::KernelSpec writer{
+        .unique_id = WRITER,
+        .source =
+            "ttnn/cpp/ttnn/operations/experimental/kda/sigmoid_gated_rms_norm/device/kernels/dataflow/"
+            "writer_sigmoid_gated_rms_norm.cpp",
+        .dfb_bindings = {m2::DFBBinding{OUT_DFB, "out", m2::DFBEndpointType::CONSUMER}},
+        .tensor_bindings = {m2::TensorBinding{OUTPUT, "output"}},
+        .compile_time_args = {{"Vt", Vt}, {"H", attrs.num_heads}, {"Mt", Mt}},
+        .runtime_arg_schema = {.runtime_arg_names = {"wi_start", "wi_count"}},
+        .hw_config = ttnn::create_writer_datamovement_config(arch),
+    };
 
-    KernelDescriptor writer;
-    writer.kernel_source =
-        "ttnn/cpp/ttnn/operations/experimental/kda/sigmoid_gated_rms_norm/device/kernels/dataflow/"
-        "writer_sigmoid_gated_rms_norm.cpp";
-    writer.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer.core_ranges = cores;
-    writer.compile_time_args = writer_ct;
-    writer.config = WriterConfigDescriptor{};
-
-    KernelDescriptor compute;
-    compute.kernel_source =
-        "ttnn/cpp/ttnn/operations/experimental/kda/sigmoid_gated_rms_norm/device/kernels/compute/"
-        "sigmoid_gated_rms_norm.cpp";
-    compute.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    compute.core_ranges = cores;
-    compute.compile_time_args = {Vt, eps_bits, inv_v_bits};
-    compute.config = kda_factory_detail::kda_compute_cfg(in.input.device()->arch(), attrs.compute_kernel_config);
-
-    auto* input_buffer = in.input.buffer();
-    auto* gate_buffer = in.gate.buffer();
-    auto* weight_buffer = in.weight.buffer();
-    auto* output_buffer = outputs[0].buffer();
-    for (uint32_t i = 0; i < dist.cores.size(); i++) {
-        const auto& core = dist.cores[i];
-        reader.emplace_runtime_args(
-            core, {dist.wi_start[i], dist.wi_count[i], input_buffer, gate_buffer, weight_buffer});
-        writer.emplace_runtime_args(core, {dist.wi_start[i], dist.wi_count[i], output_buffer});
-        compute.emplace_runtime_args(core, {dist.wi_count[i]});
+    auto compute_hw = ttnn::to_compute_hardware_config(arch, attrs.compute_kernel_config);
+    auto& unpack_modes = m2::unpack_modes(compute_hw);
+    unpack_modes[TMP_DFB] = UnpackMode::UnpackToSrc;
+    unpack_modes[STATS_DFB] = UnpackMode::UnpackToSrc;
+    unpack_modes[INV_DFB] = UnpackMode::UnpackToSrc;
+    unpack_modes[NORM_DFB] = UnpackMode::UnpackToSrc;
+    unpack_modes[SCALER_DFB] = UnpackMode::UnpackToSrc;
+    if (input_format == tt::DataFormat::Float32) {
+        unpack_modes[X_DFB] = UnpackMode::UnpackToSrc;
     }
 
-    desc.kernels.emplace_back(std::move(reader));
-    desc.kernels.emplace_back(std::move(writer));
-    desc.kernels.emplace_back(std::move(compute));
-    return desc;
+    m2::KernelSpec compute{
+        .unique_id = COMPUTE,
+        .source =
+            "ttnn/cpp/ttnn/operations/experimental/kda/sigmoid_gated_rms_norm/device/kernels/compute/"
+            "sigmoid_gated_rms_norm.cpp",
+        .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
+        .dfb_bindings =
+            {
+                m2::DFBBinding{X_DFB, "x", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{GATE_DFB, "gate", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{WEIGHT_DFB, "weight", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{TMP_DFB, "tmp", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{TMP_DFB, "tmp", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{STATS_DFB, "stats", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{STATS_DFB, "stats", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{INV_DFB, "inv", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{INV_DFB, "inv", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{NORM_DFB, "norm", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{NORM_DFB, "norm", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{OUT_DFB, "out", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{SCALER_DFB, "scaler", m2::DFBEndpointType::CONSUMER},
+            },
+        .compile_time_args = {{"Vt", Vt}, {"epsilon_bits", eps_bits}, {"inv_v_bits", inv_v_bits}},
+        .runtime_arg_schema = {.runtime_arg_names = {"wi_count"}},
+        .hw_config = std::move(compute_hw),
+    };
+
+    m2::KernelRunArgs reader_run_args{.kernel = READER};
+    m2::KernelRunArgs writer_run_args{.kernel = WRITER};
+    m2::KernelRunArgs compute_run_args{.kernel = COMPUTE};
+    for (uint32_t i = 0; i < dist.cores.size(); i++) {
+        const auto& core = dist.cores[i];
+        m2::AddRuntimeArgsForNode(
+            reader_run_args.runtime_arg_values, core, {{"wi_start", dist.wi_start[i]}, {"wi_count", dist.wi_count[i]}});
+        m2::AddRuntimeArgsForNode(
+            writer_run_args.runtime_arg_values, core, {{"wi_start", dist.wi_start[i]}, {"wi_count", dist.wi_count[i]}});
+        m2::AddRuntimeArgsForNode(compute_run_args.runtime_arg_values, core, {{"wi_count", dist.wi_count[i]}});
+    }
+
+    m2::ProgramSpec spec{
+        .name = "sigmoid_gated_rms_norm",
+        .kernels = {std::move(reader), std::move(writer), std::move(compute)},
+        .dataflow_buffers = std::move(dfbs),
+        .tensor_parameters =
+            {
+                m2::TensorParameter{.unique_id = INPUT, .spec = input.tensor_spec()},
+                m2::TensorParameter{.unique_id = GATE, .spec = gate.tensor_spec()},
+                m2::TensorParameter{.unique_id = WEIGHT, .spec = weight.tensor_spec()},
+                m2::TensorParameter{.unique_id = OUTPUT, .spec = output.tensor_spec()},
+            },
+        .work_units =
+            {
+                m2::WorkUnitSpec{
+                    .name = "main",
+                    .kernels = {READER, WRITER, COMPUTE},
+                    .target_nodes = cores,
+                },
+            },
+    };
+
+    m2::ProgramRunArgs run_args;
+    run_args.kernel_run_args.reserve(3);
+    run_args.kernel_run_args.push_back(std::move(reader_run_args));
+    run_args.kernel_run_args.push_back(std::move(writer_run_args));
+    run_args.kernel_run_args.push_back(std::move(compute_run_args));
+    run_args.tensor_args = {
+        {INPUT, input},
+        {GATE, gate},
+        {WEIGHT, weight},
+        {OUTPUT, output},
+    };
+
+    return ttnn::device_operation::ProgramArtifacts{
+        .spec = std::move(spec),
+        .run_params = std::move(run_args),
+    };
 }
 
 }  // namespace ttnn::experimental::prim
