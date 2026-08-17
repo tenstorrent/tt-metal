@@ -119,6 +119,44 @@ UnpackToDestMode = ttnn._ttnn.program_descriptor.UnpackToDestMode
 FaceGeometry = ttnn._ttnn.program_descriptor.FaceGeometry
 compute_program_descriptor_hash = ttnn._ttnn.operations.generic.compute_program_descriptor_hash
 
+# Metal 2.0 program spec types (the ttnn.generic_op spec overload)
+UnpackMode = ttnn._ttnn.program_spec.UnpackMode
+Precision = ttnn._ttnn.program_spec.Precision
+KernelBuildOptLevel = ttnn._ttnn.program_spec.KernelBuildOptLevel
+DFBEndpointType = ttnn._ttnn.program_spec.DFBEndpointType
+DFBAccessPattern = ttnn._ttnn.program_spec.DFBAccessPattern
+TensorSpecRelaxations = ttnn._ttnn.program_spec.TensorSpecRelaxations
+TensorParameter = ttnn._ttnn.program_spec.TensorParameter
+DFBAdvancedOptions = ttnn._ttnn.program_spec.DFBAdvancedOptions
+DataflowBufferSpec = ttnn._ttnn.program_spec.DataflowBufferSpec
+SemaphoreSpec = ttnn._ttnn.program_spec.SemaphoreSpec
+ScratchpadSpec = ttnn._ttnn.program_spec.ScratchpadSpec
+DataMovementGen1Config = ttnn._ttnn.program_spec.DataMovementGen1Config
+DataMovementGen2Config = ttnn._ttnn.program_spec.DataMovementGen2Config
+ComputeGen1Config = ttnn._ttnn.program_spec.ComputeGen1Config
+ComputeGen2Config = ttnn._ttnn.program_spec.ComputeGen2Config
+create_reader_dm_config = ttnn._ttnn.program_spec.create_reader_dm_config
+create_writer_dm_config = ttnn._ttnn.program_spec.create_writer_dm_config
+SourceCode = ttnn._ttnn.program_spec.SourceCode
+CompilerOptions = ttnn._ttnn.program_spec.CompilerOptions
+DFBBinding = ttnn._ttnn.program_spec.DFBBinding
+producer_of = ttnn._ttnn.program_spec.producer_of
+consumer_of = ttnn._ttnn.program_spec.consumer_of
+strided_consumer_of = ttnn._ttnn.program_spec.strided_consumer_of
+all_consumer_of = ttnn._ttnn.program_spec.all_consumer_of
+SemaphoreBinding = ttnn._ttnn.program_spec.SemaphoreBinding
+ScratchpadBinding = ttnn._ttnn.program_spec.ScratchpadBinding
+TensorBinding = ttnn._ttnn.program_spec.TensorBinding
+RuntimeArgSchema = ttnn._ttnn.program_spec.RuntimeArgSchema
+KernelAdvancedOptions = ttnn._ttnn.program_spec.KernelAdvancedOptions
+KernelSpec = ttnn._ttnn.program_spec.KernelSpec
+WorkUnitSpec = ttnn._ttnn.program_spec.WorkUnitSpec
+ProgramSpec = ttnn._ttnn.program_spec.ProgramSpec
+AdvancedKernelRunArgs = ttnn._ttnn.program_spec.AdvancedKernelRunArgs
+KernelRunArgs = ttnn._ttnn.program_spec.KernelRunArgs
+DFBRunOverrides = ttnn._ttnn.program_spec.DFBRunOverrides
+ProgramRunArgs = ttnn._ttnn.program_spec.ProgramRunArgs
+
 TensorAccessorArgs = ttnn._ttnn.tensor_accessor_args.TensorAccessorArgs
 
 # Host-side mcast helper (counterpart of kernel_lib/mcast_pipe). Mcast1D = per-row/column families;
