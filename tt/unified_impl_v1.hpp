@@ -39,12 +39,13 @@ inline uint64_t PhysicalCoord::get_noc_addr(uintptr_t l1_addr) const {
 #endif
 }
 
+// Unguarded, unlike the rest of this section: a LOGICAL coordinate is one thing
+// compute genuinely knows. get_relative_logical_* is declared for compute too
+// (api/compute/common.h), and trisc.cc defines my_relative_x_/y_ and fills them
+// from the launch message before calling the kernel -- so all five projections
+// agree on where they are. Only the VIRTUAL mapping below is data-movement-only.
 inline LogicalCoord LogicalCoord::this_core() {
-#if defined(IS_DM_THREAD) && IS_DM_THREAD
     return LogicalCoord{get_relative_logical_y(), get_relative_logical_x()};
-#else
-    return LogicalCoord{0, 0};
-#endif
 }
 
 inline LogicalCoord LogicalCoord::origin() { return LogicalCoord{0, 0}; }

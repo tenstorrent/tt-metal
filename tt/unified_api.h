@@ -52,14 +52,14 @@ struct PhysicalCoord {
 
     // This core's own physical coordinate, on this thread's NOC.
     //
-    // DATA MOVEMENT ONLY. On a compute projection this returns the ORIGIN, not
-    // the real coordinate: my_x/my_y are filled by risc_init(), which does not
-    // run on a TRISC, so metal gives compute no way to know where it is. The
-    // consequence is a quiet one -- a statement whose COMPUTE side branches on
-    // this behaves as though every core were (0,0), so circular-buffer traffic
-    // guarded by it happens everywhere and the pushes go unmatched. Gate NOC work
-    // on it, never CB work; if compute must branch on position, pass the
-    // coordinate in as a per-core runtime arg, which every projection can read.
+    // DATA MOVEMENT ONLY. On a compute projection this returns the ORIGIN, not the
+    // real coordinate: my_x/my_y are filled by risc_init(), which does not run on a
+    // TRISC (risc_common.h guards it out), so metal gives compute no way to know
+    // where it is. The consequence is a quiet one -- a statement whose COMPUTE side
+    // branches on this behaves as though every core were (0,0), so circular-buffer
+    // traffic guarded by it happens everywhere and the pushes go unmatched. Gate
+    // NOC work on it, never CB work; LogicalCoord::this_core() is the one that
+    // every projection answers correctly.
     static PhysicalCoord this_core();
     static PhysicalCoord origin();
 
@@ -73,7 +73,9 @@ struct LogicalCoord {
     uint32_t y;
     uint32_t x;
 
-    // Same caveat as PhysicalCoord::this_core(): the origin on compute.
+    // Correct on ALL projections, unlike PhysicalCoord::this_core(): compute is
+    // told its logical position by the firmware even though it cannot resolve it
+    // to a NOC address. Branch on this one, including in code compute runs.
     static LogicalCoord this_core();
     static LogicalCoord origin();
 
