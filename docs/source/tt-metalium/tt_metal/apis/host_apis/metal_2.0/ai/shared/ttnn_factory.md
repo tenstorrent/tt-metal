@@ -216,7 +216,7 @@ The audit tells you which tensor relaxations apply to this op. Today that answer
 
 It surfaces two ways, and they are the same defect:
 
-- **At verification** — an `UpdateTensorArgs` `TensorSpec` legality failure on the *second and later* dispatches (program cache hot), never the first.
+- **At verification** — a `TensorSpec` legality failure on the *second and later* dispatches (program cache hot), never the first. It is reported by whichever call refreshes the cache hit on your concept: `UpdateTensorArgs` on the base concept, `UpdateProgramRunArgs` on the custom one.
 - **By reading** — you notice, while working from the inventory, that the hash omits part of the `TensorSpec`; equivalently, that its tolerance could be expressed as a relaxation. A failing test is not required to have found this. Don't go hunting for it — but don't sit on it either.
 
 Either way the response is the same, and it is **not** a fix:
