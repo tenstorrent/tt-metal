@@ -50,11 +50,13 @@
  * It also normalizes:
  *   - math/pack Dest semaphore and ping-pong state;
  *   - Blackhole destination read-address remap;
- *   - PackMode::Default MOP, ADDR_MOD, strides, PAC X, and the address
- *     counters reset by pack Dest init.
+ *   - the address counters reset by pack Dest init;
+ *   - Default pack ADDR_MOD.
  *
  * Startup does not establish ambient unpack/math MOP or math ADDR_MOD state;
  * Cleanup uses NOP MOPs for unpack/math and zeros math ADDR_MOD_0..7.
+ * Pack MOP, strides, and PAC X are poisoned as well, so a following op must call
+ * pack_init or pack_reconfig_data_format<true> before packing.
  *
  * Compile-time DST_ACCUM_MODE and DST_SYNC_MODE are preserved (re-asserted via the
  * hw_configure helpers, not changed to a different mode).

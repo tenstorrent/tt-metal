@@ -59,8 +59,8 @@ inline void mailbox_fence()
 /**
  * Enter cleanup and wait until this thread owns the configure turn.
  *
- * @pre Incoming mailboxes contain no operation-owned messages.
- * @post Pipelines are drained. Unpack/Pack may configure. Math has already
+ * @note Drain every operation-owned message from the incoming mailboxes before calling this.
+ * @note On return the pipelines are drained and Unpack/Pack may configure; Math has already
  *       waited for Unpack to finish configuring.
  */
 template <ThreadId thread_id>
@@ -104,8 +104,10 @@ inline void start()
 /**
  * Leave the configure turn and wait until every TRISC has finished cleanup.
  *
- * @pre This thread's configuration (including mop/tensix side effects) is done.
- * @post cfg bank 0 is selected. No thread returns before all three have configured.
+ * @note Finish this thread's configuration (including any mop/tensix side effects) before
+ *       calling this.
+ * @note On return cfg bank 0 is selected, and no thread returns before all three have
+ *       configured.
  */
 template <ThreadId thread_id>
 inline void finish()

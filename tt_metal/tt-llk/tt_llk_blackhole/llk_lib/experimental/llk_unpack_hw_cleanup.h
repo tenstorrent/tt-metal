@@ -32,8 +32,9 @@ inline void _llk_unpack_hw_cleanup_configure_current_bank_()
 /**
  * @brief Quiesces all TRISCs and restores unpack cfg banks to canonical Float16_b 32x32 geometry.
  * @tparam is_fp32_dest_acc_en Kernel DST_ACCUM_MODE (re-asserted, not changed).
- * @post Both cfg banks use Float16_b 32x32 tiles with four faces (2048 bytes); bank 0 is selected.
- * @post MOP CFG is NOP-poisoned to a 1x1 double-loop template.
+ * @note On return both cfg banks use Float16_b 32x32 tiles with four faces (2048 bytes), and
+ *       bank 0 is selected.
+ * @note On return MOP CFG is NOP-poisoned to a 1x1 double-loop template.
  */
 template <bool is_fp32_dest_acc_en>
 inline void _llk_unpack_hw_cleanup_canonical_()
