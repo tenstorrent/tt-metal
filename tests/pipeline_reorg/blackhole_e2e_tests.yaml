@@ -293,3 +293,20 @@
       timeout: 10
   owner_id: U094PKWHNJ0 # Petar Milojevic
   team: models
+
+- id: bh-lb-kimi-k3-attn-res
+  name: bh_lb_Kimi_K3_ATTN_RES
+  model-name: kimi_k3
+  # Kimi K3 attention residuals: torch reference plus the device walk at 1280 tokens over
+  # SP 2 and `d` over TP 4. Needs tp > 1 — the read's reduction is over the hidden shards —
+  # and bh_loudbox is the smallest box carrying Galaxy's TP factor of 4.
+  cmd: |
+    pytest \
+      models/demos/deepseek_v3_d_p/reference/kimi_k3/attn_res/tests/ \
+      models/demos/deepseek_v3_d_p/tests/attn_res/ \
+      -vvv --tb=short
+  skus:
+    bh_loudbox:
+      timeout: 10
+  owner_id: U09LK84G4TF # Nikola Milicevic
+  team: models
