@@ -150,7 +150,7 @@ def render_model_scenarios(rows):
 
         # best ours: the cheaper measured variant, with its core count
         cands = [(v, n, r.get(f"{key}_cores", "")) for v, n, key in
-                 ((ro, "routed ttnn.topk", "routed"), (op, "direct op", "op")) if v is not None]
+                 ((ro, "routed", "routed"), (op, "direct", "op")) if v is not None]
         if cands:
             best, best_name, best_cores = min(cands)
             # which variant won is carried by the 'to capture it' column;
@@ -170,15 +170,15 @@ def render_model_scenarios(rows):
         # what adopting the best number costs, in plain words
         if best is None:
             capture = "\u2014"
-        elif today_e == "op" and best_name == "direct op":
+        elif today_e == "op" and best_name == "direct":
             capture = "nothing \u2014 already on the best engine"
-        elif best_name == "routed ttnn.topk":
+        elif best_name == "routed":
             capture = "same API; drop indices_tensor/sub_core_grids/stable from the call"
-        elif today_label == "ttnn.topk" and best_name == "direct op":
+        elif today_label == "ttnn.topk" and best_name == "direct":
             if int(r["k"]) < 16:
-                capture = "switch to the direct op (k rounds to 16, slice back); or extend the route \u2014 A/B vs envelope pending"
+                capture = "call ttnn.experimental.topk_large_indices yourself (k rounds up to 16, slice back); or extend the ttnn.topk route \u2014 A/B vs envelope pending"
             else:
-                capture = "switch the call to the direct op (RM output, u32 indices)"
+                capture = "call ttnn.experimental.topk_large_indices(return_values=True) yourself \u2014 same kernel, no ttnn.topk wrapper (RM output, u32 indices)"
                 if ro is not None and today is not None and ro < today:
                     capture += (
                         f"; or same API \u2014 drop indices_tensor/sub_core_grids/stable: "
