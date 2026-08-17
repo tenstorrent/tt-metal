@@ -541,6 +541,48 @@ void Buffer::deallocate() {
 
 void Buffer::mark_as_deallocated() { allocation_status_ = AllocationStatus::DEALLOCATED; }
 
+void Buffer::release_external_tracking() {
+    if (size_ == 0) {
+        return;
+    }
+#if defined(TRACY_ENABLE)
+    if (tt::tt_metal::MetalContext::instance(extract_context_id(device_))
+            .rtoptions()
+            .get_profiler_buffer_usage_enabled()) {
+        TracyFreeN(reinterpret_cast<const void*>(address()), get_buffer_location_name(buffer_type_, device_->id()));
+    }
+#endif
+    // Read the latch rather than probing the device with is_emule_device(): this also runs from
+    // allocator teardown, where extract_context_id() can throw on a mid-destruction MeshDevice.
+    // Equivalent by the same reasoning Buffer::deallocate() relies on -- a process is emule xor
+    // hardware, and any emule buffer set the latch when it was created.
+    if (!emule_device_seen.load(std::memory_order_relaxed)) {
+        return;
+    }
+    if (buffer_type_ == BufferType::L1 || buffer_type_ == BufferType::L1_SMALL) {
+        tt::tt_metal::emule::LiveL1Ranges::remove(device_->id(), static_cast<uint32_t>(address_));
+        tt::tt_metal::emule::LiveL1PaddingRanges::clear(device_->id(), static_cast<uint32_t>(address_));
+    } else if (buffer_type_ == BufferType::DRAM) {
+        tt::tt_metal::emule::LiveDramRanges::remove(device_->id(), static_cast<uint32_t>(address_));
+    }
+}
+
+void Buffer::invalidate_after_allocator_teardown() {
+    // Only a live allocation has anything registered with the external trackers.
+    if (allocation_status_ == AllocationStatus::ALLOCATED) {
+        try {
+            release_external_tracking();
+        } catch (...) {
+            // Reached from ~AllocatorImpl, which is noexcept. These trackers are best-effort
+            // bookkeeping; dropping an entry beats std::terminate during teardown.
+        }
+    }
+    // Deliberately no GraphTracker::track_deallocate() here. Unlike the emule ranges and Tracy,
+    // it leaves no persistent state to go stale, and firing it would inject buffer events into
+    // whatever capture happens to be open while a device is being torn down.
+    allocation_status_ = AllocationStatus::DEALLOCATED;
+}
+
 void Buffer::deallocate_impl() {
     if (allocation_status_ != AllocationStatus::ALLOCATED) {
         return;
@@ -550,24 +592,21 @@ void Buffer::deallocate_impl() {
         // address_ is only modified from this thread, no sync required
         GraphTracker::instance().track_deallocate(this);
         if (!GraphTracker::instance().hook_deallocate(this) && !hooked_allocation_) {
-#if defined(TRACY_ENABLE)
-            if (tt::tt_metal::MetalContext::instance(extract_context_id(device_))
-                    .rtoptions()
-                    .get_profiler_buffer_usage_enabled()) {
-                TracyFreeN(
-                    reinterpret_cast<const void*>(address()), get_buffer_location_name(buffer_type_, device_->id()));
-            }
-#endif
+            release_external_tracking();
             validate_sub_device_manager_id(sub_device_manager_id_, device_);
-            if (is_emule_device(device_)) {
-                if (buffer_type_ == BufferType::L1 || buffer_type_ == BufferType::L1_SMALL) {
-                    tt::tt_metal::emule::LiveL1Ranges::remove(device_->id(), static_cast<uint32_t>(address_));
-                    tt::tt_metal::emule::LiveL1PaddingRanges::clear(device_->id(), static_cast<uint32_t>(address_));
-                } else if (buffer_type_ == BufferType::DRAM) {
-                    tt::tt_metal::emule::LiveDramRanges::remove(device_->id(), static_cast<uint32_t>(address_));
-                }
-            }
             allocator_->deallocate_buffer(this);
+        } else if (!hooked_allocation_) {
+            // The allocation was real, so this buffer is registered in the allocator's tracking
+            // set, but hook_deallocate() just suppressed the free path that would deregister it.
+            // Deregister explicitly: ~AllocatorImpl walks that set to detach buffers that outlive
+            // it, so a stale entry left here becomes a write through a freed pointer once this
+            // Buffer is destroyed. The banks stay allocated -- that is the hook's business, and
+            // is unchanged by this call.
+            //
+            // allocator_ is live here: a registered buffer still reading ALLOCATED means
+            // ~AllocatorImpl has not run, since it marks everything it is tracking as deallocated
+            // and the check at the top of this function would then have returned early.
+            allocator_->untrack_buffer(this);
         }
 
         // Capture deallocates here instead of higher levels.

@@ -237,6 +237,11 @@ void AllocatorImpl::deallocate_buffer(Buffer* buffer) {
     allocated_buffers_.erase(buffer);
 }
 
+void AllocatorImpl::untrack_buffer(Buffer* buffer) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    allocated_buffers_.erase(buffer);
+}
+
 void AllocatorImpl::deallocate_buffers() {
     std::lock_guard<std::mutex> lock(mutex_);
     dram_manager_->deallocate_all();
@@ -527,6 +532,16 @@ AllocatorImpl::~AllocatorImpl() {
     l1_manager_->clear();
     l1_small_manager_->clear();
     trace_buffer_manager_->clear();
+    // Buffers keep a raw, non-owning back-pointer to their allocator (Buffer::allocator_), so any
+    // buffer still tracked here is about to outlive it. Detach them now: their memory goes away
+    // with the allocator, and Buffer::deallocate_impl() would otherwise call through the dangling
+    // pointer. The status check at the top of deallocate_impl() makes that a no-op afterwards.
+    // This also runs the cleanup those buffers owe to trackers outside the allocator (emule live
+    // ranges, Tracy), which the normal free path would have done and which would otherwise be
+    // stranded for the lifetime of the process.
+    for (auto* buffer : allocated_buffers_) {
+        buffer->invalidate_after_allocator_teardown();
+    }
     allocated_buffers_.clear();
 }
 

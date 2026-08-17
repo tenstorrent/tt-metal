@@ -306,6 +306,17 @@ private:
     // Deallocate is allowed to be called multiple times on the same buffer
     void deallocate();
     void deallocate_impl();
+
+    // Cleanup this buffer owes to trackers that live *outside* the allocator: emule live ranges
+    // and Tracy buffer-usage accounting. Shared by the normal free path and by allocator
+    // teardown, so the two cannot drift apart.
+    void release_external_tracking();
+
+    // Detach a buffer that has outlived its allocator. Runs release_external_tracking() and then
+    // marks the buffer deallocated, without routing through the allocator -- which is mid-
+    // destruction and must not be called back into. AllocatorImpl-only; see ~AllocatorImpl.
+    void invalidate_after_allocator_teardown();
+
     friend class AllocatorImpl;
     friend void DeallocateBuffer(Buffer& buffer);
     friend bool experimental::per_core_allocation::is_per_core_allocation(const Buffer&);

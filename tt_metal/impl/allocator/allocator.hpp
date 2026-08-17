@@ -41,6 +41,12 @@ public:
     void deallocate_buffer(Buffer* buffer);
     void deallocate_buffers();
 
+    // Drop `buffer` from the tracking set without freeing its banks. deallocate_buffer() already
+    // does this as part of the free; this is for the one path that must deregister without
+    // freeing -- a real allocation whose deallocation was suppressed by a graph-capture hook.
+    // Idempotent: erasing an untracked buffer is a no-op.
+    void untrack_buffer(Buffer* buffer);
+
     std::unordered_set<Buffer*> get_allocated_buffers() const;
     size_t get_num_allocated_buffers() const;
 
