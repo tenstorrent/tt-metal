@@ -4,8 +4,8 @@ Goal: implement the DFlash drafter Muse-Glimmer-30B ships with, and win decode
 t/s/u at batch 1.  The model card advertises **3.1× on an RTX 5090** (74.9 →
 233.4 tok/s) from this feature, and no stage of the original bring-up ported it.
 
-Status: **drafter implemented and numerically validated on CPU; device PCC
-queued behind another job holding the chips.**
+Status: **drafter implemented and passing device PCC, 13/13.**  Loop wiring and
+the t/s/u sweep are next.
 
 ---
 
@@ -141,9 +141,48 @@ recur silently.
 0.99994 on every layer** — confirming the bidirectional mask, plain RMSNorm,
 unfused QKV, context-as-KV, QK-norm and RoPE slicing are all right.
 
+### F3b — The golden harness silently disabled the sliding window
+
+Same shape as F3, found on device.  End-to-end PCC came back 0.9954 / 0.9966 /
+0.9970 / 0.9977 for context 1 / 16 / 128 / 2048 and **0.9288 for 4096** — the one
+case exceeding the 2048 window.
+
+`reference_forward` called the model with `use_cache=False` and no
+`attention_mask`.  With both absent, `create_bidirectional_sliding_window_mask`
+takes its `allow_is_bidirectional_skip` path and returns **`None`**, so the
+reference ran with no window whatsoever.  Below 2048 that is unobservable; above
+it, the golden rewards the wrong implementation — a CPU reimplementation with the
+window *disabled* scored **0.99997** against that golden, while the correct
+windowed port scored 0.9294.
+
+The real driver passes an explicit `attention_mask` *and* a `DFlashCache`, so the
+window does apply in production.  The harness now does the same.  The cache is
+what makes the mask the right **size**: it is constructed inside `forward` before
+K/V are appended, so the base `kv_length` is only `block_size`, and
+`DFlashCache.get_mask_sizes` adds `_previous_number_of_accepted_tokens` back.
+
+**After the fix, device PCC is 13/13:**
+
+| context | encoder | drafter end-to-end |
+|---|---|---|
+| 1 | 0.99960 | 0.99541 |
+| 16 | 0.99956 | 0.99659 |
+| 128 | 0.99952 | 0.99701 |
+| 2048 | 0.99914 | 0.99801 |
+| 4096 | 0.99914 | 0.99803 |
+
+End-to-end PCC now *rises* with context instead of falling, which is the
+signature of a correct mask.
+
+**Generalisable lesson, and the one worth carrying to other ports:** both F3 and
+F3b were references that ran, produced plausible activations, and graded the port
+against something other than production behaviour.  A golden harness must mirror
+how the model is *actually driven*, not merely call it in a way that does not
+raise.
+
 ### F4 — Device contention is not handled by anything in this repo
 
-Device PCC could not run: another job's `VLLM::EngineCore` (from
+Device PCC was blocked for ~4.5 h by another job's `VLLM::EngineCore` (from
 `/home/ttuser/dev/laguna/.../poolside_laguna_xs_2_1`, orphaned to init) holds
 `CHIP_IN_USE_0_PCIe`.  tt-metal blocks on the lock with a bare warning and no
 timeout, so a test run simply hangs until the 300 s pytest timeout fires and
@@ -151,7 +190,15 @@ reports as a test failure rather than as "hardware busy".
 
 Note also that `pgrep -x 'VLLM::EngineCore'` cannot match it — the name exceeds
 the 15-char comm limit — and `pgrep -f` matches the polling script's own argv.
-Both traps were hit while writing the waiter.
+Both traps were hit while writing the waiter, and `pkill -f` later killed its own
+invoking shell for the same reason.
+
+A waiter that fired during the other job's *teardown* then wedged the device:
+the first test hit the 300 s pytest timeout inside `open_mesh_device` and every
+subsequent test failed with `RuntimeError: Query mappings failed on device 0`.
+It cleared on its own once the chips were fully released — but note that
+pytest reports "hardware busy" and "hardware wedged" as ordinary test failures,
+which is how a contended run gets misread as a broken port.
 
 ---
 
@@ -198,9 +245,8 @@ assume it.
 
 ## Next
 
-1. **Device PCC** — queued and armed; fires automatically when the chips free.
-2. **Wire the loop end to end** — the pieces exist (drafter, taps, context
+1. **Wire the loop end to end** — the pieces exist (drafter, taps, context
    assembly, accept rule); what remains is the generator glue and the
    `DFlashCache` window-eviction bookkeeping.
-3. **Batch-1 t/s/u sweep** against the 43.4 t/s/u baseline, measuring the
+2. **Batch-1 t/s/u sweep** against the 43.4 t/s/u baseline, measuring the
    acceptance rate per ISL rather than assuming F1's 5.33.

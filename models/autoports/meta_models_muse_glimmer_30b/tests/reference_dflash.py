@@ -207,7 +207,32 @@ def synthetic_inputs(
 
 
 def reference_forward(model, inputs: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-    """Run the drafter and capture every tensor the TTNN port must match."""
+    """Run the drafter and capture every tensor the TTNN port must match.
+
+    **This must mirror how ``DFlashTokenCandidateGenerator`` actually calls the
+    model, not merely call it in a way that runs.**  The driver passes an explicit
+    ``attention_mask`` and a ``DFlashCache``; do neither and
+    ``create_bidirectional_sliding_window_mask`` takes its
+    ``allow_is_bidirectional_skip`` path and returns ``None`` — the model then
+    runs with **no sliding window at all**.  That is invisible for any context
+    shorter than the 2048 window and silently wrong beyond it: goldens generated
+    the lazy way scored a correct port at PCC 0.93 for context 4096, while an
+    unwindowed reimplementation scored 0.99997.
+
+    The cache is what makes the mask the right *size*.  The mask is built inside
+    ``forward`` before K/V are appended, so with an empty cache the base
+    ``kv_length`` is just ``block_size``; ``DFlashCache.get_mask_sizes`` adds
+    ``_previous_number_of_accepted_tokens`` to span the context positions that
+    the attention concatenates in afterwards.
+    """
+    from transformers.cache_utils import DFlashCache
+
+    context_len = inputs["context_hidden_states"].shape[1]
+    block = inputs["noise_embeds"].shape[1]
+    cache = DFlashCache(config=model.config)
+    cache.set_previous_accepted_tokens(context_len)
+    attention_mask = torch.ones(1, context_len + block, dtype=torch.long)
+
     captured: dict[str, torch.Tensor] = {}
 
     handles = [
@@ -227,7 +252,9 @@ def reference_forward(model, inputs: dict[str, torch.Tensor]) -> dict[str, torch
             out = model(
                 noise_embeds=inputs["noise_embeds"],
                 context_hidden_states=inputs["context_hidden_states"],
-                use_cache=False,
+                attention_mask=attention_mask,
+                past_key_values=cache,
+                use_cache=True,
             )
     finally:
         for handle in handles:
