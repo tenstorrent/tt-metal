@@ -122,3 +122,56 @@ overrides it, so no code change is needed to A/B a policy.
    (verified reachable here at `http://172.17.0.2:8000`, HTTP 200). TTI's
    `EVALS_AGENTIC` venv clones and editable-installs SWE-agent and Harbor v0.6.5;
    it was never created on the originating host.
+
+---
+
+## CORRECTION: this branch alone is NOT sufficient — two other repos are needed
+
+The opening of this document says "everything needed is on this branch; nothing
+required is left on the originating host". **That is wrong.** Audited
+2026-08-17. A second machine needs four things, and two of them are not published
+anywhere yet.
+
+| repo | ref needed | state |
+|---|---|---|
+| `tenstorrent/tt-metal` | `mvasiljevic/fmf/google-gemma-4-26b-a4b-it` | pushed |
+| `tenstorrent/vllm` | **4 local commits on `dev`** | **local only** |
+| `tenstorrent/tt-inference-server` | **4 local commits on `main`** | **local only** |
+| `tenstorrent/agentic-research` | `mvasiljevic/forge-lane-pipeline-findings` (context) | pushed |
+
+### tenstorrent/vllm — mandatory, and unpublished
+
+Cloned at `dev` = `7c99bd3b8`, then four commits were made locally:
+
+- **`938c45ed7 Register Gemma 4 TT vLLM adapter`** — **without this the plugin does
+  not know this architecture and the model cannot be served at all.**
+- `c5f35e550 Fix async host sampling RNG isolation`
+- `ed7a409b9 Register Qwen3.6 autoport vLLM adapter`
+- `bc1dbf107 Add Falcon3 TT vLLM integration support`
+
+The TT plugin registers models in
+`plugins/vllm-tt-plugin/src/vllm_tt_plugin/platform.py::register_tt_models()`;
+upstream `dev` carries no Gemma-4 entry.
+
+### tenstorrent/tt-inference-server — needed for the release workflow
+
+Cloned at `main` = `c8509ac2`, then four commits locally:
+
+- `ca152fe2 Support autoport external-server release specs` — also carries the
+  **`EXPERIMENTAL` eval-enforcement fix**, without which a failed or missing
+  accuracy row still reports a release PASS.
+- `bd15f1cd Add Falcon3 Base nightly eval references`
+- `e26e723b Propagate model context to API evals`
+- `b9a18e8f Qwen3.6-27B eval config, terminal-bench token budget, external-chat
+  meta evals` (operator-preserved; the stage blocked without committing it)
+
+### What to do
+
+Ask the operator to push branches for those two repos before starting, or
+reproduce them: the tt-metal branch is self-contained for the *model*, but the
+serving path (vllm) and the release/eval path (tt-inference-server) are not.
+
+The precision A/B in `doc/tti_release/experiments/` needs only the tt-metal branch
+plus the vllm Gemma registration — it does not need tt-inference-server, since it
+drives `lm_eval` directly against the server rather than through the release
+workflow.
