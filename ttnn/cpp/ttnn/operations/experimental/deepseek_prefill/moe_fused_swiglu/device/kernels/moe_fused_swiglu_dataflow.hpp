@@ -23,6 +23,38 @@
 
 namespace moe_fused_swiglu {
 
+// Minimal operation-local multicast geometry.  kernel_lib's McastRect is not on
+// origin/main; this is the only part of it this operation needs.  The hardware
+// expects NOC0 to walk low-to-high and NOC1 high-to-low.
+template <uint8_t NOC_ID = noc_index>
+struct McastRect {
+    struct Bounds {
+        uint32_t sx, sy, ex, ey;
+    };
+
+    constexpr McastRect(uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1) :
+        xlo_(x0 < x1 ? x0 : x1),
+        xhi_(x0 < x1 ? x1 : x0),
+        ylo_(y0 < y1 ? y0 : y1),
+        yhi_(y0 < y1 ? y1 : y0),
+        bounds_(NOC_ID == 1 ? Bounds{xhi_, yhi_, xlo_, ylo_} : Bounds{xlo_, ylo_, xhi_, yhi_}) {}
+
+    constexpr const Bounds& bounds() const { return bounds_; }
+
+    constexpr uint32_t area() const {
+        uint32_t width = xhi_ - xlo_ + 1;
+#if defined(ARCH_BLACKHOLE)
+        width -= static_cast<uint32_t>(xlo_ <= 8 && 8 <= xhi_);
+        width -= static_cast<uint32_t>(xlo_ <= 9 && 9 <= xhi_);
+#endif
+        return width * (yhi_ - ylo_ + 1);
+    }
+
+private:
+    uint32_t xlo_, xhi_, ylo_, yhi_;
+    Bounds bounds_;
+};
+
 // Semaphores. All but one are MONOTONE — never reset within a dispatch, compared against a running
 // total, which is what makes them race-free across M-blocks. The exception is the h all-gather's
 // per-slot VALID cells (SEM_H_RDY_BASE + s): a Flag, set and cleared each round.

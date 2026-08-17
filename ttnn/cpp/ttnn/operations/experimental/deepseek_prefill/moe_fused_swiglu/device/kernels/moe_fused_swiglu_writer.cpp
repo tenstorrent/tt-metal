@@ -23,14 +23,13 @@
 #include "api/dataflow/noc_semaphore.h"
 #include "api/debug/assert.h"
 
-#include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
+#include "tt_metal/tools/profiler/kernel_profiler.hpp"
 
 #include "moe_fused_swiglu_dataflow.hpp"  // the transport vocabulary shared with the reader
 #include "moe_fused_swiglu_common.hpp"    // the ONE definition of the mailbox word layout
 #include "moe_fused_swiglu_ct_args.hpp"   // the ONE definition of the compile-time arg order
 
-using namespace dataflow_kernel_lib;
+#define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
 
 MOE_DECLARE_CT_ENUM(MOE_WRITER_CT_ARGS);
 
@@ -115,7 +114,7 @@ inline bool h_round_on_writer(uint32_t r) { return ((H_ROUND_NOC1_MASK >> r) & 1
 // A complete writer-owned round.  Payload, linked flag, flush and the rotating-sender local reset
 // all stay on this RISC/NoC, which is the ownership boundary the earlier byte-wise split violated.
 inline void h_slot_send_posted_noc1(uint32_t slot, uint32_t l1, uint32_t size) {
-    const auto hrect = McastRect<noc_index>(
+    const auto hrect = moe_fused_swiglu::McastRect<noc_index>(
         get_arg_val<uint32_t>(RT_HRECT + 0),
         get_arg_val<uint32_t>(RT_HRECT + 1),
         get_arg_val<uint32_t>(RT_HRECT + 2),

@@ -25,18 +25,19 @@
 #include <cstdint>
 
 #include "api/compute/compute_kernel_hw_startup.h"
+#include "api/compute/eltwise_binary.h"
 #include "api/compute/matmul.h"
-#include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/bias_add_helpers.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
+#include "helpers/matmul_block_helpers.hpp"
+#include "helpers/bias_add_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/sfpu_activation_helpers.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
+#include "tt_metal/tools/profiler/kernel_profiler.hpp"
 
 #include "moe_fused_swiglu_common.hpp"   // the ONE definition of the mailbox word layout
 #include "moe_fused_swiglu_ct_args.hpp"  // the ONE definition of the compile-time arg order
 
 using namespace compute_kernel_lib;
+
+#define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
 
 // PER-STAGE ZONES — PERMANENT, always compiled, free with the profiler off. A compute TU does NOT
 // get the profiler through `dataflow_api.h` (it must not see the dataflow API at all), which is
@@ -102,13 +103,6 @@ constexpr uint32_t cb_slice_up = CT(CB_SLICE_UP);
 constexpr uint32_t cb_h_slice = CT(CB_H_SLICE);
 
 constexpr uint32_t TILE_H = 32;
-
-// BLOCKED ELTWISE. `eltwise_chain` SILENTLY clamps block_size to 1 unless every CB opts into the
-// chunked lifecycle, costing a DEST sync per tile against a budget of 8. `OperandKind::Block` is
-// required, not decorative.
-constexpr auto blk_in(uint32_t cb) { return input(cb, WaitPolicy::PerChunk, PopPolicy::PerChunk, OperandKind::Block); }
-constexpr auto blk_out(uint32_t cb) { return output(cb, ReservePolicy::PerChunk, PushPolicy::PerChunk); }
-ALWI auto blk_shape(uint32_t n) { return EltwiseShape::tiles(n, ELTWISE_BLK); }
 
 // The running sum stays in DEST for the WHOLE fold, packed to L1 once: `acc_to_dest` makes one
 // `add_tiles` fold two contributors. Raw compute API because `eltwise_chain` element specs are
@@ -178,6 +172,38 @@ ALWI void fold_dest(uint32_t num_contributors, uint32_t n) {
 template <uint32_t ACC, uint32_t IN>
 ALWI void fold_chain(uint32_t num_contributors, uint32_t n) {
     fold_dest<ACC, IN>(num_contributors, n);
+}
+
+// The only eltwise_convenience use in this kernel: a blocked, FIFO-preserving
+// elementwise multiply.  Keeping it here avoids carrying the generic eltwise
+// chain library (and its unrelated operation catalogue) onto origin/main.
+template <uint32_t A, uint32_t B, uint32_t OUT>
+ALWI void mul_blocked(uint32_t n) {
+    reconfig_data_format(A, B);
+    pack_reconfig_data_format(OUT);
+    mul_tiles_init(A, B);
+    cb_wait_front(A, n);
+    cb_wait_front(B, n);
+    cb_reserve_back(OUT, n);
+    for (uint32_t base = 0; base < n; base += ELTWISE_BLK) {
+        uint32_t width = n - base;
+        if (width > ELTWISE_BLK) {
+            width = ELTWISE_BLK;
+        }
+        tile_regs_acquire();
+        for (uint32_t i = 0; i < width; ++i) {
+            mul_tiles(A, B, base + i, base + i, i);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t i = 0; i < width; ++i) {
+            pack_tile(i, OUT);
+        }
+        tile_regs_release();
+    }
+    cb_pop_front(A, n);
+    cb_pop_front(B, n);
+    cb_push_back(OUT, n);
 }
 
 // Per-K-block FMA step count for the gate/up matmul: the padded K slot is KR_PAD tiles wide but
@@ -482,7 +508,7 @@ void kernel_main() {
             if (slice_tiles) {
                 // Inherits phase 1's hoisted cb_gate_acc pack format, which is correct exactly
                 // because cb_h_slice is bfp8 — the epilogue's single dtype boundary.
-                mul<blk_in(cb_gate_silu), blk_in(cb_slice_up), blk_out(cb_h_slice)>(blk_shape(slice_tiles));
+                mul_blocked<cb_gate_silu, cb_slice_up, cb_h_slice>(slice_tiles);
             }
         }
 

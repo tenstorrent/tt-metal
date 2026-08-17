@@ -36,14 +36,15 @@
 #include "api/tensor/noc_traits.h"
 #include "api/debug/assert.h"
 #include "hostdevcommon/common_values.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
+#include "tt_metal/tools/profiler/kernel_profiler.hpp"
 
 #include "moe_fused_swiglu_dataflow.hpp"  // the transport vocabulary shared with the writer
 #include "moe_fused_swiglu_common.hpp"    // the ONE definition of the mailbox word layout
 #include "moe_fused_swiglu_ct_args.hpp"   // the ONE definition of the compile-time arg order
 
-using namespace dataflow_kernel_lib;
+// Keep profiling source-compatible with the operation's existing permanent
+// zones without depending on kernel_lib's convenience wrapper.
+#define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
 
 // PER-STAGE ZONES — PERMANENT, always compiled. With the profiler off the macro emits no
 // instructions, so the shipped kernel is byte-identical to one with no zones. DO NOT DELETE THEM,
@@ -166,12 +167,17 @@ constexpr uint32_t RT_PEERS = 17;
 constexpr uint32_t RT_XMCAST = RT_PEERS + 2 * KGROUPS;
 constexpr uint32_t RT_HMCAST = RT_XMCAST + 4 + 2 * HGROUPS;
 
-// The x row-multicast: one rotating injector per tile-row over the HGROUPS-wide grid row.
-constexpr auto xmc = McastArgs<CT_XMCAST, RT_XMCAST, HGROUPS>();
-// The h all-gather: HGROUPS rounds over the whole HGROUPS x KGROUPS grid, round r sent by
-// column r's reduce root. SPAN is the rect area (row-major sender list).
-constexpr auto hmc = McastArgs<CT_HMCAST, RT_HMCAST, HGROUPS * KGROUPS>();
-constexpr uint32_t RT_HGROUP_RECT = hmc.next_runtime_args_offset();
+// The host emits the same five-word mcast descriptor used by kernel_lib:
+// active, data-ready semaphore, consumer-ready semaphore, active consumers,
+// flags.  This kernel only uses the rotating FLAG + pre-handshake x path.
+constexpr bool XMCAST_ACTIVE = get_compile_time_arg_val(CT_XMCAST + 0) != 0;
+constexpr uint32_t XMCAST_READY_SEM = get_compile_time_arg_val(CT_XMCAST + 1);
+constexpr uint32_t XMCAST_FREE_SEM = get_compile_time_arg_val(CT_XMCAST + 2);
+constexpr uint32_t XMCAST_CONSUMERS = get_compile_time_arg_val(CT_XMCAST + 3);
+constexpr bool HMCAST_ACTIVE = get_compile_time_arg_val(CT_HMCAST + 0) != 0;
+// h's descriptor has a rotating sender list of the whole grid.  The grouped
+// rectangle follows that list; only the rectangles are used by this raw path.
+constexpr uint32_t RT_HGROUP_RECT = RT_HMCAST + 4 + 2 * HGROUPS * KGROUPS;
 
 // POSTED (default) drops the NUM_CORES-1 payload write-acks and changes nothing else: the VALID
 // flag stays non-posted and LINKED on the same VC, so it cannot overtake the payload. Keep 0
@@ -181,12 +187,16 @@ constexpr bool kHMcastPosted = (H_MCAST_POSTED != 0);
 inline bool h_round_on_writer(uint32_t r) { return ((H_ROUND_NOC1_MASK >> r) & 1u) != 0; }
 
 inline void h_slot_send_posted(uint32_t slot, uint32_t l1, uint32_t size, bool grouped = false) {
-    const auto hrect = grouped ? McastRect<noc_index>(
+    const auto hrect = grouped ? moe_fused_swiglu::McastRect<noc_index>(
                                      get_arg_val<uint32_t>(RT_HGROUP_RECT + 0),
                                      get_arg_val<uint32_t>(RT_HGROUP_RECT + 1),
                                      get_arg_val<uint32_t>(RT_HGROUP_RECT + 2),
                                      get_arg_val<uint32_t>(RT_HGROUP_RECT + 3))
-                               : hmc.template rect<noc_index>();
+                               : moe_fused_swiglu::McastRect<noc_index>(
+                                     get_arg_val<uint32_t>(RT_HMCAST + 0),
+                                     get_arg_val<uint32_t>(RT_HMCAST + 1),
+                                     get_arg_val<uint32_t>(RT_HMCAST + 2),
+                                     get_arg_val<uint32_t>(RT_HMCAST + 3));
     const auto& rb = hrect.bounds();
     // EXCLUDE-source: `src == dst` on this send (the self-copy already placed this core's own copy),
     // so the fan-out is the rect area minus this core — the same count SenderPipe's
@@ -351,11 +361,23 @@ void kernel_main() {
     const uint32_t x_stick_base = READ_X_AT_OFFSET ? start_row : 0;
     const uint32_t x_tile_base = READ_X_AT_OFFSET ? (start_row / TILE_H) * EMB_T : 0;
 
-    // Collective pipes. Receivers are constructed before any ack, so their local flag init is
-    // race-free (see mcast_pipe.hpp SEMAPHORE LIFECYCLE).
-    Noc noc;
-    auto x_recv = xmc.receiver(noc);
-    auto x_send = xmc.sender(noc);
+    // Row multicast state.  All receivers initialize their own flag before
+    // acknowledging a sender; the sender waits for every acknowledgement, so
+    // this is the same happens-before edge as the former SenderPipe/ReceiverPipe.
+    const auto xrect = moe_fused_swiglu::McastRect<noc_index>(
+        get_arg_val<uint32_t>(RT_XMCAST + 0),
+        get_arg_val<uint32_t>(RT_XMCAST + 1),
+        get_arg_val<uint32_t>(RT_XMCAST + 2),
+        get_arg_val<uint32_t>(RT_XMCAST + 3));
+    const auto& xbounds = xrect.bounds();
+    const uint32_t x_mcast_dests = xrect.area() - 1;
+    volatile tt_l1_ptr uint32_t* x_ready =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(static_cast<uint32_t>(get_semaphore(XMCAST_READY_SEM)));
+    volatile tt_l1_ptr uint32_t* x_free =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(static_cast<uint32_t>(get_semaphore(XMCAST_FREE_SEM)));
+    if constexpr (XMCAST_ACTIVE) {
+        noc_semaphore_set(x_ready, INVALID);
+    }
 
     const uint32_t sem_data = static_cast<uint32_t>(get_semaphore(SEM_DATA));
     volatile tt_l1_ptr uint32_t* sem_data_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_data);
@@ -536,14 +558,47 @@ void kernel_main() {
             MaybeDeviceZoneScope("reader_xmcast");
             for (uint32_t t = 0; t < m_eff; ++t) {
 #ifndef ABLATE_NO_X_XFER  // /perf-measure: drop the x transport, keep cb_x_tiles' reserve/push
-                if constexpr (xmc.active) {
+                if constexpr (XMCAST_ACTIVE) {
                     // Round `t` carries tile-row `t`, injected by column `t % HGROUPS`. The lane
                     // value IS the sender's column, so the coord table needs no indirection.
                     const uint32_t round = t % HGROUPS;
                     if (round == my_col) {
-                        x_send.send(x_base + t * X_ROW_BYTES, x_base + t * X_ROW_BYTES, X_ROW_BYTES);
+                        noc_semaphore_wait(x_free, XMCAST_CONSUMERS);
+                        noc_semaphore_set(x_free, 0);
+                        const uint32_t src = x_base + t * X_ROW_BYTES;
+                        ncrisc_noc_fast_write_any_len<noc_mode>(
+                            noc_index,
+                            write_cmd_buf,
+                            src,
+                            get_noc_multicast_addr(xbounds.sx, xbounds.sy, xbounds.ex, xbounds.ey, src),
+                            X_ROW_BYTES,
+                            NOC_MULTICAST_WRITE_VC,
+                            /*mcast=*/true,
+                            /*linked=*/true,
+                            x_mcast_dests,
+                            /*multicast_path_reserve=*/true,
+                            /*posted=*/false);
+                        noc_semaphore_set(x_ready, VALID);
+                        noc_semaphore_set_multicast(
+                            static_cast<uint32_t>(get_semaphore(XMCAST_READY_SEM)),
+                            get_noc_multicast_addr(
+                                xbounds.sx,
+                                xbounds.sy,
+                                xbounds.ex,
+                                xbounds.ey,
+                                static_cast<uint32_t>(get_semaphore(XMCAST_READY_SEM))),
+                            x_mcast_dests,
+                            /*linked=*/false);
+                        noc_async_writes_flushed();
+                        // This core becomes a receiver in the next rotating round.
+                        noc_semaphore_set(x_ready, INVALID);
                     } else {
-                        x_recv.receive(round);
+                        const uint32_t sx = get_arg_val<uint32_t>(RT_XMCAST + 4 + 2 * round + 0);
+                        const uint32_t sy = get_arg_val<uint32_t>(RT_XMCAST + 4 + 2 * round + 1);
+                        noc_semaphore_inc(
+                            get_noc_addr(sx, sy, static_cast<uint32_t>(get_semaphore(XMCAST_FREE_SEM))), 1);
+                        noc_semaphore_wait(x_ready, VALID);
+                        noc_semaphore_set(x_ready, INVALID);
                     }
                 }
 #endif
@@ -801,7 +856,7 @@ void kernel_main() {
                         noc_async_read(get_noc_addr(get_write_ptr(cb_h_local)), hdst, HROW_T * H_TILE);
                         phase2_read_barrier();
 #ifndef ABLATE_NO_H_XFER
-                        if constexpr (hmc.active) {
+                        if constexpr (HMCAST_ACTIVE) {
                             h_free_expected += wd_mgroup ? MGROUP_CORES : NUM_CORES;
                             noc_semaphore_wait_min(
                                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
@@ -820,7 +875,7 @@ void kernel_main() {
                         }
                     } else {
 #ifndef ABLATE_NO_H_XFER
-                        if constexpr (hmc.active) {
+                        if constexpr (HMCAST_ACTIVE) {
                             volatile tt_l1_ptr uint32_t* hf = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
                                 static_cast<uint32_t>(get_semaphore(SEM_H_RDY_BASE + slot)));
                             MaybeDeviceZoneScope("p2_hwait");
@@ -918,7 +973,7 @@ void kernel_main() {
                         // behind every core clearing round r's. The ack accounting is the MONOTONE
                         // `h_free_expected` counter, because HACK_AHEAD deliberately breaks the
                         // round-to-round chain a reset-based handshake would need.
-                        if constexpr (hmc.active) {
+                        if constexpr (HMCAST_ACTIVE) {
                             h_free_expected += NUM_CORES;
                             noc_semaphore_wait_min(
                                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
@@ -937,7 +992,7 @@ void kernel_main() {
                         // off: wait for THIS slot's VALID, then put it back. Raw rather than a per-slot
                         // ReceiverPipe because that class's ctor sets the cell INVALID and would clobber
                         // a VALID a sender running ahead had already broadcast.
-                        if constexpr (hmc.active) {
+                        if constexpr (HMCAST_ACTIVE) {
                             volatile tt_l1_ptr uint32_t* hf =
                                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(static_cast<uint32_t>(
                                     get_semaphore(SEM_H_RDY_BASE + ((block_idx * HGROUPS + r) % DEPTH_H))));
