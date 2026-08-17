@@ -288,3 +288,57 @@ configuration, or the port's decode path — and I had already spent time ruling
 those out. The evidence says the port's generation and stop handling are working.
 The remaining problem is about how hard items interact with thinking mode and with
 the harness, which is a different investigation with different owners.
+
+---
+
+## Hypothesis 3 eliminated: lm-eval does not double-apply the chat template
+
+Checked in source rather than assumed, because the eval config only *asserted* it.
+
+`lm_eval/models/api_models.py:442`:
+
+```python
+def apply_chat_template(self, chat_history, add_generation_prompt=True):
+    if self.tokenizer_backend == "huggingface" and self.tokenized_requests:
+        return self.tokenizer.apply_chat_template(          # would render to a string
+            chat_history, tokenize=False,
+            add_generation_prompt=add_generation_prompt, ...)
+    elif self.tokenizer_backend == "remote" and self.tokenized_requests:
+        return chat_history
+    else:
+        # bit of a hack. We'll load back before sending to the API
+        return JsonChatStr(json.dumps(
+            [{**item, "type": "text"} for item in chat_history], ensure_ascii=False))
+```
+
+The invocation used `tokenizer_backend=huggingface`, so the first branch depends on
+`tokenized_requests`. The eval log settles it:
+
+```
+[models.api_models:955] Tokenized requests are disabled. Context + generation length is not checked.
+```
+
+`tokenized_requests` is **False**, so the `else` branch runs: the chat history is
+passed through as message dicts and the **server performs the only template
+rendering**. There is no client-side render, therefore no nesting of `<think>`
+openings, and the eval config's comment — "the OpenAI server still performs the only
+token rendering" — is correct.
+
+This matters for interpretation: my direct-API probe posts `messages` to the same
+chat endpoint, so it renders **identically** to the graded path. The probe is a valid
+reproduction, and the difference between the easy item converging at 1,362 tokens and
+Diamond document 1 exceeding 32,768 is therefore a property of **the question**, not
+of the harness.
+
+Remaining hypotheses, now two:
+
+1. genuinely non-convergent reasoning on PhD-level items;
+2. degenerate looping specific to hard items.
+
+Both are measured by the queued Diamond-row probe, and they are separated by the
+12-gram repetition rate — 0% on the easy item that converged.
+
+Incidental note from the same log line: with tokenised requests disabled, lm-eval
+does **not** check that prompt plus generation fits the context window. Harmless at
+this model's 262,144-token context, but worth knowing for a model where it would not
+be.
