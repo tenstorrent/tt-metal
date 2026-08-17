@@ -28,11 +28,7 @@ inline void llk_pack_init(const std::uint32_t pack_output) {
     const ckernel::TensorShape tensor_shape = get_output_tensor_shape(output_id);
 
     llk_pack_program_bfd_(output_id);
-    if constexpr (ckernel::TRISC_ID == 2) {
-        _llk_pack_init_(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), tensor_shape);
-    } else {
-        _llk_pack_init_(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack1>(), tensor_shape);
-    }
+    _llk_pack_init_(ckernel::trisc::bfd_current<pack_bfd_resource>(), tensor_shape);
 
     // 32-bit unpack-to-dest path: PACR addresses dest via SEC{TRISC_ID}_Offset (pack thread).
     // Initialize the section base to bank 0 for SyncHalf so the first PACR reads bank 0.

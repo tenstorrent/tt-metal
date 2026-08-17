@@ -45,22 +45,12 @@ inline void llk_pack_untilize_init(std::uint32_t pack_output) {
 
     if (tensor_shape.total_num_faces() == ckernel::trisc::NUM_FACES) {
         llk_pack_program_bfd_(output_id);
-        if constexpr (ckernel::TRISC_ID == 2) {
-            _llk_pack_untilize_init_<full_ct_dim, block_ct_dim>(
-                ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), tensor_shape);
-        } else {
-            _llk_pack_untilize_init_<full_ct_dim, block_ct_dim>(
-                ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack1>(), tensor_shape);
-        }
+        _llk_pack_untilize_init_<full_ct_dim, block_ct_dim>(
+            ckernel::trisc::bfd_current<pack_bfd_resource>(), tensor_shape);
     } else {
         llk_pack_program_bfd_<ckernel::trisc::L1AccessMode::Strided>(output_id);
-        if constexpr (ckernel::TRISC_ID == 2) {
-            _llk_pack_untilize_strided_init_<full_ct_dim, block_ct_dim>(
-                ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), tensor_shape);
-        } else {
-            _llk_pack_untilize_strided_init_<full_ct_dim, block_ct_dim>(
-                ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack1>(), tensor_shape);
-        }
+        _llk_pack_untilize_strided_init_<full_ct_dim, block_ct_dim>(
+            ckernel::trisc::bfd_current<pack_bfd_resource>(), tensor_shape);
     }
 }
 
@@ -111,7 +101,11 @@ inline void llk_pack_untilize(
         if (tensor_shape.total_num_faces() == ckernel::trisc::NUM_FACES) {
             _llk_pack_untilize_(dest_idx, l1_tile_idx);
         } else {
-            _llk_pack_untilize_strided_<full_ct_dim>(output_id, tensor_shape, l1_tile_idx, dest_idx);
+            // Strided PACR consumes buf_desc_id as an immediate; pass the id programmed by
+            // llk_pack_untilize_init (bfd_current), not the DFB output_id (which no longer doubles
+            // as the BFD id). The MOP branch already bakes in the correct id at init.
+            _llk_pack_untilize_strided_<full_ct_dim>(
+                ckernel::trisc::bfd_current<pack_bfd_resource>(), tensor_shape, l1_tile_idx, dest_idx);
         }
     }
 }

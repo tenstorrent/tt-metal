@@ -17,6 +17,13 @@ template <auto...>
 inline constexpr bool always_false_v = false;
 }  // namespace llk_pack_detail
 
+// The pack engine this TRISC owns: TRISC2 -> Pack0, TRISC3 -> Pack1. These pack headers are only
+// compiled under TRISC_PACK (COMPILE_FOR_TRISC=2) today, so the Pack1 arm is forward-compat. The
+// owning-TRISC guard itself lives in bfd_alloc<E>/bfd_current<E> (static_assert), so it need not be
+// repeated at each use site.
+inline constexpr ckernel::trisc::BfdResource pack_bfd_resource =
+    (ckernel::TRISC_ID == 2) ? ckernel::trisc::BfdResource::Pack0 : ckernel::trisc::BfdResource::Pack1;
+
 /*************************************************************************
  * LLK PACK COMMON
  *************************************************************************/
@@ -31,19 +38,13 @@ inline constexpr bool always_false_v = false;
  */
 template <ckernel::trisc::L1AccessMode MODE = ckernel::trisc::L1AccessMode::Continuous>
 inline void llk_pack_program_bfd_(const std::uint32_t output_id) {
-    // TODO: with multiple TCs are there multiple descriptors? Only tc_slots[0] is programmed.
-    if constexpr (ckernel::TRISC_ID == 2) {
-        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0, MODE>(
-            get_output_tensor_shape(output_id),
-            get_local_dfb_interface(output_id).tc_slots[0].base_addr,
-            static_cast<std::uint32_t>(pack_dst_format[output_id]));
-    } else {
-        static_assert(ckernel::TRISC_ID == 3, "pack BFD programming requires TRISC2 or TRISC3");
-        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack1, MODE>(
-            get_output_tensor_shape(output_id),
-            get_local_dfb_interface(output_id).tc_slots[0].base_addr,
-            static_cast<std::uint32_t>(pack_dst_format[output_id]));
-    }
+    // TODO: multi-TC not handled — only tc_slots[0]'s L1 base is programmed. When a DFB is mapped
+    // across multiple TCs this must program one descriptor per active tc_slot (same gap in
+    // llk_unpack_program_bfd_). Tied to the DFB<->buffer-descriptor decouple work.
+    ckernel::trisc::bfd_alloc_and_program<pack_bfd_resource, MODE>(
+        get_output_tensor_shape(output_id),
+        get_local_dfb_interface(output_id).tc_slots[0].base_addr,
+        static_cast<std::uint32_t>(pack_dst_format[output_id]));
 }
 
 /**

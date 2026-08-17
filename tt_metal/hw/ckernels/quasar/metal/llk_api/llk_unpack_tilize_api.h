@@ -20,6 +20,11 @@
  * Configures UNP_A stride registers and programs the MOP for tilizing
  * block_ct_dim tiles from row-major L1 data into face format in SrcA.
  *
+ * The operand gets a BFD id allocated from the unpack partition (Unp0 / UNPACR0) and its table
+ * entry is programmed here; the DFB id is used only to fetch buffer info, never as the BFD id.
+ * One init burns 1 unpack-partition id — the standard wrap contract (re-init before re-execute)
+ * applies.
+ *
  * @param operand       The input dataflow buffer identifier.
  * @param full_ct_dim   Number of tiles in a full row of the input tensor.
  * @param block_ct_dim  Number of tiles per MOP invocation (defaults to 1).

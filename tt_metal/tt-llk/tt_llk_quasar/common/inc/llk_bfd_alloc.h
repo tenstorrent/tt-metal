@@ -49,7 +49,6 @@ enum class BfdResource : std::uint8_t
 {
     Unp0 = 0,
     Unp1,
-    Unp2,
     Pack0,
     Pack1,
     Count
@@ -69,7 +68,6 @@ constexpr bool bfd_engine_owned_by_trisc(const BfdResource engine, const std::ui
             return trisc == 0;
         case BfdResource::Pack0:
             return trisc == 2;
-        case BfdResource::Unp2:
         case BfdResource::Pack1:
             return trisc == 3;
         default:
@@ -115,7 +113,7 @@ struct BfdAllocatorState
     bool initialized;                                                    // lazy init: globals are bss zero-init only, no dynamic init on device
 };
 
-// One instance per per-TRISC binary (each TRISC compiles its own image with COMPILE_FOR_TRISC).
+// One instance per TRISC binary (each TRISC compiles its own image with COMPILE_FOR_TRISC).
 inline BfdAllocatorState bfd_state; // zero-init; next initialized lazily to the partition base
 
 /**

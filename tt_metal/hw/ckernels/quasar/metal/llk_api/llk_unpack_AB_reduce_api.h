@@ -23,6 +23,12 @@
  * This function initializes the UNPACKER0 to unpack a single tile from the input DFB to srcA
  * and UNPACKER1 to unpack a single face from the input DFB to srcB, with specified reduce dimension.
  *
+ * Each operand gets a BFD id allocated from the unpack partition (operandA on Unp0 / UNPACR0,
+ * operandB on Unp1 / UNPACR1) and its table entry is programmed here; the DFB ids are used only
+ * to fetch buffer info, never as BFD ids. One init burns 2 unpack-partition ids, so the partition
+ * wraps sooner under mixed workloads — the standard wrap contract (re-init before re-execute)
+ * applies.
+ *
  */
 template <PoolType pool_type, ReduceDim reduce_dim>
 inline void llk_unpack_AB_reduce_init(const std::uint32_t operandA, const std::uint32_t operandB) {
