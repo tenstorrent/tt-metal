@@ -376,11 +376,8 @@ void MetalEnvImpl::initialize_fabric_tensix_datamover_config() {
         return;
     }
 
-    // Mock is not excluded here. FabricTensixDatamoverConfig is derived entirely from the control
-    // plane and soc descriptor -- it performs no device I/O -- and FabricFirmwareInitializer now
-    // compiles the fabric program on mock, which reaches get_tensix_config() whenever
-    // FabricTensixConfig is not DISABLED. Skipping this would leave tensix_config_ null and fatal
-    // there. Emule stops before the fabric compile, so it is unaffected either way.
+    // Mock is included: this is control-plane/soc-descriptor derived (no device I/O), and the mock
+    // fabric compile fatals on a null tensix_config_ when FabricTensixConfig != DISABLED.
     if (tt::tt_fabric::is_tt_fabric_config(this->fabric_config_)) {
         auto& cp = this->get_control_plane();
         cp.initialize_fabric_tensix_datamover_config();

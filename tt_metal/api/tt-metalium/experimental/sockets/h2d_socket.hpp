@@ -242,10 +242,9 @@ private:
     void init_receiver_tlb(
         const std::shared_ptr<MeshDevice>& mesh_device, std::optional<uint32_t> device_id = std::nullopt);
 
-    // Mock owner only: repoint bytes_acked_ptr_ at this socket's own bytes_sent_ so the FIFO
-    // always reads as fully drained. The MeshDevice resolves the owning context; nullptr leaves
-    // connector sockets unchanged so they retain their context-free construction contract.
-    void apply_mock_self_ack(const MeshDevice* mesh_device);
+    // Mock owner only: alias bytes_acked_ptr_ to bytes_sent_ so the FIFO reads as drained.
+    // Connectors remain context-free and do not use this path.
+    void apply_mock_self_ack(const MeshDevice& mesh_device);
 
     void reserve_bytes(uint32_t num_bytes);
     void push_bytes(uint32_t num_bytes);

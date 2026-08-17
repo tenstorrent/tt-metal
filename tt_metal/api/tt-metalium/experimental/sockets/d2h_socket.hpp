@@ -318,14 +318,10 @@ public:
 private:
     D2HSocket() = default;
 
-    // Mock only: repoint bytes_sent_ptr_ at a host-side stand-in for the counter the device
-    // would write, so a blocking wait can be satisfied. See the definition for the contract.
-    void apply_mock_self_feed(const MeshDevice* mesh_device);
+    // Mock owner only: redirect the device-produced counter to a host-side stand-in.
+    void apply_mock_self_feed(const MeshDevice& mesh_device);
 
-    // Mock only: grant exactly `num_bytes` of synthetic payload, enough to release the caller
-    // that is currently blocked. Consuming it brings bytes_acked_ back level with the stand-in
-    // counter, which is what leaves the socket reading as drained again afterwards. Call only
-    // from a blocking wait; never to top the FIFO up speculatively.
+    // Release a blocked mock wait without advertising persistent availability.
     void mock_grant(uint32_t num_bytes) { mock_bytes_sent_ = bytes_acked_ + num_bytes; }
 
     struct PinnedBufferInfo {
@@ -374,8 +370,7 @@ private:
     std::shared_ptr<tt::tt_metal::experimental::PinnedMemory> pinned_memory_ = nullptr;
     std::shared_ptr<uint32_t[]> host_buffer_ = nullptr;
     uint32_t* bytes_sent_ptr_ = nullptr;
-    // Mock only (see apply_mock_self_feed): the stand-in bytes_sent_ptr_ is aimed at, and the
-    // flag that lets blocking waits grant exactly the synthetic bytes they need.
+    // Host-side device-counter stand-in and its activation flag for mock.
     uint32_t mock_bytes_sent_ = 0;
     bool mock_self_feed_ = false;
     std::function<void(void*, uint32_t, uint64_t)> pcie_writer_ = nullptr;
