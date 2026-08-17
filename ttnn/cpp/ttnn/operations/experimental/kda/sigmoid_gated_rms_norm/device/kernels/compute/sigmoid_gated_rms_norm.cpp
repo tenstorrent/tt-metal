@@ -7,7 +7,6 @@
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/rsqrt.h"
-#include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/bcast.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/reconfig_data_format.h"
@@ -18,14 +17,11 @@
 void square(uint32_t n, DataflowBuffer& tmp) {
     tmp.reserve_back(n);
     pack_reconfig_data_format(dfb::tmp);
-    reconfig_data_format_srca(dfb::x);
-    copy_tile_to_dst_init_short(dfb::x);
+    reconfig_data_format(dfb::x, dfb::x);
+    mul_init(dfb::x, dfb::x, false);
     for (uint32_t i = 0; i < n; i++) {
         tile_regs_acquire();
-        copy_tile(dfb::x, i, 0);
-        copy_tile(dfb::x, i, 1);
-        mul_binary_tile_init();
-        mul_binary_tile(0, 1, 0);
+        mul_tiles(dfb::x, dfb::x, i, i, 0);
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, dfb::tmp, i);
@@ -34,16 +30,13 @@ void square(uint32_t n, DataflowBuffer& tmp) {
     tmp.push_back(n);
 }
 
-void inverse_rms(uint32_t epsilon_bits, uint32_t inv_v_bits, DataflowBuffer& inv) {
+void inverse_rms(DataflowBuffer& inv) {
     inv.reserve_back(1);
     pack_reconfig_data_format(dfb::inv);
-    reconfig_data_format_srca(dfb::stats);
-    copy_tile_to_dst_init_short(dfb::stats);
+    reconfig_data_format(dfb::stats, dfb::epsilon);
+    add_init(dfb::stats, dfb::epsilon);
     tile_regs_acquire();
-    copy_tile(dfb::stats, 0, 0);
-    binop_with_scalar_tile_init();
-    mul_unary_tile(0, inv_v_bits);
-    add_unary_tile(0, epsilon_bits);
+    add_tiles(dfb::stats, dfb::epsilon, 0, 0, 0);
     rsqrt_tile_init();
     rsqrt_tile(0);
     tile_regs_commit();
@@ -119,7 +112,7 @@ void multiply_output(uint32_t Vt, DataflowBuffer& out) {
     out.push_back(Vt);
 }
 
-template <uint32_t Vt, uint32_t epsilon_bits, uint32_t inv_v_bits>
+template <uint32_t Vt>
 TT_KERNEL void compute(uint32_t wi_count) {
     compute_kernel_hw_startup(dfb::x, dfb::scaler, dfb::out);
     DataflowBuffer x(dfb::x);
@@ -131,17 +124,19 @@ TT_KERNEL void compute(uint32_t wi_count) {
     DataflowBuffer norm(dfb::norm);
     DataflowBuffer out(dfb::out);
     DataflowBuffer scaler(dfb::scaler);
+    DataflowBuffer epsilon(dfb::epsilon);
     weight.wait_front(Vt);
     scaler.wait_front(1);
+    epsilon.wait_front(1);
     for (uint32_t i = 0; i < wi_count; i++) {
         x.wait_front(Vt);
         gate.wait_front(Vt);
         square(Vt, tmp);
         compute_kernel_lib::
-            reduce<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW, dfb::tmp, dfb::scaler, dfb::stats>(
+            reduce<ckernel::PoolType::AVG, ckernel::ReduceDim::REDUCE_ROW, dfb::tmp, dfb::scaler, dfb::stats>(
                 compute_kernel_lib::ReduceInputBlockShape::of(1, Vt));
         stats.wait_front(1);
-        inverse_rms(epsilon_bits, inv_v_bits, inv);
+        inverse_rms(inv);
         inv.wait_front(1);
         scale_by_inverse_rms(Vt, norm);
         norm.wait_front(Vt);

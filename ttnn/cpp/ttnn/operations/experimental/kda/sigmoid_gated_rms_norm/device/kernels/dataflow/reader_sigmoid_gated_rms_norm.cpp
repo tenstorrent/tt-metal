@@ -7,8 +7,9 @@
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+#include "ttnn/cpp/ttnn/kernel/dataflow/generate_bcast_scalar_metal2.hpp"
 
-template <uint32_t Vt, uint32_t H, uint32_t Mt>
+template <uint32_t Vt, uint32_t H, uint32_t Mt, uint32_t epsilon_bits>
 TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
     const auto x_acc = TensorAccessor(tensor::input);
     const auto g_acc = TensorAccessor(tensor::gate);
@@ -16,10 +17,15 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
     DataflowBuffer x(dfb::x);
     DataflowBuffer gate(dfb::gate);
     DataflowBuffer weight(dfb::weight);
+    DataflowBuffer epsilon(dfb::epsilon);
     Noc noc;
 
-    dataflow_kernel_lib::
-        calculate_and_prepare_reduce_scaler<dfb::scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
+    dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+        dfb::scaler,
+        ckernel::PoolType::AVG,
+        ckernel::ReduceDim::REDUCE_ROW,
+        Vt * tt::constants::TILE_WIDTH>();
+    generate_bcast_col_scalar(epsilon, epsilon_bits);
 
     weight.reserve_back(Vt);
     for (uint32_t vt = 0; vt < Vt; vt++) {

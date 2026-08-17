@@ -49,9 +49,9 @@ _PRODUCTION_PERF_MARGIN = 0.05
 # inline references are their medians. The 5% symmetric margin covers the <1%
 # observed spread plus board/thermal variance while still guarding regressions.
 _PRODUCTION_CASES = (
-    _ProductionCase("sp1-tp8-local", num_heads=12, sequence=5120, expected_duration_ns=166_947),
-    _ProductionCase("sp2-tp4-local", num_heads=24, sequence=2560, expected_duration_ns=167_323),
-    _ProductionCase("sp4-tp2-local", num_heads=48, sequence=1280, expected_duration_ns=167_172),
+    _ProductionCase("sp1-tp8-local", num_heads=12, sequence=5120, expected_duration_ns=153_144),
+    _ProductionCase("sp2-tp4-local", num_heads=24, sequence=2560, expected_duration_ns=154_054),
+    _ProductionCase("sp4-tp2-local", num_heads=48, sequence=1280, expected_duration_ns=153_799),
 )
 
 

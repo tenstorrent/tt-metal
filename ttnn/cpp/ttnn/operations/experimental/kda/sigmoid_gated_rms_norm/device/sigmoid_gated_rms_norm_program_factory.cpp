@@ -56,6 +56,7 @@ ttnn::device_operation::ProgramArtifacts SigmoidGatedRmsNormProgramFactory::crea
     const m2::DFBSpecName NORM_DFB{"norm"};
     const m2::DFBSpecName OUT_DFB{"out"};
     const m2::DFBSpecName SCALER_DFB{"scaler"};
+    const m2::DFBSpecName EPS_DFB{"epsilon"};
 
     const m2::TensorParamName INPUT{"input"};
     const m2::TensorParamName GATE{"gate"};
@@ -84,13 +85,11 @@ ttnn::device_operation::ProgramArtifacts SigmoidGatedRmsNormProgramFactory::crea
         make_dfb(NORM_DFB, Vt, tt::DataFormat::Float32),
         make_dfb(OUT_DFB, 2 * Vt, output_format),
         make_dfb(SCALER_DFB, 1, tt::DataFormat::Float32),
+        make_dfb(EPS_DFB, 1, tt::DataFormat::Float16_b),
     };
 
     uint32_t eps_bits = 0;
-    uint32_t inv_v_bits = 0;
-    const float inv_v = 1.0f / static_cast<float>(attrs.value_dim);
     std::memcpy(&eps_bits, &attrs.epsilon, sizeof(float));
-    std::memcpy(&inv_v_bits, &inv_v, sizeof(float));
 
     m2::KernelSpec reader{
         .unique_id = READER,
@@ -103,6 +102,7 @@ ttnn::device_operation::ProgramArtifacts SigmoidGatedRmsNormProgramFactory::crea
                 m2::DFBBinding{GATE_DFB, "gate", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{WEIGHT_DFB, "weight", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{SCALER_DFB, "scaler", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{EPS_DFB, "epsilon", m2::DFBEndpointType::PRODUCER},
             },
         .tensor_bindings =
             {
@@ -110,7 +110,7 @@ ttnn::device_operation::ProgramArtifacts SigmoidGatedRmsNormProgramFactory::crea
                 m2::TensorBinding{GATE, "gate"},
                 m2::TensorBinding{WEIGHT, "weight"},
             },
-        .compile_time_args = {{"Vt", Vt}, {"H", attrs.num_heads}, {"Mt", Mt}},
+        .compile_time_args = {{"Vt", Vt}, {"H", attrs.num_heads}, {"Mt", Mt}, {"epsilon_bits", eps_bits}},
         .runtime_arg_schema = {.runtime_arg_names = {"wi_start", "wi_count"}},
         .hw_config = ttnn::create_reader_datamovement_config(arch),
     };
@@ -159,8 +159,9 @@ ttnn::device_operation::ProgramArtifacts SigmoidGatedRmsNormProgramFactory::crea
                 m2::DFBBinding{NORM_DFB, "norm", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{OUT_DFB, "out", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{SCALER_DFB, "scaler", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{EPS_DFB, "epsilon", m2::DFBEndpointType::CONSUMER},
             },
-        .compile_time_args = {{"Vt", Vt}, {"epsilon_bits", eps_bits}, {"inv_v_bits", inv_v_bits}},
+        .compile_time_args = {{"Vt", Vt}},
         .runtime_arg_schema = {.runtime_arg_names = {"wi_count"}},
         .hw_config = std::move(compute_hw),
     };
