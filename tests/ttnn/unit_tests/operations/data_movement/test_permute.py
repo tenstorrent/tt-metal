@@ -304,9 +304,9 @@ def test_permute_fp32_mantissa_not_truncated(device, shape, perm, layout):
         ((1, 1, 32, 32), (0, 3, 2, 1), ttnn.TILE_LAYOUT),
     ],
 )
-def test_permute_fp32_exact_integers(device, shape, perm, layout):
-    """Exact-in-fp32 integers needing >11 significand bits; under tf32 these round down."""
-    values = [2049.0, 4097.0, 65537.0, float(2**24 + 1), 1.0 + 2**-23]
+def test_permute_fp32_exact_values(device, shape, perm, layout):
+    """Exact FP32 values needing >11 significand bits; TF32 truncation changes them."""
+    values = [2049.0, 4097.0, 65537.0, float(2**24 - 1), 1.0 + 2**-23]
     numel = math.prod(shape)
     torch_tensor = torch.tensor(values * (numel // len(values) + 1), dtype=torch.float32)[:numel].reshape(shape)
 
