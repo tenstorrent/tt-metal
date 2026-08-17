@@ -91,6 +91,13 @@
   <p class="sub">Micro-op layer (PR <span class="prn">①</span>+<span class="prn">②</span>, <span class="commit">d64993c·7257487</span>) is inside the kernels of these columns:
   <span class="prn">①</span> replay ×1.17 → the stock ttnn.topk column only (631.5 ms is without it; with it: 539.5 ms); <span class="prn">②</span> SFPLOADMACRO ~5–9% → the two ours columns. Factors, not times — already included in the numbers shown.</p>
   <p class="sub">‡stock topk_large_indices measured as a deterministic competition layer via the rows=2 row-parallel proxy (byte-identical stock kernels, per-row single-core wall time). †blaze runs its fused SDPA+localTopK program at exactly this shape (k=2048, 64K global context) on this box — includes SDPA work the other layers don't, so its row flatters it.</p>
+  <p class="sub"><strong>Applicability boundary of the 10.4× op column</strong> — the anchor is a <em>single row</em>, i.e. a latency
+  cell. The tree converts cores into latency at ≈1.0 core-efficiency (P=2 measures 183.0 µs = 366 core-µs/row vs the
+  shipped op's 357.0 core-µs on one core, +2.5% — core-time-neutral), so the 10.4× serves latency-bound low-row callers
+  (decode-shape indexer top-k, low-batch tails) and every routed <code>ttnn.topk</code> site. Callers with rows ≥ grid are
+  already core-optimal on the shipped 1-core-per-row layout: the GLM/DSA prefill production cell (160 rows) measures
+  712.3 µs ≈ exactly two row-waves of the shipped per-row kernel (2 × 357.0) — which is why the scenario table honestly
+  reports it 1.0×. Reducing per-core work there is the fusion lever.</p>
 
   <div class="takeaway">
     <b class="num">12,265×</b><span>The user-facing win: <code>ttnn.topk</code> at the anchor shape went from 631.5 <em>milli</em>seconds to 51.5 <em>micro</em>seconds (tree-powered, TILE-native I/O, values and indices, full test parity); k=512@65536 is 161.6 ms → 20.9 µs (7,732×). The k&gt;64 cliff no longer exists — and neither does the k≤64 one: wide/non-pow2 small-k rows that fell to the linear single-core factory (9.49–17.95 ms at N=65536, 695 µs at N=5000) now route too, at 40–423× — and so do the MoE expert gates (k≤16, padded W 128–512: 24.2 → 8.2 µs and 77.5 → 8.3 µs, 2.95× / 9.34×).</span>
