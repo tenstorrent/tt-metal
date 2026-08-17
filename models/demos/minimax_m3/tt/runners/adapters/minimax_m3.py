@@ -82,9 +82,12 @@ class MiniMaxM3PrefillAdapter(PrefillModelAdapter):
 
     l1_small_size = 0
 
-    # M3's sequence-parallel residual keeps the full embedding on every TP col (emb replicated, seq
-    # SP-sharded), so the D2D hidden state ships emb-replicated across TP.
-    pipeline_activation_emb_tp_sharded = False
+    # The D2D hidden state ships in the residual stream's layer-boundary layout (see tt/residual.py).
+    @property
+    def pipeline_activation_emb_tp_sharded(self):
+        from models.demos.minimax_m3.tt.residual import use_sharded_residual
+
+        return use_sharded_residual()
 
     # ------------------------------------------------------------------
     # HF config
