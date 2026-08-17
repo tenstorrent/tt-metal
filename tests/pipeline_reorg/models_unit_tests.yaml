@@ -1383,6 +1383,6 @@
   skus:
     wh_n150:
       timeout: 15
-      tier: 1
+      tier: 2
   owner_id: U082LLYBLSW # Gabriel Tobar (CODEOWNERS @gtobarTT)
   team: models

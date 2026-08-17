@@ -65,7 +65,6 @@ it is classified differently on different systems.
 | Z-Image-Turbo | BH QuietBox 2 |
 | TT-DiT (shared) | WH N150, BH QuietBox 2 |
 | ResNet-50 | WH N150, WH LLMBox, BH P150b |
-| BGE-M3 | WH N150 |
 ## Tier 2 Models
 | Model | Systems |
 |-------|---------|
@@ -90,6 +89,7 @@ it is classified differently on different systems.
 | Stable Diffusion XL | WH N150, WH N300, BH P150 |
 | ViT | WH N150, WH N300 |
 | Motif-Image-6B | WH LLMBox |
+| BGE-M3 | WH N150 |
 ## Tier 3 Models
 | Model | Systems |
 |-------|---------|

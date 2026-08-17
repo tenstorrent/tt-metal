@@ -1896,8 +1896,7 @@ jobs:
                           "ltx-2.3-pro-i2v",
                           "ltx-2.3-fast-i2v",
                           "z-image-turbo",
-                          "resnet50",
-                          "bge_m3"
+                          "resnet50"
                         ],
                         "type": "string"
                       },
@@ -1991,8 +1990,7 @@ jobs:
                           "flux.1-dev",
                           "ltx-2.3",
                           "z-image-turbo",
-                          "resnet50",
-                          "bge_m3"
+                          "resnet50"
                         ],
                         "type": "string"
                       },
@@ -2090,7 +2088,8 @@ jobs:
                           "gpt-oss-20b",
                           "sdxl",
                           "vit",
-                          "motif"
+                          "motif",
+                          "bge_m3"
                         ],
                         "type": "string"
                       },
@@ -2186,7 +2185,8 @@ jobs:
                           "gpt-oss-20b",
                           "sdxl",
                           "vit",
-                          "motif"
+                          "motif",
+                          "bge_m3"
                         ],
                         "type": "string"
                       },
