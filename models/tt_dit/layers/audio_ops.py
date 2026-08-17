@@ -954,10 +954,16 @@ class Conv1dViaConv3d(Module):
 
         self.same_pad = same_pad
         self.eff_k = eff_k
-        # The shifted-matmul form (see `_forward_tap_matmul`) needs stride 1 to index taps directly,
-        # fp32 to be worth doing at all, and the unsharded path: under T- or channel-sharding the conv3d
-        # route owns the halo exchange and the C_in gather, and duplicating that here would be a second
-        # place for the same invariant to be wrong. Sharded audio decode is off by default.
+        # The shifted-matmul form (see `_forward_tap_matmul`) needs stride 1 to index taps directly and
+        # fp32 to be worth doing at all. T-sharding is supported: the tap path takes its own halo from
+        # `_t_neighbor_pad`, the same exchange the conv3d route uses. Channel-TP is still excluded --
+        # there the conv3d route owns the C_in gather, and duplicating that here would be a second place
+        # for the same invariant to be wrong.
+        #
+        # This used to also require `not sharded`, which made the sharded tap path unreachable and hid
+        # two bugs in it (halo width at even `eff_k`, and freeing the ccl_manager's ping-pong buffer).
+        # Both are fixed; leaving it enabled is what keeps sharded output equal to unsharded at the same
+        # levers (83.4 dB agreement, against 57.4 dB when the two paths ran different math).
         self.tap_matmul = tap_matmul and dtype == ttnn.float32 and stride == 1 and channel_axis(parallel_config) is None
 
         self._alloc_weight_bias()
