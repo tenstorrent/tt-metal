@@ -277,5 +277,8 @@ def test_cached_state_dict_contract():
 
     del sd["tok_embeddings.weight"]
     assert "tok_embeddings.weight" not in sd
-    with pytest.raises(KeyError):
+    try:
         sd["tok_embeddings.weight"]
+        raise AssertionError("a deleted key must raise KeyError, even when the sidecar still has it")
+    except KeyError:
+        pass
