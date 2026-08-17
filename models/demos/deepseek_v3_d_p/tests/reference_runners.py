@@ -11,6 +11,7 @@ bundled reference return `None` and the comparison is skipped at the call
 site.
 """
 
+import inspect
 from copy import deepcopy
 from typing import Optional
 
@@ -75,14 +76,37 @@ def run_reference_mla(
     attn.load_state_dict(weights, strict=False)
     attn = attn.eval().to(torch.bfloat16)
     causal = torch.triu(torch.full((q_len, q_len), float("-inf"), dtype=hidden_states.dtype), diagonal=1)
-    with torch.no_grad():
-        out = attn(
-            hidden_states=hidden_states,
-            attention_mask=causal[None, None],
-            position_ids=position_ids,
-            past_key_value=None,
-            use_cache=False,
+    # Bind by signature rather than assuming one generation's shape. The vendored DeepSeek/Kimi
+    # attentions take `past_key_value` and derive rope internally; a transformers >= 5 attention
+    # (e.g. Mistral4Attention) takes `past_key_values` and REQUIRES `position_embeddings`, because
+    # rope moved up to the model level. Passing the wrong cache name silently lands in **kwargs;
+    # omitting position_embeddings is a TypeError.
+    fwd_params = inspect.signature(attn.forward).parameters
+    kwargs = {
+        "hidden_states": hidden_states,
+        "attention_mask": causal[None, None],
+        "position_ids": position_ids,
+        "use_cache": False,
+    }
+    kwargs["past_key_values" if "past_key_values" in fwd_params else "past_key_value"] = None
+    if "position_embeddings" in fwd_params:
+        rotary_cls = getattr(variant, "reference_rotary_cls", None)
+        assert rotary_cls is not None, (
+            f"{type(attn).__name__} requires position_embeddings but {variant.name!r} exposes no "
+            "reference_rotary_cls to build (cos, sin) from"
         )
+        # Build and evaluate the rope tables in FLOAT32, then cast down. Computing them in bf16 is
+        # catastrophic at long context: `position * inv_freq` loses its low bits, so the phase error
+        # grows with position. Measured on Mistral at qk_rope_head_dim=64 -- a bf16 rotary holds up
+        # to ~2k tokens and then falls off a cliff (PCC vs the absorbed reference 0.99998 at seq 512,
+        # 0.958 at seq 5120), which reads exactly like a device bug and is not one. In fp32 the
+        # absorbed (this family's) and unabsorbed (transformers') MLA formulations agree to 1.0000000.
+        rotary = rotary_cls(config=config).float()
+        with torch.no_grad():
+            cos, sin = rotary(hidden_states.float(), position_ids)
+            kwargs["position_embeddings"] = (cos.to(hidden_states.dtype), sin.to(hidden_states.dtype))
+    with torch.no_grad():
+        out = attn(**kwargs)
     # DeepseekV3Attention returns (out, attn_weights, past_kv); Kimi-K3's KimiMLAAttention returns a
     # bare tensor (upstream shape). Accept either.
     return out[0] if isinstance(out, tuple) else out

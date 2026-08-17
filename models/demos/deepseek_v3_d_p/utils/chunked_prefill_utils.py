@@ -47,14 +47,24 @@ def _ref_cache_key(config, weights, hidden_2d) -> str:
         multi-user run two users can share the same total_len while having different inputs. Keying on
         length alone would hand user 1 user 0's reference and silently corrupt its PCC.
       * config -- num_attention_heads changes the absorbed-Q head split even at identical weight
-        shapes; the NoPE / output-gate flags and rope_scaling change the math outright.
+        shapes; the NoPE / output-gate flags and rope_scaling change the math outright, and
+        mla_disable_yarn_mscale changes the softmax scale by mscale**2 (2.2058 for Mistral at
+        factor=128). Any field added here that moves the reference MUST be added to the hash below --
+        omitting one serves a stale reference against a changed device and reads as a device bug.
 
     Hashing the full tensors costs ~2 s at the 56320-token production shape, against a ~7 min
     reference. Content-addressing also makes the key collision-free across variants, so one shared
     cache dir is safe.
     """
     h = hashlib.sha1()
-    for field in ("num_attention_heads", "rms_norm_eps", "mla_use_nope", "mla_use_output_gate", "rope_scaling"):
+    for field in (
+        "num_attention_heads",
+        "rms_norm_eps",
+        "mla_use_nope",
+        "mla_use_output_gate",
+        "mla_disable_yarn_mscale",
+        "rope_scaling",
+    ):
         h.update(f"{field}={getattr(config, field, None)!r}".encode())
     _hash_tensor(h, "hidden", hidden_2d)
     for name in sorted(weights):

@@ -20,7 +20,7 @@ DeepSeek/Kimi residents in three ways that the adapter has to account for:
   * **Weights.** The checkpoint stores experts as ONE stacked fp8 tensor per projection with gate
     and up fused (``mlp.experts.gate_up_proj`` ``[128, 4096, 4096]``), not per-expert
     ``mlp.experts.{i}.*``; and fp8 is PER-TENSOR (rank-0 ``*_scale_inv``), not [128,128] block.
-    Neither is handled by the shared loader yet — see ``supports_pretrained`` below.
+    Both are handled now — see ``supports_pretrained`` below.
 
 Single expert group with a device gate, like Kimi and GLM, so the MoE routing all-gather's
 semaphores go to L1_SMALL (needs the L1_SMALL carve-out at mesh-open).
@@ -112,3 +112,13 @@ class MistralSmall4Adapter(MLAPrefillAdapter):
         from transformers.models.mistral4.modeling_mistral4 import Mistral4MoE
 
         return Mistral4MoE
+
+    @property
+    def reference_rotary_cls(self):
+        """Rope module the reference attention needs its (cos, sin) from. transformers >= 5 computes
+        rope at the MODEL level and passes `position_embeddings` down, so an attention module used
+        standalone has to be handed them explicitly (the vendored DeepSeek/Kimi references build rope
+        internally and expose nothing here)."""
+        from transformers.models.mistral4.modeling_mistral4 import Mistral4RotaryEmbedding
+
+        return Mistral4RotaryEmbedding
