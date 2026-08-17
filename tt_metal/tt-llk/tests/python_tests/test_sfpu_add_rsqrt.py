@@ -91,9 +91,21 @@ ADDENDS = (0.0, 1e-6, 1e-5, 1.0)
 # conversion and torch's differ by up to one step. Both are folded into one bf16 number
 # rather than split by dest_acc, since a 1-ULP packer disagreement is not a defect.
 #
-# atol is kept at a small floor: the binding constraint is relative (golden >= 0.44
-# everywhere in this domain), and a large atol would silently swallow the small results.
-_ATOL = 1e-3
+# atol is 0 so the rtol column above is what actually gates each cell. passed_test feeds
+# both into torch.isclose, which bounds |device - golden| by atol + rtol*|golden|, so any
+# atol floor competes with the relative term rather than backing it up. The old 1e-3 floor
+# made the tightest cell meaningless: at (ApproximationMode.No, Float32) the golden spans
+# [0.45, 3.2], so rtol*|golden| tops out near 3.2e-6 -- three orders under the floor, which
+# would therefore have accepted an error ~7700x larger than the 1.3e-7 actually measured.
+# That is the only cell exercising the SQRT_23-bit Newton refinement at full fp32 output
+# width, and the separate pcc > 0.99 gate is blind to per-element error at this scale.
+#
+# Dropping the floor is safe because the golden is bounded away from zero everywhere in
+# this domain: the sweep is uniform(0.1, 4.0) with addends up to 1.0, so
+# rsqrt(x + addend) stays inside [1/sqrt(5.0), 1/sqrt(0.1)] = [0.447, 3.163]. There are no
+# near-zero results for an absolute floor to protect. (The zero and negative argument
+# cases, whose results are +inf and NaN, are separate tests using exact predicates.)
+_ATOL = 0.0
 _RTOL = {
     # (approx, output is 32-bit)
     (ApproximationMode.No, True): 1e-6,
