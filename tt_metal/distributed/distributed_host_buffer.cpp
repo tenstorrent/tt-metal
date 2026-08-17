@@ -16,6 +16,7 @@
 #include "common/executor.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/distributed/distributed_coordinate_translator.hpp"
+#include "tt_metal/distributed/mesh_device_view_impl.hpp"
 
 namespace tt::tt_metal {
 
@@ -54,11 +55,11 @@ DistributedHostBuffer DistributedHostBuffer::create(const distributed::MeshDevic
     std::vector<distributed::MaybeRemote<Shard>> shards(
         mesh_device_view.shape().mesh_size(), distributed::MaybeRemote<Shard>::remote());
 
-    auto distributed_context =
-        tt::tt_metal::MetalContext::instance().get_control_plane().get_distributed_context(mesh_device_view.mesh_id());
+    auto distributed_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_distributed_context(
+        mesh_device_view.impl().mesh_id());
 
     int shard_index = 0;
-    for (auto maybe_device : mesh_device_view) {
+    for (auto maybe_device : mesh_device_view.impl()) {
         maybe_device.if_local([&](const auto&) {
             shards[shard_index] = distributed::MaybeRemote<Shard>::local(Shard{.is_populated = false});
         });

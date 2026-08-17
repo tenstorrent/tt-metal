@@ -22,6 +22,7 @@
 #include <map>
 #include <optional>
 #include <ostream>
+#include <queue>
 #include <set>
 #include <string>
 #include <string_view>

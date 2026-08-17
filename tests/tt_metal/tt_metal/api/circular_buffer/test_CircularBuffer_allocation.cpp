@@ -25,6 +25,7 @@
 #include <tt-metalium/device.hpp>
 #include "device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
+#include <distributed/mesh_workload_impl.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/tensor/spec/tensor_spec.hpp>
 #include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
@@ -66,7 +67,7 @@ void validate_cb_address(
         for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
             for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                 CoreCoord core_coord(x, y);
-                auto address = workload.get_cb_base_addr(mesh_device, core_coord, tt::CoreType::WORKER);
+                auto address = workload.impl().get_cb_base_addr(mesh_device, core_coord, tt::CoreType::WORKER);
                 slow_dispatch::ReadFromL1(*mesh_device, core_coord, address, cb_config_buffer_size, cb_config_vector);
 
                 std::map<uint8_t, uint32_t> address_per_buffer_index = core_to_address_per_buffer_index.at(core_coord);
@@ -530,7 +531,7 @@ TEST_F(MeshDeviceFixture, TensixTestUpdateCircularBufferPageSize) {
             for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
                 for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                     CoreCoord core_coord(x, y);
-                    auto address = workload.get_cb_base_addr(device, core_coord, tt::CoreType::WORKER);
+                    auto address = workload.impl().get_cb_base_addr(device, core_coord, tt::CoreType::WORKER);
                     slow_dispatch::ReadFromL1(*device, core_coord, address, cb_config_buffer_size, cb_config_vector);
 
                     std::map<uint8_t, uint32_t> address_per_buffer_index = golden_addresses_per_core.at(core_coord);
@@ -559,7 +560,7 @@ TEST_F(MeshDeviceFixture, TensixTestUpdateCircularBufferPageSize) {
             for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
                 for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                     CoreCoord core_coord(x, y);
-                    auto address = workload.get_cb_base_addr(device, core_coord, tt::CoreType::WORKER);
+                    auto address = workload.impl().get_cb_base_addr(device, core_coord, tt::CoreType::WORKER);
                     slow_dispatch::ReadFromL1(*device, core_coord, address, cb_config_buffer_size, cb_config_vector);
 
                     std::map<uint8_t, uint32_t> address_per_buffer_index = golden_addresses_per_core.at(core_coord);

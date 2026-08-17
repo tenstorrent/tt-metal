@@ -3,10 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <chrono>
+#include <type_traits>
 #include <fmt/base.h>
 #include <cstddef>
 #include <cstdint>
 #include <tt-metalium/host_api.hpp>
+#include "tt_metal/distributed/event_query_impl.hpp"
 #include "tt_metal/distributed/mesh_event_impl.hpp"
 #include <memory>
 #include <vector>
@@ -23,7 +25,6 @@
 #include <tt-logger/tt-logger.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
-
 namespace tt::tt_metal {
 
 using std::vector;

@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <functional>
 
-
 #include <tt-metalium/distributed.hpp>
+#include <distributed/mesh_workload_impl.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/sub_device.hpp>
 #include "impl/sub_device/sub_device_impl.hpp"
@@ -18,6 +18,7 @@
 #include "host_api.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include "tt_metal/distributed/mesh_buffer_impl.hpp"
 
 namespace tt::tt_metal {
 
@@ -157,7 +158,7 @@ TEST_F(MeshEndToEnd2x4Tests, ProgramDispatchTest) {
 
     EnqueueMeshWorkload(cq, mesh_workload, false /* blocking */);
 
-    EXPECT_EQ(mesh_workload.get_last_used_command_queue()->id(), cq_id);
+    EXPECT_EQ(mesh_workload.impl().get_last_used_command_queue()->id(), cq_id);
 
     Finish(cq);
 }

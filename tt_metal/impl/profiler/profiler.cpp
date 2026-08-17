@@ -28,6 +28,7 @@
 #include <iostream>
 
 #include <mutex>
+#include <queue>
 #include <unordered_map>
 
 #include <tt_stl/assert.hpp>

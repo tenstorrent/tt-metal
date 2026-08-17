@@ -19,6 +19,7 @@
 #include <tt-metalium/device.hpp>
 #include "device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
+#include <distributed/mesh_workload_impl.hpp>
 #include <tt-metalium/tensor/tensor_types.hpp>
 #include "gtest/gtest.h"
 #include <tt-metalium/hal_types.hpp>
@@ -57,9 +58,10 @@ bool test_cb_config_written_to_core(
                 for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                     CoreCoord core_coord(x, y);
                     uint32_t cb_config_buffer_size =
-                        workload.get_cb_size(mesh_device, core_coord, tt::CoreType::WORKER);
+                        workload.impl().get_cb_size(mesh_device, core_coord, tt::CoreType::WORKER);
 
-                    auto sem_base_addr = workload.get_sem_base_addr(mesh_device, core_coord, tt::CoreType::WORKER);
+                    auto sem_base_addr =
+                        workload.impl().get_sem_base_addr(mesh_device, core_coord, tt::CoreType::WORKER);
                     slow_dispatch::ReadFromL1(
                         *mesh_device, core_coord, sem_base_addr, cb_config_buffer_size, cb_config_vector);
 

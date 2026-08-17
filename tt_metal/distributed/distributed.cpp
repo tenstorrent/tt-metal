@@ -5,6 +5,7 @@
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
 #include <tt-metalium/distributed.hpp>
+#include "event_query_impl.hpp"
 #include <utility>
 
 #include "device.hpp"
