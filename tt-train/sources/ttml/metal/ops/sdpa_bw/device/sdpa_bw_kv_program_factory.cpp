@@ -493,6 +493,13 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
         std::vector<tt::tt_metal::UnpackToDestMode> mode(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
         mode[tt::CBIndex::c_8] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;  // kGradValueAccumCbIndex
         mode[tt::CBIndex::c_9] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;  // kGradKeyAccumCbIndex
+        // P and dS are consumed only via copy-to-dest and transpose_tile in the compute
+        // kernel (never through a Src-register unpack), so unpack-to-dest keeps them at
+        // full FP32 through the elementwise dS chain and routes transpose_tile onto the
+        // bit-exact transpose_dest path. Their consumer c_13 stays Default: it feeds
+        // matmul Src registers, where Float32 unpack is not supported.
+        mode[tt::CBIndex::c_10] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;  // kAttentionWeightsCbIndex
+        mode[tt::CBIndex::c_12] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;  // kGradScoresCbIndex
         return mode;
     };
 
