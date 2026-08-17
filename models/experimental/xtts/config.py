@@ -164,6 +164,9 @@ DEFAULT_LANGUAGE = "en"
 # tends to VERBALIZE it as "dot" at the tail. Internal commas (prosody) are kept.
 SENTENCE_FINAL_PUNCT_RE = r"[.!?]+\s*$"
 SENTENCE_SPLIT_RE = r"(?<=[.!?])\s+"
+# Internal prosodic boundaries. A sentence too long for one pass is broken here first, so the
+# seam lands where a speaker would pause anyway (upstream coqui hard-wraps such sentences).
+CLAUSE_SPLIT_RE = r"(?<=[,;:])\s+"
 COQUI_CLIP_RE = r"^LJ\d{3}-\d{4}\.wav$"  # coqui-ai/TTS tests/data/ljspeech/wavs clip names
 
 
@@ -202,13 +205,19 @@ class ChunkingConfig:
 
     max_text_ids: int = 352  # keep the padded text under MAX_TEXT_POS (404) with headroom
     max_single_pass_codes: int = 205  # above this, split into chunks
-    max_chunk_codes: int = 165  # per chunk once splitting; lower than single-pass on purpose
+    # Per chunk once splitting; lower than single-pass on purpose. codes_per_id is a linear fit,
+    # and a real take runs up to ~1.2x it (measured over a 37-chunk paragraph), so this must stay
+    # under chunk_max_tokens / 1.2 — a chunk that outgrows its budget never reaches STOP and its
+    # tail comes out as noise.
+    max_chunk_codes: int = 155
     codes_per_id: float = 156 / 71.0  # measured: 71 text ids -> 156 audio codes
     # Chunked takes share one capture, so the vocoder always runs this many latent frames
     # (zero-padded). Tile-aligned, above max_chunk_codes, below the ~205 L1 clash.
     chunk_max_tokens: int = 192
-    # A sentence is never split. ~3.7 text ids per word.
-    ids_per_word: float = 3.7
+    # Redraws allowed for a chunk that reaches the code cap without emitting STOP (an unfinished,
+    # usually noisy tail). Sampling is stochastic, so a redraw is normally enough; each costs one
+    # trace replay.
+    chunk_retries: int = 2
 
 
 CHUNKING = ChunkingConfig()
