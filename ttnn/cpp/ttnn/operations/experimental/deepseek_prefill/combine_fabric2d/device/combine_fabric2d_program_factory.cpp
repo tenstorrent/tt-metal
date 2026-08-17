@@ -5,7 +5,7 @@
 #include "combine_fabric2d_program_factory.hpp"
 #include "combine_fabric2d_placement.hpp"
 #include "combine_fabric2d_assignments.hpp"
-#include "kernels/dataflow/combine_fabric2d_kernel_protocol.hpp"
+#include "kernels/dataflow/combine_fabric2d_kernel_interface.hpp"
 
 #include <algorithm>
 #include <map>
@@ -44,10 +44,6 @@ constexpr uint32_t PKT_HDR_DRAIN_OFF = 0x0000;
 constexpr uint32_t DRAIN_SINK_OFF = 0x0400;
 constexpr uint32_t PROD_BUF_OFF = 0x1000;
 constexpr uint32_t L1_SLACK = 0x1000;
-// Depth of the reader -> producer L1 ring, in tokens. Slots move in half-ring batches so one half can be
-// refilled while the other drains.
-constexpr uint32_t CMBF2D_NUM_L1_SLOTS = 8;
-constexpr uint32_t CMBF2D_BATCH = CMBF2D_NUM_L1_SLOTS / 2;
 static_assert(PKT_HDR_DRAIN_OFF < DRAIN_SINK_OFF, "drain sink overlaps the drain packet header");
 static_assert(DRAIN_SINK_OFF < PROD_BUF_OFF, "drain sink overlaps the token ring");
 
@@ -57,12 +53,6 @@ static_assert(DRAIN_SINK_OFF < PROD_BUF_OFF, "drain sink overlaps the token ring
 //
 // One region per stream, each holding relay_chunks_per_stream chunks of fwd_pages_per_chunk pages. A chunk's
 // last used page is a sentinel marking its end, so a chunk need not be filled to capacity.
-// Tokens whose routing metadata the reader prefetches in one batch. Each pad is 64 B (a DRAM read needs a
-// 64-byte-aligned L1 destination on Blackhole), so this costs CMBF2D_META_PREFETCH * 64 B of L1. Big enough
-// that one DRAM latency is amortised over many tokens, small enough to bound L1 regardless of how long a
-// data-dependent run turns out to be.
-constexpr uint32_t CMBF2D_META_PREFETCH = 64;
-constexpr uint32_t CMBF2D_META_PAD_STRIDE = 64;
 
 // Pages a chunk can hold. Chunk lengths are data-dependent — a chunk is one producer's share of one
 // (origin chip -> this chip) run merged over the experts it serves — so only the expectation is known here:
@@ -87,18 +77,6 @@ uint32_t fwd_pages_per_chunk(
     const uint32_t mean = (seq_len_per_chip * num_experts_per_tok + denom - 1) / denom;
     return 4 * mean + 1;
 }
-
-struct L1Layout {
-    uint32_t pkt_hdr_drain;
-    uint32_t drain_sink;
-    uint32_t ring;          // num_l1_slots tokens, filled by the reader and drained by the producer
-    uint32_t pkt_hdr_ring;  // one prebuilt payload header per ring slot
-    // The reader's copy of the control tensors, read once at startup and then indexed from L1.
-    // Laid out as [expert_offsets: dispatch_group_size x num_routed_experts][counts: num_routed_experts]
-    // [region_offsets: num_routed_experts], all uint32. Unlike everything above it, nothing on another chip
-    // addresses this, so it can sit at the end — but it is still computed identically everywhere.
-    uint32_t control;
-};
 
 L1Layout compute_l1_layout(
     ttnn::MeshDevice* mesh,
@@ -132,38 +110,6 @@ L1Layout compute_l1_layout(
     return l;
 }
 
-struct DramBuffers {
-    tt::tt_metal::Buffer* in = nullptr;
-    tt::tt_metal::Buffer* out = nullptr;
-    tt::tt_metal::Buffer* fwd = nullptr;
-    tt::tt_metal::Buffer* meta = nullptr;
-    tt::tt_metal::Buffer* counts = nullptr;
-    tt::tt_metal::Buffer* region = nullptr;
-    tt::tt_metal::Buffer* expert_offsets = nullptr;
-};
-
-// Derived geometry. One-liners off the two structs the framework passes everywhere, named because
-// `aligned_page_size()` as "the token size" is not self-evident.
-uint32_t ring_extent(const CombineFabric2dParams& args) {
-    return args.device->shape()[static_cast<int32_t>(args.axis)];
-}
-
-uint32_t token_size_bytes(const CombineFabric2dInputs& tensor_args) {
-    return static_cast<uint32_t>(tensor_args.dispatched_buffer.buffer()->aligned_page_size());
-}
-
-uint32_t num_routed_experts(const CombineFabric2dInputs& tensor_args) {
-    return static_cast<uint32_t>(tensor_args.expert_token_counts.logical_shape()[-1]);
-}
-
-uint32_t num_dispatch_groups(const CombineFabric2dParams& args, const CombineFabric2dInputs& tensor_args) {
-    return num_routed_experts(tensor_args) / (args.experts_per_chip * args.dispatch_group_size);
-}
-
-uint32_t my_row(const CombineFabric2dParams& args, const ttnn::MeshCoordinate& coord) {
-    return coord[static_cast<int32_t>(args.axis)];
-}
-
 // The buffers the kernels will address must exist, and the output this op allocated must match the token
 // geometry it was derived from. Not caller validation: the output comes from our own compute_output_specs,
 // and validate_on_program_cache_miss cannot see it.
@@ -191,16 +137,6 @@ void validate_allocations(
         args.seq_len_per_chip * args.num_experts_per_tok);
 }
 
-// The per-chip values that had to be worked out rather than read off the arguments, plus the stream.
-struct KernelPlan {
-    StreamId stream = 0;
-    uint32_t my_expert_base = 0;
-    uint32_t pages_per_chunk = 0;
-    uint32_t ring_filled_addr = 0;
-    uint32_t ring_freed_addr = 0;
-    uint32_t fwd_arrived_addr = 0;
-};
-
 std::vector<uint32_t> ring_chip_ids(ttnn::MeshDevice* mesh, const ttnn::MeshCoordinate& coord, uint32_t axis) {
     const uint32_t extent = mesh->shape()[static_cast<int32_t>(axis)];
     std::vector<uint32_t> ids(extent);
@@ -210,103 +146,6 @@ std::vector<uint32_t> ring_chip_ids(ttnn::MeshDevice* mesh, const ttnn::MeshCoor
         ids[row] = static_cast<uint32_t>(mesh->get_fabric_node_id(c).chip_id);
     }
     return ids;
-}
-
-std::vector<uint32_t> pack_producer_args(
-    const CombineFabric2dInputs& tensor_args,
-    const StreamPlacement& self,
-    const StreamPlacement& downstream,
-    const L1Layout& l1,
-    const KernelPlan& plan) {
-    cmbf2d::ProducerCtArgPacker a;
-    a[cmbf2d::ProducerCtArg::NumL1Slots] = CMBF2D_NUM_L1_SLOTS;
-    a[cmbf2d::ProducerCtArg::TokenSizeBytes] = token_size_bytes(tensor_args);
-    a[cmbf2d::ProducerCtArg::SlotTailBytes] = cmbf2d::SLOT_TAIL_BYTES;
-    a[cmbf2d::ProducerCtArg::PeerChipId] = static_cast<uint32_t>(self.downstream_node.chip_id);
-    a[cmbf2d::ProducerCtArg::PeerMeshId] = *self.downstream_node.mesh_id;
-    a[cmbf2d::ProducerCtArg::RingAddr] = l1.ring;
-    a[cmbf2d::ProducerCtArg::PktHdrRingAddr] = l1.pkt_hdr_ring;
-    a[cmbf2d::ProducerCtArg::PktHdrDrainAddr] = l1.pkt_hdr_drain;
-    a[cmbf2d::ProducerCtArg::DrainSinkAddr] = l1.drain_sink;
-    a[cmbf2d::ProducerCtArg::Batch] = CMBF2D_BATCH;
-    a[cmbf2d::ProducerCtArg::FilledAddr] = plan.ring_filled_addr;
-    a[cmbf2d::ProducerCtArg::FreedAddr] = plan.ring_freed_addr;
-    // The kernel needs the placement of its peer downstream worker because it sends the
-    // forwarded-token-count semaphore bumps to it, addressed in the fabric packet header. This is also why
-    // every worker placement on the mesh is decided before any kernel is built.
-    a[cmbf2d::ProducerCtArg::FwdSemNocX] = static_cast<uint32_t>(downstream.worker_virtual.x);
-    a[cmbf2d::ProducerCtArg::FwdSemNocY] = static_cast<uint32_t>(downstream.worker_virtual.y);
-    a[cmbf2d::ProducerCtArg::FwdSemAddr] = plan.fwd_arrived_addr;
-    std::vector<uint32_t> ct;
-    a.append_to(ct);
-    return ct;
-}
-
-std::vector<uint32_t> pack_reader_args(
-    const CombineFabric2dParams& args,
-    const CombineFabric2dInputs& tensor_args,
-    const ttnn::MeshCoordinate& coord,
-    const StreamPlacement& self,
-    const std::vector<Assignment>& work,
-    const L1Layout& l1,
-    const KernelPlan& plan,
-    const DramBuffers& dram) {
-    cmbf2d::ReaderCtArgPacker a;
-    a[cmbf2d::ReaderCtArg::NumL1Slots] = CMBF2D_NUM_L1_SLOTS;
-    a[cmbf2d::ReaderCtArg::TokenSizeBytes] = token_size_bytes(tensor_args);
-    a[cmbf2d::ReaderCtArg::SlotTailBytes] = cmbf2d::SLOT_TAIL_BYTES;
-    a[cmbf2d::ReaderCtArg::Batch] = CMBF2D_BATCH;
-    a[cmbf2d::ReaderCtArg::RingAddr] = l1.ring;
-    a[cmbf2d::ReaderCtArg::FilledAddr] = plan.ring_filled_addr;
-    a[cmbf2d::ReaderCtArg::FreedAddr] = plan.ring_freed_addr;
-    a[cmbf2d::ReaderCtArg::DramInBaseAddr] = static_cast<uint32_t>(dram.in->address());
-    a[cmbf2d::ReaderCtArg::DramOutBaseAddr] = static_cast<uint32_t>(dram.out->address());
-    a[cmbf2d::ReaderCtArg::DramFwdBaseAddr] = static_cast<uint32_t>(dram.fwd->address());
-    a[cmbf2d::ReaderCtArg::FwdChunksPerQuarter] = relay_chunks_per_stream(ring_extent(args));
-    a[cmbf2d::ReaderCtArg::FwdPagesPerChunk] = plan.pages_per_chunk;
-    // Doubles as this stream's share of the same-chip run, which it copies after the fabric work.
-    a[cmbf2d::ReaderCtArg::MyQuarter] = plan.stream;
-    a[cmbf2d::ReaderCtArg::NumIncomingChunks] = relay_chunks_per_stream(ring_extent(args));
-    a[cmbf2d::ReaderCtArg::FwdSemAddr] = plan.fwd_arrived_addr;
-    a[cmbf2d::ReaderCtArg::NbrChipId] = static_cast<uint32_t>(self.downstream_node.chip_id);
-    a[cmbf2d::ReaderCtArg::ScheduleLen] = static_cast<uint32_t>(work.size());
-    a[cmbf2d::ReaderCtArg::DramMetaBaseAddr] = static_cast<uint32_t>(dram.meta->address());
-    a[cmbf2d::ReaderCtArg::DramCountsBaseAddr] = static_cast<uint32_t>(dram.counts->address());
-    a[cmbf2d::ReaderCtArg::DramRegionBaseAddr] = static_cast<uint32_t>(dram.region->address());
-    a[cmbf2d::ReaderCtArg::DramExpertOffsetsBaseAddr] = static_cast<uint32_t>(dram.expert_offsets->address());
-    a[cmbf2d::ReaderCtArg::NumRoutedExperts] = num_routed_experts(tensor_args);
-    a[cmbf2d::ReaderCtArg::ExpertsPerChip] = args.experts_per_chip;
-    a[cmbf2d::ReaderCtArg::MyExpertBase] = plan.my_expert_base;
-    a[cmbf2d::ReaderCtArg::NumExpertsPerTok] = args.num_experts_per_tok;
-    a[cmbf2d::ReaderCtArg::DispatchGroupSize] = args.dispatch_group_size;
-    a[cmbf2d::ReaderCtArg::LocalSplitCount] = stream_count(args.num_links);
-    a[cmbf2d::ReaderCtArg::MyRow] = my_row(args, coord);
-    a[cmbf2d::ReaderCtArg::ControlAddr] = l1.control;
-    a[cmbf2d::ReaderCtArg::MetaPrefetchCap] = CMBF2D_META_PREFETCH;
-
-    uint32_t num_own = 0;
-    for (const auto& w : work) {
-        num_own += w.is_relay ? 0u : 1u;
-    }
-    a[cmbf2d::ReaderCtArg::NumAssignments] = num_own;
-
-    std::vector<uint32_t> ct;
-    a.append_to(ct);
-    // Schedule: the work order, relays tagged. An own entry carries its index into the table that follows.
-    uint32_t own_idx = 0;
-    for (const auto& w : work) {
-        ct.push_back(w.is_relay ? (cmbf2d::SCHED_FWD | w.relay_chunk) : own_idx++);
-    }
-    for (const auto& w : work) {
-        if (w.is_relay) {
-            continue;
-        }
-        ct.push_back(w.dst_chip_id);
-        ct.push_back(w.dst_row);
-        ct.push_back(w.split_idx);
-        ct.push_back(w.split_count);
-    }
-    return ct;
 }
 
 // The reader/producer ring handshake is two monotonic single-writer counters, plus one counter the upstream
@@ -418,7 +257,7 @@ KernelPlan make_kernel_plan(
 // destination on Blackhole, which no offset inside a ring slot's tail can give (the tail starts at
 // token_size, and its free half is only 32-byte aligned).
 uint32_t control_region_bytes(const CombineFabric2dParams& args, const CombineFabric2dInputs& tensor_args) {
-    return CMBF2D_META_PREFETCH * CMBF2D_META_PAD_STRIDE +
+    return cmbf2d::META_PREFETCH * cmbf2d::META_PAD_STRIDE +
            static_cast<uint32_t>(sizeof(uint32_t)) * num_routed_experts(tensor_args) * (args.dispatch_group_size + 2);
 }
 
@@ -500,7 +339,7 @@ tt::tt_metal::WorkloadDescriptor CombineFabric2dProgramFactory::create_workload_
     const auto sems = allocate_ring_semaphores(mesh_device);
     const auto l1 = compute_l1_layout(
         mesh_device,
-        CMBF2D_NUM_L1_SLOTS,
+        cmbf2d::NUM_L1_SLOTS,
         token_size_bytes(tensor_args),
         control_region_bytes(operation_attributes, tensor_args),
         sems.lowest_address());

@@ -39,7 +39,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc_semaphore.h"
 #define CMBF2D_READER_KERNEL
-#include "combine_fabric2d_kernel_protocol.hpp"
+#include "combine_fabric2d_kernel_interface.hpp"
 
 void kernel_main() {
     using namespace cmbf2d;
@@ -72,8 +72,7 @@ void kernel_main() {
     // region could be tens of thousands of tokens, so a cap bounds L1 with no correctness risk. Reads are
     // issued back to back and awaited once, so one batch costs one DRAM latency, not `cap` of them.
     constexpr uint32_t meta_pads_addr = ct::control_addr;
-    constexpr uint32_t META_PAD_STRIDE = 64;
-    constexpr uint32_t META_READ_BYTES = 64;
+    constexpr uint32_t META_READ_BYTES = META_PAD_STRIDE;  // fill the whole pad; the record is shorter
     constexpr uint32_t control_tables_addr = ct::control_addr + ct::meta_prefetch_cap * META_PAD_STRIDE;
 
     // Written only by the producer; we just read it.

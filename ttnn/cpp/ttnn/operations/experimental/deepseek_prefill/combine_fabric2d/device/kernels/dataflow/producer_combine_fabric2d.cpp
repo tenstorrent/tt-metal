@@ -22,7 +22,7 @@
 #include "tt_metal/fabric/hw/inc/linear/addrgen_api.h"
 #include "fabric/fabric_edm_packet_header.hpp"
 #define CMBF2D_PRODUCER_KERNEL
-#include "combine_fabric2d_kernel_protocol.hpp"
+#include "combine_fabric2d_kernel_interface.hpp"
 
 // Forwarded tokens between semaphore bumps to the downstream reader. A bump always follows a sentinel
 // regardless, so this only sets how finely that reader can pipeline within a chunk.
