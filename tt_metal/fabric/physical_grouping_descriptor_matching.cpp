@@ -31,6 +31,7 @@
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <map>
+#include <numeric>
 
 #include <google/protobuf/text_format.h>
 
@@ -960,36 +961,9 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
             }
         }
 
-        // Collapse mesh ids that share the SAME physical pin-set (target asic positions) into one pass: gemma's
-        // meshes 1,3,5,7 all carry the asic-2 Edge pin-set, 2,4,6 all carry the asic-3 Middle pin-set, so
-        // M_4x4_h14 yields exactly two passes (Edge, Middle) while M_4x4_h11 (mesh 0) yields one (Middle). Each
-        // entry of pin_set_variants is applied on its own; an empty variant preserves the no-pin (0,0) anchor.
-        std::vector<std::vector<tt::tt_metal::experimental::tt_fabric::PinningConstraint>> pin_set_variants;
-        if (pinnings_by_mesh.empty()) {
-            pin_set_variants.emplace_back();
-        } else {
-            auto pin_set_signature =
-                [](const std::vector<tt::tt_metal::experimental::tt_fabric::PinningConstraint>& pin_set) {
-                    std::vector<std::pair<uint32_t, uint32_t>> positions;
-                    for (const auto& group : pin_set) {
-                        for (const auto& pos : group.asic_positions) {
-                            positions.emplace_back(pos.first.get(), pos.second.get());
-                        }
-                    }
-                    std::sort(positions.begin(), positions.end());
-                    std::string sig;
-                    for (const auto& [tray, asic] : positions) {
-                        sig += fmt::format("{}:{},", tray, asic);
-                    }
-                    return sig;
-                };
-            std::set<std::string> seen_signatures;
-            for (const auto& [mesh_id, pin_set] : pinnings_by_mesh) {
-                if (seen_signatures.insert(pin_set_signature(pin_set)).second) {
-                    pin_set_variants.push_back(pin_set);
-                }
-            }
-        }
+        // pin_set_variants (one independent match/commit pass each) is built below, AFTER the candidate
+        // groupings are gathered, because partitioning a mesh's pins into profiles probes co-satisfiability
+        // against those candidates.
 
         // Required nodes from MGD adjacency graph (this represents the topology pattern to match)
         size_t required_nodes = mgd_grouping_info.adjacency_graph.get_nodes().size();
@@ -1041,10 +1015,113 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
             }
         }
 
+        // Partition each mesh's pins into PROFILES and run one independent match/commit pass per distinct
+        // profile. Two pin blocks belong to the same profile iff they can BOTH fully land on at least one
+        // candidate grouping (co-satisfiable) -- this separates e.g. a Middle profile {corners->asic 3,
+        // chip1->asic 7} from an Edge profile {corners->asic 2, chip2->asic 6} WITHOUT hardcoding which asic
+        // locations form which physical column. A grouping is committed if ANY one profile fully lands (the
+        // per-variant commit loop below requires added == variant.size()), so a mesh may carry BOTH profiles
+        // and flexibly match either column. Profiles are de-duplicated by physical-position signature so a
+        // shared descriptor runs each distinct profile once. An empty variant preserves the no-pin (0,0) anchor.
+        std::vector<std::vector<tt::tt_metal::experimental::tt_fabric::PinningConstraint>> pin_set_variants;
+        if (pinnings_by_mesh.empty()) {
+            pin_set_variants.emplace_back();
+        } else {
+            // Probe co-satisfiability against exact node-count matches (node_diff 0) when present, else all
+            // candidates; using mesh-sized groupings avoids spurious co-landing on wrong-shape variants.
+            std::vector<std::pair<std::string, size_t>> probe_groupings;
+            if (auto it = candidates_by_diff.find(0); it != candidates_by_diff.end()) {
+                probe_groupings = it->second;
+            } else {
+                for (const auto& [_, pairs] : candidates_by_diff) {
+                    probe_groupings.insert(probe_groupings.end(), pairs.begin(), pairs.end());
+                }
+            }
+
+            auto block_lands_on = [&](const tt::tt_metal::experimental::tt_fabric::PinningConstraint& block,
+                                      const GroupingInfo& g) {
+                MappingConstraints<uint32_t, uint32_t> c;
+                return add_mgd_to_pgd_asic_position_pinning_constraints(c, g, {block}) == 1;
+            };
+
+            auto partition_into_profiles =
+                [&](const std::vector<tt::tt_metal::experimental::tt_fabric::PinningConstraint>& blocks) {
+                    const size_t n = blocks.size();
+                    std::vector<size_t> parent(n);
+                    std::iota(parent.begin(), parent.end(), size_t{0});
+                    std::function<size_t(size_t)> find = [&](size_t x) {
+                        while (parent[x] != x) {
+                            parent[x] = parent[parent[x]];
+                            x = parent[x];
+                        }
+                        return x;
+                    };
+                    // Union blocks that fully land together on the same candidate grouping -- but ONLY on a
+                    // grouping that a multi-chip "anchor" block (e.g. the 4 corners spanning tray 1-4) also
+                    // fully lands on. A corner block only lands when a whole physical column is present, so this
+                    // restricts co-membership inference to CLEAN single-column groupings and ignores the
+                    // mixed-column flatten variants (where, e.g., a Middle chip-pin and an Edge chip-pin could
+                    // both land and wrongly merge the two profiles).
+                    for (const auto& [gname, gidx] : probe_groupings) {
+                        const auto& g = mesh_flat_groupings.at(gname)[gidx];
+                        std::vector<size_t> landed;
+                        bool has_anchor = false;
+                        for (size_t i = 0; i < n; ++i) {
+                            if (block_lands_on(blocks[i], g)) {
+                                landed.push_back(i);
+                                if (blocks[i].fabric_nodes.size() > 1) {
+                                    has_anchor = true;
+                                }
+                            }
+                        }
+                        if (!has_anchor) {
+                            continue;
+                        }
+                        for (size_t k = 1; k < landed.size(); ++k) {
+                            parent[find(landed[k])] = find(landed[0]);
+                        }
+                    }
+                    std::map<size_t, std::vector<tt::tt_metal::experimental::tt_fabric::PinningConstraint>> comps;
+                    for (size_t i = 0; i < n; ++i) {
+                        comps[find(i)].push_back(blocks[i]);
+                    }
+                    std::vector<std::vector<tt::tt_metal::experimental::tt_fabric::PinningConstraint>> profiles;
+                    for (auto& [_, v] : comps) {
+                        profiles.push_back(std::move(v));
+                    }
+                    return profiles;
+                };
+
+            auto pin_set_signature =
+                [](const std::vector<tt::tt_metal::experimental::tt_fabric::PinningConstraint>& pin_set) {
+                    std::vector<std::pair<uint32_t, uint32_t>> positions;
+                    for (const auto& group : pin_set) {
+                        for (const auto& pos : group.asic_positions) {
+                            positions.emplace_back(pos.first.get(), pos.second.get());
+                        }
+                    }
+                    std::sort(positions.begin(), positions.end());
+                    std::string sig;
+                    for (const auto& [tray, asic] : positions) {
+                        sig += fmt::format("{}:{},", tray, asic);
+                    }
+                    return sig;
+                };
+
+            std::set<std::string> seen_signatures;
+            for (const auto& [mesh_id, pin_set] : pinnings_by_mesh) {
+                for (auto& profile : partition_into_profiles(pin_set)) {
+                    if (seen_signatures.insert(pin_set_signature(profile)).second) {
+                        pin_set_variants.push_back(std::move(profile));
+                    }
+                }
+            }
+        }
+
         // Process difference levels from closest to farthest; commit only when embedding on PSD succeeds.
-        // Run one match/commit pass per distinct pin-set (pin_set_variants); each pass commits its own
-        // groupings, so a shared descriptor accumulates both its Middle and Edge column groupings, which
-        // find_all_in_psd then maps together.
+        // Run one match/commit pass per profile (pin_set_variants); each pass commits its own groupings, so a
+        // shared descriptor accumulates both its Middle and Edge column groupings, which find_all_in_psd maps
+        // together.
         std::vector<MeshTopologyMatch> best_matches_topology;
         std::vector<MeshTopologyMatch> best_matches_psd_placed;
         size_t last_topology_match_count = 0;

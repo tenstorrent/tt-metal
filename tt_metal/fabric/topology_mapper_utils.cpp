@@ -99,6 +99,13 @@ std::optional<std::string> apply_pinning_groups(
     const std::vector<PinningConstraint>& pinning_groups,
     MeshId logical_mesh_id,
     const std::map<AsicPosition, std::set<tt::tt_metal::AsicID>>& asic_positions_to_asic_ids) {
+    // A mesh may carry more than one profile (e.g. a Middle profile {corners->asic 3, chip1->asic 7} AND an
+    // Edge profile {corners->asic 2, chip2->asic 6}); the intended semantics are "satisfy ONE full profile".
+    // For a given candidate placement (a single physical column), only the matching profile's positions are
+    // present. So skip any group whose column is absent here, and require that at least one group actually
+    // applied -- if none did, this placement fits no profile for the mesh and the pairing is rejected.
+    bool any_group_for_mesh = false;
+    bool any_group_applied = false;
     for (const auto& group : pinning_groups) {
         // If its related to another logical mesh skip it.
         std::set<FabricNodeId> fabric_nodes;
@@ -110,6 +117,7 @@ std::optional<std::string> apply_pinning_groups(
         if (fabric_nodes.empty()) {
             continue;
         }
+        any_group_for_mesh = true;
 
         std::set<tt::tt_metal::AsicID> asic_ids;
         for (const auto& position : group.asic_positions) {
@@ -126,10 +134,10 @@ std::optional<std::string> apply_pinning_groups(
         }
 
         if (asic_ids.empty()) {
-            return fmt::format(
-                "Pinned ASIC positions of a pinning group were not found among physical ASICs participating in "
-                "mesh {}",
-                logical_mesh_id.get());
+            // This group's column is not present on the candidate placement: it belongs to a different profile
+            // than the one this placement can host. Skip it rather than rejecting, so a mesh pinned with both a
+            // Middle and an Edge profile can flexibly bind to whichever column the placement provides.
+            continue;
         }
 
         if (!intra_mesh_constraints.add_required_constraint(fabric_nodes, asic_ids)) {
@@ -137,6 +145,14 @@ std::optional<std::string> apply_pinning_groups(
                 "fabric nodes in a pinning group have pinned ASIC positions present in the physical mesh but none "
                 "lie in each node's host-rank partition (conflicts with rank bindings)");
         }
+        any_group_applied = true;
+    }
+
+    if (any_group_for_mesh && !any_group_applied) {
+        return fmt::format(
+            "No pinned profile fits this placement for mesh {}: every pinning group's ASIC positions are absent "
+            "from the physical ASICs participating in this mesh",
+            logical_mesh_id.get());
     }
 
     return std::nullopt;
@@ -905,6 +921,27 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
         // Build the shape graph from placements: ASIC footprints and PGD pinning both come from each PsdPlacement.
         const auto mesh_layouts = mesh_physical_layouts_from_psd_placements(placements);
         mesh_physical_graphs[mesh_name] = build_hierarchical_from_flat_graph(flat_graph, mesh_layouts);
+
+        // DIAG(temp): placement count + physical mesh-level degree histogram for this shape.
+        {
+            const auto& pml = mesh_physical_graphs.at(mesh_name).mesh_level_graph_;
+            std::map<std::size_t, std::size_t> h;
+            for (const auto& n : pml.get_nodes()) {
+                const auto& nb = pml.get_neighbors(n);
+                h[std::set<MeshId>(nb.begin(), nb.end()).size()]++;
+            }
+            std::string s;
+            for (const auto& [d, c] : h) {
+                s += fmt::format("{}deg{}:{}", s.empty() ? "" : " ", d, c);
+            }
+            log_info(
+                tt::LogFabric,
+                "DIAG shape '{}': {} PSD placement(s), physical mesh-level {} node(s) [{}]",
+                mesh_name,
+                placements.size(),
+                pml.get_nodes().size(),
+                s);
+        }
 
         // Pre-compute one bitmask per candidate placement for this shape, straight from each placement's footprint.
         auto& gbits = group_bits_by_name[mesh_name];
@@ -1729,6 +1766,27 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
         // Build the shape graph from placements: ASIC footprints and PGD pinning both come from each PsdPlacement.
         const auto mesh_layouts = mesh_physical_layouts_from_psd_placements(placements);
         mesh_physical_graphs[mesh_name] = build_hierarchical_from_flat_graph(flat_graph, mesh_layouts);
+
+        // DIAG(temp): placement count + physical mesh-level degree histogram for this shape.
+        {
+            const auto& pml = mesh_physical_graphs.at(mesh_name).mesh_level_graph_;
+            std::map<std::size_t, std::size_t> h;
+            for (const auto& n : pml.get_nodes()) {
+                const auto& nb = pml.get_neighbors(n);
+                h[std::set<MeshId>(nb.begin(), nb.end()).size()]++;
+            }
+            std::string s;
+            for (const auto& [d, c] : h) {
+                s += fmt::format("{}deg{}:{}", s.empty() ? "" : " ", d, c);
+            }
+            log_info(
+                tt::LogFabric,
+                "DIAG shape '{}': {} PSD placement(s), physical mesh-level {} node(s) [{}]",
+                mesh_name,
+                placements.size(),
+                pml.get_nodes().size(),
+                s);
+        }
 
         // Pre-compute one bitmask per candidate placement for this shape, straight from each placement's footprint.
         auto& gbits = group_bits_by_name[mesh_name];
