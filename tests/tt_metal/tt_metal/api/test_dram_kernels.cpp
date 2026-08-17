@@ -884,10 +884,10 @@ protected:
     // Virtual coords of the whole worker grid, packed x | y<<16 -- the lane table the kernel walks.
     std::vector<uint32_t> worker_coords() const {
         std::vector<uint32_t> coords;
-        const CoreCoord grid = device_->compute_with_storage_grid_size();
+        const CoreCoord grid = mesh_device_->compute_with_storage_grid_size();
         for (uint32_t y = 0; y < grid.y; y++) {
             for (uint32_t x = 0; x < grid.x; x++) {
-                const CoreCoord v = device_->virtual_core_from_logical_core({x, y}, CoreType::WORKER);
+                const CoreCoord v = mesh_device_->virtual_core_from_logical_core({x, y}, CoreType::WORKER);
                 coords.push_back((v.x & 0xFFFFu) | ((v.y & 0xFFFFu) << 16));
             }
         }
@@ -901,10 +901,10 @@ protected:
         for (size_t i = 0; i < pattern.size(); i++) {
             pattern[i] = 0xA5A50000u + static_cast<uint32_t>(i);
         }
-        const CoreCoord grid = device_->compute_with_storage_grid_size();
+        const CoreCoord grid = mesh_device_->compute_with_storage_grid_size();
         for (uint32_t y = 0; y < grid.y; y++) {
             for (uint32_t x = 0; x < grid.x; x++) {
-                const CoreCoord v = device_->virtual_core_from_logical_core({x, y}, CoreType::WORKER);
+                const CoreCoord v = mesh_device_->virtual_core_from_logical_core({x, y}, CoreType::WORKER);
                 MetalContext::instance().get_cluster().write_core(
                     pattern.data(), bytes, tt_cxy_pair(mesh_device_->build_id(), v), tensix_l1_base_);
             }
@@ -980,7 +980,7 @@ protected:
         BenchResult result;
         result.wall_s = std::chrono::duration<double>(t1 - t0).count();
         for (uint32_t d = 0; d < num_drisc; d++) {
-            const CoreCoord v = device_->virtual_core_from_logical_core(drisc_cores[d], CoreType::DRAM);
+            const CoreCoord v = mesh_device_->virtual_core_from_logical_core(drisc_cores[d], CoreType::DRAM);
             std::vector<uint32_t> out(6);
             MetalContext::instance().get_cluster().read_core(
                 out.data(),
@@ -1004,7 +1004,8 @@ protected:
     // the DRISC's own wall clock, plus the measured DRISC clock so those numbers stand on a
     // device-side measurement rather than on the host's aiclk reading.
     void log_poll_row(const std::string& label, const BenchResult& r, uint32_t num_cores) const {
-        const uint32_t aiclk_hz = MetalContext::instance().get_cluster().get_device_aiclk(device_->id()) * 1000000u;
+        const uint32_t aiclk_hz =
+            MetalContext::instance().get_cluster().get_device_aiclk(mesh_device_->id()) * 1000000u;
         // Device cycles per host second: a lower bound on the DRISC clock (host wall includes launch
         // overhead), converging upward as the run lengthens.
         const double measured_hz = static_cast<double>(r.max_cycles) / r.wall_s;
@@ -1027,7 +1028,7 @@ protected:
     }
 
     void log_row(const std::string& label, const BenchResult& r, uint32_t markers_per_read) const {
-        const uint32_t clk_hz = MetalContext::instance().get_cluster().get_device_aiclk(device_->id()) * 1000000u;
+        const uint32_t clk_hz = MetalContext::instance().get_cluster().get_device_aiclk(mesh_device_->id()) * 1000000u;
         const double secs = static_cast<double>(r.max_cycles) / clk_hz;
         const uint64_t markers = r.total_visits * markers_per_read;
         log_info(
@@ -1137,7 +1138,7 @@ TEST_F(DramKernelDRISCScatterFixture, DRISCD2HSocketEgress) {
             socket.set_page_size(page_size);
 
             std::vector<uint32_t> payload(page_size / sizeof(uint32_t), 0xD2D2D2D2u);
-            const CoreCoord drisc_virtual = device_->virtual_core_from_logical_core(drisc_logical, CoreType::DRAM);
+            const CoreCoord drisc_virtual = mesh_device_->virtual_core_from_logical_core(drisc_logical, CoreType::DRAM);
             MetalContext::instance().get_cluster().write_core(
                 payload.data(), page_size, tt_cxy_pair(mesh_device_->build_id(), drisc_virtual), src_l1);
 
@@ -1171,7 +1172,8 @@ TEST_F(DramKernelDRISCScatterFixture, DRISCD2HSocketEgress) {
                 res_l1);
             const uint64_t cycles = (static_cast<uint64_t>(out[1]) << 32) | out[0];
             const uint64_t wait_cycles = (static_cast<uint64_t>(out[3]) << 32) | out[2];
-            const uint32_t clk_hz = MetalContext::instance().get_cluster().get_device_aiclk(device_->id()) * 1000000u;
+            const uint32_t clk_hz =
+                MetalContext::instance().get_cluster().get_device_aiclk(mesh_device_->id()) * 1000000u;
             const uint64_t total_bytes = static_cast<uint64_t>(kNumPages) * page_size;
             const double host_s = std::chrono::duration<double>(t1 - t0).count();
 
@@ -1235,7 +1237,7 @@ TEST_F(DramKernelDRISCScatterFixture, HostPullFromDramProfilerRegion) {
     const uint64_t base = hal.get_dev_addr(HalDramMemAddrType::PROFILER);
     const uint32_t per_bank = hal.get_dev_size(HalDramMemAddrType::PROFILER);
     const uint32_t banks = soc_desc.get_dram_compute_grid_size().x;
-    const auto dev_id = device_->id();
+    const auto dev_id = mesh_device_->id();
     constexpr uint32_t kRepeats = 5;
 
     log_info(LogTest, "host pull from DRAM profiler region: base 0x{:x}, {} B/bank, {} banks", base, per_bank, banks);
@@ -1299,9 +1301,9 @@ TEST_F(DramKernelDRISCScatterFixture, DRISCFusedDrainToHost) {
 
     const std::vector<uint32_t> coords = worker_coords();
     const uint32_t num_cores = static_cast<uint32_t>(coords.size());
-    const uint32_t clk_hz = MetalContext::instance().get_cluster().get_device_aiclk(device_->id()) * 1000000u;
+    const uint32_t clk_hz = MetalContext::instance().get_cluster().get_device_aiclk(mesh_device_->id()) * 1000000u;
     const auto& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(mesh_device_->build_id());
-    const CoreCoord grid = device_->compute_with_storage_grid_size();
+    const CoreCoord grid = mesh_device_->compute_with_storage_grid_size();
 
     const uint32_t buf = drisc_l1_base_;
     const uint32_t cfg = buf + kCoresPerBatch * kCoreSpan;
@@ -1314,7 +1316,7 @@ TEST_F(DramKernelDRISCScatterFixture, DRISCFusedDrainToHost) {
         drisc_l1_unreserved_size_);
 
     const CoreCoord d_logical = mesh_device_->impl().pick_unused_dram_logical_core(0);
-    const CoreCoord d_virtual = device_->virtual_core_from_logical_core(d_logical, CoreType::DRAM);
+    const CoreCoord d_virtual = mesh_device_->virtual_core_from_logical_core(d_logical, CoreType::DRAM);
     const CoreCoord d_tr = soc_desc.dram_bank_endpoint_coords.at(d_logical.x).at(d_logical.y);
     const tt::umd::CoreCoord d_phys = soc_desc.translate_coord_to(
         tt::umd::CoreCoord(d_tr.x, d_tr.y, CoreType::DRAM, CoordSystem::TRANSLATED), CoordSystem::NOC0);
@@ -1348,7 +1350,8 @@ TEST_F(DramKernelDRISCScatterFixture, DRISCFusedDrainToHost) {
                 cv[5 + r] = tail;
             }
             cv[0] = 0xA5A50000u + c;
-            const CoreCoord v = device_->virtual_core_from_logical_core({c % grid.x, c / grid.x}, CoreType::WORKER);
+            const CoreCoord v =
+                mesh_device_->virtual_core_from_logical_core({c % grid.x, c / grid.x}, CoreType::WORKER);
             MetalContext::instance().get_cluster().write_core(
                 cv.data(), cv.size() * sizeof(uint32_t), tt_cxy_pair(mesh_device_->build_id(), v), tensix_l1_base_);
         }
@@ -1458,16 +1461,16 @@ TEST_F(DramKernelDRISCScatterFixture, DRISCTwoTierDrainToHost) {
 
     const std::vector<uint32_t> coords = worker_coords();
     const uint32_t num_cores = static_cast<uint32_t>(coords.size());
-    const uint32_t clk_hz = MetalContext::instance().get_cluster().get_device_aiclk(device_->id()) * 1000000u;
+    const uint32_t clk_hz = MetalContext::instance().get_cluster().get_device_aiclk(mesh_device_->id()) * 1000000u;
     const auto& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(mesh_device_->build_id());
-    const CoreCoord grid = device_->compute_with_storage_grid_size();
+    const CoreCoord grid = mesh_device_->compute_with_storage_grid_size();
 
     const uint32_t poll_ring = drisc_l1_base_;
     const uint32_t page_buf = poll_ring + num_cores * kCvBytes;
     const uint32_t head_scratch = page_buf + 65536;  // past the largest page used here
 
     const CoreCoord d_logical = mesh_device_->impl().pick_unused_dram_logical_core(0);
-    const CoreCoord d_virtual = device_->virtual_core_from_logical_core(d_logical, CoreType::DRAM);
+    const CoreCoord d_virtual = mesh_device_->virtual_core_from_logical_core(d_logical, CoreType::DRAM);
     const CoreCoord d_tr = soc_desc.dram_bank_endpoint_coords.at(d_logical.x).at(d_logical.y);
     const tt::umd::CoreCoord d_phys = soc_desc.translate_coord_to(
         tt::umd::CoreCoord(d_tr.x, d_tr.y, CoreType::DRAM, CoordSystem::TRANSLATED), CoordSystem::NOC0);
@@ -1522,7 +1525,8 @@ TEST_F(DramKernelDRISCScatterFixture, DRISCTwoTierDrainToHost) {
         for (uint32_t c = 0; c < num_cores; c++) {
             cv[kernel_profiler::SPSC_CORE_XY] = ((c / grid.x) << 16) | (c % grid.x);  // (y<<16)|x
             cv[kernel_profiler::SPSC_RING_HEAD_0] = 0xA5A50000u + c;
-            const CoreCoord v = device_->virtual_core_from_logical_core({c % grid.x, c / grid.x}, CoreType::WORKER);
+            const CoreCoord v =
+                mesh_device_->virtual_core_from_logical_core({c % grid.x, c / grid.x}, CoreType::WORKER);
             MetalContext::instance().get_cluster().write_core(
                 cv.data(), cv.size() * sizeof(uint32_t), tt_cxy_pair(mesh_device_->build_id(), v), tensix_l1_base_);
         }
@@ -1707,9 +1711,9 @@ TEST_F(DramKernelDRISCScatterFixture, DRISCAdaptiveDrainToHost) {
 
     const std::vector<uint32_t> coords = worker_coords();
     const uint32_t num_cores = static_cast<uint32_t>(coords.size());
-    const uint32_t clk_hz = MetalContext::instance().get_cluster().get_device_aiclk(device_->id()) * 1000000u;
+    const uint32_t clk_hz = MetalContext::instance().get_cluster().get_device_aiclk(mesh_device_->id()) * 1000000u;
     const auto& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(mesh_device_->build_id());
-    const CoreCoord grid = device_->compute_with_storage_grid_size();
+    const CoreCoord grid = mesh_device_->compute_with_storage_grid_size();
 
     const uint32_t poll_ring = drisc_l1_base_;
     const uint32_t page_buf = poll_ring + num_cores * kPollBytes;
@@ -1723,7 +1727,7 @@ TEST_F(DramKernelDRISCScatterFixture, DRISCAdaptiveDrainToHost) {
         drisc_l1_unreserved_size_);
 
     const CoreCoord d_logical = mesh_device_->impl().pick_unused_dram_logical_core(0);
-    const CoreCoord d_virtual = device_->virtual_core_from_logical_core(d_logical, CoreType::DRAM);
+    const CoreCoord d_virtual = mesh_device_->virtual_core_from_logical_core(d_logical, CoreType::DRAM);
     const CoreCoord d_tr = soc_desc.dram_bank_endpoint_coords.at(d_logical.x).at(d_logical.y);
     const tt::umd::CoreCoord d_phys = soc_desc.translate_coord_to(
         tt::umd::CoreCoord(d_tr.x, d_tr.y, CoreType::DRAM, CoordSystem::TRANSLATED), CoordSystem::NOC0);
@@ -1759,7 +1763,8 @@ TEST_F(DramKernelDRISCScatterFixture, DRISCAdaptiveDrainToHost) {
                 cv[5 + r] = tail;
             }
             cv[0] = 0xA5A50000u + c;
-            const CoreCoord v = device_->virtual_core_from_logical_core({c % grid.x, c / grid.x}, CoreType::WORKER);
+            const CoreCoord v =
+                mesh_device_->virtual_core_from_logical_core({c % grid.x, c / grid.x}, CoreType::WORKER);
             MetalContext::instance().get_cluster().write_core(
                 cv.data(), cv.size() * sizeof(uint32_t), tt_cxy_pair(mesh_device_->build_id(), v), tensix_l1_base_);
         }
@@ -1875,7 +1880,7 @@ TEST_F(DramKernelDRISCScatterFixture, DRISCMultiDrainerScaling) {
     const uint32_t num_cores = static_cast<uint32_t>(coords.size());
     TT_FATAL(num_cores % kCoresPerPage == 0, "{} cores must divide by {}", num_cores, kCoresPerPage);
     const uint32_t total_pages_per_sweep = num_cores / kCoresPerPage;
-    const uint32_t clk_hz = MetalContext::instance().get_cluster().get_device_aiclk(device_->id()) * 1000000u;
+    const uint32_t clk_hz = MetalContext::instance().get_cluster().get_device_aiclk(mesh_device_->id()) * 1000000u;
     const auto& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(mesh_device_->build_id());
     const uint32_t banks = soc_desc.get_dram_compute_grid_size().x;
 
@@ -1912,7 +1917,7 @@ TEST_F(DramKernelDRISCScatterFixture, DRISCMultiDrainerScaling) {
         for (uint32_t i = 0; i < n_drisc; i++) {
             const CoreCoord lg = mesh_device_->impl().pick_unused_dram_logical_core(i);
             logical.push_back(lg);
-            virt.push_back(device_->virtual_core_from_logical_core(lg, CoreType::DRAM));
+            virt.push_back(mesh_device_->virtual_core_from_logical_core(lg, CoreType::DRAM));
             const CoreCoord tr = soc_desc.dram_bank_endpoint_coords.at(lg.x).at(lg.y);
             phys.push_back(soc_desc.translate_coord_to(
                 tt::umd::CoreCoord(tr.x, tr.y, CoreType::DRAM, CoordSystem::TRANSLATED), CoordSystem::NOC0));
@@ -2064,11 +2069,11 @@ TEST_F(DramKernelDRISCScatterFixture, DRISCIngestStraightToHost) {
 
     const std::vector<uint32_t> coords = worker_coords();
     const uint32_t num_cores = static_cast<uint32_t>(coords.size());
-    const uint32_t clk_hz = MetalContext::instance().get_cluster().get_device_aiclk(device_->id()) * 1000000u;
+    const uint32_t clk_hz = MetalContext::instance().get_cluster().get_device_aiclk(mesh_device_->id()) * 1000000u;
 
     const auto& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(mesh_device_->build_id());
     const CoreCoord d_logical = mesh_device_->impl().pick_unused_dram_logical_core(0);
-    const CoreCoord d_virtual = device_->virtual_core_from_logical_core(d_logical, CoreType::DRAM);
+    const CoreCoord d_virtual = mesh_device_->virtual_core_from_logical_core(d_logical, CoreType::DRAM);
     const CoreCoord d_translated = soc_desc.dram_bank_endpoint_coords.at(d_logical.x).at(d_logical.y);
     const tt::umd::CoreCoord d_phys = soc_desc.translate_coord_to(
         tt::umd::CoreCoord(d_translated.x, d_translated.y, CoreType::DRAM, CoordSystem::TRANSLATED), CoordSystem::NOC0);
@@ -2219,8 +2224,8 @@ TEST_F(DramKernelDRISCScatterFixture, DRISCPipelineAtoBtoHost) {
     // A on bank 0, B on bank 1 -- different banks, so B reaches A's DRAM over the NoC, not by DMA.
     const CoreCoord a_logical = mesh_device_->impl().pick_unused_dram_logical_core(0);
     const CoreCoord b_logical = mesh_device_->impl().pick_unused_dram_logical_core(1);
-    const CoreCoord a_virtual = device_->virtual_core_from_logical_core(a_logical, CoreType::DRAM);
-    const CoreCoord b_virtual = device_->virtual_core_from_logical_core(b_logical, CoreType::DRAM);
+    const CoreCoord a_virtual = mesh_device_->virtual_core_from_logical_core(a_logical, CoreType::DRAM);
+    const CoreCoord b_virtual = mesh_device_->virtual_core_from_logical_core(b_logical, CoreType::DRAM);
     const CoreCoord bank0_noc1_ep = soc_desc.get_preferred_worker_core_for_dram_view(0, /*noc=*/1);
 
     const CoreCoord b_translated = soc_desc.dram_bank_endpoint_coords.at(b_logical.x).at(b_logical.y);
@@ -2269,7 +2274,7 @@ TEST_F(DramKernelDRISCScatterFixture, DRISCPipelineAtoBtoHost) {
         bank0_noc1_ep.y);
 
     const uint32_t pages_per_sweep = sweep_bytes / kPageBytes;
-    const uint32_t clk_hz = MetalContext::instance().get_cluster().get_device_aiclk(device_->id()) * 1000000u;
+    const uint32_t clk_hz = MetalContext::instance().get_cluster().get_device_aiclk(mesh_device_->id()) * 1000000u;
 
     auto run_pipeline = [&](uint32_t pages_per_read) {
         distributed::D2HSocket socket(
@@ -2403,12 +2408,12 @@ TEST_F(DramKernelDRISCScatterFixture, DRISCCombinedReadAndDma) {
 
     const auto& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(mesh_device_->build_id());
     const uint32_t num_banks = soc_desc.get_dram_compute_grid_size().x;
-    const uint32_t clk_hz = MetalContext::instance().get_cluster().get_device_aiclk(device_->id()) * 1000000u;
+    const uint32_t clk_hz = MetalContext::instance().get_cluster().get_device_aiclk(mesh_device_->id()) * 1000000u;
 
     // Interleaved with one page per bank gives every bank the same bank-relative base, so the DRISC's
     // DMA writes into its own channel at that address.
     auto dram_buffer = CreateBuffer(InterleavedBufferConfig{
-        .device = device_,
+        .device = mesh_device_,
         .size = static_cast<uint64_t>(num_banks) * kGddrRingBytes,
         .page_size = kGddrRingBytes,
         .buffer_type = BufferType::DRAM,
@@ -2417,7 +2422,7 @@ TEST_F(DramKernelDRISCScatterFixture, DRISCCombinedReadAndDma) {
 
     prime_worker_l1(kBytesPerCore);
     const std::vector<CoreCoord> drisc = free_drisc_cores(1);
-    const CoreCoord drisc_virtual = device_->virtual_core_from_logical_core(drisc[0], CoreType::DRAM);
+    const CoreCoord drisc_virtual = mesh_device_->virtual_core_from_logical_core(drisc[0], CoreType::DRAM);
     log_info(
         LogTest,
         "combined read+DMA: {} cores x {} B, GDDR ring {} MB at 0x{:x} ({} banks), DRISC L1 {} B",
@@ -2556,8 +2561,8 @@ TEST_F(DramKernelDRISCScatterFixture, DRISCD2HSocketEgressTuned) {
     const tt::umd::CoreCoord drisc_phys = soc_desc.translate_coord_to(
         tt::umd::CoreCoord(drisc_translated.x, drisc_translated.y, CoreType::DRAM, CoordSystem::TRANSLATED),
         CoordSystem::NOC0);
-    const CoreCoord drisc_virtual = device_->virtual_core_from_logical_core(drisc_logical, CoreType::DRAM);
-    const uint32_t clk_hz = MetalContext::instance().get_cluster().get_device_aiclk(device_->id()) * 1000000u;
+    const CoreCoord drisc_virtual = mesh_device_->virtual_core_from_logical_core(drisc_logical, CoreType::DRAM);
+    const uint32_t clk_hz = MetalContext::instance().get_cluster().get_device_aiclk(mesh_device_->id()) * 1000000u;
     const uint32_t cfg_bytes = distributed::D2HSocket::required_config_buffer_size();
     constexpr uint32_t kRepeats = 3;
 
@@ -2743,7 +2748,7 @@ TEST_F(DramKernelDRISCScatterFixture, DRISCWholeCoreDepthBeyondBuffer) {
     for (uint32_t b : {1u, 4u, 8u, 16u, 32u, 64u, all}) {
         const uint32_t slots = std::min(b, max_slots);
         const BenchResult r = run_bench(drisc, kK, b, /*poll_examine=*/0, slots);
-        const uint32_t clk_hz = MetalContext::instance().get_cluster().get_device_aiclk(device_->id()) * 1000000u;
+        const uint32_t clk_hz = MetalContext::instance().get_cluster().get_device_aiclk(mesh_device_->id()) * 1000000u;
         const double cyc_per_core = static_cast<double>(r.max_cycles) / static_cast<double>(r.total_visits);
         log_info(
             LogTest,
@@ -2796,7 +2801,7 @@ TEST_F(DramKernelDRISCScatterFixture, DRISCAdaptiveDrainSteadyState) {
     prime_worker_l1(kPollBytes + kBulkBytes);
 
     const std::vector<CoreCoord> drisc = free_drisc_cores(1);
-    const uint32_t aiclk_hz = MetalContext::instance().get_cluster().get_device_aiclk(device_->id()) * 1000000u;
+    const uint32_t aiclk_hz = MetalContext::instance().get_cluster().get_device_aiclk(mesh_device_->id()) * 1000000u;
     log_info(
         LogTest,
         "adaptive drain: {} cores, poll {} B, bulk {} B, ADAPT_THRESH {} words, bulk depth {}, budget {} us",
@@ -2816,8 +2821,9 @@ TEST_F(DramKernelDRISCScatterFixture, DRISCAdaptiveDrainSteadyState) {
                 cv[5 + r] = tail;
             }
             cv[0] = 0xA5A50000u + c;  // nonzero, so the kernel's checksum guard still means something
-            const CoreCoord v = device_->virtual_core_from_logical_core(
-                {c % device_->compute_with_storage_grid_size().x, c / device_->compute_with_storage_grid_size().x},
+            const CoreCoord v = mesh_device_->virtual_core_from_logical_core(
+                {c % mesh_device_->compute_with_storage_grid_size().x,
+                 c / mesh_device_->compute_with_storage_grid_size().x},
                 CoreType::WORKER);
             MetalContext::instance().get_cluster().write_core(
                 cv.data(), cv.size() * sizeof(uint32_t), tt_cxy_pair(mesh_device_->build_id(), v), tensix_l1_base_);
@@ -2837,7 +2843,7 @@ TEST_F(DramKernelDRISCScatterFixture, DRISCAdaptiveDrainSteadyState) {
         SetRuntimeArgs(program, kid, drisc[0], rtas);
         run_workload(std::move(program));
 
-        const CoreCoord v = device_->virtual_core_from_logical_core(drisc[0], CoreType::DRAM);
+        const CoreCoord v = mesh_device_->virtual_core_from_logical_core(drisc[0], CoreType::DRAM);
         std::vector<uint32_t> out(7);
         MetalContext::instance().get_cluster().read_core(
             out.data(),
@@ -2982,10 +2988,10 @@ TEST_F(DramKernelDRISCScatterFixture, DRISCServicesRealProfiledWorkers) {
     const uint32_t ring_words = kernel_profiler::PROFILER_L1_VECTOR_SIZE;
     const uint32_t data_bytes = kNumRisc * ring_words * sizeof(uint32_t);
     const uint32_t ring0_src = cv_src + poll_bytes;
-    const uint32_t clk_hz = MetalContext::instance().get_cluster().get_device_aiclk(device_->id()) * 1000000u;
+    const uint32_t clk_hz = MetalContext::instance().get_cluster().get_device_aiclk(mesh_device_->id()) * 1000000u;
 
     const CoreCoord drisc_logical = free_drisc_cores(1)[0];
-    const CoreCoord drisc_virtual = device_->virtual_core_from_logical_core(drisc_logical, CoreType::DRAM);
+    const CoreCoord drisc_virtual = mesh_device_->virtual_core_from_logical_core(drisc_logical, CoreType::DRAM);
 
     auto set_niu_mode = [&](uint32_t stream) {
         Program p = CreateProgram();
@@ -3005,7 +3011,7 @@ TEST_F(DramKernelDRISCScatterFixture, DRISCServicesRealProfiledWorkers) {
         std::vector<uint32_t> coords;
         for (uint32_t y = 0; y < grid.y; y++) {
             for (uint32_t x = 0; x < grid.x; x++) {
-                const CoreCoord v = device_->virtual_core_from_logical_core({x, y}, CoreType::WORKER);
+                const CoreCoord v = mesh_device_->virtual_core_from_logical_core({x, y}, CoreType::WORKER);
                 producer_virtual.push_back(v);
                 coords.push_back((v.x & 0xFFFFu) | ((v.y & 0xFFFFu) << 16));
             }
@@ -3157,7 +3163,7 @@ TEST_F(DramKernelDRISCScatterFixture, DRISCServicesRealProfiledWorkers) {
         EXPECT_GE(produced_this_round, expected) << label << ": fewer words than producers must have emitted";
     };
 
-    const CoreCoord full_grid = device_->compute_with_storage_grid_size();
+    const CoreCoord full_grid = mesh_device_->compute_with_storage_grid_size();
     run_round("4x4", {4, 4}, 2000);
     run_round("full-grid", full_grid, 500);
 
