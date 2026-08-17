@@ -229,8 +229,11 @@ def test_r5_a_rejected_discovery_is_a_refusal_not_a_crash():
     refusing to launder that code through its complete-manifest fallback.
     """
     bl = (_PA / "agent" / "before_loop.py").read_text()
+    # ANCHORED ON THE BRANCH, not a 900-character window from the log line. The window stopped
+    # covering the return as soon as the handler grew, failing a test whose subject had not changed
+    # -- the fourth character-window assertion in this suite to break that way.
     i = bl.index("discovery failed (")
-    tail = bl[i : i + 900]
+    tail = bl[i : bl.index("\n    p = result[", i)]
     assert "DiscoveryRejected" in tail, "a rejected discovery still exits like a crash"
     assert "EXIT_REFUSED" in tail
 
@@ -239,3 +242,36 @@ def test_r5_a_rejected_discovery_is_a_refusal_not_a_crash():
     assert "raise SystemExit(EXIT_REFUSED)" in run_src[j : j + 700], "a refused discovery is not propagated"
     # and it must be decided BEFORE the fallback that continues on a complete manifest
     assert j < run_src.index("but the manifest is complete"), "the refusal is checked after the override"
+
+
+def test_the_refusal_path_can_actually_return_the_refusal_code():
+    """RUN 9, 2026-08-17: it could not, and the failure was invisible until a discovery was rejected.
+
+        File ".../agent/before_loop.py", line 1239, in main
+            from ..cc_optimize.run import EXIT_REFUSED
+        ImportError: attempted relative import beyond top-level package
+
+    before_loop runs as `python -m ...agent.before_loop`, so its package is `agent` and `..` walks
+    off the top. The import sat INSIDE the handler whose whole job is to return EXIT_REFUSED, so a
+    refused discovery raised on its way to reporting itself, exited rc=1, and the supervisor read
+    that as a crash and restarted it -- "racing the corrected run for the same board until both
+    wedged it", which is what the comment two lines above the import warns against. The line meant
+    to prevent that outcome produced it.
+
+    Asserted on the source rather than by importing, because the failure is a property of HOW the
+    module is loaded: imported normally by a test, the relative form resolves and the bug hides.
+    """
+    src = (_PA / "agent" / "before_loop.py").read_text()
+    i = src.index("isinstance(exc, DiscoveryRejected)")
+    body = src[i : i + 1500]
+    assert "from ..cc_optimize" not in body, "the refusal path imports beyond its top-level package again"
+    assert "EXIT_REFUSED" in body, "the refusal no longer reports a refusal"
+
+
+def test_the_refusal_code_agrees_across_the_two_places_that_report_it():
+    """before_loop RETURNS it and the supervisor READS it. Two literals that drifted would turn
+    every refusal back into three device resets, silently."""
+    m = _run()
+    bl = (_PA / "agent" / "before_loop.py").read_text()
+    i = bl.index("isinstance(exc, DiscoveryRejected)")
+    assert "EXIT_REFUSED = %d" % m.EXIT_REFUSED in bl[i : i + 1500], "before_loop's fallback disagrees with run.py"

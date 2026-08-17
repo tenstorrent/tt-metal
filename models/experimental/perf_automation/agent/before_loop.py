@@ -1236,7 +1236,22 @@ def main(argv: list[str] | None = None) -> int:
         from .probes import DiscoveryRejected
 
         if isinstance(exc, DiscoveryRejected):
-            from ..cc_optimize.run import EXIT_REFUSED
+            # ABSOLUTE, BECAUSE THIS FILE RUNS AS `python -m ...agent.before_loop`.
+            #
+            # The relative form raised "attempted relative import beyond top-level package" -- the
+            # package is `agent`, so `..` walks off the top -- and it raised INSIDE the handler that
+            # exists to return EXIT_REFUSED. So a refused discovery exited rc=1, the supervisor read
+            # that as a crash, and restarted it: precisely the "racing the corrected run for the
+            # same board until both wedged it" the comment above warns about, caused by the line
+            # meant to prevent it. Observed run 9, 2026-08-17, on a flaky lead-review verdict.
+            #
+            # Same import the supervisor uses, same literal fallback, so the two cannot disagree
+            # about which code means "refused" -- see optimize.py and
+            # test_r5_the_exit_code_has_one_definition.
+            try:
+                from models.experimental.perf_automation.cc_optimize.run import EXIT_REFUSED
+            except Exception:  # noqa: BLE001 -- a refusal must still be reportable without the import
+                EXIT_REFUSED = 3
 
             return EXIT_REFUSED
         return 1
