@@ -74,8 +74,29 @@ uses defaults. `launch.sh` re-emits them onto all three run panes.
 | `watch.sh` | Status table (PASS / HANG? / FAIL / RUN / STALE / PENDING), 15s. |
 | `watch_multiple_dirs.sh` | Same table for several runs at once: one `<log_name>` arg each, scan depth from `LOOP=`. |
 | `tail.sh` | `tail -10` of the newest `log_NN`, 30s. |
-| `host_stats.sh` | Host CPU / DRAM / swap + top processes by RSS, 5s. Reads `/proc`, no args. |
+| `host_stats.sh` | Host CPU / DRAM / swap, **1 GB hugepage pool, and the live pytest process's memlock/pin/fd limits**, 5s. Snapshots a TSV row to `<log dir>/host_stats.tsv` every 60s (`SNAP_SECS=`). Reads `/proc` + sysfs. |
 | `parse_iteration_times.py` | Per-iteration timing (min / avg / max) from any log with `Starting iteration:`. |
 
 Args are `<log_name> [loop_count]` throughout, so any pane can be run standalone against a live run
 (`MODEL=KIMI_K2_7 ./watch.sh LOG_name 20`). `REFRESH=` overrides a watcher's interval.
+
+## Why host_stats.sh watches hugepages
+
+On 2026-08-12 an `iters600` soak died on four hosts within 160 ms of each other, twice, always
+`SIGBUS` (`TEST_DONE_EXIT=135`) in a **native** thread — faulthandler marked no `Current thread`, and
+the Python main thread was mid-forward-pass. `dmesg` on the affected hosts had the answer:
+
+```
+tenstorrent 0000:42:00.0: pin_user_pages_longterm failed: -14      (EFAULT, x8 devices)
+```
+
+tt-kmd pins a hugepage-backed host buffer per device for DMA; when that pin fails, the process takes
+SIGBUS at whatever instruction touched the mapping, with no tt-metal error of any kind. So the pane
+tracks `free_hugepages` in the **1 GB** pool (`/sys/kernel/mm/hugepages/hugepages-1048576kB`, one page
+per device — 32 on an 8×4 box) and the pytest process's real `RLIMIT_MEMLOCK` / `VmLck` / `VmPin` from
+`/proc/PID`. Note `meminfo`'s `HugePages_*` rows describe only the default 2 MB pool and read `0` on a
+healthy box — use `Hugetlb:` for the total, which is carved out of DRAM and **not** counted in
+`MemAvailable`, so pinning can fail while the host looks 90% free.
+
+The 60s TSV snapshot exists because none of this survives the crash otherwise. Add `dmesg -T | tail`
+to your own post-mortem — that message is root-only, so the pane cannot capture it.
