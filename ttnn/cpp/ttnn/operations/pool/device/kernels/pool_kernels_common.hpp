@@ -45,8 +45,6 @@ template <uint32_t cb_id, uint32_t clear_value_cb_id>
 ALWI void clear_out_tiles(Noc noc, DataflowBuffer dfb, DataflowBuffer clear_dfb) {
     constexpr uint32_t tile_size = get_tile_size(cb_id);
     const uint32_t num_pages = get_local_cb_interface(cb_id).fifo_num_pages;
-    // Read the entry size from the DFB object rather than poking the raw CB interface
-    // (matches the Quasar sibling of this header, where the raw fifo_page_size is stale).
     const uint32_t num_tiles = dfb.get_entry_size() / tile_size;
 
     UnicastEndpoint self_ep;
