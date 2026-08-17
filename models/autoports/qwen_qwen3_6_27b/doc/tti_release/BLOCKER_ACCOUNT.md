@@ -164,3 +164,85 @@ producing subtly malformatted output. It is producing output that ends too early
 Whether a larger budget actually recovers the score is what the queued
 `ifeval` @ 4096 run tests; the 1280 re-run is only a reproducibility control,
 since 1280 is what the task already granted.
+
+---
+
+## Correction: what the committed eval config actually says
+
+Read directly from `reference_config/evals/eval_config.py:1265-1320` at
+tt-inference-server. Three points, one of which corrects this document and one of
+which corrects `AUTOFIX.md`.
+
+### 1. The `meta_*` names are labels; the mapping is explicit
+
+```python
+EvalTask(task_name="meta_ifeval",   eval_task_name="ifeval",                     ...)
+EvalTask(task_name="meta_gpqa_cot", eval_task_name="gpqa_diamond_cot_zeroshot",  ...)
+```
+
+`task_name` is TTI's internal label; `eval_task_name` is the lm-eval task actually
+executed. So the release runs executing `ifeval` and `gpqa_diamond_cot_zeroshot`
+were doing **exactly what the config asks**. There is no task-variant mismatch here,
+and anyone reading the recorded results should not go looking for one. (This is
+unlike the Falcon3-7B case, which was a genuine metric-variant mismatch.)
+
+### 2. `AUTOFIX.md`'s description of its own fix does not match what landed
+
+`AUTOFIX.md` states the tasks were added as `EVALS_META` using "the established
+preformatted-prompt contract (`include_path="work_dir"`,
+`apply_chat_template=False`)". The committed entries say otherwise:
+
+```python
+workflow_venv_type=WorkflowVenvType.EVALS_COMMON,
+use_chat_api=True,
+apply_chat_template=True,
+```
+
+`EVALS_COMMON`, not `EVALS_META`; and `apply_chat_template=True`, not `False`.
+
+This matters, and not pedantically. `apply_chat_template=True` is **precisely the
+path that turns thinking mode on**: lm-eval renders the chat template itself with no
+`enable_thinking` argument, so the generation prompt ends with an open `<think>`.
+Had the preformatted-prompt contract `AUTOFIX.md` described actually landed, the
+prompt text would have been fixed in the task file and inspectable, and this
+behaviour would have been visible rather than inherited.
+
+So the drift between the report and the code is the reason the thinking-mode
+default went unnoticed. Trust the code here, not the report.
+
+### 3. `strict-match` is not the graded key, so its structural 0.00 is harmless
+
+The GPQA score function reads exactly one key:
+
+```python
+score_func=score_task_single_key,
+score_func_kwargs={"result_keys": ["exact_match,flexible-extract"]},
+```
+
+So the structurally-unmatchable `strict-match` regex documented above — the prompt
+asks for `\boxed{}` while the filter looks for "The answer is" — **never affected
+scoring**. It remains a real defect in the upstream task definition and it is still
+worth reporting upstream, but it is not part of this port's story and should not be
+counted as a blocker.
+
+IFEval, by contrast, averages all four keys:
+
+```python
+score_func=score_task_keys_mean,
+score_func_kwargs={"result_keys": [
+    "prompt_level_strict_acc,none", "inst_level_strict_acc,none",
+    "prompt_level_loose_acc,none",  "inst_level_loose_acc,none"]}
+```
+
+which is why the loose/strict identity documented above matters for its score: with
+loose equal to strict, the mean is just the strict pair, i.e. (0.1786 + 0.3488)/2.
+
+### 4. No thresholds, confirmed in code
+
+```python
+published_score=None,
+published_score_ref=None,
+```
+
+for both tasks. This confirms from the code what `AUTOFIX.md` asserted in prose:
+these evals emit numbers and cannot pass or fail.
