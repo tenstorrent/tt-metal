@@ -99,7 +99,7 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
         cluster_axis);
 
     // This chip's rank names the slot of the statistics tensor it fills, and every
-    // peer's direction and hop count follow from the difference of ranks.
+    // peer's direction follows from the difference of ranks.
     std::optional<tt::tt_fabric::FabricNodeId> forward_fabric_node_id;
     std::optional<tt::tt_fabric::FabricNodeId> backward_fabric_node_id;
     uint32_t my_rank = 0;
@@ -489,28 +489,22 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
             src_fabric_node_id, backward_fabric_node_id.value(), 0, program, gather_core, gather_rt_args);
     }
 
-    // A peer's route, in the order the gather kernel takes its peers. A 1D fabric routes
-    // by hop count along the connection it was handed and has no use for a mesh; a 2D
-    // fabric routes to the peer's node outright, and the connection only chooses the
-    // first hop. The two live in the same pair of words, read back by header type — which
-    // the fabric config also decides, so host and device stay in step without a flag.
+    // A peer's route, in the order the gather kernel takes its peers: the peer's node
+    // outright, so the connection above only chooses the first hop. The fabric config
+    // also decides the packet header type the kernel reads these back with, so host and
+    // device stay in step without a flag — and only a 2D config pairs with the header
+    // this kernel is compiled against.
     const auto fabric_config = tt::tt_fabric::GetFabricConfig();
-    const bool routes_by_node = tt::tt_fabric::is_2d_fabric_config(fabric_config);
     TT_FATAL(
-        routes_by_node || tt::tt_fabric::is_1d_fabric_config(fabric_config),
-        "attn_res_gather_softmax needs a 1D or 2D fabric, got {}",
+        tt::tt_fabric::is_2d_fabric_config(fabric_config),
+        "attn_res_gather_softmax needs a 2D fabric, got {}",
         fabric_config);
     for (uint32_t p = 0; p < ring_size; ++p) {
         if (p == my_rank) {
             continue;
         }
-        if (routes_by_node) {
-            gather_rt_args.push_back(*fabric_node_ids.at(p).mesh_id);
-            gather_rt_args.push_back(fabric_node_ids.at(p).chip_id);
-        } else {
-            gather_rt_args.push_back(0);
-            gather_rt_args.push_back(p > my_rank ? p - my_rank : my_rank - p);
-        }
+        gather_rt_args.push_back(*fabric_node_ids.at(p).mesh_id);
+        gather_rt_args.push_back(fabric_node_ids.at(p).chip_id);
     }
     tt::tt_metal::SetRuntimeArgs(program, gather_kernel_id, gather_core, gather_rt_args);
 
