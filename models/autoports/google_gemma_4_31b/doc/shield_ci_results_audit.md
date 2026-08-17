@@ -162,6 +162,45 @@ back-filling one from our own run would make the check circular. **These tasks r
 and report but do not gate.** That is a real increase in executed coverage over
 having no eval entry, and an explicit remaining gap on grading.
 
+### What a `release` PASS can and cannot mean, exactly
+
+Read `workflows/acceptance_criteria.py` with `workflows/workflow_types.py` before
+believing any green result, ours included. `enforce_acceptance_criteria` only fails
+on tiers listed in `ModelStatusTypes.required_target_tiers`:
+
+| Status | Enforced tiers | `evals_enforced` |
+| --- | --- | --- |
+| `EXPERIMENTAL` | *(none)* | False |
+| `FUNCTIONAL` | `functional` | True |
+| `COMPLETE` | `functional`, `complete` | True |
+| `TOP_PERF` | `functional`, `complete`, `target` | True |
+
+Two facts follow, and they bound every claim in this document.
+
+**1. This model is `EXPERIMENTAL`.** The prod spec declares
+`status: EXPERIMENTAL`, whose enforced-tier list is empty, and `evals_enforced` is
+derived from that same list. The code says so directly: *"an EXPERIMENTAL model
+(forge, new bring-up) can fail every performance benchmark and still be
+released."* So for this model, **neither performance targets nor eval accuracy
+gate the result**. That is the platform's deliberate policy for a bring-up, not
+something bent for this onboarding — but it does mean a `release` PASS here
+asserts "every workflow executed and completed", not "performance and accuracy
+were acceptable".
+
+**2. Performance targets do not gate *any* model on this platform.** Every one of
+the 381 target entries in
+`reference_config/benchmarking/benchmark_targets/model_performance_reference.json`
+uses the tier name `theoretical`, and `theoretical` appears in no status's
+`required_target_tiers`. So perf targets are computed and reported for every
+model and enforced for none. This materially softens a claim made below: adding a
+`gemma-4-31b` entry makes the blocks **graded and reported** rather than
+`NA (ungraded)`, but it still cannot fail a run. A large performance regression
+would be visible in the report and would not turn the lane red.
+
+To make perf or eval actually gate this model, it would have to be promoted past
+`EXPERIMENTAL` **and** the reference file would need a `functional`-tier entry.
+Both are product decisions, not onboarding work.
+
 ### The most important gap: nothing was graded
 
 Every one of the 17 blocks logged
