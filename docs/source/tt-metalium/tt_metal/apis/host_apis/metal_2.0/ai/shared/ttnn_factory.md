@@ -184,7 +184,7 @@ Every `TensorParameter` enforces an exact `TensorSpec` match by default. **Don't
 
 ## Device-operation-class edits the port forces
 
-The port's writeable surface is the program factory body — the device-operation class (`validate`, `invoke`, `compute_output_specs`, attribute parsing) is otherwise off-limits (see the recipe's [Scope discipline](../port/metal2_port.md#scope-discipline)). There are **two** sanctioned exceptions, each forced by the port, each recorded prominently in the port report. The op's cache key is *not* among them — see [The cache key: leave the custom hash alone](#the-cache-key-leave-the-custom-hash-alone).
+The port's writeable surface is the program factory body — the device-operation class (`validate`, `invoke`, `compute_output_specs`, attribute parsing) is otherwise off-limits (see the recipe's [Scope discipline](../port/metal2_port.md#scope-discipline)). There are **three** sanctioned exceptions, each forced by the port, each recorded prominently in the port report. The op's cache key is *not* among them — see [The cache key: leave the custom hash alone](#the-cache-key-leave-the-custom-hash-alone).
 
 ### 1. Remove pybound legacy factory entry points
 
@@ -193,6 +193,30 @@ When the port causes a legacy factory entry point to vanish (`create_descriptor`
 ### 2. Drop a factory parameter that exists only for a pybind hook
 
 Some legacy factories carry a non-standard parameter that production code never sets — it exists only so a pybind test/introspection hook can drive the factory (layernorm's `create_descriptor` took an extra `const std::optional<CoreRangeSet>& core_range_set` used only by its pybind hook). The fixed `create_program_artifacts` signature (`attributes`, `tensor_args`, `tensor_return_value`) cannot carry it. Drop the parameter, inline its production default in the factory body, and delete the pybind hook that passed it (same procedure and report-handling as exception 1). This is mechanically the pybind-removal case with an extra parameter to unwind; flag it the same way. Don't try to preserve the hook — its `ProgramDescriptor` return is exactly what the port eliminates.
+
+### 3. Give a direct-descriptor op a conventional program factory
+
+**Recognition signal.** The device-operation declares `create_descriptor` (and any `override_runtime_arguments`) as its *own* static member, with no `program_factory_t` — there is no factory struct at all. The framework accepts that shape through a shim, `MeshDeviceOperationAdapter::DirectDescriptorFactory`, selected by the `HasDirectDescriptor` predicate in [`operation_concepts.hpp`](https://github.com/tenstorrent/tt-metal/blob/main/ttnn/api/ttnn/operation_concepts.hpp).
+
+**Why the port is forced.** That shim is keyed on the literal name `create_descriptor`, and **there is no equivalent for `create_program_artifacts`.** So the method the port replaces is the same one that made the op satisfy `DeviceOperationConcept`: swap it and `HasDirectDescriptor` goes false while `HasProgramFactoryType` was never true, leaving the op not a valid device operation. The failure is a concept mismatch at the call site, not a message naming the cause. **A `DirectSpecFactory` counterpart is a deliberate non-goal** — TTNN keeps one factory shape rather than two, so converting the op is the sanctioned resolution, not a workaround.
+
+**Procedure.** Move the factory methods into a nested struct and declare the variant — the op keeps everything else, and the factory body still lives in the same `.cpp`:
+
+```cpp
+struct MyOpDeviceOperation {
+    struct MyOpProgramFactory {
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+            const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
+        // plus the translated override, on CustomProgramSpecFactoryConcept only
+    };
+    using program_factory_t = std::variant<MyOpProgramFactory>;
+    // ... the rest of the device-operation class is untouched ...
+};
+```
+
+**Name the struct `<OpName>ProgramFactory`** — `MorehAdamWProgramFactory`, `UniformProgramFactory` — matching the convention TTNN uses for these ops. Nothing cross-references the name, so a divergent one is merely a divergent one; pick this so a reviewer reading two ports sees the same shape.
+
+Record it under Handoff points, noting that the op arrived in the direct-descriptor shape. Some ops reach the port already converted — TTNN moves them out of this shape when it has other reasons to touch them — so check for an existing `program_factory_t` before assuming the edit is yours to make; if one is there, this exception does not apply and the port is a method swap inside the existing struct.
 
 ---
 
