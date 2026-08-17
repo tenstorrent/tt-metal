@@ -66,6 +66,12 @@ read-side wrap error appears at the first probe past the window. 13 s on one
 Blackhole chip. Evidence:
 `doc/functional_decoder/bounded_modulo_decode_across_wrap.json`.
 
+Checked in both directions on hardware. Against the fixed decoders the test
+passes; against the pre-fix decoders (`git checkout 551c3fdbc6d -- tt/`, test
+retained) it fails at **exactly position 1024 with PCC 0.0031** while position
+1023 still passes — the attention output past the wrap is uncorrelated with the
+reference, not merely degraded.
+
 The shared `models/common/modules/attention/attention_1d.py` is **not** affected:
 it rejects `sliding_window` together with paged attention outright
 (`attention_1d.py:1466`). This defect is specific to this autoport's
