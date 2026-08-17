@@ -7,6 +7,7 @@
 #include <algorithm>
 
 #include <tt-metalium/allocator.hpp>
+#include <tt-metalium/constants.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
@@ -98,6 +99,14 @@ bool supported_by_codegen(
     }
 
     if (input.layout() == Layout::TILE) {
+        // Both the host-side page map and the program factory's CB page size are built from the
+        // 32x32 constants, so an off-default tile gives the kernels a page count and a page size
+        // the buffer does not have. Declining is not a correctness guarantee for the case, only a
+        // refusal to claim support this factory does not have.
+        const auto tile = input.tensor_spec().tile();
+        if (tile.get_height() != tt::constants::TILE_HEIGHT || tile.get_width() != tt::constants::TILE_WIDTH) {
+            return false;
+        }
         // The last two dims subdivide a 32x32 tile, and the reader replicates whole tile pages:
         // page replication is not torch's element-level interleave along H or W.
         return nd < ndim - 2;

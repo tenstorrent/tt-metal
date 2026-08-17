@@ -275,8 +275,9 @@ ttnn::Tensor repeat_interleave_force_codegen(
         "repeat_interleave_force_codegen invoked for a case the codegen path does not support "
         "(requires a device-resident, unsharded rank-2..4 bfloat16/float32/int32 input, an "
         "interleaved output, repeats > 1, and a repeated dim outside the pages the layout "
-        "subdivides -- TILE defers the two sub-tile dims, ROW_MAJOR defers the within-stick last "
-        "dim and needs a stick narrow enough for two CB slots in one core's L1). This entry never "
+        "subdivides -- TILE defers the two sub-tile dims and requires the default 32x32 tile, "
+        "ROW_MAJOR defers the within-stick last dim and needs a stick narrow enough for two CB "
+        "slots in one core's L1). This entry never "
         "falls back to native, because a forced leg that quietly served native would make any "
         "comparison against native vacuous. Use ttnn::repeat_interleave if you want the case "
         "routed.");
