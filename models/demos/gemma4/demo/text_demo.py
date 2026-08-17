@@ -663,6 +663,7 @@ def _run_generation_via_generator(
             max_seq_len=max_seq_len,
             max_prefill_chunk_size=int(getattr(model_args_list[0], "max_prefill_chunk_size", 0) or 0),
             model_args_list=model_args_list,
+            batch_size=batch_size,
         )
 
     # Device sample by default — see text_demo_v2 for the measurement that flipped

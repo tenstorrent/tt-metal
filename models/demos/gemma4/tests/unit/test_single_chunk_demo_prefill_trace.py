@@ -35,6 +35,11 @@ def test_enable_single_chunk_demo_bucket_only_for_true_4k(monkeypatch):
         max_seq_len=8192, max_prefill_chunk_size=2048, model_args_list=[args]
     )
 
+    assert not gt.enable_single_chunk_demo_prefill_trace_bucket(
+        max_seq_len=4096, max_prefill_chunk_size=4096, model_args_list=[args], batch_size=32
+    )
+    assert 4096 not in gt.GEMMA4_TRACE_PREFILL_SEQ_LENS
+
     assert gt.enable_single_chunk_demo_prefill_trace_bucket(
         max_seq_len=4096, max_prefill_chunk_size=4096, model_args_list=[args]
     )
