@@ -20,12 +20,12 @@
       config already declares that it ships its own code, so decide from that. We did, and it worked.
 
 3. Use the saved inputs in the tests, and allow more than one prompt
-    - Which arguments a component gets is decided by a hardcoded list of names, all of them HF vision
-      and text ones. Anything not on that list is dropped if it has a default, or filled with random
-      noise if it does not. In our attention only the activation survived. The RoPE table, the causal
-      mask and the cache were all dropped because they default to None, which is right during single
-      token decode and wrong for a longer sequence. The reference itself then ran with no causal mask
-      and could see the future, the port matched it, and the component passed.
+    - Which arguments a component gets is decided by a hardcoded list of names taken from HuggingFace
+      vision and text models. Anything not on that list is dropped if it has a default, or filled with
+      random noise if it does not. In our attention only the activation survived. The RoPE table, the
+      causal mask and the cache were all dropped because they default to None, which is right during
+      single token decode and wrong for a longer sequence. The reference itself then ran with no causal
+      mask and could see the future, the port matched it, and the component passed.
     - Real inputs and outputs are saved for every component and the log says the tests use them, but
       they do not. We wrote the missing ones by hand before the tests measured anything.
     - The end to end test also decides pass or fail for the whole model from a single prompt.
