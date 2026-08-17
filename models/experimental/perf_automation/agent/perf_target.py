@@ -208,7 +208,15 @@ class PerfTarget:
     aggregate_rate: float = 0.0
 
 
-def active_bytes(model_facts: dict, *, regime: str = "decode", seq_len: int = 0, batch: int = 1, items: int = 0) -> int:
+def active_bytes(
+    model_facts: dict,
+    *,
+    regime: str = "decode",
+    seq_len: int = 0,
+    batch: int = 1,
+    items: int = 0,
+    block: dict | None = None,
+) -> int:
     """Bytes streamed from DRAM per unit of work, summed per-tensor at each tensor's real dtype.
 
     `regime` selects the unit: "decode" is one token, "prefill" is one request of `seq_len` tokens.
@@ -250,9 +258,20 @@ def active_bytes(model_facts: dict, *, regime: str = "decode", seq_len: int = 0,
             wb = float(mf.get("total_params", 0)) * _bytes_per_elem(dt)
 
     kv = 0.0
-    if seq_len and mf.get("layers") and mf.get("kv_heads") and mf.get("head_dim"):
+    # GEOMETRY COMES FROM THE BLOCK THIS STAGE RUNS, when the caller knows which one.
+    #
+    # It was read from the model root, and a multi-tower model has no geometry at its root: the
+    # extractor took `layers` from the deepest tower and the widths from another, producing a
+    # 32-layer 3072-wide model that does not exist. Every stage then priced its KV and activations
+    # with it -- the audio encoder at 0.041 ms against a 12.80 ms measurement.
+    #
+    # `block` is that stage's own {layers, hidden_size, intermediate_size, kv_heads, head_dim},
+    # established by depth rather than by name. Absent, the root is used exactly as before, which is
+    # correct for a single-block model and is the only shape that still emits root geometry.
+    _g = dict(block) if isinstance(block, dict) and block else mf
+    if seq_len and _g.get("layers") and _g.get("kv_heads") and _g.get("head_dim"):
         kv_dt = mf.get("kv_dtype") or mf.get("dominant_dtype") or "bfloat16"
-        kv = 2.0 * int(mf["layers"]) * int(mf["kv_heads"]) * int(mf["head_dim"]) * int(seq_len) * _bytes_per_elem(kv_dt)
+        kv = 2.0 * int(_g["layers"]) * int(_g["kv_heads"]) * int(_g["head_dim"]) * int(seq_len) * _bytes_per_elem(kv_dt)
         kv *= max(1, int(batch or 1))
 
     # PREFILL MOVES MORE THAN THE WEIGHTS. Refusing the regime outright meant its caller had nothing
@@ -277,8 +296,8 @@ def active_bytes(model_facts: dict, *, regime: str = "decode", seq_len: int = 0,
     _items = max(0, int(items or 0))
     if _items and seq_len:
         kv += (kv / float(seq_len)) * float(_items)  # written on the way in, then read back
-    _n, _h = _scalar(mf.get("layers", 0), 0), _scalar(mf.get("hidden_size", 0), 0)
-    _i = _scalar(mf.get("intermediate_size", 0), 0) or (4 * _h)
+    _n, _h = _scalar(_g.get("layers", 0), 0), _scalar(_g.get("hidden_size", 0), 0)
+    _i = _scalar(_g.get("intermediate_size", 0), 0) or (4 * _h)
     if _items and _n and _h:
         a_dt = mf.get("dominant_dtype") or mf.get("torch_dtype") or "bfloat16"
         # per layer: the residual stream in and out, and the MLP intermediate in and out

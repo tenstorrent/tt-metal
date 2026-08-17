@@ -231,12 +231,18 @@ def tower_geometry(snapshot) -> dict:
     Any sub-dict carrying a layer count and a hidden size is a tower; nothing is recognised by name.
     """
     out: dict = {}
-    snap = Path(snapshot)
-    cfg = snap / "config.json" if snap.is_dir() else snap
-    try:
-        doc = json.loads(cfg.read_text())
-    except Exception:  # noqa: BLE001
-        return out
+    # A DICT IS ALSO A CONFIG. The single-tower path has no checkpoint to point at -- its geometry
+    # arrives as the manifest's model_config or _hf_cache_dims' answer -- and requiring a path there
+    # meant a flat model produced no blocks at all, which cost it the geometry it used to publish.
+    if isinstance(snapshot, dict):
+        doc = snapshot
+    else:
+        snap = Path(snapshot)
+        cfg = snap / "config.json" if snap.is_dir() else snap
+        try:
+            doc = json.loads(cfg.read_text())
+        except Exception:  # noqa: BLE001
+            return out
     if not isinstance(doc, dict):
         return out
     for sub in list(doc.values()) + [doc]:
@@ -253,7 +259,30 @@ def tower_geometry(snapshot) -> dict:
             i = int(sub.get("intermediate_size") or sub.get("ffn_dim") or 0)
         except (TypeError, ValueError):
             i = 0
-        out[n] = {"layers": n, "hidden_size": h, "intermediate_size": i or 4 * h}
+        # ATTENTION GEOMETRY COMES FROM THE SAME SUB-DICT, or not at all. The KV term needs kv_heads
+        # and head_dim, and reading them from a different tower than hidden_size is the mistake this
+        # function exists to end -- so they are taken from THIS tower's config, and left absent when
+        # it does not declare them rather than borrowed from the model root.
+        try:
+            _kvh = int(sub.get("num_key_value_heads") or sub.get("num_attention_heads") or sub.get("num_heads") or 0)
+        except (TypeError, ValueError):
+            _kvh = 0
+        try:
+            _hd = int(sub.get("head_dim") or 0)
+        except (TypeError, ValueError):
+            _hd = 0
+        try:
+            _heads = int(sub.get("num_attention_heads") or sub.get("num_heads") or 0)
+        except (TypeError, ValueError):
+            _heads = 0
+        if not _hd and h and _heads:
+            _hd = h // _heads
+        geo = {"layers": n, "hidden_size": h, "intermediate_size": i or 4 * h}
+        if _kvh:
+            geo["kv_heads"] = _kvh
+        if _hd:
+            geo["head_dim"] = _hd
+        out[n] = geo
     return out
 
 

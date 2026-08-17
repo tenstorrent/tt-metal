@@ -90,12 +90,20 @@ def test_an_unknown_regime_is_still_refused():
 
 def test_the_facts_producer_emits_the_geometry_the_prefill_term_needs():
     """Without hidden_size/intermediate_size the prefill term silently degrades to weights-only --
-    which is decode's figure, and is how both stages came to print one ceiling twice. The producer
-    already reads them from the same config; it just was not writing them out."""
+    which is decode's figure, and is how both stages came to print one ceiling twice.
+
+    It now travels per BLOCK rather than as loose keys, because the loose form had no answer for a
+    model with two towers: it took `layers` from the deepest and the widths from another, and priced
+    every stage with a model that does not exist. The single-tower shape is unchanged -- one block,
+    and its geometry is still published flat for callers that have not learned about blocks."""
     src = (_PA / "cc_optimize" / "run.py").read_text()
-    i = src.index('("layers", layers),')
-    block = src[i : i + 400]
-    assert '"hidden_size"' in block and '"intermediate_size"' in block, block
+    i = src.index("def _model_block_facts")
+    block = src[i : src.index("\ndef ", i + 1)]
+    assert "tower_geometry(" in block, "geometry no longer comes from the config's own towers"
+
+    j = src.index("def _perf_target_inputs")
+    pti = src[j : src.index("\ndef ", j + 1)]
+    assert '"hidden_size"' in pti and '"intermediate_size"' in pti, "the single-block flat view is gone"
 
 
 def test_thin_facts_still_get_a_weights_floor():

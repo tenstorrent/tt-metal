@@ -1700,6 +1700,73 @@ def _stage_roots_from_generated(secs: dict, perf_test) -> dict:
     return out
 
 
+def _model_block_facts(model_root, model_id: str = "", cfg: dict | None = None) -> dict:
+    """{root: geometry} for every block the model declares. {} when nothing can be established.
+
+    THE JOIN IS DEPTH, so nothing is recognised by name. Three independent sources each report a
+    block's depth -- the checkpoint's sections, the config's sub-dicts, and the probe's stacks -- and
+    that shared number is what lets a stage reach its own geometry:
+
+        stage -> root (stage_roots) -> depth (declared_sections) -> geometry (tower_geometry)
+
+    Voxtral: audio_tower.layers 32 -> 32x1280x5120, language_model.model.layers 30 -> 30x3072x8192.
+    A vocoder, a denoiser or a second vision stack lands here the same way, with no code change --
+    which the "vision"/"audio" name blacklist this replaces could never do.
+
+    AMBIGUITY IS REFUSED. Two sections of equal depth cannot be told apart by depth, so neither gets
+    geometry: a stage priced with its neighbour's widths is worse than a stage with no ceiling, and
+    the report already knows how to print "not modelled".
+    """
+    try:
+        from agent.checkpoint_sections import declared_sections, hf_cache_dir, tower_geometry
+    except Exception:  # noqa: BLE001
+        return {}
+    try:
+        secs = declared_sections(model_root, model_id) or {}
+        if not secs:
+            # NO SECTIONS TO NAME, which is the ordinary single-tower case: one geometry, and the
+            # model IS that block. Published under the empty root, so `len(blocks) == 1` still holds
+            # and the flat keys are emitted exactly as before -- a model with one tower loses
+            # nothing by the facts becoming per-block.
+            _snap1 = (hf_cache_dir(model_id) if model_id else None) or model_root
+            _geo1 = tower_geometry(_snap1) or tower_geometry(cfg or {}) or {}
+            return {"": dict(next(iter(_geo1.values())))} if len(_geo1) == 1 else {}
+        snap = hf_cache_dir(model_id) if model_id else None
+        geo_by_depth = tower_geometry(snap or model_root) or tower_geometry(cfg or {}) or {}
+        if not geo_by_depth:
+            return {}
+        depths = [int(d) for d in secs.values()]
+        out: dict = {}
+        for path, depth in secs.items():
+            depth = int(depth)
+            if depths.count(depth) != 1:
+                continue  # two towers of the same depth: the join cannot separate them
+            geo = geo_by_depth.get(depth) or geo_by_depth.get(str(depth))
+            if not geo:
+                continue
+            out[str(path).split(".", 1)[0]] = dict(geo)
+        # PARAMS PER BLOCK, from the checkpoint's own tensors. The compute floor is 2 x params x
+        # items, and `params` was the WHOLE model for every stage -- so the audio encoder was charged
+        # 3.611e9 parameters when its tower has 0.637e9, on top of being charged the wrong geometry.
+        # Summed per section from the same header read the numel join already uses; a block the
+        # checkpoint does not account for keeps geometry and simply has no param count, which the
+        # caller reads as "cannot price the compute term" rather than as zero work.
+        try:
+            from agent.weight_census import _checkpoint_tensor_sections
+
+            _pp: dict = {}
+            for _numel, _sec in _checkpoint_tensor_sections(snap or model_root):
+                _pp[str(_sec)] = _pp.get(str(_sec), 0) + int(_numel)
+            for _root, _geo in out.items():
+                if _pp.get(_root):
+                    _geo["params"] = int(_pp[_root])
+        except Exception:  # noqa: BLE001 -- geometry without params still prices the memory term
+            pass
+        return out
+    except Exception:  # noqa: BLE001 -- no blocks is the refused-ceiling path, not a failure
+        return {}
+
+
 def _publish_stage_roots(seq, model_root, node) -> dict:
     """Establish {stage: tower} and write it into the model's facts. Best-effort; never raises.
 
@@ -4967,64 +5034,46 @@ def _perf_target_inputs(demo_dir, model_id_hint, manifest) -> dict | None:
     # int() on one raises TypeError -- which the caller swallows, so the model lost its ENTIRE ceiling
     # over a KV-cache field the ceiling does not even need without a seq_len. perf_target._scalar
     # already coerces exactly this (per-layer top_k), so reuse it instead of a second rule here.
-    from agent.perf_target import _scalar as _sc
 
     # FLAT FIRST, then the nested walk. _scalar coerces a per-layer LIST into a scalar, which the
     # walk deliberately will not (int(list) is not a depth), so routing the flat keys through the walk
     # dropped a list-valued num_hidden_layers on the floor. The walk is the fallback that catches the
     # nested case -- gemma3 declares it under text_config and a flat .get() reads 0 for every
     # multimodal config, and 0 layers feeds the roofline facts.
-    from agent.layer_depth import _depth_from_mapping as _dfm
 
-    # THE SAME NESTING THAT HID THE LAYER COUNT HIDES ITS FOUR NEIGHBOURS. The comment above is
-    # explicit -- "gemma3 declares it under text_config and a flat .get() reads 0 for every
-    # multimodal config" -- and the fallback was given to `layers` alone. hidden_size,
-    # intermediate_size, num_key_value_heads and head_dim kept the flat lookup, so on every
-    # multimodal model they read 0, were dropped by the `if val` below, and never reached the file.
+    # GEOMETRY IS A PROPERTY OF A BLOCK, NOT OF A MODEL, so it is no longer collected as loose keys.
     #
-    # Without them active_bytes(regime="prefill") has no KV and no activation term to add, so it
-    # returns decode's figure and the report prints ONE memory ceiling on both stages -- which is
-    # what it did for gemma-3-12b and for voxtral. A lesson learned for one key and not applied to
-    # the four beside it.
-    def _cfgv(*names):
-        """A config value, flat first then one level down into a sub-config (text/decoder/llm)."""
-        for n in names:
-            v = _sc(cfg.get(n), 0)
-            if v:
-                return v
-        for _k, _sub in (cfg or {}).items():
-            if not isinstance(_sub, dict):
-                continue
-            # The TEXT tower, never the vision one: gemma3's vision_config also carries hidden_size
-            # (1280), and taking it produced a prefill activation term for the wrong tower entirely.
-            if "vision" in str(_k).lower() or "audio" in str(_k).lower():
-                continue
-            for n in names:
-                v = _sc(_sub.get(n), 0)
-                if v:
-                    return v
-        return 0
-
-    layers = _sc(cfg.get("num_hidden_layers") or cfg.get("n_layer") or cfg.get("num_layers"), 0) or _sc(_dfm(cfg), 0)
-    kv_heads = _cfgv("num_key_value_heads", "num_attention_heads", "num_heads")
-    hidden = _cfgv("hidden_size", "d_model")
-    heads = _cfgv("num_attention_heads", "num_heads")
-    head_dim = _cfgv("head_dim") or ((hidden // heads) if (hidden and heads) else 0)
-    # hidden_size and intermediate_size join the geometry because PREFILL'S byte model needs them:
-    # its activations are (2*hidden + 2*intermediate) per layer per token, and without them
-    # active_bytes(regime="prefill") falls back to the weights-only figure -- which is decode's, and
-    # is exactly how both stages came to print one memory ceiling twice. Emitted from the same config
-    # read that already produced layers/kv_heads/head_dim; no new source.
-    inter = _cfgv("intermediate_size", "ffn_dim", "d_ff")
-    for key, val in (
-        ("layers", layers),
-        ("kv_heads", kv_heads),
-        ("head_dim", head_dim),
-        ("hidden_size", hidden),
-        ("intermediate_size", inter),
-    ):
-        if val:
-            facts[key] = int(val)
+    # WHAT THIS REPLACES. Two rules picked from the same config, independently:
+    #
+    #     layers            = _depth_from_mapping(cfg)   "the DEEPEST depth anywhere"  -> 32
+    #     hidden/intermediate = first sub-config whose key says neither "vision" nor "audio" -> 3072/8192
+    #
+    # On voxtral that is the AUDIO tower's depth welded to the LANGUAGE tower's widths: a 32-layer,
+    # 3072-wide model that does not exist. Every stage then divided those numbers, so the audio
+    # encoder was priced at 0.041 ms against a 12.80 ms measurement -- 312x -- and prefill's
+    # activation term used a width its own tower does not have.
+    #
+    # The name blacklist was the tell. "vision"/"audio" is a list of towers someone had seen, and it
+    # decides geometry for every model that has any. A tower called vocoder, denoiser or projector
+    # walks straight through it.
+    #
+    # Blocks are read WHOLE instead: tower_geometry keys each tower by its DEPTH, which is the one
+    # number the checkpoint's sections, the config's sub-dicts and the probe's stacks all agree on,
+    # so a stage reaches its own geometry by structure -- stage -> root -> depth -> geometry -- with
+    # nothing recognised by name.
+    _blocks = _model_block_facts(demo_dir, mid or "", cfg)
+    if _blocks:
+        facts["blocks"] = _blocks
+    # THE FLAT KEYS SURVIVE FOR EXACTLY ONE SHAPE: a model with a single block, where "the model's
+    # geometry" and "that block's geometry" are the same sentence and every existing caller stays
+    # correct. With two or more, no flat answer exists -- emitting one is what produced the chimera --
+    # so they are omitted and a caller that has not learned about blocks gets nothing rather than a
+    # number from the wrong tower. Missing degrades to a refused ceiling; wrong degrades to 312x.
+    if len(_blocks or {}) == 1:
+        _only = next(iter(_blocks.values()))
+        for key in ("layers", "kv_heads", "head_dim", "hidden_size", "intermediate_size"):
+            if _only.get(key):
+                facts[key] = int(_only[key])
     # A DIVISOR IS THE ONE THING THAT CANNOT BE MISSING. With neither a param count nor a byte count there
     # is nothing to divide by, so returning facts would produce a zero ceiling that renders as a real one.
     if not facts.get("total_params") and not facts.get("active_params") and not facts.get("weight_bytes"):

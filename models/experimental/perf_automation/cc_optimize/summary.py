@@ -931,10 +931,18 @@ def _section_bytes_cached() -> dict:
         return _SECTION_BYTES
     _SECTION_BYTES = {}
     try:
+        # THE HUB ID FROM THE MODEL'S OWN SOURCE. This called _hf_repo_ids(Path(...)) -- and that
+        # function takes a parsed Source, not a path: `for _path, tree in src.trees.items()` raises
+        # AttributeError on a Path, the bare except below swallowed it, and _SECTION_BYTES was {} on
+        # every model since the day it was written. _stage_share then found no section, returned 1.0,
+        # and EVERY stage was priced at the whole model's bytes -- the apportionment this cache exists
+        # to provide never ran once. model_id_from_source answers the same question and takes a path,
+        # which is what the one caller has.
         from agent.checkpoint_sections import hf_cache_dir, section_bytes
-        from agent.model_contract import _hf_repo_ids
+        from agent.stack_survey import model_id_from_source
 
-        for _mid in _hf_repo_ids(Path(_MODEL_ROOT_HINT)) if _MODEL_ROOT_HINT else []:
+        _mids = [model_id_from_source(_MODEL_ROOT_HINT)] if _MODEL_ROOT_HINT else []
+        for _mid in [m for m in _mids if m]:
             snap = hf_cache_dir(_mid)
             if snap:
                 _SECTION_BYTES = section_bytes(snap) or {}
@@ -1056,6 +1064,18 @@ def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None, stag
     def _stage_share(stage) -> float:
         return _roofline_stage_share(mf, stage)
 
+    def _stage_block(stage):
+        """The geometry of the block this stage runs, or None when it cannot be established.
+
+        None means "use the model root", which is right for a single-block model and is the only
+        shape that still publishes root geometry -- a multi-tower model emits no flat keys at all,
+        precisely so a stage cannot silently inherit another tower's widths.
+        """
+        _root = str(((mf or {}).get("stage_roots") or {}).get(str(stage)) or "").strip()
+        _blocks = (mf or {}).get("blocks") or {}
+        _b = _blocks.get(_root) if _root else None
+        return dict(_b) if isinstance(_b, dict) and _b else None
+
     def _bytes_for(stage, toks):
         """This stage's read set: the weights its subtree streams, plus what it alone carries.
 
@@ -1095,8 +1115,15 @@ def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None, stag
             # ITEMS PER REQUEST is what this stage does in one unit -- `toks` already includes the
             # batch, so dividing it out keeps the two factors from being applied twice.
             _items = max(1, int(round(float(toks or 1) / float(_b)))) if toks else 0
-            _extra = float(_ab(mf, regime=stage, seq_len=_seq, batch=_b, items=_items) or 0.0) - float(
-                _ab(mf, regime=stage, seq_len=0, batch=1, items=0) or 0.0
+            # THIS STAGE'S OWN GEOMETRY. KV and activations are computed from layer count, hidden and
+            # intermediate width -- properties of the BLOCK the stage runs, not of the model. Read
+            # from the root they were a chimera on any multi-tower model: the deepest tower's depth
+            # with another tower's widths, so the audio encoder carried 3072-wide activations through
+            # 32 layers it does not have. None for a single-block model, where root geometry IS the
+            # block's and nothing changes.
+            _blk = _stage_block(stage)
+            _extra = float(_ab(mf, regime=stage, seq_len=_seq, batch=_b, items=_items, block=_blk) or 0.0) - float(
+                _ab(mf, regime=stage, seq_len=0, batch=1, items=0, block=_blk) or 0.0
             )
         except Exception:  # noqa: BLE001 -- regime unknown to the byte model, or no byte model at all
             return base
@@ -1158,9 +1185,16 @@ def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None, stag
         stages = [("decode", 1)]
         if _pt:
             stages.insert(0, ("prefill", _pt * max(1, _prefill_batch())))
-    _L = int((mf or {}).get("layers") or 0)
-    _H = int((mf or {}).get("hidden_size") or 0)
     for name, toks in stages:
+        # EVERY TERM FROM THIS STAGE'S OWN BLOCK. params, layers and hidden were read from the model
+        # root for every stage alike, so on a multi-tower model the audio encoder was priced with the
+        # language backbone's 4.014e9 parameters and 3072-wide attention -- 0.041 ms against a
+        # measurement in the tens of milliseconds. A single-block model has root geometry equal to
+        # its one block's, so nothing changes there.
+        _blk = _stage_block(name) or {}
+        _params = int(_blk.get("params") or 0) or int(params or 0)
+        _L = int(_blk.get("layers") or (mf or {}).get("layers") or 0)
+        _H = int(_blk.get("hidden_size") or (mf or {}).get("hidden_size") or 0)
         # 2 x params x tokens counts every WEIGHT matmul -- each parameter is multiplied once per
         # token, so every projection in every layer is already in there. What it omits is the
         # attention score path, QK^T and A.V, which uses no parameters at all and scales with the
@@ -1168,7 +1202,7 @@ def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None, stag
         # understated by 0.4% at ISL 128 -- invisible, which is why it survived -- but 3.3% at 1024
         # and 21.3% at 8192, where it decides whether the stage reads compute- or memory-bound.
         _attn = (4.0 * _L * float(toks) * float(toks) * _H) if (_L and _H) else 0.0
-        flops = ((2.0 * float(params) * float(toks) + _attn) / tp) if params else 0.0
+        flops = ((2.0 * float(_params) * float(toks) + _attn) / tp) if _params else 0.0
         comp_ms = ((flops / peak_flops) * 1000.0) if (flops and peak_flops > 0) else None
         _b = _bytes_for(name, toks)
         if not _b:
@@ -1407,7 +1441,21 @@ def _roofline_tables(
     _recurring_st = next(
         (st for st, rf in reversed(list(_roofs.items())) if int((rf or {}).get("tokens") or 0) == 1), None
     )
-    if _recurring_st and theo:
+    # ONE CEILING, AND IT IS THE BETTER-INFORMED ONE. This replaced the recurring stage's own roof
+    # with the model-level ceiling, to stop two almost-identical numbers appearing in one report --
+    # right about the risk, wrong about which to keep. The model-level figure divides by the WHOLE
+    # resident model, including towers the recurring stage never reads; the stage roof divides by
+    # that stage's own subtree and adds the KV it carries. On voxtral: 3.36 ms against 3.15 ms, the
+    # difference being an audio encoder a decoded token does not touch.
+    #
+    # So the overwrite happens only when the stage has no roof of its own to keep -- a model whose
+    # towers cannot be established still gets the whole-model ceiling, exactly as before.
+    #
+    # NOT YET RECONCILED WITH THE STOP GATE, which computes from the same whole-model anchor
+    # (perf_mcp.py, compute_target(mf, ...)). The gate is therefore ~7% more generous than this row
+    # for a two-tower model. That is a real disagreement and it is the next thing to fix; printing
+    # the wrong number here to match it would only hide it.
+    if _recurring_st and theo and not (_roofs.get(_recurring_st) or {}).get("memory_ms"):
         _roofs[_recurring_st]["memory_ms"] = 1000.0 / float(theo)
     _fid, _cc = _fidelity_breakdown(profile)
     _cc_floor = float(_cc) if (_cc and _cc > 0) else None
