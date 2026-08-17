@@ -435,13 +435,17 @@ then `prefill(prompt[0:n+1])` gives token `n+1`. Three consequences worth unders
 
 - **Per-token cost is one full prefill of the padded *window*, not of the real tokens.** Measured at
   window 512 over a 17-token reply: **~1.05 s/token, TTFT 979 ms.**
-- **How the window scales is OPEN — do not trust a short reply to answer it.** An earlier attempt
-  here reported "512 → 2.80 s/token, 1024 → 2.93, so the window barely matters". That was wrong:
-  both numbers averaged **2 tokens**, and the first token of a process pays program compilation, so
-  each average carried seconds of warm-up. Against the ~1.05 s/token measured over 17 tokens at 512
-  and the ~3.0 s warm `tt_forward` at 1k, the window looks like it matters *a lot* — but that
-  comparison mixes sources and is not a measurement either. To settle it, generate 30+ tokens at each
-  window and read the **per-token** log lines, ignoring the first few.
+- **Do not measure this with wall clock. Process-to-process variance is ~25% at a fixed
+  configuration** — window 512 / `actual_isl` 64 / pad tail gave min 1401 ms in one process and
+  1760 ms in another. That band is wider than every effect worth chasing, and four separate
+  hypotheses died inside it after each looking real: cost scaling with the window, cost scaling with
+  `actual_isl`, a ~288 ms first-touch `build_padding_config` penalty (it reproduced with the
+  *opposite* sign), and a large win from suppressing the ~1539 DEBUG log lines emitted per forward.
+  **None of those is established, in either direction.** Use
+  `demo/profile_prefill.py::test_ops` under tracy, which reads `DEVICE KERNEL DURATION` from
+  hardware counters and is immune to host noise; `tests/analyze_ops_perf.py` summarizes the CSV.
+  Wall clock is only useful as `test_walltime` min compared against that device total, to get the
+  host share.
 - **The minimum window is 512, not 256.** Window 256 fails at the MoE, not at attention:
   `TT_FATAL: Token count (32) must be divisible by the 64-core grid used by masked_bincount`. At
   sp=8 a 256 window gives 32 tokens/chip, and `masked_bincount` needs a multiple of **64**. So the
