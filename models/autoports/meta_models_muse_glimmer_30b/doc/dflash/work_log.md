@@ -722,6 +722,33 @@ The vocab padding is handled by *detection* rather than masking, which is worth 
 whatever the outcome: only the last shard is padded (49984 real of 50688), and a padded
 winner is identifiable from its index alone, needing no assumption about padded values.
 
+### F21 — Final validation: the model is intact at the advertised context
+
+Full batch-1 latency sweep on the final code, OSL 512, up to **ISL 130,560 + 512 =
+131,072 exactly** -- the advertised context, saturated:
+
+| ISL | TTFT ms | TPOT ms | E2EL ms | t/s/u |
+|---|---|---|---|---|
+| 128 | 65.3 | 23.59 | 12,118.7 | 42.39 |
+| 1,024 | 182.7 | 24.90 | 12,907.6 | 40.16 |
+| 4,096 | 492.4 | 26.56 | 14,066.2 | 37.65 |
+| 8,192 | 945.5 | 27.81 | 15,155.2 | 35.96 |
+| 16,384 | 2,094.7 | 30.31 | 17,582.1 | 32.99 |
+| 32,768 | 4,511.3 | 35.20 | 22,500.1 | 28.41 |
+| 65,536 | 10,274.9 | 45.13 | 33,336.1 | 22.16 |
+| **130,560** | 25,540.9 | 64.83 | 58,671.4 | 15.42 |
+
+Every point matches the pre-DFlash reference to within run-to-run noise, and E2EL at full
+context matches to 0.2 % (58,671 against 58,460).  The one visible difference is the
+TTFT/TPOT *split* at 130,560 -- 25.5 s / 64.8 ms here against 32.1 s / 51.5 ms on the
+reference -- while their sum is the same; TTFT + 512 x TPOT reconstructs E2EL on both
+sides, so this is where the harness draws the first-token boundary, not a performance
+change.  Re-running the point alone reproduced it (25.5 s / 64.3 ms), so it is stable
+rather than noise, and worth knowing before anyone quotes TTFT at full context.
+
+Non-speculative decode is also unchanged against the pristine pre-DFlash commit: 42.92
+against 42.96 t/s/u, -0.10 %, with identical output tokens (F17).
+
 ## Artifacts
 
 | file | what |
