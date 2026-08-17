@@ -31,7 +31,7 @@ from ....pipelines.minimax_h3.packing import (
 from ....utils.tensor import bf16_tensor_2dshard, from_torch
 from ....utils.test import skip_if_unsupported_num_links
 from .common import (
-    GALAXY_4X8_RING,
+    GALAXY_RING,
     REAL_BLOCK_CONFIG,
     ROPE_FREQ_DIM,
     ROPE_THETA,
@@ -74,7 +74,7 @@ def _packed_sizes(duration_s: float) -> dict:
     }
 
 
-@GALAXY_4X8_RING
+@GALAXY_RING
 @pytest.mark.parametrize(
     "duration_s",
     [

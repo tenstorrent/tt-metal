@@ -29,6 +29,7 @@ on:
           - flux.1-schnell
           - flux.1-dev
           - ltx-2.3
+          - z-image-turbo
           - resnet50
       sku:
         description: "Select SKU to test (not all models are configured for all SKUs. If a combination is non-existent no test will be run)"

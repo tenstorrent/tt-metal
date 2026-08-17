@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include "../../../../../../tt_llk/tt_llk_blackhole/llk_lib/llk_unpack_A_rmsnorm.h"
+#include "experimental/llk_unpack_A_rmsnorm.h"
 #include "llk_unpack_common_api.h"
 
 /*************************************************************************

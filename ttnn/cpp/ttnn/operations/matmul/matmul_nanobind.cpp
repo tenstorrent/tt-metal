@@ -1071,7 +1071,7 @@ void py_module(nb::module_& mod) {
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): the compute kernel configuration for the matmul operation. Defaults to `None`.
             core_grid (ttnn.CoreGrid, optional): the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to `None`.
             output_tile (List of [int], optional): Specifies the output tile configuration. Defaults to `None`.
-            optional_output_tensor (ttnn.Tensor, optional): User provided on-device output tensor where the result of matmul is to be written. Defaults to `None`.
+            optional_output_tensor (ttnn.Tensor, optional): User provided on-device output tensor where the result of matmul is to be written. Defaults to `None`. Its shape must match the expanded output shape from the table below (skipped positions are zero-filled), or, when `nnz` is provided, may instead be the compact shape `[1, nnz, M, N]`: the results of the `nnz` active batch pairs are then packed contiguously in sparsity scan order, with skipped positions omitted rather than zero-filled. When the compact shape coincides with the expanded shape (e.g. `nnz == E` in the both-sparse mode), the output is treated as compact; under the exact-nnz contract no batch is skipped there, so the two layouts are identical. The tensor's tile must equal the output tile derived from the inputs, `[in0 tile height, in1 tile width]`.
 
         Returns:
             ttnn.Tensor: the output tensor with sparse results.
