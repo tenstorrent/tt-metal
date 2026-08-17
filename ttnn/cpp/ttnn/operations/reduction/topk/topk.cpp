@@ -242,7 +242,11 @@ std::vector<Tensor> post_topk_transform_tensor(
 // W=5000, 1.38 ms at 10000, 6.87 ms at 50000, 9.49 ms at 65536) while the
 // routed composite is tens of microseconds. The small-k arm below therefore
 // routes exactly the structurally-ineligible cells; eligible pow2 cells keep
-// the bitonic path unchanged.
+// the bitonic path unchanged. A second, disjoint measured region — the
+// MoE-gate arm (see gate_route_* constants below) — additionally claims the
+// decode-class expert-gate shapes (k <= 16, padded width 128..512, <= 32
+// rows), which are below the bitonic's 8192 width floor and therefore also
+// single-core-bound in stock form.
 constexpr uint32_t large_k_route_min_k_exclusive = 64;
 // Small-k arm floor (on the tile-padded width): below this the single-core
 // fallback is already sub-ms and the routed composite's fixed envelope is
@@ -260,6 +264,24 @@ constexpr uint32_t large_k_route_k_multiple = 32;
 // 2^19 keeps a margin without excluding realistic vocab/logit widths. Wider
 // rows fall back to the stock path.
 constexpr uint32_t large_k_route_max_width = 1u << 19;
+// MoE-gate arm (second measured region of the small-k arm): decode-class MoE
+// expert gates select k <= 16 experts out of a few hundred, on <= 1 tile row
+// of tokens. Measured cells (p150a, bare-op ceilings vs stock single-core):
+//   gpt-oss gate  32x128  k=4  -> 4.07 us op vs 24.2 us stock (5.9-6.3x)
+//   qwen3.5 gate  32x512  k=10 -> 4.04 us op vs 77.5 us stock (19.2-20.2x)
+// Every padded width in [128, 512] is below the multi-core bitonic's
+// multi_core_min_width = 8192 (topk_constants.hpp), so this arm can only ever
+// replace the linear single-core factory, never the bitonic. The bounds are a
+// measured-contiguous-region gate (both endpoints measured, everything
+// between is the same shape class), NOT a hardware limit: k <= 16 keeps
+// k_rounded at exactly one LLK window (16), and the <= 32-row cap pins the
+// decode-token class the measurement covered. Unmeasured neighbours (k in
+// (16, 64], widths in (512, 4096), > 32 rows e.g. MoE prefill) keep today's
+// engine; widen only with new measurements.
+constexpr uint32_t gate_route_max_k = 16;
+constexpr uint32_t gate_route_min_padded_width = 128;
+constexpr uint32_t gate_route_max_padded_width = 512;
+constexpr uint32_t gate_route_max_flattened_rows = 32;
 
 bool should_route_to_topk_large_indices(
     const Tensor& transformed_tensor,
@@ -292,16 +314,28 @@ bool should_route_to_topk_large_indices(
         return false;
     }
     if (k <= large_k_route_min_k_exclusive) {
-        // Small-k arm: route only cells the device op's multi-core bitonic
+        const uint32_t padded_width = transformed_tensor.padded_shape()[-1];
+        // Wide arm: route only cells the device op's multi-core bitonic
         // cannot take (mirrors select_program_factory requirements #1-#2,
         // topk_device_operation.cpp:66-72 — padded width must be < 65535 and
         // a power of two), where stock otherwise falls to the linear
         // single-core factory. Cells that fail only verify_multi_core_cost
         // stay on the stock path (unchanged, conservative).
-        const uint32_t padded_width = transformed_tensor.padded_shape()[-1];
         const bool is_pow2 = padded_width != 0 && (padded_width & (padded_width - 1)) == 0;
         const bool multicore_structurally_ineligible = padded_width >= std::numeric_limits<uint16_t>::max() || !is_pow2;
-        if (!multicore_structurally_ineligible || padded_width < small_k_route_min_padded_width) {
+        const bool wide_arm = multicore_structurally_ineligible && padded_width >= small_k_route_min_padded_width;
+        // MoE-gate arm: k <= 16 (one LLK window), padded width in [128, 512],
+        // <= 32 flattened rows — the measured decode-gate region (see the
+        // gate_route_* constants above). Everything here is below the
+        // bitonic's 8192 width floor, so only the single-core factory is ever
+        // displaced. transformed_tensor is 4D with the target dim last, so
+        // logical_volume / width is exactly the flattened row count (zero
+        // volume already returned earlier in ttnn::topk).
+        const uint64_t flattened_rows = transformed_tensor.logical_volume() / transformed_tensor.logical_shape()[-1];
+        const bool gate_arm = k <= gate_route_max_k && padded_width >= gate_route_min_padded_width &&
+                              padded_width <= gate_route_max_padded_width &&
+                              flattened_rows <= gate_route_max_flattened_rows;
+        if (!wide_arm && !gate_arm) {
             return false;
         }
     }
@@ -559,10 +593,11 @@ std::vector<Tensor> topk(
     Tensor transformed_tensor = ::reduction_common::transform_to_4d_tensor(transposed_tensor, is_rank_le_4d);
 
     // Blackhole routing onto ttnn::experimental::topk_large_indices covers
-    // two regions that otherwise land on the linear single-core factory:
-    // k in (64, 2048] (off the multi-core k <= 64 gate), and k <= 64 rows
-    // whose padded width is structurally ineligible for the multi-core
-    // bitonic (>= 65535 or non-pow2). See the comment block on
+    // three regions that otherwise land on the linear single-core factory:
+    // k in (64, 2048] (off the multi-core k <= 64 gate); k <= 64 rows whose
+    // padded width is structurally ineligible for the multi-core bitonic
+    // (>= 65535 or non-pow2); and the MoE-gate region (k <= 16, padded width
+    // in [128, 512], <= 32 rows). See the comment block on
     // should_route_to_topk_large_indices for the full predicate and contract.
     if (operations::reduction::topk::CMAKE_UNIQUE_NAMESPACE::should_route_to_topk_large_indices(
             transformed_tensor,

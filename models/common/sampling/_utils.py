@@ -44,7 +44,7 @@ def upper_power_of_2(n: int) -> int:
 # ttnn.topk large-k routing predicate (call-site mirror).
 #
 # Mirror of should_route_to_topk_large_indices
-# (ttnn/cpp/ttnn/operations/reduction/topk/topk.cpp:258-320) as evaluated for a
+# (ttnn/cpp/ttnn/operations/reduction/topk/topk.cpp) as evaluated for a
 # call site that passes NO indices_tensor, NO preallocated outputs, NO
 # sub_core_grids and stable=False, on a 4D tensor reduced over its LAST dim
 # with largest=True (every production sampling call satisfies the shape/dim/
@@ -59,12 +59,21 @@ def upper_power_of_2(n: int) -> int:
 #    positions itself (dtype handled by the caller's typecast restore), and
 #    greedy determinism is owned by _adjust_values_for_tiebreak downstream.
 # ---------------------------------------------------------------------------
-_TOPK_ROUTE_MIN_K_EXCLUSIVE = 64  # topk.cpp:242
-_TOPK_ROUTE_SMALL_K_MIN_PADDED_WIDTH = 4096  # topk.cpp:247
-_TOPK_ROUTE_MAX_K = 2048  # topk.cpp:249
-_TOPK_ROUTE_K_MULTIPLE = 16  # topk.cpp:251
-_TOPK_ROUTE_MAX_WIDTH = 1 << 19  # topk.cpp:256
+_TOPK_ROUTE_MIN_K_EXCLUSIVE = 64  # large_k_route_min_k_exclusive
+_TOPK_ROUTE_SMALL_K_MIN_PADDED_WIDTH = 4096  # small_k_route_min_padded_width
+_TOPK_ROUTE_MAX_K = 2048  # large_k_route_max_k
+_TOPK_ROUTE_K_MULTIPLE = 16  # large_k_route_k_multiple
+_TOPK_ROUTE_MAX_WIDTH = 1 << 19  # large_k_route_max_width
 _TOPK_ROUTE_UINT16_MAX = 65535  # std::numeric_limits<uint16_t>::max()
+# MoE-gate arm (gate_route_* constants in topk.cpp). UNREACHABLE from every
+# production sampling call site — sampling widths are per-device vocab shards
+# (>= 32768 after pow2 padding), far above the 512-wide gate ceiling — kept
+# here only to honor KEEP IN SYNC. Drift on this arm stays fail-safe exactly
+# as described above.
+_TOPK_ROUTE_GATE_MAX_K = 16  # gate_route_max_k
+_TOPK_ROUTE_GATE_MIN_PADDED_W = 128  # gate_route_min_padded_width
+_TOPK_ROUTE_GATE_MAX_PADDED_W = 512  # gate_route_max_padded_width
+_TOPK_ROUTE_GATE_MAX_ROWS = 32  # gate_route_max_flattened_rows
 
 
 def topk_would_route_to_large_indices(x, k, mesh_device) -> bool:
@@ -84,11 +93,20 @@ def topk_would_route_to_large_indices(x, k, mesh_device) -> bool:
     if x.memory_config().is_sharded():  # topk.cpp:308
         return False
     padded_width = x.padded_shape[-1]
-    if k <= _TOPK_ROUTE_MIN_K_EXCLUSIVE:  # small-k arm, topk.cpp:288-301
+    if k <= _TOPK_ROUTE_MIN_K_EXCLUSIVE:  # small-k arm (wide + MoE-gate)
         pow2 = padded_width > 0 and (padded_width & (padded_width - 1)) == 0
         structurally_ineligible = padded_width >= _TOPK_ROUTE_UINT16_MAX or not pow2
-        if not structurally_ineligible or padded_width < _TOPK_ROUTE_SMALL_K_MIN_PADDED_WIDTH:
+        wide_arm = structurally_ineligible and padded_width >= _TOPK_ROUTE_SMALL_K_MIN_PADDED_WIDTH
+        rows = 1
+        for d in tuple(x.shape)[:-1]:
+            rows *= d
+        gate_arm = (
+            k <= _TOPK_ROUTE_GATE_MAX_K
+            and _TOPK_ROUTE_GATE_MIN_PADDED_W <= padded_width <= _TOPK_ROUTE_GATE_MAX_PADDED_W
+            and rows <= _TOPK_ROUTE_GATE_MAX_ROWS
+        )
+        if not (wide_arm or gate_arm):
             return False
     width = x.shape[-1]
     k_rounded = ((k + _TOPK_ROUTE_K_MULTIPLE - 1) // _TOPK_ROUTE_K_MULTIPLE) * _TOPK_ROUTE_K_MULTIPLE
-    return k_rounded <= width <= _TOPK_ROUTE_MAX_WIDTH  # topk.cpp:314-319
+    return k_rounded <= width <= _TOPK_ROUTE_MAX_WIDTH  # width envelope + k_rounded fit

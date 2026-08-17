@@ -17,7 +17,10 @@ covering the input classes no existing test exercises:
                0xFFFFFFFF sentinel (I8)
   determinism  same input x3 launches, bit-identical outputs (I13)
   gates        routing-gate boundary flips (k=64/65, k=2048/2049, pow2,
-               width 65504/65534/65536, W=63/64, k=W, sorted no-op, stable)
+               width 65504/65534/65536, W=63/64, k=W, sorted no-op, stable,
+               and the MoE-gate arm: k 16/17, padded W 96/128/512/544,
+               rows 32/64, largest flip — measured cells 32x128 k=4 and
+               32x512 k=10 pinned routed)
 
 BF16 DATAPATH CANONICALIZATION (measured on silicon 2026-08-16, p150a):
   the bf16 compute datapath (unpack -> Dst -> SFPU -> pack) canonicalizes
@@ -324,6 +327,7 @@ def predict_engine(
     sharded=False,
     tile_layout=True,
     blackhole=True,
+    rows=32,
     grid_x=13,
     grid_y=10,
     l1_size=1572864,
@@ -336,18 +340,23 @@ def predict_engine(
     Returns 'routed' | 'multi_core' | 'single_core'.
     """
     # ---- Level 1: Blackhole route (topk.cpp should_route_to_topk_large_indices) ----
-    k_rounded16 = _roundup(k, 16)  # large_k_route_k_multiple, topk.cpp:240,:290
-    # Small-k arm (k <= 64): routes only cells structurally ineligible for the
-    # multi-core bitonic — route-time padded width (tile roundup of the
-    # logical width, BEFORE the host min-64 pad) >= 65535 or non-pow2 — with a
-    # measured floor (small_k_route_min_padded_width = 4096). Eligible pow2
-    # cells and cells failing only verify_multi_core_cost keep the stock path.
+    k_rounded16 = _roundup(k, 16)  # large_k_route_k_multiple
+    # Small-k WIDE arm (k <= 64): routes only cells structurally ineligible
+    # for the multi-core bitonic — route-time padded width (tile roundup of
+    # the logical width, BEFORE the host min-64 pad) >= 65535 or non-pow2 —
+    # with a measured floor (small_k_route_min_padded_width = 4096). Eligible
+    # pow2 cells and cells failing only verify_multi_core_cost keep stock.
     route_padded_w = _roundup(w, 32)
-    small_k_arm = (
-        k <= 64
-        and (route_padded_w >= UINT16_MAX or not _is_pow2(route_padded_w))
-        and route_padded_w >= 4096  # small_k_route_min_padded_width
-    )
+    wide_arm = (
+        route_padded_w >= UINT16_MAX or not _is_pow2(route_padded_w)
+    ) and route_padded_w >= 4096  # small_k_route_min_padded_width
+    # Small-k MoE-GATE arm (topk.cpp gate_route_* constants): k <= 16 (one LLK
+    # window), padded width in [128, 512], <= 32 flattened rows — the measured
+    # decode-gate region (gpt-oss 32x128 k=4, qwen3.5 32x512 k=10). Entirely
+    # below the bitonic's 8192 width floor, so it only ever displaces the
+    # single-core factory.
+    gate_arm = k <= 16 and 128 <= route_padded_w <= 512 and rows <= 32
+    small_k_arm = k <= 64 and (wide_arm or gate_arm)
     if (
         largest  # topk.cpp:257-259
         and not stable  # topk.cpp:262-264
@@ -463,7 +472,12 @@ def verify_topk_cell(
     dtype_str = "fp32" if is_fp32 else "bf16"
     tt_dtype = ttnn.float32 if is_fp32 else ttnn.bfloat16
 
-    engine = predict_engine_for_device(device, W, k, dtype=dtype_str, largest=largest, stable=stable, dim_last=dim_last)
+    # Flattened row count of the (transposed, 4D) tensor the C++ gate sees —
+    # feeds the MoE-gate arm's <= 32-row cap (gate_route_max_flattened_rows).
+    n_rows = torch_input.numel() // W
+    engine = predict_engine_for_device(
+        device, W, k, dtype=dtype_str, largest=largest, stable=stable, dim_last=dim_last, rows=n_rows
+    )
     cell = dict(
         cell_id=cell_id,
         shape=list(torch_input.shape),
@@ -1065,6 +1079,21 @@ GATE_CELLS = [
     ("k1-multi", 8192, 1, True, "multi_core"),
     ("k31-multi", 8192, 31, True, "multi_core"),
     ("k97-routed-round112", 8192, 97, True, "routed"),
+    # MoE-gate arm (k <= 16, padded W in [128, 512], <= 32 rows; the
+    # gate_route_* constants in topk.cpp). Both measured production cells plus
+    # both sides of every boundary the arm introduces; every width here is
+    # below the bitonic's 8192 floor, so the non-routed side is always the
+    # single-core factory. Each cell also runs the full T1/T2 battery, so
+    # engine selection AND bit-exact outputs are pinned together.
+    ("gate-gptoss-w128-k4", 128, 4, True, "routed"),  # gpt-oss gate (models/demos/gpt_oss/tt/topk.py:26)
+    ("gate-qwen35-w512-k10", 512, 10, True, "routed"),  # qwen3.5 gate fallback (tt_moe_gate.py:639)
+    ("gate-dsv3class-w256-k8", 256, 8, True, "routed"),  # deepseek-v3 topk_experts shape class
+    ("gate-k16-boundary", 512, 16, True, "routed"),  # gate_route_max_k, inclusive
+    ("gate-k17-over", 512, 17, True, "single_core"),  # one past the k ceiling
+    ("gate-w127-pad128", 127, 4, True, "routed"),  # width floor reached via tile padding
+    ("gate-w96-under-floor", 96, 4, True, "single_core"),  # padded 96 < 128
+    ("gate-w544-over-ceiling", 544, 4, True, "single_core"),  # padded 544 > 512
+    ("gate-w128-k4-smallest", 128, 4, False, "single_core"),  # largest gate still applies
 ] + (
     [
         # FULL: routed width ceiling 2^19 inclusive (topk.cpp:245,:289-294)
@@ -1091,6 +1120,17 @@ def test_contract_gates(cell_id, W, k, largest, exp_engine, device):
             f"gates-{cell_id}: predicted {res['engine']}, matrix expects {exp_engine} "
             f"(routing gates: topk.cpp:247-295, topk_device_operation.cpp:59-115)"
         )
+
+
+def test_contract_gates_gate_arm_rows_cap(device):
+    """The MoE-gate arm is capped at 32 flattened rows
+    (gate_route_max_flattened_rows, topk.cpp): a 64-row call at an otherwise
+    in-region gate shape (W=128, k=4) keeps today's single-core engine — e.g.
+    MoE prefill token counts never change engine under this arm."""
+    x = gaussian_input(128, rows=64, seed=115)
+    res = verify_topk_cell(device, x, 4, largest=True, cell_id="gates-gate-rows64-cap")
+    if is_blackhole():
+        assert res["engine"] == "single_core", "gate arm must not fire above 32 flattened rows"
 
 
 SORTED_NOOP_CELLS = [("single_core", 2000, 32), ("multi_core", 8192, 32), ("routed", 8192, 96)]

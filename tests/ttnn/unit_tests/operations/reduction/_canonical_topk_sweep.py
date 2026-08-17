@@ -451,32 +451,34 @@ MODEL_SCENARIOS = [
     },
     {
         "name": "gate_gptoss_k4",
-        "model": "gpt-oss MoE expert gate, top-4 of 128 experts [NO-CHANGE CONTROL]",
+        "model": "gpt-oss MoE expert gate, top-4 of 128 experts",
         "callsite": "models/demos/gpt_oss/tt/topk.py:26",
         "rows": 32,
         "n": 128,
         "k": 4,
         "dtype": "bf16",
-        "engines": ["stocknow"],
-        "today_engine": "stocknow",
+        "engines": ["routed", "stocknow"],
+        "today_engine": "routed",
         "calls_note": "per MoE layer per forward (36 layers)",
-        "notes": "no-change control: k=4 violates the op's k>=16/k%16 gate and N=128 is below "
-        "every routing threshold -- routing provably cannot fire; expected tiny and unchanged. "
+        "notes": "MoE-gate route arm (topk.cpp gate_route_*: k<=16, padded W 128..512, <=32 "
+        "rows) fires here: k=4 rounds to the op's 16 floor and the shared slice trims back. "
+        "I3 landing A/B (2026-08-17): routed 8.20 us vs stock single-core 24.22 us (2.95x). "
         "(decode B=32 actually uses the fused topk_router_gpt kernel)",
     },
     {
         "name": "gate_qwen35_k10",
-        "model": "Qwen3.5 MoE gate fallback, top-10 of 512 experts [NO-CHANGE CONTROL]",
+        "model": "Qwen3.5 MoE gate fallback, top-10 of 512 experts",
         "callsite": "models/common/modules/moe/tt_moe_gate.py:639 (fallback fires for k not in {4,6,8} or N>512)",
         "rows": 32,
         "n": 512,
         "k": 10,
         "dtype": "bf16",
-        "engines": ["stocknow"],
-        "today_engine": "stocknow",
+        "engines": ["routed", "stocknow"],
+        "today_engine": "routed",
         "calls_note": "per MoE layer per forward",
-        "notes": "no-change control: k=10 violates the op gate, N=512 below every routing "
-        "threshold; expected tiny and unchanged",
+        "notes": "MoE-gate route arm (topk.cpp gate_route_*: k<=16, padded W 128..512, <=32 "
+        "rows) fires here: k=10 rounds to the op's 16 floor and the shared slice trims back. "
+        "I3 landing A/B (2026-08-17): routed 8.29 us vs stock single-core 77.49 us (9.34x)",
     },
 ]
 
