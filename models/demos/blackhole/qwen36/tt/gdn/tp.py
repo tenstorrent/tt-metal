@@ -234,8 +234,16 @@ class TPGatedDeltaNet:
         self.Nk = args.gdn_nk_tp
         self.Nv = args.gdn_nv_tp
         # Zero-column gap between a and b in the fused/ab weight so b starts on a tile boundary —
-        # see gdn_ab_gap in model_config.py and _project_qkvzab's a/b slice below.
+        # see gdn_ab_gap in model_config.py and _project_qkvzab's a/b slice below. 0 on every config
+        # except Wormhole 9B (model_config scopes it), which restores the pre-gap slice dance below.
         self._ab_gap = getattr(args, "gdn_ab_gap", 0)
+        # Wormhole 9B ONLY: the TILE-preserving decode rework (concat GQA expand instead of
+        # repeat_interleave, matmul-native recurrence output, L1-resident rec_state, beta/g left at
+        # their natural rank). MEASURED and validated on N300 + Qwen3.5-9B only, so Blackhole keeps
+        # its tuned path byte-for-byte and the 27B (dim 5120) keeps the geometry it was validated
+        # with. Same dim-based gate as _qkv_l1_tuned_for_this_model in forward_prefill (HF_MODEL is
+        # often a hashed snapshot dir, so name-based checks are unreliable).
+        self._decode_tile_opt = (not tpc.is_blackhole()) and args.dim <= 4096
         self.Dk = args.gdn_dk
         self.Dv = args.gdn_dv
         self.qkv_dim_tp = args.gdn_qkv_dim_tp
@@ -377,8 +385,11 @@ class TPGatedDeltaNet:
         """Eager-decode only: hoist rec_state into L1 so the recurrent kernel's DRAM->L1 copy
         (to_memory_config) and the post-step L1->DRAM spill are both skipped. Not used under
         _stable_state — those traces bake the DRAM address allocated in reset_state. Also skipped
-        when the batch does not fit L1 (the existing _decode_batch_split path)."""
-        if self.rec_state is None or self._stable_state:
+        when the batch does not fit L1 (the existing _decode_batch_split path), and on any config
+        outside the Wormhole-9B scope this rework was measured on (_decode_tile_opt) -- Blackhole in
+        particular never splits, so without that gate it would newly park a multi-MB fp32 state in
+        L1 for the whole decode."""
+        if not self._decode_tile_opt or self.rec_state is None or self._stable_state:
             return
         if self.rec_state.memory_config().buffer_type == ttnn.BufferType.L1:
             return
@@ -974,10 +985,21 @@ class TPGatedDeltaNet:
             # to stay tile-native (a non-tile-aligned END is free); az (a's start within qkvzab) is
             # itself already tile-aligned, so a and b can be sliced directly from qkvzab with no
             # intermediate "grab the enclosing tile-aligned ab block first" step and no untilize.
-            b_start = Nv + self._ab_gap
-            a = ttnn.slice(qkvzab, (0, 0, az), (1, S, az + Nv), memory_config=out_mc)
-            b = ttnn.slice(qkvzab, (0, 0, az + b_start), (1, S, az + b_start + Nv), memory_config=out_mc)
-            ttnn.deallocate(qkvzab)
+            if self._ab_gap:
+                b_start = Nv + self._ab_gap
+                a = ttnn.slice(qkvzab, (0, 0, az), (1, S, az + Nv), memory_config=out_mc)
+                b = ttnn.slice(qkvzab, (0, 0, az + b_start), (1, S, az + b_start + Nv), memory_config=out_mc)
+                ttnn.deallocate(qkvzab)
+            else:
+                # No gap (Blackhole / 27B): b's start is NOT tile-aligned, so slicing it straight
+                # from the wide qkvzab would untilize the whole tensor. Grab the enclosing
+                # tile-aligned block once (no untilize), then split a/b from it (test_gdn_slice_opt).
+                _ab_end = min(az + -(-2 * Nv // tpc.TILE_SIZE) * tpc.TILE_SIZE, qkvzab.shape[-1])
+                ab = ttnn.slice(qkvzab, (0, 0, az), (1, S, _ab_end), memory_config=out_mc)
+                ttnn.deallocate(qkvzab)
+                a = ttnn.slice(ab, (0, 0, 0), (1, S, Nv), memory_config=out_mc)
+                b = ttnn.slice(ab, (0, 0, Nv), (1, S, 2 * Nv), memory_config=out_mc)
+                ttnn.deallocate(ab)
             return qkv, z, a, b
         qkvz = self._col_proj(x, self.tw["qkvz"], self.args.gdn_qkvz_progcfg)
         qkv = ttnn.slice(qkvz, (0, 0, 0), (1, S, qz))
@@ -1762,25 +1784,41 @@ class TPGatedDeltaNet:
         kd = self.key_dim_tp
         q = ttnn.reshape(ttnn.slice(conv, (0, 0, 0), (1, B, kd)), (B, Nk, Dk))
         k = ttnn.reshape(ttnn.slice(conv, (0, 0, kd), (1, B, 2 * kd)), (B, Nk, Dk))
-        # v has no GQA expand — slice straight into the recurrent kernel's 4D shape.
-        v = ttnn.reshape(ttnn.slice(conv, (0, 0, 2 * kd), (1, B, self.qkv_dim_tp)), (B, 1, Nv, Dv), memory_config=_L1)
-        ttnn.deallocate(conv)
-
-        # GQA expand Q/K Nk→Nv in TILE (concat on tile-aligned Dk, not repeat_interleave's
-        # untilize-forcing path — see _gqa_expand_heads). Recurrence L2-norms + scales internally.
         rf = Nv // Nk
-        q = _gqa_expand_heads(q, rf, B, Nv, Dk, _L1)
-        k = _gqa_expand_heads(k, rf, B, Nv, Dk, _L1)
-
-        # Left at (1, B, Nv) -- their natural post-activation shape -- rather than reshaped to
-        # (B, 1, Nv) here: recurrent_gated_delta_rule_decode_wh immediately reshapes beta/g again to
-        # [B, H] itself (B/H there come from q's shape, not beta/g's rank), so a (1,B,Nv)->(B,H)
-        # reshape is exactly as cheap as a (B,1,Nv)->(B,H) one — dims of size 1 don't affect
-        # flattened data order either way. The batch-split branch below reshapes to (B,1,Nv) itself
-        # where it actually needs B as a leading (non-tiled, slice-friendly) dim.
-        beta = ttnn.sigmoid(b, memory_config=_L1)
+        if self._decode_tile_opt:
+            # WH 9B: v has no GQA expand — slice straight into the recurrent kernel's 4D shape, and
+            # expand Q/K in TILE (concat on tile-aligned Dk, not repeat_interleave's untilize-forcing
+            # path — see _gqa_expand_heads). Recurrence L2-norms + scales internally.
+            v = ttnn.reshape(
+                ttnn.slice(conv, (0, 0, 2 * kd), (1, B, self.qkv_dim_tp)), (B, 1, Nv, Dv), memory_config=_L1
+            )
+            ttnn.deallocate(conv)
+            q = _gqa_expand_heads(q, rf, B, Nv, Dk, _L1)
+            k = _gqa_expand_heads(k, rf, B, Nv, Dk, _L1)
+            # Left at (1, B, Nv) -- their natural post-activation shape -- rather than reshaped to
+            # (B, 1, Nv): the kernel reshapes beta/g to [B, H] itself (B/H come from q's shape, not
+            # beta/g's rank), so (1,B,Nv)->(B,H) is exactly as cheap and one reshape cheaper here.
+            # The batch-split branch below reshapes to (B,1,Nv) where it needs B leading to slice.
+            beta = ttnn.sigmoid(b, memory_config=_L1)
+            g = ttnn.multiply(tw["neg_exp_A"], _softplus_add(a, tw["dt_bias"]), memory_config=_L1)
+        else:
+            # Blackhole / 27B: unchanged pre-rework path.
+            v = ttnn.reshape(ttnn.slice(conv, (0, 0, 2 * kd), (1, B, self.qkv_dim_tp)), (B, Nv, Dv))
+            ttnn.deallocate(conv)
+            # GQA expand Q/K Nk→Nv; recurrence L2-norms + scales internally
+            q = ttnn.repeat_interleave(q, rf, dim=1)
+            k = ttnn.repeat_interleave(k, rf, dim=1)
+            # Decode: hand q/k/v to the recurrent kernel in L1. The kernel typecasts + does a LOCAL
+            # l2-norm (no cross-device gather), so placement is output-neutral here (unlike SDPA-q,
+            # which hard-requires DRAM, and unlike the residual→DistributedNorm all-gather).
+            q = ttnn.reshape(q, (B, 1, Nv, Dk), memory_config=_L1)
+            k = ttnn.reshape(k, (B, 1, Nv, Dk), memory_config=_L1)
+            v = ttnn.reshape(v, (B, 1, Nv, Dv), memory_config=_L1)
+            beta = ttnn.reshape(ttnn.sigmoid(b, memory_config=_L1), (B, 1, Nv))
+            g = ttnn.reshape(
+                ttnn.multiply(tw["neg_exp_A"], _softplus_add(a, tw["dt_bias"]), memory_config=_L1), (B, 1, Nv)
+            )
         ttnn.deallocate(b)
-        g = ttnn.multiply(tw["neg_exp_A"], _softplus_add(a, tw["dt_bias"]), memory_config=_L1)
         ttnn.deallocate(a)
 
         # fp32 decode step on Blackhole (QWEN35_GDN_DECODE_BF16=1 reverts to bf16 there too).
@@ -1789,6 +1827,10 @@ class TPGatedDeltaNet:
         # Only the first B users' state participates when the batch is under the allocated max.
         init_state = self.rec_state if B == Bmax else self._slice_along(self.rec_state, 0, 0, B)
         _bstep = self._decode_batch_split(B)
+        # tile_opt only exists on the Wormhole-local kernel; the Blackhole dispatch target is the
+        # shared upstream function, which does not take it. _decode_tile_opt is False on BH anyway,
+        # so gate the kwarg itself rather than passing tile_opt=False into a signature without it.
+        _rec_kw = {"tile_opt": True} if self._decode_tile_opt else {}
         if _bstep >= B:
             o, new_rec = recurrent_gated_delta_rule_decode_ttnn(
                 q,
@@ -1800,6 +1842,7 @@ class TPGatedDeltaNet:
                 initial_state=init_state,
                 device=self.mesh,
                 high_precision=_hp,
+                **_rec_kw,
             )
         else:
             # Batch-split decode: the recurrence is per-user independent (each user owns its own
@@ -1808,8 +1851,12 @@ class TPGatedDeltaNet:
             # L1-resident and holds a second same-sized tensor alongside it; see _decode_batch_split.
             # beta/g need B as a leading (non-tiled) dim here to slice per-batch-chunk without
             # hitting tile-alignment costs -- reshape to (B,1,Nv) only in this (rare, large-B) path.
-            beta_bn1 = ttnn.reshape(beta, (B, 1, Nv), memory_config=_L1)
-            g_bn1 = ttnn.reshape(g, (B, 1, Nv), memory_config=_L1)
+            # Off the tile-opt path they already arrive as (B,1,Nv), so reuse them as-is.
+            if self._decode_tile_opt:
+                beta_bn1 = ttnn.reshape(beta, (B, 1, Nv), memory_config=_L1)
+                g_bn1 = ttnn.reshape(g, (B, 1, Nv), memory_config=_L1)
+            else:
+                beta_bn1, g_bn1 = beta, g
             o_parts, rec_parts = [], []
             for s in range(0, B, _bstep):
                 e = min(s + _bstep, B)
@@ -1829,6 +1876,7 @@ class TPGatedDeltaNet:
                     initial_state=rec_s,
                     device=self.mesh,
                     high_precision=_hp,
+                    **_rec_kw,
                 )
                 for t in (q_s, k_s, v_s, beta_s, g_s, rec_s):
                     ttnn.deallocate(t)
@@ -1843,8 +1891,9 @@ class TPGatedDeltaNet:
             new_rec = ttnn.concat(rec_parts, dim=0)
             for t in o_parts + rec_parts:
                 ttnn.deallocate(t)
-            ttnn.deallocate(beta_bn1)
-            ttnn.deallocate(g_bn1)
+            if self._decode_tile_opt:
+                ttnn.deallocate(beta_bn1)
+                ttnn.deallocate(g_bn1)
         if init_state is not self.rec_state:
             ttnn.deallocate(init_state)
         if self._stable_state:
@@ -1855,24 +1904,35 @@ class TPGatedDeltaNet:
             else:
                 self._write_recurrent_state_prefix(new_rec, B)
         else:
-            # Eager path: keep the L1-resident state the kernel just produced. forward_prefill /
-            # forward_prefill_batched call _spill_rec_state_to_dram so the next conv1d does not
-            # inherit this L1 allocation (the clash documented on _gdn_conv1d). The previous
-            # always-spill-to-DRAM here paid an L1->DRAM copy every decode step for a buffer the very
-            # next decode step (_promote_rec_state_to_l1 above) immediately copied straight back.
+            # WH 9B eager path: keep the L1-resident state the kernel just produced. forward_prefill
+            # / forward_prefill_batched call _spill_rec_state_to_dram so the next conv1d does not
+            # inherit this L1 allocation (the clash documented on _gdn_conv1d). The always-spill
+            # below paid an L1->DRAM copy every decode step for a buffer the very next decode step
+            # (_promote_rec_state_to_l1) immediately copied straight back.
+            #
+            # Blackhole / 27B keep the original unconditional spill: the kernel hands the state back
+            # L1-RESIDENT (the batch-split branch above already relies on that and spills each slice
+            # for exactly this reason); the un-split branch used to just assign it, leaving
+            # Nv*Dk*Dv*4 = 1MB of L1 (16KB/bank) parked in self.rec_state for the whole lifetime of
+            # the next prefill call. That is the block that fragmented L1 and tipped the native
+            # conv1d over its ~2% L1 headroom — see _gdn_conv1d.
+            if not self._decode_tile_opt and new_rec.memory_config().buffer_type != ttnn.BufferType.DRAM:
+                _nr_l1 = new_rec
+                new_rec = ttnn.to_memory_config(new_rec, ttnn.DRAM_MEMORY_CONFIG)
+                ttnn.deallocate(_nr_l1)
             self.rec_state = new_rec
 
-        # WH kernel returns [B,H,1,V] (matmul-native, see recurrent_decode_wh.py) — rms_norm reduces
-        # the last dim (V==Dv) regardless of the singleton's position, so the [B,1,H,V]-crossing
-        # reshape is dead weight there. BH's upstream kernel still returns [B,1,H,V]; the reshape to
-        # [B,Nv,Dv] on that layout is a cheap view (the tiled pair stays (H,V) either way).
-        if tpc.is_blackhole():
+        # Under _decode_tile_opt the WH kernel returns [B,H,1,V] (matmul-native, see
+        # recurrent_decode_wh.py) -- rms_norm reduces the last dim (V==Dv) regardless of where the
+        # singleton sits, so the [B,1,H,V]-crossing reshape is dead weight. Every other config gets
+        # [B,1,H,V] as before, where the reshape to [B,Nv,Dv] is a cheap view (tiled pair stays H,V).
+        if self._decode_tile_opt:
+            out_n = ttnn.rms_norm(o, weight=tw["norm_w"], epsilon=1e-6, memory_config=_L1)  # gated norm (no +1)
+            ttnn.deallocate(o)
+        else:
             out_r = ttnn.reshape(o, (B, Nv, Dv))
             out_n = ttnn.rms_norm(out_r, weight=tw["norm_w"], epsilon=1e-6, memory_config=_L1)  # gated norm (no +1)
             ttnn.deallocate(out_r)
-        else:
-            out_n = ttnn.rms_norm(o, weight=tw["norm_w"], epsilon=1e-6, memory_config=_L1)  # gated norm (no +1)
-            ttnn.deallocate(o)
         out_f = ttnn.reshape(out_n, (1, B, self.value_dim_tp))
         ttnn.deallocate(out_n)
         gated = _silu_mul(out_f, z, _L1)
