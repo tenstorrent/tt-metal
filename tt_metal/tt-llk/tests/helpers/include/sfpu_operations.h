@@ -616,6 +616,12 @@ void call_unary_sfpu_operation_init()
     {
         llk_math_eltwise_unary_sfpu_init<OPERATION>(rsqrt_init<APPROX_MODE, false /* legacy_compat */>);
     }
+    else if constexpr (OPERATION == SfpuType::rsqrt_compat)
+    {
+        // The legacy-compat path is no longer self-contained: it runs sfpu_reciprocal_iter, whose
+        // polynomial coefficients rsqrt_init<..., true> programs into vConstFloatPrgm0..2.
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(rsqrt_init<APPROX_MODE, true /* legacy_compat */>);
+    }
     else if constexpr (OPERATION == SfpuType::sine)
     {
         llk_math_eltwise_unary_sfpu_init<OPERATION>(sine_init<APPROX_MODE>);
@@ -648,7 +654,7 @@ void call_unary_sfpu_operation_init()
         OPERATION == SfpuType::round || OPERATION == SfpuType::add1 || OPERATION == SfpuType::silu || OPERATION == SfpuType::relu_max ||
         OPERATION == SfpuType::relu_min || OPERATION == SfpuType::lrelu || OPERATION == SfpuType::hardtanh || OPERATION == SfpuType::clamp ||
         OPERATION == SfpuType::identity || OPERATION == SfpuType::cast_fp32_to_fp16a || OPERATION == SfpuType::tanh_derivative ||
-        OPERATION == SfpuType::sqrt_custom || OPERATION == SfpuType::rsqrt_compat || OPERATION == SfpuType::expm1_cw)
+        OPERATION == SfpuType::sqrt_custom || OPERATION == SfpuType::expm1_cw)
     {
         // These ops execute via self-contained tt-llk primitives that need only the generic per-op init (SFPU config
         // reg + ADDR_MOD_7 from llk_math_sfpu_init_once() above, plus a dest RWC counter reset), so route them through
@@ -656,7 +662,7 @@ void call_unary_sfpu_operation_init()
         //   - floor/ceil/trunc/frac/round/relu_max/relu_min: their production/metal <op>_init()
         //     (rounding_op_tile_init, relu_max_tile_init, relu_min_tile_init) genuinely reduces to
         //     math::reset_counters, so the bare init here matches production behavior.
-        //   - add1/identity/cast_fp32_to_fp16a/tanh_derivative/sqrt_custom/rsqrt_compat/expm1_cw: the
+        //   - add1/identity/cast_fp32_to_fp16a/tanh_derivative/sqrt_custom/expm1_cw: the
         //     OPERATION-keyed bare init has no delegate branch.
         //   - lrelu/hardtanh/clamp: no linkable definition in this test build, since only the
         //     tt-llk common (not the metal llk_api) header is included.
