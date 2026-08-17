@@ -20,25 +20,28 @@
       config already declares that it ships its own code, so decide from that. We did, and it worked.
 
 3. Use the saved inputs in the tests, and allow more than one prompt
-    - Real inputs and outputs are saved for every component, and the log says the tests use them, but
-      they do not. The main input is random noise and the others are guessed from argument names. For
-      our model that meant a 3-D activation where a complex RoPE table was expected, the additive
-      causal mask dropped so the reference itself became non-causal, and floats where integer codebook
-      indices were needed. We wrote them by hand before the tests meant anything.
+    - Which arguments a component gets is decided by a hardcoded list of names, all of them HF vision
+      and text ones. Anything not on that list is dropped if it has a default, or filled with random
+      noise if it does not. In our attention only the activation survived. The RoPE table, the causal
+      mask and the cache were all dropped because they default to None, which is right during single
+      token decode and wrong for a longer sequence. The reference itself then ran with no causal mask
+      and could see the future, the port matched it, and the component passed.
+    - Real inputs and outputs are saved for every component and the log says the tests use them, but
+      they do not. We wrote the missing ones by hand before the tests measured anything.
     - The end to end test also decides pass or fail for the whole model from a single prompt.
-    - Fix: use the saved inputs, compare against the saved output, accept more than one prompt, and
-      make the log say what the test actually used.
+    - Fix: use the saved inputs and compare against the saved output, which removes the guessing
+      entirely. Accept more than one prompt, and make the log say what it used.
 
 4. The decode step exists twice, and speed and correctness were measured on different ones
     - The version that ships has no KV cache, the traced one does. Speed was measured on the traced
       one, correctness on the other. It reported 17.2% faster; what ships got 13.2%, 297.69 to 258.26
       ms per audio frame. Our hand written port of the same model on the same board runs at 26.9 ms.
-    - The cache never reaches the component during bring-up. The saved example holds a real cache, but
-      the same object goes to the reference and then to the port, so the port sees one entry too many
-      and the cache is dropped; and the argument name is not on the recognised list, so it arrives
-      empty anyway. With no cache the test compares a single value and returns 1.0 whatever the inputs
-      are, so using the cache and ignoring it score the same. The simpler one was accepted, and the
-      shipped path then recomputes the whole prompt on every frame.
+    - The cache never reaches the component during bring-up. It is one of the arguments point 3 drops,
+      and separately the saved example holds a real one but the same object goes to the reference and
+      then to the port, so the port sees one entry too many and it is dropped to avoid that. With no
+      cache the test compares a single value and returns 1.0 whatever the inputs are, so using the
+      cache and ignoring it score the same. The simpler one was accepted, and the shipped path then
+      recomputes the whole prompt on every frame.
     - Fix, in order: copy the saved inputs before passing them to each side, add the cache to the
       recognised list, let the component use it since its signature already has the argument, and
       update the expected call counts and the component check in the same change, or a correct fix
