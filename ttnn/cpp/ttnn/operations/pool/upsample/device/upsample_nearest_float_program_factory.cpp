@@ -21,18 +21,14 @@ using namespace tt::tt_metal::experimental;
 
 constexpr uint32_t BUFFERING_FACTOR = 2;
 
-namespace {
-
-const KernelSpecName NEARFLOAT_READER{"upsample_nearfloat_reader"};
-const KernelSpecName NEARFLOAT_WRITER{"upsample_nearfloat_writer"};
-const DFBSpecName NEARFLOAT_OUT{"upsample_nearfloat_out"};
-const TensorParamName NEARFLOAT_INPUT{"upsample_nearfloat_input"};
-const TensorParamName NEARFLOAT_OUTPUT{"upsample_nearfloat_output"};
-
-}  // namespace
-
 ttnn::device_operation::ProgramArtifacts UpsampleNearestFloatProgramFactory::create_program_artifacts(
     const UpsampleParams& operation_attributes, const Tensor& input, Tensor& output_tensor) {
+    const KernelSpecName NEARFLOAT_READER{"upsample_nearfloat_reader"};
+    const KernelSpecName NEARFLOAT_WRITER{"upsample_nearfloat_writer"};
+    const DFBSpecName NEARFLOAT_OUT{"upsample_nearfloat_out"};
+    const TensorParamName NEARFLOAT_INPUT{"upsample_nearfloat_input"};
+    const TensorParamName NEARFLOAT_OUTPUT{"upsample_nearfloat_output"};
+
     const auto& input_mesh = input.mesh_tensor();
     const auto& output_mesh = output_tensor.mesh_tensor();
 

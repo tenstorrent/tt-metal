@@ -25,18 +25,6 @@ using namespace tt;
 
 namespace {
 
-const KernelSpecName SHARD_WRITER{"upsample_shard_writer"};
-const KernelSpecName SHARD_READER{"upsample_shard_reader"};
-const DFBSpecName SHARD_IN{"upsample_shard_in"};
-const DFBSpecName SHARD_OUT{"upsample_shard_out"};
-const DFBSpecName SHARD_CONFIG{"upsample_shard_config"};
-const TensorParamName SHARD_INPUT{"upsample_shard_input"};
-const TensorParamName SHARD_OUTPUT{"upsample_shard_output"};
-const TensorParamName SHARD_CONFIG_TENSOR{"upsample_shard_config_tensor"};
-
-constexpr const char* SHARD_KERNEL =
-    "ttnn/cpp/ttnn/operations/pool/upsample/device/kernels/dataflow/writer_upsample_multi_core_sharded.cpp";
-
 struct StickInterval {
     uint16_t core_x, core_y;
     uint16_t offset_start;
@@ -266,6 +254,18 @@ CoreRangeSet get_cores_with_work(
 
 ttnn::device_operation::ProgramArtifacts UpsampleMultiCoreShardedProgramFactory::create_program_artifacts(
     const UpsampleParams& operation_attributes, const Tensor& input_tensor, Tensor& output_tensor) {
+    const KernelSpecName SHARD_WRITER{"upsample_shard_writer"};
+    const KernelSpecName SHARD_READER{"upsample_shard_reader"};
+    const DFBSpecName SHARD_IN{"upsample_shard_in"};
+    const DFBSpecName SHARD_OUT{"upsample_shard_out"};
+    const DFBSpecName SHARD_CONFIG{"upsample_shard_config"};
+    const TensorParamName SHARD_INPUT{"upsample_shard_input"};
+    const TensorParamName SHARD_OUTPUT{"upsample_shard_output"};
+    const TensorParamName SHARD_CONFIG_TENSOR{"upsample_shard_config_tensor"};
+
+    constexpr const char* SHARD_KERNEL =
+        "ttnn/cpp/ttnn/operations/pool/upsample/device/kernels/dataflow/writer_upsample_multi_core_sharded.cpp";
+
     const auto& input = input_tensor;
     auto& output = output_tensor;
     const auto& input_mesh = input.mesh_tensor();

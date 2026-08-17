@@ -22,27 +22,23 @@ namespace ttnn::prim {
 using namespace tt::tt_metal;
 using namespace tt::tt_metal::experimental;
 
-namespace {
-
-const KernelSpecName INTLV_READER{"upsample_intlv_reader"};
-const KernelSpecName INTLV_WRITER{"upsample_intlv_writer"};
-const KernelSpecName INTLV_COMPUTE_G1{"upsample_intlv_compute_g1"};
-const KernelSpecName INTLV_COMPUTE_G2{"upsample_intlv_compute_g2"};
-const DFBSpecName INTLV_SRC0{"upsample_intlv_src0"};
-const DFBSpecName INTLV_OUT{"upsample_intlv_out"};
-const TensorParamName INTLV_INPUT{"upsample_intlv_input"};
-const TensorParamName INTLV_OUTPUT{"upsample_intlv_output"};
-
-// Existing Metal 2.0 fork of the untilize op's compute kernel (created by the data_movement/fold
-// port). Its binding names (dfb::src / dfb::out) and named args (per_core_block_cnt,
-// per_core_block_tile_cnt) are the shared interface this factory must match; reused as-is.
-constexpr const char* UNTILIZE_METAL2_KERNEL =
-    "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_metal2.cpp";
-
-}  // namespace
-
 ttnn::device_operation::ProgramArtifacts UpsampleMultiCoreInterleavedProgramFactory::create_program_artifacts(
     const UpsampleParams& operation_attributes, const Tensor& input_tensor, Tensor& output_tensor) {
+    const KernelSpecName INTLV_READER{"upsample_intlv_reader"};
+    const KernelSpecName INTLV_WRITER{"upsample_intlv_writer"};
+    const KernelSpecName INTLV_COMPUTE_G1{"upsample_intlv_compute_g1"};
+    const KernelSpecName INTLV_COMPUTE_G2{"upsample_intlv_compute_g2"};
+    const DFBSpecName INTLV_SRC0{"upsample_intlv_src0"};
+    const DFBSpecName INTLV_OUT{"upsample_intlv_out"};
+    const TensorParamName INTLV_INPUT{"upsample_intlv_input"};
+    const TensorParamName INTLV_OUTPUT{"upsample_intlv_output"};
+
+    // Existing Metal 2.0 fork of the untilize op's compute kernel (created by the data_movement/fold
+    // port). Its binding names (dfb::src / dfb::out) and named args (per_core_block_cnt,
+    // per_core_block_tile_cnt) are the shared interface this factory must match; reused as-is.
+    constexpr const char* UNTILIZE_METAL2_KERNEL =
+        "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_metal2.cpp";
+
     const auto& input = input_tensor;
     auto& output = output_tensor;
     const auto& input_mesh = input.mesh_tensor();
