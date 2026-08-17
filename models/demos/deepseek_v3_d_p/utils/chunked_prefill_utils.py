@@ -69,12 +69,12 @@ def discover_traces(root, num_users, variant_name=None):
     deepseek_*_sdpa_mla). When `variant_name` is given, select by whether the dir name contains 'kimi':
     a kimi variant keeps the kimi_* dirs, any other variant keeps the rest.
 
-    NOTE the filter is a substring test and so cannot separate two variants of the same family: every
-    kimi_* variant selects the same dirs. It is therefore only safe for variants that actually have
-    recorded traces. Callers must reject the others *before* getting here -- test_mla.py's
-    _run_chunked_prefill asserts on ``variant.supports_pretrained``, since a trace is recorded from a
-    real checkpoint and a variant without one (kimi_k3, sparse_mla) would otherwise be handed
-    Kimi-K2.6's traces and silently compared across architectures.
+    NOTE the filter is a substring test on the VARIANT name, so it cannot separate two variants of one
+    family: `kimi_k2_6` and `kimi_k3` both select every kimi_* dir. Renaming the dirs does not help --
+    ``want_kimi`` comes from the variant name. Such a variant must be given MLA_CHUNKED_TRACE_PATH; with
+    a root it silently gets its sibling's traces and the comparison fails at ~0 PCC.
+    _run_chunked_prefill additionally asserts ``variant.pretrained_mla_layer`` is not None, since a
+    variant with no checkpoint never had a trace recorded at all.
     """
     dirs = sorted(d for d in Path(root).iterdir() if d.is_dir())
     assert dirs, f"no trace subdirs under {root}"
@@ -98,10 +98,17 @@ def single_trace(path, num_users):
 
 
 def load_trace(d):
-    """Return (mla_input [S,H], mla_output [S,H], kv_post [S,kvpe]) for layer 0, all bf16."""
-    mi = load_file(d / "mla_io" / "mla_input_layer_0.safetensors")["mla_input_layer_0"]
-    mo = load_file(d / "mla_io" / "mla_output_layer_0.safetensors")["mla_output_layer_0"]
-    kv = load_file(d / "kv_cache" / "layer_0.safetensors")["kv_post_transform_layer_0"]
+    """Return (mla_input [S,H], mla_output [S,H], kv_post [S,kvpe]) for the traced layer, all bf16.
+
+    The layer index comes off the filenames rather than being assumed 0: on a hybrid model it cannot
+    be 0 (Kimi-K3 traces layer 3, its first full-attention layer).
+    """
+    inputs = sorted((d / "mla_io").glob("mla_input_layer_*.safetensors"))
+    assert len(inputs) == 1, f"trace dir {d}: expected exactly one traced MLA layer, found {len(inputs)}"
+    layer = inputs[0].stem[len("mla_input_layer_") :]
+    mi = load_file(inputs[0])[f"mla_input_layer_{layer}"]
+    mo = load_file(d / "mla_io" / f"mla_output_layer_{layer}.safetensors")[f"mla_output_layer_{layer}"]
+    kv = load_file(d / "kv_cache" / f"layer_{layer}.safetensors")[f"kv_post_transform_layer_{layer}"]
     return mi.to(torch.bfloat16), mo.to(torch.bfloat16), kv.to(torch.bfloat16)
 
 

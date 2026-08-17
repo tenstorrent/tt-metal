@@ -57,9 +57,12 @@ class KimiK3Adapter(MLAPrefillAdapter):
     mla_ref_cache_env = "KIMI_K3_MLA_REF_CACHE"
     ttnn_cache_env = "TT_KIMI_K3_PREFILL_TTNN_CACHE"
     # Loading the staged checkpoint wholesale needs an MXFP4 -> bf16 dequantizer that does not exist
-    # yet, so the pretrained fixtures stay skipped. The MoE gate is exempt: it is unquantized and read
+    # yet, so the full-transformer fixtures stay skipped. The MoE gate is exempt: it is unquantized and read
     # through a prefix-filtered safe_open.
     supports_pretrained = False
+    # MLA alone is loadable: quantization_config.ignore covers self_attn, so those weights are bf16.
+    # The first full-attention layer, not 0 -- layers 0-2 are KDA and hold no MLA tensors.
+    pretrained_mla_layer = KimiK3Config.mla_layer_ids()[0]
     # Left as None: shared_path feeds conftest's state_dict fixture, which pytest would resolve --
     # loading all 1.5 TB -- before the supports_pretrained skip in the fixture body runs.
     shared_path = None
