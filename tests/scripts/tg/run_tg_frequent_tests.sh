@@ -2,11 +2,7 @@
 
 run_tg_tests() {
 
-  if [[ "$1" == "resnet50" ]]; then
-    echo "LOG_METAL: running resnet50 run_tg_frequent_tests"
-    pytest models/demos/vision/classification/resnet50/ttnn_resnet/tests/test_resnet50_performant.py ; fail+=$?
-
-  elif [[ "$1" == "unit" ]]; then
+  if [[ "$1" == "unit" ]]; then
     echo "LOG_METAL: running unit/distributed run_tg_frequent_tests"
     ## ERISC IRAM is always on for WH; these tests mix fabric and non-fabric CCL and rely on consistent jit/build behavior.
     pytest tests/ttnn/distributed/test_data_parallel_example_TG.py --timeout=900 ; fail+=$?
@@ -27,12 +23,6 @@ run_tg_tests() {
   elif [[ "$1" == "qwenimage" ]]; then
     echo "LOG_METAL: running QwenImage run_tg_frequent_tests"
     pytest models/tt_dit/tests/encoders/qwen25vl/test_qwen25vl.py::test_qwen25vl_encoder_pair -k "4x8"; fail+=$?
-
-  elif [[ "$1" == "mochi" ]]; then
-    echo "LOG_METAL: running mochi run_tg_frequent_tests"
-    ARCH_NAME=wormhole_b0 FAKE_DEVICE=TG pytest models/tt_dit/tests/models/mochi/test_vae_mochi.py -k "(decoder and wh_8x4 and load_dit and large_latent) or conv3d_1x1x1 or (wh_8x4 and l768 and bf16)" --timeout=1500; fail+=$?
-    ARCH_NAME=wormhole_b0 pytest models/tt_dit/tests/models/mochi/test_attention_mochi.py -k "short_seq and 4x8"; fail+=$?
-    ARCH_NAME=wormhole_b0 pytest models/tt_dit/tests/models/mochi/test_transformer_mochi.py -k "4x8 and short_seq and not yes_load_cache and not model_caching"; fail+=$?
 
   else
     echo "LOG_METAL: Unknown model type: $1"

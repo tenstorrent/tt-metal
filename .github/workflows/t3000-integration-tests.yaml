@@ -12,10 +12,8 @@ on:
           - all
           - tteager
           - trace stress
-          - resnet
           - motif
           - qwenimage
-          - mochi
           - deepseek-modules
       platform:
         required: false

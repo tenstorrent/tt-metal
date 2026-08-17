@@ -286,6 +286,38 @@
   owner_id: U088413NP0Q # Ashai Reddy Ginuga
   team: models
 
+- name: BERT-Large unit tests
+  cmd: |
+    pytest --timeout 180 \
+      models/demos/metal_BERT_large_11/tests/test_bert_batch_dram.py \
+      models/demos/metal_BERT_large_11/tests/test_demo.py
+  model: bert-large
+  model_family: BERT
+  skus:
+    wh_n150:
+      timeout: 4
+      tier: 3
+  owner_id: U024A4EFV6U # Brian Liu
+  team: ttnn
+
+- name: ResNet-50 unit tests
+  cmd: |
+    pytest --timeout 300 \
+      models/demos/vision/classification/resnet50/wormhole/tests/test_resnet50_performant.py \
+      models/demos/vision/classification/resnet50/wormhole/tests/test_ttnn_functional_resnet50_large.py
+    pytest --timeout 300 models/demos/vision/classification/resnet50/ttnn_resnet/tests/test_resnet50_performant.py
+  model: resnet50
+  model_family: ResNet
+  skus:
+    wh_n150:
+      timeout: 20
+      tier: 1
+    wh_llmbox:
+      timeout: 8
+      tier: 1
+  owner_id: U085GDCAZTN # Pavle Josipovic
+  team: ttnn
+
 - name: Gemma-3-4B unit tests
   cmd: |
     export TT_METAL_WATCHER=30
@@ -958,6 +990,21 @@
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
 
+- name: Z-Image-Turbo unit tests
+  cmd: |
+    unset HF_HUB_OFFLINE
+    pytest --timeout 600 models/demos/z_image_turbo/tests/test_text_encoder.py
+    pytest --timeout 600 models/demos/z_image_turbo/tests/test_dit.py
+    pytest --timeout 600 models/demos/z_image_turbo/tests/test_vae.py
+  model: z-image-turbo
+  model_family: Z-Image
+  skus:
+    bh_quietbox_2:
+      timeout: 10
+      tier: 1
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+
 - name: Stable Diffusion XL LoRA unit tests
   cmd: |
     unset TT_METAL_WATCHER  # blocked by #50886 (SDXL NOC CB overflow / PCC)
@@ -1100,6 +1147,26 @@
   skus:
     wh_llmbox:
       timeout: 10
+      tier: 3
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+
+# ── Mochi (TT-DiT) ─────────────────────────────────────────────────
+- name: TT-DiT Mochi unit tests
+  cmd: |
+    unset HF_HUB_OFFLINE
+    export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE
+    pytest --timeout 1500 models/tt_dit/tests/models/mochi/test_vae_mochi.py -k "decoder or conv3d_1x1x1 or (l768 and bf16)"
+    pytest --timeout 900 models/tt_dit/tests/models/mochi/test_attention_mochi.py -k "short_seq"
+    pytest --timeout 900 models/tt_dit/tests/models/mochi/test_transformer_mochi.py -k "short_seq"
+  model: mochi
+  model_family: Mochi
+  skus:
+    wh_llmbox:
+      timeout: 60
+      tier: 3
+    wh_galaxy:
+      timeout: 80
       tier: 3
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
