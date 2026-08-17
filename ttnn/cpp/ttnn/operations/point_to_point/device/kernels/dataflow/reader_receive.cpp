@@ -15,27 +15,30 @@ void kernel_main() {
     constexpr uint32_t alignment = get_compile_time_arg_val(2);
     constexpr auto packet_buffer_args = TensorAccessorArgs<3>();
 
-    const auto page_idx_start = get_arg_val<uint32_t>(0);
-    const auto page_idx_end = get_arg_val<uint32_t>(1);
-    const auto max_pages_per_packet = get_arg_val<uint32_t>(2);
-    const auto intermediate_base_addr = get_arg_val<uint32_t>(3);
-    const auto packet_size_bytes = get_arg_val<uint32_t>(4);
-    const auto page_size_bytes = get_arg_val<uint32_t>(5);
-    const auto page_segments = get_arg_val<uint32_t>(6);
-    const uint32_t sender_semaphore_addr = get_arg_val<uint32_t>(7);
-    const uint8_t sender_num_hops = get_arg_val<uint32_t>(8);
+    // The fabric-connection block (built by ttnn::ccl::dataflow::build_ccl_fabric_rt_args) comes
+    // FIRST: consume it with a cursor from 0 (the FabricStreamSender ctor advances the cursor past
+    // it), then read the op's own args from the cursor — no hardcoded offset on either side. The
+    // block's leading has_forward flag also encodes the route direction, so peek arg 0.
+    size_t arg_idx = 0;
+    const bool sender_is_forward = get_arg_val<uint32_t>(arg_idx);
+    FabricStreamSender<> ready_sender(arg_idx, sender_is_forward, alignment);
 
-    // The fabric arg block (appended by ttnn::ccl::dataflow::append_ccl_fabric_rt_args)
-    // begins at index 9; its leading has_forward flag also encodes the route direction.
-    size_t conn_arg_idx = 9;
-    const bool sender_is_forward = get_arg_val<uint32_t>(conn_arg_idx);
+    const auto page_idx_start = get_arg_val<uint32_t>(arg_idx++);
+    const auto page_idx_end = get_arg_val<uint32_t>(arg_idx++);
+    const auto max_pages_per_packet = get_arg_val<uint32_t>(arg_idx++);
+    const auto intermediate_base_addr = get_arg_val<uint32_t>(arg_idx++);
+    const auto packet_size_bytes = get_arg_val<uint32_t>(arg_idx++);
+    const auto page_size_bytes = get_arg_val<uint32_t>(arg_idx++);
+    const auto page_segments = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t sender_semaphore_addr = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t sender_num_hops = get_arg_val<uint32_t>(arg_idx++);
 
     Noc noc;
 
     // Signal the sender we are "ready" to receive: one fabric atomic-inc, then tear down.
-    // signal_once folds construction + open() -> arm_inc() -> inc() -> close() into one static call.
+    // signal() is the one-shot open() -> arm_inc() -> inc() -> close() collapse; terminal.
     const uint64_t sender_sem_noc_addr = get_noc_addr(sender_semaphore_addr);
-    FabricStreamSender<>::signal_once(conn_arg_idx, sender_is_forward, alignment, sender_num_hops, sender_sem_noc_addr);
+    ready_sender.signal(unicast_route(sender_num_hops), sender_sem_noc_addr);
 
     // Third argument page_size from runtime args overrides TensorAccessorArgs::AlignedPageSize, which may be stale on
     // program cache hits.

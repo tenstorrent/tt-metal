@@ -19,18 +19,21 @@
  * target is trivial later if the inline footprint grows.
  *
  * @par Authoring a CCL dataflow op — which helper for each step.
- *   These are host-side C++ building blocks called from an op's PROGRAM FACTORY (point_to_point and
- *   all_gather are the consumers today); they are not ttnn ops, so they are intentionally not
- *   Python-bound. A typical fabric dataflow op builds its writer/reader args in this order:
+ *   These are host-side building blocks called from an op's PROGRAM FACTORY (point_to_point and
+ *   all_gather are the consumers today). The pure-computation entries (@c ccl_packet_dims,
+ *   @c ccl_dm_route) and @c make_ccl_semaphore are also Python-bound under @c ttnn._ttnn.fabric,
+ *   because generated ops assemble their MeshProgramDescriptor from Python host code. A typical
+ *   fabric dataflow op builds its writer/reader args in this order:
  *     1. @c ccl_packet_dims(dtype, page_size, num_pages, alignment) — frame pages into fabric
  *        packets (packet size / pages-per-packet / segments); owns the bf16 case + the page regimes.
  *     2. @c ccl_dm_route(mesh_device, sender, receiver, topology) — compute the 1-D {num_hops,
  *        is_forward, neighbor} for a single point-to-point route (owns the fwd/bwd sign reversal +
  *        the ring-vs-line shorter-path choice). The bidirectional (all_gather) case instead pairs the
  *        existing ring-route configuration with @c append_ccl_line_route_ct_args (step 4).
- *     3. @c append_ccl_fabric_rt_args(...) — append the fabric-CONNECTION runtime args in the exact
+ *     3. @c build_ccl_fabric_rt_args(...) — the fabric-CONNECTION runtime-arg block in the exact
  *        layout the kernel's FabricStreamSender opens (has_forward/has_backward + the connection
- *        block). Generic across fabric paths.
+ *        block). Place it FIRST in the kernel's runtime args; the kernel consumes it with a cursor
+ *        from 0, so neither side hardcodes an offset. Generic across fabric paths.
  *     4. @c append_ccl_line_route_ct_args(...) — bidirectional/all_gather only: append the four
  *        line-ROUTE compile-time args (fwd/bwd × unicast/multicast) in the order the writer reads
  *        them back. Distinct from step 3 — this is the ROUTE, not the connection.
@@ -216,24 +219,28 @@ inline void append_ccl_line_route_ct_args(
 // ===========================================================================
 
 /**
- * @brief Append the fabric-connection runtime args in the EXACT layout the
- *        kernel-side FabricStreamSender consumes, owning the has-forward / has-backward
- *        flag dance (removes the conn_arg_idx overlap footgun).
+ * @brief Build the fabric-connection runtime-arg BLOCK in the EXACT layout the kernel-side
+ *        FabricStreamSender consumes, owning the has-forward / has-backward flag dance:
  *
- * After the call, the block beginning at the pre-call rt_args.size() is:
  *   [has_forward][<forward conn args> if fwd][has_backward][<backward conn args> if bwd]
- * The kernel records that start index as conn_arg_idx; for a unidirectional sender the
- * has_forward flag also equals the send direction, so the kernel can peek it for
- * `is_forward`.
+ *
+ * This is the bridge between what the op author knows (two fabric nodes + a direction) and what
+ * the fabric needs on the wire — the author never lays out connection args by hand.
+ *
+ * Place the returned block FIRST in the kernel's runtime args. The kernel then consumes it with a
+ * cursor starting at 0 (`size_t arg_idx = 0; FabricStreamSender<> sender(arg_idx, ...)` advances
+ * it past the block) and reads the op's own args from the cursor after — so neither side ever
+ * hardcodes where the fabric block starts. For a unidirectional sender the leading has_forward
+ * flag also equals the send direction, so the kernel peeks `get_arg_val<uint32_t>(0)`.
  */
-inline void append_ccl_fabric_rt_args(
+inline std::vector<uint32_t> build_ccl_fabric_rt_args(
     const FabricNodeId& src_fabric_node_id,
     const FabricNodeId& neighbor_fabric_node_id,
     uint32_t link_idx,
     ProgramDescriptor& desc,
     const CoreCoord& core,
-    std::vector<uint32_t>& rt_args,
     bool is_forward) {
+    std::vector<uint32_t> rt_args;
     rt_args.push_back(is_forward);  // has_forward
     if (is_forward) {
         tt::tt_fabric::append_fabric_connection_rt_args(
@@ -244,6 +251,7 @@ inline void append_ccl_fabric_rt_args(
         tt::tt_fabric::append_fabric_connection_rt_args(
             src_fabric_node_id, neighbor_fabric_node_id, link_idx, desc, core, rt_args);
     }
+    return rt_args;
 }
 
 // ===========================================================================
