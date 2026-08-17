@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/experimental/sockets/h2d_socket.hpp>
+#include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
+#include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
 #include <internal/service/service_core_manager.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
@@ -191,6 +193,35 @@ void H2DSocket::init_data_buffer(const std::shared_ptr<MeshDevice>& mesh_device,
         data_buffer_ = MeshBuffer::create(
             data_mesh_buffer_specs, data_buffer_specs, mesh_device.get(), std::make_optional<DeviceAddr>(raw_addr));
         aligned_data_buf_start_ = tt::align(raw_addr, pcie_alignment);
+        write_ptr_ = 0;
+        return;
+    }
+
+    // A host-push socket has exactly one active receiver core. In hybrid
+    // allocator mode, keep its FIFO local to that core instead of reserving a
+    // uniform address on every worker bank in the mesh. The socket kernels
+    // only consume aligned_data_buf_start_ on recv_core_, so no cross-core
+    // address invariant is required here.
+    if (MetalContext::instance().rtoptions().get_allocator_mode_hybrid()) {
+        const uint32_t alloc_size = fifo_size_ + pcie_alignment;
+        auto shard_params =
+            ShardSpecBuffer(CoreRangeSet(recv_core_.core_coord), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
+        auto sharding_args = BufferShardingArgs(shard_params, TensorMemoryLayout::HEIGHT_SHARDED);
+        experimental::per_core_allocation::set_per_core_allocation(sharding_args, true);
+        DeviceLocalBufferConfig data_buffer_specs = {
+            .page_size = alloc_size,
+            .buffer_type = buffer_type_,
+            .sharding_args = std::move(sharding_args),
+            .bottom_up = std::nullopt,
+            .sub_device_id = std::nullopt,
+        };
+        MeshBufferConfig data_mesh_buffer_specs = ReplicatedBufferConfig{.size = alloc_size};
+        data_buffer_ = experimental::per_core_allocation::create_on_single_device(
+            data_mesh_buffer_specs, data_buffer_specs, mesh_device.get(), recv_core_.device_coord);
+        aligned_data_buf_start_ = tt::align(
+            experimental::per_core_allocation::get_per_core_address(
+                *data_buffer_, recv_core_.device_coord, recv_core_.core_coord),
+            pcie_alignment);
         write_ptr_ = 0;
         return;
     }
