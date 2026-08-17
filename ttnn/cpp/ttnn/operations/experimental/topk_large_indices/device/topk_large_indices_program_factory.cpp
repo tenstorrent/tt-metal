@@ -345,6 +345,16 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     // survivor (not the llk_k-th), which is what makes skipping profitable at
     // small k. attrs.k is already part of the program hash.
     compute_compile_args.push_back(k);
+    // Fused end-to-end merge/rebuild: stay in the fused [bf16|u16] word through
+    // every merge/rebuild and split once per row, recovering the global index
+    // from a per-chunk stamp in bits [15:11]. Sound only when every possible
+    // chunk count fits the 5-bit id: <= 32 chunks of the LLK window over the
+    // FULL logical width (valid_length can only shrink the runtime count).
+    // Derived from shape, so it is mirrored into compute_program_hash.
+    std::map<std::string, std::string> compute_defines;
+    if (fused_e2e_gate(k, input.logical_shape()[-1])) {
+        compute_defines["FUSED_E2E"] = "1";
+    }
     auto compute_kernel = tt::tt_metal::CreateKernel(
         program,
         return_values
@@ -356,7 +366,8 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
             .fp32_dest_acc_en = true,
             // K=2048 multi-chunk merge uses DEST slots 0..7; FP32 half-sync mode exposes only 4 tiles.
             .dst_full_sync_en = true,
-            .compile_args = compute_compile_args});
+            .compile_args = compute_compile_args,
+            .defines = compute_defines});
 
     tt::tt_metal::KernelHandle writer_kernel;
     if (flex_writer) {
@@ -572,6 +583,10 @@ ColumnSplitConfig compute_model_column_split_config(
 }
 
 }  // namespace
+
+bool fused_e2e_gate(uint32_t k, uint32_t input_last_dim) {
+    return tt::div_up(input_last_dim, to_uint32(snap_to_llk_target_k(k))) <= 32;
+}
 
 ColumnSplitConfig compute_column_split_config(
     uint32_t k,

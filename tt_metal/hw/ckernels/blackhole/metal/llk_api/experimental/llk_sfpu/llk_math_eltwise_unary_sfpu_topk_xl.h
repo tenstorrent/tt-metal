@@ -46,6 +46,13 @@ inline void llk_math_eltwise_unary_sfpu_topk_xl_add_lsb_indices(uint dst_index) 
         ckernel::sfpu::_topk_xl_add_lsb_indices_<K, APPROXIMATE, core_id>, dst_index, VectorMode::RC_custom);
 }
 
+// Runtime-chunk-id stamp (fused end-to-end rows: one instantiation, id per chunk).
+template <uint32_t K, bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_topk_xl_add_lsb_indices_rt(uint dst_index, uint32_t chunk_id) {
+    _llk_math_eltwise_unary_sfpu_params_(
+        ckernel::sfpu::_topk_xl_add_lsb_indices_rt_<K, APPROXIMATE>, dst_index, VectorMode::RC_custom, chunk_id);
+}
+
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_topk_xl_remove_msb_values_init() {
     ckernel::sfpu::_topk_xl_remove_msb_values_init_();
@@ -105,6 +112,18 @@ template <uint32_t K, bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_topk_xl_separate_indices_row_major(uint dst_index) {
     _llk_math_eltwise_unary_sfpu_params_(
         ckernel::sfpu::_topk_xl_separate_indices_row_major_<K, APPROXIMATE>, dst_index, VectorMode::RC_custom);
+}
+
+// Fused end-to-end: chunk-field-mask init + once-per-row global split.
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_topk_xl_separate_indices_row_major_global_init() {
+    llk_math_eltwise_unary_sfpu_init<SfpuType::unused>(ckernel::sfpu::_topk_xl_separate_indices_row_major_global_init_);
+}
+
+template <uint32_t K, bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_topk_xl_separate_indices_row_major_global(uint dst_index) {
+    _llk_math_eltwise_unary_sfpu_params_(
+        ckernel::sfpu::_topk_xl_separate_indices_row_major_global_<K, APPROXIMATE>, dst_index, VectorMode::RC_custom);
 }
 
 template <uint32_t K, bool APPROXIMATE>

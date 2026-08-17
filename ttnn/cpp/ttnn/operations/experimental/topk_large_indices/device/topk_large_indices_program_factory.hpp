@@ -62,6 +62,12 @@ struct ColumnSplitConfig {
 // num_slices_override: user-requested P (operation_attributes_t::num_slices). Validated loudly
 // against [2, 64] and the row's chunk count, clamped only against the physical grid; setting it
 // when the column-parallel path is not selected is an error.
+// FUSED_E2E compute-kernel gate: true when every possible chunk count of the
+// row fits the 5-bit chunk-id stamp (<= 32 chunks of the LLK window over the
+// full logical last dim). Shared by the row-parallel factory (kernel define)
+// and compute_program_hash (the derived bit) so they can never skew.
+bool fused_e2e_gate(uint32_t k, uint32_t input_last_dim);
+
 ColumnSplitConfig compute_column_split_config(
     uint32_t k,
     uint32_t n,

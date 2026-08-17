@@ -399,8 +399,13 @@ def test_topk_large_indices_valid_length_ignores_stale_tail(device, k, n, valid_
     ],
 )
 def test_topk_large_indices_valid_length_matches_sliced_input(device, k, num_rows, n, valid_length):
-    # valid_length=L must be numerically identical to physically slicing the row to [0, L) and running the
-    # full-width op. Both compute top-k over the exact same prefix, so the indices are bit-identical.
+    # valid_length=L must select the exact same top-k VALUE multiset as physically slicing the row to
+    # [0, L) and running the full-width op. Indices may legitimately differ ONLY on exact-bf16 ties: the
+    # two calls have different physical widths, and the engine (and with it the unspecified non-stable
+    # tie order) is chosen per physical width — e.g. the FUSED_E2E gate flips at 32 chunks, and fused
+    # cross-chunk compares break ties by stamped chunk id while unfused merges break them by network
+    # position. Every index mismatch is therefore asserted to be a bitwise value tie, and the sorted
+    # value sequences must match bit-for-bit.
     torch.manual_seed(0)
     torch_input = torch.randn(num_rows, n, dtype=torch.bfloat16)
 
@@ -410,7 +415,18 @@ def test_topk_large_indices_valid_length_matches_sliced_input(device, k, num_row
     bounded_t = ttnn.to_torch(bounded, dtype=torch.uint32).to(torch.int64)
     sliced_t = ttnn.to_torch(sliced, dtype=torch.uint32).to(torch.int64)
     _assert_index_metadata(bounded, [num_rows, k])
-    assert_equal(bounded_t, sliced_t)
+    source = torch_input.to(torch.float32)
+    for r in range(num_rows):
+        gathered_bounded = source[r, bounded_t[r]]
+        gathered_sliced = source[r, sliced_t[r]]
+        diff = (bounded_t[r] != sliced_t[r]).nonzero().flatten()
+        assert torch.equal(
+            gathered_bounded[diff], gathered_sliced[diff]
+        ), f"row {r}: {len(diff)} index diffs include a non-tie (values differ)"
+        assert torch.equal(
+            torch.sort(gathered_bounded, descending=True).values,
+            torch.sort(gathered_sliced, descending=True).values,
+        ), f"row {r}: top-k value multisets differ"
 
 
 def test_topk_large_indices_valid_length_full_width_is_noop(device):

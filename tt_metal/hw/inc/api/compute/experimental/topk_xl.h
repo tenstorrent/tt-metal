@@ -216,6 +216,16 @@ ALWI void topk_xl_add_lsb_indices(uint32_t idst) {
 }
 
 /**
+ * Runtime-chunk-id variant of topk_xl_add_lsb_indices: the 5-bit id in index
+ * bits [15:11] is a runtime argument, so one instantiation stamps every chunk
+ * of a fused end-to-end row (chunk_id in 0..31). Same init.
+ */
+template <uint32_t K>
+ALWI void topk_xl_add_lsb_indices_rt(uint32_t idst, uint32_t chunk_id) {
+    MATH((llk_math_eltwise_unary_sfpu_topk_xl_add_lsb_indices_rt<K, APPROX>(idst, chunk_id)));
+}
+
+/**
  * Initializes the state for removing 16 MSB values from the topk_xl data.
  *
  * Programs ADDR_MOD_0 with the +2 stride of one 32-lane group. Runs on PACK
@@ -333,6 +343,23 @@ ALWI void topk_xl_separate_indices(uint32_t idst) {
 template <uint32_t K>
 ALWI void topk_xl_separate_indices_row_major(uint32_t idst) {
     MATH((llk_math_eltwise_unary_sfpu_topk_xl_separate_indices_row_major<K, false>(idst)));
+}
+
+/**
+ * Fused end-to-end split: runs ONCE per row on the final fused survivor.
+ * Each u16 payload carries [chunk_id 15:11 | within-chunk 10:0]; the global
+ * index chunk_id * K + row-major(within-chunk) is recovered from the stamp
+ * itself — no chunk-base bookkeeping. Pair with
+ * topk_xl_separate_indices_row_major_global_init. Sound only for rows of
+ * <= 32 chunks (the FUSED_E2E factory gate).
+ */
+ALWI void topk_xl_separate_indices_row_major_global_init() {
+    MATH((llk_math_eltwise_unary_sfpu_topk_xl_separate_indices_row_major_global_init<false>()));
+}
+
+template <uint32_t K>
+ALWI void topk_xl_separate_indices_row_major_global(uint32_t idst) {
+    MATH((llk_math_eltwise_unary_sfpu_topk_xl_separate_indices_row_major_global<K, false>(idst)));
 }
 
 template <uint32_t K>

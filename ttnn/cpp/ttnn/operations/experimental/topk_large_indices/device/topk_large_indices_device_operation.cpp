@@ -203,7 +203,12 @@ ttsl::hash::hash_t TopkLargeIndicesDeviceOperation::compute_program_hash(
         split_config.local_grid_y,
         // Rectangle count is program structure (kernel core placement); row
         // distribution within a fixed rectangle layout stays runtime-only.
-        split_config.num_rects);
+        split_config.num_rects,
+        // FUSED_E2E compute-kernel gate: rows of <= 32 LLK-window chunks over
+        // the FULL logical width run the fused end-to-end body (the factory
+        // derives the same bit for the kernel define). Widths stay otherwise
+        // runtime-only, so this single derived bit is the only width term.
+        program::fused_e2e_gate(attrs.k, input.logical_shape()[-1]));
 }
 
 spec_return_value_t TopkLargeIndicesDeviceOperation::compute_output_specs(

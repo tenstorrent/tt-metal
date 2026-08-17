@@ -2761,6 +2761,76 @@ inline void _topk_xl_add_lsb_indices_()
     }
 }
 
+// Runtime-chunk-id variant of `_topk_xl_add_lsb_indices_`: identical body,
+// but the 5-bit id in bits [15:11] comes from a RUNTIME argument (composed
+// via TT_SFPLOADI) instead of the template parameter — one stamp
+// instantiation serves every chunk of a fused end-to-end row. KEEP IN SYNC
+// with the template variant above; the ONLY difference is the id load.
+template <std::uint32_t K, bool APPROXIMATION_MODE>
+inline void _topk_xl_add_lsb_indices_rt_(const std::uint32_t chunk_id)
+{
+    static_assert(K == 512 || K == 1024 || K == 2048, "K must be 512, 1024, or 2048");
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+
+    TTI_SFPMOV(0, p_sfpu::LTILEID, p_sfpu::LREG0, 0);
+
+    TTI_SFPIADD(1, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPIADD(16, p_sfpu::LREG0, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPIADD(17, p_sfpu::LREG0, p_sfpu::LREG3, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+
+    TTI_SFPTRANSP(0, 0, 0, 0);
+
+    TTI_SFPSHFT(6, 0, p_sfpu::LREG0, 1);
+
+    // Load chunk_id (runtime) and place it in bits [15:11] of every lane.
+    TT_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_USHORT, chunk_id);
+    TTI_SFPSHFT(11, 0, p_sfpu::LREG1, 1);
+
+    TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPIADD(1, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPIADD(2, p_sfpu::LREG0, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPIADD(3, p_sfpu::LREG0, p_sfpu::LREG3, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+
+    TTI_SFPTRANSP(0, 0, 0, 0);
+
+    lltt::record<lltt::Exec>(0, 16);
+    TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+    TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::INT32, ADDR_MOD_7, 2);
+    TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::INT32, ADDR_MOD_7, 16 + 0);
+    TTI_SFPLOAD(p_sfpu::LREG7, InstrModLoadStore::INT32, ADDR_MOD_7, 16 + 2);
+
+    TTI_SFPOR(0, p_sfpu::LREG0, p_sfpu::LREG4, 0);
+    TTI_SFPOR(0, p_sfpu::LREG1, p_sfpu::LREG5, 0);
+    TTI_SFPOR(0, p_sfpu::LREG2, p_sfpu::LREG6, 0);
+    TTI_SFPOR(0, p_sfpu::LREG3, p_sfpu::LREG7, 0);
+
+    TTI_SFPIADD(4, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPIADD(4, p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPIADD(4, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPIADD(4, p_sfpu::LREG3, p_sfpu::LREG3, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+
+    TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+    TTI_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::INT32, ADDR_MOD_7, 2);
+    TTI_SFPSTORE(p_sfpu::LREG6, InstrModLoadStore::INT32, ADDR_MOD_7, 16 + 0);
+    TTI_SFPSTORE(p_sfpu::LREG7, InstrModLoadStore::INT32, ADDR_MOD_6, 16 + 2);
+
+    for (int i = 1; i < 4; i++)
+    {
+        lltt::replay(0, 16);
+    }
+
+    constexpr int row_scale_factor = K == 512 ? 1 : K == 1024 ? 2 : 4;
+    for (int j = 1; j < row_scale_factor; j++)
+    {
+        TTI_SFPLOAD(p_sfpu::LREG4, 10, ADDR_MOD_4, 0);
+
+        for (int i = 0; i < 4; i++)
+        {
+            lltt::replay(0, 16);
+        }
+    }
+}
+
 // =============================================================================
 //  Post-reduction PACK-thread phases (`remove_msb_values`, `separate_indices`)
 // =============================================================================
@@ -2991,6 +3061,68 @@ inline void _topk_xl_separate_indices_row_major_()
         TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0);
         _topk_xl_decode_row_major_index_<K>();
         TTI_SFPOR(0, p_sfpu::LREG12, p_sfpu::LREG0, 0);
+
+        TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_0, indices_offset);
+    }
+}
+
+// Fused end-to-end variant: like `_topk_xl_separate_indices_row_major_init_`,
+// but LREG12 carries the chunk-id FIELD MASK (bits [15:11]) instead of a
+// chunk base — the global index is recovered from the stamp itself, so no
+// per-chunk base bookkeeping exists at all.
+inline void _topk_xl_separate_indices_row_major_global_init_()
+{
+    addr_mod_t {
+        .srca = {.incr = 0},
+        .srcb = {.incr = 0},
+        .dest = {.incr = 2},
+    }
+        .set(ADDR_MOD_0);
+
+    _sfpu_load_config32_(p_sfpu::LREG12, /*upper16=*/0, /*lower16=*/0xF800);
+    _sfpu_load_config32_(p_sfpu::LREG13, /*upper16=*/0, /*lower16=*/0x000F);
+    _sfpu_load_config32_(p_sfpu::LREG14, /*upper16=*/0, /*lower16=*/0x0001);
+}
+
+// Fused end-to-end split: runs ONCE per row on the final fused survivor
+// (instead of once per chunk pre-merge). Each u16 payload carries
+// [chunk_id 15:11 | within-chunk coordinate 10:0]; the global index is
+// chunk_id * K + row-major(within-chunk). For K=2048 the stamp field IS
+// chunk_id * 2048; narrower windows shift it down to the right weight.
+// Requires `_topk_xl_separate_indices_row_major_global_init_` (LREG12 =
+// 0xF800). Only sound for rows of <= 32 chunks (5-bit id) — the factory
+// gates FUSED_E2E on the padded chunk count.
+template <std::uint32_t K, bool APPROXIMATION_MODE>
+inline void _topk_xl_separate_indices_row_major_global_()
+{
+    static_assert(K == 512 || K == 1024 || K == 2048, "K must be 512, 1024, or 2048");
+    constexpr int row_scale_factor       = K == 512 ? 1 : K == 1024 ? 2 : 4;
+    constexpr int num_tiles_per_sequence = K == 512 ? 1 : K == 1024 ? 1 : 2;
+    constexpr int indices_offset         = num_tiles_per_sequence * 64;
+    // chunk_id sits at [15:11] = chunk_id * 2048; rescale to chunk_id * K.
+    constexpr int chunk_field_shift = K == 2048 ? 0 : K == 1024 ? -1 : -2;
+
+    for (int i = 0; i < row_scale_factor * 16; i++)
+    {
+        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+
+        // Value region: keep BF16 value high half and clear low half.
+        TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
+        TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_LOWER, 0);
+
+        // Index region: clear high half, save the raw u16 (incl. chunk id),
+        // decode the within-chunk coordinate, then OR the rescaled chunk
+        // field back in.
+        TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0);
+        TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG4, 0);
+        _topk_xl_decode_row_major_index_<K>();
+        TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG4, 0);
+        if constexpr (chunk_field_shift != 0)
+        {
+            TTI_SFPSHFT(chunk_field_shift & 0xFFF, p_sfpu::LREG4, p_sfpu::LREG4, 1);
+        }
+        TTI_SFPOR(0, p_sfpu::LREG4, p_sfpu::LREG0, 0);
 
         TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
         TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_0, indices_offset);
