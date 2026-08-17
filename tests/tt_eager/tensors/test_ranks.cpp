@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -14,6 +14,7 @@
 
 using namespace tt;
 using namespace tt_metal;
+using ttnn::Tensor;
 using namespace constants;
 
 bool test_2d_tensor(distributed::MeshDevice* device) {

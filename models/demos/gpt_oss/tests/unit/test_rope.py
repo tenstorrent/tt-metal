@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -20,6 +20,27 @@ from models.tt_transformers.tt.common import rope_scaling_model_factory
 from models.tt_transformers.tt.rope import rotary_embedding_factory
 
 from ..test_factory import parametrize_mesh_with_fabric
+
+# bf16 tolerance for rope cos/sin at position 0 where all elements share the same
+# value (cos(0)·scale = const).  PCC is undefined on constant tensors; allclose
+# with this atol covers normal bf16 quantisation error (observed ~0.003, <1 ULP).
+_ROPE_BF16_ATOL = 0.01
+_ROPE_BF16_RTOL = 1e-5
+
+
+def _compare_rope_vector(golden, calculated, pcc_threshold=0.99):
+    """Compare two rope embedding vectors, handling constant-tensor PCC edge case.
+
+    When both tensors are constant (e.g. cos at position 0), PCC is undefined.
+    Fall back to allclose with bf16-appropriate tolerance instead of relying on
+    comp_pcc's internal fallback whose default atol is too tight for bf16.
+    """
+    is_golden_const = golden.numel() > 0 and (golden.max() == golden.min()).item()
+    is_calc_const = calculated.numel() > 0 and (calculated.max() == calculated.min()).item()
+    if is_golden_const and is_calc_const:
+        close = torch.allclose(golden, calculated, rtol=_ROPE_BF16_RTOL, atol=_ROPE_BF16_ATOL)
+        return close, 1.0 if close else 0.0
+    return comp_pcc(golden, calculated, pcc_threshold)
 
 
 def get_rope_cos_sin_from_tt_setup(rope_setup, mesh_device, seq_len):
@@ -504,9 +525,9 @@ def test_rope_embedding_lookup_multi_user(mesh_device, device_params, batch_size
         cos_hf_pos = cos_hf_unique[pos, :]  # [head_dim/2]
         sin_hf_pos = sin_hf_unique[pos, :]  # [head_dim/2]
 
-        # Compare
-        cos_passing, cos_pcc = comp_pcc(cos_hf_pos.float(), cos_tt_user.float(), 0.99)
-        sin_passing, sin_pcc = comp_pcc(sin_hf_pos.float(), sin_tt_user.float(), 0.99)
+        # Compare (constant-tensor safe: cos at position 0 is constant across head_dim)
+        cos_passing, cos_pcc = _compare_rope_vector(cos_hf_pos.float(), cos_tt_user.float(), 0.99)
+        sin_passing, sin_pcc = _compare_rope_vector(sin_hf_pos.float(), sin_tt_user.float(), 0.99)
 
         if user_idx < 4 or user_idx == users_to_compare - 1:  # Log first few and last user
             logger.info(f"User {user_idx} at position {pos}: cos PCC={cos_pcc:.6f}, sin PCC={sin_pcc:.6f}")
@@ -620,9 +641,9 @@ def test_rope_embedding_lookup_users_row_sharded(mesh_device, device_params, max
         cos_hf_pos = cos_hf_unique[pos, :]
         sin_hf_pos = sin_hf_unique[pos, :]
 
-        # Compare
-        cos_passing, cos_pcc = comp_pcc(cos_hf_pos.float(), cos_tt_user.float(), 0.99)
-        sin_passing, sin_pcc = comp_pcc(sin_hf_pos.float(), sin_tt_user.float(), 0.99)
+        # Compare (constant-tensor safe: cos at position 0 is constant across head_dim)
+        cos_passing, cos_pcc = _compare_rope_vector(cos_hf_pos.float(), cos_tt_user.float(), 0.99)
+        sin_passing, sin_pcc = _compare_rope_vector(sin_hf_pos.float(), sin_tt_user.float(), 0.99)
 
         if user_idx < 4 or user_idx == users_to_compare - 1:
             logger.info(f"User {user_idx} at position {pos}: cos PCC={cos_pcc:.6f}, sin PCC={sin_pcc:.6f}")
@@ -743,7 +764,7 @@ def test_rotary_embedding_llama_kernel_with_scaled_values(
     trans_mat_torch = trans_mat_torch.repeat(1, 1, batch_size, 1)
 
     # Set up sharded memory configs
-    grid_size = mesh_device.compute_with_storage_grid_size()
+    grid_size = ttnn.CoreCoord(8, 8)  # Safe limit: max 8 per dimension to avoid Galaxy hangs
     batch_grid = ttnn.num_cores_to_corerangeset(batch_size, grid_size, row_wise=True)
 
     # Input memory config: HEIGHT_SHARDED (matching nlp_create_qkv_heads_decode output)
@@ -907,7 +928,9 @@ def test_rope_yarn_values_match_hf(mesh_device, device_params, reset_seeds):
     rope_ours = rotary_embedding_factory(
         dim=hf_config.head_dim,
         max_position_embeddings=hf_config.max_position_embeddings,
-        base=hf_config.rope_theta,
+        # transformers 5.x folds rope_theta into rope_parameters (GptOssConfig has no rope_theta attr).
+        base=getattr(hf_config, "rope_theta", None)
+        or (getattr(hf_config, "rope_parameters", None) or {}).get("rope_theta", 150000.0),
         rope_scaling=rope_scaling,
     )
 
@@ -1077,7 +1100,7 @@ def test_trace_rope_ops_for_corruption(mesh_device, device_params, reset_seeds):
     # ===== Now test rotary_embedding_llama =====
     logger.info("\n=== Testing rotary_embedding_llama ===")
 
-    grid_size = mesh_device.compute_with_storage_grid_size()
+    grid_size = ttnn.CoreCoord(8, 8)  # Safe limit: max 8 per dimension to avoid Galaxy hangs
     batch_grid = ttnn.num_cores_to_corerangeset(batch_per_row, grid_size, row_wise=True)
 
     # Create Q tensor with known values
@@ -1203,7 +1226,7 @@ def test_rope_multiple_iterations(mesh_device, device_params, reset_seeds):
     cos_matrix_torch = ttnn.to_torch(ttnn.get_device_tensors(rope_setup.cos_matrix)[0])
     sin_matrix_torch = ttnn.to_torch(ttnn.get_device_tensors(rope_setup.sin_matrix)[0])
 
-    grid_size = mesh_device.compute_with_storage_grid_size()
+    grid_size = ttnn.CoreCoord(8, 8)  # Safe limit: max 8 per dimension to avoid Galaxy hangs
     batch_grid = ttnn.num_cores_to_corerangeset(batch_per_row, grid_size, row_wise=True)
     num_mesh_cols = mesh_device.shape[1]
 
@@ -1350,7 +1373,7 @@ def test_paged_update_cache_with_large_values(mesh_device, device_params, reset_
     logger.info(f"K large range: [{k_torch_large.min():.4f}, {k_torch_large.max():.4f}]")
 
     # Create memory config for K
-    grid_size = mesh_device.compute_with_storage_grid_size()
+    grid_size = ttnn.CoreCoord(8, 8)  # Safe limit: max 8 per dimension to avoid Galaxy hangs
     batch_grid = ttnn.num_cores_to_corerangeset(batch_per_row, grid_size, row_wise=True)
 
     kv_mem_config = ttnn.create_sharded_memory_config(
@@ -1562,7 +1585,7 @@ def test_sdpa_with_large_q_values(mesh_device, device_params, reset_seeds):
     logger.info(f"Q large range: [{q_torch_large.min():.4f}, {q_torch_large.max():.4f}]")
 
     # Create memory config for Q
-    grid_size = mesh_device.compute_with_storage_grid_size()
+    grid_size = ttnn.CoreCoord(8, 8)  # Safe limit: max 8 per dimension to avoid Galaxy hangs
     batch_grid = ttnn.num_cores_to_corerangeset(batch_size, grid_size, row_wise=True)
 
     q_mem_config = ttnn.create_sharded_memory_config(
@@ -1606,7 +1629,7 @@ def test_sdpa_with_large_q_values(mesh_device, device_params, reset_seeds):
     )
 
     sdpa_config = ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=mesh_device.compute_with_storage_grid_size(),
+        compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),  # Safe limit: max 8 per dimension to avoid Galaxy hangs
         q_chunk_size=32,
         k_chunk_size=32,
     )
@@ -1826,7 +1849,7 @@ def test_attention_chain_with_yarn_scaling(mesh_device, device_params, reset_see
     logger.info(f"Position range: {position_ids.min().item()} - {position_ids.max().item()}")
 
     # Memory configs
-    grid_size = mesh_device.compute_with_storage_grid_size()
+    grid_size = ttnn.CoreCoord(8, 8)  # Safe limit: max 8 per dimension to avoid Galaxy hangs
     batch_grid = ttnn.num_cores_to_corerangeset(batch_per_row, grid_size, row_wise=True)
 
     q_mem_config = ttnn.create_sharded_memory_config(
@@ -1948,7 +1971,9 @@ def test_attention_chain_with_yarn_scaling(mesh_device, device_params, reset_see
 
         # Step 3: Run SDPA
         sdpa_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=mesh_device.compute_with_storage_grid_size(),
+            compute_with_storage_grid_size=ttnn.CoreCoord(
+                8, 8
+            ),  # Safe limit: max 8 per dimension to avoid Galaxy hangs
             q_chunk_size=32,
             k_chunk_size=32,
         )
@@ -2103,7 +2128,7 @@ def test_single_layer_with_yarn(mesh_device, device_params, reset_seeds, use_yar
         # Test that RoPE can be applied to Q-like tensors
         q_torch = torch.randn(1, batch_per_row, 32, 64, dtype=torch.bfloat16)
 
-        grid_size = mesh_device.compute_with_storage_grid_size()
+        grid_size = ttnn.CoreCoord(8, 8)  # Safe limit: max 8 per dimension to avoid Galaxy hangs
         batch_grid = ttnn.num_cores_to_corerangeset(batch_per_row, grid_size, row_wise=True)
 
         q_mem_config = ttnn.create_sharded_memory_config(

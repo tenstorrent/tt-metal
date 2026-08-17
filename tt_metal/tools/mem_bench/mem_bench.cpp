@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -23,7 +23,7 @@
 #include "host_utils.hpp"
 #include "tt-metalium/program.hpp"
 #include "tt_metal/impl/dispatch/util/size_literals.hpp"
-#include "vector_aligned.hpp"
+#include "tt_metal/impl/dispatch/vector_aligned.hpp"
 #include "work_thread.hpp"
 #include <llrt/tt_cluster.hpp>
 

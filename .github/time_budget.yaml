@@ -8,17 +8,21 @@
 
 # Team names are currently assigned to tests by best guess.
 #   Please message #tt-metal-infra if there are any concerns.
-# Sku names do not make the distinction between baremetal/vm, or viommu/non-viommu.
-#   This will be determined per pipeline based on need.
 
-# Example:
 metal_infra:
-  smoke: # intended category for PR gate and merge gate
-    CPU: 0
-    N150: 0
-    N300: 0
-    wh_llmbox: 0
-  sanity: # APC will be renamed to sanity
+  pr_gate:
+    wh_n150_civ2: 0
+    wh_n300_civ2: 0
+    wh_llmbox_civ2: 0
+    bh_p150b_civ2_viommu: 0
+    bh_p150b_civ2: 0
+  merge_gate:
+    wh_n150_civ2: 0
+    wh_n300_civ2: 0
+    wh_llmbox_civ2: 0
+    bh_p150b_civ2_viommu: 0
+    bh_p150b_civ2: 0
+  sanity:
     CPU: 0
     N150: 0
     N300: 0
@@ -28,7 +32,6 @@ metal_infra:
     P150b: 0
     P300: 0
     wh_llmbox: 0
-    bh_llmbox: 0
     bh_loudbox: 0
     bh_qb: 0
   unit:
@@ -64,47 +67,357 @@ metal_infra:
     wh_galaxy: 0
     bh_galaxy: 0
 
-# Current time budgets are based on sums of existing tests.
-# No official decision has been made yet for division of budgets per team.
 ttnn:
+  pr_gate:
+    wh_n150_civ2: 15
+  merge_gate:
+    wh_n150_civ2: 45
+    wh_n300_civ2: 55
+    wh_llmbox_civ2_viommu: 15
+    bh_p150b_civ2_viommu: 45
+    sim_wormhole_b0: 40
+    sim_blackhole: 40
+  sanity:
+    wh_n300_civ2: 545
+    bh_p100: 545
+    bh_p150b_civ2: 545
+    bh_quietbox_2: 65
+    bh_p300: 15
+    wh_llmbox_civ2: 40
+    sim_wormhole_b0: 680
+    sim_blackhole: 680
   unit:
     wh_llmbox: 50
+    wh_galaxy: 120
+    bh_galaxy: 40
+    bh_p100: 805
+    bh_p150b_civ2: 1045
+    wh_n150_civ2: 1205
+    wh_n300_civ2: 1180
+    bh_p150b_civ2_viommu: 115
+    bh_p300: 60
+    bh_quietbox_2: 60
   e2e:
     wh_llmbox: 90
-    wh_galaxy: 40
-    bh_galaxy: 40
+    wh_galaxy: 0
+    bh_galaxy: 30
+    bh_p150b_civ2: 55
+    bh_loudbox: 85
+    bh_p300: 85
+    bh_quietbox_2: 85
+  e2e_tier1:
+    wh_n150: 8
+    wh_llmbox_perf: 6
+  unit_tier1:
+    wh_n150: 20
+    wh_llmbox: 8
+  e2e_tier3:
+    wh_n150: 21
+  unit_tier3:
+    wh_n150: 4
+  device_perf:
+    bh_p150b_civ2: 7
+    wh_n150: 5
+    wh_llmbox_perf: 8
   integration:
     wh_llmbox: 30
-    wh_galaxy: 350
+    wh_galaxy: 120
+    wh_n150_civ2: 60
+    bh_p100: 30
+    bh_p150b_civ2_viommu: 30
+  profiler:
+    wh_llmbox: 90
+    wh_galaxy: 50
+    wh_n150_civ2: 60
+    wh_n300_civ2: 60
+    bh_p100a_civ2_viommu: 60
+    bh_p150b_civ2_viommu: 60
+  demo:
+    bh_sc1_high_power: 10
+  sweep:
+    wh_galaxy: 640
+    wh_n150_civ2: 1100
+    wh_n300_civ2: 990
+    wh_llmbox: 920
+    bh_p100a_civ2_viommu: 660
+    bh_p150b_civ2_viommu: 640
+    bh_p300_viommu: 720
+  sweep_validation:
+    wh_n150: 120
+    wh_n300: 120
+    bh_p150b_civ2: 120
+    wh_galaxy: 120
 
-fabric:
+train:
+  merge_gate:
+    bh_p150b_civ2: 30
   unit:
-    wh_llmbox: 40
-  integration:
-    wh_llmbox: 10
-  e2e:
-    wh_llmbox: 165
-    wh_galaxy: 100
-    bh_galaxy: 60
+    bh_p100: 90
+    bh_p150b_civ2: 90
+  perf:
+    bh_p100: 160
+    bh_p150b_civ2: 400
+    bh_galaxy_perf: 180
+
+ttsim:
+  unit:
+    sim_wormhole_b0: 15
+    sim_blackhole: 15
+  sanity:
+    sim_wormhole_b0: 30
+    sim_blackhole: 30
+
+shield:
+  e2e_tier2:
+    wh_n150: 150
+    wh_n300: 30
+    bh_p150b_civ2: 120
+  e2e_tier3:
+    bh_p150b_civ2: 18
+  unit_tier2:
+    wh_n150: 220
+    wh_n300: 216
+    bh_p150: 100
+    bh_p150b_civ2: 90
+  unit_tier3:
+    bh_p150b_civ2: 20
+    bh_p150: 2
+  device_perf:
+    wh_n150: 100
+    bh_p150: 60
 
 scaleout:
-  e2e:
-    wh_llmbox: 20
+  merge_gate:
+    cpu_medium: 10
+    wh_n300_civ2: 10
   unit:
-    wh_llmbox: 15
+    cpu_medium: 235
+    wh_llmbox: 60
+    wh_galaxy: 25
+  stress:
+    wh_galaxy_perf: 120
   integration:
-    wh_llmbox: 30
+    wh_llmbox: 40
+  health:
+    wh_galaxy: 15
+    bh_galaxy: 10
+  sanity:
+    wh_galaxy: 20
+    bh_quietbox_2: 15
+    bh_p300: 15
+    wh_llmbox_civ2: 30
+  e2e:
+    wh_llmbox: 185
+    wh_galaxy: 100
+    bh_galaxy: 60
+    bh_sc1: 20
+    bh_sc4: 90
+    bh_sc16: 150
+    bh_loudbox: 80
+    bh_p300: 80
+    bh_quietbox_2: 80
+
+runtime:
+  pr_gate:
+    wh_n150_civ2: 15
+  merge_gate:
+    wh_n150_civ2: 45
+    wh_n300_civ2: 15
+    wh_llmbox_civ2_viommu: 15
+    bh_p150b_civ2_viommu: 45
+  sanity:
+    wh_n150_civ2: 13
+    bh_p150b_civ2: 13
+    bh_loudbox: 5
+    sim_wormhole_b0: 30
+    sim_blackhole: 30
+    sim_wormhole_b0_galaxy: 10
+    sim_blackhole_galaxy: 10
+  unit:
+    wh_n150_civ2: 232
+    wh_n300_civ2: 99
+    wh_llmbox: 20
+    bh_p150b_civ2: 214
+    bh_p300: 69
+    bh_p150b_civ2_viommu: 11
+    bh_p100a_civ2_viommu: 79
+    bh_loudbox: 20
+    wh_galaxy: 39
+  integration:
+    wh_n150_civ2: 360
+    bh_p150b_civ2: 360
+    bh_loudbox: 25
+    wh_galaxy: 15
+    bh_galaxy: 15
+  perf:
+    wh_n300_civ2: 65
+    bh_p150_perf: 50
+  perf_profiler:
+    wh_n300_civ2: 5
+    bh_p150_perf: 5
+
+triage:
+  merge_gate:
+    wh_n150_civ2: 11
+    bh_p150b_civ2_viommu: 11
+  unit:
+    wh_n150_civ2: 16
+    bh_p150b_civ2_viommu: 16
+
+llk:
+  pr_gate:
+    wh_n150_civ2: 40
+    bh_p150b_civ2_viommu: 40
+  unit:
+    wh_n150_civ2: 40
+    wh_n300_civ2: 40
+    bh_p150: 40
+    bh_p150b_civ2_viommu: 110
+    bh_p100: 40
+  e2e:
+    wh_n150_civ2: 1800
+    bh_p150b_civ2: 1800
+  perf:
+    wh_n150_civ2: 1200
+    bh_p150b_civ2: 1200
+  bit_exact:
+    wh_n150_civ2: 90
+    bh_p150b_civ2: 180
+  merge_gate:
+    wh_n150_civ2: 300
+    bh_p150b_civ2_viommu: 70
 
 models:
+  merge_gate:
+    wh_galaxy_merge_gate: 5
+  sanity:
+    wh_galaxy_perf: 10
+    wh_n300_civ2: 5
+    bh_p150b_civ2_viommu: 110
+    bh_p300: 10
+  frequent:
+    wh_n150: 348
+    wh_n300: 330
+    wh_n150_civ2: 30
+    wh_n300_civ2: 30
+    bh_p150b_civ2: 120
+  stress:
+    wh_galaxy_perf: 500
   e2e:
-    wh_llmbox: 120
+    wh_llmbox: 198
+    bh_p150b_civ2: 8
+    bh_p300: 20
+    bh_loudbox: 193
+    bh_quietbox_2: 90
+    bh_sc1: 20
+  e2e_tier1:
+    wh_n150: 28
+    wh_galaxy_perf: 120
+    bh_p150: 27
+    bh_quietbox_2: 255
+    bh_galaxy: 78
+    bh_sc1: 140
+    bh_sc4: 120
+  e2e_tier2:
+    wh_llmbox_perf: 266
+    wh_n150: 41
+    wh_n300: 6
+    bh_p150: 26
+    bh_p300: 42
+    bh_quietbox_2: 186
+  e2e_tier3:
+    wh_llmbox_perf: 180
+    wh_galaxy_perf: 55
+    wh_n150: 65
+    wh_n300: 60
+    bh_p150: 7
+    bh_p300: 8
+    bh_quietbox_2: 42
   unit:
-    wh_llmbox: 292
+    wh_llmbox: 80
+    wh_galaxy_perf: 10
+  unit_tier1:
+    wh_llmbox: 61
+    wh_n150: 110
+    wh_galaxy: 235
+    wh_galaxy_perf: 45
+    bh_p150: 20
+    bh_quietbox_2: 390
+    bh_galaxy: 75
+    bh_sc1: 75
+    bh_sc4: 50
+  unit_tier2:
+    wh_llmbox: 114
+    wh_llmbox_perf: 172
+    wh_n150: 67
+    wh_n300: 30
+    bh_p150: 20
+    bh_quietbox_2: 50
+  unit_tier3:
+    wh_llmbox: 90
+    wh_galaxy: 80
+    wh_llmbox_perf: 58
+    wh_n150: 41
+    wh_n300: 33
+    bh_p150: 20
+    bh_p300: 30
+    bh_quietbox_2: 21
   integration:
-    wh_llmbox: 422
+    wh_llmbox: 50
   perf:
-    wh_llmbox_perf: 685
+    wh_llmbox_perf: 125
     wh_galaxy: 280
+    wh_galaxy_perf: 70
+  device_perf:
+    wh_n150: 20
+    bh_p150: 20
+    bh_p300: 20
+    bh_quietbox_2: 80
   demo:
-    wh_llmbox_perf: 1090
-    wh_galaxy: 270
+    wh_llmbox_perf: 50
+    wh_galaxy: 345
+    wh_galaxy_perf: 160
+    bh_galaxy: 470
+    bh_sc1: 437
+    bh_sc1_high_power: 143
+    wh_n150: 500
+    wh_n150_civ2: 300
+    wh_n300: 600
+    wh_n300_civ2: 400
+    wh_n300_perf: 200
+    bh_p150: 250
+    bh_p150_perf: 420
+    bh_p150b_civ2: 130
+    bh_p150b_civ2_viommu: 50
+    bh_loudbox: 1200
+    bh_p300: 800
+  sweep_tier1:
+    wh_n150: 30
+    wh_galaxy: 30
+    bh_p150: 30
+  sweep_tier2:
+    wh_n150: 30
+    wh_llmbox_perf: 60
+    bh_quietbox_2: 30
+    bh_p150: 30
+  vllm:
+    wh_galaxy_perf: 430
+    bh_quietbox_2: 310
+    wh_llmbox: 297
+    bh_loudbox: 75
+    wh_n150: 65
+umd:
+  unit:
+    wh_galaxy_perf: 35
+  sanity:
+    wh_n150_civ2: 15
+    wh_n300_civ2: 15
+    bh_p100a_civ2_viommu: 15
+    bh_p150b_civ2_viommu: 15
+
+syseng:
+  integration:
+    wh_n150_civ2: 34
+    wh_n300_civ2: 36
+    bh_p100: 18
+    bh_p150b_civ2: 18

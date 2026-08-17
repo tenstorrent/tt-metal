@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -15,8 +15,5 @@ std::vector<::EthernetLinkMetrics> deserialize_link_metrics_from_bytes(const std
 
 std::vector<uint8_t> serialize_eth_chan_identifiers_to_bytes(const std::vector<::EthChannelIdentifier>& exit_nodes);
 std::vector<::EthChannelIdentifier> deserialize_eth_chan_identifiers_from_bytes(const std::vector<uint8_t>& data);
-
-std::vector<uint8_t> serialize_reset_pairs_to_bytes(const std::vector<::ResetPair>& reset_pairs);
-std::vector<::ResetPair> deserialize_reset_pairs_from_bytes(const std::vector<uint8_t>& data);
 
 }  // namespace tt::scaleout::validation

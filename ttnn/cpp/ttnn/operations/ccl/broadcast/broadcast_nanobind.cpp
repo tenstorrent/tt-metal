@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,7 +10,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/ccl/broadcast/broadcast.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/distributed/types.hpp"
@@ -18,85 +18,56 @@
 
 namespace ttnn::operations::ccl {
 
-namespace {
-
-template <typename ccl_operation_t>
-void bind_broadcast(nb::module_& mod, const ccl_operation_t& operation, const char* doc) {
-    bind_registered_operation(
-        mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const ccl_operation_t& self,
-               const ttnn::Tensor& input_tensor,
-               const MeshCoordinate& sender_coord,
-               std::optional<uint32_t> cluster_axis,
-               std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const uint32_t num_links,
-               const ttnn::ccl::Topology topology) -> ttnn::Tensor {
-                return self(input_tensor, sender_coord, num_links, memory_config, topology, cluster_axis, subdevice_id);
-            },
-            nb::arg("input_tensor"),
-            nb::arg("sender_coord"),
-            nb::kw_only(),
-            nb::arg("cluster_axis") = nb::none(),
-            nb::arg("subdevice_id") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("num_links") = 1,
-            nb::arg("topology") = nb::cast(ttnn::ccl::Topology::Linear)});
-}
-
-}  // namespace
-
 void bind_broadcast(nb::module_& mod) {
-    bind_broadcast(
-        mod,
-        ttnn::broadcast,
+    const auto* doc =
         R"doc(
         Performs a broadcast operation from a sender device to all other mesh devices across a cluster axis.
 
         Args:
-            input_tensor (ttnn.Tensor)
-            sender_coord (MeshCoordinate): Coordinate of the sender device in the mesh.
-            cluster_axis (int): Provided a MeshTensor, the axis corresponding to MeshDevice to perform the operation on.
-            mesh_device (MeshDevice): Device mesh to perform the operation on.
+            input_tensor (ttnn.Tensor): Input tensor. The data residing on ``sender_coord`` is the data that gets broadcast.
+            sender_coord (ttnn.MeshCoordinate): Coordinate of the sender device in the mesh.
 
         Mesh Tensor Programming Guide : https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/Programming_Mesh_of_Devices/Programming_Mesh_of_Devices_with_TT-NN.md
 
         Keyword Args:
-            num_links (int, optional): Number of links to use for the all-broadcast operation. Defaults to `1`.
-            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `input tensor memory config`.
-            topology (ttnn.Topology, optional): The topology configuration to run the operation in. Valid options are Ring and Linear. Defaults to `ttnn.Topology.Ring`.
+            cluster_axis (int, optional): The mesh axis to broadcast across. Defaults to `None`, in which case the tensor must have a line (1D) topology.
+            num_links (int, optional): Number of links to use for the broadcast operation. Defaults to `None`, for which the number of links is determined automatically.
+            memory_config (ttnn.MemoryConfig, optional): Output memory configuration. Defaults to the input tensor memory config.
+            topology (ttnn.Topology, optional): Fabric topology. Valid options are Ring and Linear. Defaults to `ttnn.Topology.Linear`.
+            subdevice_id (ttnn.SubDeviceId, optional): Subdevice id for worker cores.
 
         Returns:
-            ttnn.Tensor of the output on the mesh device.
+            ttnn.Tensor: The output tensor, same shape as the input, holding the sender device's data on every device along the cluster axis.
 
-        Example:
-            >>> sender_tensor = torch.randn([1, 1, 32, 256], dtype=torch.bfloat16)
-            >>> num_devices = 4
-            >>> device_tensors = []
-            >>> for device_idx in range(num_devices):
-                    if device_idx == sender_coord_tuple[cluster_axis]:
-                        device_tensors.append(sender_tensor)
-                    else:
-                        device_tensors.append(torch.zeros_like(sender_tensor))
-            >>> mesh_tensor_torch = torch.cat(device_tensors, dim=-1)
-            >>> mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 4))
-            >>> sender_coord = MeshCoordinate((0, 0))
-            >>> mesh_mapper_config = ttnn.MeshMapperConfig(
-                    [ttnn.PlacementReplicate(), ttnn.PlacementShard(-1)], ttnn.MeshShape(1, num_devices)
-                )
-            >>> ttnn_tensor = ttnn.from_torch(
-                            mesh_tensor_torch,
-                            dtype=input_dtype,
-                            device=mesh_device,
-                            layout=layout,
-                            memory_config=mem_config,
-                            mesh_mapper=ttnn.create_mesh_mapper(mesh_device,mesh_mapper_config))
-            >>> output = ttnn.broadcast(ttnn_tensor, sender_coord)
+        Supported dtypes and layouts:
 
-        )doc");
+            .. list-table::
+                :header-rows: 1
+
+                * - Dtypes
+                  - Layouts
+                * - BFLOAT16, BFLOAT8_B, FLOAT32
+                  - TILE, ROW_MAJOR
+
+            Broadcast is a data-movement collective and does not restrict the input dtype; the output preserves the input dtype.
+
+        Memory Support:
+            - Interleaved: DRAM and L1
+            - Sharded: WIDTH_SHARDED, HEIGHT_SHARDED, BLOCK_SHARDED (each may reside in DRAM or L1; the op places no buffer-type restriction)
+        )doc";
+
+    ttnn::bind_function<"broadcast">(
+        mod,
+        doc,
+        &ttnn::broadcast,
+        nb::arg("input_tensor"),
+        nb::arg("sender_coord"),
+        nb::kw_only(),
+        nb::arg("num_links") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("topology") = nb::cast(ttnn::ccl::Topology::Linear),
+        nb::arg("cluster_axis") = nb::none(),
+        nb::arg("subdevice_id") = nb::none());
 }
 
 }  // namespace ttnn::operations::ccl

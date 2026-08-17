@@ -80,7 +80,7 @@ uint32_t dram_bank_id = 0;
 auto src0_dram_buffer = MakeBufferBFP16(mesh_device, num_tiles, false);
 ...
 std::vector<bfloat16> identity_tile = create_identity_matrix(32, 32, 32);
-distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, identity_tile.data(), false);
+distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, identity_tile, false);
 ```
 
 Notice we set the `dram_bank_id = 0`.  In this basic DRAM configuration, this happens to be the default bank for our tile, and will be passed later as a runtime argument for our coordinator kernel.  This ensures that when the time comes, the coordinator core can read from `src0_dram_buffer` and retrieve that neat little tile.
@@ -116,7 +116,7 @@ We register four device-side kernels:
 - **`coordinator_kernel`**: Only on `{0,0}`, it performs DRAM reads and multicasts.
 - **`inbound_kernel`**: On `{1,0}, {2,0}, {3,0}`, it listens for an incoming tile and acknowledges it with DPRINT.
 - **`outbound_kernel`**: (USER EXERCISE) Also on the receivers, the user can optionally writes data out to a Compute baby-RISCV core or re-broadcast to other Tensix cores.
-- **`void_compute_kernel`**: (USER EXERCISE) The user can optionaly write a compute phase to perform some math or transformation on the tile.
+- **`void_compute_kernel`**: (USER EXERCISE) The user can optionally write a compute phase to perform some math or transformation on the tile.
 
 For example, creating the coordinator (sender) kernel:
 
@@ -168,7 +168,7 @@ Upon launch, the kernel extracts **runtime arguments** passed from the host, whi
 - **Semaphores**: `sender_addr, receiver_addr` → Control when receivers are ready.
 - **DRAM source tile**: `dram_bank_id, src0_dram` → Specifies which DRAM bank and address hold the tile.
 - **Tile size**: `single_tile_size` → The total size (in bytes) of a single **32×32** tile.
-- **Destinations**: `num_dests` → Used as our sender semaphore's atomic counter, which is reached via enumeration per each receiver core's response (eg. tile aknowledgement).
+- **Destinations**: `num_dests` → Used as our sender semaphore's atomic counter, which is reached via enumeration per each receiver core's response (eg. tile acknowledgement).
 
 These arguments are extracted as follows:
 ```cpp
@@ -218,7 +218,7 @@ SliceRange sr = SliceRange{
 };
 ```
 
-It's quite customizeable.  In this example, we have the following:
+It's quite customizable.  In this example, we have the following:
 - `.h0 = 0` and `.h1 = 32` → sets the tile **height range** (ie. num of rows)
 - `.hs = 8` → strides every 8th row
 - `.w0 = 0` and `.w1 = 32` → sets the tile **width range** (ie. num of columns)
@@ -229,7 +229,7 @@ This results in an **4×4 sampled preview** of the 32×32 tile.  Pretty efficien
 To print your slice, call the TileSlice function like so:
 
 ```cpp
-DPRINT << TileSlice(cb_id_in0, 0, sr, TSLICE_INPUT_CB, TSLICE_WR_PTR, true, false);
+DPRINT("{}", TileSlice(cb_id_in0, 0, sr, TSLICE_INPUT_CB, TSLICE_WR_PTR, true, false));
 ```
 
 - **Circular Buffer ID**: `cb_id_in0` → The circular buffer ID where the tile data is stored. NOTE: it is important the circular buffer is not pushed backed yet, otherwise tile DPRINTing will fail, so make sure TileSlice is placed before a `cb_push_back()` call.
@@ -280,8 +280,8 @@ Recall that instead of setting it to `INVALID`, we reset it to `0`. Bringing thi
 So now, we print a debug message to alert you that the multicast operation is ready for launch. At this point, the coordinator has verified that all receivers are ready, so let us commence the multicast!
 
 ```cpp
-DPRINT << "CORE (" << (uint32_t)get_absolute_logical_x() << "," << (uint32_t)get_absolute_logical_y()
-    << "): Tile ready for multicast. I am starting all inbound kernels in cores in given range." << ENDL() << ENDL();
+DPRINT("CORE ({},{}): Tile ready for multicast. I am starting all inbound kernels in cores in given range.\n\n",
+    get_absolute_logical_x(), get_absolute_logical_y());
 ```
 
 ### **3.6 Multicasting the Tile**
@@ -301,7 +301,7 @@ To actually multicast the tile, we call this asynchronous function:
 noc_async_write_multicast(tile_l1_addr, identity_tile_global_multicast_addr, single_tile_size, num_dests);
 ```
 
-The tile write is non-blocking, meaning control immediately returns to our coordinator kernel while the hardware handles the tile multicast in the background. It's far more efficient than individually unicast-copying the same tile three times. Perfect for our super fast parallism needs!
+The tile write is non-blocking, meaning control immediately returns to our coordinator kernel while the hardware handles the tile multicast in the background. It's far more efficient than individually unicast-copying the same tile three times. Perfect for our super fast parallelism needs!
 
 >  *For the curious*: Under the hood, `noc_async_write_multicast` schedules a write transaction into the NoC router with a special multicast bit set in the header. METALIUM configures everything for you, so you don’t have to worry about packet routing or other data movement intricacies. Check out `dataflow_api.h` and specifically `noc_parameters.h` for more details.
 
@@ -336,7 +336,7 @@ The inbound kernel is responsible for receiving a 32×32 tile multicast from the
 
 ### **4.1 Parsing Runtime Arguments**
 
-Runtime arguments are much fewer here since we are simply aknowledging the tile, not performing anything on it. Upon launch, inbound_kernel extracts runtime arguments passed from the host, which define:
+Runtime arguments are much fewer here since we are simply acknowledging the tile, not performing anything on it. Upon launch, inbound_kernel extracts runtime arguments passed from the host, which define:
 
 - **Sender core coordinates**: `start_x, start_y` → The logical location of the coordinator core.
 
@@ -417,7 +417,7 @@ To verify correctness, receivers can use DPRINT to log a sample of the tile data
 ```cpp
 for (uint8_t r = 0; r < 32; ++r) {
     SliceRange sr = SliceRange{.h0 = static_cast<uint8_t>(r), .h1 = static_cast<uint8_t>(r+1), .hs = 1, .w0 = 0, .w1 = 32, .ws = 1};
-    DPRINT_DATA0({ DPRINT << TileSlice(cb_id_in0, 0, sr, TSLICE_INPUT_CB, TSLICE_WR_PTR, true, false); });
+    DPRINT_DATA0("{}", TileSlice(cb_id_in0, 0, sr, TSLICE_INPUT_CB, TSLICE_WR_PTR, true, false));
 }
 ```
 
@@ -432,8 +432,8 @@ cb_push_back(cb_id_in0, 1);
 And officially close out the inbound kernel with:
 
 ```cpp
-DPRINT << "CORE (" << (uint32_t)get_absolute_logical_x() << "," << (uint32_t)get_absolute_logical_y()
-    << "): Inbound kernel has processed and acknowledged its tile." << ENDL() << ENDL();
+DPRINT("CORE ({},{}): Inbound kernel has processed and acknowledged its tile.\n\n",
+    get_absolute_logical_x(), get_absolute_logical_y());
 ```
 
 

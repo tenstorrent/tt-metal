@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,7 +7,7 @@
 // this is needed for inclusion of fabric_erisc_datamover_channels.hpp, since we are not
 // including fabric_erisc_router_ct_args.hpp here, where the constant is originally defined
 namespace tt::tt_fabric {
-static constexpr uint8_t worker_handshake_noc = 0;
+static constexpr uint8_t worker_handshake_noc = noc_index;
 }  // namespace tt::tt_fabric
 
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp"

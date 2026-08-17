@@ -1,42 +1,42 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
+#include "../../../device/kernels/accumulation_common.hpp"
 
 void kernel_main() {
     // Compile time args
     // -----------------
-    constexpr uint32_t total_tiles_per_core = get_compile_time_arg_val(0);
-    constexpr auto src_args = TensorAccessorArgs<1>();
+    constexpr uint32_t total_tiles_per_core = get_arg(args::total_tiles_per_core);
 
     // Runtime args
     // ------------
-    const uint32_t src_base_addr = get_arg_val<uint32_t>(0);
-    const uint32_t src_start_tile = get_arg_val<uint32_t>(1);
-
-    // CB indices
-    // ----------
-    constexpr auto src_cb = tt::CBIndex::c_0;
-
-    // Tile sizes
-    // ----------
-    constexpr uint32_t src_tile_size = get_tile_size(src_cb);
+    const uint32_t src_start_tile = get_arg(args::src_start_tile);
 
     // Tensor accessor
     // ---------------
-    const auto src_accessor = TensorAccessor(src_args, src_base_addr, src_tile_size);
+    const auto src_accessor = TensorAccessor(tensor::src);
+
+    Noc noc;
+    DataflowBuffer dfb_src(dfb::src);
+
+    // Tile sizes
+    // ----------
+    const uint32_t src_tile_size = dfb_src.get_tile_size();
 
     //-------------------------------------------------------------------------
-    // Main loop - pull pages from src and push to src_cb
+    // Main loop - pull pages from src and push to the src dataflow buffer
     for (uint32_t tile_id = src_start_tile; tile_id < (src_start_tile + total_tiles_per_core); ++tile_id) {
-        cb_reserve_back(src_cb, 1);
-        const uint32_t l1_write_addr = get_write_ptr(src_cb);
-        const uint64_t src_noc_addr = src_accessor.get_noc_addr(tile_id);
-        noc_async_read(src_noc_addr, l1_write_addr, src_tile_size);
-        noc_async_read_barrier();
-        cb_push_back(src_cb, 1);
+        dfb_src.reserve_back(ONE_TILE);
+        noc.async_read(src_accessor, dfb_src, src_tile_size, {.page_id = tile_id}, {.offset_bytes = 0});
+        noc.async_read_barrier();
+        dfb_src.push_back(ONE_TILE);
     }
 }

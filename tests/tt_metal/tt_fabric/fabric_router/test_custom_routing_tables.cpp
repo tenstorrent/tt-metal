@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -15,7 +15,6 @@
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/distributed_context.hpp>
-#include <tt-logger/tt-logger.hpp>
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tests/tt_metal/tt_fabric/common/utils.hpp"
 

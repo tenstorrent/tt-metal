@@ -1,9 +1,10 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "batch_norm_device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
@@ -102,7 +103,7 @@ BatchNormOperation::spec_return_value_t BatchNormOperation::compute_output_specs
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     using namespace tt::constants;
     const auto output_shape = tensor_args.input.logical_shape();
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_shape,
         TensorLayout(operation_attributes.get_dtype(), PageConfig(Layout::TILE), operation_attributes.memory_config));
 }
@@ -117,46 +118,8 @@ BatchNormOperation::tensor_return_value_t BatchNormOperation::create_output_tens
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
 }
 
-tt::stl::hash::hash_t BatchNormOperation::compute_program_hash(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    const auto& [input, batch_mean, batch_var, weight, bias, output] = tensor_args;
-
-    TT_FATAL(
-        std::holds_alternative<DeviceStorage>(input.storage()),
-        "Unexpected type {}",
-        tt::stl::get_active_type_name_in_variant(input.storage()));
-
-    // For input tensor
-    auto base_tuple = std::make_tuple(attributes, input.dtype(), input.memory_config());
-
-    // To extract (optional<DataType>, optional<MemoryConfig>) from optional tensors
-    auto get_optional_tensor_info = [](const std::optional<const Tensor>& tensor_opt)
-        -> std::tuple<std::optional<DataType>, std::optional<MemoryConfig>> {
-        if (!tensor_opt.has_value()) {
-            return std::make_tuple(std::nullopt, std::nullopt);
-        }
-
-        const auto& tensor = tensor_opt.value();
-        return std::make_tuple(std::optional{tensor.dtype()}, std::optional{tensor.memory_config()});
-    };
-
-    auto args_tuple = std::tuple_cat(
-        base_tuple,
-        get_optional_tensor_info(batch_mean),
-        get_optional_tensor_info(batch_var),
-        get_optional_tensor_info(weight),
-        get_optional_tensor_info(bias));
-
-    // Apply the hash operation
-    return std::apply(
-        [](auto&&... args) {
-            return operation::hash_operation<BatchNormOperation>(std::forward<decltype(args)>(args)...);
-        },
-        std::move(args_tuple));
-}
-
-tt::stl::hash::hash_t BatchNormOperation::operation_attributes_t::to_hash() const {
-    return tt::stl::hash::hash_objects_with_default_seed(eps, memory_config, get_dtype(), compute_kernel_config);
+ttsl::hash::hash_t BatchNormOperation::operation_attributes_t::to_hash() const {
+    return ttsl::hash::hash_objects_with_default_seed(eps, memory_config, get_dtype(), compute_kernel_config);
 }
 
 }  // namespace ttnn::operations::normalization

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,7 +9,7 @@
 #include <tt_stl/aligned_allocator.hpp>
 #include <umd/device/driver_atomics.hpp>
 
-#include <tt-metalium/vector_aligned.hpp>
+#include "vector_aligned.hpp"
 
 #if defined(__x86_64__) || defined(__i386__)
 #include <emmintrin.h>

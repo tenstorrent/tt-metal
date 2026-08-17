@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,7 +12,6 @@
 #include "ttnn/core.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/types.hpp"
-#include "ttnn/decorators.hpp"
 #include "ttnn/global_semaphore.hpp"
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
@@ -31,7 +30,7 @@ struct MeshPartitionDeviceOperation {
         const std::optional<ttnn::Tensor> optional_output_tensor;
     };
 
-    using spec_return_value_t = ttnn::TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
 
     using tensor_return_value_t = ttnn::Tensor;
 
@@ -39,21 +38,15 @@ struct MeshPartitionDeviceOperation {
         using OverrideRuntimeArgsCallback = std::function<void(
             const void*,
             tt::tt_metal::Program&,  // ‼  no const, exact type
-            const std::vector<tt::tt_metal::Tensor>&,
-            const std::vector<std::optional<const tt::tt_metal::Tensor>>&,
-            const std::vector<tt::tt_metal::Tensor>&)>;
+            const std::vector<ttnn::Tensor>&,
+            const std::vector<std::optional<const ttnn::Tensor>>&,
+            const std::vector<ttnn::Tensor>&)>;
 
         // -- shared variables --------------------------------------------
-        using SliceSharedVariables = std::variant<
-            prim::SliceRmProgramFactory::shared_variables_t,
-            prim::SliceRmShardedProgramFactory::shared_variables_t,
-            prim::SliceRmStrideProgramFactory::shared_variables_t,
-            prim::SliceTileProgramFactory::shared_variables_t,
-            prim::SliceTileTensorArgsProgramFactory::shared_variables_t>;
-
+        // Remembers which slice factory built this coord's Program so the cache hit patches the
+        // slot layout that factory baked (see patch_slice_program_addresses).
         struct shared_variables_t {
             prim::SliceDeviceOperation::program_factory_t slice_program_factory;
-            SliceSharedVariables slice_shared_variables;
         };
         using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 

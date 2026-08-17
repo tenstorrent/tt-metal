@@ -1,15 +1,16 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "profiler_no_op_program_factory.hpp"
 
-#include <core/ttnn_all_includes.hpp>
 #include <enchantum/enchantum.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "metal/common/program_utils.hpp"
 #include "profiler_no_op_device_operation_types.hpp"
+#include "tt-metalium/host_api.hpp"
+#include "ttnn/types.hpp"
 
 namespace {
 

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -97,7 +97,7 @@ TEST(Sanity, ReportIntermeshLinks) {
             for (const auto& [channel, remote_connection] : links) {
                 tt::umd::CoreCoord eth_core =
                     cluster.get_soc_desc(chip_id).get_eth_core_for_channel(channel, CoordSystem::LOGICAL);
-                log_info(tt::LogTest, "  Channel {} at {}", channel, CoreCoord{eth_core.x, eth_core.y}.str());
+                log_info(tt::LogTest, "  Channel {} at {}", channel, tt::tt_metal::CoreCoord{eth_core.x, eth_core.y}.str());
             }
         }
     }

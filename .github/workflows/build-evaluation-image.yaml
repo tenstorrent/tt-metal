@@ -1,6 +1,12 @@
 name: "Build Evaluation Image"
+# Push-oriented workflow (GHCR / optional Harbor evaluation registry).
+# Intentionally does NOT use check-harbor.yaml or resolve-docker-pull-refs:
+# this workflow pushes images *to* Harbor/GHCR rather than pulling CI images
+# *through* Harbor. Tool image tags used as BuildKit contexts are canonical
+# ghcr.io refs resolved directly by the builder, not via pull-through cache.
 
 permissions:
+  contents: read
   packages: write
 
 on:
@@ -46,6 +52,11 @@ on:
         description: "Whether to push the built image to GitHub Container Registry"
         type: boolean
         default: false
+      ubuntu-version:
+        required: false
+        description: "Ubuntu version for base image (22.04 or 24.04)"
+        type: string
+        default: "24.04"
     outputs:
       evaluation-image-url:
         description: "Docker image URL(s) for the evaluation image"
@@ -92,21 +103,53 @@ on:
         description: "Whether to push the built image to GitHub Container Registry"
         type: boolean
         default: false
+      ubuntu-version:
+        required: false
+        description: "Ubuntu version for base image (22.04 or 24.04)"
+        type: string
+        default: "24.04"
 
 env:
   BUILDKIT_HOST: buildkitd.buildkit.svc.cluster.local
   BUILDKIT_PORT: 1234
 
 jobs:
+  # Compute tool image tags for pre-built dependencies
+  # These are the same tags computed in build-docker-artifact.yaml
+  check-tool-images:
+    runs-on: ubuntu-slim
+    outputs:
+      ccache-tag: ${{ steps.tags.outputs.ccache-tag }}
+      sfpi-tag: ${{ steps.tags.outputs.sfpi-tag }}
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          fetch-depth: 1
+
+      - name: Compute tool image tags
+        id: tags
+        run: |
+          set -euo pipefail
+          # compute-tool-tags.sh always produces canonical ghcr.io tags.
+          # Evaluation images are pushed directly to Harbor/GHCR (not pulled
+          # through the Harbor cache), so no harbor-prefix is needed here.
+          TOOL_TAGS=$(.github/scripts/compute-tool-tags.sh "${{ github.repository }}")
+          echo "ccache-tag=$(echo "$TOOL_TAGS" | jq -r '."ccache-tag"')" >> $GITHUB_OUTPUT
+          echo "sfpi-tag=$(echo "$TOOL_TAGS" | jq -r '."sfpi-tag"')" >> $GITHUB_OUTPUT
+
   build-evaluation-image:
     name: "Build and push"
+    needs: check-tool-images
     runs-on: ${{ inputs.runner-label }}
     timeout-minutes: 30
     outputs:
       evaluation-image-url: ${{ steps.docker-metadata.outputs.tags }}
     steps:
       - name: ⬇️ Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
 
@@ -159,7 +202,7 @@ jobs:
           nc -zv ${{ env.BUILDKIT_HOST }} ${{ env.BUILDKIT_PORT }}
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
         if: ${{ inputs.buildkit }}
         with:
           driver: remote
@@ -186,9 +229,14 @@ jobs:
           file: dockerfile/Dockerfile.evaluation
           tags: ${{ steps.docker-metadata.outputs.tags }}
           labels: ${{ steps.docker-metadata.outputs.labels }}
-          build-args: ${{ inputs.build-args }}
+          build-args: |
+            UBUNTU_VERSION=${{ inputs.ubuntu-version }}
+            ${{ inputs.build-args }}
+          build-contexts: |
+            ccache-layer=docker-image://${{ needs.check-tool-images.outputs.ccache-tag }}
+            sfpi-layer=docker-image://${{ needs.check-tool-images.outputs.sfpi-tag }}
           secrets: |
-            CCACHE_REMOTE_STORAGE=redis://${{ vars.REDIS_USER }}:${{ secrets.REDIS_PASSWORD }}@${{ vars.REDIS_HOST }}:${{ vars.REDIS_PORT }}|read-only=${{ vars.REDIS_IS_READONLY }}
+            CCACHE_REMOTE_STORAGE=redis://${{ vars.REDIS_USER }}:${{ secrets.REDIS_PASSWORD }}@${{ vars.REDIS_HOST }}:${{ vars.REDIS_PORT }}${{ vars.REDIS_IS_READONLY == 'true' && '|read-only=true' || '' }}
           cache-from: ${{ inputs.cache-from }}
           cache-to: ${{ inputs.cache-to }}
           outputs: |

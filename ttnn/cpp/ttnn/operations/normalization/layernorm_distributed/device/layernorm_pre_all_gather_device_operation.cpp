@@ -1,16 +1,14 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "layernorm_pre_all_gather_device_operation.hpp"
+#include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
-#include <tt-metalium/constants.hpp>
-
 using namespace tt::tt_metal;
-using namespace tt::constants;
 
 namespace ttnn::prim {
 
@@ -47,6 +45,13 @@ void LayerNormPreAllGatherDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "Operands to layernorm need to be on device!");
     TT_FATAL(input.buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
 
+    // Op-level invariant, so it lives here rather than in each program factory.
+    TT_FATAL(
+        !(input.dtype() == DataType::FLOAT32 && !args.compute_kernel_config.fp32_dest_acc_en),
+        "{}_pre_all_gather with Float32 input requires fp32_dest_acc_en=true in the compute kernel "
+        "config; otherwise precision is silently lost in the unpacker format conversion.",
+        args.norm_type == LayerNormDistributedType::RMSNORM ? "rms_norm" : "layer_norm");
+
     // Additional validation for Welford - requires recip_tensor
     if (std::holds_alternative<LayerNormDefaultProgramConfig>(args.program_config)) {
         const auto& program_config = std::get<LayerNormDefaultProgramConfig>(args.program_config);
@@ -76,14 +81,16 @@ LayerNormPreAllGatherDeviceOperation::spec_return_value_t LayerNormPreAllGatherD
     const auto& input_tensor = tensor_args.input;
 
     auto output_shape = input_tensor.logical_shape();
+    const uint32_t tile_width = input_tensor.tensor_spec().tile().get_width();
     uint32_t num_tiles_w = 1;
     if (args.norm_type == LayerNormDistributedType::LAYERNORM) {
         num_tiles_w = 2;
     }
-    output_shape[3] = num_tiles_w * TILE_WIDTH;
+    output_shape[3] = num_tiles_w * tile_width;
 
     auto output_dtype = args.dtype.value_or(input_tensor.dtype());
-    return TensorSpec(output_shape, TensorLayout(output_dtype, PageConfig(Layout::TILE), input_tensor.memory_config()));
+    return tt::tt_metal::TensorSpec(
+        output_shape, TensorLayout(output_dtype, PageConfig(Layout::TILE), input_tensor.memory_config()));
 }
 
 LayerNormPreAllGatherDeviceOperation::tensor_return_value_t LayerNormPreAllGatherDeviceOperation::create_output_tensors(
@@ -97,13 +104,44 @@ namespace ttnn::prim {
 
 Tensor layer_norm_pre_all_gather(
     const Tensor& input,
+    const std::optional<Tensor>& residual_input_tensor,
     const std::optional<Tensor>& recip_tensor,
     LayerNormDistributedType norm_type,
     const std::optional<tt::tt_metal::DataType>& dtype,
     const DeviceComputeKernelConfig& compute_kernel_config,
     const LayerNormProgramConfig& program_config,
-    const std::optional<bool>& use_2d_core_grid) {
+    const std::optional<bool>& use_2d_core_grid,
+    bool fast_and_approximate_mode) {
     using OperationType = LayerNormPreAllGatherDeviceOperation;
+
+    // Validate the residual before fill_implicit_tile_padding so a malformed residual surfaces
+    // a clear error here instead of crashing inside the fill helper. The device op's
+    // validate_on_program_cache_miss runs after launch, which is too late once fill has run.
+    if (residual_input_tensor.has_value()) {
+        const auto& b = residual_input_tensor.value();
+        TT_FATAL(b.layout() == Layout::TILE, "Residual tensor must have TILE layout, got: {}", b.layout());
+        TT_FATAL(
+            input.logical_shape() == b.logical_shape() && input.padded_shape() == b.padded_shape(),
+            "Input and residual logical and padded shapes must match, got input: logical={} padded={} vs residual: "
+            "logical={} padded={}",
+            input.logical_shape(),
+            input.padded_shape(),
+            b.logical_shape(),
+            b.padded_shape());
+        TT_FATAL(
+            b.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "Residual tensor must be interleaved.");
+        TT_FATAL(b.storage_type() == StorageType::DEVICE, "Operands to layernorm need to be on device!");
+        TT_FATAL(b.buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
+        TT_FATAL(input.device() == b.device(), "Input and residual tensors must be on same device");
+    }
+
+    auto input_padded = ttnn::fill_implicit_tile_padding(input, 0.0f);
+    // Also zero residual's implicit tile padding so it doesn't contaminate the kernel-fused
+    // a + b that gets fed into the per-row stats.
+    auto residual_padded = residual_input_tensor.has_value()
+                               ? std::make_optional(ttnn::fill_implicit_tile_padding(*residual_input_tensor, 0.0f))
+                               : std::nullopt;
     return ttnn::device_operation::detail::launch<OperationType>(
         OperationType::operation_attributes_t{
             .norm_type = norm_type,
@@ -111,9 +149,11 @@ Tensor layer_norm_pre_all_gather(
             .compute_kernel_config = compute_kernel_config,
             .program_config = program_config,
             .use_2d_core_grid = use_2d_core_grid,
+            .fast_and_approximate_mode = fast_and_approximate_mode,
         },
         OperationType::tensor_args_t{
-            .input = input,
+            .input = input_padded,
+            .residual_input_tensor = residual_padded,
             .recip_tensor = recip_tensor,
         });
 }

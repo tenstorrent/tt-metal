@@ -1,0 +1,157 @@
+name: "LLK Smoke impl"
+
+on:
+  workflow_call:
+    inputs:
+      docker-image:
+        description: "The LLK Docker image to use"
+        required: true
+        type: string
+      enabled-skus:
+        description: "Comma-separated SKU list or ALL_SKUS_IN_TESTS"
+        required: true
+        type: string
+      pytest-markers:
+        description: "Pytest mark expression for LLK python_tests"
+        required: false
+        type: string
+        default: "not perf and not nightly and not quasar"
+      per-test-timeout:
+        required: false
+        type: string
+        default: ""
+        description: >-
+          Max allowed timeout (minutes) for any individual test SKU entry in the
+          tests yaml. Verified during load-test-matrix via verify_time_budget.py.
+          Empty skips the per-test ceiling check.
+      sku-allowlist:
+        required: false
+        type: string
+        default: "*"
+        description: >-
+          Optional logical SKU allowlist (comma-separated) for change gating.
+          Default "*" means no extra filter. Empty string skips all tests.
+          Any other value is forwarded as --sku-allowlist.
+
+permissions:
+  checks: write
+  contents: read
+
+env:
+  LLK_PATH: tt_metal/tt-llk
+
+jobs:
+  load-test-matrix:
+    runs-on: ubuntu-slim
+    outputs:
+      matrix: ${{ steps.build-matrix.outputs.matrix }}
+    env:
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/llk_pr_gate_tests.yaml
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          sparse-checkout: |
+            .github
+            tests/pipeline_reorg
+          sparse-checkout-cone-mode: true
+      - name: Install dependencies
+        run: pip3 install PyYAML
+      - name: Verify test timeouts against budget
+        run: |
+          set -euo pipefail
+          extra=()
+          if [ -n "${{ inputs.per-test-timeout }}" ]; then
+            extra+=(--max-per-test-timeout "${{ inputs.per-test-timeout }}")
+          fi
+          python3 .github/scripts/utils/verify_time_budget.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            ./.github/time_budget.yaml \
+            pr_gate \
+            "${extra[@]}"
+      - name: Build test matrix
+        id: build-matrix
+        run: |
+          set -euo pipefail
+          allowlist_args=()
+          allowlist='${{ inputs.sku-allowlist }}'
+          # "*" (default) = omit flag (no filter). Empty = skip all. Else CSV.
+          if [ "$allowlist" != '*' ]; then
+            allowlist_args+=(--sku-allowlist "$allowlist")
+          fi
+          python3 .github/scripts/utils/prepare_test_matrix.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            "${{ inputs.enabled-skus }}" \
+            ./.github/sku_config.yaml \
+            --event "${{ github.event_name }}" \
+            "${allowlist_args[@]}"
+
+  llk-smoke-exec:
+    needs: load-test-matrix
+    if: ${{ needs.load-test-matrix.outputs.matrix != '[]' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: ${{ fromJSON(needs.load-test-matrix.outputs.matrix) }}
+    name: ${{ matrix.test-group.name }}
+    runs-on: ${{ matrix.test-group.runs_on }}
+    timeout-minutes: ${{ matrix.test-group.timeout }}
+    container:
+      image: ${{ inputs.docker-image }}
+      options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+      - name: Install SFPI
+        shell: bash
+        working-directory: ${{ env.LLK_PATH }}
+        run: |
+          cd tests
+          ./setup_testing_env.sh
+          cd ..
+      - name: Set CHIP_ARCH for logs and artifacts
+        shell: bash
+        env:
+          RUN_ON_LABELS: ${{ join(matrix.test-group.runs_on, ' ') }}
+        run: |
+          RUN_LABEL="${RUN_ON_LABELS%% *}"
+          if [[ "$RUN_LABEL" =~ N150 ]]; then
+            echo "CHIP_ARCH=wormhole" >> "$GITHUB_ENV"
+          elif [[ "$RUN_LABEL" =~ P150 ]]; then
+            echo "CHIP_ARCH=blackhole" >> "$GITHUB_ENV"
+          else
+            echo "CHIP_ARCH=unknown" >> "$GITHUB_ENV"
+          fi
+      - name: Run tests
+        shell: bash
+        working-directory: ${{ env.LLK_PATH }}
+        env:
+          PYTEST_MARKERS: ${{ inputs.pytest-markers }}
+        run: |
+          ${{ matrix.test-group.cmd }}
+
+      - name: Upload test logs on failure
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: failure()
+        with:
+          name: test-logs-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}
+          path: |
+            ${{ env.LLK_PATH }}/tests/python_tests/test_run*.log
+            ${{ env.LLK_PATH }}/tests/python_tests/test_errors*.log
+
+      - name: Upload JUnit report
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always()
+        with:
+          name: junit-report-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}
+          path: ${{ env.LLK_PATH }}/tests/python_tests/pytest-report-*-${{ matrix.test-group.split_group }}.xml
+
+      - name: Publish Test Results
+        uses: mikepenz/action-junit-report@v5
+        if: always()
+        with:
+          report_paths: ${{ env.LLK_PATH }}/tests/python_tests/pytest-report-*-${{ matrix.test-group.split_group }}.xml
+          include_passed: true
+          annotate_only: true

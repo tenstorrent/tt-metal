@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -235,7 +235,12 @@ def test_indexed_fill(device):
 def test_gather(device):
     # Create a tensor and an index tensor
     ttnn_input = ttnn.rand((4, 4), dtype=ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
-    ttnn_index = ttnn.rand((4, 2), dtype=ttnn.uint16, layout=ttnn.Layout.TILE, device=device)
+    ttnn_index = ttnn.from_torch(
+        torch.tensor([[0, 1], [1, 2], [2, 3], [3, 0]], dtype=torch.int32),
+        dtype=ttnn.uint16,
+        layout=ttnn.Layout.TILE,
+        device=device,
+    )
 
     # Gather elements along dimension 1 using the index tensor
     ttnn.gather(ttnn_input, 1, index=ttnn_index)
@@ -261,3 +266,9 @@ def test_sort(device):
     input_tensor_2d_ttnn = ttnn.from_torch(input_tensor_2d, dtype=ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
     sorted_tensor_dim, indices_dim = ttnn.sort(input_tensor_2d_ttnn, dim=1)
     logger.info(f"Sorted Tensor along dim 1: {sorted_tensor_dim}, Indices: {indices_dim}")
+
+
+def test_narrow(device):
+    input_tensor = ttnn.rand((32, 16, 16, 4), dtype=ttnn.bfloat16, device=device)
+    narrowed_tensor = ttnn.narrow(input_tensor, 0, 0, 12)
+    logger.info("Narrowed Tensor Shape:", narrowed_tensor.shape)

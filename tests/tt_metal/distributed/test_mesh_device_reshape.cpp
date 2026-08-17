@@ -1,10 +1,9 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
 #include <cstdlib>
-#include <tt_stl/indestructible.hpp>
 #include <algorithm>
 #include <cstddef>
 #include <memory>
@@ -16,13 +15,13 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
 #include "gmock/gmock.h"
-#include <tt-metalium/host_api.hpp>
 #include "hostdevcommon/common_values.hpp"
 #include <tt-metalium/mesh_config.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/system_mesh.hpp>
 #include <tt-metalium/maybe_remote.hpp>
+#include "impl/context/metal_context.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "tests/tt_metal/test_utils/env_vars.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
@@ -35,7 +34,7 @@ using ::testing::ElementsAre;
 using ::testing::SizeIs;
 
 std::vector<MeshShape> get_mesh_shapes() {
-    static tt::stl::Indestructible<std::vector<MeshShape>> kMeshShapes(std::vector<MeshShape>{
+    static ttsl::Indestructible<std::vector<MeshShape>> kMeshShapes(std::vector<MeshShape>{
         MeshShape{1, 1}, MeshShape{1, 2}, MeshShape{1, 3}, MeshShape{1, 4}, MeshShape{1, 5}, MeshShape{1, 6},
         MeshShape{1, 7}, MeshShape{1, 8}, MeshShape{2, 1}, MeshShape{2, 2}, MeshShape{2, 3}, MeshShape{2, 4},
         MeshShape{3, 1}, MeshShape{3, 2}, MeshShape{4, 1}, MeshShape{4, 2}, MeshShape{8, 1}, MeshShape{7, 1},
@@ -56,7 +55,7 @@ TEST_P(MeshConfigurationTest, MeshConfigurations) { EXPECT_EQ(mesh_device_->shap
 TEST_P(MeshConfigurationTest, GetMappedDevices) {
     const auto& shape = GetParam();
 
-    auto& system_mesh = SystemMesh::instance();
+    auto& system_mesh = MetalContext::instance().get_system_mesh();
     EXPECT_THAT(system_mesh.get_mapped_devices(shape).device_ids, SizeIs(shape.mesh_size()));
     EXPECT_THAT(system_mesh.get_mapped_devices(shape).fabric_node_ids, SizeIs(shape.mesh_size()));
 }
@@ -118,7 +117,7 @@ public:
 };
 
 TEST_F(MeshDevice1x8ReshapeTest, InvalidRequestedShape) {
-    auto& system_mesh = tt::tt_metal::distributed::SystemMesh::instance();
+    auto& system_mesh = tt::tt_metal::MetalContext::instance().get_system_mesh();
 
     // Shape too big.
     EXPECT_ANY_THROW(system_mesh.get_mapped_devices(MeshShape(9)));

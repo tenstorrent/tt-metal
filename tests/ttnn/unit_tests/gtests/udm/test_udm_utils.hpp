@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,15 +13,16 @@
 #include "tt_metal/api/tt-metalium/bfloat16.hpp"
 
 #include "ttnn/tensor/tensor.hpp"
+#include <tt_metal/impl/tensor/spec/layout/tensor_layout_impl.hpp>
 #include "ttnn/api/ttnn/distributed/api.hpp"
 #include "ttnn/api/ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/core/core.hpp"  // for ttnn::to_memory_config
 
-#include "tt_metal/experimental/udm/mesh_program.hpp"
-#include "tt_metal/experimental/udm/mesh_builder.hpp"
-#include "tt_metal/experimental/udm/mesh_tensor_builder.hpp"
-#include "tt_metal/experimental/udm/mesh_utils.hpp"
+#include <tt-metalium/experimental/udm/mesh_program.hpp>
+#include <tt-metalium/experimental/udm/mesh_builder.hpp>
+#include <tt-metalium/experimental/udm/mesh_tensor_builder.hpp>
+#include <tt-metalium/experimental/udm/mesh_utils.hpp>
 
 namespace tt::tt_metal::experimental::udm_tests {
 
@@ -43,8 +44,8 @@ inline tt::tt_metal::Shape compute_tensor_shape_in_pages(
     TT_FATAL(rank >= 1, "Tensor must have at least 1 dimension");
 
     // Get physical shape and page shape from tensor layout
-    tt::tt_metal::Shape2D physical_shape = tensor_layout.compute_physical_shape(tensor_shape);
-    tt::tt_metal::Shape2D page_shape = tensor_layout.compute_page_shape(physical_shape);
+    tt::tt_metal::Shape2D physical_shape = tensor_layout.impl().compute_physical_shape(tensor_shape);
+    tt::tt_metal::Shape2D page_shape = tensor_layout.impl().compute_page_shape(physical_shape);
 
     std::vector<uint32_t> shape_in_pages;
 
@@ -562,9 +563,8 @@ inline void log_gcores_info(
  */
 inline tt::tt_metal::experimental::udm::MeshTensorBuilder create_tensor_builder(const ttnn::Tensor& tensor) {
     // Extract MeshBuffer from the distributed tensor
-    TT_FATAL(std::holds_alternative<tt::tt_metal::DeviceStorage>(tensor.storage()), "Tensor must be on device");
-    const auto& device_storage = std::get<tt::tt_metal::DeviceStorage>(tensor.storage());
-    TT_FATAL(device_storage.mesh_buffer != nullptr, "Tensor must have a MeshBuffer");
+    TT_FATAL(is_device_tensor(tensor), "Tensor must be on device");
+    TT_FATAL(tensor.is_allocated(), "Tensor must be allocated");
 
     // Extract distribution info from tensor topology
     const auto& topology = tensor.tensor_topology();
@@ -588,7 +588,7 @@ inline tt::tt_metal::experimental::udm::MeshTensorBuilder create_tensor_builder(
     }
 
     return tt::tt_metal::experimental::udm::MeshTensorBuilder(
-        *device_storage.mesh_buffer, tensor_shape_in_pages, distribution_shape, shard_dims);
+        tensor.mesh_buffer(), tensor_shape_in_pages, distribution_shape, shard_dims);
 }
 
 /**

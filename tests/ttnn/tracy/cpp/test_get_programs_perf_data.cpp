@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,6 +13,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include "impl/context/metal_context.hpp"
 #include "impl/profiler/profiler_paths.hpp"
+#include "impl/profiler/tt_metal_profiler.hpp"
 #include <umd/device/types/cluster_descriptor_types.hpp>
 
 namespace tt::tt_metal::experimental {

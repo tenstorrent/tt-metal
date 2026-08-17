@@ -1,8 +1,8 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -16,27 +16,25 @@
 
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/device.hpp>
 #include "fabric_fixture.hpp"
 #include "utils.hpp"
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/tt_metal_profiler.hpp>
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include <umd/device/types/core_coordinates.hpp>
 
 namespace tt::tt_fabric::fabric_router_tests {
 
 void RunTestUnicastSmoke(BaseFabricFixture* fixture) {
-    CoreCoord sender_logical_core = {0, 0};
-    CoreCoord receiver_logical_core = {1, 0};
+    tt::tt_metal::CoreCoord sender_logical_core = {0, 0};
+    tt::tt_metal::CoreCoord receiver_logical_core = {1, 0};
 
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& devices = fixture->get_devices();
@@ -56,7 +54,7 @@ void RunTestUnicastSmoke(BaseFabricFixture* fixture) {
     auto src_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(src_physical_device_id);
     auto dst_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dst_physical_device_id);
 
-    CoreCoord receiver_virtual_core = receiver_device->worker_core_from_logical_core(receiver_logical_core);
+    tt::tt_metal::CoreCoord receiver_virtual_core = receiver_device->worker_core_from_logical_core(receiver_logical_core);
 
     // Get fabric context and topology
     const auto& fabric_context = control_plane.get_fabric_context();

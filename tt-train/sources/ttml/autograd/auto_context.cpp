@@ -1,12 +1,14 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "auto_context.hpp"
 
 #include <optional>
+#include <sstream>
 
 #include "core/tt_profiler.hpp"
+#include "ttnn_fixed/distributed/tt_metal.hpp"
 
 namespace ttml::autograd {
 
@@ -16,6 +18,20 @@ std::mt19937& AutoContext::get_generator() {
 
 void AutoContext::set_generator(const std::mt19937& generator) {
     m_generator = generator;
+}
+
+std::string AutoContext::get_generator_state() const {
+    std::ostringstream oss;
+    oss << m_generator;  // mt19937's stream operator emits its full internal state (624 words + position)
+    return oss.str();
+}
+
+void AutoContext::set_generator_state(const std::string& state) {
+    std::istringstream iss(state);
+    iss >> m_generator;
+    if (iss.fail()) {
+        throw std::runtime_error("Failed to deserialize RNG generator state.");
+    }
 }
 
 void AutoContext::set_seed(uint32_t seed) {
@@ -63,6 +79,14 @@ void AutoContext::close_profiler() {
 
 void AutoContext::close_device() {
     m_device = nullptr;
+    // Drop the process-global fabric config that open_device_mesh may have
+    // installed via enable_fabric(). Without this, fabric stays armed for
+    // the remainder of the process and any subsequent default 1x1 open on a
+    // host where mmio_chip_ids().size() != all_chip_ids().size() trips the
+    // "Fabric is being used but Device i is not active" check in
+    // tt_metal/impl/device/device_manager.cpp. Going TO DISABLED while no
+    // devices are open is explicitly supported (see metal_env.cpp).
+    ttnn_fixed::distributed::disable_fabric();
 }
 
 ttnn::distributed::MeshDevice& AutoContext::get_device() {
@@ -131,29 +155,79 @@ void AutoContext::initialize_socket_manager(ttnn::distributed::SocketType socket
 
 ParallelismContext::ParallelismContext(
     const ttnn::distributed::MeshDevice& mesh_device, const DistributedConfig& config) {
-    const uint32_t num_axes = (uint32_t)config.enable_ddp + (uint32_t)config.enable_tp;
-    const size_t mesh_dims = mesh_device.shape().dims();
-    const size_t mesh_size = mesh_device.shape().mesh_size();
-    TT_FATAL(
-        (mesh_size == 1 && num_axes == 0) || (mesh_size > 1 && num_axes == mesh_dims),
-        "Invalid parallelization configuration: for a single-device mesh, the number of parallelization axes must be "
-        "0; for a multi-device mesh, it must be equal to the number of mesh shape dimensions.");
+    const uint32_t num_enabled_parallelisms =
+        (uint32_t)config.enable_ddp + (uint32_t)config.enable_cp + (uint32_t)config.enable_tp;
+    const auto& mesh_shape = mesh_device.shape();
 
-    uint32_t axis = 0;
-    if (config.enable_ddp) {
-        m_ddp_axis = axis++;
-        m_num_ddp_devices = mesh_device.shape()[m_ddp_axis.value()];
-    }
-    if (config.enable_tp) {
-        m_tp_axis = axis++;
-        m_num_tp_devices = mesh_device.shape()[m_tp_axis.value()];
+    // Check if this is a line topology (one dimension is 1, e.g., [1, 32] or [32, 1])
+    // For line topologies, only one parallelism type can be enabled
+    const bool is_line_topology = mesh_shape.is_line_topology();
+
+    if (is_line_topology) {
+        TT_FATAL(
+            num_enabled_parallelisms == 1,
+            "For line mesh topology (shape {}), exactly one parallelism type must be enabled. "
+            "Got: ddp={}, tp={}, cp={}",
+            mesh_shape,
+            config.enable_ddp,
+            config.enable_tp,
+            config.enable_cp);
+
+        // Find the non-trivial axis (the one with size > 1)
+        uint32_t active_axis = 0;
+        for (uint32_t i = 0; i < mesh_shape.dims(); ++i) {
+            if (mesh_shape[i] > 1) {
+                active_axis = i;
+                break;
+            }
+        }
+
+        // Assign the single enabled parallelism to the active axis
+        if (config.enable_ddp) {
+            m_ddp_axis = active_axis;
+            m_num_ddp_devices = mesh_shape[active_axis];
+        } else if (config.enable_cp) {
+            m_cp_axis = active_axis;
+            m_num_cp_devices = mesh_shape[active_axis];
+        } else if (config.enable_tp) {
+            m_tp_axis = active_axis;
+            m_num_tp_devices = mesh_shape[active_axis];
+        }
+    } else {
+        // For 2D meshes (both dimensions > 1), number of parallelisms must match mesh dimensions
+        TT_FATAL(
+            num_enabled_parallelisms == mesh_shape.dims(),
+            "For 2D mesh (shape {}), number of enabled parallelization axes ({}) must equal mesh dimensions ({}).",
+            mesh_shape,
+            num_enabled_parallelisms,
+            mesh_shape.dims());
+
+        // Axis assignment order: DP -> CP -> TP
+        uint32_t axis = 0;
+        if (config.enable_ddp && mesh_shape[axis] > 1U) {
+            m_ddp_axis = axis++;
+            m_num_ddp_devices = mesh_shape[m_ddp_axis.value()];
+        }
+        if (config.enable_cp && mesh_shape[axis] > 1U) {
+            m_cp_axis = axis++;
+            m_num_cp_devices = mesh_shape[m_cp_axis.value()];
+        }
+        if (config.enable_tp && mesh_shape[axis] > 1U) {
+            m_tp_axis = axis++;
+            m_num_tp_devices = mesh_shape[m_tp_axis.value()];
+        }
     }
 }
+
 [[nodiscard]] const ParallelismContext& AutoContext::get_parallelism_context() const {
     if (!m_parallelism_context) {
         throw std::runtime_error("ParallelismContext is not initialized.");
     }
     return *m_parallelism_context;
+}
+
+bool AutoContext::is_parallelism_context_initialized() const {
+    return m_parallelism_context != nullptr;
 }
 
 void AutoContext::initialize_parallelism_context(const DistributedConfig& config) {
@@ -168,6 +242,13 @@ const uint32_t ParallelismContext::get_ddp_size() const {
         return 1U;
     }
     return m_num_ddp_devices;
+}
+
+const uint32_t ParallelismContext::get_cp_size() const {
+    if (!m_cp_axis.has_value()) {
+        return 1U;
+    }
+    return m_num_cp_devices;
 }
 
 const uint32_t ParallelismContext::get_tp_size() const {

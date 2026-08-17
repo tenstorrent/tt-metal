@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -45,7 +45,7 @@ tensor_return_value_t GenericOpDeviceOperation::create_output_tensors(
     return tensor_args.output_tensor;
 }
 
-tt::stl::hash::hash_t compute_program_descriptor_hash(const tt::tt_metal::ProgramDescriptor& program_descriptor) {
+ttsl::hash::hash_t compute_program_descriptor_hash(const tt::tt_metal::ProgramDescriptor& program_descriptor) {
     if (program_descriptor.custom_program_hash) {
         return *program_descriptor.custom_program_hash;
     }
@@ -56,8 +56,13 @@ tt::stl::hash::hash_t compute_program_descriptor_hash(const tt::tt_metal::Progra
             kernel.source_type,
             kernel.core_ranges,
             kernel.compile_time_args,
+            kernel.named_compile_time_args,
             kernel.defines,
             kernel.common_runtime_args.size(),
+            // Blaze-only experimental named args (issue #50953): hash the FULL named-RT-arg schema
+            // (names/lengths/dispatch across all 4 variants), NOT values. Replaces the previous
+            // partial hashing that used .size() of only 3 of 4 variants and never the names.
+            tt::tt_metal::experimental::blaze::hash_named_args_schema(kernel.blaze_named_args),
             kernel.runtime_args.size(),
             kernel.config.index(),
             kernel.config);
@@ -72,7 +77,7 @@ tt::stl::hash::hash_t compute_program_descriptor_hash(const tt::tt_metal::Progra
     };
 
     auto hash_circular_buffer = [&](const CBDescriptor& cb) -> size_t {
-        size_t hash = cb.core_ranges.size();
+        size_t hash = cb.total_size;
         for (const auto& core_range : cb.core_ranges.ranges()) {
             ttsl::hash::hash_combine(hash, core_range);
         }
@@ -107,7 +112,7 @@ tt::stl::hash::hash_t compute_program_descriptor_hash(const tt::tt_metal::Progra
     return hash;
 }
 
-tt::stl::hash::hash_t GenericOpDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t GenericOpDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
     size_t hash = 0;
     for (const auto& [mesh_coord_range, program_descriptor] : operation_attributes.mesh_programs) {

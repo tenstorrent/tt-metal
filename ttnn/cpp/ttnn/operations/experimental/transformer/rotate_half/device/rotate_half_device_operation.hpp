@@ -1,20 +1,20 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/decorators.hpp"
 #include "rotate_half_device_operation_types.hpp"
 #include "rotate_half_program_factory.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::experimental::prim {
 
 struct RotateHalfDeviceOperation {
     using operation_attributes_t = RotateHalfParams;
     using tensor_args_t = Tensor;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<RotateHalfProgramFactory>;
 

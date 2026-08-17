@@ -1,0 +1,33 @@
+name: 'Trigger Regression Analysis for Regressions'
+description: 'Triggers regression-analysis workflow for each regressed job'
+inputs:
+  regressed_workflows_path:
+    description: 'Path to a JSON file containing regressed workflows with failing jobs'
+    required: true
+  github_token:
+    description: 'GitHub token for triggering workflows'
+    required: true
+  slack_ts:
+    description: 'Slack message timestamp for threading replies (fallback when slack_ts_map has no entry for a pipeline)'
+    required: false
+  slack_ts_map:
+    description: 'JSON map of boundary key to Slack thread timestamp. Keys are "<workflow_name> / <job_name>" for per-job top-level messages, or just "<workflow_name>" for regressions with no failing jobs. Example: {"(Galaxy) Performance Tests / test-foo": "1234567890.123456"}. Falls back to the workflow-name key, then to global slack_ts, when no per-job entry is present.'
+    required: false
+  slack_channel_id:
+    description: 'Slack channel ID for sending notifications'
+    required: false
+  slack_bot_token:
+    description: 'Slack bot token for sending messages'
+    required: false
+  send-slack-message:
+    description: 'Whether regression-analysis should send a Slack message'
+    required: false
+    default: true
+  max_dispatches:
+    description: 'Hard cap on total regression-analysis dispatches per invocation (counts successful createWorkflowDispatch calls). Empty = unlimited. Useful for safe testing so a single run cannot flood the regression-analysis pipeline.'
+    required: false
+    default: ''
+
+runs:
+  using: 'node20'
+  main: 'index.js'

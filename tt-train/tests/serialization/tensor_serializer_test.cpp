@@ -1,10 +1,9 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
 
-#include <core/ttnn_all_includes.hpp>
 #include <filesystem>
 #include <fstream>
 #include <random>
@@ -17,6 +16,7 @@
 #include "modules/multi_layer_perceptron.hpp"
 #include "serialization/flatbuffer_file.hpp"
 #include "serialization/serialization.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 namespace {
 std::string generate_unique_temp_dir_name() {
@@ -100,7 +100,7 @@ TEST_F(TensorFileTest, SerializeDeserializeTensor) {
     deserializer.deserialize(output_dir.string());
 
     // Read tensor from file
-    tt::tt_metal::Tensor tensor_read = tensor_zeros;
+    ttnn::Tensor tensor_read = tensor_zeros;
     ttml::serialization::read_ttnn_tensor(deserializer, "tensor", tensor_read);
 
     auto read_vec = ttml::core::to_vector(tensor_read);
@@ -110,7 +110,7 @@ TEST_F(TensorFileTest, SerializeDeserializeTensor) {
     }
 }
 
-bool compare_tensors(const tt::tt_metal::Tensor& tensor1, const tt::tt_metal::Tensor& tensor2) {
+bool compare_tensors(const ttnn::Tensor& tensor1, const ttnn::Tensor& tensor2) {
     auto vec1 = ttml::core::to_vector(tensor1);
     auto vec2 = ttml::core::to_vector(tensor2);
     return vec1 == vec2;

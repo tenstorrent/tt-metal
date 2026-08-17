@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -20,7 +20,7 @@ using namespace tt::tt_metal::distributed;
 // 3. Allocating MeshBuffers in the distributed memory space exposed by the Virtual Mesh, to shard data across physical
 // devices
 // 4. Constructing programs targeting different SubDevices
-// 5. Constructing homogenous (same program dispatched to all physical devices) and heterogenous (different programs
+// 5. Constructing homogeneous (same program dispatched to all physical devices) and heterogeneous (different programs
 // dispatched
 //    to physical different devices) MeshWorkloads from programs
 // 6. Capturing the execution of MeshWorkloads inside a MeshTrace that gets loaded onto the Virtual Mesh
@@ -84,7 +84,7 @@ std::shared_ptr<Program> EltwiseBinaryProgramGenerator(
             .noc = tt_metal::NOC::RISCV_1_default,
             .compile_args = reader_compile_time_args});
 
-    std::vector<uint32_t> writer_compile_time_args;
+    std::vector<uint32_t> writer_compile_time_args = {output_cb_index};
     tt::tt_metal::TensorAccessorArgs(output_buf).append_to(writer_compile_time_args);
     auto unary_writer_kernel = tt_metal::CreateKernel(
         *program,
@@ -102,7 +102,7 @@ std::shared_ptr<Program> EltwiseBinaryProgramGenerator(
         {"ELTWISE_OP_TYPE", op_id_to_op_type_define[eltwise_op_index]}};
     auto eltwise_binary_kernel = tt_metal::CreateKernel(
         *program,
-        "tt_metal/kernels/compute/eltwise_binary.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_binary.cpp",
         cores_for_program,
         tt_metal::ComputeConfig{.compile_args = compute_kernel_args, .defines = binary_defines});
 
@@ -224,10 +224,10 @@ int main() {
     EnqueueMeshWorkload(mesh_device->mesh_command_queue(), add_mesh_workload, true);
     EnqueueMeshWorkload(mesh_device->mesh_command_queue(), multiply_and_subtract_mesh_workload, true);
     // =========== Step 5: Trace the MeshWorkloads using the Workload Dispatch CQ ===========
-    auto trace_id = BeginTraceCapture(mesh_device.get(), workload_cq_id);
+    auto trace_id = mesh_device->begin_mesh_trace(workload_cq);
     EnqueueMeshWorkload(mesh_device->mesh_command_queue(), add_mesh_workload, false);
     EnqueueMeshWorkload(mesh_device->mesh_command_queue(), multiply_and_subtract_mesh_workload, false);
-    mesh_device->end_mesh_trace(workload_cq_id, trace_id);
+    mesh_device->end_mesh_trace(workload_cq, trace_id);
 
     // =========== Step 6: Populate inputs ===========
     uint32_t workload_0_src0_val = 2;
@@ -255,7 +255,7 @@ int main() {
     MeshEvent write_event = data_movement_cq.enqueue_record_event();
     workload_cq.enqueue_wait_for_event(write_event);
     // =========== Step 8: Run MeshTrace on MeshCQ0 ===========
-    mesh_device->replay_mesh_trace(workload_cq_id, trace_id, false);
+    mesh_device->replay_mesh_trace(workload_cq, trace_id, false);
     // Synchronize
     MeshEvent trace_event = workload_cq.enqueue_record_event();
     data_movement_cq.enqueue_wait_for_event(trace_event);

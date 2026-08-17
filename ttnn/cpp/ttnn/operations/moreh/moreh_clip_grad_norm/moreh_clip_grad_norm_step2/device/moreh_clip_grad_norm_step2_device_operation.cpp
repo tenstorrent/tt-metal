@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -32,7 +32,7 @@ MorehClipGradNormStep2Operation::spec_return_value_t MorehClipGradNormStep2Opera
     }
 
     // output total_norm 1 element
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         Shape{1, 1},
         TensorLayout(tensor_args.tmp_pow_sum.dtype(), PageConfig(Layout::TILE), operation_attributes.memory_config));
 }

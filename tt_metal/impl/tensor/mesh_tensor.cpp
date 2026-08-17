@@ -1,0 +1,99 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include <tt-metalium/tensor/mesh_tensor.hpp>
+#include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
+#include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
+#include <tt-metalium/mesh_device.hpp>
+
+#include "mesh_tensor_impl.hpp"
+#include "spec/layout/tensor_layout_impl.hpp"
+#include "tensor_impl.hpp"
+
+namespace tt::tt_metal {
+
+MeshTensor::MeshTensor(MeshTensor&& other) noexcept = default;
+
+MeshTensor& MeshTensor::operator=(MeshTensor&& other) noexcept = default;
+
+MeshTensor::MeshTensor(std::shared_ptr<distributed::MeshBuffer> mesh_buffer, TensorSpec spec, TensorTopology topology) :
+    impl_(std::make_unique<MeshTensorImpl>(std::move(mesh_buffer), std::move(spec), std::move(topology))) {}
+
+MeshTensor::~MeshTensor() = default;
+
+MeshTensorImpl& MeshTensor::impl() {
+    TT_FATAL(impl_ != nullptr, "MeshTensor is in a moved-from state.");
+    return *impl_;
+}
+
+const MeshTensorImpl& MeshTensor::impl() const {
+    TT_FATAL(impl_ != nullptr, "MeshTensor is in a moved-from state.");
+    return *impl_;
+}
+
+const distributed::MeshBuffer& MeshTensor::mesh_buffer() const { return impl().mesh_buffer(); }
+
+const distributed::MeshDevice& MeshTensor::device() const { return mutable_device(); }
+
+distributed::MeshDevice& MeshTensor::mutable_device() const { return *mesh_buffer().device(); }
+
+const TensorSpec& MeshTensor::tensor_spec() const { return impl().spec(); }
+
+bool MeshTensor::is_valueless_after_move() const { return impl_ == nullptr; }
+
+DeviceAddr MeshTensor::address() const { return mesh_buffer().address(); }
+
+DataType MeshTensor::dtype() const { return tensor_spec().data_type(); }
+
+Layout MeshTensor::layout() const { return tensor_spec().layout(); }
+
+const Shape& MeshTensor::logical_shape() const { return tensor_spec().logical_shape(); }
+
+const Shape& MeshTensor::padded_shape() const { return tensor_spec().padded_shape(); }
+
+MeshTensor::volume_type MeshTensor::logical_volume() const { return logical_shape().volume(); }
+
+MeshTensor::volume_type MeshTensor::physical_volume() const { return padded_shape().volume(); }
+
+const MemoryConfig& MeshTensor::memory_config() const { return tensor_spec().memory_config(); }
+
+bool MeshTensor::is_sharded() const { return memory_config().is_sharded(); }
+
+const std::optional<ShardSpec>& MeshTensor::shard_spec() const { return memory_config().shard_spec(); }
+
+const std::optional<NdShardSpec>& MeshTensor::nd_shard_spec() const { return memory_config().nd_shard_spec(); }
+
+std::size_t MeshTensor::element_size() const {
+    switch (dtype()) {
+        case DataType::BFLOAT16: return sizeof(bfloat16);
+        case DataType::FLOAT32: return sizeof(float);
+        case DataType::INT32: return sizeof(int32_t);
+        case DataType::UINT32: return sizeof(uint32_t);
+        case DataType::UINT16: return sizeof(uint16_t);
+        case DataType::FP8_E4M3: return sizeof(float8_e4m3);
+        case DataType::UINT8: return sizeof(uint8_t);
+        case DataType::INT8: return sizeof(int8_t);
+        case DataType::BFLOAT8_B:
+        case DataType::BFLOAT4_B: return sizeof(std::byte);
+        default: TT_THROW("Unsupported data type");
+    }
+}
+
+Strides MeshTensor::strides() const { return tensor_spec().tensor_layout().impl().compute_strides(logical_shape()); }
+
+MeshTensor MeshTensor::allocate_on_device(distributed::MeshDevice& mesh_device, TensorSpec spec) {
+    return allocate_mesh_tensor_on_device_with_topology(
+        mesh_device, std::move(spec), TensorTopology::create_fully_replicated_tensor_topology(mesh_device.shape()));
+}
+
+MeshTensor MeshTensor::from_buffer(distributed::MeshBuffer mesh_buffer, TensorSpec spec) {
+    auto* device = mesh_buffer.device();
+    TT_FATAL(device != nullptr, "MeshBuffer must be associated with a MeshDevice");
+    return mesh_tensor_from_buffer_with_topology(
+        std::move(mesh_buffer),
+        std::move(spec),
+        TensorTopology::create_fully_replicated_tensor_topology(device->shape()));
+}
+
+}  // namespace tt::tt_metal

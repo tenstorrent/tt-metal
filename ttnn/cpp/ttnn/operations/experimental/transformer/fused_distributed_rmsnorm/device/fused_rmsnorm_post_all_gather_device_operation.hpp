@@ -1,24 +1,31 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
 #include <optional>
+#include <variant>
 
-#include "ttnn/tensor/tensor.hpp"
+#include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/device_operation.hpp"
-#include "ttnn/decorators.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 #include "fused_rmsnorm_post_all_gather_device_operation_types.hpp"
-#include "fused_rmsnorm_post_all_gather_program_factory.hpp"
 
 namespace ttnn::experimental::prim {
+
+struct FusedRMSNormPostAllGatherProgramFactory {
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
+        const FusedRmsnormPostAllGatherParams& operation_attributes,
+        const FusedRmsnormPostAllGatherInputs& tensor_args,
+        Tensor& output_tensor);
+};
 
 struct FusedRMSNormPostAllGatherDeviceOperation {
     using operation_attributes_t = FusedRmsnormPostAllGatherParams;
     using tensor_args_t = FusedRmsnormPostAllGatherInputs;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<FusedRMSNormPostAllGatherProgramFactory>;
 

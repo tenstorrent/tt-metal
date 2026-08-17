@@ -8,7 +8,7 @@ There is a major change being merged to TT-Metal & TTNN in relation to working w
 This management of multiple devices is being lowered to Metal layer. More specifically:
 1.  A TTNN user will always see a MeshDevice.
     - This object has the same APIs as the Device object, currently exposed to users.
-	- When interfacing with mutiple devices, the MeshDevice will span the extent of the physical cluster.
+	- When interfacing with multiple devices, the MeshDevice will span the extent of the physical cluster.
 	- For cases where users want to control a single physical device a Unit-Mesh (1x1 MeshDevice) Handle will be provided.
 	- The user experience should remain unchanged in either case, since the MeshDevice APIs are backwards compatible with the Device APIs.
 2.  Tensors will be allocated in lock-step on multiple physical devices while being backed by the newly introduced MeshBuffer. The cluster of physical devices is virtualized by a single MeshDevice and the MeshBuffer resides in the distributed memory space exposed by the MeshDevice. This implies that:

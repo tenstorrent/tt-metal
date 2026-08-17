@@ -21,25 +21,34 @@ Training hyperparameters and optimization settings.
 | `seed` | int | 5489 | Random seed for reproducibility |
 | `model_save_interval` | int | 500 | Save model every N steps |
 | `batch_size` | int | 4 | Batch size for training |
-| `num_epochs` | int | 1 | Number of training epochs |
-| `max_steps` | int | 1000 | Maximum number of training steps |
+| `num_epochs` | int | 0 | Epoch cap; 0 = uncapped. A run stops at whichever of `num_epochs`/`max_steps` comes first |
+| `max_steps` | int | 5000 | Step cap. At least one of `max_steps`/`num_epochs` must be set |
 | `gradient_accumulation_steps` | int | 1 | Number of steps to accumulate gradients |
 | `model_config` | str | "" | Path to model configuration file |
 | `data_path` | str | "DATA_FOLDER/shakespeare.txt" | Path to training data |
 | `scheduler_type` | str | "identity" | Learning rate scheduler ("identity", "warmup_linear") |
 | `tokenizer_type` | str | "char" | Tokenizer type ("char" or "bpe") |
 
-### Optimizer Parameters
+An epoch is one pass over the corpus's *tokens* — `corpus_tokens / (global_batch * seq_len)` steps.
+
+> **Runner differences.** Most configs run under both `examples/train/train.py` and `examples/nano_gpt`
+> (C++). Only `train.py` treats `max_steps: 0` as uncapped and raises when neither cap is set; the C++
+> runner requires `max_steps` and runs a single step at 0. The token-based epoch above is also `train.py`-only.
+
+### LR Schedule Parameters
+Apply to `scheduler_type: warmup_linear`, and to `train.py` only — the C++ `nano_gpt` runner hardcodes
+the equivalent of the defaults below and ignores overrides.
+
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `learning_rate` | float | 3e-4 | Learning rate |
-| `beta1` | float | 0.9 | Adam beta1 parameter |
-| `beta2` | float | 0.999 | Adam beta2 parameter |
-| `eps` | float | 1e-8 | Adam epsilon parameter |
-| `weight_decay` | float | 1e-2 | Weight decay for regularization |
-| `use_no_op` | bool | false | Use no-op optimizer (no parameter updates) |
-| `use_moreh_adamw` | bool | false | Use Moreh AdamW optimizer |
-| `use_kahan_summation` | bool | false | Use Kahan summation in AdamW |
+| `warmup_ratio` | float | 0.1 | Warmup length as a fraction of the schedule |
+| `warmup_steps` | int | unset | Absolute warmup length; overrides `warmup_ratio`. Omit to use the ratio; set to 0 for no warmup |
+| `min_lr_ratio` | float | 0.01 | Final LR as a fraction of the peak LR |
+| `lr_schedule_steps` | int | 0 | Steps the LR curve is shaped over; 0 = the run length. Set larger than `max_steps` to run only a prefix of a longer curve |
+
+### Optimizer
+
+Optimizer is configured inline under `training_config.optimizer`. See [Optimizer Configuration](#optimizer-configuration) below for all available types and parameters.
 
 ### Gradient Clipping Parameters
 | Parameter | Type | Default | Description |
@@ -55,12 +64,16 @@ training_config:
   seed: 5489
   batch_size: 8
   gradient_accumulation_steps: 8
-  num_epochs: 1
   max_steps: 5000
-  learning_rate: 0.0003
-  weight_decay: 0.01
-  use_moreh_adamw: true
-  use_kahan_summation: false
+  optimizer:
+    type: AdamW
+    lr: 0.0003
+    beta1: 0.9
+    beta2: 0.999
+    epsilon: 1.0e-8
+    weight_decay: 0.01
+    amsgrad: false
+    stochastic_rounding: false
   use_clip_grad_norm: false
   clip_grad_norm_max_norm: 1.0
   model_config: "configs/model_configs/tinyllama.yaml"
@@ -86,8 +99,8 @@ Device mesh and distributed training configuration.
 | `enable_tp` | bool | false | Enable Tensor Parallelism |
 
 ### Constraints
-- DDP and TP cannot both be enabled simultaneously
-- For DDP: batch_size must be divisible by number of devices
+- DDP and TP can be combined on a 2D mesh (e.g. `mesh_shape: [4, 8]` with `enable_ddp: true` and `enable_tp: true`)
+- For DDP: batch_size must be divisible by number of DDP devices
 - For TP: vocab_size is automatically rounded up to be divisible by (num_devices * 32)
 
 ### Device Mesh Shapes
@@ -128,6 +141,7 @@ Model type and architecture configuration loaded from separate files.
 | `intermediate_dim` | int | null | Feed-forward intermediate dimension |
 | `theta` | float | null | RoPE theta parameter |
 | `num_groups` | int | 3 | Number of groups for grouped attention |
+| `embedding_placement` | str | "replicated" | Token-embedding TP placement (only under TP): `replicated` (sharding off), `vocab_parallel`, or `feature_parallel`. Overridable on the CLI via `--embedding-placement`. |
 
 ### RoPE Scaling (`rope_scaling`)
 | Parameter | Type | Default | Description |
@@ -225,6 +239,63 @@ tt-train/configs/
 └── README.md                 # This file
 ```
 
+## Optimizer Configuration
+
+The optimizer is configured inline under `training_config.optimizer`.
+
+### Available Optimizer Types
+
+| Type | Description |
+|------|-------------|
+| `AdamW` | Fused AdamW — bf16 state, single custom kernel per step (default, recommended). Supports stochastic rounding. |
+| `AdamWFullPrecision` | AdamW with fp32 master weights and optimizer state; casts back to bf16 for the forward pass. Use when bf16 accumulation causes training instability. |
+| `MorehAdamW` | AdamW via `ttnn::moreh_adamw` — uses the Moreh team's kernel implementation. |
+| `AdamWComposite` | AdamW built from individual TTNN ops (no custom kernel). Supports Kahan summation. |
+| `SGD` | Fused SGD — bf16 state, single custom kernel per step (default, recommended). |
+| `SGDComposite` | SGD built from individual TTNN ops (no custom kernel). |
+| `NoOp` | No-op optimizer (no parameter updates). |
+
+### AdamW Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `type` | str | — | Optimizer type (e.g. `"AdamW"`, `"MorehAdamW"`) |
+| `lr` | float | 3e-4 | Learning rate |
+| `beta1` | float | 0.9 | Exponential decay rate for first moment |
+| `beta2` | float | 0.999 | Exponential decay rate for second moment |
+| `epsilon` | float | 1e-8 | Numerical stability constant |
+| `weight_decay` | float | 1e-2 | Weight decay coefficient |
+| `amsgrad` | bool | false | Use AMSGrad variant |
+| `stochastic_rounding` | bool | false | Enable stochastic rounding (AdamW only) |
+| `weight_decay_skip_1d` | bool | false | Skip weight decay on 1-D params (RMSNorm gains, biases). AdamW only; other types reject it. Under Muon, set it inside the nested `adamw:` section |
+| `kahan_summation` | bool | false | Enable Kahan summation (AdamWComposite only) |
+
+### SGD Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `type` | str | — | Optimizer type (`"SGD"` or `"SGDComposite"`) |
+| `lr` | float | 1e-3 | Learning rate |
+| `momentum` | float | 0.0 | Momentum factor |
+| `dampening` | float | 0.0 | Dampening for momentum |
+| `weight_decay` | float | 0.0 | Weight decay coefficient |
+| `nesterov` | bool | false | Enable Nesterov momentum |
+
+### Example
+
+```yaml
+training_config:
+  optimizer:
+    type: AdamW
+    lr: 0.0003
+    beta1: 0.9
+    beta2: 0.999
+    epsilon: 1.0e-8
+    weight_decay: 0.01
+    amsgrad: false
+    stochastic_rounding: false
+```
+
 ## Configuration Loading
 
 Configurations are loaded using YAML::LoadFile in the main application:
@@ -252,12 +323,16 @@ training_config:
   model_save_interval: 500
   batch_size: 8
   gradient_accumulation_steps: 8
-  num_epochs: 1
   max_steps: 5000
-  learning_rate: 0.0003
-  weight_decay: 0.01
-  use_moreh_adamw: true
-  use_kahan_summation: false
+  optimizer:
+    type: AdamW
+    lr: 0.0003
+    beta1: 0.9
+    beta2: 0.999
+    epsilon: 1.0e-8
+    weight_decay: 0.01
+    amsgrad: false
+    stochastic_rounding: false
   use_clip_grad_norm: false
   clip_grad_norm_max_norm: 1.0
   model_config: "configs/model_configs/tinyllama.yaml"

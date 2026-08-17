@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -36,7 +36,8 @@ PreAllGatherDeviceOperation::spec_return_value_t PreAllGatherDeviceOperation::co
     output_shape[3] = 2 * TILE_WIDTH;  // two tile columns: sum(x) and sum(x^2)
 
     auto output_dtype = args.dtype.value_or(input_tensor.dtype());
-    return TensorSpec(output_shape, TensorLayout(output_dtype, PageConfig(Layout::TILE), args.memory_config));
+    return tt::tt_metal::TensorSpec(
+        output_shape, TensorLayout(output_dtype, PageConfig(Layout::TILE), args.memory_config));
 }
 
 PreAllGatherDeviceOperation::tensor_return_value_t PreAllGatherDeviceOperation::create_output_tensors(

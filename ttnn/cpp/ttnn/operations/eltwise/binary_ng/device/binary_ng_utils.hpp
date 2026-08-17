@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -25,7 +25,16 @@ enum class KernelName {
     ReaderColBcastNg,
     ReaderRowBColABcastNg,
     ReaderScalarBcastNg,
+    ReaderRmNoBcastNg,
+    ReaderRmRowBcastNg,
+    ReaderRmColBcastNg,
+    ReaderRmRowBColABcastNg,
+    ReaderRmScalarBcastNg,
+    ReaderRmScalarOpNg,
+    WriterRmNoBcastNg,
     ComputeRowBcastNg,
+    ComputeColBcastNg,
+    ComputeScalarBcastNg,
     ComputeRowColBcastNg,
 };
 
@@ -69,6 +78,7 @@ struct OpConfig {
         MAXIMUM,
         MINIMUM,
         XLOGY,
+        ATAN2,
         LT,
         GT,
         GE,
@@ -76,6 +86,8 @@ struct OpConfig {
         HYPOT,
         WHERE,
         EQ,
+        NE,
+        ISCLOSE,
     };
 
     template <class EnumT>
@@ -92,7 +104,7 @@ struct OpConfig {
 
 void add_activation_defines(
     std::map<std::string, std::string>& defines,
-    tt::stl::Span<const unary::EltwiseUnaryWithParam> activations,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> activations,
     std::string_view operand,
     std::optional<DataType> dtype = std::nullopt);
 
@@ -117,13 +129,16 @@ struct AllShardVolumes {
 };
 
 std::optional<AllShardVolumes> get_shard_volumes(
-    const TensorSpec& a, const std::optional<TensorSpec>& b, const TensorSpec& c);
+    const tt::tt_metal::TensorSpec& a,
+    const std::optional<tt::tt_metal::TensorSpec>& b,
+    const tt::tt_metal::TensorSpec& c);
 
-const std::optional<tt::tt_metal::ShardSpec>& get_shard_spec(const TensorSpec& tensor_spec);
+const std::optional<tt::tt_metal::ShardSpec>& get_shard_spec(const tt::tt_metal::TensorSpec& tensor_spec);
 
-bool is_uneven(const TensorSpec& t);
+bool is_uneven(const tt::tt_metal::TensorSpec& t);
 
-bool is_native_L1_sharding(const TensorSpec& a, const std::optional<TensorSpec>& b, const MemoryConfig& c);
+bool is_native_L1_sharding(
+    const tt::tt_metal::TensorSpec& a, const std::optional<tt::tt_metal::TensorSpec>& b, const MemoryConfig& c);
 
 ttnn::Shape compute_broadcasted_output(const ttnn::Shape& shape_a, const ttnn::Shape& shape_b);
 

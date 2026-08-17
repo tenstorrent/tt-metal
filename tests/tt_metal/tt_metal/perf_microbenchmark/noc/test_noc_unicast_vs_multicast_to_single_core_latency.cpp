@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -14,10 +14,9 @@
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
-#include <tt-metalium/tt_metal_profiler.hpp>
+#include "impl/profiler/tt_metal_profiler.hpp"
 #include "impl/context/metal_context.hpp"
 #include <impl/dispatch/dispatch_core_manager.hpp>
 #include <llrt/tt_cluster.hpp>
@@ -30,9 +29,9 @@ void measure_latency(const std::string& kernel_name) {
 
     uint16_t channel =
         tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device->id());
-    CoreCoord producer_logical_core =
+    tt::tt_metal::CoreCoord producer_logical_core =
         tt_metal::MetalContext::instance().get_dispatch_core_manager().prefetcher_core(device->id(), channel, 0);
-    CoreCoord consumer_logical_core =
+    tt::tt_metal::CoreCoord consumer_logical_core =
         tt_metal::MetalContext::instance().get_dispatch_core_manager().dispatcher_core(device->id(), channel, 0);
 
     TT_FATAL(

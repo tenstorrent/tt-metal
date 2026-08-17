@@ -1,92 +1,109 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/add_int_sfpu.h"
+#include "api/compute/mul_int_sfpu.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/eltwise_unary/fill.h"
+#include "api/compute/pack.h"
+#include "api/compute/reconfig_data_format.h"
 #include "api/compute/tile_move_copy.h"
-
 #define APPROX false
 #include "api/compute/common.h"
 #include "api/compute/eltwise_binary_sfpu.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 #include "../accumulation_common.hpp"
 
 void kernel_main() {
-    const uint32_t num_rows = get_arg_val<uint32_t>(0);
-    const uint32_t tiles_per_row = get_arg_val<uint32_t>(1);
-    const AccumulationOp accumulation_op = static_cast<AccumulationOp>(get_arg_val<uint32_t>(2));
+    constexpr auto default_acc_value = get_arg(args::default_acc_value);
 
-    cb_wait_front(cb_start, ONE_TILE);
+    const uint32_t num_rows = get_arg(args::num_rows);
+    const uint32_t tiles_per_row = get_arg(args::tiles_per_row);
+
+    DataflowBuffer dfb_in_obj(dfb::in);
+    DataflowBuffer dfb_out_obj(dfb::out);
+    DataflowBuffer dfb_acc_obj(dfb::acc);  // note: only used in compute kernel
+
+    unary_op_init_common(dfb::in, dfb::out);
+
+    BINARY_OP_INIT();
+
+    constexpr uint32_t DST_IN = 0;
+    constexpr uint32_t DST_ACC = 1;
+
+    dfb_acc_obj.reserve_back(ONE_TILE);
+    dfb_acc_obj.push_back(ONE_TILE);
 
     for (uint32_t i = 0; i < num_rows; i++) {
-        bool enable_reload = false;
+        // Synchronize unpacker-packer between iterations
+        // This is necessary to avoid data-races on the accumulator buffer
+        dfb_acc_obj.wait_front(ONE_TILE);
+        dfb_acc_obj.pop_front(ONE_TILE);
+
+        tile_regs_acquire();
+        reconfig_data_format(dfb::acc, dfb::acc);
+
+        fill_tile_init();
+        FILL_TILE(DST_ACC, default_acc_value);
+
+        tile_regs_commit();
+
+        tile_regs_wait();
+
+        // out_of_order_output to keep packing to the accumulator buffer at the same location
+        dfb_acc_obj.reserve_back(ONE_TILE);
+
+        pack_reconfig_data_format(dfb::acc);
+        pack_tile(DST_ACC, dfb::acc);
+        tile_regs_release();
+
+        dfb_acc_obj.push_back(ONE_TILE);
 
         for (uint32_t j = 0; j < tiles_per_row; j++) {
+            // Synchronize unpacker-packer between iterations
+            dfb_acc_obj.wait_front(ONE_TILE);
+
             tile_regs_acquire();
-            const uint32_t cb_op = enable_reload ? cb_acc : cb_start;
-            cb_wait_front(cb_in, ONE_TILE);
+            dfb_in_obj.wait_front(ONE_TILE);
 
-            binary_op_init_common(cb_in, cb_op, cb_out);
+            reconfig_data_format(dfb::in, dfb::in);
+            copy_tile_to_dst_init_short(dfb::in);
+            copy_tile(dfb::in, 0, DST_IN);
 
-#ifdef CUMSUM_USE_INT32
-            copy_tile_to_dst_init_short(cb_in);
-            copy_tile(cb_in, FIRST_TILE, INT32_TILE_DEST);
+            reconfig_data_format(dfb::acc, dfb::acc);
+            copy_tile_to_dst_init_short(dfb::acc);
+            copy_tile(dfb::acc, 0, DST_ACC);
 
-            copy_tile_to_dst_init_short(cb_op);
-            copy_tile(cb_op, FIRST_TILE, INT32_TILE_ACC);
-#endif  // CUMSUM_USE_INT32
+            BINARY_OP(DST_IN, DST_ACC, DST_ACC);
+            dfb_acc_obj.pop_front(ONE_TILE);
 
-            // cumulating tiles along the first dimension,
-            // data is not dependent on itself within tiles
-            if (accumulation_op == AccumulationOp::CUMPROD) {
-                mul_tiles_init(cb_in, cb_op);
-                mul_tiles(cb_in, cb_op, FIRST_TILE, FIRST_TILE, WORKING_REG);
-            } else if (accumulation_op == AccumulationOp::CUMSUM) {
-#ifdef CUMSUM_USE_INT32
-                add_int_tile_init();
-                add_int_tile<DataFormat::Int32>(INT32_TILE_DEST, INT32_TILE_ACC, INT32_TILE_DEST);
-#else
-                add_tiles_init(cb_in, cb_op);
-                add_tiles(cb_in, cb_op, FIRST_TILE, FIRST_TILE, WORKING_REG);
-#endif  // CUMSUM_USE_INT32
-            }
-
-            cb_pop_front(cb_in, ONE_TILE);
-            if (enable_reload) {
-                cb_pop_front(cb_acc, ONE_TILE);
-            }
+            dfb_in_obj.pop_front(ONE_TILE);
 
             tile_regs_commit();
+
             tile_regs_wait();
 
-            cb_reserve_back(cb_acc, ONE_TILE);
-            // pack_reconfig_data_format(cb_acc);
-            pack_tile(WORKING_REG, cb_acc);
-            cb_push_back(cb_acc, ONE_TILE);
+            dfb_out_obj.reserve_back(ONE_TILE);
+            pack_reconfig_data_format(dfb::acc, dfb::out);  // Needed for fp32_acc_to_dest=True
+            pack_tile(DST_ACC, dfb::out);
+            dfb_out_obj.push_back(ONE_TILE);
 
-            // release_dst();
+            dfb_acc_obj.reserve_back(ONE_TILE);
 
-            // acquire_dst();
-
-            cb_wait_front(cb_acc, ONE_TILE);
-            copy_tile_to_dst_init_short(cb_acc);
-            copy_tile(cb_acc, FIRST_TILE, WORKING_REG);
-
-            cb_reserve_back(cb_out, ONE_TILE);
-            // pack_reconfig_data_format(cb_out);
-            pack_tile(WORKING_REG, cb_out);
-            cb_push_back(cb_out, ONE_TILE);
+            pack_reconfig_data_format(dfb::out, dfb::acc);  // Needed for fp32_acc_to_dest=True
+            pack_tile(DST_ACC, dfb::acc);
 
             tile_regs_release();
 
-            enable_reload = true;
+            dfb_acc_obj.push_back(ONE_TILE);
         }
-
-        // cb_wait_front(cb_acc);
-        cb_pop_front(cb_acc, ONE_TILE);
     }
 
-    cb_pop_front(cb_start, ONE_TILE);
+    // Clean-up and empty the accumulator buffer
+    dfb_acc_obj.wait_front(ONE_TILE);
+    dfb_acc_obj.pop_front(ONE_TILE);
 }

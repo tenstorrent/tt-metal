@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,8 +8,7 @@
 #include "ttnn/device_operation.hpp"
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt_stl/reflection.hpp>
-
+#include <tuple>
 namespace ttnn::prim {
 
 struct BroadcastParams {
@@ -39,8 +38,9 @@ struct BroadcastParams {
 
     // Add attributes method for reflection
     auto attributes() const {
-        using tt::stl::reflection::Attribute;
+        using ttsl::reflection::Attribute;
         std::vector<std::tuple<std::string, Attribute>> attrs;
+        attrs.reserve(6);
         attrs.emplace_back("sender_coord", sender_coord);
         attrs.emplace_back("num_links", num_links);
         attrs.emplace_back("ring_size", ring_size);
@@ -48,6 +48,13 @@ struct BroadcastParams {
         attrs.emplace_back("topology", topology);
         attrs.emplace_back("cluster_axis", cluster_axis);
         return attrs;
+    }
+
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "sender_coord", "num_links", "ring_size", "output_mem_config", "topology", "cluster_axis", "sub_device_id");
+    auto attribute_values() const {
+        return std::make_tuple(
+            sender_coord, num_links, ring_size, output_mem_config, topology, cluster_axis, sub_device_id);
     }
 };
 

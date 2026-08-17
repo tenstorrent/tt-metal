@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,6 +9,6 @@
 
 namespace ttnn::prim::detail {
 
-uint32_t get_packed_value(const tt::tt_metal::Tensor& tensor, const tt::tt_metal::PadValue& pad_value);
+uint32_t get_packed_value(const ttnn::Tensor& tensor, const ttnn::PadValue& pad_value);
 
 }  // namespace ttnn::prim::detail

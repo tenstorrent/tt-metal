@@ -1,25 +1,28 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    uint32_t num_tiles = get_arg_val<uint32_t>(1);
-    uint32_t tile_offset = get_arg_val<uint32_t>(2);
-    uint32_t outer_stride = get_arg_val<uint32_t>(3);
-    uint32_t inner_size = get_arg_val<uint32_t>(4);
-    uint32_t dim_size = get_arg_val<uint32_t>(5);
-
-    constexpr auto cb_out = tt::CBIndex::c_16;
+    auto num_tiles = get_arg(args::num_tiles);
+    auto tile_offset = get_arg(args::tile_offset);
+    auto outer_stride = get_arg(args::outer_stride);
+    auto inner_size = get_arg(args::inner_size);
+    auto dim_size = get_arg(args::dim_size);
 
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
-    uint32_t dst_out_tile_bytes = get_tile_size(cb_out);
 
-    constexpr auto out_args = TensorAccessorArgs<0>();
-    const auto dst_out = TensorAccessor(out_args, dst_addr, dst_out_tile_bytes);
+    const auto dst_out = TensorAccessor(tensor::dx);
+
+    Noc noc;
+    DataflowBuffer dfb_out_obj(dfb::out);
+    const auto out_tile_bytes = dfb_out_obj.get_tile_size();
 
     uint32_t curr_tile = tile_offset;
     for (uint32_t i = 0; i < num_tiles; i += onetile) {
@@ -29,11 +32,10 @@ void kernel_main() {
 
         uint32_t dim_stride = inner_size;
         for (uint32_t d = 0; d < dim_size; d++) {
-            cb_wait_front(cb_out, onetile);
-            uint32_t l1_read_addr = get_read_ptr(cb_out);
-            noc_async_write_tile(tile_idx, dst_out, l1_read_addr);
-            noc_async_write_barrier();
-            cb_pop_front(cb_out, onetile);
+            dfb_out_obj.wait_front(onetile);
+            noc.async_write(dfb_out_obj, dst_out, out_tile_bytes, {.offset_bytes = 0}, {.page_id = tile_idx});
+            noc.async_write_barrier();
+            dfb_out_obj.pop_front(onetile);
             tile_idx += dim_stride;
         }
         curr_tile += 1;

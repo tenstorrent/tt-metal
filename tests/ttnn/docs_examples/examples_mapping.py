@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -16,6 +16,7 @@ from . import test_reduction_examples as reduction
 from . import test_normalization_examples as normalization
 from . import test_embedding_examples as embedding
 from . import test_pooling_examples as pooling
+from . import test_ccl_examples as ccl
 
 FUNCTION_TO_EXAMPLES_MAPPING_DICT = {
     # Core
@@ -45,6 +46,7 @@ FUNCTION_TO_EXAMPLES_MAPPING_DICT = {
     "ttnn.full": tensor_creation.test_full,
     "ttnn.full_like": tensor_creation.test_full_like,
     "ttnn.rand": tensor_creation.test_rand,
+    "ttnn.randn": tensor_creation.test_randn,
     "ttnn.from_buffer": tensor_creation.test_from_buffer,
     "ttnn.bernoulli": tensor_creation.test_bernoulli,
     "ttnn.complex_tensor": tensor_creation.test_complex_tensor,
@@ -390,6 +392,7 @@ FUNCTION_TO_EXAMPLES_MAPPING_DICT = {
     "ttnn.indexed_fill": data_movement.test_indexed_fill,
     "ttnn.gather": data_movement.test_gather,
     "ttnn.sort": data_movement.test_sort,
+    "ttnn.narrow": data_movement.test_narrow,
     # Normalization
     "ttnn.group_norm": normalization.test_group_norm,
     "ttnn.layer_norm": normalization.test_layer_norm,
@@ -416,9 +419,16 @@ FUNCTION_TO_EXAMPLES_MAPPING_DICT = {
     # "ttnn.transformer.scaled_dot_product_attention": transformer.test_scaled_dot_product_attention, # Lack of example
     # "ttnn.transformer.scaled_dot_product_attention_decode": transformer.test_scaled_dot_product_attention_decode, # Lack of example
     # CCL
-    # "ttnn.all_gather": ccl.test_all_gather, # Non-working example
-    # "ttnn.reduce_scatter": ccl.test_reduce_scatter, # Non-working example
-    # "ttnn.all_reduce": ccl.test_all_reduce, # Non-working example
+    "ttnn.all_gather": ccl.test_all_gather,
+    "ttnn.all_broadcast": ccl.test_all_broadcast,
+    "ttnn.broadcast": ccl.test_broadcast,
+    "ttnn.all_reduce": ccl.test_all_reduce,
+    "ttnn.reduce_scatter": ccl.test_reduce_scatter,
+    "ttnn.reduce_to_root": ccl.test_reduce_to_root,
+    "ttnn.mesh_partition": ccl.test_mesh_partition,
+    "ttnn.point_to_point": ccl.test_point_to_point,
+    "ttnn.all_to_all_dispatch": ccl.test_all_to_all_dispatch,
+    "ttnn.all_to_all_combine": ccl.test_all_to_all_combine,
     # Embedding
     "ttnn.embedding": embedding.test_embedding,
     # Convolution

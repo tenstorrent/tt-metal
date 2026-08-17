@@ -1,13 +1,15 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <tt_stl/reflection.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/global_semaphore.hpp"
 #include <tt-metalium/sub_device.hpp>
+#include <cstddef>
 #include <optional>
 
 namespace ttnn::experimental::prim {
@@ -41,8 +43,11 @@ struct AllToAllAsyncParams {
         sub_device_id(sub_device_id) {}
 
     auto attributes() const {
-        using tt::stl::reflection::Attribute;
+        using ttsl::reflection::Attribute;
+        // Seven unconditional attributes plus the optional sub_device_id.
+        constexpr std::size_t kMaxNumAttributes = 8;
         std::vector<std::tuple<std::string, Attribute>> attrs;
+        attrs.reserve(kMaxNumAttributes);
         attrs.emplace_back("in_dim", in_dim);
         attrs.emplace_back("out_dim", out_dim);
         attrs.emplace_back("num_links", num_links);

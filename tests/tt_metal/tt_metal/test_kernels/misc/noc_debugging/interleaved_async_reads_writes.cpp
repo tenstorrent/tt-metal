@@ -1,18 +1,18 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
 
-#include "experimental/noc.h"
-#include "experimental/endpoints.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/endpoints.h"
 
 void kernel_main() {
-    experimental::Noc noc;
-    experimental::UnicastEndpoint unicast_endpoint;
+    Noc noc;
+    UnicastEndpoint unicast_endpoint;
 
     constexpr uint32_t num_bytes = 64;
-    constexpr uint32_t num_iterations = 5000;
+    constexpr uint32_t num_iterations = 10;
 
     for (uint32_t i = 0; i < num_iterations; ++i) {
         noc.async_read(

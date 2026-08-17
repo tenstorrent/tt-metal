@@ -1,25 +1,24 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <string>
 
-#include "ttnn/decorators.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn {
-namespace operations::data_movement {
 
-struct RepeatOperation {
-    static ttnn::Tensor invoke(
-        const ttnn::Tensor& input_tensor,
-        const ttnn::SmallVector<uint32_t>& repetition_vector,
-        const std::optional<MemoryConfig>& provided_output_mem_config);
+// `implementation`: "auto" (default) picks codegen when the codegen prim
+// supports the call and it isn't perf-demoted, else native; "native" and
+// "codegen" force the respective prim ("codegen" TT_FATALs if unsupported).
+ttnn::Tensor repeat(
+    const ttnn::Tensor& input_tensor,
+    const ttsl::SmallVector<uint32_t>& repetition_vector,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::string& implementation = "auto");
 
-    static ttnn::Tensor invoke(const ttnn::Tensor& input_tensor, const ttnn::Shape& repeat_dims);
-};
-
-}  // namespace operations::data_movement
-
-constexpr auto repeat = ttnn::register_operation<"ttnn::repeat", ttnn::operations::data_movement::RepeatOperation>();
+ttnn::Tensor repeat(
+    const ttnn::Tensor& input_tensor, const ttnn::Shape& repeat_dims, const std::string& implementation = "auto");
 
 }  // namespace ttnn

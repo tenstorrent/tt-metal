@@ -1,0 +1,70 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+#include <tt_stl/reflection.hpp>
+
+#include <cstdint>
+#include <optional>
+
+#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
+
+#include "ttnn/tensor/tensor.hpp"
+
+namespace ttnn::experimental::prim {
+
+struct SelectiveReduceCombineParams {
+    uint32_t hidden_size;
+    uint32_t batch_size;
+    uint32_t seq_size;
+    uint32_t select_experts_k;
+    uint32_t num_links;
+
+    uint32_t axis;
+    tt::tt_fabric::Topology topology;
+
+    uint32_t num_token_parallel_cores;
+    uint32_t num_data_parallel_cores;
+    std::vector<ttnn::CoreCoord> worker_cores;
+    CoreRangeSet mux_core_range_set;
+    ttnn::MemoryConfig output_memory_config;
+    std::optional<GlobalSemaphore> optional_cross_device_semaphore;
+
+    // When true, the combine runs as a single-device local reduction with no fabric/mux
+    // setup. Used by moe_compute's FullLocal path on a 1x1 mesh. The axis/topology/num_links
+    // /mux_core_range_set/optional_cross_device_semaphore fields are ignored in this mode.
+    bool local_combine = false;
+
+    auto attributes() const {
+        using ttsl::reflection::Attribute;
+        std::vector<std::tuple<std::string, Attribute>> attrs;
+        attrs.reserve(13);
+        attrs.emplace_back("hidden_size", hidden_size);
+        attrs.emplace_back("batch_size", batch_size);
+        attrs.emplace_back("seq_size", seq_size);
+        attrs.emplace_back("select_experts_k", select_experts_k);
+        attrs.emplace_back("num_links", num_links);
+        attrs.emplace_back("axis", axis);
+        attrs.emplace_back("num_token_parallel_cores", num_token_parallel_cores);
+        attrs.emplace_back("num_data_parallel_cores", num_data_parallel_cores);
+        attrs.emplace_back("worker_cores", worker_cores);
+        attrs.emplace_back("mux_core_range_set", mux_core_range_set);
+        attrs.emplace_back("output_memory_config", output_memory_config);
+        attrs.emplace_back("optional_cross_device_semaphore", optional_cross_device_semaphore);
+        attrs.emplace_back("local_combine", local_combine);
+
+        return attrs;
+    }
+};
+
+struct SelectiveReduceCombineTensors {
+    ttnn::Tensor dense_input_tensor;
+    ttnn::Tensor dense_activations_tensor;
+    ttnn::Tensor dense_token_maps_tensor;
+    ttnn::Tensor dense_token_counts_tensor;
+    std::optional<ttnn::Tensor> optional_output_tensor;
+};
+
+}  // namespace ttnn::experimental::prim

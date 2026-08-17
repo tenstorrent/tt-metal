@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,7 +10,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include <ttnn/tensor/xtensor/xtensor_all_includes.hpp>
 
-namespace tt::tt_metal::experimental::xtensor {
+namespace ttnn::experimental::xtensor {
 
 // Returns the shape of the xtensor as `tt::tt_metal::Shape`.
 template <typename E>
@@ -30,7 +30,7 @@ using AdaptedView = decltype(xt::adapt(
 // Returns `AdaptedView<T>` for a span of data.
 // Does not take ownership of the data.
 template <typename T>
-auto adapt(tt::stl::Span<T> data, const std::vector<size_t>& shape_vec) {
+auto adapt(ttsl::Span<T> data, const std::vector<size_t>& shape_vec) {
     return xt::adapt(data.data(), data.size(), xt::no_ownership(), std::move(shape_vec));
 }
 
@@ -40,18 +40,18 @@ template <typename T>
 class XtensorAdapter {
 public:
     XtensorAdapter(std::vector<T>&& data, const std::vector<size_t>& shape_vec) :
-        data_(std::move(data)), expr_(adapt(tt::stl::make_span(data_), std::move(shape_vec))) {}
+        data_(std::move(data)), expr_(adapt(ttsl::make_span(data_), std::move(shape_vec))) {}
 
     XtensorAdapter(const XtensorAdapter& other) :
-        data_(other.data_), expr_(adapt(tt::stl::make_span(data_), other.expr_.shape())) {}
+        data_(other.data_), expr_(adapt(ttsl::make_span(data_), other.expr_.shape())) {}
 
     XtensorAdapter(XtensorAdapter&& other) noexcept :
-        data_(std::move(other.data_)), expr_(adapt(tt::stl::make_span(data_), other.expr_.shape())) {}
+        data_(std::move(other.data_)), expr_(adapt(ttsl::make_span(data_), other.expr_.shape())) {}
 
     XtensorAdapter& operator=(const XtensorAdapter& other) {
         if (this != &other) {
             data_ = other.data_;
-            expr_ = adapt(tt::stl::make_span(data_), other.expr_.shape());
+            expr_ = adapt(ttsl::make_span(data_), other.expr_.shape());
         }
         return *this;
     }
@@ -59,7 +59,7 @@ public:
     XtensorAdapter& operator=(XtensorAdapter&& other) noexcept {
         if (this != &other) {
             data_ = std::move(other.data_);
-            expr_ = adapt(tt::stl::make_span(data_), other.expr_.shape());
+            expr_ = adapt(ttsl::make_span(data_), other.expr_.shape());
         }
         return *this;
     }
@@ -82,7 +82,7 @@ private:
 // Converts a span to an xtensor view.
 // IMPORTANT: the lifetime of the returned xtensor view is tied to the lifetime of the underlying buffer.
 template <typename T>
-xt::xarray<T> span_to_xtensor_view(tt::stl::Span<const T> buffer, const tt::tt_metal::Shape& shape) {
+xt::xarray<T> span_to_xtensor_view(ttsl::Span<const T> buffer, const tt::tt_metal::Shape& shape) {
     std::vector<size_t> shape_vec(shape.cbegin(), shape.cend());
     return xt::adapt(buffer.data(), buffer.size(), xt::no_ownership(), shape_vec);
 }
@@ -100,26 +100,26 @@ xt::xarray<T> span_to_xtensor_view(std::span<T> buffer, const tt::tt_metal::Shap
 template <typename T>
 auto xtensor_to_span(const xt::xarray<T>& xtensor) {
     auto adaptor = xt::adapt(xtensor.data(), xtensor.size(), xt::no_ownership());
-    return tt::stl::Span<const T>(adaptor.data(), adaptor.size());
+    return ttsl::Span<const T>(adaptor.data(), adaptor.size());
 }
 
 // Converts an xtensor to a Tensor.
 // IMPORTANT: this copies the data into the returned Tensor, which can be an expensive operation.
 template <typename T>
-tt::tt_metal::Tensor from_xtensor(const xt::xarray<T>& buffer, const TensorSpec& spec) {
+ttnn::Tensor from_xtensor(const xt::xarray<T>& buffer, const tt::tt_metal::TensorSpec& spec) {
     auto shape = get_shape_from_xarray(buffer);
-    TT_FATAL(shape == spec.logical_shape(), "xtensor has a different shape than the supplied TensorSpec");
+    TT_FATAL(shape == spec.logical_shape(), "xtensor has a different shape than the supplied tt::tt_metal::TensorSpec");
     auto buffer_view = xtensor_to_span(buffer);
-    return tt::tt_metal::Tensor::from_span<T>(buffer_view, spec);
+    return ttnn::Tensor::from_span<T>(buffer_view, spec);
 }
 
 // Converts a Tensor to an xtensor.
 // IMPORTANT: this copies the data into the returned Tensor, which can be an expensive operation.
 template <typename T>
-xt::xarray<T> to_xtensor(const tt::tt_metal::Tensor& tensor) {
+xt::xarray<T> to_xtensor(const ttnn::Tensor& tensor) {
     auto vec = tensor.to_vector<T>();
     const auto& shape = tensor.logical_shape();
-    return xt::xarray<T>(span_to_xtensor_view(tt::stl::Span<T>(vec.data(), vec.size()), shape));
+    return xt::xarray<T>(span_to_xtensor_view(ttsl::Span<T>(vec.data(), vec.size()), shape));
 }
 
-}  // namespace tt::tt_metal::experimental::xtensor
+}  // namespace ttnn::experimental::xtensor

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,10 +7,11 @@
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/moreh/moreh_mean_backward/device/moreh_mean_backward_device_operation.hpp"
 
-namespace ttnn::operations::moreh::moreh_mean_backward {
-Tensor MorehMeanBackward::invoke(
+namespace ttnn {
+
+Tensor moreh_mean_backward(
     const Tensor& output_grad,
-    std::optional<std::variant<int64_t, ttnn::SmallVector<int64_t>>> dim,
+    std::optional<std::variant<int64_t, ttsl::SmallVector<int64_t>>> dim,
     const bool keepdim,
     const std::optional<ttnn::Shape>& input_grad_shape,
     const std::optional<Tensor>& input_grad,
@@ -24,12 +25,13 @@ Tensor MorehMeanBackward::invoke(
         } else if (std::holds_alternative<int64_t>(dim.value())) {
             input_grad_rank += 1;
         } else {
-            auto dims = std::get<ttnn::SmallVector<int64_t>>(dim.value());
+            auto dims = std::get<ttsl::SmallVector<int64_t>>(dim.value());
             input_grad_rank += dims.size();
         }
     }
-    ttnn::SmallVector<int64_t> dims = get_dim(dim, input_grad_rank);
+    ttsl::SmallVector<int64_t> dims = ttnn::operations::get_dim(dim, input_grad_rank);
     return ttnn::prim::moreh_mean_backward(
         output_grad, dims, keepdim, input_grad_shape, input_grad, memory_config, compute_kernel_config);
 }
-}  // namespace ttnn::operations::moreh::moreh_mean_backward
+
+}  // namespace ttnn

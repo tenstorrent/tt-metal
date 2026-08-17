@@ -1,17 +1,17 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
 
-#include "experimental/noc.h"
-#include "experimental/core_local_mem.h"
-#include "experimental/endpoints.h"
+#include "api/dataflow/noc.h"
+#include "api/core_local_mem.h"
+#include "api/dataflow/endpoints.h"
 
 void kernel_main() {
-    experimental::Noc noc;
-    experimental::CoreLocalMem<uint32_t> local_buffer(L1_BUFFER_ADDR);
-    experimental::UnicastEndpoint unicast_endpoint;
+    Noc noc;
+    CoreLocalMem<uint32_t> local_buffer(L1_BUFFER_ADDR);
+    UnicastEndpoint unicast_endpoint;
 
     constexpr uint32_t num_bytes = 64;
 
@@ -23,7 +23,7 @@ void kernel_main() {
             {
                 .noc_x = OTHER_CORE_X,
                 .noc_y = OTHER_CORE_Y,
-                .addr = i,
+                .addr = L1_BUFFER_ADDR,
             },
             {});
 #if defined(USE_READ_BARRIER)

@@ -1,0 +1,41 @@
+diff --git a/c++/CMakeLists.txt b/c++/CMakeLists.txt
+index dcb370b5..2e3f660b 100644
+--- a/c++/CMakeLists.txt
++++ b/c++/CMakeLists.txt
+@@ -158,9 +158,6 @@ else()
+     message(SEND_ERROR "Cap'n Proto requires compiler-specific extensions (e.g., -std=gnu++14). Please leave CMAKE_CXX_EXTENSIONS undefined or ON.")
+   endif()
+ 
+-  if (NOT ANDROID)
+-    add_compile_options(-pthread)
+-  endif()
+ endif()
+ 
+ # Source =======================================================================
+diff --git a/c++/src/kj/CMakeLists.txt b/c++/src/kj/CMakeLists.txt
+index 48c49b74..3e47a2f8 100644
+--- a/c++/src/kj/CMakeLists.txt
++++ b/c++/src/kj/CMakeLists.txt
+@@ -80,8 +80,9 @@ add_library(kj ${kj_sources})
+ add_library(CapnProto::kj ALIAS kj)
+ target_compile_features(kj PUBLIC cxx_std_17)
+ 
++find_package(Threads REQUIRED)
+ if(UNIX AND NOT ANDROID)
+-  target_link_libraries(kj PUBLIC pthread)
++  target_link_libraries(kj PUBLIC Threads::Threads)
+ endif()
+ #make sure the lite flag propagates to all users (internal + external) of this library
+ target_compile_definitions(kj PUBLIC ${CAPNP_LITE_FLAG})
+@@ -149,10 +150,7 @@ if(NOT CAPNP_LITE)
+     target_compile_definitions(kj-async PUBLIC KJ_USE_FIBERS=0)
+   endif()
+ 
+-  if(UNIX)
+-    # external clients of this library need to link to pthreads
+-    target_compile_options(kj-async INTERFACE "-pthread")
+-  elseif(WIN32)
++  if(WIN32)
+     target_link_libraries(kj-async PUBLIC ws2_32)
+   endif()
+   # Ensure the library has a version set to match autotools build

@@ -1,14 +1,12 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.common.utility_functions import skip_with_watcher
+from tests.ttnn.utils_for_testing import assert_equal
 
 
-@skip_with_watcher("Skipping test with watcher enabled due to hang, see github issue #37096")
 def test_transpose_with_reshape(device):
     # Create input tensor
     torch_input = torch.rand((1, 1, 2048, 512), dtype=torch.bfloat16)
@@ -32,4 +30,4 @@ def test_transpose_with_reshape(device):
     torch_ref = torch_ref.transpose(1, 2)
 
     # Compare results
-    assert_with_pcc(torch_ref, tt_result, 0.9999)
+    assert_equal(torch_ref, tt_result)

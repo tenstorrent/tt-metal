@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,7 +10,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "mesh_partition.hpp"
 
 namespace ttnn::operations::ccl {
@@ -31,32 +31,32 @@ void bind_mesh_partition(nb::module_& mod) {
         Returns:
             ttnn.Tensor: The partitioned tensor, with output_shape = input_shape for all the unspecified dimensions, and output_shape[dim] = input_shape[dim] / num_devices, where num_devices is the number of devices along the `cluster_axis` if specified, else the total number of devices along the mesh.
 
-        Example:
-            >>> tensor = ttnn.mesh_partition(
-                            tt_input_tensors_list[i],
-                            dim,
-                            cluster_axis=1,
-                            memory_config=output_mem_config)
+        Supported dtypes and layouts:
+
+            .. list-table::
+                :header-rows: 1
+
+                * - Dtypes
+                  - Layouts
+                * - BFLOAT16, BFLOAT8_B, FLOAT32
+                  - TILE, ROW_MAJOR
+
+            mesh_partition is a per-device slice (it does not use the fabric) and does not restrict the input dtype; the output preserves the input dtype. ``input_shape[dim]`` must be evenly divisible by the number of devices along the cluster axis.
+
+        Memory Support:
+            - Interleaved: DRAM and L1
+            - Sharded: DRAM and L1
         )doc";
 
-    using OperationType = decltype(ttnn::mesh_partition);
-    ttnn::bind_registered_operation(
+    ttnn::bind_function<"mesh_partition">(
         mod,
-        ttnn::mesh_partition,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               int32_t dim,
-               std::optional<uint32_t> cluster_axis,
-               const std::optional<ttnn::MemoryConfig>& memory_config) {
-                return self(input_tensor, dim, cluster_axis, memory_config);
-            },
-            nb::arg("input_tensor").noconvert(),
-            nb::arg("dim"),
-            nb::arg("cluster_axis") = nb::none(),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none()});
+        &ttnn::mesh_partition,
+        nb::arg("input_tensor").noconvert(),
+        nb::arg("dim"),
+        nb::arg("cluster_axis") = nb::none(),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none());
 }
 
 }  // namespace ttnn::operations::ccl

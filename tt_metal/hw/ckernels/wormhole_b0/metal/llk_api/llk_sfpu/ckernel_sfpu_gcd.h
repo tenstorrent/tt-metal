@@ -57,12 +57,12 @@ inline void calculate_sfpu_gcd(const uint dst_index_in0, const uint dst_index_in
         // size of each tile in Dest is 64 rows
         constexpr uint dst_tile_size = 64;
 
-        TT_SFPLOAD(p_sfpu::LREG0, 4, 3, dst_index_in0 * dst_tile_size);  // a
-        TT_SFPLOAD(p_sfpu::LREG1, 4, 3, dst_index_in1 * dst_tile_size);  // b
+        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, 3, dst_index_in0 * dst_tile_size);  // a
+        TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::INT32, 3, dst_index_in1 * dst_tile_size);  // b
 
         calculate_sfpu_gcd_body<31>();
 
-        TT_SFPSTORE(p_sfpu::LREG1, 4, 3, dst_index_out * dst_tile_size);
+        TT_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::INT32, 3, dst_index_out * dst_tile_size);
         dst_reg++;
     }
 }

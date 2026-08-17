@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -107,7 +107,7 @@ def run(
     )
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.elu(input_tensor_a, alpha, memory_config=sharded_config)
+    output_tensor = ttnn.elu(input_tensor_a, alpha=alpha, memory_config=sharded_config)
     e2e_perf = stop_measuring_time(start_time)
     output_tensor = ttnn.to_torch(output_tensor)
 

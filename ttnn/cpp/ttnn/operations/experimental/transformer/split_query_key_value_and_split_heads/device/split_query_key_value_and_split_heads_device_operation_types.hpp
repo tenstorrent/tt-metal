@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,7 +12,7 @@
 namespace ttnn::experimental::prim {
 
 struct SplitQueryKeyValueAndSplitHeadsParams {
-    CoreCoord compute_with_storage_grid_size;
+    tt::tt_metal::CoreCoord compute_with_storage_grid_size;
     tt::tt_metal::MemoryConfig output_mem_config;
     uint32_t num_heads{};
 };

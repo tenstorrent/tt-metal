@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,18 +6,43 @@
 
 #include <functional>
 #include <optional>
+#include <variant>
 
 #include "ttnn/tensor/tensor.hpp"
-#include "layernorm_pre_all_gather_program_factory.hpp"
+#include "ttnn/metal_v2_artifacts.hpp"
 
 #include "layernorm_pre_all_gather_device_operation_types.hpp"
 
 namespace ttnn::prim {
 
+// Program factory for normal (non-Welford, non-2D) operation
+struct LayerNormPreAllGatherProgramFactory {
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+        const LayerNormPreAllGatherParams& operation_attributes,
+        const LayerNormPreAllGatherInputs& tensor_args,
+        Tensor& output);
+};
+
+// Program factory for 2D core grid operation
+struct LayerNormPreAllGather2DProgramFactory {
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+        const LayerNormPreAllGatherParams& operation_attributes,
+        const LayerNormPreAllGatherInputs& tensor_args,
+        Tensor& output);
+};
+
+// Program factory for Welford algorithm (layernorm only)
+struct LayerNormPreAllGatherWelfordProgramFactory {
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+        const LayerNormPreAllGatherParams& operation_attributes,
+        const LayerNormPreAllGatherInputs& tensor_args,
+        Tensor& output);
+};
+
 struct LayerNormPreAllGatherDeviceOperation {
     using operation_attributes_t = LayerNormPreAllGatherParams;
     using tensor_args_t = LayerNormPreAllGatherInputs;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<
         LayerNormPreAllGatherProgramFactory,
@@ -39,11 +64,13 @@ namespace ttnn::prim {
 
 Tensor layer_norm_pre_all_gather(
     const Tensor& input,
+    const std::optional<Tensor>& residual_input_tensor,
     const std::optional<Tensor>& recip_tensor,
     LayerNormDistributedType norm_type,
     const std::optional<tt::tt_metal::DataType>& dtype,
     const DeviceComputeKernelConfig& compute_kernel_config,
     const LayerNormProgramConfig& program_config,
-    const std::optional<bool>& use_2d_core_grid);
+    const std::optional<bool>& use_2d_core_grid,
+    bool fast_and_approximate_mode);
 
 }  // namespace ttnn::prim

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -24,24 +24,14 @@ struct UntilizeTensorArgs {
 struct UntilizeOperationAttributes {
     tt::tt_metal::MemoryConfig output_mem_config;
     bool use_multicore{};
-    bool use_pack_untilize{};
     bool fp32_dest_acc_en{};
     std::optional<CoreRangeSet> sub_core_grids;
-    bool enough_space_width{};
     bool enough_space_height{};
     uint32_t pf_type{};
 };
 
 using UntilizeTensorReturnValue = Tensor;
-using UntilizeSpecReturnValue = ttnn::TensorSpec;
+using UntilizeSpecReturnValue = tt::tt_metal::TensorSpec;
 using UntilizeShapeReturnValue = ttnn::Shape;
-
-struct UntilizeSharedVariables {
-    tt::tt_metal::KernelHandle reader_kernel_id{};
-    tt::tt_metal::KernelHandle writer_kernel_id{};
-    tt::tt_metal::CBHandle cb_src0{};
-    tt::tt_metal::CBHandle cb_output{};
-    std::vector<CoreCoord> cores_with_runtime_args;
-};
 
 }  // namespace ttnn::prim

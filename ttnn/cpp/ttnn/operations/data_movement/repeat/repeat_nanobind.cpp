@@ -1,41 +1,22 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "repeat_nanobind.hpp"
 
 #include <optional>
+#include <string>
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/string.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
+#include "ttnn-nanobind/small_vector_caster.hpp"  // for ttsl::SmallVector<uint32_t>
 
 #include "repeat.hpp"
 
 namespace ttnn::operations::data_movement {
 namespace nb = nanobind;
-
-namespace {
-template <typename data_movement_operation_t>
-void bind_repeat_op(nb::module_& mod, const data_movement_operation_t& operation, const char* doc) {
-    ttnn::bind_registered_operation(
-        mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const data_movement_operation_t& self,
-               const ttnn::Tensor& input_tensor,
-               const ttnn::SmallVector<uint32_t>& repetition_vector,
-               const std::optional<ttnn::MemoryConfig>& memory_config) {
-                return self(input_tensor, repetition_vector, memory_config);
-            },
-            nb::arg("input_tensor"),
-            nb::arg("repeat_dims"),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none()});
-}
-
-}  // namespace
 
 void bind_repeat(nb::module_& mod) {
     const auto* doc = R"doc(
@@ -47,12 +28,25 @@ void bind_repeat(nb::module_& mod) {
 
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            implementation (str, optional): "auto" (default), "native", or "codegen".
 
         Returns:
             ttnn.Tensor: the output tensor.
     )doc";
 
-    bind_repeat_op(mod, ttnn::repeat, doc);
+    ttnn::bind_function<"repeat">(
+        mod,
+        doc,
+        nb::overload_cast<
+            const ttnn::Tensor&,
+            const ttsl::SmallVector<uint32_t>&,
+            const std::optional<MemoryConfig>&,
+            const std::string&>(&ttnn::repeat),
+        nb::arg("input_tensor"),
+        nb::arg("repeat_dims"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("implementation") = "auto");
 }
 
 }  // namespace ttnn::operations::data_movement

@@ -1,13 +1,16 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/matmul/device/sparse/sparse_matmul_device_operation.hpp"
-#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation_types.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation.hpp"
+#include "ttnn/operations/matmul/device/config/matmul_program_config_types.hpp"
+
+#include <variant>
 
 #include <tt-metalium/work_split.hpp>
 
@@ -60,9 +63,19 @@ ttnn::Shape compute_sparse_matmul_output_shape(
 
     return output_shape;
 }
+
+ttnn::Shape compute_sparse_matmul_compact_output_shape(
+    const ttnn::Tensor& input_tensor_a, const ttnn::Tensor& input_tensor_b, uint32_t nnz) {
+    return ttnn::Shape{1U, nnz, input_tensor_a.logical_shape()[-2], input_tensor_b.logical_shape()[-1]};
+}
 }  // namespace
 
 namespace ttnn::prim {
+
+void SparseMatmulDeviceOperation::validate_on_program_cache_hit(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    validate_on_program_cache_miss(operation_attributes, tensor_args);
+}
 
 void SparseMatmulDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
@@ -70,6 +83,41 @@ void SparseMatmulDeviceOperation::validate_on_program_cache_miss(
     const auto& input_tensor_a = tensor_args.input_tensors.at(0);
     const auto& input_tensor_b = tensor_args.input_tensors.at(1);
     const auto& sparsity = tensor_args.input_tensors.at(2);
+
+    TT_FATAL(
+        input_tensor_a.storage_type() == ttnn::StorageType::DEVICE &&
+            input_tensor_b.storage_type() == ttnn::StorageType::DEVICE &&
+            sparsity.storage_type() == ttnn::StorageType::DEVICE,
+        "All sparse matmul inputs must be on device");
+    TT_FATAL(
+        input_tensor_a.buffer() != nullptr && input_tensor_b.buffer() != nullptr && sparsity.buffer() != nullptr,
+        "All sparse matmul inputs must be allocated in buffers");
+    TT_FATAL(
+        input_tensor_a.device() == input_tensor_b.device() && input_tensor_a.device() == sparsity.device(),
+        "All sparse matmul inputs must be on the same device");
+    TT_FATAL(
+        input_tensor_a.layout() == ttnn::Layout::TILE,
+        "Input tensor A must be TILE layout, got {}",
+        input_tensor_a.layout());
+    TT_FATAL(
+        input_tensor_b.layout() == ttnn::Layout::TILE,
+        "Input tensor B must be TILE layout, got {}",
+        input_tensor_b.layout());
+    TT_FATAL(
+        is_floating_point(input_tensor_a.dtype()),
+        "Input tensor A must be a floating point type, got {}",
+        input_tensor_a.dtype());
+    TT_FATAL(
+        is_floating_point(input_tensor_b.dtype()),
+        "Input tensor B must be a floating point type, got {}",
+        input_tensor_b.dtype());
+    TT_FATAL(
+        sparsity.layout() == ttnn::Layout::ROW_MAJOR,
+        "Sparsity tensor must be ROW_MAJOR layout, got {}",
+        sparsity.layout());
+    TT_FATAL(
+        operation_attributes.is_input_a_sparse || operation_attributes.is_input_b_sparse,
+        "sparse_matmul requires at least one of is_input_a_sparse or is_input_b_sparse to be true");
 
     const auto& a_shape_padded = get_matmul_tensor_padded_shape(input_tensor_a, /*transpose=*/false);
     const auto& b_shape_padded = get_matmul_tensor_padded_shape(input_tensor_b, /*transpose=*/false);
@@ -119,7 +167,9 @@ void SparseMatmulDeviceOperation::validate_on_program_cache_miss(
         b_shape_padded,
         in1_tile);
     TT_FATAL(
-        operation_attributes.nnz.value_or(1) > 0, "nnz ({}) must be greater than 0", operation_attributes.nnz.value());
+        operation_attributes.nnz.value_or(1) > 0,
+        "nnz ({}) must be greater than 0",
+        operation_attributes.nnz.value_or(1));
 
     // Check that nnz is less than or equal to the length of all batch dimensions
     uint32_t batch_length_A = 1;
@@ -148,15 +198,113 @@ void SparseMatmulDeviceOperation::validate_on_program_cache_miss(
     // Check that sparsity has enough entries
     TT_FATAL(
         sparsity.logical_volume() == batch_length,
-        "sparsity.logical_volume() ({}) must be equal to the product of all batch dimensions ({})",
+        "sparsity logical_volume ({}) must equal batch_length ({}) "
+        "[sparsity_shape={}, is_input_a_sparse={}, is_input_b_sparse={}]",
         sparsity.logical_volume(),
-        batch_length);
+        batch_length,
+        sparsity.logical_shape(),
+        operation_attributes.is_input_a_sparse,
+        operation_attributes.is_input_b_sparse);
 
     TT_FATAL(
         operation_attributes.nnz.value_or(1) <= batch_length,
         "nnz ({}) must be less than or equal to the length of all batch dimensions ({})",
-        operation_attributes.nnz,
+        operation_attributes.nnz.value_or(1),
         batch_length);
+
+    // When nnz is supplied, the receiver and compute kernels loop exactly nnz times while the in0 sender
+    // only multicasts once per non-zero sparsity entry. The op therefore requires
+    // count_nonzero(sparsity) == nnz; a mismatch deadlocks the device (see issue #45943).
+    // count_nonzero(sparsity) is data-dependent and lives on device, so it cannot be checked here on the
+    // host -- it is the caller's responsibility to pass an exact nnz, and the contract is validated
+    // on-device in reader_bmm_tile_layout_in0_sender_padding.cpp (asserts loudly under watcher instead of
+    // hanging).
+
+    const bool is_output_tensor_given =
+        !tensor_args.optional_output_tensors.empty() && tensor_args.optional_output_tensors.at(0).has_value();
+    if (is_output_tensor_given) {
+        // The program factory derives the writer's page geometry from the input tiles
+        // ({in0 tile height, in1 tile width}), not from the output tensor, so an optional
+        // output with any other tile would be paged differently than the writer writes it.
+        const auto& optional_output_tile = tensor_args.optional_output_tensors.at(0)->tensor_spec().tile();
+        TT_FATAL(
+            optional_output_tile.get_height() == in0_tile.get_height() &&
+                optional_output_tile.get_width() == in1_tile.get_width(),
+            "Optional output tensor tile {}x{} must match the output tile {}x{} derived from the input tiles",
+            optional_output_tile.get_height(),
+            optional_output_tile.get_width(),
+            in0_tile.get_height(),
+            in1_tile.get_width());
+
+        const auto& optional_output_shape = tensor_args.optional_output_tensors.at(0)->logical_shape();
+        const auto expanded_output_shape = compute_sparse_matmul_output_shape(
+            input_tensor_a,
+            input_tensor_b,
+            operation_attributes.is_input_a_sparse,
+            operation_attributes.is_input_b_sparse);
+
+        if (operation_attributes.nnz.has_value()) {
+            const auto compact_output_shape = compute_sparse_matmul_compact_output_shape(
+                input_tensor_a, input_tensor_b, operation_attributes.nnz.value());
+            TT_FATAL(
+                optional_output_shape == expanded_output_shape || optional_output_shape == compact_output_shape,
+                "Optional output tensor shape {} must match expanded output shape {} or compact output shape {} "
+                "when nnz={}",
+                optional_output_shape,
+                expanded_output_shape,
+                compact_output_shape,
+                operation_attributes.nnz.value());
+        } else {
+            TT_FATAL(
+                optional_output_shape == expanded_output_shape,
+                "Optional output tensor shape {} must match expanded output shape {} when nnz is not provided",
+                optional_output_shape,
+                expanded_output_shape);
+        }
+    }
+
+    // The mcast_in0 kernel derives in1_num_subblocks = out_block_w / out_subblock_w and bakes it in
+    // as a compute-kernel compile-time arg. When out_subblock_w does not divide out_block_w the
+    // integer division yields 0, the compute kernel's in1_subblock loop runs zero times and never
+    // pushes cb_out, and the in1 writer parks forever on cb_out.wait_front() -- a silent device hang
+    // requiring a board reset. The same expression also underflows uint32 in the last-block padded
+    // skip count. Reject on the host instead, matching the dense matmul path's
+    // validate_matmul_block_and_subblock_configuration.
+    //
+    // Check order matters: every value used as a divisor below is rejected as zero first, so a
+    // malformed program config fails as a TT_FATAL rather than a host divide-by-zero.
+    if (operation_attributes.program_config.has_value()) {
+        if (const auto* pc = std::get_if<operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(
+                &operation_attributes.program_config.value())) {
+            TT_FATAL(
+                pc->out_subblock_w != 0 && pc->out_subblock_h != 0,
+                "sparse_matmul: out_subblock_w and out_subblock_h must be non-zero");
+            TT_FATAL(
+                pc->out_block_w != 0 && pc->out_block_h != 0,
+                "sparse_matmul: out_block_w and out_block_h must be non-zero");
+            TT_FATAL(
+                pc->out_block_w % pc->out_subblock_w == 0,
+                "sparse_matmul: out_block_w ({}) must be divisible by out_subblock_w ({}); otherwise "
+                "in1_num_subblocks becomes 0 and the mcast_in0 kernel deadlocks",
+                pc->out_block_w,
+                pc->out_subblock_w);
+            TT_FATAL(
+                pc->out_block_h % pc->out_subblock_h == 0,
+                "sparse_matmul: out_block_h ({}) must be divisible by out_subblock_h ({})",
+                pc->out_block_h,
+                pc->out_subblock_h);
+            TT_FATAL(
+                pc->per_core_M % pc->out_block_h == 0,
+                "sparse_matmul: per_core_M ({}) must be divisible by out_block_h ({})",
+                pc->per_core_M,
+                pc->out_block_h);
+            TT_FATAL(
+                pc->per_core_N % pc->out_block_w == 0,
+                "sparse_matmul: per_core_N ({}) must be divisible by out_block_w ({})",
+                pc->per_core_N,
+                pc->out_block_w);
+        }
+    }
 }
 
 SparseMatmulDeviceOperation::spec_return_value_t SparseMatmulDeviceOperation::compute_output_specs(
@@ -193,7 +341,7 @@ SparseMatmulDeviceOperation::spec_return_value_t SparseMatmulDeviceOperation::co
         operation_attributes.output_tile,
         /*optional_output_tensor_tile=*/std::nullopt);
 
-    return {TensorSpec(
+    return {tt::tt_metal::TensorSpec(
         output_shape,
         tt::tt_metal::TensorLayout(
             output_dtype,
@@ -206,6 +354,13 @@ SparseMatmulDeviceOperation::tensor_return_value_t SparseMatmulDeviceOperation::
     SparseMatmulDeviceOperation::tensor_return_value_t output_tensors;
     const auto& optional_output_tensors = tensor_args.optional_output_tensors;
     const auto& input_tensors = tensor_args.input_tensors;
+    // A compact output is fully written by the in1 writer (one block per non-zero sparsity entry),
+    // so it skips the zero-fill below; expanded outputs rely on it to zero the skipped blocks.
+    const bool compact_output = !optional_output_tensors.empty() && optional_output_tensors[0].has_value() &&
+                                operation_attributes.nnz.has_value() &&
+                                optional_output_tensors[0]->logical_shape() ==
+                                    compute_sparse_matmul_compact_output_shape(
+                                        input_tensors.at(0), input_tensors.at(1), operation_attributes.nnz.value());
 
     if (!optional_output_tensors.empty() and optional_output_tensors[0].has_value()) {
         output_tensors.reserve(optional_output_tensors.size());
@@ -215,14 +370,16 @@ SparseMatmulDeviceOperation::tensor_return_value_t SparseMatmulDeviceOperation::
                 "If using optional output tensors, all output tensors must have a value");
             output_tensors.emplace_back(optional_output_tensor.value());
         }
-        for (auto& output_tensor : output_tensors) {
-            output_tensor = ttnn::zeros_like(
-                output_tensor,
-                std::nullopt,
-                std::nullopt,
-                std::nullopt,
-                std::nullopt,
-                std::optional<Tensor>(output_tensor));
+        if (!compact_output) {
+            for (auto& output_tensor : output_tensors) {
+                output_tensor = ttnn::zeros_like(
+                    output_tensor,
+                    std::nullopt,
+                    std::nullopt,
+                    std::nullopt,
+                    std::nullopt,
+                    std::optional<Tensor>(output_tensor));
+            }
         }
         return output_tensors;
     }
@@ -232,6 +389,7 @@ SparseMatmulDeviceOperation::tensor_return_value_t SparseMatmulDeviceOperation::
     for (const auto& output_spec : output_specs) {
         output_tensors.emplace_back(create_device_tensor(output_spec, device));
     }
+    // Compact output requires a caller-supplied tensor, so this path is never compact.
     for (auto& output_tensor : output_tensors) {
         output_tensor = ttnn::zeros_like(
             output_tensor,
@@ -244,11 +402,10 @@ SparseMatmulDeviceOperation::tensor_return_value_t SparseMatmulDeviceOperation::
     return output_tensors;
 }
 
-// static tt::stl::hash::hash_t SparseMatmulDeviceOperation::compute_program_hash(
+// static ttsl::hash::hash_t SparseMatmulDeviceOperation::compute_program_hash(
 //     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
-std::tuple<SparseMatmulDeviceOperation::operation_attributes_t, SparseMatmulDeviceOperation::tensor_args_t>
-SparseMatmulDeviceOperation::invoke(
+std::tuple<SparseMatmulParams, SparseMatmulInputs> sparse_matmul_build_operation_args(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const Tensor& sparsity,
@@ -283,6 +440,41 @@ SparseMatmulDeviceOperation::invoke(
     return {parameters, SparseMatmulInputs{{input_tensor_a, input_tensor_b, sparsity}, {}, {optional_output_tensor}}};
 }
 
+SparseMatmulDeviceOperation::tensor_return_value_t sparse_matmul(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const Tensor& sparsity,
+    const std::optional<Tensor>& optional_output_tensor,
+    std::optional<uint32_t> nnz,
+    bool is_input_a_sparse,
+    bool is_input_b_sparse,
+    const std::optional<const MemoryConfig>& memory_config,
+    std::optional<const DataType> dtype,
+    const std::optional<const operations::matmul::MatmulProgramConfig>& program_config,
+    std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<const CoreCoord>& user_core_coord,
+    const std::optional<const tt::tt_metal::Tile>& output_tile,
+    const std::optional<const GlobalCircularBuffer>& global_cb,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    auto [params, inputs] = sparse_matmul_build_operation_args(
+        input_tensor_a,
+        input_tensor_b,
+        sparsity,
+        optional_output_tensor,
+        nnz,
+        is_input_a_sparse,
+        is_input_b_sparse,
+        memory_config,
+        std::move(dtype),
+        program_config,
+        std::move(compute_kernel_config),
+        user_core_coord,
+        output_tile,
+        global_cb,
+        sub_device_id);
+    return ttnn::device_operation::launch<SparseMatmulDeviceOperation>(params, inputs);
+}
+
 SparseMatmulParams create_sparse_matmul_attributes(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
@@ -307,6 +499,10 @@ SparseMatmulParams create_sparse_matmul_attributes(
 
     auto matmul_struct =
         create_matmul_attributes(input_tensor_a, input_tensor_b, matmul_attributes, {optional_output_tensors.at(0)});
+    if (matmul_struct.program_config.has_value()) {
+        auto device_grid = input_tensor_a.device()->compute_with_storage_grid_size();
+        operations::matmul::normalize_program_config(matmul_struct.program_config.value(), device_grid);
+    }
     return SparseMatmulParams{
         parameters.nnz,
         parameters.is_input_a_sparse,

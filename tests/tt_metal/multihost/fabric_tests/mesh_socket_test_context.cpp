@@ -1,8 +1,9 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tests/tt_metal/multihost/fabric_tests/mesh_socket_test_context.hpp"
+#include <tt_stl/reflection.hpp>
 #include "tests/tt_metal/multihost/fabric_tests/socket_send_recv_utils.hpp"
 
 #include <algorithm>
@@ -24,8 +25,9 @@ MeshSocketTestContext::~MeshSocketTestContext() { cleanup(); }
 
 void MeshSocketTestContext::initialize() {
     log_info(tt::LogTest, "Initializing MeshSocketTestContext...");
-    const auto mesh_id_str = std::string(std::getenv("TT_MESH_ID"));
-    local_mesh_id_ = MeshId{std::stoi(mesh_id_str)};
+    const char* mesh_id_env = std::getenv("TT_MESH_ID");
+    TT_FATAL(mesh_id_env != nullptr, "TT_MESH_ID environment variable must be set for Multi-Host Fabric Tests.");
+    local_mesh_id_ = MeshId{std::stoi(mesh_id_env)};
     if (config_.physical_mesh_config.has_value()) {
         initialize_and_validate_custom_physical_config(config_.physical_mesh_config.value());
     }
@@ -254,8 +256,8 @@ std::unordered_map<Rank, tt::tt_fabric::MeshId> MeshSocketTestContext::create_ra
 
     std::vector<std::byte> recv_buffer(sizeof(uint32_t) * world_size);
     distributed_context_->all_gather(
-        tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&local_mesh_id_), sizeof(local_mesh_id_)),
-        tt::stl::Span<std::byte>(recv_buffer));
+        ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&local_mesh_id_), sizeof(local_mesh_id_)),
+        ttsl::Span<std::byte>(recv_buffer));
 
     std::unordered_map<Rank, tt::tt_fabric::MeshId> rank_to_mesh_id;
     for (uint32_t rank = 0; rank < world_size; ++rank) {
@@ -286,7 +288,7 @@ void MeshSocketTestContext::share_seed() {
         // Send seed to all other ranks
         for (uint32_t rank = 1; rank < *distributed_context_->size(); ++rank) {
             distributed_context_->send(
-                tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&seed), sizeof(seed)),
+                ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&seed), sizeof(seed)),
                 tt::tt_metal::distributed::multihost::Rank{rank},
                 tt::tt_metal::distributed::multihost::Tag{0});
         }
@@ -294,7 +296,7 @@ void MeshSocketTestContext::share_seed() {
         // All other ranks receive the seed from rank 0
         log_info(tt::LogTest, "Rank {} receiving seed from rank 0", *local_rank_);
         distributed_context_->recv(
-            tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&seed), sizeof(seed)),
+            ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&seed), sizeof(seed)),
             tt::tt_metal::distributed::multihost::Rank{0},
             tt::tt_metal::distributed::multihost::Tag{0});
         log_info(tt::LogTest, "Rank {} received seed: {}", *local_rank_, seed);

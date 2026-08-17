@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 // RoPE unified kernel
@@ -14,6 +14,7 @@
 #include "../../../unified_kernels/kernel_op_api.hpp"
 #include "../../../unified_kernels/kernel_utils.hpp"
 #include "../../../unified_kernels/rope.hpp"
+#include "../../../metadata/metadata.hpp"
 
 // Compile-time role flags for dead code elimination via if constexpr
 struct Core {
@@ -25,28 +26,28 @@ void kernel_main() {
 // Define args per RISC (different compile-time arg layout per processor)
 // ============================================================================
 #if defined(COMPILE_FOR_NCRISC)
-    // CTArgs type alias (required for Op template)
     constexpr uint32_t Wt = get_named_compile_time_arg_val("Wt");
     constexpr uint32_t Ht = get_named_compile_time_arg_val("Ht");
-    using RopeCTArgs = deepseek_b1_ops::Rope::ReaderCTArgs<Wt, Ht>;
+    constexpr uint32_t cos_sin_page_size = get_named_compile_time_arg_val("cos_sin_page_size");
+    constexpr uint32_t total_Wt = get_named_compile_time_arg_val("total_Wt");
+    constexpr uint32_t start_tile_offset = get_named_compile_time_arg_val("start_tile_offset");
+    using RopeCTArgs = deepseek_b1_ops::Rope::ReaderCTArgs<Wt, Ht, cos_sin_page_size, total_Wt, start_tile_offset>;
 
     constexpr uint32_t in_cb = get_named_compile_time_arg_val("in_cb");
-    constexpr uint32_t cos_cb = get_named_compile_time_arg_val("cos_cb");
-    constexpr uint32_t sin_cb = get_named_compile_time_arg_val("sin_cb");
+    constexpr uint32_t cos_sin_cb = get_named_compile_time_arg_val("cos_sin_cb");
+    constexpr uint32_t cos_tensor_address = get_named_compile_time_arg_val("cos_tensor_address");
+    constexpr uint32_t sin_tensor_address = get_named_compile_time_arg_val("sin_tensor_address");
     constexpr uint32_t trans_mat_cb = get_named_compile_time_arg_val("trans_mat_cb");
-    // Setup sharded buffers: input CB contains Ht * Wt tiles total (consumed in Ht iterations),
-    // sin/cos CBs contain Wt tiles each (reused for all Ht heads)
+
     unified_kernels::setup_sharded_buffer(in_cb, Wt);
-    unified_kernels::setup_sharded_buffer(cos_cb, Wt);
-    unified_kernels::setup_sharded_buffer(sin_cb, Wt);
     unified_kernels::setup_sharded_buffer(trans_mat_cb, 1);
 
-    // Reader args: CB indices for sharded input signaling
     deepseek_b1_ops::Rope::ReaderArgs rope_args{
         .in_cb = in_cb,
-        .cos_cb = cos_cb,
-        .sin_cb = sin_cb,
-        .trans_mat_cb = trans_mat_cb,
+        .cos_sin_cb = cos_sin_cb,
+        .cos_tensor_address = cos_tensor_address,
+        .sin_tensor_address = sin_tensor_address,
+        .global_pos = 0,
     };
 
 #elif defined(COMPILE_FOR_BRISC)
@@ -64,33 +65,35 @@ void kernel_main() {
 
     // CB indices (passed as runtime args to ComputeArgs)
     constexpr uint32_t in_cb = get_named_compile_time_arg_val("in_cb");
-    constexpr uint32_t cos_cb = get_named_compile_time_arg_val("cos_cb");
-    constexpr uint32_t sin_cb = get_named_compile_time_arg_val("sin_cb");
+    constexpr uint32_t cos_sin_cb = get_named_compile_time_arg_val("cos_sin_cb");
     constexpr uint32_t trans_mat_cb = get_named_compile_time_arg_val("trans_mat_cb");
     constexpr uint32_t rotated_in_interm_cb = get_named_compile_time_arg_val("rotated_in_interm_cb");
-    constexpr uint32_t cos_interm_cb = get_named_compile_time_arg_val("cos_interm_cb");
-    constexpr uint32_t sin_interm_cb = get_named_compile_time_arg_val("sin_interm_cb");
     constexpr uint32_t out_cb = get_named_compile_time_arg_val("out_cb");
 
     // Compute args: all CB indices
     deepseek_b1_ops::Rope::ComputeArgs rope_args{
         .in_cb = in_cb,
-        .cos_cb = cos_cb,
-        .sin_cb = sin_cb,
+        .cos_sin_cb = cos_sin_cb,
         .trans_mat_cb = trans_mat_cb,
         .rotated_in_interm_cb = rotated_in_interm_cb,
-        .cos_interm_cb = cos_interm_cb,
-        .sin_interm_cb = sin_interm_cb,
         .out_cb = out_cb,
     };
-    // Full init, CBs don't matter
-    compute_kernel_hw_startup(0, 0, 0);  // Full init, CBs don't matter
+    deepseek_compute_kernel_init();
 #endif
 
     // ========================================================================
     // RoPE operation
     // CTArgs, IsActiveCore
     // ========================================================================
+#if defined(COMPILE_FOR_NCRISC)
+    uint32_t metadata_addr = get_common_arg_val<uint32_t>(0);
+    volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata* metadata_ptr =
+        reinterpret_cast<volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata*>(metadata_addr);
+    uint32_t cur_pos = metadata_ptr->position_id;
+#endif
     deepseek_b1_ops::Rope::Op<RopeCTArgs, Core::is_active_core> rope;
+#if defined(COMPILE_FOR_NCRISC)
+    rope.set_global_pos(rope_args, cur_pos);
+#endif
     rope(rope_args);
 }

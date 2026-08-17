@@ -1,14 +1,16 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "linear_op.hpp"
 
-#include <core/ttnn_all_includes.hpp>
-
 #include "autograd/auto_context.hpp"
 #include "autograd/graph_utils.hpp"
 #include "core/compute_kernel_config.hpp"
+#include "ttnn/operations/creation/creation.hpp"
+#include "ttnn/operations/matmul/matmul.hpp"
+#include "ttnn/operations/moreh/moreh_linear_backward/moreh_linear_backward.hpp"
+#include "ttnn/types.hpp"
 #include "ttnn_fixed/matmuls.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
@@ -60,12 +62,11 @@ void moreh_linear_backward(
         tensor->get_value(),
         weight->get_value(),
         /* are required outputs */ std::vector<bool>{true, true, bias != nullptr},
-        bias != nullptr ? std::optional<tt::tt_metal::Tensor>(bias->get_value())
-                        : std::optional<tt::tt_metal::Tensor>(std::nullopt),
+        bias != nullptr ? std::optional<ttnn::Tensor>(bias->get_value()) : std::optional<ttnn::Tensor>(std::nullopt),
         tensor_grad,
         weight_grad,
-        bias ? std::optional<tt::tt_metal::Tensor>(ttnn::empty_like(bias->get_value()))
-             : std::optional<tt::tt_metal::Tensor>(std::nullopt),
+        bias ? std::optional<ttnn::Tensor>(ttnn::empty_like(bias->get_value()))
+             : std::optional<ttnn::Tensor>(std::nullopt),
         /* input_grad_mem_config */ std::nullopt,
         /* weight_grad_mem_config */ std::nullopt,
         /* bias_grad_mem_config */ std::nullopt,
@@ -96,8 +97,7 @@ autograd::TensorPtr linear_op(
     out->set_value(ttnn::linear(
         tensor->get_value(),
         weight->get_value(),
-        bias != nullptr ? std::optional<tt::tt_metal::Tensor>(bias->get_value())
-                        : std::optional<tt::tt_metal::Tensor>(std::nullopt),
+        bias != nullptr ? std::optional<ttnn::Tensor>(bias->get_value()) : std::optional<ttnn::Tensor>(std::nullopt),
         /* transpose_a */ false,
         /* tranpose_b */ true,
         /* memory_config */ std::nullopt,
@@ -113,8 +113,7 @@ autograd::TensorPtr linear_op(
         ttnn_linear_backward(tensor, weight, bias, out);
     };
 
-    auto links = autograd::get_links(weight, tensor, bias);
-    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+    out->set_node(autograd::add_backward_node(std::move(grad), out, weight, tensor, bias));
     return out;
 }
 

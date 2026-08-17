@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -6,11 +6,12 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.warmup import WarmupForwardMixin
 from models.demos.qwen3_vl.tt.common import get_block_size, get_max_prefill_chunk_size, num_blocks_in_seq
 from models.tt_transformers.tt.generator import Generator as TTTGenerator
 
 
-class Generator:
+class Generator(WarmupForwardMixin):
     def __init__(self, model, model_args, mesh_device, processor=None, tokenizer=None):
         """
         Creating a Qwen2_5_Vision wrapper requires only a mesh_device and model_args.
@@ -52,7 +53,7 @@ class Generator:
         prompt_lens=None,
         deepstack_visual_embeds=None,
     ):
-        batch, batch_seq_len = tokens.shape[:2]
+        batch, batch_seq_len = tokens.shape[0], tokens.shape[1]
         output_logits = torch.zeros(batch, 1, self.model_args.vocab_size)
         prompt_lens = prompt_lens if prompt_lens is not None else torch.tensor([batch_seq_len] * batch)
 
@@ -69,7 +70,7 @@ class Generator:
             if page_table is not None:
                 page_table_user = self._ttt_generator._get_prefill_user_page_table(page_table, kv_cache, seq_len)
 
-            logits = self.__prefill_forward_single_user_text(
+            logits = self.prefill_forward_single_user_text(
                 tokens[user_id : user_id + 1],
                 page_table=page_table_user if page_table is not None else None,
                 user_id=user_id,
@@ -88,10 +89,6 @@ class Generator:
 
         return output_logits
 
-    def warmup_model_prefill(self, kv_cache, enable_trace, sampling_params=None):
-        logger.warning("Warmup model prefill not implemented for Qwen3_VL Generator")
-        logger.warning("Tracing in prefill mode is not supported for Qwen3_VL")
-
     def update_cos_sin(self, cos_matrix_pt=None, sin_matrix_pt=None):
         self.model.rope_setup.update_cos_sin(cos_matrix_pt=cos_matrix_pt, sin_matrix_pt=sin_matrix_pt)
 
@@ -107,7 +104,7 @@ class Generator:
         # convert to torch tensor
         self.model.rope_setup.rope_deltas = torch.tensor(rope_deltas_list)
 
-    def decode_forward_text(
+    def decode_forward(
         self,
         tokens,
         start_pos,
@@ -116,8 +113,9 @@ class Generator:
         enable_trace=True,
         read_from_device=True,
         sampling_params=None,
+        **kwargs,
     ):
-        return self._ttt_generator.decode_forward_text(
+        return self._ttt_generator.decode_forward(
             tokens=tokens,
             start_pos=start_pos,
             page_table=page_table,
@@ -125,9 +123,10 @@ class Generator:
             enable_trace=enable_trace,
             read_from_device=read_from_device,
             sampling_params=sampling_params,
+            **kwargs,
         )
 
-    def __prefill_forward_single_user_text(
+    def prefill_forward_single_user_text(
         self, tokens, page_table, user_id, last_token_idx, rot_mats, kv_cache=None, deepstack_visual_embeds=None
     ):
         seq_len = tokens.shape[1]
@@ -190,7 +189,7 @@ class Generator:
                 )
                 tt_logits = self.model.ttnn_prefill_forward(
                     chunk_prefill_input,
-                    rot_mats_global=[rm[user_id : user_id + 1, ...] for rm in chunk_rot_mats_prefill],
+                    rot_mats_global=[rm[0:1, ...] for rm in chunk_rot_mats_prefill],
                     user_id=CHUNK_USER_ID,
                     page_table=page_table_tt,
                     chunk_page_table=chunk_page_table_tt,
@@ -224,7 +223,7 @@ class Generator:
 
             tt_logits = self.model.ttnn_prefill_forward(
                 prefill_input,
-                rot_mats_global=[rm[user_id : user_id + 1, ...] for rm in rot_mats_prefill],
+                rot_mats_global=[rm[0:1, ...] for rm in rot_mats_prefill],
                 user_id=user_id,
                 page_table=page_table_tt,
                 get_last_token=(last_token_idx // 32) * 32,
@@ -242,6 +241,10 @@ class Generator:
                 ttnn.deallocate(page_table_tt)
 
             return logits
+
+    def warmup_model_prefill(self, kv_cache, enable_trace, can_sample_on_device, greedy_only: bool = False) -> None:
+        logger.warning("Warmup model prefill not implemented for Qwen3_VL Generator")
+        logger.warning("Tracing in prefill mode is not supported for Qwen3_VL")
 
     # [INFO] this is called by vLLM
     def read_decode_output(self, tt_out, async_read=False):

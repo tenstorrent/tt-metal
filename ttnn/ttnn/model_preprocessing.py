@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -159,6 +159,7 @@ def default_preprocessor(model, name, ttnn_module_args) -> ParameterDict:
 
 torch_dtype_to_ttnn_dtype = {
     torch.uint8: ttnn.uint8,
+    torch.int8: ttnn.int8,
     torch.int16: ttnn.uint16,
     torch.int32: ttnn.int32,
     torch.int64: ttnn.uint32,

@@ -1,8 +1,7 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <core/ttnn_all_includes.hpp>
 #include <fstream>
 
 #include "autograd/auto_context.hpp"

@@ -1,7 +1,8 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/fmt.hpp>
 #include "fabric_builder_config.hpp"
 #include "fabric_tensix_builder_impl.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"

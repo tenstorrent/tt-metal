@@ -5,6 +5,11 @@
 option(WITH_PYTHON_BINDINGS "Enables build of python bindings" ON)
 option(ENABLE_CODE_TIMERS "Enable code timers" OFF)
 option(ENABLE_TRACY "Enable Tracy Profiling" ON)
+set(TRACY_DEBUG_CATEGORY
+    "off"
+    CACHE STRING
+    "Tracy debug-verbosity categories to compile in: off, or a comma-separated list from tt_metal/tools/profiler/tracy_debug_categories.txt."
+)
 option(ENABLE_LIBCXX "Enable using libc++" OFF)
 option(ENABLE_BUILD_TIME_TRACE "Enable build time trace (Clang only -ftime-trace)" OFF)
 option(BUILD_SHARED_LIBS "Create shared libraries" ON)
@@ -21,6 +26,15 @@ option(ENABLE_DISTRIBUTED "Enable multihost distributed compute support (OpenMPI
 option(TT_UMD_BUILD_SIMULATION "Force UMD to include its simulation harnessing" ON)
 option(TT_INSTALL "Define installation rules" ON)
 option(TT_USE_SYSTEM_SFPI "Use system path for SFPI. SFPI is used to compile firmware." OFF)
+option(TT_METAL_USE_EMULE "Build with tt-emule software emulation (no hardware required)" OFF)
+set(TT_EMULE_PATH "" CACHE PATH "Local path to tt-emule source (overrides CPM fetch from GitHub)")
+
+if(TT_METAL_USE_EMULE)
+    set(TT_UMD_BUILD_EMULE ON)
+    if(TT_EMULE_PATH)
+        set(CPM_tt_emule_SOURCE "${TT_EMULE_PATH}")
+    endif()
+endif()
 
 ###########################################################################################
 

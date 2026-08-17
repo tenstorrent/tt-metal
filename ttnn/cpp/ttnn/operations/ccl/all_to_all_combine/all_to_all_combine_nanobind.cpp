@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,12 +10,41 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "all_to_all_combine.hpp"
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
 namespace ttnn::operations::ccl {
+namespace {
+
+ttnn::Tensor all_to_all_combine_impl(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& expert_metadata_tensor,
+    const ttnn::Tensor& expert_mapping_tensor,
+    const bool local_reduce,
+    const std::optional<uint32_t> output_shard_dim,
+    const std::optional<uint32_t> cluster_axis,
+    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
+    const std::optional<ttnn::MemoryConfig>& memory_config,
+    const std::optional<ttnn::Tensor>& output_tensor,
+    const std::optional<uint32_t> num_links,
+    const std::optional<tt::tt_fabric::Topology> topology) {
+    return ttnn::all_to_all_combine(
+        input_tensor,
+        expert_mapping_tensor,
+        expert_metadata_tensor,
+        local_reduce,
+        num_links,
+        topology,
+        memory_config,
+        cluster_axis,
+        output_shard_dim,
+        subdevice_id,
+        output_tensor);
+}
+
+}  // namespace
 
 void bind_all_to_all_combine(nb::module_& mod) {
     const auto* doc =
@@ -49,62 +78,53 @@ void bind_all_to_all_combine(nb::module_& mod) {
         Returns:
             ttnn.Tensor: The combined tokens tensor. The tensor is expected to be [K, B, S, H] sharded along the output_shard_dim dimension across the number of devices along the cluster axis if it was set, or all devices if it was not set, (e.g. [K, B/D[A], S, H] per device if output_shard_dim is 1 or [K, B, S/D[A], H] per device if output_shard_dim is 2). The tensor is expected to be in Row Major, Interleaved format. The rows are sparsely populated such that each row is either a token if that token was dispatched to that device, or a placeholder row if that token was not dispatched to that device.
 
-        Example:
-            >>> output_tensor = ttnn.all_to_all_combine(
-                                    input_tensor,
-                                    expert_metadata_tensor,
-                                    expert_mapping_tensor,
-                                    num_links=num_links,
-                                    topology=topology,
-                                    memory_config=output_memory_config,
-                                    local_reduce=local_reduce,
-                                    cluster_axis=cluster_axis,
-                                    output_shard_dim=output_shard_dim)
+        Supported dtypes and layouts:
+
+            .. list-table::
+                :header-rows: 1
+
+                * - Tensor
+                  - Dtypes
+                  - Layouts
+                * - input_tensor
+                  - BFLOAT16
+                  - ROW_MAJOR
+                * - expert_metadata_tensor
+                  - UINT16
+                  - ROW_MAJOR
+                * - expert_mapping_tensor
+                  - UINT16
+                  - ROW_MAJOR
+
+            All input tensors must be rank 4 and ``cluster_axis`` is required. ``expert_mapping_tensor`` must be fully replicated across the mesh. Additional input-spec constraints enforced by the op:
+
+            - The number of experts must be evenly divisible by the number of devices.
+            - Unless ``local_reduce`` is set, ``input_tensor``'s leading (expert) dimension must equal ``experts / num_devices``.
+            - ``output_shard_dim`` must be 1 or 2. When it is 1, the metadata batch dimension must be divisible by the cluster-axis device count; when it is 2, the metadata sequence dimension must be divisible by the cluster-axis device count.
+
+            The output preserves the input dtype (BFLOAT16) and is ROW_MAJOR.
+
+        Memory Support:
+            - Interleaved: DRAM and L1
+            - Sharded: not supported (output memory config must not be sharded)
         )doc";
 
-    using OperationType = decltype(ttnn::all_to_all_combine);
-    ttnn::bind_registered_operation(
+    ttnn::bind_function<"all_to_all_combine">(
         mod,
-        ttnn::all_to_all_combine,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const ttnn::Tensor& expert_metadata_tensor,
-               const ttnn::Tensor& expert_mapping_tensor,
-               const bool local_reduce,
-               const std::optional<uint32_t> output_shard_dim,
-               const std::optional<uint32_t> cluster_axis,
-               const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& output_tensor,
-               const std::optional<uint32_t> num_links,
-               const std::optional<tt::tt_fabric::Topology> topology) {
-                return self(
-                    input_tensor,
-                    expert_mapping_tensor,
-                    expert_metadata_tensor,
-                    local_reduce,
-                    num_links,
-                    topology,
-                    memory_config,
-                    cluster_axis,
-                    output_shard_dim,
-                    subdevice_id,
-                    output_tensor);
-            },
-            nb::arg("input_tensor").noconvert(),
-            nb::arg("expert_metadata_tensor").noconvert(),
-            nb::arg("expert_mapping_tensor").noconvert(),
-            nb::kw_only(),
-            nb::arg("local_reduce") = false,
-            nb::arg("output_shard_dim") = 1,
-            nb::arg("cluster_axis") = nb::none(),
-            nb::arg("subdevice_id") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none(),
-            nb::arg("num_links") = nb::none(),
-            nb::arg("topology").noconvert() = nb::none()});
+        all_to_all_combine_impl,
+        nb::arg("input_tensor").noconvert(),
+        nb::arg("expert_metadata_tensor").noconvert(),
+        nb::arg("expert_mapping_tensor").noconvert(),
+        nb::kw_only(),
+        nb::arg("local_reduce") = false,
+        nb::arg("output_shard_dim") = 1,
+        nb::arg("cluster_axis") = nb::none(),
+        nb::arg("subdevice_id") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("output_tensor") = nb::none(),
+        nb::arg("num_links") = nb::none(),
+        nb::arg("topology").noconvert() = nb::none());
 }
 
 }  // namespace ttnn::operations::ccl

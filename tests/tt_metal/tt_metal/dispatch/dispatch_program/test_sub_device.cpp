@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -23,16 +23,14 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-metalium/tt_metal_profiler.hpp>
 #include "command_queue_fixture.hpp"
-#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include "dispatch_test_utils.hpp"
 #include "gtest/gtest.h"
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "hostdevcommon/kernel_structs.h"
-#include <tt-metalium/kernel_types.hpp>
 #include "llrt.hpp"
 #include "multi_command_queue_fixture.hpp"
 #include <tt-metalium/program.hpp>
@@ -153,7 +151,7 @@ void test_sub_device_synchronization(distributed::MeshDevice* device) {
     auto buffer_1 = distributed::MeshBuffer::create(replicated_config_1, local_config_1, device);
 
     // Test blocking synchronize doesn't stall
-    distributed::Synchronize(device, std::nullopt);
+    distributed::Synchronize(*device, std::nullopt);
 
     // Test blocking write buffer doesn't stall
     distributed::EnqueueWriteMeshBuffer(device->mesh_command_queue(), buffer_1, input_1, true);
@@ -161,7 +159,7 @@ void test_sub_device_synchronization(distributed::MeshDevice* device) {
     // Test record event won't cause a stall
 
     auto event = device->mesh_command_queue().enqueue_record_event_to_host();
-    distributed::Synchronize(device, std::nullopt);
+    distributed::Synchronize(*device, std::nullopt);
 
     // Test blocking read buffer doesn't stall
     std::vector<uint32_t> output_1;
@@ -225,7 +223,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceBasicPrograms) {
 
         mesh_device->reset_sub_device_stall_group();
     }
-    distributed::Synchronize(mesh_device.get(), std::nullopt);
+    distributed::Synchronize(*mesh_device, std::nullopt);
     ReadMeshDeviceProfilerResults(*mesh_device);
 }
 
@@ -268,7 +266,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceBasicProgramsReuse) {
 
         mesh_device->reset_sub_device_stall_group();
     }
-    distributed::Synchronize(mesh_device.get(), std::nullopt);
+    distributed::Synchronize(*mesh_device, std::nullopt);
 
     // Rerun programs on sub-device manager 2
     mesh_device->load_sub_device_manager(sub_device_manager_2);
@@ -294,7 +292,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceBasicProgramsReuse) {
 
         mesh_device->reset_sub_device_stall_group();
     }
-    distributed::Synchronize(mesh_device.get(), std::nullopt);
+    distributed::Synchronize(*mesh_device, std::nullopt);
     ReadMeshDeviceProfilerResults(*mesh_device);
 }
 
@@ -348,7 +346,7 @@ TEST_F(UnitMeshCQSingleCardProgramFixture, TensixTestSubDeviceMyLogicalCoordinat
     distributed::Finish(mesh_device->mesh_command_queue());
     mesh_device->reset_sub_device_stall_group();
     distributed::Synchronize(
-        mesh_device.get(), std::nullopt);  // Ensure this CQ is cleared. Each CQ can only work on 1 sub device
+        *mesh_device, std::nullopt);  // Ensure this CQ is cleared. Each CQ can only work on 1 sub device
 
     // Check coordinates
     tt::tt_metal::verify_kernel_coordinates(
@@ -397,7 +395,8 @@ TEST_F(UnitMeshCQSingleCardProgramFixture, TensixTestSubDeviceMyLogicalCoordinat
         distributed::Finish(mesh_device->mesh_command_queue());
         mesh_device->reset_sub_device_stall_group();
         distributed::Synchronize(
-            mesh_device.get(), 0);  // Ensure this CQ is cleared. Each CQ can only work on 1 sub device
+            *mesh_device,
+            mesh_device->mesh_command_queue(0));  // Ensure this CQ is cleared. Each CQ can only work on 1 sub device
 
         // Check coordinates
         tt::tt_metal::verify_kernel_coordinates(
@@ -460,7 +459,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceProgramReuseRtas) {
             mesh_workload_2.add_program(device_range, create_program_with_args());
             distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload_2, false);
 
-            distributed::Synchronize(mesh_device.get(), std::nullopt);
+            distributed::Synchronize(*mesh_device, std::nullopt);
             std::vector<uint32_t> kernel_result;
             tt_metal::detail::ReadFromDeviceL1(
                 mesh_device->get_devices()[0], core, l1_unreserved_base, sizeof(int), kernel_result);
@@ -486,7 +485,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceFixture, TensixTestSubDeviceCQOwnership) {
         // On sub device 1.
         tt_metal::CreateKernel(
             program,
-            "tt_metal/kernels/dataflow/blank.cpp",
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
             CoreRangeSet(CoreRange({0, 0}, {2, 2})),
             tt_metal::DataMovementConfig{
                 .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
@@ -498,7 +497,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceFixture, TensixTestSubDeviceCQOwnership) {
         // On sub device 2.
         tt_metal::CreateKernel(
             program,
-            "tt_metal/kernels/dataflow/blank.cpp",
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
             CoreRangeSet(CoreRange({3, 3}, {3, 3})),
             tt_metal::DataMovementConfig{
                 .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
@@ -541,7 +540,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceFixture, TensixTestSubDeviceCQOwnership) {
     mesh_device->mesh_command_queue(0).enqueue_wait_for_event(event2);
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), mesh_workload_2, false);
 
-    distributed::Synchronize(mesh_device.get(), std::nullopt);
+    distributed::Synchronize(*mesh_device, std::nullopt);
 
     // Synchronize allows transferring ownership of either subdevice.
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), mesh_workload_1, false);

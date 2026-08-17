@@ -1,12 +1,10 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/reduction/topk/device/topk_device_operation.hpp"
 
 #include "ttnn/operations/reduction/topk/device/topk_device_operation_types.hpp"
-#include "ttnn/operations/reduction/topk/device/topk_single_core_program_factory.hpp"
-#include "ttnn/operations/reduction/topk/device/topk_multi_core_program_factory.hpp"
 #include "ttnn/operations/reduction/topk/device/topk_constants.hpp"
 #include "ttnn/operations/reduction/topk/device/topk_utils.hpp"
 
@@ -15,6 +13,7 @@
 #include <tt_stl/assert.hpp>
 #include "tt-metalium/allocator.hpp"
 #include "ttnn/operations/math.hpp"
+#include "ttnn/operations/reduction/reduce_op_validation.hpp"
 
 #include <optional>
 #include <tuple>
@@ -83,7 +82,9 @@ TopKDeviceOperation::program_factory_t TopKDeviceOperation::select_program_facto
         // Determine data formats for memory cost calculation
         const tt::DataFormat value_cb_data_format =
             tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-        const tt::DataFormat index_cb_data_format = tt::DataFormat::UInt16;  // Multi-core always uses UInt16
+        // fp32 forces UInt32 indices (see compute_output_specs); size them so the cost isn't undercounted.
+        const tt::DataFormat index_cb_data_format =
+            input_tensor.dtype() == DataType::FLOAT32 ? tt::DataFormat::UInt32 : tt::DataFormat::UInt16;
 
         // Calculate tile sizes for memory cost analysis
         const uint32_t value_tile_size = tile_size(value_cb_data_format);
@@ -102,14 +103,14 @@ TopKDeviceOperation::program_factory_t TopKDeviceOperation::select_program_facto
             core_range,                               // Available core grid
             device->l1_size_per_core(),               // L1 memory per core
             value_tile_size,                          // Value tile memory size
-            index_tile_size);                         // Index tile memory size
+            index_tile_size,                          // Index tile memory size
+            input_tensor.tensor_spec().tile().get_width());
     }
 
     // Select program factory based on feasibility analysis
     if (multicore_supported) {
         return TopKMultiCoreProgramFactory{};
     }
-
     return TopKSingleCoreProgramFactory{};
 }
 
@@ -132,6 +133,32 @@ void TopKDeviceOperation::validate_on_program_cache_miss(
         "Input height (combined input_shape[0-3]) {} must be a multiple of 32",
         input_shape[0] * input_shape[1] * input_shape[2]);
 
+    TT_FATAL(args.k != 0, "K must be non-zero");
+
+    // The stable bitonic network is only implemented in the WH/BH LLKs; the Quasar LLK
+    // static_asserts STABLE_SORT == false. Reject it here so the caller gets an actionable error
+    // instead of a kernel JIT failure.
+    if (args.stable) {
+        const auto arch = input_tensor.device()->arch();
+        TT_FATAL(
+            arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE,
+            "TopK stable=true is not supported on {}: the bitonic top-k LLK only implements the stable "
+            "network on Wormhole and Blackhole",
+            arch);
+    }
+
+    {
+        const int8_t logical_rank = static_cast<int8_t>(input_tensor.logical_shape().rank());
+        const int8_t last_dim = logical_rank - 1;
+        TT_FATAL(
+            args.dim == -1 || args.dim == last_dim,
+            "TopK device operation expects reduction on the last dimension (dim=-1 or dim={} for logical rank "
+            "{}), got {})",
+            last_dim,
+            logical_rank,
+            args.dim);
+    }
+
     // Memory configuration validation
     TT_FATAL(args.output_memory_config.is_sharded() == false, "Sharded implementation not supported yet");
 
@@ -141,8 +168,9 @@ void TopKDeviceOperation::validate_on_program_cache_miss(
     // Data type validation
     const auto input_tensor_dtype = input_tensor.dtype();
     TT_FATAL(
-        input_tensor_dtype == DataType::BFLOAT16 || input_tensor_dtype == DataType::BFLOAT8_B,
-        "Input tensor must be BFLOAT16, or BFLOAT8_B, got: {}",
+        input_tensor_dtype == DataType::BFLOAT16 || input_tensor_dtype == DataType::BFLOAT8_B ||
+            input_tensor_dtype == DataType::FLOAT32,
+        "Input tensor must be BFLOAT16, BFLOAT8_B, or FLOAT32, got: {}",
         input_tensor_dtype);
 
     // Optional indices tensor validation (for pre-allocated indices)
@@ -152,6 +180,23 @@ void TopKDeviceOperation::validate_on_program_cache_miss(
             indices_tensor_dtype == DataType::UINT16 || indices_tensor_dtype == DataType::UINT32,
             "Optional input tensor must be UINT16, or UINT32, got: {}",
             indices_tensor_dtype);
+        // fp32 input forces UINT32 index CBs (see compute_output_specs); UINT16 indices would be wrong.
+        TT_FATAL(
+            !(input_tensor_dtype == DataType::FLOAT32 && indices_tensor_dtype == DataType::UINT16),
+            "Optional indices tensor must be UINT32 when input tensor is FLOAT32, got UINT16");
+        // The reader kernels page a caller-supplied indices tensor with the input's page index
+        // (page_id = i * Wt + j), so the two must describe the same tile grid: same padded width
+        // and same total number of tiles. A narrower indices tensor is read past the end of its
+        // buffer and returns indices that do not belong to the returned values. The composite
+        // topk() front-end checks the logical shapes too, but ttnn::prim::topk is a public entry
+        // point of its own. Ranks may legitimately differ (the front-end normalizes only the input
+        // to 4D), so compare the tile grid rather than the full shape.
+        TT_FATAL(
+            indices_tensor->padded_shape()[-1] == input_tensor.padded_shape()[-1] &&
+                indices_tensor->physical_volume() == input_tensor.physical_volume(),
+            "Optional indices tensor must span the same tile grid as the input tensor, got shape: {}, expected: {}",
+            indices_tensor->padded_shape(),
+            input_tensor.padded_shape());
     }
 
     // Preallocated output tensor validation
@@ -159,8 +204,9 @@ void TopKDeviceOperation::validate_on_program_cache_miss(
         const auto output_tensor0_dtype = std::get<0>(preallocated_outputs.value()).dtype();  // Values tensor
         const auto output_tensor1_dtype = std::get<1>(preallocated_outputs.value()).dtype();  // Indices tensor
         TT_FATAL(
-            output_tensor0_dtype == DataType::BFLOAT16 || output_tensor0_dtype == DataType::BFLOAT8_B,
-            "Preallocated output tensor must be BFLOAT16 or BFLOAT8_B got: {}",
+            output_tensor0_dtype == DataType::BFLOAT16 || output_tensor0_dtype == DataType::BFLOAT8_B ||
+                output_tensor0_dtype == DataType::FLOAT32,
+            "Preallocated output tensor must be BFLOAT16, BFLOAT8_B, or FLOAT32 got: {}",
             output_tensor0_dtype);
         TT_FATAL(
             output_tensor1_dtype == DataType::UINT16 || output_tensor1_dtype == DataType::UINT32,
@@ -173,10 +219,24 @@ void TopKDeviceOperation::validate_on_program_cache_miss(
             input_tensor_dtype);
     }
 
+    ReduceOpDeviceGridValidationOptions topk_grid_opts;
+    topk_grid_opts.sub_grid_contained_in_device_grid = &args.sub_core_grids;
+    topk_grid_opts.sub_grid_label = "sub_core_grids";
+    validate_reduce_op_tensor(input_tensor, "TopK", "input", &topk_grid_opts);
+    if (indices_tensor.has_value()) {
+        validate_reduce_op_tensor(indices_tensor.value(), "TopK", "indices");
+    }
+    if (preallocated_outputs.has_value()) {
+        validate_reduce_op_tensor(std::get<0>(preallocated_outputs.value()), "TopK", "preallocated_values");
+        validate_reduce_op_tensor(std::get<1>(preallocated_outputs.value()), "TopK", "preallocated_indices");
+    }
     // Execution feasibility validation
     // Verify that the operation can be executed with available hardware resources
     bool can_run = false;
-    bool uint16_output = (input_shape[args.dim] <= std::numeric_limits<uint16_t>::max());
+    // fp32 forces UInt32 indices (see compute_output_specs), so exclude it here too — otherwise
+    // verify_single_core_cost models UInt16 index CBs and undercounts the fp32 single-core L1 footprint.
+    bool uint16_output =
+        (input_shape[args.dim] <= std::numeric_limits<uint16_t>::max()) && (input_tensor.dtype() != DataType::FLOAT32);
 
     // Try multi-core execution first if dimension is large enough
     if (input_shape[args.dim] >= ttnn::prim::constants::multi_core_min_width) {
@@ -184,7 +244,9 @@ void TopKDeviceOperation::validate_on_program_cache_miss(
 
         // Set up data formats for memory cost calculations
         tt::DataFormat value_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-        tt::DataFormat index_cb_data_format = tt::DataFormat::UInt16;
+        // fp32 forces UInt32 indices (see compute_output_specs); size them so the cost isn't undercounted.
+        tt::DataFormat index_cb_data_format =
+            input_tensor.dtype() == DataType::FLOAT32 ? tt::DataFormat::UInt32 : tt::DataFormat::UInt16;
 
         uint32_t value_tile_size = tile_size(value_cb_data_format);
         uint32_t index_tile_size = tile_size(index_cb_data_format);
@@ -205,8 +267,9 @@ void TopKDeviceOperation::validate_on_program_cache_miss(
             args.k,                                   // Top-K value
             core_range,                               // Available cores
             device->allocator()->get_statistics(tt::tt_metal::BufferType::L1).largest_free_block_bytes,  // L1 memory
-            value_tile_size,   // Value tile size
-            index_tile_size);  // Index tile size
+            value_tile_size,  // Value tile size
+            index_tile_size,  // Index tile size
+            input_tensor.tensor_spec().tile().get_width());
 
         // Fallback to single-core if multi-core is not feasible
         if (!can_run) {
@@ -238,17 +301,20 @@ TopKDeviceOperation::spec_return_value_t TopKDeviceOperation::compute_output_spe
     output_shape[-1] = args.k;  // Set last dimension to K (number of top elements)
 
     ttnn::Shape input_shape = input_tensor.padded_shape();
-    // Choose index data type based on dimension size (16-bit vs 32-bit indices)
-    const bool uint16_output = (input_shape[args.dim] <= std::numeric_limits<uint16_t>::max());  // 65535
+    // Choose index data type based on dimension size (16-bit vs 32-bit indices).
+    // fp32 input sorts with fp32 dest accumulation, which loads indices as INT32, so it
+    // requires 32-bit (UINT32) indices regardless of dimension size.
+    const bool uint16_output = (input_shape[args.dim] <= std::numeric_limits<uint16_t>::max()) &&
+                               (input_tensor.dtype() != DataType::FLOAT32);  // 65535
 
     // Create values tensor specification (same data type as input)
-    const auto values_spec = TensorSpec(
+    const auto values_spec = tt::tt_metal::TensorSpec(
         output_shape, TensorLayout(input_tensor.dtype(), PageConfig(Layout::TILE), args.output_memory_config));
 
     // Create indices tensor specification (integer type based on dimension size)
     const DataType index_dtype = uint16_output ? DataType::UINT16 : DataType::UINT32;
-    const auto index_spec =
-        TensorSpec(output_shape, TensorLayout(index_dtype, PageConfig(Layout::TILE), args.output_memory_config));
+    const auto index_spec = tt::tt_metal::TensorSpec(
+        output_shape, TensorLayout(index_dtype, PageConfig(Layout::TILE), args.output_memory_config));
 
     return {values_spec, index_spec};
 }
@@ -275,6 +341,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> topk(
     int8_t dim,
     bool largest,
     bool sorted,
+    bool stable,
     const tt::tt_metal::MemoryConfig& memory_config,
     const tt::tt_metal::CoreRangeSet& sub_core_grids,
     const std::optional<Tensor>& indices_tensor,
@@ -285,6 +352,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> topk(
             .dim = dim,
             .largest = largest,
             .sorted = sorted,
+            .stable = stable,
             .output_memory_config = memory_config,
             .sub_core_grids = sub_core_grids},
         TopkInputs{

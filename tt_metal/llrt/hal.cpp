@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -35,16 +35,26 @@ Hal::Hal(
     tt::ARCH arch,
     bool is_base_routing_fw_enabled,
     bool enable_2_erisc_mode,
-    uint32_t profiler_dram_bank_size_per_risc_bytes) :
+    uint32_t profiler_dram_bank_size_per_risc_bytes,
+    bool enable_dram_backed_cq,
+    bool is_simulator,
+    bool enable_blackhole_dram_programmable_cores) :
     arch_(arch) {
     switch (this->arch_) {
         case tt::ARCH::WORMHOLE_B0:
-            initialize_wh(is_base_routing_fw_enabled, profiler_dram_bank_size_per_risc_bytes);
+            initialize_wh(is_base_routing_fw_enabled, profiler_dram_bank_size_per_risc_bytes, enable_dram_backed_cq);
             break;
 
-        case tt::ARCH::QUASAR: initialize_qa(profiler_dram_bank_size_per_risc_bytes); break;
+        case tt::ARCH::QUASAR: initialize_qa(profiler_dram_bank_size_per_risc_bytes, enable_dram_backed_cq); break;
 
-        case tt::ARCH::BLACKHOLE: initialize_bh(enable_2_erisc_mode, profiler_dram_bank_size_per_risc_bytes); break;
+        case tt::ARCH::BLACKHOLE:
+            initialize_bh(
+                enable_2_erisc_mode,
+                profiler_dram_bank_size_per_risc_bytes,
+                enable_dram_backed_cq,
+                is_simulator,
+                enable_blackhole_dram_programmable_cores);
+            break;
 
         default: /*TT_THROW("Unsupported arch for HAL")*/; break;
     }
@@ -53,6 +63,35 @@ Hal::Hal(
 uint64_t Hal::get_pcie_addr_lower_bound() const { return pcie_addr_lower_bound_; }
 
 uint64_t Hal::get_pcie_addr_upper_bound() const { return pcie_addr_upper_bound_; }
+
+HalCoreInfoType create_unregistered_programmable_core(
+    HalProgrammableCoreType programmable_core_type, const HalCoreInfoType& factory_source) {
+    std::vector<DeviceAddr> mem_map_bases(static_cast<std::size_t>(HalL1MemAddrType::COUNT), 0);
+    std::vector<uint32_t> mem_map_sizes(static_cast<std::size_t>(HalL1MemAddrType::COUNT), 0);
+    std::vector<uint32_t> fw_mailbox_addr(static_cast<std::size_t>(FWMailboxMsg::COUNT), 0);
+    return HalCoreInfoType(
+        programmable_core_type,
+        CoreType::WORKER,
+        {},
+        {},
+        std::move(mem_map_bases),
+        std::move(mem_map_sizes),
+        std::move(fw_mailbox_addr),
+        {},
+        false,
+        false,
+        false,
+        factory_source.get_dev_msgs_factory(),
+        factory_source.get_fabric_telemetry_factory(),
+        factory_source.get_realtime_profiler_msgs_factory());
+}
+
+void ensure_hal_core_info_slots(std::vector<HalCoreInfoType>& core_info, const HalCoreInfoType& factory_source) {
+    while (core_info.size() < static_cast<std::size_t>(HalProgrammableCoreType::COUNT)) {
+        const auto slot = static_cast<HalProgrammableCoreType>(core_info.size());
+        core_info.push_back(create_unregistered_programmable_core(slot, factory_source));
+    }
+}
 
 uint32_t Hal::get_programmable_core_type_index(HalProgrammableCoreType programmable_core_type_index) const {
     uint32_t index = static_cast<uint32_t>(programmable_core_type_index);
@@ -179,8 +218,16 @@ HalProcessorSet Hal::parse_processor_set_spec(std::string_view spec) const {
         set.add(HalProgrammableCoreType::IDLE_ETH, 0);
         set.add(HalProgrammableCoreType::IDLE_ETH, 1);
     }
+    if (spec.find("DR") != std::string_view::npos) {
+        if (has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
+            set.add(HalProgrammableCoreType::DRAM, 0);
+        }
+    }
     if (set.empty()) {
-        TT_THROW("Invalid RISC selection: \"{}\". Valid values are BR,NC,TR0,TR1,TR2,TR*,ER0,ER1,ER*.", spec);
+        TT_THROW(
+            "Invalid RISC selection: \"{}\". Valid values are BR,NC,TR0,TR1,TR2,TR*,ER0,ER1,ER*{}.",
+            spec,
+            has_programmable_core_type(HalProgrammableCoreType::DRAM) ? ",DR" : "");
     }
     return set;
 }

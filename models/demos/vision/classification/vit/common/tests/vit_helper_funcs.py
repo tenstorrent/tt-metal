@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -66,7 +66,9 @@ def get_data_loader(input_loc, batch_size, iterations, download_entire_dataset=F
 
     if len(files) == 0:
         files_raw = iter(
-            load_dataset("imagenet-1k", split="validation", use_auth_token=True, streaming=not download_entire_dataset)
+            load_dataset(
+                "ILSVRC/imagenet-1k", split="validation", use_auth_token=True, streaming=not download_entire_dataset
+            )
         )
         files = []
         sample_count = batch_size * iterations

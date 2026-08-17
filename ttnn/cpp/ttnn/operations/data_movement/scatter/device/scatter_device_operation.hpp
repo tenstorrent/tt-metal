@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,13 +9,13 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
 
-#include "ttnn/decorators.hpp"
-
 #include "../scatter_enums.hpp"
 #include "scatter_device_operation_types.hpp"
 
 #include "scatter_program_factory.hpp"
 #include "scatter_reduce_bfloat16_program_factory.hpp"
+#include "ttnn/types.hpp"
+#include "ttnn/operation.hpp"
 
 namespace ttnn::prim {
 
@@ -24,7 +24,7 @@ using namespace tt::tt_metal;
 struct ScatterDeviceOperation {
     using operation_attributes_t = ScatterParams;
     using tensor_args_t = ScatterInputs;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<ScatterProgramFactory, ScatterReduceBfloat16ProgramFactory>;
 

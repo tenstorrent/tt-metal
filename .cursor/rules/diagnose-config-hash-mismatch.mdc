@@ -1,0 +1,218 @@
+---
+description: Diagnose why config_hash values differ between model trace and sweep trace for matched configurations. Use after validate-sweep-trace.mdc reports exact matches but config_hashes still differ.
+globs: tests/sweep_framework/sweeps/model_traced/*_model_traced.py
+alwaysApply: false
+---
+
+# Diagnosing config_hash Mismatches Between Model and Sweep Traces
+
+## When to Use
+
+After `validate-sweep-trace.mdc` reports exact or close matches (arguments match after normalization), but the `config_hash` values in the model trace and sweep trace are different.
+
+## How config_hash Is Computed
+
+In `generic_ops_tracer.py` (lines 520–522), `config_hash` is:
+
+```python
+normalized = {"operation": op_name, "arguments": op_args, "hardware": hardware, "mesh": mesh_config}
+config_hash = hashlib.sha256(json.dumps(normalized, sort_keys=True).encode()).hexdigest()
+```
+
+The four components:
+
+| Component | Source | What it contains |
+|-----------|--------|------------------|
+| `operation` | `op_name` | e.g. `"ttnn.concat"` |
+| `arguments` | Raw `op_args` dict | All tensor args (`arg0`, `arg1`, …) with `original_shape`, `original_dtype`, `layout`, `storage_type`, `memory_config` (including `hash`), `tensor_placement`; all named kwargs (`dim`, `num_links`, etc.) |
+| `hardware` | `machine_info` | Tuple: `(board_type, device_series, card_count)` |
+| `mesh` | `machine_info.tensor_placements[0]` | `{mesh_shape, placement_type, shard_dim}` or `None` if no top-level `tensor_placements` |
+
+**Critical**: The hash is computed on **raw** values — no normalization is applied. Fields that `validate-sweep-trace.mdc` ignores (like `memory_config.hash`) are still included in the hash input.
+
+## Diagnostic Procedure
+
+For each pair of matched configs (sweep config_id → model config_id from validation report):
+
+### Step 1: Reconstruct the hash inputs
+
+For **both** model and sweep configs, build the normalized dict that would be hashed:
+
+1. **`operation`**: The operation name string (should be identical).
+2. **`arguments`**: The full `arguments` dict from the config entry — this is the raw value, NOT stripped of ignored keys.
+3. **`hardware`**: Extract from `executions[0].machine_info`:
+   - `board_type`, `device_series` (first element if list), `card_count` (default 1)
+   - Produce tuple: `(board_type, device_series, card_count)`
+4. **`mesh`**: Extract from `executions[0].machine_info.tensor_placements[0]`:
+   - If `tensor_placements` exists and is non-empty, parse `mesh_device_shape` and `placement` to build `{mesh_shape, placement_type, shard_dim}`
+   - Otherwise `None`
+
+### Step 2: Diff the four components
+
+Compare each component between model and sweep. Report **every** difference, not just the first.
+
+### Step 3: Categorize root causes
+
+Use the categories below to classify each difference.
+
+## Root Cause Categories
+
+### 1. `memory_config.hash` (device-specific pointer hash)
+
+**Symptom**: `arguments.arg0[N].memory_config.hash` or `arguments.<kwarg>.memory_config.hash` differs.
+
+**Why**: This is a runtime memory allocation hash that changes between executions, even on the same machine. It is never stable across runs.
+
+**Fixable in sweep module?** No. This is inherent to the tracer capturing device-specific state.
+
+**Resolution**: Must be fixed in `generic_ops_tracer.py` by excluding `memory_config.hash` from `op_args` before computing `config_hash`, or by stripping it during hash normalization. Example:
+
+```python
+def _strip_hash_from_args(args):
+    """Remove device-specific hash from memory_config before hashing."""
+    if isinstance(args, dict):
+        return {k: _strip_hash_from_args(v) if k != "hash" or not isinstance(v, int) else None
+                for k, v in args.items() if not (k == "hash" and isinstance(v, int))}
+    elif isinstance(args, list):
+        return [_strip_hash_from_args(item) for item in args]
+    return args
+```
+
+### 2. `shard_spec` serialization (`"None"` string vs JSON `null`)
+
+**Symptom**: Model trace has `"shard_spec": "None"` (a JSON string), sweep trace has `"shard_spec": null` (JSON null).
+
+**Why**: The model tracer captures `shard_spec` by calling `str()` on the Python value, producing the string `"None"`. The sweep tracer captures the Python `None` object directly, which serializes to JSON `null`. Both mean "no shard spec" but `json.dumps` produces different bytes.
+
+**Fixable in sweep module?** Partially — the sweep module could force `shard_spec` to the string `"None"` before the op call, but this is fragile and non-standard.
+
+**Resolution**: Normalize `shard_spec` in the hash computation. Before computing `config_hash`, convert any `null`/`None` `shard_spec` to the string `"None"` (or vice versa) for consistency:
+
+```python
+def _normalize_shard_spec(args):
+    if isinstance(args, dict):
+        result = {}
+        for k, v in args.items():
+            if k == "shard_spec" and v is None:
+                result[k] = "None"
+            else:
+                result[k] = _normalize_shard_spec(v)
+        return result
+    elif isinstance(args, list):
+        return [_normalize_shard_spec(item) for item in args]
+    return args
+```
+
+### 3. `tensor_placement` differences
+
+**Symptom**: `arguments.arg0[N].tensor_placement.placement` differs — e.g., model has `"['PlacementShard(2)', 'PlacementShard(1)']"`, sweep has `"['PlacementReplicate', 'PlacementReplicate']"`.
+
+**Why**: The sweep module distributes tensors across the mesh differently than the model did. This changes the `tensor_placement` recorded per-tensor in the arguments.
+
+**Fixable in sweep module?** Yes — this is the primary target of `fix-sweep-trace-match.mdc`. Use `ShardTensor2dMesh` with the correct `dims` parsed from the model trace's `mesh_device.placements`.
+
+**Resolution**: Follow Category 4 of `fix-sweep-trace-match.mdc`.
+
+### 4. `hardware` tuple mismatch
+
+**Symptom**: The `hardware` component differs — e.g., model ran on `("Wormhole", "tt-galaxy-wh", 32)`, sweep ran on `("Wormhole", "n150", 1)`.
+
+**Why**: Model trace was captured on a different machine (e.g., Galaxy cluster) than the sweep test (e.g., single-card dev box).
+
+**Fixable in sweep module?** No. Hardware is determined by the test environment.
+
+**Resolution**: Run the sweep on the same hardware class as the model trace. The `validate_sweep_pipeline.py` `--arch-name` and `--mesh-shape` flags help align this, but `board_type`, `device_series`, and `card_count` come from `tt-smi` at runtime.
+
+### 5. `mesh` config mismatch
+
+**Symptom**: The `mesh` component differs or is `None` in one trace but not the other.
+
+**Why**: `mesh` is derived from `machine_info.tensor_placements` (a top-level field, not per-tensor). Older trace formats or certain ops may not populate this field.
+
+**Fixable in sweep module?** No — this depends on how `generic_ops_tracer.py` populates `machine_info`.
+
+**Resolution**: Usually both traces have `mesh = None` because per-tensor placements replaced the global `tensor_placements` field. If one trace has it and the other doesn't, investigate whether the trace was generated with a different version of the tracer.
+
+### 6. Extra or missing keys in arguments
+
+**Symptom**: Model has a key (e.g., `"memory_config"`) that sweep doesn't, or vice versa. The validation rule ignores this via normalization, but the raw hash input includes it.
+
+**Why**: The sweep module passes extra/fewer kwargs to the op than the model did.
+
+**Fixable in sweep module?** Yes — this is the primary target of Categories 1–3 in `fix-sweep-trace-match.mdc`.
+
+**Resolution**: Follow `fix-sweep-trace-match.mdc` to align kwargs exactly.
+
+### 7. Argument value differences (non-normalized)
+
+**Symptom**: A value differs in a way that validation normalization papers over — e.g., `"dim": 3` vs `"dim": -1` (both refer to the same axis but are numerically different).
+
+**Fixable in sweep module?** Yes — pass the original value from the model trace config, not a resolved/normalized version.
+
+**Resolution**: Follow Category 3 of `fix-sweep-trace-match.mdc`.
+
+## Output Format
+
+```
+=== config_hash Diagnostic Report ===
+Model trace: <filename>
+Sweep trace: <filename>
+Matched configs analyzed: N
+
+--- Pair 1: sweep config_id X -> model config_id Y ---
+  Model config_hash: <hash>
+  Sweep config_hash: <hash>
+
+  Component: operation
+    MATCH ✓
+
+  Component: hardware
+    Model: ("Wormhole", "tt-galaxy-wh", 32)
+    Sweep: ("Wormhole", "tt-galaxy-wh", 32)
+    MATCH ✓
+
+  Component: mesh
+    Model: None
+    Sweep: None
+    MATCH ✓
+
+  Component: arguments
+    DIFF at arguments.arg0[0].memory_config.hash:
+      Model: 46082544174525093
+      Sweep: 12345678901234567
+      Category: 1 (memory_config.hash — device-specific, NOT fixable in sweep module)
+
+    DIFF at arguments.arg0[0].memory_config.shard_spec:
+      Model: "None" (string)
+      Sweep: null (JSON null)
+      Category: 2 (shard_spec serialization — fix in tracer normalization)
+
+  Root causes: Category 1, Category 2
+  Fixable in sweep module: No (all diffs are tracer-level)
+
+--- Pair 2: sweep config_id A -> model config_id B ---
+  ...
+
+=== Summary ===
+Total pairs: N
+Pairs with identical config_hash: M
+Pairs with different config_hash: N-M
+
+Root cause breakdown:
+  Category 1 (memory_config.hash): X pairs
+  Category 2 (shard_spec serialization): Y pairs
+  Category 3 (tensor_placement): Z pairs
+  ...
+
+Actionable in sweep module: Z pairs (Categories 3, 6, 7)
+Requires tracer fix: X pairs (Categories 1, 2)
+Environment-dependent: W pairs (Categories 4, 5)
+```
+
+## Important Notes
+
+- Use the config_id mapping from `validate-sweep-trace.mdc` to pair model and sweep configs. Only analyze matched pairs.
+- The `arguments` comparison must be done on **raw** values (not normalized). This is the opposite of `validate-sweep-trace.mdc` which strips ignored keys.
+- `memory_config.hash` is almost always different and is the most common reason for hash mismatch. If this is the ONLY difference, note that the configs are functionally identical and the mismatch is expected until the tracer is updated.
+- When multiple categories apply to a single pair, list all of them.
+- `json.dumps(obj, sort_keys=True)` is deterministic for the same Python object, so any byte-level difference in the serialized form means the input objects differ structurally.

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
@@ -13,18 +13,18 @@
 #include "transpose_wh_sharded_program_factory.hpp"
 #include "transpose_wh_sharded_rm_program_factory.hpp"
 
-#include "ttnn/decorators.hpp"
-#include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 #include <variant>
+#include "ttnn/operation.hpp"
+#include "ttnn/distributed/types.hpp"
 
 namespace ttnn::prim {
 
 struct TransposeDeviceOperation {
     using operation_attributes_t = TransposeParams;
     using tensor_args_t = TransposeInputs;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<
         TransposeWHProgramFactory,

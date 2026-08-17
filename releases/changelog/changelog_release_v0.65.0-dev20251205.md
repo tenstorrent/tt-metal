@@ -96,7 +96,7 @@
    - PR: #31266
 - [skip ci] Remove cron jobs from t3k and galaxy demo tests
    - PR: #33814
-- [Fabric] telemetry to be controled by env var in more detail
+- [Fabric] telemetry to be controlled by env var in more detail
    - PR: #33523
 - [skip ci] Optimize set-opened-on workflow by hardcoding IDs
    - PR: #33810

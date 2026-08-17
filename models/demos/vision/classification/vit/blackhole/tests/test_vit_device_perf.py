@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -17,6 +17,7 @@ except ModuleNotFoundError:
     use_signpost = False
 
 
+@pytest.mark.skip(reason="Sharding issue: 120 shards exceeds 110 L1 banks on BH compute cores github issue #38877")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize("batch_size", [10])
 def test_vit_device_ops(
@@ -42,6 +43,7 @@ def test_vit_device_ops(
     ttnn.synchronize_device(device)
 
 
+@pytest.mark.skip(reason="Sharding issue: 120 shards exceeds 110 L1 banks on BH compute cores github issue #38877")
 @pytest.mark.parametrize("batch_size", [10])
 @pytest.mark.parametrize(
     "expected_kernel_samples_per_sec",

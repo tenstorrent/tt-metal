@@ -1,0 +1,29 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include "ckernel_ops.h"
+#include "sfpi.h"
+
+namespace ckernel
+{
+namespace sfpu
+{
+
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void _cast_fp32_to_fp16a_(const int iterations)
+{
+#pragma GCC unroll 8
+    for (int d = 0; d < iterations; d++)
+    {
+        sfpi::vFloat x   = sfpi::dst_reg[0];
+        x                = sfpi::convert<sfpi::vFloat16a>(x, sfpi::RoundMode::Nearest);
+        sfpi::dst_reg[0] = x;
+        sfpi::dst_reg++;
+    }
+}
+
+} // namespace sfpu
+} // namespace ckernel

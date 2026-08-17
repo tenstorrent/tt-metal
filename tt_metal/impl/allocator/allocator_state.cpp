@@ -1,8 +1,8 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/allocator_state.hpp>
+#include "allocator_state.hpp"
 #include <tt-metalium/allocator.hpp>
 #include <tt_stl/assert.hpp>
 #include <enchantum/enchantum.hpp>

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -20,7 +20,7 @@ StridedAllGatherAsync::spec_return_value_t StridedAllGatherAsync::compute_output
     const auto& input_tensor = tensor_args.input_tensor;
     auto shape = input_tensor.logical_shape();
     shape[attributes.dim] *= attributes.ring_size;
-    return {TensorSpec(
+    return {tt::tt_metal::TensorSpec(
         shape,
         TensorLayout(input_tensor.dtype(), input_tensor.tensor_spec().page_config(), attributes.output_mem_config))};
 }
@@ -43,7 +43,6 @@ tt::tt_metal::operation::Hash StridedAllGatherAsync::compute_program_hash(
         attributes.output_mem_config,
         attributes.topology,
         attributes.cluster_axis,
-        attributes.tiles_per_chunk,
         attributes.num_workers_per_link,
         attributes.num_buffers_per_channel,
         attributes.mm_cores_y,
@@ -65,7 +64,6 @@ Tensor strided_all_gather_async(
     const std::optional<MemoryConfig>& memory_config,
     const ttnn::ccl::Topology topology,
     const std::optional<uint32_t>& cluster_axis,
-    const std::optional<uint32_t>& tiles_per_chunk,
     const std::optional<uint32_t>& num_workers_per_link,
     const std::optional<uint32_t>& num_buffers_per_channel,
     const std::optional<uint32_t>& mm_cores_y,
@@ -96,7 +94,6 @@ Tensor strided_all_gather_async(
         ccl_topology,
         multi_device_global_semaphore,
         cluster_axis,
-        tiles_per_chunk,
         num_workers_per_link,
         num_buffers_per_channel,
         mm_cores_y,

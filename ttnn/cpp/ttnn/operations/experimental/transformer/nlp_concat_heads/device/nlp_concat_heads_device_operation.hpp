@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,9 +12,6 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "nlp_concat_heads_program_factory.hpp"
 
-#include "ttnn/device_operation.hpp"
-#include "ttnn/decorators.hpp"
-
 #include "nlp_concat_heads_device_operation_types.hpp"
 
 namespace ttnn::experimental::prim {
@@ -22,7 +19,7 @@ namespace ttnn::experimental::prim {
 struct NLPConcatHeadsDeviceOperation {
     using operation_attributes_t = NlpConcatHeadsParams;
     using tensor_args_t = Tensor;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<NLPConcatHeadsProgramFactory>;
 

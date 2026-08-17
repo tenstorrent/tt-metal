@@ -1,0 +1,404 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "reduce_scatter_program_utils.hpp"
+
+#include <algorithm>
+#include <array>
+#include <numeric>
+
+#include <tt-logger/tt-logger.hpp>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/constants.hpp>
+
+#include "ttnn/operations/experimental/ccl/composite_common.hpp"
+
+namespace ttnn::experimental::ccl {
+
+uint32_t reduce_scatter_core_count_per_link(
+    uint32_t num_workers_per_direction,
+    uint32_t num_directions_per_link,
+    uint32_t num_mux_cores_per_direction_per_link) {
+    log_trace(
+        tt::LogOp,
+        "DEBUG: num_workers_per_direction: {}, num_directions_per_link: {}, num_mux_cores_per_direction_per_link: {}",
+        num_workers_per_direction,
+        num_directions_per_link,
+        num_mux_cores_per_direction_per_link);
+    return num_directions_per_link * (num_mux_cores_per_direction_per_link + num_workers_per_direction);
+}
+
+uint32_t reduce_scatter_default_workers(
+    const ttnn::MeshDevice& mesh_device,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    ttnn::ccl::Topology topology,
+    uint32_t input_data_size_bytes,
+    uint32_t num_links,
+    uint32_t ring_size,
+    uint32_t num_directions_per_link,
+    uint32_t num_mux_cores_per_direction_per_link) {
+    auto sd_id = sub_device_id.value_or(mesh_device.get_sub_device_ids().at(0));
+    auto subdevice_core_range_set = mesh_device.worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
+    uint32_t num_cores = subdevice_core_range_set.num_cores();
+    log_trace(tt::LogOp, "DEBUG: num_cores: {}", num_cores);
+    ttsl::SmallVector<uint32_t> candidate_worker_counts;
+    double data_moved_per_link_bytes = double(input_data_size_bytes) * (ring_size - 1) / ring_size / num_links /
+                                       (topology == ttnn::ccl::Topology::Ring ? 2 : 1);
+    log_trace(tt::LogOp, "DEBUG: data_moved_per_link_bytes: {}", data_moved_per_link_bytes);
+    // Heuristic thresholds derived from sweep tests:
+    // tests/ttnn/multidevice_perf_tests/test_reduce_scatter_hyperparameter_sweep_perf_galaxy.py
+    // For linear: 4+MB → 8 workers; 0.5–4MB → 4 workers; 0–0.5MB → 2 workers.
+    // For ring:  50+MB → 8 workers;   1–50MB → 4 workers;   0–1MB → 2 workers.
+    // At a single packet size (4KB) use one worker to minimise mux overhead.
+    constexpr double RING_HIGH_DATA_THRESHOLD = 50.0 * 1024 * 1024;
+    constexpr double RING_LOW_DATA_THRESHOLD = 1.0 * 1024 * 1024;
+    constexpr double LINEAR_HIGH_DATA_THRESHOLD = 4000000.0;
+    constexpr double LINEAR_LOW_DATA_THRESHOLD = 500000.0;
+    constexpr double SINGLE_PACKET_THRESHOLD = 4.0 * 1024;
+    if (topology == ttnn::ccl::Topology::Ring) {
+        if (data_moved_per_link_bytes > RING_HIGH_DATA_THRESHOLD) {
+            candidate_worker_counts = {8, 4, 2, 1};
+        } else if (data_moved_per_link_bytes <= SINGLE_PACKET_THRESHOLD) {
+            candidate_worker_counts = {1};
+        } else if (data_moved_per_link_bytes < RING_LOW_DATA_THRESHOLD) {
+            candidate_worker_counts = {2, 1};
+        } else {
+            candidate_worker_counts = {4, 2, 1};
+        }
+    } else if (topology == ttnn::ccl::Topology::Linear) {
+        if (data_moved_per_link_bytes > LINEAR_HIGH_DATA_THRESHOLD) {
+            candidate_worker_counts = {8, 4, 2, 1};
+        } else if (data_moved_per_link_bytes <= SINGLE_PACKET_THRESHOLD) {
+            candidate_worker_counts = {1};
+        } else if (data_moved_per_link_bytes < LINEAR_LOW_DATA_THRESHOLD) {
+            candidate_worker_counts = {2, 1};
+        } else {
+            candidate_worker_counts = {4, 2, 1};
+        }
+    }
+    for (auto worker_count : candidate_worker_counts) {
+        uint32_t core_count =
+            num_links * reduce_scatter_core_count_per_link(
+                            worker_count, num_directions_per_link, num_mux_cores_per_direction_per_link);
+        log_trace(tt::LogOp, "DEBUG: core_count {} for worker_count {}", core_count, worker_count);
+        if (num_cores >= core_count) {
+            log_trace(
+                tt::LogOp,
+                "data_moved_per_link_bytes: {} and worker_count: {}",
+                data_moved_per_link_bytes,
+                worker_count);
+            return worker_count;
+        }
+    }
+    TT_THROW(
+        "Not enough cores available on the subdevice or device for the requested configuration to match the number of "
+        "links {}",
+        num_links);
+}
+
+uint32_t reduce_scatter_default_chunks_per_sync(
+    ttnn::ccl::Topology topology, uint32_t num_tiles_to_process_per_slice, uint32_t tile_granularity) {
+    // For Line, as early as 20 chunks per sync we get statistically significant performance improvements.
+    // For Ring there is no statistically significant performance improvement until 80 chunks per sync.
+    TT_FATAL(topology == ttnn::ccl::Topology::Ring || topology == ttnn::ccl::Topology::Linear, "Invalid topology");
+    constexpr uint32_t RING_DEFAULT_CHUNKS_PER_SYNC = 80;
+    constexpr uint32_t LINEAR_DEFAULT_CHUNKS_PER_SYNC = 20;
+    uint32_t default_value =
+        topology == ttnn::ccl::Topology::Ring ? RING_DEFAULT_CHUNKS_PER_SYNC : LINEAR_DEFAULT_CHUNKS_PER_SYNC;
+    uint32_t total_chunks = std::max(num_tiles_to_process_per_slice / tile_granularity / 2, (uint32_t)1);
+    return std::min(default_value, total_chunks);
+}
+
+RingIntermStagingParams reduce_scatter_ring_interm_staging_params(
+    const ttnn::Tensor& input_tensor,
+    ttnn::ccl::Topology topology,
+    uint32_t dim,
+    uint32_t ring_size,
+    bool fp32_dest_acc_en) {
+    const auto& shape = input_tensor.padded_shape();
+
+    const auto [normalized_dim, input_tensor_C, input_tensor_B] =
+        (shape.rank() == 2) ? reduce_scatter_map_2d_to_4d(dim) : reduce_scatter_map_nd_to_4d(shape, dim);
+
+    // Only the batch/channel divisions affect output_channel_num_pages (per-channel tile count); the
+    // Ht/Wt scatter splits are absorbed into that count and don't need to be tracked separately.
+    uint32_t slice_B = input_tensor_B, slice_C = input_tensor_C;
+    if (normalized_dim == 0) {
+        slice_B /= ring_size;
+    } else if (normalized_dim == 1) {
+        slice_C /= ring_size;
+    }
+
+    const uint32_t single_tile_bytes = input_tensor.buffer()->page_size();
+    const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
+    const uint32_t num_pages_per_packet = packet_size_bytes / single_tile_bytes;
+    const uint32_t num_tiles_to_write_per_packet = std::min(4u, num_pages_per_packet);
+    const uint32_t max_dst_size = fp32_dest_acc_en ? 4u : 8u;
+    const uint32_t tile_granularity = std::min(4u * num_tiles_to_write_per_packet, max_dst_size);
+
+    const uint32_t input_num_pages = input_tensor.buffer()->num_pages();
+    const uint32_t output_num_pages = input_num_pages / ring_size;
+    const uint32_t output_batch_num_pages = output_num_pages / slice_B;
+    const uint32_t output_channel_num_pages = output_batch_num_pages / slice_C;
+
+    const uint32_t chunks_per_channel = (output_channel_num_pages + tile_granularity - 1) / tile_granularity;
+    const uint32_t total_chunks = ring_size * slice_C * chunks_per_channel;
+    const uint32_t page_bytes = tile_granularity * single_tile_bytes;
+
+    // The contiguous fast path covers the ring topology on dims 1/2/3 (dim 0 uses distinct kernels).
+    // It applies whether the intermediate is internally allocated or a caller-provided persistent
+    // buffer; persistent callers must allocate the buffer via reduce_scatter_ring_interm_staging_spec.
+    const bool use_contiguous = topology == ttnn::ccl::Topology::Ring && normalized_dim != 0;
+
+    return RingIntermStagingParams{
+        use_contiguous,
+        normalized_dim,
+        tile_granularity,
+        single_tile_bytes,
+        num_pages_per_packet,
+        chunks_per_channel,
+        total_chunks,
+        page_bytes};
+}
+
+std::optional<tt::tt_metal::TensorSpec> reduce_scatter_ring_interm_staging_spec(
+    const ttnn::Tensor& input_tensor,
+    ttnn::ccl::Topology topology,
+    uint32_t dim,
+    uint32_t ring_size,
+    bool fp32_dest_acc_en) {
+    const auto params =
+        reduce_scatter_ring_interm_staging_params(input_tensor, topology, dim, ring_size, fp32_dest_acc_en);
+    if (!params.use_contiguous) {
+        return std::nullopt;
+    }
+    // Opaque byte-staging: row-major UINT8, page (row) = one chunk (page_bytes). Interleaved DRAM so
+    // chunks spread across banks. UINT8 makes page bytes == width with no element-size divisibility
+    // constraint; page_bytes is DRAM-aligned (asserted in the program factory).
+    return tt::tt_metal::TensorSpec(
+        ttnn::Shape({params.total_chunks, params.page_bytes}),
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::UINT8,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
+            tt::tt_metal::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM)));
+}
+
+std::optional<tt::tt_metal::TensorSpec> reduce_scatter_ring_penult_intermediate_staging_spec(
+    const ttnn::Tensor& input_tensor,
+    ttnn::ccl::Topology topology,
+    uint32_t dim,
+    uint32_t ring_size,
+    bool fp32_dest_acc_en) {
+    const auto params =
+        reduce_scatter_ring_interm_staging_params(input_tensor, topology, dim, ring_size, fp32_dest_acc_en);
+    if (!params.use_contiguous) {
+        return std::nullopt;
+    }
+    // Same chunk-paged layout as the main intermediate, but sized without the ring_size (slice_idx)
+    // axis: total_chunks == ring_size * slice_C * chunks_per_channel, so this region is exactly
+    // slice_C * chunks_per_channel pages, addressed as (c * chunks_per_channel + chunk-in-channel).
+    const uint32_t penult_intermediate_chunks = params.total_chunks / ring_size;
+    return tt::tt_metal::TensorSpec(
+        ttnn::Shape({penult_intermediate_chunks, params.page_bytes}),
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::UINT8,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
+            tt::tt_metal::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM)));
+}
+
+bool reduce_scatter_tensor_matches_spec(const ttnn::Tensor& tensor, const tt::tt_metal::TensorSpec& spec) {
+    return tensor.logical_shape() == spec.logical_shape() && tensor.dtype() == spec.data_type() &&
+           tensor.layout() == spec.layout() &&
+           tensor.memory_config().buffer_type() == spec.memory_config().buffer_type();
+}
+
+bool reduce_scatter_use_contiguous_interm(
+    const ttnn::Tensor& input_tensor,
+    const std::optional<ttnn::Tensor>& optional_intermediate_tensor,
+    ttnn::ccl::Topology topology,
+    uint32_t dim,
+    uint32_t ring_size,
+    bool fp32_dest_acc_en) {
+    const auto stage_spec =
+        reduce_scatter_ring_interm_staging_spec(input_tensor, topology, dim, ring_size, fp32_dest_acc_en);
+    if (!stage_spec.has_value()) {
+        // Linear, or Ring with scatter dim 0: the chunk-paged layout does not exist here.
+        return false;
+    }
+    if (!optional_intermediate_tensor.has_value()) {
+        return true;
+    }
+    return reduce_scatter_tensor_matches_spec(*optional_intermediate_tensor, *stage_spec);
+}
+
+std::tuple<uint32_t, uint32_t, uint32_t> reduce_scatter_map_nd_to_4d(const ttnn::Shape& shape, uint32_t dim) {
+    TT_FATAL(shape.rank() > 2, "Expected rank 3 or greater");
+
+    auto [normalized_dim, rank_diff] = composite_common::normalize_dim_4d(dim, shape.rank());
+
+    const uint32_t c_dims_end = shape.rank() - 2;
+    uint32_t b_dims_end;
+    if (rank_diff >= 1 && dim <= rank_diff) {
+        b_dims_end = dim;
+        normalized_dim = 1;
+    } else if (rank_diff == -1 && dim == 0) {
+        b_dims_end = 1;
+    } else {
+        b_dims_end = shape.rank() - 3;
+    }
+
+    const uint32_t input_tensor_B =
+        std::accumulate(shape.cbegin(), shape.cbegin() + b_dims_end, 1, std::multiplies<uint32_t>());
+    const uint32_t input_tensor_C =
+        std::accumulate(shape.cbegin() + b_dims_end, shape.cbegin() + c_dims_end, 1, std::multiplies<uint32_t>());
+
+    return {normalized_dim, input_tensor_C, input_tensor_B};
+}
+
+std::tuple<uint32_t, uint32_t, uint32_t> reduce_scatter_map_2d_to_4d(uint32_t dim) {
+    constexpr auto RANK_2D = 2;
+    TT_FATAL(dim == 0 || dim == 1, "Expected dim 0 or 1");
+    const uint32_t normalized_dim = std::get<0>(composite_common::normalize_dim_4d(dim, RANK_2D));
+    return {normalized_dim, /*input_tensor_C=*/1, /*input_tensor_B=*/1};
+}
+
+std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> reduce_scatter_get_tile_offsets(
+    uint32_t worker_id,
+    uint32_t num_workers,
+    uint32_t output_batch_num_pages,
+    uint32_t output_channel_num_pages,
+    uint32_t slice_Wt,
+    uint32_t input_tensor_Wt,
+    uint32_t normalized_dim) {
+    uint32_t start_tiles_read;
+    uint32_t start_tiles_to_read;
+    uint32_t start_pages_read_in_row;
+    uint32_t start_row_offset;
+
+    if (normalized_dim == 0) {
+        start_tiles_read = worker_id * output_batch_num_pages / num_workers;
+        start_tiles_to_read = (worker_id + 1) * output_batch_num_pages / num_workers;
+        start_pages_read_in_row = 0;
+        start_row_offset = 0;
+    } else {
+        start_tiles_read = worker_id * output_channel_num_pages / num_workers;
+        start_tiles_to_read = (worker_id + 1) * output_channel_num_pages / num_workers;
+        start_pages_read_in_row = start_tiles_read % slice_Wt;
+        start_row_offset = start_tiles_read / slice_Wt * input_tensor_Wt;
+    }
+
+    return {start_tiles_read, start_tiles_to_read, start_pages_read_in_row, start_row_offset};
+}
+
+void append_fabric_mux_connection_ct_args(
+    tt::tt_fabric::FabricMuxChannelType channel_type,
+    const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
+    uint32_t num_workers_per_direction,
+    std::vector<uint32_t>& writer_ct_args) {
+    constexpr auto num_ct_args = 5;
+    const std::array<uint32_t, num_ct_args> ct_args = {
+        mux_kernel_config.get_num_buffers(channel_type),
+        mux_kernel_config.get_buffer_size_bytes(channel_type),
+        mux_kernel_config.get_status_address(),
+        mux_kernel_config.get_termination_signal_address(),
+        num_workers_per_direction};
+    writer_ct_args.reserve(writer_ct_args.capacity() + num_ct_args);
+    std::copy(ct_args.begin(), ct_args.end(), std::back_inserter(writer_ct_args));
+}
+
+void append_fabric_mux_connection_rt_args(
+    bool mux_connection_valid,
+    const tt::tt_metal::CoreCoord& mux_virtual_core,
+    tt::tt_fabric::FabricMuxChannelType channel_type,
+    const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
+    const tt::tt_metal::CoreCoord& worker_logical_core,
+    uint32_t worker_per_direction_id,
+    bool is_termination_master,
+    tt::tt_metal::CoreCoord termination_master_virtual_core,
+    tt::tt_metal::Program& program,
+    std::vector<uint32_t>& worker_rt_args) {
+    constexpr auto num_rt_args = 17;
+    const std::array<uint32_t, num_rt_args> rt_args = {
+        mux_connection_valid,
+        is_termination_master,
+        mux_virtual_core.x,
+        mux_virtual_core.y,
+        mux_kernel_config.get_channel_base_address(channel_type, worker_per_direction_id),
+        mux_kernel_config.get_connection_info_address(channel_type, worker_per_direction_id),
+        mux_kernel_config.get_connection_handshake_address(channel_type, worker_per_direction_id),
+        mux_kernel_config.get_flow_control_address(channel_type, worker_per_direction_id),
+        mux_kernel_config.get_buffer_index_address(channel_type, worker_per_direction_id),
+        mux_kernel_config.get_channel_credits_stream_id(channel_type, worker_per_direction_id),
+        tt::tt_metal::CreateSemaphore(program, {worker_logical_core}, 0),
+        tt::tt_metal::CreateSemaphore(program, {worker_logical_core}, 0),
+        tt::tt_metal::CreateSemaphore(program, {worker_logical_core}, 0),
+        tt::tt_metal::CreateSemaphore(program, {worker_logical_core}, 0),
+        tt::tt_metal::CreateSemaphore(program, {worker_logical_core}, 0),
+        termination_master_virtual_core.x,
+        termination_master_virtual_core.y,
+    };
+    worker_rt_args.reserve(worker_rt_args.capacity() + num_rt_args);
+    std::copy(rt_args.begin(), rt_args.end(), std::back_inserter(worker_rt_args));
+}
+
+void append_fabric_mux_connection_rt_args(
+    bool mux_connection_valid,
+    const tt::tt_metal::CoreCoord& mux_virtual_core,
+    tt::tt_fabric::FabricMuxChannelType channel_type,
+    const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
+    const tt::tt_metal::CoreCoord& worker_logical_core,
+    uint32_t worker_per_direction_id,
+    bool is_termination_master,
+    tt::tt_metal::CoreCoord termination_master_virtual_core,
+    tt::tt_metal::ProgramDescriptor& desc,
+    tt::tt_metal::KernelDescriptor::RTArgList& worker_rt_args) {
+    // Allocate a worker-core-scoped semaphore by querying the next available ID
+    // and parking a SemaphoreDescriptor on the ProgramDescriptor. Returns the new ID.
+    auto alloc_sem = [&]() -> uint32_t {
+        auto id_opt = desc.find_available_semaphore_id(worker_logical_core, tt::CoreType::WORKER);
+        TT_FATAL(
+            id_opt.has_value(),
+            "No available semaphore ID for fabric mux connection on worker core (x={}, y={}, core_type=WORKER); "
+            "{} SemaphoreDescriptors already allocated on this ProgramDescriptor.",
+            worker_logical_core.x,
+            worker_logical_core.y,
+            desc.semaphores.size());
+        const uint32_t id = id_opt.value();
+        desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
+            .id = id,
+            .core_type = tt::CoreType::WORKER,
+            .core_ranges =
+                tt::tt_metal::CoreRangeSet(tt::tt_metal::CoreRange(worker_logical_core, worker_logical_core)),
+            .initial_value = 0});
+        return id;
+    };
+
+    constexpr auto num_rt_args = 17;
+    worker_rt_args.reserve(num_rt_args);
+    worker_rt_args.push_back(static_cast<uint32_t>(mux_connection_valid));
+    worker_rt_args.push_back(static_cast<uint32_t>(is_termination_master));
+    worker_rt_args.push_back(static_cast<uint32_t>(mux_virtual_core.x));
+    worker_rt_args.push_back(static_cast<uint32_t>(mux_virtual_core.y));
+    worker_rt_args.push_back(
+        static_cast<uint32_t>(mux_kernel_config.get_channel_base_address(channel_type, worker_per_direction_id)));
+    worker_rt_args.push_back(
+        static_cast<uint32_t>(mux_kernel_config.get_connection_info_address(channel_type, worker_per_direction_id)));
+    worker_rt_args.push_back(static_cast<uint32_t>(
+        mux_kernel_config.get_connection_handshake_address(channel_type, worker_per_direction_id)));
+    worker_rt_args.push_back(
+        static_cast<uint32_t>(mux_kernel_config.get_flow_control_address(channel_type, worker_per_direction_id)));
+    worker_rt_args.push_back(
+        static_cast<uint32_t>(mux_kernel_config.get_buffer_index_address(channel_type, worker_per_direction_id)));
+    worker_rt_args.push_back(
+        static_cast<uint32_t>(mux_kernel_config.get_channel_credits_stream_id(channel_type, worker_per_direction_id)));
+    worker_rt_args.push_back(alloc_sem());
+    worker_rt_args.push_back(alloc_sem());
+    worker_rt_args.push_back(alloc_sem());
+    worker_rt_args.push_back(alloc_sem());
+    worker_rt_args.push_back(alloc_sem());
+    worker_rt_args.push_back(static_cast<uint32_t>(termination_master_virtual_core.x));
+    worker_rt_args.push_back(static_cast<uint32_t>(termination_master_virtual_core.y));
+}
+
+}  // namespace ttnn::experimental::ccl

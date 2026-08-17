@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -322,8 +322,9 @@ void create_worker_kernel(
 }
 
 int main(int argc, char** argv) {
+    const char* tt_metal_home = std::getenv("TT_METAL_HOME");
     const std::string default_log_file_path =
-        std::string(std::getenv("TT_METAL_HOME")) + "/generated/fabric_mux_bandwidth_temp.txt";
+        (tt_metal_home ? std::string(tt_metal_home) : std::string(".")) + "/generated/fabric_mux_bandwidth_temp.txt";
     const size_t default_num_full_size_channels = 8;
     const size_t default_num_header_only_channels = 0;
     const size_t default_num_buffers_full_size_channel = 8;
@@ -502,12 +503,12 @@ int main(int argc, char** argv) {
     }
 
     log_info(tt::LogTest, "Workers done, terminating mux kernel");
-    std::vector<uint32_t> termiation_signal(1, tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
+    std::vector<uint32_t> termination_signal(1, tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
     tt::tt_metal::detail::WriteToDeviceL1(
-        device, mux_logical_core, mux_kernel_config.get_termination_signal_address(), termiation_signal);
+        device, mux_logical_core, mux_kernel_config.get_termination_signal_address(), termination_signal);
 
     log_info(tt::LogTest, "Waiting for mux kernel to terminate");
-    // need to wait before terminating driner core otherwise the mux kernel will hang while closing connection
+    // need to wait before terminating driver core otherwise the mux kernel will hang while closing connection
     std::vector<uint32_t> mux_status(1, 0);
     while (mux_status[0] != tt::tt_fabric::EDMStatus::TERMINATED) {
         tt::tt_metal::detail::ReadFromDeviceL1(
@@ -516,7 +517,7 @@ int main(int argc, char** argv) {
 
     log_info(tt::LogTest, "Terminating drainer kernel");
     tt::tt_metal::detail::WriteToDeviceL1(
-        device, drainer_logical_core, drainer_kernel_config.get_termination_signal_address(), termiation_signal);
+        device, drainer_logical_core, drainer_kernel_config.get_termination_signal_address(), termination_signal);
 
     log_info(tt::LogTest, "Waiting for programs");
     tt::tt_metal::distributed::Finish(cq);

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -169,14 +169,15 @@ MinimalMatmulSplitDeviceOperation::spec_return_value_t MinimalMatmulSplitDeviceO
     auto dtype = operation_attributes.output_dtype.value_or(in0_input_tensor.dtype());
 
     // Create specs for output tensors
-    std::vector<TensorSpec> output_specs;
+    std::vector<tt::tt_metal::TensorSpec> output_specs;
     output_specs.reserve(chunks);
 
     const uint32_t N_per_chunk = N / chunks;
     for (int32_t i = 0; i < chunks; ++i) {
         ttnn::Shape output_shape(in0_input_tensor_shape);
         output_shape[-1] = N_per_chunk;
-        output_specs.push_back(TensorSpec(output_shape, TensorLayout(dtype, PageConfig(Layout::TILE), memory_config)));
+        output_specs.push_back(
+            tt::tt_metal::TensorSpec(output_shape, TensorLayout(dtype, PageConfig(Layout::TILE), memory_config)));
     }
 
     return output_specs;
@@ -216,7 +217,7 @@ ttnn::experimental::prim::MinimalMatmulSplitDeviceOperation::tensor_return_value
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor.device()->arch(),
         compute_kernel_config,
-        MathFidelity::HiFi2,
+        tt::tt_metal::MathFidelity::HiFi2,
         false /*approx_mode*/,
         true /*fp32_acc*/,
         true /*packer_acc*/);

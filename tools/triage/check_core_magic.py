@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -19,17 +19,16 @@ Owner:
 
 from ttexalens.context import Context
 from ttexalens.coordinate import OnChipCoordinate
-from ttexalens.elf import ParsedElfFile
-from ttexalens.memory_access import MemoryAccess
-from dispatcher_data import run as get_dispatcher_data, DispatcherData
-from elfs_cache import run as get_elfs_cache
+from ttexalens.elf import ElfFile
+from ttexalens.memory_access import MemoryAccess, create_l1_memory_access
+from dispatcher_data import run as get_dispatcher_data, DispatcherData, RunChecks
 from run_checks import run as get_run_checks
 from triage import ScriptConfig, log_check_location, run_script
 from ttexalens.umd_device import TimeoutDeviceRegisterError
 
 
 script_config = ScriptConfig(
-    depends=["run_checks", "dispatcher_data", "elfs_cache"],
+    depends=["run_checks", "dispatcher_data"],
 )
 
 MAILBOX_CORRUPTED_MESSAGE = "Mailbox is likely corrupted, potentially due to NoC writes to an invalid location."
@@ -46,32 +45,38 @@ class CoreMagicValues:
         self.worker = fw_elf.get_enum_value("CoreMagicNumber::WORKER")
         self.active_eth = fw_elf.get_enum_value("CoreMagicNumber::ACTIVE_ETH")
         self.idle_eth = fw_elf.get_enum_value("CoreMagicNumber::IDLE_ETH")
+        self.dram = fw_elf.get_enum_value("CoreMagicNumber::DRAM")
 
         self.magic_to_name = {
             self.worker: "WORKER",
             self.active_eth: "ACTIVE_ETH",
             self.idle_eth: "IDLE_ETH",
+            self.dram: "DRAM",
         }
 
     def get_name(self, magic_value: int) -> str | None:
         return self.magic_to_name.get(magic_value, None)
 
 
-def get_expected_magic_for_location(location: OnChipCoordinate, magic_values: CoreMagicValues) -> tuple[int, str]:
+def get_expected_magic_for_location(
+    location: OnChipCoordinate, magic_values: CoreMagicValues, run_checks: RunChecks
+) -> tuple[int, str]:
     """
     Determine the expected magic number based on location type.
     Returns (magic_value, type_name).
     """
-    block_type = location.noc_block.block_type
-    if block_type == "functional_workers":
-        return magic_values.worker, "WORKER"
-    elif location in location.device.idle_eth_block_locations:
-        return magic_values.idle_eth, "IDLE_ETH"
-    elif location in location.device.active_eth_block_locations:
-        return magic_values.active_eth, "ACTIVE_ETH"
-    else:
-        # Default to worker for unknown types
-        return magic_values.worker, "WORKER"
+    block_type = run_checks.get_block_type(location)
+    match block_type:
+        case "tensix":
+            return magic_values.worker, "WORKER"
+        case "idle_eth":
+            return magic_values.idle_eth, "IDLE_ETH"
+        case "active_eth":
+            return magic_values.active_eth, "ACTIVE_ETH"
+        case "dram":
+            return magic_values.dram, "DRAM"
+        case _:
+            return magic_values.worker, "WORKER"
 
 
 def try_read_magic_with_dispatcher_data(
@@ -85,7 +90,8 @@ def try_read_magic_with_dispatcher_data(
     """
     try:
         dispatcher_core_data = dispatcher_data.get_cached_core_data(location, risc_name)
-        return dispatcher_core_data.mailboxes.core_info.core_magic_number.read_value()
+        assert dispatcher_core_data.mailboxes is not None
+        return int(dispatcher_core_data.mailboxes.core_info.core_magic_number.read_value())
     except TimeoutDeviceRegisterError:
         raise
     except Exception as e:
@@ -99,13 +105,13 @@ def try_read_magic_with_dispatcher_data(
 
 def try_read_magic_with_elf(
     l1_mem_access: MemoryAccess,
-    fw_elf: ParsedElfFile,
+    fw_elf: ElfFile,
 ) -> int | None:
     """
     Attempt to read core_magic_number using the given firmware ELF.
     Returns the magic value or None if reading fails.
     """
-    return fw_elf.get_global("mailboxes", l1_mem_access).core_info.core_magic_number.read_value()
+    return int(fw_elf.get_global("mailboxes", l1_mem_access).core_info.core_magic_number.read_value())
 
 
 def check_core_magic(
@@ -113,12 +119,16 @@ def check_core_magic(
     risc_name: str,
     dispatcher_data: DispatcherData,
     magic_values: CoreMagicValues,
+    run_checks: RunChecks,
 ):
     """
     Check if the core_magic_number matches the expected firmware type.
     If mismatch, try other firmware types to identify what's actually present.
     """
-    expected_magic, expected_type = get_expected_magic_for_location(location, magic_values)
+    if not dispatcher_data.risc_enabled(risc_name):
+        return
+
+    expected_magic, expected_type = get_expected_magic_for_location(location, magic_values, run_checks)
 
     # Read the magic number from the expected mailbox location
     actual_magic = try_read_magic_with_dispatcher_data(location, risc_name, dispatcher_data)
@@ -145,10 +155,12 @@ def check_core_magic(
         other_elfs_to_try.append(("IDLE_ETH", dispatcher_data._idle_erisc_elf))
     if expected_type != "ACTIVE_ETH":
         other_elfs_to_try.append(("ACTIVE_ETH", dispatcher_data._active_erisc_elf))
+    if expected_type != "DRAM" and dispatcher_data._drisc_elf is not None:
+        other_elfs_to_try.append(("DRAM", dispatcher_data._drisc_elf))
 
     found_type = None
     for type_name, other_elf in other_elfs_to_try:
-        l1_mem_access = MemoryAccess.create_l1(location)
+        l1_mem_access = create_l1_memory_access(location)
         other_magic = try_read_magic_with_elf(l1_mem_access, other_elf)
         if other_magic is not None:
             other_type_name = magic_values.get_name(other_magic)
@@ -174,20 +186,19 @@ def check_core_magic(
 
 
 def run(args, context: Context):
-    BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth", "active_eth"]
+    BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth", "active_eth", "dram"]
     # Only check one RISC per core since magic is core-wide, not per-RISC
-    # Use brisc for tensix, erisc/erisc0 for eth
-    RISC_CORES_TO_CHECK = ["brisc", "erisc", "erisc0"]
+    # Use brisc for tensix, erisc/erisc0 for eth, drisc for dram
+    RISC_CORES_TO_CHECK = ["brisc", "erisc", "erisc0", "drisc"]
 
     dispatcher_data = get_dispatcher_data(args, context)
-    elfs_cache = get_elfs_cache(args, context)
     run_checks = get_run_checks(args, context)
 
     # Read magic values from firmware (identical across all firmware types)
     magic_values = CoreMagicValues(dispatcher_data._brisc_elf)
 
     run_checks.run_per_core_check(
-        lambda location, risc_name: check_core_magic(location, risc_name, dispatcher_data, magic_values),
+        lambda location, risc_name: check_core_magic(location, risc_name, dispatcher_data, magic_values, run_checks),
         block_filter=BLOCK_TYPES_TO_CHECK,
         core_filter=RISC_CORES_TO_CHECK,
     )

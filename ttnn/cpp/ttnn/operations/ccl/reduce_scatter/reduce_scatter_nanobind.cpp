@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,7 +10,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "reduce_scatter.hpp"
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
@@ -37,65 +37,48 @@ void bind_reduce_scatter(nb::module_& mod) {
             chunks_per_sync (int, optional): Hyperparameter.
             num_workers_per_link (int, optional): Hyperparameter.
             num_buffers_per_channel (int, optional): Hyperparameter.
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Compute kernel configuration for the reduction. Defaults to `None`.
+            use_l1_small_for_semaphores (bool, optional): If True, allocate internal global semaphores in L1_SMALL instead of L1 to reduce L1 fragmentation. Defaults to `False`.
 
         Returns:
             ttnn.Tensor: The reduced and scattered tensor, with output_shape = input_shape for all the unspecified dimensions, and output_shape[dim] = input_shape[dim] / num_devices, where num_devices is the number of devices along the `cluster_axis` if specified, else the total number of devices along the mesh.
 
-        Example:
-            >>> # ttnn_tensor shape is [1, 8, 32, 256]
-            >>> # num_devices along cluster_axis is 8
-            >>> output = ttnn.reduce_scatter(ttnn_tensor, dim=1, cluster_axis=1)
-            >>> print(output.shape)
-            [1, 1, 32, 256]
+        Supported dtypes and layouts:
+
+            .. list-table::
+                :header-rows: 1
+
+                * - Dtypes
+                  - Layouts
+                * - BFLOAT16, BFLOAT8_B, FLOAT32
+                  - TILE, ROW_MAJOR
+
+            Input must be rank 2 or greater and the scatter dim must be divisible by the number of devices (for tiled inputs scattered on the last two dims, by ``num_devices * tile_size``). The output preserves the input dtype. Row-major inputs, and tiled inputs whose scatter breaks a tile, are routed through the composite implementation.
+
+        Memory Support:
+            - Interleaved: DRAM and L1
+            - Sharded: WIDTH_SHARDED, HEIGHT_SHARDED and ND_SHARDED may reside in DRAM or L1; BLOCK_SHARDED must be in L1.
         )doc";
 
-    using OperationType = decltype(ttnn::reduce_scatter);
-    ttnn::bind_registered_operation(
+    ttnn::bind_function<"reduce_scatter">(
         mod,
-        ttnn::reduce_scatter,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               int32_t dim,
-               const std::optional<uint32_t> cluster_axis,
-               const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::MemoryConfig>& intermediate_memory_config,
-               std::optional<ttnn::Tensor>& optional_output_tensor,
-               const std::optional<uint32_t> num_links,
-               const std::optional<tt::tt_fabric::Topology> topology,
-               const std::optional<uint32_t> chunks_per_sync,
-               const std::optional<uint32_t> num_workers_per_link,
-               const std::optional<uint32_t> num_buffers_per_channel) {
-                return self(
-                    input_tensor,
-                    dim,
-                    cluster_axis,
-                    subdevice_id,
-                    memory_config,
-                    intermediate_memory_config,
-                    optional_output_tensor,
-                    num_links,
-                    topology,
-                    chunks_per_sync,
-                    num_workers_per_link,
-                    num_buffers_per_channel);
-            },
-            nb::arg("input_tensor").noconvert(),
-            nb::arg("dim"),
-            nb::kw_only(),
-            nb::arg("cluster_axis") = nb::none(),
-            nb::arg("subdevice_id") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("intermediate_memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none(),
-            nb::arg("num_links") = nb::none(),
-            nb::arg("topology").noconvert() = nb::none(),
-            nb::arg("chunks_per_sync") = nb::none(),
-            nb::arg("num_workers_per_link") = nb::none(),
-            nb::arg("num_buffers_per_channel") = nb::none(),
-        });
+        &ttnn::reduce_scatter,
+        nb::arg("input_tensor").noconvert(),
+        nb::arg("dim"),
+        nb::kw_only(),
+        nb::arg("cluster_axis") = nb::none(),
+        nb::arg("subdevice_id") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("intermediate_memory_config") = nb::none(),
+        nb::arg("output_tensor") = nb::none(),
+        nb::arg("num_links") = nb::none(),
+        nb::arg("topology").noconvert() = nb::none(),
+        nb::arg("chunks_per_sync") = nb::none(),
+        nb::arg("num_workers_per_link") = nb::none(),
+        nb::arg("num_buffers_per_channel") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("use_l1_small_for_semaphores") = false);
 }
 
 }  // namespace ttnn::operations::ccl

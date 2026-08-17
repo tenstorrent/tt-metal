@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 // Gated Local Reduce fused kernel
@@ -45,8 +45,7 @@ void kernel_main() {
         constexpr uint32_t out_cb = get_named_compile_time_arg_val("gated_local_reduce_out_cb");
         constexpr uint32_t group1_num_tiles = get_named_compile_time_arg_val("gated_local_reduce_group1_num_tiles");
         constexpr uint32_t group2_num_tiles = get_named_compile_time_arg_val("gated_local_reduce_group2_num_tiles");
-        // Full init, CBs don't matter
-        compute_kernel_hw_startup(0, 0, 0);
+        deepseek_compute_kernel_init();
 
         // ================================================================
         // Phase 1: reduce(group1) + SiLU -> intermed[0]  (ADD with SiLU)
@@ -74,9 +73,9 @@ void kernel_main() {
         cb_reserve_back(out_cb, 1);
 
         // Initialize and perform multiplication
-        binary_op_init_common(intermed_cb, intermed_cb, out_cb);
+        compute_kernel_hw_startup(intermed_cb, intermed_cb, out_cb);
         tile_regs_acquire();
-        mul_tiles_init(intermed_cb, intermed_cb);
+        mul_init(intermed_cb, intermed_cb);
         mul_tiles(intermed_cb, intermed_cb, 0, 1, 0);
 
         // Commit and wait

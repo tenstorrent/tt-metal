@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,13 +13,11 @@
 #include <unordered_set>
 #include <string>
 #include <vector>
-#include <nlohmann/json.hpp>
 
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <common/TracyTTDeviceData.hpp>
 #include <tt-metalium/experimental/profiler.hpp>
-#include <tt_stl/assert.hpp>
-#include "thread_pool.hpp"
+#include "impl/threading/thread_pool.hpp"
 
 namespace tt::tt_metal {
 
@@ -35,7 +33,31 @@ inline const AnalysisRiscTypes AnalysisRiscTypesAny = {
     tracy::RiscType::TRISC_1,
     tracy::RiscType::TRISC_2,
     tracy::RiscType::ERISC,
-    tracy::RiscType::TENSIX_RISC_AGG};
+    tracy::RiscType::TENSIX_RISC_AGG,
+    tracy::RiscType::QUASAR_DM0,
+    tracy::RiscType::QUASAR_DM1,
+    tracy::RiscType::QUASAR_DM2,
+    tracy::RiscType::QUASAR_DM3,
+    tracy::RiscType::QUASAR_DM4,
+    tracy::RiscType::QUASAR_DM5,
+    tracy::RiscType::QUASAR_DM6,
+    tracy::RiscType::QUASAR_DM7,
+    tracy::RiscType::QUASAR_NEO0_TRISC0,
+    tracy::RiscType::QUASAR_NEO0_TRISC1,
+    tracy::RiscType::QUASAR_NEO0_TRISC2,
+    tracy::RiscType::QUASAR_NEO0_TRISC3,
+    tracy::RiscType::QUASAR_NEO1_TRISC0,
+    tracy::RiscType::QUASAR_NEO1_TRISC1,
+    tracy::RiscType::QUASAR_NEO1_TRISC2,
+    tracy::RiscType::QUASAR_NEO1_TRISC3,
+    tracy::RiscType::QUASAR_NEO2_TRISC0,
+    tracy::RiscType::QUASAR_NEO2_TRISC1,
+    tracy::RiscType::QUASAR_NEO2_TRISC2,
+    tracy::RiscType::QUASAR_NEO2_TRISC3,
+    tracy::RiscType::QUASAR_NEO3_TRISC0,
+    tracy::RiscType::QUASAR_NEO3_TRISC1,
+    tracy::RiscType::QUASAR_NEO3_TRISC2,
+    tracy::RiscType::QUASAR_NEO3_TRISC3};
 
 using AnalysisMarkerTypes = std::unordered_set<tracy::TTDeviceMarkerType>;
 inline const AnalysisMarkerTypes AnalysisMarkerTypesAny = {

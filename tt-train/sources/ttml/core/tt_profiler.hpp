@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -20,6 +20,7 @@ public:
     void read_results(
         ttnn::distributed::MeshDevice* device,
         const std::string& noop_identifier = "noop_identifier",
+        bool dump_results = false,
         const size_t number_of_noops = 5U,
         tt::tt_metal::ProfilerReadState read_state = tt::tt_metal::ProfilerReadState::NORMAL) const;
 
@@ -29,6 +30,8 @@ public:
     [[nodiscard]] bool is_enabled() const;
     void enable();
     void disable();
+
+    [[nodiscard]] bool get_naive_profiling() const;
 
 private:
     bool m_enabled = false;

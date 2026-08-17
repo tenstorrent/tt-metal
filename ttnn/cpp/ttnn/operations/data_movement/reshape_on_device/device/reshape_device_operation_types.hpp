@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -15,7 +15,7 @@ struct ReshapeOnDeviceParams {
 };
 
 struct ReshapeOnDeviceInputs {
-    tt::tt_metal::Tensor input_tensor;
+    ttnn::Tensor input_tensor;
 };
 
 }  // namespace ttnn::prim

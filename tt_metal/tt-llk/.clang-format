@@ -1,0 +1,87 @@
+BasedOnStyle: Google
+ColumnLimit: 160
+IndentWidth: 4
+
+# Indentation and Alignment
+# -------------------------
+# This will make access modifiers (public/protected/private) sit on the same indentation as `class` keyword
+AccessModifierOffset: -4
+
+# Arguments, parameters and construction initializer are broken as following:
+# - Try to fit everything into single line (controlled by ColumnLimit).
+# - If it doesn't fit, break immediately after open bracket (in case of arguments and parameters)
+#   or after colon in case of constructor initializers.
+# - Try to fit everything else into the second line.
+# - If it doesn't fit in second line, then each argument, parameter or initializer will sit in its own line.
+AlignAfterOpenBracket: AlwaysBreak
+AlignConsecutiveAssignments: Consecutive
+AlignConsecutiveBitFields: Consecutive
+AlignConsecutiveMacros: Consecutive
+AlignTrailingComments: true
+AlignEscapedNewlines: Left
+AlignOperands: true
+
+# Bin Packing
+# -----------
+BinPackArguments: false
+BinPackParameters: false
+
+# Constructor Initializers
+# ------------------------
+# When constructor initializers exist in the constructor definition, leave the colon as last thing on the original
+# line instead of putting it on the next line.
+BreakConstructorInitializers: AfterColon
+
+# Pointer and Reference Alignment
+# -------------------------------
+DerivePointerAlignment: true
+PointerAlignment: Left
+ReferenceAlignment: Left
+
+# Braces and Blocks
+# -----------------
+# Disallow single statements after if/else/for/while/do without curly braces.
+InsertBraces: true
+BreakBeforeBraces: Allman
+
+# Separate definition blocks, including classes, structs, enums, and functions.
+SeparateDefinitionBlocks: Always
+SpaceBeforeCpp11BracedList: true
+
+# Spaces and Formatting
+# ---------------------
+SpacesBeforeTrailingComments: 1
+SpacesInAngles: Never
+
+# Short Statements and Functions
+# ------------------------------
+AllowShortLoopsOnASingleLine: false
+AllowShortBlocksOnASingleLine: false
+AllowShortEnumsOnASingleLine: false
+AllowShortIfStatementsOnASingleLine: false
+AllowShortFunctionsOnASingleLine: false
+
+# Miscellaneous
+# -------------
+RemoveSemicolon: true
+SortUsingDeclarations: LexicographicNumeric
+
+# Include Categories
+# ------------------
+IncludeCategories:
+  - Regex: '^<.*\.h>'
+    Priority: 1
+    SortPriority: 0
+  - Regex: '^<.*>'
+    Priority: 2
+    SortPriority: 0
+  - Regex: '^".*"'
+    Priority: 3
+    SortPriority: 0
+
+# Custom Macros
+# -------------
+# Add custom macros for v_if and v_elseif
+ForEachMacros:
+  - v_if
+  - v_elseif

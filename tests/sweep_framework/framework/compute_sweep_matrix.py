@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -7,11 +7,6 @@ Compute the sweep test matrix for GitHub Actions CI.
 
 This script analyzes generated sweep vector files and produces a matrix
 configuration that maps test modules to appropriate hardware runners.
-
-The matrix output includes:
-- Module batching to parallelize execution
-- Runner assignment based on mesh topology (for lead models)
-- Suite name configuration per run type
 
 Environment Variables (from GitHub Actions context):
 - GITHUB_EVENT_SCHEDULE: Cron schedule expression
@@ -21,17 +16,61 @@ Environment Variables (from GitHub Actions context):
 - VECTORS_DIR: Directory containing vector JSON files (default: /tmp/vectors)
 
 Output:
-Prints JSON matrix to stdout in format required by GitHub Actions.
+Prints GitHub Actions output lines to stdout (matrix + per-hw matrices).
 """
 
+import argparse
 import os
 import json
 import sys
 from collections import defaultdict
 from pathlib import Path
 
-# Import mesh utilities from shared constants module
-from constants import get_mesh_shape_string, strip_mesh_suffix
+from constants import get_mesh_shape_string, parse_hardware_suffix, strip_grouping_suffix, strip_mesh_suffix
+
+# split_vectors_by_device_key lives one level up (it is a runnable CI script, not framework
+# internals). Import it rather than re-deriving the partition here: the run job executes that
+# same module to materialise the batch directories, so sharing the planner is what guarantees
+# the matrix's batch names and the directories on disk agree.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from split_vectors_by_device_key import (  # noqa: E402
+    DEVICE_OPEN_MINUTES,
+    SECONDS_PER_VECTOR,
+    VECTORS_BATCH_ROOT,
+    group_vectors,
+    plan_batches,
+)
+from matrix_runner_config import (
+    DEFAULT_MODEL_TRACED_GROUPING_MODE,
+    GENERATION_MANIFEST_FILENAME,
+    HW_GROUP_MATRIX_KEYS,
+    LEAD_MODELS_BATCH_POLICY,
+    LEAD_MODELS_DEFAULT_TEST_GROUP,
+    LEAD_MODELS_SUITE_NAME,
+    MAX_BATCH_MODULES,
+    MODEL_TRACED_BATCH_POLICY,
+    SCHEDULE_TYPES,
+    SUPPORTED_VECTOR_GROUPING_MODES,
+    SWEEP_TYPES,
+    get_batch_timeout,
+    get_lead_models_test_group_name_for_hardware_group,
+    get_mesh_test_group_map,
+    get_runner_config,
+    get_sku_total_budget,
+    get_test_group_name_for_hardware_group,
+    get_weighted_batch_timeout,
+)
+
+DEFAULT_PRETTY_MATRIX_PATH = "tests/sweep_framework/framework/sweep_matrix.json"
+
+# Safety factor on the per-vector time term when deriving a batch timeout. See where
+# _sizing_minutes is set: the splitter's SECONDS_PER_VECTOR is measured on a light op, so the
+# un-margined estimate lands exactly on the observed need for a heavy batch.
+_VECTOR_TIME_MARGIN = 1.5
+
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
 
 
 def chunk_modules(items, size):
@@ -39,309 +78,572 @@ def chunk_modules(items, size):
     return [",".join(items[i : i + size]) for i in range(0, len(items), size)] if items else []
 
 
-# Alias for backward compatibility and clearer naming in this context
-def get_mesh_shape(module_name):
-    """Extract mesh shape string from module name (wrapper for get_mesh_shape_string)."""
-    return get_mesh_shape_string(module_name)
+def _get_runner(name):
+    """Look up a runner config by test_group_name."""
+    return get_runner_config(name)
 
 
-def get_lead_models_mesh_runner_config():
+def _hw_label(hardware_group):
+    """Readable label like 'wormhole/n300/4c' or 'default'."""
+    if hardware_group is None:
+        return "default"
+    board_type, device_series, card_count = hardware_group
+    return f"{board_type}/{device_series}/{card_count}c"
+
+
+def _log_module_groups(header, modules, groups):
+    """Print a summary of module grouping to stderr."""
+    total_base = len(set(strip_grouping_suffix(m) for m in modules))
+    # `groups` is one entry per routed group, each holding that group's module list -- so the
+    # group COUNT is the number of matrix entries. Summing the module lists (as this used to)
+    # reported "183 matrix entries" for a 16-entry run, which reads as a job count and is not one.
+    print(
+        f"{header}: {len(modules)} vector files ({total_base} unique modules), " f"{len(groups)} matrix entries",
+        file=sys.stderr,
+    )
+    for label, entries in groups:
+        unique = len(set(strip_grouping_suffix(m) for m in entries))
+        print(f"  {label}: {len(entries)} vectors ({unique} unique modules)", file=sys.stderr)
+
+
+def _build_entries(runner_config, batches, batch_display_prefix, suite_name):
+    """Create matrix include entries for a set of batches using a runner config.
+
+    One include entry per batch (mesh_dims "").
+
+    Multi-device CCL modules whose vectors span both FABRIC_1D/RING and FABRIC_2D
+    meshes (e.g. all_gather) used to be split into per-fabric-family [1D]/[2D] jobs
+    to avoid an in-process FABRIC_1D->FABRIC_2D transition hang on T3K. That hang
+    was the device profiler overflowing the idle-erisc dispatch kernel (cq_prefetch)
+    at FABRIC_2D mesh open; it is now resolved by skipping the profiler for CCL in
+    sweeps_runner (_is_multidevice_ccl_module). With the profiler off, the
+    transition runs cleanly in one process (validated on T3K: 3/3 single-process
+    1D->2D runs passed, 0 hangs), so the split is no longer needed. The runner's
+    --mesh-dims filter remains available for ad-hoc per-fabric-family runs.
     """
-    Configuration: Map mesh shapes to runner configurations.
+    entries = []
+    for batch in batches:
+        base_display = f"{batch_display_prefix}:{batch}" if batch_display_prefix else batch
+        entries.append(
+            {
+                **runner_config,
+                "module_selector": batch,
+                "batch_display": base_display,
+                "suite_name": suite_name,
+                "mesh_dims": "",
+            }
+        )
+    return entries
 
-    Each entry specifies which runner handles which mesh shapes.
-    Multiple mesh shapes can be handled by the same runner.
 
-    To add new mesh configurations or runners, add entries to this list.
+def _load_generation_manifest(vectors_path):
+    """Load generation manifest metadata if present."""
+    manifest_path = vectors_path / GENERATION_MANIFEST_FILENAME
+    if not manifest_path.exists():
+        return {}
 
-    Note: 'runs_on' can be either:
-      - A string: Single runner label (e.g., "tt-ubuntu-2204-n150-stable")
-      - A list: Multiple runner labels for GitHub Actions matrix
-                (e.g., ["topology-6u", "arch-wormhole_b0", "in-service", "pipeline-functional"])
+    try:
+        with open(manifest_path, "r", encoding="utf-8") as file:
+            data = json.load(file)
+    except (OSError, json.JSONDecodeError) as e:
+        print(f"Warning: Failed to read generation manifest at {manifest_path}: {e}", file=sys.stderr)
+        return {}
+
+    if not isinstance(data, dict):
+        print(f"Warning: Generation manifest at {manifest_path} is not a JSON object", file=sys.stderr)
+        return {}
+    return data
+
+
+def _modules_from_manifest_or_dir(vectors_path, manifest):
+    """Resolve module stems from manifest vector_files or by scanning directory."""
+    manifest_files = manifest.get("vector_files")
+    if isinstance(manifest_files, list):
+        files = [name for name in manifest_files if isinstance(name, str) and name.endswith(".json")]
+        if files:
+            modules = sorted({Path(name).stem for name in files if Path(name).name != GENERATION_MANIFEST_FILENAME})
+            if modules:
+                return modules
+
+    return sorted([f.stem for f in vectors_path.glob("*.json") if f.name != GENERATION_MANIFEST_FILENAME])
+
+
+def _group_modules_by_preference(modules, grouping_mode):
+    """Group modules by mesh, hardware, or unmatched based on routing preference."""
+    mesh_modules = defaultdict(list)
+    hw_modules = defaultdict(list)
+    unmatched = []
+
+    for module in modules:
+        mesh = get_mesh_shape_string(module)
+        # Strip the trailing .mesh_NxM before parsing the hardware suffix: vector
+        # files carry BOTH suffixes (e.g. .hw_blackhole_p300a_2c.mesh_1x2), and
+        # parse_hardware_suffix returns None when the .mesh_* tail is still present.
+        # Without this, every hw-suffixed file falls through to mesh routing —
+        # harmless for wormhole (mesh shape maps to its own lane) but it sends
+        # blackhole files (mesh 1x1/1x2) to the wormhole n150/n300 lanes where they
+        # are dropped, so the blackhole lanes never run. Mirrors vector_source.py.
+        hw = parse_hardware_suffix(strip_mesh_suffix(module))
+
+        if grouping_mode == "mesh":
+            if mesh:
+                mesh_modules[mesh].append(module)
+            elif hw:
+                hw_modules[hw].append(module)
+            else:
+                unmatched.append(module)
+        else:
+            if hw:
+                hw_modules[hw].append(module)
+            elif mesh:
+                mesh_modules[mesh].append(module)
+            else:
+                unmatched.append(module)
+
+    return mesh_modules, hw_modules, unmatched
+
+
+def _get_test_group_for_mesh_shape(mesh_shape, mesh_test_groups, run_label, default_test_group=None):
+    """Resolve a mesh shape to a logical test group with optional fallback."""
+    test_group_name = mesh_test_groups.get(mesh_shape)
+    if test_group_name is not None:
+        return test_group_name
+
+    if default_test_group is not None:
+        print(
+            f"Warning: Mesh shape '{mesh_shape}' has no {run_label} runner mapping; using default runner",
+            file=sys.stderr,
+        )
+        return default_test_group
+
+    print(
+        f"Warning: Mesh shape '{mesh_shape}' has no {run_label} runner mapping; modules will be skipped",
+        file=sys.stderr,
+    )
+    return None
+
+
+def _batch_modules_for_test_group(base_modules, batch_size, batch_policy=None):
+    """Batch base module names using fixed size or policy-defined parallel jobs.
+
+    Modules listed in LEAD_MODELS_BATCH_POLICY["solo_modules"] are pulled out
+    and given their own dedicated 1-module batch before the rest are chunked.
+
+    A ``parallel_jobs`` policy fixes the job count and lets the batch width grow
+    with the module set, so it is capped at MAX_BATCH_MODULES: past that the job
+    count rises instead, keeping any single timeout from taking down a very wide
+    batch (see MAX_BATCH_MODULES for the run that motivated the cap).
     """
-    return [
-        {
-            # Single-chip operations (1x1 mesh) - runs on N150
-            "mesh_shapes": ["1x1"],
-            "test_group_name": "lead-models-single-chip",
-            "arch": "wormhole_b0",
-            "runs_on": "tt-ubuntu-2204-n150-stable",
-            "runner_label": "N150",
-            "tt_smi_cmd": "tt-smi -r",
-            "suite_name": "model_traced",
-        },
-        {
-            # Multi-chip operations - runs on Galaxy (32-chip topology)
-            # Handles all mesh shapes larger than 1x1
-            "mesh_shapes": ["1x2", "1x4", "1x8", "2x4", "4x8", "8x4", "2x16", "16x2"],
-            "test_group_name": "lead-models-galaxy",
-            "arch": "wormhole_b0",
-            "runs_on": [
-                "topology-6u",  # 32-chip galaxy topology
-                "arch-wormhole_b0",  # Wormhole B0 architecture
-                "in-service",  # Available for use
-                "pipeline-functional",  # Functional pipeline
-            ],
-            "runner_label": "topology-6u",
-            "tt_smi_cmd": "tt-smi -r",
-            "suite_name": "model_traced",
-        },
-    ]
+    solo_set = set(LEAD_MODELS_BATCH_POLICY.get("solo_modules", []))
+    solo = [m for m in base_modules if m in solo_set]
+    rest = [m for m in base_modules if m not in solo_set]
+
+    parallel_jobs = (batch_policy or {}).get("parallel_jobs")
+    if parallel_jobs:
+        size = min(MAX_BATCH_MODULES, max(1, -(-len(rest) // parallel_jobs)))
+        batches = chunk_modules(rest, size)
+    else:
+        batches = chunk_modules(rest, min(batch_size, MAX_BATCH_MODULES))
+
+    for sm in solo:
+        batches.append(sm)
+    return batches
+
+
+def _append_routed_group(
+    include_entries, batches, log_groups, label, modules, test_group_name, batch_size, suite_name, batch_policy=None
+):
+    """Convert routed modules for one logical group into matrix entries."""
+    if not modules or test_group_name is None:
+        return
+
+    base = sorted(set(strip_grouping_suffix(m) for m in modules))
+    runner_config = _get_runner(test_group_name)
+    runner_batches = _batch_modules_for_test_group(base, batch_size, batch_policy)
+    batches.extend(runner_batches)
+    include_entries.extend(_build_entries(runner_config, runner_batches, label, suite_name))
+    log_groups.append((label, modules))
+
+
+# ── Matrix computation per run type ─────────────────────────────────────────
 
 
 def compute_lead_models_matrix(modules, batch_size):
-    """
-    Compute matrix for lead models run with mesh-aware runner assignment.
+    """Compute matrix for lead models with mesh-aware runner assignment."""
+    mesh_test_groups = get_mesh_test_group_map("lead_models")
+    mesh_modules, hw_modules, unmatched = _group_modules_by_preference(modules, "mesh")
 
-    Args:
-        modules: List of module names (from vector JSON filenames)
-        batch_size: Number of modules per batch
-
-    Returns:
-        Tuple of (include_entries, batches, ccl_batches)
-    """
-    config = get_lead_models_mesh_runner_config()
-
-    # Group modules by mesh shape
-    mesh_shape_modules = defaultdict(list)
-    unmatched_modules = []
-
-    for module in modules:
-        mesh_shape = get_mesh_shape(module)
-        if mesh_shape:
-            mesh_shape_modules[mesh_shape].append(module)
-        else:
-            unmatched_modules.append(module)
-
-    # Build set of all configured mesh shapes for validation
-    configured_shapes = set()
-    for runner_config in config:
-        configured_shapes.update(runner_config["mesh_shapes"])
-
-    # Warn about mesh shapes without runner config
-    for mesh_shape in mesh_shape_modules.keys():
-        if mesh_shape not in configured_shapes:
-            print(
-                f"Warning: Mesh shape '{mesh_shape}' has no runner config, " f"modules will be skipped", file=sys.stderr
-            )
-
-    # Create matrix entries based on runner config
     include_entries = []
     batches = []
+    log_groups = []
+    routed_modules = defaultdict(list)
 
-    for runner_config in config:
-        # Collect all modules for this runner's mesh shapes
-        runner_modules = []
-        for mesh_shape in runner_config["mesh_shapes"]:
-            runner_modules.extend(mesh_shape_modules.get(mesh_shape, []))
+    for mesh_shape, mods in sorted(mesh_modules.items()):
+        test_group_name = _get_test_group_for_mesh_shape(
+            mesh_shape,
+            mesh_test_groups,
+            "lead_models",
+        )
+        if test_group_name is not None:
+            routed_modules[test_group_name].extend(mods)
 
-        if not runner_modules:
-            continue
+    for hw_group, mods in sorted(hw_modules.items()):
+        routed_modules[get_lead_models_test_group_name_for_hardware_group(hw_group)].extend(mods)
 
-        # Strip mesh suffixes to get base module names that sweeps_runner can find
-        # The VectorExportSource will automatically load mesh-variant JSONs
-        base_modules = sorted(set(strip_mesh_suffix(m) for m in runner_modules))
+    if unmatched:
+        routed_modules[LEAD_MODELS_DEFAULT_TEST_GROUP].extend(unmatched)
 
-        # For Galaxy runners (multi-chip), use smaller batches (8 ops per batch)
-        # For single-chip runners, use the standard batch size
-        is_galaxy = runner_config["test_group_name"] == "lead-models-galaxy"
-        if is_galaxy:
-            # Galaxy: 8 operations per batch
-            runner_batches = chunk_modules(base_modules, 8)
-        else:
-            # Standard batching for single-chip
-            runner_batches = chunk_modules(base_modules, batch_size)
+    lead_models_group_order = [LEAD_MODELS_DEFAULT_TEST_GROUP]
+    for test_group_name in dict.fromkeys(mesh_test_groups.values()):
+        if test_group_name not in lead_models_group_order:
+            lead_models_group_order.append(test_group_name)
+    for test_group_name in routed_modules:
+        if test_group_name not in lead_models_group_order:
+            lead_models_group_order.append(test_group_name)
 
-        batches.extend(runner_batches)
+    for test_group_name in lead_models_group_order:
+        label_meshes = [mesh for mesh, group in mesh_test_groups.items() if group == test_group_name]
+        batch_label = "+".join(label_meshes) if label_meshes else test_group_name
+        _append_routed_group(
+            include_entries,
+            batches,
+            log_groups,
+            batch_label,
+            routed_modules.get(test_group_name, []),
+            test_group_name,
+            batch_size,
+            LEAD_MODELS_SUITE_NAME,
+            LEAD_MODELS_BATCH_POLICY.get(test_group_name),
+        )
 
-        # Create matrix entries
-        mesh_label = "+".join(runner_config["mesh_shapes"])
-        for batch in runner_batches:
+    # Log
+    for mesh, mods in sorted(mesh_modules.items()):
+        log_groups.append((f"mesh {mesh}", mods))
+    for hw, mods in sorted(hw_modules.items()):
+        log_groups.append((f"hardware {_hw_label(hw)}", mods))
+    if unmatched:
+        log_groups.append(("no grouping suffix (default runner)", unmatched))
+    _log_module_groups("Lead models run", modules, log_groups)
+
+    return include_entries, batches
+
+
+def compute_model_traced_matrix(modules, batch_size, suite_name, grouping_mode=None):
+    """Compute matrix for model_traced runs using mesh/hardware grouped vector files."""
+    mode = grouping_mode if grouping_mode in SUPPORTED_VECTOR_GROUPING_MODES else DEFAULT_MODEL_TRACED_GROUPING_MODE
+    if grouping_mode not in (*SUPPORTED_VECTOR_GROUPING_MODES, None):
+        print(f"Warning: Unsupported grouping_mode '{grouping_mode}', defaulting to hardware routing", file=sys.stderr)
+
+    mesh_test_groups = get_mesh_test_group_map("model_traced")
+    mesh_modules, hw_modules, unmatched = _group_modules_by_preference(modules, mode)
+
+    include_entries = []
+    batches = []
+    log_groups = []
+
+    for mesh_shape, mods in sorted(mesh_modules.items(), key=lambda x: x[0]):
+        test_group_name = _get_test_group_for_mesh_shape(
+            mesh_shape,
+            mesh_test_groups,
+            "model_traced",
+            "wormhole-n150-sweeps",
+        )
+        _append_routed_group(
+            include_entries,
+            batches,
+            log_groups,
+            f"mesh {mesh_shape}",
+            mods,
+            test_group_name,
+            batch_size,
+            suite_name,
+            MODEL_TRACED_BATCH_POLICY.get(test_group_name),
+        )
+
+    grouped = sorted(hw_modules.items(), key=lambda x: x[0])
+    if unmatched:
+        grouped.append((None, unmatched))
+
+    for hw_group, mods in grouped:
+        hw_test_group = get_test_group_name_for_hardware_group(hw_group)
+        _append_routed_group(
+            include_entries,
+            batches,
+            log_groups,
+            f"hardware {_hw_label(hw_group)}",
+            mods,
+            hw_test_group,
+            batch_size,
+            suite_name,
+            MODEL_TRACED_BATCH_POLICY.get(hw_test_group),
+        )
+
+    _log_module_groups(f"Model traced run ({mode}-grouped)", modules, log_groups)
+    return include_entries, batches
+
+
+def _route_modules_to_lanes(module_stems, run_type, grouping_mode):
+    """Map vector-file stems to the CI lanes that own them.
+
+    Same routing the module-batched path uses (mesh suffix, else hardware suffix), just
+    applied to one batch's files instead of the whole run.
+    """
+    mesh_test_groups = get_mesh_test_group_map(run_type)
+    is_lead = run_type == "lead_models"
+    preference = "mesh" if is_lead else grouping_mode
+    mesh_modules, hw_modules, unmatched = _group_modules_by_preference(module_stems, preference)
+
+    lanes = defaultdict(list)
+    for mesh_shape, mods in mesh_modules.items():
+        # lead_models keeps strict ownership (unmapped mesh -> skipped, with a warning);
+        # model_traced falls back to the n150 lane. Preserved from the per-run functions.
+        lane = _get_test_group_for_mesh_shape(
+            mesh_shape, mesh_test_groups, run_type, None if is_lead else "wormhole-n150-sweeps"
+        )
+        if lane is not None:
+            lanes[lane].extend(mods)
+
+    for hw_group, mods in hw_modules.items():
+        lane = (
+            get_lead_models_test_group_name_for_hardware_group(hw_group)
+            if is_lead
+            else get_test_group_name_for_hardware_group(hw_group)
+        )
+        lanes[lane].extend(mods)
+
+    if unmatched:
+        lane = LEAD_MODELS_DEFAULT_TEST_GROUP if is_lead else get_test_group_name_for_hardware_group(None)
+        lanes[lane].extend(unmatched)
+
+    return lanes
+
+
+def compute_device_key_matrix(vectors_path, run_type, suite_name, grouping_mode, manifest=None):
+    """Compute a matrix whose unit of work is a DEVICE-KEY batch, not a set of modules.
+
+    A batch holds only vectors that need the same (mesh shape, dispatch axis, fabric), so
+    the job declares that device up front, opens it once, and never switches. Previously a
+    job was "3 modules", its vectors spanned several mesh shapes, and whatever shape
+    auto-detect picked was inherited by all of them -- vectors traced at another shape
+    silently fell back to ReplicateTensorToMesh instead of their traced placement, and the
+    runtime attempts to correct for that are what produced mid-job device reopens (the
+    Galaxy dispatch-wedge risk).
+
+    A batch can still span lanes (a 1x1 batch holds both wormhole and blackhole files), so
+    each batch fans out to one entry per owning lane, each carrying only that lane's
+    modules. The batch directory is shared; --module-name keeps the jobs disjoint.
+    """
+    plan = plan_batches(group_vectors(vectors_path, manifest))
+
+    # Share of each op's vectors per batch, for the timeout weighting below.
+    op_totals = defaultdict(int)
+    for batch in plan:
+        for file_name, count in batch["file_vectors"].items():
+            op_totals[strip_grouping_suffix(Path(file_name).stem)] += count
+
+    include_entries = []
+    batches = []
+    log_groups = []
+    all_stems = []
+
+    for batch in plan:
+        stems = [Path(name).stem for name in batch["vector_files"]]
+        all_stems.extend(stems)
+        mesh = batch["mesh_shape"]
+        mesh_label = f"{mesh[0]}x{mesh[1]}" if mesh else ""
+
+        for lane, mods in sorted(_route_modules_to_lanes(stems, run_type, grouping_mode).items()):
+            base = sorted(set(strip_grouping_suffix(m) for m in mods))
+            selector = ",".join(base)
+            vectors = sum(batch["file_vectors"].get(f"{m}.json", 0) for m in mods)
+            shares = defaultdict(float)
+            for module in mods:
+                token = strip_grouping_suffix(module)
+                total = op_totals.get(token, 0)
+                if total:
+                    shares[token] += batch["file_vectors"].get(f"{module}.json", 0) / total
+
+            batches.append(selector)
             include_entries.append(
                 {
-                    "test_group_name": runner_config["test_group_name"],
-                    "arch": runner_config["arch"],
-                    "runs_on": runner_config["runs_on"],
-                    "runner_label": runner_config["runner_label"],
-                    "tt_smi_cmd": runner_config["tt_smi_cmd"],
-                    "module_selector": batch,
-                    "batch_display": f"{mesh_label}:{batch}",
-                    "suite_name": runner_config["suite_name"],
+                    **_get_runner(lane),
+                    "module_selector": selector,
+                    "batch_display": f"{batch['name']}:{lane}",
+                    "suite_name": suite_name,
+                    "mesh_dims": "",
+                    # Declared, not auto-detected -- see the docstring.
+                    "mesh_shape": mesh_label,
+                    "dispatch_axis": batch["dispatch_axis"],
+                    "fabric": batch["fabric"],
+                    "vectors_dir": f"{VECTORS_BATCH_ROOT}/{batch['name']}",
+                    "_op_shares": dict(shares),
+                    # What the splitter's time model says this lane's slice of the batch costs.
+                    # Timing it by op-shares alone under-budgets big batches (see
+                    # get_weighted_batch_timeout); the batch was SIZED by this model.
+                    #
+                    # The per-vector term carries a margin because SECONDS_PER_VECTOR is the
+                    # splitter's own admittedly-optimistic figure ("comes from slice, a light
+                    # op"). Un-margined it lands exactly on the observed need -- model_traced
+                    # run 30702189957 mesh1x2_row_1d passed 432 of 562 vectors in 29.2 min,
+                    # extrapolating to ~38 min against a computed 38. A timeout is a ceiling,
+                    # not a target: a job that finishes early releases its runner, while one
+                    # killed at the wall throws away everything it had done.
+                    "_sizing_minutes": DEVICE_OPEN_MINUTES + _VECTOR_TIME_MARGIN * vectors * SECONDS_PER_VECTOR / 60.0,
                 }
             )
+            log_groups.append((f"{batch['name']} -> {lane} ({vectors} vectors)", mods))
 
-    # Log summary
-    total_base_modules = len(set(strip_mesh_suffix(m) for m in modules))
-    print(
-        f"Lead models run: {len(modules)} vector files ({total_base_modules} unique modules), "
-        f"{len(include_entries)} matrix entries",
-        file=sys.stderr,
-    )
-    for mesh_shape, mods in sorted(mesh_shape_modules.items()):
-        unique_base = len(set(strip_mesh_suffix(m) for m in mods))
-        print(f"  mesh {mesh_shape}: {len(mods)} vectors ({unique_base} unique modules)", file=sys.stderr)
-
-    return include_entries, batches, []  # No CCL batches for lead models
+    _log_module_groups(f"Device-key run ({run_type}, {len(plan)} batches)", all_stems, log_groups)
+    return include_entries, batches
 
 
 def compute_standard_matrix(modules, batch_size, suite_name):
-    """
-    Compute matrix for standard runs (nightly, comprehensive, model_traced).
-
-    Args:
-        modules: List of module names (may include mesh suffixes from JSON filenames)
-        batch_size: Number of modules per batch
-        suite_name: Suite name override (None means no override)
-
-    Returns:
-        Tuple of (include_entries, batches, ccl_batches)
-    """
-    # Strip mesh suffixes to get base module names that sweeps_runner can find
-    # The VectorExportSource will automatically load mesh-variant JSONs
-    base_modules = sorted(set(strip_mesh_suffix(m) for m in modules))
-
+    """Compute matrix for nightly/comprehensive runs."""
+    base_modules = sorted(set(strip_grouping_suffix(m) for m in modules))
     ccl_modules = [m for m in base_modules if m.startswith("ccl.")]
+    regular_modules = [m for m in base_modules if not m.startswith("ccl.")]
 
-    # Create batches for all modules using base names
-    regular_batches = chunk_modules(base_modules, batch_size)
-    batches = list(regular_batches)
-
-    # Generate CCL-only batches for dedicated runners
+    # Keep CCL modules off the default runner path; they get their own N300 lane below.
+    regular_batches = chunk_modules(regular_modules, batch_size)
     ccl_batches = chunk_modules(ccl_modules, batch_size)
 
-    include_entries = []
+    n150_config = _get_runner("wormhole-n150-sweeps")
+    include_entries = _build_entries(n150_config, regular_batches, "", suite_name)
 
-    # Standard wormhole runner entries
-    wormhole_template = {
-        "test_group_name": "wormhole-n150-sweeps",
-        "arch": "wormhole_b0",
-        "runs_on": "tt-ubuntu-2204-n150-stable",
-        "runner_label": "N150",
-        "tt_smi_cmd": "tt-smi -r",
-    }
-
-    for batch in regular_batches:
-        include_entries.append(
-            {
-                **wormhole_template,
-                "module_selector": batch,
-                "batch_display": batch,
-                "suite_name": suite_name,
-            }
-        )
-
-    # CCL-specific entries for N300 runners
     if ccl_batches:
-        n300_template = {
-            "test_group_name": "n300-llmbox-ccl",
-            "arch": "wormhole_b0",
-            "runs_on": "tt-ubuntu-2204-n300-llmbox-viommu-stable",
-            "runner_label": "n300-llmbox",
-            "tt_smi_cmd": "tt-smi -r",
-        }
-        for batch in ccl_batches:
-            include_entries.append(
-                {
-                    **n300_template,
-                    "module_selector": batch,
-                    "batch_display": f"ccl:{batch}",
-                    "suite_name": "generality_suite_fabric_1d",
-                }
-            )
+        ccl_config = _get_runner("n300-llmbox-ccl")
+        include_entries.extend(_build_entries(ccl_config, ccl_batches, "ccl", "generality_suite_fabric_1d"))
 
-    return include_entries, batches, ccl_batches
+    return include_entries, list(regular_batches), ccl_batches
+
+
+# ── Main ─────────────────────────────────────────────────────────────────────
 
 
 def main():
-    """Main entry point for matrix computation."""
-    # Read environment variables from GitHub Actions context
+    """Main entry point."""
+    parser = argparse.ArgumentParser(description="Compute sweep matrix and emit GitHub Actions outputs.")
+    parser.add_argument(
+        "--write-to-file",
+        required=False,
+        nargs="?",
+        const=DEFAULT_PRETTY_MATRIX_PATH,
+        default=None,
+        help=(
+            "Optional path to write a pretty-printed matrix JSON for human review. "
+            f"If provided without a value, defaults to {DEFAULT_PRETTY_MATRIX_PATH}."
+        ),
+    )
+    args = parser.parse_args()
+
     schedule_expr = os.environ.get("GITHUB_EVENT_SCHEDULE", "")
     event_name = os.environ.get("GITHUB_EVENT_NAME", "")
     sweep_name = os.environ.get("SWEEP_NAME", "")
     measure_device_perf = os.environ.get("MEASURE_DEVICE_PERF", "false")
     vectors_dir = os.environ.get("VECTORS_DIR", "/tmp/vectors")
+    # Kill switch back to module-count batching, for bisecting a bad run without a revert.
+    device_key_batching = os.environ.get("SWEEP_DEVICE_KEY_BATCHING", "1").strip() != "0"
 
-    # Read vector files from directory
     vectors_path = Path(vectors_dir)
     if not vectors_path.exists():
         print(f"Error: Vectors directory not found: {vectors_dir}", file=sys.stderr)
         sys.exit(1)
 
-    modules = sorted([f.stem for f in vectors_path.glob("*.json")])
-
+    manifest = _load_generation_manifest(vectors_path)
+    modules = _modules_from_manifest_or_dir(vectors_path, manifest)
     if not modules:
         print(f"Error: No vector JSON files found in {vectors_dir}", file=sys.stderr)
         sys.exit(1)
 
-    # Detect run type (mutually exclusive with explicit precedence)
-    is_comprehensive = False
-    is_model_traced = False
-    is_lead_models = False
+    # Detect run type: explicit sweep name takes precedence, then schedule cron
+    run_type = SWEEP_TYPES.get(sweep_name) or SCHEDULE_TYPES.get(schedule_expr, "nightly")
 
-    # Prefer explicit sweep selection over schedule-based detection
-    if sweep_name == "ALL SWEEPS (Lead Models)":
-        is_lead_models = True
-    elif sweep_name == "ALL SWEEPS (Model Traced)":
-        is_model_traced = True
-    elif sweep_name == "ALL SWEEPS (Comprehensive)":
-        is_comprehensive = True
-    else:
-        # Fallback to schedule-based detection when no explicit sweep is selected
-        # Schedule expressions must match ttnn-run-sweeps.yaml:
-        #   - "0 2 * * *"  -> lead models (2 AM daily)
-        #   - "0 3 * * *"  -> model traced (3 AM daily)
-        #   - "0 4 * * 3,6" -> comprehensive (4 AM Wed/Sat)
-        #   - "30 4 * * 0,1,2,4,5" -> nightly (falls through to else)
-        if schedule_expr == "0 2 * * *":
-            is_lead_models = True
-        elif schedule_expr == "0 3 * * *":
-            is_model_traced = True
-        elif schedule_expr == "0 4 * * 3,6":
-            is_comprehensive = True
-
-    # Determine batch size
-    # Use smaller batch size for comprehensive runs or when device performance measurement is enabled
-    # (must stay under 256 total batches due to GitHub Actions limit)
+    # Batch size: smaller for comprehensive or device-perf runs (must stay under 256 batches)
     device_perf_enabled = event_name == "schedule" or measure_device_perf == "true"
-    if is_comprehensive or device_perf_enabled:
-        batch_size = 3
-    else:
-        batch_size = 10
+    batch_size = 3 if (run_type == "comprehensive" or device_perf_enabled) else 10
 
-    # Compute matrix based on run type
-    if is_lead_models:
-        include_entries, batches, ccl_batches = compute_lead_models_matrix(modules, batch_size)
+    # Compute matrix
+    ccl_batches = []
+    grouping_mode = manifest.get("vector_grouping_mode")
+    if run_type in ("lead_models", "model_traced") and device_key_batching:
+        suite = LEAD_MODELS_SUITE_NAME if run_type == "lead_models" else "model_traced"
+        include_entries, batches = compute_device_key_matrix(vectors_path, run_type, suite, grouping_mode, manifest)
+    elif run_type == "lead_models":
+        include_entries, batches = compute_lead_models_matrix(modules, batch_size)
+    elif run_type == "model_traced":
+        include_entries, batches = compute_model_traced_matrix(modules, batch_size, "model_traced", grouping_mode)
     else:
-        # Determine suite name for standard runs
-        if is_model_traced:
-            suite_name = "model_traced"
-        elif is_comprehensive:
-            suite_name = None
-        else:
-            suite_name = "nightly"
-
+        suite_name = None if run_type == "comprehensive" else run_type  # "nightly" or None
         include_entries, batches, ccl_batches = compute_standard_matrix(modules, batch_size, suite_name)
 
-    # Validation
-    total_batches = len(batches)
-    if total_batches > 256:
+    # Stamp the per-batch timeout (minutes) onto every matrix entry so the workflow
+    # enforces it at the GitHub job level (timeout-minutes). Each batch's ceiling is
+    # the sum of its ops' per-op ceilings, sourced from the batch policy in
+    # tests/pipeline_reorg/ttnn_sweep_tests.yaml keyed by (target=run_type, sku).
+    # A device-key batch holds a fraction of each of its ops' vectors, so it is charged the
+    # matching fraction of each per-op ceiling (get_weighted_batch_timeout). Module-sized
+    # batches hold all of an op's vectors and keep the full per-op sum.
+    for entry in include_entries:
+        op_shares = entry.pop("_op_shares", None)
+        if op_shares is None:
+            entry.pop("_sizing_minutes", None)
+            entry["timeout"] = get_batch_timeout(run_type, entry.get("sku"), entry.get("module_selector", ""))
+        else:
+            entry["timeout"] = get_weighted_batch_timeout(
+                run_type, entry.get("sku"), op_shares, sizing_minutes=entry.pop("_sizing_minutes", 0)
+            )
+
+    # Budget enforcement: the sum of a SKU's per-batch timeouts is that SKU's total
+    # time for this run. Check it against the per-run budget declared for the
+    # (target, sku) in ttnn_sweep_tests.yaml (skus.<sku>.timeout) — the same number
+    # verify_time_budget.py enforces (statically) against .github/time_budget.yaml.
+    # Because the batch count is dynamic, the live sum can only be checked here, not
+    # statically; this enforces it per run. Untracked (target, sku) pairs
+    # (nightly/comprehensive) have no declared budget and are skipped. Exceeding the
+    # budget is fatal: the static verify_time_budget.py step caps the declared per-run
+    # numbers, and this caps the run that is actually about to be dispatched.
+    sku_totals = defaultdict(int)
+    for entry in include_entries:
+        sku_totals[entry.get("sku")] += entry["timeout"]
+    over_budget_skus = []
+    for sku, requested in sorted(sku_totals.items()):
+        budget = get_sku_total_budget(run_type, sku)
+        if budget is None:
+            continue
+        over_budget = requested > budget
+        status = "OVER BUDGET" if over_budget else "OK"
         print(
-            f"Total batch count ({total_batches}) exceeds GitHub Actions matrix limit of 256. "
-            f"Please adjust BATCH_SIZE or reduce the number of modules.",
+            f"[budget] {run_type} sku={sku}: this run needs {requested} min across "
+            f"its batches, per-run budget is {budget} min -> {status}",
+            file=sys.stderr,
+        )
+        if over_budget:
+            over_budget_skus.append(sku)
+            print(
+                f"[budget][ERROR] {run_type} / {sku}: the sum of this run's per-batch "
+                f"timeouts ({requested} min) exceeds the per-run budget of {budget} min "
+                f"declared in tests/pipeline_reorg/ttnn_sweep_tests.yaml. Raise "
+                f"skus.{sku}.timeout there (and the matching .github/time_budget.yaml "
+                f"ttnn.sweep entry) or lower the per-op ceilings.",
+                file=sys.stderr,
+            )
+    # Report every offending SKU before failing so one run surfaces all of them.
+    if over_budget_skus:
+        print(
+            f"[budget][ERROR] {run_type}: over budget on {len(over_budget_skus)} sku(s): "
+            f"{', '.join(over_budget_skus)}. Refusing to dispatch.",
             file=sys.stderr,
         )
         sys.exit(1)
 
-    total_matrix_entries = len(include_entries)
-    if total_matrix_entries > 256:
-        print(
-            f"Total matrix entry count ({total_matrix_entries}) exceeds GitHub Actions matrix "
-            f"limit of 256. Please adjust batching logic or reduce modules.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+    # Validate GitHub Actions limits
+    for label, count in [("batch", len(batches)), ("matrix entry", len(include_entries))]:
+        if count > 256:
+            print(f"Total {label} count ({count}) exceeds GitHub Actions limit of 256.", file=sys.stderr)
+            sys.exit(1)
 
-    # Output matrix JSON
+    # Output: combined matrix + per-hardware matrices (piped to $GITHUB_OUTPUT)
+    compact = {"separators": (",", ":")}
     result = {
         "module": modules,
         "batches": batches,
@@ -349,7 +651,31 @@ def main():
         "include": include_entries,
     }
 
-    print(json.dumps(result))
+    if args.write_to_file:
+        output_path = Path(args.write_to_file)
+        try:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(output_path, "w", encoding="utf-8") as file:
+                json.dump(result, file, indent=2)
+                file.write("\n")
+        except OSError as error:
+            print(f"Failed to write matrix JSON to {output_path}: {error}", file=sys.stderr)
+            sys.exit(1)
+
+    print("matrix=" + json.dumps(result, **compact))
+
+    active_hw = []
+    for hw_key, group_names in HW_GROUP_MATRIX_KEYS.items():
+        hw_entries = [e for e in include_entries if e.get("test_group_name", "") in group_names]
+        print(f"{hw_key}-matrix=" + json.dumps({"include": hw_entries}, **compact))
+        if hw_entries:
+            active_hw.append(hw_key)
+
+    # Hardware groups that actually have at least one batch this run. The dispatcher
+    # fans out one reusable-workflow leg per active group (strategy.matrix over this
+    # list), so empty groups are never scheduled and no leg is ever handed an empty
+    # matrix — replacing the seven hand-maintained per-hardware caller jobs.
+    print("active-hw=" + json.dumps(active_hw, **compact))
 
 
 if __name__ == "__main__":

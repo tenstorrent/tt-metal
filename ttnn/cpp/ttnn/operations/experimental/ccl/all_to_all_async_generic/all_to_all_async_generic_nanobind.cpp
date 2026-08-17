@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,7 +10,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/experimental/ccl/all_to_all_async_generic/all_to_all_async_generic.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/distributed/types.hpp"
@@ -18,54 +18,9 @@
 
 namespace ttnn::operations::experimental::ccl {
 
-namespace {
-
-template <typename ccl_operation_t>
-void bind_all_to_all_async_generic_op(nb::module_& mod, const ccl_operation_t& operation, const char* doc) {
-    bind_registered_operation(
-        mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const ccl_operation_t& self,
-               const ttnn::Tensor& input_tensor,
-               const int32_t in_dim,
-               const int32_t out_dim,
-               const std::optional<ttnn::Tensor>& persistent_output_buffer,
-               const uint32_t num_links,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const ttnn::ccl::Topology topology,
-               std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-               std::optional<uint32_t> cluster_axis) -> ttnn::Tensor {
-                return self(
-                    input_tensor,
-                    persistent_output_buffer,
-                    in_dim,
-                    out_dim,
-                    num_links,
-                    memory_config,
-                    topology,
-                    subdevice_id,
-                    cluster_axis);
-            },
-            nb::arg("input_tensor"),
-            nb::arg("in_dim"),
-            nb::arg("out_dim"),
-            nb::kw_only(),
-            nb::arg("persistent_output_buffer") = nb::none(),
-            nb::arg("num_links") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("topology") = nb::none(),
-            nb::arg("subdevice_id") = nb::none(),
-            nb::arg("cluster_axis") = nb::none()});
-}
-
-}  // namespace
-
 void bind_all_to_all_async_generic(nb::module_& mod) {
-    bind_all_to_all_async_generic_op(
+    ttnn::bind_function<"all_to_all_async_generic", "ttnn.experimental.">(
         mod,
-        ttnn::experimental::all_to_all_async_generic,
         R"doc(
         Performs an asynchronous all-to-all collective communication operation across multiple devices.
 
@@ -84,7 +39,9 @@ void bind_all_to_all_async_generic(nb::module_& mod) {
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for buffers.
             topology (ttnn.Topology, optional): Network topology to use. Defaults to ttnn.Topology.Ring.
             subdevice_id (SubDeviceId, optional): Target specific subdevice for the operation.
-            cluster_axis (int, optional): The axis along which to cluster the communication.
+            cluster_axis (int, optional): The axis along which to cluster the communication. Required on a
+                FABRIC_2D mesh, where packets are injected through the routing-table-selected compass
+                connection along this axis (a logical row or column on LoudBox / Galaxy).
 
         Returns:
             ttnn.Tensor: Output tensor containing redistributed data.
@@ -99,7 +56,18 @@ void bind_all_to_all_async_generic(nb::module_& mod) {
             ...     out_dim=3,
             ...     cluster_axis=1
             ... )
-        )doc");
+        )doc",
+        &ttnn::experimental::all_to_all_async_generic,
+        nb::arg("input_tensor"),
+        nb::arg("in_dim"),
+        nb::arg("out_dim"),
+        nb::kw_only(),
+        nb::arg("persistent_output_buffer") = nb::none(),
+        nb::arg("num_links") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("topology") = nb::none(),
+        nb::arg("subdevice_id") = nb::none(),
+        nb::arg("cluster_axis") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::ccl

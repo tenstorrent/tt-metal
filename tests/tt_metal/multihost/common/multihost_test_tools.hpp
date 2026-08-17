@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -22,7 +22,7 @@ using tt::tt_metal::distributed::multihost::is_supported_dtype_v;
 //----------------------------------------------------------------------
 
 template <typename T>
-inline tt::stl::Span<std::byte> as_bytes_single(T& obj) noexcept {
+inline ttsl::Span<std::byte> as_bytes_single(T& obj) noexcept {
     return {reinterpret_cast<std::byte*>(std::addressof(obj)), sizeof(T)};
 }
 

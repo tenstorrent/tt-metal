@@ -245,7 +245,7 @@ Dropout needs a custom hash because:
 - Multiple program factories (needs `program_factory.index()`)
 
 ```cpp
-tt::stl::hash::hash_t DropoutDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t DropoutDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     const auto& input_shape = input_tensor.padded_shape();
@@ -306,7 +306,7 @@ Test that programs with different structure create separate cache entries:
 
 ```python
 def test_operation_cache_hash(device, ...):
-    # Test that program cache does not re-use the same program for different inputs
+    # Test that program cache does not reuse the same program for different inputs
     grid_size = device.compute_with_storage_grid_size()
     dummy = []
     for i in range(2):

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -7,6 +7,7 @@ import pytest
 from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
+from tests.tests_common.cache_entries_counter import CacheEntriesCounter
 
 
 def create_global_semaphores(mesh_device, cores, initial_value):
@@ -39,6 +40,7 @@ def create_ring_attention_submesh(mesh_device, rp_axis, rp_factor, up_factor):
     submesh_shape[rp_axis] = rp_factor
     submesh_shape[1 - rp_axis] = up_factor
     submesh_device = mesh_device.create_submesh(ttnn.MeshShape(submesh_shape[0], submesh_shape[1]))
+    submesh_device.cache_entries_counter = CacheEntriesCounter(submesh_device)
     return submesh_device
 
 
@@ -133,20 +135,21 @@ def run_ring_attention_all_gather_impl(
     tt_all_gather_out_tensor_list = []
 
     def run_op(i):
-        tt_all_gather_out_tensors = ttnn.experimental.ring_attention_all_gather_async(
-            ag_input_tensor_mesh_list[i],
-            persistent_output_buffer=persistent_output_buffers[i],
-            dim=sequence_index,
-            multi_device_global_semaphore=ccl_semaphore_handles[i],
-            cluster_axis=rp_axis,
-            mesh_device=mesh_device,
-            num_links=num_links,
-            memory_config=mem_config_ag,
-            topology=all_gather_topology,
-            subdevice_id=worker_sub_device_id,
-        )
+        with mesh_device.cache_entries_counter.measure():
+            tt_all_gather_out_tensors = ttnn.experimental.ring_attention_all_gather_async(
+                ag_input_tensor_mesh_list[i],
+                persistent_output_buffer=persistent_output_buffers[i],
+                dim=sequence_index,
+                multi_device_global_semaphore=ccl_semaphore_handles[i],
+                cluster_axis=rp_axis,
+                mesh_device=mesh_device,
+                num_links=num_links,
+                memory_config=mem_config_ag,
+                topology=all_gather_topology,
+                subdevice_id=worker_sub_device_id,
+            )
 
-        return tt_all_gather_out_tensors
+            return tt_all_gather_out_tensors
 
     if enable_trace:
         # Compile the op
@@ -347,7 +350,7 @@ def test_ring_attention_all_gather(
 @pytest.mark.parametrize(
     "enable_trace, num_iters",
     [
-        (False, 1),
+        (False, 3),
     ],
     ids=["check"],
 )
@@ -380,36 +383,28 @@ def test_ring_attention_all_gather_program_cache(
 ):
     submesh_device = create_ring_attention_submesh(mesh_device, rp_axis, rp_factor, up_factor)
 
-    dummy_tensors = []
-    for i in range(3):
-        dummy_tensors.append(
-            ttnn.from_torch(
-                torch.rand(ag_output_shape),
-                device=submesh_device,
-                layout=layout,
-                dtype=ag_input_dtype,
-                mesh_mapper=ttnn.ShardTensor2dMesh(
-                    submesh_device, mesh_shape=tuple(submesh_device.shape), dims=[None, None]
-                ),
-            )
-        )
-        run_ring_attention_all_gather_impl(
-            submesh_device,
-            ag_output_shape,
-            ag_num_inputs,
-            rp_axis,
-            rp_factor,
-            up_factor,
-            num_links,
-            ag_input_dtype,
-            layout,
-            mem_config_input,
-            mem_config_ag,
-            all_gather_topology=all_gather_topology,
-            enable_trace=enable_trace,
-            num_iters=num_iters,
-            pcc_threshold=pcc_threshold,
-        )
-        ttnn.synchronize_device(submesh_device)
+    # Run the op num_iters (>1) times within a SINGLE run_ring_attention_all_gather_impl invocation. The op
+    # must be exercised under one sub-device-manager lifetime: run_ring_attention_all_gather_impl loads a
+    # sub-device manager on entry, which clears the program cache (mesh_device.cpp clear_program_cache on
+    # manager switch), so looping the whole helper would clear the cache between calls and defeat the reuse
+    # check. The impl's internal loop runs the op num_iters times with distinct per-iter persistent buffers
+    # and global semaphores, so cache reuse is still validated against address variation.
+    run_ring_attention_all_gather_impl(
+        submesh_device,
+        ag_output_shape,
+        ag_num_inputs,
+        rp_axis,
+        rp_factor,
+        up_factor,
+        num_links,
+        ag_input_dtype,
+        layout,
+        mem_config_input,
+        mem_config_ag,
+        all_gather_topology=all_gather_topology,
+        enable_trace=enable_trace,
+        num_iters=num_iters,
+        pcc_threshold=pcc_threshold,
+    )
 
-    assert submesh_device.num_program_cache_entries() == 1
+    assert submesh_device.cache_entries_counter.total == 1

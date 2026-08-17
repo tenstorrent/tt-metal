@@ -1,17 +1,24 @@
 training_config:
-  project_name: "tt_train_nano_gpt" # not really nanogpt, but want to use the same wandb project name for now
+  project_name: "tt_train_tinyllama_bpe"
   seed: 5489
-  model_save_interval: 1
-  batch_size: 1
-  num_epochs: 1
-  max_steps: 5000
-  learning_rate: 0.0003
-  weight_decay: 0.01
-  use_moreh_adamw: true
-  use_kahan_summation: false
+  model_save_interval: 500
+  batch_size: 5
+  max_steps: 1000
+  scheduler_type: warmup_linear
   use_clip_grad_norm: false
   clip_grad_norm_max_norm: 1.0
-  model_config: "configs/model_configs/tinyllama.yaml"
+  data_path: "data/tokenized_shakespeare_tinyllama.yaml"
+  model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/tinyllama_bpe.yaml"
+  optimizer:
+    type: AdamW
+    lr: 3.0e-4
+    beta1: 0.9
+    beta2: 0.95
+    epsilon: 1.0e-8
+    weight_decay: 0.1
+    amsgrad: false
+    stochastic_rounding: true
+    weight_decay_skip_1d: true
 
 device_config:
   enable_ddp: false

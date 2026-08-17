@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -51,7 +51,7 @@ void CloneOperation::validate_on_program_cache_miss(
 CloneOperation::spec_return_value_t CloneOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         input.logical_shape(),
         tt::tt_metal::TensorLayout::fromPaddedShape(
             operation_attributes.dtype,
@@ -90,7 +90,7 @@ ttnn::Tensor clone(
         OperationType::operation_attributes_t{
             dtype.value_or(input.dtype()),
             memory_config.value_or(input.memory_config()),
-            init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4),
+            init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4),
         },
         OperationType::tensor_args_t{input});
 }

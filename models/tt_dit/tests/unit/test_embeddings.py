@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -6,28 +6,31 @@ import math
 
 import pytest
 import torch
+from diffusers import FlowMatchEulerDiscreteScheduler
 from diffusers.models.embeddings import (
     CombinedTimestepGuidanceTextProjEmbeddings as TorchCombinedTimestepGuidanceTextProjEmbeddings,
 )
-from diffusers.models.transformers.transformer_mochi import MochiTransformer3DModel
-from diffusers.models.transformers.transformer_sd3 import SD3Transformer2DModel as TorchSD3Transformer2DModel
+from diffusers.models.embeddings import Timesteps as TorchTimesteps
+from diffusers.models.transformers.transformer_wan import WanTimeTextImageEmbedding as TorchWanTimeTextImageEmbedding
+from loguru import logger
 
 import ttnn
 
 from ...layers.embeddings import (
     CombinedTimestepGuidanceTextProjEmbeddings,
     Embedding,
-    MochiPatchEmbed,
-    PatchEmbed,
-    PixartAlphaTextProjection,
+    PixArtAlphaTextProjection,
     SD35CombinedTimestepTextProjEmbeddings,
     TimestepEmbedding,
+    Timesteps,
     WanPatchEmbed,
+    WanTimeTextImageEmbedding,
 )
+from ...parallel.manager import CCLManager
 from ...utils import tensor
 from ...utils.check import assert_quality
 from ...utils.substate import substate
-from ...utils.tensor import bf16_tensor
+from ...utils.tensor import bf16_tensor, float32_tensor, unflatten
 
 
 class TorchCombinedTimestepTextProjEmbeddings(torch.nn.Module):
@@ -172,6 +175,58 @@ class TorchWanPatchEmbed(torch.nn.Module):
     indirect=True,
 )
 @pytest.mark.parametrize(
+    ("num_channels, num_inference_steps"),
+    [
+        (256, 40),  # SD3.5 timestep embedding. Add wan
+    ],
+)
+# @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+def test_timestep_encoding(
+    mesh_device: ttnn.MeshDevice,
+    num_channels: int,
+    num_inference_steps: int,
+) -> None:
+    torch_dtype = torch.bfloat16
+
+    # Create Torch model
+    torch_model = TorchTimesteps(num_channels=num_channels, flip_sin_to_cos=True, downscale_freq_shift=0, scale=1).to(
+        torch_dtype
+    )
+    torch_model.eval()
+
+    # Create TT model
+    tt_model = Timesteps(num_channels=num_channels, mesh_device=mesh_device, dtype=ttnn.float32)
+    tt_model_bf16 = Timesteps(num_channels=num_channels, mesh_device=mesh_device, dtype=ttnn.bfloat16)
+
+    # Create input tensors
+    torch.manual_seed(0)
+    scheduler = FlowMatchEulerDiscreteScheduler()
+    scheduler.set_timesteps(num_inference_steps)
+    input_tensor = scheduler.timesteps  # Assume batched based on num_inference_steps to test all.
+
+    # Run torch model
+    torch_output = torch_model(input_tensor)
+
+    # Convert to TT tensor
+    tt_input = float32_tensor(input_tensor.unsqueeze(1).unsqueeze(1).unsqueeze(1), device=mesh_device)
+
+    # Run TT model
+    tt_output = tt_model(tt_input)
+    tt_output_bf16 = tt_model_bf16(ttnn.typecast(tt_input, dtype=ttnn.bfloat16))
+
+    # Convert back to torch and compare
+    tt_output_torch = ttnn.to_torch(tt_output).squeeze(1).squeeze(1)  # remove wh dimensions
+    tt_output_torch_bf16 = ttnn.to_torch(tt_output_bf16).squeeze(1).squeeze(1)  # remove wh dimensions
+    assert_quality(torch_output, tt_output_torch, pcc=0.99, relative_rmse=0.02)  # FP32. Expected RMSE ~1%
+    assert_quality(torch_output, tt_output_torch_bf16, pcc=0.95, relative_rmse=0.35)  # BF16. Expected RMSE ~30%
+
+
+@pytest.mark.parametrize(
+    "mesh_device",
+    [(1, 1)],
+    indirect=True,
+)
+@pytest.mark.parametrize(
     ("B, in_channels, time_embed_dim"),
     [
         (1, 256, 2432),  # SD3.5 timestep embedding
@@ -179,7 +234,7 @@ class TorchWanPatchEmbed(torch.nn.Module):
         (1, 128, 1024),  # Smaller test case
     ],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+# @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_timestep_embedding(
     mesh_device: ttnn.MeshDevice,
     B: int,
@@ -232,7 +287,7 @@ def test_timestep_embedding(
         (1, 512, 1024),  # Smaller test case
     ],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+# @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_pixart_alpha_text_projection(
     mesh_device: ttnn.MeshDevice,
     B: int,
@@ -246,7 +301,7 @@ def test_pixart_alpha_text_projection(
     torch_model.eval()
 
     # Create TT model
-    tt_model = PixartAlphaTextProjection(
+    tt_model = PixArtAlphaTextProjection(
         in_features=in_features,
         hidden_size=hidden_size,
         mesh_device=mesh_device,
@@ -285,7 +340,7 @@ def test_pixart_alpha_text_projection(
         (1, 1024, 768),  # Smaller test case
     ],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+# @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_combined_timestep_text_proj_embeddings(
     mesh_device: ttnn.MeshDevice,
     B: int,
@@ -337,7 +392,7 @@ def test_combined_timestep_text_proj_embeddings(
         (10, 3072, 768),  # Flux.1 [schnell]
     ],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+# @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_combined_timestep_guidance_text_proj_embeddings(
     mesh_device: ttnn.MeshDevice,
     batch_size: int,
@@ -378,188 +433,6 @@ def test_combined_timestep_guidance_text_proj_embeddings(
 
 
 @pytest.mark.parametrize(
-    "mesh_device, tp_mesh_axis, sp_mesh_axis",
-    [
-        [(1, 1), 0, 1],
-        [(1, 2), 0, 1],
-        [(1, 2), 1, 0],
-        [(2, 1), 0, 1],
-        [(2, 1), 1, 0],
-        [(2, 2), 0, 1],
-        [(2, 2), 1, 0],
-    ],
-    indirect=["mesh_device"],
-)
-@pytest.mark.parametrize(
-    ("B, H, W, patch_size, in_channels, embed_dim, pos_embed_max_size"),
-    [
-        (1, 128, 128, 2, 16, 2432, 192),  # SD3.5 large config
-    ],
-)
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-def test_patch_embed_sd35(
-    mesh_device: ttnn.MeshDevice,
-    tp_mesh_axis: int,
-    sp_mesh_axis: int,
-    B: int,
-    H: int,
-    W: int,
-    patch_size: int,
-    in_channels: int,
-    embed_dim: int,
-    pos_embed_max_size: int,
-) -> None:
-    torch_dtype = torch.bfloat16
-
-    # Create Torch model
-    parent_torch_model = TorchSD3Transformer2DModel.from_pretrained(
-        f"stabilityai/stable-diffusion-3.5-large", subfolder="transformer", torch_dtype=torch_dtype
-    )
-    torch_model = parent_torch_model.pos_embed
-    torch_model.eval()
-
-    assert patch_size == torch_model.patch_size
-    assert in_channels == torch_model.proj.in_channels
-    assert embed_dim == torch_model.proj.out_channels
-    assert pos_embed_max_size == torch_model.pos_embed_max_size
-
-    # Create TT model
-    tt_model = PatchEmbed(
-        height=H,
-        width=W,
-        patch_size=patch_size,
-        in_channels=in_channels,
-        embed_dim=embed_dim,
-        pos_embed_max_size=pos_embed_max_size,
-        mesh_device=mesh_device,
-        tp_mesh_axis=tp_mesh_axis,
-        sp_mesh_axis=sp_mesh_axis,
-    )
-    tt_model.load_torch_state_dict(torch_model.state_dict())
-
-    # Create input tensors - NHWC format for TT model
-    torch.manual_seed(0)
-    input_tensor_nchw = torch.randn((B, in_channels, H, W), dtype=torch_dtype)
-    input_tensor_nhwc = input_tensor_nchw.permute(0, 2, 3, 1).clone()
-
-    # Run torch model (expects NHWC input)
-    torch_output = torch_model(input_tensor_nchw)
-
-    # Convert to TT tensor
-    tt_input = bf16_tensor(input_tensor_nhwc, device=mesh_device, mesh_axis=sp_mesh_axis, shard_dim=1)
-
-    # Run TT model
-    tt_output = tt_model(tt_input)
-
-    # Convert back to torch and compare
-    # Handle sharded output
-    shard_dims = [None, None]
-    shard_dims[sp_mesh_axis] = 2  # Sequence dimension sharding
-    shard_dims[tp_mesh_axis] = 3
-    tt_output_torch = ttnn.to_torch(
-        tt_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=shard_dims, mesh_shape=tuple(mesh_device.shape)),
-    )
-    assert_quality(
-        torch_output, tt_output_torch, pcc=0.999_995, relative_rmse=0.05
-    )  # Lower PCC due to conv2d approximation
-
-
-@pytest.mark.parametrize(
-    "mesh_device, tp_mesh_axis, sp_mesh_axis",
-    [
-        [(1, 1), 0, 1],
-        [(1, 2), 0, 1],
-        [(1, 2), 1, 0],
-        [(2, 1), 0, 1],
-        [(2, 1), 1, 0],
-        [(2, 2), 0, 1],
-        [(2, 2), 1, 0],
-    ],
-    indirect=["mesh_device"],
-)
-@pytest.mark.parametrize(
-    ("B, T, H, W, patch_size, in_channels, embed_dim"),
-    [
-        (1, 28, 60, 106, 2, 12, 3072),  # Mochi config
-    ],
-)
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-def test_patch_embed_mochi(
-    mesh_device: ttnn.MeshDevice,
-    tp_mesh_axis: int,
-    sp_mesh_axis: int,
-    B: int,
-    T: int,
-    H: int,
-    W: int,
-    patch_size: int,
-    in_channels: int,
-    embed_dim: int,
-) -> None:
-    torch_dtype = torch.bfloat16
-
-    # Create Torch model
-    parent_torch_model = MochiTransformer3DModel.from_pretrained(
-        f"genmo/mochi-1-preview", subfolder="transformer", torch_dtype=torch_dtype
-    )
-    torch_model = parent_torch_model.patch_embed
-    torch_model.eval()
-
-    assert patch_size == torch_model.patch_size
-    assert in_channels == torch_model.proj.in_channels
-    assert embed_dim == torch_model.proj.out_channels
-
-    # Create TT model
-    tt_model = MochiPatchEmbed(
-        patch_size=patch_size,
-        in_channels=in_channels,
-        embed_dim=embed_dim,
-        mesh_device=mesh_device,
-    )
-    tt_model.load_torch_state_dict(torch_model.state_dict())
-
-    # Create input tensors - NHWC format for TT model
-    torch.manual_seed(0)
-    input_tensor_ncthw = torch.randn((B, in_channels, T, H, W), dtype=torch_dtype)
-    input_tensor_ntchw = input_tensor_ncthw.permute(0, 2, 1, 3, 4).flatten(0, 1)  # (B*T, in_channels, H, W)
-
-    input_tensor_patched = input_tensor_ncthw.clone().reshape(
-        B, in_channels, T, H // patch_size, patch_size, W // patch_size, patch_size
-    )
-    input_tensor_patched = input_tensor_patched.permute(
-        0, 2, 3, 5, 4, 6, 1
-    )  # (B, T, H//patch_size, W//patch_size, patch_size, patch_size, in_channels)
-    input_tensor_patched = input_tensor_patched.reshape(
-        1, B, T * H // patch_size * W // patch_size, patch_size * patch_size * in_channels
-    )
-
-    # Run torch model (expects NHWC input)
-    torch_output_tsd = torch_model(input_tensor_ntchw)
-    torch_output_flattened = torch_output_tsd.reshape(B, T * H // patch_size * W // patch_size, embed_dim)
-
-    # Convert to TT tensor
-    tt_input = bf16_tensor(input_tensor_patched, device=mesh_device, mesh_axis=sp_mesh_axis, shard_dim=2)
-
-    # Run TT model
-    tt_output = tt_model(tt_input)
-
-    # Convert back to torch and compare
-    # Handle sharded output
-    shard_dims = [None, None]
-    shard_dims[sp_mesh_axis] = 2  # Sequence dimension sharding
-    shard_dims[tp_mesh_axis] = 0
-    tt_output_torch = ttnn.to_torch(
-        tt_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=shard_dims, mesh_shape=tuple(mesh_device.shape)),
-    )
-    for i in range(tt_output_torch.shape[0]):
-        assert_quality(
-            torch_output_flattened, tt_output_torch[i], pcc=0.999_994, relative_rmse=0.05
-        )  # Lower PCC due to conv2d approximation
-
-
-@pytest.mark.parametrize(
     "mesh_device",
     [(1, 1)],
     indirect=True,
@@ -572,7 +445,7 @@ def test_patch_embed_mochi(
         (1, 16, 32, 32, (2, 2, 2), 12, 3072),  # Smaller test case
     ],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+# @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_wan_patch_embed(
     mesh_device: ttnn.MeshDevice,
     B: int,
@@ -644,6 +517,114 @@ def test_wan_patch_embed(
     )  # Lower PCC due to conv3d approximation
 
 
+@pytest.mark.parametrize(
+    ("B, seq_len, embed_dim"),
+    [
+        (1, 512, 4096),  # Wan2.2
+    ],
+)
+@pytest.mark.parametrize(
+    "mesh_device, num_links",
+    [[(2, 4), 1], [(4, 8), 4], [(4, 8), 2]],
+    ids=["t3k", "wh_glx", "bh_glx"],
+    indirect=["mesh_device"],
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    indirect=True,
+)
+def test_wan_time_text_image_embedding(
+    mesh_device: ttnn.MeshDevice,
+    B: int,
+    seq_len: int,
+    embed_dim: int,
+    num_links: int,
+) -> None:
+    torch_dtype = torch.float32
+    torch.manual_seed(12334)
+    # Create Torch model
+    inner_dim = 5120
+    time_freq_dim = 256
+    time_proj_dim = inner_dim * 6
+    text_embed_dim = 4096
+    torch_model = TorchWanTimeTextImageEmbedding(
+        dim=inner_dim,
+        time_freq_dim=time_freq_dim,
+        time_proj_dim=time_proj_dim,
+        text_embed_dim=text_embed_dim,
+    ).to(torch_dtype)
+    torch_model.eval()
+
+    mesh_axis = 1
+    ccl_manager = CCLManager(
+        mesh_device=mesh_device,
+        num_links=num_links,
+        topology=ttnn.Topology.Linear,
+    )
+
+    # Create TT model
+    tt_model = WanTimeTextImageEmbedding(
+        dim=inner_dim,
+        time_freq_dim=time_freq_dim,
+        time_proj_dim=time_proj_dim,
+        text_embed_dim=text_embed_dim,
+        mesh_device=mesh_device,
+        tp_mesh_axis=mesh_axis,
+        ccl_manager=ccl_manager,
+    )
+
+    tt_model.load_torch_state_dict(torch_model.state_dict())
+
+    # Create input tensors
+    timestep_tensor = torch.randn((B,), dtype=torch_dtype) * 1000
+    encoder_hidden_states_tensor = torch.randn((B, seq_len, embed_dim), dtype=torch_dtype)
+
+    # Run torch model
+    temb_torch, timestep_proj_torch, encoder_hidden_states_torch, _ = torch_model(
+        timestep_tensor, encoder_hidden_states_tensor
+    )
+
+    # Convert to TT tensors
+    timestep_4d = timestep_tensor.unsqueeze(0).unsqueeze(0).unsqueeze(0)
+    encoder_hidden_states_4d = encoder_hidden_states_tensor.unsqueeze(0)
+    tt_timestep = float32_tensor(timestep_4d, device=mesh_device)
+    tt_encoder_hidden_states = bf16_tensor(encoder_hidden_states_4d, device=mesh_device)
+
+    # Run TT model
+    temb, timestep_proj, encoder_hidden_states = tt_model(tt_timestep, tt_encoder_hidden_states)
+
+    # prepare data for comparison
+    timestep_proj_torch = timestep_proj_torch.unflatten(1, (6, -1))
+    timestep_proj = unflatten(timestep_proj, -1, (6, -1))
+    temb = ccl_manager.all_gather(temb, dim=-1, mesh_axis=mesh_axis, use_hyperparams=True)
+    timestep_proj = ccl_manager.all_gather(timestep_proj, dim=-1, mesh_axis=mesh_axis, use_hyperparams=True)
+
+    # Convert back to torch and compare
+    tt_temb_torch = ttnn.to_torch(ttnn.get_device_tensors(temb)[0], dtype=torch_dtype).squeeze(0).squeeze(0)
+    tt_timestep_proj_torch = (
+        ttnn.to_torch(ttnn.get_device_tensors(timestep_proj)[0], dtype=torch_dtype).squeeze(0).squeeze(0)
+    )
+    tt_encoder_hidden_states_torch = ttnn.to_torch(
+        ttnn.get_device_tensors(encoder_hidden_states)[0], dtype=torch_dtype
+    ).squeeze(0)
+
+    logger.info(
+        f"torch shape: {timestep_proj_torch.shape}, mean: {torch.mean(timestep_proj_torch)}, std: {torch.std(timestep_proj_torch)}, min: {torch.min(timestep_proj_torch)}, max: {torch.max(timestep_proj_torch)}"
+    )
+    logger.info(
+        f"tt shape: {tt_timestep_proj_torch.shape}, mean: {torch.mean(tt_timestep_proj_torch)}, std: {torch.std(tt_timestep_proj_torch)}, min: {torch.min(tt_timestep_proj_torch)}, max: {torch.max(tt_timestep_proj_torch)}"
+    )
+
+    assert_quality(temb_torch, tt_temb_torch, pcc=0.9999, relative_rmse=0.005)  # expected RMSE =0.3%
+    assert_quality(timestep_proj_torch, tt_timestep_proj_torch, pcc=0.9999, relative_rmse=0.005)  # expected RMSE =0.4%
+
+    # Investigate slightly lower PCC and higher RMSE when compared to using Wantransformer.context_embedder
+    assert_quality(
+        encoder_hidden_states_torch, tt_encoder_hidden_states_torch, pcc=0.9999, relative_rmse=0.01
+    )  # expected RMSE =0.8%
+
+
 @pytest.mark.parametrize("mesh_device", [(1, 1), (1, 2)], indirect=["mesh_device"])
 @pytest.mark.parametrize(
     ("dictionary_size", "embedding_size", "batch_size", "sequence_length"),
@@ -651,7 +632,7 @@ def test_wan_patch_embed(
         (152064, 3584, 2, 512),  # Qwen-2.5-VL
     ],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+# @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_embedding(
     mesh_device: ttnn.MeshDevice, dictionary_size: int, embedding_size: int, batch_size: int, sequence_length: int
 ) -> None:

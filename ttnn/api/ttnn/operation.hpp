@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -18,16 +18,16 @@
 
 namespace tt::tt_metal::operation {
 
-using Hash = tt::stl::hash::hash_t;
+using Hash = ttsl::hash::hash_t;
 
 template <typename OperationType, typename... Types>
 static Hash hash_operation(const Types&... objects) {
-    return stl::hash::hash_objects_with_default_seed(tt::stl::hash::type_hash<OperationType>, objects...);
+    return ttsl::hash::hash_objects_with_default_seed(ttsl::hash::type_hash<OperationType>, objects...);
 }
 
-using Tensors = std::vector<Tensor>;
-using OptionalTensors = std::vector<std::optional<Tensor>>;
-using OptionalConstTensors = std::vector<std::optional<const Tensor>>;
+using Tensors = std::vector<ttnn::Tensor>;
+using OptionalTensors = std::vector<std::optional<ttnn::Tensor>>;
+using OptionalConstTensors = std::vector<std::optional<const ttnn::Tensor>>;
 
 template <typename... Args>
 struct last_type;
@@ -165,10 +165,10 @@ public:
 struct ExternalOperation {
     using OutputTensors = Tensors;
     const std::string function_name_;
-    const tt::stl::reflection::Attributes attributes_;
+    const ttsl::reflection::Attributes attributes_;
 
     std::string get_type_name() const { return this->function_name_; }
-    tt::stl::reflection::Attributes attributes() const { return this->attributes_; }
+    ttsl::reflection::Attributes attributes() const { return this->attributes_; }
 };
 
 }  // namespace tt::tt_metal::operation

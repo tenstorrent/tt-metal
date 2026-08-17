@@ -1,9 +1,10 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
 #include "kernel_op_api.hpp"
+#include "kernel_utils.hpp"
 
 #if defined(COMPILE_FOR_BRISC)
 #include "api/dataflow/dataflow_api.h"
@@ -20,8 +21,9 @@
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/eltwise_unary/rsqrt.h"
 #include "api/compute/experimental/mul_reduce_scalar.h"
-#include "../kernel_includes/tt_metal/include/compute_kernel_api/add_rsqrt.h"
-#include "../kernel_includes/tt_metal/include/compute_kernel_api/rmsnorm.h"
+#include "api/compute/experimental/pack_block.h"
+#include "api/compute/experimental/add_rsqrt.h"
+#include "api/compute/experimental/rmsnorm.h"
 #endif
 
 namespace deepseek_b1_ops {
@@ -55,11 +57,22 @@ struct RMSNorm {
     struct WriterCTArgs {};
 
     // Compute CTArgs: fp32_acc, num_tiles, rsqrt_fast_approx (template params)
-    template <bool FP32Acc, uint32_t NumTiles, bool RsqrtFastApprox>
+    template <
+        bool FP32Acc,
+        uint32_t NumTiles,
+        bool RsqrtFastApprox,
+        uint32_t InputCb,
+        uint32_t GammaCb,
+        uint32_t OutputCb,
+        bool DoGamma = true>
     struct ComputeCTArgs {
         static constexpr bool fp32_acc = FP32Acc;
         static constexpr uint32_t num_tiles = NumTiles;
         static constexpr bool rsqrt_fast_approx = RsqrtFastApprox;
+        static constexpr uint32_t input_cb = InputCb;
+        static constexpr uint32_t gamma_cb = GammaCb;
+        static constexpr uint32_t output_cb = OutputCb;
+        static constexpr bool do_gamma = DoGamma;
     };
 
     // ========================================================================
@@ -70,11 +83,9 @@ struct RMSNorm {
     // Writer args (BRISC): none (BRISC is no-op)
     struct WriterArgs {};
     struct ComputeArgs {
-        uint32_t input_cb;
-        uint32_t gamma_cb;
-        uint32_t output_cb;
         uint32_t epsilon;
         float scalar;
+        uint32_t gamma_address_override = 0;  // byte address; overrides gamma read ptr if > 0
     };
 
     using RTArgs = unified_kernels::SelectByRISCV<ReaderArgs, WriterArgs, ComputeArgs>;
@@ -97,8 +108,14 @@ struct RMSNorm {
             // ================================================================
             // TRISC (Compute)
             // ================================================================
-            // Init block done only once
-            cb_wait_front(args.gamma_cb, CTArgs::num_tiles);  // we don't pop, only wait once and reuse
+            // Init block done only once; we don't pop, only wait once and reuse
+            if constexpr (CTArgs::do_gamma) {
+                if (args.gamma_address_override > 0) {
+                    UNPACK(({ unified_kernels::override_cb_rd_ptr(CTArgs::gamma_cb, args.gamma_address_override); }));
+                } else {
+                    cb_wait_front(CTArgs::gamma_cb, CTArgs::num_tiles);
+                }
+            }
 
             compute_rmsnorm(args);
 #endif
@@ -107,15 +124,17 @@ struct RMSNorm {
 #if defined(COMPILE_FOR_TRISC)
         void compute_rmsnorm(const ComputeArgs& args) {
             constexpr uint32_t num_tiles = CTArgs::num_tiles;
-            reconfig_data_format<false, true>(args.input_cb, args.input_cb);
-            pack_reconfig_data_format<true>(args.output_cb);
+            reconfig_full_operand(CTArgs::input_cb, CTArgs::input_cb);
+            pack_reconfig_data_format<true>(CTArgs::output_cb);
+            pack_block_contiguous_init(CTArgs::output_cb);
             {
                 // Square the input
-                mul_reduce_scalar_init(args.input_cb, args.input_cb);
+                mul_reduce_scalar_init(CTArgs::input_cb, CTArgs::input_cb);
                 add_rsqrt_tile_init();
-                cb_wait_front(args.input_cb, num_tiles);
+                cb_wait_front(CTArgs::input_cb, num_tiles);
                 tile_regs_acquire();
-                mul_reduce_scalar_tile<PoolType::SUM>(args.input_cb, args.input_cb, num_tiles, args.scalar);
+                mul_reduce_scalar_tile<PoolType::SUM>(
+                    CTArgs::input_cb, CTArgs::input_cb, CTArgs::output_cb, num_tiles, args.scalar);
                 mul_reduce_scalar_uninit();
             }
             {
@@ -123,25 +142,27 @@ struct RMSNorm {
             }
             {
                 // Multiply input by 1/RMS
-                rmsnorm_mul_bcast_scalar_reuse_tiles_init<num_tiles>(args.input_cb);
-                rmsnorm_mul_bcast_scalar_reuse_tiles<num_tiles, true>(args.input_cb, 0, 0, 0);
-                if constexpr (pop_input) {
-                    cb_pop_front(args.input_cb, num_tiles);
-                }
+                rmsnorm_mul_bcast_scalar_reuse_tiles_init<num_tiles>(CTArgs::input_cb);
+                rmsnorm_mul_bcast_scalar_reuse_tiles<num_tiles, true>(CTArgs::input_cb, 0, 0, 0);
             }
             {
                 // Multiply by the weight
-                cb_reserve_back(args.output_cb, num_tiles);
-                binary_dest_reuse_tiles_init<ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(args.gamma_cb);
-                for (uint32_t i = 0; i < num_tiles; i++) {
-                    binary_dest_reuse_tiles<ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(args.gamma_cb, i, i);
+                cb_reserve_back(CTArgs::output_cb, num_tiles);
+                if constexpr (CTArgs::do_gamma) {
+                    mul_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(CTArgs::gamma_cb);
+                    for (uint32_t i = 0; i < num_tiles; i++) {
+                        mul_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
+                            CTArgs::gamma_cb, i, i);
+                    }
                 }
-
                 tile_regs_commit();
                 tile_regs_wait();
-                pack_tile_block(0, args.output_cb, num_tiles);
-                cb_push_back(args.output_cb, num_tiles);
+                pack_block_contiguous(0, CTArgs::output_cb, num_tiles);
+                cb_push_back(CTArgs::output_cb, num_tiles);
                 tile_regs_release();
+            }
+            if constexpr (pop_input) {
+                cb_pop_front(CTArgs::input_cb, num_tiles);
             }
         }
 #endif

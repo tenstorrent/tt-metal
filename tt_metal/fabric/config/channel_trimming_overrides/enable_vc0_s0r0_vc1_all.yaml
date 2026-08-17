@@ -1,0 +1,7 @@
+channel_trimming_overrides:
+  vc0:
+    force_enable_sender_channels: [0]
+    force_enable_receiver_channels: [0]
+  vc1:
+    force_enable_all_sender_channels: true
+    force_enable_all_receiver_channels: true

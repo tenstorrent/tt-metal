@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -32,7 +32,7 @@ struct PagedFusedUpdateCacheInputs {
     std::optional<Tensor> page_table;
 };
 
-using PagedFusedUpdateCacheResultSpec = std::vector<ttnn::TensorSpec>;
+using PagedFusedUpdateCacheResultSpec = std::vector<tt::tt_metal::TensorSpec>;
 using PagedFusedUpdateCacheResult = std::tuple<Tensor, Tensor>;
 
 }  // namespace ttnn::experimental::prim

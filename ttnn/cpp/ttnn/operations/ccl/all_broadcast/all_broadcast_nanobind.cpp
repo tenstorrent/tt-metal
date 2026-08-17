@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,7 +10,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "all_broadcast.hpp"
 #include <tt-metalium/sub_device_types.hpp>
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
@@ -31,46 +31,40 @@ void bind_all_broadcast(nb::module_& mod) {
             memory_config (ttnn.MemoryConfig, optional): Output memory configuration. Defaults to input tensor memory config.
             num_links (int, optional): The number of links to use for the all-broadcast operation. Defaults to `1`.
             topology (ttnn.Topology, optional): Fabric topology. Defaults to `ttnn.Topology.Linear`.
+            use_l1_small_for_semaphores (bool, optional): If True, allocate internal global semaphores in L1_SMALL instead of L1 to reduce L1 fragmentation. Defaults to `False`.
 
         Returns:
             List[ttnn.Tensor]: A list of tensors, one from each device, where each tensor has the same shape as the input.
 
-        Example:
+        Supported dtypes and layouts:
 
-            >>> mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 8))
-            >>> input_tensor = ttnn.from_torch(
-                            torch.rand([1, 1, 32, 256]),
-                            dtype=ttnn.bfloat16,
-                            device=mesh_device,
-                            layout=ttnn.TILE_LAYOUT,
-                            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device))
-            >>> output = ttnn.all_broadcast(input_tensor)
-            >>> # output is a list of 8 tensors, each with shape [1, 1, 32, 256]
+            .. list-table::
+                :header-rows: 1
+
+                * - Dtypes
+                  - Layouts
+                * - BFLOAT16, BFLOAT8_B, FLOAT32
+                  - TILE, ROW_MAJOR
+
+            All-broadcast is a data-movement collective and does not restrict the input dtype; each output tensor preserves the input dtype. When ``cluster_axis`` is not specified the tensor must have a line (1D) topology.
+
+        Memory Support:
+            - Interleaved: DRAM and L1
+            - Sharded: WIDTH_SHARDED, HEIGHT_SHARDED, BLOCK_SHARDED (each may reside in DRAM or L1; the op places no buffer-type restriction)
     )doc";
 
-    using OperationType = decltype(ttnn::all_broadcast);
-    ttnn::bind_registered_operation(
+    ttnn::bind_function<"all_broadcast">(
         mod,
-        ttnn::all_broadcast,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const std::optional<uint32_t> cluster_axis,
-               const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<uint32_t> num_links,
-               const std::optional<ttnn::ccl::Topology> topology) {
-                return self(input_tensor, cluster_axis, subdevice_id, memory_config, num_links, topology);
-            },
-            nb::arg("input_tensor").noconvert(),
-            nb::kw_only(),
-            nb::arg("cluster_axis") = nb::none(),
-            nb::arg("subdevice_id") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("num_links") = 1,
-            nb::arg("topology") = nb::cast(ttnn::ccl::Topology::Linear),
-        });
+        &ttnn::all_broadcast,
+        nb::arg("input_tensor").noconvert(),
+        nb::kw_only(),
+        nb::arg("cluster_axis") = nb::none(),
+        nb::arg("subdevice_id") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("num_links") = 1,
+        nb::arg("topology") = nb::cast(ttnn::ccl::Topology::Linear),
+        nb::arg("use_l1_small_for_semaphores") = false);
 }
 
 }  // namespace ttnn::operations::ccl

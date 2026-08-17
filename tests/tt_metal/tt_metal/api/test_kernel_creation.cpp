@@ -1,8 +1,10 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/core_coord.hpp>
+#include "context/metal_env_accessor.hpp"
+#include "distributed/mesh_device_impl.hpp"
 #include "llrt/core_descriptor.hpp"
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -14,17 +16,17 @@
 
 #include "base_types.hpp"
 #include "compile_program_with_kernel_path_env_var_fixture.hpp"
-#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/device.hpp>
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include "mesh_dispatch_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include "gtest/gtest.h"
-#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 namespace tt::tt_metal {
 
@@ -56,8 +58,6 @@ TEST_F(MeshDispatchFixture, DISABLED_TensixIdleEthCreateKernelsOnDispatchCores) 
         GTEST_SKIP() << "This test is only supported in fast dispatch mode";
     }
     for (const auto& mesh_device : this->devices_) {
-        auto* device = mesh_device->get_devices()[0];
-
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -67,8 +67,10 @@ TEST_F(MeshDispatchFixture, DISABLED_TensixIdleEthCreateKernelsOnDispatchCores) 
 
         const auto& dispatch_core_config = get_dispatch_core_config();
         CoreType dispatch_core_type = get_core_type_from_config(dispatch_core_config);
-        std::vector<CoreCoord> dispatch_cores =
-            tt::get_logical_dispatch_cores(device->id(), device->num_hw_cqs(), dispatch_core_config);
+        MetalEnvImpl& env_impl =
+            MetalEnvAccessor(MetalContext::instance(mesh_device->impl().get_context_id()).get_env()).impl();
+        std::vector<CoreCoord> dispatch_cores = tt::get_logical_dispatch_cores(
+            env_impl, mesh_device->get_device_ids()[0], mesh_device->num_hw_cqs(), dispatch_core_config);
         std::set<CoreRange> dispatch_core_ranges;
         for (CoreCoord core : dispatch_cores) {
             dispatch_core_ranges.emplace(core);
@@ -85,7 +87,7 @@ TEST_F(MeshDispatchFixture, DISABLED_TensixIdleEthCreateKernelsOnDispatchCores) 
         } else if (dispatch_core_type == CoreType::ETH) {
             EXPECT_ANY_THROW(tt_metal::CreateKernel(
                                  program_,
-                                 "tests/tt_metal/tt_metal/test_kernels/misc/erisc_print.cpp",
+                                 "tests/tt_metal/tt_metal/test_kernels/device_print/erisc_print.cpp",
                                  CoreRangeSet(dispatch_core_range_set),
                                  EthernetConfig{.eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_0}););
         }
@@ -95,7 +97,7 @@ TEST_F(MeshDispatchFixture, DISABLED_TensixIdleEthCreateKernelsOnDispatchCores) 
 TEST_F(CompileProgramWithKernelPathEnvVarFixture, TensixKernelUnderMetalRootDir) {
     const std::string& kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_4.cpp";
     create_kernel(kernel_file);
-    detail::CompileProgram(this->device_, this->program_);
+    slow_dispatch::CompileProgram(this->device(), this->program_);
 }
 
 TEST_F(CompileProgramWithKernelPathEnvVarFixture, TensixKernelUnderKernelRootDir) {
@@ -103,7 +105,7 @@ TEST_F(CompileProgramWithKernelPathEnvVarFixture, TensixKernelUnderKernelRootDir
     const std::string& new_kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/new_kernel.cpp";
     this->setup_kernel_dir(orig_kernel_file, new_kernel_file);
     this->create_kernel(new_kernel_file);
-    detail::CompileProgram(this->device_, this->program_);
+    slow_dispatch::CompileProgram(this->device(), this->program_);
     this->cleanup_kernel_dir();
 }
 
@@ -111,13 +113,43 @@ TEST_F(CompileProgramWithKernelPathEnvVarFixture, TensixKernelUnderMetalRootDirA
     const std::string& kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_4.cpp";
     this->setup_kernel_dir(kernel_file, kernel_file);
     this->create_kernel(kernel_file);
-    detail::CompileProgram(this->device_, this->program_);
+    slow_dispatch::CompileProgram(this->device(), this->program_);
     this->cleanup_kernel_dir();
 }
 
 TEST_F(CompileProgramWithKernelPathEnvVarFixture, TensixNonExistentKernel) {
     const std::string& kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/non_existent_kernel.cpp";
     EXPECT_THROW(this->create_kernel(kernel_file), std::exception);
+}
+
+TEST_F(MeshDispatchFixture, TensixKernelMetaSourceCodeShowsInlineSource) {
+    const std::string kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy.cpp";
+    const std::string inline_source = "void kernel_main() {}";
+
+    auto program = CreateProgram();
+
+    auto file_kernel_handle = CreateKernel(
+        program,
+        kernel_file,
+        CoreCoord(0, 0),
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+
+    auto inline_kernel_handle = CreateKernelFromString(
+        program,
+        inline_source,
+        CoreCoord(0, 0),
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+
+    auto file_kernel = program.impl().get_kernel(file_kernel_handle);
+    auto inline_kernel = program.impl().get_kernel(inline_kernel_handle);
+
+    auto file_meta = file_kernel->meta(nullptr);
+    auto inline_meta = inline_kernel->meta(nullptr);
+
+    EXPECT_EQ(inline_meta.source, "Inline source")
+        << "SOURCE_CODE kernels should report 'Inline source' in metadata, not the raw source code";
+
+    EXPECT_EQ(file_meta.source, kernel_file) << "FILE_PATH kernels should report their file path in metadata";
 }
 
 // Unit test for Kernel::compute_hash() - tests that different unpack_to_dest_mode produces different hashes

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -21,7 +21,7 @@ class SubDeviceImpl;
 
 class SubDevice {
 public:
-    explicit SubDevice(tt::stl::Span<const CoreRangeSet> cores);
+    explicit SubDevice(ttsl::Span<const CoreRangeSet> cores);
     // Internal constructor (internal use only)
     SubDevice(SubDeviceImpl&& impl);
 

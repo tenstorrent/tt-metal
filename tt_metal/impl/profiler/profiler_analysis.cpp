@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,14 +9,21 @@
 #include <sstream>
 #include <tracy/Tracy.hpp>
 #include <tt-logger/tt-logger.hpp>
+#include <nlohmann/json.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/profiler.hpp>
+#include <tt_metal.hpp>
+#include "tt_metal_profiler.hpp"
 #include <fstream>
 
+#include "context/metal_env_accessor.hpp"
 #include "core_coord.hpp"
+#include "common/filesystem_utils.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/device/device_manager.hpp"
 #include "profiler_analysis.hpp"
 #include "profiler_state_manager.hpp"
+#include <impl/dispatch/data_collection.hpp>
 #include <impl/dispatch/dispatch_core_manager.hpp>
 #include <llrt/tt_cluster.hpp>
 
@@ -50,10 +57,57 @@ NLOHMANN_JSON_SERIALIZE_ENUM(
      {RiscType::TRISC_1, "TRISC_1"},
      {RiscType::TRISC_2, "TRISC_2"},
      {RiscType::TENSIX_RISC_AGG, "TENSIX_RISC_AGG"},
-     {RiscType::ERISC, "ERISC"}});
+     {RiscType::ERISC, "ERISC"},
+     {RiscType::NONE, "NONE"},
+     {RiscType::QUASAR_DM0, "QUASAR_DM0"},
+     {RiscType::QUASAR_DM1, "QUASAR_DM1"},
+     {RiscType::QUASAR_DM2, "QUASAR_DM2"},
+     {RiscType::QUASAR_DM3, "QUASAR_DM3"},
+     {RiscType::QUASAR_DM4, "QUASAR_DM4"},
+     {RiscType::QUASAR_DM5, "QUASAR_DM5"},
+     {RiscType::QUASAR_DM6, "QUASAR_DM6"},
+     {RiscType::QUASAR_DM7, "QUASAR_DM7"},
+     {RiscType::QUASAR_NEO0_TRISC0, "QUASAR_NEO0_TRISC0"},
+     {RiscType::QUASAR_NEO0_TRISC1, "QUASAR_NEO0_TRISC1"},
+     {RiscType::QUASAR_NEO0_TRISC2, "QUASAR_NEO0_TRISC2"},
+     {RiscType::QUASAR_NEO0_TRISC3, "QUASAR_NEO0_TRISC3"},
+     {RiscType::QUASAR_NEO1_TRISC0, "QUASAR_NEO1_TRISC0"},
+     {RiscType::QUASAR_NEO1_TRISC1, "QUASAR_NEO1_TRISC1"},
+     {RiscType::QUASAR_NEO1_TRISC2, "QUASAR_NEO1_TRISC2"},
+     {RiscType::QUASAR_NEO1_TRISC3, "QUASAR_NEO1_TRISC3"},
+     {RiscType::QUASAR_NEO2_TRISC0, "QUASAR_NEO2_TRISC0"},
+     {RiscType::QUASAR_NEO2_TRISC1, "QUASAR_NEO2_TRISC1"},
+     {RiscType::QUASAR_NEO2_TRISC2, "QUASAR_NEO2_TRISC2"},
+     {RiscType::QUASAR_NEO2_TRISC3, "QUASAR_NEO2_TRISC3"},
+     {RiscType::QUASAR_NEO3_TRISC0, "QUASAR_NEO3_TRISC0"},
+     {RiscType::QUASAR_NEO3_TRISC1, "QUASAR_NEO3_TRISC1"},
+     {RiscType::QUASAR_NEO3_TRISC2, "QUASAR_NEO3_TRISC2"},
+     {RiscType::QUASAR_NEO3_TRISC3, "QUASAR_NEO3_TRISC3"}});
 }  // namespace tracy
 
 namespace tt::tt_metal {
+
+namespace {
+
+uint32_t get_available_worker_core_count_for_program(
+    ChipId chip_id,
+    uint64_t encoded_runtime_host_id,
+    MetalEnv& env,
+    uint8_t num_hw_cqs,
+    const DispatchCoreConfig& dispatch_core_config) {
+    const auto decoded = detail::DecodePerDeviceProgramID(encoded_runtime_host_id);
+    const std::optional<tt::ProgramSubDeviceInfo> sub_device_info =
+        tt::GetProgramSubDevice(chip_id, decoded.base_program_id);
+    if (sub_device_info.has_value() && sub_device_info->num_available_worker_cores > 0) {
+        return sub_device_info->num_available_worker_cores;
+    }
+
+    const CoreCoord compute_grid_size =
+        tt::get_compute_grid_size(MetalEnvAccessor(env).impl(), chip_id, num_hw_cqs, dispatch_core_config);
+    return compute_grid_size.x * compute_grid_size.y;
+}
+
+}  // namespace
 
 namespace detail {
 
@@ -228,6 +282,26 @@ bool matches_start_end_config(const tracy::TTDeviceMarker& marker, const Analysi
                marker.marker_name_keyword_flags, start_end_config.marker_name_keywords);
 }
 
+// Fixed per-processor-type clock (MHz) for Quasar. NEO TRISCs run at 1.4 GHz; DMs read the NEO TRISC
+// wall clock for now, so DM and TRISC timestamps share one timeline and can be compared directly.
+// TODO: update the DM clock frequency once the DMs read their own clock counter and the DM and TRISC
+// clock domains are synchronized.
+// Returns nullopt for non-Quasar RISCs (WH/BH), which fall back to the runtime device aiclk.
+std::optional<int> quasar_processor_clock_mhz(tracy::RiscType risc) {
+    using tracy::RiscType;
+    static_assert(
+        static_cast<int>(RiscType::QUASAR_DM7) - static_cast<int>(RiscType::QUASAR_DM0) == 7 &&
+            static_cast<int>(RiscType::QUASAR_NEO3_TRISC3) - static_cast<int>(RiscType::QUASAR_NEO0_TRISC0) == 15,
+        "quasar_processor_clock_mhz relies on contiguous QUASAR_DM*/QUASAR_NEO*_TRISC* enum blocks");
+    if (risc >= RiscType::QUASAR_DM0 && risc <= RiscType::QUASAR_DM7) {
+        return 1400;  // Quasar DM: 1.4 GHz (reads the NEO TRISC wall clock for now)
+    }
+    if (risc >= RiscType::QUASAR_NEO0_TRISC0 && risc <= RiscType::QUASAR_NEO3_TRISC3) {
+        return 1400;  // Neo TRISC: 1.4 GHz
+    }
+    return std::nullopt;
+}
+
 AnalysisResults parse_duration(
     const AnalysisConfig& analysis_config,
     const std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& markers) {
@@ -239,6 +313,7 @@ AnalysisResults parse_duration(
     std::unordered_map<experimental::ProgramExecutionUID, experimental::ProgramSingleAnalysisResult>&
         results_per_program_execution_uid = analysis_results.results_per_program_execution_uid;
     ChipId device_id = -1;
+    tracy::RiscType zone_start_risc = tracy::RiscType::NONE;
 
     for (uint32_t i = 0; i < markers.size(); ++i) {
         const auto& marker_ref = markers[i];
@@ -252,6 +327,9 @@ AnalysisResults parse_duration(
         if (matches_start_end_config(marker, analysis_config.start_config)) {
             if (program_results == PROGRAM_INVALID_SINGLE_ANALYSIS_RESULT) {
                 program_results.start_timestamp = marker.timestamp;
+                if (zone_start_risc == tracy::RiscType::NONE) {
+                    zone_start_risc = marker.risc;
+                }
             }
         }
         if (matches_start_end_config(marker, analysis_config.end_config)) {
@@ -269,8 +347,10 @@ AnalysisResults parse_duration(
     for (auto& [_, result] : results_per_program_execution_uid) {
         if (result != PROGRAM_INVALID_SINGLE_ANALYSIS_RESULT) {
             TT_ASSERT(result.start_timestamp <= result.end_timestamp);
+            // Quasar DM/TRISC use hardcoded clock frequencies for now
             const int chip_frequency_mhz =
-                tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(device_id);
+                quasar_processor_clock_mhz(zone_start_risc)
+                    .value_or(tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(device_id));
             result.duration = static_cast<uint64_t>(
                 std::round((result.end_timestamp - result.start_timestamp) * 1000.0 / chip_frequency_mhz));
         }
@@ -288,6 +368,9 @@ getMetaDataForPrograms(const std::vector<std::reference_wrapper<const tracy::TTD
     std::map<experimental::ProgramExecutionUID, ProgramsPerfResults::SingleProgramPerfResults::ProgramMetaData>
         program_execution_uid_to_meta_data;
 
+    // Use the default MetalEnv
+    MetalEnv& env = MetalContext::instance().get_env();
+
     std::unordered_map<experimental::ProgramExecutionUID, std::unordered_set<CoreCoord>>
         fw_cores_per_program_execution_uid;
     for (const auto& marker_ref : markers) {
@@ -303,9 +386,8 @@ getMetaDataForPrograms(const std::vector<std::reference_wrapper<const tracy::TTD
                 tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().get_num_hw_cqs();
             const DispatchCoreConfig& dispatch_core_config =
                 tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
-            const CoreCoord compute_grid_size =
-                tt::get_compute_grid_size(marker.chip_id, num_hw_cqs, dispatch_core_config);
-            const uint32_t num_available_worker_cores = compute_grid_size.x * compute_grid_size.y;
+            const uint32_t num_available_worker_cores = get_available_worker_core_count_for_program(
+                static_cast<ChipId>(marker.chip_id), marker.runtime_host_id, env, num_hw_cqs, dispatch_core_config);
 
             program_execution_uid_to_meta_data[program_execution_uid] = {
                 .device_id = static_cast<ChipId>(marker.chip_id),
@@ -574,11 +656,11 @@ void writeProgramsPerfResultsToCSV(
         }
     }
 
-    TT_ASSERT(std::filesystem::exists(report_path.parent_path()));
+    TT_ASSERT(tt::filesystem::safe_exists(report_path.parent_path()).value_or(false));
     TT_ASSERT(report_path.extension() == ".csv");
 
     std::ofstream log_file_ofs;
-    if (std::filesystem::exists(report_path)) {
+    if (tt::filesystem::safe_exists(report_path).value_or(false)) {
         log_file_ofs.open(report_path, std::ios_base::app);
     } else {
         log_file_ofs.open(report_path);
@@ -694,8 +776,11 @@ void writeProgramsPerfResultsToCSV(
         }
     };
 
-    for (const auto& [device_id, samples] : kernel_durations_ns_by_device) {
-        print_summary(device_id, samples);
+    const auto& dev_mgr = tt::tt_metal::MetalContext::instance().device_manager();
+    if (dev_mgr && dev_mgr->get_all_active_device_ids().size() == 1) {
+        for (const auto& [device_id, samples] : kernel_durations_ns_by_device) {
+            print_summary(device_id, samples);
+        }
     }
 }
 
@@ -762,11 +847,12 @@ void from_json(const nlohmann::json& j, AnalysisConfig& config) {
 }
 
 std::vector<AnalysisConfig> loadAnalysisConfigsFromJSON(const std::filesystem::path& json_path) {
-    TT_ASSERT(std::filesystem::exists(json_path));
+    TT_ASSERT(tt::filesystem::safe_exists(json_path).value_or(false));
     std::ifstream json_ifs(json_path);
     const nlohmann::json configs_json = nlohmann::json::parse(json_ifs);
 
     std::vector<AnalysisConfig> configs;
+    configs.reserve(configs_json.size());
     for (const auto& config_json : configs_json) {
         configs.push_back(config_json.get<AnalysisConfig>());
     }

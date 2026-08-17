@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -55,7 +55,7 @@ MatmulReduceScatterAsyncDeviceOperation::compute_output_specs(
     std::vector<Tensor> input_tensors = {tensor_args.input, tensor_args.weight};
 
     // Matmul shape
-    ttnn::TensorSpec matmul_output_specs = ttnn::prim::MatmulDeviceOperation::compute_output_specs(
+    tt::tt_metal::TensorSpec matmul_output_specs = ttnn::prim::MatmulDeviceOperation::compute_output_specs(
         args.matmul_struct, {.input_tensors = input_tensors})[0];
 
     // Reduce Scatter shape - use the device operation's compute_output_specs
@@ -79,7 +79,7 @@ MatmulReduceScatterAsyncDeviceOperation::create_output_tensors(
     return {.mm = matmul_output_tensor, .reduce_scatter = tensor_args.persistent_output};
 }
 
-tt::stl::hash::hash_t MatmulReduceScatterAsyncDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t MatmulReduceScatterAsyncDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "MatmulReduceScatterAsyncDeviceOperation::compute_program_hash is called");
 

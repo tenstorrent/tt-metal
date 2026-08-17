@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -24,7 +24,7 @@ MatmulProgramConfig create_simple_matmul_program_config(
     bool transpose_b,
     uint32_t bias_single_tile_size,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
-    const CoreCoord& compute_with_storage_grid_size,
+    const tt::tt_metal::CoreCoord& compute_with_storage_grid_size,
     const tt::tt_metal::MemoryConfig& mem_config,
     tt::tt_metal::DataType output_dtype);
 

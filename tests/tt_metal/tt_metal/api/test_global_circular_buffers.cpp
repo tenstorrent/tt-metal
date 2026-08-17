@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -16,12 +16,12 @@
 
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include "mesh_dispatch_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 // Access to internal API: ProgramImpl::finalize_offsets
 #include "impl/program/program_impl.hpp"
@@ -85,7 +85,7 @@ TEST_F(MeshDispatchFixture, TensixProgramGlobalCircularBuffersAPI) {
 
         tt::tt_metal::CreateKernel(
             program,
-            "tt_metal/kernels/dataflow/blank.cpp",
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
             all_cores,
             tt::tt_metal::DataMovementConfig{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = tt::tt_metal::NOC::RISCV_0_default});
@@ -101,7 +101,7 @@ TEST_F(MeshDispatchFixture, TensixProgramGlobalCircularBuffersAPI) {
             std::exception);
         auto remote_cb =
             tt::tt_metal::experimental::CreateCircularBuffer(program, receiver_cores, global_cb_config, global_cb);
-        tt::tt_metal::detail::CompileProgram(mesh_device.get(), program);
+        slow_dispatch::CompileProgram(*mesh_device, program);
         program.impl().finalize_offsets(mesh_device.get());
         tt::tt_metal::experimental::UpdateDynamicCircularBufferAddress(program, remote_cb, global_cb);
         EXPECT_THROW(UpdateDynamicCircularBufferAddress(program, remote_cb, dummy_global_cb), std::exception);
@@ -114,7 +114,7 @@ TEST_F(MeshDispatchFixture, TensixProgramGlobalCircularBuffersAPI) {
 
         tt::tt_metal::CreateKernel(
             program,
-            "tt_metal/kernels/dataflow/blank.cpp",
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
             all_cores,
             tt::tt_metal::DataMovementConfig{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = tt::tt_metal::NOC::RISCV_0_default});

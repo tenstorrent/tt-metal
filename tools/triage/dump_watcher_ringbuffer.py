@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
 """
 Usage:
-    dump_watcher_ringbuffer
+    dump_watcher_ringbuffer [--skip-watcher-enabled-check]
+
+Options:
+    --skip-watcher-enabled-check  Dump the ring buffer without checking whether watcher was enabled in the run.
 
 Description:
     Dump watcher ring buffer contents for all cores, skipping cores with empty buffers. This ringbuffer can be written
     into by using the WATCHER_RING_BUFFER_PUSH macro in a kernel.
+    Skipped by default when watcher was not enabled; use --skip-watcher-enabled-check to run anyway.
 
 Owner:
     jbaumanTT
@@ -17,9 +21,10 @@ Owner:
 
 from dataclasses import dataclass
 from triage import ScriptConfig, triage_field, run_script
-from run_checks import run as get_run_checks
+from run_checks import run as get_run_checks, RunChecks
 from elfs_cache import run as get_elfs_cache, ElfsCache
 from dispatcher_data import run as get_dispatcher_data, DispatcherData
+from configuration_provider import run as get_configuration
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.context import Context
 from ttexalens.umd_device import TimeoutDeviceRegisterError
@@ -53,8 +58,9 @@ def read_ring_buffer(
 
     fw_elf = elf_cache[fw_path]
     mailboxes = dispatcher_data.get_cached_core_data(location, risc_name).mailboxes
+    assert mailboxes is not None, "mailboxes could not be read for this core"
 
-    current_ptr = mailboxes.watcher.debug_ring_buf.current_ptr
+    current_ptr = int(mailboxes.watcher.debug_ring_buf.current_ptr)
     if current_ptr == 65535:
         # Nothing pushed
         return None
@@ -89,26 +95,35 @@ def read_ring_buffer_for_block(
     location: OnChipCoordinate,
     dispatcher_data: DispatcherData,
     elf_cache: ElfsCache,
+    run_checks: RunChecks,
 ):
     """Select appropriate RISC per block type and read the ring buffer."""
     try:
-        block_type = location._device.get_block_type(location)
+        block_type = run_checks.get_block_type(location)
     except Exception:
         return None
 
     risc_name = location.noc_block.risc_names[0]
+
+    if not dispatcher_data.risc_enabled(risc_name):
+        return None
 
     return read_ring_buffer(location, block_type, risc_name, dispatcher_data, elf_cache)
 
 
 def run(args, context: Context):
     """Entry point for triage framework."""
+    if not args["--skip-watcher-enabled-check"]:
+        config = get_configuration(args, context)
+        if not config.get_bool("watcher_enabled"):
+            return None
+
     run_checks = get_run_checks(args, context)
     dispatcher_data = get_dispatcher_data(args, context)
     elfs_cache = get_elfs_cache(args, context)
-    BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth", "active_eth"]
+    BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth", "active_eth", "dram"]
     return run_checks.run_per_block_check(
-        lambda location: read_ring_buffer_for_block(location, dispatcher_data, elfs_cache),
+        lambda location: read_ring_buffer_for_block(location, dispatcher_data, elfs_cache, run_checks),
         block_filter=BLOCK_TYPES_TO_CHECK,
     )
 

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #include "impl/context/metal_context.hpp"
+#include "llrt/tlb_config.hpp"  // kL2cpuLimBase / kL2cpuLimTlbEnd
 
 namespace tt {
 
@@ -21,9 +22,19 @@ namespace tt {
     ((((a) >= HAL_MEM_ETH_BASE) && ((a) + (l) <= HAL_MEM_ETH_BASE + HAL_MEM_ETH_SIZE)) || \
      (DEBUG_VALID_REG_ADDR(a) && (l) == 4))
 
-static bool coord_found_p(const std::vector<tt::umd::CoreCoord>& coords, CoreCoord core) {
+#define DEBUG_VALID_DRAM_L1_ADDR(a, l)                                                                                \
+    ((tt::tt_metal::MetalContext::instance().hal().has_programmable_core_type(                                        \
+          tt::tt_metal::HalProgrammableCoreType::DRAM) &&                                                             \
+      (((a) >= tt::tt_metal::MetalContext::instance().hal().get_l1_noc_offset(                                        \
+                   tt::tt_metal::HalProgrammableCoreType::DRAM)) &&                                                   \
+       ((a) + (l) <=                                                                                                  \
+        tt::tt_metal::MetalContext::instance().hal().get_l1_noc_offset(tt::tt_metal::HalProgrammableCoreType::DRAM) + \
+            HAL_MEM_DRAM_L1_SIZE))) ||                                                                                \
+     (DEBUG_VALID_REG_ADDR(a) && (l) == 4))
+
+static bool coord_found_p(const std::vector<tt::umd::CoreCoord>& coords, tt::tt_metal::CoreCoord core) {
     for (const tt::umd::CoreCoord& core_coord : coords) {
-        CoreCoord item = {core_coord.x, core_coord.y};
+        tt::tt_metal::CoreCoord item = {core_coord.x, core_coord.y};
         if (item == core) {
             return true;
         }
@@ -31,9 +42,9 @@ static bool coord_found_p(const std::vector<tt::umd::CoreCoord>& coords, CoreCoo
     return false;
 }
 
-static bool coord_found_p(const std::unordered_set<CoreCoord>& coords, CoreCoord core) { return coords.contains(core); }
+static bool coord_found_p(const std::unordered_set<tt::tt_metal::CoreCoord>& coords, tt::tt_metal::CoreCoord core) { return coords.contains(core); }
 
-static std::string noc_address(CoreCoord core, uint64_t a, uint32_t l) {
+static std::string noc_address(tt::tt_metal::CoreCoord core, uint64_t a, uint32_t l) {
     std::stringstream ss;
     ss << "noc{" << core.str() << ", 0x" << std::setfill('0') << std::setw(8) << std::hex << a << ", " << std::dec << l
        << "}";
@@ -60,35 +71,70 @@ static void print_stack_trace() {
 static void watcher_sanitize_host_noc(
     const char* what,
     const metal_SocDescriptor& soc_d,
-    const std::unordered_set<CoreCoord>& virtual_worker_cores,
-    const std::unordered_set<CoreCoord>& virtual_eth_cores,
-    const std::unordered_set<CoreCoord>& virtual_pcie_cores,
-    const std::unordered_set<CoreCoord>& virtual_dram_cores,
-    const CoreCoord& core,
+    const std::unordered_set<tt::tt_metal::CoreCoord>& virtual_worker_cores,
+    const std::unordered_set<tt::tt_metal::CoreCoord>& virtual_eth_cores,
+    const std::unordered_set<tt::tt_metal::CoreCoord>& virtual_pcie_cores,
+    const std::unordered_set<tt::tt_metal::CoreCoord>& virtual_dram_cores,
+    const std::unordered_set<tt::tt_metal::CoreCoord>& virtual_dram_hw_cores,
+    const std::unordered_set<tt::tt_metal::CoreCoord>& virtual_dispatch_cores,
+    const tt::tt_metal::CoreCoord& core,
     uint64_t addr,
     uint32_t lbytes) {
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const bool dram_l1_available = hal.has_programmable_core_type(tt::tt_metal::HalProgrammableCoreType::DRAM);
+    const uint64_t dram_l1_noc_offset =
+        dram_l1_available ? hal.get_l1_noc_offset(tt::tt_metal::HalProgrammableCoreType::DRAM) : 0;
+
     if (coord_found_p(soc_d.get_cores(CoreType::PCIE, CoordSystem::NOC0), core) ||
         coord_found_p(virtual_pcie_cores, core)) {
         TT_THROW("Host watcher: bad {} NOC coord {}", what, core.str());
     } else if (
         coord_found_p(soc_d.get_cores(CoreType::DRAM, CoordSystem::NOC0), core) ||
         coord_found_p(virtual_dram_cores, core)) {
-        uint64_t dram_addr_base = 0;
-        uint64_t dram_addr_size = soc_d.dram_core_size;
-        uint64_t dram_addr_end = dram_addr_size - dram_addr_base;
-        if (!DEBUG_VALID_DRAM_ADDR(addr, lbytes, dram_addr_base, dram_addr_end)) {
+        if (dram_l1_available && coord_found_p(virtual_dram_hw_cores, core) && addr >= dram_l1_noc_offset) {
+            if (!DEBUG_VALID_DRAM_L1_ADDR(addr, lbytes)) {
+                print_stack_trace();
+                TT_THROW("Host watcher: bad {} dram L1 address {}", what, noc_address(core, addr, lbytes));
+            }
+        } else {
+            uint64_t dram_addr_base = 0;
+            uint64_t dram_addr_size = soc_d.dram_core_size;
+            uint64_t dram_addr_end = dram_addr_size - dram_addr_base;
+            if (!DEBUG_VALID_DRAM_ADDR(addr, lbytes, dram_addr_base, dram_addr_end)) {
+                print_stack_trace();
+                TT_THROW("Host watcher: bad {} dram address {}", what, noc_address(core, addr, lbytes));
+            }
+        }
+    } else if (dram_l1_available && coord_found_p(virtual_dram_hw_cores, core)) {
+        if (!DEBUG_VALID_DRAM_L1_ADDR(addr, lbytes)) {
             print_stack_trace();
-            TT_THROW("Host watcher: bad {} dram address {}", what, noc_address(core, addr, lbytes));
+            TT_THROW("Host watcher: bad {} dram hw core address {}", what, noc_address(core, addr, lbytes));
         }
     } else if (coord_found_p(virtual_eth_cores, core)) {
         if (!DEBUG_VALID_ETH_ADDR(addr, lbytes)) {
             print_stack_trace();
             TT_THROW("Host watcher: bad {} eth address {}", what, noc_address(core, addr, lbytes));
         }
+    } else if (
+        coord_found_p(soc_d.get_cores(CoreType::DISPATCH, CoordSystem::NOC0), core) ||
+        coord_found_p(virtual_dispatch_cores, core)) {
+        if (!DEBUG_VALID_WORKER_ADDR(addr, lbytes)) {
+            print_stack_trace();
+            TT_THROW("Host watcher: bad {} dispatch address {}", what, noc_address(core, addr, lbytes));
+        }
     } else if (coord_found_p(virtual_worker_cores, core)) {
         if (!DEBUG_VALID_WORKER_ADDR(addr, lbytes)) {
             print_stack_trace();
             TT_THROW("Host watcher: bad {} worker address {}", what, noc_address(core, addr, lbytes));
+        }
+    } else if (coord_found_p(soc_d.get_cores(CoreType::L2CPU, CoordSystem::NOC0), core)) {
+        // L2CPU tiles address LIM, which does not start at 0, so the worker/eth
+        // address predicates do not apply. Validate against the LIM aperture the
+        // per-tile static TLB covers. get_cores() is empty on architectures
+        // without L2CPU tiles, making this branch unreachable there.
+        if (addr < ll_api::kL2cpuLimBase || addr + lbytes > ll_api::kL2cpuLimTlbEnd) {
+            print_stack_trace();
+            TT_THROW("Host watcher: bad {} L2CPU LIM address {}", what, noc_address(core, addr, lbytes));
         }
     } else {
         // Bad COORD
@@ -99,11 +145,13 @@ static void watcher_sanitize_host_noc(
 
 inline void watcher_sanitize_host_noc_read(
     const metal_SocDescriptor& soc_d,
-    const std::unordered_set<CoreCoord>& virtual_worker_cores,
-    const std::unordered_set<CoreCoord>& virtual_eth_cores,
-    const std::unordered_set<CoreCoord>& virtual_pcie_cores,
-    const std::unordered_set<CoreCoord>& virtual_dram_cores,
-    const CoreCoord& core,
+    const std::unordered_set<tt::tt_metal::CoreCoord>& virtual_worker_cores,
+    const std::unordered_set<tt::tt_metal::CoreCoord>& virtual_eth_cores,
+    const std::unordered_set<tt::tt_metal::CoreCoord>& virtual_pcie_cores,
+    const std::unordered_set<tt::tt_metal::CoreCoord>& virtual_dram_cores,
+    const std::unordered_set<tt::tt_metal::CoreCoord>& virtual_dram_hw_cores,
+    const std::unordered_set<tt::tt_metal::CoreCoord>& virtual_dispatch_cores,
+    const tt::tt_metal::CoreCoord& core,
     uint64_t addr,
     uint32_t lbytes) {
     watcher_sanitize_host_noc(
@@ -113,6 +161,8 @@ inline void watcher_sanitize_host_noc_read(
         virtual_eth_cores,
         virtual_pcie_cores,
         virtual_dram_cores,
+        virtual_dram_hw_cores,
+        virtual_dispatch_cores,
         core,
         addr,
         lbytes);
@@ -120,11 +170,13 @@ inline void watcher_sanitize_host_noc_read(
 
 inline void watcher_sanitize_host_noc_write(
     const metal_SocDescriptor& soc_d,
-    const std::unordered_set<CoreCoord>& virtual_worker_cores,
-    const std::unordered_set<CoreCoord>& virtual_eth_cores,
-    const std::unordered_set<CoreCoord>& virtual_pcie_cores,
-    const std::unordered_set<CoreCoord>& virtual_dram_cores,
-    const CoreCoord& core,
+    const std::unordered_set<tt::tt_metal::CoreCoord>& virtual_worker_cores,
+    const std::unordered_set<tt::tt_metal::CoreCoord>& virtual_eth_cores,
+    const std::unordered_set<tt::tt_metal::CoreCoord>& virtual_pcie_cores,
+    const std::unordered_set<tt::tt_metal::CoreCoord>& virtual_dram_cores,
+    const std::unordered_set<tt::tt_metal::CoreCoord>& virtual_dram_hw_cores,
+    const std::unordered_set<tt::tt_metal::CoreCoord>& virtual_dispatch_cores,
+    const tt::tt_metal::CoreCoord& core,
     uint64_t addr,
     uint32_t lbytes) {
     watcher_sanitize_host_noc(
@@ -134,6 +186,8 @@ inline void watcher_sanitize_host_noc_write(
         virtual_eth_cores,
         virtual_pcie_cores,
         virtual_dram_cores,
+        virtual_dram_hw_cores,
+        virtual_dispatch_cores,
         core,
         addr,
         lbytes);
@@ -141,14 +195,27 @@ inline void watcher_sanitize_host_noc_write(
 
 inline void watcher_sanitize_host_noc_multicast_write(
     const metal_SocDescriptor& soc_d,
-    const std::unordered_set<CoreCoord>& virtual_worker_cores,
-    const CoreCoord& core_start,
-    const CoreCoord& core_end,
+    const std::unordered_set<tt::tt_metal::CoreCoord>& virtual_worker_cores,
+    const tt::tt_metal::CoreCoord& core_start,
+    const tt::tt_metal::CoreCoord& core_end,
     uint64_t addr,
     uint32_t lbytes) {
-    if (core_start.x > core_end.x || core_start.y > core_end.y) {
+    // NoC torus architectures (WH/BH) support wrap-around multicasts where end < start,
+    // but only for Tensix cores. DRAM/PCIe/Eth cores don't support wrap-around.
+    bool has_noc_torus =
+        (tt::tt_metal::MetalContext::instance().hal().get_noc_topology() == tt::tt_metal::NoCTopologyType::TORUS);
+    bool is_tensix_multicast = (coord_found_p(soc_d.get_cores(CoreType::TENSIX, CoordSystem::NOC0), core_start) ||
+                                coord_found_p(virtual_worker_cores, core_start)) &&
+                               (coord_found_p(soc_d.get_cores(CoreType::TENSIX, CoordSystem::NOC0), core_end) ||
+                                coord_found_p(virtual_worker_cores, core_end));
+
+    // Allow wrap-around only for Tensix cores on torus architectures
+    bool allow_wrap_around = has_noc_torus && is_tensix_multicast;
+
+    if (!allow_wrap_around && (core_start.x > core_end.x || core_start.y > core_end.y)) {
         TT_THROW(
-            "Host watcher: bad multicast write coordinates - start {} must be <= end {} in both x and y",
+            "Host watcher: bad multicast write coordinates - start {} must be <= end {} in both x and y (multicast "
+            "invalid range)",
             core_start.str(),
             core_end.str());
     }

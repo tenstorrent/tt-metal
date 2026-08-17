@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -25,7 +25,8 @@ struct CreateQKVHeadsInputs {
     const std::optional<std::tuple<Tensor, Tensor, Tensor>> preallocated_outputs;
 };
 
-using CreateQKVHeadsResultSpec = std::tuple<TensorSpec, TensorSpec, TensorSpec>;
+using CreateQKVHeadsResultSpec =
+    std::tuple<tt::tt_metal::TensorSpec, tt::tt_metal::TensorSpec, tt::tt_metal::TensorSpec>;
 using CreateQKVHeadsResult = std::tuple<Tensor, Tensor, Tensor>;
 
 }  // namespace ttnn::experimental::prim

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -310,7 +310,7 @@ class TtBiFPN:
 
     def _swish(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """Swish activation: x * sigmoid(x)"""
-        return x * ttnn.sigmoid_accurate(x, True)
+        return x * ttnn.sigmoid(x, mode=ttnn.SigmoidMode.AccurateWithFastExp)
 
     def __call__(self, inputs: Tuple[ttnn.Tensor, ...]) -> Tuple[ttnn.Tensor, ...]:
         """

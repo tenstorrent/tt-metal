@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,9 +9,9 @@
 #include <cstdint>
 
 void kernel_main() {
-    // IMPORTANT: since there is no read kernel, and data is alraedy in circular buffers
+    // IMPORTANT: since there is no read kernel, and data is already in circular buffers
     // do not call cb_wait_front() because there is no wait. And we ensured there is enough
-    // spece in the circular buffers for the entirty of the computation.
+    // space in the circular buffers for the entirty of the computation.
     // if calling cb_wait_front() here, the kernel will hang forever as no one is producing
     // data to the circular buffers.
 
@@ -25,8 +25,8 @@ void kernel_main() {
 
     constexpr uint32_t dst_reg = 0;
 
-    binary_op_init_common(cb_in0, cb_in1, cb_out0);
-    add_tiles_init(cb_in0, cb_in1);
+    compute_kernel_hw_startup(cb_in0, cb_in1, cb_out0);
+    add_init(cb_in0, cb_in1);
 
     // The standard vector addition kernel but without waiting on circular buffers (as explained
     // above).

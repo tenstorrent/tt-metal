@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -17,6 +17,6 @@ struct NonzeroInputs {
 };
 
 using NonzeroResult = std::tuple<Tensor, Tensor>;
-using NonzeroResultSpec = std::tuple<TensorSpec, TensorSpec>;
+using NonzeroResultSpec = std::tuple<tt::tt_metal::TensorSpec, tt::tt_metal::TensorSpec>;
 
 }  // namespace ttnn::prim

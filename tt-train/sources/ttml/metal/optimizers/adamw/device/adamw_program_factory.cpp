@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,7 +7,7 @@
 #include <common/TracyQueue.hpp>
 #include <cstdint>
 #include <enchantum/enchantum.hpp>
-#include <random>
+#include <optional>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
@@ -79,6 +79,28 @@ struct AdamWKernels {
     tt::tt_metal::KernelHandle compute_group_2;
 };
 
+namespace {
+
+// splitmix32 finalizer -- decorrelates seeds derived from one base draw.
+uint32_t mix_seed(uint32_t x) {
+    x = (x ^ (x >> 16)) * 0x21F0AAADU;
+    x = (x ^ (x >> 15)) * 0x735A2D97U;
+    return x ^ (x >> 15);
+}
+
+// Spreads the caller's seed over the cores.
+std::vector<uint32_t> make_stochastic_rounding_seeds(std::optional<uint32_t> base, uint32_t num_cores) {
+    std::vector<uint32_t> seeds(num_cores, 0U);
+    if (base.has_value()) {
+        for (uint32_t i = 0; i < num_cores; ++i) {
+            seeds[i] = mix_seed(*base + i * 0x9E3779B9U);
+        }
+    }
+    return seeds;
+}
+
+}  // namespace
+
 /**
  * Set up the runtime arguments for the 4 relevant kernels (reader, writer, compute G1, compute G2)
  *        for each core in the grid.
@@ -108,16 +130,7 @@ void assign_per_core_runtime_args(
     float inv_sqrt_bc2 = 1.0f / std::sqrt(bias_correction2);
     float decay_factor = 1.0f - attrs.lr * attrs.weight_decay;
 
-    // Generate seeds for stochastic rounding (0 if disabled)
-    std::vector<uint32_t> seeds(num_cores, 0);
-    if (attrs.stochastic_rounding == StochasticRounding::Enabled) {
-        std::random_device rd;
-        std::mt19937 gen(rd());
-        std::uniform_int_distribution<uint32_t> dis(1, 0xFFFFFFFF);
-        for (uint32_t i = 0; i < num_cores; i++) {
-            seeds[i] = dis(gen);
-        }
-    }
+    std::vector<uint32_t> seeds = make_stochastic_rounding_seeds(attrs.stochastic_rounding_seed, num_cores);
 
     // Compute runtime args (same for all cores except seed)
     std::vector<uint32_t> compute_args{
@@ -237,8 +250,14 @@ AdamWProgramFactory::cached_program_t AdamWProgramFactory::create(
 
     const uint32_t twice_block_size = 2U * block_size;
 
-    const uint32_t num_input_tiles = twice_block_size;
-    const uint32_t num_output_tiles = twice_block_size;
+    const uint32_t intermediate_num_tiles = twice_block_size;
+
+    // Use 1× block_size pipeline depth: benchmarks at tt-train/tests/benchmark/adamw_benchmark.cpp proved it to be the
+    // best for BW utilization
+    uint32_t pipeline_depth = block_size;
+
+    const uint32_t num_input_tiles = pipeline_depth;
+    const uint32_t num_output_tiles = pipeline_depth;
 
     // param CB - uses param_data_format (bf16 or fp32 depending on mode)
     [[maybe_unused]] auto cb_param = create_circular_buffer(
@@ -289,7 +308,7 @@ AdamWProgramFactory::cached_program_t AdamWProgramFactory::create(
             kMaxExpAvgSqCbIndex,
             intermediate_data_format,
             float32_single_tile_size_bytes,
-            num_output_tiles);
+            intermediate_num_tiles);
     }
 
     // Intermediate CBs are always fp32
@@ -299,7 +318,7 @@ AdamWProgramFactory::cached_program_t AdamWProgramFactory::create(
         kMomentumCbIndex,
         intermediate_data_format,
         float32_single_tile_size_bytes,
-        num_output_tiles);
+        intermediate_num_tiles);
 
     [[maybe_unused]] auto cb_variance = create_circular_buffer(
         program,
@@ -307,7 +326,7 @@ AdamWProgramFactory::cached_program_t AdamWProgramFactory::create(
         kVarianceCbIndex,
         intermediate_data_format,
         float32_single_tile_size_bytes,
-        num_output_tiles);
+        intermediate_num_tiles);
 
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels
@@ -346,7 +365,8 @@ AdamWProgramFactory::cached_program_t AdamWProgramFactory::create(
     // -------------------------------------------------------------------------
 
     // FPU is not used at all in the operation
-    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::UnpackToDestFp32);
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
+        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
 
     // Group 1 compile-time arguments
     std::vector<uint32_t> compute_group_1_args = {
@@ -354,7 +374,7 @@ AdamWProgramFactory::cached_program_t AdamWProgramFactory::create(
         block_size};                 // per_core_block_size
 
     tt::tt_metal::ComputeConfig compute_config{
-        .math_fidelity = MathFidelity::HiFi4,
+        .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
         .fp32_dest_acc_en = true,
         .unpack_to_dest_mode = unpack_to_dest_mode,
         .math_approx_mode = false,
@@ -450,16 +470,7 @@ void AdamWProgramFactory::override_runtime_arguments(
     float inv_sqrt_bc2 = 1.0f / std::sqrt(bias_correction2);
     float decay_factor = 1.0f - attrs.lr * attrs.weight_decay;
 
-    // Generate seeds for stochastic rounding (0 if disabled)
-    std::vector<uint32_t> seeds(num_cores, 0);
-    if (attrs.stochastic_rounding == StochasticRounding::Enabled) {
-        std::random_device rd;
-        std::mt19937 gen(rd());
-        std::uniform_int_distribution<uint32_t> dis(1, 0xFFFFFFFF);
-        for (uint32_t i = 0; i < num_cores; i++) {
-            seeds[i] = dis(gen);
-        }
-    }
+    std::vector<uint32_t> seeds = make_stochastic_rounding_seeds(attrs.stochastic_rounding_seed, num_cores);
 
     // Helper to select correct compute runtime args with error handling
     auto get_compute_runtime_args = [&](const tt::tt_metal::CoreCoord& core) -> auto& {

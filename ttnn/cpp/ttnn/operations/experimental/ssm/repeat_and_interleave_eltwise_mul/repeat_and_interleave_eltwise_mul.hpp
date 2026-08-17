@@ -1,5 +1,5 @@
 
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -16,6 +16,6 @@ ttnn::Tensor repeat_and_interleave_eltwise_mul(
     const Tensor& b,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<DataType> dtype = std::nullopt,
-    std::optional<MathFidelity> math_fidelity = std::nullopt);
+    std::optional<tt::tt_metal::MathFidelity> math_fidelity = std::nullopt);
 
 }  // namespace ttnn::experimental

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -41,6 +41,6 @@ struct AllGatherMatmulAsyncInputs {
 };
 
 using AllGatherMatmulAsyncResult = std::vector<Tensor>;
-using AllGatherMatmulAsyncResultSpec = std::vector<ttnn::TensorSpec>;
+using AllGatherMatmulAsyncResultSpec = std::vector<tt::tt_metal::TensorSpec>;
 
 }  // namespace ttnn::experimental::prim

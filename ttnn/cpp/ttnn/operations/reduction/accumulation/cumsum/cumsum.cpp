@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,8 +9,6 @@
 
 #include "cumsum.hpp"
 
-#include <tt-logger/tt-logger.hpp>
-#include <tt_stl/small_vector.hpp>
 #include <utility>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"

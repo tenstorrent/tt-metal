@@ -1,13 +1,12 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
 #include <fmt/base.h>
-#include <nlohmann/json.hpp>
+#include <nlohmann/json_fwd.hpp>
 #include <stdint.h>
-#include <tt_stl/reflection.hpp>
 #include <tt_stl/span.hpp>
 #include <algorithm>
 #include <cstddef>
@@ -17,14 +16,15 @@
 #include <string>
 #include <vector>
 
+// UMD: re-exports tt_xy_pair, aliased as CoreCoord in this header.
 #include <umd/device/types/xy_pair.hpp>
 
-namespace tt::stl::json {
+namespace ttsl::json {
 template <typename T>
 struct from_json_t;
 template <typename T>
 struct to_json_t;
-}  // namespace tt::stl::json
+}  // namespace ttsl::json
 
 namespace tt::tt_metal {
 
@@ -104,13 +104,13 @@ constexpr bool operator<(const CoreRange& left, const CoreRange& right) {
 
 class CoreRangeSet {
 public:
-    CoreRangeSet(tt::stl::Span<const CoreRange> core_ranges);
+    CoreRangeSet(ttsl::Span<const CoreRange> core_ranges);
 
     CoreRangeSet(const std::set<CoreRange>& core_ranges);
 
     CoreRangeSet(const CoreRange& core_range);
 
-    CoreRangeSet(tt::stl::Span<const CoreCoord> core_coords);
+    CoreRangeSet(ttsl::Span<const CoreCoord> core_coords);
 
     CoreRangeSet() = default;
 
@@ -210,39 +210,38 @@ bool operator!=(const CoreRangeSet& a, const CoreRangeSet& b);
 }  // namespace tt::tt_metal
 
 // Adding to tt::tt_metal namespace as we transition to moving this out of global namespace eventually.
-using CoreCoord [[deprecated("Use tt::tt_metal::CoreCoord")]] = tt::tt_metal::CoreCoord;
 using CoreRange [[deprecated("Use tt::tt_metal::CoreRange")]] = tt::tt_metal::CoreRange;
 using CoreRangeSet [[deprecated("Use tt::tt_metal::CoreRangeSet")]] = tt::tt_metal::CoreRangeSet;
 
 // Deprecated function wrappers - use tt::tt_metal namespace versions instead
-// template to depriorize the wrappers in overloading to avoid ambigous selection from compiler.
+// template to depriorize the wrappers in overloading to avoid ambiguous selection from compiler.
 
 template <bool _compiler_deprioritize_this = true>
-[[deprecated("Use tt::tt_metal::corerange_to_cores")]] inline std::vector<CoreCoord> corerange_to_cores(
+[[deprecated("Use tt::tt_metal::corerange_to_cores")]] inline std::vector<tt::tt_metal::CoreCoord> corerange_to_cores(
     const CoreRangeSet& crs, std::optional<uint32_t> max_cores = std::nullopt, bool row_wise = false) {
     return tt::tt_metal::corerange_to_cores(crs, max_cores, row_wise);
 }
 
 template <bool _compiler_deprioritize_this = true>
-[[deprecated("Use tt::tt_metal::grid_to_cores")]] inline std::vector<CoreCoord> grid_to_cores(
+[[deprecated("Use tt::tt_metal::grid_to_cores")]] inline std::vector<tt::tt_metal::CoreCoord> grid_to_cores(
     uint32_t num_cores, uint32_t grid_size_x, uint32_t grid_size_y, bool row_wise = false) {
     return tt::tt_metal::grid_to_cores(num_cores, grid_size_x, grid_size_y, row_wise);
 }
 
 template <bool _compiler_deprioritize_this = true>
-[[deprecated("Use tt::tt_metal::grid_to_cores")]] inline std::vector<CoreCoord> grid_to_cores(
-    CoreCoord start, CoreCoord end, bool row_wise = false) {
+[[deprecated("Use tt::tt_metal::grid_to_cores")]] inline std::vector<tt::tt_metal::CoreCoord> grid_to_cores(
+    tt::tt_metal::CoreCoord start, tt::tt_metal::CoreCoord end, bool row_wise = false) {
     return tt::tt_metal::grid_to_cores(start, end, row_wise);
 }
 
 template <bool _compiler_deprioritize_this = true>
-[[deprecated("Use tt::tt_metal::grid_to_cores_with_noop")]] inline std::vector<CoreCoord> grid_to_cores_with_noop(
+[[deprecated("Use tt::tt_metal::grid_to_cores_with_noop")]] inline std::vector<tt::tt_metal::CoreCoord> grid_to_cores_with_noop(
     uint32_t bbox_x, uint32_t bbox_y, uint32_t grid_size_x, uint32_t grid_size_y, bool row_wise = false) {
     return tt::tt_metal::grid_to_cores_with_noop(bbox_x, bbox_y, grid_size_x, grid_size_y, row_wise);
 }
 
 template <bool _compiler_deprioritize_this = true>
-[[deprecated("Use tt::tt_metal::grid_to_cores_with_noop")]] inline std::vector<CoreCoord> grid_to_cores_with_noop(
+[[deprecated("Use tt::tt_metal::grid_to_cores_with_noop")]] inline std::vector<tt::tt_metal::CoreCoord> grid_to_cores_with_noop(
     const CoreRangeSet& used_cores, const CoreRangeSet& all_cores, bool row_wise = false) {
     return tt::tt_metal::grid_to_cores_with_noop(used_cores, all_cores, row_wise);
 }

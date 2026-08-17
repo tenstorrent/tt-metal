@@ -1,14 +1,13 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "comm_ops.hpp"
 
-#include <core/ttnn_all_includes.hpp>
-
 #include "autograd/auto_context.hpp"
 #include "autograd/graph.hpp"
 #include "autograd/graph_utils.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn_fixed/distributed/ttnn_ops.hpp"
 
 namespace ttml::ops::distributed {
@@ -22,8 +21,7 @@ autograd::TensorPtr reduce_scatter(
             tensor->add_grad(ttnn_fixed::distributed::all_gather(out->get_grad(), dim, cluster_axis));
         }
     };
-    auto links = autograd::get_links(tensor);
-    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+    out->set_node(autograd::add_backward_node(std::move(grad), out, tensor));
     return out;
 }
 
@@ -44,22 +42,34 @@ autograd::TensorPtr scatter(
             tensor->add_grad(ttnn_fixed::distributed::all_gather(out->get_grad(), dim, cluster_axis));
         }
     };
-    auto links = autograd::get_links(tensor);
-    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+    out->set_node(autograd::add_backward_node(std::move(grad), out, tensor));
     return out;
 }
 
 autograd::TensorPtr all_gather(
-    const autograd::TensorPtr& tensor, const int dim, const std::optional<uint32_t> cluster_axis) {
+    const autograd::TensorPtr& tensor,
+    const int dim,
+    const std::optional<uint32_t> cluster_axis,
+    const GradOutputType grad_output_type) {
     auto out = autograd::create_tensor(ttnn_fixed::distributed::all_gather(tensor->get_value(), dim, cluster_axis));
 
-    autograd::GradFunction grad = [tensor, out, dim, cluster_axis]() {
+    autograd::GradFunction grad = [tensor, out, dim, cluster_axis, grad_output_type]() {
         if (out->is_grad_initialized()) {
-            tensor->add_grad(ttnn_fixed::distributed::reduce_scatter(out->get_grad(), dim, cluster_axis));
+            if (grad_output_type == GradOutputType::SHARDED) {
+                // The gathered output slices were distinct per device, so the output grad
+                // is sharded: sum the reduce-scattered slices back onto each input shard.
+                tensor->add_grad(ttnn_fixed::distributed::reduce_scatter(out->get_grad(), dim, cluster_axis));
+            } else {
+                // The gathered output was replicated across `cluster_axis`, so the output
+                // grad is replicated too. reduce_scatter would sum tp_size identical copies
+                // and we would divide by tp_size to recover each device's slice — which is
+                // exactly a local partition of the replicated grad. Take it directly:
+                // no collective and no elementwise scale.
+                tensor->add_grad(ttnn_fixed::distributed::mesh_partition(out->get_grad(), dim, cluster_axis));
+            }
         }
     };
-    auto links = autograd::get_links(tensor);
-    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+    out->set_node(autograd::add_backward_node(std::move(grad), out, tensor));
     return out;
 }
 
@@ -75,8 +85,7 @@ autograd::TensorPtr all_reduce(
             }
         }
     };
-    auto links = autograd::get_links(tensor);
-    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+    out->set_node(autograd::add_backward_node(std::move(grad), out, tensor));
     return out;
 }
 
@@ -87,8 +96,7 @@ autograd::TensorPtr broadcast(const autograd::TensorPtr& tensor, const std::opti
             tensor->add_grad(ttnn_fixed::distributed::all_reduce(out->get_grad(), cluster_axis));
         }
     };
-    auto links = autograd::get_links(tensor);
-    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+    out->set_node(autograd::add_backward_node(std::move(grad), out, tensor));
     return out;
 }
 
@@ -110,8 +118,7 @@ autograd::TensorPtr ring_shift(
         }
     };
 
-    auto links = autograd::get_links(tensor);
-    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+    out->set_node(autograd::add_backward_node(std::move(grad), out, tensor));
     return out;
 }
 

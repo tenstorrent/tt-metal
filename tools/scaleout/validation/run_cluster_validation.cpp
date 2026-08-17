@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,7 +12,8 @@
 
 #include <cxxopts.hpp>
 #include <factory_system_descriptor/utils.hpp>
-#include "tt_metal/fabric/physical_system_descriptor.hpp"
+#include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
+#include "tt_metal/fabric/physical_system_discovery.hpp"
 #include <tt-metalium/distributed.hpp>
 #include "tt_metal/impl/context/metal_context.hpp"
 #include <cabling_generator/cabling_generator.hpp>
@@ -282,11 +283,11 @@ PhysicalSystemDescriptor generate_physical_system_descriptor(const InputArgs& in
         return physical_system_descriptor;
     }
     log_output_rank0("Running Physical Discovery");
-    constexpr bool run_discovery = true;
     auto& context = tt::tt_metal::MetalContext::instance();
-    const auto& driver = context.get_cluster().get_driver();
-    auto physical_system_descriptor = tt::tt_metal::PhysicalSystemDescriptor(
-        driver, context.get_distributed_context_ptr(), &context.hal(), context.rtoptions(), run_discovery);
+    auto physical_system_descriptor = tt::tt_metal::run_physical_system_discovery(
+        *context.get_cluster().get_cluster_desc(),
+        context.get_distributed_context_ptr(),
+        context.rtoptions().get_target_device());
     log_output_rank0("Physical Discovery Complete");
     log_output_rank0("Detected Hosts: " + log_hostnames(physical_system_descriptor.get_all_hostnames()));
     return physical_system_descriptor;
@@ -372,26 +373,49 @@ int main(int argc, char* argv[]) {
     AsicTopology missing_asic_topology = run_connectivity_validation(input_args, physical_system_descriptor);
 
     bool links_reset = false;
-    // Ethernet Link Retraining through SW is currently only supported for Wormhole
-    bool link_retrain_supported = tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::WORMHOLE_B0;
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const bool link_retrain_supported = cluster.supports_ethernet_link_retraining();
     constexpr uint32_t MAX_RETRAINS_BEFORE_FAILURE =
         5;  // If links don't come up after 5 retrains, the system is in an unrecoverable state.
     uint32_t num_retrains = 0;
+    std::unordered_map<EthChannelIdentifier, uint32_t> link_retrain_counts;
     while (!missing_asic_topology.empty() && link_retrain_supported && num_retrains < MAX_RETRAINS_BEFORE_FAILURE) {
+        auto retrained_links = collect_retrained_link_identifiers(missing_asic_topology, physical_system_descriptor);
+        for (const auto& link_id : retrained_links) {
+            link_retrain_counts[link_id]++;
+        }
+        log_output_rank0(
+            "Link Retrain Iteration " + std::to_string(num_retrains + 1) + ": Retraining " +
+            std::to_string(retrained_links.size()) + " link endpoints");
+
         reset_ethernet_links(physical_system_descriptor, missing_asic_topology);
         links_reset = true;
         num_retrains++;
-        physical_system_descriptor.run_discovery(true, true);
+        // Re-run discovery
+        auto& context_ref = tt::tt_metal::MetalContext::instance();
+        physical_system_descriptor.clear();
+        auto new_psd = tt::tt_metal::run_physical_system_discovery(
+            *context_ref.get_cluster().get_cluster_desc(),
+            context_ref.get_distributed_context_ptr(),
+            context_ref.rtoptions().get_target_device(),
+            true,
+            true);
+        physical_system_descriptor.merge(std::move(new_psd));
         missing_asic_topology = run_connectivity_validation(input_args, physical_system_descriptor);
     }
 
+    distributed_context.barrier();
     if (num_retrains == MAX_RETRAINS_BEFORE_FAILURE && !missing_asic_topology.empty()) {
+        log_link_retrain_summary(link_retrain_counts, num_retrains, input_args.output_path);
+        log_unretrainable_channels(
+            missing_asic_topology, physical_system_descriptor, num_retrains, input_args.output_path);
         TT_THROW("Encountered unrecoverable state. Please check the system and try again.");
         return -1;
     }
     if (links_reset) {
-        log_output_rank0("Ethernet Links were Retrained. Please run the validation tool again to issue traffic.");
-        return 0;
+        log_link_retrain_summary(link_retrain_counts, num_retrains, input_args.output_path);
+        log_output_rank0("Rediscovering ethernet links after successful link retraining");
+        cluster.rediscover_ethernet_links();
     }
 
     ConnectivityValidationConfig validation_config{

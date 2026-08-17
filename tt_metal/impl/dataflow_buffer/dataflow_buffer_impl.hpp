@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,12 +9,16 @@
 #include <memory>
 #include <optional>
 #include <unordered_map>
+#include <span>
 #include <vector>
 
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/experimental/dataflow_buffer/dataflow_buffer.hpp>
+#include <tt_stl/assert.hpp>
 
-#include "tt_metal/hw/inc/internal/dataflow_buffer_interface.h"
+#include <tt-metalium/core_coord.hpp>
+#include "impl/context/context_types.hpp"
+#include "impl/dataflow_buffer/dataflow_buffer.hpp"
+
+#include "tt_metal/hw/inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h"
 
 namespace tt::tt_metal {
 struct KernelGroup;
@@ -22,15 +26,25 @@ struct KernelGroup;
 
 namespace tt::tt_metal::experimental::dfb::detail {
 
-// Per-risc config matching dfb_initializer_per_risc_t (40 bytes)
+// Who writes this DFB's remapper ClientL/ClientR registers on device.
+enum class RemapperProgrammer : uint8_t {
+    NONE,           // DFB does not use the remapper
+    DM1,            // DM1 programs the pairs during DFB init; producers wait on ClientL valid
+    TENSIX_PACKER,  // each Neo's packer programs its own pair; DM1 cannot see Tensix-only TCs
+};
+
 struct LocalDFBInterfaceHost {
-    std::array<uint32_t, 4> base_addr = {0};
-    std::array<uint32_t, 4> limit = {0};
-    std::array<::experimental::PackedTileCounter, 4> packed_tile_counter = {0};
+    std::array<uint32_t, ::dfb::MAX_NUM_TILE_COUNTERS_TO_RR> base_addr = {0};
+    std::array<uint32_t, ::dfb::MAX_NUM_TILE_COUNTERS_TO_RR> limit = {0};
+    std::array<::dfb::PackedTileCounter, ::dfb::MAX_NUM_TILE_COUNTERS_TO_RR> packed_tile_counter = {0};
     uint8_t num_tcs_to_rr = 1;
+    bool broadcast_tc = false;  // DM-DM ALL producer: post to all TCs instead of round-robin
     uint8_t remapper_pair_index = 0;
-    bool should_init_tc = false;
     uint32_t consumer_tcs = 0;
+    uint8_t remapper_consumer_ids_mask = 0;
+    uint8_t producer_client_type = 0;
+    // Intra-tensix only: sacrificial ClientR shadow TC paired with packed_tile_counter[0]. 0xFF if unused.
+    uint8_t intra_shadow_tc_id = 0xFF;
 };
 
 struct DFBRiscConfig {
@@ -39,47 +53,227 @@ struct DFBRiscConfig {
     LocalDFBInterfaceHost config;
 };
 
+// One group of cores that share the same HW config (TC/remapper assignments).
+// l1_by_core stores the allocated L1 base address per core (same formula fills base_addr/limit at serialize time).
+struct DfbGroup {
+    CoreRangeSet core_ranges;
+    std::vector<DFBRiscConfig> hw_risc_configs;            // base_addr/limit intentionally zeroed
+    std::vector<std::pair<CoreCoord, uint32_t>> l1_by_core; // (core, alloc_addr)
+};
+
 struct DataflowBufferImpl {
+    // Unique, program-wide handle
     uint32_t id{};
+    // Owning MetalContext; set from ProgramImpl at add_dataflow_buffer.
+    ContextId context_id_{DEFAULT_CONTEXT_ID};
+    // Device-facing slot number, baked into kernel binaries as the dfb::<name> accessor value and
+    // used as the config-table index in the dispatch payload.
+    uint32_t device_slot{};
     CoreRangeSet core_ranges;
     DataflowBufferConfig config;
 
+    ContextId get_context_id() const { return context_id_; }
+
     uint16_t risc_mask = 0;  // bits 0-7 = DM riscs, bits 8-15 = Tensix riscs
+    uint8_t tensix_trisc_mask = 0;  // bits 0-3: which TRISC(s) use DFB (producer=bit2, consumer=bit0 or bit3)
     uint16_t capacity = 0;
-    std::vector<DFBRiscConfig> risc_configs;
 
-    // Shared config fields (written to dfb_initializer_t)
-    uint32_t entry_size = 0;
-    uint32_t stride_size = 0;
-    std::array<uint8_t, 4> txn_ids = {0};
-    uint8_t num_entries_per_txn_id = 0;
-    uint8_t num_entries_per_txn_id_per_tc = 0;
-    uint8_t remapper_consumer_mask = 0;
-    uint8_t num_txn_ids = 0;
+    // Per-CoreRangeSet groups of cores sharing identical HW config (TC/remapper).
+    std::vector<DfbGroup> groups;
 
-    std::optional<uint32_t> allocated_address;
+    // Maps each CoreCoord to {group_index, alloc_addr}
+    std::unordered_map<CoreCoord, std::pair<size_t, uint32_t>> core_lookup_;
+
+    // Shared config fields (written to dfb_initializer_t, same for all cores)
+    uint32_t stride_in_entries = 0;
+    dfb_txn_id_descriptor_t producer_txn_descriptor = {};
+    dfb_txn_id_descriptor_t consumer_txn_descriptor = {};
+
+    // Flag to track if TC/remapper allocation has been finalized
+    bool configs_finalized = false;
+    // Flag to track if this DFB uses remapper (set during finalization)
+    bool use_remapper = false;
+    // Signals who programs the remapper pairs on device
+    RemapperProgrammer remapper_programmer = RemapperProgrammer::NONE;
+
+    // Set by set_borrowed_memory_base_addr()
+    uint32_t borrowed_addr_ = 0;
+
+    // Aliased DFBs share the same L1 data-buffer
+    // alias_primary_id: set on secondaries; holds the primary's DFB id.
+    // alias_secondary_ids: set on the primary; lists all secondary DFB ids.
+    // The choice of a primary is arbitrary
+    std::optional<uint32_t> alias_primary_id;
+    std::vector<uint32_t>   alias_secondary_ids;
+
+    bool borrows_memory() const { return config.borrows_memory; }
+
+    void set_borrowed_memory_base_addr(uint32_t new_addr) {
+        TT_FATAL(borrows_memory(), "Cannot set borrowed address on DFB {} that does not borrow memory", id);
+        borrowed_addr_ = new_addr;
+        // If allocate_dataflow_buffers() has already run, update the live tables so that
+        // a subsequent run picks up the new address.
+        for (auto& group : groups) {
+            for (auto& [core, addr] : group.l1_by_core) {
+                addr = new_addr;
+            }
+        }
+        for (auto& [core, pair] : core_lookup_) {
+            pair.second = new_addr;
+        }
+    }
 
     uint32_t total_size() const { return config.entry_size * config.num_entries; }
     uint32_t serialized_size() const;
-    std::vector<uint8_t> serialize() const;  // returns config to write to device
+    uint16_t dm1_remapper_slot_count() const;  // slots this DFB contributes to the core-wide DM1 blob
+    void append_dm1_remapper_slots_for_core(const CoreCoord& core, std::vector<uint8_t>& data) const;
+
+    std::vector<uint8_t> serialize_for_core(const CoreCoord& core) const;  // WH/BH only (4-word CB format)
+
+    // Returns per-core DFBRiscConfig with base_addr/limit resolved for core's alloc_addr.
+    // Used by serialize_dfb_config_for_core to build per-hart init blobs.
+    std::vector<DFBRiscConfig> compute_per_core_risc_configs(const CoreCoord& core) const;
+
+    // Override entry_size and/or num_entries. Recomputes capacity/stride and, on a re-entry
+    // (already-finalized) DFB with implicit sync, recomputes the txn descriptors in place while
+    // preserving the allocated transaction IDs and TC assignment.
+    void update_size(std::optional<uint32_t> new_entry_size, std::optional<uint32_t> new_num_entries);
+
+    // Returns the L1 data-buffer base address, which is identical for every core in the
+    // DFB's core range (guaranteed by finalize_dataflow_buffer_configs).
+    uint32_t uniform_alloc_addr() const {
+        TT_ASSERT(!core_lookup_.empty(), "DFB {} needs to be finalized before accessing the allocated address", id);
+        return core_lookup_.begin()->second.second;
+    }
 };
+
+// Host-precomputed init indices in dfb_global_header_t (participation masks; dfb_byte_offset filled during layout
+// write). Device uses these instead of walking all DFBs on the merged-loop hot path.
+void populate_dfb_global_header_participation(
+    dfb_global_header_t& ghdr, const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core);
+
+void verify_dfb_global_header_participation(
+    const dfb_global_header_t& ghdr, const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core);
+
+// Verifies that each hart's blob in the serialized config is internally consistent.
+void verify_dfb_hart_blobs(
+    std::span<const uint8_t> config_bytes, const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core);
+
+// Packed Quasar config size for [prefix | DM1 blobs | DM0 blobs | layouts], including L1 transfer padding.
+uint32_t compute_dfb_config_serialized_size(
+    const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core);
+
+// DM0 ISR blob region: core header + txn_id-indexed hw pool + txn desc pool.
+uint32_t dm0_isr_blob_region_size(const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core);
+
+// DM1 remapper blob: core header + contiguous remapper slots across all DFBs on core.
+uint32_t dm1_remapper_blob_core_size(const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core);
+
+std::vector<uint8_t> serialize_dm1_remapper_core_blob(
+    const CoreCoord& core, const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core);
+
+// Packs Quasar DFB config: [header | offset table | DM1 blobs | DM0 blobs | per-DFB layouts]. Returns bytes written.
+size_t serialize_dfb_config_for_core(
+    const CoreCoord& core,
+    const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core,
+    std::span<uint8_t> out);
 
 class TileCounterAllocator {
 public:
-    ::experimental::PackedTileCounter allocate(uint8_t tensix_id);
-    void reset() { next_tc_id_.fill(0); }
+    // Allocate a tile counter for (core, tensix_id).
+    // use_t6_only=false → DM-visible pool [0, NUM_TENSIX_TILE_COUNTERS_FOR_DM)
+    // use_t6_only=true  → Tensix-only pool [TC_TENSIX_POOL_START, NUM_TILE_COUNTERS_PER_TENSIX)
+    // The remapper can reference any of the 32 TCs, so both pools live in one allocator.
+    ::dfb::PackedTileCounter allocate(const CoreCoord& core, uint8_t tensix_id, bool use_t6_only = false);
+
+    // Allocate ClientL + sacrificial ClientR shadow from the Tensix-only pool for one intra-tensix
+    // DFB on (core, tensix_id). Only ClientL is used for credits; ClientR exists solely to absorb
+    // the remapper's HW update copy. The two TCs need not be adjacent. Each call spends
+    // TILE_COUNTERS_PER_INTRA_TENSIX_DFB of that Neo's NUM_TENSIX_ONLY_TILE_COUNTERS.
+    std::pair<::dfb::PackedTileCounter, ::dfb::PackedTileCounter> allocate_intra_tensix_pair(
+        const CoreCoord& core, uint8_t tensix_id);
+
+    void reset() { next_tc_id_.clear(); }
 
 private:
-    std::array<uint8_t, 4> next_tc_id_ = {0};
+    struct PerCoreCounters {
+        std::array<uint8_t, 4> dm_next     = {};  // next available TC id in [0, NUM_TENSIX_TILE_COUNTERS_FOR_DM)
+        std::array<uint8_t, 4> t6_only_next = {};  // next available TC id offset from TC_TENSIX_POOL_START
+    };
+    std::unordered_map<CoreCoord, PerCoreCounters> next_tc_id_;
 };
 
+// Remapper pairs are split by fan-out and programmer:
+//   DM1 1-to-many → [0, 16)
+//   1-to-1 pool [16, 64) shared by DM1 (bottom-up) and packer/intra (top-down):
+//     reserve_packer_ranges() claims an exact contiguous block per Neo from pair 63 downward;
+//     allocate() gives DM1 pairs from pair 16 upward. The two frontiers are collision-checked.
+// This keeps packer-owned pairs above DM1's high watermark while leaving unused capacity available.
 class RemapperIndexAllocator {
 public:
-    uint8_t allocate(const CoreCoord& core_coord);
+    // Claim exact contiguous 1-to-1 blocks for each Neo's packer pairs on this core.
+    // Must run before any allocate()/allocate_for_packer() for the core.
+    void reserve_packer_ranges(const CoreCoord& core_coord, const std::array<uint8_t, ::dfb::NUM_TENSIX>& counts);
+    // DM1-programmed pairs. one_to_many selects the fan-out pool vs the shared 1-to-1 frontier.
+    uint8_t allocate(const CoreCoord& core_coord, bool one_to_many);
+    // Next pair from Neo `tensix_id`'s reserved contiguous block (ascending).
+    uint8_t allocate_for_packer(const CoreCoord& core_coord, uint8_t tensix_id);
     void reset();
 
 private:
-    std::unordered_map<CoreCoord, uint8_t> next_index_;
+    struct PerCorePools {
+        uint8_t next_one_to_many = 0;  // offset into [0, NUM_REMAPPER_ONE_TO_MANY_PAIRINGS)
+        uint8_t next_one_to_one = 0;   // DM1 offset from REMAPPER_ONE_TO_ONE_PAIR_START (bottom-up)
+        uint8_t packer_floor = ::dfb::NUM_REMAPPER_PAIRINGS;       // first packer-owned pair (top-down)
+        std::array<uint8_t, ::dfb::NUM_TENSIX> packer_base = {};   // absolute pair index, or 0xFF if unused
+        std::array<uint8_t, ::dfb::NUM_TENSIX> packer_count = {};  // exact reserved count
+        std::array<uint8_t, ::dfb::NUM_TENSIX> packer_next = {};   // offset within [base, base+count)
+    };
+    std::unordered_map<CoreCoord, PerCorePools> next_index_;
+};
+
+// Allocates DFB implicit-sync transaction IDs from the runtime pool
+// [DFB_TXN_ID_BASE, HW_TXN_ID_MAX], top-down.
+// Txn id 0 is reserved (NOC_V2_TRID_STATIC). User kernels may use [0, USER_TXN_ID_MAX].
+class TxnIdAllocator {
+public:
+    std::vector<uint8_t> allocate(uint8_t count);
+    void reset() { next_id_ = HW_TXN_ID_MAX; }
+
+private:
+    // Next highest ID available to allocate (descending within the DFB pool).
+    uint8_t next_id_ = HW_TXN_ID_MAX;
+};
+
+// Allocates Remapper clientTypes for ALL consumer mode.
+//
+// Hardware access rules:
+//   - DM RISCs (risc_id 0-7):    clientR must be in [0, 3] (DM TC groups 0-3)
+//   - Tensix RISCs (risc_id 8-11): clientR must be in [4, 7] (NEO_0 to NEO_3)
+//   - clientL (producer) must not equal clientR (consumer)
+//
+// Allocation:
+//   - Tensix consumer: clientR = 4 + (risc_id - 8), and unique per Tensix neo.
+//   - DM consumer: cycle through [0, 3] \ {producer_client_type} in round-robin order.
+//     DM clientR IDs may repeat across consumers; uniqueness is provided by the tc_id
+//     (cnt_sel) within each clientR group, which is assigned by TileCounterAllocator.
+class ClientTypeAllocator {
+public:
+    // producer_client_type: the clientL already assigned to the producer.
+    // consumer_risc_id: RISC ID of the consumer being allocated.
+    // Returns clientType in [0, 3] for DM consumers, [4, 7] for Tensix consumers.
+    uint8_t allocate_for_consumer(uint8_t producer_client_type, uint8_t consumer_risc_id);
+
+    static uint8_t get_tensix_id(uint8_t client_type) { return client_type % 4; }
+
+    void reset() {
+        tensix_used_mask_ = 0;
+        dm_alloc_count_ = 0;
+    }
+
+private:
+    uint8_t tensix_used_mask_ = 0;  // Bitmask of used Tensix clientTypes (bits 0-3 → ids 4-7)
+    uint8_t dm_alloc_count_ = 0;    // Counts DM consumers allocated; used for round-robin cycling
 };
 
 uint32_t finalize_dfbs(

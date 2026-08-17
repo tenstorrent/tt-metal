@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,7 +10,8 @@
 #include <nanobind/stl/optional.h>
 
 #include "untilize.hpp"
-#include "ttnn-nanobind/decorators.hpp"
+#include "untilize_force.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 
 namespace ttnn::operations::data_movement::detail {
 
@@ -30,32 +31,50 @@ void bind_untilize(nb::module_& mod) {
 
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
                 use_multicore (bool, optional): Whether to use multicore. Defaults to `True`.
-                use_pack_untilize (bool, optional): Whether to use pack untilize. Defaults to `True`.
                 sub_core_grids (ttnn.CoreRangeSet, optional): Sub core grids. Defaults to `None`.
 
             Returns:
                 List of ttnn.Tensor: the output tensor.
         )doc";
 
-    using OperationType = decltype(ttnn::untilize);
-    ttnn::bind_registered_operation(
+    ttnn::bind_function<"untilize">(
         mod,
-        ttnn::untilize,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const std::optional<MemoryConfig>& memory_config,
-               bool use_multicore,
-               bool use_pack_untilize,
-               const std::optional<CoreRangeSet>&& sub_core_grids) {
-                return self(input_tensor, memory_config, use_multicore, use_pack_untilize, sub_core_grids);
-            },
-            nb::arg("input_tensor"),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("use_multicore") = true,
-            nb::arg("use_pack_untilize") = true,
-            nb::arg("sub_core_grids") = nb::none()});
+        &ttnn::untilize,
+        nb::arg("input_tensor"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("use_multicore") = true,
+        nb::arg("sub_core_grids") = nb::none());
+
+    // Bound with a plain def rather than ttnn::bind_function: the latter tags the callable for
+    // auto_register_ttnn_cpp_operations, which would republish these as ttnn.* operations. They are
+    // meant to stay reachable only via this private module. See untilize_force.hpp.
+    mod.def(
+        "untilize_force_native",
+        &untilize_force_native,
+        nb::arg("input_tensor"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("use_multicore") = true,
+        nb::arg("sub_core_grids") = nb::none(),
+        nb::call_guard<nb::gil_scoped_release>(),
+        R"doc(
+            Verification only: runs the native untilize prim unconditionally. Not part of the ttnn API;
+            use ttnn.untilize, which selects a prim on its own.
+        )doc");
+
+    mod.def(
+        "untilize_force_codegen",
+        &untilize_force_codegen,
+        nb::arg("input_tensor"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::call_guard<nb::gil_scoped_release>(),
+        R"doc(
+            Verification only: runs the codegen untilize prim unconditionally, raising for a case outside
+            its support scope rather than falling back to native. Not part of the ttnn API; use
+            ttnn.untilize, which selects a prim on its own.
+        )doc");
 }
 }  // namespace ttnn::operations::data_movement::detail

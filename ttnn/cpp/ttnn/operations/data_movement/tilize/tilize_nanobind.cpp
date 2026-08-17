@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,7 +10,7 @@
 #include <nanobind/stl/optional.h>
 
 #include "tilize.hpp"
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 
 namespace ttnn::operations::data_movement::detail {
 
@@ -30,33 +30,24 @@ void bind_tilize(nb::module_& mod) {
             dtype (data type, optional): Data type of the output tensor. Defaults to `None`.
             use_multicore (bool, optional): Whether to use multicore. Defaults to `True`.
             use_low_perf (bool, optional): Use a low performance version that uses less memory. USE ONLY IF ABSOLUTELY NEEDED IN MODELS. Defaults to `False`.
+            tile (ttnn.Tile, optional): Tile shape for the output tensor. Defaults to the standard 32x32 tile.
             sub_core_grids (CoreRangeSet, optional): Used to restrict tilize to a set of cores, Defaults to using the entire device
 
         Returns:
             ttnn.Tensor: the output tensor.
     )doc";
 
-    using OperationType = decltype(ttnn::tilize);
-    ttnn::bind_registered_operation(
+    ttnn::bind_function<"tilize">(
         mod,
-        ttnn::tilize,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const std::optional<MemoryConfig>& memory_config,
-               std::optional<DataType> output_dtype,
-               bool use_multicore,
-               bool use_low_perf,
-               const std::optional<CoreRangeSet>& sub_core_grids) {
-                return self(input_tensor, memory_config, output_dtype, use_multicore, use_low_perf, sub_core_grids);
-            },
-            nb::arg("input_tensor"),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("dtype") = nb::none(),
-            nb::arg("use_multicore") = true,
-            nb::arg("use_low_perf") = false,
-            nb::arg("sub_core_grids") = nb::none()});
+        &ttnn::tilize,
+        nb::arg("input_tensor"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("dtype") = nb::none(),
+        nb::arg("use_multicore") = true,
+        nb::arg("use_low_perf") = false,
+        nb::arg("tile") = tt::tt_metal::Tile(),  // default to 32x32 tile
+        nb::arg("sub_core_grids") = nb::none());
 }
 }  // namespace ttnn::operations::data_movement::detail

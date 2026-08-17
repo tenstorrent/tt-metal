@@ -1,0 +1,703 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+"""
+Matrix routing configuration for sweep CI.
+
+Used by ``compute_sweep_matrix.py`` to answer three related questions:
+1. Which physical runner profile should a job use?
+2. Which logical ``test_group_name`` should a routed job belong to?
+3. Which GitHub Actions output bucket (``n150-matrix``, ``galaxy-matrix``, ...)
+   should that job be emitted into?
+
+This module centralizes routing policy. ``constants.py`` still owns filename
+parsing such as ``.mesh_*`` and ``.hw_*`` suffix semantics; this file maps those
+already-parsed routing hints to logical test groups and runner profiles.
+"""
+
+import functools
+import os
+
+# ── Run type detection (workflow inputs vs cron schedule) ────────────────────
+# ``compute_sweep_matrix.main`` sets batching and which matrix builder to call
+# from these maps. Workflow ``SWEEP_NAME`` wins; else ``GITHUB_EVENT_SCHEDULE``
+# is matched; default is ``nightly``.
+
+SWEEP_TYPES = {
+    "ALL SWEEPS (Lead Models)": "lead_models",
+    "ALL SWEEPS (Model Traced)": "model_traced",
+    "ALL SWEEPS (Comprehensive)": "comprehensive",
+    "ALL SWEEPS (Nightly)": "nightly",
+}
+
+SCHEDULE_TYPES = {
+    "0 2 * * *": "lead_models",
+    "0 3 * * *": "model_traced",
+}
+
+
+# ── Artifact written by ``sweeps_parameter_generator`` ───────────────────────
+# Lived next to vector JSON under ``vectors_export/``; lists produced files and
+# ``vector_grouping_mode`` so the matrix step does not infer policy from scans alone.
+
+GENERATION_MANIFEST_FILENAME = "generation_manifest.json"
+SUPPORTED_VECTOR_GROUPING_MODES = ("mesh", "hw")
+DEFAULT_MODEL_TRACED_GROUPING_MODE = "hw"
+
+VECTOR_LOAD_FILTER_POLICIES = {
+    "mesh": {
+        "kind": "mesh",
+        "enforce_mesh_capability": True,
+        "enforce_hardware_capability": False,
+    },
+    "hw": {
+        "kind": "hardware",
+        "enforce_mesh_capability": False,
+        "enforce_hardware_capability": True,
+    },
+}
+
+
+# ── Physical runner profiles ──────────────────────────────────────────────────
+# These are the machine-level properties consumed directly by the workflow.
+# Multiple logical test groups may point at the same profile, which avoids
+# repeating ``runs_on``, ``runner_label``, ``tt_smi_cmd``, and ``arch``.
+
+MATRIX_OUTPUT_KEYS = ("n150", "n300", "p150b", "p100a", "p300a", "t3k", "galaxy")
+
+# Each profile references an ``sku`` by name; the actual ``runs_on`` runner-label
+# set lives in the shared .github/sku_config.yaml (single source of truth for HW
+# representation — the pipeline-reorg convention). ``get_runner_config`` resolves
+# ``runs_on`` from there via ``_resolve_runs_on(profile["sku"])``. ``arch``,
+# ``runner_label``, ``tt_smi_cmd``, and ``matrix_output_key`` stay here as they are
+# sweep-routing concerns, not general SKU attributes.
+#
+# SKUs are the EXISTING logical SKUs already defined in .github/sku_config.yaml
+# (infra's abstraction layer); sweeps does not add its own SKU entries. Sweeps
+# runs on the shared civ2/viommu runner pools.
+RUNNER_PROFILES = {
+    "n150": {
+        "arch": "wormhole_b0",
+        "sku": "wh_n150_civ2",
+        "runner_label": "N150",
+        "tt_smi_cmd": "tt-smi -r",
+        "matrix_output_key": "n150",
+    },
+    "n300": {
+        "arch": "wormhole_b0",
+        "sku": "wh_n300_civ2",
+        "runner_label": "N300",
+        "tt_smi_cmd": "tt-smi -r",
+        "matrix_output_key": "n300",
+    },
+    "n300-llmbox": {
+        "arch": "wormhole_b0",
+        "sku": "wh_llmbox_civ2_viommu",
+        "runner_label": "n300-llmbox",
+        "tt_smi_cmd": "tt-smi -r",
+        "matrix_output_key": "n300",
+    },
+    "p150b": {
+        "arch": "blackhole",
+        "sku": "bh_p150b_civ2_viommu",
+        "runner_label": "p150b",
+        "tt_smi_cmd": "tt-smi -r",
+        "matrix_output_key": "p150b",
+    },
+    "p100a": {
+        "arch": "blackhole",
+        "sku": "bh_p100a_civ2_viommu",
+        "runner_label": "p100a",
+        "tt_smi_cmd": "tt-smi -r",
+        "matrix_output_key": "p100a",
+    },
+    "p300a": {
+        "arch": "blackhole",
+        "sku": "bh_p300_viommu",
+        "runner_label": "P300",
+        "tt_smi_cmd": "tt-smi -r",
+        "matrix_output_key": "p300a",
+    },
+    "t3k": {
+        "arch": "wormhole_b0",
+        "sku": "wh_llmbox",
+        "runner_label": "config-t3000",
+        "tt_smi_cmd": "tt-smi -r",
+        "matrix_output_key": "t3k",
+    },
+    "galaxy-topology-6u": {
+        "arch": "wormhole_b0",
+        "sku": "wh_galaxy",
+        "runner_label": "topology-6u",
+        "tt_smi_cmd": "tt-smi -glx_reset_auto",
+        "matrix_output_key": "galaxy",
+    },
+}
+
+
+# ── Runner-label resolution from the shared SKU config ───────────────────────
+# runs_on lives in .github/sku_config.yaml keyed by SKU name; RUNNER_PROFILES
+# only names the SKU. This centralizes HW representation (pipeline-reorg).
+def _sku_config_path():
+    """Locate .github/sku_config.yaml. Prefer $TT_METAL_HOME; else walk up from
+    this file (tests/sweep_framework/framework/ -> repo root)."""
+    home = os.environ.get("TT_METAL_HOME")
+    if home:
+        candidate = os.path.join(home, ".github", "sku_config.yaml")
+        if os.path.exists(candidate):
+            return candidate
+    return os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".github", "sku_config.yaml"))
+
+
+@functools.lru_cache(maxsize=1)
+def _sku_runs_on_map():
+    import yaml
+
+    with open(_sku_config_path()) as f:
+        cfg = yaml.safe_load(f) or {}
+    return {name: (entry or {}).get("runs_on", []) for name, entry in (cfg.get("skus") or {}).items()}
+
+
+def _resolve_runs_on(sku_name):
+    """Resolve a profile's SKU name to its runs_on labels from sku_config.yaml.
+
+    Preserves the historical single-label-as-string form (a 1-element list is
+    returned as the bare string) so the emitted matrix stays byte-identical to the
+    pre-migration output — GitHub treats a string and a 1-element array the same."""
+    labels = _sku_runs_on_map().get(sku_name)
+    if labels is None:
+        raise KeyError(
+            f"Sweep SKU '{sku_name}' not found in {_sku_config_path()}. "
+            "Every RUNNER_PROFILES[*]['sku'] must have a matching skus entry."
+        )
+    if isinstance(labels, list) and len(labels) == 1:
+        return labels[0]
+    return labels
+
+
+# ── Timeouts + budget from the pipeline-reorg test yaml ───────────────────────
+# The single source of truth is tests/pipeline_reorg/ttnn_sweep_tests.yaml, keyed
+# by (target, sku). It carries two independent numbers (see that file's header):
+#
+#   skus.<sku>.timeout   — the TOTAL budget (minutes) for that target's jobs on
+#                          that SKU for ONE run (sum of every batch's timeout).
+#                          verify_time_budget.py sums it per (team, sku) against
+#                          .github/time_budget.yaml -> ttnn.sweep.
+#   batch.overhead/default/overrides — the PER-BATCH (per-op) timeout policy used
+#                          to size each GH job's timeout-minutes.
+#
+# The batch count is dynamic (modules are discovered from the generated vector
+# files at runtime), so a job's timeout is built up from its ops rather than by
+# dividing the SKU total by the batch count — dividing would shrink every long
+# batch's ceiling as soon as the run produced more (shorter) batches.
+DEFAULT_JOB_TIMEOUT_MIN = 60
+DEFAULT_PER_OP_TIMEOUT_MIN = 8
+
+# Fixed per-job cost charged once per batch on top of its ops: container start,
+# artifact download, tt-metal cache warm, device reset. The cheapest sweep job in
+# run 30553811243 took 3.1 min without running any meaningful op work, and a
+# single download-artifact step in that run took 6.5 min. Billing 100% of a
+# batch's ceiling to op work is what put the passing jobs right up against their
+# wall (3.1 -> 11.6 min against a 12 min ceiling) and killed 42 of 119 jobs.
+DEFAULT_BATCH_OVERHEAD_MIN = 6
+
+# Modules per batch never exceed this, even when a group's `parallel_jobs` policy
+# would produce a larger chunk. Without it a big module set collapses into a few
+# very wide jobs — run 30553811243 put 17 modules in one t3k batch, giving a
+# 90-minute single-job ceiling that then expired and took all 17 ops down with
+# it. Capping trades more (shorter, independently retryable) jobs for a bounded
+# blast radius per timeout.
+MAX_BATCH_MODULES = 8
+
+# Fallback per-op policy for (target, sku) pairs not tracked in the yaml (e.g.
+# nightly / comprehensive runs). Mirrors the model_traced block in that file (the
+# more conservative of the two targets) so an untracked lane still right-sizes
+# heavy ops instead of one flat ceiling.
+DEFAULT_BATCH_POLICY = {
+    "overhead": DEFAULT_BATCH_OVERHEAD_MIN,
+    "default": DEFAULT_PER_OP_TIMEOUT_MIN,
+    "overrides": {
+        "all_gather_async": 45,
+        "conv2d": 40,
+        "reduce_scatter": 36,
+        "all_reduce": 36,
+        "matmul": 24,
+        "linear": 24,
+        "reshape": 18,
+        "split": 18,
+    },
+}
+
+
+def _sweep_tests_yaml_path():
+    """Locate tests/pipeline_reorg/ttnn_sweep_tests.yaml. Prefer $TT_METAL_HOME;
+    else walk up from this file (tests/sweep_framework/framework/ -> repo root)."""
+    rel = os.path.join("tests", "pipeline_reorg", "ttnn_sweep_tests.yaml")
+    home = os.environ.get("TT_METAL_HOME")
+    if home:
+        candidate = os.path.join(home, rel)
+        if os.path.exists(candidate):
+            return candidate
+    return os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "..", "..", rel))
+
+
+@functools.lru_cache(maxsize=1)
+def _sweep_tests_entries():
+    """Parse ttnn_sweep_tests.yaml into a list of entries.
+
+    Missing/unreadable file → empty list, so matrix generation never hard-fails
+    on a timeout/budget lookup (callers fall back to the defaults above)."""
+    import yaml
+
+    try:
+        with open(_sweep_tests_yaml_path()) as f:
+            entries = yaml.safe_load(f) or []
+    except (OSError, yaml.YAMLError):
+        return []
+    return entries if isinstance(entries, list) else []
+
+
+@functools.lru_cache(maxsize=1)
+def _sweep_total_budget_map():
+    """Return {(target, sku): total_budget_min} from skus.<sku>.timeout."""
+    out = {}
+    for entry in _sweep_tests_entries():
+        target = entry.get("target")
+        for sku_name, sku_cfg in (entry.get("skus") or {}).items():
+            if isinstance(sku_cfg, dict) and "timeout" in sku_cfg:
+                out[(target, sku_name)] = sku_cfg["timeout"]
+    return out
+
+
+@functools.lru_cache(maxsize=1)
+def _sweep_batch_policy_map():
+    """Return {(target, sku): {"default": int, "overrides": {op: int}}}.
+
+    A per-SKU ``batch`` block wins over the target-level ``batch`` block; either
+    may be absent, in which case callers fall back to DEFAULT_BATCH_POLICY."""
+    out = {}
+    for entry in _sweep_tests_entries():
+        target = entry.get("target")
+        entry_policy = entry.get("batch") if isinstance(entry.get("batch"), dict) else None
+        for sku_name, sku_cfg in (entry.get("skus") or {}).items():
+            sku_policy = sku_cfg.get("batch") if isinstance(sku_cfg, dict) else None
+            policy = sku_policy if isinstance(sku_policy, dict) else entry_policy
+            if isinstance(policy, dict):
+                out[(target, sku_name)] = policy
+    return out
+
+
+def _op_timeout_min(module_token, policy):
+    """Per-op ceiling (minutes) for one module token under a batch policy.
+
+    ``overrides`` keys are matched as substrings of the module token (vector-file
+    stems carry a grouping suffix, e.g. ``model_traced.all_gather_async_model_traced``),
+    so ``all_gather_async`` matches that token. If several keys match, the largest
+    ceiling wins; otherwise the policy default applies."""
+    default = policy.get("default", DEFAULT_PER_OP_TIMEOUT_MIN)
+    overrides = policy.get("overrides") or {}
+    matched = [minutes for op_key, minutes in overrides.items() if op_key in module_token]
+    return max(matched) if matched else default
+
+
+def get_batch_timeout(target, sku, module_selector, default=DEFAULT_JOB_TIMEOUT_MIN):
+    """Per-batch (per-GH-job) timeout in minutes for one matrix entry.
+
+    ``module_selector`` is the comma-joined set of module tokens in the batch.
+    Ops in a batch run sequentially, so the batch ceiling is the SUM of its ops'
+    per-op ceilings, plus the policy's fixed per-batch ``overhead`` for the job
+    setup that is not op work. An empty selector falls back to the hard job
+    ceiling."""
+    policy = _sweep_batch_policy_map().get((target, sku)) or DEFAULT_BATCH_POLICY
+    tokens = [t for t in (module_selector or "").split(",") if t]
+    if not tokens:
+        return default
+    overhead = policy.get("overhead", DEFAULT_BATCH_OVERHEAD_MIN)
+    total = overhead + sum(_op_timeout_min(t, policy) for t in tokens)
+    return max(1, int(round(total)))
+
+
+# Floor for a device-key batch's timeout. The weighted model below charges each op a FRACTION
+# of its ceiling, so a batch holding a couple of vectors of one op lands near `overhead` alone
+# -- but `overhead` (6 min for lead_models) was calibrated when batches were large and fixed
+# cost was amortised across many ops. A 1-module device-key batch pays the full fixed cost:
+# container start (cheapest job observed 3.1 min), artifact download (one step observed
+# 6.5 min), kernel-cache clear, then a Galaxy mesh open (~4 min). Lead-models run 30702184301
+# stamped mesh4x8_col_2d_rms_norm_pre_all_gather at 7 min; it was killed at 7.1 min wall clock
+# having executed ZERO vectors. The floor covers fixed cost so a small batch gets a chance to
+# run; op time above it still comes from the weighted share.
+MIN_DEVICE_KEY_BATCH_TIMEOUT_MIN = 18
+
+
+def get_weighted_batch_timeout(target, sku, module_shares, default=DEFAULT_JOB_TIMEOUT_MIN, sizing_minutes=0):
+    """Per-batch timeout for a batch holding a FRACTION of each of its ops' vectors.
+
+    Device-key batches are sized by vector count, so one batch can touch 40 modules while
+    carrying only a slice of each. Charging every module its full per-op ceiling (what
+    get_batch_timeout does, correctly, for module-sized batches) would bill an op once per
+    batch it appears in and blow the SKU budget. Here each module is charged its ceiling
+    scaled by the share of that op's vectors present in this batch, so summed over a whole
+    run every op is still billed exactly once.
+
+    ``module_shares`` maps module token -> that op's share of its own vectors in this batch
+    (0..1, summing to 1 across the run).
+
+    ``sizing_minutes`` is what the SPLITTER's time model says this batch costs (its vector
+    count at SECONDS_PER_VECTOR, plus device open). A device-key batch is sized by that model
+    but timed by the per-op shares above, and the two can disagree: model_traced run
+    30702189957 stamped mesh1x2_row_1d at 29 min for 562 vectors (3.1 s/vector), and it was
+    killed at 29.2 min having passed 432 -- still executing, at ~4 s/vector. Taking the max
+    keeps the budget consistent with the model that chose the batch size in the first place."""
+    policy = _sweep_batch_policy_map().get((target, sku)) or DEFAULT_BATCH_POLICY
+    if not module_shares:
+        return default
+    overhead = policy.get("overhead", DEFAULT_BATCH_OVERHEAD_MIN)
+    total = overhead + sum(_op_timeout_min(token, policy) * share for token, share in module_shares.items())
+    return max(MIN_DEVICE_KEY_BATCH_TIMEOUT_MIN, int(round(max(total, overhead + sizing_minutes))))
+
+
+def get_sku_total_budget(target, sku):
+    """Total per-run budget (minutes) declared for a (target, sku), or None if the
+    pair is not budget-tracked in the yaml (e.g. nightly / comprehensive)."""
+    return _sweep_total_budget_map().get((target, sku))
+
+
+def get_timeout_for(target, sku, default=DEFAULT_JOB_TIMEOUT_MIN):
+    """Back-compat accessor for the (target, sku) TOTAL budget (minutes).
+
+    Prefer get_batch_timeout() for per-job stamping and get_sku_total_budget()
+    for the per-run budget; retained for any external callers."""
+    return _sweep_total_budget_map().get((target, sku), default)
+
+
+# ── Logical test groups ───────────────────────────────────────────────────────
+# ``test_group_name`` is the logical identity that appears in matrix rows,
+# artifacts, and workflow conditionals. Each group points at one runner profile.
+
+TEST_GROUPS = {
+    "wormhole-n150-sweeps": {"runner_profile": "n150"},
+    "wormhole-n300-sweeps": {"runner_profile": "n300"},
+    "n300-llmbox-ccl": {"runner_profile": "n300-llmbox"},
+    "blackhole-p150b-sweeps": {"runner_profile": "p150b"},
+    "blackhole-p100a-sweeps": {"runner_profile": "p100a"},
+    "blackhole-p300a-sweeps": {"runner_profile": "p300a"},
+    "wormhole-t3k-sweeps": {"runner_profile": "t3k"},
+    "wormhole-galaxy-sweeps": {"runner_profile": "galaxy-topology-6u"},
+    "lead-models-single-chip": {"runner_profile": "n150"},
+    "lead-models-galaxy": {"runner_profile": "galaxy-topology-6u"},
+}
+
+
+# ── Lead models sweep: mesh routing + batching policy ───────────────────────
+# Lead-model vectors are still routed by mesh or hardware hints, but unlike
+# model-traced runs they collapse into only two logical CI lanes:
+# single-chip and galaxy. Mesh-grouped files route through the map below.
+# Hardware-grouped files use ``get_lead_models_test_group_name_for_hardware_group``.
+# Files with no explicit grouping suffix fall back to ``LEAD_MODELS_DEFAULT_TEST_GROUP``.
+
+LEAD_MODELS_MESH_TEST_GROUPS = {
+    "1x1": "lead-models-single-chip",
+    "1x2": "lead-models-galaxy",
+    "1x4": "lead-models-galaxy",
+    "1x8": "lead-models-galaxy",
+    "2x4": "lead-models-galaxy",
+    "4x8": "lead-models-galaxy",
+    "8x4": "lead-models-galaxy",
+    "2x16": "lead-models-galaxy",
+    "16x2": "lead-models-galaxy",
+    "4x4": "lead-models-galaxy",
+    "1x32": "lead-models-galaxy",
+    "32x1": "lead-models-galaxy",
+}
+
+LEAD_MODELS_DEFAULT_TEST_GROUP = "lead-models-single-chip"
+LEAD_MODELS_SUITE_NAME = "model_traced"
+
+# Absent entries use the caller-provided fixed ``batch_size``.
+# ``solo_modules`` — modules that must run in their own dedicated batch (one
+# module per CI job).  Used for ops like all_gather_async that need exclusive
+# device access or have long/unpredictable runtimes that would starve other
+# ops sharing the same batch.
+LEAD_MODELS_BATCH_POLICY = {
+    "solo_modules": [
+        "model_traced.all_gather_async_model_traced",
+        # conv2d runs in its own batch (own process): its heavy 1024x1024 convs
+        # intermittently deadlock the dispatch hang-detector once device state
+        # accumulates from OTHER modules in a shared batch (CI run 28150416165:
+        # 1df14794 stalled >300s twice, even on a clean-device retry). conv2d run
+        # ALONE passes (verified T3K 1x8), so isolating it avoids the cross-module
+        # accumulation that triggers the hang.
+        "model_traced.conv2d_model_traced",
+    ],
+}
+
+
+# ── Model-traced sweep: per-group batching policy ─────────────────────────────
+# Controls how many parallel CI jobs each test group gets for model-traced runs.
+# Absent entries use the caller-provided fixed ``batch_size``.
+MODEL_TRACED_BATCH_POLICY = {
+    "wormhole-t3k-sweeps": {"parallel_jobs": 5, "batch_size": 5},
+}
+
+
+# ── Model-traced sweep: mesh suffix → logical test group ─────────────────────
+# These maps answer the CI ownership question:
+# "Which logical lane owns a mesh-grouped vector file?"
+#
+# IMPORTANT:
+# - In CI, ownership should stay strict so one vector file maps to one lane.
+# - On local/manual runs, physical hardware may be able to run a broader set of
+#   meshes than the CI ownership map allows. That broader capability is modeled
+#   separately below so we do not overload ownership with capability.
+
+MODEL_TRACED_MESH_TEST_GROUPS = {
+    "1x1": "wormhole-n150-sweeps",
+    "1x2": "wormhole-n300-sweeps",
+    "2x1": "wormhole-n300-sweeps",
+    "1x4": "wormhole-t3k-sweeps",
+    "1x8": "wormhole-t3k-sweeps",
+    "2x4": "wormhole-galaxy-sweeps",
+    "4x8": "wormhole-galaxy-sweeps",
+    "8x4": "wormhole-galaxy-sweeps",
+    "2x16": "wormhole-galaxy-sweeps",
+    "16x2": "wormhole-galaxy-sweeps",
+    "4x4": "wormhole-galaxy-sweeps",
+    "1x32": "wormhole-galaxy-sweeps",
+    "32x1": "wormhole-galaxy-sweeps",
+}
+
+
+TEST_GROUP_HARDWARE_CAPABILITY_RULES = {
+    "wormhole-n150-sweeps": ({"board_type": "wormhole", "device_series": "n150", "card_count": 1},),
+    "wormhole-n300-sweeps": ({"board_type": "wormhole", "device_series": "n300", "card_count": 1},),
+    "blackhole-p150b-sweeps": ({"board_type": "blackhole", "device_series": "p150b", "card_count": 1},),
+    "blackhole-p100a-sweeps": ({"board_type": "blackhole", "device_series": "p100a", "card_count": 1},),
+    "blackhole-p300a-sweeps": ({"board_type": "blackhole", "device_series": "p300a", "card_count": 2},),
+    "wormhole-t3k-sweeps": ({"device_series": "n300", "card_count": 4},),
+    "wormhole-galaxy-sweeps": ({"device_series": "tt_galaxy_wh"},),
+    "lead-models-single-chip": ({"max_card_count": 1, "excluded_device_series": ("tt_galaxy_wh",)},),
+    "lead-models-galaxy": (
+        {"device_series": "tt_galaxy_wh"},
+        {"min_card_count": 2},
+    ),
+}
+
+
+# ── Local/manual mesh capability by physical hardware ────────────────────────
+# This answers a different question from the ownership maps above:
+# "What meshes can this machine reasonably run when no explicit TEST_GROUP_NAME
+# has been pinned for CI scheduling?"
+#
+# We keep this separate from CI ownership so local/manual execution can be more
+# permissive without reintroducing duplicate execution in CI.
+LOCAL_HARDWARE_MESH_CAPABILITY_RULES = (
+    {
+        "match": {"board_type": "wormhole", "device_series": "n150", "card_count": 1},
+        "allowed_mesh_shapes": ("1x1",),
+    },
+    {
+        "match": {"board_type": "wormhole", "device_series": "n300", "card_count": 1},
+        "allowed_mesh_shapes": ("1x1", "1x2"),
+    },
+    {
+        "match": {"device_series": "n300", "card_count": 4},
+        "allowed_mesh_shapes": ("1x1", "1x2", "1x4"),
+    },
+    {
+        "match": {"device_series": "tt_galaxy_wh"},
+        "allowed_mesh_shapes": ("1x1", "1x2", "1x4", "1x8", "2x4", "4x4", "4x8", "8x4", "2x16", "16x2", "1x32", "32x1"),
+    },
+    {
+        "match": {"board_type": "blackhole", "device_series": "p150b", "card_count": 1},
+        "allowed_mesh_shapes": ("1x1",),
+    },
+    {
+        "match": {"board_type": "blackhole", "device_series": "p100a", "card_count": 1},
+        "allowed_mesh_shapes": ("1x1",),
+    },
+    {
+        "match": {"board_type": "blackhole", "device_series": "p300a", "card_count": 2},
+        "allowed_mesh_shapes": ("1x1", "1x2"),
+    },
+)
+
+
+# ── Routing helpers ───────────────────────────────────────────────────────────
+# Resolve ``test_group_name`` / runner payloads for ``compute_*_matrix`` and
+# ``main`` output splitting.
+
+
+def get_runner_config(test_group_name):
+    """Build the matrix row payload for a logical test group."""
+    group = TEST_GROUPS[test_group_name]
+    profile = RUNNER_PROFILES[group["runner_profile"]]
+    return {
+        "test_group_name": test_group_name,
+        "arch": profile["arch"],
+        "sku": profile["sku"],
+        "runs_on": _resolve_runs_on(profile["sku"]),
+        "runner_label": profile["runner_label"],
+        "tt_smi_cmd": profile["tt_smi_cmd"],
+    }
+
+
+def get_matrix_output_key_for_test_group(test_group_name):
+    """Return which ``*-matrix`` output bucket this test group belongs to."""
+    group = TEST_GROUPS[test_group_name]
+    profile = RUNNER_PROFILES[group["runner_profile"]]
+    return profile["matrix_output_key"]
+
+
+def get_test_group_name_for_hardware_group(hardware_group):
+    """Map a parsed hardware tuple to the logical test group used in CI."""
+    if hardware_group is None:
+        return "wormhole-n150-sweeps"
+
+    board_type, device_series, card_count = hardware_group
+
+    if device_series == "p300a":
+        return "blackhole-p300a-sweeps"
+    if device_series == "p100a":
+        return "blackhole-p100a-sweeps"
+    if board_type == "blackhole" or device_series == "p150b":
+        return "blackhole-p150b-sweeps"
+    if device_series == "tt_galaxy_wh":
+        return "wormhole-galaxy-sweeps"
+    if device_series == "n300" and card_count == 4:
+        return "wormhole-t3k-sweeps"
+    if device_series == "n300":
+        return "wormhole-n300-sweeps"
+    return "wormhole-n150-sweeps"
+
+
+def get_lead_models_test_group_name_for_hardware_group(hardware_group):
+    """Map a parsed hardware tuple to the lead-model CI lane."""
+    if hardware_group is None:
+        return LEAD_MODELS_DEFAULT_TEST_GROUP
+
+    board_type, device_series, card_count = hardware_group
+    if board_type == "blackhole":
+        return LEAD_MODELS_DEFAULT_TEST_GROUP
+    wants_galaxy = device_series == "tt_galaxy_wh" or card_count > 1
+    return "lead-models-galaxy" if wants_galaxy else LEAD_MODELS_DEFAULT_TEST_GROUP
+
+
+def get_mesh_test_group_map(run_type):
+    """Return the mesh-shape ownership map for a run type."""
+    if run_type == "lead_models":
+        return LEAD_MODELS_MESH_TEST_GROUPS
+    if run_type == "model_traced":
+        return MODEL_TRACED_MESH_TEST_GROUPS
+    return {}
+
+
+def get_vector_load_filter_policy(grouping_mode):
+    """Return the runtime filtering policy implied by manifest grouping mode."""
+    return VECTOR_LOAD_FILTER_POLICIES.get(
+        grouping_mode,
+        {
+            "kind": None,
+            "enforce_mesh_capability": False,
+            "enforce_hardware_capability": False,
+        },
+    )
+
+
+def get_vector_load_filter_kind(grouping_mode):
+    """Return which compatibility filter should be enforced from manifest grouping mode."""
+    return get_vector_load_filter_policy(grouping_mode)["kind"]
+
+
+def get_allowed_mesh_shapes_for_test_group(run_type, test_group_name):
+    """Return manifest mesh-shape strings owned by a logical test group.
+
+    This is the strict CI ownership view. A runner lane should only claim the
+    meshes routed to it by the matrix so we avoid duplicate execution.
+    """
+    mesh_test_groups = get_mesh_test_group_map(run_type)
+    if not mesh_test_groups:
+        return ()
+
+    return tuple(sorted(mesh for mesh, group_name in mesh_test_groups.items() if group_name == test_group_name))
+
+
+def get_allowed_mesh_shapes_for_local_hardware_group(hardware_group):
+    """Return broader mesh capability for a locally inferred physical machine.
+
+    Unlike ``get_allowed_mesh_shapes_for_test_group()``, this helper is for
+    local/manual runs where no explicit CI lane was selected. In that case we
+    prefer hardware capability over CI ownership so a machine can run meshes it
+    is physically capable of supporting.
+    """
+    for capability_rule in LOCAL_HARDWARE_MESH_CAPABILITY_RULES:
+        if hardware_group_matches_rule(hardware_group, capability_rule["match"]):
+            return capability_rule["allowed_mesh_shapes"]
+    return ()
+
+
+def get_allowed_hardware_rules_for_test_group(run_type, test_group_name):
+    """Return hardware capability rules for a logical test group."""
+    del run_type
+    return TEST_GROUP_HARDWARE_CAPABILITY_RULES.get(test_group_name, ())
+
+
+def get_test_group_capability_profile(run_type, test_group_name):
+    """Return derived mesh + hardware capabilities for a logical test group."""
+    return {
+        "allowed_mesh_shapes": get_allowed_mesh_shapes_for_test_group(run_type, test_group_name),
+        "hardware_rules": get_allowed_hardware_rules_for_test_group(run_type, test_group_name),
+    }
+
+
+def hardware_group_matches_rule(hardware_group, rule):
+    """Return whether a normalized hardware tuple satisfies one capability rule."""
+    if hardware_group is None:
+        return False
+
+    board_type, device_series, card_count = hardware_group
+    required_board = rule.get("board_type")
+    required_series = rule.get("device_series")
+    required_count = rule.get("card_count")
+    min_card_count = rule.get("min_card_count")
+    max_card_count = rule.get("max_card_count")
+    excluded_device_series = tuple(rule.get("excluded_device_series", ()))
+
+    if device_series and device_series in excluded_device_series:
+        return False
+
+    if required_board and board_type:
+        wormhole_compatible = "wormhole" in required_board and "wormhole" in board_type
+        if required_board != board_type and not wormhole_compatible:
+            return False
+
+    if required_series and device_series and required_series != device_series:
+        return False
+
+    if card_count is not None:
+        if required_count is not None and card_count != required_count:
+            return False
+        if min_card_count is not None and card_count < min_card_count:
+            return False
+        if max_card_count is not None and card_count > max_card_count:
+            return False
+
+    return True
+
+
+def hardware_group_matches_any_rule(hardware_group, rules):
+    """Return whether a hardware tuple satisfies any declared capability rule."""
+    return any(hardware_group_matches_rule(hardware_group, rule) for rule in rules)
+
+
+# ── Derived: split combined matrix into per-hardware workflow outputs ────────
+# The output bucket is a property of the runner profile, so derive these lists
+# instead of repeating them by hand in a second mapping.
+
+HW_GROUP_MATRIX_KEYS = {
+    key: [
+        test_group_name
+        for test_group_name in TEST_GROUPS
+        if get_matrix_output_key_for_test_group(test_group_name) == key
+    ]
+    for key in MATRIX_OUTPUT_KEYS
+}

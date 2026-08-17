@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -79,7 +79,9 @@ def run_perf_deit(
         weka_is_on = True
         if len(image_examples) == 0:
             weka_is_on = False
-            files_raw = iter(load_dataset("imagenet-1k", split="validation", use_auth_token=True, streaming=True))
+            files_raw = iter(
+                load_dataset("ILSVRC/imagenet-1k", split="validation", use_auth_token=True, streaming=True)
+            )
             image_examples = []
             sample_count = BATCH_SIZE * iterations
             for _ in range(sample_count):

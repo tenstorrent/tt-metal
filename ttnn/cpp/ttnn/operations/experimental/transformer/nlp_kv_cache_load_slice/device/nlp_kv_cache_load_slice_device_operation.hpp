@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,16 +7,16 @@
 #include <optional>
 
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/decorators.hpp"
 #include "nlp_kv_cache_load_slice_device_operation_types.hpp"
 #include "nlp_kv_cache_load_slice_program_factory.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::experimental::prim {
 
 struct NlpKVCacheLoadSliceDeviceOperation {
     using operation_attributes_t = NlpKvCacheLoadSliceParams;
     using tensor_args_t = NlpKvCacheLoadSliceInputs;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<NlpKVCacheLoadSliceProgramFactory>;
 

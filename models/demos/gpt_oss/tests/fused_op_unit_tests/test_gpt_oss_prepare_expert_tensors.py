@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -26,6 +26,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc, profiler
+from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from tools.tracy.process_model_log import get_latest_ops_log_filename, run_device_profiler
 
@@ -394,7 +395,10 @@ def _run_prepare_expert_tensors_test(
     )
 
     # Compare outputs - indices (use exact match for integers)
-    indices_match = torch.all(tt_indices_rm_torch == ref_indices_rm)
+    # Cast both to int32 before comparing: tt_indices_rm_torch is uint16 (from TTNN DataType::UINT16)
+    # and ref_indices_rm is int16 (torch.Short). PyTorch does not support type promotion between
+    # unsigned and signed integer types, so we widen both to int32 for the comparison.
+    indices_match = torch.all(tt_indices_rm_torch.to(torch.int32) == ref_indices_rm.to(torch.int32))
     logger.info(f"Indices exact match: {indices_match}")
     assert indices_match, "Expert indices don't match exactly"
 
@@ -409,7 +413,7 @@ def _run_prepare_expert_tensors_test(
     )
 
     def op_fn():
-        return gpt_oss_prepare_expert_tensors_ttnn(
+        hidden_rm, indices_rm, _ = gpt_oss_prepare_expert_tensors_ttnn(
             tt_hidden_states,
             tt_topk_indices,
             tt_topk_weights,
@@ -418,6 +422,10 @@ def _run_prepare_expert_tensors_test(
             hidden_size,
             num_experts_per_tok,
         )
+        # Only return tensors that own their own device buffer.
+        # The weights output is a reshape-view aliasing the input's buffer;
+        # deallocating it would free the input and crash subsequent iterations.
+        return (hidden_rm, indices_rm)
 
     # Device performance measurement mode (when env var is set)
     if os.getenv(DEVICE_PERF_ENV_VAR) is not None:
@@ -600,7 +608,7 @@ def _skip_single_device_no_ccl():
     [
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-            "trace_region_size": 30000000,
+            TRACE_MODEL_KEY_PARAM: "gpt-oss-20b",
         }
     ],
     indirect=True,
@@ -684,7 +692,7 @@ def test_gpt_oss_prepare_expert_tensors(
     [
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-            "trace_region_size": 30000000,
+            TRACE_MODEL_KEY_PARAM: "gpt-oss-20b",
         }
     ],
     indirect=True,

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -21,12 +21,12 @@
 #include "common_test_utils.hpp"
 #include "ttnn/async_runtime.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/operations/ccl/all_gather/all_gather.hpp"
-#include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/unit_mesh/unit_mesh_utils.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
@@ -79,6 +79,12 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0) {
         single_meshes[3].get(),
     };
 
+    // https://github.com/tenstorrent/tt-metal/issues/24235
+    // Remove when https://github.com/tenstorrent/tt-metal/issues/25418 is fixed.
+    for (auto& device : single_meshes) {
+        device->disable_and_clear_program_cache();
+    }
+
     const size_t num_devices = devices.size();
     TT_FATAL(
         test_expected_num_devices == num_devices,
@@ -100,8 +106,9 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0) {
     QueueId op_cq_id(0);  // operation command queue id
     boost::asio::thread_pool pool(devices.size());
 
-    TensorSpec tensor_spec(input_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), in_memory_config));
-    TensorSpec output_tensor_spec(
+    tt::tt_metal::TensorSpec tensor_spec(
+        input_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), in_memory_config));
+    tt::tt_metal::TensorSpec output_tensor_spec(
         output_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), in_memory_config));
 
     for (int outer_loop = 0; outer_loop < 1; outer_loop++) {
@@ -121,17 +128,9 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0) {
                     host_data[j] = bfloat16(static_cast<float>(dev_idx));
                 }
 
-                // TODO (#25340): Switch to use create_device_tensor? (TensorTopology logic should mirror
-                // create_device_tensor)
                 auto& single_mesh = single_meshes[dev_idx];
-                auto input_buffer = tt::tt_metal::tensor_impl::allocate_device_buffer(single_mesh.get(), tensor_spec);
-                auto input_storage = tt::tt_metal::DeviceStorage{input_buffer, {MeshCoordinate(0, 0)}};
-                Tensor input_tensor = Tensor(input_storage, tensor_spec, TensorTopology{});
-
-                auto output_buffer =
-                    tt::tt_metal::tensor_impl::allocate_device_buffer(single_mesh.get(), output_tensor_spec);
-                auto output_storage = tt::tt_metal::DeviceStorage{output_buffer, {MeshCoordinate(0, 0)}};
-                Tensor output_tensor = Tensor(output_storage, output_tensor_spec, TensorTopology{});
+                Tensor input_tensor = ttnn::create_device_tensor(tensor_spec, single_mesh.get());
+                Tensor output_tensor = ttnn::create_device_tensor(output_tensor_spec, single_mesh.get());
 
                 // Enqueue write_buffer to the read/write command queue and record the event
                 ttnn::write_buffer(QueueId(op_cq_id), input_tensor, {host_data});
@@ -153,18 +152,17 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0) {
 
         log_info(LogTest, "Enqueue AllGather");
 
-        auto aggregated_tensor = tt::tt_metal::experimental::unit_mesh::aggregate(device_tensors);
-        auto aggregated_output_tensor = tt::tt_metal::experimental::unit_mesh::aggregate(output_tensors);
+        auto aggregated_tensor = ttnn::experimental::unit_mesh::aggregate(device_tensors);
+        auto aggregated_output_tensor = ttnn::experimental::unit_mesh::aggregate(output_tensors);
         // Quiesce parent mesh before all gather
         mesh_device_->quiesce_devices();
 
         auto all_gathered_tensor = ttnn::all_gather(
             aggregated_tensor,
             /* dim */ 0,
-            std::nullopt,
-            std::nullopt,
-            std::nullopt,
-            aggregated_output_tensor);
+            /*cluster_axis=*/std::nullopt,
+            /*memory_config=*/std::nullopt,
+            /*persistent_output_tensor=*/aggregated_output_tensor);
 
         // Quiesce parent mesh after all gather
         mesh_device_->quiesce_devices();
@@ -181,10 +179,7 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0) {
                     dummy_data[j] = bfloat16(static_cast<float>(dev_idx));
                 }
                 auto& single_mesh = single_meshes[dev_idx];
-                auto dummy_buffer = tt::tt_metal::tensor_impl::allocate_device_buffer(single_mesh.get(), tensor_spec);
-                auto dummy_storage = tt::tt_metal::DeviceStorage{dummy_buffer, {MeshCoordinate(0, 0)}};
-
-                Tensor dummy_tensor = Tensor(dummy_storage, tensor_spec, TensorTopology{});
+                Tensor dummy_tensor = ttnn::create_device_tensor(tensor_spec, single_mesh.get());
                 ttnn::write_buffer(ttnn::QueueId(op_cq_id), dummy_tensor, {dummy_data});
                 ttnn::test_utils::dispatch_ops_to_device(dummy_tensor, ttnn::QueueId(op_cq_id));
 
@@ -273,8 +268,9 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0CQ1) {
 
     boost::asio::thread_pool pool(devices.size());
 
-    TensorSpec tensor_spec(input_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), in_memory_config));
-    TensorSpec output_tensor_spec(
+    tt::tt_metal::TensorSpec tensor_spec(
+        input_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), in_memory_config));
+    tt::tt_metal::TensorSpec output_tensor_spec(
         output_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), in_memory_config));
 
     for (int outer_loop = 0; outer_loop < 1; outer_loop++) {
@@ -295,17 +291,8 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0CQ1) {
                 }
 
                 auto& single_mesh = single_meshes[dev_idx];
-                auto input_buffer = tt::tt_metal::tensor_impl::allocate_device_buffer(single_mesh.get(), tensor_spec);
-                auto input_storage = tt::tt_metal::DeviceStorage{input_buffer, {MeshCoordinate(0, 0)}};
-
-                // TODO (#25340): Switch to use create_device_tensor? (TensorTopology logic should mirror
-                // create_device_tensor)
-                Tensor input_tensor = Tensor(input_storage, tensor_spec, TensorTopology{});
-
-                auto output_buffer =
-                    tt::tt_metal::tensor_impl::allocate_device_buffer(single_mesh.get(), output_tensor_spec);
-                auto output_storage = tt::tt_metal::DeviceStorage{output_buffer, {MeshCoordinate(0, 0)}};
-                Tensor output_tensor = Tensor(output_storage, output_tensor_spec, TensorTopology{});
+                Tensor input_tensor = ttnn::create_device_tensor(tensor_spec, single_mesh.get());
+                Tensor output_tensor = ttnn::create_device_tensor(output_tensor_spec, single_mesh.get());
 
                 // Enqueue write_buffer to the operation`s command queue and record the event
                 ttnn::write_buffer(op_cq_id, input_tensor, {host_data});
@@ -333,8 +320,8 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0CQ1) {
 
         log_info(LogTest, "Enqueue AllGather");
 
-        auto aggregated_tensor = tt::tt_metal::experimental::unit_mesh::aggregate(device_tensors);
-        auto aggregated_output_tensor = tt::tt_metal::experimental::unit_mesh::aggregate(output_tensors);
+        auto aggregated_tensor = ttnn::experimental::unit_mesh::aggregate(device_tensors);
+        auto aggregated_output_tensor = ttnn::experimental::unit_mesh::aggregate(output_tensors);
 
         // Quiesce parent mesh before all gather
         mesh_device_->quiesce_devices();
@@ -342,10 +329,9 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0CQ1) {
         auto all_gathered_tensor = ttnn::all_gather(
             aggregated_tensor,
             /* dim */ dim,
-            std::nullopt,
-            std::nullopt,
-            std::nullopt,
-            aggregated_output_tensor);
+            /*cluster_axis=*/std::nullopt,
+            /*memory_config=*/std::nullopt,
+            /*persistent_output_tensor=*/aggregated_output_tensor);
 
         // Quiesce parent mesh after all gather
         mesh_device_->quiesce_devices();
@@ -366,10 +352,7 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0CQ1) {
                 for (int j = 0; j < num_elems; j++) {
                     dummy_data[j] = bfloat16(static_cast<float>(dev_idx));
                 }
-                auto dummy_buffer = tt::tt_metal::tensor_impl::allocate_device_buffer(single_mesh.get(), tensor_spec);
-                auto dummy_storage = tt::tt_metal::DeviceStorage{dummy_buffer, {MeshCoordinate(0, 0)}};
-
-                Tensor dummy_tensor = Tensor(dummy_storage, tensor_spec, TensorTopology{});
+                Tensor dummy_tensor = ttnn::create_device_tensor(tensor_spec, single_mesh.get());
                 ttnn::write_buffer(op_cq_id, dummy_tensor, {dummy_data});
                 ttnn::test_utils::dispatch_ops_to_device(dummy_tensor, op_cq_id);
 
@@ -479,8 +462,9 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksMultithreadCQ0) {
 
     boost::asio::thread_pool pool(devices.size());
 
-    TensorSpec tensor_spec(input_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), in_memory_config));
-    TensorSpec output_tensor_spec(
+    tt::tt_metal::TensorSpec tensor_spec(
+        input_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), in_memory_config));
+    tt::tt_metal::TensorSpec output_tensor_spec(
         output_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), in_memory_config));
 
     for (int outer_loop = 0; outer_loop < 1; outer_loop++) {
@@ -501,17 +485,8 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksMultithreadCQ0) {
                 }
 
                 auto& single_mesh = single_meshes[dev_idx];
-                auto input_buffer = tt::tt_metal::tensor_impl::allocate_device_buffer(single_mesh.get(), tensor_spec);
-                auto input_storage = tt::tt_metal::DeviceStorage{input_buffer, {MeshCoordinate(0, 0)}};
-
-                // TODO (#25340): Switch to use create_device_tensor? (TensorTopology logic should mirror
-                // create_device_tensor)
-                Tensor input_tensor = Tensor(input_storage, tensor_spec, TensorTopology{});
-
-                auto output_buffer =
-                    tt::tt_metal::tensor_impl::allocate_device_buffer(single_mesh.get(), output_tensor_spec);
-                auto output_storage = tt::tt_metal::DeviceStorage{output_buffer, {MeshCoordinate(0, 0)}};
-                Tensor output_tensor = Tensor(output_storage, output_tensor_spec, TensorTopology{});
+                Tensor input_tensor = ttnn::create_device_tensor(tensor_spec, single_mesh.get());
+                Tensor output_tensor = ttnn::create_device_tensor(output_tensor_spec, single_mesh.get());
 
                 // Enqueue write_buffer to the operation`s command queue and record the event
                 ttnn::write_buffer(mem_cq_id, input_tensor, {host_data});
@@ -539,8 +514,8 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksMultithreadCQ0) {
 
         log_info(LogTest, "Enqueue AllGather");
 
-        auto aggregated_tensor = tt::tt_metal::experimental::unit_mesh::aggregate(device_tensors);
-        auto aggregated_output_tensor = tt::tt_metal::experimental::unit_mesh::aggregate(output_tensors);
+        auto aggregated_tensor = ttnn::experimental::unit_mesh::aggregate(device_tensors);
+        auto aggregated_output_tensor = ttnn::experimental::unit_mesh::aggregate(output_tensors);
 
         // Quiesce parent mesh before all gather
         mesh_device_->quiesce_devices();
@@ -548,10 +523,9 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksMultithreadCQ0) {
         auto all_gathered_tensor = ttnn::all_gather(
             aggregated_tensor,
             /* dim */ dim,
-            std::nullopt,
-            std::nullopt,
-            std::nullopt,
-            aggregated_output_tensor);
+            /*cluster_axis=*/std::nullopt,
+            /*memory_config=*/std::nullopt,
+            /*persistent_output_tensor=*/aggregated_output_tensor);
 
         // Quiesce parent mesh after all gather
         mesh_device_->quiesce_devices();
@@ -570,10 +544,7 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksMultithreadCQ0) {
                 for (int j = 0; j < num_elems; j++) {
                     dummy_data[j] = bfloat16(static_cast<float>(dev_idx));
                 }
-                auto dummy_buffer = tt::tt_metal::tensor_impl::allocate_device_buffer(single_mesh.get(), tensor_spec);
-                auto dummy_storage = tt::tt_metal::DeviceStorage{dummy_buffer, {MeshCoordinate(0, 0)}};
-
-                Tensor dummy_tensor = Tensor(dummy_storage, tensor_spec, TensorTopology{});
+                Tensor dummy_tensor = ttnn::create_device_tensor(tensor_spec, single_mesh.get());
                 ttnn::write_buffer(op_ccl_cq_id, dummy_tensor, {dummy_data});
                 ttnn::test_utils::dispatch_ops_to_device(dummy_tensor, op_ccl_cq_id);
 

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -25,6 +25,7 @@ TEST(CleanupTest, Basic) {
 
 TEST(CleanupTest, MultipleCleanupsInOrder) {
     std::vector<int> log;
+    log.reserve(3);
     {
         auto cleanup1 = make_cleanup([&log]() { log.push_back(1); });
         auto cleanup2 = make_cleanup([&log]() { log.push_back(2); });
@@ -56,7 +57,7 @@ TEST(CleanupTest, MoveConstruction) {
 TEST(CleanupTest, ExceptionSafety) {
     bool cleanup_called = false;
     try {
-        auto cleanup = make_cleanup([&cleanup_called]() { cleanup_called = true; });
+        [[maybe_unused]] auto cleanup = make_cleanup([&cleanup_called]() { cleanup_called = true; });
         throw std::runtime_error("test exception");
     } catch (const std::runtime_error& e) {
         // Exception caught, cleanup should still execute

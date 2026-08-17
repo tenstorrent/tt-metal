@@ -1,8 +1,9 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <tt_stl/reflection.hpp>
 
 #include <cstdint>
 #include <optional>
@@ -55,8 +56,9 @@ struct LlamaAllGatherMatmulAsyncParams {
         cluster_axis(cluster_axis) {}
 
     auto attributes() const {
-        using tt::stl::reflection::Attribute;
+        using ttsl::reflection::Attribute;
         std::vector<std::tuple<std::string, Attribute>> attrs;
+        attrs.reserve(9);
         attrs.emplace_back("devices", devices);
         attrs.emplace_back("dim", dim);
         attrs.emplace_back("num_links", num_links);
@@ -80,8 +82,8 @@ struct LlamaAllGatherMatmulAsyncResult {
 };
 
 struct LlamaAllGatherMatmulAsyncResultSpec {
-    TensorSpec mm;
-    TensorSpec aggregated;
+    tt::tt_metal::TensorSpec mm;
+    tt::tt_metal::TensorSpec aggregated;
 };
 
 struct LlamaAllGatherMatmulAsyncInputs {

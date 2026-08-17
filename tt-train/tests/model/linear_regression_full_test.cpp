@@ -1,11 +1,9 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <fmt/format.h>
 #include <gtest/gtest.h>
-
-#include <core/ttnn_all_includes.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "core/system_utils.hpp"
@@ -40,6 +38,7 @@ TEST_F(LinearRegressionFullTest, TestLinearRegressionFull) {
     }
 
     std::vector<float> targets;
+    targets.reserve(batch_size);
     for (size_t i = 0; i < batch_size; ++i) {
         targets.push_back(static_cast<float>(i) * 0.1F);
     }

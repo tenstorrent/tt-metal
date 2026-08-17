@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -15,53 +15,41 @@
 #include <nanobind/stl/variant.h>
 
 #include "ttnn/operations/data_movement/fold/fold.hpp"
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/types.hpp"
 
 namespace ttnn::operations::data_movement {
 
 void bind_fold_operation(nb::module_& mod) {
-    bind_registered_operation(
-        mod,
-        ttnn::fold,
-        R"doc(
-            Fold TT Tensor.
-            Input tensor must be on TT accelerator device, in ROW_MAJOR.
-            Output tensor will be on TT accelerator device, in ROW_MAJOR.
+    const auto* doc = R"doc(
+        NHWC space-to-depth. Packs every stride_h * stride_w neighbourhood at position
+        (h * stride_h, w * stride_w) into the channel dim at position (h, w). Shapes below
+        use the padded H/W/C (any HW / channel padding is applied before folding).
 
-            Args:
-                input (ttnn.Tensor): Input tensor to be folded. Tensor of shape [N, H, W, C].
-                stride_h (int): Stride along the H-dimension.
-                stride_w (int): Stride along the W-dimension.
-        )doc",
-        ttnn::nanobind_overload_t{
-            [](const decltype(ttnn::fold)& op,
-               const ttnn::Tensor& input,
-               uint32_t stride_h,
-               uint32_t stride_w,
-               bool use_transpose_as_fold,
-               const std::optional<ttnn::Shape>& output_shape,
-               std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>, std::array<uint32_t, 6>> padding,
-               const std::optional<CoreRangeSet>& grid_size,
-               const std::optional<MemoryConfig>& override_memory_config) -> ttnn::Tensor {
-                return op(
-                    input,
-                    stride_h,
-                    stride_w,
-                    use_transpose_as_fold,
-                    output_shape,
-                    padding,
-                    grid_size,
-                    override_memory_config);
-            },
-            nb::arg("input"),
-            nb::arg("stride_h"),
-            nb::arg("stride_w"),
-            nb::arg("use_transpose_as_fold") = false,
-            nb::arg("output_shape") = nb::none(),
-            nb::arg("padding") = std::array<uint32_t, 2>{0, 0},
-            nb::arg("grid_size") = nb::none(),
-            nb::arg("override_memory_config") = nb::none()});
+        Output shape: (N, Hp/stride_h, Wp/stride_w, Cp * stride_h * stride_w)
+        where Hp, Wp, Cp are the padded input dims.
+
+        Args:
+            input (ttnn.Tensor): Input tensor [N, H, W, C].
+            stride_h (int): Stride along H.
+            stride_w (int): Stride along W.
+            collapse_output (bool, optional): Default False. When True, returns
+                (1, 1, N * Hp/stride_h * Wp/stride_w, Cp * stride_h * stride_w) instead.
+    )doc";
+
+    ttnn::bind_function<"fold">(
+        mod,
+        doc,
+        &ttnn::fold,
+        nb::arg("input"),
+        nb::arg("stride_h"),
+        nb::arg("stride_w"),
+        nb::arg("use_transpose_as_fold") = false,
+        nb::arg("output_shape") = nb::none(),
+        nb::arg("padding") = std::array<uint32_t, 2>{0, 0},
+        nb::arg("grid_size") = nb::none(),
+        nb::arg("override_memory_config") = nb::none(),
+        nb::arg("collapse_output") = false);
 }
 
 }  // namespace ttnn::operations::data_movement

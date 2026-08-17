@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -20,11 +20,9 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/profiler_optional_metadata.hpp>
-#include <tt-metalium/profiler_types.hpp>
+#include <tt-metalium/device_types.hpp>
+// UMD: re-exports CoreType (used in SetRuntimeArgs/GetRuntimeArgs default parameter).
 #include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/soc_descriptor.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
 
 namespace tt::tt_metal {
 class Buffer;
@@ -48,7 +46,29 @@ std::map<ChipId, IDevice*> CreateDevices(
     [[deprecated]] bool ignored = false,  // This argument was not used
     bool initialize_fabric_and_dispatch_fw = true);
 
+/**
+ * Close all devices in the given map.
+ *
+ * This function closes all devices in the given map, releasing many associated resources. After this call, this process
+ * still controls all devices. Call ReleaseOwnership() to fully release ownership.
+ *
+ * Return value: void
+ */
 void CloseDevices(const std::map<ChipId, IDevice*>& devices);
+
+/**
+ * Release ownership of the MetalContext singleton instance.
+ *
+ * The MetalContext is created when a hal function is called or a MeshDevice or IDevice are created. Only one process
+ * can have a MetalContext at any one time. This function destroys the MetalContext instance, releasing all associated
+ * resources and allowing another process to create a new MetalContext.
+ * All devices must be closed before calling this function.
+ *
+ * After calling this function, the MetalContext will be re-created on the next access.
+ *
+ * Return value: void
+ */
+void ReleaseOwnership();
 
 /**
  * Returns a pointer to an active device with the given ID, NULL otherwise
@@ -73,7 +93,7 @@ IDevice* GetActiveDevice(ChipId device_id);
  * host_buffer | Buffer on host to copy data from                | Span<const uint8_t> &   | Host buffer size must match
  * buffer               | Yes      |
  */
-void WriteToBuffer(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer);
+void WriteToBuffer(Buffer& buffer, ttsl::Span<const uint8_t> host_buffer);
 /**
  * Copies data from a host buffer into the specified buffer
  *
@@ -89,7 +109,7 @@ template <typename DType>
 void WriteToBuffer(Buffer& buffer, const std::vector<DType>& host_buffer) {
     WriteToBuffer(
         buffer,
-        tt::stl::Span<const uint8_t>(
+        ttsl::Span<const uint8_t>(
             reinterpret_cast<const uint8_t*>(host_buffer.data()), host_buffer.size() * sizeof(DType)));
 }
 template <typename DType>
@@ -183,7 +203,7 @@ void CompileProgram(IDevice* device, Program& program, bool force_slow_dispatch 
  * | Argument            | Description                                                            | Type | Valid Range
  * | Required |
  * |---------------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
- * | device              | The device to whcih runtime args will be written                       | IDevice* | | Yes |
+ * | device              | The device to which runtime args will be written                       | IDevice* | | Yes |
  * | program             | The program holding the runtime args                                   | const Program & | |
  * Yes      |
  */
@@ -211,20 +231,6 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
  * |                          | no       |
  */
 uint32_t EncodePerDeviceProgramID(uint32_t base_program_id, uint32_t device_id, bool is_host_fallback_op = false);
-
-/**
- * Decode per device program ID to get encoded values (base program id, device id, and a flag indicating whether
- * it's an op run entirely on host).
- *
- * Return value: tuple<uint32_t, uint32_t, bool>
- *
- * | Argument             | Description                                                                         |  Data
- * type            | Valid range              | required |
- * |----------------------|-------------------------------------------------------------------------------------|-----------------------|--------------------------|----------|
- * | device_program_id    | Encoded device specific id used by the performance profiler  |
- * uint32_t        | 0 - 2^32 - 1             | yes      |
- */
-DeviceProgramId DecodePerDeviceProgramID(uint32_t device_program_id);
 
 // clang-format off
 /**

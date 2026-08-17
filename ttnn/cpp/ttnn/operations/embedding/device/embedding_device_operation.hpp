@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,19 +7,19 @@
 #include <variant>
 
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/decorators.hpp"
 
 #include "embedding_device_operation_types.hpp"
 #include "embeddings_fused_program_factory.hpp"
 #include "embeddings_rm_program_factory.hpp"
 #include "embeddings_tilized_indices_program_factory.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::prim {
 
 struct EmbeddingsDeviceOperation {
     using operation_attributes_t = EmbeddingParams;
     using tensor_args_t = EmbeddingInputs;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<
         EmbeddingsFusedProgramFactory,

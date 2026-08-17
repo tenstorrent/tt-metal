@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,6 +12,11 @@
 
 namespace ttnn::experimental::prim {
 
+// Matmul-signal aggregators (fused all-gather only) need one extra worker core per direction on top of the
+// mux/worker cores. Auto falls back to reader-signaled matmul when those cores do not fit at the requested
+// core_grid_offset; On requires them, Off never uses them.
+enum class MMSignalAggregatorMode : uint8_t { Auto, On, Off };
+
 struct StridedAllGatherAsyncParams {
     const std::vector<tt::tt_metal::IDevice*> devices;
     const uint32_t dim;
@@ -21,7 +26,6 @@ struct StridedAllGatherAsyncParams {
     const ttnn::ccl::Topology topology;
     const std::vector<GlobalSemaphore> semaphore;
     const std::optional<uint32_t> cluster_axis;
-    const std::optional<uint32_t> tiles_per_chunk;
     const std::optional<uint32_t> num_workers_per_link;
     const std::optional<uint32_t> num_buffers_per_channel;
     const std::optional<uint32_t> mm_cores_y;

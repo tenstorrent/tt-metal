@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,12 +12,17 @@
 #include <nanobind/stl/vector.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/shared_ptr.h>
+#include <nanobind/stl/pair.h>
 
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 
 namespace ttnn::mesh_socket {
 
 void py_module_types(nb::module_& mod) {
+    nb::enum_<tt::tt_metal::distributed::SocketEndpoint>(mod, "SocketEndpoint")
+        .value("SENDER", tt::tt_metal::distributed::SocketEndpoint::SENDER, "Sender endpoint")
+        .value("RECEIVER", tt::tt_metal::distributed::SocketEndpoint::RECEIVER, "Receiver endpoint");
+
     nb::class_<tt::tt_metal::distributed::MeshCoreCoord>(mod, "MeshCoreCoord")
         .def(
             nb::init<tt::tt_metal::distributed::MeshCoordinate, tt::tt_metal::CoreCoord>(),
@@ -59,18 +64,23 @@ void py_module_types(nb::module_& mod) {
                 Args:
                     sender_core (MeshCoreCoord): The mesh core coordinate of the sender
                     receiver_core (MeshCoreCoord): The mesh core coordinate of the receiver
-            )doc");
+            )doc")
+        .def_rw("sender_core", &tt::tt_metal::distributed::SocketConnection::sender_core, "Sender core coordinate")
+        .def_rw(
+            "receiver_core", &tt::tt_metal::distributed::SocketConnection::receiver_core, "Receiver core coordinate");
     nb::class_<tt::tt_metal::distributed::SocketMemoryConfig>(mod, "SocketMemoryConfig")
         .def(
             nb::init<
                 tt::tt_metal::BufferType,
                 uint32_t,
                 std::optional<tt::tt_metal::SubDeviceId>,
-                std::optional<tt::tt_metal::SubDeviceId>>(),
+                std::optional<tt::tt_metal::SubDeviceId>,
+                bool>(),
             nb::arg("socket_storage_type"),
             nb::arg("fifo_size"),
             nb::arg("sender_sub_device") = nb::none(),
             nb::arg("receiver_sub_device") = nb::none(),
+            nb::arg("per_core_allocation") = false,
             R"doc(
                 Initialize a SocketMemoryConfig with socket storage type, fifo size, sender sub device and receiver sub device.
 
@@ -79,17 +89,30 @@ void py_module_types(nb::module_& mod) {
                     fifo_size (int): The size of the fifo
                     sender_sub_device (SubDeviceId, optional): The sub device of the sender
                     receiver_sub_device (SubDeviceId, optional): The sub device of the receiver
-            )doc");
+                    per_core_allocation (bool, optional): When True and socket_storage_type is L1, allocate the
+                        receiver data (FIFO) buffer with the per-core (HYBRID) allocator so it only occupies L1 on
+                        the receiver connection core instead of every worker core. Requires the device to be opened
+                        with TT_METAL_ALLOCATOR_MODE_HYBRID=1. Defaults to False (no behavior change).
+            )doc")
+        .def_rw(
+            "per_core_allocation",
+            &tt::tt_metal::distributed::SocketMemoryConfig::per_core_allocation,
+            "Whether the receiver data buffer uses per-core (HYBRID) allocation")
+        .def_rw(
+            "socket_storage_type",
+            &tt::tt_metal::distributed::SocketMemoryConfig::socket_storage_type,
+            "The buffer type used for the socket data buffer")
+        .def_rw("fifo_size", &tt::tt_metal::distributed::SocketMemoryConfig::fifo_size, "The size of the socket FIFO");
     nb::class_<tt::tt_metal::distributed::SocketConfig>(mod, "SocketConfig")
         .def(
             "__init__",
             [](tt::tt_metal::distributed::SocketConfig* config,
-               std::vector<tt::tt_metal::distributed::SocketConnection> connections,
-               tt::tt_metal::distributed::SocketMemoryConfig memory_config,
+               const std::vector<tt::tt_metal::distributed::SocketConnection>& connections,
+               const tt::tt_metal::distributed::SocketMemoryConfig& memory_config,
                std::optional<int> sender_rank,
                std::optional<int> receiver_rank) {
                 new (config) tt::tt_metal::distributed::SocketConfig();
-                config->socket_connection_config = std::move(connections);
+                config->socket_connection_config = connections;
                 config->socket_mem_config = memory_config;
                 if (sender_rank.has_value()) {
                     config->sender_rank = tt::tt_metal::distributed::multihost::Rank(sender_rank.value());
@@ -110,6 +133,32 @@ void py_module_types(nb::module_& mod) {
                     memory_config (SocketMemoryConfig): The memory config of the socket
                     sender_rank (int, optional): The rank of the sender host in a multi-host context
                     receiver_rank (int, optional): The rank of the receiver host in a multi-host context
+            )doc")
+        .def(
+            "__init__",
+            [](tt::tt_metal::distributed::SocketConfig* config,
+               const std::vector<tt::tt_metal::distributed::SocketConnection>& connections,
+               const tt::tt_metal::distributed::SocketMemoryConfig& memory_config,
+               uint32_t sender_mesh_id,
+               uint32_t receiver_mesh_id) {
+                new (config) tt::tt_metal::distributed::SocketConfig(
+                    connections,
+                    memory_config,
+                    tt::tt_fabric::MeshId(sender_mesh_id),
+                    tt::tt_fabric::MeshId(receiver_mesh_id));
+            },
+            nb::arg("connections"),
+            nb::arg("memory_config"),
+            nb::arg("sender_mesh_id"),
+            nb::arg("receiver_mesh_id"),
+            R"doc(
+                Initialize a SocketConfig with connections, memory config, and mesh IDs.
+
+                Args:
+                    connections (List[SocketConnection]): The connections of the socket
+                    memory_config (SocketMemoryConfig): The memory config of the socket
+                    sender_mesh_id (int): The system mesh ID of the sender mesh
+                    receiver_mesh_id (int): The system mesh ID of the receiver mesh
             )doc");
     nb::class_<tt::tt_metal::distributed::MeshSocket>(mod, "MeshSocket")
         .def(
@@ -137,6 +186,50 @@ void py_module_types(nb::module_& mod) {
             R"doc(
                 Returns the L1 address of the socket configuration buffer on the device.
                 This address is passed to device kernels to access socket metadata.
+            )doc")
+        .def(
+            "get_active_cores",
+            [](const tt::tt_metal::distributed::MeshSocket& socket) { return socket.get_active_cores(); },
+            R"doc(
+                Returns the active cores of the socket.
+            )doc")
+        .def(
+            "get_mesh_device",
+            [](const tt::tt_metal::distributed::MeshSocket& socket) { return socket.get_mesh_device(); },
+            R"doc(
+                Returns the mesh device of the socket.
+            )doc")
+        .def(
+            "get_connection_config",
+            [](const tt::tt_metal::distributed::MeshSocket& socket) {
+                return socket.get_config().socket_connection_config;
+            },
+            R"doc(
+            Returns the connection config of the socket.
+            )doc")
+        .def(
+            "get_socket_endpoint_type",
+            &tt::tt_metal::distributed::MeshSocket::get_socket_endpoint_type,
+            R"doc(
+                Returns the socket endpoint type (SENDER or RECEIVER).
+
+                Returns:
+                    SocketEndpoint: The endpoint type of this socket.
+            )doc")
+        .def(
+            "get_fabric_node_id",
+            &tt::tt_metal::distributed::MeshSocket::get_fabric_node_id,
+            nb::arg("endpoint"),
+            nb::arg("coord"),
+            R"doc(
+                Returns the fabric node ID for a given endpoint and device coordinate.
+
+                Args:
+                    endpoint (SocketEndpoint): The endpoint type (SENDER or RECEIVER).
+                    coord (MeshCoordinate): The device coordinate to look up.
+
+                Returns:
+                    FabricNodeId: The fabric node ID for the given endpoint and coordinate.
             )doc");
 }
 

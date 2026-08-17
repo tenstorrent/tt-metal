@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 ///
@@ -84,10 +84,10 @@ ReduceToRootOp::spec_return_value_t ReduceToRootOp::compute_output_specs(
     const auto& input_tensor_s = tensor_args.input_tensor_s;
     const auto& input_tensor_m = tensor_args.input_tensor_m;
 
-    std::vector<TensorSpec> final_output_spec = {
+    std::vector<tt::tt_metal::TensorSpec> final_output_spec = {
         input_tensor_l.tensor_spec(), input_tensor_s.tensor_spec(), input_tensor_m.tensor_spec()};
 
-    std::vector<TensorSpec> intermediate_specs;
+    std::vector<tt::tt_metal::TensorSpec> intermediate_specs;
     if (tensor_args.optional_intermediate_tensor.has_value()) {
         intermediate_specs.push_back(tensor_args.optional_intermediate_tensor.value().tensor_spec());
         return {intermediate_specs, final_output_spec};
@@ -97,7 +97,7 @@ ReduceToRootOp::spec_return_value_t ReduceToRootOp::compute_output_specs(
     uint32_t shape_1 = final_output_spec[0].memory_config().shard_spec()->shape[1] +
                        (2 * final_output_spec[1].memory_config().shard_spec()->shape[1]);
     Shape intermediate_shape = Shape{shape_0, shape_1};
-    TensorSpec intermediate_spec(intermediate_shape, final_output_spec[0].tensor_layout());
+    tt::tt_metal::TensorSpec intermediate_spec(intermediate_shape, final_output_spec[0].tensor_layout());
     intermediate_specs.push_back(intermediate_spec);
 
     return {intermediate_specs, final_output_spec};
@@ -156,7 +156,7 @@ ReduceToRootOp::ReduceToRoot::cached_mesh_workload_t ReduceToRootOp::ReduceToRoo
         semaphores.push_back(ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0));
     }
     log_debug(tt::LogOp, "Semaphores allocated and waiting for all devices to be ready in reduce_to_root op");
-    tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, {});
+    tt::tt_metal::distributed::Synchronize(*mesh_device, std::nullopt, {});
     log_debug(tt::LogOp, "Synchronize devices in reduce_to_root op done");
 
     const auto& coords = tensor_coords.coords();

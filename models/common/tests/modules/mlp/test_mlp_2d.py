@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -17,7 +17,13 @@ import pytest
 import torch
 from loguru import logger
 from transformers import AutoConfig, AutoModelForCausalLM
-from transformers.modeling_utils import no_init_weights
+
+# transformers 5.x moved no_init_weights to transformers.initialization; fall back
+# to the old location for transformers < 5.x.
+try:
+    from transformers.initialization import no_init_weights
+except ImportError:
+    from transformers.modeling_utils import no_init_weights
 
 import ttnn
 from models.common.modules.lazy_weight import LazyWeight
@@ -442,6 +448,8 @@ def test_mlp_2d_vs_reference_from_model_args(ttnn_mesh_device: ttnn.MeshDevice, 
     Runs only on Galaxy (TG) devices due to Galaxy-specific CCL operations.
     """
 
+    import os
+
     from models.tt_transformers.tests.test_utils import get_ref_model_dype
     from models.tt_transformers.tt.ccl import TT_CCL
     from models.tt_transformers.tt.model_config import ModelArgs
@@ -449,10 +457,10 @@ def test_mlp_2d_vs_reference_from_model_args(ttnn_mesh_device: ttnn.MeshDevice, 
     batch_size = 1
     mode = "decode" if seq_len <= 32 else "prefill"
 
+    os.environ.setdefault("HF_MODEL", "meta-llama/Llama-3.1-8B-Instruct")
     model_args = ModelArgs(ttnn_mesh_device, max_batch_size=batch_size, max_seq_len=128, cache_hf=True)
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict()
-    model_config = model_args.get_model_config()
 
     # Load reference model
     first_layer_prefix = model_args.get_state_dict_prefix("MLP", 0)
@@ -481,8 +489,8 @@ def test_mlp_2d_vs_reference_from_model_args(ttnn_mesh_device: ttnn.MeshDevice, 
     # Run reference
     reference_output = reference_model(torch_input)
 
-    # Run TT model - use model_config for proper input sharding
-    input_mem_config = model_config["MLP_ACT_MEMCFG"] if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
+    # Run TT model
+    input_mem_config = ttnn.DRAM_MEMORY_CONFIG
 
     tt_input = ttnn.from_torch(
         torch_input,

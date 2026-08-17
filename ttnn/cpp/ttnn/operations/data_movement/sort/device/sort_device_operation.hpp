@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,17 +7,16 @@
 #include "sort_program_factory.hpp"
 #include "sort_device_operation_types.hpp"
 
-#include "ttnn/decorators.hpp"
-
 #include <cstdint>
 #include <optional>
+#include "ttnn/types.hpp"
 
 namespace ttnn::prim {
 
 struct SortDeviceOperation {
     using operation_attributes_t = SortParams;
     using tensor_args_t = SortInputs;
-    using spec_return_value_t = std::vector<ttnn::TensorSpec>;
+    using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
     using tensor_return_value_t = std::vector<Tensor>;
     using program_factory_t = std::variant<
         SortProgramFactorySingleRowSingleCore,

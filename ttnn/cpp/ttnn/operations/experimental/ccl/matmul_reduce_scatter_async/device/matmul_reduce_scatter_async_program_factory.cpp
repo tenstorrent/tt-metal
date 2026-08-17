@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,8 +7,6 @@
 #include <algorithm>
 
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/work_split.hpp>
 
 #include "ttnn/operations/math.hpp"
@@ -79,11 +77,15 @@ MatmulReduceScatterAsyncProgramFactory::cached_program_t MatmulReduceScatterAsyn
         ttnn::experimental::ccl::ReduceScatterFusedOpSignaler();
     reduce_scatter_fused_op_signaler->init_fused_op();
 
+    auto resolved_reduce_scatter_compute_kernel_config =
+        ttnn::ccl::resolve_fp32_acc_compute_kernel_config(std::nullopt, output_tensors.mm.dtype());
+
     // Reduce Scatter - use the new artifacts-based helper
     auto reduce_scatter_artifacts = ttnn::experimental::prim::build_ring_reduce_scatter_minimal_async_program_artifacts(
         program,
         output_tensors.mm,
         tensor_args.persistent_intermediate,
+        /*penult_intermediate_tensor=*/std::nullopt,  // contiguous intermediate path not supported through here.
         mesh_coord,
         forward_coord,
         backward_coord,
@@ -102,7 +104,7 @@ MatmulReduceScatterAsyncProgramFactory::cached_program_t MatmulReduceScatterAsyn
         std::nullopt,
         std::nullopt,
         args.reduce_scatter_core_grid_offset,
-        std::nullopt);
+        resolved_reduce_scatter_compute_kernel_config);
 
     // Create a matmul signal info object that gets populated by the matmul kernel
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> matmul_fused_op_signaler =
@@ -162,11 +164,13 @@ void MatmulReduceScatterAsyncProgramFactory::override_runtime_arguments(
             shared_vars.reduce_scatter_artifacts.num_workers_per_direction,
             shared_vars.reduce_scatter_artifacts.num_mux_cores_per_direction_per_link,
             shared_vars.reduce_scatter_artifacts.num_cores_per_link,
+            shared_vars.reduce_scatter_artifacts.normalized_dim,
             args.reduce_scatter_params.barrier_semaphore,
             args.reduce_scatter_params.semaphore,
             output_tensors.mm,
             tensor_args.persistent_intermediate,
-            output_tensors.reduce_scatter);
+            output_tensors.reduce_scatter,
+            /*penult_intermediate=*/std::nullopt);
     }
 }
 

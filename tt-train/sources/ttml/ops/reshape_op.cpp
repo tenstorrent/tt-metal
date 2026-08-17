@@ -1,10 +1,8 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "reshape_op.hpp"
-
-#include <core/ttnn_all_includes.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/graph_utils.hpp"
@@ -17,7 +15,7 @@ autograd::TensorPtr reshape(const autograd::TensorPtr& tensor, std::span<uint32_
 
     // Convert span to SmallVector for ttnn::Shape construction
     // ttnn::Shape expects SmallVector<uint32_t> (which is the Container type)
-    ttnn::SmallVector<uint32_t> shape_vec(shape.begin(), shape.end());
+    ttsl::SmallVector<uint32_t> shape_vec(shape.begin(), shape.end());
 
     // Construct ttnn::Shape from SmallVector
     ttnn::Shape ttnn_shape(shape_vec);
@@ -34,8 +32,7 @@ autograd::TensorPtr reshape(const autograd::TensorPtr& tensor, std::span<uint32_
         tensor->add_grad(grad_reshaped);
     };
 
-    auto links = autograd::get_links(tensor);
-    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+    out->set_node(autograd::add_backward_node(std::move(grad), out, tensor));
 
     return out;
 }

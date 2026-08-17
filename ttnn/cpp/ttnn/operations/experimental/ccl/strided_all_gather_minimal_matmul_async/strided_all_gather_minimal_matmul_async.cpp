@@ -1,13 +1,13 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/experimental/ccl/strided_all_gather_minimal_matmul_async/device/strided_all_gather_minimal_matmul_async_op.hpp"
 #include "ttnn/operations/experimental/ccl/strided_all_gather_minimal_matmul_async/strided_all_gather_minimal_matmul_async.hpp"
 
-namespace ttnn::operations::experimental::ccl {
+namespace ttnn::experimental {
 
-std::vector<ttnn::Tensor> ExecuteStridedAllGatherMinimalMatmulAsync::invoke(
+std::vector<ttnn::Tensor> strided_all_gather_minimal_matmul_async(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     const std::optional<ttnn::Tensor>& persistent_output_buffer,
@@ -25,7 +25,12 @@ std::vector<ttnn::Tensor> ExecuteStridedAllGatherMinimalMatmulAsync::invoke(
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel,
-    std::optional<bool> read_local_slice_from_input) {
+    std::optional<bool> read_local_slice_from_input,
+    const std::optional<const Tensor>& fused_ternary_input_a,
+    const std::optional<const Tensor>& fused_ternary_input_b,
+    std::optional<float> fused_ternary_scalar,
+    int32_t chunks,
+    ttnn::experimental::prim::MMSignalAggregatorMode mm_signal_aggregator_mode) {
     return ttnn::prim::strided_all_gather_minimal_matmul_async(
         input_tensor,
         weight_tensor,
@@ -45,7 +50,12 @@ std::vector<ttnn::Tensor> ExecuteStridedAllGatherMinimalMatmulAsync::invoke(
         num_workers_per_link.value_or(
             1),  // Conservatively 1 right now since the all gather core grid is hardcoded from the outside
         num_buffers_per_channel,
-        read_local_slice_from_input);
+        read_local_slice_from_input,
+        fused_ternary_input_a,
+        fused_ternary_input_b,
+        fused_ternary_scalar,
+        chunks,
+        mm_signal_aggregator_mode);
 }
 
-}  // namespace ttnn::operations::experimental::ccl
+}  // namespace ttnn::experimental

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -169,8 +169,6 @@ class TtDetrTransformerDecoderLayer:
                     weight=self.params.norms[norm_index].weight,
                     bias=self.params.norms[norm_index].bias,
                 )
-                ttnn.deallocate(self.params.norms[norm_index].weight)
-                ttnn.deallocate(self.params.norms[norm_index].bias)
                 norm_index += 1
 
             elif layer == "cross_attn":

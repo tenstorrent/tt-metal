@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,7 +10,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "all_reduce.hpp"
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
@@ -35,44 +35,34 @@ void bind_all_reduce(nb::module_& mod) {
         Returns:
             ttnn.Tensor: The reduced tensor with the same shape as the input tensor. The output tensor is identical across all devices along the cluster axis if specified, otherwise it is identical across all devices in the mesh.
 
-        Example:
-            >>> full_tensor = torch.randn([1, 1, 32, 256], dtype=torch.bfloat16)
-            >>> mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 8))
-            >>> ttnn_tensor = ttnn.from_torch(
-                            full_tensor,
-                            dtype=input_dtype,
-                            device=mesh_device,
-                            layout=layout,
-                            memory_config=mem_config,
-                            mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=(1, 8), dims=(-1, -2)))
-            >>> output = ttnn.all_reduce(ttnn_tensor)
-            >>> print(output.shape)
-            [1, 1, 32, 256]
+        Supported dtypes and layouts:
+
+            .. list-table::
+                :header-rows: 1
+
+                * - Dtypes
+                  - Layouts
+                * - BFLOAT16, BFLOAT8_B, FLOAT32
+                  - TILE, ROW_MAJOR
+
+            The reduction is performed in BFLOAT16; BFLOAT8_B inputs are up-cast to BFLOAT16 for the reduction and cast back, and FLOAT32 takes a dedicated reduction path. Input must be rank 2 or greater. The output preserves the input dtype and shape.
+
+        Memory Support:
+            - Interleaved: DRAM and L1
+            - Sharded: supported in DRAM or L1. A sharded input is converted to interleaved internally (its buffer type is preserved), and the result is written back according to the requested output ``memory_config``.
         )doc";
 
-    using OperationType = decltype(ttnn::all_reduce);
-    ttnn::bind_registered_operation(
+    ttnn::bind_function<"all_reduce">(
         mod,
-        ttnn::all_reduce,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const std::optional<uint32_t> cluster_axis,
-               const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<uint32_t> num_links,
-               const std::optional<tt::tt_fabric::Topology> topology) {
-                return self(input_tensor, cluster_axis, subdevice_id, memory_config, num_links, topology);
-            },
-            nb::arg("input_tensor").noconvert(),
-            nb::kw_only(),
-            nb::arg("cluster_axis") = nb::none(),
-            nb::arg("subdevice_id") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("num_links") = nb::none(),
-            nb::arg("topology") = nb::none(),
-        });
+        &ttnn::all_reduce,
+        nb::arg("input_tensor").noconvert(),
+        nb::kw_only(),
+        nb::arg("cluster_axis") = nb::none(),
+        nb::arg("subdevice_id") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("num_links") = nb::none(),
+        nb::arg("topology") = nb::none());
 }
 
 }  // namespace ttnn::operations::ccl

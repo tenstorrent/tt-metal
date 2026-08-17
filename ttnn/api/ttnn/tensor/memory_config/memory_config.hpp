@@ -1,7 +1,7 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include <tt-metalium/experimental/tensor/spec/memory_config/memory_config.hpp>
+#include <tt-metalium/tensor/spec/memory_config/memory_config.hpp>

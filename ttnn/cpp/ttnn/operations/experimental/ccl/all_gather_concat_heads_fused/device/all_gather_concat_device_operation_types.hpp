@@ -1,13 +1,14 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <tt_stl/reflection.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/global_semaphore.hpp"
-#include <tt_stl/reflection.hpp>
+#include <cstddef>
 #include <optional>
 #include <vector>
 
@@ -48,8 +49,10 @@ struct AllGatherConcatParams {
         cluster_axis(cluster_axis) {}
     // Add attributes method for reflection
     auto attributes() const {
-        using tt::stl::reflection::Attribute;
+        using ttsl::reflection::Attribute;
+        constexpr std::size_t kNumAttributes = 9;
         std::vector<std::tuple<std::string, Attribute>> attrs;
+        attrs.reserve(kNumAttributes);
 
         attrs.emplace_back("dim", dim);
         attrs.emplace_back("num_links", num_links);

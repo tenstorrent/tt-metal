@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -45,6 +45,7 @@ std::vector<DatasetSubset<DatasetType>> random_split(
 
     // Create the subsets
     std::vector<DatasetSubset<DatasetType>> subsets;
+    subsets.reserve(split_sizes.size());
     auto current_iter = indices.begin();
     for (size_t size : split_sizes) {
         std::vector<size_t> subset_indices(current_iter, current_iter + (long)size);

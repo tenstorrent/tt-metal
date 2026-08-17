@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -180,19 +180,14 @@ class RotarySetup(LightweightModule):
         assert position_idxs.device != device, "rot_idxs must be on device"
 
         # [INFO] Qwen2.5 VL produces cos and sin matrices with shape [batch_size, 1, seq_len, head_dim]
-        # todo)) { Optimize the slicing work-around below
         assert len(position_idxs.shape) == 1, "position_idxs must be a [batch] tensor"
-        batch_size = position_idxs.shape[0]
-        cos, sin = None, None
-        for i in range(batch_size):
-            pos_i = position_idxs[i : i + 1]
-            cos_i = ttnn.embedding(pos_i, self.cos_matrix)  # [1, head_dim]
-            sin_i = ttnn.embedding(pos_i, self.sin_matrix)  # [1, head_dim]
-            cos = cos_i if cos is None else ttnn.concat([cos, cos_i], dim=0)  # towards [batch_size, head_dim]
-            sin = sin_i if sin is None else ttnn.concat([sin, sin_i], dim=0)  # towards [batch_size, head_dim]
 
-        cos = ttnn.to_layout(cos, ttnn.TILE_LAYOUT)
-        sin = ttnn.to_layout(sin, ttnn.TILE_LAYOUT)
+        # Reshape from [batch] to [1, batch] for batched embedding
+        rot_idxs = ttnn.reshape(position_idxs, (1, position_idxs.shape[0]))
+
+        # Single batched embedding call instead of loop - much more efficient
+        cos = ttnn.embedding(rot_idxs, self.cos_matrix, layout=ttnn.TILE_LAYOUT)  # [1, batch, head_dim]
+        sin = ttnn.embedding(rot_idxs, self.sin_matrix, layout=ttnn.TILE_LAYOUT)  # [1, batch, head_dim]
 
         cos = ttnn.unsqueeze_to_4D(cos)  # [1, 1, batch_size, head_dim]
         sin = ttnn.unsqueeze_to_4D(sin)  # [1, 1, batch_size, head_dim]

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,6 +10,6 @@
 namespace tt::tt_metal::distributed {
 
 // Identifier for a mesh trace.
-using MeshTraceId = tt::stl::StrongType<uint32_t, struct MeshTraceIdTag>;
+using MeshTraceId = ttsl::StrongType<uint32_t, struct MeshTraceIdTag>;
 
 }  // namespace tt::tt_metal::distributed

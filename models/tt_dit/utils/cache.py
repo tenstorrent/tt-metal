@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -10,7 +10,10 @@ from typing import TYPE_CHECKING, NamedTuple
 
 from loguru import logger
 
+import ttnn
+
 from ..layers.module import Module
+from . import walltime
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -45,6 +48,7 @@ def load_model(
     subfolder: str,
     parallel_config: NamedTuple,
     mesh_shape: Sequence[int],
+    mesh_device: ttnn.MeshDevice,
     dtype: str = "bf16",
     is_fsdp: bool = False,
     get_torch_state_dict: Callable[[], dict] | None = None,
@@ -55,7 +59,7 @@ def load_model(
 
     Attempts to load from cache first. If the cache does not exist, loads from PyTorch state dict
     (if provided) and optionally creates the cache. Raises `MissingCacheError` if neither is
-    available.
+    available. Finally, any module that needs to be offloaded is taken care of.
 
     Args:
         `tt_model`: TT model instance to load weights into.
@@ -63,6 +67,7 @@ def load_model(
         `subfolder`: Subfolder within model cache directory (e.g., "transformer", "vae").
         `parallel_config`: Parallelism configuration (tensor/sequence parallel).
         `mesh_shape`: Device mesh shape.
+        `mesh_device`: Mesh device used to derive the multi-host ownership cache suffix.
         `dtype`: Data type for cached weights (default: "bf16").
         `is_fsdp`: Whether FSDP is used (default: False).
         `get_torch_state_dict`: Optional callable returning PyTorch state dict. Enables lazy
@@ -74,11 +79,15 @@ def load_model(
         `MissingCacheError`: Cache does not exist and `get_torch_state_dict` is `None`.
         `RuntimeError`: `TT_DIT_CACHE_DIR` is not set and `get_torch_state_dict` is `None`.
     """
+    if tt_model.is_loaded():
+        return
+
     cache_dir = model_cache_dir(
         model_name=model_name,
         subfolder=subfolder,
         parallel_config=parallel_config,
         mesh_shape=mesh_shape,
+        mesh_device=mesh_device,
         dtype=dtype,
         is_fsdp=is_fsdp,
         required=get_torch_state_dict is None,
@@ -91,26 +100,33 @@ def load_model(
             "Loading transformer weights from PyTorch state dict. "
             "To use caching, set the TT_DIT_CACHE_DIR environment variable."
         )
-        tt_model.load_torch_state_dict(get_torch_state_dict())
+        with walltime.timed("weight_load", f"{model_name}/{subfolder}", cached=False):
+            tt_model.load_torch_state_dict(get_torch_state_dict())
+        ttnn.distributed_context_barrier()
         return
 
-    if Path(cache_dir).is_dir():
+    if _cache_is_complete(cache_dir):
         logger.info(f"loading cache at '{cache_dir}'.")
-        tt_model.load(cache_dir)
+        with walltime.timed("weight_load", f"{model_name}/{subfolder}", cached=True):
+            tt_model.load(cache_dir)
+        ttnn.distributed_context_barrier()
         return
 
     if get_torch_state_dict is None:
         raise MissingCacheError(cache_dir)
 
     logger.info("Cache does not exist. Loading PyTorch state dict.")
-    # Create host tensors when creating the cache to circumvent the issue that replicated device
-    # tensors lead to redundant copies when saved to disk.
-    tt_model.load_torch_state_dict(get_torch_state_dict(), on_host=create_cache)
+    with walltime.timed("weight_load", f"{model_name}/{subfolder}", cached=False):
+        tt_model.load_torch_state_dict(get_torch_state_dict())
+
+    # If distributed, ensure that all processes have completed the check whether cache_dir exists,
+    # before any rank might proceed to create that dir to save.
+    ttnn.distributed_context_barrier()
 
     if create_cache:
         logger.info(f"Writing cache to '{cache_dir}'.")
         tt_model.save(cache_dir)
-        tt_model.load(cache_dir)  # move to device
+        _mark_cache_complete(cache_dir)
 
 
 def model_cache_dir(
@@ -119,6 +135,7 @@ def model_cache_dir(
     subfolder: str,
     parallel_config: NamedTuple,
     mesh_shape: Sequence[int],
+    mesh_device: ttnn.MeshDevice,
     dtype: str = "bf16",
     is_fsdp: bool = False,
     required: bool = True,
@@ -137,7 +154,46 @@ def model_cache_dir(
     if is_fsdp:
         key += "_FSDP"
 
-    return Path(cache_dir) / model_name / subfolder / key
+    path = Path(cache_dir) / model_name / subfolder / key
+
+    ownership_suffix = _cache_ownership_suffix(mesh_device)
+    if ownership_suffix:
+        path = path / ownership_suffix
+
+    return path
+
+
+def _cache_ownership_suffix(mesh_device: ttnn.MeshDevice) -> str:
+    """Multi-host cache dir suffix keyed by local mesh-coordinate ownership.
+
+    Single-host / no distributed context: empty (same unsuffixed path as before).
+    Multi-host: ``host_coords_r{r0}-{r1}_c{c0}-{c1}`` for the local coord bounding box.
+    """
+    if _distributed_world_size() <= 1:
+        return ""
+
+    view = mesh_device.get_view()
+    rows = []
+    cols = []
+    for coord in ttnn.MeshCoordinateRange(view.shape()):
+        if view.is_local(coord):
+            rows.append(int(coord[0]))
+            cols.append(int(coord[1]))
+    return f"host_coords_r{min(rows)}-{max(rows)}_c{min(cols)}-{max(cols)}"
+
+
+def _cache_is_complete(cache_dir: str | Path) -> bool:
+    return (Path(cache_dir) / CACHE_DICT_FILE).is_file()
+
+
+def _mark_cache_complete(cache_dir: str | Path) -> None:
+    (Path(cache_dir) / CACHE_DICT_FILE).touch()
+
+
+def _distributed_world_size() -> int:
+    if not ttnn.distributed_context_is_initialized():
+        return 1
+    return int(ttnn.distributed_context_world_size())
 
 
 def _cache_root() -> str | None:

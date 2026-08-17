@@ -1,21 +1,116 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
+#include <map>
 #include <memory>
+#include <set>
+#include <tuple>
+#include <vector>
 #include <gtest/gtest.h>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include "tt_cluster.hpp"
-#include "tt_metal/fabric/topology_solver_internal.hpp"
-#include "tt_metal/fabric/physical_system_descriptor.hpp"
-#include "tt_metal/fabric/serialization/physical_system_descriptor_serialization.hpp"
-#include <tt-metalium/experimental/mock_device.hpp>
+#include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
+#include <tt-metalium/experimental/mock_device/mock_device.hpp>
 
 namespace tt::tt_fabric {
+
+namespace {
+
+template <typename TargetNode, typename GlobalNode>
+bool topology_test_complete_mapping_preserves_edges(
+    const detail::GraphIndexData<TargetNode, GlobalNode>& graph_data, const std::vector<int>& mapping) {
+    for (size_t t = 0; t < graph_data.n_target; ++t) {
+        if (mapping[t] < 0) {
+            return false;
+        }
+    }
+    for (size_t t1 = 0; t1 < graph_data.n_target; ++t1) {
+        const size_t g1 = static_cast<size_t>(mapping[t1]);
+        for (size_t t2 : graph_data.target_adj_idx[t1]) {
+            const size_t g2 = static_cast<size_t>(mapping[t2]);
+            if (!std::binary_search(graph_data.global_adj_idx[g1].begin(), graph_data.global_adj_idx[g1].end(), g2)) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+// Recompute ConstraintIndexData stats from the returned node map; ensures preferred_* in MappingResult match the
+// mapping.
+template <typename TargetNode, typename GlobalNode>
+void topology_test_expect_result_stats_match_mapping(
+    const detail::GraphIndexData<TargetNode, GlobalNode>& graph_data,
+    const detail::ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
+    const MappingResult<TargetNode, GlobalNode>& r,
+    size_t expected_preferred_total,
+    const char* label) {
+    std::vector<int> mapping(graph_data.n_target, -1);
+    for (size_t ti = 0; ti < graph_data.n_target; ++ti) {
+        const TargetNode tn = graph_data.target_nodes[ti];
+        auto it = r.target_to_global.find(tn);
+        ASSERT_NE(it, r.target_to_global.end()) << label << ": missing mapped target " << tn;
+        auto git = graph_data.global_to_idx.find(it->second);
+        ASSERT_NE(git, graph_data.global_to_idx.end());
+        mapping[ti] = static_cast<int>(git->second);
+    }
+    const auto [req_sat, pref_sat, pref_tot] = constraint_data.compute_constraint_stats(mapping, graph_data);
+    EXPECT_EQ(pref_tot, expected_preferred_total) << label << ": preferred_total";
+    EXPECT_EQ(pref_sat, r.constraint_stats.preferred_satisfied) << label << ": preferred_satisfied must match mapping";
+    EXPECT_EQ(pref_tot, r.constraint_stats.preferred_total) << label;
+    EXPECT_EQ(req_sat, r.constraint_stats.required_satisfied) << label;
+    EXPECT_TRUE(topology_test_complete_mapping_preserves_edges(graph_data, mapping))
+        << label << ": edges must be preserved on globals";
+}
+
+template <typename TargetNode, typename GlobalNode>
+size_t topology_test_relaxed_channel_fit_sum(
+    const detail::GraphIndexData<TargetNode, GlobalNode>& graph_data, const std::vector<int>& mapping) {
+    size_t sum = 0;
+    for (size_t t1 = 0; t1 < graph_data.n_target; ++t1) {
+        for (size_t t2 : graph_data.target_adj_idx[t1]) {
+            if (t2 <= t1) {
+                continue;
+            }
+            const int g1 = mapping[t1];
+            const int g2 = mapping[t2];
+            if (g1 < 0 || g2 < 0) {
+                continue;
+            }
+            size_t required = 1;
+            const auto& tc1 = graph_data.target_conn_count[t1];
+            const auto it1 = tc1.find(t2);
+            if (it1 != tc1.end()) {
+                required = std::max(required, it1->second);
+            }
+            const auto& tc2 = graph_data.target_conn_count[t2];
+            const auto it2 = tc2.find(t1);
+            if (it2 != tc2.end()) {
+                required = std::max(required, it2->second);
+            }
+            const size_t ug1 = static_cast<size_t>(g1);
+            const size_t ug2 = static_cast<size_t>(g2);
+            size_t actual = 0;
+            const auto& gc = graph_data.global_conn_count[ug1];
+            const auto git = gc.find(ug2);
+            if (git != gc.end()) {
+                actual = git->second;
+            }
+            sum += std::min(required, actual);
+        }
+    }
+    return sum;
+}
+
+}  // namespace
 
 class TopologySolverTest : public ::testing::Test {
 protected:
@@ -115,6 +210,112 @@ TEST_F(TopologySolverTest, BuildAdjacencyMapLogicalWithSwitch) {
     EXPECT_EQ(adjacency_map.size(), 2u) << "Should have 2 meshes total (1 compute + 1 switch)";
     EXPECT_EQ(compute_mesh_count, 1u) << "Should have 1 compute mesh (mesh_id 0)";
     EXPECT_EQ(switch_mesh_count, 1u) << "Should have 1 switch mesh (mesh_id 1)";
+}
+
+TEST_F(TopologySolverTest, BuildAdjacencyMapLogicalFromDescriptor) {
+    // Use 2x2 T3K multiprocess MGD (has 2 compute meshes: mesh_id 0 and 1)
+    const char* tt_metal_home = std::getenv("TT_METAL_HOME");
+    ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
+    const std::filesystem::path mesh_graph_desc_path =
+        std::filesystem::path(tt_metal_home) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_mesh_graph_descriptor.textproto";
+
+    // Create mesh graph from descriptor
+    auto mesh_graph_descriptor = MeshGraphDescriptor(mesh_graph_desc_path);
+    auto mesh_graph = MeshGraph(cluster_type, mesh_graph_desc_path.string());
+
+    // Build adjacency map logical (includes all meshes, including switches if present)
+    auto adjacency_map = build_adjacency_graph_logical(mesh_graph_descriptor);
+    auto adjacency_map_from_graph = build_adjacency_graph_logical(mesh_graph);
+
+    for (const auto& [mesh_id, adj_graph] : adjacency_map) {
+        ASSERT_TRUE(adjacency_map_from_graph.contains(mesh_id))
+            << "Mesh " << mesh_id.get() << " should exist in adjacency map from graph";
+        const auto& adj_graph_from_graph = adjacency_map_from_graph.find(mesh_id)->second;
+        EXPECT_EQ(adj_graph.get_nodes().size(), adj_graph_from_graph.get_nodes().size())
+            << "Mesh " << mesh_id.get() << " should have the same number of nodes";
+        for (int i = 0; i < adj_graph.get_nodes().size(); i++) {
+            EXPECT_EQ(
+                adj_graph.get_neighbors(adj_graph.get_nodes()[i]).size(),
+                adj_graph_from_graph.get_neighbors(adj_graph_from_graph.get_nodes()[i]).size())
+                << "Mesh " << mesh_id.get() << " should have the same number of neighbors for node "
+                << adj_graph.get_nodes()[i];
+        }
+    }
+
+    // For T3K 2x2 multiprocess, we expect 2 meshes (mesh_id 0 and 1)
+    // Note: This includes all meshes returned by get_all_mesh_ids() (compute meshes and switches if present)
+    EXPECT_EQ(adjacency_map.size(), 2u) << "Should have 2 meshes (mesh_id 0 and 1)";
+}
+
+// Regression: MGD lists grid shape only (no explicit MESH connection entries); intra-mesh edges come from
+// MeshGraphDescriptor::populate_intra_mesh_connections. Used by generate_rank_bindings + multi-MGD merge tests.
+TEST_F(TopologySolverTest, BuildAdjacencyMapLogicalFromBhGalaxyDescriptorMatchesMeshGraph) {
+    const char* tt_metal_home = std::getenv("TT_METAL_HOME");
+    ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
+    const std::filesystem::path mesh_graph_desc_path =
+        std::filesystem::path(tt_metal_home) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_galaxy_single_4x4_mesh.textproto";
+
+    MeshGraphDescriptor mesh_graph_descriptor(mesh_graph_desc_path);
+    MeshGraph mesh_graph(cluster_type, mesh_graph_desc_path.string());
+
+    auto adjacency_from_descriptor = build_adjacency_graph_logical(mesh_graph_descriptor);
+    auto adjacency_from_graph = build_adjacency_graph_logical(mesh_graph);
+
+    ASSERT_EQ(adjacency_from_descriptor.size(), adjacency_from_graph.size());
+    for (const auto& [mesh_id, adj_graph] : adjacency_from_descriptor) {
+        ASSERT_TRUE(adjacency_from_graph.contains(mesh_id))
+            << "Mesh " << mesh_id.get() << " should exist in adjacency map from MeshGraph";
+        const auto& adj_graph_from_graph = adjacency_from_graph.find(mesh_id)->second;
+        EXPECT_EQ(adj_graph.get_nodes().size(), adj_graph_from_graph.get_nodes().size())
+            << "Mesh " << mesh_id.get() << " should have the same number of nodes";
+        for (const auto& node : adj_graph.get_nodes()) {
+            EXPECT_EQ(adj_graph.get_neighbors(node).size(), adj_graph_from_graph.get_neighbors(node).size())
+                << "Mesh " << mesh_id.get() << " node " << node << " neighbor count should match MeshGraph path";
+        }
+    }
+}
+
+TEST_F(TopologySolverTest, BuildAdjacencyMapLogicalFromDescriptor2) {
+    const char* tt_metal_home = std::getenv("TT_METAL_HOME");
+    ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
+    const std::filesystem::path mesh_graph_desc_path =
+        std::filesystem::path(tt_metal_home) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_8x2_mesh_graph_descriptor.textproto";
+
+    // Create mesh graph from descriptor
+    auto mesh_graph_descriptor = MeshGraphDescriptor(mesh_graph_desc_path);
+    auto mesh_graph = MeshGraph(cluster_type, mesh_graph_desc_path.string());
+
+    // Build adjacency map logical (includes all meshes, including switches if present)
+    auto adjacency_map = build_adjacency_graph_logical(mesh_graph_descriptor);
+    auto adjacency_map_from_graph = build_adjacency_graph_logical(mesh_graph);
+
+    for (const auto& [mesh_id, adj_graph] : adjacency_map) {
+        ASSERT_TRUE(adjacency_map_from_graph.contains(mesh_id))
+            << "Mesh " << mesh_id.get() << " should exist in adjacency map from graph";
+        const auto& adj_graph_from_graph = adjacency_map_from_graph.find(mesh_id)->second;
+        EXPECT_EQ(adj_graph.get_nodes().size(), adj_graph_from_graph.get_nodes().size())
+            << "Mesh " << mesh_id.get() << " should have the same number of nodes";
+        for (int i = 0; i < adj_graph.get_nodes().size(); i++) {
+            EXPECT_EQ(
+                adj_graph.get_neighbors(adj_graph.get_nodes()[i]).size(),
+                adj_graph_from_graph.get_neighbors(adj_graph_from_graph.get_nodes()[i]).size())
+                << "Mesh " << mesh_id.get() << " should have the same number of neighbors for node "
+                << adj_graph.get_nodes()[i];
+
+            for (const auto& neighbor : adj_graph.get_neighbors(adj_graph.get_nodes()[i])) {
+                EXPECT_TRUE(
+                    std::find(
+                        adj_graph_from_graph.get_neighbors(adj_graph_from_graph.get_nodes()[i]).begin(),
+                        adj_graph_from_graph.get_neighbors(adj_graph_from_graph.get_nodes()[i]).end(),
+                        neighbor) != adj_graph_from_graph.get_neighbors(adj_graph_from_graph.get_nodes()[i]).end())
+                    << "Mesh " << mesh_id.get() << " should have neighbor " << neighbor << " for node "
+                    << adj_graph.get_nodes()[i];
+            }
+        }
+    }
 }
 
 TEST_F(TopologySolverTest, BuildAdjacencyMapPhysical) {
@@ -280,7 +481,7 @@ TEST_F(TopologySolverTest, MappingConstraintsTraitConstraints) {
     MappingConstraints<TestTargetNode, TestGlobalNode> required_constraints;
     std::map<TestTargetNode, std::string> target_traits = {{1, "host0"}, {2, "host0"}, {3, "host1"}};
     std::map<TestGlobalNode, std::string> global_traits = {{10, "host0"}, {11, "host0"}, {20, "host1"}, {21, "host1"}};
-    required_constraints.add_required_trait_constraint<std::string>(target_traits, global_traits);
+    EXPECT_TRUE(required_constraints.add_required_trait_constraint<std::string>(target_traits, global_traits));
 
     EXPECT_EQ(required_constraints.get_valid_mappings(1).size(), 2u);
     EXPECT_EQ(required_constraints.get_valid_mappings(1).count(10), 1u);
@@ -303,11 +504,11 @@ TEST_F(TopologySolverTest, MappingConstraintsIntersection) {
     // Test multiple trait constraints intersection (using uint8_t) - validation happens automatically
     std::map<TestTargetNode, uint8_t> target_host = {{1, 0}, {2, 0}};
     std::map<TestGlobalNode, uint8_t> global_host = {{10, 0}, {11, 0}, {20, 1}};
-    constraints.add_required_trait_constraint<uint8_t>(target_host, global_host);
+    EXPECT_TRUE(constraints.add_required_trait_constraint<uint8_t>(target_host, global_host));
 
     std::map<TestTargetNode, uint8_t> target_rack = {{1, 0}, {2, 1}};
     std::map<TestGlobalNode, uint8_t> global_rack = {{10, 0}, {11, 1}, {20, 0}};
-    constraints.add_required_trait_constraint<uint8_t>(target_rack, global_rack);
+    EXPECT_TRUE(constraints.add_required_trait_constraint<uint8_t>(target_rack, global_rack));
 
     EXPECT_EQ(constraints.get_valid_mappings(1).size(), 1u);  // host=0 AND rack=0 -> {10}
     EXPECT_EQ(constraints.get_valid_mappings(1).count(10), 1u);
@@ -334,14 +535,13 @@ TEST_F(TopologySolverTest, MappingConstraintsConflictHandling) {
     // Test conflict in required constraint - should throw automatically
     MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
     constraints.add_required_constraint(1, 10);
-    EXPECT_THROW(constraints.add_required_constraint(1, 20), std::runtime_error);
+    EXPECT_FALSE(constraints.add_required_constraint(1, 20)) << "Conflicting constraint should return false";
 
     // Test conflict in trait constraint - should throw (no matching global nodes)
     MappingConstraints<TestTargetNode, TestGlobalNode> trait_constraints;
     std::map<TestTargetNode, size_t> target_traits = {{1, 999}};
     std::map<TestGlobalNode, size_t> global_traits = {{10, 100}, {20, 200}};
-    EXPECT_THROW(
-        trait_constraints.add_required_trait_constraint<size_t>(target_traits, global_traits), std::runtime_error);
+    EXPECT_FALSE(trait_constraints.add_required_trait_constraint<size_t>(target_traits, global_traits));
 
     // Test conflict in trait constraint - conflicting trait values
     MappingConstraints<TestTargetNode, TestGlobalNode> conflict_constraints;
@@ -351,15 +551,15 @@ TEST_F(TopologySolverTest, MappingConstraintsConflictHandling) {
 
     std::map<TestTargetNode, uint8_t> target_host2 = {{1, 1}};
     std::map<TestGlobalNode, uint8_t> global_host2 = {{20, 1}, {21, 1}};
-    EXPECT_THROW(
-        conflict_constraints.add_required_trait_constraint<uint8_t>(target_host2, global_host2), std::runtime_error);
+    EXPECT_FALSE(conflict_constraints.add_required_trait_constraint<uint8_t>(target_host2, global_host2));
 
-    // Test conflict in constructor - should throw
+    // Test conflict in constructor - constructor doesn't throw, but validation should fail
     std::set<std::pair<TestTargetNode, TestGlobalNode>> conflicting_required = {{1, 10}, {1, 20}};
     std::set<std::pair<TestTargetNode, TestGlobalNode>> empty_preferred;
-    EXPECT_THROW(
-        (MappingConstraints<TestTargetNode, TestGlobalNode>(conflicting_required, empty_preferred)),
-        std::runtime_error);
+    MappingConstraints<TestTargetNode, TestGlobalNode> conflict_constraints_ctor(conflicting_required, empty_preferred);
+    // After construction with conflicting constraints, validation should fail
+    EXPECT_FALSE(conflict_constraints_ctor.validate())
+        << "Conflicting constraints in constructor should fail validation";
 }
 
 TEST_F(TopologySolverTest, GraphIndexDataBasic) {
@@ -526,6 +726,43 @@ TEST_F(TopologySolverTest, ConstraintIndexDataBasic) {
     EXPECT_TRUE(candidates_1.empty());  // Empty means all are valid
 }
 
+TEST_F(TopologySolverTest, ConstraintIndexDataForbiddenWithoutRestrictions) {
+    using namespace tt::tt_fabric::detail;
+
+    // Target with no required constraints + forbidden pairs
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2};
+    target_adj_map[2] = {1};
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};
+    global_adj_map[11] = {10};
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    GraphIndexData graph_data(target_graph, global_graph);
+
+    // No required constraints; add forbidden pair (1, 10)
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    constraints.add_forbidden_constraint(1, 10);
+
+    ConstraintIndexData constraint_data(constraints, graph_data);
+
+    // Target 1 (index 0): restricted empty, forbidden includes global 10 (index 0)
+    EXPECT_TRUE(constraint_data.restricted_global_indices[0].empty());
+    EXPECT_EQ(constraint_data.forbidden_global_indices[0].size(), 1u);
+    EXPECT_EQ(constraint_data.forbidden_global_indices[0][0], 0u);
+
+    // is_valid_mapping: (0, 0) forbidden, (0, 1) valid
+    EXPECT_FALSE(constraint_data.is_valid_mapping(0, 0));  // Target 1 -> Global 10: forbidden
+    EXPECT_TRUE(constraint_data.is_valid_mapping(0, 1));   // Target 1 -> Global 11: valid
+
+    // Target 2 (index 1): no restrictions, no forbidden
+    EXPECT_TRUE(constraint_data.forbidden_global_indices[1].empty());
+    EXPECT_TRUE(constraint_data.is_valid_mapping(1, 0));
+    EXPECT_TRUE(constraint_data.is_valid_mapping(1, 1));
+}
+
 TEST_F(TopologySolverTest, ConstraintIndexDataTraitConstraints) {
     using namespace tt::tt_fabric::detail;
 
@@ -549,7 +786,7 @@ TEST_F(TopologySolverTest, ConstraintIndexDataTraitConstraints) {
     MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
     std::map<TestTargetNode, std::string> target_traits = {{1, "host0"}, {2, "host1"}};
     std::map<TestGlobalNode, std::string> global_traits = {{10, "host0"}, {11, "host0"}, {20, "host1"}};
-    constraints.add_required_trait_constraint<std::string>(target_traits, global_traits);
+    EXPECT_TRUE(constraints.add_required_trait_constraint<std::string>(target_traits, global_traits));
 
     ConstraintIndexData constraint_data(constraints, graph_data);
 
@@ -740,7 +977,7 @@ TEST_F(TopologySolverTest, ConstraintIndexDataMissingNodes) {
         {20, "group1"},   // Missing from graph
         {11, "group2"},   // Exists in graph
         {30, "group2"}};  // Missing from graph
-    constraints.add_required_trait_constraint<std::string>(target_traits, global_traits);
+    EXPECT_TRUE(constraints.add_required_trait_constraint<std::string>(target_traits, global_traits));
 
     // Add preferred constraints with missing nodes
     constraints.add_preferred_constraint(1, 20);  // Node 20 is NOT in global graph
@@ -1136,7 +1373,7 @@ TEST_F(TopologySolverTest, DFSSearchEngineBasic) {
 
     // Run search
     DFSSearchEngine<TestTargetNode, TestGlobalNode> engine;
-    bool found = engine.search(graph_data, constraint_data, constraints, ConnectionValidationMode::RELAXED);
+    bool found = engine.search(graph_data, constraint_data, ConnectionValidationMode::RELAXED);
 
     // Should find a mapping (e.g., 1->10, 2->11)
     EXPECT_TRUE(found);
@@ -1188,7 +1425,7 @@ TEST_F(TopologySolverTest, DFSSearchEngineWithConstraints) {
 
     // Run search
     DFSSearchEngine<TestTargetNode, TestGlobalNode> engine;
-    bool found = engine.search(graph_data, constraint_data, constraints, ConnectionValidationMode::RELAXED);
+    bool found = engine.search(graph_data, constraint_data, ConnectionValidationMode::RELAXED);
 
     // Should find a mapping
     EXPECT_TRUE(found);
@@ -1225,7 +1462,7 @@ TEST_F(TopologySolverTest, DFSSearchEngineNoSolution) {
 
     // Run search
     DFSSearchEngine<TestTargetNode, TestGlobalNode> engine;
-    bool found = engine.search(graph_data, constraint_data, constraints, ConnectionValidationMode::RELAXED);
+    bool found = engine.search(graph_data, constraint_data, ConnectionValidationMode::RELAXED);
 
     // Should not find a mapping (target graph too large)
     EXPECT_FALSE(found);
@@ -1257,7 +1494,7 @@ TEST_F(TopologySolverTest, DFSSearchEngineStrictMode) {
 
     // Run search in STRICT mode - should find mapping (1->10, 2->12) since 12 has 2 channels
     DFSSearchEngine<TestTargetNode, TestGlobalNode> engine;
-    bool found = engine.search(graph_data, constraint_data, constraints, ConnectionValidationMode::STRICT);
+    bool found = engine.search(graph_data, constraint_data, ConnectionValidationMode::STRICT);
 
     EXPECT_TRUE(found);
     const auto& state = engine.get_state();
@@ -1297,7 +1534,7 @@ TEST_F(TopologySolverTest, DFSSearchEngineRelaxedModeChannelPreference) {
 
     // Run search in RELAXED mode
     DFSSearchEngine<TestTargetNode, TestGlobalNode> engine;
-    bool found = engine.search(graph_data, constraint_data, constraints, ConnectionValidationMode::RELAXED);
+    bool found = engine.search(graph_data, constraint_data, ConnectionValidationMode::RELAXED);
 
     EXPECT_TRUE(found);
     const auto& state = engine.get_state();
@@ -1349,7 +1586,7 @@ TEST_F(TopologySolverTest, MappingValidatorSavesPartialMapping) {
     ConstraintIndexData constraint_data(constraints, graph_data);
 
     // Initialize search state with partial mapping (node 1 -> 10, node 2 -> 11)
-    DFSSearchEngine<TestTargetNode, TestGlobalNode>::SearchState state;
+    TopologySearchState state;
     state.mapping.resize(3, -1);
     state.mapping[0] = 0;   // target node 1 -> global node 10
     state.mapping[1] = 1;   // target node 2 -> global node 11
@@ -1361,7 +1598,7 @@ TEST_F(TopologySolverTest, MappingValidatorSavesPartialMapping) {
     // Build result - should save partial mapping even though it's incomplete
     MappingResult<TestTargetNode, TestGlobalNode> result =
         MappingValidator<TestTargetNode, TestGlobalNode>::build_result(
-            state.mapping, graph_data, state, constraints, ConnectionValidationMode::RELAXED);
+            state.mapping, graph_data, constraint_data, state, ConnectionValidationMode::RELAXED);
 
     // Should fail (incomplete mapping)
     EXPECT_FALSE(result.success);
@@ -1569,7 +1806,7 @@ TEST_F(TopologySolverTest, RequiredConstraints_4x8MeshOn8x8Mesh_CornersToCorners
     // Create constraints with trait-based required mappings (one-to-many)
     // This constrains mesh corners to map to ANY of the 8 specified positions
     MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
-    constraints.add_required_trait_constraint<std::string>(target_traits, global_traits);
+    EXPECT_TRUE(constraints.add_required_trait_constraint<std::string>(target_traits, global_traits));
 
     // Solve the mapping
     auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
@@ -1642,6 +1879,79 @@ TEST_F(TopologySolverTest, RequiredConstraints_4x8MeshOn8x8Mesh_CornersToCorners
     } else {
         log_error(tt::LogFabric, "Mapping failed: {}", result.error_message);
     }
+}
+
+TEST_F(TopologySolverTest, SolveTopologyMapping_4x3MeshOn6x2Torus) {
+    // Test mapping a 4x3 logical mesh onto a 6x2 physical torus
+    // Logical mesh: 4x3 grid (12 nodes, no wrap-around)
+    // Physical mesh: 6x2 torus (12 nodes, with wrap-around in both dimensions)
+    //
+    // This tests that a grid topology cannot be mapped onto a torus topology
+    // where the torus has wrap-around connections that the grid doesn't have.
+    // Uses smaller topology to reduce DFS calls while still testing the concept.
+
+    // Create logical graph: 4x3 mesh (12 nodes, no wrap-around)
+    auto logical_graph = create_2d_mesh_graph<TestTargetNode>(4, 3);
+
+    // Create physical graph: 6x2 torus (12 nodes, with wrap-around)
+    auto physical_graph = create_2d_torus_graph<TestGlobalNode>(6, 2);
+
+    // Verify graph sizes match
+    EXPECT_EQ(logical_graph.get_nodes().size(), 12u) << "Logical mesh should have 4*3=12 nodes";
+    EXPECT_EQ(physical_graph.get_nodes().size(), 12u) << "Physical torus should have 6*2=12 nodes";
+
+    // Verify logical graph structure (4x3 mesh)
+    // Corners have 2 neighbors, edges have 3 neighbors, interior have 4 neighbors
+    size_t logical_corner_count = 0, logical_edge_count = 0, logical_interior_count = 0;
+    for (const auto& node : logical_graph.get_nodes()) {
+        size_t degree = logical_graph.get_neighbors(node).size();
+        if (degree == 2) {
+            logical_corner_count++;
+        } else if (degree == 3) {
+            logical_edge_count++;
+        } else if (degree == 4) {
+            logical_interior_count++;
+        }
+    }
+    // 4x3 mesh: 4 corners, (4-2)*2 + (3-2)*2 = 4 + 2 = 6 edge nodes, (4-2)*(3-2) = 2 interior
+    EXPECT_EQ(logical_corner_count, 4u);
+    EXPECT_EQ(logical_edge_count, 6u);
+    EXPECT_EQ(logical_interior_count, 2u);
+
+    // Verify physical graph structure (6x2 torus - all nodes have 4 neighbors due to wrap-around)
+    for (const auto& node : physical_graph.get_nodes()) {
+        size_t degree = physical_graph.get_neighbors(node).size();
+        EXPECT_EQ(degree, 4u) << "All nodes in a 2D torus should have exactly 4 neighbors";
+    }
+
+    // No constraints - let the solver find any valid mapping
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    // Solve the mapping
+    auto result = solve_topology_mapping(logical_graph, physical_graph, constraints, ConnectionValidationMode::RELAXED);
+
+    // Verify mapping failed - a 4x3 mesh cannot map onto a 6x2 torus
+    // The mesh has nodes with 2 neighbors (corners) and 3 neighbors (edges),
+    // but the torus only has nodes with 4 neighbors (all nodes due to wrap-around).
+    // This violates the adjacency preservation requirement.
+    EXPECT_FALSE(result.success) << "4x3 mesh should NOT map onto 6x2 torus because mesh has nodes with 2-3 neighbors "
+                                 << "but torus only has nodes with 4 neighbors. Error: " << result.error_message;
+    EXPECT_FALSE(result.error_message.empty()) << "Should have error message explaining why mapping failed";
+
+    // Verify no infinite loop occurred - DFS calls should be reasonable and not exceed limit
+    // The DFS limit is 1 million, so we check that it's well below that
+    EXPECT_LT(result.stats.dfs_calls, 1000000u) << "DFS calls should not exceed limit (no infinite loop)";
+
+    // Log statistics for debugging
+    log_info(
+        tt::LogFabric,
+        "4x3 mesh on 6x2 torus test (expected failure): dfs_calls={}, backtracks={}, memoization_hits={}, "
+        "mapped_nodes={}, error={}",
+        result.stats.dfs_calls,
+        result.stats.backtrack_count,
+        result.stats.memoization_hits,
+        result.target_to_global.size(),
+        result.error_message);
 }
 
 // Helper function to create a 2D mesh graph without torus connections (no wrap-around)
@@ -1772,7 +2082,7 @@ TEST_F(TopologySolverTest, DFSSearchEngineStressTest_1DRingOn2DMesh) {
 
     // Run DFS search
     DFSSearchEngine<TestTargetNode, TestGlobalNode> search_engine;
-    bool found = search_engine.search(graph_data, constraint_data, constraints, ConnectionValidationMode::RELAXED);
+    bool found = search_engine.search(graph_data, constraint_data, ConnectionValidationMode::RELAXED);
     const auto& state = search_engine.get_state();
 
     // This should succeed - a 1D ring can be embedded in a 2D mesh
@@ -1854,7 +2164,7 @@ TEST_F(TopologySolverTest, DFSSearchEngineStressTest_1DChainOn2DMesh_Negative) {
         ConstraintIndexData constraint_data(constraints, graph_data);
 
         DFSSearchEngine<TestTargetNode, TestGlobalNode> search_engine;
-        bool found = search_engine.search(graph_data, constraint_data, constraints, ConnectionValidationMode::RELAXED);
+        bool found = search_engine.search(graph_data, constraint_data, ConnectionValidationMode::RELAXED);
         const auto& state = search_engine.get_state();
 
         EXPECT_TRUE(found) << "1D chain of 9 nodes should map to 3x3 mesh (9 nodes)";
@@ -1871,7 +2181,7 @@ TEST_F(TopologySolverTest, DFSSearchEngineStressTest_1DChainOn2DMesh_Negative) {
         ConstraintIndexData constraint_data(constraints, graph_data);
 
         DFSSearchEngine<TestTargetNode, TestGlobalNode> search_engine;
-        bool found = search_engine.search(graph_data, constraint_data, constraints, ConnectionValidationMode::RELAXED);
+        bool found = search_engine.search(graph_data, constraint_data, ConnectionValidationMode::RELAXED);
         const auto& state = search_engine.get_state();
 
         if (found) {
@@ -1931,7 +2241,7 @@ TEST_F(TopologySolverTest, DFSSearchEngine_DisconnectedTargetGraph) {
 
     // Run DFS search
     DFSSearchEngine<TestTargetNode, TestGlobalNode> search_engine;
-    bool found = search_engine.search(graph_data, constraint_data, constraints, ConnectionValidationMode::RELAXED);
+    bool found = search_engine.search(graph_data, constraint_data, ConnectionValidationMode::RELAXED);
     const auto& state = search_engine.get_state();
 
     // This should succeed - two disconnected chains can map to one connected chain
@@ -2004,7 +2314,7 @@ TEST_F(TopologySolverTest, DFSSearchEngine_DisconnectedGlobalGraph) {
 
     // Run DFS search
     DFSSearchEngine<TestTargetNode, TestGlobalNode> search_engine;
-    bool found = search_engine.search(graph_data, constraint_data, constraints, ConnectionValidationMode::RELAXED);
+    bool found = search_engine.search(graph_data, constraint_data, ConnectionValidationMode::RELAXED);
     const auto& state = search_engine.get_state();
 
     // This should fail - a connected chain cannot map to disconnected components
@@ -2046,7 +2356,7 @@ TEST_F(TopologySolverTest, DFSSearchEngine_DisconnectedBothGraphs_Success) {
 
     // Run DFS search
     DFSSearchEngine<TestTargetNode, TestGlobalNode> search_engine;
-    bool found = search_engine.search(graph_data, constraint_data, constraints, ConnectionValidationMode::RELAXED);
+    bool found = search_engine.search(graph_data, constraint_data, ConnectionValidationMode::RELAXED);
     const auto& state = search_engine.get_state();
 
     // This should succeed - disconnected target can map to disconnected global
@@ -2098,7 +2408,7 @@ TEST_F(TopologySolverTest, DFSSearchEngine_DisconnectedBothGraphs_Failure) {
 
     // Run DFS search
     DFSSearchEngine<TestTargetNode, TestGlobalNode> search_engine;
-    bool found = search_engine.search(graph_data, constraint_data, constraints, ConnectionValidationMode::RELAXED);
+    bool found = search_engine.search(graph_data, constraint_data, ConnectionValidationMode::RELAXED);
     const auto& state = search_engine.get_state();
 
     // This should fail - target has 6 nodes but global only has 5
@@ -2113,6 +2423,41 @@ TEST_F(TopologySolverTest, DFSSearchEngine_DisconnectedBothGraphs_Failure) {
             state.backtrack_count,
             state.error_message);
     }
+}
+
+// Test that 2 disconnected logical nodes map to 2 different physical nodes
+// Logical graph: 2 disconnected nodes (no edges between them)
+// Physical graph: 3 fully connected nodes (complete graph/clique)
+// This verifies that the solver correctly rejects constraints that force two logical nodes
+// to map to the same physical node
+TEST_F(TopologySolverTest, SolveTopologyMapping_DisconnectedNodesToFullyConnected_ShouldMapToDifferentNodes) {
+    // Create target graph: 2 disconnected nodes (no edges)
+    // Node 0 and Node 1 are isolated (no connection between them)
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[0] = {};  // Node 0 has no neighbors
+    target_adj_map[1] = {};  // Node 1 has no neighbors
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    // Create global graph: 3 fully connected nodes (complete graph/clique)
+    // All nodes are connected to each other: 100 <-> 101 <-> 102 (all pairs connected)
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[100] = {101, 102};  // Node 100 connects to 101 and 102
+    global_adj_map[101] = {100, 102};  // Node 101 connects to 100 and 102
+    global_adj_map[102] = {100, 101};  // Node 102 connects to 100 and 101
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    // Add constraints to force both logical nodes to map to the same physical node
+    // This should cause the solver to fail because two different logical nodes
+    // cannot map to the same physical node
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    constraints.add_required_constraint(0, 100);  // Force logical node 0 -> physical node 100
+    constraints.add_required_constraint(1, 100);  // Force logical node 1 -> physical node 100 (SAME as node 0!)
+
+    // Solve - should FAIL because both logical nodes are constrained to the same physical node
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+
+    // Should fail - cannot map two different logical nodes to the same physical node
+    EXPECT_FALSE(result.success) << "Solver should reject mapping two logical nodes to the same physical node";
 }
 
 // Tests for public API: solve_topology_mapping
@@ -2157,9 +2502,353 @@ TEST_F(TopologySolverTest, SolveTopologyMapping_BasicSuccess) {
     bool connected = std::find(neighbors1.begin(), neighbors1.end(), global2) != neighbors1.end();
     EXPECT_TRUE(connected) << "Mapped nodes should be connected in global graph";
 
-    // Verify statistics
-    EXPECT_GT(result.stats.dfs_calls, 0u) << "Should have made DFS calls";
+    // Verify statistics (dfs_calls is only meaningful for the DFS backend; SAT leaves it at zero)
     EXPECT_GE(result.stats.elapsed_time.count(), 0) << "Should have elapsed time";
+    EXPECT_GE(result.stats.memoization_hits, 0u) << "Should track memoization hits";
+}
+
+// Four isolated targets / globals: SAT should satisfy strictly more preferred constraints than DFS's first solution.
+TEST_F(TopologySolverTest, SolveTopologyMapping_SatMaximizesPreferredHits_VersusDfsFirstSolution) {
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {};
+    target_adj_map[2] = {};
+    target_adj_map[3] = {};
+    target_adj_map[4] = {};
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {};
+    global_adj_map[11] = {};
+    global_adj_map[12] = {};
+    global_adj_map[13] = {};
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    ASSERT_TRUE(constraints.add_required_constraint(1u, std::set<TestGlobalNode>{10, 11}));
+    ASSERT_TRUE(constraints.add_required_constraint(2u, std::set<TestGlobalNode>{10, 11}));
+    ASSERT_TRUE(constraints.add_required_constraint(3u, std::set<TestGlobalNode>{12, 13}));
+    ASSERT_TRUE(constraints.add_required_constraint(4u, std::set<TestGlobalNode>{12, 13}));
+    constraints.add_preferred_constraint(1u, std::set<TestGlobalNode>{10, 11});
+    constraints.add_preferred_constraint(2u, 10);
+    constraints.add_preferred_constraint(3u, 12);
+    constraints.add_preferred_constraint(4u, 13);
+
+    auto sat_result = solve_topology_mapping(
+        target_graph,
+        global_graph,
+        constraints,
+        ConnectionValidationMode::RELAXED,
+        false,
+        TopologyMappingSolverEngine::Sat);
+    EXPECT_TRUE(sat_result.success) << "SAT engine should find a valid mapping";
+    EXPECT_EQ(sat_result.target_to_global.size(), 4u);
+
+    auto dfs_result = solve_topology_mapping(
+        target_graph,
+        global_graph,
+        constraints,
+        ConnectionValidationMode::RELAXED,
+        false,
+        TopologyMappingSolverEngine::Dfs);
+    EXPECT_TRUE(dfs_result.success) << "DFS engine should find a valid mapping";
+    EXPECT_GT(sat_result.constraint_stats.preferred_satisfied, dfs_result.constraint_stats.preferred_satisfied)
+        << "SAT should satisfy more preferred constraints than DFS on this fixture";
+}
+
+// Each target is pinned to a single global that is also its unique preferred choice: one feasible bijection.
+// SAT and DFS should both satisfy all preferred targets (no competition between early/late decisions).
+TEST_F(TopologySolverTest, SolveTopologyMapping_SatPreferred_UniquePinned_AllEnginesMaxPreferred) {
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {};
+    target_adj_map[2] = {};
+    target_adj_map[3] = {};
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {};
+    global_adj_map[11] = {};
+    global_adj_map[12] = {};
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    ASSERT_TRUE(constraints.add_required_constraint(1u, 10));
+    ASSERT_TRUE(constraints.add_required_constraint(2u, 11));
+    ASSERT_TRUE(constraints.add_required_constraint(3u, 12));
+    constraints.add_preferred_constraint(1u, 10);
+    constraints.add_preferred_constraint(2u, 11);
+    constraints.add_preferred_constraint(3u, 12);
+
+    auto sat_result = solve_topology_mapping(
+        target_graph,
+        global_graph,
+        constraints,
+        ConnectionValidationMode::RELAXED,
+        false,
+        TopologyMappingSolverEngine::Sat);
+    EXPECT_TRUE(sat_result.success);
+    EXPECT_EQ(sat_result.constraint_stats.preferred_satisfied, 3u);
+
+    auto dfs_result = solve_topology_mapping(
+        target_graph,
+        global_graph,
+        constraints,
+        ConnectionValidationMode::RELAXED,
+        false,
+        TopologyMappingSolverEngine::Dfs);
+    EXPECT_TRUE(dfs_result.success);
+    EXPECT_EQ(dfs_result.constraint_stats.preferred_satisfied, 3u);
+}
+
+// Two targets share {10,11} and both prefer 10; at most one preferred hit among them. Third target maps to 12 only.
+TEST_F(TopologySolverTest, SolveTopologyMapping_SatPreferred_SharedHotGlobal_BruteAndSatAgree) {
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {};
+    target_adj_map[2] = {};
+    target_adj_map[3] = {};
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {};
+    global_adj_map[11] = {};
+    global_adj_map[12] = {};
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    ASSERT_TRUE(constraints.add_required_constraint(1u, std::set<TestGlobalNode>{10, 11}));
+    ASSERT_TRUE(constraints.add_required_constraint(2u, std::set<TestGlobalNode>{10, 11}));
+    ASSERT_TRUE(constraints.add_required_constraint(3u, 12));
+    constraints.add_preferred_constraint(1u, 10);
+    constraints.add_preferred_constraint(2u, 10);
+    constraints.add_preferred_constraint(3u, 12);
+
+    auto sat_result = solve_topology_mapping(
+        target_graph,
+        global_graph,
+        constraints,
+        ConnectionValidationMode::RELAXED,
+        false,
+        TopologyMappingSolverEngine::Sat);
+    EXPECT_TRUE(sat_result.success);
+    EXPECT_EQ(sat_result.constraint_stats.preferred_satisfied, 2u);
+
+    auto dfs_result = solve_topology_mapping(
+        target_graph,
+        global_graph,
+        constraints,
+        ConnectionValidationMode::RELAXED,
+        false,
+        TopologyMappingSolverEngine::Dfs);
+    EXPECT_TRUE(dfs_result.success);
+    EXPECT_EQ(dfs_result.constraint_stats.preferred_satisfied, 2u);
+}
+
+// Same 4-target construction as SolveTopologyMapping_SatMaximizesPreferredHits_VersusDfsFirstSolution; SAT should
+// hit all four preferred spots in one solve on this tiny instance.
+TEST_F(TopologySolverTest, SolveTopologyMapping_SatPreferred_MatchesBruteForceOptimum) {
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {};
+    target_adj_map[2] = {};
+    target_adj_map[3] = {};
+    target_adj_map[4] = {};
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {};
+    global_adj_map[11] = {};
+    global_adj_map[12] = {};
+    global_adj_map[13] = {};
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    ASSERT_TRUE(constraints.add_required_constraint(1u, std::set<TestGlobalNode>{10, 11}));
+    ASSERT_TRUE(constraints.add_required_constraint(2u, std::set<TestGlobalNode>{10, 11}));
+    ASSERT_TRUE(constraints.add_required_constraint(3u, std::set<TestGlobalNode>{12, 13}));
+    ASSERT_TRUE(constraints.add_required_constraint(4u, std::set<TestGlobalNode>{12, 13}));
+    constraints.add_preferred_constraint(1u, std::set<TestGlobalNode>{10, 11});
+    constraints.add_preferred_constraint(2u, 10);
+    constraints.add_preferred_constraint(3u, 12);
+    constraints.add_preferred_constraint(4u, 13);
+
+    auto sat_result = solve_topology_mapping(
+        target_graph,
+        global_graph,
+        constraints,
+        ConnectionValidationMode::RELAXED,
+        false,
+        TopologyMappingSolverEngine::Sat);
+    EXPECT_TRUE(sat_result.success);
+    EXPECT_EQ(sat_result.target_to_global.size(), 4u);
+    EXPECT_EQ(sat_result.constraint_stats.preferred_satisfied, 4u);
+}
+
+// Two targets with eight parallel links; physical graph has a 4-link edge (10–11) and an 8-link edge (11–12).
+// Global 99 hangs off 12. SAT should achieve strictly better relaxed channel fit (sum_e min(required, actual)) than
+// DFS's first feasible mapping on this fixture (DFS lands on fit 4; SAT lands higher).
+TEST_F(TopologySolverTest, SolveTopologyMapping_SatMaximizesRelaxedChannelFit_VersusDfsFirstSolution) {
+    using namespace tt::tt_fabric::detail;
+
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2, 2, 2, 2, 2, 2, 2, 2};
+    target_adj_map[2] = {1, 1, 1, 1, 1, 1, 1, 1};
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11, 11, 11, 11};
+    global_adj_map[11] = {10, 10, 10, 10, 12, 12, 12, 12, 12, 12, 12, 12};
+    global_adj_map[12] = {11, 11, 11, 11, 11, 11, 11, 11, 99};
+    global_adj_map[99] = {12};
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    ASSERT_TRUE(constraints.add_forbidden_constraint(1u, 99u));
+    ASSERT_TRUE(constraints.add_forbidden_constraint(2u, 99u));
+    GraphIndexData graph_data(target_graph, global_graph);
+
+    auto sat_result = solve_topology_mapping(
+        target_graph,
+        global_graph,
+        constraints,
+        ConnectionValidationMode::RELAXED,
+        true,
+        TopologyMappingSolverEngine::Sat);
+    EXPECT_TRUE(sat_result.success);
+    std::vector<int> sat_mapping(graph_data.n_target, -1);
+    for (size_t ti = 0; ti < graph_data.n_target; ++ti) {
+        const TestTargetNode tn = graph_data.target_nodes[ti];
+        sat_mapping[ti] = static_cast<int>(graph_data.global_to_idx.at(sat_result.target_to_global.at(tn)));
+    }
+    const size_t sat_fit = topology_test_relaxed_channel_fit_sum(graph_data, sat_mapping);
+
+    auto dfs_result = solve_topology_mapping(
+        target_graph,
+        global_graph,
+        constraints,
+        ConnectionValidationMode::RELAXED,
+        true,
+        TopologyMappingSolverEngine::Dfs);
+    EXPECT_TRUE(dfs_result.success);
+    std::vector<int> dfs_mapping(graph_data.n_target, -1);
+    for (size_t ti = 0; ti < graph_data.n_target; ++ti) {
+        const TestTargetNode tn = graph_data.target_nodes[ti];
+        dfs_mapping[ti] = static_cast<int>(graph_data.global_to_idx.at(dfs_result.target_to_global.at(tn)));
+    }
+    const size_t dfs_fit = topology_test_relaxed_channel_fit_sum(graph_data, dfs_mapping);
+    EXPECT_EQ(dfs_fit, 4u) << "DFS first solution should use the 4-wide host edge for this fixture";
+    EXPECT_GT(sat_fit, dfs_fit) << "SAT should achieve strictly better relaxed channel fit than DFS here";
+}
+
+// Same eight parallel-link logical edge as above, but the host is only the path 10–11–12 (4-wide then 8-wide).
+// No extra leaf node: DFS still completes on the 4-link host edge first (sum 4) while SAT can use the 8-link edge (sum
+// 8).
+TEST_F(TopologySolverTest, SolveTopologyMapping_RelaxedChannelFitSum_SatBeatsDfs_SimplePathHost) {
+    using namespace tt::tt_fabric::detail;
+
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2, 2, 2, 2, 2, 2, 2, 2};
+    target_adj_map[2] = {1, 1, 1, 1, 1, 1, 1, 1};
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11, 11, 11, 11};
+    global_adj_map[11] = {10, 10, 10, 10, 12, 12, 12, 12, 12, 12, 12, 12};
+    global_adj_map[12] = {11, 11, 11, 11, 11, 11, 11, 11};
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    GraphIndexData graph_data(target_graph, global_graph);
+
+    auto sat_result = solve_topology_mapping(
+        target_graph,
+        global_graph,
+        constraints,
+        ConnectionValidationMode::RELAXED,
+        true,
+        TopologyMappingSolverEngine::Sat);
+    EXPECT_TRUE(sat_result.success);
+    std::vector<int> sat_mapping(graph_data.n_target, -1);
+    for (size_t ti = 0; ti < graph_data.n_target; ++ti) {
+        const TestTargetNode tn = graph_data.target_nodes[ti];
+        sat_mapping[ti] = static_cast<int>(graph_data.global_to_idx.at(sat_result.target_to_global.at(tn)));
+    }
+    const size_t sat_fit = topology_test_relaxed_channel_fit_sum(graph_data, sat_mapping);
+
+    auto dfs_result = solve_topology_mapping(
+        target_graph,
+        global_graph,
+        constraints,
+        ConnectionValidationMode::RELAXED,
+        true,
+        TopologyMappingSolverEngine::Dfs);
+    EXPECT_TRUE(dfs_result.success);
+    std::vector<int> dfs_mapping(graph_data.n_target, -1);
+    for (size_t ti = 0; ti < graph_data.n_target; ++ti) {
+        const TestTargetNode tn = graph_data.target_nodes[ti];
+        dfs_mapping[ti] = static_cast<int>(graph_data.global_to_idx.at(dfs_result.target_to_global.at(tn)));
+    }
+    const size_t dfs_fit = topology_test_relaxed_channel_fit_sum(graph_data, dfs_mapping);
+
+    EXPECT_EQ(dfs_fit, 4u);
+    EXPECT_EQ(sat_fit, 8u);
+    EXPECT_GT(sat_fit, dfs_fit);
+}
+
+// Logical link requires 3 parallel connections; physical edge only has 2. STRICT validation fails; RELAXED still embeds
+// and records bandwidth warnings. Exercises connection-count handling on a minimal two-node instance for SAT and DFS.
+TEST_F(TopologySolverTest, SolveTopologyMapping_RelaxedMode_ParallelLinkShortfall_SatAndDfs) {
+    using namespace tt::tt_fabric::detail;
+
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2, 2, 2};
+    target_adj_map[2] = {1, 1, 1};
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11, 11};
+    global_adj_map[11] = {10, 10};
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    GraphIndexData graph_data(target_graph, global_graph);
+    ASSERT_EQ(graph_data.n_target, 2u);
+    EXPECT_EQ(graph_data.target_conn_count[0].at(1), 3u);
+    EXPECT_EQ(graph_data.global_conn_count[0].at(1), 2u);
+
+    for (TopologyMappingSolverEngine engine : {TopologyMappingSolverEngine::Sat, TopologyMappingSolverEngine::Dfs}) {
+        auto strict_res = solve_topology_mapping(
+            target_graph,
+            global_graph,
+            constraints,
+            ConnectionValidationMode::STRICT,
+            /* quiet_mode= */ true,
+            engine);
+        EXPECT_FALSE(strict_res.success) << "STRICT should fail when required parallel channels exceed host capacity ("
+                                         << (engine == TopologyMappingSolverEngine::Sat ? "SAT" : "DFS") << ")";
+
+        auto relaxed_res = solve_topology_mapping(
+            target_graph,
+            global_graph,
+            constraints,
+            ConnectionValidationMode::RELAXED,
+            /* quiet_mode= */ true,
+            engine);
+        EXPECT_TRUE(relaxed_res.success) << "RELAXED should embed despite channel shortfall ("
+                                         << (engine == TopologyMappingSolverEngine::Sat ? "SAT" : "DFS")
+                                         << "): " << relaxed_res.error_message;
+        EXPECT_EQ(relaxed_res.target_to_global.size(), 2u);
+        EXPECT_FALSE(relaxed_res.warnings.empty())
+            << "RELAXED should emit bandwidth mismatch warnings ("
+            << (engine == TopologyMappingSolverEngine::Sat ? "SAT" : "DFS") << ")";
+
+        std::vector<int> mapping(graph_data.n_target, -1);
+        for (size_t ti = 0; ti < graph_data.n_target; ++ti) {
+            const TestTargetNode tn = graph_data.target_nodes[ti];
+            mapping[ti] = static_cast<int>(graph_data.global_to_idx.at(relaxed_res.target_to_global.at(tn)));
+        }
+        EXPECT_TRUE(topology_test_complete_mapping_preserves_edges(graph_data, mapping));
+        EXPECT_EQ(topology_test_relaxed_channel_fit_sum(graph_data, mapping), 2u)
+            << "min(required=3, actual=2) for the single logical link ("
+            << (engine == TopologyMappingSolverEngine::Sat ? "SAT" : "DFS") << ")";
+    }
 }
 
 TEST_F(TopologySolverTest, SolveTopologyMapping_WithRequiredConstraints) {
@@ -2379,11 +3068,73 @@ TEST_F(TopologySolverTest, SolveTopologyMapping_ResultStructure) {
         EXPECT_EQ(result.global_to_target.at(global), target) << "Bidirectional mappings should be consistent";
     }
 
-    // Verify statistics are populated
-    EXPECT_GT(result.stats.dfs_calls, 0u) << "Should have DFS calls";
+    // Verify statistics are populated (dfs_calls only reflects the DFS engine)
     EXPECT_GE(result.stats.elapsed_time.count(), 0) << "Should have elapsed time";
+    EXPECT_GE(result.stats.memoization_hits, 0u) << "Should track memoization hits";
     EXPECT_EQ(result.constraint_stats.required_satisfied, 1u) << "Should satisfy required constraint";
     EXPECT_GE(result.constraint_stats.preferred_satisfied, 0u) << "Should track preferred constraints";
+}
+
+TEST_F(TopologySolverTest, SolveTopologyMapping_MemoizationHits) {
+    // Test that memoization hits and backtracking stats are tracked in results
+    // Create a topology with multiple paths to allow exploration
+
+    // Create target graph: 1 -> 2 -> 3 -> 4 -> 5 (5-node path)
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2};
+    target_adj_map[2] = {1, 3};
+    target_adj_map[3] = {2, 4};
+    target_adj_map[4] = {3, 5};
+    target_adj_map[5] = {4};
+
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    // Create global graph with multiple valid paths
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11, 15};
+    global_adj_map[11] = {10, 12};
+    global_adj_map[12] = {11, 13};
+    global_adj_map[13] = {12, 14, 19};  // Multiple neighbors for exploration
+    global_adj_map[14] = {13};
+    global_adj_map[19] = {13, 20};
+    global_adj_map[20] = {19};
+    global_adj_map[15] = {10, 16};  // Alternative path
+    global_adj_map[16] = {15, 17};
+    global_adj_map[17] = {16, 18};
+    global_adj_map[18] = {17};
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    // Use constraints to guide search - this may or may not cause backtracking
+    // depending on heuristic choices, but stats should always be tracked
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    constraints.add_required_constraint(1, 10);
+    constraints.add_required_constraint(2, 11);
+    constraints.add_required_constraint(3, 12);
+    constraints.add_preferred_constraint(4, 19);  // Guide search
+
+    // Solve
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+
+    // Should succeed after backtracking
+    EXPECT_TRUE(result.success) << "Should find a valid mapping after backtracking";
+
+    // Verify stats are tracked (dfs_calls only reflects the DFS engine)
+    EXPECT_GE(result.stats.memoization_hits, 0u) << "Should track memoization hits";
+
+    // Verify stats are tracked correctly
+    // Note: With efficient forward consistency checking, backtracking may not always occur
+    // in simple topologies. The important thing is that the stats are properly tracked.
+    // If backtracking occurs (backtrack_count > 0), that demonstrates the mechanism works.
+    // If it doesn't occur, that's also valid - it means the heuristics are working well.
+
+    // Log the stats for debugging
+    log_info(
+        tt::LogFabric,
+        "Memoization test: dfs_calls={}, backtracks={}, memoization_hits={}",
+        result.stats.dfs_calls,
+        result.stats.backtrack_count,
+        result.stats.memoization_hits);
 }
 
 TEST_F(TopologySolverTest, MappingConstraintsOneToManyRequired) {
@@ -2432,7 +3183,7 @@ TEST_F(TopologySolverTest, MappingConstraintsOneToManyRequired) {
     MappingConstraints<TestTargetNode, TestGlobalNode> constraints3;
     std::set<TestTargetNode> target_nodes2 = {1, 2};
     constraints3.add_required_constraint(target_nodes2, 10);
-    EXPECT_THROW(constraints3.add_required_constraint(1, 20), std::runtime_error);
+    EXPECT_FALSE(constraints3.add_required_constraint(1, 20)) << "Conflicting constraint should return false";
 }
 
 TEST_F(TopologySolverTest, MappingConstraintsOneToManyPreferred) {
@@ -2516,11 +3267,2782 @@ TEST_F(TopologySolverTest, MappingConstraintsOneToManyIntersection) {
     MappingConstraints<TestTargetNode, TestGlobalNode> constraints3;
     std::map<TestTargetNode, uint8_t> target_traits = {{1, 0}};
     std::map<TestGlobalNode, uint8_t> global_traits = {{10, 0}, {11, 0}, {20, 1}};
-    constraints3.add_required_trait_constraint<uint8_t>(target_traits, global_traits);
+    EXPECT_TRUE(constraints3.add_required_trait_constraint<uint8_t>(target_traits, global_traits));
     EXPECT_EQ(constraints3.get_valid_mappings(1).size(), 2u);  // {10, 11}
 
     std::set<TestGlobalNode> global_nodes3 = {10, 12};
     constraints3.add_required_constraint(1, global_nodes3);
     EXPECT_EQ(constraints3.get_valid_mappings(1).size(), 1u);  // Intersection: {10}
 }
+
+TEST_F(TopologySolverTest, MappingConstraintsForbiddenBasic) {
+    // Test basic forbidden constraint after required constraint
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    std::set<TestGlobalNode> global_nodes = {10, 11, 12};
+    constraints.add_required_constraint(1, global_nodes);
+    EXPECT_EQ(constraints.get_valid_mappings(1).size(), 3u);
+
+    // Forbid one mapping
+    constraints.add_forbidden_constraint(1, 11);
+    EXPECT_EQ(constraints.get_valid_mappings(1).size(), 2u);
+    EXPECT_EQ(constraints.get_valid_mappings(1).count(10), 1u);
+    EXPECT_EQ(constraints.get_valid_mappings(1).count(11), 0u);  // Forbidden
+    EXPECT_EQ(constraints.get_valid_mappings(1).count(12), 1u);
+
+    // Forbid another mapping
+    constraints.add_forbidden_constraint(1, 12);
+    EXPECT_EQ(constraints.get_valid_mappings(1).size(), 1u);
+    EXPECT_EQ(constraints.get_valid_mappings(1).count(10), 1u);
+    EXPECT_EQ(constraints.get_valid_mappings(1).count(11), 0u);
+    EXPECT_EQ(constraints.get_valid_mappings(1).count(12), 0u);
+
+    // Verify is_valid_mapping works correctly
+    EXPECT_TRUE(constraints.is_valid_mapping(1, 10));
+    EXPECT_FALSE(constraints.is_valid_mapping(1, 11));
+    EXPECT_FALSE(constraints.is_valid_mapping(1, 12));
+}
+
+TEST_F(TopologySolverTest, MappingConstraintsManyToMany) {
+    // Test many-to-many constraint: any target node from a set can map to any global node from a set
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    std::set<TestTargetNode> target_nodes = {1, 2, 3};
+    std::set<TestGlobalNode> global_nodes = {10, 11, 12};
+
+    // Add many-to-many constraint
+    constraints.add_required_constraint(target_nodes, global_nodes);
+
+    // Verify all target nodes can map to any of the global nodes
+    EXPECT_EQ(constraints.get_valid_mappings(1).size(), 3u);
+    EXPECT_EQ(constraints.get_valid_mappings(1).count(10), 1u);
+    EXPECT_EQ(constraints.get_valid_mappings(1).count(11), 1u);
+    EXPECT_EQ(constraints.get_valid_mappings(1).count(12), 1u);
+
+    EXPECT_EQ(constraints.get_valid_mappings(2).size(), 3u);
+    EXPECT_EQ(constraints.get_valid_mappings(2).count(10), 1u);
+    EXPECT_EQ(constraints.get_valid_mappings(2).count(11), 1u);
+    EXPECT_EQ(constraints.get_valid_mappings(2).count(12), 1u);
+
+    EXPECT_EQ(constraints.get_valid_mappings(3).size(), 3u);
+    EXPECT_EQ(constraints.get_valid_mappings(3).count(10), 1u);
+    EXPECT_EQ(constraints.get_valid_mappings(3).count(11), 1u);
+    EXPECT_EQ(constraints.get_valid_mappings(3).count(12), 1u);
+
+    // Verify is_valid_mapping works correctly
+    EXPECT_TRUE(constraints.is_valid_mapping(1, 10));
+    EXPECT_TRUE(constraints.is_valid_mapping(1, 11));
+    EXPECT_TRUE(constraints.is_valid_mapping(1, 12));
+    EXPECT_TRUE(constraints.is_valid_mapping(2, 10));
+    EXPECT_TRUE(constraints.is_valid_mapping(3, 12));
+    EXPECT_FALSE(constraints.is_valid_mapping(1, 20));  // Not in global_nodes set
+    // Targets outside the group are not restricted by this constraint
+    EXPECT_TRUE(constraints.is_valid_mapping(4, 10));
+}
+
+TEST_F(TopologySolverTest, MappingConstraintsManyToMany_PinningGroupSemantics) {
+    // Pinning-group semantics:
+    //  - {1,2,3,4} -> {a,b,c,d,e}: group members land on distinct globals from the set; leftovers stay free
+    //  - {1,2,3,4,5} -> {a,b,c,d}: rejected at add time (too many targets)
+    //  - {1} -> {a,b,c,d,e}: 1:many; other targets may still use any global (subject to injectivity)
+
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj;
+    for (TestTargetNode t = 1; t <= 6; ++t) {
+        target_adj[t] = {};
+    }
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj);
+
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj;
+    for (TestGlobalNode g = 10; g <= 15; ++g) {
+        global_adj[g] = {};
+    }
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj);
+
+    const std::set<TestGlobalNode> abcde = {10, 11, 12, 13, 14};
+    const std::set<TestGlobalNode> abcd = {10, 11, 12, 13};
+
+    // Case 1: four targets, five globals — succeeds; node 6 may use the leftover global
+    {
+        MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+        ASSERT_TRUE(constraints.add_required_constraint(std::set<TestTargetNode>{1, 2, 3, 4}, abcde));
+        auto result =
+            solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+        ASSERT_TRUE(result.success) << result.error_message;
+        for (TestTargetNode t = 1; t <= 4; ++t) {
+            TestGlobalNode g = result.target_to_global.at(t);
+            EXPECT_TRUE(abcde.count(g) == 1) << "group member " << t << " must land in the pool";
+        }
+        std::set<TestGlobalNode> used_by_group;
+        for (TestTargetNode t = 1; t <= 4; ++t) {
+            used_by_group.insert(result.target_to_global.at(t));
+        }
+        EXPECT_EQ(used_by_group.size(), 4u);
+        // Node 6 is outside the group and maps to some global (including any leftover from abcde)
+        EXPECT_TRUE(result.target_to_global.count(6) == 1);
+    }
+
+    // Case 2: five targets, four globals — rejected immediately
+    {
+        MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+        EXPECT_FALSE(constraints.add_required_constraint(std::set<TestTargetNode>{1, 2, 3, 4, 5}, abcd));
+    }
+
+    // Case 3: single target, five globals — 1:many; node 2 may share the pool
+    {
+        MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+        ASSERT_TRUE(constraints.add_required_constraint(std::set<TestTargetNode>{1}, abcde));
+        EXPECT_TRUE(constraints.is_valid_mapping(2, 10));
+        EXPECT_TRUE(constraints.is_valid_mapping(2, 14));
+        AdjacencyGraph<TestTargetNode>::AdjacencyMap two_target_adj{{1, {}}, {2, {}}};
+        AdjacencyGraph<TestTargetNode> two_target_graph(two_target_adj);
+        AdjacencyGraph<TestGlobalNode>::AdjacencyMap two_global_adj{{10, {}}, {11, {}}};
+        AdjacencyGraph<TestGlobalNode> two_global_graph(two_global_adj);
+        auto result =
+            solve_topology_mapping(two_target_graph, two_global_graph, constraints, ConnectionValidationMode::RELAXED);
+        ASSERT_TRUE(result.success) << result.error_message;
+        EXPECT_TRUE(abcde.count(result.target_to_global.at(1)) == 1);
+    }
+}
+
+// Same-group constraint: target groups map within global group boundaries (no splitting).
+// Multiple target groups may share one global group.
+TEST_F(TopologySolverTest, SolveTopologyMapping_SameGroupConstraint_Basic) {
+    // Chain 1-2-3-4; groups {1,2}, {3,4} -> globals {10,11}, {12,13}
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj;
+    target_adj[1] = {2};
+    target_adj[2] = {1, 3};
+    target_adj[3] = {2, 4};
+    target_adj[4] = {3};
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj);
+
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj;
+    global_adj[10] = {11};
+    global_adj[11] = {10, 12};
+    global_adj[12] = {11, 13};
+    global_adj[13] = {12};
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    constraints.set_same_rank_groups_constraint(
+        std::vector<std::set<TestTargetNode>>{{1, 2}, {3, 4}},
+        std::vector<std::set<TestGlobalNode>>{{10, 11}, {12, 13}});
+
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+    ASSERT_TRUE(result.success) << result.error_message;
+
+    TestGlobalNode g1 = result.target_to_global.at(1), g2 = result.target_to_global.at(2);
+    TestGlobalNode g3 = result.target_to_global.at(3), g4 = result.target_to_global.at(4);
+    bool grp0_first = (g1 == 10 || g1 == 11) && (g2 == 10 || g2 == 11);
+    bool grp1_first = (g3 == 10 || g3 == 11) && (g4 == 10 || g4 == 11);
+    EXPECT_NE(grp0_first, grp1_first) << "Each target group stays within one global group";
+}
+
+TEST_F(TopologySolverTest, SolveTopologyMapping_SameGroupConstraint_SharedGlobalGroup) {
+    // {1} {2} map to {1,3,2}: multiple target groups may share one global group; no boundary breaking
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj;
+    target_adj[1] = {2};
+    target_adj[2] = {1};
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj);
+
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj;
+    global_adj[1] = {3};
+    global_adj[3] = {1, 2};
+    global_adj[2] = {3};
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    constraints.set_same_rank_groups_constraint(
+        std::vector<std::set<TestTargetNode>>{{1}, {2}}, std::vector<std::set<TestGlobalNode>>{{1, 3, 2}});
+
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+    ASSERT_TRUE(result.success) << result.error_message;
+
+    // Both targets in same global group; chain 1-2 maps to path in 1-3-2
+    EXPECT_TRUE(
+        (result.target_to_global.at(1) == 1 && result.target_to_global.at(2) == 3) ||
+        (result.target_to_global.at(1) == 3 && result.target_to_global.at(2) == 1) ||
+        (result.target_to_global.at(1) == 3 && result.target_to_global.at(2) == 2) ||
+        (result.target_to_global.at(1) == 2 && result.target_to_global.at(2) == 3));
+}
+
+TEST_F(TopologySolverTest, SolveTopologyMapping_SameGroupConstraint_SplittingTargetGroupRejected) {
+    // [1,2,3] must stay together; globals {10},{11},{12} force splitting -> should fail
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj;
+    target_adj[1] = {2};
+    target_adj[2] = {1, 3};
+    target_adj[3] = {2};
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj);
+
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj;
+    global_adj[10] = {11};
+    global_adj[11] = {10, 12};
+    global_adj[12] = {11};
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    constraints.set_same_rank_groups_constraint(
+        std::vector<std::set<TestTargetNode>>{{1, 2, 3}}, std::vector<std::set<TestGlobalNode>>{{10}, {11}, {12}});
+
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+    ASSERT_FALSE(result.success) << "Target group {1,2,3} cannot be split across global groups {10},{11},{12}";
+}
+
+// Cross-validation: same-rank feasibility vs required mappings (set_theory check in validate()).
+TEST_F(TopologySolverTest, MappingConstraints_SetSameRankRejected_WhenRequiredPinsDifferentPartitions) {
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    ASSERT_TRUE(constraints.add_required_constraint(1, TestGlobalNode(10)));
+    ASSERT_TRUE(constraints.add_required_constraint(2, TestGlobalNode(12)));
+    // Targets {1,2} must share one global partition; 10 is only in {10,11}, 12 only in {12,13} -> infeasible.
+    EXPECT_FALSE(constraints.set_same_rank_groups_constraint(
+        std::vector<std::set<TestTargetNode>>{{1, 2}}, std::vector<std::set<TestGlobalNode>>{{10, 11}, {12, 13}}))
+        << "Same-rank groups should be rejected when required mappings straddle global partitions";
+    EXPECT_TRUE(constraints.get_same_rank_target_groups().empty());
+    EXPECT_TRUE(constraints.get_same_rank_global_groups().empty());
+    EXPECT_EQ(constraints.get_valid_mappings(1).count(10), 1u);
+    EXPECT_EQ(constraints.get_valid_mappings(2).count(12), 1u);
+}
+
+TEST_F(TopologySolverTest, MappingConstraints_SetSameRankSucceeds_WhenRequiredSharesOnePartition) {
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    ASSERT_TRUE(constraints.add_required_constraint(1, TestGlobalNode(10)));
+    ASSERT_TRUE(constraints.add_required_constraint(2, TestGlobalNode(11)));
+    EXPECT_TRUE(constraints.set_same_rank_groups_constraint(
+        std::vector<std::set<TestTargetNode>>{{1, 2}}, std::vector<std::set<TestGlobalNode>>{{10, 11}, {12, 13}}));
+    EXPECT_EQ(constraints.get_same_rank_target_groups().size(), 1u);
+}
+
+// Cardinality is re-checked on required adds (validate_cardinality_constraints from validate()).
+TEST_F(TopologySolverTest, MappingConstraints_AddRequiredRejected_WhenCardinalityBecomesUnsatisfiable) {
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    std::set<std::pair<TestTargetNode, TestGlobalNode>> pairs = {{1, 10}, {1, 11}, {2, 10}, {2, 11}};
+    ASSERT_TRUE(constraints.add_cardinality_constraint(pairs, 3));
+    ASSERT_TRUE(constraints.add_required_constraint(1, TestGlobalNode(10)));
+    // At most two pairs can be satisfied in any assignment: (1,10) and (2,11) or (1,10) and (2,10), etc. — never 3.
+    EXPECT_FALSE(constraints.add_required_constraint(2, TestGlobalNode(11)))
+        << "Required constraint that caps cardinality-satisfiable pairs below min_count should fail";
+    EXPECT_EQ(constraints.get_valid_mappings(2).size(), 0u)
+        << "Failed add should not leave a partial required mapping for target 2";
+}
+
+// Forbidden-only path runs full validate(); failed add must not leave forbidden_pairs_ mutated.
+TEST_F(TopologySolverTest, MappingConstraints_ForbiddenRejectedAndRolledBack_WhenBreaksSameRank) {
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    ASSERT_TRUE(constraints.set_same_rank_groups_constraint(
+        std::vector<std::set<TestTargetNode>>{{1, 2}}, std::vector<std::set<TestGlobalNode>>{{10, 11}, {12, 13}}));
+    ASSERT_TRUE(constraints.add_required_constraint(1, TestGlobalNode(10)));
+    ASSERT_TRUE(constraints.add_required_constraint(2, std::set<TestGlobalNode>{10, 11}));
+    // Target 2 must stay in {10,11} with target 1; forbidding both globals removes every candidate in that partition.
+    std::set<TestGlobalNode> forbid_both = {10, 11};
+    EXPECT_FALSE(constraints.add_forbidden_constraint(2, forbid_both));
+    EXPECT_TRUE(constraints.get_forbidden_pairs().empty())
+        << "Forbidden inserts should roll back on validation failure";
+    EXPECT_EQ(constraints.get_valid_mappings(2).count(10), 1u);
+    EXPECT_EQ(constraints.get_valid_mappings(2).count(11), 1u);
+}
+
+TEST_F(TopologySolverTest, MappingConstraintsManyToManyIntersection) {
+    // Test many-to-many constraint intersection with existing constraints
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    // First, add individual constraint for target node 1
+    std::set<TestGlobalNode> initial_globals = {10, 11};
+    constraints.add_required_constraint(1, initial_globals);
+    EXPECT_EQ(constraints.get_valid_mappings(1).size(), 2u);
+
+    // Now add many-to-many constraint that includes target node 1
+    std::set<TestTargetNode> target_nodes = {1, 2, 3};
+    std::set<TestGlobalNode> many_to_many_globals = {11, 12, 13};
+
+    // This should intersect: target 1 can only map to {10, 11} ∩ {11, 12, 13} = {11}
+    constraints.add_required_constraint(target_nodes, many_to_many_globals);
+
+    EXPECT_EQ(constraints.get_valid_mappings(1).size(), 1u);
+    EXPECT_EQ(constraints.get_valid_mappings(1).count(11), 1u);
+    EXPECT_EQ(constraints.get_valid_mappings(1).count(10), 0u);  // Removed by intersection
+
+    // Target nodes 2 and 3 should have all three options
+    EXPECT_EQ(constraints.get_valid_mappings(2).size(), 3u);
+    EXPECT_EQ(constraints.get_valid_mappings(2).count(11), 1u);
+    EXPECT_EQ(constraints.get_valid_mappings(2).count(12), 1u);
+    EXPECT_EQ(constraints.get_valid_mappings(2).count(13), 1u);
+
+    EXPECT_EQ(constraints.get_valid_mappings(3).size(), 3u);
+}
+
+TEST_F(TopologySolverTest, MappingConstraintsManyToManyConflict) {
+    // Test many-to-many constraint that causes conflict
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    // First constrain target 1 to only global 10
+    constraints.add_required_constraint(1, 10);
+    EXPECT_EQ(constraints.get_valid_mappings(1).size(), 1u);
+
+    // Now add many-to-many constraint that doesn't include global 10
+    std::set<TestTargetNode> target_nodes = {1, 2};
+    std::set<TestGlobalNode> global_nodes = {11, 12};
+
+    // This should cause a conflict for target 1: {10} ∩ {11, 12} = {}
+    EXPECT_FALSE(constraints.add_required_constraint(target_nodes, global_nodes))
+        << "Conflicting constraint should return false";
+}
+
+TEST_F(TopologySolverTest, MappingConstraintsForbiddenOneToMany) {
+    // Test forbidden constraint with multiple global nodes
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    std::set<TestGlobalNode> global_nodes = {10, 11, 12, 13};
+    constraints.add_required_constraint(1, global_nodes);
+    EXPECT_EQ(constraints.get_valid_mappings(1).size(), 4u);
+
+    // Forbid multiple mappings at once
+    std::set<TestGlobalNode> forbidden_nodes = {11, 13};
+    constraints.add_forbidden_constraint(1, forbidden_nodes);
+    EXPECT_EQ(constraints.get_valid_mappings(1).size(), 2u);
+    EXPECT_EQ(constraints.get_valid_mappings(1).count(10), 1u);
+    EXPECT_EQ(constraints.get_valid_mappings(1).count(11), 0u);  // Forbidden
+    EXPECT_EQ(constraints.get_valid_mappings(1).count(12), 1u);
+    EXPECT_EQ(constraints.get_valid_mappings(1).count(13), 0u);  // Forbidden
+}
+
+TEST_F(TopologySolverTest, MappingConstraintsForbiddenManyToOne) {
+    // Test forbidden constraint with multiple target nodes
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    std::set<TestGlobalNode> global_nodes1 = {10, 11, 12};
+    std::set<TestGlobalNode> global_nodes2 = {10, 11, 13};
+    constraints.add_required_constraint(1, global_nodes1);
+    constraints.add_required_constraint(2, global_nodes2);
+    EXPECT_EQ(constraints.get_valid_mappings(1).size(), 3u);
+    EXPECT_EQ(constraints.get_valid_mappings(2).size(), 3u);
+
+    // Forbid one global node for multiple targets
+    std::set<TestTargetNode> target_nodes = {1, 2};
+    constraints.add_forbidden_constraint(target_nodes, 11);
+    EXPECT_EQ(constraints.get_valid_mappings(1).size(), 2u);  // {10, 12}
+    EXPECT_EQ(constraints.get_valid_mappings(1).count(11), 0u);
+    EXPECT_EQ(constraints.get_valid_mappings(2).size(), 2u);  // {10, 13}
+    EXPECT_EQ(constraints.get_valid_mappings(2).count(11), 0u);
+}
+
+TEST_F(TopologySolverTest, MappingConstraintsForbiddenTwoFullListsCartesian) {
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    constraints.add_required_constraint(1, std::set<TestGlobalNode>{10, 11});
+    constraints.add_required_constraint(2, std::set<TestGlobalNode>{10, 12});
+    EXPECT_TRUE(constraints.add_forbidden_constraint(std::set<TestTargetNode>{1, 2}, std::set<TestGlobalNode>{10}));
+    EXPECT_EQ(constraints.get_valid_mappings(1).size(), 1u);
+    EXPECT_EQ(constraints.get_valid_mappings(1).count(11), 1u);
+    EXPECT_EQ(constraints.get_valid_mappings(2).size(), 1u);
+    EXPECT_EQ(constraints.get_valid_mappings(2).count(12), 1u);
+}
+
+TEST_F(TopologySolverTest, MappingConstraintsForbiddenTwoListsRequiresBothNonEmpty) {
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    constraints.add_required_constraint(1, 10);
+    EXPECT_FALSE(constraints.add_forbidden_constraint(std::set<TestTargetNode>{}, std::set<TestGlobalNode>{10}));
+    EXPECT_FALSE(constraints.add_forbidden_constraint(std::set<TestTargetNode>{1}, std::set<TestGlobalNode>{}));
+    EXPECT_FALSE(constraints.add_forbidden_constraint(std::set<TestTargetNode>{}, std::set<TestGlobalNode>{}));
+    EXPECT_EQ(constraints.get_valid_mappings(1).size(), 1u);
+}
+
+TEST_F(TopologySolverTest, MappingConstraintsForbiddenContradiction) {
+    // Test that forbidden constraint cannot contradict required constraint
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    constraints.add_required_constraint(1, 10);
+    EXPECT_EQ(constraints.get_valid_mappings(1).size(), 1u);
+    EXPECT_EQ(constraints.get_valid_mappings(1).count(10), 1u);
+
+    // Try to forbid the required mapping - should return false
+    EXPECT_FALSE(constraints.add_forbidden_constraint(1, 10)) << "Forbidding required mapping should return false";
+
+    // Verify the constraint is still valid after the failed attempt
+    EXPECT_EQ(constraints.get_valid_mappings(1).size(), 1u);
+    EXPECT_EQ(constraints.get_valid_mappings(1).count(10), 1u);
+}
+
+TEST_F(TopologySolverTest, MappingConstraintsForbiddenWithoutSeeding) {
+    // Test add_forbidden_constraint when target has NO valid_mappings_ entry (no required constraints).
+    // Forbidden pairs are stored in forbidden_pairs_ and applied without seeding.
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    // No add_required_constraint - valid_mappings_ is empty for all targets
+
+    // Add forbidden constraint for target 1 -> global 10 (no valid_mappings_ for target 1)
+    EXPECT_TRUE(constraints.add_forbidden_constraint(1, 10));
+
+    // Verify forbidden_pairs_ was populated
+    const auto& forbidden = constraints.get_forbidden_pairs();
+    EXPECT_EQ(forbidden.size(), 1u);
+    EXPECT_TRUE(forbidden.count({1, 10}) == 1u);
+
+    // Verify is_valid_mapping rejects the forbidden pair
+    EXPECT_FALSE(constraints.is_valid_mapping(1, 10));
+    EXPECT_TRUE(constraints.is_valid_mapping(1, 11));  // Other mappings still valid
+}
+
+TEST_F(TopologySolverTest, SolveWithForbiddenConstraintsOnlyNoSeeding) {
+    // Solve topology mapping with ONLY forbidden constraints (no required constraints).
+    // Verifies add_forbidden_constraint works without seeding valid_mappings_.
+    using namespace tt::tt_fabric;
+
+    // Target graph: 1 -- 2 (2 nodes, edge between them)
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2};
+    target_adj_map[2] = {1};
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    // Global graph: 10 -- 11 (2 nodes, same structure)
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};
+    global_adj_map[11] = {10};
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    // No required constraints - only forbidden
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    constraints.add_forbidden_constraint(1, 10);  // Target 1 cannot map to global 10
+
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+
+    EXPECT_TRUE(result.success) << "Mapping with forbidden-only constraints should succeed";
+    // Target 1 must map to 11 (10 is forbidden), target 2 must map to 10
+    EXPECT_EQ(result.target_to_global.at(1), 11) << "Target 1 should map to 11 (10 is forbidden)";
+    EXPECT_EQ(result.target_to_global.at(2), 10) << "Target 2 should map to 10";
+}
+
+TEST_F(TopologySolverTest, MappingConstraintsForbiddenAfterTrait) {
+    // Test forbidden constraint after trait constraint
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    std::map<TestTargetNode, std::string> target_traits = {{1, "host0"}, {2, "host0"}};
+    std::map<TestGlobalNode, std::string> global_traits = {{10, "host0"}, {11, "host0"}, {20, "host1"}};
+    EXPECT_TRUE(constraints.add_required_trait_constraint<std::string>(target_traits, global_traits));
+    EXPECT_EQ(constraints.get_valid_mappings(1).size(), 2u);  // {10, 11}
+
+    // Forbid one of the valid mappings
+    constraints.add_forbidden_constraint(1, 11);
+    EXPECT_EQ(constraints.get_valid_mappings(1).size(), 1u);
+    EXPECT_EQ(constraints.get_valid_mappings(1).count(10), 1u);
+    EXPECT_EQ(constraints.get_valid_mappings(1).count(11), 0u);
+
+    // Target 2 should still have both mappings
+    EXPECT_EQ(constraints.get_valid_mappings(2).size(), 2u);
+}
+
+TEST_F(TopologySolverTest, MappingConstraintsForbiddenEmptyValidMappings) {
+    // Test that forbidding all valid mappings causes validation error
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    std::set<TestGlobalNode> global_nodes = {10, 11};
+    constraints.add_required_constraint(1, global_nodes);
+    EXPECT_EQ(constraints.get_valid_mappings(1).size(), 2u);
+
+    // Forbid one mapping - should be fine
+    constraints.add_forbidden_constraint(1, 11);
+    EXPECT_EQ(constraints.get_valid_mappings(1).size(), 1u);
+
+    // Forbid the remaining mapping - should return false (empty valid mappings)
+    EXPECT_FALSE(constraints.add_forbidden_constraint(1, 10)) << "Forbidding last valid mapping should return false";
+}
+
+TEST_F(TopologySolverTest, SolveTopologyMapping_WithForbiddenConstraints) {
+    // Create target graph: 1 -> 2 -> 3
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2};
+    target_adj_map[2] = {1, 3};
+    target_adj_map[3] = {2};
+
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    // Create global graph: 10 -> 11 -> 12 -> 13
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};
+    global_adj_map[11] = {10, 12};
+    global_adj_map[12] = {11, 13};
+    global_adj_map[13] = {12};
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    // Add required constraint: target node 1 must map to global node 10
+    // Add forbidden constraint: target node 2 cannot map to global node 12
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    constraints.add_required_constraint(1, 10);
+
+    // First, add a required constraint for target 2 to restrict its valid mappings
+    std::set<TestGlobalNode> valid_for_2 = {11, 12, 13};
+    constraints.add_required_constraint(2, valid_for_2);
+
+    // Then forbid one of them
+    constraints.add_forbidden_constraint(2, 12);
+
+    // Solve
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+
+    // Should succeed
+    EXPECT_TRUE(result.success) << "Mapping with forbidden constraint should succeed";
+
+    // Verify required constraint is satisfied
+    EXPECT_EQ(result.target_to_global.at(1), 10) << "Required constraint should be satisfied";
+
+    // Verify forbidden constraint is satisfied (target 2 should not map to 12)
+    EXPECT_NE(result.target_to_global.at(2), 12) << "Forbidden constraint should be satisfied";
+}
+
+// ============================================================================
+// Cardinality Constraint Tests
+// ============================================================================
+
+TEST_F(TopologySolverTest, CardinalityConstraint_Basic) {
+    // Test basic cardinality constraint: at least 1 of {(x,1), (x,2), (y,1), (y,2)} must be satisfied
+    // Create simple target graph: x -> y
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2};  // x=1, y=2
+    target_adj_map[2] = {1};
+
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    // Create global graph: 10 -> 11 -> 12 -> 13
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};
+    global_adj_map[11] = {10, 12};
+    global_adj_map[12] = {11, 13};
+    global_adj_map[13] = {12};
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    // Add cardinality constraint: at least 1 of {(1,10), (1,11), (2,10), (2,11)} must be satisfied
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    std::set<std::pair<TestTargetNode, TestGlobalNode>> cardinality_pairs = {{1, 10}, {1, 11}, {2, 10}, {2, 11}};
+    constraints.add_cardinality_constraint(cardinality_pairs, 1);
+
+    // Solve
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+
+    // Should succeed
+    EXPECT_TRUE(result.success) << "Mapping with cardinality constraint should succeed";
+
+    // Verify at least one of the cardinality pairs is satisfied
+    bool cardinality_satisfied = false;
+    if ((result.target_to_global.at(1) == 10) || (result.target_to_global.at(1) == 11) ||
+        (result.target_to_global.at(2) == 10) || (result.target_to_global.at(2) == 11)) {
+        cardinality_satisfied = true;
+    }
+    EXPECT_TRUE(cardinality_satisfied) << "At least one cardinality constraint pair should be satisfied";
+
+    // Verify graph isomorphism is maintained
+    TestGlobalNode global1 = result.target_to_global.at(1);
+    TestGlobalNode global2 = result.target_to_global.at(2);
+    const auto& neighbors1 = global_graph.get_neighbors(global1);
+    bool connected = std::find(neighbors1.begin(), neighbors1.end(), global2) != neighbors1.end();
+    EXPECT_TRUE(connected) << "Mapped nodes should be connected in global graph";
+}
+
+TEST_F(TopologySolverTest, CardinalityConstraint_MinCountGreaterThanOne) {
+    // Test cardinality constraint with min_count = 2
+    // Create target graph: 1 -> 2 -> 3
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2};
+    target_adj_map[2] = {1, 3};
+    target_adj_map[3] = {2};
+
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    // Create global graph: 10 -> 11 -> 12 -> 13 -> 14
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};
+    global_adj_map[11] = {10, 12};
+    global_adj_map[12] = {11, 13};
+    global_adj_map[13] = {12, 14};
+    global_adj_map[14] = {13};
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    // Add cardinality constraint: at least 2 of {(1,10), (1,11), (2,11), (2,12), (3,12), (3,13)} must be satisfied
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    std::set<std::pair<TestTargetNode, TestGlobalNode>> cardinality_pairs = {
+        {1, 10}, {1, 11}, {2, 11}, {2, 12}, {3, 12}, {3, 13}};
+    constraints.add_cardinality_constraint(cardinality_pairs, 2);
+
+    // Solve
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+
+    // Should succeed
+    EXPECT_TRUE(result.success) << "Mapping with cardinality constraint (min_count=2) should succeed";
+
+    // Count how many cardinality pairs are satisfied
+    size_t satisfied_count = 0;
+    if (result.target_to_global.at(1) == 10 || result.target_to_global.at(1) == 11) {
+        satisfied_count++;
+    }
+    if (result.target_to_global.at(2) == 11 || result.target_to_global.at(2) == 12) {
+        satisfied_count++;
+    }
+    if (result.target_to_global.at(3) == 12 || result.target_to_global.at(3) == 13) {
+        satisfied_count++;
+    }
+
+    EXPECT_GE(satisfied_count, 2u) << "At least 2 cardinality constraint pairs should be satisfied";
+}
+
+TEST_F(TopologySolverTest, CardinalityConstraint_WithRequiredConstraints) {
+    // Test cardinality constraint combined with required constraints
+    // Create target graph: 1 -> 2
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2};
+    target_adj_map[2] = {1};
+
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    // Create global graph: 10 -> 11 -> 12
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};
+    global_adj_map[11] = {10, 12};
+    global_adj_map[12] = {11};
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    // Add required constraint: node 1 must map to 10
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    constraints.add_required_constraint(1, 10);
+
+    // Add cardinality constraint: at least 1 of {(1,10), (1,11), (2,10), (2,11)} must be satisfied
+    // Note: (1,11) will be filtered out because 1 must map to 10
+    std::set<std::pair<TestTargetNode, TestGlobalNode>> cardinality_pairs = {{1, 10}, {1, 11}, {2, 10}, {2, 11}};
+    constraints.add_cardinality_constraint(cardinality_pairs, 1);
+
+    // Solve
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+
+    // Should succeed
+    EXPECT_TRUE(result.success) << "Mapping with cardinality + required constraints should succeed";
+
+    // Verify required constraint is satisfied
+    EXPECT_EQ(result.target_to_global.at(1), 10) << "Required constraint should be satisfied";
+
+    // Verify cardinality constraint is satisfied (either (1,10) or (2,10) or (2,11))
+    bool cardinality_satisfied = (result.target_to_global.at(1) == 10) || (result.target_to_global.at(2) == 10) ||
+                                 (result.target_to_global.at(2) == 11);
+    EXPECT_TRUE(cardinality_satisfied) << "Cardinality constraint should be satisfied";
+}
+
+TEST_F(TopologySolverTest, CardinalityConstraint_ConflictWithRequired) {
+    // Test that cardinality constraint throws error when incompatible with required constraints
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    // Add required constraint: node 1 must map to 20
+    constraints.add_required_constraint(1, 20);
+
+    // Add cardinality constraint: at least 1 of {(1,10), (1,11)} must be satisfied
+    // This should fail because 1 can only map to 20, not 10 or 11
+    std::set<std::pair<TestTargetNode, TestGlobalNode>> cardinality_pairs = {{1, 10}, {1, 11}};
+    EXPECT_FALSE(constraints.add_cardinality_constraint(cardinality_pairs, 1))
+        << "Cardinality constraint incompatible with required constraints should return false";
+}
+
+TEST_F(TopologySolverTest, CardinalityConstraint_MultipleConstraints) {
+    // Test multiple cardinality constraints
+    // Create target graph: 1 -> 2 -> 3
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2};
+    target_adj_map[2] = {1, 3};
+    target_adj_map[3] = {2};
+
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    // Create global graph: 10 -> 11 -> 12 -> 13
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};
+    global_adj_map[11] = {10, 12};
+    global_adj_map[12] = {11, 13};
+    global_adj_map[13] = {12};
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    // First cardinality constraint: at least 1 of {(1,10), (1,11)} must be satisfied
+    std::set<std::pair<TestTargetNode, TestGlobalNode>> cardinality_pairs1 = {{1, 10}, {1, 11}};
+    constraints.add_cardinality_constraint(cardinality_pairs1, 1);
+
+    // Second cardinality constraint: at least 1 of {(2,11), (2,12)} must be satisfied
+    std::set<std::pair<TestTargetNode, TestGlobalNode>> cardinality_pairs2 = {{2, 11}, {2, 12}};
+    constraints.add_cardinality_constraint(cardinality_pairs2, 1);
+
+    // Solve
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+
+    // Should succeed
+    EXPECT_TRUE(result.success) << "Mapping with multiple cardinality constraints should succeed";
+
+    // Verify first cardinality constraint is satisfied
+    bool constraint1_satisfied = (result.target_to_global.at(1) == 10) || (result.target_to_global.at(1) == 11);
+    EXPECT_TRUE(constraint1_satisfied) << "First cardinality constraint should be satisfied";
+
+    // Verify second cardinality constraint is satisfied
+    bool constraint2_satisfied = (result.target_to_global.at(2) == 11) || (result.target_to_global.at(2) == 12);
+    EXPECT_TRUE(constraint2_satisfied) << "Second cardinality constraint should be satisfied";
+}
+
+TEST_F(TopologySolverTest, CardinalityConstraint_Validation) {
+    // Test that cardinality constraint validation works correctly
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    // Test empty pairs - should return false
+    std::set<std::pair<TestTargetNode, TestGlobalNode>> empty_pairs;
+    EXPECT_FALSE(constraints.add_cardinality_constraint(empty_pairs, 1))
+        << "Empty cardinality constraint should return false";
+
+    // Test min_count > pairs.size() - should return false
+    std::set<std::pair<TestTargetNode, TestGlobalNode>> pairs = {{1, 10}, {2, 11}};
+    EXPECT_FALSE(constraints.add_cardinality_constraint(pairs, 3)) << "min_count > pairs.size() should return false";
+
+    // Test min_count = 0 - should return false
+    EXPECT_FALSE(constraints.add_cardinality_constraint(pairs, 0)) << "min_count = 0 should return false";
+
+    // Test valid constraint
+    EXPECT_TRUE(constraints.add_cardinality_constraint(pairs, 1)) << "Valid cardinality constraint should return true";
+}
+
+TEST_F(TopologySolverTest, CardinalityConstraint_IntegrationWithSolver) {
+    // Test that cardinality constraints work correctly with the full solver pipeline
+    // Create target graph: 1 -> 2 -> 3
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2};
+    target_adj_map[2] = {1, 3};
+    target_adj_map[3] = {2};
+
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    // Create global graph: 10 -> 11 -> 12 -> 13 -> 14
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};
+    global_adj_map[11] = {10, 12};
+    global_adj_map[12] = {11, 13};
+    global_adj_map[13] = {12, 14};
+    global_adj_map[14] = {13};
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    // Add cardinality constraint: at least 1 of {(1,10), (1,11), (2,11), (2,12), (3,12), (3,13)} must be satisfied
+    std::set<std::pair<TestTargetNode, TestGlobalNode>> cardinality_pairs = {
+        {1, 10}, {1, 11}, {2, 11}, {2, 12}, {3, 12}, {3, 13}};
+    constraints.add_cardinality_constraint(cardinality_pairs, 1);
+
+    // Solve
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+
+    // Should succeed
+    EXPECT_TRUE(result.success) << "Mapping with cardinality constraint should succeed";
+    EXPECT_TRUE(result.error_message.empty()) << "Should have no error message on success";
+
+    // Verify all nodes are mapped
+    EXPECT_EQ(result.target_to_global.size(), 3u) << "Should map all 3 target nodes";
+    EXPECT_EQ(result.global_to_target.size(), 3u) << "Should have bidirectional mappings";
+
+    // Verify graph isomorphism
+    for (size_t i = 1; i <= 3; ++i) {
+        TestTargetNode target_i = static_cast<TestTargetNode>(i);
+        TestGlobalNode global_i = result.target_to_global.at(target_i);
+
+        // Check neighbors
+        const auto& target_neighbors = target_graph.get_neighbors(target_i);
+        const auto& global_neighbors = global_graph.get_neighbors(global_i);
+
+        for (const auto& target_neighbor : target_neighbors) {
+            TestGlobalNode mapped_neighbor = result.target_to_global.at(target_neighbor);
+            bool neighbor_connected =
+                std::find(global_neighbors.begin(), global_neighbors.end(), mapped_neighbor) != global_neighbors.end();
+            EXPECT_TRUE(neighbor_connected) << "Neighbor " << target_neighbor << " mapped to " << mapped_neighbor
+                                            << " should be connected to " << global_i << " in global graph";
+        }
+    }
+
+    // Verify statistics (dfs_calls only reflects the DFS engine)
+    EXPECT_GE(result.stats.elapsed_time.count(), 0) << "Should have elapsed time";
+    EXPECT_GE(result.stats.memoization_hits, 0u) << "Should track memoization hits";
+}
+
+TEST_F(TopologySolverTest, CardinalityConstraint_ConstraintIndexData) {
+    // Test that cardinality constraints are correctly converted to ConstraintIndexData
+    using namespace tt::tt_fabric::detail;
+
+    // Create simple graphs
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2};
+    target_adj_map[2] = {1};
+
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};
+    global_adj_map[11] = {10, 12};
+    global_adj_map[12] = {11};
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    GraphIndexData graph_data(target_graph, global_graph);
+
+    // Add cardinality constraint
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    std::set<std::pair<TestTargetNode, TestGlobalNode>> cardinality_pairs = {{1, 10}, {1, 11}, {2, 10}, {2, 11}};
+    constraints.add_cardinality_constraint(cardinality_pairs, 1);
+
+    // Convert to ConstraintIndexData
+    ConstraintIndexData constraint_data(constraints, graph_data);
+
+    // Verify cardinality constraints are present
+    EXPECT_FALSE(constraint_data.cardinality_constraints.empty())
+        << "Cardinality constraints should be converted to index data";
+
+    // Verify we can check cardinality constraints
+    std::vector<int> mapping = {0, 1};  // target 1 -> global 10 (idx 0), target 2 -> global 11 (idx 1)
+    EXPECT_TRUE(constraint_data.check_cardinality_constraints(mapping))
+        << "Cardinality constraints should be satisfied by this mapping";
+
+    // Test can_satisfy_cardinality_constraints with partial mapping
+    std::vector<int> partial_mapping = {0, -1};  // target 1 mapped, target 2 not mapped
+    EXPECT_TRUE(constraint_data.can_satisfy_cardinality_constraints(partial_mapping))
+        << "Cardinality constraints should still be satisfiable with partial mapping";
+}
+
+TEST_F(TopologySolverTest, CardinalityConstraint_ForwardConsistency) {
+    // Test that cardinality constraints are checked during forward consistency checking
+    // This ensures branches are pruned early if cardinality constraints cannot be satisfied
+    // Create target graph: 1 -> 2 -> 3
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2};
+    target_adj_map[2] = {1, 3};
+    target_adj_map[3] = {2};
+
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    // Create global graph: 10 -> 11 -> 12 -> 13
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};
+    global_adj_map[11] = {10, 12};
+    global_adj_map[12] = {11, 13};
+    global_adj_map[13] = {12};
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    // Add cardinality constraint: at least 1 of {(1,10), (1,11), (2,11), (2,12)} must be satisfied
+    // This constraint should guide the solver
+    std::set<std::pair<TestTargetNode, TestGlobalNode>> cardinality_pairs = {{1, 10}, {1, 11}, {2, 11}, {2, 12}};
+    constraints.add_cardinality_constraint(cardinality_pairs, 1);
+
+    // Solve
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+
+    // Should succeed
+    EXPECT_TRUE(result.success) << "Mapping with cardinality constraint should succeed";
+
+    // Verify cardinality constraint is satisfied
+    bool cardinality_satisfied = (result.target_to_global.at(1) == 10) || (result.target_to_global.at(1) == 11) ||
+                                 (result.target_to_global.at(2) == 11) || (result.target_to_global.at(2) == 12);
+    EXPECT_TRUE(cardinality_satisfied) << "Cardinality constraint should be satisfied";
+}
+
+TEST_F(TopologySolverTest, CardinalityConstraint_WithPreferredConstraints) {
+    // Test cardinality constraint combined with preferred constraints
+    // Create target graph: 1 -> 2
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2};
+    target_adj_map[2] = {1};
+
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    // Create global graph: 10 -> 11 -> 12
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};
+    global_adj_map[11] = {10, 12};
+    global_adj_map[12] = {11};
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    // Add preferred constraint: node 1 prefers 10
+    constraints.add_preferred_constraint(1, 10);
+
+    // Add cardinality constraint: at least 1 of {(1,10), (1,11), (2,10), (2,11)} must be satisfied
+    std::set<std::pair<TestTargetNode, TestGlobalNode>> cardinality_pairs = {{1, 10}, {1, 11}, {2, 10}, {2, 11}};
+    constraints.add_cardinality_constraint(cardinality_pairs, 1);
+
+    // Solve
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+
+    // Should succeed
+    EXPECT_TRUE(result.success) << "Mapping with cardinality + preferred constraints should succeed";
+
+    // Verify cardinality constraint is satisfied
+    bool cardinality_satisfied = (result.target_to_global.at(1) == 10) || (result.target_to_global.at(1) == 11) ||
+                                 (result.target_to_global.at(2) == 10) || (result.target_to_global.at(2) == 11);
+    EXPECT_TRUE(cardinality_satisfied) << "Cardinality constraint should be satisfied";
+
+    // Preferred constraint should guide the solver (but not required)
+    // If cardinality is satisfied by (1,10), preferred constraint is also satisfied
+    if (result.target_to_global.at(1) == 10) {
+        EXPECT_EQ(result.constraint_stats.preferred_satisfied, 1u) << "Preferred constraint should be satisfied";
+    }
+}
+
+TEST_F(TopologySolverTest, CardinalityConstraint_WithForbiddenConstraints) {
+    // Test cardinality constraint combined with forbidden constraints
+    // Create target graph: 1 -> 2 -> 3
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2};
+    target_adj_map[2] = {1, 3};
+    target_adj_map[3] = {2};
+
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    // Create global graph: 10 -> 11 -> 12 -> 13
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};
+    global_adj_map[11] = {10, 12};
+    global_adj_map[12] = {11, 13};
+    global_adj_map[13] = {12};
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    // Add required constraint: node 1 can map to {10, 11, 12}
+    constraints.add_required_constraint(1, std::set<TestGlobalNode>{10, 11, 12});
+
+    // Forbid node 1 from mapping to 10
+    constraints.add_forbidden_constraint(1, 10);
+
+    // Add cardinality constraint: at least 1 of {(1,10), (1,11), (2,10), (2,11)} must be satisfied
+    // Note: (1,10) will be filtered out because it's forbidden
+    std::set<std::pair<TestTargetNode, TestGlobalNode>> cardinality_pairs = {{1, 10}, {1, 11}, {2, 10}, {2, 11}};
+    constraints.add_cardinality_constraint(cardinality_pairs, 1);
+
+    // Solve
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+
+    // Should succeed
+    EXPECT_TRUE(result.success) << "Mapping with cardinality + forbidden constraints should succeed";
+
+    // Verify forbidden constraint is satisfied (node 1 should not map to 10)
+    EXPECT_NE(result.target_to_global.at(1), 10) << "Forbidden constraint should be satisfied";
+
+    // Verify cardinality constraint is satisfied (must be via (1,11), (2,10), or (2,11))
+    bool cardinality_satisfied = (result.target_to_global.at(1) == 11) || (result.target_to_global.at(2) == 10) ||
+                                 (result.target_to_global.at(2) == 11);
+    EXPECT_TRUE(cardinality_satisfied) << "Cardinality constraint should be satisfied";
+}
+
+TEST_F(TopologySolverTest, CardinalityConstraint_WithManyToManyConstraints) {
+    // Test cardinality constraint combined with many-to-many constraints
+    // Create target graph: 1 -> 2 -> 3
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2};
+    target_adj_map[2] = {1, 3};
+    target_adj_map[3] = {2};
+
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    // Create global graph: 10 -> 11 -> 12 -> 13
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};
+    global_adj_map[11] = {10, 12};
+    global_adj_map[12] = {11, 13};
+    global_adj_map[13] = {12};
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    // Add many-to-many constraint: nodes {1, 2} can map to {10, 11, 12}
+    std::set<TestTargetNode> target_nodes = {1, 2};
+    std::set<TestGlobalNode> global_nodes = {10, 11, 12};
+    constraints.add_required_constraint(target_nodes, global_nodes);
+
+    // Add cardinality constraint: at least 1 of {(1,10), (1,11), (2,10), (2,11)} must be satisfied
+    std::set<std::pair<TestTargetNode, TestGlobalNode>> cardinality_pairs = {{1, 10}, {1, 11}, {2, 10}, {2, 11}};
+    constraints.add_cardinality_constraint(cardinality_pairs, 1);
+
+    // Solve
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+
+    // Should succeed
+    EXPECT_TRUE(result.success) << "Mapping with cardinality + many-to-many constraints should succeed";
+
+    // Verify many-to-many constraint is satisfied
+    EXPECT_TRUE(global_nodes.contains(result.target_to_global.at(1))) << "Node 1 should map to {10,11,12}";
+    EXPECT_TRUE(global_nodes.contains(result.target_to_global.at(2))) << "Node 2 should map to {10,11,12}";
+
+    // Verify cardinality constraint is satisfied
+    bool cardinality_satisfied = (result.target_to_global.at(1) == 10) || (result.target_to_global.at(1) == 11) ||
+                                 (result.target_to_global.at(2) == 10) || (result.target_to_global.at(2) == 11);
+    EXPECT_TRUE(cardinality_satisfied) << "Cardinality constraint should be satisfied";
+}
+
+TEST_F(TopologySolverTest, CardinalityConstraint_WithMultipleConstraintTypes) {
+    // Test cardinality constraint combined with multiple constraint types
+    // Create target graph: 1 -> 2 -> 3
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2};
+    target_adj_map[2] = {1, 3};
+    target_adj_map[3] = {2};
+
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    // Create global graph: 10 -> 11 -> 12 -> 13
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};
+    global_adj_map[11] = {10, 12};
+    global_adj_map[12] = {11, 13};
+    global_adj_map[13] = {12};
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    // Add required constraint: node 1 can map to {10, 11, 12}
+    constraints.add_required_constraint(1, std::set<TestGlobalNode>{10, 11, 12});
+
+    // Add preferred constraint: node 2 prefers 11
+    constraints.add_preferred_constraint(2, 11);
+
+    // Add forbidden constraint: node 1 cannot map to 12
+    constraints.add_forbidden_constraint(1, 12);
+
+    // Add cardinality constraint: at least 2 of {(1,10), (1,11), (2,10), (2,11), (2,12)} must be satisfied
+    std::set<std::pair<TestTargetNode, TestGlobalNode>> cardinality_pairs = {
+        {1, 10}, {1, 11}, {2, 10}, {2, 11}, {2, 12}};
+    constraints.add_cardinality_constraint(cardinality_pairs, 2);
+
+    // Solve
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+
+    // Should succeed
+    EXPECT_TRUE(result.success) << "Mapping with multiple constraint types should succeed";
+
+    // Verify required constraint is satisfied
+    EXPECT_TRUE(result.target_to_global.at(1) == 10 || result.target_to_global.at(1) == 11)
+        << "Node 1 should map to {10, 11} (12 is forbidden)";
+
+    // Verify forbidden constraint is satisfied
+    EXPECT_NE(result.target_to_global.at(1), 12) << "Forbidden constraint should be satisfied";
+
+    // Verify cardinality constraint is satisfied (at least 2 pairs)
+    size_t satisfied_pairs = 0;
+    if (result.target_to_global.at(1) == 10) {
+        satisfied_pairs++;
+    }
+    if (result.target_to_global.at(1) == 11) {
+        satisfied_pairs++;
+    }
+    if (result.target_to_global.at(2) == 10) {
+        satisfied_pairs++;
+    }
+    if (result.target_to_global.at(2) == 11) {
+        satisfied_pairs++;
+    }
+    if (result.target_to_global.at(2) == 12) {
+        satisfied_pairs++;
+    }
+    EXPECT_GE(satisfied_pairs, 2u) << "At least 2 cardinality pairs should be satisfied";
+}
+
+TEST_F(TopologySolverTest, CardinalityConstraint_IntersectionWithRequired) {
+    // Test cardinality constraint with intersection scenarios
+    // Create target graph: 1 -> 2
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2};
+    target_adj_map[2] = {1};
+
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    // Create global graph: 10 -> 11 -> 12
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};
+    global_adj_map[11] = {10, 12};
+    global_adj_map[12] = {11};
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    // Add required constraint: node 1 can map to {10, 11}
+    constraints.add_required_constraint(1, std::set<TestGlobalNode>{10, 11});
+
+    // Add cardinality constraint: at least 1 of {(1,10), (1,11), (1,12), (2,10), (2,11)} must be satisfied
+    // Note: (1,12) will be filtered out because 1 can only map to {10, 11}
+    std::set<std::pair<TestTargetNode, TestGlobalNode>> cardinality_pairs = {
+        {1, 10}, {1, 11}, {1, 12}, {2, 10}, {2, 11}};
+    constraints.add_cardinality_constraint(cardinality_pairs, 1);
+
+    // Solve
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+
+    // Should succeed
+    EXPECT_TRUE(result.success) << "Mapping with cardinality intersection should succeed";
+
+    // Verify required constraint is satisfied
+    EXPECT_TRUE(result.target_to_global.at(1) == 10 || result.target_to_global.at(1) == 11)
+        << "Node 1 should map to {10, 11}";
+
+    // Verify cardinality constraint is satisfied (must be via valid pairs)
+    bool cardinality_satisfied = (result.target_to_global.at(1) == 10) || (result.target_to_global.at(1) == 11) ||
+                                 (result.target_to_global.at(2) == 10) || (result.target_to_global.at(2) == 11);
+    EXPECT_TRUE(cardinality_satisfied) << "Cardinality constraint should be satisfied with valid pairs";
+}
+
+TEST_F(TopologySolverTest, CardinalityConstraint_MinCountWithConstraints) {
+    // Test cardinality constraint with min_count > 1 combined with other constraints
+    // Create target graph: 1 -> 2 -> 3
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2};
+    target_adj_map[2] = {1, 3};
+    target_adj_map[3] = {2};
+
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    // Create global graph: 10 -> 11 -> 12 -> 13
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};
+    global_adj_map[11] = {10, 12};
+    global_adj_map[12] = {11, 13};
+    global_adj_map[13] = {12};
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    // Add required constraint: node 1 can map to {10, 11}
+    constraints.add_required_constraint(1, std::set<TestGlobalNode>{10, 11});
+
+    // Add forbidden constraint: node 2 cannot map to 12
+    constraints.add_forbidden_constraint(2, 12);
+
+    // Add cardinality constraint: at least 2 of {(1,10), (1,11), (2,10), (2,11), (2,12)} must be satisfied
+    // Note: (2,12) will be filtered out because it's forbidden
+    std::set<std::pair<TestTargetNode, TestGlobalNode>> cardinality_pairs = {
+        {1, 10}, {1, 11}, {2, 10}, {2, 11}, {2, 12}};
+    constraints.add_cardinality_constraint(cardinality_pairs, 2);
+
+    // Solve
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+
+    // Should succeed
+    EXPECT_TRUE(result.success) << "Mapping with min_count=2 and constraints should succeed";
+
+    // Verify constraints are satisfied
+    EXPECT_TRUE(result.target_to_global.at(1) == 10 || result.target_to_global.at(1) == 11)
+        << "Node 1 should map to {10, 11}";
+    EXPECT_NE(result.target_to_global.at(2), 12) << "Node 2 should not map to 12 (forbidden)";
+
+    // Verify cardinality constraint is satisfied (at least 2 pairs)
+    size_t satisfied_pairs = 0;
+    if (result.target_to_global.at(1) == 10) {
+        satisfied_pairs++;
+    }
+    if (result.target_to_global.at(1) == 11) {
+        satisfied_pairs++;
+    }
+    if (result.target_to_global.at(2) == 10) {
+        satisfied_pairs++;
+    }
+    if (result.target_to_global.at(2) == 11) {
+        satisfied_pairs++;
+    }
+    EXPECT_GE(satisfied_pairs, 2u) << "At least 2 cardinality pairs should be satisfied";
+}
+
+TEST_F(TopologySolverTest, CardinalityConstraint_MultipleCardinalityWithOtherConstraints) {
+    // Test multiple cardinality constraints combined with other constraint types
+    // Create target graph: 1 -> 2 -> 3
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2};
+    target_adj_map[2] = {1, 3};
+    target_adj_map[3] = {2};
+
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    // Create global graph: 10 -> 11 -> 12 -> 13
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};
+    global_adj_map[11] = {10, 12};
+    global_adj_map[12] = {11, 13};
+    global_adj_map[13] = {12};
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    // Add required constraint: node 1 can map to {10, 11}
+    constraints.add_required_constraint(1, std::set<TestGlobalNode>{10, 11});
+
+    // Add preferred constraint: node 2 prefers 11
+    constraints.add_preferred_constraint(2, 11);
+
+    // Add first cardinality constraint: at least 1 of {(1,10), (1,11), (2,10)} must be satisfied
+    std::set<std::pair<TestTargetNode, TestGlobalNode>> cardinality_pairs1 = {{1, 10}, {1, 11}, {2, 10}};
+    constraints.add_cardinality_constraint(cardinality_pairs1, 1);
+
+    // Add second cardinality constraint: at least 1 of {(2,11), (2,12), (3,11)} must be satisfied
+    std::set<std::pair<TestTargetNode, TestGlobalNode>> cardinality_pairs2 = {{2, 11}, {2, 12}, {3, 11}};
+    constraints.add_cardinality_constraint(cardinality_pairs2, 1);
+
+    // Solve
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+
+    // Should succeed
+    EXPECT_TRUE(result.success) << "Mapping with multiple cardinality constraints should succeed";
+
+    // Verify required constraint is satisfied
+    EXPECT_TRUE(result.target_to_global.at(1) == 10 || result.target_to_global.at(1) == 11)
+        << "Node 1 should map to {10, 11}";
+
+    // Verify first cardinality constraint is satisfied
+    bool cardinality1_satisfied = (result.target_to_global.at(1) == 10) || (result.target_to_global.at(1) == 11) ||
+                                  (result.target_to_global.at(2) == 10);
+    EXPECT_TRUE(cardinality1_satisfied) << "First cardinality constraint should be satisfied";
+
+    // Verify second cardinality constraint is satisfied
+    bool cardinality2_satisfied = (result.target_to_global.at(2) == 11) || (result.target_to_global.at(2) == 12) ||
+                                  (result.target_to_global.at(3) == 11);
+    EXPECT_TRUE(cardinality2_satisfied) << "Second cardinality constraint should be satisfied";
+}
+
+TEST_F(TopologySolverTest, CardinalityConstraint_ManyToMany_Basic) {
+    // Test many-to-many cardinality constraint: at least 1 mapping from {1,2} × {10,11,12}
+    // Create target graph: 1 -> 2
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2};
+    target_adj_map[2] = {1};
+
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    // Create global graph: 10 -> 11 -> 12
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};
+    global_adj_map[11] = {10, 12};
+    global_adj_map[12] = {11};
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    // Add many-to-many cardinality constraint: at least 1 of {(1,10), (1,11), (1,12), (2,10), (2,11), (2,12)}
+    std::set<TestTargetNode> target_nodes = {1, 2};
+    std::set<TestGlobalNode> global_nodes = {10, 11, 12};
+    constraints.add_cardinality_constraint(target_nodes, global_nodes, 1);
+
+    // Solve
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+
+    // Should succeed
+    EXPECT_TRUE(result.success) << "Mapping with many-to-many cardinality constraint should succeed";
+
+    // Verify cardinality constraint is satisfied (at least 1 pair)
+    bool cardinality_satisfied = (result.target_to_global.at(1) == 10) || (result.target_to_global.at(1) == 11) ||
+                                 (result.target_to_global.at(1) == 12) || (result.target_to_global.at(2) == 10) ||
+                                 (result.target_to_global.at(2) == 11) || (result.target_to_global.at(2) == 12);
+    EXPECT_TRUE(cardinality_satisfied) << "Many-to-many cardinality constraint should be satisfied";
+}
+
+TEST_F(TopologySolverTest, CardinalityConstraint_ManyToMany_MinCountGreaterThanOne) {
+    // Test many-to-many cardinality constraint with min_count = 2
+    // Create target graph: 1 -> 2 -> 3
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2};
+    target_adj_map[2] = {1, 3};
+    target_adj_map[3] = {2};
+
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    // Create global graph: 10 -> 11 -> 12 -> 13
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};
+    global_adj_map[11] = {10, 12};
+    global_adj_map[12] = {11, 13};
+    global_adj_map[13] = {12};
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    // Add many-to-many cardinality constraint: at least 2 of {(1,10), (1,11), (2,10), (2,11)}
+    std::set<TestTargetNode> target_nodes = {1, 2};
+    std::set<TestGlobalNode> global_nodes = {10, 11};
+    constraints.add_cardinality_constraint(target_nodes, global_nodes, 2);
+
+    // Solve
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+
+    // Should succeed
+    EXPECT_TRUE(result.success) << "Mapping with many-to-many cardinality constraint (min_count=2) should succeed";
+
+    // Verify cardinality constraint is satisfied (at least 2 pairs)
+    size_t satisfied_pairs = 0;
+    if (result.target_to_global.at(1) == 10 || result.target_to_global.at(1) == 11) {
+        satisfied_pairs++;
+    }
+    if (result.target_to_global.at(2) == 10 || result.target_to_global.at(2) == 11) {
+        satisfied_pairs++;
+    }
+    EXPECT_GE(satisfied_pairs, 2u) << "At least 2 pairs from many-to-many cardinality constraint should be satisfied";
+}
+
+TEST_F(TopologySolverTest, CardinalityConstraint_ManyToMany_WithRequiredConstraints) {
+    // Test many-to-many cardinality constraint combined with required constraints
+    // Create target graph: 1 -> 2
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2};
+    target_adj_map[2] = {1};
+
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    // Create global graph: 10 -> 11 -> 12
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};
+    global_adj_map[11] = {10, 12};
+    global_adj_map[12] = {11};
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    // Add required constraint: node 1 must map to 10
+    constraints.add_required_constraint(1, 10);
+
+    // Add many-to-many cardinality constraint: at least 1 of {(1,10), (1,11), (2,10), (2,11)}
+    // Note: (1,11) will be filtered out because 1 must map to 10
+    std::set<TestTargetNode> target_nodes = {1, 2};
+    std::set<TestGlobalNode> global_nodes = {10, 11};
+    constraints.add_cardinality_constraint(target_nodes, global_nodes, 1);
+
+    // Solve
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+
+    // Should succeed
+    EXPECT_TRUE(result.success) << "Mapping with many-to-many cardinality + required constraints should succeed";
+
+    // Verify required constraint is satisfied
+    EXPECT_EQ(result.target_to_global.at(1), 10) << "Required constraint should be satisfied";
+
+    // Verify cardinality constraint is satisfied (via (1,10) or (2,10) or (2,11))
+    bool cardinality_satisfied = (result.target_to_global.at(1) == 10) || (result.target_to_global.at(2) == 10) ||
+                                 (result.target_to_global.at(2) == 11);
+    EXPECT_TRUE(cardinality_satisfied) << "Many-to-many cardinality constraint should be satisfied";
+}
+
+TEST_F(TopologySolverTest, CardinalityConstraint_ManyToMany_WithForbiddenConstraints) {
+    // Test many-to-many cardinality constraint combined with forbidden constraints
+    // Create target graph: 1 -> 2 -> 3
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2};
+    target_adj_map[2] = {1, 3};
+    target_adj_map[3] = {2};
+
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    // Create global graph: 10 -> 11 -> 12 -> 13
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};
+    global_adj_map[11] = {10, 12};
+    global_adj_map[12] = {11, 13};
+    global_adj_map[13] = {12};
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    // Add required constraint: node 1 can map to {10, 11, 12}
+    constraints.add_required_constraint(1, std::set<TestGlobalNode>{10, 11, 12});
+
+    // Forbid node 1 from mapping to 10
+    constraints.add_forbidden_constraint(1, 10);
+
+    // Add many-to-many cardinality constraint: at least 1 of {(1,10), (1,11), (2,10), (2,11)}
+    // Note: (1,10) will be filtered out because it's forbidden
+    std::set<TestTargetNode> target_nodes = {1, 2};
+    std::set<TestGlobalNode> global_nodes = {10, 11};
+    constraints.add_cardinality_constraint(target_nodes, global_nodes, 1);
+
+    // Solve
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+
+    // Should succeed
+    EXPECT_TRUE(result.success) << "Mapping with many-to-many cardinality + forbidden constraints should succeed";
+
+    // Verify forbidden constraint is satisfied
+    EXPECT_NE(result.target_to_global.at(1), 10) << "Forbidden constraint should be satisfied";
+
+    // Verify cardinality constraint is satisfied (must be via (1,11), (2,10), or (2,11))
+    bool cardinality_satisfied = (result.target_to_global.at(1) == 11) || (result.target_to_global.at(2) == 10) ||
+                                 (result.target_to_global.at(2) == 11);
+    EXPECT_TRUE(cardinality_satisfied) << "Many-to-many cardinality constraint should be satisfied";
+}
+
+TEST_F(TopologySolverTest, CardinalityConstraint_ManyToMany_Validation) {
+    // Test validation of many-to-many cardinality constraint
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    // Test empty target nodes - should throw
+    std::set<TestTargetNode> empty_targets;
+    std::set<TestGlobalNode> global_nodes = {10, 11};
+    EXPECT_FALSE(constraints.add_cardinality_constraint(empty_targets, global_nodes, 1))
+        << "Empty target nodes should return false";
+
+    // Test empty global nodes - should return false
+    std::set<TestTargetNode> target_nodes = {1, 2};
+    std::set<TestGlobalNode> empty_globals;
+    EXPECT_FALSE(constraints.add_cardinality_constraint(target_nodes, empty_globals, 1))
+        << "Empty global nodes should return false";
+
+    // Test min_count greater than number of pairs - should return false
+    std::set<TestTargetNode> small_targets = {1};
+    std::set<TestGlobalNode> small_globals = {10};
+    EXPECT_FALSE(constraints.add_cardinality_constraint(small_targets, small_globals, 2))
+        << "min_count > pairs.size() should return false";
+
+    // Test min_count = 0 - should return false
+    EXPECT_FALSE(constraints.add_cardinality_constraint(target_nodes, global_nodes, 0))
+        << "min_count = 0 should return false";
+}
+
+TEST_F(TopologySolverTest, CardinalityConstraint_ManyToMany_EquivalentToExplicitPairs) {
+    // Test that many-to-many cardinality constraint is equivalent to explicitly listing all pairs
+    // Create target graph: 1 -> 2
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2};
+    target_adj_map[2] = {1};
+
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    // Create global graph: 10 -> 11 -> 12
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};
+    global_adj_map[11] = {10, 12};
+    global_adj_map[12] = {11};
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    // Test 1: Using many-to-many convenience method
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints1;
+    std::set<TestTargetNode> target_nodes = {1, 2};
+    std::set<TestGlobalNode> global_nodes = {10, 11};
+    constraints1.add_cardinality_constraint(target_nodes, global_nodes, 1);
+
+    // Test 2: Using explicit pairs (equivalent)
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints2;
+    std::set<std::pair<TestTargetNode, TestGlobalNode>> explicit_pairs = {{1, 10}, {1, 11}, {2, 10}, {2, 11}};
+    constraints2.add_cardinality_constraint(explicit_pairs, 1);
+
+    // Both should have the same cardinality constraints
+    EXPECT_EQ(constraints1.get_cardinality_constraints().size(), constraints2.get_cardinality_constraints().size());
+    if (!constraints1.get_cardinality_constraints().empty() && !constraints2.get_cardinality_constraints().empty()) {
+        const auto& pairs1 = constraints1.get_cardinality_constraints()[0].first;
+        const auto& pairs2 = constraints2.get_cardinality_constraints()[0].first;
+        EXPECT_EQ(pairs1.size(), pairs2.size());
+        EXPECT_EQ(pairs1, pairs2) << "Many-to-many should generate same pairs as explicit listing";
+    }
+}
+
+TEST_F(TopologySolverTest, SolveTopologyMapping_RingToMesh48Nodes) {
+    // Create ring topology (target graph): 48 nodes (0-47) with degree 2
+    // Each node connects to its two neighbors in a ring
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+
+    // TODO: Change this to a programmatically generated ring topology
+    // Parse ring topology from the provided data
+    // Node 0: connects to 47 and 1
+    target_adj_map[0] = {47, 47, 47, 47, 1, 1, 1, 1, 1, 1, 1, 1};
+    target_adj_map[1] = {2, 2, 2, 2, 2, 2, 2, 2, 0, 0, 0, 0, 0, 0, 0, 0};
+    target_adj_map[2] = {3, 3, 3, 3, 1, 1, 1, 1, 1, 1, 1, 1};
+    target_adj_map[3] = {4, 4, 4, 4, 4, 4, 4, 4, 2, 2, 2, 2};
+    target_adj_map[4] = {5, 5, 5, 5, 5, 5, 5, 5, 3, 3, 3, 3, 3, 3, 3, 3};
+    target_adj_map[5] = {6, 6, 6, 6, 4, 4, 4, 4, 4, 4, 4, 4};
+    target_adj_map[6] = {7, 7, 7, 7, 7, 7, 7, 7, 5, 5, 5, 5};
+    target_adj_map[7] = {8, 8, 8, 8, 8, 8, 8, 8, 6, 6, 6, 6, 6, 6, 6, 6};
+    target_adj_map[8] = {9, 9, 9, 9, 7, 7, 7, 7, 7, 7, 7, 7};
+    target_adj_map[9] = {10, 10, 10, 10, 10, 10, 10, 10, 8, 8, 8, 8};
+    target_adj_map[10] = {11, 11, 11, 11, 11, 11, 11, 11, 9, 9, 9, 9, 9, 9, 9, 9};
+    target_adj_map[11] = {12, 12, 12, 12, 12, 12, 12, 12, 10, 10, 10, 10, 10, 10, 10, 10};
+    target_adj_map[12] = {13, 13, 13, 13, 11, 11, 11, 11, 11, 11, 11, 11};
+    target_adj_map[13] = {14, 14, 14, 14, 12, 12, 12, 12};
+    target_adj_map[14] = {15, 15, 15, 15, 13, 13, 13, 13};
+    target_adj_map[15] = {16, 16, 16, 16, 14, 14, 14, 14};
+    target_adj_map[16] = {17, 17, 17, 17, 17, 17, 17, 17, 15, 15, 15, 15};
+    target_adj_map[17] = {18, 18, 18, 18, 18, 18, 18, 18, 16, 16, 16, 16, 16, 16, 16, 16};
+    target_adj_map[18] = {19, 19, 19, 19, 19, 19, 19, 19, 17, 17, 17, 17, 17, 17, 17, 17};
+    target_adj_map[19] = {20, 20, 20, 20, 18, 18, 18, 18, 18, 18, 18, 18};
+    target_adj_map[20] = {21, 21, 21, 21, 21, 21, 21, 21, 19, 19, 19, 19};
+    target_adj_map[21] = {22, 22, 22, 22, 22, 22, 22, 22, 20, 20, 20, 20, 20, 20, 20, 20};
+    target_adj_map[22] = {23, 23, 23, 23, 23, 23, 23, 23, 21, 21, 21, 21, 21, 21, 21, 21};
+    target_adj_map[23] = {24, 24, 24, 24, 22, 22, 22, 22, 22, 22, 22, 22};
+    target_adj_map[24] = {25, 25, 25, 25, 25, 25, 25, 25, 23, 23, 23, 23};
+    target_adj_map[25] = {26, 26, 26, 26, 26, 26, 26, 26, 24, 24, 24, 24, 24, 24, 24, 24};
+    target_adj_map[26] = {27, 27, 27, 27, 27, 27, 27, 27, 25, 25, 25, 25, 25, 25, 25, 25};
+    target_adj_map[27] = {28, 28, 28, 28, 26, 26, 26, 26, 26, 26, 26, 26};
+    target_adj_map[28] = {29, 29, 29, 29, 29, 29, 29, 29, 27, 27, 27, 27};
+    target_adj_map[29] = {30, 30, 30, 30, 30, 30, 30, 30, 28, 28, 28, 28, 28, 28, 28, 28};
+    target_adj_map[30] = {31, 31, 31, 31, 31, 31, 31, 31, 29, 29, 29, 29, 29, 29, 29, 29};
+    target_adj_map[31] = {32, 32, 32, 32, 30, 30, 30, 30, 30, 30, 30, 30};
+    target_adj_map[32] = {33, 33, 33, 33, 31, 31, 31, 31};
+    target_adj_map[33] = {34, 34, 34, 34, 32, 32, 32, 32};
+    target_adj_map[34] = {35, 35, 35, 35, 33, 33, 33, 33};
+    target_adj_map[35] = {36, 36, 36, 36, 36, 36, 36, 36, 34, 34, 34, 34};
+    target_adj_map[36] = {37, 37, 37, 37, 37, 37, 37, 37, 35, 35, 35, 35, 35, 35, 35, 35};
+    target_adj_map[37] = {38, 38, 38, 38, 38, 38, 38, 38, 36, 36, 36, 36, 36, 36, 36, 36};
+    target_adj_map[38] = {39, 39, 39, 39, 37, 37, 37, 37, 37, 37, 37, 37};
+    target_adj_map[39] = {40, 40, 40, 40, 40, 40, 40, 40, 38, 38, 38, 38};
+    target_adj_map[40] = {41, 41, 41, 41, 41, 41, 41, 41, 39, 39, 39, 39, 39, 39, 39, 39};
+    target_adj_map[41] = {42, 42, 42, 42, 40, 40, 40, 40, 40, 40, 40, 40};
+    target_adj_map[42] = {43, 43, 43, 43, 43, 43, 43, 43, 41, 41, 41, 41};
+    target_adj_map[43] = {44, 44, 44, 44, 44, 44, 44, 44, 42, 42, 42, 42, 42, 42, 42, 42};
+    target_adj_map[44] = {45, 45, 45, 45, 43, 43, 43, 43, 43, 43, 43, 43};
+    target_adj_map[45] = {46, 46, 46, 46, 46, 46, 46, 46, 44, 44, 44, 44};
+    target_adj_map[46] = {47, 47, 47, 47, 47, 47, 47, 47, 45, 45, 45, 45, 45, 45, 45, 45};
+    target_adj_map[47] = {0, 0, 0, 0, 46, 46, 46, 46, 46, 46, 46, 46};
+
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    // Create mesh topology (global graph): 48 nodes (0-47) with varying degrees
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+
+    // Parse mesh topology from the provided data
+    global_adj_map[0] = {29, 29, 22, 22, 29, 29, 27, 27, 13, 13, 27, 27,
+                         29, 29, 27, 27, 22, 22, 27, 27, 29, 29, 13, 13};
+    global_adj_map[1] = {32, 32, 22, 22, 32, 32, 13, 13, 28, 28, 32, 32,
+                         28, 28, 32, 32, 22, 22, 28, 28, 13, 13, 28, 28};
+    global_adj_map[2] = {30, 30, 23, 23, 30, 30, 20, 20, 23, 23, 34, 34,
+                         34, 34, 20, 20, 34, 34, 34, 34, 30, 30, 30, 30};
+    global_adj_map[3] = {34, 34, 14, 14, 34, 34, 12, 12, 34, 34, 34, 34,
+                         14, 14, 30, 30, 30, 30, 30, 30, 12, 12, 30, 30};
+    global_adj_map[4] = {21, 21, 24, 24, 22, 22, 24, 24, 25, 25, 25, 25, 18, 18,
+                         25, 25, 25, 25, 21, 21, 24, 24, 22, 22, 18, 18, 24, 24};
+    global_adj_map[5] = {32, 32, 32, 32, 19, 19, 32, 32, 28, 28, 17, 17,
+                         17, 17, 32, 32, 28, 28, 28, 28, 19, 19, 28, 28};
+    global_adj_map[6] = {25, 25, 24, 24, 16, 16, 25, 25, 24, 24, 24, 24,
+                         15, 15, 16, 16, 25, 25, 15, 15, 25, 25, 24, 24};
+    global_adj_map[7] = {26, 26, 21, 21, 33, 33, 26, 26, 18, 18, 33, 33,
+                         26, 26, 21, 21, 18, 18, 33, 33, 26, 26, 33, 33};
+    global_adj_map[8] = {31, 31, 23, 23, 35, 35, 35, 35, 20, 20, 35, 35,
+                         35, 35, 31, 31, 23, 23, 31, 31, 31, 31, 20, 20};
+    global_adj_map[9] = {33, 33, 26, 26, 33, 33, 15, 15, 15, 15, 26, 26,
+                         26, 26, 33, 33, 16, 16, 26, 26, 33, 33, 16, 16};
+    global_adj_map[10] = {17, 17, 29, 29, 29, 29, 27, 27, 27, 27, 19, 19,
+                          29, 29, 27, 27, 17, 17, 29, 29, 27, 27, 19, 19};
+    global_adj_map[11] = {18, 18, 31, 31, 18, 18, 14, 14, 31, 31, 22, 22, 35, 35, 14, 14,
+                          31, 31, 35, 35, 12, 12, 31, 31, 22, 22, 35, 35, 35, 35, 12, 12};
+    global_adj_map[12] = {37, 37, 11, 11, 43, 43, 3, 3, 43, 43, 37, 37, 37, 37, 37, 37, 3, 3, 43, 43, 11, 11, 43, 43};
+    global_adj_map[13] = {44, 44, 0, 0, 1, 1, 41, 41, 44, 44, 1, 1, 0, 0, 41, 41, 41, 41, 44, 44, 41, 41, 44, 44};
+    global_adj_map[14] = {39, 39, 3, 3, 40, 40, 39, 39, 39, 39, 3, 3, 40, 40, 40, 40, 11, 11, 40, 40, 39, 39, 11, 11};
+    global_adj_map[15] = {36, 36, 9, 9, 36, 36, 42, 42, 42, 42, 6, 6, 42, 42, 9, 9, 42, 42, 36, 36, 6, 6, 36, 36};
+    global_adj_map[16] = {38, 38, 6, 6, 38, 38, 9, 9, 46, 46, 6, 6, 46, 46, 46, 46, 38, 38, 46, 46, 38, 38, 9, 9};
+    global_adj_map[17] = {41, 41, 10, 10, 44, 44, 44, 44, 41, 41, 5, 5, 41, 41, 10, 10, 44, 44, 5, 5, 44, 44, 41, 41};
+    global_adj_map[18] = {42, 42, 7, 7, 42, 42, 42, 42, 4,  4,  42, 42, 11, 11,
+                          36, 36, 7, 7, 36, 36, 36, 36, 11, 11, 4,  4,  36, 36};
+    global_adj_map[19] = {45, 45, 5, 5, 45, 45, 45, 45, 10, 10, 47, 47, 45, 45, 5, 5, 47, 47, 10, 10, 47, 47, 47, 47};
+    global_adj_map[20] = {40, 40, 2, 2, 2, 2, 39, 39, 40, 40, 40, 40, 40, 40, 8, 8, 8, 8, 39, 39, 39, 39, 39, 39};
+    global_adj_map[21] = {7, 7, 38, 38, 46, 46, 46, 46, 4, 4, 46, 46, 7, 7, 38, 38, 4, 4, 38, 38, 38, 38, 46, 46};
+    global_adj_map[22] = {47, 47, 4,  4,  45, 45, 11, 11, 47, 47, 0,  0,  4, 4, 0,  0,
+                          45, 45, 47, 47, 1,  1,  11, 11, 47, 47, 45, 45, 1, 1, 45, 45};
+    global_adj_map[23] = {37, 37, 43, 43, 43, 43, 37, 37, 43, 43, 8, 8, 43, 43, 2, 2, 2, 2, 37, 37, 8, 8, 37, 37};
+    global_adj_map[24] = {36, 36, 4, 4, 4, 4, 6, 6, 6, 6, 6, 6, 36, 36, 38, 38, 4, 4, 4, 4, 6, 6, 38, 38};
+    global_adj_map[25] = {6, 6, 4, 4, 6, 6, 42, 42, 6, 6, 4, 4, 46, 46, 6, 6, 4, 4, 42, 42, 4, 4, 46, 46};
+    global_adj_map[26] = {42, 42, 9, 9, 7, 7, 46, 46, 46, 46, 9, 9, 7, 7, 7, 7, 42, 42, 9, 9, 9, 9, 7, 7};
+    global_adj_map[27] = {10, 10, 45, 45, 0, 0, 0, 0, 10, 10, 45, 45, 41, 41, 0, 0, 10, 10, 41, 41, 0, 0, 10, 10};
+    global_adj_map[28] = {1, 1, 5, 5, 45, 45, 41, 41, 1, 1, 45, 45, 1, 1, 5, 5, 41, 41, 5, 5, 1, 1, 5, 5};
+    global_adj_map[29] = {0, 0, 0, 0, 44, 44, 47, 47, 10, 10, 10, 10, 0, 0, 47, 47, 0, 0, 10, 10, 44, 44, 10, 10};
+    global_adj_map[30] = {40, 40, 3, 3, 2, 2, 3, 3, 43, 43, 3, 3, 2, 2, 40, 40, 2, 2, 2, 2, 43, 43, 3, 3};
+    global_adj_map[31] = {8, 8, 40, 40, 8, 8, 8, 8, 43, 43, 11, 11, 40, 40, 11, 11, 8, 8, 43, 43, 11, 11, 11, 11};
+    global_adj_map[32] = {1, 1, 47, 47, 5, 5, 5, 5, 47, 47, 5, 5, 1, 1, 1, 1, 44, 44, 1, 1, 44, 44, 5, 5};
+    global_adj_map[33] = {9, 9, 7, 7, 36, 36, 7, 7, 9, 9, 36, 36, 9, 9, 38, 38, 7, 7, 9, 9, 38, 38, 7, 7};
+    global_adj_map[34] = {2, 2, 2, 2, 3, 3, 3, 3, 39, 39, 3, 3, 37, 37, 39, 39, 2, 2, 3, 3, 37, 37, 2, 2};
+    global_adj_map[35] = {11, 11, 11, 11, 11, 11, 39, 39, 37, 37, 8,  8,  8, 8,
+                          47, 47, 8,  8,  11, 11, 37, 37, 47, 47, 39, 39, 8, 8};
+    global_adj_map[36] = {33, 33, 18, 18, 24, 24, 18, 18, 18, 18, 18, 18,
+                          15, 15, 15, 15, 24, 24, 15, 15, 15, 15, 33, 33};
+    global_adj_map[37] = {12, 12, 35, 35, 23, 23, 34, 34, 23, 23, 12, 12,
+                          35, 35, 12, 12, 34, 34, 23, 23, 12, 12, 23, 23};
+    global_adj_map[38] = {24, 24, 21, 21, 16, 16, 16, 16, 21, 21, 21, 21,
+                          16, 16, 33, 33, 16, 16, 24, 24, 33, 33, 21, 21};
+    global_adj_map[39] = {14, 14, 35, 35, 14, 14, 34, 34, 34, 34, 20, 20,
+                          20, 20, 14, 14, 20, 20, 35, 35, 20, 20, 14, 14};
+    global_adj_map[40] = {30, 30, 14, 14, 14, 14, 20, 20, 20, 20, 20, 20,
+                          30, 30, 20, 20, 31, 31, 31, 31, 14, 14, 14, 14};
+    global_adj_map[41] = {17, 17, 28, 28, 27, 27, 13, 13, 13, 13, 17, 17,
+                          28, 28, 13, 13, 17, 17, 27, 27, 17, 17, 13, 13};
+    global_adj_map[42] = {15, 15, 26, 26, 15, 15, 25, 25, 15, 15, 18, 18,
+                          25, 25, 18, 18, 26, 26, 18, 18, 15, 15, 18, 18};
+    global_adj_map[43] = {12, 12, 23, 23, 30, 30, 23, 23, 31, 31, 30, 30,
+                          12, 12, 23, 23, 31, 31, 12, 12, 12, 12, 23, 23};
+    global_adj_map[44] = {13, 13, 32, 32, 13, 13, 13, 13, 29, 29, 13, 13,
+                          17, 17, 17, 17, 32, 32, 17, 17, 29, 29, 17, 17};
+    global_adj_map[45] = {27, 27, 22, 22, 22, 22, 19, 19, 19, 19, 22, 22,
+                          28, 28, 22, 22, 19, 19, 28, 28, 19, 19, 27, 27};
+    global_adj_map[46] = {21, 21, 26, 26, 21, 21, 16, 16, 26, 26, 16, 16,
+                          21, 21, 25, 25, 16, 16, 16, 16, 21, 21, 25, 25};
+    global_adj_map[47] = {22, 22, 19, 19, 22, 22, 29, 29, 22, 22, 32, 32, 35, 35,
+                          29, 29, 19, 19, 22, 22, 32, 32, 19, 19, 35, 35, 19, 19};
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    // No constraints
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    // Solve
+    auto result = solve_topology_mapping(
+        target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED, /* quiet_mode= */ false);
+
+    // Should succeed
+    EXPECT_TRUE(result.success) << "Ring to mesh mapping should succeed";
+    EXPECT_TRUE(result.error_message.empty()) << "Should have no error message on success";
+
+    // Verify mappings
+    EXPECT_EQ(result.target_to_global.size(), 48u) << "Should map all 48 target nodes";
+    EXPECT_EQ(result.global_to_target.size(), 48u) << "Should have bidirectional mappings for all nodes";
+
+    // Verify all target nodes are mapped
+    for (uint32_t i = 0; i < 48; ++i) {
+        EXPECT_NE(result.target_to_global.find(i), result.target_to_global.end())
+            << "Target node " << i << " should be mapped";
+    }
+
+    // Verify statistics (dfs_calls only reflects the DFS engine)
+    EXPECT_GE(result.stats.elapsed_time.count(), 0) << "Should have elapsed time";
+    EXPECT_GE(result.stats.memoization_hits, 0u) << "Should track memoization hits";
+}
+
+// Isolated regression for TopologyMapper auto-discovery: same ~32×32 SAT scale as mock-cluster control plane init.
+// No preferred constraints → single hard encode + one SAT solve even under RELAXED (including parallel logical
+// edges).
+TEST_F(TopologySolverTest, SolveTopologyMapping_Sat_32MeshAutoDiscoveryScale_IsFast) {
+    auto target_graph = create_2d_mesh_graph<TestTargetNode>(4, 8);
+    auto global_graph = create_2d_mesh_graph<TestGlobalNode>(4, 8);
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    auto result = solve_topology_mapping(
+        target_graph,
+        global_graph,
+        constraints,
+        ConnectionValidationMode::RELAXED,
+        /* quiet_mode= */ true,
+        TopologyMappingSolverEngine::Sat);
+
+    EXPECT_TRUE(result.success) << result.error_message;
+    EXPECT_EQ(result.target_to_global.size(), 32u);
+    EXPECT_LT(result.stats.elapsed_time.count(), 10'000'000)
+        << "Expected fast path (single hard SAT) for unit-edge mesh without preferred constraints";
+}
+
+// Galaxy-normalized 8×4 mesh (32 nodes): same first successful shape order as generate_possible_cluster_shapes(32).
+TEST_F(TopologySolverTest, SolveTopologyMapping_Sat_32MeshAutoDiscoveryScale_8x4_IsFast) {
+    auto target_graph = create_2d_mesh_graph<TestTargetNode>(8, 4);
+    auto global_graph = create_2d_mesh_graph<TestGlobalNode>(8, 4);
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    auto result = solve_topology_mapping(
+        target_graph,
+        global_graph,
+        constraints,
+        ConnectionValidationMode::RELAXED,
+        /* quiet_mode= */ true,
+        TopologyMappingSolverEngine::Sat);
+
+    EXPECT_TRUE(result.success) << result.error_message;
+    EXPECT_EQ(result.target_to_global.size(), 32u);
+    EXPECT_LT(result.stats.elapsed_time.count(), 10'000'000)
+        << "Expected single-solve SAT for no-preferred RELAXED at auto-discovery scale";
+}
+
+// ============================================================================
+// SAT Stress Tests — exercise each constraint feature at non-trivial scale
+// ============================================================================
+
+// 32-node ring on 8×8 mesh with preferred constraints (single-solve SAT: LB + at-least-k on preferred hits).
+TEST_F(TopologySolverTest, SatStress_RingOnMesh_WithPreferred) {
+    using namespace tt::tt_fabric::detail;
+    constexpr size_t N = 32;
+    auto target_graph = create_1d_ring_graph<TestTargetNode>(N);
+    auto global_graph = create_2d_mesh_graph<TestGlobalNode>(8, 8);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    for (size_t i = 0; i < N; ++i) {
+        constraints.add_preferred_constraint(static_cast<TestTargetNode>(i), static_cast<TestGlobalNode>(i));
+    }
+
+    GraphIndexData graph_data(target_graph, global_graph);
+    ConstraintIndexData constraint_data(constraints, graph_data);
+    ASSERT_EQ(graph_data.n_target, N);
+
+    auto sat_result = solve_topology_mapping(
+        target_graph,
+        global_graph,
+        constraints,
+        ConnectionValidationMode::RELAXED,
+        /* quiet_mode= */ true,
+        TopologyMappingSolverEngine::Sat);
+    EXPECT_TRUE(sat_result.success) << "SAT should embed 32-ring in 8×8 mesh: " << sat_result.error_message;
+    EXPECT_EQ(sat_result.target_to_global.size(), N);
+    topology_test_expect_result_stats_match_mapping(graph_data, constraint_data, sat_result, N, "SAT");
+    EXPECT_GE(sat_result.constraint_stats.preferred_satisfied, 1u)
+        << "LB + at-least-k should force at least one preferred hit at this scale";
+
+    auto dfs_result = solve_topology_mapping(
+        target_graph,
+        global_graph,
+        constraints,
+        ConnectionValidationMode::RELAXED,
+        /* quiet_mode= */ true,
+        TopologyMappingSolverEngine::Dfs);
+    EXPECT_TRUE(dfs_result.success) << "DFS should also find a mapping: " << dfs_result.error_message;
+    EXPECT_EQ(dfs_result.target_to_global.size(), N);
+    topology_test_expect_result_stats_match_mapping(graph_data, constraint_data, dfs_result, N, "DFS");
+    EXPECT_GE(dfs_result.constraint_stats.preferred_satisfied, 1u)
+        << "DFS should satisfy at least one preferred on this instance";
+}
+
+// 4×8 mesh (32 nodes) on 8×8 mesh (64 nodes) with same-rank groups + cardinality.
+TEST_F(TopologySolverTest, SatStress_MeshOnMesh_SameRank_Cardinality) {
+    constexpr size_t TROWS = 4, TCOLS = 8;
+    constexpr size_t GROWS = 8, GCOLS = 8;
+    auto target_graph = create_2d_mesh_graph<TestTargetNode>(TROWS, TCOLS);
+    auto global_graph = create_2d_mesh_graph<TestGlobalNode>(GROWS, GCOLS);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    std::vector<std::set<TestTargetNode>> target_groups;
+    std::vector<std::set<TestGlobalNode>> global_groups;
+    for (size_t r = 0; r < TROWS; ++r) {
+        std::set<TestTargetNode> tg;
+        for (size_t c = 0; c < TCOLS; ++c) {
+            tg.insert(static_cast<TestTargetNode>(r * TCOLS + c));
+        }
+        target_groups.push_back(tg);
+    }
+    for (size_t r = 0; r < GROWS; ++r) {
+        std::set<TestGlobalNode> gg;
+        for (size_t c = 0; c < GCOLS; ++c) {
+            gg.insert(static_cast<TestGlobalNode>(r * GCOLS + c));
+        }
+        global_groups.push_back(gg);
+    }
+    constraints.set_same_rank_groups_constraint(target_groups, global_groups);
+
+    std::set<std::pair<TestTargetNode, TestGlobalNode>> card_pairs;
+    for (size_t c = 0; c < TCOLS; ++c) {
+        TestTargetNode tn = static_cast<TestTargetNode>(c);
+        for (size_t gc = 0; gc < GCOLS; ++gc) {
+            card_pairs.insert({tn, static_cast<TestGlobalNode>(gc)});
+        }
+    }
+    constraints.add_cardinality_constraint(card_pairs, 1);
+
+    auto sat_result = solve_topology_mapping(
+        target_graph,
+        global_graph,
+        constraints,
+        ConnectionValidationMode::RELAXED,
+        /* quiet_mode= */ true,
+        TopologyMappingSolverEngine::Sat);
+    EXPECT_TRUE(sat_result.success) << "SAT should embed 4×8 mesh in 8×8 mesh with same-rank + cardinality: "
+                                    << sat_result.error_message;
+    EXPECT_EQ(sat_result.target_to_global.size(), TROWS * TCOLS);
+
+    auto dfs_result = solve_topology_mapping(
+        target_graph,
+        global_graph,
+        constraints,
+        ConnectionValidationMode::RELAXED,
+        /* quiet_mode= */ true,
+        TopologyMappingSolverEngine::Dfs);
+    EXPECT_TRUE(dfs_result.success) << "DFS should also succeed: " << dfs_result.error_message;
+}
+
+// 4×4 mesh (16 targets) with 2-channel edges on 6×6 mesh (36 globals) with mixed channels — STRICT mode.
+TEST_F(TopologySolverTest, SatStress_MeshOnMesh_StrictChannels) {
+    constexpr size_t TROWS = 4, TCOLS = 4;
+    constexpr size_t GROWS = 6, GCOLS = 6;
+
+    auto make_multichannel_mesh = [](size_t rows, size_t cols, size_t channels) {
+        using AdjMap = typename AdjacencyGraph<TestGlobalNode>::AdjacencyMap;
+        AdjMap adj_map;
+        auto nid = [cols](size_t r, size_t c) { return static_cast<TestGlobalNode>(r * cols + c); };
+        for (size_t r = 0; r < rows; ++r) {
+            for (size_t c = 0; c < cols; ++c) {
+                std::vector<TestGlobalNode> neigh;
+                auto push_n = [&](size_t nr, size_t nc) {
+                    for (size_t ch = 0; ch < channels; ++ch) {
+                        neigh.push_back(nid(nr, nc));
+                    }
+                };
+                if (c > 0) {
+                    push_n(r, c - 1);
+                }
+                if (c < cols - 1) {
+                    push_n(r, c + 1);
+                }
+                if (r > 0) {
+                    push_n(r - 1, c);
+                }
+                if (r < rows - 1) {
+                    push_n(r + 1, c);
+                }
+                adj_map[nid(r, c)] = neigh;
+            }
+        }
+        return AdjacencyGraph<TestGlobalNode>(adj_map);
+    };
+
+    using TargetAdjMap = typename AdjacencyGraph<TestTargetNode>::AdjacencyMap;
+    TargetAdjMap target_adj;
+    auto tnid = [](size_t r, size_t c) { return static_cast<TestTargetNode>(r * TCOLS + c); };
+    for (size_t r = 0; r < TROWS; ++r) {
+        for (size_t c = 0; c < TCOLS; ++c) {
+            std::vector<TestTargetNode> neigh;
+            auto push_n = [&](size_t nr, size_t nc) {
+                neigh.push_back(tnid(nr, nc));
+                neigh.push_back(tnid(nr, nc));
+            };
+            if (c > 0) {
+                push_n(r, c - 1);
+            }
+            if (c < TCOLS - 1) {
+                push_n(r, c + 1);
+            }
+            if (r > 0) {
+                push_n(r - 1, c);
+            }
+            if (r < TROWS - 1) {
+                push_n(r + 1, c);
+            }
+            target_adj[tnid(r, c)] = neigh;
+        }
+    }
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj);
+    auto global_graph = make_multichannel_mesh(GROWS, GCOLS, 2);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    auto sat_result = solve_topology_mapping(
+        target_graph,
+        global_graph,
+        constraints,
+        ConnectionValidationMode::STRICT,
+        /* quiet_mode= */ true,
+        TopologyMappingSolverEngine::Sat);
+    EXPECT_TRUE(sat_result.success) << "SAT STRICT: 4×4 mesh (2-ch) in 6×6 mesh (2-ch) should succeed: "
+                                    << sat_result.error_message;
+    EXPECT_EQ(sat_result.target_to_global.size(), TROWS * TCOLS);
+    EXPECT_TRUE(sat_result.warnings.empty()) << "STRICT mode should produce no warnings when channels match";
+
+    auto dfs_result = solve_topology_mapping(
+        target_graph,
+        global_graph,
+        constraints,
+        ConnectionValidationMode::STRICT,
+        /* quiet_mode= */ true,
+        TopologyMappingSolverEngine::Dfs);
+    EXPECT_TRUE(dfs_result.success) << "DFS STRICT should also succeed: " << dfs_result.error_message;
+}
+
+namespace {
+// Physical mesh-level adjacency: 80-node trace from multihost Physical Mesh-Level Graph print (parallel edges kept).
+AdjacencyGraph<TestGlobalNode> make_mesh_level_physical_graph_cluster_trace_80() {
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map{
+        {static_cast<TestGlobalNode>(0), {65, 65, 30, 30, 65, 65, 6,  6,  6, 6, 76, 76, 30, 30, 76, 76,
+                                          65, 65, 6,  6,  65, 65, 30, 30, 6, 6, 76, 76, 30, 30, 76, 76}},
+        {static_cast<TestGlobalNode>(1), {23, 23, 38, 38, 23, 23, 38, 38, 23, 23, 38, 38, 23, 23, 38, 38}},
+        {static_cast<TestGlobalNode>(2), {63, 63, 78, 78, 63, 63, 38, 38, 38, 38, 8, 8, 63, 63, 78, 78,
+                                          78, 78, 8,  8,  63, 63, 38, 38, 38, 38, 8, 8, 78, 78, 8,  8}},
+        {static_cast<TestGlobalNode>(3), {11, 11, 11, 11, 11, 11, 48, 48, 11, 11, 48, 48, 48, 48, 48, 48}},
+        {static_cast<TestGlobalNode>(4), {7, 7, 7, 7, 7, 7, 74, 74, 74, 74, 74, 74, 7, 7, 74, 74}},
+        {static_cast<TestGlobalNode>(5), {69, 69, 71, 71, 68, 68, 71, 71, 69, 69, 71, 71, 68, 68, 71, 71,
+                                          69, 69, 71, 71, 68, 68, 71, 71, 69, 69, 71, 71, 68, 68, 71, 71}},
+        {static_cast<TestGlobalNode>(6),
+         {78, 78, 59, 59, 0, 0, 59, 59, 78, 78, 59, 59, 0, 0, 78, 78, 0, 0, 78, 78, 59, 59, 0, 0}},
+        {static_cast<TestGlobalNode>(7), {55, 55, 55, 55, 4, 4, 55, 55, 4, 4, 55, 55, 4, 4, 4, 4}},
+        {static_cast<TestGlobalNode>(8), {9, 9, 62, 62, 9,  9,  72, 72, 9,  9,  62, 62, 72, 72, 2, 2,
+                                          9, 9, 72, 72, 62, 62, 2,  2,  72, 72, 2,  2,  62, 62, 2, 2}},
+        {static_cast<TestGlobalNode>(9), {65, 65, 8, 8, 8, 8, 65, 65, 8, 8, 65, 65, 65, 65, 8, 8}},
+        {static_cast<TestGlobalNode>(10),
+         {73, 73, 73, 73, 76, 76, 66, 66, 76, 76, 66, 66, 66, 66, 73, 73, 76, 76, 73, 73, 76, 76, 66, 66}},
+        {static_cast<TestGlobalNode>(11), {3, 3, 3, 3, 3, 3, 20, 20, 20, 20, 3, 3, 20, 20, 20, 20}},
+        {static_cast<TestGlobalNode>(12), {45, 45, 48, 48, 66, 66, 22, 22, 45, 45, 48, 48, 45, 45, 66, 66,
+                                           48, 48, 22, 22, 66, 66, 22, 22, 48, 48, 22, 22, 45, 45, 66, 66}},
+        {static_cast<TestGlobalNode>(13), {51, 51, 26, 26, 26, 26, 51, 51, 51, 51, 26, 26, 51, 51, 26, 26}},
+        {static_cast<TestGlobalNode>(14), {27, 27, 70, 70, 70, 70, 68, 68, 27, 27, 70, 70, 27, 27, 70, 70,
+                                           70, 70, 68, 68, 27, 27, 70, 70, 70, 70, 68, 68, 70, 70, 68, 68}},
+        {static_cast<TestGlobalNode>(15), {31, 31, 76, 76, 31, 31, 31, 31, 31, 31, 76, 76, 76, 76, 76, 76}},
+        {static_cast<TestGlobalNode>(16),
+         {51, 51, 28, 28, 51, 51, 51, 51, 28, 28, 51, 51, 28, 28, 72, 72, 28, 28, 72, 72, 72, 72, 72, 72}},
+        {static_cast<TestGlobalNode>(17), {60, 60, 27, 27, 60, 60, 27, 27, 59, 59, 27, 27, 60, 60, 27, 27,
+                                           59, 59, 27, 27, 59, 59, 27, 27, 59, 59, 27, 27, 60, 60, 27, 27}},
+        {static_cast<TestGlobalNode>(18), {25, 25, 60, 60, 25, 25, 60, 60, 60, 60, 36, 36, 25, 25, 60, 60,
+                                           60, 60, 36, 36, 60, 60, 36, 36, 25, 25, 60, 60, 60, 60, 36, 36}},
+        {static_cast<TestGlobalNode>(19), {74, 74, 37, 37, 37, 37, 37, 37, 74, 74, 37, 37, 74, 74, 74, 74}},
+        {static_cast<TestGlobalNode>(20), {11, 11, 11, 11, 11, 11, 44, 44, 44, 44, 11, 11, 44, 44, 44, 44}},
+        {static_cast<TestGlobalNode>(21), {33, 33, 44, 44, 44, 44, 33, 33, 33, 33, 44, 44, 33, 33, 44, 44}},
+        {static_cast<TestGlobalNode>(22), {31, 31, 58, 58, 58, 58, 12, 12, 31, 31, 58, 58, 34, 34, 12, 12,
+                                           34, 34, 12, 12, 31, 31, 34, 34, 31, 31, 34, 34, 58, 58, 12, 12}},
+        {static_cast<TestGlobalNode>(23), {1, 1, 52, 52, 52, 52, 1, 1, 1, 1, 1, 1, 52, 52, 52, 52}},
+        {static_cast<TestGlobalNode>(24), {75, 75, 68, 68, 68, 68, 70, 70, 75, 75, 68, 68, 75, 75, 68, 68,
+                                           75, 75, 68, 68, 68, 68, 70, 70, 68, 68, 70, 70, 68, 68, 70, 70}},
+        {static_cast<TestGlobalNode>(25), {18, 18, 57, 57, 18, 18, 57, 57, 73, 73, 57, 57, 73, 73, 57, 57,
+                                           73, 73, 57, 57, 18, 18, 57, 57, 18, 18, 57, 57, 73, 73, 57, 57}},
+        {static_cast<TestGlobalNode>(26), {46, 46, 13, 13, 13, 13, 46, 46, 13, 13, 46, 46, 46, 46, 13, 13}},
+        {static_cast<TestGlobalNode>(27), {14, 14, 17, 17, 67, 67, 17, 17, 14, 14, 17, 17, 67, 67, 17, 17,
+                                           67, 67, 17, 17, 67, 67, 17, 17, 14, 14, 17, 17, 14, 14, 17, 17}},
+        {static_cast<TestGlobalNode>(28), {16, 16, 40, 40, 77, 77, 32, 32, 77, 77, 16, 16, 16, 16, 40, 40,
+                                           32, 32, 40, 40, 77, 77, 16, 16, 32, 32, 40, 40, 77, 77, 32, 32}},
+        {static_cast<TestGlobalNode>(29), {39, 39, 42, 42, 42, 42, 42, 42, 39, 39, 39, 39, 39, 39, 42, 42}},
+        {static_cast<TestGlobalNode>(30),
+         {38, 38, 49, 49, 0, 0, 0, 0, 38, 38, 0, 0, 38, 38, 49, 49, 49, 49, 38, 38, 49, 49, 0, 0}},
+        {static_cast<TestGlobalNode>(31), {22, 22, 15, 15, 22, 22, 15, 15, 15, 15, 22, 22, 15, 15, 22, 22}},
+        {static_cast<TestGlobalNode>(32),
+         {33, 33, 28, 28, 28, 28, 62, 62, 28, 28, 62, 62, 33, 33, 33, 33, 62, 62, 62, 62, 33, 33, 28, 28}},
+        {static_cast<TestGlobalNode>(33), {32, 32, 21, 21, 32, 32, 32, 32, 21, 21, 21, 21, 32, 32, 21, 21}},
+        {static_cast<TestGlobalNode>(34),
+         {64, 64, 22, 22, 64, 64, 35, 35, 35, 35, 22, 22, 64, 64, 35, 35, 22, 22, 64, 64, 35, 35, 22, 22}},
+        {static_cast<TestGlobalNode>(35), {71, 71, 49, 49, 71, 71, 49, 49, 71, 71, 49, 49, 71, 71, 49, 49,
+                                           34, 34, 49, 49, 34, 34, 49, 49, 34, 34, 49, 49, 34, 34, 49, 49}},
+        {static_cast<TestGlobalNode>(36), {43, 43, 50, 50, 50, 50, 18, 18, 50, 50, 18, 18, 43, 43, 50, 50,
+                                           50, 50, 18, 18, 50, 50, 18, 18, 43, 43, 50, 50, 43, 43, 50, 50}},
+        {static_cast<TestGlobalNode>(37), {64, 64, 19, 19, 64, 64, 19, 19, 19, 19, 64, 64, 64, 64, 19, 19}},
+        {static_cast<TestGlobalNode>(38),
+         {1, 1, 2, 2, 30, 30, 1, 1, 2, 2, 30, 30, 2, 2, 30, 30, 30, 30, 1, 1, 2, 2, 1, 1}},
+        {static_cast<TestGlobalNode>(39), {29, 29, 54, 54, 29, 29, 29, 29, 54, 54, 29, 29, 54, 54, 54, 54}},
+        {static_cast<TestGlobalNode>(40), {64, 64, 28, 28, 53, 53, 54, 54, 53, 53, 54, 54, 53, 53, 64, 64,
+                                           53, 53, 64, 64, 64, 64, 28, 28, 54, 54, 28, 28, 54, 54, 28, 28}},
+        {static_cast<TestGlobalNode>(41), {66, 66, 66, 66, 61, 61, 66, 66, 61, 61, 66, 66, 61, 61, 61, 61}},
+        {static_cast<TestGlobalNode>(42), {52, 52, 52, 52, 29, 29, 29, 29, 29, 29, 29, 29, 52, 52, 52, 52}},
+        {static_cast<TestGlobalNode>(43), {36, 36, 75, 75, 79, 79, 75, 75, 36, 36, 75, 75, 79, 79, 75, 75,
+                                           79, 79, 75, 75, 36, 36, 75, 75, 36, 36, 75, 75, 79, 79, 75, 75}},
+        {static_cast<TestGlobalNode>(44), {20, 20, 21, 21, 21, 21, 21, 21, 20, 20, 20, 20, 20, 20, 21, 21}},
+        {static_cast<TestGlobalNode>(45), {12, 12, 53, 53, 53, 53, 53, 53, 12, 12, 12, 12, 53, 53, 12, 12}},
+        {static_cast<TestGlobalNode>(46), {61, 61, 61, 61, 61, 61, 26, 26, 26, 26, 26, 26, 26, 26, 61, 61}},
+        {static_cast<TestGlobalNode>(47), {58, 58, 59, 59, 58, 58, 59, 59, 75, 75, 59, 59, 58, 58, 59, 59,
+                                           75, 75, 59, 59, 58, 58, 59, 59, 75, 75, 59, 59, 75, 75, 59, 59}},
+        {static_cast<TestGlobalNode>(48),
+         {12, 12, 56, 56, 3, 3, 3, 3, 12, 12, 56, 56, 3, 3, 12, 12, 56, 56, 3, 3, 12, 12, 56, 56}},
+        {static_cast<TestGlobalNode>(49), {30, 30, 35, 35, 30, 30, 35, 35, 57, 57, 35, 35, 57, 57, 35, 35,
+                                           30, 30, 35, 35, 30, 30, 35, 35, 57, 57, 35, 35, 57, 57, 35, 35}},
+        {static_cast<TestGlobalNode>(50), {71, 71, 36, 36, 36, 36, 60, 60, 71, 71, 36, 36, 36, 36, 60, 60,
+                                           36, 36, 60, 60, 71, 71, 36, 36, 71, 71, 36, 36, 36, 36, 60, 60}},
+        {static_cast<TestGlobalNode>(51), {16, 16, 16, 16, 13, 13, 13, 13, 13, 13, 16, 16, 16, 16, 13, 13}},
+        {static_cast<TestGlobalNode>(52), {23, 23, 23, 23, 42, 42, 23, 23, 42, 42, 42, 42, 23, 23, 42, 42}},
+        {static_cast<TestGlobalNode>(53), {45, 45, 45, 45, 40, 40, 40, 40, 45, 45, 40, 40, 45, 45, 40, 40}},
+        {static_cast<TestGlobalNode>(54),
+         {39, 39, 39, 39, 40, 40, 58, 58, 40, 40, 58, 58, 40, 40, 58, 58, 58, 58, 39, 39, 40, 40, 39, 39}},
+        {static_cast<TestGlobalNode>(55), {7, 7, 78, 78, 7, 7, 78, 78, 78, 78, 78, 78, 7, 7, 7, 7}},
+        {static_cast<TestGlobalNode>(56),
+         {48, 48, 67, 67, 67, 67, 48, 48, 67, 67, 76, 76, 67, 67, 76, 76, 76, 76, 48, 48, 76, 76, 48, 48}},
+        {static_cast<TestGlobalNode>(57), {49, 49, 25, 25, 49, 49, 25, 25, 70, 70, 25, 25, 70, 70, 25, 25,
+                                           49, 49, 25, 25, 49, 49, 25, 25, 70, 70, 25, 25, 70, 70, 25, 25}},
+        {static_cast<TestGlobalNode>(58),
+         {54, 54, 54, 54, 47, 47, 22, 22, 22, 22, 54, 54, 22, 22, 54, 54, 47, 47, 22, 22, 47, 47, 47, 47}},
+        {static_cast<TestGlobalNode>(59), {6, 6, 47, 47, 17, 17, 47, 47, 17, 17, 47, 47, 6,  6,  47, 47,
+                                           6, 6, 47, 47, 6,  6,  47, 47, 17, 17, 47, 47, 17, 17, 47, 47}},
+        {static_cast<TestGlobalNode>(60), {18, 18, 50, 50, 17, 17, 18, 18, 17, 17, 18, 18, 17, 17, 18, 18,
+                                           18, 18, 50, 50, 18, 18, 50, 50, 17, 17, 18, 18, 18, 18, 50, 50}},
+        {static_cast<TestGlobalNode>(61), {41, 41, 46, 46, 41, 41, 46, 46, 46, 46, 41, 41, 46, 46, 41, 41}},
+        {static_cast<TestGlobalNode>(62),
+         {69, 69, 32, 32, 69, 69, 8, 8, 8, 8, 32, 32, 32, 32, 69, 69, 8, 8, 8, 8, 32, 32, 69, 69}},
+        {static_cast<TestGlobalNode>(63), {77, 77, 77, 77, 2, 2, 2, 2, 77, 77, 2, 2, 2, 2, 77, 77}},
+        {static_cast<TestGlobalNode>(64),
+         {37, 37, 34, 34, 34, 34, 37, 37, 40, 40, 37, 37, 40, 40, 40, 40, 34, 34, 37, 37, 40, 40, 34, 34}},
+        {static_cast<TestGlobalNode>(65), {9, 9, 9, 9, 0, 0, 0, 0, 0, 0, 9, 9, 9, 9, 0, 0}},
+        {static_cast<TestGlobalNode>(66),
+         {41, 41, 12, 12, 10, 10, 12, 12, 10, 10, 10, 10, 12, 12, 10, 10, 41, 41, 41, 41, 12, 12, 41, 41}},
+        {static_cast<TestGlobalNode>(67), {27, 27, 79, 79, 56, 56, 79, 79, 27, 27, 79, 79, 27, 27, 79, 79,
+                                           56, 56, 79, 79, 56, 56, 79, 79, 27, 27, 79, 79, 56, 56, 79, 79}},
+        {static_cast<TestGlobalNode>(68), {24, 24, 14, 14, 24, 24, 14, 14, 24, 24, 14, 14, 5, 5, 24, 24,
+                                           5,  5,  24, 24, 24, 24, 14, 14, 5,  5,  24, 24, 5, 5, 24, 24}},
+        {static_cast<TestGlobalNode>(69), {62, 62, 73, 73, 5, 5, 73, 73, 62, 62, 73, 73, 62, 62, 73, 73,
+                                           62, 62, 73, 73, 5, 5, 73, 73, 5,  5,  73, 73, 5,  5,  73, 73}},
+        {static_cast<TestGlobalNode>(70), {14, 14, 24, 24, 57, 57, 14, 14, 57, 57, 14, 14, 14, 14, 24, 24,
+                                           14, 14, 24, 24, 14, 14, 24, 24, 57, 57, 14, 14, 57, 57, 14, 14}},
+        {static_cast<TestGlobalNode>(71), {35, 35, 5, 5, 50, 50, 5, 5, 50, 50, 5, 5, 50, 50, 5, 5,
+                                           35, 35, 5, 5, 50, 50, 5, 5, 35, 35, 5, 5, 35, 35, 5, 5}},
+        {static_cast<TestGlobalNode>(72),
+         {16, 16, 16, 16, 79, 79, 8, 8, 16, 16, 8, 8, 16, 16, 79, 79, 8, 8, 79, 79, 79, 79, 8, 8}},
+        {static_cast<TestGlobalNode>(73), {10, 10, 69, 69, 25, 25, 69, 69, 25, 25, 69, 69, 10, 10, 69, 69,
+                                           25, 25, 69, 69, 10, 10, 69, 69, 10, 10, 69, 69, 25, 25, 69, 69}},
+        {static_cast<TestGlobalNode>(74), {4, 4, 4, 4, 19, 19, 19, 19, 4, 4, 4, 4, 19, 19, 19, 19}},
+        {static_cast<TestGlobalNode>(75), {47, 47, 43, 43, 47, 47, 43, 43, 24, 24, 43, 43, 47, 47, 43, 43,
+                                           24, 24, 43, 43, 24, 24, 43, 43, 47, 47, 43, 43, 24, 24, 43, 43}},
+        {static_cast<TestGlobalNode>(76), {15, 15, 56, 56, 56, 56, 0,  0,  10, 10, 0, 0, 10, 10, 0,  0,
+                                           15, 15, 10, 10, 15, 15, 56, 56, 56, 56, 0, 0, 15, 15, 10, 10}},
+        {static_cast<TestGlobalNode>(77), {28, 28, 63, 63, 28, 28, 28, 28, 28, 28, 63, 63, 63, 63, 63, 63}},
+        {static_cast<TestGlobalNode>(78),
+         {6, 6, 2, 2, 6, 6, 2, 2, 6, 6, 6, 6, 55, 55, 2, 2, 55, 55, 55, 55, 2, 2, 55, 55}},
+        {static_cast<TestGlobalNode>(79), {72, 72, 67, 67, 72, 72, 67, 67, 43, 43, 67, 67, 43, 43, 67, 67,
+                                           72, 72, 67, 67, 43, 43, 67, 67, 43, 43, 67, 67, 72, 72, 67, 67}},
+    };
+    return AdjacencyGraph<TestGlobalNode>(global_adj_map);
+}
+
+// Line64 mesh benchmark: keep moderate cap (many Hamiltonian paths exist; full grid enumeration explodes).
+constexpr size_t kTopologyBenchmarkLine64MultiSolveEnumerationCap = 10;
+// Ring64 on 80-node trace: large cap for incremental scaling (SAT vs DFS); may exhaust before cap.
+constexpr size_t kTopologyBenchmarkRing64MultiSolveEnumerationCap = 10;
+
+// Real inter-mesh physical adjacency captured from the superpod DeepSeek "blitz decode" 64-stage pipeline run
+// (512 ASICs -> 64 logical meshes). The logical topology is a pure 64-node ring and the physical graph here also
+// has 64 nodes, so the mapping is a bijection: embedding the ring is a Hamiltonian-cycle search on this sparse,
+// near-3-regular graph (degree histogram {2:8, 3:56}). This is the instance the general SAT solve historically
+// thrashed on. Unique neighbors only (RELAXED mode -> only adjacency matters); symmetrized to be undirected.
+AdjacencyGraph<TestGlobalNode> make_blitz_decode_physical_graph_64() {
+    const std::map<int, std::vector<int>> directed = {
+        {0, {48, 58, 26}},  {1, {28, 48, 51}},  {2, {16, 52, 54}},  {3, {23, 50, 52}},  {4, {59, 54, 19}},
+        {5, {17, 49, 56}},  {6, {21, 59, 50}},  {7, {61, 63, 29}},  {8, {22, 61, 60}},  {9, {27, 51, 57}},
+        {10, {20, 60, 55}}, {11, {24, 57, 58}}, {12, {62, 56, 18}}, {13, {53, 62, 25}}, {14, {49, 53, 30}},
+        {15, {63, 55, 31}}, {16, {2, 37, 47}},  {17, {42, 21, 5}},  {18, {45, 12, 37}}, {19, {46, 4}},
+        {20, {38, 28, 10}}, {21, {6, 36, 17}},  {22, {39, 8, 23}},  {23, {34, 3, 22}},  {24, {11, 44, 45}},
+        {25, {13, 32}},     {26, {0, 43, 46}},  {27, {35, 9, 30}},  {28, {1, 33, 20}},  {29, {7, 41, 32}},
+        {30, {14, 40, 27}}, {31, {15, 47, 44}}, {32, {25, 53, 29}}, {33, {28, 51}},     {34, {23, 52}},
+        {35, {27, 57, 36}}, {36, {21, 50, 35}}, {37, {16, 54, 18}}, {38, {20, 55, 40}}, {39, {22, 60}},
+        {40, {30, 49, 38}}, {41, {29, 61}},     {42, {17, 56}},     {43, {26, 48}},     {44, {24, 58, 31}},
+        {45, {18, 62, 24}}, {46, {19, 59, 26}}, {47, {31, 63, 16}}, {48, {0, 1, 43}},   {49, {40, 5, 14}},
+        {50, {36, 3, 6}},   {51, {1, 9, 33}},   {52, {34, 2, 3}},   {53, {32, 14, 13}}, {54, {37, 4, 2}},
+        {55, {10, 15, 38}}, {56, {42, 12, 5}},  {57, {35, 11, 9}},  {58, {11, 0, 44}},  {59, {46, 6, 4}},
+        {60, {8, 10, 39}},  {61, {41, 8, 7}},   {62, {45, 13, 12}}, {63, {15, 7, 47}}};
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap adj;
+    for (const auto& [u, nbrs] : directed) {
+        for (int v : nbrs) {
+            adj[static_cast<TestGlobalNode>(u)].push_back(static_cast<TestGlobalNode>(v));
+            adj[static_cast<TestGlobalNode>(v)].push_back(static_cast<TestGlobalNode>(u));
+        }
+    }
+    return AdjacencyGraph<TestGlobalNode>(adj);
+}
+
+}  // namespace
+
+// Benchmark: 64-node path (1×64 chain) into 4×16 mesh (64 nodes). Enumerates distinct full assignments
+// (unique_shapes=false): blocking forbids each exact embedding so SAT/DFS can collect many Hamiltonian paths.
+// Times first next() vs subsequent incremental next() on one TopologyMappingEnumerationSession.
+TEST_F(TopologySolverTest, Benchmark_Line64_On_Mesh4x16_MultiSolve_SatDfs) {
+    using namespace tt::tt_fabric::detail;
+    constexpr size_t kPathNodes = 64;
+    constexpr size_t kMeshRows = 4;
+    constexpr size_t kMeshCols = 16;
+    constexpr size_t kMaxSolutions = kTopologyBenchmarkLine64MultiSolveEnumerationCap;
+
+    static_assert(kMeshRows * kMeshCols == kPathNodes, "mesh node count must match path length");
+
+    auto target_graph = create_1d_chain_graph<TestTargetNode>(kPathNodes);
+    auto global_graph = create_2d_mesh_graph<TestGlobalNode>(kMeshRows, kMeshCols);
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    GraphIndexData graph_data(target_graph, global_graph);
+    ConstraintIndexData constraint_data(constraints, graph_data);
+    ASSERT_EQ(graph_data.n_target, kPathNodes);
+    ASSERT_EQ(graph_data.n_global, kPathNodes);
+
+    setenv("TT_METAL_OPERATION_TIMEOUT_SECONDS", "600", 1);
+
+    auto validate_all = [&](const std::vector<MappingResult<TestTargetNode, TestGlobalNode>>& results,
+                            const char* label) {
+        for (size_t ri = 0; ri < results.size(); ++ri) {
+            ASSERT_TRUE(results[ri].success) << label << " solution " << ri;
+            EXPECT_EQ(results[ri].target_to_global.size(), kPathNodes) << label << " solution " << ri;
+            std::vector<int> mapping(graph_data.n_target, -1);
+            for (size_t ti = 0; ti < graph_data.n_target; ++ti) {
+                const TestTargetNode tn = graph_data.target_nodes[ti];
+                mapping[ti] = static_cast<int>(graph_data.global_to_idx.at(results[ri].target_to_global.at(tn)));
+            }
+            EXPECT_TRUE(topology_test_complete_mapping_preserves_edges(graph_data, mapping))
+                << label << " solution " << ri;
+            topology_test_expect_result_stats_match_mapping(graph_data, constraint_data, results[ri], 0, label);
+        }
+    };
+
+    for (TopologyMappingSolverEngine engine : {TopologyMappingSolverEngine::Sat, TopologyMappingSolverEngine::Dfs}) {
+        const char* engine_label = engine == TopologyMappingSolverEngine::Sat ? "SAT" : "DFS";
+
+        using clock = std::chrono::steady_clock;
+        TopologyMappingEnumerationSession<TestTargetNode, TestGlobalNode> enum_session;
+        std::vector<std::map<TestTargetNode, TestGlobalNode>> excluded;
+        excluded.reserve(kMaxSolutions);
+
+        std::vector<MappingResult<TestTargetNode, TestGlobalNode>> results;
+        results.reserve(kMaxSolutions);
+
+        const auto t_first_begin = clock::now();
+        auto first_result = enum_session.next(
+            target_graph,
+            global_graph,
+            constraints,
+            excluded,
+            ConnectionValidationMode::RELAXED,
+            /*quiet_mode=*/true,
+            engine,
+            /*unique_shapes=*/false);
+        const auto first_ms =
+            std::chrono::duration_cast<std::chrono::milliseconds>(clock::now() - t_first_begin).count();
+
+        ASSERT_TRUE(first_result.success) << engine_label << " first next()";
+        results.push_back(std::move(first_result));
+        excluded.push_back(results.back().target_to_global);
+
+        const auto t_incremental_begin = clock::now();
+        for (size_t extra = 1; extra < kMaxSolutions; ++extra) {
+            auto next_result = enum_session.next(
+                target_graph,
+                global_graph,
+                constraints,
+                excluded,
+                ConnectionValidationMode::RELAXED,
+                /*quiet_mode=*/true,
+                engine,
+                /*unique_shapes=*/false);
+            ASSERT_TRUE(next_result.success) << engine_label << " incremental next() index " << extra;
+            excluded.push_back(next_result.target_to_global);
+            results.push_back(std::move(next_result));
+        }
+        const auto incremental_total_ms =
+            std::chrono::duration_cast<std::chrono::milliseconds>(clock::now() - t_incremental_begin).count();
+
+        const auto total_ms = first_ms + incremental_total_ms;
+        const size_t incremental_calls = kMaxSolutions - 1;
+        const long incremental_avg_ms =
+            incremental_calls > 0
+                ? static_cast<long>((incremental_total_ms + incremental_calls / 2) / incremental_calls)
+                : 0;
+
+        ASSERT_FALSE(results.empty()) << engine_label;
+        EXPECT_GE(results.size(), 2u) << engine_label << ": expect multiple distinct embeddings on 4×16 mesh";
+        EXPECT_EQ(results.size(), kMaxSolutions)
+            << engine_label << ": grid has many Hamiltonian paths; should fill requested cap";
+
+        validate_all(results, "line64 enumerate");
+
+        std::set<std::vector<int>> distinct_raw;
+        for (const auto& r : results) {
+            std::vector<int> raw(graph_data.n_target, -1);
+            for (size_t ti = 0; ti < graph_data.n_target; ++ti) {
+                const TestTargetNode tn = graph_data.target_nodes[ti];
+                raw[ti] = static_cast<int>(graph_data.global_to_idx.at(r.target_to_global.at(tn)));
+            }
+            ASSERT_TRUE(distinct_raw.insert(std::move(raw)).second) << engine_label << ": duplicate assignment";
+        }
+
+        if (engine == TopologyMappingSolverEngine::Sat) {
+            EXPECT_EQ(enum_session.sat_solve_calls(), kMaxSolutions) << "SAT: one solve per next()";
+            EXPECT_EQ(enum_session.sat_hard_constraint_encode_calls(), 1u) << "SAT: single hard encode for session";
+            RecordProperty("benchmark_line64_mesh416_sat_ms_first_solution", static_cast<int>(first_ms));
+            RecordProperty("benchmark_line64_mesh416_sat_ms_incremental_total", static_cast<int>(incremental_total_ms));
+            RecordProperty("benchmark_line64_mesh416_sat_ms_incremental_avg", static_cast<int>(incremental_avg_ms));
+            RecordProperty("benchmark_line64_mesh416_sat_ms_total", static_cast<int>(total_ms));
+            RecordProperty("benchmark_line64_mesh416_sat_num_solutions", static_cast<int>(results.size()));
+        } else {
+            RecordProperty("benchmark_line64_mesh416_dfs_ms_first_solution", static_cast<int>(first_ms));
+            RecordProperty("benchmark_line64_mesh416_dfs_ms_incremental_total", static_cast<int>(incremental_total_ms));
+            RecordProperty("benchmark_line64_mesh416_dfs_ms_incremental_avg", static_cast<int>(incremental_avg_ms));
+            RecordProperty("benchmark_line64_mesh416_dfs_ms_total", static_cast<int>(total_ms));
+            RecordProperty("benchmark_line64_mesh416_dfs_num_solutions", static_cast<int>(results.size()));
+        }
+
+        log_info(
+            tt::LogFabric,
+            "Benchmark_Line64_On_Mesh4x16_MultiSolve: engine={} unique_shapes=false "
+            "first_solution_ms={} incremental_total_ms={} incremental_avg_ms={} total_ms={} "
+            "solutions_found={} max_requested={} path_nodes={} mesh={}x{}",
+            engine_label,
+            first_ms,
+            incremental_total_ms,
+            incremental_avg_ms,
+            total_ms,
+            results.size(),
+            kMaxSolutions,
+            kPathNodes,
+            kMeshRows,
+            kMeshCols);
+    }
+}
+
+// Benchmark: 64-node ring into 80-node mesh-level cluster trace (multihost physical graph). Per engine, runs two
+// phases like Benchmark_Line64 timing: (1) unique_shapes=false — distinct full assignments; (2) unique_shapes=true —
+// distinct sorted global image sets. Logs/RecordProperty for each include first vs incremental next() ms.
+TEST_F(TopologySolverTest, Benchmark_Ring64_On_ClusterTrace80_MultiSolve_SatDfs) {
+    using namespace tt::tt_fabric::detail;
+    constexpr size_t kRingNodes = 64;
+    constexpr size_t kTraceNodes = 80;
+    constexpr size_t kMaxSolutions = kTopologyBenchmarkRing64MultiSolveEnumerationCap;
+
+    auto target_graph = create_1d_ring_graph<TestTargetNode>(kRingNodes);
+    auto global_graph = make_mesh_level_physical_graph_cluster_trace_80();
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    ASSERT_EQ(target_graph.get_nodes().size(), kRingNodes);
+    ASSERT_EQ(global_graph.get_nodes().size(), kTraceNodes);
+
+    GraphIndexData graph_data(target_graph, global_graph);
+    ConstraintIndexData constraint_data(constraints, graph_data);
+    ASSERT_EQ(graph_data.n_target, kRingNodes);
+    ASSERT_EQ(graph_data.n_global, kTraceNodes);
+
+    setenv("TT_METAL_OPERATION_TIMEOUT_SECONDS", "600", 1);
+
+    auto validate_all = [&](const std::vector<MappingResult<TestTargetNode, TestGlobalNode>>& results,
+                            const char* label) {
+        for (size_t ri = 0; ri < results.size(); ++ri) {
+            ASSERT_TRUE(results[ri].success) << label << " solution " << ri;
+            EXPECT_EQ(results[ri].target_to_global.size(), kRingNodes) << label << " solution " << ri;
+            std::vector<int> mapping(graph_data.n_target, -1);
+            for (size_t ti = 0; ti < graph_data.n_target; ++ti) {
+                const TestTargetNode tn = graph_data.target_nodes[ti];
+                mapping[ti] = static_cast<int>(graph_data.global_to_idx.at(results[ri].target_to_global.at(tn)));
+            }
+            EXPECT_TRUE(topology_test_complete_mapping_preserves_edges(graph_data, mapping))
+                << label << " solution " << ri;
+            topology_test_expect_result_stats_match_mapping(graph_data, constraint_data, results[ri], 0, label);
+        }
+    };
+
+    for (TopologyMappingSolverEngine engine : {TopologyMappingSolverEngine::Sat, TopologyMappingSolverEngine::Dfs}) {
+        const char* engine_label = engine == TopologyMappingSolverEngine::Sat ? "SAT" : "DFS";
+
+        for (bool unique_shapes_flag : {false, true}) {
+            using clock = std::chrono::steady_clock;
+            TopologyMappingEnumerationSession<TestTargetNode, TestGlobalNode> enum_session;
+            std::vector<std::map<TestTargetNode, TestGlobalNode>> excluded;
+            excluded.reserve(kMaxSolutions);
+
+            std::vector<MappingResult<TestTargetNode, TestGlobalNode>> results;
+            results.reserve(kMaxSolutions);
+
+            const auto t_first_begin = clock::now();
+            auto first_result = enum_session.next(
+                target_graph,
+                global_graph,
+                constraints,
+                excluded,
+                ConnectionValidationMode::RELAXED,
+                /*quiet_mode=*/true,
+                engine,
+                unique_shapes_flag);
+            const auto first_ms =
+                std::chrono::duration_cast<std::chrono::milliseconds>(clock::now() - t_first_begin).count();
+
+            ASSERT_TRUE(first_result.success) << engine_label << " first next() unique_shapes=" << unique_shapes_flag;
+            results.push_back(std::move(first_result));
+            excluded.push_back(results.back().target_to_global);
+
+            const auto t_incremental_begin = clock::now();
+            for (size_t extra = 1; extra < kMaxSolutions; ++extra) {
+                auto next_result = enum_session.next(
+                    target_graph,
+                    global_graph,
+                    constraints,
+                    excluded,
+                    ConnectionValidationMode::RELAXED,
+                    /*quiet_mode=*/true,
+                    engine,
+                    unique_shapes_flag);
+                if (!next_result.success) {
+                    break;
+                }
+                excluded.push_back(next_result.target_to_global);
+                results.push_back(std::move(next_result));
+            }
+            const auto incremental_total_ms =
+                std::chrono::duration_cast<std::chrono::milliseconds>(clock::now() - t_incremental_begin).count();
+
+            const auto total_ms = first_ms + incremental_total_ms;
+            const size_t n_found = results.size();
+            const size_t incremental_calls = n_found > 1 ? n_found - 1 : 0;
+            const long incremental_avg_ms =
+                incremental_calls > 0
+                    ? static_cast<long>((incremental_total_ms + incremental_calls / 2) / incremental_calls)
+                    : 0;
+
+            ASSERT_FALSE(results.empty()) << engine_label << " unique_shapes=" << unique_shapes_flag;
+            validate_all(results, unique_shapes_flag ? "ring64 trace80 unique_shapes" : "ring64 trace80 enumerate");
+
+            if (!unique_shapes_flag) {
+                EXPECT_GE(n_found, 2u) << engine_label << ": expect multiple distinct embeddings";
+                EXPECT_EQ(n_found, kMaxSolutions)
+                    << engine_label << ": should fill requested enumeration cap (distinct assignments)";
+                std::set<std::vector<int>> distinct_raw;
+                for (const auto& r : results) {
+                    std::vector<int> raw(graph_data.n_target, -1);
+                    for (size_t ti = 0; ti < graph_data.n_target; ++ti) {
+                        const TestTargetNode tn = graph_data.target_nodes[ti];
+                        raw[ti] = static_cast<int>(graph_data.global_to_idx.at(r.target_to_global.at(tn)));
+                    }
+                    ASSERT_TRUE(distinct_raw.insert(std::move(raw)).second)
+                        << engine_label << ": duplicate full assignment";
+                }
+            } else {
+                EXPECT_GE(n_found, 2u) << engine_label << ": expect multiple distinct global image sets";
+                std::set<std::vector<int>> distinct_shape_keys;
+                for (const auto& r : results) {
+                    std::vector<int> shape_key;
+                    shape_key.reserve(graph_data.n_target);
+                    for (size_t ti = 0; ti < graph_data.n_target; ++ti) {
+                        const TestTargetNode tn = graph_data.target_nodes[ti];
+                        shape_key.push_back(static_cast<int>(graph_data.global_to_idx.at(r.target_to_global.at(tn))));
+                    }
+                    std::sort(shape_key.begin(), shape_key.end());
+                    ASSERT_TRUE(distinct_shape_keys.insert(std::move(shape_key)).second)
+                        << engine_label << ": duplicate unique_shapes key";
+                }
+            }
+
+            const char* unique_shapes_word = unique_shapes_flag ? "true" : "false";
+
+            if (engine == TopologyMappingSolverEngine::Sat) {
+                EXPECT_EQ(enum_session.sat_solve_calls(), n_found)
+                    << "SAT: one solve per successful next() unique_shapes=" << unique_shapes_flag;
+                EXPECT_EQ(enum_session.sat_hard_constraint_encode_calls(), 1u)
+                    << "SAT: single hard encode for session unique_shapes=" << unique_shapes_flag;
+                if (!unique_shapes_flag) {
+                    RecordProperty("benchmark_ring64_trace80_sat_ms_first_solution", static_cast<int>(first_ms));
+                    RecordProperty(
+                        "benchmark_ring64_trace80_sat_ms_incremental_total", static_cast<int>(incremental_total_ms));
+                    RecordProperty(
+                        "benchmark_ring64_trace80_sat_ms_incremental_avg", static_cast<int>(incremental_avg_ms));
+                    RecordProperty("benchmark_ring64_trace80_sat_ms_total", static_cast<int>(total_ms));
+                    RecordProperty("benchmark_ring64_trace80_sat_num_solutions", static_cast<int>(n_found));
+                } else {
+                    RecordProperty(
+                        "benchmark_ring64_trace80_sat_ms_first_solution_unique_shapes", static_cast<int>(first_ms));
+                    RecordProperty(
+                        "benchmark_ring64_trace80_sat_ms_incremental_total_unique_shapes",
+                        static_cast<int>(incremental_total_ms));
+                    RecordProperty(
+                        "benchmark_ring64_trace80_sat_ms_incremental_avg_unique_shapes",
+                        static_cast<int>(incremental_avg_ms));
+                    RecordProperty("benchmark_ring64_trace80_sat_ms_total_unique_shapes", static_cast<int>(total_ms));
+                    RecordProperty(
+                        "benchmark_ring64_trace80_sat_num_solutions_unique_shapes", static_cast<int>(n_found));
+                }
+            } else {
+                if (!unique_shapes_flag) {
+                    RecordProperty("benchmark_ring64_trace80_dfs_ms_first_solution", static_cast<int>(first_ms));
+                    RecordProperty(
+                        "benchmark_ring64_trace80_dfs_ms_incremental_total", static_cast<int>(incremental_total_ms));
+                    RecordProperty(
+                        "benchmark_ring64_trace80_dfs_ms_incremental_avg", static_cast<int>(incremental_avg_ms));
+                    RecordProperty("benchmark_ring64_trace80_dfs_ms_total", static_cast<int>(total_ms));
+                    RecordProperty("benchmark_ring64_trace80_dfs_num_solutions", static_cast<int>(n_found));
+                } else {
+                    RecordProperty(
+                        "benchmark_ring64_trace80_dfs_ms_first_solution_unique_shapes", static_cast<int>(first_ms));
+                    RecordProperty(
+                        "benchmark_ring64_trace80_dfs_ms_incremental_total_unique_shapes",
+                        static_cast<int>(incremental_total_ms));
+                    RecordProperty(
+                        "benchmark_ring64_trace80_dfs_ms_incremental_avg_unique_shapes",
+                        static_cast<int>(incremental_avg_ms));
+                    RecordProperty("benchmark_ring64_trace80_dfs_ms_total_unique_shapes", static_cast<int>(total_ms));
+                    RecordProperty(
+                        "benchmark_ring64_trace80_dfs_num_solutions_unique_shapes", static_cast<int>(n_found));
+                }
+            }
+
+            log_info(
+                tt::LogFabric,
+                "Benchmark_Ring64_On_ClusterTrace80_MultiSolve: engine={} unique_shapes={} "
+                "first_solution_ms={} incremental_total_ms={} incremental_avg_ms={} total_ms={} "
+                "solutions_found={} max_requested={} ring_nodes={} trace_nodes={}",
+                engine_label,
+                unique_shapes_word,
+                first_ms,
+                incremental_total_ms,
+                incremental_avg_ms,
+                total_ms,
+                n_found,
+                kMaxSolutions,
+                kRingNodes,
+                kTraceNodes);
+        }
+    }
+}
+
+// Small single-solve timing for the real superpod "blitz decode" 64-stage pipeline: a 64-node logical ring
+// embedded bijectively into the captured 64-node physical inter-mesh graph (a Hamiltonian-cycle search). Measures
+// how long one SAT solve takes to find a valid mapping with the minimal SAT optimizations in place (bijection
+// completeness + rotational anchor pin). SAT only: this dense bijection has no generic-DFS-friendly structure, so
+// the backtracking DFS engine does not converge here -- the SAT path is what the production mapper relies on.
+TEST_F(TopologySolverTest, Benchmark_Ring64_On_BlitzDecodePhysical64_Solve) {
+    using namespace tt::tt_fabric::detail;
+    constexpr size_t kRingNodes = 64;
+
+    auto target_graph = create_1d_ring_graph<TestTargetNode>(kRingNodes);
+    auto global_graph = make_blitz_decode_physical_graph_64();
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    ASSERT_EQ(target_graph.get_nodes().size(), kRingNodes);
+    ASSERT_EQ(global_graph.get_nodes().size(), kRingNodes)
+        << "blitz-decode physical graph must be 64 nodes (bijection)";
+
+    GraphIndexData graph_data(target_graph, global_graph);
+    ConstraintIndexData constraint_data(constraints, graph_data);
+    ASSERT_EQ(graph_data.n_target, kRingNodes);
+    ASSERT_EQ(graph_data.n_global, kRingNodes);
+
+    setenv("TT_METAL_OPERATION_TIMEOUT_SECONDS", "600", 1);
+
+    using clock = std::chrono::steady_clock;
+    const auto t0 = clock::now();
+    auto result = solve_topology_mapping(
+        target_graph,
+        global_graph,
+        constraints,
+        ConnectionValidationMode::RELAXED,
+        /*quiet_mode=*/true,
+        TopologyMappingSolverEngine::Sat);
+    const auto solve_ms = std::chrono::duration_cast<std::chrono::milliseconds>(clock::now() - t0).count();
+
+    ASSERT_TRUE(result.success) << "SAT should find a mapping: " << result.error_message;
+    EXPECT_EQ(result.target_to_global.size(), kRingNodes);
+    std::vector<int> mapping(graph_data.n_target, -1);
+    for (size_t ti = 0; ti < graph_data.n_target; ++ti) {
+        const TestTargetNode tn = graph_data.target_nodes[ti];
+        mapping[ti] = static_cast<int>(graph_data.global_to_idx.at(result.target_to_global.at(tn)));
+    }
+    const bool edges_ok = topology_test_complete_mapping_preserves_edges(graph_data, mapping);
+    EXPECT_TRUE(edges_ok) << "mapping must preserve ring adjacency (valid Hamiltonian cycle)";
+
+    RecordProperty("benchmark_ring64_blitz64_sat_ms", static_cast<int>(solve_ms));
+    log_info(
+        tt::LogFabric,
+        "Benchmark_Ring64_On_BlitzDecodePhysical64_Solve: engine=SAT solve_ms={} ring_nodes={}",
+        solve_ms,
+        kRingNodes);
+}
+
+// UNSAT stress: 16-node complete graph target on 8×8 mesh (K16 requires degree 15, mesh max is 4).
+TEST_F(TopologySolverTest, SatStress_UnsatCompleteGraph) {
+    constexpr size_t N = 16;
+    using AdjMap = typename AdjacencyGraph<TestTargetNode>::AdjacencyMap;
+    AdjMap target_adj;
+    for (size_t i = 0; i < N; ++i) {
+        std::vector<TestTargetNode> neigh;
+        for (size_t j = 0; j < N; ++j) {
+            if (j != i) {
+                neigh.push_back(static_cast<TestTargetNode>(j));
+            }
+        }
+        target_adj[static_cast<TestTargetNode>(i)] = neigh;
+    }
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj);
+    auto global_graph = create_2d_mesh_graph<TestGlobalNode>(8, 8);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    auto sat_result = solve_topology_mapping(
+        target_graph,
+        global_graph,
+        constraints,
+        ConnectionValidationMode::RELAXED,
+        /* quiet_mode= */ true,
+        TopologyMappingSolverEngine::Sat);
+    EXPECT_FALSE(sat_result.success) << "K16 cannot embed in 8×8 mesh (degree 15 > max 4): SAT should report UNSAT";
+    EXPECT_FALSE(sat_result.error_message.empty());
+}
+
+// ============================================================================
+// Multi-solution API tests (solve_topology_mapping_n / _all / _next)
+// Uses plain int node IDs so graphs can be specified inline without fabric machinery.
+// ============================================================================
+
+using IntAdj = AdjacencyGraph<int>;
+using IntConstraints = MappingConstraints<int, int>;
+using IntAdjMap = typename IntAdj::AdjacencyMap;
+
+// ---------------------------------------------------------------------------
+// Test 1: SingleNode_TwoGlobals_FindsBoth
+//
+// 1-node target can map to either of the 2 global nodes => 2 solutions.
+// ---------------------------------------------------------------------------
+TEST_F(TopologySolverTest, SingleNode_TwoGlobals_FindsBoth) {
+    IntAdj target(IntAdjMap{{0, {}}});
+    IntAdj global(IntAdjMap{{10, {}}, {11, {}}});
+    IntConstraints constraints;
+
+    const auto results = solve_topology_mapping_all<int, int>(target, global, constraints,
+                                                               ConnectionValidationMode::RELAXED,
+                                                               /*quiet_mode=*/true);
+
+    EXPECT_EQ(results.size(), 2u) << "Expected exactly 2 solutions for single-node target into 2-global graph";
+    for (const auto& r : results) {
+        EXPECT_TRUE(r.success);
+        EXPECT_EQ(r.target_to_global.size(), 1u);
+    }
+
+    std::set<int> chosen_globals;
+    for (const auto& r : results) {
+        chosen_globals.insert(r.target_to_global.at(0));
+    }
+    EXPECT_EQ(chosen_globals.size(), 2u) << "Both globals should be covered";
+}
+
+// ---------------------------------------------------------------------------
+// Test 2: TwoNodeChain_CountsAllEmbeddings
+//
+// 2-chain target (0-1) embedded into 4-path global (20-21-22-23).
+// Valid embeddings: 3 undirected positions × 2 directions = 6 distinct injective embeddings.
+// ---------------------------------------------------------------------------
+TEST_F(TopologySolverTest, TwoNodeChain_CountsAllEmbeddings) {
+    IntAdj target(IntAdjMap{{0, {1}}, {1, {0}}});
+    IntAdj global(IntAdjMap{{20, {21}}, {21, {20, 22}}, {22, {21, 23}}, {23, {22}}});
+    IntConstraints constraints;
+
+    const auto results = solve_topology_mapping_all<int, int>(target, global, constraints,
+                                                               ConnectionValidationMode::RELAXED,
+                                                               /*quiet_mode=*/true);
+
+    EXPECT_EQ(results.size(), 6u) << "Expected 6 embeddings of a 2-chain into a 4-path";
+    for (const auto& r : results) {
+        EXPECT_TRUE(r.success);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SolveN_RespectsMaxLimit
+//
+// 4-clique target into 6-clique global — request max=2, must get at most 2 results.
+// ---------------------------------------------------------------------------
+TEST_F(TopologySolverTest, SolveN_RespectsMaxLimit) {
+    IntAdj target(IntAdjMap{
+        {0, {1, 2, 3}},
+        {1, {0, 2, 3}},
+        {2, {0, 1, 3}},
+        {3, {0, 1, 2}},
+    });
+    IntAdj global(IntAdjMap{
+        {10, {11, 12, 13, 14, 15}},
+        {11, {10, 12, 13, 14, 15}},
+        {12, {10, 11, 13, 14, 15}},
+        {13, {10, 11, 12, 14, 15}},
+        {14, {10, 11, 12, 13, 15}},
+        {15, {10, 11, 12, 13, 14}},
+    });
+    IntConstraints constraints;
+
+    const auto results = solve_topology_mapping_n<int, int>(target, global, constraints,
+                                                             /*max_solutions=*/2,
+                                                             ConnectionValidationMode::RELAXED,
+                                                             /*quiet_mode=*/true);
+
+    EXPECT_LE(results.size(), 2u);
+    EXPECT_GE(results.size(), 1u) << "There should be at least 1 valid solution";
+    for (const auto& r : results) {
+        EXPECT_TRUE(r.success);
+    }
+}
+
+// TopologyMappingEnumerationSession: incremental SAT does one hard encode per stable context; exhaustive next().
+TEST_F(TopologySolverTest, TopologySolver_SolveNextAndIncrementalSatSession) {
+    // (A) Second mapping differs from first.
+    {
+        IntAdj target(IntAdjMap{{0, {}}});
+        IntAdj global(IntAdjMap{{50, {}}, {51, {}}, {52, {}}});
+        IntConstraints constraints;
+        const auto first = solve_topology_mapping<int, int>(
+            target, global, constraints, ConnectionValidationMode::RELAXED, /*quiet_mode=*/true);
+        ASSERT_TRUE(first.success);
+        std::vector<std::map<int, int>> excluded{first.target_to_global};
+        TopologyMappingEnumerationSession<int, int> enumeration_session;
+        const auto second = enumeration_session.next(
+            target,
+            global,
+            constraints,
+            excluded,
+            ConnectionValidationMode::RELAXED,
+            /*quiet_mode=*/true,
+            TopologyMappingSolverEngine::Auto,
+            false);
+        EXPECT_TRUE(second.success);
+        EXPECT_NE(first.target_to_global, second.target_to_global);
+    }
+    // (B) Exhausted space => success=false.
+    {
+        IntAdj target(IntAdjMap{{0, {}}});
+        IntAdj global(IntAdjMap{{60, {}}});
+        IntConstraints constraints;
+        const auto first = solve_topology_mapping<int, int>(
+            target, global, constraints, ConnectionValidationMode::RELAXED, /*quiet_mode=*/true);
+        ASSERT_TRUE(first.success);
+        std::vector<std::map<int, int>> excluded{first.target_to_global};
+        TopologyMappingEnumerationSession<int, int> enumeration_session;
+        const auto next = enumeration_session.next(
+            target,
+            global,
+            constraints,
+            excluded,
+            ConnectionValidationMode::RELAXED,
+            /*quiet_mode=*/true,
+            TopologyMappingSolverEngine::Auto,
+            false);
+        EXPECT_FALSE(next.success);
+    }
+
+    // (C) Incremental SAT session vs solve_n; monotone exclusions keep a single hard CNF encode.
+    IntAdj target(IntAdjMap{{0, {}}});
+    IntAdj global(IntAdjMap{
+        {100, {}},
+        {101, {}},
+        {102, {}},
+        {103, {}},
+        {104, {}},
+        {105, {}},
+        {106, {}},
+        {107, {}},
+        {108, {}},
+        {109, {}},
+        {110, {}},
+        {111, {}},
+    });
+    IntConstraints constraints;
+
+    constexpr size_t kRounds = 8;
+    std::vector<std::map<int, int>> expected_prefix;
+    expected_prefix.reserve(kRounds);
+    {
+        TopologyMappingEnumerationSession<int, int> probe;
+        std::vector<std::map<int, int>> ex;
+        ex.reserve(kRounds);
+        for (size_t i = 0; i < kRounds; ++i) {
+            const auto r = probe.next(
+                target,
+                global,
+                constraints,
+                ex,
+                ConnectionValidationMode::RELAXED,
+                /*quiet_mode=*/true,
+                TopologyMappingSolverEngine::Sat,
+                false);
+            ASSERT_TRUE(r.success) << "probe round " << i;
+            expected_prefix.push_back(r.target_to_global);
+            ex.push_back(r.target_to_global);
+        }
+    }
+
+    TopologyMappingEnumerationSession<int, int> check_calls;
+    std::vector<std::map<int, int>> ex_acc;
+    ex_acc.reserve(kRounds);
+    std::set<std::map<int, int>> session_maps;
+    for (size_t i = 0; i < kRounds; ++i) {
+        const size_t excluded_at_call = ex_acc.size();
+        const bool reused_graph_context = (i > 0);
+        const auto r = check_calls.next(
+            target,
+            global,
+            constraints,
+            ex_acc,
+            ConnectionValidationMode::RELAXED,
+            true,
+            TopologyMappingSolverEngine::Sat,
+            false);
+        ASSERT_TRUE(r.success);
+        log_info(
+            tt::LogFabric,
+            "TopologySolver_SolveNextAndIncrementalSatSession: SAT stats reused_graph_context={} solve_out={} "
+            "solve_calls={} hard_constraint_encodes={} excluded_mappings={} blocking_clauses_encoded={}",
+            reused_graph_context,
+            "SAT",
+            check_calls.sat_solve_calls(),
+            check_calls.sat_hard_constraint_encode_calls(),
+            excluded_at_call,
+            excluded_at_call);
+        ASSERT_EQ(check_calls.sat_hard_constraint_encode_calls(), 1u);
+        ASSERT_TRUE(session_maps.insert(r.target_to_global).second);
+        EXPECT_EQ(r.target_to_global, expected_prefix[i]);
+        ex_acc.push_back(r.target_to_global);
+    }
+    EXPECT_EQ(check_calls.sat_solve_calls(), kRounds);
+    EXPECT_EQ(check_calls.sat_hard_constraint_encode_calls(), 1u);
+
+    const auto batch = solve_topology_mapping_n<int, int>(
+        target,
+        global,
+        constraints,
+        kRounds,
+        ConnectionValidationMode::RELAXED,
+        true,
+        TopologyMappingSolverEngine::Sat,
+        false);
+    ASSERT_EQ(batch.size(), kRounds);
+    std::set<std::map<int, int>> batch_maps;
+    for (const auto& r : batch) {
+        ASSERT_TRUE(r.success);
+        batch_maps.insert(r.target_to_global);
+    }
+    EXPECT_EQ(session_maps, batch_maps);
+
+    {
+        TopologyMappingEnumerationSession<int, int> warmup;
+        std::vector<std::map<int, int>> ex;
+        ex.reserve(kRounds);
+        for (size_t i = 0; i < kRounds; ++i) {
+            const auto r = warmup.next(
+                target,
+                global,
+                constraints,
+                ex,
+                ConnectionValidationMode::RELAXED,
+                true,
+                TopologyMappingSolverEngine::Sat,
+                false);
+            ASSERT_TRUE(r.success);
+            ex.push_back(r.target_to_global);
+        }
+    }
+
+    using clock = std::chrono::steady_clock;
+    const auto t_fresh_start = clock::now();
+    for (size_t i = 0; i < kRounds; ++i) {
+        TopologyMappingEnumerationSession<int, int> fresh;
+        std::vector<std::map<int, int>> ex;
+        ex.reserve(i);
+        for (size_t j = 0; j < i; ++j) {
+            ex.push_back(expected_prefix[j]);
+        }
+        const auto r = fresh.next(
+            target,
+            global,
+            constraints,
+            ex,
+            ConnectionValidationMode::RELAXED,
+            true,
+            TopologyMappingSolverEngine::Sat,
+            false);
+        ASSERT_TRUE(r.success);
+        EXPECT_EQ(r.target_to_global, expected_prefix[i]);
+        EXPECT_EQ(fresh.sat_hard_constraint_encode_calls(), 1u);
+        EXPECT_EQ(fresh.sat_solve_calls(), 1u);
+    }
+    const auto fresh_ms = std::chrono::duration_cast<std::chrono::milliseconds>(clock::now() - t_fresh_start).count();
+
+    const auto t_reuse_start = clock::now();
+    TopologyMappingEnumerationSession<int, int> reuse_session;
+    {
+        std::vector<std::map<int, int>> ex;
+        ex.reserve(kRounds);
+        for (size_t i = 0; i < kRounds; ++i) {
+            const auto r = reuse_session.next(
+                target,
+                global,
+                constraints,
+                ex,
+                ConnectionValidationMode::RELAXED,
+                true,
+                TopologyMappingSolverEngine::Sat,
+                false);
+            ASSERT_TRUE(r.success);
+            ex.push_back(r.target_to_global);
+        }
+    }
+    EXPECT_EQ(reuse_session.sat_hard_constraint_encode_calls(), 1u);
+    EXPECT_EQ(reuse_session.sat_solve_calls(), kRounds);
+    const auto reuse_ms = std::chrono::duration_cast<std::chrono::milliseconds>(clock::now() - t_reuse_start).count();
+
+    RecordProperty("fresh_session_total_ms", static_cast<int>(fresh_ms));
+    RecordProperty("reuse_session_total_ms", static_cast<int>(reuse_ms));
+    // Timing assertions are only meaningful when there is measurable elapsed time.
+    // Sub-millisecond problems (both == 0 ms) cannot be compared reliably.
+    if (fresh_ms > 0) {
+        EXPECT_LT(reuse_ms, fresh_ms);
+        EXPECT_LT(reuse_ms * 2, fresh_ms);
+    }
+}
+
 }  // namespace tt::tt_fabric

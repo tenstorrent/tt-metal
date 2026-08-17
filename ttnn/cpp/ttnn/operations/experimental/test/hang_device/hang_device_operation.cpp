@@ -1,9 +1,8 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operation.hpp"
-#include "ttnn/decorators.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "hang_device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
@@ -19,7 +18,7 @@ void ExecuteTestHangDeviceOperation::validate_on_program_cache_hit(
 
 ExecuteTestHangDeviceOperation::spec_return_value_t ExecuteTestHangDeviceOperation::compute_output_specs(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         tensor_args.tensor.logical_shape(),
         tt::tt_metal::TensorLayout(
             tensor_args.tensor.dtype(), tt::tt_metal::PageConfig(tensor_args.tensor.layout()), MemoryConfig{}));
@@ -36,3 +35,11 @@ ExecuteTestHangDeviceOperation::invoke(const Tensor& input_tensor) {
     return {operation_attributes_t{}, tensor_args_t{input_tensor}};
 }
 }  // namespace ttnn::prim
+
+namespace ttnn::operations::experimental::test {
+
+Tensor test_hang_device_operation(const Tensor& input_tensor) {
+    return device_operation::launch<ttnn::prim::ExecuteTestHangDeviceOperation>({}, {input_tensor});
+}
+
+}  // namespace ttnn::operations::experimental::test

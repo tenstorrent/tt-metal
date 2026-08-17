@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -31,7 +31,7 @@ RecvAsyncDeviceOperation::tensor_return_value_t RecvAsyncDeviceOperation::create
     return {tensor_args};
 }
 
-tt::stl::hash::hash_t RecvAsyncDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t RecvAsyncDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "RecvAsyncDeviceOperation::compute_program_hash is called");
     const ttnn::Tensor& output_tensor = tensor_args;

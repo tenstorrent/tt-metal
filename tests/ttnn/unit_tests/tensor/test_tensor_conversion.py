@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -11,7 +11,13 @@ import torch
 import numpy as np
 
 import ttnn
-from tests.ttnn.utils_for_testing import tt_dtype_to_torch_dtype, tt_dtype_to_np_dtype
+from tests.ttnn.utils_for_testing import (
+    align_tensor_dtype,
+    tt_dtype_to_torch_dtype,
+    tt_dtype_to_np_dtype,
+    TORCH_INTEGER_DTYPES,
+    NP_INTEGER_DTYPES,
+)
 
 pytestmark = pytest.mark.use_module_device
 
@@ -21,6 +27,7 @@ pytestmark = pytest.mark.use_module_device
     "tt_dtype",
     [
         ttnn.uint8,
+        ttnn.int8,
         ttnn.uint16,
         ttnn.uint32,
         ttnn.int32,
@@ -38,7 +45,7 @@ def test_tensor_conversion_with_tt_dtype(python_lib, shape, tt_dtype, convert_to
     if python_lib == torch:
         dtype = tt_dtype_to_torch_dtype[tt_dtype]
 
-        if dtype in {torch.uint8, torch.int16, torch.int32}:
+        if dtype in TORCH_INTEGER_DTYPES:
             py_tensor = torch.randint(torch.iinfo(dtype).min, torch.iinfo(dtype).max, shape, dtype=dtype)
         else:
             py_tensor = torch.rand(shape, dtype=dtype)
@@ -50,7 +57,7 @@ def test_tensor_conversion_with_tt_dtype(python_lib, shape, tt_dtype, convert_to
             pytest.skip("ttnn.bfloat16 dtype is not supported yet for numpy tensors!")
         dtype = tt_dtype_to_np_dtype[tt_dtype]
 
-        if dtype in {np.ubyte, np.int16, np.int32}:
+        if dtype in NP_INTEGER_DTYPES:
             py_tensor = np.random.randint(np.iinfo(dtype).min, np.iinfo(dtype).max, shape, dtype=dtype)
         else:
             py_tensor = np.random.random(shape).astype(dtype=dtype)
@@ -72,6 +79,8 @@ def test_tensor_conversion_with_tt_dtype(python_lib, shape, tt_dtype, convert_to
     elif python_lib == np:
         py_tensor_after_round_trip = tt_tensor.to_numpy()
 
+    py_tensor_after_round_trip = align_tensor_dtype(py_tensor_after_round_trip, py_tensor.dtype)
+
     assert py_tensor.dtype == py_tensor_after_round_trip.dtype
     assert py_tensor.shape == py_tensor_after_round_trip.shape
 
@@ -87,6 +96,7 @@ def test_tensor_conversion_with_tt_dtype(python_lib, shape, tt_dtype, convert_to
 
 string_to_torch_dtype = {
     "uint8": torch.uint8,
+    "int8": torch.int8,
     "int16": torch.int16,
     "int32": torch.int32,
     "int64": torch.int64,
@@ -97,6 +107,7 @@ string_to_torch_dtype = {
 
 string_to_np_dtype = {
     "uint8": np.ubyte,
+    "int8": np.byte,
     "int16": np.int16,
     "int32": np.int32,
     "int64": np.int64,
@@ -110,6 +121,7 @@ string_to_np_dtype = {
     "python_dtype_str",
     [
         "uint8",
+        "int8",
         "int16",
         "int32",
         "int64",
@@ -126,7 +138,7 @@ def test_tensor_conversion_with_python_dtype(python_lib, shape, python_dtype_str
     if python_lib == torch:
         dtype = string_to_torch_dtype[python_dtype_str]
 
-        if dtype in {torch.uint8, torch.int16, torch.int32, torch.int64}:
+        if dtype in TORCH_INTEGER_DTYPES:
             py_tensor = torch.randint(torch.iinfo(dtype).min, torch.iinfo(dtype).max, shape, dtype=dtype)
         else:
             py_tensor = torch.rand(shape, dtype=dtype)
@@ -138,7 +150,7 @@ def test_tensor_conversion_with_python_dtype(python_lib, shape, python_dtype_str
             pytest.skip("{} dtype is not supported yet for numpy tensors!".format(python_dtype_str))
         dtype = string_to_np_dtype[python_dtype_str]
 
-        if dtype in {np.ubyte, np.int16, np.int32, np.int64}:
+        if dtype in NP_INTEGER_DTYPES:
             py_tensor = np.random.randint(np.iinfo(dtype).min, np.iinfo(dtype).max, shape, dtype=dtype)
         else:
             py_tensor = np.random.random(shape).astype(dtype=dtype)
@@ -162,6 +174,8 @@ def test_tensor_conversion_with_python_dtype(python_lib, shape, python_dtype_str
                 python_dtype_str
             )
         )
+
+    py_tensor_after_round_trip = align_tensor_dtype(py_tensor_after_round_trip, py_tensor.dtype)
 
     assert py_tensor.dtype == py_tensor_after_round_trip.dtype
     assert py_tensor.shape == py_tensor_after_round_trip.shape

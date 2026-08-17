@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,7 +8,6 @@
 #include <sys/random.h>
 
 #include <algorithm>
-#include <core/ttnn_all_includes.hpp>
 #include <cstdint>
 #include <limits>
 #include <random>
@@ -66,12 +65,12 @@ void load_random_data_from_os(std::span<float> data) {
 }  // namespace
 
 class UnaryOpsTest : public ::testing::Test {
-protected:
-    void SetUp() override {
+public:
+    static void SetUpTestSuite() {
         autograd::ctx().open_device();
     }
 
-    void TearDown() override {
+    static void TearDownTestSuite() {
         autograd::ctx().close_device();
     }
 };
@@ -82,7 +81,7 @@ TEST_F(UnaryOpsTest, GlobalMean) {
     auto shape = ttnn::Shape({2, 1, 1, 4});
     auto tensor = core::from_vector(test_data, shape, &autograd::ctx().get_device());
 
-    auto tensor_ptr = autograd::create_tensor(tensor);
+    auto tensor_ptr = autograd::create_tensor(tensor, /* requires_grad */ true);
 
     auto result = mean(tensor_ptr);
     auto result_data = core::to_vector(result->get_value());
@@ -102,7 +101,7 @@ TEST_F(UnaryOpsTest, LogSoftmax) {
     auto* device = &autograd::ctx().get_device();
     std::vector<float> test_data = {-0.1F, -0.2F, -0.3F, -0.4F, 0.F, -0.2F, -0.3F, -0.4F};
     auto tensor = core::from_vector(test_data, ttnn::Shape({2, 1, 1, 4}), device);
-    auto tensor_ptr = autograd::create_tensor(tensor);
+    auto tensor_ptr = autograd::create_tensor(tensor, /* requires_grad */ true);
     auto result = log_softmax_moreh(tensor_ptr, 3);
     auto result_data = core::to_vector(result->get_value());
     std::vector<float> expected_data = {
@@ -121,6 +120,43 @@ TEST_F(UnaryOpsTest, LogSoftmax) {
     }
 }
 
+TEST_F(UnaryOpsTest, Exp) {
+    auto* device = &autograd::ctx().get_device();
+    // e^0 = 1, e^1 ≈ 2.71828, e^-1 ≈ 0.36788
+    xt::xarray<float> data = {{{{0.F, 1.F, -1.F, 0.5F}}}};
+    auto tensor_ptr = autograd::create_tensor(core::from_xtensor(data, device), /* requires_grad */ true);
+
+    auto result = exp(tensor_ptr);
+    auto result_xt = core::to_xtensor(result->get_value());
+
+    xt::xarray<float> expected = {{{{1.F, 2.71828F, 0.36788F, 1.64872F}}}};
+    EXPECT_TRUE(xt::allclose(result_xt, expected, 1e-2F, 1e-2F));
+
+    result->backward();
+    auto grad = core::to_xtensor(tensor_ptr->get_grad());
+    // d(e^x)/dx = e^x, upstream grad is 1
+    EXPECT_TRUE(xt::allclose(grad, expected, 1e-2F, 1e-2F));
+}
+
+TEST_F(UnaryOpsTest, Clip) {
+    auto* device = &autograd::ctx().get_device();
+    //                 below lo   in range   at hi   above hi
+    xt::xarray<float> data = {{{{-5.F, 2.F, 3.F, 10.F}}}};
+    auto tensor_ptr = autograd::create_tensor(core::from_xtensor(data, device), /* requires_grad */ true);
+
+    auto result = clip(tensor_ptr, 1.F, 3.F);
+    auto result_xt = core::to_xtensor(result->get_value());
+
+    xt::xarray<float> expected = {{{{1.F, 2.F, 3.F, 3.F}}}};
+    EXPECT_TRUE(xt::allclose(result_xt, expected));
+
+    result->backward();
+    auto grad = core::to_xtensor(tensor_ptr->get_grad());
+    // grad passes through where lo <= x <= hi, zero otherwise
+    xt::xarray<float> expected_grad = {{{{0.F, 1.F, 1.F, 0.F}}}};
+    EXPECT_TRUE(xt::allclose(grad, expected_grad));
+}
+
 TEST_F(UnaryOpsTest, Silu) {
     auto N = 4;
     auto C = 1;
@@ -132,8 +168,10 @@ TEST_F(UnaryOpsTest, Silu) {
     load_random_data_from_os(std::span{a.data(), a.size()});
 
     // Create two input tensors - one for kernel implementation, one for composite
-    auto a_kernel = autograd::create_tensor(core::from_xtensor(a, &autograd::ctx().get_device()));
-    auto a_composite = autograd::create_tensor(core::from_xtensor(a, &autograd::ctx().get_device()));
+    auto a_kernel =
+        autograd::create_tensor(core::from_xtensor(a, &autograd::ctx().get_device()), /* requires_grad */ true);
+    auto a_composite =
+        autograd::create_tensor(core::from_xtensor(a, &autograd::ctx().get_device()), /* requires_grad */ true);
 
     // Forward pass - both use same forward implementation (ttnn::silu)
     // but will use different backward implementations

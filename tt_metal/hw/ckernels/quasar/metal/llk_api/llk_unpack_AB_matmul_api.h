@@ -1,10 +1,12 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <cstdint>
 #include "llk_unpack_matmul.h"
 #include "llk_unpack_common_api.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 /*************************************************************************
  * LLK UNPACK AB MATMUL
@@ -34,6 +36,15 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
     // In1 -> srcA
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
+
+    // _llk_unpack_matmul_ takes no TensorShape, so it does not scale its L1 tile indices by the face
+    // count; Quasar matmul is full-tile only (tt-metal #45208).
+    LLK_ASSERT(
+        get_operand_tensor_shape(operandA_id).total_num_faces() == ckernel::MAX_NUM_FACES,
+        "this path indexes L1 in whole tiles, so it supports full 32x32 tiles only");
+    LLK_ASSERT(
+        get_operand_tensor_shape(operandB_id).total_num_faces() == ckernel::MAX_NUM_FACES,
+        "this path indexes L1 in whole tiles, so it supports full 32x32 tiles only");
 
     _llk_unpack_matmul_init_<TRANSPOSE_EN>(operandA_id, operandB_id, ct_dim, rt_dim, kt_dim);
 }
@@ -68,12 +79,19 @@ inline void llk_unpack_AB_matmul(
     const std::uint32_t kt_dim = 1) {
     // In0/InA -> srcB
     // In1/InB -> srcA
+    LLK_TDMA_GUARD_NOTE_TDMA(operandA);  // TEN-4746: real unpack (UNPACR) disarms these dfbs
+    LLK_TDMA_GUARD_NOTE_TDMA(operandB);
 
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
 
-    const std::uint32_t l1_tile_idx_0 = get_local_cb_interface(operandA_id).fifo_rd_tile_idx + tile_index_a;
-    const std::uint32_t l1_tile_idx_1 = get_local_cb_interface(operandB_id).fifo_rd_tile_idx + tile_index_b;
+    const LocalDFBInterface& local_dfb_interface_a = get_local_dfb_interface(operandA_id);
+    const LocalDFBInterface& local_dfb_interface_b = get_local_dfb_interface(operandB_id);
+
+    const std::uint32_t l1_tile_idx_0 =
+        local_dfb_interface_a.tc_slots[local_dfb_interface_a.tc_idx].rd_entry_idx + tile_index_a;
+    const std::uint32_t l1_tile_idx_1 =
+        local_dfb_interface_b.tc_slots[local_dfb_interface_b.tc_idx].rd_entry_idx + tile_index_b;
 
     WAYPOINT("UPMW");
     _llk_unpack_matmul_(ct_dim, rt_dim, kt_dim, l1_tile_idx_0, l1_tile_idx_1);

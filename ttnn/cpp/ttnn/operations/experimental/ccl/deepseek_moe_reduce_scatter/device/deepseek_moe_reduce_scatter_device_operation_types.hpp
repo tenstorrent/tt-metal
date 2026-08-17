@@ -1,8 +1,9 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <tt_stl/reflection.hpp>
 
 #include <cstdint>
 #include <optional>
@@ -10,7 +11,6 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt_stl/reflection.hpp>
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 
 namespace ttnn::experimental::prim {
@@ -32,8 +32,9 @@ struct DeepseekMoEReduceScatterParams {
     std::optional<uint32_t> cluster_axis;
 
     auto attributes() const {
-        using tt::stl::reflection::Attribute;
+        using ttsl::reflection::Attribute;
         std::vector<std::tuple<std::string, Attribute>> attrs;
+        attrs.reserve(4);
         attrs.emplace_back("output_memory_config", output_memory_config);
         attrs.emplace_back("dim", dim);
         attrs.emplace_back("num_links", num_links);

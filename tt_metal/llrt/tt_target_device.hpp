@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -15,6 +15,7 @@ enum class TargetDevice : std::uint8_t {
     Silicon = 0,
     Simulator = 1,
     Mock = 2,
+    Emule = 3,
     Invalid = 0xFF,
 };
 

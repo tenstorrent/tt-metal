@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,6 +7,7 @@
 #include "ttnn-nanobind/decorators.hpp"
 #include "sliding_window.hpp"
 #include "op_slicing/op_slicing.hpp"
+#include <tt_stl/reflection.hpp>
 
 using namespace tt::tt_metal;
 using namespace ttnn::operations::op_slicing;

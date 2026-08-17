@@ -1,19 +1,20 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include "ttnn/decorators.hpp"
 #include "ttnn/operations/data_movement/indexed_fill/device/indexed_fill_device_operation_types.hpp"
 #include "ttnn/operations/data_movement/indexed_fill/device/indexed_fill_program_factory.hpp"
+#include "ttnn/types.hpp"
+#include "ttnn/operation.hpp"
 
 namespace ttnn::prim {
 
 struct IndexedFillDeviceOperation {
     using operation_attributes_t = IndexedFillParams;
     using tensor_args_t = IndexedFillInputs;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<IndexedFillProgramFactory>;
 

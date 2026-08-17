@@ -115,11 +115,11 @@ Ensure you follow these guidelines to successfully run the Llama3-70B demo.
 
     ```bash
     # Installing from within `tt-metal`
-    export VLLM_TARGET_DEVICE="tt"
     git clone https://github.com/tenstorrent/vllm.git
     cd vllm
     git checkout TT_VLLM_COMMIT_SHA_OR_TAG
-    pip install -e .
+    VLLM_TARGET_DEVICE=empty pip install -e .
+    pip install -e plugins/vllm-tt-plugin
     cd ..
     ```
 
@@ -128,7 +128,7 @@ Ensure you follow these guidelines to successfully run the Llama3-70B demo.
 3. **Running the server**
 
     ```bash
-    python vllm/examples/server_example_tt.py
+    python vllm/plugins/vllm-tt-plugin/examples/server_example_tt.py
     ```
 
 4. **Interact with server**

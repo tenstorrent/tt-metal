@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -17,8 +17,9 @@ namespace ttnn::experimental {
 ttnn::Tensor conv3d(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
+    std::optional<ttnn::MeshDevice*> device,
     const std::optional<ttnn::Tensor>& bias_tensor,
-    const ttnn::experimental::prim::Conv3dConfig& config,
+    const std::optional<ttnn::experimental::prim::Conv3dConfig>& config,
     tt::tt_metal::DataType dtype_,
     uint32_t output_channels_,
     const std::array<uint32_t, 3>& kernel_size_,
@@ -28,6 +29,12 @@ ttnn::Tensor conv3d(
     const std::string& padding_mode_ = "zeros",
     uint32_t groups_ = 1,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+    const std::optional<ttnn::Tensor>& halo_buffer = std::nullopt,
+    uint32_t logical_h_mask = 0,
+    uint32_t logical_w_mask = 0,
+    const std::optional<ttnn::Tensor>& pad_offset_tensor = std::nullopt,
+    uint32_t output_pad_h = 0,
+    uint32_t output_pad_w = 0);
 
 }  // namespace ttnn::experimental

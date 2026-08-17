@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -8,11 +8,11 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 
 def run_moe_test(N, C, H, W, k, E, e, dtype, device):
-    # torch.manual_seed(2005)
+    torch.manual_seed(2005)
     shape = [N, C, H, W]
     torch_dtype = torch.bfloat16
 
@@ -22,13 +22,10 @@ def run_moe_test(N, C, H, W, k, E, e, dtype, device):
     expert_mask = torch.zeros([N, C, 1, W], dtype=torch_dtype)
     expert_mask[:, :, :, E:] = float("-inf")
 
-    # TODO: make this addition a part of the moe op
-    input += expert_mask
-
     topE_mask = torch.zeros([N, C, 1, k], dtype=torch_dtype)
     topE_mask[:, :, :, e:] = float("-inf")
 
-    pyt_topk_values, pyt_topk_indices = torch.topk(input, k, dim=-1)
+    pyt_topk_values, pyt_topk_indices = torch.topk(input + expert_mask, k, dim=-1)
     torch_weights_1SB1 = torch.sum(
         (torch.softmax(pyt_topk_values + topE_mask, dim=-1) * (pyt_topk_indices == 0))[:, :, :, :e],
         dim=-1,
@@ -45,9 +42,17 @@ def run_moe_test(N, C, H, W, k, E, e, dtype, device):
 
         ttnn_weights_1SB1 = ttnn.to_torch(weights_1SB1)
 
-        pcc_values = 0.95
-
-        assert_with_pcc(torch_weights_1SB1, ttnn_weights_1SB1, pcc_values)
+        # test for equivalance
+        assert_numeric_metrics(
+            torch_weights_1SB1,
+            ttnn_weights_1SB1,
+            pcc_threshold=0.999,
+            rtol=0.046,
+            atol=0.012,
+            frobenius_threshold=0.017,
+            check_ulp=True,
+            ulp_threshold=8,
+        )
 
 
 @pytest.mark.parametrize(
@@ -59,7 +64,10 @@ def run_moe_test(N, C, H, W, k, E, e, dtype, device):
 )
 @pytest.mark.parametrize(
     "N, C, H, W, k, E, e",
-    ((1, 1, 32, 64, 32, 8, 2),),  # Mixtral8x7B
+    [
+        (1, 1, 32, 64, 32, 8, 2),  # Mixtral8x7B decode shape (Wt=2)
+        (1, 1, 32, 256, 32, 8, 2),  # wider expert dim (Wt=8) — exercises the upfront expert-mask load for Wt>4
+    ],
 )
 def test_moe(N, C, H, W, k, E, e, dtype, device):
     run_moe_test(N, C, H, W, k, E, e, dtype, device)

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -97,7 +97,7 @@ MorehSoftmaxBackwardOperation::spec_return_value_t MorehSoftmaxBackwardOperation
     if (tensor_args.input_grad_tensor.has_value()) {
         return tensor_args.input_grad_tensor->tensor_spec();
     }
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         tensor_args.output_tensor.logical_shape(),
         tt::tt_metal::TensorLayout(
             tensor_args.output_tensor.dtype(),
@@ -194,7 +194,7 @@ moreh_softmax_backward(
         strategy,
         memory_config.value_or(output_tensor.memory_config()),
         init_device_compute_kernel_config(
-            output_grad_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)};
+            output_grad_tensor.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4)};
     auto tensor_args = OperationType::tensor_args_t{output_tensor, output_grad_tensor, input_grad_tensor};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,7 +12,7 @@
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/vector.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/reduce_scatter_minimal_async.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/distributed/types.hpp"
@@ -20,72 +20,9 @@
 
 namespace ttnn::operations::experimental::ccl {
 
-namespace {
-
-template <typename ccl_operation_t>
-void bind_reduce_scatter_minimal_async(nb::module_& mod, const ccl_operation_t& operation, const char* doc) {
-    bind_registered_operation(
-        mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const ccl_operation_t& self,
-               const ttnn::Tensor& input_tensor,
-               const std::optional<std::vector<ttnn::Tensor>>& persistent_output_buffers,
-               const int32_t dim,
-               const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
-               const std::optional<GlobalSemaphore>& barrier_semaphore,
-               const uint32_t num_links,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::MemoryConfig>& intermediate_memory_config,
-               const ttnn::ccl::Topology topology,
-               std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-               std::optional<uint32_t> cluster_axis,
-               std::optional<uint32_t> chunks_per_sync,
-               std::optional<uint32_t> num_workers_per_link,
-               std::optional<uint32_t> num_buffers_per_channel,
-               const std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config) -> ttnn::Tensor {
-                return self(
-                    input_tensor,
-                    persistent_output_buffers,
-                    dim,
-                    multi_device_global_semaphore,
-                    barrier_semaphore,
-                    num_links,
-                    memory_config,
-                    intermediate_memory_config,
-                    topology,
-                    subdevice_id,
-                    cluster_axis,
-                    chunks_per_sync,
-                    num_workers_per_link,
-                    num_buffers_per_channel,
-                    compute_kernel_config);
-            },
-            nb::arg("input_tensor"),
-            nb::arg("persistent_output_buffers") = nb::none(),
-            nb::arg("dim"),
-            nb::arg("multi_device_global_semaphore"),
-            nb::kw_only(),
-            nb::arg("barrier_semaphore") = nb::none(),
-            nb::arg("num_links") = 1,
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("intermediate_memory_config") = nb::none(),
-            nb::arg("topology") = nb::cast(ttnn::ccl::Topology::Ring),
-            nb::arg("subdevice_id") = nb::none(),
-            nb::arg("cluster_axis") = nb::none(),
-            nb::arg("chunks_per_sync") = nb::none(),
-            nb::arg("num_workers_per_link") = nb::none(),
-            nb::arg("num_buffers_per_channel") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none()});
-}
-
-}  // namespace
-
 void bind_reduce_scatter_minimal_async(nb::module_& mod) {
-    bind_reduce_scatter_minimal_async(
+    ttnn::bind_function<"reduce_scatter_minimal_async", "ttnn.experimental.">(
         mod,
-        ttnn::experimental::reduce_scatter_minimal_async,
         R"doc(
         Performs an reduce-scatter operation on multi-device :attr:`input_tensor` across all devices.
 
@@ -97,16 +34,99 @@ void bind_reduce_scatter_minimal_async(nb::module_& mod) {
         Mesh Tensor Programming Guide : https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/Programming_Mesh_of_Devices/Programming_Mesh_of_Devices_with_TT-NN.md
 
         Keyword Args:
-            num_links (int, optional): Number of links to use for the all-gather operation. Defaults to `1`.
+            num_links (int, optional): Number of links to use for the reduce-scatter operation. Defaults to the maximum available.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `input tensor memory config`.
             topology (ttnn.Topology, optional): The topology configuration to run the operation in. Valid options are Ring and Linear. Defaults to `ttnn.Topology.Ring`.
+
+        Intermediate staging layouts:
+            On the ring path (Ring topology, scatter dim != 0) the op supports two layouts for its
+            intermediate buffer, and picks between them from the buffer it is handed:
+
+            * Contiguous (chunk-paged). The intermediate is a row-major, interleaved-DRAM staging
+              tensor whose page holds a whole chunk, so a chunk's tiles are contiguous at the
+              destination. The writer sends a chunk as one or more fused-unicast writes (one per
+              fabric packet, since a chunk may exceed a single packet's payload) instead of
+              scatter-writing tile by tile, and the reader reads it back in one coalesced
+              transaction instead of one per tile. Requires a companion penult intermediate, which
+              the op allocates alongside the intermediate unless you pass persistent buffers; to
+              pass your own, allocate both with reduce_scatter_minimal_async_create_intermediate_buffer.
+            * Tiled. The intermediate mirrors the input tensor's shape and tiled addressing, one tile
+              per page. This is the only layout available for Linear topology or scatter dim 0.
+
+            Selection rule:
+
+            * No persistent intermediate passed in persistent_output_buffers: the op allocates the
+              contiguous staging buffer itself and uses the contiguous path.
+            * A persistent intermediate passed in: whichever layout its TensorSpec matches. A buffer
+              matching neither layout is rejected with an error naming both.
+
+            The contiguous path mainly helps small datatypes. With bfloat8_b a tile is 1088 bytes, so
+            tile-granular DRAM traffic sits below the NoC-to-DRAM transaction-size knee (~2 KB) and
+            leaves bandwidth on the table; coalescing a whole chunk into one transaction roughly
+            doubles the intermediate readback throughput. Wider datatypes (bfloat16, float32) already
+            clear that knee per tile, so the gain there is smaller. Prefer the contiguous path unless
+            you have an existing input-shaped persistent buffer you need to keep using.
 
         Returns:
             ttnn.Tensor: the output tensor.
 
         Example:
 
-        )doc");
+        )doc",
+        &ttnn::experimental::reduce_scatter_minimal_async,
+        nb::arg("input_tensor"),
+        nb::arg("persistent_output_buffers") = nb::none(),
+        nb::arg("dim"),
+        nb::arg("multi_device_global_semaphore"),
+        nb::kw_only(),
+        nb::arg("barrier_semaphore") = nb::none(),
+        nb::arg("num_links") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("intermediate_memory_config") = nb::none(),
+        nb::arg("topology") = nb::cast(ttnn::ccl::Topology::Ring),
+        nb::arg("subdevice_id") = nb::none(),
+        nb::arg("cluster_axis") = nb::none(),
+        nb::arg("chunks_per_sync") = nb::none(),
+        nb::arg("num_workers_per_link") = nb::none(),
+        nb::arg("num_buffers_per_channel") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none());
+
+    ttnn::bind_function<"reduce_scatter_minimal_async_create_intermediate_buffer", "ttnn.experimental.">(
+        mod,
+        R"doc(
+        Allocates the persistent staging buffers for the contiguous ring reduce_scatter_minimal_async
+        fast path (Ring topology, scatter dim != 0).
+
+        On this path the intermediate is a chunk-paged, row-major, interleaved-DRAM staging tensor rather
+        than an input-shaped tensor, and the 2nd-last ring iteration stages one direction's contribution
+        into a second, smaller chunk-paged "penult" intermediate instead of scatter-writing it into the
+        tiled output tensor. Both must be allocated with the exact layout the op expects. This helper reuses the
+        op's own sizing so the returned tensors are guaranteed to match. Pass the result as
+        persistent_output_buffers = [result[0], output_tensor, result[1]] (intermediate at index 0,
+        penult intermediate at index 2; output_tensor is the caller's own persistent output). The `dim`, `topology`,
+        `cluster_axis`, and `compute_kernel_config` arguments must match those passed to
+        reduce_scatter_minimal_async.
+
+        Passing the returned intermediate is what selects the contiguous path; hand
+        reduce_scatter_minimal_async an input-shaped intermediate instead and it uses the tiled layout.
+        See the reduce_scatter_minimal_async docstring for the full selection rule and for when the
+        contiguous path is worth it (chiefly small datatypes such as bfloat8_b).
+
+        Raises if the configuration cannot use the contiguous path at all (Linear topology, or scatter
+        dim 0); there the intermediate has the input tensor's shape, can be allocated directly, and
+        needs no penult intermediate.
+
+        Returns:
+            List[ttnn.Tensor]: [intermediate_buffer, penult_intermediate_buffer], both allocated on the input
+            tensor's device.
+        )doc",
+        &ttnn::experimental::reduce_scatter_minimal_async_create_intermediate_buffer,
+        nb::arg("input_tensor"),
+        nb::arg("dim"),
+        nb::kw_only(),
+        nb::arg("topology") = nb::cast(ttnn::ccl::Topology::Ring),
+        nb::arg("cluster_axis") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::ccl

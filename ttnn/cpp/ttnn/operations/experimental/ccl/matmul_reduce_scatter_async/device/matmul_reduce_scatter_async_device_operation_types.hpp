@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -45,8 +45,8 @@ struct MatmulReduceScatterAsyncResult {
 };
 
 struct MatmulReduceScatterAsyncResultSpec {
-    TensorSpec mm;
-    TensorSpec reduce_scatter;
+    tt::tt_metal::TensorSpec mm;
+    tt::tt_metal::TensorSpec reduce_scatter;
 };
 
 struct MatmulReduceScatterAsyncInputs {

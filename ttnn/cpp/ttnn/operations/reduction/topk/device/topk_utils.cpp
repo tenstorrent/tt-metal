@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -60,10 +60,12 @@ std::optional<TopKCoreConfig> find_topk_core_config(
     const tt::tt_metal::CoreRange& core_range,
     uint32_t l1_size,
     uint32_t value_tile_size,
-    uint32_t index_tile_size) {
+    uint32_t index_tile_size,
+    uint32_t tile_width) {
     // Calculate the maximum number of cores available in the core grid
     const auto max_cores =
         (core_range.end_coord.y - core_range.start_coord.y - 1) * (core_range.end_coord.x - core_range.start_coord.x);
+    TT_FATAL(max_cores > 0, "Core grid must contain at least one core. Got core range: {}", core_range.str());
 
     // Calculate conservative starting split size:
     // 1. Divide width by tile width to get number of tiles
@@ -71,23 +73,39 @@ std::optional<TopKCoreConfig> find_topk_core_config(
     // 3. Convert back to elements by multiplying by tile width
     // This ensures we start with a split size that can utilize most available cores
     const uint32_t start_split_size =
-        static_cast<uint32_t>(width / tt::constants::TILE_WIDTH / largest_power_of_two(max_cores)) *
-        tt::constants::TILE_WIDTH;
+        static_cast<uint32_t>(width / tile_width / largest_power_of_two(max_cores)) * tile_width;
+
+    // The transposed intermediate CBs (c_2, c_4, c_6, and c_8 on local cores) all use bf16
+    // when the input format is bfp8/bfp4 to avoid shared-exponent precision loss during sort
+    // and inter-core transfer.  Use the larger of the two tile sizes for all value-holding
+    // CB cost estimates.
+    const uint32_t bf16_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
+    const uint32_t transposed_tile_size = std::max(value_tile_size, bf16_tile_size);
+
     // Search for optimal split size by trying powers of 2 from conservative start to max_dim
     for (uint32_t split_size = start_split_size; split_size <= max_dim; split_size *= 2) {
         // Calculate work distribution for this split size
+        TT_FATAL(
+            split_size != 0,
+            "Split size must be non-zero (got 0 for width={}, max_cores={}, max_dim={})",
+            width,
+            max_cores,
+            max_dim);
         const uint32_t rem = width % split_size;                      // Remainder after even division
         const uint32_t num_cores = (width / split_size) + (rem > 0);  // Cores needed (extra for remainder)
 
-        // Calculate memory costs for this configuration:
-        // Gather cost: Memory for collecting results from all cores (includes both value and index tiles)
-        // Factor of 2 accounts for intermediate storage during gather phase
-        const uint32_t memory_cost_gather = 2 * num_cores * (value_tile_size + index_tile_size);
-
-        // Local cost: Memory each core needs for its portion of the work
-        // Proportional to split_size converted to tiles
-        const uint32_t memory_cost_local =
-            (split_size / tt::constants::TILE_WIDTH) * (value_tile_size + index_tile_size);
+        // Per-core L1 footprint mirroring the multi-core factory's CBs: charge the gather/output
+        // buffers to a single core (they live on one core), not amortised across all cores.
+        const uint32_t Wt_final = (num_cores * std::max(k, tile_width)) / tile_width;
+        const uint32_t Wt_local = split_size / tile_width;
+        const uint32_t shared_cost = 4 * (value_tile_size + index_tile_size) +              // c_0,c_1 input
+                                     Wt_final * (transposed_tile_size + index_tile_size) +  // c_4,c_5 gathered
+                                     2 * index_tile_size;                                   // c_9 local-index out
+        const uint32_t final_core_cost =  // + c_8 value, c_6/c_7 workspace
+            shared_cost + 2 * value_tile_size + Wt_final * (transposed_tile_size + index_tile_size);
+        const uint32_t local_core_cost =  // + c_2/c_3 transposed, c_8 value
+            shared_cost + Wt_local * (transposed_tile_size + index_tile_size) + 2 * transposed_tile_size;
+        const uint32_t per_core_cost = std::max(final_core_cost, local_core_cost);
 
         // Extract core grid dimensions from the available range
         const uint32_t max_x = core_range.end_coord.x - core_range.start_coord.x;
@@ -117,12 +135,12 @@ std::optional<TopKCoreConfig> find_topk_core_config(
             }
         }
         // Comprehensive validation: check all requirements for a valid configuration
-        if (num_cores <= max_cores &&                                                        // Core count feasible
-            memory_cost_gather + (memory_cost_local * num_cores) < (l1_size * num_cores) &&  // Memory fits
-            num_cores > 1 &&                                                                 // Multi-core beneficial
-            split_size >= min_dim &&                                                         // Hardware minimum met
-            contiguous_cores_available &&                                                    // Can arrange cores
-            rem == 0) {  // Perfect division (no remainder)
+        if (num_cores <= max_cores &&      // Core count feasible
+            per_core_cost < l1_size &&     // Memory fits
+            num_cores > 1 &&               // Multi-core beneficial
+            split_size >= min_dim &&       // Hardware minimum met
+            contiguous_cores_available &&  // Can arrange cores
+            rem == 0) {                    // Perfect division (no remainder)
 
             // Create configuration with all the calculated parameters
             TopKCoreConfig config{};
@@ -133,8 +151,7 @@ std::optional<TopKCoreConfig> find_topk_core_config(
             // Calculate final input size after parallel processing:
             // Each core produces top-K results, so final size is num_cores * max(K, TILE_WIDTH)
             // TILE_WIDTH minimum ensures proper tile alignment
-            config.final_input_size =
-                static_cast<uint16_t>(num_cores * std::max(k, static_cast<uint32_t>(tt::constants::TILE_WIDTH)));
+            config.final_input_size = static_cast<uint16_t>(num_cores * std::max(k, tile_width));
 
             config.selected_x = static_cast<uint16_t>(selected_x);
             config.selected_y = static_cast<uint16_t>(selected_y);
@@ -172,10 +189,10 @@ bool verify_multi_core_cost(
     const tt::tt_metal::CoreRange& core_range,
     uint32_t l1_size,
     uint32_t value_tile_size,
-    uint32_t index_tile_size) {
-    // Attempt to find a valid configuration
-    const auto config =
-        find_topk_core_config(width, min_dim, max_dim, k, core_range, l1_size, value_tile_size, index_tile_size);
+    uint32_t index_tile_size,
+    uint32_t tile_width) {
+    const auto config = find_topk_core_config(
+        width, min_dim, max_dim, k, core_range, l1_size, value_tile_size, index_tile_size, tile_width);
     return config.has_value();
 }
 
@@ -206,7 +223,8 @@ bool verify_single_core_cost(const ttnn::Tensor& input_tensor, uint32_t k, bool 
     constexpr uint32_t cb_in_units = 2 * num_cb_unit;  // Input buffer size multiplier
 
     // Calculate number of tiles needed to store K elements
-    const uint32_t Ktiles = tt::div_up(k, tt::constants::TILE_WIDTH);
+    const uint32_t tile_width = input_tensor.tensor_spec().tile().get_width();
+    const uint32_t Ktiles = tt::div_up(k, tile_width);
 
     // Define circular buffer requirements for different stages:
     constexpr uint32_t input_cb_tile_count = cb_in_units;   // Input data streaming
@@ -223,10 +241,21 @@ bool verify_single_core_cost(const ttnn::Tensor& input_tensor, uint32_t k, bool 
     const uint32_t value_tile_size = tt::tile_size(value_cb_data_format);
     const uint32_t index_tile_size = tt::tile_size(index_cb_data_format);
 
-    // Total memory cost: sum of all circular buffers, each storing both values and indices
+    // Transposed (c_2) and result-prep (c_4) CBs use bf16 only when input is bfp8/bfp4 (those
+    // are upcast to bf16 for the sort). fp32 is kept at full width for the exact fp32 sort, so
+    // its compute buffers are fp32-sized — modeling that here lets large-K fp32 be rejected
+    // cleanly instead of overflowing L1 at CB-allocation time.
+    const uint32_t compute_tile_size =
+        (value_cb_data_format == tt::DataFormat::Bfp8_b || value_cb_data_format == tt::DataFormat::Bfp4_b)
+            ? tt::tile_size(tt::DataFormat::Float16_b)
+            : value_tile_size;
+
+    // Total memory cost: input/output buffers use value_tile_size, intermediate compute
+    // buffers (transposed + result_prep) use compute_tile_size (may be larger).
     const uint32_t memory_cost_local =
-        (input_cb_tile_count + transposed_cb_tile_count + result_prep_cb_tile_count + output_cb_tile_count) *
-        (value_tile_size + index_tile_size);
+        (input_cb_tile_count * (value_tile_size + index_tile_size)) +
+        ((transposed_cb_tile_count + result_prep_cb_tile_count) * (compute_tile_size + index_tile_size)) +
+        (output_cb_tile_count * (value_tile_size + index_tile_size));
 
     // Verify that total memory requirement fits within single core's L1 cache
     return memory_cost_local < device->l1_size_per_core();

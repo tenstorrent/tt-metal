@@ -1,10 +1,9 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -13,10 +12,12 @@
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
 
+// forward declarations
 namespace tt::tt_metal {
 class IDevice;
+class GlobalSemaphore;
+class GlobalSemaphoreImpl;
 }  // namespace tt::tt_metal
 
 namespace tt::tt_metal {
@@ -29,11 +30,16 @@ public:
     GlobalSemaphore(
         IDevice* device, CoreRangeSet&& cores, uint32_t initial_value, BufferType buffer_type = BufferType::L1);
 
-    GlobalSemaphore(const GlobalSemaphore&) = default;
-    GlobalSemaphore& operator=(const GlobalSemaphore&) = default;
+    // Internal constructor (internal use only)
+    GlobalSemaphore(GlobalSemaphoreImpl&& impl);
 
-    GlobalSemaphore(GlobalSemaphore&&) noexcept = default;
-    GlobalSemaphore& operator=(GlobalSemaphore&&) noexcept = default;
+    GlobalSemaphore(const GlobalSemaphore& other);
+    GlobalSemaphore& operator=(const GlobalSemaphore& other);
+
+    GlobalSemaphore(GlobalSemaphore&& other) noexcept;
+    GlobalSemaphore& operator=(GlobalSemaphore&& other) noexcept;
+
+    ~GlobalSemaphore();
 
     IDevice* device() const;
 
@@ -42,16 +48,10 @@ public:
     void reset_semaphore_value(uint32_t reset_value) const;
 
     static constexpr auto attribute_names = std::forward_as_tuple("cores", "buffer_type");
-    auto attribute_values() const { return std::make_tuple(this->cores_, this->buffer_.get_buffer()->buffer_type()); }
+    std::tuple<CoreRangeSet, BufferType> attribute_values() const;
 
 private:
-    void setup_buffer(uint32_t initial_value, BufferType buffer_type);
-
-    // GlobalSemaphore is implemented as a wrapper around a sharded buffer
-    // This can be updated in the future to be its own container with optimized dispatch functions
-    distributed::AnyBuffer buffer_;
-    IDevice* device_;
-    CoreRangeSet cores_;
+    std::unique_ptr<GlobalSemaphoreImpl> pimpl_;
 };
 
 }  // namespace tt::tt_metal

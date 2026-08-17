@@ -1,0 +1,488 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+from typing import Optional
+
+from loguru import logger
+
+import ttnn
+
+# NOTE: This file is forked from models/common/modules/tt_ccl.py
+#       This is done to include logic for divifing the grid of cores for ring attention
+#       One col is taken for the CCL communication of the op
+
+# =============================================================================
+# CCL tuning defaults - shared across all TTTv2 modules
+# =============================================================================
+
+# Default number of chunks per synchronization barrier in CCL operations.
+# Higher values reduce sync overhead but increase latency per chunk.
+CCL_CHUNKS_PER_SYNC = 10
+
+# Default number of worker threads per Ethernet link for CCL operations.
+CCL_NUM_WORKERS_PER_LINK = 2
+
+# Default number of double-buffered channels per CCL link.
+CCL_NUM_BUFFERS_PER_CHANNEL = 2
+
+# =============================================================================
+# TT_CCL cache - one instance per mesh_device (semaphores are hardware resources)
+# =============================================================================
+
+
+_tt_ccl_cache: dict[int, "TT_CCL"] = {}
+
+
+def get_tt_ccl(mesh_device: ttnn.MeshDevice) -> "TT_CCL":
+    """Get or create TT_CCL for mesh_device (cached per device id)."""
+    mesh_id = mesh_device.id()
+    if mesh_id not in _tt_ccl_cache:
+        _tt_ccl_cache[mesh_id] = TT_CCL(mesh_device)
+    return _tt_ccl_cache[mesh_id]
+
+
+def clear_tt_ccl_cache():
+    """Clear cache (for testing)."""
+    _tt_ccl_cache.clear()
+
+
+# =============================================================================
+# TT_CCL class
+# =============================================================================
+
+
+def create_global_semaphores(mesh_device, cores, initial_value):
+    # create global semaphore handles
+    ccl_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, cores, initial_value) for _ in range(2)]
+    return ccl_semaphore_handles
+
+
+class TT_CCL:
+    def __init__(
+        self,
+        mesh_device,
+    ):
+        self.mesh_device = mesh_device
+        full_compute_grid = self.mesh_device.compute_with_storage_grid_size()
+        self.sub_device_crs = ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(
+                        full_compute_grid.x - 1,
+                        full_compute_grid.y - 1,
+                    ),
+                )
+            }
+        )
+
+        self.ring_attention_ccl_core_grid_offset = (full_compute_grid.x - 1, 0)
+
+        # create global semaphore handles
+        self.ring_attention_ccl_semaphore_handles = create_global_semaphores(mesh_device, self.sub_device_crs, 0)
+
+        self.barrier_semaphore_idx = [0, 0, 0]
+        self.barrier_semaphore_handles = [[], [], []]
+
+        self.ag_semaphores_idx = [0, 0, 0]
+        self.ag_semaphore_handles = [[], [], []]
+
+        self.rs_semaphores_idx = [0, 0, 0]
+        self.rs_semaphore_handles = [[], [], []]
+
+        # cluster-axis-0, cluster-axis-1, no-cluster-axis
+        for i in range(3):
+            # double buffered semaphores
+            for _ in range(2):
+                self.barrier_semaphore_handles[i].append(
+                    ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0)
+                )
+
+                self.ag_semaphore_handles[i].append(
+                    [ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0) for _ in range(2)]
+                )
+
+                self.rs_semaphore_handles[i].append(
+                    [ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0) for _ in range(3)]
+                )
+
+        # Single, stable-address reduce_scatter INTERMEDIATE accumulator, shared by ALL layers'
+        # shared experts. Giving the shared-expert reduce_scatter a persistent, fixed-address
+        # intermediate (a) keeps it alive across the shared-expert||dispatch sub-device overlap so
+        # the concurrent dispatch can't reuse its freed slot mid-flight, and (b) fixes the DRAM
+        # layout every iteration so the op's fabric reduction order is identical -> bit-exact
+        # determinism. One buffer for the whole model (layers share the shape and run sequentially)
+        # keeps the memory cost flat. See TtSharedExpert.forward.
+        self.shared_rs_intermediate = None
+
+        # Keepalive for the shared-expert reduce_scatter INPUT (output_full). The overlapped
+        # dispatch must not reuse this buffer's DRAM slot mid-flight, so it is held until the next
+        # shared-expert forward. Stored here (one slot, shared across all layers that run
+        # sequentially) rather than on each per-layer TtSharedExpert instance — a per-instance
+        # reference would never be released (every layer object stays alive for the whole model),
+        # leaking one RS input per layer. See set_shared_rs_input_keepalive / TtSharedExpert.forward.
+        self.shared_rs_input_keepalive = None
+
+        # Persistent ring-attention buffers shared by every layer's MLA, keyed by their shape
+        # signature. One set for the whole model. See get_mla_ring_attention_buffers.
+        self.mla_ring_attention_buffers: dict[tuple, dict] = {}
+
+        # Persistent chunked-prefill (ring_mla) gathered-KV scratch buffers shared by every layer's
+        # MLA, keyed by shape signature. See get_mla_chunked_kv_buffer.
+        self.mla_chunked_kv_buffers: dict[tuple, "ttnn.Tensor"] = {}
+
+        # Persistent full-capacity sparse-MLA KV-prefix gather buffers shared by every layer's MLA.
+        # See get_mla_sparse_kv_gather_buffer.
+        self.mla_sparse_kv_gather_buffers: dict[tuple, "ttnn.Tensor"] = {}
+
+        # Persistent TP high-bandwidth all-gather outputs shared by MLA layers.  Their sequence
+        # capacity is the fixed prefill chunk length, not the growing KV-cache length.
+        self.mla_high_bw_all_gather_buffers: dict[tuple, "ttnn.Tensor"] = {}
+
+        # Persistent ring-indexer gathered-K scratch buffers shared by every layer's DSA indexer,
+        # keyed by shape signature. See get_indexer_ring_k_buffer.
+        self.indexer_ring_k_buffers: dict[tuple, "ttnn.Tensor"] = {}
+
+    def get_mla_ring_attention_buffers(
+        self,
+        *,
+        seq_len,
+        kv_lora_rank,
+        qk_rope_head_dim,
+        qk_head_dim,
+        v_head_dim,
+        num_heads,
+        tp_axis,
+        dtype=ttnn.bfloat8_b,
+    ):
+        """Lazily allocate (once per mesh) and return the persistent ring-attention buffers shared by
+        every layer's MLA: the all-gather K/V output buffers plus the dummy joint_q/kv/v placeholders
+        (seq_len=0) that ring_joint_scaled_dot_product_attention requires. All MLA layers share one
+        config + seq_len + mesh, so a single set is reused at a stable address across layers -- layers
+        run sequentially (no in-flight overlap), and the fixed address also keeps the op's fabric
+        reduction order identical for bit-exact determinism. Cached by shape signature so distinct
+        configs/seq_lens on the same mesh get their own set. Returns a dict of ttnn.Tensor."""
+        import torch
+
+        key = (seq_len, kv_lora_rank, qk_rope_head_dim, qk_head_dim, v_head_dim, num_heads, tp_axis, dtype)
+        if key in self.mla_ring_attention_buffers:
+            return self.mla_ring_attention_buffers[key]
+
+        mesh_shape = tuple(self.mesh_device.shape)
+        num_heads_local = num_heads // self.mesh_device.shape[tp_axis]
+        v_shard_dims = [None, None]
+        v_shard_dims[tp_axis] = 1  # TP heads
+        k_shard_dims = [None, None]  # replicated across the mesh
+        joint_shard_dims = [None, None]
+        joint_shard_dims[tp_axis] = 1  # shard on head dimension
+
+        def _alloc(tensor, *, shard_dims=None, replicate=False):
+            mapper = (
+                ttnn.ReplicateTensorToMesh(self.mesh_device)
+                if replicate
+                else ttnn.ShardTensor2dMesh(self.mesh_device, mesh_shape=mesh_shape, dims=shard_dims)
+            )
+            return ttnn.from_torch(
+                tensor,
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=dtype,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=mapper,
+            )
+
+        assert num_heads_local * self.mesh_device.shape[tp_axis] == num_heads
+        buffers = {
+            "persistent_k_output_buffer": _alloc(
+                torch.zeros(1, 1, seq_len, kv_lora_rank + qk_rope_head_dim), shard_dims=k_shard_dims
+            ),
+            "persistent_v_output_buffer": _alloc(
+                torch.zeros(1, num_heads, seq_len, v_head_dim), shard_dims=v_shard_dims
+            ),
+            "joint_q": _alloc(torch.zeros(1, num_heads, 0, qk_head_dim), shard_dims=joint_shard_dims),
+            "joint_kv": _alloc(torch.zeros(1, 1, 0, kv_lora_rank + qk_rope_head_dim), replicate=True),
+            "joint_v": _alloc(torch.zeros(1, num_heads, 0, v_head_dim), shard_dims=joint_shard_dims),
+        }
+        self.mla_ring_attention_buffers[key] = buffers
+        return buffers
+
+    def get_mla_chunked_kv_buffer(self, *, cache_batch, seq_len, kvpe_dim, dtype=ttnn.bfloat8_b):
+        """Lazily allocate (once per mesh) and return the combined gathered-KV scratch buffer used by
+        the chunked-prefill ring_mla op (persistent_output_buffer_kv). It's scratch -- each layer's
+        gather overwrites it, it holds no per-layer state -- and uniform across layers (cache_batch =
+        slot_num*layer_num, seq_len, mesh are all fixed for a model), so one buffer is shared by every
+        layer's MLA instead of re-allocating a full slot_num*layer_num buffer per layer. Replicated
+        across the mesh ([None, None]); cached by shape signature."""
+        import torch
+
+        key = (cache_batch, seq_len, kvpe_dim, dtype)
+        if key not in self.mla_chunked_kv_buffers:
+            self.mla_chunked_kv_buffers[key] = ttnn.from_torch(
+                torch.zeros(cache_batch, 1, seq_len, kvpe_dim),
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=dtype,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=[None, None]
+                ),
+            )
+        return self.mla_chunked_kv_buffers[key]
+
+    def get_mla_sparse_kv_gather_buffer(self, *, seq_len, row_width, dtype, layout):
+        """Return the full-capacity output scratch for sparse MLA's SP KV-prefix gather.
+
+        The sparse cache has a fixed maximum sequence length. Each layer gathers one selected cache slot
+        into this replicated batch-1 scratch, overwriting it before sparse SDPA consumes the selected
+        indices. Layers run serially, so one stable-address buffer per cache representation is sufficient
+        for the model and avoids per-prefix allocations.
+        """
+        import torch
+
+        key = (seq_len, row_width, dtype, layout)
+        if key not in self.mla_sparse_kv_gather_buffers:
+            self.mla_sparse_kv_gather_buffers[key] = ttnn.from_torch(
+                torch.zeros(1, 1, seq_len, row_width),
+                device=self.mesh_device,
+                layout=layout,
+                dtype=dtype,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+        return self.mla_sparse_kv_gather_buffers[key]
+
+    def get_mla_high_bw_all_gather_buffer(self, *, name, shape, dtype, layout):
+        """Return an MLA TP all-gather output allocated during model construction.
+
+        Layers execute serially, so one buffer for each fixed activation shape can be shared across the
+        model.  ``shape`` is the maximum (fixed) prefill chunk shape seen by the corresponding gather.
+        """
+        key = (name, tuple(shape), dtype, layout)
+        if key not in self.mla_high_bw_all_gather_buffers:
+            self.mla_high_bw_all_gather_buffers[key] = ttnn.empty(
+                shape,
+                dtype=dtype,
+                layout=layout,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        return self.mla_high_bw_all_gather_buffers[key]
+
+    def get_indexer_ring_k_buffer(self, *, local_k, sp_axis):
+        """Return the persistent full-K output buffer for the fused ring indexer.
+
+        ``local_k`` is the persistent local cache [B,1,T/sp,D]. In indexed mode the fused op gathers
+        only the selected slot over ``sp_axis`` into [1,1,T,D] while scoring arriving bands. All layers
+        execute serially and share the same index-cache geometry, so one stable-address scratch buffer
+        per shape/dtype is sufficient for the whole model instead of allocating a full gathered cache
+        per layer.
+        """
+        import torch
+
+        local_shape = tuple(local_k.shape)
+        global_seq_len = local_shape[2] * self.mesh_device.shape[sp_axis]
+        key = (global_seq_len, local_shape[3], local_k.dtype, sp_axis)
+        if key not in self.indexer_ring_k_buffers:
+            self.indexer_ring_k_buffers[key] = ttnn.from_torch(
+                torch.zeros(1, 1, global_seq_len, local_shape[3]),
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=local_k.dtype,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+        return self.indexer_ring_k_buffers[key]
+
+    def get_shared_rs_intermediate(self, input_tensor, topology):
+        """Lazily allocate (once per mesh) and return the shared reduce_scatter intermediate
+        accumulator. The Ring tiled path requires the persistent intermediate to have the same
+        shape, dtype, and layout as its input. The Linear path retains its double-sized leading
+        dimension for forward/backward halves. Interleaved DRAM, replicated across the mesh. A
+        single buffer is reused at a stable address by every shared-expert reduce_scatter — all
+        layers share the same shape and run sequentially, so one buffer for the whole model is safe."""
+        import torch
+
+        if self.shared_rs_intermediate is None:
+            intermediate_shape = list(input_tensor.shape)
+            if topology == ttnn.Topology.Linear:
+                intermediate_shape = [2] + intermediate_shape
+            self.shared_rs_intermediate = ttnn.from_torch(
+                torch.zeros(intermediate_shape),
+                device=self.mesh_device,
+                layout=input_tensor.layout,
+                dtype=input_tensor.dtype,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+        return self.shared_rs_intermediate
+
+    def set_shared_rs_input_keepalive(self, input_tensor):
+        """Hold the shared-expert reduce_scatter INPUT alive until the next shared-expert forward,
+        so the concurrent (overlapped) dispatch cannot reuse its DRAM slot mid-flight. A single slot
+        shared across all sequentially-run layers: each layer's forward overwrites it, releasing the
+        previous layer's input (its refcount drops to zero and the DRAM is freed). This must live on
+        tt_ccl (one instance for the whole model), NOT on the per-layer TtSharedExpert object — the
+        latter would pin one RS input per layer for the model's lifetime, leaking DRAM every layer."""
+        self.shared_rs_input_keepalive = input_tensor
+
+    def get_and_cycle_barrier_semaphore_handle(self, cluster_axis=None):
+        semaphore_index = 2 if cluster_axis is None else cluster_axis
+        current_idx = self.barrier_semaphore_idx[semaphore_index]
+        self.barrier_semaphore_idx[semaphore_index] = (current_idx + 1) % 2
+        return self.barrier_semaphore_handles[semaphore_index][current_idx]
+
+    def get_and_cycle_ag_semaphore_handles(self, cluster_axis=None):
+        semaphore_index = 2 if cluster_axis is None else cluster_axis
+        current_idx = self.ag_semaphores_idx[semaphore_index]
+        self.ag_semaphores_idx[semaphore_index] = (current_idx + 1) % 2
+        return self.ag_semaphore_handles[semaphore_index][current_idx]
+
+    def get_and_cycle_rs_semaphore_handles(self, cluster_axis=None):
+        semaphore_index = 2 if cluster_axis is None else cluster_axis
+        current_idx = self.rs_semaphores_idx[semaphore_index]
+        self.rs_semaphores_idx[semaphore_index] = (current_idx + 1) % 2
+        return self.rs_semaphore_handles[semaphore_index][current_idx]
+
+    def get_num_links(self, cluster_axis=None):
+        """Get the number of available Ethernet links for CCL operations on this mesh device."""
+        return get_num_links(self.mesh_device, cluster_axis)
+
+
+# =============================================================================
+# Topology auto-detection
+# =============================================================================
+
+
+# todo)) work with the CCL team to find opportunity to simplify this --> e.g., build into TTNN APIs?
+def default_topology(mesh_device: ttnn.MeshDevice) -> Optional[ttnn.Topology]:
+    """Auto-detect CCL topology based on cluster type and device count."""
+    num_devices = mesh_device.get_num_devices()
+    if num_devices == 8 and ttnn.cluster.get_cluster_type() in [
+        ttnn.cluster.ClusterType.T3K,
+        ttnn.cluster.ClusterType.GALAXY,
+    ]:
+        # NOTE: we always want to do ring if it is available
+        return ttnn.Topology.Ring
+    elif num_devices > 1:
+        # NOTE: this should be a fallback when the ring is not available
+        return ttnn.Topology.Linear
+    return None
+
+
+# Per-axis CCL topology. Mesh dim 0 = rows = "Y" = sp_axis; dim 1 = cols = "X" = tp_axis.
+# A torus fabric physically wraps a given axis; Ring is only valid on a wrapped axis (otherwise the
+# collective hangs forever on a wrap link the fabric does not service — get_usable_topology() keeps
+# Ring because the coords span the axis). Reading the *active* fabric config keeps the returned
+# topology consistent with whatever was opened, so a (descriptor, fabric, topology) mismatch can't
+# silently ask Ring on an unwrapped axis.
+_FABRIC_PER_AXIS_TOPOLOGY = {
+    # fabric_config: (sp_topology [dim 0 / Y], tp_topology [dim 1 / X])
+    ttnn.FabricConfig.FABRIC_2D_TORUS_X: (ttnn.Topology.Linear, ttnn.Topology.Ring),
+    ttnn.FabricConfig.FABRIC_2D_TORUS_Y: (ttnn.Topology.Ring, ttnn.Topology.Linear),
+    ttnn.FabricConfig.FABRIC_2D_TORUS_XY: (ttnn.Topology.Ring, ttnn.Topology.Ring),
+    ttnn.FabricConfig.FABRIC_1D_RING: (ttnn.Topology.Ring, ttnn.Topology.Linear),
+}
+
+
+def per_axis_topology(
+    fabric_config: Optional[ttnn.FabricConfig] = None,
+) -> tuple[ttnn.Topology, ttnn.Topology]:
+    """Return the per-axis CCL topology ``(sp_topology, tp_topology)`` for the fabric.
+
+    ``sp_topology`` drives cluster_axis=0 (rows / Y) collectives, ``tp_topology`` drives
+    cluster_axis=1 (cols / X). Ring is returned only for an axis the fabric physically wraps; every
+    other axis is Linear. When ``fabric_config`` is None the currently-active fabric is queried so
+    the result always matches the opened fabric.
+    """
+    if fabric_config is None:
+        fabric_config = ttnn.get_fabric_config()
+    mapped = _FABRIC_PER_AXIS_TOPOLOGY.get(fabric_config)
+    if mapped is not None:
+        return mapped
+    # Unknown fabric → all-Linear. If the fabric name looks ring/torus-capable, this means a wrap-
+    # capable fabric was opened but has no per-axis mapping here: collectives would silently run
+    # all-Linear (correct but no ring speedup, and a likely sign the mapping needs updating). Warn
+    # loudly rather than degrade silently.
+    name = getattr(fabric_config, "name", str(fabric_config))
+    if "TORUS" in name.upper() or "RING" in name.upper():
+        logger.warning(
+            f"per_axis_topology: fabric {name} is ring/torus-capable but has no entry in "
+            "_FABRIC_PER_AXIS_TOPOLOGY; defaulting to (Linear, Linear) so no axis will ring. "
+            "Add it to the mapping if a ring topology is intended."
+        )
+    return (ttnn.Topology.Linear, ttnn.Topology.Linear)
+
+
+# =============================================================================
+# Device name / link count helpers (copied from TTTv1 ccl.py + model_config.py
+# to avoid importing from tt_transformers)
+# =============================================================================
+
+
+def _determine_device_name(mesh_device: ttnn.MeshDevice) -> str:
+    """Determine device name based on number of devices and architecture."""
+    num_devices = mesh_device.get_num_devices() if mesh_device else 0
+    arch_name = ttnn.get_arch_name()
+    dram_grid_size = mesh_device.dram_grid_size() if mesh_device else None
+
+    if num_devices == 0:
+        return "CPU"
+
+    if "blackhole" in arch_name:
+        dict_device_names = {
+            1: "P100" if dram_grid_size and dram_grid_size.x == 7 else "P150",
+            2: "P300",
+            4: "P150x4",
+            8: "P150x8",
+            32: "BHGLX",
+        }
+    elif "wormhole_b0" in arch_name:
+        dict_device_names = {
+            1: "N150",
+            2: "N300",
+            4: "N150x4",
+            8: "T3K",
+            32: "TG",
+        }
+    else:
+        raise ValueError(f"Unsupported architecture: {arch_name}")
+
+    if num_devices in dict_device_names:
+        return dict_device_names[num_devices]
+    raise ValueError(f"Unsupported number of devices: {num_devices} for {arch_name}")
+
+
+def get_num_links(mesh_device: ttnn.MeshDevice, cluster_axis: int | None = None) -> int:
+    """
+    Get the number of available Ethernet links for CCL operations.
+
+    Args:
+        mesh_device: The mesh device to query.
+        cluster_axis: Optional cluster axis to query links for.
+            - 0: vertical axis (North-South).
+            - 1: horizontal axis (East-West).
+            - None: minimum across all axes.
+
+    Returns:
+        int: The number of available links.
+    """
+    device_name = _determine_device_name(mesh_device)
+    link_dict = {
+        "P100": (0, 0),
+        "P150": (0, 0),
+        "N150": (0, 0),
+        "N300": (1, 1),
+        "T3K": (1, 1),
+        "P150x4": (2, 2),
+        "P150x8": (2, 2),
+        "P300": (2, 2),
+        "BHGLX": (2, 2),  # NOTE: Possible increase to 4 when it's enabled
+        "TG": (4, 4),
+        "N150x4": (1, 1),
+    }
+    device_links = link_dict[device_name]
+    if cluster_axis is None:
+        return min(device_links)
+    if cluster_axis in (0, 1):
+        return device_links[cluster_axis]
+    return min(device_links)

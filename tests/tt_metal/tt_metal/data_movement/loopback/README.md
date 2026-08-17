@@ -39,3 +39,6 @@ Each test case has multiple runs, and each run has a unique runtime host id, ass
 
 1. Loopback Packet Sizes: Tests loopback
 2. Loopback Directed Ideal: Tests the most optimal data movement setup on the core itself that reduces the number of transactions while maximizing transaction size to minimize the effects of initialization overhead.
+
+## Quasar Notes
+`TensixDataMovementLoopbackPacketSizes` and `TensixDataMovementLoopbackDirectedIdeal` include Quasar-specific code paths inside `GenericMeshDeviceFixture`. Run with `TT_METAL_SLOW_DISPATCH_MODE=1` and the Quasar simulator.

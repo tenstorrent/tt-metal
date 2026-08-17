@@ -1,15 +1,17 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "rand_nanobind.hpp"
 
 #include <cstdint>
+#include <optional>
 
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/optional.h>
 #include <nanobind/stl/string.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "rand.hpp"
 
 namespace ttnn::operations::rand {
@@ -17,13 +19,15 @@ void bind_rand_operation(nb::module_& mod) {
     std::string doc =
         R"doc(
         Generates a tensor with the given shape, filled with random values from a uniform distribution.
-        based on the specified data type:
+        Output semantics depend on the specified data type:
 
-        - DataType.float32 / bfloat16 / bfloat4_b / bfloat8_b:
-            Floating-point values in range [0.0, 1.0)
+        - DataType.float32 / bfloat16:
+            Values are generated natively in the half-open range [`low`, `high`).
 
-        - Integer data types:
-            Not supported for uniform random generation.
+        - DataType.bfloat4_b / bfloat8_b / int8 / int32 / uint16 / uint32:
+            These legacy outputs are generated in float32 and then typecast. Typecast rounding applies, so the
+            converted values are not guaranteed to remain in [`low`, `high`). Integer output is not a discrete
+            uniform distribution. DataType.uint8 and fp8_e4m3 are not supported.
 
         Args:
             shape (list[int]) - a list of integers defining the shape of the output tensor.
@@ -37,34 +41,29 @@ void bind_rand_operation(nb::module_& mod) {
             high (float, optional): The upper bound of the range (exclusive).
             seed (int, optional): An optional seed to initialize the random number generator
                                 for reproducible results. Defaults to 0.
+            mesh_mapper (ttnn.MeshMapperConfig, optional): Distribution strategy for multi-device tensors.
+                Use ``ttnn.MeshMapperConfig([ttnn.PlacementShard(dim)])`` to shard across mesh devices along the
+                given tensor dimension, or ``ttnn.MeshMapperConfig([ttnn.PlacementReplicate()])`` to replicate.
+                When sharding, each device generates unique random values; when replicating with a fixed seed,
+                all devices produce the same values. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: A tensor with specified shape, dtype, and layout containing random values.
         )doc";
 
-    using OperationType = decltype(ttnn::rand);
-    bind_registered_operation(
+    ttnn::bind_function<"rand">(
         mod,
-        ttnn::rand,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Shape& shape,
-               MeshDevice& device,
-               const DataType dtype,
-               const Layout layout,
-               const MemoryConfig& memory_config,
-               float from,
-               float to,
-               uint32_t seed) { return self(shape, device, dtype, layout, memory_config, from, to, seed); },
-            nb::arg("shape"),
-            nb::arg("device"),
-            nb::kw_only(),
-            nb::arg("dtype") = nb::cast(DataType::BFLOAT16),
-            nb::arg("layout") = nb::cast(Layout::TILE),
-            nb::arg("memory_config") = nb::cast(ttnn::DRAM_MEMORY_CONFIG),
-            nb::arg("low") = 0.0f,
-            nb::arg("high") = 1.0f,
-            nb::arg("seed") = 0});
+        doc.c_str(),
+        &ttnn::rand,
+        nb::arg("shape"),
+        nb::arg("device"),
+        nb::kw_only(),
+        nb::arg("dtype") = nb::cast(DataType::BFLOAT16),
+        nb::arg("layout") = nb::cast(Layout::TILE),
+        nb::arg("memory_config") = nb::cast(ttnn::DRAM_MEMORY_CONFIG),
+        nb::arg("low") = 0.0f,
+        nb::arg("high") = 1.0f,
+        nb::arg("seed") = 0,
+        nb::arg("mesh_mapper") = nb::none());
 }
 }  // namespace ttnn::operations::rand

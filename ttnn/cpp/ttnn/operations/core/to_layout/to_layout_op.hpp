@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -15,15 +15,14 @@
 #include "ttnn/core.hpp"
 #include "ttnn/types.hpp"
 
-namespace ttnn::operations::core {
+namespace ttnn {
 
-struct ToLayout {
-    static Tensor invoke(
-        const ttnn::Tensor& tensor_arg,
-        ttnn::Layout layout,
-        const std::optional<ttnn::DataType>& dtype = std::nullopt,
-        const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
-};
+Tensor to_layout(
+    const Tensor& tensor_arg,
+    Layout layout,
+    const std::optional<DataType>& dtype = std::nullopt,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    float pad_value = 0.0f);
 
-}  // namespace ttnn::operations::core
+}  // namespace ttnn

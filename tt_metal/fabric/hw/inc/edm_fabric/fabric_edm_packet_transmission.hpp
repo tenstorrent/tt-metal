@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,7 +13,7 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_ct_args.hpp"
 
 // If the hop/distance counter equals to the below value, it indicates that it has
-// arrived at (atleast one of) the intended destination(s)
+// arrived at (at least one of) the intended destination(s)
 static constexpr size_t DESTINATION_HOP_COUNT = 1;
 // TODO: make 0 and the associated field to num mcast destinations
 static constexpr size_t LAST_MCAST_DESTINATION = 1;
@@ -22,18 +22,17 @@ FORCE_INLINE void print_pkt_hdr_routing_fields(volatile tt::tt_fabric::PacketHea
 #ifdef DEBUG_PRINT_ENABLED
     switch (packet_start->chip_send_type) {
         case tt::tt_fabric::CHIP_UNICAST: {
-            DPRINT << "C_UNI: dist:"
-                   << (uint32_t)(packet_start->routing_fields.value & tt::tt_fabric::RoutingFields::HOP_DISTANCE_MASK)
-                   << "\n";
+            DPRINT(
+                "C_UNI: dist:{}\n",
+                (uint32_t)(packet_start->routing_fields.value & tt::tt_fabric::RoutingFields::HOP_DISTANCE_MASK));
             break;
         }
         case tt::tt_fabric::CHIP_MULTICAST: {
-            DPRINT << "C_MCST: dist:"
-                   << (uint32_t)(packet_start->routing_fields.value & tt::tt_fabric::RoutingFields::HOP_DISTANCE_MASK)
-                   << ", rng:"
-                   << (uint32_t)((packet_start->routing_fields.value & tt::tt_fabric::RoutingFields::RANGE_MASK) >>
-                                 tt::tt_fabric::RoutingFields::START_DISTANCE_FIELD_BIT_WIDTH)
-                   << "\n";
+            DPRINT(
+                "C_MCST: dist:{}, rng:{}\n",
+                (uint32_t)(packet_start->routing_fields.value & tt::tt_fabric::RoutingFields::HOP_DISTANCE_MASK),
+                (uint32_t)((packet_start->routing_fields.value & tt::tt_fabric::RoutingFields::RANGE_MASK) >>
+                           tt::tt_fabric::RoutingFields::START_DISTANCE_FIELD_BIT_WIDTH));
             break;
         }
     };
@@ -42,7 +41,7 @@ FORCE_INLINE void print_pkt_hdr_routing_fields(volatile tt::tt_fabric::PacketHea
 
 FORCE_INLINE void print_pkt_hdr_routing_fields(volatile tt::tt_fabric::LowLatencyPacketHeader* const packet_start) {
 #ifdef DEBUG_PRINT_ENABLED
-    DPRINT << "ROUTE:" << packet_start->routing_fields.value << "\n";
+    DPRINT("ROUTE:{}\n", packet_start->routing_fields.value);
 #endif
 }
 
@@ -51,11 +50,13 @@ FORCE_INLINE void print_pkt_header_noc_fields(volatile T* const packet_start) {
 #ifdef DEBUG_PRINT_ENABLED
     switch (packet_start->noc_send_type) {
         case tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE: {
-            DPRINT << "N_WR addr:" << (uint64_t)packet_start->command_fields.unicast_write.noc_address << "\n";
+            DPRINT("N_WR addr:{}\n", (uint64_t)packet_start->command_fields.unicast_write.noc_address);
         } break;
         case tt::tt_fabric::NocSendType::NOC_UNICAST_ATOMIC_INC: {
-            DPRINT << "N_WR addr:" << (uint64_t)packet_start->command_fields.unicast_seminc.noc_address
-                   << ", val:" << (uint32_t)packet_start->command_fields.unicast_seminc.val << "\n";
+            DPRINT(
+                "N_WR addr:{}, val:{}\n",
+                (uint64_t)packet_start->command_fields.unicast_seminc.noc_address,
+                (uint32_t)packet_start->command_fields.unicast_seminc.val);
 
         } break;
         default:
@@ -68,10 +69,12 @@ FORCE_INLINE void print_pkt_header_noc_fields(volatile T* const packet_start) {
 FORCE_INLINE void print_pkt_header(volatile tt::tt_fabric::PacketHeader* const packet_start) {
 #ifdef DEBUG_PRINT_ENABLED
     auto const& header = *packet_start;
-    DPRINT << "PKT: nsnd_t:" << (uint32_t)packet_start->noc_send_type
-           << ", csnd_t:" << (uint32_t)packet_start->chip_send_type
-           << ", src_chip:" << (uint32_t)packet_start->src_ch_id
-           << ", payload_size_bytes:" << (uint32_t)packet_start->payload_size_bytes << "\n";
+    DPRINT(
+        "PKT: nsnd_t:{} csnd_t:{} src_chip:{} payload_size_bytes:{}\n",
+        (uint32_t)packet_start->noc_send_type,
+        (uint32_t)packet_start->chip_send_type,
+        (uint32_t)packet_start->src_ch_id,
+        (uint32_t)packet_start->payload_size_bytes);
     print_pkt_hdr_routing_fields(packet_start);
     print_pkt_header_noc_fields(packet_start);
 #endif
@@ -80,9 +83,11 @@ FORCE_INLINE void print_pkt_header(volatile tt::tt_fabric::PacketHeader* const p
 FORCE_INLINE void print_pkt_header(volatile tt::tt_fabric::LowLatencyPacketHeader* const packet_start) {
 #ifdef DEBUG_PRINT_ENABLED
     auto const& header = *packet_start;
-    DPRINT << "PKT: nsnd_t:" << (uint32_t)packet_start->noc_send_type
-           << ", src_chip:" << (uint32_t)packet_start->src_ch_id
-           << ", payload_size_bytes:" << (uint32_t)packet_start->payload_size_bytes << "\n";
+    DPRINT(
+        "PKT: nsnd_t:{} src_chip:{} payload_size_bytes:{}\n",
+        (uint32_t)packet_start->noc_send_type,
+        (uint32_t)packet_start->src_ch_id,
+        (uint32_t)packet_start->payload_size_bytes);
     print_pkt_hdr_routing_fields(packet_start);
     print_pkt_header_noc_fields(packet_start);
 #endif
@@ -121,16 +126,18 @@ FORCE_INLINE void flush_write_to_noc_pipeline(uint8_t rx_channel_id) {
 // Shifts the chunk encoding in a scatter write packet to the next chunk
 FORCE_INLINE void shift_to_next_chunk(uint8_t& chunk_encodings) { chunk_encodings >>= 2; }
 
-// Since we unicast to local, we must omit the packet header
-// This function only does reads, and within scope there are no modifications to the packet header
+// Core implementation of unicast-to-local-chip dispatch.
+// Accepts pre-resolved payload_size_bytes and noc_send_type to avoid redundant uncached L1 reads
+// when the caller has already loaded these (e.g. via a packed 4B load).
 __attribute__((optimize("jump-tables")))
 #ifndef FABRIC_2D
 FORCE_INLINE
 #endif
     void
-    execute_chip_unicast_to_local_chip(
+    execute_chip_unicast_to_local_chip_impl(
         tt_l1_ptr PACKET_HEADER_TYPE* const packet_start,
         uint16_t payload_size_bytes,
+        tt::tt_fabric::NocSendType noc_send_type,
         uint32_t transaction_id,
         uint8_t rx_channel_id) {
     const auto& header = *packet_start;
@@ -138,7 +145,31 @@ FORCE_INLINE
 
     constexpr bool update_counter = false;
 
-    tt::tt_fabric::NocSendType noc_send_type = header.noc_send_type;
+    channel_trimming_usage_recorder.set_noc_send_type_used(rx_channel_id, noc_send_type);
+    // NOC_SPARSE_MCAST_WRITE (enum value 8) sits above the contiguous standard range. Handling it as
+    // an early, unlikely branch keeps the standard switch below bounded to the dense
+    // 0..NOC_UNICAST_SCATTER_WRITE range, so its jump table is unchanged.
+    if (noc_send_type == tt::tt_fabric::NocSendType::NOC_SPARSE_MCAST_WRITE) [[unlikely]] {
+        // chip_idx/write_idx select this chip's page group; the router advances both before
+        // forwarding, so the values read here are guaranteed to be this chip's (see
+        // receiver_forward_packet). The same payload is written to each of this chip's pages.
+        const auto& sparse = header.command_fields.sparse_mcast_write;
+        const uint8_t count = sparse.counts[sparse.chip_idx];
+        const uint8_t base = sparse.write_idx;
+        for (uint8_t j = 0; j < count; j++) {
+            noc_async_write_one_packet_with_trid<update_counter, false>(
+                payload_start_address,
+                sparse.noc_address[base + j],
+                payload_size_bytes,
+                transaction_id,
+                tt::tt_fabric::local_chip_data_cmd_buf,
+                tt::tt_fabric::edm_to_local_chip_noc,
+                tt::tt_fabric::forward_and_local_write_noc_vc);
+        }
+        return;
+    }
+    // Standard local-write types are 0..NOC_UNICAST_SCATTER_WRITE; nothing above that range reaches this
+    // point (sparse returned above, and the gap types between it and sparse never hit the local-write path).
     if (noc_send_type > tt::tt_fabric::NocSendType::NOC_SEND_TYPE_LAST) {
         __builtin_unreachable();
     }
@@ -297,6 +328,25 @@ FORCE_INLINE
     };
 }
 
+// Wrapper that resolves noc_send_type from the packet header via a packed 4B load
+// (payload_size_bytes + noc_send_type in one read), then delegates to the core implementation.
+// The caller-provided payload_size_bytes is still used (not the packed copy) to preserve
+// existing call-site semantics.
+__attribute__((optimize("jump-tables")))
+#ifndef FABRIC_2D
+FORCE_INLINE
+#endif
+    void
+    execute_chip_unicast_to_local_chip(
+        tt_l1_ptr PACKET_HEADER_TYPE* const packet_start,
+        uint16_t payload_size_bytes,
+        uint32_t transaction_id,
+        uint8_t rx_channel_id) {
+    auto packed = PACKET_HEADER_TYPE::PackedPayloadAndSendType::load(packet_start);
+    execute_chip_unicast_to_local_chip_impl(
+        packet_start, payload_size_bytes, packed.noc_send_type, transaction_id, rx_channel_id);
+}
+
 // Forward packet to local relay in UDM mode
 // Unlike execute_chip_unicast_to_local_chip, this sends the FULL packet (header + payload)
 // to the relay, which will then handle forwarding to local chip workers
@@ -310,7 +360,7 @@ __attribute__((optimize("jump-tables"))) void execute_chip_unicast_to_relay(
     uint32_t transaction_id,
     uint8_t rx_channel_id) {
     // Assert that relay has space (best effort check)
-    ASSERT(local_relay_interface.edm_has_space_for_packet());
+    ASSERT(local_relay_interface.template edm_has_space_for_packet<ENABLE_RISC_CPU_DATA_CACHE>());
 
     // Send the full packet (header + payload) to relay
     // The relay will handle the local chip forwarding
@@ -361,7 +411,7 @@ FORCE_INLINE void update_packet_header_for_next_hop(
         new_value = cached_routing_fields.route_buffer[0];
 
 // Shift buffer left
-#pragma unroll
+#pragma GCC unroll 16
         for (uint32_t i = 0; i < EXT - 1; i++) {
             const_cast<uint32_t*>(packet_header->routing_fields.route_buffer)[i] =
                 cached_routing_fields.route_buffer[i + 1];
@@ -369,7 +419,7 @@ FORCE_INLINE void update_packet_header_for_next_hop(
         const_cast<uint32_t*>(packet_header->routing_fields.route_buffer)[EXT - 1] = 0;
     } else {
 // No refill needed - just copy buffer as-is
-#pragma unroll
+#pragma GCC unroll 16
         for (uint32_t i = 0; i < EXT; i++) {
             const_cast<uint32_t*>(packet_header->routing_fields.route_buffer)[i] =
                 cached_routing_fields.route_buffer[i];

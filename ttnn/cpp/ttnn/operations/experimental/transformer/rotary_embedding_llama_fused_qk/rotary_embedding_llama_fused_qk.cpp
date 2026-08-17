@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,9 +7,9 @@
 #include "ttnn/operations/experimental/transformer/rotary_embedding_llama_fused_qk/device/rotary_embedding_llama_fused_qk_device_operation.hpp"
 #include "ttnn/device.hpp"
 
-namespace ttnn::operations::experimental::transformer {
+namespace ttnn::experimental {
 
-std::tuple<ttnn::Tensor, ttnn::Tensor> RotaryEmbeddingLlamaFusedQKOperation::invoke(
+std::tuple<ttnn::Tensor, ttnn::Tensor> rotary_embedding_llama_fused_qk(
     const Tensor& q_input_tensor,
     const Tensor& k_input_tensor,
     const Tensor& cos_cache,
@@ -19,7 +19,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> RotaryEmbeddingLlamaFusedQKOperation::inv
     auto arch = q_input_tensor.storage_type() == StorageType::DEVICE ? q_input_tensor.device()->arch()
                                                                      : ttnn::GetDefaultDevice()->arch();
     auto kernel_config_val =
-        init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, true, false, false);
+        init_device_compute_kernel_config(arch, compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4, true, false, false);
 
     const tt::tt_metal::MemoryConfig& q_output_memory_config = q_input_tensor.memory_config();
     const tt::tt_metal::MemoryConfig& k_output_memory_config = k_input_tensor.memory_config();
@@ -37,4 +37,4 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> RotaryEmbeddingLlamaFusedQKOperation::inv
         row_major_QK);
 }
 
-}  // namespace ttnn::operations::experimental::transformer
+}  // namespace ttnn::experimental

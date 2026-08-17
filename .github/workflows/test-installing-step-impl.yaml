@@ -1,19 +1,17 @@
-name: "[internal] Test INSTALLING.md install.sh step impl"
+name: "[internal] Validate installation step from instructions impl"
 
 
 on:
   workflow_call:
-    inputs:
-      runner-label:
-        required: false
-        type: string
-        default: N150
+
+env:
+  TT_INSTALLER_VERSION: v2.1.0
 
 jobs:
   install-and-run-mnist:
-    name: Install deps and run MNIST MLP
-    runs-on: ${{ format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label) }}
-    timeout-minutes: 15
+    name: TT-Installer and run MNIST MLP
+    runs-on: ${{ format('tt-ubuntu-2204-{0}-viommu-stable', 'N150') }}
+    timeout-minutes: 30
     steps:
       - name: Prepare system
         run: |
@@ -25,7 +23,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          timeout 60 curl -fsSL https://github.com/tenstorrent/tt-installer/releases/latest/download/install.sh -O
+          timeout 60 curl -fsSL "https://github.com/tenstorrent/tt-installer/releases/download/${TT_INSTALLER_VERSION}/install.sh" -O
           chmod +x install.sh
 
           timeout 600 bash ./install.sh \

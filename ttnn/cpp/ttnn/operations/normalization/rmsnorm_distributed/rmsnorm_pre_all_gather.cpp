@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,20 +8,21 @@
 #include "ttnn/operations/normalization/layernorm/device/layernorm_device_operation.hpp"
 #include "ttnn/device.hpp"
 
-namespace ttnn::operations::normalization {
+namespace ttnn {
 
-ttnn::Tensor ExecuteRMSNormPreAllGather::invoke(
+ttnn::Tensor rms_norm_pre_all_gather(
     const ttnn::Tensor& input_tensor,
     const DataType dtype,
     const std::optional<const ttnn::Tensor>& residual_input_tensor,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const ttnn::prim::LayerNormProgramConfig>& program_config,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<bool>& use_2d_core_grid) {
+    const std::optional<bool>& use_2d_core_grid,
+    bool fast_and_approximate_mode) {
     auto arch = input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.device()->arch()
                                                                    : ttnn::GetDefaultDevice()->arch();
     auto kernel_config_val =
-        init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, true, false, false);
+        init_device_compute_kernel_config(arch, compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4, true, false, false);
     if (input_tensor.is_sharded()) {
         return ttnn::prim::layer_norm(
             input_tensor,
@@ -38,12 +39,14 @@ ttnn::Tensor ExecuteRMSNormPreAllGather::invoke(
     }
     return ttnn::prim::layer_norm_pre_all_gather(
         input_tensor,
-        std::nullopt,  // recip_tensor not needed for rmsnorm (second argument)
+        residual_input_tensor,
+        std::nullopt,  // recip_tensor not needed for rmsnorm
         ttnn::prim::LayerNormDistributedType::RMSNORM,
         dtype,
         kernel_config_val,
         program_config.value_or(ttnn::prim::LayerNormDefaultProgramConfig{}),
-        use_2d_core_grid);
+        use_2d_core_grid,
+        fast_and_approximate_mode);
 }
 
-}  // namespace ttnn::operations::normalization
+}  // namespace ttnn

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -42,7 +42,38 @@ MESH_ROOT2 = 2
 MESH_ROOT1 = 3
 
 
-def get_device_role(coord: ttnn.MeshCoordinate, root_coord: ttnn.MeshCoordinate) -> int:
+def get_root3_row(root_row: int, use_torus: bool = False) -> int:
+    """Pick the row of ROOT3 for a given root row.
+
+    Linear (default) mode covers all 4 rows of a 4x2 mesh by always placing
+    ROOT3 on an inner row (1 or 2). For inner roots this matches the historical
+    "other inner row" rule. For corner roots (0 or 3) we pick the inner row on
+    the OPPOSITE side of the root, which keeps the LEAF→{ROOT3,ROOT_ROW} hops
+    1 row apart and only forces the ROOT3→ROOT_ROW hop to be 2 rows
+    (resolved via fabric multi-hop routing, see `reduce_num_hops`).
+
+    Torus mode is retained for callers that explicitly know the fabric wraps
+    rows; it is no longer auto-enabled by lm_head_sampling.
+    """
+    if use_torus:
+        if root_row == 0:
+            return 3
+        if root_row == 3:
+            return 0
+        raise ValueError(f"Torus mode requires root at corner row (0 or 3), got row {root_row}")
+
+    if root_row == 0:
+        return 2
+    if root_row == 1:
+        return 2
+    if root_row == 2:
+        return 1
+    if root_row == 3:
+        return 1
+    raise ValueError(f"Unsupported root_row {root_row} for 4-row mesh")
+
+
+def get_device_role(coord: ttnn.MeshCoordinate, root_coord: ttnn.MeshCoordinate, use_torus: bool = False) -> int:
     """Determine the role of a device based on its coordinate and the root coordinate."""
     if coord[0] == root_coord[0] and coord[1] == root_coord[1]:
         return MESH_ROOT1
@@ -50,13 +81,10 @@ def get_device_role(coord: ttnn.MeshCoordinate, root_coord: ttnn.MeshCoordinate)
     root_row = root_coord[0]
     my_row = coord[0]
 
-    # ROOT2: same row as ROOT1, different column
     if my_row == root_row:
         return MESH_ROOT2
 
-    # ROOT3: the other inner row (if ROOT1 is at row 1, ROOT3 is at row 2, and vice versa)
-    root3_row = 2 if root_row == 1 else 1
-    if my_row == root3_row:
+    if my_row == get_root3_row(root_row, use_torus):
         return MESH_ROOT3
 
     return MESH_LEAF
@@ -86,30 +114,54 @@ class ReduceToOneB1:
     @staticmethod
     def op(
         input_tensor_mesh: ttnn.Tensor,
-        intermediate_tensors: list,
+        intermediate_tensor: ttnn.Tensor,
         output_tensor: ttnn.Tensor,
         semaphores: list,
         root_coord: ttnn.MeshCoordinate,
         exit_coord: Optional[ttnn.MeshCoordinate] = None,
+        downstream_sockets=None,
+        agg_output_size_bytes: int = 0,
+        num_iterations: int = 1,
+        is_torus: bool = False,
+        forward_metadata_size_bytes: int = 0,
+        metadata_l1_addr: int = 0,
+        worker_fabric_ready_semaphore=None,
     ) -> ttnn.Tensor:
         """
         Execute reduce-to-one operation using generic_op.
 
+        When downstream_sockets is provided, each ROOT1 worker core directly sends
+        its shard through its own dedicated sender socket to the downstream
+        d2d_exchange pipeline core.
+
         Args:
             input_tensor_mesh: Input tensor mesh (each device has its own data)
-            intermediate_tensors: List of 3 pre-allocated intermediate tensor meshes
-                                  for the 3 rounds of receiving
+            intermediate_tensor: Pre-allocated intermediate tensor mesh (3x shard width,
+                                 backing a single 3-page CB for all reduction rounds)
             output_tensor: Pre-allocated output tensor mesh (single-core sharded)
             semaphores: List of 4 global semaphores for synchronization
-                        [round1, round2, round3, exit]
             root_coord: MeshCoordinate of the root device (must be row 1 or 2)
             exit_coord: Optional MeshCoordinate for exit signaling (defaults to root_coord)
+            downstream_sockets: Optional list of sender sockets for each ROOT1 worker core
+            agg_output_size_bytes: Total useful output bytes (unpadded) for socket aggregation
+            num_iterations: Number of iterations to run inside the kernel
+            is_torus: Whether to use torus topology
+            worker_fabric_ready_semaphore: Optional shared worker->fabric ready semaphore.
+                                         When provided, this avoids allocating the semaphore
+                                         inside the op, which is required for trace capture.
 
         Returns:
-            Output tensor with reduced data at root device
+            Output tensor
         """
+        # Convert root_coord to MeshCoordinate if it's a tuple
+        if isinstance(root_coord, tuple):
+            root_coord = ttnn.MeshCoordinate(root_coord[0], root_coord[1])
+
+        # Convert exit_coord to MeshCoordinate if it's a tuple
         if exit_coord is None:
             exit_coord = root_coord
+        elif isinstance(exit_coord, tuple):
+            exit_coord = ttnn.MeshCoordinate(exit_coord[0], exit_coord[1])
 
         mesh_device = input_tensor_mesh.device()
         mesh_shape = mesh_device.shape
@@ -120,16 +172,12 @@ class ReduceToOneB1:
         if mesh_rows != 4 or mesh_cols != 2:
             raise ValueError(f"Mesh shape must be 4x2, got {mesh_rows}x{mesh_cols}")
 
-        # Validate root_coord
-        if root_coord[0] not in [1, 2]:
-            raise ValueError(f"Root coordinate row must be 1 or 2, got {root_coord[0]}")
+        use_torus = is_torus and root_coord[0] in [0, 3]
 
         # Get per-device tensors
         input_tensors_per_device = ttnn.get_device_tensors(input_tensor_mesh)
         output_tensors_per_device = ttnn.get_device_tensors(output_tensor)
-        intermediate_r1_per_device = ttnn.get_device_tensors(intermediate_tensors[0])
-        intermediate_r2_per_device = ttnn.get_device_tensors(intermediate_tensors[1])
-        intermediate_r3_per_device = ttnn.get_device_tensors(intermediate_tensors[2])
+        intermediate_per_device = ttnn.get_device_tensors(intermediate_tensor)
 
         # Get semaphore addresses
         sem_round1_addr = ttnn.get_global_semaphore_address(semaphores[0])
@@ -163,17 +211,15 @@ class ReduceToOneB1:
             compute_tile_height * compute_tile_width
         )
 
-        packet_header_size_bytes = 96
+        packet_header_size_bytes = ttnn.get_tt_fabric_packet_header_size_bytes()
         slot_size_bytes = packet_header_size_bytes + payload_size_bytes
 
         # CB indices (matching C++ implementation)
         local_cb = 0  # Input tensor
-        received_cb_r1 = 1  # Round 1: LEAF → ROOT*
+        received_cb = 1  # 3-page CB for all reduction rounds (backed by intermediate tensor)
         output_cb = 2  # Final output
         packet_cb = 3  # Packet staging
-        received_cb_r2 = 5  # Round 2: ROOT3 → ROOT2/ROOT1
-        received_cb_r3 = 6  # Round 3: ROOT2 → ROOT1
-        scratch_cb = 7  # Scratch for compute
+        scratch_cb = 5  # Scratch for compute
 
         # Create mesh program descriptor
         mesh_program_descriptor = ttnn.MeshProgramDescriptor()
@@ -186,12 +232,37 @@ class ReduceToOneB1:
         output_shard_spec = output_sample.memory_config().shard_spec
         output_core = output_shard_spec.grid.ranges()[0].start
 
+        shard_grid = input_sample.memory_config().shard_spec.grid
+        shard_cores = ttnn.corerange_to_cores(shard_grid, row_wise=True)
+
+        # Create a single global ready semaphore for worker->fabric signaling.
+        # Each FC sees its own local semaphore instance at the same L1 address.
+        device_grid_size = mesh_device.compute_with_storage_grid_size()
+        worker_fabric_sem_cores = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))]
+        )
+        if isinstance(worker_fabric_ready_semaphore, (list, tuple)):
+            raise ValueError(
+                "Expected a single worker_fabric_ready_semaphore; "
+                "reduce_to_one standalone now uses one shared ready-mask semaphore"
+            )
+        if worker_fabric_ready_semaphore is None:
+            worker_fabric_ready_semaphore = ttnn.create_global_semaphore(mesh_device, worker_fabric_sem_cores, 0)
+        worker_fabric_ready_sem_addr = ttnn.get_global_semaphore_address(worker_fabric_ready_semaphore)
+
+        # Persistent-signal sync setup for downstream sockets
+        agg_sem_addr = 0
+        total_num_workers_count = len(shard_cores) if downstream_sockets is not None else 0
+        if downstream_sockets is not None:
+            agg_sem = ttnn.create_global_semaphore(mesh_device, worker_fabric_sem_cores, 0)
+            agg_sem_addr = ttnn.get_global_semaphore_address(agg_sem)
+
         for row in range(mesh_rows):
             for col in range(mesh_cols):
                 coord = ttnn.MeshCoordinate(row, col)
                 device_idx = row * mesh_cols + col
 
-                role = get_device_role(coord, root_coord)
+                role = get_device_role(coord, root_coord, use_torus)
                 is_leaf = role == MESH_LEAF
                 is_root3 = role == MESH_ROOT3
                 is_root2 = role == MESH_ROOT2
@@ -200,9 +271,7 @@ class ReduceToOneB1:
                 # Get tensors for this device
                 input_tensor_device = input_tensors_per_device[device_idx]
                 output_tensor_device = output_tensors_per_device[device_idx]
-                intermediate_r1_device = intermediate_r1_per_device[device_idx]
-                intermediate_r2_device = intermediate_r2_per_device[device_idx]
-                intermediate_r3_device = intermediate_r3_per_device[device_idx]
+                intermediate_device = intermediate_per_device[device_idx]
 
                 device = input_tensor_device.device()
 
@@ -227,11 +296,22 @@ class ReduceToOneB1:
                 num_workers_per_column = len(column_to_cores[sorted_columns[0]])
 
                 # Fabric cores: one per column, placed to the right of bottom core
+                # For horizontal layouts (all cores in same row), place below instead
                 fabric_cores = []
                 column_to_fabric_core = {}
+
+                # Detect layout: if all workers in 1-2 rows, it's horizontal
+                all_y_coords = set(core.y for core in input_cores_list)
+                is_horizontal_layout = len(all_y_coords) <= 2
+
                 for x in sorted_columns:
                     bottom_core = max(column_to_cores[x], key=lambda c: c.y)
-                    fabric_core = ttnn.CoreCoord(bottom_core.x + 1, bottom_core.y)
+                    if is_horizontal_layout:
+                        # Horizontal layout: place fabric core below (y+1)
+                        fabric_core = ttnn.CoreCoord(bottom_core.x, bottom_core.y + 1)
+                    else:
+                        # Vertical layout: place fabric core to the right (x+1)
+                        fabric_core = ttnn.CoreCoord(bottom_core.x + 1, bottom_core.y)
                     fabric_cores.append(fabric_core)
                     column_to_fabric_core[x] = fabric_core
 
@@ -252,10 +332,16 @@ class ReduceToOneB1:
 
                 # Determine destination coordinate based on role
                 if is_leaf:
-                    if row == 0:
-                        dest_coord = ttnn.MeshCoordinate(row + 1, col)
-                    else:  # row == 3
-                        dest_coord = ttnn.MeshCoordinate(row - 1, col)
+                    if use_torus:
+                        if row == 1:
+                            dest_coord = ttnn.MeshCoordinate(row - 1, col)
+                        else:  # row == 2
+                            dest_coord = ttnn.MeshCoordinate(row + 1, col)
+                    else:
+                        if row == 0:
+                            dest_coord = ttnn.MeshCoordinate(row + 1, col)
+                        else:  # row == 3
+                            dest_coord = ttnn.MeshCoordinate(row - 1, col)
                 elif is_root3:
                     dest_coord = ttnn.MeshCoordinate(root_coord[0], col)
                 elif is_root2:
@@ -267,18 +353,20 @@ class ReduceToOneB1:
                 fabric_node_id = mesh_device.get_fabric_node_id(coord)
                 dest_fabric_node_id = mesh_device.get_fabric_node_id(dest_coord)
 
-                # Destination L1 address depends on role
+                # Destination L1 address: offset within the single intermediate tensor
+                # Page 0 = round 1 (LEAF data), page 1 = round 2 (ROOT3), page 2 = round 3 (ROOT2)
+                intermediate_base = intermediate_device.buffer_address()
                 if is_leaf:
-                    dst_l1_addr = intermediate_r1_device.buffer_address()
+                    dst_l1_addr = intermediate_base  # page 0
                     dst_sem_addr = sem_round1_addr
                 elif is_root3:
-                    dst_l1_addr = intermediate_r2_device.buffer_address()
+                    dst_l1_addr = intermediate_base + payload_size_bytes  # page 1
                     dst_sem_addr = sem_round2_addr
                 elif is_root2:
-                    dst_l1_addr = intermediate_r3_device.buffer_address()
+                    dst_l1_addr = intermediate_base + 2 * payload_size_bytes  # page 2
                     dst_sem_addr = sem_round3_addr
                 else:
-                    dst_l1_addr = intermediate_r1_device.buffer_address()
+                    dst_l1_addr = intermediate_base  # ROOT1 exit (not used for reduce)
                     dst_sem_addr = sem_exit_addr
 
                 # Get physical coords for output core
@@ -290,12 +378,18 @@ class ReduceToOneB1:
                     ("device_role", role),
                     ("num_tiles", num_compute_tiles),
                     ("local_cb", local_cb),
-                    ("received_cb_r1", received_cb_r1),
-                    ("received_cb_r2", received_cb_r2),
-                    ("received_cb_r3", received_cb_r3),
+                    ("received_cb", received_cb),
+                    ("num_loop_iters", num_iterations),
                 ]
 
                 # Writer (BRISC) compile-time args
+                device_total_num_workers = (
+                    total_num_workers_count if (is_root1 and downstream_sockets is not None) else 0
+                )
+                device_agg_output_size = agg_output_size_bytes if (is_root1 and downstream_sockets is not None) else 0
+                device_forward_metadata_size = (
+                    forward_metadata_size_bytes if (is_root1 and downstream_sockets is not None) else 0
+                )
                 writer_ct_args = [
                     ("device_role", role),
                     ("num_tiles", num_compute_tiles),
@@ -309,7 +403,10 @@ class ReduceToOneB1:
                     ("output_core_noc_x", output_core_phys.x),
                     ("output_core_noc_y", output_core_phys.y),
                     ("num_workers", num_workers_per_column),
-                    ("slot_size_bytes", slot_size_bytes),
+                    ("total_num_workers", device_total_num_workers),
+                    ("agg_output_size_bytes", device_agg_output_size),
+                    ("forward_metadata_size_bytes", device_forward_metadata_size),
+                    ("num_loop_iters", num_iterations),
                 ]
 
                 # Compute (TRISC) compile-time args
@@ -317,11 +414,10 @@ class ReduceToOneB1:
                     ("device_role", role),
                     ("num_tiles", num_compute_tiles),
                     ("local_cb", local_cb),
-                    ("received_cb_r1", received_cb_r1),
-                    ("received_cb_r2", received_cb_r2),
-                    ("received_cb_r3", received_cb_r3),
+                    ("received_cb", received_cb),
                     ("output_cb", output_cb),
                     ("scratch_cb", scratch_cb),
+                    ("num_loop_iters", num_iterations),
                 ]
 
                 # === Common Runtime Args ===
@@ -333,30 +429,50 @@ class ReduceToOneB1:
                 ]
 
                 # === Per-Core Runtime Args ===
+                # Persistent-signal core setup for ROOT1 with downstream sockets
+                # First worker core is the designated persistent-signal coordinator
+                persistent_core_noc_x = 0
+                persistent_core_noc_y = 0
+                if is_root1 and downstream_sockets is not None:
+                    persistent_core_phys = device.worker_core_from_logical_core(input_cores_list[0])
+                    persistent_core_noc_x = persistent_core_phys.x
+                    persistent_core_noc_y = persistent_core_phys.y
+
+                # Resolve metadata L1 address for ROOT1 last-worker forwarding
+                device_metadata_l1_addr = metadata_l1_addr if (is_root1 and forward_metadata_size_bytes > 0) else 0
+
                 # Build per-core BRISC args for worker cores
                 brisc_per_core_args = []
-                for core in input_cores_list:
+                for core_idx, core in enumerate(input_cores_list):
                     fabric_core = column_to_fabric_core[core.x]
                     fabric_core_phys = device.worker_core_from_logical_core(fabric_core)
                     slot_idx = core_to_slot_idx[(core.x, core.y)]
                     shard_idx = core_to_shard_idx[(core.x, core.y)]
 
+                    socket_config_addr = 0
+                    if is_root1 and downstream_sockets is not None:
+                        socket_config_addr = downstream_sockets[shard_idx].get_config_buffer_address()
+
                     worker_args = [
-                        fabric_core_phys.x,  # fabric_core_noc_x
-                        fabric_core_phys.y,  # fabric_core_noc_y
-                        slot_idx,  # my_slot_idx
-                        slot_idx,  # worker_sem_id (same as slot_idx for simplicity)
-                        dst_l1_addr,  # dst_l1_addr
-                        dst_sem_addr,  # dst_sem_addr
-                        output_tensor_device.buffer_address(),  # output_base_addr
-                        shard_idx,  # shard_idx
+                        fabric_core_phys.x,
+                        fabric_core_phys.y,
+                        slot_idx,
+                        worker_fabric_ready_sem_addr,
+                        dst_l1_addr,
+                        dst_sem_addr,
+                        output_tensor_device.buffer_address(),
+                        shard_idx,
+                        socket_config_addr,
+                        device_metadata_l1_addr,
                     ]
+                    if is_root1 and downstream_sockets is not None:
+                        worker_args.extend([agg_sem_addr, persistent_core_noc_x, persistent_core_noc_y])
+
                     brisc_per_core_args.append((core, worker_args))
 
-                # Fabric cores BRISC args: worker semaphore IDs (fabric args appended later)
+                # Fabric cores BRISC args: shared ready semaphore address (fabric args appended later)
                 for fc in fabric_cores:
-                    fabric_args = list(range(num_workers_per_column))  # Worker sem IDs
-                    brisc_per_core_args.append((fc, fabric_args))
+                    brisc_per_core_args.append((fc, [worker_fabric_ready_sem_addr]))
 
                 # === CB Descriptors ===
                 compute_tile_desc = ttnn.TileDescriptor(compute_tile_height, compute_tile_width)
@@ -374,13 +490,13 @@ class ReduceToOneB1:
                     )
                 ]
 
-                # received_cb_r1: backed by intermediate tensor r1
-                cb1_desc = ttnn.cb_descriptor_from_sharded_tensor(received_cb_r1, intermediate_r1_device)
+                # received_cb: 3-page CB backed by intermediate tensor (all reduction rounds)
+                cb1_desc = ttnn.cb_descriptor_from_sharded_tensor(received_cb, intermediate_device)
                 cb1_desc.core_ranges = all_cores_set
-                cb1_desc.total_size = payload_size_bytes
+                cb1_desc.total_size = 3 * payload_size_bytes
                 cb1_desc.format_descriptors = [
                     ttnn.CBFormatDescriptor(
-                        buffer_index=received_cb_r1,
+                        buffer_index=received_cb,
                         data_format=dtype,
                         page_size=payload_size_bytes,
                         tile=compute_tile_desc,
@@ -413,35 +529,9 @@ class ReduceToOneB1:
                     ],
                 )
 
-                # received_cb_r2: backed by intermediate tensor r2
-                cb5_desc = ttnn.cb_descriptor_from_sharded_tensor(received_cb_r2, intermediate_r2_device)
-                cb5_desc.core_ranges = all_cores_set
-                cb5_desc.total_size = payload_size_bytes
-                cb5_desc.format_descriptors = [
-                    ttnn.CBFormatDescriptor(
-                        buffer_index=received_cb_r2,
-                        data_format=dtype,
-                        page_size=payload_size_bytes,
-                        tile=compute_tile_desc,
-                    )
-                ]
-
-                # received_cb_r3: backed by intermediate tensor r3
-                cb6_desc = ttnn.cb_descriptor_from_sharded_tensor(received_cb_r3, intermediate_r3_device)
-                cb6_desc.core_ranges = all_cores_set
-                cb6_desc.total_size = payload_size_bytes
-                cb6_desc.format_descriptors = [
-                    ttnn.CBFormatDescriptor(
-                        buffer_index=received_cb_r3,
-                        data_format=dtype,
-                        page_size=payload_size_bytes,
-                        tile=compute_tile_desc,
-                    )
-                ]
-
                 # scratch_cb: compute scratch (not tensor-backed)
                 cb_size_bytes = num_compute_tiles * compute_tile_size_bytes
-                cb7_desc = ttnn.CBDescriptor(
+                cb5_desc = ttnn.CBDescriptor(
                     total_size=cb_size_bytes,
                     core_ranges=all_cores_set,
                     format_descriptors=[
@@ -454,8 +544,17 @@ class ReduceToOneB1:
                     ],
                 )
 
-                cb_list = [cb0_desc, cb1_desc, cb2_desc, cb3_desc, cb5_desc, cb6_desc, cb7_desc]
+                cb_list = [cb0_desc, cb1_desc, cb2_desc, cb3_desc, cb5_desc]
 
+                # Build unified compile-time core descriptors
+                unified_ct_core_descriptors = [
+                    UnifiedCompileTimeCoreDescriptor(
+                        named_compile_time_arg="is_fabric_core",
+                        core_range=fabric_core_set,
+                        value=1,
+                        other_value=0,
+                    ),
+                ]
                 # === Unified Kernel Descriptor ===
                 unified_kernel = UnifiedKernelDescriptor(
                     kernel_source=kernel_path,
@@ -469,42 +568,30 @@ class ReduceToOneB1:
                         fp32_dest_acc_en=False,
                         math_approx_mode=False,
                     ),
-                    unified_compile_time_core_descriptors=[
-                        UnifiedCompileTimeCoreDescriptor(
-                            named_compile_time_arg="is_fabric_core",
-                            core_range=fabric_core_set,
-                            value=1,
-                            other_value=0,
-                        ),
-                    ],
+                    unified_compile_time_core_descriptors=unified_ct_core_descriptors,
                     per_core_runtime_args_descriptor=PerCoreRuntimeArgsDescriptor(
                         brisc_args=brisc_per_core_args,
                     ),
+                    noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
                 )
 
                 kernel_result = unified_kernel.get_kernel_descriptors()
                 fabric_group = kernel_result.get_group_by_arg("is_fabric_core", 1)
 
-                # Create semaphores for worker→fabric synchronization
+                # Worker→fabric semaphores are global (created before the loop)
                 semaphore_descriptors = []
-                for worker_idx in range(num_workers_per_column):
-                    sem_desc = ttnn.SemaphoreDescriptor(
-                        id=worker_idx,
-                        core_type=ttnn.CoreType.WORKER,
-                        core_ranges=fabric_core_set,
-                        initial_value=0,
-                    )
-                    semaphore_descriptors.append(sem_desc)
 
                 # === Program Descriptor ===
+                all_kernels = kernel_result.kernels
+
                 program = ttnn.ProgramDescriptor(
-                    kernels=kernel_result.kernels,
+                    kernels=all_kernels,
                     semaphores=semaphore_descriptors,
                     cbs=cb_list,
                 )
 
                 # Add fabric connection args for fabric cores (must be done after program creation)
-                # ROOT1 doesn't send via fabric, so skip fabric setup
+                # ROOT1 doesn't send via fabric for exit socket, so skip that fabric setup
                 if not is_root1:
                     fabric_kernel_idx = fabric_group.brisc_kernel_index
                     for fc_idx, fc in enumerate(fabric_cores):
@@ -522,13 +609,11 @@ class ReduceToOneB1:
 
                 mesh_program_descriptor[ttnn.MeshCoordinateRange(coord, coord)] = program
 
-        # Execute
+        # Execute reduce-to-one operation
         input_list = [
             input_tensor_mesh,
             output_tensor,
-            intermediate_tensors[0],
-            intermediate_tensors[1],
-            intermediate_tensors[2],
+            intermediate_tensor,
         ]
         ttnn.generic_op(input_list, mesh_program_descriptor)
 

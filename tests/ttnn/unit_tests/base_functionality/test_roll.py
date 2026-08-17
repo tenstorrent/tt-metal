@@ -1,12 +1,11 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
 import torch
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.common.utility_functions import is_watcher_enabled
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
 
 
 @pytest.mark.parametrize(
@@ -74,8 +73,7 @@ def test_roll(device, input_tensor, shifts, dim, layout, dtype, memory_config):
     ttnn_out = ttnn.roll(ttnn_tensor, shifts, dim)
     ttnn_result_torch = ttnn.to_torch(ttnn_out)
 
-    assert_with_pcc(pytorch_out, ttnn_result_torch)
-    assert torch.allclose(pytorch_out, ttnn_result_torch)
+    assert_equal(pytorch_out, ttnn_result_torch)
 
 
 @pytest.mark.parametrize(
@@ -109,9 +107,6 @@ def test_roll(device, input_tensor, shifts, dim, layout, dtype, memory_config):
     ],
 )
 def test_roll_without_dim(device, input_tensor, shifts):
-    if is_watcher_enabled():
-        pytest.skip("Skipping test with watcher enabled, see #37096")
-
     tensor = torch.tensor(input_tensor, dtype=torch.float32)
     ttnn_tensor = ttnn.from_torch(tensor)
     ttnn_tensor = ttnn.to_layout(ttnn_tensor, ttnn.ROW_MAJOR_LAYOUT)
@@ -119,8 +114,7 @@ def test_roll_without_dim(device, input_tensor, shifts):
     pytorch_out = torch.roll(tensor, shifts)
     ttnn_out = ttnn.roll(ttnn_tensor, shifts)
     ttnn_result_torch = ttnn.to_torch(ttnn_out)
-    assert_with_pcc(pytorch_out, ttnn_result_torch)
-    assert torch.allclose(pytorch_out, ttnn_result_torch)
+    assert_equal(pytorch_out, ttnn_result_torch)
 
 
 @pytest.mark.parametrize(
@@ -195,8 +189,7 @@ def test_roll_tile_padding(device, input_tensor, shifts, dim, layout, dtype):
     ttnn_out = ttnn.roll(ttnn_tensor, shifts, dim)
     ttnn_result_torch = ttnn.to_torch(ttnn_out)
 
-    assert_with_pcc(pytorch_out, ttnn_result_torch)
-    assert torch.allclose(pytorch_out, ttnn_result_torch)
+    assert_equal(pytorch_out, ttnn_result_torch)
 
 
 @pytest.mark.parametrize(
@@ -220,3 +213,21 @@ def test_roll_with_program_cache(device, shape, shifts, dims):
 
         assert_with_pcc(torch_output_tensor, ttnn_output_torch)
         assert torch.allclose(ttnn_output_torch, ttnn_output_torch)
+
+
+@pytest.mark.parametrize(
+    "first_shape, second_shape, shifts, dims",
+    [
+        ((1, 1, 32, 32), (1, 1, 128, 128), [1, 1], [2, 3]),
+        ((2, 2, 32, 32), (2, 2, 96, 64), [2, -1], [2, 3]),
+    ],
+)
+def test_roll_cache_hit_larger_shape(device, first_shape, second_shape, shifts, dims):
+    # shift/dim/dtype/layout/memory_config match, so both shapes share one program-cache entry by design:
+    # the hit path re-applies the new shape's transfer plan. Guards that reuse against a stale plan.
+    for shape in (first_shape, second_shape):
+        torch_input = torch.arange(1, 1 + torch.tensor(shape).prod().item(), dtype=torch.float32).reshape(shape)
+        expected = torch.roll(torch_input, shifts=shifts, dims=dims)
+        ttnn_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+        actual = ttnn.to_torch(ttnn.roll(ttnn_input, shifts, dims))
+        assert_with_pcc(expected, actual)

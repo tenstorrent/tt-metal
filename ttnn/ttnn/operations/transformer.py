@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -7,6 +7,8 @@ from typing import Optional
 import ttnn
 
 SDPAProgramConfig = ttnn._ttnn.operations.transformer.SDPAProgramConfig
+PagedCacheGeometryOverride = ttnn._ttnn.operations.transformer.PagedCacheGeometryOverride
+SparseKVFormat = ttnn._ttnn.operations.transformer.SparseKVFormat
 
 
 def _golden_function(

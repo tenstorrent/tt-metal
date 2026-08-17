@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -10,7 +10,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import profiler
-from models.demos.t3000.falcon40b.reference.hf_modeling_falcon import FalconForCausalLM
+from models.demos.t3000.falcon40b.tests.test_utils import load_falcon_reference_model
 from models.demos.t3000.falcon40b.tt.falcon_causallm import TtFalconCausalLM
 from models.demos.t3000.falcon40b.tt.model_config import get_model_config
 from models.perf.perf_utils import prep_perf_report
@@ -42,10 +42,7 @@ def run_test_FalconCausalLM_end_to_end(
     profiler.clear()
 
     profiler.start("hugging_face_model_setup")
-    hugging_face_reference_model = FalconForCausalLM.from_pretrained(
-        model_version, local_files_only=is_ci_env, low_cpu_mem_usage=True, num_hidden_layers=num_layers
-    )
-    hugging_face_reference_model.eval()
+    hugging_face_reference_model = load_falcon_reference_model(model_version, num_hidden_layers=num_layers)
     configuration = hugging_face_reference_model.config
     state_dict = hugging_face_reference_model.state_dict()
     profiler.end("hugging_face_model_setup")
@@ -306,13 +303,13 @@ def run_test_FalconCausalLM_end_to_end(
 @pytest.mark.parametrize(
     "llm_mode, batch, seq_len, kv_cache_len, expected_compile_time, expected_inference_time, num_layers, model_config_str",
     (
-        ("prefill", 1, 32, 0, 62, 0.37 + 0.04, 60, "BFLOAT8_B-DRAM"),
-        ("prefill", 1, 128, 0, 60, 0.39 + 0.04, 60, "BFLOAT8_B-DRAM"),
-        ("prefill", 1, 2048, 0, 60, 0.94 + 0.1, 60, "BFLOAT8_B-DRAM"),
-        ("prefill", 1, 32, 0, 60, 0.42 + 0.04, 60, "BFLOAT16-DRAM"),
-        ("prefill", 1, 128, 0, 60, 0.46 + 0.04, 60, "BFLOAT16-DRAM"),
-        ("prefill", 1, 2048, 0, 60, 1.18 + 0.1, 60, "BFLOAT16-DRAM"),
-        ("decode", 32, 1, 128, 60, 0.21 + 0.02, 60, "BFLOAT8_B-SHARDED"),
+        ("prefill", 1, 32, 0, 62, 0.11 + 0.02, 60, "BFLOAT8_B-DRAM"),
+        ("prefill", 1, 128, 0, 60, 0.11 + 0.03, 60, "BFLOAT8_B-DRAM"),
+        ("prefill", 1, 2048, 0, 60, 0.67 + 0.05, 60, "BFLOAT8_B-DRAM"),
+        ("prefill", 1, 32, 0, 60, 0.11 + 0.02, 60, "BFLOAT16-DRAM"),
+        ("prefill", 1, 128, 0, 60, 0.11 + 0.02, 60, "BFLOAT16-DRAM"),
+        ("prefill", 1, 2048, 0, 60, 0.95 + 0.07, 60, "BFLOAT16-DRAM"),
+        ("decode", 32, 1, 128, 60, 0.13 + 0.02, 60, "BFLOAT8_B-SHARDED"),
     ),
     ids=[
         "prefill_seq32_bfp8",

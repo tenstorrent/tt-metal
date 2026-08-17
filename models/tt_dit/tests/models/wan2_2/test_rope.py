@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -34,19 +34,19 @@ from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard
         [(4, 8), 1, 0, 2],
     ],
     ids=[
-        "1x1sp0tp1",
-        "1x2sp0tp1",
-        "1x2sp1tp0",
-        "2x1sp0tp1",
-        "2x1sp1tp0",
-        "2x2sp0tp1",
-        "2x2sp1tp0",
-        "2x4sp0tp1",
-        "2x4sp1tp0",
-        "wh_4x8sp0tp1",
-        "wh_4x8sp1tp0",
-        "bh_4x8sp0tp1",
-        "bh_4x8sp1tp0",
+        "1x1sp0tp1nl1",
+        "1x2sp0tp1nl1",
+        "1x2sp1tp0nl1",
+        "2x1sp0tp1nl1",
+        "2x1sp1tp0nl1",
+        "2x2sp0tp1nl1",
+        "2x2sp1tp0nl1",
+        "2x4sp0tp1nl1",
+        "2x4sp1tp0nl1",
+        "4x8sp0tp1nl4",
+        "4x8sp1tp0nl4",
+        "4x8sp0tp1nl2",
+        "4x8sp1tp0nl2",
     ],
     indirect=["mesh_device"],
 )

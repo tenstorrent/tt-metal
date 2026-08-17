@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,9 +10,9 @@
 #include "tt_metal/programming_examples/matmul/matmul_common/bmm_op.hpp"
 #include "tt_metal/api/tt-metalium/bfloat16.hpp"
 
-#include "tt_metal/experimental/udm/mesh_kernel.hpp"
-#include "tt_metal/experimental/udm/mesh_utils.hpp"
-#include "tt_metal/experimental/udm/mesh_circular_buffer.hpp"
+#include <tt-metalium/experimental/udm/mesh_kernel.hpp>
+#include <tt-metalium/experimental/udm/mesh_utils.hpp>
+#include <tt-metalium/experimental/udm/mesh_circular_buffer.hpp>
 
 namespace tt::tt_metal::experimental::udm_tests {
 namespace {
@@ -48,15 +48,10 @@ tt::tt_metal::experimental::udm::MeshProgram create_program(
     auto input_compile_time_args = input_mesh_tensor_builder.get_compile_time_args();
     auto output_compile_time_args = output_mesh_tensor_builder.get_compile_time_args();
 
-    // Create packed scaler for SUM reduction (1.0)
-    bfloat16 bfloat_scaler = bfloat16(1.0f);
-    uint32_t packed_scaler = pack_two_bfloat16_into_uint32({bfloat_scaler, bfloat_scaler});
-
-    // Combine compile-time args: input, output, then packed scaler
+    // Combine compile-time args: input, output
     std::vector<uint32_t> dataflow_compile_time_args = input_compile_time_args;
     dataflow_compile_time_args.insert(
         dataflow_compile_time_args.end(), output_compile_time_args.begin(), output_compile_time_args.end());
-    dataflow_compile_time_args.push_back(packed_scaler);
 
     // Get input tensor shape info for CB sizing
     const auto& input_shape = input_mesh_tensor_builder.get_mesh_tensor_shape_in_pages();

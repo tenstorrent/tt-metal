@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -112,7 +112,7 @@ MorehSoftmaxOperation::spec_return_value_t MorehSoftmaxOperation::compute_output
         return tensor_args.output->tensor_spec();
     }
 
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         tensor_args.input.logical_shape(),
         TensorLayout(
             tensor_args.input.dtype(), PageConfig(tensor_args.input.layout()), operation_attributes.memory_config));
@@ -206,7 +206,7 @@ ttnn::operations::moreh::moreh_softmax::MorehSoftmaxOperation::tensor_return_val
         strategy,
         memory_config.value_or(input.memory_config()),
         init_device_compute_kernel_config(
-            input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4, true, is_fp32)};
+            input.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4, true, is_fp32)};
     auto tensor_args = OperationType::tensor_args_t{input, output};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

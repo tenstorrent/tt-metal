@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -41,7 +41,7 @@ LlamaAllGatherMatmulAsyncDeviceOperation::compute_output_specs(
     auto intermediate_shape = input0.padded_shape();
     intermediate_shape[-1] = intermediate_shape[-1] * args.ring_size;
     auto intermediate_shard_shape = args.output_memory_config.shard_spec()->shape;
-    TensorSpec intermediate_tensor_spec = TensorSpec(
+    tt::tt_metal::TensorSpec intermediate_tensor_spec = tt::tt_metal::TensorSpec(
         intermediate_shape,
         TensorLayout(input0.dtype(), input0.tensor_spec().page_config(), args.output_memory_config));
 
@@ -61,11 +61,11 @@ LlamaAllGatherMatmulAsyncDeviceOperation::compute_output_specs(
             aggregated_shard_shape,
             tt::tt_metal::ShardOrientation::ROW_MAJOR));
 
-    TensorSpec aggregated_tensor_spec = TensorSpec(
+    tt::tt_metal::TensorSpec aggregated_tensor_spec = tt::tt_metal::TensorSpec(
         aggregated_shape, TensorLayout(input0.dtype(), input0.tensor_spec().page_config(), aggregated_mem_config));
 
     // Matmul output spec - using aggregated tensor as input to matmul
-    ttnn::TensorSpec matmul_output_specs =
+    tt::tt_metal::TensorSpec matmul_output_specs =
         ttnn::prim::MatmulDeviceOperation::compute_output_specs(args.matmul_struct, {{input0, input1}, {}})[0];
 
     return LlamaAllGatherMatmulAsyncResultSpec{.mm = matmul_output_specs, .aggregated = aggregated_tensor_spec};
@@ -88,7 +88,7 @@ LlamaAllGatherMatmulAsyncDeviceOperation::create_output_tensors(
     return LlamaAllGatherMatmulAsyncResult{.mm = matmul_output_tensor, .aggregated = aggregated_tensor};
 }
 
-tt::stl::hash::hash_t LlamaAllGatherMatmulAsyncDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t LlamaAllGatherMatmulAsyncDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input0 = tensor_args.input0;
     const auto& input1 = tensor_args.input1;

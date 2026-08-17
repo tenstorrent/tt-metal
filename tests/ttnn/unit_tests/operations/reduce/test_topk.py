@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -8,21 +8,34 @@ pytestmark = pytest.mark.use_module_device
 
 import torch
 import ttnn
-from tests.ttnn.utils_for_testing import assert_allclose, assert_equal
+from tests.ttnn.utils_for_testing import assert_equal, assert_numeric_metrics
 
 UINT16_MAX = 65535
+TEST_PADDING_VALUE = -42
 
 
 def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_grids=None, pass_indices_tensor=False):
     torch.manual_seed(2005)
 
+    if dtype == ttnn.bfloat8_b:
+        pytest.xfail("BFLOAT8_B not supported by pad operation in topk")
+
+    # float32 sorts at full 32-bit precision (no bf16 downcast), so its single-core compute
+    # buffers are ~2x the bf16 size. The result-prep (2*Kt) + output (Kt) tiles dominate L1, so
+    # the ceiling is a tile count, not a width: measured max is 54 output tiles (k <= 1728) in
+    # Wormhole's ~1.5MB per-core L1; beyond that the buffers overflow. Multi-core can't help
+    # here (it requires k <= 64). Kt = ceil(k/32).
+    if dtype == ttnn.float32 and (k + 31) // 32 > 54:
+        pytest.skip("exact float32 top-K exceeds single-core L1 beyond k=1728 (54 output tiles)")
+
     # Input tensor
     shape = [N, C, H, W]
     ttnn_indices_dtype = ttnn.uint16 if W <= UINT16_MAX else ttnn.uint32
     torch_indices_dtype = torch.uint16 if W <= UINT16_MAX else torch.uint32
-    torch_dtype = torch.bfloat16
+    torch_dtype = torch.float32 if dtype == ttnn.float32 else torch.bfloat16
     input = torch.randn(shape, dtype=torch_dtype) * 0.9
     ttnn_input = ttnn.from_torch(input, dtype, layout=ttnn.Layout.TILE, device=device)
+    ttnn_input = ttnn.fill_implicit_tile_padding(ttnn_input, TEST_PADDING_VALUE)
 
     pyt_topk_values, pyt_topk_indices = torch.topk(input, k, dim=dim, largest=largest, sorted=True)
 
@@ -33,6 +46,7 @@ def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_g
         indices_tensor = ttnn.from_torch(
             indices_tensor_torch, ttnn_indices_dtype, layout=ttnn.Layout.TILE, device=device
         )
+        indices_tensor = ttnn.fill_implicit_tile_padding(indices_tensor, TEST_PADDING_VALUE)
     else:
         indices_tensor = None
 
@@ -56,11 +70,16 @@ def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_g
     assert list(ttnn_topk_values.shape) == desired_shape
     assert list(ttnn_topk_indices.shape) == desired_shape
 
-    # Assert values correctness
-    if dtype == ttnn.bfloat8_b:
-        assert_allclose(ttnn_torch_values, pyt_topk_values, rtol=1e-1, atol=1e-1)
-    else:
-        assert_equal(ttnn_torch_values, pyt_topk_values)
+    # test for equivalance
+    assert_numeric_metrics(
+        pyt_topk_values,
+        ttnn_torch_values,
+        pcc_threshold=0.9999,
+        rtol=1e-06,
+        atol=1e-06,
+        frobenius_threshold=1e-09,
+    )
+    assert_equal(ttnn_torch_values, pyt_topk_values)
 
     # Assert indices correctness using gather
     # pcc is not a good measure for the raw indices
@@ -82,12 +101,12 @@ def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_g
     (
         ttnn.bfloat16,
         ttnn.bfloat8_b,
-        # ttnn.float32, top bits in float32 get cut off somewhere, LLK does not work for this
+        ttnn.float32,
     ),
     ids=[
         "BFLOAT16_B",
         "BFLOAT8_B",
-        # "FLOAT32",
+        "FLOAT32",
     ],
 )
 @pytest.mark.parametrize(
@@ -95,6 +114,7 @@ def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_g
     (
         (1, 1, 32, 8192, 3, 50),
         (1, 1, 64, 64, 2, 32),
+        (1, 1, 32, 32 * 512, 3, 32),
         (1, 1, 64, 64, 2, 64),
         (1, 2048, 1, 64, 1, 32),
         (1, 1, 32, 64, 3, 2),
@@ -106,6 +126,12 @@ def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_g
         (1, 1, 32, 18992, 3, 32),
         (1, 1, 32, 10000, 3, 32),
         (1, 1, 32, 64128, 3, 32),
+        (1, 1, 65 * 32, 32 * 3, 3, 32),
+        (1, 10, 32, 512, 2, 32),
+        (5, 9, 96, 1024, 2, 32),
+        (5, 9, 1024, 96, 3, 32),
+        (3, 2, 160, 960, 2, 32),
+        (8, 16, 18, 20, 3, 18),
     ),
 )
 @pytest.mark.parametrize(
@@ -141,7 +167,7 @@ def test_topk(N, C, H, W, dim, k, dtype, sorted, largest, device, sub_core_grids
 )
 @pytest.mark.parametrize(
     "N, C, H, W, dim, k",
-    ((1, 1, 32, 16 * 1024, 3, 32),),
+    ((1, 1, 32, 16 * 1024, 3, 32), (8, 16, 18, 22, 3, 22)),
 )
 @pytest.mark.parametrize(
     "sorted",
@@ -195,6 +221,7 @@ def test_topk_sub_core_grids(N, C, H, W, dim, k, dtype, sorted, largest, device,
     (
         (1, 1, 32, 151936, 3, 50),
         (1, 1, 32, 128256, 3, 50),
+        (1, 1, 16, 20, 3, 16),
     ),
 )
 @pytest.mark.parametrize(
@@ -230,26 +257,105 @@ def test_topk_large_2d_shapes(N, C, H, W, dim, k, dtype, sorted, largest, device
     run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_grids, pass_indices_tensor)
 
 
+def run_topk_bfloat8_inf_test(N, C, H, W, k, dim, sub_core_grids, device):
+    assert W % 32 == 0, "W must be a multiple of 32 to avoid the pad path"
+    assert H >= 2, "H must be >= 2 to have both finite and all-inf rows"
+
+    torch.manual_seed(2005)
+    shape = [N, C, H, W]
+    input_torch = torch.randn(shape, dtype=torch.bfloat16) * 0.9
+    # Set all rows except the first to +inf to trigger the shared-exponent bug
+    # on the intermediate transposed tiles.
+    input_torch[:, :, 1:, :] = float("inf")
+
+    pyt_values, _ = torch.topk(input_torch, k, dim=dim, largest=True, sorted=True)
+
+    ttnn_input = ttnn.from_torch(input_torch, ttnn.bfloat8_b, layout=ttnn.Layout.TILE, device=device)
+    ttnn_input = ttnn.fill_implicit_tile_padding(ttnn_input, TEST_PADDING_VALUE)
+    ttnn_values, ttnn_indices = ttnn.topk(
+        ttnn_input, k, dim=dim, largest=True, sorted=True, sub_core_grids=sub_core_grids
+    )
+
+    desired_shape = list(shape)
+    desired_shape[dim] = k
+    assert list(ttnn_values.shape) == desired_shape
+    assert list(ttnn_indices.shape) == desired_shape
+
+    ttnn_values_torch = ttnn.to_torch(ttnn_values)
+    ttnn_indices_torch = ttnn.to_torch(ttnn_indices).to(torch.int64)
+
+    # Only compare the finite (H=0) rows; the all-inf rows are uninteresting and
+    # their exact ordering is undefined when all values are equal (+inf).
+    pyt_values_finite = pyt_values[:, :, :1, :]
+    ttnn_values_finite = ttnn_values_torch[:, :, :1, :]
+    ttnn_gather_finite = torch.gather(input_torch, dim, ttnn_indices_torch)[:, :, :1, :]
+
+    cosine = torch.nn.CosineSimilarity(dim=dim)
+    cosine_sim = torch.mean(cosine(pyt_values_finite, ttnn_gather_finite))
+    assert cosine_sim > 0.99, (
+        f"Cosine similarity between bfloat8_b topk values and gather-from-indices "
+        f"is {cosine_sim:.4f} (expected > 0.99).  "
+        f"This is the bfp8 shared-exponent/inf regression."
+    )
+
+    # bfloat8_b has 2 mantissa bits, so the maximum relative quantization error per
+    # value is 2^-2 = 25%.  Two quantization steps occur (input bf16→bfp8 and output
+    # bf16→bfp8), but they are correlated so the combined worst-case stays near 25%.
+    # rtol=0.1 is therefore stricter than the format's theoretical maximum, meaning it
+    # catches genuine corruption (e.g. values becoming 0 due to the inf/shared-exponent
+    # bug) while tolerating legitimate bfp8 rounding.
+    # Cast to float32 first: pyt_values_finite is bfloat16 while ttnn_values_finite is
+    # float32 (ttnn.to_torch upcasts bfloat8_b), and torch.allclose raises on dtype mismatch.
+    assert torch.allclose(pyt_values_finite.float(), ttnn_values_finite.float(), rtol=0.1, atol=0.1), (
+        f"bfloat8_b TopK values exceed 10 % relative error vs PyTorch reference:\n"
+        f"  PyTorch:  {pyt_values_finite}\n"
+        f"  TTNN:     {ttnn_values_finite}"
+    )
+
+
 @pytest.mark.parametrize(
-    "torch_input_tenosr_dtype, ttnn_input_tenosr_dtype",
+    "N, C, H, W, dim, k, sub_core_grids",
     [
-        (torch.float32, ttnn.float32),
+        (1, 1, 32, 256, 3, 32, None),
+        (
+            1,
+            1,
+            32,
+            16 * 1024,
+            3,
+            32,
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 7)),
+                ]
+            ),
+        ),
+    ],
+    ids=["single_core_bfp8_inf", "multi_core_bfp8_inf"],
+)
+def test_topk_bfloat8_with_inf(N, C, H, W, dim, k, sub_core_grids, device):
+    """bfloat8_b TopK correctness when an entire H-row contains +inf values."""
+    if dim == 0 or dim == 1:
+        pytest.skip("dim=0/1 not supported for bfloat8_b (transpose path requires bfloat16 or float32)")
+    run_topk_bfloat8_inf_test(N, C, H, W, k, dim, sub_core_grids, device)
+
+
+@pytest.mark.parametrize(
+    "torch_input_tensor_dtype, ttnn_input_tensor_dtype",
+    [
         (torch.uint32, ttnn.uint32),
         (torch.int32, ttnn.int32),
     ],
 )
-def test_topk_input_dtypes_raise(torch_input_tenosr_dtype, ttnn_input_tenosr_dtype, device):
+def test_topk_input_dtypes_raise(torch_input_tensor_dtype, ttnn_input_tensor_dtype, device, expect_error):
     torch.manual_seed(0)
     shape = [1, 1, 32, 64]
 
-    if torch_input_tenosr_dtype == torch.float32:
-        input_torch = torch.randn(shape, dtype=torch_input_tenosr_dtype)
-    else:
-        input_torch = torch.randint(0, 100, shape, dtype=torch_input_tenosr_dtype)
+    input_torch = torch.randint(0, 100, shape, dtype=torch_input_tensor_dtype)
 
-    ttnn_input = ttnn.from_torch(input_torch, ttnn_input_tenosr_dtype, layout=ttnn.Layout.TILE, device=device)
+    ttnn_input = ttnn.from_torch(input_torch, ttnn_input_tensor_dtype, layout=ttnn.Layout.TILE, device=device)
 
-    with pytest.raises(Exception):
+    with expect_error(RuntimeError, "Input tensor must be BFLOAT16, BFLOAT8_B, or FLOAT32"):
         ttnn.topk(ttnn_input, k=32, dim=-1, largest=True, sorted=True)
 
 
@@ -264,15 +370,103 @@ def test_topk_input_dtypes_raise(torch_input_tenosr_dtype, ttnn_input_tenosr_dty
         (ttnn.bfloat16, ttnn.bfloat16),
     ],
 )
-def test_topk_preallocated_dtype_raise(value_dtype, index_dtype, device):
+def test_topk_preallocated_dtype_raise(value_dtype, index_dtype, device, expect_error):
     torch.manual_seed(0)
+    k = 32
     shape = [1, 1, 32, 64]
+    output_shape = [1, 1, 32, k]
 
     input_torch = torch.randn(shape, dtype=torch.bfloat16)
     ttnn_input = ttnn.from_torch(input_torch, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
 
-    value_tensor = ttnn.empty_like(ttnn_input, dtype=value_dtype)
-    index_tensor = ttnn.empty_like(ttnn_input, dtype=index_dtype)
+    # Preallocated outputs must carry the topk output shape ([..., k]); allocating at the input shape would
+    # trip the shape check in topk() before dtype validation is reached and defeat the purpose of this test.
+    output_torch = torch.zeros(output_shape, dtype=torch.bfloat16)
+    value_tensor = ttnn.from_torch(output_torch, value_dtype, layout=ttnn.Layout.TILE, device=device)
+    index_tensor = ttnn.from_torch(output_torch, index_dtype, layout=ttnn.Layout.TILE, device=device)
 
-    with pytest.raises(Exception):
-        ttnn.topk(ttnn_input, k=32, dim=-1, largest=True, sorted=True, out=(value_tensor, index_tensor))
+    with expect_error(RuntimeError, "Preallocated"):
+        ttnn.topk(ttnn_input, k=k, dim=-1, largest=True, sorted=True, output_tensor=(value_tensor, index_tensor))
+
+
+def test_topk_fp32_input_with_uint16_indices_tensor_raise(device, expect_error):
+    # fp32 input forces UINT32 index CBs; a UINT16 indices_tensor would silently produce wrong indices.
+    torch.manual_seed(0)
+    k = 32
+    shape = [1, 1, 32, 8192]
+
+    input_torch = torch.randn(shape, dtype=torch.bfloat16)
+    ttnn_input = ttnn.from_torch(input_torch, ttnn.float32, layout=ttnn.Layout.TILE, device=device)
+
+    indices_torch = torch.zeros(shape, dtype=torch.uint16)
+    indices_tensor = ttnn.from_torch(indices_torch, ttnn.uint16, layout=ttnn.Layout.TILE, device=device)
+
+    with expect_error(RuntimeError, "Optional indices tensor must be UINT32 when input tensor is FLOAT32"):
+        ttnn.topk(ttnn_input, k=k, dim=-1, largest=True, sorted=True, indices_tensor=indices_tensor)
+
+
+def test_topk_narrower_indices_tensor_raise(device, expect_error):
+    # The indices are streamed with the input's page stride, so a narrower indices tensor is read at
+    # the wrong pages and produces wrong indices rather than an error.
+    torch.manual_seed(0)
+    k = 32
+    shape = [1, 1, 32, 8192]
+
+    input_torch = torch.randn(shape, dtype=torch.bfloat16)
+    ttnn_input = ttnn.from_torch(input_torch, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+
+    indices_torch = torch.zeros([1, 1, 32, shape[3] // 2], dtype=torch.uint16)
+    indices_tensor = ttnn.from_torch(indices_torch, ttnn.uint16, layout=ttnn.Layout.TILE, device=device)
+
+    with expect_error(RuntimeError, "Indices tensor has incorrect shape"):
+        ttnn.topk(ttnn_input, k=k, dim=-1, largest=True, sorted=True, indices_tensor=indices_tensor)
+
+
+def test_topk_indices_tensor_on_non_last_dim_raise(device, expect_error):
+    # The front end transposes the reduced dim to last and leaves the indices tensor alone, so the
+    # indices are paged in the input's post-transpose layout and come back rounded to a tile.
+    torch.manual_seed(0)
+    k = 32
+    shape = [1, 1, 8192, 32]
+
+    input_torch = torch.randn(shape, dtype=torch.bfloat16)
+    ttnn_input = ttnn.from_torch(input_torch, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+
+    indices_torch = torch.zeros(shape, dtype=torch.uint16)
+    for i in range(shape[2]):
+        indices_torch[:, :, i, :] = i
+    indices_tensor = ttnn.from_torch(indices_torch, ttnn.uint16, layout=ttnn.Layout.TILE, device=device)
+
+    with expect_error(RuntimeError, "only supported for a reduction on the last dimension"):
+        ttnn.topk(ttnn_input, k=k, dim=2, largest=True, sorted=True, indices_tensor=indices_tensor)
+
+
+@pytest.mark.parametrize("largest", [True, False])
+def test_topk_multicore_local_write_correctness(largest, device):
+    """
+    Correctness guard for the multi-core topk local-writer path: an input width >= multi_core_min_width
+    (8192) routes to TopKMultiCoreProgramFactory + writer_local_topk, which NoC-writes each local-topk
+    tile from its CB slot to the final core and then cb_pop_front releases the slot back to the compute
+    producer. Correct aggregation at the final core relies on each write being drained before its slot is
+    reused; a regression there -- e.g. a WAR hazard where the producer's next pack_tile overwrites the
+    slot while the NoC write's source-read is still in flight -- would corrupt the landed values and make
+    this check fail.
+
+    This is a value-correctness guard, not a deterministic race reproducer: such a WAR is latent (masked
+    by compute-pack latency), so it would not necessarily surface on every run.
+    """
+    torch.manual_seed(2005)
+    W, k = 8192, 32  # W >= 8192 -> multi-core path; k=32 -> Kt=1
+    t = torch.randn((1, 1, 32, W), dtype=torch.bfloat16)
+    x = ttnn.from_torch(t, ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    v, i = ttnn.topk(x, k, dim=-1, largest=largest, sorted=True)
+    ttnn.synchronize_device(device)
+
+    got = ttnn.to_torch(v).float()
+    ref, _ = torch.topk(t.float(), k, dim=-1, largest=largest, sorted=True)
+    # Compare the (order-insensitive) set of top-k values per row.
+    got_s = got.sort(dim=-1, descending=True).values
+    ref_s = ref.sort(dim=-1, descending=True).values
+    assert torch.allclose(
+        got_s, ref_s, atol=1e-2
+    ), f"multi-core topk values mismatch (WAR regression?): max_diff={(got_s - ref_s).abs().max():.4f}"

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 ///
@@ -10,7 +10,7 @@
 #include <tt-metalium/work_split.hpp>
 #include "reduce_to_root_op.hpp"
 
-#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/operations/core/core.hpp"
 
@@ -184,6 +184,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
 
     // Get all cores from the shard grid
     std::vector<CoreCoord> all_coord_cores;
+    all_coord_cores.reserve(shard_grid.num_cores());
     for (const auto& core_range : shard_grid.ranges()) {
         auto cores = corerange_to_cores(core_range, std::nullopt);
         all_coord_cores.insert(all_coord_cores.end(), cores.begin(), cores.end());
@@ -619,7 +620,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
         uint32_t loop_size = is_root_device ? 2 : 1;
 
         auto compute_kernel_configuration = ttnn::init_device_compute_kernel_config(
-            input_tensor_l.device()->arch(), std::nullopt, MathFidelity::HiFi4, true, false, false);
+            input_tensor_l.device()->arch(), std::nullopt, tt::tt_metal::MathFidelity::HiFi4, true, false, false);
 
         auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
             get_compute_kernel_config_args(input_tensor_l.device()->arch(), compute_kernel_configuration);
@@ -645,6 +646,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
     // Split cores into links - divide all cores evenly between links
     constexpr auto num_links = 2;
     std::vector<CoreCoord> cores;
+    cores.reserve(num_shard_cores);
     std::vector<CoreRangeSet> cores_per_link;
 
     // Split cores evenly: first half to link 1, second half to link 2
@@ -830,7 +832,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
         ReduceToRootOp::ReduceToRoot::shared_variables_t{
             .send_unary_reader_kernel_id = is_sender_device ? reader_kernel : 0,
             .send_unary_writer_kernel_id = is_sender_device ? writer_kernel : 0,
-            .cores = cores,
+            .cores = std::move(cores),
             .root1_reader_kernel_id = is_root_device ? reader_kernel : 0,
             .root1_writer_kernel_id = is_root_device ? writer_kernel : 0,
             .root2_reader_kernel_id = is_root2_device ? reader_kernel : 0,

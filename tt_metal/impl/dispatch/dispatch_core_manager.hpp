@@ -1,14 +1,16 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
 #include <stdint.h>
+#include <functional>
 #include <list>
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
@@ -17,14 +19,18 @@
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tt-metalium/experimental/context/metal_env.hpp>
+#include <hostdevcommon/common_values.hpp>
 
 namespace tt::tt_metal {
+
+class MetalContext;
 
 // Dispatch core manager APIs track which cores are assigned to which dispatch functionality
 
 // A command queue is split into an issue queue and completion queue
 //  Host enqueues commands and data to be sent to device into the issue queue, and device reads from the issue queue.
-//  prefetcher kernels read commands targetting the MMIO or remote device respectively from the issue queue
+//  prefetcher kernels read commands targeting the MMIO or remote device respectively from the issue queue
 //  Device writes data into the completion queue for host to read back
 //  command_queue_consumer and remote_completion_queue_writer (to be added) kernels write into the completion queue for
 //  MMIO or remote device respectively Currently two cores are used to interface with each command queue region, marked
@@ -61,12 +67,14 @@ public:
     /// dispatch functionality
     ///         This list contains dispatch cores that have not been assigned to a particular dispatch function
     /// @param num_hw_cqs is used to get the correct collection of dispatch cores for a particular device
-    /// @param dispatch_core_config specfies the core type that is designated for dispatch functionality
-    dispatch_core_manager(const DispatchCoreConfig& dispatch_core_config, uint8_t num_hw_cqs);
+    /// @param dispatch_core_config specifies the core type that is designated for dispatch functionality
+    /// @param ctx owning MetalContext (for sibling accessors such as get_service_core_manager)
+    dispatch_core_manager(
+        const DispatchCoreConfig& dispatch_core_config, uint8_t num_hw_cqs, MetalEnvImpl& env, MetalContext& ctx);
 
-    static constexpr uint8_t MAX_NUM_HW_CQS = 2;
+    static constexpr uint8_t MAX_NUM_HW_CQS = ::MAX_NUM_HW_CQS;
 
-    /// @brief Gets the location of the kernel desginated to read from the issue queue region from a particular command
+    /// @brief Gets the location of the kernel designated to read from the issue queue region from a particular command
     /// queue
     ///         Each command queue has an issue queue where host enqueues commands. This core relays to the dispatcher
     ///         core to interpret and launch For remote devices, this core is located on the associated MMIO device
@@ -79,7 +87,7 @@ public:
 
     bool is_prefetcher_core_allocated(ChipId device_id, uint16_t channel, uint8_t cq_id);
 
-    /// @brief Gets the location of the kernel desginated to interface with prefetcher kernel running on mmio device.
+    /// @brief Gets the location of the kernel designated to interface with prefetcher kernel running on mmio device.
     ///         Prefetcher kernel on mmio device relays commands to prefetcher_d running on remote device.
     /// @param device_id ID of the device that a fast dispatch command targets
     /// @param channel assigned to the command queue where commands are enqueued
@@ -89,11 +97,11 @@ public:
 
     bool is_prefetcher_d_core_allocated(ChipId device_id, uint16_t channel, uint8_t cq_id);
 
-    /// @brief Gets the location of the kernel desginated to write to the completion queue region for a particular
+    /// @brief Gets the location of the kernel designated to write to the completion queue region for a particular
     /// command queue
     ///         Each command queue has one completion queue
     ///         For MMIO devices this core is the same as the issue queue reader core core because one kernel is
-    ///         responisble for interpreting + relaying commands and writing to completion queue For remote devices,
+    ///         responsible for interpreting + relaying commands and writing to completion queue For remote devices,
     ///         this core is located on the associated MMIO device since it can access sysmem (location of command
     ///         queue)
     /// @param device_id ID of the device that a fast dispatch command targets
@@ -139,9 +147,13 @@ public:
 
     bool is_fabric_mux_core_allocated(ChipId device_id, uint16_t channel, uint8_t cq_id, int tunnel);
 
-    CoreType get_dispatch_core_type();
+    CoreType get_dispatch_core_type() const;
 
     DispatchCoreConfig get_dispatch_core_config();
+
+    // Returns dispatch-column cores not yet allocated to FD or RT profiler.
+    // Valid after initialize_fast_dispatch() completes on this device.
+    std::vector<CoreCoord> get_available_dispatch_cores(ChipId device_id);
 
     uint8_t get_num_hw_cqs() const { return this->num_hw_cqs; }
 
@@ -150,10 +162,19 @@ public:
 
     std::vector<CoreCoord> get_all_logical_dispatch_cores(ChipId device_id);
 
+    /// @brief Returns the tensix reserved at construction time for the real-time profiler.
+    /// Taken from the back of the WORKER dispatch pool (dispatch consumes from the front), so
+    /// this core is never assigned to dispatch / prefetch / dispatch_s / fabric-mux kernels.
+    /// Returns nullopt for ETH dispatch or when no spare slot was available.
+    /// @param device_id ID of the device
+    /// @return tt_cxy_pair logical location of the reserved tensix, or empty if no reservation exists
+    std::optional<tt_cxy_pair> get_reserved_realtime_profiler_core(ChipId device_id);
+
 private:
     /// @brief reset_dispatch_core_manager initializes vector of cores per device for dispatch kernels
-    /// @param dispatch_core_config specfies the core type for dispatch kernels
-    void reset_dispatch_core_manager(const DispatchCoreConfig& dispatch_core_config, uint8_t num_hw_cqs);
+    /// @param dispatch_core_config specifies the core type for dispatch kernels
+    void reset_dispatch_core_manager(
+        const DispatchCoreConfig& dispatch_core_config, uint8_t num_hw_cqs, MetalEnvImpl& env);
 
     /// @brief getting any available dispatch core for a device
     /// @param device_id
@@ -190,8 +211,15 @@ private:
     std::unordered_map<ChipId, std::unordered_map<uint16_t, std::unordered_map<uint8_t, dispatch_core_placement_t>>>
         dispatch_core_assignments;
     std::unordered_map<ChipId, std::list<CoreCoord>> available_dispatch_cores_by_device;
+    // Tensix reserved at construction time for the real-time profiler kernel.
+    // Removed from available_dispatch_cores_by_device so dispatch cannot reach it.
+    std::unordered_map<ChipId, tt_cxy_pair> reserved_realtime_profiler_core_by_device_;
     DispatchCoreConfig dispatch_core_config_;
     uint8_t num_hw_cqs{};
+    MetalEnvImpl& env_;
+    // Owning context; used for context-level siblings (e.g. service_core_manager). Keep env_
+    // for env-level cluster/HAL access — do not reach env state through ctx_.
+    MetalContext& ctx_;
     static dispatch_core_manager* _inst;
 };
 

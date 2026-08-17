@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -26,10 +26,9 @@
 
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
@@ -37,6 +36,7 @@
 #include "impl/context/metal_context.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include <llrt/tt_cluster.hpp>
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -51,10 +51,8 @@ const uint32_t N_RANDS = 512;
 }  // namespace
 
 // Disabled because this test can hang the NoC due to hardware issues.
-// Uses detail::LaunchProgram which requires slow dispatch mode
-TEST_F(MeshDeviceSingleCardFixture, DISABLED_StressNocMcast) {
-    IDevice* dev = devices_[0]->get_devices()[0];
-
+// Uses slow_dispatch::LaunchProgram which requires slow dispatch mode
+TEST_F(UnitMeshFixture, DISABLED_StressNocMcast) {
     // Use default test parameters
     uint32_t time_secs = DEFAULT_SECONDS;
     uint32_t tlx = 0;
@@ -75,13 +73,13 @@ TEST_F(MeshDeviceSingleCardFixture, DISABLED_StressNocMcast) {
 
     CoreRange workers_logical({tlx, tly}, {tlx + width - 1, tly + height - 1});
     CoreCoord mcast_logical(mcast_x, mcast_y);
-    CoreCoord tl_core = dev->worker_core_from_logical_core({tlx, tly});
+    CoreCoord tl_core = this->device().worker_core_from_logical_core({tlx, tly});
 
-    CoreCoord mcast_end = dev->worker_core_from_logical_core(workers_logical.end_coord);
+    CoreCoord mcast_end = this->device().worker_core_from_logical_core(workers_logical.end_coord);
     bool virtualization_enabled = tt::tt_metal::MetalContext::instance().hal().is_coordinate_virtualization_enabled();
     uint32_t num_dests = workers_logical.size();
     CoreCoord virtual_offset = virtualization_enabled
-                                   ? dev->worker_core_from_logical_core({0, 0})
+                                   ? this->device().worker_core_from_logical_core({0, 0})
                                    : CoreCoord(0, 0);  // In this case pass physical coordinates as runtime args
 
     std::vector<uint32_t> compile_args = {
@@ -98,8 +96,8 @@ TEST_F(MeshDeviceSingleCardFixture, DISABLED_StressNocMcast) {
         virtual_offset.y,
         N_RANDS,
         rnd_delay,
-        dev->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1),
-        dev->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1),
+        this->device().allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1),
+        this->device().allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1),
     };
 
     KernelHandle ucast_kernel = tt_metal::CreateKernel(
@@ -116,14 +114,14 @@ TEST_F(MeshDeviceSingleCardFixture, DISABLED_StressNocMcast) {
         std::vector<uint32_t> runtime_args;
         // Not particularly random since all cores are getting the same data
         // N_RANDS in bytes
-        CoreCoord grid_size = dev->logical_grid_size();
+        CoreCoord grid_size = this->device().logical_grid_size();
         for (int i = 0; i < N_RANDS / sizeof(uint32_t); i++) {
             uint32_t rnd = 0;
             for (int j = 0; j < sizeof(uint32_t); j++) {
                 uint32_t x = rand() % grid_size.x;
                 uint32_t y = rand() % grid_size.y;
                 if (!virtualization_enabled) {
-                    CoreCoord physical_coord = dev->worker_core_from_logical_core(CoreCoord(x, y));
+                    CoreCoord physical_coord = this->device().worker_core_from_logical_core(CoreCoord(x, y));
                     x = physical_coord.x;
                     y = physical_coord.y;
                 }
@@ -149,5 +147,5 @@ TEST_F(MeshDeviceSingleCardFixture, DISABLED_StressNocMcast) {
     }
     log_info(LogTest, "Running for {} seconds", time_secs);
 
-    tt::tt_metal::detail::LaunchProgram(dev, program, true);
+    slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true);
 }

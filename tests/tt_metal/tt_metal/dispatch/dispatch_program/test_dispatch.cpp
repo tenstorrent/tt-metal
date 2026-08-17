@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -17,24 +17,31 @@
 #include <tt-metalium/circular_buffer_constants.h>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/device.hpp>
 #include "mesh_dispatch_fixture.hpp"
+#include "device_fixture.hpp"
 #include <distributed.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
+#include "impl/dispatch/dispatch_core_manager.hpp"
+#include "impl/dispatch/dispatch_query_manager.hpp"
+#include "impl/dispatch/dispatch_engine_cores.hpp"
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
 
-// Access to internal API: ProgramImpl::get_cb_base_addr, ProgramImpl::get_cb_size
+// Access to internal API: ProgramImpl::get_cb_base_addr, ProgramImpl::get_cb_size, Eth, EthernetConfig,
+// CreateSemaphore with CoreType
 #include "impl/program/program_impl.hpp"
+#include "impl/kernels/kernel.hpp"
+#include "impl/buffers/semaphore.hpp"
 
 namespace tt::tt_metal {
 
@@ -173,7 +180,7 @@ TEST_F(MeshDispatchFixture, EthTestBlank) {
             CoreCoord eth_core = *eth_cores.begin();
             CreateKernel(
                 program,
-                "tt_metal/kernels/dataflow/blank.cpp",
+                "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
                 eth_core,
                 tt::tt_metal::EthernetConfig{
                     .eth_mode = this->slow_dispatch_ ? Eth::IDLE : Eth::RECEIVER,
@@ -326,21 +333,22 @@ TEST_F(MeshDispatchFixture, TensixActiveEthTestCBsAcrossDifferentCoreTypes) {
 
             CreateKernel(
                 program,
-                "tt_metal/kernels/dataflow/blank.cpp",
+                "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
                 core_coord,
                 DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 
             CreateKernel(
                 program,
-                "tt_metal/kernels/dataflow/blank.cpp",
+                "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
                 core_coord,
                 DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
             CreateKernel(
                 program,
-                "tt_metal/kernels/dataflow/blank.cpp",
+                "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
                 core_coord,
-                EthernetConfig{.eth_mode = Eth::RECEIVER, .noc = static_cast<NOC>(erisc_idx), .processor = dm_processor});
+                EthernetConfig{
+                    .eth_mode = Eth::RECEIVER, .noc = static_cast<NOC>(erisc_idx), .processor = dm_processor});
 
             workload.add_program(device_range, std::move(program));
             this->RunProgram(mesh_device, workload);
@@ -383,11 +391,13 @@ TEST_F(MeshDispatchFixture, TensixActiveEthTestCBsAcrossDifferentCoreTypes) {
 class EarlyReturnFixture : public MeshDispatchFixture {
     void SetUp() override {
         tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_early_return(true);
+        get_shared_devices().needs_recovery = true;
         MeshDispatchFixture::SetUp();
     }
     void TearDown() override {
         MeshDispatchFixture::TearDown();
         tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_early_return(false);
+        get_shared_devices().needs_recovery = true;
     }
 };
 
@@ -401,7 +411,7 @@ TEST_F(EarlyReturnFixture, TensixKernelEarlyReturn) {
         // Kernel will block if it doesn't early return.
         CreateKernel(
             program,
-            "tt_metal/kernels/dataflow/writer_unary.cpp",
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
             worker,
             DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
@@ -443,6 +453,147 @@ TEST_F(MeshDispatchFixture, TensixCircularBufferInitFunction) {
             }
         }
     }
+}
+
+TEST_F(MeshDispatchFixture, TensixTestCreateCircularBufferOnOutOfRangeCores) {
+    for (auto& device : devices_) {
+        auto& cq = device->mesh_command_queue();
+        distributed::MeshWorkload workload;
+        auto zero_coord = distributed::MeshCoordinate(0, 0);
+        auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+        Program program;
+        workload.add_program(device_range, std::move(program));
+        auto& program_ = workload.get_programs().at(device_range);
+
+        auto grid_size = device->compute_with_storage_grid_size();
+        CoreRange cr({0, 0}, {grid_size.x, grid_size.y - 1});
+        CoreRangeSet cr_set({cr});
+
+        uint32_t page_size = tt::tile_size(tt::DataFormat::Float16_b);
+        CircularBufferConfig config =
+            CircularBufferConfig(page_size, {{0, tt::DataFormat::Float16_b}}).set_page_size(0, page_size);
+        CreateCircularBuffer(program_, cr_set, config);
+
+        EXPECT_ANY_THROW(distributed::EnqueueMeshWorkload(cq, workload, false));
+    }
+}
+
+namespace {
+
+std::optional<CoreCoord> quasar_dispatch_s_virtual_core(IDevice* device) {
+    auto& metal_context = MetalContext::instance();
+    if (!metal_context.get_dispatch_query_manager().dispatch_s_enabled()) {
+        return std::nullopt;
+    }
+
+    auto& dcm = metal_context.get_dispatch_core_manager();
+    const ChipId chip = device->id();
+    const uint16_t channel = metal_context.get_cluster().get_assigned_channel_for_device(chip);
+    if (!dcm.is_dispatcher_s_core_allocated(chip, channel, /*cq_id=*/0)) {
+        return std::nullopt;
+    }
+
+    const auto& logical_cxy = dcm.dispatcher_s_core(chip, channel, 0);
+    const CoreType core_type = dcm.get_dispatch_core_type();
+    return device->virtual_core_from_logical_core(CoreCoord{logical_cxy.x, logical_cxy.y}, core_type);
+}
+
+Program create_quasar_l1_write_program(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    const experimental::NodeCoord& node,
+    uint32_t l1_address,
+    uint32_t value) {
+    const experimental::KernelSpecName dm_kernel_name{"dispatch_s_test_dm"};
+    experimental::KernelSpec dm_kernel_spec{
+        .unique_id = dm_kernel_name,
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/simple_l1_write.cpp",
+        .num_threads = 1,
+        .runtime_arg_schema = {.runtime_arg_names = {"address"}, .common_runtime_arg_names = {"value"}},
+        .hw_config = experimental::DataMovementGen2Config{},
+    };
+
+    experimental::ProgramSpec spec{
+        .name = "quasar_dispatch_s_test",
+        .kernels = {dm_kernel_spec},
+        .work_units =
+            {experimental::WorkUnitSpec{
+                .name = "main",
+                .kernels = {dm_kernel_name},
+                .target_nodes = node,
+            }},
+    };
+
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    experimental::ProgramRunArgs params;
+    params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
+        .kernel = dm_kernel_name,
+        .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(node, {{"address", l1_address}}),
+        .common_runtime_arg_values = {{"value", value}},
+    }};
+    experimental::SetProgramRunArgs(program, params);
+    return program;
+}
+
+}  // namespace
+
+TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarDispatchSInstantiatedAndRunning) {
+    if (getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
+        GTEST_SKIP() << "Requires fast dispatch";
+    }
+
+    const bool use_tensix_fallback = MetalContext::instance().rtoptions().get_use_quasar_tensix_dispatch_cores();
+    auto mesh_device = devices_.front();
+    IDevice* device = mesh_device->get_devices().front();
+    if (!use_tensix_fallback && detail::sd_cq_kernel_tests_should_skip(device)) {
+        GTEST_SKIP() << "No dispatch-engine cores in soc descriptor";
+    }
+
+    auto& dispatch_query_manager = MetalContext::instance().get_dispatch_query_manager();
+    // Host enables dispatch_s for this config
+    ASSERT_TRUE(dispatch_query_manager.dispatch_s_enabled());
+
+    auto& dispatch_core_manager = MetalContext::instance().get_dispatch_core_manager();
+    const CoreType dispatch_core_type = dispatch_core_manager.get_dispatch_core_type();
+    if (use_tensix_fallback) {
+        EXPECT_EQ(dispatch_core_type, CoreType::WORKER);
+    } else {
+        EXPECT_EQ(dispatch_core_type, CoreType::DISPATCH);
+    }
+
+    // dispatch_s is wired in topology/core manager
+    const auto dispatch_s_core = quasar_dispatch_s_virtual_core(device);
+    ASSERT_TRUE(dispatch_s_core.has_value());
+
+    const ChipId chip = device->id();
+    const uint16_t channel = MetalContext::instance().get_cluster().get_assigned_channel_for_device(chip);
+    const auto& dispatch_s_logical = dispatch_core_manager.dispatcher_s_core(chip, channel, 0);
+    const auto& dispatch_logical = dispatch_core_manager.dispatcher_core(chip, channel, 0);
+    // dispatch_s and dispatch share the same logical coord
+    EXPECT_EQ(dispatch_s_logical.x, dispatch_logical.x);
+    EXPECT_EQ(dispatch_s_logical.y, dispatch_logical.y);
+
+    const experimental::NodeCoord worker_node{0, 0};
+    const uint32_t l1_address = MetalContext::instance().hal().get_dev_addr(
+        HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
+    constexpr uint32_t test_value = 0xdeadbeef;
+    std::vector<uint32_t> cleared_l1(1, 0);
+    detail::WriteToDeviceL1(device, worker_node, l1_address, cleared_l1);
+
+    auto& cq = mesh_device->mesh_command_queue();
+    const distributed::MeshCoordinateRange device_range =
+        distributed::MeshCoordinateRange(distributed::MeshCoordinate(0, 0), distributed::MeshCoordinate(0, 0));
+
+    distributed::MeshWorkload workload;
+    workload.add_program(
+        device_range, create_quasar_l1_write_program(mesh_device, worker_node, l1_address, test_value));
+    distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::Finish(cq);
+
+    std::vector<uint32_t> result(1, 0);
+    detail::ReadFromDeviceL1(device, worker_node, l1_address, sizeof(uint32_t), result);
+    // End-to-end proof dispatch_s ran: dispatch_hd notifies dispatch_s to multicast the worker go
+    // signal; without a functioning dispatch_s the worker kernel never writes L1.
+    ASSERT_EQ(result[0], test_value);
 }
 
 }  // namespace tt::tt_metal

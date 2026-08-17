@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,16 +7,16 @@
 #include <optional>
 
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/decorators.hpp"
 #include "fast_reduce_nc_device_operation_types.hpp"
 #include "fast_reduce_nc_program_factory.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::experimental::prim {
 
 struct FastReduceNCDeviceOperation {
     using operation_attributes_t = FastReduceNCParams;
     using tensor_args_t = FastReduceNCInputs;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<FastReduceNCProgramFactory>;
 
@@ -35,6 +35,8 @@ Tensor fast_reduce_nc(
     const int32_t& dim,
     const std::optional<const Tensor>& output,
     const MemoryConfig& output_mem_config,
-    const DeviceComputeKernelConfig& compute_kernel_config);
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::optional<DataType>& output_dtype = std::nullopt);
 
 }  // namespace ttnn::prim

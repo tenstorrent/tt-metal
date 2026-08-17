@@ -4,6 +4,7 @@ include(sources.cmake)
 add_executable(unit_tests_noc_debugging ${UNIT_TESTS_NOC_DEBUGGING_SRC})
 
 TT_ENABLE_UNITY_BUILD(unit_tests_noc_debugging)
+target_precompile_headers(unit_tests_noc_debugging REUSE_FROM metal_common_pch)
 
 target_link_libraries(unit_tests_noc_debugging PRIVATE test_metal_common_libs)
 

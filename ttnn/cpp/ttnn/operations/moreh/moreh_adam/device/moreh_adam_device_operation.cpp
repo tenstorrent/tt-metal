@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -58,8 +58,9 @@ MorehAdamOperation::spec_return_value_t MorehAdamOperation::compute_output_specs
     auto output_shape = tensor_args.param_in.logical_shape();
     auto dtype = tensor_args.param_in.dtype();
 
-    std::vector<std::optional<TensorSpec>> ret;
-    TensorSpec out_spec(
+    std::vector<std::optional<tt::tt_metal::TensorSpec>> ret;
+    ret.reserve(4);
+    tt::tt_metal::TensorSpec out_spec(
         output_shape, TensorLayout(dtype, PageConfig(Layout::TILE), operation_attributes.memory_config));
     for (int idx = 0; idx < 3; idx++) {
         if (tensor_args.output_tensors.at(idx).has_value()) {
@@ -85,6 +86,7 @@ MorehAdamOperation::tensor_return_value_t MorehAdamOperation::create_output_tens
     auto* device = tensor_args.param_in.device();
 
     std::vector<std::optional<Tensor>> ret;
+    ret.reserve(output_specs.size());
     auto memory_config = operation_attributes.memory_config;
 
     for (size_t idx = 0; idx < output_specs.size(); idx++) {
@@ -102,11 +104,11 @@ MorehAdamOperation::tensor_return_value_t MorehAdamOperation::create_output_tens
 
 auto MorehAdamOperation::compute_program_hash(
     const MorehAdamOperation::operation_attributes_t& operation_attributes,
-    const MorehAdamOperation::tensor_args_t& tensor_args) -> tt::stl::hash::hash_t {
+    const MorehAdamOperation::tensor_args_t& tensor_args) -> ttsl::hash::hash_t {
     auto operation_attributes_without_step_and_lr = operation_attributes;
     operation_attributes_without_step_and_lr.step = 0;
     operation_attributes_without_step_and_lr.lr = 0.0f;
-    return tt::stl::hash::hash_objects_with_default_seed(operation_attributes_without_step_and_lr, tensor_args);
+    return ttsl::hash::hash_objects_with_default_seed(operation_attributes_without_step_and_lr, tensor_args);
 }
 }  // namespace ttnn::operations::moreh::moreh_adam
 
@@ -140,7 +142,7 @@ ttnn::operations::moreh::moreh_adam::MorehAdamOperation::tensor_return_value_t m
         step.value_or(0),
         amsgrad.value_or(false),
         memory_config.value_or(param_in.memory_config()),
-        init_device_compute_kernel_config(param_in.device()->arch(), compute_kernel_config, MathFidelity::HiFi4),
+        init_device_compute_kernel_config(param_in.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4),
     };
     auto tensor_args = OperationType::tensor_args_t{
         param_in,

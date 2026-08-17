@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,8 +7,13 @@
 #ifndef _NOC_PARAMETERS_H_
 #define _NOC_PARAMETERS_H_
 
-// TODO: review these values
-#define VIRTUAL_TENSIX_START_X 1
+// Quasar functional workers occupy physical x[2..9], y[2..5] (no harvesting;
+// physical col x=1 is empty, x=0 is router). Coordinate virtualization is
+// identity here (tt-umd translated==physical, craq-sim applies no QSR remap),
+// so the virtual Tensix origin must equal the physical worker start. X was
+// copy-pasted from Blackhole (=1, where BH's physical Tensix start is 1) and
+// must be 2 for Quasar; Y already matches (physical y-start is 2).
+#define VIRTUAL_TENSIX_START_X 2
 #define VIRTUAL_TENSIX_START_Y 2
 #define COORDINATE_VIRTUALIZATION_ENABLED 1
 
@@ -63,6 +68,7 @@
 #define NOC_BRCST_LO (NOC_REGS_START_ADDR + 0x20)
 #define NOC_BRCST_HI (NOC_REGS_START_ADDR + 0x24)
 #define NOC_AT_LEN (NOC_REGS_START_ADDR + 0x28)
+#define NOC_AT_LEN_BE NOC_AT_LEN  // No separate byte-enable reg on Quasar; alias for WH/BH compat
 #define NOC_L1_ACC_AT_INSTRN (NOC_REGS_START_ADDR + 0x2C)
 #define NOC_SEC_CTRL (NOC_REGS_START_ADDR + 0x30)
 #define NOC_AT_DATA (NOC_REGS_START_ADDR + 0x34)
@@ -142,7 +148,7 @@
 #define NOC_STATUS(cnt) (NOC_REGS_START_ADDR + 0x200 + ((cnt) * 4))
 
 // status/performance counter registers
-// IMPROVE: add offsets for misc. debug status regiters
+// IMPROVE: add offsets for misc. debug status registers
 
 // from noc/rtl/tt_noc_params.svh
 // parameter TOTAL_STATUS_REGS = NIU_STATUS_REGS + MST_IF_INTP_STATUS_REGS + ROUTER_STATUS_REGS + SLV_IF_STATUS_REGS +
@@ -428,7 +434,7 @@
 #define NOC_MCAST_COORDINATE_END_X(noc_coordinate) \
     (((noc_coordinate) >> (0 * NOC_ADDR_NODE_ID_BITS)) & NOC_NODE_ID_MASK)
 
-// Addres formats
+// Address formats
 
 #define NOC_XY_ADDR(x, y, addr)                                                                                      \
     ((((uint64_t)(y)) << (NOC_ADDR_LOCAL_BITS + NOC_ADDR_NODE_ID_BITS)) | (((uint64_t)(x)) << NOC_ADDR_LOCAL_BITS) | \
@@ -454,28 +460,42 @@
 #define NOC_XY_PCIE_ENCODING(x, y) \
     ((uint64_t(NOC_XY_ENCODING(x, y)) << (NOC_ADDR_LOCAL_BITS - NOC_COORD_REG_OFFSET)) | 0x1000000000000000)
 
-#define NOC_LOCAL_ADDR(addr) (addr)
+#define NOC_MULTICAST_ENCODING(x_start, y_start, x_end, y_end)                                                         \
+    ((((uint32_t)(x_start)) << (2 * NOC_ADDR_NODE_ID_BITS)) | (((uint32_t)(y_start)) << (3 * NOC_ADDR_NODE_ID_BITS)) | \
+     (((uint32_t)(x_end))) | (((uint32_t)(y_end)) << (NOC_ADDR_NODE_ID_BITS)))
 
-// TODO review these alignment restrictions
-// Alignment restrictions
-#define NOC_L1_READ_ALIGNMENT_BYTES 16
-#define NOC_L1_WRITE_ALIGNMENT_BYTES 16
+// Quasar firmware currently uses BH-style encoding (X,Y coords embedded at bits 36+).
+// NOC_LOCAL_ADDR extracts the local offset (bits 0-35) for memory bounds validation.
+//
+// Note: Unlike BH, Quasar doesn't need to preserve PCIe bit 60 here - PCIe TLBs
+// handle address translation before firmware sees the address.
+//
+// TODO: When software moves to ATT-based flat 64-bit addressing:
+//   1. Replace NOC_XY_ADDR() usage with global address construction
+//   2. Update sanitize.h to handle coordinate-less addresses
+//   3. Change this macro to identity: #define NOC_LOCAL_ADDR(addr) (addr)
+#define NOC_LOCAL_ADDR(addr) NOC_LOCAL_ADDR_OFFSET(addr)
+
+// NOC transfer alignment. The Quasar NOC shifts the data to make it so things don't need to be
+// aligned, hence no L1/DRAM restriction. Kept DECOUPLED from L1_ALIGNMENT/DRAM_ALIGNMENT below: the
+// NOC's relaxed alignment does not apply to other L1 consumers (e.g. the unpacker), which still
+// need the physical L1 width.
+#define NOC_L1_READ_ALIGNMENT_BYTES 1
+#define NOC_L1_WRITE_ALIGNMENT_BYTES 1
 #define NOC_PCIE_READ_ALIGNMENT_BYTES 64
 #define NOC_PCIE_WRITE_ALIGNMENT_BYTES 16
-#define NOC_DRAM_READ_ALIGNMENT_BYTES 64
-#define NOC_DRAM_WRITE_ALIGNMENT_BYTES 16
+#define NOC_DRAM_READ_ALIGNMENT_BYTES 1
+#define NOC_DRAM_WRITE_ALIGNMENT_BYTES 1
+// TODO(quasar): For Quasar, do a per-register lookup - 4 or 8 depending on target reg.
+#define NOC_REG_ALIGNMENT_BYTES 4
 
-#define L1_ALIGNMENT                                                                              \
-    (static_cast<uint32_t>(                                                                       \
-        NOC_L1_READ_ALIGNMENT_BYTES >= NOC_L1_WRITE_ALIGNMENT_BYTES ? NOC_L1_READ_ALIGNMENT_BYTES \
-                                                                    : NOC_L1_WRITE_ALIGNMENT_BYTES))
+// Allocation / layout alignment. Pinned to the physical floor (L1 = 16B, GDDR = 64B), NOT derived
+// from the NOC values above
+#define L1_ALIGNMENT (static_cast<uint32_t>(16))
 #define PCIE_ALIGNMENT                                                                                  \
     (static_cast<uint32_t>(                                                                             \
         NOC_PCIE_READ_ALIGNMENT_BYTES >= NOC_PCIE_WRITE_ALIGNMENT_BYTES ? NOC_PCIE_READ_ALIGNMENT_BYTES \
                                                                         : NOC_PCIE_WRITE_ALIGNMENT_BYTES))
-#define DRAM_ALIGNMENT                                                                                  \
-    (static_cast<uint32_t>(                                                                             \
-        NOC_DRAM_READ_ALIGNMENT_BYTES >= NOC_DRAM_WRITE_ALIGNMENT_BYTES ? NOC_DRAM_READ_ALIGNMENT_BYTES \
-                                                                        : NOC_DRAM_WRITE_ALIGNMENT_BYTES))
+#define DRAM_ALIGNMENT (static_cast<uint32_t>(64))
 
 #endif

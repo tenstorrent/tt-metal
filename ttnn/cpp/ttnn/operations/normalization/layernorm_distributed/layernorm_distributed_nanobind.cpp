@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,16 +9,16 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
+#include "ttnn/types.hpp"
 #include "layernorm_pre_all_gather.hpp"
 #include "layernorm_post_all_gather.hpp"
 
 namespace ttnn::operations::normalization::detail {
 
 void bind_normalization_layernorm_pre_all_gather_operation(nb::module_& mod) {
-    ttnn::bind_registered_operation(
+    ttnn::bind_function<"layer_norm_pre_all_gather">(
         mod,
-        ttnn::layer_norm_pre_all_gather,
         R"doc(
               This operation is used in conjunction with :func:`ttnn.layer_norm_post_all_gather` to compute layer norm on a distributed setup, where layer norm is defined as:
 
@@ -46,6 +46,7 @@ void bind_normalization_layernorm_pre_all_gather_operation(nb::module_& mod) {
                 program_config (ttnn.ProgramConfig, optional): the program configuration. Defaults to None.
                 memory_config (ttnn.MemoryConfig, optional): the memory configuration. Defaults to None.
                 recip_tensor (ttnn.Tensor, optional): the reciprocals tensor for Welford algorithm. Required when using Welford (use_welford=True in program_config). Create using :func:`ttnn.create_layer_norm_reciprocals`. Defaults to None.
+                fast_and_approximate_mode (bool, optional): FLOAT32 only. ``False`` (default) uses the accurate SFPU path (full float32 accumulation); ``True`` uses the faster FPU path (inputs truncated to TF32). The accurate path is unavailable on Quasar and falls back to the FPU there. Ignored by the Welford path. No effect for non-FLOAT32 inputs. Defaults to False.
 
               Returns:
                 ttnn.Tensor: the output tensor.
@@ -75,24 +76,24 @@ void bind_normalization_layernorm_pre_all_gather_operation(nb::module_& mod) {
                 - Input tensors must be on-device and rank 4.
                 - Unsharded runs: :attr:`input_tensor` must be interleaved.
                 - Sharded runs: inputs cannot be height-sharded, padded height must equal TILE_HEIGHT (32).
-                - When using :attr:`residual_input_tensor` with sharding, it must match the :attr:`input_tensor` padded shape and sharding.
+                - When using :attr:`residual_input_tensor`, it must match the :attr:`input_tensor` logical and padded shape, and sharding spec for sharded inputs.
                 - When using Welford algorithm (use_welford=True), :attr:`recip_tensor` must be provided.
         )doc",
-        ttnn::nanobind_arguments_t{
-            nb::arg("input_tensor"),
-            nb::kw_only(),
-            nb::arg("dtype") = nb::cast(DataType::BFLOAT16),
-            nb::arg("residual_input_tensor") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none(),
-            nb::arg("program_config") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("recip_tensor") = nb::none()});
+        &ttnn::layer_norm_pre_all_gather,
+        nb::arg("input_tensor"),
+        nb::kw_only(),
+        nb::arg("dtype") = nb::cast(DataType::BFLOAT16),
+        nb::arg("residual_input_tensor") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("program_config") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("recip_tensor") = nb::none(),
+        nb::arg("fast_and_approximate_mode") = false);
 }
 
 void bind_normalization_layernorm_post_all_gather_operation(nb::module_& mod) {
-    ttnn::bind_registered_operation(
+    ttnn::bind_function<"layer_norm_post_all_gather">(
         mod,
-        ttnn::layer_norm_post_all_gather,
         R"doc(
                 This operation is used in conjunction with :func:`ttnn.layer_norm_pre_all_gather` to compute layer norm on a distributed setup, where layer norm is defined as:
 
@@ -134,7 +135,7 @@ void bind_normalization_layernorm_post_all_gather_operation(nb::module_& mod) {
 
                     * - dtype
                       - layout
-                    * - BFLOAT16, BFLOAT8_B
+                    * - BFLOAT16, BFLOAT8_B, FLOAT32
                       - TILE
 
                   .. list-table:: stats
@@ -142,7 +143,7 @@ void bind_normalization_layernorm_post_all_gather_operation(nb::module_& mod) {
 
                     * - dtype
                       - layout
-                    * - BFLOAT16
+                    * - BFLOAT16, BFLOAT8_B, FLOAT32
                       - TILE
 
                   .. list-table:: weight (gamma) and bias (beta)
@@ -150,29 +151,30 @@ void bind_normalization_layernorm_post_all_gather_operation(nb::module_& mod) {
 
                     * - dtype
                       - layout
-                    * - BFLOAT16
-                      - ROW_MAJOR
+                    * - BFLOAT16, FLOAT32
+                      - ROW_MAJOR, TILE
 
                   Output tensor will be in TILE layout and have the same dtype as the :attr:`input_tensor`
 
                 Limitations:
                   - Input tensors must be on-device and rank 4.
+                  - FLOAT32 :attr:`input_tensor` / :attr:`stats` require ``fp32_dest_acc_en=true`` in the compute kernel config.
                   - The last padded dim of :attr:`stats` must be a multiple of TILE_WIDTH.
                   - The first three padded dims of :attr:`stats` must match :attr:`input_tensor`.
-                  - If :attr:`weight` (gamma) is provided, :attr:`bias` (beta) must also be provided with matching layouts with their last padded dim matching TILE_WIDTH.
+                  - :attr:`weight` (gamma) and :attr:`bias` (beta) are independently optional, may be BFLOAT16 or FLOAT32, and must match :attr:`input_tensor` per the layout rules above.
                   - Sharded runs: inputs cannot be height-sharded, padded height must equal TILE_HEIGHT (32), and :attr:`stats` must be sharded with `num_cores=1` and expected tile columns per device.
         )doc",
-        ttnn::nanobind_arguments_t{
-            nb::arg("input_tensor"),
-            nb::arg("stats"),
-            nb::kw_only(),
-            nb::arg("epsilon") = 1e-12,
-            nb::arg("weight") = nb::none(),
-            nb::arg("bias") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none(),
-            nb::arg("program_config") = nb::none(),
-            nb::arg("dtype") = nb::none()});
+        &ttnn::layer_norm_post_all_gather,
+        nb::arg("input_tensor"),
+        nb::arg("stats"),
+        nb::kw_only(),
+        nb::arg("epsilon") = 1e-12,
+        nb::arg("weight") = nb::none(),
+        nb::arg("bias") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("program_config") = nb::none(),
+        nb::arg("dtype") = nb::none());
 }
 
 void bind_normalization_layernorm_distributed(nb::module_& mod) {

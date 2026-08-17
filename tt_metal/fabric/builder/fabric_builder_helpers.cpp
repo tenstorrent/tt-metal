@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -62,6 +62,7 @@ std::vector<eth_chan_directions> get_all_other_directions(eth_chan_directions di
     }
 
     std::vector<eth_chan_directions> dirs;
+    dirs.reserve(all_directions.size());
     for (auto dir : all_directions) {
         if (dir != direction) {
             dirs.push_back(dir);

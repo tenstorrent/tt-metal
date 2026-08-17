@@ -1,9 +1,10 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "deepseek_grouped_gate_device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::experimental::reduction {
 
@@ -50,12 +51,12 @@ DeepseekGroupedGateDeviceOperation::spec_return_value_t DeepseekGroupedGateDevic
     auto output_shape = shape;
     output_shape[-1] = attributes.n_activated_experts;
 
-    return std::array<TensorSpec, 2>{
-        TensorSpec(
+    return std::array<tt::tt_metal::TensorSpec, 2>{
+        tt::tt_metal::TensorSpec(
             output_shape,
             tt::tt_metal::TensorLayout(
                 scores.dtype(), tt::tt_metal::PageConfig(scores.layout()), attributes.output_mem_config)),
-        TensorSpec(
+        tt::tt_metal::TensorSpec(
             output_shape,
             tt::tt_metal::TensorLayout(
                 DataType::UINT16, tt::tt_metal::PageConfig(scores.layout()), attributes.output_mem_config))};
@@ -100,7 +101,3 @@ deepseek_grouped_gate(
 }
 
 }  // namespace ttnn::prim
-
-namespace ttnn::operations::experimental::reduction {
-
-}  // namespace ttnn::operations::experimental::reduction

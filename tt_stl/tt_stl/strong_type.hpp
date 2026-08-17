@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -101,6 +101,14 @@ public:
 private:
     T value_;
 };
+
+// Type trait to detect StrongType instantiations.
+template <typename T>
+struct is_strong_type : std::false_type {};
+template <typename T, typename Tag>
+struct is_strong_type<StrongType<T, Tag>> : std::true_type {};
+template <typename T>
+inline constexpr bool is_strong_type_v = is_strong_type<T>::value;
 
 }  // namespace ttsl
 

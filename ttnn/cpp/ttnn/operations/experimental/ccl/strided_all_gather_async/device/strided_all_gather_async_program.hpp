@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -50,13 +50,13 @@ struct StridedAllGatherAsyncProgramFactory {
         const std::vector<GlobalSemaphore>& semaphore,
         std::optional<ttnn::experimental::ccl::StridedAllGatherFusedOpSignaler>& fused_op_signaler,
         bool read_local_slice_from_input,
-        std::optional<uint32_t> tiles_per_chunk,
         std::optional<uint32_t> num_workers_per_direction_opt,
         std::optional<uint32_t> num_buffers_per_channel,
         std::optional<uint32_t> mm_cores_y,
         std::optional<uint32_t> mm_block_ht,
         std::optional<uint32_t> mm_block_wt,
-        CoreCoord core_grid_offset = CoreCoord(0, 0));
+        CoreCoord core_grid_offset = CoreCoord(0, 0),
+        MMSignalAggregatorMode mm_signal_aggregator_mode = MMSignalAggregatorMode::Auto);
 
     static void override_runtime_arguments_per_program(
         const shared_variables_t& shared_variables,

@@ -1,10 +1,9 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include "ttnn/decorators.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape_common.hpp"
 
 
@@ -29,33 +28,38 @@ ttnn::Tensor PerformView(
     uint32_t tile_first_dim,
     uint32_t tile_second_dim);
 
-struct ReshapeViewOperation {
-    static ttnn::Tensor invoke(
-        const ttnn::Tensor& input_tensor,
-        const ttnn::Shape& logical_shape,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<PadValue>& pad_value = std::nullopt,
-        TileReshapeMapMode = TileReshapeMapMode::CACHE,
-        const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt);
-    static ttnn::Tensor invoke(
-        const ttnn::Tensor& input_tensor,
-        const ttnn::Shape& logical_input_shape,
-        const ttnn::Shape& padded_input_shape,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<PadValue>& pad_value = std::nullopt,
-        TileReshapeMapMode = TileReshapeMapMode::CACHE,
-        const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt);
-    static ttnn::Tensor invoke(
-        const ttnn::Tensor& input_tensor,
-        tt::stl::Span<const int32_t> shape_vector,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<PadValue>& pad_value = std::nullopt,
-        TileReshapeMapMode = TileReshapeMapMode::CACHE,
-        const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt);
-};
-
 }  // namespace operations::data_movement
 
-constexpr auto reshape = ttnn::register_operation<"ttnn::reshape", ttnn::operations::data_movement::ReshapeViewOperation>();
+// Free function declarations with default parameters
+// `skip_padding_fill`: if true, `pad_value` is ignored and tile padding is left as-is.
+//   Exception: BFLOAT8_B outputs always run the fill (skip is silently ignored) to prevent
+//   shared-exponent corruption in 16-elem sub-blocks that straddle the logical/padded boundary.
+ttnn::Tensor reshape(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Shape& logical_shape,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<PadValue>& pad_value = std::nullopt,
+    TileReshapeMapMode reshape_map_mode = TileReshapeMapMode::CACHE,
+    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt,
+    bool skip_padding_fill = false);
+
+ttnn::Tensor reshape(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Shape& logical_input_shape,
+    const ttnn::Shape& padded_input_shape,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<PadValue>& pad_value = std::nullopt,
+    TileReshapeMapMode reshape_map_mode = TileReshapeMapMode::CACHE,
+    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt,
+    bool skip_padding_fill = false);
+
+ttnn::Tensor reshape(
+    const ttnn::Tensor& input_tensor,
+    ttsl::Span<const int32_t> shape_vector,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<PadValue>& pad_value = std::nullopt,
+    TileReshapeMapMode reshape_map_mode = TileReshapeMapMode::CACHE,
+    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt,
+    bool skip_padding_fill = false);
 
 }  // namespace ttnn

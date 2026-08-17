@@ -1,13 +1,13 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/fmt.hpp>
 #include <cstdint>
 #include <system_mesh.hpp>
 #include <tt-metalium/mesh_device_view.hpp>
 #include <tt-metalium/shape2d.hpp>
 #include <tt-metalium/distributed_context.hpp>
-#include <tt_stl/indestructible.hpp>
 #include <algorithm>
 #include <cstddef>
 #include <unordered_set>
@@ -55,7 +55,7 @@ private:
     MappedDevice get_system_mapped_device(const MeshCoordinate& coord) const;
 
 public:
-    Impl();
+    explicit Impl(const tt::tt_fabric::ControlPlane& control_plane);
 
     const DistributedCoordinateTranslator& coordinate_translator() const;
 
@@ -84,16 +84,16 @@ MappedDevice SystemMesh::Impl::get_system_mapped_device(const MeshCoordinate& co
 }
 
 // Implementation of public methods
-SystemMesh::Impl::Impl() :
-    mesh_id_(MetalContext::instance().get_control_plane().get_local_mesh_id_bindings()[0]),
+SystemMesh::Impl::Impl(const tt::tt_fabric::ControlPlane& control_plane) :
+    mesh_id_(control_plane.get_local_mesh_id_bindings()[0]),
     coordinate_translator_(
-        MetalContext::instance().get_control_plane().get_physical_mesh_shape(
+        control_plane.get_physical_mesh_shape(
             mesh_id_,  //
             tt::tt_fabric::MeshScope::GLOBAL),
-        MetalContext::instance().get_control_plane().get_physical_mesh_shape(
+        control_plane.get_physical_mesh_shape(
             mesh_id_,  //
             tt::tt_fabric::MeshScope::LOCAL),
-        MetalContext::instance().get_control_plane().get_local_mesh_offset()),
+        control_plane.get_local_mesh_offset()),
     system_mapped_devices_(initialize_mapped_devices(mesh_id_, coordinate_translator_.global_shape())) {
     log_debug(
         LogDistributed,
@@ -103,7 +103,7 @@ SystemMesh::Impl::Impl() :
         coordinate_translator_.local_offset());
 
     // Get local physical coordinates
-    const auto& local_physical_translation_map = get_system_mesh_coordinate_translation_map();
+    const auto local_physical_translation_map = get_system_mesh_coordinate_translation_map(control_plane);
     TT_FATAL(
         local_physical_translation_map.shape() == coordinate_translator_.local_shape(),
         "Local coordinates shape mismatch: {} != {}",
@@ -200,7 +200,7 @@ SystemMesh::MappedDevices SystemMesh::Impl::get_mapped_devices(
         system_shape);
 
     // Attempt to fit the requested mesh into the system mesh, potentially rotating it.
-    auto requested_mesh_fits = [&system_offset, &system_shape](const tt::stl::SmallVector<uint32_t>& rotated_shape) {
+    auto requested_mesh_fits = [&system_offset, &system_shape](const ttsl::SmallVector<uint32_t>& rotated_shape) {
         for (int i = 0; i < system_shape.dims(); ++i) {
             if (system_offset[i] + rotated_shape[i] > system_shape[i]) {
                 return false;
@@ -209,7 +209,7 @@ SystemMesh::MappedDevices SystemMesh::Impl::get_mapped_devices(
         return true;
     };
 
-    tt::stl::SmallVector<uint32_t> rotated_shape(requested_shape.cbegin(), requested_shape.cend());
+    ttsl::SmallVector<uint32_t> rotated_shape(requested_shape.cbegin(), requested_shape.cend());
     size_t rotations = 0;
     while (!requested_mesh_fits(rotated_shape) && rotations < system_dimensions) {
         std::rotate(rotated_shape.begin(), rotated_shape.begin() + 1, rotated_shape.end());
@@ -224,7 +224,7 @@ SystemMesh::MappedDevices SystemMesh::Impl::get_mapped_devices(
             system_offset);
     }
 
-    tt::stl::SmallVector<uint32_t> end_coord;
+    ttsl::SmallVector<uint32_t> end_coord;
     for (int i = 0; i < system_dimensions; ++i) {
         end_coord.push_back(system_offset[i] + rotated_shape[i] - 1);
     }
@@ -256,12 +256,12 @@ SystemMesh::MappedDevices SystemMesh::Impl::get_mapped_devices(
     return mapped_devices;
 }
 
-SystemMesh::SystemMesh() : pimpl_(std::make_unique<Impl>()) {}
+SystemMesh::SystemMesh(const tt::tt_fabric::ControlPlane& control_plane) :
+    pimpl_(std::make_unique<Impl>(control_plane)) {}
 
-SystemMesh& SystemMesh::instance() {
-    static tt::stl::Indestructible<SystemMesh> instance;
-    return instance.get();
-}
+SystemMesh::~SystemMesh() = default;
+
+SystemMesh& SystemMesh::instance() { return MetalContext::instance().get_system_mesh(); }
 
 const MeshShape& SystemMesh::shape() const { return pimpl_->coordinate_translator().global_shape(); }
 const MeshShape& SystemMesh::local_shape() const { return pimpl_->coordinate_translator().local_shape(); }

@@ -1,15 +1,19 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <core/ttnn_all_includes.hpp>
 #include <iostream>
 
+#include "tt-metalium/bfloat16.hpp"
+#include "tt-metalium/host_api.hpp"
 #include "ttml.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/tensor/host_buffer/functions.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 std::shared_ptr<tt::tt_metal::distributed::MeshDevice> device;
 
-void print_tensor(const tt::tt_metal::Tensor& tensor) {
+void print_tensor(const ttnn::Tensor& tensor) {
     // IMPORTANT. This function prints the tensor data assuming the tensor is in ROW_MAJOR layout
     // but we are using TILE layout. The printed format WILL NOT be correct. But good enough for a demo
 
@@ -64,7 +68,7 @@ int main() {
         42,
         -1));
     // Now we create a tensor with the buffer we just created
-    auto x = tt::tt_metal::Tensor(
+    auto x = ttnn::Tensor(
         // Let the tensor take ownership of the buffer
         std::move(buffer),
         // IMPORTANT: SHAPE MUST BE 4D ELSE EVERYTHING WILL BREAK during the PAD operation

@@ -1,8 +1,10 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+
+#include <atomic>
 
 #include "device/device_impl.hpp"
 #include "firmware_initializer.hpp"
@@ -23,7 +25,7 @@ public:
     void init(const std::vector<Device*>& devices, [[maybe_unused]] const std::unordered_set<InitializerKey>& init_done)
         override;
     void configure() override;
-    void teardown() override;
+    void teardown(std::unordered_set<InitializerKey>& init_done) override;
     void post_teardown() override;
     bool is_initialized() const override;
 
@@ -40,7 +42,7 @@ private:
 
     tt::tt_fabric::ControlPlane& control_plane_;
     std::vector<Device*> devices_;
-    bool initialized_ = false;
+    std::atomic_flag initialized_;
 };
 
 }  // namespace tt::tt_metal

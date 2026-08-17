@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,7 +6,6 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/tt_metal_profiler.hpp>
 #include <tt-metalium/distributed.hpp>
 
 using namespace tt::tt_metal;
@@ -76,7 +75,7 @@ int main() {
         distributed::EnqueueMeshWorkload(cq, workload, false);
         distributed::Finish(cq);
 
-        // It is necessary to explictly read profile results at the end of the
+        // It is necessary to explicitly read profile results at the end of the
         // program to get noc traces for standalone tt_metal programs.  For
         // ttnn, this is called _automatically_
         ReadMeshDeviceProfilerResults(*mesh_device);

@@ -1,24 +1,27 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/decorators.hpp"
 #include "bcast_device_operation_types.hpp"
 #include "bcast_multi_core_h_program_factory.hpp"
 #include "bcast_sharded_h_program_factory.hpp"
 #include "bcast_sharded_h_optimised_program_factory.hpp"
 #include "bcast_multi_core_w_program_factory.hpp"
 #include "bcast_multi_core_hw_program_factory.hpp"
+#include "ttnn/types.hpp"
+#include "ttnn/operation.hpp"
+#include <tt-metalium/program_descriptors.hpp>
+#include <variant>
 
 namespace ttnn::prim {
 
 struct BcastDeviceOperation {
     using operation_attributes_t = BcastParams;
     using tensor_args_t = BcastInputs;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<
         BcastMultiCoreHProgramFactory,
@@ -37,9 +40,6 @@ struct BcastDeviceOperation {
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
     static tensor_return_value_t create_output_tensors(
-        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
-
-    static tt::stl::hash::hash_t compute_program_hash(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
     static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(

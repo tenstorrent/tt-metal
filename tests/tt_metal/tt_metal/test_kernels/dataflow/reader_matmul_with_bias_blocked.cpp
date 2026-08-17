@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,7 +6,7 @@
 #include "api/dataflow/dataflow_api.h"
 
 void kernel_main() {
-    uint32_t src0_addr            = get_arg_val<uint32_t>(0);
+    uint32_t src0_addr = get_arg_val<uint32_t>(0);
     uint32_t src0_dram_bank_id = get_arg_val<uint32_t>(1);
     uint32_t src1_addr = get_arg_val<uint32_t>(2);
     uint32_t src1_dram_bank_id = get_arg_val<uint32_t>(3);
@@ -33,12 +33,11 @@ void kernel_main() {
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_in1 = 1;
     constexpr uint32_t cb_id_in2 = 2;
-
     uint32_t l1_write_addr_in0;
     uint32_t l1_write_addr_in1;
     uint32_t l1_write_addr_in2;
 
-    for(uint32_t i = 0; i < num_blocks; i++) {
+    for (uint32_t i = 0; i < num_blocks; i++) {
         uint64_t src0_noc_addr = get_noc_addr_from_bank_id<true>(src0_dram_bank_id, src0_addr);
         uint64_t src1_noc_addr = get_noc_addr_from_bank_id<true>(src1_dram_bank_id, src1_addr);
 

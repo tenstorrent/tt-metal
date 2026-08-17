@@ -1,10 +1,13 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
+#include <yaml-cpp/yaml.h>
+
 #include <core/ttnn_all_includes.hpp>
+#include <optional>
 #include <tuple>
 #include <type_traits>
 #include <utility>
@@ -30,7 +33,7 @@ enum class WeightTyingType {
 };
 
 autograd::TensorPtr memory_efficient_runner(
-    auto&& forward_impl, const autograd::TensorPtr& input, const autograd::TensorPtr& mask) {
+    auto&& forward_impl, const autograd::TensorPtr& input, const std::optional<autograd::TensorPtr>& mask) {
     if (autograd::ctx().get_gradient_mode() == autograd::GradMode::DISABLED) {
         return forward_impl(input, mask);
     }
@@ -51,6 +54,8 @@ autograd::TensorPtr memory_efficient_runner(
     autograd::GradFunction grad = [input, mask, out, forward_impl, generator]() mutable {
         // detach input from existing graph
         auto input_detached = autograd::create_tensor(input->get_value());
+        // enable gradients for the detached input so the graph is built during recomputation
+        input_detached->set_requires_grad(true);
         // run forward pass again
         autograd::TensorPtr output;
         {
@@ -68,8 +73,11 @@ autograd::TensorPtr memory_efficient_runner(
         input->add_grad(input_detached->get_grad());
     };
 
-    auto links = autograd::get_links(input);
-    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+    // Add backward node unconditionally - we bypass add_backward_node's requires_grad check
+    // because during recomputation, parameters might be trainable even if input isn't.
+    // This is critical for LoRA where input from frozen embeddings has requires_grad=false
+    // but internal LoRA parameters are trainable.
+    out->set_node(autograd::add_backward_node_always(std::move(grad), out, input));
     return out;
 }
 
@@ -123,8 +131,8 @@ public:
 
     const uint32_t update(
         const uint32_t layer_idx,
-        const tt::tt_metal::Tensor& key_states,
-        const tt::tt_metal::Tensor& value_states,
+        const ttnn::Tensor& key_states,
+        const ttnn::Tensor& value_states,
         const uint32_t new_tokens);
 
     /**
@@ -206,20 +214,20 @@ private:
      * @brief Update cache for prefill mode (writes entire sequence starting at position 0)
      */
     const uint32_t update_prefill(
-        const tt::tt_metal::Tensor& key_tensor,
-        const tt::tt_metal::Tensor& value_tensor,
-        tt::tt_metal::Tensor& k_cache,
-        tt::tt_metal::Tensor& v_cache,
+        const ttnn::Tensor& key_tensor,
+        const ttnn::Tensor& value_tensor,
+        ttnn::Tensor& k_cache,
+        ttnn::Tensor& v_cache,
         const uint32_t new_tokens);
 
     /**
      * @brief Update cache for decode mode (writes single token at cache_position)
      */
     const uint32_t update_decode(
-        const tt::tt_metal::Tensor& key_tensor,
-        const tt::tt_metal::Tensor& value_tensor,
-        tt::tt_metal::Tensor& k_cache,
-        tt::tt_metal::Tensor& v_cache,
+        const ttnn::Tensor& key_tensor,
+        const ttnn::Tensor& value_tensor,
+        ttnn::Tensor& k_cache,
+        ttnn::Tensor& v_cache,
         const uint32_t cache_position,
         const uint32_t new_tokens = 1);
 };

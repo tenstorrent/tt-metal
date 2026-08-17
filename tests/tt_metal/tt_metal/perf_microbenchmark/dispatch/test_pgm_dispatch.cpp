@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -26,15 +26,15 @@
 
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/distributed.hpp>
 #include "hostdevcommon/common_values.hpp"
-#include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include "impl/context/metal_context.hpp"
 #include "impl/buffers/semaphore.hpp"
+#include "impl/kernels/kernel.hpp"
 #include <tt_stl/span.hpp>
 #include "test_common.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
@@ -63,6 +63,8 @@ using namespace tt;
 using namespace tt::tt_metal::distributed;
 
 static bool dump_test_info = false;
+
+static bool slow_dispatch_enabled() { return std::getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr; }
 
 struct TestInfo {
     uint32_t iterations = DEFAULT_ITERATIONS;
@@ -106,8 +108,8 @@ std::tuple<uint32_t, uint32_t> get_core_count() {
         core_x = 7;
         core_y = 6;
     } else if (arch_name == "blackhole") {
-        // Two columns and one row harvested.
-        core_x = 11;
+        // Two columns harvested, plus a row and column used for dispatch cores.
+        core_x = 10;
         core_y = 8;
     } else {
         log_fatal(tt::LogTest, "Unexpected ARCH_NAME {}", arch_name);
@@ -487,9 +489,9 @@ MeshTraceId setup_trace_if_enabled(
     MeshTraceId tid;
     if (info.use_trace) {
         const std::size_t cq_id = 0;
-        tid = BeginTraceCapture(mesh_device.get(), cq_id);
+        tid = mesh_device->begin_mesh_trace(mesh_device->mesh_command_queue(cq_id));
         executor.execute_programs();
-        mesh_device->end_mesh_trace(cq_id, tid);
+        mesh_device->end_mesh_trace(mesh_device->mesh_command_queue(cq_id), tid);
         Finish(mesh_device->mesh_command_queue(cq_id));
     }
     return tid;
@@ -504,12 +506,11 @@ void run_benchmark_timing_loop(
     ProgramExecutor& executor,
     MeshTraceId tid,
     const std::shared_ptr<MeshDevice>& mesh_device) {
-    constexpr std::size_t cq_id = 0;
     auto execute_func = executor.execute_programs;
     for ([[maybe_unused]] auto _ : state) {
         auto start = std::chrono::system_clock::now();
         if (info.use_trace) {
-            mesh_device->replay_mesh_trace(cq_id, tid, false);
+            mesh_device->replay_mesh_trace(mesh_cq, tid, false);
         } else {
             execute_func();
         }
@@ -593,10 +594,8 @@ std::array<tt_metal::Program, 2> create_standard_programs(
 }
 // Helper function to create prefetcher cache load programs
 std::pair<std::vector<tt_metal::Program>, std::unordered_map<std::string, uint32_t>> create_load_prefetcher_programs(
-    const TestInfo& info, const std::shared_ptr<MeshDevice>& mesh_device, DispatchCoreType dispatch_core_type) {
-    uint32_t prefetcher_cache_size = tt::tt_metal::MetalContext::instance()
-                                         .dispatch_mem_map(dispatch_core_type_to_core_type(dispatch_core_type))
-                                         .ringbuffer_size();
+    const TestInfo& info, const std::shared_ptr<MeshDevice>& mesh_device) {
+    uint32_t prefetcher_cache_size = tt::tt_metal::MetalContext::instance().dispatch_mem_map().ringbuffer_size();
     uint32_t target_total_size = (3 * prefetcher_cache_size) / 2;
     uint32_t num_kernels = get_num_kernels(info);
     uint32_t estimated_program_size =
@@ -689,7 +688,10 @@ static int pgm_dispatch(T& state, TestInfo info) {
         const ChipId device_id = 0;
         const std::size_t cq_id = 0;
         DispatchCoreType dispatch_core_type = info.dispatch_from_eth ? DispatchCoreType::ETH : DispatchCoreType::WORKER;
-        size_t trace_region_size = 1'000'000'000;
+        // load_prefetcher_test captures hundreds of programs in a single trace to overflow the
+        // prefetcher cache; the captured trace is ~1.03 GB on wormhole_b0 (refs #46983), so the
+        // region must comfortably exceed 1 GB.
+        size_t trace_region_size = 1'500'000'000;
         std::string arch_name = tt::tt_metal::hal::get_arch_name();
         if (arch_name == std::string("blackhole")) {
             // Blackhole has more cores, so we need more room to store RTAs.
@@ -698,6 +700,18 @@ static int pgm_dispatch(T& state, TestInfo info) {
         mesh_device = MeshDevice::create_unit_mesh(
             device_id, DEFAULT_L1_SMALL_SIZE, trace_region_size, 1, DispatchCoreConfig{dispatch_core_type});
         auto& mesh_cq = mesh_device->mesh_command_queue(cq_id);
+
+        auto grid_size = mesh_device->compute_with_storage_grid_size();
+        if (info.workers.end_coord.x >= grid_size.x || info.workers.end_coord.y >= grid_size.y) {
+            log_fatal(
+                LogTest,
+                "Requested worker range ({},{}) exceeds device grid ({}x{})",
+                info.workers.end_coord.x,
+                info.workers.end_coord.y,
+                grid_size.x,
+                grid_size.y);
+            return 1;
+        }
 
         std::vector<tt_metal::SubDevice> sub_devices;
         if (info.n_subdevice_ranges > 1) {
@@ -715,7 +729,7 @@ static int pgm_dispatch(T& state, TestInfo info) {
         ProgramExecutor executor([]() {}, []() {}, 0);  // Initialize with placeholder
         std::vector<MeshWorkload> mesh_workloads;
         if (info.load_prefetcher) {
-            auto [programs, extra_counters] = create_load_prefetcher_programs(info, mesh_device, dispatch_core_type);
+            auto [programs, extra_counters] = create_load_prefetcher_programs(info, mesh_device);
             executor = create_load_prefetcher_executor(info, mesh_workloads, programs, mesh_cq);
             // Store extra counters for later use
             if constexpr (std::is_same_v<T, benchmark::State>) {
@@ -1043,8 +1057,17 @@ int main(int argc, char** argv) {
     if (test_args::has_command_option(input_args, "--custom")) {
         TestInfo info;
         init(input_args, info);
+        if (info.use_trace && slow_dispatch_enabled()) {
+            log_info(tt::LogTest, "Trace capture is not supported for slow dispatch; skipping test");
+            return 0;
+        }
         FakeBenchmarkState state;
         return pgm_dispatch(state, info);
+    }
+
+    if (slow_dispatch_enabled()) {
+        log_info(tt::LogTest, "Program dispatch trace benchmarks are not supported for slow dispatch; skipping suite");
+        return 0;
     }
 
     if (test_args::has_command_option(input_args, "--dump-test-info")) {

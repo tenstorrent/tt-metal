@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,6 +6,7 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/experimental/global_circular_buffer.hpp>
 #include <optional>
 
 namespace ttnn::prim {
@@ -16,6 +17,13 @@ void DramPrefetcherOperation::validate_on_program_cache_miss(
     TT_FATAL(!input_tensors.empty(), "Must have at least one input tensor");
     TT_FATAL(args.num_layers > 0, "Prefetcher must run for at least 1 layer");
     TT_FATAL(args.global_cb.has_value(), "Global circular buffer must be provided");
+
+    TT_FATAL(
+        tt::tt_metal::experimental::sender_core_type(*args.global_cb) !=
+            tt::tt_metal::experimental::SenderCoreType::Dram,
+        "ttnn.dram_prefetcher does not support DRAM-sender GlobalCircularBuffers. Use "
+        "ttnn.experimental.start_tensor_prefetcher / ttnn.experimental.stop_tensor_prefetcher instead.");
+
     const ttnn::Tensor& tensor_addrs = input_tensors.back();  // Last tensor is tensor_addrs
 
     auto global_cb = *(args.global_cb);
@@ -30,6 +38,9 @@ void DramPrefetcherOperation::validate_on_program_cache_miss(
             "Global circular buffer must have same number of receivers for each sender core");
     }
     uint32_t num_receivers_per_sender = sender_receiver_core_mapping[0].second.num_cores();
+
+    TT_FATAL(num_readers > 0, "Number of reader cores must be greater than zero");
+    TT_FATAL(num_receivers_per_sender > 0, "Number of receiver cores per sender must be greater than zero");
 
     for (size_t i = 0; i < input_tensors.size() - 1; ++i) {
         const auto& tensor = input_tensors[i];
@@ -69,9 +80,9 @@ void DramPrefetcherOperation::validate_on_program_cache_miss(
     TT_FATAL(tensor_addrs_data_format == tt::DataFormat::UInt32, "Tensor containing addresses must be of type UInt32");
 }
 
-TensorSpec DramPrefetcherOperation::compute_output_specs(
+tt::tt_metal::TensorSpec DramPrefetcherOperation::compute_output_specs(
     const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         ttnn::Shape{32, 32},
         tt::tt_metal::TensorLayout(
             tensor_args.input_tensors[0].dtype(),

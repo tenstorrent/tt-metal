@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -60,6 +60,9 @@ struct SocketMemoryConfig {
     // TODO: Should data cores be on a different sub device?
     std::optional<SubDeviceId> sender_sub_device = std::nullopt;
     std::optional<SubDeviceId> receiver_sub_device = std::nullopt;
+    // TT_METAL_ALLOCATOR_MODE_HYBRID=1 must be set to enable per-core allocation on socket data buffer.
+    // so data buffers are allocated only on the receiver connection cores instead of every worker core.
+    bool per_core_allocation = false;
 
     // User-provided constructor to make this non-aggregate (prevents ambiguity with Reflectable concept)
     SocketMemoryConfig() = default;
@@ -67,16 +70,19 @@ struct SocketMemoryConfig {
         BufferType socket_storage_type,
         uint32_t fifo_size,
         std::optional<SubDeviceId> sender_sub_device = std::nullopt,
-        std::optional<SubDeviceId> receiver_sub_device = std::nullopt) :
+        std::optional<SubDeviceId> receiver_sub_device = std::nullopt,
+        bool per_core_allocation = false) :
         socket_storage_type(socket_storage_type),
         fifo_size(fifo_size),
         sender_sub_device(sender_sub_device),
-        receiver_sub_device(receiver_sub_device) {}
+        receiver_sub_device(receiver_sub_device),
+        per_core_allocation(per_core_allocation) {}
 
-    static constexpr auto attribute_names =
-        std::forward_as_tuple("socket_storage_type", "fifo_size", "sender_sub_device", "receiver_sub_device");
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "socket_storage_type", "fifo_size", "sender_sub_device", "receiver_sub_device", "per_core_allocation");
     auto attribute_values() const {
-        return std::forward_as_tuple(socket_storage_type, fifo_size, sender_sub_device, receiver_sub_device);
+        return std::forward_as_tuple(
+            socket_storage_type, fifo_size, sender_sub_device, receiver_sub_device, per_core_allocation);
     }
 };
 
@@ -88,7 +94,10 @@ struct SocketConfig {
     std::vector<SocketConnection> socket_connection_config;
     SocketMemoryConfig socket_mem_config;
     // Specifies the ranks of the sender and receiver hosts in a multi-host context.
-    // Used for inital handshaking and validation of the socket configs.
+    // When a socket is constructed via explicit ranks, those ranks define the
+    // point-to-point handshake participants only. SocketConnection device
+    // coordinates remain canonical logical mesh coordinates within the sender
+    // and receiver meshes.
     std::optional<tt::tt_fabric::MeshId> sender_mesh_id = std::nullopt;
     std::optional<tt::tt_fabric::MeshId> receiver_mesh_id = std::nullopt;
     multihost::Rank sender_rank{0};
@@ -149,7 +158,7 @@ public:
         const std::shared_ptr<MeshDevice>& sender,
         const std::shared_ptr<MeshDevice>& receiver,
         const SocketConfig& base_config);
-    // Access the data-buffer associated with the socket on the reciver mesh. Can only be queried for receiver sockets.
+    // Access the data-buffer associated with the socket on the receiver mesh. Can only be queried for receiver sockets.
     std::shared_ptr<MeshBuffer> get_data_buffer() const;
     // Access the config buffer associated with this socket.
     std::shared_ptr<MeshBuffer> get_config_buffer() const;
@@ -158,9 +167,15 @@ public:
     const SocketConfig& get_config() const;
     // Access the socket endpoint type (SENDER or RECEIVER).
     SocketEndpoint get_socket_endpoint_type() const { return socket_endpoint_type_; }
+    // Returns true when this socket was constructed from explicit sender/receiver
+    // ranks and therefore uses pairwise rank-scoped handshake semantics.
+    bool is_rank_scoped_socket() const { return rank_scoped_socket_; }
 
     tt::tt_fabric::FabricNodeId get_fabric_node_id(SocketEndpoint endpoint, const MeshCoordinate& coord) const;
 
+    std::vector<MeshCoreCoord> get_active_cores() const;
+
+    MeshDevice* get_mesh_device() const { return config_buffer_->device(); }
     static constexpr auto attribute_names =
         std::forward_as_tuple("config", "socket_endpoint_type", "fabric_node_id_map");
     auto attribute_values() const { return std::forward_as_tuple(config_, socket_endpoint_type_, fabric_node_id_map_); }
@@ -187,6 +202,7 @@ private:
     std::shared_ptr<MeshBuffer> config_buffer_;
     SocketConfig config_;
     SocketEndpoint socket_endpoint_type_;
+    bool rank_scoped_socket_ = false;
     std::unordered_map<multihost::Rank, multihost::Rank> rank_translation_table_;
     // TODO: replace with enchantum::array
     std::array<std::unordered_map<MeshCoordinate, tt::tt_fabric::FabricNodeId>, enchantum::count<SocketEndpoint>>

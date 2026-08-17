@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+ * SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -86,9 +86,9 @@ struct ComputeKernelArg {
 };
 
 struct ComputeKernelConfig {
-    MathFidelity math_fidelity = MathFidelity::HiFi4;
+    tt::tt_metal::MathFidelity math_fidelity = tt::tt_metal::MathFidelity::HiFi4;
     bool fp32_dest_acc_en = false;
-    std::vector<UnpackToDestMode> unpack_to_dest_mode;
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode;
     bool math_approx_mode = false;
     std::map<std::string, std::string> defines;
 };
@@ -98,20 +98,20 @@ struct ComputeKernelConfig {
     const std::string& file_name,
     const std::vector<ComputeKernelArg>& args,
     const std::map<std::string, std::string>& defines = {},
-    MathFidelity math_fidelity = MathFidelity::HiFi4,
+    tt::tt_metal::MathFidelity math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
     bool fp32_dest_acc_en = false,
     bool math_approx_mode = false,
-    const std::vector<UnpackToDestMode>& unpack_to_dest_mode = {});
+    const std::vector<tt::tt_metal::UnpackToDestMode>& unpack_to_dest_mode = {});
 
 [[maybe_unused]] KernelHandle CreateComputeKernel(
     Program& program,
     const std::string& file_name,
     ComputeKernelArg arg,
     std::map<std::string, std::string> defines = {},
-    MathFidelity math_fidelity = MathFidelity::HiFi4,
+    tt::tt_metal::MathFidelity math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
     bool fp32_dest_acc_en = false,
     bool math_approx_mode = false,
-    std::vector<UnpackToDestMode> unpack_to_dest_mode = {});
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode = {});
 
 [[maybe_unused]] std::vector<KernelHandle> CreateComputeKernel(
     Program& program,
@@ -259,16 +259,16 @@ uint32_t compute_inner(const ttnn::Shape& shape, uint32_t dim);
 
 uint32_t compute_outer(const ttnn::Shape& shape, uint32_t dim);
 
-void expand_to_max_dim(ttnn::SmallVector<uint32_t>& dim, const ttnn::Shape& shape);
+void expand_to_max_dim(ttsl::SmallVector<uint32_t>& dim, const ttnn::Shape& shape);
 
 void validate_input_with_dim(const Tensor& input, const int64_t& dim);
 
 void validate_output_with_keepdim(const Tensor& input, const Tensor& output, const int64_t& dim, const bool& keepdim);
 
-void initialize_dims_with_range(ttnn::SmallVector<int64_t>& dims, uint32_t input_rank);
+void initialize_dims_with_range(ttsl::SmallVector<int64_t>& dims, uint32_t input_rank);
 
-ttnn::SmallVector<int64_t> get_dim(
-    const std::optional<std::variant<int64_t, ttnn::SmallVector<int64_t>>>& dim, uint32_t input_rank);
+ttsl::SmallVector<int64_t> get_dim(
+    const std::optional<std::variant<int64_t, ttsl::SmallVector<int64_t>>>& dim, uint32_t input_rank);
 
 std::tuple<uint32_t, uint32_t, uint32_t> extract_spatial_dims(const ttnn::Shape& shape);
 

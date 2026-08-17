@@ -1,9 +1,10 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
+#include <array>
 #include <optional>
 #include <string>
 
@@ -21,7 +22,9 @@ struct Conv3dConfig {
         uint32_t H_out_block_ = 1,
         uint32_t C_out_block_ = 0,
         uint32_t C_in_block_ = 0,
-        CoreCoord compute_with_storage_grid_size_ = {1, 1}) :
+        std::array<uint32_t, 3> dilation_ = {1, 1, 1},
+        uint32_t alignment_ = 32,
+        tt::tt_metal::CoreCoord compute_with_storage_grid_size_ = {1, 1}) :
         weights_dtype(weights_dtype_),
         output_layout(output_layout_),
         T_out_block(T_out_block_),
@@ -29,6 +32,8 @@ struct Conv3dConfig {
         H_out_block(H_out_block_),
         C_out_block(C_out_block_),
         C_in_block(C_in_block_),
+        dilation(dilation_),
+        alignment(alignment_),
         compute_with_storage_grid_size(compute_with_storage_grid_size_) {}
 
     tt::tt_metal::DataType weights_dtype;
@@ -38,7 +43,9 @@ struct Conv3dConfig {
     uint32_t H_out_block;
     uint32_t C_out_block;
     uint32_t C_in_block;
-    CoreCoord compute_with_storage_grid_size;
+    std::array<uint32_t, 3> dilation;
+    uint32_t alignment;
+    tt::tt_metal::CoreCoord compute_with_storage_grid_size;
 
     static constexpr auto attribute_names = std::make_tuple(
         "weights_dtype",
@@ -48,6 +55,8 @@ struct Conv3dConfig {
         "H_out_block",
         "C_out_block",
         "C_in_block",
+        "dilation",
+        "alignment",
         "compute_with_storage_grid_size");
 
     auto attribute_values() const {
@@ -59,6 +68,8 @@ struct Conv3dConfig {
             this->H_out_block,
             this->C_out_block,
             this->C_in_block,
+            this->dilation,
+            this->alignment,
             this->compute_with_storage_grid_size);
     }
 };
@@ -75,12 +86,22 @@ struct Conv3dParams {
     std::array<uint32_t, 3> dilation;
     std::string padding_mode;
     uint32_t groups;
+    // Logical-pad masking (opt-in)
+    // 0 == disabled.
+    uint32_t logical_h_mask = 0;
+    uint32_t logical_w_mask = 0;
+    // Padded-output mode (opt-in)
+    // 0 == compact output.
+    uint32_t output_pad_h = 0;
+    uint32_t output_pad_w = 0;
 };
 
 struct Conv3dInputs {
     Tensor input_tensor;
     Tensor weight_tensor;
     std::optional<const Tensor> bias_tensor;
+    std::optional<const Tensor> halo_buffer;
+    std::optional<const Tensor> pad_offset_tensor;
 };
 
 namespace detail {
@@ -90,7 +111,8 @@ std::tuple<uint32_t, uint32_t, uint32_t> compute_output_dims(
     uint32_t W_in,
     const std::array<uint32_t, 3>& padding,
     const std::array<uint32_t, 3>& stride,
-    const std::array<uint32_t, 3>& kernel_size);
+    const std::array<uint32_t, 3>& kernel_size,
+    const std::array<uint32_t, 3>& dilation);
 }  // namespace detail
 
 }  // namespace ttnn::experimental::prim

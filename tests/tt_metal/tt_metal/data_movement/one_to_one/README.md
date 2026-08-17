@@ -32,7 +32,7 @@ The tests use the Mesh Device API with fast dispatch mode:
 | l1_data_format            | DataFormat            | Data format data that will be moved. |
 | num_virtual_channels      | uint32_t              | Number of virtual channels to cycle through (must be > 1 for cycling). |
 | noc_id                    | NOC                   | Specify which NOC to use for the test. |
-| use_2_0_api               | bool                  | Determines if the test uses the experimental device 2.0 API. |
+| use_2_0_api               | bool                  | Determines if the test uses the device 2.0 API. |
 
 ## Test Cases
 Each test case uses bfloat16 as L1 data format and flit size (32B for WH, 64B for BH) as page size.
@@ -46,17 +46,22 @@ Each test case has multiple runs, and each run has a unique runtime host id, ass
 
 4. **TensixDataMovementOneToOneCustom** (Test ID: 151) - *[Currently Skipped]* Custom test case with configurable parameters for specialized testing scenarios. Uses 256 transactions, 1 page per transaction, and 4 virtual channels.
 
-5. **TensixDataMovementOneToOnePacketSizes2_0** (Test ID: 158) - Device 2.0 API version of the packet sizes test. Tests the same packet size variations as test ID 4 but uses the experimental NOC API with structured endpoints and virtual channel support.
+5. **TensixDataMovementOneToOnePacketSizes2_0** (Test ID: 158) - Device 2.0 API version of the packet sizes test. Tests the same packet size variations as test ID 4 but uses the NOC API with structured endpoints and virtual channel support.
+
+6. **TensixDataMovementOneToOneDirectedIdeal2_0** (Test ID: 160) - Device 2.0 API version of the directed ideal test.
 
 ## Device 2.0 API Tests
-This test suite now includes tests using the new device 2.0 experimental NOC API. These tests provide the same functionality as the original tests but use an updated API design:
+This test suite now includes tests using the new device 2.0 NOC API. These tests provide the same functionality as the original tests but use an updated API design:
 
 ### Key Features of Device 2.0 API Tests:
-- **Experimental NOC API**: Uses `experimental::Noc` and `experimental::UnicastEndpoint` for structured NOC operations
+- **NOC API**: Uses `Noc` and `UnicastEndpoint` for structured NOC operations
 - **Structured Arguments**: Source and destination arguments are defined using structured `noc_traits_t` types
 
 ### Device 2.0 Kernels:
-- `sender_2_0.cpp`: Implements the sender functionality using the experimental NOC API
+- `sender_2_0.cpp`: Implements the sender functionality using the NOC API
 - `sender.cpp`: Original sender kernel for comparison
 
-Both API versions run the same test cases but use different underlying implementations. The device 2.0 tests serve as a validation and performance comparison for the new experimental API.
+Both API versions run the same test cases but use different underlying implementations. The device 2.0 tests serve as a validation and performance comparison for the new API.
+
+## Quasar Notes
+`TensixDataMovementOneToOnePacketSizes` and `TensixDataMovementOneToOneDirectedIdeal` include Quasar-specific code paths inside `GenericMeshDeviceFixture`. Requires `TT_METAL_SLOW_DISPATCH_MODE=1`, the Quasar simulator, and a grid with at least 2 columns (e.g. `emu-quasar-2x3`).

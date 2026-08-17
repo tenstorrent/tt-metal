@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -48,7 +48,7 @@ def test_binary_comp_ops(input_shapes, out_dtype, mem_configs, ttnn_function, de
     golden_tensor = golden_fn(in_data, other_data)
     golden_tensor = golden_tensor.int()
 
-    output_tensor = ttnn.to_torch(tt_output_tensor_on_device)
+    output_tensor = ttnn.to_torch(tt_output_tensor_on_device).to(golden_tensor.dtype)
 
     are_equal = torch.equal(output_tensor, golden_tensor)
     assert are_equal
@@ -91,7 +91,7 @@ def test_binary_comp_opt_out(input_shapes, out_dtype, mem_configs, ttnn_function
     golden_tensor = golden_fn(in_data, other_data)
     golden_tensor = golden_tensor.int()
 
-    output_tensor = ttnn.to_torch(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor).to(golden_tensor.dtype)
 
     are_equal = torch.equal(output_tensor, golden_tensor)
     assert are_equal
@@ -144,7 +144,7 @@ def test_binary_comp_ops_scalar(input_shapes, scalar, out_dtype, mem_configs, tt
     golden_tensor = golden_fn(in_data, scalar)
     golden_tensor = golden_tensor.int()
 
-    output_tensor = ttnn.to_torch(tt_output_tensor_on_device)
+    output_tensor = ttnn.to_torch(tt_output_tensor_on_device).to(golden_tensor.dtype)
 
     are_equal = torch.equal(output_tensor, golden_tensor)
     assert are_equal
@@ -171,8 +171,8 @@ def test_binary_comp_ops_scalar(input_shapes, scalar, out_dtype, mem_configs, tt
     "ttnn_function",
     (ttnn.eq, ttnn.ne),
 )
-@pytest.mark.parametrize("use_legacy", (True, False))
-def test_binary_comp_uint16_ops(input_shapes, mem_configs, ttnn_function, device, use_legacy):
+def test_binary_comp_uint16_ops(input_shapes, mem_configs, ttnn_function, device):
+    torch.manual_seed(0)
     in_data = torch.randint(0, 100, input_shapes, dtype=torch.int32)
     in_data[-1] = 65535
     # Make a copy of in_data so 50% of values are the same
@@ -186,13 +186,11 @@ def test_binary_comp_uint16_ops(input_shapes, mem_configs, ttnn_function, device
     cq_id = 0
     mem_cfg = mem_configs
 
-    output_tensor = ttnn_function(
-        input_tensor, other_tensor, memory_config=mem_cfg, queue_id=cq_id, use_legacy=use_legacy
-    )
+    output_tensor = ttnn_function(input_tensor, other_tensor, memory_config=mem_cfg, queue_id=cq_id)
 
     golden_fn = ttnn.get_golden_function(ttnn_function)
     golden_tensor = golden_fn(in_data, other_data)
     golden_tensor = golden_tensor.int()
 
-    output_tensor = ttnn.to_torch(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor).to(golden_tensor.dtype)
     assert torch.equal(output_tensor, golden_tensor)

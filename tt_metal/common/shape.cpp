@@ -1,10 +1,11 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "shape.hpp"
 
 #include <tt_stl/assert.hpp>
+#include <tt_stl/reflection.hpp>
 #include <tt_stl/small_vector.hpp>
 #include <functional>
 #include <numeric>
@@ -15,7 +16,7 @@ namespace tt::tt_metal {
 
 bool Shape::operator==(const Shape& other) const = default;
 
-bool Shape::operator==(const tt::stl::SmallVector<uint32_t>& other) const { return this->value_ == other; }
+bool Shape::operator==(const ttsl::SmallVector<uint32_t>& other) const { return this->value_ == other; }
 
 size_t Shape::rank() const { return this->size(); }
 
@@ -31,7 +32,7 @@ std::array<uint32_t, 4> Shape::to_array_4D() const {
 }
 
 Shape Shape::to_rank(size_t new_rank) const {
-    tt::stl::SmallVector<uint32_t> new_shape(new_rank, 1);
+    ttsl::SmallVector<uint32_t> new_shape(new_rank, 1);
 
     int cur_idx = static_cast<int>(rank()) - 1;
     int new_idx = static_cast<int>(new_rank) - 1;
@@ -68,7 +69,7 @@ std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Shape& shape) {
     return os;
 }
 
-tt::stl::SmallVector<size_t> compute_strides(const tt::tt_metal::Shape& shape) {
+ttsl::SmallVector<size_t> compute_strides(const tt::tt_metal::Shape& shape) {
     if (shape.rank() == 0) {
         return {};
     }
@@ -76,10 +77,10 @@ tt::stl::SmallVector<size_t> compute_strides(const tt::tt_metal::Shape& shape) {
     auto num_elements = shape.volume();
     // If any dim is 0, volume would be 0
     if (num_elements == 0) {
-        return tt::stl::SmallVector<size_t>(shape.rank(), 0);
+        return ttsl::SmallVector<size_t>(shape.rank(), 0);
     }
 
-    tt::stl::SmallVector<size_t> strides;
+    ttsl::SmallVector<size_t> strides;
     for (size_t index = 0; index < shape.rank(); index++) {
         num_elements /= static_cast<size_t>(shape[index]);
         strides.push_back(num_elements);
@@ -87,11 +88,23 @@ tt::stl::SmallVector<size_t> compute_strides(const tt::tt_metal::Shape& shape) {
     return strides;
 }
 
-std::size_t compute_flat_indices(tt::stl::Span<const uint32_t> indices, tt::stl::Span<const size_t> strides) {
+std::size_t compute_flat_indices(ttsl::Span<const uint32_t> indices, ttsl::Span<const size_t> strides) {
     return std::inner_product(indices.begin(), indices.end(), strides.begin(), std::size_t{0});
 }
 
 }  // namespace tt::tt_metal
+
+std::string ttsl::fmt_detail::to_string(const tt::tt_metal::Shape& shape) {
+    std::string result = "Shape([";
+    for (size_t i = 0; i < shape.rank(); ++i) {
+        if (i > 0) {
+            result += ", ";
+        }
+        result += std::to_string(shape[i]);
+    }
+    result += "])";
+    return result;
+}
 
 nlohmann::json ttsl::json::to_json_t<tt::tt_metal::Shape>::operator()(const tt::tt_metal::Shape& shape) const {
     return ttsl::json::to_json(shape.view());

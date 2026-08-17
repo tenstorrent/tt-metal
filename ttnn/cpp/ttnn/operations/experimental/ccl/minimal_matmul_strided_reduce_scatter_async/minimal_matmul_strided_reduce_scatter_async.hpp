@@ -1,0 +1,54 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/core_coord.hpp>
+#include "ttnn/operations/experimental/ccl/minimal_matmul_strided_reduce_scatter_async/device/minimal_matmul_strided_reduce_scatter_async_op.hpp"
+#include "ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
+#include "ttnn/distributed/api.hpp"
+
+namespace ttnn::experimental {
+
+// input_tensor: a single activation, or a 2-element list [prefix, suffix] virtually concatenated
+// (concat-free) on the channel (K, last) axis ONLY — the two must be identical on every other axis.
+// Any per-segment channel count is allowed; the weight must be per-segment tile-padded
+// (see prepare_weight_for_concatenated_input in models/tt_dit/utils/tensor.py) so that
+// prefix_padded_K + suffix_padded_K == weight_padded_K.
+std::vector<ttnn::Tensor> minimal_matmul_strided_reduce_scatter_async(
+    const std::variant<ttnn::Tensor, std::vector<ttnn::Tensor>>& input_tensor,
+    const ttnn::Tensor& weight_tensor,
+    uint32_t dim,
+    const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
+    CoreCoord reduce_scatter_core_grid_offset,
+    const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
+    uint32_t num_links = 1,
+    const std::optional<ttnn::MemoryConfig>& memory_config_mm = std::nullopt,
+    const std::optional<ttnn::MemoryConfig>& rs_output_mem_config = std::nullopt,
+    const std::optional<ttnn::MemoryConfig>& rs_intermediate_mem_config = std::nullopt,
+    ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
+    std::optional<uint32_t> cluster_axis = std::nullopt,
+    const std::optional<const Tensor>& bias = std::nullopt,
+    const std::optional<operations::unary::UnaryWithParam>& fused_activation = std::nullopt,
+    const std::optional<const ttnn::experimental::prim::MinimalMatmulConfig>& config = std::nullopt,
+    const std::optional<GlobalSemaphore>& barrier_semaphore = std::nullopt,
+    bool using_persistent_buffers = false,
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
+    std::optional<uint32_t> num_workers_per_link = std::nullopt,
+    std::optional<uint32_t> num_buffers_per_channel = std::nullopt,
+    std::optional<uint32_t> chunk_width_in_mm_blocks = std::nullopt,
+    const std::optional<Tensor>& optional_rs_output_tensor = std::nullopt,
+    std::optional<float> fused_ternary_scalar = std::nullopt,
+    const std::optional<const Tensor>& addcmul_input_tensor1 = std::nullopt,
+    const std::optional<const Tensor>& addcmul_input_tensor2 = std::nullopt,
+    std::optional<tt::tt_metal::DataType> dtype = std::nullopt,
+    const std::optional<const Tensor>& mm_progress_counters = std::nullopt,
+    std::optional<uint32_t> mm_window_blocks = std::nullopt,
+    const std::optional<const Tensor>& mm_credit_counters = std::nullopt);
+
+}  // namespace ttnn::experimental

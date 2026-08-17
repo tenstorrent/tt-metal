@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,8 +6,6 @@
 
 #include "rms_allgather_device_operation_types.hpp"
 #include "rms_allgather_program_factory.hpp"
-#include "ttnn/device_operation.hpp"
-#include "ttnn/decorators.hpp"
 #include "ttnn/operations/normalization/layernorm/device/layernorm_types.hpp"
 
 namespace ttnn::experimental::prim {
@@ -17,7 +15,7 @@ namespace layernorm = ttnn::prim;
 struct RMSAllGatherDeviceOperation {
     using operation_attributes_t = RMSAllGatherParams;
     using tensor_args_t = RMSAllGatherInputs;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<RMSAllGatherMeshWorkloadFactory>;
     using shared_variables_t = RMSAllGatherMeshWorkloadFactory::shared_variables_t;
@@ -28,7 +26,7 @@ struct RMSAllGatherDeviceOperation {
 
     static tensor_return_value_t create_output_tensors(const operation_attributes_t& args, const tensor_args_t&);
 
-    static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
 }  // namespace ttnn::experimental::prim

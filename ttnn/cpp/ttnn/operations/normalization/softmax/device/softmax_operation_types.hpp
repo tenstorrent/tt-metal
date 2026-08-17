@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -15,7 +15,7 @@ namespace ttnn {
 // Softmax program configuration structs
 struct SoftmaxDefaultProgramConfig {};
 struct SoftmaxShardedMultiCoreProgramConfig {
-    CoreCoord compute_with_storage_grid_size;
+    tt::tt_metal::CoreCoord compute_with_storage_grid_size;
     std::size_t subblock_w{};
     std::size_t block_h{};
     std::size_t block_w{};

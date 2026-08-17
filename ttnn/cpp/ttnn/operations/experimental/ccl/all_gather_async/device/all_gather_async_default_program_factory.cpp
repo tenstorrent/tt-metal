@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -171,7 +171,7 @@ uint32_t default_workers(
     // Above 4 workers we start getting performance drops, so we limit to 4 workers or less, depending on the number of
     // available cores This was determined by the sweep
     // tests/ttnn/multidevice_perf_tests/sweep_all_gather_hyperparameters_T3K.py
-    ttnn::SmallVector<uint32_t> candidate_worker_counts;
+    ttsl::SmallVector<uint32_t> candidate_worker_counts;
     // if per link data moved is greater than 0.25 MB, we search greedily for 4 workers, otherwise we search greedily
     // for 2 workers. for ring, half the data is moved per link, so we divide by 2
     double data_moved_per_link_bytes = double(output_data_size_bytes) * (ring_size - 1) / ring_size / num_links /
@@ -305,14 +305,27 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
     auto [num_targets_forward, num_targets_backward] =
         ccl::get_forward_backward_line_mcast_distance(ring_size, ring_index, topology, false);
     auto [unicast_forward_args, unicast_backward_args] = ccl::get_forward_backward_line_unicast_configuration(
-        topology, sender_device_coord, forward_coord, backward_coord, mesh_device);
+        sender_device_coord, forward_coord, backward_coord, mesh_device);
+    const bool use_fabric_2d_neighbor_barrier =
+        topology == ccl::Topology::Linear && tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig());
+    // A logical line can turn when it is embedded in a 2D physical mesh (for example QB 1x4 on its
+    // four-chip cycle). A single Fabric multicast range cannot describe that turn: its hop range
+    // continues in the physical direction selected by the first neighbor. The all-gather data path
+    // already store-and-forwards through immediate neighbors, so its startup barrier only needs to
+    // prove that those immediate neighbors have reached their worker kernels. Keep the full-range
+    // barrier for 1D Fabric and use terminal one-hop ranges for Fabric2D.
+    const uint32_t barrier_targets_forward =
+        use_fabric_2d_neighbor_barrier ? std::min(num_targets_forward, 1u) : num_targets_forward;
+    const uint32_t barrier_targets_backward =
+        use_fabric_2d_neighbor_barrier ? std::min(num_targets_backward, 1u) : num_targets_backward;
     auto [barrier_mcast_forward_args, barrier_mcast_backward_args] = ccl::get_forward_backward_line_mcast_configuration(
-        topology,
         sender_device_coord,
         forward_coord,
         backward_coord,
-        topology == ccl::Topology::Linear ? num_targets_forward : ring_size - 1,
-        topology == ccl::Topology::Linear ? num_targets_backward : ring_size - 1,
+        topology == ccl::Topology::Linear ? barrier_targets_forward
+                                          : (use_fabric_2d_neighbor_barrier ? 1u : ring_size - 1),
+        topology == ccl::Topology::Linear ? barrier_targets_backward
+                                          : (use_fabric_2d_neighbor_barrier ? 1u : ring_size - 1),
         mesh_device);
 
     TT_FATAL(
@@ -321,8 +334,11 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
         num_links, num_cores_per_link, mesh_device, sub_device_id, core_grid_offset, sub_core_grid);
 
     std::vector<CoreRange> sender_worker_core_ranges;
+    sender_worker_core_ranges.reserve(num_links * num_directions_per_link * num_workers_per_direction);
     std::vector<CoreRange> mux_core_ranges;
+    mux_core_ranges.reserve(num_links * num_directions_per_link);
     std::vector<CoreRange> termination_master_core_ranges;
+    termination_master_core_ranges.reserve(num_links * num_directions_per_link);
 
     std::set<CoreRange> sender_forward_core_ranges;
     std::set<CoreRange> sender_backward_core_ranges;
@@ -383,6 +399,12 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
     // L1 Scratch CB Creation
     const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
     uint32_t l1_scratch_cb_page_size_bytes = page_size;
+    TT_FATAL(
+        packet_size_bytes >= l1_scratch_cb_page_size_bytes,
+        "Fabric packet size ({} bytes) must be >= tensor page size ({} bytes). "
+        "Increase max_packet_payload_size_bytes in FabricRouterConfig.",
+        packet_size_bytes,
+        l1_scratch_cb_page_size_bytes);
 
     // scatter-write currently supports 4 distinct noc addresses
     uint32_t max_target_noc_addresses_per_packet = 4;
@@ -413,7 +435,6 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
         reader_compute_defines["OUTPUT_IS_SHARDED"] = "1";
         writer_compute_defines["OUTPUT_IS_SHARDED"] = "1";
     }
-
     if (num_mux_cores_per_direction_per_link) {
         writer_compute_defines["USE_WORKER_MUX"] = "1";
     }
@@ -482,15 +503,30 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
         (input_tensor_shape.rank() == 2) ? map_2d_to_4d() : map_nd_to_4d();
 
     uint32_t single_batch_head_num_pages = input_tensor_num_pages / batch_head_size;
-    TT_FATAL(!(input_tensor_shape[-1] % TILE_WIDTH), "Input tensor width must be a multiple of TILE_WIDTH");
-    TT_FATAL(!(output_tensor_shape[-1] % TILE_WIDTH), "Output tensor width must be a multiple of TILE_WIDTH");
-    uint32_t TILE_WIDTH = 32;
+    constexpr uint32_t TILE_SIZE = 32;
+    // Only check tile alignment for the dimension being all-gathered
+    uint32_t rank = input_tensor_shape.rank();
+    if (dim == rank - 1) {
+        TT_FATAL(
+            !(input_tensor_shape[-1] % TILE_SIZE),
+            "Input tensor width must be tile-aligned when all-gathering along width");
+        TT_FATAL(
+            !(output_tensor_shape[-1] % TILE_SIZE),
+            "Output tensor width must be tile-aligned when all-gathering along width");
+    } else if (dim == rank - 2) {
+        TT_FATAL(
+            !(input_tensor_shape[-2] % TILE_SIZE),
+            "Input tensor height must be tile-aligned when all-gathering along height");
+        TT_FATAL(
+            !(output_tensor_shape[-2] % TILE_SIZE),
+            "Output tensor height must be tile-aligned when all-gathering along height");
+    }
 
-    uint32_t input_tensor_Wt = input_tensor_shape[-1] / TILE_WIDTH;
-    uint32_t input_tensor_Ht = input_tensor_shape[-2] / TILE_WIDTH;
+    uint32_t input_tensor_Wt = input_tensor_shape[-1] / TILE_SIZE;
+    uint32_t input_tensor_Ht = input_tensor_shape[-2] / TILE_SIZE;
 
-    uint32_t output_tensor_Wt = output_tensor_shape[-1] / TILE_WIDTH;
-    uint32_t output_tensor_Ht = output_tensor_shape[-2] / TILE_WIDTH;
+    uint32_t output_tensor_Wt = output_tensor_shape[-1] / TILE_SIZE;
+    uint32_t output_tensor_Ht = output_tensor_shape[-2] / TILE_SIZE;
 
     auto num_full_size_channels = num_workers_per_direction;
     auto num_header_only_channels = 0;
@@ -561,6 +597,8 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
         output_tensor_C,                  // output_tensor_C
         fuse_op,                          // fuse_op
         reverse_order,                    // reverse
+        use_fabric_2d_neighbor_barrier ? static_cast<uint32_t>((num_targets_forward != 0) + (num_targets_backward != 0))
+                                       : ring_size - 1,  // barrier_target_count
     };
 
     if (num_mux_cores_per_direction_per_link) {

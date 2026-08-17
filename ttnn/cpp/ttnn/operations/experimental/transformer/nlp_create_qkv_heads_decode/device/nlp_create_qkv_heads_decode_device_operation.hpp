@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,15 +12,12 @@
 #include "nlp_create_qkv_heads_decode_sharded_program_factory.hpp"
 #include "nlp_create_qkv_heads_decode_sharded_subcoregrid_program_factory.hpp"
 
-#include "ttnn/device_operation.hpp"
-#include "ttnn/decorators.hpp"
-
 namespace ttnn::experimental::prim {
 
 struct NLPCreateQKVHeadsDecodeDeviceOperation {
     using operation_attributes_t = NlpCreateQkvHeadsDecodeParams;
     using tensor_args_t = NlpCreateQkvHeadsDecodeInputs;
-    using spec_return_value_t = std::vector<TensorSpec>;
+    using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
     using tensor_return_value_t = std::vector<Tensor>;
     using program_factory_t = std::variant<
         NLPCreateQKVHeadsDecodeInterleavedProgramFactory,

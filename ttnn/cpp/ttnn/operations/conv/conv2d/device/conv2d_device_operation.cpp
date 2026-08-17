@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,7 +13,6 @@
 #include <tt-metalium/math.hpp>
 
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/circular_buffer.hpp>
 #include <tt-metalium/constants.hpp>
 
 #include <tt-metalium/work_split.hpp>
@@ -40,7 +39,7 @@ Conv2dDeviceOperation::program_factory_t Conv2dDeviceOperation::select_program_f
     return Conv2dShardedProgramFactory{};
 }
 
-TensorSpec Conv2dDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec Conv2dDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& /*tensor_args*/) {
     const auto& input_tensor_a_shape = args.input_tensor_shape;
     uint32_t batch_size = input_tensor_a_shape[0];
@@ -66,8 +65,9 @@ TensorSpec Conv2dDeviceOperation::compute_output_specs(
         auto shard_grid = args.memory_config.shard_spec().value().grid;
         auto shard_spec =
             tt::tt_metal::ShardSpec{shard_grid, shard_shape, args.memory_config.shard_spec().value().orientation};
-        auto mem_config = args.memory_config.with_shard_spec(shard_spec);
-        return TensorSpec(
+        auto mem_config = tt::tt_metal::MemoryConfig(
+            args.memory_config.memory_layout(), args.memory_config.buffer_type(), shard_spec);
+        return tt::tt_metal::TensorSpec(
             output_shape,
             tt::tt_metal::TensorLayout(
                 args.dtype,
@@ -79,7 +79,7 @@ TensorSpec Conv2dDeviceOperation::compute_output_specs(
                                                   // Row Major.
                 ));
     }
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_shape,
         tt::tt_metal::TensorLayout::fromPaddedShape(
             args.dtype,
@@ -129,35 +129,17 @@ void Conv2dDeviceOperation::validate_on_program_cache_miss(
             } else {
                 out_width_ntiles = tt::div_up(out_width_ntiles, args.parallelization_config.grid_size.x);
             }
+            TT_FATAL(
+                args.block_config.out_subblock_w_ntiles == out_width_ntiles ||
+                    args.block_config.out_subblock_h_ntiles == 1,
+                "Error");
+        } else {
+            TT_FATAL(
+                args.block_config.out_subblock_w_ntiles == per_core_out_matrix_width_ntiles ||
+                    args.block_config.out_subblock_h_ntiles == 1,
+                "Error");
         }
-        TT_FATAL(
-            args.block_config.out_subblock_w_ntiles == per_core_out_matrix_width_ntiles ||
-                args.block_config.out_subblock_h_ntiles == 1,
-            "Error");
     }
-}
-
-tt::stl::hash::hash_t Conv2dDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    hashable_operation_attributes_t hashable_args = {
-        .sliding_window_config = args.sliding_window_config,
-        .output_channels = args.output_channels,
-        .untilize_out = args.untilize_out,
-        .has_bias = args.has_bias,
-        .activation = args.activation,
-        .parallelization_config = args.parallelization_config,
-        .block_config = args.block_config,
-        .memory_config = args.memory_config,
-        .dtype = args.dtype,
-        .input_tensor_shape = args.input_tensor_shape,
-        .compute_kernel_config = args.compute_kernel_config,
-        .enable_act_double_buffer = args.enable_act_double_buffer,
-        .enable_weights_double_buffer = args.enable_weights_double_buffer,
-        .enable_activation_reuse = args.enable_activation_reuse,
-        .config_tensors_in_dram = args.config_tensors_in_dram,
-        .force_split_reader = args.force_split_reader,
-    };
-    return tt::stl::hash::hash_objects_with_default_seed(hashable_args, tensor_args);
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<Tensor> Conv2dDeviceOperation::create_op_performance_model(

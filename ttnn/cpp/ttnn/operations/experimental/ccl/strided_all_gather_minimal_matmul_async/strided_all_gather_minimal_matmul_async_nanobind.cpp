@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,8 +11,9 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/vector.h>
+#include <nanobind/stl/variant.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/experimental/ccl/strided_all_gather_minimal_matmul_async/strided_all_gather_minimal_matmul_async.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/distributed/types.hpp"
@@ -21,82 +22,14 @@
 
 namespace ttnn::operations::experimental::ccl {
 
-namespace {
-
-template <typename ccl_operation_t>
-void bind_strided_all_gather_minimal_matmul_async_op(
-    nb::module_& mod, const ccl_operation_t& operation, const char* doc) {
-    bind_registered_operation(
-        mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const ccl_operation_t& self,
-               const ttnn::Tensor& input_tensor,
-               const ttnn::Tensor& weight_tensor,
-               const std::optional<ttnn::Tensor>& persistent_output_buffer,
-               const uint32_t dim,
-               const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
-               const CoreCoord strided_all_gather_core_grid_offset,
-               const uint32_t num_links,
-               const std::optional<ttnn::MemoryConfig>& memory_config_ag,
-               const ttnn::ccl::Topology topology,
-               std::optional<uint32_t> cluster_axis,
-               const std::optional<const Tensor>& bias,
-               const std::optional<unary::UnaryWithParam>& fused_activation,
-               const std::optional<const ttnn::experimental::prim::MinimalMatmulConfig>& config,
-               const std::optional<ttnn::MemoryConfig>& memory_config_mm,
-               const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
-               std::optional<uint32_t> num_workers_per_link,
-               std::optional<uint32_t> num_buffers_per_channel,
-               std::optional<bool> read_local_slice_from_input) -> std::vector<ttnn::Tensor> {
-                return self(
-                    input_tensor,
-                    weight_tensor,
-                    persistent_output_buffer,
-                    dim,
-                    multi_device_global_semaphore,
-                    strided_all_gather_core_grid_offset,
-                    num_links,
-                    memory_config_ag,
-                    topology,
-                    cluster_axis,
-                    bias,
-                    fused_activation,
-                    config,
-                    memory_config_mm,
-                    compute_kernel_config,
-                    num_workers_per_link,
-                    num_buffers_per_channel,
-                    read_local_slice_from_input);
-            },
-            nb::arg("input_tensor"),
-            nb::arg("weight_tensor"),
-            nb::arg("persistent_output_buffer"),
-            nb::arg("dim"),
-            nb::arg("multi_device_global_semaphore"),
-            nb::arg("strided_all_gather_core_grid_offset"),
-            nb::kw_only(),
-            nb::arg("num_links") = 1,
-            nb::arg("memory_config_ag") = nb::none(),
-            nb::arg("topology") = nb::cast(ttnn::ccl::Topology::Ring),
-            nb::arg("cluster_axis") = nb::none(),
-            nb::arg("bias") = nb::none(),
-            nb::arg("fused_activation") = nb::none(),
-            nb::arg("config") = nb::none(),
-            nb::arg("memory_config_mm") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none(),
-            nb::arg("num_workers_per_link") = nb::none(),
-            nb::arg("num_buffers_per_channel") = nb::none(),
-            nb::arg("read_local_slice_from_input") = nb::none()});
-}
-
-}  // namespace
-
 void bind_strided_all_gather_minimal_matmul_async(nb::module_& mod) {
-    bind_strided_all_gather_minimal_matmul_async_op(
+    nb::enum_<ttnn::experimental::prim::MMSignalAggregatorMode>(mod, "MMSignalAggregatorMode")
+        .value("Auto", ttnn::experimental::prim::MMSignalAggregatorMode::Auto)
+        .value("On", ttnn::experimental::prim::MMSignalAggregatorMode::On)
+        .value("Off", ttnn::experimental::prim::MMSignalAggregatorMode::Off);
+
+    ttnn::bind_function<"strided_all_gather_minimal_matmul_async", "ttnn.experimental.">(
         mod,
-        ttnn::experimental::strided_all_gather_minimal_matmul_async,
         R"doc(strided_all_gather_minimal_matmul_async(input_tensor: ttnn.Tensor, weight_tensor: ttnn.Tensor, dim: int, *, num_links: int = 1, memory_config: Optional[ttnn.MemoryConfig] = None) -> (ttnn.Tensor, ttnn.Tensor)
 
         Performs an all-gather operation on multi-device :attr:`input_tensor` across all devices.
@@ -119,6 +52,11 @@ void bind_strided_all_gather_minimal_matmul_async(nb::module_& mod) {
             * :attr:`program_config` (Optional[ttnn.MatmulProgramConfig])
             * :attr:`fused_activation` (Optional[str])
             * :attr:`compute_kernel_config` (Optional[DeviceComputeKernelConfig])
+            * :attr:`fused_ternary_input_a` (Optional[ttnn.Tensor]): addcmul residual/base tensor (added to the result).
+            * :attr:`fused_ternary_input_b` (Optional[ttnn.Tensor]): addcmul multiplier/gate tensor; a single tile-row broadcasts across M.
+            * :attr:`fused_ternary_scalar` (Optional[float]): addcmul scale; output = a + scalar * matmul_out * b. Requires both a and b.
+            * :attr:`chunks` (int): split the matmul output into this many tensors along N (default 1). Returns [all_gather_output, matmul_chunk_0, ..., matmul_chunk_{chunks-1}]. N must be divisible by chunks.
+            * :attr:`mm_signal_aggregator_mode` (ttnn.MMSignalAggregatorMode): whether the all-gather signals the matmul through per-direction aggregator cores. These cost one worker core per direction on top of `num_links * (num_workers_per_link + 1) * 2` mux/worker cores, all placed from `strided_all_gather_core_grid_offset`. `Auto` (default) uses them when they fit and otherwise falls back to reader-signaled matmul with a warning, `On` requires them, `Off` never uses them.
 
         Example:
 
@@ -126,7 +64,32 @@ void bind_strided_all_gather_minimal_matmul_async(nb::module_& mod) {
             >>> weight_tensor = ttnn.from_torch(torch.tensor((2, 1), dtype=torch.bfloat16), device=device)
             >>> all_gathered_mm_in, mm_out = ttnn.strided_all_gather_minimal_matmul_async(tensor, weight_tensor, dim=0, (0, 0))
 
-        )doc");
+        )doc",
+        &ttnn::experimental::strided_all_gather_minimal_matmul_async,
+        nb::arg("input_tensor"),
+        nb::arg("weight_tensor"),
+        nb::arg("persistent_output_buffer"),
+        nb::arg("dim"),
+        nb::arg("multi_device_global_semaphore"),
+        nb::arg("strided_all_gather_core_grid_offset"),
+        nb::kw_only(),
+        nb::arg("num_links") = 1,
+        nb::arg("memory_config_ag") = nb::none(),
+        nb::arg("topology") = nb::cast(ttnn::ccl::Topology::Ring),
+        nb::arg("cluster_axis") = nb::none(),
+        nb::arg("bias") = nb::none(),
+        nb::arg("fused_activation") = nb::none(),
+        nb::arg("config") = nb::none(),
+        nb::arg("memory_config_mm") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("num_workers_per_link") = nb::none(),
+        nb::arg("num_buffers_per_channel") = nb::none(),
+        nb::arg("read_local_slice_from_input") = nb::none(),
+        nb::arg("fused_ternary_input_a") = nb::none(),
+        nb::arg("fused_ternary_input_b") = nb::none(),
+        nb::arg("fused_ternary_scalar") = nb::none(),
+        nb::arg("chunks") = 1,
+        nb::arg("mm_signal_aggregator_mode") = nb::cast(ttnn::experimental::prim::MMSignalAggregatorMode::Auto));
 }
 
 }  // namespace ttnn::operations::experimental::ccl

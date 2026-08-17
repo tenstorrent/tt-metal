@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -81,7 +81,7 @@ BcastToOperation::spec_return_value_t BcastToOperation::compute_output_specs(
     if (tensor_args.output.has_value()) {
         return tensor_args.output->tensor_spec();
     }
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         Shape{operation_attributes.output_shape},
         tt::tt_metal::TensorLayout(
             tensor_args.input.dtype(),

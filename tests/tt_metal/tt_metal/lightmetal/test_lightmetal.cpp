@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -25,12 +25,11 @@
 // #include <tt-metalium/buffer_types.hpp>
 // #include <tt-metalium/circular_buffer_config.hpp>
 // // #include <tt-metalium/core_coord.hpp>
-// #include <tt-metalium/data_types.hpp>
+// #include <tt-metalium/kernel_types.hpp>
 // #include <tt-metalium/device.hpp>
 // #include <tt-metalium/tensor_accessor_args.hpp>
 // #include "gtest/gtest.h"
 // #include "hostdevcommon/kernel_structs.h"
-// #include <tt-metalium/kernel_types.hpp>
 // #include "lightmetal/host_api_capture_helpers.hpp"
 // #include <tt-metalium/lightmetal_capture_utils.hpp>
 // #include "lightmetal_fixture.hpp"
@@ -168,19 +167,19 @@
 //     CoreCoord worker = {0, 0};
 //     auto reader_kernel = CreateKernel(
 //         program,
-//         "tt_metal/kernels/dataflow/reader_unary.cpp",
+//         "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary.cpp",
 //         worker,
 //         DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 
 //     auto writer_kernel = CreateKernel(
 //         program,
-//         "tt_metal/kernels/dataflow/writer_unary.cpp",
+//         "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
 //         worker,
 //         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
 //     CreateKernel(
 //         program,
-//         "tt_metal/kernels/compute/eltwise_sfpu.cpp",
+//         "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_sfpu.cpp",
 //         worker,
 //         ComputeConfig{
 //             .math_approx_mode = true,

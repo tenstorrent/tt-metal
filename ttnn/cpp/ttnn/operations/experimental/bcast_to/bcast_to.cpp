@@ -1,11 +1,10 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <optional>
 
 #include "bcast_to.hpp"
-#include <tt_stl/small_vector.hpp>
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/experimental/bcast_to/device/bcast_to_device_operation.hpp"
 

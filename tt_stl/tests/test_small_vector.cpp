@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 //===----------------------------------------------------------------------===//
@@ -28,7 +28,7 @@
 
 #include <tt_stl/small_vector.hpp>
 
-namespace tt::stl {
+namespace ttsl {
 namespace {
 
 constexpr std::size_t kInlineCapacity = 4;
@@ -528,4 +528,4 @@ TEST(SmallVectorEdgeCaseTest, OverAlignedTypesAreProperlyAllocated) {
 }
 
 }  // namespace
-}  // namespace tt::stl
+}  // namespace ttsl

@@ -1,13 +1,14 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
-import matplotlib.pyplot as plt
-from matplotlib.gridspec import GridSpec
 import itertools
+import os
+
+import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 from loguru import logger  # type: ignore
+from matplotlib.gridspec import GridSpec
 
 from tests.tt_metal.tt_metal.data_movement.python.constants import *
 
@@ -21,6 +22,7 @@ class Plotter:
         # Create architecture-specific subdirectory
         self.output_dir = os.path.join(output_dir, arch)
         self.noc_width = NOC_WIDTHS.get(arch, 64)  # Default to 64 if architecture not found
+        self.noc_freq_ghz = NOC_FREQ_GHZ.get(arch, 1.0)
         self.arch = arch
         self.test_id_to_name = test_id_to_name
         self.test_id_to_comment = test_id_to_comment
@@ -51,6 +53,10 @@ class Plotter:
             # For direct write tests, use one plot (1x1 grid)
             config["nrows_per_figure"] = 1
             config["ncols_per_figure"] = 1
+        if "Quasar Cache Write" in test_name:
+            # Two panels: duration vs size and bandwidth vs size (one line per write mode)
+            config["nrows_per_figure"] = 1
+            config["ncols_per_figure"] = 2
         return config
 
     def get_bandwidth_mode(self, test_id):
@@ -61,6 +67,15 @@ class Plotter:
         test_info = self.metadata_loader.load_test_information()
         test_data = test_info.get("tests", {}).get(test_id, {})
         return test_data.get("bandwidth_mode", "per_core")
+
+    def get_bandwidth_unit(self, test_id):
+        """Returns the bandwidth_unit for a given test_id from test_information.yaml.
+        Defaults to 'bpc' (bytes/cycle) if not specified."""
+        if self.metadata_loader is None:
+            return "bpc"
+        test_info = self.metadata_loader.load_test_information()
+        test_data = test_info.get("tests", {}).get(test_id, {})
+        return test_data.get("bandwidth_unit", "bpc")
 
     def plot_dm_stats(self):
         # Ensure output directory exists
@@ -119,6 +134,7 @@ class Plotter:
                     axes.append(fig.add_subplot(gridspec[row, col]))
 
             bandwidth_mode = self.get_bandwidth_mode(test_id)
+            bandwidth_unit = self.get_bandwidth_unit(test_id)
 
             # Generate plots based on test type
             if "Multicast Schemes" in test_name:
@@ -149,9 +165,14 @@ class Plotter:
                 # For NOC API Latency tests, plot cycles per transaction
                 self.plot_transaction_size_vs_cycles_per_transaction(axes[0], plot_data[test_id])
                 self.plot_num_transactions_vs_total_cycles(axes[1], plot_data[test_id])
+            elif "Quasar Cache Write" in test_name:
+                self.plot_quasar_cache_write_duration(axes[0], plot_data[test_id])
+                self.plot_quasar_cache_write_bandwidth(axes[1], plot_data[test_id])
             else:  # Packet Sizes
                 self.plot_durations(axes[0], plot_data[test_id])
-                self.plot_data_size_vs_bandwidth(axes[1], plot_data[test_id], bandwidth_mode=bandwidth_mode)
+                self.plot_data_size_vs_bandwidth(
+                    axes[1], plot_data[test_id], bandwidth_mode=bandwidth_mode, bandwidth_unit=bandwidth_unit
+                )
 
             # Add figure title
             fig.suptitle(f"{test_name} ({self.arch.upper()})", fontsize=16, fontweight="bold", y=0.98)
@@ -182,7 +203,7 @@ class Plotter:
         yscale="linear",
         xbase=2,
         ybase=10,
-        add_theoretical_max_bw=False,
+        y_scale=1.0,
     ):
         # Flatten data and add riscv to each run
         all_runs = []
@@ -215,18 +236,11 @@ class Plotter:
             current_series_runs.sort(key=lambda r: r[x_key])
 
             x_vals = [run[x_key] for run in current_series_runs]
-            y_vals = [run[y_key] for run in current_series_runs]
+            y_vals = [run[y_key] * y_scale for run in current_series_runs]
 
             label = label_format(combo, series_keys)
 
             ax.plot(x_vals, y_vals, label=label, marker="o")
-
-        if add_theoretical_max_bw:
-            all_x_vals = sorted(set(run[x_key] for run in all_runs))
-            max_bandwidths = [
-                self.noc_width * ((size / self.noc_width) / ((size / self.noc_width) + 1)) for size in all_x_vals
-            ]
-            ax.plot(all_x_vals, max_bandwidths, label="Theoretical Max BW", linestyle="--", color="black")
 
         # Adjust the plot area to leave space for the legend
         box = ax.get_position()
@@ -276,21 +290,81 @@ class Plotter:
             ybase=10,
         )
 
+    # Quasar Cache Write: Total Data Size vs amortized per-write Duration (one line per mode).
+    # The timed zone repeats the write num_transactions (=iteration count) times, so the
+    # per-write duration is duration_cycles / num_transactions.
+    def plot_quasar_cache_write_duration(self, ax, data):
+        per_iter_data = {}
+        for riscv, runs in data.items():
+            new_runs = []
+            for run in runs:
+                r = run.copy()
+                iters = run.get("num_transactions", 1) or 1
+                r["per_iter_duration"] = run["duration_cycles"] / iters
+                new_runs.append(r)
+            per_iter_data[riscv] = new_runs
+        self._plot_series(
+            ax=ax,
+            data=per_iter_data,
+            x_key="transaction_size",  # holds total bytes written per iteration (N)
+            y_key="per_iter_duration",
+            series_keys=["write_path"],
+            label_format=lambda combo, keys: f"{combo[0]}",
+            title="Data Size vs Write Duration (amortized)",
+            xlabel="Total Data Size (bytes)",
+            ylabel="Duration per write (cycles)",
+            xscale="log",
+            xbase=2,
+        )
+
+    # Quasar Cache Write: Total Data Size vs Bandwidth (bytes/cycle, one line per write mode)
+    def plot_quasar_cache_write_bandwidth(self, ax, data):
+        self._plot_series(
+            ax=ax,
+            data=data,
+            x_key="transaction_size",  # holds total bytes written per iteration (N)
+            y_key="bandwidth",  # num_transactions * size / duration = per-iteration bytes/cycle
+            series_keys=["write_path"],
+            label_format=lambda combo, keys: f"{combo[0]}",
+            title="Data Size vs Bandwidth",
+            xlabel="Total Data Size (bytes)",
+            ylabel="Bandwidth (bytes/cycle)",
+            xscale="log",
+            xbase=2,
+        )
+
     # Packet Sizes: Transaction Size vs Bandwidth
-    def plot_data_size_vs_bandwidth(self, ax, data, bandwidth_mode="per_core"):
+    def plot_data_size_vs_bandwidth(self, ax, data, bandwidth_mode="per_core", bandwidth_unit="bpc"):
         x_key = "transaction_size"
         series_keys = ["riscv", "num_transactions"]
+
+        use_gbps = bandwidth_unit == "gbps"
 
         if bandwidth_mode == "combined":
             y_key = "combined_bandwidth"
             title = "Transaction Size vs Combined Bandwidth"
-            ylabel = "Combined Bandwidth (bytes/cycle)"
-            add_theoretical_max_bw = False
+            if use_gbps:
+                ylabel = "Combined Bandwidth (GB/s)"
+                y_scale = self.noc_freq_ghz
+            else:
+                ylabel = "Combined Bandwidth (bytes/cycle)"
+                y_scale = 1.0
         else:
-            y_key = "bandwidth"
+            if use_gbps:
+                # Use bandwidth_gbps (computed from real device clock freq) when available
+                has_gbps = any(run.get("bandwidth_gbps", 0) > 0 for runs in data.values() for run in runs)
+                if has_gbps:
+                    y_key = "bandwidth_gbps"
+                    y_scale = 1.0  # Already in GB/s
+                else:
+                    y_key = "bandwidth"
+                    y_scale = self.noc_freq_ghz
+                ylabel = "Bandwidth (GB/s)"
+            else:
+                y_key = "bandwidth"
+                y_scale = 1.0
+                ylabel = "Bandwidth (bytes/cycle)"
             title = "Transaction Size vs Bandwidth"
-            ylabel = "Bandwidth (bytes/cycle)"
-            add_theoretical_max_bw = True
 
         xlabel = "Transaction Size (bytes)"
 
@@ -307,7 +381,7 @@ class Plotter:
             ylabel=ylabel,
             xscale="log",
             xbase=2,
-            add_theoretical_max_bw=add_theoretical_max_bw,
+            y_scale=y_scale,
         )
 
     # Transaction ID: Transaction ID Count vs Bandwidth (grouped by transaction size)
@@ -382,7 +456,6 @@ class Plotter:
             ylabel=ylabel,
             xscale="log",
             xbase=2,
-            add_theoretical_max_bw=False,
         )
 
     # Direct Write: Address pattern
@@ -407,7 +480,6 @@ class Plotter:
             ylabel=ylabel,
             xscale="log",
             xbase=2,
-            add_theoretical_max_bw=False,
         )
 
     # Multicast Schemes: Grid Dimensions vs Bandwidth

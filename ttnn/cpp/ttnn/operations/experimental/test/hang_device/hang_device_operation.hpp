@@ -1,10 +1,10 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-
-#include "ttnn/decorators.hpp"
+#include "ttnn/device_operation.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::prim {
 
@@ -13,7 +13,7 @@ struct ExecuteTestHangDeviceOperation {
         const Tensor& tensor;
     };
 
-    using spec_return_value_t = ttnn::TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
 
     using tensor_return_value_t = Tensor;
 
@@ -49,12 +49,8 @@ struct ExecuteTestHangDeviceOperation {
 
 }  // namespace ttnn::prim
 
-namespace ttnn {
-struct TestHangOp {
-    static Tensor invoke(const Tensor& input) {
-        return device_operation::launch<ttnn::prim::ExecuteTestHangDeviceOperation>({}, {input});
-    }
-};
+namespace ttnn::operations::experimental::test {
 
-constexpr auto hang_device_operation = ttnn::register_operation<"ttnn::hang_device_operation", ttnn::TestHangOp>();
-}  // namespace ttnn
+Tensor test_hang_device_operation(const Tensor& input_tensor);
+
+}  // namespace ttnn::operations::experimental::test

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -94,6 +94,15 @@ private:
 // Use ASICPosition type alias for consistency with TopologyMapper
 using AsicPosition = tt::tt_metal::ASICPosition;
 
+// A many-to-many ASIC pinning group parsed from a single AsicPinning entry in the MGD. Any of
+// `fabric_nodes` may map to any of `asic_positions` (all-to-all); the topology solver still enforces a
+// bijection, so distinct nodes land on distinct ASICs. A group with a single node and a single position is
+// the classic one-to-one pin. The same shape is used as TopologyMappingConfig::PinningConstraint.
+struct AsicPinningGroup {
+    std::vector<FabricNodeId> fabric_nodes;
+    std::vector<AsicPosition> asic_positions;
+};
+
 // TODO: Try make efficient by storing stringviews?
 class MeshGraphDescriptor {
 public:
@@ -133,6 +142,25 @@ public:
     const std::vector<GlobalNodeId>& all_meshes() const { return mesh_instances_; }
     const std::vector<GlobalNodeId>& all_graphs() const { return graph_instances_; }
     const std::vector<GlobalNodeId>& all_switches() const { return switch_instances_; }
+    std::unordered_set<std::string> all_names() const {
+        std::unordered_set<std::string> names;
+        names.reserve(instances_by_name_.size());
+        for (const auto& [name, _] : instances_by_name_) {
+            names.insert(name);
+        }
+        return names;
+    }
+    std::unordered_set<std::string> all_types() const {
+        std::unordered_set<std::string> types;
+        types.reserve(instances_by_type_.size());
+        for (const auto& [type, _] : instances_by_type_) {
+            types.insert(type);
+        }
+        return types;
+    }
+
+    // Unique mesh descriptor names from mesh instances (e.g. "M0", "Decode32x4"), sorted lexicographically.
+    std::vector<std::string> get_all_mesh_names() const;
 
     // Queries
     const std::vector<GlobalNodeId>& instances_by_name(const std::string& name) const {
@@ -164,6 +192,31 @@ public:
             source_device_id);
         return it->second;
     }
+    const std::string& type_by_name(const std::string& name) const {
+        const auto& ids = instances_by_name(name);
+        return get_instance(ids[0]).type;
+    }
+
+    // Calculate chip count from device_topology dimensions for a mesh instance
+    // Returns the product of all dimensions in device_topology.dims()
+    // Example: [4, 4] = 4 × 4 = 16 chips
+    // Example: [8, 2] = 8 × 2 = 16 chips
+    // Example: [32, 4] = 32 × 4 = 128 chips
+    uint32_t get_chip_count(GlobalNodeId mesh_instance_id) const;
+    uint32_t get_chip_count(const InstanceData& mesh_instance) const;
+
+    // Calculate chip count from device_topology dimensions for a switch instance
+    // Returns the product of all dimensions in device_topology.dims()
+    // Same calculation as meshes - switches use the same device_topology structure
+    // Example: [4, 4] = 4 × 4 = 16 chips
+    // Example: [8, 2] = 8 × 2 = 16 chips
+    uint32_t get_switch_chip_count(GlobalNodeId switch_instance_id) const;
+    uint32_t get_switch_chip_count(const InstanceData& switch_instance) const;
+
+    // Count instances by type
+    // Returns a map from type name to count of instances with that type
+    // Example: count_instances_by_type({"MESH", "POD"}) returns {MESH: 4, POD: 2}
+    std::unordered_map<std::string, uint32_t> count_instances_by_type(const std::vector<std::string>& types) const;
 
     // TODO: This will disappear after we move to Physical discovery
     proto::Architecture get_arch() const;
@@ -171,8 +224,11 @@ public:
 
     // Helper to infer FabricType from MGD dim_types
     static FabricType infer_fabric_type_from_dim_types(const proto::MeshDescriptor* mesh_desc);
+    static FabricType infer_fabric_type_from_dim_types(const proto::SwitchDescriptor* switch_desc);
 
-    const std::vector<std::pair<AsicPosition, FabricNodeId>>& get_pinnings() const { return pinnings_; }
+    // Many-to-many pinning groups parsed from the MGD's top-level `pinnings` section. Each entry may
+    // bind multiple logical fabric nodes to multiple physical ASIC positions (all-to-all).
+    const std::vector<AsicPinningGroup>& get_pinnings() const { return pinnings_; }
 
 private:
     // Descriptor fast lookup
@@ -196,10 +252,12 @@ private:
 
     // Connections
     std::unordered_map<GlobalNodeId, std::vector<ConnectionId>> connections_by_instance_id_;
-    std::unordered_map<std::string_view, std::vector<ConnectionId>> connections_by_type_;
+    // Must use owning std::string keys: keys were previously string_views into InstanceData::type, which broke
+    // move/copy (e.g. std::vector<MeshGraphDescriptor>::emplace_back / reallocation) by leaving dangling views.
+    std::unordered_map<std::string, std::vector<ConnectionId>> connections_by_type_;
     std::unordered_map<GlobalNodeId, std::vector<ConnectionId>> connections_by_source_device_id_;
 
-    std::vector<std::pair<AsicPosition, FabricNodeId>> pinnings_;
+    std::vector<AsicPinningGroup> pinnings_;
 
     static void set_defaults(proto::MeshGraphDescriptor& proto);
     static std::vector<std::string> static_validate(
@@ -252,7 +310,7 @@ private:
     void populate_intra_mesh_express_connections(GlobalNodeId mesh_id);
     void populate_inter_mesh_connections(GlobalNodeId graph_id);
     void populate_inter_mesh_manual_connections(GlobalNodeId graph_id);
-    void populate_inter_mesh_topology_connections(GlobalNodeId graph_id);  // TODO: To be implemented in seperate PR
+    void populate_inter_mesh_topology_connections(GlobalNodeId graph_id);  // TODO: To be implemented in separate PR
     void populate_inter_mesh_topology_connections_all_to_all(GlobalNodeId graph_id);
     void populate_inter_mesh_topology_connections_ring(GlobalNodeId graph_id);
 

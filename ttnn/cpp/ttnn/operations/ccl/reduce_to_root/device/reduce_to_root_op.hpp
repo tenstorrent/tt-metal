@@ -1,15 +1,16 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 ///
 #pragma once
 
-#include "ttnn/decorators.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 
 #include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
+#include "ttnn/device_operation.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn {
 namespace operations::ccl {
@@ -21,7 +22,7 @@ struct ReduceToRootOp {
         const tt::tt_fabric::Topology topology;
         const std::optional<std::vector<ttnn::CoreCoord>> input_mux_cores;
 
-        const std::vector<ttnn::TensorSpec> _input_tensor_spec;
+        const std::vector<tt::tt_metal::TensorSpec> _input_tensor_spec;
 
         static constexpr auto attribute_names = std::forward_as_tuple("root_coord", "scale_fp32", "topology");
         auto attribute_values() const { return std::forward_as_tuple(root_coord, scale_fp32, topology); };
@@ -37,7 +38,7 @@ struct ReduceToRootOp {
         const std::optional<Tensor> optional_intermediate_tensor;
     };
 
-    using spec_return_value_t = std::array<std::vector<ttnn::TensorSpec>, 2>;
+    using spec_return_value_t = std::array<std::vector<tt::tt_metal::TensorSpec>, 2>;
     using tensor_return_value_t = std::array<std::vector<ttnn::Tensor>, 2>;
 
     struct ReduceToRoot {
