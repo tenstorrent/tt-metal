@@ -830,8 +830,11 @@ def _build_cell_callable(ttnn, torch, device, cell):
             # return_values); validate by gathering the input at the indices
             # and comparing (order-insensitively) to torch.topk over the
             # valid_length-masked input.
+            vals_out = None
             if isinstance(out, (list, tuple)):
-                out = out[0]
+                # return_values=True returns (values, indices), torch-style
+                # (topk_large_indices_nanobind.cpp:22-24)
+                vals_out, out = out[0], out[1]
             idx = ttnn.to_torch(out).to(torch.int64)[..., :k]
             gathered = t.float().gather(-1, idx)
             masked = t.float().clone()
@@ -840,6 +843,11 @@ def _build_cell_callable(ttnn, torch, device, cell):
             ref = torch.topk(masked, k=k, dim=-1).values
             g_sorted = torch.sort(gathered, dim=-1, descending=True).values
             err = (g_sorted - ref).abs().max().item()
+            if vals_out is not None:
+                # returned values must equal the input gathered at the
+                # returned indices, elementwise (same order)
+                v = ttnn.to_torch(vals_out).float()[..., :k]
+                err = max(err, (v - gathered).abs().max().item())
             res = {"max_abs_err": err}
             if cell.get("strict"):
                 # Competition mode: selection must be exact, and a wrong cell
@@ -2103,6 +2111,10 @@ def build_scenario_cells(specs, args):
                     "dim": -1,
                     "anchor": "model_scenario",
                     "valid_length": s.get("valid_length"),
+                    # plumbed through to the op child (see the return_values
+                    # branch there); scenarios3 silently dropped this flag and
+                    # measured indices-only -- never lose it again
+                    "return_values": s.get("return_values", False),
                     "apriori": "",
                     "expected_factory": "",
                     "composite": composite,

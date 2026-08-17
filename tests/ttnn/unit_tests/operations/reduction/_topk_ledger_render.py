@@ -127,6 +127,18 @@ def render_psweep_table(psweep, comp_rows):
     return "\n".join(body)
 
 
+def op_active_cores(rows, cores):
+    """Tracy's CORE COUNT is the LAUNCHED program grid, not active workers:
+    the op's row-parallel factory (rows > 1) launches the full grid and cores
+    beyond the row count exit immediately, so label those cells 'N of Mc'.
+    Column-parallel cells (rows == 1) report their real chunk count."""
+    try:
+        c = int(str(cores))
+    except (TypeError, ValueError):
+        return str(cores or "")
+    return f"{rows} of {c}" if 1 < rows < c else str(c)
+
+
 def render_model_scenarios(rows):
     """MODEL_SCENARIOS region. One speedup semantics, stated in the header:
     speedup = today / best-ours, always. 'best ours' names which variant won
@@ -137,22 +149,28 @@ def render_model_scenarios(rows):
     body = []
     for r in rows:
         esc = lambda s: _html.escape(s or "")  # noqa: E731
-        shape = f"{int(r['rows'])}\u00d7{int(r['n']):,}, k={int(r['k'])}"
+        nrows = int(r["rows"])
+        shape = f"{nrows}\u00d7{int(r['n']):,}, k={int(r['k'])}"
         today_e = r.get("today_engine", "")
         today_label = {"stocknow": "ttnn.topk", "routed": "ttnn.topk", "op": "topk_large_indices"}.get(today_e, today_e)
         today = fnum(r.get("today_us"))
         ro, op = fnum(r.get("routed_us")), fnum(r.get("op_us"))
         today_cores = r.get(f"{today_e}_cores", "")
+        if today_e == "op" and today_cores:
+            today_cores = op_active_cores(nrows, today_cores)
         if today is not None and today_cores:
             today_td = f'<td class="n">{today:,.1f} <span class="flat">@{today_cores}c</span></td>'
         else:
             today_td = us_fmt(today)
 
         # best ours: the cheaper measured variant, with its core count
-        cands = [(v, n, r.get(f"{key}_cores", "")) for v, n, key in
+        cands = [(v, n, key) for v, n, key in
                  ((ro, "routed", "routed"), (op, "direct", "op")) if v is not None]
         if cands:
-            best, best_name, best_cores = min(cands)
+            best, best_name, best_key = min(cands)
+            best_cores = r.get(f"{best_key}_cores", "")
+            if best_key == "op":
+                best_cores = op_active_cores(nrows, best_cores)
             # which variant won is carried by the 'to capture it' column;
             # repeating it in every cell is noise
             bc = f" @{best_cores}c" if best_cores else ""
@@ -179,7 +197,10 @@ def render_model_scenarios(rows):
                 capture = "call ttnn.experimental.topk_large_indices yourself (k rounds up to 16, slice back); or extend the ttnn.topk route \u2014 A/B vs envelope pending"
             else:
                 capture = "call ttnn.experimental.topk_large_indices(return_values=True) yourself \u2014 same kernel, no ttnn.topk wrapper (RM output, u32 indices)"
-                if ro is not None and today is not None and ro < today:
+                # offer the same-API alternative only where routing meaningfully
+                # beats today (same 1.05 threshold as the win coloring) -- a tie
+                # within noise (e.g. routing not engaging) is not an alternative
+                if ro is not None and today is not None and today / ro >= 1.05:
                     capture += (
                         f"; or same API \u2014 drop indices_tensor/sub_core_grids/stable: "
                         f"{ro:,.1f} \u00b5s ({today / ro:,.1f}\u00d7)"
@@ -221,7 +242,7 @@ def render_exec_numbers(rows, psweep):
         pmin, pmax = min(pts), max(pts)
         best, worst = min(pts.values()), max(pts.values())
         prange_op = f"{worst:,.1f}→{best:,.1f} µs over P={pmin}–{pmax}"
-        sprange_op = f"{pb / worst:,.0f}×–{pb / best:,.0f}× vs stock" if pb else "—"
+        sprange_op = f"{pb / worst:,.0f}×–{pb / best:,.0f}× vs stock ttnn.topk" if pb else "—"
     else:
         prange_op = sprange_op = "—"
 
@@ -238,7 +259,7 @@ def render_exec_numbers(rows, psweep):
         f'      <tr><td>vs stock ttnn.topk</td><td class="n flat">—</td><td class="n flat">{ratio(pb, bl)} (fused†)</td>'
         f'<td class="n ours gl"><strong>{ratio(pb, op)}</strong></td><td class="n gr">{ratio(pb, osk)}</td>'
         f'<td class="n ours gl"><strong>{ratio(pb, ro)}</strong></td><td class="n gr">1×</td></tr>',
-        f'      <tr><td>cores</td><td class="n flat">128 (assumed)</td><td class="n flat">32</td>'
+        f'      <tr><td>cores</td><td class="n flat">128 (assumed)</td><td class="n flat">{r.get("blaze_cores") or "—"}</td>'
         f'<td class="n ours gl">{opc}</td><td class="n gr">1/row</td><td class="n ours gl">{opc}</td><td class="n gr">1</td></tr>',
         f'      <tr><td>runtime over supported P</td><td class="n flat">—</td><td class="n flat">—</td>'
         f'<td class="n ours gl">{prange_op} ({sprange_op})</td><td class="n gr">—</td>'
