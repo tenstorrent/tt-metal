@@ -188,16 +188,18 @@ int ExpressRingTopology::next_row(int src, int dst) const {
         const auto& run = leaf_runs[leaf_run_of[leaf]];
         return leaf_index_of[leaf] < static_cast<int>(run.rows.size()) - 1 - leaf_index_of[leaf];
     };
-    // Same-run pairs on the same side of the run's midpoint walk the leaf links directly. Pairs that
-    // straddle the midpoint do NOT: routing them across the middle would chain the run's forward edges
-    // into a cycle with the anchors' chord (an unprotected loop). They fall through to egress+ingress
-    // instead, exiting to one anchor and re-entering from the other, which leaves the middle edge
-    // unused and keeps the run cycle-free.
-    if (is_leaf(src) && leaf_run_of[src] == leaf_run_of[dst] &&
-        nearer_end_is_before(src) == nearer_end_is_before(dst)) {
+    // Same-run pairs walk the leaf links directly when they sit on the same side of the run's midpoint,
+    // or when the run holds just the two of them. A run of two has no interior, so its single hop is a
+    // whole route: it neither extends another route nor is extended, and so cannot join a cycle. Longer
+    // runs must not be crossed end to end -- chaining the forward edges across the middle closes a loop
+    // with the anchors' chord -- so those pairs fall through to egress+ingress, exiting to one anchor
+    // and re-entering from the other, leaving the middle edge unused.
+    if (is_leaf(src) && leaf_run_of[src] == leaf_run_of[dst]) {
         const auto& run = leaf_runs[leaf_run_of[src]];
-        const int i = leaf_index_of[src];
-        return run.rows[leaf_index_of[dst] > i ? i + 1 : i - 1];
+        if (run.rows.size() == 2 || nearer_end_is_before(src) == nearer_end_is_before(dst)) {
+            const int i = leaf_index_of[src];
+            return run.rows[leaf_index_of[dst] > i ? i + 1 : i - 1];
+        }
     }
     if (is_leaf(src)) {
         const auto& run = leaf_runs[leaf_run_of[src]];

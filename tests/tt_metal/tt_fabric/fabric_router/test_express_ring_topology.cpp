@@ -13,7 +13,6 @@
 
 #include <cstdlib>
 #include <filesystem>
-#include <fstream>
 #include <memory>
 #include <string>
 #include <utility>
@@ -24,6 +23,7 @@
 
 #include "cluster.hpp"
 #include "fabric_fixture.hpp"
+#include "utils.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/fabric/express_ring_topology.hpp"
 
@@ -48,10 +48,14 @@ struct Hop {
     int next;
 };
 
+std::string fixture_path(const std::string& fixture) {
+    return (std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+            "tests/tt_metal/tt_fabric/custom_mesh_descriptors" / fixture)
+        .string();
+}
+
 ExpressRingTopology derive(const std::string& fixture) {
-    const auto path = std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-                      "tests/tt_metal/tt_fabric/custom_mesh_descriptors" / fixture;
-    MeshGraph mesh_graph(tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, path.string());
+    MeshGraph mesh_graph(tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, fixture_path(fixture));
     auto topo = derive_express_ring_topology(mesh_graph, MeshId{0});
     EXPECT_TRUE(topo.has_value()) << fixture << " derived no express rings";
     return topo.value_or(ExpressRingTopology{});
@@ -74,14 +78,12 @@ bool cluster_available() {
 std::unique_ptr<ControlPlane> make_control_plane(
     const std::string& fixture, FabricReliabilityMode reliability_mode, FabricConfig fabric_config) {
     auto& metal = tt::tt_metal::MetalContext::instance();
-    const auto path = std::filesystem::path(metal.rtoptions().get_root_dir()) /
-                      "tests/tt_metal/tt_fabric/custom_mesh_descriptors" / fixture;
     auto control_plane = std::make_unique<ControlPlane>(
         metal.get_cluster(),
         metal.rtoptions(),
         metal.hal(),
         metal.full_world_distributed_context(),
-        path.string(),
+        fixture_path(fixture),
         fabric_config,
         reliability_mode);
     control_plane->configure_routing_tables_for_fabric_ethernet_channels();
@@ -219,10 +221,11 @@ TEST(ExpressRingTopologyTest, Rings32x4) {
 }
 
 using tt::tt_fabric::fabric_router_tests::ControlPlaneFixture;
+using tt::tt_fabric::fabric_router_tests::write_temp_descriptor;
 
 // The canonical logical route query must reconstruct the same path the table walks, and must complete
 // the express axis before turning onto X. chip = row*4 + col on the 8x4 fixture.
-TEST_F(ControlPlaneFixture, CanonicalRoute8x4) {
+TEST_F(ControlPlaneFixture, TestExpressCanonicalRoute8x4) {
     if (!cluster_available()) {
         GTEST_SKIP() << "needs a Blackhole Galaxy or TT_METAL_MOCK_CLUSTER_DESC_PATH";
     }
@@ -254,7 +257,7 @@ TEST_F(ControlPlaneFixture, CanonicalRoute8x4) {
 
 // The node/direction predicates on the two-family fixture: ex8 may continue into ex4, the reverse
 // crossing is terminal, and leaves carry no protected ring.
-TEST_F(ControlPlaneFixture, RingPredicates32x4) {
+TEST_F(ControlPlaneFixture, TestExpressRingPredicates32x4) {
     if (!cluster_available()) {
         GTEST_SKIP() << "needs a Blackhole Galaxy or TT_METAL_MOCK_CLUSTER_DESC_PATH";
     }
@@ -298,19 +301,6 @@ TEST_F(ControlPlaneFixture, RingPredicates32x4) {
 // in the Rings* tests above; what remains here is predicate behavior per (row, direction) and the
 // axis-level query semantics behind mesh_has_protected_ring_in_axis_of.
 
-namespace {
-
-// MeshGraph construction is path-based, so edge-case descriptors are written inline to a temp file
-// rather than added to the shared fixture directory (which is reserved for fixtures several suites
-// share). Same pattern as test_channel_trimming_capture.cpp's temp files.
-std::string write_temp_descriptor(const std::string& name, const std::string& text_proto) {
-    const auto path = std::filesystem::temp_directory_path() / name;
-    std::ofstream(path) << text_proto;
-    return path.string();
-}
-
-}  // namespace
-
 TEST(ExpressRingTopologyTest, DoubleChordPerRowIsRejected) {
     // A row terminating two chords (span 4 and span 8 both landing on row 2) cannot be identified
     // by a bare Z command; derivation must refuse it rather than guess.
@@ -333,19 +323,10 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
 // A single wide pattern on the 32-row RING axis: each block skips six interior rows, so leaves form
 // runs of six rather than pairs. Exercises entering and leaving a long run one row at a time: each
 // hop must land on a physically adjacent row.
-TEST(ExpressRingTopologyTest, LeafRunsOfSix) {
-    const auto path = write_temp_descriptor("express_links_32x4_ex8_only.textproto", R"(
-mesh_descriptors {
-  name: "M0"
-  arch: BLACKHOLE
-  device_topology { dims: [32, 4] dim_types: [RING, RING] }
-  host_topology   { dims: [4, 1] }
-  channels { count: 2 policy: RELAXED }
-  express_links { dim_idx: 0  pattern { start: 0  step: 8 } }
-}
-top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
-)");
-    MeshGraph mesh_graph(tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, path);
+TEST(ExpressRingTopologyTest, Rings32x4Ex8Only) {
+    MeshGraph mesh_graph(
+        tt::tt_metal::ClusterType::BLACKHOLE_GALAXY,
+        fixture_path("express_links_32x4_ex8_only_mesh_graph_descriptor.textproto"));
     const auto topo = derive_express_ring_topology(mesh_graph, MeshId{0});
     ASSERT_TRUE(topo.has_value());
 
@@ -421,7 +402,7 @@ TEST(ExpressRingTopologyTest, NoExpressTopologyYieldsNoRingState) {
     EXPECT_FALSE(derive_express_ring_topology(mesh_graph, MeshId{0}).has_value());
 }
 
-TEST_F(ControlPlaneFixture, Row2ExpressOutputIsBothTransitAndAcquisition) {
+TEST_F(ControlPlaneFixture, TestExpressRow2OutputIsBothTransitAndAcquisition) {
     if (!cluster_available()) {
         GTEST_SKIP() << "needs a Blackhole Galaxy or TT_METAL_MOCK_CLUSTER_DESC_PATH";
     }
@@ -445,7 +426,7 @@ TEST_F(ControlPlaneFixture, Row2ExpressOutputIsBothTransitAndAcquisition) {
     EXPECT_TRUE(control_plane->continuation_allowed(row(2), D::S, D::Z));
 }
 
-TEST_F(ControlPlaneFixture, Row2ReverseDomainIsSymmetric) {
+TEST_F(ControlPlaneFixture, TestExpressRow2ReverseDomainIsSymmetric) {
     if (!cluster_available()) {
         GTEST_SKIP() << "needs a Blackhole Galaxy or TT_METAL_MOCK_CLUSTER_DESC_PATH";
     }
@@ -467,7 +448,7 @@ TEST_F(ControlPlaneFixture, Row2ReverseDomainIsSymmetric) {
     EXPECT_TRUE(control_plane->continuation_allowed(row(2), D::S, D::N));
 }
 
-TEST_F(ControlPlaneFixture, LeafRowHasNoYRingButKeepsXRing) {
+TEST_F(ControlPlaneFixture, TestExpressLeafRowHasNoYRingButKeepsXRing) {
     if (!cluster_available()) {
         GTEST_SKIP() << "needs a Blackhole Galaxy or TT_METAL_MOCK_CLUSTER_DESC_PATH";
     }
@@ -491,7 +472,7 @@ TEST_F(ControlPlaneFixture, LeafRowHasNoYRingButKeepsXRing) {
     EXPECT_TRUE(control_plane->is_protected_ring_edge(row(3), D::E));
 }
 
-TEST_F(ControlPlaneFixture, CrossFamilyContinueIsAllowedButLandOnlyIsNot) {
+TEST_F(ControlPlaneFixture, TestExpressCrossFamilyContinueIsAllowedButLandOnlyIsNot) {
     if (!cluster_available()) {
         GTEST_SKIP() << "needs a Blackhole Galaxy or TT_METAL_MOCK_CLUSTER_DESC_PATH";
     }
@@ -512,7 +493,7 @@ TEST_F(ControlPlaneFixture, CrossFamilyContinueIsAllowedButLandOnlyIsNot) {
     EXPECT_FALSE(control_plane->continuation_allowed(row(7), D::N, D::S));
 }
 
-TEST_F(ControlPlaneFixture, OrientationReversalIsNeverAllowed) {
+TEST_F(ControlPlaneFixture, TestExpressOrientationReversalIsNeverAllowed) {
     if (!cluster_available()) {
         GTEST_SKIP() << "needs a Blackhole Galaxy or TT_METAL_MOCK_CLUSTER_DESC_PATH";
     }
@@ -535,7 +516,7 @@ TEST_F(ControlPlaneFixture, OrientationReversalIsNeverAllowed) {
 // The keystone for the per-mesh axis query: distinct from the per-node query, row 3 is a leaf and
 // sits on no Y ring, but the axis still carries one. Answering per node here would disable flow
 // control on that chip's Y routers, and that flag also gates first-level ACK and the credit path.
-TEST_F(ControlPlaneFixture, AxisLevelQueryDoesNotElideOnLeaves) {
+TEST_F(ControlPlaneFixture, TestExpressAxisLevelQueryDoesNotElideOnLeaves) {
     if (!cluster_available()) {
         GTEST_SKIP() << "needs a Blackhole Galaxy or TT_METAL_MOCK_CLUSTER_DESC_PATH";
     }
@@ -559,7 +540,7 @@ TEST_F(ControlPlaneFixture, AxisLevelQueryDoesNotElideOnLeaves) {
 // The case the topology token gets wrong: a LINE Y axis (no cardinal end wrap) whose retained
 // express chords still close one spanning protected ring. Deciding from the topology enum would
 // drop the bubble on a ring that needs it.
-TEST_F(ControlPlaneFixture, CarveOutWithoutEndWrapStillReportsAYRing) {
+TEST_F(ControlPlaneFixture, TestExpressCarveOutWithoutEndWrapStillReportsAYRing) {
     if (!cluster_available()) {
         GTEST_SKIP() << "needs a Blackhole Galaxy or TT_METAL_MOCK_CLUSTER_DESC_PATH";
     }
