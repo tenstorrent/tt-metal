@@ -15,6 +15,9 @@
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt_stl/reflection.hpp>
 
+#include "device/generic_op_device_operation.hpp"
+#include "ttnn-nanobind/metal2_casters.hpp"
+
 namespace ttnn::operations::generic {
 
 // Defined in generic_op_device_operation.cpp
@@ -35,6 +38,11 @@ void bind_generic_operation(nb::module_& mod) {
                 kernel specifications, computational buffer configurations, semaphores, and other execution
                 parameters. Use ProgramDescriptor for SPMD mode (same program on all devices) or
                 MeshProgramDescriptor for explicit per-device control.
+
+            Alternatively, the Metal 2.0 form takes:
+            spec (ttnn.ProgramSpec): kernels, dataflow buffers, tensor parameters, work units.
+            run_args (ttnn.ProgramRunArgs): per-dispatch runtime argument values.
+            tensor_args (dict[str, int]): TensorParameter name -> index into io_tensors.
 
         Returns:
             ttnn.Tensor: Handle to the output tensor.
@@ -57,7 +65,20 @@ void bind_generic_operation(nb::module_& mod) {
         nb::arg("io_tensors"),
         nb::arg("program_descriptor"));
 
-    ttnn::bind_function<"generic_op">(mod, doc.c_str(), mesh_program_overload, program_overload);
+    // Metal 2.0 overload: ProgramSpec + ProgramRunArgs
+    auto spec_overload = ttnn::overload_t(
+        static_cast<Tensor (*)(
+            const std::vector<Tensor>&,
+            const tt::tt_metal::experimental::ProgramSpec&,
+            const tt::tt_metal::experimental::ProgramRunArgs&,
+            const tt::tt_metal::experimental::Table<tt::tt_metal::experimental::TensorParamName, uint32_t>&)>(
+            &ttnn::generic_op),
+        nb::arg("io_tensors"),
+        nb::arg("spec"),
+        nb::arg("run_args"),
+        nb::arg("tensor_args"));
+
+    ttnn::bind_function<"generic_op">(mod, doc.c_str(), mesh_program_overload, program_overload, spec_overload);
 
     mod.def(
         "compute_program_descriptor_hash",
@@ -69,6 +90,15 @@ void bind_generic_operation(nb::module_& mod) {
             Hashes kernel sources, compile-time args, core ranges, CB structure,
             and semaphores. Excludes runtime arg values and buffer addresses,
             making it suitable as a cache key for structural equivalence.
+        )pbdoc");
+
+    mod.def(
+        "compute_program_spec_hash",
+        &compute_program_spec_hash,
+        nb::arg("spec"),
+        R"pbdoc(
+            Structural hash of a ProgramSpec: the program cache key the spec path uses.
+            Excludes runtime argument values and tensor addresses.
         )pbdoc");
 }
 
