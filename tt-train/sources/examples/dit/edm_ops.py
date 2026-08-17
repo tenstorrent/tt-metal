@@ -15,10 +15,13 @@ site). This keeps every broadcast (bias add, per-block embedding add) in the
 already-validated [B,1,T,D] (+) [B,1,1,D] row-broadcast form and lets 1x1
 convs / attention reuse plain LinearLayers.
 
-LAYOUT POLICY: pad/slice/concat/permute/pool/upsample run in ROW_MAJOR
-NHWC (TILE front-padding is restricted and the pool/upsample kernels are RM
-NHWC ops); matmul and moreh.group_norm run in TILE. Conversions are explicit
-via _rm/_tile. Phase 1 optimizes for correctness, not layout-churn count.
+LAYOUT POLICY: pad/slice/concat/permute and the pool/upsample composites
+run in ROW_MAJOR NHWC (TILE front-padding is restricted); matmul, elementwise
+adds, and moreh group_norm run in TILE. Conversions are explicit via
+_rm/_tile. Phase 1 optimizes for correctness, not layout-churn count.
+Pool/upsample avoid the ttnn sliding-window kernels entirely — see the note
+above _sum_pool2x2_rm (ttml opens the mesh with l1_small_size=0, which the
+halo path needs).
 
 CONV WEIGHT ROW_ORDER (must match reference_unet.py exactly):
     3x3 conv weight is a TILE matrix [1, 1, 9*C_in, C_out] with row index
@@ -35,6 +38,7 @@ than saving the 9x-wider patch tensor.
 from __future__ import annotations
 
 import ttnn
+from ttnn.operations import moreh as ttnn_moreh  # not attached to the ttnn namespace in all builds
 
 import ttml
 
@@ -170,8 +174,43 @@ class Conv3x3Im2col(ttml.autograd.Function):
         return dx, dw, db
 
 
+# NOTE: pool/upsample are deliberately NOT ttnn.avg_pool2d / ttnn.upsample.
+# Those go through the sliding-window halo path, which allocates from the
+# L1_SMALL region — and ttml opens its mesh with DEFAULT_L1_SMALL_SIZE = 0
+# (tt-train/sources/ttml/core/mesh_device.cpp), so they die with an
+# out-of-memory TT_FATAL in bank_manager.cpp. For fixed 2x2/stride-2 kernels
+# the same math is a handful of RM reshape/slice/concat + TILE adds — all
+# primitives already exercised by the conv im2col/col2im paths.
+
+
+def _sum_pool2x2_rm(v_rm, b, h, w, c):
+    """RM [B,H,W,C] -> RM [B,H/2,W/2,C], each output = SUM of its 2x2 window.
+
+    Pure data movement + adds, no halo: pair adjacent W pixels via a
+    [B,H,W/2,2C] view (last-dim slices = even/odd columns), then pair
+    adjacent rows via a [B,H/2,W,C] view (dim-2 slices = even/odd rows).
+    """
+    r = ttnn.reshape(v_rm, (b, h, w // 2, 2 * c))
+    even_w = ttnn.slice(r, [0, 0, 0, 0], [b, h, w // 2, c])
+    odd_w = ttnn.slice(r, [0, 0, 0, c], [b, h, w // 2, 2 * c])
+    s = _rm(ttnn.add(_tile(even_w), _tile(odd_w)))  # [B,H,W/2,C]
+    s = ttnn.reshape(s, (b, h // 2, w, c))  # rows (2i, 2i+1) side by side in dim 2
+    even_h = ttnn.slice(s, [0, 0, 0, 0], [b, h // 2, w // 2, c])
+    odd_h = ttnn.slice(s, [0, 0, w // 2, 0], [b, h // 2, w, c])
+    return _rm(ttnn.add(_tile(even_h), _tile(odd_h)))  # [B,H/2,W/2,C]
+
+
+def _nearest_up2_rm(v_rm, b, h, w, c):
+    """RM [B,H,W,C] -> RM [B,2H,2W,C] nearest-neighbor: concat-duplicate each
+    pixel along W (channel-concat + reshape), then each row along H."""
+    r = ttnn.concat([v_rm, v_rm], dim=-1)  # [B,H,W,2C]: pixel duplicated adjacently
+    r = ttnn.reshape(r, (b, h, 1, 2 * w * c))
+    r = ttnn.concat([r, r], dim=-1)  # [B,H,1,4WC]: row duplicated adjacently
+    return ttnn.reshape(r, (b, 2 * h, 2 * w, c))
+
+
 class AvgPool2x2(ttml.autograd.Function):
-    """2x2/stride-2 average pool on [B,1,HW,C] tokens.
+    """2x2/stride-2 average pool on [B,1,HW,C] tokens (halo-free composite).
 
     Backward is the exact adjoint: nearest-2x upsample of dOut times 0.25.
     """
@@ -181,24 +220,23 @@ class AvgPool2x2(ttml.autograd.Function):
         v = x.get_value()
         b, c = v.shape[0], v.shape[-1]
         ctx.dims = (b, h, w, c)
-        r = ttnn.reshape(_rm(v), (1, 1, b * h * w, c))
-        out = ttnn.avg_pool2d(r, b, h, w, c, (2, 2), (2, 2), (0, 0))  # RM [1,1,B*(H/2)*(W/2),C]
-        return _tile(ttnn.reshape(out, (b, 1, (h // 2) * (w // 2), c)))
+        s = _sum_pool2x2_rm(_tokens_to_nhwc_rm(v, b, h, w, c), b, h, w, c)
+        return ttnn.multiply(_nhwc_rm_to_tokens(s, b, h // 2, w // 2, c), 0.25)
 
     @staticmethod
     def backward(ctx, grad_output):
         b, h, w, c = ctx.dims
         g = _tokens_to_nhwc_rm(grad_output, b, h // 2, w // 2, c)
-        up = ttnn.upsample(g, 2)  # RM [B,H,W,C]
+        up = _nearest_up2_rm(g, b, h // 2, w // 2, c)  # RM [B,H,W,C]
         return ttnn.multiply(_nhwc_rm_to_tokens(up, b, h, w, c), 0.25)
 
 
 class UpsampleNearest2(ttml.autograd.Function):
-    """Nearest-neighbor 2x upsample on [B,1,HW,C] tokens.
+    """Nearest-neighbor 2x upsample on [B,1,HW,C] tokens (halo-free composite).
 
-    Backward is the exact adjoint: 2x2 SUM pool (avg_pool2d with
-    divisor_override=1) of dOut. AvgPool2x2/UpsampleNearest2 form an
-    adjoint pair; the device gate checks <u, up(x)> == <down(u), x>.
+    Backward is the exact adjoint: 2x2 SUM pool of dOut. AvgPool2x2 and
+    UpsampleNearest2 form an adjoint pair; the device gate checks both
+    directions numerically.
     """
 
     @staticmethod
@@ -206,20 +244,19 @@ class UpsampleNearest2(ttml.autograd.Function):
         v = x.get_value()
         b, c = v.shape[0], v.shape[-1]
         ctx.dims = (b, h, w, c)
-        r = _tokens_to_nhwc_rm(v, b, h, w, c)
-        up = ttnn.upsample(r, 2)  # RM [B,2H,2W,C]
+        up = _nearest_up2_rm(_tokens_to_nhwc_rm(v, b, h, w, c), b, h, w, c)
         return _nhwc_rm_to_tokens(up, b, 2 * h, 2 * w, c)
 
     @staticmethod
     def backward(ctx, grad_output):
         b, h, w, c = ctx.dims
-        g = ttnn.reshape(_rm(grad_output), (1, 1, b * 2 * h * 2 * w, c))
-        down = ttnn.avg_pool2d(g, b, 2 * h, 2 * w, c, (2, 2), (2, 2), (0, 0), divisor_override=1)
-        return _tile(ttnn.reshape(down, (b, 1, h * w, c)))
+        g = _tokens_to_nhwc_rm(grad_output, b, 2 * h, 2 * w, c)
+        down = _sum_pool2x2_rm(g, b, 2 * h, 2 * w, c)  # RM [B,H,W,C]
+        return _nhwc_rm_to_tokens(down, b, h, w, c)
 
 
 class GroupNormMoreh(ttml.autograd.Function):
-    """GroupNorm on [B,1,HW,C] tokens via ttnn.moreh.group_norm (NCHW TILE).
+    """GroupNorm on [B,1,HW,C] tokens via the moreh group_norm kernels (NCHW TILE).
 
     apply(x, gamma [1,1,1,C], beta [1,1,1,C], num_groups, H, W).
     Wraps the moreh op in NHWC<->NCHW permutes (done in ROW_MAJOR — plain
@@ -234,7 +271,7 @@ class GroupNormMoreh(ttml.autograd.Function):
         b, c = v.shape[0], v.shape[-1]
         nhwc = _tokens_to_nhwc_rm(v, b, h, w, c)
         nchw = _tile(ttnn.permute(nhwc, (0, 3, 1, 2)))  # [B,C,H,W]
-        out, mean, rstd = ttnn.moreh.group_norm(
+        out, mean, rstd = ttnn_moreh.group_norm(
             nchw,
             num_groups,
             eps=GroupNormMoreh.EPS,
@@ -255,7 +292,7 @@ class GroupNormMoreh(ttml.autograd.Function):
         b, h, w, c = ctx.dims
         g_nhwc = _tokens_to_nhwc_rm(grad_output, b, h, w, c)
         g_nchw = _tile(ttnn.permute(g_nhwc, (0, 3, 1, 2)))
-        dx_nchw, dgamma, dbeta = ttnn.moreh.group_norm_backward(
+        dx_nchw, dgamma, dbeta = ttnn_moreh.group_norm_backward(
             g_nchw,
             ctx.nchw,
             ctx.mean,

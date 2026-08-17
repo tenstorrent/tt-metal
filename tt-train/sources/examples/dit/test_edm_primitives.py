@@ -188,7 +188,7 @@ def t_moreh_group_norm_raw():
     xv = from_np(x).get_value()
     gv = from_np(gamma.reshape(1, 1, 1, c)).get_value()
     bv = from_np(beta.reshape(1, 1, 1, c)).get_value()
-    out, mean, rstd = ttnn.moreh.group_norm(
+    out, mean, rstd = ttnn_moreh.group_norm(
         xv, groups, eps=1e-6, gamma=gv, beta=bv, are_required_outputs=[True, True, True]
     )
     ref, _, _ = np_group_norm(x, groups, gamma, beta)
@@ -196,7 +196,7 @@ def t_moreh_group_norm_raw():
     assert_close(got, ref, rtol=0.03, atol=0.05, tag="fwd")
 
     gov = from_np(g_out).get_value()
-    dx, dgamma, dbeta = ttnn.moreh.group_norm_backward(
+    dx, dgamma, dbeta = ttnn_moreh.group_norm_backward(
         gov, xv, mean, rstd, groups, are_required_outputs=[True, True, True], gamma=gv
     )
     rdx, rdgamma, rdbeta = np_group_norm_bwd(x, groups, gamma, g_out)
