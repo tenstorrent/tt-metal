@@ -67,6 +67,9 @@ void kernel_main() {
 
     Noc noc;
     DataflowBuffer stage_buf(cb_id_stage);
+    CircularBuffer cb_headers(cb_id_headers);
+    Semaphore<> ready_sem(ready_sem_id);
+    Semaphore<> done_sem(done_sem_id);
 
     // Page size is given explicitly — the accessor's compile-time value can be stale
     // on a program-cache hit — and it doubles as the fabric payload size.
@@ -85,9 +88,9 @@ void kernel_main() {
     // One payload header and one increment header per peer: a header carries its
     // peer's route for the whole kernel, and peers in the same direction still differ by
     // route, so headers cannot be shared even within a direction.
-    cb_reserve_back(cb_id_headers, kStatsPerRow * kPeers);
-    const uint32_t header_base = get_write_ptr(cb_id_headers);
-    cb_push_back(cb_id_headers, kStatsPerRow * kPeers);
+    cb_headers.reserve_back(kStatsPerRow * kPeers);
+    const uint32_t header_base = cb_headers.get_write_ptr();
+    cb_headers.push_back(kStatsPerRow * kPeers);
 
     volatile PACKET_HEADER_TYPE* payload_headers[kPeers];
     volatile PACKET_HEADER_TYPE* inc_headers[kPeers];
@@ -115,7 +118,9 @@ void kernel_main() {
         ++slot;
     }
 
-    auto* ready_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(ready_sem_id));
+    // A global semaphore is an allocator buffer named by a runtime address, so it cannot be
+    // wrapped: the Semaphore object resolves its address from a program semaphore id, and its
+    // decrement is a local read-modify-write, which is the race the subtraction below avoids.
     auto* arrival_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arrival_sem_addr);
     // The peer's copy of this semaphore. Same logical core there — one program shape
     // per chip — so the local NOC address is the right one to name it by.
@@ -124,8 +129,8 @@ void kernel_main() {
     // Nothing can go out until every statistics core has parked its rows. Only those
     // cores signal; the fold cores beyond them have nothing to contribute here and
     // wait to be released like the rest.
-    noc_semaphore_wait(ready_sem_ptr, num_stat_cores);
-    noc_semaphore_set(ready_sem_ptr, 0);
+    ready_sem.wait(num_stat_cores);
+    ready_sem.set(0);
 
     // A rank's plane is a contiguous run of pages, and the two planes it owns are
     // adjacent, so the whole of what it sends is one run. It is staged in chunks and
@@ -141,7 +146,7 @@ void kernel_main() {
         const uint32_t chunk = remaining < stage_tiles ? remaining : stage_tiles;
 
         stage_buf.reserve_back(chunk);
-        const uint32_t stage_base = get_write_ptr(cb_id_stage);
+        const uint32_t stage_base = stage_buf.get_write_ptr();
         for (uint32_t t = 0; t < chunk; ++t) {
             noc.async_read(
                 stats_accessor,
@@ -183,16 +188,16 @@ void kernel_main() {
     // most of the grid, so this is a multicast per rectangle rather than an increment
     // per core: a hundred serialized atomics would put the whole fold behind a wake-up
     // ramp longer than the exchange it is waiting on.
-    const uint32_t done_sem_addr = get_semaphore(done_sem_id);
     for (uint32_t r = 0; r < num_release_ranges; ++r) {
         const uint32_t base = kReleaseRangeArgIdx + kWordsPerReleaseRange * r;
-        const uint64_t range_noc_addr = get_noc_multicast_addr(
+        done_sem.inc_multicast(
+            noc,
             get_arg_val<uint32_t>(base),
             get_arg_val<uint32_t>(base + 1),
             get_arg_val<uint32_t>(base + 2),
             get_arg_val<uint32_t>(base + 3),
-            done_sem_addr);
-        noc_semaphore_inc_multicast(range_noc_addr, 1, get_arg_val<uint32_t>(base + 4));
+            1,
+            get_arg_val<uint32_t>(base + 4));
     }
-    noc_async_atomic_barrier();
+    noc.async_atomic_barrier();
 }

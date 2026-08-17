@@ -105,9 +105,8 @@ void kernel_main() {
     auto out_accessor = TensorAccessor(out_args, out_addr);
     auto total_accessor = TensorAccessor(total_args, total_addr);
 
-    const uint32_t done_sem_addr = get_semaphore(done_sem_id);
-    auto* done_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(done_sem_addr);
-    const uint64_t ready_sem_noc_addr = get_noc_addr(gather_core_x, gather_core_y, get_semaphore(ready_sem_id));
+    Semaphore<> ready_sem(ready_sem_id);
+    Semaphore<> done_sem(done_sem_id);
 
     // Pass one: this rank's whole share, parked before anything blocks. Compute
     // produces the two statistics of a row together, so they are written together.
@@ -154,14 +153,14 @@ void kernel_main() {
     // counts exactly those. A fold-only core has nothing to park but still has to be
     // held here: the scalar sets it is about to read are the gathered statistics.
     if (num_stat_rows > 0) {
-        noc_semaphore_inc(ready_sem_noc_addr, 1);
+        ready_sem.up(noc, gather_core_x, gather_core_y, 1);
     }
 
     // The gather core signals only once every rank's slot for every row is filled,
     // so this single wait is the whole of a worker's participation in the collective.
-    noc_semaphore_wait(done_sem_ptr, 1);
+    done_sem.wait(1);
     // Reset for the next dispatch: a program-cache hit reuses this semaphore.
-    noc_semaphore_set(done_sem_ptr, 0);
+    done_sem.set(0);
 
     // Pass two: hand compute a complete scalar set per token row this core's tile run
     // touches, then drain its output. The set is rank-major — shift, mass, then each
