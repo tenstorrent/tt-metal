@@ -121,7 +121,7 @@ ttnn:
     wh_llmbox_perf: 8
   integration:
     wh_llmbox: 30
-    wh_galaxy: 110
+    wh_galaxy: 100
     wh_n150_civ2: 60
     bh_p100: 30
     bh_p150b_civ2_viommu: 30
@@ -352,7 +352,7 @@ models:
     wh_n150: 67
     wh_n300: 30
     bh_p150: 20
-    bh_quietbox_2: 50
+    bh_quietbox_2: 60
   unit_tier3:
     wh_llmbox: 90
     wh_galaxy: 80
@@ -363,10 +363,8 @@ models:
     bh_p300: 30
     bh_quietbox_2: 21
   integration:
-    wh_llmbox: 40
+    wh_llmbox: 30
   perf:
-    wh_llmbox_perf: 110
-    wh_galaxy: 280
     wh_galaxy_perf: 55
   device_perf:
     wh_n150: 20
@@ -374,9 +372,7 @@ models:
     bh_p300: 20
     bh_quietbox_2: 80
   demo:
-    wh_llmbox_perf: 35
-    wh_galaxy: 345
-    wh_galaxy_perf: 145
+    wh_galaxy_perf: 125
     bh_galaxy: 470
     bh_sc1: 485
     bh_sc1_high_power: 163
