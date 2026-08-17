@@ -7,7 +7,7 @@
 #include <string>
 
 #include "combine_fabric2d_device_operation.hpp"
-#include "kernels/dataflow/combine_fabric2d_kernel_protocol.hpp"
+#include "kernels/dataflow/combine_fabric2d_kernel_interface.hpp"
 #include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::combine_fabric2d {
