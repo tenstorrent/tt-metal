@@ -407,7 +407,24 @@ cross-core reduction. (16 cores/head is 8x faster again, and unusable below ~409
 
 **C ships** (`DecoderConfig.decode_sdpa_max_cores_per_head = 1`): correct at every context, 6.5x closer
 to HF than A at the advertised context (`1 - PCC` 2.3e-4 vs 1.4e-3) while matching it to the 7th
-decimal everywhere else, and 2.4x faster there. B is the most accurate at long context but destroys a 1024-token decode,
+decimal everywhere else, and 2.4x faster there.
+
+**Where it actually matters: small batch.** The field is `max_cores_per_head_*batch*`, and the
+factory divides by the batch, so the *old* default's cores/head depends on how many slots decode
+together — `min(110, 110 * B * 2) / B / 2` on this part:
+
+| decode batch | 1 | 2 | 4 | 8 | 16 | 32 |
+|---|---|---|---|---|---|---|
+| cores/head with **no** config | 55 | 27 | 13 | 6 | 3 | **1** |
+| cores/head with the shipped config | 1 | 1 | 1 | 1 | 1 | 1 |
+
+So at batch 32 the two settings are *identical*, which is why the batch-32 decode tests never caught
+this and why the §5 perf table barely moved (50.15 -> 50.08 ms). The bug lived in **small-batch,
+long-context decode** — one or a few long requests, which is exactly the serving case and exactly
+what `test_longest_decode_context` (batch 1) measures. The shipped config makes the decomposition
+batch-independent: 1 core per (slot, KV head), so 2 cores at batch 1 and 64 at batch 32, and no
+cross-core reduction inside a head at any batch. Batch 32 accuracy is unaffected and separately
+covered — the `decode[full]` family's 82 rows include batch 32 at worst 0.9999849. B is the most accurate at long context but destroys a 1024-token decode,
 so it is unshippable at any single setting — which is what made A look forced before this sweep
 existed. An earlier version of this section claimed "whether a program config is passed at all" was
 the discriminator and handed `optimize` a per-position config selection; both were wrong, and the
@@ -770,6 +787,12 @@ One repo file outside the autoport directory was touched: `conftest.py` (§7 ite
   linear-attention decode comparison above batch 2**. The DeltaNet recurrence is per-slot and the
   state is updated whole-tensor in place, so a slot-indexing error there would show as one bad row
   diluted into a batch average. A full-model stage adding batched paths should add that comparison.
+* **The §3.8 fix is batch-dependent, and later stages decode at many batch sizes.** The old
+  default was only wrong at small batch (55 cores/head at batch 1 down to 1 at batch 32 — §3.8 has
+  the table); the shipped config pins 1 core per (slot, KV head) at every batch. A stage that
+  changes the decode batch, or adds continuous batching where the active-slot count varies per step,
+  inherits a *fixed* decomposition rather than one that silently changes with occupancy. That is the
+  property to preserve.
 * **The §3.8 handoff is a *latency* question now, not an accuracy one.** Shipping 1 core/head
   took the advertised-context decode from 0.9986 to 0.9997685 and made every context correct; what
   remains on the table is (a) 0.9999958 at 262144 from 16 cores/head, which is unusable below

@@ -320,6 +320,14 @@ five contexts: **0.9997685** (shipped) vs 0.9985674 (no config) vs 0.0304429 (st
 it is *faster*: 11.5 ms vs 28.1 ms per op call at 262144 keys, so there was no trade-off to make —
 55 cores/head was both the slowest and the least accurate setting measured.
 
+**Scope of the bug: small batch.** The field is `max_cores_per_head_*batch*` and the factory divides
+by the batch, so the old default's cores/head was `min(110, 110*B*2)/B/2` — 55 at batch 1, 27 at 2,
+13 at 4, 6 at 8, 3 at 16 and **1 at 32**. At batch 32 the old and new settings are therefore
+identical, which is why 82 batch-32 `decode[full]` rows never caught it and why the batch-32 perf
+table barely moved. It was a small-batch, long-context defect: one or a few long requests, i.e. the
+serving case, and what `test_longest_decode_context` (batch 1) measures. The shipped config makes the
+decomposition batch-independent at 1 core per (slot, KV head).
+
 **Two things reported rather than explained**, both worth an upstream issue:
 
 * an explicit config with `max_cores_per_head_batch=110` derives the same 55 cores/head as passing
