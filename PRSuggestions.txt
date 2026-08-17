@@ -96,17 +96,17 @@ single p150b. Seven things worth fixing. Points 5 and 6 are one line each.
 
 7. Name the optimization steps, so a good run can be repeated
     - The optimizer tries categories of change, most of them settings: core grid, precision, how
-      tensors are split. The one category for changing the computation itself is where every large win
-      came from, and it names only three things to try, none of which the agent used. It improvised the
-      rest, which is why the run was good and why another would not repeat it.
-    - Worth naming, each with a condition for when it fires: fold an add into the matmul that consumes
-      it; use in-place variants when an operand dies immediately; try both orders when a projection
-      sits next to a slice or gather; bake a constant scale into the weights at load; concatenate
-      sibling projections sharing an input; split a fused op into primitives once tracing is on; swap a
-      hand rolled interior for a library primitive; try removing a config applied earlier. The order
-      one goes both ways, so it has to be measured rather than assumed.
-    - Three things it cannot express: the host is never a valid destination, though moving one argmax
-      there was among our largest wins; fewer ops is treated as always better, though once tracing
-      removes launch cost the opposite can win; and correctness is checked at one sequence length, so a
-      change can be right there and wrong further along, and since each frame feeds the next, one
-      flipped choice changes everything after it.
+      tensors are split. The one category for changing the computation itself is where every large
+      win came from, and it names only three things to try, none of which the agent used. It
+      improvised the rest, which is why the run was good and why another would not repeat it.
+    - Worth naming, each with a condition for when it fires: fold an add into the matmul that
+      consumes it; use in-place variants when an operand dies immediately; try both orders when a
+      projection sits next to a slice or gather; bake a constant scale into the weights at load;
+      concatenate sibling projections sharing an input; split a fused op into primitives once
+      tracing is on; swap a hand rolled interior for a library primitive; try removing a config
+      applied earlier. The order one goes both ways, so it has to be measured rather than assumed.
+    - Three things it cannot express: the host is never a valid destination, though moving one
+      argmax there was among our largest wins; fewer ops is treated as always better, though once
+      tracing removes launch cost the opposite can win; and correctness is checked at one sequence
+      length, so a change can be right there and wrong further along, and since each frame feeds the
+      next, one flipped choice changes everything after it.
