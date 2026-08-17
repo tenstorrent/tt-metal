@@ -14,30 +14,26 @@ to make that possible, and what is verified versus still open.
 | [31824560569](https://github.com/tenstorrent/tt-shield/actions/runs/31824560569) | `benchmarks` | chat template resolved; died on the 5s metal op watchdog |
 | [31832502684](https://github.com/tenstorrent/tt-shield/actions/runs/31832502684) | `benchmarks` | rebuild with `DISABLE_METAL_OP_TIMEOUT=1`; aborted by the runner itself — host disk at 81%, `631G /data/mgiermakowski`. Not our failure |
 | [31858340006](https://github.com/tenstorrent/tt-shield/actions/runs/31858340006) | `benchmarks` | **success** — 17 sweep points, 0 failed requests, but every block `NA (ungraded)`. See `shield_ci_results_audit.md` |
-| [32006778390](https://github.com/tenstorrent/tt-shield/actions/runs/32006778390) | `release` | **queued 3h+, not started.** Runner contention, not a fault — see below |
+| [32006778390](https://github.com/tenstorrent/tt-shield/actions/runs/32006778390) | `release` | queued 3h+ behind other tenants, never started; **cancelled** once the watchdog and eval fixes landed, because `resolve-shas` pins SHAs at dispatch time and it would have tested the superseded config |
+| [32028283074](https://github.com/tenstorrent/tt-shield/actions/runs/32028283074) | `release` | failed `resolve-shas` in 39s — dispatched with the stale `vllm-git-ref=dev`. Never reached a runner, no device time. See the `main` note above |
+| [32028455474](https://github.com/tenstorrent/tt-shield/actions/runs/32028455474) | `release` | dispatched with the watchdog restored, the base-model eval config in place, and `vllm-git-ref=main` |
 
-### The `release` lane is queued behind other tenants, not broken
+### `bh-qb-ge` is a single host, so release jobs queue behind each other
 
-As of 2026-08-17 10:45 UTC, run 32006778390's `run-release-gemma-4-31B-bh-qb-ge-p300x2`
-job is still `queued` with no steps started, three hours after dispatch.
-`bh-qb-ge` is a **single** p300x2 host and three release jobs are contending for
-it:
+Run 32006778390 sat `queued` with no steps started for over three hours because
+`bh-qb-ge` is a **single** p300x2 host and three release jobs were contending for
+it: `gemma-4-31B-it` (vvukoman), ours, and `diffusiongemma-26B-A4B-it` (zni).
+Nothing needed fixing on our side for that.
 
-| Dispatch | State |
-| --- | --- |
-| `gemma-4-31B-it \| release` (vvukoman/add-8-models-to-release-flow) | in progress — and one earlier attempt already **failed** |
-| `gemma-4-31B \| release` (ours) | queued |
-| `diffusiongemma-26B-A4B-it \| release` (zni) | queued |
-
-Two things follow. First, nothing here needs fixing on our side; the job will
-start when the runner frees. Second, the stock **instruct** model's `release` lane
-is failing on that same runner right now, so if ours fails too, the shared-lane
+One thing to carry forward: the stock **instruct** model's `release` lane was
+failing on that same runner at the same time, so if ours fails, the shared-lane
 explanation must be ruled out before it is attributed to the autoport.
 
 Worth noting the PR these dispatches run under is *"switching from vllm-fork to
 vllm-tt-plugin (main branch and new repo)"* — the platform is moving to exactly
 the plugin mechanism this onboarding used, which is independent support for having
-avoided a `tenstorrent/vllm` patch.
+avoided a `tenstorrent/vllm` patch. That same migration is what invalidated the
+`vllm-git-ref=dev` recipe.
 
 ### Run 31807380436 proved the container path end to end
 
@@ -94,10 +90,28 @@ tt_metal/impl/dispatch/system_memory_manager.cpp:702
 `run_vllm_api_server.set_metal_timeout_env_vars` sets
 `TT_METAL_OPERATION_TIMEOUT_SECONDS=5.0`. The same log shows `JIT cache stats:
 0/636 hits` and `init engine ... took 73.48 seconds` against 3.80 s warm locally,
-so a first-compile prefill matmul simply outran the 5 s limit. The spec now sets
-`DISABLE_METAL_OP_TIMEOUT=1`. That removes a known false positive; it does not
-prove no hang exists, and a genuine one would now present as a stall instead of a
-5 s abort.
+so a first-compile prefill matmul simply outran the 5 s limit.
+
+**Resolved 2026-08-17 by raising the threshold, not disabling the watchdog.** The
+spec briefly set `DISABLE_METAL_OP_TIMEOUT=1`, which suppressed hang detection
+*and* the automatic tt-triage capture wired through
+`TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE` — so a pass obtained that way
+could not distinguish "did not hang" from "hangs are no longer detected". It now
+sets `TT_METAL_OPERATION_TIMEOUT_SECONDS: "120"` instead. Detection stays on: a
+wedged device never completes, so it still trips and still triages. No TTI code
+change was needed, because `set_runtime_env_vars` applies spec `env_vars` *after*
+`set_metal_timeout_env_vars`, so the spec value wins while the triage hook stays
+wired. 120 s matches the value `tt-media-server/scripts/sp_env_sample.sh` already
+ships.
+
+The threshold was measured rather than guessed. On this QB2 host, with
+`TT_METAL_CACHE` pointed at an empty directory (`JIT cache stats: 0/829 hits`),
+the multichip prefill+decode layer bench completed **at the stock 5.0 s limit
+with no timeout**, twice — 124 s and 125 s wall, identical results. So the
+cold-compile cost is bounded at layer scale; the raise is headroom for the full
+60-layer, 1836-kernel first compile that tripped this run, not a blanket escape
+from the check. `tests/test_gemma4_31b_autoport_spec.py` in tt-inference-server
+now asserts the disable cannot return.
 
 ### Changing TTI code or specs requires a rebuild
 
