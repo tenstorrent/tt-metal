@@ -1,0 +1,151 @@
+# Voxtral-TTS pipeline run: eight things worth fixing
+
+We took Voxtral-TTS, a 4B text to speech model with three stacks, through the whole pipeline on a
+single p150b. Eight things worth fixing. Point 3 is the root of point 4, so they are one job and the
+place to start. Points 5 and 6 are one line each.
+
+## 1. Check that the model implementation the tool writes actually works
+
+- When a model is not in HF format the tool writes its own PyTorch version of it, and every later
+  test is scored against that version. What it checks only confirms the weights fit, not that the
+  maths is right, and a wrong RoPE or a wrong epsilon leaves every shape identical. Ours was
+  correct, but we only know that because we compared it against our own reference by hand.
+- Fix: have it write a real check that the model works, and prove the check can fail by breaking the
+  model on purpose. Otherwise you get a test that passes whatever happens. It already did exactly
+  this for our model, in a comment: it drove the speech path and found that a wrong RoPE gives a
+  buzz that never stops. That should be a test, not a comment.
+
+## 2. Fix bring-up from a local folder
+
+- A local folder takes a different path than a name downloaded from HuggingFace, and that path stops
+  before working out the model's structure and memory needs. So the run reports every component as
+  supported, then one step later refuses to continue because it cannot tell whether the model is
+  supported at all, naming neither the cause nor the input.
+- The optimize stage then confuses the folder holding the weights with the folder holding the
+  generated code, and pointing it at the generated code loses which model it came from, so it cannot
+  build its own correctness check. We supplied the model name by hand.
+- Fix: give a local folder the same treatment as a downloaded name, and keep the model's identity
+  separate from where its files live.
+- Also, running a model's own code is only allowed for one hardcoded model name. Ours passed the
+  early checks and then failed when it ran, blaming the model rather than the setting. A model's
+  config already declares that it ships its own code, which is enough on its own. We changed it to
+  use that, and it worked.
+
+## 3. The component tests guess their inputs, so they can pass a wrong port
+
+- Which arguments a component gets is decided by a hardcoded list of names taken from HuggingFace
+  vision and text models. Anything not on that list is dropped if it has a default, or filled with
+  random noise if it does not. In our attention only the activation survived. The RoPE table, the
+  causal mask and the cache were all dropped because they default to None, which is right during
+  single token decode and wrong for a longer sequence. The reference itself then ran with no causal
+  mask and could see the future, the port matched it, and the component passed.
+- Real inputs and outputs are saved for every component and the log says the tests use them, but
+  they do not. We wrote the missing ones by hand before the tests measured anything.
+- The end to end test also decides pass or fail for the whole model from a single prompt.
+- Fix: use the saved inputs and compare against the saved output. Where an input still has to be
+  built, let the agent that writes the test build it, since it has read the block and knows what
+  each argument is. A fixed list of names can only cover models you have already seen. Right now
+  every component gets the same test file with only the name substituted, though the components
+  differ completely, so the attention test knows nothing about attention. Accept more than one
+  prompt, and make the log say what it used.
+
+## 4. The decode step exists twice, and speed and correctness were measured on different ones
+
+- There are two versions of the decode pass. The shipped one has no KV cache. A second one, written
+  later so the work could be recorded and replayed on the device, does have a cache. Correctness was
+  measured on the first and speed on the second, so the improvement that reaches the shipped path is
+  smaller than the one reported, because it is not the same code.
+- Why the shipped one has no cache goes back to bring-up. A component is tested by running the real
+  model once, recording the arguments each component was called with, then calling the original and
+  the rewrite on those recorded arguments and comparing the results. For attention the recording
+  does include a real cache, but a cache is mutable and attention appends to it, so whichever side
+  runs first leaves an extra entry behind, and the second side then attends over one position too
+  many and looks wrong. Giving each side its own copy is a one line fix. It was dropped instead, and
+  it is also one of the arguments point 3 drops, so it would have arrived empty either way. With no
+  cache the test compares a single value and returns PCC 1.0 whatever the inputs are, so a version
+  that uses the cache and one that ignores it score the same, and the simpler one was accepted.
+- That then determined how the demo had to work, because the demo has to use the components that
+  passed. A component that cannot remember anything has to be given the whole prompt plus everything
+  generated so far, so every frame re-runs all layers over the entire sequence and keeps only the
+  last position.
+- Fix: as in point 3, let the agent build the cache input rather than relying on a list of names.
+  Copy the saved inputs before passing them to each side, so the reference cannot write into what
+  the port is about to read. Then let the component use the cache, its signature already has the
+  argument. For the traced version the position is baked in when the run is recorded, so it always
+  writes to the same slot; it has to become a tensor on the device.
+- The number every edit is ranked by is also not generation time. It times one prefill against one
+  decode, so prefill carries about half the weight while being 2% of a real utterance, and decode,
+  which is 97%, enters once. The edits still helped and the shipped path did get faster, but they
+  were ranked by something that does not reflect where the time goes, so rank by a whole utterance
+  instead. Separately, the number reported as per token is really the whole call, so measuring a
+  longer and more realistic utterance makes the cost per token look worse.
+
+## 5. The accuracy target is stated three different ways
+
+- The diagram and the getting started page say 0.99, one README line says 0.99 per component and
+  0.95 end to end, and the gate documents 0.99 as required. The command line passes 0.95 and that is
+  the one that wins. Bring-up then prints the next command to run without any threshold, so copying
+  what it just gave you gets 0.95.
+- Fix: the component tests and the gate's own default already use 0.99, so the end to end value
+  passed on the command line is the only 0.95, and could be 0.99 as well. That looser bar does not
+  only permit a worse model, it produces one: the same code scored 0.9586 at 0.95 and 0.9986 at
+  0.99, because the repair loop stops as soon as it clears. Printing the target that was used would
+  help too, and the docs could then settle on one number.
+
+## 6. The correctness gate accepts impossible scores
+
+- It reported a PCC of 33.612 and marked it verified against a threshold of 0.99. The number is
+  scraped from the log by a pattern loose enough to match any line that mentions pcc, nothing checks
+  that it is in range, and the exit code is ignored, so that one number is the only signal there is.
+  Every optimization the tool keeps rests on it.
+- Fix: a range check would catch it, with a small tolerance since a real score can round just past
+  1. The exit code is there to cross-check against when the number is implausible.
+
+## 7. Name the optimization steps, so a good run can be repeated
+
+- The optimizer works through categories of change, most of which only tune settings: core grid,
+  precision, how tensors are split. The one category for changing the computation itself is where
+  every large win came from, and it names only three things to try, none of which the agent used. It
+  improvised the rest, which is why the run was good and why another would not repeat it.
+- Worth naming, each with a condition for when it fires:
+  - fold a repeated evaluation into rows of one larger matmul, rather than repeating the call or the
+    tensor
+  - fold an add into the matmul that consumes it
+  - concatenate projections that share an input, as with Q, K and V
+  - bake a constant scale into the weights at load
+  - use in-place variants when an operand dies immediately
+  - try both orders when a projection sits next to a slice or gather. This one goes both ways, so it
+    has to be measured rather than assumed
+  - chunk attention above a measured length when it uses a sliding window, rather than building the
+    whole score matrix and masking most of it away
+  - pad a varying input to a few fixed sizes, since every distinct size compiles its own kernels,
+    but choose those sizes for the model's own range: a ladder from another workload pads further
+    than it needs to, and that is wasted work on every call
+  - split a fused op into primitives once tracing is on
+  - swap a hand rolled interior for a library primitive
+  - try removing a config applied earlier
+- Also worth building in: when a change removes a cost, re-open the levers that were rejected
+  because of that cost. Tracing was on our own rejected list, became the single biggest win on the
+  branch, and then reversed five earlier rejections whose reasoning rested on per op launch cost.
+  Keeping each rejection together with the reason for it makes that automatic rather than lucky.
+- Three things it cannot express: the host is never a valid destination, though moving one argmax
+  there was among our largest wins; fewer ops is treated as always better, though once tracing
+  removes launch cost the opposite can win; and correctness is checked at one sequence length, so a
+  change can be right there and wrong further along, and since each frame feeds the next, one
+  flipped choice changes everything after it.
+
+## 8. PCC alone cannot judge a speech model
+
+- PCC is right for a component against its reference, but not as the end to end verdict. The model
+  emits discrete codes and feeds them back, so a change can score near perfect on tensors while the
+  codes diverge, and one flipped code redirects the rest of the utterance.
+- What worked for us, cheapest first. Pin the random draw the model makes each frame, so two runs of
+  the same code produce the same audio and can be compared at all. Then count how many emitted codes
+  exactly match the reference's, which is free and stricter than any correlation. Each frame is
+  generated from the ones before it, so one early difference compounds until the outputs are
+  unrelated; feeding the reference's frames in at every step, instead of the model's own, isolates
+  the change, which is teacher forcing. Then word error rate, by transcribing the output with
+  Whisper and comparing against the text you asked for, and a predicted naturalness score, where a
+  model trained on human ratings estimates from the waveform alone how a listener would rate it out
+  of five. Whether every prompt terminates on its own is nearly free.
+- Fix: gate on these rather than on a correlation alone.
