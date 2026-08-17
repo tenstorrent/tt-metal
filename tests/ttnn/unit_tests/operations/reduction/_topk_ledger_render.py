@@ -139,6 +139,18 @@ def op_active_cores(rows, cores):
     return f"{rows} of {c}" if 1 < rows < c else str(c)
 
 
+# Scenarios whose "same API -- drop the args" alternative has LANDED on this
+# branch: the sampling call sites (tt_sampling.py, sampling_1d.py) now take
+# the routed form wherever the route fires (commit maps scenario -> sha).
+# Verified old-vs-new on device: values 100% bit-exact (multiset and
+# sequence), every index diff a proven bitwise tie, post-tiebreak greedy pick
+# identical, non-routing control bit-identical in every field.
+ROUTED_FORM_LANDED = {
+    "sampling_qwen36_tp4": "575ff18a1be",
+    "sampling_1chip_split": "575ff18a1be",
+}
+
+
 def render_model_scenarios(rows):
     """MODEL_SCENARIOS region. One speedup semantics, stated in the header:
     speedup = today / best-ours, always. 'best ours' names which variant won
@@ -164,8 +176,7 @@ def render_model_scenarios(rows):
             today_td = us_fmt(today)
 
         # best ours: the cheaper measured variant, with its core count
-        cands = [(v, n, key) for v, n, key in
-                 ((ro, "routed", "routed"), (op, "direct", "op")) if v is not None]
+        cands = [(v, n, key) for v, n, key in ((ro, "routed", "routed"), (op, "direct", "op")) if v is not None]
         if cands:
             best, best_name, best_key = min(cands)
             best_cores = r.get(f"{best_key}_cores", "")
@@ -205,6 +216,12 @@ def render_model_scenarios(rows):
                         f"; or same API \u2014 drop indices_tensor/sub_core_grids/stable: "
                         f"{ro:,.1f} \u00b5s ({today / ro:,.1f}\u00d7)"
                     )
+                    landed_sha = ROUTED_FORM_LANDED.get(r["scenario"])
+                    if landed_sha:
+                        capture += (
+                            f" \u2014 LANDED on this branch ({landed_sha}): the call site now takes "
+                            f"this form (values bit-exact; index diffs all proven ties; greedy pick identical)"
+                        )
         else:
             capture = "\u2014"
 
@@ -226,9 +243,10 @@ def render_model_scenarios(rows):
         '<th>calls today</th><th class="n">today \u00b5s</th>'
         '<th class="n ours">best ours \u00b5s</th>'
         '<th class="n">speedup (today \u00f7 best ours)</th>'
-        '<th>to capture it</th><th>note</th></tr></thead>'
+        "<th>to capture it</th><th>note</th></tr></thead>"
     )
     return head + "\n    <tbody>\n" + "\n".join(body) + "\n    </tbody>\n  </table></div>"
+
 
 def render_exec_numbers(rows, psweep):
     r = next((x for x in rows if int(x["k"]) == ANCHOR_K and int(x["W"]) == ANCHOR_W), None)
