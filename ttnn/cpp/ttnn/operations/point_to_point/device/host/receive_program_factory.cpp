@@ -124,36 +124,26 @@ tt::tt_metal::ProgramDescriptor receive_program_factory(
         increment = std::min(increment, output_num_pages - page_idx_start);
         page_idx_end += increment;
 
-        // Build reader RT args via plain vector to interop with the fabric
-        // helper, then promote to the KernelDescriptor's RTArgList — index 3
-        // (intermediate buffer address) becomes a Buffer* binding, and index
-        // 7 stays as the GlobalSemaphore's absolute address.
-        std::vector<uint32_t> reader_runtime_args = {
-            page_idx_start,
-            page_idx_end,
-            num_pages_per_packet,
-            intermediate_tensor.buffer()->address(),  // placeholder, replaced via Buffer* below
-            packet_size_bytes,
-            output_page_size_bytes,
-            num_page_segments,
-            semaphore.address(),
-            num_hops};
-
-        // Appends [has_forward(=sender_is_forward)][fwd conn args][has_backward][bwd conn args]
-        // starting at index 9 — the layout the kernel's FabricStreamSender consumes.
-        ::ttnn::ccl::dataflow::append_ccl_fabric_rt_args(
-            this_fabric_id, next_fabric_id, link_idx, desc, c, reader_runtime_args, sender_is_forward);
-
-        tt::tt_metal::KernelDescriptor::RTArgList reader_rt_args_builder;
-        reader_rt_args_builder.reserve(reader_runtime_args.size());
-        for (size_t i = 0; i < reader_runtime_args.size(); ++i) {
-            if (i == 3) {
-                reader_rt_args_builder.push_back(intermediate_tensor.buffer());
-            } else {
-                reader_rt_args_builder.push_back(reader_runtime_args[i]);
-            }
+        // Reader RT args. The fabric-connection block (built by the host helper, which owns its
+        // wire layout) goes FIRST; the kernel consumes it with a cursor from 0 and reads the op's
+        // own args after it — neither side hardcodes where the fabric block starts. Op args are
+        // pushed as their natural types: Buffer* records a BufferBinding the framework patches on
+        // a program-cache hit, so no placeholder/promotion pass is needed.
+        tt::tt_metal::KernelDescriptor::RTArgList reader_rt_args;
+        for (uint32_t arg : ::ttnn::ccl::dataflow::build_ccl_fabric_rt_args(
+                 this_fabric_id, next_fabric_id, link_idx, desc, c, sender_is_forward)) {
+            reader_rt_args.push_back(arg);
         }
-        desc.kernels[receive_unary_reader_kernel_id].emplace_runtime_args(c, reader_rt_args_builder);
+        reader_rt_args.push_back(page_idx_start);
+        reader_rt_args.push_back(page_idx_end);
+        reader_rt_args.push_back(num_pages_per_packet);
+        reader_rt_args.push_back(intermediate_tensor.buffer());  // intermediate base address (Buffer* binding)
+        reader_rt_args.push_back(packet_size_bytes);
+        reader_rt_args.push_back(output_page_size_bytes);
+        reader_rt_args.push_back(num_page_segments);
+        reader_rt_args.push_back(semaphore.address());
+        reader_rt_args.push_back(num_hops);
+        desc.kernels[receive_unary_reader_kernel_id].emplace_runtime_args(c, reader_rt_args);
 
         // Writer RT args.  Index 0 is the output buffer's base address —
         // push as Buffer* so the framework records a BufferBinding.
