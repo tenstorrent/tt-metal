@@ -43,6 +43,15 @@ class MLAReference(nn.Module):
         # forward() is overridden below to use memory-efficient F.scaled_dot_product_attention.
         self.attention = DeepseekV3Attention(config, layer_idx=layer_idx)
 
+        # Kimi-K3 deltas; both absent (-> False) on every other variant.
+        self.use_nope = bool(getattr(config, "mla_use_nope", False))
+        self.use_output_gate = bool(getattr(config, "mla_use_output_gate", False))
+        if self.use_output_gate:
+            # On self.attention so the "model.layers.N.self_attn.*" state dict reaches it.
+            self.attention.g_proj = nn.Linear(
+                config.hidden_size, config.num_attention_heads * config.v_head_dim, bias=False
+            )
+
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -90,12 +99,14 @@ class MLAReference(nn.Module):
         k_pe = k_pe.view(bsz, 1, q_len, attn.qk_rope_head_dim)
         k_nope = attn.kv_a_layernorm(compressed_kv).view(bsz, 1, q_len, attn.kv_lora_rank)
 
-        # RoPE
-        kv_seq_len = k_nope.shape[-2]
-        if past_key_value is not None:
-            kv_seq_len += past_key_value.get_seq_length(attn.layer_idx)
-        cos, sin = attn.rotary_emb(k_nope, seq_len=kv_seq_len, meta_style=True)
-        q_pe, k_pe = apply_rotary_pos_emb(q_pe, k_pe, cos, sin, position_ids, meta_style=True)
+        # RoPE; NoPE (Kimi-K3) skips it -- q_pe / k_pe stay unrotated but are still concatenated below.
+        sin = cos = None
+        if not self.use_nope:
+            kv_seq_len = k_nope.shape[-2]
+            if past_key_value is not None:
+                kv_seq_len += past_key_value.get_seq_length(attn.layer_idx)
+            cos, sin = attn.rotary_emb(k_nope, seq_len=kv_seq_len, meta_style=True)
+            q_pe, k_pe = apply_rotary_pos_emb(q_pe, k_pe, cos, sin, position_ids, meta_style=True)
 
         # Assemble query_states and key_states (KVPE)
         query_states = k_pe.new_empty(bsz, attn.num_heads, q_len, attn.kv_lora_rank + attn.qk_rope_head_dim)
@@ -162,6 +173,12 @@ class MLAReference(nn.Module):
 
         attn_output = attn_output.transpose(1, 2).contiguous()
         attn_output = attn_output.reshape(bsz, q_len, attn.num_heads * attn.v_head_dim)
+
+        # Kimi-K3 output gate; head-major over the last dim, as the device path applies it after
+        # nlp_concat_heads. Cannot move before wkv_b2: g * (attn @ W_b2) != (g * attn) @ W_b2.
+        if self.use_output_gate:
+            attn_output = attn_output * attn.g_proj(hidden_states).sigmoid()
+
         attn_output = attn.o_proj(attn_output)
 
         return attn_output, None, past_key_value

@@ -24,11 +24,45 @@
 #include "api/debug/assert.h"
 #include "api/debug/waypoint.h"
 #include "api/lock.h"
+#include "api/core_local_mem.h"
+#include <type_traits>
 
 #if __has_include("chlkc_descriptors.h")
 #include "chlkc_descriptors.h"
 #define DFB_DESCRIPTORS_DEFINED
 #endif
+
+// RAII scoped lock returned by DataflowBuffer::scoped_write_lock()/scoped_read_lock(). get_ptr() returns
+// the write pointer for a write-lock and the read pointer for a read-lock, wrapped in a CoreLocalMem object.
+// The CoreLocalMem object is mutable for a write-lock, const for a read-lock.
+template <bool IsWrite, typename ReleaseFunc>
+class DfbScopedLock {
+public:
+    inline __attribute__((always_inline)) DfbScopedLock(uint32_t pointer, ReleaseFunc release) :
+        pointer_(pointer), release_(release) {}
+    inline __attribute__((always_inline)) ~DfbScopedLock() { release_(); }
+
+    DfbScopedLock(const DfbScopedLock&) = delete;
+    DfbScopedLock(DfbScopedLock&&) = delete;
+    DfbScopedLock& operator=(const DfbScopedLock&) = delete;
+    DfbScopedLock& operator=(DfbScopedLock&&) = delete;
+
+    template <typename T = uint32_t>
+    [[nodiscard]] inline __attribute__((always_inline)) CoreLocalMem<std::conditional_t<IsWrite, T, const T>> get_ptr()
+        const {
+        return CoreLocalMem<std::conditional_t<IsWrite, T, const T>>(pointer_);
+    }
+
+private:
+    uint32_t pointer_;
+    ReleaseFunc release_;
+};
+
+template <bool IsWrite, typename ReleaseFunc>
+[[nodiscard]] inline __attribute__((always_inline)) DfbScopedLock<IsWrite, ReleaseFunc> make_dfb_scoped_lock(
+    uint32_t pointer, ReleaseFunc release) {
+    return DfbScopedLock<IsWrite, ReleaseFunc>(pointer, release);
+}
 
 // Opaque handle for a DataflowBuffer binding (declared in kernel_bindings_generated.h).
 // The user will never directly interact with this type.
@@ -37,19 +71,19 @@
 // The user then uses that accessor_name to construct a DataflowBuffer in the kernel code.
 //
 // Usage example:
-//   // (Host code declares "my_dfb_name" as the DFB local accessor name for this kernel.)
+//   // (Host code declares "my_dfb_name" as the DFB accessor name for this kernel.)
 //   // In the kernel code:
 //   DataflowBuffer my_dfb(dfb::my_dfb_name);
 //
-// Here my_dfb_name is a constexpr DFBAccessor, auto-included in kernel_bindings_generated.h.
+// Here my_dfb_name is a constexpr DFBBindingToken, auto-included in kernel_bindings_generated.h.
 //
-struct DFBAccessor {
-    explicit constexpr DFBAccessor(uint16_t id) noexcept : id_(id) {}
+struct DFBBindingToken {
+    explicit constexpr DFBBindingToken(uint16_t id) noexcept : id_(id) {}
 
-    // DFBAccessor is backed by a compile-time ID (an implicit CTA).
+    // DFBBindingToken is backed by a compile-time ID (an implicit CTA).
 
     // Implicit conversion to uint32_t:
-    // This lets a Metal 2.0 kernel pass a DFBAccessor directly to Gen1 (WH/BH) LLK
+    // This lets a Metal 2.0 kernel pass a DFBBindingToken directly to Gen1 (WH/BH) LLK
     // compute APIs that expect a raw CB id.
     // This conversion is constexpr; it's intended for Gen1 use only.
     constexpr operator uint32_t() const noexcept { return id_; }
@@ -69,9 +103,9 @@ public:
     // Preferred constructor for Metal 2.0 / ProgramSpec kernels.
     // Pass the named binding constant from kernel_bindings_generated.h:
     //   DataflowBuffer dfb(my_dfb_name);
-    DataflowBuffer(DFBAccessor accessor) : DataflowBuffer(static_cast<uint16_t>(accessor)) {}
+    DataflowBuffer(DFBBindingToken token) : DataflowBuffer(static_cast<uint16_t>(token)) {}
 
-    // Low-level constructor: prefer DFBAccessor overload above for new kernel code.
+    // Low-level constructor: prefer DFBBindingToken overload above for new kernel code.
     DataflowBuffer(uint16_t logical_dfb_id);
 
     uint16_t get_id() const { return logical_dfb_id_; }
@@ -290,7 +324,8 @@ public:
 #endif
 
     // Peek current FIFO cursors (byte address / arch units). Use for local entry data access —
-    // prefer with scoped_lock when poking L1. Prefer noc.h for Class 1 transfers (pass the DFB).
+    // prefer holding a scoped_write_lock/scoped_read_lock when poking L1. Prefer noc.h for Class 1
+    // transfers (pass the DFB).
     uint32_t get_write_ptr() const { return get_write_ptr_impl(); }
     uint32_t get_read_ptr() const { return get_read_ptr_impl(); }
 
@@ -301,9 +336,20 @@ public:
     void evil_set_read_ptr(uint32_t addr);
 #endif
 
-    [[nodiscard]] auto scoped_lock() {
-        // TODO: Register with the debugger to track the lock
-        return Lock([this]() { release_scoped_lock(); });
+    // Lock num_entries entries starting at the write_ptr (scoped_write_lock) or read_ptr (scoped_read_lock).
+    // Both:
+    //   - Flag any NOC write into the locked entries as WRITE_TO_LOCKED_DFB.
+    //   - On Quasar, invalidate the L2 cache range on acquire.
+    // In addition, scoped_write_lock also flushes on release.
+    [[nodiscard]] auto scoped_write_lock(uint16_t num_entries = 1) {
+        const ScopedLockRegion region = lock_acquire_impl<true>(num_entries);
+        return make_dfb_scoped_lock<true>(
+            region.start, [this, region, num_entries]() { lock_release_impl<true>(region, num_entries); });
+    }
+    [[nodiscard]] auto scoped_read_lock(uint16_t num_entries = 1) {
+        const ScopedLockRegion region = lock_acquire_impl<false>(num_entries);
+        return make_dfb_scoped_lock<false>(
+            region.start, [this, region, num_entries]() { lock_release_impl<false>(region, num_entries); });
     }
 
 private:
@@ -317,6 +363,16 @@ private:
 #ifndef COMPILE_FOR_TRISC
     void write_barrier_impl(const Noc &noc) const;
 #endif
+
+    struct ScopedLockRegion {
+        uint32_t start;  // first locked address = the write/read pointer at acquire
+        uint32_t base;   // wrap base  (Quasar tc_slot base; WH/BH ring base)
+        uint32_t limit;  // wrap limit (Quasar tc_slot limit; WH/BH fifo_limit)
+    };
+    template <bool is_write>
+    ScopedLockRegion lock_acquire_impl(uint16_t num_entries);
+    template <bool is_write>
+    void lock_release_impl(ScopedLockRegion region, uint16_t num_entries);
 
 #ifdef ARCH_QUASAR
     template <bool is_producer>
@@ -332,10 +388,6 @@ private:
     void commit_implicit_write();
 #endif // !COMPILE_FOR_TRISC
 #endif // ARCH_QUASAR
-
-    void release_scoped_lock() {
-        // TODO: Unregister with the debugger
-    }
 
     constexpr uint32_t address_units_to_bytes(uint32_t units) const {
         return units << cb_addr_shift;

@@ -114,7 +114,6 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
 @pytest.mark.parametrize("padded_percent", [0, 50], ids=lambda p: f"pad{p}")
 def test_prep_dispatch_combine(
     mesh_device,
-    device_params,
     seq_len_per_chip,
     emb_dim,
     num_routed_experts,
@@ -150,11 +149,6 @@ def test_prep_dispatch_combine(
             dispatch_group_size dimension). Equals global_expert_offsets minus the
             per-source-device local offset.
     """
-    if device_params.get("fabric_config") == ttnn.FabricConfig.FABRIC_2D and tuple(mesh_device.shape) == (4, 2):
-        pytest.skip(
-            "fabric2d mesh-4x2 all-gather hang. Revert this skip when "
-            "https://github.com/tenstorrent/tt-metal/issues/50559 is closed."
-        )
     torch.manual_seed(42)
     num_devices = mesh_device.get_num_devices()
 
@@ -231,8 +225,14 @@ def test_prep_dispatch_combine(
         dims=(sp_axis, None),
     )
 
+    # masked_bincount consumes the gate's UINT16, TILE, L1-interleaved indices directly (untiled in-kernel).
     tt_indices = ttnn.from_torch(
-        indices, mesh_mapper=mesh_mapper_replicated, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, dtype=ttnn.uint16
+        indices,
+        mesh_mapper=mesh_mapper_replicated,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        dtype=ttnn.uint16,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
 
     # Create expert dispatch table
@@ -275,7 +275,6 @@ def test_prep_dispatch_combine(
     ) = tt_gate_outputs(
         ttnn_top_k_experts_indices=tt_indices,
         num_routed_experts=num_routed_experts,
-        seq_len_per_chip=seq_len_per_chip,
         num_experts_per_tok=num_experts_per_tok,
     )
 

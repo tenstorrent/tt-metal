@@ -44,6 +44,7 @@ inline std::optional<std::uint32_t> find_io_tensor_index(std::uint32_t value, co
 inline std::vector<std::pair<uint32_t, uint32_t>> compute_cb_io_tensor_map(
     const tt::tt_metal::ProgramDescriptor& desc, const std::vector<OptionalAddr>& tensor_addrs) {
     std::vector<std::pair<uint32_t, uint32_t>> result;
+    result.reserve(desc.cbs.size());
     for (size_t ci = 0; ci < desc.cbs.size(); ++ci) {
         const auto* buf = desc.cbs[ci].buffer;
         if (buf != nullptr) {

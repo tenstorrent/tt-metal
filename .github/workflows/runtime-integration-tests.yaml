@@ -140,7 +140,7 @@ jobs:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
-      build-wheel: true
+      build-inplace-wheel: true
       enable-lto: ${{ inputs.enable-lto || false }}
 
   runtime-integration-tests:

@@ -11,6 +11,7 @@
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 #include "tt-metalium/hal_types.hpp"
 #include "tt-metalium/experimental/global_circular_buffer.hpp"
+#include "ttnn/global_circular_buffer.hpp"
 #include "tt-metalium/work_split.hpp"
 #include "tt_stl/reflection.hpp"
 #include "tt_stl/unreachable.hpp"
@@ -1033,6 +1034,47 @@ void validate_dram_sender_global_cb_gather_in0_geometry_recv_contig(
         ring_size);
 }
 
+void validate_dram_sender_global_cb_mcast_in0_geometry(
+    const tt::tt_metal::experimental::GlobalCircularBuffer& gcb,
+    const Tensor& input_tensor_b,
+    const tt::tt_metal::Tile& in1_tile,
+    const operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig& program_config) {
+    TT_FATAL(
+        tt::tt_metal::experimental::sender_core_type(gcb) == tt::tt_metal::experimental::SenderCoreType::Dram,
+        "mcast_in0 global_cb requires programmable DRAM senders");
+    TT_FATAL(
+        program_config.out_block_h == program_config.per_core_M &&
+            program_config.out_block_w == program_config.per_core_N,
+        "mcast_in0 global_cb requires one output block per worker: out_block_h ({}) must equal per_core_M ({}) "
+        "and out_block_w ({}) must equal per_core_N ({})",
+        program_config.out_block_h,
+        program_config.per_core_M,
+        program_config.out_block_w,
+        program_config.per_core_N);
+
+    // The receiver-contiguous weight ↔ matmul cross-checks (DRAM NdShardSpec, one full-K × per_core_N
+    // shard per receiver, num_shards == receiver_count, K % in0_block_w == 0, per_core_N == per-receiver
+    // N, stream_in1 == false) are owned by the shared prefetcher helper. Call it rather than re-deriving
+    // them here, so the recv-contig contract lives in one place.
+    ttnn::global_circular_buffer::tensor_prefetcher_block_count_for_matmul_1d(program_config, input_tensor_b, gcb);
+
+    // GCB-window guards specific to this op: the mcast reader streams K-blocks through a two-page
+    // remote-CB window, so the GCB must be an exact multiple of the in1 K-block page and hold >= 2 pages.
+    const uint32_t in1_block_size_bytes =
+        program_config.in0_block_w * program_config.per_core_N *
+        in1_tile.get_tile_size(tt::tt_metal::datatype_to_dataformat_converter(input_tensor_b.dtype()));
+    TT_FATAL(
+        gcb.size() % in1_block_size_bytes == 0,
+        "mcast_in0 global_cb size {} must be a multiple of its in1 K-block page size {}",
+        gcb.size(),
+        in1_block_size_bytes);
+    TT_FATAL(
+        gcb.size() >= 2 * in1_block_size_bytes,
+        "mcast_in0 global_cb requires a two-page streaming window: size {} must be at least {}",
+        gcb.size(),
+        2 * in1_block_size_bytes);
+}
+
 // Helper: warns if a caller of MatmulDeviceOperation's static API hasn't populated
 // allowed_worker_cores on a program_config variant that supports the field. ttnn::prim::matmul()
 // normalizes its attributes before launch, but direct callers (e.g. CCL fused ops in
@@ -1713,6 +1755,26 @@ void validate_matmul_mcast1d_config(
         "{}: Matmul1D does not support mcast_in0 and gather_in0 at the "
         "same time.",
         config_name);
+    TT_FATAL(
+        program_config.gather_in0 || !program_config.stream_in1,
+        "{}: stream_in1 is the gather_in0 ring-rotation mode and requires gather_in0=true",
+        config_name);
+
+    if (attributes.global_cb.has_value() && !program_config.gather_in0) {
+        TT_FATAL(
+            program_config.mcast_in0,
+            "{}: global_cb without gather_in0 is supported only for mcast_in0=true",
+            config_name);
+        validate_dram_sender_global_cb_mcast_in0_geometry(
+            attributes.global_cb.value(), input_tensor_b, in1_tile, program_config);
+        TT_FATAL(
+            program_config.fuse_batch || get_batch_size(a_shape_padded) == 1,
+            "{}: mcast_in0 global_cb requires one effective activation batch, but fuse_batch={} and "
+            "activation batch size={}",
+            config_name,
+            program_config.fuse_batch,
+            get_batch_size(a_shape_padded));
+    }
 
     // Gather in0 specific validation
     if (program_config.gather_in0) {
@@ -1813,7 +1875,9 @@ void validate_matmul_mcast1d_config(
     } else {
         const auto device_grid_1d = input_tensor_a.device()->compute_with_storage_grid_size();
         check_tensor_in_grid(input_tensor_a, device_grid_1d);
-        check_tensor_in_grid(input_tensor_b, device_grid_1d);
+        if (!attributes.global_cb.has_value()) {
+            check_tensor_in_grid(input_tensor_b, device_grid_1d);
+        }
     }
     if (program_config.mcast_in0 || program_config.gather_in0) {
         if (input_tensor_a.is_sharded()) {
@@ -2065,7 +2129,7 @@ MatmulDeviceOperation::program_factory_t MatmulDeviceOperation::select_program_f
     const auto& config = operation_attributes.program_config.value();
 
     return std::visit(
-        [](const auto& c) -> program_factory_t {
+        [&operation_attributes](const auto& c) -> program_factory_t {
             using T = std::decay_t<decltype(c)>;
             if constexpr (std::is_same_v<T, operations::matmul::MatmulMultiCoreProgramConfig>) {
                 return MatmulMultiCoreProgramFactory{};
@@ -2074,8 +2138,10 @@ MatmulDeviceOperation::program_factory_t MatmulDeviceOperation::select_program_f
             } else if constexpr (std::is_same_v<T, operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>) {
                 return MatmulMultiCoreReuseMcast2DProgramFactory{};
             } else if constexpr (std::is_same_v<T, operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
-                // gather_in0 uses the legacy MeshWorkload path (create_descriptor not yet supported)
-                if (c.gather_in0) {
+                // gather_in0 (create_descriptor not yet supported) and any GCB-backed config
+                // (ProgramDescriptor cannot attach an experimental GlobalCircularBuffer) use the legacy
+                // MeshWorkload builder.
+                if (c.gather_in0 || operation_attributes.global_cb.has_value()) {
                     return MatmulMeshWorkloadMultiCoreReuseMcast1DProgramFactory{};
                 }
                 return MatmulMultiCoreReuseMcast1DProgramFactory{};

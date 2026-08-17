@@ -30,7 +30,7 @@ void kernel_main() {
     constexpr uint32_t weight_decay_tile = 3;
     constexpr uint32_t one_tile = 4;
 
-    binary_op_init_common(dfb::param_in, dfb::param_in, dfb::param_out);
+    compute_kernel_hw_startup(dfb::param_in, dfb::param_in, dfb::param_out);
 
     constexpr uint32_t num_tiles = get_arg(args::num_tiles);
 

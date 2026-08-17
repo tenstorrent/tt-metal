@@ -74,6 +74,8 @@ def llama_config_from_yaml(yaml_config: dict, vocab_size: int, use_tp: bool = Fa
 
     return LlamaConfig(
         hidden_size=tc.get("embedding_dim", 384),
+        # Read the MLP intermediate size from the yaml.
+        intermediate_size=tc.get("intermediate_dim", None),
         num_hidden_layers=tc.get("num_blocks", 6),
         num_attention_heads=tc.get("num_heads", 6),
         num_key_value_heads=tc.get("num_groups", 3),

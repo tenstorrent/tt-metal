@@ -292,7 +292,8 @@ static FORCE_INLINE void populate_unicast_scatter_write_fields(
         }
     }
 
-    if constexpr (has_flag(UpdateMask, UnicastScatterWriteUpdateMask::PayloadSize)) {
+    constexpr bool update_payload_size = has_flag(UpdateMask, UnicastScatterWriteUpdateMask::PayloadSize);
+    if constexpr (update_payload_size) {
         packet_header->payload_size_bytes = packet_size_bytes;
     }
 
@@ -306,7 +307,9 @@ static FORCE_INLINE void populate_unicast_scatter_write_fields(
             accumulated += chunk;
             packet_header->command_fields.unicast_scatter_write.chunk_size[i] = chunk;
         }
-        ASSERT(accumulated < payload_size);
+        if constexpr (update_payload_size) {
+            ASSERT(accumulated < payload_size);
+        }
         for (uint8_t i = chunk_size_count; i < NOC_SCATTER_WRITE_MAX_CHUNKS - 1; i++) {
             packet_header->command_fields.unicast_scatter_write.chunk_size[i] = 0;
         }

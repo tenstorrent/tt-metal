@@ -19,7 +19,7 @@ namespace tt::tt_metal::experimental {
 // Advanced options for Metal 2.0 specs
 // ============================================================================
 //
-// Each Metal 2.0 Spec (KernelSpec, DataflowBufferSpec, TensorParameter, ...) may
+// Each Metal 2.0 Spec (KernelSpec, DataflowBufferSpec, ...) may
 // carry a *AdvancedOptions field at the end of its struct.
 // Features in "advanced options" are one (or more) of:
 //
@@ -59,22 +59,27 @@ struct KernelAdvancedOptions {
     // It will later be deprecated and replaced by std::array typed arguments.
 
     //--------------------------------
-    // Compile time varargs
-    //--------------------------------
-    // TODO: This is currently unimplemented.
-    //       However, certain variadic kernels require this workaround.
-    //       (#45388 tracks the implementation of this feature.)
-
-    //--------------------------------
     // Runtime varargs
     //--------------------------------
     // Number of runtime varargs for the kernel.
     // Set the vararg values (per node) via ProgramRunArgs.
+    //
+    // To retrieve these values in kernel code, use:
+    //   get_vararg(uint32_t idx); // index in [0, num_runtime_varargs - 1]
+    //
+    // CAUTION: This feature exists to address niche uses cases only.
+    //          Prefer regular, named runtime arguments unless varargs are strictly necessary.
     uint32_t num_runtime_varargs = 0;
 
     // Number of common runtime varargs for the kernel.
     // Set the vararg values via ProgramRunArgs.
     // (The same argument values are broadcast to every node the kernel runs on.)
+    //
+    // To retrieve these values in kernel code, use:
+    //    get_common_vararg(uint32_t idx); // index in [0, num_common_runtime_varargs - 1]
+    //
+    // CAUTION: This feature exists to address niche uses cases only.
+    //          Prefer named common runtime arguments unless varargs are strictly necessary.
     uint32_t num_common_runtime_varargs = 0;
 
     // Per-node runtime vararg-count override.
@@ -85,6 +90,24 @@ struct KernelAdvancedOptions {
     //       existing uses are refactored to avoid it.
     [[deprecated("Per-node-vararg-count feature is deprecated and will be removed.")]]
     Table<Nodes, /* num_varargs */ uint32_t> num_runtime_varargs_per_node;
+
+    //--------------------------------
+    // Compile time varargs
+    //--------------------------------
+    // Compile-time vararg VALUES for the kernel.
+    // (Unlike the runtime varargs fields above, these values are baked into the Program
+    // at kernel compile time.)
+    //
+    // To retrieve these values in kernel code, use:
+    //   - get_compile_time_vararg(idx)   // for a computed index
+    //   - get_compile_time_vararg<idx>() // for a compile-time constant index
+    //   - get_num_compile_time_varargs() // for the count
+    //
+    // CAUTION: This is a temporary API that will removed in favor of compile-time array arguments.
+    //          It exists to solve a niche, isolated use case.
+    //          Always prefer regular, named compile-time arguments.
+    [[deprecated("Compile-time varargs is a temporary feature that will be removed in the future.")]]
+    std::vector<uint32_t> compile_time_varargs;
 };
 
 struct DFBAdvancedOptions {
@@ -169,48 +192,6 @@ struct SemaphoreAdvancedOptions {
     //       When cross-node DFB becomes available, non-zero initial values will be removed.
     [[deprecated("Non-zero semaphore initialization is deprecated and will be removed.")]]
     uint32_t initial_value = 0;
-};
-
-struct TensorParameterAdvancedOptions {
-    ////////////////////////////////////////////////////////////////////////////////
-    // TensorSpec match relaxation options
-    ////////////////////////////////////////////////////////////////////////////////
-
-    // By default, the MeshTensor argument provided at execution time must
-    // EXACTLY match the TensorParameter's declared TensorSpec.
-    // The options here relax this match requirement in particular ways.
-    //
-    // CAUTION:
-    // These options are UNSAFE if set to true; most kernels will not function
-    // correctly if the tensor argument's spec deviates from the declared spec.
-    // Use with caution. You must ensure that your kernel logic outside of the
-    // TensorAccessor itself is compatible with the chosen relaxation option(s)!
-
-    // Permit tensor arguments whose logical_shape differs from the declared shape.
-    // The argument's padded_shape must still match exactly.
-    //
-    // Effects:
-    //  - Validation checks are relaxed
-    //  - TensorAccessor configuration is completely unchanged
-    bool match_padded_shape_only = false;
-
-    // Permit tensor arguments with dynamic logical shape.
-    // The argument's logical_shape AND padded_shape may differ from the declared shape.
-    //
-    // Effects:
-    //  - Validation checks are relaxed.
-    //  - For a sharded tensor:
-    //    The TensorAccessor configuration DYNAMICALLY reflects the tensor argument's actual shape.
-    //    Shape, expressed in pages-per-dim, becomes implicit common runtime arguments.
-    //  - For an interleaved TILED tensor:
-    //    TensorAccessor configuration is unchanged
-    //    (The page size is fixed by dtype/tile dims, so it cannot vary with shape).
-    //  - For an interleaved ROW-MAJOR tensor:
-    //    The TensorAccessor configuration DYNAMICALLY reflects the tensor argument's page size.
-    //    NOTE: page_size = last_dim_width * element_size is part of the varying shape!
-    //    The aligned_page_size becomes an implicit common runtime argument.
-    //    (Your kernel can access this value via TensorAccessor::get_aligned_page_size().)
-    bool dynamic_tensor_shape = false;
 };
 
 }  // namespace tt::tt_metal::experimental

@@ -5,7 +5,7 @@ import pytest
 from helpers.format_config import DataFormat
 from helpers.llk_params import PerfRunType
 from helpers.param_config import input_output_formats, parametrize
-from helpers.perf import PerfConfig
+from helpers.perf.core import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
     LOOP_FACTOR,
@@ -86,7 +86,7 @@ def _perf_unpack_tilize(
         runtimes=[
             generate_input_dim(dimensions, dimensions),
             TILE_COUNT(tile_count),
-            LOOP_FACTOR(4),
+            LOOP_FACTOR(256),
         ],
         variant_stimuli=StimuliConfig(
             None,

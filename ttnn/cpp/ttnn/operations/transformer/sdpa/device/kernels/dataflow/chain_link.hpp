@@ -19,12 +19,11 @@
 struct ChainConfig {
     static constexpr uint32_t kRuntimeArgCount =
         ttnn::operations::transformer::sdpa::ring_joint::kChainConfigRuntimeArgCount;
-    static_assert(kRuntimeArgCount == 18, "ChainConfig::read_from_args must match the shared runtime arg layout");
+    static_assert(kRuntimeArgCount == 16, "ChainConfig::read_from_args must match the shared runtime arg layout");
 
     bool participates = false;
     bool is_injector = false;
     bool is_sink = false;
-    uint32_t batch = 0;
     uint32_t head = 0;
     uint32_t prev_physical_x = 0;
     uint32_t prev_physical_y = 0;
@@ -38,7 +37,6 @@ struct ChainConfig {
     uint32_t injector_physical_x = 0;
     uint32_t injector_physical_y = 0;
     uint32_t mcast_num_dests = 0;
-    uint32_t mcast_sender_wait = 0;
 
     // Read kRuntimeArgCount args in canonical order matching append_to_args().
     static ChainConfig read_from_args(uint32_t& argidx) {
@@ -46,7 +44,6 @@ struct ChainConfig {
         cfg.participates = static_cast<bool>(get_arg_val<uint32_t>(argidx++));
         cfg.is_injector = static_cast<bool>(get_arg_val<uint32_t>(argidx++));
         cfg.is_sink = static_cast<bool>(get_arg_val<uint32_t>(argidx++));
-        cfg.batch = get_arg_val<uint32_t>(argidx++);
         cfg.head = get_arg_val<uint32_t>(argidx++);
         cfg.prev_physical_x = get_arg_val<uint32_t>(argidx++);
         cfg.prev_physical_y = get_arg_val<uint32_t>(argidx++);
@@ -60,7 +57,6 @@ struct ChainConfig {
         cfg.injector_physical_x = get_arg_val<uint32_t>(argidx++);
         cfg.injector_physical_y = get_arg_val<uint32_t>(argidx++);
         cfg.mcast_num_dests = get_arg_val<uint32_t>(argidx++);
-        cfg.mcast_sender_wait = get_arg_val<uint32_t>(argidx++);
         return cfg;
     }
 
@@ -83,7 +79,7 @@ struct ChainConfig {
  *
  * Template parameters:
  * - mcast_enabled: selects multicast vs unicast forwarding at compile time
- * - is_head_level: true = head chain (matches batch AND head), false = batch chain (matches batch only)
+ * - is_head_level: true = head chain (matches head), false = shared-K chain
  *
  * Constructor stores semaphore IDs and target coords.
  *
@@ -99,7 +95,6 @@ public:
     const bool is_sink;
 
     // Chain scope matching
-    const uint32_t chain_batch;
     const uint32_t chain_head;  // Only checked when is_head_level
     const uint32_t next_core_q_chunks;
 
@@ -119,16 +114,13 @@ public:
         uint32_t mcast_end_x,
         uint32_t mcast_end_y,
         uint32_t mcast_num_dests,
-        uint32_t mcast_sender_wait,
         uint32_t chunk_tiles,
         uint32_t tile_bytes,
-        uint32_t chain_batch,
         uint32_t chain_head,
         uint32_t next_core_q_chunks) :
         is_participant(is_participant),
         is_injector(is_injector),
         is_sink(is_sink),
-        chain_batch(chain_batch),
         chain_head(chain_head),
         next_core_q_chunks(next_core_q_chunks),
         sender_sem_id_(sender_sem_id),
@@ -142,7 +134,7 @@ public:
         mcast_start_y_(mcast_start_y),
         mcast_end_x_(mcast_end_x),
         mcast_end_y_(mcast_end_y),
-        sender_wait_count_((mcast_enabled && is_injector) ? mcast_sender_wait : 1),
+        sender_wait_count_((mcast_enabled && is_injector) ? mcast_num_dests : 1),
         mcast_num_dests_(mcast_num_dests),
         chunk_tiles_(chunk_tiles),
         tile_bytes_(tile_bytes) {
@@ -154,18 +146,11 @@ public:
 
     /**
      * Check if this core should receive data from upstream.
-     * Head-level chains match (batch, head), batch-level chains match batch only.
-     * In mcast mode, skip batch check: mcast is only enabled for B=1, and padded
-     * iterations may have garbage nb values from out-of-bounds global_q_chunk.
+     * Head-level chains match the head; shared-K chains apply to every iteration.
      */
-    bool should_receive(uint32_t nb, uint32_t nq) const {
+    bool should_receive(uint32_t nq) const {
         if (!is_participant || is_injector) {
             return false;
-        }
-        if constexpr (!mcast_enabled) {
-            if (nb != chain_batch) {
-                return false;
-            }
         }
         if constexpr (is_head_level) {
             if (nq != chain_head) {
@@ -178,16 +163,10 @@ public:
     /**
      * Check if this core should forward data to downstream.
      * Also checks iteration count against next core's expected reads.
-     * In mcast mode, skip batch check (see should_receive comment).
      */
-    bool should_forward(uint32_t nb, uint32_t nq, uint32_t q_iter_local) const {
+    bool should_forward(uint32_t nq, uint32_t q_iter_local) const {
         if (!is_participant || is_sink) {
             return false;
-        }
-        if constexpr (!mcast_enabled) {
-            if (nb != chain_batch) {
-                return false;
-            }
         }
         if constexpr (is_head_level) {
             if (nq != chain_head) {
@@ -262,8 +241,7 @@ public:
                 {.offset_bytes = 0},
                 {.noc_x = next_core_x_, .noc_y = next_core_y_, .addr = cb_addr});
             noc.async_writes_flushed();
-            Semaphore<>(valid_sem_id_)
-                .relay_unicast(noc, Semaphore<>(receiver_sem_id_), next_core_x_, next_core_y_);
+            Semaphore<>(valid_sem_id_).relay_unicast(noc, Semaphore<>(receiver_sem_id_), next_core_x_, next_core_y_);
         }
     }
 
