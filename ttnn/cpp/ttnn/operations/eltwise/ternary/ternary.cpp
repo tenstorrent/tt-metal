@@ -106,7 +106,10 @@ inline bool is_invalid_bcast(const ttnn::operations::ternary::TernaryBroadcastTy
     return broadcast_type == ttnn::operations::ternary::TernaryBroadcastType::INVALID_BCAST;
 }
 
-inline bool is_integer_dtype(DataType dtype) { return dtype == DataType::INT32 || dtype == DataType::UINT32; }
+inline bool is_integer_dtype(DataType dtype) {
+    return dtype == DataType::INT32 || dtype == DataType::UINT32 || dtype == DataType::UINT16 ||
+           dtype == DataType::UINT8;
+}
 
 // TTT: tensor, tensor, tensor
 Tensor invoke_impl(
