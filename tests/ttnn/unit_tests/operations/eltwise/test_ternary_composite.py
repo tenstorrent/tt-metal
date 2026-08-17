@@ -278,9 +278,11 @@ def test_mac_overload_ttnn(input_shapes, value1, value2, device):
     ),
 )
 def test_mac_ttnn(input_shapes, device):
-    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
-    in_data2, input_tensor2 = data_gen_with_range(input_shapes, -100, 100, device)
-    in_data3, input_tensor3 = data_gen_with_range(input_shapes, -100, 100, device)
+    # Distinct seeds per operand: data_gen_with_range reseeds from a fixed default, so
+    # reusing it would make a, b and c bit-identical and mask any operand mix-up.
+    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device, seed=0)
+    in_data2, input_tensor2 = data_gen_with_range(input_shapes, -100, 100, device, seed=1)
+    in_data3, input_tensor3 = data_gen_with_range(input_shapes, -100, 100, device, seed=2)
 
     output_tensor = ttnn.mac(input_tensor1, input_tensor2, input_tensor3)
     golden_fn = ttnn.get_golden_function(ttnn.mac)
@@ -293,9 +295,9 @@ def test_mac_ttnn(input_shapes, device):
 def test_mac_output_tensor(device):
     """Test that ttnn.mac correctly writes into a preallocated output_tensor."""
     shape = torch.Size([1, 1, 32, 32])
-    in_data1, input_tensor1 = data_gen_with_range(shape, -100, 100, device)
-    in_data2, input_tensor2 = data_gen_with_range(shape, -100, 100, device)
-    in_data3, input_tensor3 = data_gen_with_range(shape, -100, 100, device)
+    in_data1, input_tensor1 = data_gen_with_range(shape, -100, 100, device, seed=0)
+    in_data2, input_tensor2 = data_gen_with_range(shape, -100, 100, device, seed=1)
+    in_data3, input_tensor3 = data_gen_with_range(shape, -100, 100, device, seed=2)
 
     preallocated = ttnn.zeros(shape, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     result = ttnn.mac(input_tensor1, input_tensor2, input_tensor3, output_tensor=preallocated)
@@ -315,9 +317,9 @@ def test_mac_output_tensor(device):
 def test_mac_sub_core_grids(device):
     """Test that ttnn.mac accepts sub_core_grids and produces correct results."""
     shape = torch.Size([1, 1, 32, 32])
-    in_data1, input_tensor1 = data_gen_with_range(shape, -100, 100, device)
-    in_data2, input_tensor2 = data_gen_with_range(shape, -100, 100, device)
-    in_data3, input_tensor3 = data_gen_with_range(shape, -100, 100, device)
+    in_data1, input_tensor1 = data_gen_with_range(shape, -100, 100, device, seed=0)
+    in_data2, input_tensor2 = data_gen_with_range(shape, -100, 100, device, seed=1)
+    in_data3, input_tensor3 = data_gen_with_range(shape, -100, 100, device, seed=2)
 
     core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
     output_tensor = ttnn.mac(input_tensor1, input_tensor2, input_tensor3, sub_core_grids=core_grid)
@@ -338,8 +340,8 @@ def test_mac_sub_core_grids(device):
 @pytest.mark.parametrize("value", [1.0, 5.0, -3.5])
 def test_mac_tts_ttnn(input_shapes, value, device):
     """TTS variant: a * b + scalar"""
-    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
-    in_data2, input_tensor2 = data_gen_with_range(input_shapes, -100, 100, device)
+    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device, seed=0)
+    in_data2, input_tensor2 = data_gen_with_range(input_shapes, -100, 100, device, seed=1)
 
     output_tensor = ttnn.mac(input_tensor1, input_tensor2, value)
     golden_tensor = (in_data1 * in_data2 + value).to(torch.bfloat16)
@@ -357,8 +359,8 @@ def test_mac_tts_ttnn(input_shapes, value, device):
 @pytest.mark.parametrize("value", [1.0, 5.0, -3.5])
 def test_mac_tst_ttnn(input_shapes, value, device):
     """TST variant: a * scalar + c"""
-    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
-    in_data3, input_tensor3 = data_gen_with_range(input_shapes, -100, 100, device)
+    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device, seed=0)
+    in_data3, input_tensor3 = data_gen_with_range(input_shapes, -100, 100, device, seed=2)
 
     output_tensor = ttnn.mac(input_tensor1, value, input_tensor3)
     golden_tensor = (in_data1 * value + in_data3).to(torch.bfloat16)
