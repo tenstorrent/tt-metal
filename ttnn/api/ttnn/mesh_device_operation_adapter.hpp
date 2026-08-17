@@ -906,13 +906,13 @@ public:
             auto op_owned_tensors =
                 std::make_shared<std::vector<tt::tt_metal::MeshTensor>>(std::move(artifacts.op_owned_tensors));
 
-            const bool skip_validation = !ttnn::CONFIG.get<"validate_program_args">();
+            // Cache miss is the cold path: always validate here, so every cached program was
+            // built from a checked spec. validate_program_args only gates the hit-path re-checks.
             tt::tt_metal::distributed::MeshWorkload mesh_workload;
             std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
             for (const auto& range : tensor_coords.ranges()) {
-                auto program =
-                    tt::tt_metal::experimental::MakeProgramFromSpec(*mesh_device, artifacts.spec, skip_validation);
-                tt::tt_metal::experimental::SetProgramRunArgs(program, artifacts.run_params, skip_validation);
+                auto program = tt::tt_metal::experimental::MakeProgramFromSpec(*mesh_device, artifacts.spec);
+                tt::tt_metal::experimental::SetProgramRunArgs(program, artifacts.run_params);
                 shared_variables.emplace(
                     range, shared_variables_t{.bindings = bindings, .op_owned_tensors = op_owned_tensors});
                 mesh_workload.add_program(range, std::move(program));
@@ -931,6 +931,7 @@ public:
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value) {
             auto io_mesh_tensors = collect_mesh_tensors(tensor_args, tensor_return_value);
+            const bool skip_validation = !ttnn::CONFIG.get<"validate_program_args">();
             for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
                 const auto& sv = cached_workload.shared_variables.at(coordinate_range);
 
@@ -947,7 +948,7 @@ public:
                 for (const auto& b : sv.bindings) {
                     fresh_tensor_args.emplace(b.tensor_parameter_name, TensorArgument{mesh_tensors[b.tensor_idx]});
                 }
-                tt::tt_metal::experimental::UpdateTensorArgs(program, fresh_tensor_args);
+                tt::tt_metal::experimental::UpdateTensorArgs(program, fresh_tensor_args, skip_validation);
             }
         }
     };
