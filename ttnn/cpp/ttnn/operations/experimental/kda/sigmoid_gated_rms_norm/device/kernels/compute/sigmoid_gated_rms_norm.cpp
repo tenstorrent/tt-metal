@@ -56,7 +56,7 @@ void inverse_rms(uint32_t epsilon_bits, uint32_t inv_v_bits) {
     cb_push_back(cb_inv, 1);
 }
 
-void normalize(uint32_t Vt) {
+void scale_by_inverse_rms(uint32_t Vt) {
     cb_reserve_back(cb_norm, Vt);
     pack_reconfig_data_format(cb_norm);
     reconfig_data_format(cb_x, cb_inv);
@@ -157,7 +157,7 @@ void kernel_main() {
         tmp.pop_front(Vt);
         inverse_rms(epsilon_bits, inv_v_bits);
         inv.wait_front(1);
-        normalize(Vt);
+        scale_by_inverse_rms(Vt);
         norm.wait_front(Vt);
         x.pop_front(Vt);
         inv.pop_front(1);
