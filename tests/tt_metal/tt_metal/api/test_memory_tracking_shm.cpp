@@ -12,6 +12,14 @@
 // No device is needed: SharedMemoryStatsProvider is constructed from an asic_id, so these
 // tests attach to a synthetic region of their own (keyed by the test process's pid, so
 // concurrent CI jobs cannot collide) and never touch a real chip's region.
+//
+// These are processes rather than threads for a reason beyond fidelity: ThreadSanitizer cannot
+// see this region's races. Its shadow state is keyed by virtual address, and every provider
+// mmap()s its own view, so two parties writing the same physical word through different
+// mappings are invisible to it -- verified with a deliberate 2M-iteration race across two
+// mappings of one page, which TSan reported only when both threads shared a single mapping.
+// A clean TSan run therefore says nothing about the invariants below; these tests are the
+// coverage.
 
 #include <fcntl.h>
 #include <sys/mman.h>
