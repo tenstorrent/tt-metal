@@ -1221,8 +1221,6 @@ Conv2dConfig determine_conv_config_for_auto_shard(
         conv_config.shard_layout.has_value()) {
         return conv_config;
     }
-    const bool conv_is_1d_depthwise =
-        is_1d_depthwise_conv(groups, in_channels, out_channels, kernel_size[0], input_height, enable_bias);
 
     auto get_l1_usage_for_sharding = [&](TensorMemoryLayout shard_layout, const Conv2dConfig& conv_config) {
         return calculate_L1_usage_for_conv_op(
@@ -1250,10 +1248,14 @@ Conv2dConfig determine_conv_config_for_auto_shard(
     };
     core_count_and_size height = get_l1_usage_for_sharding(TensorMemoryLayout::HEIGHT_SHARDED, conv_config);
 
-    // 1d depthwise convs support only height sharding
-    if (conv_is_1d_depthwise) {
-        return height.conv_config;
-    }
+    // 1d depthwise convs used to be forced onto height sharding because the
+    // depthwise weight/kernel fast path only supports height sharding. That
+    // layout can exceed L1 for depthwise conv1d shapes with many channels
+    // (in_channels == out_channels == groups much larger than the grid), and
+    // once the depthwise weight layout conversion is skipped for non-height
+    // sharding (see prepare_conv_weights_internal) the generic width/block
+    // sharded paths run these shapes, so depthwise convs compete in the same
+    // min-total-size comparison as every other conv.
 
     const core_count_and_size block = get_l1_usage_for_sharding(TensorMemoryLayout::BLOCK_SHARDED, conv_config);
     const core_count_and_size width = get_l1_usage_for_sharding(TensorMemoryLayout::WIDTH_SHARDED, conv_config);
