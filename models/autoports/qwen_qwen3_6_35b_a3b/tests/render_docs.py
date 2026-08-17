@@ -1019,6 +1019,14 @@ def render_freshness_list():
     )
     for path in (README, WORKLOG):
         text = path.read_text()
+        # Exactly one of each marker, or refuse. A second copy -- e.g. the work log quoting the marker
+        # while *describing* this renderer, which is precisely what happened once -- makes the
+        # non-greedy match start at the quote and run to the real end marker, silently deleting
+        # everything in between (it ate a whole section of the work log before this check existed).
+        n_begin, n_end = text.count(FRESHNESS_BEGIN), text.count(FRESHNESS_END)
+        if (n_begin, n_end) != (1, 1):
+            report.append(f"  MISS     freshness markers in {path.name}: found {n_begin} begin / {n_end} end, want 1/1")
+            continue
         pat = re.compile(re.escape(FRESHNESS_BEGIN) + r".*?" + re.escape(FRESHNESS_END) + r"\n", re.S)
         if not pat.search(text):
             # MISS, not WARN. Round 7 found this renderer silently disabled -- its anchor was prose
