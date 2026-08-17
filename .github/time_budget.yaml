@@ -177,14 +177,14 @@ shield:
     wh_n300: 30
     bh_p150b_civ2: 120
   e2e_tier3:
-    bh_p150b_civ2: 18
+    bh_p150b_civ2: 43 # panoptic-deeplab 18 + xtts-v2 25
   unit_tier2:
     wh_n150: 220
     wh_n300: 216
     bh_p150: 100
     bh_p150b_civ2: 90
   unit_tier3:
-    bh_p150b_civ2: 20
+    bh_p150b_civ2: 45 # panoptic-deeplab 8 + bevformer 12 + xtts-v2 25
     bh_p150: 2
   device_perf:
     wh_n150: 100
