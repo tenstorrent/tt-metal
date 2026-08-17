@@ -48,4 +48,9 @@
   262,143-token context harness. Its watcher log audit is clean; see
   `watcher_rereview/`.
 
-Local stage commit SHAs are appended after review and commit.
+## Local commits
+
+- `d22be2aa73e75a9607ef2acf88bdc85abd99e4aa` — implementation, tests, and
+  reviewable evidence index (`Add Qwen3.8-27B functional decoder`).
+- The metadata commit containing this SHA entry is reported in the final handoff;
+  it cannot self-record its own content-addressed SHA. No commit was pushed.
