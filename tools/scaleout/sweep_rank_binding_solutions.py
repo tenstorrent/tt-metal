@@ -25,6 +25,7 @@ See tools/scaleout/README_sweep_rank_binding_solutions.md for the design.
 import os
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -167,6 +168,69 @@ class _RetryResult:
     recover_exhausted: bool = False
 
 
+def _reap_pattern_for(program: List[str]) -> Optional[str]:
+    """A distinctive substring of ``<program>`` used to pkill its worker ranks on the hosts.
+
+    Prefers a pytest ``file.py::test`` target (unique to this workload), else the last program token.
+    Returned as a ``pkill -f`` pattern. None -> reaping is local-only (no remote rank pattern known).
+    """
+    for tok in reversed(program):
+        if "::" in tok:
+            return tok
+    return program[-1] if program else None
+
+
+def _reap_command_processes(pgid: Optional[int], host_set: Optional[str], reap_pattern: Optional[str]) -> None:
+    """Kill every process a launched command left behind — locally and on every host — then verify.
+
+    A tt-run that fails/times out leaves worker ranks alive on the remote hosts; they keep holding the
+    per-chip ``CHIP_IN_USE_*_PCIe`` locks, so the *next* attempt wedges on
+    ``Waiting for lock 'CHIP_IN_USE_*'``. This SIGKILLs the local launcher process group
+    (mpirun/prterun/ssh) and, on each host in ``host_set``, pkills the workload ranks + ``prted``,
+    polling ``pgrep`` until they are actually gone so the next command starts clean. Runs after every
+    command (timeout or normal exit). Best-effort; never raises.
+    """
+    # 1. Local: SIGKILL the command's whole process group (the launched parent -- tt-run/bash -- plus
+    #    the ssh's it spawns), AND pkill the MPI launchers by name in case they setsid'd into their own
+    #    session and escaped the process-group kill. Together this guarantees the parent process and all
+    #    its child MPI processes on this host die. pkill -f on these names can't match the driver
+    #    (python) or its own pkill, so it is self-match-safe.
+    if pgid:
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError, OSError):
+            pass
+    for launcher in ("mpirun-ulfm", "prterun", "prted"):
+        try:
+            subprocess.run(
+                ["pkill", "-9", "-f", launcher], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10
+            )
+        except (subprocess.TimeoutExpired, OSError):
+            pass
+    # 2. Remote worker ranks + prted on each host (these hold the CHIP_IN_USE PCIe locks).
+    hosts = [h.strip() for h in (host_set or "").split(",") if h.strip()]
+    if not hosts or not reap_pattern:
+        return
+    # Bracket the last char (the classic `[x]` trick) so the reap command's OWN shell -- whose cmdline
+    # necessarily contains the pattern -- is NOT matched by pkill/pgrep -f, avoiding self-kill.
+    bracketed = reap_pattern[:-1] + "[" + reap_pattern[-1] + "]" if reap_pattern else reap_pattern
+    pat = shlex.quote(bracketed)
+    # prted first (exact process name -x, never self-matches), then the workload ranks by cmdline.
+    kill_sh = f"pkill -9 -x prted >/dev/null 2>&1; pkill -9 -f {pat} >/dev/null 2>&1; true"
+    ssh = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", "-o", "StrictHostKeyChecking=no"]
+    for h in hosts:
+        # Kill, then poll (bounded) until the ranks are gone, re-killing each round.
+        for _ in range(8):
+            try:
+                subprocess.run(ssh + [h, kill_sh], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=25)
+                chk = subprocess.run(ssh + [h, f"pgrep -f {pat} | wc -l"], capture_output=True, text=True, timeout=25)
+            except subprocess.TimeoutExpired:
+                break
+            if (chk.stdout or "").strip() in ("", "0"):
+                break
+            time.sleep(1)
+
+
 def _run_once(
     cmd: List[str],
     *,
@@ -175,19 +239,40 @@ def _run_once(
     timeout: Optional[int],
     append: bool,
     header: Optional[str] = None,
+    host_set: Optional[str] = None,
+    reap_pattern: Optional[str] = None,
 ) -> Tuple[str, Optional[int]]:
-    """Run ``cmd`` once. Returns ``(status, returncode)`` where status is pass/fail/timeout."""
+    """Run ``cmd`` once in its own process group, then reap everything it started (local group +
+    remote ranks) so nothing lingers holding CHIP_IN_USE locks. Returns ``(status, returncode)``."""
     mode = "a" if append else "w"
-    try:
-        with open(log_path, mode) as log:
-            if header:
-                log.write(header)
-                log.flush()
-            proc = subprocess.run(cmd, cwd=cwd, stdout=log, stderr=subprocess.STDOUT, timeout=timeout)
-        rc = proc.returncode
-        return ("pass" if rc == 0 else "fail", rc)
-    except subprocess.TimeoutExpired:
-        return ("timeout", None)
+    status: str = "fail"
+    rc: Optional[int] = None
+    pgid: Optional[int] = None
+    proc: Optional[subprocess.Popen] = None
+    with open(log_path, mode) as log:
+        if header:
+            log.write(header)
+            log.flush()
+        # start_new_session=True -> the command is its own process-group/session leader, so we can
+        # SIGKILL the whole tree (mpirun/prterun/ssh) on timeout, not just the direct child.
+        proc = subprocess.Popen(cmd, cwd=cwd, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+        try:
+            pgid = os.getpgid(proc.pid)
+        except (ProcessLookupError, OSError):
+            pgid = None
+        try:
+            rc = proc.wait(timeout=timeout)
+            status = "pass" if rc == 0 else "fail"
+        except subprocess.TimeoutExpired:
+            status = "timeout"
+    # Always reap this command's processes (on timeout AND on normal exit); cheap no-op on a clean pass.
+    _reap_command_processes(pgid, host_set, reap_pattern)
+    if proc is not None:
+        try:
+            proc.wait(timeout=15)  # collect the (now-killed) child so it isn't left a zombie
+        except Exception:  # noqa: BLE001
+            pass
+    return status, rc
 
 
 def _run_with_retries(
@@ -201,6 +286,8 @@ def _run_with_retries(
     label: str = "tt-run",
     append_log: bool = False,
     cmd_display: Optional[str] = None,
+    host_set: Optional[str] = None,
+    reap_pattern: Optional[str] = None,
 ) -> _RetryResult:
     """Run ``cmd`` up to ``retries`` times, recovering only after a failure.
 
@@ -229,7 +316,16 @@ def _run_with_retries(
             header += f"{PREFIX} recover attempt {attempt}/{attempts}\n"
 
         click.echo(f"{PREFIX}   {label} [{attempt}/{attempts}]")
-        last_status, last_rc = _run_once(cmd, cwd=cwd, log_path=log_path, timeout=timeout, append=append, header=header)
+        last_status, last_rc = _run_once(
+            cmd,
+            cwd=cwd,
+            log_path=log_path,
+            timeout=timeout,
+            append=append,
+            header=header,
+            host_set=host_set,
+            reap_pattern=reap_pattern,
+        )
         if last_status == "pass":
             if label == "recover":
                 click.echo(f"{PREFIX}   WARNING: recover succeeded (rc=0) on attempt {attempt}/{attempts}; continuing")
@@ -636,6 +732,27 @@ def main(
     results = []
     stopped_early = False
     recover_exhausted = False
+
+    # PROACTIVE reset BEFORE any tt-run: first reap leftover ranks from prior runs on every host (they
+    # hold CHIP_IN_USE PCIe locks), then run the recover command once so the first solution launches on
+    # a clean cluster. This is the SAME command used reactively after a failure -> all recovery + all
+    # process-killing lives in this sweep driver (not the caller). Skipped on --dry-run / "true" no-op.
+    if not dry_run:
+        all_hosts = ",".join(parsed_hosts) if parsed_hosts else None
+        _reap_command_processes(None, all_hosts, _reap_pattern_for(program))
+        if recover_command and recover_command != "true":
+            click.echo(f"{PREFIX} Initial reset before sweep:\n  {recover_command}")
+            _run_with_retries(
+                ["/bin/bash", "-c", recover_command],
+                cwd=_repo_root(),
+                log_path=logs_root / "_initial_recover.log",
+                timeout=None,
+                retries=retries,
+                recover_cmd=None,
+                label="recover",
+                cmd_display=recover_command,
+            )
+
     for i, sol in enumerate(solutions):
         # Total-budget check (before launching, so we never interrupt a running solve).
         if sweep_timeout is not None:
@@ -696,6 +813,10 @@ def main(
             recover_cmd=recover_command,
             label="tt-run",
             cmd_display=cmd_str,
+            # After every attempt (timeout or exit), reap this solution's ranks on its hosts so the
+            # retry never wedges on a CHIP_IN_USE lock held by the prior attempt's leftover process.
+            host_set=sol.get("host_set"),
+            reap_pattern=_reap_pattern_for(program),
         )
         dur = round(time.time() - t0, 1)
         click.echo(
