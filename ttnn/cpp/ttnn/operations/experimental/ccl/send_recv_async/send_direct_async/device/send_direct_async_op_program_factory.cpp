@@ -16,62 +16,72 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tt_align.hpp>
 #include "ttnn/operations/experimental/ccl/send_recv_async/send_recv_utils.hpp"
+
 using namespace tt::constants;
+using namespace tt::tt_metal;
 
 namespace ttnn::experimental::prim {
 
-SendDirectAsyncMeshWorkloadFactory::cached_mesh_workload_t SendDirectAsyncMeshWorkloadFactory::create_mesh_workload(
-    const SendDirectAsyncParams& operation_attributes,
-    const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const Tensor& tensor_args,
-    std::vector<Tensor>& tensor_return_value) {
-    tt::tt_metal::distributed::MeshWorkload workload;
-    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
-    ttnn::MeshCoordinateRangeSet workload_coords =
-        ttnn::send_recv_utils::get_workload_coords<tt::tt_metal::distributed::SocketEndpoint::SENDER>(
-            tensor_coords, operation_attributes.mesh_socket);
+namespace {
 
-    for (const auto& coord : workload_coords.coords()) {
-        auto cached_program = create_at(operation_attributes, coord, tensor_args, tensor_return_value);
-        workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
-        shared_variables.emplace(ttnn::MeshCoordinateRange(coord), std::move(cached_program.shared_variables));
-    }
-    return cached_mesh_workload_t{std::move(workload), std::move(shared_variables)};
-}
-
-ttnn::device_operation::CachedProgram<SendDirectAsyncMeshWorkloadFactory::shared_variables_t>
-SendDirectAsyncMeshWorkloadFactory::create_at(
-    const SendDirectAsyncParams& operation_attributes,
-    const ttnn::MeshCoordinate& mesh_coordinate,
-    const Tensor& tensor_args,
-    std::vector<Tensor>& /*tensor_return_value*/) {
-    auto mesh_socket = operation_attributes.mesh_socket;
-    const auto& input_tensor = tensor_args;
-    auto* mesh_device = input_tensor.device();
-    IDevice* target_device = mesh_device ? mesh_device->get_device(mesh_coordinate) : tensor_args.device();
-
-    tt::tt_metal::Program program{};
-    const auto* socket_mesh_device = mesh_socket.get_config_buffer()->device();
-    const auto& socket_connection_config = mesh_socket.get_config().socket_connection_config;
-
-    std::vector<CoreCoord> sender_core_coords;
+// The socket connections whose sender core sits on `target_device`, in socket-connection order.
+// create_descriptor and override_runtime_arguments both walk this so the per-core runtime-arg
+// ordering they assume stays identical.
+struct SenderConnections {
+    std::vector<CoreCoord> core_coords;
     std::vector<tt::tt_fabric::FabricNodeId> sender_fabric_node_ids;
     std::vector<tt::tt_fabric::FabricNodeId> receiver_fabric_node_ids;
+};
 
-    for (const auto& connection : socket_connection_config) {
+SenderConnections collect_sender_connections(
+    const tt::tt_metal::distributed::MeshSocket& mesh_socket, const Tensor& input_tensor, IDevice* target_device) {
+    const auto* socket_mesh_device = mesh_socket.get_config_buffer()->device();
+    SenderConnections connections;
+    for (const auto& connection : mesh_socket.get_config().socket_connection_config) {
         if (socket_mesh_device->get_device(connection.sender_core.device_coord)->id() == target_device->id()) {
-            sender_core_coords.push_back(connection.sender_core.core_coord);
-            sender_fabric_node_ids.push_back(
+            connections.core_coords.push_back(connection.sender_core.core_coord);
+            connections.sender_fabric_node_ids.push_back(
                 input_tensor.device()->get_fabric_node_id(connection.sender_core.device_coord));
-            receiver_fabric_node_ids.push_back(mesh_socket.get_fabric_node_id(
+            connections.receiver_fabric_node_ids.push_back(mesh_socket.get_fabric_node_id(
                 tt::tt_metal::distributed::SocketEndpoint::RECEIVER, connection.receiver_core.device_coord));
         }
     }
-    uint32_t num_cores = sender_core_coords.size();
+    return connections;
+}
+
+IDevice* resolve_target_device(const Tensor& tensor, const std::optional<ttnn::MeshCoordinate>& coord) {
     TT_FATAL(
-        num_cores > 0,
-        "send_direct_async found no socket connections whose sender core is on device {}",
-        target_device->id());
+        coord.has_value(), "send_direct_async: the program factory requires a per-device mesh dispatch coordinate");
+    auto* mesh_device = tensor.device();
+    return mesh_device ? mesh_device->get_device(*coord) : tensor.device()->get_device(0);
+}
+
+// Descriptor kernel indices, fixed by the push order at the end of create_descriptor.
+constexpr uint32_t reader_kernel_index = 0;
+constexpr uint32_t writer_kernel_index = 1;
+
+}  // namespace
+
+ProgramDescriptor SendDirectAsyncProgramFactory::create_descriptor(
+    const SendDirectAsyncParams& operation_attributes,
+    const Tensor& tensor_args,
+    std::vector<Tensor>& /*tensor_return_value*/,
+    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
+    const auto& mesh_socket = operation_attributes.mesh_socket;
+    const auto& input_tensor = tensor_args;
+    IDevice* target_device = resolve_target_device(input_tensor, mesh_dispatch_coordinate);
+
+    auto connections = collect_sender_connections(mesh_socket, input_tensor, target_device);
+    const auto& sender_core_coords = connections.core_coords;
+    const auto& sender_fabric_node_ids = connections.sender_fabric_node_ids;
+    const auto& receiver_fabric_node_ids = connections.receiver_fabric_node_ids;
+
+    uint32_t num_cores = sender_core_coords.size();
+    // This device holds no sender core of the socket, so it has no work. An empty descriptor tells
+    // the framework to skip this coordinate.
+    if (num_cores == 0) {
+        return ProgramDescriptor{};
+    }
 
     // cores must not exceed available fabric links
     {
@@ -131,45 +141,55 @@ SendDirectAsyncMeshWorkloadFactory::create_at(
 
     tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
-    auto src0_cb_index = tt::CBIndex::c_0;
-
-    tt::tt_metal::CircularBufferConfig cb_src0_config =
-        tt::tt_metal::CircularBufferConfig(cb_num_pages * cb_page_size, {{src0_cb_index, df}})
-            .set_page_size(src0_cb_index, cb_page_size);
-
     std::set<CoreRange> sender_core_ranges;
     for (const auto& core : sender_core_coords) {
         sender_core_ranges.insert(CoreRange(core));
     }
     CoreRangeSet sender_core_range_set(sender_core_ranges);
 
-    CreateCircularBuffer(program, sender_core_range_set, cb_src0_config);
+    ProgramDescriptor desc;
 
+    constexpr uint8_t src0_cb_index = tt::CBIndex::c_0;
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = cb_num_pages * cb_page_size,
+        .core_ranges = sender_core_range_set,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = src0_cb_index,
+            .data_format = df,
+            .page_size = cb_page_size,
+        }}},
+    });
+
+    constexpr uint8_t packet_header_cb_index = tt::CBIndex::c_1;
     uint32_t packet_header_cb_num_pages = 2;  // One for data, one for sync
     uint32_t packet_header_cb_page_size = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
-
-    auto packet_header_cb_index = tt::CBIndex::c_1;
-
-    tt::tt_metal::CircularBufferConfig cb_packet_header_config =
-        tt::tt_metal::CircularBufferConfig(
-            packet_header_cb_num_pages * packet_header_cb_page_size, {{packet_header_cb_index, tt::DataFormat::UInt32}})
-            .set_page_size(packet_header_cb_index, packet_header_cb_page_size);
-
-    CreateCircularBuffer(program, sender_core_range_set, cb_packet_header_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = packet_header_cb_num_pages * packet_header_cb_page_size,
+        .core_ranges = sender_core_range_set,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = packet_header_cb_index,
+            .data_format = tt::DataFormat::UInt32,
+            .page_size = packet_header_cb_page_size,
+        }}},
+    });
 
     // Page 0 is the dest-info landing zone the receiver writes back into, page 1 stages the
     // advertise payload pushed to the receiver over the socket.
-    auto handshake_cb_index = tt::CBIndex::c_2;
+    constexpr uint8_t handshake_cb_index = tt::CBIndex::c_2;
     uint32_t handshake_cb_num_pages = 2;
-    tt::tt_metal::CircularBufferConfig cb_handshake_config =
-        tt::tt_metal::CircularBufferConfig(
-            handshake_cb_num_pages * handshake_page_size, {{handshake_cb_index, tt::DataFormat::UInt32}})
-            .set_page_size(handshake_cb_index, handshake_page_size);
-
-    CreateCircularBuffer(program, sender_core_range_set, cb_handshake_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = handshake_cb_num_pages * handshake_page_size,
+        .core_ranges = sender_core_range_set,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = handshake_cb_index,
+            .data_format = tt::DataFormat::UInt32,
+            .page_size = handshake_page_size,
+        }}},
+    });
 
     const auto input_accessor_args = tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer());
     auto compile_time_args = input_accessor_args.get_compile_time_args();
+
     std::vector<uint32_t> reader_compile_args = {
         src0_cb_index,               // cb0_id
         input_page_size,             // input_page_size
@@ -183,12 +203,14 @@ SendDirectAsyncMeshWorkloadFactory::create_at(
     };
     reader_compile_args.insert(reader_compile_args.end(), compile_time_args.begin(), compile_time_args.end());
 
-    auto reader_kernel_id = tt::tt_metal::CreateKernel(
-        program,
+    KernelDescriptor reader;
+    reader.kernel_source =
         "ttnn/cpp/ttnn/operations/experimental/ccl/send_recv_async/send_direct_async/device/kernels/"
-        "sender_direct_reader.cpp",
-        sender_core_range_set,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_args));
+        "sender_direct_reader.cpp";
+    reader.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader.core_ranges = sender_core_range_set;
+    reader.compile_time_args = std::move(reader_compile_args);
+    reader.config = ReaderConfigDescriptor{};
 
     // The writer addresses the receiver's output tensor, whose layout matches the input tensor.
     std::vector<uint32_t> writer_compile_args = {
@@ -207,12 +229,14 @@ SendDirectAsyncMeshWorkloadFactory::create_at(
     };
     writer_compile_args.insert(writer_compile_args.end(), compile_time_args.begin(), compile_time_args.end());
 
-    auto writer_kernel_id = tt::tt_metal::CreateKernel(
-        program,
+    KernelDescriptor writer;
+    writer.kernel_source =
         "ttnn/cpp/ttnn/operations/experimental/ccl/send_recv_async/send_direct_async/device/kernels/"
-        "sender_direct_writer.cpp",
-        sender_core_range_set,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_args));
+        "sender_direct_writer.cpp";
+    writer.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer.core_ranges = sender_core_range_set;
+    writer.compile_time_args = std::move(writer_compile_args);
+    writer.config = WriterConfigDescriptor{};
 
     for (uint32_t core_idx = 0; core_idx < num_cores; ++core_idx) {
         const auto& sender_core_coord = sender_core_coords[core_idx];
@@ -225,14 +249,18 @@ SendDirectAsyncMeshWorkloadFactory::create_at(
             num_pages_remainder = pages_for_this_core % num_pages_per_packet;
         }
 
-        std::vector<uint32_t> reader_rt_args = {
-            input_tensor.buffer()->address(),  // input_base_addr
-            pages_for_this_core,               // num_pages
-            page_start_offset,                 // page_start_offset
-            num_whole_packets,                 // num_whole_packets
-            num_pages_remainder,               // num_pages_remainder
-        };
-        tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, sender_core_coord, reader_rt_args);
+        // Both addresses below are re-applied by override_runtime_arguments instead of being declared
+        // as Buffer* bindings: the socket config buffer is not tensor-backed, so the binding fast
+        // path would patch the input address and leave the socket address frozen at first miss.
+        reader.runtime_args.emplace_back(
+            sender_core_coord,
+            KernelDescriptor::CoreRuntimeArgs{
+                input_tensor.buffer()->address(),  // smuggled-rta-ok: patched in override_runtime_arguments
+                pages_for_this_core,               // num_pages
+                page_start_offset,                 // page_start_offset
+                num_whole_packets,                 // num_whole_packets
+                num_pages_remainder,               // num_pages_remainder
+            });
 
         std::vector<uint32_t> writer_rt_args = {
             mesh_socket.get_config_buffer()->address(),  // socket_config_addr
@@ -247,48 +275,44 @@ SendDirectAsyncMeshWorkloadFactory::create_at(
         auto link_indices = tt::tt_fabric::get_forwarding_link_indices(sender_fabric_node_id, receiver_fabric_node_id);
 
         uint32_t selected_link_index = link_indices[core_idx % link_indices.size()];
-        tt::tt_fabric::append_fabric_connection_rt_args(
+        tt::tt_fabric::append_fabric_connection_rt_args<ProgramDescriptor>(
             sender_fabric_node_id,
             receiver_fabric_node_id,
             selected_link_index,
-            program,
+            desc,
             sender_core_coord,
             writer_rt_args);
 
-        tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, sender_core_coord, writer_rt_args);
+        writer.runtime_args.emplace_back(sender_core_coord, std::move(writer_rt_args));
     }
 
-    return {
-        std::move(program),
-        shared_variables_t{
-            .sender_core_coords = sender_core_coords,
-            .reader_kernel_id = reader_kernel_id,
-            .writer_kernel_id = writer_kernel_id,
-        }};
+    // Kernel order fixes the descriptor kernel indices: 0 = reader, 1 = writer.
+    desc.kernels.push_back(std::move(reader));
+    desc.kernels.push_back(std::move(writer));
+
+    return desc;
 }
 
-void SendDirectAsyncMeshWorkloadFactory::override_runtime_arguments(
-    cached_mesh_workload_t& cached_workload,
+void SendDirectAsyncProgramFactory::override_runtime_arguments(
+    Program& program,
     const SendDirectAsyncParams& operation_attributes,
     const Tensor& tensor_args,
-    [[maybe_unused]] std::vector<Tensor>& tensor_return_value) {
-    for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
-        auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);
+    std::vector<Tensor>& /*tensor_return_value*/,
+    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
+    const auto& mesh_socket = operation_attributes.mesh_socket;
+    const auto& input_tensor = tensor_args;
+    IDevice* target_device = resolve_target_device(input_tensor, mesh_dispatch_coordinate);
 
-        auto& sender_core_coords = shared_vars.sender_core_coords;
-        const auto& reader_kernel_id = shared_vars.reader_kernel_id;
-        const auto& writer_kernel_id = shared_vars.writer_kernel_id;
+    // Everything else in the runtime args (page counts, offsets, fabric connection trailers) derives
+    // from the tensor spec and socket topology, both of which are in the program hash — so on a cache
+    // hit only these two base addresses can have moved.
+    const uint32_t input_base_addr = input_tensor.buffer()->address();
+    const uint32_t socket_config_addr = mesh_socket.get_config_buffer()->address();
 
-        const auto& mesh_socket = operation_attributes.mesh_socket;
-        const auto& input_tensor = tensor_args;
-
-        for (const auto& sender_core_coord : sender_core_coords) {
-            auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id, sender_core_coord);
-            auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id, sender_core_coord);
-
-            reader_runtime_args[0] = input_tensor.buffer()->address();
-            writer_runtime_args[0] = mesh_socket.get_config_buffer()->address();
-        }
+    for (const auto& sender_core_coord :
+         collect_sender_connections(mesh_socket, input_tensor, target_device).core_coords) {
+        GetRuntimeArgs(program, reader_kernel_index, sender_core_coord)[0] = input_base_addr;
+        GetRuntimeArgs(program, writer_kernel_index, sender_core_coord)[0] = socket_config_addr;
     }
 }
 

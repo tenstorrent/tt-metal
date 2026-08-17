@@ -5,7 +5,10 @@
 #include "recv_direct_async_op_device_operation_types.hpp"
 #include "recv_direct_async_op_device_operation.hpp"
 
+#include <algorithm>
+
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/experimental/ccl/send_recv_async/send_recv_utils.hpp"
@@ -29,6 +32,18 @@ void RecvDirectAsyncDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         mesh_socket.get_config().socket_mem_config.socket_storage_type == tt::tt_metal::BufferType::L1,
         "recv_direct_async requires an L1 socket storage type");
+
+    // The program factory builds per mesh coordinate and emits an empty descriptor (no program) for
+    // devices that hold no receiver core. Catch a socket that misses the tensor's mesh entirely
+    // here, otherwise it would dispatch an empty workload instead of reporting the mismatch.
+    const ttnn::MeshCoordinateRange tensor_mesh_range(output_tensor.device()->shape());
+    const auto& connections = mesh_socket.get_config().socket_connection_config;
+    TT_FATAL(
+        std::any_of(
+            connections.begin(),
+            connections.end(),
+            [&](const auto& connection) { return tensor_mesh_range.contains(connection.receiver_core.device_coord); }),
+        "recv_direct_async: no socket receiver core lies on the output tensor's mesh");
 }
 
 RecvDirectAsyncDeviceOperation::spec_return_value_t RecvDirectAsyncDeviceOperation::compute_output_specs(

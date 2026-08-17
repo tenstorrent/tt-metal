@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -18,60 +19,69 @@
 #include "ttnn/operations/experimental/ccl/send_recv_async/send_recv_utils.hpp"
 
 using namespace tt::constants;
+using namespace tt::tt_metal;
 
 namespace ttnn::experimental::prim {
 
-RecvDirectAsyncMeshWorkloadFactory::cached_mesh_workload_t RecvDirectAsyncMeshWorkloadFactory::create_mesh_workload(
-    const RecvDirectAsyncParams& operation_attributes,
-    const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const Tensor& tensor_args,
-    std::vector<Tensor>& tensor_return_value) {
-    tt::tt_metal::distributed::MeshWorkload workload;
-    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
-    ttnn::MeshCoordinateRangeSet workload_coords =
-        ttnn::send_recv_utils::get_workload_coords<tt::tt_metal::distributed::SocketEndpoint::RECEIVER>(
-            tensor_coords, operation_attributes.mesh_socket);
-    for (const auto& coord : workload_coords.coords()) {
-        auto cached_program = create_at(operation_attributes, coord, tensor_args, tensor_return_value);
-        workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
-        shared_variables.emplace(ttnn::MeshCoordinateRange(coord), std::move(cached_program.shared_variables));
-    }
-    return cached_mesh_workload_t{std::move(workload), std::move(shared_variables)};
-}
+namespace {
 
-ttnn::device_operation::CachedProgram<RecvDirectAsyncMeshWorkloadFactory::shared_variables_t>
-RecvDirectAsyncMeshWorkloadFactory::create_at(
-    const RecvDirectAsyncParams& operation_attributes,
-    const ttnn::MeshCoordinate& mesh_coordinate,
-    const Tensor& tensor_args,
-    std::vector<Tensor>& /*tensor_return_value*/) {
-    auto mesh_socket = operation_attributes.mesh_socket;
-    const auto& output_tensor = tensor_args;
-    auto* mesh_device = output_tensor.device();
-    IDevice* target_device = mesh_device ? mesh_device->get_device(mesh_coordinate) : tensor_args.device();
-
-    tt::tt_metal::Program program{};
-    const auto* socket_mesh_device = mesh_socket.get_config_buffer()->device();
-    const auto& socket_connection_config = mesh_socket.get_config().socket_connection_config;
-
-    std::vector<CoreCoord> receiver_core_coords;
+// The socket connections whose receiver core sits on `target_device`, in socket-connection order.
+// create_descriptor and override_runtime_arguments both walk this so the per-core runtime-arg
+// ordering they assume stays identical.
+struct ReceiverConnections {
+    std::vector<CoreCoord> core_coords;
     std::vector<tt::tt_fabric::FabricNodeId> sender_fabric_node_ids;
     std::vector<tt::tt_fabric::FabricNodeId> receiver_fabric_node_ids;
+};
 
-    for (const auto& connection : socket_connection_config) {
+ReceiverConnections collect_receiver_connections(
+    const tt::tt_metal::distributed::MeshSocket& mesh_socket, const Tensor& output_tensor, IDevice* target_device) {
+    const auto* socket_mesh_device = mesh_socket.get_config_buffer()->device();
+    ReceiverConnections connections;
+    for (const auto& connection : mesh_socket.get_config().socket_connection_config) {
         if (socket_mesh_device->get_device(connection.receiver_core.device_coord)->id() == target_device->id()) {
-            receiver_core_coords.push_back(connection.receiver_core.core_coord);
-            receiver_fabric_node_ids.push_back(
+            connections.core_coords.push_back(connection.receiver_core.core_coord);
+            connections.receiver_fabric_node_ids.push_back(
                 output_tensor.device()->get_fabric_node_id(connection.receiver_core.device_coord));
-            sender_fabric_node_ids.push_back(mesh_socket.get_fabric_node_id(
+            connections.sender_fabric_node_ids.push_back(mesh_socket.get_fabric_node_id(
                 tt::tt_metal::distributed::SocketEndpoint::SENDER, connection.sender_core.device_coord));
         }
     }
-    uint32_t num_cores = receiver_core_coords.size();
+    return connections;
+}
+
+IDevice* resolve_target_device(const Tensor& tensor, const std::optional<ttnn::MeshCoordinate>& coord) {
     TT_FATAL(
-        num_cores > 0,
-        "recv_direct_async found no socket connections whose receiver core is on device {}",
-        target_device->id());
+        coord.has_value(), "recv_direct_async: the program factory requires a per-device mesh dispatch coordinate");
+    auto* mesh_device = tensor.device();
+    return mesh_device ? mesh_device->get_device(*coord) : tensor.device()->get_device(0);
+}
+
+// Descriptor kernel index, fixed by the push order at the end of create_descriptor.
+constexpr uint32_t handshake_kernel_index = 0;
+
+}  // namespace
+
+ProgramDescriptor RecvDirectAsyncProgramFactory::create_descriptor(
+    const RecvDirectAsyncParams& operation_attributes,
+    const Tensor& tensor_args,
+    std::vector<Tensor>& /*tensor_return_value*/,
+    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
+    const auto& mesh_socket = operation_attributes.mesh_socket;
+    const auto& output_tensor = tensor_args;
+    IDevice* target_device = resolve_target_device(output_tensor, mesh_dispatch_coordinate);
+
+    auto connections = collect_receiver_connections(mesh_socket, output_tensor, target_device);
+    const auto& receiver_core_coords = connections.core_coords;
+    const auto& sender_fabric_node_ids = connections.sender_fabric_node_ids;
+    const auto& receiver_fabric_node_ids = connections.receiver_fabric_node_ids;
+
+    uint32_t num_cores = receiver_core_coords.size();
+    // This device holds no receiver core of the socket, so it has no work. An empty descriptor tells
+    // the framework to skip this coordinate.
+    if (num_cores == 0) {
+        return ProgramDescriptor{};
+    }
 
     // cores must not exceed available fabric links
     {
@@ -98,35 +108,41 @@ RecvDirectAsyncMeshWorkloadFactory::create_at(
         receiver_core_range_set = receiver_core_range_set.merge(CoreRangeSet({CoreRange(core, core)}));
     }
 
+    ProgramDescriptor desc;
+
+    constexpr uint8_t packet_header_cb_index = tt::CBIndex::c_0;
     uint32_t packet_header_cb_num_pages = 2;
     uint32_t packet_header_cb_page_size = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = packet_header_cb_num_pages * packet_header_cb_page_size,
+        .core_ranges = receiver_core_range_set,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = packet_header_cb_index,
+            .data_format = tt::DataFormat::UInt32,
+            .page_size = packet_header_cb_page_size,
+        }}},
+    });
 
-    auto packet_header_cb_index = tt::CBIndex::c_0;
-
-    tt::tt_metal::CircularBufferConfig cb_packet_header_config =
-        tt::tt_metal::CircularBufferConfig(
-            packet_header_cb_num_pages * packet_header_cb_page_size, {{packet_header_cb_index, tt::DataFormat::UInt32}})
-            .set_page_size(packet_header_cb_index, packet_header_cb_page_size);
-
-    CreateCircularBuffer(program, receiver_core_range_set, cb_packet_header_config);
-
-    std::vector<uint32_t> handshake_compile_args = {
+    KernelDescriptor handshake;
+    handshake.kernel_source =
+        "ttnn/cpp/ttnn/operations/experimental/ccl/send_recv_async/recv_direct_async/device/kernels/"
+        "receiver_direct.cpp";
+    handshake.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    handshake.core_ranges = receiver_core_range_set;
+    handshake.compile_time_args = {
         packet_header_cb_index,  // fabric_packet_header_cb_id
         handshake_page_size,     // handshake_page_size (socket page size)
     };
-
-    auto handshake_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/send_recv_async/recv_direct_async/device/kernels/"
-        "receiver_direct.cpp",
-        receiver_core_range_set,
-        tt::tt_metal::WriterDataMovementConfig(handshake_compile_args));
+    handshake.config = WriterConfigDescriptor{};
 
     for (uint32_t core_idx = 0; core_idx < num_cores; ++core_idx) {
         const auto& receiver_core_coord = receiver_core_coords[core_idx];
         const auto& sender_fabric_node_id = sender_fabric_node_ids[core_idx];
         const auto& receiver_fabric_node_id = receiver_fabric_node_ids[core_idx];
 
+        // Both addresses are re-applied by override_runtime_arguments instead of being declared as
+        // Buffer* bindings: the socket config buffer is not tensor-backed, so the binding fast path
+        // would patch the output address and leave the socket address frozen at first miss.
         std::vector<uint32_t> handshake_rt_args = {
             mesh_socket.get_config_buffer()->address(),  // socket_config_addr
             output_tensor.buffer()->address(),           // output_base_addr
@@ -136,44 +152,42 @@ RecvDirectAsyncMeshWorkloadFactory::create_at(
         TT_FATAL(!link_indices.empty(), "No link indices found for receiver core");
 
         uint32_t selected_link_index = link_indices[core_idx % link_indices.size()];
-        tt::tt_fabric::append_fabric_connection_rt_args(
+        tt::tt_fabric::append_fabric_connection_rt_args<ProgramDescriptor>(
             receiver_fabric_node_id,
             sender_fabric_node_id,
             selected_link_index,
-            program,
+            desc,
             receiver_core_coord,
             handshake_rt_args);
 
-        tt::tt_metal::SetRuntimeArgs(program, handshake_kernel_id, receiver_core_coord, handshake_rt_args);
+        handshake.runtime_args.emplace_back(receiver_core_coord, std::move(handshake_rt_args));
     }
 
-    return {
-        std::move(program),
-        shared_variables_t{
-            .receiver_core_coords = receiver_core_coords,
-            .handshake_kernel_id = handshake_kernel_id,
-        }};
+    desc.kernels.push_back(std::move(handshake));
+
+    return desc;
 }
 
-void RecvDirectAsyncMeshWorkloadFactory::override_runtime_arguments(
-    cached_mesh_workload_t& cached_workload,
+void RecvDirectAsyncProgramFactory::override_runtime_arguments(
+    Program& program,
     const RecvDirectAsyncParams& operation_attributes,
     const Tensor& tensor_args,
-    [[maybe_unused]] std::vector<Tensor>& tensor_return_value) {
-    for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
-        auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);
+    std::vector<Tensor>& /*tensor_return_value*/,
+    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
+    const auto& mesh_socket = operation_attributes.mesh_socket;
+    const auto& output_tensor = tensor_args;
+    IDevice* target_device = resolve_target_device(output_tensor, mesh_dispatch_coordinate);
 
-        auto& receiver_core_coords = shared_vars.receiver_core_coords;
-        const auto& handshake_kernel_id = shared_vars.handshake_kernel_id;
+    // The rest of the runtime args (the fabric connection trailer) derives from the socket topology,
+    // which is in the program hash — so on a cache hit only these two base addresses can have moved.
+    const uint32_t socket_config_addr = mesh_socket.get_config_buffer()->address();
+    const uint32_t output_base_addr = output_tensor.buffer()->address();
 
-        const auto& mesh_socket = operation_attributes.mesh_socket;
-        const auto& output_tensor = tensor_args;
-
-        for (const auto& receiver_core_coord : receiver_core_coords) {
-            auto& handshake_runtime_args = GetRuntimeArgs(program, handshake_kernel_id, receiver_core_coord);
-            handshake_runtime_args[0] = mesh_socket.get_config_buffer()->address();
-            handshake_runtime_args[1] = output_tensor.buffer()->address();
-        }
+    for (const auto& receiver_core_coord :
+         collect_receiver_connections(mesh_socket, output_tensor, target_device).core_coords) {
+        auto& handshake_runtime_args = GetRuntimeArgs(program, handshake_kernel_index, receiver_core_coord);
+        handshake_runtime_args[0] = socket_config_addr;
+        handshake_runtime_args[1] = output_base_addr;
     }
 }
 
