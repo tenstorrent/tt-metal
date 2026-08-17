@@ -34,6 +34,52 @@ LLK_PERF_CHANGED=false
 LLK_CI_CHANGED=false
 WORKFLOWS_CHANGED=false
 
+# Workflow files transitively reachable from the CI gate entrypoints
+# (pr-gate.yaml / merge-gate.yaml) via local `uses: ./.github/workflows/...`
+# references. Only changes to these files can affect what the PR/merge gate
+# actually runs; the ~200 other workflow files are standalone automation
+# (schedule/dispatch-triggered metrics, cleanup, triage, ...) whose changes
+# cannot alter gate results. Computed dynamically so it never rots as
+# workflows are added/removed.
+GATE_REACHABLE_WORKFLOWS=""
+compute_gate_reachable_workflows() {
+    local entrypoints=(".github/workflows/pr-gate.yaml" ".github/workflows/merge-gate.yaml")
+    local queue=() visited=" " current refs ref
+    for current in "${entrypoints[@]}"; do
+        # If an entrypoint is missing, something is off; caller fails open.
+        if [[ ! -f "$current" ]]; then
+            return 1
+        fi
+        queue+=("$current")
+    done
+    while [[ ${#queue[@]} -gt 0 ]]; do
+        current="${queue[0]}"
+        queue=("${queue[@]:1}")
+        if [[ "$visited" == *" $current "* ]]; then
+            continue
+        fi
+        visited+="$current "
+        # Follow local reusable-workflow references (BFS). No match is fine.
+        refs=$(grep -oE 'uses:[[:space:]]*\./\.github/workflows/[^@[:space:]"'\'']+' "$current" | sed 's|.*\./||') || true
+        for ref in $refs; do
+            if [[ -f "$ref" && "$visited" != *" $ref "* ]]; then
+                queue+=("$ref")
+            fi
+        done
+    done
+    GATE_REACHABLE_WORKFLOWS="$visited"
+}
+if ! compute_gate_reachable_workflows; then
+    # Fail open: with an empty set, is_gate_reachable_workflow treats every
+    # workflow as gate-relevant (old behavior). Never silently under-scan.
+    GATE_REACHABLE_WORKFLOWS=""
+fi
+is_gate_reachable_workflow() {
+    if [[ -z "$GATE_REACHABLE_WORKFLOWS" ]]; then
+        return 0
+    fi
+    [[ "$GATE_REACHABLE_WORKFLOWS" == *" $1 "* ]]
+}
 
 while IFS= read -r FILE; do
     case "$FILE" in
@@ -146,12 +192,19 @@ while IFS= read -r FILE; do
             BUILD_WORKFLOWS_CHANGED=true
             ANY_CODE_CHANGED=true
             ;;
-        # Any other workflow change runs the standard PR gate. More specific workflow
-        # patterns above (e.g. llk-*.yaml, build-artifact.yaml) match first and keep
-        # their targeted behavior; this catch-all ensures a workflow-only PR never
-        # silently skips CI. Fanned out to the full gate below (same as submodule).
+        # Any other workflow change that can affect the PR/merge gate runs the
+        # standard PR gate. More specific workflow patterns above (e.g.
+        # llk-*.yaml, build-artifact.yaml) match first and keep their targeted
+        # behavior; this catch-all ensures a gate-relevant workflow-only PR
+        # never silently skips CI. Fanned out to the full gate below (same as
+        # submodule). Workflows NOT reachable from the gate entrypoints are
+        # standalone (own schedule:/workflow_dispatch: triggers, never
+        # uses:-referenced by the gate) — changing them cannot affect gate
+        # results, so they set no flags, like any other unrelated file.
         .github/workflows/*.yaml|.github/workflows/*.yml)
-            WORKFLOWS_CHANGED=true
+            if is_gate_reachable_workflow "$FILE"; then
+                WORKFLOWS_CHANGED=true
+            fi
             ;;
     esac
 done <<< "$CHANGED_FILES"
