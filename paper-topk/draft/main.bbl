@@ -129,12 +129,6 @@ Z.~Jia, B.~Tillman, M.~Maggioni, and D.~P. Scarpazza, ``Dissecting the
   {Graphcore} {IPU} architecture via microbenchmarking,'' Citadel, Tech. Rep.,
   2019, arXiv:1912.03413.
 
-\bibitem{blackholemicrobench2025}
-``Dissecting the {Tenstorrent} {Blackhole} architecture via
-  microbenchmarking,'' Informal technical report, Tech. Rep., 2025, uNVERIFIED:
-  formerly at asplos.dev (404 as of 2026-08-16); locate archived copy before
-  submission.
-
 \bibitem{ttisadocs2025}
 {Tenstorrent}, ``Tensix {ISA} documentation ({Blackhole} and {Wormhole}),''
   Vendor ISA documentation, 2025, \texttt{Dst}, \texttt{SFPGT},
@@ -239,6 +233,12 @@ N.~Brown, J.~Davies, and F.~Le~Clair, ``Exploring fast {Fourier} transforms on
 Amati \emph{et~al.}, ``Accelerating gravitational n-body simulations using the
   {RISC-V}-based {Tenstorrent} {Wormhole},'' in \emph{Proc. SC Workshops},
   2025, arXiv:2605.02744 / 2509.19294. UNVERIFIED: verify full author list.
+
+\bibitem{blackholemicrobench2025}
+``Dissecting the {Tenstorrent} {Blackhole} architecture via
+  microbenchmarking,'' Informal technical report, Tech. Rep., 2025, uNVERIFIED:
+  formerly at asplos.dev (404 as of 2026-08-16); locate archived copy before
+  submission.
 
 \bibitem{occamy2025}
 ``Occamy: A 432-core dual-chiplet dual-{HBM2E} 768-{DP-GFLOP/s} {RISC-V} system

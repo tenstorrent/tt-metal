@@ -11,25 +11,23 @@
 \section{Related Work}
 \label{sec:related}
 
-This section carries the deltas by contribution; inline citations
-appeared in context.
+Deltas by contribution; inline citations appeared in context.
 
 \paragraph{Mesh selection theory}
-Krizanc and Narayanan solved rank selection on mesh-connected processor
-arrays three decades ago: optimal algorithms on the abstract $n \times n$
-mesh~\cite{krizanc1992optimal}, a deterministic $1.45n$-step bound against
-the $2n+o(n)$ sorting bound~\cite{krizanc1993fast}, and the multi-packet
-$N/p$-per-PE regime our $\lceil C/P\rceil$ leaf term
+Krizanc and Narayanan solved rank selection on abstract meshes three
+decades ago: optimal $n \times n$-mesh
+algorithms~\cite{krizanc1992optimal}, a deterministic $1.45n$-step
+bound (sorting needs $2n+o(n)$)~\cite{krizanc1993fast}, and the
+multi-packet regime our $\lceil C/P\rceil$ leaf term
 inhabits~\cite{multipacket1992}. The theory assumed unit-cost neighbor
-communication and returned the $k$-th element alone: no full top-$k$ set
-with values and indices, no real NoC costs, no atomics-free rendezvous,
-no measurement. We therefore claim the first \emph{measured,
-cost-modeled} full top-$k$ on commercial NoC-mesh silicon, with
-\costmodel read as the mesh-theory bound instantiated with measured
-constants (Section~\ref{sec:system}). Fagin's threshold algorithm and its
-distributed descendants~\cite{fagin2003optimal,cao2004tput,michel2005klee}
-merge per-node top-$k$ lists under running thresholds --- the same
-tournament idea at datacenter round-trip costs.
+communication and returned the $k$-th element alone: no
+values-and-indices top-$k$ set, no real NoC costs, no measurement. We therefore claim the first \emph{measured,
+cost-modeled} full top-$k$ on commercial NoC-mesh silicon
+(Section~\ref{sec:system} instantiates the mesh bound with measured
+constants). Fagin-style distributed threshold
+algorithms~\cite{fagin2003optimal,cao2004tput,michel2005klee} merge
+per-node top-$k$ lists --- the same tournament at datacenter round-trip
+costs.
 
 \paragraph{GPU selection}
 The GPU lineage runs from Alabi et al.~\cite{alabi2012kselection} through
@@ -51,13 +49,12 @@ it reports 1.88$\times$ over TensorRT-LLM's radix select on NVIDIA
 Blackwell~\cite{gvr2026}. Chunk-skip (Section~\ref{sec:system}) skips at
 chunk granularity, is sound by construction --- no verification pass
 exists to run --- and its distribution-free law (Eq.~\ref{eq:skiplaw})
-yields a compile-time $K/4$ gate and a pre-build forecast. SpAtten's
+yields the compile-time gate and pre-build forecast. SpAtten's
 quick-select engine~\cite{wang2021spatten} and Focus's streaming
-concentrator~\cite{focus2025} are hardware threshold-engine cousins. The
-rank statistics are textbook --- a running top-$k$ over a random-order
-stream updates $k\ln(n/k)+O(k)$ times~\cite{knuth1998taocp3} --- but we
-find no published chunked corollary, compile-time gate, or soundness
-proof for skipping inside a bitonic cascade.
+concentrator~\cite{focus2025} are hardware threshold-engine cousins. The rank statistics are
+textbook~\cite{knuth1998taocp3}; we find no published chunked
+corollary, compile-time gate, or soundness proof for skipping inside a
+bitonic cascade.
 
 \paragraph{Accelerator characterization}
 Published Tensix studies characterize performance --- stencils on
@@ -65,23 +62,18 @@ Grayskull~\cite{brown2024grayskull}, matmul~\cite{matmul2025tenstorrent};
 FFT~\cite{brown2025fft}, stencils~\cite{stencil2026wormhole}, numerical
 kernels~\cite{numkernels2026wormhole}, operator
 fusion~\cite{fusion2026tensix}, and N-body~\cite{amati2025nbody} on
-Wormhole. An informal Blackhole microbenchmark report
-circulated in 2025, but its link is dead and no archive
-exists~\cite{blackholemicrobench2025} --- itself an argument for
+Wormhole. An informal 2025 Blackhole microbenchmark report has a dead link and
+no archive~\cite{blackholemicrobench2025} --- itself an argument for
 archival characterization. None covers datapath numerics or selection
-primitives. Section~\ref{sec:characterization}'s delta over the software
-float re-encodings~\cite{herf2001radix,merrill2011radix} and
-IEEE~754-2019 \texttt{totalOrder}~\cite{ieee754-2019}: the Tensix
-datapath imposes the total order and the bf16 canonicalization in
-\emph{hardware}, not software.
+primitives; Section~\ref{sec:characterization} owns that delta.
 
 \paragraph{The class-wide gap}
 We find no sorting or selection publication for Cerebras WSE, Groq,
 SambaNova, Occamy~\cite{occamy2025}, Manticore~\cite{zaruba2021manticore},
 or Esperanto silicon; Graphcore ships \texttt{popops::TopK} with no
-published algorithm or performance study~\cite{poplar_topk}. This paper
-prices the ingredients any member of the dataflow-mesh class must pay ---
-but fills the gap for only one member.
+published algorithm or performance study~\cite{poplar_topk}. This paper prices the
+ingredients the dataflow-mesh class must pay --- but fills the gap for
+one member.
 
 \section{Methodology: An Agentic Design-Space Campaign}
 \label{sec:methodology}
@@ -90,9 +82,8 @@ An LLM-agent campaign with human review produced these measurements.
 Prior agentic kernel work
 optimizes \emph{given} kernels against benchmark
 suites~\cite{ouyang2025kernelbench,sakana2025aicuda,accelopt2025,kforge2025,peak2025};
-this campaign ran a design-space study with measured no-gos on
-novel silicon --- we claim no first-ness for the approach, only its
-record.
+this campaign ran a design-space study with measured no-gos on novel
+silicon; we claim no first-ness, only the record.
 
 % ---- Optional Tab M1 (gate ledger). Cut per BUDGET.md overflow rule 3;
 % re-enable if global assembly finds the column.
@@ -114,57 +105,56 @@ record.
 % \end{table}
 
 The campaign ran as research~$\rightarrow$~implement~$\rightarrow$~validate
-gates with stop rules registered before any measurement --- a contract
-gate (semantics and harness pinned first), a materialization gate (no
-complete emit path with headroom $\Rightarrow$ stop selector work), and
-an engine shootout; the radix track
+gates with pre-registered stop rules --- a contract gate (semantics
+and harness pinned first), a materialization gate (no emit path with
+headroom $\Rightarrow$ stop), and an engine shootout; the radix track
 died by its own rule (Section~\ref{sec:dspace-closure}).
 
 The most transferable instrument was forecast-before-build
-(Section~\ref{sec:forecast}): a calibrated host simulation no-go'd the
-column-parallel chunk-skip variant --- never built --- and redirected
-the build to the row-parallel variant that measured $-$45.1\%
-(1.82$\times$) on silicon (\S\ref{sec:eval-skip}).
+(Section~\ref{sec:forecast}): the no-go'd variant was never built; the
+redirect measured 1.82$\times$ (\S\ref{sec:eval-skip}).
 
-Agent-generated numbers earn trust only under adversarial audit: a
-multi-agent audit re-verified the working notes' citations
+Agent-generated numbers earn trust only under adversarial audit: one
+re-verified the working notes' citations
 ($\approx$55 of 60 exact, none fabricated), re-adjudicated disputed
 figures on fresh silicon, and caught a
-faster-and-wrong kernel class with schedule-mutation controls --- the AI
-CUDA Engineer's reward-hacking failure mode~\cite{sakana2025aicuda}. Correctness gates make the audit decidable:
+faster-and-wrong kernel class with schedule-mutation controls --- the
+reward-hacking failure mode~\cite{sakana2025aicuda}. Correctness gates
+make the audit decidable:
 every cell fails closed against a bit-exact golden
-(\S\ref{sec:eval-method}), so wrong-but-close kernels cannot survive. The
+(\S\ref{sec:eval-method}). The
 campaign also surfaced, and reported upstream, two vendor perf-harness
-bugs: a stimuli configuration never written, and a semaphore leak that
-deadlocks later tests on an un-reset device.
+bugs (a stimuli configuration never written; a semaphore leak that
+deadlocks later tests).
 
 The process also failed in ordinary ways: the a-priori Dst-layout
 derivation was wrong until calibration dumps replaced it
 (\S\ref{sec:char-dst}), and one working-note figure was invented
-outright until the audit deleted it; both are logged in the released
-notes, and neither reached a measured claim.
+outright until the audit deleted it; both are logged; neither reached a
+measured claim.
 
 \section{Conclusion}
 \label{sec:conclusion}
 
-We measured exact top-$k$ across its design space on a \bh \pca and closed
-a four-orders-of-magnitude gap: 631.5\,ms $\to$ 63.4\us{}
-(9{,}956$\times$) at the anchor shape, 23.3\us{} on 104 cores at the
-1M-context shape under the validated cost model, 1.82$\times$ more from
-sound chunk-skipping in the forecast-selected row-parallel
-regime. The design-space answer: on a NoC mesh without scatter, the
-winning economics are parallelized comparison networks (A) plus sound
-rank-statistic skipping --- the weak form of (D) --- which is
-Floyd--Rivest's lesson~\cite{floydrivest1975}, not radix's.
+We measured exact top-$k$ across its design space on a \bh \pca and
+closed a four-orders-of-magnitude gap: 631.5\,ms $\to$ 63.4\us{}
+(9{,}956$\times$) at the anchor shape, 23.3\us{} at the 1M-context
+shape, 1.82$\times$ more from chunk-skipping in the forecast-selected
+row-parallel regime --- attributed honestly in
+\S\ref{sec:eval-attribution}: routing supplies the orders of
+magnitude; the algorithm, 1.4$\times$ over the strongest eligible
+baseline plus its tree, placement, and skip terms. The design-space answer: on a NoC mesh
+without scatter, the winning economics are parallelized comparison
+networks (A) plus sound rank-statistic skipping --- the weak form of
+(D) --- which is Floyd--Rivest's lesson~\cite{floydrivest1975}, not
+radix's.
 
-The negative result ships with its own expiry conditions --- the counting
+The negative result ships with expiry conditions --- the counting
 family (B) reopens if any one holds: (1)~a device-side compaction or
 gather primitive appears, or a composed producer$+$consumer
 compressed-stream benchmark proves $\geq 2\times$ headroom at $k{=}2048$,
-$N \geq 262{,}144$ --- restoring true (D); (2)~$k$ outgrows the
-2048-element LLK ceiling, ending the additivity of counting passes;
+$N \geq 262{,}144$; (2)~$k$ outgrows the
+2048-element LLK ceiling, ending counting-pass additivity;
 (3)~the consumer becomes a sampler that never materializes the top-$k$
-set; (4)~$N$ grows until full-data passes (C) dominate. Future work
-follows the open gaps: a Wormhole port, energy alongside
-time, condition~(1)'s composed compressed-stream benchmark, and
-end-to-end tokens/s once call sites drop the disqualifying arguments.
+set; (4)~$N$ grows until full-data passes (C) dominate. Future work: a Wormhole port, energy,
+condition~(1)'s benchmark, and tokens/s at the relaxed call sites.

@@ -2,19 +2,17 @@
 \section{Characterizing the Tensix Datapath for Selection}
 \label{sec:characterization}
 
-Selection exercises corners of a datapath that matmul studies never touch:
-NaN ordering, signed zeros, compare-exchange operand routing, and the cost of
+Selection exercises corners of a datapath that matmul studies never
+touch: NaN ordering, signed zeros, operand routing, and the cost of
 getting one count off the SIMD unit. This section banks those facts as an
 archival reference in the
 microbenchmark-dissection genre of Jia et al.~\cite{jia2019ipu}; no prior
-Tensix study, including the general \bh microbenchmark
-report~\cite{blackholemicrobench2025}, reports datapath numerics or
-selection-primitive costs (\S\ref{sec:related}).
+Tensix study reports datapath numerics or selection-primitive costs
+(\S\ref{sec:related}).
 Table~\ref{tab:characterization} anchors the section. Every cycle
 figure is a two-point slope measurement with a $2.000\times$ control
-tripwire (\S\ref{sec:eval-method}), quoted at the
-precision the harness earned; the section stays in cycles, so no busy-clock
-conversion caveat applies.
+tripwire (\S\ref{sec:eval-method}); the section stays in cycles, so no
+busy-clock conversion caveat applies.
 
 \begin{table*}[t]
 \centering
@@ -103,9 +101,7 @@ before any operation touches them --- Table~\ref{tab:characterization},
 row~1, gives the full rules --- while index positions survive and fp32
 passes bit-exactly. Vendor ISA documentation corroborates
 the Dst behavior~\cite{ttisadocs2025}. This rule is the precondition for
-every correctness gate in the paper (\S\ref{sec:bg-problem}): every
-reference model in \S\ref{sec:evaluation} canonicalizes before
-comparing bit-exactly.
+every correctness gate in the paper (\S\ref{sec:bg-problem}).
 
 A failing differential test on $\pm$NaN specials exposed the second law: the
 comparators implement the sign-magnitude total order of
@@ -115,8 +111,7 @@ in the packer's threshold unit, which passes $+$NaN and zeroes $-$NaN. GPU
 radix sorts build this order in software via the float$\to$orderable-uint
 bit-flip trick~\cite{herf2001radix,merrill2011radix}; IEEE~754-2019 calls
 it \texttt{totalOrder}~\cite{ieee754-2019}; on Tensix the \emph{hardware
-datapath} imposes it, so filtering, bucketing, and the final compare agree
-on one order with no key transform on the critical path.
+datapath} imposes it, with no key transform on the critical path.
 
 \subsection{Packer primitives}
 \label{sec:char-packer}
@@ -136,14 +131,14 @@ SFPU filter as the ISA floor for signed data.
 
 Reading a running threshold out of the engine's Dst-resident window
 (\S\ref{sec:system}) requires knowing where rank $r$ lives. Full-region Dst
-dumps against distinct-monotone input, checked word-for-word against torch
-rank order at $M{=}512/1024/2048$, fix the law
+dumps against distinct-monotone input, checked word-for-word at
+$M{=}512/1024/2048$, fix the law
 (Table~\ref{tab:characterization}): column-major over $M/16$ physical
 rows. An a-priori derivation of this layout was wrong; calibration replaced
 it. A decision tracer that accumulated $-\infty$ on first bring-up fixed
 the companion fact: \texttt{SFPSWAP} with mod1${=}$1 routes max to VC ---
-the in-tree comment reads backwards; the vendor functional model agrees
-with the measurement~\cite{ttisadocs2025}. These two facts make
+the in-tree comment reads backwards; the vendor functional model
+agrees~\cite{ttisadocs2025}. These two facts make
 \S\ref{sec:system}'s chunk-skip rendezvous implementable.
 
 \subsection{Measured floors and the co-issue law}
@@ -151,9 +146,9 @@ with the measurement~\cite{ttisadocs2025}. These two facts make
 
 Four floors bound data-dependent designs
 (Table~\ref{tab:characterization}, rows 8--9): counting at 2.0000
-cyc/vector exactly; the fp32 unpack-to-dest floor at 3.938 cyc/vector ---
-a different quantity from the filter bench's 3.855 local floor, kept
-apart deliberately; a rendezvous at 81/101/98 cyc
+cyc/vector exactly; the fp32 unpack-to-dest floor at 3.938 cyc/vector
+(distinct from the filter bench's 3.855 local floor); a rendezvous at
+81/101/98 cyc
 (\texttt{tensix\_sync} / semaphore / Dst-sentinel poll), provided the
 SFPU folds lanes first, since raw-lane reads cost 756--773 cyc.
 \S\ref{sec:design-space} prices counting designs with exactly these
@@ -162,6 +157,6 @@ Load$+$Simple$+$\{MAD$\,|\,$Store\} maps onto three sub-units that co-issue
 for free (1.000--1.003 cyc/vector), but reductions need $\geq$2 issues
 because \texttt{SFPIADD} is not macro-schedulable --- hence 2 cyc/vector is
 the counting ceiling. Applied constructively, the same law produced the
-shipped micro-op wins on the incumbent: merge $1.195/1.221/1.235\times$ and
-step $1.053/1.074/1.090\times$ at $M{=}512/1024/2048$, from paired
-MATH\_ISOLATE arms whose control read $2.000$ on every quoted run.
+shipped micro-op wins: merge $1.195/1.221/1.235\times$ and step
+$1.053/1.074/1.090\times$ at $M{=}512/1024/2048$ (paired MATH\_ISOLATE
+arms, control $2.000$ on every run).

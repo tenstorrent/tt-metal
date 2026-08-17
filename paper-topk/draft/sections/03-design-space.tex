@@ -11,9 +11,9 @@ GPU radix select wins because its hardware sells wide exact counting and
 cheap
 materialization~\cite{alabi2012kselection,gaihre2021drtopk,zhang2023paralleltopk,li2024radik};
 \bh quotes different prices. This section decomposes exact selection into
-three orthogonal questions, prices each ingredient on silicon, and locates
-the ingredient that kills the family --- materialization, not counting and
-not synchronization. The (A)--(F) vocabulary defined here carries through
+three orthogonal questions, prices each ingredient on silicon, and
+locates the one that kills the family: materialization, not counting or
+synchronization. The (A)--(F) vocabulary defined here carries through
 Sections~\ref{sec:system}--\ref{sec:conclusion}.
 
 \subsection{Three Questions, Six Answers}
@@ -39,62 +39,22 @@ scatter compaction, grid-sync decisions
 the shipping \bh engine answers (A)+(C)+(E) --- $\approx$2 cycles/element
 on every pass, zero decisions. Can \bh move to (B)?
 
-\begin{table}[t]
-\caption{GPU radix-select ingredients, priced on \bh.}
-\label{tab:ingredients}
-\centering
-\scriptsize
-\setlength{\tabcolsep}{3pt}
-\begin{tabular}{@{}p{1.3cm}p{1.1cm}p{3.9cm}p{1.5cm}@{}}
-\toprule
-\textbf{Ingredient} & \textbf{GPU form} & \textbf{\bh, measured} & \textbf{Verdict} \\
-\midrule
-Wide exact counting (Q1-B) &
-8--12 bits/pass, shared-mem.\ atomics~\cite{alabi2012kselection,li2024radik} &
-SFPU: 1\,bit @ 2.0 cyc/vec, 3\,bits @ 3.0; additive on the 3.94 cyc/vec
-unpack floor ($+$2.42/$+$4.52 in-stream; 2.44/4.53 isolated)
-[\texttt{cgtceq}]. RISC: 256-bin histogram
-7.56--7.90 cyc/elem vs.\ 3.02 load floor; 8.23 with 4-way sub-histograms;
-L1-resident 15.5--19.9 [\texttt{risc-scan}] &
-narrow (SFPU) or slow (RISC) --- degenerates to bisection \\
-\addlinespace
-Cheap decisions (Q3-F) &
-grid sync / fused kernels &
-81 cyc/decision best (sync $+$ fold $+$ MMIO read); semaphore 101, sentinel
-98; no fold 756--773; MMIO $\approx$10 cyc/word [\texttt{cgtceq}] &
-affordable --- not the blocker \\
-\addlinespace
-\hspace{0pt}Materiali\-zation (Q2-D) &
-scatter / compaction &
-dense RISC emit 12.97--17.81 cyc/elem vs.\ a $\approx$0.5 bar; SFPU has no
-scatter; packer compressed stream 0.63 cyc/orig-elem, consumer-only
-[\texttt{risc-scan}] &
-the load-bearing gap \\
-\addlinespace
-A slow incumbent &
-\texttt{thrust::} \texttt{sort} &
-34.4\us (k=2048, N=65{,}536); 23.3\us (k=512, N=262{,}144) after this
-study's own fixes [\texttt{sweep}] &
-bar moved $-$15--27\% during the study \\
-\bottomrule
-\end{tabular}
-\end{table}
-
 \subsection{The Ingredients, Measured}
 \label{sec:dspace-ingredients}
 
-Table~\ref{tab:ingredients} prices the four ingredients, each cell tagged
-with its benchmark; all costs are slope-measured cycles,
-gated bit-exactly against host goldens (\S\ref{sec:eval-method}).
+We price the ingredients one at a time; all costs are slope-measured
+cycles, gated bit-exactly against host goldens (\S\ref{sec:eval-method}).
 
 \textbf{Wide exact counting (Q1-B).}
 The 32-lane SFPU counts exactly but narrowly: one predicate bit per pass
 at 2.0000 cycles/vector, three bits at 3.0, riding additively on the 3.94
-cyc/vec unpack floor. A GPU pass
+cyc/vec unpack floor ($+$2.42/$+$4.52 in-stream; 2.44/4.53 isolated). A
+GPU pass
 resolves 8--12 bits~\cite{alabi2012kselection,li2024radik}; an SFPU pass
 resolves 1--3, so a radix engine on this datapath collapses into a
 bisection. The scalar cores are no rescue: a 256-bin RISC histogram runs
-7.56--7.90 cycles/element against a 3.02 pure-load floor.
+7.56--7.90 cycles/element against a 3.02 pure-load floor (8.23 with
+4-way sub-histograms; 15.5--19.9 L1-resident).
 
 \textbf{Cheap decisions (Q3-F).}
 Decisions measure 81 cycles each at best: a \texttt{tensix\_sync}, a
@@ -129,9 +89,9 @@ on the key space, monotone because sign-magnitude keys order the probes
 random, clustered, and all-equal distributions across seeds, a
 $K\in\{31,32,33\}$ straddle, ties, and $\pm 0$/Inf/NaN/denormal specials
 --- bisection to the exact $K$-th threshold costs a median of 14 decisions
-and 2{,}313 cycles per 1{,}024-element row, worst case 17
-decisions on clustered, all-equal, and tied inputs, exactly where
-key-space bisection predicts; the certification invariant
+and 2{,}313 cycles per 1{,}024-element row, worst case 17 on the
+clustered and tied inputs key-space bisection predicts; the
+certification invariant
 $C_{\mathrm{gt}} < K \le C_{\mathrm{gt}}{+}C_{\mathrm{eq}}$ held
 field-exactly on every row. Per decision, $\approx$165 cycles --- one
 count pass ($\approx$64--70), one rendezvous (81), loop

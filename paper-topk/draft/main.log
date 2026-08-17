@@ -1,4 +1,4 @@
-This is pdfTeX, Version 3.141592653-2.6-1.40.25 (TeX Live 2023/Debian) (preloaded format=pdflatex 2026.7.11)  16 AUG 2026 22:02
+This is pdfTeX, Version 3.141592653-2.6-1.40.25 (TeX Live 2023/Debian) (preloaded format=pdflatex 2026.7.11)  17 AUG 2026 08:27
 entering extended mode
  restricted \write18 enabled.
  %&-line parsing enabled.
@@ -238,11 +238,48 @@ Package: booktabs 2020/01/12 v1.61803398 Publication quality tables
 \@lastruleclass=\count283
 \@thisrulewidth=\dimen187
 )
-(/usr/share/texlive/texmf-dist/tex/latex/multirow/multirow.sty
+(/usr/share/texlive/texmf-dist/tex/latex/algorithms/algorithm.sty
+Package: algorithm 2009/08/24 v0.1 Document Style `algorithm' - floating enviro
+nment
+
+(/usr/share/texlive/texmf-dist/tex/latex/float/float.sty
+Package: float 2001/11/08 v1.3d Float enhancements (AL)
+\c@float@type=\count284
+\float@exts=\toks24
+\float@box=\box55
+\@float@everytoks=\toks25
+\@floatcapt=\box56
+)
+(/usr/share/texlive/texmf-dist/tex/latex/base/ifthen.sty
+Package: ifthen 2022/04/13 v1.1d Standard LaTeX ifthen package (DPC)
+)
+\@float@every@algorithm=\toks26
+\c@algorithm=\count285
+)
+(/usr/share/texlive/texmf-dist/tex/latex/algorithmicx/algpseudocode.sty
+Package: algpseudocode
+
+(/usr/share/texlive/texmf-dist/tex/latex/algorithmicx/algorithmicx.sty
+Package: algorithmicx 2005/04/27 v1.2 Algorithmicx
+
+Document Style algorithmicx 1.2 - a greatly improved `algorithmic' style
+\c@ALG@line=\count286
+\c@ALG@rem=\count287
+\c@ALG@nested=\count288
+\ALG@tlm=\skip54
+\ALG@thistlm=\skip55
+\c@ALG@Lnr=\count289
+\c@ALG@blocknr=\count290
+\c@ALG@storecount=\count291
+\c@ALG@tmpcounter=\count292
+\ALG@tmplength=\skip56
+)
+Document Style - pseudocode environments for use with the `algorithmicx' style
+) (/usr/share/texlive/texmf-dist/tex/latex/multirow/multirow.sty
 Package: multirow 2021/03/15 v2.8 Span multiple rows of a table
-\multirow@colwidth=\skip54
-\multirow@cntb=\count284
-\multirow@dima=\skip55
+\multirow@colwidth=\skip57
+\multirow@cntb=\count293
+\multirow@dima=\skip58
 \bigstrutjot=\dimen188
 )
 (/usr/share/texlive/texmf-dist/tex/latex/tools/xspace.sty
@@ -272,22 +309,22 @@ e \nobreakspace #2}\ifdim \wd \@tempboxa >\hsize \setbox \@tempboxa \hbox {\nor
 malfont \footnotesize {#1.}\nobreakspace \nobreakspace }\parbox [t]{\hsize }{\n
 ormalfont \footnotesize \noindent \unhbox \@tempboxa #2}\else \ifCLASSOPTIONcon
 ference \hbox to\hsize {\normalfont \footnotesize \hfil \box \@tempboxa \hfil }
-\else \hbox to\hsize {\normalfont \footnotesize \box \@tempboxa \hfil }\fi \fi 
+\else \hbox to\hsize {\normalfont \footnotesize \box \@tempboxa \hfil }\fi \fi
 \fi  on input line 1175.
 )
-\c@KVtest=\count285
-\sf@farskip=\skip56
+\c@KVtest=\count294
+\sf@farskip=\skip59
 \sf@captopadj=\dimen197
-\sf@capskip=\skip57
-\sf@nearskip=\skip58
-\c@subfigure=\count286
-\c@subfigure@save=\count287
-\c@lofdepth=\count288
-\c@subtable=\count289
-\c@subtable@save=\count290
-\c@lotdepth=\count291
-\sf@top=\skip59
-\sf@bottom=\skip60
+\sf@capskip=\skip60
+\sf@nearskip=\skip61
+\c@subfigure=\count295
+\c@subfigure@save=\count296
+\c@lofdepth=\count297
+\c@subtable=\count298
+\c@subtable@save=\count299
+\c@lotdepth=\count300
+\sf@top=\skip62
+\sf@bottom=\skip63
 )
 (/usr/share/texlive/texmf-dist/tex/latex/xcolor/xcolor.sty
 Package: xcolor 2023/11/15 v3.01 LaTeX color extensions (UK)
@@ -359,15 +396,15 @@ Package: gettitlestring 2019/12/15 v1.6 Cleanup title references (HO)
 (/usr/share/texlive/texmf-dist/tex/latex/kvoptions/kvoptions.sty
 Package: kvoptions 2022-06-15 v3.15 Key value format for package options (HO)
 ))
-\c@section@level=\count292
+\c@section@level=\count301
 )
 (/usr/share/texlive/texmf-dist/tex/latex/etoolbox/etoolbox.sty
 Package: etoolbox 2020/10/05 v2.5k e-TeX tools for LaTeX (JAW)
-\etb@tempcnta=\count293
+\etb@tempcnta=\count302
 )
 \@linkdim=\dimen199
-\Hy@linkcounter=\count294
-\Hy@pagecounter=\count295
+\Hy@linkcounter=\count303
+\Hy@pagecounter=\count304
 
 (/usr/share/texlive/texmf-dist/tex/latex/hyperref/pd1enc.def
 File: pd1enc.def 2024-01-20 v7.01h Hyperref: PDFDocEncoding definition (HO)
@@ -377,7 +414,7 @@ Now handling font encoding PD1 ...
 (/usr/share/texlive/texmf-dist/tex/generic/intcalc/intcalc.sty
 Package: intcalc 2019/12/15 v1.3 Expandable calculations with integers (HO)
 )
-\Hy@SavedSpaceFactor=\count296
+\Hy@SavedSpaceFactor=\count305
 
 (/usr/share/texlive/texmf-dist/tex/latex/hyperref/puenc.def
 File: puenc.def 2024-01-20 v7.01h Hyperref: PDF Unicode definition (HO)
@@ -391,7 +428,7 @@ Package hyperref Info: Plain pages OFF on input line 4194.
 Package hyperref Info: Backreferencing OFF on input line 4199.
 Package hyperref Info: Implicit mode ON; LaTeX internals redefined.
 Package hyperref Info: Bookmarks ON on input line 4446.
-\c@Hy@tempcnt=\count297
+\c@Hy@tempcnt=\count306
 
 (/usr/share/texlive/texmf-dist/tex/latex/url/url.sty
 \Urlmuskip=\muskip17
@@ -407,7 +444,7 @@ Package: bitset 2019/12/09 v1.3 Handle bit-vector datatype (HO)
 Package: bigintcalc 2019/12/15 v1.5 Expandable calculations on big integers (HO
 )
 ))
-\Fld@menulength=\count298
+\Fld@menulength=\count307
 \Field@Width=\dimen257
 \Fld@charsize=\dimen258
 Package hyperref Info: Hyper figures OFF on input line 6063.
@@ -422,9 +459,9 @@ Package hyperref Info: PDF/A mode OFF on input line 6093.
 Package: atbegshi-ltx 2021/01/10 v1.0c Emulation of the original atbegshi
 package with kernel methods
 )
-\Hy@abspage=\count299
-\c@Item=\count300
-\c@Hfootnote=\count301
+\Hy@abspage=\count308
+\c@Item=\count309
+\c@Hfootnote=\count310
 )
 Package hyperref Info: Driver (autodetected): hpdftex.
 
@@ -436,8 +473,8 @@ Package: atveryend-ltx 2020/08/19 v1.0a Emulation of the original atveryend pac
 kage
 with kernel methods
 )
-\Fld@listcount=\count302
-\c@bookmark@seq@number=\count303
+\Fld@listcount=\count311
+\c@bookmark@seq@number=\count312
 
 (/usr/share/texlive/texmf-dist/tex/latex/rerunfilecheck/rerunfilecheck.sty
 Package: rerunfilecheck 2022-07-10 v1.10 Rerun checks for auxiliary files (HO)
@@ -448,49 +485,49 @@ Package: uniquecounter 2019/12/15 v1.4 Provide unlimited unique counter (HO)
 Package uniquecounter Info: New unique counter `rerunfilecheck' on input line 2
 85.
 )
-\Hy@SectionHShift=\skip61
+\Hy@SectionHShift=\skip64
 )
 (/usr/share/texlive/texmf-dist/tex/latex/l3backend/l3backend-pdftex.def
 File: l3backend-pdftex.def 2024-01-04 L3 backend support: PDF output (pdfTeX)
-\l__color_backend_stack_int=\count304
-\l__pdf_internal_box=\box55
+\l__color_backend_stack_int=\count313
+\l__pdf_internal_box=\box57
 )
 (./main.aux)
 \openout1 = `main.aux'.
 
-LaTeX Font Info:    Checking defaults for OML/cmm/m/it on input line 51.
-LaTeX Font Info:    ... okay on input line 51.
-LaTeX Font Info:    Checking defaults for OMS/cmsy/m/n on input line 51.
-LaTeX Font Info:    ... okay on input line 51.
-LaTeX Font Info:    Checking defaults for OT1/cmr/m/n on input line 51.
-LaTeX Font Info:    ... okay on input line 51.
-LaTeX Font Info:    Checking defaults for T1/cmr/m/n on input line 51.
-LaTeX Font Info:    ... okay on input line 51.
-LaTeX Font Info:    Checking defaults for TS1/cmr/m/n on input line 51.
-LaTeX Font Info:    ... okay on input line 51.
-LaTeX Font Info:    Checking defaults for OMX/cmex/m/n on input line 51.
-LaTeX Font Info:    ... okay on input line 51.
-LaTeX Font Info:    Checking defaults for U/cmr/m/n on input line 51.
-LaTeX Font Info:    ... okay on input line 51.
-LaTeX Font Info:    Checking defaults for PD1/pdf/m/n on input line 51.
-LaTeX Font Info:    ... okay on input line 51.
-LaTeX Font Info:    Checking defaults for PU/pdf/m/n on input line 51.
-LaTeX Font Info:    ... okay on input line 51.
+LaTeX Font Info:    Checking defaults for OML/cmm/m/it on input line 53.
+LaTeX Font Info:    ... okay on input line 53.
+LaTeX Font Info:    Checking defaults for OMS/cmsy/m/n on input line 53.
+LaTeX Font Info:    ... okay on input line 53.
+LaTeX Font Info:    Checking defaults for OT1/cmr/m/n on input line 53.
+LaTeX Font Info:    ... okay on input line 53.
+LaTeX Font Info:    Checking defaults for T1/cmr/m/n on input line 53.
+LaTeX Font Info:    ... okay on input line 53.
+LaTeX Font Info:    Checking defaults for TS1/cmr/m/n on input line 53.
+LaTeX Font Info:    ... okay on input line 53.
+LaTeX Font Info:    Checking defaults for OMX/cmex/m/n on input line 53.
+LaTeX Font Info:    ... okay on input line 53.
+LaTeX Font Info:    Checking defaults for U/cmr/m/n on input line 53.
+LaTeX Font Info:    ... okay on input line 53.
+LaTeX Font Info:    Checking defaults for PD1/pdf/m/n on input line 53.
+LaTeX Font Info:    ... okay on input line 53.
+LaTeX Font Info:    Checking defaults for PU/pdf/m/n on input line 53.
+LaTeX Font Info:    ... okay on input line 53.
 
 -- Lines per column: 56 (exact).
 (/usr/share/texlive/texmf-dist/tex/context/base/mkii/supp-pdf.mkii
 [Loading MPS to PDF converter (version 2006.09.02).]
-\scratchcounter=\count305
+\scratchcounter=\count314
 \scratchdimen=\dimen259
-\scratchbox=\box56
-\nofMPsegments=\count306
-\nofMParguments=\count307
-\everyMPshowfont=\toks24
-\MPscratchCnt=\count308
+\scratchbox=\box58
+\nofMPsegments=\count315
+\nofMParguments=\count316
+\everyMPshowfont=\toks27
+\MPscratchCnt=\count317
 \MPscratchDim=\dimen260
-\MPnumerator=\count309
-\makeMPintoPDFobject=\count310
-\everyMPtoPDFconversion=\toks25
+\MPnumerator=\count318
+\makeMPintoPDFobject=\count319
+\everyMPtoPDFconversion=\toks28
 ) (/usr/share/texlive/texmf-dist/tex/latex/epstopdf-pkg/epstopdf-base.sty
 Package: epstopdf-base 2020-01-24 v2.11 Base part for package epstopdf
 Package epstopdf-base Info: Redefining graphics rule for `.eps' on input line 4
@@ -503,7 +540,7 @@ e
 Package caption Info: Begin \AtBeginDocument code.
 Package caption Info: subfig package v1.3 is loaded.
 Package caption Info: End \AtBeginDocument code.
-Package hyperref Info: Link coloring OFF on input line 51.
+Package hyperref Info: Link coloring OFF on input line 53.
 
 (./main.out) (./main.out)
 \@outlinefile=\write3
@@ -536,41 +573,20 @@ File: ot1pcr.fd 2001/06/04 font definitions for OT1/pcr.
 /usr/share/texlive/texmf-dist/fonts/enc/dvips/base/8r.enc}
 
 
-]
-Underfull \hbox (badness 10000) in paragraph at lines 80--89
-[]\OT1/ptm/b/n/10 Design and mea-sure-ment \OT1/ptm/m/n/10 of a column-parallel
-
- []
-
-
-Underfull \hbox (badness 2556) in paragraph at lines 80--89
-\OT1/ptm/m/n/10 log-tree top-$\OML/cmm/m/it/10 k$ \OT1/ptm/m/n/10 op-er-a-tor o
-n the 130-core Black-hole
- []
-
-
-Underfull \hbox (badness 10000) in paragraph at lines 80--89
-\OT1/ptm/m/n/10 mesh---semaphore-tree ren-dezvous with-out atom-ics
- []
-
-
-Underfull \hbox (badness 3557) in paragraph at lines 80--89
-\OT1/ptm/m/n/10 or global synchronization---with the val-i-dated cost
- []
-
-) (./sections/02-background.tex
-Underfull \hbox (badness 4441) in paragraph at lines 100--107
+])
+(./sections/02-background.tex
+Underfull \hbox (badness 4441) in paragraph at lines 97--104
 []\OT1/ptm/m/n/10 The Ten-stor-rent Black-hole p150a ex-poses 130 pro-
  []
 
 
-Underfull \hbox (badness 10000) in paragraph at lines 121--129
+Underfull \hbox (badness 10000) in paragraph at lines 118--126
 []\OT1/ptm/m/n/10 The ven-dor stack routes \OT1/pcr/m/n/10 ttnn.topk \OT1/ptm/m
 /n/10 through
  []
 
 
-Underfull \hbox (badness 6658) in paragraph at lines 121--129
+Underfull \hbox (badness 6658) in paragraph at lines 118--126
 \OT1/ptm/m/n/10 a bitonic lo-cal sort in the low-level ker-nel li-brary
  []
 
@@ -579,215 +595,87 @@ Underfull \hbox (badness 1953) in paragraph at lines 22--35
 \OT1/ptm/m/n/10 par-i-son net-work --- a fixed, data-oblivious sched-ule of
  []
 
-
-Underfull \hbox (badness 10000) in paragraph at lines 52--52
-[]\OT1/ptm/m/n/7 Wide ex-act
- []
-
-
-Underfull \hbox (badness 10000) in paragraph at lines 52--52
-\OT1/ptm/m/n/7 count-ing
- []
-
-
-Underfull \hbox (badness 10000) in paragraph at lines 53--53
-[]\OT1/ptm/m/n/7 8--12
- []
-
-
-Underfull \hbox (badness 10000) in paragraph at lines 53--53
-\OT1/ptm/m/n/7 bits/pass,
- []
-
-
-Underfull \hbox (badness 10000) in paragraph at lines 53--53
-\OT1/ptm/m/n/7 shared-
- []
-
-
-Underfull \hbox (badness 10000) in paragraph at lines 53--53
-\OT1/ptm/m/n/7 mem.
- []
-
-
-Underfull \hbox (badness 10000) in paragraph at lines 53--53
-\OT1/ptm/m/n/7 atom-
- []
-
-
-Underfull \hbox (badness 1478) in paragraph at lines 54--58
-\OT1/ptm/m/n/7 pack floor ($\OT1/cmr/m/n/7 +$\OT1/ptm/m/n/7 2.42/$\OT1/cmr/m/n/
-7 +$\OT1/ptm/m/n/7 4.52 in-stream;
- []
-
-
-Underfull \hbox (badness 1622) in paragraph at lines 61--61
-[]\OT1/ptm/m/n/7 Cheap de-ci-
- []
-
-
-Underfull \hbox (badness 1558) in paragraph at lines 62--62
-\OT1/ptm/m/n/7 fused ker-
- []
-
-
-Underfull \hbox (badness 10000) in paragraph at lines 65--66
-[]\OT1/ptm/m/n/7 affordable ---
- []
-
-
-Underfull \hbox (badness 10000) in paragraph at lines 67--67
-[]\OT1/ptm/m/n/7 Materiali-
- []
-
-
-Underfull \hbox (badness 10000) in paragraph at lines 67--67
-\OT1/ptm/m/n/7 zation
- []
-
-
-Underfull \hbox (badness 10000) in paragraph at lines 68--68
-[]\OT1/ptm/m/n/7 scatter
- []
-
-
-Underfull \hbox (badness 10000) in paragraph at lines 68--68
-\OT1/ptm/m/n/7 / com-
- []
-
-
-Underfull \hbox (badness 7221) in paragraph at lines 69--71
-\OT1/ptm/m/n/7 vs. a $\OMS/cmsy/m/n/7 ^^Y$\OT1/ptm/m/n/7 0.5 bar; SFPU has no
- []
-
-
-Underfull \hbox (badness 7186) in paragraph at lines 69--71
-\OT1/ptm/m/n/7 scat-ter; packer com-pressed stream
- []
-
-
-Underfull \hbox (badness 10000) in paragraph at lines 69--71
-\OT1/ptm/m/n/7 0.63 cyc/orig-elem, consumer-only
- []
-
-
-Underfull \hbox (badness 10000) in paragraph at lines 72--73
-[]\OT1/ptm/m/n/7 the load-
- []
-
-
-Underfull \hbox (badness 2582) in paragraph at lines 74--74
-[]\OT1/ptm/m/n/7 A slow in-
- []
-
-
-Overfull \hbox (2.30177pt too wide) in paragraph at lines 75--75
-[]\OT1/pcr/m/n/7 thrust::
- []
-
-
-Underfull \hbox (badness 10000) in paragraph at lines 78--79
-[]\OT1/ptm/m/n/7 bar moved
- []
-
-
-Underfull \hbox (badness 10000) in paragraph at lines 78--79
-\OMS/cmsy/m/n/7 ^^@$\OT1/ptm/m/n/7 15--27%
- []
-
-
-Underfull \hbox (badness 10000) in paragraph at lines 78--79
-\OT1/ptm/m/n/7 dur-ing the
- []
-
-[3]) (./sections/04-system.tex
-<fig/fig-s1-operator.pdf, id=281, 249.3315pt x 220.42351pt>
+) (./sections/04-system.tex [3]
+Package hyperref Info: bookmark level for unknown algorithm defaults to 0 on in
+put line 35.
+<fig/fig-s1-operator.pdf, id=275, 207.0102pt x 143.2894pt>
 File: fig/fig-s1-operator.pdf Graphic file (type pdf)
 <use fig/fig-s1-operator.pdf>
-Package pdftex.def Info: fig/fig-s1-operator.pdf  used on input line 50.
-(pdftex.def)             Requested size: 189.0pt x 167.08635pt.
-
-Overfull \hbox (2.6968pt too wide) detected at line 65
-[][][][]\OT1/cmr/m/n/10 (\OML/cmm/m/it/10 P\OT1/cmr/m/n/10 )  =  2 []\OML/cmm/m
-/it/10 C=P[]  \OT1/cmr/m/n/10 +  [] [][] \OML/cmm/m/it/10 P[];  P \OMS/cmsy/m/n
-/10 2 \OT1/cmr/m/n/10 [2\OML/cmm/m/it/10 ;  []\OT1/cmr/m/n/10 (\OML/cmm/m/it/10
- C; \OT1/cmr/m/n/10 128)]\OML/cmm/m/it/10 ;
- []
-
-[4 <./fig/fig-s1-operator.pdf>]) (./sections/05-characterization.tex [5]
-Underfull \hbox (badness 6893) in paragraph at lines 29--29
+Package pdftex.def Info: fig/fig-s1-operator.pdf  used on input line 83.
+(pdftex.def)             Requested size: 226.79846pt x 156.9935pt.
+ [4 <./fig/fig-s1-operator.pdf>]
+<fig/fig-s2-skip-law.pdf, id=337, 209.58301pt x 151.767pt>
+File: fig/fig-s2-skip-law.pdf Graphic file (type pdf)
+<use fig/fig-s2-skip-law.pdf>
+Package pdftex.def Info: fig/fig-s2-skip-law.pdf  used on input line 183.
+(pdftex.def)             Requested size: 209.16046pt x 151.46324pt.
+)
+(./sections/05-characterization.tex [5 <./fig/fig-s2-skip-law.pdf>]
+Underfull \hbox (badness 6893) in paragraph at lines 27--27
 []\OT1/ptm/m/n/7 bf16 canon-i-cal-iza-
  []
 
 
-Underfull \hbox (badness 10000) in paragraph at lines 45--45
+Underfull \hbox (badness 10000) in paragraph at lines 43--43
 []\OT1/ptm/m/n/7 Exponent
  []
 
 
-Underfull \hbox (badness 10000) in paragraph at lines 45--45
+Underfull \hbox (badness 10000) in paragraph at lines 43--43
 \OT1/ptm/m/n/7 his-togram:
  []
 
 
-Underfull \hbox (badness 10000) in paragraph at lines 53--53
+Underfull \hbox (badness 10000) in paragraph at lines 51--51
 []\OT1/ptm/m/n/7 Exponent
  []
 
 
-Underfull \hbox (badness 1762) in paragraph at lines 53--53
+Underfull \hbox (badness 1762) in paragraph at lines 51--51
 \OT1/ptm/m/n/7 his-togram: alias-ing
  []
 
 
-Underfull \hbox (badness 1365) in paragraph at lines 75--75
+Underfull \hbox (badness 1365) in paragraph at lines 73--73
 []\OT1/pcr/m/n/7 SFPSWAP \OT1/ptm/m/n/7 operand
  []
 
 
-Underfull \hbox (badness 10000) in paragraph at lines 88--88
+Underfull \hbox (badness 10000) in paragraph at lines 86--86
 []\OT1/pcr/m/n/7 SFPLOADMACRO
  []
 
 LaTeX Font Info:    Trying to load font information for OMS+ptm on input line 8
-9.
+7.
 (/usr/share/texlive/texmf-dist/tex/latex/psnfss/omsptm.fd
-File: omsptm.fd 
+File: omsptm.fd
 )
 LaTeX Font Info:    Font shape `OMS/ptm/m/n' in size <7> not available
-(Font)              Font shape `OMS/cmsy/m/n' tried instead on input line 89.
+(Font)              Font shape `OMS/cmsy/m/n' tried instead on input line 87.
 LaTeX Font Info:    Font shape `OT1/pcr/m/it' in size <10> not available
-(Font)              Font shape `OT1/pcr/m/sl' tried instead on input line 134.
-
-Underfull \hbox (badness 1831) in paragraph at lines 137--148
-\OT1/ptm/m/n/10 resident win-dow (\TS1/ptm/m/n/10 §[]\OT1/ptm/m/n/10 IV[]) re-q
-uires know-ing where rank $\OML/cmm/m/it/10 r$
- []
-
-
-Underfull \hbox (badness 1448) in paragraph at lines 137--148
-\OT1/ptm/m/n/10 put, checked word-for-word against torch rank or-der at
- []
-
+(Font)              Font shape `OT1/pcr/m/sl' tried instead on input line 129.
 LaTeX Font Info:    Font shape `OMS/ptm/m/n' in size <10> not available
-(Font)              Font shape `OMS/cmsy/m/n' tried instead on input line 161.
-) (./sections/06-evaluation.tex [6]
-Underfull \vbox (badness 1237) has occurred while \output is active []
-
- [7]
-<fig/fig-e1-pscaling.pdf, id=405, 260.17201pt x 187.902pt>
+(Font)              Font shape `OMS/cmsy/m/n' tried instead on input line 156.
+)
+(./sections/06-evaluation.tex [6] [7]
+<fig/fig-e1-pscaling.pdf, id=455, 209.58301pt x 155.38051pt>
 File: fig/fig-e1-pscaling.pdf Graphic file (type pdf)
 <use fig/fig-e1-pscaling.pdf>
-Package pdftex.def Info: fig/fig-e1-pscaling.pdf  used on input line 197.
-(pdftex.def)             Requested size: 191.51862pt x 138.32564pt.
+Package pdftex.def Info: fig/fig-e1-pscaling.pdf  used on input line 199.
+(pdftex.def)             Requested size: 209.16046pt x 155.06952pt.
 
-[8 <./fig/fig-e1-pscaling.pdf>]
-<fig/fig-e2-skip-ab.pdf, id=480, 260.17201pt x 173.448pt>
-File: fig/fig-e2-skip-ab.pdf Graphic file (type pdf)
-<use fig/fig-e2-skip-ab.pdf>
-Package pdftex.def Info: fig/fig-e2-skip-ab.pdf  used on input line 230.
-(pdftex.def)             Requested size: 191.51862pt x 127.68521pt.
-) (./sections/07-related.tex [9 <./fig/fig-e2-skip-ab.pdf>]) (./main.bbl
+Underfull \hbox (badness 5050) in paragraph at lines 207--221
+\OT1/ptm/m/n/10 ($\OMS/cmsy/m/n/10 ^^@\OT1/cmr/m/n/10 45\OML/cmm/m/it/10 :\OT1/
+cmr/m/n/10 1%$\OT1/ptm/m/n/10 , $\OT1/cmr/m/n/10 1\OML/cmm/m/it/10 :\OT1/cmr/m/
+n/10 82\OMS/cmsy/m/n/10 ^^B$\OT1/ptm/m/n/10 ) at rows$[]\OT1/cmr/m/n/10 2$\OT1/
+ptm/m/n/10 , $\OML/cmm/m/it/10 k[]\OT1/cmr/m/n/10 32$\OT1/ptm/m/n/10 , $\OML/cm
+m/m/it/10 N[]\OT1/cmr/m/n/10 65[]536$\OT1/ptm/m/n/10 , and
+ []
+
+
+Underfull \vbox (badness 10000) has occurred while \output is active []
+
+ [8 <./fig/fig-e1-pscaling.pdf>]) (./sections/07-related.tex [9]) (./main.bbl
 
 Package balance Warning: You have called \balance in second column
 (balance)                Columns might not be balanced.
@@ -799,13 +687,13 @@ e-cod-
  []
 
 
-Underfull \hbox (badness 3803) in paragraph at lines 139--145
+Underfull \hbox (badness 3803) in paragraph at lines 133--139
 []\OT1/ptm/m/n/8 Tenstorrent, ``Ten-six ISA doc-u-men-ta-tion (Black-hole and W
 orm-
  []
 
 
-Underfull \hbox (badness 2229) in paragraph at lines 163--168
+Underfull \hbox (badness 2229) in paragraph at lines 157--162
 []\OT1/ptm/m/n/8 Tenstorrent, ``LLM per-for-mance model: op-er-a-tor roofline t
 a-bles,''
  []
@@ -817,7 +705,10 @@ ar-[]api / en / 3 . 1 . 0 / poplibs /
  []
 
 
-Overfull \vbox (6.87903pt too high) has occurred while \output is active []
+Overfull \vbox (0.89091pt too high) has occurred while \output is active []
+
+
+Overfull \vbox (1.05902pt too high) has occurred while \output is active []
 
 
 [11])
@@ -842,44 +733,45 @@ LaTeX2e <2023-11-01> patch level 1
 L3 programming layer <2024-01-22>
  ***********
 Package rerunfilecheck Info: File `main.out' has not changed.
-(rerunfilecheck)             Checksum: B9870BE093698BAB4FFCD3C44E2DA6FF;6732.
- ) 
+(rerunfilecheck)             Checksum: 2A0FDD1CF0B7B89EC3C7A47296052FBF;6613.
+ )
 Here is how much of TeX's memory you used:
- 12513 strings out of 476106
- 199588 string characters out of 5793933
+ 13200 strings out of 476106
+ 210461 string characters out of 5793933
  1971975 words of memory out of 5000000
- 34201 multiletter control sequences out of 15000+600000
+ 34871 multiletter control sequences out of 15000+600000
  608756 words of font info for 140 fonts, out of 8000000 for 9000
  59 hyphenation exceptions out of 8191
  75i,12n,79p,381b,598s stack positions out of 10000i,1000n,20000p,200000b,200000s
 </usr/share/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmbx10.pfb></us
 r/share/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmex10.pfb></usr/shar
 e/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmmi10.pfb></usr/share/texl
-ive/texmf-dist/fonts/type1/public/amsfonts/cm/cmmi6.pfb></usr/share/texlive/tex
-mf-dist/fonts/type1/public/amsfonts/cm/cmmi7.pfb></usr/share/texlive/texmf-dist
-/fonts/type1/public/amsfonts/cm/cmmi8.pfb></usr/share/texlive/texmf-dist/fonts/
-type1/public/amsfonts/cm/cmmi9.pfb></usr/share/texlive/texmf-dist/fonts/type1/p
-ublic/amsfonts/cm/cmr10.pfb></usr/share/texlive/texmf-dist/fonts/type1/public/a
-msfonts/cm/cmr6.pfb></usr/share/texlive/texmf-dist/fonts/type1/public/amsfonts/
-cm/cmr7.pfb></usr/share/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmr8.
-pfb></usr/share/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmr9.pfb></us
-r/share/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy10.pfb></usr/shar
-e/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy5.pfb></usr/share/texli
-ve/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy6.pfb></usr/share/texlive/texm
-f-dist/fonts/type1/public/amsfonts/cm/cmsy7.pfb></usr/share/texlive/texmf-dist/
-fonts/type1/public/amsfonts/cm/cmsy8.pfb></usr/share/texlive/texmf-dist/fonts/t
-ype1/public/amsfonts/cm/cmsy9.pfb></usr/share/texlive/texmf-dist/fonts/type1/pu
-blic/amsfonts/symbols/msam10.pfb></usr/share/texlive/texmf-dist/fonts/type1/urw
-/courier/ucrb8a.pfb></usr/share/texlive/texmf-dist/fonts/type1/urw/courier/ucrr
-8a.pfb></usr/share/texlive/texmf-dist/fonts/type1/urw/courier/ucrro8a.pfb></usr
-/share/texlive/texmf-dist/fonts/type1/urw/times/utmb8a.pfb></usr/share/texlive/
-texmf-dist/fonts/type1/urw/times/utmbi8a.pfb></usr/share/texlive/texmf-dist/fon
-ts/type1/urw/times/utmr8a.pfb></usr/share/texlive/texmf-dist/fonts/type1/urw/ti
-mes/utmri8a.pfb>
-Output written on main.pdf (12 pages, 428930 bytes).
+ive/texmf-dist/fonts/type1/public/amsfonts/cm/cmmi5.pfb></usr/share/texlive/tex
+mf-dist/fonts/type1/public/amsfonts/cm/cmmi6.pfb></usr/share/texlive/texmf-dist
+/fonts/type1/public/amsfonts/cm/cmmi7.pfb></usr/share/texlive/texmf-dist/fonts/
+type1/public/amsfonts/cm/cmmi8.pfb></usr/share/texlive/texmf-dist/fonts/type1/p
+ublic/amsfonts/cm/cmmi9.pfb></usr/share/texlive/texmf-dist/fonts/type1/public/a
+msfonts/cm/cmr10.pfb></usr/share/texlive/texmf-dist/fonts/type1/public/amsfonts
+/cm/cmr5.pfb></usr/share/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmr6
+.pfb></usr/share/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmr7.pfb></u
+sr/share/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmr8.pfb></usr/share
+/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmr9.pfb></usr/share/texlive
+/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy10.pfb></usr/share/texlive/texmf
+-dist/fonts/type1/public/amsfonts/cm/cmsy5.pfb></usr/share/texlive/texmf-dist/f
+onts/type1/public/amsfonts/cm/cmsy6.pfb></usr/share/texlive/texmf-dist/fonts/ty
+pe1/public/amsfonts/cm/cmsy7.pfb></usr/share/texlive/texmf-dist/fonts/type1/pub
+lic/amsfonts/cm/cmsy8.pfb></usr/share/texlive/texmf-dist/fonts/type1/public/ams
+fonts/cm/cmsy9.pfb></usr/share/texlive/texmf-dist/fonts/type1/public/amsfonts/s
+ymbols/msam10.pfb></usr/share/texlive/texmf-dist/fonts/type1/urw/courier/ucrb8a
+.pfb></usr/share/texlive/texmf-dist/fonts/type1/urw/courier/ucrr8a.pfb></usr/sh
+are/texlive/texmf-dist/fonts/type1/urw/courier/ucrro8a.pfb></usr/share/texlive/
+texmf-dist/fonts/type1/urw/times/utmb8a.pfb></usr/share/texlive/texmf-dist/font
+s/type1/urw/times/utmbi8a.pfb></usr/share/texlive/texmf-dist/fonts/type1/urw/ti
+mes/utmr8a.pfb></usr/share/texlive/texmf-dist/fonts/type1/urw/times/utmri8a.pfb
+>
+Output written on main.pdf (12 pages, 474911 bytes).
 PDF statistics:
- 775 PDF objects out of 1000 (max. 8388607)
- 602 compressed objects within 7 object streams
- 114 named destinations out of 1000 (max. 500000)
- 280 words of extra memory for PDF output out of 10000 (max. 10000000)
-
+ 789 PDF objects out of 1000 (max. 8388607)
+ 655 compressed objects within 7 object streams
+ 113 named destinations out of 1000 (max. 500000)
+ 272 words of extra memory for PDF output out of 10000 (max. 10000000)

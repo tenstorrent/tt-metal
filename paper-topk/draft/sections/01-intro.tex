@@ -29,8 +29,7 @@ with five RISC-V processors, a 32-lane SIMD unit (SFPU), and software-managed
 SRAM, joined by a 2D NoC~\cite{vasiljevic2024blackhole}. Every fast GPU
 top-$k$ mechanism leans on primitives this machine lacks --- atomic
 histograms, scatter compaction, grid-wide
-synchronization~\cite{alabi2012kselection,gaihre2021drtopk,li2024radik};
-cores synchronize through NoC semaphores
+synchronization~\cite{alabi2012kselection,gaihre2021drtopk,li2024radik}
 (\S\ref{sec:bg-problem}).
 
 The missing primitives are not one vendor's oversight. AI accelerators
@@ -46,7 +45,7 @@ publication exists for the dataflow-accelerator class
 approximation~\cite{chern2022tpuknn,twostage2025}. Mesh-selection theory
 proved step bounds on abstract
 arrays~\cite{krizanc1992optimal,krizanc1993fast}, but returned neither
-values with indices nor a measurement on real silicon.
+values-with-indices nor silicon measurements.
 
 We measured the design space ingredient by ingredient instead of betting on
 one kernel. The study decomposes every exact top-$k$ engine along three
@@ -58,27 +57,31 @@ materialization is the wall, so radix select degenerates to threshold
 bisection and loses. The space instead rewards parallelizing the
 data-oblivious comparison network as a column-parallel log-tree operator
 (\S\ref{sec:system}); the one data-dependent mechanism that survives without
-scatter is a chunk-skip rule, sound by construction, that obeys a
-distribution-free rank-statistic law and gates itself at compile time.
+scatter is a chunk-skip rule, sound by construction and gated at
+compile time by a distribution-free rank-statistic law.
 
 The study is candid about its own dynamics. The incumbent bitonic engine
 absorbed the study's routing and placement fixes and finished at 34.4\us on
 the anchor cell ($k{=}2048$, $N{=}65{,}536$)---inside the uncertainty band
 of the radix-select model priced from our own microbenchmarks; a
 pre-registered stop rule closed that track (\S\ref{sec:design-space}).
-The surviving gap to the vendor roofline is
-9.7--29.9$\times$ across all 24 measured cells (\S\ref{sec:evaluation}).
+The same candor governs the headline: \S\ref{sec:eval-attribution}
+attributes the orders of magnitude mostly to routing around the
+single-core fallback, and the algorithm to a measured 1.4$\times$ over
+the strongest eligible stock configuration plus its measured tree,
+placement, and skip terms. The surviving gap to the
+vendor roofline is 9.7--29.9$\times$ across all 24 measured cells
+(\S\ref{sec:evaluation}).
 
 This paper contributes:
 \begin{itemize}
 \item \textbf{Quantification}, via single-ingredient silicon
-  microbenchmarks, of why GPU radix-select economics do not transfer to a
-  NoC-mesh dataflow core: exact SFPU counting is 1 bit per 2.0
-  cycles/vector, decisions cost 81 cycles, and materialization---not
-  counting---is the load-bearing gap, with dense emission at 13.0
-  cycles/element against a 0.5 bar (\S\ref{sec:design-space}).
+  microbenchmarks, of why GPU radix-select economics do not transfer to
+  a NoC-mesh dataflow core: counting is narrow, decisions are
+  affordable, and materialization---not counting---is the load-bearing
+  gap (\S\ref{sec:design-space}).
 \item \textbf{Design and measurement} of a column-parallel log-tree top-$k$
-  operator on the 130-core \bh mesh---semaphore-tree rendezvous without
+  operator---semaphore-tree rendezvous without
   atomics or global synchronization---with the validated cost model
   \costmodel and a cost-optimal rectangle embedding: 34.3\us at $k{=}2048$,
   $N{=}65{,}536$ on 32 cores (18{,}401$\times$ over the pre-study stock
@@ -90,19 +93,18 @@ This paper contributes:
   chunk-skip law $P(\mathrm{skip}) \approx e^{-K/(c+1)}$
   for streaming bitonic cascades, with a soundness proof, a compile-time
   $K/4$ gate, and a calibrated pre-build forecast that eliminated the losing
-  variant; the surviving variant measures 1.82$\times$ ($-45.1\%$) at
+  variant; the surviving variant measures 1.82$\times$ at
   rows${=}2$, $k{=}32$, $N{=}65{,}536$ (\S\ref{sec:system}).
 \item \textbf{First public characterization} of the Tensix compute
   datapath's numeric semantics and sorting-relevant primitive costs: bf16
   canonicalization (NaN$\to$Inf, $-0\to{+}0$, subnormal$\to{+}0$), a native
   sign-magnitude total order including NaN, a 1-in-8-sampled and
   32-bin-aliased packer exponent histogram, and measured synchronization
-  floors (\S\ref{sec:characterization})---absent from all prior Tensix
-  studies (\S\ref{sec:related}).
+  floors (\S\ref{sec:characterization}).
 \end{itemize}
 
 Every performance cell behind these claims is gated bit-exact against a host
-golden---never a similarity threshold---and every headline number traces to
-a committed measurement artifact; the ledger and canonical sweep
-harness will be released, and \S\ref{sec:methodology} discloses the
-LLM-agent campaign methodology.
+golden and every headline number traces to
+a committed measurement artifact; the ledger and canonical harness
+will be released, and \S\ref{sec:methodology} discloses the agentic
+campaign methodology.

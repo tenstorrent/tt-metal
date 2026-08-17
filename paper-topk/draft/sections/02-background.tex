@@ -56,26 +56,24 @@ multiset of the input \emph{as canonicalized by the datapath} (bf16
 specials are rewritten on entry; Section~\ref{sec:characterization} pins
 the rules) under the hardware's native sign-magnitude total order; every
 index is unique and satisfies $x[\mathrm{index}] = \mathrm{value}$
-bit-exactly (rows with fewer than $k$ finite values emit a documented
-sentinel index); repeated launches return bit-identical outputs. bf16 is
+bit-exactly (short rows emit a documented sentinel index); repeated
+launches return bit-identical outputs. bf16 is
 the datatype at every surveyed production call site; fp32 traverses
 bit-exactly. Production adds three contract variants:
 indices-only versus (values, indices) outputs, multi-row batches, and a
 valid-length prefix that masks a stale tail.
 
-Where does $x$ come from, and where do the results go? The row is always
-the output of the operator immediately upstream --- an lm-head matmul, an
-attention-indexer score, or an expert-gate projection --- written to a
-DRAM-interleaved tensor in the producer's layout; results return to
-DRAM for the consumer. Three
+Where does $x$ come from, and where do the results go? The row is
+always the upstream operator's output --- an lm-head matmul, an
+attention-indexer score, or an expert-gate projection ---
+DRAM-interleaved in the producer's layout; results return to DRAM. Three
 consumer classes cover every surveyed call site
 (Table~\ref{tab:scenarios}): token sampling needs values and indices at
 $k{=}32$ over vocabulary shards of $N{=}16$--$65$K every decoded token;
 sparse-attention KV gather needs indices only at $k{=}512$--$2048$ over
 contexts up to 1M, every layer; mixture-of-experts dispatch needs
-$k{=}4$--$16$ winners over 128--512 experts every layer. A selection
-engine's real cost therefore includes the layout conversions between the
-producer's format, the engine's, and the consumer's --- which is why
+$k{=}4$--$16$ winners over 128--512 experts every layer. A selection engine's real cost therefore includes the layout
+conversions between producer, engine, and consumer formats --- why
 Section~\ref{sec:evaluation} prices end-to-end composites, never bare
 kernels.
 
@@ -85,33 +83,32 @@ family~\cite{intel_x86simdsort,blacher2023vqsort} --- rides coherent
 caches and branch predictors: branchy, data-dependent control flow is
 cheap and the scalar pivot logic is free. GPU selection rides
 shared-memory atomic histograms, scatter compaction, and grid-wide
-synchronization (\S\ref{sec:bg-gpu}). \bh has none of these: no
+synchronization --- Section~\ref{sec:design-space} prices each of these
+affordances on this silicon. \bh has none of them: no
 cross-core atomics, no scatter or compaction in the compute path, no
 global barrier --- synchronization is NoC semaphores over
 software-managed SRAM, the 32-lane SFPU counts 1--3 bits per pass, and
 the fast path is a fixed, data-oblivious instruction stream, so every
-data-dependent decision costs a measured 81-cycle rendezvous. Every
-verdict in Section~\ref{sec:design-space} and every design choice in
-Section~\ref{sec:system} traces back to this paragraph.
+data-dependent decision costs a measured 81-cycle rendezvous.
 
 \subsection{Blackhole and the Tensix Core}
 \label{sec:bg-tensix}
 
 The Tenstorrent \bh \pca exposes 130 programmable Tensix workers on a
 13$\times$10 grid, joined by a 2D network-on-chip
-(NoC)~\cite{vasiljevic2024blackhole}; the count is a property of this
-unit (harvesting varies per part), and no result here hardcodes it. Each
+(NoC)~\cite{vasiljevic2024blackhole}; the count is a property of
+this unit (harvesting varies; no result hardcodes it). Each
 core owns
 ${\approx}1.5$\,MB of software-managed L1 SRAM~\cite{vasiljevic2024blackhole};
 there is no cache hierarchy and no coherence protocol.
 
-Five RISC-V processors share that L1: two move data over the NoC (one
-reads, one writes), and three compute as an
+Five RISC-V processors share that L1: two move data over the NoC, and
+three compute as an
 \emph{unpack}$\to$\emph{math}$\to$\emph{pack} pipeline. The math stage
 owns the SFPU, a 32-lane SIMD engine, and
-stages its output in the Dst register file that pack consumes. An operator is
-therefore three-to-five cooperating programs per core, synchronized through
-producer/consumer circular buffers (CBs) in L1.
+stages its output in the Dst register file that pack consumes. An operator is therefore
+three-to-five cooperating programs per core, synchronized through
+circular buffers in L1.
 Sections~\ref{sec:design-space} and~\ref{sec:characterization} price these
 units one at a time; Section~\ref{sec:system} spends them.
 
@@ -135,33 +132,19 @@ ${\approx}137$\,ns/element: 695\us at $W{=}5{,}000$ ($k{=}32$), growing to
 measured cliff. At the $W < 65{,}535$ gate, a $k\le32$ row jumps from
 106.7\us (multi-core, 65 cores, $N{=}8{,}192$) to 9.49\,ms (one core,
 $N{=}65{,}534$) --- ${\approx}89\times$ more time for $8\times$ more
-elements. We state the cliff here as architecture context;
+elements. The cliff is architecture context here;
 Section~\ref{sec:evaluation} owns the fix. The bitonic engine itself is
-data-oblivious --- an input-independent instruction stream, no
-decisions, no shrinking candidate sets --- one corner of the design
-space Section~\ref{sec:design-space} maps and prices.
+data-oblivious --- one corner of the design space
+Section~\ref{sec:design-space} maps and prices.
 
-\subsection{What GPU Selection Assumes}
-\label{sec:bg-gpu}
-
-Exact top-k on GPUs is a mature family; each branch leans on a specific
-hardware affordance --- the import price \bh must pay to adopt it.
-\textbf{Radix/bucket select} builds 8--12-bit exact histograms in shared
-memory via atomics, scatters survivors to a compacted buffer, and
-recurses~\cite{alabi2012kselection,zhang2023paralleltopk,li2024radik}:
-wide exact counting plus cheap materialization of a shrinking candidate
-set. \textbf{WarpSelect} kills most elements at a single compare against a
-per-lane running threshold and parks survivors in per-lane
-queues~\cite{johnson2019billion}: a cheap lane-local compare plus a place
-to park survivors (Section~\ref{sec:system} contrasts this
-element-granular threshold with our chunk-granular skip).
-\textbf{Threshold-guess families} predict the $k$-th value from the
-previous decode step, count against the guess, and refine until the
-boundary is exact~\cite{gvr2026}: cheap counting plus a cheap
-count-to-decision rendezvous. \textbf{The escape hatch}: TPU-KNN and its
-two-stage successors avoid exact selection outright, reshaping top-k
-into matmul-friendly partial
-reductions~\cite{chern2022tpuknn,twostage2025} --- the accelerator
-industry's confession that exact selection is hostile to matmul-centric
-machines. This paper measures the exact path anyway:
-Section~\ref{sec:design-space} prices each affordance above on silicon.
+Exact GPU top-k, by contrast, is a mature family, each branch leaning
+on a hardware affordance \bh must re-price to import: radix/bucket
+select on 8--12-bit atomic histograms plus scatter
+compaction~\cite{alabi2012kselection,zhang2023paralleltopk,li2024radik};
+WarpSelect on a cheap per-lane running-threshold compare with per-lane
+survivor queues~\cite{johnson2019billion}; threshold-guess decoders on
+cheap counting against a predicted boundary~\cite{gvr2026}; and
+TPU-KNN's escape into matmul-shaped
+approximation~\cite{chern2022tpuknn,twostage2025}. This paper measures
+the exact path anyway: Section~\ref{sec:design-space} prices each
+affordance on silicon.

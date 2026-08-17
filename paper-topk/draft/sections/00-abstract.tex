@@ -21,8 +21,8 @@ SFPU counting yields 1 bit per 2.0 cycles/vector, a count-to-decision
 rendezvous costs 81 cycles, and materialization---not counting---is the load-bearing gap
 (dense emission 13.0 cycles/element against a 0.5 bar). The design space
 instead rewards parallelizing the data-oblivious comparison network: a
-column-parallel log-tree operator whose bitonic leaves feed a semaphore-tree
-merge, governed by a validated cost model \costmodel. The operator measures
+column-parallel log-tree operator governed by a validated cost model
+\costmodel. The operator measures
 34.3\us at $k{=}2048$, $N{=}65{,}536$ (bf16) on 32 cores---18,401$\times$
 over the pre-study stock path---and scales monotonically to 23.3\us at
 $k{=}512$, $N{=}262{,}144$ on 104 cores. A distribution-free chunk-skip law
@@ -35,8 +35,8 @@ honest about its own dynamics: the incumbent bitonic engine absorbed the
 study's routing and placement fixes and outran the radix-select model it was
 measured against. We also report the first public characterization of the
 Tensix datapath's numeric semantics: bf16 canonicalization, a native
-sign-magnitude total order including NaN, and a 1-in-8-sampled, 32-bin-aliased
-packer exponent histogram.
+sign-magnitude total order including NaN, and a sampled, aliased packer
+exponent histogram.
 \end{abstract}
 
 \begin{IEEEkeywords}
