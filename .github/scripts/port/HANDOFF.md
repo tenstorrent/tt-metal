@@ -1297,3 +1297,46 @@ front of the agent. The trigger is still human, so a person chooses to start the
 *content* is not. That is why `dispatch.py` frames collected review text in `port-brief.md` as
 quotation rather than as instruction, and it is the reason to be careful about ever widening what
 update mode ingests.
+
+## Two ways a port branch quietly diverges from the harness that is supposed to grade it
+
+Both found while setting up the first resume run on `tilize`, and both bite a human doing something
+entirely reasonable to a port branch.
+
+### A resumed port runs the harness its own branch carries, not the one you dispatched
+
+`Place the launcher outside the sandbox` copies `.github/scripts/port/*.py` out of the workspace, and
+it runs *after* `Checkout tt-metal`, which checks out `PORT_BRANCH`. So on a resume the launcher comes
+from the port branch. For a fresh port the two are the same thing, because `PORT_BRANCH` is empty and
+the checkout takes the triggering ref, which is why this went unnoticed.
+
+The consequence is that a port branch freezes the harness as of its branch point, and no amount of
+dispatching from a newer ref changes that. `ebanerjee/port-tilize` was cut before the manifest removal,
+so it had no `discover.py`, while the workflow definition arriving from the dispatch ref had already
+been rewritten to call `discover.py --category-only`. That combination fails in the resolve step,
+before an agent exists, and the error says nothing about branches.
+
+Merging the harness into the port branch is the fix that keeps the reproducibility property: a port
+and the harness that graded it travel together, which is worth something when a verdict has to be
+explained months later. The alternative -- staging the launcher from the dispatch ref -- would make
+harness fixes reach every port branch at once and would also mean a port could be re-graded by a
+harness it has never seen. That is a real choice, not an oversight, but it should be made deliberately
+rather than by whichever step order happened to be written first.
+
+### The generator pin lives on the tip commit and nowhere else
+
+`Pin the generator to the commit this port was written against` reads the trailer with `git log -1`
+against a `fetch-depth: 1` checkout. One commit, no history. So **any** commit pushed onto a port
+branch that is not written by `dispatch.py publish` drops the pin, and the next run silently falls
+back to the floating generator branch.
+
+That is not a small silent failure. When this was hit, the floating branch was 68 commits ahead of the
+pin, and vendoring kernels from it against host code written for `dcc8e35bf` is the untilize
+`rm_shard_split.h` failure exactly: 112 cases writing uncorrelated data, presenting as a kernel bug
+rather than as a pin problem. A merge commit is the likeliest way in, because merging the harness onto
+a port branch is now a thing we do on purpose.
+
+Until the read walks history -- which needs a deeper fetch, so it is not a one-line change -- any
+hand-made commit on a port branch has to carry the trailer forward explicitly. Checking that
+`git log -1 --format='%(trailers:key=Port-generator,valueonly=true,unfold=true)'` still returns forty
+hex characters before pushing is the whole test.
