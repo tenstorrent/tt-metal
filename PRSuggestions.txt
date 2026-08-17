@@ -87,10 +87,12 @@ single p150b. Seven things worth fixing. Points 5 and 6 are one line each.
       would help too, and the docs could then settle on one number.
 
 6. The correctness gate accepts values that cannot be correlations
-    - It reported a PCC of 33.612 and marked it verified against a threshold of 0.99. Nothing checks
-      the range, and the test's exit code is ignored, so reading the number out of the log is the only
-      signal there is. Every optimization the tool keeps rests on that one answer.
-    - Fix: a range check would catch it, and the exit code is already there to be used.
+    - It reported a PCC of 33.612 and marked it verified against a threshold of 0.99. The number is
+      scraped from the log by a pattern loose enough to match any line that mentions pcc, nothing
+      checks that it is in range, and the exit code is ignored, so that one number is the only signal
+      there is. Every optimization the tool keeps rests on it.
+    - Fix: a range check would catch it, with a small tolerance since a real score can round just past
+      1. The exit code is there to cross-check against when the number is implausible.
 
 7. Name the optimization steps, so a good run can be repeated
     - Every large win came from the structural step, but that step lists only three things to try and
