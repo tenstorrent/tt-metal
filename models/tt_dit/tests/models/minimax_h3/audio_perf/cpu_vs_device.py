@@ -27,7 +27,11 @@ import ttnn
 SR = 32000
 HOP = 800
 NUM_LATENT_FRAMES = 207
-OUT_DIR = os.environ.get("CVD_OUT_DIR", "/data/rshirvani/audio_compare/clips")
+# Default under the repo's `generated/` (gitignored, and where the rest of the stack already writes)
+# rather than any particular developer's filesystem, so this runs on CI and on a fresh clone.
+OUT_DIR = os.environ.get("CVD_OUT_DIR") or os.path.join(
+    os.environ.get("TT_METAL_HOME", os.getcwd()), "generated", "audio_perf", "clips"
+)
 # `MINIMAX_H3_MODEL_PATH` is what the test suite uses (`common.weights_subdir`); the older
 # `MINIMAX_H3_DIFFUSERS_DIR` is still accepted so existing shells keep working.
 WEIGHTS = os.environ.get("MINIMAX_H3_MODEL_PATH") or os.environ.get("MINIMAX_H3_DIFFUSERS_DIR", "")

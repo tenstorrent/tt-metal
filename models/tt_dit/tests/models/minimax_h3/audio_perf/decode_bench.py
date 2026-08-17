@@ -5,6 +5,7 @@ came from. Build once, warm once, then time N decodes; report median and spread.
 """
 import json
 import os
+import re
 import statistics
 import sys
 import time
@@ -16,9 +17,13 @@ import ttnn
 from models.tt_dit.models.audio_vae.minimax_h3.convert_minimax_h3_audio import convert_minimax_h3_audio_state_dict
 from models.tt_dit.models.audio_vae.minimax_h3.decoder_minimax_h3_audio import MiniMaxH3AudioDecoder
 
-LABEL = sys.argv[1]
+# Label reaches a filename below, so keep it to one path-safe component: a caller passing
+# "../../etc/x" or an absolute path must not escape OUT.
+LABEL = re.sub(r"[^A-Za-z0-9._-]", "_", os.path.basename(sys.argv[1])) or "bench"
 N = int(os.environ.get("BENCH_N", "5"))
-OUT = os.environ.get("BENCH_OUT", "/data/rshirvani/bench_out")
+OUT = os.environ.get("BENCH_OUT") or os.path.join(
+    os.environ.get("TT_METAL_HOME", os.getcwd()), "generated", "audio_perf", "bench"
+)
 # `MINIMAX_H3_MODEL_PATH` is what the test suite uses (`common.weights_subdir`); the older
 # `MINIMAX_H3_DIFFUSERS_DIR` is still accepted so existing shells keep working.
 _root = os.environ.get("MINIMAX_H3_MODEL_PATH") or os.environ.get("MINIMAX_H3_DIFFUSERS_DIR", "")

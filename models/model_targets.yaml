@@ -942,6 +942,24 @@ targets:
             accuracy: {}
             owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
+  # Audio VAE decode stage only, not the full pipeline. Placeholder so the gap is visible to target
+  # tooling: the measured floors today are 291 ms at 45.80 dB, or 369 ms at 49.52 dB with
+  # split_mode="weight" + tap_matmul, on a 4x8 Blackhole mesh with an 8-way T-shard and trace
+  # (models/tt_dit/tests/models/minimax_h3/audio_perf/cpu_vs_device.py). Left TODO rather than active
+  # because this stage's targets are a decode latency and a PSNR against a CPU reference, and `perf`
+  # /`accuracy` here carry LLM fields (time_to_first_token, top1/top5); the enforceable schema for an
+  # audio stage needs to be agreed with the target-validation owners before values move in here.
+  minimax-h3-audio-decode:
+    aliases: ["MiniMax-H3-audio-decode", "minimax-h3-audio-vae"]
+    skus:
+      bh_galaxy:
+        entries:
+          - batch_size: 1
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+
   mistral-7b:
     aliases: ["Mistral-7B", "mistralai/Mistral-7B-Instruct-v0.3"]
     skus:

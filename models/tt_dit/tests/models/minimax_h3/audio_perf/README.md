@@ -13,7 +13,10 @@ gates live in `../test_audio_minimax_h3.py`.
       python cpu_vs_device.py
 
 Encodes four real clips (speech and music) with the torch/diffusers reference, decodes each on CPU and on
-device, and scores device against CPU. Prints latency PASS/FAIL against the 300 ms target, and an accuracy
+device, and scores device against CPU. Prints latency PASS/FAIL against the 300 ms target (tracked as
+`minimax-h3-audio-decode` in `models/model_targets.yaml`, currently a `TODO` placeholder -- an audio
+stage's targets are a decode latency and a PSNR, which that file's `perf`/`accuracy` fields do not yet
+express, so the enforceable values still live in this script), and an accuracy
 verdict only when `CVD_BASELINE_PSNR` is given -- the accuracy criterion is "no worse than the same levers
 unsharded", which has to be measured rather than hard-coded. WAVs land in `$CVD_OUT_DIR` so the difference
 can be heard; non-default configurations tag their filenames, so a sharded decode cannot overwrite a

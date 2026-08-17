@@ -532,6 +532,10 @@ def _localize_divergence(baseline, parallel, *, factor: int, logger) -> None:
     )
 
 
+# ~14 min: three decoder builds plus a decode per factor. `pytest.ini` defaults to 300 s, so without
+# this marker plain `pytest` kills the test rather than running it, and callers should not have to know
+# to pass `--timeout`.
+@pytest.mark.timeout(2400)
 @pytest.mark.parametrize(("mesh_device", "device_params"), MESH, indirect=["mesh_device", "device_params"])
 def test_audio_decode_t_parallel(mesh_device):
     weights_dir = weights_subdir("audio_vae")
@@ -562,9 +566,16 @@ def test_audio_decode_t_parallel(mesh_device):
             decoder = _build(mesh_device, config, converted, pc, ccl)
             out = decoder(latents)
             seconds = _best(lambda: decoder(latents))
-        except Exception as exc:  # a factor the stack rejects is a result, not a test failure
+        except Exception as exc:
+            # Every entry in FACTORS is a layout this stage claims to support, so a raise here is a
+            # regression, not a "result". Recording it as unsupported let factor 4 break while factor 8
+            # kept the test green -- the assertions below only require *some* parallel factor to run,
+            # so one of the two supported layouts could silently lose coverage. Anything genuinely
+            # optional belongs in KNOWN_BROKEN, which is explicit and reviewable.
             logger.warning(f"t_factor={factor} axis={axis} FAILED: {str(exc)[:160]}")
             results.append((factor, axis, None, None))
+            if (factor, axis) not in KNOWN_BROKEN:
+                raise
             continue
 
         if baseline_out is None:
