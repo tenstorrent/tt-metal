@@ -13,15 +13,18 @@ redefinition error. (tt-blaze papers over the same collision with ``#ifndef`` gu
 Nothing else in the tree compiles both headers into one translation unit, so the error
 that extraction fixes is unreachable from every other test. This test makes it reachable.
 
-It is primarily a **compile-time** assertion -- the value is in the build succeeding --
-which is why the runtime assertion is deliberately modest: the kernel calls the shared
-helper to rebase the Dst write pointer, sets it back to 0, and then a plain datacopy must
-still land correctly. That catches a helper that leaves the offset dirty, without
-duplicating the real sort coverage in test_topk_xl.py.
+This is a **compile-time** assertion -- the value is in the build succeeding. The kernel
+also runs, which shows the combined translation unit executes rather than merely building,
+but the run deliberately claims nothing about the helper's offset: the datacopy used to
+read DEST back reprograms ``DEST_TARGET_REG_CFG_MATH_Offset_ADDR32`` itself before it
+touches DEST, so any offset the helper left is discarded. See the note in
+``sources/sort_headers_coexist_test.cpp``. The helper is covered in its real context by the
+topk_xl and deepseek_top32_rm kernels.
 
-The offset swept is in Dst rows. 0 is the no-op baseline; 2 is what topk_xl itself uses
-(``set_dst_write_addr_offset(tile_offset + (col ? 0 : 2))``); 64 is a whole-tile rebase,
-the granularity deepseek_top32_rm uses for its multi-tile Dst region.
+``dest_acc`` is swept because it is the one axis that changes what the combined TU
+actually builds -- it flips ``is_fp32_dest_acc_en`` through both headers' DEST addressing
+and the datacopy -- unlike the Dst-row offset that used to be swept here, which no
+downstream check could observe.
 """
 
 import torch
@@ -33,7 +36,6 @@ from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
-from helpers.test_variant_parameters import SORT_DST_WRITE_OFFSET
 from helpers.utils import passed_test
 
 pytestmark = [skip_for_wormhole, skip_for_quasar]
@@ -47,9 +49,9 @@ FORMATS = input_output_formats([DataFormat.Float16_b], same=True)
 
 @parametrize(
     formats=FORMATS,
-    dst_write_offset=[0, 2, 64],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
 )
-def test_sort_headers_coexist(formats, dst_write_offset):
+def test_sort_headers_coexist(formats, dest_acc):
     torch.manual_seed(0)
 
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
@@ -62,7 +64,7 @@ def test_sort_headers_coexist(formats, dst_write_offset):
     configuration = TestConfig(
         "sources/sort_headers_coexist_test.cpp",
         formats,
-        templates=[SORT_DST_WRITE_OFFSET(dst_write_offset)],
+        templates=[],
         runtimes=[],
         variant_stimuli=StimuliConfig(
             src_A.flatten(),
@@ -75,7 +77,7 @@ def test_sort_headers_coexist(formats, dst_write_offset):
             tile_count_res=1,
         ),
         unpack_to_dest=formats.input_format.is_32_bit(),
-        dest_acc=DestAccumulation.No,
+        dest_acc=dest_acc,
     )
 
     res_from_L1 = configuration.run().result[:ELEMENTS_PER_TILE]
@@ -90,7 +92,8 @@ def test_sort_headers_coexist(formats, dst_write_offset):
     golden = torch.tensor(golden[:ELEMENTS_PER_TILE], dtype=torch_format).flatten()
 
     assert passed_test(golden, device, formats.output_format), (
-        "the datacopy after set_dst_write_addr_offset("
-        f"{dst_write_offset}) -> set_dst_write_addr_offset(0) was corrupted: the shared "
-        "helper appears to leave the Dst write offset dirty"
+        "the datacopy in the translation unit that includes both experimental sort SFPU "
+        "headers was corrupted -- the two headers no longer coexist cleanly at runtime. "
+        "This does not implicate set_dst_write_addr_offset's value; see the module "
+        "docstring for why the offset itself is not observable here."
     )
