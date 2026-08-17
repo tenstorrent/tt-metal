@@ -43,30 +43,31 @@
    cache:
     - Both are written when the pipeline is wired together, not during bring-up.
     - The cache never reaches the component, for two reasons:
-        - the saved example contains a real cache, but the same object is given to the reference and
+        - the saved example contains a real cache, but the same object is passed to the reference and
           then to the port. The reference writes into it as it runs, so the port sees one entry too
-          many. So the cache is dropped. The tool notes the cost: with no cache the test compares a
-          single value and returns 1.0 whatever the inputs are.
-        - the test only passes arguments whose names are on a recognised list, and the cache is not
-          on it, so it always arrives empty.
-      Using the cache and ignoring it score the same, so the simpler version was accepted.
-    - The version that generates speech then has no choice but to recompute. It must use the accepted
-      components, and one that ignores the cache can only be given the whole prompt plus everything
-      generated so far, every frame.
-    - Careful: the plan expects the model to run once per frame plus once for the prompt, so a
-      correct fix will fail that check, and the one verifying which components are used. Update both
-      in the same change or a good fix looks like a regression.
-    - The traced version is correct at any position when called normally. It is stuck at one position
-      only once recorded, because the position is baked in. To replay it in a loop the position has
-      to live on the device.
-    - Effect: speed was measured on the traced version, correctness on the eager one. It reported
-      17.2% faster; what ships got 13.2% (297.69 to 258.26 ms per audio frame), because most edits
-      touched shared code. So the work is not lost, but nothing measured what ships. Our hand written
-      port of the same model on the same board runs at 26.9 ms.
+          many. The cache is dropped to avoid that, and the tool notes what it costs: with no cache
+          the test compares a single value and returns 1.0 whatever the inputs are.
+        - the test only passes arguments whose names are on a recognised list, and the cache is not on
+          it, so it always arrives empty.
+      A version that uses the cache and one that ignores it therefore score the same, so the simpler
+      one was accepted.
+    - The version that generates speech then has to recompute. It must use the accepted components,
+      and one that ignores the cache can only be given the whole prompt plus everything generated so
+      far, on every frame.
+    - A correct fix will fail two existing checks: the plan expects the model to run once per frame
+      plus once for the prompt, and a second check verifies which components are used. Update both in
+      the same change, or a good fix will look like a regression.
+    - The traced version works at any position when called directly. The problem appears once it is
+      recorded, because the position is baked into the recording, so a recording made at position 200
+      always writes to slot 200. To replay it in a loop the position has to be a tensor on the device.
+    - Speed was measured on the traced version and correctness on the eager one. It reported 17.2%
+      faster; what ships got 13.2% (297.69 to 258.26 ms per audio frame), because most edits touched
+      shared code. The work is not lost, but nothing measured what ships. Our hand written port of
+      the same model on the same board runs at 26.9 ms.
     - Fix, in order:
-        1. copy the saved inputs before giving them to each side
+        1. copy the saved inputs before passing them to each side
         2. add the cache to the recognised list
         3. let the component use the cache, its signature already has the argument
         4. update the expected call counts and both checks in the same change
-        5. for the traced version, make the position live on the device
-    - Also: before measuring speed, check that the code measured is the code that generates speech.
+        5. for the traced version, make the position a tensor on the device
+    - Before measuring speed, check that the code measured is the code that generates speech.
