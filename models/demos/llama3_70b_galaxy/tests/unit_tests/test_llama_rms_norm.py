@@ -7,6 +7,7 @@ from loguru import logger
 import ttnn
 from models.common.rmsnorm import RMSNorm as TtRMSNorm
 from models.demos.llama3_70b_galaxy.tt.model_config import TtModelArgs
+from models.tt_transformers.tests.test_utils import get_ref_model_dype
 from models.common.utility_functions import (
     comp_pcc,
     comp_allclose,
@@ -95,11 +96,10 @@ def test_llama_rms_norm_inference(
     }
     reference_model = model_args.reference_rms_norm()
     reference_model.load_state_dict(partial_state_dict)
-    # HF reference weights load as bf16 (torch_dtype="auto"); torch inputs are fp32, so match the reference to fp32.
-    reference_model.to(torch.float32)
+    ref_dtype = get_ref_model_dype(reference_model, model_args.model_name)
 
     input = torch.rand(1, 1, 32, model_args.dim)
-    reference_output = reference_model(input)
+    reference_output = reference_model(input.to(ref_dtype))
     for i in range(3):
         # DistributedNorm inputs are fractured across devices and interleaved in DRAM (for prefill) and L1 (for decode)
         tt_input = ttnn.from_torch(

@@ -12,6 +12,7 @@ from models.demos.llama3_70b_galaxy.tt.llama_common import (
 )
 from models.demos.llama3_70b_galaxy.tt.model_config import TtModelArgs, LlamaOptimizations
 from models.demos.llama3_70b_galaxy.tt.llama_model import TtTransformer
+from models.tt_transformers.tests.test_utils import get_ref_model_dype
 from models.common.sampling.tt_sampling import TTSampling
 from models.common.utility_functions import (
     comp_pcc,
@@ -183,7 +184,7 @@ def test_llama_model_inference(
     if run_ref_pt:
         reference_model = model_args.reference_transformer()
         reference_model.load_state_dict(reference_state_dict)
-        reference_model.model.to(torch.float32)
+        ref_dtype = get_ref_model_dype(reference_model, model_args.model_name)
 
     # Embedding on host
     embd = HostEmbedding(model_args)
@@ -335,7 +336,7 @@ def test_llama_model_inference(
 
             if run_ref_pt:  # Run reference model
                 # In this test all users have the same position
-                ref_output = reference_model(pt_decode_input, current_pos[0])
+                ref_output = reference_model(pt_decode_input.to(ref_dtype), current_pos[0])
 
             # Increment position
             current_pos = torch.full((batch,), generation_start_pos + i)

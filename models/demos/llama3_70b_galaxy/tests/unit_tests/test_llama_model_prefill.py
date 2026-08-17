@@ -14,6 +14,7 @@ from models.demos.llama3_70b_galaxy.tt.llama_common import (
 )
 from models.demos.llama3_70b_galaxy.tt.llama_model import TtTransformer
 from models.demos.llama3_70b_galaxy.tt.model_config import TtModelArgs, LlamaOptimizations
+from models.tt_transformers.tests.test_utils import get_ref_model_dype
 from models.common.utility_functions import (
     comp_pcc,
     comp_allclose,
@@ -127,8 +128,7 @@ def test_llama_model_inference(
     if run_ref_pt:
         reference_model = model_args.reference_transformer()
         reference_model.load_state_dict(reference_state_dict)
-        # HF reference weights load as bf16 (torch_dtype="auto"); torch inputs are fp32, so match the reference to fp32.
-        reference_model.model.to(torch.float32)
+        ref_dtype = get_ref_model_dype(reference_model, model_args.model_name)
     # Embedding on host
     embd = HostEmbedding(model_args)
     embd.load_state_dict({"emb.weight": state_dict[f"{state_dict_prefix}tok_embeddings.weight"]})
@@ -212,7 +212,7 @@ def test_llama_model_inference(
         tt_output_torch = tt_out[:, 0:1, :, : model_args.dim].view(batch_size, seq_len, -1)  # [ batch, seq, hidden_dim]
 
         if run_ref_pt:  # Run reference model
-            ref_output = reference_model(pt_prefill_input, start_pos, mode="prefill")
+            ref_output = reference_model(pt_prefill_input.to(ref_dtype), start_pos, mode="prefill")
 
         # Measure PCC if also running reference model
         if run_ref_pt:

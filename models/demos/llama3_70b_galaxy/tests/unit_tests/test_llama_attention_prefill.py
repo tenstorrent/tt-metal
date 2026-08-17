@@ -7,6 +7,7 @@ from loguru import logger
 import ttnn
 from models.demos.llama3_70b_galaxy.tt.llama_attention import TtLlamaAttention
 from models.demos.llama3_70b_galaxy.tt.model_config import TtModelArgs
+from models.tt_transformers.tests.test_utils import get_ref_model_dype
 from models.demos.llama3_70b_galaxy.tt.llama_common import (
     get_prefill_rot_mat,
     get_rot_transformation_mat,
@@ -77,8 +78,7 @@ def test_llama_attention_inference(
     }
     reference_model = model_args.reference_attention()
     reference_model.load_state_dict(partial_state_dict)
-    # HF reference weights load as bf16 (torch_dtype="auto"); torch inputs are fp32, so match the reference to fp32.
-    reference_model.attention.to(torch.float32)
+    ref_dtype = get_ref_model_dype(reference_model, model_args.model_name)
 
     # pre-compute the rotational embedding matrix and send to device
     rot_mats = get_prefill_rot_mat(
@@ -180,7 +180,9 @@ def test_llama_attention_inference(
 
         # Reset the HF reference DynamicCache so each iteration compares the same logical sequence.
         reference_model.past_key_value = DynamicCache()
-        reference_output = reference_model(pt_attention_input, positions[0], freqs_cis_i, mask=attn_mask_torch)
+        reference_output = reference_model(
+            pt_attention_input.to(ref_dtype), positions[0], freqs_cis_i, mask=attn_mask_torch
+        )
 
         passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc)
 

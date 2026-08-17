@@ -13,6 +13,7 @@ from models.demos.llama3_70b_galaxy.tt.llama_common import (
 from models.demos.llama3_70b_galaxy.tt.model_config import TtModelArgs
 from models.demos.llama3_70b_galaxy.tt.llama_decoder import TtTransformerBlock
 from models.demos.llama3_70b_galaxy.tt.llama_rope import TtLlamaRotarySetup
+from models.tt_transformers.tests.test_utils import get_ref_model_dype
 from models.common.utility_functions import (
     comp_pcc,
     comp_allclose,
@@ -104,8 +105,7 @@ def test_llama_decoder_inference(
     }
     reference_model = model_args.reference_decoder()
     reference_model.load_state_dict(partial_state_dict)
-    # HF reference weights load as bf16 (torch_dtype="auto"); torch inputs are fp32, so match the reference to fp32.
-    reference_model.decoder.to(torch.float32)
+    ref_dtype = get_ref_model_dype(reference_model, model_args.model_name)
 
     generation_length = 10
     all_tests_pass = True
@@ -233,7 +233,7 @@ def test_llama_decoder_inference(
         freqs_cis_i = freqs_cis[current_pos[0], :].unsqueeze(0)
 
         # Reference model
-        ref_output = reference_model(pt_decode_input, current_pos[0], freqs_cis_i, mask=None)
+        ref_output = reference_model(pt_decode_input.to(ref_dtype), current_pos[0], freqs_cis_i, mask=None)
 
         passing, pcc_message = comp_pcc(ref_output, tt_output_torch)
 

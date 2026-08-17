@@ -8,6 +8,7 @@ import ttnn
 from models.demos.llama3_70b_galaxy.tt.llama_attention import TtLlamaAttention
 from models.demos.llama3_70b_galaxy.tt.llama_rope import TtLlamaRotarySetup
 from models.demos.llama3_70b_galaxy.tt.model_config import TtModelArgs
+from models.tt_transformers.tests.test_utils import get_ref_model_dype
 from models.demos.llama3_70b_galaxy.tt.llama_common import (
     precompute_freqs,
     PagedAttentionConfig,
@@ -91,8 +92,7 @@ def test_llama_attention_inference(
 
     reference_model = model_args.reference_attention()
     reference_model.load_state_dict(partial_state_dict)
-    # HF reference weights load as bf16 (torch_dtype="auto"); torch inputs are fp32, so match the reference to fp32.
-    reference_model.attention.to(torch.float32)
+    ref_dtype = get_ref_model_dype(reference_model, model_args.model_name)
 
     seq_len = 1
 
@@ -253,7 +253,9 @@ def test_llama_attention_inference(
         # In this test all users have the same position (if using batch > 1)
         freqs_cis_i = freqs_cis[current_pos_dram[0], :].unsqueeze(0)
 
-        reference_output = reference_model(pt_attention_input, current_pos_dram[0], freqs_cis_i, mask=None)
+        reference_output = reference_model(
+            pt_attention_input.to(ref_dtype), current_pos_dram[0], freqs_cis_i, mask=None
+        )
 
         passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc)
 

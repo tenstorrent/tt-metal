@@ -12,6 +12,7 @@ from models.demos.llama3_70b_galaxy.tt.llama_common import (
 )
 from models.demos.llama3_70b_galaxy.tt.llama_decoder import TtTransformerBlock
 from models.demos.llama3_70b_galaxy.tt.model_config import TtModelArgs
+from models.tt_transformers.tests.test_utils import get_ref_model_dype
 from models.common.utility_functions import (
     comp_pcc,
     comp_allclose,
@@ -81,8 +82,7 @@ def test_llama_decoder_inference(
 
     reference_model = model_args.reference_decoder()
     reference_model.load_state_dict(partial_state_dict)
-    # HF reference weights load as bf16 (torch_dtype="auto"); torch inputs are fp32, so match the reference to fp32.
-    reference_model.decoder.to(torch.float32)
+    ref_dtype = get_ref_model_dype(reference_model, model_args.model_name)
 
     generation_start_pos = 0
     generation_length = 1
@@ -163,7 +163,7 @@ def test_llama_decoder_inference(
         # Reference model
         attn_mask = torch.full((max_seq_len, max_seq_len), torch.finfo(torch.float32).min)
         attn_mask_torch = torch.triu(attn_mask, diagonal=1)
-        ref_output = reference_model(pt_decode_input, positions[0], freqs_cis_i, mask=attn_mask_torch)
+        ref_output = reference_model(pt_decode_input.to(ref_dtype), positions[0], freqs_cis_i, mask=attn_mask_torch)
         # Run TT model
         tt_out, _ = tt_model(decode_input, None, None, rot_mats, user_id=0, mode="prefill", page_table=page_table_tt)
         tt_out = ttnn.to_torch(

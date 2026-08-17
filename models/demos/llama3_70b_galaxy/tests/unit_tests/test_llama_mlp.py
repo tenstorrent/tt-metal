@@ -8,6 +8,7 @@ from loguru import logger
 import ttnn
 from models.demos.llama3_70b_galaxy.tt.llama_mlp import TtLlamaMLP
 from models.demos.llama3_70b_galaxy.tt.model_config import TtModelArgs
+from models.tt_transformers.tests.test_utils import get_ref_model_dype
 from models.common.utility_functions import (
     comp_pcc,
     comp_allclose,
@@ -70,8 +71,7 @@ def test_llama_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds):
     model_args.WEIGHTS_DTYPE = dtype
     reference_model = model_args.reference_mlp()
     reference_model.load_state_dict(partial_state_dict)
-    # HF reference weights load as bf16 (torch_dtype="auto"); torch_input is fp32, so match the reference to fp32.
-    reference_model.to(torch.float32)
+    ref_dtype = get_ref_model_dype(reference_model, model_args.model_name)
 
     tt_model = TtLlamaMLP(
         mesh_device=mesh_device,
@@ -127,7 +127,7 @@ def test_llama_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds):
         logger.info("llama MLP Done")
         tt_output_torch = tt_output_torch[:, :1, :, : model_args.dim]  # (1, 8, bsz, 8192) -> (1, 1, bsz, 8192)
 
-        reference_output = reference_model(torch_input[:, :, :, : model_args.dim])
+        reference_output = reference_model(torch_input[:, :, :, : model_args.dim].to(ref_dtype))
 
         pcc_required = 0.99
         passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
