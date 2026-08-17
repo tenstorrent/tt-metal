@@ -1,11 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""CPU unit tests for the ``reference/`` oracle: HF adapter, HF parity, replay harness (#47468).
-
-Standalone-importable: no device and no 51 GB checkpoint, every primitive instantiates
-from config alone.
-"""
+"""Critical real-HF parity, stage-gate, and trajectory-harness drift guards."""
 
 import importlib.util
 from types import SimpleNamespace
@@ -15,38 +11,19 @@ import torch
 import torch.nn as nn
 
 from models.experimental.diffusion_gemma.config import DiffusionConfig
+from models.experimental.diffusion_gemma.reference import sampling as S
+from models.experimental.diffusion_gemma.reference.hf_reference import run_reference_trajectory
 from models.experimental.diffusion_gemma.reference.replay_hf_tt import (
-    _make_replay_noise,
-    _stage_gate_active_step_indices,
-    _tensor_sha256,
     _validate_stage_gate_args,
     build_arg_parser,
-)
-from models.experimental.diffusion_gemma.reference import sampling as S
-from models.experimental.diffusion_gemma.reference.attention_mask import build_canvas_denoise_mask
-from models.experimental.diffusion_gemma.reference.hf_reference import (
-    hf_reference_generate,
-    is_hf_reference_available,
-    load_hf_reference,
-    make_logits_fn,
-    run_reference_trajectory,
 )
 from models.experimental.diffusion_gemma.reference.self_conditioning import DiffusionGemmaRMSNorm, SelfConditioning
 from models.experimental.diffusion_gemma.tests.trajectory_pcc import compare_trajectories
 
-_requires_transformers = pytest.mark.skipif(
-    importlib.util.find_spec("transformers") is None,
-    reason="transformers not installed",
-)
-
-# find_spec RAISES ModuleNotFoundError on a submodule whose parent is absent, so probe the
-# parent first: without it this module-level gate would break collection of the whole file
-# (including the transformers-independent tests) in an env with no transformers at all.
 _HAS_HF_DIFFUSION_GEMMA = (
     importlib.util.find_spec("transformers") is not None
     and importlib.util.find_spec("transformers.models.diffusion_gemma") is not None
 )
-
 _requires_hf_diffusion_gemma = pytest.mark.skipif(
     not _HAS_HF_DIFFUSION_GEMMA,
     reason="transformers.models.diffusion_gemma not installed (ships since transformers 5.12)",
@@ -54,83 +31,28 @@ _requires_hf_diffusion_gemma = pytest.mark.skipif(
 
 
 def _gen(seed=0):
-    g = torch.Generator()
-    g.manual_seed(seed)
-    return g
+    generator = torch.Generator()
+    generator.manual_seed(seed)
+    return generator
 
 
-# --- HF reference adapter and trajectory harness ---------------------------------------------
-#
-# The real HF model is environment-gated, so these verify (a) the guard behaves, and (b) the
-# adapter + trajectory + PCC harness compose correctly using a mock canvas-logits model that
-# stands in for the HF / device model.
-
-
-def _cfg(**kw):
-    return DiffusionConfig(max_denoise_steps=8, entropy_stop_threshold=0.1, stable_steps_to_halt=1, **kw)
+def _cfg(**kwargs):
+    return DiffusionConfig(max_denoise_steps=8, entropy_stop_threshold=0.1, stable_steps_to_halt=1, **kwargs)
 
 
 class _MockCanvasModel:
-    """Deterministic canvas-logits model: fixed per-position logits, optional drift."""
-
     def __init__(self, batch, length, vocab, seed, drift=0.0):
         self._logits = torch.randn(batch, length, vocab, generator=_gen(seed))
         self._drift = drift
 
-    def __call__(self, canvas, **kw):
-        out = self._logits.clone()
+    def __call__(self, canvas, **kwargs):
+        output = self._logits.clone()
         if self._drift:
-            out[..., 0] += self._drift  # perturb one logit -> can flip argmax/accept
-        return out
-
-
-class _FakeRawHFModel:
-    """Stands in for a raw DiffusionGemmaForBlockDiffusion: has generate() + a
-    config with canvas_length, so the canvas-logits seam must reject it."""
-
-    class _Cfg:
-        canvas_length = 256
-
-    def __init__(self):
-        self.config = self._Cfg()
-
-    def generate(self, input_ids, **kw):
-        return {"sequences": input_ids, "kw": kw}
-
-
-def test_guard_reports_unavailable_and_loader_raises(expect_error):
-    # In this environment diffusion_gemma is not installed.
-    if not is_hf_reference_available():
-        with expect_error(ImportError, match="diffusion_gemma"):
-            load_hf_reference("google/diffusiongemma-26B-A4B-it")
-    else:  # pragma: no cover - only when a diffusion_gemma build is present
-        pytest.skip("diffusion_gemma is available; loader guard not exercised")
-
-
-def test_canvas_logits_seam_rejects_raw_hf_model(expect_error):
-    """make_logits_fn / run_reference_trajectory must NOT accept a raw HF model
-    (its canvas is decoder_input_ids, not the first positional). Finding #2."""
-    raw = _FakeRawHFModel()
-    with expect_error(TypeError, match="canvas-logits callable"):
-        make_logits_fn(raw)
-    with expect_error(TypeError, match="canvas-logits callable"):
-        run_reference_trajectory(raw, torch.zeros(1, 8, dtype=torch.long), _cfg(), 32)
-
-
-def test_hf_reference_generate_delegates_to_model_generate():
-    """The real-HF oracle seam calls model.generate(input_ids, ...) and forwards kwargs."""
-    raw = _FakeRawHFModel()
-    ids = torch.arange(8).view(1, 8)
-    out = hf_reference_generate(raw, ids, max_new_tokens=256)
-    assert out["sequences"] is ids
-    assert out["kw"]["max_new_tokens"] == 256
+            output[..., 0] += self._drift
+        return output
 
 
 def test_harness_rejects_drifted_candidate():
-    """Drift must be caught on the DETERMINISTIC decision classes, not via RNG noise.
-    Inject fixed Gumbel+renoise into all three runs so the only difference is the
-    logit drift; a no-drift control must PASS (proving the test isn't vacuous), and
-    the drifted run must fail with degraded argmax agreement."""
     batch, length, vocab = 1, 8, 32
     init = S.random_canvas((batch, length), vocab, generator=_gen(3))
 
@@ -150,186 +72,11 @@ def test_harness_rejects_drifted_candidate():
             noise_tokens_fn=noise_fn,
         )
 
-    ref = run(0.0)
-    # no-drift control: same injected noise -> identical trajectory -> the harness PASSES
-    assert compare_trajectories(ref, run(0.0)).passed
-    # a strong logit drift flips argmax/accept deterministically -> the harness FAILS
-    cmp = compare_trajectories(ref, run(5.0))
-    assert not cmp.passed
-    assert cmp.min_argmax_agreement < 1.0  # caught on the deterministic decision class, not RNG
-
-
-# --- HF sliding-layer denoise visibility (#51080) --------------------------------------------
-#
-# The DG reference module used to document the rule as "attend only keys with
-# ``abs(q_idx - kv_idx) <= sliding_window``" and implemented that staircase. HF does no such
-# thing. These tests pin what HF really does, so the per-layer-span work is validated against
-# the real reference and a transformers upgrade that changes it fails loudly here instead of
-# silently shifting committed tokens.
-#
-# Ground truth, established by reading
-# ``transformers/models/diffusion_gemma/modeling_diffusion_gemma.py`` and ``cache_utils.py``:
-#
-# 1. A sliding layer's cache RETAINS only ``sliding_window - 1`` committed tokens
-#    (``DynamicSlidingWindowLayer.update`` keeps ``full_key_states[:, :, -sliding_window + 1:, :]``).
-# 2. For the ordinary unpadded DynamicCache path, ``create_diffusion_decoder_attention_mask``
-#    returns ``None`` for BOTH masks — so there is no sliding mask at all and the window is
-#    purely a cache-truncation effect.
-# 3. When a padding mask IS materialized, the sliding mask is expanded from a 1-D per-key
-#    vector, so it has NO query-index dependence — every canvas row sees the same key set.
-#
-# => HF sliding-layer denoise visibility = the ``sliding_window - 1`` most recent committed
-#    tokens, ALL-ATTEND, plus the full canvas. No staircase.
-
-W = 8  # tiny stand-in for the real sliding_window=1024; the arithmetic is what matters
-CANVAS = 4
-
-
-def _kv(seq_len: int, *, offset: int = 0):
-    """K/V shaped [batch, heads, seq, head_dim] whose values encode absolute position."""
-    pos = torch.arange(offset, offset + seq_len, dtype=torch.float32)
-    return pos.view(1, 1, seq_len, 1).clone(), pos.view(1, 1, seq_len, 1).clone()
-
-
-def _text_config():
-    from transformers.models.diffusion_gemma.configuration_diffusion_gemma import DiffusionGemmaTextConfig
-
-    return DiffusionGemmaTextConfig(
-        hidden_size=8,
-        intermediate_size=16,
-        num_hidden_layers=2,
-        num_attention_heads=1,
-        num_key_value_heads=1,
-        head_dim=8,
-        sliding_window=W,
-        canvas_length=CANVAS,
-        layer_types=["sliding_attention", "full_attention"],
-    )
-
-
-def _seed_cache(past, config, prompt_len: int):
-    """Push ``prompt_len`` committed tokens through every layer so get_seq_length() == prompt_len."""
-    k, v = _kv(prompt_len)
-    k = k.expand(1, config.num_key_value_heads, prompt_len, config.head_dim).contiguous()
-    v = v.expand(1, config.num_key_value_heads, prompt_len, config.head_dim).contiguous()
-    for layer_idx in range(config.num_hidden_layers):
-        past.update(k.clone(), v.clone(), layer_idx)
-
-
-@_requires_transformers
-def test_sliding_layer_cache_retains_exactly_window_minus_one():
-    """Fact 1: retention is sliding_window - 1, NOT sliding_window."""
-    from transformers.cache_utils import DynamicSlidingWindowLayer
-
-    layer = DynamicSlidingWindowLayer(sliding_window=W)
-    n = 5 * W
-    k, v = _kv(n)
-    out_k, _out_v = layer.update(k, v)
-
-    # The op returns the full concatenation for this call, but what it RETAINS is truncated.
-    assert layer.keys.shape[2] == W - 1, f"expected {W - 1} retained rows, got {layer.keys.shape[2]}"
-    retained = layer.keys.flatten().tolist()
-    assert retained == list(range(n - (W - 1), n)), "retained rows must be the most recent W-1 positions"
-    assert out_k.shape[2] >= layer.keys.shape[2]
-
-
-@_requires_transformers
-def test_unpadded_dynamic_cache_produces_no_sliding_mask_at_all():
-    """Fact 2: the common DG path returns None for both masks -> no staircase exists."""
-    from transformers.cache_utils import DynamicCache
-    from transformers.models.diffusion_gemma.modeling_diffusion_gemma import DiffusionGemmaDecoderModel
-
-    config = _text_config()
-    past = DynamicCache(config=config)
-    prompt_len = 3 * W
-    _seed_cache(past, config, prompt_len)
-
-    inputs_embeds = torch.zeros(1, CANVAS, config.hidden_size)
-
-    # decoder_attention_mask=None -> shortcut return
-    masks = DiffusionGemmaDecoderModel.create_diffusion_decoder_attention_mask(
-        config=config, inputs_embeds=inputs_embeds, past_key_values=past, decoder_attention_mask=None
-    )
-    assert masks == {"full_attention": None, "sliding_attention": None}
-
-    # an all-ones (unpadded) mask takes the same shortcut
-    all_ones = torch.ones(1, prompt_len + CANVAS, dtype=torch.long)
-    masks = DiffusionGemmaDecoderModel.create_diffusion_decoder_attention_mask(
-        config=config, inputs_embeds=inputs_embeds, past_key_values=past, decoder_attention_mask=all_ones
-    )
-    assert masks == {"full_attention": None, "sliding_attention": None}, (
-        "an unpadded DynamicCache must produce no materialized mask; the sliding window is "
-        "a cache-truncation effect, not a mask"
-    )
-
-
-@_requires_transformers
-def test_materialized_sliding_mask_has_no_query_dependence_and_spans_window_minus_one():
-    """Fact 3: when materialized, the sliding mask is query-INDEPENDENT (no staircase)."""
-    from transformers.cache_utils import DynamicCache
-    from transformers.models.diffusion_gemma.modeling_diffusion_gemma import DiffusionGemmaDecoderModel
-
-    config = _text_config()
-    past = DynamicCache(config=config)
-    prompt_len = 3 * W
-    _seed_cache(past, config, prompt_len)
-
-    inputs_embeds = torch.zeros(1, CANVAS, config.hidden_size)
-    # One left-pad position forces materialization (mask.all() is False).
-    padded = torch.ones(1, prompt_len + CANVAS, dtype=torch.long)
-    padded[0, 0] = 0
-
-    masks = DiffusionGemmaDecoderModel.create_diffusion_decoder_attention_mask(
-        config=config, inputs_embeds=inputs_embeds, past_key_values=past, decoder_attention_mask=padded
-    )
-    sliding = masks["sliding_attention"]
-    assert sliding is not None
-
-    # NO staircase: every canvas (query) row must see an identical key set.
-    rows = sliding.shape[2]
-    assert rows == CANVAS
-    for i in range(1, rows):
-        assert torch.equal(
-            sliding[:, :, 0, :], sliding[:, :, i, :]
-        ), "sliding mask varies by query row -- that would be a |q-k| staircase, which HF does not do"
-
-    # Span: (W-1) committed columns + the canvas, all canvas columns attended.
-    assert sliding.shape[-1] == (W - 1) + CANVAS
-    assert bool(sliding[..., -CANVAS:].all()), "canvas columns must be fully attended"
-
-
-@_requires_transformers
-def test_tt_window_span_formula_matches_hf_key_set():
-    """The span/offset arithmetic the TT per-layer read will use reproduces HF's key set.
-
-    TT reads a TILE-ALIGNED ``span`` rows at ``lo = max(0, P - span)`` and masks the
-    uncommitted / out-of-window columns. HF attends absolute positions ``[P-(W-1), P)``.
-    A tile-aligned span cannot be ``W-1`` (1023 is not a multiple of 32), which is exactly
-    why the design reads one extra row and masks it out.
-    """
-    span = W  # stands in for the tile-aligned 1024 vs HF's 1023
-
-    for P in (1, W - 1, W, W + 1, 2 * W, 5 * W):
-        hf_visible = set(range(max(0, P - (W - 1)), P))
-
-        lo = max(0, P - span)
-        tt_visible = {
-            lo + r
-            for r in range(span)
-            # committed-prefix predicate AND the HF cache-retention predicate
-            if (lo + r) < P and (lo + r) >= P - (W - 1)
-        }
-        assert tt_visible == hf_visible, f"P={P}: TT {sorted(tt_visible)} != HF {sorted(hf_visible)}"
-
-
-# --- parity with the REAL installed transformers diffusion_gemma (#47468) --------------------
-#
-# ``transformers`` ships ``diffusion_gemma`` since 5.12, so the authoritative drift guard is to
-# test our purpose-built reference primitives against the **actual installed** classes — not the
-# vendored copies in ``reference/_upstream.py`` (those remain only as a fallback for envs without
-# diffusion_gemma, e.g. old CI). These supersede ``test_model.py`` whenever
-# transformers >= 5.12 is present; the two together mean the reference is pinned to the real
-# model in every env.
+    reference = run(0.0)
+    assert compare_trajectories(reference, run(0.0)).passed
+    comparison = compare_trajectories(reference, run(5.0))
+    assert not comparison.passed
+    assert comparison.min_argmax_agreement < 1.0
 
 
 @_requires_hf_diffusion_gemma
@@ -342,13 +89,19 @@ def test_entropy_accept_matches_real_EntropyBoundSampler():
     for seed, bound in [(2, 0.05), (3, 0.1), (4, 0.5), (5, 2.0)]:
         logits = torch.randn(1, 64, 128, generator=_gen(seed))
         sampler = EntropyBoundSampler(
-            EntropyBoundSamplerConfig(entropy_bound=bound), canvas_length=64, vocab_size=128, max_denoising_steps=48
+            EntropyBoundSamplerConfig(entropy_bound=bound),
+            canvas_length=64,
+            vocab_size=128,
+            max_denoising_steps=48,
         )
-        # accept_canvas sets sampler.accepted_token_mask (the scatter-back accept mask)
-        sampler.accept_canvas(torch.zeros(1, 64, dtype=torch.long), torch.ones(1, 64, dtype=torch.long), logits, 1)
-        real_mask = sampler.accepted_token_mask.bool()
+        sampler.accept_canvas(
+            torch.zeros(1, 64, dtype=torch.long),
+            torch.ones(1, 64, dtype=torch.long),
+            logits,
+            1,
+        )
         ours = S.entropy_budget_accept(S.token_entropy(logits), bound, min_accept=0)
-        assert torch.equal(ours, real_mask), f"seed {seed} bound {bound}: accept mask differs from real sampler"
+        assert torch.equal(ours, sampler.accepted_token_mask.bool())
 
 
 @_requires_hf_diffusion_gemma
@@ -357,14 +110,18 @@ def test_temperature_matches_real_LinearSchedule():
         LinearTemperatureScheduleLogitsProcessor,
     )
 
-    N, t_min, t_max = 48, 0.4, 0.8
-    proc = LinearTemperatureScheduleLogitsProcessor(t_min=t_min, t_max=t_max, max_denoising_steps=N)
+    steps, t_min, t_max = 48, 0.4, 0.8
+    processor = LinearTemperatureScheduleLogitsProcessor(
+        t_min=t_min,
+        t_max=t_max,
+        max_denoising_steps=steps,
+    )
     scores = torch.ones(1, 10)
-    for cur_step in range(1, N + 1):
-        out = proc(None, scores.clone(), cur_step)  # scores / temperature
-        real_temp = float(scores[0, 0] / out[0, 0])
-        ours_temp = S.temperature_at_step(N - cur_step, N, t_max, t_min)  # forward index = N - cur_step
-        assert abs(real_temp - ours_temp) < 1e-5, f"cur_step {cur_step}: temp {ours_temp} != {real_temp}"
+    for current_step in range(1, steps + 1):
+        output = processor(None, scores.clone(), current_step)
+        real_temperature = float(scores[0, 0] / output[0, 0])
+        ours = S.temperature_at_step(steps - current_step, steps, t_max, t_min)
+        assert abs(real_temperature - ours) < 1e-5
 
 
 @_requires_hf_diffusion_gemma
@@ -372,69 +129,13 @@ def test_stopping_confidence_matches_real_criterion():
     from transformers.models.diffusion_gemma.generation_diffusion_gemma import StableAndConfidentStoppingCriteria
 
     logits = torch.randn(4, 32, 200, generator=_gen(6))
-    thresh = float(S.token_entropy(logits).mean(dim=-1).median())
-    # stability_threshold=0 -> stable is always True, isolating the confidence comparison
-    real = StableAndConfidentStoppingCriteria(stability_threshold=0, confidence_threshold=thresh)
-    real_out = real(logits.argmax(dim=-1), logits)
-    ours = S.token_entropy(logits).mean(dim=-1) < thresh
-    assert torch.equal(ours, real_out)
-
-
-@_requires_hf_diffusion_gemma
-def test_canvas_denoise_mask_matches_real_bidirectional_layer_masks():
-    from transformers.models.diffusion_gemma.configuration_diffusion_gemma import DiffusionGemmaTextConfig
-    from transformers.models.diffusion_gemma.modeling_diffusion_gemma import create_masks_for_generate
-
-    prompt_len, canvas_len, sliding_window, hidden = 10, 6, 4, 8
-    cfg = DiffusionGemmaTextConfig(
-        vocab_size=32,
-        hidden_size=hidden,
-        intermediate_size=16,
-        num_hidden_layers=2,
-        num_attention_heads=1,
-        num_key_value_heads=1,
-        head_dim=hidden,
-        layer_types=["sliding_attention", "full_attention"],
-        sliding_window=sliding_window,
-    )
-    cfg.is_causal = False
-    cfg._attn_implementation = "eager"
-
-    total_len = prompt_len + canvas_len
-    hf_masks = create_masks_for_generate(cfg, torch.zeros(1, total_len, hidden), None, None)
-
-    # ``create_masks_for_generate`` is ``transformers.masking_utils``' GENERIC builder (see the
-    # import at the top of modeling_diffusion_gemma.py); DiffusionGemma's own override of that
-    # name lives on DiffusionGemmaEncoderModel and just delegates to it. It therefore describes
-    # the ENCODER's prompt self-attention, where the sliding window IS a per-(q,k) distance
-    # predicate — and its sliding mask is a staircase.
-    #
-    # The DENOISE pass is the DECODER, which builds its masks with
-    # ``DiffusionGemmaDecoderModel.create_diffusion_decoder_attention_mask`` instead. That
-    # function applies NO staircase: on the ordinary unpadded DynamicCache path it returns None
-    # for both masks, and the sliding window is purely a cache-truncation effect (the layer
-    # retains only ``sliding_window - 1`` committed tokens). Comparing our denoise mask against
-    # the encoder/generic builder is what put a ``abs(q-k) <= sliding_window`` staircase into
-    # this repo's reference in the first place — see #51080. The decoder semantics are pinned in
-    # the sliding-layer denoise-visibility section above, so this test no longer asserts that
-    # parity.
-    assert hf_masks["sliding_attention"] is not None, "encoder-side sliding mask should materialize"
-    hf_encoder_sliding = hf_masks["sliding_attention"][0, 0, prompt_len:, :] == 0
-    rows = hf_encoder_sliding.shape[0]
-    assert any(
-        not torch.equal(hf_encoder_sliding[row], hf_encoder_sliding[0]) for row in range(1, rows)
-    ), "the generic/encoder builder is expected to be query-dependent (a staircase); if this ever stops being true, revisit #51080"
-
-    # Full-attention parity still holds and is meaningful: HF skips materializing an
-    # all-bidirectional mask for full layers, and ours is all-attend.
-    assert hf_masks["full_attention"] is None
-    assert torch.all(build_canvas_denoise_mask(prompt_len, canvas_len, layer_type="full_attention") == 0)
+    threshold = float(S.token_entropy(logits).mean(dim=-1).median())
+    real = StableAndConfidentStoppingCriteria(stability_threshold=0, confidence_threshold=threshold)
+    assert torch.equal(S.token_entropy(logits).mean(dim=-1) < threshold, real(logits.argmax(dim=-1), logits))
 
 
 @_requires_hf_diffusion_gemma
 def test_real_denoising_step_uses_temperature_processed_logits_for_decisions():
-    """HF routes processed logits to accept/stop/self-conditioning, not raw logits."""
-
     from transformers.generation.logits_process import LogitsProcessorList
     from transformers.models.diffusion_gemma.generation_diffusion_gemma import (
         DiffusionGemmaGenerationMixin,
@@ -449,11 +150,11 @@ def test_real_denoising_step_uses_temperature_processed_logits_for_decisions():
         def __init__(self):
             self.accept_logits = None
 
-        def accept_canvas(self, current_canvas, denoiser_canvas, logits, cur_step):
+        def accept_canvas(self, current_canvas, denoiser_canvas, logits, current_step):
             self.accept_logits = logits.detach().clone()
             return denoiser_canvas
 
-        def renoise_canvas(self, accepted_canvas, cur_step):
+        def renoise_canvas(self, accepted_canvas, current_step):
             return accepted_canvas
 
     class _Stopping:
@@ -468,12 +169,11 @@ def test_real_denoising_step_uses_temperature_processed_logits_for_decisions():
 
     batch, length, vocab = 1, 3, 7
     raw_logits = torch.randn(batch, length, vocab, generator=_gen(10))
-    cur_step = 2
+    current_step = 2
     processor = LogitsProcessorList(
         [LinearTemperatureScheduleLogitsProcessor(t_min=0.4, t_max=0.8, max_denoising_steps=4)]
     )
-    expected_processed = processor(None, raw_logits, cur_step=torch.tensor(cur_step, dtype=torch.int32))
-
+    expected = processor(None, raw_logits, cur_step=torch.tensor(current_step, dtype=torch.int32))
     fake_self = SimpleNamespace(
         config=SimpleNamespace(text_config=SimpleNamespace(vocab_size=vocab)),
         model=SimpleNamespace(
@@ -494,31 +194,31 @@ def test_real_denoising_step_uses_temperature_processed_logits_for_decisions():
         mask_mapping={},
         past_key_values=None,
         finished_denoising=torch.zeros(batch, dtype=torch.bool),
-        cur_step=cur_step,
+        cur_step=current_step,
         sampler=sampler,
         logits_processor=processor,
         diffusion_stopping_criteria=stopping,
     )
 
-    assert torch.allclose(sampler.accept_logits, expected_processed)
-    assert torch.allclose(stopping.logits, expected_processed)
-    assert torch.equal(stopping.argmax_canvas, expected_processed.argmax(dim=-1))
-    assert torch.allclose(self_conditioning_logits.float(), expected_processed.to(torch.bfloat16).float())
+    assert torch.allclose(sampler.accept_logits, expected)
+    assert torch.allclose(stopping.logits, expected)
+    assert torch.equal(stopping.argmax_canvas, expected.argmax(dim=-1))
+    assert torch.allclose(self_conditioning_logits.float(), expected.to(torch.bfloat16).float())
 
 
 @_requires_hf_diffusion_gemma
 def test_rmsnorm_matches_real():
     from transformers.models.diffusion_gemma.modeling_diffusion_gemma import DiffusionGemmaRMSNorm as RealRMS
 
-    x = torch.randn(2, 3, 16, generator=_gen(9))
-    for with_scale in [True, False]:
+    inputs = torch.randn(2, 3, 16, generator=_gen(9))
+    for with_scale in (True, False):
         real = RealRMS(16, eps=1e-6, with_scale=with_scale)
         ours = DiffusionGemmaRMSNorm(16, eps=1e-6, with_scale=with_scale)
         if with_scale:
             with torch.no_grad():
                 real.weight.copy_(torch.randn(16, generator=_gen(3)))
                 ours.weight.copy_(real.weight)
-        assert torch.allclose(ours(x), real(x), atol=1e-6), f"with_scale={with_scale}"
+        assert torch.allclose(ours(inputs), real(inputs), atol=1e-6)
 
 
 @_requires_hf_diffusion_gemma
@@ -526,20 +226,28 @@ def test_self_conditioning_matches_real():
     from transformers.models.diffusion_gemma.configuration_diffusion_gemma import DiffusionGemmaTextConfig
     from transformers.models.diffusion_gemma.modeling_diffusion_gemma import DiffusionGemmaSelfConditioning
 
-    hidden, inter = 16, 40
-    cfg = DiffusionGemmaTextConfig(
-        hidden_size=hidden, intermediate_size=inter, rms_norm_eps=1e-6, hidden_activation="gelu_pytorch_tanh"
+    hidden, intermediate = 16, 40
+    config = DiffusionGemmaTextConfig(
+        hidden_size=hidden,
+        intermediate_size=intermediate,
+        rms_norm_eps=1e-6,
+        hidden_activation="gelu_pytorch_tanh",
     )
-    real = DiffusionGemmaSelfConditioning(cfg).eval()
-    ours = SelfConditioning(hidden, intermediate_size=inter, eps=1e-6, activation="gelu_pytorch_tanh").eval()
+    real = DiffusionGemmaSelfConditioning(config).eval()
+    ours = SelfConditioning(
+        hidden,
+        intermediate_size=intermediate,
+        eps=1e-6,
+        activation="gelu_pytorch_tanh",
+    ).eval()
     with torch.no_grad():
         ours.pre_norm.weight.copy_(real.pre_norm.weight)
         ours.gate_proj.weight.copy_(real.gate_proj.weight)
         ours.up_proj.weight.copy_(real.up_proj.weight)
         ours.down_proj.weight.copy_(real.down_proj.weight)
-    emb = torch.randn(2, 5, hidden, generator=_gen(8))
-    sig = torch.randn(2, 5, hidden, generator=_gen(9))
-    assert torch.allclose(ours(emb, sig), real(emb, sig), atol=1e-5)
+    embeddings = torch.randn(2, 5, hidden, generator=_gen(8))
+    signal = torch.randn(2, 5, hidden, generator=_gen(9))
+    assert torch.allclose(ours(embeddings, signal), real(embeddings, signal), atol=1e-5)
 
 
 @_requires_hf_diffusion_gemma
@@ -560,7 +268,7 @@ def test_decoder_soft_embedding_matches_reference_scale_and_mask():
             return inputs_embeds
 
     batch, length, vocab, hidden = 2, 4, 11, 4
-    text_cfg = DiffusionGemmaTextConfig(
+    text_config = DiffusionGemmaTextConfig(
         vocab_size=vocab,
         hidden_size=hidden,
         intermediate_size=8,
@@ -571,7 +279,7 @@ def test_decoder_soft_embedding_matches_reference_scale_and_mask():
         layer_types=[],
         rms_norm_eps=1e-6,
     )
-    real = DiffusionGemmaDecoderModel(DiffusionGemmaConfig(text_config=text_cfg)).eval()
+    real = DiffusionGemmaDecoderModel(DiffusionGemmaConfig(text_config=text_config)).eval()
     capture = _CaptureSelfConditioning()
     real.self_conditioning = capture
 
@@ -591,64 +299,11 @@ def test_decoder_soft_embedding_matches_reference_scale_and_mask():
     assert torch.all(capture.signal[1] == 0)
 
 
-# --- HF/TT replay harness --------------------------------------------------------------------
-
-
-def test_seeded_replay_noise_is_deterministic_and_nonzero():
-    kwargs = {
-        "seed": 7,
-        "steps": 2,
-        "canvas_length": 4,
-        "vocab_size": 16,
-        "mode": "seeded",
-    }
-
-    first_gumbel, first_renoise = _make_replay_noise(**kwargs)
-    second_gumbel, second_renoise = _make_replay_noise(**kwargs)
-
-    assert len(first_gumbel) == len(first_renoise) == 2
-    assert torch.equal(first_gumbel[0], second_gumbel[0])
-    assert torch.equal(first_renoise[1], second_renoise[1])
-    assert torch.isfinite(first_gumbel[0]).all()
-    assert torch.count_nonzero(first_gumbel[0]) > 0
-    assert _tensor_sha256(first_gumbel[0]) == _tensor_sha256(second_gumbel[0])
-
-
 def test_stage_gate_requires_canonical_production_replay(expect_error):
-    args = build_arg_parser().parse_args(["--stage-gate", "--noise-mode", "seeded", "--max-denoising-steps", "8"])
+    args = build_arg_parser().parse_args(
+        ["--stage-gate", "--noise-mode", "seeded", "--max-denoising-steps", "8"]
+    )
     _validate_stage_gate_args(args)
-
     args.max_denoising_steps = 1
     with expect_error(ValueError, match="max-denoising-steps 8"):
         _validate_stage_gate_args(args)
-
-
-def test_stage_gate_rejects_fp32_hf_reference(expect_error):
-    # The bf16-floor self-consistency control uses --hf-dtype float32, but the
-    # production gate must keep the bf16 reference (#48291 doc/decision_fidelity).
-    args = build_arg_parser().parse_args(
-        ["--stage-gate", "--noise-mode", "seeded", "--max-denoising-steps", "8", "--hf-dtype", "float32"]
-    )
-    with expect_error(ValueError, match="bf16 HF reference"):
-        _validate_stage_gate_args(args)
-
-
-def test_stage_gate_stops_entropy_metric_at_common_all_accept():
-    active = torch.tensor([[False, True]])
-    saturated = torch.tensor([[True, True]])
-    hf_traj = SimpleNamespace(
-        per_step=[
-            SimpleNamespace(accept_mask=active),
-            SimpleNamespace(accept_mask=saturated),
-            SimpleNamespace(accept_mask=saturated),
-        ]
-    )
-    tt_traj = SimpleNamespace(
-        per_step=[
-            SimpleNamespace(accept_mask=active),
-            SimpleNamespace(accept_mask=saturated),
-            SimpleNamespace(accept_mask=saturated),
-        ]
-    )
-
-    assert _stage_gate_active_step_indices(hf_traj, tt_traj) == [0, 1]

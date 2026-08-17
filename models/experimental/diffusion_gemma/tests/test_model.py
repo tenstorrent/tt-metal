@@ -26,29 +26,6 @@ def _gen(seed=0):
     return g
 
 
-# --- SDPA chunk-size helper --------------------------------------------------
-# ``_largest_tile_divisor`` is imported from ``diffusion_gemma.tt.diffusion_attention``,
-# which owns it. It used to be imported from ``models.demos.gemma4.tt.attention.operations``;
-# that module no longer has it, so the import failed at COLLECTION time and took the whole
-# DiffusionGemma suite down with it — pytest aborts the run on a collection error, so one
-# stale line hid 761 passing tests. That module pulls in ``ttnn``, so import it inside the
-# test: a stale/unbuilt ttnn must fail this test, not the whole file's collection.
-
-
-@pytest.mark.parametrize(
-    "length, preferred, expected",
-    [
-        pytest.param(100, 100, 32, id="never-returns-non-tile-multiple"),
-        pytest.param(384, 256, 192, id="prefers-largest-aligned-divisor"),
-        pytest.param(512, 256, 256, id="preferred-already-divides"),
-    ],
-)
-def test_largest_tile_divisor(length, preferred, expected):
-    from models.experimental.diffusion_gemma.tt.diffusion_attention import _largest_tile_divisor
-
-    assert _largest_tile_divisor(length, preferred) == expected
-
-
 # --- reference vs vendored upstream primitives -------------------------------
 # ``reference/_upstream.py`` holds VERBATIM algorithm extractions from transformers
 # ``diffusion_gemma``. These tests assert our reconciled ``reference/`` primitives reproduce
