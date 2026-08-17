@@ -131,6 +131,7 @@ jobs:
           echo "Selected SKUs: $SKUS"
   build-artifact:
     needs: check-harbor
+    if: ${{ !cancelled() }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read
@@ -144,6 +145,7 @@ jobs:
 
   runtime-sanity-tests:
     needs: [check-harbor, build-artifact, resolve-skus]
+    if: ${{ !cancelled() && needs.build-artifact.result == 'success' && needs.resolve-skus.result == 'success' }}
     uses: ./.github/workflows/runtime-sanity-tests-impl.yaml
     secrets: inherit
     with:
