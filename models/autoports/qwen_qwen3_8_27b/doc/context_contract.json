@@ -1,0 +1,17 @@
+{
+  "model_id": "Qwen/Qwen3.8-27B",
+  "hf_advertised_context": 262144,
+  "functional_decoder_supported_context": 262144,
+  "largest_prefill_context_tested": 262144,
+  "largest_non_aligned_prefill_context_tested": 262143,
+  "largest_decode_position_tested": 262143,
+  "non_aligned_boundary_evidence": {
+    "linear_attention_final_chunk_tokens": 127,
+    "full_attention_final_chunk_tokens": 2047,
+    "full_attention_partial_final_page_tokens": 63,
+    "decode_position": 262143
+  },
+  "maximum_functional_batch_tested": 2,
+  "capability_reduction": null,
+  "status": "functional_decoder_complete"
+}

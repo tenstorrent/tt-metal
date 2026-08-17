@@ -1,0 +1,10 @@
+Command (2026-08-17 UTC):
+TT_METAL_WATCHER=10 TT_METAL_LOGS_PATH=$PWD/models/autoports/qwen_qwen3_8_27b/doc/functional_decoder/watcher_rereview pytest -q models/autoports/qwen_qwen3_8_27b/tests/test_functional_decoder.py -k 'real_weights_paged_prefill_and_decode_pcc or real_weights_deltanet_prefill_and_traced_decode_pcc or full_attention_batched_paged_prefill_decode_pcc or advertised_context_layer_harness' -s
+
+Result: 4 passed, 24 deselected, 1 warning in 163.45 seconds.
+Covered: both real-weight B=1 PCC/trace paths, B=2 distinct-position paged
+prefill/decode PCC, and the 262143-token non-aligned context harness.
+Watcher log audit: no fatal, assertion, sanitizer, NoC, watcher, or circular
+buffer error. Devices 0-3 detached and closed cleanly.
+Machine-readable test results: junit.xml
+Device watcher output: generated/watcher/watcher.log

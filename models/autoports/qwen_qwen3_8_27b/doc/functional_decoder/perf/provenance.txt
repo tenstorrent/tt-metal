@@ -1,0 +1,27 @@
+Date: 2026-08-17 UTC
+Repository: /home/mvasiljevic/tt-metal-fmf
+Model: Qwen/Qwen3.8-27B
+Device architecture: Blackhole
+Firmware bundle: 19.9.0
+Profiler: repository python -m tracy
+Report tool: tt-perf-report 1.2.8
+
+Capture commands (run serially, watcher disabled):
+python -m tracy -r -p -v -m pytest 'models/autoports/qwen_qwen3_8_27b/tests/test_functional_decoder.py::test_profile_warmed_prefill_and_traced_decode[full_prefill-device_params0]' -s
+python -m tracy -r -p -v -m pytest 'models/autoports/qwen_qwen3_8_27b/tests/test_functional_decoder.py::test_profile_warmed_prefill_and_traced_decode[full_decode-device_params0]' -s
+python -m tracy -r -p -v -m pytest 'models/autoports/qwen_qwen3_8_27b/tests/test_functional_decoder.py::test_profile_warmed_prefill_and_traced_decode[gdn_prefill-device_params0]' -s
+python -m tracy -r -p -v -m pytest 'models/autoports/qwen_qwen3_8_27b/tests/test_functional_decoder.py::test_profile_warmed_prefill_and_traced_decode[gdn_decode-device_params0]' -s
+
+Generated source -> retained source:
+generated/profiler/reports/2026_08_17_16_06_10/ops_perf_results_2026_08_17_16_06_10.csv -> captures/full_prefill/ops_perf_results.csv
+generated/profiler/reports/2026_08_17_16_06_25/ops_perf_results_2026_08_17_16_06_25.csv -> captures/full_decode/ops_perf_results.csv
+generated/profiler/reports/2026_08_17_16_06_48/ops_perf_results_2026_08_17_16_06_48.csv -> captures/gdn_prefill/ops_perf_results.csv
+generated/profiler/reports/2026_08_17_16_07_06/ops_perf_results_2026_08_17_16_07_06.csv -> captures/gdn_decode/ops_perf_results.csv
+
+Report commands for each case use its matching start/end markers:
+tt-perf-report captures/<case>/ops_perf_results.csv --start-signpost <start> --end-signpost <end> --no-advice --no-summary --no-color > captures/<case>/human_table.txt
+tt-perf-report captures/<case>/ops_perf_results.csv --start-signpost <start> --end-signpost <end> --no-advice --no-summary --csv captures/<case>/filtered_ops.csv
+
+All four pytest processes passed, emitted their requested signpost pair, and
+closed the device. Auditing each retained `capture_console.log` found no
+buffer-full, dropped-event, or dropped-marker warning. Watcher was not enabled.
