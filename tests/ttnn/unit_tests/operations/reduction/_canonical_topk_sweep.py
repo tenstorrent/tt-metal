@@ -433,7 +433,7 @@ MODEL_SCENARIOS = [
         "engines": ["op", "routed"],
         "today_engine": "op",
         "calls_note": "per sparse-MLA layer per prefill chunk",
-        "notes": "today IS the op (row-parallel, chunk skip live); stocknow omitted (no call site)",
+        "notes": "today IS the op (row-parallel, chunk skip live); stock ttnn.topk column omitted (no such call site exists)",
     },
     {
         "name": "msa_blocks_k16",

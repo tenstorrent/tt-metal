@@ -140,6 +140,13 @@ def render_model_scenarios(rows):
         esc = lambda s: _html.escape(s or "")  # noqa: E731
         shape = f"{int(r['rows'])}×{int(r['n']):,}, k={int(r['k'])}"
         today_e = r.get("today_engine", "")
+        # Reader-facing names for the harness layer ids: the column answers
+        # "what runs when the model makes this call today".
+        today_label = {
+            "stocknow": "stock ttnn.topk",
+            "op": "topk_large_indices (direct call)",
+            "routed": "ttnn.topk (our routing)",
+        }.get(today_e, today_e)
         today = fnum(r.get("today_us"))
         ro, op = fnum(r.get("routed_us")), fnum(r.get("op_us"))
         if today is not None:
@@ -147,18 +154,26 @@ def render_model_scenarios(rows):
         else:
             est = re.search(r"SKIPPED_SLOW\(est~(\d+)ms\)", r.get(f"{today_e}_status", "") or "")
             today_td = f'<td class="n flat">≈ {int(est.group(1)):,} ms †</td>' if est else '<td class="n flat">—</td>'
-        best = min((v for v in (ro, op) if v is not None), default=None)
-        if today is not None and best:
-            ratio = today / best
+        # Drop-in speedup: the same-API replacement. For ttnn.topk call sites
+        # that is the routed column (canonical call, no API change); when the
+        # call site already invokes the op directly, today IS the op (1.0x).
+        # The op column remains visible as the switch-the-call ceiling.
+        dropin = op if today_e == "op" else ro
+        if today is not None and dropin:
+            ratio = today / dropin
             rs = f"{ratio:,.0f}×" if ratio >= 100 else f"{ratio:,.1f}×"
             sp = f'<td class="n win">{rs}</td>' if ratio >= 1.05 else f'<td class="n flat">{rs}</td>'
         else:
-            sp = '<td class="n flat">—</td>'
+            sp = '<td class="n flat">n/a</td>'
 
         # "win" styling only when the engine actually beats today; a routed
         # cell 14x SLOWER than the model's current engine must not render
         # bold-green.
-        def eng_td(v):
+        def eng_td(v, eng):
+            if v is None and r.get(f"{eng}_status") is None:
+                # engine was never scheduled for this scenario (structurally
+                # ineligible by design, e.g. MoE-gate no-change controls)
+                return '<td class="n flat">n/a</td>'
             return us_fmt(v, "win" if (v is not None and today is not None and v < today) else "")
 
         note = esc(r.get("notes", ""))
@@ -168,15 +183,15 @@ def render_model_scenarios(rows):
             f'      <tr><td>{esc(r["scenario"])}</td>'
             f'<td>{esc(r.get("model", ""))}<br><code>{esc(r.get("callsite", ""))}</code></td>'
             f'<td class="n">{shape}</td>'
-            f'<td class="n">{esc(today_e)}</td>{today_td}'
-            f"{eng_td(ro)}{eng_td(op)}{sp}"
+            f'<td class="n">{esc(today_label)}</td>{today_td}'
+            f"{eng_td(ro, 'routed')}{eng_td(op, 'op')}{sp}"
             f"<td>{note}</td></tr>"
         )
     head = (
         '<thead><tr><th>scenario</th><th>model + callsite</th><th class="n">shape (rows×N, k)</th>'
         '<th class="n">today: engine</th><th class="n">today µs</th>'
         '<th class="n ours">ttnn.topk (our routing)</th><th class="n ours">topk_large_indices (our multi-core)</th>'
-        '<th class="n">best speedup</th><th>note</th></tr></thead>'
+        '<th class="n">drop-in speedup</th><th>note</th></tr></thead>'
     )
     return (
         f'  <div class="tablewrap"><table>\n    {head}\n    <tbody>\n'
