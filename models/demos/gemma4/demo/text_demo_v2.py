@@ -240,12 +240,10 @@ def _device_params():
         "l1_small_size": int(os.environ.get("GEMMA4_L1_SMALL_SIZE", 24576)),
     }
     # ``trace_region_size`` must cover the CUMULATIVE size of every captured
-    # trace, not the largest one: batch-1 warms a prefill trace per ISL bucket
-    # plus the decode trace, so the limit is first hit at the *last*
-    # end_trace_capture (decode). Traced multi-chunk (auto on unbounded
-    # long-ISL demos) adds sp0/sp1 chunk traces; on WH 31B decode then needs
-    # ~68 MB — 64 MB fails. 96 MB leaves headroom; BH stays at 256 MB.
-    default_trace_region = 256_000_000 if is_blackhole() else 96_000_000
+    # trace, not the largest one (limit is hit at the last end_trace_capture,
+    # usually decode). Batched demos add B=2/4 prefill traces plus a larger
+    # decode graph; WH 96 MB is not enough for 31B batch-8/32. BH stays at 256 MB.
+    default_trace_region = 256_000_000 if is_blackhole() else 192_000_000
     params["trace_region_size"] = int(os.environ.get("GEMMA4_TRACE_REGION_SIZE", default_trace_region))
 
     router = fabric_router_config_from_env()
@@ -292,7 +290,7 @@ def _device_params():
             # wedges on P150x8 after the first all_gather. See generator.py.
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",
             True,
-            4096,
+            1024,
             32,
             200,
             True,
@@ -595,6 +593,7 @@ def test_demo_text(
             max_seq_len=max_seq_len,
             max_prefill_chunk_size=int(getattr(model_args_list[0], "max_prefill_chunk_size", 0) or 0),
             model_args_list=model_args_list,
+            batch_size=batch_size,
         )
     # Sample on device by default, whenever the model exposes a sampling module
     # (TP>1 and a vocab shard <=64K); models without one fall back to host.
@@ -912,6 +911,7 @@ def _run_spec_decode(
             max_seq_len=max_seq_len,
             max_prefill_chunk_size=int(getattr(args_list[0], "max_prefill_chunk_size", 0) or 0),
             model_args_list=args_list,
+            batch_size=batch_size,
         )
     generator.warmup_model_prefill(
         kv_cache=tt_kv_cache, enable_trace=prefill_enable_trace, can_sample_on_device=False, greedy_only=True
@@ -1118,6 +1118,7 @@ def _run_spec_decode_batched(
             max_seq_len=max_seq_len,
             max_prefill_chunk_size=int(getattr(args_list[0], "max_prefill_chunk_size", 0) or 0),
             model_args_list=args_list,
+            batch_size=B,
         )
     generator.warmup_model_prefill(
         kv_cache=tt_kv_cache, enable_trace=prefill_enable_trace, can_sample_on_device=False, greedy_only=True

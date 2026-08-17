@@ -422,11 +422,12 @@ def _short_seq_l1_gather_memcfg(tensor, ccl_manager):
     InterleavedToSharded per all-reduce -- measured 47.2 -> 43.5 us
     (-0.45 ms/decode step on 31B), bit-exact (ops_list/tools/sweeps/l1_stream.py).
 
-    Decode: tile-aligned height <= ``TILE_SIZE``. Short prefill (height <=
-    ``_SHARDED_NORM_MAX_HEIGHT``): same win for post-attn / post-MLP LN. Prefill
-    may keep the LN/residual island (``prefill_mlp_island_enabled``); do *not*
-    feed that shard into gate_up — Wormhole 1D prefill CBs clash (SharedMLP
-    S2I's to interleaved for M > TILE).
+    Decode: tile-aligned height <= ``TILE_SIZE``. Short prefill (physical
+    height ``N*C*H`` <= ``_SHARDED_NORM_MAX_HEIGHT``): same win for post-attn /
+    post-MLP LN. Batched prefill is ``[B, 1, S, H]`` — shard height is ``B*S``,
+    not ``S``. Prefill may keep the LN/residual island
+    (``prefill_mlp_island_enabled``); do *not* feed that shard into gate_up —
+    Wormhole 1D prefill CBs clash (SharedMLP S2I's to interleaved for M > TILE).
     """
     if not ccl_l1_gather_enabled():
         return None
@@ -434,15 +435,16 @@ def _short_seq_l1_gather_memcfg(tensor, ccl_manager):
         shape = tensor.shape
         if len(shape) != 4:
             return None
-        padded_height = ((int(shape[-2]) + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
         from models.demos.gemma4.tt.rms_norm import (
             _SHARDED_NORM_MAX_HEIGHT,
+            activation_physical_height,
             sharded_norm_enabled,
             width_shard_input_memcfg,
         )
 
         if not sharded_norm_enabled():
             return None
+        padded_height = activation_physical_height(shape)
         if not (1 <= padded_height <= _SHARDED_NORM_MAX_HEIGHT):
             return None
         return width_shard_input_memcfg(ccl_manager.mesh_device, shape[-1], padded_height)
@@ -452,16 +454,7 @@ def _short_seq_l1_gather_memcfg(tensor, ccl_manager):
 
 
 def _decode_l1_gather_memcfg(tensor, ccl_manager):
-    """Decode-only alias — see ``_short_seq_l1_gather_memcfg``."""
-    try:
-        shape = tensor.shape
-        if len(shape) != 4:
-            return None
-        padded_height = ((int(shape[-2]) + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
-        if not (1 <= padded_height <= ttnn.TILE_SIZE):
-            return None
-    except Exception:
-        return None
+    """Alias for ``_short_seq_l1_gather_memcfg`` (decode and short prefill)."""
     return _short_seq_l1_gather_memcfg(tensor, ccl_manager)
 
 

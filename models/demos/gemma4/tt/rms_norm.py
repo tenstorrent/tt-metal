@@ -124,6 +124,19 @@ def decode_width_shard_spec(mesh_device, dim):
     return (memcfg, program_config, num_cores)
 
 
+def activation_physical_height(shape) -> int:
+    """Tile-padded row count a width-sharded layout must use for ``shape``.
+
+    TILE activations are physically ``N*C*H`` tall. Batched prefill is
+    ``[B, 1, S, H]``, so ``shape[-2]`` is ``S`` and undercounts by ``B``.
+    """
+    rows = 1
+    for i in range(len(shape) - 1):
+        rows *= int(shape[i])
+    tile = ttnn.TILE_SIZE
+    return ((rows + tile - 1) // tile) * tile
+
+
 def width_shard_spec(mesh_device, dim, height):
     """``(input_memcfg, program_config)`` for width-sharded RMSNorm at ``(height, dim)``.
 
@@ -314,7 +327,7 @@ class RMSNorm(nn.Module):
             # keep the plain path. Sharded config is (width, height)-specific.
             # ``GEMMA4_SHARDED_NORM=0`` forces interleaved (short-ISL A/B).
             keep = bool(keep_sharded) and norm_keep_sharded_enabled()
-            padded_height = ((int(x.shape[-2]) + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+            padded_height = activation_physical_height(x.shape)
             if (
                 not skip_sharded_path
                 and sharded_norm_enabled()
