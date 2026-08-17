@@ -387,3 +387,40 @@ requiring the hand-launched external-server path used here.
    read-wrap test was run; the device has been occupied by these evals.
 7. **`MESH_DEVICE=P150x4` vs `P300x2` decode-logit corruption**, which the release
    spec asserts and no measurement on this branch has checked.
+
+## Would CI pass or fail today?
+
+**Upstream `main` plus the release-flow branch: it would report PASS, vacuously.**
+The catalog entry sets `status: EXPERIMENTAL`, and upstream that status waives
+everything this port would be judged on:
+
+- `ModelStatusTypes.EXPERIMENTAL.required_target_tiers == []`
+  (`workflows/workflow_types.py:322`) — no benchmark tier is enforced. The
+  docstring is explicit: "an EXPERIMENTAL model (forge, new bring-up) can fail
+  every performance benchmark and still be released."
+- `evals_enforced` is `bool(required_target_tiers)` (`:336`), so it is `False` for
+  EXPERIMENTAL, and upstream `_evals_enforced()` returns that value.
+
+So an ungradable accuracy row, a Docker-failed agentic row and any perf miss would
+all pass acceptance. The PASS would certify nothing.
+
+**The local run reported FAIL only because this checkout carries the branch's own
+patch** `b07735ae`, which hard-codes `_evals_enforced() -> True`:
+
+> Treating an EXPERIMENTAL model as an implicit eval waiver can turn failed or
+> missing accuracy rows into a release PASS without a declared issue.
+
+`git diff origin/main -- report_module/acceptance_criteria.py` confirms that fix is
+not upstream.
+
+| enforcement | verdict | driver |
+|---|---|---|
+| upstream `main` today | **PASS** | EXPERIMENTAL waives evals and all benchmark tiers |
+| + the branch's eval-enforcement patch | **FAIL** | 2 blockers (agentic, no Docker); accuracy row `NA` regardless |
+
+Neither verdict is a statement about the port. Under strict enforcement the
+blockers are a missing `r1_gpqa_diamond` reference and a missing Docker daemon;
+under upstream enforcement nothing is checked at all. Three things have to land
+before a release verdict means anything for this model: a published or GPU
+reference for `r1_gpqa_diamond`, graded benchmark tiers instead of a lone
+`theoretical` block, and the eval-enforcement fix upstream.
