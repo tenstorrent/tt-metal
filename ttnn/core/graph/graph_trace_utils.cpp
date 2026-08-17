@@ -291,8 +291,26 @@ uint32_t extract_circular_buffers_peak_size_per_core(const nlohmann::json& trace
 }
 
 // calculate the size of buffer allocated/deallocated on each core
+// For sharded buffers (num_cores > 0), return the conservative worst-case
+// per-core allocation: ceil(total/page_size) pages, distributed across cores
+// with ceil rounding, times page_size. This matches F4 behavior and makes the
+// L1 budget check conservative so the optimizer avoids over-large act_block_h
+// and prefers height_sharded over block_sharded at small spatial resolutions.
+// For interleaved buffers (num_cores == 0), kMaxSizePerBank is already correct.
 static uint32_t calculate_buffer_allocation_size(const nlohmann::json& node) {
-    return json_to_int(node.at(kParams).at(kMaxSizePerBank));
+    uint32_t max_size_per_bank = static_cast<uint32_t>(json_to_int(node.at(kParams).at(kMaxSizePerBank)));
+    uint32_t num_cores = static_cast<uint32_t>(json_to_int(node.at(kParams).at(kNumCores)));
+    if (num_cores > 0) {
+        uint32_t page_size = static_cast<uint32_t>(json_to_int(node.at(kParams).at(kPageSize)));
+        uint32_t total    = static_cast<uint32_t>(json_to_int(node.at(kParams).at(kSize)));
+        if (page_size > 0) {
+            uint32_t pages          = (total + page_size - 1) / page_size;
+            uint32_t pages_per_core = (pages + num_cores - 1) / num_cores;
+            uint32_t worst_case     = pages_per_core * page_size;
+            return std::max(max_size_per_bank, worst_case);
+        }
+    }
+    return max_size_per_bank;
 }
 
 uint32_t extract_peak_memory_usage(const nlohmann::json& trace) {
