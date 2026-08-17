@@ -53,6 +53,7 @@ import ttnn
 from models.experimental.xtts.config import (
     AUDIO_POST,
     CHUNKING,
+    CLAUSE_SPLIT_RE,
     COQUI_CLIP_RE,
     DEMO,
     GENERATION,
@@ -103,11 +104,47 @@ def _load_audio_22k(ref_audio, max_seconds):
 
 
 def _split_into_chunks(text, lang):
-    """Split text into sentence groups that fit one synthesis pass."""
+    """Split text into groups that each fit one synthesis pass."""
 
     def ids_of(t):
         """Count wrapped text token ids for a string."""
         return preprocess_text(re.sub(SENTENCE_FINAL_PUNCT_RE, "", t), lang=lang).shape[-1]
+
+    def est_codes(t):
+        """Estimate the audio codes a string needs."""
+        return ids_of(t) * CHUNKING.codes_per_id
+
+    def pack(atoms, max_codes):
+        """Greedily group atoms into runs that fit the code budget."""
+        out, cur = [], []
+        for a in atoms:
+            cand = " ".join(cur + [a])
+            if cur and (ids_of(cand) > CHUNKING.max_text_ids or est_codes(cand) > max_codes):
+                out.append(" ".join(cur))
+                cur = [a]
+            else:
+                cur.append(a)
+        if cur:
+            out.append(" ".join(cur))
+        return out
+
+    def atoms_of(sentence, max_codes):
+        """Break a too-long sentence into pieces that can fit a pass.
+
+        A pass decodes at most a fixed number of codes, so a sentence over that budget is never
+        finished: the decode runs to the cap and the tail comes out as drone or noise. Break it
+        at internal punctuation first (a seam where a speaker pauses anyway) and fall back to
+        word wrapping for a clause that is still too long — the same approach as upstream coqui's
+        ``split_sentence``, which hard-wraps any sentence over its length limit.
+        """
+        if est_codes(sentence) <= max_codes:
+            return [sentence]
+        atoms = []
+        for clause in (c.strip() for c in re.split(CLAUSE_SPLIT_RE, sentence)):
+            if not clause:
+                continue
+            atoms.extend(clause.split() if est_codes(clause) > max_codes else [clause])
+        return atoms
 
     whole = text.strip()
     if (
@@ -116,26 +153,12 @@ def _split_into_chunks(text, lang):
     ):
         return [whole]  # single pass
 
-    parts = [p.strip() for p in re.split(SENTENCE_SPLIT_RE, whole) if p.strip()]
-    max_words = int(CHUNKING.max_single_pass_codes / CHUNKING.codes_per_id / CHUNKING.ids_per_word)
-    for p in parts:
-        if ids_of(p) * CHUNKING.codes_per_id > CHUNKING.max_single_pass_codes:
-            logger.warning(
-                f"sentence is {len(p.split())} words (~{int(ids_of(p) * CHUNKING.codes_per_id)} audio codes) — over "
-                f"the ~{max_words}-word single-pass limit. A sentence is never split, so this pass may fail with an "
-                f"L1 circular-buffer clash. Shorten it or add punctuation."
-            )
-    chunks, cur = [], []
-    for part in parts:
-        cand = " ".join(cur + [part])
-        n = ids_of(cand)
-        if cur and (n > CHUNKING.max_text_ids or n * CHUNKING.codes_per_id > CHUNKING.max_chunk_codes):
-            chunks.append(" ".join(cur))
-            cur = [part]
-        else:
-            cur.append(part)
-    if cur:
-        chunks.append(" ".join(cur))
+    budget = CHUNKING.max_chunk_codes
+    sentences = [p.strip() for p in re.split(SENTENCE_SPLIT_RE, whole) if p.strip()]
+    chunks = pack([a for s in sentences for a in atoms_of(s, budget)], budget)
+    for c in chunks:
+        if est_codes(c) > budget:  # a single word over the budget; nothing left to split on
+            logger.warning(f"chunk needs ~{int(est_codes(c))} codes, over the {budget}-code budget: {c!r}")
     return chunks
 
 
@@ -210,7 +233,7 @@ def _log_perf_metrics(
     logger.info(f"{prefix}---------------------------------------")
 
 
-def _generate_one(tt, wrapped, cond_wav, spk_wav_tt, cfg):
+def _generate_one(tt, wrapped, real_len, cond_wav, spk_wav_tt, cfg):
     """Run one device generation, vocode, and onset post-processing."""
     # FULL-MODEL TRACE: the entire model runs inside ttnn traces — SETUP trace (on-device
     # conditioning mel + speaker encoder + prefill that seeds the KV cache), the DECODE-step trace
@@ -230,19 +253,32 @@ def _generate_one(tt, wrapped, cond_wav, spk_wav_tt, cfg):
         top_p=gen.top_p,
         repetition_penalty=gen.repetition_penalty,
         min_new_tokens=gen.min_tokens,
+        text_real_len=real_len,
     )
     wav_np = ttnn.to_torch(wav_dev).float().reshape(-1).numpy()  # [T_out]
     logger.info(
         f"  replay split: setup {perf['setup_replay_s']:.3f}s | decode {perf['decode_replay_s']:.3f}s "
         f"({codes.shape[1]} codes) | vocoder {perf['vocoder_replay_s']:.3f}s"
     )
-    return _postprocess(wav_np, cfg.audio_post), codes, float(perf["replay_s"]), float(perf["compile_s"])
+    if not perf["stopped"]:
+        logger.warning(
+            f"pass ran out of its {gen.max_tokens}-code budget without reaching STOP — the tail may be "
+            "unfinished or noisy. Shorten the text or raise GenerationConfig.max_tokens."
+        )
+    return (
+        _postprocess(wav_np, cfg.audio_post),
+        codes,
+        float(perf["replay_s"]),
+        bool(perf["stopped"]),
+        float(perf["compile_s"]),
+    )
 
 
 def _generate_chunked(tt, chunks, cond_wav, spk_wav_tt, cfg):
     """Synthesize all chunks of a take from one warmup and trace capture."""
     gen = cfg.generation
     budget = cfg.chunking.chunk_max_tokens
+    retries = cfg.chunking.chunk_retries
     text_len = chunks[0][1].shape[1]
     prompt_len = NUM_LATENTS + text_len
     max_seq = -(-(prompt_len + budget + 2) // TILE) * TILE
@@ -264,15 +300,33 @@ def _generate_chunked(tt, chunks, cond_wav, spk_wav_tt, cfg):
             f"({text_len} text tokens, {budget}-code budget) — chunks now replay only"
         )
         out = []
-        for j, (_, w) in enumerate(chunks):
-            wav_t, codes_j, perf = session.run(w)
+        for j, (_, w, real) in enumerate(chunks):
+            wav_t, codes_j, perf = session.run(w, real)
+            replay_s = float(perf["replay_s"])
+            # A pass that never reaches STOP ends mid-word and trails off into drone or noise.
+            # Sampling is stochastic, so simply drawing again usually lands a clean take; only
+            # text that genuinely does not fit the budget exhausts the retries.
+            for attempt in range(retries):
+                if perf["stopped"]:
+                    break
+                logger.warning(
+                    f"  chunk {j + 1}/{len(chunks)} hit the {budget}-code cap without STOP "
+                    f"(noisy tail) — retry {attempt + 1}/{retries}"
+                )
+                wav_t, codes_j, perf = session.run(w, real)
+                replay_s += float(perf["replay_s"])
+            if not perf["stopped"]:
+                logger.warning(
+                    f"  chunk {j + 1}/{len(chunks)} still hit the cap after {retries} retries; its tail may "
+                    "be noisy. It likely needs more codes than the per-chunk budget allows."
+                )
             logger.info(
                 f"  chunk {j + 1}/{len(chunks)} replay split: setup {perf['setup_replay_s']:.3f}s | "
                 f"decode {perf['decode_replay_s']:.3f}s ({codes_j.shape[1]} codes) | "
                 f"vocoder {perf['vocoder_replay_s']:.3f}s"
             )
             wav_np = _postprocess(np.ascontiguousarray(wav_t.numpy(), dtype="float32"), cfg.audio_post)
-            out.append((wav_np, codes_j, float(perf["replay_s"])))
+            out.append((wav_np, codes_j, replay_s, bool(perf["stopped"])))
         return out, session.compile_s
     finally:
         session.close()
@@ -292,8 +346,10 @@ def _take_on_device(sd, ref_decoder_full, chunks, cond_wav, spk_wav, cfg, seed_o
             # runs regardless, so takes differ even without this).
             ttnn.manual_seed(cfg.generation.seed + seed_offset, device=device)
         if len(chunks) == 1:
-            wav_np, codes, dt, compile_s = _generate_one(tt, chunks[0][1], cond_wav, spk_wav_tt, cfg)
-            return [(wav_np, codes, dt)], compile_s
+            wav_np, codes, dt, stopped, compile_s = _generate_one(
+                tt, chunks[0][1], chunks[0][2], cond_wav, spk_wav_tt, cfg
+            )
+            return [(wav_np, codes, dt, stopped)], compile_s
         return _generate_chunked(tt, chunks, cond_wav, spk_wav_tt, cfg)
     finally:
         ttnn.close_device(device)
@@ -362,7 +418,8 @@ def main():
     )
 
     # Text that fits ONE pass stays a single pass (the fast path); only text over the single-pass
-    # budget is split at sentence boundaries into several passes that are joined back together.
+    # budget is split — at sentence boundaries, then at commas inside a sentence too long for a
+    # pass — into several passes that are joined back together.
     chunk_texts = _split_into_chunks(cfg.text, cfg.language)
     wrapped_chunks = [
         (clean, wrap_text_ids(preprocess_text(clean, lang=cfg.language)))
@@ -373,13 +430,17 @@ def main():
     # STOP_TEXT_TOKEN, which the model already reads as end-of-text, so a chunk padded past its own
     # length behaves exactly as it did when padded only to its own tile.
     pad_to = -(-max(w.shape[1] for _, w in wrapped_chunks) // TILE) * TILE
-    chunks = [(clean, F.pad(w, (0, pad_to - w.shape[1]), value=STOP_TEXT_TOKEN)) for clean, w in wrapped_chunks]
+    # The real length rides along: the padding is masked out of decode attention, so a short
+    # chunk stops on time instead of padding its way to the code cap.
+    chunks = [
+        (clean, F.pad(w, (0, pad_to - w.shape[1]), value=STOP_TEXT_TOKEN), w.shape[1]) for clean, w in wrapped_chunks
+    ]
     if len(chunks) == 1:
-        logger.info(f"text fits ONE pass ({chunks[0][1].shape[1]} tokens): {chunks[0][0]!r}")
+        logger.info(f"text fits ONE pass ({chunks[0][2]} tokens): {chunks[0][0]!r}")
     else:
         logger.info(f"text exceeds the single-pass budget -> CHUNKED into {len(chunks)} passes:")
-        for i, (clean, w) in enumerate(chunks):
-            logger.info(f"  [{i + 1}/{len(chunks)}] {w.shape[1]:3d} tokens  {clean!r}")
+        for i, (clean, _, real) in enumerate(chunks):
+            logger.info(f"  [{i + 1}/{len(chunks)}] {real:3d} tokens  {clean!r}")
 
     # Resolve the STOP-suppression floor. Auto (negative) scales with the text, clamped below the
     # code budget, so a longer prompt is protected from stopping short while a short one isn't
@@ -415,20 +476,21 @@ def main():
         # The whole take on ONE device: a single pass generates once, a chunked take captures once
         # and replays every chunk off that capture.
         results, compile_s = _take_on_device(sd, reference.decoder_full, chunks, wav, spk_wav, cfg, i)
-        pieces, code_parts = [], []
+        pieces, code_parts, stops = [], [], []
         dt = 0.0
         ttfc_s = results[0][2]  # first chunk/pass replay → analogue of time-to-first-chunk
-        for j, (wav_j, codes_j, dt_j) in enumerate(results):
+        for j, (wav_j, codes_j, dt_j, stopped_j) in enumerate(results):
             dt += dt_j
             pieces.append(wav_j.astype("float32"))
             code_parts.append(codes_j)
+            stops.append(stopped_j)
             nc = codes_j.shape[1]
             audio_j_s = _audio_duration_s(wav_j)
             rtf_j = dt_j / audio_j_s if audio_j_s > 0 else float("inf")
             if len(chunks) > 1:
                 logger.info(
                     f"  take {i + 1}/{n} chunk {j + 1}/{len(chunks)}: {nc} codes "
-                    f"({'stop' if nc < budget else 'max'}), "
+                    f"({'stop' if stopped_j else 'max'}), "
                     f"audio {audio_j_s:.2f}s, replay {dt_j:.3f}s, RTF {rtf_j:.3f}"
                 )
         latency = time.time() - t_take0
@@ -440,7 +502,7 @@ def main():
         )
         codes_i = torch.cat(code_parts, dim=1)
         n_codes = codes_i.shape[1]
-        stopped = all(c.shape[1] < budget for c in code_parts)
+        stopped = all(stops)
         audio_s = _audio_duration_s(wav_i)
         score, detail = _score_take(wav_i, cfg.text, codes_i, cfg.scoring) if n > 1 else (0.0, "")
         logger.info(

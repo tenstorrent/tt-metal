@@ -128,6 +128,17 @@ class TtXttsGptModel(LightweightModule):
         self.max_seq = max_seq
         self.stack.init_static(max_seq)
 
+    def set_text_padding(self, cond_len, real_len, padded_len):
+        """Hide the text padding of the current prompt from decode attention.
+
+        The prompt is [cond latents | text | STOP padding]. The padding only exists to pin a
+        chunked take's prompt geometry to ONE captured trace; the model must not read it, or a
+        short chunk keeps generating (it repeats itself, or drones) instead of emitting STOP.
+        Prefill is causal and the padding sits last, so the real tokens' K/V are unaffected —
+        masking these slots at decode makes a padded prompt exactly equal to an unpadded one.
+        """
+        self.stack.set_prompt_pad(cond_len + real_len, cond_len + padded_len)
+
     def _pos_ids(self, value):
         """Build a 1x1 uint32 id tensor on device."""
         return ttnn.from_torch(

@@ -7,6 +7,7 @@ import torch
 import ttnn
 
 from models.common.lightweightmodule import LightweightModule
+from models.experimental.xtts.config import NUM_LATENTS
 from models.experimental.xtts.reference.xtts_conditioning import chunk_wav
 from models.experimental.xtts.reference.xtts_gpt_block import HIDDEN_SIZE
 from models.experimental.xtts.reference.xtts_gpt_generate import MAX_AUDIO_TOKENS
@@ -128,6 +129,7 @@ class TtXtts(LightweightModule):
         top_p=1.0,
         repetition_penalty=1.0,
         min_new_tokens=0,
+        text_real_len=None,
     ):
         """Run fully traced setup, decode, and vocoder inference."""
         dev = self.device
@@ -137,6 +139,8 @@ class TtXtts(LightweightModule):
         wav_devs = [self._wav_chunk_to_device(c) for c in chunk_wav(cond_wav)]
         text_dev = gpt.text_ids_to_device(text_ids)
         gpt.alloc_static_kv(max_seq)
+        # Padding exists only to tile-align the prompt; keep decode from attending to it.
+        gpt.set_text_padding(NUM_LATENTS, text_real_len or text_ids.shape[1], text_ids.shape[1])
 
         def _setup():
             """Compute speaker emb and prefill for setup capture."""
@@ -164,7 +168,7 @@ class TtXtts(LightweightModule):
         if text_dev.is_allocated():
             ttnn.deallocate(text_dev)
 
-        codes, latents, decode_replay_s = self.generator.generate_ondevice_traced(
+        codes, latents, decode_replay_s, stopped = self.generator.generate_ondevice_traced(
             prompt_len,
             max_new_tokens=max_new_tokens,
             temperature=temperature,
@@ -204,6 +208,7 @@ class TtXtts(LightweightModule):
             "setup_replay_s": setup_replay_s,
             "decode_replay_s": decode_replay_s,
             "vocoder_replay_s": vocoder_replay_s,
+            "stopped": stopped,
         }
         return wav_dev, codes, perf
 
@@ -240,7 +245,7 @@ class TtXttsTracedSession:
         self.text_dev = gpt.text_ids_to_device(torch.zeros(1, text_len, dtype=torch.long))
         self.ref_wav_spk = ref_wav_spk
         gpt.alloc_static_kv(max_seq)
-        prompt_len = 32 + text_len
+        prompt_len = NUM_LATENTS + text_len
         self.decoder = TtTracedDecoder(
             gpt,
             prompt_len,
@@ -293,8 +298,13 @@ class TtXttsTracedSession:
         """Convert latent frames to output sample count."""
         return _interp_len(frames) * self.upsample
 
-    def run(self, text_ids):
-        """Replay traced session for new text ids."""
+    def run(self, text_ids, real_len=None):
+        """Replay traced session for new text ids.
+
+        ``real_len`` is this chunk's UNPADDED wrapped-token count. Chunks share one capture, so
+        they are all padded to a common length; the padding is then masked out of decode
+        attention, which is what lets a short chunk still emit STOP on time.
+        """
         dev = self.device
         assert text_ids.shape[1] == self.text_dev.shape[1], (
             f"session captured for {self.text_dev.shape[1]} text tokens, got {text_ids.shape[1]} — "
@@ -304,6 +314,7 @@ class TtXttsTracedSession:
         ttnn.copy(text_tmp, self.text_dev)
         if text_tmp.is_allocated():
             ttnn.deallocate(text_tmp)
+        self.tt.gpt.set_text_padding(NUM_LATENTS, real_len or text_ids.shape[1], text_ids.shape[1])
         t0 = time.perf_counter()
         ttnn.execute_trace(dev, self.setup_tid, blocking=True)
         setup_replay_s = time.perf_counter() - t0
@@ -330,6 +341,7 @@ class TtXttsTracedSession:
             "setup_replay_s": setup_replay_s,
             "decode_replay_s": decode_replay_s,
             "vocoder_replay_s": vocoder_replay_s,
+            "stopped": self.decoder.stopped,
         }
         return wav, codes, perf
 

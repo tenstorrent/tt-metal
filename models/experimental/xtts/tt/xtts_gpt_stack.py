@@ -29,7 +29,7 @@ class TtXttsGptStack(LightweightModule):
             self.init_static(max_seq)
 
     def init_static(self, max_seq):
-        """Allocate static arange buffer for decode masking."""
+        """Allocate static arange and prompt-pad buffers for decode masking."""
         self.max_seq = max_seq
         self.arange = ttnn.from_torch(
             torch.arange(max_seq, dtype=torch.float32).reshape(1, 1, 1, max_seq),
@@ -37,12 +37,33 @@ class TtXttsGptStack(LightweightModule):
             dtype=ttnn.float32,
             layout=ttnn.TILE_LAYOUT,
         )
+        # 1.0 marks a prompt slot decode must NOT attend to — the STOP_TEXT_TOKEN padding that
+        # pins every chunk of a chunked take to one captured prompt geometry. Persistent and
+        # updated IN PLACE (see set_prompt_pad) so a captured trace keeps binding this buffer.
+        self.prompt_pad = ttnn.from_torch(
+            torch.zeros(1, 1, 1, max_seq),
+            device=self.device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+        )
+
+    def set_prompt_pad(self, start, end):
+        """Hide prompt slots [start, end) from decode attention (in place; host write)."""
+        flags = torch.zeros(1, 1, 1, self.max_seq)
+        flags[..., start:end] = 1.0
+        src = ttnn.from_torch(flags, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        ttnn.copy(src, self.prompt_pad)
+        ttnn.deallocate(src)
 
     def forward_decode(self, x, kv, pos, write_idx=None):
         # add_mask must stay DRAM (SDPA asserts DRAM mask).
         """Run one decode step through all blocks and final LN."""
         gt = ttnn.typecast(ttnn.gt(self.arange, pos), ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
-        add_mask = ttnn.multiply(gt, NEG_INF, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # Block the future (gt) AND the text padding: 1.0 in either -> -inf.
+        blocked = ttnn.maximum(gt, self.prompt_pad, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(gt)
+        add_mask = ttnn.multiply(blocked, NEG_INF, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(blocked)
         onehot = None
         if write_idx is None:
             onehot_row = ttnn.typecast(ttnn.eq(self.arange, pos), ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)

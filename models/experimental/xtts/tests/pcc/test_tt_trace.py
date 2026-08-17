@@ -135,6 +135,71 @@ def test_tt_traced_session_reuse(device, xtts_state_dict, reset_seeds):
     assert torch.equal(audio_a2, audio_a), "replaying a text after another one changed its waveform"
 
 
+@pytest.mark.timeout(1800)
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": 65536, "trace_region_size": SESSION_TRACE_REGION}], indirect=True
+)
+def test_tt_traced_session_text_padding(device, xtts_state_dict, reset_seeds):
+    """A chunk padded to a longer shared prompt must decode as if it were not padded.
+
+    Chunks of a chunked take replay ONE capture, so they are all padded to the longest chunk's
+    length with STOP_TEXT_TOKEN. Decode must not attend to that padding: unmasked, a short chunk
+    reads the padding as "there is more text" and keeps generating — it repeats itself, then
+    drones or turns to noise — instead of emitting STOP on time. Measured before the mask
+    existed: 18 real tokens padded with 64 STOP tokens went from 27-33 codes to 75-175.
+    """
+    from scipy.signal import resample_poly
+
+    sd = xtts_state_dict
+    wav = load_reference_audio(sample="en_sample.wav", max_seconds=COND_SECONDS)
+    g = math.gcd(SPK_SR, MEL_SR)
+    spk_wav = torch.from_numpy(resample_poly(wav[0].numpy(), SPK_SR // g, MEL_SR // g).astype("float32")).unsqueeze(0)
+
+    text = "Hey, how are you doing?"
+    wrapped = wrap_text_ids(preprocess_text(text, lang="en"))
+    real_len = wrapped.shape[1]
+    own = -(-real_len // TILE) * TILE  # this text's own tile-aligned length
+    extra = 64  # what a much longer sibling chunk would force on it
+
+    tt = TtXtts(device, sd, XttsHifiDecoderFull(sd))
+    spk_wav_tt = ttnn.from_torch(
+        spk_wav.reshape(1, -1).float(), layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.float32
+    )
+
+    counts = {}
+    for text_len in (own, own + extra):
+        padded = F.pad(wrapped, (0, text_len - real_len), value=STOP_TEXT_TOKEN)
+        # One max_seq for both: same KV geometry and kernels, so the padding is the ONLY variable.
+        assert NUM_LATENTS + text_len + TRACE_MAX_TOKENS + 2 <= TRACE_MAX_SEQ
+        session = tt.traced_session(
+            wav,
+            spk_wav_tt,
+            text_len,
+            TRACE_MAX_SEQ,
+            TRACE_MAX_TOKENS,
+            temperature=TRACE_TEMPERATURE,
+            top_k=TRACE_TOP_K,
+            top_p=TRACE_TOP_P,
+            repetition_penalty=TRACE_REP,
+        )
+        try:
+            # Same seed before each run -> the pre-drawn Gumbel noise matches, so the two
+            # padding regimes are compared on identical sampling draws.
+            torch.manual_seed(1234)
+            _, codes, perf = session.run(padded, real_len)
+        finally:
+            session.close()
+        counts[text_len] = (codes.shape[1], bool(perf["stopped"]))
+        logger.info(f"padded to {text_len} ({text_len - real_len} pad tokens): {counts[text_len]}")
+
+    (n_own, stopped_own), (n_pad, stopped_pad) = counts[own], counts[own + extra]
+    assert stopped_own and stopped_pad, f"a take ran to the code cap instead of reaching STOP: {counts}"
+    assert n_pad <= max(8, int(1.5 * n_own)), (
+        f"{extra} pad tokens stretched the take from {n_own} to {n_pad} codes — decode is reading "
+        "the text padding (prompt-pad mask not applied?)"
+    )
+
+
 @pytest.mark.timeout(2400)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 65536, "trace_region_size": 52428800}], indirect=True)
 def test_tt_eval_traced(device, xtts_state_dict, reset_seeds):
@@ -259,7 +324,9 @@ def test_tt_eval_traced_long(device, xtts_state_dict, reset_seeds):
         wrap_text_ids(preprocess_text(re.sub(SENTENCE_FINAL_PUNCT_RE, "", t.strip()), lang="en")) for t in chunk_texts
     ]
     pad_to = -(-max(w.shape[1] for w in wrapped) // TILE) * TILE
-    chunks = [F.pad(w, (0, pad_to - w.shape[1]), value=STOP_TEXT_TOKEN) for w in wrapped]
+    # Pad to a common length (one capture for all chunks) and keep each chunk's real length, which
+    # is what masks the padding out of decode attention — see test_tt_traced_session_text_padding.
+    chunks = [(F.pad(w, (0, pad_to - w.shape[1]), value=STOP_TEXT_TOKEN), w.shape[1]) for w in wrapped]
     assert len(chunks) > 1, "EVAL_LONG_TEXT is meant to exceed a single pass; it no longer does"
 
     tt = TtXtts(device, sd, XttsHifiDecoderFull(sd))
@@ -288,8 +355,8 @@ def test_tt_eval_traced_long(device, xtts_state_dict, reset_seeds):
     gap = np.zeros(int(AUDIO_POST.chunk_gap_seconds * OUTPUT_SAMPLE_RATE), dtype="float32")
     pieces, n_codes = [], 0
     try:
-        for i, w in enumerate(chunks):
-            wav_i, codes_i, _ = session.run(w)
+        for i, (w, real) in enumerate(chunks):
+            wav_i, codes_i, _ = session.run(w, real)
             wav_i = wav_i.float().numpy().astype("float32")
             n_codes += codes_i.shape[1]
             if pieces:
