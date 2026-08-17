@@ -72,3 +72,9 @@ inline void llk_math_matmul_reinit_no_mop(
         transpose, g.in0_tile_r_dim, g.in0_tile_c_dim, g.in1_tile_r_dim, g.in1_tile_c_dim, g.partial_face);
     math::reset_counters(p_setrwc::SET_ABD_F);
 }
+
+inline void llk_math_matmul_16x32_32x32_hifi2_splitk2_init() { _llk_math_matmul_16x32_32x32_hifi2_splitk2_init_(); }
+
+inline void llk_math_matmul_16x32_32x32_hifi2_splitk2(const uint dst_index) {
+    _llk_math_matmul_16x32_32x32_hifi2_splitk2_(dst_index);
+}

@@ -1810,8 +1810,11 @@ def run_ring_joint_sdpa_chunked(
         main_col_dim = sdpa_input_shard_dims[1] if sdpa_input_shard_dims[1] is not None else -1
         mesh_composer = ttnn.create_mesh_composer(mesh_device, ttnn.MeshComposerConfig(main_row_dim, main_col_dim))
 
+        q_tile = ttnn.Tile((16, 32)) if all(q_chunk == 16 for q_chunk, _ in qk_configs) else None
+
         def upload_q(q_host):
-            return ttnn.from_torch(
+            tile_kwargs = {"tile": q_tile} if q_tile is not None else {}
+            tt_q = ttnn.from_torch(
                 q_host,
                 dtype=q_dtype,
                 layout=ttnn.TILE_LAYOUT,
@@ -1819,7 +1822,9 @@ def run_ring_joint_sdpa_chunked(
                 mesh_mapper=ttnn.ShardTensor2dMesh(
                     mesh_device, mesh_shape=tuple(mesh_device.shape), dims=sdpa_input_shard_dims
                 ),
+                **tile_kwargs,
             )
+            return tt_q
 
         def upload_k(k_host, memory_config=None):
             kwargs = {}
@@ -4797,7 +4802,7 @@ RING_MLA_CHUNKED_MODEL_CONFIGS["kimi_k3"] = ModelConfig(
     is_causal=True,
     q_dtype=ttnn.bfloat16,
     kv_dtype=ttnn.bfloat8_b,
-    q_chunk_sizes=[32],
+    q_chunk_sizes=[16],
     # K2.6's list. 640 is what K3 deploys; a wider k sweep is a local run, not CI cost.
     k_chunk_sizes=[512, 640],
     seq_len=CHUNKED_PREFILL_CHUNK_SIZE,  # unused by chunked path
@@ -5348,7 +5353,6 @@ def test_ring_joint_attention_minimax3_gqa_chunked_perf_impl(model_name, qk_conf
 def test_ring_mla_chunked_accuracy(model_name, qk_configs, chunk_size):
     """Validate ring_mla (latent V) chunked prefill with reusable max-sized K/V buffers."""
     mesh_config = MESH_CONFIG
-
     run_ring_joint_sdpa_chunked(
         mesh_config,
         RING_MLA_CHUNKED_MODEL_CONFIGS[model_name],
@@ -5700,9 +5704,9 @@ def test_ring_mla_create_chunked_perf_table(model_name, q_chunk_size, k_chunk_si
 
 
 # === TEST 9: CHUNKED-PREFILL ring_mla PERF CHECK ===
-# Profiles each ring_mla model's 50k+5k chunk (final, most compute-bound chunk of its chunked
-# prefill): natively on Galaxy (sp=8, tp=4) and simulated on the 4-device QuietBox (sp=4, tp=1).
-# Symmetric +/- band, same as the ring joint perf check.
+# Profiles each ring_mla model's final, most compute-bound chunk. Chunk size scales with SP so
+# every topology runs 11 chunks (final index 10) with 640 Q rows/device/chunk. Symmetric +/- band,
+# same as the ring joint check.
 if MESH_CONFIG.is_galaxy:
     RING_MLA_CHUNKED_PERF_CHECK_CONFIGS = [
         # (model_name, q_chunk_size, k_chunk_size, ring_size, expected_util)
@@ -5717,8 +5721,7 @@ else:
         # (model_name, q_chunk_size, k_chunk_size, ring_size, expected_util)
         # 4-device ring (QuietBox, 100 SDPA cores)
         ("kimi50k", 32, 640, 4, 66.05),
-        # Kimi-K3, measured 2026-08-05 on bh_quietbox_2 (run 31003064713): 4.845 ms. Inert until
-        # #52190 ungates this test here; kimi50k read 65.89 vs its committed 66.05 in the same run.
+        # Kimi-K3, measured 2026-08-05 on bh_quietbox_2 (run 31003064713): 4.845 ms.
         ("kimi_k3", 32, 640, 4, 67.07),
     ]
 
@@ -5746,13 +5749,12 @@ else:
 @skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
 @skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
 @pytest.mark.skipif(
-    not is_high_power(),
-    reason="perf job requires a high-power (>=130W TDP) galaxy; guards the exabox.tenstorrent.com/power=14kw label",
+    MESH_CONFIG.is_galaxy and not is_high_power(),
+    reason="galaxy perf job requires a high-power (>=130W TDP) host; guards the exabox.tenstorrent.com/power=14kw label",
 )
 def test_ring_mla_chunked_perf_check(model_name, q_chunk_size, k_chunk_size, ring_size_expected, expected_util):
-    """Measure ring_mla chunked-prefill math utilization for the kimi 50k+5k galaxy chunk (a 5k Q
-    chunk against a 50k K/V prefix), simulated on the 4-device QuietBox, via realtime profiler and assert
-    within +/- RING_JOINT_PERF_MARGIN.
+    """Measure ring_mla chunked-prefill math utilization via realtime profiler and assert within
+    +/- RING_JOINT_PERF_MARGIN. Every topology profiles final chunk index 10 with 640 Q rows/device.
 
     RING_JOINT_CHUNKED_CHUNK_ID isolates the final chunk so only its iteration is profiled;
     each chunk rebuilds its K/V cache from scratch, so it reproduces the full-sequence kernel.
@@ -5762,8 +5764,9 @@ def test_ring_mla_chunked_perf_check(model_name, q_chunk_size, k_chunk_size, rin
 
     model = RING_MLA_CHUNKED_MODEL_CONFIGS[model_name]
     chunk_size = CHUNKED_PREFILL_CHUNK_SIZE
-    n_chunks = CHUNKED_PREFILL_TOTAL_SEQ // chunk_size
-    perf_chunk = n_chunks - 1  # final chunk: largest K/V prefix + current chunk (simulates galaxy 50k+5k)
+    total_seq = CHUNKED_PREFILL_TOTAL_SEQ
+    n_chunks = CHUNKED_PREFILL_N_CHUNKS
+    perf_chunk = n_chunks - 1
 
     config_id = f"{get_test_case_id(model, q_chunk_size, k_chunk_size)}-chunk{chunk_size}-fresh_kv"
     runtime = open_ring_joint_sdpa_runtime(MESH_CONFIG)
@@ -5775,6 +5778,7 @@ def test_ring_mla_chunked_perf_check(model_name, q_chunk_size, k_chunk_size, rin
                     MESH_CONFIG,
                     model,
                     chunk_size=chunk_size,
+                    total_seq=total_seq,
                     qk_configs=[(q_chunk_size, k_chunk_size)],
                     persistent_buffer_mode="reuse_max",
                     use_ring_mla=True,
@@ -5794,7 +5798,7 @@ def test_ring_mla_chunked_perf_check(model_name, q_chunk_size, k_chunk_size, rin
     upper = expected_util * (1 + RING_JOINT_PERF_MARGIN)
 
     logger.info(
-        f"ring_mla chunked 50k+5k perf check {config_id}: "
+        f"ring_mla chunked perf check {config_id}: "
         f"duration={duration_ns/1e6:.3f} ms, math_util={utilization:.2f}% "
         f"(expected {expected_util:.2f}%, band [{lower:.2f}, {upper:.2f}]), "
         f"profiler_records={len(perf_records)}"

@@ -449,6 +449,47 @@ inline void _llk_math_matmul_init_no_mop_(
     math::reset_counters(p_setrwc::SET_ABD_F);
 }
 
+// Specialized BF16 HiFi2 16x32 x 32x32 schedule. Each K face accumulates into
+// a separate destination tile so the MVMUL recurrence distance is eight; PACK
+// combines the pair when it writes the logical output tile.
+inline void _llk_math_matmul_16x32_32x32_hifi2_splitk2_init_()
+{
+    matmul_configure_addrmod<MathFidelity::HiFi2, 0>(false /* transpose */, FACE_R_DIM, TILE_C_DIM, TILE_R_DIM, TILE_C_DIM, false /* partial_face */);
+
+    addr_mod_t {
+        .srca     = {.incr = 0, .clr = 1, .cr = 1},
+        .srcb     = {.incr = 0, .clr = 1, .cr = 1},
+        .dest     = {.incr = 0, .clr = 1, .cr = 1},
+        .fidelity = {.incr = 0, .clr = 1},
+    }
+        .set(ADDR_MOD_6);
+    math::reset_counters(p_setrwc::SET_ABD_F);
+}
+
+inline void _llk_math_matmul_16x32_32x32_hifi2_splitk2_(const std::uint32_t dst_index)
+{
+    constexpr std::uint32_t partial_tile_stride = 1U << DstTileSizeLog2[DstTileShape::Tile32x32];
+    math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
+
+    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
+    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0);
+    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
+    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_4, 0);
+    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, partial_tile_stride);
+    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, partial_tile_stride);
+    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, partial_tile_stride);
+    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_5, partial_tile_stride);
+
+    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
+    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0);
+    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
+    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_4, 0);
+    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, partial_tile_stride);
+    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, partial_tile_stride);
+    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, partial_tile_stride);
+    TTI_MVMUL(p_setrwc::CLR_AB, 0, ADDR_MOD_6, partial_tile_stride);
+}
+
 inline void _llk_math_matmul_uninit_no_mop_()
 {
     // No state to restore - all states are transient or default

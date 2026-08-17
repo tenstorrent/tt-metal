@@ -86,6 +86,19 @@ ALWI void matmul_block_no_mop(
     MATH((llk_math_matmul_no_mop<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, idst, ct_dim, rt_dim)));
 }
 
+#ifdef ARCH_BLACKHOLE
+ALWI void mm_tiny_splitk2_reinit_short(uint32_t in0_cb_id, uint32_t in1_cb_id) {
+    UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, false, 1, 1, 1)));
+    MATH((llk_math_matmul_16x32_32x32_hifi2_splitk2_init()));
+}
+
+ALWI void matmul_tile_tiny_splitk2(
+    uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t in0_tile_index, uint32_t in1_tile_index, uint32_t idst) {
+    UNPACK((llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, 1, 1, 1)));
+    MATH((llk_math_matmul_16x32_32x32_hifi2_splitk2(idst)));
+}
+#endif
+
 // clang-format off
 /**
  * Lightweight no-MOP matmul reinit for steady-state loops where tile formats/dim assumptions

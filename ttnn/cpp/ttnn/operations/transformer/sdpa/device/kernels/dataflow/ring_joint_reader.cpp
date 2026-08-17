@@ -459,6 +459,8 @@ void kernel_main() {
     constexpr uint32_t cb_v_in = get_compile_time_arg_val(cb_arg_offset + 2);
     constexpr uint32_t cb_attention_sink = get_compile_time_arg_val(cb_arg_offset + 3);
     constexpr uint32_t cb_kv_pad_derived = get_compile_time_arg_val(cb_arg_offset + 4);
+    constexpr bool use_q16_tiles = get_tile_num_faces(cb_q_in) == 2;
+    constexpr uint32_t q_local_padded_Kt = q_local_padded_Nt / (use_q16_tiles ? 2 : 1);
 
     if constexpr (slot_from_metadata || kv_pad_from_metadata) {
         Noc meta_noc;
@@ -475,7 +477,7 @@ void kernel_main() {
             const uint32_t kv_actual_tile_count = kv_actual_isl / 32;
             logical_nt = ring_joint::compute_logical_nt(kv_actual_isl, chunk_size_t * 32, 32);
             const auto qmap = ring_joint::build_kv_pad_q_mapping_device(
-                kv_actual_tile_count, logical_nt, ring_size, q_local_padded_Nt, fused_op_receiver.seq.ring_index);
+                kv_actual_tile_count, logical_nt, ring_size, q_local_padded_Kt, fused_op_receiver.seq.ring_index);
             const auto masks = ring_joint::build_ring_work_masks_device(
                 fused_op_receiver.seq.ring_index,
                 ring_size,
@@ -486,7 +488,7 @@ void kernel_main() {
                 kv_local_padded_Nt,
                 chunked_enabled,
                 chunk_size_t,
-                q_local_padded_Nt,
+                q_local_padded_Kt,
                 logical_nt,
                 num_joint_k_chunks,
                 L,
@@ -819,7 +821,7 @@ void kernel_main() {
                     q_chunk * Sq_chunk_t,
                     Sq_chunk_t,
                     ring_index,
-                    q_local_padded_Nt,
+                    q_local_padded_Kt,
                     ring_size,
                     sliding_window_size,
                     tt::constants::TILE_HEIGHT,
@@ -853,7 +855,7 @@ void kernel_main() {
                         chunked_enabled,
                         kv_local_padded_Nt,
                         chunk_size_t,
-                        q_local_padded_Nt>(source_ring_id, source_k_chunk * Sk_chunk_t, logical_nt);
+                        q_local_padded_Kt>(source_ring_id, source_k_chunk * Sk_chunk_t, logical_nt);
 
                 // Sharded joint: this ring iteration serves shard `ring_id`, whose global joint tile
                 // range starts at ring_id * Lt_local. A joint K chunk whose global start tile is

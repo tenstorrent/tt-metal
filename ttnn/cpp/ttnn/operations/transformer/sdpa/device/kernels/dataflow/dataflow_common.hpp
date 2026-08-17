@@ -9,6 +9,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
@@ -334,13 +335,14 @@ void fill_neginf_tile(uint32_t cb_id, uint32_t tile_id) {
     constexpr uint32_t bfp4_size = num_exponents + tt::constants::TILE_HW / 2;
     constexpr uint32_t bfp8_size = num_exponents + tt::constants::TILE_HW;
     constexpr uint32_t bf16_size = tt::constants::TILE_HW * 2;
+    constexpr uint32_t bf16_tiny_size = 2 * tt::constants::FACE_HW * sizeof(uint16_t);
 
     CircularBuffer cb(cb_id);
     uint32_t write_addr = cb.get_write_ptr() + tile_id * tile_bytes;
     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(write_addr);
     constexpr uint32_t total_words = tile_bytes / sizeof(uint32_t);
 
-    if constexpr (tile_bytes == bf16_size) {
+    if constexpr (tile_bytes == bf16_size || tile_bytes == bf16_tiny_size) {
         // BFLOAT16: fill with 0xFF80FF80 (-inf in bf16, two values per word)
         for (uint32_t i = 0; i < total_words; i++) {
             ptr[i] = 0xFF80FF80;
@@ -384,6 +386,8 @@ void fill_vertical_tile_bf16(Noc noc, uint32_t cb_id, uint32_t tile_id, uint32_t
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb.get_write_ptr() + tile_id * tile_bytes);
 
     // Face offsets in uint32 words
+    constexpr uint32_t num_faces = tile_bytes / (tt::constants::FACE_HW * sizeof(uint16_t));
+    static_assert(num_faces == 2 || num_faces == 4, "Lightweight masks require 16x32 or 32x32 BF16 tiles");
     constexpr uint32_t face_offsets[4] = {
         0,                    // Face 0: rows[0:16], cols[0:16]
         uint32_per_face,      // Face 1: rows[0:16], cols[16:32]
@@ -392,7 +396,7 @@ void fill_vertical_tile_bf16(Noc noc, uint32_t cb_id, uint32_t tile_id, uint32_t
     };
     constexpr uint32_t face_col_starts[4] = {0, 16, 0, 16};
 
-    for (uint32_t f = 0; f < 4; f++) {
+    for (uint32_t f = 0; f < num_faces; f++) {
         uint32_t face_col_start = face_col_starts[f];
 
         if (unpad_col_in_tile <= face_col_start) {
@@ -438,7 +442,7 @@ void fill_vertical_tile_bf16(Noc noc, uint32_t cb_id, uint32_t tile_id, uint32_t
  * Face 3 (rows 16-31, cols 16-31): same diagonal pattern as face 0 (shifted by 16 in both dims)
  */
 template <uint32_t tile_bytes>
-void fill_causal_diagonal_tile_bf16(Noc noc, uint32_t cb_id, uint32_t tile_id) {
+void fill_causal_diagonal_tile_bf16(Noc noc, uint32_t cb_id, uint32_t tile_id, bool bottom_half = false) {
     // Start with all zeros
     fill_tile_zeros<tile_bytes>(noc, cb_id, tile_id);
 
@@ -452,6 +456,8 @@ void fill_causal_diagonal_tile_bf16(Noc noc, uint32_t cb_id, uint32_t tile_id) {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb.get_write_ptr() + tile_id * tile_bytes);
 
     // Face offsets in uint32 words
+    constexpr uint32_t num_faces = tile_bytes / (tt::constants::FACE_HW * sizeof(uint16_t));
+    static_assert(num_faces == 2 || num_faces == 4, "Causal masks require 16x32 or 32x32 BF16 tiles");
     constexpr uint32_t face_offsets[4] = {
         0,                    // Face 0: rows[0:16], cols[0:16]
         uint32_per_face,      // Face 1: rows[0:16], cols[16:32]
@@ -459,17 +465,22 @@ void fill_causal_diagonal_tile_bf16(Noc noc, uint32_t cb_id, uint32_t tile_id) {
         3 * uint32_per_face   // Face 3: rows[16:32], cols[16:32]
     };
 
-    // Face 1: entirely -inf (cols 16-31 > rows 0-15)
-    for (uint32_t i = 0; i < uint32_per_face; i++) {
-        ptr[face_offsets[1] + i] = NEGINF_PAIR;
+    if constexpr (num_faces == 4) {
+        // Face 1: entirely -inf (cols 16-31 > rows 0-15). Face 2 stays zero.
+        for (uint32_t i = 0; i < uint32_per_face; i++) {
+            ptr[face_offsets[1] + i] = NEGINF_PAIR;
+        }
+    } else if (!bottom_half) {
+        // Top 16 query rows: right K face is entirely above the diagonal.
+        for (uint32_t i = 0; i < uint32_per_face; i++) {
+            ptr[face_offsets[1] + i] = NEGINF_PAIR;
+        }
     }
 
-    // Face 2: entirely zero — already done by fill_tile_zeros
-
-    // Face 0 and Face 3: diagonal pattern (identical — both have local row r with cols 0..r valid, r+1..15 masked)
-    constexpr uint32_t diag_faces[2] = {0, 3};
-    for (uint32_t f = 0; f < 2; f++) {
-        uint32_t face_base = face_offsets[diag_faces[f]];
+    const uint32_t diag_count = num_faces == 4 ? 2 : 1;
+    for (uint32_t f = 0; f < diag_count; f++) {
+        const uint32_t diag_face = num_faces == 4 ? (f == 0 ? 0 : 3) : (bottom_half ? 1 : 0);
+        uint32_t face_base = face_offsets[diag_face];
         for (uint32_t row = 0; row < tt::constants::FACE_HEIGHT; row++) {
             // First masked column in this row: row + 1
             uint32_t first_masked = row + 1;
@@ -620,9 +631,10 @@ void generate_lightweight_mask_tiles(Noc noc) {
     constexpr uint32_t partial_mask_tiles = (global_n_partial_col > 0 ? 1 : 0) + (joint_l_partial_col > 0 ? 1 : 0);
     constexpr bool has_sliding_window = sliding_window_size > 0;
     constexpr uint32_t sliding_diag_tiles = has_sliding_window ? kSlidingWindowEdgeTiles : 0;
-    constexpr uint32_t causal_diag_tiles = (!has_sliding_window && is_causal_lw) ? 1 : 0;
-    constexpr uint32_t total_mask_tiles = 1 + sliding_diag_tiles + causal_diag_tiles + partial_mask_tiles;
     constexpr uint32_t mask_tile_size_bytes = get_tile_size(cb_mask_in);
+    constexpr bool tiny_q_tile = mask_tile_size_bytes == tt::constants::FACE_HW * 2 * sizeof(uint16_t);
+    constexpr uint32_t causal_diag_tiles = (!has_sliding_window && is_causal_lw) ? (tiny_q_tile ? 2 : 1) : 0;
+    constexpr uint32_t total_mask_tiles = 1 + sliding_diag_tiles + causal_diag_tiles + partial_mask_tiles;
 
     CircularBuffer cb(cb_mask_in);
     cb.reserve_back(total_mask_tiles);
@@ -637,7 +649,10 @@ void generate_lightweight_mask_tiles(Noc noc) {
             noc, tile_idx);
         tile_idx += kSlidingWindowEdgeTiles;
     } else if constexpr (is_causal_lw) {
-        fill_causal_diagonal_tile_bf16<mask_tile_size_bytes>(noc, cb_mask_in, tile_idx++);
+        fill_causal_diagonal_tile_bf16<mask_tile_size_bytes>(noc, cb_mask_in, tile_idx++, false);
+        if constexpr (tiny_q_tile) {
+            fill_causal_diagonal_tile_bf16<mask_tile_size_bytes>(noc, cb_mask_in, tile_idx++, true);
+        }
     }
 
     // Subsequent tiles: partial mask tiles for boundary conditions

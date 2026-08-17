@@ -501,6 +501,8 @@ void kernel_main() {
     constexpr uint32_t cb_out = get_compile_time_arg_val(cb_arg_offset + 13);
     constexpr uint32_t cb_max_out = get_compile_time_arg_val(cb_arg_offset + 14);  // deferred norm: compute -> DRAM
     constexpr uint32_t cb_lse_out = cb_max_out;                                    // eager norm: compute -> DRAM
+    constexpr bool use_q16_tiles = get_tile_num_faces(cb_out) == 2;
+    constexpr uint32_t q_local_padded_Kt = q_local_padded_Nt / (use_q16_tiles ? 2 : 1);
 
     constexpr uint32_t tile_bytes = get_tile_size(cb_out);
     constexpr uint32_t stats_tile_bytes = get_tile_size(cb_max_in);
@@ -522,7 +524,7 @@ void kernel_main() {
             kv_local_padded_Nt,
             chunked_enabled,
             chunk_size_t,
-            q_local_padded_Nt,
+            q_local_padded_Kt,
             logical_nt,
             num_joint_k_chunks,
             L,

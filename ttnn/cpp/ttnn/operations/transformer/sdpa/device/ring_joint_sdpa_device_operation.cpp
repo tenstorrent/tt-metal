@@ -773,11 +773,19 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
 
     // Validate chunk sizes if program config is provided
 
+    const auto q_tile = tensor_args.input_q.tensor_spec().tile();
+    const uint32_t q_tile_height = q_tile.get_height();
     TT_FATAL(
-        q_chunk_size % tt::constants::TILE_WIDTH == 0,
-        "q_chunk_size must be divisible by TILE_SIZE. Got q_chunk_size: {}, TILE_SIZE: {}",
+        q_tile.get_width() == tt::constants::TILE_WIDTH &&
+            (q_tile_height == tt::constants::TILE_HEIGHT || q_tile_height == tt::constants::FACE_HEIGHT),
+        "Ring joint SDPA Q tiles must be 32x32 or 16x32. Got {}x{}",
+        q_tile_height,
+        q_tile.get_width());
+    TT_FATAL(
+        q_chunk_size % q_tile_height == 0,
+        "q_chunk_size must be divisible by the Q tile height. Got q_chunk_size: {}, Q tile height: {}",
         q_chunk_size,
-        tt::constants::TILE_WIDTH);
+        q_tile_height);
     TT_FATAL(
         k_chunk_size % tt::constants::TILE_WIDTH == 0,
         "k_chunk_size must be divisible by TILE_SIZE. Got k_chunk_size: {}, TILE_SIZE: {}",
@@ -847,13 +855,14 @@ RingJointSDPAResultSpec RingJointSDPADeviceOperation::compute_output_specs(
     // head dim as v head dim
     out_shape[3] = v_head_dim;
 
+    const auto output_page_config = PageConfig(Layout::TILE, input.tensor_spec().tile());
     return {
         tt::tt_metal::TensorSpec(
-            out_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config)),
+            out_shape, TensorLayout(DataType::BFLOAT16, output_page_config, args.output_memory_config)),
         tt::tt_metal::TensorSpec(
-            joint_output_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config)),
+            joint_output_shape, TensorLayout(DataType::BFLOAT16, output_page_config, args.output_memory_config)),
         tt::tt_metal::TensorSpec(
-            stats_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config))};
+            stats_shape, TensorLayout(DataType::BFLOAT16, output_page_config, args.output_memory_config))};
 }
 
 RingJointSDPAResult RingJointSDPADeviceOperation::create_output_tensors(

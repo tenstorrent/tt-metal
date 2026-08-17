@@ -188,13 +188,26 @@ constexpr bool sdpa_unpack_format_changed() {
 #endif
 }
 
+template <uint32_t old_cb, uint32_t new_cb>
+constexpr bool sdpa_unpack_tile_geometry_changed() {
+#if defined(TRISC_UNPACK) || defined(TRISC_MATH)
+    return unpack_tile_face_r_dim[old_cb] != unpack_tile_face_r_dim[new_cb] ||
+           unpack_tile_num_faces[old_cb] != unpack_tile_num_faces[new_cb];
+#else
+    return false;
+#endif
+}
+
 template <uint32_t srca_old_cb, uint32_t srca_new_cb, uint32_t srcb_old_cb, uint32_t srcb_new_cb>
 ALWI void sdpa_maybe_reconfig_data_format() {
 #if defined(TRISC_UNPACK) || defined(TRISC_MATH)
     if constexpr (
         sdpa_unpack_format_changed<srca_old_cb, srca_new_cb>() ||
         sdpa_unpack_format_changed<srcb_old_cb, srcb_new_cb>()) {
-        reconfig_data_format(srca_old_cb, srca_new_cb, srcb_old_cb, srcb_new_cb);
+        constexpr bool tile_geometry_changed = sdpa_unpack_tile_geometry_changed<srca_old_cb, srca_new_cb>() ||
+                                               sdpa_unpack_tile_geometry_changed<srcb_old_cb, srcb_new_cb>();
+        reconfig_data_format<SrcOrder::Regular, tile_geometry_changed>(
+            srca_old_cb, srca_new_cb, srcb_old_cb, srcb_new_cb);
     }
 #endif
 }
@@ -205,7 +218,10 @@ ALWI void sdpa_maybe_reconfig_data_format(uint32_t runtime_srca_old_cb, uint32_t
     if constexpr (
         sdpa_unpack_format_changed<srca_old_cb, srca_new_cb>() ||
         sdpa_unpack_format_changed<srcb_old_cb, srcb_new_cb>()) {
-        reconfig_data_format(runtime_srca_old_cb, srca_new_cb, runtime_srcb_old_cb, srcb_new_cb);
+        constexpr bool tile_geometry_changed = sdpa_unpack_tile_geometry_changed<srca_old_cb, srca_new_cb>() ||
+                                               sdpa_unpack_tile_geometry_changed<srcb_old_cb, srcb_new_cb>();
+        reconfig_data_format<SrcOrder::Regular, tile_geometry_changed>(
+            runtime_srca_old_cb, srca_new_cb, runtime_srcb_old_cb, srcb_new_cb);
     }
 #endif
 }
@@ -227,7 +243,9 @@ static __attribute__((noinline, noclone)) void configure_pack_width(uint32_t cb,
 ALWI void configure_single_tile_pack(uint32_t cb) { configure_pack_width(cb, 1); }
 
 ALWI bool configure_row_pack_width(uint32_t cb, uint32_t pack_width) {
-    const bool use_blocked_pack_width = should_use_blocked_pack_width(pack_width);
+    // The blocked pack MOP advances in native 32x32 destination-tile strides. For a 16x32
+    // destination that skips every other logical output tile, so use scalar packing instead.
+    const bool use_blocked_pack_width = Q_TILE_NUM_FACES == 4 && should_use_blocked_pack_width(pack_width);
     configure_pack_width(cb, use_blocked_pack_width ? pack_width : 1);
     return use_blocked_pack_width;
 }
@@ -276,7 +294,7 @@ ALWI void pack_contiguous_rows_nocfg(
     uint32_t col_base,
     uint32_t pack_width) {
     uint32_t dst_index = 0;
-    const bool use_blocked_pack_width = should_use_blocked_pack_width(pack_width);
+    const bool use_blocked_pack_width = Q_TILE_NUM_FACES == 4 && should_use_blocked_pack_width(pack_width);
     for (uint32_t row = 0; row < row_count; ++row) {
         uint32_t out_tile_index = (row_base + row) * row_stride + col_base;
         if (use_blocked_pack_width) {
@@ -337,7 +355,6 @@ void blocked_matmul_and_pack(
         in1_index += in1_stride;
     }
     tile_regs_commit();
-
     tile_regs_wait();
     if (!skip_pack_configure) {
         configure_row_pack_width(out_cb, subblock_w);
@@ -371,7 +388,8 @@ void inplace_v_matmul_pack_batched(
     // reused with multi-tile Q.
     static_assert(subblock_h == 1, "inplace_v_matmul_pack_batched requires single-tile Q (subblock_h==1)");
     // subblock_h DST tiles per output column; batch as many columns as DST holds.
-    const uint32_t cols_per_batch = dst_size / subblock_h;
+    constexpr bool use_tiny_splitk2 = Q_TILE_NUM_FACES == 2;
+    const uint32_t cols_per_batch = use_tiny_splitk2 ? dst_size / 2 : dst_size / subblock_h;
     for (uint32_t vs0 = 0; vs0 < vDHt; vs0 += cols_per_batch) {
         const uint32_t cols = (vDHt - vs0 < cols_per_batch) ? (vDHt - vs0) : cols_per_batch;
         tile_regs_acquire();
@@ -379,8 +397,15 @@ void inplace_v_matmul_pack_batched(
             uint32_t in0_index = in0_index_start;
             uint32_t in1_index = (vs0 + c) * KT_stride;
             for (uint32_t inner = 0; inner < inner_dim; ++inner) {
-                matmul_block_no_mop(
-                    in0_cb, in1_cb, in0_index, in1_index, c * subblock_h, false, 1, subblock_h, KT_stride);
+#ifdef ARCH_BLACKHOLE
+                if constexpr (use_tiny_splitk2) {
+                    matmul_tile_tiny_splitk2(in0_cb, in1_cb, in0_index, in1_index, 2 * c);
+                } else
+#endif
+                {
+                    matmul_block_no_mop(
+                        in0_cb, in1_cb, in0_index, in1_index, c * subblock_h, false, 1, subblock_h, KT_stride);
+                }
                 in0_index++;
                 in1_index++;
             }
@@ -388,7 +413,20 @@ void inplace_v_matmul_pack_batched(
         tile_regs_commit();
         tile_regs_wait();
         configure_row_pack_width(out_cb, cols);
-        pack_contiguous_rows_nocfg(out_cb, 0, subblock_h, vDHt, vs0, cols);
+#ifdef ARCH_BLACKHOLE
+        if constexpr (use_tiny_splitk2) {
+            for (uint32_t c = 0; c < cols; ++c) {
+                pack_reconfig_l1_acc(0);
+                sdpa_pack_tile_ooo(2 * c, out_cb, vs0 + c);
+                pack_reconfig_l1_acc(1);
+                sdpa_pack_tile_ooo(2 * c + 1, out_cb, vs0 + c);
+            }
+            pack_reconfig_l1_acc(0);
+        } else
+#endif
+        {
+            pack_contiguous_rows_nocfg(out_cb, 0, subblock_h, vDHt, vs0, cols);
+        }
         tile_regs_release();
     }
 }
@@ -436,10 +474,12 @@ void reduce_c_row_group(
         CircularBuffer(in0_cb).wait_front(cumulative_input_tiles);
     }
 
-    reduce_block_max_row_init_runtime(out_cb, reduce_cols, respect_trigger);
+    constexpr uint32_t num_faces = Q_TILE_NUM_FACES;
+    reduce_block_max_row_init_runtime(out_cb, reduce_cols, respect_trigger, num_faces);
     for (uint32_t i = 0; i < group_size; i++) {
         const uint32_t input_tile_start = (row_start + i) * row_stride;
-        reduce_block_max_row_runtime(in0_cb, scale_cb, input_tile_start, i, respect_trigger, overlap_first_half);
+        reduce_block_max_row_runtime(
+            in0_cb, scale_cb, input_tile_start, i, respect_trigger, overlap_first_half, num_faces);
     }
     reduce_block_max_row_uninit_runtime(in0_cb, respect_trigger, overlap_first_half);
 
@@ -465,7 +505,7 @@ void reduce_c_row_group(
  * In-place sub_exp on cb_qkt_im: subtracts max, applies exp with ReLU clamping,
  * writes back to same positions. Accumulates row sums into reduce_cb.
  */
-template <bool profiling_enabled, uint32_t scale_fp32>
+template <bool profiling_enabled, uint32_t scale_fp32, uint32_t tile_num_faces = 4>
 void sub_exp_block_bcast_cols(
     uint32_t inout_cb,
     uint32_t max_cb,
@@ -506,8 +546,9 @@ void sub_exp_block_bcast_cols(
     {
         MaybeDeviceZoneScopedN(profiling_enabled, "EXP");
         uint32_t dst_index = 0;
-        constexpr int iterations = 32;
-        constexpr VectorMode vector_mode_exp = VectorMode::None;
+        constexpr bool tiny_q_tile = tile_num_faces == 2;
+        constexpr int iterations = tiny_q_tile ? 8 : 32;
+        constexpr VectorMode vector_mode_exp = tiny_q_tile ? VectorMode::R : VectorMode::None;
         for (uint32_t i = 0; i < tiles_per_row; i++) {
             for (uint32_t j = 0; j < tiles_per_column; j++) {
                 exp_packthread_tile<true, false, InputClamping::None, iterations>(dst_index++, vector_mode_exp);
@@ -1345,7 +1386,7 @@ static void sdpa_inner_loop_step(
             if (q_subblock > 0) {
                 uint32_t prev_q_subblock = q_subblock - 1;
                 sdpa_maybe_reconfig_data_format<cb_kt_in, cb_qkt_im, cb_q_in, cb_qkt_im>();
-                sub_exp_block_bcast_cols<profiling_enabled, scale_fp32>(
+                sub_exp_block_bcast_cols<profiling_enabled, scale_fp32, Q_TILE_NUM_FACES>(
                     cb_qkt_im,
                     cur.max,
                     cur.sum,
@@ -1545,7 +1586,7 @@ static void sdpa_inner_loop_step(
                 // Split-drain (common, materialized-V path): interleave each column-subblock's
                 // sub_exp with its partial V matmul; partial products accumulate across kt_sub via L1.
                 for (uint32_t kt_sub = 0; kt_sub < kt_num_full_subblocks; ++kt_sub) {
-                    sub_exp_block_bcast_cols<profiling_enabled, scale_fp32>(
+                    sub_exp_block_bcast_cols<profiling_enabled, scale_fp32, Q_TILE_NUM_FACES>(
                         cb_qkt_im,
                         cur.max,
                         cur.sum,
@@ -1607,7 +1648,7 @@ static void sdpa_inner_loop_step(
                 // group). Vs split-drain this drops the L1-acc and the per-kt_sub packs/barriers.
                 // active_Sk == kt_num_full_subblocks * actual_sbw exactly, so one pass covers the row.
                 for (uint32_t kt_sub = 0; kt_sub < kt_num_full_subblocks; ++kt_sub) {
-                    sub_exp_block_bcast_cols<profiling_enabled, scale_fp32>(
+                    sub_exp_block_bcast_cols<profiling_enabled, scale_fp32, Q_TILE_NUM_FACES>(
                         cb_qkt_im,
                         cur.max,
                         cur.sum,
@@ -1627,7 +1668,14 @@ static void sdpa_inner_loop_step(
                     MaybeDeviceZoneScopedN(profiling_enabled, "QKT@V MM+Pack");
                     sdpa_maybe_reconfig_data_format<cb_normalized_out, cb_v_in, cb_normalized_out, cb_qkt_im>(
                         out_cb, out_cb);
-                    mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_h, KT_stride);
+#ifdef ARCH_BLACKHOLE
+                    if constexpr (Q_TILE_NUM_FACES == 2) {
+                        mm_tiny_splitk2_reinit_short(cb_qkt_im, cb_v_in);
+                    } else
+#endif
+                    {
+                        mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_h, KT_stride);
+                    }
                     inplace_v_matmul_pack_batched<vDHt, dst_size, qktv_h>(
                         cb_qkt_im,
                         cb_v_in,
@@ -2298,6 +2346,7 @@ void sdpa_ring_v2(
     init_sdpa_streaming_semaphores();
 
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
+    constexpr bool use_q16_tiles = Q_TILE_NUM_FACES == 2;
     constexpr bool has_sliding_window = sliding_window_size > 0;
     static_assert(!has_sliding_window || chunked_enabled, "Sliding windows require chunked prefill");
     // is_causal: diagonal stamp only on iter 0 (K is local-frame). Chunked: every iter (absolute coords).
@@ -2442,15 +2491,17 @@ void sdpa_ring_v2(
         uint32_t q_start_tile = 0;
         if constexpr (has_sliding_window) {
             q_start_tile = logical_nt - ring_size * q_local_padded_Nt + chunked.ring_index * q_local_padded_Nt +
-                           q_chunk * Sq_chunk_t;
+                           (use_q16_tiles ? q_chunk / 2 : q_chunk * Sq_chunk_t);
         } else if constexpr (is_causal_sdpa) {
             if (is_causal_iter) {
-                q_start_tile = q_chunk * Sq_chunk_t;
-                causal_k_limit = (q_start_tile + Sq_chunk_t + Sk_chunk_t - 1) / Sk_chunk_t;
+                q_start_tile = use_q16_tiles ? q_chunk / 2 : q_chunk * Sq_chunk_t;
+                const uint32_t q_end_tile = q_start_tile + (use_q16_tiles ? 1 : Sq_chunk_t);
+                causal_k_limit = (q_end_tile + Sk_chunk_t - 1) / Sk_chunk_t;
             }
         } else if constexpr (chunked_enabled) {
             // Absolute Q tile row. Diag stamp masks K past Q's range; logical_n skip handles K past the cache.
-            q_start_tile = chunked.q_start_idx_t + chunked.ring_index * q_local_padded_Nt + q_chunk * Sq_chunk_t;
+            q_start_tile = chunked.q_start_idx_t + chunked.ring_index * q_local_padded_Nt +
+                           (use_q16_tiles ? q_chunk / 2 : q_chunk * Sq_chunk_t);
         }
 
         if (try_balanced_skip(q_chunk)) {
@@ -2637,13 +2688,14 @@ void sdpa_ring_v2(
                     const uint32_t k_global_start =
                         kv_global_tile_for_local<true, local_padded_Nt, chunk_size_t, q_local_padded_Nt>(
                             source_ring_id, source_k_chunk * Sk_chunk_t);
-                    const uint32_t q_global_end = q_start_tile + Sq_chunk_t;
+                    const uint32_t q_global_end = q_start_tile + (use_q16_tiles ? 1 : Sq_chunk_t);
                     if (k_global_start < q_global_end && q_global_end - k_global_start < active_Sk_param) {
                         active_Sk_param = q_global_end - k_global_start;
                         chunk_sbw = largest_factor_le(active_Sk_param, qkt_subblock_w);
                     }
                 } else if (is_causal_iter && k_chunk == causal_k_limit - 1) {
-                    const uint32_t causal_active = q_start_tile + Sq_chunk_t - k_chunk * Sk_chunk_t;
+                    const uint32_t causal_active =
+                        q_start_tile + (use_q16_tiles ? 1 : Sq_chunk_t) - k_chunk * Sk_chunk_t;
                     if (causal_active < active_Sk_param) {
                         active_Sk_param = causal_active;
                         chunk_sbw = largest_factor_le(active_Sk_param, qkt_subblock_w);
@@ -2677,7 +2729,7 @@ void sdpa_ring_v2(
             const bool step_apply_causal = [&]() {
                 if constexpr (has_sliding_window) {
                     return q_start_tile < step_k_start_tile + Sk_chunk_t &&
-                           q_start_tile + Sq_chunk_t > step_k_start_tile;
+                           q_start_tile + (use_q16_tiles ? 1 : Sq_chunk_t) > step_k_start_tile;
                 }
                 return is_causal_iter;
             }();
@@ -2761,10 +2813,10 @@ void sdpa_ring_v2(
                 step_save_out_cb,
                 step_save_max_cb,
                 step_apply_causal,
-                kv_pad_rotation_enabled ? q_chunk * Sq_chunk_t : q_start_tile,
+                kv_pad_rotation_enabled ? (use_q16_tiles ? q_chunk / 2 : q_chunk * Sq_chunk_t) : q_start_tile,
                 step_k_start_tile,
                 lw_mask.neginf_tile_idx,
-                has_sliding_window ? 1 : lw_mask.causal_diag_tile_idx,
+                has_sliding_window ? 1 : lw_mask.causal_diag_tile_idx + (use_q16_tiles ? (q_chunk & 1u) : 0u),
                 has_sliding_window ? 2 : 0,
                 has_sliding_window ? 3 : 0,
                 has_sliding_window ? 4 : 0,

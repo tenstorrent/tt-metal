@@ -85,6 +85,10 @@ void kernel_main() {
     // Slot 53: true (unpadded) joint length in tiles (similar to spatial logical_nt). Drives the
     // per-ring-iteration joint tail mask and the joint out-of-bounds K-chunk skip.
     constexpr uint32_t logical_lt = get_compile_time_arg_val(53);
+    constexpr uint32_t cb_arg_offset = 54;
+    constexpr uint32_t cb_q_in_early = get_compile_time_arg_val(cb_arg_offset + 0);
+    constexpr bool use_q16_tiles = Q_TILE_NUM_FACES == 2;
+    constexpr uint32_t q_local_padded_Kt = q_local_padded_Nt / (use_q16_tiles ? 2 : 1);
     constexpr uint32_t v_cb_physical_width_t = v_shares_k_buffer ? DHt : vDHt;
     // In-place latent-V (single-tile Q): read V straight from K^T instead of materializing it.
     // Shared with the program factory and reader via kt_inplace_v_enabled().
@@ -115,7 +119,8 @@ void kernel_main() {
 
     constexpr uint32_t neginf_tile_idx = 0;
     constexpr uint32_t causal_diag_tile_idx = diag_tile_enabled ? 1 : 0;
-    constexpr uint32_t edge_mask_tiles = has_sliding_window ? kSlidingWindowEdgeTiles : (diag_tile_enabled ? 1 : 0);
+    constexpr uint32_t causal_diag_tiles = diag_tile_enabled ? (use_q16_tiles ? 2 : 1) : 0;
+    constexpr uint32_t edge_mask_tiles = has_sliding_window ? kSlidingWindowEdgeTiles : causal_diag_tiles;
     constexpr uint32_t base_partial_offset = 1 + edge_mask_tiles;
     constexpr uint32_t global_n_partial_tile_idx = (global_n_partial_col > 0) ? base_partial_offset : 0;
     constexpr uint32_t joint_l_partial_tile_idx =
@@ -124,7 +129,7 @@ void kernel_main() {
         1 + edge_mask_tiles + (global_n_partial_col > 0 ? 1 : 0) + (joint_l_partial_col > 0 ? 1 : 0);
 
     constexpr uint32_t q_start_idx_t =
-        chunked_enabled && !kv_pad_rotation_enabled ? logical_nt_compile - q_local_padded_Nt * ring_size : 0;
+        chunked_enabled && !kv_pad_rotation_enabled ? logical_nt_compile - q_local_padded_Kt * ring_size : 0;
 
     uint32_t argidx = 0;
     const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
@@ -155,7 +160,6 @@ void kernel_main() {
     // scalars (joint_is_sharded, logical_lt) declared near the top of the kernel, so the CB block
     // starts at 54.
     constexpr bool kv_pad_from_metadata = get_compile_time_arg_val(51) == 1;
-    constexpr uint32_t cb_arg_offset = 54;
     constexpr uint32_t cb_q_in = get_compile_time_arg_val(cb_arg_offset + 0);
     constexpr uint32_t cb_k_in = get_compile_time_arg_val(cb_arg_offset + 1);
     constexpr uint32_t cb_v_in = get_compile_time_arg_val(cb_arg_offset + 2);
@@ -405,7 +409,7 @@ void kernel_main() {
                 is_balanced,
                 chunked_enabled,
                 kv_local_padded_Nt,
-                q_local_padded_Nt,
+                q_local_padded_Kt,
                 chunk_size_t,
                 global_n_has_padding,
                 local_n_has_padding,
@@ -458,7 +462,7 @@ void kernel_main() {
                 scale_fp32,
                 needs_lightweight_mask,
                 chunked_enabled,
-                q_local_padded_Nt,
+                q_local_padded_Kt,
                 chunk_size_t>(
                 qk_in0_block_w,
                 qk_subblock_w,
