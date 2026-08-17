@@ -30,6 +30,11 @@ from models.demos.gemma4.tt.attention.operations import (
 # 1 MiB on P150: 32 heads * chunk * head_dim * sizeof(bf16).
 SLIDING_HEAD_CONCAT_CHUNK = 64
 
+# Worker grid the tuned gate-projection program config below is built for. Its
+# block dimensions are coupled to this core count, so a part whose grid is
+# smaller in either dimension takes TTNN's auto-selected program instead.
+TUNED_GATE_GRID = ttnn.CoreCoord(11, 10)
+
 
 class _FusedSharedMLP:
     """Dense GeGLU MLP with GELU folded into the gate projection matmul."""
@@ -40,6 +45,32 @@ class _FusedSharedMLP:
         self.down_proj = functional_mlp.down_proj
         self.mesh_config = functional_mlp.mesh_config
         self.ccl_manager = functional_mlp.ccl_manager
+        self._tuned_gate_grid_fits = self._grid_fits_tuned_gate(functional_mlp)
+
+    @staticmethod
+    def _grid_fits_tuned_gate(functional_mlp) -> bool:
+        """Whether this part's worker grid can host the tuned gate geometry.
+
+        The gate program config below hardcodes an 11x10 (110-core) grid, and its
+        block dimensions are coupled to that core count, so it cannot simply be
+        rescaled. Rather than over-request cores and throw at runtime on a part
+        with a narrower or shorter grid, check once and fall back to TTNN's
+        auto-selected program (plus a separate GELU) when it would not fit. Grids
+        that do fit -- this host's 11x10 and P150b's 13x10 -- take the tuned path
+        unchanged, so no measured configuration changes behaviour.
+        """
+        mesh_device = getattr(getattr(functional_mlp, "ccl_manager", None), "mesh_device", None)
+        if mesh_device is None:
+            try:
+                mesh_device = functional_mlp.gate_proj.device()
+            except Exception:  # noqa: BLE001 - introspection only; fall back below
+                mesh_device = None
+        if mesh_device is None:
+            # Cannot introspect the grid. Keep the tuned path, which is what every
+            # recorded configuration used, rather than silently changing numerics.
+            return True
+        grid = mesh_device.compute_with_storage_grid_size()
+        return grid.x >= TUNED_GATE_GRID.x and grid.y >= TUNED_GATE_GRID.y
 
     def __call__(self, hidden_states):
         gelu = ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 1.0)
@@ -48,9 +79,9 @@ class _FusedSharedMLP:
         # decode and the seq-128 acceptance workload, with GELU placed in the
         # program config so it is genuinely compiled into the matmul kernel.
         gate_program_config = None
-        if m_tiles <= 4:
+        if m_tiles <= 4 and self._tuned_gate_grid_fits:
             gate_program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
+                compute_with_storage_grid_size=TUNED_GATE_GRID,
                 in0_block_w=2,
                 out_subblock_h=1,
                 out_subblock_w=7,
