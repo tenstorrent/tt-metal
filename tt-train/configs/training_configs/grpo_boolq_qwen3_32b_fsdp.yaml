@@ -32,6 +32,9 @@ training_config:
     max_completion_length: 256
     num_generations: 8
     warmup_steps: 0
+    log_completions: false
+    num_completions_to_print: 0
+    report_to: none
 
 device_config:
   enable_fsdp: true

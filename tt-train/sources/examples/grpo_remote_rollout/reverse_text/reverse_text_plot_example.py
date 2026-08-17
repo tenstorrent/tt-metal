@@ -21,7 +21,7 @@ Usage:
 Examples:
     reverse_text_plot_example.py
     reverse_text_plot_example.py generated/tt-train/grpo_reverse_text_run/*/grpo_metrics.csv
-    reverse_text_plot_example.py --metrics reward avg_length --window 5
+    reverse_text_plot_example.py --metrics reward_mean mean_completion_len --window 5
 """
 
 import argparse
@@ -38,15 +38,17 @@ import numpy as np
 
 RUNS_SUBDIR = "generated/tt-train/grpo_reverse_text_run"
 
-# Every column GRPOMonitor writes in the async example (training-time only).
-# Extend when the worker gains a per-call temperature override so a greedy-eval
-# callback can run again.
+# Training-time columns the built-in GRPOMonitor writes for the async run.
+# No greedy-eval columns (the async worker bakes temperature into the decode
+# trace). ``*_time_s`` after ``generation_time_s`` are per-callback timings
+# lagged one step (step 1 is nan); see GRPO_TRAINER.md.
 METRICS = [
-    ("reward", "reward (similarity ratio)"),
-    ("avg_length", "mean completion (tokens)"),
+    ("reward_mean", "reward (similarity ratio)"),
+    ("mean_completion_len", "mean completion (tokens)"),
     ("step_time_s", "step time (s)"),
-    ("step_time_with_weight_updates_s", "step time incl. sync (s)"),
     ("generation_time_s", "generation time (s)"),
+    ("WeightSyncCallback_time_s", "weight sync callback time (s)"),
+    ("GRPOMonitor_time_s", "monitor callback time (s)"),
 ]
 
 

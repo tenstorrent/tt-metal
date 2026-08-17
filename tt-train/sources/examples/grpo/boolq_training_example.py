@@ -4,7 +4,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import argparse
-import csv
 import logging
 import os
 import random
@@ -16,7 +15,7 @@ from datasets import load_dataset
 from transformers import AutoTokenizer
 from ttml.common.config import DeviceConfig, TrainingConfig, TransformerConfig, get_model_config, load_config
 from ttml.common.utils import get_tt_metal_runtime_root
-from ttml.trainers import GRPOTrainer, TrainerCallback, get_grpo_config
+from ttml.trainers import GRPOTrainer, get_grpo_config
 from utils.llama_completer import LlamaCompletionCtx
 from utils.llama_completer import LlamaGRPOCompleter
 from utils.qwen3_completer import Qwen3CompletionCtx
@@ -29,57 +28,6 @@ try:
 except ImportError:
     wandb = None
     _WANDB_AVAILABLE = False
-    logging.warning("'wandb' package not installed; --wandb will be a no-op.")
-
-
-class GRPOMonitor(TrainerCallback):
-    def __init__(self, output_dir, wandb_enabled=False):
-        self.file_path = os.path.join(output_dir, "grpo_metrics.csv")
-        self.wandb_enabled = wandb_enabled and _WANDB_AVAILABLE
-        os.makedirs(output_dir, exist_ok=True)
-        with open(self.file_path, mode="w", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow(["step", "reward", "avg_length", "step_time_s", "generation_time_s"])
-
-    def on_step_end(self, trainer, step, **kwargs):
-        reward = kwargs["reward_mean"]
-        length = kwargs["mean_completion_len"]
-        min_length = kwargs["min_completion_len"]
-        max_length = kwargs["max_completion_len"]
-        step_time_s = kwargs.get("step_time_s", float("nan"))
-        generation_time_s = kwargs.get("generation_time_s", float("nan"))
-        # The logging format already prepends a timestamp (%(asctime)s).
-        logging.info(
-            "Step %d | Reward: %.4f | Len: %.2f (min %d, max %d) tokens | Step: %.2fs | Gen: %.2fs",
-            step,
-            reward,
-            length,
-            min_length,
-            max_length,
-            step_time_s,
-            generation_time_s,
-        )
-        with open(self.file_path, mode="a", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow([step, reward, length, step_time_s, generation_time_s])
-
-        if self.wandb_enabled:
-            wandb.log(
-                {
-                    "grpo/reward": reward,
-                    "grpo/avg_length": length,
-                    "grpo/min_length": min_length,
-                    "grpo/max_length": max_length,
-                    "grpo/step_time_s": step_time_s,
-                    "grpo/generation_time_s": generation_time_s,
-                },
-                step=step,
-            )
-
-    def on_train_end(self, trainer):
-        logging.info("Training complete.")
-        if self.wandb_enabled:
-            wandb.finish()
 
 
 def boolq_reward(completions, answer, **kwargs):
@@ -277,7 +225,11 @@ if __name__ == "__main__":
     )
     grpo_config = get_grpo_config(raw, output_dir=output_dir)
 
-    wandb_enabled = False
+    # `--wandb` is a CLI toggle that overrides the YAML's `report_to`: we start
+    # a wandb run here (the framework's built-in GRPOMonitor never calls
+    # wandb.init itself, matching the current TRL convention) and flip the
+    # config so the auto-added monitor forwards metrics to it. When --wandb is
+    # not passed, `report_to` stays whatever the YAML said (default "none").
     if args.wandb:
         if not _WANDB_AVAILABLE:
             logging.warning("--wandb specified but the 'wandb' package is not installed; skipping W&B logging.")
@@ -295,7 +247,7 @@ if __name__ == "__main__":
                     **optimizer_dict,
                 },
             )
-            wandb_enabled = True
+            grpo_config.report_to = "wandb"
             logging.info(
                 "W&B logging enabled (project=%s, run=%s)",
                 args.wandb_project,
@@ -332,7 +284,7 @@ if __name__ == "__main__":
         config=grpo_config,
         reward_func=boolq_reward,
         optimizer_dict=optimizer_dict,
-        callbacks=[GRPOMonitor(output_dir, wandb_enabled=wandb_enabled)],
+        # The auto-added GRPOMonitor (from grpo_config) covers CSV + wandb.
         model_source=model_id,
     )
     grpo_trainer.train()
