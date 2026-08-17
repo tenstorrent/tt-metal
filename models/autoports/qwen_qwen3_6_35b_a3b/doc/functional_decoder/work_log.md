@@ -767,6 +767,7 @@ Local only; nothing pushed.
 | `ea58fe8fa7ae1138dbc35a363b6b817faeeed605` (`ea58fe8fa7a`) | **review rounds 1 and 2**: the fixes in §9 and §10 — ROW_MAJOR RoPE tables, the per-slot state reset, and the `decode_sdpa_max_cores_per_head = 1` config whose *rationale* round 4 later overturned — and every artifact regenerated against that code |
 | `b5c71c62624f984353960c1d6c266dc2fbd428d2` (`b5c71c62624`) | **review round 3** (§11): the classified real-weight maxabs anomaly, `_zero_`, `_tilized`, the provenance-log reset rule, and two new tests |
 | `60e2a90711448a9fd48366919a17f61a37026153` (`60e2a907114`) | **review round 4** (§12): the corrected decode-SDPA root cause and the shipped `decode_sdpa_k_chunk_size = 512`, the 2-D sweep with its identity control, `_zero_` via `ttnn.fill`, the ragged tail-reference cases, three new op probes, the extended maxabs sweep, and every artifact regenerated against that code |
+| `a08c264e60011b92fadb6f88d6b46660a9645888` (`a08c264e600`) | **review round 5** (§13): the `sdpa_chunk` alignment fix, the position-dependence correction to §5, the committed `tests/render_docs.py` + `test_docs_match_artifacts`, the corrected `exp_approx_mode` derivations, and every artifact regenerated against that code |
 | later commits | documentation only: SHA records and analysis notes that could not be written before the commits they describe |
 
 A table cannot contain its own SHA, so the last rows are deliberately open-ended rather than
