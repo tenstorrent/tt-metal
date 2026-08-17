@@ -28,6 +28,7 @@
 
 #include "api/compute/bcast.h"
 #include "api/compute/binary_max_min.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
@@ -225,8 +226,8 @@ void derive_row_weights(CircularBuffer& cb_row_obj) {
     // `partial`, `running_sum` and any deferred write are separate CBs here rather than
     // one interleaved set, so the MAC alternates its srcA operand. That is only safe
     // because the device operation rejects a dtype mismatch among them — one
-    // `init_bcast` configures the unpacker for all of them.
-    init_bcast<EltwiseBinaryType::ELWMUL, BroadcastType::COL>(cb_partial, cb_row, cb_out);
+    // `bcast_init` configures the unpacker for all of them.
+    bcast_init<EltwiseBinaryType::ELWMUL, BroadcastType::COL>(cb_partial, cb_row);
     MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWMUL, BroadcastType::COL, MATH_FIDELITY>(
         cb_partial, cb_row, 1 /*acc_to_dest*/)));
     reconfig_data_format(cb_partial, cb_row);
@@ -257,7 +258,7 @@ void kernel_main() {
     DataflowBuffer tmp_buf(cb_tmp);
     DataflowBuffer scaler_buf(cb_scaler);
 
-    binary_op_init_common(cb_prefix, cb_q, cb_tmp);
+    compute_kernel_hw_startup(cb_prefix, cb_q, cb_tmp);
 
     // Pass one: this rank's statistics for every row this core carries, which is what
     // the writer parks and the gather core then puts on the wire. A core that only
@@ -288,7 +289,7 @@ void kernel_main() {
                 [] {
                     reconfig_data_format(cb_stream, cb_q);
                     pack_reconfig_data_format(cb_tmp);
-                    mul_bcast_rows_init_short(cb_stream, cb_q);
+                    mul_bcast_rows_init(cb_stream, cb_q);
                 },
                 [](uint32_t wt) { mul_tiles_bcast_rows(cb_stream, cb_q, wt, wt, 0); });
 
