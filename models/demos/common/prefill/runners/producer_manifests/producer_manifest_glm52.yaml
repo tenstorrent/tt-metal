@@ -1,0 +1,38 @@
+# GLM-5.2 (sparse/DSA) single-galaxy prefill: runner-side KV validation, no migration.
+#
+# Drive with:
+#   python -m models.demos.common.prefill.runners.prefill_producer \
+#     --manifest models/demos/common/prefill/runners/producer_manifests/producer_manifest_glm52.yaml
+#
+# Only the fields that differ from the documented defaults are set; see
+# prefill_producer_manifest.example.yaml for the full reference.
+
+model:
+  variant: glm_5_2
+  # MUST be the full 78. num_full_indexer_layers() sizes the DSA index cache from the whole 78-entry
+  # indexer_types map regardless of how many layers a run actually builds, so a truncated run leaves the
+  # upper index ranks unwritten and the producer's read-back asserts.
+  num_layers: 78
+  max_seq_len: 56320
+  chunk_size: 5120
+
+transport:
+  sp: 8
+  tp: 4
+  h2d_service_id: glm52_prefill
+
+workload:
+  num_users: 1
+  chunks: "11"
+  max_requests: 1
+  check_pcc: true
+  # NOT the adapter's serving default. Only this trace carries the dsa/indexer_k_layer_* tensors, without
+  # which index_golden_present() is False and the entire indexer-K check silently downgrades to a warning
+  # -- i.e. the sparse half of the model would appear validated while being unchecked.
+  trace_dir: /mnt/models/deepseek-prefill-cache/glm-traces/vllm-glm52-indexer-kcache-55k
+
+env:
+  # GLM-5.2's calibrated KVPE floor. The producer's 0.93 default and the runner's 0.88 are Kimi-era numbers
+  # that sit ABOVE GLM's documented minimum (nope bottoms ~0.86 @ L75), so both fail a perfectly good run.
+  PREFILL_STANDALONE_CHUNKED_PCC: "0.85"
+  PREFILL_SEND_SHUTDOWN: "1"

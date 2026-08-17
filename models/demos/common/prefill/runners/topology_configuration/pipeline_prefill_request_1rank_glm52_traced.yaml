@@ -1,0 +1,42 @@
+# REQUEST mode, 1 rank, GLM-5.2 (sparse/DSA) with TRACED prefill. Drive with prefill_producer.py
+# (--manifest producer_manifests/producer_manifest_glm52.yaml) on this host.
+#
+# Sibling of pipeline_prefill_request_1rank.yaml. It exists as its own binding because ttrun does NOT
+# propagate PREFILL_* from the launching shell -- per-run knobs have to live in global_env here, so a
+# model+trace combination is a file, not a set of exports.
+rank_bindings:
+  - {rank: 0, mesh_id: 0, mesh_host_rank: 0, env_overrides: {}}
+# Plain 8x4 2D mesh, NOT the torus-XY descriptor the stock 1rank binding uses: the torus needs
+# wraparound links this galaxy's discovery does not report, and tt-run fails the whole run with
+# "Graph specified in MGD could not fit in the discovered physical topology". FABRIC_2D +
+# Topology.Linear is also exactly what the GLM transformer tests run on, so this keeps the runner
+# on the same transport the accuracy numbers were measured with.
+mesh_graph_desc_path: tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
+global_env:
+  PREFILL_FABRIC_MODE: "2d"
+  PREFILL_MODEL: "glm_5_2"
+  # MUST be the full 78 -- the DSA index cache is sized from the whole indexer_types map regardless of the
+  # run's layer count, so a truncated run leaves upper index ranks unwritten.
+  PREFILL_NUM_LAYERS: "78"
+  PREFILL_MAX_SEQ_LEN: "56320"
+  PREFILL_H2D_SERVICE_ID: "glm52_prefill"
+  PREFILL_GATE_FALLBACK_MODE: "DEVICE_FP32"
+
+  # Traced prefill: capture the per-chunk forward once during compile(), then replay it per chunk with the
+  # per-chunk scalars advanced on-device through the metadata tensors. Verified BIT-IDENTICAL to the
+  # untraced path on GLM-5.2 (KV + indexer-K caches, against an untraced-vs-untraced control).
+  PREFILL_USE_TRACE: "1"
+  # Measured ~48 MB at 78 layers; 512 MB leaves headroom and fails loudly (at end_trace_capture) if short.
+  PREFILL_TRACE_REGION_SIZE: "536870912"
+  # NOTE: PREFILL_LAYER_ACK_D2H is incompatible with tracing and the runner rejects the combination -- the
+  # D2H ack record is per-chunk socket metadata whose address cannot be captured. Use the host-callback
+  # ack path (PREFILL_ENABLE_LAYER_ACK), which the segmented capture splits around.
+  PREFILL_ENABLE_LAYER_ACK: "1"
+  PREFILL_MOCK_MIGRATION: "1"
+  PREFILL_REQUEST_LOOP_PCC: "1"
+  # GLM-5.2's calibrated KVPE floor; the 0.88 default is Kimi-era and above GLM's documented minimum.
+  PREFILL_STANDALONE_CHUNKED_PCC: "0.85"
+  PREFILL_TRACE_DIR: "/mnt/models/deepseek-prefill-cache/glm-traces/vllm-glm52-indexer-kcache-55k"
+  GLM52_HF_MODEL: "/mnt/models/deepseek-prefill-cache/GLM-5.2-FP8"
+  TT_GLM52_PREFILL_TTNN_CACHE: "/mnt/models/deepseek-prefill-cache/glm52_ttnn_cache"
+  LOGURU_LEVEL: "INFO"

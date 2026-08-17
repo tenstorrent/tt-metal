@@ -21,7 +21,7 @@ from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.deepseek_v3_d_p.tt.mla.indexer import resolve_has_indexer
+from models.demos.deepseek_v3_d_p.tt.mla.indexer import resolve_has_indexer, sparse_trace_supported
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.mla.utils import create_balanced_chunk_order, reverse_reorder_tensor_chunks
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
@@ -299,13 +299,12 @@ class TtPrefillTransformer(LightweightModule):
         trace captured over forward() is split at the shared-expert/dispatch sub-device boundaries
         (see utils/sub_device_trace.py). Pass None to restore plain eager load/clear.
 
-        DENSE-MLA ONLY. Tracing a sparse/DSA (indexer) model is rejected: the traced forward advances
-        its per-chunk scalars through the metadata ops, and the indexer path has no metadata overload
-        yet — the captured forward also never threads index_kv_cache, so a sparse model would replay
-        silently WITHOUT its indexer cache and produce wrong KV rather than failing. Porting the
-        indexer ops is out of scope here."""
+        DENSE-MLA by default. Tracing a sparse/DSA (indexer) model is rejected unless
+        sparse_trace_supported(): the indexer ops still take their per-chunk scalars as host runtime
+        args, which a replay freezes at capture-time values, so a sparse model would replay chunk
+        1..N with chunk 0's causal offset and produce wrong KV rather than failing."""
         if controller is not None:
-            assert not self._has_indexer, (
+            assert not self._has_indexer or sparse_trace_supported(), (
                 "trace capture is not supported for sparse/DSA (indexer) attention. Supported today: "
                 "the dense-MLA models (deepseek_v3, kimi_k2_6, kimi_k2_7). GLM (glm_5_1 / glm_5_2) and "
                 "any other indexer/sparse-attention variant need their indexer ops ported to the "

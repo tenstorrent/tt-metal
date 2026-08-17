@@ -17,6 +17,13 @@
 
 constexpr bool fused_ring_enabled = get_compile_time_arg_val(num_common_ct_args) != 0;
 constexpr uint32_t page_bytes = get_compile_time_arg_val(num_common_ct_args + 1);  // row-major page = T*2 bytes
+// Trace-safe metadata flag, appended after out's accessor args by both factories (0 on the classic path).
+// The writer needs nothing else: kv_len is pinned to the compile-time full width on that path.
+constexpr auto writer_out_args_probe = TensorAccessorArgs<num_common_ct_args + 2>();
+constexpr uint32_t wmeta_flag_arg = writer_out_args_probe.next_compile_time_args_offset();
+constexpr bool chunk_start_from_metadata = get_compile_time_arg_val(wmeta_flag_arg) != 0;
+constexpr uint32_t wmeta_cb_arg = chunk_start_from_metadata ? wmeta_flag_arg + 1 : 0;
+constexpr uint32_t cb_meta_writer = get_compile_time_arg_val(wmeta_cb_arg);
 
 constexpr uint32_t frag_bytes = tt::constants::TILE_WIDTH * sizeof(uint16_t);  // one bf16 tile row
 
@@ -127,7 +134,16 @@ void kernel_main() {
     const uint32_t band0 = get_arg_val<uint32_t>(4);
     const uint32_t num_bands = get_arg_val<uint32_t>(5);
     // [6] max_bands (unused). [7] kv_len_tiles caps columns written per cell (full when unset).
-    const uint32_t kv_len_tiles = get_arg_val<uint32_t>(7);
+    uint32_t kv_len_tiles = get_arg_val<uint32_t>(7);
+    if constexpr (chunk_start_from_metadata) {
+        // Take the reader's derivation, do not re-derive: kv_len_tiles decides how many output columns this
+        // kernel drains, and compute produced its strips against the reader's value. One derivation, two
+        // mailboxes, so the two cannot disagree.
+        CircularBuffer wmeta(cb_meta_writer);
+        wmeta.wait_front(1);
+        kv_len_tiles = CoreLocalMem<volatile uint32_t>(wmeta.get_read_ptr())[0];
+        wmeta.pop_front(1);
+    }
     // [8] per-device chunk-start (tiles); runtime so distinct values reuse one program. Only the block-pool
     // forced-local stamp uses it; always set.
     const uint32_t chunk_start_keys = get_arg_val<uint32_t>(8) * tt::constants::TILE_WIDTH;

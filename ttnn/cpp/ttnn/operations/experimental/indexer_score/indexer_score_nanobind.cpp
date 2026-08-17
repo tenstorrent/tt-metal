@@ -199,6 +199,15 @@ void bind_indexer_score(nb::module_& mod) {
         scoring; the reader gates each K band on ONLY the SP shards that band touches, so it scores already-
         arrived shards while farther slabs are still in flight. DSA only -- there is no fused MSA variant.
 
+        Trace-safe capture: pass ``chunk_start_idx_tensor`` (a 1-element uint32 ROW_MAJOR DRAM tensor)
+        INSTEAD of the ``chunk_start_idx`` / ``kv_len`` scalars when the call is to be recorded into a ttnn
+        trace. Those scalars are hash-excluded host runtime args that the program-cache path re-patches on
+        every dispatch; a trace replay cannot re-run that patch, so a captured scalar stays frozen at its
+        capture-time value and every later chunk would be scored against the first chunk's causal window --
+        wrong results, not an error. On the tensor path the reader reads the word on-device and derives the
+        causal geometry and ``kv_len`` (= chunk_start_idx + sp*chunk_local) from it, so one captured program
+        serves every chunk. Requires the block-cyclic layout; ``kv_len`` must be left unset.
+
         Args:
             q: [B, Hi, Sq, D] bf16/bfp8_b tiled (post non-interleaved RoPE); see indexer_score_dsa
             k: [B, 1, T, D] bf16/bfp8_b tiled PERSISTENT all-gather OUTPUT buffer, T = sp*sll. B must be 1
@@ -250,7 +259,8 @@ void bind_indexer_score(nb::module_& mod) {
         nb::arg("kv_len") = nb::none(),
         nb::arg("seq_subshard_axis") = nb::none(),
         nb::arg("block_cyclic_sp_axis") = nb::none(),
-        nb::arg("block_cyclic_chunk_local") = nb::none());
+        nb::arg("block_cyclic_chunk_local") = nb::none(),
+        nb::arg("chunk_start_idx_tensor") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::indexer_score::detail

@@ -496,7 +496,7 @@ class TtIndexer:
         self._idx_knorm_w = w["k_norm"]
         self._idx_knorm_b = w["k_norm_bias"]
 
-    def _bc_rope_pe(self, x: ttnn.Tensor, rope_tensors: dict, kv_actual_global: int) -> ttnn.Tensor:
+    def _bc_rope_pe(self, x: ttnn.Tensor, rope_tensors: dict, kv_actual_global: int, metadata=None) -> ttnn.Tensor:
         """Block-cyclic INDEXED RoPE on the rope half (first 64) of the last dim (block-cyclic path only).
         x [1, n_heads, S/sp, D_idx] SP-sharded on seq; rope_tensors are the whole-cache block-cyclic
         cos/sin/trans built by RotarySetup.get_rope_tensors_indexed — reused verbatim from ttMLA (the
@@ -512,21 +512,41 @@ class TtIndexer:
             pe_i = ttnn.linear(pe, self._rope_perm, compute_kernel_config=self.hifi4_fp32_compute_kernel_config)
             ttnn.deallocate(pe)
             pe = pe_i
-        pe = ttnn.experimental.deepseek_prefill.rotary_embedding_indexed(
-            pe,
-            rope_tensors["cos_matrix"],
-            rope_tensors["sin_matrix"],
-            rope_tensors["trans_matrix"],
-            kv_actual_global=kv_actual_global,
-            cluster_axis=self.sp_axis,
-        )
+        # Trace-safe metadata path: kv_actual_global is read on-device from metadata[1] (actual_start),
+        # exactly as ttMLA._apply_rope_padded does, so the host scalar may be unknown here.
+        if metadata is not None:
+            pe = ttnn.experimental.deepseek_prefill.rotary_embedding_indexed(
+                pe,
+                rope_tensors["cos_matrix"],
+                rope_tensors["sin_matrix"],
+                rope_tensors["trans_matrix"],
+                metadata[1],  # actual_start = kv_actual_global (1-element tensor)
+                cluster_axis=self.sp_axis,
+            )
+        else:
+            pe = ttnn.experimental.deepseek_prefill.rotary_embedding_indexed(
+                pe,
+                rope_tensors["cos_matrix"],
+                rope_tensors["sin_matrix"],
+                rope_tensors["trans_matrix"],
+                kv_actual_global=kv_actual_global,
+                cluster_axis=self.sp_axis,
+            )
         out = ttnn.concat([pe, nope], dim=-1)
         ttnn.deallocate(pe)
         ttnn.deallocate(nope)
         return out
 
     def write_k(
-        self, hidden_states, seq_len, start_pos, rope_tensors=None, cache_user_id=0, cache_layer_idx=0, index_kbuf=None
+        self,
+        hidden_states,
+        seq_len,
+        start_pos,
+        rope_tensors=None,
+        cache_user_id=0,
+        cache_layer_idx=0,
+        index_kbuf=None,
+        metadata=None,
     ):
         """Device K stem (wk + TP all-reduce + k_norm + device rope) written into the device index-key
         cache. forward() calls this on every chunk so the key-cache stays complete — else later chunks
@@ -556,18 +576,38 @@ class TtIndexer:
         # offset (pad-aware) — the same math the query/key rope above uses. Single-shot is folded onto this
         # path as one full-seq chunk at start_pos=0, so the indexer is always block-cyclic. num_layers is the
         # compacted stride (_index_cache_layers) so it matches the cache_batch_idx computed in forward().
-        k = self._bc_rope_pe(k, rope_tensors, start_pos)  # [1, 1, S/sp, D_idx] bf16
+        # Compact index cache (GLM-5.2 cross-layer reuse): the slot is this layer's FULL-indexer rank, not
+        # its layer index. Resolved here rather than in forward() because ttMLA._forward_kv_only calls
+        # write_k DIRECTLY with the un-compacted local index — resolving it there too would leave the two
+        # entry points free to disagree, and a wrong slot is silent corruption, not an error. forward()
+        # still applies the same remap for cache_batch_idx, so this is idempotent.
+        if self._is_index_compact:
+            cache_layer_idx = self._index_layer_idx
+        k = self._bc_rope_pe(k, rope_tensors, start_pos, metadata=metadata)  # [1, 1, S/sp, D_idx] bf16
         if k.dtype != index_kbuf.dtype:  # write dtype must match the cache (update_padded_kv_cache asserts)
             k = ttnn.typecast(k, index_kbuf.dtype)
-        ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
-            index_kbuf,
-            k,
-            slot_idx=cache_user_id,
-            layer_idx=cache_layer_idx,
-            num_layers=self._index_cache_layers,
-            kv_actual_global=start_pos,
-            cluster_axis=self.sp_axis,
-        )
+        if metadata is not None:
+            # Trace-safe: slot_idx (metadata[0]) + kv_actual_global (metadata[1]) read on-device. num_layers
+            # stays the compacted stride so the kernel recomposes the same (user, layer) slot as the scalar path.
+            ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+                index_kbuf,
+                k,
+                metadata[0],  # slot_idx tensor
+                metadata[1],  # kv_actual_global tensor
+                layer_idx=cache_layer_idx,
+                num_layers=self._index_cache_layers,
+                cluster_axis=self.sp_axis,
+            )
+        else:
+            ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+                index_kbuf,
+                k,
+                slot_idx=cache_user_id,
+                layer_idx=cache_layer_idx,
+                num_layers=self._index_cache_layers,
+                kv_actual_global=start_pos,
+                cluster_axis=self.sp_axis,
+            )
         ttnn.deallocate(k)
 
     def forward(
@@ -580,6 +620,7 @@ class TtIndexer:
         cache_user_id: int = 0,
         cache_layer_idx: int = 0,
         index_kv_cache: ttnn.Tensor = None,
+        metadata=None,
     ) -> ttnn.Tensor:
         """Indexer forward → top-k key indices [1, 1, S/sp, k] over the device index-key cache, SP-sharded
         on the query axis (each chip scores its own S/sp rows; no Q/W all-gather). Fully on-device:
@@ -622,6 +663,7 @@ class TtIndexer:
             cache_user_id=cache_user_id,
             cache_layer_idx=cache_layer_idx,
             index_kbuf=index_kv_cache,
+            metadata=metadata,
         )
 
         # Q stem: the shared q_a latent (qr) -> indexer wq_b.
@@ -636,8 +678,11 @@ class TtIndexer:
         q, _, _ = ttnn.experimental.nlp_create_qkv_heads(
             q, num_heads=a.index_n_heads, num_kv_heads=0, transpose_k_heads=False, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )  # [1, H_idx, S/sp, D_idx] — all heads resident
-        # block-cyclic indexed rope (same op/tables as the key rope + MLA q_pe)
-        q_dev = self._bc_rope_pe(q, rope_tensors, start_pos)
+        # block-cyclic indexed rope (same op/tables as the key rope + MLA q_pe). Metadata-threaded for the
+        # same reason as the key rope: under capture start_pos is 0, so without it every chunk's QUERIES
+        # would be roped at position 0 while the keys were roped correctly -- a silent accuracy loss that
+        # looks like "trace is a bit worse", not like a failure.
+        q_dev = self._bc_rope_pe(q, rope_tensors, start_pos, metadata=metadata)
 
         # weights_proj: device stem -> FULL all-reduce over tp (all H_idx heads, matching the replicated
         # wq_b heads) -> scale -> [1, 1, S/sp, H_idx].
@@ -685,7 +730,15 @@ class TtIndexer:
         # key cache ONCE — but that needs L1 headroom, so k_chunk is bounded by resident head count
         # (DSA_INDEXER_CONFIG, measured per model: DeepSeek@64h=64, GLM@32h=224; larger OOMs).
         k_chunk = get_indexer_key_chunk(a.index_n_heads)
-        cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=qc, k_chunk_size=min(k_chunk, end_pos), head_group_size=0)
+        # k_chunk_size feeds the HASHED program config, so a per-chunk value would compile a new program per
+        # chunk and defeat trace reuse entirely. min(k_chunk, end_pos) is already constant at every deployed
+        # config (end_pos >= chunk_global = seq_len*sp >> k_chunk), so assert that rather than rely on it: a
+        # future short-chunk config would otherwise silently recapture instead of failing.
+        assert k_chunk <= glob, (
+            f"indexer k_chunk {k_chunk} exceeds the global chunk {glob}: k_chunk_size would vary per chunk and "
+            "enter the program hash, so one captured trace could not serve every chunk"
+        )
+        cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=qc, k_chunk_size=k_chunk, head_group_size=0)
         # SP-sharded queries (rotation-safe): each chip scores its S/sp rows while the fused ring indexer
         # gathers remote block-cyclic K slabs into a shared persistent full-T buffer. The reader consumes
         # each band as soon as its source slab arrives and dual-sources the local slab directly, overlapping
@@ -713,13 +766,20 @@ class TtIndexer:
             cluster_axis=self.sp_axis,
             topology=self.sp_ccl_topology,
             num_links=self.ccl_num_links,
-            chunk_start_idx=start_pos,
+            # Trace-safe: hand the op the 1-element chunk_start_idx tensor instead of the host scalar, and
+            # leave kv_len unset (the kernel derives it as chunk_start + sp*chunk_local, exactly the value the
+            # scalar path passes). Both scalars are host runtime args that a replay would freeze.
+            chunk_start_idx=None if metadata is not None else start_pos,
+            chunk_start_idx_tensor=metadata[1] if metadata is not None else None,
             program_config=cfg,
             seq_subshard_axis=self.tp_axis if tpsp else None,
             cache_batch_idx=cache_batch_idx,
             block_cyclic_sp_axis=self.sp_axis,
             block_cyclic_chunk_local=seq_len,
-            kv_len=end_pos,
+            # Metadata path: kv_len is derived on-device as chunk_start + sp*chunk_local -- exactly the
+            # end_pos passed here on the scalar path -- so both paths score the same prefix and the traced
+            # result is bit-identical, not merely accurate.
+            kv_len=None if metadata is not None else end_pos,
         )
         if host_start is not None:
             _fused_ring_host_timing["calls"] += 1
@@ -730,11 +790,26 @@ class TtIndexer:
         # Top-k key indices [1,1,S/sp,k] (ROW_MAJOR uint32). Future/pad -inf columns surface as the
         # 0xFFFFFFFF sentinel that sparse_mla drops. The indexer score/cache contract requires a
         # 16-element-aligned key prefix; this is independent of fixed top-k capacity.
-        assert end_pos % 16 == 0, f"indexer cache prefix must be 16-element aligned; got end_pos={end_pos}"
+        # Host-side end_pos is unknown under capture (start_pos is read on-device), so assert the invariant
+        # that actually has to hold: the per-chunk stride. actual_start's 16-alignment is already a
+        # precondition of update_padded_kv_cache, which writes the same cache.
+        if metadata is not None:
+            assert glob % 16 == 0, f"indexer chunk stride must be 16-element aligned; got glob={glob}"
+        else:
+            assert end_pos % 16 == 0, f"indexer cache prefix must be 16-element aligned; got end_pos={end_pos}"
         # Block-cyclic logits are the full preallocated width T with a stale [end_pos, T) tail (kv_len only
         # wrote the real prefix); valid_length bounds top-k to that prefix so the tail is never read or ranked.
-        topk_valid_length = end_pos
-        idx = ttnn.experimental.topk_large_indices(logits, k=self.index_topk_capacity, valid_length=topk_valid_length)
+        topk_valid_length = None if metadata is not None else end_pos
+        # Metadata path: top-k's bound must MATCH the score's kv_len or it ranks a stale tail (kv_len too
+        # small) or drops real keys (too large). Both are derived from the same metadata[1] word plus the
+        # same structural chunk_global, so they cannot drift: valid_length = actual_start + glob = end_pos.
+        idx = ttnn.experimental.topk_large_indices(
+            logits,
+            k=self.index_topk_capacity,
+            valid_length=topk_valid_length,
+            valid_length_tensor=metadata[1] if metadata is not None else None,
+            valid_length_offset=glob if metadata is not None else 0,
+        )
         # TP×SP: topk ran on the TP-seq-sharded rows ([1,1,S/(sp·tp),k]); regather over TP back to the
         # [1,1,S/sp,k] contract so sparse_sdpa/mla.py are unchanged. (Redundant TP-round-trip for GLM's
         # head→seq reshard, which re-splits it; correct regardless. tp=1: no-op.)
@@ -783,6 +858,23 @@ class ReuseIndexer:
 
 # Back-compat alias; TtIndexer.WEIGHT_NAMES is the single source of truth.
 INDEXER_WEIGHT_NAMES = TtIndexer.WEIGHT_NAMES
+
+
+def sparse_trace_supported() -> bool:
+    """True when a sparse/DSA (indexer) forward may be captured into a ttnn trace.
+
+    A capture freezes every host-supplied per-chunk scalar at its capture-time value. This used to rule
+    sparse models out entirely: ring_indexer_score_dsa's chunk_start_idx and topk_large_indices'
+    valid_length were host runtime args that the program-cache path re-patched per dispatch, and a replay
+    cannot re-run that patch -- so chunks 1..N would silently reuse chunk 0's causal window.
+
+    Both now read their per-chunk value on-device from the metadata tensors, and the KV + indexer-K caches
+    a traced GLM-5.2 run produces are BIT-IDENTICAL to the untraced ones (verified on an 8x4 Blackhole
+    galaxy against an untraced-vs-untraced control). So the default is on.
+
+    PREFILL_ALLOW_SPARSE_TRACE=0 forces the old rejection, for bisecting a suspected trace-related
+    regression without editing code."""
+    return os.environ.get("PREFILL_ALLOW_SPARSE_TRACE", "1") == "1"
 
 
 def resolve_has_indexer(config, state_dict=None, explicit=None, weight_cache_path=None, cache_name_prefix=None) -> bool:

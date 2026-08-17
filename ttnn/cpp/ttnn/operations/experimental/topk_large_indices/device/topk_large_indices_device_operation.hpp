@@ -34,13 +34,27 @@ struct TopkLargeIndicesDeviceOperation {
         const operation_attributes_t& attrs, const tensor_args_t& tensor_args);
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input_tensor, uint32_t k, std::optional<uint32_t> valid_length);
+        const Tensor& input_tensor,
+        uint32_t k,
+        std::optional<uint32_t> valid_length,
+        const std::optional<Tensor>& valid_length_tensor = std::nullopt,
+        uint32_t valid_length_offset = 0);
 };
 
 }  // namespace ttnn::operations::experimental::topk_large_indices
 
 namespace ttnn::experimental {
 
-Tensor topk_large_indices(const Tensor& input_tensor, uint32_t k, std::optional<uint32_t> valid_length = std::nullopt);
+// valid_length_tensor / valid_length_offset are the TRACE-SAFE form of valid_length: the kernel reads the
+// 1-element uint32 tensor on-device and uses (tensor[0] + valid_length_offset). Supply them INSTEAD of the
+// `valid_length` scalar when the call is captured into a ttnn trace -- a captured scalar is frozen at its
+// capture-time value, so every later chunk would rank the wrong prefix. Defaulted, so existing callers are
+// source-compatible and byte-identical.
+Tensor topk_large_indices(
+    const Tensor& input_tensor,
+    uint32_t k,
+    std::optional<uint32_t> valid_length = std::nullopt,
+    const std::optional<Tensor>& valid_length_tensor = std::nullopt,
+    uint32_t valid_length_offset = 0);
 
 }  // namespace ttnn::experimental

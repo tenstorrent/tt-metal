@@ -46,6 +46,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
     num_full_indexer_layers,
     reset_fused_ring_host_timing,
     resolve_has_indexer,
+    sparse_trace_supported,
 )
 from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     blockcyclic_cache_host,
@@ -1104,6 +1105,84 @@ def test_glm_prefill_transformer_chunked(
     )
 
 
+# GLM-5.2 KV + indexer-K cache accuracy, traced and untraced, over one runner so the two modes do
+# exactly the same device work. This is the sparse counterpart of test_kimi_prefill_transformer_chunked.
+#
+# WHAT IS CHECKED IN EACH MODE. Both modes assert the two CACHE PCCs (KVPE and, GLM-only, the DSA
+# indexer-K cache), which are read back after the run. The per-layer decoder-output PCC that
+# test_glm_prefill_transformer_chunked asserts is deliberately NOT here: it comes from
+# return_intermediates=True, a host readback in the middle of forward(), which is a hard TT_FATAL
+# inside begin_trace_capture(). So per-layer PCC stays untraced-only by construction, and the
+# traced-vs-untraced claim is made over the caches — which are the actual product of chunked prefill.
+@pytest.mark.parametrize("use_trace", [False, True], ids=["notrace", "traced"])
+@pytest.mark.parametrize(
+    "n_chunks, preload_isl",
+    [(1, 10 * CHUNK), (2, 0), (11, 0)],
+    ids=["warm_cache", "two_chunks", "cold_cache"],
+)
+@pytest.mark.parametrize("num_layers", [1, 10, 78], ids=["L1", "L10", "L78"])
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links, topology",
+    [
+        pytest.param(
+            (8, 4),
+            {
+                # FABRIC_2D + RELAXED_INIT: the production GLM transport, and the one the traced perf
+                # test uses — so accuracy is measured on the same fabric the perf number comes from.
+                "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=GLM51Config.FABRIC_PAYLOAD_SIZE),
+                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+                # Routing consumes 512 B; leave 256 B for sparse-MLA high-bandwidth-gather semaphores.
+                "l1_small_size": 1152,
+                # Required by use_trace=True; reserved for both modes (device_params is its own axis).
+                "trace_region_size": 512 * 1024 * 1024,
+            },
+            2,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="mesh-8x4",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("variant", ["glm_5_2"], indirect=True, ids=["glm52"])
+@pytest.mark.skipif(not is_blackhole(), reason="GLM DSA ops (indexer / sparse SDPA) are Blackhole-only")
+@pytest.mark.timeout(0)
+def test_glm_prefill_transformer_chunked_kv_pcc(
+    variant,
+    config_only,
+    mesh_device,
+    device_params,
+    weight_cache_path,
+    num_layers,
+    n_chunks,
+    preload_isl,
+    num_links,
+    topology,
+    use_trace,
+):
+    if preload_isl + n_chunks * CHUNK > SEQ_CACHE_NOPCC:
+        pytest.skip(f"preload_isl {preload_isl} + {n_chunks} chunks exceeds the {SEQ_CACHE_NOPCC}-token cache")
+    run_chunked_transformer_updated(
+        variant,
+        config_only,
+        mesh_device,
+        weight_cache_path,
+        num_layers,
+        n_chunks,
+        GateComputeMode.DEVICE_FP32,
+        num_links,
+        topology,
+        1,  # num_iters: accuracy, not timing
+        routing_use_l1_small_for_semaphores=True,
+        preload_isl=preload_isl,
+        check_pcc=True,
+        use_trace=use_trace,
+        # GLM-5.2's calibrated KVPE floor, not Kimi's 0.96 (which is above GLM's documented minimum).
+        kv_pcc_threshold=KV_CACHE_PCC_THRESHOLD,
+    )
+
+
 def run_chunked_transformer_updated(
     variant,
     config,
@@ -1121,6 +1200,7 @@ def run_chunked_transformer_updated(
     preload_isl=0,
     check_pcc=False,
     use_trace=False,
+    kv_pcc_threshold=None,
 ):
     """No-PCC perf/smoke variant of run_chunked_transformer: build the transformer ONCE, then drive the
     full n_chunks-chunk prefill `num_iters` times with return_intermediates=False (no per-layer host
@@ -1227,11 +1307,10 @@ def run_chunked_transformer_updated(
         f"num_iters={num_iters}"
     )
 
-    # Trace is DENSE-MLA ONLY. Asserted here (not just deep in set_trace_controller) so a sparse model
-    # fails before the multi-minute weight load. GLM (glm_5_1 / glm_5_2) carries the DSA indexer fields,
-    # whose ops have no per-element-tensor metadata overload yet — and the captured forward never threads
-    # index_kv_cache, so a traced sparse run would silently skip the indexer and write wrong KV.
-    if use_trace:
+    # Trace is DENSE-MLA by default. Checked here (not just deep in set_trace_controller) so a sparse
+    # model fails before the multi-minute weight load. GLM (glm_5_1 / glm_5_2) carries the DSA indexer
+    # fields, whose ops still take their per-chunk scalars as host runtime args that a replay freezes.
+    if use_trace and not sparse_trace_supported():
         assert not resolve_has_indexer(config), (
             "use_trace=True is not supported for sparse/DSA (indexer) attention — GLM (glm_5_1 / "
             "glm_5_2) and friends. Supported traced models are the dense-MLA ones (deepseek_v3, "
@@ -1472,6 +1551,7 @@ def run_chunked_transformer_updated(
                 cache_user_id=0,
                 return_intermediates=False,
                 metadata=trace_metadata,
+                index_kv_cache=tt_index_kv_cache,
             )
 
         trace_controller = SubDeviceTraceController(mesh_device)
@@ -1631,6 +1711,37 @@ def run_chunked_transformer_updated(
     # Optional accuracy check on the same run that produced the timings, so a perf number is never
     # reported for a functionally wrong prefill. Off by default: this runner's whole point is to need no
     # golden trace, and enabling it makes one mandatory.
+    # Bit-exactness harness. PCC-vs-golden answers "is each mode accurate"; it does NOT answer "is traced
+    # the same computation as untraced". Dump the raw gathered device caches so two runs can be compared
+    # element-for-element offline. Always run an untraced-vs-untraced control: this model's CCL semaphore
+    # handout is a length-2 ring with an ODD count per forward, so consecutive eager forwards use opposite
+    # semaphore sets and untraced is not necessarily bit-stable against ITSELF. Without that control a
+    # traced-vs-untraced difference cannot be attributed to tracing.
+    dump_path = os.environ.get("PREFILL_DUMP_KV")
+    digest_path = os.environ.get("PREFILL_DUMP_KV_DIGEST")
+    if dump_path or digest_path:
+        payload = {"kvpe": gather_cache_tp0(tt_kvpe_cache.storage, mesh_device)}
+        if tt_index_kv_cache is not None:
+            payload["index"] = gather_cache_tp0(tt_index_kv_cache, mesh_device)
+        if dump_path:
+            torch.save(payload, dump_path)
+            logger.info(f"[bit-exactness] dumped device caches to {dump_path}")
+        if digest_path:
+            # Per-layer content digest instead of the raw tensors. A full L78 dump is ~108 GB per run,
+            # which makes the exact-equality question impractical to ask at production depth; a digest is
+            # a few KB and answers the SAME question (equal bytes <=> equal digest), just without being
+            # able to localise a difference. Use the raw dump at small depth to localise, this to confirm.
+            import hashlib
+
+            digests = {}
+            for key, t in payload.items():
+                digests[key] = [
+                    hashlib.sha256(t[i].contiguous().view(torch.uint8).numpy().tobytes()).hexdigest()
+                    for i in range(t.shape[0])
+                ]
+            Path(digest_path).write_text(json.dumps(digests, indent=1))
+            logger.info(f"[bit-exactness] wrote per-layer digests to {digest_path}")
+
     if check_pcc:
         assert (
             trace_dir is not None and trace_dir.exists()
@@ -1651,9 +1762,26 @@ def run_chunked_transformer_updated(
             SEQ_CACHE_NOPCC,
             total_len,
             config.kv_lora_rank,
-            assert_threshold=TRACE_KV_CACHE_PCC_THRESHOLD,
+            # Calibrated floors are model-specific: Kimi's 0.96 sits ABOVE GLM-5.2's documented KVPE
+            # minimum (~0.86 @ L75), so applying it to GLM fails a perfectly good run.
+            assert_threshold=TRACE_KV_CACHE_PCC_THRESHOLD if kv_pcc_threshold is None else kv_pcc_threshold,
             assert_layer_depth=GATED_LAYER_DEPTH,
         )
+        # GLM/DSA only: the indexer's own key cache. Read back after the run like the KVPE cache, so
+        # unlike the per-layer decoder PCC (which needs a mid-forward host readback and is therefore
+        # impossible under capture) this check works identically traced and untraced.
+        if tt_index_kv_cache is not None and (trace_dir / "dsa" / "indexer_k_layer_0").exists():
+            _record_indexer_k_cache_pcc(
+                trace_dir,
+                layout,
+                tt_index_kv_cache,
+                mesh_device,
+                sp,
+                num_layers,
+                SEQ_CACHE_NOPCC,
+                total_len,
+                config,
+            )
 
     # Release the captured trace + the sub-device managers that own its buffers BEFORE the mesh
     # closes. Without this the MeshTraceBuffers are freed via SubDeviceManager's dtor after the
@@ -1933,6 +2061,8 @@ def test_ds_prefill_transformer_chunked_no_pcc(
 # the empty-cache case (preload0) needs no golden trace, preload_isl > 0 requires it. Uses the GLM fabric payload + on-device fp32 gate + L1_SMALL
 # routing semaphores, exactly like test_glm_prefill_transformer_chunked. glm_5_2 additionally exercises the
 # DSA cross-layer indexer reuse per chunk. Requires the GLM TTNN weight cache (set the variant's cache env).
+# notrace/traced, not trace: "notrace" CONTAINS "trace", so `-k trace` would select both modes.
+@pytest.mark.parametrize("use_trace", [False, True], ids=["notrace", "traced"])
 @pytest.mark.parametrize(
     "num_iters", [1, 2, 10, 20, 25], ids=["iters1", "two_iters", "ten_iters", "iters20", "iters25"]
 )
@@ -1966,6 +2096,10 @@ def test_ds_prefill_transformer_chunked_no_pcc(
                 "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
                 # Routing consumes 512 B; leave 256 B for sparse-MLA high-bandwidth-gather semaphores and rest for other needs.
                 "l1_small_size": 1152,
+                # Required by use_trace=True. device_params is its own parametrize axis, so it cannot be
+                # conditioned on use_trace — the region is reserved for BOTH modes, costing the untraced
+                # mode DRAM it does not use. Too small fails loudly at end_trace_capture, not silently.
+                "trace_region_size": 512 * 1024 * 1024,
             },
             2,
             ttnn.Topology.Linear,
@@ -1994,6 +2128,7 @@ def test_glm_prefill_transformer_chunked_no_pcc(
     num_links,
     topology,
     preload_isl,
+    use_trace,
 ):
     if preload_isl + n_chunks * CHUNK > SEQ_CACHE_NOPCC:
         pytest.skip(f"preload_isl {preload_isl} + {n_chunks} chunks exceeds the {SEQ_CACHE_NOPCC}-token cache")
@@ -2010,6 +2145,7 @@ def test_glm_prefill_transformer_chunked_no_pcc(
         num_iters,
         routing_use_l1_small_for_semaphores=True,
         preload_isl=preload_isl,
+        use_trace=use_trace,
     )
 
 

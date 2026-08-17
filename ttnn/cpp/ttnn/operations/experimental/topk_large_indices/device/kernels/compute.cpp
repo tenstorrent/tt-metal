@@ -106,18 +106,31 @@ FORCE_INLINE void process_chunk(CircularBuffer& input_cb, uint32_t dst_base, uin
 
 void kernel_main() {
     const uint32_t num_rows = get_arg_val<uint32_t>(0);
-    const uint32_t num_chunks = get_arg_val<uint32_t>(1);
-    const uint32_t tail_elements = get_arg_val<uint32_t>(2);
+    uint32_t num_chunks = get_arg_val<uint32_t>(1);
+    uint32_t tail_elements = get_arg_val<uint32_t>(2);
 
     constexpr uint32_t input_cb = get_compile_time_arg_val(0);
     constexpr uint32_t indices_cb = get_compile_time_arg_val(1);
     constexpr uint32_t K = get_compile_time_arg_val(2);
+    // Trace-safe metadata: take the reader's derivation rather than the (replay-frozen) runtime args, and
+    // rather than re-deriving -- see the reader's note on why a second derivation risks a hang.
+    constexpr bool valid_length_from_metadata = get_compile_time_arg_val(3) != 0;
+    constexpr uint32_t meta_cb_arg = valid_length_from_metadata ? 4 : 0;
+    constexpr uint32_t meta_cb = get_compile_time_arg_val(meta_cb_arg);
 
     static_assert(K == 512 || K == 1024 || K == 2048, "K must be 512, 1024, or 2048");
     constexpr uint32_t tiles_per_sequence = (K + elements_per_tile - 1) / elements_per_tile;
     constexpr uint32_t sequence_tiles = tiles_per_sequence * 2u;
     constexpr uint32_t slot0 = 0;
     constexpr uint32_t slot1 = sequence_tiles;
+
+    if constexpr (valid_length_from_metadata) {
+        CircularBuffer meta_cb_obj(meta_cb);
+        meta_cb_obj.wait_front(1);
+        num_chunks = ckernel::read_tile_value(meta_cb, 0, 0);
+        tail_elements = ckernel::read_tile_value(meta_cb, 0, 1);
+        meta_cb_obj.pop_front(1);
+    }
 
     compute_kernel_hw_startup(input_cb, indices_cb);
     pack_untilize_dest_init<tiles_per_sequence, tiles_per_sequence>(indices_cb);

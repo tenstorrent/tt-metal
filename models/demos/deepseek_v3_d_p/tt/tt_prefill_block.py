@@ -13,6 +13,7 @@ from transformers.configuration_utils import PretrainedConfig
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
+from models.demos.deepseek_v3_d_p.tt.mla.indexer import sparse_trace_supported
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import compute_constants, extract_mesh_config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe import TtMoe
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
@@ -437,11 +438,16 @@ class TtPrefillBlock(LightweightModule):
         its MLA (per-layer migration-ack segmentation; only acts when the controller carries an ack
         callback). No-op for dense / kv-only FFNs, whose FFN has no sub-device overlap to trace around.
 
-        DENSE-MLA ONLY — see TtPrefillTransformer.set_trace_controller for why. Re-asserted here so a
-        caller that drives a single block (the block-level tests) is caught too, not just whole-model
-        callers."""
+        DENSE-MLA by default — see TtPrefillTransformer.set_trace_controller for why. Re-checked here
+        so a caller that drives a single block (the block-level tests) is caught too, not just
+        whole-model callers."""
         mla = getattr(self, "mla", None)
-        if controller is not None and mla is not None and getattr(mla, "_has_indexer", False):
+        if (
+            controller is not None
+            and mla is not None
+            and getattr(mla, "_has_indexer", False)
+            and not sparse_trace_supported()
+        ):
             raise AssertionError(
                 f"trace capture is not supported for sparse/DSA (indexer) attention (layer "
                 f"{getattr(self.mla, 'layer_idx', '?')} resolved has_indexer=True). Supported today: "
