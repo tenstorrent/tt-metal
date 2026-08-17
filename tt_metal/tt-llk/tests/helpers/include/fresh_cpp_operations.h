@@ -33,6 +33,37 @@ __attribute__((noinline)) void calculate_sigmoid_appx_fresh_cpp() {
 }
 
 template <int ITERATIONS>
+// The same SigmoidAppx contract stated as a 3-range magnitude dispatch tree
+// with constant affine leaves -- the dataflow shape the compiler's LUT
+// instruction selection (-mtt-tensix-optimize-lut-select) proves and
+// re-selects as a single SFPLUTFP32.  Kept alongside the cubic above as a
+// second independently measurable selector: coefficients are a 3-piece fit
+// of sigmoid(|x|)-0.5 over the test's [-5, 5] stimulus domain; the explicit
+// setsgn restores the odd symmetry outside the tree (SGN_RETAIN folding is a
+// later compiler increment).  Same golden and tolerance contract as the
+// cubic (exact torch.sigmoid, atol 0.13 / rtol 0.05).
+__attribute__((noinline)) void calculate_sigmoid_appx_tree_cpp()
+{
+    for (int row = 0; row < ITERATIONS; ++row)
+    {
+        const sfpi::vFloat input = sfpi::dst_reg[0];
+        const sfpi::vFloat mag   = sfpi::abs(input);
+        sfpi::vFloat g           = mag * 0.0375f + 0.3058f;
+        v_if (mag < 1.0f)
+        {
+            g = mag * 0.2452f + -0.0005f;
+        }
+        v_elseif (mag < 2.0f)
+        {
+            g = mag * 0.1497f + 0.0814f;
+        }
+        v_endif;
+        sfpi::dst_reg[0] = sfpi::setsgn(g, input) + 0.5f;
+        sfpi::dst_reg++;
+    }
+}
+
+template <int ITERATIONS>
 __attribute__((noinline)) void calculate_signbit_fresh_cpp() {
     for (int row = 0; row < ITERATIONS; ++row) {
         // Keep the all-lane predicate boundary typed and local to this

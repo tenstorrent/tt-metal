@@ -251,7 +251,12 @@ class SFPU_TERNARY_SCALAR(TemplateParameter):
 
 @dataclass
 class FRESH_CPP_IMPL(TemplateParameter):
-    """Select production (0) or test-only semantic SFPI C++ (1)."""
+    """Select production (0) or a test-only semantic SFPI C++ form (>= 1).
+
+    Most ops define only impl 1 (the fresh semantic body).  SigmoidAppx also
+    defines impl 2: the 3-range magnitude dispatch tree, a second semantic
+    form kept as its own measurable selector.
+    """
 
     value: int = 0
 

@@ -289,7 +289,9 @@ def test_perf_exp_fresh_cpp(
 @parametrize(
     formats=input_output_formats([DataFormat.Float16_b]),
     dest_acc=[DestAccumulation.No],
-    fresh_cpp_impl=[0, 1],
+    # 0 = production, 1 = fresh semantic cubic, 2 = fresh semantic 3-range
+    # magnitude dispatch tree (the LUT-eligible shape).
+    fresh_cpp_impl=[0, 1, 2],
 )
 def test_perf_sigmoid_appx_fresh_cpp(
     perf_report,

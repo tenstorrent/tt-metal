@@ -120,7 +120,7 @@ AUDITED_SEEDS = {
     ),
     "metal__ckernel_sfpu_sigmoid_appx": dict(
         semantic_cpp_class="ready",
-        semantic_cpp_blocker="Fresh typed cubic is functionally valid; competitive lowering needs loop-invariant SFPU constant materialization/hoisting, special-register allocation, and counted-loop replay formation.",
+        semantic_cpp_blocker="Fresh typed cubic (impl 1) is functionally valid; competitive lowering needs loop-invariant SFPU constant materialization/hoisting, special-register allocation, and counted-loop replay formation. The tree form (impl 2) is the LUT-formation shape; its LUT-ON measurement awaits the post-wave toolchain pin (-mtt-tensix-optimize-lut-select is absent from pinned cc1plus 9827aaacc829 and errors on use).",
         paired_selector_status="implemented",
         test_status="pass",
         perf_status="measured",
@@ -756,7 +756,7 @@ AUDITED_MAPPINGS = {
     "metal__ckernel_sfpu_sigmoid_appx": dict(
         functional_modules="test_sfpu_unary.py::test_sigmoid_appx_fresh_cpp",
         perf_modules="perf_eltwise_unary_sfpu.py::test_perf_sigmoid_appx_fresh_cpp",
-        notes="Audited paired production/fresh semantic-C++ SigmoidAppx selector and isolated profiler fixture.",
+        notes="Audited production/fresh semantic-C++ SigmoidAppx selectors with isolated profiler fixture; BOTH semantic forms are independently measurable under the identical golden/tolerance contract: impl 1 = 2-MAD cubic (node test_sigmoid_appx_fresh_cpp[fresh_cpp]), impl 2 = 3-range magnitude dispatch tree, the LUT-eligible shape (node test_sigmoid_appx_fresh_cpp[fresh_cpp_tree]); perf nodes test_perf_sigmoid_appx_fresh_cpp fresh_cpp_impl 0/1/2.",
     ),
     "metal__ckernel_sfpu_signbit": dict(
         functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu_signbit",

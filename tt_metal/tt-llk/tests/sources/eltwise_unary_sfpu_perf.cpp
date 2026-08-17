@@ -257,6 +257,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
                                 block_tile,
                                 VectorMode::None);
                         }
+                        else if constexpr (FRESH_CPP_IMPL == 2 && SFPU_UNARY_OPERATION == SfpuType::sigmoid_appx)
+                        {
+                            // Second semantic form: 3-range magnitude dispatch tree
+                            // (the LUT-eligible shape); same contract as impl 1.
+                            SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_sigmoid_appx_tree_cpp, (ITERATIONS), block_tile, VectorMode::None);
+                        }
                         else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::signbit)
                         {
                             SFPU_UNARY_CALL(
@@ -344,6 +350,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
                                 (ITERATIONS),
                                 block_tile,
                                 VectorMode::None);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 2 && SFPU_UNARY_OPERATION == SfpuType::sigmoid_appx)
+                        {
+                            // Second semantic form: 3-range magnitude dispatch tree
+                            // (the LUT-eligible shape); same contract as impl 1.
+                            SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_sigmoid_appx_tree_cpp, (ITERATIONS), block_tile, VectorMode::None);
                         }
                         else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::signbit)
                         {

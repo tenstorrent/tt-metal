@@ -997,8 +997,16 @@ def test_exp_fresh_cpp(fresh_cpp_impl, edge_values):
     )
 
 
-@pytest.mark.parametrize("fresh_cpp_impl", [0, 1], ids=["production", "fresh_cpp"])
+@pytest.mark.parametrize(
+    "fresh_cpp_impl",
+    [0, 1, 2],
+    ids=["production", "fresh_cpp", "fresh_cpp_tree"],
+)
 def test_sigmoid_appx_fresh_cpp(fresh_cpp_impl):
+    """Three independently measurable selectors under one golden/tolerance
+    contract: 0 = handwritten production kernel, 1 = fresh semantic 2-MAD
+    cubic, 2 = fresh semantic 3-range magnitude dispatch tree (the
+    LUT-eligible shape for -mtt-tensix-optimize-lut-select)."""
     eltwise_unary_sfpu(
         "sources/eltwise_unary_sfpu_test.cpp",
         InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
