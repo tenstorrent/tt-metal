@@ -1,0 +1,40 @@
+operands:
+  - name: "input_A"
+    dims: [64, 64]
+    format: "Float16_b"
+  - name: "input_B"
+    dims: [64, 64]
+    format: "Float16_b"
+    const_value: 1.0
+  - name: "elwmul_out"
+    dims: [64, 64]
+    format: "Float16_b"
+  - name: "reduce_out"
+    dims: [64, 64]
+    format: "Float16_b"
+
+operations:
+  - math:
+      - type: "Fpu"
+        src_a: "input_A"
+        src_b: "input_B"
+        operation: "Elwmul"
+        unpacker: "UnpackerAB"
+        math_fidelity: "HiFi2"
+    block_size: [64, 64]
+    pack:
+      - output: "elwmul_out"
+        packer: "Packer"
+  - math:
+      - type: "Fpu"
+        src_a: "input_A"
+        src_b: "input_B"
+        operation: "Reduce"
+        reduce_dim: "REDUCE_SCALAR"
+        reduce_pool: "SUM"
+        unpacker: "ReduceUnpacker"
+        math_fidelity: "LoFi"
+    block_size: [64, 64]
+    pack:
+      - output: "reduce_out"
+        packer: "Packer"
