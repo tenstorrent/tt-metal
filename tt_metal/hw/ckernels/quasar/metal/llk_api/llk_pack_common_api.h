@@ -37,10 +37,10 @@ inline constexpr ckernel::trisc::BfdResource pack_bfd_resource =
  * PACR_STRIDE untilize sequences.
  */
 template <ckernel::trisc::L1AccessMode MODE = ckernel::trisc::L1AccessMode::Continuous>
-inline void llk_pack_program_bfd_(const std::uint32_t output_id) {
+inline void llk_pack_program_bfd(const std::uint32_t output_id) {
     // TODO: multi-TC not handled — only tc_slots[0]'s L1 base is programmed. When a DFB is mapped
     // across multiple TCs this must program one descriptor per active tc_slot (same gap in
-    // llk_unpack_program_bfd_). Tied to the DFB<->buffer-descriptor decouple work.
+    // llk_unpack_program_bfd). Tied to the DFB<->buffer-descriptor decouple work.
     ckernel::trisc::bfd_alloc_and_program<pack_bfd_resource, MODE>(
         get_output_tensor_shape(output_id),
         get_local_dfb_interface(output_id).tc_slots[0].base_addr,

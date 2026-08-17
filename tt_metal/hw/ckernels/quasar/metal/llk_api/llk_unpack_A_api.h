@@ -55,7 +55,7 @@ inline void llk_unpack_A_init(
         constexpr ckernel::trisc::BfdResource engine = binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA
                                                            ? ckernel::trisc::BfdResource::Unp1
                                                            : ckernel::trisc::BfdResource::Unp0;
-        llk_unpack_program_bfd_<engine>(operand_id);
+        llk_unpack_program_bfd<engine>(operand_id);
         _llk_unpack_unary_operand_init_<
             p_unpacr::UNP_A,
             false /* TRANSPOSE_EN */,
@@ -70,7 +70,7 @@ inline void llk_unpack_A_init(
             // Route to UNP_DEST purely on the op-writer flag (no format inspection). A 16-bit
             // operand is unpacked to DEST here too when the op writer requested it.
             if constexpr (unpack_to_dest) {
-                llk_unpack_program_bfd_<ckernel::trisc::BfdResource::Unp0>(operand_id);
+                llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp0>(operand_id);
                 _llk_unpack_unary_operand_init_<
                     p_unpacr::UNP_DEST,
                     false /*transpose*/,
@@ -79,7 +79,7 @@ inline void llk_unpack_A_init(
                     true>(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), tensor_shape, 1);
                 return;
             }
-            llk_unpack_program_bfd_<ckernel::trisc::BfdResource::Unp0>(operand_id);
+            llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp0>(operand_id);
             if (transpose_of_faces && within_face_16x16_transpose) {
                 _llk_unpack_unary_operand_init_<p_unpacr::UNP_A, true, DST_ACCUM_MODE, binary_reuse_dest, false>(
                     ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), tensor_shape, 1);
@@ -100,7 +100,7 @@ inline void llk_unpack_A_init(
             constexpr std::uint32_t unp_sel = unpack_to_dest ? p_unpacr::UNP_A : p_unpacr::UNP_B;
             constexpr ckernel::trisc::BfdResource engine =
                 unpack_to_dest ? ckernel::trisc::BfdResource::Unp0 : ckernel::trisc::BfdResource::Unp1;
-            llk_unpack_program_bfd_<engine>(operand_id);
+            llk_unpack_program_bfd<engine>(operand_id);
             _llk_unpack_unary_broadcast_operands_init_<unp_sel, BType, unpack_to_dest>(
                 ckernel::trisc::bfd_current<engine>(), 1);
         }

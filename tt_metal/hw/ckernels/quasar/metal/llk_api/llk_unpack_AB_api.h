@@ -47,8 +47,8 @@ inline void llk_unpack_AB_init(
         get_operand_tensor_shape(operandB_id).total_num_faces() == ckernel::MAX_NUM_FACES,
         "this path indexes L1 in whole tiles, so it supports full 32x32 tiles only");
 
-    llk_unpack_program_bfd_<ckernel::trisc::BfdResource::Unp0>(operandA_id);
-    llk_unpack_program_bfd_<ckernel::trisc::BfdResource::Unp1>(operandB_id);
+    llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp0>(operandA_id);
+    llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp1>(operandB_id);
 
     if constexpr (BType == BroadcastType::NONE) {
         _llk_unpack_binary_operands_init_(

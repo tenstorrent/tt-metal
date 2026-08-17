@@ -44,11 +44,11 @@ inline void llk_pack_untilize_init(std::uint32_t pack_output) {
         "only 1x32 and 2x32 tiny tiles supported for pack untilize on Quasar");
 
     if (tensor_shape.total_num_faces() == ckernel::trisc::NUM_FACES) {
-        llk_pack_program_bfd_(output_id);
+        llk_pack_program_bfd(output_id);
         _llk_pack_untilize_init_<full_ct_dim, block_ct_dim>(
             ckernel::trisc::bfd_current<pack_bfd_resource>(), tensor_shape);
     } else {
-        llk_pack_program_bfd_<ckernel::trisc::L1AccessMode::Strided>(output_id);
+        llk_pack_program_bfd<ckernel::trisc::L1AccessMode::Strided>(output_id);
         _llk_pack_untilize_strided_init_<full_ct_dim, block_ct_dim>(
             ckernel::trisc::bfd_current<pack_bfd_resource>(), tensor_shape);
     }
