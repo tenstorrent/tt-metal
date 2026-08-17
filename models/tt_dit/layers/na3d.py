@@ -934,9 +934,18 @@ def neighborhood_attention_3d_op_sp_w_sharded(
 
     # K/V: gather this chip's W-band into the full W the window needs (chip order = W order, so the
     # concatenation rebuilds the full W-outer sequence). Q stays this chip's W-shard.
+    #
+    # DIFFVAE_CCL_PERSISTENT=1 routes the all-gathers through cached persistent output buffers + the
+    # pre-created ping-pong semaphores (instead of a fresh buffer per call). Required for ttnn tracing:
+    # a trace bakes absolute addresses, so a freshly-allocated gather output is clobbered on replay.
+    persist_ccl = os.environ.get("DIFFVAE_CCL_PERSISTENT", "0") == "1"
     with _sp_w_prof(mesh, "kv-allgather"):
-        tk = ccl_manager.all_gather(to_seq(k, w_local), dim=2, mesh_axis=sp_axis, use_hyperparams=False)
-        tv = ccl_manager.all_gather(to_seq(v, w_local), dim=2, mesh_axis=sp_axis, use_hyperparams=False)
+        tk = ccl_manager.all_gather(
+            to_seq(k, w_local), dim=2, mesh_axis=sp_axis, use_hyperparams=False, use_persistent_buffer=persist_ccl
+        )
+        tv = ccl_manager.all_gather(
+            to_seq(v, w_local), dim=2, mesh_axis=sp_axis, use_hyperparams=False, use_persistent_buffer=persist_ccl
+        )
     tq = to_seq(q, w_local)
 
     offsets = torch.arange(sp, dtype=torch.int32) * seq_local
@@ -993,7 +1002,9 @@ def neighborhood_attention_3d_op_sp_w_sharded(
     # the head axis rebuilds [head0 | head1 | ...]; downstream sees the full width as without TP.
     if tp_axis is not None:
         with _sp_w_prof(mesh, "head-allgather"):
-            attended = ccl_manager.all_gather(attended, dim=1, mesh_axis=tp_axis, use_hyperparams=False)
+            attended = ccl_manager.all_gather(
+                attended, dim=1, mesh_axis=tp_axis, use_hyperparams=False, use_persistent_buffer=persist_ccl
+            )
         heads = full_heads
         width = heads * head_dim
 
