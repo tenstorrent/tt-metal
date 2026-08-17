@@ -29,6 +29,10 @@ enum SortDir : bool {
     ArgMin = true,
 };
 
+// No-op: stable sort is static_asserted off on Quasar; the stub keeps the arch-independent
+// compute API (topk_set_stable_descending_mode) compiling.
+inline void set_topk_stable_descending_mode(bool) {}
+
 // Set the per-TRISC dest section base register for the math TRISC.
 // Quasar has separate SEC0..SEC3 registers (one per TRISC); this implementation
 // runs the SFPU TopK network on the math TRISC, so SFPLOAD/SFPSTORE effective

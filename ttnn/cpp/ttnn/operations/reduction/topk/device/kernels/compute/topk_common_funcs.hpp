@@ -50,6 +50,8 @@ void process_and_sort_tiles(
             transpose_tile(index_dfb_index, 1, 3);
         }
         // llk_topk_sort -> inplace
+        // (stable) tie-break polarity is set once per kernel from the global `largest`;
+        // it must not follow `ascending`, which alternates for bitonic sequence building.
         ckernel::topk_local_sort<stable_sort>(0, (int)ascending, end_phase);
         tile_regs_commit();
 
@@ -109,6 +111,9 @@ void process_tile_pair(
 
     // merge values - move larger 32 values into 0th dest and lower 32 values into 1st dest
     // sort within the larger 32 values
+    // (stable) tie-break polarity is set once per kernel from the global `largest`; `ascending`
+    // here may be flipped per core (direction_init) to alternate output direction for the final
+    // cross-core bitonic merge, and the tie polarity must not flip with it.
     ckernel::topk_rebuild<stable_sort>(0, (uint32_t)ascending, m_iter, K, logk, target_tiles_is_one);
 
     tile_regs_commit();

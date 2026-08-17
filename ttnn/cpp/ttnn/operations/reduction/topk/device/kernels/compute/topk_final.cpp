@@ -74,6 +74,11 @@ void kernel_main() {
     // init pack, compute and unpack
     init_sfpu(input_dfb_index, values_dfb_index);
     ckernel::topk_tile_init();
+    if constexpr (stable_sort) {
+        // Tie-break polarity is a property of the GLOBAL sort order (largest vs smallest); set once,
+        // never per-call from the local bitonic direction.
+        ckernel::topk_set_stable_descending_mode(largest != 0);
+    }
 
     DataflowBuffer input_dfb(input_dfb_index);
     DataflowBuffer index_dfb(index_dfb_index);
