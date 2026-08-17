@@ -28,11 +28,20 @@ namespace tt::tt_metal {
 template <bool hugepage_write = false>
 class DeviceCommand {
 public:
-    DeviceCommand() = default;
+    // Prefer DeviceCommand(MetalContext&). Legacy ctors resolve the global singleton and will be
+    // removed once all callers pass a MetalContext (N2c/C3).
+    // TODO(N2c/C3): remove once all callers pass a MetalContext.
+    DeviceCommand();
+    // TODO(N2c/C3): remove once all callers pass a MetalContext.
     DeviceCommand(void* cmd_region, uint32_t cmd_sequence_sizeB);
-
+    // TODO(N2c/C3): remove once all callers pass a MetalContext.
     template <bool hp_w = hugepage_write, typename std::enable_if_t<!hp_w, int> = 0>
     DeviceCommand(uint32_t cmd_sequence_sizeB);
+
+    explicit DeviceCommand(MetalContext& ctx);
+    DeviceCommand(MetalContext& ctx, void* cmd_region, uint32_t cmd_sequence_sizeB);
+    template <bool hp_w = hugepage_write, typename std::enable_if_t<!hp_w, int> = 0>
+    DeviceCommand(MetalContext& ctx, uint32_t cmd_sequence_sizeB);
 
     DeviceCommand& operator=(const DeviceCommand& other);
     DeviceCommand& operator=(DeviceCommand&& other) noexcept;
@@ -314,12 +323,14 @@ private:
         }
     }
 
+    void init_from_context(MetalContext& ctx);
+
     uint32_t cmd_sequence_sizeB = 0;
     void* cmd_region = nullptr;
     uint32_t cmd_write_offsetB = 0;
-    uint32_t pcie_alignment =
-        tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::HOST);
-    uint32_t l1_alignment = tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::L1);
+    MetalContext* ctx_ = nullptr;
+    uint32_t pcie_alignment = 0;
+    uint32_t l1_alignment = 0;
 
     vector_aligned<uint32_t> cmd_region_vector;
 };
