@@ -43,6 +43,35 @@ inline constexpr auto gpr(const std::uint32_t index)
     return detail::with_cfg_policy<Size, Completion>(hal::gpr(index));
 }
 
+/**
+ * @brief Bind a GPR source to a complete state-CFG word destination.
+ *
+ * The returned operation can be combined with @ref set assignments in one
+ * heterogeneous @ref write call. It acts as an ordering barrier between
+ * automatically grouped assignment runs.
+ *
+ * @tparam F: Field anchoring the destination CFG word.
+ * @tparam S: Repeated descriptor section; compilation fails when it is outside F.count.
+ * @tparam GprIndex: Compile-time GPR index or the runtime-index sentinel.
+ * @tparam Size: Transfer width, values = <Bits32/Bits128>.
+ * @tparam Completion: WRCFG completion policy.
+ * @param source: GPR source and transfer policy.
+ */
+template <const Field& F, Sec S, std::uint32_t GprIndex, GprTransferSize Size, WrcfgCompletion Completion>
+inline constexpr auto from_gpr(const detail::GprOperand<GprIndex, Size, Completion> source)
+{
+    return GprWrite<F, S, detail::GprOperand<GprIndex, Size, Completion>> {source};
+}
+
+/**
+ * @brief Bind a default 32-bit GPR source to a state-CFG destination.
+ */
+template <const Field& F, Sec S, std::uint32_t GprIndex>
+inline constexpr auto from_gpr(const hal::Gpr<GprIndex> source)
+{
+    return from_gpr<F, S>(detail::with_cfg_policy<GprTransferSize::Bits32, WrcfgCompletion::Wait>(source));
+}
+
 // -------------------------------------------------------------------------------------------------
 // RISC reads
 // -------------------------------------------------------------------------------------------------
@@ -52,7 +81,7 @@ inline constexpr auto gpr(const std::uint32_t index)
  *
  * @tparam B  must be @ref Access::MMIO.
  * @tparam F  reference to a generated `static constexpr Field`.
- * @tparam S  section (@ref Sec).
+ * @tparam S: Section (@ref Sec); compilation fails when it is outside F.count.
  * @tparam Target thread-CFG bank. Current selects the issuing TRISC; an
  *         explicit T0/T1/T2 target is required from BRISC. Leave this at
  *         Current for state CFG.
@@ -149,7 +178,7 @@ inline __attribute__((always_inline)) void read(detail::GprOperand<GprIndex, Siz
  *
  * @tparam A: Access path, values = <TensixCfgUnit>.
  * @tparam F: Field identifying the source CFG word.
- * @tparam S: Repeated descriptor section.
+ * @tparam S: Repeated descriptor section; compilation fails when it is outside F.count.
  * @tparam GprIndex: Compile-time destination GPR index.
  * @param destination: Common GPR operand receiving the CFG word.
  */
@@ -164,7 +193,7 @@ inline __attribute__((always_inline)) void read(const hal::Gpr<GprIndex> destina
  *
  * @tparam A: Access path, values = <TensixCfgUnit/TensixScalarUnit>.
  * @tparam F: Field identifying the first destination CFG word.
- * @tparam S: Repeated descriptor section.
+ * @tparam S: Repeated descriptor section; compilation fails when it is outside F.count.
  * @tparam GprIndex: Compile-time GPR index or the runtime-index sentinel.
  * @tparam Size: Transfer width, values = <Bits32/Bits128>.
  * @tparam Completion: WRCFG completion policy used by TensixCfgUnit.
@@ -175,62 +204,7 @@ inline __attribute__((always_inline)) void read(const hal::Gpr<GprIndex> destina
 template <Access A, const Field& F, Sec S, std::uint32_t GprIndex, GprTransferSize Size, WrcfgCompletion Completion>
 inline __attribute__((always_inline)) void write(const detail::GprOperand<GprIndex, Size, Completion> source)
 {
-    static_assert(
-        A == Access::TensixCfgUnit || A == Access::TensixScalarUnit, "GPR-backed cfg::write requires Access::TensixCfgUnit or Access::TensixScalarUnit");
-    static_assert(F.file == RegisterFile::State, "GPR-backed cfg::write cannot write thread CFG (SETC16) fields");
-    static_assert(static_cast<std::uint32_t>(S) < F.count, "section index out of range for this register");
-    static_assert(F.shamt(S) == 0, "GPR cfg::write must start at the beginning of a CFG word");
-    if constexpr (Size == GprTransferSize::Bits128)
-    {
-        static_assert((F.addr32(S) & 0x3u) == 0u, "128-bit GPR cfg::write destination must be four-word aligned");
-    }
-
-    if constexpr (A == Access::TensixScalarUnit)
-    {
-        constexpr std::uint32_t address = F.addr32(S);
-        static_assert(
-            address >= THCON_CFGREG_BASE_ADDR32 && address < GLOBAL_CFGREG_BASE_ADDR32, "Access::TensixScalarUnit supports THCON CFG destinations only");
-        if constexpr (Size == GprTransferSize::Bits128)
-        {
-            static_assert(address + 3u < GLOBAL_CFGREG_BASE_ADDR32, "128-bit REG2FLOP transfer crosses the THCON CFG range");
-        }
-
-        constexpr std::uint32_t size_sel   = Size == GprTransferSize::Bits128 ? 0u : 1u;
-        constexpr std::uint32_t flop_index = address - THCON_CFGREG_BASE_ADDR32;
-        if constexpr (GprIndex == detail::DynamicGprIndex)
-        {
-            LLK_ASSERT(source.index < 64u, "REG2FLOP GPR index must be in [0, 63]");
-            if constexpr (Size == GprTransferSize::Bits128)
-            {
-                LLK_ASSERT((source.index & 0x3u) == 0u, "128-bit REG2FLOP source GPR must be four-word aligned");
-            }
-            TT_REG2FLOP(size_sel, 0, 0, 0, flop_index, source.index);
-        }
-        else
-        {
-            static_assert(GprIndex < 64u, "REG2FLOP GPR index must be in [0, 63]");
-            if constexpr (Size == GprTransferSize::Bits128)
-            {
-                static_assert((GprIndex & 0x3u) == 0u, "128-bit REG2FLOP source GPR must be four-word aligned");
-            }
-            TTI_REG2FLOP(size_sel, 0, 0, 0, flop_index, GprIndex);
-        }
-    }
-    else
-    {
-        if constexpr (GprIndex == detail::DynamicGprIndex)
-        {
-            TT_WRCFG(source.index, Size == GprTransferSize::Bits128, F.addr32(S));
-        }
-        else
-        {
-            TTI_WRCFG(GprIndex, Size == GprTransferSize::Bits128, F.addr32(S));
-        }
-        if constexpr (Completion == WrcfgCompletion::Wait)
-        {
-            TTI_NOP;
-        }
-    }
+    detail::write_gpr<A>(from_gpr<F, S>(source));
 }
 
 /**
@@ -238,7 +212,7 @@ inline __attribute__((always_inline)) void write(const detail::GprOperand<GprInd
  *
  * @tparam A: Access path, values = <TensixCfgUnit/TensixScalarUnit>.
  * @tparam F: Field identifying the destination CFG word.
- * @tparam S: Repeated descriptor section.
+ * @tparam S: Repeated descriptor section; compilation fails when it is outside F.count.
  * @tparam GprIndex: Compile-time or runtime source GPR index.
  * @param source: Common GPR operand supplying one complete word.
  */
@@ -253,37 +227,55 @@ inline __attribute__((always_inline)) void write(const hal::Gpr<GprIndex> source
 // -------------------------------------------------------------------------------------------------
 
 /**
- * @brief Write one or more composed CFG words.
+ * @brief Group field assignments through an already-resolved RISC MMIO bank.
  *
- * One ConfigWord is one logical word update. Several ConfigWords provide a
- * transaction-style interface, but hardware still needs one update for every
- * distinct physical address.
+ * @tparam A: Access path, values = <MMIO>.
+ * @tparam First: First field-assignment type returned by @ref set.
+ * @tparam Rest: Remaining field-assignment types returned by @ref set.
+ * @param cfg: Active CFG bank returned by `ckernel::get_cfg_pointer()`.
+ * @param first: First field assignment.
+ * @param rest: Remaining field assignments.
  */
-template <Access A, typename First, typename... Rest, std::enable_if_t<detail::is_config_word_v<First>, int> = 0>
-inline __attribute__((always_inline)) void write(const First& first, const Rest&... rest)
-{
-    detail::write_words<A>(first, rest...);
-}
-
-/**
- * @brief Write composed CFG words through an already-resolved RISC MMIO bank.
- *
- * This overload avoids re-reading CFG_STATE_ID when a hot loop performs
- * several writes to the same bank. The pointer must come from
- * `ckernel::get_cfg_pointer()`.
- */
-template <Access A, typename First, typename... Rest, std::enable_if_t<detail::is_config_word_v<First>, int> = 0>
+template <
+    Access A,
+    typename First,
+    typename... Rest,
+    std::enable_if_t<detail::is_field_assignment_v<First> && (detail::is_field_assignment_v<Rest> && ...), int> = 0>
 inline __attribute__((always_inline)) void write(volatile std::uint32_t* tt_reg_ptr cfg, const First& first, const Rest&... rest)
 {
     static_assert(A == Access::MMIO, "an already-resolved CFG pointer requires Access::MMIO");
-    detail::write_words_mmio(cfg, first, rest...);
+    detail::write_assignments_mmio(cfg, first, rest...);
+}
+
+/**
+ * @brief Replace one complete state-CFG word through an already-resolved MMIO bank.
+ *
+ * The field is an address anchor only: its mask and shift are not applied.
+ * This preserves prepacked union values without constructing an intermediate
+ * word descriptor.
+ *
+ * @tparam A: Access path, values = <MMIO>.
+ * @tparam Anchor: Field identifying the containing physical word.
+ * @tparam S: Repeated descriptor section; compilation fails when it is outside Anchor.count.
+ * @tparam WordOffset: Physical word offset from the anchor.
+ * @param cfg: Active CFG bank returned by `ckernel::get_cfg_pointer()`.
+ * @param value: Complete 32-bit word replacing the destination.
+ */
+template <Access A, const Field& Anchor, Sec S, std::uint32_t WordOffset = 0>
+inline __attribute__((always_inline)) void write(volatile std::uint32_t* tt_reg_ptr cfg, const std::uint32_t value)
+{
+    static_assert(A == Access::MMIO, "an already-resolved CFG pointer requires Access::MMIO");
+    static_assert(Anchor.file == RegisterFile::State, "Access::MMIO targets the state CFG");
+    static_assert(static_cast<std::uint32_t>(S) < Anchor.count, "section index out of range for this register");
+
+    cfg[Anchor.addr32(S) + WordOffset] = value;
 }
 
 /**
  * @brief Writer passed to the lambda overload of cfg::write().
  *
  * A RISC batch resolves the active state bank once. The callable may emit
- * composed words, field assignments, individual fields, or arrays, and may
+ * field assignments, individual fields, prepacked words, or arrays, and may
  * use ordinary control flow to iterate over runtime data.
  */
 template <Access A>
@@ -304,29 +296,51 @@ public:
         static_assert(A == Access::MMIO, "an already-resolved CFG pointer requires Access::MMIO");
     }
 
-    template <typename First, typename... Rest, std::enable_if_t<detail::is_config_word_v<First>, int> = 0>
+    template <typename First, typename... Rest, std::enable_if_t<detail::is_field_assignment_v<First> && (detail::is_field_assignment_v<Rest> && ...), int> = 0>
     inline __attribute__((always_inline)) void operator()(const First& first, const Rest&... rest) const
     {
         if constexpr (A == Access::MMIO)
         {
-            detail::write_words_mmio(cfg_, first, rest...);
+            detail::write_assignments_mmio(cfg_, first, rest...);
         }
         else
         {
-            detail::write_words<A>(first, rest...);
+            detail::write_assignments<A>(first, rest...);
         }
     }
 
-    template <typename First, typename... Rest, std::enable_if_t<detail::is_field_assignment_v<First> && (detail::is_field_assignment_v<Rest> && ...), int> = 0>
+    template <
+        typename First,
+        typename... Rest,
+        std::enable_if_t<
+            detail::is_write_operation_v<First> && (detail::is_write_operation_v<Rest> && ...) &&
+                (detail::is_gpr_write_v<First> || (detail::is_gpr_write_v<Rest> || ...)),
+            int> = 0>
     inline __attribute__((always_inline)) void operator()(const First& first, const Rest&... rest) const
     {
-        (*this)(word(first, rest...));
+        detail::write_operations<A>(first, rest...);
     }
 
     template <const Field& F, Sec S>
     inline __attribute__((always_inline)) void field(const std::uint32_t value) const
     {
         (*this)(set<F, S>(value));
+    }
+
+    /**
+     * @brief Replace one prepacked state-CFG word through the resolved MMIO bank.
+     *
+     * The anchor supplies only the address; its mask and shift are ignored.
+     *
+     * @tparam Anchor: Field descriptor anchoring the destination word.
+     * @tparam S: Section containing the destination word.
+     * @tparam WordOffset: Additional 32-bit word offset from the anchor.
+     * @param value: Complete prepacked 32-bit word to store.
+     */
+    template <const Field& Anchor, Sec S, std::uint32_t WordOffset = 0>
+    inline __attribute__((always_inline)) void replace(const std::uint32_t value) const
+    {
+        write<A, Anchor, S, WordOffset>(cfg_, value);
     }
 
     template <const Field& F, Sec S, std::uint32_t Count, std::size_t ArrayCount>
@@ -346,7 +360,7 @@ private:
  * @code
  * write<Access::MMIO>([&](auto& out) {
  *     out.template field<PrngSeed::Seed_Val, Sec::S0>(seed);
- *     out(word<Thcon[Reg1].Row_start_section_size, Sec::S0>(packed));
+ *     out.template replace<PackCounters::pack_per_xy_plane, Sec::S0>(packed_counters);
  * });
  * @endcode
  */
@@ -384,7 +398,13 @@ inline __attribute__((always_inline)) void write(const std::uint32_t (&values)[A
 }
 
 /**
- * @brief Combine and write fields from one physical CFG word.
+ * @brief Group and write field assignments by physical CFG word.
+ *
+ * Assignments with the same register file and resolved address are composed
+ * even when they are not adjacent. Distinct words are emitted in the order
+ * their addresses first appear. A Tensix group made entirely from constant
+ * assignments uses TTI instructions; a group containing a runtime value uses
+ * TT instructions. Use separate calls when hardware programming order matters.
  *
  * @code
  * write<Access::TensixCfgUnit>(
@@ -392,6 +412,12 @@ inline __attribute__((always_inline)) void write(const std::uint32_t (&values)[A
  *     set<AluFormatSpecReg1::SrcB, Sec::S0>(src_b),
  *     set<AluAccCtrl::Fp32_enabled, Sec::S0>(fp32));
  * @endcode
+ *
+ * @tparam A: Access path, values = <MMIO/TensixCfgUnit>.
+ * @tparam First: First field-assignment type returned by @ref set.
+ * @tparam Rest: Remaining field-assignment types returned by @ref set.
+ * @param first: First field assignment.
+ * @param rest: Remaining field assignments.
  */
 template <
     Access A,
@@ -400,14 +426,35 @@ template <
     std::enable_if_t<detail::is_field_assignment_v<First> && (detail::is_field_assignment_v<Rest> && ...), int> = 0>
 inline __attribute__((always_inline)) void write(const First& first, const Rest&... rest)
 {
-    if constexpr (detail::is_constant_field_assignment_v<First> && (detail::is_constant_field_assignment_v<Rest> && ...))
-    {
-        detail::write_constant_assignments<A, First, Rest...>();
-    }
-    else
-    {
-        detail::write_word<A>(word(first, rest...));
-    }
+    detail::write_assignments<A>(first, rest...);
+}
+
+/**
+ * @brief Emit grouped field assignments and ordered GPR transfers through one access entry point.
+ *
+ * Every maximal consecutive run of @ref set assignments is grouped by physical
+ * word. Each @ref from_gpr operation flushes that run, emits its complete-word
+ * transfer and completion policy in source order, and starts a new run. The
+ * descriptor-only dispatch is resolved at compile time and introduces no
+ * runtime branch or loop.
+ *
+ * @tparam A: Access path, value = <TensixCfgUnit>.
+ * @tparam First: First operation type returned by @ref set or @ref from_gpr.
+ * @tparam Rest: Remaining operation types.
+ * @param first: First write operation.
+ * @param rest: Remaining write operations.
+ */
+template <
+    Access A,
+    typename First,
+    typename... Rest,
+    std::enable_if_t<
+        detail::is_write_operation_v<First> && (detail::is_write_operation_v<Rest> && ...) &&
+            (detail::is_gpr_write_v<First> || (detail::is_gpr_write_v<Rest> || ...)),
+        int> = 0>
+inline __attribute__((always_inline)) void write(const First& first, const Rest&... rest)
+{
+    detail::write_operations<A>(first, rest...);
 }
 
 /**
@@ -415,7 +462,7 @@ inline __attribute__((always_inline)) void write(const First& first, const Rest&
  *
  * @tparam A  @ref Access — RISC MMIO or Tensix instruction.
  * @tparam F  reference to a generated `static constexpr Field` (e.g. Reg::Field).
- * @tparam S  section (@ref Sec).
+ * @tparam S: Section (@ref Sec); compilation fails when it is outside F.count.
  *
  * @note SETC16 (Access::TensixCfgUnit on the Thread file) writes a whole 16-bit thread
  *       word and has no per-field RMW; for a word packing several fields,
@@ -464,7 +511,7 @@ inline __attribute__((always_inline)) void write(const std::uint32_t value)
  *
  * @tparam A      must be @ref Access::TensixCfgUnit (RISC MMIO is a runtime store).
  * @tparam F      reference to a generated `static constexpr Field`.
- * @tparam S      section (@ref Sec).
+ * @tparam S: Section (@ref Sec); compilation fails when it is outside F.count.
  * @tparam Value  compile-time value to place in the field.
  *
  * @note Only the config-word bytes the field actually covers are emitted

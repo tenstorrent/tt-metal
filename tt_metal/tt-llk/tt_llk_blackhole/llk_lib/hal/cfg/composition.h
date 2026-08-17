@@ -5,8 +5,8 @@
 #pragma once
 
 #include <cstdint>
-#include <type_traits>
 
+#include "access_types.h"
 #include "detail/composition_traits.h"
 #include "field.h"
 
@@ -14,10 +14,17 @@ namespace hal::cfg
 {
 
 /**
- * @brief Absolute config word of field @p F at section @p S (compile-time).
+ * @brief Resolve the absolute config word of a field section at compile time.
+ *
+ * @tparam F: Field whose containing word is resolved.
+ * @tparam S: Repeated descriptor section; compilation fails when it is outside F.count.
  */
 template <const Field& F, Sec S>
-inline constexpr std::uint32_t word_addr = F.addr32(S);
+inline constexpr std::uint32_t word_addr = []
+{
+    static_assert(static_cast<std::uint32_t>(S) < F.count, "section index out of range for this register");
+    return F.addr32(S);
+}();
 
 /**
  * @brief One field assignment, not yet written to hardware.
@@ -61,6 +68,27 @@ struct ConstantFieldAssignment
 };
 
 /**
+ * @brief One destination-bound whole-word GPR transfer.
+ *
+ * Use @ref from_gpr to construct one. Unlike a field assignment, this operation
+ * replaces one or four complete state-CFG words and acts as an ordering barrier
+ * between automatically grouped assignment runs.
+ */
+template <const Field& F, Sec S, typename Source>
+struct GprWrite
+{
+    static_assert(F.file == RegisterFile::State, "GPR-backed CFG writes require a state-CFG destination");
+    static_assert(static_cast<std::uint32_t>(S) < F.count, "section index out of range for this register");
+    static_assert(F.shamt(S) == 0, "GPR-backed CFG writes must start at the beginning of a CFG word");
+
+    static constexpr RegisterFile file   = F.file;
+    static constexpr std::uint32_t addr  = F.addr32(S);
+    static constexpr std::uint32_t words = Source::size == GprTransferSize::Bits128 ? 4u : 1u;
+
+    Source source;
+};
+
+/**
  * @brief Associate a runtime value with a generated CFG field.
  */
 template <const Field& F, Sec S>
@@ -78,8 +106,11 @@ inline constexpr ConstantFieldAssignment<F, S, Value> set()
     return {};
 }
 
+namespace detail
+{
+
 /**
- * @brief A composed physical CFG word.
+ * @brief A composed physical CFG word used only by the write backend.
  *
  * @p Mask is part of the type, allowing the Tensix backend to prune unused
  * RMWCIB byte writes at compile time.
@@ -111,60 +142,6 @@ struct SingleFieldWord
     Assignment assignment;
 };
 
-/**
- * @brief Wrap one assignment as a lazily encoded physical CFG word.
- */
-template <typename Assignment, std::enable_if_t<detail::is_field_assignment_v<Assignment>, int> = 0>
-inline constexpr auto word(const Assignment& assignment)
-{
-    return SingleFieldWord<Assignment> {assignment};
-}
-
-/**
- * @brief Combine assignments occupying the same physical CFG word.
- *
- * Fields may come from different generated structs. Their register file and
- * resolved word address must agree, and their masks must not overlap.
- */
-template <typename First, typename... Rest, std::enable_if_t<(sizeof...(Rest) > 0), int> = 0>
-inline constexpr auto word(const First& first, const Rest&... rest)
-{
-    static_assert(
-        detail::is_field_assignment_v<First> && (detail::is_field_assignment_v<Rest> && ...), "cfg::word() accepts only values returned by cfg::set()");
-    static_assert(((First::file == Rest::file) && ...), "all assignments in cfg::word() must use the same register file");
-    static_assert(((First::addr == Rest::addr) && ...), "all assignments in cfg::word() must resolve to the same physical CFG word");
-    static_assert(detail::assignments_disjoint<First, Rest...>::value, "overlapping CFG field assignments in cfg::word()");
-
-    constexpr std::uint32_t combined_mask = First::mask | (Rest::mask | ... | 0u);
-    return ConfigWord<First::file, First::addr, combined_mask> {detail::encode(first) | (detail::encode(rest) | ... | 0u)};
-}
-
-/**
- * @brief Wrap a prepacked complete CFG word using field @p F as its address.
- *
- * The field must begin at bit zero of the selected word. No field mask is
- * applied: writing the result replaces all 32 bits.
- */
-template <const Field& F, Sec S>
-inline constexpr auto word(const std::uint32_t value)
-{
-    static_assert(F.file == RegisterFile::State, "prepacked CFG words target the state CFG");
-    static_assert(static_cast<std::uint32_t>(S) < F.count, "section index out of range for this register");
-    static_assert(F.shamt(S) == 0, "prepacked CFG word anchor must begin at bit zero");
-
-    return ConfigWord<F.file, F.addr32(S), 0xffffffffu> {value};
-}
-
-/**
- * @brief Wrap a prepacked complete CFG word at an offset from field @p F.
- */
-template <const Field& F, Sec S, std::uint32_t WordOffset>
-inline constexpr auto word_at(const std::uint32_t value)
-{
-    static_assert(F.file == RegisterFile::State, "prepacked CFG words target the state CFG");
-    static_assert(static_cast<std::uint32_t>(S) < F.count, "section index out of range for this register");
-
-    return ConfigWord<F.file, F.addr32(S) + WordOffset, 0xffffffffu> {value};
-}
+} // namespace detail
 
 } // namespace hal::cfg
