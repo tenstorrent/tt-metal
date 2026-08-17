@@ -19,6 +19,11 @@ Measured on Blackhole (p150): DiT-S (32.6M params, patch 4) trains at
 | `sample_from_ckpt.py` | Offline DDIM sampling (with CFG) from a saved checkpoint |
 | `test_device_primitives.py` | On-device gate: every primitive the model relies on, cheapest first |
 | `reference_torch.py`, `test_reference.py` | PyTorch golden model (CPU) mirroring the ttml implementation 1:1 |
+| `edm.py` | EDM (Karras 2022) recipe, host side: preconditioning, batch builders (token + image space), Heun sampler, SongUNet block plan |
+| `edm_ops.py` | Convolutional autograd Functions for ttml: `Conv3x3Im2col`, `GroupNormMoreh`, `AvgPool2x2`/`UpsampleNearest2` (adjoint pair), `Permute`, `ConcatChannels`, `Scale` |
+| `edm_unet.py` | DDPM++ SongUNet (EDM CIFAR-10 config, 56.7M params) on ttml, mirroring `reference_unet.py` 1:1 |
+| `reference_unet.py`, `test_reference_unet.py` | PyTorch golden SongUNet + CPU validation (im2col ROW_ORDER, param count, shape walk, EDM overfit) |
+| `test_edm_primitives.py` | On-device gate for the UNet primitives (run before training the UNet) |
 
 ## Run
 
@@ -43,6 +48,25 @@ python sample_from_ckpt.py -c <training_config.yaml> --ckpt runs/dit/<run>/ckpt_
 CIFAR-10 downloads automatically to `training_config.data_path` on first run.
 `--overfit-batch --max-steps 300` trains on one fixed batch (bring-up sanity:
 loss must collapse).
+
+## SongUNet (convolutional EDM backbone, Phase 1)
+
+The EDM DDPM++ "SongUNet" (Karras 2022 CIFAR-10 config) is implemented on
+ttml with **composite im2col convolutions** — native `ttnn.conv2d` re-preps
+weights host-side on every call when weights change, which is unusable for
+training. Trainable 3x3 conv weights are stored flattened as
+`[1,1,9*C_in,C_out]` matrices with `ROW_ORDER = (kh, kw, c_in)` (see
+`reference_unet.py` for the full spec and the documented deviations from
+official EDM). Activations flow as `[B,1,H*W,C]` channels-last tokens so 1x1
+convs, attention, and all conditioning broadcasts reuse the validated DiT
+machinery; GroupNorm wraps the `ttnn.moreh.group_norm` kernel pair in
+NHWC<->NCHW permutes; avgpool/nearest-upsample are implemented as an exact
+adjoint pair. Bring-up order:
+
+```bash
+python test_reference_unet.py     # CPU (torch): golden model, 56.7M params, overfit
+python test_edm_primitives.py    # device gate: conv/GN/pool/attn fwd+bwd parity
+```
 
 ## Design notes (framework workarounds, kept intentionally visible)
 
