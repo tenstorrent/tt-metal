@@ -130,10 +130,6 @@ inline void noc_async_writes_flushed(uint8_t = 0) { ASSERT(false); }
 namespace tt {
 namespace unified {
 
-#if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
-
-#else
-
 // The CB's *configured* page size, not the data format's tile size --
 // get_tile_size() is derived from unpack_tile_size[] and only coincides with the
 // page size when a page happens to hold exactly one tile.
@@ -141,9 +137,12 @@ namespace unified {
 // fifo_page_size is stored pre-shifted by cb_addr_shift, which is 0 on a
 // data-movement build (bytes) and CIRCULAR_BUFFER_COMPUTE_ADDR_SHIFT on a TRISC
 // (16B words). The shift is written out so this stays right if it ever moves.
+//
+// Defined on every projection, unlike the NOC intrinsics above: both names it
+// needs resolve on a TRISC too (api/compute/cb_api.h uses get_local_cb_interface,
+// and cb_addr_shift has a compute variant). A kernel converting a tile count to a
+// byte offset needs the answer in code shared by all five threads.
 inline uint32_t cb_page_bytes(uint32_t cb) { return get_local_cb_interface(cb).fifo_page_size << cb_addr_shift; }
-
-#endif
 
 }  // namespace unified
 }  // namespace tt

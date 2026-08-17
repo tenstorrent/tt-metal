@@ -27,6 +27,8 @@ inline PhysicalCoord PhysicalCoord::this_core() {
 #endif
 }
 
+inline PhysicalCoord PhysicalCoord::origin() { return LogicalCoord::origin().to_physical(); }
+
 inline uint64_t PhysicalCoord::get_noc_addr(uintptr_t l1_addr) const {
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     // Qualified: this class has a member of the same name.
@@ -44,6 +46,8 @@ inline LogicalCoord LogicalCoord::this_core() {
     return LogicalCoord{0, 0};
 #endif
 }
+
+inline LogicalCoord LogicalCoord::origin() { return LogicalCoord{0, 0}; }
 
 inline PhysicalCoord LogicalCoord::to_physical(uint32_t y_offset, uint32_t x_offset) const {
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
@@ -453,32 +457,24 @@ Block NocAsyncReadCoreTx<thread>::wait() const {
 // --- NocAsyncWriteCoreTx ---
 
 template <int thread>
-NocAsyncWriteCoreTx<thread>::NocAsyncWriteCoreTx(const Storage& dst, const Block& src) :
-    dst_cb(dst.cb_id),
-    dst_tiles(dst.num_tiles),
-    src_cb(src.cb_id),
-    src_tiles(src.num_tiles),
-    arrived(kCopyArrivedSem<thread>) {}
+NocAsyncWriteCoreTx<thread>::NocAsyncWriteCoreTx(
+    const Storage& dst, const Block& src, PhysicalMcast dst_range, uint32_t semaphore_id) :
+    NocAsyncWriteCoreTx(dst, src, dst_range.contains(PhysicalCoord::this_core()), semaphore_id) {}
 
 template <int thread>
 NocAsyncWriteCoreTx<thread>::NocAsyncWriteCoreTx(
-    const Storage& dst, const Block& src, PhysicalMcast rect, bool receiving) :
+    const Storage& dst, const Block& src, bool reader, uint32_t semaphore_id) :
     dst_cb(dst.cb_id),
     dst_tiles(dst.num_tiles),
     src_cb(src.cb_id),
     src_tiles(src.num_tiles),
-    rect(rect),
-    broadcast(true),
-    receiving(receiving),
-    arrived(kCopyArrivedSem<thread>) {}
+    arrived(semaphore_id),
+    reader(reader) {}
 
 template <int thread>
 NocAsyncWriteCoreTx<thread>::~NocAsyncWriteCoreTx() {
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     if constexpr (thread == TT_DM_THREAD_ID) {
-        // Writes have DEPARTED local L1 -- the release condition for a source
-        // buffer. Not the same as having landed. A receiving core issued none,
-        // so this is a no-op for it.
         noc_async_writes_flushed();
         cb_pop_front(src_cb, src_tiles);
     }
@@ -489,24 +485,16 @@ NocAsyncWriteCoreTx<thread>::~NocAsyncWriteCoreTx() {
 }
 
 template <int thread>
-Block NocAsyncWriteCoreTx<thread>::wait() const {
+Block NocAsyncWriteCoreTx<thread>::wait(uint32_t num_writers) const {
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     if constexpr (thread == TT_DM_THREAD_ID) {
-        if (broadcast && receiving) {
-            // A receiving core has nothing of its own in flight. Its data landed
-            // when the sender says so, not when its own NOC goes idle.
-            arrived.wait(1);
-            arrived.set(0);  // rearm for the next push
-        } else {
-            noc_async_write_barrier();  // LANDED at the destination
-            if (broadcast) {
-                // Only now is that true for the receivers too.
-                arrived.inc_mcast(rect);
-            }
+        if (reader) {
+            // Clearing after the count is a window: a writer already into the
+            // next round has its increment erased here, hanging the round after.
+            // Repeated pushes need the caller to keep the rounds apart --
+            // synchronize_cores() between them is enough. See noc_core_write.
+            arrived.wait(num_writers).set(0);
         }
-        // Every core pushes, including a sender outside the rectangle: the
-        // destination address is this core's own write pointer, so the copies have
-        // to advance in step or the next push lands somewhere else.
         cb_push_back(dst_cb, dst_tiles);
     }
 #if defined(ASSERT_ENABLED) && ASSERT_ENABLED
@@ -778,63 +766,77 @@ NocAsyncReadCoreTx<thread> noc_core_read(const Storage& dst, Block src, Physical
 }
 
 template <int thread>
-NocAsyncWriteCoreTx<thread> noc_core_write(const Storage& dst, Block src, PhysicalCoord coord, uint32_t byte_offset) {
+NocAsyncWriteCoreTx<thread> noc_core_write(
+    const Storage& dst, Block src, PhysicalCoord coord, bool write_predicate, uint32_t byte_offset) {
     src.consume();
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     if constexpr (thread == TT_DM_THREAD_ID) {
         cb_wait_front(src.cb_id, src.num_tiles);
         cb_reserve_back(dst.cb_id, dst.num_tiles);
-        const uint32_t bytes = cb_page_bytes(dst.cb_id);
-        const uint64_t to = coord.get_noc_addr(get_write_ptr(dst.cb_id) + byte_offset);
-        noc_async_write(get_read_ptr(src.cb_id), to, bytes * src.num_tiles);
+        if (write_predicate) {
+            const uint32_t bytes = cb_page_bytes(dst.cb_id);
+            const uint64_t to = coord.get_noc_addr(get_write_ptr(dst.cb_id) + byte_offset);
+            noc_async_write(get_read_ptr(src.cb_id), to, bytes * src.num_tiles);
+
+            Semaphore<thread> semaphore(kCopyArrivedSem<thread>);
+            semaphore.inc_remote(coord);
+        }
     }
 #else
     (void)coord;
     (void)byte_offset;
 #endif
-    return NocAsyncWriteCoreTx<thread>(dst, src);
+    return NocAsyncWriteCoreTx<thread>(dst, src, coord, kCopyArrivedSem<thread>);
 }
 
 template <int thread>
-NocAsyncWriteCoreTx<thread> noc_core_write(const Storage& dst, Block src, PhysicalMcast mcast, uint32_t byte_offset) {
+NocAsyncWriteCoreTx<thread> noc_core_write(
+    const Storage& dst, Block src, PhysicalMcast mcast, bool write_predicate, uint32_t byte_offset) {
     static_assert(
         kMcastSemsReserved,
         "a multicast noc_core_write needs its arrival semaphore reserved by the host: build the program "
         "through unified_program(), which reserves it and defines TT_UNIFIED_MCAST_SEM_BASE");
     src.consume();
-    bool receiving = false;
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     if constexpr (thread == TT_DM_THREAD_ID) {
-        // Which side of the exchange this core is on, decided from its own
-        // coordinate -- the same shape as the multicast noc_load handshake.
-        receiving = mcast.contains(PhysicalCoord::this_core());
-
-        // Both sides reserve: the receivers to take delivery, the sender because
-        // its own write pointer is what addresses theirs.
         cb_wait_front(src.cb_id, src.num_tiles);
         cb_reserve_back(dst.cb_id, dst.num_tiles);
 
-        const uint32_t bytes = cb_page_bytes(dst.cb_id);
-        const uint64_t to = mcast.get_noc_addr(get_write_ptr(dst.cb_id) + byte_offset);
+        if (write_predicate) {
+            const uint32_t bytes = cb_page_bytes(dst.cb_id);
+            const uint64_t to = mcast.get_noc_addr(get_write_ptr(dst.cb_id) + byte_offset);
 
-        // Sender-aware count, not num_dests_excluding_sender(): this core is
-        // outside the rectangle, so every core in range is a destination.
-        const uint32_t num_dests = mcast.num_dests_excluding(PhysicalCoord::this_core());
+            // A core inside the rectangle needs its own copy, which plain
+            // multicast skips -- unless src and dst are already the same L1
+            // address, where that copy would be onto itself.
+            const bool same_local_addr = get_write_ptr(dst.cb_id) == get_read_ptr(src.cb_id);
+            const bool loopback = !same_local_addr && mcast.contains(PhysicalCoord::this_core());
 
-        // No destination count on the handle: noc_async_write_multicast adds
-        // num_dests to noc_nonposted_writes_acked at issue time, so the
-        // destructor's flush and wait()'s barrier cover every destination.
-        if (receiving) {
-            noc_async_write_multicast_loopback_src(get_read_ptr(src.cb_id), to, bytes * src.num_tiles, num_dests);
-        } else {
-            noc_async_write_multicast(get_read_ptr(src.cb_id), to, bytes * src.num_tiles, num_dests);
+            // The two primitives count differently: plain multicast never writes
+            // to self and wants self excluded, while the loopback variant does
+            // write to self and wants it counted ("mcasting to an 8x8 grid that
+            // includes self, num_dests should be 64" -- dataflow_api.h). Both
+            // add num_dests to noc_nonposted_writes_acked at issue time, so the
+            // wrong one leaves the write-ack counter skewed for the rest of the
+            // kernel, not merely the transfer.
+            const uint32_t num_dests =
+                loopback ? mcast.volume() : mcast.num_dests_excluding(PhysicalCoord::this_core());
+
+            if (loopback) {
+                noc_async_write_multicast_loopback_src(get_read_ptr(src.cb_id), to, bytes * src.num_tiles, num_dests);
+            } else {
+                noc_async_write_multicast(get_read_ptr(src.cb_id), to, bytes * src.num_tiles, num_dests);
+            }
+
+            Semaphore<thread> semaphore(kCopyArrivedSem<thread>);
+            semaphore.inc_mcast(mcast);
         }
     }
 #else
     (void)mcast;
     (void)byte_offset;
 #endif
-    return NocAsyncWriteCoreTx<thread>(dst, src, mcast, receiving);
+    return NocAsyncWriteCoreTx<thread>(dst, src, mcast, kCopyArrivedSem<thread>);
 }
 
 // The Logical forms translate and forward. `src` moves through, so consume() runs
@@ -846,13 +848,15 @@ NocAsyncReadCoreTx<thread> noc_core_read(const Storage& dst, Block src, LogicalC
 }
 
 template <int thread>
-NocAsyncWriteCoreTx<thread> noc_core_write(const Storage& dst, Block src, LogicalCoord coord, uint32_t byte_offset) {
-    return noc_core_write<thread>(dst, std::move(src), coord.to_physical(), byte_offset);
+NocAsyncWriteCoreTx<thread> noc_core_write(
+    const Storage& dst, Block src, LogicalCoord coord, bool write_predicate, uint32_t byte_offset) {
+    return noc_core_write<thread>(dst, std::move(src), coord.to_physical(), write_predicate, byte_offset);
 }
 
 template <int thread>
-NocAsyncWriteCoreTx<thread> noc_core_write(const Storage& dst, Block src, LogicalMcast mcast, uint32_t byte_offset) {
-    return noc_core_write<thread>(dst, std::move(src), mcast.to_physical(), byte_offset);
+NocAsyncWriteCoreTx<thread> noc_core_write(
+    const Storage& dst, Block src, LogicalMcast mcast, bool write_predicate, uint32_t byte_offset) {
+    return noc_core_write<thread>(dst, std::move(src), mcast.to_physical(), write_predicate, byte_offset);
 }
 
 }  // namespace unified
