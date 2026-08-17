@@ -52,7 +52,6 @@ on:
           - llama3_70b_dp
           - whisper
           - gpt-oss
-          - motif
           - wan22
           - qwen3_32b
           - qwen3_32b_long_context
@@ -69,7 +68,6 @@ on:
           - llama3
           - unit
           - wan22
-          - motif
           - qwenimage
         default: "disabled"
       galaxy-perf:
@@ -83,7 +81,6 @@ on:
           #          - llama70b
           #          - llama_unit_tests
           #          - llama70b_prefill
-          - motif
           #          - sentence_bert
           - wan2-2
           - qwenimage

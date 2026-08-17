@@ -10,7 +10,6 @@ on:
         default: all
         options:
           - all
-          - motif
           - qwenimage
       platform:
         required: false
