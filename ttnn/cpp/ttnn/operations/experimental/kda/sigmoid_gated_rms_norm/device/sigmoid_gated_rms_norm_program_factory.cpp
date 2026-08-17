@@ -10,7 +10,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-#include "../../device/kda_factory_utils.hpp"
+#include "../../factory/kda_factory_utils.hpp"
 
 using namespace tt::tt_metal;
 using namespace tt::constants;
