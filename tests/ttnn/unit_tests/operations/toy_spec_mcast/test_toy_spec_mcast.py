@@ -103,3 +103,48 @@ def test_attach_rejects_unknown_kernel(device, expect_error):
 
     with expect_error(KeyError, "not in the ProgramSpec"):
         family.attach(spec, run_args, kernels=["nope"])
+
+
+def test_attach_rejects_prefix_collision(device, expect_error):
+    """Two families sharing a prefix would silently share semaphores."""
+    from ttnn.mcast_spec import McastFamily
+
+    grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))])
+    cores = [ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0)]
+    kernel = ttnn.KernelSpec(unique_id="r", source="/dev/null", hw_config=ttnn.create_reader_dm_config())
+    spec = ttnn.ProgramSpec(name="t", kernels=[kernel])
+    run_args = ttnn.ProgramRunArgs(kernel_run_args=[ttnn.KernelRunArgs(kernel="r")])
+
+    McastFamily(device, grid, "row", shape=ttnn.Mcast1DShape.PerRow).attach(spec, run_args, kernels=["r"], cores=cores)
+    with expect_error(ValueError, "different prefix"):
+        McastFamily(device, grid, "row", shape=ttnn.Mcast1DShape.PerColumn).attach(
+            spec, run_args, kernels=["r"], cores=cores
+        )
+
+
+def test_declared_vararg_count_shifts_the_family_block(device):
+    """attach derives its base from the declared count, so a kernel that declares varargs without
+    supplying values shifts the family's block. The host validator is what catches it."""
+    from ttnn.mcast_spec import McastFamily
+
+    grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))])
+    cores = [ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0)]
+    kernel = ttnn.KernelSpec(
+        unique_id="r",
+        source="/dev/null",
+        hw_config=ttnn.create_reader_dm_config(),
+        advanced_options=ttnn.KernelAdvancedOptions(num_runtime_varargs=2),  # declared, never supplied
+    )
+    spec = ttnn.ProgramSpec(name="t", kernels=[kernel])
+    run_args = ttnn.ProgramRunArgs(kernel_run_args=[ttnn.KernelRunArgs(kernel="r")])
+
+    family = McastFamily(device, grid, "row", shape=ttnn.Mcast1DShape.PerRow)
+    family.attach(spec, run_args, kernels=["r"], cores=cores)
+
+    # attach honoured the DECLARED count (2), so the family's block starts at vararg index 2 --
+    # but only its own 4 values were ever supplied, at indices 0..3. The device would read the
+    # rect from 2..5. get_vararg is not bounds-checked, so only the host validator catches this,
+    # and only when ttnn.CONFIG.validate_program_args is on.
+    assert dict(spec.kernels[0].compile_time_args)["row_rt_base"] == 2
+    assert spec.kernels[0].advanced_options.num_runtime_varargs == 6
+    assert len(run_args.kernel_run_args[0].advanced_options.runtime_varargs[cores[0]]) == 4
