@@ -47,6 +47,18 @@ LM_HEAD_SIGNPOST = "gemma4_lm_head"
 _MAX_SAMPLING_SHARD_WIDTH = 256 * 1024
 
 
+def force_argmax_sampling_enabled() -> bool:
+    """``GEMMA4_TT_FORCE_ARGMAX=1`` opts on-device sampling into the argmax path.
+
+    When every user in the batch decodes greedily (top_k=1, top_p=1.0,
+    temperature=0), TTSampling can skip the top-k / top-p / RNG pipeline and use
+    a single all-gather + ``ttnn.argmax`` instead. That path is off by default
+    (unset or ``0`` — today's behaviour): the batch still routes through the
+    top-k pipeline, which is exact for greedy and needs no CCL semaphores.
+    """
+    return os.environ.get("GEMMA4_TT_FORCE_ARGMAX", "0").strip().lower() not in ("0", "false", "no", "off", "")
+
+
 def _compute_per_device_vocab(vocab_size, num_tp):
     """Per-device vocab width: tile-aligned then rounded to next power of 2.
 
@@ -503,19 +515,37 @@ class Gemma4Model:
         # tp>1 and shard<=64K, which silently dropped every 1x1 and 1x2 run onto
         # the host path: a full 262144-wide logits row read to CPU per decode step.
         self.sampling = None
+        self._sampling_logits_in_dram = False
         if is_mesh:
             per_device_padded = _compute_per_device_vocab(hf_config.vocab_size, tp)
             if per_device_padded <= _MAX_SAMPLING_SHARD_WIDTH:
-                # tt_ccl=None: TopK path does not need AG semaphores. Force-argmax
-                # (allow_force_argmax) was tried with get_tt_ccl but untilize/argmax
-                # TT_FATALs on WH ("CBs clash with L1 buffers" on core [0-0]).
+                # tt_ccl=None: the TopK path does not need AG semaphores. The
+                # argmax path all-gathers the full logits row and does, so a CCL
+                # is wired only when GEMMA4_TT_FORCE_ARGMAX opts in.
+                force_argmax = force_argmax_sampling_enabled()
+                sampling_tt_ccl = None
+                if force_argmax and mesh_device.get_num_devices() > 1:
+                    from models.common.modules.tt_ccl import get_tt_ccl
+
+                    sampling_tt_ccl = get_tt_ccl(mesh_device)
+                    logger.info("GEMMA4_TT_FORCE_ARGMAX=1: sampling gets its own CCL for the argmax all-gather")
                 self.sampling = SamplingGenerator(
-                    args=self._make_sampling_args(hf_config, mesh_device, tp),
+                    args=self._make_sampling_args(hf_config, mesh_device, tp, force_argmax=force_argmax),
                     mesh_device=mesh_device,
-                    tt_ccl=None,
+                    tt_ccl=sampling_tt_ccl,
                 )
+                # The argmax path all-gathers the full vocab row into the logits'
+                # own memory config and then untilizes it. Decode lm_head writes
+                # L1-interleaved (lm_head_decode_config), so a 262144-wide bf16
+                # gather parks ~16.7 MB in L1 and untilize's CBs then collide with
+                # it ("statically allocated circular buffers ... clash with L1
+                # buffers on core [0-0]"). Land decode logits in DRAM instead when
+                # this path is armed; the top-k path is unaffected because it only
+                # gathers 32-wide top-k results.
+                self._sampling_logits_in_dram = force_argmax
                 logger.info(
-                    f"On-device sampling initialized (vocab={hf_config.vocab_size}, per_device={per_device_padded})"
+                    f"On-device sampling initialized (vocab={hf_config.vocab_size}, "
+                    f"per_device={per_device_padded}, force_argmax={force_argmax})"
                 )
         # Generator/vLLM entry points gate on this flag (and sampling != None).
         self._supports_on_device_sampling = self.sampling is not None
@@ -570,8 +600,13 @@ class Gemma4Model:
         ttnn.copy_host_to_device_tensor(host, self.prefill_valid_len_dev)
 
     @staticmethod
-    def _make_sampling_args(hf_config, mesh_device, tp):
-        """Create minimal args object for SamplingGenerator/TTSampling."""
+    def _make_sampling_args(hf_config, mesh_device, tp, force_argmax=False):
+        """Create minimal args object for SamplingGenerator/TTSampling.
+
+        ``force_argmax`` (from ``GEMMA4_TT_FORCE_ARGMAX``) publishes the
+        SAMPLING_AG_CONFIG that TTSampling reads to allow its argmax path; the
+        default leaves model_config empty, so allow_force_argmax stays False.
+        """
 
         class _Args:
             pass
@@ -586,6 +621,15 @@ class Gemma4Model:
         args.num_devices = mesh_device.get_num_devices()
         args.is_galaxy = mesh_device.shape[0] > 1
         args.model_config = {}
+        if force_argmax:
+            from models.demos.gemma4.tt.ccl import ccl_chunks_per_sync, default_ccl_topology, default_num_links
+
+            args.model_config["SAMPLING_AG_CONFIG"] = {
+                "allow_force_argmax": True,
+                "num_links": default_num_links(),
+                "chunks_per_sync": ccl_chunks_per_sync(),
+                "topology": default_ccl_topology(mesh_device),
+            }
         args.use_topk_logprobs = False
         return args
 
@@ -1114,6 +1158,10 @@ class Gemma4Model:
             k = self.hidden_size
             n = self.lm_head_weight.shape[-1]
             program_config, out_memcfg, compute_kernel_config = lm_head_decode_config(self.mesh_device, m, k, n)
+            if is_decode and allow_sharded and self._sampling_logits_in_dram and out_memcfg is not None:
+                # GEMMA4_TT_FORCE_ARGMAX: keep the logits out of L1 so the
+                # full-vocab gather + untilize in TTSampling has L1 for its CBs.
+                out_memcfg = ttnn.DRAM_MEMORY_CONFIG
             from models.demos.gemma4.tt.attention.operations import hoist_prefill_matmul_in0_if_needed
 
             act, act_l1 = hoist_prefill_matmul_in0_if_needed(hidden_states, program_config)
