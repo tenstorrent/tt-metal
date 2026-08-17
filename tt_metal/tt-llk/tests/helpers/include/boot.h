@@ -26,6 +26,26 @@ extern void (*__init_array_end[])(void);
 // even though -fno-asynchronous-unwind-tables -fno-exceptions flags are set
 void* __gxx_personality_v0;
 
+// Typed-region declaration markers (compiler prgm-const freedom proof; trusted
+// like sfprawlreg_access, CRAQ is the check).  The markers emit no instruction
+// word, but they live in the IR as volatile ghosts and can shift surrounding
+// scalar scheduling, so they are opt-in: builds that enable the prgm-const
+// optimization define LLK_ENABLE_TTREGION_MARKERS next to the -m flag; every
+// other build (and any toolchain without the builtins) compiles the plain
+// unmarked code, byte-identically.
+#ifndef TT_LLK_TTREGION_BEGIN
+#if defined(LLK_ENABLE_TTREGION_MARKERS) && defined(__has_builtin)
+#if __has_builtin(__builtin_rvtt_ttregion_begin)
+#define TT_LLK_TTREGION_BEGIN(config_write_mask, reserved) __builtin_rvtt_ttregion_begin((config_write_mask), (reserved))
+#define TT_LLK_TTREGION_END()                              __builtin_rvtt_ttregion_end()
+#endif
+#endif
+#ifndef TT_LLK_TTREGION_BEGIN
+#define TT_LLK_TTREGION_BEGIN(config_write_mask, reserved)
+#define TT_LLK_TTREGION_END()
+#endif
+#endif
+
 __attribute__((no_profile_instrument_function)) TT_ALWAYS_INLINE void do_crt0()
 {
     asm volatile(
@@ -59,7 +79,13 @@ __attribute__((no_profile_instrument_function)) TT_ALWAYS_INLINE void do_crt0()
     // Execute global constructors
     for (void (**temp_constructor)(void) = __init_array_start; temp_constructor < __init_array_end; temp_constructor++)
     {
+        // Typed effects declaration for the init-array walk: the constructors
+        // are this translation unit's own scanned bodies -- the indirect call
+        // writes no SFPCONFIG destination, no PRGM register, and no LaneConfig
+        // (mask 0).  Markers sit in the loop-body block with the call they cover.
+        TT_LLK_TTREGION_BEGIN(0, 0);
         (*temp_constructor)();
+        TT_LLK_TTREGION_END();
     }
 }
 
