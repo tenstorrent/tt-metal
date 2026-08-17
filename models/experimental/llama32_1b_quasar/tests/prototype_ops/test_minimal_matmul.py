@@ -22,7 +22,7 @@ Reference is ``x @ w``; large-K (INTERMEDIATE=8192) uses a looser pcc.
 import pytest
 
 import ttnn
-from models.experimental.llama32_1b_quasar.tests.ops import op_utils as U
+from models.experimental.llama32_1b_quasar.tests.prototype_ops import op_utils as U
 
 # Only the prefill lengths above the minimal_matmul threshold (seq_len > 128).
 _MM_SEQ_LENS = [s for s in U.PREFILL_SEQ_LENS if s > 128]

@@ -21,7 +21,7 @@ Value-preserving -> torch reference is a plain narrow; PCC 0.999.
 import pytest
 
 import ttnn
-from models.experimental.llama32_1b_quasar.tests.ops import op_utils as U
+from models.experimental.llama32_1b_quasar.tests.prototype_ops import op_utils as U
 
 # (id, seq_len, last_token) grounded in real prefill sequence lengths (U.PREFILL_SEQ_LENS).
 _SLICE_SITES = [

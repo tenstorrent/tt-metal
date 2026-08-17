@@ -24,7 +24,7 @@ mirroring the CCL unit tests. We assert shape/dtype of the gathered output.
 import pytest
 
 import ttnn
-from models.experimental.llama32_1b_quasar.tests.ops import op_utils as U
+from models.experimental.llama32_1b_quasar.tests.prototype_ops import op_utils as U
 
 # CCL collective — needs a multi-device mesh. The (1, 2) parametrization below is
 # skipped automatically by the ttnn_mesh_device fixture on single-device systems
@@ -42,8 +42,6 @@ def test_all_gather_async(ttnn_mesh_device, reset_seeds):
     mesh = ttnn_mesh_device
     if tuple(mesh.shape) == (1, 1):
         pytest.skip("multi-device op")
-
-    num_devices = max(tuple(mesh.shape))
 
     shape = (1, 1, U.MAX_BATCH, U.DIM)
     x_torch = U.torch_rand(shape)
@@ -67,5 +65,6 @@ def test_all_gather_async(ttnn_mesh_device, reset_seeds):
         num_buffers_per_channel=2,
     )
 
-    assert gathered.shape[-1] == (U.DIM // num_devices) * num_devices
-    U.assert_shape_dtype(gathered, dtype=ttnn.bfloat16, finite=False)
+    # Gathered result is the original (pre-shard) tensor; auto_compose returns one replica.
+    assert gathered.shape[-1] == U.DIM, f"gathered width {gathered.shape[-1]} != full {U.DIM}"
+    U.assert_pcc(x_torch, gathered, pcc=0.999, mesh_device=mesh)

@@ -25,7 +25,7 @@ from models.experimental.llama32_1b_quasar.modules.tt_ccl import (
     CCL_NUM_WORKERS_PER_LINK,
     get_tt_ccl,
 )
-from models.experimental.llama32_1b_quasar.tests.ops import op_utils as U
+from models.experimental.llama32_1b_quasar.tests.prototype_ops import op_utils as U
 
 # CCL + matmul fused op — needs a multi-device mesh. The (1, 2) parametrization below
 # is skipped automatically by the ttnn_mesh_device fixture on single-device systems
@@ -71,5 +71,8 @@ def test_all_gather_matmul_async(ttnn_mesh_device, reset_seeds, batch):
         num_buffers_per_channel=CCL_NUM_BUFFERS_PER_CHANNEL,
     )
 
-    # After all-gather over dim=3 (K = Q_DIM full) and matmul with WO, output width = DIM.
+    # After all-gather over dim=3 (K = Q_DIM full) and matmul with the column-sharded WO, each device
+    # produces its output-column slice; auto_compose concatenates them back to full [1,1,m,DIM] = x @ WO.
+    ref = x_torch.float() @ w_torch.float()
     U.assert_shape_dtype(dense_out, shape=(1, 1, m, U.DIM), mesh_device=mesh)
+    U.assert_pcc(ref, dense_out, pcc=0.99, mesh_device=mesh)

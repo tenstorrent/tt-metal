@@ -26,7 +26,7 @@ single-core grid, which makes the passed shape the exact per-core shard shape.
 import pytest
 
 import ttnn
-from models.experimental.llama32_1b_quasar.tests.ops import op_utils as U
+from models.experimental.llama32_1b_quasar.tests.prototype_ops import op_utils as U
 
 # Single-core grid: with use_height_and_width_as_shard_shape=True the passed
 # shape IS the per-core shard shape, so a (1,1,H,W) tensor maps exactly.

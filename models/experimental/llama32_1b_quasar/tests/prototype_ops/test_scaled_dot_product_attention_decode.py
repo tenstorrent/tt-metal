@@ -28,7 +28,7 @@ import pytest
 import torch
 
 import ttnn
-from models.experimental.llama32_1b_quasar.tests.ops import op_utils as U
+from models.experimental.llama32_1b_quasar.tests.prototype_ops import op_utils as U
 
 # KV-cache sequence capacity and the current decode position (same for all users).
 CACHE_SEQ = 256

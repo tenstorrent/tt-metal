@@ -21,7 +21,7 @@ import pytest
 import torch
 
 import ttnn
-from models.experimental.llama32_1b_quasar.tests.ops import op_utils as U
+from models.experimental.llama32_1b_quasar.tests.prototype_ops import op_utils as U
 
 # (id, batch, width) — width split in half along dim=3.
 _SPLIT_SITES = [

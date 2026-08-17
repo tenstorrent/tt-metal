@@ -26,7 +26,7 @@ assert output shape / dtype / finiteness.
 import pytest
 
 import ttnn
-from models.experimental.llama32_1b_quasar.tests.ops import op_utils as U
+from models.experimental.llama32_1b_quasar.tests.prototype_ops import op_utils as U
 
 
 @U.with_default_mesh()
@@ -55,3 +55,7 @@ def test_nlp_concat_heads_decode(ttnn_mesh_device, reset_seeds, batch):
         dtype=ttnn.bfloat16,
         mesh_device=mesh,
     )
+    # Concat is a pure reshape [1, batch, heads, head_dim] -> [1, 1, batch, heads*head_dim]; check the real
+    # (unpadded) batch rows -- assert_pcc trims got to the reference's element count (drops the tile-pad tail).
+    ref = attn_torch.reshape(1, 1, batch, U.N_HEADS * U.HEAD_DIM)
+    U.assert_pcc(ref, attn_output_cat, pcc=0.999, mesh_device=mesh)

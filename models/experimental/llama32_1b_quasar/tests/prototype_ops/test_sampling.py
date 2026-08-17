@@ -36,7 +36,7 @@ import pytest
 import torch
 
 import ttnn
-from models.experimental.llama32_1b_quasar.tests.ops import op_utils as U
+from models.experimental.llama32_1b_quasar.tests.prototype_ops import op_utils as U
 
 # ttnn.sampling deadlocks inside its device kernels on the Quasar emulator: the
 # sampling core (worker 0,0) stalls with BRISC at CWFW (cb_wait_front, waiting for
@@ -46,6 +46,7 @@ from models.experimental.llama32_1b_quasar.tests.ops import op_utils as U
 # The default token-accuracy path uses SAMPLING_MODE=host (host argmax) and never calls
 # ttnn.sampling, so this does not affect the emulator token-accuracy run. Skipped until
 # the sampling kernel deadlock is investigated on device/LLK.
+# See: https://github.com/tenstorrent/tt-llk/issues/1352
 pytestmark = pytest.mark.skip(
     reason="ttnn.sampling device kernels deadlock on Quasar emulator (CWFW/MWDD); host argmax used on token-accuracy path"
 )

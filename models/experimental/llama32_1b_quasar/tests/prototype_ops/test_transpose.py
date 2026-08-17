@@ -20,7 +20,7 @@ import pytest
 import torch
 
 import ttnn
-from models.experimental.llama32_1b_quasar.tests.ops import op_utils as U
+from models.experimental.llama32_1b_quasar.tests.prototype_ops import op_utils as U
 
 # (id, shape, dim0, dim1) — rope transposes dims (1, 2) of [1, 1, batch, head_dim].
 _TRANSPOSE_SITES = [

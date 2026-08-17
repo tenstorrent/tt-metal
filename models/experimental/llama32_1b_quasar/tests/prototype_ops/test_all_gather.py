@@ -22,7 +22,7 @@ multi-device).
 import pytest
 
 import ttnn
-from models.experimental.llama32_1b_quasar.tests.ops import op_utils as U
+from models.experimental.llama32_1b_quasar.tests.prototype_ops import op_utils as U
 
 # CCL collective — needs a multi-device mesh. The (1, 2) parametrization below is
 # skipped automatically by the ttnn_mesh_device fixture on single-device systems
@@ -37,7 +37,6 @@ def test_all_gather(ttnn_mesh_device, reset_seeds):
         pytest.skip("multi-device op")
 
     cluster_shape = tuple(mesh.shape)
-    num_devices = max(cluster_shape)
     cluster_axis = None if 1 in cluster_shape else 0
 
     # Full tensor sharded along the last dim across devices (each device holds DIM/num_devices).
@@ -54,8 +53,7 @@ def test_all_gather(ttnn_mesh_device, reset_seeds):
         topology=ttnn.Topology.Linear,
     )
 
-    # After gather each device holds the full width again.
-    assert (
-        gathered.shape[-1] == (U.DIM // num_devices) * num_devices
-    ), f"gathered width {gathered.shape[-1]} != full {U.DIM}"
-    U.assert_shape_dtype(gathered, dtype=ttnn.bfloat16, finite=False)
+    # After gather each device holds the full width again -> the gathered result is the original
+    # (pre-shard) tensor (auto_compose returns a single replica), so x_torch is the direct reference.
+    assert gathered.shape[-1] == U.DIM, f"gathered width {gathered.shape[-1]} != full {U.DIM}"
+    U.assert_pcc(x_torch, gathered, pcc=0.999, mesh_device=mesh)

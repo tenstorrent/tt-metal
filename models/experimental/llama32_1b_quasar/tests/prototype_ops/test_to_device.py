@@ -16,13 +16,15 @@ import pytest
 import torch
 
 import ttnn
-from models.experimental.llama32_1b_quasar.tests.ops import op_utils as U
+from models.experimental.llama32_1b_quasar.tests.prototype_ops import op_utils as U
+from models.experimental.llama32_1b_quasar.utility_functions import nearest_32
 
 
 @U.with_default_mesh()
 @pytest.mark.parametrize(
     "shape",
-    [pytest.param((1, U.TILE * b), id=f"rot_idxs-batch{b}") for b in U.DECODE_BATCHES]
+    # rot_idxs: prepare_rot_idxs pads [batch] -> [1, nearest_32(batch)] (rope_1d.py), i.e. 32 for both decode batches.
+    [pytest.param((1, nearest_32(b)), id=f"rot_idxs-batch{b}") for b in U.DECODE_BATCHES]
     + [pytest.param((1, 1, seq, U.DIM), id=f"activation-seq{seq}") for seq in U.PREFILL_SEQ_LENS],
 )
 @pytest.mark.parametrize("uint", [True, False], ids=["uint32", "bf16"])

@@ -25,7 +25,7 @@ import pytest
 import torch
 
 import ttnn
-from models.experimental.llama32_1b_quasar.tests.ops import op_utils as U
+from models.experimental.llama32_1b_quasar.tests.prototype_ops import op_utils as U
 
 BLOCK_SIZE = 64  # paged KV block size (tile-aligned)
 

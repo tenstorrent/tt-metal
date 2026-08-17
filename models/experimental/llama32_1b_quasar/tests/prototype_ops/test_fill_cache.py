@@ -22,7 +22,7 @@ input (PCC 0.999 on the slice).
 import pytest
 
 import ttnn
-from models.experimental.llama32_1b_quasar.tests.ops import op_utils as U
+from models.experimental.llama32_1b_quasar.tests.prototype_ops import op_utils as U
 
 
 @U.with_default_mesh()

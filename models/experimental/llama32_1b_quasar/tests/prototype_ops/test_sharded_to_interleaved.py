@@ -21,7 +21,7 @@ NOTE: single-core grid so the passed shape is the exact per-core shard shape.
 import pytest
 
 import ttnn
-from models.experimental.llama32_1b_quasar.tests.ops import op_utils as U
+from models.experimental.llama32_1b_quasar.tests.prototype_ops import op_utils as U
 
 _GRID = ttnn.CoreGrid(y=1, x=1)
 

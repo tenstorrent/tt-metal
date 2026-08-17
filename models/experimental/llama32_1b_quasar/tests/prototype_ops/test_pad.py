@@ -25,7 +25,7 @@ import pytest
 import torch.nn.functional as F
 
 import ttnn
-from models.experimental.llama32_1b_quasar.tests.ops import op_utils as U
+from models.experimental.llama32_1b_quasar.tests.prototype_ops import op_utils as U
 
 # (id, seq_len, pad_to) — seq_len values are tile-sub-multiples padded up to a tile-aligned length.
 _PAD_SITES = [

@@ -16,7 +16,7 @@ elementwise product in torch.
 import pytest
 
 import ttnn
-from models.experimental.llama32_1b_quasar.tests.ops import op_utils as U
+from models.experimental.llama32_1b_quasar.tests.prototype_ops import op_utils as U
 
 _SHAPES = [pytest.param((1, 1, seq, U.DIM), id=f"prefill-seq{seq}") for seq in U.PREFILL_SEQ_LENS] + [
     pytest.param((1, 1, batch, U.DIM), id=f"decode-batch{batch}") for batch in U.DECODE_BATCHES

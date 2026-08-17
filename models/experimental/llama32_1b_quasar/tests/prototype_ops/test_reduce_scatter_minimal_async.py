@@ -25,7 +25,7 @@ assert shape/dtype.
 import pytest
 
 import ttnn
-from models.experimental.llama32_1b_quasar.tests.ops import op_utils as U
+from models.experimental.llama32_1b_quasar.tests.prototype_ops import op_utils as U
 
 # CCL collective — needs a multi-device mesh. The (1, 2) parametrization below is
 # skipped automatically by the ttnn_mesh_device fixture on single-device systems
@@ -70,6 +70,7 @@ def test_reduce_scatter_minimal_async(ttnn_mesh_device, reset_seeds):
         num_buffers_per_channel=2,
     )
 
-    # reduce-scatter scatters the reduced result along dim 3 -> width / num_devices per device.
+    # reduce-scatter sums the replicated input across devices then scatters along dim 3 -> width/num_devices
+    # per device. Every device was fed the same x, so the composed (concatenated) result is num_devices * x.
     assert reduced.shape[-1] == U.DIM // num_devices, f"scattered width {reduced.shape[-1]} != {U.DIM // num_devices}"
-    U.assert_shape_dtype(reduced, dtype=ttnn.bfloat16, finite=False)
+    U.assert_pcc(x_torch.float() * num_devices, reduced, pcc=0.999, mesh_device=mesh)
