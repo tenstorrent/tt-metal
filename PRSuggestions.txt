@@ -80,7 +80,11 @@ single p150b. Seven things worth fixing. Points 5 and 6 are one line each.
       0.95 end to end, and the gate documents 0.99 as required. The command line passes 0.95 and that
       is the one that wins. Bring-up then prints the next command to run without any threshold, so
       copying what it just gave you gets 0.95.
-    - Fix: make the docs and the defaults agree, and print the target that was used.
+    - Fix: 0.99 everywhere, and make the docs agree. The components, the matmul sweep and the gate's
+      own default already use it, the end to end value passed on the command line is the only 0.95.
+      That looser bar does not only permit a worse model, it produces one: the same code scored 0.9586
+      at 0.95 and 0.9986 at 0.99, because the repair loop stops as soon as it clears. Also print the
+      target that was used.
 
 6. The correctness gate accepts values that cannot be correlations
     - It reported a PCC of 33.612 and marked it verified against a threshold of 0.99. Nothing checks
