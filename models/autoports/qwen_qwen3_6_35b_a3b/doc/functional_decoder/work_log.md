@@ -356,3 +356,16 @@ TT_METAL_LOGS_PATH=models/autoports/qwen_qwen3_6_35b_a3b/doc/functional_decoder/
 | determinism / repeated input | `test_prefill_determinism`, `test_decode_determinism` (bit-identical over 3 repeats) |
 | watcher-clean run | `watcher/` — 8 passed, 17262-line log, `watcher_hits.txt` empty (README §3.9) |
 | README + work log with commands, PCC, perf, limitations, artifacts | this file + `README.md` |
+
+## 9. Commits
+
+Local only; nothing pushed.
+
+| SHA | contents |
+|---|---|
+| `12c947d9147670eb0b3a9b23136635b89de709f3` (`12c947d9147`) | the whole stage: `models/autoports/qwen_qwen3_6_35b_a3b/**` plus the `conftest.py` guarded-import fix (§7 item 4 of the README) |
+
+Pre-commit reformatted the Python sources (black/isort/autoflake — formatting only, no import
+or semantic changes) and rejected two >500 KB artifacts; the full suite was re-run after the
+reformat (**95 passed**) before committing, and the artifact policy is documented in
+`tracy/README.md`.
