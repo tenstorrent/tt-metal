@@ -38,12 +38,10 @@
       prompt, and make the log say what it used.
 
 4. The decode step exists twice, and speed and correctness were measured on different ones
-    - Speech is generated one audio frame at a time, and every frame needs a pass through the
-      backbone. The generated code ends up with two versions of that pass. The one the demo runs has
-      no KV cache. A second one, written later so the work could be recorded and replayed on the
-      device, does have a cache. Correctness was measured on the first, speed on the second. It
-      reported 17.2% faster; what ships got 13.2%, 297.69 to 258.26 ms per audio frame. Our hand
-      written port of the same model on the same board runs at 26.9 ms.
+    - There are two versions of the decode pass. The one the demo runs has no KV cache. A second one,
+      written later so the work could be recorded and replayed on the device, does have a cache.
+      Correctness was measured on the first and speed on the second, so the improvement that reaches
+      the shipped path is smaller than the one reported, because it is not the same code.
     - Why the shipped one has no cache goes back to bring-up. The cache is one of the arguments point
       3 drops, so the component was never tested with one. The saved example does hold a real cache,
       but the same object is handed to the reference and then to the port, and the reference writes
