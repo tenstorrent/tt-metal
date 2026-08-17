@@ -499,3 +499,75 @@ The non-greedy arms on Diamond row 0 are queued in `release_grading_probe.py`
 with low repetition**, and at least one produces the correct `\boxed{A}`. If a non-greedy
 arm *also* loops, then sampling is not sufficient and a repetition penalty is required —
 which would still be a configuration fix rather than a port fix.
+
+---
+
+## Probe results in full, and one open risk they surface
+
+Measured 2026-08-17 with `tests/thinking_mode_probe.py` against the autoport at
+`max_num_seqs=1`, no reasoning parser, temperature 0.0 unless the arm says otherwise.
+
+| case | tokens | finish_reason | 12-gram rep | `</think>` in output | boxed | correct |
+|---|---:|---|---:|---:|---|---|
+| `trivial_thinkOFF` | **2** / 128 | stop | 0.0% | absent | — | — |
+| `easy_thinkOFF` | 472 / 1024 | stop | 0.0% | absent | `A` | **yes** |
+| `diamond0_thinkOFF` | **1,849** / 4,096 | stop | 0.0% | absent | `A` | **yes** |
+| `diamond0_thinkON` | **16,384** / 16,384 | length | **50.06%** | absent | — | no |
+
+The loop is explicit. The most-repeated 12-gram in the thinking-ON run occurs **1,241
+times**:
+
+```
+'110^{-64} 110^{-64} 110^{-64} 110^{-64} 110^{-64} 110^{-64} 110^{-64} '
+```
+
+against the thinking-OFF run on the same question, which opens
+
+```
+'To determine the minimum energy difference required to clearly distinguish (resolve) two'
+```
+
+and reaches the correct answer in 1,849 tokens.
+
+`diamond1_thinkON` (organic chemistry) was stopped mid-generation to free the devices for
+the `r1_gpqa_diamond` run; it is not in the table. Whether the loop is domain-general is
+therefore untested, though the `r1_gpqa_diamond` run covers ten real documents and will
+answer it incidentally.
+
+### The open risk: does a *successful* thinking-ON response emit `</think>`?
+
+Note the fourth column: `</think>` is absent from the generated output in **every** case.
+For the three thinking-OFF arms that is expected and correct — the template puts
+`<think>\n\n</think>\n\n` in the *prompt*, so the model never generates it. For the
+looping arm it is expected too.
+
+What is **not** covered by this table is a thinking-ON response that terminates
+successfully. The earlier stop-token probe produced one — the easy physics item, 1,362
+tokens, `finish_reason=stop`, ending `...matches option (A).\n\n\boxed{A}` — but that
+probe did not record whether `</think>` appeared, and it saved only the head and tail of
+the text, so it cannot be checked after the fact.
+
+This matters because of how the release's reasoning parser behaves. From
+`vllm/reasoning/qwen3_reasoning_parser.py`, if `</think>` is absent and thinking is
+enabled, the parser returns `(model_output, None)` — **everything becomes
+`reasoning_content` and `content` is empty**. lm-eval grades `content`.
+
+So there are two possibilities, with very different consequences:
+
+- **the model does emit `</think>` on success** — the parser splits correctly, `content`
+  holds the short final answer, and GPQA grading works cleanly once the budget and
+  sampling are right;
+- **the model does not emit `</think>`** — then even a correct, terminating answer yields
+  empty `content` under the release configuration, and GPQA scores 0 regardless of budget
+  or sampling. That would be a genuine defect in the interaction between this port and
+  the release's parser choice, not a task-config issue.
+
+`tests/release_grading_probe.py`, queued next, is what distinguishes these: it runs with
+`--reasoning_parser qwen3` active and reports `content` and `reasoning_content` lengths
+separately for every arm. The `r1_gpqa_diamond` run now executing also carries the parser,
+so its per-sample outputs will show the same thing at scale.
+
+Recording this before the results arrive so the prediction is falsifiable: I expect the
+model **does** emit `</think>` when it converges, because the chat template's own
+multi-turn branch parses prior assistant messages by splitting on `'</think>'`
+(`{%- if '</think>' in content %}`), which only makes sense if the model produces it.
