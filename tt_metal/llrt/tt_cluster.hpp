@@ -368,8 +368,6 @@ public:
 
     // Returns whether IOMMU is enabled on the system (cached at init time)
     bool is_iommu_enabled() const;
-    // Returns whether NOC mapping is enabled on the system (cached at init time)
-    bool is_noc_mapping_enabled() const;
 
     tt::tt_metal::ClusterType get_cluster_type() const;
 
