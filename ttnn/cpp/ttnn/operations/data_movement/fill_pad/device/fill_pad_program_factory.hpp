@@ -81,6 +81,18 @@ inline std::string get_where_data_fmt(ttnn::DataType dtype) {
     }
 }
 
+// Product of all dimensions except the last two (H, W). Matches fill_implicit_tile_padding's rank-3 collapse.
+inline std::uint32_t num_slice_batches(const tt::tt_metal::Shape& logical_shape) {
+    if (logical_shape.rank() <= 2) {
+        return 1u;
+    }
+    std::uint32_t n_slices = 1u;
+    for (std::uint32_t i = 0; i < logical_shape.rank() - 2; ++i) {
+        n_slices *= logical_shape[i];
+    }
+    return n_slices;
+}
+
 }  // namespace ttnn::prim::detail
 
 namespace ttnn::prim {

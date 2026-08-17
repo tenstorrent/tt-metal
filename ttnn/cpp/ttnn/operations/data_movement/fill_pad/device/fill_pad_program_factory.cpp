@@ -83,7 +83,7 @@ ttnn::device_operation::ProgramArtifacts FillPadProgramFactory::create_program_a
 
     const std::uint32_t height = input_tensor.logical_shape()[-2];
     const std::uint32_t width = input_tensor.logical_shape()[-1];
-    const std::uint32_t N_slices = input_tensor.logical_shape().rank() > 2 ? input_tensor.logical_shape()[-3] : 1u;
+    const std::uint32_t N_slices = detail::num_slice_batches(input_tensor.logical_shape());
 
     const std::uint32_t tile_height = input_tensor.tensor_spec().tile().get_height();
     const std::uint32_t tile_width = input_tensor.tensor_spec().tile().get_width();
@@ -366,7 +366,7 @@ ttnn::device_operation::ProgramArtifacts FillPadL1ShardedProgramFactory::create_
 
     const std::uint32_t height = input_tensor.logical_shape()[-2];
     const std::uint32_t width = input_tensor.logical_shape()[-1];
-    const std::uint32_t N_slices = input_tensor.logical_shape().rank() > 2 ? input_tensor.logical_shape()[-3] : 1u;
+    const std::uint32_t N_slices = detail::num_slice_batches(input_tensor.logical_shape());
 
     TT_FATAL(N_slices == 1, "FillPadL1ShardedProgramFactory: N_slices > 1 not yet supported (got {})", N_slices);
 
