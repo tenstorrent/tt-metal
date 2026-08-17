@@ -365,15 +365,17 @@ streams the column split produces --- hence the gate
 The parallel term carries its applicability boundary: the tree
 converts cores into \emph{latency} at ${\approx}1.0$ core-efficiency
 --- $P{=}2$ costs 183.0\us{} (\S\ref{sec:eval-scaling}), 366
-core-\textmu s per row, against the shipped per-row kernel's 357.0\us{}
-on one core ($+2.5\%$) --- so the $10.4\times$ serves latency-bound
-low-row callers (the decode-shape indexer, low-batch tails), while
-callers with rows ${\geq}$ grid are already core-optimal on the
-one-core-per-row layout: the 160-row prefill indexer of
-Table~\ref{tab:scenarios} measures 712.3\us{}, almost exactly two
-130-core row-waves of that kernel ($2 \times 357.0$), reported there
-as $1.00\times$/$0.80\times$. Cutting per-core work at
-that shape is the fusion lever below, not more cores.
+core-\textmu s per row vs the shipped kernel's 357.0 on one core
+($+2.5\%$) --- so the $10.4\times$ serves latency-bound low-row
+callers, while callers with rows ${\geq}$ grid are core-optimal on
+one-core-per-row \emph{except} for the idle remainder wave, which a
+hybrid landing now harvests: rows past the full row-parallel waves run
+as concurrent per-row merge trees on the cores the last wave would
+idle, inside the op (no call-site change). The 160-row indexer of
+Table~\ref{tab:scenarios} --- 712.3\us{} $\approx 2\times357.0$ at the
+table's pinning --- measures 467.0\us{} on the final tree
+($1.53\times$; the $k{=}512$ sibling $559.5 \to 358.3$\us{},
+$1.56\times$). Cutting per-core work is the fusion lever below.
 One term is structural: selection, never sorting --- only
 $M$-wide candidate windows cross the NoC, $P{-}1$ in total
 (Fig.~\ref{fig:operator}, \S\ref{sec:tree}). Why these moves and not

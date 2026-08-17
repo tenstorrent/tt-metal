@@ -95,9 +95,12 @@
   cell. The tree converts cores into latency at ≈1.0 core-efficiency (P=2 measures 183.0 µs = 366 core-µs/row vs the
   shipped op's 357.0 core-µs on one core, +2.5% — core-time-neutral), so the 10.4× serves latency-bound low-row callers
   (decode-shape indexer top-k, low-batch tails) and every routed <code>ttnn.topk</code> site. Callers with rows ≥ grid are
-  already core-optimal on the shipped 1-core-per-row layout: the GLM/DSA prefill production cell (160 rows) measures
-  712.3 µs ≈ exactly two row-waves of the shipped per-row kernel (2 × 357.0) — which is why the scenario table honestly
-  reports it 1.0×. Reducing per-core work there is the fusion lever.</p>
+  core-optimal on the shipped 1-core-per-row layout <em>except for the idle remainder wave — now harvested</em>
+  (26abf46feee): the op internally splits rows &gt; grid into full row-parallel waves plus a multi-rectangle remainder
+  (one P-core tree per leftover row on the otherwise-idle cores) and concats. The GLM/DSA prefill cell (160 rows,
+  712.3 µs ≈ 2 × 357.0 at the scenario table's pinning) measures <strong>467.0 µs (1.53×)</strong> on the final tree;
+  the DS-V4 k=512 sibling 559.5 → <strong>358.3 µs (1.56×)</strong>. Zero call-site changes. Reducing per-core work
+  is the remaining fusion lever.</p>
 
   <div class="takeaway">
     <b class="num">12,265×</b><span>The user-facing win: <code>ttnn.topk</code> at the anchor shape went from 631.5 <em>milli</em>seconds to 51.5 <em>micro</em>seconds (tree-powered, TILE-native I/O, values and indices, full test parity); k=512@65536 is 161.6 ms → 20.9 µs (7,732×). The k&gt;64 cliff no longer exists — and neither does the k≤64 one: wide/non-pow2 small-k rows that fell to the linear single-core factory (9.49–17.95 ms at N=65536, 695 µs at N=5000) now route too, at 40–423× — and so do the MoE expert gates (k≤16, padded W 128–512: 24.2 → 8.2 µs and 77.5 → 8.3 µs, 2.95× / 9.34×).</span>
@@ -305,8 +308,11 @@
     </tbody>
   </table></div>
 <!-- /MODEL_SCENARIOS -->
-  <p class="sub"><strong>GLM/DSA prefill update (2026-08-17, validated):</strong> the dsa_indexer_k2048 cell re-measured
-  712.2 µs on the final landed tree (−0.01% vs the row above). System context: top-k is ~0.3% of GLM-5.2 end-to-end
+  <p class="sub"><strong>GLM/DSA prefill update (2026-08-17, validated):</strong> the dsa_indexer_k2048 row above is
+  pre-hybrid: the plain call now measures <strong>467.0 µs (1.53×)</strong> and the DS-V4 k=512 row
+  <strong>358.3 µs (1.56×)</strong> via the multi-rectangle hybrid (26abf46feee; battery 28/28, suite 181 ✓;
+  evidence glm-hybrid-composite/RESULTS.md) — zero call-site changes; rows re-pin on the next scenarios run.
+  Pre-hybrid the cell re-measured 712.2 µs on the landed tree (−0.01% vs the row above). System context: top-k is ~0.3% of GLM-5.2 end-to-end
   prefill (~2.6 s/chunk baseline, GH #51331) — one TP collective in the same layer (~1 ms, GH #47803) outweighs the
   whole cell — so the live lever is call-site integration, not kernel speed: the post-op TP regather is the exact
   inverse of the consumer's re-partition for thin-head-shard models (GLM 64h/tp4, DS-V4; not DS-V3.2 at 128h), and the

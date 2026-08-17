@@ -1,3 +1,11 @@
+# STATUS — revision 5 (hybrid remainder-wave harvest), 2026-08-17
+
+Rev-5 delta (REVISION-5.md; evidence §9 B11): §6-F boundary passage now
+carries the landed multi-rectangle + hybrid result — the plain 160-row
+indexer call measures 467.0 µs (1.53×; k=512 sibling 358.3, 1.56×) with zero
+call-site changes (commit 26abf46feee). Length-neutral; body ends page 10;
+0 errors, 0 overfull. Previous (revision 4) status follows.
+
 # STATUS — revision 4 (silicon validation + attribution + system-context pass), 2026-08-17
 
 Rev-4 delta (summary: REVISION-4.md; evidence §8 B8–B10): every printed anchor
