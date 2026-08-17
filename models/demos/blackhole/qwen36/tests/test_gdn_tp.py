@@ -17,6 +17,7 @@ Run:
     MESH_DEVICE=P150x4 HF_MODEL=Qwen/Qwen3.6-27B \
       pytest models/demos/blackhole/qwen36/tests/test_gdn_tp.py -v -s
 """
+import gc
 import os
 
 import pytest
@@ -235,6 +236,10 @@ def test_gdn_tp_peruser_state(mesh_device, B, reset_seeds, ensure_gc, request):
         g.forward_prefill(_pf_in(mesh_device, args, xp[u]), chunk_size=T, capture_state=True)
         out_u = g.forward_decode(replicate_to_device(mesh_device, xd[u]))
         ref_rows.append(ttnn.to_torch(out_u, mesh_composer=comp)[0, 0, 0].float())
+        # Decode leaves rec_state in L1; native conv1d CBs on the next instance clash unless spilled.
+        g._spill_rec_state_to_dram()
+        del g
+    gc.collect()
 
     # ---- batched: per-user prefill(return_state) -> assemble -> single batched decode ----
     gb = TPGatedDeltaNet(mesh_device, args, tw, tt_ccl)
@@ -298,6 +303,9 @@ def test_gdn_tp_write_slot_and_remap(mesh_device, B, reset_seeds, ensure_gc, req
         g.forward_prefill(_pf_in(mesh_device, args, xp[u]), chunk_size=T, capture_state=True)
         out_u = g.forward_decode(replicate_to_device(mesh_device, xd[u]))
         ref_rows.append(ttnn.to_torch(out_u, mesh_composer=comp)[0, 0, 0].float())
+        g._spill_rec_state_to_dram()
+        del g
+    gc.collect()
 
     # ---- batched via write_slot: each user prefilled B=1, its state written into ITS slot ----
     gb = TPGatedDeltaNet(mesh_device, args, tw, tt_ccl)
@@ -306,8 +314,10 @@ def test_gdn_tp_write_slot_and_remap(mesh_device, B, reset_seeds, ensure_gc, req
         gu = TPGatedDeltaNet(mesh_device, args1, tw, tt_ccl)
         gu.reset_state()
         gu.forward_prefill(_pf_in(mesh_device, args, xp[u]), chunk_size=T, capture_state=True)
+        gu._spill_rec_state_to_dram()
         gb.write_slot(u, gu.rec_state, list(gu.conv_states))  # consumes gu's rec/conv buffers
         gu.rec_state, gu.conv_states = None, None
+        del gu
 
     x_dec = torch.cat(xd, dim=2)  # [1, 1, B, dim], row u = user u's decode token
     out_b = gb.forward_decode(replicate_to_device(mesh_device, x_dec))
