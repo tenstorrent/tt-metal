@@ -1,7 +1,8 @@
 1. Check the model implementation the tool writes when a model is not in HF format
     - It writes its own PyTorch version of the model, and every later test is scored against that
-      version, but the only check on it is a comment. Ours turned out correct and we verified it
-      ourselves, which means a wrong one would pass the same way.
+      version, but the only check on it is a comment. Ours was correct, though we only know that
+      because we compared it against our own reference by hand. Nothing in the run would have caught a
+      wrong one.
     - Fix: write that check as code and run it. It already worked out the right check for this model,
       and even tried a wrong RoPE on purpose to show the check catches it, so keep that part.
 
