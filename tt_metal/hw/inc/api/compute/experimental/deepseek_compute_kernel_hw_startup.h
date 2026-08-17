@@ -5,6 +5,7 @@
 #pragma once
 
 #include <limits>
+#include <cstdint>
 
 #include "api/compute/common.h"
 
@@ -13,7 +14,7 @@
 #endif
 
 namespace ckernel {
-constexpr uint32_t SFPU_FPU = semaphore::UNPACK_MATH_DONE;
+constexpr std::uint32_t SFPU_FPU = semaphore::UNPACK_MATH_DONE;
 }
 
 /**
@@ -32,21 +33,19 @@ ALWI void deepseek_compute_kernel_init() {
     MATH(ckernel::t6_semaphore_init(ckernel::semaphore::FPU_SFPU, 0, 1));
     PACK(ckernel::t6_semaphore_init(ckernel::SFPU_FPU, 0, 1));
     compute_kernel_hw_startup(0, 0, 0);
-#ifdef ARCH_BLACKHOLE
     if constexpr (enable_math_reconfig_remap) {
         MATH((llk_math_reconfig_remap(true)));
     }
-#endif
 }
 
 // Self-guarding + self-seeding compute HW init. chlkc unpack_src_format is a per-core
 // constexpr table (255 = CB absent). Seed HW startup from the first present CB — an
 // identity conversion the LLK allowlist always accepts — or skip if no CB is configured.
 #if defined(COMPILE_FOR_TRISC)
-constexpr uint32_t DEEPSEEK_NO_PRESENT_CB = std::numeric_limits<uint32_t>::max();
-constexpr uint32_t _deepseek_first_present_cb() {
-    constexpr uint32_t n = (uint32_t)(sizeof(unpack_src_format) / sizeof(unpack_src_format[0]));
-    for (uint32_t i = 0; i < n; ++i) {
+constexpr std::uint32_t DEEPSEEK_NO_PRESENT_CB = std::numeric_limits<std::uint32_t>::max();
+constexpr std::uint32_t deepseek_first_present_cb() {
+    constexpr std::uint32_t n = (std::uint32_t)(sizeof(unpack_src_format) / sizeof(unpack_src_format[0]));
+    for (std::uint32_t i = 0; i < n; ++i) {
         if (unpack_src_format[i] != 255) {
             return i;
         }
@@ -55,14 +54,12 @@ constexpr uint32_t _deepseek_first_present_cb() {
 }
 
 ALWI void deepseek_compute_kernel_init_present() {
-    constexpr uint32_t seed = _deepseek_first_present_cb();
+    constexpr std::uint32_t seed = deepseek_first_present_cb();
     if constexpr (seed != DEEPSEEK_NO_PRESENT_CB) {
         MATH(ckernel::t6_semaphore_init(ckernel::semaphore::FPU_SFPU, 0, 1));
         PACK(ckernel::t6_semaphore_init(ckernel::SFPU_FPU, 0, 1));
         compute_kernel_hw_startup(seed, seed, seed);
-#ifdef ARCH_BLACKHOLE
         MATH((llk_math_reconfig_remap(true)));
-#endif
     }
 }
 #endif
@@ -72,7 +69,7 @@ ALWI void deepseek_compute_kernel_init_present() {
  * Call once at kernel start. Same as compute_kernel_hw_startup() but with configurable fp32_dest_acc_en.
  */
 template <bool fp32_dest_acc_en = false>
-ALWI void deepseek_compute_kernel_hw_startup(uint32_t icb0, uint32_t icb1, uint32_t ocb) {
+ALWI void deepseek_compute_kernel_hw_startup(std::uint32_t icb0, std::uint32_t icb1, std::uint32_t ocb) {
     UNPACK((llk_unpack_hw_configure<fp32_dest_acc_en>(icb0, icb1)));
 
     MATH((llk_math_pack_sync_init<fp32_dest_acc_en>()));

@@ -73,8 +73,6 @@ void kernel_main() {
         get_named_compile_time_arg_val("moe_gate_cb_tilize_idx"),
         get_named_compile_time_arg_val("moe_gate_topk"),
         get_named_compile_time_arg_val("moe_gate_softmax")>;
-    // This op's lineage predates the Blackhole math-reconfig-remap enable that the
-    // deepseek_v3_b1 / tt-blaze kernels run with; opt out to preserve its existing behavior.
     deepseek_compute_kernel_init<false /* enable_math_reconfig_remap */>();
 #endif
 
