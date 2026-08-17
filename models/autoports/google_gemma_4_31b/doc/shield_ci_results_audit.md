@@ -101,9 +101,31 @@ asserts the disable cannot silently return.
 
 ### Yes, one change alters what is being tested: the chat template
 
-The base checkpoint's tokenizer has `chat_template=None`, and TTI's trace capture
-posts to `/v1/chat/completions` unconditionally, so requests could not render at
-all. The spec now supplies the autoport's own
+The base checkpoint's tokenizer has `chat_template=None`, so chat-shaped requests
+could not render at all.
+
+**Corrected root cause (2026-08-17).** An earlier version of this document blamed
+TTI's trace capture, citing `utils/prompt_client.py::call_chat_inference`. That
+was wrong: `call_chat_inference` has **no callers**, and text trace capture calls
+`call_inference(..., use_chat_api=False)` — the *completions* endpoint. Chat is
+used there only inside the multimodal image loop, which does not apply to a text
+model.
+
+What actually requires a chat template is the **benchmark driver**:
+`llm_module/drivers/vllm.py` builds every LLM benchmark as
+
+```text
+vllm bench serve --backend openai-chat --endpoint /v1/chat/completions
+```
+
+with those two values hardcoded and no completions alternative. Since `release`
+includes benchmarks, a base checkpoint cannot be benchmarked on this platform at
+all without supplying a template. That makes the override a genuine platform
+constraint for base models rather than a choice — and it is worth noting that the
+eval half needs no template, because `EvalTask` defaults to `local-completions`
+and our entry sets `apply_chat_template=False`.
+
+The spec supplies the autoport's own
 `doc/vllm_integration/chat_template.jinja`, which is `bos_token` plus
 newline-joined message content.
 
