@@ -34,6 +34,52 @@ def _timeit(fn, mesh, iters=3):
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize("grid, kernel", [((4, 4, 4), (3, 3, 3)), ((8, 8, 8), (5, 5, 5))], ids=["s4", "s8"])
+def test_fused_q_offset(*, mesh_device, grid, kernel):
+    """Fused NA3D with a nonzero windowed_q_token_offset (the W-SP crux): run the fused kernel on a Q
+    SUB-BAND (rows [off, S)) against FULL K/V, telling it its global offset, and check it matches the
+    na3d_torch reference's corresponding rows. If this holds, spatial-W SP is just plumbing."""
+    T, H, W = grid
+    heads, head_dim = 2, 64
+    S = T * H * W
+    off = S // 2
+    assert off % 32 == 0, "offset must be tile-aligned"
+    torch.manual_seed(0)
+    q, k, v = (torch.randn(1, T, H, W, heads, head_dim, dtype=torch.float32) for _ in range(3))
+    ref = na3d_torch(q, k, v, kernel, scale=1.0).reshape(1, S, heads * head_dim)  # [1, S, width]
+
+    def kv_wrow(x):  # full K/V -> [1, heads, T*H, W*head_dim] ROW_MAJOR (fused's W-row page layout)
+        x = ttnn.from_torch(x, device=mesh_device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+        x = ttnn.permute(ttnn.reshape(x, (1, S, heads, head_dim)), (0, 2, 1, 3))  # [1, heads, S, hd]
+        return ttnn.reshape(x, (1, heads, T * H, W * head_dim))
+
+    k_tt, v_tt = kv_wrow(k), kv_wrow(v)
+    q_full = ttnn.from_torch(q, device=mesh_device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    q_full = ttnn.permute(ttnn.reshape(q_full, (1, S, heads, head_dim)), (0, 2, 1, 3))  # [1, heads, S, hd]
+    q_band = ttnn.to_layout(ttnn.slice(q_full, [0, 0, off, 0], [1, heads, S, head_dim]), ttnn.TILE_LAYOUT)
+
+    grid_dev = mesh_device.compute_with_storage_grid_size()
+    attended = ttnn.transformer.scaled_dot_product_attention(
+        q_band,
+        k_tt,
+        v_tt,
+        is_causal=False,
+        neighborhood_3d=(T, H, W, *kernel),
+        neighborhood_gather=True,
+        windowed_q_token_offset=off,
+        scale=1.0,
+        program_config=ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=(grid_dev.x, grid_dev.y),
+            exp_approx_mode=False,
+            q_chunk_size=32,
+            k_chunk_size=32,
+        ),
+    )
+    got = ttnn.to_torch(attended).float().permute(0, 2, 1, 3).reshape(1, S - off, heads * head_dim)
+    assert_quality(ref[:, off:, :], got, pcc=0.999)
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
 @pytest.mark.parametrize(
     "grid, kernel, heads, head_dim",
     [

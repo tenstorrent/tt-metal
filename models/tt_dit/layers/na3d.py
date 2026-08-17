@@ -883,15 +883,38 @@ def neighborhood_attention_3d_op_sp_w_sharded(
     offsets = torch.arange(sp, dtype=torch.int32) * seq_local
     off_tt = from_torch(offsets, device=mesh, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_axes=[sp_axis])
 
+    # DIFFVAE_SP_FUSED=1 runs the fast fused (neighborhood_gather) kernel instead of the streamed op:
+    # K/V become the W-row-paged ROW_MAJOR layout the fused reader gathers from (grid is W-outer, so a
+    # page is an inner-axis (h_full) row and the flattened (T,H) = w_full*t_full). Q + the per-device
+    # offset are unchanged (verified: fused honours windowed_q_token_offset).
+    use_fused = os.environ.get("DIFFVAE_SP_FUSED", "0") == "1"
+    prog_config = None
+    if use_fused:
+
+        def wrow(x: ttnn.Tensor) -> ttnn.Tensor:
+            x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+            return ttnn.reshape(x, (batch, heads, w_full * t_full, h_full * head_dim))
+
+        tk, tv = wrow(tk), wrow(tv)
+        grid_dev = mesh.compute_with_storage_grid_size()
+        prog_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=(grid_dev.x, grid_dev.y),
+            exp_approx_mode=False,
+            q_chunk_size=32,
+            k_chunk_size=32,
+        )
+
     attended = ttnn.transformer.scaled_dot_product_attention(
         tq,
         tk,
         tv,
         is_causal=False,
         neighborhood_3d=(w_full, t_full, h_full, kw, kt, kh),  # grid given W-outer to match the flatten
+        neighborhood_gather=use_fused,
         scale=scale,
         windowed_q_token_offset=0,
         windowed_q_token_offset_tensor=off_tt,
+        program_config=prog_config,
     )
     for tensor in (tq, tk, tv):
         ttnn.deallocate(tensor)

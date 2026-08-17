@@ -23,18 +23,26 @@ CHECKPOINT = Path(
 )
 
 
+# (deterministic-stages backend, stage-5 backend). "gather+fused5" is the interesting mixed config:
+# fast gather where it fits (the smaller early stages) and the memory-light fused only for stage 5,
+# the stage that OOMs gather at 1080p. Set DIFFVAE_STAGE_TIMING=1 for the per-stage breakdown.
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
-@pytest.mark.parametrize("backend", ["gather", "fused"], ids=["gather", "fused"])
+@pytest.mark.parametrize(
+    "backends",
+    [("gather", "gather"), ("fused", "fused"), ("gather", "fused")],
+    ids=["gather", "fused", "gather+fused5"],
+)
 @pytest.mark.parametrize("latent_hw", [(16, 16), (34, 60)], ids=["s16", "s34x60"])
-def test_decode_timing(*, mesh_device, backend, latent_hw):
+def test_decode_timing(*, mesh_device, backends, latent_hw):
     if not CHECKPOINT.exists():
         pytest.skip(f"missing {CHECKPOINT}")
+    stages_b, stage5_b = backends
     config = decoder_config(CHECKPOINT)
     lh, lw = latent_hw
     torch.manual_seed(0)
     latent = torch.randn(1, config["in_channels"], 4, lh, lw)
 
-    dec = DiffVAEDecoder(config, mesh_device=mesh_device, stage5_na3d_backend=backend, stages_na3d_backend=backend)
+    dec = DiffVAEDecoder(config, mesh_device=mesh_device, stages_na3d_backend=stages_b, stage5_na3d_backend=stage5_b)
     dec.load_checkpoint(CHECKPOINT)
 
     px = dec.decode(latent, seed=0)  # warmup (also builds fused mask cache)
@@ -45,4 +53,40 @@ def test_decode_timing(*, mesh_device, backend, latent_hw):
     px = dec.decode(latent, seed=0)
     ttnn.synchronize_device(mesh_device)
     dt = time.perf_counter() - t0
-    print(f"\n[decode {backend}] latent(1,{config['in_channels']},4,{lh},{lw}) -> {px_shape}: {dt * 1000:8.0f} ms\n")
+    tag = f"stages={stages_b},stage5={stage5_b}"
+    print(f"\n[decode {tag}] latent(1,{config['in_channels']},4,{lh},{lw}) -> {px_shape}: {dt * 1000:8.0f} ms\n")
+
+
+# Stage-5 spatial-W SP across the mesh: shards Q/output over W (sp-way). DIFFVAE_SP_FUSED=1 runs the fast
+# fused kernel per shard instead of the streamed op. Times op-sharded vs fused-sharded on the same mesh.
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True, ids=["ring"]
+)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True, ids=["4x8"])
+@pytest.mark.parametrize("latent_hw", [(16, 16), (34, 60)], ids=["s16", "s34x60"])
+def test_decode_wsp_timing(*, mesh_device, latent_hw):
+    if not CHECKPOINT.exists():
+        pytest.skip(f"missing {CHECKPOINT}")
+    from models.tt_dit.parallel.manager import CCLManager
+
+    config = decoder_config(CHECKPOINT)
+    lh, lw = latent_hw
+    torch.manual_seed(0)
+    latent = torch.randn(1, config["in_channels"], 4, lh, lw)
+    ccl = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
+    dec = DiffVAEDecoder(
+        config, mesh_device=mesh_device, ccl_manager=ccl, stage5_na3d_backend="op_sp_w_sharded", stage5_sp_axis=1
+    )
+    dec.load_checkpoint(CHECKPOINT)
+
+    px = dec.decode(latent, seed=0)  # warmup
+    ttnn.synchronize_device(mesh_device)
+    px_shape = tuple(px.shape)
+    t0 = time.perf_counter()
+    px = dec.decode(latent, seed=0)
+    ttnn.synchronize_device(mesh_device)
+    dt = time.perf_counter() - t0
+    backend = "fused" if os.environ.get("DIFFVAE_SP_FUSED") == "1" else "op"
+    print(
+        f"\n[decode W-SP({backend}) 4x8] latent(1,{config['in_channels']},4,{lh},{lw}) -> {px_shape}: {dt * 1000:8.0f} ms\n"
+    )
