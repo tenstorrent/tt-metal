@@ -247,15 +247,14 @@ static constexpr uint32_t SPSC_MARKER_WORDS = 2;
 // backend definition file needn't change; constant-folds to a per-RISC .bss word.
 [[maybe_unused]] static uint32_t g_prev_timer_hi = 0xFFFFFFFFu;
 
-// Tear-free 64-bit wall-clock read: HIGH and LOW are separate registers, so a tick between them would
-// pair an old high with a new (wrapped-small) low -> a timestamp ~2^32 too small = a backwards jump. Re-read
-// HIGH after LOW and retry if it moved, so (hi, lo) is always one consistent snapshot.
+// 64-bit wall-clock read. Reading LOW latches HIGH (see c_tensix_core.h "latches high"; Quasar names
+// the register WALL_CLOCK_H_LATCHED), so LOW-then-HIGH is one coherent snapshot in exactly two loads
+// -- no tear is possible and no retry loop is needed. HIGH must be read AFTER LOW: on its own it
+// returns the latch from whenever LOW was last read, which is arbitrarily stale.
 inline __attribute__((always_inline)) void read_wall_clock(uint32_t& hi, uint32_t& lo) {
     volatile tt_reg_ptr uint32_t* p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
-    do {
-        hi = p_reg[WALL_CLOCK_HIGH_INDEX];
-        lo = p_reg[WALL_CLOCK_LOW_INDEX];
-    } while (hi != p_reg[WALL_CLOCK_HIGH_INDEX]);
+    lo = p_reg[WALL_CLOCK_LOW_INDEX];
+    hi = p_reg[WALL_CLOCK_HIGH_INDEX];
 }
 
 // Slow path of ring_ensure_room (out-of-line: ONE copy, not inlined at every zone scope). The ring is
