@@ -127,17 +127,16 @@
 
 - name: "Blaze - HCA perf"
   cmd: |
-    export MESH_DEVICE=TG
 
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/perf/test_ttnn_hca_perf.py -k "flash" -vvv --tb=short
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/perf/test_ttnn_hca_perf.py -k "flash and 8x4" -vvv --tb=short
     '
   test_type: hca_perf
   test_group: module
   skus:
     bh_sc1_high_power:
-      timeout: 5
+      timeout: 3
   owner_id: U08SXRPCTJ5  # Janko Mitrovic
   team: models
   sp_config: sc1
