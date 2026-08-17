@@ -118,11 +118,16 @@ Consequences for the numbers above:
   precision ladder it drove (2/10 … 4/10 at 1,024 generated tokens) was
   measuring corrupted generations, since 1,024 generated tokens crosses the
   wrap for any prompt.
-- `meta_ifeval` passed partly because its TT run recorded no `max_gen_toks`, so
-  lm-eval's 256-token API default applied against the control's 1,280. Short
-  answers never reach position 1024. Set it explicitly on the rerun.
+- `meta_ifeval` ran at the **same** 1,280-token budget as its control, contrary to
+  an earlier note here: `ifeval.yaml` sets `max_gen_toks: 1280` in the task, and
+  task `generation_kwargs` beat the API backend's 256 default
+  (`lm_eval/models/api_models.py:963`). The `gen_kwargs` recorded in
+  `tti_eval_ifeval.json` is the CLI override only. It mostly passed because typical
+  instruction-following answers are a few hundred tokens and never reach absolute
+  position 1024; the long-answer documents were corrupted, which is the likely
+  source of the 82.62 % vs 87.04 % gap (≈1 prompt of 28). GPQA's task YAML sets no
+  budget at all, which is why it needed the explicit `max_gen_toks=32768` and why
+  nearly every GPQA request crossed the boundary.
 
-Required before Stage 11 can be reclassified: rerun both mandatory evals with
-the fix and with IFEval's completion budget matched to its control. Not done on
-the debugging machine — it has no vLLM checkout, and the GPQA documents come
-from the gated `Idavidrein/gpqa` dataset.
+Required before Stage 11 can be reclassified: rerun both mandatory evals with the
+fix. See `POST_FIX_EVAL_RESULTS.md` for the rerun on 4×P300C.

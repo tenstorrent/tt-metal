@@ -364,9 +364,17 @@ Corrections to this document's earlier sections, all measured rather than argued
    pre-wrap disagreements pick HF's rank-2 token at an HF top1−top2 margin whose
    median is 1.25, against 15.19 at agreements.
 4. **"Passes at 100, passes at 1,280, fails at 32,768" is not a length ladder.**
-   TT's IFEval run recorded no `max_gen_toks`, so lm-eval's 256 default applied
-   (the HF control used 1,280). IFEval passed because 256 generated tokens on
-   short prompts never reach position 1024 — not because 1,280 was validated.
+   Both evals crossed the same boundary, they just crossed it at different rates.
+   `ifeval.yaml` sets `max_gen_toks: 1280` in the *task*, and task
+   `generation_kwargs` beat the API backend's 256 default
+   (`lm_eval/models/api_models.py:963`), so both TT and HF IFEval ran at 1,280 —
+   the `{'stream': False, 'seed': 42}` in `tti_eval_ifeval.json` records the CLI
+   override only, not the effective budget. IFEval mostly passed because typical
+   instruction-following answers are a few hundred tokens and never reach absolute
+   position 1024; the documents whose answers did run long were corrupted, which is
+   the most likely source of the 82.62 % vs 87.04 % gap (≈1 prompt of 28). GPQA's
+   task YAML genuinely sets no budget, which is why it needed an explicit
+   `max_gen_toks=32768` and why nearly every GPQA request crossed the boundary.
 5. **The greedy sampler is exonerated.** The shipped sharded chunked-topk path
    matched an exact argmax on identical logits in 1,024 step-level A/Bs.
 6. **Reproducing the exact failing eval needs one thing not mentioned here:** the

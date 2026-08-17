@@ -410,11 +410,20 @@ class Gemma4ForCausalLM(nn.Module):
             or bool((flat_positions[logical_batch:] >= 0).any())
         ):
             raise ValueError("vLLM decode rows must pack active requests before inactive slots")
-        # Model compute must use only scheduler-active rows. Sampling1D pads
-        # logits and parameters to its canonical 32 lanes internally; padding
-        # the model itself made greedy trajectories depend on concurrency and
-        # let inactive rows participate in decode collectives.
-        execution_batch = logical_batch
+        # Decode over the canonical lane space whenever more than one request is
+        # active; batch one stays genuinely batch one for the headline serving path.
+        #
+        # Executing only the scheduler-active rows (`execution_batch =
+        # logical_batch`) is cheaper and was adopted in eb459b3bf9e, but it
+        # corrupts any row whose prefill lands while other rows are already
+        # decoding: at concurrency 9 row 8 emits garbage from its first token, and
+        # `meta_ifeval` collapses from 82.62 % to 2-7 %. That change was measured on
+        # a five-document probe while every long generation was still corrupted by
+        # the sliding-cache read wrap, so the regression was invisible. Restoring
+        # the padded width reproduces the recorded IFEval row exactly
+        # (0.7857/0.8372/0.8214/0.8605). Re-deriving the cheaper active-row path is
+        # tracked in doc/tti_release/POST_FIX_EVAL_RESULTS.md.
+        execution_batch = 1 if logical_batch == 1 else self.max_batch_size
         active = flat_positions[:execution_batch] >= 0
         mode = "host" if sampling_params is None else "device"
         output = gen.decode_forward(

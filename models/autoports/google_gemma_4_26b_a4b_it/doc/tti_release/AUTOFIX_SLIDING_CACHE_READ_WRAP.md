@@ -102,9 +102,15 @@ That is exactly the Stage 11 signature the earlier AutoDebug could not explain:
   degenerate never emit EOS. `AUTODEBUG_GPQA_DIVERGENCE.md` records "the last
   four are reported together at 3:20:54" — four requests exhausting the cap
   together, which it flagged as "a useful lead, not a finding".
-- `meta_ifeval` PASSES because its TT run recorded no `max_gen_toks`
-  (`tti_eval_ifeval.json`), so lm-eval's API default of 256 applied: with short
-  prompts those requests never reach position 1024.
+- `meta_ifeval` mostly PASSES because its answers are short. It ran at the same
+  1,280-token budget as its control — `ifeval.yaml` sets `max_gen_toks: 1280` in the
+  task and task `generation_kwargs` beat the API backend's 256 default
+  (`lm_eval/models/api_models.py:963`); the `gen_kwargs` recorded in
+  `tti_eval_ifeval.json` is the CLI override only. Typical instruction-following
+  answers are a few hundred tokens and never reach absolute position 1024, but the
+  documents whose answers ran long were corrupted, which is the likely source of the
+  82.62 % vs 87.04 % gap (≈1 prompt of 28). GPQA's task YAML sets no budget at all,
+  which is why it needed the explicit `max_gen_toks=32768`.
 
 ## Why every earlier gate missed it
 
@@ -187,10 +193,9 @@ statistically over many documents rather than by trajectory match.
 
 ## Next steps
 
-1. Re-run the Stage 11 `meta_gpqa_cot` / `meta_ifeval` gate with the fix. The
-   IFEval run must set `max_gen_toks` explicitly (1,280, matching the HF
-   control) — its recorded `gen_kwargs` did not, so the passing row was measured
-   at the API's 256-token default.
+1. Re-run the Stage 11 `meta_gpqa_cot` / `meta_ifeval` gate with the fix, keeping
+   every recorded setting identical so the result is comparable to the blocked run.
+   Results: `POST_FIX_EVAL_RESULTS.md`.
 2. Add a gate for sustained free-running decode past `2 × sliding_window` and
    assert coherence plus EOS, not just cache PCC at one boundary.
 3. Re-check the multichip and vLLM decode paths for any other write/read kwarg

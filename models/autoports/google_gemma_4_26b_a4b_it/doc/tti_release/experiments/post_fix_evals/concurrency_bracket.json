@@ -1,0 +1,128 @@
+{
+ "reference_head": "To determine if two energy levels can be clearly resolved, we must consider the **energy uncertainty** associated with each state due to the Heisenberg Uncertainty Principle.\n\n**1. Understand the Unce",
+ "results": {
+  "8": [
+   {
+    "copy": 0,
+    "completion_tokens": 706,
+    "finish_reason": "stop",
+    "matches_reference": true,
+    "head": "To determine if two energy levels can be clearly resolved, we must con"
+   },
+   {
+    "copy": 1,
+    "completion_tokens": 706,
+    "finish_reason": "stop",
+    "matches_reference": true,
+    "head": "To determine if two energy levels can be clearly resolved, we must con"
+   },
+   {
+    "copy": 2,
+    "completion_tokens": 706,
+    "finish_reason": "stop",
+    "matches_reference": true,
+    "head": "To determine if two energy levels can be clearly resolved, we must con"
+   },
+   {
+    "copy": 3,
+    "completion_tokens": 706,
+    "finish_reason": "stop",
+    "matches_reference": true,
+    "head": "To determine if two energy levels can be clearly resolved, we must con"
+   },
+   {
+    "copy": 4,
+    "completion_tokens": 706,
+    "finish_reason": "stop",
+    "matches_reference": true,
+    "head": "To determine if two energy levels can be clearly resolved, we must con"
+   },
+   {
+    "copy": 5,
+    "completion_tokens": 706,
+    "finish_reason": "stop",
+    "matches_reference": true,
+    "head": "To determine if two energy levels can be clearly resolved, we must con"
+   },
+   {
+    "copy": 6,
+    "completion_tokens": 706,
+    "finish_reason": "stop",
+    "matches_reference": true,
+    "head": "To determine if two energy levels can be clearly resolved, we must con"
+   },
+   {
+    "copy": 7,
+    "completion_tokens": 706,
+    "finish_reason": "stop",
+    "matches_reference": true,
+    "head": "To determine if two energy levels can be clearly resolved, we must con"
+   }
+  ],
+  "9": [
+   {
+    "copy": 0,
+    "completion_tokens": 710,
+    "finish_reason": "stop",
+    "matches_reference": false,
+    "head": "To determine if two energy levels can be clearly resolved, we must con"
+   },
+   {
+    "copy": 1,
+    "completion_tokens": 710,
+    "finish_reason": "stop",
+    "matches_reference": false,
+    "head": "To determine if two energy levels can be clearly resolved, we must con"
+   },
+   {
+    "copy": 2,
+    "completion_tokens": 710,
+    "finish_reason": "stop",
+    "matches_reference": false,
+    "head": "To determine if two energy levels can be clearly resolved, we must con"
+   },
+   {
+    "copy": 3,
+    "completion_tokens": 710,
+    "finish_reason": "stop",
+    "matches_reference": false,
+    "head": "To determine if two energy levels can be clearly resolved, we must con"
+   },
+   {
+    "copy": 4,
+    "completion_tokens": 710,
+    "finish_reason": "stop",
+    "matches_reference": false,
+    "head": "To determine if two energy levels can be clearly resolved, we must con"
+   },
+   {
+    "copy": 5,
+    "completion_tokens": 710,
+    "finish_reason": "stop",
+    "matches_reference": false,
+    "head": "To determine if two energy levels can be clearly resolved, we must con"
+   },
+   {
+    "copy": 6,
+    "completion_tokens": 710,
+    "finish_reason": "stop",
+    "matches_reference": false,
+    "head": "To determine if two energy levels can be clearly resolved, we must con"
+   },
+   {
+    "copy": 7,
+    "completion_tokens": 710,
+    "finish_reason": "stop",
+    "matches_reference": false,
+    "head": "To determine if two energy levels can be clearly resolved, we must con"
+   },
+   {
+    "copy": 8,
+    "completion_tokens": 1024,
+    "finish_reason": "length",
+    "matches_reference": false,
+    "head": "ToHS\uc5b4\uc9c4 l exponentially lrase lrase un waysers lrase lrase the enough.\n"
+   }
+  ]
+ }
+}
