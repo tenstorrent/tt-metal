@@ -5394,6 +5394,90 @@ directory — and never leave a local absolute path in a shared registry.
 
 ---
 
+## ★★★★ F48 — the loader resolver DOES write the architecture itself, and nothing checks it
+
+**Status: tested end to end, twice** · `scripts/tt_hw_planner/reference_loader_resolver.py` ·
+evidence: `/localdev/lserbedzija/resolver_test/`
+
+This corrects an earlier belief of mine (see Corrections): I had concluded the resolver only *adapts*
+an existing PyTorch implementation. That was true of the first run only, because one was reachable.
+With every local implementation hidden, it writes the architecture from scratch — and it is right.
+
+### Run 1 — reference reachable
+
+The resolver produced a **729-line adapter** that imports our hand-written reference and re-exposes
+it under the checkpoint's native key names. It also wrote itself a `_selfcheck`, which passed:
+
+```
+[loader] backbone (1, 10, 3072) -> (1, 10, 3072)  mean +0.0043 std 2.5234
+[loader] kv-cache PCC: prefill 1.000000  steps 1.000000
+[loader] codec (1, 37, 24) -> wav (1, 1, 46080) (1.92s @ 24000 Hz) peak 0.9984
+[loader] wrapper vs raw reference_forward: PCC 1.00000000, max|d| 0.000e+00
+```
+
+### Run 2 — every PyTorch implementation hidden
+
+`isolated_run.sh` moved 15 items out of reach behind an EXIT trap (both reference trees, our TTNN
+port, the HF export, the tool's own generated demo, the overlay store, and run 1's own output), then
+verified `0` readable copies of `voxtral_common_ref.py` and `modeling_voxtral_tts.py` anywhere under
+`/localdev/lserbedzija`. Only the raw Mistral-native checkpoint remained.
+
+In ~20 minutes it wrote a **1064-line from-scratch implementation** of all three stacks, importing
+nothing but `json`, `math`, `os`, `typing`, `torch`, and `safetensors`. It diagnosed the load failure
+correctly, found the architecture's real home from the model's own metadata, and declined to import
+it for a stated reason:
+
+> *"Importing that package here is not viable as a reference: every vllm module is built from a
+> `VllmConfig` and is wired to vllm's parallel/quantised layer stack, a CUDA platform, a paged
+> KV-cache manager and a running engine."*
+
+It built on the `meta` device and enforced a **strict bijection** between checkpoint tensors and
+parameters at load time, so nothing could be silently left uninitialised. It also refused to
+fabricate the encoder the checkpoint does not ship, rather than filling it randomly.
+
+### Does it actually compute the right model? Yes — I tested it
+
+`test_iso_loader.py`, against the restored hand-written reference, same weights, fp32 both sides:
+
+| stage | result |
+|---|---|
+| text embedding | PCC 1.00000000, max\|d\| 0 |
+| backbone, 26 layers (RoPE / GQA / RMSNorm / SwiGLU) | PCC 0.99999988, max\|d\| 1.53e-05 |
+| its own KV cache vs full recompute | PCC 1.00000000 |
+| codec decoder → 24 kHz waveform | PCC 1.00000000, max\|d\| 5.04e-06 |
+| flow matching, x_0 pinned → 37 codes | **37/37 codes bit-identical** |
+
+**7/7 checks passed.** It even implemented a working per-layer KV cache — the thing the graduated
+attention stub does not do (F27).
+
+Two convention differences are worth knowing, because both are *documented and self-consistent*, and
+both cost me a false alarm before I read the docstrings: it takes model-emitted codes as `(B, T, 37)`
+and strips the 2 audio special tokens itself, where our reference takes stripped codes as
+`(B, 37, T)`. Feeding both the same raw integers shifts every code by 2 and reports PCC 0.9998 —
+which is what I first measured and wrongly began attributing to the codec.
+
+### The actual defect
+
+**Run 2 wrote no `_selfcheck` at all** (`selfcheck=2` in run 1's file, `selfcheck=0` in run 2's).
+With no reference to compare against, nothing verified the 1064 lines — and this file becomes the
+**ground truth every downstream PCC gate is measured against**. Here it was right. Had it been
+subtly wrong — one RoPE convention, one norm epsilon — every component would have been brought up
+to PCC 0.99 against a wrong target, and no gate in the pipeline could have noticed. The loader's own
+docstring even anticipates the risk (*"worth knowing before you 'fix' the RoPE"*), which makes the
+absence of a check more striking, not less.
+
+Compounding it: the resolver is **off by default** (`_ENV_FLAG`), and only runs *after* a component
+has already failed to load. So for any model not natively loadable by `transformers` — most of TTS —
+the default experience is "unsupported", while the capability to handle it already exists and works.
+
+**Fix:** turn it on by default; and when it writes a from-scratch implementation, make it write and
+run a self-check too. It cannot compare against a reference that isn't there, but it can assert what
+it already knows: the checkpoint bijection it enforces, shape and finiteness at every stage, cached
+vs recomputed equivalence, and determinism under a pinned seed. Then say plainly in the log which of
+the two things happened — adapted an existing implementation, or wrote one unverified.
+
+---
+
 ## Corrections to this document
 
 - **"None of the optimisation work reaches a user" was WRONG.** An earlier draft of F46 said the 11
@@ -5428,6 +5512,16 @@ directory — and never leave a local absolute path in a shared registry.
   Hub; they ship under `library=vllm` and `library=coqui` respectively, in their own native
   formats, not in `transformers` format. The tool's loader requires the latter — that is the actual
   constraint, and S1 is the consequence of it.
+- **"The resolver adapts an existing implementation; without one it stops" was WRONG.** I drew that
+  from run 1, where our reference was reachable and it wrote an adapter. Re-tested with all 15
+  implementations and copies hidden, it wrote a 1064-line architecture from scratch that matches our
+  reference on every stage (7/7, flow codes bit-identical). See F48. The real defect is narrower and
+  worse: nothing verifies what it writes.
+- **The codec decoder is NOT off by PCC 0.9998.** I measured that and started localising it as a
+  codec defect. The cause was my own test: the from-scratch loader takes model-emitted codes
+  `(B, T, 37)` and strips the 2 audio special tokens itself, while our reference takes stripped codes
+  as `(B, 37, T)`. Matching the conventions gives PCC 1.00000000, max|d| 5.04e-06. Both interfaces
+  were documented in their own docstrings; I had not read them before measuring.
 
 ---
 
