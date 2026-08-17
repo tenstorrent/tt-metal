@@ -831,6 +831,7 @@ def neighborhood_attention_3d_op_sp_w_sharded(
     sp_axis: int,
     ccl_manager,
     scale: float | None = None,
+    tp_axis: int | None = None,
 ) -> ttnn.Tensor:
     """SP-over-W with SHARDED input AND output, for full-stage spatial parallelism.
 
@@ -846,6 +847,14 @@ def neighborhood_attention_3d_op_sp_w_sharded(
     is told its grid as ``(W, T, H)`` with the matching ``(kw, kt, kh)`` kernel. Each chip is told
     its flattened W-outer origin. Requires W divisible by the mesh axis and a tile-aligned shard
     origin (``(W/sp) * T * H`` a multiple of ``TILE_HEIGHT``).
+
+    ``tp_axis`` (optional) adds TENSOR PARALLELISM OVER HEADS on a second, orthogonal mesh axis:
+    attention is independent per head, so each chip along ``tp_axis`` keeps only ``heads/tp`` of the
+    heads. The head split is a communication-free per-device slice of the (replicated-over-tp) q/k/v
+    done BEFORE the K/V all-gather -- so the gather that is the memory wall shrinks by ``tp`` too --
+    and the heads are all-gathered back over ``tp_axis`` right after the flash, so the output
+    projection and residual downstream see the full width unchanged. Composes with the W-shard: the
+    two all-gathers are over different mesh axes.
     """
     mesh = q.device()
     sp = int(list(mesh.shape)[sp_axis])
@@ -854,6 +863,19 @@ def neighborhood_attention_3d_op_sp_w_sharded(
     assert batch == 1, f"batched NA3D is not implemented; got batch={batch}"
     assert (t, h) == (t_full, h_full), f"q dims {(t, h)} != full {(t_full, h_full)}"
     assert w_local * sp == w_full, f"W={w_full} must split evenly over sp={sp} (got W_local={w_local})"
+
+    # TP-over-heads: partition q/k/v on the head axis across tp_axis. This is a pure per-device slice
+    # (each chip selects its head band from the replicated tensor -- no comms), done here before the
+    # heads are folded into the sequence so the K/V all-gather below moves only this chip's heads.
+    full_heads = heads
+    if tp_axis is not None:
+        tp = int(list(mesh.shape)[tp_axis])
+        assert heads % tp == 0, f"heads={heads} must split evenly over tp={tp}"
+        q = ttnn.mesh_partition(q, dim=4, cluster_axis=tp_axis)
+        k = ttnn.mesh_partition(k, dim=4, cluster_axis=tp_axis)
+        v = ttnn.mesh_partition(v, dim=4, cluster_axis=tp_axis)
+        heads = heads // tp
+
     width = heads * head_dim
     seq_local = w_local * t_full * h_full  # W-outer flatten of this chip's band
     # No tile-alignment requirement on seq_local: to_layout tile-pads the sequence dim transparently
@@ -918,6 +940,14 @@ def neighborhood_attention_3d_op_sp_w_sharded(
     )
     for tensor in (tq, tk, tv):
         ttnn.deallocate(tensor)
+
+    # TP-over-heads: reassemble the full head-width from the tp shards while still (B, NH, S, HD)
+    # rank-4 (all_gather supports rank 4). Device order along tp_axis is head order, so gathering on
+    # the head axis rebuilds [head0 | head1 | ...]; downstream sees the full width as without TP.
+    if tp_axis is not None:
+        attended = ccl_manager.all_gather(attended, dim=1, mesh_axis=tp_axis, use_hyperparams=False)
+        heads = full_heads
+        width = heads * head_dim
 
     # (B, NH, seq_local, HD) -> W-outer (B, W_local, T, H, width) -> (B, T, H, W_local, width), sharded.
     attended = ttnn.to_layout(attended, ttnn.ROW_MAJOR_LAYOUT)

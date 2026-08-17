@@ -17,8 +17,10 @@ here -- see :func:`neighborhood_attention_3d`.
 
 from __future__ import annotations
 
+import contextlib
 import math
 import os
+import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, NamedTuple
 
@@ -26,6 +28,39 @@ import torch
 from loguru import logger
 
 import ttnn
+
+#: Per-stage decode timing. Off unless DIFFVAE_STAGE_TIMING is set (a truthy value), since each
+#: probe forces a device sync that would otherwise serialize the async pipeline.
+_STAGE_TIMING = os.environ.get("DIFFVAE_STAGE_TIMING", "") not in ("", "0")
+
+
+@contextlib.contextmanager
+def stage_timer(mesh_device, label: str):
+    """Sync the mesh and time a decode stage (or its host-side tail). Inert unless DIFFVAE_STAGE_TIMING."""
+    if not _STAGE_TIMING:
+        yield
+        return
+    ttnn.synchronize_device(mesh_device)
+    t0 = time.perf_counter()
+    yield
+    ttnn.synchronize_device(mesh_device)
+    logger.info(f"[stage-timing] {label:34s} {(time.perf_counter() - t0) * 1000:9.1f} ms")
+
+
+def stage_time_start(mesh_device):
+    """Paired form of stage_timer for loop bodies that can't be wrapped. Returns t0 (or None if off)."""
+    if not _STAGE_TIMING:
+        return None
+    ttnn.synchronize_device(mesh_device)
+    return time.perf_counter()
+
+
+def stage_time_end(mesh_device, label: str, t0):
+    if t0 is None:
+        return
+    ttnn.synchronize_device(mesh_device)
+    logger.info(f"[stage-timing] {label:34s} {(time.perf_counter() - t0) * 1000:9.1f} ms")
+
 
 from ...layers.embeddings import TimestepEmbedding, Timesteps
 from ...layers.linear import Linear
@@ -548,6 +583,7 @@ class _NeighborhoodAttention3D(Module):
         ccl_manager=None,
         na3d_backend: str | None = None,
         sp_axis: int | None = None,
+        tp_axis: int | None = None,
     ) -> None:
         super().__init__()
         self.config = config
@@ -559,6 +595,9 @@ class _NeighborhoodAttention3D(Module):
         # override so the whole decoder can be flipped to the op backend for the OOM diagnosis.
         self.na3d_backend = na3d_backend or os.environ.get("DIFFVAE_NA3D_BACKEND", "gather")
         self.sp_axis = sp_axis
+        # TP-over-heads on a second mesh axis (only meaningful under op_sp_w_sharded): the attention
+        # runs on heads/tp of the heads per chip, gathered back before the output projection.
+        self.tp_axis = tp_axis
         self.scale = config.head_dim**-0.5
 
         linear = {"bias": True, "mesh_device": mesh_device, "dtype": dtype}
@@ -677,6 +716,7 @@ class _NeighborhoodAttention3D(Module):
                 sp_axis=self.sp_axis,
                 ccl_manager=self.ccl_manager,
                 scale=1.0,
+                tp_axis=self.tp_axis,
             )
         else:
             out = neighborhood_attention_3d(
@@ -711,6 +751,7 @@ class DiffusionNABlock(Module):
         ccl_manager=None,
         na3d_backend: str | None = None,
         sp_axis: int | None = None,
+        tp_axis: int | None = None,
     ) -> None:
         super().__init__()
         self.config = config
@@ -720,6 +761,7 @@ class DiffusionNABlock(Module):
         # so the block's own frame slicing must use the local rows-per-frame, not the full W.
         self.na3d_backend = na3d_backend or os.environ.get("DIFFVAE_NA3D_BACKEND", "gather")
         self.sp_axis = sp_axis
+        self.tp_axis = tp_axis
         self.context_proj = Linear(config.context_channels, config.dim, bias=True, mesh_device=mesh_device, dtype=dtype)
         self.scale_shift_table = Parameter(
             total_shape=[1, NUM_ADALN_CHUNKS * config.dim], device=mesh_device, dtype=dtype
@@ -739,6 +781,7 @@ class DiffusionNABlock(Module):
             ccl_manager=ccl_manager,
             na3d_backend=self.na3d_backend,
             sp_axis=sp_axis,
+            tp_axis=tp_axis,
         )
         self.norm2 = RMSNorm(config.dim, **norm)
         # Fused [up | gate] projection: Linear's swiglu path packs the two halves into
@@ -931,6 +974,7 @@ class DiffVAEStage5(Module):
         ccl_manager=None,
         na3d_backend: str | None = None,
         sp_axis: int | None = None,
+        tp_axis: int | None = None,
     ) -> None:
         super().__init__()
         self.config = config or DiffVAEStage5Config()
@@ -945,6 +989,10 @@ class DiffVAEStage5(Module):
         # diagnostic can flip the whole decoder to the replicated op backend).
         self.na3d_backend = na3d_backend or os.environ.get("DIFFVAE_NA3D_BACKEND", "gather")
         self.sp_axis = sp_axis
+        # TP-over-heads on a second mesh axis: only the per-head attention shards over it; every
+        # other op (context, RoPE, MLP, tail) stays replicated across tp_axis. Composes with the
+        # W-shard above -- the two use orthogonal mesh axes.
+        self.tp_axis = tp_axis
         self._w_sharded = self.na3d_backend == "op_sp_w_sharded"
         if self._w_sharded:
             assert sp_axis is not None, "op_sp_w_sharded needs sp_axis"
@@ -968,6 +1016,7 @@ class DiffVAEStage5(Module):
                 ccl_manager=ccl_manager,
                 na3d_backend=self.na3d_backend,
                 sp_axis=sp_axis,
+                tp_axis=tp_axis,
             )
             for _ in range(cfg.num_blocks)
         )
@@ -1142,8 +1191,14 @@ class DiffVAEStage5(Module):
         bands = self.bands(grid)
         if self._w_sharded:
             context = self._wshard_context(context, grid)
-        out = self.forward_diff_step(context, self.embed_x_t(x_t, bands), timestep, grid, bands)
+        with stage_timer(self.mesh_device, "stage5 diff-blocks (attn)"):
+            out = self.forward_diff_step(context, self.embed_x_t(x_t, bands), timestep, grid, bands)
 
+        with stage_timer(self.mesh_device, "stage5 tail (host pull + unpatchify)"):
+            return self._to_pixels(out, grid)
+
+    def _to_pixels(self, out, grid):
+        cfg = self.config
         if self._w_sharded:
             # ``out`` is this chip's W-band; gather every band to the host and undo the
             # (device, t, h, w_local) reordering back to the (t, h, w) volume before unpatchify.

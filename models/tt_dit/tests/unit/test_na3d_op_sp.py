@@ -289,6 +289,55 @@ def test_na3d_op_sp_w_sharded_matches_host(*, mesh_device, sp_axis, dims, kernel
     "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True, ids=["ring"]
 )
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True, ids=["4x8"])
+@pytest.mark.parametrize("dims, kernel", [((4, 4, 32), (3, 3, 3)), ((3, 2, 16), (3, 3, 3))])
+def test_na3d_op_sp_w_sharded_tp_matches_host(*, mesh_device, dims, kernel):
+    """W-SP composed with TENSOR PARALLELISM OVER HEADS on the orthogonal mesh axis. q/k/v are
+    W-sharded over sp_axis (cols, 8) and replicated over tp_axis (rows, 4); the executor partitions
+    the 4 heads over tp_axis (1 head/chip), runs the flash on that head, and gathers the heads back
+    before returning. Reassembled over W, it matches the host full result -- proving the two axes
+    compose. The head-gather makes the output replicated over tp_axis, so W-reassembly is unchanged."""
+    from ...layers.na3d import neighborhood_attention_3d_op_sp_w_sharded
+
+    sp_axis, tp_axis = 1, 0  # W over the 8-axis, heads over the 4-axis
+    T, H, W = dims
+    heads, head_dim = 4, 64
+    sp = list(mesh_device.shape)[sp_axis]
+    tp = list(mesh_device.shape)[tp_axis]
+    assert heads % tp == 0 and W % sp == 0
+
+    torch.manual_seed(0)
+    q, k, v = (torch.randn(1, T, H, W, heads, head_dim, dtype=torch.float32) for _ in range(3))
+    expected = na3d_torch(q, k, v, kernel, scale=1.0).reshape(1, T, H, W, heads * head_dim)
+
+    # Shard W (dim 3) over sp_axis; heads stay full and replicated over tp_axis (the executor slices
+    # them). Output comes back W-sharded over sp_axis, replicated over tp_axis.
+    shard_axes = [None] * 6
+    shard_axes[3] = sp_axis
+    q_tt, k_tt, v_tt = (
+        from_torch(x, device=mesh_device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_axes=shard_axes)
+        for x in (q, k, v)
+    )
+    ccl_manager = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
+    out = neighborhood_attention_3d_op_sp_w_sharded(
+        q_tt,
+        k_tt,
+        v_tt,
+        dims=dims,
+        kernel_size=kernel,
+        sp_axis=sp_axis,
+        ccl_manager=ccl_manager,
+        scale=1.0,
+        tp_axis=tp_axis,
+    )
+
+    got = to_torch_replicated(out, mesh_axes=[None, None, None, sp_axis, None])
+    assert_quality(expected, got, pcc=0.999)
+
+
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True, ids=["ring"]
+)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True, ids=["4x8"])
 @pytest.mark.parametrize("sp_axis", [0, 1], ids=["sp_rows", "sp_cols"])
 def test_na_block_op_sp_w_sharded_matches_op(*, mesh_device, sp_axis):
     """SP over W for a deterministic-stage NA block: run on a W-SHARDED sequence (x + RoPE tables

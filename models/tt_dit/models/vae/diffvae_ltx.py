@@ -33,7 +33,7 @@ from ...layers.na3d import (
     plan_na3d,
 )
 from ...layers.normalization import RMSNorm
-from .diffvae_ltx_stage5 import TILE, log_dram
+from .diffvae_ltx_stage5 import TILE, log_dram, stage_time_end, stage_time_start
 
 ROPE_BASE = 10000.0
 
@@ -717,6 +717,7 @@ class DeterministicStages(Module):
         count = len(self.upsamples) if stages is None else stages
         sharded = False
         for stage in range(count):
+            _stage_t0 = stage_time_start(self.mesh_device)
             t, h, w = dims
             stage_sharded = self._w_sharded and stage > 0
             if stage_sharded:
@@ -741,6 +742,7 @@ class DeterministicStages(Module):
                 out_dims = (out_dims[0], out_dims[1], out_dims[2] * self.sp)  # local W -> full W
             dims = out_dims
             log_dram(self.mesh_device, f"det stage {stage} upsampled to {dims} sharded={stage_sharded}")
+            stage_time_end(self.mesh_device, f"det stage {stage} -> {dims}", _stage_t0)
 
         if sharded:
             x = self._wgather(x, dims)  # W-sharded -> replicated context; stage-5 handoff unchanged
@@ -779,6 +781,7 @@ class DiffVAEDecoder(Module):
         ccl_manager=None,
         stage5_na3d_backend: str | None = None,
         stage5_sp_axis: int | None = None,
+        stage5_tp_axis: int | None = None,
         stages_na3d_backend: str | None = None,
         stages_sp_axis: int | None = None,
     ):
@@ -828,6 +831,7 @@ class DiffVAEDecoder(Module):
             ccl_manager=ccl_manager,
             na3d_backend=stage5_na3d_backend,
             sp_axis=stage5_sp_axis,
+            tp_axis=stage5_tp_axis,
         )
         self.dtype = dtype
 
@@ -904,7 +908,9 @@ class DiffVAEDecoder(Module):
         """
         from .diffvae_ltx_stage5 import Grid
 
+        _ctx_t0 = stage_time_start(self.mesh_device)
         context, dims = self.forward_context(latent)
+        stage_time_end(self.mesh_device, "det stages TOTAL (forward_context)", _ctx_t0)
         grid = Grid(batch=1, t=dims[0], h=dims[1], w=dims[2])
         context = ttnn.reshape(context, (1, 1, grid.sites, self.config["stage_channels"][-1]))
 

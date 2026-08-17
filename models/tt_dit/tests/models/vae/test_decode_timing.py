@@ -74,8 +74,16 @@ def test_decode_wsp_timing(*, mesh_device, latent_hw):
     torch.manual_seed(0)
     latent = torch.randn(1, config["in_channels"], 4, lh, lw)
     ccl = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
+    # DIFFVAE_TP_HEADS=1 adds TP-over-heads on the orthogonal (rows, size-4) mesh axis: stage-5
+    # attention runs on heads/4 of the 4 heads per chip, gathered back before the output proj.
+    tp_axis = 0 if os.environ.get("DIFFVAE_TP_HEADS") == "1" else None
     dec = DiffVAEDecoder(
-        config, mesh_device=mesh_device, ccl_manager=ccl, stage5_na3d_backend="op_sp_w_sharded", stage5_sp_axis=1
+        config,
+        mesh_device=mesh_device,
+        ccl_manager=ccl,
+        stage5_na3d_backend="op_sp_w_sharded",
+        stage5_sp_axis=1,
+        stage5_tp_axis=tp_axis,
     )
     dec.load_checkpoint(CHECKPOINT)
 
@@ -87,6 +95,7 @@ def test_decode_wsp_timing(*, mesh_device, latent_hw):
     ttnn.synchronize_device(mesh_device)
     dt = time.perf_counter() - t0
     backend = "fused" if os.environ.get("DIFFVAE_SP_FUSED") == "1" else "op"
+    tp = "+TP4" if tp_axis is not None else ""
     print(
-        f"\n[decode W-SP({backend}) 4x8] latent(1,{config['in_channels']},4,{lh},{lw}) -> {px_shape}: {dt * 1000:8.0f} ms\n"
+        f"\n[decode W-SP({backend}){tp} 4x8] latent(1,{config['in_channels']},4,{lh},{lw}) -> {px_shape}: {dt * 1000:8.0f} ms\n"
     )
