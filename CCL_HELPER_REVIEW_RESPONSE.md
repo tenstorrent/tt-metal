@@ -1,99 +1,82 @@
-# CCL Helpers PR (#46413) — response to team-meeting review
+# CCL Helpers PR (#46413) — team-meeting review: IMPLEMENTED
 
-Addresses the three tt-metal-side concerns from the review. **These are proposals, not yet
-implemented+built:** the machine this was drafted on (bh-34) has no `clang-20` toolchain and its
-device is down (firmware mismatch), so the C++ below has not been compiled or run here. The plan is
-grounded in a full read of the current helper (`ccl_helpers_dataflow.hpp`/`.inl`, the host header,
-and the `point_to_point` factory); file:line cites are the current PR head (`d53c7013`).
+The three tt-metal-side concerns from the review are implemented on this branch
+(`wransom/ccl_help_review`, based on the PR head `d53c7013`), built with clang-20, and verified on
+the multichip craq-sim (see Verification below). Commits:
 
----
-
-## #1 — reduce the number of function TYPES (not the steps)
-
-Two consolidations remove distinct types without removing any sequential step:
-
-1. **Collapse the unicast + multicast atomic-inc into one inc type (highest value, low risk).**
-   `arm_inc` → `AtomicIncChannel::inc(addr)` and `arm_multicast_inc` → `MulticastIncChannel::multicast_inc(addr)`
-   are near-duplicates: both `set_state<Val|Flush>` on a fresh header (`.inl:242` vs `:269`) and both
-   issue `<DstAddr>` with an identical `uint64_t remote_sem_noc_addr` (`.inl:252` vs `:280`). The only
-   differences are cast mode (`fabric_unicast_*` vs `fabric_multicast_*`) and that the multicast arm
-   takes its own route. Since cast mode is fixed at arm time, ONE `IncChannel` with a single
-   `inc(addr)` can serve both — the arm variant bakes multicast-ness into the header. Removes **1
-   channel type + 1 arm type** and unifies two issue-method names that already share a signature. The
-   lost compile-time "this is multicast" tag carries no safety (both just take a NOC addr; route is
-   already bound). Callers (`all_gather` writer 192-213, `point_to_point` writer_send:60) keep working.
-
-2. **Collapse the one-shot `signal` / `signal_once` family 4 → 2.** `signal(num_hops,…)` (`hpp:409`) and
-   `signal_once(num_hops,…)` (`hpp:424`) are thin wrappers that only call `unicast_route(n)` before the
-   route-info forms (`:406`/`:416`). `unicast_route()` is already public (`hpp:226`), so drop the two
-   `num_hops` overloads; the one caller (`reader_receive.cpp:36`) passes `unicast_route(n)` — one token.
-
-Leave separate (genuinely different shapes, merging would burden the common path): `arm_unicast_write`
-vs `arm_scatter_write`; `write` vs `write_page`. `DirectConn`/`MuxConn` are already the consolidated
-`ConnT`-template model the review wants — the atomic-inc merge should follow that same pattern.
-
-**Net: −1 channel type, −1 arm type, −2 one-shot overloads, 0 steps removed.**
+- `119b39b` — pybind `ccl_packet_dims` + `ccl_dm_route` (carried over from the eval branch)
+- `783aae1` — #1: consolidate helper function types
+- `dde0032` — #2: host helper owns the fabric arg layout end-to-end; #3: pybind `make_ccl_semaphore`
 
 ---
 
-## #2 — host helpers unclear; the migrated factory should bridge op-author ↔ fabric
+## #1 — fewer function TYPES, same steps (`783aae1`)
 
-The kernel helper is a clean typestate; the host helper is today a set of **à-la-carte packers**, so the
-factory author is still forced to know fabric internals. In `point_to_point/device/host/send_program_factory.cpp`:
+- **One armed atomic-inc channel.** `AtomicIncChannel<ConnT, IncCast>` (Unicast default / Multicast)
+  replaces the `AtomicIncChannel` + `MulticastIncChannel` pair. `arm_inc(val)` and
+  `arm_inc(mcast_route, val)` are overloads (`arm_multicast_inc` is gone) and the issue verb is
+  `inc(addr)` for both casts (`multicast_inc` is gone). Cast mode is baked into the header at arm
+  time; issue dispatch is `if constexpr` — zero cost. The two paths were near-duplicates (same
+  `set_state<Val|Flush>` + `with_state<DstAddr>` shape, differing only in the unicast vs multicast
+  fabric entry point).
+- **One spelling per one-shot.** `signal(route, …)` / `signal_once(cursor, …, route, …)` drop their
+  `num_hops` twins; `unicast_route(n)` is public, so the caller writes `signal(unicast_route(n), …)`.
 
-- **Clear:** `ccl_packet_dims(...)` (send:34-36) and `ccl_dm_route(...)` (send:93-94) — good bridges.
-- **Unclear #1:** the author hand-builds a `std::vector<uint32_t>` of **9 scalars in a hardcoded order**
-  (send:145-155) that must byte-match the kernel's `get_arg_val` indices (writer_send.cpp:19-27) — two
-  files kept in sync by hand, no shared struct.
-- **Unclear #2:** `append_ccl_fabric_rt_args(...)` appends the connection block *starting at index 9*
-  (send:160-161); the kernel re-hardcodes `size_t conn_arg_idx = 9` (writer_send.cpp:33). A magic
-  number duplicated host↔kernel.
-- **Unclear #3:** the author then hand-promotes the plain vector into a `KernelDescriptor::RTArgList`,
-  knowing which slots are `Buffer*`/semaphore bindings (idx 0 buffer, idx 8 semaphore) for cache-hit
-  address patching (send:163-169).
+Net: −1 channel type, −1 arm name, −1 issue name, −2 one-shot overloads; zero sequential steps
+removed. Left separate on purpose: `arm_unicast_write` vs `arm_scatter_write` (genuinely different
+issue shapes) and `write` vs `write_page` (a step-level convenience, not a distinct type).
 
-**The gap:** the author naturally knows tensors + mesh coords + topology + page accounting; they should
-NOT have to know the RT-arg *wire layout*, the has_fwd/has_bwd flag encoding, which slots are bindings,
-or the magic `conn_arg_idx = 9`.
+## #2 — host helper bridges op-author ↔ fabric (`dde0032`)
 
-**Bridge (proposed):** a single per-direction args-builder that owns the whole layout —
+The factory previously hand-laid a 9-scalar arg vector that had to byte-match the kernel's
+`get_arg_val` indices, duplicated a magic `conn_arg_idx = 9` in host AND kernel, and hand-promoted
+`Buffer*`/semaphore bindings after the fact.
 
-```cpp
-// host — the SOLE definition of the host↔kernel arg layout
-KernelDescriptor::RTArgList build_ccl_send_writer_args(
-    const Buffer* in, const Buffer* out, const PacketDims&, const DmRoute&,
-    const GlobalSemaphore&, const CoreCoord&, /* link_idx, etc. */);
-```
+- `append_ccl_fabric_rt_args` → **`build_ccl_fabric_rt_args`**: RETURNS the connection block, and
+  the block goes **FIRST** in the kernel's runtime args. The kernel consumes it with a cursor from 0
+  (the `FabricStreamSender` ctor advances it) and reads the op's args after — **the magic offset is
+  gone from both sides** and the helper is the sole owner of the wire layout.
+- The `point_to_point` factories now push op args as their natural types straight into the
+  `RTArgList` (a `Buffer*` records the cache-hit binding) — the placeholder-then-promote pass is
+  deleted in both factories.
 
-returning a ready `RTArgList` with `Buffer*`/semaphore bindings already placed and the connection block
-already appended at the right offset — paired with a kernel-side `FabricStreamSender` ctor that knows
-its own offset instead of hardcoding `= 9`. This subsumes send steps 3-5, deletes the magic index and
-the two-file sync, and leaves the author passing only op-author-level inputs. (Also fix the host
-header's stale line 22-24 "intentionally not Python-bound" — contradicts #3.)
+So the op author supplies only what they naturally know — buffers, mesh coords, topology, page
+accounting (`ccl_packet_dims`), the route (`ccl_dm_route`) — and never the wire layout.
 
----
+## #3 — pybind the host helpers (`119b39b` + `dde0032`)
 
-## #3 — pybind the host helpers (generated ops are Python host code)
+Generated ops assemble their `MeshProgramDescriptor` from Python host code, so the host surface is
+now bound under `ttnn._ttnn.fabric`:
 
-Binding site: `ttnn/cpp/ttnn-nanobind/fabric.cpp`, `ttnn::fabric::bind_fabric_api(nb::module_&)` (the
-`ttnn._ttnn.fabric` submodule, `__init__.cpp:258/272`); add `mod.def(...)` at the end + `#include
-".../ccl_helpers_dataflow_host.hpp"`. POD returns follow the `CclPacketDims` `nb::class_` precedent.
+| Python | What it owns |
+|---|---|
+| `ccl_packet_dims(dtype, page_size, num_pages, alignment)` → `CclPacketDims` | packet framing; the bf16 `bit_floor` + both packing regimes |
+| `ccl_dm_route(mesh_device, src, dst, topology)` → `CclDmRoute` | 1-D route; the fwd/bwd sign reversal + ring short-way |
+| `make_ccl_semaphore(mesh_device, initial_value=0)` → `GlobalSemaphore` | allocation + the cache-miss cross-device `Synchronize`; park on `MeshProgramDescriptor.semaphores` |
+| `setup_fabric_connection(...)` (pre-existing) | the fabric-connection runtime args from Python |
 
-| Host helper | Status | Binding note |
-|---|---|---|
-| `ccl_packet_dims`, `ccl_dm_route` | bound on `ccl_help_eval` (commit `5b8156d`) but **NOT on the current `ccl_help` PR head** — carry them over | pure-compute, already have the `nb::class_` POD pattern |
-| `make_ccl_semaphore` | C++-only → bind | one-liner: `mod.def("make_ccl_semaphore", &...::make_ccl_semaphore, nb::arg("mesh_device"), nb::arg("initial_value")=0)`; `GlobalSemaphore` already bound |
-| `append_ccl_fabric_rt_args` | C++-only → bind | highest value (owns the has_fwd/has_bwd footgun). Don't expose the out-param vector — follow `setup_fabric_connection`'s lambda that builds + *returns* a `std::vector<uint32_t>`; note it *appends*, so take the in-progress list and return it extended. All arg types already bindable (`FabricNodeId`, `CoreCoord`, `ProgramDescriptor&`). |
-| `append_ccl_line_route_ct_args` | C++-only, **templated** → bind via wrapper | wrap a lambda over 4 `std::vector<uint32_t>` returning the packed `ct_args` (templates can't bind directly); pure concatenation, value is owning the fwd/bwd × uni/mcast order in one place |
-
-If #2's `build_ccl_*_args` bridge lands, it becomes the primary thing to pybind (a generated Python op
-calls it directly), and `append_ccl_fabric_rt_args` binding is subsumed.
+The host header's stale "intentionally not Python-bound" note is corrected, and its authoring guide
+now describes the conn-block-first contract.
 
 ---
 
-## Blocker / next step
+## Verification
 
-The C++ above needs a `clang-20` build to compile+verify — unavailable on bh-34 (only clang-14), and the
-device is down (firmware 19.9 vs 19.12). On a machine with the toolchain I'll implement all three, build,
-and (for #1/#2) re-run the migrated `point_to_point`/`all_gather` kernels on the sim to confirm no
-regression, then push the real diff to this PR.
+- Host build: clean (clang-20; the refactored factories + pybind compile in-tree).
+- Python: `import ttnn` from this build; all three bindings present and callable.
+- Multichip craq-sim (results):
+  - `point_to_point` nightly suite: **27 passed, 0 failed** (BH 8xP150 sim, mesh (2,4), FABRIC_1D,
+    12 min) — exercises the unicast `arm_inc`/`inc`, `signal`, and the conn-block-first layout in
+    BOTH factories/kernels. Includes `cache_hit_with_output_tensor`, which validates the
+    conn-first `Buffer*` binding positions across program-cache hits. The 2 deselected cases are
+    the `with_device_delay` variants — they busy-wait on device clock cycles, which never
+    terminates on a ~kHz simulator (sim limitation, not a helper issue).
+  - `all_gather_async` `gather_dim_0 × fabric_linear` barrier case: **passed** (WH T3K all-MMIO
+    sim, (1,8), 68 s) — exercises the multicast `arm_inc` overload + unified `inc`, scatter, and
+    MuxConn through the rewritten `minimal_default_writer`.
+
+## Note on the pybind carry-over
+
+`ccl_packet_dims`/`ccl_dm_route` were bound on the eval branch (`5b8156d`) but that commit was NOT
+on the PR head — carried over here so the binding ships with the helper PR rather than the eval
+scaffolding.
