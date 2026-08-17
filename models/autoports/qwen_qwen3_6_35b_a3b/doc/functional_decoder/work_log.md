@@ -572,14 +572,27 @@ Local only; nothing pushed.
 |---|---|
 | `12c947d9147670eb0b3a9b23136635b89de709f3` (`12c947d9147`) | the whole stage: `models/autoports/qwen_qwen3_6_35b_a3b/**` plus the `conftest.py` guarded-import fix (§7 item 4 of the README) |
 | `b2bb054161fcde8a1664f848ce0f35ad3f58aeea` (`b2bb054161f`) | this work log's commit table (the SHA above could not be recorded in the commit it names) |
-| _review round 1_ | the fixes in §9 plus every artifact regenerated against the fixed code |
+| `ea58fe8fa7ae1138dbc35a363b6b817faeeed605` (`ea58fe8fa7a`) | **review rounds 1 and 2**: the fixes in §9 and §10, the shipped `decode_sdpa_max_cores_per_head = 1`, the ROW_MAJOR RoPE tables, the per-slot state reset, and every artifact regenerated against this code |
 
-All evidence was regenerated after the review-round code fixes, in this order and one hardware
-command at a time: long-context (5 pytest processes) -> `write_context_contract.py` -> contract
-test -> op probes -> watcher -> Tracy perf (4 cases) -> `summarize_perf.py` -> main suite -> the
-two SDPA diagnostics. Every committed log therefore postdates the final `functional_decoder.py`;
-the long-context PCCs came back bit-identical to the pre-fix run, which is the expected result
-since the RoPE-alias trigger needs `supported_context <= 2048`.
+All evidence was regenerated after the last code change, one hardware command at a time. The
+round-2 pass ran: main suite (gate) -> long-context (5 pytest processes) ->
+`write_context_contract.py` -> contract test -> op probes -> watcher -> Tracy perf (4 cases) ->
+`summarize_perf.py` -> on-model SDPA control -> long-decode diagnostic -> DRAM capacity probe ->
+main suite again (so `pcc.jsonl` is from the final code) -> the op sweep. Check it rather than
+trust it:
+
+```bash
+find models/autoports/qwen_qwen3_6_35b_a3b/doc -type f \
+  ! -newer models/autoports/qwen_qwen3_6_35b_a3b/tt/functional_decoder.py
+```
+
+should list only `weight_stats/*.json` (checkpoint-derived), the `.gitignore` / `README.md` files
+that describe the artifact policy, and `triage/` (a record of the §6 incident when it happened).
+
+Three numbers reproduced **bit-identically** across independent re-runs, which is worth recording
+because it makes the determinism claim concrete: the five advertised-context PCCs, the on-model
+three-setting comparison (0.9999950 / 0.4791771 / 0.9999949 at context 258 and so on), and the
+whole 20-row op sweep. Only wall-clock and per-op device times moved, by <0.2%.
 
 Pre-commit reformatted the Python sources (black/isort/autoflake — formatting only, no import
 or semantic changes) and rejected two >500 KB artifacts; the full suite was re-run after the
