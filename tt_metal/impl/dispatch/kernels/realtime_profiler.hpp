@@ -18,8 +18,7 @@ constexpr uint32_t REALTIME_PROFILER_SYNC_MARKER_ID = 0xFFFFFFFF;
 
 // CQDispatchSetWriteOffsetCmd::program_host_id and RT timestamp correlation: this value means the
 // dispatch event is not tied to a profiled program (raw streams, preamble defaults). dispatch_d
-// must not push it into the program-id FIFO; dispatch_s passes it to write_buffer_id for non-GO
-// commands so the host can filter those records out.
+// must not push it into the program-id FIFO, and dispatch_s does not publish a descriptor for it.
 constexpr uint16_t REALTIME_PROFILER_UNPROFILED_PROGRAM_HOST_ID = 0;
 
 // Program ID FIFO size
@@ -68,37 +67,8 @@ bool program_id_fifo_pop(volatile tt_l1_ptr realtime_profiler_msg_t* msg, uint32
     return true;
 }
 
-// Record a real-time profiler timestamp (start or end) to the appropriate ping-pong buffer.
-// Reads mailbox state to determine which buffer to use (opposite of what's being pushed).
-// is_start: true for kernel start timestamp, false for kernel end timestamp
-FORCE_INLINE
-void record_realtime_timestamp(volatile tt_l1_ptr realtime_profiler_msg_t* msg, bool is_start) {
-    uint32_t time_hi = 0;
-    uint32_t time_lo = 0;
-    read_realtime_wall_clock(&time_hi, &time_lo);
-
-    // Determine buffer from profiler state: write to buffer NOT being pushed
-    // PUSH_B means real-time profiler is pushing B, so write to A
-    // Otherwise (IDLE, PUSH_A) write to B
-    RealtimeProfilerState state = static_cast<RealtimeProfilerState>(msg->realtime_profiler_state);
-    bool use_buffer_a = (state == REALTIME_PROFILER_STATE_PUSH_B);
-
-    // Get pointer to appropriate timestamp field
-    volatile realtime_profiler_timestamp_t* ts;
-    if (use_buffer_a) {
-        ts = is_start ? &msg->kernel_start_a : &msg->kernel_end_a;
-    } else {
-        ts = is_start ? &msg->kernel_start_b : &msg->kernel_end_b;
-    }
-
-    ts->time_lo = time_lo;
-    ts->time_hi = time_hi;
-}
-
 // Pop a program ID from the FIFO without writing it to the buffer.
 // Returns the popped ID, or 0 if the FIFO was empty.
-// Call this early to maintain timing (FIFO pop involves L1 reads/writes),
-// then call write_buffer_id() later once the command type is known.
 FORCE_INLINE
 uint32_t pop_program_id(volatile tt_l1_ptr realtime_profiler_msg_t* msg) {
     uint32_t id = 0;
@@ -106,22 +76,6 @@ uint32_t pop_program_id(volatile tt_l1_ptr realtime_profiler_msg_t* msg) {
     return id;
 }
 
-// Write a program ID to both start and end timestamps of the current write buffer.
-// For GO_SIGNAL commands: pass the ID from pop_program_id().
-// For non-GO commands: pass REALTIME_PROFILER_UNPROFILED_PROGRAM_HOST_ID so the host filters them out.
-FORCE_INLINE
-void write_buffer_id(volatile tt_l1_ptr realtime_profiler_msg_t* msg, uint32_t id) {
-    RealtimeProfilerState state = static_cast<RealtimeProfilerState>(msg->realtime_profiler_state);
-    bool use_buffer_a = (state == REALTIME_PROFILER_STATE_PUSH_B);
-
-    if (use_buffer_a) {
-        msg->kernel_start_a.id = id;
-        msg->kernel_end_a.id = id;
-    } else {
-        msg->kernel_start_b.id = id;
-        msg->kernel_end_b.id = id;
-    }
-}
 #else
 FORCE_INLINE
 bool program_id_fifo_append(volatile tt_l1_ptr realtime_profiler_msg_t*, uint32_t) { return false; }
@@ -130,11 +84,5 @@ FORCE_INLINE
 bool program_id_fifo_pop(volatile tt_l1_ptr realtime_profiler_msg_t*, uint32_t*) { return false; }
 
 FORCE_INLINE
-void record_realtime_timestamp(volatile tt_l1_ptr realtime_profiler_msg_t*, bool) {}
-
-FORCE_INLINE
 uint32_t pop_program_id(volatile tt_l1_ptr realtime_profiler_msg_t*) { return 0; }
-
-FORCE_INLINE
-void write_buffer_id(volatile tt_l1_ptr realtime_profiler_msg_t*, uint32_t) {}
 #endif

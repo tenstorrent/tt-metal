@@ -16,6 +16,7 @@
 #include <tt-metalium/mesh_command_queue.hpp>
 #include <tt_align.hpp>
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <cstdlib>
 #include <functional>
@@ -97,6 +98,22 @@ std::shared_ptr<Kernel> GetKernel(const ProgramImpl& program, KernelHandle kerne
 namespace program_dispatch {
 
 namespace {
+
+uint8_t encode_realtime_profiler_worker_count(uint32_t num_workers) {
+    if (num_workers <= std::numeric_limits<uint8_t>::max()) {
+        return static_cast<uint8_t>(num_workers);
+    }
+
+    static std::atomic_flag warned;
+    if (!warned.test_and_set(std::memory_order_relaxed)) {
+        log_warning(
+            tt::LogMetal,
+            "Real-time profiler cannot encode a {}-worker launch in its 8-bit command field; "
+            "the launch will run normally but its interval will be counted as unsupported",
+            num_workers);
+    }
+    return 0;
+}
 
 inline bool is_watcher_assert_enabled() {
     return tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled() &&
@@ -1385,7 +1402,7 @@ public:
                 // WH/BH: DFBs reuse the CB slot format; device slot N starts at N * 4 words.
                 for (const auto& dfb : dfbs_on_corerange) {
                     size_t dfb_byte_offset = static_cast<size_t>(dfb->device_slot) *
-                                            UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
+                                             UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
                     auto serialized = dfb->serialize_for_core(logical_representative);
                     TT_FATAL(
                         dfb_byte_offset + serialized.size() <= payload.size(),
@@ -2473,6 +2490,7 @@ void update_program_dispatch_commands(
     uint32_t multicast_cores_launch_message_wptr,
     uint32_t unicast_cores_launch_message_wptr,
     uint32_t expected_num_workers_completed,
+    uint32_t num_program_workers,
     CoreCoord dispatch_core,
     SubDeviceId sub_device_id,
     const ProgramDispatchMetadata& dispatch_md,
@@ -2663,6 +2681,8 @@ void update_program_dispatch_commands(
             MetalContext::instance().dispatch_mem_map().get_completion_counter_offset(cq_id));
     cached_program_command_sequence.mcast_go_signal_cmd_ptr->wait_count = expected_num_workers_completed;
     cached_program_command_sequence.mcast_go_signal_cmd_ptr->profiler_program_id = runtime_id;
+    cached_program_command_sequence.mcast_go_signal_cmd_ptr->profiler_num_workers =
+        encode_realtime_profiler_worker_count(num_program_workers);
     // Update the number of unicast txns based on user provided parameter
     // This is required when a MeshWorkload uses ethernet cores on a set of devices
     // where the number of active eth cores is heterogeneous across devices.
@@ -2870,6 +2890,8 @@ void update_traced_program_dispatch_commands(
             MetalContext::instance().dispatch_mem_map().get_completion_counter_offset(cq_id));
     cached_program_command_sequence.mcast_go_signal_cmd_ptr->wait_count = expected_num_workers_completed;
     cached_program_command_sequence.mcast_go_signal_cmd_ptr->profiler_program_id = runtime_id;
+    cached_program_command_sequence.mcast_go_signal_cmd_ptr->profiler_num_workers =
+        encode_realtime_profiler_worker_count(trace_node.num_workers);
     // Update the number of unicast txns based on user provided parameter
     // This is required when a MeshWorkload uses ethernet cores on a set of devices
     // where the number of active eth cores is heterogeneous across devices.

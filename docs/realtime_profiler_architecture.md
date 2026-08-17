@@ -37,15 +37,15 @@ This document describes how the **dispatch core** (dispatch_s), **real-time prof
 |   |   +---------------+  +-------------------------------------------+  |   |
 |   |   | Mailbox (L1)  |  | Loop:                                     |  |   |
 |   |   | - config_buf  |  |   IDLE + sync_request -> sync(); push     |  |   |
-|   |   |   _addr       |  |   PUSH_A -> NOC read buf A -> D2H push    |  |   |
-|   |   | - state (R/W) |  |   PUSH_B -> NOC read buf B -> D2H push    |  |   |
-|   |   | - sync_req    |  |   TERMINATE -> exit                       |  |   |
+|   |   |   _addr       |  |   PUSH_B -> NOC read buf B -> ring push   |  |   |
+|   |   | - state (R/W) |  |   terminate_requested -> drain and exit   |  |   |
+|   |   | - sync_req    |  |                                           |  |   |
 |   |   | - sync_host_ts|  |                                           |  |   |
 |   |   +-------+-------+  +-------------------------------------------+  |   |
 |   |           |                        ^ NOC read (timestamp data)      |   |
 |   +-----------+------------------------+--------------------------------+   |
 |               |                        |                                    |
-|               | state (PUSH_A/B)       |                                    |
+|               | state (PUSH_B)         |                                    |
 |               | NOC write              |                                    |
 |               v                        |                                    |
 |   +---------------------------------------------------------------------+   |
@@ -53,15 +53,13 @@ This document describes how the **dispatch core** (dispatch_s), **real-time prof
 |   | Kernel: cq_dispatch_subordinate.cpp                                 |   |
 |   |                                                                     |   |
 |   |   L1 carve-out realtime_profiler_msg_t:                              |   |
-|   |     Ping-pong: kernel_start_a/b, kernel_end_a/b                     |   |
-|   |     program_id_fifo, realtime_profiler_core_noc_xy,                 |   |
-|   |     realtime_profiler_remote_state_addr                             |   |
+|   |     per-stream start/watermark slots, completed-record ring,        |   |
+|   |     mailbox B, drop counters, reset generations, termination        |   |
 |   |                                                                     |   |
-|   |   Per-command: record start ts, FIFO program id, process cmd,       |   |
-|   |     record end ts, signal_realtime_profiler_and_switch()            |   |
-|   |     ... process command ...                                         |   |
-|   |     record_realtime_timestamp(false); signal_realtime_profiler_and_ |   |
-|   |     switch();  (NOC-write state to profiler core)                   |   |
+|   |   NCRISC: publish start descriptor before go signal; service at     |   |
+|   |     most one completed record into mailbox B per progress point     |   |
+|   |   TRISC0: observe each stream completion counter, capture device    |   |
+|   |     end tick, publish intervals, and order Finish watermarks        |   |
 |   +---------------------------------------------------------------------+   |
 +-----------------------------------------------------------------------------+
 ```
@@ -75,16 +73,15 @@ This document describes how the **dispatch core** (dispatch_s), **real-time prof
   (dispatch_s)               (cq_realtime_profiler)               (receiver thread)
 
        |                              |                                  |
-       | 1. Record start ts,          |                                  |
-       |    program_id into           |                                  |
-       |    mailbox buf A or B        |                                  |
-       | 2. Process command           |                                  |
-       | 3. Record end ts             |                                  |
-       | 4. Update state PUSH_A/B     |                                  |
-       | 5. NOC write state --------> |                                  |
-       |                              | 6. See state PUSH_A or PUSH_B    |
+       | 1. Publish start descriptor  |                                  |
+       | 2. Send go signal            |                                  |
+       | 3. TRISC0 observes stream    |                                  |
+       |    completion, records end   |                                  |
+       | 4. Publish completed record  |                                  |
+       | 5. Move one record to buf B  |                                  |
+       | 6. NOC write PUSH_B -------->|                                  |
        |                              | 7. NOC read timestamp data       |
-       | <----------------------------|    from dispatch_s L1 (buf A/B)  |
+       | <----------------------------|    from dispatch_s L1 (buf B)    |
        |                              | 8. Push page to D2H socket       |
        |                              |    (PCIe write to host buffer)   |
        |                              | -------------------------------> | 9. wait_for_pages
@@ -129,8 +126,8 @@ Host and device timestamps are aligned so that Tracy (or other consumers) can re
 
 | Location | Contents (`realtime_profiler_msg_t`) |
 |----------|----------------------------------------|
-| **Dispatch_s L1** | Ping-pong buffers, program_id_fifo, **realtime_profiler_core_noc_xy**, **realtime_profiler_remote_state_addr**, realtime_profiler_state. Host writes NOC XY and the profiler tensix L1 address of `realtime_profiler_state` for NOC signaling. |
-| **Profiler tensix L1** | **config_buffer_addr**, **realtime_profiler_state**, sync_request, sync_host_timestamp. |
+| **Dispatch_s L1** | Per-stream start rings, completed-record ring, mailbox B, loss counters, reset generations, termination handshake, program_id_fifo, **realtime_profiler_core_noc_xy**, and **realtime_profiler_remote_state_addr**. Host writes NOC XY and the profiler tensix L1 address of `realtime_profiler_state` for NOC signaling. |
+| **Profiler tensix L1** | **config_buffer_addr**, **realtime_profiler_state**, **terminate_requested**, sync_request, sync_host_timestamp. |
 
 Layout: `tt_metal/hw/inc/hostdev/realtime_profiler_msgs.h`. HAL: `tt::tt_metal::realtime_profiler_msgs`. Not in `mailboxes_t`.
 
@@ -140,8 +137,12 @@ Layout: `tt_metal/hw/inc/hostdev/realtime_profiler_msgs.h`. HAL: `tt::tt_metal::
 
 | Component | File(s) |
 |-----------|--------|
-| Dispatch_s (timestamp record + signal) | `tt_metal/impl/dispatch/kernels/cq_dispatch_subordinate.cpp`, `realtime_profiler.hpp` |
-| Real-time profiler kernel | `tt_metal/impl/dispatch/kernels/cq_realtime_profiler.cpp` |
+| Dispatch_s NCRISC (start publication + transport signal) | `tt_metal/impl/dispatch/kernels/cq_dispatch_subordinate.cpp`, `realtime_profiler.hpp` |
+| Dispatch_d (program-ID + reset-epoch publication) | `tt_metal/impl/dispatch/kernels/cq_dispatch.cpp` |
+| Dispatch_s TRISC0 (completion observer) | `tt_metal/impl/dispatch/kernels/cq_dispatch_subordinate_compute.cpp`, `cq_realtime_profiler_dispatch_subordinate.hpp` |
+| Profiler-core BRISC (mailbox reader) | `tt_metal/impl/dispatch/kernels/cq_realtime_profiler.cpp` |
+| Profiler-core NCRISC (D2H pusher) | `tt_metal/impl/dispatch/kernels/cq_realtime_profiler_push.cpp` |
 | Host init, sync, receiver thread | `mesh_device.cpp`, `realtime_profiler_manager.cpp` |
 | Shared struct + HAL accessors | `realtime_profiler_msgs.h` → `realtime_profiler_msgs` (generated) |
+| Wrap and queue protocol helpers | `tt_metal/impl/dispatch/kernels/realtime_profiler_protocol.hpp` |
 | Callbacks (Tracy, user) | `tt_metal/impl/dispatch/data_collector.cpp`, `realtime_profiler_tracy_handler.cpp` |

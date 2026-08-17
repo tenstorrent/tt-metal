@@ -33,6 +33,10 @@ void write_go_signal(
     const program_dispatch::ProgramDispatchMetadata& dispatch_md);
 
 void write_rt_profiler_flush(
-    uint8_t cq_id, SubDeviceId sub_device_id, SystemMemoryManager& sysmem_manager, uint32_t wait_count);
+    uint8_t cq_id,
+    SubDeviceId sub_device_id,
+    SystemMemoryManager& sysmem_manager,
+    uint32_t wait_count,
+    uint32_t watermark_id);
 
 }  // namespace tt::tt_metal::distributed

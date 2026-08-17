@@ -136,6 +136,7 @@ void update_program_dispatch_commands(
     uint32_t multicast_cores_launch_message_wptr,
     uint32_t unicast_cores_launch_message_wptr,
     uint32_t expected_num_workers_completed,
+    uint32_t num_program_workers,
     CoreCoord dispatch_core,
     SubDeviceId sub_device_id,
     const ProgramDispatchMetadata& dispatch_md,

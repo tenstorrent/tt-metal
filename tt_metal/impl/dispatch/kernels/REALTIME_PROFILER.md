@@ -1,111 +1,166 @@
-# Real-Time Profiler: Architecture and Performance Analysis
+# Blackhole Real-Time Profiler Device Path
 
-## Overview
+## Scope
 
-The real-time profiler streams per-program device-side timestamps to the host
-during execution, enabling 1:1 correlation between host-side Tracy zones
-(`EnqueueMeshWorkload`) and device-side program execution windows.
+The real-time profiler is enabled only on Blackhole with worker
+dispatch and one command queue. It records device wall-clock start and end
+ticks for programs on independent dispatch streams. Wormhole, Quasar,
+multi-command-queue, trace-replay concurrency, and model integration are not
+part of this feature; profiler eligibility rejects those architectures.
 
-### Components
+## Device pipeline
 
-| Component | File | Core | NOC |
-|-----------|------|------|-----|
-| **dispatch_s** (signal source) | `cq_dispatch_subordinate.cpp` | NCRISC | NOC 1 |
-| **BRISC reader** (fast path) | `cq_realtime_profiler.cpp` | reserved profiler tensix BRISC | NOC 0 |
-| **NCRISC pusher** (slow path) | `cq_realtime_profiler_push.cpp` | reserved profiler tensix NCRISC | NOC 1 |
-| **host manager** | `realtime_profiler_manager.cpp` | CPU threads | PCIe |
+| Stage | Producer | Consumer | Full behavior |
+| --- | --- | --- | --- |
+| Per-stream start queue | dispatch_s NCRISC | dispatch_s TRISC0 | Count `start_descriptor_drop_count`; launch continues |
+| Completed interval queue | dispatch_s TRISC0 | dispatch_s NCRISC | Count `completed_record_drop_count`; observation continues |
+| Per-stream watermark slot | dispatch_s NCRISC | dispatch_s TRISC0 / dispatch_s NCRISC | Count `watermark_request_drop_count`; dispatch continues |
+| Mailbox B | dispatch_s NCRISC | profiler-core BRISC | Leave record queued until a later bounded service point |
+| Reserved-core L1 ring | profiler-core BRISC | profiler-core NCRISC | Intervals reserve one control slot and count `transport_drop_count`; watermarks retain mailbox ownership until the control slot is available |
+| D2H socket | profiler-core NCRISC | host receiver | May backpressure the reserved profiler core, never dispatch |
 
-The data mover is split across two RISCs on a reserved dedicated tensix core — an otherwise-unused core taken from the back of the dispatch core pool.
-The BRISC reader pulls timestamps off dispatch_s and drops them into an L1 ring
-buffer; the NCRISC pusher drains that ring to the host over PCIe. Splitting the
-work this way decouples the fast NOC read from the PCIe push, so that transient bursts
-can be absorbed without dropping records.
+## Component map
 
-### Data Flow
+| Component | File | Core / transport |
+| --- | --- | --- |
+| Start publisher and record forwarder | `cq_dispatch_subordinate.cpp` | dispatch_s NCRISC, NOC 1 |
+| Reset-epoch publisher and ID producer | `cq_dispatch.cpp` | dispatch_d BRISC, shared L1 |
+| Completion observer | `cq_dispatch_subordinate_compute.cpp`, `cq_realtime_profiler_dispatch_subordinate.hpp` | dispatch_s TRISC0, shared L1 |
+| Counter/wrap helpers | `realtime_profiler_protocol.hpp` | host tests and device firmware |
+| Mailbox reader | `cq_realtime_profiler.cpp` | reserved profiler BRISC, NOC 0 |
+| D2H pusher | `cq_realtime_profiler_push.cpp` | reserved profiler NCRISC, NOC 1 / PCIe |
+| Host manager | `realtime_profiler_manager.cpp` | receiver and callback threads |
 
-```
-dispatch_s            BRISC reader          NCRISC pusher          host
-(NCRISC, NOC 1)       (profiler tensix,     (profiler tensix,      (receiver thread)
-                       NOC 0)                NOC 1)
-    |                      |                      |                      |
-    |-- inline_dw_write -->|                      |                      |
-    |   PUSH_A / PUSH_B    |                      |                      |
-    |   (NOC 1, ~92 cyc)   |                      |                      |
-    |                      |-- noc_async_read     |                      |
-    |                      |   (read timestamps,  |                      |
-    |                      |    NOC 0)            |                      |
-    |                      |-- write_index++ ---->| L1 ring buffer       |
-    |                      |                      |                      |
-    |                      |                      |-- drain all pending  |
-    |                      |                      |   push_entries_to_host
-    |                      |                      |   (coalesced PCIe    |
-    |                      |                      |    writes, ~420 ns) ->| hugepage
-    |                      |                      |                      |-- read pages
-    |                      |                      |                      |   -> callbacks
+dispatch_s receives the exact worker contribution in each go command. Just
+before sending the go signal, it publishes a descriptor containing the runtime
+ID, device start tick, stream, reset generation, and modular completion target:
+
+```text
+target = (previous completion count + workers in this launch) mod 2^17
 ```
 
-## Double-Buffer Protocol
+TRISC0 continuously samples every configured completion stream. When a target
+is reached using the stream counter's half-range modular comparison, TRISC0
+captures the end tick and publishes an eight-word completed interval. If
+multiple targets became ready between samples, only the newest can receive an
+accurate sampled end tick; the ambiguous older intervals are counted as
+completion-observer drops.
 
-dispatch_s maintains two timestamp buffers in its own L1 (A/B). On each
-`CQ_DISPATCH_CMD_WAIT` completion it:
+dispatch_s calls `service_realtime_profiler_once()` at existing progress
+points. One call forwards at most one completed interval or watermark and returns immediately
+when mailbox B is occupied. There is no steady-state profiler drain or
+acknowledgement loop on dispatch_s.
 
-1. Writes the program's start/end timestamps into the next buffer (alternating A/B)
-2. Sends a `PUSH_A` or `PUSH_B` state to the reserved profiler tensix via a NOC
-   inline dword write
+On Blackhole an inline write to profiler-core L1 uses the NCRISC spoof command
+buffer. The default multicast go path therefore defers profiler service while
+`wait_for_workers()` runs between `init_state` and `with_state`; its next normal
+progress point services any queued record. Device-print builds retain their
+existing wait-before-`init_state` ordering. Neither progress path can overwrite
+live go-signal NOC state.
 
-This alternation only hands one in-flight record to the reader at a time;
-dispatch_s never blocks on the profiler.
+The profiler-core BRISC NOC-reads the mailbox-B payload. Intervals treat the
+ring as full with one slot remaining, count a transport drop, and acknowledge
+the mailbox. That reserved slot carries an ordered watermark. If it is
+temporarily occupied, BRISC retains the watermark notification until NCRISC
+makes space; dispatch_s does not wait for the acknowledgement. The NCRISC
+remains responsible for coalesced D2H socket writes and may wait for host FIFO
+space without propagating that wait back to application dispatch.
 
-The **BRISC reader** polls its state mailbox. On `PUSH_A`/`PUSH_B` it issues a
-`noc_async_read` of the 32-byte timestamp pair from the indicated dispatch_s
-buffer into the next ring slot, then advances `write_index` (records for
-unprofiled programs are read but not committed). If the ring is full it spins
-(heartbeat `ring_full_wait_count`); in practice this does not happen, because the
-host drains records faster than they are produced. The reader also services host
-clock-sync requests, enqueueing sync-marker records into the same ring.
+The NCRISC snapshots the reserved-core ring indices and sends every available
+entry in a coalesced `push_entries_to_host()` call. Transfers are split only at
+ring wrap, host-FIFO wrap, and the NOC burst limit, then committed with one
+socket page notification and NOC write barrier.
 
-The **NCRISC pusher** owns the slow PCIe path. Each iteration it snapshots
-`write_index`/`read_index`, and if the ring is non-empty it pushes *all*
-available entries in one `push_entries_to_host` call, then advances `read_index`
-by the number drained.
+The host receiver drains D2H pages, decodes interval and sync records, and
+publishes intervals to a `BroadcastRing`. Each registered callback has its own
+consumer thread. A slow callback increments only that consumer's drop count; it
+cannot stall the socket receiver, reserved profiler core, or application
+dispatch.
 
-`push_entries_to_host` reserves the pages in the D2H socket, then issues
-coalesced NOC writes over PCIe — up to `NOC_MAX_BURST_SIZE` per write, chunked at
-ring-wrap, host-FIFO-wrap, and burst-size boundaries — followed by a single
-`socket_push_pages` + `socket_notify_receiver` + `noc_async_write_barrier`.
+## Ordering and cache visibility
 
-## Measured Timing
+Each local queue is single-producer/single-consumer. The producer writes the
+payload, executes `fence w,w`, and publishes its write index last. Blackhole has
+no separate uncached L1 alias, so a cross-RISC consumer invalidates its L1 cache
+before reading the producer index and invalidates again before reading a reused
+payload slot.
 
-### Signal cost (dispatch_s side)
+The existing NOC barriers order mailbox-B payload reads and reserved-ring
+publication. The dispatch_s inline state notification is sent only after the
+32-byte mailbox-B payload is stored and fenced. The payload remains 16-byte
+aligned in the shared message; firmware compile-time checks reject a layout or
+generated address that would make the Blackhole NOC read align down to the
+wrong words.
 
-| Metric | Value |
-|--------|-------|
-| `signal_realtime_profiler_and_switch` duration | **~92 cycles (~0.09 us)** |
-| Signal = NOC 1 inline dword write | Negligible overhead on dispatch |
+## Stream reset and wrap
 
-### Push cost (NCRISC pusher side)
+Natural 17-bit completion-counter wrap is forward progress. It does not reset
+profiler state. For an explicit `CLEAR_STREAM`, co-located dispatch_d increments
+the stream's reset generation after clearing the hardware counter. Descriptors
+carry that generation; TRISC0 consumes and counts stale-generation descriptors
+instead of correlating them with the reset counter.
 
-| Metric | Value |
-|--------|-------|
-| `push_entries_to_host` per drain | **~420 ns** |
+Queue producer and consumer indices use unsigned 32-bit distance, with bounded
+capacities far below the half range.
 
-### Throughput
+## Finish watermark
 
-The profiler fully keeps up with dispatch. The signal-to-record path is a fast
-NOC read into a deep L1 ring, decoupled from the PCIe push; the pusher
-then drains the entire pending backlog per iteration and coalesces it into a few
-large bursts (~420 ns per push). Because the ring absorbs bursts and the push is cheap,
-signals never outrun the drain and no records are lost.
+Every explicit exact collection allocates one nonzero 32-bit watermark ID and
+emits a `CQ_DISPATCH_CMD_RT_PROFILER_FLUSH` carrying that ID for each selected
+stream.
+After the existing worker wait, dispatch_s publishes a per-stream request.
+TRISC0 completes it only after the target is reached and every preceding start
+descriptor was emitted or counted as loss. Descriptors for later completion
+targets do not delay the watermark. TRISC0 snapshots the completed-record
+producer index, successful sequence, reset generation, and cumulative
+descriptor-, observer-, and record-stage loss. dispatch_s forwards that
+watermark only after its completed-record consumer reaches the snapshot, and
+prioritizes a now-eligible watermark over records accepted after the snapshot.
 
-This is verified under load by `test_realtime_profiler_stress.cpp`, which replays
-a 4096-program blank-kernel trace back-to-back — the peak signal rate dispatch can
-sustain, since blank kernels minimize per-program dispatch overhead — and asserts
-every record arrives with the device ring and host D2H FIFO never filling.
+A request from a reset generation newer than TRISC0's adopted generation waits
+for the next observer pass. A request from an older, already-quiesced generation
+uses a dedicated protocol-error watermark marker. Watermark request/protocol
+counters remain control-plane diagnostics; they are not folded into the
+descriptor-stage interval-loss delta.
 
-## Implementation Notes
+The host consumes watermark pages internally. A batch is complete only after
+the exact ID was observed for every registered stream on every active device;
+FIFO or ring emptiness is never completion evidence. Normal Finish sends the
+existing flush with watermark ID zero, so it neither creates collection state
+nor executes the device watermark path.
+`FinishAndCollectProgramRealtimeProfiler()` explicitly waits with a host
+control-plane timeout and returns stream masks plus source/transport loss
+deltas. Source loss is also reported as descriptor, completion-observer, and
+completed-record deltas. The command-queue identity field is fixed at zero for
+this single-command-queue protocol. It does not create host-derived operation
+durations.
 
-- The host side runs a receiver thread that drains device→host pages and
-  publishes decoded records onto a `BroadcastRing`; separate per-callback
-  consumer threads read from the ring and invoke the registered callbacks. A slow
-  callback only drops records for that consumer (tracked in `Consumer::dropped`);
-  it never stalls page draining or dispatch.
+Watermarks already armed for a stream remain serviceable if a later sub-device
+manager temporarily reduces the active stream count: the stage scanner covers
+the fixed eight-stream protocol domain and uses the pending mask to avoid work
+on idle streams.
+
+## Termination
+
+After application work is quiesced, dispatch_s requests the TRISC0 completion
+observer to stop and waits only for a device-cycle-bounded acknowledgement. It
+then performs an item- and device-cycle-bounded handoff attempt. This
+post-quiescence loop may poll an occupied mailbox B for its IDLE acknowledgement
+until the device-cycle deadline so the last accepted record can advance. Any
+completed records or descriptors still queued after a successful observer stop
+are counted before dispatch termination proceeds. Observer-stop timeout is
+reported separately. If profiler-core termination finds the final mailbox
+occupied while its ring is completely full, it counts that transport loss
+before acknowledging the mailbox and exiting.
+After the completion observer stops, any request or ready watermark still in a
+per-stream slot is counted as watermark-request loss before dispatch exits.
+
+## Resource bounds
+
+- Per-stream start depth: 4 descriptors across at most 8 streams.
+- Completed interval depth: 128 records.
+- Dispatch-core profiler message: 5,536 bytes.
+- Reserved profiler-core L1 layout: unchanged at 262,336 bytes.
+
+The protocol, ordering proof, rejected alternatives, and milestone gates are
+documented in `docs/realtime_profiler_concurrent_subdevice_protocol.md`.

@@ -51,6 +51,7 @@ constexpr uint32_t packed_write_max_unicast_sub_cmds =
     PACKED_WRITE_MAX_UNICAST_SUB_CMDS;  // Number of cores in compute grid
 constexpr uintptr_t dispatch_s_sync_sem_base_addr = DISPATCH_S_SYNC_SEM_BASE_ADDR;
 constexpr uint32_t max_num_worker_sems = MAX_NUM_WORKER_SEMS;  // maximum number of worker semaphores
+static_assert(max_num_worker_sems <= REALTIME_PROFILER_MAX_STREAMS);
 constexpr uint32_t max_num_go_signal_noc_data_entries =
     MAX_NUM_GO_SIGNAL_NOC_DATA_ENTRIES;  // maximum number of go signal data words
 constexpr uint32_t mcast_go_signal_addr = MCAST_GO_SIGNAL_ADDR;
@@ -1131,6 +1132,20 @@ static void process_wait() {
             stream,
             STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX,
             neg_sem_val << REMOTE_DEST_BUF_WORDS_FREE_INC);
+#ifdef ARCH_BLACKHOLE
+        // Publish an explicit profiler epoch after the hardware counter clear.
+        // The 17-bit stream counter also rolls over naturally, so consumers must
+        // not infer a reset from counter values alone. process_wait has already
+        // waited for every old-epoch target, so the unavoidable clear-to-epoch
+        // publication window cannot expose unfinished valid descriptors.
+        const uint32_t profiler_stream_index = stream - first_stream_used;
+        invalidate_l1_cache();
+        if (rt_profiler_msg->realtime_profiler_core_noc_xy != 0 && profiler_stream_index < max_num_worker_sems) {
+            asm volatile("fence iorw, iorw" ::: "memory");
+            rt_profiler_msg->stream_reset_generation[profiler_stream_index]++;
+            asm volatile("fence w, w" ::: "memory");
+        }
+#endif
         if constexpr (telemetry_enabled) {
             dispatch_telemetry_control->worker_stream_reset_update = ++local_worker_stream_reset_update;
         }

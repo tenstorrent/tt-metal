@@ -532,6 +532,11 @@ void DeviceCommand<hugepage_write>::add_dispatch_go_signal_mcast(
         "Number of unicast destinations {} exceeds maximum {}",
         num_unicast_txns,
         std::numeric_limits<uint8_t>::max());
+    TT_FATAL(
+        wait_stream <= std::numeric_limits<uint8_t>::max(),
+        "Dispatch stream index {} exceeds maximum {}",
+        wait_stream,
+        std::numeric_limits<uint8_t>::max());
     uint32_t lengthB = sizeof(CQDispatchCmd);
     TT_ASSERT(
         lengthB <= (1 << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE),
@@ -546,7 +551,7 @@ void DeviceCommand<hugepage_write>::add_dispatch_go_signal_mcast(
         mcast_cmd->mcast.num_unicast_txns = num_unicast_txns;
         mcast_cmd->mcast.noc_data_start_index = noc_data_start_index;
         mcast_cmd->mcast.profiler_program_id = profiler_program_id;
-        mcast_cmd->mcast.wait_stream = wait_stream;
+        mcast_cmd->mcast.wait_stream = static_cast<uint8_t>(wait_stream);
     };
     CQDispatchCmd* mcast_cmd_dst = this->reserve_space<CQDispatchCmd*>(sizeof(CQDispatchCmd));
 
@@ -561,13 +566,15 @@ void DeviceCommand<hugepage_write>::add_dispatch_go_signal_mcast(
 }
 
 template <bool hugepage_write>
-void DeviceCommand<hugepage_write>::add_dispatch_rt_profiler_flush(uint32_t wait_count, uint32_t wait_stream) {
+void DeviceCommand<hugepage_write>::add_dispatch_rt_profiler_flush(
+    uint32_t wait_count, uint32_t wait_stream, uint32_t watermark_id) {
     this->add_prefetch_relay_inline(true, sizeof(CQDispatchCmd), DispatcherSelect::DISPATCH_SUBORDINATE);
     auto initialize_flush_cmd = [&](CQDispatchCmd* flush_cmd) {
         *flush_cmd = {};
         flush_cmd->base.cmd_id = CQ_DISPATCH_CMD_RT_PROFILER_FLUSH;
         flush_cmd->rt_profiler_flush.wait_count = wait_count;
         flush_cmd->rt_profiler_flush.wait_stream = wait_stream;
+        flush_cmd->rt_profiler_flush.watermark_id = watermark_id;
     };
     CQDispatchCmd* flush_cmd_dst = this->reserve_space<CQDispatchCmd*>(sizeof(CQDispatchCmd));
     if constexpr (hugepage_write) {

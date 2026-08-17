@@ -30,6 +30,10 @@ enum RtProfilerNcriscStage : uint32_t {
     RT_PROFILER_NCRISC_STAGE_PUSHING = 5,
 };
 
+// Test-only saturation sentinel. NCRISC consults it only after the ring has
+// reached the interval-full threshold, so it adds no steady-state branch.
+constexpr uint32_t RT_PROFILER_NCRISC_TEST_PAUSE_STAGE = 0xffffffffu;
+
 struct RtProfilerNcriscDebug {
     uint32_t stage;
     uint32_t socket_config_addr;
@@ -54,8 +58,8 @@ struct RtProfilerRingBuffer {
     volatile uint32_t write_index;  // incremented by BRISC after writing an entry
     volatile uint32_t read_index;   // incremented by NCRISC after pushing an entry
     volatile uint32_t terminate;    // set by BRISC to tell NCRISC to drain and exit
-    // BRISC (cq_realtime_profiler): incremented once per enqueue attempt blocked on a full ring
-    volatile uint32_t ring_full_wait_count;
+    // BRISC (cq_realtime_profiler): intervals discarded because the ring was full.
+    volatile uint32_t transport_drop_count;
     RtProfilerNcriscDebug ncrisc_debug;
     uint8_t data[RT_PROFILER_RING_CAPACITY][RT_PROFILER_ENTRY_SIZE];
 };
@@ -95,6 +99,12 @@ static_assert(sizeof(RealtimeProfilerCoreL1) == sizeof(RtProfilerRingBuffer) + R
 
 inline bool rt_ring_full(volatile RtProfilerRingBuffer* rb) {
     return (rb->write_index - rb->read_index) >= RT_PROFILER_RING_CAPACITY;
+}
+
+// Keep one slot available for an ordered watermark. Interval pressure is
+// reported as transport loss instead of making batch completion itself lossy.
+inline bool rt_ring_interval_full(volatile RtProfilerRingBuffer* rb) {
+    return (rb->write_index - rb->read_index) >= RT_PROFILER_RING_CAPACITY - 1;
 }
 
 inline bool rt_ring_empty(volatile RtProfilerRingBuffer* rb) { return rb->write_index == rb->read_index; }

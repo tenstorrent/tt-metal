@@ -15,6 +15,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <future>
 #include <thread>
 #include <vector>
 
@@ -41,6 +42,7 @@
 namespace tt::tt_metal {
 namespace {
 
+using tt::tt_metal::experimental::FinishAndCollectProgramRealtimeProfiler;
 using tt::tt_metal::experimental::IsProgramRealtimeProfilerActive;
 using tt::tt_metal::experimental::ProgramRealtimeProfilerCallbackHandle;
 using tt::tt_metal::experimental::ProgramRealtimeRecordBatch;
@@ -225,7 +227,7 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
     std::this_thread::sleep_for(kPostQuiesceDrain);
     const uint32_t peak_fifo_pages = rt->peak_fifo_pages();
     const uint32_t fifo_capacity_pages = rt->host_fifo_capacity_pages();
-    const uint32_t ring_full_waits = rt->ring_full_wait_count();
+    const uint32_t transport_drops = rt->transport_drop_count();
     const uint64_t published_batches = rt->num_published_batches();
     const double mean_publish_batch =
         published_batches ? static_cast<double>(rt->num_published_records()) / published_batches : 0.0;
@@ -238,7 +240,7 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
     log_info(
         tt::LogTest,
         "[RT profiler stress] {} stress records across {} active device(s) over {} replays, max_callback_batch={}, "
-        "mean_publish_batch={:.1f}, peak_fifo={}/{} pages, ring_full_waits={}, {} startup-race skips, {} "
+        "mean_publish_batch={:.1f}, peak_fifo={}/{} pages, transport_drops={}, {} startup-race skips, {} "
         "large-negative-delta skips (worst delta = {} cycles), {} bad-frequency, {} implausible-duration",
         stress_records,
         num_active_devices,
@@ -247,7 +249,7 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
         mean_publish_batch,
         peak_fifo_pages,
         fifo_capacity_pages,
-        ring_full_waits,
+        transport_drops,
         startup_race_skips,
         large_negative_skips,
         worst_negative_delta,
@@ -262,7 +264,7 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
     EXPECT_LT(peak_fifo_pages, fifo_capacity_pages)
         << "host D2H FIFO reached capacity; the receiver drained it slower than the device filled it";
 
-    EXPECT_EQ(ring_full_waits, 0u)
+    EXPECT_EQ(transport_drops, 0u)
         << "device ring reached capacity; the receiver drained it slower than the device filled it";
 
     const uint64_t max_allowed_large_negative =
@@ -280,6 +282,115 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
                                         << " stress record(s) reported duration >= " << kMaxStressDurationNs
                                         << " ns (clock corruption / mis-decoded timestamp)";
 
+    EXPECT_TRUE(mesh_device->close());
+}
+
+TEST(RealtimeProfilerStress, DelayedHostDrainPreservesOneFullBurst) {
+    auto mesh_device = open_full_mesh();
+    ASSERT_NE(mesh_device, nullptr);
+    if (!IsProgramRealtimeProfilerActive()) {
+        mesh_device->close();
+        GTEST_SKIP() << "Real-time profiler is not active on this dispatch config";
+    }
+    auto* rt = mesh_device->impl().get_realtime_profiler();
+    ASSERT_NE(rt, nullptr);
+    const uint64_t expected_records = static_cast<uint64_t>(kNumProgramsInTrace) * rt->num_active_devices();
+
+    distributed::MeshWorkload workload = build_blank_kernel_workload(mesh_device);
+    auto& cq = mesh_device->mesh_command_queue(0);
+    distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
+
+    distributed::MeshTraceId trace_id = distributed::BeginTraceCapture(mesh_device.get(), cq.id());
+    for (uint32_t i = 0; i < kNumProgramsInTrace; ++i) {
+        distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
+    }
+    mesh_device->end_mesh_trace(cq.id(), trace_id);
+
+    // Drain warm-up/capture-adjacent traffic before defining the burst's exact
+    // collection baseline.
+    const auto baseline = FinishAndCollectProgramRealtimeProfiler(cq, std::chrono::seconds(5));
+    ASSERT_TRUE(baseline.complete());
+    ASSERT_FALSE(baseline.lossy());
+
+    std::atomic<uint64_t> received{0};
+    std::atomic<uint64_t> callback_drops{0};
+    std::atomic<uint64_t> invalid_intervals{0};
+    const auto handle = RegisterProgramRealtimeProfilerCallback([&](const ProgramRealtimeRecordBatch& batch) {
+        callback_drops.fetch_add(batch.dropped, std::memory_order_relaxed);
+        for (const auto& record : batch.records) {
+            if (record.runtime_id != kStressRuntimeId) {
+                continue;
+            }
+            received.fetch_add(1, std::memory_order_relaxed);
+            if (record.end_timestamp < record.start_timestamp || !(record.frequency > 0.0)) {
+                invalid_intervals.fetch_add(1, std::memory_order_relaxed);
+            }
+        }
+    });
+
+    struct ReceiverResumeGuard {
+        distributed::RealtimeProfilerManager* profiler;
+        ~ReceiverResumeGuard() {
+            if (profiler != nullptr) {
+                profiler->set_receiver_loop_paused_for_testing(false);
+            }
+        }
+    } resume_guard{rt};
+
+    rt->set_receiver_loop_paused_for_testing(true);
+    mesh_device->replay_mesh_trace(cq.id(), trace_id, /*blocking=*/true);
+    auto collection = std::async(
+        std::launch::async, [&] { return FinishAndCollectProgramRealtimeProfiler(cq, std::chrono::seconds(10)); });
+
+    // A temporarily empty host FIFO is not batch completion. The exact
+    // collection must remain pending until the paused receiver observes the
+    // device-produced watermarks behind this burst.
+    const auto while_paused = collection.wait_for(std::chrono::milliseconds(100));
+    rt->set_receiver_loop_paused_for_testing(false);
+    resume_guard.profiler = nullptr;
+    const auto result = collection.get();
+
+    const auto callback_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (received.load(std::memory_order_relaxed) < expected_records &&
+           std::chrono::steady_clock::now() < callback_deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    const uint32_t peak_fifo_pages = rt->peak_fifo_pages();
+    const uint32_t fifo_capacity_pages = rt->host_fifo_capacity_pages();
+    const uint32_t transport_drops = rt->transport_drop_count();
+    const auto source_losses = rt->device_loss_counts();
+    UnregisterProgramRealtimeProfilerCallback(handle);
+    mesh_device->release_mesh_trace(trace_id);
+
+    log_info(
+        tt::LogTest,
+        "[RT profiler delayed-host burst] records={}/{} collection_records={} peak_fifo={}/{} "
+        "callback_drops={} source_loss={} transport_loss={} protocol_error={} invalid_intervals={}",
+        received.load(),
+        expected_records,
+        result.record_count,
+        peak_fifo_pages,
+        fifo_capacity_pages,
+        callback_drops.load(),
+        source_losses.total(),
+        transport_drops,
+        result.protocol_error,
+        invalid_intervals.load());
+
+    EXPECT_EQ(while_paused, std::future_status::timeout);
+    EXPECT_TRUE(result.complete());
+    EXPECT_FALSE(result.timed_out);
+    EXPECT_FALSE(result.protocol_error);
+    EXPECT_EQ(result.record_count, expected_records);
+    EXPECT_EQ(result.source_dropped, 0u);
+    EXPECT_EQ(result.transport_dropped, 0u);
+    EXPECT_EQ(received.load(), expected_records);
+    EXPECT_EQ(callback_drops.load(), 0u);
+    EXPECT_EQ(invalid_intervals.load(), 0u);
+    EXPECT_EQ(source_losses.total(), 0u);
+    EXPECT_EQ(transport_drops, 0u);
+    EXPECT_LT(peak_fifo_pages, fifo_capacity_pages);
     EXPECT_TRUE(mesh_device->close());
 }
 

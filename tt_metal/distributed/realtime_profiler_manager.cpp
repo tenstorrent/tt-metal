@@ -5,6 +5,7 @@
 #include "distributed/realtime_profiler_manager.hpp"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
@@ -47,6 +48,7 @@
 #include <tracy/TracyTTDevice.hpp>
 
 #include "context/metal_context.hpp"
+#include "common/env_lib.hpp"
 #include "device/device_manager.hpp"
 #include "dispatch/command_queue_common.hpp"
 #include "dispatch/dispatch_core_manager.hpp"
@@ -122,6 +124,19 @@ RealtimeProfilerEligibility evaluate_realtime_profiler_eligibility(IDevice* devi
     const auto& hal = metal.hal();
     const auto& cluster = metal.get_cluster();
     auto& dispatch_core_manager = metal.get_dispatch_core_manager();
+
+    if (tt::parse_env<bool>("TT_METAL_DISABLE_REALTIME_PROFILER", false)) {
+        log_debug(tt::LogMetal, "Real-time profiler disabled by TT_METAL_DISABLE_REALTIME_PROFILER.");
+        return {};
+    }
+
+    if (hal.get_arch() != tt::ARCH::BLACKHOLE) {
+        log_debug(
+            tt::LogMetal,
+            "Real-time profiler disabled on device {}: the concurrent sub-device protocol is Blackhole-only.",
+            device_id);
+        return {};
+    }
 
     // Gate mock/emulated targets: D2HSocket::init_host_buffer_hugepage dereferences a real PCIe hugepage absent there.
     if (cluster.is_mock_or_emulated()) {
@@ -316,13 +331,118 @@ RealtimeProfilerManager::DeviceState::DeviceState(DeviceState&&) noexcept = defa
 
 uint32_t RealtimeProfilerManager::host_fifo_capacity_pages() const { return RealtimeProfilerRuntimeSizes::fifo_pages; }
 
-uint32_t RealtimeProfilerManager::ring_full_wait_count() const {
+uint32_t RealtimeProfilerManager::register_collection(uint32_t expected_stream_mask) {
+    TT_FATAL(expected_stream_mask != 0, "A real-time profiler collection must select at least one stream");
+    std::lock_guard<std::mutex> lock(collection_mutex_);
+    TT_FATAL(
+        collections_.size() < kMaxOutstandingCollections,
+        "Real-time profiler has {} exact collections awaiting callers",
+        collections_.size());
+    uint32_t watermark_id = 0;
+    do {
+        watermark_id = next_watermark_id_++;
+    } while (watermark_id == 0 || collections_.contains(watermark_id));
+
+    CollectionState state;
+    state.devices.reserve(devices_.size());
+    for (const auto& dev_state : devices_) {
+        state.devices.push_back(CollectionDeviceState{
+            .chip_id = dev_state.chip_id,
+            .expected_stream_mask = expected_stream_mask,
+            .baseline_record_count = dev_state.received_record_count,
+            .baseline_descriptor_drop = dev_state.latest_descriptor_drop_snapshot,
+            .baseline_observer_drop = dev_state.latest_observer_drop_snapshot,
+            .baseline_record_drop = dev_state.latest_record_drop_snapshot,
+            .baseline_transport_drop = dev_state.latest_transport_drop_snapshot,
+            .descriptor_drop_snapshot = dev_state.latest_descriptor_drop_snapshot,
+            .observer_drop_snapshot = dev_state.latest_observer_drop_snapshot,
+            .record_drop_snapshot = dev_state.latest_record_drop_snapshot,
+            .transport_drop_snapshot = dev_state.latest_transport_drop_snapshot,
+            .observed_record_count = dev_state.received_record_count,
+        });
+    }
+    collections_.emplace(watermark_id, std::move(state));
+    return watermark_id;
+}
+
+void RealtimeProfilerManager::cancel_collection(uint32_t watermark_id) {
+    std::lock_guard<std::mutex> lock(collection_mutex_);
+    collections_.erase(watermark_id);
+    collection_cv_.notify_all();
+}
+
+experimental::ProgramRealtimeProfilerCollectionResult RealtimeProfilerManager::make_collection_result_locked(
+    uint32_t watermark_id, const CollectionState& state, bool timed_out) const {
+    experimental::ProgramRealtimeProfilerCollectionResult result;
+    result.requested_watermark = watermark_id;
+    result.observed_watermark = state.complete ? watermark_id : 0;
+    result.timed_out = timed_out;
+    result.protocol_error = state.protocol_error;
+    result.devices.reserve(state.devices.size());
+    for (const auto& collection_device : state.devices) {
+        const auto device_it = std::ranges::find_if(
+            devices_, [&](const DeviceState& device) { return device.chip_id == collection_device.chip_id; });
+        const bool device_complete = collection_device.observed_stream_mask == collection_device.expected_stream_mask;
+        const uint64_t received = device_complete
+                                      ? collection_device.observed_record_count
+                                      : (device_it == devices_.end() ? collection_device.baseline_record_count
+                                                                     : device_it->received_record_count);
+        experimental::ProgramRealtimeProfilerDeviceCollection device_result{
+            .chip_id = collection_device.chip_id,
+            .expected_stream_mask = collection_device.expected_stream_mask,
+            .observed_stream_mask = collection_device.observed_stream_mask,
+            .record_count = received - collection_device.baseline_record_count,
+            .descriptor_dropped = static_cast<uint32_t>(
+                collection_device.descriptor_drop_snapshot - collection_device.baseline_descriptor_drop),
+            .observer_dropped = static_cast<uint32_t>(
+                collection_device.observer_drop_snapshot - collection_device.baseline_observer_drop),
+            .record_dropped =
+                static_cast<uint32_t>(collection_device.record_drop_snapshot - collection_device.baseline_record_drop),
+            .transport_dropped = static_cast<uint32_t>(
+                collection_device.transport_drop_snapshot - collection_device.baseline_transport_drop),
+        };
+        device_result.source_dropped =
+            device_result.descriptor_dropped + device_result.observer_dropped + device_result.record_dropped;
+        result.record_count += device_result.record_count;
+        result.descriptor_dropped += device_result.descriptor_dropped;
+        result.observer_dropped += device_result.observer_dropped;
+        result.record_dropped += device_result.record_dropped;
+        result.source_dropped += device_result.source_dropped;
+        result.transport_dropped += device_result.transport_dropped;
+        result.devices.push_back(device_result);
+    }
+    return result;
+}
+
+experimental::ProgramRealtimeProfilerCollectionResult RealtimeProfilerManager::wait_for_collection(
+    uint32_t watermark_id, std::chrono::milliseconds timeout) {
+    std::unique_lock<std::mutex> lock(collection_mutex_);
+    const bool ready = collection_cv_.wait_for(lock, timeout, [&] {
+        const auto it = collections_.find(watermark_id);
+        return it == collections_.end() || it->second.result.has_value();
+    });
+    auto it = collections_.find(watermark_id);
+    if (it == collections_.end()) {
+        experimental::ProgramRealtimeProfilerCollectionResult result;
+        result.requested_watermark = watermark_id;
+        result.protocol_error = true;
+        return result;
+    }
+    auto result = ready && it->second.result.has_value()
+                      ? *it->second.result
+                      : make_collection_result_locked(watermark_id, it->second, true);
+    collections_.erase(it);
+    lock.unlock();
+    return result;
+}
+
+uint32_t RealtimeProfilerManager::transport_drop_count() const {
     uint32_t peak = 0;
     for (const auto& dev_state : devices_) {
         if (dev_state.core_l1.ring_buffer == 0 || !dev_state.device) {
             continue;
         }
-        const uint32_t addr = dev_state.core_l1.ring_buffer + offsetof(RtProfilerRingBuffer, ring_full_wait_count);
+        const uint32_t addr = dev_state.core_l1.ring_buffer + offsetof(RtProfilerRingBuffer, transport_drop_count);
         std::vector<uint32_t> value(1, 0);
         tt::tt_metal::detail::ReadFromDeviceL1(
             dev_state.device, dev_state.realtime_profiler_core, addr, sizeof(uint32_t), value, CoreType::WORKER);
@@ -331,36 +451,536 @@ uint32_t RealtimeProfilerManager::ring_full_wait_count() const {
     return peak;
 }
 
+RealtimeProfilerDeviceLossCounts RealtimeProfilerManager::device_loss_counts() const {
+    RealtimeProfilerDeviceLossCounts counts;
+    const auto& hal = MetalContext::instance(context_id_).hal();
+    const auto& factory = hal.get_realtime_profiler_msgs_factory(HalProgrammableCoreType::TENSIX);
+    using Field = realtime_profiler_msgs::realtime_profiler_msg_t::Field;
+    for (const auto& dev_state : devices_) {
+        if (dev_state.dispatch_s_profiler_msg_addr == 0 || !dev_state.device) {
+            continue;
+        }
+        auto read_field = [&](Field field) {
+            std::vector<uint32_t> value(1, 0);
+            tt::tt_metal::detail::ReadFromDeviceL1(
+                dev_state.device,
+                dev_state.dispatch_s_core,
+                dev_state.dispatch_s_profiler_msg_addr +
+                    factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(field),
+                sizeof(uint32_t),
+                value,
+                CoreType::WORKER);
+            return value[0];
+        };
+        counts.start_descriptor += read_field(Field::start_descriptor_drop_count);
+        counts.unsupported_launch += read_field(Field::unsupported_launch_drop_count);
+        counts.reset_descriptor += read_field(Field::reset_descriptor_drop_count);
+        counts.completion_observer += read_field(Field::completion_observer_drop_count);
+        counts.stuck_descriptor_head += read_field(Field::stuck_descriptor_head_count);
+        counts.completed_record += read_field(Field::completed_record_drop_count);
+        counts.terminal_descriptor += read_field(Field::terminal_descriptor_drop_count);
+        counts.terminal_record += read_field(Field::terminal_record_drop_count);
+        counts.completion_observer_timeout += read_field(Field::completion_observer_timeout_count);
+        counts.watermark_request += read_field(Field::watermark_request_drop_count);
+        counts.watermark_protocol += read_field(Field::watermark_protocol_error_count);
+    }
+    return counts;
+}
+
+RealtimeProfilerQualificationCounts RealtimeProfilerManager::qualification_counts_for_testing() const {
+    TT_FATAL(
+        std::getenv("TT_RT_PROFILER_QUALIFICATION_HOOK") != nullptr,
+        "Real-time profiler qualification counters require TT_RT_PROFILER_QUALIFICATION_HOOK before process startup");
+
+    RealtimeProfilerQualificationCounts counts;
+    const auto& hal = MetalContext::instance(context_id_).hal();
+    TT_FATAL(hal.get_arch() == tt::ARCH::BLACKHOLE, "Real-time profiler qualification counters are Blackhole-only");
+    constexpr uint32_t qualification_record_cycles_low = 0;
+    constexpr uint32_t qualification_record_cycles_high = 1;
+    constexpr uint32_t qualification_record_count = 2;
+    constexpr uint32_t qualification_max_scan_cycles = 3;
+
+    for (const auto& dev_state : devices_) {
+        if (dev_state.dispatch_s_profiler_msg_addr == 0 || !dev_state.device) {
+            continue;
+        }
+        TT_FATAL(
+            dev_state.qualification_scratch_addr != 0,
+            "Real-time profiler qualification scratch was not reserved before device creation");
+
+        std::vector<uint32_t> scratch(realtime_profiler_msgs::REALTIME_PROFILER_QUALIFICATION_SCRATCH_WORDS, 0);
+        tt::tt_metal::detail::ReadFromDeviceL1(
+            dev_state.device,
+            dev_state.dispatch_s_core,
+            dev_state.qualification_scratch_addr,
+            scratch.size() * sizeof(uint32_t),
+            scratch,
+            CoreType::WORKER);
+
+        const uint64_t device_record_handler_cycles =
+            static_cast<uint64_t>(scratch[qualification_record_cycles_low]) |
+            (static_cast<uint64_t>(scratch[qualification_record_cycles_high]) << 32);
+        counts.record_handler_cycles += device_record_handler_cycles;
+        counts.record_handler_count += scratch[qualification_record_count];
+        counts.max_observer_scan_cycles =
+            std::max(counts.max_observer_scan_cycles, scratch[qualification_max_scan_cycles]);
+        if (dev_state.sync_frequency > 0.0 &&
+            (counts.minimum_frequency == 0.0 || dev_state.sync_frequency < counts.minimum_frequency)) {
+            counts.minimum_frequency = dev_state.sync_frequency;
+        }
+    }
+    return counts;
+}
+
+void RealtimeProfilerManager::prime_start_descriptor_queue_full_for_testing(
+    uint32_t stream_index, uint32_t completion_target) const {
+    TT_FATAL(
+        stream_index < realtime_profiler_msgs::REALTIME_PROFILER_MAX_STREAMS,
+        "Real-time profiler test stream {} is out of range",
+        stream_index);
+    const auto& factory =
+        MetalContext::instance(context_id_).hal().get_realtime_profiler_msgs_factory(HalProgrammableCoreType::TENSIX);
+    using Message = realtime_profiler_msgs::realtime_profiler_msg_t;
+    using Field = Message::Field;
+    for (const auto& dev_state : devices_) {
+        if (dev_state.dispatch_s_profiler_msg_addr == 0 || !dev_state.device) {
+            continue;
+        }
+        std::vector<uint32_t> generation(1, 0);
+        tt::tt_metal::detail::ReadFromDeviceL1(
+            dev_state.device,
+            dev_state.dispatch_s_core,
+            dev_state.dispatch_s_profiler_msg_addr + factory.offset_of<Message>(Field::stream_reset_generation) +
+                stream_index * sizeof(uint32_t),
+            sizeof(uint32_t),
+            generation,
+            CoreType::WORKER);
+
+        std::vector<uint32_t> descriptors(
+            realtime_profiler_msgs::REALTIME_PROFILER_START_QUEUE_CAPACITY *
+                realtime_profiler_msgs::REALTIME_PROFILER_START_DESCRIPTOR_WORDS,
+            0);
+        for (uint32_t slot = 0; slot < realtime_profiler_msgs::REALTIME_PROFILER_START_QUEUE_CAPACITY; ++slot) {
+            const uint32_t offset = slot * realtime_profiler_msgs::REALTIME_PROFILER_START_DESCRIPTOR_WORDS;
+            descriptors[offset + 3] = completion_target;
+            descriptors[offset + 4] = generation[0];
+        }
+        tt::tt_metal::detail::WriteToDeviceL1(
+            dev_state.device,
+            dev_state.dispatch_s_core,
+            dev_state.dispatch_s_profiler_msg_addr + factory.offset_of<Message>(Field::start_descriptor_words) +
+                stream_index * descriptors.size() * sizeof(uint32_t),
+            descriptors,
+            CoreType::WORKER);
+        std::vector<uint32_t> zero(1, 0);
+        std::vector<uint32_t> full(1, realtime_profiler_msgs::REALTIME_PROFILER_START_QUEUE_CAPACITY);
+        tt::tt_metal::detail::WriteToDeviceL1(
+            dev_state.device,
+            dev_state.dispatch_s_core,
+            dev_state.dispatch_s_profiler_msg_addr + factory.offset_of<Message>(Field::start_descriptor_read_index) +
+                stream_index * sizeof(uint32_t),
+            zero,
+            CoreType::WORKER);
+        tt::tt_metal::detail::WriteToDeviceL1(
+            dev_state.device,
+            dev_state.dispatch_s_core,
+            dev_state.dispatch_s_profiler_msg_addr + factory.offset_of<Message>(Field::start_descriptor_write_index) +
+                stream_index * sizeof(uint32_t),
+            full,
+            CoreType::WORKER);
+    }
+}
+
+void RealtimeProfilerManager::clear_start_descriptor_queue_for_testing(uint32_t stream_index) const {
+    TT_FATAL(
+        stream_index < realtime_profiler_msgs::REALTIME_PROFILER_MAX_STREAMS,
+        "Real-time profiler test stream {} is out of range",
+        stream_index);
+    const auto& factory =
+        MetalContext::instance(context_id_).hal().get_realtime_profiler_msgs_factory(HalProgrammableCoreType::TENSIX);
+    using Message = realtime_profiler_msgs::realtime_profiler_msg_t;
+    for (const auto& dev_state : devices_) {
+        if (dev_state.dispatch_s_profiler_msg_addr == 0 || !dev_state.device) {
+            continue;
+        }
+        std::vector<uint32_t> write_index(1, 0);
+        tt::tt_metal::detail::ReadFromDeviceL1(
+            dev_state.device,
+            dev_state.dispatch_s_core,
+            dev_state.dispatch_s_profiler_msg_addr +
+                factory.offset_of<Message>(Message::Field::start_descriptor_write_index) +
+                stream_index * sizeof(uint32_t),
+            sizeof(uint32_t),
+            write_index,
+            CoreType::WORKER);
+        tt::tt_metal::detail::WriteToDeviceL1(
+            dev_state.device,
+            dev_state.dispatch_s_core,
+            dev_state.dispatch_s_profiler_msg_addr +
+                factory.offset_of<Message>(Message::Field::start_descriptor_read_index) +
+                stream_index * sizeof(uint32_t),
+            write_index,
+            CoreType::WORKER);
+    }
+}
+
+void RealtimeProfilerManager::advance_stream_reset_generation_for_testing(uint32_t stream_index) const {
+    TT_FATAL(
+        stream_index < realtime_profiler_msgs::REALTIME_PROFILER_MAX_STREAMS,
+        "Real-time profiler test stream {} is out of range",
+        stream_index);
+    const auto& factory =
+        MetalContext::instance(context_id_).hal().get_realtime_profiler_msgs_factory(HalProgrammableCoreType::TENSIX);
+    using Message = realtime_profiler_msgs::realtime_profiler_msg_t;
+    for (const auto& dev_state : devices_) {
+        if (dev_state.dispatch_s_profiler_msg_addr == 0 || !dev_state.device) {
+            continue;
+        }
+        std::vector<uint32_t> generation(1, 0);
+        const uint32_t generation_addr = dev_state.dispatch_s_profiler_msg_addr +
+                                         factory.offset_of<Message>(Message::Field::stream_reset_generation) +
+                                         stream_index * sizeof(uint32_t);
+        tt::tt_metal::detail::ReadFromDeviceL1(
+            dev_state.device,
+            dev_state.dispatch_s_core,
+            generation_addr,
+            sizeof(uint32_t),
+            generation,
+            CoreType::WORKER);
+        generation[0]++;
+        tt::tt_metal::detail::WriteToDeviceL1(
+            dev_state.device, dev_state.dispatch_s_core, generation_addr, generation, CoreType::WORKER);
+    }
+}
+
+void RealtimeProfilerManager::prime_completed_record_queue_full_for_testing() {
+    TT_FATAL(
+        !finish_sync_requested_.load(std::memory_order_acquire) && !finish_sync_busy_.load(std::memory_order_acquire) &&
+            !has_active_finish_sync(),
+        "Real-time profiler record-queue fault injection requires idle finish-sync state");
+    const auto& factory =
+        MetalContext::instance(context_id_).hal().get_realtime_profiler_msgs_factory(HalProgrammableCoreType::TENSIX);
+    using Message = realtime_profiler_msgs::realtime_profiler_msg_t;
+    std::vector<uint32_t> occupied(1, realtime_profiler_msgs::REALTIME_PROFILER_STATE_PUSH_B);
+    std::vector<uint32_t> zero(1, 0);
+    std::vector<uint32_t> full(1, realtime_profiler_msgs::REALTIME_PROFILER_RECORD_QUEUE_CAPACITY);
+    for (auto& dev_state : devices_) {
+        if (dev_state.dispatch_s_profiler_msg_addr == 0 || !dev_state.device) {
+            continue;
+        }
+        // Pause the reserved-core BRISC in its existing sync loop, with no
+        // timestamp to publish, so it cannot acknowledge the occupied dispatch
+        // mailbox during injection.
+        write_sync_request(dev_state, SyncRequest::Set);
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        tt::tt_metal::detail::WriteToDeviceL1(
+            dev_state.device,
+            dev_state.dispatch_s_core,
+            dev_state.dispatch_s_profiler_msg_addr +
+                factory.offset_of<Message>(Message::Field::realtime_profiler_state),
+            occupied,
+            CoreType::WORKER);
+        tt::tt_metal::detail::WriteToDeviceL1(
+            dev_state.device,
+            dev_state.dispatch_s_core,
+            dev_state.dispatch_s_profiler_msg_addr + factory.offset_of<Message>(Message::Field::record_read_index),
+            zero,
+            CoreType::WORKER);
+        tt::tt_metal::detail::WriteToDeviceL1(
+            dev_state.device,
+            dev_state.dispatch_s_core,
+            dev_state.dispatch_s_profiler_msg_addr + factory.offset_of<Message>(Message::Field::record_write_index),
+            full,
+            CoreType::WORKER);
+    }
+}
+
+void RealtimeProfilerManager::clear_completed_record_queue_for_testing() {
+    const auto& factory =
+        MetalContext::instance(context_id_).hal().get_realtime_profiler_msgs_factory(HalProgrammableCoreType::TENSIX);
+    using Message = realtime_profiler_msgs::realtime_profiler_msg_t;
+    std::vector<uint32_t> idle(1, realtime_profiler_msgs::REALTIME_PROFILER_STATE_IDLE);
+    for (auto& dev_state : devices_) {
+        if (dev_state.dispatch_s_profiler_msg_addr == 0 || !dev_state.device) {
+            continue;
+        }
+        std::vector<uint32_t> write_index(1, 0);
+        tt::tt_metal::detail::ReadFromDeviceL1(
+            dev_state.device,
+            dev_state.dispatch_s_core,
+            dev_state.dispatch_s_profiler_msg_addr + factory.offset_of<Message>(Message::Field::record_write_index),
+            sizeof(uint32_t),
+            write_index,
+            CoreType::WORKER);
+        tt::tt_metal::detail::WriteToDeviceL1(
+            dev_state.device,
+            dev_state.dispatch_s_core,
+            dev_state.dispatch_s_profiler_msg_addr + factory.offset_of<Message>(Message::Field::record_read_index),
+            write_index,
+            CoreType::WORKER);
+        tt::tt_metal::detail::WriteToDeviceL1(
+            dev_state.device,
+            dev_state.dispatch_s_core,
+            dev_state.dispatch_s_profiler_msg_addr +
+                factory.offset_of<Message>(Message::Field::realtime_profiler_state),
+            idle,
+            CoreType::WORKER);
+        tt::tt_metal::detail::WriteToDeviceL1(
+            dev_state.device,
+            dev_state.realtime_profiler_core,
+            dev_state.dispatch_s_profiler_msg_addr +
+                factory.offset_of<Message>(Message::Field::realtime_profiler_state),
+            idle,
+            CoreType::WORKER);
+        write_sync_request(dev_state, SyncRequest::Clear);
+    }
+}
+
+void RealtimeProfilerManager::prime_reserved_ring_for_testing(uint32_t occupancy) {
+    TT_FATAL(
+        std::getenv("TT_RT_PROFILER_RING_TEST_HOOK") != nullptr,
+        "Reserved profiler ring injection requires TT_RT_PROFILER_RING_TEST_HOOK before device creation");
+    TT_FATAL(
+        occupancy >= RT_PROFILER_RING_CAPACITY - 1 && occupancy <= RT_PROFILER_RING_CAPACITY,
+        "Reserved profiler ring injection occupancy {} must be {} or {}",
+        occupancy,
+        RT_PROFILER_RING_CAPACITY - 1,
+        RT_PROFILER_RING_CAPACITY);
+    constexpr uint32_t stage_offset =
+        offsetof(RtProfilerRingBuffer, ncrisc_debug) + offsetof(RtProfilerNcriscDebug, stage);
+    constexpr uint32_t data_words = RT_PROFILER_RING_CAPACITY * RT_PROFILER_ENTRY_SIZE / sizeof(uint32_t);
+    std::vector<uint32_t> pause(1, RT_PROFILER_NCRISC_TEST_PAUSE_STAGE);
+    std::vector<uint32_t> zero_data(data_words, 0);
+    for (auto& dev_state : devices_) {
+        if (dev_state.core_l1.ring_buffer == 0 || !dev_state.device) {
+            continue;
+        }
+        tt::tt_metal::detail::WriteToDeviceL1(
+            dev_state.device,
+            dev_state.realtime_profiler_core,
+            dev_state.core_l1.ring_buffer + stage_offset,
+            pause,
+            CoreType::WORKER);
+        tt::tt_metal::detail::WriteToDeviceL1(
+            dev_state.device,
+            dev_state.realtime_profiler_core,
+            dev_state.core_l1.ring_buffer + offsetof(RtProfilerRingBuffer, data),
+            zero_data,
+            CoreType::WORKER);
+        std::vector<uint32_t> read_index(1, 0);
+        tt::tt_metal::detail::ReadFromDeviceL1(
+            dev_state.device,
+            dev_state.realtime_profiler_core,
+            dev_state.core_l1.ring_buffer + offsetof(RtProfilerRingBuffer, read_index),
+            sizeof(uint32_t),
+            read_index,
+            CoreType::WORKER);
+        std::vector<uint32_t> write_index(1, read_index[0] + occupancy);
+        tt::tt_metal::detail::WriteToDeviceL1(
+            dev_state.device,
+            dev_state.realtime_profiler_core,
+            dev_state.core_l1.ring_buffer + offsetof(RtProfilerRingBuffer, write_index),
+            write_index,
+            CoreType::WORKER);
+    }
+}
+
+void RealtimeProfilerManager::resume_reserved_ring_consumer_for_testing() {
+    constexpr uint32_t stage_offset =
+        offsetof(RtProfilerRingBuffer, ncrisc_debug) + offsetof(RtProfilerNcriscDebug, stage);
+    std::vector<uint32_t> resume(1, 0);
+    for (auto& dev_state : devices_) {
+        if (dev_state.core_l1.ring_buffer == 0 || !dev_state.device) {
+            continue;
+        }
+        tt::tt_metal::detail::WriteToDeviceL1(
+            dev_state.device,
+            dev_state.realtime_profiler_core,
+            dev_state.core_l1.ring_buffer + stage_offset,
+            resume,
+            CoreType::WORKER);
+    }
+}
+
+uint32_t RealtimeProfilerManager::reserved_ring_occupancy_for_testing() const {
+    uint32_t peak = 0;
+    for (const auto& dev_state : devices_) {
+        if (dev_state.core_l1.ring_buffer == 0 || !dev_state.device) {
+            continue;
+        }
+        std::vector<uint32_t> indices(2, 0);
+        tt::tt_metal::detail::ReadFromDeviceL1(
+            dev_state.device,
+            dev_state.realtime_profiler_core,
+            dev_state.core_l1.ring_buffer,
+            indices.size() * sizeof(uint32_t),
+            indices,
+            CoreType::WORKER);
+        peak = std::max(peak, indices[0] - indices[1]);
+    }
+    return peak;
+}
+
+bool RealtimeProfilerManager::dispatch_mailbox_pending_for_testing() const {
+    const auto& factory =
+        MetalContext::instance(context_id_).hal().get_realtime_profiler_msgs_factory(HalProgrammableCoreType::TENSIX);
+    using Message = realtime_profiler_msgs::realtime_profiler_msg_t;
+    for (const auto& dev_state : devices_) {
+        if (dev_state.dispatch_s_profiler_msg_addr == 0 || !dev_state.device) {
+            continue;
+        }
+        std::vector<uint32_t> state(1, 0);
+        tt::tt_metal::detail::ReadFromDeviceL1(
+            dev_state.device,
+            dev_state.dispatch_s_core,
+            dev_state.dispatch_s_profiler_msg_addr +
+                factory.offset_of<Message>(Message::Field::realtime_profiler_state),
+            sizeof(uint32_t),
+            state,
+            CoreType::WORKER);
+        if (state[0] == realtime_profiler_msgs::REALTIME_PROFILER_STATE_PUSH_B) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool RealtimeProfilerManager::inject_unexpected_watermark_for_testing(uint32_t watermark_id, uint32_t stream) {
+    TT_FATAL(stream < 32, "Injected real-time profiler stream {} is out of range", stream);
+    std::lock_guard<std::mutex> lock(collection_mutex_);
+    if (devices_.empty() || !collections_.contains(watermark_id)) {
+        return false;
+    }
+    std::array<uint32_t, realtime_profiler_msgs::REALTIME_PROFILER_RECORD_WORDS> page{};
+    page[0] = watermark_id;
+    page[2] = realtime_profiler_msgs::REALTIME_PROFILER_WATERMARK_MARKER_ID;
+    page[3] = (realtime_profiler_msgs::REALTIME_PROFILER_RECORD_SCHEMA_VERSION << 24) |
+              (realtime_profiler_msgs::REALTIME_PROFILER_RECORD_TYPE_WATERMARK << 16) | stream;
+    observe_watermark(devices_.front(), page.data());
+    return true;
+}
+
 void RealtimeProfilerManager::publish_pages(
-    const DeviceState& dev_state,
+    DeviceState& dev_state,
     const uint32_t* page_buf,
     uint32_t num_pages,
     std::vector<tt::ProgramRealtimeRecord>& records) {
     constexpr uint32_t kPageWords = RealtimeProfilerRuntimeSizes::page_size / sizeof(uint32_t);
-    auto is_record = [](const uint32_t* page) { return page[2] != 0 && page[3] != REALTIME_PROFILER_SYNC_MARKER_ID; };
+    auto record_type = [](const uint32_t* page) { return (page[3] >> 16) & 0xff; };
     records.clear();
     const uint32_t chip_id = dev_state.chip_id;
     const double sync_frequency = dev_state.sync_frequency;
     const DataCollector* const data_collector = data_collector_;
+    std::lock_guard<std::mutex> collection_lock(collection_mutex_);
     for (uint32_t page = 0; page < num_pages; ++page) {
         const uint32_t* rp = page_buf + page * kPageWords;
-        if (!is_record(rp)) {
+        if (rp[2] == 0 || rp[3] == REALTIME_PROFILER_SYNC_MARKER_ID ||
+            record_type(rp) != realtime_profiler_msgs::REALTIME_PROFILER_RECORD_TYPE_INTERVAL) {
             continue;
         }
+        const uint32_t header = rp[3];
         records.emplace_back(
             rp[2],
             chip_id,
             (static_cast<uint64_t>(rp[0]) << 32) | rp[1],
             (static_cast<uint64_t>(rp[4]) << 32) | rp[5],
             sync_frequency,
-            data_collector->GetKernelSourcesForRuntimeId(static_cast<uint16_t>(rp[2])));
+            data_collector->GetKernelSourcesForRuntimeId(static_cast<uint16_t>(rp[2])),
+            (header >> 8) & 0xff,
+            header & 0xff,
+            rp[6],
+            header >> 24,
+            record_type(rp));
     }
-    if (records.empty()) {
+    if (!records.empty()) {
+        num_published_records_.fetch_add(records.size(), std::memory_order_relaxed);
+        num_published_batches_.fetch_add(1, std::memory_order_relaxed);
+        ring_->writer().publish_batch(std::span<const tt::ProgramRealtimeRecord>(records));
+    }
+
+    // Publish callback records before making their following watermark visible
+    // to collection waiters. Then replay page order under the collection lock so
+    // each watermark captures the exact host-received record count at that point.
+    for (uint32_t page = 0; page < num_pages; ++page) {
+        const uint32_t* rp = page_buf + page * kPageWords;
+        if (rp[3] == REALTIME_PROFILER_SYNC_MARKER_ID) {
+            continue;
+        }
+        if (record_type(rp) == realtime_profiler_msgs::REALTIME_PROFILER_RECORD_TYPE_INTERVAL && rp[2] != 0) {
+            dev_state.received_record_count++;
+            dev_state.latest_record_sequence = rp[6];
+        } else if (
+            record_type(rp) == realtime_profiler_msgs::REALTIME_PROFILER_RECORD_TYPE_WATERMARK &&
+            (rp[2] == realtime_profiler_msgs::REALTIME_PROFILER_WATERMARK_MARKER_ID ||
+             rp[2] == realtime_profiler_msgs::REALTIME_PROFILER_WATERMARK_PROTOCOL_ERROR_MARKER_ID)) {
+            observe_watermark(dev_state, rp);
+        }
+    }
+}
+
+void RealtimeProfilerManager::observe_watermark(DeviceState& dev_state, const uint32_t* page) {
+    const uint32_t watermark_id = page[0];
+    const uint32_t stream = page[3] & 0xff;
+    auto it = collections_.find(watermark_id);
+    if (it == collections_.end()) {
         return;
     }
-    num_published_records_.fetch_add(records.size(), std::memory_order_relaxed);
-    num_published_batches_.fetch_add(1, std::memory_order_relaxed);
-    ring_->writer().publish_batch(std::span<const tt::ProgramRealtimeRecord>(records));
+    auto& state = it->second;
+    state.protocol_error |= page[2] == realtime_profiler_msgs::REALTIME_PROFILER_WATERMARK_PROTOCOL_ERROR_MARKER_ID;
+    auto device_it = std::ranges::find_if(
+        state.devices, [&](const CollectionDeviceState& device) { return device.chip_id == dev_state.chip_id; });
+    if (device_it == state.devices.end() || stream >= 32 || (device_it->expected_stream_mask & (1u << stream)) == 0 ||
+        (device_it->observed_stream_mask & (1u << stream)) != 0) {
+        state.protocol_error = true;
+    } else {
+        device_it->observed_stream_mask |= 1u << stream;
+        const uint32_t descriptor_snapshot = page[4];
+        const uint32_t observer_snapshot = page[5];
+        const uint32_t record_snapshot = page[6];
+        const uint32_t transport_snapshot = page[7];
+        if (static_cast<uint32_t>(descriptor_snapshot - device_it->baseline_descriptor_drop) >=
+            static_cast<uint32_t>(device_it->descriptor_drop_snapshot - device_it->baseline_descriptor_drop)) {
+            device_it->descriptor_drop_snapshot = descriptor_snapshot;
+        }
+        if (static_cast<uint32_t>(observer_snapshot - device_it->baseline_observer_drop) >=
+            static_cast<uint32_t>(device_it->observer_drop_snapshot - device_it->baseline_observer_drop)) {
+            device_it->observer_drop_snapshot = observer_snapshot;
+        }
+        if (static_cast<uint32_t>(record_snapshot - device_it->baseline_record_drop) >=
+            static_cast<uint32_t>(device_it->record_drop_snapshot - device_it->baseline_record_drop)) {
+            device_it->record_drop_snapshot = record_snapshot;
+        }
+        if (static_cast<uint32_t>(transport_snapshot - device_it->baseline_transport_drop) >=
+            static_cast<uint32_t>(device_it->transport_drop_snapshot - device_it->baseline_transport_drop)) {
+            device_it->transport_drop_snapshot = transport_snapshot;
+        }
+        dev_state.latest_descriptor_drop_snapshot = device_it->descriptor_drop_snapshot;
+        dev_state.latest_observer_drop_snapshot = device_it->observer_drop_snapshot;
+        dev_state.latest_record_drop_snapshot = device_it->record_drop_snapshot;
+        dev_state.latest_transport_drop_snapshot = device_it->transport_drop_snapshot;
+        const uint32_t source_delta = (device_it->descriptor_drop_snapshot - device_it->baseline_descriptor_drop) +
+                                      (device_it->observer_drop_snapshot - device_it->baseline_observer_drop) +
+                                      (device_it->record_drop_snapshot - device_it->baseline_record_drop);
+        const uint32_t transport_delta = device_it->transport_drop_snapshot - device_it->baseline_transport_drop;
+        if (dev_state.latest_record_sequence != page[1] && source_delta == 0 && transport_delta == 0) {
+            state.protocol_error = true;
+        }
+        if (device_it->observed_stream_mask == device_it->expected_stream_mask) {
+            device_it->observed_record_count = dev_state.received_record_count;
+        }
+    }
+    if (state.protocol_error) {
+        state.result = make_collection_result_locked(watermark_id, state, false);
+        collection_cv_.notify_all();
+        return;
+    }
+    state.complete = std::ranges::all_of(state.devices, [](const CollectionDeviceState& device) {
+        return device.observed_stream_mask == device.expected_stream_mask;
+    });
+    if (state.complete) {
+        state.result = make_collection_result_locked(watermark_id, state, false);
+        collection_cv_.notify_all();
+    }
 }
 
 bool RealtimeProfilerManager::has_active_finish_sync() const {
@@ -506,6 +1126,23 @@ void RealtimeProfilerManager::initialize_devices(const std::shared_ptr<MeshDevic
     // TODO: When realtime profiler is supported on Quasar, we'll need to pass in the command queue id(s).
     const uint32_t realtime_profiler_base_addr =
         dispatch_mem_map.get_device_command_queue_addr(CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG, /*cq_id=*/0);
+    uint32_t qualification_scratch_addr = 0;
+    if (hal.get_arch() == tt::ARCH::BLACKHOLE && std::getenv("TT_RT_PROFILER_QUALIFICATION_HOOK") != nullptr) {
+        const uint32_t telemetry_addr =
+            dispatch_mem_map.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_TELEMETRY, /*cq_id=*/0);
+        const uint32_t profiler_msg_size = factory.size_of<realtime_profiler_msgs::realtime_profiler_msg_t>();
+        const uint32_t qualification_scratch_size =
+            realtime_profiler_msgs::REALTIME_PROFILER_QUALIFICATION_SCRATCH_WORDS * sizeof(uint32_t);
+        const uint32_t profiler_carve_out =
+            telemetry_addr >= realtime_profiler_base_addr ? telemetry_addr - realtime_profiler_base_addr : 0;
+        TT_FATAL(
+            profiler_carve_out >= profiler_msg_size + qualification_scratch_size,
+            "TT_RT_PROFILER_QUALIFICATION_HOOK must be set before the first device open in this process "
+            "(profiler carve-out is {} B, need {} B)",
+            profiler_carve_out,
+            profiler_msg_size + qualification_scratch_size);
+        qualification_scratch_addr = realtime_profiler_base_addr + profiler_msg_size;
+    }
     // RealtimeProfilerCoreL1 (ring + D2H sender config) sits past the dispatch carve-outs; the core is off the L1 bank
     // table so the allocator never lands here.
     const uint32_t rt_profiler_core_l1_base =
@@ -561,6 +1198,7 @@ void RealtimeProfilerManager::initialize_devices(const std::shared_ptr<MeshDevic
         dev_state.chip_id = device_id;
         dev_state.mesh_coord = coord;
         dev_state.realtime_profiler_core = realtime_profiler_core;
+        dev_state.qualification_scratch_addr = qualification_scratch_addr;
         // Single base past UNRESERVED, sub-addresses via offsetof, bypassing the allocator.
         dev_state.core_l1 = rt_profiler_core_l1_addrs;
 
@@ -600,19 +1238,24 @@ void RealtimeProfilerManager::initialize_devices(const std::shared_ptr<MeshDevic
         dev_state.sync_request_addr = realtime_profiler_base_addr + sync_request_offset;
         dev_state.sync_host_ts_addr = realtime_profiler_base_addr + sync_host_timestamp_offset;
 
-        // Write real-time profiler core info into the dispatch carve-out for termination signaling.
+        // Publish the remote mailbox address now, but defer the nonzero
+        // activation word until the reserved-core mailbox is zeroed and both
+        // profiler kernels are launched.
         if (dispatch_core_manager.is_dispatcher_s_core_allocated(device_id, 0, 0)) {
             const tt_cxy_pair& dispatch_s_cxy = dispatch_core_manager.dispatcher_s_core(device_id, 0, 0);
             CoreCoord dispatch_s_core(dispatch_s_cxy.x, dispatch_s_cxy.y);
+            dev_state.dispatch_s_core = dispatch_s_core;
+            dev_state.dispatch_s_profiler_msg_addr = realtime_profiler_base_addr;
 
-            CoreCoord realtime_profiler_virtual =
-                device->virtual_core_from_logical_core(realtime_profiler_core, CoreType::WORKER);
-            uint32_t realtime_profiler_noc_xy =
-                hal.noc_xy_encoding(realtime_profiler_virtual.x, realtime_profiler_virtual.y);
+            // dispatch_s/TRISC0 are waiting on the zero activation coordinate.
+            // Clear the complete local protocol block before publishing any
+            // remote address so newly added fields cannot inherit stale L1
+            // contents from an earlier dispatch layout.
+            const uint32_t profiler_msg_size = factory.size_of<realtime_profiler_msgs::realtime_profiler_msg_t>();
+            std::vector<uint32_t> zero_dispatch_msg(profiler_msg_size / sizeof(uint32_t), 0);
+            tt::tt_metal::detail::WriteToDeviceL1(
+                device, dispatch_s_core, realtime_profiler_base_addr, zero_dispatch_msg, CoreType::WORKER);
 
-            uint32_t realtime_profiler_core_noc_xy_offset =
-                factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
-                    realtime_profiler_msgs::realtime_profiler_msg_t::Field::realtime_profiler_core_noc_xy);
             uint32_t remote_state_addr_field_offset =
                 factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
                     realtime_profiler_msgs::realtime_profiler_msg_t::Field::realtime_profiler_remote_state_addr);
@@ -621,14 +1264,6 @@ void RealtimeProfilerManager::initialize_devices(const std::shared_ptr<MeshDevic
                     realtime_profiler_msgs::realtime_profiler_msg_t::Field::realtime_profiler_state);
             uint32_t realtime_profiler_core_state_addr = realtime_profiler_base_addr + realtime_profiler_state_offset;
 
-            std::vector<uint32_t> noc_xy_data = {realtime_profiler_noc_xy};
-            tt::tt_metal::detail::WriteToDeviceL1(
-                device,
-                dispatch_s_core,
-                realtime_profiler_base_addr + realtime_profiler_core_noc_xy_offset,
-                noc_xy_data,
-                CoreType::WORKER);
-
             std::vector<uint32_t> remote_state_addr_data = {realtime_profiler_core_state_addr};
             tt::tt_metal::detail::WriteToDeviceL1(
                 device,
@@ -636,17 +1271,6 @@ void RealtimeProfilerManager::initialize_devices(const std::shared_ptr<MeshDevic
                 realtime_profiler_base_addr + remote_state_addr_field_offset,
                 remote_state_addr_data,
                 CoreType::WORKER);
-
-            log_debug(
-                tt::LogMetal,
-                "[Real-time profiler] Device {}: wrote real-time profiler core info (noc_xy=0x{:x}, "
-                "remote_state_addr=0x{:x}) "
-                "to dispatch_s ({}, {})",
-                device_id,
-                realtime_profiler_noc_xy,
-                realtime_profiler_core_state_addr,
-                dispatch_s_core.x,
-                dispatch_s_core.y);
         }
 
         // Ring buffer (BRISC->NCRISC handoff) at a fixed carve-out offset; not Buffer::create'd since the core is off
@@ -698,7 +1322,6 @@ void RealtimeProfilerManager::initialize_devices(const std::shared_ptr<MeshDevic
 
             uint32_t dispatch_core_noc_x = 0;
             uint32_t dispatch_core_noc_y = 0;
-            uint32_t dispatch_data_addr_a = 0;
             uint32_t dispatch_data_addr_b = 0;
             if (dispatch_core_manager.is_dispatcher_s_core_allocated(device_id, 0, 0)) {
                 const tt_cxy_pair& dispatch_s_cxy = dispatch_core_manager.dispatcher_s_core(device_id, 0, 0);
@@ -707,11 +1330,8 @@ void RealtimeProfilerManager::initialize_devices(const std::shared_ptr<MeshDevic
                 dispatch_core_noc_x = dispatch_s_virtual.x;
                 dispatch_core_noc_y = dispatch_s_virtual.y;
 
-                uint32_t kernel_start_a_offset = factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
-                    realtime_profiler_msgs::realtime_profiler_msg_t::Field::kernel_start_a);
                 uint32_t kernel_start_b_offset = factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
                     realtime_profiler_msgs::realtime_profiler_msg_t::Field::kernel_start_b);
-                dispatch_data_addr_a = realtime_profiler_base_addr + kernel_start_a_offset;
                 dispatch_data_addr_b = realtime_profiler_base_addr + kernel_start_b_offset;
             }
 
@@ -720,7 +1340,6 @@ void RealtimeProfilerManager::initialize_devices(const std::shared_ptr<MeshDevic
             brisc_config.noc = NOC::RISCV_0_default;
             brisc_config.defines["DISPATCH_CORE_NOC_X"] = std::to_string(dispatch_core_noc_x);
             brisc_config.defines["DISPATCH_CORE_NOC_Y"] = std::to_string(dispatch_core_noc_y);
-            brisc_config.defines["DISPATCH_DATA_ADDR_A"] = std::to_string(dispatch_data_addr_a);
             brisc_config.defines["DISPATCH_DATA_ADDR_B"] = std::to_string(dispatch_data_addr_b);
             brisc_config.defines["DISPATCH_PROFILER_STATE_ADDR"] = std::to_string(
                 realtime_profiler_base_addr +
@@ -728,6 +1347,8 @@ void RealtimeProfilerManager::initialize_devices(const std::shared_ptr<MeshDevic
                     realtime_profiler_msgs::realtime_profiler_msg_t::Field::realtime_profiler_state));
             brisc_config.defines["RING_BUFFER_ADDR"] = std::to_string(ring_buffer_addr);
             brisc_config.defines["REALTIME_PROFILER_MSG_ADDR"] = std::to_string(realtime_profiler_base_addr);
+            brisc_config.defines["REALTIME_PROFILER_PROTOCOL_BUILD_KEY"] =
+                std::to_string(realtime_profiler_msgs::REALTIME_PROFILER_PROTOCOL_VERSION);
             CreateKernel(
                 realtime_profiler_program, realtime_profiler_kernel_path, realtime_profiler_core, brisc_config);
 
@@ -736,6 +1357,11 @@ void RealtimeProfilerManager::initialize_devices(const std::shared_ptr<MeshDevic
             ncrisc_config.noc = NOC::RISCV_1_default;
             ncrisc_config.defines["RING_BUFFER_ADDR"] = std::to_string(ring_buffer_addr);
             ncrisc_config.defines["REALTIME_PROFILER_MSG_ADDR"] = std::to_string(realtime_profiler_base_addr);
+            ncrisc_config.defines["REALTIME_PROFILER_PROTOCOL_BUILD_KEY"] =
+                std::to_string(realtime_profiler_msgs::REALTIME_PROFILER_PROTOCOL_VERSION);
+            if (std::getenv("TT_RT_PROFILER_RING_TEST_HOOK") != nullptr) {
+                ncrisc_config.defines["RT_PROFILER_RING_TEST_HOOK"] = "1";
+            }
             if (need_pcie_noc_defines) {
                 ncrisc_config.defines["RT_PROFILER_PCIE_NOC_X"] = std::to_string(pcie_noc_x);
                 ncrisc_config.defines["RT_PROFILER_PCIE_NOC_Y"] = std::to_string(pcie_noc_y);
@@ -765,6 +1391,31 @@ void RealtimeProfilerManager::initialize_devices(const std::shared_ptr<MeshDevic
                 realtime_profiler_core.y,
                 ring_buffer_addr,
                 config_buffer_addr);
+        }
+
+        if (dev_state.dispatch_s_profiler_msg_addr != 0) {
+            CoreCoord realtime_profiler_virtual =
+                device->virtual_core_from_logical_core(realtime_profiler_core, CoreType::WORKER);
+            const uint32_t realtime_profiler_noc_xy =
+                hal.noc_xy_encoding(realtime_profiler_virtual.x, realtime_profiler_virtual.y);
+            const uint32_t realtime_profiler_core_noc_xy_offset =
+                factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
+                    realtime_profiler_msgs::realtime_profiler_msg_t::Field::realtime_profiler_core_noc_xy);
+            std::vector<uint32_t> noc_xy_data = {realtime_profiler_noc_xy};
+            tt::tt_metal::detail::WriteToDeviceL1(
+                device,
+                dev_state.dispatch_s_core,
+                realtime_profiler_base_addr + realtime_profiler_core_noc_xy_offset,
+                noc_xy_data,
+                CoreType::WORKER);
+
+            log_debug(
+                tt::LogMetal,
+                "[Real-time profiler] Device {}: activated dispatch_s ({}, {}) for profiler core noc_xy=0x{:x}",
+                device_id,
+                dev_state.dispatch_s_core.x,
+                dev_state.dispatch_s_core.y,
+                realtime_profiler_noc_xy);
         }
 
         MetalContext::instance(context_id_).device_manager()->mark_rt_profiler_device_init_complete(device_id);
@@ -990,6 +1641,10 @@ uint64_t RealtimeProfilerManager::run_receiver_loop() {
     uint64_t num_pages_received = 0;
     auto last_fifo_plot = std::chrono::steady_clock::now();
     while (!stop_.load(std::memory_order_acquire)) {
+        if (receiver_loop_paused_for_testing_.load(std::memory_order_acquire)) {
+            std::this_thread::sleep_for(kReceiverMaxBackoff);
+            continue;
+        }
         const bool scan_sync_marker = finish_sync_busy_.load(std::memory_order_acquire);
         const uint32_t num_pages = drain_all_devices(scan_sync_marker, page_buf, record_buf);
         num_pages_received += num_pages;
@@ -1170,13 +1825,43 @@ void RealtimeProfilerManager::shutdown() {
     constexpr auto kShutdownKernelExitGrace = std::chrono::milliseconds(100);
     MetalContext::instance(context_id_).data_collector()->DetachRealtimeProfilerCallbackListener(this);
 
-    // Re-write ring_buffer->terminate as a safety net, then let the push kernel deliver the last PCIe page.
+    {
+        std::lock_guard<std::mutex> lock(collection_mutex_);
+        for (auto& [watermark_id, state] : collections_) {
+            if (!state.result.has_value()) {
+                state.result = make_collection_result_locked(watermark_id, state, true);
+            }
+        }
+    }
+    collection_cv_.notify_all();
+
+    const auto& factory =
+        MetalContext::instance(context_id_).hal().get_realtime_profiler_msgs_factory(HalProgrammableCoreType::TENSIX);
+    const uint32_t terminate_requested_offset = factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
+        realtime_profiler_msgs::realtime_profiler_msg_t::Field::terminate_requested);
+
+    // Re-write both kernel termination requests as a safety net, then let the
+    // push kernel deliver the last PCIe page.
     for (auto& dev_state : devices_) {
         if (dev_state.core_l1.ring_buffer != 0 && dev_state.device) {
             const uint32_t terminate_addr = dev_state.core_l1.ring_buffer + offsetof(RtProfilerRingBuffer, terminate);
             std::vector<uint32_t> terminate_flag = {1};
             try {
                 write_sync_request(dev_state, SyncRequest::Clear);
+                if (dev_state.dispatch_s_profiler_msg_addr != 0) {
+                    tt::tt_metal::detail::WriteToDeviceL1(
+                        dev_state.device,
+                        dev_state.dispatch_s_core,
+                        dev_state.dispatch_s_profiler_msg_addr + terminate_requested_offset,
+                        terminate_flag,
+                        CoreType::WORKER);
+                    tt::tt_metal::detail::WriteToDeviceL1(
+                        dev_state.device,
+                        dev_state.realtime_profiler_core,
+                        dev_state.dispatch_s_profiler_msg_addr + terminate_requested_offset,
+                        terminate_flag,
+                        CoreType::WORKER);
+                }
                 tt::tt_metal::detail::WriteToDeviceL1(
                     dev_state.device,
                     dev_state.realtime_profiler_core,
@@ -1206,29 +1891,29 @@ void RealtimeProfilerManager::shutdown() {
         if (dev_state.core_l1.ring_buffer == 0 || !dev_state.device) {
             continue;
         }
-        const uint32_t full_wait_addr =
-            dev_state.core_l1.ring_buffer + offsetof(RtProfilerRingBuffer, ring_full_wait_count);
-        std::vector<uint32_t> full_wait(1, 0);
+        const uint32_t transport_drop_addr =
+            dev_state.core_l1.ring_buffer + offsetof(RtProfilerRingBuffer, transport_drop_count);
+        std::vector<uint32_t> transport_drops(1, 0);
         try {
             tt::tt_metal::detail::ReadFromDeviceL1(
                 dev_state.device,
                 dev_state.realtime_profiler_core,
-                full_wait_addr,
+                transport_drop_addr,
                 sizeof(uint32_t),
-                full_wait,
+                transport_drops,
                 CoreType::WORKER);
-            if (full_wait[0] != 0) {
+            if (transport_drops[0] != 0) {
                 log_warning(
                     tt::LogMetal,
                     "[Real-time profiler] Device {} L1 ring hit capacity {} time(s); profiler records may have been "
                     "dropped",
                     dev_state.chip_id,
-                    full_wait[0]);
+                    transport_drops[0]);
             }
         } catch (const std::exception& e) {
             log_warning(
                 tt::LogMetal,
-                "[Real-time profiler] Failed to read ring_full_wait_count for device {}: {}",
+                "[Real-time profiler] Failed to read transport_drop_count for device {}: {}",
                 dev_state.chip_id,
                 e.what());
         }

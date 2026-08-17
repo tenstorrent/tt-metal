@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <chrono>
+
 #include "mesh_command_queue_base.hpp"
 
 #include "tt_metal/common/multi_producer_single_consumer_queue.hpp"
@@ -15,6 +17,10 @@
 #include "tt_metal/impl/buffers/dispatch.hpp"
 #include "tt_metal/impl/dispatch/ringbuffer_cache.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
+
+namespace tt::tt_metal::experimental {
+struct ProgramRealtimeProfilerCollectionResult;
+}
 
 // Forward declaration of the FDMeshCQTestAccessor class
 // This is used to access the system memory manager from cq test fixtures
@@ -69,6 +75,8 @@ private:
         const program_dispatch::ProgramDispatchMetadata& dispatch_md);
     // Clear the num_workers_completed counter on the dispatcher cores corresponding to this CQ.
     void clear_expected_num_workers_completed();
+    std::optional<uint32_t> finish_nolock_impl(
+        ttsl::Span<const SubDeviceId> sub_device_ids, bool retain_profiler_collection);
     // Access a reference system memory manager, which acts as a global host side state manager for
     // specific MeshCommandQueue attributes.
     // TODO: All Mesh level host state managed by this class should be moved out, since its not
@@ -253,6 +261,8 @@ public:
     void drain_events_from_completion_queue();
     void verify_reported_events_after_draining(const MeshEvent& event);
     void finish(ttsl::Span<const SubDeviceId> sub_device_ids = {}) override;
+    experimental::ProgramRealtimeProfilerCollectionResult finish_and_collect_realtime_profiler(
+        std::chrono::milliseconds timeout, ttsl::Span<const SubDeviceId> sub_device_ids = {});
     void reset_worker_state(
         bool reset_launch_msg_state,
         uint32_t num_sub_devices,

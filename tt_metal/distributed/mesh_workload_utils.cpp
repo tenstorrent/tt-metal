@@ -101,7 +101,11 @@ void write_go_signal(
 }
 
 void write_rt_profiler_flush(
-    uint8_t cq_id, SubDeviceId sub_device_id, SystemMemoryManager& sysmem_manager, uint32_t wait_count) {
+    uint8_t cq_id,
+    SubDeviceId sub_device_id,
+    SystemMemoryManager& sysmem_manager,
+    uint32_t wait_count,
+    uint32_t watermark_id) {
     DeviceCommandCalculator calculator;
     calculator.add_dispatch_rt_profiler_flush();
     uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
@@ -110,7 +114,7 @@ void write_rt_profiler_flush(
 
     HugepageDeviceCommand flush_cmd_sequence(cmd_region, cmd_sequence_sizeB);
     const uint32_t wait_stream = MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(*sub_device_id);
-    flush_cmd_sequence.add_dispatch_rt_profiler_flush(wait_count, wait_stream);
+    flush_cmd_sequence.add_dispatch_rt_profiler_flush(wait_count, wait_stream, watermark_id);
 
     TT_ASSERT(flush_cmd_sequence.size_bytes() == flush_cmd_sequence.write_offset_bytes());
 

@@ -44,6 +44,33 @@ struct RealtimeProfilerCoreL1Addrs {
     uint32_t socket_config = 0;
 };
 
+struct RealtimeProfilerDeviceLossCounts {
+    uint64_t start_descriptor = 0;
+    uint64_t unsupported_launch = 0;
+    uint64_t reset_descriptor = 0;
+    uint64_t completion_observer = 0;
+    uint64_t stuck_descriptor_head = 0;
+    uint64_t completed_record = 0;
+    uint64_t terminal_descriptor = 0;
+    uint64_t terminal_record = 0;
+    uint64_t completion_observer_timeout = 0;
+    uint64_t watermark_request = 0;
+    uint64_t watermark_protocol = 0;
+
+    uint64_t total() const {
+        return start_descriptor + unsupported_launch + reset_descriptor + completion_observer + stuck_descriptor_head +
+               completed_record + terminal_descriptor + terminal_record + completion_observer_timeout +
+               watermark_request + watermark_protocol;
+    }
+};
+
+struct RealtimeProfilerQualificationCounts {
+    uint64_t record_handler_cycles = 0;
+    uint32_t record_handler_count = 0;
+    uint32_t max_observer_scan_cycles = 0;
+    double minimum_frequency = 0.0;
+};
+
 // Owns the RT-profiler subsystem for one MeshDevice: per-device state, the receiver thread, the Tracy handler, and the
 // host-device sync handshake (sharded across a small worker pool, with a 60s per-chip throttle).
 class RealtimeProfilerManager : private tt::RealtimeProfilerCallbackListener {
@@ -69,8 +96,33 @@ public:
     uint32_t host_fifo_capacity_pages() const;
     uint64_t num_published_records() const { return num_published_records_.load(std::memory_order_relaxed); }
     uint64_t num_published_batches() const { return num_published_batches_.load(std::memory_order_relaxed); }
-    uint32_t ring_full_wait_count() const;  // reads device L1
+    uint32_t transport_drop_count() const;                        // reads device L1
+    RealtimeProfilerDeviceLossCounts device_loss_counts() const;  // reads dispatch_s L1
+    void prime_start_descriptor_queue_full_for_testing(uint32_t stream_index, uint32_t completion_target) const;
+    void advance_stream_reset_generation_for_testing(uint32_t stream_index) const;
+    void clear_start_descriptor_queue_for_testing(uint32_t stream_index) const;
+    // Device fault injection for focused profiler tests only. These methods
+    // require the normal finish-sync state machine to be idle.
+    void prime_completed_record_queue_full_for_testing();
+    void clear_completed_record_queue_for_testing();
+    void prime_reserved_ring_for_testing(uint32_t occupancy);
+    void resume_reserved_ring_consumer_for_testing();
+    uint32_t reserved_ring_occupancy_for_testing() const;
+    bool dispatch_mailbox_pending_for_testing() const;
+    bool inject_unexpected_watermark_for_testing(uint32_t watermark_id, uint32_t stream);
+    RealtimeProfilerQualificationCounts qualification_counts_for_testing() const;
+    void set_receiver_loop_paused_for_testing(bool paused) {
+        receiver_loop_paused_for_testing_.store(paused, std::memory_order_release);
+    }
+    void set_next_watermark_id_for_testing(uint32_t id) {
+        std::lock_guard<std::mutex> lock(collection_mutex_);
+        next_watermark_id_ = id;
+    }
     size_t num_active_devices() const { return devices_.size(); }
+    uint32_t register_collection(uint32_t expected_stream_mask);
+    void cancel_collection(uint32_t watermark_id);
+    experimental::ProgramRealtimeProfilerCollectionResult wait_for_collection(
+        uint32_t watermark_id, std::chrono::milliseconds timeout);
 
 private:
     struct DeviceState {
@@ -78,6 +130,9 @@ private:
         uint32_t chip_id = 0;
         MeshCoordinate mesh_coord = MeshCoordinate(0);
         CoreCoord realtime_profiler_core;
+        CoreCoord dispatch_s_core;
+        uint32_t dispatch_s_profiler_msg_addr = 0;
+        uint32_t qualification_scratch_addr = 0;
         std::unique_ptr<D2HSocket> socket;
         // Owns the BRISC+NCRISC program to keep its kernels (and their metadata for tt-inspector) alive for the
         // manager's lifetime.
@@ -93,6 +148,12 @@ private:
         // Updated after a successful finish-path or init SYNC_CHECK handshake; used to
         // throttle redundant finish syncs (minimum 60s between attempts per device).
         std::optional<std::chrono::steady_clock::time_point> last_finish_sync_at;
+        uint64_t received_record_count = 0;
+        uint32_t latest_record_sequence = 0;
+        uint32_t latest_descriptor_drop_snapshot = 0;
+        uint32_t latest_observer_drop_snapshot = 0;
+        uint32_t latest_record_drop_snapshot = 0;
+        uint32_t latest_transport_drop_snapshot = 0;
         // First finish-path sync bypasses the throttle so short runs still get a FINISH_SYNC pair; cleared after that
         // handshake.
         bool pending_first_unthrottled_finish_sync = false;
@@ -155,10 +216,11 @@ private:
         std::vector<tt::ProgramRealtimeRecord>& record_buf);
     // Decode program records from drained pages and publish them to the broadcast ring.
     void publish_pages(
-        const DeviceState& dev_state,
+        DeviceState& dev_state,
         const uint32_t* page_buf,
         uint32_t num_pages,
         std::vector<tt::ProgramRealtimeRecord>& records);
+    void observe_watermark(DeviceState& dev_state, const uint32_t* page);
     enum SyncRequest : uint32_t { Clear = 0, Set = 1 };
     static void write_sync_request(DeviceState& dev_state, SyncRequest value);
     [[nodiscard]] bool has_active_finish_sync() const;
@@ -181,6 +243,7 @@ private:
     std::atomic<bool> stop_{false};
     std::atomic<bool> finish_sync_requested_{false};
     std::atomic<bool> finish_sync_busy_{false};
+    std::atomic<bool> receiver_loop_paused_for_testing_{false};
     std::atomic<std::chrono::steady_clock::rep> last_sync_request_at_{0};
 
     std::mutex finish_sync_wait_mu_;
@@ -202,6 +265,37 @@ private:
     std::optional<RecordRing> ring_;
     std::mutex consumers_mutex_;
     std::unordered_map<tt::ProgramRealtimeProfilerCallbackHandle, std::unique_ptr<Consumer>> consumers_;
+
+    struct CollectionDeviceState {
+        uint32_t chip_id = 0;
+        uint32_t expected_stream_mask = 0;
+        uint32_t observed_stream_mask = 0;
+        uint64_t baseline_record_count = 0;
+        uint32_t baseline_descriptor_drop = 0;
+        uint32_t baseline_observer_drop = 0;
+        uint32_t baseline_record_drop = 0;
+        uint32_t baseline_transport_drop = 0;
+        uint32_t descriptor_drop_snapshot = 0;
+        uint32_t observer_drop_snapshot = 0;
+        uint32_t record_drop_snapshot = 0;
+        uint32_t transport_drop_snapshot = 0;
+        uint64_t observed_record_count = 0;
+    };
+
+    struct CollectionState {
+        bool complete = false;
+        bool protocol_error = false;
+        std::vector<CollectionDeviceState> devices;
+        std::optional<experimental::ProgramRealtimeProfilerCollectionResult> result;
+    };
+
+    experimental::ProgramRealtimeProfilerCollectionResult make_collection_result_locked(
+        uint32_t watermark_id, const CollectionState& state, bool timed_out) const;
+    mutable std::mutex collection_mutex_;
+    std::condition_variable collection_cv_;
+    uint32_t next_watermark_id_ = 1;
+    std::unordered_map<uint32_t, CollectionState> collections_;
+    static constexpr size_t kMaxOutstandingCollections = 4096;
 };
 
 }  // namespace distributed

@@ -19,6 +19,7 @@
 #include "tt_metal/impl/dispatch/kernels/device_print_dispatch.h"
 #endif
 #include "tt_metal/impl/dispatch/kernels/realtime_profiler.hpp"
+#include "tt_metal/impl/dispatch/kernels/realtime_profiler_protocol.hpp"
 #include "hostdevcommon/profiler_common.h"
 #include "hostdevcommon/dispatch_telemetry_types.hpp"
 #include "hostdev/dev_msgs.h"
@@ -148,10 +149,6 @@ volatile tt_l1_ptr realtime_profiler_msg_t* rt_profiler_msg =
     reinterpret_cast<volatile tt_l1_ptr realtime_profiler_msg_t*>(REALTIME_PROFILER_MSG_ADDR);
 
 static bool rt_profiler_enabled = false;
-static uint32_t rt_active_program_id[max_num_worker_sems] = {0};
-static uint32_t rt_active_start_hi[max_num_worker_sems] = {0};
-static uint32_t rt_active_start_lo[max_num_worker_sems] = {0};
-
 static uint32_t num_pages_acquired = 0;
 static uint32_t num_mcasts_sent[max_num_worker_sems] = {0};
 static uintptr_t cmd_ptr;
@@ -173,11 +170,24 @@ static uint32_t worker_count_update_for_dispatch_d[max_num_worker_sems] = {0};
 static uint32_t go_signal_noc_data[max_num_go_signal_noc_data_entries];
 
 static uint32_t num_worker_sems = 1;
+static uint32_t next_watermark_stream = 0;
+static uint32_t pending_watermark_stream_mask = 0;
 
 // The dispatch message entry limit also bounds the number of sub-devices.
 static std::array<uint32_t, max_num_worker_sems> workers_per_sub_device = {0};
 
-FORCE_INLINE void drain_realtime_profiler_records();
+static_assert(max_num_worker_sems <= REALTIME_PROFILER_MAX_STREAMS);
+static_assert(
+    (REALTIME_PROFILER_START_QUEUE_CAPACITY & (REALTIME_PROFILER_START_QUEUE_CAPACITY - 1)) == 0,
+    "Realtime profiler start queue capacity must be a power of two");
+static_assert(
+    (REALTIME_PROFILER_RECORD_QUEUE_CAPACITY & (REALTIME_PROFILER_RECORD_QUEUE_CAPACITY - 1)) == 0,
+    "Realtime profiler record queue capacity must be a power of two");
+static_assert(
+    REALTIME_PROFILER_START_QUEUE_WORDS ==
+    REALTIME_PROFILER_MAX_STREAMS * REALTIME_PROFILER_START_QUEUE_CAPACITY * REALTIME_PROFILER_START_DESCRIPTOR_WORDS);
+static_assert(
+    REALTIME_PROFILER_RECORD_QUEUE_WORDS == REALTIME_PROFILER_RECORD_QUEUE_CAPACITY * REALTIME_PROFILER_RECORD_WORDS);
 
 FORCE_INLINE
 void dispatch_s_wr_reg_cmd_buf_init() {
@@ -216,8 +226,9 @@ FORCE_INLINE
 void dispatch_s_noc_inline_dw_write(uint64_t addr, uint32_t val, uint8_t noc_id, uint8_t be = 0xF) {
     WAYPOINT("NWIW");
     DEBUG_SANITIZE_NOC_ADDR(noc_id, addr, 4);
-    // Workaround for BH inline writes does not apply here because this writes to a stream register.
-    // See comment in `noc_get_interim_inline_value_addr` for more details.
+    // Blackhole's L1-destination spoof path hardcodes NCRISC_WR_CMD_BUF even
+    // though this helper requests DISPATCH_S_WR_REG_CMD_BUF. Such writes must
+    // not occur between a cq_noc_async_write_init_state/with_state pair.
     noc_fast_write_dw_inline<noc_mode>(
         noc_id,
         DISPATCH_S_WR_REG_CMD_BUF,
@@ -231,62 +242,71 @@ void dispatch_s_noc_inline_dw_write(uint64_t addr, uint32_t val, uint8_t noc_id,
     WAYPOINT("NWID");
 }
 
-FORCE_INLINE
-void signal_realtime_profiler_and_switch(volatile tt_l1_ptr realtime_profiler_msg_t* msg) {
-    RealtimeProfilerState current_state = static_cast<RealtimeProfilerState>(msg->realtime_profiler_state);
-    bool used_buffer_a = (current_state == REALTIME_PROFILER_STATE_PUSH_B);
-
-    RealtimeProfilerState new_state = used_buffer_a ? REALTIME_PROFILER_STATE_PUSH_A : REALTIME_PROFILER_STATE_PUSH_B;
-    msg->realtime_profiler_state = new_state;
-
-    if (msg->realtime_profiler_core_noc_xy != 0) {
-        uint64_t realtime_profiler_addr =
-            get_noc_addr_helper(msg->realtime_profiler_core_noc_xy, msg->realtime_profiler_remote_state_addr);
-        dispatch_s_noc_inline_dw_write(realtime_profiler_addr, static_cast<uint32_t>(new_state), my_noc_index);
-    }
-}
-
-FORCE_INLINE
-void enqueue_realtime_profiler_record(
-    uint32_t id, uint32_t start_hi, uint32_t start_lo, uint32_t end_hi, uint32_t end_lo) {
-    static_assert(
-        (REALTIME_PROFILER_RECORD_QUEUE_CAPACITY & (REALTIME_PROFILER_RECORD_QUEUE_CAPACITY - 1)) == 0,
-        "Realtime profiler record queue capacity must be a power of two");
-    uint32_t write_index = rt_profiler_msg->record_write_index;
-    if (write_index - rt_profiler_msg->record_read_index >= REALTIME_PROFILER_RECORD_QUEUE_CAPACITY) {
-        drain_realtime_profiler_records();
-        write_index = rt_profiler_msg->record_write_index;
-    }
-
-    const uint32_t slot = write_index & (REALTIME_PROFILER_RECORD_QUEUE_CAPACITY - 1);
-    volatile tt_l1_ptr uint32_t* record = &rt_profiler_msg->record_words[slot * REALTIME_PROFILER_RECORD_WORDS];
-    record[0] = start_hi;
-    record[1] = start_lo;
-    record[2] = id;
-    record[3] = 0;
-    record[4] = end_hi;
-    record[5] = end_lo;
-    record[6] = id;
-    record[7] = 0;
-
-    write_index++;
-    rt_profiler_msg->record_write_index = write_index;
-}
-
-FORCE_INLINE
-void drain_realtime_profiler_records() {
-    while (rt_profiler_msg->record_read_index != rt_profiler_msg->record_write_index) {
-        while (rt_profiler_msg->realtime_profiler_state != REALTIME_PROFILER_STATE_IDLE) {
-            invalidate_l1_cache();
+__attribute__((noinline)) bool stage_realtime_profiler_watermark(uint32_t record_read_index) {
+    for (uint32_t n = 0; n < max_num_worker_sems; ++n) {
+        const uint32_t stream_index = (next_watermark_stream + n) % max_num_worker_sems;
+        const uint32_t stream_bit = 1u << stream_index;
+        if ((pending_watermark_stream_mask & stream_bit) == 0) {
+            continue;
         }
+        const uint32_t ready_read_index = rt_profiler_msg->watermark_ready_read_index[stream_index];
+        if (ready_read_index == rt_profiler_msg->watermark_ready_write_index[stream_index]) {
+            continue;
+        }
+        invalidate_l1_cache();
+        const uint32_t required_record_index = rt_profiler_msg->watermark_ready_record_write_index[stream_index];
+        if (static_cast<int32_t>(record_read_index - required_record_index) < 0) {
+            continue;
+        }
+        rt_profiler_msg->kernel_start_b.time_hi = rt_profiler_msg->watermark_ready_id[stream_index];
+        rt_profiler_msg->kernel_start_b.time_lo = rt_profiler_msg->watermark_ready_sequence[stream_index];
+        rt_profiler_msg->kernel_start_b.id = rt_profiler_msg->watermark_ready_protocol_error[stream_index] != 0
+                                                 ? REALTIME_PROFILER_WATERMARK_PROTOCOL_ERROR_MARKER_ID
+                                                 : REALTIME_PROFILER_WATERMARK_MARKER_ID;
+        rt_profiler_msg->kernel_start_b.header = (REALTIME_PROFILER_RECORD_SCHEMA_VERSION << 24) |
+                                                 (REALTIME_PROFILER_RECORD_TYPE_WATERMARK << 16) | stream_index;
+        rt_profiler_msg->kernel_end_b.time_hi = rt_profiler_msg->watermark_ready_descriptor_drop_count[stream_index];
+        rt_profiler_msg->kernel_end_b.time_lo = rt_profiler_msg->watermark_ready_observer_drop_count[stream_index];
+        rt_profiler_msg->kernel_end_b.id = rt_profiler_msg->watermark_ready_record_drop_count[stream_index];
+        rt_profiler_msg->kernel_end_b.header = 0;
+        rt_profiler_msg->watermark_ready_read_index[stream_index] = ready_read_index + 1;
+        next_watermark_stream = (stream_index + 1) % max_num_worker_sems;
+        pending_watermark_stream_mask &= ~stream_bit;
+        invalidate_l1_cache();
+        if (rt_profiler_msg->watermark_request_read_index[stream_index] !=
+                rt_profiler_msg->watermark_request_write_index[stream_index] ||
+            rt_profiler_msg->watermark_ready_read_index[stream_index] !=
+                rt_profiler_msg->watermark_ready_write_index[stream_index]) {
+            pending_watermark_stream_mask |= stream_bit;
+        }
+        return true;
+    }
+    return false;
+}
 
-        const uint32_t read_index = rt_profiler_msg->record_read_index;
+FORCE_INLINE bool service_realtime_profiler_once() {
+    if (!rt_profiler_enabled) {
+        return false;
+    }
+
+    invalidate_l1_cache();
+    if (rt_profiler_msg->realtime_profiler_state != REALTIME_PROFILER_STATE_IDLE) {
+        return false;
+    }
+
+    const uint32_t read_index = rt_profiler_msg->record_read_index;
+    const uint32_t write_index = rt_profiler_msg->record_write_index;
+    const bool found_watermark = pending_watermark_stream_mask != 0 && stage_realtime_profiler_watermark(read_index);
+
+    if (!found_watermark) {
+        if (read_index == write_index) {
+            return false;
+        }
+        // Blackhole has no uncached L1 alias. Invalidate again after observing the
+        // producer index so a reused payload slot cannot be read from NCRISC's D$.
+        invalidate_l1_cache();
         const uint32_t slot = read_index & (REALTIME_PROFILER_RECORD_QUEUE_CAPACITY - 1);
         volatile tt_l1_ptr uint32_t* record = &rt_profiler_msg->record_words[slot * REALTIME_PROFILER_RECORD_WORDS];
-
-        // Acknowledged transport is drained outside the measured worker interval. Since
-        // the profiler core returns dispatch_s to IDLE after each read, one buffer is
-        // sufficient and no notification can overwrite an unread record.
         rt_profiler_msg->kernel_start_b.time_hi = record[0];
         rt_profiler_msg->kernel_start_b.time_lo = record[1];
         rt_profiler_msg->kernel_start_b.id = record[2];
@@ -295,16 +315,155 @@ void drain_realtime_profiler_records() {
         rt_profiler_msg->kernel_end_b.time_lo = record[5];
         rt_profiler_msg->kernel_end_b.id = record[6];
         rt_profiler_msg->kernel_end_b.header = record[7];
-
-        rt_profiler_msg->realtime_profiler_state = REALTIME_PROFILER_STATE_PUSH_B;
-        const uint64_t realtime_profiler_addr = get_noc_addr_helper(
-            rt_profiler_msg->realtime_profiler_core_noc_xy, rt_profiler_msg->realtime_profiler_remote_state_addr);
-        dispatch_s_noc_inline_dw_write(realtime_profiler_addr, REALTIME_PROFILER_STATE_PUSH_B, my_noc_index);
         rt_profiler_msg->record_read_index = read_index + 1;
     }
+    asm volatile("fence w, w" ::: "memory");
 
-    while (rt_profiler_msg->realtime_profiler_state != REALTIME_PROFILER_STATE_IDLE) {
+    rt_profiler_msg->realtime_profiler_state = REALTIME_PROFILER_STATE_PUSH_B;
+    const uint64_t realtime_profiler_addr = get_noc_addr_helper(
+        rt_profiler_msg->realtime_profiler_core_noc_xy, rt_profiler_msg->realtime_profiler_remote_state_addr);
+    dispatch_s_noc_inline_dw_write(realtime_profiler_addr, REALTIME_PROFILER_STATE_PUSH_B, my_noc_index);
+    return true;
+}
+
+FORCE_INLINE void enqueue_realtime_profiler_watermark(uint32_t id, uint32_t wait_count, uint32_t wait_stream) {
+    if (!rt_profiler_enabled) {
         invalidate_l1_cache();
+        rt_profiler_enabled = (rt_profiler_msg->realtime_profiler_core_noc_xy != 0);
+    }
+    if (!rt_profiler_enabled || id == 0) {
+        return;
+    }
+    if constexpr (virtualize_unicast_cores) {
+        rt_profiler_msg->watermark_request_drop_count++;
+        return;
+    }
+    const uint32_t stream_index = wait_stream - first_stream_used;
+    ASSERT(stream_index < num_worker_sems);
+    invalidate_l1_cache();
+    const uint32_t write_index = rt_profiler_msg->watermark_request_write_index[stream_index];
+    const uint32_t read_index = rt_profiler_msg->watermark_request_read_index[stream_index];
+    if (write_index != read_index) {
+        rt_profiler_msg->watermark_request_drop_count++;
+        return;
+    }
+    rt_profiler_msg->watermark_request_id[stream_index] = id;
+    rt_profiler_msg->watermark_request_target[stream_index] = wait_count & ((1u << MEM_WORD_ADDR_WIDTH) - 1);
+    rt_profiler_msg->watermark_request_generation[stream_index] =
+        rt_profiler_msg->stream_reset_generation[stream_index];
+    asm volatile("fence w, w" ::: "memory");
+    rt_profiler_msg->watermark_request_write_index[stream_index] = write_index + 1;
+    pending_watermark_stream_mask |= 1u << stream_index;
+}
+
+FORCE_INLINE void enqueue_realtime_profiler_start(
+    uint32_t id, uint32_t wait_count, uint32_t num_workers, uint32_t wait_stream) {
+    if (!rt_profiler_enabled) {
+        // dispatch_s may have cached the disabled value while waiting for its
+        // first command even though host initialization has since enabled the
+        // profiler. Refresh only until activation; eligibility is immutable
+        // for the rest of this kernel lifetime.
+        invalidate_l1_cache();
+        rt_profiler_enabled = (rt_profiler_msg->realtime_profiler_core_noc_xy != 0);
+    }
+    if (!rt_profiler_enabled || id == REALTIME_PROFILER_UNPROFILED_PROGRAM_HOST_ID) {
+        return;
+    }
+    if (num_workers == 0) {
+        rt_profiler_msg->unsupported_launch_drop_count++;
+        return;
+    }
+
+    if constexpr (virtualize_unicast_cores) {
+        // The virtualized-core workaround injects synthetic completion into
+        // first_stream_used, so it can satisfy an unrelated descriptor early.
+        // Exclude this dispatch configuration from concurrent profiling rather
+        // than publish intervals with contaminated completion counters.
+        rt_profiler_msg->unsupported_launch_drop_count++;
+        return;
+    }
+
+    const uint32_t stream_index = wait_stream - first_stream_used;
+    ASSERT(stream_index < max_num_worker_sems);
+
+    invalidate_l1_cache();
+    const uint32_t generation = rt_profiler_msg->stream_reset_generation[stream_index];
+    const uint32_t write_index = rt_profiler_msg->start_descriptor_write_index[stream_index];
+    const uint32_t read_index = rt_profiler_msg->start_descriptor_read_index[stream_index];
+    if (realtime_profiler_queue_full(write_index, read_index, REALTIME_PROFILER_START_QUEUE_CAPACITY)) {
+        rt_profiler_msg->start_descriptor_drop_count++;
+        return;
+    }
+
+    uint32_t start_hi = 0;
+    uint32_t start_lo = 0;
+    read_realtime_wall_clock(&start_hi, &start_lo);
+    const uint32_t slot = write_index & (REALTIME_PROFILER_START_QUEUE_CAPACITY - 1);
+    const uint32_t descriptor_offset =
+        (stream_index * REALTIME_PROFILER_START_QUEUE_CAPACITY + slot) * REALTIME_PROFILER_START_DESCRIPTOR_WORDS;
+    volatile tt_l1_ptr uint32_t* descriptor = &rt_profiler_msg->start_descriptor_words[descriptor_offset];
+    descriptor[0] = start_hi;
+    descriptor[1] = start_lo;
+    descriptor[2] = id;
+    descriptor[3] = realtime_profiler_completion_target<MEM_WORD_ADDR_WIDTH>(wait_count, num_workers);
+    descriptor[4] = generation;
+    asm volatile("fence w, w" ::: "memory");
+    rt_profiler_msg->start_descriptor_write_index[stream_index] = write_index + 1;
+}
+
+FORCE_INLINE bool stop_realtime_profiler_completion_observer() {
+    constexpr uint32_t observer_stop_cycle_budget = 2'000'000;
+    rt_profiler_msg->terminate_requested = 1;
+    asm volatile("fence w, w" ::: "memory");
+    const uint64_t start = get_timestamp();
+    while (get_timestamp() - start < observer_stop_cycle_budget) {
+        invalidate_l1_cache();
+        if (rt_profiler_msg->completion_observer_stopped != 0) {
+            return true;
+        }
+    }
+    rt_profiler_msg->completion_observer_timeout_count++;
+    return false;
+}
+
+FORCE_INLINE void terminal_drain_realtime_profiler(bool completion_observer_stopped) {
+    constexpr uint32_t terminal_cycle_budget = 2'000'000;
+    constexpr uint32_t terminal_item_budget = REALTIME_PROFILER_RECORD_QUEUE_CAPACITY;
+    const uint64_t start = get_timestamp();
+    uint32_t forwarded = 0;
+    while (get_timestamp() - start < terminal_cycle_budget && forwarded < terminal_item_budget) {
+        forwarded += service_realtime_profiler_once();
+        invalidate_l1_cache();
+        if (rt_profiler_msg->record_read_index == rt_profiler_msg->record_write_index &&
+            rt_profiler_msg->realtime_profiler_state == REALTIME_PROFILER_STATE_IDLE) {
+            break;
+        }
+    }
+
+    invalidate_l1_cache();
+    if (!completion_observer_stopped) {
+        return;
+    }
+    const uint32_t read_index = rt_profiler_msg->record_read_index;
+    const uint32_t write_index = rt_profiler_msg->record_write_index;
+    rt_profiler_msg->terminal_record_drop_count += write_index - read_index;
+    rt_profiler_msg->record_read_index = write_index;
+
+    for (uint32_t i = 0; i < max_num_worker_sems; ++i) {
+        invalidate_l1_cache();
+        const uint32_t request_read_index = rt_profiler_msg->watermark_request_read_index[i];
+        const uint32_t request_write_index = rt_profiler_msg->watermark_request_write_index[i];
+        const uint32_t ready_read_index = rt_profiler_msg->watermark_ready_read_index[i];
+        const uint32_t ready_write_index = rt_profiler_msg->watermark_ready_write_index[i];
+        rt_profiler_msg->watermark_request_drop_count +=
+            (request_write_index - request_read_index) + (ready_write_index - ready_read_index);
+        rt_profiler_msg->watermark_request_read_index[i] = request_write_index;
+        rt_profiler_msg->watermark_ready_read_index[i] = ready_write_index;
+
+        const uint32_t descriptor_read_index = rt_profiler_msg->start_descriptor_read_index[i];
+        const uint32_t descriptor_write_index = rt_profiler_msg->start_descriptor_write_index[i];
+        rt_profiler_msg->terminal_descriptor_drop_count += descriptor_write_index - descriptor_read_index;
+        rt_profiler_msg->start_descriptor_read_index[i] = descriptor_write_index;
     }
 }
 
@@ -318,58 +477,8 @@ uint32_t stream_wrap_gt(uint32_t a, uint32_t b) {
     return (diff << shift) > 0;
 }
 
-FORCE_INLINE
-void finish_realtime_profiled_program(uint32_t wait_count, uint32_t wait_stream) {
-    if (!rt_profiler_enabled) {
-        return;
-    }
-    const uint32_t stream_index = wait_stream - first_stream_used;
-    ASSERT(stream_index < max_num_worker_sems);
-    const uint32_t id = rt_active_program_id[stream_index];
-    if (id == REALTIME_PROFILER_UNPROFILED_PROGRAM_HOST_ID) {
-        return;
-    }
-
-#ifndef ARCH_QUASAR
-    invalidate_l1_cache();
-    const uint32_t target_count = wait_count & ((1u << MEM_WORD_ADDR_WIDTH) - 1);
-    while (rt_profiler_msg->stream_completion_count[stream_index] != target_count) {
-        invalidate_l1_cache();
-    }
-    const uint32_t end_hi = rt_profiler_msg->stream_end_time_hi[stream_index];
-    const uint32_t end_lo = rt_profiler_msg->stream_end_time_lo[stream_index];
-#else
-    uint32_t end_hi = 0;
-    uint32_t end_lo = 0;
-    read_realtime_wall_clock(&end_hi, &end_lo);
-#endif
-    enqueue_realtime_profiler_record(
-        id, rt_active_start_hi[stream_index], rt_active_start_lo[stream_index], end_hi, end_lo);
-    rt_active_program_id[stream_index] = REALTIME_PROFILER_UNPROFILED_PROGRAM_HOST_ID;
-}
-
-FORCE_INLINE
-void start_realtime_profiled_program(uint32_t id, uint32_t wait_count, uint32_t wait_stream) {
-    (void)wait_count;
-    // The host enables profiling asynchronously after dispatch-s boots. Refresh here so the first
-    // real program is not lost merely because kernel_main sampled the enable word before its command.
-    invalidate_l1_cache();
-    rt_profiler_enabled = (rt_profiler_msg->realtime_profiler_core_noc_xy != 0);
-    if (!rt_profiler_enabled || id == REALTIME_PROFILER_UNPROFILED_PROGRAM_HOST_ID) {
-        return;
-    }
-    const uint32_t stream_index = wait_stream - first_stream_used;
-    ASSERT(stream_index < max_num_worker_sems);
-    uint32_t start_hi = 0;
-    uint32_t start_lo = 0;
-    read_realtime_wall_clock(&start_hi, &start_lo);
-    rt_active_start_hi[stream_index] = start_hi;
-    rt_active_start_lo[stream_index] = start_lo;
-    rt_active_program_id[stream_index] = id;
-}
-
-FORCE_INLINE
-void wait_for_workers(uint32_t wait_count, uint32_t wait_stream) {
+template <bool service_profiler = true>
+FORCE_INLINE void wait_for_workers(uint32_t wait_count, uint32_t wait_stream) {
     WAYPOINT("WCW");
     last_wait_count = wait_count;
     last_wait_stream = wait_stream;
@@ -386,8 +495,8 @@ void wait_for_workers(uint32_t wait_count, uint32_t wait_stream) {
 #else
     while (stream_wrap_gt(wait_count, *worker_sem)) {
 #endif
-        if (rt_profiler_enabled) {
-            record_realtime_timestamp(rt_profiler_msg, false);
+        if constexpr (service_profiler) {
+            service_realtime_profiler_once();
         }
 #if DEVICE_PRINT_DISPATCH_ENABLED
         device_print_dispatcher.execute();
@@ -432,6 +541,7 @@ FORCE_INLINE void cb_acquire_pages_dispatch_s(uint32_t n) {
     // than the number available
     while (wrap_gt(num_pages_acquired + n, *sem_addr)) {
         invalidate_l1_cache();
+        service_realtime_profiler_once();
         update_worker_completion_count_on_dispatch_d();
 #if DEVICE_PRINT_DISPATCH_ENABLED
         device_print_dispatcher.execute();
@@ -447,7 +557,8 @@ FORCE_INLINE void cb_release_pages_dispatch_s(uint32_t n) {
 #ifdef ARCH_QUASAR
     Semaphore<programmable_core_type>(sem_id).up(n);
 #else
-    dispatch_s_noc_semaphore_inc(get_noc_addr_helper(noc_xy, get_semaphore<programmable_core_type>(sem_id)), n, my_noc_index);
+    dispatch_s_noc_semaphore_inc(
+        get_noc_addr_helper(noc_xy, get_semaphore<programmable_core_type>(sem_id)), n, my_noc_index);
 #endif
 }
 
@@ -465,6 +576,7 @@ void process_go_signal_mcast_cmd(uint32_t profiler_program_id) {
     uint32_t& mcasts_sent = num_mcasts_sent[sync_index];
     while (wrap_ge(mcasts_sent, *sync_sem_addr)) {
         invalidate_l1_cache();
+        service_realtime_profiler_once();
         // Update dispatch_d with the latest num_workers
         update_worker_completion_count_on_dispatch_d();
 #if DEVICE_PRINT_DISPATCH_ENABLED
@@ -490,24 +602,19 @@ void process_go_signal_mcast_cmd(uint32_t profiler_program_id) {
     uint32_t num_unicasts = cmd->mcast.num_unicast_txns;
     uint32_t wait_count = cmd->mcast.wait_count;
     uint32_t wait_stream = cmd->mcast.wait_stream;
+    uint32_t profiler_num_workers = cmd->mcast.profiler_num_workers;
 
     if (multicast_go_offset != CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET) {
-        // Setup registers before waiting for workers so only the NOC_CMD_CTRL register needs to be touched after.
         uint64_t dst_noc_addr_multicast =
             get_noc_addr_helper(worker_mcast_grid, mcast_go_signal_addr + sizeof(uint32_t) * multicast_go_offset);
         uint32_t num_dests = num_worker_cores_to_mcast;
         // Ensure the offset with respect to L1_ALIGNMENT is the same for the source and destination.
         uint32_t storage_offset = multicast_go_offset % (L1_ALIGNMENT / sizeof(uint32_t));
         aligned_go_signal_storage_uncached[storage_offset] = go_signal_value;
-
 #if DEVICE_PRINT_DISPATCH_ENABLED
-        // wait_for_workers polls device_print_dispatcher.execute() inside its busy loop when
-        // DEVICE_PRINT dispatch is enabled. That dispatcher may issue writes using
-        // NCRISC_WR_REG_CMD_BUF, which would clobber the state programmed by
-        // cq_noc_async_write_init_state below. Wait first in that build so init_state's state
-        // is the last thing touching this command buffer before the cq_noc_async_write_with_state
-        // call. In the non-DEVICE_PRINT build keep the original ordering so init_state + write
-        // accounting overlap with the worker wait.
+        // Device-print servicing may program NCRISC_WR_CMD_BUF while this wait
+        // makes progress, so complete the wait before establishing go-signal
+        // NOC state in that build.
         wait_for_workers(wait_count, wait_stream);
 #endif
 
@@ -522,16 +629,17 @@ void process_go_signal_mcast_cmd(uint32_t profiler_program_id) {
         noc_increment_nonposted_writes_acked(noc_index, num_dests);
 
 #if !DEVICE_PRINT_DISPATCH_ENABLED
-        wait_for_workers(wait_count, wait_stream);
+        // Keep the established init/wait overlap, but defer profiler NOC
+        // notification while cmd buf 0 contains live go-signal state. The next
+        // normal progress point services any queued record.
+        wait_for_workers<false>(wait_count, wait_stream);
 #endif
-        finish_realtime_profiled_program(wait_count, wait_stream);
-        start_realtime_profiled_program(profiler_program_id, wait_count, wait_stream);
+        enqueue_realtime_profiler_start(profiler_program_id, wait_count, profiler_num_workers, wait_stream);
         cq_noc_async_write_with_state<CQ_NOC_sndl, CQ_NOC_wait>(0, 0, 0, num_dests);
         noc_increment_nonposted_writes_issued(noc_index, 1);
     } else {
         wait_for_workers(wait_count, wait_stream);
-        finish_realtime_profiled_program(wait_count, wait_stream);
-        start_realtime_profiled_program(profiler_program_id, wait_count, wait_stream);
+        enqueue_realtime_profiler_start(profiler_program_id, wait_count, profiler_num_workers, wait_stream);
     }
 
     *aligned_go_signal_storage_uncached = go_signal_value;
@@ -653,8 +761,8 @@ void merge_dispatch_d_noc_counter_deltas() {
 
     constexpr auto dispatch_d_proc_type = static_cast<decltype(proc_type)>(TensixProcessorTypes::DM0);
 
-    volatile tt_l1_ptr uint32_t* shutdown_sem_addr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<programmable_core_type>(dispatch_d_shutdown_sem_id));
+    volatile tt_l1_ptr uint32_t* shutdown_sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+        get_semaphore<programmable_core_type>(dispatch_d_shutdown_sem_id));
     noc_semaphore_wait(shutdown_sem_addr, 1);
 
     invalidate_l1_cache();
@@ -728,7 +836,7 @@ void kernel_main() {
 #endif
     while (!done) {
         DeviceZoneScopedN("CQ-DISPATCH-SUBORDINATE");
-        rt_profiler_enabled = (rt_profiler_msg->realtime_profiler_core_noc_xy != 0);
+        service_realtime_profiler_once();
         // Keep the established early FIFO pop: dispatch_d and dispatch_s hand off IDs
         // asynchronously, and delaying this until after command acquisition loses the
         // correlation window on distributed mesh dispatch.
@@ -745,7 +853,10 @@ void kernel_main() {
         switch (cmd->base.cmd_id) {
             case CQ_DISPATCH_CMD_SEND_GO_SIGNAL:
                 DPRINT("CQ_DISPATCH_CMD_SEND_GO_SIGNAL\n");
-                process_go_signal_mcast_cmd(cmd->mcast.profiler_program_id);
+                {
+                    const uint32_t profiler_program_id = cmd->mcast.profiler_program_id;
+                    process_go_signal_mcast_cmd(profiler_program_id);
+                }
                 break;
             case CQ_DISPATCH_SET_NUM_WORKER_SEMS:
                 DPRINT("CQ_DISPATCH_SET_NUM_WORKER_SEMS\n");
@@ -770,29 +881,41 @@ void kernel_main() {
             case CQ_DISPATCH_CMD_RT_PROFILER_FLUSH:
                 DPRINT("CQ_DISPATCH_CMD_RT_PROFILER_FLUSH\n");
                 wait_for_workers(cmd->rt_profiler_flush.wait_count, cmd->rt_profiler_flush.wait_stream);
-                finish_realtime_profiled_program(cmd->rt_profiler_flush.wait_count, cmd->rt_profiler_flush.wait_stream);
-                drain_realtime_profiler_records();
+                enqueue_realtime_profiler_watermark(
+                    cmd->rt_profiler_flush.watermark_id,
+                    cmd->rt_profiler_flush.wait_count,
+                    cmd->rt_profiler_flush.wait_stream);
+                service_realtime_profiler_once();
                 cmd_ptr += sizeof(CQDispatchCmd);
                 break;
-            case CQ_DISPATCH_CMD_TERMINATE:
+            case CQ_DISPATCH_CMD_TERMINATE: {
                 DPRINT("CQ_DISPATCH_CMD_TERMINATE\n");
+                invalidate_l1_cache();
+                rt_profiler_enabled |= (rt_profiler_msg->realtime_profiler_core_noc_xy != 0);
+                // TRISC0 is launched with dispatch_s even when the host profiler
+                // is ineligible, so its local stop request is unconditional.
+                rt_profiler_msg->terminate_requested = 1;
+                asm volatile("fence w, w" ::: "memory");
+                bool completion_observer_stopped = true;
                 if (rt_profiler_enabled) {
-                    drain_realtime_profiler_records();
+                    completion_observer_stopped = stop_realtime_profiler_completion_observer();
+                    terminal_drain_realtime_profiler(completion_observer_stopped);
                 }
 
-                rt_profiler_msg->realtime_profiler_state = REALTIME_PROFILER_STATE_TERMINATE;
                 if (rt_profiler_enabled) {
                     uint64_t realtime_profiler_terminate_addr = get_noc_addr_helper(
                         rt_profiler_msg->realtime_profiler_core_noc_xy,
-                        rt_profiler_msg->realtime_profiler_remote_state_addr);
-                    dispatch_s_noc_inline_dw_write(
-                        realtime_profiler_terminate_addr, REALTIME_PROFILER_STATE_TERMINATE, my_noc_index);
+                        rt_profiler_msg->realtime_profiler_remote_state_addr +
+                            __builtin_offsetof(realtime_profiler_msg_t, terminate_requested) -
+                            __builtin_offsetof(realtime_profiler_msg_t, realtime_profiler_state));
+                    dispatch_s_noc_inline_dw_write(realtime_profiler_terminate_addr, 1, my_noc_index);
                 }
                 if constexpr (telemetry_enabled) {
                     dispatch_telemetry_control->compute_terminate = 1;
                 }
                 done = true;
                 break;
+            }
             default: DPRINT("dispatcher_s invalid command\n"); ASSERT(0);
         }
         // Dispatch s only supports single page commands for now

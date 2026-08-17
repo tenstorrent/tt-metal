@@ -11,6 +11,7 @@
 #include <mesh_event.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/experimental/core_subset_write/buffer_write.hpp>
+#include <tt-metalium/experimental/realtime_profiler.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <algorithm>
@@ -57,6 +58,7 @@
 #include <tt_stl/overloaded.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
 #include <distributed/mesh_device_impl.hpp>
+#include <distributed/realtime_profiler_manager.hpp>
 #include "dispatch/simple_trace_allocator.hpp"
 #if defined(TT_UMD_BUILD_SIMULATION)
 #include "buffers/simulator_direct_write.hpp"
@@ -508,6 +510,7 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
             cq_shared_state_->worker_launch_message_buffer_state[*sub_device_id].get_mcast_wptr(),
             cq_shared_state_->worker_launch_message_buffer_state[*sub_device_id].get_unicast_wptr(),
             expected_num_workers_completed,
+            num_workers,
             this->virtual_program_dispatch_core(),
             sub_device_id,
             dispatch_metadata,
@@ -683,44 +686,72 @@ void FDMeshCommandQueue::enqueue_read_shard_from_core(
         ReadCoreDataDescriptor(dst, size_bytes), address.device_coord, blocking, sub_device_ids);
 }
 
-void FDMeshCommandQueue::finish_nolock(ttsl::Span<const SubDeviceId> sub_device_ids) {
+std::optional<uint32_t> FDMeshCommandQueue::finish_nolock_impl(
+    ttsl::Span<const SubDeviceId> sub_device_ids, bool retain_profiler_collection) {
     ZoneScopedN("FDMeshCommandQueue::finish_nolock");
 
     if (this->get_target_device_type() == tt::TargetDevice::Mock ||
         this->get_target_device_type() == tt::TargetDevice::Emule) {
-        return;
+        return std::nullopt;
     }
 
-    if (tt::IsProgramRealtimeProfilerActive()) {
-        for (const auto& sub_device_id : buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids)) {
-            const uint32_t wait_count = expected_num_workers_completed_[*sub_device_id];
-            for (auto* device : mesh_device_->get_devices()) {
-                write_rt_profiler_flush(id_, sub_device_id, device->sysmem_manager(), wait_count);
+    std::optional<uint32_t> profiler_watermark;
+    auto selected_sub_devices = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
+    auto* realtime_profiler = mesh_device_->impl().get_realtime_profiler();
+    try {
+        if (realtime_profiler != nullptr && realtime_profiler->num_active_devices() != 0) {
+            if (retain_profiler_collection) {
+                uint32_t expected_stream_mask = 0;
+                for (const auto& sub_device_id : selected_sub_devices) {
+                    TT_FATAL(
+                        *sub_device_id < 32,
+                        "Real-time profiler stream {} exceeds the collection mask",
+                        *sub_device_id);
+                    expected_stream_mask |= 1u << *sub_device_id;
+                }
+                profiler_watermark = realtime_profiler->register_collection(expected_stream_mask);
+            }
+            for (const auto& sub_device_id : selected_sub_devices) {
+                const uint32_t wait_count = expected_num_workers_completed_[*sub_device_id];
+                for (auto* device : mesh_device_->get_devices()) {
+                    write_rt_profiler_flush(
+                        id_, sub_device_id, device->sysmem_manager(), wait_count, profiler_watermark.value_or(0));
+                }
             }
         }
-    }
 
-    auto event = this->enqueue_record_event_to_host_nolock(sub_device_ids);
+        auto event = this->enqueue_record_event_to_host_nolock(sub_device_ids);
 
-    std::unique_lock<std::mutex> lock(reads_processed_cv_mutex_);
-    this->wait_for_outstanding_reads(lock);
-    auto& sub_device_cq_owner = cq_shared_state_->sub_device_cq_owner;
-    for (const auto& sub_device_id : buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids)) {
-        sub_device_cq_owner[*sub_device_id].finished(this->id_);
-    }
-
-    if (should_handle_exception_.load()) {
-        std::lock_guard<std::mutex> exception_lock(exception_mutex_);
-        if (auto exception_ptr = thread_exception_ptr_) {
-            thread_exception_ptr_ = nullptr;
-            should_handle_exception_.store(false);
-            num_outstanding_reads_.store(0);
-            reads_processed_cv_.notify_all();
-            lock.unlock();
-            in_use_ = false;
-            std::rethrow_exception(exception_ptr);
+        std::unique_lock<std::mutex> lock(reads_processed_cv_mutex_);
+        this->wait_for_outstanding_reads(lock);
+        auto& sub_device_cq_owner = cq_shared_state_->sub_device_cq_owner;
+        for (const auto& sub_device_id : selected_sub_devices) {
+            sub_device_cq_owner[*sub_device_id].finished(this->id_);
         }
+
+        if (should_handle_exception_.load()) {
+            std::lock_guard<std::mutex> exception_lock(exception_mutex_);
+            if (auto exception_ptr = thread_exception_ptr_) {
+                thread_exception_ptr_ = nullptr;
+                should_handle_exception_.store(false);
+                num_outstanding_reads_.store(0);
+                reads_processed_cv_.notify_all();
+                lock.unlock();
+                in_use_ = false;
+                std::rethrow_exception(exception_ptr);
+            }
+        }
+        return profiler_watermark;
+    } catch (...) {
+        if (realtime_profiler != nullptr && profiler_watermark.has_value()) {
+            realtime_profiler->cancel_collection(*profiler_watermark);
+        }
+        throw;
     }
+}
+
+void FDMeshCommandQueue::finish_nolock(ttsl::Span<const SubDeviceId> sub_device_ids) {
+    (void)this->finish_nolock_impl(sub_device_ids, false);
 }
 
 void FDMeshCommandQueue::finish(ttsl::Span<const SubDeviceId> sub_device_ids) {
@@ -735,6 +766,32 @@ void FDMeshCommandQueue::finish(ttsl::Span<const SubDeviceId> sub_device_ids) {
 
     // Barrier across all active hosts of the mesh
     active_distributed_context_->barrier();
+}
+
+experimental::ProgramRealtimeProfilerCollectionResult FDMeshCommandQueue::finish_and_collect_realtime_profiler(
+    std::chrono::milliseconds timeout, ttsl::Span<const SubDeviceId> sub_device_ids) {
+    std::optional<uint32_t> watermark;
+    {
+        auto lock = lock_api_function_();
+        watermark = this->finish_nolock_impl(sub_device_ids, true);
+    }
+
+    if (!watermark.has_value()) {
+        experimental::ProgramRealtimeProfilerCollectionResult result;
+        result.profiler_inactive = true;
+        active_distributed_context_->barrier();
+        return result;
+    }
+    auto* realtime_profiler = mesh_device_->impl().get_realtime_profiler();
+    TT_FATAL(realtime_profiler != nullptr, "Real-time profiler manager disappeared during collection");
+    auto result = realtime_profiler->wait_for_collection(*watermark, timeout);
+    if (result.complete()) {
+        // The exact wait intentionally releases the queue API lock. The sync
+        // state machine has its own arbitration and does not mutate CQ state.
+        mesh_device_->impl().trigger_realtime_profiler_sync_check();
+    }
+    active_distributed_context_->barrier();
+    return result;
 }
 
 bool FDMeshCommandQueue::write_shard_to_device(

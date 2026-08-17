@@ -5,9 +5,18 @@
 #pragma once
 
 #include <cstdint>
+#include <chrono>
 #include <functional>
 #include <span>
 #include <string_view>
+#include <vector>
+
+#include <tt-metalium/sub_device_types.hpp>
+#include <tt_stl/span.hpp>
+
+namespace tt::tt_metal::distributed {
+class MeshCommandQueue;
+}
 
 namespace tt::tt_metal::experimental {
 
@@ -20,6 +29,45 @@ struct ProgramRealtimeRecord {
     double frequency;                                  // Device clock frequency (cycles per ns)
     std::span<const std::string_view> kernel_sources;  // Kernel source paths; valid until
                                                        // MetalContext teardown or reinitialization.
+    uint32_t command_queue_id = 0;                     // Fixed at 0 by the supported single-command-queue protocol.
+    uint32_t dispatch_stream = 0;
+    uint32_t sequence = 0;
+    uint32_t schema_version = 0;
+    uint32_t record_type = 0;
+};
+
+struct ProgramRealtimeProfilerDeviceCollection {
+    uint32_t chip_id = 0;
+    uint32_t expected_stream_mask = 0;
+    uint32_t observed_stream_mask = 0;
+    uint64_t record_count = 0;
+    uint64_t descriptor_dropped = 0;
+    uint64_t observer_dropped = 0;
+    uint64_t record_dropped = 0;
+    uint64_t source_dropped = 0;
+    uint64_t transport_dropped = 0;
+};
+
+struct ProgramRealtimeProfilerCollectionResult {
+    uint32_t requested_watermark = 0;
+    uint32_t observed_watermark = 0;
+    uint64_t record_count = 0;
+    uint64_t descriptor_dropped = 0;
+    uint64_t observer_dropped = 0;
+    uint64_t record_dropped = 0;
+    uint64_t source_dropped = 0;
+    uint64_t transport_dropped = 0;
+    bool timed_out = false;
+    bool profiler_inactive = false;
+    bool protocol_error = false;
+    std::vector<ProgramRealtimeProfilerDeviceCollection> devices;
+
+    // complete() proves the exact device watermark was observed for every
+    // expected stream; it does not imply lossless collection. Check lossy().
+    bool complete() const { return requested_watermark != 0 && observed_watermark == requested_watermark; }
+    bool lossy() const {
+        return timed_out || profiler_inactive || source_dropped != 0 || transport_dropped != 0 || protocol_error;
+    }
 };
 
 struct ProgramRealtimeRecordBatch {
@@ -76,5 +124,18 @@ void UnregisterProgramRealtimeProfilerCallback(ProgramRealtimeProfilerCallbackHa
  * every RT-profiler-enabled device has been closed.
  */
 bool IsProgramRealtimeProfilerActive();
+
+/**
+ * Finish the selected streams and wait for their exact device-produced
+ * profiler watermark. The timeout controls only the host collection wait;
+ * operation durations in the returned records remain raw device ticks. An
+ * ineligible or disabled profiler is reported as profiler_inactive, separately
+ * from a malformed device protocol response. The caller must keep the command
+ * queue and its MeshDevice alive until this function returns.
+ */
+ProgramRealtimeProfilerCollectionResult FinishAndCollectProgramRealtimeProfiler(
+    distributed::MeshCommandQueue& command_queue,
+    std::chrono::milliseconds timeout,
+    ttsl::Span<const SubDeviceId> sub_device_ids = {});
 
 }  // namespace tt::tt_metal::experimental

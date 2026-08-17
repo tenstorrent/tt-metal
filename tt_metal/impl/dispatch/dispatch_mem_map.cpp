@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <enchantum/enchantum.hpp>
+#include <cstdlib>
 #include <tt-metalium/tt_align.hpp>
 
 #include "dispatch_mem_map.hpp"
@@ -98,6 +99,10 @@ DispatchMemMap::DispatchMemMap(
             device_cq_addr_sizes_[dev_addr_idx] =
                 hal.get_realtime_profiler_msgs_factory(HalProgrammableCoreType::TENSIX)
                     .size_of<realtime_profiler_msgs::realtime_profiler_msg_t>();
+            if (hal.get_arch() == tt::ARCH::BLACKHOLE && std::getenv("TT_RT_PROFILER_QUALIFICATION_HOOK") != nullptr) {
+                device_cq_addr_sizes_[dev_addr_idx] +=
+                    realtime_profiler_msgs::REALTIME_PROFILER_QUALIFICATION_SCRATCH_WORDS * sizeof(uint32_t);
+            }
         } else if (dev_addr_type == CommandQueueDeviceAddrType::DISPATCH_TELEMETRY) {
             device_cq_addr_sizes_[dev_addr_idx] = dispatch_telemetry_types::DISPATCH_TELEMETRY_SIZE;
         } else if (dev_addr_type == CommandQueueDeviceAddrType::DISPATCH_TELEMETRY_CONTROL) {

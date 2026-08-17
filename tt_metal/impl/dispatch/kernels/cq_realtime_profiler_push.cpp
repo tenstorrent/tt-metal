@@ -20,6 +20,10 @@
 #include "tt_metal/impl/dispatch/kernels/realtime_profiler_ring_buffer.hpp"
 #include "api/debug/dprint.h"
 
+#if defined(RT_PROFILER_NCRISC_DEBUG) && defined(RT_PROFILER_RING_TEST_HOOK)
+#error "RT_PROFILER_RING_TEST_HOOK reuses the disabled NCRISC debug stage word"
+#endif
+
 // Real-time profiler page size - must match host-side
 // RealtimeProfilerRuntimeSizes::page_size (which is also RT_PROFILER_ENTRY_SIZE).
 constexpr uint32_t realtime_profiler_page_size = RT_PROFILER_ENTRY_SIZE;  // 64 bytes
@@ -159,6 +163,12 @@ void kernel_main() {
 
         RT_PROF_NCRISC_DBG_SET(ring_buffer, stage, RT_PROFILER_NCRISC_STAGE_PUSHING);
         const uint32_t available = write_index - read_index;
+#ifdef RT_PROFILER_RING_TEST_HOOK
+        if (available >= RT_PROFILER_RING_CAPACITY - 1 &&
+            ring_buffer->ncrisc_debug.stage == RT_PROFILER_NCRISC_TEST_PAUSE_STAGE) {
+            continue;
+        }
+#endif
         push_entries_to_host(
             profiler_socket,
             read_index,

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "dispatch_s.hpp"
 
+#include <cstdlib>
 #include <span>
 #include <tt_metal.hpp>
 #include "impl/buffers/semaphore.hpp"
@@ -69,6 +70,12 @@ void zero_dispatch_s_realtime_profiler_msg_fields(
                    realtime_profiler_msgs::realtime_profiler_msg_t::Field::realtime_profiler_state));
     write_u32(
         base + factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
+                   realtime_profiler_msgs::realtime_profiler_msg_t::Field::terminate_requested));
+    write_u32(
+        base + factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
+                   realtime_profiler_msgs::realtime_profiler_msg_t::Field::completion_observer_stopped));
+    write_u32(
+        base + factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
                    realtime_profiler_msgs::realtime_profiler_msg_t::Field::program_id_fifo_start));
     write_u32(
         base + factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
@@ -80,29 +87,37 @@ void zero_dispatch_s_realtime_profiler_msg_fields(
         base + factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
                    realtime_profiler_msgs::realtime_profiler_msg_t::Field::record_read_index));
 
-    const uint32_t ksa = factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
-        realtime_profiler_msgs::realtime_profiler_msg_t::Field::kernel_start_a);
-    const uint32_t kea = factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
-        realtime_profiler_msgs::realtime_profiler_msg_t::Field::kernel_end_a);
     const uint32_t ksb = factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
         realtime_profiler_msgs::realtime_profiler_msg_t::Field::kernel_start_b);
     const uint32_t keb = factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
         realtime_profiler_msgs::realtime_profiler_msg_t::Field::kernel_end_b);
-    write_u32(base + ksa + ts_id_byte_off);
-    write_u32(base + kea + ts_id_byte_off);
     write_u32(base + ksb + ts_id_byte_off);
     write_u32(base + keb + ts_id_byte_off);
 
-    const uint32_t stream_end_time_hi = factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
-        realtime_profiler_msgs::realtime_profiler_msg_t::Field::stream_end_time_hi);
-    const uint32_t stream_end_time_lo = factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
-        realtime_profiler_msgs::realtime_profiler_msg_t::Field::stream_end_time_lo);
-    const uint32_t stream_completion_count = factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
-        realtime_profiler_msgs::realtime_profiler_msg_t::Field::stream_completion_count);
-    for (uint32_t i = 0; i < 8; ++i) {
-        write_u32(base + stream_end_time_hi + i * sizeof(uint32_t));
-        write_u32(base + stream_end_time_lo + i * sizeof(uint32_t));
-        write_u32(base + stream_completion_count + i * sizeof(uint32_t));
+    const uint32_t start_write = factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
+        realtime_profiler_msgs::realtime_profiler_msg_t::Field::start_descriptor_write_index);
+    const uint32_t start_read = factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
+        realtime_profiler_msgs::realtime_profiler_msg_t::Field::start_descriptor_read_index);
+    const uint32_t reset_generation = factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
+        realtime_profiler_msgs::realtime_profiler_msg_t::Field::stream_reset_generation);
+    for (uint32_t i = 0; i < REALTIME_PROFILER_MAX_STREAMS; ++i) {
+        write_u32(base + start_write + i * sizeof(uint32_t));
+        write_u32(base + start_read + i * sizeof(uint32_t));
+        write_u32(base + reset_generation + i * sizeof(uint32_t));
+    }
+
+    for (const auto field :
+         {realtime_profiler_msgs::realtime_profiler_msg_t::Field::successful_record_sequence,
+          realtime_profiler_msgs::realtime_profiler_msg_t::Field::start_descriptor_drop_count,
+          realtime_profiler_msgs::realtime_profiler_msg_t::Field::unsupported_launch_drop_count,
+          realtime_profiler_msgs::realtime_profiler_msg_t::Field::reset_descriptor_drop_count,
+          realtime_profiler_msgs::realtime_profiler_msg_t::Field::completion_observer_drop_count,
+          realtime_profiler_msgs::realtime_profiler_msg_t::Field::stuck_descriptor_head_count,
+          realtime_profiler_msgs::realtime_profiler_msg_t::Field::completed_record_drop_count,
+          realtime_profiler_msgs::realtime_profiler_msg_t::Field::terminal_descriptor_drop_count,
+          realtime_profiler_msgs::realtime_profiler_msg_t::Field::terminal_record_drop_count,
+          realtime_profiler_msgs::realtime_profiler_msg_t::Field::completion_observer_timeout_count}) {
+        write_u32(base + factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(field));
     }
 }
 
@@ -330,6 +345,7 @@ void DispatchSKernel::CreateKernel() {
          std::to_string(device_->get_noc_multicast_encoding(noc_selection_.downstream_noc, virtual_core_range))},
         {"NUM_WORKER_CORES_TO_MCAST", std::to_string(device_worker_cores.size())},
         {"REALTIME_PROFILER_MSG_ADDR", std::to_string(static_config_.realtime_profiler_msg_addr.value())},
+        {"REALTIME_PROFILER_PROTOCOL_BUILD_KEY", std::to_string(REALTIME_PROFILER_PROTOCOL_VERSION)},
         {"DISPATCH_TELEMETRY_ADDR", std::to_string(static_config_.dispatch_telemetry_addr.value())},
         {"DISPATCH_TELEMETRY_DISABLED", std::to_string(static_config_.dispatch_telemetry_disabled.value_or(false))},
         {"DISPATCH_TELEMETRY_CONTROL_ADDR", std::to_string(static_config_.dispatch_telemetry_control_addr.value())},
@@ -362,11 +378,32 @@ void DispatchSKernel::CreateKernel() {
             {"FIRST_STREAM_INDEX", std::to_string(static_config_.first_stream_used.value())},
             {"NUM_STREAMS_TO_MONITOR", std::to_string(static_config_.max_num_worker_sems.value())},
             {"REALTIME_PROFILER_MSG_ADDR", std::to_string(static_config_.realtime_profiler_msg_addr.value())},
+            {"REALTIME_PROFILER_PROTOCOL_BUILD_KEY", std::to_string(REALTIME_PROFILER_PROTOCOL_VERSION)},
             {"DISPATCH_TELEMETRY_ADDR", std::to_string(static_config_.dispatch_telemetry_addr.value())},
             {"DISPATCH_TELEMETRY_DISABLED", std::to_string(static_config_.dispatch_telemetry_disabled.value_or(false))},
             {"TOTAL_SUB_DEVICES", std::to_string(static_config_.max_num_worker_sems.value())},
             {"DISPATCH_TELEMETRY_CONTROL_ADDR", std::to_string(static_config_.dispatch_telemetry_control_addr.value())},
         };
+        if (device_->arch() == tt::ARCH::BLACKHOLE && std::getenv("TT_RT_PROFILER_QUALIFICATION_HOOK") != nullptr) {
+            const uint32_t profiler_msg_addr = static_config_.realtime_profiler_msg_addr.value();
+            const uint32_t telemetry_addr = static_config_.dispatch_telemetry_addr.value();
+            const uint32_t profiler_msg_size = descriptor_.hal()
+                                                   .get_realtime_profiler_msgs_factory(HalProgrammableCoreType::TENSIX)
+                                                   .size_of<realtime_profiler_msgs::realtime_profiler_msg_t>();
+            const uint32_t qualification_scratch_size =
+                realtime_profiler_msgs::REALTIME_PROFILER_QUALIFICATION_SCRATCH_WORDS * sizeof(uint32_t);
+            const uint32_t profiler_carve_out =
+                telemetry_addr >= profiler_msg_addr ? telemetry_addr - profiler_msg_addr : 0;
+            TT_FATAL(
+                profiler_carve_out >= profiler_msg_size + qualification_scratch_size,
+                "TT_RT_PROFILER_QUALIFICATION_HOOK must be set before the first device open in this process "
+                "(profiler carve-out is {} B, need {} B)",
+                profiler_carve_out,
+                profiler_msg_size + qualification_scratch_size);
+            compute_defines["RT_PROFILER_QUALIFICATION_HOOK"] = "1";
+            compute_defines["RT_PROFILER_QUALIFICATION_SCRATCH_ADDR"] =
+                std::to_string(profiler_msg_addr + profiler_msg_size);
+        }
         tt::tt_metal::ComputeConfig compute_config;
         compute_config.defines = compute_defines;
         tt::tt_metal::CreateKernel(*program_, compute_kernel_path, logical_core_, compute_config);

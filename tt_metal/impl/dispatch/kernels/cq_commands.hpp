@@ -402,9 +402,11 @@ struct CQDispatchGoSignalMcastCmd {
     uint8_t num_unicast_txns;
     uint8_t noc_data_start_index;
     uint16_t profiler_program_id;
+    uint8_t profiler_num_workers;
     uint32_t wait_count;
-    uint16_t wait_stream;  // Index of the stream to wait on
+    uint8_t wait_stream;  // Index of the stream to wait on; hardware has fewer than 256 streams.
 } __attribute__((packed));
+static_assert(sizeof(CQDispatchGoSignalMcastCmd) == CQ_DISPATCH_CMD_SIZE - sizeof(CQDispatchBaseCmd));
 
 struct CQDispatchNotifySubordinateGoSignalCmd {
     // sends a counter update to dispatch_s when it sees this cmd
@@ -416,6 +418,7 @@ struct CQDispatchNotifySubordinateGoSignalCmd {
 struct CQDispatchRtProfilerFlushCmd {
     uint32_t wait_count;   // worker completion count to wait on
     uint32_t wait_stream;  // stream index to wait on
+    uint32_t watermark_id;
 } __attribute__((packed));
 
 struct CQDispatchSetNumWorkerSemsCmd {

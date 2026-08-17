@@ -33,6 +33,7 @@
 #include <dispatch/dispatch_query_manager.hpp>
 #include <dispatch/dispatch_mem_map.hpp>
 #include "hostdevcommon/dispatch_telemetry_types.hpp"
+#include "hostdev/realtime_profiler_msgs.h"
 #include "impl/dispatch/dispatch_engine_cores.hpp"
 
 using namespace tt::tt_metal;
@@ -542,6 +543,7 @@ void DispatchKernel::CreateKernel() {
         {"FABRIC_HEADER_RB_ENTRIES", std::to_string(static_config_.fabric_header_rb_entries.value())},
         {"MY_FABRIC_SYNC_STATUS_ADDR", std::to_string(static_config_.my_fabric_sync_status_addr.value())},
         {"REALTIME_PROFILER_MSG_ADDR", std::to_string(static_config_.realtime_profiler_msg_addr.value())},
+        {"REALTIME_PROFILER_PROTOCOL_BUILD_KEY", std::to_string(REALTIME_PROFILER_PROTOCOL_VERSION)},
         {"DISPATCH_TELEMETRY_ADDR", std::to_string(static_config_.dispatch_telemetry_addr.value())},
         {"DISPATCH_TELEMETRY_CONTROL_ADDR", std::to_string(static_config_.dispatch_telemetry_control_addr.value())},
         {"DISPATCH_TELEMETRY_DISABLED", std::to_string(static_config_.dispatch_telemetry_disabled.value_or(false))},

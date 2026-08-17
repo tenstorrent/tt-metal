@@ -10,6 +10,7 @@
 #include "impl/kernels/kernel.hpp"
 #include "tt-metalium/program.hpp"
 #include "data_collector.hpp"
+#include "tt_metal/distributed/fd_mesh_command_queue.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -107,5 +108,16 @@ void UnregisterProgramRealtimeProfilerCallback(ProgramRealtimeProfilerCallbackHa
 }
 
 bool IsProgramRealtimeProfilerActive() { return tt::IsProgramRealtimeProfilerActive(); }
+
+ProgramRealtimeProfilerCollectionResult FinishAndCollectProgramRealtimeProfiler(
+    distributed::MeshCommandQueue& command_queue,
+    std::chrono::milliseconds timeout,
+    ttsl::Span<const SubDeviceId> sub_device_ids) {
+    auto* fast_dispatch_queue = dynamic_cast<distributed::FDMeshCommandQueue*>(&command_queue);
+    TT_FATAL(
+        fast_dispatch_queue != nullptr,
+        "Device-watermark real-time profiler collection requires a fast-dispatch MeshCommandQueue");
+    return fast_dispatch_queue->finish_and_collect_realtime_profiler(timeout, sub_device_ids);
+}
 
 }  // namespace tt::tt_metal::experimental
