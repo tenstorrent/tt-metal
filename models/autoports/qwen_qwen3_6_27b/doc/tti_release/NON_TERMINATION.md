@@ -571,3 +571,64 @@ Recording this before the results arrive so the prediction is falsifiable: I exp
 model **does** emit `</think>` when it converges, because the chat template's own
 multi-turn branch parses prior assistant messages by splitting on `'</think>'`
 (`{%- if '</think>' in content %}`), which only makes sense if the model produces it.
+
+---
+
+## Correction: CI already runs these evals concurrently; my hand-rolled runs did not
+
+The section above recommends "run the eval concurrently ... this needs no model change,
+only `--max_num_seqs 32` on the server and `num_concurrent=10` in the invocation". That
+recommendation is **misdirected at CI** — CI already does it. It applies only to my own
+hand-rolled runs.
+
+`reference_config/evals/eval_config.py:193-194`:
+
+```python
+    # Note: batch_size is set to 1 because max_concurrent is set to 32
+    batch_size: int = 1
+    max_concurrent: int = 32
+```
+
+`max_concurrent` is an `EvalTask` **default**, so every task inherits 32 unless it opts
+out. `llm_module/eval_command.py:215-243` then clamps it to the device spec and emits the
+flag:
+
+```python
+effective_max_concurrent = task.max_concurrent
+if effective_max_concurrent and device_max_concurrency:
+    effective_max_concurrent = min(effective_max_concurrent, device_max_concurrency)
+...
+optional_model_args.append(f"num_concurrent={effective_max_concurrent}")
+```
+
+With the P300X2 spec's `max_concurrency: 32`, that resolves to `num_concurrent=32`. The
+sibling `Qwen/Qwen3.8-27B` entry does not set `max_concurrent`, so it inherits 32 — and
+the entry proposed in `PROPOSED_EVAL_CONFIG.md` inherits it too.
+
+### What that changes
+
+| | server | client | wall clock for 10 documents |
+|---|---|---|---:|
+| my `run_r1_gpqa.sh` | `max_num_seqs 1` | `num_concurrent=1` | **~2.3 h** (measured pace: ~15k tokens/doc at ~56 ms) |
+| **CI as configured** | `max_num_seqs 32` | **`num_concurrent=32`** | **~85 min** |
+
+Because the ten documents overlap, the batch step cost (~270 ms, serving all active rows
+at once) is paid once per token position rather than once per document. So CI's
+configuration is *faster* in wall clock than the sequential run I did, despite each
+individual token being ~4.8x more expensive.
+
+This also removes a worry worth naming explicitly, since it nearly changed the plan: the
+combination "serve at batch 32, request sequentially" would have made this eval ~11 h. CI
+does not do that. Only my hand-rolled invocation did, and it was slower for it.
+
+### What still stands from `SERVING_BATCH_LATENCY.md`
+
+Nothing there is retracted. The finding is about **single-user serving latency** — one
+active request on a 32-slot server costs ~270 ms/token against ~56 ms on a 1-slot server,
+because decode cost follows the allocated batch rather than the active rows. That remains
+true and remains a real caveat on the headline `16.157 t/s/u` figure, which was measured
+at `max_num_seqs=1`.
+
+The distinction is just that an eval at `num_concurrent=32` is running in the
+**throughput** regime, where paying for 32 rows is exactly what you want, not the
+latency regime where it is waste.
