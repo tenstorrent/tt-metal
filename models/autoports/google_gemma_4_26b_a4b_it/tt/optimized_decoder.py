@@ -1146,7 +1146,11 @@ class OptimizedDecoder(FunctionalDecoder):
             sliding_window_size=kind.sliding_window,
             program_config=self.sdpa_program_config,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            **self._cache_view_kwargs(prefill=False),
+            # Same cache view as the update above, including cache_position_modulo:
+            # the read side must wrap its page-table lookups exactly like the write
+            # side, or positions past the bounded sliding capacity fold onto physical
+            # block 0 and attend to the wrong tokens.
+            **update_kwargs,
         )
         concat_mem_config = _make_decode_height_sharded_memory_config(self.mesh_device, batch, kind.head_dim)
         if sharded_residual:

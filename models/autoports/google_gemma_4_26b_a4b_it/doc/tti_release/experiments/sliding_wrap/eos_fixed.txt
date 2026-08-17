@@ -1,0 +1,41 @@
+To find the first-order shift in the energy of the ground state, we use time-independent perturbation theory.
+
+**1. Identify the unperturbed system:**
+For a particle of mass $m$ in a one-dimensional box of width $L$ (from $x=0$ to $x=L$), the unperturbed ground state wavefunction $\psi_1(x)$ is:
+$$\psi_1(x) = \sqrt{\frac{2}{L}} \sin\left(\frac{\pi x}{L}\right)$$
+
+**2. Identify the perturbation:**
+The perturbation potential is given as:
+$$V(x) = V_0 \sin\left(\frac{\pi x}{L}\right)$$
+
+**3. Apply first-order perturbation theory:**
+The first-order correction to the energy $E_1^{(1)}$ is the expectation value of the perturbation potential in the unperturbed ground state:
+$$E_1^{(1)} = \langle \psi_1 | V(x) | \psi_1 \rangle = \int_{0}^{L} \psi_1^*(x) V(x) \psi_1(x) \, dx$$
+
+**4. Set up the integral:**
+Substitute the expressions for $\psi_1(x)$ and $V(x)$:
+$$E_1^{(1)} = \int_{0}^{L} \left(\sqrt{\frac{2}{L}} \sin\left(\frac{\pi x}{L}\right)\right) \left(V_0 \sin\left(\frac{\pi x}{L}\right)\right) \left(\sqrt{\frac{2}{L}} \sin\left(\frac{\pi x}{L}\right)\right) \, dx$$
+$$E_1^{(1)} = \frac{2V_0}{L} \int_{0}^{L} \sin^3\left(\frac{\pi x}{L}\right) \, dx$$
+
+**5. Evaluate the integral:**
+Let $u = \frac{\pi x}{L}$, then $du = \frac{\pi}{L} dx \implies dx = \frac{L}{\pi} du$. The limits change from $[0, L]$ to $[0, \pi]$.
+$$\int_{0}^{L} \sin^3\left(\frac{\pi x}{L}\right) \, dx = \frac{L}{\pi} \int_{0}^{\pi} \sin^3(u) \, du$$
+Using the identity $\sin^3(u) = \sin(u)(1 - \cos^2(u))$:
+$$\int_{0}^{\pi} \sin^3(u) \, du = \int_{0}^{\pi} (\sin(u) - \sin(u)\cos^2(u)) \, du$$
+$$= \left[ -\cos(u) + \frac{\cos^3(u)}{3} \right]_{0}^{\pi}$$
+$$= \left( -(-1) + \frac{(-1)^3}{3} \right) - \left( -(1) + \frac{1^3}{3} \right)$$
+$$= \left( 1 - \frac{1}{3} \right) - \left( -1 + \frac{1}{3} \right) = \frac{2}{3} - (-\frac{2}{3}) = \frac{4}{3}$$
+
+**6. Final Calculation:**
+Substitute the integral result back into the expression for $E_1^{(1)}$:
+$$E_1^{(1)} = \frac{2V_0}{L} \cdot \frac{L}{\pi} \cdot \frac{4}{3} = \frac{8V_0}{3\pi}$$
+
+Comparing this result to the given choices:
+(A) $8V_0 / (3\pi)$
+(B) $V_0 / 2$
+(C) 0
+(D) $2V_0 / \pi$
+
+The result matches choice (A).
+
+Final Answer: \boxed{A}<turn|>

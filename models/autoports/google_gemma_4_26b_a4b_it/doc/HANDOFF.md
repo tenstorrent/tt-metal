@@ -305,3 +305,70 @@ template and the HF control's locally-applied template produce the *same* prompt
 The autoport ships a passthrough compatibility template; if the two arms prompt
 differently, they are not measuring the same task and the 4/10 vs 10/10 gap is
 not attributable to the model at all.
+
+### Outcome of the four points above
+
+All four were independently confirmed on the second machine, and the advice to
+read the samples before touching precision was correct — it is what led to the
+root cause. Specifically:
+
+1. Confirmed. The same wrong-family stop string appears in the new
+   `r1_gpqa_diamond` recipe as `['<|end_of_text|>','<|endoftext|>','<|im_end|>']`,
+   equally inert; the release spec overrides it to `[]`.
+2. Confirmed. `strict-match` is 0.0 on both arms, so the verdict rests on
+   `flexible-extract` alone.
+3. Acted on. Re-running with `--log_samples` and classifying every document is
+   what exposed the real defect: two failures were **degenerate from their very
+   first token** — neither a wrong answer nor a missed extraction — and that led
+   to the sliding-cache read wrap below.
+4. Confirmed, and it survives the fix: at 9/10 the port now sits one document
+   from failing a bar derived from a single ten-sample control.
+
+The precision A/B was also run, and the prediction that it would chase a ghost
+was right: HiFi2 everywhere plus BFP8 decode MLP plus FP32 logits moves the
+per-token disagreement from 8/512 to 9/512 at +28 % decode time.
+
+## CLOSED: the blocker was a sliding-cache read-side wrap bug
+
+Found and fixed 2026-08-17 on the second machine. Full write-up and evidence:
+**`doc/tti_release/AUTOFIX_SLIDING_CACHE_READ_WRAP.md`**.
+
+`paged_update_cache` received `cache_position_modulo=1024`; the matching
+`paged_scaled_dot_product_attention_decode` did not, in all three decode paths
+(`optimized_decoder.py`, `multichip_decoder.py`, `functional_decoder.py`). Per
+that op's own documentation, without it "positions past the bounded capacity
+collapse onto physical block 0 and silently corrupt the cache". 25 of 30 layers
+are sliding with a cache sized at exactly 1024 tokens, so every generation
+crossing **absolute position 1024** was corrupted. Passing the write side's
+`update_kwargs` to the read call fixes it, at no throughput cost
+(28.33 vs 28.84 t/s/u).
+
+Same prompt, same 2,048-token budget, shipped precision policy:
+
+| | tokens generated | EOS | output |
+|---|---:|---|---|
+| before | 2048 (cap) | no | coherent to ~890, then token soup |
+| after | 884 | yes | complete derivation, `Final Answer: \boxed{A}` (correct) |
+
+Corrections to this document's earlier sections, all measured rather than argued:
+
+1. **Ranked hypothesis 1 (precision) is refuted.** HiFi2 everywhere + BFP8 decode
+   MLP + FP32 logits changes the pre-wrap TT/HF greedy disagreement from 8/512 to
+   9/512 — no improvement, +28 % decode time.
+2. **Ranked hypothesis 2 (cache lifecycle) was right**, but the mechanism is a
+   missing kwarg on the read path, not "accumulated" anything, and it is not
+   subtle: it is total corruption at a fixed absolute position.
+3. **"The first-divergence experiment was never run" is wrong.** `RUN_NOTES.md:99`
+   and `AUTOFIX.md:50-52` record it: divergence at generated index 15 with
+   re-prefill recovery. That divergence is unrelated near-tie noise — 7 of 8
+   pre-wrap disagreements pick HF's rank-2 token at an HF top1−top2 margin whose
+   median is 1.25, against 15.19 at agreements.
+4. **"Passes at 100, passes at 1,280, fails at 32,768" is not a length ladder.**
+   TT's IFEval run recorded no `max_gen_toks`, so lm-eval's 256 default applied
+   (the HF control used 1,280). IFEval passed because 256 generated tokens on
+   short prompts never reach position 1024 — not because 1,280 was validated.
+5. **The greedy sampler is exonerated.** The shipped sharded chunked-topk path
+   matched an exact argmax on identical logits in 1,024 step-level A/Bs.
+6. **Reproducing the exact failing eval needs one thing not mentioned here:** the
+   GPQA documents come from the gated `Idavidrein/gpqa` dataset, so a second
+   machine needs an HF token with those terms accepted.

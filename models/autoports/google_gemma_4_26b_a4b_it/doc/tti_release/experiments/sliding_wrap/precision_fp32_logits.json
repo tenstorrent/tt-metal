@@ -1,0 +1,10 @@
+{
+ "schema_version": 1,
+ "config_id": "shipped_plus_fp32_logits",
+ "extends": "/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/datatype_sweep/selected_precision_config.json",
+ "overrides": {
+  "logits_sampling": {
+   "logits_dtype": "FP32"
+  }
+ }
+}

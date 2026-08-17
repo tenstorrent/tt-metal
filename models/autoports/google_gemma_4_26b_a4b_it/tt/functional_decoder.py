@@ -54,7 +54,6 @@ from pathlib import Path
 from typing import Any
 
 import ttnn
-
 from models.common.lightweightmodule import LightweightModule
 from models.demos.gemma4.tt.experts import Gemma4ExpertConfig
 from models.demos.gemma4.tt.experts.decode import _build_sparse_matmul_config
@@ -935,7 +934,11 @@ class FunctionalDecoder(LightweightModule):
             **update_kwargs,
         )
 
-        sdpa_kwargs = self._cache_view_kwargs(prefill=False)
+        # Same cache view as the updates above, including cache_position_modulo: the
+        # read side must wrap its page-table lookups exactly like the write side, or
+        # positions past the bounded sliding capacity fold onto physical block 0 and
+        # attend to the wrong tokens.
+        sdpa_kwargs = update_kwargs
         attn_out = ttnn.transformer.paged_scaled_dot_product_attention_decode(
             q_heads,
             key_cache,

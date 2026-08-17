@@ -1,0 +1,36 @@
+To find the first-order shift in the energy of the ground state, we use first-order time-independent perturbation theory.
+
+**1. Identify the unperturbed ground state wavefunction:**
+For a particle of mass $m$ in a one-dimensional box of width $L$ (from $x=0$ to $x=L$), the unperturbed energy eigenfunctions are:
+$$\psi_n(x) = \sqrt{\frac{2}{L}} \sin\left(\frac{n\pi x}{L}\right)$$
+For the ground state ($n=1$):
+$$\psi_1(x) = \sqrt{\frac{2}{L}} \sin\left(\frac{\pi x}{L}\right)$$
+
+**2. Apply the first-order energy shift formula:**
+The first-order correction to the energy $E_1^{(1)}$ is given by the expectation value of the perturbation $V(x)$ in the unperturbed ground state:
+$$E_1^{(1)} = \langle \psi_1 | V(x) | \psi_1 \rangle = \int_{0}^{L} \psi_1^*(x) V(x) \psi_1(x) \, dx$$
+
+**3. Substitute the given perturbation and wavefunction:**
+Given $V(x) = V_0 \sin\left(\frac{\pi x}{L}\right)$, we have:
+$$E_1^{(1)} = \int_{0}^{L} \left(\sqrt{\frac{2}{L}} \sin\left(\frac{\pi x}{L}\right)\right) \left(V_0 \sin\left(\frac{\pi x}{L}\right)\right) \left(\sqrt{\frac{2}{L}} \sin\left(\frac{\pi x}{L}\right)\right) \, dx$$
+$$E_1^{(1)} = \frac{2V_0}{L} \int_{0}^{L} \sin^3\left(\frac{\pi x}{L}\right) \, dx$$
+
+**4. Evaluate the integral:**
+Let $u = \frac{\pi x}{L}$, then $du = \frac{\pi}{L} dx \implies dx = \frac{L}{\pi} du$. The limits change from $[0, L]$ to $[0, \pi]$.
+$$E_1^{(1)} = \frac{2V_0}{L} \cdot \frac{L}{\pi} \int_{0}^{\pi} \sin^3(u) \, du = \frac{2V_0}{\pi} \int_{0}^{\pi} \sin^3(u) \, du$$
+Using the identity $\sin^3(u) = \sin(u)(1 - \cos^2(u))$:
+$$\int_{0}^{\pi} (\sin(u) - \sin(u)\cos^2(u)) \, du = \left[ -\cos(u) + \frac{\cos^3(u)}{3} \right]_{0}^{\pi}$$
+$$= \left( -(-1) + \frac{(-1)^3}{3} \right) - \left( -(1) + \frac{1^3}{3} \right) = \left( 1 - \frac{1}{3} \right) - \left( -1 + \frac{1}{3} \right) = \frac{2}{3} + \frac{2}{3} = \frac{4}{3}$$
+
+**5. Final Calculation:**
+$$E_1^{(1)} = \frac{2V_0}{\pi} \cdot \frac{4}{3} = \frac{8V_0}{3\pi}$$
+
+Comparing this result to the given choices:
+(A) $8V_0 / (3\pi)$
+(B) $V_0 / 2$
+(C) 0
+(D) $2V_0 / \pi$
+
+The result matches choice (A).
+
+\boxed{A}<turn|>

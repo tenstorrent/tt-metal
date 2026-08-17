@@ -893,7 +893,11 @@ class MultichipDecoder(OptimizedDecoder):
             sliding_window_size=kind.sliding_window,
             program_config=self.sdpa_program_config,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            **self._cache_view_kwargs(prefill=False),
+            # Same cache view as the update above, including cache_position_modulo:
+            # the read side must wrap its page-table lookups exactly like the write
+            # side, or positions past the bounded sliding capacity fold onto physical
+            # block 0 and attend to the wrong tokens.
+            **update_kwargs,
         )
         attn_out = ttnn.to_memory_config(attn_out, head_mem, dtype=attn_out.dtype)
         attn_out = ttnn.experimental.nlp_concat_heads_decode(attn_out, num_heads=LOCAL_Q_HEADS)

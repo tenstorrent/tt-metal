@@ -1,0 +1,16 @@
+To find the first-order shift in the energy of the ground state, we use first-order time-independent perturbation theory.
+
+**1. Identify the unperturbed ground state wavefunction:**
+For a particle of mass $m$ in a one-dimensional box of width $L$ (from $x=0$ to $x=L$), the unperturbed energy eigenfunctions are:
+$$\psi_n(x) = \sqrt{\frac{2}{L}} \sin\left(\frac{n\pi x}{L}\right)$$
+For the ground state ($n=1$):
+$$\psi_1(x) = \sqrt{\frac{2}{L}} \sin\left(\frac{\pi x}{L}\right)$$
+
+**2. Apply the first-order energy shift formula:**
+The first-order correction to the energy $E_1^{(1)}$ is given by the expectation value of the perturbation $V(x)$ in the unperturbed ground state:
+$$E_1^{(1)} = \langle \psi_1 | V(x) | \psi_1 \rangle = \int_{0}^{L} \psi_1^*(x) V(x) \psi_1(x) \, dx$$
+
+**3. Substitute the given perturbation and wavefunction:**
+Given $V(x) = V_0 \sin\left(\frac{\pi x}{L}\right)$, we have:
+$$E_1^{(1)} = \int_{0}^{L} \left(\sqrt{\frac{2}{L}} \sin\left(\frac{\pi x}{L}\right)\right) \left(V_0 \sin\left(\frac{\pi x}{L}\right)\right) \left(\sqrt{\frac{2}{L}} \sin\left(\frac{\pi x}{L}\right) \text{s} \text{sin}\left(\frac{\text{theorse}\right)^2}{L} \textstyleмicros} \textstyle{L} \sin\left(\frac{\textstyle{L}\text{theorsim} \dots \text{/text-and {and liveness-and l-tye-tyer-ander-and \{L-and and linde-and-anderer-andand Leno-and and and the-me((and and L^2-the_emer/L-canet_and  ,, moster-_and \{and and and and and andand  прос-and and and-_and than-the-and and l-the 2-and \text-and ling-and-sin-and-and-gand-@_, and }
+-and and and and and and and and and and and and and and and and and andandrend-_ander-duty-- indeed and thanandedand and andand and and and andand thanand and}andng-er-and and and and and and and and and and and and and and ander-count-and andthe-the-ander and andsman l-and and and andand and and and and and the and and and and and andander \andeng and and and and andz_and l_ປະ-and and and and \(and anddisplay_ selam- and and l-and unique-�- l/Trichieserim l-aand and andan andnding lole-teper-s and and and and and and lterererment<|channel>-andArray lacker-_and\[ast_and l/ander- much-d and the-andtyles- lince-of-and anding lert-and answer- lgethy-andand ler- l- lable l-and the and and and andrangeoters-tamiel and-and--andals-the-and/other B_and and lel and and and and_and and and and and and and and ander and_and lel-and and and and and andlah and and and and and and and and and and and and and is-_ander-and and and and and and and and and and the and and  -and and and $\ le and $\text_drums_sp-ander and lthe and l-and and smileasteand the and "), $\text-ander_and and-and and $\text-_ sanvelboard_ने-the-and and and and and noticeur and and and and and and and-one-andvel lablelot-thinger- much-\\-an  -ther-san lapor and the and enougher-thes-thes-or and and-and thetet--and and the {and labley lable-ander-and  , lel _றவு-ander-and and and and and and ander and and and and the and and and and and and and and and and and and and and and and and and and and the and and say_прос-and and and and and and and and and and and the and and and_

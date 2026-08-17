@@ -1,0 +1,20 @@
+{
+ "schema_version": 1,
+ "config_id": "hifi2_everywhere_bfp8_decode_mlp_fp32_logits",
+ "extends": "/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/datatype_sweep/selected_precision_config.json",
+ "overrides": {
+  "decode_weight_groups": {
+   "packed_mlp_gate_up": "BFP8_B"
+  },
+  "compute_fidelities": {
+   "sliding_attention": "HIFI2",
+   "full_attention": "HIFI2",
+   "dense_mlp": "HIFI2",
+   "expert_gate_up": "HIFI2",
+   "expert_down": "HIFI2"
+  },
+  "logits_sampling": {
+   "logits_dtype": "FP32"
+  }
+ }
+}
