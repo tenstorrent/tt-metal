@@ -174,9 +174,9 @@ The second hard prerequisite is the op's **TTNN-side shape**: is it on a factory
 
 - **`Custom hash`** — not a portability question. The port leaves a custom `compute_program_hash` (and a backdoor `attribute_values` / `to_hash`) exactly as it is; see [the cache key](../shared/ttnn_factory.md#the-cache-key-leave-the-custom-hash-alone). Ops whose hash genuinely needs analysis are held by the **relaxation** signal instead, which is where that risk actually lives.
 - **`Override runtime args method?`** — not a gate; it **selects the target concept**. See [TTNN porting shape](#ttnn-porting-shape).
-- **`Pybind descriptor`** — not a gate. The port **deletes** the pybound `create_descriptor` binding, with the ops team's agreement; a replacement is expected later. Record the site so the porter can carry it into the port report as the user-visible change it is.
+- **`Pybind descriptor`** — not a gate. The port **deletes** the pybound `create_descriptor` binding; a replacement is expected later. Record the site so the porter can carry it into the port report as the user-visible change it is.
 
-**The two runtime-args columns do different jobs.** TTNN's runtime-arg-update mechanism churned and the sheet carries *two* columns for it. Only one of them blocks:
+**The two runtime-args columns do different jobs.** TTNN has two runtime-arg-update mechanisms and the sheet carries a column for each. Only one of them blocks:
 
 - **`Runtime-args update (get_dynamic_runtime_args)` == `yes`** → blocks, routed to **TTNN**. A *deprecated* workaround, mid-removal. You should rarely meet one: the migration off it is nearly complete, and the ops that still carry it are blocked on the sheet.
 - **`Override runtime args method?` == `yes`** → **does not block.** It is the signal that this port targets **`CustomProgramSpecFactoryConcept`** instead of the base concept. Record it as the target ([TTNN porting shape](#ttnn-porting-shape)); the porter *translates* the method rather than deleting it.
@@ -189,7 +189,7 @@ The two are enforced mutually exclusive at the device-op level (a device-op defi
 - `Custom hash` — grep the device-op for a `compute_program_hash` override. Verified because the porter is told it is there and must leave it alone. (One case muddies this: a **Pybound-`create_descriptor`** op may *rename* the hook so the framework uses the default hash and reach the custom hash only through the pybind name — see the `Pybind descriptor` note below. So on a pybound op a grep-vs-sheet mismatch here is explainable by the rename, and is not by itself evidence the sheet is stale.)
 - `Runtime-args update (get_dynamic_runtime_args)` — grep the **device-op** for a `get_dynamic_runtime_args` hook (`static std::vector<DynamicRuntimeArg> get_dynamic_runtime_args(...)`). It lives on the DeviceOperation, **not** the factory, and is often **active for only some of that device-op's factories** — its body returns real args for one and `{}` for the rest. Attribute **per-factory**: the gate taints only the factory row(s) the hook actually fires for; sibling factories on the same device-op stay clean. (This is why one device-op's rows can legitimately differ in `Is able to port?`.)
 - `Override runtime args method?` — grep for an `override_runtime_arguments` method. Not a gate, but verify it anyway: it decides the **target concept**, so a wrong value sends the porter down the wrong path. **Mind the name-collision with the `Concept` check above:** on a *legacy* device-op, `create()` + `override_runtime_arguments()` is the legacy-concept signature, which gates via `Concept` and routes to the PD-migration team; on a *`descriptor`/PD* op the same method is this column's target-concept signal. Same method name, two different meanings — decide which by the surrounding concept.
-- `Pybind descriptor` — grep the op's `*_nanobind.cpp` for a `create_descriptor` binding. **Not a gate:** the ops team has green-lit deleting the binding as part of the port, and the port recipe already does so (they intend to add a replacement later). Record the `file:line` — the porter needs it, because removing it is a user-visible API change that gets its own entry in the port report. Do not reverse-engineer the descriptor internals.
+- `Pybind descriptor` — grep the op's `*_nanobind.cpp` for a `create_descriptor` binding. **Not a gate:** the port deletes the binding, and a replacement is expected later. Record the `file:line` — the porter needs it, because removing it is a user-visible API change that gets its own entry in the port report. Do not reverse-engineer the descriptor internals.
 - `Secretly SPMD Workload?` (only when `Concept == WorkloadDescriptor`) — `create_descriptor` returns a `WorkloadDescriptor`; a **single entry** in its `programs` vector (each a `PerCoordProgram` = `MeshCoordinateRange` + `ProgramDescriptor`) ⇒ SPMD.
 - **Factory-set match** (a cheap, high-signal staleness check the per-column checks miss) — confirm the sheet's rows for this op correspond one-to-one with the code's factories: every sheet factory row maps to a factory that still exists, and every factory in the code has a row. A **phantom row** (a factory since renamed or deleted) or a **missing row** (a factory the sheet never caught up to) means the sheet is stale for this op → treat it as spreadsheet-broken (routing below).
 
@@ -237,7 +237,7 @@ That is a deliberate scope choice, not an oversight. Ops needing a real relaxati
 
 **Read the cell; do not re-derive it.** Any value other than `none` blocks the port and routes to the **ops team**. Report the value verbatim — the vocabulary distinguishes work that is queued from work that is already scheduled, and reproducing it exactly is what lets the reader tell those apart. Do not attempt to judge whether the op "really" needs the relaxation: that analysis is the reason the column exists.
 
-**Relaxation candidates (FYI-U).** Even while custom-hash ops are gated, a custom hash sometimes reveals which tensor properties the op *actually* depends on — a candidate for a future relaxation. Record any such candidate for the team's relaxation roadmap; it is **fallible** (many custom hashes are themselves wrong) and never reaches the porter brief.
+**Relaxation candidates (FYI-U).** A custom hash sometimes reveals which tensor properties the op *actually* depends on — a candidate for a future relaxation. Record any such candidate for the team's relaxation roadmap; it is **fallible** (many custom hashes are themselves wrong) and never reaches the porter brief.
 
 **Finding role: GATE** (routed to the ops team); the relaxation-candidate note is **FYI-U**.
 
@@ -493,7 +493,7 @@ This signal **does not gate the port**, but it induces a **cross-op coordination
 
 Metal 2.0 **supports** both RTA and CRTA varargs via the kernel-side vararg mechanism, so this does **not** gate — it's a porter heads-up. The value is the auditor doing, unhurried, a classification the porter would otherwise have to: report the kernel and the recognition site (`file:line`) and note it's a genuine loop-indexed varargs case (RTA or CRTA), so the porter reaches for the vararg mechanism rather than trying to name each — per the recipe's [kernel-side whitelist rule 4](../port/metal2_port.md#kernel-side-whitelist).
 
-**Not to be confused with CTA varargs**, which **do** gate the port (caught by the [CTA varargs Appendix A entry](#variable-count-compile-time-arguments-cta-varargs--unsupported)): kernels that loop over `get_compile_time_arg_val(i)` with a **runtime-varying count**, or ops whose `tensor_args_t` carries a variable-count container like `std::vector<Tensor>`. The distinction that matters: a *runtime-varying count* is what makes **CTA** varargs unsupportable, whereas an **RTA/CRTA** loop needs varargs regardless of whether its count is fixed.
+**CTA varargs are a separate mechanism, and they don't gate either.** A kernel that reads *compile-time* args at a varying index — `get_compile_time_arg_val(i)` in a count-driven loop, the shape an op with a `std::vector<Tensor>` input list often takes — ports onto `KernelAdvancedOptions::compile_time_varargs`, read kernel-side with `get_compile_time_vararg(i)`. It is ordinary port work; note the site alongside the RTA ones so the porter reaches for the mechanism instead of trying to name each element. **Named CTAs stay the default**: the vararg form is a deliberately temporary escape hatch (the API marks it deprecated on arrival, pending typed array arguments), so it is for a genuine variable-count block and nothing else. Genuine ones are **rare** — rarer than the RTA case — so a suspected one is usually a misread: a variable-count *input* list (`tensor_args_t` carrying a `std::vector<Tensor>`) is a prompt to go read the kernel, not a verdict, since the per-input metadata may equally ride RTAs or runtime DFB streaming. What decides it is the kernel reading compile-time args at a **varying** index; reads at constexpr offsets — even computed ones — are a fixed set, and they get names.
 
 ### Incidental anomalies
 
@@ -592,7 +592,6 @@ Opens with a **status summary** grouped Prereqs / Feature Support / TTNN Readine
   | GlobalCircularBuffer | RED / N/A | config-scoped — RED the offending factory, name the clean subset |
   | CBDescriptor `address_offset` (non-zero) | RED / N/A | runtime-team consultation (verbatim message) |
   | GlobalSemaphore | RED / N/A | |
-  | Variable-count compile-time arguments (CTA varargs) | RED / N/A | |
 
 - **CB endpoints (GATE-free):** <every CB is either legal (1 producer, 1 consumer) or carries a port-time disposition — **self-loop** (one toucher: single-ended / sync-free, legal on Gen1 for compute *and* DM), **1P+1C assignment** (two touchers, e.g. a dual-instance work-split — bind one PRODUCER, one CONSUMER, no flag) with its `(CB, config)` list, **multi-binding advanced-option flag** (genuine ≥2 of a role the census can't relabel — ≥3 touchers or FIFO-doubling; hidden-2nd-writer or multi-reader face) with its `(CB, config)` list, a **dead-CB drop** (zero endpoints in *every* config) @ `file:line`, or a **conditional DFB** (zero endpoints in some configs, live in others — name both). Nothing here blocks a Gen1 port. **Deferred** (re-evaluate post–Device 2.0) if the Device 2.0 gate is RED.>
 - **Offset base pointers:** <GREEN — no address RTA folds a host-side offset into its base, or every fold has already been split out by the ops team (→ clean base, handled as ordinary tensor-binding port work) — or — RED: Type 1 (raw offset arg) / Type 2 (accessor-fed offset arg → flag early, ops team + framework) @ `file:line` by kernel + role. Factory-scoped: an RM slice-family RED names the tiled factories as a clean subset. Type 3 (`address_offset`) is the Appendix A entry; Type 4 (`narrow`) ports as-is. Cross-references the offset-base-pointer triage analysis (a dated prior).>
@@ -682,7 +681,7 @@ These facts feed the port's TTNN ProgramFactory wiring (→ `ttnn_factory.md`); 
 
 Every Appendix A entry is UNSUPPORTED, so a per-row status is one of two — there is no `GREEN` row:
 
-- **`N/A`** — the feature is absent from the op (the op uses no `GlobalSemaphore`, so that entry cannot fire; it has no variable-count CTAs, so the CTA-varargs entry cannot fire; etc.). Since every entry is a gate-feature, an absent one is `N/A` — the gate didn't fire because the feature is *absent*, so there is nothing to "pass."
+- **`N/A`** — the feature is absent from the op (the op uses no `GlobalSemaphore`, so that entry cannot fire; no `CBDescriptor` sets a non-zero `address_offset`, so that entry cannot fire; etc.). Since every entry is a gate-feature, an absent one is `N/A` — the gate didn't fire because the feature is *absent*, so there is nothing to "pass."
 - **`RED`** — an UNSUPPORTED feature is present → the port is gated.
 
 A clean feature scan is therefore all-`N/A`. (The *subject's* overall roll-up may still read "GREEN — no gate fired"; that's the subject verdict, distinct from these per-row labels.)
@@ -814,28 +813,6 @@ Plain `Semaphore` / `CreateSemaphore(program, core_spec, initial_value)` is the 
 
 **Examples in the wild** (for ground-truthing your match):
 - Most CCL ops under `ttnn/cpp/ttnn/operations/experimental/ccl/`, e.g. `llama_reduce_scatter/device/llama_reduce_scatter_device_operation.cpp`, `all_gather_concat_heads_fused/device/`, `llama_all_gather_matmul_async/device/`.
-
-### Variable-count compile-time arguments (CTA varargs) — UNSUPPORTED
-
-**Status**: Not yet supported in Metal 2.0. Ops whose structure requires a *variable number of compile-time arguments* — for example, ops that accept a list of input tensors of runtime-varying count, or kernels that iterate over a runtime-varying number of CTAs — cannot be ported today. Metal 2.0's `compile_time_args` schema requires fixed-shape declaration at factory-construction time; there is no kernel-side equivalent of the legacy positional-CTA loop yet. A CTA-vararg feature is on the host API roadmap.
-
-**Recognition — definitely this feature** (refuse and report):
-
-- **Op-level signal.** The op accepts a *variable number of input tensors* — e.g., the device-operation class's `tensor_args_t` carries a `std::vector<Tensor>` (or equivalent variable-count container) rather than a fixed-count tuple of named tensors. Treat this as a **prompt to inspect the kernel, not a verdict on its own:** a variable-count input list is necessary but *not* sufficient. The author may thread per-input metadata through CTA varargs — but may equally use RTAs or runtime CB-streaming, both of which Metal 2.0 supports. Do not fire the rule off this signal alone.
-- **Kernel-level signal (the decider).** The kernel reads *compile-time* args using a *runtime-varying index* — e.g., `get_compile_time_arg_val(i)` inside a loop where `i` depends on a count value, or a kernel template instantiated over a variable count derived from a CTA. (Args read at **constexpr** offsets — even computed ones — are fixed-count, not this.)
-
-The **kernel-level signal fires the rule**; the op-level signal only tells you to go read the kernel. If you genuinely cannot resolve how the kernel consumes the count, default conservative — treat it as CTA varargs (RED) and record the uncertainty.
-
-**Recognition — false-positive guard**:
-
-- *RTA varargs* (`get_vararg(i)` for runtime args) ARE supported in Metal 2.0 via the kernel-side vararg mechanism — see the porter recipe's [kernel-side whitelist rule 4](../port/metal2_port.md#kernel-side-whitelist) and the [patterns catalog's Caution on varargs](../shared/port_patterns.md#caution-avoid-varargs-unless-absolutely-necessary). The rule fires only on *compile-time* varargs.
-- A fixed-count list of input tensors known at port time (e.g., always exactly 4 inputs) is not variadic — that's a multi-input op with a known shape. Port it as multiple named `TensorParameter`s and `TensorBinding`s.
-- A **variable-count input list whose per-input data rides RTAs or runtime CB-streaming** (an RTA-driven count loop, *not* a compile-time-arg loop) is **not** CTA varargs — the compile-time arg *count* is fixed. Classify N/A. *Example:* `matmul` carries a `std::vector<Tensor>` (a, b, weights) and a runtime-varying multi-weight path, yet its kernels read compile-time args only at **constexpr** offsets — no runtime-varying CTA index — so it is N/A here. This is the case the `std::vector<Tensor>` op-level cue over-fires on (it is a *prompt to read the kernel*, per the op-level signal above, not a verdict).
-
-**Action**: STOP. Report to the user that this op's structure requires a CTA-vararg feature Metal 2.0 does not yet support. Do not attempt to capitulate by demoting CTAs to RTAs (that's the [Demoting per-group CTA to RTA anti-pattern](../shared/port_patterns.md#anti-pattern-demoting-per-group-cta-to-rta)) or by hand-unrolling the variable-count loop in the kernel.
-
-**Examples in the wild** (for ground-truthing your match):
-- `ttnn/cpp/ttnn/operations/data_movement/concat/` — accepts a runtime-varying list of input tensors.
 
 ---
 
