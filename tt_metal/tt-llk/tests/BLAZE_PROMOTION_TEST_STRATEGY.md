@@ -685,4 +685,3 @@ sooner:
 `4164de1` add_rsqrt · `3898f05` custom_mm uninit · `906e73a` sort-header coexistence ·
 `5c6a605` + `744bbe2` docs · `169a504` sampling Prgm0 hazard · `931eab1` + `fc2aec7` +
 `3e42be9` doc upkeep · `566a1e5` + `d6e00d0` + `3b8903f` the chunked-reduce attempts.
-
