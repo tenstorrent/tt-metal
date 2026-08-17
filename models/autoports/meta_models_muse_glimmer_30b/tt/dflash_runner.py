@@ -72,6 +72,16 @@ class DFlashStats:
     draft_noise_seconds: float = 0.0
     draft_forward_seconds: float = 0.0
     draft_candidates_seconds: float = 0.0
+    #: ``verify_seconds`` split the same way, because "verify" is not all target
+    #: forward: it also runs the LM head over every verified row and pulls a
+    #: 202k-wide logits tile to host per 32-row tile just to take an argmax.
+    verify_forward_seconds: float = 0.0
+    verify_logits_seconds: float = 0.0
+    #: Pulling the five tapped hidden-state tensors to host and concatenating them.
+    #: Charged to neither draft nor verify, so it hid in the unaccounted remainder.
+    taps_seconds: float = 0.0
+    #: Uploading the (bucket-padded) accumulated context back to device.
+    context_upload_seconds: float = 0.0
 
     @property
     def accepted_per_target_forward(self) -> float:
@@ -103,6 +113,10 @@ class DFlashStats:
             "draft_forward_seconds": self.draft_forward_seconds,
             "draft_candidates_seconds": self.draft_candidates_seconds,
             "verify_seconds": self.verify_seconds,
+            "verify_forward_seconds": self.verify_forward_seconds,
+            "verify_logits_seconds": self.verify_logits_seconds,
+            "taps_seconds": self.taps_seconds,
+            "context_upload_seconds": self.context_upload_seconds,
             "total_seconds": self.total_seconds,
             "ms_per_token": self.ms_per_token,
             "tokens_per_second": self.tokens_per_second,
@@ -123,7 +137,9 @@ class DFlashRunner:
         max_verify_rows: int | None = None,
         padded_drafting: bool = True,
         pad_context: bool = True,
-        aligned_verify: bool = False,
+        aligned_verify: bool = True,
+        uncapped_argmax: bool = True,
+        verify_mode: str = "prefill",
     ) -> None:
         self.generator = generator
         self.model = generator.model
@@ -165,44 +181,85 @@ class DFlashRunner:
         #: changing the attention reduction width and flipping near-tied argmaxes
         #: (would vanish without padding).
         self.pad_context = bool(pad_context)
+        #: Take every argmax from the **pre-softcap** logits.
+        #:
+        #: The LM head computes ``T * tanh(x)``, which is strictly monotonic and so
+        #: cannot change an argmax in exact arithmetic -- the reason the first
+        #: implementation reused the full head for candidates.  In bf16 it can and does.
+        #: Spacing near 1.0 is ``2**-8`` = 0.0039 while ``tanh(x) > 0.996`` for
+        #: ``x > 3.1``, so every strong logit saturates to the *same* bf16 value and the
+        #: winner becomes whichever index the reduction reaches first.
+        #:
+        #: Speculation is the workload that cannot afford it: a candidate is accepted only
+        #: when the drafter's argmax equals the target's, so ties on both sides make
+        #: agreement a coin flip.  HF's candidate path uses the raw ``nn.Linear``, and the
+        #: CPU oracle accepts 4.41 tokens per target forward on the same prompt and length
+        #: where this port accepted 2.67 -- a 40 % deficit that no amount of drafter
+        #: fidelity explained (F8).
+        #:
+        #: Applies to the *verify* argmax as well as to candidate selection, since a tie
+        #: on the target's side costs acceptance exactly as much as one on the drafter's.
+        #: Sampling is untouched: the cap shapes the distribution and only its effect on
+        #: argmax is a no-op.
+        self.uncapped_argmax = bool(uncapped_argmax)
+        #: ``"prefill"`` (default) verifies the block with a prefill forward.
+        #: ``"decode"`` / ``"decode_eager"`` verify it as one batched decode step and are
+        #: **kept only as a recorded negative result** -- they are not sound.
+        #:
+        #: The idea was strong and the arithmetic still is.  A prefill forward costs 55-67 ms
+        #: measured flat from 32 to 256 rows and start positions 0 to 1024, i.e. it is
+        #: host-dispatch bound, while a *traced* decode step through the same 52 layers
+        #: costs 23.3 ms; and the port documents that ``DECODE_ROWS`` "is not the batch size
+        #: and is deliberately independent of it", which measurement confirmed (70.35 ms at
+        #: 16 active rows against 72.12 ms at 1).  So putting the anchor and its 15
+        #: candidates in 16 decode rows sharing one page-table row, with
+        #: ``current_pos[u] = anchor_pos + u``, should verify the whole block for the price
+        #: of one decode step -- a 64.5 -> 24 ms change, which is the entire break-even gap.
+        #:
+        #: It does not hold: **decode rows do not reliably observe each other's same-step
+        #: K/V writes.**  Row ``u`` needs the K/V that rows ``< u`` write in the same op,
+        #: and two runs of the identical step, each from a freshly re-seeded cache,
+        #: disagreed at row 14 -- and the winner differed from the prefill reference by a
+        #: **0.59** logit gap, far outside the bf16 near-tie floor.  End to end it produced
+        #: degenerate output (token 1574 repeated) whose acceptance *looked* excellent
+        #: (blocks of 15/15) precisely because repetition is trivial to draft.
+        #:
+        #: Two traps worth keeping, because both made it look correct:
+        #: running the prefill reference *before* the decode step pre-warms the cache for
+        #: exactly those positions, so the decode never has to chain and scores 0/16; and
+        #: running the decode twice without re-seeding does the same to the second run.
+        #: ``tests/dflash_decode_verify_probe.py`` re-seeds before every measurement.
+        self.verify_mode = str(verify_mode)
+        #: Lazily captured trace for the verify decode step, with taps armed.  The shipped
+        #: decode trace cannot be reused: it is captured *without* hidden-state taps, and
+        #: DFlash needs them to build the drafter's context.
+        self._verify_trace: dict | None = None
         #: Restart the verify forward at the page-block boundary below the anchor,
         #: threading sliding K/V tails, instead of re-forwarding the whole prefix from 0.
         #:
-        #: **INCOMPLETE - default off.**  This is the change the arithmetic demands: the
-        #: from-0 verify is 106.8 ms of a 157.6 ms iteration (68 %) against a break-even
-        #: budget of 3.12 tokens x 23.31 ms = 72.7 ms, and it *grows* with the prefix, so
-        #: DFlash gets worse the longer it runs.  The scaffold here works end to end and
-        #: the two constraints people expect to block it do not: ``_chunk_page_table``
-        #: already shifts the page table by ``start_pos / block_size``, and a sliding tail
-        #: for an earlier position is a *prefix* of the one already held, which
-        #: ``trim_sliding_tails`` already produces.  Two measured problems remain:
+        #: This is the change the arithmetic demands: the from-0 verify is 106.8 ms of a
+        #: 157.6 ms iteration (68 %) against a break-even budget of 3.12 tokens x
+        #: 23.31 ms = 72.7 ms, and it *grows* with the prefix, so DFlash gets worse the
+        #: longer it runs.  The aligned restart re-forwards at most
+        #: ``page_block_size - 1`` committed rows regardless of position.
         #:
-        #: 1. **It is slower, not faster.**  39 of the target's 52 layers are sliding, so
-        #:    trimming every iteration costs 78 device slices plus 39 tail concats, and
-        #:    verify went 106.8 -> 157 ms/iteration: the tail bookkeeping costs more than
-        #:    the shorter forward saves.  The fix is to stop paying it per iteration --
-        #:    ``prefill_forward`` *consumes* the tail it is handed, which forces a fresh
-        #:    trim every call, so it needs a borrow mode that neither frees the tail nor
-        #:    replaces it.  The trim is then only needed when ``aligned_start`` actually
-        #:    advances, i.e. once per ``page_block_size`` tokens rather than 20x more often.
-        #: 2. **One committed token is wrong**, reproducibly.  At OSL 128 the aligned path
-        #:    emits two tokens (34302, 14166) where from-0 and greedy emit one (26382), at
-        #:    produced index 32 / absolute position 99, after which the streams re-align.
-        #:    Committed tokens are the target's own argmax, so a wrong one means the verify
-        #:    forward saw wrong history, not that the drafter guessed badly. Ruled out by
-        #:    inspection: the chunked-SDPA offset (q and k chunk sizes are both shrunk
-        #:    until they divide ``start_pos``), tile-padding garbage in the tail (always
-        #:    trimmed off, since ``aligned_start' <= anchor_pos + block``), and rejected
-        #:    candidates inside the tail (everything below ``aligned_start'`` is either a
-        #:    prefix token or an accepted candidate, whose K/V is by definition correct).
+        #: Neither of the two constraints the first implementation recorded as blocking
+        #: this is real.  ``_chunk_page_table`` already shifts the page table by
+        #: ``start_pos / block_size``.  And no sliding K/V tail is needed at all: while
+        #: the sequence sits inside the 2048 window, every sliding layer's window
+        #: excludes nothing, so it *is* a full-attention layer over the chunk and the
+        #: decoder routes it through the paged path
+        #: (``FunctionalDecoder.sliding_window_is_inert``).  An earlier attempt did
+        #: thread tails, via ``trim_sliding_tails``, and was both slower -- 78 device
+        #: slices per iteration across the 39 sliding layers took verify to 157 ms -- and
+        #: wrong by one committed token.  Removing the tails removed both problems.
         #:
-        #: Reproduce with ``--verify aligned``; the gate is token equality against
-        #: ``--verify from-zero``, which is exact and much sharper than acceptance rate.
+        #: Past the window this must fall back to real tail threading; the
+        #: ``max_verify_rows`` guard refuses rather than silently attending a truncated
+        #: history.  The gate is token equality with ``--verify from-zero``, which is
+        #: exact and far sharper than acceptance rate: the earlier tail bug moved
+        #: acceptance by only 0.2 while moving tokens outright.
         self.aligned_verify = bool(aligned_verify)
-        #: Absolute position where the sliding K/V tails currently held by the model end,
-        #: or None when none are held.  Tracked here rather than asked of the model
-        #: because the tail's *length* is min(window, end) and so does not reveal it.
-        self._tail_end: int | None = None
 
     # ------------------------------------------------------------------ helpers
 
@@ -225,7 +282,10 @@ class DFlashRunner:
             host = ttnn.to_torch(tensor, mesh_composer=ttnn.ConcatMeshToTensor(self.model.mesh_device, dim=0))[0:1]
             ttnn.deallocate(tensor)
             host = host.reshape(1, -1, self.config.hidden_size)[:, offset : offset + num_rows, :]
-            pieces.append(host.float())
+            # Kept in bf16 rather than widened to float32: it is uploaded as bf16, and at
+            # bucket 256 a float32 accumulator costs an 8.5M-element convert *per
+            # iteration* on the host for nothing.
+            pieces.append(host.to(torch.bfloat16))
         return torch.cat(pieces, dim=-1)
 
     def _upload_context(self, context: torch.Tensor, *, pad_to: int | None = None) -> ttnn.Tensor:
@@ -243,8 +303,10 @@ class DFlashRunner:
             if rows < pad_to:
                 padding = torch.zeros(1, 1, pad_to - rows, int(host.shape[3]), dtype=host.dtype)
                 host = torch.cat([host, padding], dim=2)
+        if host.dtype != torch.bfloat16:
+            host = host.to(torch.bfloat16)
         return ttnn.from_torch(
-            host.to(torch.bfloat16),
+            host,
             device=self.model.mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat16,
@@ -275,12 +337,108 @@ class DFlashRunner:
         ttnn.deallocate(embedded)
         return trimmed
 
+    def _taps_from(self, taps: dict, num_rows: int, *, offset: int = 0) -> torch.Tensor:
+        """Assemble the drafter context from already-held tap tensors, without freeing them.
+
+        ``_taps_to_host`` drains and deallocates, which is right for the prefill path where
+        every forward produces fresh taps.  The traced decode path must not: its tap tensors
+        are **persistent trace outputs**, rewritten in place by each replay, so freeing them
+        would invalidate the trace.
+        """
+        pieces = []
+        for layer_idx in self._tap_layers():
+            host = ttnn.to_torch(taps[layer_idx], mesh_composer=ttnn.ConcatMeshToTensor(self.model.mesh_device, dim=0))[
+                0:1
+            ]
+            host = host.reshape(1, -1, self.config.hidden_size)[:, offset : offset + num_rows, :]
+            pieces.append(host.to(torch.bfloat16))
+        return torch.cat(pieces, dim=-1)
+
+    def _ensure_verify_trace(self) -> None:
+        """Capture the verify decode step once, with taps armed.
+
+        Mirrors ``MuseGlimmerGenerator._capture_decode_trace``: warm-compile first (which
+        *executes*, so anything it mutated is restaged by the caller afterwards), then
+        capture.  ``advance_positions=False`` because the verify restages absolute
+        positions every iteration and must not have them incremented underneath it.
+
+        The tensors kept here -- the logits and the five taps -- are the graph's own
+        outputs, so their addresses are baked into the trace and every replay refreshes
+        them in place.  That is the same contract the decode trace's ``_trace_logits``
+        relies on, and it is why nothing in the loop may deallocate them.
+        """
+        if self._verify_trace is not None:
+            return
+        model = self.model
+        inputs = self.generator._device_inputs
+        tap_layers = self._tap_layers()
+
+        model.arm_hidden_state_taps(tap_layers)
+        warm = model.ttnn_decode_forward(
+            inputs["tokens"],
+            inputs["current_pos"],
+            inputs["rope_pos_ids"],
+            inputs["page_table"],
+            advance_positions=False,
+        )
+        ttnn.deallocate(warm)
+        for tensor in model.take_hidden_state_taps().values():
+            ttnn.deallocate(tensor)
+        ttnn.synchronize_device(model.mesh_device)
+
+        trace_id = ttnn.begin_trace_capture(model.mesh_device, cq_id=0)
+        model.arm_hidden_state_taps(tap_layers)
+        logits = model.ttnn_decode_forward(
+            inputs["tokens"],
+            inputs["current_pos"],
+            inputs["rope_pos_ids"],
+            inputs["page_table"],
+            advance_positions=False,
+        )
+        taps = model.take_hidden_state_taps()
+        ttnn.end_trace_capture(model.mesh_device, trace_id, cq_id=0)
+        ttnn.synchronize_device(model.mesh_device)
+        model.note_trace_captured()
+        self._verify_trace = {"id": trace_id, "logits": logits, "taps": taps}
+
+    def release_verify_trace(self) -> None:
+        if self._verify_trace is None:
+            return
+        try:
+            ttnn.release_trace(self.model.mesh_device, self._verify_trace["id"])
+        finally:
+            self._verify_trace = None
+
     def _argmax_rows(self, logits: ttnn.Tensor, rows: int) -> list[int]:
-        """Host argmax over the first ``rows`` rows of a vocab-sharded logits tile."""
-        gathered = self.model.gather_and_untilize_logits(logits)
-        host = self.model.logits_to_torch(gathered, gathered=True)
+        """Argmax over the first ``rows`` rows of a vocab-sharded logits tile.
+
+        Reduced **on device**, so what crosses PCIe is ``rows`` token ids rather than a
+        ``rows x 202752`` float tile.  DFlash calls this on the whole verify block *and*
+        on every drafted block, so at OSL 128 the host version moved ~26 MB per tile and
+        cost 16.1 ms per iteration inside the verify plus 14.0 ms inside the draft --
+        together about a quarter of the iteration, spent transferring numbers only to
+        take their argmax.
+
+        The vocab padding has to go first.  ``gather_and_untilize_logits`` returns
+        ``padded_vocab_size`` columns and ``logits_to_torch`` drops the tail *after* the
+        transfer; a device argmax over the padded width would happily return a padded id
+        that is not a real token, which would corrupt candidates silently rather than
+        raise.  So slice to ``vocab_size`` and reduce that.
+        """
+        model = self.model
+        gathered = model.gather_and_untilize_logits(logits)
+        vocab = int(model.config.vocab_size)
+        shape = tuple(gathered.shape)
+        if int(shape[-1]) != vocab:
+            trimmed = ttnn.slice(gathered, [0, 0, 0, 0], [shape[0], shape[1], shape[2], vocab])
+            ttnn.deallocate(gathered)
+            gathered = trimmed
+        ids = ttnn.argmax(gathered, dim=-1)
         ttnn.deallocate(gathered)
-        return [int(torch.argmax(host[r]).item()) for r in range(rows)]
+        host = ttnn.to_torch(ttnn.get_device_tensors(ids)[0]).reshape(-1)
+        ttnn.deallocate(ids)
+        model.counters["readbacks"] += 1
+        return [int(host[r]) for r in range(rows)]
 
     def _candidate_ids(self, drafter_hidden: ttnn.Tensor) -> list[int]:
         """Target ``lm_head`` on the drafter's output, dropping the anchor position.
@@ -297,11 +455,97 @@ class DFlashRunner:
             padded = ttnn.pad(drafter_hidden, [(0, 0), (0, 0), (0, TILE_ROWS - rows), (0, 0)], value=0.0)
         else:
             padded = self.model._slice_rows(drafter_hidden, 0, aligned=True)
-        logits = self.model.lm_head.forward(padded)
+        logits = self.model.lm_head.forward(padded, apply_softcap=not self.uncapped_argmax)
         ttnn.deallocate(padded)
         ids = self._argmax_rows(logits, block)
         ttnn.deallocate(logits)
         return ids[1:]  # position 0 is the anchor; it predicts candidate 0
+
+    def _verify_decode(self, anchor_token: int, candidates: list[int], anchor_pos: int, stats):
+        """Verify the block with one replay of the traced decode step.
+
+        Row ``u`` carries the token at ``anchor_pos + u`` and is limited to
+        ``[0, anchor_pos + u]``, so it attends the candidates before it and not those
+        after -- the causal structure of a 16-row prefill, checked position by position
+        in ``tests/dflash_decode_verify_probe.py`` (0 mismatches of 16).
+        """
+        model = self.model
+        block = self.config.block_size
+        verify_tokens = [int(anchor_token)] + list(candidates)
+
+        t_forward = time.perf_counter()
+        self.generator._stage(
+            tokens=verify_tokens,
+            positions=torch.arange(anchor_pos, anchor_pos + len(verify_tokens)),
+        )
+        inputs = self.generator._device_inputs
+        if self.verify_mode == "decode_eager":
+            # Same graph, no trace: isolates a trace-replay fault from a logic fault.
+            model.arm_hidden_state_taps(self._tap_layers())
+            logits = model.ttnn_decode_forward(
+                inputs["tokens"],
+                inputs["current_pos"],
+                inputs["rope_pos_ids"],
+                inputs["page_table"],
+                advance_positions=False,
+            )
+            taps = model.take_hidden_state_taps()
+            owned = True
+        else:
+            ttnn.execute_trace(model.mesh_device, self._verify_trace["id"], cq_id=0, blocking=True)
+            logits, taps, owned = self._verify_trace["logits"], self._verify_trace["taps"], False
+        stats.verify_forward_seconds += time.perf_counter() - t_forward
+        stats.target_forwards += 1
+
+        t_logits = time.perf_counter()
+        target_argmax = self._argmax_rows(logits, block)
+        stats.verify_logits_seconds += time.perf_counter() - t_logits
+        if owned:
+            ttnn.deallocate(logits)
+            self._eager_taps_owned = taps
+        return target_argmax, taps
+
+    def _verify_prefill(self, full_sequence, candidates: list[int], anchor_pos: int, tt_page_table, stats):
+        """Verify the block with a prefill forward, restarting at a page-block boundary.
+
+        Kept as the reference path the decode verify is graded against.  It re-forwards up
+        to ``page_block_size - 1`` committed rows, and a prefill forward costs 55-67 ms
+        whatever its width, so it is ~2.7x the decode step for the same result.
+        """
+        model = self.model
+        block = self.config.block_size
+        if self.aligned_verify:
+            page_block = int(model.config.page_block_size)
+            aligned_start = (anchor_pos // page_block) * page_block
+        else:
+            aligned_start = 0
+        lead = anchor_pos - aligned_start
+        verify_ids = list(full_sequence[aligned_start:anchor_pos]) + [full_sequence[anchor_pos]] + list(candidates)
+        assert len(verify_ids) == lead + block, (len(verify_ids), lead, block)
+
+        model.arm_hidden_state_taps(self._tap_layers())
+        tt_tokens, _ = model.prefill_tokens_to_device(verify_ids)
+        embedded = model.embed_prefill(tt_tokens)
+        ttnn.deallocate(tt_tokens)
+        # No sliding K/V tails are threaded and none are needed: inside the 2048 window a
+        # sliding layer's window excludes nothing, so the decoder routes it down the paged
+        # path exactly as it does a full layer (FunctionalDecoder.sliding_window_is_inert).
+        model.release_sliding_tails()
+        t_forward = time.perf_counter()
+        hidden = model.prefill_forward(embedded, page_table=tt_page_table, user_id=0, start_pos=aligned_start)
+        ttnn.synchronize_device(model.mesh_device)
+        stats.verify_forward_seconds += time.perf_counter() - t_forward
+        stats.target_forwards += 1
+
+        t_logits = time.perf_counter()
+        rows = model.prefill_all_logits(hidden, prompt_len=len(verify_ids), apply_softcap=not self.uncapped_argmax)
+        all_argmax: list[int] = []
+        for tile_index, row in enumerate(rows):
+            remaining = len(verify_ids) - tile_index * TILE_ROWS
+            all_argmax.extend(self._argmax_rows(row, min(TILE_ROWS, remaining)))
+            ttnn.deallocate(row)
+        stats.verify_logits_seconds += time.perf_counter() - t_logits
+        return all_argmax[lead : lead + block], hidden, lead
 
     # -------------------------------------------------------------------- driver
 
@@ -328,27 +572,29 @@ class DFlashRunner:
         self.generator._stage(page_table=table)
         slot_row = model.page_table_row(table, 0)
         tt_page_table = model.page_table_row_to_device(slot_row)
+        if self.verify_mode.startswith("decode"):
+            # Every verify row addresses the SAME sequence: they write different positions
+            # inside slot 0, which is what makes a batched decode step a block verify.
+            if int(model.config.max_batch_size) < block:
+                raise ValueError(
+                    f"decode verify needs max_batch_size >= block_size ({block}), got "
+                    f"{model.config.max_batch_size}; build the generator with max_batch_size=32"
+                )
+            shared_rows = slot_row.repeat(int(model.config.max_batch_size), 1)
+            self.generator._stage(tokens=[0], positions=torch.zeros(1), page_table=shared_rows)
+            if self.verify_mode == "decode":
+                self._ensure_verify_trace()
 
         # ---------------------------------------------------------- prefill
         model.arm_hidden_state_taps(self._tap_layers())
         tt_tokens, _ = model.prefill_tokens_to_device(prompt)
         embedded = model.embed_prefill(tt_tokens)
         ttnn.deallocate(tt_tokens)
-        # Retain the tail: the very first verify already restarts at a page boundary
-        # below the prompt length (67 -> 64), so it needs a tail from this call.
-        prompt_padded_rows = int(embedded.shape[2])
-        hidden = model.prefill_forward(
-            embedded,
-            page_table=tt_page_table,
-            user_id=0,
-            start_pos=0,
-            keep_sliding_tails=self.aligned_verify,
-        )
-        self._tail_end = prompt_padded_rows if self.aligned_verify else None
+        hidden = model.prefill_forward(embedded, page_table=tt_page_table, user_id=0, start_pos=0)
         stats.target_forwards += 1
         # Context for iteration 0 is the whole prompt: positions 0..L-1.
         context_host = self._taps_to_host(prompt_len)
-        logits = model.prefill_logits(hidden, last_token_index=prompt_len - 1)
+        logits = model.prefill_logits(hidden, last_token_index=prompt_len - 1, apply_softcap=not self.uncapped_argmax)
         ttnn.deallocate(hidden)
         anchor = self._argmax_rows(logits, model.row_within_tile(prompt_len - 1) + 1)[
             model.row_within_tile(prompt_len - 1)
@@ -420,7 +666,9 @@ class DFlashRunner:
                         "context rows and absolute positions have drifted apart"
                     )
                 width = context_bucket(valid) if self.pad_context else valid
+                t_up = time.perf_counter()
                 tt_context = self._upload_context(accumulated_context, pad_to=width)
+                stats.context_upload_seconds += time.perf_counter() - t_up
                 drafter_out = self.drafter.forward_padded(
                     noise,
                     tt_context,
@@ -445,93 +693,20 @@ class DFlashRunner:
             stats.draft_seconds += time.perf_counter() - t0
 
             # ------------------------------------------------------ verify
-            #
-            # ``paged_fill_cache`` always writes from virtual block 0 of the page
-            # table it is handed, so a multi-token prefill MUST start on a page-block
-            # boundary -- ``start_pos=67`` raises.  Speculation needs a forward at an
-            # arbitrary position, so align *down* to the block boundary and re-forward
-            # the committed tokens in between.  That is close to free at batch 1: the
-            # target is weight-bandwidth bound, so an 80-row forward costs about what a
-            # 32-row one does, and re-forwarding committed tokens rewrites byte-identical
-            # K/V at the same positions.
             t0 = time.perf_counter()
-            # Restart the verify forward at the nearest page-block boundary at or below
-            # the anchor, instead of re-forwarding the whole prefix from 0.  Two
-            # constraints have to be met at once, and both already have machinery:
-            #
-            #  * ``paged_fill_cache`` writes from virtual block 0 of the page table it is
-            #    handed, so ``start_pos`` must be a multiple of the page block size.
-            #    ``FunctionalDecoder._chunk_page_table`` shifts the row by
-            #    ``start_pos / block_size`` and enforces exactly that.
-            #  * A sliding-window layer refuses ``start_pos > 0`` without the previous
-            #    call's K/V tail, because the paged chunked SDPA has no sliding-window
-            #    mask and cannot recover the window from the cache.
-            #
-            # The tail bookkeeping is what made this look hard: ``prefill_forward``
-            # emits its tail at the *end* of the call, i.e. at ``aligned_start + padded``,
-            # while the next verify restarts *earlier* than that.  But a sliding tail is a
-            # contiguous run of K/V rows, so the tail for an earlier position is a
-            # **prefix** of the one we hold -- exactly what ``trim_sliding_tails`` already
-            # does for tile-padded prompts.  So: keep the tail on every forward, then trim
-            # it back to the next restart point.
-            #
-            # Re-forwards at most ``page_block_size - 1`` committed rows instead of the
-            # entire prefix, which also rewrites byte-identical K/V at those positions.
-            # Bounded to sequences inside the sliding window: past it the tail holds
-            # ``[end - window, end)`` and the rows an earlier position needs were never
-            # retained, which ``trim_sliding_tails`` raises on rather than approximating.
-            full_sequence = prompt + produced
-            if self.aligned_verify:
-                page_block = int(model.config.page_block_size)
-                aligned_start = (anchor_pos // page_block) * page_block
+            if self.verify_mode.startswith("decode"):
+                # One traced decode step over the block: the anchor and its candidates at
+                # absolute positions anchor_pos..anchor_pos+block-1, all sharing slot 0's
+                # page-table row.  Nothing is re-forwarded -- the prefix is already in the
+                # paged cache -- so this is O(block) by construction rather than by
+                # alignment, and costs one decode step whatever the block size.
+                target_argmax, verify_taps = self._verify_decode(produced[-1], candidates, anchor_pos, stats)
+                lead, hidden = 0, None
             else:
-                aligned_start = 0
-            lead = anchor_pos - aligned_start
-            verify_ids = full_sequence[aligned_start:anchor_pos] + [produced[-1]] + candidates
-            assert len(verify_ids) == lead + block, (len(verify_ids), lead, block)
-
-            # Hand the layers a tail ending exactly at ``aligned_start``;
-            # ``sliding_kv_tail_len(start_pos)`` is ``min(window, start_pos)`` and the
-            # shape check is exact, so an untrimmed tail is rejected outright.
-            continuation = aligned_start > 0
-            if continuation:
-                if self._tail_end is None or self._tail_end < aligned_start:
-                    raise AssertionError(
-                        f"verify needs sliding tails ending at {aligned_start} but holds "
-                        f"{self._tail_end}; every forward must run with keep_sliding_tails=True"
-                    )
-                model.trim_sliding_tails(aligned_start, self._tail_end)
-                self._tail_end = aligned_start
-            else:
-                model.release_sliding_tails()
-                self._tail_end = None
-
-            model.arm_hidden_state_taps(self._tap_layers())
-            tt_tokens, _ = model.prefill_tokens_to_device(verify_ids)
-            embedded = model.embed_prefill(tt_tokens)
-            ttnn.deallocate(tt_tokens)
-            # ``prefill_tokens_to_device`` tile-pads, so the forward writes K/V for the
-            # padded length and the tail it retains ends there, not at len(verify_ids).
-            padded_rows = int(embedded.shape[2])
-            hidden = model.prefill_forward(
-                embedded,
-                page_table=tt_page_table,
-                user_id=0,
-                start_pos=aligned_start,
-                continuation=continuation,
-                keep_sliding_tails=self.aligned_verify,
-            )
-            if self.aligned_verify:
-                self._tail_end = aligned_start + padded_rows
-            stats.target_forwards += 1
-            rows = model.prefill_all_logits(hidden, prompt_len=len(verify_ids))
-            all_argmax: list[int] = []
-            for tile_index, row in enumerate(rows):
-                remaining = len(verify_ids) - tile_index * TILE_ROWS
-                all_argmax.extend(self._argmax_rows(row, min(TILE_ROWS, remaining)))
-                ttnn.deallocate(row)
-            # Rows [lead, lead + block) are the anchor and the 15 candidates.
-            target_argmax = all_argmax[lead : lead + block]
+                target_argmax, hidden, lead = self._verify_prefill(
+                    prompt + produced, candidates, anchor_pos, tt_page_table, stats
+                )
+                verify_taps = None
             stats.verify_seconds += time.perf_counter() - t0
 
             result = accept_block(
@@ -548,12 +723,20 @@ class DFlashRunner:
             # Context for the next iteration: verify_hidden[:n_matches + 1], i.e. the
             # anchor plus the accepted candidates, at positions anchor_pos..+n_matches.
             num = result.n_matches + 1
-            context_host = self._taps_to_host(num, offset=lead)
+            t_taps = time.perf_counter()
+            if verify_taps is not None:
+                # Trace outputs: read, never drain.  Row u already *is* position
+                # anchor_pos + u, so there is no lead to skip.
+                context_host = self._taps_from(verify_taps, num, offset=0)
+            else:
+                context_host = self._taps_to_host(num, offset=lead)
+            stats.taps_seconds += time.perf_counter() - t_taps
             # Positions anchor_pos..anchor_pos+n_matches follow the rows already
             # accumulated, so a plain append keeps row i at absolute position i --
             # the invariant forward_padded relies on.
             accumulated_context = torch.cat([accumulated_context, context_host], dim=1)
-            ttnn.deallocate(hidden)
+            if hidden is not None:
+                ttnn.deallocate(hidden)
             context_start = anchor_pos
             # The new anchor is the last committed token.
             anchor_pos = anchor_pos + result.n_committed

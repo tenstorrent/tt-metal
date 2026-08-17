@@ -1,0 +1,30 @@
+{
+  "length": 200,
+  "restart": 128,
+  "positions_compared": 72,
+  "mismatches": [
+    {
+      "position": 131,
+      "from_zero": 6881,
+      "aligned": 97147,
+      "from_zero_top2_gap": 0.1875,
+      "aligned_top2_gap": 0.0
+    },
+    {
+      "position": 151,
+      "from_zero": 3234,
+      "aligned": 2963,
+      "from_zero_top2_gap": 0.0625,
+      "aligned_top2_gap": 0.1875
+    },
+    {
+      "position": 184,
+      "from_zero": 5091,
+      "aligned": 163002,
+      "from_zero_top2_gap": 0.1875,
+      "aligned_top2_gap": 0.0
+    }
+  ],
+  "wide_gap_mismatches": 0,
+  "near_tie_gap_threshold": 0.25
+}

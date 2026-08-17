@@ -719,7 +719,10 @@ class FunctionalDecoder(LightweightModule):
             ttnn.deallocate(v_fill)
 
         next_tail: tuple[ttnn.Tensor, ttnn.Tensor] | None = None
-        if cfg.is_sliding:
+        # A sliding layer whose window excludes nothing IS a full layer over this chunk,
+        # so take the paged path: it needs no K/V tail, which is what lets a continuation
+        # prefill start at an arbitrary page-aligned offset. See sliding_window_is_inert.
+        if cfg.is_sliding and not self.sliding_window_is_inert(start_pos, seq_len):
             attn, next_tail = self._prefill_sdpa_sliding(q, k, v, sliding_tail, need_tail)
         else:
             attn = self._prefill_sdpa_full(q, k, v, page_table, user_id, start_pos)
@@ -737,6 +740,31 @@ class FunctionalDecoder(LightweightModule):
         projected = ttnn.linear(gated, self.wo, dtype=self.activation_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(gated)
         return projected, next_tail
+
+    def sliding_window_is_inert(self, start_pos: int, seq_len: int) -> bool:
+        """True when this chunk's sliding window excludes nothing, so the layer is
+        *exactly* a full-attention layer over it.
+
+        A sliding layer with window ``w`` lets query ``i`` attend keys ``(i - w, i]``.
+        The last query in this chunk is at ``start_pos + seq_len - 1``, so if that is
+        below ``w`` then ``i - w + 1 <= 0`` for every query and the lower bound clips
+        nothing.  This is an identity, not an approximation.
+
+        Why it is worth testing for: the *only* reason a sliding layer needs the
+        previous call's K/V tail is that ``chunked_scaled_dot_product_attention`` has no
+        sliding-window mask, so it cannot be used and the window has to be rebuilt from
+        an explicit tail.  When the window is inert there is no mask to apply, so the
+        paged path is exactly right and the tail is unnecessary.  Nothing is missing from
+        the cache either: every layer shares one ``cache_shape`` sized for
+        ``max_seq_len`` and there is no eviction, so a sliding layer's paged cache holds
+        the full history like any other.
+
+        This is what makes a continuation prefill at an arbitrary page-aligned offset
+        possible below the window -- which is the whole verify forward in speculative
+        decoding -- without threading tails through every one of the 39 sliding layers.
+        """
+        window = int(self.config.sliding_window or 0)
+        return bool(window) and (start_pos + seq_len) <= window
 
     def _chunk_page_table(
         self, page_table: ttnn.Tensor, user_id: int, start_pos: int, seq_len: int
@@ -1008,10 +1036,18 @@ class FunctionalDecoder(LightweightModule):
         # mask, so the prefix cannot be read back from the paged cache the way
         # full-attention layers read it.  This mirrors the generator-level
         # sliding-tail hand-off in models/demos/gemma4/tt/attention/prefill.py.
+        #
+        # ...*unless* the window excludes nothing over this call, in which case there is
+        # no mask to rebuild and the paged path is exactly right, so no tail is required.
+        # See ``sliding_window_is_inert``: the condition is on the whole call, so it holds
+        # for every internal chunk too.  This is what lets speculative decoding restart a
+        # verify forward at an arbitrary page-aligned offset without threading tails
+        # through all 39 sliding layers.
         required_tail = self.sliding_kv_tail_len(start_pos)
+        window_inert = self.sliding_window_is_inert(start_pos, seq_len)
         if sliding_kv_tail is not None and not cfg.is_sliding:
             raise ValueError("sliding_kv_tail is only meaningful on sliding-window layers")
-        if cfg.is_sliding and start_pos > 0 and sliding_kv_tail is None:
+        if cfg.is_sliding and start_pos > 0 and sliding_kv_tail is None and not window_inert:
             raise ValueError(
                 f"continuation prefill at start_pos={start_pos} on a sliding-window layer needs "
                 f"sliding_kv_tail: the previous call's last {required_tail} K/V rows. Get it by "

@@ -1014,7 +1014,10 @@ class FusedDecoder(FunctionalDecoder):
             ttnn.deallocate(v_fill)
 
         next_tail: tuple[ttnn.Tensor, ttnn.Tensor] | None = None
-        if cfg.is_sliding:
+        # A sliding layer whose window excludes nothing IS a full layer over this chunk,
+        # so take the paged path: it needs no K/V tail, which is what lets a continuation
+        # prefill start at an arbitrary page-aligned offset. See sliding_window_is_inert.
+        if cfg.is_sliding and not self.sliding_window_is_inert(start_pos, seq_len):
             attn, next_tail = self._prefill_sdpa_sliding(q, k, v, sliding_tail, need_tail)
         else:
             attn = self._prefill_sdpa_full(q, k, v, page_table, user_id, start_pos)

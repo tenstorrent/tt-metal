@@ -77,15 +77,26 @@ def main() -> None:
     )
     parser.add_argument(
         "--verify",
-        default="from-zero",
-        choices=["aligned", "from-zero"],
+        default="aligned",
+        choices=["aligned", "from-zero", "decode", "decode_eager"],
         help=(
-            "from-zero (default): re-forward the whole prefix, O(prefix) and growing, but "
-            "correct. aligned: restart at the page-block boundary below the anchor, threading "
-            "sliding K/V tails, re-forwarding at most page_block_size-1 committed rows -- "
-            "INCOMPLETE, currently both slower (78 tail slices/iteration beat the shorter "
-            "forward) and wrong by one committed token at OSL 128. Token equality against "
-            "from-zero is the gate; see DFlashRunner.aligned_verify."
+            "aligned (default): prefill forward restarted at the page-block boundary below "
+            "the anchor, so it re-forwards at most page_block_size-1 committed rows. "
+            "from-zero: re-forward the whole prefix, O(prefix) and growing. decode / "
+            "decode_eager: verify as one batched decode step -- UNSOUND, kept only as a "
+            "recorded negative result, because decode rows do not reliably see each "
+            "other's same-step K/V writes; see DFlashRunner.verify_mode."
+        ),
+    )
+    parser.add_argument(
+        "--page-block",
+        type=int,
+        default=None,
+        help=(
+            "paged KV block size. The aligned verify restarts at a multiple of this, so it "
+            "sets how many committed rows get re-forwarded: 64 means up to 63, 32 means up "
+            "to 31. 32 is the floor -- chunked SDPA needs start_pos to be a multiple of the "
+            "32-row tile."
         ),
     )
     parser.add_argument("--out", default=None)
@@ -94,7 +105,17 @@ def main() -> None:
     mesh = open_generator_mesh()
     try:
         logger.info("building target generator ...")
-        gen = build_generator(".", mesh, max_batch_size=1, max_seq_len=args.max_seq_len)
+        # The decode verify puts the block's 16 rows in the decode batch, so the batch must
+        # be at least block_size.  This costs nothing: the port documents that the decode
+        # step always runs 32 rows with inactive ones carrying current_pos = -1, and it
+        # measured 70.35 ms at 16 active users against 72.12 ms at 1.
+        build_kwargs = {
+            "max_batch_size": 32 if args.verify.startswith("decode") else 1,
+            "max_seq_len": args.max_seq_len,
+        }
+        if args.page_block:
+            build_kwargs["page_block_size"] = args.page_block
+        gen = build_generator(".", mesh, **build_kwargs)
         tok = gen.tokenizer
 
         if args.prompts_file:
@@ -116,7 +137,8 @@ def main() -> None:
             drafter,
             padded_drafting=args.drafting in ("padded", "padded-exact"),
             pad_context=args.drafting == "padded",
-            aligned_verify=args.verify == "aligned",
+            aligned_verify=args.verify != "from-zero",
+            verify_mode=args.verify if args.verify.startswith("decode") else "prefill",
         )
 
         per_prompt = []
@@ -204,6 +226,7 @@ def main() -> None:
             "prompt_tokens": len(prompt_ids),
             "drafter_weight_dtype": args.drafter_dtype,
             "drafting": args.drafting,
+            "page_block": args.page_block,
             "verify": args.verify,
             "dflash": stats.as_dict(),
             "dflash_token_ids": dflash_tokens,

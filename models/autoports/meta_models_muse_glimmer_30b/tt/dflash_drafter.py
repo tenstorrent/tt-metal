@@ -469,6 +469,16 @@ class _DFlashLayer(LightweightModule):
         key = self._apply_rope(key, *rope)
         return key, value
 
+    # NOTE: serving the 32 query heads from 8 K/V heads by *grouping the queries*
+    # (reshaping ``[1, 32, block, d]`` to ``[1, 8, 4*block, d]``) instead of
+    # ``repeat_interleave``-ing K and V looks exactly equivalent and copies nothing, and
+    # it does not work here.  TILE layout pads the ``-2`` dimension to 32, so with
+    # ``block == 16`` each head occupies a 32-row tile of which half is padding; a
+    # reshape that merges heads into the row axis therefore crosses those padding rows
+    # and is not a relabelling of the same bytes.  Measured: PCC against the HF goldens
+    # collapses (15 of 25 drafter tests fail) while the encoder tests, which touch no
+    # head dimension, still pass.  It would be valid at ``block >= 32``.
+
     def _attend(self, query: ttnn.Tensor, key: ttnn.Tensor, value: ttnn.Tensor, mask: ttnn.Tensor, block: int):
         config = self.config
         key = ttnn.repeat_interleave(key, config.num_kv_groups, dim=1)

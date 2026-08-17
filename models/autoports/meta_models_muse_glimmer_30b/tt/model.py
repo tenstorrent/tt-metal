@@ -586,12 +586,27 @@ class _LMHead(LightweightModule):
             return ttnn.to_memory_config(hidden, self.input_memcfg), True
         return ttnn.interleaved_to_sharded(hidden, self.input_memcfg), True
 
-    def forward(self, hidden: ttnn.Tensor) -> ttnn.Tensor:
+    def forward(self, hidden: ttnn.Tensor, *, apply_softcap: bool = True) -> ttnn.Tensor:
         """``[1, 1, 32, hidden]`` -> vocab-sharded ``[1, 1, 32, local_vocab]``.
 
         Returns DRAM-interleaved bf16 TILE logits, which is what the sampler
         requires of its input and what its per-device index offsets assume the
         shard layout to be.
+
+        ``apply_softcap=False`` returns the **pre-cap** logits, for callers that only
+        take an ``argmax``.  ``T * tanh(x)`` is strictly monotonic, so it cannot change
+        an argmax in exact arithmetic -- but it destroys one in **bf16**.  bf16 spacing
+        near 1.0 is ``2**-8`` = 0.0039 and ``tanh(x) > 0.996`` for ``x > 3.1``, so every
+        pre-cap logit above ~3.1 saturates to the *same* bf16 value and the winner among
+        the strong candidates becomes whichever index the reduction happens to visit
+        first.  Speculative decoding is exactly the workload that cannot afford this: a
+        drafted token is accepted only when the drafter's argmax equals the target's, so
+        ties on both sides turn agreement into a coin flip and cost acceptance rate.
+        HF's own candidate path uses the raw ``nn.Linear`` for this reason.
+
+        Skipping the cap is also two ops cheaper, so there is no reason for an
+        argmax-only caller to pay for it.  Sampling must keep it: the cap shapes the
+        distribution, and only its effect on *argmax* is a no-op.
         """
         hidden_in, owned = self._as_input(hidden)
         logits = ttnn.linear(
@@ -608,6 +623,15 @@ class _LMHead(LightweightModule):
             interleaved = ttnn.sharded_to_interleaved(logits, ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(logits)
             logits = interleaved
+        if not apply_softcap:
+            # Same DRAM-interleaved contract the softcapped path below honours: callers
+            # (the sampler, gather_and_untilize_logits) assume interleaved vocab shards,
+            # and with softcap_in_l1 the matmul output is still sharded at this point.
+            if logits.is_sharded():
+                interleaved = ttnn.sharded_to_interleaved(logits, ttnn.DRAM_MEMORY_CONFIG)
+                ttnn.deallocate(logits)
+                logits = interleaved
+            return logits
         memcfg = logits.memory_config()
         capped = ttnn.tanh(logits, memory_config=memcfg)
         ttnn.deallocate(logits)
@@ -1469,7 +1493,7 @@ class MuseGlimmerModel(LightweightModule):
         self._sliding_tails = next_tails if keep_sliding_tails else None
         return hidden
 
-    def prefill_logits(self, hidden: ttnn.Tensor, *, last_token_index: int) -> ttnn.Tensor:
+    def prefill_logits(self, hidden: ttnn.Tensor, *, last_token_index: int, apply_softcap: bool = True) -> ttnn.Tensor:
         """Vocab-sharded logits for one prompt position, from the prefill hidden state.
 
         The LM head runs on the single tile row that holds ``last_token_index``,
@@ -1479,11 +1503,13 @@ class MuseGlimmerModel(LightweightModule):
         row = self._slice_rows(hidden, last_token_index)
         normed = self.final_norm.forward(row)
         ttnn.deallocate(row)
-        logits = self.lm_head.forward(normed)
+        logits = self.lm_head.forward(normed, apply_softcap=apply_softcap)
         ttnn.deallocate(normed)
         return logits
 
-    def prefill_all_logits(self, hidden: ttnn.Tensor, *, prompt_len: int) -> list[ttnn.Tensor]:
+    def prefill_all_logits(
+        self, hidden: ttnn.Tensor, *, prompt_len: int, apply_softcap: bool = True
+    ) -> list[ttnn.Tensor]:
         """Vocab-sharded logits for every prompt position, one tile row at a time.
 
         Only the readiness prefill check needs this.  It is deliberately a list of
@@ -1496,7 +1522,7 @@ class MuseGlimmerModel(LightweightModule):
             row = self._slice_rows(hidden, offset, aligned=True)
             normed = self.final_norm.forward(row)
             ttnn.deallocate(row)
-            outputs.append(self.lm_head.forward(normed))
+            outputs.append(self.lm_head.forward(normed, apply_softcap=apply_softcap))
             ttnn.deallocate(normed)
         return outputs
 
