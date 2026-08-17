@@ -185,8 +185,10 @@ def _skip_unsupported(formats, dest_acc):
         formats.input_format == DataFormat.Float16_b
         and dest_acc == DestAccumulation.Yes
     ):
-        pytest.skip("Float16_b with dest_acc=Yes adds nothing here: the pack layout, "
-                    "not the DEST width, is what this test varies")
+        pytest.skip(
+            "Float16_b with dest_acc=Yes adds nothing here: the pack layout, "
+            "not the DEST width, is what this test varies"
+        )
 
 
 @parametrize(
@@ -234,9 +236,7 @@ def test_custom_mm_uninit_keeps_pack_mop_when_not_asked(
         formats, dest_acc, dense_packing, restore_mop=False, skip_uninit=False
     )
 
-    assert not passed_test(
-        golden, device, formats.output_format, print_errors=False
-    ), (
+    assert not passed_test(golden, device, formats.output_format, print_errors=False), (
         f"{family}_block_uninit<restore_tile_pack_mop=false> left the packer in a "
         "state where a plain _llk_pack_ reproduced the DEST tiles -- the block MOP "
         "installed before the uninit appears to have been restored anyway"
@@ -262,9 +262,7 @@ def test_custom_mm_uninit_is_load_bearing(family, formats, dest_acc, dense_packi
         formats, dest_acc, dense_packing, restore_mop=True, skip_uninit=True
     )
 
-    assert not passed_test(
-        golden, device, formats.output_format, print_errors=False
-    ), (
+    assert not passed_test(golden, device, formats.output_format, print_errors=False), (
         "run 1 reproduced the DEST tiles with no uninit at all, so neither the "
         "W-stride nor the pack-MOP restore is observable here -- this test has lost "
         "its teeth and the setup needs revisiting"
