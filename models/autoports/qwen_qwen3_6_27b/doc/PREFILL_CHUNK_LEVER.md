@@ -218,3 +218,107 @@ produced by a multiply.
 
 Both of these are worth measuring only after the chunk sweep, because the chunk
 result determines how many scan steps exist to optimise in the first place.
+
+---
+
+## Root cause: the gated-delta prefill path was never optimised
+
+Added 2026-08-17 from the committed functional-decoder profile plus the optimized
+decoder's own source. This supersedes the framing above — the chunk size matters,
+but it is a symptom of something larger.
+
+### The optimized decoder delegates its linear prefill to the correctness-first code
+
+`optimized_decoder.py:_linear_attention_prefill_chunk` does not implement an
+optimised scan. It expands the recurrent state to FP32, calls the functional
+implementation, and compresses the result back:
+
+```python
+state_dtype = self.policy.linear_recurrent_state_dtype
+if state_dtype == ttnn.float32:
+    return FunctionalDecoder._linear_attention_prefill_chunk(self, hidden_states)
+...
+output = FunctionalDecoder._linear_attention_prefill_chunk(self, hidden_states)
+```
+
+Its own docstring is explicit: *"run the proven implementation **unchanged**"*.
+
+Decode was optimised thoroughly — packed projections, fused CCL, traced replay,
+DRAM-sharded matmuls. MLP and generic projections got optimised prefill paths
+(`_prefill_linear`, `_mlp_prefill`). But the **gated-delta token mixer's prefill —
+48 of 64 layers — is still the stage-01 correctness-first implementation** with a
+dtype wrapper around it.
+
+### What that implementation costs, measured
+
+From `doc/functional_decoder/tracy/linear_attention_prefill_s5/prefill_perf_report.csv`,
+**one** linear-attention layer, **one** chunk:
+
+| op family | n | % of ops | device µs | gap µs | % of wall |
+|---|---:|---:|---:|---:|---:|
+| BinaryNg | 78 | 19.5% | 454 | **992** | 12.5% |
+| Matmul | 43 | 10.8% | 6264 | 188 | 55.8% |
+| Unary | 36 | 9.0% | 111 | **550** | 5.7% |
+| ReshapeView | 35 | 8.8% | 281 | 154 | 3.8% |
+| UntilizeWithUnpadding | 34 | 8.5% | 482 | 114 | 5.2% |
+| Transpose | 30 | 7.5% | 92 | 133 | 1.9% |
+| Permute | 30 | 7.5% | 334 | 45 | 3.3% |
+| Slice | 25 | 6.3% | 291 | 17 | 2.7% |
+| TilizeWithValPadding | 25 | 6.3% | 309 | 136 | 3.8% |
+| Concat, FillPad, Reduce, Copy, LayerNorm | 63 | 15.8% | 483 | 125 | 5.3% |
+| **total** | **399** | | **9101** | **2452** | |
+
+Three things stand out:
+
+1. **43 of 399 ops (11%) are matmuls.** The other **356 (89%) are layout and
+   elementwise glue** — 59 tile/untile conversions, 120 pure data-movement ops
+   (reshape/transpose/permute/slice), 114 elementwise ops.
+2. **For the small ops, dispatch costs more than the work.** BinaryNg: 992 µs gap
+   against 454 µs device. Unary: 550 µs gap against 111 µs device, a **5× ratio**.
+   Overall gap is 21% of wall time in this layer.
+3. **All 399 are per chunk.** `_linear_attention_prefill` slices
+   `hidden_states[:, :, start:stop, :]` and calls the chunk function, so the
+   projections, norms, layout conversions and elementwise work all repeat for every
+   32-token slice — not just the scan.
+
+### Why this explains ~3.8 s, and why the chunk is a big lever
+
+At S=128 with chunk 32 there are 4 chunks per linear layer:
+
+```
+48 linear layers x 4 chunks x ~399 ops  ~=  76,600 ops
+16 full-attention layers x ~73 ops      ~=   1,170 ops
+                                        ~=  78,000 device ops
+```
+
+At a warm TTFT of 3,784 ms that is **~48 µs per op**, which is dispatch-scale.
+The 48 gated-delta layers account for ~98% of the op count.
+
+So raising the chunk does far more than shorten the scan: it divides *the entire
+per-chunk op count* by `S/C`. Going 32 → 128 at S=128 collapses 4 chunks into 1 —
+roughly a **4× reduction in device ops** — while making each tensor 4× wider, which
+is the direction this hardware prefers. The scan's `log2(C)` work growth applies
+only to the 43 matmuls, and only the handful that are scan matmuls.
+
+### Caveats, because this is extrapolation from one small profile
+
+- The profile is **S=5, one chunk, functional decoder**. S=5 pads to a single
+  32-tile, so a chunk-32 slice should cost similarly, but that is an assumption.
+- The optimized decoder wraps rather than replaces this path, so its op count
+  should be close, plus two typecasts per chunk. Not confirmed by a profile.
+- The 78,000-op figure is arithmetic on those assumptions, not a measurement. The
+  confirming measurement is an optimized-path prefill profile at S=128, which does
+  not exist on this branch.
+
+### What this reprioritises
+
+The chunk sweep already queued now tests the cheap version of this (one constant,
+no code change). But the larger finding is that **prefill optimisation was never
+done for the dominant layer type**, and the 89%-glue op mix says the ceiling is
+much higher than a constant can reach: fusing the elementwise chains, removing the
+tile/untile round trips at the conv and recurrent boundaries, and hoisting the
+per-chunk constants are all still available.
+
+That also reframes the stage-08 precision work. It ranked candidates on a metric
+that moves the 11% of ops that are matmuls, while 89% of the ops — and all of the
+dispatch overhead — were untouched by any precision choice.
