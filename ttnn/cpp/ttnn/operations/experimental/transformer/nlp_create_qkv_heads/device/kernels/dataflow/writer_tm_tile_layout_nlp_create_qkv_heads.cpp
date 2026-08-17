@@ -6,48 +6,41 @@
 #include <array>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
     Noc noc;
 
     // WRITER RUNTIME ARGS
-    uint32_t q_tensor_addr = get_arg_val<uint32_t>(0);
-    uint32_t k_tensor_addr = get_arg_val<uint32_t>(1);
-    uint32_t v_tensor_addr = get_arg_val<uint32_t>(2);
-    uint32_t num_blocks = get_arg_val<uint32_t>(3);
-    uint32_t q_out_h_dim = get_arg_val<uint32_t>(4);
-    uint32_t q_out_tensor_tile_id = get_arg_val<uint32_t>(5);
-    uint32_t k_out_tensor_tile_id = get_arg_val<uint32_t>(6);
-    uint32_t v_out_tensor_tile_id = get_arg_val<uint32_t>(7);
+    uint32_t num_blocks = get_arg(args::num_blocks);
+    uint32_t q_out_h_dim = get_arg(args::q_out_h_dim);
+    uint32_t q_out_tensor_tile_id = get_arg(args::q_out_tensor_tile_id);
+    uint32_t k_out_tensor_tile_id = get_arg(args::k_out_tensor_tile_id);
+    uint32_t v_out_tensor_tile_id = get_arg(args::v_out_tensor_tile_id);
 
     // COMPILE TIME ARGS
-    constexpr uint32_t q_out_h_tiles = get_compile_time_arg_val(0);
-    constexpr uint32_t q_out_w_tiles = get_compile_time_arg_val(1);
-    constexpr uint32_t q_out_HtWt = get_compile_time_arg_val(2);
-    constexpr uint32_t q_out_c = get_compile_time_arg_val(3);
-    constexpr uint32_t kv_out_c = get_compile_time_arg_val(4);
-    constexpr auto q_args = TensorAccessorArgs<5>();
-    constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
-    constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
+    constexpr uint32_t q_out_h_tiles = get_arg(args::q_out_h_tiles);
+    constexpr uint32_t q_out_w_tiles = get_arg(args::q_out_w_tiles);
+    constexpr uint32_t q_out_HtWt = get_arg(args::q_out_HtWt);
+    constexpr uint32_t q_out_c = get_arg(args::q_out_c);
+    constexpr uint32_t kv_out_c = get_arg(args::kv_out_c);
 
-    constexpr uint32_t cb_id_qv = 1;  // cb for Q, V heads tiles
+    const auto sq = TensorAccessor(tensor::q);
+    const auto sk = TensorAccessor(tensor::k);
+    const auto sv = TensorAccessor(tensor::v);
+
+    DataflowBuffer cb_qv(dfb::qv);  // cb for Q, V heads tiles
 #ifdef TRANSPOSE_K_HEADS
-    constexpr uint32_t cb_id_k = 16;  // cb for K heads (filled by compute)
+    DataflowBuffer cb_k(dfb::k_out);  // cb for K heads (filled by compute)
 #else
-    constexpr uint32_t cb_id_k = 1;  // cb for K heads (directly from reader)
+    DataflowBuffer cb_k(dfb::qv);  // cb for K heads (directly from reader; same buffer as Q, V)
 #endif
-    const auto sq = TensorAccessor(q_args, q_tensor_addr);
-    const auto sk = TensorAccessor(k_args, k_tensor_addr);
-    const auto sv = TensorAccessor(v_args, v_tensor_addr);
 
-    CircularBuffer cb_qv(cb_id_qv);
-    CircularBuffer cb_k(cb_id_k);
-
-    const uint32_t tile_bytes_qv = get_tile_size(cb_id_qv);
-    const uint32_t tile_bytes_k = get_tile_size(cb_id_k);
+    const uint32_t tile_bytes_qv = cb_qv.get_tile_size();
+    const uint32_t tile_bytes_k = cb_k.get_tile_size();
 
     constexpr uint32_t block_size = 1;  // micro-block size for read/write; nothing to do with num_blocks
     // TODO: This might negatively impact perf
