@@ -2541,10 +2541,8 @@ TEST(MeshGraphDescriptorTests, VectorReallocPreservesConnectionsByTypeLookup) {
         << "First MGD's MESH connection index must survive vector reallocation";
     EXPECT_FALSE(mgds[1].connections_by_type("FABRIC").empty())
         << "Dual MGD should retain FABRIC connections after emplace";
-// Verify the skip_links pattern (axis=ROW start=2 step=4) expands into the expected intra-mesh Z edges
-// on the shared 8x4 [LINE, RING] descriptor (also used by the routing/lowering tests).
-// skip_links expands into the expected intra-mesh Z edges on the 8x4 [LINE, RING] descriptor.
-TEST(MeshGraphDescriptorTests, SkipLinks8x4) {
+}
+
 // express_links expands into the expected intra-mesh Z edges on the 8x4 [LINE, RING] descriptor.
 TEST(MeshGraphDescriptorTests, ExpressLinks8x4) {
     const std::filesystem::path desc_path =
