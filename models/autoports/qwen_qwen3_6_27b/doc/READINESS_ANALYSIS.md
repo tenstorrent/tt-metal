@@ -79,3 +79,48 @@ Functionally complete and serving at full context. The blocker is environmental
 and one decision away. The substantive engineering debt is TTFT and the
 untested long-generation path — the second of which is now known to be where a
 sibling port actually broke.
+
+---
+
+## CORRECTION: the Docker blocker is scoped to the agent, not to this machine
+
+I recorded stage 11 as a "genuine infrastructure blocker". That is right for the
+stage agent and wrong as a statement about what is possible here. Tested
+2026-08-17:
+
+| test | result |
+|---|---|
+| Docker server reachable from the host | **yes**, 29.2.1 |
+| `mvasiljevic-ttxla` network | bridge, IP **172.17.0.2**, no published ports |
+| host -> container port 8000 (the vLLM port) | **HTTP 200** |
+| sibling container with `/var/run/docker.sock` mounted can drive Docker | **yes** (listed running containers) |
+
+So the accurate statement is: **the stage agent runs inside
+`mvasiljevic-ttxla`, which has no docker CLI and no `/var/run/docker.sock`, so
+from inside that container Terminal-Bench genuinely cannot run.** Its diagnosis
+was correct for its own scope. But the operator is not confined there, and
+`terminal_bench_2` is satisfiable on this machine without any new hardware or
+access:
+
+1. Serve from `mvasiljevic-ttxla` exactly as stages 09–11 already did (the TT
+   devices stay where they are).
+2. Run the Harbor / Terminal-Bench client **outside** that container — either on
+   the host or in a sibling container started with
+   `-v /var/run/docker.sock:/var/run/docker.sock`, which lets Terminal-Bench
+   spawn its own task containers.
+3. Point `api_base` at **`http://172.17.0.2:8000`** instead of loopback. This is
+   precisely what the stage's own AutoFix plan asked for — "changing only
+   `api_base` from loopback to the verified host-reachable address. Harbor is
+   client-side and must not mount or access TT devices" — and the address is now
+   verified reachable.
+
+Setup cost is real, not zero: TTI's `.workflow_venvs` live inside
+`mvasiljevic-ttxla`, so a sibling container needs either a bind-mount of
+`/home/mvasiljevic/tt-inference-server` (visible on the host at that same path)
+or its own install, plus the HF token. That is work, but it is work rather than a
+wall.
+
+**What this does not change:** the audit records this model scoring **0.0 on both
+`terminal_bench_2` and `swe_bench_verified`** in its earlier Exp19 TTI run, so the
+eval may well run and score zero. The value of unblocking is a real number in
+place of an unknown, not a likely pass.
