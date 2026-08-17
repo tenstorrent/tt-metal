@@ -91,14 +91,80 @@ STALE_SECS="${STALE_SECS:-240}"
 # Path of the Nth outer-iteration log (zero-padded): log_for 3 -> <dir>/log_03
 log_for() { printf "%s/log_%02d" "$1" "$2"; }
 
+# Decode a shell exit status into a signal name. 128+N means "killed by signal N",
+# and the distinction matters: 135 (SIGBUS) is a failed host mapping — the tt-kmd
+# pin_user_pages failure mode — while 139 (SIGSEGV) or 134 (SIGABRT) point at the
+# process itself. Anything under 128 is pytest's own status, not a signal.
+sig_name() {
+  local rc="$1"
+  if [ "$rc" -lt 128 ]; then echo "exit $rc"; return; fi
+  case $((rc - 128)) in
+    6) echo "SIGABRT" ;;
+    7) echo "SIGBUS" ;;
+    9) echo "SIGKILL" ;;
+    11) echo "SIGSEGV" ;;
+    15) echo "SIGTERM" ;;
+    *) echo "signal $((rc - 128))" ;;
+  esac
+}
+
+# Host-state post-mortem for a failed iteration: crash_snapshot <dir> <n> <rc> <log>
+# Writes <dir>/crash_NN.txt. Everything in here is readable without root, on purpose
+# — the kernel ring buffer is off limits on these nodes, so the substitute is the
+# state that precedes the driver's complaint: how many 1 GB hugepages are free (one
+# per PCIe device is needed; a crashed run that has not released its pages leaves
+# free < devices, and the NEXT run is the one that dies), the process's pinning
+# limits, and anything still holding the devices.
+crash_snapshot() {
+  local dir="$1" n="$2" rc="$3" log="$4"
+  local out ndev hp1g hp2m
+  out=$(printf "%s/crash_%02d.txt" "$dir" "$n")
+  hp1g=/sys/kernel/mm/hugepages/hugepages-1048576kB
+  hp2m=/sys/kernel/mm/hugepages/hugepages-2048kB
+  ndev=$(ls /sys/bus/pci/drivers/tenstorrent/ 2>/dev/null | grep -c '^0000:')
+
+  {
+    echo "=== crash snapshot: iteration $n on $(hostname -s) at $(date '+%F %T %Z')"
+    echo "exit=$rc ($(sig_name "$rc"))   log=$log"
+    echo
+    echo "--- hugepages (1 GB pool: one page per PCIe device, $ndev bound)"
+    printf "1G  nr=%s free=%s resv=%s surplus=%s\n" \
+      "$(cat $hp1g/nr_hugepages 2>/dev/null)" "$(cat $hp1g/free_hugepages 2>/dev/null)" \
+      "$(cat $hp1g/resv_hugepages 2>/dev/null)" "$(cat $hp1g/surplus_hugepages 2>/dev/null)"
+    printf "2M  nr=%s free=%s\n" \
+      "$(cat $hp2m/nr_hugepages 2>/dev/null)" "$(cat $hp2m/free_hugepages 2>/dev/null)"
+    grep -E '^(MemTotal|MemFree|MemAvailable|Hugetlb):' /proc/meminfo
+    echo "hugetlbfs files still present:"; ls -l /dev/hugepages-1G/ 2>&1 | tail -n +2
+    echo
+    echo "--- limits (shell)"
+    # ulimit -l is kB and bash cannot print anything else, so convert: a raw
+    # 74202924 reads like bytes and hides that this is ~71 GiB, i.e. not the limit.
+    echo "memlock=$(awk -v k="$(ulimit -l)" 'BEGIN{printf "%.1f", k/1048576}') GiB  nofile=$(ulimit -n)  nproc=$(ulimit -u)"
+    echo
+    echo "--- processes still holding the devices"
+    pgrep -af 'pytest|test_prefill' 2>/dev/null || echo "(none)"
+    for p in $(pgrep -f 'pytest.*test_prefill_transformer_chunked' 2>/dev/null); do
+      echo "pid $p:"
+      grep -E '^(VmRSS|VmLck|VmPin):' "/proc/$p/status" 2>/dev/null
+      grep -E 'Max locked memory|Max open files' "/proc/$p/limits" 2>/dev/null
+    done
+    echo
+    echo "--- fatal error block from the log (if any)"
+    grep -m1 -A6 'Fatal Python error' "$log" 2>/dev/null || echo "(no faulthandler dump)"
+    echo
+    echo "--- last 30 log lines"
+    tail -30 "$log" 2>/dev/null
+  } > "$out" 2>&1
+}
+
 # Scan one log dir over outer iterations 1..LOOP.
-# Sets globals: pass fail hang running pending, and the `details` array.
+# Sets globals: pass fail crash hang running pending, and the `details` array.
 scan_log_dir() {
   local dir="$1"
-  pass=0; fail=0; hang=0; running=0; pending=0
+  pass=0; fail=0; crash=0; hang=0; running=0; pending=0
   details=()
 
-  local i f next N iter layer mtime now idle elapsed loading progress
+  local i f next N iter layer mtime now idle elapsed loading progress rc
   for i in $(seq 1 "$LOOP"); do
     f=$(log_for "$dir" "$i")
     next=$(log_for "$dir" $((i + 1)))
@@ -114,6 +180,18 @@ scan_log_dir() {
     elif grep -qE '^=+.*(1 failed|1 error)' "$f" 2>/dev/null; then
       details+=("  $N: FAIL")
       ((fail++))
+    elif rc=$(grep -oE 'TEST_DONE_EXIT=[0-9]+' "$f" 2>/dev/null | tail -1 | cut -d= -f2) &&
+      [ -n "$rc" ] && [ "$rc" -ge 128 ]; then
+      # Killed by a signal: pytest never printed a summary, so the PASS/FAIL greps
+      # above both miss it and the mtime logic below would call it HANG?. See
+      # crash_NN.txt in this dir for the host state at the time.
+      details+=("  $N: CRASH  $(sig_name "$rc")")
+      ((crash++))
+    elif grep -q 'Fatal Python error' "$f" 2>/dev/null; then
+      # Same thing caught mid-flight: the faulthandler dump is in the log but the
+      # exit line has not been appended yet (or predates that change).
+      details+=("  $N: CRASH  $(grep -m1 -oE 'Fatal Python error: .*' "$f")")
+      ((crash++))
     else
       # Single-shot test logs "Starting iteration:"; the chunked no-PCC test logs
       # "iter N done (C chunks) in ...s" once per completed outer iteration.

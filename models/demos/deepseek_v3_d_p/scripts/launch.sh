@@ -79,7 +79,9 @@ done
 STRESS_CMD="$RUN_ENV $SCRIPTS/stress.sh $LOG_NAME $LOOP_CNT |& tee $TT_METAL_HOME/$LOG_NAME.log"
 WATCH_CMD="$RUN_ENV $SCRIPTS/watch.sh $LOG_NAME $LOOP_CNT"
 TAIL_CMD="$RUN_ENV $SCRIPTS/tail.sh $LOG_NAME $LOOP_CNT"
-HOST_CMD="$SCRIPTS/host_stats.sh"
+# log_name only, so the pane appends its 60s snapshots to <log dir>/host_stats.tsv.
+# No run env: it watches the box, not a run point.
+HOST_CMD="$SCRIPTS/host_stats.sh $LOG_NAME"
 
 run_pane() { printf 'bash -l -c %q' "$1"; }
 
