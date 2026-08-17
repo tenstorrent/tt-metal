@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+# git-guard.sh — PreToolUse(Bash) guard for codegen runs.
+#
+# Two jobs:
+#   1. Log every bash command the agent runs, with an OK/BLOCK verdict, so a run can
+#      be audited with `grep BLOCK`.
+#   2. During a blind run, deny commands that read git history, so a regeneration
+#      cannot recover the implementation that was hidden for the run.
+#
+# Why this exists: a codegen worktree shares the parent repo's object store, so every
+# deleted blob is still reachable. Telling the agent not to look is not enforcement.
+# This is the enforcement for the shell path; the permissions.deny rules in
+# ../settings.json cover the Read/Grep/Glob path, which never touches a shell and so
+# never reaches this script (and therefore is NOT recorded in this log).
+#
+# Blocking is opt-in per run. Without CODEGEN_BLIND_RUN this hook only logs, so it does
+# not contradict the read-only-git-is-allowed policy in ../CLAUDE.md and
+# ../codegen/CLAUDE.md — the codegen router legitimately uses `git log` / `git show`.
+#
+# Log line format (tab separated):
+#     <UTC timestamp>  <session id>  <OK|BLOCK>  <command, newlines flattened>
+#
+# Log location: $CODEGEN_GUARD_LOG, else $TMPDIR/codegen-git-guard-<session id>.log.
+# The pipeline points CODEGEN_GUARD_LOG at "$LOG_DIR/git-guard.log" so the audit trail
+# is stored exactly like state.json and the agent transcripts.
+
+set -uo pipefail
+
+BLIND="${CODEGEN_BLIND_RUN:-0}"
+
+payload=$(cat)
+
+# Line 1 = session id, line 2.. = the raw command (may span lines).
+meta=$(printf '%s' "$payload" | python3 -c 'import json,sys
+try:
+    d = json.load(sys.stdin)
+    print(str(d.get("session_id") or "nosession"))
+    print(d.get("tool_input", {}).get("command", "") or "")
+except Exception:
+    print("nosession"); print("")' 2>/dev/null)
+sid=$(printf '%s' "$meta" | head -1)
+cmd=$(printf '%s' "$meta" | tail -n +2)
+
+# One log per run — a shared file would make lines unattributable. The default is keyed
+# by session id so a hand-started session still gets its own file. The pipeline collects
+# this file into the run's LOG_DIR at the end of the run (execute_step_extract_transcripts).
+LOG="${CODEGEN_GUARD_LOG:-${TMPDIR:-/tmp}/codegen-git-guard-${sid}.log}"
+
+# Blind mode can also be armed by a marker file, which is how the pipeline does it:
+# HIDE_EXISTING_KERNEL is chosen *after* Claude has started, and a running process's
+# environment cannot be changed from the outside. The marker can be created mid-session.
+if [ "$BLIND" != "1" ] && [ -f "${TMPDIR:-/tmp}/codegen-blind-run-${sid}" ]; then
+    BLIND=1
+fi
+
+# A history-reading git subcommand. Allows for a path prefix (/usr/bin/git), a
+# `command` prefix, and leading options such as `-C <dir>` or `--no-pager`.
+SUBCMD='(^|[^[:alnum:]_-])git([[:space:]]+(-[^[:space:]]+|-C[[:space:]]+[^[:space:]]+))*[[:space:]]+(log|reflog|rev-list|cat-file|blame|stash|fsck|archive|show)([^[:alnum:]_-]|$)'
+
+# Any explicit reference to an older revision, or a raw read of the object store. The
+# bare-SHA pattern is what stops `git worktree add <dir> <old-sha>` and
+# `git checkout <old-sha> -- <path>`; `worktree` itself stays allowed because the
+# pipeline creates its own worktrees.
+REVREF='HEAD~|HEAD\^|@\{|\.git/(logs|objects|refs|packed-refs)|(^|[^[:alnum:]])[0-9a-f]{7,40}([^[:alnum:]]|$)'
+
+# Cheap gate: only inspect commands that mention git or a .git path at all.
+GITISH='(^|[^[:alnum:]_-])git([^[:alnum:]_-]|$)|\.git/'
+
+verdict=OK
+if [ "$BLIND" = "1" ] && printf '%s' "$cmd" | grep -qE "$GITISH"; then
+    if printf '%s' "$cmd" | grep -qE "$SUBCMD" || printf '%s' "$cmd" | grep -qE "$REVREF"; then
+        verdict=BLOCK
+    fi
+fi
+
+# Record the command and the verdict. Newlines and tabs are flattened so every command
+# is exactly one greppable line.
+cmd_flat=$(printf '%s' "$cmd" | tr '\n\t' '  ')
+mkdir -p "$(dirname "$LOG")" 2>/dev/null || true
+printf '%s\t%s\t%s\t%s\n' \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$sid" "$verdict" "$cmd_flat" >> "$LOG" 2>/dev/null || true
+
+if [ "$verdict" = "BLOCK" ]; then
+    reason="Blocked by git-guard: this codegen run is a blind regeneration, so reading git history (or an older revision) is not permitted. git status/add/commit and a bare 'git diff' are allowed."
+    printf '%s\n' "$reason" >&2
+    python3 -c 'import json,sys; print(json.dumps({"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":sys.argv[1]}}))' "$reason"
+fi
+
+exit 0

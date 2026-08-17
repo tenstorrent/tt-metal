@@ -403,6 +403,23 @@ execute_step_hide_existing_kernel() {
     # file this run deliberately ignored. Space-separated: every path is repo-relative and
     # space-free.
     ss HIDDEN_FILES "${hidden[*]}"
+
+    # Arm .claude/hooks/git-guard.sh for the rest of this session: from here on it denies
+    # every git-history read, so the implementation just hidden cannot be recovered from the
+    # object store the worktree shares with the parent repo. A marker file is used rather
+    # than an env var because HIDE_EXISTING_KERNEL is decided after Claude has started and a
+    # running process's environment cannot be changed from outside.
+    local _sid
+    _sid="$(sg SESSION_ID 2>/dev/null || echo "")"
+    [ -z "$_sid" ] && _sid="$(python "$_ORCH_SCRIPTS/session_cost.py" --print-session 2>/dev/null | awk '{print $1}')"
+    if [ -n "$_sid" ]; then
+        _disk_guard touch "${TMPDIR:-/tmp}/codegen-blind-run-${_sid}" || return $?
+        ss GUARD_ARMED true --json
+        echo "  git-guard armed (blind mode) for session $_sid"
+    else
+        ss GUARD_ARMED false --json
+        echo "  WARNING: SESSION_ID unresolved — git-guard NOT armed; this run is not blind-safe"
+    fi
     # Guard: a test source left on the branch that #includes a header we just hid makes the
     # run's compile fail in a way no agent can repair — worst under LOCK_TESTS, where the
     # tester may not touch tests. Scan the run's own compile scope (tt-llk tests) and
@@ -1140,6 +1157,20 @@ execute_step_extract_transcripts() {
     python "$S/extract_run_transcripts.py" --log-dir "$_L" \
         ${sid:+--session-id "$sid" --project-cwd "$pcwd"} \
         || echo "extract_run_transcripts: skipped (non-fatal)"
+
+    # Collect the git-guard command log alongside the transcripts, and record how many
+    # commands it denied. GUARD_BLOCKS is the whole audit: 0 means this run never reached
+    # for git history; anything higher names the commands in git-guard.log.
+    local guard_src="${TMPDIR:-/tmp}/codegen-git-guard-${sid}.log" blocks=0
+    if [ -n "$sid" ] && [ -f "$guard_src" ]; then
+        _disk_guard cp "$guard_src" "$_L/git-guard.log" || return $?
+        blocks="$(grep -c $'\tBLOCK\t' "$_L/git-guard.log" 2>/dev/null || echo 0)"
+        rm -f "${TMPDIR:-/tmp}/codegen-blind-run-${sid}"
+        echo "git-guard: $(wc -l < "$_L/git-guard.log") command(s) logged, $blocks blocked"
+    else
+        echo "git-guard: no log for session ${sid:-<unknown>} (hook not active this run)"
+    fi
+    ss GUARD_BLOCKS "$blocks" --json
 }
 
 # ===========================================================================
