@@ -1,21 +1,29 @@
-# Performance examples — catalog
+# Performance catalog — examples + propositions
 
-Short, self-contained, **runnable** ops that each isolate one or two kernel-level performance
-concepts and **measure** them on device (real `ns`, never a claimed speedup). Use them to learn a
-pattern, then re-measure on your own shapes with each example's CLI / test.
+One catalog, two parts:
 
-**Reading order:** this file → the example's `README.md` → read the code and run the test only if
-you need to. For the ⭐ Starter examples, the *gist* below is often enough to act immediately.
+- **Part 1 — Realized examples**: short, self-contained, **runnable** ops that each isolate one or two
+  kernel-level performance concepts and **measure** them on device (real `ns`, never a claimed speedup).
+  Learn a pattern, then re-measure on your own shapes with the example's CLI / test.
+- **Part 2 — Propositions**: the cross-codebase "optimal vs non-optimal" data-movement lever checklist —
+  each with a code pointer, most **not yet built as an example**. These are the Mode-A candidate levers to
+  walk when enumerating algorithms with `/perf-ceiling-dm`. Levers already covered by a Part-1 example are
+  tagged **→ example**; the rest are open **propositions** — when you build one, promote it into Part 1.
 
-**Difficulty:**
+**Reading order:** this file → the example's `README.md` → the code + test only if you need to. For the
+⭐ Starter examples the *gist* is often enough to act immediately; for a proposition, follow its code pointer.
+
+**Difficulty (Part 1):**
 - **⭐ T1 Starter** — one knob/placement decision, no kernel restructure. Actionable from the gist.
 - **⭐⭐ T2 Intermediate** — a CB-sizing / transfer-shape / kernel change. Read the README.
 - **⭐⭐⭐ T3 Advanced** — kernel restructure, overlap scheduling, mcast / semaphores. Read the code.
 
-Every number below is stamped in that example's `report.md` with the box + arch it was measured
-on. They are illustrative of the *effect*, not CI bounds.
+Every number in Part 1 is stamped in that example's `report.md` with the box + arch it was measured on.
+Illustrative of the *effect*, not CI bounds.
 
 ---
+
+# Part 1 — Realized examples (runnable, measured)
 
 ## ⭐⭐ T2 — [`noc_placement`](noc_placement/README.md)
 **Concept:** two knobs for interleaved-DRAM NoC contention — core **placement** (column/row/diagonal)
@@ -48,6 +56,24 @@ core a contiguous tile-**column** range, capped by a `WT_CHUNK` constant so per-
 Same reader/compute/writer kernels; only the per-core `(start_page, num_pages)` and the active-core
 count change.
 
+## ⭐⭐ T2 — [`distribution_gate`](distribution_gate/README.md)
+**Concept:** work distribution — a fixed split axis fills the grid for one aspect ratio and strands
+the other; **gate** the specialized axis so fixing one regime does not regress the other.
+**Situation:** a height (tile-row) split strands **wide-short** tensors on ~1 core; a width
+(tile-column) split strands **tall-narrow** tensors on ~1 core — the trap is symmetric. The tempting
+"fix" for wide-short is to switch wholesale to a width split, but that switch **regresses every
+tall-narrow shape** the height split already handled.
+**Measured win:** each fixed split collapses on its bad regime — height_split is **7.25× slower** on
+`32×4096` (1 core), width_split is **6.15× slower** on `2048×32` (1 core) (WH B0, 64-core grid, bf16,
+relu). The **gated** variant (height by default, divert to width only when height under-fills) fills
+the grid on **both** regimes, and on shapes the height split already saturated (`2048×2048`, `2048×32`)
+it is **byte-identical to height_split** — a measured no-regression: gated 90665 ns vs height 90666 ns.
+**Gist:** don't switch a distribution scheme wholesale to fix one regime. Keep the conventional split
+as the default and divert to the specialized one **only behind a utilization predicate** (e.g. "the
+default fills ≤ 1/K of the grid"); when the gate doesn't trip the default path is untouched, so the
+shapes it already handled cannot regress. Same kernels; only the per-core tile rectangle / active-core
+count change.
+
 ## ⭐⭐ T2 — [`double_buffer`](double_buffer/README.md)
 **Concept:** keeping bytes in flight on the NoC for a DRAM reader→compute→writer pipeline, via three
 levers — outstanding reads per barrier (`block`), double-buffered CBs, and transfer size (dtype).
@@ -63,15 +89,6 @@ wall time. **No gain once DRAM-bandwidth-bound** — 64 cores hit **190.8 GB/s**
 and size each CB to `2 * block` tiles (double-buffered). Small sweet spot (~4–8); bigger wastes L1.
 Use the smallest dtype your accuracy allows. Skip all of it if you're already bandwidth-bound (enough
 cores) or compute-bound.
-
-## ⭐⭐ T2 — [`tile_reorder`](tile_reorder/README.md)
-**Concept:** transfer coalescing on a DRAM-bandwidth-bound move.
-**Situation:** a whole-tile relocation (permute / transpose-of-tiles) written the generic way —
-as many small sub-tile (face) writes with a barrier each.
-**Measured win:** relocating each **whole 2 KB tile in one NoC write** is at least as fast as, and
-on this move faster than, writing it as 4 × 512 B faces — bigger coalesced transactions hit higher
-achieved DRAM bandwidth. Reader on NoC0, writer on NoC1 to overlap.
-**Gist:** on a DRAM-bound move, move whole pages and batch barriers; don't scatter sub-tile faces.
 
 ## ⭐⭐ T2 — [`split_reader`](split_reader/README.md)
 **Concept:** when a *single* data-movement RISC-V is the bottleneck — saturated **issuing** NoC read
@@ -321,3 +338,209 @@ tile-index `reduce_scatter_mcast` wins instead (**~2×** over root) by paralleli
 at **1 tile/core** tree reduce wins again (low fan-in; reduce-scatter degenerates to one worker).
 Rule of thumb: **tree reduce when the grid is busy or the payload is tiny; tile-index reduce-scatter
 for an isolated, well-fed group.** On a 1-D group tree reduce collapses to the single root reduce.
+---
+
+# Part 2 — Propositions (levers, mostly not yet built as examples)
+
+A cross-codebase checklist of what separates an **optimal** op from a **non-optimal** one in tt-metal.
+**A–E are data movement** (placement, transaction shape, residency, compile-time specialization, host
+dispatch); **F is the compute-side precision cost** — the knobs whose expensive setting is the default,
+so an op pays for them by inheritance rather than by decision. The recurring theme:
+
+> **Optimal** = keep data in L1, move large coalesced transactions, overlap read/write streams, and
+> specialize at compile time.
+> **Non-optimal** = stream small pages through DRAM with generic runtime address-gen and a barrier
+> per transaction.
+
+Each lever has a code pointer (file + line, this branch). Levers already covered by a Part-1 example
+are tagged **→ example: `name`**; the rest are open **propositions** — build one and promote it. The
+whole list is the source of Mode-A candidate levers for `/perf-ceiling-dm`: walk it when enumerating
+competing algorithm ideas, then estimate each on your own transfers. Deep references:
+`tech_reports/Saturating_DRAM_bandwidth/Saturating_DRAM_bandwidth.md` (theory behind A–B, >92% DRAM BW
+on WH) and `tech_reports/AdvancedPerformanceOptimizationsForModels/AdvancedPerformanceOptimizationsForModels.md`
+(host-dispatch overlap, E). API surface: `tt_metal/hw/inc/api/dataflow/dataflow_api.h`.
+
+## A. Core / grid placement — the biggest single lever
+
+**A0. Active-core count is a per-regime correctness check, not a one-time choice.** Before the
+placement levers below, the *number* of active cores must be right for **every shape regime the op
+accepts** — a single distribution scheme can be optimal in one regime and pathological in another.
+The criterion:
+- **interleaved** → `active_cores == min(grid, total_tiles, bandwidth_knee)` — **but classify the bound
+  FIRST**, because the knee only exists for a **bandwidth-bound** op:
+  - **Bandwidth-bound** (big pages / coalesced reads that actually saturate DRAM/L1 BW) → the knee is a
+    **hard ceiling**: once achieved bandwidth plateaus,
+    extra cores add no bandwidth and only add dispatch/NoC overhead. If the knee is **below**
+    `total_tiles`, stop at the knee — more cores past it can be *slower*, not just wasteful.
+  - **Read/write-transaction-rate bound** (small pages — e.g. a 32-row stick at ≤128 B/page, the
+    typical layout-conversion reader) → there **is no reachable knee**: the op cannot hit DRAM
+    bandwidth at *any* core count because it is issue-rate limited, and the sync/dispatch floor scales
+    with **blocks-per-core**, so shedding cores *adds* cost. Here `bandwidth_knee = full grid` — use
+    **all** the cores. **Do not cap.** (Measured on tilize: applying a 16-core knee cap was **~2.4×
+    slower** — the knee clause was implemented, measured, and refuted precisely because the op is
+    transaction-rate bound at 64 B/page.)
+  - **How to tell:** if per-page transfers are small (≤~128 B) or the profiler shows achieved BW far
+    below the ceiling as you add cores, it is transaction-rate bound → full grid. Only cap when a core
+    sweep shows achieved BW actually plateauing.
+- **sharded input** → `active_cores == the shard's own cores` (lever A2), not a re-spread 2D grid.
+
+Assert the active-core count above **per shape regime the op accepts**, not once for the shape you
+happened to develop on.
+
+- **A1. Spread worker cores across the DRAM-facing axis, not down one axis** — banks sit in a few
+  columns; a line stacked on one axis piles traffic onto shared NoC links. `row_wise` in
+  `split_work_to_cores` (`tt_metal/api/tt-metalium/work_split.hpp:46`) picks the line.
+  **→ example: `noc_placement`** (placement lever).
+- **A2. Launch only on cores that hold data** *(proposition)* — returns exactly the cores with shards
+  and maps each DRAM bank to its NoC-optimal worker.
+  `get_optimal_worker_cores_for_sharded_tensor()` — `ttnn/core/tensor/tensor_utils.cpp:54`; consumers
+  `untilize/device/factories/untilize_multi_core_program_factory.cpp:330`.
+- **A3. Reader adjacent to its DRAM bank; one reader ↔ one bank** — one NoC hop, disjoint routes;
+  multiple readers stacked on one axis congest. `Saturating_DRAM_bandwidth.md:4-13`.
+- **A4. Cliff-core specialization** *(proposition)* — split into full cores + one remainder core; skip
+  the cliff kernel when empty. `work_split.hpp:46`; `untilize_multi_core_program_factory.cpp:132,396-400`.
+
+## B. Transaction shape & the NoC (kernel level)
+
+**B0. Levers that add fixed per-core setup are a per-regime tradeoff, not a free win.** Most levers
+below (coalesced-block reads B5, deferred barriers B7, trid double-issue B8, per-reader VCs B10,
+stateful NoC B13, shard-aligned core groups) add a fixed per-core setup/issue cost that pays off when
+each core has enough work to amortize it — and *regresses* the smallest-shard / lowest-work-per-core
+regime, where that fixed cost dominates the ~1–8 tiles of real work. So a lever's counterfactual
+(Mode C) must be measured on the **smallest regime it will run in**, not only the aggregate or a large
+shape: a lever that is net-positive on big/interleaved shapes can be net-negative on tiny sharded
+ones. "Missed lever" (Mode D) is real headroom **only in the regime the lever would actually run** —
+gate it on a work-per-core threshold rather than applying it globally.
+
+- **B5. Coalesce into whole-page transactions; don't scatter sub-tile faces** — bigger transactions hit
+  higher achieved BW. `dataflow_api.h:566`.
+- **B6. Hit the one-packet fast path** — transfers ≤ `NOC_MAX_BURST_SIZE` (**512 B** on WH) take the
+  cheap single-packet path. `dataflow_api.h:551,566`; `noc_parameters.h:219`. **→ example: `double_buffer`**
+  (transfer-size lever).
+- **B7. One barrier per *block*, not per transaction** — issue a block of reads, then one
+  `noc_async_read_barrier()`. `Saturating_DRAM_bandwidth.md:11`. **→ example: `double_buffer`**.
+- **B8. Transaction-ID (trid) double-issue** *(proposition — best practice)* — tag each block, barrier
+  only on the *previous* id, so ≥1 request is always in flight. `dataflow_api.h:2366` + the trid
+  barrier/with-state family.
+  **→ example: `split_reader`** (the other way to keep reads in flight: two RISCs each issuing half
+  the block, instead of one RISC double-issuing). Both are "more outstanding requests"; audit them
+  together, and note that neither can show a win on a **one-block-per-core** shape — there is no
+  next block to overlap against. If every benched shape is one-block, that is a *bench* gap, not
+  evidence the lever doesn't apply.
+- **B9. Split streams across NoCs — reader NoC0 / writer NoC1** — read and write streams overlap instead
+  of contending. `dataflow_api_common.h:62-63`; `preferred_noc_for_dram_read/write` in `kernel_types.hpp`.
+  **→ example: `noc_placement`** (NoC-selection lever).
+- **B10. Per-reader VC assignment** *(proposition)* — break first-come-first-serve serialization when
+  readers share a route. `vc`/`use_vc` params on `dataflow_api.h` read/write.
+- **B11. Alignment** *(proposition — mostly automatic)* — 32 B DRAM-read / 16 B DRAM-write; misaligned
+  transfers split or RMW. `noc_parameters.h:295-296`; `dataflow_api_addrgen.h:289` (`aligned_page_size`).
+- **B12. Multicast instead of N unicasts** — one write fans out to a rectangle of receivers.
+  `dataflow_api.h:932` (`noc_async_write_multicast`). **→ example: `shared_input_reuse`** (mcast_pipe).
+- **B13. `set_state`/`with_state` stateful transfers** *(proposition)* — configure the command buffer
+  once for many same-shape transfers to varying addresses. `dataflow_api.h:594,627`.
+
+## C. Buffering & data residency (host + kernel)
+- **C14. Zero-copy: alias the circular buffer directly onto the shard buffer (L1↔L1)** *(proposition)* —
+  the reader "just pushes"; requires input *and* output in L1.
+  `untilize_multi_core_program_factory.cpp:103-116`; `tilize/device/tilize_device_operation.cpp:22`.
+  Aliasing has two
+  degrees: removing the *NoC traffic* (the CB is the shard) and removing the *kernel* (fold the
+  dataflow away entirely, so the program is compute-only). The second is a separate, measurable step
+  — a resident path whose reader still exists to run the CB handshake has taken only the first.
+- **C15. Prefer sharded (L1-resident) over interleaved for DRAM-bound ops** *(proposition)* — each reader
+  its own bank, >92% BW vs interleaved congestion. `Saturating_DRAM_bandwidth.md`.
+- **C16. Double-buffer CBs (depth 2) — but only when it pays** — single-block cores skip it to save L1.
+  `concat/device/concat_program_factory.cpp:111`; `untilize_multi_core_program_factory.cpp:132`.
+  **→ example: `double_buffer`**.
+- **C17. In-place / no-copy when buffers don't overlap** *(proposition)* — only copy through a CB when
+  regions actually overlap. `move/move.cpp:69,89-92,107,148`.
+
+## D. Compile-time specialization & program caching (host level)
+- **D18. Bake `TensorAccessorArgs` as compile-time args** *(proposition)* — address-gen unrolled per
+  buffer type, not computed at runtime. `untilize_multi_core_program_factory.cpp:175,209`.
+- **D19. Pass only buffer base addresses as runtime args** *(proposition)* — program caches; only the
+  address is patched on re-run. `untilize_multi_core_program_factory.cpp:330,335,396`.
+- **D20. Layout / special-case factory selection** *(proposition)* — pick the specialized factory by
+  layout match; fall back to the generic streaming factory only when nothing matches.
+  `untilize/device/untilize_device_operation.cpp:285,310,315-316,346-349`.
+- **D21. Precompute per-core indexing host-side; `InterleavedAddrGenFast` (shifts, not multiplies) for
+  pow2 pages** *(proposition)*. `untilize_multi_core_program_factory.cpp:335,396`;
+  `dataflow_api_addrgen.h:349`.
+
+## E. Host-dispatch overlap (whole-model level)
+- **E22. Metal Trace + multiple command queues + events** *(proposition — whole-model, usually outside
+  perf-lab's single-op scope)* — remove per-op host dispatch; overlap input I/O (CQ1) with execution
+  (CQ0). `AdvancedPerformanceOptimizationsForModels.md:33,157,161`.
+
+## F. Precision cost (compute-side) — pay only for the precision the gate needs
+
+**F23. A precision knob is a perf lever, not free correctness insurance.** Every knob below taxes
+throughput when on, and each one's *default* or its most obvious setting is the expensive one — so
+"leave it on to be safe" is a measurable, invisible cost. The rule: **enable the cheapest config that
+clears the accuracy gate, measured** — set the knob, measure the PCC margin, and downgrade any knob
+that turns out not to be load-bearing. Blanket-enabling a precision knob is the compute-side analogue
+of over-parallelizing: correct but slower, and the cost stays invisible until you measure against a
+baseline that didn't pay it.
+
+**The boundary, and it is hard: this lever is about knobs the OP derives, never knobs the CALLER
+set.** A `ttnn.ComputeKernelConfig` a user passed in is a contract — downgrading `math_fidelity` or
+`fp32_dest_acc_en` underneath it is a silent precision regression and a fake win, not a lever (the
+perf tournament forbids it outright). What F24–F27 govern is the op's *own* choice: the value it
+computes from dtypes, or the default it ships when the caller said nothing. Deep reference:
+`/numeric-formats-metal` §1.7 (the knob-cost table) and `numerical_stability_analysis_reference.md`
+§2.1–2.2 (the srcA/srcB TF32 drop, the DEST capacity table).
+
+- **F24. Fast packer unless the gate needs precise** — `bfp8_pack_precise` picks how the packer writes
+  a `bfloat8_b` tile: fast truncates the block-float mantissas, precise rounds and costs an **extra
+  pack pass — measured ~1.4× slower on a `bf16 → bfp8_b` tilize at identical cores**. Anchor:
+  `bf16 → bfp8_b` clears **PCC 0.999 on the fast packer** (measured 0.99996), so precise earns its
+  keep essentially only for **wide (fp32) inputs → bfp8_b**. Gate it on the *input* dtype, not blanket
+  on the output dtype: `out == bfloat8_b and in == float32`, not `out == bfloat8_b` (the latter is what
+  over-conservative ops ship, and it pays the pass for every bf16 input that never needed it).
+  `tt_metal/api/tt-metalium/kernel_types.hpp:110`,
+  `tt_metal/api/tt-metalium/program_descriptors.hpp:105`; the packer branch itself:
+  `tt_metal/jit_build/data_format.cpp:264`.
+- **F25. `fp32_dest_acc_en` off unless the datums are 32-bit** *(proposition)* — a 32-bit DEST costs
+  throughput **and halves capacity**: `get_dest_limit()` returns 8→**4** tiles half-sync and 16→**8**
+  full-sync. That capacity is the ceiling on tiles per compute iteration, so enabling it silently
+  shrinks the **block factor** that B5/B7/C16 and every blocking decision are tuned against — the cost
+  shows up as more per-block overhead in a stage that looks unrelated. Enable it for genuinely 32-bit
+  datums or a cross-CB fp32 accumulation that needs the range; not as a default.
+  `ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp:89` (`get_dest_limit`, and
+  `get_dst_full_sync_enabled()` at `:71` — the other input to the same capacity);
+  `numerical_stability_analysis_reference.md` §2.2.
+- **F26. A lossless unpack path buys nothing downstream of any FPU phase** *(proposition — often a
+  structural closure)* — `Fp32Mode::Lossless` / `UnpackToDestFp32` keeps fp32 bit-exact on the way
+  into DEST, but in any pipeline containing at least one FPU helper (`reduce`, `matmul`, an FPU binary,
+  the default fast `tilize`) the data passes through srcA/srcB and takes the **fp32 → TF32 drop
+  anyway**. Paying for lossless in that chain buys *nothing* and costs the slower unpack path. So this
+  lever is usually closable by structure rather than by sweep: if the chain hits an FPU phase, the
+  lossless variant is provably pointless — assert it and move on. Reach for it only for a chain that
+  stays out of srcA/srcB end to end. `ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp:63` (`Fp32Mode`);
+  `numerical_stability_analysis_reference.md` §2.1.
+- **F27. Lowest `math_fidelity` (and `math_approx_mode=true`) that clears the gate** *(proposition)* —
+  HiFi* buys mantissa coverage with **more FPU passes**, and the shipped default is the most expensive
+  one: `MathFidelity math_fidelity = MathFidelity::HiFi4`
+  (`tt_metal/api/tt-metalium/kernel_types.hpp:106`). An op that never measured a lower fidelity is
+  paying HiFi4 by inheritance, not by decision. Measure the fidelity ladder against the accuracy gate
+  for the op's *own* default and pick the cheapest rung that clears it — while leaving a
+  caller-supplied fidelity exactly as given (F23).
+
+## Compact optimal-vs-non-optimal
+| Dimension | Non-optimal | Optimal |
+|---|---|---|
+| Core placement | line stacked on one axis | spread across bank-facing axis; only cores with data |
+| Transaction size | many <512 B sub-transactions | coalesced whole pages, one-packet ≤512 B |
+| Barriers | one per transaction | one per block → trid double-issue |
+| Streams | shared NoC | reader NoC0 / writer NoC1, per-reader VCs |
+| Residency | stream through DRAM interleaved | L1 sharded, CB aliased to shard (zero-copy) |
+| Args | runtime address-gen | compile-time `TensorAccessorArgs`, cached program |
+| Precision knobs | precise packer / fp32 DEST / HiFi4 on by default "to be safe" | cheapest config that clears the measured accuracy gate; caller's contract untouched |
+
+## Notes
+- Sections A–B are grounded in `Saturating_DRAM_bandwidth.md` (>92% DRAM BW on Wormhole). Use
+  `/perf-ceiling-dm` to turn a proposed transfer scheme into a predicted target and `/perf-measure` to
+  measure the real number on device.
+- Some ops referenced by earlier drafts (`interleaved_to_sharded`, `sharded_to_interleaved`, `reshard`)
+  are absent on this branch (nuked for agent eval); the surviving `untilize` / `tilize` / `transpose` /
+  `concat` / `move` factories illustrate the same host-side patterns.
