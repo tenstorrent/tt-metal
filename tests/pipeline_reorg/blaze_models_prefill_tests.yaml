@@ -744,13 +744,13 @@
   test_type: prefill_runner_kv_pcc
   test_group: module
   skus:
-    bh_sc4-blitz:
+    bh_sc4:
       # Measured test step ~6 min; headroom for the up-to-120s producer connect plus
       # model-load/NFS variance on a 4-galaxy run. Must match the scaleout/demo budget.
       timeout: 15
   owner_id: U0AC4LTJH1P # Jaksa Jovicic
   team: scaleout
-  sp_config: sc4-blitz
+  sp_config: sc4
 
 # MiniMax-M3 full-model real-weights prefill + per-layer KV PCC (standalone harness, not pytest).
 # Requires staged mounts (same layout as models/demos/minimax_m3/scripts/README_golden_kv.md):

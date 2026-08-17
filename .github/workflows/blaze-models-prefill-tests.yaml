@@ -131,11 +131,11 @@ jobs:
       test-type: sdpa_perf
       resource-prefix: sdpa-perf
 
-  Galaxy-Blaze-models-prefill-sc4-blitz:
+  Galaxy-Blaze-models-prefill-sc4:
     needs: [validate-test-type, check-harbor, build-artifact]
-    # 4-galaxy (SC4-blitz) disaggregated-prefill runner+producer KV-PCC leg. Its own impl
+    # 4-galaxy (SC4) disaggregated-prefill runner+producer KV-PCC leg. Its own impl
     # invocation because the impl filters the matrix by sp_config, and this is the only
-    # sc4-blitz entry (the sc1 job's enabled-skus + sp_config filters already exclude it).
+    # sc4 entry (the sc1 job's enabled-skus + sp_config filters already exclude it).
     # Runs for the default "all", for the "module" group, and when its own stage is selected.
     if: ${{ needs.validate-test-type.outputs.test-type == 'all' || contains(needs.validate-test-type.outputs.test-type, 'module') || contains(needs.validate-test-type.outputs.test-type, 'prefill_runner_kv_pcc') }}
     permissions:
@@ -147,10 +147,10 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      enabled-skus: bh_sc4-blitz
-      sp-config: sc4-blitz
+      enabled-skus: bh_sc4
+      sp-config: sc4
       test-type: ${{ needs.validate-test-type.outputs.test-type }}
-      resource-prefix: sc4-blitz
+      resource-prefix: sc4
       # The runner is a server that idles in an unbounded request loop until the producer
       # connects and drives H2D, so no device op completes for tens of seconds by design.
       # The default operation-timeout watchdog would fire mid-idle, run tt-triage (which
@@ -164,7 +164,7 @@ jobs:
     # uploads its leg matrix as test_matrix_<resource-prefix>; we merge them
     # into expected-jobs so legs that produced no ai_job_summary artifact are
     # reconciled as infra failures rather than silently dropped.
-    needs: [Galaxy-Blaze-models-prefill, Galaxy-Blaze-models-prefill-SDPA-Perf-tests, Galaxy-Blaze-models-prefill-sc4-blitz]
+    needs: [Galaxy-Blaze-models-prefill, Galaxy-Blaze-models-prefill-SDPA-Perf-tests, Galaxy-Blaze-models-prefill-sc4]
     if: always() && !cancelled()
     runs-on: ubuntu-latest
     steps:
