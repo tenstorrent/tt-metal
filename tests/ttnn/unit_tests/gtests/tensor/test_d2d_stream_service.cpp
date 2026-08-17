@@ -27,6 +27,7 @@
 //     (1x1<->1x1 for single-chip cases; 1x2<->1x2 for multi-socket cases).
 
 #include <algorithm>
+#include <type_traits>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -67,7 +68,6 @@
 #include "ttnn/tensor/types.hpp"
 
 #include "stream_service_test_utils.hpp"  // replicate_all
-
 namespace ttnn::distributed::test {
 namespace {
 
@@ -101,9 +101,8 @@ using ::tt::tt_metal::distributed::MeshDevice;
 using ::tt::tt_metal::distributed::MeshMapperConfig;
 using ::tt::tt_metal::distributed::MeshShape;
 using ::tt::tt_metal::distributed::MeshWorkload;
-using ::tt::tt_metal::distributed::ReadShard;
+using ::tt::tt_metal::distributed::ShardDataTransfer;
 using ::tt::tt_metal::distributed::SocketMemoryConfig;
-using ::tt::tt_metal::distributed::WriteShard;
 using ttnn::D2DStreamConfig;
 using ttnn::D2DStreamService;
 using ttnn::D2DStreamServiceReceiver;
@@ -254,7 +253,8 @@ void verify_transfer(
     // Load the sender backing tensor on every participating coord and make sure
     // the writes land before we trigger the sender.
     for (const auto& coord : coords) {
-        WriteShard(sender_mesh->mesh_command_queue(), sender_mesh_buffer, iota, coord);
+        sender_mesh->mesh_command_queue().enqueue_write_shards(
+            sender_mesh_buffer, {ShardDataTransfer{coord}.host_data(iota.data())}, false);
     }
     Finish(sender_mesh->mesh_command_queue());
 

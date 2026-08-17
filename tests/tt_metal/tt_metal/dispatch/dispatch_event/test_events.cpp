@@ -3,10 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <chrono>
+#include <type_traits>
 #include <fmt/base.h>
 #include <cstddef>
 #include <cstdint>
 #include <tt-metalium/host_api.hpp>
+#include "tt_metal/distributed/event_query_impl.hpp"
 #include <memory>
 #include <vector>
 
@@ -22,7 +24,6 @@
 #include <tt-logger/tt-logger.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
-
 namespace tt::tt_metal {
 
 using std::vector;
@@ -73,7 +74,10 @@ TEST_F(UnitMeshCQEventFixture, TestEventsDataMovementWrittenToCompletionQueueInO
             buffers.push_back(distributed::MeshBuffer::create(buffer_config, local_config, mesh_device.get()));
 
             if (data_movement_mode == DataMovementMode::WRITE) {
-                distributed::WriteShard(cq, buffers.back(), page, distributed::MeshCoordinate(0, 0), true);
+                cq.enqueue_write_shards(
+                    buffers.back(),
+                    {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(page.data())},
+                    true);
             } else if (data_movement_mode == DataMovementMode::READ) {
                 distributed::ReadShard(cq, page, buffers.back(), distributed::MeshCoordinate(0, 0), true);
             }
@@ -266,7 +270,8 @@ TEST_F(UnitMeshCQEventFixture, TestEventsMixedWriteBufferRecordWaitSynchronize) 
         distributed::ReplicatedBufferConfig buffer_config{.size = page_size};
         std::shared_ptr<distributed::MeshBuffer> buf =
             distributed::MeshBuffer::create(buffer_config, local_config, mesh_device.get());
-        distributed::WriteShard(cq, buf, page, distributed::MeshCoordinate(0, 0), true);
+        cq.enqueue_write_shards(
+            buf, {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(page.data())}, true);
         cq.enqueue_wait_for_event(*event);
 
         if (i % 10 == 0) {

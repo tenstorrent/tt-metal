@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <chrono>
+#include <type_traits>
 #include <cerrno>
 #include <fmt/base.h>
 #include <cstdint>
@@ -24,7 +25,6 @@
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "test_common.hpp"
-
 using namespace tt;
 using namespace tt::tt_metal;
 using std::chrono::duration_cast;
@@ -94,7 +94,10 @@ int main(int argc, char** argv) {
 
             for (int i = 0; i < iter; i++) {
                 begin = std::chrono::steady_clock::now();
-                distributed::WriteShard(cq, buffer, src_vec, distributed::MeshCoordinate(0, 0));
+                cq.enqueue_write_shards(
+                    buffer,
+                    {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(src_vec.data())},
+                    false);
                 distributed::Finish(cq);
                 end = std::chrono::steady_clock::now();
                 elapsed_sum += end - begin;

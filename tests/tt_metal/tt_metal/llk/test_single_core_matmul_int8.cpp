@@ -33,7 +33,6 @@
 #include "tt_metal/test_utils/packing.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
-
 namespace tt::tt_metal {
 
 using namespace tt;
@@ -181,9 +180,9 @@ bool single_tile_matmul_int8(const std::shared_ptr<distributed::MeshDevice>& mes
     ////////////////////////////////////////////////////////////////////////////
 
     convert_to_sign_mag(input_0);
-    distributed::EnqueueWriteMeshBuffer(cq, input0_dram_buffer, input_0);
+    cq.enqueue_write_mesh_buffer(input0_dram_buffer, input_0.data(), false);
     convert_to_sign_mag(input_1);
-    distributed::EnqueueWriteMeshBuffer(cq, input1_dram_buffer, input_1);
+    cq.enqueue_write_mesh_buffer(input1_dram_buffer, input_1.data(), false);
 
     tt_metal::SetRuntimeArgs(
         program,
@@ -213,7 +212,9 @@ bool single_tile_matmul_int8(const std::shared_ptr<distributed::MeshDevice>& mes
     //                      Comparison Checking
     ////////////////////////////////////////////////////////////////////////////
     std::vector<int8_t> dest_buffer_data;
-    distributed::EnqueueReadMeshBuffer(cq, dest_buffer_data, output_dram_buffer);
+    (dest_buffer_data)
+        .resize((output_dram_buffer)->size() / sizeof(typename std::decay_t<decltype(dest_buffer_data)>::value_type));
+    cq.enqueue_read_mesh_buffer((dest_buffer_data).data(), output_dram_buffer, true);
     pass = dest_buffer_data == golden_output;
 
     for (int i = 0; i < 1024; i++) {

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <fmt/base.h>
+#include <type_traits>
 #include <gtest/gtest.h>
 #include <cstdint>
 #include <sys/types.h>
@@ -30,7 +31,6 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <umd/device/types/arch.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
-
 namespace tt::tt_metal {
 class IDevice;
 }  // namespace tt::tt_metal
@@ -224,7 +224,8 @@ void run_single_core_copy_block_matmul_partials(
     auto& program_run = workload.get_programs().at(device_range);
 
     std::vector<uint32_t> src_vec = generate_copy_block_stimulus(dram_buffer_size, test_config);
-    distributed::WriteShard(cq, src_dram_buffer, src_vec, zero_coord);
+    cq.enqueue_write_shards(
+        src_dram_buffer, {distributed::ShardDataTransfer{zero_coord}.host_data(src_vec.data())}, false);
 
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {

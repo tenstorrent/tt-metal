@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <chrono>
+#include <type_traits>
 #include <fmt/base.h>
 #include <gtest/gtest.h>
 #include <cstdint>
@@ -30,7 +31,6 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/data_format/bfloat16_utils.hpp"
-
 namespace tt::tt_metal {
 
 using std::vector;
@@ -285,7 +285,7 @@ bool flatten_stress(
         SetRuntimeArgs(program_on_workload, unary_writer_kernel, core, writer_runtime_args);
 
         // Async write input
-        distributed::EnqueueWriteMeshBuffer(cq, src_dram_buffer, *src_vec, false);
+        cq.enqueue_write_mesh_buffer(src_dram_buffer, src_vec->data(), false);
         // Share ownership of buffer with program
         AssignGlobalBufferToProgram(
             std::shared_ptr<Buffer>(src_dram_buffer->get_backing_buffer()), program_on_workload);

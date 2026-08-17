@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
+#include <type_traits>
 #include <fmt/format.h>
 #include <algorithm>
 #include <filesystem>
@@ -24,7 +25,6 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_device_view.hpp>
 #include <distributed/mesh_device_view_impl.hpp>
-
 namespace tt::tt_fabric::test {
 
 // Import needed types
@@ -127,8 +127,14 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
 
     // Blocking writes so data is resident before kernels run
     auto& mcq = mesh->mesh_command_queue();
-    Dist::WriteShard(mcq, src_buf, tx, src_coord, /*blocking=*/true);
-    Dist::WriteShard(mcq, dst_buf, zeros, dst_coord, /*blocking=*/true);
+    mcq.enqueue_write_shards(
+        src_buf,
+        {Dist::ShardDataTransfer{src_coord}.host_data(tx.data())},
+        /*blocking=*/true);
+    mcq.enqueue_write_shards(
+        dst_buf,
+        {Dist::ShardDataTransfer{dst_coord}.host_data(zeros.data())},
+        /*blocking=*/true);
 
     // === Build the multicast receiver set from a rectangular sub-mesh ===
     std::vector<Dist::MeshCoordinate> dst_coords;
@@ -157,9 +163,15 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
         return;
     }
     for (const auto& c : dst_coords) {
-        Dist::WriteShard(mcq, dst_buf, zeros, c, /*blocking=*/true);
+        mcq.enqueue_write_shards(
+            dst_buf,
+            {Dist::ShardDataTransfer{c}.host_data(zeros.data())},
+            /*blocking=*/true);
     }
-    Dist::WriteShard(mcq, dst_buf, zeros, src_coord, /*blocking=*/true);
+    mcq.enqueue_write_shards(
+        dst_buf,
+        {Dist::ShardDataTransfer{src_coord}.host_data(zeros.data())},
+        /*blocking=*/true);
 
     // Build RX programs: one per receiver chip
     std::vector<tt::tt_metal::Program> receiver_progs;

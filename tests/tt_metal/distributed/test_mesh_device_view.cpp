@@ -23,20 +23,20 @@ using ::testing::SizeIs;
 
 TEST(MeshDeviceViewTest, GetRingCoordinatesRingShapeEmpty) {
     EXPECT_ANY_THROW(
-        (void)MeshDeviceView::get_ring_coordinates(/*ring_shape*/ Shape2D(1, 0), /*mesh_shape*/ Shape2D(2, 4)));
+        (void)MeshDeviceViewImpl::get_ring_coordinates(/*ring_shape*/ Shape2D(1, 0), /*mesh_shape*/ Shape2D(2, 4)));
     EXPECT_ANY_THROW(
-        (void)MeshDeviceView::get_ring_coordinates(/*ring_shape*/ Shape2D(0, 1), /*mesh_shape*/ Shape2D(2, 4)));
+        (void)MeshDeviceViewImpl::get_ring_coordinates(/*ring_shape*/ Shape2D(0, 1), /*mesh_shape*/ Shape2D(2, 4)));
 }
 
 TEST(MeshDeviceViewTest, GetRingCoordinatesRingShapeTooBig) {
     EXPECT_ANY_THROW(
-        (void)MeshDeviceView::get_ring_coordinates(/*ring_shape*/ Shape2D(2, 4), /*mesh_shape*/ Shape2D(2, 2)));
+        (void)MeshDeviceViewImpl::get_ring_coordinates(/*ring_shape*/ Shape2D(2, 4), /*mesh_shape*/ Shape2D(2, 2)));
     EXPECT_ANY_THROW(
-        (void)MeshDeviceView::get_ring_coordinates(/*ring_shape*/ Shape2D(4, 2), /*mesh_shape*/ Shape2D(2, 2)));
+        (void)MeshDeviceViewImpl::get_ring_coordinates(/*ring_shape*/ Shape2D(4, 2), /*mesh_shape*/ Shape2D(2, 2)));
 }
 
 TEST(MeshDeviceViewTest, GetRingCoordinates) {
-    auto ring_coords = MeshDeviceView::get_ring_coordinates(Shape2D(2, 2), Shape2D(2, 2));
+    auto ring_coords = MeshDeviceViewImpl::get_ring_coordinates(Shape2D(2, 2), Shape2D(2, 2));
     ASSERT_THAT(ring_coords, SizeIs(4));
     EXPECT_EQ(ring_coords[0], MeshCoordinate(0, 0));
     EXPECT_EQ(ring_coords[1], MeshCoordinate(0, 1));
@@ -45,7 +45,7 @@ TEST(MeshDeviceViewTest, GetRingCoordinates) {
 }
 
 TEST(MeshDeviceViewTest, GetRingCoordinatesDonut) {
-    auto ring_coords = MeshDeviceView::get_ring_coordinates(Shape2D(3, 3), Shape2D(4, 4));
+    auto ring_coords = MeshDeviceViewImpl::get_ring_coordinates(Shape2D(3, 3), Shape2D(4, 4));
     ASSERT_THAT(ring_coords, SizeIs(8));
     EXPECT_EQ(ring_coords[0], MeshCoordinate(0, 0));
     EXPECT_EQ(ring_coords[1], MeshCoordinate(0, 1));
@@ -58,13 +58,13 @@ TEST(MeshDeviceViewTest, GetRingCoordinatesDonut) {
 }
 
 TEST(MeshDeviceViewTest, GetLineCoordinatesLineTooBig) {
-    EXPECT_ANY_THROW((void)MeshDeviceView::get_line_coordinates(
+    EXPECT_ANY_THROW((void)MeshDeviceViewImpl::get_line_coordinates(
         /*length*/ 10, /*mesh_shape*/ Shape2D(2, 2), /*mesh_offset*/ Shape2D(0, 0)));
 }
 
 TEST(MeshDeviceViewTest, GetLineCoordinatesWithShorterLine) {
-    auto line_coords =
-        MeshDeviceView::get_line_coordinates(/*length*/ 3, /*mesh_shape*/ Shape2D(2, 2), /*mesh_offset*/ Shape2D(0, 0));
+    auto line_coords = MeshDeviceViewImpl::get_line_coordinates(
+        /*length*/ 3, /*mesh_shape*/ Shape2D(2, 2), /*mesh_offset*/ Shape2D(0, 0));
     ASSERT_THAT(line_coords, SizeIs(3));
     EXPECT_EQ(line_coords[0], MeshCoordinate(0, 0));
     EXPECT_EQ(line_coords[1], MeshCoordinate(0, 1));
@@ -72,8 +72,8 @@ TEST(MeshDeviceViewTest, GetLineCoordinatesWithShorterLine) {
 }
 
 TEST(MeshDeviceViewTest, GetLineCoordinates2x2) {
-    auto line_coords =
-        MeshDeviceView::get_line_coordinates(/*length*/ 4, /*mesh_shape*/ Shape2D(2, 2), /*mesh_offset*/ Shape2D(0, 0));
+    auto line_coords = MeshDeviceViewImpl::get_line_coordinates(
+        /*length*/ 4, /*mesh_shape*/ Shape2D(2, 2), /*mesh_offset*/ Shape2D(0, 0));
     ASSERT_THAT(line_coords, SizeIs(4));
     EXPECT_EQ(line_coords[0], MeshCoordinate(0, 0));
     EXPECT_EQ(line_coords[1], MeshCoordinate(0, 1));
@@ -82,16 +82,16 @@ TEST(MeshDeviceViewTest, GetLineCoordinates2x2) {
 }
 
 TEST(MeshDeviceViewTest, GetLineCoordinates2x2WithOffset) {
-    auto line_coords =
-        MeshDeviceView::get_line_coordinates(/*length*/ 2, /*mesh_shape*/ Shape2D(2, 2), /*mesh_offset*/ Shape2D(1, 0));
+    auto line_coords = MeshDeviceViewImpl::get_line_coordinates(
+        /*length*/ 2, /*mesh_shape*/ Shape2D(2, 2), /*mesh_offset*/ Shape2D(1, 0));
     ASSERT_THAT(line_coords, SizeIs(2));
     EXPECT_EQ(line_coords[0], MeshCoordinate(1, 0));
     EXPECT_EQ(line_coords[1], MeshCoordinate(1, 1));
 }
 
 TEST(MeshDeviceViewTest, GetLineCoordinates3x3) {
-    auto line_coords =
-        MeshDeviceView::get_line_coordinates(/*length*/ 9, /*mesh_shape*/ Shape2D(3, 3), /*mesh_offset*/ Shape2D(0, 0));
+    auto line_coords = MeshDeviceViewImpl::get_line_coordinates(
+        /*length*/ 9, /*mesh_shape*/ Shape2D(3, 3), /*mesh_offset*/ Shape2D(0, 0));
     ASSERT_THAT(line_coords, SizeIs(9));
     // Actual path produced by DFS algorithm (prefers ring but falls back if not possible)
     EXPECT_EQ(line_coords[0], MeshCoordinate(0, 0));
@@ -106,8 +106,8 @@ TEST(MeshDeviceViewTest, GetLineCoordinates3x3) {
 }
 
 TEST(MeshDeviceViewTest, GetLineCoordinates3x3WithOffset) {
-    auto line_coords =
-        MeshDeviceView::get_line_coordinates(/*length*/ 5, /*mesh_shape*/ Shape2D(3, 3), /*mesh_offset*/ Shape2D(1, 1));
+    auto line_coords = MeshDeviceViewImpl::get_line_coordinates(
+        /*length*/ 5, /*mesh_shape*/ Shape2D(3, 3), /*mesh_offset*/ Shape2D(1, 1));
     ASSERT_THAT(line_coords, SizeIs(5));
     EXPECT_EQ(line_coords[0], MeshCoordinate(1, 1));
     EXPECT_EQ(line_coords[1], MeshCoordinate(1, 2));
@@ -130,13 +130,13 @@ TEST(MeshDeviceViewTest, GetLineCoordinatesRingFormation) {
     };
 
     // Test small length (2 nodes)
-    auto line_coords_2 = MeshDeviceView::get_line_coordinates(
+    auto line_coords_2 = MeshDeviceViewImpl::get_line_coordinates(
         /*length*/ 2, /*mesh_shape*/ Shape2D(3, 3), /*mesh_offset*/ Shape2D(1, 1));
     ASSERT_THAT(line_coords_2, SizeIs(2));
     verify_ring(line_coords_2);
 
     // Test visiting all nodes in 2x2 mesh
-    auto line_coords_4 = MeshDeviceView::get_line_coordinates(
+    auto line_coords_4 = MeshDeviceViewImpl::get_line_coordinates(
         /*length*/ 4, /*mesh_shape*/ Shape2D(2, 2), /*mesh_offset*/ Shape2D(0, 0));
     ASSERT_THAT(line_coords_4, SizeIs(4));
     std::set<MeshCoordinate> unique_coords_4(line_coords_4.begin(), line_coords_4.end());
@@ -150,24 +150,24 @@ TEST(MeshDeviceViewTest, GetLineCoordinatesRingPreferredButNotRequired) {
 
     // Helper lambda to check if path forms a ring
     // Requesting more nodes than exist in the mesh should still fail
-    EXPECT_ANY_THROW((void)MeshDeviceView::get_line_coordinates(
+    EXPECT_ANY_THROW((void)MeshDeviceViewImpl::get_line_coordinates(
         /*length*/ 10, /*mesh_shape*/ Shape2D(2, 2), /*mesh_offset*/ Shape2D(0, 0)));
 
     // Cases where ring may not be possible - function should still succeed
     // Visiting 3 nodes from corner (0,0) in 3x3 mesh - may or may not form a ring
-    auto line_coords_3_corner = MeshDeviceView::get_line_coordinates(
+    auto line_coords_3_corner = MeshDeviceViewImpl::get_line_coordinates(
         /*length*/ 3, /*mesh_shape*/ Shape2D(3, 3), /*mesh_offset*/ Shape2D(0, 0));
     ASSERT_THAT(line_coords_3_corner, SizeIs(3));
     // Function succeeds, ring formation is preferred but not required
 
     // Visiting 3 nodes from center (1,1) in 3x3 mesh - may or may not form a ring
-    auto line_coords_3_center = MeshDeviceView::get_line_coordinates(
+    auto line_coords_3_center = MeshDeviceViewImpl::get_line_coordinates(
         /*length*/ 3, /*mesh_shape*/ Shape2D(3, 3), /*mesh_offset*/ Shape2D(1, 1));
     ASSERT_THAT(line_coords_3_center, SizeIs(3));
     // Function succeeds, ring formation is preferred but not required
 
     // Visiting all nodes in 3x3 mesh from corner - may or may not form a ring
-    auto line_coords_9 = MeshDeviceView::get_line_coordinates(
+    auto line_coords_9 = MeshDeviceViewImpl::get_line_coordinates(
         /*length*/ 9, /*mesh_shape*/ Shape2D(3, 3), /*mesh_offset*/ Shape2D(0, 0));
     ASSERT_THAT(line_coords_9, SizeIs(9));
     std::set<MeshCoordinate> unique_coords_9(line_coords_9.begin(), line_coords_9.end());
@@ -180,14 +180,14 @@ using MeshDeviceView2x4Test = MeshDevice2x4Fixture;
 TEST_F(MeshDeviceView2x4Test, MeshId) {
     const auto& view = mesh_device_->get_view();
     EXPECT_EQ(view.shape(), MeshShape(2, 4));
-    EXPECT_EQ(view.mesh_id(), tt::tt_fabric::MeshId(0));
+    EXPECT_EQ(view.impl().mesh_id(), tt::tt_fabric::MeshId(0));
 }
 
 TEST_F(MeshDeviceView2x4Test, ViewBasicProperties) {
     const auto& view = mesh_device_->get_view();
 
-    EXPECT_FALSE(view.empty());
-    EXPECT_EQ(view.size(), 8);
+    EXPECT_FALSE(view.impl().empty());
+    EXPECT_EQ(view.impl().size(), 8);
     EXPECT_EQ(view.num_devices(), 8);
     EXPECT_EQ(view.shape(), MeshShape(2, 4));
     EXPECT_TRUE(view.is_mesh_2d());
@@ -224,13 +224,13 @@ TEST_F(MeshDeviceView2x4Test, ViewGetDevice) {
 TEST_F(MeshDeviceView2x4Test, ViewGetFabricNodeId) {
     const auto& view = mesh_device_->get_view();
 
-    auto fabric_id_00 = view.get_fabric_node_id(MeshCoordinate{0, 0});
-    auto fabric_id_13 = view.get_fabric_node_id(MeshCoordinate{1, 3});
+    auto fabric_id_00 = view.impl().get_fabric_node_id(MeshCoordinate{0, 0});
+    auto fabric_id_13 = view.impl().get_fabric_node_id(MeshCoordinate{1, 3});
 
     EXPECT_NE(fabric_id_00, fabric_id_13);
 
     // Out of bounds throws
-    EXPECT_ANY_THROW((void)view.get_fabric_node_id(MeshCoordinate{2, 0}));
+    EXPECT_ANY_THROW((void)view.impl().get_fabric_node_id(MeshCoordinate{2, 0}));
 }
 
 TEST_F(MeshDeviceView2x4Test, ViewGetDevices) {
@@ -279,7 +279,7 @@ TEST_F(MeshDeviceView2x4Test, ViewGetFabricNodeIdsInRange) {
     const auto& view = mesh_device_->get_view();
 
     MeshCoordinateRange range(MeshCoordinate{0, 0}, MeshCoordinate(1, 1));
-    auto fabric_ids = view.get_fabric_node_ids(range);
+    auto fabric_ids = view.impl().get_fabric_node_ids(range);
     EXPECT_THAT(fabric_ids, SizeIs(4));
 }
 
@@ -351,7 +351,7 @@ TEST_F(MeshDeviceView2x4Test, ViewFindDevice) {
 TEST_F(MeshDeviceView2x4Test, ViewLineCoordinates) {
     const auto& view = mesh_device_->get_view();
 
-    auto line_coords = view.get_line_coordinates();
+    auto line_coords = view.impl().get_line_coordinates();
     EXPECT_THAT(line_coords, SizeIs(8));
 
     // Verify zigzag pattern: row 0 left-to-right, row 1 right-to-left
@@ -368,7 +368,7 @@ TEST_F(MeshDeviceView2x4Test, ViewLineCoordinates) {
 TEST_F(MeshDeviceView2x4Test, ViewRingCoordinates) {
     const auto& view = mesh_device_->get_view();
 
-    auto ring_coords = view.get_ring_coordinates();
+    auto ring_coords = view.impl().get_ring_coordinates();
     EXPECT_THAT(ring_coords, SizeIs(8));
 
     // Verify ring traversal (clockwise from top-left)
@@ -397,7 +397,7 @@ TEST_F(MeshDeviceView2x4Test, ViewIterator) {
     const auto& view = mesh_device_->get_view();
 
     std::vector<IDevice*> iterated_devices;
-    for (auto device : view) {
+    for (auto device : view.impl()) {
         iterated_devices.push_back(*device);
     }
 
@@ -411,7 +411,7 @@ TEST_F(MeshDeviceView2x4Test, ViewIterator) {
 TEST_F(MeshDeviceView2x4Test, ViewMeshId) {
     const auto& view = mesh_device_->get_view();
 
-    auto mesh_id = view.mesh_id();
+    auto mesh_id = view.impl().mesh_id();
 
     // All fabric node IDs should have the same mesh ID
     for (const auto& fabric_id : view.get_fabric_node_ids()) {
@@ -424,7 +424,7 @@ TEST_F(MeshDeviceView2x4Test, View2DMethodsThrowOnNon2DMesh) {
     std::vector<tt::tt_fabric::FabricNodeId> fabric_node_ids;
     for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
         devices.push_back(mesh_device_->get_view().impl().get_device(coord));
-        fabric_node_ids.push_back(mesh_device_->get_view().get_fabric_node_id(coord));
+        fabric_node_ids.push_back(mesh_device_->get_view().impl().get_fabric_node_id(coord));
     }
 
     MeshDeviceView view_1d(MeshShape(8), devices, fabric_node_ids);
@@ -435,11 +435,11 @@ TEST_F(MeshDeviceView2x4Test, View2DMethodsThrowOnNon2DMesh) {
     EXPECT_ANY_THROW((void)view_1d.get_devices_on_column(0));
     EXPECT_ANY_THROW((void)view_1d.get_fabric_node_ids_on_row(0));
     EXPECT_ANY_THROW((void)view_1d.get_fabric_node_ids_on_column(0));
-    EXPECT_ANY_THROW((void)view_1d.get_line_coordinates());
-    EXPECT_ANY_THROW((void)view_1d.get_ring_coordinates());
-    EXPECT_ANY_THROW((void)view_1d.get_line_devices());
+    EXPECT_ANY_THROW((void)view_1d.impl().get_line_coordinates());
+    EXPECT_ANY_THROW((void)view_1d.impl().get_ring_coordinates());
+    EXPECT_ANY_THROW((void)view_1d.impl().get_line_devices());
     EXPECT_ANY_THROW((void)view_1d.get_ring_devices());
-    EXPECT_ANY_THROW((void)view_1d.get_line_fabric_node_ids());
+    EXPECT_ANY_THROW((void)view_1d.impl().get_line_fabric_node_ids());
     EXPECT_ANY_THROW((void)view_1d.get_ring_fabric_node_ids());
 }
 

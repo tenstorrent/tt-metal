@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
+#include <type_traits>
 #include <cstdint>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -36,7 +37,6 @@
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "tests/tt_metal/tt_metal/dispatch/sub_device_test_utils.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
-
 namespace tt::tt_metal::distributed::test {
 namespace {
 
@@ -143,7 +143,7 @@ TEST_F(MeshSubDeviceTestSuite, DataCopyOnSubDevices) {
         // Block after this write on host, since the global semaphore update starting the
         // program goes through an independent path (UMD) and can go out of order wrt the
         // buffer data
-        EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), input_buf, src_vec, true);
+        mesh_device_->mesh_command_queue().enqueue_write_mesh_buffer(input_buf, src_vec.data(), true);
 
         for (auto* device : mesh_device_->get_devices()) {
             MetalContext::instance().get_cluster().write_core(

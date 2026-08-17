@@ -14,7 +14,6 @@
 #include <random>
 #include <string_view>
 #include <vector>
-
 using namespace tt::tt_metal;
 using CoreSpec = std::variant<CoreCoord, CoreRange, CoreRangeSet>;
 
@@ -139,8 +138,8 @@ int main(int argc, char** argv) {
     // We're writing to a shard allocated on MeshCoordinate 0, 0, since this is a 1x1 MeshDevice
     //  When the MeshDevice is 2 dimensional, this API can be used to target specific physical devices
     // The last argument indicates if the operation is blocking or not.
-    distributed::WriteShard(cq, a, a_data, device_coord, false);
-    distributed::WriteShard(cq, b, b_data, device_coord, false);
+    cq.enqueue_write_shards(a, {distributed::ShardDataTransfer{device_coord}.host_data(a_data.data())}, false);
+    cq.enqueue_write_shards(b, {distributed::ShardDataTransfer{device_coord}.host_data(b_data.data())}, false);
 
     // A Tensix core is made up with 5 processors. 2 data movement processors, and 3 compute processors. The 2 data
     // movement processors act independent to other cores. And the 3 compute processors act together (hence 1 kernel for
@@ -203,7 +202,8 @@ int main(int argc, char** argv) {
 
     // We're reading from a shard allocated on Device Coordinate 0, 0, since this is a 1x1
     //  When the MeshDevice is 2 dimensional, this API can be used to target specific physical devices
-    distributed::EnqueueReadMeshBuffer(cq, c_data, c, true);
+    c_data.resize(c->device_local_size() / sizeof(uint32_t));
+    cq.enqueue_read_mesh_buffer((c_data).data(), c, true);
 
     // Print partial results so we can see the output is correct (plus or minus some error due to BFP16 precision)
     std::cout << "Partial results: (note we are running under BFP16. It's going to be less accurate)\n";

@@ -4,6 +4,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
+#include <type_traits>
 #include <tuple>
 #include <map>
 #include <set>
@@ -37,7 +38,6 @@
 
 #include <enchantum/enchantum.hpp>
 #include <llrt/tt_cluster.hpp>
-
 using namespace tt;
 using namespace tt::test_utils;
 using namespace tt::test_utils::df;

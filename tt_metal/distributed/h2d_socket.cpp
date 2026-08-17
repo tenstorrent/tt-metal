@@ -4,6 +4,8 @@
 
 #include <tt-metalium/experimental/sockets/h2d_socket.hpp>
 #include <internal/service/service_core_manager.hpp>
+#include <tt-metalium/host_buffer.hpp>
+#include <tt-metalium/memory_pin.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
 #include "tt_metal/distributed/named_shm.hpp"
@@ -258,8 +260,10 @@ void H2DSocket::write_socket_metadata(
         tt::tt_metal::detail::WriteToDeviceL1(
             device, recv_core_.core_coord, static_cast<uint32_t>(config_buffer_->address()), bytes);
     } else {
-        distributed::WriteShard(
-            mesh_device->mesh_command_queue(0), config_buffer_, config_data, recv_core_.device_coord, true);
+        mesh_device->mesh_command_queue(0).enqueue_write_shards(
+            config_buffer_,
+            {distributed::ShardDataTransfer{recv_core_.device_coord}.host_data(config_data.data())},
+            true);
     }
 }
 

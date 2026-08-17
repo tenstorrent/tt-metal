@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <chrono>
+#include <type_traits>
 #include <fmt/base.h>
 #include <gtest/gtest.h>
 #include <cstddef>
@@ -37,7 +38,6 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <umd/device/types/arch.hpp>
 #include <tt-metalium/distributed.hpp>
-
 namespace tt::tt_metal {
 
 using std::map;
@@ -246,7 +246,8 @@ bool run_sfpu_all_same_buffer(distributed::MeshCommandQueue& cq, const SfpuConfi
 
     mesh_workload.add_program(device_range, std::move(program));
 
-    distributed::WriteShard(cq, input_dram_buffer, packed_input, local_coord);
+    cq.enqueue_write_shards(
+        input_dram_buffer, {distributed::ShardDataTransfer{local_coord}.host_data(packed_input.data())}, false);
     distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
     distributed::Finish(cq);
 

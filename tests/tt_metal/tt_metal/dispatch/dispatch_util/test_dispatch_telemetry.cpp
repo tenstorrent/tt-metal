@@ -36,7 +36,6 @@
 #include "impl/dispatch/dispatch_query_manager.hpp"
 #include "distributed/mesh_trace.hpp"
 #include "llrt/core_descriptor.hpp"
-
 namespace tt::tt_metal {
 namespace {
 

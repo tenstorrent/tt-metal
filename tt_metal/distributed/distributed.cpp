@@ -5,6 +5,7 @@
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
 #include <tt-metalium/distributed.hpp>
+#include "event_query_impl.hpp"
 #include <utility>
 
 #include "device.hpp"
@@ -177,10 +178,6 @@ void Synchronize(MeshDevice* device, std::optional<uint8_t> cq_id, ttsl::Span<co
     } else {
         Synchronize(*device, std::nullopt, sub_device_ids);
     }
-}
-
-MeshTraceId BeginTraceCapture(MeshDevice* device, uint8_t cq_id) {
-    return device->begin_mesh_trace(device->mesh_command_queue(cq_id));
 }
 
 void Finish(MeshCommandQueue& mesh_cq, ttsl::Span<const SubDeviceId> sub_device_ids) {

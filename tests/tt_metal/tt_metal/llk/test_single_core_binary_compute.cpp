@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_stl/reflection.hpp>
+#include <type_traits>
 #include <fmt/base.h>
 #include <gtest/gtest.h>
 #include <cstddef>
@@ -39,7 +40,6 @@
 #include <umd/device/types/arch.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/distributed.hpp>
-
 namespace tt::tt_metal {
 class IDevice;
 }  // namespace tt::tt_metal
@@ -338,9 +338,12 @@ static BinaryBuffers create_and_populate_binary_buffers(
     buffers.input2 = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
     buffers.output = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
 
-    distributed::WriteShard(cq, buffers.input0, stimulus.packed_input0, zero_coord, false);
-    distributed::WriteShard(cq, buffers.input1, stimulus.packed_input1, zero_coord, false);
-    distributed::WriteShard(cq, buffers.input2, stimulus.packed_input2, zero_coord, false);
+    cq.enqueue_write_shards(
+        buffers.input0, {distributed::ShardDataTransfer{zero_coord}.host_data(stimulus.packed_input0.data())}, false);
+    cq.enqueue_write_shards(
+        buffers.input1, {distributed::ShardDataTransfer{zero_coord}.host_data(stimulus.packed_input1.data())}, false);
+    cq.enqueue_write_shards(
+        buffers.input2, {distributed::ShardDataTransfer{zero_coord}.host_data(stimulus.packed_input2.data())}, false);
 
     return buffers;
 }

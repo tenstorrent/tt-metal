@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <bit>
+#include <type_traits>
 #include <cmath>
 #include <gtest/gtest.h>
 #include <map>
@@ -21,7 +22,6 @@
 #include <tt-logger/tt-logger.hpp>
 #include "tt_metal/test_utils/packing.hpp"
 #include <umd/device/types/arch.hpp>
-
 namespace tt::tt_metal {
 
 using namespace tt::test_utils;
@@ -174,7 +174,7 @@ StochasticRoundingResult run_stochastic_rounding(
 
     mesh_workload.add_program(distributed::MeshCoordinateRange(cq.device()->shape()), std::move(program));
 
-    distributed::EnqueueWriteMeshBuffer(cq, input_dram_buffer, packed_input, false);
+    cq.enqueue_write_mesh_buffer(input_dram_buffer, packed_input.data(), false);
     distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
     distributed::Finish(cq);
 

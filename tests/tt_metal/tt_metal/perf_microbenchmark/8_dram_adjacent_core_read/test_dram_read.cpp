@@ -45,7 +45,6 @@
 #include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/distributed.hpp>
 #include "tt_metal/test_utils/bfloat_utils.hpp"
-
 using namespace tt;
 using std::chrono::duration_cast;
 using std::chrono::microseconds;
@@ -492,7 +491,7 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Copy Input To DRAM or L1
         ////////////////////////////////////////////////////////////////////////////
-        tt_metal::distributed::EnqueueWriteMeshBuffer(device->mesh_command_queue(), input_buffer, input_vec, false);
+        device->mesh_command_queue().enqueue_write_mesh_buffer(input_buffer, input_vec.data(), false);
         tt_metal::distributed::Finish(device->mesh_command_queue());
 
         ////////////////////////////////////////////////////////////////////////////

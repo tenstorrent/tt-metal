@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <fmt/base.h>
+#include <type_traits>
 #include <gtest/gtest.h>
 #include <cstdint>
 #include "hostdevcommon/fabric_common.h"
@@ -43,7 +44,6 @@
 #include <umd/device/types/xy_pair.hpp>
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "test_host_kernel_common.hpp"
-
 namespace tt::tt_fabric::fabric_router_tests {
 
 // hack to let topology.cpp to know the binary is a unit test
@@ -73,8 +73,11 @@ std::shared_ptr<tt_metal::distributed::MeshBuffer> PrepareBuffer(
         .size = size,
     };
     auto buffer = tt_metal::distributed::MeshBuffer::create(global_buffer_config, device_local_config, device.get());
-    tt_metal::distributed::WriteShard(
-        device->mesh_command_queue(), buffer, fill_data, tt::tt_metal::distributed::MeshCoordinate({0, 0}), true);
+    device->mesh_command_queue().enqueue_write_shards(
+        buffer,
+        {tt_metal::distributed::ShardDataTransfer{tt::tt_metal::distributed::MeshCoordinate({0, 0})}.host_data(
+            fill_data.data())},
+        true);
     return buffer;
 }
 

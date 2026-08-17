@@ -41,6 +41,7 @@
 #include "math.hpp"
 #include <impl/dispatch/dispatch_mem_map.hpp>
 #include <distributed/mesh_device_impl.hpp>
+#include "tt_metal/distributed/mesh_buffer_impl.hpp"
 
 namespace tt::tt_metal {
 
@@ -605,11 +606,12 @@ TEST_F(MeshDeviceFixture, SlowDispatchFullGridAccess) {
 
         std::vector<uint32_t> src_vec(num_tiles * single_tile_size / sizeof(uint32_t), 0);
         std::iota(src_vec.begin(), src_vec.end(), 42);
-        EnqueueWriteMeshBuffer(mesh_device->mesh_command_queue(), mesh_buffer, src_vec);
+        mesh_device->mesh_command_queue().enqueue_write_mesh_buffer(mesh_buffer, src_vec.data(), false);
         Finish(mesh_device->mesh_command_queue());
 
-        std::vector<uint32_t> dst_vec = {};
-        EnqueueReadMeshBuffer(mesh_device->mesh_command_queue(), dst_vec, mesh_buffer, true);
+        const size_t dst_vec_n = mesh_buffer->size() / sizeof(uint32_t);
+        std::vector<uint32_t> dst_vec(dst_vec_n);
+        mesh_device->mesh_command_queue().enqueue_read_mesh_buffer((dst_vec).data(), mesh_buffer, true);
         EXPECT_EQ(dst_vec, src_vec) << "Buffer operations failed with full grid in slow dispatch mode";
     }
 }

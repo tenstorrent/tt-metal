@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <chrono>
+#include <type_traits>
 #include <fmt/base.h>
 //////////////////////////////////////////////////////////////////////////////////////////
 // Tests data movement between N cores with proper use of semaphores for sync
@@ -38,7 +39,6 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <umd/device/types/arch.hpp>
 #include <tt-metalium/distributed.hpp>
-
 namespace tt::tt_metal {
 
 using std::map;
@@ -244,7 +244,7 @@ void create_and_run_row_pipeline(
         create_random_vector_of_bfloat16(buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
 
     log_info(LogTest, "Writing to device buffer->..");
-    distributed::EnqueueWriteMeshBuffer(cq, src_buffer, src_vec);
+    cq.enqueue_write_mesh_buffer(src_buffer, src_vec.data(), false);
     log_info(LogTest, "Writing to device buffer Done.");
     distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
     distributed::Finish(cq);

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <fmt/base.h>
+#include <type_traits>
 #include <gtest/gtest.h>
 #include <cstddef>
 #include <umd/device/types/core_coordinates.hpp>
@@ -35,7 +36,6 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <umd/device/types/arch.hpp>
 #include "eth_test_common.hpp"
-
 using namespace tt;
 using namespace tt::tt_metal;
 using namespace tt::test_utils;
@@ -290,7 +290,8 @@ bool noc_reader_and_writer_kernels(
         });
 
     auto reader_inputs = generate_uniform_random_vector<uint32_t>(0, 100, byte_size / sizeof(uint32_t));
-    distributed::WriteShard(cq, reader_dram_buffer, reader_inputs, zero_coord);
+    cq.enqueue_write_shards(
+        reader_dram_buffer, {distributed::ShardDataTransfer{zero_coord}.host_data(reader_inputs.data())}, false);
 
     auto writer_inputs = generate_uniform_random_vector<uint32_t>(0, 100, byte_size / sizeof(uint32_t));
     tt::tt_metal::MetalContext::instance().get_cluster().write_core(
@@ -300,7 +301,8 @@ bool noc_reader_and_writer_kernels(
     std::vector<uint32_t> all_zeros(byte_size / sizeof(uint32_t), 0);
     tt::tt_metal::MetalContext::instance().get_cluster().write_core(
         device->id(), eth_noc_xy, all_zeros, eth_dst_l1_address);
-    distributed::WriteShard(cq, writer_dram_buffer, all_zeros, zero_coord);
+    cq.enqueue_write_shards(
+        writer_dram_buffer, {distributed::ShardDataTransfer{zero_coord}.host_data(all_zeros.data())}, false);
 
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);

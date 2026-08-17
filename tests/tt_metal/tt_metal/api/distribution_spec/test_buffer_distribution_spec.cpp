@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "gtest/gtest.h"
+#include <type_traits>
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "dispatch/system_memory_manager.hpp"
 #include "allocator/allocator.hpp"
@@ -13,7 +14,6 @@
 #include <tt-metalium/buffer_distribution_spec.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
-
 namespace distribution_spec_tests {
 using tt::tt_metal::BufferDistributionSpec;  // NOLINT(misc-unused-using-decls)
 constexpr uint32_t PADDING = tt::tt_metal::UncompressedBufferPageMapping::PADDING;
@@ -275,7 +275,7 @@ TEST_P(MeshBufferReadWriteTests, WriteReadLoopback) {
      * Here, buffer refers to local device buffer or shard view
      * - Initialize buffer and command queue state to 0
      * - Initialize src vector
-     * - Write to buffer (with either EnqueueWriteMeshBuffer or WriteToBuffer)
+     * - Write to buffer (with either enqueue_write_mesh_buffer or WriteToBuffer)
      * - Validate written results are correct per core (using explicitly hard-coded core mapping)
      * - Read from buffer (with either ReadShard or ReadFromBuffer)
      */
@@ -326,8 +326,8 @@ TEST_P(MeshBufferReadWriteTests, WriteReadLoopback) {
         tt::test_utils::generate_uniform_random_vector<uint8_t>(0, UINT8_MAX, host_size_in_bytes / sizeof(uint8_t));
 
     if (cq_write) {
-        log_info(tt::LogTest, "Writing with: FDMeshCommandQueue EnqueueWriteMeshBuffer");
-        EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), mesh_buffer, src, /*blocking=*/false);
+        log_info(tt::LogTest, "Writing with: FDMeshCommandQueue enqueue_write_mesh_buffer");
+        mesh_device_->mesh_command_queue().enqueue_write_mesh_buffer(mesh_buffer, src.data(), /*blocking=*/false);
         Finish(mesh_device_->mesh_command_queue());
     } else {
         log_info(tt::LogTest, "Writing with: WriteToBuffer (equivalent to SDMeshCommandQueue enqueue_write_shards)");

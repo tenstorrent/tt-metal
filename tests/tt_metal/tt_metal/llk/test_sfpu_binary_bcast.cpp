@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <fmt/base.h>
+#include <type_traits>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -31,7 +32,6 @@
 
 #include "device_fixture.hpp"
 #include "test_golden_impls.hpp"
-
 namespace tt::tt_metal {
 
 namespace unit_tests::compute::sfpu_binary_bcast {
@@ -265,8 +265,10 @@ bool run_sfpu_binary_bcast(const std::shared_ptr<distributed::MeshDevice>& mesh_
     auto src_b_tiled = ::unit_tests::compute::gold_standard_tilize(to_tile_input(src_b_rm), gc);
     auto golden_tiled = ::unit_tests::compute::gold_standard_tilize(to_tile_input(golden_rm), gc);
 
-    distributed::WriteShard(cq, src_data_buffer, src_a_tiled, zero_coord);
-    distributed::WriteShard(cq, src_bcast_buffer, src_b_tiled, zero_coord);
+    cq.enqueue_write_shards(
+        src_data_buffer, {distributed::ShardDataTransfer{zero_coord}.host_data(src_a_tiled.data())}, false);
+    cq.enqueue_write_shards(
+        src_bcast_buffer, {distributed::ShardDataTransfer{zero_coord}.host_data(src_b_tiled.data())}, false);
 
     tt_metal::SetRuntimeArgs(
         program_,
@@ -294,7 +296,6 @@ bool run_sfpu_binary_bcast(const std::shared_ptr<distributed::MeshDevice>& mesh_
 
     std::vector<uint32_t> device_tiled;
     distributed::ReadShard(cq, device_tiled, dst_buffer, zero_coord);
-
     if (device_tiled.size() != golden_tiled.size()) {
         log_error(tt::LogTest, "Size mismatch: device={} golden={}", device_tiled.size(), golden_tiled.size());
         return false;

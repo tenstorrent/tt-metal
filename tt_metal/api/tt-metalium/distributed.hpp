@@ -9,6 +9,7 @@
 #include <optional>
 #include <vector>
 
+#include <tt_stl/assert.hpp>
 #include <tt_stl/optional_reference.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/buffer.hpp>
@@ -17,7 +18,6 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_event.hpp>
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
-#include <tt-metalium/mesh_trace_id.hpp>
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 
@@ -35,17 +35,6 @@ class IDevice;
 namespace distributed {
 
 void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking);
-
-template <typename DType>
-void WriteShard(
-    MeshCommandQueue& mesh_cq,
-    const std::shared_ptr<MeshBuffer>& mesh_buffer,
-    std::vector<DType>& src,
-    const MeshCoordinate& coord,
-    bool blocking = false) {
-    std::vector<ShardDataTransfer> shard_data_transfers = {ShardDataTransfer{coord}.host_data(src.data())};
-    mesh_cq.enqueue_write_shards(mesh_buffer, shard_data_transfers, blocking);
-}
 
 template <typename DType>
 void ReadShard(
@@ -74,7 +63,8 @@ void EnqueueWriteMeshBuffer(
     std::shared_ptr<MeshBuffer>& mesh_buffer,
     const std::vector<DType>& src,
     bool blocking = false) {
-    TT_FATAL(src.size() * sizeof(DType) >= mesh_buffer->size(),
+    TT_FATAL(
+        src.size() * sizeof(DType) >= mesh_buffer->size(),
         "Source vector is too small for mesh buffer: mesh buffer size={} bytes, source size={} * {} bytes",
         mesh_buffer->size(),
         src.size(),
@@ -92,7 +82,7 @@ void EnqueueReadMeshBuffer(
     // This API supports reading MeshBuffers sharded across devices
     // and a Unit-MeshBuffer with a replicated layout.
     if (mesh_buffer->global_layout() == MeshBufferLayout::SHARDED) {
-        dst.resize(mesh_buffer->global_shard_spec().global_size / sizeof(DType));
+        dst.resize(std::get<ShardedBufferConfig>(mesh_buffer->global_config()).global_size / sizeof(DType));
     } else {
         dst.resize(mesh_buffer->size() / sizeof(DType));
     }
@@ -102,19 +92,10 @@ void EnqueueReadMeshBuffer(
 // Make the current thread block until the event is recorded by the associated MeshCommandQueue.
 void EventSynchronize(const MeshEvent& event);
 
-// Query the status of an event tied to a MeshCommandQueue.
-// Returns true if the CQ has completed recording the event, false otherwise.
-bool EventQuery(const MeshEvent& event);
-
 void Synchronize(
     MeshDevice& device,
     ttsl::optional_reference<MeshCommandQueue> mesh_cq,
     ttsl::Span<const SubDeviceId> sub_device_ids = {});
-
-[[deprecated(
-    "Use MeshDevice::begin_mesh_trace(MeshCommandQueue&) instead. BeginTraceCapture(MeshDevice*, uint8_t) will be "
-    "removed after September 9th, 2026.")]]
-MeshTraceId BeginTraceCapture(MeshDevice* device, uint8_t cq_id);
 
 // Takes the device by pointer, so the reference-taking overload above is the only candidate for a MeshDevice lvalue
 // and this one the only candidate for a MeshDevice*. That keeps Synchronize(device, std::nullopt, ...) unambiguous

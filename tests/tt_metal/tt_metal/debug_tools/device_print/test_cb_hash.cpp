@@ -16,6 +16,7 @@
 //   3. Distinct inputs produce distinct fingerprints (discrimination).
 
 #include <cstdint>
+#include <type_traits>
 #include <fstream>
 #include <regex>
 #include <sstream>
@@ -36,7 +37,6 @@
 #include "tt_metal/tt_metal/debug_tools/debug_tools_fixture.hpp"
 #include "gtest/gtest.h"
 #include "tt_metal/test_utils/stimulus.hpp"
-
 using namespace tt;
 using namespace tt::tt_metal;
 
@@ -151,7 +151,10 @@ uint32_t run_once(
         s.core,
         {static_cast<uint32_t>(s.output_dram->address()), 0u, static_cast<uint32_t>(NUM_TILES)});
 
-    distributed::WriteShard(cq, s.input_dram, const_cast<std::vector<uint32_t>&>(input), s.zero);
+    cq.enqueue_write_shards(
+        s.input_dram,
+        {distributed::ShardDataTransfer{s.zero}.host_data(const_cast<std::vector<uint32_t>&>(input).data())},
+        false);
     fixture->RunProgram(mesh_device, s.workload);
 
     return extract_hash(fixture->dprint_file_name, LABEL, INPUT_CB, NUM_TILES);
@@ -191,7 +194,10 @@ uint32_t run_once_sfpu(
     SetRuntimeArgs(
         *s.program, writer, s.core, {static_cast<uint32_t>(s.output_dram->address()), 0u, static_cast<uint32_t>(NUM_TILES)});
 
-    distributed::WriteShard(cq, s.input_dram, const_cast<std::vector<uint32_t>&>(input), s.zero);
+    cq.enqueue_write_shards(
+        s.input_dram,
+        {distributed::ShardDataTransfer{s.zero}.host_data(const_cast<std::vector<uint32_t>&>(input).data())},
+        false);
     fixture->RunProgram(mesh_device, s.workload);
 
     std::vector<uint32_t> result(NUM_TILES * 1024, 0u);

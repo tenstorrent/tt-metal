@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_stl/reflection.hpp>
+#include <type_traits>
 #include <chrono>
 #include <fmt/base.h>
 #include <gtest/gtest.h>
@@ -37,7 +38,6 @@
 #include "tt_metal/test_utils/df/float32.hpp"
 #include "tt_metal/test_utils/packing.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
-
 namespace tt::tt_metal {
 class IDevice;
 }  // namespace tt::tt_metal
@@ -483,8 +483,10 @@ void run_single_core_broadcast(
     auto tilized_input0 = ::unit_tests::compute::gold_standard_tilize(packed_input0, config);
     auto tilized_input1 = ::unit_tests::compute::gold_standard_tilize(packed_input1, config);
 
-    distributed::WriteShard(cq, src_a_dram_buffer, tilized_input0, zero_coord);
-    distributed::WriteShard(cq, src_b_dram_buffer, tilized_input1, zero_coord);
+    cq.enqueue_write_shards(
+        src_a_dram_buffer, {distributed::ShardDataTransfer{zero_coord}.host_data(tilized_input0.data())}, false);
+    cq.enqueue_write_shards(
+        src_b_dram_buffer, {distributed::ShardDataTransfer{zero_coord}.host_data(tilized_input1.data())}, false);
 
     distributed::EnqueueMeshWorkload(cq, workload, is_quasar);
     distributed::Finish(cq);
@@ -757,8 +759,10 @@ void run_sub_bcast_col_custom(
     auto tilized_input0 = ::unit_tests::compute::gold_standard_tilize(packed_input0, grid_config);
     auto tilized_input1 = ::unit_tests::compute::gold_standard_tilize(packed_input1, bcast_config);
 
-    distributed::WriteShard(cq, src_a_dram_buffer, tilized_input0, zero_coord);
-    distributed::WriteShard(cq, src_b_dram_buffer, tilized_input1, zero_coord);
+    cq.enqueue_write_shards(
+        src_a_dram_buffer, {distributed::ShardDataTransfer{zero_coord}.host_data(tilized_input0.data())}, false);
+    cq.enqueue_write_shards(
+        src_b_dram_buffer, {distributed::ShardDataTransfer{zero_coord}.host_data(tilized_input1.data())}, false);
 
     distributed::EnqueueMeshWorkload(cq, workload, is_quasar);
     distributed::Finish(cq);

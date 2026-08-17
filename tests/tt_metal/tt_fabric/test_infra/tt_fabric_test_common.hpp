@@ -5,6 +5,7 @@
 #pragma once
 
 #include <array>
+#include <type_traits>
 #include <vector>
 #include <unordered_map>
 #include <algorithm>
@@ -33,7 +34,6 @@
 #include "tt_fabric_test_common_types.hpp"
 #include "tt_metal/distributed/fd_mesh_command_queue.hpp"
 #include "tt_metal/distributed/mesh_device_impl.hpp"
-
 using MeshDevice = tt::tt_metal::distributed::MeshDevice;
 using MeshCoordinate = tt::tt_metal::distributed::MeshCoordinate;
 using MeshShape = tt::tt_metal::distributed::MeshShape;
@@ -645,8 +645,10 @@ public:
 
         const auto total_size = size_bytes * cores.size();
         std::vector<uint32_t> zero_buffer(total_size / sizeof(uint32_t), 0);
-        tt::tt_metal::distributed::WriteShard(
-            mesh_device_->mesh_command_queue(), mesh_buffer, zero_buffer, device_coord, true);
+        mesh_device_->mesh_command_queue().enqueue_write_shards(
+            mesh_buffer,
+            {tt::tt_metal::distributed::ShardDataTransfer{device_coord}.host_data(zero_buffer.data())},
+            true);
     }
 
     // Local runtime args function - writes args to local args buffer instead of using SetRuntimeArgs
@@ -662,8 +664,10 @@ public:
         all_args_buffer.reserve(total_size / sizeof(uint32_t));
         all_args_buffer.insert(all_args_buffer.end(), args.begin(), args.end());
 
-        tt::tt_metal::distributed::WriteShard(
-            mesh_device_->mesh_command_queue(), mesh_buffer, all_args_buffer, device_coord, true);
+        mesh_device_->mesh_command_queue().enqueue_write_shards(
+            mesh_buffer,
+            {tt::tt_metal::distributed::ShardDataTransfer{device_coord}.host_data(all_args_buffer.data())},
+            true);
     }
 
     // ======================================================================================

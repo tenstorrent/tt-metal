@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
+#include <type_traits>
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
@@ -39,7 +40,6 @@
 #include <umd/device/types/arch.hpp>
 #include "tt_metal/test_utils/bfloat_utils.hpp"
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
-
 namespace tt::tt_metal {
 class IDevice;
 }  // namespace tt::tt_metal
@@ -535,12 +535,12 @@ bool single_core_unpack_reconfig_quasar(const std::shared_ptr<distributed::MeshD
     auto src4 = create_random_vector_of_bfloat16(f16_tile_size, kRandMax, /*seed=*/0x1005);
     auto src5 = create_random_vector_of_bfloat16(f16_tile_size, kRandMax, /*seed=*/0x1006);
 
-    distributed::WriteShard(cq, inp0_dram, src0, zero_coord, false);
-    distributed::WriteShard(cq, inp1_dram, src1, zero_coord, false);
-    distributed::WriteShard(cq, inp2_dram, src2, zero_coord, false);
-    distributed::WriteShard(cq, inp3_dram, src3, zero_coord, false);
-    distributed::WriteShard(cq, inp4_dram, src4, zero_coord, false);
-    distributed::WriteShard(cq, inp5_dram, src5, zero_coord, false);
+    cq.enqueue_write_shards(inp0_dram, {distributed::ShardDataTransfer{zero_coord}.host_data(src0.data())}, false);
+    cq.enqueue_write_shards(inp1_dram, {distributed::ShardDataTransfer{zero_coord}.host_data(src1.data())}, false);
+    cq.enqueue_write_shards(inp2_dram, {distributed::ShardDataTransfer{zero_coord}.host_data(src2.data())}, false);
+    cq.enqueue_write_shards(inp3_dram, {distributed::ShardDataTransfer{zero_coord}.host_data(src3.data())}, false);
+    cq.enqueue_write_shards(inp4_dram, {distributed::ShardDataTransfer{zero_coord}.host_data(src4.data())}, false);
+    cq.enqueue_write_shards(inp5_dram, {distributed::ShardDataTransfer{zero_coord}.host_data(src5.data())}, false);
 
     auto in0 = unpack_uint32_vec_into_bfloat16_vec(src0);
     auto in1 = unpack_uint32_vec_into_bfloat16_vec(src1);
@@ -872,12 +872,12 @@ bool single_core_pack_reconfig_quasar(const std::shared_ptr<distributed::MeshDev
     auto src4 = create_random_vector_of_bfloat16(f16_tile_size, kRandMax, /*seed=*/0x2005);
     auto src5 = create_random_vector_of_bfloat16(f16_tile_size, kRandMax, /*seed=*/0x2006);
 
-    distributed::WriteShard(cq, inp0_dram, src0, zero_coord, false);
-    distributed::WriteShard(cq, inp1_dram, src1, zero_coord, false);
-    distributed::WriteShard(cq, inp2_dram, src2, zero_coord, false);
-    distributed::WriteShard(cq, inp3_dram, src3, zero_coord, false);
-    distributed::WriteShard(cq, inp4_dram, src4, zero_coord, false);
-    distributed::WriteShard(cq, inp5_dram, src5, zero_coord, false);
+    cq.enqueue_write_shards(inp0_dram, {distributed::ShardDataTransfer{zero_coord}.host_data(src0.data())}, false);
+    cq.enqueue_write_shards(inp1_dram, {distributed::ShardDataTransfer{zero_coord}.host_data(src1.data())}, false);
+    cq.enqueue_write_shards(inp2_dram, {distributed::ShardDataTransfer{zero_coord}.host_data(src2.data())}, false);
+    cq.enqueue_write_shards(inp3_dram, {distributed::ShardDataTransfer{zero_coord}.host_data(src3.data())}, false);
+    cq.enqueue_write_shards(inp4_dram, {distributed::ShardDataTransfer{zero_coord}.host_data(src4.data())}, false);
+    cq.enqueue_write_shards(inp5_dram, {distributed::ShardDataTransfer{zero_coord}.host_data(src5.data())}, false);
 
     auto in0 = unpack_uint32_vec_into_bfloat16_vec(src0);
     auto in1 = unpack_uint32_vec_into_bfloat16_vec(src1);

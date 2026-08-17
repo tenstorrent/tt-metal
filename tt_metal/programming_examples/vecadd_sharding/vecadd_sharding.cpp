@@ -24,7 +24,6 @@
 #include <random>
 #include <string_view>
 #include <vector>
-
 using namespace tt::tt_metal;
 
 using CoreSpec = std::variant<CoreCoord, CoreRange, CoreRangeSet>;
@@ -221,8 +220,8 @@ int main(int argc, char** argv) {
 
     // copy data from host to L1 directly
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
-    EnqueueWriteMeshBuffer(cq, a, a_data, false);
-    EnqueueWriteMeshBuffer(cq, b, b_data, false);
+    cq.enqueue_write_mesh_buffer(a, a_data.data(), false);
+    cq.enqueue_write_mesh_buffer(b, b_data.data(), false);
 
     // Setup arguments and run the program.
     SetRuntimeArgs(program, compute, cores, {num_tiles_per_core});
@@ -232,8 +231,8 @@ int main(int argc, char** argv) {
     fmt::print("Kernel execution finished. Reading results...\n");
 
     // Read the output buffer.
-    std::vector<bfloat16> c_data;
-    distributed::EnqueueReadMeshBuffer(cq, c_data, c, true);
+    std::vector<bfloat16> c_data(c->device_local_size() / sizeof(bfloat16));
+    cq.enqueue_read_mesh_buffer((c_data).data(), c, true);
 
     // Print partial results so we can see the output is correct (plus or minus
     // some error due to BFP16 precision)

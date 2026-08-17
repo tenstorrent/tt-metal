@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <system_mesh.hpp>
 #include <tt-metalium/mesh_device_view.hpp>
+#include "mesh_device_view_impl.hpp"
 #include <tt-metalium/shape2d.hpp>
 #include <tt-metalium/distributed_context.hpp>
 #include <algorithm>
@@ -185,7 +186,7 @@ SystemMesh::MappedDevices SystemMesh::Impl::get_mapped_devices(
 
         auto line_length = requested_shape.mesh_size();
         for (const auto& logical_coordinate :
-             MeshDeviceView::get_line_coordinates(line_length, system_mesh_2d, system_offset_2d)) {
+             MeshDeviceViewImpl::get_line_coordinates(line_length, system_mesh_2d, system_offset_2d)) {
             const auto mapped_device = get_system_mapped_device(logical_coordinate);
             mapped_devices.device_ids.push_back(mapped_device.device_id);
             mapped_devices.fabric_node_ids.push_back(mapped_device.fabric_node_id);

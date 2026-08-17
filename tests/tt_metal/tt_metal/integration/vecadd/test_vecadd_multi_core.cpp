@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <fmt/base.h>
+#include <type_traits>
 #include <gtest/gtest.h>
 #include <cstddef>
 #include <tt-metalium/bfloat16.hpp>
@@ -30,7 +31,6 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
-
 namespace tt::tt_metal {
 
 using namespace tt;
@@ -139,8 +139,8 @@ bool vecadd_multi_core(
         SetRuntimeArgs(program, compute, core, {tiles_per_core, i});
     }
 
-    distributed::WriteShard(cq, a, a_data, zero_coord);
-    distributed::WriteShard(cq, b, b_data, zero_coord);
+    cq.enqueue_write_shards(a, {distributed::ShardDataTransfer{zero_coord}.host_data(a_data.data())}, false);
+    cq.enqueue_write_shards(b, {distributed::ShardDataTransfer{zero_coord}.host_data(b_data.data())}, false);
     // Enqueue the program
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);

@@ -7,6 +7,7 @@
 // checkpoint, debug_dump_cb, debug_dump_l1, debug_dump_cb_typed.
 
 #include <cstdint>
+#include <type_traits>
 #include <string>
 #include <vector>
 
@@ -26,7 +27,6 @@
 #include "debug_tools_test_utils.hpp"
 #include "gtest/gtest.h"
 #include "tt_metal/test_utils/stimulus.hpp"
-
 using namespace tt;
 using namespace tt::tt_metal;
 
@@ -116,7 +116,7 @@ static void run_basic_checkpoint(
 
     auto input =
         tt::test_utils::generate_packed_uniform_random_vector<uint32_t, bfloat16>(-1.0f, 1.0f, NUM_TILES * 1024);
-    distributed::WriteShard(cq, s.input_dram, input, s.zero);
+    cq.enqueue_write_shards(s.input_dram, {distributed::ShardDataTransfer{s.zero}.host_data(input.data())}, false);
     fixture->RunProgram(mesh_device, s.workload);
 
     std::vector<uint32_t> output;
@@ -170,7 +170,7 @@ static void run_checkpoint_loop(
 
     auto input =
         tt::test_utils::generate_packed_uniform_random_vector<uint32_t, bfloat16>(-1.0f, 1.0f, NUM_TILES * 1024);
-    distributed::WriteShard(cq, s.input_dram, input, s.zero);
+    cq.enqueue_write_shards(s.input_dram, {distributed::ShardDataTransfer{s.zero}.host_data(input.data())}, false);
     fixture->RunProgram(mesh_device, s.workload);
 
     std::vector<uint32_t> output;
@@ -274,8 +274,8 @@ static void run_global_checkpoint(
         tt::test_utils::generate_packed_uniform_random_vector<uint32_t, bfloat16>(-1.0f, 1.0f, NUM_TILES * 1024);
     auto data1 =
         tt::test_utils::generate_packed_uniform_random_vector<uint32_t, bfloat16>(-1.0f, 1.0f, NUM_TILES * 1024);
-    distributed::WriteShard(cq, in0, data0, zero);
-    distributed::WriteShard(cq, in1, data1, zero);
+    cq.enqueue_write_shards(in0, {distributed::ShardDataTransfer{zero}.host_data(data0.data())}, false);
+    cq.enqueue_write_shards(in1, {distributed::ShardDataTransfer{zero}.host_data(data1.data())}, false);
     fixture->RunProgram(mesh_device, workload);
 
     std::vector<uint32_t> o0, o1;
@@ -334,7 +334,7 @@ static void run_dump_cb(DevicePrintFixture* fixture, const std::shared_ptr<distr
 
     auto input =
         tt::test_utils::generate_packed_uniform_random_vector<uint32_t, bfloat16>(-1.0f, 1.0f, NUM_TILES * 1024);
-    distributed::WriteShard(cq, s.input_dram, input, s.zero);
+    cq.enqueue_write_shards(s.input_dram, {distributed::ShardDataTransfer{s.zero}.host_data(input.data())}, false);
     fixture->RunProgram(mesh_device, s.workload);
 
     std::vector<uint32_t> output;
@@ -390,7 +390,7 @@ static void run_dump_l1(DevicePrintFixture* fixture, const std::shared_ptr<distr
 
     auto input =
         tt::test_utils::generate_packed_uniform_random_vector<uint32_t, bfloat16>(-1.0f, 1.0f, NUM_TILES * 1024);
-    distributed::WriteShard(cq, s.input_dram, input, s.zero);
+    cq.enqueue_write_shards(s.input_dram, {distributed::ShardDataTransfer{s.zero}.host_data(input.data())}, false);
     fixture->RunProgram(mesh_device, s.workload);
 
     std::vector<uint32_t> output;
@@ -446,7 +446,7 @@ static void run_dump_typed(DevicePrintFixture* fixture, const std::shared_ptr<di
 
     auto input =
         tt::test_utils::generate_packed_uniform_random_vector<uint32_t, bfloat16>(-1.0f, 1.0f, NUM_TILES * 1024);
-    distributed::WriteShard(cq, s.input_dram, input, s.zero);
+    cq.enqueue_write_shards(s.input_dram, {distributed::ShardDataTransfer{s.zero}.host_data(input.data())}, false);
     fixture->RunProgram(mesh_device, s.workload);
 
     std::vector<uint32_t> output;

@@ -8,7 +8,6 @@
 
 #include <cstdint>
 #include <vector>
-
 #ifndef OVERRIDE_KERNEL_PREFIX
 #define OVERRIDE_KERNEL_PREFIX ""
 #endif
@@ -59,7 +58,7 @@ int main() {
     // Source data preparation and DRAM transfer
     const uint16_t input_data = 14;  // Example input data
     std::vector<uint16_t> src_vec(buffer_config.size / sizeof(uint16_t), input_data);
-    distributed::EnqueueWriteMeshBuffer(cq, src_dram_buffer, src_vec, false);
+    cq.enqueue_write_mesh_buffer(src_dram_buffer, src_vec.data(), false);
 
     // L1 circular buffer setup
     constexpr uint32_t src0_cb_index = CBIndex::c_0;
@@ -115,8 +114,8 @@ int main() {
     distributed::Finish(cq);
 
     // Data transfer back to host machine
-    std::vector<uint16_t> result_vec;
-    distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, true);
+    std::vector<uint16_t> result_vec(dst_dram_buffer->device_local_size() / sizeof(uint16_t));
+    cq.enqueue_read_mesh_buffer((result_vec).data(), dst_dram_buffer, true);
 
     fmt::print("Result = {} : Expected = {}\n", result_vec[0], input_data);
 

@@ -16,7 +16,6 @@
 #include <tt-metalium/mesh_device.hpp>
 #include "tt_metal/distributed/pinned_memory_cache.hpp"
 #include "tt_metal/distributed/mesh_device_view_impl.hpp"
-
 namespace tt::tt_metal {
 
 // ======================================================================================

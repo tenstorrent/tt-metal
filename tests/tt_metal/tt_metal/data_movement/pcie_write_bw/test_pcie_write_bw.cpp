@@ -163,13 +163,14 @@ TEST_F(GenericMeshDeviceFixture, PCIeHostWriteBandwidthSweep) {
         vector<uint32_t> src(buf_size / sizeof(uint32_t), 0xDEADBEEF);
 
         // Warmup
-        distributed::WriteShard(cq, buffer, src, device_coord, false);
+        cq.enqueue_write_shards(buffer, {distributed::ShardDataTransfer{device_coord}.host_data(src.data())}, false);
         distributed::Finish(cq);
 
         // Timed
         auto start = chrono::high_resolution_clock::now();
         for (uint32_t i = 0; i < num_iterations; i++) {
-            distributed::WriteShard(cq, buffer, src, device_coord, false);
+            cq.enqueue_write_shards(
+                buffer, {distributed::ShardDataTransfer{device_coord}.host_data(src.data())}, false);
         }
         distributed::Finish(cq);
         auto end = chrono::high_resolution_clock::now();

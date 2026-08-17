@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstddef>
+#include <type_traits>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device.hpp>
@@ -43,10 +44,8 @@
 #include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <tt-metalium/distributed.hpp>
-
 // Access to internal API: ProgramImpl::validate_circular_buffer_region
 #include "tt_metal/impl/program/program_impl.hpp"
-
 namespace tt::tt_metal {
 
 constexpr uint32_t k_local_l1_size = 3200;
@@ -154,7 +153,7 @@ void test_sub_device_synchronization(distributed::MeshDevice* device) {
     distributed::Synchronize(*device, std::nullopt);
 
     // Test blocking write buffer doesn't stall
-    distributed::EnqueueWriteMeshBuffer(device->mesh_command_queue(), buffer_1, input_1, true);
+    device->mesh_command_queue().enqueue_write_mesh_buffer(buffer_1, input_1.data(), true);
 
     // Test record event won't cause a stall
 
