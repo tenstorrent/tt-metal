@@ -27,6 +27,7 @@ def run_reference_moe(
     routed_expert_weights,
     shared_expert_weights,
     x,
+    latent_weights=None,
 ) -> Optional[torch.Tensor]:
     """Forward the variant's upstream MoE reference on CPU."""
     if variant.reference_moe_cls is None:
@@ -39,11 +40,16 @@ def run_reference_moe(
     cfg = deepcopy(config)
     cfg.n_routed_experts = gate_weights["weight"].shape[0]
     cfg.hidden_size = gate_weights["weight"].shape[1]
+    if hasattr(cfg, "num_experts"):
+        cfg.num_experts = cfg.n_routed_experts
     if routed_expert_weights:
         cfg.moe_intermediate_size = routed_expert_weights[0]["gate_proj"].shape[0]
+        # Kimi-K3's routed experts read the latent width, not hidden_size.
+        if getattr(cfg, "routed_expert_hidden_size", None) is not None:
+            cfg.routed_expert_hidden_size = routed_expert_weights[0]["gate_proj"].shape[1]
     moe = variant.reference_moe_cls(cfg)
     moe.load_state_dict(
-        _pack_reference_moe_state_dict(gate_weights, routed_expert_weights, shared_expert_weights),
+        _pack_reference_moe_state_dict(moe, gate_weights, routed_expert_weights, shared_expert_weights, latent_weights),
         strict=True,
     )
     moe = moe.eval().to(torch.bfloat16)
@@ -88,7 +94,13 @@ def run_reference_mla(
     return out[0] if isinstance(out, tuple) else out
 
 
-def _pack_reference_moe_state_dict(gate_weights, routed_expert_weights, shared_expert_weights) -> dict:
+def _pack_reference_moe_state_dict(moe, gate_weights, routed_expert_weights, shared_expert_weights, latent_weights):
+    """Pack TT-side weight dicts into ``moe``'s own key layout, for a strict load.
+
+    Read off the constructed module rather than a per-variant table: Kimi-K3 names its routed
+    projections w1/w3/w2 and adds the latent pair plus its norm, and anything else it grows would
+    surface as a strict-load error naming the key.
+    """
     sd = {
         "gate.weight": gate_weights["weight"],
         "gate.e_score_correction_bias": gate_weights["e_score_correction_bias"],
@@ -96,7 +108,14 @@ def _pack_reference_moe_state_dict(gate_weights, routed_expert_weights, shared_e
         "shared_experts.up_proj.weight": shared_expert_weights["up_proj"],
         "shared_experts.down_proj.weight": shared_expert_weights["down_proj"],
     }
+    src = ("gate_proj", "up_proj", "down_proj")
+    dst = ("w1", "w3", "w2") if hasattr(moe.experts[0], "w1") else src
     for i, w in enumerate(routed_expert_weights):
-        for proj in ("gate_proj", "up_proj", "down_proj"):
-            sd[f"experts.{i}.{proj}.weight"] = w[proj]
+        for proj, name in zip(src, dst):
+            sd[f"experts.{i}.{name}.weight"] = w[proj]
+    if hasattr(moe, "routed_expert_down_proj"):
+        sd["routed_expert_down_proj.weight"] = latent_weights["down_proj"]
+        sd["routed_expert_up_proj.weight"] = latent_weights["up_proj"]
+        if hasattr(moe, "routed_expert_norm"):
+            sd["routed_expert_norm.weight"] = latent_weights["norm"]
     return {k: v.to(torch.bfloat16) for k, v in sd.items()}
