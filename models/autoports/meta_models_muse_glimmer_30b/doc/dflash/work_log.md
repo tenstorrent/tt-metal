@@ -18,6 +18,11 @@ Two independent things cap it, both now measured rather than assumed:
   drafter scores no better against this target — so the CPU oracle's 4.41
   accepted/forward is not reachable here.
 
+The *shipped* non-speculative path is unaffected: measured against the pristine
+pre-DFlash commit it is 42.92 vs 42.96 t/s/u, a -0.10 % difference inside the
+run-to-run spread, with identical output tokens (F17).  "DFlash is slower" is a
+statement about the feature, not about the release path.
+
 F16 records three redesigns that would each have closed the gap and did not
 survive measurement.
 
@@ -592,6 +597,41 @@ and is exactly equivalent on paper.  Wrong here: TILE layout pads the `-2` dimen
 reshape folding heads into the row axis crosses it.  15 of 25 drafter tests fail while
 the encoder tests, which touch no head dimension, still pass.  It would be valid at
 `block_size >= 32`.
+
+### F17 — The DFlash commits do not regress non-speculative decode
+
+Worth settling with a direct A/B rather than by assertion, because "DFlash made things
+slower" is ambiguous between *the feature is slower than not using it* (true, and the
+whole subject of F13/F15) and *merging this work slowed the shipped path* (not true).
+
+`doc/dflash/bench/baseline_ab.py` measures plain greedy decode and TTFT.  It lives
+outside the model tree deliberately, so the identical script runs against two
+checkouts via `PYTHONPATH`, with the interpreter, the tt-metal build and the device
+held fixed:
+
+| | pristine `0dd37ce6ee3` | DFlash tip `b20c1de1858` |
+|---|---|---|
+| decode t/s/u, best of 3 | **42.96** | **42.92** |
+| per-trial | 37.55 / 42.96 / 42.92 | 37.63 / 42.92 / 42.91 |
+| TTFT, best of 3 | 60.0 ms | 62.4 ms |
+| TTFT per-trial | 60.4 / 60.0 / **73.7** | 64.2 / 62.4 / 65.5 |
+| first 16 tokens | — | **identical** |
+
+Decode differs by **-0.10 %**, inside the run-to-run spread, and the generated tokens
+are identical.  TTFT's 2.4 ms difference sits well inside the pristine arm's own
+60.0-73.7 ms spread, so it is not resolvable at three trials; it is worth re-checking
+if the sliding-window routing added in F14 is ever suspected, since that is the one
+change touching the shipped prefill path.
+
+Both arms show the same cold-first-trial pattern (37.6 then 42.9), which is the trace
+capture and program-cache population F12 warns about -- another reason to report the
+best of several trials rather than a single one.
+
+**Note for anyone repeating this**: `git worktree add <relative-path>` resolves against
+the *current* directory, so adding a worktree from inside another worktree nests it.
+The first run of this A/B pointed `PYTHONPATH` at a path that did not exist, `models`
+silently fell back to the shared checkout, and both arms measured the same tree.  The
+harness prints the resolved package root for exactly that reason -- check it.
 
 ## Artifacts
 

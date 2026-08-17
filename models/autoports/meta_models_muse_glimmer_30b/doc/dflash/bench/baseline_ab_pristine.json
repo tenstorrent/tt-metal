@@ -1,0 +1,39 @@
+{
+  "label": "pristine-0dd37ce6ee3",
+  "model_root": "/home/ttuser/dev/muse-glimmer/tt-metal/.claude/worktrees/dflash-perf/.claude/worktrees/pristine/models/autoports/meta_models_muse_glimmer_30b",
+  "prompt_tokens": 67,
+  "max_new_tokens": 128,
+  "trial_seconds": [
+    3.408632762999332,
+    2.979385069997079,
+    2.9821794039999077
+  ],
+  "best_seconds": 2.979385069997079,
+  "tokens_per_second": 42.961885420243945,
+  "ms_per_token": 23.27644585935218,
+  "ttft_seconds": [
+    0.060418533998017665,
+    0.06001413199919625,
+    0.07368143100029556
+  ],
+  "best_ttft_ms": 60.01413199919625,
+  "median_tokens_per_second": 42.921629674028814,
+  "first_tokens": [
+    328,
+    19669,
+    200023,
+    10064,
+    262,
+    13940,
+    1023,
+    511,
+    165339,
+    1472,
+    21721,
+    20230,
+    1574,
+    2991,
+    1657,
+    328
+  ]
+}

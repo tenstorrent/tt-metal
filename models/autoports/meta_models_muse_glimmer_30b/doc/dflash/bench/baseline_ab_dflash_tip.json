@@ -1,0 +1,39 @@
+{
+  "label": "dflash-tip-b20c1de1858",
+  "model_root": "/home/ttuser/dev/muse-glimmer/tt-metal/.claude/worktrees/dflash-perf/models/autoports/meta_models_muse_glimmer_30b",
+  "prompt_tokens": 67,
+  "max_new_tokens": 128,
+  "trial_seconds": [
+    3.4018663329989067,
+    2.9822262079978827,
+    2.9828691559996514
+  ],
+  "best_seconds": 2.9822262079978827,
+  "tokens_per_second": 42.920956048445696,
+  "ms_per_token": 23.29864224998346,
+  "ttft_seconds": [
+    0.06423328499658965,
+    0.0624445809989993,
+    0.06551046300228336
+  ],
+  "best_ttft_ms": 62.4445809989993,
+  "median_tokens_per_second": 42.911704572272214,
+  "first_tokens": [
+    328,
+    19669,
+    200023,
+    10064,
+    262,
+    13940,
+    1023,
+    511,
+    165339,
+    1472,
+    21721,
+    20230,
+    1574,
+    2991,
+    1657,
+    328
+  ]
+}
