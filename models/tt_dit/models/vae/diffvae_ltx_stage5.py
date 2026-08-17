@@ -1191,35 +1191,40 @@ class DiffVAEStage5(Module):
         bands = self.bands(grid)
         if self._w_sharded:
             context = self._wshard_context(context, grid)
-        with stage_timer(self.mesh_device, "stage5 diff-blocks (attn)"):
+        with stage_timer(self.mesh_device, "stage5 diff-blocks (attn+MLP)"):
             out = self.forward_diff_step(context, self.embed_x_t(x_t, bands), timestep, grid, bands)
 
-        with stage_timer(self.mesh_device, "stage5 tail (host pull + unpatchify)"):
-            return self._to_pixels(out, grid)
+        return self._to_pixels(out, grid)
 
     def _to_pixels(self, out, grid):
+        # The tail splits into a device->host PCIe pull and a host-side unpatchify permute; timing
+        # them apart tells us which one the (large, at 1080p) tail cost actually is.
         cfg = self.config
         if self._w_sharded:
             # ``out`` is this chip's W-band; gather every band to the host and undo the
             # (device, t, h, w_local) reordering back to the (t, h, w) volume before unpatchify.
             sp = int(list(self.mesh_device.shape)[self.sp_axis])
             w_local = grid.w // sp
-            gathered = gathered_to_torch(out, mesh_axes=[None, None, self.sp_axis, None])[..., : cfg.patch_channels]
-            ttnn.deallocate(out)
-            packed = (
-                gathered.reshape(sp, grid.t, grid.h, w_local, cfg.patch_channels)
-                .permute(1, 2, 0, 3, 4)
-                .reshape(grid.batch, grid.t, grid.h, grid.w, cfg.patch_channels)
-                .permute(0, 4, 1, 2, 3)
-            )
-            return unpatchify(packed, cfg.patch_size)
+            with stage_timer(self.mesh_device, "stage5 tail: device->host pull"):
+                gathered = gathered_to_torch(out, mesh_axes=[None, None, self.sp_axis, None])[..., : cfg.patch_channels]
+                ttnn.deallocate(out)
+            with stage_timer(self.mesh_device, "stage5 tail: host unpatchify"):
+                packed = (
+                    gathered.reshape(sp, grid.t, grid.h, w_local, cfg.patch_channels)
+                    .permute(1, 2, 0, 3, 4)
+                    .reshape(grid.batch, grid.t, grid.h, grid.w, cfg.patch_channels)
+                    .permute(0, 4, 1, 2, 3)
+                )
+                return unpatchify(packed, cfg.patch_size)
 
         # This tensor is replicated across the mesh, so a bare ttnn.to_torch sees one buffer per
         # device and fails. Reading a single chip's copy is what that replication means; the
         # composing helper instead pulls all 32 copies to the host and indexes one out of them,
         # which for a 418 MB output is 13 GB over PCIe and was 100s of a 190s decode.
-        packed = local_device_to_torch(out)[..., : cfg.patch_channels]
-        ttnn.deallocate(out)
-        packed = packed.reshape(grid.batch, grid.t, grid.h, grid.w, cfg.patch_channels)
-        packed = packed.permute(0, 4, 1, 2, 3)
-        return unpatchify(packed, cfg.patch_size)
+        with stage_timer(self.mesh_device, "stage5 tail: device->host pull"):
+            packed = local_device_to_torch(out)[..., : cfg.patch_channels]
+            ttnn.deallocate(out)
+        with stage_timer(self.mesh_device, "stage5 tail: host unpatchify"):
+            packed = packed.reshape(grid.batch, grid.t, grid.h, grid.w, cfg.patch_channels)
+            packed = packed.permute(0, 4, 1, 2, 3)
+            return unpatchify(packed, cfg.patch_size)
