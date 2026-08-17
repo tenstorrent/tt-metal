@@ -13,7 +13,7 @@ place to start. Points 5 and 6 are one line each.
       gives a buzz that never stops. That should be a test, not a comment.
 
 2. Fix bring-up from a local folder
-    - A folder on disk takes a different path than a name downloaded from HuggingFace, and that path
+    - A local folder takes a different path than a name downloaded from HuggingFace, and that path
       stops before working out the model's structure and memory needs. So the run reports every
       component as supported, then one step later refuses to continue because it cannot tell whether
       the model is supported at all, naming neither the cause nor the input.
@@ -96,10 +96,10 @@ place to start. Points 5 and 6 are one line each.
       1. The exit code is there to cross-check against when the number is implausible.
 
 7. Name the optimization steps, so a good run can be repeated
-    - The optimizer tries categories of change, most of them settings: core grid, precision, how
-      tensors are split. The one category for changing the computation itself is where every large
-      win came from, and it names only three things to try, none of which the agent used. It
-      improvised the rest, which is why the run was good and why another would not repeat it.
+    - The optimizer works through categories of change, most of which only tune settings: core grid,
+      precision, how tensors are split. The one category for changing the computation itself is where
+      every large win came from, and it names only three things to try, none of which the agent used.
+      It improvised the rest, which is why the run was good and why another would not repeat it.
     - Worth naming, each with a condition for when it fires. The theme is fewer and bigger kernels:
         - fold a repeated evaluation into rows of one larger matmul, rather than repeating the call
           or the tensor. Two instances of this gave us 2.23x and 1.40x
