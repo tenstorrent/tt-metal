@@ -230,7 +230,7 @@ void write_pack_counters(
 }
 
 void kernel_main() {
-    uint32_t register_name = get_compile_time_arg_val(0);
+    uint32_t register_name = get_arg(args::register_name);
 
     // Get pointer to registers for current state ID
     volatile uint tt_reg_ptr* cfg = get_cfg_pointer();
