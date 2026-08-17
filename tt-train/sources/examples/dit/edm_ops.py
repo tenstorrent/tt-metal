@@ -37,10 +37,25 @@ than saving the 9x-wider patch tensor.
 
 from __future__ import annotations
 
+import os
+
 import ttnn
 from ttnn.operations import moreh as ttnn_moreh  # not attached to the ttnn namespace in all builds
 
 import ttml
+
+# Phase 2: route the conv FORWARD through native ttnn.conv2d (backward stays
+# the im2col composite). Our flat [1,1,9Cin,Cout] TILE bf16 param passes
+# conv2d's is_valid_device_conv_weights shape sniff (rank-4 [1,1,*,>=Cout],
+# TILE, dtype match), so ALL host-side weight prep is skipped — the kernel
+# consumes the param in place. Ordering evidence (prepare_conv2d_weights.cpp):
+# every relevant converter emits row = (kh*KW + kw)*Cin + cin == our
+# ROW_ORDER; the height-sharded "special padding" variant is byte-identical
+# iff block_height_padding == 0, which holds when Cin*KW is tile-aligned.
+# Hence the native path is only taken for Cin % 32 == 0 (conv_in with Cin=3
+# keeps the composite), and test_edm_primitives.py carries an empirical
+# probe + parity gate that decides the question on hardware.
+NATIVE_CONV = os.environ.get("EDM_NATIVE_CONV", "0") == "1"
 
 
 def _rm(v):
@@ -126,12 +141,50 @@ class ConcatChannels(ttml.autograd.Function):
         return da, db
 
 
+def _conv3x3_native_fwd(v, wv, b, h, w, c, cout):
+    """Native ttnn.conv2d forward consuming the flat ROW_ORDER weight in place.
+
+    v [B,1,HW,C] tokens -> [B,1,HW,Cout] tokens. No bias here (the caller
+    adds our [1,1,1,Cout] param with the proven row-broadcast add). The
+    weight must never be re-prepped: if the 'Device weights not properly
+    prepared' warning fires on this call, the design failed — the parity
+    gate would also catch that as a throughput/ordering anomaly.
+    """
+    inp = ttnn.reshape(_rm(v), (1, 1, b * h * w, c))
+    # Pin HEIGHT_SHARDED: the expected prepared-weight layout depends on the
+    # shard scheme (block-sharded splits Cin across cores — incompatible with
+    # a shared flat param). Height-sharded with tile-aligned Cin*KW expects
+    # exactly the plain [9Cin,Cout] matrix in our ROW_ORDER, uniformly across
+    # every conv shape in the model — no silent per-shape layout flips.
+    conv_config = ttnn.Conv2dConfig(shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED)
+    out = ttnn.conv2d(
+        input_tensor=inp,
+        weight_tensor=wv,
+        device=wv.device(),
+        in_channels=c,
+        out_channels=cout,
+        batch_size=b,
+        input_height=h,
+        input_width=w,
+        kernel_size=(3, 3),
+        stride=(1, 1),
+        padding=(1, 1),
+        conv_config=conv_config,
+    )
+    if out.memory_config().is_sharded():
+        out = ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG)
+    return _tile(ttnn.reshape(_rm(out), (b, 1, h * w, cout)))
+
+
 class Conv3x3Im2col(ttml.autograd.Function):
-    """3x3 same-pad conv as im2col + matmul; weight flat [1,1,9Cin,Cout].
+    """3x3 same-pad conv; weight flat [1,1,9Cin,Cout] (ROW_ORDER).
 
     apply(x [B,1,HW,Cin], weight, bias [1,1,1,Cout], H, W) -> [B,1,HW,Cout].
-    Backward: dW = im2col(x)^T @ dOut (im2col recomputed), db = sum_BHW dOut,
-    dX = col2im(dOut @ W^T) via 9 pad-shift adds.
+    Forward: im2col + matmul composite, or native ttnn.conv2d when
+    EDM_NATIVE_CONV=1 and Cin/Cout are tile-aligned (see NATIVE_CONV note).
+    Backward (always im2col composite): dW = im2col(x)^T @ dOut (im2col
+    recomputed), db = sum_BHW dOut, dX = col2im(dOut @ W^T) via 9 pad-shift
+    adds.
     """
 
     @staticmethod
@@ -140,11 +193,14 @@ class Conv3x3Im2col(ttml.autograd.Function):
         b = v.shape[0]
         c = v.shape[-1]
         cout = wv.shape[-1]
+        ctx.save_for_backward(x, weight)
+        ctx.dims = (b, h, w, c, cout)
+        if NATIVE_CONV and c % 32 == 0 and cout % 32 == 0:
+            out = _conv3x3_native_fwd(v, wv, b, h, w, c, cout)
+            return ttnn.add(out, bv)  # [B,1,HW,Cout] + [1,1,1,Cout]
         cols = _im2col(v, b, h, w, c)  # [1,1,BHW,9C]
         out = ttnn.matmul(cols, wv)  # [1,1,BHW,Cout]
         out = ttnn.add(out, bv)
-        ctx.save_for_backward(x, weight)
-        ctx.dims = (b, h, w, c, cout)
         return _tile(ttnn.reshape(_rm(out), (b, 1, h * w, cout)))
 
     @staticmethod

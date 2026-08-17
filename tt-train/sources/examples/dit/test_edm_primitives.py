@@ -286,6 +286,95 @@ def t_conv_bwd():
     assert_close(grad_np(bt).reshape(-1), rdb, 0.08, 0.05 * abs(rdb).max(), "dB")
 
 
+def _pcc(a, b):
+    a = a.reshape(-1).astype(np.float64)
+    b = b.reshape(-1).astype(np.float64)
+    return float(np.corrcoef(a, b)[0, 1])
+
+
+@check("native conv2d probe: effective weight row order seen by the kernel")
+def t_native_conv_probe():
+    """Empirically answer the Phase-2 row-ordering question: feed a batch of
+    single-pixel delta images through native ttnn.conv2d using our flat
+    ROW_ORDER weight (consumed in place, no prep), recover the effective
+    OIHW weight the kernel actually applied, and report the row permutation
+    relative to ROW_ORDER. Identity = the kernel's prepared-weight layout
+    equals our flatten; otherwise the printout gives the true ordering so the
+    param (or ROW_ORDER globally) can be permuted to match.
+    """
+    from edm_ops import _conv3x3_native_fwd
+
+    rng = np.random.default_rng(9)
+    cin = cout = 32
+    h = w = 8
+    b = cin  # image k carries a delta at the center pixel, in channel k
+    i0 = j0 = 4
+    # Random +-1 rows: the true match reproduces the row exactly (delta conv
+    # copies weight values), spurious cross-correlations stay well below 1.
+    flat = rng.choice([-1.0, 1.0], size=(9 * cin, cout)).astype(np.float32)
+    x = np.zeros((b, h, w, cin), dtype=np.float32)
+    for k in range(cin):
+        x[k, i0, j0, k] = 1.0
+    xt = from_np(x.reshape(b, 1, h * w, cin))
+    wt = from_np(flat.reshape(1, 1, 9 * cin, cout))
+    out = _conv3x3_native_fwd(xt.get_value(), wt.get_value(), b, h, w, cin, cout)
+    o = ttml.autograd.create_tensor(out, False).to_numpy(ttnn.DataType.FLOAT32).reshape(b, h, w, cout)
+    # out(pi,pj,o) = sum W[o,c,kh,kw] x(pi+kh-1, pj+kw-1, c); the delta at
+    # (i0,j0, ch=k) puts W_eff[o,k,kh,kw] at out[k, i0-kh+1, j0-kw+1, o].
+    eff = np.zeros_like(flat)
+    for kh in range(3):
+        for kw in range(3):
+            for ch in range(cin):
+                eff[(kh * 3 + kw) * cin + ch] = o[ch, i0 - kh + 1, j0 - kw + 1]
+    sims = np.abs(eff @ flat.T) / cout  # 1.0 == exact (up to sign) row match
+    perm = sims.argmax(axis=1)
+    strength = sims.max(axis=1)
+    ident = np.arange(9 * cin)
+    n_id = int((perm == ident).sum())
+    print(f"     row match: {n_id}/{9*cin} identity, min match strength {strength.min():.3f}", flush=True)
+    if n_id != 9 * cin:
+        moved = np.where(perm != ident)[0]
+        print(f"     PERMUTED (ours->kernel), first 20: {list(zip(moved[:20].tolist(), perm[moved[:20]].tolist()))}", flush=True)
+        decode = [((int(r) // cin) // 3, (int(r) // cin) % 3, int(r) % cin) for r in perm[moved[:8]]]
+        print(f"     kernel positions of those rows as (kh,kw,cin): {decode}", flush=True)
+    assert n_id == 9 * cin and strength.min() > 0.9, (
+        f"native conv2d consumes a DIFFERENT row order ({9*cin - n_id} rows moved) — "
+        "apply the printed permutation at init + inverse on wgrad, or change ROW_ORDER globally"
+    )
+
+
+@check("native conv2d fwd parity vs im2col composite (C=32@16x16, C=128@32x32)")
+def t_native_conv_parity():
+    from edm_ops import _conv3x3_native_fwd, _im2col
+
+    rng = np.random.default_rng(10)
+    for cin, cout, h, w in [(32, 32, 16, 16), (128, 128, 32, 32)]:
+        b = 2
+        x_np = rng.standard_normal((b, h, w, cin)).astype(np.float32)
+        w_np = (rng.standard_normal((9 * cin, cout)) / math.sqrt(9 * cin)).astype(np.float32)
+        xt = from_np(x_np.reshape(b, 1, h * w, cin))
+        wt = from_np(w_np.reshape(1, 1, 9 * cin, cout))
+        v, wv = xt.get_value(), wt.get_value()
+
+        native = ttml.autograd.create_tensor(_conv3x3_native_fwd(v, wv, b, h, w, cin, cout), False)
+        native = native.to_numpy(ttnn.DataType.FLOAT32).reshape(b, h, w, cout)
+        comp = ttml.autograd.create_tensor(ttnn.matmul(_im2col(v, b, h, w, cin), wv), False)
+        comp = comp.to_numpy(ttnn.DataType.FLOAT32).reshape(b, h, w, cout)
+        golden = np_conv3x3(x_np, w_np, np.zeros(cout, dtype=np.float32))
+
+        pcc_nc = _pcc(native, comp)
+        pcc_ng = _pcc(native, golden)
+        err_nc = np.abs(native - comp).max()
+        err_ng = np.abs(native - golden).max()
+        print(
+            f"     C={cin}@{h}x{w}: PCC(native,composite)={pcc_nc:.6f} PCC(native,golden)={pcc_ng:.6f} "
+            f"maxerr vs comp {err_nc:.4f}, vs fp32 golden {err_ng:.4f}",
+            flush=True,
+        )
+        assert pcc_nc >= 0.999, f"native/composite diverge at C={cin}: PCC={pcc_nc}"
+        assert pcc_ng >= 0.999, f"native/golden diverge at C={cin}: PCC={pcc_ng}"
+
+
 @check("GroupNormMoreh wrapper fwd+bwd on tokens (C=64,16x16,G=16)")
 def t_groupnorm_wrapper():
     from edm_ops import GroupNormMoreh
@@ -434,6 +523,8 @@ if __name__ == "__main__":
             t_pool_upsample,
             t_conv_fwd,
             t_conv_bwd,
+            t_native_conv_probe,
+            t_native_conv_parity,
             t_groupnorm_wrapper,
             t_concat_channels,
             t_block_parity,

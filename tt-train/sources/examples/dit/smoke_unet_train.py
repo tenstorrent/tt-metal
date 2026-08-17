@@ -5,10 +5,13 @@
 """UNet training smoke + throughput probe on real CIFAR-10.
 
     python smoke_unet_train.py --data-dir <dir> [--model tiny|cifar]
-        [--steps 300] [--batch 32] [--probe]
+        [--steps 300] [--batch 32] [--probe] [--native-conv]
 
 --probe: 30 timed steps after warmup, prints img/s (use with --model cifar
 to size the full EDM run).
+--native-conv (or env EDM_NATIVE_CONV=1): conv FORWARD via native
+ttnn.conv2d consuming the flat weight in place (backward stays im2col).
+Run the probe once with and once without to compare paths.
 """
 
 from __future__ import annotations
@@ -38,7 +41,14 @@ def main():
     ap.add_argument("--batch", type=int, default=32)
     ap.add_argument("--lr", type=float, default=1e-4)
     ap.add_argument("--probe", action="store_true")
+    ap.add_argument("--native-conv", action="store_true", help="conv fwd via native ttnn.conv2d")
     args = ap.parse_args()
+
+    import edm_ops
+
+    if args.native_conv:
+        edm_ops.NATIVE_CONV = True  # same switch as env EDM_NATIVE_CONV=1
+    conv_path = "native" if edm_ops.NATIVE_CONV else "im2col"
 
     ttml.open_device_mesh(ttml.Mesh((1, 1), ("dp", "tp")))
     images, labels = load_cifar10(args.data_dir)
@@ -46,7 +56,7 @@ def main():
 
     model = song_unet_tiny() if args.model == "tiny" else song_unet_cifar()
     n_params = sum(int(np.prod(t.shape())) for t in model.parameters().values())
-    print(f"model={args.model} params={n_params/1e6:.2f}M batch={args.batch}", flush=True)
+    print(f"model={args.model} params={n_params/1e6:.2f}M batch={args.batch} conv={conv_path}", flush=True)
 
     opt = ttml.optimizers.create_optimizer({"type": "AdamW", "lr": args.lr}, model.parameters())
     ctx = ttml.autograd.AutoContext.get_instance()
@@ -75,7 +85,7 @@ def main():
             print(f"step {step:5d} loss {loss_val:.4f}", flush=True)
     if args.probe:
         dt = time.time() - t0
-        print(f"PROBE: {30*args.batch/dt:.1f} img/s ({dt/30*1000:.0f} ms/step)", flush=True)
+        print(f"PROBE[conv={conv_path}]: {30*args.batch/dt:.1f} img/s ({dt/30*1000:.0f} ms/step)", flush=True)
     print("SMOKE_DONE", flush=True)
 
 

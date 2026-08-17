@@ -68,6 +68,15 @@ python test_reference_unet.py     # CPU (torch): golden model, 56.7M params, ove
 python test_edm_primitives.py    # device gate: conv/GN/pool/attn fwd+bwd parity
 ```
 
+**Native conv forward (Phase 2):** `EDM_NATIVE_CONV=1` (or
+`smoke_unet_train.py --native-conv`) routes the 3x3 conv *forward* through
+native `ttnn.conv2d`, which consumes our flat `[1,1,9Cin,Cout]` TILE weight
+in place (passes the device-weight shape sniff, so per-step weight prep is
+skipped entirely; height-sharded is pinned so the expected layout matches
+ROW_ORDER at every shape). Backward stays the im2col composite. Gated by the
+`native conv2d probe`/`parity` checks in `test_edm_primitives.py`; only
+convs with `Cin % 32 == 0` take the native path (`conv_in` keeps im2col).
+
 ## Design notes (framework workarounds, kept intentionally visible)
 
 - **Patchify lives on the host.** There is no autograd permute/transpose, only
