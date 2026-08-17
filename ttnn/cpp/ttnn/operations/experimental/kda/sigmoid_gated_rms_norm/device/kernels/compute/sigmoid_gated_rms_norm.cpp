@@ -14,7 +14,6 @@
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
-namespace {
 constexpr uint32_t cb_x = 0, cb_gate = 1, cb_weight = 2, cb_tmp = 3;
 constexpr uint32_t cb_stats = 4, cb_inv = 5, cb_norm = 6, cb_out = 7, cb_scaler = 8;
 
@@ -121,8 +120,6 @@ void multiply_output(uint32_t Vt) {
     }
     cb_push_back(cb_out, Vt);
 }
-}  // namespace
-
 void kernel_main() {
     constexpr uint32_t Vt = get_compile_time_arg_val(0);
     constexpr uint32_t epsilon_bits = get_compile_time_arg_val(1);
