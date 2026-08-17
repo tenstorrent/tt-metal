@@ -53,6 +53,11 @@ on:
         type: boolean
         default: true
         description: "Run T3000 sanity tests"
+      run-fabric-sanity-tests:
+        required: false
+        type: boolean
+        default: true
+        description: "Run fabric sanity tests (WH N300 + BH card smoke)"
       run-ops-sanity-tests:
         required: false
         type: boolean
@@ -152,6 +157,11 @@ on:
         default: true
         type: boolean
         description: "Run T3000 sanity tests"
+      run-fabric-sanity-tests:
+        required: false
+        default: true
+        type: boolean
+        description: "Run fabric sanity tests (WH N300 + BH card smoke)"
       run-ops-sanity-tests:
         required: false
         default: true
@@ -360,6 +370,25 @@ jobs:
       enable-watcher: ${{ inputs.enable-watcher || false }}
       enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+      timeout-minutes-override: ${{ inputs.enable-watcher && 80 || 0 }}
+      ref: ${{ inputs.ref || github.sha }}
+
+  # Fabric sanity (WH N300 + T3K llmbox + BH card smoke via fabric_sanity_tests.yaml).
+  # Single source of truth for fabric coverage in the sanity pipeline.
+  # generate-sku-matrix.sanity-skus only carries wh_n300_civ2 + BH SKUs.
+  # `wh_llmbox_civ2` is appended when run-wormhole is on so t3k fabric tests runs
+  # here
+  fabric-sanity-tests:
+    if: ${{ always() && !cancelled() && needs.build-artifact.result == 'success' && (needs.generate-sku-matrix.outputs.run-wormhole == 'true' || needs.generate-sku-matrix.outputs.run-blackhole == 'true') && toJSON(inputs.run-fabric-sanity-tests) != 'false' }}
+    needs: [build-artifact, generate-sku-matrix]
+    secrets: inherit
+    uses: ./.github/workflows/fabric-sanity-tests-impl.yaml
+    with:
+      enabled-skus: ${{ format('{0}{1}', needs.generate-sku-matrix.outputs.sanity-skus, needs.generate-sku-matrix.outputs.run-wormhole == 'true' && ',wh_llmbox_civ2' || '') }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enable-watcher: ${{ inputs.enable-watcher || false }}
       timeout-minutes-override: ${{ inputs.enable-watcher && 80 || 0 }}
       ref: ${{ inputs.ref || github.sha }}
 
