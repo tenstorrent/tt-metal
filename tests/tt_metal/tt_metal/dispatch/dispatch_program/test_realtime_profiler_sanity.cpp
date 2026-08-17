@@ -31,6 +31,13 @@
 #include <gtest/gtest.h>
 
 #include "hostdevcommon/common_values.hpp"
+#include "hostdev/realtime_profiler_msgs.h"
+#include "impl/context/metal_context.hpp"
+#include "impl/dispatch/command_queue_common.hpp"
+#include "impl/dispatch/dispatch_mem_map.hpp"
+#include "impl/dispatch/dispatch_settings.hpp"
+#include "llrt/hal.hpp"
+#include "tt_metal/distributed/mesh_device_impl.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/distributed.hpp>
@@ -40,7 +47,10 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/program.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/experimental/realtime_profiler.hpp>
+
+#include "realtime_profiler_test_utils.hpp"
 
 namespace tt::tt_metal {
 namespace {
@@ -62,6 +72,160 @@ constexpr double kMaxDurationNs = 1'000'000'000.0;
 // Per-program marker embedded in the kernel source so the source-correlation
 // assertion can verify each record carries the correct source.
 constexpr const char* kSourceMarkerPrefix = "rt_profiler_marker_";
+
+TEST(RealtimeProfilerProtocol, CleanBaselineL1BudgetAndScratchRegisterOwnership) {
+    constexpr int kDeviceId = 0;
+    constexpr uint32_t kProtocolMessageBudget = 8 * 1024;
+
+    auto mesh_device = distributed::MeshDevice::create_unit_mesh(
+        kDeviceId, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, DispatchCoreConfig{DispatchCoreType::WORKER});
+    ASSERT_NE(mesh_device, nullptr);
+    auto* device = mesh_device->get_devices().front();
+    if (device->arch() != tt::ARCH::BLACKHOLE) {
+        mesh_device->close();
+        GTEST_SKIP() << "The clean-room register protocol is Blackhole-only";
+    }
+
+    auto& metal = MetalContext::instance(mesh_device->impl().get_context_id());
+    const auto& dispatch_mem_map = metal.dispatch_mem_map();
+    const uint32_t l1_size = metal.hal().get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);
+    const uint32_t dispatch_end =
+        dispatch_mem_map.dispatch_buffer_base(/*cq_id=*/0) +
+        (dispatch_mem_map.dispatch_buffer_pages() << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE) +
+        dispatch_mem_map.dispatch_s_buffer_size();
+    ASSERT_LE(dispatch_end, l1_size);
+    const uint32_t current_headroom = l1_size - dispatch_end;
+    const uint32_t worst_case_aligned_growth = tt::align(
+        kProtocolMessageBudget - sizeof(realtime_profiler_msg_t),
+        1u << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE);
+
+    EXPECT_GE(current_headroom, worst_case_aligned_growth)
+        << "The clean-room profiler message budget no longer fits before the dispatch buffers reach the end of L1";
+    log_info(
+        tt::LogTest,
+        "[RT profiler M0] baseline_msg={} B message_budget={} B dispatch_end=0x{:x} l1_size=0x{:x} "
+        "headroom={} B worst_aligned_growth={} B",
+        sizeof(realtime_profiler_msg_t),
+        kProtocolMessageBudget,
+        dispatch_end,
+        l1_size,
+        current_headroom,
+        worst_case_aligned_growth);
+
+    constexpr uint32_t kScratchMask = 0x00FFFFFF;
+    constexpr uint32_t kScratch3TestValue = 0x0007E50A;
+    constexpr uint32_t kScratch4TestValue = 0x005A1234;
+    constexpr uint32_t kScratch5TestValue = 0x00A5FEDC;
+    constexpr uint32_t kScratchAckValue = 0x003C0DE5;
+    const CoreCoord worker{0, 0};
+    const uint32_t output_addr =
+        metal.hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
+    std::vector<uint32_t> zeros(14, 0);
+    detail::WriteToDeviceL1(device, worker, output_addr, zeros, CoreType::WORKER);
+
+    Program scratch_program = CreateProgram();
+    const std::string scratch_producer_kernel =
+        "#include <cstdint>\n"
+        "#include \"api/dataflow/dataflow_api.h\"\n"
+        "void kernel_main() {\n"
+        "  constexpr uint32_t stream = 8;\n"
+        "  constexpr uint32_t scratch3 = 39;\n"
+        "  constexpr uint32_t scratch4 = 40;\n"
+        "  constexpr uint32_t scratch5 = 41;\n"
+        "  constexpr uint32_t value3 = 0x0007E50A;\n"
+        "  constexpr uint32_t value4 = 0x005A1234;\n"
+        "  constexpr uint32_t value5 = 0x00A5FEDC;\n"
+        "  constexpr uint32_t not_ready = 0x00102030;\n"
+        "  constexpr uint32_t ack = 0x003C0DE5;\n"
+        "  uint32_t old3 = NOC_STREAM_READ_REG(stream, scratch3);\n"
+        "  uint32_t old4 = NOC_STREAM_READ_REG(stream, scratch4);\n"
+        "  uint32_t old5 = NOC_STREAM_READ_REG(stream, scratch5);\n"
+        "  NOC_STREAM_WRITE_REG(stream, scratch5, not_ready);\n"
+        "  NOC_STREAM_WRITE_REG(stream, scratch3, value3);\n"
+        "  NOC_STREAM_WRITE_REG(stream, scratch4, value4);\n"
+        "  volatile tt_l1_ptr uint32_t* out =\n"
+        "      reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(0));\n"
+        "  out[0] = old3; out[1] = old4; out[2] = old5;\n"
+        "  out[3] = NOC_STREAM_READ_REG(stream, scratch3);\n"
+        "  out[4] = NOC_STREAM_READ_REG(stream, scratch4);\n"
+        "  asm volatile(\"fence w,w\" ::: \"memory\");\n"
+        "  NOC_STREAM_WRITE_REG(stream, scratch5, value5);\n"
+        "  out[5] = NOC_STREAM_READ_REG(stream, scratch5);\n"
+        "  uint32_t observed_ack = 0;\n"
+        "  for (uint32_t i = 0; i < 1000000; ++i) {\n"
+        "    observed_ack = NOC_STREAM_READ_REG(stream, scratch4);\n"
+        "    if (observed_ack == ack) break;\n"
+        "  }\n"
+        "  out[10] = observed_ack;\n"
+        "  NOC_STREAM_WRITE_REG(stream, scratch3, old3);\n"
+        "  NOC_STREAM_WRITE_REG(stream, scratch4, old4);\n"
+        "  NOC_STREAM_WRITE_REG(stream, scratch5, old5);\n"
+        "  out[11] = NOC_STREAM_READ_REG(stream, scratch3);\n"
+        "  out[12] = NOC_STREAM_READ_REG(stream, scratch4);\n"
+        "  out[13] = NOC_STREAM_READ_REG(stream, scratch5);\n"
+        "}\n";
+    const KernelHandle scratch_producer_handle = CreateKernelFromString(
+        scratch_program,
+        scratch_producer_kernel,
+        worker,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+    const std::string scratch_consumer_kernel =
+        "#include <cstdint>\n"
+        "#include \"api/compute/compute_kernel_api.h\"\n"
+        "void kernel_main() {\n"
+        "#if COMPILE_FOR_TRISC == 0\n"
+        "  constexpr uint32_t stream = 8;\n"
+        "  constexpr uint32_t scratch3 = 39;\n"
+        "  constexpr uint32_t scratch4 = 40;\n"
+        "  constexpr uint32_t scratch5 = 41;\n"
+        "  constexpr uint32_t value3 = 0x0007E50A;\n"
+        "  constexpr uint32_t value4 = 0x005A1234;\n"
+        "  constexpr uint32_t value5 = 0x00A5FEDC;\n"
+        "  constexpr uint32_t ack = 0x003C0DE5;\n"
+        "  uint32_t observed3 = 0;\n"
+        "  uint32_t observed4 = 0;\n"
+        "  uint32_t observed5 = 0;\n"
+        "  for (uint32_t i = 0; i < 1000000; ++i) {\n"
+        "    observed3 = NOC_STREAM_READ_REG(stream, scratch3);\n"
+        "    observed4 = NOC_STREAM_READ_REG(stream, scratch4);\n"
+        "    observed5 = NOC_STREAM_READ_REG(stream, scratch5);\n"
+        "    if (observed3 == value3 && observed4 == value4 && observed5 == value5) break;\n"
+        "  }\n"
+        "  volatile tt_l1_ptr uint32_t* out =\n"
+        "      reinterpret_cast<volatile tt_l1_ptr uint32_t*>(" +
+        std::to_string(output_addr) +
+        "u);\n"
+        "  out[6] = observed3; out[7] = observed4; out[8] = observed5;\n"
+        "  if (observed3 == value3 && observed4 == value4 && observed5 == value5) {\n"
+        "    NOC_STREAM_WRITE_REG(stream, scratch4, ack);\n"
+        "    out[9] = ack;\n"
+        "  }\n"
+        "#endif\n"
+        "}\n";
+    CreateKernelFromString(scratch_program, scratch_consumer_kernel, worker, ComputeConfig{});
+    SetRuntimeArgs(scratch_program, scratch_producer_handle, worker, {output_addr});
+    distributed::MeshWorkload scratch_workload;
+    scratch_workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), std::move(scratch_program));
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), scratch_workload, /*blocking=*/true);
+
+    std::vector<uint32_t> scratch_result;
+    detail::ReadFromDeviceL1(
+        device, worker, output_addr, static_cast<uint32_t>(zeros.size() * sizeof(uint32_t)), scratch_result);
+    ASSERT_EQ(scratch_result.size(), zeros.size());
+    EXPECT_EQ(scratch_result[3] & kScratchMask, kScratch3TestValue);
+    EXPECT_EQ(scratch_result[4] & kScratchMask, kScratch4TestValue);
+    EXPECT_EQ(scratch_result[5] & kScratchMask, kScratch5TestValue);
+    EXPECT_EQ(scratch_result[6] & kScratchMask, kScratch3TestValue);
+    EXPECT_EQ(scratch_result[7] & kScratchMask, kScratch4TestValue);
+    EXPECT_EQ(scratch_result[8] & kScratchMask, kScratch5TestValue);
+    EXPECT_EQ(scratch_result[9] & kScratchMask, kScratchAckValue);
+    EXPECT_EQ(scratch_result[10] & kScratchMask, kScratchAckValue);
+    EXPECT_EQ(scratch_result[11], scratch_result[0]);
+    EXPECT_EQ(scratch_result[12], scratch_result[1]);
+    EXPECT_EQ(scratch_result[13], scratch_result[2]);
+
+    EXPECT_TRUE(mesh_device->close());
+}
 
 // Inlined kernel source: 200 × 200 = 40K unrolled NOPs. Used for both data
 // movement (BRISC/NCRISC) and compute (TRISC) RISCs. We inline rather than
@@ -305,13 +469,9 @@ TEST(RealtimeProfilerSanity, LastProgramRecordDeliveredOnFinish) {
         GTEST_SKIP() << "Real-time profiler is not active on this dispatch config";
     }
 
-    std::mutex records_mu;
-    std::vector<ProgramRealtimeRecord> records;
-    ProgramRealtimeProfilerCallbackHandle handle =
-        RegisterProgramRealtimeProfilerCallback([&records_mu, &records](const ProgramRealtimeRecordBatch& batch) {
-            std::lock_guard<std::mutex> lk(records_mu);
-            records.insert(records.end(), batch.records.begin(), batch.records.end());
-        });
+    test_utils::RealtimeProfilerRecordCollector collector;
+    ProgramRealtimeProfilerCallbackHandle handle = RegisterProgramRealtimeProfilerCallback(
+        [&collector](const ProgramRealtimeRecordBatch& batch) { collector.consume(batch); });
 
     CoreCoord compute_grid = mesh_device->compute_with_storage_grid_size();
     CoreRange all_cores(CoreCoord{0, 0}, CoreCoord{compute_grid.x - 1, compute_grid.y - 1});
@@ -321,23 +481,14 @@ TEST(RealtimeProfilerSanity, LastProgramRecordDeliveredOnFinish) {
     }
 
     distributed::Finish(mesh_device->mesh_command_queue());
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    constexpr uint32_t last_runtime_id = kNumPrograms;
+    const auto wait_result = collector.wait_for_runtime_ids({last_runtime_id}, std::chrono::seconds(2));
     UnregisterProgramRealtimeProfilerCallback(handle);
 
-    constexpr uint32_t last_runtime_id = kNumPrograms;
-    bool last_record_seen = false;
-    {
-        std::lock_guard<std::mutex> lk(records_mu);
-        for (const auto& rec : records) {
-            if (rec.runtime_id == last_runtime_id) {
-                last_record_seen = true;
-                break;
-            }
-        }
-    }
-
-    EXPECT_TRUE(last_record_seen) << "The final program's RT profiler record (runtime_id=" << last_runtime_id
-                                  << ") was not delivered; ensure that the finish-time RT-profiler flush is emitted";
+    EXPECT_EQ(wait_result.host_dropped, 0u) << "Host callback loss makes final-record delivery inconclusive";
+    EXPECT_TRUE(wait_result.complete)
+        << "The final program's RT profiler record (runtime_id=" << last_runtime_id
+        << ") was not delivered after device queue completion and a bounded callback wait";
 
     EXPECT_TRUE(mesh_device->close());
 }

@@ -38,6 +38,8 @@
 #include "tt_metal/distributed/realtime_profiler_manager.hpp"
 #include "tt_metal/distributed/mesh_device_impl.hpp"
 
+#include "realtime_profiler_test_utils.hpp"
+
 namespace tt::tt_metal {
 namespace {
 
@@ -53,6 +55,7 @@ using tt::tt_metal::experimental::UnregisterProgramRealtimeProfilerCallback;
 // takes NCRISC to push 1–2 entries over PCIe, so by enqueue ~80 of 4096
 // the ring is at capacity and stays there for the rest of the trace.
 constexpr uint32_t kNumProgramsInTrace = 4096;
+constexpr uint32_t kNumProgramsInNonTraceBurst = 4096;
 
 constexpr uint32_t kDefaultStressReplaySeconds = 60;
 
@@ -137,6 +140,44 @@ std::shared_ptr<distributed::MeshDevice> open_full_mesh() {
         kTraceRegionSize,
         1,
         DispatchCoreConfig{DispatchCoreType::WORKER});
+}
+
+TEST(RealtimeProfilerStress, NonTraceBurstDriverPreservesRecords) {
+    auto mesh_device = open_full_mesh();
+    ASSERT_NE(mesh_device, nullptr);
+    if (!IsProgramRealtimeProfilerActive()) {
+        mesh_device->close();
+        GTEST_SKIP() << "Real-time profiler is not active on this dispatch config";
+    }
+    const auto* rt = mesh_device->impl().get_realtime_profiler();
+    ASSERT_NE(rt, nullptr);
+
+    test_utils::RealtimeProfilerRecordCollector collector;
+    ProgramRealtimeProfilerCallbackHandle handle = RegisterProgramRealtimeProfilerCallback(
+        [&collector](const ProgramRealtimeRecordBatch& batch) { collector.consume(batch); });
+
+    distributed::MeshWorkload workload = build_blank_kernel_workload(mesh_device);
+    auto& cq = mesh_device->mesh_command_queue(0);
+    distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
+
+    for (uint32_t i = 0; i < kNumProgramsInNonTraceBurst; ++i) {
+        distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
+    }
+    distributed::Finish(cq);
+
+    const uint64_t expected_records = static_cast<uint64_t>(kNumProgramsInNonTraceBurst + 1) * rt->num_active_devices();
+    const auto wait_result = collector.wait_for_record_count(
+        kStressRuntimeId, static_cast<std::size_t>(expected_records), std::chrono::seconds(20));
+    UnregisterProgramRealtimeProfilerCallback(handle);
+
+    const auto records = collector.records();
+    const auto observed_records = static_cast<uint64_t>(
+        std::count_if(records.begin(), records.end(), [](const auto& r) { return r.runtime_id == kStressRuntimeId; }));
+    EXPECT_EQ(wait_result.host_dropped, 0u);
+    EXPECT_TRUE(wait_result.complete) << "non-trace burst produced " << observed_records << " of " << expected_records
+                                      << " expected records";
+    EXPECT_EQ(observed_records, expected_records);
+    EXPECT_TRUE(mesh_device->close());
 }
 
 TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {

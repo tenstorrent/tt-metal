@@ -4,7 +4,7 @@
 **Target:** Blackhole, single hardware command queue, supported local MMIO dispatch topology
 **Reference implementation:** `335393399b602a7d090c5cd4b3ac7652acbfda0f`
 **Clean baseline:** `5fa57f6d18bdc46e0d623a6f86a1b7d4bfcc547b` (`20e839e1ff9032573690c031751ad58b5e967fed^`), the exact pre-concurrent-profiler state
-**Status:** design approved by Claude Opus; ready for Milestone 0
+**Status:** Milestone 0 approved by Claude Opus; Milestone 1 ready to implement
 
 ## 1. Purpose
 
@@ -74,10 +74,13 @@ runtime changes from `20e839e1` are inherited by assumption.
 - Do not add model, Sparse MLA, TopK, all-gather, core-allocation, or scheduler
   policy to this work.
 - Do not implement concurrent profiling for Wormhole, Galaxy relay, multi-CQ,
-  or unsupported dispatch topologies.
-- Preserve the pre-concurrent Wormhole runtime: do not create or launch the
-  Blackhole completion-observer TRISC, and do not change Wormhole dispatch_s
-  firmware size or throughput beyond measurement noise.
+  trace replay, or unsupported dispatch topologies. Trace-captured go commands
+  are explicitly marked unprofiled while ordinary commands remain active.
+- This feature intentionally disables the realtime profiler on Wormhole and
+  removes the baseline Wormhole monitor TRISC. No Wormhole compatibility is
+  required; Wormhole program execution must remain correct and must not regress
+  in dispatch throughput. The product owner explicitly approved this support
+  removal for the Blackhole-only profiler work.
 - Reject unsupported configurations explicitly at capability/initialization
   boundaries rather than partially activating the profiler.
 
@@ -103,16 +106,22 @@ The capability is active only when every condition below is true:
 - the dispatch topology has the authoritative worker-completion counters and
   reset path validated in Milestone 0;
 - the number of dispatch streams fits the compile-time stream mask;
-- trace replay is disabled for this feature.
+- trace-captured go commands carry zero profiler runtime ID and zero profiler
+  worker contribution, so replay is deliberately unprofiled without changing
+  the device's latched capability for ordinary commands.
 
 Initialization returns a precise unsupported reason when any condition fails.
 No unsupported path may report the profiler as active, create the observer
 kernel, or add profiler work to dispatch/`Finish`.
 
-Wormhole behavior outside this feature remains unchanged. The new observer
-kernel is neither created nor launched on Wormhole; this is tested as a
-non-regression requirement. The new protocol is compiled and activated only
-for eligible Blackhole configurations.
+The realtime profiler becomes inactive on Wormhole for this feature. No
+observer kernel is created or launched there; this intended compatibility break
+is tested for clean shutdown and dispatch-throughput non-regression. The new
+protocol is compiled and activated only for eligible Blackhole configurations.
+
+Trace replay is not an inactive capability reason because capture can begin
+after initialization. Milestone 1 suppresses descriptors in captured commands
+and proves normal profiling resumes after replay.
 
 ## 5. Timing and loss contract
 
@@ -126,11 +135,11 @@ device_id
 cq_id
 stream_id
 runtime_program_id
-generation
+generation_low16
 start_tick
 observed_completion_tick
 publish_sequence
-device_loss_snapshot
+cumulative_source_dropped_low32
 ```
 
 `start_tick` and `observed_completion_tick` are 64-bit raw device ticks from the
@@ -138,18 +147,25 @@ same documented clock domain. Both halves are transported explicitly and the
 wrap rule is tested. Host time may be emitted separately for diagnostics, but
 it can never populate either field or the reported duration.
 
+The authoritative generation is 32-bit in shared device state; the eight-word
+wire record packs its low 16 bits beside the 16-bit runtime ID. The staged
+source-loss aggregate is carried modulo 2^32 and extended monotonically by the
+host. The protocol decision record fixes the complete word/bit layout.
+
 ### 5.2 Measurement interpretation
 
 For an accepted invocation:
 
 ```text
 reported_duration = observed_completion_tick - start_tick
-reported_duration = worker_execution + go_delivery_lead + observer_poll_lag
+reported_duration = worker_execution + go_delivery/fanout lead + observer_poll_lag
 ```
 
 The API and documentation use “device-produced correlated interval,” not
 “exact kernel duration.” Qualification must measure the observer scan latency
 and estimate or bound go-signal delivery lead on the supported topology.
+The start tick is captured after waiting for prior work on the same stream; the
+prior-worker wait is never included in the interval.
 
 ### 5.3 Loss interpretation
 
@@ -157,7 +173,9 @@ Every accepted descriptor produces at most one interval. The protocol retains
 distinct monotonic counters for:
 
 - descriptor-queue full;
-- unsupported launch metadata, including zero or unencodable worker count;
+- unsupported launch metadata for a nonzero profiler runtime ID, including zero
+  or unencodable worker count; runtime ID zero is intentionally unprofiled and
+  is not loss;
 - stale/reset-generation descriptor;
 - multiple already-satisfied descriptors coalesced into one observation;
 - an unsatisfiable/stuck descriptor head;
@@ -174,6 +192,13 @@ but is not added again when computing the number of lost intervals. Consumers
 receive both the structured counters and an explicitly defined aggregate and
 compare monotonic snapshots to determine whether a measurement range was
 lossless.
+
+The aggregate is composed at each downstream copy boundary: TRISC0 contributes
+observer loss, dispatch_s contributes launch/descriptor loss, and the reserved
+BRISC contributes device-ring loss. Terminal losses after the last accepted
+record remain visible through the explicit per-device capability/diagnostic
+query. No metadata read supplies a timing endpoint, and ordinary close adds no
+fallback D2H path.
 
 No code may retry indefinitely, wait for capacity, or overwrite an unconsumed
 entry without recording loss.
@@ -195,7 +220,20 @@ invocation identity, and no profiler metadata publication can block dispatch.
 Any field-width trade made to retain the go-command ABI must be proved valid
 with compile-time checks and supported-value validation.
 
-### 6.2 Per-stream descriptor queue
+### 6.2 Cold initialization and ownership
+
+The host zeroes the complete profiler L1 region before launching dispatch
+kernels. dispatch_d, dispatch_s, and TRISC0 then initialize only their owned
+indices, counters, and stream-8 scratch registers and publish separate ready
+flags. The existing finite host initialization handshake activates profiling
+only after all dispatch-core ready flags and reserved-core socket readiness are
+visible. Until activation, dispatch_s and TRISC0 park without reading persistent
+queue or scratch state. Reload repeats the same handshake.
+
+The protocol decision record names the pre-launch initializer and sole runtime
+writer for every field. The baseline's competing mailbox clears are removed.
+
+### 6.3 Per-stream descriptor queue
 
 Each supported stream owns a compile-time-sized SPSC descriptor queue in shared
 L1. The initial and default depth is four:
@@ -230,19 +268,21 @@ before or immediately after go issuance to minimize skew without creating a
 record for a go command that cannot execute. The selected order is fixed in the
 protocol document and tested.
 
-### 6.3 Active-stream observer
+### 6.4 Active-stream observer
 
 Do not introduce a cross-RISC L1 read/modify/write bitmask. dispatch_s is the
 single writer of a monotonic descriptor-publication signal in NOC-overlay
 register space, which is not D-cache-cached on Blackhole. The observer owns its
 active-stream mask locally and tracks descriptor consumer state per stream.
 
-The preferred encoding is one global publication epoch plus per-stream
-producer sequence/index signals in register space. When the global epoch
-changes, the observer refreshes the affected per-stream publication signals and
-then reads their L1 descriptor payloads with the required visibility operation.
-Milestone 0 must confirm the exact available registers, widths, wrap rule, and
-writer ownership before fixing the layout.
+The selected encoding uses two otherwise-unused 24-bit scratch registers on
+Blackhole stream 8: one descriptor-publication epoch written only by dispatch_s
+and one completed-publication epoch written only by TRISC0. Stream 8 is outside
+the dispatch completion range 48–55, and scratch registers exist on streams
+8–11. When the descriptor epoch changes, the observer invalidates L1, reads all
+per-stream producer indices, and derives its local active mask. The 24-bit
+epochs use half-range modular comparison and are only wakeup hints; queue
+indices in L1 remain authoritative.
 
 The observer:
 
@@ -263,18 +303,26 @@ but the newest satisfied descriptor, increments the coalescing-loss counter by
 the number discarded, and emits only the newest interval with that observation
 tick. It never fabricates distinct end ticks.
 
-A descriptor from an older generation is discarded and counted. A
-same-generation head that remains unsatisfied while its queue is full increments
-`stuck_descriptor_head` once for that episode. It is not discarded by an
-arbitrary wall-clock timeout because it may represent a valid long program;
-later launches may lose profiler descriptors but application dispatch remains
-unblocked. Reset/termination provides the bounded recovery path.
+On an ordered one-generation reset, the clear command proves all old targets
+completed. The observer coalesces them, attempts to emit the newest with a
+`reset_observed` record type and a device tick sampled at reset observation, and
+then adopts the new generation. Only older or unordered stale descriptors are
+discarded and counted. A same-generation head that remains unsatisfied while its
+queue is full increments `stuck_descriptor_head` once for that episode. It is
+not discarded by an arbitrary wall-clock timeout because it may represent a
+valid long program; later launches may lose profiler descriptors but application
+dispatch remains unblocked. Reset/termination provides the bounded recovery
+path.
 
-### 6.4 Completed-record handoff
+### 6.5 Completed-record handoff
 
-Use one bounded SPSC completed-record queue from the observer to dispatch_s.
-The record payload is written before its producer index. dispatch_s performs at
-most one bounded service action at each existing safe service point:
+Use one compile-time 64-entry SPSC completed-record queue from the observer to
+dispatch_s. It stores 64 eight-word records (2,048 bytes), uses monotonic
+`uint32_t` producer/consumer indices, and has compile-time assertions that the
+capacity is a power of two and at least twice the maximum 32 accepted
+descriptors across eight streams. The record payload is written before its
+producer index. dispatch_s performs exactly one bounded record service action at
+each existing safe service point:
 
 - check a register-space pending/publication signal first;
 - if it is clear, return with no cache invalidation;
@@ -298,29 +346,31 @@ profiler NOC operation in that window can silently corrupt go-signal state.
 Milestone 0 records the exact safe service points and Milestone 2 tests this
 invariant.
 
-### 6.5 Existing profiler ring
+### 6.6 Existing profiler ring
 
 The reserved realtime-profiler core retains the existing bounded ring and host
 transport. A full ring increments `device_ring_drops` and discards the incoming
 interval. It never waits for host acknowledgement or free space.
 
+TRISC0 stamps observer loss in the completed record, dispatch_s adds its own
+launch/descriptor loss to the outbound mailbox copy, and the reserved BRISC adds
+its cumulative ring loss to each accepted ring copy. A sentinel after pressure
+therefore observes downstream loss even though TRISC0 cannot read reserved-core
+state. The 32-bit wire aggregate is extended to 64 bits by the host.
+
 The ring publishes record payload before its committed index. Schema and layout
 changes participate in the firmware/JIT cache key and have compile-time size,
 alignment, and offset assertions on both producer and consumer sides.
 
-### 6.6 Generation and reset
+### 6.7 Generation and reset
 
-The reset protocol is an ordered lifecycle transaction, not an independently
-updated shared integer:
-
-1. stop accepting profiler descriptors for the affected stream;
-2. account for and discard any old-generation descriptors/records that cannot
-   complete;
-3. clear the authoritative hardware completion counter;
-4. publish the new generation through the same ordered register-space control
-   path observed by dispatch_s and TRISC0;
-5. make both producer and observer adopt the generation before descriptor
-   acceptance resumes.
+The reset protocol is an ordered lifecycle transaction. In the supported
+co-located topology dispatch_d clears the counter, publishes the shared-L1
+generation and a 24-bit reset epoch in stream 8 scratch register 3, and only
+then processes the ordered next-go notification that advances dispatch_s's
+per-stream sync semaphore. The next descriptor cannot cross that semaphore.
+dispatch_s and TRISC0 observe the reset epoch, invalidate L1, and adopt the new
+generation before accepting/consuming new descriptors.
 
 If the current command topology cannot order those steps, concurrent profiling
 is inactive for that topology. A launch observed in the clear-to-generation
@@ -331,7 +381,7 @@ Tests exercise the actual `CLEAR_STREAM`/sub-device-manager lifecycle and an
 adversarial launch in the clear-to-generation publication window. Direct L1
 mutation remains fault injection and is not accepted as reset-path coverage.
 
-### 6.7 Shutdown
+### 6.8 Shutdown
 
 Observer shutdown and terminal draining are bounded by item and cycle budgets.
 Unconsumed descriptors/records are counted separately, and observer-stop
@@ -340,10 +390,11 @@ lifecycle teardown, but it cannot wait indefinitely and it cannot conceal loss.
 
 ## 7. Continuous collection only
 
-The clean implementation deliberately removes the watermark protocol,
-`FinishAndCollectProgramRealtimeProfiler`, per-stream control slots, and the
-large host collection registry. No current production consumer uses that API;
-Sparse MLA profiling already consumes the continuous callback.
+The clean implementation deliberately does not introduce the working
+reference's watermark protocol, `FinishAndCollectProgramRealtimeProfiler`,
+per-stream control slots, or large host collection registry. No current
+production consumer uses that API; Sparse MLA profiling already consumes the
+continuous callback.
 
 Ordinary `Finish` emits zero realtime-profiler commands when no future,
 separately approved collection feature exists. Stream-mask and sub-device-limit
@@ -368,29 +419,33 @@ dropped.
 
 Preserve the shipped names and make additions explicit:
 
-- `ProgramRealtimeRecord` retains its existing fields and adds `generation`
-  plus a structured device-loss snapshot identifier if required by the wire
-  layout;
+- `ProgramRealtimeRecord` retains its existing fields and adds command queue,
+  dispatch stream, generation, successful sequence, schema/type, and cumulative
+  source-loss fields;
 - `ProgramRealtimeRecordBatch::dropped` continues to mean host callback-ring
   loss only;
 - `ProgramRealtimeRecordBatch` adds a span of per-device
-  `ProgramRealtimeProfilerDeviceLossSnapshot` values containing the structured
-  device counters from Section 5.3;
+  `ProgramRealtimeProfilerDeviceLossSnapshot` values containing chip ID and the
+  newest cumulative aggregate source loss in the batch;
 - `RegisterProgramRealtimeProfilerCallback` and
   `UnregisterProgramRealtimeProfilerCallback` remain source-compatible;
 - `IsProgramRealtimeProfilerActive()` remains and returns true when any managed
   device is active;
 - `GetProgramRealtimeProfilerDeviceCapabilities()` is the single new query and
-  returns `{chip_id, active, inactive_reason}` for initialized devices.
+  returns `{chip_id, active, inactive_reason, detailed_loss_counts}` for
+  initialized devices. The exact enum and structs are fixed by the Milestone 0
+  protocol decision record.
 
 `FinishAndCollectProgramRealtimeProfiler` and its collection-result structs are
 not part of the clean implementation. They belong only to the working reference
-and are deleted when rebuilding from the pre-concurrent baseline.
+and are never introduced on the pre-concurrent baseline.
 
 Test-only saturation and fault injection live in test support rather than the
 production manager API. Production code contains no outstanding collection
 registry. Device-loss counters reach ordinary callbacks on every successful
-record; the sentinel pattern covers all-records-dropped tests.
+record; the sentinel pattern covers all-records-dropped steady-state tests.
+Terminal teardown counters are inspected only through the explicit diagnostic
+query.
 
 ## 9. Performance contract
 
@@ -411,8 +466,8 @@ At minimum, measure:
 - sustained and burst interval throughput before counted loss;
 - per-stream descriptor drop rate at the shortest supported program duration
   with at least two active streams, comparing descriptor depths two and four;
-- Wormhole dispatch_s firmware size and dispatch throughput delta against
-  `5fa57f6d18b`.
+- compile-time confirmation that Wormhole creates no observer kernel; Wormhole
+  profiler runtime compatibility is intentionally outside scope.
 
 Measurement method:
 
@@ -456,9 +511,13 @@ Deliverables:
   cache visibility, and supported dispatch topology.
 - Prove the depth-four, compile-time-sized SPSC descriptor and completed-record
   ownership model.
+- Freeze the host-zero/device-ready/activation handshake and name the sole
+  runtime writer of every shared field.
 - Prove the register-space publication signal and local active-stream mechanism.
 - Record the go-path NOC command-buffer hazard and exact safe service points.
 - Define deterministic continuous-callback test scaffolding without a watermark.
+- Add a reusable non-trace burst generator so later transport and loss tests do
+  not depend on a replay mode that is intentionally unprofiled.
 - Define the exact public record, loss-snapshot, capability structs, and
   compatibility behavior from Section 8.
 - Measure the clean performance, firmware-size, and L1 baselines and lock
@@ -488,7 +547,10 @@ Deliverables:
 - Delete the program-ID FIFO append/pop/storage path as a dispatch deadlock fix.
 - Latch disabled/unsupported state so it has no per-launch cache or NOC work.
 - Prevent creation or launch of the observer TRISC on Wormhole.
-- Add negative tests for multi-CQ, unsupported topology, and non-Blackhole.
+- Encode trace-captured go commands as unprofiled and prove replay emits zero
+  descriptors while ordinary profiling resumes afterward.
+- Add negative tests for multi-CQ, unsupported topology, non-Blackhole, and
+  trace replay.
 - Add a regression with more than 32 profiled programs while dispatch_s is
   stalled on a downstream semaphore; dispatch_d must continue making progress.
 - Revisit the profiler-FIFO coverage exclusion documented near
@@ -499,8 +561,8 @@ Exit criteria:
 - There is no profiler-owned loop in go-command dispatch.
 - Unsupported configurations fail before activation and never time out later.
 - Existing supported non-concurrent profiler behavior remains intact.
-- Wormhole creates no observer kernel and its dispatch_s size/throughput match
-  the pre-concurrent baseline within the locked budget.
+- Wormhole creates no observer kernel. Runtime compatibility is intentionally
+  not required for this Blackhole-only feature.
 - Disabled-path hard constraints and numeric budget pass.
 - Claude returns exact `APPROVE`.
 
@@ -511,7 +573,7 @@ Deliverables:
 - Implement depth-four, compile-time-sized per-stream descriptor queues.
 - Implement generation-aware completion targets.
 - Implement register-space publication signaling, observer-local active-stream
-  state, and the bounded completed-record queue.
+  state, and the fixed 64-entry completed-record queue.
 - Add the minimum correct Blackhole publication/cache operations.
 - Add every loss/protocol counter named in Section 5.3.
 - Exercise actual reset/reload firmware paths.
@@ -559,6 +621,7 @@ Focused tests:
 
 - delayed/paused host drain;
 - device-ring and callback-ring saturation;
+- non-trace burst generation under each pressure mode;
 - payload-before-index visibility and schema/cache-key mismatches;
 - consumer detects every induced gap or loss delta;
 - deterministic callback tests reach terminal success/loss without a watermark;
@@ -584,8 +647,8 @@ Deliverables:
   profiler code.
 - Document the timing error distribution, loss behavior, support matrix,
   firmware/L1 cost, and raw evidence.
-- Verify Wormhole does not create/launch the observer kernel and passes its
-  locked firmware-size and dispatch-throughput non-regression gates.
+- Verify Wormhole does not create/launch the observer kernel; no Wormhole
+  runtime qualification is required.
 - Obtain final Claude Opus approval of the complete profiler diff and evidence.
 
 Exit criteria:
@@ -611,9 +674,9 @@ gate multi-CQ/topology, test real reset, correct “exact” terminology, expose
 device loss, and eliminate unnecessary idle scanning/cache work.
 
 The complete revised plan received exact `APPROVE` from Claude Opus at high
-effort after code-backed verification of those findings. Milestone 0 still owns
-two intentionally unresolved wire-level decisions: the exact loss-snapshot
-encoding and descriptor publication order relative to go issuance.
+effort after code-backed verification of those findings. Milestone 0 fixes the
+loss-snapshot encoding and descriptor-publication order in the protocol decision
+record before runtime implementation begins.
 
 Claude Opus reviews exactly once at each milestone boundary after tests and
 evidence are ready:
