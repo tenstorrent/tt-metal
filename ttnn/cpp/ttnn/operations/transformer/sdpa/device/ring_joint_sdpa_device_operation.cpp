@@ -388,8 +388,9 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     //   * tokens_per_frame is a multiple of TILE_HEIGHT and is a multiple of both
     //     q_chunk_size and k_chunk_size — i.e. each SDPA chunk sits inside one frame. Chunks
     //     smaller than a frame are allowed.
-    //   * num_frames_padded divides ring_size (each SP shard = whole number of frames), and is
-    //     <= 32 (packed representation caps at 32*32 = 1024 bits).
+    //   * num_frames_padded need not divide ring_size: a shard may hold a fractional number of
+    //     frames (e.g. ring 16, 24 frames -> 1.5 frames/shard), as long as each chunk still lands in
+    //     one frame. That holds when the per-device shard is a whole number of chunks. Must be <= 32.
     //   * logical_n == num_frames_real * tokens_per_frame (un-padded); the padded frames are all-zero
     //     rows and columns in the pattern.
     //   * incompatible with is_causal (softmax mask semantics differ — causal is triangular,
@@ -423,11 +424,20 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             nf_pad > 0 && nf_pad <= 32,
             "num_frames_padded ({}) must be in [1, 32] for the packed-bit representation",
             nf_pad);
+        // Frames may be fractional per shard, so instead require each shard to be a whole number of
+        // chunks: then no chunk straddles a frame boundary even when the shard base is mid-frame.
+        const uint32_t n_local_q_sparse = static_cast<uint32_t>(input_tensor_q.logical_shape()[2]);
+        const uint32_t n_local_kv_sparse = static_cast<uint32_t>(tensor_args.local_kv_seq_len());
         TT_FATAL(
-            nf_pad % args.ring_size == 0,
-            "ring_size ({}) must divide num_frames_padded ({}) so each SP shard holds whole frames",
-            args.ring_size,
-            nf_pad);
+            n_local_q_sparse % args.get_q_chunk_size() == 0,
+            "per-device Q sequence ({}) must be a whole number of q_chunks ({})",
+            n_local_q_sparse,
+            args.get_q_chunk_size());
+        TT_FATAL(
+            n_local_kv_sparse % args.get_k_chunk_size() == 0,
+            "per-device K/V sequence ({}) must be a whole number of k_chunks ({})",
+            n_local_kv_sparse,
+            args.get_k_chunk_size());
         const auto padded_n = static_cast<std::size_t>(nf_pad) * fsl;
         TT_FATAL(
             padded_n >= args.logical_n,

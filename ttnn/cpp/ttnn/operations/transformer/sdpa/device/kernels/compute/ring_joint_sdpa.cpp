@@ -268,10 +268,10 @@ void kernel_main() {
     // The first active iter starts with fresh accumulators; restoring would read stale staging.
     bool seen_active_iter = false;
 
-    uint32_t q_frame_offset = 0;
+    uint32_t q_shard_start_tile = 0;
     if constexpr (sparse_frames_enabled) {
-        const uint32_t q_frames_per_shard = q_local_padded_Nt / tiles_per_frame;
-        q_frame_offset = ring_index * q_frames_per_shard;
+        // Tile-space start of this device's q shard; each chunk's frame is derived from it by division.
+        q_shard_start_tile = ring_index * q_local_padded_Nt;
     }
 
     constexpr uint32_t sdpa_ring_iterations = has_sliding_window ? 1 : ring_size;
@@ -482,7 +482,7 @@ void kernel_main() {
                 is_first_active_iter,
                 logical_lt,
                 sparse_frame_mask_words,
-                q_frame_offset,
+                q_shard_start_tile,
                 q_work_bitmap);
         } else {
             assert_kv_pad_rotation_streaming_only<kv_pad_rotation_enabled>();

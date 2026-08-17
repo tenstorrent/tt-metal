@@ -679,11 +679,13 @@ void kernel_main() {
     // chunk) while compute still drains the pushed K/V via its per-q zero-work fast path (no matmul).
     bool shard_attends_nothing = false;
     if constexpr (sparse_frames_enabled == 1) {
-        const uint32_t q_frames_per_shard = q_local_padded_Nt / tiles_per_frame;
-        const uint32_t q_frame_base = ring_index * q_frames_per_shard;
+        // Frame range this shard's q tiles touch (inclusive). Must match compute's enumeration so
+        // push/drain stay in lockstep.
+        const uint32_t q_shard_start_tile = ring_index * q_local_padded_Nt;
+        const uint32_t q_frame_lo = q_shard_start_tile / tiles_per_frame;
+        const uint32_t q_frame_hi = (q_shard_start_tile + q_local_padded_Nt - 1) / tiles_per_frame;
         shard_attends_nothing = true;
-        for (uint32_t qf_local = 0; qf_local < q_frames_per_shard && shard_attends_nothing; ++qf_local) {
-            const uint32_t qf = q_frame_base + qf_local;
+        for (uint32_t qf = q_frame_lo; qf <= q_frame_hi && shard_attends_nothing; ++qf) {
             for (uint32_t kf = 0; kf < sparse_num_frames_padded; ++kf) {
                 const uint32_t bit_idx = qf * sparse_num_frames_padded + kf;
                 if (((sparse_frame_mask_words[bit_idx >> 5] >> (bit_idx & 31)) & 1u) != 0u) {
@@ -954,11 +956,11 @@ void kernel_main() {
                     if (!kv_chunk_is_joint && !shard_attends_nothing) {
                         const uint32_t k_global_start_tile = kv_local_padded_Nt * ring_id + k_chunk * Sk_chunk_t;
                         const uint32_t k_frame = k_global_start_tile / tiles_per_frame;
-                        const uint32_t q_frames_per_shard = q_local_padded_Nt / tiles_per_frame;
-                        const uint32_t q_frame_base = ring_index * q_frames_per_shard;
+                        const uint32_t q_shard_start_tile = ring_index * q_local_padded_Nt;
+                        const uint32_t q_frame_lo = q_shard_start_tile / tiles_per_frame;
+                        const uint32_t q_frame_hi = (q_shard_start_tile + q_local_padded_Nt - 1) / tiles_per_frame;
                         bool any_q_attends = false;
-                        for (uint32_t qf_local = 0; qf_local < q_frames_per_shard; ++qf_local) {
-                            const uint32_t qf = q_frame_base + qf_local;
+                        for (uint32_t qf = q_frame_lo; qf <= q_frame_hi; ++qf) {
                             const uint32_t bit_idx = qf * sparse_num_frames_padded + k_frame;
                             if (((sparse_frame_mask_words[bit_idx >> 5] >> (bit_idx & 31)) & 1u) != 0u) {
                                 any_q_attends = true;

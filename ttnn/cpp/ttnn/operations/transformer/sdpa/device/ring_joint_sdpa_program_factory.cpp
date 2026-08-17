@@ -353,9 +353,9 @@ std::vector<uint32_t> compute_q_work_bitmap(
         }
         return bitmap;
     }
-    // q_frame_offset for this device (matches the kernel-side computation).
-    const uint32_t q_frames_per_shard = (tiles_per_frame > 0) ? (q_local_padded_Nt / tiles_per_frame) : 0u;
-    const uint32_t q_frame_offset = device_index * q_frames_per_shard;
+    // Tile-space start of this device's q shard; each chunk's frame is derived from it by division
+    // (matches the kernel), so a shard may hold a fractional number of frames.
+    const uint32_t q_shard_start_tile = device_index * q_local_padded_Nt;
     // Simulate the ring_id sequencer for this device to get ring_id per iter.
     RingIdSequencer seq(device_index, ring_size, backward_writes_expected, forward_writes_expected);
     auto noop_sync = [](uint32_t, uint32_t) {};
@@ -381,7 +381,7 @@ std::vector<uint32_t> compute_q_work_bitmap(
                 bitmap[q_chunk] |= (1u << ring_iter);
                 continue;
             }
-            const uint32_t q_frame_for_this_chunk = (q_chunk * Sq_chunk_t) / tiles_per_frame + q_frame_offset;
+            const uint32_t q_frame_for_this_chunk = (q_shard_start_tile + q_chunk * Sq_chunk_t) / tiles_per_frame;
             for (uint32_t k = 0; k < num_local_k_chunks; ++k) {
                 const uint32_t k_local_start = k * Sk_chunk_t;
                 // Mirror the compute pre-scan / reader OOB skip (kv_chunk_starts_before_logical_end,

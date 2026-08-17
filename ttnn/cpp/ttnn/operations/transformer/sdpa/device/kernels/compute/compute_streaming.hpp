@@ -2299,9 +2299,10 @@ void sdpa_ring_v2(
     // True (unpadded) joint length in tiles; joint K chunks starting at/after it are pure padding.
     const uint32_t logical_lt = 0,
     const uint32_t* sparse_frame_mask_words = nullptr,
-    // Global Q-frame offset: this SP-sharded device's local Q chunk 0 maps to global Q frame
-    // `q_frame_offset`, used to index the broadcast-global `sparse_frame_mask_words` table. 0 when unsharded.
-    const uint32_t q_frame_offset = 0,
+    // Tile-space start of this device's q shard (ring_index * q_local_padded_Nt). A chunk's frame is
+    // (q_shard_start_tile + q_chunk*Sq_chunk_t) / tiles_per_frame, so shards may hold fractional
+    // frames. 0 when unsharded.
+    const uint32_t q_shard_start_tile = 0,
     // Per-q_chunk work bitmap: bit `iter` set iff q_chunk has work in that (mask-active) iter.
     const uint32_t* q_work_bitmap = nullptr) {
     init_sdpa_streaming_semaphores();
@@ -2313,12 +2314,12 @@ void sdpa_ring_v2(
     // pushes stranded in the CBs. This flag forces the drain paths below to drain unconditionally.
     bool shard_attends_nothing = false;
     if constexpr (sparse_frames_enabled) {
-        constexpr uint32_t q_frames_per_shard = (tiles_per_frame > 0) ? (q_local_padded_Nt / tiles_per_frame) : 0u;
-        if (q_frames_per_shard > 0) {
-            const uint32_t q_frame_base = (q_frame_offset / q_frames_per_shard) * q_frames_per_shard;
+        if constexpr (tiles_per_frame > 0 && q_local_padded_Nt > 0) {
+            // Frame range this shard's q tiles touch (inclusive; a partial end frame is included).
+            const uint32_t q_frame_lo = q_shard_start_tile / tiles_per_frame;
+            const uint32_t q_frame_hi = (q_shard_start_tile + q_local_padded_Nt - 1) / tiles_per_frame;
             shard_attends_nothing = true;
-            for (uint32_t qf_local = 0; qf_local < q_frames_per_shard && shard_attends_nothing; ++qf_local) {
-                const uint32_t qf = q_frame_base + qf_local;
+            for (uint32_t qf = q_frame_lo; qf <= q_frame_hi && shard_attends_nothing; ++qf) {
                 for (uint32_t kf = 0; kf < num_frames_padded_compile; ++kf) {
                     const uint32_t bit_idx = qf * num_frames_padded_compile + kf;
                     if (((sparse_frame_mask_words[bit_idx >> 5] >> (bit_idx & 31u)) & 1u) != 0u) {
@@ -2481,12 +2482,12 @@ void sdpa_ring_v2(
             const uint32_t word = sparse_frame_mask_words[bit_idx >> 5];
             const uint32_t bit = (word >> (bit_idx & 31u)) & 1u;
             if (bit == 0u) {
-                // This Q chunk doesn't attend this k_frame. Check if reader pushed.
-                const uint32_t q_frames_per_shard = q_local_padded_Nt / tiles_per_frame;
-                const uint32_t q_frame_base = (q_frame_offset / q_frames_per_shard) * q_frames_per_shard;
+                // This q chunk doesn't attend this k_frame, but the reader pushed it if any frame in
+                // the shard's range does; drain in that case.
+                const uint32_t q_frame_lo = q_shard_start_tile / tiles_per_frame;
+                const uint32_t q_frame_hi = (q_shard_start_tile + q_local_padded_Nt - 1) / tiles_per_frame;
                 bool aggregate_allowed = false;
-                for (uint32_t qf_local = 0; qf_local < q_frames_per_shard; ++qf_local) {
-                    const uint32_t qf = q_frame_base + qf_local;
+                for (uint32_t qf = q_frame_lo; qf <= q_frame_hi; ++qf) {
                     const uint32_t agg_bit_idx = qf * num_frames_padded_compile + k_frame;
                     if (((sparse_frame_mask_words[agg_bit_idx >> 5] >> (agg_bit_idx & 31u)) & 1u) != 0u) {
                         aggregate_allowed = true;
@@ -2562,8 +2563,8 @@ void sdpa_ring_v2(
         // skip predicates so `is_last_k` fires on the right chunk in the main loop below.
         uint32_t q_frame_for_this_chunk = 0;
         if constexpr (sparse_frames_enabled) {
-            // Derive the local Q-frame index from this device's q_chunk. Q-frame is uniform within a Q chunk.
-            q_frame_for_this_chunk = (q_chunk * Sq_chunk_t) / tiles_per_frame + q_frame_offset;
+            // Global frame of this q chunk; each chunk sits in one frame, so one division is exact.
+            q_frame_for_this_chunk = (q_shard_start_tile + q_chunk * Sq_chunk_t) / tiles_per_frame;
         }
         uint32_t per_q_valid_kv = has_sliding_window ? sliding_q_plan.total_k_chunk_count : 0;
         for (uint32_t k = 0; !has_sliding_window && k < num_kv_chunks; ++k) {
@@ -2601,8 +2602,8 @@ void sdpa_ring_v2(
             if (per_q_valid_kv == 0) {
                 // Drain any k_chunks reader pushed. Reader pushed if any q_frame in shard attends this k_frame.
                 // Since this q_chunk has per_q_valid_kv==0, we drain (not process) every pushed chunk.
-                const uint32_t q_frames_per_shard = q_local_padded_Nt / tiles_per_frame;
-                const uint32_t q_frame_base = (q_frame_offset / q_frames_per_shard) * q_frames_per_shard;
+                const uint32_t q_frame_lo = q_shard_start_tile / tiles_per_frame;
+                const uint32_t q_frame_hi = (q_shard_start_tile + q_local_padded_Nt - 1) / tiles_per_frame;
                 for (uint32_t k = 0; k < num_kv_chunks; ++k) {
                     const bool is_joint_ = (k >= num_local_k_chunks);
                     if (try_skip_oob_kv(ring_id, k, is_joint_)) {
@@ -2613,8 +2614,7 @@ void sdpa_ring_v2(
                         const uint32_t k_global_start_tile = local_padded_Nt * ring_id + k * Sk_chunk_t;
                         const uint32_t k_frame = k_global_start_tile / tiles_per_frame;
                         bool aggregate_allowed = false;
-                        for (uint32_t qf_local = 0; qf_local < q_frames_per_shard; ++qf_local) {
-                            const uint32_t qf = q_frame_base + qf_local;
+                        for (uint32_t qf = q_frame_lo; qf <= q_frame_hi; ++qf) {
                             const uint32_t bit_idx = qf * num_frames_padded_compile + k_frame;
                             if (((sparse_frame_mask_words[bit_idx >> 5] >> (bit_idx & 31u)) & 1u) != 0u) {
                                 aggregate_allowed = true;

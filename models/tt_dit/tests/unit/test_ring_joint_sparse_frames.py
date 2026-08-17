@@ -198,9 +198,10 @@ def _run_sparse_frames_op(
 ):
     """Build small Q/K/V, run the ring op with sparse computation enabled, compare to a pytorch ref."""
 
-    assert num_frames_padded % sp_factor == 0, "num_frames_padded must be a multiple of sp_factor"
     assert tokens_per_frame % ttnn.TILE_SIZE == 0, "tokens_per_frame must be tile-aligned"
     n_pad = num_frames_padded * tokens_per_frame
+    # A shard may hold a fractional number of frames; only the padded sequence must shard evenly.
+    assert n_pad % sp_factor == 0, "padded sequence (num_frames_padded * tokens_per_frame) must divide sp_factor"
     fsl_tiles = tokens_per_frame // ttnn.TILE_SIZE
     q_chunk_size_tokens = q_chunk_size_tokens if q_chunk_size_tokens is not None else tokens_per_frame
     k_chunk_size_tokens = k_chunk_size_tokens if k_chunk_size_tokens is not None else tokens_per_frame
@@ -210,6 +211,14 @@ def _run_sparse_frames_op(
     assert (
         tokens_per_frame % k_chunk_size_tokens == 0
     ), f"k_chunk_size_tokens ({k_chunk_size_tokens}) must divide tokens_per_frame ({tokens_per_frame})"
+    # No chunk may straddle a frame, so the per-device sequence must be a whole number of chunks.
+    per_device_seq = n_pad // sp_factor
+    assert (
+        per_device_seq % q_chunk_size_tokens == 0
+    ), f"per-device seq ({per_device_seq}) must be a whole number of q_chunks ({q_chunk_size_tokens})"
+    assert (
+        per_device_seq % k_chunk_size_tokens == 0
+    ), f"per-device seq ({per_device_seq}) must be a whole number of k_chunks ({k_chunk_size_tokens})"
 
     # Golden reference on host.
     torch.manual_seed(0)
@@ -515,6 +524,118 @@ class TestSparseFramesRing:
             k_chunk_size_tokens=384,
             sparse_frames_enabled=sparse_frames_enabled,
             force_allow_all=force_allow_all,
+        )
+
+    @_MESH_TOPOLOGY_GALAXY
+    @pytest.mark.parametrize(
+        ("sparse_frames_enabled", "force_allow_all"),
+        [
+            pytest.param(True, False, id="sparse"),
+            pytest.param(True, True, id="sparse_allow_all"),
+        ],
+    )
+    @pytest.mark.parametrize("tokens_per_frame", [pytest.param(3840, id="720p"), pytest.param(1920, id="480p")])
+    def test_video_fractional_frames(
+        self,
+        mesh_device,
+        num_links,
+        sp_axis,
+        sp_factor,
+        tp_axis,
+        tp_factor,
+        device_params,
+        all_gather_topology,
+        reset_seeds,
+        sparse_frames_enabled,
+        force_allow_all,
+        tokens_per_frame,
+    ):
+        """Video-scale geometry where num_frames_padded is not a multiple of sp_factor, so each shard
+        holds a fractional number of frames and straddles frame boundaries."""
+        nf_padded = sp_factor + sp_factor // 2
+        nf_real = nf_padded - 2
+        assert nf_padded % sp_factor != 0, "this test must exercise the fractional-frames-per-shard path"
+        _run_sparse_frames_op(
+            mesh_device=mesh_device,
+            sp_axis=sp_axis,
+            sp_factor=sp_factor,
+            tp_axis=tp_axis,
+            tp_factor=tp_factor,
+            num_links=num_links,
+            num_frames_real=nf_real,
+            num_frames_padded=nf_padded,
+            tokens_per_frame=tokens_per_frame,
+            b=1,
+            nh=40,
+            d=128,
+            window=5,
+            add_last_frame=True,
+            all_gather_topology=all_gather_topology,
+            q_chunk_size_tokens=320,  # divides both the frame and the fractional per-device seq
+            k_chunk_size_tokens=320,
+            sparse_frames_enabled=sparse_frames_enabled,
+            force_allow_all=force_allow_all,
+        )
+
+    @_MESH_TOPOLOGY
+    @pytest.mark.parametrize(
+        "drain_pattern",
+        ["windowed", "tail_drain", "head_drain", "middle_drain"],
+    )
+    def test_fractional_frames_sub_frame(
+        self,
+        mesh_device,
+        num_links,
+        sp_axis,
+        sp_factor,
+        tp_axis,
+        tp_factor,
+        device_params,
+        all_gather_topology,
+        reset_seeds,
+        drain_pattern,
+    ):
+        """Small-shape fractional-frames-per-shard (num_frames_padded not a multiple of sp_factor)."""
+        tokens_per_frame = 64
+        nf_padded = sp_factor + sp_factor // 2
+        nf_real = nf_padded - 2
+        assert nf_padded % sp_factor != 0, "this test must exercise the fractional-frames-per-shard path"
+
+        allow_override = None
+        if drain_pattern != "windowed":
+            allow = torch.zeros(nf_padded, nf_padded, dtype=torch.uint8)
+            half = nf_real // 2
+            for q in range(nf_real):
+                if drain_pattern == "tail_drain":
+                    allow[q, :half] = 1
+                elif drain_pattern == "head_drain":
+                    allow[q, half:nf_real] = 1
+                elif drain_pattern == "middle_drain":
+                    for k in range(nf_real):
+                        if k % 2 == 0:
+                            allow[q, k] = 1
+            allow_override = allow
+
+        _run_sparse_frames_op(
+            mesh_device=mesh_device,
+            sp_axis=sp_axis,
+            sp_factor=sp_factor,
+            tp_axis=tp_axis,
+            tp_factor=tp_factor,
+            num_links=num_links,
+            num_frames_real=nf_real,
+            num_frames_padded=nf_padded,
+            tokens_per_frame=tokens_per_frame,
+            b=1,
+            nh=8,
+            d=128,
+            window=5,
+            add_last_frame=True,
+            all_gather_topology=all_gather_topology,
+            q_chunk_size_tokens=tokens_per_frame // 2,
+            k_chunk_size_tokens=tokens_per_frame // 2,
+            sparse_frames_enabled=True,
+            allow_override=allow_override,
         )
 
     @_MESH_TOPOLOGY
