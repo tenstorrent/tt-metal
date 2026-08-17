@@ -222,3 +222,46 @@ def test_the_count_join_still_wins_when_the_probe_can_answer():
 
     src = inspect.getsource(stage_roots)
     assert src.index("by_count.get") < src.index("_stage_roots_from_generated")
+
+
+def test_the_mapping_survives_a_null_perf_test(tmp_path):
+    """RUN 7: still no mapping, with the join fixed AND the call hoisted out of the signpost branch.
+
+        note - no_perf_test: perf_test null; falling back to pcc.end_to_end
+
+    `pipe["perf_test"]` was None, so _coverage_layers was handed the PCC gate -- which carries no
+    stage->stack bindings, because it is not a generated perf test. The fallback keyed on that node
+    and returned {} while three generated perf tests sat on disk beside it holding exactly the
+    mapping wanted.
+
+    Depending on WHICH node a caller passes is the mistake. The binding lives in the generated tests;
+    they are found under the model root, and the node is only a first guess at where to look."""
+    from cc_optimize.run import _stage_roots_from_generated
+
+    e2e = tmp_path / "tests" / "e2e"
+    e2e.mkdir(parents=True)
+    (e2e / "test_main_perf.py").write_text(
+        'PERF_ENCODE_LAYERS = _env_layers("TT_PERF_ENCODE_LAYERS", "TT_PERF_STACK0_LAYERS")\n'
+        'PERF_DECODE_LAYERS = _env_layers("TT_PERF_DECODE_LAYERS", "TT_PERF_STACK1_LAYERS")\n'
+    )
+    (e2e / "test_e2e_pipeline.py").write_text("def test_e2e_voxtral_pipeline():\n    pass\n")
+    secs = {"audio_tower.layers": 32, "language_model.model.layers": 30}
+
+    for node in (None, "", str(e2e / "test_e2e_pipeline.py::test_e2e_voxtral_pipeline")):
+        got = _stage_roots_from_generated(secs, node, str(tmp_path))
+        assert got == {"encode": "audio_tower", "decode": "language_model"}, (node, got)
+
+
+def test_generated_tests_that_disagree_are_not_evidence(tmp_path):
+    """They are written by one generator from one survey, so they agree. If two ever did not, the
+    mapping is a coin toss and a stage would be priced at another tower's bytes."""
+    from cc_optimize.run import _stage_roots_from_generated
+
+    e2e = tmp_path / "tests" / "e2e"
+    e2e.mkdir(parents=True)
+    (e2e / "test_a_perf.py").write_text('PERF_ENCODE_LAYERS = _env_layers("X", "TT_PERF_STACK0_LAYERS")\n')
+    (e2e / "test_b_perf.py").write_text('PERF_ENCODE_LAYERS = _env_layers("X", "TT_PERF_STACK1_LAYERS")\n')
+    got = _stage_roots_from_generated(
+        {"audio_tower.layers": 32, "language_model.model.layers": 30}, None, str(tmp_path)
+    )
+    assert "encode" not in got, got

@@ -1649,10 +1649,10 @@ def stage_roots(seq, model_root, model_id: str = "", perf_test=None) -> dict:
                 roots.add(cands[0].split(".", 1)[0])
         if len(roots) == 1:
             out[str(stage)] = roots.pop()
-    return out or _stage_roots_from_generated(secs, perf_test)
+    return out or _stage_roots_from_generated(secs, perf_test, model_root)
 
 
-def _stage_roots_from_generated(secs: dict, perf_test) -> dict:
+def _stage_roots_from_generated(secs: dict, perf_test, model_root=None) -> dict:
     """The same mapping, from the perf test the TOOL generated, when the probe's counts cannot give it.
 
     THE COUNT JOIN CANNOT FIRE DURING A REAL RUN, and had never fired. It compares the block count
@@ -1682,21 +1682,46 @@ def _stage_roots_from_generated(secs: dict, perf_test) -> dict:
     TIES ARE REFUSED. Two sections of equal depth cannot be ordered by depth, and an order chosen by
     name would be a coin toss that silently prices one tower at another's bytes.
     """
-    if not secs or not perf_test:
+    if not secs:
         return {}
     ordered = sorted(secs.items(), key=lambda kv: (-int(kv[1]), str(kv[0])))
     depths = [int(c) for _p, c in ordered]
     if len(set(depths)) != len(depths):
         return {}
-    try:
-        src = Path(str(perf_test).split("::", 1)[0]).read_text(errors="ignore")
-    except OSError:
+    # THE BINDING IS IN THE GENERATED TEST, WHEREVER THAT IS -- not in whichever node the caller
+    # happened to be given. `pipe["perf_test"]` is null on a run that falls back to the pcc gate
+    # ("no_perf_test: perf_test null; falling back to pcc.end_to_end", run 7), and the pcc test
+    # carries no stage->stack bindings at all, so keying on it returned {} while three generated
+    # perf tests sat on disk beside it holding exactly the mapping wanted.
+    #
+    # So the node is tried first, and then every generated perf test under the model root. They are
+    # written by the same generator from the same survey, so they agree; a file that disagrees is
+    # dropped rather than allowed to win a coin toss.
+    _srcs = []
+    for _cand in [
+        str(perf_test or "").split("::", 1)[0],
+        *sorted(str(x) for x in Path(model_root).glob("tests/e2e/*_perf.py")),
+    ]:
+        if not _cand:
+            continue
+        try:
+            _srcs.append(Path(_cand).read_text(errors="ignore"))
+        except OSError:
+            continue
+    if not _srcs:
         return {}
     out: dict = {}
-    for m in re.finditer(r"PERF_([A-Z0-9_]+)_LAYERS\s*=.*?TT_PERF_STACK(\d+)_LAYERS", src):
-        stage, idx = m.group(1).lower(), int(m.group(2))
-        if 0 <= idx < len(ordered):
-            out[stage] = str(ordered[idx][0]).split(".", 1)[0]
+    _seen: dict = {}
+    for src in _srcs:
+        for m in re.finditer(r"PERF_([A-Z0-9_]+)_LAYERS\s*=.*?TT_PERF_STACK(\d+)_LAYERS", src):
+            stage, idx = m.group(1).lower(), int(m.group(2))
+            if not (0 <= idx < len(ordered)):
+                continue
+            _root_for = str(ordered[idx][0]).split(".", 1)[0]
+            if _seen.setdefault(stage, _root_for) != _root_for:
+                out.pop(stage, None)  # two generated tests disagree: neither is evidence
+                continue
+            out[stage] = _root_for
     return out
 
 
