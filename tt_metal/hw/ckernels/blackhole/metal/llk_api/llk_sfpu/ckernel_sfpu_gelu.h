@@ -214,14 +214,17 @@ void gelu_init() {
         // [1.5, 2.0): slope=0.6099, intercept=-0.2635  (lreg1 hi / lreg5 hi)
         // [2.0, 3.0): slope=0.5402, intercept=-0.1194  (lreg2)
         // [3.0, ∞):   slope=0.5,    intercept=0.0      (lreg2 hi / lreg6 hi)
-        _sfpu_load_imm32_(0, 0x37E7322B);
-        _sfpu_load_imm32_(4, 0xB12286D8);
+        // Load the packed 6-segment LUT coefficients directly into the LRegs via sfpi.
+        // vUInt(uint32_t) emits a full 32-bit immediate load, equivalent to the two
+        // 16-bit halves that _sfpu_load_imm32_ previously wrote.
+        sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vUInt(0x37E7322Bu);
+        sfpi::l_reg[sfpi::LRegs::LReg4] = sfpi::vUInt(0xB12286D8u);
 
-        _sfpu_load_imm32_(1, 0x38E138F3);
-        _sfpu_load_imm32_(5, 0xB437B479);
+        sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::vUInt(0x38E138F3u);
+        sfpi::l_reg[sfpi::LRegs::LReg5] = sfpi::vUInt(0xB437B479u);
 
-        _sfpu_load_imm32_(2, 0x38003852);
-        _sfpu_load_imm32_(6, 0x7c00afa4);
+        sfpi::l_reg[sfpi::LRegs::LReg2] = sfpi::vUInt(0x38003852u);
+        sfpi::l_reg[sfpi::LRegs::LReg6] = sfpi::vUInt(0x7c00afa4u);
     } else if constexpr (is_fp32_dest_acc_en) {
         // FP32 accurate mode: rational erf evaluation requires reciprocal init
         sfpu_reciprocal_init<false>();

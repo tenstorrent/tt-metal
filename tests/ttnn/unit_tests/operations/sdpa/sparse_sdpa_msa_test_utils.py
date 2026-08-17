@@ -188,6 +188,7 @@ def run_op_msa_composed(q, k, v, indices, device, *, k_chunk_size=128):
         dev(kv_packed.to(torch.bfloat16), ttnn.bfloat16),
         dev(exp.to(torch.int32), ttnn.uint32),
         v_dim,
+        kv_format=ttnn.transformer.SparseKVFormat.BF16,
         scale=scale,
         k_chunk_size=k_chunk_size,
     )

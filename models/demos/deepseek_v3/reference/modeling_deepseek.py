@@ -42,6 +42,7 @@ from typing import List, Optional, Tuple, Union
 import numpy as np
 import torch
 import torch.distributed as dist
+import torch.fx
 import torch.nn.functional as F
 from torch import nn
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
@@ -55,7 +56,7 @@ from transformers.modeling_outputs import (
     SequenceClassifierOutputWithPast,
 )
 from transformers.modeling_utils import PreTrainedModel
-from transformers.pytorch_utils import ALL_LAYERNORM_LAYERS, is_torch_greater_or_equal_than_1_13
+from transformers.pytorch_utils import ALL_LAYERNORM_LAYERS
 from transformers.utils import (
     add_start_docstrings,
     add_start_docstrings_to_model_forward,
@@ -63,22 +64,12 @@ from transformers.utils import (
     replace_return_docstrings,
 )
 
-# transformers >= 5.x removed is_torch_fx_available (it was just `is_torch_available()`).
-try:
-    from transformers.utils.import_utils import is_torch_fx_available
-except ImportError:
-    from transformers.utils import is_torch_available as is_torch_fx_available
-
 from .configuration_deepseek import DeepseekV3Config
 from .reference_utils import topk_bitonic
 
 # This makes `_prepare_4d_causal_attention_mask` a leaf function in the FX graph.
 # It means that the function will not be traced through and simply appear as a node in the graph.
-if is_torch_fx_available():
-    if not is_torch_greater_or_equal_than_1_13:
-        import torch.fx
-
-    _prepare_4d_causal_attention_mask = torch.fx.wrap(_prepare_4d_causal_attention_mask)
+_prepare_4d_causal_attention_mask = torch.fx.wrap(_prepare_4d_causal_attention_mask)
 
 
 logger = logging.get_logger(__name__)

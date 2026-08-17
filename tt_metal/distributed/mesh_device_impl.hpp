@@ -66,7 +66,6 @@ class DriscL1Arena;
 
 namespace distributed {
 
-class D2HSocket;
 class MeshCommandQueue;
 class MeshDeviceView;
 struct MeshTraceBuffer;
@@ -278,7 +277,6 @@ public:
     SystemMemoryManager& sysmem_manager() override;
 
     // MeshTrace Internal APIs - these should be used to deprecate the single device backed trace APIs
-    // If cq_id is not provided, the current command queue is returned from the current thread
     MeshTraceId begin_mesh_trace(uint8_t cq_id);
     void begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id);
     void end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id);
@@ -306,7 +304,7 @@ public:
         bool minimal = false);
     void init_realtime_profiler_socket(const std::shared_ptr<MeshDevice>& mesh_device);
     void trigger_realtime_profiler_sync_check();
-    D2HSocket* get_realtime_profiler_socket() const;
+    RealtimeProfilerManager* get_realtime_profiler() const;
 
     // DRISC L1 arena. Consumed by the DRAM-sender GlobalCircularBuffer ctor for
     // pages_sent allocations. Constructed eagerly in initialize_impl() when the

@@ -89,11 +89,11 @@ void kernel_main() {
 
 // pre-add x + y
 #ifdef FUSE_PRE_ADD
-    binary_op_init_common(cb_in0, cb_in1, cb_in);
+    compute_kernel_hw_startup(cb_in0, cb_in1, cb_in);
     reconfig_data_format(cb_in0, cb_in1);
     pack_reconfig_data_format(cb_in);
     reconfig_data_format(cb_in0, cb_in1);
-    add_tiles_init(cb_in0, cb_in1);
+    add_init(cb_in0, cb_in1);
     cb_in_obj.reserve_back(num_tiles_per_block);
     index_subblock_w_offset = 0;
     for (uint32_t j = 0; j < num_subblocks_w; j++) {
@@ -116,11 +116,12 @@ void kernel_main() {
     pack_reconfig_data_format(cb_in, cb_x2);
     reconfig_data_format(cb_in0, cb_in, cb_in1, cb_in);
 #else
-    binary_op_init_common(cb_in, cb_in, cb_x2);
+    // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
+    compute_kernel_hw_startup(cb_in, cb_in, cb_x2);
 #endif
 
     // X^2
-    mul_tiles_init(cb_in, cb_in);
+    mul_init(cb_in, cb_in);
     index_h_offset = 0;
     cb_x2_obj.reserve_back(num_tiles_per_block);
     index_subblock_w_offset = 0;
@@ -203,7 +204,8 @@ void kernel_main() {
     cb_signaling.pop_front(1);
     constexpr uint32_t post_dst0 = 0;
     constexpr uint32_t post_scaler0 = 0;
-    binary_op_init_common(cb_stats, post_cb_scaler_global, cb_var);
+    // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
+    compute_kernel_hw_startup(cb_stats, post_cb_scaler_global, cb_var);
     index_subblock_w_offset = 0;
     index_h_offset = 0;
     index = 0;
@@ -232,7 +234,7 @@ void kernel_main() {
             cb_var_obj.wait_front(1);
             cb_eps_obj.wait_front(1);
 
-            add_tiles_init(cb_var, cb_eps);
+            add_init(cb_var, cb_eps);
             tile_regs_acquire();
             add_tiles(cb_var, cb_eps, 0, 0, post_dst0);
             tile_regs_wait();
@@ -251,7 +253,7 @@ void kernel_main() {
     pack_reconfig_data_format(cb_im);
     // (x - Ex) * 1/[sqrt(Var + eps)]
     reconfig_data_format(cb_xmm, cb_ex_global);
-    mul_bcast_cols_init_short(cb_xmm, cb_ex_global);
+    mul_bcast_cols_init(cb_xmm, cb_ex_global);
     index_h_offset = 0;
     cb_im_obj.reserve_back(num_tiles_per_block);
     index_subblock_w_offset = 0;
@@ -281,7 +283,7 @@ void kernel_main() {
 
     reconfig_data_format(cb_im, cb_gamma);
     pack_reconfig_data_format(cb_out);
-    mul_bcast_rows_init_short(cb_im, cb_gamma);
+    mul_bcast_rows_init(cb_im, cb_gamma);
     cb_gamma_obj.wait_front(block_w);
     index_h_offset = 0;
     cb_outgamma_obj.reserve_back(num_tiles_per_block);

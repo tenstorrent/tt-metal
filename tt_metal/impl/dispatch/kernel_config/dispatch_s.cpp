@@ -30,6 +30,7 @@
 #include "device/device_manager.hpp"
 #include <dispatch/dispatch_query_manager.hpp>
 #include <dispatch/dispatch_mem_map.hpp>
+#include "impl/dispatch/dispatch_engine_cores.hpp"
 #include "hostdev/realtime_profiler_msgs.h"
 
 #include "impl/context/metal_context.hpp"
@@ -122,13 +123,13 @@ DispatchSKernel::DispatchSKernel(
 }
 
 void DispatchSKernel::GenerateStaticConfigs() {
-    const auto& my_dispatch_constants = *dispatch_mem_map_[enchantum::to_underlying(GetCoreType())].get();
+    const auto& my_dispatch_constants = get_dispatch_mem_map();
 
     uint32_t dispatch_s_buffer_base = 0xff;
     if (get_dispatch_query_manager_ref().dispatch_s_enabled()) {
         uint32_t dispatch_buffer_base = my_dispatch_constants.dispatch_buffer_base(cq_id_);
-        if (GetCoreType() == CoreType::WORKER) {
-            // dispatch_s is on the same Tensix core as dispatch_d. Shared resources. Offset CB start idx.
+        if (GetCoreType() == CoreType::WORKER || GetCoreType() == CoreType::DISPATCH) {
+            // dispatch_s shares the core with dispatch_d (Tensix WORKER or Quasar DE). Offset CB start idx.
             dispatch_s_buffer_base = dispatch_buffer_base + (1 << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE) *
                                                                 my_dispatch_constants.dispatch_buffer_pages();
         } else {
@@ -394,7 +395,7 @@ void DispatchSKernel::ConfigureCore() {
 
         // Just need to clear the dispatch message
         std::vector<uint32_t> zero = {0x0};
-        const auto& my_dispatch_constants = *dispatch_mem_map_[enchantum::to_underlying(GetCoreType())].get();
+        const auto& my_dispatch_constants = get_dispatch_mem_map();
         uint32_t dispatch_s_sync_sem_base_addr = my_dispatch_constants.get_device_command_queue_addr(
             CommandQueueDeviceAddrType::DISPATCH_S_SYNC_SEM, cq_id_);
         for (uint32_t i = 0; i < DispatchSettings::DISPATCH_MESSAGE_ENTRIES; i++) {

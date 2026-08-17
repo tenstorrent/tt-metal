@@ -988,7 +988,7 @@ TEST_F(TopologyMapperUtilsTest, Pinning_SingleNodePinned_RespectsPinning) {
     const AsicPosition pos{tray, loc};
 
     TopologyMappingConfig config;
-    config.pinnings.emplace_back(pos, nodes[0]);
+    config.pinnings.push_back({{nodes[0]}, {pos}});
     config.asic_positions[asics[0]] = pos;
     config.asic_positions[asics[1]] = {tt::tt_metal::TrayID{1}, tt::tt_metal::ASICLocation{1}};
 
@@ -1014,7 +1014,7 @@ TEST_F(TopologyMapperUtilsTest, Pinning_InvalidPosition_Fails) {
     const AsicPosition invalid_pos{nonexistent_tray, nonexistent_loc};
 
     TopologyMappingConfig config;
-    config.pinnings.emplace_back(invalid_pos, nodes[0]);
+    config.pinnings.push_back({{nodes[0]}, {invalid_pos}});
     config.asic_positions[asics[0]] = {tt::tt_metal::TrayID{1}, tt::tt_metal::ASICLocation{0}};
     config.asic_positions[asics[1]] = {tt::tt_metal::TrayID{1}, tt::tt_metal::ASICLocation{1}};
 
@@ -1024,7 +1024,7 @@ TEST_F(TopologyMapperUtilsTest, Pinning_InvalidPosition_Fails) {
     EXPECT_THAT(result.error_message, ::testing::HasSubstr("not found"));
 }
 
-TEST_F(TopologyMapperUtilsTest, Pinning_DuplicatePinningsSameNode_Fails) {
+TEST_F(TopologyMapperUtilsTest, Pinning_ManyToMany_OneNodeTwoPositions_Succeeds) {
     const auto nodes = make_nodes(2);
     const auto asics = make_asics(2);
 
@@ -1034,20 +1034,19 @@ TEST_F(TopologyMapperUtilsTest, Pinning_DuplicatePinningsSameNode_Fails) {
     const auto node_ranks = make_uniform_node_ranks(nodes, rank0_);
     const auto asic_ranks = make_uniform_asic_ranks(asics, rank0_);
 
-    // Pin the same node to two different positions
     const AsicPosition pos1{tt::tt_metal::TrayID{1}, tt::tt_metal::ASICLocation{0}};
     const AsicPosition pos2{tt::tt_metal::TrayID{1}, tt::tt_metal::ASICLocation{1}};
 
     TopologyMappingConfig config;
-    config.pinnings.emplace_back(pos1, nodes[0]);
-    config.pinnings.emplace_back(pos2, nodes[0]);  // Same node, different position
+    config.pinnings.push_back({{nodes[0]}, {pos1, pos2}});
     config.asic_positions[asics[0]] = pos1;
     config.asic_positions[asics[1]] = pos2;
 
     const auto result = map_mesh_to_physical(mesh_id_, logical_adj, physical_adj, node_ranks, asic_ranks, config);
 
-    EXPECT_FALSE(result.success);
-    EXPECT_THAT(result.error_message, ::testing::HasSubstr("multiple"));
+    ASSERT_TRUE(result.success) << result.error_message;
+    EXPECT_TRUE(
+        result.fabric_node_to_asic.at(nodes[0]) == asics[0] || result.fabric_node_to_asic.at(nodes[0]) == asics[1]);
 }
 
 TEST_F(TopologyMapperUtilsTest, Pinning_NodeNotInMesh_Fails) {
@@ -1065,7 +1064,7 @@ TEST_F(TopologyMapperUtilsTest, Pinning_NodeNotInMesh_Fails) {
     const AsicPosition pos{tt::tt_metal::TrayID{1}, tt::tt_metal::ASICLocation{0}};
 
     TopologyMappingConfig config;
-    config.pinnings.emplace_back(pos, nonexistent_node);
+    config.pinnings.push_back({{nonexistent_node}, {pos}});
     config.asic_positions[asics[0]] = pos;
     config.asic_positions[asics[1]] = {tt::tt_metal::TrayID{1}, tt::tt_metal::ASICLocation{1}};
 
@@ -1139,7 +1138,7 @@ TEST_F(TopologyMapperUtilsTest, Pinning_MapMultiMeshToPhysical_MeshLevelPinnings
     // Logical mesh 0 has no pinnings. It will be placed on the first available physical mesh, if the pinnings are
     // applied only at the intra-mesh level. Pin logical mesh 1, such that it has to land on physical mesh 0. This
     // will make sure we apply mesh-level pinnings before inter-mesh mapping.
-    config.pinnings.emplace_back(pos100, ln1[0]);
+    config.pinnings.push_back({{ln1[0]}, {pos100}});
 
     const auto result =
         map_multi_mesh_to_physical(logical, physical, config, asic_id_to_mesh_rank, fabric_node_id_to_mesh_rank);
@@ -4281,6 +4280,46 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
     EXPECT_GE(meshes_with_64_asics, 1u) << "16×4 MGD should yield at least one 64-ASIC physical mesh partition";
 }
 
+TEST_F(
+    TopologyMapperUtilsTest,
+    BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx_DisaggregatedPrefill2x4PipelineDecode32x4Combined) {
+    // Test build_physical_multi_mesh_adjacency_graph using PGD and PSD
+    // Blitz 4x2 pipeline MGD (SP4 GLX mock: 64 physical meshes vs 48 on triple 16x8 / 12 ranks)
+    using namespace ::tt::tt_fabric;
+
+    const char* tt_metal_home = std::getenv("TT_METAL_HOME");
+    ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
+
+    // Check if mock cluster descriptor is available (set by tt-run)
+    auto* mock_desc = getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH");
+    if (mock_desc == nullptr) {
+        GTEST_SKIP() << "TT_METAL_MOCK_CLUSTER_DESC_PATH not set - run with tt-run --mock-cluster-rank-binding";
+    }
+
+    // Create PSD from mock cluster
+    tt::tt_metal::PhysicalSystemDescriptor psd = create_psd_from_mock_cluster();
+
+    // Load PGD - same rev-AB BH galaxy grouping descriptor used by the sibling Sp4Glx tests.
+    const std::filesystem::path pgd_path =
+        std::filesystem::path(tt_metal_home) /
+        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_rev_ab_physical_grouping_descriptor.textproto";
+    ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
+    PhysicalGroupingDescriptor pgd{pgd_path};
+
+    // Custom 10-stage 4×2 pipeline (8 ASICs/stage) — see bh_glx_10stage_4x2_pipeline.textproto
+    const std::filesystem::path mgd_path = std::filesystem::path(tt_metal_home) /
+                                           "tests/tt_metal/tt_fabric/custom_mesh_descriptors/"
+                                           "disaggregated_prefill_2x4_pipeline_decode_32x4_combined.textproto";
+    ASSERT_TRUE(std::filesystem::exists(mgd_path)) << "MGD file not found: " << mgd_path;
+    MeshGraphDescriptor mgd{mgd_path};
+
+    // Build physical multi-mesh graph using PGD and PSD
+    const auto physical_multi_mesh_graph = build_physical_multi_mesh_adjacency_graph(psd, pgd, mgd);
+
+    // Expect 48 + 1 groupings
+    EXPECT_EQ(physical_multi_mesh_graph.mesh_adjacency_graphs_.size(), 49u);
+}
+
 TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx_Blitz2x4) {
     // Test build_physical_multi_mesh_adjacency_graph using PGD and PSD
     // Blitz 4x2 pipeline MGD (SP4 GLX mock: 64 physical meshes vs 48 on triple 16x8 / 12 ranks)
@@ -4365,8 +4404,8 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
     }
 
     const auto& pinnings = mgd.get_pinnings();
-    for (const auto& [pos, fabric_node] : pinnings) {
-        config.pinnings.emplace_back(pos, fabric_node);
+    for (const auto& group : pinnings) {
+        config.pinnings.push_back({group.fabric_nodes, group.asic_positions});
     }
 
     if (!config.pinnings.empty()) {
@@ -4495,8 +4534,8 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
     }
 
     const auto& pinnings = mgd.get_pinnings();
-    for (const auto& [pos, fabric_node] : pinnings) {
-        config.pinnings.emplace_back(pos, fabric_node);
+    for (const auto& group : pinnings) {
+        config.pinnings.push_back({group.fabric_nodes, group.asic_positions});
     }
 
     if (!config.pinnings.empty()) {
@@ -4625,8 +4664,8 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
     }
 
     const auto& pinnings = mgd.get_pinnings();
-    for (const auto& [pos, fabric_node] : pinnings) {
-        config.pinnings.emplace_back(pos, fabric_node);
+    for (const auto& group : pinnings) {
+        config.pinnings.push_back({group.fabric_nodes, group.asic_positions});
     }
 
     if (!config.pinnings.empty()) {
@@ -5089,6 +5128,80 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Single
         EXPECT_EQ(pinned_positions, mesh_positions)
             << "Pinned positions should be exactly this mesh's ASIC footprint (by position)";
     }
+}
+
+TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_VectorOverload_ThreadsPinnings_MatchesSingular) {
+    // The vector<MGD> (multi-MGD) builder must thread per-MGD pinnings into the SAME PGD<->MGD grouping match and
+    // PSD placement as the single-MGD builder overload. For a single MGD wrapped in a size-1 vector this checks:
+    //   (1) every threaded pin is HONORED (each pinned logical chip lands on one of its group's allowed positions;
+    //       the hard node-0 pin restricts its group to a single position, so this also proves the pin has effect), and
+    //   (2) the resulting mesh_pgd_pinnings_ is identical to the single-MGD overload given the same pins (i.e. the
+    //       vector path reaches the exact same grouping/placement code as the normal path).
+    using namespace ::tt::tt_fabric;
+
+    const char* tt_metal_home = std::getenv("TT_METAL_HOME");
+    ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
+    auto* mock_desc = getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH");
+    if (mock_desc == nullptr) {
+        GTEST_SKIP() << "TT_METAL_MOCK_CLUSTER_DESC_PATH not set - run with TT_METAL_MOCK_CLUSTER_DESC_PATH=...";
+    }
+
+    tt::tt_metal::PhysicalSystemDescriptor psd = create_psd_from_mock_cluster();
+
+    const std::filesystem::path pgd_path =
+        std::filesystem::path(tt_metal_home) /
+        "tests/tt_metal/tt_fabric/physical_groupings/wh_bh_rev_c_galaxy_physical_grouping_descriptor.textproto";
+    ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
+    PhysicalGroupingDescriptor pgd{pgd_path};
+
+    const std::string mgd_text_proto = R"proto(
+        mesh_descriptors {
+          name: "M0"
+          arch: BLACKHOLE
+          device_topology { dims: [ 4, 8 ] }
+          host_topology { dims: [ 1, 1 ] }
+          channels { count: 2 policy: RELAXED }
+        }
+
+        top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    )proto";
+    MeshGraphDescriptor mgd{mgd_text_proto};
+
+    // Corner pins in the MGD's LOCAL mesh-id space (mesh 0), built via the same helper the production Phase-1 path
+    // uses. hard_pin_node_0 restricts logical chip 0 to a single ASIC position (the NW corner).
+    std::vector<PinningConstraint> pins = get_galaxy_fixed_asic_position_pinnings_for_mesh(
+        MeshId{0}, tt::tt_metal::distributed::MeshShape(4, 8), /*hard_pin_node_0=*/true, /*nw_corner_only=*/false);
+    ASSERT_FALSE(pins.empty()) << "Galaxy corner helper should produce pinning groups for a 4x8 mesh";
+
+    // Build via the multi-MGD vector overload, threading pins as per_mgd_pinnings[0].
+    const std::vector<MeshGraphDescriptor> mgds{mgd};
+    const std::vector<std::optional<std::vector<PinningConstraint>>> per_mgd_pins{pins};
+    const auto vec_graph = build_physical_multi_mesh_adjacency_graph(psd, pgd, mgds, per_mgd_pins);
+
+    ASSERT_EQ(vec_graph.mesh_adjacency_graphs_.size(), 1u);
+    ASSERT_FALSE(vec_graph.mesh_pgd_pinnings_.empty())
+        << "Vector overload built with pinnings must carry a PGD pinning (pins were not threaded to the builder)";
+
+    // (1) Every threaded pin must be honored in the resulting PGD pinning.
+    for (const auto& group : pins) {
+        for (const FabricNodeId& fn : group.fabric_nodes) {
+            auto mesh_it = vec_graph.mesh_pgd_pinnings_.find(fn.mesh_id);
+            ASSERT_NE(mesh_it, vec_graph.mesh_pgd_pinnings_.end()) << "No pinning map for mesh " << *fn.mesh_id;
+            auto chip_it = mesh_it->second.find(fn.chip_id);
+            ASSERT_NE(chip_it, mesh_it->second.end()) << "Pinned chip " << fn.chip_id << " missing from result";
+            const bool in_allowed =
+                std::find(group.asic_positions.begin(), group.asic_positions.end(), chip_it->second) !=
+                group.asic_positions.end();
+            EXPECT_TRUE(in_allowed) << "Pinned chip " << fn.chip_id << " placed outside its threaded allowed positions";
+        }
+    }
+
+    // (2) Threading must reach the exact same grouping/placement code as the single-MGD overload: same pins in ->
+    // same mesh_pgd_pinnings_ out.
+    const auto singular_graph =
+        build_physical_multi_mesh_adjacency_graph(psd, pgd, mgd, std::optional<std::vector<PinningConstraint>>{pins});
+    EXPECT_EQ(vec_graph.mesh_pgd_pinnings_, singular_graph.mesh_pgd_pinnings_)
+        << "Vector overload with per-MGD pins must match the single-MGD overload with the same pins";
 }
 
 TEST_F(

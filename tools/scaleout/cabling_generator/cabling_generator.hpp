@@ -8,6 +8,7 @@
 #include <memory>
 #include <set>
 #include <string>
+#include <tuple>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -192,8 +193,39 @@ public:
     // Method to emit cabling guide CSV
     void emit_cabling_guide_csv(const std::string& output_path, bool loc_info = true) const;
 
-    // Method to emit merged cabling descriptor
-    void emit_cabling_descriptor(const std::string& output_path) const;
+    // Method to emit merged cabling descriptor.
+    // When hierarchical=false (default), a nested resolved tree is flattened into a single-level,
+    // hostname-keyed "extracted_topology" descriptor (CableGen shape). When hierarchical=true, the
+    // nested tree is serialized faithfully (one graph_template per graph instance), preserving the
+    // hierarchy so the derived FSD instance_path reflects the full structure.
+    void emit_cabling_descriptor(const std::string& output_path, bool hierarchical = false) const;
+
+    // A child to nest under a composite root. instance_name is the child's directory name (used to
+    // uniquify the child's top instance_path segment). deployment_path, when non-empty, is the child's
+    // own deployment (host_id-indexed); it lets hierarchical children (whose leaf nodes are named by
+    // instance, not hostname) load positionally instead of being sliced from the composite deployment
+    // by hostname. fsd_path, when non-empty, supplies the child's intra-cluster hierarchy.
+    struct AggregateChild {
+        std::string instance_name;
+        std::string cabling_path;
+        std::string fsd_path;         // may be empty
+        std::string deployment_path;  // may be empty
+    };
+
+    // Build a composite generator that nests each child under a root named composite_name, wiring
+    // glue descriptors (inter-child cabling, referencing hosts by hostname) at the composite level.
+    // When a child's fsd_path is non-empty, its intra-cluster hierarchy is taken from that FSD's
+    // per-host instance_path (e.g. sp4/sp2_0/...): each child host lands at
+    //   <composite_name>/<fsd_seg0>-<instance_name>/<fsd_seg1>/.../<fsd_leaf>
+    // so the aggregated FSD combines the directory forest with the descriptor's own hierarchy. When
+    // fsd_path is empty, the child's resolved tree is nested directly under instance_name instead.
+    // Used to aggregate a tree of cluster configs while keeping the hierarchy (see
+    // merge_cluster_configs.py).
+    static CablingGenerator build_nested_aggregate(
+        const std::string& composite_name,
+        const std::vector<AggregateChild>& children,
+        const std::vector<std::string>& glue_descriptor_paths,
+        const std::string& deployment_descriptor_path);
 
     // Method to emit deployment descriptor (one host per node in host_id order; use for merged output)
     void emit_deployment_descriptor(const std::string& output_path) const;

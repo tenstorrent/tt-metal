@@ -103,7 +103,7 @@ FORCE_INLINE void reload_from_cb_to_dst(
 
     uint32_t start_dst_index = 0;
     uint32_t start_tile_index = 0;
-    copy_block_matmul_partials(mm_partials_cb_id, start_tile_index, start_dst_index, out_subblock_num_tiles);
+    copy_block(mm_partials_cb_id, start_tile_index, start_dst_index, out_subblock_num_tiles);
 
     mm_partials_cb.pop_front(out_subblock_num_tiles);
     // Reconfigure srcA back
@@ -384,7 +384,7 @@ void kernel_main() {
 #endif
 #endif
                                 uint32_t start_dst_index = 0;
-                                pack_tile_block(start_dst_index, mm_out_cb_id, out_subblock_num_tiles);
+                                pack_block(start_dst_index, mm_out_cb_id, out_subblock_num_tiles);
 
                                 tile_regs_release();
                                 mm_out_cb.push_back(out_subblock_num_tiles);
@@ -407,7 +407,7 @@ void kernel_main() {
 #endif
 
                                 uint32_t start_dst_index = 0;
-                                pack_tile_block(start_dst_index, mm_partials_cb_id, out_subblock_num_tiles);
+                                pack_block(start_dst_index, mm_partials_cb_id, out_subblock_num_tiles);
 
                                 tile_regs_release();
                                 mm_partials_cb.push_back(out_subblock_num_tiles);
@@ -467,9 +467,9 @@ void kernel_main() {
 #endif
                 reconfig_data_format(in1_cb_id, mm_partials_cb_id, in0_cb_id, bias_cb_id);
                 if constexpr (row_broadcast_bias) {
-                    add_bcast_rows_init_short(mm_partials_cb_id, bias_cb_id);
+                    add_bcast_rows_init(mm_partials_cb_id, bias_cb_id);
                 } else {
-                    add_tiles_init(mm_partials_cb_id, bias_cb_id);
+                    add_init(mm_partials_cb_id, bias_cb_id);
                 }
                 // Reader only pushes bias once when num_blocks_w_dim == 1;
                 // the tiles stay in the CB for reuse across bh/batch iterations.

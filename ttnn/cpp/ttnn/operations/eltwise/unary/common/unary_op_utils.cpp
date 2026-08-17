@@ -5,6 +5,7 @@
 #include "unary_op_utils.hpp"
 
 #include <optional>
+#include <type_traits>
 #include <tt_stl/assert.hpp>
 #include "ttnn/tensor/types.hpp"
 
@@ -101,6 +102,7 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::HARDTANH: return "SFPU_OP_HARDTANH_INCLUDE";
         case UnaryOpType::RPOW: return "SFPU_OP_RPOW_INCLUDE";
         case UnaryOpType::HARDMISH: return "SFPU_OP_HARDMISH_INCLUDE";
+        case UnaryOpType::SOFTCAP: return "SFPU_OP_SOFTCAP_INCLUDE";
         case UnaryOpType::LGAMMA: return "SFPU_OP_LGAMMA_INCLUDE";
         case UnaryOpType::DIGAMMA: return "SFPU_OP_DIGAMMA_INCLUDE";
         case UnaryOpType::TANHSHRINK: return "SFPU_OP_TANHSHRINK_INCLUDE";
@@ -336,6 +338,16 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                     idst,
                     (uint)params[0])};
         case UnaryOpType::REMAINDER:
+            if (input_dtype == DataType::UINT32) {
+                if constexpr (std::is_floating_point_v<T>) {
+                    TT_FATAL(false, "Expected integer scalar divisor (uint32 or int32)");
+                } else {
+                    TT_FATAL(param0_raw > 0, "Divisor must be positive, got {}", param0_raw);
+                }
+                return {
+                    "remainder_tile_uint32_init();",
+                    fmt::format("remainder_tile_uint32({}, {}u);", idst, static_cast<uint32_t>(param0_raw))};
+            }
             return {
                 fmt::format(
                     "remainder_tile_init({:#x}u, {:#x}u);",
@@ -600,6 +612,18 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 "celu_tile_init();",
                 fmt::format(
                     "celu_tile({}, {:#x}u, {:#x}u);",
+                    idst,
+                    std::bit_cast<uint32_t>(param0),
+                    std::bit_cast<uint32_t>(1.0f / param0))};
+        // softcap takes beta with 1/beta precomputed here, so the kernel never divides. The
+        // check is repeated from UnaryDeviceOperation::validate because fused activation chains
+        // (ttnn::multiply's lhs/rhs/post_activations) reach this emitter without going through it.
+        case UnaryOpType::SOFTCAP:
+            TT_FATAL(param0 != 0.0f, "SOFTCAP requires a non-zero beta");
+            return {
+                "softcap_tile_init();",
+                fmt::format(
+                    "softcap_tile({}, {:#x}u, {:#x}u);",
                     idst,
                     std::bit_cast<uint32_t>(param0),
                     std::bit_cast<uint32_t>(1.0f / param0))};

@@ -186,7 +186,7 @@ FabricMuxV2Config::FabricMuxV2Config(
 }
 
 void FabricMuxV2Config::append_client_connection_rt_args(
-    const CoreCoord& mux_virtual_core,
+    const tt::tt_metal::CoreCoord& mux_virtual_core,
     uint8_t logical_channel_id,
     const ClientSemaphores& client_semaphores,
     std::vector<uint32_t>& worker_args) const {
@@ -241,7 +241,7 @@ std::unordered_map<std::string, uint32_t> FabricMuxV2Config::get_fabric_mux_v2_n
 void add_fabric_mux_v2_to_program(
     tt::tt_metal::Program& program,
     const FabricMuxV2Config& config,
-    const CoreCoord& mux_logical_core,
+    const tt::tt_metal::CoreCoord& mux_logical_core,
     const std::vector<uint32_t>& downstream_sender_rt_args,
     tt::tt_metal::NOC forwarder_noc) {
     const auto manager_noc = get_manager_noc_from_forwarder_noc(forwarder_noc);
@@ -258,7 +258,8 @@ void add_fabric_mux_v2_to_program(
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = forwarder_noc,
-            .named_compile_args = named_compile_args});
+            .named_compile_args = named_compile_args,
+            .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
     tt::tt_metal::SetRuntimeArgs(program, forwarder_kernel, mux_logical_core, downstream_sender_rt_args);
 
     tt::tt_metal::CreateKernel(
@@ -268,13 +269,14 @@ void add_fabric_mux_v2_to_program(
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
             .noc = manager_noc,
-            .named_compile_args = named_compile_args});
+            .named_compile_args = named_compile_args,
+            .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
 }
 
 void add_fabric_mux_v2_to_program(
     tt::tt_metal::Program& program,
     const FabricMuxV2Config& config,
-    const CoreCoord& mux_logical_core,
+    const tt::tt_metal::CoreCoord& mux_logical_core,
     const FabricNodeId& src_fabric_node_id,
     const FabricNodeId& dst_fabric_node_id,
     uint32_t link_idx,

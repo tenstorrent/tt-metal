@@ -194,6 +194,15 @@ class DataFormat(Enum):
             DataFormat.MxFp4,
         }
 
+    def is_block_float(self) -> bool:
+        """Checks if the data format is a block float format."""
+        return self in {
+            DataFormat.Bfp8,
+            DataFormat.Bfp8_b,
+            DataFormat.Bfp4_b,
+            DataFormat.Bfp2_b,
+        }
+
     def supports_l1_accumulation(self) -> bool:
         """Checks if the data format supports L1 accumulation"""
         return self in {

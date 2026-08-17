@@ -181,14 +181,14 @@ struct Conv2dConfig {
 enum class Conv2dOpParallelizationStrategy { MULTI_CORE, MULTI_CORE_REUSE, MULTI_CORE_REUSE_MCAST, SINGLE_CORE };
 
 struct Conv2dParallelizationConfig {
-    CoreCoord grid_size;  // (x,y)
+    tt::tt_metal::CoreCoord grid_size;  // (x,y)
     uint32_t num_cores_nhw = 1;
     uint32_t num_cores_c_in = 1;
     uint32_t num_cores_c_out = 1;
     uint32_t per_core_out_matrix_height_ntile = 1;
     uint32_t per_core_out_matrix_width_ntile = 1;
 
-    CoreCoord get_grid_size() const { return this->grid_size; }
+    tt::tt_metal::CoreCoord get_grid_size() const { return this->grid_size; }
 };
 
 struct Conv2dBlockConfig {

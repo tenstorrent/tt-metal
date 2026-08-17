@@ -115,6 +115,10 @@ void loop_and_wait_with_timeout(
 }
 }  // namespace
 
+bool d2h_uses_hugepage_fallback(const MetalContext& ctx) {
+    return !ctx.hal().get_supports_64_bit_pcie_addressing() && !ctx.get_cluster().is_iommu_enabled();
+}
+
 SystemMemoryManager::SystemMemoryManager(ContextId context_id, ChipId device_id, uint8_t num_hw_cqs) :
     context_id(context_id),
     device_id(device_id),
@@ -209,9 +213,18 @@ SystemMemoryManager::SystemMemoryManager(ContextId context_id, ChipId device_id,
     this->channel_offset = DispatchSettings::MAX_HUGEPAGE_SIZE * get_umd_channel(channel) +
                            (channel >> 2) * DispatchSettings::MAX_DEV_CHANNEL_SIZE;
 
-    // Two TRANSFER_PAGE_SIZE pages per HW CQ reserved for free_region_* (see DRAM-backed path above).
     static constexpr uint32_t AUX_PAGES_PER_CQ = 2;
     uint32_t per_cq_reduction = AUX_PAGES_PER_CQ * DispatchSettings::TRANSFER_PAGE_SIZE;
+    if (d2h_uses_hugepage_fallback(ctx)) {
+        per_cq_reduction += tt::align(
+            (DispatchSettings::HUGEPAGE_D2H_FALLBACK_RESERVE_BYTES + num_hw_cqs - 1) / num_hw_cqs,
+            DispatchSettings::TRANSFER_PAGE_SIZE);
+    }
+    TT_FATAL(
+        this->cq_size > per_cq_reduction,
+        "Command queue size {} B is too small for the {} B aux reservation",
+        this->cq_size,
+        per_cq_reduction);
     this->cq_size -= per_cq_reduction;
 
     uint32_t total_cq_space = static_cast<uint32_t>(num_hw_cqs) * this->cq_size;
@@ -227,7 +240,7 @@ void SystemMemoryManager::init_dispatch_core_interfaces(uint8_t num_hw_cqs, uint
     auto& ctx = tt::tt_metal::MetalContext::instance(context_id);
     const CoreType core_type = ctx.get_dispatch_core_manager().get_dispatch_core_type();
     const uint32_t cq_start = ctx.dispatch_mem_map().get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
-    const auto& mem_map = ctx.dispatch_mem_map(core_type);
+    const auto& mem_map = ctx.dispatch_mem_map();
     for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
         // L1 addresses differ per cq_id when this CQ's dispatch kernels share their dispatch core's L1 with another
         // CQ's
@@ -681,9 +694,8 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
     }
 
     auto& ctx = tt::tt_metal::MetalContext::instance(context_id);
-    const CoreType core_type = ctx.get_dispatch_core_manager().get_dispatch_core_type();
     const uint32_t prefetch_q_rd_ptr =
-        ctx.dispatch_mem_map(core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_RD, cq_id);
+        ctx.dispatch_mem_map().get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_RD, cq_id);
 
     // Helper to wait for fetch queue space, if needed
     uint32_t fence;
@@ -723,7 +735,7 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
 
     wait_for_fetch_q_space();
     // Wrap FetchQ if possible
-    const auto& mem_map = ctx.dispatch_mem_map(core_type);
+    const auto& mem_map = ctx.dispatch_mem_map();
     uint32_t prefetch_q_base = mem_map.get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED, cq_id);
     uint32_t prefetch_q_limit =
         prefetch_q_base + (mem_map.prefetch_q_entries() * mem_map.prefetch_q_entry_size_bytes());

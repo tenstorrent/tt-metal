@@ -54,7 +54,7 @@ void kernel_main() {
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(in_cb, dfb::trans_mat_cb, out_cb);
     matmul_init(in_cb, dfb::trans_mat_cb);
-    binary_op_init_common(
+    compute_kernel_hw_startup(
         dfb::rotated_in_interm_cb, dfb::sin_cb, dfb::sin_interm_cb);  // General Init for all binary ops
 
     for (uint32_t ht = 0; ht < Ht; ht++) {  // Over n_heads_t dimension
@@ -81,7 +81,7 @@ void kernel_main() {
         rotated_in_interm_cb_obj.push_back(Wt);
         rotated_in_interm_cb_obj.wait_front(Wt);
 
-        mul_tiles_init(dfb::rotated_in_interm_cb, dfb::sin_cb);
+        mul_init(dfb::rotated_in_interm_cb, dfb::sin_cb);
         ACQ();
         // sin_interim = rotated * sin
         mul_tiles(dfb::rotated_in_interm_cb, dfb::sin_cb, 0, 0, 0);
@@ -90,7 +90,7 @@ void kernel_main() {
         sin_interm_cb_obj.push_back(Wt);
         rotated_in_interm_cb_obj.pop_front(Wt);
 
-        mul_tiles_init(in_cb, dfb::cos_cb);
+        mul_init(in_cb, dfb::cos_cb);
         ACQ();
         // cos_interim = x * cos
         mul_tiles(in_cb, dfb::cos_cb, 0, 0, 0);
@@ -101,7 +101,7 @@ void kernel_main() {
 
         sin_interm_cb_obj.wait_front(Wt);
         cos_interm_cb_obj.wait_front(Wt);
-        add_tiles_init(dfb::cos_interm_cb, dfb::sin_interm_cb);
+        add_init(dfb::cos_interm_cb, dfb::sin_interm_cb);
         ACQ();
         // out = cos_interim + sin_interim
         add_tiles(dfb::cos_interm_cb, dfb::sin_interm_cb, 0, 0, 0);

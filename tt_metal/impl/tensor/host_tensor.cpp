@@ -2,9 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/experimental/tensor/host_tensor.hpp>
+#include <tt-metalium/tensor/host_tensor.hpp>
+#include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
 
 #include "host_tensor_impl.hpp"
+#include "spec/layout/tensor_layout_impl.hpp"
+#include "tensor_impl.hpp"
 
 namespace tt::tt_metal {
 
@@ -12,18 +15,20 @@ namespace tt::tt_metal {
 HostTensor::HostTensor(DistributedHostBuffer buffer, TensorSpec spec, TensorTopology topology) :
     impl_(std::make_unique<HostTensorImpl>(std::move(buffer), std::move(spec), std::move(topology))) {}
 
-HostTensor HostTensor::from_buffer(DistributedHostBuffer buffer, TensorSpec spec, TensorTopology topology) {
-    return HostTensor(std::move(buffer), std::move(spec), std::move(topology));
-}
-
-HostTensor HostTensor::from_buffer(HostBuffer buffer, TensorSpec spec, TensorTopology topology) {
+HostTensor HostTensor::from_buffer(HostBuffer buffer, TensorSpec spec) {
     auto distributed_buffer = DistributedHostBuffer::create(
         distributed::MeshShape(1, 1),
         distributed::MeshShape(1, 1),
         distributed::MeshCoordinate(0, 0),
         /*context=*/nullptr);
     distributed_buffer.emplace_shard(distributed::MeshCoordinate(0, 0), [&buffer]() { return std::move(buffer); });
-    return HostTensor(std::move(distributed_buffer), std::move(spec), std::move(topology));
+    return HostTensor(std::move(distributed_buffer), std::move(spec), TensorTopology{});
+}
+
+HostTensor HostTensor::allocate_for_overwrite(TensorSpec spec) {
+    // Sequence allocate before moving spec: argument evaluation order is unspecified.
+    auto buffer = tensor_impl::allocate_host_buffer(spec);
+    return from_buffer(std::move(buffer), std::move(spec));
 }
 
 HostTensor::HostTensor(const HostTensor& other) :
@@ -58,8 +63,6 @@ const HostTensorImpl& HostTensor::impl() const {
 
 const TensorSpec& HostTensor::tensor_spec() const { return impl().spec(); }
 
-const TensorTopology& HostTensor::tensor_topology() const { return impl().topology(); }
-
 bool HostTensor::is_valueless_after_move() const { return impl_ == nullptr; }
 
 const DistributedHostBuffer& HostTensor::buffer() const { return impl().buffer(); }
@@ -92,22 +95,19 @@ std::size_t HostTensor::element_size() const {
         case DataType::UINT32: return sizeof(uint32_t);
         case DataType::UINT16: return sizeof(uint16_t);
         case DataType::UINT8: return sizeof(uint8_t);
+        case DataType::INT8: return sizeof(int8_t);
         case DataType::BFLOAT8_B:
         case DataType::BFLOAT4_B: return sizeof(std::byte);
         default: TT_THROW("Unsupported data type");
     }
 }
 
-Strides HostTensor::strides() const { return tensor_spec().tensor_layout().compute_strides(logical_shape()); }
+Strides HostTensor::strides() const { return tensor_spec().tensor_layout().impl().compute_strides(logical_shape()); }
 
 HostTensor HostTensor::transform(const std::function<HostBuffer(const HostBuffer&)>& callable) const {
     auto transformed_buffer =
         buffer().transform(callable, DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
-    return HostTensor(std::move(transformed_buffer), tensor_spec(), tensor_topology());
-}
-
-void HostTensor::update_tensor_topology(TensorTopology tensor_topology) {
-    impl().update_topology(std::move(tensor_topology));
+    return HostTensor(std::move(transformed_buffer), tensor_spec(), impl().topology());
 }
 
 }  // namespace tt::tt_metal
