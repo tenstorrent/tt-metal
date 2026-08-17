@@ -169,3 +169,52 @@ Blelloch (work-efficient) scan does `O(C)` work with `2*log2(C)` depth, trading 
 doubling of depth for the removal of the `log2(C)` work factor. That is a real
 kernel-level change rather than a constant, so it is only worth considering if the
 chunk sweep shows the FLOP term binding.
+
+---
+
+## Two secondary dispatch levers in the same scan, chunk-size independent
+
+Recorded while counting the scan body. Neither is attempted; both reduce
+dispatches without touching the chunk, so they compose with whatever the sweep
+concludes.
+
+### 1. The two shift-concats are 40% of the scan's ops
+
+Of the five ops per scan step, two are pure data movement:
+
+```
+previous_transform = ttnn.concat([identity[:, :distance], transform[:, :-distance]], dim=1)
+previous_bias      = ttnn.concat([zero[:, :distance],     bias[:, :-distance]],      dim=1)
+```
+
+Both implement "shift right by `distance`, fill with the scan identity". Each
+allocates a fresh full-size tensor per step. If the same effect can be had from a
+pre-padded buffer plus a slice — allocate `transform` and `bias` with `chunk`
+leading padding already holding identity/zero, then read the shifted view — the
+step drops from **5 ops to 3**, a 40% dispatch reduction on the term that the
+measurements above suggest dominates.
+
+Caveat that has to be checked before believing it: whether a slice at a non-tile
+offset produces a view or forces a copy on this stack. If it forces a copy, this
+buys nothing and the concat is already the cheap way to do it.
+
+### 2. `identity` and `zero` are rebuilt per chunk, per layer
+
+```
+identity = ttnn.repeat(self.weights["linear_identity"], ttnn.Shape([groups, sequence, 1, 1]))
+zero = ttnn.multiply(identity, 0.0)
+```
+
+These are **constants** for a given `(groups, chunk)` shape, but they are
+materialised inside `_linear_attention_prefill_chunk`, which runs once per chunk
+per layer. At S=128 with chunk 32 that is 4 chunks × 48 gated-delta layers = **192
+rebuilds of each**, or 384 large tensor allocate/deallocate pairs per prefill, for
+tensors whose contents never change.
+
+Hoisting them to a per-shape cache on the model is a small, contained change. The
+direct op saving is modest (two ops per chunk), but the allocator churn it removes
+is not obviously modest, and `zero` in particular is an entire tensor of zeros
+produced by a multiply.
+
+Both of these are worth measuring only after the chunk sweep, because the chunk
+result determines how many scan steps exist to optimise in the first place.
