@@ -133,15 +133,19 @@ place to start. Points 5 and 6 are one line each.
       while the codes diverge, and one flipped code redirects the rest of the utterance.
     - What worked for us, cheapest first. Pin the random draw the model makes each frame, so two
       runs of the same code produce the same audio and can be compared at all. Then count how many
-      emitted codes exactly match the reference's, which is free and far stricter than a
-      correlation. Each frame is generated from the ones before it, so one early difference
-      compounds until the two outputs are unrelated; feeding the reference's own frames in at every
-      step instead, teacher forcing, removes that, and any difference left is caused by the change
-      itself. After that, word error rate over a long transcript, and whether every prompt ends on
-      its own. Anything that changes what the model produces needs a listening pass.
-    - One warning, because we lost time to it: free running word error rate cannot separate two
-      builds. The same code across three seeds spanned 0.88% to 2.06%, wider than most changes worth
-      measuring. Only the long form aggregate was stable, 1 wrong word in 894 over three seeds.
+      emitted codes exactly match the reference's, which is free and stricter than any correlation.
+      Each frame is generated from the ones before it, so one early difference compounds until the
+      outputs are unrelated; feeding the reference's own frames in at every step instead, teacher
+      forcing, isolates the change. Then word error rate from an ASR over the output, and a no
+      reference MOS predictor over the waveform. Whether every prompt terminates on its own is
+      nearly free. A listening pass for anything that changes what the model produces.
+    - Three things we learned the hard way. Absolute scores are meaningless, since the predictors
+      are not calibrated for this domain, so run both arms on identical prompts and compare the
+      delta. Short prompts are noise: one word swung more than a point of MOS across seeds, and word
+      error rate on identical code spanned 0.88% to 2.06%, so gate on the long form aggregate. And
+      mel cepstral distortion, the obvious objective distance, failed its own self test in three
+      implementations, one scoring 24.9 between a waveform and the same waveform plus inaudible
+      noise, so we dropped it.
 
 We have the logs and the measurements behind all of this, and can open an issue per point if that
 is easier.
