@@ -307,18 +307,36 @@ def _reap_command_processes(
     # necessarily contains the pattern -- is NOT matched by pkill/pgrep -f, avoiding self-kill.
     bracketed = reap_pattern[:-1] + "[" + reap_pattern[-1] + "]" if reap_pattern else reap_pattern
     pat = shlex.quote(bracketed)
-    # Workload ranks by cmdline (always). prted by exact name (-x) UNLESS sparing the producer's daemons:
-    # while the producer is alive, killing prted would take the producer down too, so we rely on the
-    # pattern kill + the local process-group kill (which orphans this job's prted) instead.
+    # CRUCIAL: exclude THIS driver's own process group. host_set can include the login node this driver
+    # runs on (the reap sshes there too), and the driver's cmdline carries the trailing pytest target, so
+    # a blind `pkill -f <pattern>` would SIGKILL the driver itself. The worker ranks run in a *separate*
+    # process group (tt-run uses start_new_session), so excluding the driver's pgid still reaps them. The
+    # exclusion only ever matches on the login node; on remote hosts no process has this pgid.
+    self_pgid = os.getpgid(0)
+    # Kill workload ranks by cmdline, pid-by-pid, skipping anything in the driver's own process group.
+    pattern_kill = (
+        f"for pid in $(pgrep -f {pat} 2>/dev/null); do "
+        f'pg=$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d " "); '
+        f'[ "$pg" = "{self_pgid}" ] && continue; '
+        f'kill -9 "$pid" 2>/dev/null; done'
+    )
+    # Count survivors the same way (excluding the driver's group) so the login-node poll can reach 0.
+    pattern_count = (
+        f"c=0; for pid in $(pgrep -f {pat} 2>/dev/null); do "
+        f'pg=$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d " "); '
+        f'[ "$pg" = "{self_pgid}" ] && continue; c=$((c+1)); done; echo "$c"'
+    )
+    # prted by exact name (-x) UNLESS sparing the producer's daemons: while the producer is alive, killing
+    # prted would take the producer down too, so we rely on the pattern kill + the local process-group kill.
     prted_kill = "" if spare_daemons else "pkill -9 -x prted >/dev/null 2>&1; "
-    kill_sh = f"{prted_kill}pkill -9 -f {pat} >/dev/null 2>&1; true"
+    kill_sh = f"{prted_kill}{pattern_kill}; true"
     ssh = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", "-o", "StrictHostKeyChecking=no"]
     for h in hosts:
         # Kill, then poll (bounded) until the ranks are gone, re-killing each round.
         for _ in range(8):
             try:
                 subprocess.run(ssh + [h, kill_sh], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=25)
-                chk = subprocess.run(ssh + [h, f"pgrep -f {pat} | wc -l"], capture_output=True, text=True, timeout=25)
+                chk = subprocess.run(ssh + [h, pattern_count], capture_output=True, text=True, timeout=25)
             except subprocess.TimeoutExpired:
                 break
             if (chk.stdout or "").strip() in ("", "0"):
@@ -868,6 +886,14 @@ def main(
     # at a time (serialized). No producer in --solutions-dir mode -- the list is already on disk.
     producer: Optional[_Producer] = None
     if producer_cmd is not None and not dry_run:
+        # Remove any stale solutions_index.yaml from a prior run so the consumer waits for THIS producer's
+        # freshly streamed solutions instead of immediately consuming leftovers (the producer rewrites it
+        # incrementally as it finds each solution).
+        stale_index = sol_dir / "solutions_index.yaml"
+        try:
+            stale_index.unlink()
+        except FileNotFoundError:
+            pass
         producer = _start_producer(producer_cmd, cwd=_repo_root(), log_path=logs_root / "_producer.log")
 
     def _consume_one(sol: dict, position_label: str) -> str:
