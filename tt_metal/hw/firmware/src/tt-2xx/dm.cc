@@ -236,8 +236,7 @@ extern "C" uint32_t _start1() {
     if (hartid == 0) {
         extern uint32_t __ldm_data_start[];
         do_crt1(__ldm_data_start);
-        // Zero out the EXTERNAL down() lock words and the cached-pool seed-protocol words once
-        // at boot; both protocols put their words back to 0 themselves after every use/program.
+        // Zero these words used for semaphores at boot
         for (uint32_t w = 0; w < (MEM_NOC_CAS_RET_SIZE + MEM_NOC_SEM_LOCK_SIZE + MEM_DM_CACHED_SEM_SIZE) / 4; w++) {
             reinterpret_cast<volatile uint32_t*>(MEM_L1_UNCACHED_BASE + MEM_NOC_CAS_RET_BASE)[w] = 0;
         }
