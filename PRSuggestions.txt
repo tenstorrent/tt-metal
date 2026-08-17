@@ -1,5 +1,6 @@
 We took Voxtral-TTS, a 4B text to speech model with three stacks, through the whole pipeline on a
-single p150b. Seven things worth fixing. Points 5 and 6 are one line each.
+single p150b. Seven things worth fixing. Point 3 is the root of point 4, so they are one job and the
+place to start. Points 5 and 6 are one line each.
 
 1. Check that the model implementation the tool writes actually works
     - When a model is not in HF format the tool writes its own PyTorch version of it, and every later
@@ -16,7 +17,7 @@ single p150b. Seven things worth fixing. Points 5 and 6 are one line each.
       stops before working out the model's structure and memory needs. So the run reports every
       component as supported, then one step later refuses to continue because it cannot tell whether
       the model is supported at all, naming neither the cause nor the input.
-    - Optimizer stage then confuses the folder holding the weights with the folder holding the
+    - The optimize stage then confuses the folder holding the weights with the folder holding the
       generated code, and pointing it at the generated code loses which model it came from, so it
       cannot build its own correctness check. We supplied the model name by hand.
     - Fix: give a local folder the same treatment as a downloaded name, and keep the model's identity
@@ -26,7 +27,7 @@ single p150b. Seven things worth fixing. Points 5 and 6 are one line each.
       config already declares that it ships its own code, which is enough on its own. We changed it
       to use that, and it worked.
 
-3. Use the saved inputs in the tests, and allow more than one prompt
+3. The component tests guess their inputs, so they can pass a wrong port
     - Which arguments a component gets is decided by a hardcoded list of names taken from
       HuggingFace vision and text models. Anything not on that list is dropped if it has a default,
       or filled with random noise if it does not. In our attention only the activation survived. The
@@ -124,3 +125,6 @@ single p150b. Seven things worth fixing. Points 5 and 6 are one line each.
       tracing removes launch cost the opposite can win; and correctness is checked at one sequence
       length, so a change can be right there and wrong further along, and since each frame feeds the
       next, one flipped choice changes everything after it.
+
+We have the logs and the measurements behind all of this, and can open an issue per point if that
+is easier.
