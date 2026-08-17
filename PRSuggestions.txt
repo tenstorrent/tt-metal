@@ -136,16 +136,19 @@ place to start. Points 5 and 6 are one line each.
       emitted codes exactly match the reference's, which is free and stricter than any correlation.
       Each frame is generated from the ones before it, so one early difference compounds until the
       outputs are unrelated; feeding the reference's own frames in at every step instead, teacher
-      forcing, isolates the change. Then word error rate from an ASR over the output, and a no
-      reference MOS predictor over the waveform. Whether every prompt terminates on its own is
-      nearly free. A listening pass for anything that changes what the model produces.
-    - Three things we learned the hard way. Absolute scores are meaningless, since the predictors
+      forcing, isolates the change. Then word error rate, by transcribing the output with Whisper
+      and comparing against the text you asked for, and a predicted naturalness score, where a model
+      trained on human ratings estimates from the waveform alone how a listener would rate it out of
+      five. Whether every prompt terminates on its own is nearly free. A listening pass for anything
+      that changes what the model produces.
+    - Three things we learned the hard way. Absolute scores are meaningless, since these predictors
       are not calibrated for this domain, so run both arms on identical prompts and compare the
-      delta. Short prompts are noise: one word swung more than a point of MOS across seeds, and word
-      error rate on identical code spanned 0.88% to 2.06%, so gate on the long form aggregate. And
-      mel cepstral distortion, the obvious objective distance, failed its own self test in three
-      implementations, one scoring 24.9 between a waveform and the same waveform plus inaudible
-      noise, so we dropped it.
+      delta. Short prompts are noise: one word swung more than a point of naturalness across seeds,
+      and word error rate on identical code spanned 0.88% to 2.06%, so gate on the long form
+      aggregate. Long form has its own trap: the recogniser's window is 30 seconds and it will
+      silently transcribe only the first 30 of a longer clip. And mel cepstral distortion, the
+      obvious objective distance, failed its own self test in three implementations, one scoring
+      24.9 between a waveform and the same waveform plus inaudible noise, so we dropped it.
 
 We have the logs and the measurements behind all of this, and can open an issue per point if that
 is easier.
