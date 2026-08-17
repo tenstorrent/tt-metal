@@ -128,7 +128,7 @@ public:
         const void* host_data,
         const MeshCoordinateRange& device_range,
         bool blocking,
-        std::optional<BufferRegion> region = std::nullopt) override;
+        std::optional<BufferRegion> region = std::nullopt);
     void enqueue_write_mesh_buffer(
         const std::shared_ptr<MeshBuffer>& buffer, const void* host_data, bool blocking) override;
     void enqueue_write(

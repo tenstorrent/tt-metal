@@ -68,12 +68,6 @@ public:
         bool blocking) = 0;
 
     // MeshBuffer Read/Write APIs
-    virtual void enqueue_write_shard_to_sub_grid(
-        const MeshBuffer& buffer,
-        const void* host_data,
-        const MeshCoordinateRange& device_range,
-        bool blocking,
-        std::optional<BufferRegion> region = std::nullopt) = 0;
     virtual void enqueue_write_mesh_buffer(
         const std::shared_ptr<MeshBuffer>& buffer, const void* host_data, bool blocking) = 0;
     // If PinnedMemory is attached to a HostBuffer used within the enqueue_write, the contents of the memory must not be

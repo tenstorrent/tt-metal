@@ -5,6 +5,7 @@
 #include <mesh_buffer.hpp>
 #include <tt_stl/fmt.hpp>
 #include <mesh_command_queue.hpp>
+#include "tt_metal/distributed/mesh_command_queue_base.hpp"
 #include <mesh_workload.hpp>
 #include <cstdint>
 #include <tt_metal/impl/program/program_command_sequence.hpp>
@@ -173,7 +174,7 @@ void MeshWorkloadImpl::load_binaries(MeshCommandQueue& mesh_cq) {
                     mesh_device,
                     kernel_bin_buf_->address());
 
-                mesh_cq.enqueue_write_shard_to_sub_grid(
+                as_mesh_command_queue_base(mesh_cq).enqueue_write_shard_to_sub_grid(
                     *kernel_bin_buf_view,
                     program.impl().get_program_transfer_info().binary_data.data(),
                     device_range,

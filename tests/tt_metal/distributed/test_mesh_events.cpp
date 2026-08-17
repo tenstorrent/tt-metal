@@ -20,6 +20,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_command_queue.hpp>
+#include "tt_metal/distributed/mesh_command_queue_base.hpp"
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_event.hpp>
@@ -236,7 +237,8 @@ TEST_F(MeshEventsTestSuite, CustomDeviceRanges) {
 
         std::vector<std::vector<uint32_t>> readback_vecs = {};
 
-        mesh_device_->mesh_command_queue(1).enqueue_write_shard_to_sub_grid(*buf, src_vec.data(), devices_0, false);
+        ::tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device_->mesh_command_queue(1))
+            .enqueue_write_shard_to_sub_grid(*buf, src_vec.data(), devices_0, false);
         auto event0 = mesh_device_->mesh_command_queue(1).enqueue_record_event({}, devices_0);
         mesh_device_->mesh_command_queue(0).enqueue_wait_for_event(event0);
 
@@ -247,7 +249,8 @@ TEST_F(MeshEventsTestSuite, CustomDeviceRanges) {
                 {ShardDataTransfer{coord}.host_data(readback_vecs.back().data())}, buf, true);
         }
 
-        mesh_device_->mesh_command_queue(1).enqueue_write_shard_to_sub_grid(*buf, src_vec.data(), devices_1, false);
+        ::tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device_->mesh_command_queue(1))
+            .enqueue_write_shard_to_sub_grid(*buf, src_vec.data(), devices_1, false);
         auto event1 = mesh_device_->mesh_command_queue(1).enqueue_record_event_to_host({}, devices_1);
         EventSynchronize(event1);
 

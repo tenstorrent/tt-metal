@@ -5,6 +5,7 @@
 #include "mesh_trace.hpp"
 
 #include <mesh_command_queue.hpp>
+#include "tt_metal/distributed/mesh_command_queue_base.hpp"
 #include <mesh_coord.hpp>
 #include <cstdint>
 #include <tt-metalium/allocator.hpp>
@@ -159,7 +160,7 @@ void MeshTrace::populate_mesh_buffer(
         }
         auto write_region =
             BufferRegion(write_offset_per_device_range.at(device_range), write_data.size() * sizeof(uint32_t));
-        mesh_cq.enqueue_write_shard_to_sub_grid(
+        as_mesh_command_queue_base(mesh_cq).enqueue_write_shard_to_sub_grid(
             *(trace_buffer->mesh_buffer), write_data.data(), device_range, true, write_region);
         write_offset_per_device_range.at(device_range) += mesh_trace_data.data.size() * sizeof(uint32_t);
     }
