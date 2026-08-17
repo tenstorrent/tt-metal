@@ -1,90 +1,78 @@
 1. Enable bring-up of models which are not natively in HF format, because there is a lot of models
    not in this format
-    - In TTS these are the majority. Natively-transformers TTS is a short list (SpeechT5, VITS/MMS,
-      Bark, Parler-TTS, Moshi, CSM, Dia). Most of what people use ships its own inference code:
-      XTTS-v2, StyleTTS2, F5-TTS, CosyVoice, Fish Speech, GPT-SoVITS, ChatTTS, MeloTTS, Kokoro,
-      Tortoise, and Voxtral-TTS. Being hosted on the HF Hub is not the same as being loadable by
-      transformers, which is what the loader requires.
-    - You already have a resolver for exactly this case. It writes a model-local loader that the
-      generated tests pick up as a fallback, and correctness stays gated by PCC, so it cannot weaken
-      a test. But it is disabled by default and only reachable after a component has already failed
-      to build its reference, so in practice a non-transformers model simply looks unsupported.
-    - Fix: enable it by default, or at least point at it in the error message when loading fails.
-    - We did not exercise it -- we converted the model to HF format ourselves before starting, so we
-      cannot say how well it works. If converting is the intended path, document what the wrapper
-      has to provide. It took us several days.
+    - In TTS most models are like this. Only a few load directly with transformers (SpeechT5,
+      VITS/MMS, Bark, Parler-TTS, Moshi, CSM, Dia). Most ship their own code: XTTS-v2, StyleTTS2,
+      F5-TTS, CosyVoice, Fish Speech, GPT-SoVITS, Kokoro, Voxtral-TTS and others. Being on the HF
+      Hub does not mean transformers can load it.
+    - You already have something for this. It writes a small loader for the model, which the
+      generated tests then use, and PCC still checks correctness. But it is off by default and only
+      runs after a component has already failed, so these models just look unsupported.
+    - Fix: turn it on by default, or point at it in the error when loading fails.
+    - We are testing whether it works on our model and will report the result.
 
 2. Fix the model bring up from local path
-    - A local path takes different code paths from a Hub model id, and the difference surfaces late
-      with a misleading diagnosis:
-        - a local model directory gets a reduced probe, and the run dies three stages later with a
-          diagnosis pointing somewhere else
-        - the optimize stage mistakes a local model directory for a demo directory, which makes it
-          unusable by model id
-        - the workaround for that, passing the demo directory instead, loses the model id, so
-          optimize cannot build its own correctness gate even though it had already written one. We
-          had to name the gate test explicitly on the command line to get one at all.
-    - Fix: treat a local directory as a first-class model id everywhere, and carry it alongside the
-      demo directory rather than instead of it.
-    - Related: support for custom-architecture checkpoints is an allowlist containing exactly one
-      model name. Such a model clears preflight and static analysis, then fails at execution with a
-      message blaming the model repository rather than the loader. Fix: decide from the checkpoint
-      instead -- its config already declares that it ships custom code, and HF refuses to load it
-      without permission, so that declaration is decisive and no allowlist is needed. We patched
-      this and it worked.
+    - A folder on disk behaves differently from a Hub name, and the difference only shows up later,
+      with a confusing error:
+        - a local folder gets a shallower check, and the run dies three stages later pointing at the
+          wrong thing
+        - the optimize stage treats a local model folder as a demo folder, so you cannot point it at
+          the model at all
+        - passing the demo folder instead loses track of which model it is, so optimize cannot build
+          its own correctness check even though it already wrote one. We had to name that check by
+          hand.
+    - Fix: accept a folder anywhere a Hub name is accepted, and keep both the model and the demo
+      folder instead of one replacing the other.
+    - Related: models that ship their own code only work if their name is in a hardcoded list, and
+      that list has one entry. Ours passed the early checks, then failed when it ran, with an error
+      blaming the model rather than the loader. Fix: look at the model instead, its config already
+      says it ships its own code. We changed this and it worked.
 
 3. Support multiple input prompts for the tests
-    - Two layers, and the per-component tests are in worse shape than "one prompt":
-        - end-to-end gate: a single prompt decides pass/fail for the whole port, and no option
-          widens it. One sample cannot separate a systematic error from a lucky prompt.
-        - per-component gates: the real captured inputs are never used. The pipeline captures real
-          inputs and outputs for every component, and reports that the component tests will use
-          them, but none of them do. The main input is random noise.
-        - and out of the box it is worse than noise: inputs are guessed from the argument names on
-          the component's signature, which for this model produced a wrongly shaped activation where
-          a rotary table was required, silently dropped the causal mask so the reference itself
-          became non-causal, and passed floats where integer codebook ids were needed. Those inputs
-          had to be written by hand during bring-up before the tests meant anything.
-    - Fix (components): use the captured inputs when they exist, and compare against the captured
-      output, so the gate becomes a real golden test. Everything needed is already on disk.
-    - Fix (end-to-end): take the sample count from the batch dimension the test already has, or
-      expose an option.
-    - Fix (both): make the log line say what the gate actually ran on.
+    - Two separate problems:
+        - the end to end test uses one prompt to decide pass or fail for the whole model, and there
+          is no way to add more. One prompt cannot tell a real bug from a lucky guess.
+        - the per component tests never use real inputs. The pipeline saves real inputs and outputs
+          for every component, and says the tests will use them, but they do not. The main input is
+          random noise.
+        - worse, inputs are guessed from the argument names. For our model that gave a wrongly
+          shaped input where a table of rotation values was needed, dropped the mask that stops the
+          model looking ahead (so the reference answer itself became wrong), and passed decimals
+          where whole numbers were needed. These had to be written by hand during bring-up before
+          the tests meant anything.
+    - Fix: use the saved inputs and compare against the saved output. It is all already on disk.
+    - Fix: let the end to end test run more than one prompt.
+    - Fix: make the log say what the test actually used.
 
 4. Model has two implementations of decode step, eager one without KV cache and traced one with KV
    cache:
-    - Both are created in the wiring stage, not during bring-up. Bring-up produces the components.
-    - The cache never reaches the component, for two independent reasons:
-        - the captured example does contain a real cache, but the same object is handed to the
-          reference and then to the port. The reference writes into it as it runs, so the port would
-          attend over one position more than the reference did. So the cache is dropped -- and the
-          harness records the consequence itself: with no cache the attention is over a single key
-          and returns 1.0 whatever the inputs are, which makes the test meaningless.
-        - separately, the test builds its inputs from a list of recognised argument names, and the
-          cache is not on that list, so it is always passed as null.
-      A cache-using and a cache-ignoring port therefore score identically, so the simpler one was
-      written and accepted.
-    - Why the shipped path then recomputes: the rules require the demo to run through the accepted
-      components, and a component that ignores the cache leaves only one correct option -- hand it
-      the whole prompt plus everything generated so far, on every frame.
-    - Watch out when fixing: the plan requires the backbone to run once per frame plus once for the
-      prompt, so a correct fix will fail that check, and the component-identity check as well.
-      Update the expected counts in the same change, or a good fix will look like a regression.
-    - On the traced one: it is correct at any position when called normally, because the position is
-      an argument. It is locked to a single position only once recorded, because the position is
-      baked into the recording -- a recording made at position 200 always writes slot 200. To replay
-      it in a loop the position has to live on the device as a tensor.
-    - Impact: every optimizer attempt was measured against the traced path, while the end-to-end
-      correctness gate ran the eager one. It reported a 17.2% gain; the shipped path improved 13.2%
-      (297.69 -> 258.26 ms per audio frame), because most edits landed in code both paths share. So
-      the work is not lost, but nothing measured what actually ships. For scale, our hand-written
-      port of the same model on the same board runs at 26.9 ms per frame.
+    - Both are written when the pipeline is wired together, not during bring-up.
+    - The cache never reaches the component, for two reasons:
+        - the saved example contains a real cache, but the same object is given to the reference and
+          then to the port. The reference writes into it as it runs, so the port sees one entry more
+          than the reference did. So the cache is dropped, and the tool notes the cost itself: with
+          no cache the test compares a single value and returns 1.0 whatever the inputs are.
+        - the test only passes arguments whose names are on a recognised list, and the cache is not
+          on it, so it always arrives empty.
+      Using the cache and ignoring it therefore score the same, so the simpler version was accepted.
+    - The demo then has no choice but to recompute. It must use the accepted components, and one
+      that ignores the cache can only be given the whole prompt plus everything generated so far, on
+      every frame.
+    - Careful when fixing: the plan expects the model to run once per frame plus once for the
+      prompt, so a correct fix will fail that check and the one verifying the demo uses the accepted
+      components. Update both in the same change or a good fix looks like a regression.
+    - The traced version is correct at any position when called normally. It is stuck at one
+      position only once recorded, because the position is baked in: a recording made at position
+      200 always writes to slot 200. To replay it in a loop the position has to live on the device.
+    - Effect: speed was measured on the traced version while correctness was checked on the eager
+      one. It reported 17.2% faster; what ships got 13.2% faster (297.69 to 258.26 ms per audio
+      frame), because most edits touched shared code. So the work is not lost, but nothing measured
+      what ships. Our hand written port of the same model on the same board runs at 26.9 ms.
     - Fix, in order:
-        1. copy the captured inputs before handing them to each side
-        2. add the cache to the list of recognised inputs, so the component is specified against it
-        3. let the component use the cache -- its signature already has the parameter, and the
-           reference already defines the contract
-        4. re-derive the plan's expected call counts, updating both checks in the same change
-        5. for the traced path, move the position onto the device as a tensor
-    - Also cheap and independent: check that the function the perf test measures is actually
-      reachable from the demo's entry point, before measuring. That alone would have caught this.
+        1. copy the saved inputs before giving them to each side
+        2. add the cache to the recognised list, so the component is tested with one
+        3. let the component use the cache. Its signature already has the argument and the reference
+           shows how it should work.
+        4. update the expected call counts, and both checks, in the same change
+        5. for the traced version, make the position live on the device
+    - Also worth adding: before measuring speed, check that the code being measured is reachable
+      from the demo. That alone would have caught this.
