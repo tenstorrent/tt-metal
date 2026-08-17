@@ -96,18 +96,22 @@ def create_multimodal_model(
     # a cache_file_name (patch-embed conv, siglip position embed, the two projector weights) are
     # served real from the sidecar; the rest are dataless placeholders. The build uses bfloat8_b,
     # so the cache identity must too. Shares the cache dir + host-weight set with the text path.
+    # components="text+vision": this build also constructs the siglip tower and projector, whose
+    # tensorbins a text-only seed never wrote. Recording it means a text-seeded marker is rejected
+    # here and we cold-load instead of building the vision tower from placeholders. (#45400 review)
     cache_dtype = ttnn.bfloat8_b
     cache_dir = tt_model_args.weight_cache_path(cache_dtype)
     cache_identity = dict(
         model_name=tt_model_args.model_name,
         n_layers=tt_model_args.n_layers,
         mesh_shape=tuple(tt_model_args.mesh_device.shape),
+        components=["text", "vision"],
     )
     loaded_real_weights = False
     if checkpoint is None:
         if not tt_model_args.dummy_weights and weight_cache_is_complete(cache_dir, **cache_identity):
             logger.info("Warm ttnn weight cache detected -- building hybrid vision state_dict (no HF load).")
-            checkpoint = build_cached_state_dict(cache_dir)
+            checkpoint = build_cached_state_dict(cache_dir, args=tt_model_args)
         else:
             checkpoint = tt_model_args.load_state_dict()
             loaded_real_weights = bool(checkpoint) and not tt_model_args.dummy_weights

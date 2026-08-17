@@ -14,7 +14,6 @@ from transformers.models.qwen3_vl.modeling_qwen3_vl import Qwen3VLForConditional
 
 import ttnn
 from models.common.sampling import SamplingParams
-from models.common.weight_cache import build_cached_state_dict, mark_weight_cache_complete, weight_cache_is_complete
 from models.demos.qwen3_vl.tt.common import (
     PagedAttentionConfig,
     get_hf_visual,
@@ -56,7 +55,6 @@ def create_tt_model(
     page_params,
     dtype=ttnn.bfloat8_b,
     use_paged_kv_cache=False,
-    text_only=False,
 ):
     tt_model_args = ModelArgs(
         mesh_device,
@@ -65,30 +63,15 @@ def create_tt_model(
         optimizations=optimizations,
         max_seq_len=max_seq_len,
     )
-    # Warm ttnn cache => skip the HF from_pretrained load for the (text) Transformer weights; they
-    # build from .tensorbin. TEXT-ONLY callers only. The "a placeholder is safe because the vision
-    # path uses a separate live HF reference" reasoning was disproved on qwen36, where the same
-    # comment held and vision_demo.py still generated token soup from a dataless state_dict (CI
-    # run 31503881448) -- the multimodal splice reads weights the placeholder cannot supply. The
-    # equivalent weight has not been identified here, so this fork does not get to assume it is
-    # unaffected: callers that attach a vision tower must leave text_only=False. (#45400)
-    cache_dir = tt_model_args.weight_cache_path(dtype)
-    cache_identity = dict(
-        model_name=tt_model_args.model_name,
-        n_layers=tt_model_args.n_layers,
-        mesh_shape=tuple(tt_model_args.mesh_device.shape),
-    )
-    loaded_real_weights = False
-    if (
-        text_only
-        and not getattr(tt_model_args, "dummy_weights", False)
-        and weight_cache_is_complete(cache_dir, **cache_identity)
-    ):
-        logger.info("Warm ttnn weight cache detected -- skipping HF state_dict load (text-only build).")
-        state_dict = build_cached_state_dict(cache_dir)
-    else:
-        state_dict = tt_model_args.load_state_dict()
-        loaded_real_weights = bool(state_dict) and not getattr(tt_model_args, "dummy_weights", False)
+    # NOTE: no warm-ttnn-cache skip here -- this fork always loads the real weights.
+    # The skip was gated on text_only, but every caller builds the vision tower, so the branch was
+    # unreachable and the model never actually saved anything. Enabling it needs the multimodal
+    # weight set identified first: the "a placeholder is safe because the vision path uses a
+    # separate live HF reference" reasoning was disproved on qwen36, where the same comment held and
+    # vision_demo.py still generated token soup from a dataless state_dict (CI run 31503881448) --
+    # the multimodal splice reads weights the placeholder cannot supply. Until the equivalent weight
+    # here is found and sidecarred (as gemma3-vision does), cold-load. (#45400 review)
+    state_dict = tt_model_args.load_state_dict()
 
     paged_attention_config = (
         PagedAttentionConfig(
@@ -109,9 +92,6 @@ def create_tt_model(
     )
 
     tt_kv_cache = [l.attention.layer_past for l in model.layers] if use_paged_kv_cache else None
-
-    if loaded_real_weights:
-        mark_weight_cache_complete(cache_dir, state_dict, **cache_identity)
 
     return tt_model_args, model, paged_attention_config, tt_kv_cache
 

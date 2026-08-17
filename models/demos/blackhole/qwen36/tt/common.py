@@ -56,6 +56,7 @@ def create_tt_model(
         model_name=args.model_name,
         n_layers=args.n_layers,
         mesh_shape=tuple(args.mesh_device.shape),
+        components=["text"] if text_only else ["text", "vision"],
     )
     loaded_real_weights = False
     if (

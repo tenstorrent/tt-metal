@@ -926,13 +926,13 @@ def create_tt_model(
         prefetcher.num_layers = tt_model_args.n_layers
 
     # Decide whether the HF weights are still needed on host. When the ttnn weight cache for
-    # this (model, dtype, mesh shape) was already fully built on a previous run, ttnn.as_tensor
-    # loads every weight from disk and the state_dict is never read -- so skip the expensive
-    # from_pretrained host load entirely (the load that OOMs/hangs in prefill, #48509), without
-    # relying on the manual --skip-model-load flag. Generalizes GPT-OSS PR #48531.
+    # this build was already fully built on a previous run, ttnn.as_tensor loads every weight from
+    # disk and the state_dict is never read -- so skip the expensive from_pretrained host load
+    # entirely (the load that OOMs/hangs in prefill, #48509). Generalizes GPT-OSS PR #48531 (whose
+    # --skip-model-load pytest flag is gpt_oss-only; nothing equivalent exists for these models).
     #
-    # state_dict is None  -> decide here (warm cache => {} skip, else cold load).
-    # state_dict == {}     -> explicit skip (--skip-model-load) or a prior DP model already skipped.
+    # state_dict is None  -> decide here (warm cache => placeholder, else cold load).
+    # state_dict falsy/{}  -> caller already decided to skip (e.g. a prior DP submesh); build as-is.
     # state_dict populated -> reuse across DP models (avoid reloading for every submesh).
     loaded_real_weights = False
     if state_dict is None:

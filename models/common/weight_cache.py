@@ -32,9 +32,18 @@ from loguru import logger
 WEIGHT_CACHE_MARKER = ".weights_complete"
 HOST_WEIGHTS_SIDECAR = ".host_weights.pt"
 # Bump when the set/naming/layout of cached weights, or this marker schema, changes such that an
-# existing cache would not satisfy a new build. Kept at 2 to stay compatible with the markers
-# PR #50550 already writes for the tt_transformers models (same required fields).
-WEIGHT_CACHE_FORMAT_VERSION = 2
+# existing cache would not satisfy a new build. A marker written by an older format is rejected,
+# so the run cold-loads and regenerates rather than building from an incompatible cache.
+#   v2: model/n_layers/mesh_shape validation + a {key: [shape, dtype]} manifest.
+#   v3: canonical mesh_shape encoding shared with ModelArgs (the two writers previously encoded it
+#       differently and each rejected the other's marker), a `components` field so a text-only seed
+#       cannot certify a cache for a build that also needs the vision tower, and `cache_files` --
+#       the recursive list of .tensorbin files the completed build actually produced, verified
+#       per-file on read. That last one is load-bearing: ttnn.as_tensor PERSISTS whatever tensor it
+#       is handed on a cache miss, so a marker that outlives some of its tensorbins would otherwise
+#       dump placeholders to disk as real cache entries -- silent, permanent corruption. Verifying
+#       the recorded file set turns every such case back into a plain cold load.
+WEIGHT_CACHE_FORMAT_VERSION = 3
 
 DEFAULT_FORCE_ENV = "TT_TRANSFORMERS_FORCE_MODEL_LOAD"
 
@@ -43,10 +52,60 @@ def _dtype_from_str(s):
     return getattr(torch, s.rsplit(".", 1)[-1])
 
 
-def weight_cache_is_complete(cache_path, *, model_name, n_layers, mesh_shape, force_env=DEFAULT_FORCE_ENV):
+def normalize_mesh_shape(mesh_shape):
+    """Canonical marker encoding for a mesh shape.
+
+    ``ttnn.MeshShape`` stringifies as ``MeshShape([1, 8])`` while callers that pass a plain tuple
+    stringify as ``(1, 8)``. Both writers must agree or each rejects the other's marker and the
+    model cold-loads forever (gemma3 inherits ModelArgs but its demos call this module). Normalize
+    everything to a plain tuple-of-ints string."""
+    try:
+        return str(tuple(int(d) for d in mesh_shape))
+    except TypeError:
+        return str(mesh_shape)
+
+
+def _normalize_components(components):
+    """Canonical component list. ``None`` means "the whole model as this loader builds it" and is
+    encoded as a single implicit component so old-style callers stay self-consistent."""
+    if components is None:
+        return ["all"]
+    if isinstance(components, str):
+        return [components]
+    return sorted(str(c) for c in components)
+
+
+def list_cache_files(cache_path):
+    """Every ``.tensorbin`` under ``cache_path``, recursively, as sorted relative POSIX paths.
+
+    Recursive because forked loaders nest per-layer weights in subdirectories (qwen36
+    ``layers.{n}/``, gemma4 ``layer_{i}/``); a top-level ``glob`` would call a cache complete when
+    only the root-level ``output.weight`` survived an interrupted seed."""
+    cache_path = Path(cache_path)
+    return sorted(p.relative_to(cache_path).as_posix() for p in cache_path.rglob("*.tensorbin"))
+
+
+def load_host_sidecar(cache_path):
+    """Load the host-weights sidecar, or None if absent/unreadable."""
+    sidecar = Path(cache_path) / HOST_WEIGHTS_SIDECAR
+    if not sidecar.is_file():
+        return None
+    try:
+        return torch.load(sidecar, map_location="cpu", weights_only=True)
+    except Exception:
+        return None
+
+
+def weight_cache_is_complete(
+    cache_path, *, model_name, n_layers, mesh_shape, components=None, force_env=DEFAULT_FORCE_ENV
+):
     """True when the on-disk ttnn weight cache at ``cache_path`` was fully built by a previous run
-    for this (model_name, n_layers, mesh_shape) and carries a weight manifest (and, if it declared
-    host weights, the sidecar holding them). ``force_env=...=1`` forces a cold load."""
+    for this exact build, and every tensorbin that build produced is still present.
+
+    ``components`` names the model parts this build will construct (e.g. ``"text"`` vs
+    ``"text+vision"``); a marker written by a narrower build does not satisfy a wider one, because
+    the wider build needs tensorbins the narrower one never wrote. ``force_env=...=1`` forces a
+    cold load."""
     if force_env and os.getenv(force_env) == "1":
         return False
     cache_path = Path(cache_path)
@@ -61,7 +120,13 @@ def weight_cache_is_complete(cache_path, *, model_name, n_layers, mesh_shape, fo
         return False
     if meta.get("model_name") != model_name or meta.get("n_layers") != n_layers:
         return False
-    if meta.get("mesh_shape") != str(mesh_shape):
+    if meta.get("mesh_shape") != normalize_mesh_shape(mesh_shape):
+        return False
+    # The recorded build must cover every component this build needs. Superset is fine (a
+    # text+vision seed wrote the text tensorbins too, so it satisfies a text-only build); a subset
+    # is not (a text-only seed never wrote the vision tower's tensorbins, and accepting it would
+    # make as_tensor dump placeholders for them).
+    if not set(_normalize_components(components)).issubset(set(meta.get("components") or [])):
         return False
     if not meta.get("weights"):
         return False
@@ -69,25 +134,37 @@ def weight_cache_is_complete(cache_path, *, model_name, n_layers, mesh_shape, fo
     # sidecar (interrupted or racing seed) must fall back to a cold load -- the way a torn marker
     # already does via the except above -- rather than pass this gate and then crash torch.load on
     # every subsequent run, bricking the cache dir. (#45400 review)
-    if meta.get("host_weights"):
-        sidecar = cache_path / HOST_WEIGHTS_SIDECAR
-        if not sidecar.is_file():
-            return False
-        try:
-            torch.load(sidecar, map_location="cpu", weights_only=True)
-        except Exception:
-            return False
-    return any(cache_path.glob("*.tensorbin"))
+    if meta.get("host_weights") and load_host_sidecar(cache_path) is None:
+        return False
+    # Every tensorbin the completed build produced must still be on disk. Any missing file would
+    # otherwise be regenerated by as_tensor FROM THE PLACEHOLDER we are about to hand it, writing
+    # garbage into the cache permanently. Missing file => cold load, which rebuilds it correctly.
+    recorded = meta.get("cache_files")
+    if not recorded:
+        return False
+    present = set(list_cache_files(cache_path))
+    return all(f in present for f in recorded)
 
 
 def mark_weight_cache_complete(
-    cache_path, state_dict, *, model_name, n_layers, mesh_shape, is_moe=False, is_host_weight=None
+    cache_path,
+    state_dict,
+    *,
+    model_name,
+    n_layers,
+    mesh_shape,
+    components=None,
+    is_moe=False,
+    is_host_weight=None,
 ):
     """Record that the ttnn weight cache at ``cache_path`` is fully built.
 
     Writes a ``.weights_complete`` marker holding a ``{key: [shape, dtype]}`` manifest of every
-    weight. If ``is_host_weight(key)`` is provided, the (real) tensors it matches are also saved
-    to a ``.host_weights.pt`` sidecar so a later warm run can serve them for real (hybrid)."""
+    weight plus the recursive list of ``.tensorbin`` files this build produced (verified per-file
+    on read). If ``is_host_weight(key)`` is provided, the (real) tensors it matches are also saved
+    to a ``.host_weights.pt`` sidecar so a later warm run can serve them for real (hybrid).
+
+    Call this only AFTER the model has been constructed, so the tensorbins exist to be recorded."""
     cache_path = Path(cache_path)
     marker = cache_path / WEIGHT_CACHE_MARKER
     weights = {}
@@ -102,15 +179,22 @@ def mark_weight_cache_complete(
             host[k] = v
     try:
         cache_path.mkdir(parents=True, exist_ok=True)
+        cache_files = list_cache_files(cache_path)
+        if not cache_files:
+            logger.warning(f"Not marking weight cache complete: no .tensorbin files under {cache_path}")
+            return
         # Write both the sidecar and the marker atomically (temp file + os.replace, atomic on
         # POSIX). Two jobs can seed the same (model, dtype, mesh) dir on one host concurrently, and
         # an interrupted write must never leave a torn file that a later run picks up: a half-written
         # sidecar would otherwise pass the is_file() gate and crash torch.load on every subsequent
-        # run. Sidecar first, then marker, so the completeness gate only appears once its sidecar is
+        # run. The temp name is pid-unique so two concurrent seeders cannot write the SAME temp
+        # inode -- with a fixed name, B could publish the file while A was still writing into it.
+        # Sidecar first, then marker, so the completeness gate only appears once its sidecar is
         # fully in place. (#45400 review)
+        uniq = os.getpid()
         if host:
             sidecar = cache_path / HOST_WEIGHTS_SIDECAR
-            sidecar_tmp = sidecar.with_suffix(sidecar.suffix + ".tmp")
+            sidecar_tmp = sidecar.with_suffix(sidecar.suffix + f".tmp.{uniq}")
             torch.save(host, sidecar_tmp)
             os.replace(sidecar_tmp, sidecar)
         marker_body = json.dumps(
@@ -118,13 +202,15 @@ def mark_weight_cache_complete(
                 "format_version": WEIGHT_CACHE_FORMAT_VERSION,
                 "model_name": model_name,
                 "n_layers": n_layers,
-                "mesh_shape": str(mesh_shape),
+                "mesh_shape": normalize_mesh_shape(mesh_shape),
+                "components": _normalize_components(components),
+                "cache_files": cache_files,
                 "is_moe": bool(is_moe),
                 "host_weights": sorted(host.keys()),
                 "weights": weights,
             }
         )
-        marker_tmp = marker.with_suffix(marker.suffix + ".tmp")
+        marker_tmp = marker.with_suffix(marker.suffix + f".tmp.{uniq}")
         marker_tmp.write_text(marker_body)
         os.replace(marker_tmp, marker)
         logger.info(f"Marked ttnn weight cache complete: {marker} ({len(weights)} weights, {len(host)} host-loaded)")
@@ -189,16 +275,48 @@ class CachedStateDict(collections.abc.MutableMapping):
     def __len__(self):
         return sum(1 for _ in self)
 
+    # Mapping's default __contains__/get/items route through __getitem__, which allocates a
+    # full-size torch.empty for EVERY key touched -- including multi-GB ones like lm_head.weight.
+    # substate() (models/tt_dit/utils/substate.py) iterates .items() and filters by prefix, so a
+    # 62-layer gemma4 build would allocate the entire model once per layer just to discard it.
+    # Answer membership from the key sets, and make items() lazy so only matching keys materialize.
+    def __contains__(self, key):
+        if key in self._deleted:
+            return False
+        return key in self._overrides or key in self._host or key in self._manifest
 
-def build_cached_state_dict(cache_path):
-    """Build the warm-cache stand-in ``state_dict`` from the marker manifest + host sidecar."""
+    def keys(self):
+        return list(self)
+
+    def items(self):
+        for k in self:
+            yield k, self[k]
+
+    def get(self, key, default=None):
+        if key not in self:
+            return default
+        return self[key]
+
+
+def build_cached_state_dict(cache_path, host=None, args=None):
+    """Build the warm-cache stand-in ``state_dict`` from the marker manifest + host sidecar.
+
+    ``host`` may be a sidecar dict already loaded by ``weight_cache_is_complete``'s validation, to
+    avoid a second multi-GB ``torch.load`` of the same file on every warm run (gemma-4-31b's
+    embedding alone is ~2.8 GB).
+
+    ``args`` (a ModelArgs-like) has ``is_mixture_of_experts`` restored from the marker. That flag is
+    normally set as a side effect of ``load_state_dict`` (by sniffing for ``.experts.`` keys), which
+    the warm path skips -- so without this a MoE checkpoint would build a dense decoder and die on a
+    missing ``feed_forward.w1.weight``. (#45400 review)"""
     cache_path = Path(cache_path)
     meta = json.loads((cache_path / WEIGHT_CACHE_MARKER).read_text())
     manifest = meta["weights"]
-    host = {}
-    sidecar = cache_path / HOST_WEIGHTS_SIDECAR
-    if sidecar.is_file():
-        host = torch.load(sidecar, map_location="cpu", weights_only=True)
+    if args is not None and hasattr(args, "__dict__"):
+        args.is_mixture_of_experts = bool(meta.get("is_moe", False))
+    if host is None and meta.get("host_weights"):
+        host = load_host_sidecar(cache_path)
+    host = host or {}
     logger.info(
         f"Warm ttnn weight cache: built state_dict for {len(manifest)} weights "
         f"({len(host)} real host weights, no full HF load)."

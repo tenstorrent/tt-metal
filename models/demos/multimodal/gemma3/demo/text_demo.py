@@ -121,18 +121,24 @@ def create_tt_model(
     # vision share one cache dir and gemma3's load_state_dict returns the full multimodal dict, so
     # both paths use the shared hybrid helper with the SAME host-weight set (the text Transformer
     # consumes none of the 5 vision host keys, but they must be captured to the sidecar for the
-    # vision path). None=decide, placeholder=skip/DP-reuse, populated=reuse. (#45400 follow-up)
+    # vision path). None=decide, placeholder=skip/DP-reuse, populated=reuse.
+    #
+    # components="text": this build constructs ONLY the text Transformer, so it only writes the
+    # text tensorbins. The marker records that, and vision_demo (components="text+vision") will not
+    # accept it -- otherwise the vision tower would be built from placeholders and as_tensor would
+    # dump them to disk as real cache entries. (#45400 review)
     cache_dir = tt_model_args.weight_cache_path(dtype)
     cache_identity = dict(
         model_name=tt_model_args.model_name,
         n_layers=tt_model_args.n_layers,
         mesh_shape=tuple(tt_model_args.mesh_device.shape),
+        components=["text"],
     )
     loaded_real_weights = False
     if state_dict is None:
         if not tt_model_args.dummy_weights and weight_cache_is_complete(cache_dir, **cache_identity):
             logger.info("Warm ttnn weight cache detected -- building state_dict from cache (no HF load).")
-            state_dict = build_cached_state_dict(cache_dir)
+            state_dict = build_cached_state_dict(cache_dir, args=tt_model_args)
         else:
             state_dict = tt_model_args.load_state_dict()
             loaded_real_weights = bool(state_dict) and not tt_model_args.dummy_weights
