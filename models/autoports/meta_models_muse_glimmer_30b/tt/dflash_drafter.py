@@ -181,6 +181,54 @@ def build_noise_ids(anchor_token_id: int, block_size: int, mask_token_id: int) -
     return [int(anchor_token_id)] + [int(mask_token_id)] * (block_size - 1)
 
 
+class DFlashDrafterCache:
+    """Per-layer K/V for the *accepted context only*, mirroring ``DFlashCache``.
+
+    HF appends the whole ``concat(context, window)`` to its cache each forward and
+    then crops the window back off (``cache.crop(-block_size)``), leaving only
+    context.  This holds the same state by construction: the window's K/V is
+    computed per forward and never stored, so there is nothing to crop.
+
+    Entries are post-``k_norm``, post-RoPE, which is what HF's ``cache.update()``
+    receives.  ``positions`` tracks the absolute position of each cached row,
+    because the sliding-window mask is built from absolute positions.
+    """
+
+    def __init__(self, num_layers: int) -> None:
+        self.k: list[ttnn.Tensor | None] = [None] * num_layers
+        self.v: list[ttnn.Tensor | None] = [None] * num_layers
+        self.positions: torch.Tensor = torch.empty(0, dtype=torch.long)
+
+    @property
+    def length(self) -> int:
+        return int(self.positions.numel())
+
+    def append(self, layer_idx: int, key: ttnn.Tensor, value: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Concatenate on the sequence dim and return the full cached K/V."""
+        if self.k[layer_idx] is None:
+            self.k[layer_idx], self.v[layer_idx] = key, value
+        else:
+            merged_k = ttnn.concat([self.k[layer_idx], key], dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            merged_v = ttnn.concat([self.v[layer_idx], value], dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(self.k[layer_idx])
+            ttnn.deallocate(self.v[layer_idx])
+            ttnn.deallocate(key)
+            ttnn.deallocate(value)
+            self.k[layer_idx], self.v[layer_idx] = merged_k, merged_v
+        return self.k[layer_idx], self.v[layer_idx]
+
+    def note_positions(self, positions: torch.Tensor) -> None:
+        self.positions = torch.cat([self.positions, positions.to(torch.long)])
+
+    def release(self) -> None:
+        for store in (self.k, self.v):
+            for idx, tensor in enumerate(store):
+                if tensor is not None:
+                    ttnn.deallocate(tensor)
+                    store[idx] = None
+        self.positions = torch.empty(0, dtype=torch.long)
+
+
 class _PlainNorm(LightweightModule):
     """``rms_norm(x) * w`` - the drafter's norm, *not* the target's centered variant."""
 
@@ -285,6 +333,97 @@ class _DFlashLayer(LightweightModule):
         out = ttnn.permute(reshaped, (0, 2, 1, 3))
         ttnn.deallocate(reshaped)
         return out
+
+    def _project_kv(self, source: ttnn.Tensor, seq_len: int, *, rope: tuple[ttnn.Tensor, ttnn.Tensor]):
+        """``k_proj``/``v_proj`` + ``k_norm`` + RoPE for one K/V source.
+
+        ``k_proj(cat(context, window)) == cat(k_proj(context), k_proj(window))``
+        because it is linear, which is what lets the context half be cached while
+        the window half is recomputed each forward.  ``v`` is deliberately not
+        normed - only Q and K carry QK-norm.
+        """
+        config = self.config
+        key = ttnn.linear(source, self.wk, dtype=self.activation_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        value = ttnn.linear(source, self.wv, dtype=self.activation_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        key = self._split_heads(key, seq_len, config.num_key_value_heads)
+        value = self._split_heads(value, seq_len, config.num_key_value_heads)
+        key = self._per_head_norm(key, self.k_norm_weight)
+        key = self._apply_rope(key, *rope)
+        return key, value
+
+    def _attend(self, query: ttnn.Tensor, key: ttnn.Tensor, value: ttnn.Tensor, mask: ttnn.Tensor, block: int):
+        config = self.config
+        key = ttnn.repeat_interleave(key, config.num_kv_groups, dim=1)
+        value = ttnn.repeat_interleave(value, config.num_kv_groups, dim=1)
+        key_t = ttnn.permute(key, (0, 1, 3, 2))
+        ttnn.deallocate(key)
+        scores = ttnn.matmul(query, key_t, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(key_t)
+        scores = ttnn.mul(scores, config.sdpa_scale, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        scores = ttnn.add(scores, mask, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        probs = ttnn.softmax(scores, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(scores)
+        attn = ttnn.matmul(probs, value, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(probs)
+        ttnn.deallocate(value)
+        merged = ttnn.permute(attn, (0, 2, 1, 3))
+        ttnn.deallocate(attn)
+        merged = ttnn.reshape(merged, (1, 1, block, config.num_attention_heads * config.head_dim))
+        out = ttnn.linear(merged, self.wo, dtype=self.activation_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(merged)
+        return out
+
+    def _feed_forward(self, hidden_states: ttnn.Tensor, attn_out: ttnn.Tensor) -> ttnn.Tensor:
+        hidden_states = ttnn.add(hidden_states, attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(attn_out)
+        normed = self.post_attention_layernorm(hidden_states)
+        mlp_out = self.mlp(normed)
+        ttnn.deallocate(normed)
+        out = ttnn.add(hidden_states, mlp_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(mlp_out)
+        ttnn.deallocate(hidden_states)
+        return out
+
+    def forward_cached(
+        self,
+        hidden_states: ttnn.Tensor,
+        *,
+        context: ttnn.Tensor | None,
+        context_len: int,
+        rope_ctx: tuple[ttnn.Tensor, ttnn.Tensor] | None,
+        rope_win: tuple[ttnn.Tensor, ttnn.Tensor],
+        mask: ttnn.Tensor,
+        cache: "DFlashDrafterCache",
+        layer_idx: int,
+    ) -> ttnn.Tensor:
+        """Cached variant: append the new context K/V, recompute the window's."""
+        config = self.config
+        block = int(hidden_states.shape[2])
+        normed = self.input_layernorm(hidden_states)
+
+        if context is not None and context_len > 0:
+            key_ctx, value_ctx = self._project_kv(context, context_len, rope=rope_ctx)
+            cached_k, cached_v = cache.append(layer_idx, key_ctx, value_ctx)
+        else:
+            cached_k, cached_v = cache.k[layer_idx], cache.v[layer_idx]
+
+        query = ttnn.linear(normed, self.wq, dtype=self.activation_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        query = self._split_heads(query, block, config.num_attention_heads)
+        query = self._per_head_norm(query, self.q_norm_weight)
+        query = self._apply_rope(query, *rope_win)
+
+        key_win, value_win = self._project_kv(normed, block, rope=rope_win)
+        ttnn.deallocate(normed)
+
+        # The cache tensors persist across iterations, so concat into new buffers
+        # and never free the cached halves here.
+        key = ttnn.concat([cached_k, key_win], dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        value = ttnn.concat([cached_v, value_win], dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(key_win)
+        ttnn.deallocate(value_win)
+
+        attn_out = self._attend(query, key, value, mask, block)
+        return self._feed_forward(hidden_states, attn_out)
 
     def forward(
         self,
@@ -467,6 +606,81 @@ class DFlashDrafter(LightweightModule):
         out = self.encoder_norm(projected)
         ttnn.deallocate(projected)
         return out
+
+    def forward_cached(
+        self,
+        noise_embeds: ttnn.Tensor,
+        new_context_hidden_states: ttnn.Tensor | None,
+        *,
+        context_positions: torch.Tensor,
+        noise_positions: torch.Tensor,
+        cache: DFlashDrafterCache,
+    ) -> ttnn.Tensor:
+        """One drafting step, reusing cached context K/V.
+
+        Only the *newly accepted* context rows are passed; everything older is
+        already in ``cache``.  This is what makes a drafting step cheap: without it
+        each iteration would re-project the whole context through
+        ``encoder.fc`` (33280 -> 6656), which alone costs more than the five
+        decoder layers.
+
+        Args:
+            noise_embeds: ``[1, 1, block_size, hidden]``.
+            new_context_hidden_states: ``[1, 1, num_new, 5 * hidden]`` or ``None``.
+            context_positions: absolute positions of the new context rows.
+            noise_positions: absolute positions of the ``block_size`` window slots.
+            cache: mutated in place.
+        """
+        config = self.config
+        block = int(noise_embeds.shape[2])
+        context_len = 0 if new_context_hidden_states is None else int(new_context_hidden_states.shape[2])
+        if context_len != int(context_positions.numel()):
+            raise ValueError(f"context has {context_len} rows but {context_positions.numel()} positions were given")
+        if int(noise_positions.numel()) != block:
+            raise ValueError(f"noise_positions has {noise_positions.numel()} entries for a block of {block}")
+
+        context = self.project_context(new_context_hidden_states) if context_len else None
+        cache.note_positions(context_positions)
+        kv_positions = torch.cat([cache.positions, noise_positions])
+
+        def upload(tensor: torch.Tensor, seq_len: int) -> ttnn.Tensor:
+            return _to_device(
+                tensor.reshape(1, 1, seq_len, config.head_dim).to(torch.bfloat16),
+                mesh_device=self.mesh_device,
+                dtype=ttnn.bfloat16,
+            )
+
+        rope_ctx = None
+        if context_len:
+            cos, sin = rope_tables(context_positions, config.head_dim, config.rope_theta)
+            rope_ctx = (upload(cos, context_len), upload(sin, context_len))
+        cos_w, sin_w = rope_tables(noise_positions, config.head_dim, config.rope_theta)
+        rope_win = (upload(cos_w, block), upload(sin_w, block))
+
+        mask = _to_device(
+            bidirectional_sliding_mask(noise_positions, kv_positions, config.sliding_window, torch.bfloat16),
+            mesh_device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+        )
+
+        hidden = noise_embeds
+        for layer_idx, layer in enumerate(self.layers):
+            hidden = layer.forward_cached(
+                hidden,
+                context=context,
+                context_len=context_len,
+                rope_ctx=rope_ctx,
+                rope_win=rope_win,
+                mask=mask,
+                cache=cache,
+                layer_idx=layer_idx,
+            )
+
+        if context is not None:
+            ttnn.deallocate(context)
+        for tensor in (*(rope_ctx or ()), *rope_win, mask):
+            ttnn.deallocate(tensor)
+        return self.final_norm(hidden)
 
     def forward(
         self,
