@@ -30,8 +30,12 @@
     - Real inputs and outputs are saved for every component and the log says the tests use them, but
       they do not. We wrote the missing ones by hand before the tests measured anything.
     - The end to end test also decides pass or fail for the whole model from a single prompt.
-    - Fix: use the saved inputs and compare against the saved output, which removes the guessing
-      entirely. Accept more than one prompt, and make the log say what it used.
+    - Fix: use the saved inputs and compare against the saved output. Where an input still has to be
+      built, let the agent that writes the test build it, since it has read the block and knows what
+      each argument is. A fixed list of names can only cover models you have already seen. Right now
+      the seven component tests are the same 746 line file with the name substituted, so nothing in
+      the attention test knows anything about attention. Accept more than one prompt, and make the log
+      say what it used.
 
 4. The decode step exists twice, and speed and correctness were measured on different ones
     - The version that ships has no KV cache, the traced one does. Speed was measured on the traced
