@@ -21,6 +21,7 @@
     - Fix: one rule for when it runs, described correctly. Have it write that check as code and run
       it, keeping the deliberate wrong version, since a check never seen to fail proves little. And
       say in the log whether it adapted an existing implementation or wrote one itself.
+
 2. Fix the model bring up from local path
     - A folder on disk behaves differently from a Hub name, and fails later with a confusing error:
         - a local folder gets a shallower check, and the run dies three stages later pointing at the
