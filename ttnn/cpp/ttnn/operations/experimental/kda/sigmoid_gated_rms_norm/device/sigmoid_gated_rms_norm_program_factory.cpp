@@ -111,9 +111,9 @@ tt::tt_metal::ProgramDescriptor SigmoidGatedRmsNormProgramFactory::create_descri
         compute.emplace_runtime_args(core, {dist.wi_count[i]});
     }
 
-    desc.kernels.push_back(std::move(reader));
-    desc.kernels.push_back(std::move(writer));
-    desc.kernels.push_back(std::move(compute));
+    desc.kernels.emplace_back(std::move(reader));
+    desc.kernels.emplace_back(std::move(writer));
+    desc.kernels.emplace_back(std::move(compute));
     return desc;
 }
 
