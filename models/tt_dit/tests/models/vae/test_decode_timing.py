@@ -142,10 +142,16 @@ def test_decode_gather_mesh_timing(*, mesh_device, latent_hw):
     )
 
 
-# Isolate the PCC cost of TP in stage 5 at real 1080p. The replicated reference OOMs at 1080p, so use
-# the no-TP sharded decode as the high-fidelity reference and PCC the TP variants against it: TP head-slice
-# only (DIFFVAE_TP_PROJ=0) vs TP + column-parallel qkv (DIFFVAE_TP_PROJ=1). The delta between those two
-# is exactly the col-qkv numerics cost.
+def _pcc(a, b):
+    a, b = a.flatten().double(), b.flatten().double()
+    return torch.corrcoef(torch.stack([a, b]))[0, 1].item()
+
+
+# Individual PCC + runtime at 1080p 25-frame, for the no-TP sharded path and the TP+col-qkv sharded path,
+# each measured against the GATHER-mesh decode as the reference (the dense-masked-attention NA3D backend --
+# the highest-fidelity path that fits at 1080p; single-chip replicated OOMs at the tail). All three run on
+# the same 4x8 mesh. The two sharded configs share the full lever stack (fused W-SP, det-SP, q_chunk,
+# T-inner) and differ only in TP (stage-5 heads + column-parallel qkv, and TP-heads on the det stages).
 @pytest.mark.parametrize(
     "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True, ids=["ring"]
 )
@@ -157,13 +163,21 @@ def test_decode_1080p_tp_pcc(*, mesh_device):
 
     from models.tt_dit.parallel.manager import CCLManager
 
-    os.environ["DIFFVAE_SP_FUSED"] = "1"
     config = decoder_config(CHECKPOINT)
     torch.manual_seed(0)
-    latent = torch.randn(1, config["in_channels"], 4, 34, 60)  # 1080p
+    latent = torch.randn(1, config["in_channels"], 4, 34, 60)  # 1080p, 25 frames
     ccl = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
 
-    def run(tp_axis, tp_proj):
+    def timed(dec):
+        dec.decode(latent, seed=0)  # warmup
+        ttnn.synchronize_device(mesh_device)
+        t0 = time.perf_counter()
+        px = dec.decode(latent, seed=0)
+        ttnn.synchronize_device(mesh_device)
+        return px.float(), (time.perf_counter() - t0) * 1000.0
+
+    def sharded(tp_axis, tp_proj):
+        os.environ["DIFFVAE_SP_FUSED"] = "1"
         os.environ["DIFFVAE_TP_PROJ"] = "1" if tp_proj else "0"
         dec = DiffVAEDecoder(
             config,
@@ -174,18 +188,21 @@ def test_decode_1080p_tp_pcc(*, mesh_device):
             stage5_tp_axis=tp_axis,
             stages_na3d_backend="op_sp_w_sharded",
             stages_sp_axis=1,
+            stages_tp_axis=tp_axis,
         )
         dec.load_checkpoint(CHECKPOINT)
-        return dec.decode(latent, seed=0).float()
+        return timed(dec)
 
-    def pcc(a, b):
-        a, b = a.flatten().double(), b.flatten().double()
-        return torch.corrcoef(torch.stack([a, b]))[0, 1].item()
+    # Reference: gather-mesh decode (dense masked attention, query-sharded across the mesh).
+    ref_dec = DiffVAEDecoder(
+        config, mesh_device=mesh_device, ccl_manager=ccl, stages_na3d_backend="gather", stage5_na3d_backend="gather"
+    )
+    ref_dec.load_checkpoint(CHECKPOINT)
+    ref, t_ref = timed(ref_dec)
 
-    ref = run(None, False)  # no TP -- highest-fidelity sharded path that fits at 1080p
-    tp_head = run(0, False)  # TP head-slice only (no col-qkv)
-    tp_full = run(0, True)  # TP + column-parallel qkv
+    no_tp, t_no = sharded(None, False)
+    tp_full, t_tp = sharded(0, True)
 
-    logger.info(f"[1080p-tp-pcc] TP head-slice vs no-TP:  {pcc(tp_head, ref) * 100:.4f} %")
-    logger.info(f"[1080p-tp-pcc] TP + col-qkv vs no-TP:   {pcc(tp_full, ref) * 100:.4f} %")
-    logger.info(f"[1080p-tp-pcc] col-qkv delta (full vs head): {pcc(tp_full, tp_head) * 100:.4f} %")
+    logger.info(f"[1080p-pcc] gather-mesh reference:          runtime {t_ref:8.0f} ms")
+    logger.info(f"[1080p-pcc] no-TP sharded:  PCC {_pcc(no_tp, ref) * 100:.4f} %   runtime {t_no:8.0f} ms")
+    logger.info(f"[1080p-pcc] TP + col-qkv:   PCC {_pcc(tp_full, ref) * 100:.4f} %   runtime {t_tp:8.0f} ms")
