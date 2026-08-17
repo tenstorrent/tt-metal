@@ -15,12 +15,14 @@ tt::tt_metal::ComputeConfigDescriptor kda_compute_cfg(
         return tt::tt_metal::ComputeConfigDescriptor{
             .math_fidelity = tt::tt_metal::MathFidelity::HiFi4, .fp32_dest_acc_en = true, .math_approx_mode = false};
     }
-    const auto args = get_compute_kernel_config_args(arch, config);
+    const auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+        get_compute_kernel_config_args(arch, config);
+    (void)packer_l1_acc;
     return tt::tt_metal::ComputeConfigDescriptor{
-        .math_fidelity = std::get<0>(args),
-        .fp32_dest_acc_en = std::get<2>(args),
-        .dst_full_sync_en = std::get<4>(args),
-        .math_approx_mode = std::get<1>(args)};
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .dst_full_sync_en = dst_full_sync_en,
+        .math_approx_mode = math_approx_mode};
 }
 
 KdaPrepWorkDist distribute_prep(tt::tt_metal::CoreCoord grid, uint32_t total, uint32_t core_cap) {

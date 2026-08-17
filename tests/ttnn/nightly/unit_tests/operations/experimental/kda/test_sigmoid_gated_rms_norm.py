@@ -147,7 +147,7 @@ def _production_compute_kernel_config(device: ttnn.Device) -> ttnn.DeviceCompute
         device.arch(),
         math_fidelity=ttnn.MathFidelity.HiFi4,
         fp32_dest_acc_en=True,
-        packer_l1_acc=True,
+        packer_l1_acc=False,
     )
 
 
@@ -372,6 +372,55 @@ def test_sigmoid_gated_rms_norm_program_key_includes_epsilon(device: ttnn.Device
     assert device.num_program_cache_entries() == entries + 1
     _run(input_tt, gate_tt, weight_tt, num_heads=2, epsilon=2e-5)
     assert device.num_program_cache_entries() == entries + 1
+
+
+def test_sigmoid_gated_rms_norm_default_compute_config_matches_explicit_defaults(device: ttnn.Device) -> None:
+    _, (input_tt, gate_tt, weight_tt) = _device_inputs(device, seed=817)
+    implicit = ttnn.to_torch(_run(input_tt, gate_tt, weight_tt))
+    entries = device.num_program_cache_entries()
+    explicit_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=True,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+        dst_full_sync_en=False,
+        throttle_level=ttnn.ThrottleLevel.NO_THROTTLE,
+    )
+    explicit = ttnn.to_torch(_run(input_tt, gate_tt, weight_tt, compute_kernel_config=explicit_config))
+    assert device.num_program_cache_entries() == entries
+    assert_bit_identical(implicit, explicit, name="implicit vs explicit production compute defaults")
+
+
+@pytest.mark.parametrize(
+    ("compute_kernel_config", "message"),
+    [
+        (
+            ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                packer_l1_acc=True,
+            ),
+            "packer_l1_acc=true is unsupported",
+        ),
+        (
+            ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                throttle_level=ttnn.ThrottleLevel.LEVEL_1,
+            ),
+            "throttle_level must be NO_THROTTLE",
+        ),
+    ],
+    ids=["packer-l1-acc", "throttle"],
+)
+def test_sigmoid_gated_rms_norm_rejects_unsupported_compute_config(
+    device: ttnn.Device,
+    expect_error: Callable,
+    compute_kernel_config: ttnn.DeviceComputeKernelConfig,
+    message: str,
+) -> None:
+    _, (input_tt, gate_tt, weight_tt) = _device_inputs(device)
+    with expect_error(RuntimeError, message):
+        _run(input_tt, gate_tt, weight_tt, compute_kernel_config=compute_kernel_config)
 
 
 @pytest.mark.parametrize(

@@ -26,7 +26,9 @@ ttnn::Tensor sigmoid_gated_rms_norm(
         MathFidelity::HiFi4,
         /*default_approx_mode=*/true,
         /*default_fp32_acc=*/true,
-        /*default_l1_acc=*/true);
+        /*default_l1_acc=*/false,
+        /*default_dst_full_sync_en=*/false,
+        ttnn::operations::compute_throttle_utils::ThrottleLevel::NO_THROTTLE);
     return ttnn::experimental::prim::sigmoid_gated_rms_norm(
         input, gate, weight, num_heads, epsilon, output_memory_config, kernel_config, output_dtype);
 }
