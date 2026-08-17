@@ -140,6 +140,13 @@ void kernel_main() {
     // Initialize kernel components
     compute_kernel_hw_startup(input_val_dfb_index, input_ind_dfb_index, output_val_dfb_index);
     ckernel::topk_tile_init();
+    if constexpr (stable_sort) {
+        // Tie-break polarity is a property of the GLOBAL sort order: for largest-first, equal values
+        // keep the lower original index next to the larger-value position (descending mode). Set once;
+        // it must never follow the per-call sort direction (idir), which alternates to build bitonic
+        // sequences.
+        ckernel::topk_set_stable_descending_mode(largest != 0);
+    }
 
     DataflowBuffer input_val_dfb(input_val_dfb_index);
     DataflowBuffer input_ind_dfb(input_ind_dfb_index);

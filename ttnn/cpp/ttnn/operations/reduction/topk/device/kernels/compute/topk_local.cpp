@@ -125,6 +125,14 @@ void kernel_main() {
 
     compute_kernel_hw_startup(input_dfb_index, index_dfb_index, input_transposed_dfb_index);
     ckernel::topk_tile_init();
+    if constexpr (stable_sort) {
+        // Tie-break polarity is a property of the GLOBAL sort order (largest vs smallest), set once.
+        // It must NOT follow direction_init/ascending: cores deliberately alternate their local sort
+        // direction (so the final core sees opposite-sorted neighbour sequences), but ties on a
+        // direction-flipped core must come out in the exact mirror order (index-descending) for the
+        // global bitonic merge to keep equal values stable.
+        ckernel::topk_set_stable_descending_mode(largest != 0);
+    }
 
     DataflowBuffer input_transposed_dfb(input_transposed_dfb_index);
     DataflowBuffer index_transposed_dfb(index_transposed_dfb_index);
