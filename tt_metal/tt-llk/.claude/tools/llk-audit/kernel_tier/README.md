@@ -79,6 +79,17 @@ tile shape compiles a different kernel. Kernels that fail to translate are liste
 never silently dropped. If nothing parses, `bootstrap.sh` exits non-zero rather
 than emit a false "0 findings" all-clear.
 
+Per-TU holes propagate too, so *some* kernels failing can't be hidden by others
+succeeding: a hole status **leads** the ledger row (`PARSE-FAIL`, `PARSE-HOLE`,
+`EMPTY-OUT`, `EXEC-FAIL`, `SKIP-*`, `HOST-LEAK`, `NON-KERNEL-CMD`), which both keeps
+it out of the `ok/N parsed` headline and trips `bootstrap.sh`'s anchored grep, which
+passes a `--degraded-note` into the audit JSON's `degraded`. `PARSE-HOLE` is the
+ambiguous case — a TU that parsed **with errors** and kept **zero** kernel facts,
+where a real non-kernel TU is indistinguishable from a kernel TU whose facts were
+lost; its envelope is never written, so the ledger is the only place those errors
+can surface. Parse errors on a TU that *did* keep facts are deliberately not a hole:
+that envelope is written, so they reach the audit JSON's top-level `parse_errors`.
+
 ## Requirements
 
 - The `extractor/llk_extract` binary built (`extractor/build.sh`).

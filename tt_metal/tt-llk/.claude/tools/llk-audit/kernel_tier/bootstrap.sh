@@ -78,12 +78,14 @@ fi
 AUDIT="$OUT/audit.kernel.$ARCH.json"
 # Surface per-kernel capture coverage holes into the audit JSON's `degraded`: a run
 # where kernel TUs failed to parse/extract must NOT read as a clean 0-findings to a
-# JSON-only consumer. Count the GENUINE failure statuses in the coverage ledger (not
-# the expected 'nonkernel' skips) and pass them as an external degraded note.
+# JSON-only consumer. Count the GENUINE failure statuses in the coverage ledger (a
+# clean 'nonkernel' skip is expected and NOT counted, but PARSE-HOLE — parsed with
+# errors AND zero kept facts — is, since its lost facts are indistinguishable from a
+# real non-kernel TU) and pass them as an external degraded note.
 LEDGER="$OUT/kernel_coverage.$ARCH.txt"
 HOLE_ARGS=()
 if [ -f "$LEDGER" ]; then
-  HOLES=$(grep -cE '\[(PARSE-FAIL|EMPTY-OUT|EXEC-FAIL|SKIP-noparse|SKIP-nosrc|HOST-LEAK|NON-KERNEL-CMD)' "$LEDGER" || true)
+  HOLES=$(grep -cE '\[(PARSE-FAIL|PARSE-HOLE|EMPTY-OUT|EXEC-FAIL|SKIP-noparse|SKIP-nosrc|HOST-LEAK|NON-KERNEL-CMD)' "$LEDGER" || true)
   if [ "${HOLES:-0}" -gt 0 ]; then
     HOLE_ARGS=(--degraded-note "kernel-tier capture: $HOLES kernel TU(s) failed to parse/extract (see $LEDGER) — coverage hole, NOT a clean all-clear")
   fi

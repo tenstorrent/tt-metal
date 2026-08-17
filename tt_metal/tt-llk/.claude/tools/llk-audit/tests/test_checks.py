@@ -2191,6 +2191,47 @@ def test_capture_tu_ledger_one_row_per_tu():
     assert nf == 0 and status.startswith("HOST-LEAK=") and ":nonkernel" in status
     assert HOLE.search(f"[{status:16}]"), status
 
+    # PARSE-HOLE: parsed WITH errors and kept ZERO kernel facts. A kernel TU whose facts
+    # were lost to those errors is indistinguishable from a real non-kernel TU, and no
+    # envelope is written for nf==0 (so the audit JSON's `parse_errors` never sees them)
+    # -> the ledger is the only signal, so the marker must LEAD and trip the HOLE grep.
+    # Without this, `ok(parse_errors):nonkernel` counted as clean and one other
+    # fact-contributing TU made the whole run read as an all-clear.
+    kept, status, nf, hl = capture.tu_ledger_status([], 3)
+    assert nf == 0 and kept == [] and hl == []
+    assert status.startswith("PARSE-HOLE:"), status
+    assert not status.startswith("ok")  # excluded from the `ok/N parsed` headline
+    assert HOLE.search(f"[{status:16}]"), status
+
+    # ...and the underlying diagnosis is preserved, not replaced by the marker.
+    assert "ok(parse_errors)" in status and ":nonkernel" in status, status
+
+    # A TU whose facts were all DROPPED as non-kernel-surface under parse errors is the
+    # same hole (0 kept, errors present) — the drop count must not mask it.
+    kept, status, nf, hl = capture.tu_ledger_status([{"file": "x/ckernels/y.h"}], 1)
+    assert nf == 0 and status.startswith("PARSE-HOLE:") and ":drop=1" in status, status
+    assert HOLE.search(f"[{status:16}]"), status
+
+    # DELIBERATELY NOT a hole: parse errors WITH surviving facts. That envelope IS
+    # written, so its parse_errors reach the audit JSON's top-level `parse_errors` and
+    # run.sh's headline. Marking it too would flag nearly every TU and drown the signal.
+    kept, status, nf, hl = capture.tu_ledger_status([dev], 5)
+    assert nf == 1 and status == "ok(parse_errors)", status
+    assert not HOLE.search(f"[{status:16}]"), status
+
+    # DELIBERATELY NOT a hole: a clean parse that legitimately holds no kernel facts
+    # (e.g. a pure-library TU) — 0 errors, so nothing was lost.
+    kept, status, nf, hl = capture.tu_ledger_status([], 0)
+    assert nf == 0 and status == "ok:nonkernel", status
+    assert not HOLE.search(f"[{status:16}]"), status
+
+    # Both tripwires at once: one row, both markers retained, hole still detected.
+    kept, status, nf, hl = capture.tu_ledger_status([host], 2)
+    assert nf == 0 and len(hl) == 1
+    assert status.startswith("HOST-LEAK=") and "PARSE-HOLE:" in status, status
+    assert not status.startswith("ok")
+    assert HOLE.search(f"[{status:16}]"), status
+
 
 @case
 def test_kernel_surface_filter():

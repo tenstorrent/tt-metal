@@ -171,16 +171,16 @@ def is_host_path(path: str) -> bool:
 
 def tu_ledger_status(all_facts: list, pe: int):
     """The SINGLE per-TU coverage-ledger entry: fold the kernel-surface trim, host-leak
-    tripwire, and empty-fact ('nonkernel') conditions into ONE status string + the kept
-    facts. Returns (kept, status, nf, host_leak).
+    tripwire, parse-hole, and empty-fact ('nonkernel') conditions into ONE status string
+    + the kept facts. Returns (kept, status, nf, host_leak).
 
-    Exactly one row per TU — a host leak must NOT emit a *second* ledger row (that
-    double-counts the coverage denominator). A HOST-LEAK is PREPENDED so it LEADS the
-    status because (a) bootstrap.sh's HOLE grep is anchored at the '[' (`\\[(...|HOST-LEAK
-    |...)`) so the marker must come first to be detected, and (b) a scope tripwire must
-    NOT read as a clean 'ok' parse in the `ok/N` headline. The surviving non-host device
-    facts are still returned in `kept` so the caller writes them (dropping them would be
-    a real recall loss)."""
+    Exactly one row per TU — a tripwire must NOT emit a *second* ledger row (that
+    double-counts the coverage denominator). A hole marker (HOST-LEAK, PARSE-HOLE) is
+    PREPENDED so it LEADS the status because (a) bootstrap.sh's HOLE grep is anchored at
+    the '[' (`\\[(...|HOST-LEAK|...)`) so the marker must come first to be detected, and
+    (b) a tripwire must NOT read as a clean 'ok' parse in the `ok/N` headline. The
+    surviving non-host device facts are still returned in `kept` so the caller writes
+    them (dropping them would be a real recall loss)."""
     kept = [f for f in all_facts if in_kernel_surface(f.get("file", ""))]
     host_leak = [f for f in all_facts if is_host_path(f.get("file", ""))]
     kept = [f for f in kept if not is_host_path(f.get("file", ""))]
@@ -191,6 +191,15 @@ def tu_ledger_status(all_facts: list, pe: int):
         status += f":drop={dropped}"
     if nf == 0:
         status += ":nonkernel"
+    # Parsed WITH ERRORS and kept ZERO kernel facts: ambiguous — a genuinely non-kernel
+    # TU is indistinguishable from a kernel TU whose facts were LOST to those errors, so
+    # it must not read as a clean parse. The ledger is the ONLY signal here: the caller
+    # writes no envelope for an nf==0 TU, so these parse_errors never reach the audit
+    # JSON's `parse_errors` either. `pe > 0` WITH kept facts is deliberately NOT a hole —
+    # that envelope IS written, so its parse_errors do surface in the audit JSON (marking
+    # it too would flag nearly every TU and drown the signal).
+    if pe and nf == 0:
+        status = f"PARSE-HOLE:{status}"
     if host_leak:
         status = f"HOST-LEAK={len(host_leak)}:{status}"
     return kept, status, nf, host_leak

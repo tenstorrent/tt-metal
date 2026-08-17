@@ -30,17 +30,6 @@ full-word write.
   non-atomic `|=` from `POTENTIAL_CLOBBER` → **CAP-REDUCTION**. A correct fix must split the
   intra-clobber path (op-sensitive) from the cross-thread safety path (op-insensitive).
 
-### L2 — kernel-tier: a parse-failed non-kernel TU can read as coverage-clean
-Kernel tier only (`--full-jit`). In `kernel_tier/capture.py`, a translation unit that parses with
-errors (`parse_errors > 0`) yet yields 0 kernel-surface facts is logged `ok(...)nonkernel`; because
-the status leads with `ok`, `bootstrap.sh`'s anchored HOLE grep never counts it, so the parse hole
-does not reach the audit-JSON `degraded`.
-- **Risk:** CAP-REDUCTION — a kernel that *should* have contributed facts but failed to parse can
-  read as coverage-clean to a JSON consumer.
-- **Live today:** none observed (opt-in `--full-jit` tier only; not exercised on the default path).
-- **Fix:** in `tu_ledger_status`, give a `parse_errors>0 && 0-kept` TU a HOLE-leading status so
-  bootstrap's grep counts it.
-
 ### L3 — no committed golden baseline / real-tree count assertion
 `out/` is gitignored, so there is no committed golden fact base / per-arch count manifest and no
 automated real-tree count assertion. A real recall regression (an extractor edit, a `registry.py`
@@ -259,5 +248,8 @@ gate — the credit quartet is now recalled via `_CB_RECV_TYPES`; this is the No
 ## How to add an entry
 Append a `### <id> — <one-line title>` block with **Risk** (CAP-REDUCTION / FALSE-FLAG), **Live
 today**, **Fix**, and any **Fix hazard**. Link the relevant checker `blind_spots` rather than
-restating it. When you fix one, delete its entry in the same change. This file — not a commit message
-or a memory note — is the single home for deferred gaps.
+restating it. When you fix one, delete its entry in the same change. IDs are **stable and never
+reused** — deleting an entry leaves a gap in the numbering on purpose, because checker `blind_spots`
+and code comments cite them by id (e.g. `KNOWN_GAPS L7`); reusing a freed id would silently
+re-point those references. This file — not a commit message or a memory note — is the single home
+for deferred gaps.
