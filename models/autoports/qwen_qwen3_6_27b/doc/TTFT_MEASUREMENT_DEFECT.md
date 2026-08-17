@@ -113,3 +113,57 @@ mitigations, neither implemented: build the masks and selectors for all chunks a
 **one** batched tensor and slice on device, or generate them on device from
 `prompt_lens` instead of uploading per chunk. Worth measuring before it matters
 to a long-context serving claim.
+
+---
+
+## Correction, same day: the vLLM TTFTs are warm, not compile-dominated
+
+Added 2026-08-17 after reading the plugin. The inference above that the stage
+09/10 vLLM TTFTs might be program-build dominated is **wrong**, and the reason is
+worth recording because it changes what the number means.
+
+`vllm_tt_plugin/worker.py:compile_or_warm_up_model` calls
+`model_runner.warmup_model()`, which is a deliberate **two-phase** warmup
+(`model_runner.py:3264`):
+
+> "Phase 1 compiles all op variants (prefill + decode) into the program cache
+> WITHOUT capturing any traces. Phase 2 then captures traces with every op
+> already compiled, so no new kernel-cache allocations occur that could corrupt
+> trace memory."
+
+and it states as an explicit requirement:
+
+> "2. Prefill warmup must cover all supported sequence lengths. If a new sequence
+> length appears during inference, its first compilation will allocate new kernel
+> cache entries (including reshape caches) that can corrupt active traces."
+
+So prefill programs are compiled before the server accepts requests, by design.
+The startup log confirms it ran: `TTModelRunner: trace_mode=all,
+sample_on_device_mode=all, enable_model_warmup=True`.
+
+### What survives, and what it now implies
+
+Still correct, and unaffected:
+
+- `tests/full_model_perf.py` TTFT **is** cold. That is a property of the script —
+  it times the first `prefill_forward` with no preceding warmup — and it is where
+  stage 08's ~5.13 s TTFT column and its 502 ms ranking spread come from. That
+  spread remains contaminated by compile cost.
+- The vLLM TTFTs are **n=1** (P50 identical to P99). That limitation stands
+  regardless of warmth: there is no distribution behind 3,784 ms.
+
+Now different, and more interesting: **~3,784 ms is a real warm prefill.** A
+128-token prompt costs ~3.8 s while a decode step costs ~56 ms, so prefilling 128
+tokens costs about as much as **68 decode steps** — roughly 30 ms of prefill per
+prompt token, against 56 ms per generated token. Prefill should be far more
+efficient per token than decode, because it processes the whole prompt in batched
+passes rather than one token at a time. It is not.
+
+That makes prefill a genuine optimisation target rather than a measurement
+artifact, and it promotes the chunk-size term from a long-context footnote to the
+first thing to test. See `PREFILL_CHUNK_LEVER.md`.
+
+The queued cold-vs-warm sweep is still worth running: it quantifies the compile
+share on the `full_model_perf` path, and its warm number is the cross-check
+against the vLLM 3,784 ms. If warm TTFT there lands near 3.8 s, the two harnesses
+agree and prefill is simply slow.
