@@ -36,7 +36,13 @@ from edm_unet import song_unet_cifar, song_unet_tiny
 from train_dit_cifar import load_cifar10
 
 
-def from_np(a):
+def from_np(a, mapper=None):
+    import ttnn as _t
+
+    if mapper is not None:
+        return ttml.autograd.Tensor.from_numpy(
+            np.ascontiguousarray(a, dtype=np.float32), _t.Layout.TILE, _t.DataType.BFLOAT16, mapper
+        )
     return ttml.autograd.Tensor.from_numpy(np.ascontiguousarray(a, dtype=np.float32))
 
 
@@ -111,6 +117,7 @@ def main():
     ap.add_argument("--batch", type=int, default=32)
     ap.add_argument("--lr", type=float, default=1e-4)
     ap.add_argument("--probe", action="store_true")
+    ap.add_argument("--mesh", type=int, default=1, help="dp mesh size (DDP; batch is global)")
     ap.add_argument("--native-conv", action="store_true", help="conv fwd via native ttnn.conv2d")
     args = ap.parse_args()
 
@@ -120,7 +127,12 @@ def main():
         edm_ops.NATIVE_CONV = True  # same switch as env EDM_NATIVE_CONV=1
     conv_path = "native" if edm_ops.NATIVE_CONV else "im2col"
 
-    ttml.open_device_mesh(ttml.Mesh((1, 1), ("dp", "tp")))
+    ttml.open_device_mesh(ttml.Mesh((args.mesh, 1), ("dp", "tp")))
+    batch_mapper = ttml.mesh().axis_mapper("dp", tdim=0) if args.mesh > 1 else None
+    loss_composer = None
+    if args.mesh > 1:
+        device = ttml.autograd.AutoContext.get_instance().get_device()
+        loss_composer = ttml.core.distributed.concat_mesh_to_tensor_composer(device, 0)
     images, labels = load_cifar10(args.data_dir)
     print(f"CIFAR loaded {images.shape}", flush=True)
 
@@ -155,7 +167,8 @@ def main():
         loss = ttml.ops.loss.mse_loss(pred, from_np_input(nchw_to_nhwc_tokens(target)))
         loss.backward(False)
         opt.step()
-        loss_val = float(loss.to_numpy(None, None, ttml.autograd.PreferredPrecision.NATIVE).astype(np.float32).reshape(-1)[0])
+        loss_np = loss.to_numpy(None, loss_composer, ttml.autograd.PreferredPrecision.NATIVE)
+        loss_val = float(np.asarray(loss_np, dtype=np.float32).mean())
         ctx.reset_graph()
         if args.probe and step == warmup:
             t0 = time.time()
