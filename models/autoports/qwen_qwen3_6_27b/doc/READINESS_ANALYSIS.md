@@ -204,3 +204,73 @@ position. Long generation is not merely untested here: the two evals that
 exercise it have already produced low uncontrolled scores, and the sibling port
 that *did* build a control failed on the same task at a higher score than this
 one achieved. Treat accuracy as the open question and TTFT as second.
+
+---
+
+## RESOLVED: both low eval scores are generation-budget truncation, not model quality
+
+Investigated 2026-08-17 by reading the per-sample outputs this run *did* retain
+(`release_final3_cache/.../samples_*.jsonl`). The scores recorded above are
+harness artifacts. **This port's accuracy remains unmeasured — but it is not
+established as bad, and the numbers above must not be quoted as quality.**
+
+### The mechanism, from the task definitions
+
+| task | `max_gen_toks` in the lm-eval task YAML | effective budget here |
+|---|---|---|
+| `ifeval` | **1280** | 1280 |
+| `gpqa_diamond_cot_zeroshot` | **not set** | **256** (lm-eval API backend default) |
+
+The stage passed `gen_kwargs = {'stream': False, 'seed': 42}` with no override, so
+GPQA inherited a 256-token cap. Chain-of-thought GPQA cannot finish in 256 tokens.
+
+### What the retained samples show — GPQA (20 rows = 10 docs x 2 filters)
+
+| measure | value |
+|---|---|
+| raw response length | min 93, **median 120**, max 142 words |
+| ends with terminal punctuation | **0 / 20** |
+| contains `boxed` (the string the extractor needs) | **0 / 20** |
+| `filtered_resps == "[invalid]"` | **16 / 20** |
+
+Tails are severed mid-formula, e.g. `"$\Gamma_2 \approx \frac{\hbar}{"` and
+`"1. 1,"`. The model never reached an answer, the extractor therefore returned
+`[invalid]`, and that produced the 0.3. **The 3/10 measures the cap, not the
+model.**
+
+### And IFEval — 28 rows
+
+Median 759 words (≈1000 tokens) against its 1280 budget, but only **9 of 28 end
+with terminal punctuation**: 19 responses are cut mid-sentence, e.g.
+`"...He successfully"`. Unfinished responses fail instruction-following format
+checks, which is a sufficient explanation for 17.86 % prompt-level strict without
+invoking any model defect.
+
+### What to run, corrected
+
+1. **GPQA with an explicit budget** — this is the decisive test. Gemma's stage used
+   `max_gen_toks=32768` for the same task, having diagnosed this exact issue
+   ("lm-eval API backend's implicit 256-token default truncated GPQA reasoning").
+2. **IFEval above 1280** — 4096 or higher. Re-running *at* 1280 changes nothing,
+   because 1280 is what it already had; that was an operator error worth recording.
+3. Only then, if scores are still low, build the paired HF control. Building a
+   control against truncated generations would have measured the cap on both
+   sides.
+
+### Why this does not transfer to the sibling Gemma port
+
+Gemma's GPQA ran at `max_gen_toks=32768`, so its 4/10 against an HF control's
+10/10 is **not** this defect. Its own open questions are different and are
+recorded on that branch: `strict-match` scoring 0.0 in *both* arms (so the strict
+extractor never matches even a known-good reference), `log_samples` unset in both
+arms (so its failures cannot be inspected at all), and `until: ['</s>']` being a
+Llama/Mistral stop string that can never fire on a model whose stops are `<eos>`
+and ids `[1, 106, 50]`.
+
+### The general lesson for this pipeline
+
+Three of the four "quality failures" seen across these three ports were harness
+defects, not model defects: Falcon's IFEval graded against the wrong metric
+variant of a model card (apparent 0.544, actually parity), and now both of this
+port's scores. Establish that the harness let the model finish and that the
+extractor can parse its output **before** attributing a low score to the port.
