@@ -107,6 +107,19 @@ class GRPOConfig:
     max_completion_length: int
     num_generations: int
     warmup_steps: int
+    # Logging / reporting options. These match TRL's GRPOConfig names where
+    # applicable but the accepted values are intentionally narrower in this
+    # framework — ``report_to`` accepts ONLY the strings ``"none"`` or
+    # ``"wandb"`` (no list form, no other backends). ``log_completions`` gates
+    # whether the built-in GRPOMonitor prints a sample of completions per step;
+    # ``num_completions_to_print`` bounds how many.
+    log_completions: bool = False
+    num_completions_to_print: int = 0
+    report_to: str = "none"
+    # Escape hatch: when True the trainer does NOT auto-append a GRPOMonitor
+    # callback (users can still add their own). Kept off by default so the
+    # default experience prints step metrics + writes ``grpo_metrics.csv``.
+    disable_default_monitor: bool = False
     # Deprecated/unused: the number of prompts per generation batch is now
     # derived at runtime from per_device_train_batch_size, num_devices, and
     # num_generations. Kept only so older configs that still set it construct
@@ -143,6 +156,30 @@ class GRPOConfig:
             raise ValueError(
                 f"grpo_config: 'checkpoint_interval' must be > 0 when checkpointing is enabled "
                 f"(got {self.checkpoint_interval})."
+            )
+
+        # ``report_to`` is intentionally a plain string in this framework
+        # (unlike TRL, which accepts a list). Reject lists/tuples early so a
+        # copy-pasted TRL config surfaces the difference immediately.
+        if not isinstance(self.report_to, str):
+            raise TypeError(
+                f"grpo_config: 'report_to' must be a str, got {type(self.report_to).__name__}. "
+                "Supported values: 'none', 'wandb'."
+            )
+        _allowed_report_to = {"none", "wandb"}
+        if self.report_to not in _allowed_report_to:
+            raise ValueError(
+                f"grpo_config: 'report_to' must be one of {sorted(_allowed_report_to)} " f"(got {self.report_to!r})."
+            )
+
+        if self.num_completions_to_print < 0:
+            raise ValueError(
+                f"grpo_config: 'num_completions_to_print' must be >= 0 " f"(got {self.num_completions_to_print})."
+            )
+        if self.log_completions and self.num_completions_to_print == 0:
+            logging.warning(
+                "grpo_config: 'log_completions' is True but 'num_completions_to_print' is 0; "
+                "no completions will be logged. Set 'num_completions_to_print' > 0 to enable."
             )
 
         # Warn (once per construction) when a deprecated field is explicitly set.
@@ -391,9 +428,31 @@ class GRPOTrainer:
         self.config = config
         self.reward_func = reward_func
         self.optimizer_dict = optimizer_dict
-        self.callbacks: List[Any] = callbacks or []
+        self.callbacks: List[Any] = list(callbacks or [])
         self.model_source = model_source
         self.model: Any = None
+        # Mutable per-step metrics dict — callbacks earlier in ``self.callbacks``
+        # can add/overwrite entries here (e.g. an eval callback writing
+        # ``trainer.metrics["eval_similarity"] = ...``) and later callbacks
+        # (notably the built-in ``GRPOMonitor``) read the merged view.
+        # Initialised empty; the trainer rebuilds it at the top of each step.
+        self.metrics: dict = {}
+        # Per-callback ``on_step_end`` wall-clock times from the PREVIOUS step,
+        # keyed as ``<ClassName>_time_s``. Merged into the next step's metrics
+        # so a callback's cost lands in the CSV row after it ran. Step 1 sees
+        # an empty dict → NaN in the CSV.
+        self._prev_callback_times: dict = {}
+
+        # Auto-append the framework's default GRPOMonitor unless the config
+        # opts out. Placed LAST so any user-supplied callbacks (e.g. eval)
+        # get a chance to populate ``self.metrics`` before the monitor writes
+        # a row. Import locally to avoid a module-level cycle with
+        # ``grpo_monitor.py`` (which imports :class:`GRPOConfig`).
+        if not self.config.disable_default_monitor:
+            from .grpo_monitor import GRPOMonitor
+
+            if not any(isinstance(cb, GRPOMonitor) for cb in self.callbacks):
+                self.callbacks.append(GRPOMonitor(self.config))
 
     def _compute_grpo_loss(
         self,
@@ -708,6 +767,7 @@ class GRPOTrainer:
                     min_completion_len = 0
                     max_completion_len = 0
 
+<<<<<<< HEAD
                 step_metrics = {
                     "reward_mean": mean_reward,
                     "reward_std": float(rewards_np.std()),
@@ -721,6 +781,44 @@ class GRPOTrainer:
                 }
                 for cb in self.callbacks:
                     cb.on_step_end(self, num_steps, **step_metrics)
+=======
+                if grpo_cfg.logging_steps > 0 and num_steps % grpo_cfg.logging_steps == 0:
+                    # Build the mutable per-step metrics dict on ``self`` so
+                    # callbacks can inject additional columns (e.g. an eval
+                    # callback writing ``trainer.metrics["eval_similarity"]``).
+                    # Merges in the previous step's per-callback timings so
+                    # ``GRPOMonitor`` records each callback's ``on_step_end``
+                    # cost in the CSV row after it ran.
+                    self.metrics = {
+                        "reward_mean": mean_reward,
+                        "reward_std": float(rewards_np.std()),
+                        "mean_completion_len": mean_completion_len,
+                        "min_completion_len": min_completion_len,
+                        "max_completion_len": max_completion_len,
+                        "lr": base_lr * warmup_factor,
+                        "step_time_s": step_time_s,
+                        "generation_time_s": generation_time_s_for_step,
+                        **self._prev_callback_times,
+                    }
+                    if grpo_cfg.log_completions and grpo_cfg.num_completions_to_print > 0:
+                        k = grpo_cfg.num_completions_to_print
+                        self.metrics["prompts"] = prompts_strs[:k]
+                        self.metrics["completions"] = completions_strs[:k]
+                        self.metrics["rewards"] = list(rewards[:k])
+
+                    # Time each callback's ``on_step_end`` in place. Cleared
+                    # at the top of the loop so old entries don't linger if
+                    # the callback list changed mid-run. Safe to mutate mid-
+                    # loop because callbacks read ``self.metrics`` (built
+                    # above), never ``self._prev_callback_times``.
+                    self._prev_callback_times = {}
+                    for cb in self.callbacks:
+                        cb_t0 = time.perf_counter()
+                        cb.on_step_end(self, num_steps, **self.metrics)
+                        self._prev_callback_times[f"{type(cb).__name__}_time_s"] = time.perf_counter() - cb_t0
+
+                step_t0 = time.perf_counter()
+>>>>>>> 7684a0258ec (tt-train/grpo: move logging into framework, add report_to / log_completions)
 
                 if grpo_cfg.checkpointing and num_steps % grpo_cfg.checkpoint_interval == 0:
                     ckpt_dir = os.path.join(grpo_cfg.output_dir, "checkpoints", f"grpo_step_{num_steps}")
