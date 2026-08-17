@@ -1,14 +1,18 @@
 # tt-llk blaze promotions — OPEN work
 
 > **What this is.** The remaining tt-llk test work for the blaze->tt-metal `experimental/`
-> promotions (#52709, #52713, #52727). **5 items remain: 3 not started, 2 attempted and
+> promotions (#52709, #52713, #52727). **4 items remain: 2 not started, 2 attempted and
 > reverted.** Completed work has been moved out to
 > **`BLAZE_PROMOTION_TESTS_DONE.md`** — check there before starting anything, since three
 > of the plans below were already corrected by what those tests measured on silicon.
 >
-> Branch: `ldjurovic/llk-tests-blaze-promotions` (tt-metal), which merges the three PRs
-> onto main so the promoted headers exist to compile against. Rebase onto main once they
-> land; the test commits touch only `tt_metal/tt-llk/tests/`.
+> Branch: `ldjurovic/llk-tests-blaze-promotions` (tt-metal). **#52709 merged on 2026-08-14**
+> and the branch has since been rebased onto main, so the rmsnorm / add_rsqrt /
+> eltwise_mul_scalar headers now come from main rather than from a merge commit. #52713 and
+> #52727 are still open, so the branch still carries their promotion payload (32 files,
+> byte-identical to `pmilenkovic/promote-top32-rm` and `pmilenkovic/promote-custom-mm`);
+> rebase again once they land and those drop out, leaving only `tt_metal/tt-llk/tests/`
+> plus the two LLK header fixes noted in the DONE document.
 >
 > Hardware: Blackhole p100a. Every item below is Blackhole-only — every promoted header is
 > `#if defined(ARCH_BLACKHOLE)`-guarded — so each test carries `skip_for_wormhole` +
@@ -24,14 +28,19 @@
 | # | Item | PR | Est. | Notes |
 |---|------|----|------|-------|
 | 1 | `mul_reduce_scalar_chunked_tile` — new driver, not an extension | #52709 | ~1 d spent, not done | **§3. Attempted and reverted — read §3 before retrying.** Driver written and compiling; result is ~5-30x high and unexplained |
-| 2 | `rmsnorm` bcast-scalar dest-reuse — new file | #52709 | ~2 d | **§4** |
 | 3 | plain `custom_mm` matmul — new file | #52727 | ~2 d | **§8.** Also settles the `ct ∈ {7,9,11}` doc question |
-| 4 | `top32_rm` — new file, two modes | #52713 | ~3-4 d | **§6.** Largest single effort; also the only coverage for the 7 newly-promoted SFPU wrappers |
-| 5 | `eltwise_mul_scalar` HiFi init fix | #52709 | ? | **§9. Attempted and reverted — read §9 before retrying.** Hangs the device as first written |
+| 4 | `top32_rm` — new file, two modes | #52713 | ~3-4 d | **§6.** Largest single effort. **Now also gates a removal:** the 7 `llk_math_deepseek_top32_rm` wrappers were dropped from the promotion on review (no caller, no test), so this item is what earns them back |
+| 5 | `eltwise_mul_scalar` HiFi init fix | #52709 | ? | **§9. Attempted and reverted — read §9 before retrying.** Hangs the device as first written. **See also the review finding in the DONE document (Finding 7): the workaround's stated mechanism does not survive reading the code it calls** |
 
-> The sampling `recip_init` polluter test (formerly item 6) is **done** — moved to the DONE
-> document. It found that the hazard is a ~1e-3 precision loss hidden by the suite's 2%
-> reciprocal tolerance, not the garbage the PR wording implies.
+> Two items formerly on this list are **done** and have moved to the DONE document:
+>
+> - the sampling `recip_init` polluter test (formerly item 6) — found that the hazard is a
+>   ~1e-3 precision loss hidden by the suite's 2% reciprocal tolerance, not the garbage the
+>   PR wording implies;
+> - **`rmsnorm` bcast-scalar dest-reuse (formerly item 2)** — 66 variants passing. It found
+>   that neither rmsnorm LLK header compiled under the tt-llk build at all, and that ELWMUL
+>   accumulates into DEST where ELWADD overwrites. See §4 for the stub and the DONE
+>   document for the results and findings.
 
 Plus one item that is not a test task:
 
@@ -225,48 +234,32 @@ test isolates the chunking logic rather than re-testing the multiply.
 
 ---
 
-## 4. OPEN #2 — `rmsnorm` bcast-scalar dest-reuse (new file)
+## 4. DONE — `rmsnorm` bcast-scalar dest-reuse (was OPEN #2)
 
-- `tests/python_tests/test_rmsnorm_bcast_scalar_dest_reuse.py`
-- `tests/sources/rmsnorm_bcast_scalar_dest_reuse_test.cpp`
+**Landed.** `tests/sources/rmsnorm_bcast_scalar_dest_reuse_test.cpp` +
+`tests/python_tests/test_rmsnorm_bcast_scalar_dest_reuse.py`, 66 variants passing on
+BH p100a. Results, the sweep actually built, and the findings are in section 6 (and
+Findings 5-6) of `BLAZE_PROMOTION_TESTS_DONE.md`.
 
-**Why a new file, not an extension.** The op is a `num_tiles`-templated MOP
-(`rmsnorm_bcast_scalar_dest_reuse_configure_mop<eltwise_binary_type, num_tiles, math_fidelity>`) driven from a
-*single* unpack, with SrcB sourced from DEST via `MOVD2B` under a `WAIT_SFPU | SRCB_VLD` stall
-(`rmsnorm_bcast_scalar_reuse_dest_as_src`). No existing test file has that structure: `test_bcast.py` does
-one-tile-per-unpack broadcasts, `test_eltwise_binary.py` has no MOP-over-N-tiles axis and no
-`num_tiles`-as-template-argument plumbing.
+The plan that used to sit here was followed in outline — new file rather than an extension,
+driver replicating the compute API's call sequence at the llk layer, DEST seeded by a
+datacopy pre-pass — with four corrections that came out of building it:
 
-Kernel structure — replicate `api/compute/experimental/rmsnorm.h`'s call sequence at the llk layer, which is
-the established tt-llk convention (see §6):
+- **The headers did not compile under the tt-llk build.** Both carried dead locals that trip
+  `-Werror=unused-variable`. This had to be fixed before any test could exist, and is the
+  reason the estimate was optimistic.
+- **`clear_dest` is not a free axis.** ELWMUL accumulates into DEST, so only
+  `clear_dest=True` has a DEST-independent result; the false half is asserted separately
+  against an accumulating golden.
+- **Fidelity is swept for ELWMUL only** — the ELWADD MOP branch never reads the template
+  argument, so sweeping it there builds identical ELFs.
+- **`num_faces ∈ {1, 2}` needs its own test**, not a cell in the main matrix: the pack still
+  emits a full 4-face tile, so those variants are about the *uncovered* tail rather than
+  about the op.
 
-```
-UNPACK: _llk_unpack_A_rmsnorm_init_<num_tiles, SCALAR, true, DEST_TO_SRCB>(transpose, transpose, ...)
-        _llk_unpack_A_<SCALAR, true, DEST_TO_SRCB>(...)          // ONE unpack for all num_tiles
-MATH:   _llk_math_rmsnorm_bcast_scalar_dest_reuse_init_<op, num_tiles, fidelity>(num_faces, acc_to_dest)
-        _llk_math_rmsnorm_bcast_scalar_dest_reuse_<op, num_tiles, dest_acc, fidelity, clear_dest>(src, dst)
-PACK:   pack num_tiles tiles
-```
+The `unpack_full_transpose` axis called out as highest-value did land and passes, so the
+transpose-fold path blaze's version of the header added is now covered.
 
-Golden: seed DEST with `num_tiles` known tiles (a datacopy pre-pass, same technique as
-`_prepare_dest_reuse_inputs` in `test_eltwise_binary.py`), then apply the scalar at element `[0]` of the
-unpacked operand element-wise across all `num_tiles` × all faces, in `ELWADD` or `ELWMUL`. Reuse
-`helpers/golden_generators.py`'s binary golden with a bcast-scalar wrapper.
-
-Sweep:
-
-| axis | values | rationale |
-|------|--------|-----------|
-| `eltwise_binary_type` | `ELWADD`, `ELWMUL` | both instantiate distinct MOP branches (`TT_OP_ELWADD` vs `TT_OP_ELWMUL` at lines 31-64) |
-| `num_tiles` | `1, 2, 3, 7, 8` (bf16) / `1..4` (fp32 DEST) | it is the MOP's outer-loop count; DEST half-sync capacity caps it |
-| `math_fidelity` | `LoFi, HiFi2, HiFi4` | fidelity is a template arg on both init and execute |
-| `clear_dest` | `False, True` | template arg with no other coverage |
-| `dest_acc` | `No, Yes` | |
-| `num_faces` | `1, 2, 4` | runtime arg to `_init_`; tiny-tile geometry |
-| `unpack_full_transpose` | `False, True` | **the axis only blaze's version has** — the `_fidelity` init folds transpose into the unpack. This is new reachable surface, so it must be swept. |
-
-Priority note: `unpack_full_transpose=True` and `clear_dest=True` are the two axes that exist *only* because
-blaze's version won the reconciliation. They are the highest-value cells in this matrix.
 
 ---
 
@@ -508,20 +501,31 @@ Landed while building the completed items; check here before adding a new one:
 | `CUSTOM_MM_UNINIT` | `UNINIT_DENSE_PACKING`, `UNINIT_RESTORE_MOP`, `UNINIT_SKIP`, `BLOCK_MOP_NUM_FACES` | OPEN #3 — the same dense/geometry axes |
 | `PACK_NUM_TILES` | `PACK_NUM_TILES` | any driver with a compile-time-bounded pack loop |
 | `SFPU_FAST_APPROX` | `SFPU_FAST_APPROX` | sqrt/rsqrt-family template arg |
-| `SORT_DST_WRITE_OFFSET` | `SORT_DST_WRITE_OFFSET` | OPEN #4 — `top32_rm` shares the helper |
 | `SAMPLING_PRGM0_HAZARD` | `SAMPLING_POLLUTE_PRGM0`, `SAMPLING_SKIP_RECIP_INIT` | template for any "prove the init is load-bearing" axis |
+| `RMSNORM_DEST_REUSE` | `RMSNORM_NUM_TILES`, `RMSNORM_NUM_FACES`, `RMSNORM_CLEAR_DEST`, `RMSNORM_UNPACK_FULL_TRANSPOSE` | OPEN #4 — a worked example of bundling a template `num_tiles` with a MOP-sizing `num_faces` |
+
+> `SORT_DST_WRITE_OFFSET` used to be listed here as reusable for OPEN #4. **It no longer
+> exists** — review of the sort-header coexistence test established that the offset it swept
+> is unobservable (`_llk_math_eltwise_unary_datacopy_` reprograms
+> `DEST_TARGET_REG_CFG_MATH_Offset_ADDR32` before touching DEST), so the sweep and the
+> parameter were both removed. A `top32_rm` test that wants to observe the helper needs a
+> DEST consumer that does not reprogram that register first.
 
 ### Still to add
 
 - **`helpers/test_variant_parameters.py`** — for OPEN #1: a compile-time `DST_CAPACITY` and
   the chunked `num_tiles` (both are template args in the chunked reduction, not runtime).
-  For OPEN #2: `NUM_TILES_TEMPLATE` (rmsnorm's `num_tiles` is a *template* arg, unlike the
-  existing runtime `TILE_COUNT`), `CLEAR_DEST`, `UNPACK_FULL_TRANSPOSE`. For OPEN #4:
-  `TOP32_MODE`, `TOP32_TOP_MIN`, `SORT_DIRECTION`.
+  For OPEN #4: `TOP32_MODE`, `TOP32_TOP_MIN`, `SORT_DIRECTION`. (The OPEN #2 entry that
+  used to sit here — a template `num_tiles`, `CLEAR_DEST`, `UNPACK_FULL_TRANSPOSE` — landed
+  as the single `RMSNORM_DEST_REUSE` bundle above.)
 - **`helpers/golden_generators.py`** — `MulReduceScalarChunkedGolden` (OPEN #1),
-  `RmsnormBcastScalarGolden` (OPEN #2), `Top32RmGolden` (OPEN #4, likely an extension of
-  the existing `TopKXLGolden`). OPEN #3 should reuse the existing matmul golden and
-  `helpers/matmul_sweep.py`.
+  `Top32RmGolden` (OPEN #4, likely an extension of the existing `TopKXLGolden`). OPEN #3
+  should reuse the existing matmul golden and `helpers/matmul_sweep.py`.
+  No `RmsnormBcastScalarGolden` was needed in the end: the op is elementwise against one
+  broadcast scalar, so the golden is a few lines in the test file reusing
+  `EltwiseBinaryGolden._apply_fidelity_masking` for the ELWMUL phases. Worth copying rather
+  than adding a generator class — see the note on fidelity in Finding 6 of the DONE
+  document.
 - **`conftest.py`** — every remaining test is Blackhole-only: `skip_for_wormhole` +
   `skip_for_quasar`.
 
@@ -536,6 +540,28 @@ between its two runs, and OPEN #1's chunked reduction re-inits mid-loop. Per the
 notes, HW state leaks between kernel reconfigurations, and a `TENSIX TIMED OUT` in such a
 test must **not** be masked with `tt-smi -r` — that would hide the very reconfig escape the
 test exists to catch. Reset only for a genuine runtime hang, and record what hung first.
+
+**There is already one live reconfig escape in the tree, and it will bite anyone running a
+combined session.** Measured on BH p100a, 2026-08-17:
+
+```
+pytest test_topk_xl.py <any test_eltwise_binary Bfp4_b/ELWMUL/LoFi/transpose_srca:Yes case>
+  -> 1 failed
+pytest test_eltwise_binary.py            (alone)   -> 4388 passed, 72 skipped
+pytest test_topk_xl.py                   (alone)   -> 71 passed
+```
+
+Specifically `test_eltwise_binary[dest_acc:No-formats:Bfp4_b->Bfp4_b-broadcast_type:None_-math_op:Elwmul-math_fidelity:LoFi-transpose_srca:Yes-input_dimensions:[256, 32]-tile_dimensions:[32, 32]]`
+passes alone and fails when `test_topk_xl.py` ran before it in the same session.
+
+This is **pre-existing and unrelated to the promotions** — it reproduces on a clean checkout
+of main with every blaze-promotion change stashed. It is recorded here only so that whoever
+runs the full suite while working on OPEN #4 does not spend an afternoon blaming their own
+`top32_rm` driver: `top32_rm` and `topk_xl` share the sort headers, so a new failure in that
+area will look like your fault. Bisect single-file-then-target before assuming it is.
+
+It also needs an owner in its own right — per the tt-llk notes a reconfig escape is a real
+bug, not a test-ordering nuisance, and `tt-smi -r` must not be used to paper over it.
 
 ---
 
@@ -658,6 +684,22 @@ because none of it is discoverable from the code without spending the same time.
 - **`_llk_math_eltwise_binary_` derives `num_faces` / `face_r_dim` from the `TensorShape` it
   is handed.** Forcing `DEFAULT_TENSOR_SHAPE` on a 2-face tile makes math issue four faces
   of ops against a two-face packer and deadlocks MATH_PACK. Relevant to item 5 (§9).
+- **ELWMUL accumulates into DEST; ELWADD overwrites it.** In the rmsnorm dest-reuse MOP both
+  branches pass 0 in the instruction's dest-accumulate slot — `TT_OP_ELWADD(0, acc_to_dest,
+  ...)` with `acc_to_dest == 0`, and `TT_OP_ELWMUL(0, 0, ...)` — so they read as if they
+  behave alike. They do not: with the ZEROACC suppressed the mul lands `seed + A*scalar`
+  while the add lands `A + scalar`. This is why every rmsnorm mul call site must pass
+  `clear_dest=true`, and it generalises — do not assume a 0 in that slot means overwrite.
+- **LoFi ELWMUL costs a few percent, not a few ULPs.** On a `uniform(-4, 4)` sweep the LoFi
+  mantissa masking produced ~3% relative error — far outside any tolerance worth calling
+  tight. Model it with `EltwiseBinaryGolden._apply_fidelity_masking` per phase (as
+  `test_eltwise_binary.py` does) rather than widening `rtol`, or the test stops being able
+  to see a real regression.
+- **`-Werror` in the tt-llk build is stricter than the metal kernel build.** Two promoted
+  headers (`llk_unpack_A_rmsnorm.h`, `llk_math_rmsnorm_bcast_scalar_dest_reuse.h`) carried
+  dead locals that metal never compiled and tt-llk rejects outright. Expect this for any
+  header being covered by tt-llk for the first time; it is a prerequisite task, not a
+  surprise, and it is part of why the ~2 d estimate on the rmsnorm item was optimistic.
 
 ### 12.5 Method notes
 

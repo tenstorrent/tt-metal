@@ -5,12 +5,19 @@
 > `BLAZE_PROMOTION_TEST_STRATEGY.md` on 2026-08-14 so that document only tracks
 > outstanding work.
 >
-> Nothing here needs action, with **one exception**: the defect in Finding 2 is recorded as
-> an `xfail` in a landed test and still needs an owner decision. It is cross-referenced
-> from the open-work document.
+> Most of this needs no action. **Three items do**, and are cross-referenced from the
+> open-work document:
 >
-> Branch: `ldjurovic/llk-tests-blaze-promotions` (tt-metal), which merges #52709 + #52713 +
-> #52727 onto main so the promoted headers exist to compile against.
+> - **Finding 2** — the `dense_packing` W-stride defect, recorded as an `xfail` in a landed
+>   test. Needs an owner decision.
+> - **Finding 7** — the `eltwise_mul_scalar` HiFi workaround's stated mechanism does not
+>   survive reading the code it calls. Needs the #52709 author.
+> - **Finding 8** — a pre-existing `topk_xl` -> `eltwise_binary` reconfig escape. Unrelated
+>   to the promotions, but it needs an owner and it will confuse OPEN #4.
+>
+> Branch: `ldjurovic/llk-tests-blaze-promotions` (tt-metal). #52709 merged 2026-08-14 and the
+> branch was rebased onto main; #52713 and #52727 are still open, so it still carries their
+> promotion payload.
 
 **PRs covered:** tt-metal #52747, #52745, #52713, #52727, #52709
 
@@ -21,25 +28,26 @@
 | | |
 |---|---|
 | Verification tier (V1-V4) | 4 of 4, all green |
-| New test items landed | 4 (`add_rsqrt`, `custom_mm` `block_uninit`, sort-header coexistence, sampling Prgm0 hazard) |
-| Test results | **87 new variants passing / 2 xfailed** (42 + 30 + 3 + 12) |
-| Files | 6 added (3 `tests/sources/*.cpp`, 3 `tests/python_tests/test_*.py`) + 2 extended (`sfpu_sampling_test.cpp`, `test_sfpu_sampling.py`) |
-| Product findings | 1 defect (needs a decision) + 4 behavioural constraints |
+| New test items landed | 5 (`add_rsqrt`, `custom_mm` `block_uninit`, sort-header coexistence, sampling Prgm0 hazard, rmsnorm bcast-scalar dest-reuse) |
+| Test results | **137 new variants passing / 1 xfailed** (42 + 15 + 2 + 12 + 66) |
+| Files | 8 added (4 `tests/sources/*.cpp`, 4 `tests/python_tests/test_*.py`) + 2 extended (`sfpu_sampling_test.cpp`, `test_sfpu_sampling.py`) + 2 LLK headers fixed to compile |
+| Product findings | 1 defect (needs a decision) + 1 pre-existing reconfig escape (needs an owner) + 6 behavioural constraints |
 
 ### Landed tests
 
 | Item | Files | Result |
 |------|-------|--------|
 | `add_rsqrt` SFPU functor (#52709) | `tests/sources/sfpu_add_rsqrt_test.cpp`, `tests/python_tests/test_sfpu_add_rsqrt.py` | 42 passed, 14 skipped |
-| `custom_mm`/`compressed_custom_mm` `block_uninit` (#52727) | `tests/sources/custom_mm_uninit_restore_test.cpp`, `tests/python_tests/test_custom_mm_uninit_restore.py` | 30 passed, 2 xfailed, 32 skipped |
-| Sort-header coexistence (#52713) | `tests/sources/sort_headers_coexist_test.cpp`, `tests/python_tests/test_sort_headers_coexist.py` | 3 passed |
+| `custom_mm`/`compressed_custom_mm` `block_uninit` (#52727) | `tests/sources/custom_mm_uninit_restore_test.cpp`, `tests/python_tests/test_custom_mm_uninit_restore.py` | 15 passed, 1 xfailed, 16 skipped |
+| Sort-header coexistence (#52713) | `tests/sources/sort_headers_coexist_test.cpp`, `tests/python_tests/test_sort_headers_coexist.py` | 2 passed |
+| **rmsnorm bcast-scalar dest-reuse (#52709)** | `tests/sources/rmsnorm_bcast_scalar_dest_reuse_test.cpp`, `tests/python_tests/test_rmsnorm_bcast_scalar_dest_reuse.py` | **66 passed, 66 skipped** |
 | Sampling `vConstFloatPrgm0` hazard (#52745) | `tests/sources/sfpu_sampling_test.cpp`, `tests/python_tests/test_sfpu_sampling.py` (extended) | 63 passed, 97 skipped (was 51 passed) |
 
 ### Verification tier — all green on the merged branch
 
 | Suite | For | Result |
 |---|---|---|
-| `test_matmul_custom_compressed.py` | V1 / #52727 | 582 passed |
+| `test_matmul_custom_compressed.py` | V1 / #52727 | 583 passed |
 | `test_topk_xl.py` | V2 / #52713 | 71 passed |
 | `test_sfpu_sampling.py` | V3 / #52745 | 51 passed, 93 skipped as the baseline; **63 passed, 97 skipped** after the hazard test below was added |
 | `test_generalized_moe_gate.py` | V4 / #52747 | 89 passed |
@@ -176,6 +184,22 @@ an out-of-range offset in a negative variant if the harness supports expected-as
 
 Plus: run `test_topk_xl.py` unchanged on the branch. It is the direct regression check for the header edit.
 
+**Landed as `sort_headers_coexist_test.cpp` + `test_sort_headers_coexist.py` — 2 passed**, and
+review corrected its scope. The original plan asserted that a datacopy after
+`set_dst_write_addr_offset` proves the helper leaves no dirty Dst offset. It does not:
+`_llk_math_eltwise_unary_datacopy_` itself calls
+`math::set_dst_write_addr<Tile32x32, SrcRegs>(dst_index)` — the same
+`DEST_TARGET_REG_CFG_MATH_Offset_ADDR32` the helper writes — **before** anything touches
+DEST, so whatever the helper left is discarded and the copy lands identically whether the
+helper is correct or deleted.
+
+The 0/2/64 offset sweep and its `SORT_DST_WRITE_OFFSET` template parameter were therefore
+removed; one call is kept so the helper is still code-generated, and `dest_acc` is swept
+instead as the one axis that changes what the combined TU builds. **The compile-time
+coexistence assertion is the real content of this test**, which is what the PR claims.
+Observing the offset's effect needs a DEST consumer that does not reprogram that register
+first — relevant to OPEN #4.
+
 ---
 
 ## 4. `custom_mm` / `compressed_custom_mm` `block_uninit` (#52727) — DONE
@@ -221,6 +245,25 @@ tiles 32 rows apart instead of 64). Run the identical matrix for
 > to `<..., true>`. Worth confirming which callers opt in — and it is a good argument for testing both
 > polarities as above rather than assuming the restore is always on.
 
+**Landed at 15 passed / 1 xfailed / 16 skipped**, half the original 30/2/32. Review found the
+`family` axis (`custom_mm` vs `compressed_custom_mm`) never reached the build: `_run` had no
+`family` parameter and `CUSTOM_MM_UNINIT` no family field, so both values produced the same
+`variant_id`, the ELF was reused, and every surviving case simply ran twice on hardware with
+three assertion f-strings differing.
+
+The rationale was also backwards. The driver **replicates** the uninit body rather than
+calling `custom_mm_block_uninit` / `compressed_custom_mm_block_uninit` — a tt-llk test cannot
+include `tt_metal/hw/inc/api/compute` — so a future divergence between the two headers is
+exactly what the axis could not catch: both ids would keep passing. Guarding that divergence
+needs a test on the metal side that calls the real entry points; **that gap is still open and
+unowned.**
+
+The `restore_tile_pack_mop` opt-in question above was raised again in review and deliberately
+left as-is: the flag defaults to `false`, nothing in the tree opts in, and switching the
+family to a clean-state-on-entry contract is an API change that does not belong in a test PR.
+Both polarities and the inert-at-matching-geometry case are pinned, which is what a future
+contract change will need.
+
 ---
 
 ## 5. Sampling `vConstFloatPrgm0` cross-op hazard (#52745) — DONE
@@ -258,7 +301,55 @@ still cannot distinguish.
 
 ---
 
-## 6. Findings from building these tests
+## 6. rmsnorm bcast-scalar dest-reuse (#52709) — DONE
+
+`tests/sources/rmsnorm_bcast_scalar_dest_reuse_test.cpp` +
+`tests/python_tests/test_rmsnorm_bcast_scalar_dest_reuse.py` — **66 passed, 66 skipped** on
+BH p100a. Was OPEN item 2 in the strategy document.
+
+The op is a `num_tiles`-templated MOP driven from a **single** unpack call, with SrcB
+sourced from DEST via `MOVD2B` under a `WAIT_SFPU | SRCB_VLD` stall rather than from L1. No
+existing test file has that shape, which is why it is a new driver rather than an extension:
+`test_bcast.py` does one-tile-per-unpack broadcasts and `test_eltwise_binary.py` has neither
+the `num_tiles`-as-template-argument plumbing nor a MOP-over-N-tiles axis.
+
+### Driver shape
+
+1. a plain A2D datacopy seeds DEST[0]; element [0] of that tile is what `MOVD2B` broadcasts,
+   standing in for the `1/RMS` that `add_rsqrt` produces in the real kernel;
+2. `_llk_math_rmsnorm_bcast_scalar_dest_reuse_` runs with `src_index == dst_index == 0`,
+   which is exactly how `unified_kernels/rmsnorm.hpp:146` calls it;
+3. `num_tiles` tiles are packed out.
+
+The seed tile is deliberately non-uniform so a `MOVD2B` that picked up the wrong row or face
+fails rather than silently agreeing with the golden.
+
+### Sweep as built
+
+| axis | values | note |
+|---|---|---|
+| `eltwise_binary_type` | `ELWADD`, `ELWMUL` | `ELWSUB` is accepted by the MOP but the compute API never instantiates it |
+| `num_tiles` | 1, 2, 3, 4 | 3 is the odd count that catches an off-by-one in `num_tiles * num_faces / 2` |
+| `math_fidelity` | LoFi, HiFi2, HiFi4 — **ELWMUL only** | the ELWADD MOP branch never reads the template argument, so sweeping it there builds identical ELFs |
+| `clear_dest` | both for ELWADD; True in the main matrix for ELWMUL | see Finding 6 — the mul accumulates, so its False half is asserted against an accumulating golden in its own test |
+| `num_faces` | 4 in the main matrix; 1 and 2 in a dedicated test | at <4 the pack still emits a full 4-face tile, so those variants are about the uncovered tail |
+| `dest_acc` / formats | Float16_b/No, Float32/Yes | |
+| `unpack_full_transpose` | False, True | the axis that exists only because blaze's version won the reconciliation — **it lands and passes** |
+
+### Deviations from the original plan, and why
+
+- **`unpack_to_dest` is off for every variant.** The `static_assert` in
+  `_llk_unpack_A_rmsnorm_mop_config_` rejects it for this configuration
+  (SCALAR + `acc_to_dest` + `DEST_TO_SRCB`). Driving only the *seed* unpack through it while
+  the op itself cannot corrupts the fp32 result into alternating datums — correct values at
+  odd indices, garbage at even. Worth recognising that signature.
+- **No `RmsnormBcastScalarGolden` generator was added.** The op is elementwise against one
+  broadcast scalar, so the golden is a few lines in the test file. It does reuse
+  `EltwiseBinaryGolden._apply_fidelity_masking` for the ELWMUL phases — see Finding 6.
+
+---
+
+## 7. Findings from building these tests
 
 ### Finding 1 — `restore_tile_pack_mop` is only observable at mismatched tile geometry
 
@@ -341,9 +432,108 @@ conversion already costs 2.3e-3, only 2.2x from the unrefined error, so a strict
 would be measuring the packer rather than the hazard. Worth knowing if anyone tightens
 `RECIP_REL_TOL` later — bf16 output with an fp32 DEST cannot distinguish the two.
 
+
+### Finding 5 — the rmsnorm LLK headers did not compile under the tt-llk build
+
+`llk_unpack_A_rmsnorm.h` and `llk_math_rmsnorm_bcast_scalar_dest_reuse.h` were promoted by
+#52709 with metal-side consumers only. tt-llk builds with `-Werror`, and both headers fail
+it outright on dead locals — so **no tt-llk test for this family could exist at all** until
+they were fixed:
+
+| Header | Dead symbols |
+|---|---|
+| `llk_unpack_A_rmsnorm.h` | 8 unreachable `UNPACR` / `SETADCZW` constants carried over from `llk_unpack_A.h`'s general `mop_config`, plus 2 unused format parameters the signature must keep |
+| `llk_math_rmsnorm_bcast_scalar_dest_reuse.h` | `addr_mod`, `innerloop`, `outerloop`, `ZERO_ACC_MODE` — all superseded by values passed straight to `ckernel_template` or chosen per `DstSync` branch |
+
+The unpack constants are unreachable *by construction*: the `static_assert`s pin that MOP to
+SCALAR + `acc_to_dest` + `DEST_TO_SRCB`, so SrcB is never unpacked from L1 and the
+unpack-to-dest opcodes cannot fire. Removal is behaviour-preserving — none was ever read.
+
+**Generalise this:** expect a build fix as a prerequisite for any promoted header tt-llk
+covers for the first time. It is part of why the ~2 d estimate on this item was optimistic,
+and OPEN #3 / OPEN #4 should budget for it.
+
+### Finding 6 — ELWMUL accumulates into DEST; ELWADD overwrites it
+
+Both branches of `rmsnorm_bcast_scalar_dest_reuse_configure_mop` pass 0 in the instruction's
+dest-accumulate slot — `TT_OP_ELWADD(0, acc_to_dest, ...)` with `acc_to_dest == 0`, and
+`TT_OP_ELWMUL(0, 0, ...)` — so the two read as though they behave alike. Measured on BH
+p100a with the `ZEROACC` suppressed (`clear_dest=False`), they do not:
+
+| op | result with a seeded DEST |
+|---|---|
+| ELWADD | `A + scalar` — the seed is discarded |
+| ELWMUL | `seed + A*scalar` — the seed is accumulated onto |
+
+This is the contract `unified_kernels/rmsnorm.hpp:146` depends on when it passes
+`clear_dest=true` to the mul, and it had no test. Both directions are now asserted, the add
+case as an explicit negative control so the asymmetry is pinned as a property of the MOP
+branch rather than of the driver.
+
+**Do not assume a 0 in that slot means overwrite.**
+
+Two corollaries for the remaining work:
+
+- **`clear_dest` is a correctness requirement for ELWMUL, not a preference.** Any future
+  caller of the mul path that omits it inherits whatever DEST held.
+- **LoFi ELWMUL costs a few percent, not a few ULPs.** On a `uniform(-4, 4)` sweep the LoFi
+  mantissa masking produced ~3% relative error, and it scales with the operand magnitude.
+  Model it per phase with `EltwiseBinaryGolden._apply_fidelity_masking` the way
+  `test_eltwise_binary.py` does, rather than widening `rtol` — a tolerance loose enough to
+  absorb LoFi is loose enough to miss a real regression.
+
+### Finding 7 — the `eltwise_mul_scalar` HiFi workaround's stated mechanism does not hold
+
+Raised during review of the test PR, against `api/compute/experimental/eltwise_mul_scalar.h`
+(now in main). The `deepseek_binary_dest_reuse_tiles_init` HiFi branch calls
+`_llk_math_eltwise_binary_init_` with a hardcoded `DEFAULT_TENSOR_SHAPE`, and its comment
+attributes a HiFi4 correctness fix to the shorthand init "mis-specialising the tile shape".
+Reading the code it calls:
+
+- `get_effective_math_fidelity<ELWMUL, f>()` is the **identity** for ELWMUL
+  (`llk_math_common_api.h:123-125`), so the fidelity gate cannot be the difference;
+- `acc_to_dest` is 0 in both arms;
+- the shorthand resolves the shape as `get_operand_tensor_shape(operand_A)` regardless of
+  fidelity (`llk_math_binary_api.h:31-42`).
+
+So tensor shape is the *only* thing separating the two arms — and on a standard 4-face
+32x32 CB `get_operand_tensor_shape` returns exactly `DEFAULT_TENSOR_SHAPE`, making the HiFi
+arm bit-identical to the shorthand it replaces. Meanwhile the paired execute
+(`deepseek_binary_dest_reuse_tiles`) uses the 4-arg overload, which *does* derive the shape
+from the CB — so on any non-default geometry init and execute disagree.
+
+Combined with the measured fact in §12.4 of the strategy document — forcing
+`DEFAULT_TENSOR_SHAPE` on a 2-face tile deadlocks the MATH_PACK handshake rather than
+corrupting the result — the workaround is either inert (4-face CB) or hangs (2-face CB).
+There is no configuration in which it does what its comment says.
+
+The failing config #52709 cites is `gated_local_reduce` at HiFi4 (M2 MoE HiFi4,
+0.70 -> 0.9996). **That measurement is not explained by the stated mechanism**, so either
+the comment needs correcting or the real cause is still unidentified. Flagged to the #52709
+author; relevant to OPEN item 5.
+
+### Finding 8 — a pre-existing reconfig escape between `topk_xl` and `eltwise_binary`
+
+Not caused by any promotion — it reproduces on a clean checkout of main with every
+blaze-promotion change stashed — but it will waste time for whoever picks up OPEN #4, since
+`top32_rm` and `topk_xl` share the sort headers and a new failure there will look
+self-inflicted.
+
+```
+pytest test_eltwise_binary.py   (alone)  -> 4388 passed, 72 skipped
+pytest test_topk_xl.py          (alone)  ->   71 passed
+pytest test_topk_xl.py <target>          ->    1 failed
+```
+
+where `<target>` is
+`test_eltwise_binary[dest_acc:No-formats:Bfp4_b->Bfp4_b-broadcast_type:None_-math_op:Elwmul-math_fidelity:LoFi-transpose_srca:Yes-input_dimensions:[256, 32]-tile_dimensions:[32, 32]]`.
+
+Per the tt-llk notes a reconfig escape is a real bug rather than a test-ordering nuisance,
+and `tt-smi -r` must not be used to paper over it. **Needs an owner.**
+
 ---
 
-## 7. Note on tooling (applies to the remaining work too)
+## 8. Note on tooling (applies to the remaining work too)
 
 Run tests through `tt-llk/.claude/scripts/run_test.sh` (`count` / `compile` / `run`), not
 raw pytest. Two gotchas cost time: a `--k` expression containing brackets or commas

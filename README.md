@@ -3,10 +3,16 @@
 Documentation-only branch, so these two files can be read from anywhere without checking
 out the work branch. **No code here** — see below for where that lives.
 
+This branch is now the *only* home for them: both documents were briefly checked into
+`tt_metal/tt-llk/tests/` alongside the tests and were removed on review, on the grounds that
+a point-in-time plan with effort estimates and in-flight PR cross-references is a different
+genre from the durable `tests/*.md` usage guides. The durable hardware findings they carried
+were moved into code comments next to what they constrain before the deletion.
+
 | File | What it is |
 |---|---|
-| [`blaze_llk_promotion_test_strategy.md`](blaze_llk_promotion_test_strategy.md) | **Open work.** The 5 remaining items, what is uncovered, two attempts that were reverted and why, open questions for the PR authors, and an appendix of everything learned (harness gotchas, LLK facts established by measurement, method notes). |
-| [`BLAZE_PROMOTION_TESTS_DONE.md`](BLAZE_PROMOTION_TESTS_DONE.md) | **Closed record.** The 4 landed test suites with results, the 4 green verification items, and the 4 findings that came out of building them. |
+| [`blaze_llk_promotion_test_strategy.md`](blaze_llk_promotion_test_strategy.md) | **Open work.** The 4 remaining items, what is uncovered, two attempts that were reverted and why, open questions for the PR authors, and an appendix of everything learned (harness gotchas, LLK facts established by measurement, method notes). |
+| [`BLAZE_PROMOTION_TESTS_DONE.md`](BLAZE_PROMOTION_TESTS_DONE.md) | **Closed record.** The 5 landed test suites with results, the 4 green verification items, and the 8 findings that came out of building them. |
 
 ## Covers
 
@@ -15,28 +21,35 @@ tt-metal PRs **#52747, #52745, #52713, #52727, #52709** — the blaze → tt-met
 
 ## Where the code is
 
-Branch **`ldjurovic/llk-tests-blaze-promotions`**, which merges #52709 + #52713 + #52727
-onto main so the promoted headers exist to compile against. Six files added under
+Branch **`ldjurovic/llk-tests-blaze-promotions`** (PR
+[#53130](https://github.com/tenstorrent/tt-metal/pull/53130)). Eight files added under
 `tt_metal/tt-llk/tests/`:
 
 - `sources/sfpu_add_rsqrt_test.cpp` + `python_tests/test_sfpu_add_rsqrt.py`
 - `sources/custom_mm_uninit_restore_test.cpp` + `python_tests/test_custom_mm_uninit_restore.py`
 - `sources/sort_headers_coexist_test.cpp` + `python_tests/test_sort_headers_coexist.py`
+- `sources/rmsnorm_bcast_scalar_dest_reuse_test.cpp` + `python_tests/test_rmsnorm_bcast_scalar_dest_reuse.py`
 
-plus an extension to `sources/sfpu_sampling_test.cpp` / `python_tests/test_sfpu_sampling.py`.
+plus an extension to `sources/sfpu_sampling_test.cpp` / `python_tests/test_sfpu_sampling.py`,
+and a build fix to two LLK headers that did not compile under tt-llk at all (Finding 5).
 
-That branch carries the three PR merge commits, so it is **not reviewable as-is** — the test
-commits touch only `tt_metal/tt-llk/tests/` and should be rebased onto main once the PRs
-land.
+**#52709 merged on 2026-08-14** and the branch has been rebased onto main, so that family's
+headers no longer appear in the diff. #52713 and #52727 are still open, so the branch still
+carries their promotion payload — 32 files, byte-identical to
+`pmilenkovic/promote-top32-rm` and `pmilenkovic/promote-custom-mm`. Rebase again once those
+land and the PR reduces to the test files.
 
 ## Status at time of writing
 
 - Verification tier V1–V4: **4 of 4 green**
-- New test items: **4 landed** (87 new variants passing, 2 xfailed), **2 attempted and
-  reverted**, **3 not started**
-- **1 defect needs an owner decision** — the `dense_packing` W-stride constants in
-  `custom_mm.h` / `compressed_custom_mm.h` are hardcoded for a 16-bit pack source. Carried
-  as item **D1** in the open-work document, with the detail as Finding 2 in the done
-  document.
+- New test items: **5 landed** (137 new variants passing, 1 xfailed), **2 attempted and
+  reverted**, **2 not started**
+- **Three things need an owner:**
+  - the `dense_packing` W-stride constants in `custom_mm.h` / `compressed_custom_mm.h` are
+    hardcoded for a 16-bit pack source (item **D1**, detail as Finding 2);
+  - the `eltwise_mul_scalar` HiFi workaround's stated mechanism does not survive reading the
+    code it calls (Finding 7, for the #52709 author);
+  - a pre-existing `topk_xl` -> `eltwise_binary` reconfig escape, unrelated to the
+    promotions but liable to confuse the remaining `top32_rm` work (Finding 8).
 
-All results measured on Blackhole p100a.
+All results measured on Blackhole p100a. Last updated 2026-08-17.
