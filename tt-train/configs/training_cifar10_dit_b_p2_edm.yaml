@@ -1,0 +1,40 @@
+training_config:
+  project_name: "tt_train_dit_edm_b"
+  seed: 5489
+  batch_size: 2048
+  # EDM official duration: 200 Mimg -> 97,656 steps at batch 2048.
+  max_steps: 98000
+  model_save_interval: 2000
+  data_path: "/data/ayerofieiev/dit/data"
+  output_dir: "/data/ayerofieiev/dit/runs"
+  model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/dit_b_p2.yaml"
+  # EDM: lr ramp over ~10 Mimg then constant (no decay).
+  lr_schedule: warmup_constant
+  warmup_steps: 4800
+  # EDM EMA halflife 0.5 Mimg = 244 steps at b2048 -> per-step decay 0.5^(1/244).
+  ema_decay: 0.99716
+  ema_interval: 25
+  hflip_augment: true
+  optimizer:
+    type: AdamW
+    lr: 0.001
+    beta1: 0.9
+    beta2: 0.999
+    epsilon: 1.0e-8
+    weight_decay: 0.0
+
+diffusion_config:
+  recipe: edm
+  # EDM CIFAR-10 conditional trains without CFG dropout.
+  cfg_drop_prob: 0.0
+
+eval_config:
+  sample_interval: 0
+
+logging_config:
+  log_interval: 100
+  wandb: false
+
+device_config:
+  enable_ddp: true
+  mesh_shape: [32, 1]

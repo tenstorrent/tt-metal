@@ -28,6 +28,7 @@ import ttml
 from ttml.common.config import load_config
 
 from diffusion import DiffusionSchedule, make_training_batch, one_hot, timestep_features, patchify, unpatchify
+from edm import make_edm_batch
 from dit_ttml import DiT
 
 CIFAR_URL = "https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz"
@@ -81,12 +82,14 @@ def _param_to_numpy(t, composer=None, num_devices: int = 1):
     # precision=FULL runs a device-side typecast whose fp32 view is CACHED and
     # never refreshed (tt-train issue #41657) — with it, every checkpoint/EMA
     # read after the first silently returns stale (init-time) weights.
-    arr = t.to_numpy(None, composer, ttml.autograd.PreferredPrecision.NATIVE).astype(np.float32)
     if composer is not None and num_devices > 1:
-        # Replicated param read via concat composer stacks the per-device
-        # copies along dim 0; keep the first replica.
-        arr = arr[: arr.shape[0] // num_devices]
-    return arr
+        # Replicated params: reading via a concat composer pulls ALL replicas
+        # off the mesh (~5s for a DiT-S param set). Read one shard instead.
+        import ttnn
+
+        shard = ttnn.get_device_tensors(t.get_value(ttml.autograd.PreferredPrecision.NATIVE))[0]
+        return ttnn.to_torch(shard).float().numpy()
+    return t.to_numpy(None, None, ttml.autograd.PreferredPrecision.NATIVE).astype(np.float32)
 
 
 def save_checkpoint(model, path: str, state: dict | None = None, composer=None, num_devices: int = 1):
@@ -176,6 +179,10 @@ def main():
     ap.add_argument("-c", "--config", required=True, help="training config yaml")
     ap.add_argument("--overfit-batch", action="store_true", help="repeat one fixed batch (bringup sanity)")
     ap.add_argument("--max-steps", type=int, default=None, help="override training_config.max_steps")
+    ap.add_argument("--run-name", default=None, help="stable run dir name (required to resume across jobs)")
+    ap.add_argument("--resume", action="store_true", help="resume from <run_dir>/resume.ckpt if present")
+    ap.add_argument("--max-seconds", type=int, default=0,
+                    help="time budget: save resume.ckpt and exit cleanly once exceeded (segmented runs)")
     args = ap.parse_args()
 
     cfg = load_config(args.config)
@@ -200,9 +207,12 @@ def main():
     batch_size = tc["batch_size"]
     max_steps = args.max_steps or tc["max_steps"]
 
-    run_name = f"dit_d{model_cfg['embedding_dim']}x{model_cfg['num_blocks']}_p{model_cfg['patch_size']}_b{batch_size}_{int(time.time())}"
+    run_name = args.run_name or (
+        f"dit_d{model_cfg['embedding_dim']}x{model_cfg['num_blocks']}_p{model_cfg['patch_size']}_b{batch_size}_{int(time.time())}"
+    )
     run_dir = os.path.join(tc["output_dir"], run_name)
     os.makedirs(run_dir, exist_ok=True)
+    resume_path = os.path.join(run_dir, "resume.ckpt")
 
     wandb_run = None
     if lc.get("wandb", False):
@@ -224,13 +234,17 @@ def main():
         beta_end=dc.get("beta_end", 2e-2),
     )
     cfg_drop_prob = dc.get("cfg_drop_prob", 0.1)
+    hflip = bool(tc.get("hflip_augment", False))
+    recipe = dc.get("recipe", "ddpm")  # "ddpm" | "edm" (Karras et al. 2022, F-space MSE)
 
     opt = ttml.optimizers.create_optimizer(tc["optimizer"], model.parameters())
     ctx = ttml.autograd.AutoContext.get_instance()
     rng = np.random.default_rng(seed)
 
     base_lr = tc["optimizer"]["lr"]
-    use_cosine = tc.get("lr_schedule", "constant") == "cosine"
+    lr_schedule = tc.get("lr_schedule", "constant")
+    use_cosine = lr_schedule == "cosine"
+    use_warmup_const = lr_schedule == "warmup_constant"
     warmup = tc.get("warmup_steps", 500)
     ema = None
     if tc.get("ema_decay", 0):
@@ -243,10 +257,36 @@ def main():
     sample_every = ec.get("sample_interval", 0)
     ckpt_every = tc.get("model_save_interval", 0)
 
+    # Resume: restore weights + optimizer via ttml.checkpointing (atomic file,
+    # NATIVE-precision gather; immune to the to_numpy stale-cache issue), plus
+    # step / EMA / dataloader-RNG state from the opaque header.
+    start_step = 0
+    if args.resume and os.path.isfile(resume_path):
+        from ttml.checkpointing import load_checkpoint
+
+        header = load_checkpoint(resume_path, model_params=model.parameters(), optimizer=opt)
+        start_step = int(header["step"])
+        rng.bit_generator.state = header["rng_state"]
+        if ema is not None and header.get("ema_state") is not None:
+            ema.state = header["ema_state"]
+        print(f"resumed from {resume_path} at step {start_step}", flush=True)
+
+    def save_resume(step):
+        from ttml.checkpointing import save_checkpoint as ttml_save
+
+        ttml_save(
+            resume_path,
+            header={"step": step, "rng_state": rng.bit_generator.state,
+                    "ema_state": ema.state if ema is not None else None},
+            model_params=model.parameters(),
+            optimizer=opt,
+        )
+
     model.train()
+    t_start = time.time()
     t0 = time.time()
     ema_loss = None
-    for step in range(1, max_steps + 1):
+    for step in range(start_step + 1, max_steps + 1):
         if args.overfit_batch:
             batch_rng = np.random.default_rng(123)
             idx = np.arange(batch_size)
@@ -254,10 +294,16 @@ def main():
             batch_rng = rng
             idx = rng.integers(0, images.shape[0], size=batch_size)
 
-        tokens, t_feats, onehot, target = make_training_batch(
-            images[idx], labels[idx], schedule, patch, model.dim, batch_rng,
-            cfg_drop_prob=cfg_drop_prob, null_class=num_classes,
-        )
+        if recipe == "edm":
+            tokens, t_feats, onehot, target = make_edm_batch(
+                images[idx], labels[idx], patch, model.dim, batch_rng,
+                cfg_drop_prob=cfg_drop_prob, null_class=num_classes, hflip=hflip,
+            )
+        else:
+            tokens, t_feats, onehot, target = make_training_batch(
+                images[idx], labels[idx], schedule, patch, model.dim, batch_rng,
+                cfg_drop_prob=cfg_drop_prob, null_class=num_classes, hflip=hflip,
+            )
 
         import ttnn
 
@@ -268,6 +314,8 @@ def main():
 
         if use_cosine:
             opt.set_lr(cosine_lr(step, max_steps, base_lr, warmup))
+        elif use_warmup_const:
+            opt.set_lr(base_lr * min(1.0, step / max(1, warmup)))
 
         opt.zero_grad()
         pred = model(dev(tokens), dev(t_feats), dev(onehot))
@@ -313,8 +361,16 @@ def main():
                             composer=loss_composer, num_devices=dp_size)
             if ema is not None:
                 save_checkpoint(model, os.path.join(run_dir, f"ckpt_ema_{step:06d}.npz"), state=ema.state)
+            save_resume(step)
+
+        if args.max_seconds and time.time() - t_start > args.max_seconds:
+            save_resume(step)
+            print(f"SEGMENT_END step={step} of {max_steps}", flush=True)
+            return
 
     save_checkpoint(model, os.path.join(run_dir, "ckpt_final.npz"), composer=loss_composer, num_devices=dp_size)
+    save_resume(max_steps)
+    print(f"TRAINING_COMPLETE step={max_steps}", flush=True)
     if ema is not None:
         save_checkpoint(model, os.path.join(run_dir, "ckpt_ema_final.npz"), state=ema.state)
     print(f"done; artifacts in {run_dir}")
