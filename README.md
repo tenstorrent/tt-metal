@@ -1,9 +1,9 @@
 # tt-llk test docs for the blaze `experimental/` promotions
 
-Documentation-only branch, so these two files can be read from anywhere without checking
-out the work branch. **No code here** — see below for where that lives.
+Documentation-only branch, so these can be read from anywhere without checking out the work
+branch. **No code here** — see below for where that lives.
 
-This branch is now the *only* home for them: both documents were briefly checked into
+This branch is now the *only* home for them: the two original documents were briefly checked into
 `tt_metal/tt-llk/tests/` alongside the tests and were removed on review, on the grounds that
 a point-in-time plan with effort estimates and in-flight PR cross-references is a different
 genre from the durable `tests/*.md` usage guides. The durable hardware findings they carried
@@ -11,7 +11,8 @@ were moved into code comments next to what they constrain before the deletion.
 
 | File | What it is |
 |---|---|
-| [`blaze_llk_promotion_test_strategy.md`](blaze_llk_promotion_test_strategy.md) | **Open work.** The 4 remaining items, what is uncovered, two attempts that were reverted and why, open questions for the PR authors, and an appendix of everything learned (harness gotchas, LLK facts established by measurement, method notes). |
+| [`REMAINING_WORK.md`](REMAINING_WORK.md) | **Start here.** Every outstanding item in one place — functional test gaps, the three product issues that need an owner rather than a test, the review comments that landed in `main` before they could be fixed, and PR mechanics — each with a plan and a suggested order. |
+| [`blaze_llk_promotion_test_strategy.md`](blaze_llk_promotion_test_strategy.md) | **Background detail.** Superseded as a to-do list by `REMAINING_WORK.md`; keep it for the forensic record on the two attempted-and-reverted items (§3, §9), which is too long to inline. The 4 remaining items, what is uncovered, two attempts that were reverted and why, open questions for the PR authors, and an appendix of everything learned (harness gotchas, LLK facts established by measurement, method notes). |
 | [`BLAZE_PROMOTION_TESTS_DONE.md`](BLAZE_PROMOTION_TESTS_DONE.md) | **Closed record.** The 5 landed test suites with results, the 4 green verification items, and the 8 findings that came out of building them. |
 
 ## Covers
