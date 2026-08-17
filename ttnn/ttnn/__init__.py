@@ -360,6 +360,7 @@ from ttnn.types import (
     KernelRunArgs,
     DFBRunOverrides,
     ProgramRunArgs,
+    compute_program_spec_hash,
     TensorAccessorArgs,
     attach_absent_mcast,
     TransferMode,
