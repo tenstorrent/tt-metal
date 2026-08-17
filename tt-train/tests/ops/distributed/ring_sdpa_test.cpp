@@ -400,15 +400,18 @@ static void TestRingAttention(
         // power is intact.
         const float bw_rtol = 3e-2F;
         const float bw_atol = 5e-2F;
-        // dK alone runs through the TF32 FPU-transpose path (dK = dS^T Q in the reused
-        // sdpa_bw_kv kernel), which measures up to ~0.09 max abs error on device while
-        // dQ/dV hold 5e-2. Simulated math bugs land at 1.2-27 absolute, so detection
-        // power is intact at this grade.
-        const float dk_atol = 1.5e-1F;
+        // dK is the only gradient whose accumulation length is the query sequence
+        // (dV rows are softmax-convex combinations of dO; dQ contracts over head_dim),
+        // so its magnitude and its TF32-matmul noise grow with S while dQ/dV stay O(1).
+        // Grade it relative to its own largest true value: 2% of amax(|ref dK|), with
+        // the fixed floor for tiny-magnitude cases.
+        const float dk_atol = std::max(bw_atol, 2e-2F * xt::amax(xt::abs(ref_grads.dK))());
         const auto report = [](const xt::xarray<float>& ref, const xt::xarray<float>& got) {
             const float max_abs = xt::amax(xt::abs(got - ref))();
             const float max_rel = xt::amax(xt::abs(got - ref) / (xt::abs(ref) + 1e-6F))();
-            return "max_abs_diff=" + std::to_string(max_abs) + " max_rel_diff=" + std::to_string(max_rel);
+            const float ref_amax = xt::amax(xt::abs(ref))();
+            return "max_abs_diff=" + std::to_string(max_abs) + " max_rel_diff=" + std::to_string(max_rel) +
+                   " ref_amax=" + std::to_string(ref_amax);
         };
         EXPECT_TRUE(xt::allclose(ref_grads.dQ, gathered_dQ, bw_rtol, bw_atol))
             << "Ring attention dQ gradient does not match reference: " << report(ref_grads.dQ, gathered_dQ);
