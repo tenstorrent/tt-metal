@@ -27,37 +27,25 @@ namespace ckernel::sfpu {
 // differs. Quasar's SFPLUTFP32 reads the table from the constant LRegs 9-14 and the looked-up value
 // from LReg3, where WH/BH read the table from LReg0-2/LReg4-6.
 //
-// So gelu_init loads the table with _sfpu_load_config32_ rather than sfpi: vCReg assignment reaches
-// SFPCONFIG, but the assembler rejects dests 9 and 10 ("permitted mask is 0xf9ff"), which is two of
-// the six table words. See tt-metal issue #51346.
-//
-// The loop below is still plain sfpi. lut2_sign() wants six LReg operands because that is where WH/BH
-// keep the table, and it pins the looked-up value to LReg3, which is what this hardware wants anyway.
-// The LUT ignores those six registers here, so reading them back through l_reg[] (no instructions
-// emitted) is enough to satisfy the intrinsic. Loading the table into them, the way Blackhole's init
-// does, is what miscompares.
-//
-// Two things to avoid: vConstFloatPrgm0 for the 0.5 (that is LReg12, a table intercept word; an
-// SFPMULI immediate is free), and any sfpi code between this init and the loop, since the table
-// overwrites the SFPU constants 0.0/1.0/-1.0 in LReg9/10/11. Each op's init restores them via
+// Do not put the 0.5 in vConstFloatPrgm0 — that is LReg12, a table intercept word. Hoist it into a
+// general LReg and force SFPMAD: `in * half + piecewise` constant-folds the 0.5 back to SFPMULI +
+// SFPADD. Dest 11-14 overwrite -1.0 and the programmable constants; dests 9/10 are LUT-only and
+// leave 0.0/1.0 in place. Each op's init restores the programmable constants via
 // _init_sfpu_config_reg_, so a following op is unaffected.
 // =============================================================================
 
 template <int ITERATIONS = SFPU_ITERATIONS>
 inline void calculate_gelu_appx() {
-    // Operands lut2_sign() requires; their contents are irrelevant on Quasar (see above).
-    sfpi::vUInt l0 = sfpi::l_reg[sfpi::LRegs::LReg0];
-    sfpi::vUInt l1 = sfpi::l_reg[sfpi::LRegs::LReg1];
-    sfpi::vUInt l2 = sfpi::l_reg[sfpi::LRegs::LReg2];
-    sfpi::vUInt l4 = sfpi::l_reg[sfpi::LRegs::LReg4];
-    sfpi::vUInt l5 = sfpi::l_reg[sfpi::LRegs::LReg5];
-    sfpi::vUInt l6 = sfpi::l_reg[sfpi::LRegs::LReg6];
+    // SFPLOADI once; __builtin_rvtt_sfpmad keeps it live. Operator `in * 0.5f + p` is SFPMULI+SFPADD.
+    sfpi::vFloat half = 0.5f;
+    constexpr unsigned lut_mod = sfpi::SFPLUTFP32_MOD0_FP16_6ENTRY_TABLE1 | sfpi::SFPLUTFP32_MOD0_SGN_UPDATE;
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat in = sfpi::dst_reg[0];
-        sfpi::vFloat piecewise = lut2_sign(in, l0, l1, l2, l4, l5, l6);
-        sfpi::dst_reg[0] = in * 0.5f + piecewise;
+        sfpi::vFloat piecewise = __builtin_rvtt_sfplutfp32(in.get(), lut_mod);
+        sfpi::dst_reg[0] =
+            sfpi::vFloat(__builtin_rvtt_sfpmad(in.get(), half.get(), piecewise.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE));
         sfpi::dst_reg++;
     }
 }
@@ -178,35 +166,30 @@ sfpi_inline sfpi::vFloat calculate_gelu_piecewise(sfpi::vFloat x) {
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void gelu_init() {
     if constexpr (APPROXIMATION_MODE) {
-        // Segment slopes/intercepts, packed hi/lo the way SFPLUTFP32's FP16 6-entry mode 1 reads
-        // them. Same values as the Blackhole table (l_reg0 = 0x37E7322B, l_reg4 = 0xB12286D8, ...).
+        // 6-segment piecewise-linear LUT: f(|x|) in GELU(x) ≈ 0.5*x + f(|x|).
+        // SFPLUTFP32 mode 1 reads slopes from dests 9-11 and intercepts from dests 12-14.
+        // Each dest is two IEEE FP16 values packed hi:lo in one uint32. Same bits as Blackhole
+        // LReg0-2 (slopes) / LReg4-6 (intercepts).
         //
-        // 1.0 > x >= 0.5
-        // lreg9_hi  =  0.4939 (0x37E7)
-        // lreg12_hi = -0.1605 (0xB122)
-        // 0.5 > x >= 0.0
-        // lreg9_lo  =  0.1928 (0x322B)
-        // lreg12_lo = -7.4e-05 (0x86D8)
-        ckernel::math::_sfpu_load_config32_(0x9, 0x37E7, 0x322B);
-        ckernel::math::_sfpu_load_config32_(0xC, 0xB122, 0x86D8);
+        //   |x|          slope    intercept    packed in
+        //   [0.0, 0.5)   0.1928   ~0           dest 9/12 lo
+        //   [0.5, 1.0)   0.4939   -0.1605      dest 9/12 hi
+        //   [1.0, 1.5)   0.6189   -0.2797      dest 10/13 lo
+        //   [1.5, 2.0)   0.6099   -0.2635      dest 10/13 hi
+        //   [2.0, 3.0)   0.5402   -0.1194      dest 11/14 lo
+        //   [3.0, ∞)     0.50      0.0         dest 11/14 hi
 
-        // 2.0 > x >= 1.5
-        // lreg10_hi =  0.6099 (0x38E1)
-        // lreg13_hi = -0.2635 (0xB437)
-        // 1.5 > x >= 1.0
-        // lreg10_lo =  0.6189 (0x38F3)
-        // lreg13_lo = -0.2797 (0xB479)
-        ckernel::math::_sfpu_load_config32_(0xA, 0x38E1, 0x38F3);
-        ckernel::math::_sfpu_load_config32_(0xD, 0xB437, 0xB479);
+        // slopes [0, 1), intercepts [0, 1)
+        __builtin_rvtt_sfpwriteconfig_v(sfpi::vUInt(0x37E7322Bu).get(), 9);
+        __builtin_rvtt_sfpwriteconfig_v(sfpi::vUInt(0xB12286D8u).get(), 12);
 
-        // x >= 3.0
-        // lreg11_hi =  0.50   (0x3800)
-        // lreg14_hi =  0.0    (0x7C00)
-        // 3.0 > x >= 2.0
-        // lreg11_lo =  0.5402 (0x3852)
-        // lreg14_lo = -0.1194 (0xAFA4)
-        ckernel::math::_sfpu_load_config32_(0xB, 0x3800, 0x3852);
-        ckernel::math::_sfpu_load_config32_(0xE, 0x7C00, 0xAFA4);
+        // slopes [1, 2), intercepts [1, 2)
+        __builtin_rvtt_sfpwriteconfig_v(sfpi::vUInt(0x38E138F3u).get(), 10);
+        __builtin_rvtt_sfpwriteconfig_v(sfpi::vUInt(0xB437B479u).get(), 13);
+
+        // slopes [2, ∞), intercepts [2, ∞)
+        __builtin_rvtt_sfpwriteconfig_v(sfpi::vUInt(0x38003852u).get(), 11);
+        __builtin_rvtt_sfpwriteconfig_v(sfpi::vUInt(0x7C00AFA4u).get(), 14);
     } else if constexpr (is_fp32_dest_acc_en) {
         // FP32 accurate mode: rational erf evaluation requires reciprocal init
         _init_reciprocal_<false>();
