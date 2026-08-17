@@ -1551,6 +1551,13 @@ _OP_SINGULARITIES: Dict[
     # singularity here instead is free, because this table never touches the draw path.
     MathOperation.SfpuBinaryFmod: {Operand.B: ((0.0, _BOTH),)},
     MathOperation.SfpuBinaryRemainder: {Operand.B: ((0.0, _BOTH),)},
+    # atan2(y, x) has no pole, but x = 0 is a genuine branch point and the only place its
+    # answer is discontinuous in x: atan2(y, +0) = +/-pi/2 by the sign of y, and crossing to
+    # x < 0 with y held at 0 jumps the result to +/-pi. Registered on operand B (the x
+    # operand) and probed from both sides, so the two branches are driven rather than the
+    # interior of one of them. Nothing else reaches this: atan2 keeps the format default,
+    # whose draw is positive-only, so a random sweep only ever samples the first quadrant.
+    MathOperation.SfpuAtan2: {Operand.B: ((0.0, _BOTH),)},
     # Ternary: the pole is on the *third* operand, which is why OperandSpecs grew a spec_C.
     # addcdiv is a + value * b / c and snake_beta is a + sin(b*a)^2 / c, so c = 0 is a
     # genuine pole for both. _ternary_default_specs holds c in uniform(1, 2) for exactly
@@ -2472,6 +2479,131 @@ def specials_after_nan_sign_gate(
     ):
         return False
     return specials
+
+
+# Cat B for the *binary* SFPU family. The golden-side gate, exactly as SPECIALS_READY_OPS is for
+# the unary and scalar families, and deliberately a separate dict rather than an extension of it:
+# membership is per family because the goldens are. SfpuElwadd and Add1 share neither an
+# implementation nor a Dest path, so "the unary namesake is ready" is not evidence about this one.
+#
+# Both gates still have to pass -- this one says the *golden* defines an answer for a non-finite
+# operand, specials_safe() says the *pipeline* delivers one intact.
+#
+# Measured before enrolling, host-side and then on a Wormhole n150. What that measurement found,
+# recorded here because it is the reason this dict is not simply "every float binary op":
+#
+#   * All 21 float goldens *answer* at all 25 (special, special) pairs -- none raises. That is
+#     unlike the unary tranche, where math.sin/cos/acos/asin/tan raised on a non-finite input and
+#     five goldens had to be rerouted through torch first. There was no equivalent audit to do.
+#   * The six comparisons and min/max answered, but wrongly: they modelled IEEE's unordered
+#     comparison rather than the SFPU's documented total order. Fixed in BinarySFPUGolden before
+#     any of them was enrolled, which is the order that matters -- enrolling first would have
+#     recorded seven kernel divergences that the ISA specifies as correct behaviour.
+#   * The whole category was driven at once rather than op by op -- all 21 candidates, every
+#     class, every specials-safe cell -- which is the only way the families below become visible.
+#     12 agreed everywhere and are enrolled here; 9 diverge and stay out, in
+#     _BINARY_SPECIALS_NOT_READY, because a wall of failures with five different causes is exactly
+#     what per-op enrolment exists to prevent.
+BINARY_SPECIALS_READY_OPS: Dict[MathOperation, str] = {
+    # Plain SFPMAD arithmetic: "if any input is NaN or +/-Infinity, then the result will be NaN or
+    # +/-Infinity, following the usual IEEE754 rules". Green on Wormhole on all safe cells.
+    MathOperation.SfpuElwadd: "IEEE: inf+x = inf, inf+(-inf) = NaN, NaN+x = NaN. Plain SFPMAD, "
+    "which the ISA specifies as IEEE for a non-finite input. Green on Wormhole.",
+    MathOperation.SfpuElwsub: "As SfpuElwadd; inf-inf = NaN is the case worth having.",
+    MathOperation.SfpuElwmul: "IEEE: inf*x = inf, inf*0 = NaN, +/-0 signs multiply. Green on "
+    "Wormhole.",
+    MathOperation.SfpuElwrsub: "As SfpuElwsub with the operands reversed.",
+    # Total order -- and the reason max/min enrol on a model the six comparisons could not: their
+    # kernel is a bare SFPSWAP(VEC_MIN_MAX) with no NaN guard.
+    MathOperation.SfpuBinaryMax: "binary_max_min is a bare SFPSWAP(VEC_MIN_MAX) with no NaN "
+    "guard, so the documented total order reaches the result: +NaN is the maximum, -NaN the "
+    "minimum. Golden models sfpu_max, not torch.maximum -- those agree on +NaN by coincidence "
+    "and differ on -NaN. Green on Wormhole.",
+    MathOperation.SfpuBinaryMin: "As SfpuBinaryMax, and the op that made the difference visible: "
+    "torch.minimum propagates a NaN where the total order returns the other operand.",
+    # IEEE unordered, because these kernels reject a NaN operand before comparing. The guard is
+    # quoted per sequence in BinarySFPUGolden, above _lt.
+    MathOperation.SfpuElwEq: "calculate_binary_comp_fp32_equal rejects a NaN operand "
+    "(SFPIADD(inf, |a|+|b|, CC_GTE0)) so its pre-stored default stands and eq(NaN, x) = 0 -- "
+    "IEEE's unordered answer, deliberately, not the SFPSWAP total order. Green on Wormhole.",
+    MathOperation.SfpuElwNe: "As SfpuElwEq; its default result is 1, so ne(NaN, x) = 1.",
+    MathOperation.SfpuElwLt: "calculate_binary_comp_fp32_strict_ordered pre-stores 0 and guards "
+    "the store with the same 'rejects NaN' predicate, so lt(NaN, x) = 0. Green on Wormhole.",
+    MathOperation.SfpuElwGt: "As SfpuElwLt, operands swapped.",
+    MathOperation.SfpuElwLe: "calculate_binary_comp_fp32_weak_ordered pre-stores 1, rejects if "
+    "false, then stores 0 under 'abs(a) + abs(b) > inf; a or b is NaN'. So le(NaN, x) = 0.",
+    MathOperation.SfpuElwGe: "As SfpuElwLe, operands swapped.",
+}
+
+# The 9 that diverge, and what each waits on. Five causes rather than nine investigations, which
+# is what driving the category in one sweep buys. Measured on a Wormhole n150. None is enrolled on
+# a guess: a reason string written to make a variant green becomes a permanent, plausible-looking
+# claim about the hardware, and nobody re-derives one once it is written.
+_BINARY_SPECIALS_NOT_READY: Dict[MathOperation, str] = {
+    # (1) Composition through a reciprocal / log / exp -- the binary half of the audit's section
+    # 5.9, where 23 unary ops sit behind the same question. Each builds its result from a primitive
+    # the ISA specifies only inside a stated range (SFPARECIP gives accuracy bounds for 0 <= x < 2;
+    # SFPLUTFP32 documents no NaN/inf handling), so what the composition does with a non-finite
+    # input is an LLK decision rather than an ISA one. One answer decides all six.
+    MathOperation.SfpuElwdiv: "composition: reciprocal + Newton-Raphson. Section 5.6 Q1.",
+    MathOperation.SfpuXlogy: "composition: x * log(y). Section 5.6 Q1.",
+    MathOperation.SfpuElwpow: "composition: exp(b * ln a). Section 5.6 Q1.",
+    MathOperation.SfpuBinaryFmod: "composition: quotient via reciprocal. Section 5.6 Q1.",
+    MathOperation.SfpuBinaryRemainder: "composition: as fmod. Section 5.6 Q1.",
+    MathOperation.SfpuAtan2: "composition: ratio plus a format-specific polynomial. Diverges on "
+    "2 cells rather than 4, so its non-finite handling is partial. Section 5.6 Q1.",
+    # (2) Compare-against-zero on an operand that may be a NaN. calculate_mask is
+    # `v_if(mask == 0)`, which lowers to SFPSETCC -- whose contract is conditioned "provided that
+    # VC is neither negative zero nor any kind of NaN". Identical to what holds Sign and Heaviside
+    # out of the unary cat B, so it is section 5.6's third question rather than a new one.
+    MathOperation.SfpuMask: "the mask operand reaches SFPSETCC, whose contract excludes a NaN "
+    "operand. Section 5.6 Q3, with Sign and Heaviside.",
+    # (3) Its own question, and a narrow one. ckernel_sfpu_isclose documents torch.isclose
+    # semantics including EQUAL_NAN=false ("any NaN input => result = 0") and bit-inspects for
+    # +/-Inf against NaN -- so both sides claim to agree and do not. Needs one per-cell read-back
+    # to say whether the golden or the kernel's inf path is wrong. Do not adjust the golden before
+    # that: fixing a golden to match is how a kernel divergence gets laundered into agreement.
+    MathOperation.SfpuIsclose: "golden and kernel both claim torch.isclose semantics and "
+    "disagree at a non-finite operand; needs a per-cell read-back to say which is wrong.",
+    # (4) Not a binary op in the sense this probe assumes. The kernel reads in1 only on its x > 4
+    # branch and the golden ignores operand B outright -- verified: logsigmoid(1, y) is constant in
+    # y. A special injected into B is therefore not a stimulus for anything, and enrolling it would
+    # buy a variant that asserts nothing about operand B while looking as though it does.
+    MathOperation.SfpuLogsigmoid: "effectively unary -- operand B is read only on the x > 4 "
+    "branch and the golden ignores it, so a cat-B probe in B asserts nothing.",
+}
+
+assert not (
+    set(BINARY_SPECIALS_READY_OPS) & set(_BINARY_SPECIALS_NOT_READY)
+), "an op cannot be both enrolled in cat B and recorded as not ready for it"
+
+
+def generated_nan_sign_is_asserted(
+    input_format: DataFormat,
+    output_format: DataFormat,
+    dest_acc: Optional[Union[bool, Enum]],
+    on_wormhole: bool,
+) -> bool:
+    """Would this pipeline make a *generated* NaN's sign load-bearing on Wormhole?
+
+    The binary-family twin of nan_sign_is_unspecified(), and it takes no op argument -- which is
+    the whole difference. There, membership is a measured per-op fact (GENERATED_NAN_SIGN_OPS):
+    a kernel either invents its NaN or forwards one, and no property of the format axis predicts
+    which. Here the caller already knows, because the binary edge sweep partitions its probe *by
+    what the golden answers*: the `both_zero` and `nan_golden` classes are exactly the pairs
+    where finite operands produce a NaN, so every element of them is generated by construction.
+
+    Two conditions, same as the unary gate:
+      * the pipeline narrows, so the NaN leaves as a signed infinity (not nan_survives_to_l1);
+      * the arch leaves that sign unspecified, i.e. Wormhole -- `SFPMAD.md` says the sign "might
+        or might not be set" there and promises canonical 0x7fc00000 on Blackhole.
+
+    Where this is True there is nothing sound to assert *yet*: an xfail would claim the sign is
+    wrong when the ISA says it may be either, so the same silicon could satisfy or break it run
+    to run. The assertion to restore is "an infinity of either sign", which is a change to the
+    comparator rather than to this gate -- see tt-metal#52938 and the audit's section 5.10.
+    """
+    return on_wormhole and not nan_survives_to_l1(input_format, output_format, dest_acc)
 
 
 def specials_safe_formats(

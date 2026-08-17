@@ -17,6 +17,7 @@ coverage, and no hardware run reports it — the variant passes, having tested t
 twice.
 """
 
+import math
 import struct
 
 import pytest
@@ -27,6 +28,7 @@ from helpers.sfpu_domains import (
     Operand,
     edge_values,
     for_op,
+    generated_nan_sign_is_asserted,
     nan_sign_is_unspecified,
     nan_survives_to_l1,
     ops_with_singularity,
@@ -200,6 +202,331 @@ def test_nan_sign_gate_matches_the_measured_wormhole_failures():
         assert not nan_sign_is_unspecified(
             op, DataFormat.Float32, DataFormat.Float32, DestAccumulation.Yes
         ), f"{op.name} lost its Float32->Float32 dest_acc=Yes assertion"
+
+
+def test_generated_nan_sign_gate_is_the_narrowing_cells_on_wormhole_only():
+    """The binary family's gate: no op argument, and exactly the cells that narrow.
+
+    Where the unary gate needs a measured op set (a kernel either invents its NaN or forwards
+    one, and nothing about the format axis predicts which), the binary edge sweep already knows
+    per class -- so this gate is the pipeline half alone. Pinned so that stays true: an op
+    argument appearing here would mean the two gates had been conflated.
+    """
+    for cell in _EDGE_SWEEP_CELLS:
+        if not specials_safe(*cell):
+            continue
+        narrows = not nan_survives_to_l1(*cell)
+        assert generated_nan_sign_is_asserted(*cell, on_wormhole=True) == narrows, (
+            f"{cell} disagrees with nan_survives_to_l1 on Wormhole -- the gate must be "
+            "exactly the narrowing cells"
+        )
+        assert not generated_nan_sign_is_asserted(*cell, on_wormhole=False), (
+            f"{cell} is gated on Blackhole, where SFPMAD promises the canonical 0x7fc00000 "
+            "and the sign is therefore assertable"
+        )
+
+
+def test_binary_golden_dest_format_matches_the_domains_rule():
+    """BinarySFPUGolden._dest_format and nan_survives_to_l1 must derive the same Dest.
+
+    Three places state this rule -- the unary golden, the binary golden, and sfpu_domains'
+    internal derivation -- and a silent disagreement would put the golden's NaN substitution on
+    a different set of cells than the gate that decides where the probe may be asserted. Checked
+    rather than commented, since the two live in different modules.
+    """
+    from helpers.golden_generators import BinarySFPUGolden
+
+    for input_format, output_format, dest_acc in _EDGE_SWEEP_CELLS:
+        dst = BinarySFPUGolden._dest_format(input_format, output_format, dest_acc)
+        preserves = (dst, output_format) in {
+            (DataFormat.Float16, DataFormat.Float16),
+            (DataFormat.Float32, DataFormat.Float16),
+            (DataFormat.Float32, DataFormat.Float32),
+        }
+        assert preserves == nan_survives_to_l1(input_format, output_format, dest_acc), (
+            f"{input_format.name}->{output_format.name} dest_acc={dest_acc}: the golden "
+            f"derives Dest={dst.name}, which disagrees with nan_survives_to_l1"
+        )
+
+
+def test_binary_golden_requires_dest_acc_and_output_format_together():
+    """Supplying one without the other is rejected rather than half-modelled.
+
+    Half the contract is worse than none of it: the Dest width would come from dest_acc while
+    the pack decision silently defaulted, giving a golden wrong in a new way rather than in the
+    documented old one.
+    """
+    import torch
+    from helpers.golden_generators import BinarySFPUGolden
+
+    golden = BinarySFPUGolden()
+    tile_pair = torch.zeros(2048, dtype=torch.float32)
+    for missing in ("output_format", "dest_acc"):
+        kwargs = {
+            "dest_acc": DestAccumulation.No,
+            "output_format": DataFormat.Float32,
+        }
+        del kwargs[missing]
+        with pytest.raises(ValueError, match="must be supplied together"):
+            golden(
+                MathOperation.SfpuElwadd,
+                tile_pair.clone(),
+                0,
+                1,
+                0,
+                32,
+                [64, 32],
+                DataFormat.Float32,
+                **kwargs,
+            )
+
+
+def test_binary_comparison_family_splits_on_the_kernel_nan_guard():
+    """max/min follow the SFPU total order; the six comparisons do not. Pinned both ways.
+
+    This split is not derivable from the ISA, which is why it is pinned rather than commented.
+    All eight ops route through SFPSWAP, whose page specifies SignMagIsSmaller() and the total
+    order -- but the six comparison kernels wrap the swap in an explicit NaN rejection
+    ("rejects NaN", `SFPIADD(inf, |a|+|b|, CC_GTE0)`), so a NaN operand never reaches the compare
+    and the IEEE unordered answer stands. binary_max_min is a bare TTI_SFPSWAP with no such
+    guard, so for those two the order does reach the result.
+
+    Measured on a Wormhole n150: modelling all eight on the total order failed the six
+    comparisons on 4 cells each and passed max/min everywhere.
+
+    Both NaN signs are probed for max/min, because torch.maximum agrees with the total order on
+    +NaN by coincidence and disagrees on -NaN -- a one-sided probe certifies a wrong golden.
+    """
+    import torch
+    from helpers.golden_generators import BinarySFPUGolden, sfpu_max, sfpu_min
+
+    golden = BinarySFPUGolden()
+    nan, inf = float("nan"), float("inf")
+
+    # The six: IEEE unordered, because the kernel rejects a NaN operand outright.
+    ieee_probes = [(nan, 1.0), (1.0, nan), (nan, nan), (nan, inf), (-inf, nan)]
+    for op, expected in {
+        MathOperation.SfpuElwLt: 0.0,
+        MathOperation.SfpuElwGt: 0.0,
+        MathOperation.SfpuElwLe: 0.0,
+        MathOperation.SfpuElwGe: 0.0,
+        MathOperation.SfpuElwEq: 0.0,
+        MathOperation.SfpuElwNe: 1.0,
+    }.items():
+        for a, b in ieee_probes:
+            got = float(golden.ops[op](torch.tensor(a), torch.tensor(b)))
+            assert got == expected, (
+                f"{op.name}({a}, {b}) = {got}, expected {expected}. These kernels reject a NaN "
+                "operand before the compare, so the answer is IEEE's unordered one and NOT the "
+                "SFPU total order. Do not 'fix' this from the SFPSWAP ISA page -- read the guard "
+                "in calculate_binary_comp_fp32_* first."
+            )
+
+    # max/min: the total order, both NaN signs.
+    for op, reference in (
+        (MathOperation.SfpuBinaryMax, sfpu_max),
+        (MathOperation.SfpuBinaryMin, sfpu_min),
+    ):
+        for a, b in [(nan, 1.0), (-nan, 1.0), (nan, inf), (-inf, nan), (nan, nan)]:
+            got = float(golden.ops[op](torch.tensor(a), torch.tensor(b)))
+            want = float(reference(a, b))
+            assert got == want or (got != got and want != want), (
+                f"{op.name}({a}, {b}) = {got}, but the total order gives {want}. "
+                "binary_max_min is a bare SFPSWAP(VEC_MIN_MAX) with no NaN guard."
+            )
+
+    # The integer axis, which shares the same six entries plus max/min, must be unaffected.
+    for op, (a, b, want) in {
+        MathOperation.SfpuElwLt: (-5, 3, 1.0),
+        MathOperation.SfpuElwGe: (-5, 3, 0.0),
+        MathOperation.SfpuElwLe: (7, 7, 1.0),
+        MathOperation.SfpuElwGt: (7, 7, 0.0),
+        MathOperation.SfpuMaxInt32: (-5, 3, 3.0),
+        MathOperation.SfpuMinInt32: (-5, 3, -5.0),
+    }.items():
+        got = float(
+            golden.ops[op](
+                torch.tensor(a, dtype=torch.int32), torch.tensor(b, dtype=torch.int32)
+            )
+        )
+        assert got == want, (
+            f"{op.name}({a}, {b}) = {got} on the Int32 axis, expected {want}: "
+            "calculate_binary_comp_int32 is a plain two's-complement compare"
+        )
+
+
+def _binary_op_enumerators(arch_dir: str) -> set:
+    """The BinaryOp enumerator names declared for one architecture.
+
+    Parsed from ckernel_defs.h rather than mirrored here, because a copy of the enum in this file
+    would keep agreeing with itself after the header changed -- which is the exact failure this
+    guard exists to prevent.
+    """
+    import re
+    from pathlib import Path
+
+    header = (
+        Path(__file__).resolve().parents[2]
+        / arch_dir
+        / "common"
+        / "inc"
+        / "ckernel_defs.h"
+    )
+    assert header.is_file(), (
+        f"{header} not found. This guard pins coverage-audit section 4.5 against the arch "
+        "headers; if the layout moved, repoint it rather than deleting it."
+    )
+    text = header.read_text()
+    body = re.search(r"enum class BinaryOp\s*:\s*[^{]*\{(.*?)\}", text, re.S)
+    assert body, f"no `enum class BinaryOp` found in {header}"
+    return set(re.findall(r"^\s*([A-Z][A-Z0-9_]*)\s*(?:=|,)", body.group(1), re.M))
+
+
+# Coverage audit section 4.5 lists these five as driven by "none (WH/BH)". That is true of the
+# enum *members* and false of the *kernels*, and the difference is an alias that crosses a
+# MathOpType boundary: these carry MathOpType.SFPU_BINARY_INT, which only the Quasar dispatch
+# header implements, while the same kernels are reached on WH/BH through the SFPU_BINARY members
+# below at DataFormat.Int32. Section 2.4 of the audit already warns about aliasing for
+# SfpuWhere/TTNNWhere and LogicalNot/LogicalNotUnary; these are the same hazard one enum apart.
+_QUASAR_INT_BINARY_ALIASES = {
+    MathOperation.SfpuGtInt: MathOperation.SfpuElwGt,
+    MathOperation.SfpuLtInt: MathOperation.SfpuElwLt,
+    MathOperation.SfpuLeInt: MathOperation.SfpuElwLe,
+    MathOperation.SfpuGeInt: MathOperation.SfpuElwGe,
+    # The int multiply is spelled MUL on Quasar and reaches _mul_int32_; on WH/BH the same kernel
+    # is MUL_INT32, which SfpuMulInt32 drives (test_sfpu_binary_int_uniform).
+    MathOperation.SfpuElwmulInt: MathOperation.SfpuMulInt32,
+}
+
+
+@pytest.mark.parametrize("arch_dir", ["tt_llk_wormhole_b0", "tt_llk_blackhole"])
+def test_quasar_int_binary_members_alias_covered_kernels(arch_dir):
+    """The five SFPU_BINARY_INT members are unreachable on WH/BH; their kernels are not.
+
+    Two halves, and both matter. If the first fails, one of these members became dispatchable and
+    is now genuinely untested -- give it a test. If the second fails, the alias it was relying on
+    stopped being driven, and the kernel lost its only WH/BH coverage while the audit still
+    recorded it as covered by proxy. Either way the audit's section 4.5 needs rewriting, which is
+    why this asserts the shape rather than describing it.
+    """
+    declared = _binary_op_enumerators(arch_dir)
+
+    for member, alias in _QUASAR_INT_BINARY_ALIASES.items():
+        spec = member.value
+        if member is MathOperation.SfpuElwmulInt:
+            # "MUL" *is* declared -- it is the float multiply. What matters is that this member
+            # cannot be dispatched here, which its MathOpType decides, not its spelling.
+            assert spec.operation_type.name == "SFPU_BINARY_INT"
+        else:
+            assert spec.cpp_enum_value not in declared, (
+                f"{member.name} names BinaryOp::{spec.cpp_enum_value}, which is now declared "
+                f"in {arch_dir}. It is reachable on this arch and needs a test of its own; the "
+                "audit's section 4.5 alias note no longer covers it."
+            )
+
+        assert alias.value.cpp_enum_value in declared, (
+            f"{member.name}'s kernel is covered on WH/BH only through {alias.name}, whose "
+            f"BinaryOp::{alias.value.cpp_enum_value} is no longer declared in {arch_dir}"
+        )
+
+
+def test_int_comparison_aliases_are_driven_at_int32():
+    """The aliasing claim above is only worth anything while the alias is actually driven at Int32.
+
+    Checked against the test module's own list so the two cannot drift: if the ordered comparisons
+    stop being driven on an integer format, the four Quasar members lose their proxy coverage
+    silently.
+    """
+    import test_sfpu_binary
+
+    driven = set(test_sfpu_binary._INT_COMPARISON_OPS)
+    expected = {
+        MathOperation.SfpuElwLt,
+        MathOperation.SfpuElwGt,
+        MathOperation.SfpuElwLe,
+        MathOperation.SfpuElwGe,
+    }
+    assert driven == expected, (
+        "_INT_COMPARISON_OPS no longer holds the four ordered comparisons, so the Int32 "
+        f"comparison kernel's coverage moved: {driven ^ expected}"
+    )
+    assert (
+        set(_QUASAR_INT_BINARY_ALIASES.values()) - {MathOperation.SfpuMulInt32}
+        == driven
+    ), "the alias table and the driven set disagree"
+
+
+def test_every_float_binary_op_is_classified_for_cat_b():
+    """Enrolled or recorded-as-not-ready, for every float op the binary sweep can drive.
+
+    Totality, in the same spirit as test_sfpu_binary's three stimulus-source sets: an op that is in
+    neither dict keeps cat B switched off while looking, to a reader, as though it had been
+    considered. The count is not pinned -- only the partition -- so adding a binary op is a
+    one-line decision rather than a test edit.
+    """
+    import test_sfpu_binary
+    from helpers.sfpu_domains import (
+        _BINARY_SPECIALS_NOT_READY,
+        BINARY_SPECIALS_READY_OPS,
+    )
+
+    candidates = (
+        test_sfpu_binary._CLASSIFIED_STIMULI_OPS
+        - test_sfpu_binary._INT_DRIVEN_BINARY_OPS
+    )
+    classified = set(BINARY_SPECIALS_READY_OPS) | set(_BINARY_SPECIALS_NOT_READY)
+    unclassified = sorted(op.name for op in candidates - classified)
+    assert not unclassified, (
+        "these float binary ops reach sfpu_binary() but appear in neither "
+        "BINARY_SPECIALS_READY_OPS nor _BINARY_SPECIALS_NOT_READY, so nothing records whether "
+        f"cat B is off for them by decision or by omission: {unclassified}"
+    )
+    stale = sorted(op.name for op in classified - candidates)
+    assert (
+        not stale
+    ), f"these ops carry a cat-B verdict but no longer reach the binary driver: {stale}"
+
+    for op, reason in BINARY_SPECIALS_READY_OPS.items():
+        assert len(reason) > 20, f"{op.name}'s cat-B reason is too short to be a claim"
+
+
+def test_reduce_extremum_follows_the_total_order_on_floats_only():
+    """Reduce MAX/MIN fold under the SFPU total order; Sum/Average stay IEEE; ints stay torch.
+
+    ckernel_sfpu_reduce.h reduces MAX/MIN with a bare TTI_SFPSWAP(VEC_MIN_MAX) and no NaN guard, so
+    unlike the six binary comparisons the order does reach the result. MIN is the load-bearing case:
+    a column holding one +NaN must reduce to the *finite* minimum, where torch.min propagates.
+
+    Integers are checked in the same test because ReduceColumn/ReduceRow are deliberately *not*
+    routed through _call_integer, so an Int32 reduce reaches the same helper -- and there the model
+    is _emit_int32_signed_cswap_, i.e. plain two's complement.
+    """
+    import torch
+    from helpers.golden_generators import UnarySFPUGolden
+
+    nan, inf = float("nan"), float("inf")
+    fold = UnarySFPUGolden._reduce_extremum
+
+    column = torch.tensor([[1.0], [nan], [-2.0], [inf]])
+    assert math.isnan(
+        float(fold(column, dim=0, want_max=True)[0])
+    ), "max over a column containing +NaN must be NaN: +NaN is the total order's maximum"
+    assert float(fold(column, dim=0, want_max=False)[0]) == -2.0, (
+        "min over a column containing +NaN must be the finite minimum (-2.0), not NaN. "
+        "torch.min propagates the NaN, which is IEEE and not what SFPSWAP does."
+    )
+
+    negative_nan = torch.tensor([[1.0], [-nan], [2.0]])
+    assert math.isnan(
+        float(fold(negative_nan, dim=0, want_max=False)[0])
+    ), "-NaN is the total order's minimum, so min must return it"
+    assert (
+        float(fold(negative_nan, dim=0, want_max=True)[0]) == 2.0
+    ), "-NaN must not win a max; this is the direction torch.maximum gets wrong"
+
+    ints = torch.tensor([[5], [-7], [3]], dtype=torch.int32)
+    assert int(fold(ints, dim=0, want_max=False)[0]) == -7
+    assert int(fold(ints, dim=0, want_max=True)[0]) == 5
 
 
 def test_nan_sign_gate_ignores_ops_that_forward_a_nan():
