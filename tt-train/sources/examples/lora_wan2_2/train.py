@@ -27,7 +27,7 @@ from pipeline_config import SUBFOLDER, Config
 from utils.dataset import LatentEmbedDataset, TextEmbeds, make_collate_fn
 from utils.device_setup import setup_device
 from utils.logger import Logger
-from utils.lora_export import save_all
+from utils.lora_export import load_all, save_all
 from utils.lora_targets import resolve as resolve_lora_targets
 from timing import fmt, phase, record
 
@@ -176,8 +176,11 @@ def validation_loss(experts, val_loader, cfg: Config, ctx, rope_params, patch_si
 
 
 def train(cfg: Config) -> None:
-    random.seed(cfg.SEED)
-    rng = np.random.default_rng(cfg.SEED)
+    if cfg.RESUME_STEP and cfg.RESUME_STEP >= cfg.MAX_STEPS:
+        raise ValueError(f"RESUME_STEP={cfg.RESUME_STEP} leaves nothing to train (MAX_STEPS={cfg.MAX_STEPS})")
+
+    random.seed(cfg.SEED + cfg.RESUME_STEP)
+    rng = np.random.default_rng(cfg.SEED + cfg.RESUME_STEP)
 
     cache = Path(cfg.CACHE_DIR)
     if not (cache / "embeds.npy").exists() or not (cache / "samples").exists():
@@ -218,8 +221,14 @@ def train(cfg: Config) -> None:
         f"accum={cfg.GRAD_ACCUM} -> effective {global_batch * cfg.GRAD_ACCUM}"
     )
 
+    # Offset by RESUME_STEP so a resumed run does not replay the first chunk's shuffle order.
     train_loader = InMemoryDataloader(
-        train_ds, train_collate, batch_size=global_batch, shuffle=True, drop_last=True, seed=cfg.SEED
+        train_ds,
+        train_collate,
+        batch_size=global_batch,
+        shuffle=True,
+        drop_last=True,
+        seed=cfg.SEED + cfg.RESUME_STEP,
     )
     val_loader = InMemoryDataloader(
         val_ds, val_collate, batch_size=1, shuffle=False, drop_last=False, seed=cfg.SEED + 1
@@ -227,6 +236,9 @@ def train(cfg: Config) -> None:
 
     with phase("load experts + inject LoRA"):
         experts = {role: build_lora_expert(role, cfg) for role in cfg.experts_to_load()}
+    if cfg.RESUME_STEP:
+        with phase(f"resume from step {cfg.RESUME_STEP}"):
+            load_all(experts, cfg, suffix=f"_step{cfg.RESUME_STEP:05d}")
     for m in experts.values():
         m.train()
 
@@ -254,14 +266,17 @@ def train(cfg: Config) -> None:
     run_name = f"wan22_14b_{cfg.STYLE.lower()}_{cfg.TRAIN_EXPERTS}_r{cfg.LORA_RANK}"
     logger = Logger(cfg.WANDB_ENABLED, cfg.WANDB_PROJECT, run_name, cfg.asdict())
 
-    global_step, micro = 0, 0
+    global_step, micro = cfg.RESUME_STEP, 0
     accum_loss, accum_n = 0.0, 0
     ema = None
     step_times: list[float] = []
     loop_start = step_start = time.time()
     data_iter = iter(train_loader)
     optimizer.zero_grad()
-    print(f"[train] loop: max_steps={cfg.MAX_STEPS} accum={cfg.GRAD_ACCUM} t-range=[{lo:.3f},{hi:.3f})")
+    print(
+        f"[train] loop: step {global_step} -> max_steps={cfg.MAX_STEPS} "
+        f"accum={cfg.GRAD_ACCUM} t-range=[{lo:.3f},{hi:.3f})"
+    )
 
     while global_step < cfg.MAX_STEPS:
         try:
