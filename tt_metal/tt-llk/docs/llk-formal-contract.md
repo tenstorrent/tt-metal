@@ -8,7 +8,7 @@ Neither side is frozen. Where the math and the code disagree today, §7 lists it
 convergence item. The target is that every symbol here maps to one place in the code, and the
 checker tool reads its rules from §5–§6.
 
-Notation: `≜` is "defined as", `∈` is "is an element of", `⨁` joins named fields into a record, `⊥` is unset (as in not
+Notation: `≜` is "defined as", `∈` is "is an element of", `⟨…⟩` is a record literal, `×` / `∏` join fields into a record (product — all fields present at once, a struct), `+` / `Σ` form a tagged union (coproduct — exactly one alternative live, a `std::variant`; "sum" here means one term is selected, not arithmetic addition), `⊥` is unset (as in not
 touched by the Sanitizer, not a HW reset value).
 
 ---
@@ -41,7 +41,7 @@ S ≜ ⟨ s_U, s_F, s_S, s_P ; Γ ⟩           // struct State [operation.h]
 ```
 
 `Γ` is the global `UnwindContext unwind`. It holds source locations, not contract state.
-We can restate this as `S = Σᵢ sᵢ + Γ`, where `i ∈ I`.
+We can restate this as `S = ∏ᵢ sᵢ × Γ`, where `i ∈ I` (a product — all four per-EXU states and `Γ` are present at once).
 
 ### 2.2 Per-EXU state `sᵢ`  (`ExuState<i>`, types.h)
 
@@ -63,13 +63,13 @@ Live operation record:
 Therefore:
 
 ```
-sᵢ  =  ρᵢ  +  yᵢ  +  Σ_{j∈Ωᵢ} x̂ⱼ
+sᵢ  =  ρᵢ  ×  yᵢ  ×  Σ_{j∈Ωᵢ} x̂ⱼ
 ```
 
 
-An important distinction here is that `ρᵢ` is needed for FSM check, while the other terms are required for the operand check. If we're only interested in operand check, we can simplify the previous expression to `sᵢ = Σⱼ x̂ⱼ + yᵢ`, where `Σ` is a tagged union, not a sum, and `yᵢ`.
+An important distinction here is that `ρᵢ` is needed for FSM check, while the other terms are required for the operand check. If we're only interested in operand check, we can simplify the previous expression to `sᵢ = Σⱼ x̂ⱼ × yᵢ`: `Σⱼ x̂ⱼ` is the tagged union over operations (one term live) and `× yᵢ` joins in the shared operand record.
 
-`⨁` (your `Σ`) is a tagged union: at runtime one term is live. That live term is `ωᵢ`, or
+`Σⱼ x̂ⱼ` is the tagged union: at runtime one term is live. That live term is `ωᵢ`, or
 `∅` before the first `init`. `yᵢ` is shared by all operations of the EXU, so it sits once in
 `sᵢ` and once as the snapshot `y'ⱼ` inside each `x̂ⱼ`. This is the `std::variant` (one live
 alternative) plus the single `Operand<i>::Struct` in `ExuState`.
@@ -118,7 +118,7 @@ x̂ⱼ ≜ ⟨ σⱼ , xⱼ , y'ⱼ ⟩
 | `xⱼ` | `G::Struct state` | the operation's own fields (§2.6) |
 | `y'ⱼ` | `Operand<i>::Struct snap` | operand snapshot = `maskⱼ(yᵢ)` |
 
-Your `x̂ⱼ = xⱼ + y'ⱼ` leaves out `σⱼ`. Use `x̂ⱼ = σⱼ ⊕ xⱼ ⊕ y'ⱼ`.
+Your `x̂ⱼ = xⱼ × y'ⱼ` leaves out `σⱼ`. Use `x̂ⱼ = σⱼ × xⱼ × y'ⱼ` (a record — all three present).
 
 **Mask.** `maskⱼ` is the `known` bits of `snap`. `init` snapshots only the operand fields the
 hook restated; the rest stay `⊥`. So `y'ⱼ` is a partial view of `yᵢ`: the fields operation `j`
