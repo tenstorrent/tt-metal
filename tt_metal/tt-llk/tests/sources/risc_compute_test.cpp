@@ -18,11 +18,14 @@ std::uint32_t math_sync_tile_dst_index = 0;
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
-    std::int32_t* A = reinterpret_cast<std::int32_t*>(params.buffer_A[0]);
-    std::int32_t* B = reinterpret_cast<std::int32_t*>(params.buffer_B[0]);
-    std::int32_t* C = reinterpret_cast<std::int32_t*>(params.buffer_Res[0]);
-
-    std::transform(A, A + 1024, B, C, std::plus<std::int32_t>());
+    const std::uint32_t total_tiles = params.NUM_BLOCKS * params.NUM_TILES_IN_BLOCK;
+    for (std::uint32_t tile = 0; tile < total_tiles; tile += 3)
+    {
+        const auto* A = reinterpret_cast<const std::int32_t*>(params.buffer_A[tile]);
+        const auto* B = reinterpret_cast<const std::int32_t*>(params.buffer_B[tile]);
+        auto* C       = reinterpret_cast<std::int32_t*>(params.buffer_Res[tile]);
+        std::transform(A, A + 1024, B, C, std::plus<std::int32_t>());
+    }
 }
 
 #endif
@@ -31,11 +34,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
-    std::int32_t* A = reinterpret_cast<std::int32_t*>(params.buffer_A[1]);
-    std::int32_t* B = reinterpret_cast<std::int32_t*>(params.buffer_B[1]);
-    std::int32_t* C = reinterpret_cast<std::int32_t*>(params.buffer_Res[1]);
-
-    std::transform(A, A + 1024, B, C, std::plus<std::int32_t>());
+    const std::uint32_t total_tiles = params.NUM_BLOCKS * params.NUM_TILES_IN_BLOCK;
+    for (std::uint32_t tile = 1; tile < total_tiles; tile += 3)
+    {
+        const auto* A = reinterpret_cast<const std::int32_t*>(params.buffer_A[tile]);
+        const auto* B = reinterpret_cast<const std::int32_t*>(params.buffer_B[tile]);
+        auto* C       = reinterpret_cast<std::int32_t*>(params.buffer_Res[tile]);
+        std::transform(A, A + 1024, B, C, std::plus<std::int32_t>());
+    }
 }
 
 #endif
@@ -44,11 +50,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
-    std::int32_t* A = reinterpret_cast<std::int32_t*>(params.buffer_A[2]);
-    std::int32_t* B = reinterpret_cast<std::int32_t*>(params.buffer_B[2]);
-    std::int32_t* C = reinterpret_cast<std::int32_t*>(params.buffer_Res[2]);
-
-    std::transform(A, A + 1024, B, C, std::plus<std::int32_t>());
+    const std::uint32_t total_tiles = params.NUM_BLOCKS * params.NUM_TILES_IN_BLOCK;
+    for (std::uint32_t tile = 2; tile < total_tiles; tile += 3)
+    {
+        const auto* A = reinterpret_cast<const std::int32_t*>(params.buffer_A[tile]);
+        const auto* B = reinterpret_cast<const std::int32_t*>(params.buffer_B[tile]);
+        auto* C       = reinterpret_cast<std::int32_t*>(params.buffer_Res[tile]);
+        std::transform(A, A + 1024, B, C, std::plus<std::int32_t>());
+    }
 }
 
 #endif

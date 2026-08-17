@@ -15,6 +15,7 @@ jobs:
 
   track-compile-time:
     needs: check-harbor
+    if: ${{ !cancelled() }}
     name: "⏱️ Track Compile Time"
     runs-on: tt-ubuntu-2204-large-stable
     timeout-minutes: 120
@@ -66,6 +67,7 @@ jobs:
             --toolchain-path cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake \
             --disable-pch \
             --disable-unity-builds \
+            --disable-profiler \
             --build-all \
             --configure-only
 

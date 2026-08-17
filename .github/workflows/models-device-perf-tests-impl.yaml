@@ -27,7 +27,7 @@ on:
 
 jobs:
   load-test-matrix:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       matrix: ${{ steps.apply-filters.outputs.matrix }}
     env:
@@ -57,8 +57,7 @@ jobs:
           python3 .github/scripts/utils/prepare_test_matrix.py \
             ${{ env.TESTS_YAML_PATH }} \
             "${{ inputs.enabled-skus }}" \
-            ./.github/sku_config.yaml \
-            ./.github/blackhole_demo_systems.yaml
+            ./.github/sku_config.yaml
       - name: Apply model filters
         id: apply-filters
         run: |
@@ -107,7 +106,7 @@ jobs:
         # Mount the HF / tt_cache root so it always appears inside the container
         # at /mnt/MLPerf/huggingface, regardless of which BH cache mode the
         # runner uses. Host source comes from matrix.test-group['weights-cache-mode']
-        # (populated from .github/blackhole_demo_systems.yaml by prepare_test_matrix.py):
+        # (populated from the weights-cache-mode field in .github/sku_config.yaml by prepare_test_matrix.py):
         #   cloud-mlperf            → host /mnt/MLPerf/huggingface (shared NFS)
         #   local-disk / lfc        → host /localdev/blackhole_demos/huggingface_data (per-runner)
         #   yyz4-mnt-models         → host /mnt/models/huggingface (YYZ4 Exabox nfs storage mount)

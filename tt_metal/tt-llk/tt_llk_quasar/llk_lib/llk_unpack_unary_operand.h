@@ -324,11 +324,12 @@ inline void _llk_unpack_unary_operand_init_(const std::uint32_t buf_desc_id, con
         // producer (UNP_DEST), so it programs the per-TRISC section base itself rather than
         // letting the math middleman set it on its behalf
         // Establish the initial bank-0 base here; the per-tile call flips
-        // it in SyncHalf. unpack::TRISC_ID == 0 selects the same SEC slot the UNP_DEST client reads.
+        // it in SyncHalf. TriscID::Unpack selects the same SEC slot the UNP_DEST client reads.
         ckernel::trisc::_reset_dest_register_offset_();
-        ckernel::trisc::_set_dest_section_base_<ckernel::unpack::TRISC_ID>(ckernel::trisc::_get_dest_buffer_base_());
+        ckernel::trisc::_set_dest_section_base_<to_underlying(ckernel::trisc::TriscID::Unpack)>(ckernel::trisc::_get_dest_buffer_base_());
 
         cfg_rmw(THCON_UNPACKER0_REG0_TRANSPOSE_RMW, 0 /*TRANSPOSE_EN forced false for UNP_DEST*/);
+        cfg_rmw(THCON_UNPACKER1_REG0_TRANSPOSE_RMW, 0);
         _llk_unpack_unary_operand_mop_config_<UNP_SEL, IS_32b_DEST_EN>(buf_desc_id, num_tiles);
         return;
     }
@@ -336,9 +337,11 @@ inline void _llk_unpack_unary_operand_init_(const std::uint32_t buf_desc_id, con
     if constexpr (UNP_SEL == p_unpacr::UNP_A || UNP_SEL == p_unpacr::UNP_DEST)
     {
         cfg_rmw(THCON_UNPACKER0_REG0_TRANSPOSE_RMW, TRANSPOSE_EN);
+        cfg_rmw(THCON_UNPACKER1_REG0_TRANSPOSE_RMW, 0);
     }
     else if constexpr (UNP_SEL == p_unpacr::UNP_B)
     {
+        cfg_rmw(THCON_UNPACKER0_REG0_TRANSPOSE_RMW, 0);
         cfg_rmw(THCON_UNPACKER1_REG0_TRANSPOSE_RMW, TRANSPOSE_EN);
     }
 
@@ -409,7 +412,7 @@ inline void _llk_unpack_unary_operand_(const std::uint32_t l1_tile_idx, const Te
         // Unpack owns the DEST section base, so it flips to the other bank for the next iteration
         if constexpr (DEST_SYNC_MODE == ckernel::DstSync::SyncHalf)
         {
-            _llk_sync_advance_dest_section_<ckernel::unpack::TRISC_ID, true /*EN_32BIT_DEST*/, p_stall::UNPACK0>();
+            _llk_sync_advance_dest_section_<to_underlying(ckernel::trisc::TriscID::Unpack), true /*EN_32BIT_DEST*/, p_stall::UNPACK0>();
         }
         return;
     }

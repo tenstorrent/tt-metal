@@ -23,10 +23,10 @@ void VariableMatmulDeviceOperation::validate_on_program_cache_miss(
     const auto& weight_tensor = tensor_args.weight_tensor;
     const auto& config = operation_attributes.config;
 
-    TT_FATAL(act_tensor.storage_type() == StorageType::DEVICE, "variable_matmul activation must be on device");
+    TT_FATAL(act_tensor.storage_type() == ttnn::StorageType::DEVICE, "variable_matmul activation must be on device");
     auto* device = act_tensor.device();
     auto check_on_device = [device](const ttnn::Tensor& t, const char* name) {
-        TT_FATAL(t.storage_type() == StorageType::DEVICE, "variable_matmul {} must be on device", name);
+        TT_FATAL(t.storage_type() == ttnn::StorageType::DEVICE, "variable_matmul {} must be on device", name);
         TT_FATAL(t.buffer() != nullptr, "variable_matmul {} must be allocated in a device buffer", name);
         TT_FATAL(t.device() == device, "variable_matmul {} must reside on the same device as the input", name);
     };
@@ -209,7 +209,7 @@ VariableMatmulDeviceOperation::spec_return_value_t VariableMatmulDeviceOperation
     ttnn::Shape output_shape(in0.logical_shape());
     output_shape[-2] = M;
     output_shape[-1] = N;
-    return TensorSpec(output_shape, TensorLayout(dtype, PageConfig(Layout::TILE), memory_config));
+    return tt::tt_metal::TensorSpec(output_shape, TensorLayout(dtype, PageConfig(Layout::TILE), memory_config));
 }
 
 VariableMatmulDeviceOperation::tensor_return_value_t VariableMatmulDeviceOperation::create_output_tensors(
@@ -219,7 +219,7 @@ VariableMatmulDeviceOperation::tensor_return_value_t VariableMatmulDeviceOperati
     }
     const auto output_spec = compute_output_specs(operation_attributes, tensor_args);
     auto* device = tensor_args.input_tensor.device();
-    return create_device_tensor(output_spec, device);
+    return ttnn::create_device_tensor(output_spec, device);
 }
 
 ttsl::hash::hash_t VariableMatmulDeviceOperation::compute_program_hash(

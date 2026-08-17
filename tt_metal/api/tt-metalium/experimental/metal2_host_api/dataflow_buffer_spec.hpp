@@ -18,6 +18,7 @@
 #include <tt-metalium/face_geometry.hpp>
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>  // tt::DataFormat
+#include <tt_stl/strong_type.hpp>
 
 // ============================================================================
 //  DataflowBufferSpec API
@@ -68,8 +69,8 @@
 
 namespace tt::tt_metal::experimental {
 
-// DFBSpecName is defined in advanced_options.hpp (included above) — the lowest
-// header that references it.
+// Name identifying a DataflowBufferSpec within a ProgramSpec.
+using DFBSpecName = ttsl::StrongType<std::string, struct DFBSpecNameTag>;
 
 //------------------------------------------------
 // DataflowBufferSpec

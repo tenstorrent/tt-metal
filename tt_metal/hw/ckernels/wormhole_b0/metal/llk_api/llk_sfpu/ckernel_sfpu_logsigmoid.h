@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpu/ckernel_sfpu_converter.h"
@@ -15,14 +16,14 @@ namespace sfpu {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_logsigmoid(
-    const uint dst_index_in0,  // Index for input (x)
-    const uint dst_index_in1,  // Index for exp(-x)
-    const uint dst_index_out)  // Index for output
+    const std::uint32_t dst_index_in0,  // Index for input (x)
+    const std::uint32_t dst_index_in1,  // Index for exp(-x)
+    const std::uint32_t dst_index_out)  // Index for output
 {
     // logsigmoid(x) = -softplus(-x)
+    constexpr std::uint32_t dst_tile_size_sfpi = 32;
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        constexpr uint dst_tile_size_sfpi = 32;
-
         // Read inputs from destination registers
         sfpi::vFloat x = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
         sfpi::vFloat exp_neg_x = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];

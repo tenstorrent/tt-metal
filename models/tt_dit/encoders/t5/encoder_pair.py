@@ -93,6 +93,7 @@ class T5TokenizerEncoderPair:
             subfolder="",
             parallel_config=self._parallel_config,
             mesh_shape=tuple(self._device.shape),
+            mesh_device=self._device,
         )
 
         return model

@@ -8,6 +8,8 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/types.hpp"
 #include <tt-metalium/program_descriptors.hpp>
+#include <ttnn/metal_v2_artifacts.hpp>
+#include <cstdint>
 
 namespace ttnn::operations::moreh::moreh_softmax {
 
@@ -31,7 +33,7 @@ bool is_moreh_softmax_h_small_available(const Tensor& tensor, const DeviceComput
 
 struct MorehSoftmaxOperation {
     struct operation_attributes_t {
-        uint32_t dim{};
+        std::uint32_t dim{};
         const MorehSoftmaxOp op;
         const MorehSoftmaxOpParallelizationStrategy strategy;
         const MemoryConfig memory_config;
@@ -43,15 +45,21 @@ struct MorehSoftmaxOperation {
         const std::optional<Tensor>& output;
     };
 
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
 
-#define DEFINE_SOFTMAX_FACTORY(factory_name)                      \
-    struct factory_name {                                         \
-        static tt::tt_metal::ProgramDescriptor create_descriptor( \
-            const operation_attributes_t& operation_attributes,   \
-            const tensor_args_t& tensor_args,                     \
-            tensor_return_value_t& output);                       \
+// All five factories ported to Metal 2.0 (MetalV2FactoryConcept); each returns ProgramArtifacts
+// from create_program_artifacts. See device/softmax_*/softmax_*.cpp.
+// NOTE (w_large): the fp32_dest_acc_en path must be built at -O3 (the w_large factory sets the compute
+// KernelSpec opt_level to O3, matching legacy). At -O2 GCC fails to fold the LLK addrmod SETC16 inline-asm
+// immediate in the larger fp32 TU and JIT aborts with "impossible constraint in 'asm'"; at O3 no workaround
+// is needed. See moreh_softmax_w_large.cpp's top-of-file note.
+#define DEFINE_SOFTMAX_FACTORY(factory_name)                                      \
+    struct factory_name {                                                         \
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts( \
+            const operation_attributes_t& operation_attributes,                   \
+            const tensor_args_t& tensor_args,                                     \
+            tensor_return_value_t& output);                                       \
     };
 
     DEFINE_SOFTMAX_FACTORY(MorehSoftmaxCLargeFactory)
@@ -82,7 +90,7 @@ struct MorehSoftmaxOperation {
 namespace ttnn::prim {
 ttnn::operations::moreh::moreh_softmax::MorehSoftmaxOperation::tensor_return_value_t moreh_softmax(
     const Tensor& input_tensor,
-    uint32_t dim,
+    std::uint32_t dim,
     const std::optional<Tensor>& output_tensor,
     ttnn::operations::moreh::moreh_softmax::MorehSoftmaxOp op,
     ttnn::operations::moreh::moreh_softmax::MorehSoftmaxOpParallelizationStrategy strategy,

@@ -31,6 +31,7 @@ def run_transpose_test(
     input_mem_config=None,
     output_mem_config=None,
     dtype=ttnn.bfloat16,
+    expected_shard_orientation=None,
 ):
     """Helper to run a single transpose test with the given configs."""
     torch.manual_seed(12345)
@@ -59,6 +60,11 @@ def run_transpose_test(
             assert (
                 actual.shard_spec is not None
             ), f"Sharded output requested but result has no shard_spec (silently fell back?)"
+            if expected_shard_orientation is not None:
+                assert actual.shard_spec.orientation == expected_shard_orientation, (
+                    f"Expected output shard orientation {expected_shard_orientation}, "
+                    f"got {actual.shard_spec.orientation}"
+                )
 
     ref = x.transpose(dim0, dim1)
     got = ttnn.to_torch(result.cpu().to(ttnn.ROW_MAJOR_LAYOUT))
@@ -96,7 +102,7 @@ def _tile_align(shard_shape, layout):
     return (h, w)
 
 
-def _block_shard_config(shape, device, layout=ttnn.TILE_LAYOUT):
+def _block_shard_config(shape, device, layout=ttnn.TILE_LAYOUT, orientation=ttnn.ShardOrientation.ROW_MAJOR):
     """Create a 2x2 block-sharded MemoryConfig; shard rounded up to tile for TILE inputs."""
     compute_grid = device.compute_with_storage_grid_size()
     grid_x = min(2, compute_grid.x)
@@ -106,30 +112,39 @@ def _block_shard_config(shape, device, layout=ttnn.TILE_LAYOUT):
     shard_spec = ttnn.ShardSpec(
         ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_x - 1, grid_y - 1))}),
         shard_shape,
-        ttnn.ShardOrientation.ROW_MAJOR,
+        orientation,
     )
     return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, shard_spec)
 
 
-def _height_shard_config(shape, device, num_cores=4, buffer_type=ttnn.BufferType.L1, layout=ttnn.TILE_LAYOUT):
+def _height_shard_config(
+    shape,
+    device,
+    num_cores=4,
+    buffer_type=ttnn.BufferType.L1,
+    layout=ttnn.TILE_LAYOUT,
+    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+):
     """Create a height-sharded MemoryConfig; shard rounded up to tile for TILE inputs."""
     compute_grid = device.compute_with_storage_grid_size()
     num_cores = min(num_cores, compute_grid.x * compute_grid.y)
     shard_grid = ttnn.num_cores_to_corerangeset(num_cores, compute_grid, True)
     total_h, w = _padded_hw(shape, layout)
     shard_shape = _tile_align(((total_h + num_cores - 1) // num_cores, w), layout)
-    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, orientation)
     return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, buffer_type, shard_spec)
 
 
-def _width_shard_config(shape, device, num_cores=4, layout=ttnn.TILE_LAYOUT):
+def _width_shard_config(
+    shape, device, num_cores=4, layout=ttnn.TILE_LAYOUT, orientation=ttnn.ShardOrientation.ROW_MAJOR
+):
     """Create a width-sharded MemoryConfig; shard rounded up to tile for TILE inputs."""
     compute_grid = device.compute_with_storage_grid_size()
     num_cores = min(num_cores, compute_grid.x * compute_grid.y)
     shard_grid = ttnn.num_cores_to_corerangeset(num_cores, compute_grid, True)
     total_h, w = _padded_hw(shape, layout)
     shard_shape = _tile_align((total_h, (w + num_cores - 1) // num_cores), layout)
-    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, orientation)
     return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
 
 
@@ -345,7 +360,7 @@ def test_transpose_dram_sharded_fallback(device):
     assert_with_ulp(ref, got, ulp_threshold=1)
 
 
-# Non-native (BLOCK) sharded input → user-requested sharded output without shard_spec.
+# Non-native (BLOCK) sharded input → sharded output without shard_spec; COL_MAJOR cases cover orientation propagation.
 @pytest.mark.parametrize(
     "requested_out_layout",
     [
@@ -354,15 +369,54 @@ def test_transpose_dram_sharded_fallback(device):
         pytest.param(ttnn.TensorMemoryLayout.BLOCK_SHARDED, id="B_out"),
     ],
 )
-def test_transpose_non_native_sharded_input_to_sharded_nospec(requested_out_layout, device):
+@pytest.mark.parametrize(
+    "input_orientation",
+    [
+        pytest.param(ttnn.ShardOrientation.ROW_MAJOR, id="row_major_in"),
+        pytest.param(ttnn.ShardOrientation.COL_MAJOR, id="col_major_in"),
+    ],
+)
+def test_transpose_non_native_sharded_input_to_sharded_nospec(requested_out_layout, input_orientation, device):
     shape = (1, 1, 64, 64)
     run_transpose_test(
         shape,
         2,
         3,
         device,
-        input_mem_config=_block_shard_config(shape, device),
+        input_mem_config=_block_shard_config(shape, device, orientation=input_orientation),
         output_mem_config=ttnn.MemoryConfig(requested_out_layout, ttnn.BufferType.L1),
+        expected_shard_orientation=input_orientation,
+    )
+
+
+# Native cross-layout sharded-nospec output: preserves input shard orientation end-to-end.
+@pytest.mark.parametrize(
+    "input_factory, requested_out_layout",
+    [
+        pytest.param(
+            lambda d: _height_shard_config((1, 1, 128, 128), d, orientation=ttnn.ShardOrientation.COL_MAJOR),
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            id="col_major_height_in_width_out_nospec",
+        ),
+        pytest.param(
+            lambda d: _width_shard_config((1, 1, 128, 128), d, orientation=ttnn.ShardOrientation.COL_MAJOR),
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            id="col_major_width_in_height_out_nospec",
+        ),
+    ],
+)
+def test_transpose_native_col_major_sharded_input_to_sharded_nospec_cross_layout(
+    input_factory, requested_out_layout, device
+):
+    shape = (1, 1, 128, 128)
+    run_transpose_test(
+        shape,
+        2,
+        3,
+        device,
+        input_mem_config=input_factory(device),
+        output_mem_config=ttnn.MemoryConfig(requested_out_layout, ttnn.BufferType.L1),
+        expected_shard_orientation=ttnn.ShardOrientation.COL_MAJOR,
     )
 
 
@@ -457,6 +511,8 @@ _IRREGULAR_SHAPES = [
     ((1, 13, 47, 64), 1, 2),
     ((1, 7, 33, 96), 1, 2),
     ((3, 5, 32, 64), 0, 1),
+    # Sub-NoC-aligned stick (W·E % 16 != 0) — guards HEIGHT-sh RM native path (#47299).
+    ((1, 1, 32, 97), 2, 3),
 ]
 
 
@@ -484,6 +540,20 @@ def test_transpose_irregular_shapes_sharded(shape, dim0, dim1, shard_factory, in
         device,
         input_layout=input_layout,
         input_mem_config=shard_factory(shape, device, layout=input_layout),
+    )
+
+
+# f32 sibling for the newly-native RM HEIGHT-sh sub-NoC-aligned stick (#47299).
+def test_transpose_rm_height_sharded_sub_noc_aligned_stick_float32(device):
+    shape = (1, 1, 32, 49)  # W·E = 49·4 = 196 bytes → 196 % 16 = 4
+    run_transpose_test(
+        shape,
+        2,
+        3,
+        device,
+        input_layout=ttnn.ROW_MAJOR_LAYOUT,
+        input_mem_config=_height_shard_config(shape, device, layout=ttnn.ROW_MAJOR_LAYOUT),
+        dtype=ttnn.float32,
     )
 
 
@@ -784,3 +854,119 @@ def test_transpose_rm_block_or_width_sharded_to_sharded(shape, dim0, dim1, input
         input_mem_config=input_mem_config,
         output_mem_config=output_mem_config,
     )
+
+
+# Specless sharded output must shrink CoreRangeSet to populated shard count.
+
+
+def _assert_shrink_h_or_w(device, result_mc, n_used):
+    """Common shrink assertion for H/W: exact core count + row-wise CoreRangeSet."""
+    compute_grid = device.compute_with_storage_grid_size()
+    if compute_grid.x * compute_grid.y <= n_used:
+        pytest.skip(f"Device grid too small to observe shrink (need > {n_used} cores)")
+    grid = result_mc.shard_spec.grid
+    assert grid.num_cores() == n_used, f"Expected {n_used} populated cores, got {grid.num_cores()}"
+    expected = ttnn.num_cores_to_corerangeset(n_used, compute_grid, True)
+    assert grid == expected, f"Expected row-wise CoreRangeSet {expected}, got {grid}"
+
+
+def test_transpose_specless_sharded_output_grid_shrinks_height(device):
+    """HEIGHT_SHARDED no-spec output: expect ceil(tensor_h / shard_h) populated cores, not all_cores.
+    shape=(2,2,32,64) WH → out=(2,2,64,32); tensor_h=256, shard_h=32 → 8 populated cores."""
+    shape = (2, 2, 32, 64)
+    out_mc = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1)
+    torch.manual_seed(12345)
+    x = torch.rand(shape, dtype=torch.bfloat16)
+    ttnn_in = ttnn.from_torch(
+        x, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=L1_INTERLEAVED
+    )
+    result = ttnn.transpose(ttnn_in, 2, 3, memory_config=out_mc)
+    _assert_shrink_h_or_w(device, result.memory_config(), n_used=8)
+    ref = x.transpose(2, 3)
+    got = ttnn.to_torch(result.cpu().to(ttnn.ROW_MAJOR_LAYOUT))
+    assert_with_ulp(ref, got, ulp_threshold=0)
+
+
+def test_transpose_specless_sharded_output_grid_shrinks_width(device):
+    """WIDTH_SHARDED no-spec output: expect ceil(tensor_w / shard_w) populated cores.
+    shape=(2,2,64,32) WH → out=(2,2,32,64); tensor_w=64, shard_w=32 → 2 populated cores."""
+    shape = (2, 2, 64, 32)
+    out_mc = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1)
+    torch.manual_seed(12345)
+    x = torch.rand(shape, dtype=torch.bfloat16)
+    ttnn_in = ttnn.from_torch(
+        x, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=L1_INTERLEAVED
+    )
+    result = ttnn.transpose(ttnn_in, 2, 3, memory_config=out_mc)
+    _assert_shrink_h_or_w(device, result.memory_config(), n_used=2)
+    ref = x.transpose(2, 3)
+    got = ttnn.to_torch(result.cpu().to(ttnn.ROW_MAJOR_LAYOUT))
+    assert_with_ulp(ref, got, ulp_threshold=0)
+
+
+def test_transpose_specless_sharded_output_grid_shrinks_block(device):
+    """BLOCK_SHARDED no-spec output: expect rectangular n_rows x n_cols populated grid.
+    shape=(1,1,64,64) WH → out=(1,1,64,64); shard=32x32 → 2x2 rectangle = 4 cores."""
+    shape = (1, 1, 64, 64)
+    out_mc = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1)
+    compute_grid = device.compute_with_storage_grid_size()
+    if compute_grid.x < 2 or compute_grid.y < 2:
+        pytest.skip("Device grid too small for 2x2 BLOCK shrink test")
+    torch.manual_seed(12345)
+    x = torch.rand(shape, dtype=torch.bfloat16)
+    ttnn_in = ttnn.from_torch(
+        x, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=L1_INTERLEAVED
+    )
+    result = ttnn.transpose(ttnn_in, 2, 3, memory_config=out_mc)
+    grid = result.memory_config().shard_spec.grid
+    assert grid.num_cores() == 4, f"Expected 2x2 = 4 populated cores, got {grid.num_cores()}"
+    expected = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
+    assert grid == expected, f"Expected rectangular BLOCK grid {expected}, got {grid}"
+    ref = x.transpose(2, 3)
+    got = ttnn.to_torch(result.cpu().to(ttnn.ROW_MAJOR_LAYOUT))
+    assert_with_ulp(ref, got, ulp_threshold=0)
+
+
+def test_transpose_specless_sharded_output_grid_shrinks_block_col_major(device):
+    """BLOCK+COL_MAJOR shrink (WH 8x8): orientation-aware divisors → shard=(32,32), n_h=2, n_w=3 → 2x3=6 cores."""
+    shape = (1, 1, 96, 64)
+    compute_grid = device.compute_with_storage_grid_size()
+    if compute_grid.x < 2 or compute_grid.y < 3:
+        pytest.skip("Device grid too small for COL_MAJOR 2x3 BLOCK shrink test")
+    in_mc = _block_shard_config(shape, device, orientation=ttnn.ShardOrientation.COL_MAJOR)
+    out_mc = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1)
+    torch.manual_seed(12345)
+    x = torch.rand(shape, dtype=torch.bfloat16)
+    ttnn_in = ttnn.from_torch(x, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=in_mc)
+    result = ttnn.transpose(ttnn_in, 2, 3, memory_config=out_mc)
+    ss = result.memory_config().shard_spec
+    assert ss.orientation == ttnn.ShardOrientation.COL_MAJOR, f"Expected COL_MAJOR orientation, got {ss.orientation}"
+    assert ss.grid.num_cores() == 6, f"Expected 2x3 = 6 populated cores, got {ss.grid.num_cores()}"
+    expected = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 2))})
+    assert ss.grid == expected, f"Expected COL_MAJOR rect {expected} (phys_x=n_h=2, phys_y=n_w=3), got {ss.grid}"
+    ref = x.transpose(2, 3)
+    got = ttnn.to_torch(result.cpu().to(ttnn.ROW_MAJOR_LAYOUT))
+    assert_with_ulp(ref, got, ulp_threshold=0)
+
+
+def test_transpose_specless_sharded_output_grid_shrinks_block_col_major_non_square(device):
+    """BLOCK+COL_MAJOR non-square (BH p150b 13x10) — orientation-aware divisors → shard=(32,64), 10x7=70 cores."""
+    compute_grid = device.compute_with_storage_grid_size()
+    if compute_grid.x == compute_grid.y or compute_grid.x < 13 or compute_grid.y < 10:
+        pytest.skip(f"needs non-square grid >= 13x10 (have {compute_grid.x}x{compute_grid.y})")
+    shape = (1, 1, 416, 320)
+    in_mc = _block_shard_config(shape, device, orientation=ttnn.ShardOrientation.COL_MAJOR)
+    out_mc = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1)
+    torch.manual_seed(12345)
+    x = torch.rand(shape, dtype=torch.bfloat16)
+    ttnn_in = ttnn.from_torch(x, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=in_mc)
+    result = ttnn.transpose(ttnn_in, 2, 3, memory_config=out_mc)
+    ss = result.memory_config().shard_spec
+    assert ss.orientation == ttnn.ShardOrientation.COL_MAJOR, f"Expected COL_MAJOR, got {ss.orientation}"
+    assert ss.shape[0] == 32 and ss.shape[1] == 64, f"Expected shard=(32,64), got ({ss.shape[0]},{ss.shape[1]})"
+    assert ss.grid.num_cores() == 70, f"Expected 10x7=70 cores, got {ss.grid.num_cores()}"
+    expected = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(9, 6))})
+    assert ss.grid == expected, f"Expected COL_MAJOR rect (0,0)->(9,6), got {ss.grid}"
+    ref = x.transpose(2, 3)
+    got = ttnn.to_torch(result.cpu().to(ttnn.ROW_MAJOR_LAYOUT))
+    assert_with_ulp(ref, got, ulp_threshold=0)

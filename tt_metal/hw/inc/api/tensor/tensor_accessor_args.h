@@ -75,13 +75,22 @@ struct TensorAccessorArgs {
         }
     }();
 
-    static constexpr uint32_t NumBanksCT = [] {
+    // Raw compile-time num_banks word: the bank count in the low bits and the shard-contiguous flag in the top bit
+    // (see arg_config.hpp). NumBanksCT / is_shard_contiguous are the unpacked views used everywhere else.
+    static constexpr uint32_t NumBanksRawCT = [] {
         if constexpr (!is_sharded || num_banks_is_crta) {
             return 0;
         } else {
             return get_compile_time_arg_val(NumBanksCTAOffset);
         }
     }();
+
+    static constexpr uint32_t NumBanksCT = tensor_accessor::unpack_num_banks(NumBanksRawCT);
+
+    // Shard-contiguous distribution (CONTIGUOUS_1D) vs. round-robin. When num_banks is compile-time this is read from
+    // the top bit of the compile-time num_banks word; when num_banks is runtime, the live value is read from the
+    // runtime num_banks word instead (see resolve_shard_contiguous()). Carries no extra args/slots.
+    static constexpr bool is_shard_contiguous = tensor_accessor::unpack_is_shard_contiguous(NumBanksRawCT);
 
     static constexpr uint32_t PhysicalNumBanksCT = (NumBanksCT + 1) / 2;
 
@@ -142,7 +151,20 @@ public:
         if constexpr (!num_banks_is_crta) {
             return NumBanksCT;
         } else {
-            return get_common_arg_val<uint32_t>(num_banks_crta_offset());
+            // The runtime num_banks word packs the shard-contiguous flag in its top bit; strip it off.
+            return tensor_accessor::unpack_num_banks(get_common_arg_val<uint32_t>(num_banks_crta_offset()));
+        }
+    }
+
+    // Whether shards are distributed contiguously (shard-contiguous, CONTIGUOUS_1D) vs. round-robin. When num_banks is
+    // compile-time this is the constexpr is_shard_contiguous (top bit of the compile-time num_banks word); when
+    // num_banks is runtime it is read from the top bit of the runtime num_banks word, so it can vary per dispatch
+    // without recompiling.
+    constexpr bool resolve_shard_contiguous() const {
+        if constexpr (!num_banks_is_crta) {
+            return is_shard_contiguous;
+        } else {
+            return tensor_accessor::unpack_is_shard_contiguous(get_common_arg_val<uint32_t>(num_banks_crta_offset()));
         }
     }
 

@@ -1,4 +1,5 @@
 set(HW_JIT_API_HEADERS
+    inc/experimental/blaze_rt_arg.h
     inc/api/alignment.h
     inc/api/compile_time_args.h
     inc/api/remote_circular_buffer.h
@@ -28,6 +29,7 @@ set(HW_JIT_API_HEADERS
     inc/api/tensor/shard_pages_address_iterator.h
     inc/api/tensor/pages_address_iterator.h
     inc/api/tensor/page.h
+    inc/api/scratchpad.h
     inc/api/compute/compute_kernel_api.h
     inc/api/compute/add_int_sfpu.h
     inc/api/compute/atan2.h
@@ -90,6 +92,7 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/eltwise_unary/sfpu_int_sum.h
     inc/api/compute/eltwise_unary/sfpu_split_includes.h
     inc/api/compute/eltwise_unary/shift.h
+    inc/api/compute/eltwise_unary/softcap.h
     inc/api/compute/eltwise_unary/softplus.h
     inc/api/compute/eltwise_unary/sqrt.h
     inc/api/compute/eltwise_unary/tanh_derivative.h
@@ -98,9 +101,15 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/eltwise_unary/typecast.h
     inc/api/compute/eltwise_unary/where.h
     inc/api/compute/ema.h
+    inc/api/compute/experimental/add_rsqrt.h
+    inc/api/compute/experimental/eltwise_mul_scalar.h
     inc/api/compute/experimental/fast_untilize.h
     inc/api/compute/experimental/mul_reduce_scalar.h
+    inc/api/compute/experimental/pack_block_uninit.h
+    inc/api/compute/experimental/rmsnorm.h
+    inc/api/compute/experimental/rope_sfpu.h
     inc/api/compute/experimental/semaphore.h
+    inc/api/compute/experimental/sum_reduce_scalar.h
     inc/api/compute/binary_fmod.h
     inc/api/compute/gcd.h
     inc/api/compute/isclose.h
@@ -122,7 +131,9 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/sentinel/compute_kernel_sentinel.h
     inc/api/compute/sentinel/sentinel_core.h
     inc/api/compute/sentinel/testing_spy.h
+    inc/api/compute/situ_glu.h
     inc/api/compute/softmax.h
+    inc/api/compute/src_order.h
     inc/api/compute/sub_int_sfpu.h
     inc/api/compute/tile_move_copy.h
     inc/api/compute/tilize.h
@@ -137,11 +148,14 @@ set(HW_JIT_API_HEADERS
     inc/api/dataflow/noc.h
     inc/api/dataflow/endpoints.h
     inc/api/dataflow/circular_buffer.h
+    inc/api/dataflow/cross_node_dfb.h
     inc/api/dataflow/dataflow_buffer.h
     inc/experimental/kernel_args.h
+    inc/experimental/blaze_named_args.h
     inc/api/dataflow/noc_semaphore.h
     inc/api/core_local_mem.h
     inc/api/tensor/noc_traits.h
+    inc/hostdev/cross_node_dfb_constants.h
     inc/hostdev/dev_msgs.h
     inc/hostdev/device_print_common.h
     inc/hostdev/device_print_structures.h
@@ -154,6 +168,8 @@ set(HW_JIT_API_HEADERS
     inc/internal/bit_utils.h
     inc/internal/circular_buffer_interface.h
     inc/internal/circular_buffer_init.h
+    inc/internal/cross_node_dfb_init.h
+    inc/internal/cross_node_dfb_interface.h
     inc/internal/firmware_common.h
     inc/internal/mod_div_lib.h
     inc/internal/risc_attribs.h

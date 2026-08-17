@@ -127,7 +127,7 @@ void MorehLayerNormBackwardGammaBetaGradOperation::validate_on_program_cache_mis
 MorehLayerNormBackwardGammaBetaGradOperation::spec_return_value_t
 MorehLayerNormBackwardGammaBetaGradOperation::compute_output_specs(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
-    std::vector<std::optional<TensorSpec>> result(2);
+    std::vector<std::optional<tt::tt_metal::TensorSpec>> result(2);
     if (tensor_args.gamma_grad.has_value()) {
         result[0] = tensor_args.gamma_grad->tensor_spec();
     }

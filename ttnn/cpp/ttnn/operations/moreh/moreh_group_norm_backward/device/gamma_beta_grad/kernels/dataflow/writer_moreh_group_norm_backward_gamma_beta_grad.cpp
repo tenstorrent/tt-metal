@@ -4,7 +4,7 @@
 
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
@@ -43,11 +43,11 @@ void kernel_main() {
     constexpr uint32_t TILE_W = 32;
 
     Noc noc;
-    CircularBuffer cb_gamma_grad(cb_id_gamma_grad);
-    CircularBuffer cb_beta_grad(cb_id_beta_grad);
+    DataflowBuffer dfb_gamma_grad(cb_id_gamma_grad);
+    DataflowBuffer dfb_beta_grad(cb_id_beta_grad);
 
-    const auto gamma_grad_l1_read_ptr = cb_gamma_grad.get_read_ptr();
-    const auto beta_grad_l1_read_ptr = cb_beta_grad.get_read_ptr();
+    const auto gamma_grad_l1_read_ptr = dfb_gamma_grad.get_read_ptr();
+    const auto beta_grad_l1_read_ptr = dfb_beta_grad.get_read_ptr();
 
     for (uint32_t outer_idx = 0; outer_idx < num_channels_per_core; ++outer_idx) {
         auto c_idx = outer_idx + (tile_offset / HtWt);
@@ -61,39 +61,39 @@ void kernel_main() {
         if (gamma_grad_has_value) {
             // gamma_grad (1, 1, 1, C)
             const auto gamma_grad_dtype_bytes = gamma_grad_tile_bytes / (TILE_H * TILE_W);
-            cb_gamma_grad.wait_front(onetile);
+            dfb_gamma_grad.wait_front(onetile);
             if (tilized_gamma_beta_idx_in_tile != 0) {
                 CoreLocalMem<uint16_t> gamma_grad_ptr(gamma_grad_l1_read_ptr);
                 gamma_grad_ptr[tilized_gamma_beta_idx_in_tile] = gamma_grad_ptr[0];
             }
             noc.async_write(
-                cb_gamma_grad,
+                dfb_gamma_grad,
                 gamma_grad_addrg,
                 gamma_grad_dtype_bytes,
                 {.offset_bytes = tilized_gamma_beta_idx_in_tile * gamma_grad_dtype_bytes},
                 {.page_id = gamma_beta_tile_idx,
                  .offset_bytes = tilized_gamma_beta_idx_in_tile * gamma_grad_dtype_bytes});
             noc.async_write_barrier();
-            cb_gamma_grad.pop_front(onetile);
+            dfb_gamma_grad.pop_front(onetile);
         }
 
         if (beta_grad_has_value) {
             // beta_grad (1, 1, 1, C)
             const auto beta_grad_dtype_bytes = beta_grad_tile_bytes / (TILE_H * TILE_W);
-            cb_beta_grad.wait_front(onetile);
+            dfb_beta_grad.wait_front(onetile);
             if (tilized_gamma_beta_idx_in_tile != 0) {
                 CoreLocalMem<uint16_t> beta_grad_ptr(beta_grad_l1_read_ptr);
                 beta_grad_ptr[tilized_gamma_beta_idx_in_tile] = beta_grad_ptr[0];
             }
             noc.async_write(
-                cb_beta_grad,
+                dfb_beta_grad,
                 beta_grad_addrg,
                 beta_grad_dtype_bytes,
                 {.offset_bytes = tilized_gamma_beta_idx_in_tile * beta_grad_dtype_bytes},
                 {.page_id = gamma_beta_tile_idx,
                  .offset_bytes = tilized_gamma_beta_idx_in_tile * beta_grad_dtype_bytes});
             noc.async_write_barrier();
-            cb_beta_grad.pop_front(onetile);
+            dfb_beta_grad.pop_front(onetile);
         }
 
     }  // outer_idx loop

@@ -406,26 +406,43 @@ class TTMoEGate:
 
     def _derive_program_config(self) -> dict:
         """Derive the 2D-mcast blocking for the gate matmul (``batch×hidden @ hidden×padded_experts``) from
-        its shape + the device grid. Reproduces the previously hand-tuned per-model configs exactly.
+        its shape + the device grid. Matches the previously hand-tuned per-model configs, except the
+        256-expert gate now uses ``per_core_N=1`` instead of ``2`` (see the ``per_core_N`` bullet).
 
           ``M_tiles = ceil(batch/32)`` (=1 for the batch-32 decode gate); ``K_tiles = hidden/32``;
           ``N_tiles = padded_experts/32`` (256 experts → 8, the 512-combine path → 16).
             • ``in0_block_w`` = largest divisor of ``K_tiles`` that is ≤ 32 (the widest K-block within the
               32-tile cap; a non-1024-multiple hidden gives e.g. 20 / 22 / 30 instead of 32).
-            • ``per_core_N`` = smallest divisor ≥ 2 of ``N_tiles`` that fits the grid
-              (``N_tiles / per_core_N ≤ grid.x``): 2 on an 8-wide grid, growing to 4 on a narrower one.
+            • ``per_core_N`` = smallest divisor ≥ 1 of ``N_tiles`` that fits the grid
+              (``N_tiles / per_core_N ≤ grid.x``) — i.e. spread N across as many cores as the grid holds.
+              256 experts (``N_tiles=8``) on an 8-wide grid → ``1`` (8 N-cores); the 512-combine path
+              (``N_tiles=16``) → ``2`` (16 tiles can't map to 16 cores, so 8). NOTE: ``per_core_N=1``
+              measured faster than ``2`` for the tiny (``M_tiles=1``) 256 gate.
             • ``out_block_{h,w}`` = ``per_core_{M,N}``; ``out_subblock_{h,w}`` = largest factors with
-              ``h * w ≤ 8`` (the DEST half-register tile cap).
+              ``h * w ≤ dst_subblock_cap`` — the DEST subblock budget = HALF of the DEST tile capacity
+              (MATH/PACK double-buffer): 8 tiles for bf16 accumulation, but **4 for fp32 accumulation**
+              (an fp32 tile takes 2× the DEST space, so half as many fit). This matches ttnn's own
+              ``get_subblock_sizes`` rule (``h*w ≤ 4`` iff ``fp32_dest_acc_en``). The gate DEFAULTS to fp32
+              accumulation (see ``_matmul_compute_config``), so the cap is normally 4.
         """
+        # DEST subblock tile budget: fp32 accumulation halves the usable DEST (8->4 tiles). Read the flag off
+        # the already-built compute config (None = ttnn default = bf16 accumulate). Must match the cap ttnn's
+        # own auto-derivation enforces, else a hand-built subblock could exceed the fp32 DEST budget.
+        fp32_dest_acc_en = bool(getattr(self.compute_kernel_config, "fp32_dest_acc_en", False))
+        dst_subblock_cap = 4 if fp32_dest_acc_en else 8
         batch = self.config.batch_per_device or 32
         m_tiles = (batch + 31) // 32
         k_tiles = self.hidden_size // 32
         n_tiles = self._padded_experts // 32
         grid_x = self._grid.x
         in0_block_w = max(d for d in range(1, 33) if k_tiles % d == 0)
-        per_core_n = next((d for d in range(2, n_tiles + 1) if n_tiles % d == 0 and n_tiles // d <= grid_x), n_tiles)
-        out_subblock_w = next((w for w in range(min(per_core_n, 8), 0, -1) if per_core_n % w == 0), 1)
-        out_subblock_h = next((h for h in range(m_tiles, 0, -1) if m_tiles % h == 0 and h * out_subblock_w <= 8), 1)
+        per_core_n = next((d for d in range(1, n_tiles + 1) if n_tiles % d == 0 and n_tiles // d <= grid_x), n_tiles)
+        # out_subblock_w capped at dst_subblock_cap too: out_subblock_h can be 1, so w alone can equal the
+        # h*w budget — without the cap a wide per_core_n (e.g. 8) would pick w=8,h=1 = 8 tiles, busting fp32's 4.
+        out_subblock_w = next((w for w in range(min(per_core_n, dst_subblock_cap), 0, -1) if per_core_n % w == 0), 1)
+        out_subblock_h = next(
+            (h for h in range(m_tiles, 0, -1) if m_tiles % h == 0 and h * out_subblock_w <= dst_subblock_cap), 1
+        )
         return {
             "in0_block_w": in0_block_w,
             "out_subblock_h": out_subblock_h,

@@ -197,7 +197,7 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
     }
 
     tt::tt_metal::distributed::Synchronize(
-        mesh_device, std::nullopt, {});  // interaction with subdevice needs to be investigated
+        *mesh_device, std::nullopt, {});  // interaction with subdevice needs to be investigated
 
     for (const auto& coord : tensor_coords.coords()) {
         auto cached_program = create_at(
@@ -495,6 +495,8 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
 
     auto fabric_max_packet_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
     const auto l1_alignment = tt::tt_metal::hal::get_l1_alignment();
+    const auto dram_alignment = tt::tt_metal::hal::get_dram_alignment();
+    const uint32_t payload_alignment = std::max(l1_alignment, dram_alignment);
 
     // New mapping format: [devices, experts]
     // Each page is one device's view. Kernels only need to read 1 page (source device's mapping row).
@@ -710,6 +712,9 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
     std::vector<CoreCoord> termination_master_virtual_cores;
     std::vector<uint32_t> termination_master_semaphore_ids;
     if (use_mux) {
+        termination_master_cores.reserve(num_links);
+        termination_master_virtual_cores.reserve(num_links);
+        termination_master_semaphore_ids.reserve(num_links);
         for (uint32_t link = 0; link < num_links; link++) {
             uint32_t master_worker_idx = link * workers_per_link;  // First worker on this link
             const auto& master_core = sender_cores[master_worker_idx];
@@ -773,9 +778,11 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
 
             // Calculate payload split parameters
             // Worker 0 sends first portion, worker 1 sends second portion, etc.
+            // Round up chunks to aligned addresses, final worker gets remainder.
             uint32_t full_payload_size = input_page_size;
-            uint32_t payload_size = full_payload_size / workers_per_link;
-            uint32_t payload_offset = worker_idx_within_link * payload_size;
+            uint32_t payload_chunk = tt::round_up(tt::div_up(full_payload_size, workers_per_link), payload_alignment);
+            uint32_t payload_offset = std::min(worker_idx_within_link * payload_chunk, full_payload_size);
+            uint32_t payload_size = std::min(payload_chunk, full_payload_size - payload_offset);
             // Primary worker (worker 0) sends metadata + atomic_inc and is also termination master
             bool is_primary_payload_worker = (worker_idx_within_link == 0);
 

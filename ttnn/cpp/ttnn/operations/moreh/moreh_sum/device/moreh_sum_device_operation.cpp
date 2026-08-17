@@ -85,7 +85,7 @@ MorehSumOperation::spec_return_value_t MorehSumOperation::compute_output_specs(
         // e.g. (2, 64, 64) with dim 0 to be (1, 64, 64)
         output_shape[operation_attributes.dim] = 1;
     } else {
-        ttnn::SmallVector<uint32_t> shape;
+        ttsl::SmallVector<uint32_t> shape;
 
         // e.g. (2, 64, 64) with dim 1 to be (2, 1[32], 64)
         // e.g. (2, 64, 64) with dim 0 to be (64, 64)
@@ -102,7 +102,7 @@ MorehSumOperation::spec_return_value_t MorehSumOperation::compute_output_specs(
     }
 
     log_debug(tt::LogOp, "{}:{} output_shape {}", __func__, __LINE__, output_shape);
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_shape,
         TensorLayout(
             tensor_args.input.dtype(), PageConfig(tensor_args.input.layout()), operation_attributes.memory_config));

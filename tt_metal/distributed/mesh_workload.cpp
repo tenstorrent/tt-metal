@@ -86,6 +86,7 @@ MeshWorkloadImpl::MeshWorkloadImpl() : id(get_next_counter()) {
 MeshWorkloadImpl::~MeshWorkloadImpl() { Inspector::mesh_workload_destroyed(this); }
 
 void MeshWorkloadImpl::add_program(const MeshCoordinateRange& device_range, Program&& program) {
+    TT_FATAL(!is_finalized(), "Cannot add programs to a MeshWorkload after it has been finalized.");
     auto potential_intersection = find_intersection(programs_, device_range);
     TT_FATAL(
         !potential_intersection,
@@ -98,13 +99,7 @@ void MeshWorkloadImpl::add_program(const MeshCoordinateRange& device_range, Prog
 
 void MeshWorkloadImpl::compile_program(const MeshCoordinateRange& device_range, MeshDevice* mesh_device) {
     auto& program = programs_.at(device_range);
-    program.impl().compile(mesh_device);
-    program.impl().allocate_circular_buffers(mesh_device);
-    program.impl().validate_circular_buffer_core_ranges(mesh_device);
-    program.impl().validate_circular_buffer_region(mesh_device);
-    program.impl().finalize_dataflow_buffer_configs();
-    program.impl().allocate_dataflow_buffers(mesh_device);
-    program.impl().validate_dataflow_buffer_region(mesh_device);
+    program.impl().compile_and_allocate(mesh_device, false);
 }
 
 void MeshWorkloadImpl::compile(MeshDevice* mesh_device) {
@@ -137,7 +132,7 @@ void MeshWorkloadImpl::load_binaries(MeshCommandQueue& mesh_cq) {
             "Reusing MeshWorkloads across MeshDevices is currently not supported.");
         TT_FATAL(
             program_binary_status_.at(mesh_device->id()) == ProgramBinaryStatus::Committed,
-            "Expected Program Biinaries to be committed to DRAM.");
+            "Expected Program Binaries to be committed to DRAM.");
     } else {
         // Allocate kernel binary buffers of max size across all devices, to ensure we have lock step allocation.
         uint32_t max_kernel_bin_buf_size = 0;
@@ -217,8 +212,7 @@ void MeshWorkloadImpl::generate_dispatch_commands(MeshCommandQueue& mesh_cq) {
     // These commands will be updated based on MeshDevice state when the
     // workload is enqueued.
     auto* mesh_device = mesh_cq.device();
-    auto dispatch_core_type = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
-    uint32_t prefetcher_cache_sizeB = MetalContext::instance().dispatch_mem_map(dispatch_core_type).ringbuffer_size();
+    uint32_t prefetcher_cache_sizeB = MetalContext::instance().dispatch_mem_map().ringbuffer_size();
 
     bool use_prefetcher_cache =
         this->max_program_kernels_sizeB_ and this->max_program_kernels_sizeB_ <= prefetcher_cache_sizeB;
@@ -414,7 +408,7 @@ void MeshWorkloadImpl::finalize_offsets(MeshDevice* mesh_device) {
     for (auto& [_, program] : programs_) {
         program_impls.push_back(&program.impl());
     }
-    tt::stl::Span<tt::tt_metal::detail::ProgramImpl*> programs(program_impls.data(), program_impls.size());
+    ttsl::Span<tt::tt_metal::detail::ProgramImpl*> programs(program_impls.data(), program_impls.size());
 
     this->max_program_kernels_sizeB_ = tt::tt_metal::detail::ProgramImpl::finalize_program_offsets(
         extract_context_id(mesh_device),

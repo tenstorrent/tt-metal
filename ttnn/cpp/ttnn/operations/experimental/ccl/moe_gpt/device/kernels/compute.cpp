@@ -13,6 +13,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/fill.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/dataflow/circular_buffer.h"
 
 // Need these headers for running SFPU on PACK thread
 #ifdef TRISC_PACK
@@ -52,26 +53,39 @@ void kernel_main() {
     const auto ring_neighbor_physical_x = get_arg_val<uint32_t>(argidx++);
     const auto ring_neighbor_physical_y = get_arg_val<uint32_t>(argidx++);
 
-    // CBs
-    constexpr auto cb_r2c_w0_w1 = tt::CBIndex::c_0;
+    // CB ids
+    constexpr auto cb_r2c_w0_w1_id = tt::CBIndex::c_0;
 #ifdef TILIZE_FUSED
-    constexpr auto cb_s2c_in = tt::CBIndex::c_16;  // shared tilize→matmul CB
-    constexpr auto cb_w2c_md = tt::CBIndex::c_5;   // metadata bridge from dm1
+    constexpr auto cb_s2c_in_id = tt::CBIndex::c_16;  // shared tilize→matmul CB
+    constexpr auto cb_w2c_md_id = tt::CBIndex::c_5;   // metadata bridge from dm1
 #else
-    constexpr auto cb_s2c_in = tt::CBIndex::c_1;
+    constexpr auto cb_s2c_in_id = tt::CBIndex::c_1;
 #endif
-    constexpr auto cb_c2w_rdy = tt::CBIndex::c_2;
-    constexpr auto cb_w2c_rdy = tt::CBIndex::c_3;
-    constexpr auto cb_s2c_in2 = tt::CBIndex::c_4;
-    constexpr auto cb_c2c_ones_tile = tt::CBIndex::c_6;
+    constexpr auto cb_c2w_rdy_id = tt::CBIndex::c_2;
+    constexpr auto cb_w2c_rdy_id = tt::CBIndex::c_3;
+    constexpr auto cb_s2c_in2_id = tt::CBIndex::c_4;
+    constexpr auto cb_c2c_ones_tile_id = tt::CBIndex::c_6;
 
     // CB Aliases
-    constexpr auto cb_r2c_w2 = tt::CBIndex::c_0;
+    constexpr auto cb_r2c_w2_id = tt::CBIndex::c_0;
 #ifdef TILIZE_FUSED
-    constexpr auto cb_c2s_out = tt::CBIndex::c_14;  // untilized ROW_MAJOR output
+    constexpr auto cb_c2s_out_id = tt::CBIndex::c_14;  // untilized ROW_MAJOR output
 #else
-    constexpr auto cb_c2s_out = tt::CBIndex::c_1;
+    constexpr auto cb_c2s_out_id = tt::CBIndex::c_1;
 #endif
+
+    // CircularBuffer typed wrappers
+    CircularBuffer cb_r2c_w0_w1(cb_r2c_w0_w1_id);
+    CircularBuffer cb_s2c_in(cb_s2c_in_id);
+#ifdef TILIZE_FUSED
+    CircularBuffer cb_w2c_md(cb_w2c_md_id);
+#endif
+    CircularBuffer cb_c2w_rdy(cb_c2w_rdy_id);
+    CircularBuffer cb_w2c_rdy(cb_w2c_rdy_id);
+    CircularBuffer cb_s2c_in2(cb_s2c_in2_id);
+    CircularBuffer cb_c2c_ones_tile(cb_c2c_ones_tile_id);
+    CircularBuffer cb_r2c_w2(cb_r2c_w2_id);
+    CircularBuffer cb_c2s_out(cb_c2s_out_id);
 
     // Constants for MoEGPT
     // GPT-OSS: K=2880 -> 90 tiles height, N=2880 -> 90 tiles
@@ -119,31 +133,31 @@ void kernel_main() {
     // Compute
     //-------------------------------------------------------------------------
     // Create a ones-tile for bias addition (matmul with ones × bias_row = bias)
-    unary_op_init_common(cb_c2c_ones_tile, cb_c2c_ones_tile);
+    unary_op_init_common(cb_c2c_ones_tile_id, cb_c2c_ones_tile_id);
     tile_regs_acquire();
     fill_tile_init();
     constexpr uint32_t dst0 = 0;
     fill_tile(dst0, 1.f);
     tile_regs_commit();
     tile_regs_wait();
-    cb_reserve_back(cb_c2c_ones_tile, 1);
-    pack_tile(dst0, cb_c2c_ones_tile);
+    cb_c2c_ones_tile.reserve_back(1);
+    pack_tile(dst0, cb_c2c_ones_tile_id);
     tile_regs_release();
-    cb_push_back(cb_c2c_ones_tile, 1);
+    cb_c2c_ones_tile.push_back(1);
 
-    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_s2c_in, cb_r2c_w0_w1, cb_s2c_in2);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_s2c_in_id, cb_r2c_w0_w1_id, cb_s2c_in2_id);
 
     // Pack is always configured to Float16_b
-    pack_reconfig_data_format(cb_s2c_in2);
+    pack_reconfig_data_format(cb_s2c_in2_id);
 
     // Unpacker B is for input/activation and eltwise inputs, so Float16_b
-    reconfig_data_format_srcb(cb_s2c_in);
+    reconfig_data_format_srcb(cb_s2c_in_id);
 
     // Unpacker A is for W0,W1 and W2, so Bf4_b
-    reconfig_data_format_srca(cb_r2c_w0_w1);
+    reconfig_data_format_srca(cb_r2c_w0_w1_id);
 
     // Initialize matmul for W0
-    matmul_block_init(cb_s2c_in, cb_r2c_w0_w1, /*transpose=*/false, /*ct_dim=*/4, /*rt_dim=*/1, /*kt_dim=*/1);
+    matmul_block_init(cb_s2c_in_id, cb_r2c_w0_w1_id, /*transpose=*/false, /*ct_dim=*/4, /*rt_dim=*/1, /*kt_dim=*/1);
 
     // Initialize SFPU for GPT-OSS SwiGLU activation
     PACK((llk_math_eltwise_binary_sfpu_swiglu_init()));
@@ -160,9 +174,9 @@ void kernel_main() {
     // Receive per-expert token counts + chunk_ready semaphore from dm1 via cb_w2c_md
     //   [0..num_experts-1] = raw token counts per expert
     //   [num_experts]      = matmul_chunk_ready_semaphore address
-    cb_wait_front(cb_w2c_md, 2);
+    cb_w2c_md.wait_front(2);
     volatile tt_l1_ptr uint32_t* cb_w2c_md_read_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_tile_address(cb_w2c_md, 0));
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_tile_address(cb_w2c_md_id, 0));
 
     uint32_t NUM_CHUNKS_PER_EXPERT[num_experts];
     for (uint32_t e = 0; e < num_experts; ++e) {
@@ -170,7 +184,7 @@ void kernel_main() {
         NUM_CHUNKS_PER_EXPERT[e] = (num_tokens + tokens_per_chunk - 1) / tokens_per_chunk;
     }
     uint32_t chunk_ready_sem_addr = cb_w2c_md_read_ptr[num_experts];
-    cb_pop_front(cb_w2c_md, 2);
+    cb_w2c_md.pop_front(2);
 
     // Unified chunk loop: SwiGLU → A2A (via dm1) → W2 matmul → untilize
     // Full pipeline completes per chunk, matching the deepseek moe_compute pattern.
@@ -189,6 +203,9 @@ void kernel_main() {
         for (uint32_t chunk = 0; chunk < num_expert_chunks; ++chunk) {
             // Wait for tilize drain to deliver this chunk via multicast
             UNPACK(({
+                // Device 2.0 migration: legacy primitive retained: chunk_ready_sem_addr is a runtime-resolved L1
+                // semaphore address (delivered via cb_w2c_md), not a per-program id. Semaphore<> binds to per-program
+                // ids via get_semaphore<>(id), so it cannot wrap a resolved address
                 noc_semaphore_wait_min(chunk_ready_sem_ptr, chunk_ready_wait_value);
                 chunk_ready_wait_value++;
             }));
@@ -203,7 +220,7 @@ void kernel_main() {
                 tile_regs_acquire();
                 uint32_t k_tracker = 0;
                 for (uint32_t block_id = 0; block_id < w0_w1_blocks_per_two_elt_tile; ++block_id) {
-                    cb_wait_front(cb_r2c_w0_w1, w0_w1_tiles_per_block);
+                    cb_r2c_w0_w1.wait_front(w0_w1_tiles_per_block);
                     uint32_t last_k_index = 0;
                     for (uint32_t k = 0; k < w0_w1_tiles_per_block; k += 4) {
                         if (k_tracker == num_w0_w1_tiles_h) {
@@ -211,8 +228,8 @@ void kernel_main() {
                             break;
                         }
                         matmul_block(
-                            cb_s2c_in,
-                            cb_r2c_w0_w1,
+                            cb_s2c_in_id,
+                            cb_r2c_w0_w1_id,
                             in0_index++,
                             /*in1_index=*/k,
                             /*idst=*/0,
@@ -225,8 +242,8 @@ void kernel_main() {
                     if (k_tracker == num_w0_w1_tiles_h) {
                         // Bias addition: matmul(ones_tile, bias_row)
                         matmul_block(
-                            cb_c2c_ones_tile,
-                            cb_r2c_w0_w1,
+                            cb_c2c_ones_tile_id,
+                            cb_r2c_w0_w1_id,
                             0,
                             /*in1_index=*/last_k_index,
                             /*idst=*/0,
@@ -235,7 +252,7 @@ void kernel_main() {
                             /*rt_dim=*/1,
                             /*kt_dim=*/1);
                     }
-                    cb_pop_front(cb_r2c_w0_w1, w0_w1_tiles_per_block);
+                    cb_r2c_w0_w1.pop_front(w0_w1_tiles_per_block);
                 }
 
                 tile_regs_commit();
@@ -252,26 +269,26 @@ void kernel_main() {
 
                 PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
 
-                pack_tile</*out_of_order_output=*/true>(0, cb_s2c_in2, /*output_tile_index=*/tile_id);
-                pack_tile</*out_of_order_output=*/true>(2, cb_s2c_in2, /*output_tile_index=*/tile_id + 1);
+                pack_tile</*out_of_order_output=*/true>(0, cb_s2c_in2_id, /*output_tile_index=*/tile_id);
+                pack_tile</*out_of_order_output=*/true>(2, cb_s2c_in2_id, /*output_tile_index=*/tile_id + 1);
                 tile_regs_release();
             }
 
             // Signal dm1 that SwiGLU output is ready
-            cb_reserve_back(cb_c2w_rdy, 1);
-            cb_push_back(cb_c2w_rdy, 1);
+            cb_c2w_rdy.reserve_back(1);
+            cb_c2w_rdy.push_back(1);
 
             // W2 matmul + untilize (dm1 does A2A ring, compute does W2) (with bias)
-            cb_reserve_back(cb_c2s_out, moe_gpt_ring::TOKENS_PER_CHUNK);  // 32 pages
+            cb_c2s_out.reserve_back(moe_gpt_ring::TOKENS_PER_CHUNK);  // 32 pages
             constexpr uint32_t w2_bias_blocks_per_iter_fused = w2_blocks_per_expert / num_a2a_iters;
 
             // Init pack_untilize once before the iter loop (overlaps with matmul compute)
-            pack_untilize_dest_init</*block_ct_dim=*/4, /*full_ct_dim=*/source_width_tiles>(cb_c2s_out);
+            pack_untilize_dest_init</*block_ct_dim=*/4, /*full_ct_dim=*/source_width_tiles>(cb_c2s_out_id);
 
             for (uint32_t iter = 0; iter < num_a2a_iters; ++iter) {
                 uint32_t dm1_step = 0;
                 uint32_t dm1_tiles_remaining = moe_gpt_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][0];
-                cb_wait_front(cb_w2c_rdy, 1);
+                cb_w2c_rdy.wait_front(1);
 
                 // 6-buffer cycling: each A2A step uses buf (step % 6)
                 uint32_t in2_buf = 0, in2_offset = 0, in2_index = 0;
@@ -280,7 +297,7 @@ void kernel_main() {
                 uint32_t k_tracker = 0;
 
                 for (uint32_t block_id = 0; block_id < w2_bias_blocks_per_iter_fused; ++block_id) {
-                    cb_wait_front(cb_r2c_w2, w2_tiles_per_block);
+                    cb_r2c_w2.wait_front(w2_tiles_per_block);
                     uint32_t last_k_index = 0;
                     for (uint32_t k = 0; k < w2_tiles_per_block; k += 4) {
                         if (k_tracker == num_w0_w1_tiles_h) {
@@ -288,8 +305,8 @@ void kernel_main() {
                             break;
                         }
                         if (dm1_tiles_remaining == 0) {
-                            cb_pop_front(cb_w2c_rdy, 1);
-                            cb_wait_front(cb_w2c_rdy, 1);
+                            cb_w2c_rdy.pop_front(1);
+                            cb_w2c_rdy.wait_front(1);
                             dm1_tiles_remaining =
                                 moe_gpt_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][++dm1_step];
                             in2_buf = (in2_buf >= 5) ? 0 : in2_buf + 1;  // 6 buffers: cycle 0..5
@@ -299,8 +316,8 @@ void kernel_main() {
                         dm1_tiles_remaining--;
 
                         matmul_block(
-                            cb_s2c_in2,
-                            cb_r2c_w2,
+                            cb_s2c_in2_id,
+                            cb_r2c_w2_id,
                             in2_index++,
                             /*in1_index=*/k,
                             /*idst=*/0,
@@ -313,8 +330,8 @@ void kernel_main() {
                     if (k_tracker == num_w0_w1_tiles_h) {
                         // Bias addition: matmul(ones_tile, bias_row)
                         matmul_block(
-                            cb_c2c_ones_tile,
-                            cb_r2c_w2,
+                            cb_c2c_ones_tile_id,
+                            cb_r2c_w2_id,
                             0,
                             /*in1_index=*/last_k_index,
                             /*idst=*/0,
@@ -323,32 +340,32 @@ void kernel_main() {
                             /*rt_dim=*/1,
                             /*kt_dim=*/1);
                     }
-                    cb_pop_front(cb_r2c_w2, w2_tiles_per_block);
+                    cb_r2c_w2.pop_front(w2_tiles_per_block);
                 }
 
-                cb_pop_front(cb_w2c_rdy, 1);
+                cb_w2c_rdy.pop_front(1);
 
                 tile_regs_commit();
 
                 // Untilize W2 output to cb_c2s_out (ROW_MAJOR)
                 tile_regs_wait();
                 pack_untilize_dest</*block_ct_dim=*/4, /*full_ct_dim=*/source_width_tiles>(
-                    cb_c2s_out, /*block_rt_dim=*/1, /*block_c_index=*/iter);
+                    cb_c2s_out_id, /*block_rt_dim=*/1, /*block_c_index=*/iter);
                 tile_regs_release();
             }
 
-            pack_untilize_uninit(cb_c2s_out);
-            cb_push_back(cb_c2s_out, moe_gpt_ring::TOKENS_PER_CHUNK);  // 32 pages
+            pack_untilize_uninit(cb_c2s_out_id);
+            cb_c2s_out.push_back(moe_gpt_ring::TOKENS_PER_CHUNK);  // 32 pages
 
             // Toggle input buffer and reinit packer for next chunk's SwiGLU
             use_second_half_buffer = !use_second_half_buffer;
-            pack_reconfig_data_format(cb_s2c_in2);
+            pack_reconfig_data_format(cb_s2c_in2_id);
         }
     }
 
     // Drain W2 pipeline: dm0 pushes extra blocks at end
-    cb_wait_front(cb_r2c_w2, w2_tiles_per_block);
-    cb_pop_front(cb_r2c_w2, w2_tiles_per_block);
+    cb_r2c_w2.wait_front(w2_tiles_per_block);
+    cb_r2c_w2.pop_front(w2_tiles_per_block);
 
 #else
     // NON-FUSED MODE: Standard expert loop with A2A (with bias)
@@ -357,8 +374,8 @@ void kernel_main() {
     uint32_t out_offset_per_expert = 0;
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
         if (expert_id > 0) {
-            cb_wait_front(cb_w2c_rdy, 1);
-            cb_pop_front(cb_w2c_rdy, 1);
+            cb_w2c_rdy.wait_front(1);
+            cb_w2c_rdy.pop_front(1);
         }
 
         // Compute in @ {W0,W1} with bias
@@ -368,7 +385,7 @@ void kernel_main() {
             tile_regs_acquire();
             uint32_t k_tracker = 0;
             for (uint32_t block_id = 0; block_id < w0_w1_blocks_per_two_elt_tile; ++block_id) {
-                cb_wait_front(cb_r2c_w0_w1, w0_w1_tiles_per_block);
+                cb_r2c_w0_w1.wait_front(w0_w1_tiles_per_block);
                 uint32_t last_k_index = 0;
                 for (uint32_t k = 0; k < w0_w1_tiles_per_block; k += 4) {
                     if (k_tracker == moe_gpt_ring::NUM_W0_W1_TILES_H) {
@@ -376,8 +393,8 @@ void kernel_main() {
                         break;
                     }
                     matmul_block(
-                        cb_s2c_in,
-                        cb_r2c_w0_w1,
+                        cb_s2c_in_id,
+                        cb_r2c_w0_w1_id,
                         in0_index++,
                         /*in1_index=*/k,
                         /*idst=*/0,
@@ -390,8 +407,8 @@ void kernel_main() {
                 if (k_tracker == moe_gpt_ring::NUM_W0_W1_TILES_H) {
                     // Bias addition: matmul(ones_tile, bias_row)
                     matmul_block(
-                        cb_c2c_ones_tile,
-                        cb_r2c_w0_w1,
+                        cb_c2c_ones_tile_id,
+                        cb_r2c_w0_w1_id,
                         0,
                         /*in1_index=*/last_k_index,
                         /*idst=*/0,
@@ -400,7 +417,7 @@ void kernel_main() {
                         /*rt_dim=*/1,
                         /*kt_dim=*/1);
                 }
-                cb_pop_front(cb_r2c_w0_w1, w0_w1_tiles_per_block);
+                cb_r2c_w0_w1.pop_front(w0_w1_tiles_per_block);
             }
 
             tile_regs_commit();
@@ -415,20 +432,20 @@ void kernel_main() {
             PACK((llk_math_eltwise_binary_sfpu_swiglu<false>(2, 3, 2)));
             PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
 
-            pack_tile</*out_of_order_output=*/true>(0, cb_s2c_in2, /*output_tile_index=*/tile_id);
-            pack_tile</*out_of_order_output=*/true>(2, cb_s2c_in2, /*output_tile_index=*/tile_id + 1);
+            pack_tile</*out_of_order_output=*/true>(0, cb_s2c_in2_id, /*output_tile_index=*/tile_id);
+            pack_tile</*out_of_order_output=*/true>(2, cb_s2c_in2_id, /*output_tile_index=*/tile_id + 1);
             tile_regs_release();
         }
 
-        cb_reserve_back(cb_c2w_rdy, 1);
-        cb_push_back(cb_c2w_rdy, 1);
+        cb_c2w_rdy.reserve_back(1);
+        cb_c2w_rdy.push_back(1);
 
         // Compute in2 @ W2 with bias
         uint32_t out_tile_index = expert_id * num_w0_w1_tiles_h;
         for (uint32_t iter = 0; iter < num_a2a_iters; ++iter) {
             uint32_t dm1_step = 0;
             uint32_t dm1_tiles_remaining = moe_gpt_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][0];
-            cb_wait_front(cb_w2c_rdy, 1);
+            cb_w2c_rdy.wait_front(1);
 
             uint32_t in2_buf = 0, in2_offset = 0, in2_index = 0;
 
@@ -436,7 +453,7 @@ void kernel_main() {
             uint32_t k_tracker = 0;
             constexpr uint32_t w2_bias_blocks_per_iter = w2_blocks_per_expert / num_a2a_iters;
             for (uint32_t block_id = 0; block_id < w2_bias_blocks_per_iter; ++block_id) {
-                cb_wait_front(cb_r2c_w2, w2_tiles_per_block);
+                cb_r2c_w2.wait_front(w2_tiles_per_block);
                 uint32_t last_k_index = 0;
                 for (uint32_t k = 0; k < w2_tiles_per_block; k += 4) {
                     if (k_tracker == moe_gpt_ring::NUM_W0_W1_TILES_H) {
@@ -444,8 +461,8 @@ void kernel_main() {
                         break;
                     }
                     if (dm1_tiles_remaining == 0) {
-                        cb_pop_front(cb_w2c_rdy, 1);
-                        cb_wait_front(cb_w2c_rdy, 1);
+                        cb_w2c_rdy.pop_front(1);
+                        cb_w2c_rdy.wait_front(1);
                         dm1_tiles_remaining = moe_gpt_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][++dm1_step];
                         in2_buf = (in2_buf >= 5) ? 0 : in2_buf + 1;  // 6 buffers: cycle 0..5
                         in2_offset = in2_buf * tiles_per_step;
@@ -453,8 +470,8 @@ void kernel_main() {
                     }
                     dm1_tiles_remaining--;
                     matmul_block(
-                        cb_s2c_in2,
-                        cb_r2c_w2,
+                        cb_s2c_in2_id,
+                        cb_r2c_w2_id,
                         in2_index++,
                         /*in1_index=*/k,
                         /*idst=*/0,
@@ -467,8 +484,8 @@ void kernel_main() {
                 if (k_tracker == moe_gpt_ring::NUM_W0_W1_TILES_H) {
                     // Bias addition: matmul(ones_tile, bias_row)
                     matmul_block(
-                        cb_c2c_ones_tile,
-                        cb_r2c_w2,
+                        cb_c2c_ones_tile_id,
+                        cb_r2c_w2_id,
                         0,
                         /*in1_index=*/last_k_index,
                         /*idst=*/0,
@@ -477,24 +494,24 @@ void kernel_main() {
                         /*rt_dim=*/1,
                         /*kt_dim=*/1);
                 }
-                cb_pop_front(cb_r2c_w2, w2_tiles_per_block);
+                cb_r2c_w2.pop_front(w2_tiles_per_block);
             }
 
-            cb_pop_front(cb_w2c_rdy, 1);
+            cb_w2c_rdy.pop_front(1);
 
             tile_regs_commit();
             tile_regs_wait();
-            pack_tile</*out_of_order_output=*/true>(0, cb_c2s_out, /*output_tile_index=*/out_tile_index++);
-            pack_tile</*out_of_order_output=*/true>(1, cb_c2s_out, /*output_tile_index=*/out_tile_index++);
-            pack_tile</*out_of_order_output=*/true>(2, cb_c2s_out, /*output_tile_index=*/out_tile_index++);
-            pack_tile</*out_of_order_output=*/true>(3, cb_c2s_out, /*output_tile_index=*/out_tile_index++);
+            pack_tile</*out_of_order_output=*/true>(0, cb_c2s_out_id, /*output_tile_index=*/out_tile_index++);
+            pack_tile</*out_of_order_output=*/true>(1, cb_c2s_out_id, /*output_tile_index=*/out_tile_index++);
+            pack_tile</*out_of_order_output=*/true>(2, cb_c2s_out_id, /*output_tile_index=*/out_tile_index++);
+            pack_tile</*out_of_order_output=*/true>(3, cb_c2s_out_id, /*output_tile_index=*/out_tile_index++);
             tile_regs_release();
         }
     }  // end for (expert_id)
 
     // Drain the pipeline
-    cb_wait_front(cb_r2c_w2, w2_tiles_per_block);
-    cb_pop_front(cb_r2c_w2, w2_tiles_per_block);
+    cb_r2c_w2.wait_front(w2_tiles_per_block);
+    cb_r2c_w2.pop_front(w2_tiles_per_block);
 
 #endif  // TILIZE_FUSED
 }

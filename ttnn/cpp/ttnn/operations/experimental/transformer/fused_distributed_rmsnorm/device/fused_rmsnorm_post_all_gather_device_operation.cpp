@@ -149,14 +149,14 @@ void FusedRMSNormPostAllGatherDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-TensorSpec FusedRMSNormPostAllGatherDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec FusedRMSNormPostAllGatherDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
     auto output_shape = input_tensor.logical_shape();
     output_shape[1] = args.num_heads;
     output_shape[3] /= args.num_heads;
 
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_shape,
         tt::tt_metal::TensorLayout(
             args.dtype.value_or(input_tensor.dtype()), tt::tt_metal::PageConfig(Layout::TILE), args.memory_config));

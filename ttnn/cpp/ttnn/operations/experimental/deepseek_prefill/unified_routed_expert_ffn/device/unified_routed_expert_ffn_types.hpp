@@ -30,6 +30,16 @@ namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_exper
 // below and re-checking the per-core L1 budget.
 inline constexpr uint32_t MAX_GLOBAL_EXPERTS = tt::constants::TILE_HW;  // 1024
 
+// Per-expert FFN activation variant. Selected at the op boundary and baked into
+// the compute kernel via a compile-time define, so each variant caches as a
+// distinct program. For SwiGluOai the alpha/limit are baked to the M3/gpt-oss
+// values (1.702 / 7.0, SwiGLUConfigGPTOSS) in the kernel — no extra params.
+enum class RoutedExpertActivation : uint8_t {
+    Silu = 0,  // plain SiLU SwiGLU: silu(gate) * up                      (DeepSeek default)
+    SwiGluOai =
+        1,  // clamped swigluoai: (clamp(up,±L)+1)·clamp(gate,max=L)·σ(α·clamp(gate,max=L))  (MiniMax-M3 / gpt-oss)
+};
+
 // Attributes (the constants known at host time).
 struct UnifiedRoutedExpertFfnParams {
     // The compute kernel chunks the M axis into pieces of this many tiles so a
@@ -37,15 +47,56 @@ struct UnifiedRoutedExpertFfnParams {
     // keeps DeepSeek V3 routed-expert dims inside Blackhole L1.
     uint32_t chunk_M_tiles = 64;
 
+    // This expert's M dimension in tiles — the row count the matmul grid,
+    // chunk loop, and CB sizes are built for. Decoupled from x's shape so x
+    // may be a shared buffer larger than one expert's region: the reader/writer
+    // index into it at the region offset while the op still sizes its work to a
+    // single expert. When x IS the per-expert tensor this equals x_padded[-2]/TILE.
+    uint32_t m_tiles = 0;
+
     // Local expert id used to index `global_expert_idx_table` at runtime
     // (kernel reads global_id = idx_table[local_expert_id], then count =
     // counts[global_id]).
     uint32_t local_expert_id = 0;
 
+    // When true, x is a shared buffer and the reader offsets its x reads by this
+    // expert's region start (expert_region_offsets[global_id]) — fusing what
+    // ttnn::extract did. Requires expert_region_offsets. False => x is per-expert.
+    bool read_x_at_offset = false;
+
+    // When true, x is a ROW_MAJOR bf16 buffer: the reader streams row-major
+    // sticks and the compute kernel tilizes them (bf16 -> bf8_b) before the
+    // gate/up matmul, fusing the standalone to_layout. False => x is already
+    // TILE bf8_b (the reader reads tile pages directly). Off preserves the
+    // pre-fusion path for standalone / Wormhole callers.
+    bool x_is_row_major = false;
+
+    // Per-expert FFN activation variant. Baked into the compute kernel as a
+    // compile-time define, so each variant caches as a distinct program — hence
+    // it is part of the program-cache key below.
+    RoutedExpertActivation activation = RoutedExpertActivation::Silu;
+
+    // Whether the (optional) gate/up/down expert biases are fused. Derived from
+    // the presence of the bias tensors in the inputs. Drives a compile-time
+    // FUSE_BIAS define in the compute/reader kernels, so a bias vs no-bias
+    // program caches distinctly — hence it is part of the program-cache key.
+    // (gpt-oss experts have gate/up/down biases; DeepSeek / MiniMax-M3 do not.)
+    bool fuse_bias = false;
+
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config;
 
-    static constexpr auto attribute_names = std::forward_as_tuple("chunk_M_tiles", "local_expert_id");
-    auto attribute_values() const { return std::forward_as_tuple(chunk_M_tiles, local_expert_id); }
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "chunk_M_tiles",
+        "m_tiles",
+        "local_expert_id",
+        "read_x_at_offset",
+        "x_is_row_major",
+        "activation",
+        "fuse_bias");
+    auto attribute_values() const {
+        return std::forward_as_tuple(
+            chunk_M_tiles, m_tiles, local_expert_id, read_x_at_offset, x_is_row_major, activation, fuse_bias);
+    }
 };
 
 // Tensors fed into the op.
@@ -76,6 +127,14 @@ struct UnifiedRoutedExpertFfnInputs {
     // buffer) at start[global_id]/TILE tile-rows, fusing the ttnn::insert step.
     // Requires optional_output to also be set.
     std::optional<Tensor> expert_region_offsets;
+    // Optional per-expert projection biases (gpt-oss). All three are present or
+    // all absent (validated host-side). gate_bias/up_bias are (1, N=hidden);
+    // down_bias is (1, N=emb). When set, the fused kernel adds gate/up bias
+    // before the activation and down bias after the down matmul. Absent for the
+    // bias-free DeepSeek / MiniMax-M3 path (byte-identical).
+    std::optional<Tensor> gate_bias;
+    std::optional<Tensor> up_bias;
+    std::optional<Tensor> down_bias;
 };
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn

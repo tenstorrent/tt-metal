@@ -139,6 +139,7 @@ std::vector<std::string> topological_sort(
     }
 
     std::vector<std::string> order;
+    order.reserve(all_nodes.size());
     while (!q.empty()) {
         auto node = q.front();
         q.pop();
@@ -161,7 +162,9 @@ std::map<std::string, size_t> assign_submeshes(
     const std::vector<std::string>& stage_order,
     const std::vector<EdgeInputTuple>& edges,
     const std::map<ConnectionKey, ConnectionInfo>& connections,
-    size_t num_submeshes) {
+    size_t num_submeshes,
+    const std::map<std::string, uint32_t>& node_chip_counts,
+    const std::vector<std::vector<InternalChip>>& chips) {
     // Build reverse-lookup: dst -> [src] for non-loopback edges
     std::map<std::string, std::vector<std::string>> parents;
     for (const auto& [src, dst, is_lb] : edges) {
@@ -227,6 +230,22 @@ std::map<std::string, size_t> assign_submeshes(
             }
         }
 
+        // Shape constraint: a node may only land on a submesh whose chip count
+        // matches the node's declared shape (rows*cols).  Without this, a stage
+        // declared 4x2 can be placed on a 1x2 submesh of a different mesh whenever
+        // ethernet connectivity allows, silently mis-placing it (e.g. the final-
+        // layer / loopback stage landing on a 1x2 instead of its 4x2 mesh).
+        auto cc_it = node_chip_counts.find(node);
+        if (cc_it != node_chip_counts.end()) {
+            std::set<size_t> filtered;
+            for (size_t s : candidates) {
+                if (chips[s].size() == cc_it->second) {
+                    filtered.insert(s);
+                }
+            }
+            candidates = std::move(filtered);
+        }
+
         for (size_t sub : candidates) {
             node_to_sub[node] = sub;
             used.insert(sub);
@@ -242,7 +261,8 @@ std::map<std::string, size_t> assign_submeshes(
     if (!solve(0)) {
         throw std::runtime_error(
             "resolve_graph_layout: no valid submesh assignment found — "
-            "physical connectivity does not match the graph topology");
+            "physical connectivity (and per-node shape, if constrained) does not "
+            "match the graph topology");
     }
     return node_to_sub;
 }
@@ -250,7 +270,9 @@ std::map<std::string, size_t> assign_submeshes(
 }  // anonymous namespace
 
 GraphLayoutResult resolve_graph_layout(
-    const std::vector<EdgeInputTuple>& edges, const std::vector<std::vector<ChipTuple>>& submesh_chips) {
+    const std::vector<EdgeInputTuple>& edges,
+    const std::vector<std::vector<ChipTuple>>& submesh_chips,
+    const std::map<std::string, uint32_t>& node_chip_counts) {
     // ------------------------------------------------------------------
     // 0. Convert chip tuples to internal representation
     // ------------------------------------------------------------------
@@ -271,6 +293,7 @@ GraphLayoutResult resolve_graph_layout(
     // 2. Collect unique node names and separate loopback edges
     // ------------------------------------------------------------------
     std::vector<std::string> all_nodes;
+    all_nodes.reserve(edges.size() * 2);
     {
         std::set<std::string> seen;
         for (const auto& [src, dst, is_lb] : edges) {
@@ -291,7 +314,7 @@ GraphLayoutResult resolve_graph_layout(
     // ------------------------------------------------------------------
     // 4. Assign submeshes to nodes via backtracking
     // ------------------------------------------------------------------
-    auto node_to_sub = assign_submeshes(stage_order, edges, connections, num_submeshes);
+    auto node_to_sub = assign_submeshes(stage_order, edges, connections, num_submeshes, node_chip_counts, chips);
 
     // ------------------------------------------------------------------
     // 5. Resolve physical coords for every edge
@@ -329,17 +352,21 @@ GraphLayoutResult resolve_graph_layout(
         size_t curr_sub = node_to_sub.at(stage_order[i]);
 
         // Find the resolved entry edge for this stage (non-loopback, dst == stage_order[i]).
-        uint32_t entry_row = UINT32_MAX, entry_col = UINT32_MAX;
-        for (const auto& re : resolved_edges) {
+        // Keep the edge itself: in a FORK graph the topological stage_order interleaves the
+        // branches, so stage_order[i-1] is NOT this stage's predecessor — the entry edge's
+        // own source is (that's what the connection lookup below must use).
+        ResolvedEdge* entry_re = nullptr;
+        for (auto& re : resolved_edges) {
             if (!re.is_loopback && re.dst == stage_order[i]) {
-                entry_row = re.entry_row;
-                entry_col = re.entry_col;
+                entry_re = &re;
                 break;
             }
         }
-        if (entry_row == UINT32_MAX) {
+        if (entry_re == nullptr) {
             continue;  // stage 0 — no entry edge
         }
+        uint32_t entry_row = entry_re->entry_row;
+        uint32_t entry_col = entry_re->entry_col;
 
         // Find the resolved exit edge for this stage (src == stage_order[i], any kind).
         ResolvedEdge* exit_re = nullptr;
@@ -369,16 +396,11 @@ GraphLayoutResult resolve_graph_layout(
                 }
             }
             if (!resolved) {
-                // No alternative exit link — try changing the entry edge instead.
-                size_t prev_sub = node_to_sub.at(stage_order[i - 1]);
+                // No alternative exit link — try changing the entry edge instead. Use the
+                // entry edge's ACTUAL source submesh (not stage_order[i-1], which is the
+                // wrong branch in an interleaved fork topological order).
+                size_t prev_sub = node_to_sub.at(entry_re->src);
                 const auto& entry_links = connections.at({prev_sub, curr_sub}).links;
-                ResolvedEdge* entry_re = nullptr;
-                for (auto& re : resolved_edges) {
-                    if (!re.is_loopback && re.dst == stage_order[i]) {
-                        entry_re = &re;
-                        break;
-                    }
-                }
                 for (const auto& lp : entry_links) {
                     if (lp.entry_row != exit_re->exit_row || lp.entry_col != exit_re->exit_col) {
                         entry_re->exit_row = lp.exit_row;
@@ -419,6 +441,7 @@ GraphLayoutResult resolve_graph_layout(
     }
 
     std::vector<std::pair<uint32_t, uint32_t>> unclaimed;
+    unclaimed.reserve(chips[stage0_sub].size());
     for (const auto& [fid, row, col] : chips[stage0_sub]) {
         if (!used_coords.contains({row, col})) {
             unclaimed.push_back({row, col});

@@ -383,7 +383,15 @@ void bind_unary_operation_with_float_parameter(
     const std::string& parameter_doc,
     const std::string& info_doc,
     const std::string& supported_dtype = "BFLOAT16",
-    const std::string& note = "") {
+    const std::string& note = "",
+    const std::string& math_equation = "") {
+    const std::string math =
+        math_equation.empty()
+            ? fmt::format(
+                  R"doc(\mathrm{{output\_tensor}}_i = \verb|{0}|(\mathrm{{input\_tensor}}_i, \verb|{1}|))doc",
+                  std::string(OpName),
+                  parameter_name)
+            : math_equation;
     auto doc = fmt::format(
         R"doc(
         Applies {0} to :attr:`input_tensor` element-wise with {2}.
@@ -391,7 +399,7 @@ void bind_unary_operation_with_float_parameter(
         {4}
 
         .. math::
-            \mathrm{{output\_tensor}}_i = \verb|{0}|(\mathrm{{input\_tensor}}_i, \verb|{2}|)
+            {7}
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
@@ -424,7 +432,8 @@ void bind_unary_operation_with_float_parameter(
         parameter_doc,
         info_doc,
         supported_dtype,
-        note);
+        note,
+        math);
 
     ttnn::bind_function<OpName>(
         mod,
@@ -446,7 +455,15 @@ void bind_unary_operation_with_scalar_parameter(
     const std::string& parameter_doc,
     const std::string& info_doc,
     const std::string& supported_dtype = "BFLOAT16",
-    const std::string& note = "") {
+    const std::string& note = "",
+    const std::string& math_equation = "") {
+    const std::string math =
+        math_equation.empty()
+            ? fmt::format(
+                  R"(\mathrm{{output\_tensor}}_i = \verb|{0}|(\mathrm{{input\_tensor}}_i, \verb|{1}|))",
+                  std::string(OpName),
+                  parameter_name)
+            : math_equation;
     auto doc = fmt::format(
         R"doc(
         Applies {0} to :attr:`input_tensor` element-wise with {2}.
@@ -454,11 +471,11 @@ void bind_unary_operation_with_scalar_parameter(
         {4}
 
         .. math::
-            \mathrm{{output\_tensor}}_i = \verb|{0}|(\mathrm{{input\_tensor}}_i, \verb|{2}|)
+            {7}
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
-            {2} (float/int): {3}.
+            {2} (float or int): {3}.
 
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
@@ -487,7 +504,8 @@ void bind_unary_operation_with_scalar_parameter(
         parameter_doc,
         info_doc,
         supported_dtype,
-        note);
+        note,
+        math);
 
     ttnn::bind_function<OpName>(
         mod,
@@ -1793,13 +1811,13 @@ void py_module(nb::module_& mod) {
         &ttnn::relu,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|relu|(\mathrm{{input\_tensor}}_i))doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT32, UINT16, UINT8)doc");
     bind_unary_operation_subcoregrids<"relu6">(
         mod,
         &ttnn::relu6,
-        R"doc(\mathrm{{output\_tensor}}_i = \verb|relu6|(\mathrm{{input\_tensor}}_i))doc",
+        R"doc(\mathrm{{output\_tensor}}_i = \min(\max(\mathrm{{input\_tensor}}_i, 0), 6))doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT32, UINT16, UINT8)doc");
     bind_unary_operation_subcoregrids<"sign">(
         mod,
         &ttnn::sign,
@@ -1973,26 +1991,42 @@ void py_module(nb::module_& mod) {
         mod,
         "negative_slope",
         "The slope parameter for the Leaky ReLU function",
+        "Passes non-negative inputs through unchanged and scales negative inputs by negative_slope.",
+        R"doc(FLOAT32, BFLOAT16, BFLOAT8_B, UINT32, UINT16, UINT8)doc",
         "",
-        R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc");
-    bind_unary_operation_with_float_parameter<"relu_max", &ttnn::relu_max>(
+        R"doc(\mathrm{output\_tensor}_i = \max(0, \mathrm{input\_tensor}_i) + \verb|negative_slope| \cdot \min(0, \mathrm{input\_tensor}_i))doc");
+    bind_unary_operation_with_scalar_parameter<"relu_max", &ttnn::relu_max>(
         mod,
         "upper_limit",
-        "The max value for ReLU function",
-        "This function caps off the input to a max value and a min value of 0",
-        R"doc(BFLOAT16, BFLOAT8_B)doc",
-        R"doc(System memory is not supported.)doc");
-    bind_unary_operation_with_float_parameter<"relu_min", &ttnn::relu_min>(
+        "The max value for ReLU function.",
+        "This function caps off the input to a max value and a min value of 0.",
+        R"doc(FLOAT32, BFLOAT16, BFLOAT8_B, INT32, UINT32, UINT16, UINT8)doc",
+        R"doc(System memory is not supported.)doc",
+        R"doc(\mathrm{output\_tensor}_i = \min(\max(\mathrm{input\_tensor}_i, 0), \verb|upper_limit|))doc");
+    bind_unary_operation_with_scalar_parameter<"relu_min", &ttnn::relu_min>(
         mod,
         "lower_limit",
-        "The min value for ReLU function",
-        "This will carry out ReLU operation at min value instead of the standard 0",
-        R"doc(BFLOAT16, FLOAT32)doc",
-        R"doc(System memory is not supported.)doc");
+        "The min value for ReLU function.",
+        "This will carry out ReLU operation at min value instead of the standard 0.",
+        R"doc(FLOAT32, BFLOAT16, BFLOAT8_B, INT32, UINT32, UINT16, UINT8)doc",
+        R"doc(System memory is not supported.)doc",
+        R"doc(\mathrm{output\_tensor}_i = \max(\mathrm{input\_tensor}_i, \verb|lower_limit|))doc");
     bind_unary_operation_with_float_parameter<"rpow", &ttnn::rpow>(
         mod, "exponent", "exponent value. Non-positive values are not supported.", "");
     bind_unary_operation_with_float_parameter_default<"celu", &ttnn::celu>(
         mod, "alpha", "The alpha parameter for the CELU function", 1.0f, "", R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc");
+    // The up half of Moonshot's SiTU activation. No default beta: it is a model
+    // hyperparameter (Kimi K3 uses 25 for the up half).
+    bind_unary_operation_with_float_parameter<"softcap", &ttnn::softcap>(
+        mod,
+        "beta",
+        "The beta parameter. Bounds the output to +/-beta. Must be non-zero",
+        // No pipe-delimited absolute values here: Sphinx reads |x| as an rST substitution.
+        "Bounds the input smoothly to +/-beta: near-linear well inside beta, saturating at the limits. Known as "
+        "soft capping (e.g. Gemma logit softcapping); also the up half of Moonshot's SiTU activation.",
+        R"doc(BFLOAT16, BFLOAT8_B)doc",
+        "",
+        R"doc(\mathrm{output\_tensor}_i = \verb|beta| \cdot \tanh(\mathrm{input\_tensor}_i / \verb|beta|))doc");
 
     bind_unary_operation_with_scalar_parameter<"fill", &ttnn::fill>(
         mod,
@@ -2022,7 +2056,7 @@ void py_module(nb::module_& mod) {
         "Dimension to split input tensor. Supported only for last dimension (dim = -1 or 3)",
         "Split the tensor into two parts, apply the ReLU function on the second tensor, and then perform "
         "multiplication with the first tensor.",
-        R"doc(BFLOAT16, BFLOAT8_B)doc",
+        R"doc(BFLOAT16, BFLOAT8_B, UINT32, UINT16)doc",
         R"doc(System memory is not supported.
 
            Last dimension of input tensor should be divisible by 64.

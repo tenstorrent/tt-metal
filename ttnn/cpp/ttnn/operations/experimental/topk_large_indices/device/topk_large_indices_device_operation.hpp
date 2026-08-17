@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <optional>
 #include <tuple>
 #include <variant>
 
@@ -32,13 +33,14 @@ struct TopkLargeIndicesDeviceOperation {
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& attrs, const tensor_args_t& tensor_args);
 
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(const Tensor& input_tensor, uint32_t k);
+    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
+        const Tensor& input_tensor, uint32_t k, std::optional<uint32_t> valid_length);
 };
 
 }  // namespace ttnn::operations::experimental::topk_large_indices
 
 namespace ttnn::experimental {
 
-Tensor topk_large_indices(const Tensor& input_tensor, uint32_t k);
+Tensor topk_large_indices(const Tensor& input_tensor, uint32_t k, std::optional<uint32_t> valid_length = std::nullopt);
 
 }  // namespace ttnn::experimental

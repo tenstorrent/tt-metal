@@ -120,7 +120,8 @@ NOINLINE NOCLONE void _print_compute_info(const UnwindContext context)
 }
 
 template <Trigger level, typename T>
-TT_ALWAYS_INLINE void operand_assert(const State<T> expected, const State<T> actual, ct_string message, const UnwindContext update, const UnwindContext current)
+static TT_ALWAYS_INLINE void operand_assert(
+    const State<T> expected, const State<T> actual, ct_string message, const UnwindContext update, const UnwindContext current)
 {
     if (!enabled_trigger(level) || expected.assert_cond(actual))
     {
@@ -144,33 +145,56 @@ TT_ALWAYS_INLINE void operand_assert(const State<T> expected, const State<T> act
     LLK_ASSERT(false, "Operand assertion, look at Sanitizer log");
 }
 
-template <Trigger level>
-NOINLINE NOCLONE bool operation_assert(const Operation expected, const Operation actual, const UnwindContext update, const UnwindContext current)
+static TT_ALWAYS_INLINE ct_string _operation_status_name(const OperationStatus status)
 {
-    if (!enabled_trigger(level) || expected == actual)
+    switch (status)
     {
-        // If check is enabled and passed, return true.
-        return enabled_trigger(level) && expected == actual;
+        case OperationStatus::None:
+            return CTSTR("NONE");
+        case OperationStatus::Initialized:
+            return CTSTR("INITIALIZED");
+        case OperationStatus::Executed:
+            return CTSTR("EXECUTED");
+        case OperationStatus::Uninitialized:
+            return CTSTR("UNINITIALIZED");
+    }
+    __builtin_unreachable();
+}
+
+template <Trigger level>
+NOINLINE NOCLONE bool operation_assert(
+    ct_string message, const OperationState& state, OperationStatus status, Operation operation, const UnwindContext update, const UnwindContext current)
+{
+    if (!enabled_trigger(level) || state.operation == operation)
+    {
+        // If the check is enabled and the operation matches, report success.
+        return enabled_trigger(level) && state.operation == operation;
     }
 
     DEVICE_PRINT(
         "┌─[ llk::san ]─[ {} ]───\r"
-        "│  Called execute or uninit for operation that is not initialized\r",
-        _trigger_name(level));
+        "│  {}\r",
+        _trigger_name(level),
+        message);
 
     _print_full_kernel();
 
     DEVICE_PRINT(
         "│\r"
-        "│  ┌[ Last init call ]─\r"
-        "│  ├── Operation ── {}\r",
-        expected);
+        "│  ┌[ {} ]─\r"
+        "│  ├── Operation X ── {}\r",
+        _operation_status_name(state.status),
+        state.operation);
+
     _print_compute_info(update);
 
     DEVICE_PRINT(
-        "│  ┌[ Violating execute / uninit call ]─\r"
-        "│  ├── Operation ── {}\r",
-        actual);
+        "│\r"
+        "│  ┌[ {} ]─\r"
+        "│  ├── Operation Y ── {}\r",
+        _operation_status_name(status),
+        operation);
+
     _print_compute_info(current);
 
     DEVICE_PRINT("└─────────────────────────────\n");
@@ -215,21 +239,21 @@ NOINLINE NOCLONE void operation_argument_assert(
     LLK_ASSERT(false, "Operation argument assertion, look at Sanitizer log");
 }
 
-static inline ct_string fsm_state_name(const FsmState state)
+static inline ct_string _fsm_state_name(const FsmStateType state)
 {
     switch (state)
     {
-        case FsmState::Initial:
+        case FsmStateType::Initial:
             return CTSTR("INITIAL");
-        case FsmState::Configured:
+        case FsmStateType::Configured:
             return CTSTR("CONFIGURED");
-        case FsmState::Initialized:
+        case FsmStateType::Initialized:
             return CTSTR("INITIALIZED");
-        case FsmState::Executed:
+        case FsmStateType::Executed:
             return CTSTR("EXECUTED");
-        case FsmState::Uninitialized:
+        case FsmStateType::Uninitialized:
             return CTSTR("UNINITIALIZED");
-        case FsmState::Reconfigured:
+        case FsmStateType::Reconfigured:
             return CTSTR("RECONFIGURED");
     }
     __builtin_unreachable();
@@ -237,19 +261,20 @@ static inline ct_string fsm_state_name(const FsmState state)
 
 NOINLINE NOCLONE void _print_fsm_transition(const FsmState current_state, const FsmState next_state, const ct_string allowed)
 {
+    // sstanisic todo: try to find a non-invasive way to also print the operation where relevant
     DEVICE_PRINT(
         "│\r"
         "│  ┌[ State machine ]─\r"
         "│  ├── Current state ───── {}\r"
         "│  ├── Attempted transition ─ {}\r"
-        "│  └── Allowed transitions  ─ [{}]\r",
-        fsm_state_name(current_state),
-        fsm_state_name(next_state),
+        "│  └── Allowed transitions  ─ {{ {} }}\r",
+        _fsm_state_name(current_state.type),
+        _fsm_state_name(next_state.type),
         allowed);
 }
 
 template <Trigger level>
-NOINLINE NOCLONE void fsm_assert(
+NOINLINE NOCLONE bool fsm_assert(
     bool success,
     ct_string message,
     FsmState transition_from,
@@ -260,7 +285,7 @@ NOINLINE NOCLONE void fsm_assert(
 {
     if (!enabled_trigger(level) || success)
     {
-        return;
+        return true;
     }
 
     DEVICE_PRINT(
@@ -283,6 +308,8 @@ NOINLINE NOCLONE void fsm_assert(
     DEVICE_PRINT("└─────────────────────────────\n");
 
     LLK_ASSERT(false, "FSM assertion, look at Sanitizer log");
+
+    return false;
 }
 
 } // namespace llk::san

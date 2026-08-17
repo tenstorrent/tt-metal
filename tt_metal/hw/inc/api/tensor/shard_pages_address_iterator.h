@@ -56,10 +56,11 @@ public:
         }
 
         // Calculate NOC address for the final position
+        const auto bank_shard = accessor.shard_to_bank(shard_id);
         PageMapping current_page_mapping{
-            .bank_id = shard_id % accessor.dspec().num_banks(),
+            .bank_id = bank_shard.bank_id,
             .bank_page_offset =
-                (shard_id / accessor.dspec().num_banks() * accessor.dspec().shard_volume()) + current_page_id_in_shard};
+                (bank_shard.shard_in_bank * accessor.dspec().shard_volume()) + current_page_id_in_shard};
         current_noc_addr = accessor.get_noc_addr(current_page_mapping, 0, noc);
         ASSERT(current_page_id_in_shard <= accessor.dspec().shard_volume());
         update_current_page();

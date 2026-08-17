@@ -184,7 +184,17 @@ NUM_ITERS = 2
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 @pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
 @pytest.mark.parametrize(
-    "input_shape", [[128, 128], [544, 2880], [8, 8, 128, 128], [8, 128, 128], [8, 8, 8, 8, 128, 128], [8, 8, 8, 16, 16]]
+    "input_shape",
+    [
+        [128, 128],
+        [544, 2880],
+        [8, 8, 128, 128],
+        [8, 128, 128],
+        [8, 8, 8, 8, 128, 128],
+        [8, 8, 8, 16, 16],
+        [256],
+        [96],
+    ],
 )
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG])
@@ -206,6 +216,97 @@ def test_nd(mesh_device, input_shape, cluster_axis, dtype, memory_config, topolo
         tt_output_tensor = torch.cat([ttnn.to_torch(t) for t in ttnn.get_device_tensors(tt_out_tensor)])
         eq, mess = comp_pcc(torch_reference, tt_output_tensor)
         assert eq, mess
+
+
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 8), (2, 4)], indirect=True, ids=["1x8", "2x4"])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT], ids=["tile", "row_major"])
+@pytest.mark.parametrize("N", [32, 96, 256])
+def test_rank1(mesh_device, layout, N):
+    torch.manual_seed(0)
+    num_devices = tuple(mesh_device.shape)[1]  # cluster_axis 1
+    torch_input = torch.rand([N]).bfloat16()
+
+    tt_input = ttnn.from_torch(
+        torch_input,
+        layout=layout,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        device=mesh_device,
+    )
+    logger.info(f"N={N} layout={layout} logical={tt_input.shape} padded={tt_input.padded_shape}")
+
+    tt_output = ttnn.all_reduce(
+        tt_input,
+        cluster_axis=1,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        topology=ttnn.Topology.Linear,
+    )
+
+    assert list(tt_output.shape) == [N], f"expected a rank-1 output of shape [{N}], got {tt_output.shape}"
+
+    torch_reference = torch_input.float() * num_devices
+    for i, device_tensor in enumerate(ttnn.get_device_tensors(tt_output)):
+        eq, mess = comp_pcc(torch_reference, ttnn.to_torch(device_tensor).float())
+        assert eq, f"device {i}: {mess}"
+
+
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 2), (1, 4)], indirect=True, ids=["1x2", "1x4"])
+@pytest.mark.parametrize("N", [96, 256])
+def test_rank1_explicit_semaphores(mesh_device, N):
+    torch.manual_seed(0)
+    num_devices = mesh_device.get_num_devices()
+
+    compute_grid_size = mesh_device.compute_with_storage_grid_size()
+    ccl_sub_device_crs = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
+    )
+    worker_sub_device = ttnn.SubDevice([ccl_sub_device_crs])
+    worker_sub_device_id = ttnn.SubDeviceId(0)
+    sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
+    mesh_device.load_sub_device_manager(sub_device_manager)
+    mesh_device.set_sub_device_stall_group([worker_sub_device_id])
+
+    rs_global_semaphores = [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(3)]
+    ag_global_semaphores = [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(2)]
+    barrier_semaphores = [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(2)]
+
+    torch_input = torch.rand([N]).bfloat16()
+    tt_input = ttnn.from_torch(
+        torch_input,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        device=mesh_device,
+    )
+    logger.info(f"N={N} devices={num_devices} logical={tt_input.shape} padded={tt_input.padded_shape}")
+
+    try:
+        tt_output = ttnn.experimental.all_reduce_async(
+            tt_input,
+            num_devices=num_devices,
+            barrier_semaphores=barrier_semaphores,
+            rs_global_semaphores=rs_global_semaphores,
+            ag_global_semaphores=ag_global_semaphores,
+            math_op=ttnn.ReduceType.Sum,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=ttnn.Topology.Linear,
+            subdevice_id=worker_sub_device_id,
+        )
+        ttnn.synchronize_device(mesh_device, sub_device_ids=[worker_sub_device_id])
+    finally:
+        mesh_device.reset_sub_device_stall_group()
+        mesh_device.clear_loaded_sub_device_manager()
+
+    assert list(tt_output.shape) == [N], f"expected a rank-1 output of shape [{N}], got {tt_output.shape}"
+
+    torch_reference = torch_input.float() * num_devices
+    for i, device_tensor in enumerate(ttnn.get_device_tensors(tt_output)):
+        eq, mess = comp_pcc(torch_reference, ttnn.to_torch(device_tensor).float())
+        assert eq, f"device {i}: {mess}"
 
 
 @pytest.mark.parametrize(

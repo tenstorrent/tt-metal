@@ -19,9 +19,7 @@ void generate_bcast_scaler() {
     u.u = scaler;
     constexpr uint32_t onetile = 1;
     dfb1.reserve_back(onetile);
-    // On Quasar, dfb.get_write_ptr() returns a cacheable-alias L1 address; the noncacheable
-    // alias is reached by adding MEMORY_PORT_NONCACHEABLE_MEM_PORT_MEM_BASE_ADDR. On Gen1 the
-    // returned pointer is already usable; the macro doesn't exist there.
+    // Local L1 fill of the reserved entry (data peek — not a NOC transfer endpoint).
 #ifdef ARCH_QUASAR
     auto ptr = reinterpret_cast<uint16_t*>(dfb1.get_write_ptr() + MEMORY_PORT_NONCACHEABLE_MEM_PORT_MEM_BASE_ADDR);
 #else
@@ -68,17 +66,9 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_tiles; i += blk) {
         uint32_t rem = blk;
         dfb0.reserve_back(rem);
-#ifdef ARCH_QUASAR
-        uint32_t l1_write_addr = dfb0.get_write_ptr() + MEMORY_PORT_NONCACHEABLE_MEM_PORT_MEM_BASE_ADDR;
-#else
-        uint32_t l1_write_addr = dfb0.get_write_ptr();
-#endif
 
         for (uint32_t r = 0; r < rem; r++) {
-            uint64_t src_noc_addr =
-                get_noc_addr(i + r + tile_offset, src_a);  // not contiguous for sequential r, can be banked
-            auto addr = l1_write_addr + (r * tile_bytes);
-            noc_async_read(src_noc_addr, addr, tile_bytes);
+            noc.async_read(src_a, dfb0, tile_bytes, {.page_id = i + r + tile_offset}, {.offset_bytes = r * tile_bytes});
         }
         noc.async_read_barrier();
         dfb0.push_back(rem);

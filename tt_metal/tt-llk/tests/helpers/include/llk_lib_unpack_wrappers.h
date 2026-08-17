@@ -56,9 +56,10 @@ inline void _llk_unpack_tilize_wrapper_(
     _llk_unpack_tilize_(base_address, tile_index, unpack_src_format, unpack_dst_format, block_ct_dim, face_r_dim, num_faces, narrow_tile);
 }
 
-inline void _llk_unpack_tilize_uninit_wrapper_(const std::uint32_t unpack_dst_format, [[maybe_unused]] const std::uint32_t num_faces = 4)
+inline void _llk_unpack_tilize_uninit_wrapper_(
+    const std::uint32_t unpack_dst_format, const std::uint32_t num_faces = 4, const std::uint32_t face_r_dim = FACE_R_DIM)
 {
-    _llk_unpack_tilize_uninit_(unpack_dst_format);
+    _llk_unpack_tilize_uninit_(unpack_dst_format, ckernel::tensor_shape_from_num_faces(face_r_dim, num_faces));
 }
 
 #elif defined(ARCH_BLACKHOLE)
@@ -107,7 +108,7 @@ inline void _llk_unpack_tilize_wrapper_(
 
 inline void _llk_unpack_tilize_uninit_wrapper_(const std::uint32_t unpack_dst_format, const std::uint32_t num_faces = 4)
 {
-    _llk_unpack_tilize_uninit_(unpack_dst_format, num_faces);
+    _llk_unpack_tilize_uninit_(unpack_dst_format, ckernel::tensor_shape_from_num_faces(ckernel::MAX_FACE_R_DIM, num_faces));
 }
 
 #else

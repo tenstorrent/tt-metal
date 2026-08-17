@@ -241,7 +241,7 @@ void kernel_main() {
     //-------------------------------------------------------------------------
     // compute_kernel_hw_startup must be the first compute API call; the has_bias block below
     // issues compute work, so the startup is hoisted above it (otherwise it would be mid-kernel).
-    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_s2c_in, cb_r2c_w0_w1, cb_s2c_in2);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_s2c_in_id, cb_r2c_w0_w1_id, cb_s2c_in2_id);
 
     if constexpr (has_bias) {
         // Create a ones-tile for bias addition (matmul with ones × bias_row = bias).
@@ -288,13 +288,6 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* num_tokens_per_expert_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_w2c_md_read_ptr[0]);
 
-    // Precompute NUM_CHUNKS_PER_EXPERT
-    uint32_t NUM_CHUNKS_PER_EXPERT[num_experts];
-    for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
-        uint32_t num_tokens = num_tokens_per_expert_ptr[expert_id];
-        NUM_CHUNKS_PER_EXPERT[expert_id] = (num_tokens + tokens_per_chunk - 1) / tokens_per_chunk;
-    }
-
     // Value we wait on that indicates the next chunk of tiles have arrived from the tilize cores
     uint32_t matmul_chunk_ready_semaphore_wait_value = 1;
     uint32_t matmul_chunk_ready_semaphore_addr = cb_w2c_md_read_ptr[1];
@@ -309,13 +302,14 @@ void kernel_main() {
     // This decides which half of the buffer will have the valid data sent by tilize cores
     bool use_second_half_buffer = false;
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
-        uint32_t num_expert_chunks = NUM_CHUNKS_PER_EXPERT[expert_id];
+        const uint32_t num_tokens = num_tokens_per_expert_ptr[expert_id];
+        const uint32_t num_expert_chunks = (num_tokens + tokens_per_chunk - 1) / tokens_per_chunk;
         for (uint32_t chunk = 0; chunk < num_expert_chunks; ++chunk) {
             // GELU re-inits its SFPU LUT inside pack_compute_activation on every iteration (the
             // trailing MUL there clobbers it), so it's its own initializer — skip the per-chunk
             // init for GELU to avoid a redundant gelu_init. SILU/SWIGLU init once here.
             if constexpr (activation_type != ttnn::experimental::prim::detail::MoEActivationFunction::GELU) {
-                detail::pack_init_activation<activation_type>();
+                ::detail::pack_init_activation<activation_type>();
             }
 
             // Initialize matmul for W0
@@ -325,7 +319,7 @@ void kernel_main() {
             // Wait for next chunk of tiles to arrive from the tilize cores
             // Min to allow tilize cores to send increment for second expert
             // while first expert still being processed
-            detail::noc_semaphore_wait_min(
+            ::detail::noc_semaphore_wait_min(
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(matmul_chunk_ready_semaphore_addr),
                 matmul_chunk_ready_semaphore_wait_value++);
 
@@ -367,6 +361,12 @@ void kernel_main() {
                                 continue;  // skip padding K slots after bias
                             }
                         }
+                        if constexpr (!has_bias) {
+                            if (k_tracker >= num_w0_w1_tiles_h) {
+                                k_tracker++;
+                                continue;  // skip padding K slots
+                            }
+                        }
                         matmul_block(
                             cb_s2c_in_id,
                             cb_r2c_w0_w1_id,
@@ -377,9 +377,7 @@ void kernel_main() {
                             /*ct_dim=*/4,
                             /*rt_dim=*/1,
                             /*kt_dim=*/1);
-                        if constexpr (has_bias) {
-                            k_tracker++;
-                        }
+                        k_tracker++;
                     }
                     cb_r2c_w0_w1.pop_front(w0_w1_tiles_per_block);
                 }
@@ -399,7 +397,7 @@ void kernel_main() {
                 //---------------------------------------------------------------------
                 // Apply activation
                 //---------------------------------------------------------------------
-                detail::pack_compute_activation<activation_type>();
+                ::detail::pack_compute_activation<activation_type>();
 
                 PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
 

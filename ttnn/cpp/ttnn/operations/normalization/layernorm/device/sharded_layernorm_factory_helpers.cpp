@@ -123,6 +123,8 @@ GridParams GridParams::compute(const Tensor& input, uint32_t block_ht, CoreCoord
         offset = bbox.start_coord;
     }
     uint32_t nb = get_num_blocks(mcast, rw, gs, spec);
+    bool rectangular = spec.grid.num_cores() == gs.x * gs.y;
+    bool two_stage = rectangular && should_use_two_stage_reduce(mcast, rw, gs, compute_with_storage_grid_size);
     return GridParams{
         .shard_spec = spec,
         .grid_size = gs,
@@ -131,7 +133,8 @@ GridParams GridParams::compute(const Tensor& input, uint32_t block_ht, CoreCoord
         .row_wise = rw,
         .num_blocks = nb,
         .use_mcast = nb > 1,
-        .use_two_stage_reduce = should_use_two_stage_reduce(mcast, rw, gs, compute_with_storage_grid_size)};
+        .use_two_stage_reduce = two_stage,
+        .grid_is_rectangular = rectangular};
 }
 
 WorkerDistribution WorkerDistribution::compute(const GridParams& grid, uint32_t block_ht) {
@@ -402,6 +405,11 @@ CoreRanges CoreRanges::compute(const GridParams& grid, const WorkerDistribution&
         cr.not_all_to_all_workers = apply_grid_offset(cr.not_all_to_all_workers, offset);
     }
 
+    const CoreRange bbox = grid.shard_spec.grid.bounding_box();
+    cr.mcast_dest_cores = CoreRangeSet(bbox);
+    cr.inactive_cores = cr.mcast_dest_cores.subtract(cr.all_cores);
+    cr.num_mcast_dests = (grid.mcast_1d ? bbox.size() : grid.num_blocks) - 1;
+
     return cr;
 }
 
@@ -631,7 +639,8 @@ CompileTimeArgs CompileTimeArgs::build(const CompileTimeArgsContext& ctx) {
         workers.num_blocks_second_stage,
         ctx.reduce_second_stage_semaphore_id,
         (uint32_t)ctx.rms_norm,
-        (uint32_t)ctx.use_welford};
+        (uint32_t)ctx.use_welford,
+        core_ranges.num_mcast_dests};
 
     // Reader receiver all-to-all compile time args
     args.reader_receiver_all_to_all = {
@@ -756,20 +765,42 @@ CompileTimeArgs CompileTimeArgs::build(const CompileTimeArgsContext& ctx) {
     // Welford-specific compute args
     if (ctx.use_welford) {
         const uint32_t tile_width = ctx.tile_width;
-        uint32_t last_tile_W = ctx.K - (((ctx.K - tile_width) / tile_width) * tile_width);
+        // Number of valid (logical) columns in the final tile of the width. The kernel uses this
+        // both to bound the partial Welford tile and, via last_block_w, to weight the final width
+        // shard in the cross-core combine, so it must reflect the logical width, not padded K.
+        uint32_t last_tile_W = (ctx.logical_K % tile_width == 0) ? tile_width : (ctx.logical_K % tile_width);
         auto eps_u32 = std::bit_cast<uint32_t>(ctx.eps);
+        const uint32_t logical_Kt = (ctx.logical_K + tile_width - 1) / tile_width;
+        // Number of valid (logical) tiles the final width block reduces. The other width blocks each own
+        // block_wt tiles; the final block owns the remainder. Each block spans a whole number of tiles
+        // (block_w columns), so when the logical width does not fill them evenly the final core owns
+        // fewer than block_wt tiles, and the cross-core combine must weight it by its true width, not
+        // block_w. A partial boundary tile is counted as a valid tile here; its valid-column count is
+        // carried separately in last_tile_W and combined into last_block_w.
+        // For example, w=96 gives 3 tiles, which sharded on two cores leaves two real tiles on the
+        // first core and one real tile plus one padding tile on the second. For w=80 (also 3 tiles),
+        // the second core owns last_block_wt = 1 tile that is itself partial (last_tile_W = 16 valid
+        // columns) plus one padding tile.
+        // The subtraction below does not underflow: validate_sharded_input requires the trailing width pad
+        // to be strictly less than one shard, i.e. (num_blocks - 1) * block_wt < Kt, and the padded width
+        // Kt equals logical_Kt (padded_shape rounds the logical width up to a whole tile). So
+        // (num_blocks - 1) * block_wt is strictly less than logical_Kt, and the final width block always
+        // owns at least one logical tile: last_block_wt >= 1.
+        const uint32_t last_block_wt = logical_Kt - (ctx.grid->num_blocks - 1) * ctx.block_wt;
 
         args.compute_all_to_all.push_back(tile_width);
         args.compute_all_to_all.push_back(last_tile_W);
-        args.compute_all_to_all.push_back(ctx.K);
+        args.compute_all_to_all.push_back(ctx.logical_K);
         args.compute_all_to_all.push_back(eps_u32);
         args.compute_all_to_all.push_back(ctx.per_core_recip_lut_size);
+        args.compute_all_to_all.push_back(last_block_wt);
 
         args.compute_not_all_to_all.push_back(tile_width);
         args.compute_not_all_to_all.push_back(last_tile_W);
-        args.compute_not_all_to_all.push_back(ctx.K);
+        args.compute_not_all_to_all.push_back(ctx.logical_K);
         args.compute_not_all_to_all.push_back(eps_u32);
         args.compute_not_all_to_all.push_back(ctx.per_core_recip_lut_size);
+        args.compute_not_all_to_all.push_back(last_block_wt);
     }
 
     return args;
@@ -778,6 +809,90 @@ CompileTimeArgs CompileTimeArgs::build(const CompileTimeArgsContext& ctx) {
 //////////////////////////////////////////////////////////////////////////////
 // Kernel and CB descriptor builders
 //////////////////////////////////////////////////////////////////////////////
+
+namespace {
+
+// build_writer_args() lays out the gamma/beta base addresses at fixed writer arg indices 3 and 4.
+constexpr uint32_t kWriterGammaArgIdx = 3;
+constexpr uint32_t kWriterBetaArgIdx = 4;
+
+// Bind the gamma/beta writer address slots to their Buffer* so the framework patches them on
+// cache hits. A null buffer (absent optional tensor) leaves the baked 0 untouched.
+void bind_writer_gamma_beta(KernelDescriptor& desc, Buffer* gamma_buffer, Buffer* beta_buffer) {
+    if (gamma_buffer == nullptr && beta_buffer == nullptr) {
+        return;
+    }
+    for (const auto& core_args : desc.runtime_args) {
+        const CoreCoord& core = core_args.first;
+        if (gamma_buffer != nullptr) {
+            desc.buffer_bindings.push_back({core, kWriterGammaArgIdx, gamma_buffer});
+        }
+        if (beta_buffer != nullptr) {
+            desc.buffer_bindings.push_back({core, kWriterBetaArgIdx, beta_buffer});
+        }
+    }
+}
+
+void add_idle_core_kernel_descriptors(
+    ProgramDescriptor& program_descriptor,
+    const CoreRanges& core_ranges,
+    const KernelConfig& kernel_config,
+    const KernelDescriptor::NamedCompileTimeArgs& reader_cb_named_args,
+    const KernelDescriptor::NamedCompileTimeArgs& writer_cb_named_args,
+    const KernelDescriptor::NamedCompileTimeArgs& compute_cb_named_args) {
+    if (core_ranges.inactive_cores.empty()) {
+        return;
+    }
+
+    auto with_idle_define = [](KernelDescriptor::Defines defines) {
+        defines.emplace_back("IDLE_CORE", "1");
+        return defines;
+    };
+
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source = kernel_config.reader_receiver_path;
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = core_ranges.inactive_cores;
+    reader_desc.compile_time_args = kernel_config.reader_receiver_ct_args;
+    reader_desc.named_compile_time_args = reader_cb_named_args;
+    reader_desc.defines = with_idle_define(kernel_config.reader_receiver_defines);
+    reader_desc.config = DataMovementConfigDescriptor{
+        .processor = DataMovementProcessor::RISCV_0,
+        .noc = kernel_config.reader_noc,
+        .noc_mode = NOC_MODE::DM_DEDICATED_NOC};
+    program_descriptor.kernels.push_back(std::move(reader_desc));
+
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source = kernel_config.writer_path;
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = core_ranges.inactive_cores;
+    writer_desc.compile_time_args = kernel_config.writer_receiver_ct_args;
+    auto writer_named_args = writer_cb_named_args;
+    writer_named_args.push_back({"is_all_to_all_worker", 0});
+    writer_desc.named_compile_time_args = std::move(writer_named_args);
+    writer_desc.defines = with_idle_define(kernel_config.writer_defines);
+    writer_desc.config = DataMovementConfigDescriptor{
+        .processor = DataMovementProcessor::RISCV_1,
+        .noc = kernel_config.writer_noc,
+        .noc_mode = NOC_MODE::DM_DEDICATED_NOC};
+    program_descriptor.kernels.push_back(std::move(writer_desc));
+
+    KernelDescriptor compute_desc;
+    compute_desc.kernel_source = kernel_config.compute_path;
+    compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute_desc.core_ranges = core_ranges.inactive_cores;
+    compute_desc.compile_time_args = kernel_config.compute_not_all_to_all_ct_args;
+    compute_desc.named_compile_time_args = compute_cb_named_args;
+    compute_desc.defines = with_idle_define(kernel_config.compute_defines);
+    compute_desc.config = ComputeConfigDescriptor{
+        .math_fidelity = kernel_config.math_fidelity,
+        .fp32_dest_acc_en = kernel_config.fp32_dest_acc_en,
+        .dst_full_sync_en = kernel_config.dst_full_sync_en,
+        .math_approx_mode = kernel_config.math_approx_mode};
+    program_descriptor.kernels.push_back(std::move(compute_desc));
+}
+
+}  // namespace
 
 void add_kernel_descriptors(
     ProgramDescriptor& program_descriptor,
@@ -805,6 +920,14 @@ void add_kernel_descriptors(
         {"cb_in_2", tt::CBIndex::c_2},
         {"cb_eps", tt::CBIndex::c_3},
         {"cb_in_4", tt::CBIndex::c_4},
+        // On-device column mask (non-distributed, generated by the writer under DO_COL_MASK): the mask
+        // CB and the logical width (where the padding columns begin).
+        {"cb_col_mask", tt::CBIndex::c_19},
+        {"logical_K", kernel_config.logical_K},
+        // Per-core width in tiles and the Welford flag, shared by both writer descriptors. The
+        // per-role is_all_to_all_worker flag is appended per descriptor below, since it differs.
+        {"block_w", kernel_config.block_wt},
+        {"use_welford", static_cast<uint32_t>(kernel_config.use_welford)},
     };
 
     KernelDescriptor::NamedCompileTimeArgs compute_cb_named_args = {
@@ -833,7 +956,19 @@ void add_kernel_descriptors(
         // layernorm_sharded_welford.cpp) so the named arg can stay present unconditionally.
         {"cb_x_welford", tt::CBIndex::c_29},
         {"welford_fp32_alias", static_cast<uint8_t>(kernel_config.welford_fp32_alias ? 1 : 0)},
+        // Column mask for the non-tile-aligned path. CB 14 (E[x] scratch) is LayerNorm-only; CB 19
+        // (the writer-generated mask) is applied at every masking site and shared with RMSNorm.
+        {"cb_mask_scratch", tt::CBIndex::c_14},
+        {"cb_col_mask_packed", tt::CBIndex::c_19},
     };
+
+    add_idle_core_kernel_descriptors(
+        program_descriptor,
+        core_ranges,
+        kernel_config,
+        reader_cb_named_args,
+        writer_cb_named_args,
+        compute_cb_named_args);
 
     // Reader sender kernel
     KernelDescriptor reader_sender_kernel_desc;
@@ -892,9 +1027,12 @@ void add_kernel_descriptors(
     writer_sender_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_sender_kernel_desc.core_ranges = core_ranges.all_to_all_cores;
     writer_sender_kernel_desc.compile_time_args = std::move(kernel_config.writer_sender_ct_args);
-    writer_sender_kernel_desc.named_compile_time_args = writer_cb_named_args;
+    auto writer_sender_named_args = writer_cb_named_args;
+    writer_sender_named_args.push_back({"is_all_to_all_worker", 1});
+    writer_sender_kernel_desc.named_compile_time_args = std::move(writer_sender_named_args);
     writer_sender_kernel_desc.defines = kernel_config.writer_defines;
     writer_sender_kernel_desc.runtime_args = std::move(kernel_config.writer_sender_rt_args);
+    bind_writer_gamma_beta(writer_sender_kernel_desc, kernel_config.gamma_buffer, kernel_config.beta_buffer);
     writer_sender_kernel_desc.config = DataMovementConfigDescriptor{
         .processor = DataMovementProcessor::RISCV_1,
         .noc = kernel_config.writer_noc,
@@ -908,9 +1046,12 @@ void add_kernel_descriptors(
         writer_receiver_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
         writer_receiver_kernel_desc.core_ranges = core_ranges.not_all_to_all_workers;
         writer_receiver_kernel_desc.compile_time_args = std::move(kernel_config.writer_receiver_ct_args);
-        writer_receiver_kernel_desc.named_compile_time_args = writer_cb_named_args;
+        auto writer_receiver_named_args = writer_cb_named_args;
+        writer_receiver_named_args.push_back({"is_all_to_all_worker", 0});
+        writer_receiver_kernel_desc.named_compile_time_args = std::move(writer_receiver_named_args);
         writer_receiver_kernel_desc.defines = std::move(kernel_config.writer_defines);
         writer_receiver_kernel_desc.runtime_args = std::move(kernel_config.writer_receiver_rt_args);
+        bind_writer_gamma_beta(writer_receiver_kernel_desc, kernel_config.gamma_buffer, kernel_config.beta_buffer);
         writer_receiver_kernel_desc.config = DataMovementConfigDescriptor{
             .processor = DataMovementProcessor::RISCV_1,
             .noc = kernel_config.writer_noc,
@@ -1110,6 +1251,27 @@ void add_cb_descriptors(
             tt::CBIndex::c_2,
             tt::DataFormat::Float16_b,
             cb_config.bfloat16_tile_size));
+        if (cb_config.do_legacy_layernorm_col_mask) {
+            // CB 14: scratch holding the masked input for the LayerNorm E[x] reduction (so cb_in stays
+            // intact for the (x - E[x]) pass). The mask itself is the writer-generated CB 19 below.
+            program_descriptor.cbs.push_back(make_cb_descriptor(
+                cb_config.xmm_CB_size,
+                core_ranges.all_cores,
+                tt::CBIndex::c_14,
+                cb_config.cb_data_format,
+                cb_config.single_tile_size));
+        }
+        if (cb_config.do_col_mask) {
+            // CB 19: writer-generated column mask, block_wt tiles (one tile-row), always in bfloat16.
+            // The mask holds only 1.0 or 0.0 in bfloat16. The writer fills it per core from the core's
+            // width position (full / partial / all-padding per tile); compute waits on it and reads by tile index.
+            program_descriptor.cbs.push_back(make_cb_descriptor(
+                cb_config.col_mask_gen_CB_size_bytes,
+                core_ranges.all_cores,
+                tt::CBIndex::c_19,
+                tt::DataFormat::Float16_b,
+                cb_config.bfloat16_tile_size));
+        }
         // CB 3: in3 eps
         program_descriptor.cbs.push_back(make_cb_descriptor(
             cb_config.in3_CB_size,
@@ -1244,6 +1406,14 @@ void add_cb_descriptors(
             cb_config.out_single_tile_size,
             cb_config.output_reshard_buffer));
     }
+
+    if (!core_ranges.inactive_cores.empty()) {
+        for (auto& cb_desc : program_descriptor.cbs) {
+            if (cb_desc.buffer == nullptr && cb_desc.core_ranges == core_ranges.all_cores) {
+                cb_desc.core_ranges = core_ranges.mcast_dest_cores;
+            }
+        }
+    }
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -1279,12 +1449,24 @@ CoreIndices CoreIndices::compute(uint32_t core_idx, const CoreCoord& core, const
             (idx.width_index * ctx.workers.num_rows_per_all_to_all_worker) * ctx.single_tile_size;
     }
 
-    idx.gamma_tile_start_id = idx.width_index * ctx.block_wt;
-    idx.beta_tile_start_id = idx.width_index * ctx.block_wt;
+    idx.width_shard_tile_start_id = idx.width_index * ctx.block_wt;
 
     idx.num_reduce_tiles_per_block_h = ctx.block_wt;
     if (idx.width_index == ctx.last_core_width_index) {
         idx.num_reduce_tiles_per_block_h = ctx.Kt - ctx.last_core_width_index * ctx.block_wt;
+    }
+
+    // Real (logical) column count this core reduces over (used by the Welford compute kernel, which has
+    // no per-column mask). Cores before the last own a full block_w; the final real core owns the
+    // remaining logical columns (which may end in a partial tile); any all-padding core beyond it owns
+    // none. For a single width shard this is just the whole logical width.
+    const uint32_t block_w = ctx.block_wt * TILE_WIDTH;
+    if (idx.width_index < ctx.last_core_width_index) {
+        idx.welford_reduce_w = block_w;
+    } else if (idx.width_index == ctx.last_core_width_index) {
+        idx.welford_reduce_w = ctx.logical_K - ctx.last_core_width_index * block_w;
+    } else {
+        idx.welford_reduce_w = 0;
     }
 
     return idx;
@@ -1322,6 +1504,16 @@ std::vector<uint32_t> build_compute_args(
             args.push_back((uint32_t)ctx.num_distributed_devices);
         }
     }
+    // Welford-only args, appended after the all-to-all args so the other compute kernels, which do not
+    // read them, are unaffected. The Welford kernel reads welford_reduce_w at different index on
+    // all-to-all workers vs other workers.
+    args.push_back(idx.welford_reduce_w);
+    // The global width-block index of the last real (partial) block, and this core's own width-block
+    // index. The Welford cross-core combine (run only on all-to-all workers) uses these to weight each
+    // combined block/row by its true logical width: the partial block sits at a single global position,
+    // not in every row. Read at indices 5 and 6 on all-to-all workers.
+    args.push_back(ctx.last_core_width_index);
+    args.push_back(idx.width_index);
     return args;
 }
 
@@ -1356,6 +1548,7 @@ std::vector<uint32_t> build_reader_sender_args(
     }
 
     std::vector<uint32_t> args;
+    args.reserve(7 + ctx.mcast_noc_x.size() + ctx.mcast_noc_y.size());
     args.push_back(mcast_start.x);
     args.push_back(mcast_start.y);
     args.push_back(mcast_end.x);
@@ -1385,6 +1578,7 @@ std::vector<uint32_t> build_reader_sender_args(
 std::vector<uint32_t> build_reader_receiver_all_to_all_args(
     const CoreCoord& core, const CoreIndices& idx, const RuntimeArgsContext& ctx) {
     std::vector<uint32_t> args;
+    args.reserve(6 + ctx.mcast_noc_x.size() + ctx.mcast_noc_y.size());
 
     bool is_last_all_to_all_worker;
     if (ctx.grid.use_two_stage_reduce) {
@@ -1422,6 +1616,7 @@ std::vector<uint32_t> build_reader_receiver_all_to_all_args(
 
 std::vector<uint32_t> build_reader_receiver_not_all_to_all_args(const CoreIndices& idx, const RuntimeArgsContext& ctx) {
     std::vector<uint32_t> args;
+    args.reserve(7);
     args.push_back(false);  // is_last_all_to_all_worker
     args.push_back(idx.all_to_all_worker_tile_offset_bytes);
     args.push_back(0);  // is_second_stage_reader
@@ -1486,6 +1681,7 @@ std::vector<uint32_t> build_writer_args(
     const std::vector<uint32_t>& write_back_args,
     bool is_all_to_all) {
     std::vector<uint32_t> args;
+    args.reserve(6 + write_back_args.size());
 
     if (is_all_to_all) {
         if (ctx.grid.use_two_stage_reduce && idx.width_index >= ctx.workers.num_cores_all_to_all_first_stage) {
@@ -1500,8 +1696,7 @@ std::vector<uint32_t> build_writer_args(
     args.push_back(ctx.eps_u);
     args.push_back(ctx.gamma_dram_addr);
     args.push_back(ctx.beta_dram_addr);
-    args.push_back(idx.gamma_tile_start_id);
-    args.push_back(idx.beta_tile_start_id);
+    args.push_back(idx.width_shard_tile_start_id);
     args.insert(args.end(), write_back_args.begin(), write_back_args.end());
     return args;
 }

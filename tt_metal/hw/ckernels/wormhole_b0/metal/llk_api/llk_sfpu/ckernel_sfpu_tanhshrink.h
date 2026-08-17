@@ -8,6 +8,7 @@
 #include "ckernel_sfpu_exp.h"
 #include "ckernel_sfpu_recip.h"
 #include "ckernel_sfpu_tanh.h"
+#include "cmath_common.h"
 
 namespace ckernel::sfpu {
 
@@ -56,11 +57,13 @@ inline void calculate_tanhshrink() {
                 // Clamp |x| to 9 (tanh(9) rounds to 1.0 in fp32) so the saturation tail and
                 // +/-inf stay exact and the exp argument is bounded to [-18, -2].
                 sfpi::vFloat axc = ax;
-                sfpi::vFloat clamp = 9.0f;
-                sfpi::vec_min_max(axc, clamp);  // axc = min(|x|, 9)
+                axc = sfpi::min(axc, 9.0f);
                 sfpi::vFloat e = _sfpu_exp_fp32_accurate_unsafe_(-2.f * axc);
-                sfpi::vFloat sig = sfpu_reciprocal_iter<2>(sfpi::vConst1 + e);  // sigmoid(2|x|)
-                sfpi::vFloat tanh_ax = 2.f * sig - sfpi::vConst1;            // tanh(|x|)
+                // Denominator 1+e is provably well-conditioned here: |x|>1 so
+                // e = exp(-2|x|) in (0, e^-2], giving 1+e in [1, 1+e^-2] >= 1.
+                // A single Newton refinement therefore suffices (2->1 iterations).
+                sfpi::vFloat sig = sfpu_reciprocal_iter<1>(1.0f + e);  // sigmoid(2|x|)
+                sfpi::vFloat tanh_ax = 2.f * sig - 1.0f;               // tanh(|x|)
                 result = sfpi::copysgn(ax - tanh_ax, x);
             } else {
                 // tanh(|x|) via a degree-3 minimax fit on [1,3.3].
@@ -68,8 +71,7 @@ inline void calculate_tanhshrink() {
                 // clamp to 1.0 holds the saturation tail exactly (including +/-inf).
                 sfpi::vFloat p = PolynomialEvaluator::eval(
                     ax, 6.1829000893e-02f, 1.0561303143e+00f, -4.0859283753e-01f, 5.3348409333e-02f);
-                sfpi::vFloat one = sfpi::vConst1;
-                sfpi::vec_min_max(p, one);                 // p = min(p, 1.0)
+                p = sfpi::min(p, 1.0f);
                 sfpi::vFloat tanhx = sfpi::copysgn(p, x);  // tanh(-x) = -tanh(x)
                 result = x - tanhx;
             }
@@ -87,6 +89,7 @@ inline void calculate_tanhshrink() {
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void tanhshrink_init() {
+    math::reset_counters(p_setrwc::SET_ABD_F);
     // The bf16 large-|x| path uses only local literal polynomials, so it needs no init.
     if constexpr (is_fp32_dest_acc_en) {
         // The fp32 large-|x| path only needs the reciprocal Newton constants; the accurate

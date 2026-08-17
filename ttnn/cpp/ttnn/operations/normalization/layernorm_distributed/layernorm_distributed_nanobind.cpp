@@ -46,6 +46,7 @@ void bind_normalization_layernorm_pre_all_gather_operation(nb::module_& mod) {
                 program_config (ttnn.ProgramConfig, optional): the program configuration. Defaults to None.
                 memory_config (ttnn.MemoryConfig, optional): the memory configuration. Defaults to None.
                 recip_tensor (ttnn.Tensor, optional): the reciprocals tensor for Welford algorithm. Required when using Welford (use_welford=True in program_config). Create using :func:`ttnn.create_layer_norm_reciprocals`. Defaults to None.
+                fast_and_approximate_mode (bool, optional): FLOAT32 only. ``False`` (default) uses the accurate SFPU path (full float32 accumulation); ``True`` uses the faster FPU path (inputs truncated to TF32). The accurate path is unavailable on Quasar and falls back to the FPU there. Ignored by the Welford path. No effect for non-FLOAT32 inputs. Defaults to False.
 
               Returns:
                 ttnn.Tensor: the output tensor.
@@ -86,7 +87,8 @@ void bind_normalization_layernorm_pre_all_gather_operation(nb::module_& mod) {
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("program_config") = nb::none(),
         nb::arg("memory_config") = nb::none(),
-        nb::arg("recip_tensor") = nb::none());
+        nb::arg("recip_tensor") = nb::none(),
+        nb::arg("fast_and_approximate_mode") = false);
 }
 
 void bind_normalization_layernorm_post_all_gather_operation(nb::module_& mod) {
@@ -133,7 +135,7 @@ void bind_normalization_layernorm_post_all_gather_operation(nb::module_& mod) {
 
                     * - dtype
                       - layout
-                    * - BFLOAT16, BFLOAT8_B
+                    * - BFLOAT16, BFLOAT8_B, FLOAT32
                       - TILE
 
                   .. list-table:: stats
@@ -141,7 +143,7 @@ void bind_normalization_layernorm_post_all_gather_operation(nb::module_& mod) {
 
                     * - dtype
                       - layout
-                    * - BFLOAT16
+                    * - BFLOAT16, BFLOAT8_B, FLOAT32
                       - TILE
 
                   .. list-table:: weight (gamma) and bias (beta)
@@ -149,16 +151,17 @@ void bind_normalization_layernorm_post_all_gather_operation(nb::module_& mod) {
 
                     * - dtype
                       - layout
-                    * - BFLOAT16
-                      - ROW_MAJOR
+                    * - BFLOAT16, FLOAT32
+                      - ROW_MAJOR, TILE
 
                   Output tensor will be in TILE layout and have the same dtype as the :attr:`input_tensor`
 
                 Limitations:
                   - Input tensors must be on-device and rank 4.
+                  - FLOAT32 :attr:`input_tensor` / :attr:`stats` require ``fp32_dest_acc_en=true`` in the compute kernel config.
                   - The last padded dim of :attr:`stats` must be a multiple of TILE_WIDTH.
                   - The first three padded dims of :attr:`stats` must match :attr:`input_tensor`.
-                  - :attr:`weight` (gamma) and :attr:`bias` (beta) are independently optional; when either is provided it must be BFLOAT16 and match :attr:`input_tensor` per the layout rules above.
+                  - :attr:`weight` (gamma) and :attr:`bias` (beta) are independently optional, may be BFLOAT16 or FLOAT32, and must match :attr:`input_tensor` per the layout rules above.
                   - Sharded runs: inputs cannot be height-sharded, padded height must equal TILE_HEIGHT (32), and :attr:`stats` must be sharded with `num_cores=1` and expected tile columns per device.
         )doc",
         &ttnn::layer_norm_post_all_gather,

@@ -79,10 +79,6 @@ using ::tt::tt_metal::CoreRange;
 using ::tt::tt_metal::CreateCircularBuffer;
 using ::tt::tt_metal::CreateKernel;
 using ::tt::tt_metal::CreateProgram;
-using ::tt::tt_metal::D2DStreamConfig;
-using ::tt::tt_metal::D2DStreamService;
-using ::tt::tt_metal::D2DStreamServiceReceiver;
-using ::tt::tt_metal::D2DStreamServiceSender;
 using ::tt::tt_metal::DataMovementConfig;
 using ::tt::tt_metal::DataMovementProcessor;
 using ::tt::tt_metal::DataType;
@@ -108,6 +104,10 @@ using ::tt::tt_metal::distributed::MeshWorkload;
 using ::tt::tt_metal::distributed::ReadShard;
 using ::tt::tt_metal::distributed::SocketMemoryConfig;
 using ::tt::tt_metal::distributed::WriteShard;
+using ttnn::D2DStreamConfig;
+using ttnn::D2DStreamService;
+using ttnn::D2DStreamServiceReceiver;
+using ttnn::D2DStreamServiceSender;
 
 // service_cores_supported / h2d_host_pinning_supported live in
 // stream_service_test_utils.hpp (shared with the stream-pipeline gtest).
@@ -138,7 +138,7 @@ D2DStreamConfig make_config(
         DataType::UINT32,
         PageConfig(Layout::ROW_MAJOR),
         MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM, std::nullopt});
-    const TensorSpec global_spec(global_shape, tensor_layout);
+    const tt::tt_metal::TensorSpec global_spec(global_shape, tensor_layout);
     return D2DStreamConfig{
         .global_spec = global_spec,
         .mapper = create_mesh_mapper(*sender_mesh, MeshMapperConfig{.placements = replicate_all(*sender_mesh)}),
@@ -743,7 +743,7 @@ void verify_metadata_reuse(
 MeshWorkload make_receiver_consumer_workload(
     D2DStreamServiceReceiver* receiver,
     const std::shared_ptr<MeshDevice>& mesh,
-    const tt::tt_metal::Tensor& output_tensor,
+    const ttnn::Tensor& output_tensor,
     uint32_t num_iters) {
     const auto& coords = receiver->get_backing_tensor().tensor_topology().mesh_coords();
     const auto* backing_buffer = receiver->get_backing_tensor().buffer();
@@ -804,7 +804,7 @@ MeshWorkload make_receiver_consumer_workload(
 
 // Assert `output_tensor` holds the iota (base + i) on every coord.
 void expect_output_tensor_iota(
-    const tt::tt_metal::Tensor& output_tensor, const std::shared_ptr<MeshDevice>& mesh, uint32_t base) {
+    const ttnn::Tensor& output_tensor, const std::shared_ptr<MeshDevice>& mesh, uint32_t base) {
     auto mesh_buffer = mesh_buffer_view(output_tensor);
     const size_t num_u32 = output_tensor.buffer()->size() / sizeof(uint32_t);
     const std::vector<uint32_t> expected = make_iota_u32(num_u32, base);
@@ -928,7 +928,7 @@ MeshWorkload make_bridge_workload(
 // that pack exponents alongside data are covered).
 std::unique_ptr<H2DStreamService> make_h2d_service(
     const std::shared_ptr<MeshDevice>& sender_mesh,
-    const TensorSpec& global_spec,
+    const tt::tt_metal::TensorSpec& global_spec,
     const CoreRange& worker_cores,
     uint32_t metadata_size_bytes) {
     const uint32_t fifo_bytes = fifo_bytes_for(global_spec);
@@ -993,7 +993,7 @@ void verify_h2d_d2d_bridge(
     cfg.metadata_size_bytes = metadata_size_bytes;
     auto [sender, receiver] = D2DStreamService::create_pair(sender_mesh, receiver_mesh, std::move(cfg));
 
-    auto output_tensor = tt::tt_metal::create_device_tensor(
+    auto output_tensor = ttnn::create_device_tensor(
         receiver->get_backing_tensor().tensor_spec(),
         receiver_mesh.get(),
         receiver->get_backing_tensor().tensor_topology());
@@ -1068,7 +1068,7 @@ void verify_three_stage_chain(
     cfg1.metadata_size_bytes = metadata_size_bytes;
     auto [sender1, receiver1] = D2DStreamService::create_pair(stage1, stage2, std::move(cfg1));
 
-    auto output_tensor = tt::tt_metal::create_device_tensor(
+    auto output_tensor = ttnn::create_device_tensor(
         receiver1->get_backing_tensor().tensor_spec(), stage2.get(), receiver1->get_backing_tensor().tensor_topology());
 
     auto consumer_workload = make_receiver_consumer_workload(receiver1.get(), stage2, output_tensor, num_iters);
@@ -1121,7 +1121,7 @@ void verify_h2d_d2d_bridge_reuse(
     cfg.metadata_size_bytes = metadata_size_bytes;
     auto [sender, receiver] = D2DStreamService::create_pair(sender_mesh, receiver_mesh, std::move(cfg));
 
-    auto output_tensor = tt::tt_metal::create_device_tensor(
+    auto output_tensor = ttnn::create_device_tensor(
         receiver->get_backing_tensor().tensor_spec(),
         receiver_mesh.get(),
         receiver->get_backing_tensor().tensor_topology());

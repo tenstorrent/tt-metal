@@ -14,16 +14,22 @@ Therefore, the peak achieved flops changes based on the datatype, the size of th
 
 ### Running Benchmarks
 
-The matrix multiply TFLOPS results can be tested on any Wormhole or Blackhole card using:
+The matrix multiply TFLOPS results can be tested on any Wormhole or Blackhole card. The benchmark is gated behind `TTNN_RUN_GEMM_FLOPS_BENCHMARK=1` (it skips otherwise) and runs a single unified test, `test_matmul_2d_host_perf`, that sweeps three modes and writes them all to one CSV (`generated/matmul_benchmark_report.csv`):
 
-**For manually selected matmul configurations (best performance):**
+- `oob` — out-of-box matmul configs (default auto-selected settings)
+- `tuned_2d_l1` — explicitly tuned 2D multicast config with L1-sharded in0 and output (best performance)
+- `tuned_2d_dram` — explicitly tuned 2D multicast config with DRAM-interleaved in0 and output
+
+The easiest way to run the full flow (benchmark + CSV placement + plot generation) is the provided runner, which sets all required env vars:
+
 ```bash
-TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_DEVICE_PROFILER=1 pytest tests/ttnn/unit_tests/benchmarks/test_benchmark.py::test_matmul_2d_host_perf
+bash tech_reports/GEMM_FLOPS/run_bench.sh
 ```
 
-**For out-of-box matmul configurations (default settings):**
+To run only the benchmark without regenerating the plots, invoke the test directly (note the required env var):
+
 ```bash
-TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_DEVICE_PROFILER=1 pytest tests/ttnn/unit_tests/benchmarks/test_benchmark.py::test_matmul_2d_host_perf_out_of_box
+TTNN_RUN_GEMM_FLOPS_BENCHMARK=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_DEVICE_PROFILER=1 pytest tests/ttnn/unit_tests/benchmarks/test_benchmark.py::test_matmul_2d_host_perf -xvs --timeout=7200
 ```
 
 Alternatively, to test on an N300 card, use ```WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml``` before each command.

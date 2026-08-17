@@ -15,6 +15,7 @@
 #include "ttnn/operations/data_movement/transpose/device/transpose_utils.hpp"
 
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/hal.hpp>
 
 using namespace tt::tt_metal;
 
@@ -177,7 +178,7 @@ void SliceDeviceOperation::validate_on_program_cache_miss(
 SliceDeviceOperation::spec_return_value_t SliceDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
-    SmallVector<uint32_t> out_shape(input_tensor.logical_shape().rank());
+    ttsl::SmallVector<uint32_t> out_shape(input_tensor.logical_shape().rank());
 
     if (args.use_tensor_args) {
         TT_FATAL(
@@ -247,7 +248,7 @@ SliceDeviceOperation::spec_return_value_t SliceDeviceOperation::compute_output_s
             tt::tt_metal::MemoryConfig(output_mem_config.memory_layout(), output_mem_config.buffer_type(), derived);
     }
 
-    return ttnn::TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_tensor_shape,
         tt::tt_metal::TensorLayout(input_tensor.dtype(), PageConfig(input_tensor.layout()), output_mem_config));
 }
@@ -276,13 +277,16 @@ SliceDeviceOperation::program_factory_t SliceDeviceOperation::select_program_fac
     bool has_step = std::any_of(args.step.cbegin(), args.step.cend(), [](uint32_t s) { return s != 1; });
 
     if (input.layout() == Layout::ROW_MAJOR) {
-        // HEIGHT→HEIGHT no-step: fast CB path, no NOC read needed.
-        // WIDTH/BLOCK-sharded RM: SliceRmProgramFactory with per-shard page size via noc_async_*_sharded.
+        // Misaligned W-begin needs SliceRmProgramFactory's tt_memmove fixup (issue #50714).
+        const uint32_t begins_bytes_last =
+            args.slice_start.rank() > 0 ? args.slice_start[-1] * input.element_size() : 0u;
+        const bool w_begin_aligned = (begins_bytes_last % ::hal::get_l1_alignment()) == 0;
         const bool height_sharded_in_out_no_step =
             input.is_sharded() &&
             input.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED &&
             args.output_mem_config.is_sharded() &&
-            args.output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED && !has_step;
+            args.output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED && !has_step &&
+            w_begin_aligned;
         if (height_sharded_in_out_no_step) {
             return SliceRmShardedProgramFactory{};
         }
@@ -293,6 +297,60 @@ SliceDeviceOperation::program_factory_t SliceDeviceOperation::select_program_fac
     }
     // Layout::TILE — TensorAccessor at tile granularity handles all sharded buffer types natively.
     return SliceTileProgramFactory{};
+}
+
+ttsl::hash::hash_t SliceDeviceOperation::compute_program_hash(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    // Default hash has weak distribution for small-integer shape sequences (boost::hash_combine
+    // style), causing false cache hits when shapes differ but collide. Mix in full input/output
+    // specs and slice params so any two invocations with different core-grid sizes get distinct
+    // keys. Same pattern as concat fix in PR #45144 (issue #47602).
+    auto factory = select_program_factory(operation_attributes, tensor_args);
+    auto hash = tt::tt_metal::operation::hash_operation<SliceDeviceOperation>(
+        operation_attributes.slice_start,
+        operation_attributes.slice_end,
+        operation_attributes.step,
+        operation_attributes.use_tensor_args,
+        operation_attributes.slice_dim,
+        operation_attributes.num_devices,
+        operation_attributes.output_mem_config,
+        operation_attributes.sub_core_grids,
+        factory.index(),
+        tensor_args.start_tensor.has_value());
+
+    const auto& input = tensor_args.input;
+    hash = ttsl::hash::hash_objects(
+        hash,
+        input.logical_shape().rank(),
+        input.logical_shape(),
+        input.padded_shape(),
+        input.layout(),
+        input.dtype(),
+        input.memory_config());
+
+    if (tensor_args.start_tensor.has_value()) {
+        const auto& st = tensor_args.start_tensor.value();
+        hash = ttsl::hash::hash_objects(
+            hash,
+            st.logical_shape().rank(),
+            st.logical_shape(),
+            st.padded_shape(),
+            st.layout(),
+            st.dtype(),
+            st.memory_config());
+    }
+
+    const auto output_spec = compute_output_specs(operation_attributes, tensor_args);
+    hash = ttsl::hash::hash_objects(
+        hash,
+        output_spec.logical_shape().rank(),
+        output_spec.logical_shape(),
+        output_spec.padded_shape(),
+        output_spec.layout(),
+        output_spec.data_type(),
+        output_spec.memory_config());
+
+    return hash;
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<SliceDeviceOperation::tensor_return_value_t>

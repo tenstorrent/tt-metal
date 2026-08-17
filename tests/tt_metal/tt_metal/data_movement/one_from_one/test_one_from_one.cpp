@@ -81,6 +81,15 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneFro
         {"test_id", (uint32_t)test_config.test_id},
         {"num_vc", (uint32_t)test_config.num_virtual_channels}};
 
+    DataMovementHardwareConfig requestor_hw_config;
+    if (device->arch() == tt::ARCH::QUASAR) {
+        requestor_hw_config = DataMovementGen2Config{};
+    } else {
+        requestor_hw_config = DataMovementGen1Config{
+            .processor = DataMovementProcessor::RISCV_1,
+            .noc = test_config.noc_id,
+        };
+    }
     KernelSpec requestor_spec{
         .unique_id = KernelSpecName{"requestor"},
         .source = requestor_kernel_path,
@@ -90,15 +99,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneFro
             {
                 .runtime_arg_names = {"num_of_transactions", "transaction_size_bytes", "responder_x", "responder_y"},
             },
-        .hw_config =
-            DataMovementHardwareConfig{
-                .gen1_config =
-                    DataMovementHardwareConfig::Gen1Config{
-                        .processor = DataMovementProcessor::RISCV_1,
-                        .noc = test_config.noc_id,
-                    },
-                .gen2_config = DataMovementHardwareConfig::Gen2Config{},
-            },
+        .hw_config = requestor_hw_config,
     };
 
     ProgramSpec spec{
@@ -115,13 +116,15 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneFro
 
     ProgramRunArgs run_params;
     ProgramRunArgs::KernelRunArgs requestor_run_params{.kernel = requestor_spec.unique_id};
-    requestor_run_params.runtime_arg_values.push_back(
-        {.node = test_config.master_core_coord,
-         .args = {
-             {"num_of_transactions", (uint32_t)test_config.num_of_transactions},
-             {"transaction_size_bytes", (uint32_t)transaction_size_bytes},
-             {"responder_x", (uint32_t)physical_subordinate_core.x},
-             {"responder_y", (uint32_t)physical_subordinate_core.y}}});
+    AddRuntimeArgsForNode(
+        requestor_run_params.runtime_arg_values,
+        test_config.master_core_coord,
+        {
+            {"num_of_transactions", (uint32_t)test_config.num_of_transactions},
+            {"transaction_size_bytes", (uint32_t)transaction_size_bytes},
+            {"responder_x", (uint32_t)physical_subordinate_core.x},
+            {"responder_y", (uint32_t)physical_subordinate_core.y},
+        });
     run_params.kernel_run_args.push_back(requestor_run_params);
     SetProgramRunArgs(program, run_params);
 

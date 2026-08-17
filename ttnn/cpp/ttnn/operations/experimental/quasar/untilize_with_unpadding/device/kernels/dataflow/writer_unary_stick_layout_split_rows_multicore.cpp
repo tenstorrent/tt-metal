@@ -7,7 +7,6 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
-#include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 
@@ -41,14 +40,15 @@ void kernel_main() {
         bool has_rows = (num_rows + padding_rows) > 0;
 
         cb_out0.wait_front(num_tiles_per_row * has_rows);
-        uint32_t l1_read_addr = cb_out0.get_read_ptr();
         for (uint32_t k = 0; k < num_rows; k++) {
-            CoreLocalMem<uint32_t> src(l1_read_addr);
             noc.async_write(
-                src, s, unpadded_X_size, {.offset_bytes = 0}, {.page_id = base_stick_id + k, .offset_bytes = 0});
+                cb_out0,
+                s,
+                unpadded_X_size,
+                {.offset_bytes = k * padded_X_size},
+                {.page_id = base_stick_id + k, .offset_bytes = 0});
 
             noc.async_write_barrier();
-            l1_read_addr += padded_X_size;
         }
         cb_out0.pop_front(num_tiles_per_row * has_rows);
     };

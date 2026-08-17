@@ -302,10 +302,10 @@ void Data::rpc_get_all_build_envs(rpc::Inspector::GetAllBuildEnvsResults::Builde
         build_info.setBuildKey(build_env.build_key);
         build_info.setFirmwarePath(build_env.firmware_root_path);
         build_info.setFwCompileHash(fw_compile_hash);
-        // Surface whether DRAM programmable RISC cores are enabled (Blackhole only)
-        // This reflects the runtime option used when initializing HAL on silicon.
+        // Surface whether DRAM programmable RISC cores are enabled (Blackhole only).
+        // Reflects what the HAL registered at init; see MetalEnvImpl for the enable conditions.
         build_info.setDramProgrammableCoresEnabled(
-            tt::tt_metal::MetalContext::instance().rtoptions().get_enable_blackhole_dram_programmable_cores());
+            tt::tt_metal::MetalContext::instance().hal().has_programmable_core_type(HalProgrammableCoreType::DRAM));
         build_info.setTensixFwLaunchAddrValue(tensix_fw_launch_addr_value);
     }
 }
@@ -376,11 +376,15 @@ void Data::rpc_get_blocks_by_type(rpc::Inspector::GetBlocksByTypeResults::Builde
         std::vector<std::pair<uint32_t, uint32_t>> active_eth_xy;
         std::vector<std::pair<uint32_t, uint32_t>> idle_eth_xy;
 
-        for (const CoreCoord& logical_core : control_plane.get_active_ethernet_cores(device_id)) {
+        const auto active_eth_cores = control_plane.get_active_ethernet_cores(device_id);
+        active_eth_xy.reserve(active_eth_cores.size());
+        for (const CoreCoord& logical_core : active_eth_cores) {
             active_eth_xy.emplace_back(logical_core.x, logical_core.y);
         }
 
-        for (const CoreCoord& logical_core : control_plane.get_inactive_ethernet_cores(device_id)) {
+        const auto idle_eth_cores = control_plane.get_inactive_ethernet_cores(device_id);
+        idle_eth_xy.reserve(idle_eth_cores.size());
+        for (const CoreCoord& logical_core : idle_eth_cores) {
             idle_eth_xy.emplace_back(logical_core.x, logical_core.y);
         }
 

@@ -6,7 +6,6 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
-#include "api/debug/dprint.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
@@ -85,6 +84,11 @@ void kernel_main() {
                     shard_size_bytes,
                     {},
                     {.noc_x = next_core_noc_x, .noc_y = next_core_noc_y, .addr = curr_shard_write_addr});
+                // Flush the write before issuing the semaphore increment. The write uses the
+                // regular write command buffer while the atomic increment uses the AT command
+                // buffer; without this flush the atomic can arrive at the destination before
+                // the payload, causing the receiver to read stale data.
+                noc_obj.async_writes_flushed();
             }
 
             // Signal the next core that data is ready

@@ -144,6 +144,26 @@ SHAPES = [
     (3072, 5120, 3840, 8, 8, True, "plain"),
     (3072, 5120, 1280, 8, 8, True, "plain"),
     (3072, 5120, 3456, 8, 8, True, "plain_gelu"),
+    # MiniMax-H3 AGMM shapes, BH Galaxy TP=4 / SP=8, 12x9 grid (the model reserves one core column
+    # for CCL). M is the per-device packed sequence length at 768P; 4768 is the 5s case and is used
+    # for all three because the model keys its block sizes on (K, N) only -- M changes with the
+    # requested duration while K and N are fixed by the architecture and the TP factor.
+    #   to_qkv  K_tiles_per_device = 42
+    #   to_out  K_tiles_per_device = 56
+    #   ff1     K_tiles_per_device = 42, fused SwiGLU
+    (4768, 5376, 5376, 12, 9, True, "qkv"),
+    (4768, 7168, 1344, 12, 9, True, "plain"),
+    (4768, 5376, 7168, 12, 9, True, "ff1_swiglu"),
+    # MiniMax-H3 fused MM+RS+addcmul (ff2). K = 14336 / tp = 3584 is already per-device. The core grid
+    # is the *matmul* grid; the reduce-scatter takes the rows above it, so one entry per candidate grid.
+    (4768, 3584, 5376, 12, 7, False, "mmrs"),
+    (4768, 3584, 5376, 12, 8, False, "mmrs"),
+    (4768, 3584, 5376, 12, 9, False, "mmrs"),
+    # 12x8 won that grid sweep (1.313 ms vs 1.373 at 12x7 and 1.487 at 12x9); the longer durations
+    # (M = 9216 / 13632) reuse its blocking rather than being swept -- warmup compiles one program per
+    # combo and compile time grows with M, so M=9216 alone is ~75 min against ~9 min here, for a block
+    # shape that has little reason to change with M. To check that assumption, add
+    #   (9216, 3584, 5376, 12, 8, False, "mmrs"),
 ]
 
 SHAPE_IDS = [f"{M}_{K}_{N}_{cgx}x{cgy}_{'agmm' if agmm else 'mm'}_{uc}" for M, K, N, cgx, cgy, agmm, uc in SHAPES]
@@ -174,13 +194,34 @@ USE_CASE_CONFIGS = {
         "math_approx_mode": True,
         "use_matmul_split": True,
     },
+    # Single-block to_qkv via minimal_matmul_split with chunks=3, approx math.
+    # Mirrors cross_attn_kv but splits into 3 Q/K/V chunks instead of 2.
+    "qkv_mm_split": {
+        "chunks": 3,
+        "math_approx_mode": True,
+        "use_matmul_split": True,
+    },
+    # Fused matmul + reduce-scatter + addcmul (RowParallelLinear.forward_fused_addcmul). The shape's
+    # core grid is the *matmul* grid; the reduce-scatter runs on the rows between it and the full
+    # device grid, so sweeping the grid means adding one SHAPES entry per candidate grid. K is already
+    # per-device here (row-parallel fractures the input), so it is not gathered.
+    "mmrs": {
+        "is_mmrs": True,
+        "use_addcmul": True,  # for the L1 estimate; the runner always passes addcmul tensors
+    },
+    # ff1 (proj_mlp) with fused SwiGLU — gate+up packed into N=4608 weight.
+    # fp32_dest_acc_en=True (always on); N_block MUST be even (gate/up tile-pairs interleave along N).
+    # No fused_activation (incompatible with fuse_swiglu per TT_FATAL).
+    "ff1_swiglu": {
+        "fuse_swiglu": True,
+    },
 }
 
 # Whether the sweep uses fp32 dest accumulator. With fp32 dest, the DEST tile
 # capacity is halved (4 tiles instead of 8), so only subblocks with h*w == 4
 # match peak compute throughput — and among those, 2x2 is strictly preferred
 # over 4x1 / 1x4 (better tile reuse in the math LLK). So when fp32 dest is on
-# we skip the subblock sweep entirely and always pick 2x2 (when divisible).
+# the subblock sweep is skipped entirely and 2x2 is picked (when divisible).
 FP32_DEST_ACC_EN = True
 
 # Block-size candidate methodology:
@@ -250,7 +291,7 @@ def get_k_block_candidates(K_per_device):
     K_block-sized chunks — any K_block that doesn't divide K_per_device leaves
     a partial chunk on the last iteration, which the algorithm doesn't support.
 
-    So we restrict to divisors only. K_BLOCK_MIN excludes tiny sizes that are
+    So candidates are restricted to divisors only. K_BLOCK_MIN excludes tiny sizes that are
     dispatch-overhead-bound; there's no upper cap because dividing K cleanly
     never adds padding even at larger block sizes.
     """
@@ -326,12 +367,20 @@ def pick_subblock(m_block, n_block, max_dest_volume=4):
 
 
 def generate_kn_combos(K_per_device, N_per_core, m_block=1, use_case="plain"):
-    """Generate (K_block, N_block) combos filtered by L1 budget."""
+    """Generate (K_block, N_block) combos filtered by L1 budget.
+
+    For fuse_swiglu use_cases, N_block MUST be even (TT_FATAL: gate/up tile-pairs
+    are interleaved along N, so a block must never split a pair). Odd N candidates
+    are skipped pre-sweep to avoid hard asserts that would abort the program.
+    """
     k_candidates = get_k_block_candidates(K_per_device)
     n_candidates = get_mn_block_candidates(N_per_core)
+    require_even_n = USE_CASE_CONFIGS.get(use_case, {}).get("fuse_swiglu", False)
     combos = []
     for k in k_candidates:
         for n in n_candidates:
+            if require_even_n and n % 2 != 0:
+                continue
             if estimate_l1_kb(m_block, k, n, use_case) <= L1_BUDGET_KB:
                 combos.append((k, n))
     return combos
@@ -488,6 +537,7 @@ def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_gri
     )
 
     fused_activation = uc_cfg.get("fused_activation", None)
+    fuse_swiglu = uc_cfg.get("fuse_swiglu", False)
     chunks = uc_cfg.get("chunks", 1)
     scalar = uc_cfg.get("scalar", None)
     mesh_shape = tuple(mesh_device.shape)
@@ -501,6 +551,70 @@ def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_gri
             subblock_w=sb_w,
             compute_with_storage_grid_size=core_grid,
         )
+
+    if uc_cfg.get("is_mmrs", False):
+        cluster_axis = cfg["cluster_axis"]
+        cluster_size = cfg["mesh_shape"][cluster_axis]
+        full_grid = mesh_device.compute_with_storage_grid_size()
+
+        # Mirrors FusedMMRSConfig.get_params: the RS zone is whatever rows the matmul leaves free.
+        rs_zone_capacity = (full_grid.y - core_grid.y) * full_grid.x
+        num_workers_per_link = rs_zone_capacity // (2 * cfg["num_links"]) - 1
+        if num_workers_per_link < 1:
+            msg = f"matmul grid {core_grid} leaves no room for the reduce-scatter on {full_grid}"
+            raise ValueError(msg)
+
+        tt_input = ttnn.from_torch(
+            torch.randn((1, 1, M, K), dtype=torch.float32), dtype=dtype, device=mesh_device, layout=ttnn.TILE_LAYOUT
+        )
+        tt_weight = ttnn.from_torch(
+            torch.randn((K, N), dtype=torch.float32), dtype=dtype, device=mesh_device, layout=ttnn.TILE_LAYOUT
+        )
+        tt_bias = ttnn.from_torch(
+            torch.randn((1, N), dtype=torch.float32), dtype=dtype, device=mesh_device, layout=ttnn.TILE_LAYOUT
+        )
+        # The addcmul operands are already at the post-scatter width.
+        addcmul_shape = (1, 1, M, N // cluster_size)
+        tt_addcmul_a = ttnn.from_torch(
+            torch.randn(addcmul_shape, dtype=torch.float32), dtype=dtype, device=mesh_device, layout=ttnn.TILE_LAYOUT
+        )
+        tt_addcmul_b = ttnn.from_torch(
+            torch.randn(addcmul_shape, dtype=torch.float32), dtype=dtype, device=mesh_device, layout=ttnn.TILE_LAYOUT
+        )
+
+        ccl_cores = ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(full_grid.x - 1, full_grid.y - 1))}
+        )
+        rs_semaphores = [ttnn.create_global_semaphore(mesh_device, ccl_cores, 0) for _ in range(3)]
+        barrier_semaphore = ttnn.create_global_semaphore(mesh_device, ccl_cores, 0)
+
+        def run_op(m_blk, k_blk, n_blk, sb_h, sb_w, sync=True):
+            ttnn.experimental.minimal_matmul_strided_reduce_scatter_async(
+                input_tensor=tt_input,
+                weight_tensor=tt_weight,
+                dim=3,
+                multi_device_global_semaphore=rs_semaphores,
+                reduce_scatter_core_grid_offset=ttnn.CoreCoord(0, core_grid.y),
+                num_links=cfg["num_links"],
+                config=_matmul_config(m_blk, k_blk, n_blk, sb_h, sb_w),
+                num_buffers_per_channel=None,
+                chunk_width_in_mm_blocks=1,
+                num_workers_per_link=num_workers_per_link,
+                bias=tt_bias,
+                memory_config_mm=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+                rs_output_mem_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+                topology=cfg["topology"],
+                cluster_axis=cluster_axis,
+                compute_kernel_config=compute_config,
+                barrier_semaphore=barrier_semaphore,
+                fused_ternary_scalar=1.0,
+                addcmul_input_tensor1=tt_addcmul_a,
+                addcmul_input_tensor2=tt_addcmul_b,
+            )
+            if sync:
+                ttnn.synchronize_device(mesh_device)
+
+        return run_op
 
     if is_agmm:
         sp_axis = cfg["sp_axis"]
@@ -584,6 +698,7 @@ def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_gri
                 addcmul_input_tensor1=addcmul_tensor1,
                 addcmul_input_tensor2=addcmul_tensor2,
                 chunks=chunks,
+                fuse_swiglu=fuse_swiglu,
             )
             if sync:
                 ttnn.synchronize_device(mesh_device)
@@ -626,6 +741,7 @@ def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_gri
                 fused_activation=fused_activation,
                 compute_kernel_config=compute_config,
                 config=cfg_obj,
+                fuse_swiglu=fuse_swiglu,
             )
         else:
             ttnn.experimental.minimal_matmul(
@@ -635,6 +751,7 @@ def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_gri
                 config=cfg_obj,
                 fused_activation=fused_activation,
                 compute_kernel_config=compute_config,
+                fuse_swiglu=fuse_swiglu,
             )
         if sync:
             ttnn.synchronize_device(mesh_device)
@@ -713,7 +830,7 @@ def _quiet_loguru():
     logger.add(sys.stderr, level="ERROR")
 
 
-@pytest.mark.timeout(7200)  # 2h — one worker now covers the full (M, K, N) grid
+@pytest.mark.timeout(7200)  # 2h — one worker covers the full (M, K, N) grid
 @pytest.mark.parametrize("device_config", list(DEVICE_CONFIGS.keys()))
 @pytest.mark.parametrize("shape", SHAPES, ids=SHAPE_IDS)
 def test_mm_sweep_worker(device_config, shape):
@@ -796,7 +913,7 @@ def test_mm_sweep_worker(device_config, shape):
 # ============================================================================
 
 
-@pytest.mark.timeout(7200)  # 2 hours — one subprocess per shape now
+@pytest.mark.timeout(7200)  # 2 hours — one subprocess per shape
 @pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance sweep - skip on CI")
 @pytest.mark.parametrize("device_config", list(DEVICE_CONFIGS.keys()))
 @pytest.mark.parametrize("shape", SHAPES, ids=SHAPE_IDS)
@@ -946,12 +1063,19 @@ def main():
         help="Filter to a single shape as M,K,N (e.g. 6144,5120,3456)",
     )
     parser.add_argument("--csv", type=str, default=CSV_FILE)
+    parser.add_argument(
+        "--use-case",
+        type=str,
+        default=None,
+        choices=list(USE_CASE_CONFIGS.keys()),
+        help="Restrict sweep to a single use_case (e.g. ff1_swiglu)",
+    )
     args = parser.parse_args()
 
     device_config = args.device_config
     cfg = resolve_config(device_config)
 
-    # Filter shapes
+    # Filter shapes by M,K,N then optionally by use_case
     if args.shape:
         m, k, n = [int(x) for x in args.shape.split(",")]
         shapes = [s for s in SHAPES if s[0] == m and s[1] == k and s[2] == n]
@@ -960,6 +1084,12 @@ def main():
             return
     else:
         shapes = SHAPES
+
+    if args.use_case:
+        shapes = [s for s in shapes if s[6] == args.use_case]
+        if not shapes:
+            print(f"No shapes match use_case={args.use_case!r}")
+            return
 
     write_csv_header(args.csv)
     all_best = {}

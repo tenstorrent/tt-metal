@@ -13,7 +13,6 @@
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/tt_metal_profiler.hpp>
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -525,7 +524,7 @@ bool validation_fp16(
     tt_metal::distributed::ReadShard(
         device->mesh_command_queue(), result, out_buffer, tt_metal::distributed::MeshCoordinate(0, 0), true);
     auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result);
-    auto result_flat_layout = convert_layout_tile_nfaces_to_tile_swizzled(tt::stl::make_const_span(result_bfp16));
+    auto result_flat_layout = convert_layout_tile_nfaces_to_tile_swizzled(ttsl::make_const_span(result_bfp16));
     auto result_untilized = untilize_swizzled(result_flat_layout, mt * 32, nt * 32);
 
     const auto& in0_values = in0_tensor.get_values();
@@ -757,7 +756,7 @@ int main(int argc, char** argv) {
             for (uint32_t i = 0; i < num_layers; ++i) {
                 auto input_vec_tilized = tilize_swizzled(in1_tensor_fp8.get_values(), k, n);
                 std::vector<uint32_t> packed_input_vec_tile_layout =
-                    pack_as_bfp8_tiles(tt::stl::make_const_span(input_vec_tilized), true, false);
+                    pack_as_bfp8_tiles(ttsl::make_const_span(input_vec_tilized), true, false);
                 in1_buffers[i] = create_and_transfer_data_sharded_cb(
                     device.get(),
                     packed_input_vec_tile_layout,
@@ -772,7 +771,7 @@ int main(int argc, char** argv) {
             // in0
             auto activations_tilized = tilize_swizzled(in0_tensor_fp8.get_values(), m, k * num_receivers);
             std::vector<uint32_t> activations =
-                pack_as_bfp8_tiles(tt::stl::make_const_span(activations_tilized), true, false);
+                pack_as_bfp8_tiles(ttsl::make_const_span(activations_tilized), true, false);
             in0_buffer = create_and_transfer_data_sharded_cb(
                 device.get(),
                 activations,
@@ -800,7 +799,7 @@ int main(int argc, char** argv) {
             for (uint32_t i = 0; i < num_layers; ++i) {
                 auto input_vec_tilized = tilize_swizzled(in1_tensor_fp16.get_values(), k, n);
                 auto input_vec_tile_layout =
-                    convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::make_const_span(input_vec_tilized));
+                    convert_layout_tile_swizzled_to_tile_nfaces(ttsl::make_const_span(input_vec_tilized));
                 vector<uint32_t> packed_input_vec_tile_layout =
                     pack_bfloat16_vec_into_uint32_vec(input_vec_tile_layout);
                 in1_buffers[i] = create_and_transfer_data_sharded_cb(
@@ -817,7 +816,7 @@ int main(int argc, char** argv) {
             // in0
             auto activations_tilized = tilize_swizzled(in0_tensor_fp16.get_values(), m, k * num_receivers);
             auto activations_tile_layout =
-                convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::make_const_span(activations_tilized));
+                convert_layout_tile_swizzled_to_tile_nfaces(ttsl::make_const_span(activations_tilized));
             vector<uint32_t> activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
             in0_buffer = create_and_transfer_data_sharded_cb(
                 device.get(),

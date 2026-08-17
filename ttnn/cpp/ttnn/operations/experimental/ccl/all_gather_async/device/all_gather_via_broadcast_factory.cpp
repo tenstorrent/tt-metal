@@ -288,7 +288,7 @@ tt::tt_metal::WorkloadDescriptor AllGatherViaBroadcastFactory::create_workload_d
     auto* mesh_device = tensor_args.input_tensor.device();
     auto subdevice_id = operation_attributes.sub_device_id.value_or(mesh_device->get_sub_device_ids().at(0));
     const auto available_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, subdevice_id);
-    ttnn::SmallVector<tt::tt_metal::SubDeviceId> subdevices = {subdevice_id};
+    ttsl::SmallVector<tt::tt_metal::SubDeviceId> subdevices = {subdevice_id};
 
     // Workload-scoped semaphores: allocated once on cache miss and parked on
     // workload_descriptor.semaphores so they outlive the cached workload (the
@@ -297,7 +297,7 @@ tt::tt_metal::WorkloadDescriptor AllGatherViaBroadcastFactory::create_workload_d
     auto init_barrier_semaphore = ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0);
     auto final_barrier_semaphore = ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0);
     log_debug(tt::LogOp, "Semaphores allocated and waiting for all devices to be ready");
-    tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, subdevices);
+    tt::tt_metal::distributed::Synchronize(*mesh_device, std::nullopt, subdevices);
     log_debug(tt::LogOp, "All devices are ready, starting program execution");
 
     workload_descriptor.semaphores.push_back(init_barrier_semaphore);

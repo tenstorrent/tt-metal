@@ -74,6 +74,12 @@ std::vector<uint16_t> gold_reduce_hw(
 std::vector<uint32_t> gold_standard_tilize_w_elwadd(
     const std::vector<uint32_t>& src0_vec, const std::vector<uint32_t>& src1_vec, const GoldenConfig& config);
 
+// Tilizes row-major src0_vec, then performs reduce column with PoolType::MAX.
+// Returns tilized result with only row 0 populated per tile (reduce mask zeros the rest).
+// src1_vec is the scaler tile; the scaler is extracted from its first element.
+std::vector<uint32_t> gold_standard_tilize_w_reduce_col_max(
+    const std::vector<uint32_t>& src0_vec, const std::vector<uint32_t>& src1_vec, const GoldenConfig& config);
+
 // Used if golden function needs pack_rows details
 struct PackRowsConfig {
     int num_rows{};
