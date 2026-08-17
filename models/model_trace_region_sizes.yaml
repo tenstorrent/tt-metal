@@ -53,11 +53,11 @@ sizes:
       bh_p300:
         trace_region_size: 80000000
       p300x2:
-        # performance-batch-32-ci required 116,531,200 bytes for its complete
-        # trace set on a physical P150_X4 quietbox. Keep measured headroom for
-        # repeatable full-trace capture instead of relying on the former 96 MB
-        # estimate.
-        trace_region_size: 128000000
+        # performance-batch-32-ci exceeded 128 MB after capturing decode plus
+        # Q128 prefill batches 32, 1, and 2; the declared warmup set continues
+        # through batches 4, 8, and 16. Reserve the complete set with headroom
+        # instead of iterating over partial capture boundaries.
+        trace_region_size: 224000000
       bh_loudbox:
         trace_region_size: 84000000
 
