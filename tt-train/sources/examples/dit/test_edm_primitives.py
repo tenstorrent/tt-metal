@@ -24,6 +24,7 @@ import traceback
 
 import numpy as np
 import ttnn
+from ttnn.operations import moreh as ttnn_moreh
 
 import ttml
 
