@@ -48,11 +48,14 @@ def test_nlp_concat_heads_decode(ttnn_mesh_device, reset_seeds, batch):
 
     # Concatenated hidden dim: [1, 1, padded_batch, n_heads*head_dim] == [1, 1, padded_batch, Q_DIM].
     # The op tile-pads the user/batch dim to a full tile (nearest_32(batch)): batch=1 -> 32, 32 -> 32.
+    # Those pad rows (users that don't exist, e.g. rows 1..31 when batch=1) are uninitialized and thus
+    # legitimately non-finite, so check shape/dtype only (finite=False) and validate the REAL rows via PCC.
     padded_batch = ((batch + U.TILE - 1) // U.TILE) * U.TILE
     U.assert_shape_dtype(
         attn_output_cat,
         shape=(1, 1, padded_batch, U.N_HEADS * U.HEAD_DIM),
         dtype=ttnn.bfloat16,
+        finite=False,
         mesh_device=mesh,
     )
     # Concat is a pure reshape [1, batch, heads, head_dim] -> [1, 1, batch, heads*head_dim]; check the real
