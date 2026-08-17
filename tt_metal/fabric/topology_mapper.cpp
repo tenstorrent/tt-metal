@@ -1743,7 +1743,7 @@ MeshGraph TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
                         enchantum::to_string(fabric_type),
                         total_number_of_chips);
                 }
-                return std::move(*mesh_graph);
+                return *mesh_graph;
             }
         }
     }
@@ -1776,7 +1776,7 @@ MeshGraph TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
                     final_mesh_size,
                     total_number_of_chips);
             }
-            return std::move(*mesh_graph);
+            return *mesh_graph;
         }
     }
     // Throw if no possible mesh shape is found to match, this means there are no devices! This should never happen
