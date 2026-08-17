@@ -5458,13 +5458,35 @@ which is what I first measured and wrongly began attributing to the codec.
 
 ### The actual defect
 
-**Run 2 wrote no `_selfcheck` at all** (`selfcheck=2` in run 1's file, `selfcheck=0` in run 2's).
-With no reference to compare against, nothing verified the 1064 lines — and this file becomes the
-**ground truth every downstream PCC gate is measured against**. Here it was right. Had it been
-subtly wrong — one RoPE convention, one norm epsilon — every component would have been brought up
-to PCC 0.99 against a wrong target, and no gate in the pipeline could have noticed. The loader's own
-docstring even anticipates the risk (*"worth knowing before you 'fix' the RoPE"*), which makes the
-absence of a check more striking, not less.
+**Run 2 emitted no executable `_selfcheck`** (`selfcheck=2` in run 1's file, `selfcheck=0` in run 2's).
+This file becomes the **ground truth every downstream PCC gate is measured against**, and nothing the
+pipeline runs re-verifies it.
+
+The nuance matters, and it is to the tool's credit: it *did* verify the implementation while writing
+it, and it found a genuinely discriminative test on its own — including a **negative control**, which
+is more than most humans would do. From its docstring:
+
+> *"Do not sanity-check this model with a text continuation. `tied_embeddings` makes `tok_embeddings`
+> double as an LM head, but upstream never evaluates it … so the text head is vestigial and scores
+> worse than uniform no matter what the attention does. All three RoPE conventions (interleaved /
+> rotate_half / none) score identically on text, so text proves nothing here.*
+>
+> *The real check is the TTS path, and it is sharply discriminative. Driving this module end to end …
+> with the native interleaved RoPE produces genuine speech: the model raises `[END_AUDIO]` by itself
+> at a duration that tracks the input text (1.5 s for "Hello.", 7.6 s for a long sentence), with ~98%
+> of energy below 4 kHz and an f0 that follows the requested voice (~135 Hz for `casual_male`, ~282 Hz
+> for `neutral_female`). Swapping in the `rotate_half` convention instead yields a 387 Hz buzz that
+> never terminates."*
+
+That is exactly the right check, and it correctly rules out the cheap one that would have passed
+regardless. **The defect is that all of it is prose.** It cannot be re-run, it is not evidence
+anything downstream can act on, and the pipeline has no way to know whether it happened at all — for
+this model, or for the next one where the agent skips it and writes the same confident paragraph.
+
+Here the implementation was right (7/7 above). Had it been subtly wrong, every component would have
+been brought up to PCC 0.99 against a wrong target with no gate able to notice. Note also what the
+loader itself proved: on the one check a naive implementer would reach for — text perplexity — all
+three RoPE conventions score the same. The obvious check is worthless on this model.
 
 ### Second defect: the gating is inconsistent, and one docstring states the opposite of the behaviour
 
@@ -5493,8 +5515,39 @@ the tool an HF-format export we had built by hand, so `_hf_native` was true, `_n
 false, and the one path that would have fired never did. **Our workaround suppressed the feature that
 existed to remove the need for the workaround.**
 
-**Fix:** pick one gating rule for all three paths and correct the docstring to match; and when it
-writes a from-scratch implementation, make it write and run a self-check too. It cannot compare against a reference that isn't there, but it can assert what
+### What a from-scratch implementation CAN be checked against, with no reference
+
+Layered, cheapest first, with the error class each layer actually catches:
+
+1. **Structural, free.** The strict checkpoint bijection it already enforces, plus per-tensor shape
+   equality and `strict=True`. Also assert every value the checkpoint *declares* — `params.json` here
+   gives `dim`, `n_layers`, `n_heads=32`, `n_kv_heads=8`, `head_dim=128`, `rope_theta=1e6`,
+   `norm_eps=1e-05`, `causal=True`, `tied_embeddings=True`, `rms_norm=PRE`, `use_biases=False`. Catches
+   missing/extra layers, wrong widths, wrong epsilon, wrong theta. **Does not** catch conventions.
+2. **Internal consistency.** Cached prefill+steps must equal full recompute (I measured PCC 1.0);
+   padded positions must not change real ones; perturbing token *t* must not move outputs before *t*
+   (a real causality check — the same defect class as the dropped causal mask in F21). Determinism
+   under a pinned seed. Catches dropped masks, position bugs, cache indexing errors.
+3. **The discriminative behavioural test, with a negative control** — the one the agent found here.
+   For a TTS model: does it terminate by itself, does duration track input length, is ~98% of energy
+   below 4 kHz, does f0 match the requested voice? Then deliberately swap the suspect convention and
+   confirm the test *fails* (`rotate_half` → 387 Hz buzz, never terminates). A check that has never
+   been shown to fail is not evidence. This is what catches the convention errors layer 1 cannot, and
+   it is why text perplexity is useless here — all three RoPE conventions score the same on text.
+4. **Differential, if the budget allows.** Have the resolver write the loader twice, independently,
+   and compare numerically. Two independent implementations agreeing to fp32 rounding is strong
+   evidence; the pipeline already spawns agents, so this is cheap. Catches one-shot mistakes, but not
+   a convention both runs share.
+5. **External anchor, when one exists.** Many model cards publish a sample for a stated prompt. Match
+   it once. Not always available, but the strongest single check when it is.
+
+What none of these can catch: an error the upstream author also made. Worth stating in the log rather
+than implying the loader is validated.
+
+**Fix:** pick one gating rule for all three paths and correct the docstring to match; make the
+resolver *emit* layers 1–3 as a runnable `_selfcheck` — it already designed layer 3 unprompted, so
+the capability is there — and run it, recording the result where the gates can see it. And say plainly
+in the log which of the two things happened: adapted an existing implementation, or wrote one. It cannot compare against a reference that isn't there, but it can assert what
 it already knows: the checkpoint bijection it enforces, shape and finiteness at every stage, cached
 vs recomputed equivalence, and determinism under a pinned seed. Then say plainly in the log which of
 the two things happened — adapted an existing implementation, or wrote one unverified.
@@ -5538,8 +5591,9 @@ the two things happened — adapted an existing implementation, or wrote one unv
 - **"The resolver adapts an existing implementation; without one it stops" was WRONG.** I drew that
   from run 1, where our reference was reachable and it wrote an adapter. Re-tested with all 15
   implementations and copies hidden, it wrote a 1064-line architecture from scratch that matches our
-  reference on every stage (7/7, flow codes bit-identical). See F48. The real defect is narrower and
-  worse: nothing verifies what it writes.
+  reference on every stage (7/7, flow codes bit-identical). See F48. The real defect is narrower: it
+  verified the implementation, and found a sharply discriminative test with a negative control, but
+  emitted all of it as prose instead of a runnable check.
 - **"The resolver is off by default and only runs after a component has failed" was WRONG**, and I
   had put it in the PR-facing document. It is true of two of the three trigger paths. The third —
   pre-flight in `bringup_cc.py`, on the **default** engine — calls `resolve(..., enabled=True)` and
