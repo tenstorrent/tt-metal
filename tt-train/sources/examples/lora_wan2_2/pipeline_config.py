@@ -73,6 +73,7 @@ class Config:
     LOGNORM_STD: float = 1.0
     VAL_LOSS_EVERY: int = 200
     CKPT_EVERY: int = 500
+    RESUME_STEP: int = 0
 
     INFER_H: int = 512
     INFER_W: int = 512

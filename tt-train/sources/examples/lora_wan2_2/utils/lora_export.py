@@ -120,12 +120,22 @@ def save_lora_expert(model, path: str, mesh_shape=(1, 1)) -> None:
     print(f"[save] wrote {len(state)} LoRA tensors -> {path}")
 
 
+def _with_suffix(path: str, suffix: str) -> str:
+    if not suffix:
+        return path
+    return str(Path(path).with_name(Path(path).stem + suffix + ".safetensors"))
+
+
 def save_all(experts: dict, cfg, suffix: str = "") -> None:
     for role, model in experts.items():
-        p = cfg.expert_path(role)
-        if suffix:
-            p = str(Path(p).with_name(Path(p).stem + suffix + ".safetensors"))
-        save_lora_expert(model, p, cfg.MESH_SHAPE)
+        save_lora_expert(model, _with_suffix(cfg.expert_path(role), suffix), cfg.MESH_SHAPE)
+
+
+def load_all(experts: dict, cfg, suffix: str = "") -> None:
+    for role, model in experts.items():
+        path = _with_suffix(cfg.expert_path(role), suffix)
+        n = load_lora_expert(model, path, cfg.MESH_SHAPE)
+        print(f"[load] restored {n} LoRA tensors <- {path}")
 
 
 def load_lora_expert(model, path: str, mesh_shape=(1, 1)) -> int:
