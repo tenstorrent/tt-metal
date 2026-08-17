@@ -34,6 +34,12 @@ template <
     DataFormat data_format,
     ReduceFp32Mode fp32_mode = ReduceFp32Mode::Fast>
 constexpr bool is_sfpu_reduce_path() {
+#ifdef ARCH_QUASAR
+    // Quasar has no SFPU reduce path (and no ckernel::PoolType::MIN) — every reduce runs on the FPU.
+    // Returning false here keeps this constexpr valid without naming the absent PoolType::MIN, and the
+    // downstream `static_assert(!is_sfpu, "SFPU reduce path is not supported on Quasar")` then holds.
+    return false;
+#else
     if constexpr (
         pool_type != ckernel::PoolType::MAX && pool_type != ckernel::PoolType::SUM &&
         pool_type != ckernel::PoolType::MIN) {
@@ -53,6 +59,7 @@ constexpr bool is_sfpu_reduce_path() {
         return false;
     }
     return reduce_dim == ckernel::ReduceDim::REDUCE_ROW || reduce_dim == ckernel::ReduceDim::REDUCE_COL;
+#endif  // ARCH_QUASAR
 }
 
 /**
