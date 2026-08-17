@@ -241,6 +241,11 @@ AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_pro
         // Decide between multicast or unicast algorithm
         const auto& input_tensor = tensor_args.input_tensor;
         const uint32_t axis = args.get_1d_axis();
+        if (tt::tt_fabric::is_2d_fabric_config(args.fabric_config) && !args.axis_is_straight[axis]) {
+            // 2D multicast walks N hops out one physical direction, so a bent axis needs unicast's
+            // one-hop relay. 1D hops ride the cabled chain, which is the bent axis itself.
+            return program_factory_t{AllGatherUnicastFactory{}};
+        }
         switch (input_tensor.device()->arch()) {
             case tt::ARCH::WORMHOLE_B0: {
                 const uint64_t num_pages = input_tensor.buffer()->num_pages();       // per-device shard
@@ -317,6 +322,7 @@ std::tuple<AllGatherParams, AllGatherInputs> all_gather_build_operation_args(
     // An inactive axis has num_devices = 1, num_links = 0, Linear topology.
     std::array<tt::tt_fabric::Topology, 2> axis_topology{
         tt::tt_fabric::Topology::Linear, tt::tt_fabric::Topology::Linear};
+    std::array<bool, 2> axis_is_straight{true, true};
     std::array<uint32_t, 2> axis_num_devices{1u, 1u};
     std::array<uint32_t, 2> axis_num_links{0u, 0u};
     for (uint32_t axis = 0; axis < 2; ++axis) {
@@ -325,6 +331,7 @@ std::tuple<AllGatherParams, AllGatherInputs> all_gather_build_operation_args(
             continue;
         }
         axis_topology[axis] = ::ttnn::ccl::get_axis_topology(input_tensor, fabric_config, axis);
+        axis_is_straight[axis] = ttnn::operations::ccl::common::get_axis_geometry(*mesh_device, axis).is_straight;
         axis_num_devices[axis] = ::ttnn::ccl::get_topological_dimension(input_tensor, axis);
         axis_num_links[axis] = ttnn::operations::ccl::common::get_num_links(*mesh_device, axis);
     }
@@ -352,6 +359,7 @@ std::tuple<AllGatherParams, AllGatherInputs> all_gather_build_operation_args(
             cluster_axis,
             fabric_config,
             axis_topology,
+            axis_is_straight,
             axis_num_devices,
             axis_num_links,
             num_devices,

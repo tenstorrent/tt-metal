@@ -92,6 +92,12 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
         if (!is_axis_active) {
             continue;
         }
+        // A true 2D collective cannot fall back to unicast, so a bent axis has no valid algorithm
+        // here and must not be silently mis-routed.
+        TT_FATAL(
+            !fabric_is_2d || operation_attributes.axis_is_straight[axis],
+            "AllGather 2D multicast needs mesh axis {} wired as a straight line, but it turns corners",
+            axis);
 
         const auto axis_topology = operation_attributes.axis_topology[axis];
         const uint32_t axis_index = sender_device_coord[axis];

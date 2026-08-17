@@ -9,6 +9,7 @@
 #include <cmath>
 
 #include "ccl_host_datastructures.hpp"
+#include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 
@@ -140,9 +141,11 @@ tt::tt_fabric::Topology get_axis_topology(
         axis_can_wrap = fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D_RING;
     }
 
-    // Ring only if the fabric can wrap this axis AND the device set spans [0..size-1].
-    const bool axis_is_ring = axis_can_wrap && get_boundary_mode(tensor, tt::tt_fabric::Topology::Torus, axis) ==
-                                                   tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::WRAP;
+    // The FabricConfig torus flags name a *fabric* mesh axis. A MeshDevice view axis may be a
+    // permutation of the fabric mesh (a line view of a 2x4 board is its perimeter cycle), so the
+    // flag alone says nothing about this axis. Ring only if the axis is actually wired closed.
+    const bool axis_is_ring =
+        axis_can_wrap && ::ttnn::operations::ccl::common::get_axis_geometry(*tensor.device(), axis).wrap_edge_exists;
     return axis_is_ring ? tt::tt_fabric::Topology::Ring : tt::tt_fabric::Topology::Linear;
 }
 

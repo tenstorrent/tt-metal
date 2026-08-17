@@ -389,6 +389,31 @@ def test_all_gather_only(
     )
 
 
+# A (1, 8) view of T3K's 2x4 fabric is its perimeter cycle, so consecutive view coords turn corners.
+@skip_for_blackhole("This is a wormhole test")
+@pytest.mark.parametrize("num_iters", [2])
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+def test_all_gather_folded_line_2d_fabric(
+    mesh_device,
+    num_iters,
+    function_level_defaults,
+):
+    run_all_gather_impl(
+        mesh_device,
+        8,
+        [1, 1, 32, 1024],
+        3,
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        function_level_defaults,
+        (32, 128),
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
+        num_iters=num_iters,
+        tensor_mem_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+    )
+
+
 # Enumerate the post-commit cases explicitly
 @skip_for_wormhole_b0()
 @pytest.mark.parametrize(
