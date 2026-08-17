@@ -13,9 +13,12 @@ before this test. Both bodies consist entirely of two conditional packer-state r
     dense_packing         -> W-stride back to the default 64-row tile-to-tile spacing
     restore_tile_pack_mop -> _llk_pack_mop_config_<PackMode::Default>()
 
-Since the two uninits have identical bodies, one driver covers both; the family is
-carried as a test parameter purely so a future divergence between them shows up as a
-named failure rather than silently passing.
+Since the two uninits have identical bodies, one driver covers both. Note what that does
+*not* buy: the driver replicates the shared body rather than calling either compute-API
+function, because a tt-llk test cannot include tt_metal/hw/inc/api/compute. So this test
+pins the behaviour the two headers currently share, and a future divergence between them
+is exactly what it cannot catch -- that needs a test on the metal side that calls the
+real entry points.
 
 How it works
 ------------
@@ -88,8 +91,12 @@ FORMATS = input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=
 # than one tile while staying inside DEST half-sync capacity at fp32 (4 tiles).
 NUM_TILES = 4
 
-# The two uninits have identical bodies; see module docstring.
-FAMILIES = ["custom_mm", "compressed_custom_mm"]
+# The two uninits have identical bodies, and custom_mm_uninit_restore_test.cpp
+# replicates that shared body rather than calling either compute-API function (a tt-llk
+# test cannot include tt_metal/hw/inc/api/compute). So there is deliberately no
+# per-family axis: it would build the identical ELF twice and could not catch the one
+# thing it would exist to catch, a future divergence between the two headers. Guarding
+# that divergence needs a test on the metal side that calls the real entry points.
 
 
 def _run(
@@ -192,12 +199,11 @@ def _skip_unsupported(formats, dest_acc):
 
 
 @parametrize(
-    family=FAMILIES,
     formats=FORMATS,
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     dense_packing=[False, True],
 )
-def test_custom_mm_uninit_restores_pack_mop(family, formats, dest_acc, dense_packing):
+def test_custom_mm_uninit_restores_pack_mop(formats, dest_acc, dense_packing):
     """restore_tile_pack_mop=True must leave the packer able to pack plain tiles."""
     _skip_unsupported(formats, dest_acc)
     if dense_packing and formats.output_format.is_32_bit():
@@ -208,20 +214,19 @@ def test_custom_mm_uninit_restores_pack_mop(family, formats, dest_acc, dense_pac
     )
 
     assert passed_test(golden, device, formats.output_format), (
-        f"{family}_block_uninit<dense_packing={dense_packing}, "
+        f"custom_mm/compressed_custom_mm _block_uninit<dense_packing={dense_packing}, "
         "restore_tile_pack_mop=true> did not restore a usable tile-pack state: the "
         "following plain _llk_pack_ did not reproduce the DEST tiles"
     )
 
 
 @parametrize(
-    family=FAMILIES,
     formats=FORMATS,
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     dense_packing=[False, True],
 )
 def test_custom_mm_uninit_keeps_pack_mop_when_not_asked(
-    family, formats, dest_acc, dense_packing
+    formats, dest_acc, dense_packing
 ):
     """restore_tile_pack_mop=False must leave the caller's block MOP installed.
 
@@ -237,19 +242,18 @@ def test_custom_mm_uninit_keeps_pack_mop_when_not_asked(
     )
 
     assert not passed_test(golden, device, formats.output_format, print_errors=False), (
-        f"{family}_block_uninit<restore_tile_pack_mop=false> left the packer in a "
-        "state where a plain _llk_pack_ reproduced the DEST tiles -- the block MOP "
-        "installed before the uninit appears to have been restored anyway"
+        "custom_mm/compressed_custom_mm _block_uninit<restore_tile_pack_mop=false> left "
+        "the packer in a state where a plain _llk_pack_ reproduced the DEST tiles -- the "
+        "block MOP installed before the uninit appears to have been restored anyway"
     )
 
 
 @parametrize(
-    family=FAMILIES,
     formats=FORMATS,
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     dense_packing=[False, True],
 )
-def test_custom_mm_uninit_is_load_bearing(family, formats, dest_acc, dense_packing):
+def test_custom_mm_uninit_is_load_bearing(formats, dest_acc, dense_packing):
     """Negative control: with the uninit dropped entirely, run 1 must be wrong.
 
     Guards against the whole test degenerating into a tautology -- if run 1 passed
@@ -270,13 +274,12 @@ def test_custom_mm_uninit_is_load_bearing(family, formats, dest_acc, dense_packi
 
 
 @parametrize(
-    family=FAMILIES,
     formats=FORMATS,
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     restore_mop=[False, True],
 )
 def test_custom_mm_uninit_pack_mop_restore_is_noop_at_matching_geometry(
-    family, formats, dest_acc, restore_mop
+    formats, dest_acc, restore_mop
 ):
     """With the block MOP at the same geometry the restore installs, the flag is inert.
 
@@ -301,7 +304,8 @@ def test_custom_mm_uninit_pack_mop_restore_is_noop_at_matching_geometry(
     )
 
     assert passed_test(golden, device, formats.output_format), (
-        f"{family}_block_uninit<restore_tile_pack_mop={restore_mop}> did not leave a "
-        "usable tile-pack state even though the block MOP already carried the matching "
-        "4-face geometry -- something other than geometry is being disturbed"
+        f"custom_mm/compressed_custom_mm _block_uninit<restore_tile_pack_mop="
+        f"{restore_mop}> did not leave a usable tile-pack state even though the block MOP "
+        "already carried the matching 4-face geometry -- something other than geometry is "
+        "being disturbed"
     )
