@@ -96,8 +96,18 @@ namespace ckernel::sfpu
 
 // Test-only compiler-flow spelling of the production where operation.  Keep
 // the loads and store bit-preserving: where chooses an operand, it does not
-// numerically convert it.  The condition is interpreted in its declared type
-// so floating-point -0 remains false.
+// numerically convert it.  The condition is loaded bitwise (U16/U32) and
+// tested != 0 — the handwritten kernel's own protocol (ckernel_sfpu_where.h
+// loads the condition raw LO16/INT32 and predicates on SFPSETCC LREG_EQ0).
+// Condition-mode unification (Lane R3 / where-adjudication 2026-08-17): with
+// every load and the store in one launch-sourced mod0, the macro planner
+// derives the compact separator-absorbed select calendar (misc 0x770) for
+// fp16b/Float32 too, instead of the separator-kept 4-slot form (misc 0x706)
+// that silicon adjudication proved delivery-divergent.  Semantics note: raw
+// !=0 differs from float truthiness only on -0.0 and (if HW flushed them)
+// denormal conditions; the suite's condition stimuli (uniform [0,1), exact
+// 0/1 patterns) contain neither, and the handwritten kernel has always used
+// the bitwise protocol.
 template <DataFormat FORMAT, int ITERATIONS>
 sfpi_inline void calculate_where_generated(
     const std::uint32_t dst_index_in0,
@@ -112,11 +122,11 @@ sfpi_inline void calculate_where_generated(
     {
         if constexpr (FORMAT == DataFormat::Float16_b)
         {
-            sfpi::vFloat condition = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi].mode<sfpi::DataLayout::F16b>();
+            sfpi::vUInt condition  = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi].mode<sfpi::DataLayout::U16>();
             sfpi::vUInt true_bits = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi].mode<sfpi::DataLayout::U16>();
             sfpi::vUInt false_bits = sfpi::dst_reg[dst_index_in2 * dst_tile_size_sfpi].mode<sfpi::DataLayout::U16>();
             sfpi::vUInt result = false_bits;
-            v_if (condition != 0.0f)
+            v_if (condition != 0u)
             {
                 result = true_bits;
             }
@@ -125,11 +135,11 @@ sfpi_inline void calculate_where_generated(
         }
         else if constexpr (FORMAT == DataFormat::Float32)
         {
-            sfpi::vFloat condition = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi].mode<sfpi::DataLayout::F32>();
+            sfpi::vUInt condition  = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi].mode<sfpi::DataLayout::U32>();
             sfpi::vUInt true_bits = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi].mode<sfpi::DataLayout::U32>();
             sfpi::vUInt false_bits = sfpi::dst_reg[dst_index_in2 * dst_tile_size_sfpi].mode<sfpi::DataLayout::U32>();
             sfpi::vUInt result = false_bits;
-            v_if (condition != 0.0f)
+            v_if (condition != 0u)
             {
                 result = true_bits;
             }

@@ -393,6 +393,66 @@ def test_ttnn_where_device_profile(perf_report, ttnn_where_impl, label):
     print(f"TTNN_WHERE_DEVICE_PROFILE impl={label} body_cycles={cycles:.2f}")
 
 
+@pytest.mark.parametrize(
+    "ttnn_where_impl,label", [(0, "handwritten_macro_replay"), (1, "generated_sfpi")]
+)
+def test_ttnn_where_int32_device_profile(perf_report, ttnn_where_impl, label):
+    """Measure identical Int32 where bodies with device timestamps.
+
+    The Int32/compact measurement vehicle the 2026-08-17 where adjudication
+    flagged as missing (VERDICT.md harness follow-up): the compact 3-slot
+    separator-absorbed calendar (misc 0x770) is the silicon-green formed path,
+    but only the fp16b (formerly 4-slot) shape had a profile node. Same idiom
+    as test_ttnn_where_device_profile: deterministic alternating condition,
+    distinguishable operands, TTNN_WHERE_BODY / MATH_ISOLATE.
+    """
+    formats = InputOutputFormat(DataFormat.Int32, DataFormat.Int32)
+    input_dimensions = [64, 64]
+    tile_count = 4
+
+    condition = (torch.arange(64 * 64) % 2).view(64, 64).to(torch.int32)
+    true_value = torch.full(input_dimensions, 2, dtype=torch.int32)
+    false_value = torch.full(input_dimensions, 11, dtype=torch.int32)
+
+    configuration = PerfConfig(
+        "sources/sfpu_ternary_test.cpp",
+        formats,
+        run_types=[PerfRunType.MATH_ISOLATE],
+        templates=[
+            SFPU_TERNARY_OP(MathOperation.TTNNWhere),
+            SFPU_TERNARY_SCALAR(_SCALAR_VALUE_BITS),
+            APPROX_MODE(ApproximationMode.No),
+            DISABLE_SRC_ZERO_FLAG(True),
+            DEST_SYNC(),
+            TTNNWhereImplTemplate(ttnn_where_impl),
+        ],
+        runtimes=[NUM_BLOCKS(tile_count), NUM_TILES_IN_BLOCK(1)],
+        variant_stimuli=StimuliConfig(
+            condition.flatten(),
+            formats.input_format,
+            true_value.flatten(),
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_count,
+            tile_count_B=tile_count,
+            tile_count_res=tile_count,
+            buffer_C=false_value.flatten(),
+            stimuli_C_format=formats.input_format,
+            tile_count_C=tile_count,
+        ),
+        unpack_to_dest=True,
+        dest_acc=DestAccumulation.No,
+        compile_time_formats=True,
+    )
+    configuration.run(perf_report, run_count=1)
+    rows = perf_report.frame()
+    rows = rows[rows["marker"] == "TTNN_WHERE_BODY"]
+    assert len(rows) >= 1, rows.to_string(index=False)
+    cycles = float(rows["mean(MATH_ISOLATE)"].sum())
+    assert cycles > 0
+    print(f"TTNN_WHERE_INT32_DEVICE_PROFILE impl={label} body_cycles={cycles:.2f}")
+
+
 # MCW test with dynamic format sweeping like main test
 # Use same input/output format - no mixing
 @parametrize(
