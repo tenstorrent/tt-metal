@@ -32,8 +32,7 @@ inline __attribute__((always_inline)) uint32_t read_hw_thread_idx() {
 #endif
 }
 
-// Fills ::hw_thread_idx for the calling hardware thread. Must run once per thread after
-// do_thread_crt1() has initialized thread-local storage, and before anything calls
+// Fills ::hw_thread_idx for the calling hardware thread. Must run once per thread before anything calls
 // get_hw_thread_idx().
 inline __attribute__((always_inline)) void init_hw_thread_idx() { hw_thread_idx = read_hw_thread_idx(); }
 #endif
