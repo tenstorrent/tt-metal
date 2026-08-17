@@ -296,11 +296,33 @@ All on this host, against pristine upstream vLLM `dev` `bf98d55`:
   spec entry as well.
 - **No release lane.** `models-ci-config.json` registers nightly only; a
   `"release": {"devices": ["P300X2"]}` block is a separate opt-in.
-- **Unexplained concurrency figure.** TTI reported `Maximum concurrency for
-  113,280 tokens per request: 1.00x` where a direct `api_server` launch reported
-  `8.62x` on an identical 103,872-token KV pool. Probably TTI deriving
-  `max_num_batched_tokens` from `max_context`, but it is not confirmed and would
-  affect any batching claim.
+- ~~**Unexplained concurrency figure.**~~ **RESOLVED 2026-08-17 — expected, not a
+  defect.** Both the Shield run and a local `--workflow release` run report
+  `GPU KV cache size: 103,872 tokens` and `Maximum concurrency for 113,280 tokens
+  per request: 1.00x`, with `max_num_batched_tokens=113280` matching
+  `max_model_len`, so the earlier guess that TTI derives
+  `max_num_batched_tokens` from `max_context` is wrong.
+
+  The figure is a **per-cache-group** number. `get_max_tokens_all_users` sizes the
+  pool as five 10-layer sliding groups plus one 10-layer global group:
+
+  ```text
+  sliding_blocks/group = ceil(113280/64) + 1        = 1771
+  global_blocks        = ceil(113280/128)           =  885
+  required_pool_blocks = 5*1771 + 885               = 9740   (623,360 tokens)
+  per group            = 9740 // 6 = 1623 blocks    = 103,872 tokens   <-- printed
+  concurrency          = 103,872 / 113,280          = 0.917  -> "1.00x"
+  ```
+
+  So the pool is deliberately sized for **exactly one** full-context request, and
+  `~1.00x` is the correct reading. Note this means `103,872 < 113,280` is *not* a
+  capacity shortfall: it compares a per-group token count against the full context
+  length, which is not apples-to-apples for a hybrid cache. It also confirms the
+  spec's `max_concurrency: 32` is a short-context figure, as the audit says.
+
+  The one-off `8.62x` from an early direct `api_server` launch remains
+  unexplained, but it is a single outlier against two reproducible runs and should
+  not be relied on.
 - **Branch age.** This branch is ~1,900 commits behind tt-metal main, and 13 of
   those commits touch `models/demos/gemma4` modules the autoport's serving path
   imports (`attention/operations.py`, `attention/decode.py`, `layer.py`,

@@ -50,7 +50,15 @@ links and corrupted decode logits".
 | Decode t/s/u, from median ITL | 34.11 | 14.81 | 2.30x |
 | Output throughput, aggregate | 23.08 tok/s | 14.71 tok/s | 1.57x |
 | GPU KV cache | 103,872 tokens | 21,824 tokens | 4.76x |
-| Max concurrency at own ceiling | 8.62x @ 113,280 | 3.26x @ 49,152 | — |
+| Max concurrency at own ceiling | 8.62x @ 113,280 (see note) | 3.26x @ 49,152 | — |
+
+> **Note on the 8.62x figure (added 2026-08-17):** treat it as unreliable. Two
+> later reproducible runs -- Shield 31858340006 and a local `--workflow release`
+> run -- both report `1.00x` for the same 113,280-token request size on a
+> 103,872-token per-group pool, which is the arithmetically expected value
+> (`9740 blocks // 6 hybrid cache groups * 64 = 103,872`; `103,872 / 113,280 =
+> 0.917`). The pool is sized for exactly one full-context request, so no
+> batching claim should rest on 8.62x. See `shield_ci_onboarding.md`.
 
 Against TTI's published `theoretical` target for this platform
 (`model_performance_reference.json`: 46 ms TTFT, 37 t/s/u):
