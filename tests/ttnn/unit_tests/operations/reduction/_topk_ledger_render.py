@@ -128,56 +128,55 @@ def render_psweep_table(psweep, comp_rows):
 
 
 def render_model_scenarios(rows):
-    """MODEL_SCENARIOS region: one row per scenario. Columns: scenario |
-    model + callsite | shape | today engine | today µs | routed µs | op µs |
-    best speedup | note. Numbers come only from MEASURED cells (us_fmt's
-    em-dash rule); a SKIPPED_SLOW today cell renders as '≈ X ms †' -- a
-    linear-model estimate, visibly distinct from a measurement."""
+    """MODEL_SCENARIOS region. One speedup semantics, stated in the header:
+    speedup = today / best-ours, always. 'best ours' names which variant won
+    (routed ttnn.topk or the direct op); 'to capture it' says in plain words
+    what adopting the best number costs. Numbers only from MEASURED cells."""
     import html as _html
 
     body = []
     for r in rows:
         esc = lambda s: _html.escape(s or "")  # noqa: E731
-        shape = f"{int(r['rows'])}×{int(r['n']):,}, k={int(r['k'])}"
+        shape = f"{int(r['rows'])}\u00d7{int(r['n']):,}, k={int(r['k'])}"
         today_e = r.get("today_engine", "")
-        # Reader-facing names for the harness layer ids: the column answers
-        # "what runs when the model makes this call today".
-        # This column answers exactly one question: which op does the model
-        # call today. Engine detail (single-core vs bitonic vs tree) is in
-        # the notes; implementation state is what the ours-columns compare.
-        today_label = {
-            "stocknow": "ttnn.topk",
-            "routed": "ttnn.topk",
-            "op": "topk_large_indices",
-        }.get(today_e, today_e)
+        today_label = {"stocknow": "ttnn.topk", "routed": "ttnn.topk", "op": "topk_large_indices"}.get(today_e, today_e)
         today = fnum(r.get("today_us"))
         ro, op = fnum(r.get("routed_us")), fnum(r.get("op_us"))
-        if today is not None:
-            today_td = us_fmt(today)
+
+        # best ours: the cheaper measured variant
+        cands = [(v, n) for v, n in ((ro, "routed ttnn.topk"), (op, "direct op")) if v is not None]
+        if cands:
+            best, best_name = min(cands)
+            best_td = f'<td class="n ours">{best:,.1f} <span class="flat">({best_name})</span></td>'
         else:
-            est = re.search(r"SKIPPED_SLOW\(est~(\d+)ms\)", r.get(f"{today_e}_status", "") or "")
-            today_td = f'<td class="n flat">≈ {int(est.group(1)):,} ms †</td>' if est else '<td class="n flat">—</td>'
-        # Drop-in speedup: the same-API replacement. For ttnn.topk call sites
-        # that is the routed column (canonical call, no API change); when the
-        # call site already invokes the op directly, today IS the op (1.0x).
-        # The op column remains visible as the switch-the-call ceiling.
-        dropin = op if today_e == "op" else ro
-        if today is not None and dropin:
-            ratio = today / dropin
-            rs = f"{ratio:,.0f}×" if ratio >= 100 else f"{ratio:,.1f}×"
+            best, best_name, best_td = None, None, '<td class="n flat">not run</td>'
+
+        if today is not None and best is not None:
+            ratio = today / best
+            rs = f"{ratio:,.0f}\u00d7" if ratio >= 100 else f"{ratio:,.1f}\u00d7"
             sp = f'<td class="n win">{rs}</td>' if ratio >= 1.05 else f'<td class="n flat">{rs}</td>'
         else:
-            sp = '<td class="n flat">n/a</td>'
+            sp = '<td class="n flat">\u2014</td>'
 
-        # "win" styling only when the engine actually beats today; a routed
-        # cell 14x SLOWER than the model's current engine must not render
-        # bold-green.
-        def eng_td(v, eng):
-            if v is None and r.get(f"{eng}_status") is None:
-                # engine was never scheduled for this scenario (structurally
-                # ineligible by design, e.g. MoE-gate no-change controls)
-                return '<td class="n flat">n/a</td>'
-            return us_fmt(v, "win" if (v is not None and today is not None and v < today) else "")
+        # what adopting the best number costs, in plain words
+        if best is None:
+            capture = "\u2014"
+        elif today_e == "op" and best_name == "direct op":
+            capture = "nothing \u2014 already on the best engine"
+        elif best_name == "routed ttnn.topk":
+            capture = "same API; drop indices_tensor/sub_core_grids/stable from the call"
+        elif today_label == "ttnn.topk" and best_name == "direct op":
+            if int(r["k"]) < 16:
+                capture = "switch to the direct op (k rounds to 16, slice back); or extend the route \u2014 A/B vs envelope pending"
+            else:
+                capture = "switch the call to the direct op (RM output, u32 indices)"
+                if ro is not None and today is not None and ro < today:
+                    capture += (
+                        f"; or same API \u2014 drop indices_tensor/sub_core_grids/stable: "
+                        f"{ro:,.1f} \u00b5s ({today / ro:,.1f}\u00d7)"
+                    )
+        else:
+            capture = "\u2014"
 
         note = esc(r.get("notes", ""))
         if r.get("calls_note"):
@@ -186,22 +185,20 @@ def render_model_scenarios(rows):
             f'      <tr><td>{esc(r["scenario"])}</td>'
             f'<td>{esc(r.get("model", ""))}<br><code>{esc(r.get("callsite", ""))}</code></td>'
             f'<td class="n">{shape}</td>'
-            f'<td class="n">{esc(today_label)}</td>{today_td}'
-            f"{eng_td(ro, 'routed')}{eng_td(op, 'op')}{sp}"
+            f'<td class="n">{esc(today_label)}</td>{us_fmt(today)}'
+            f"{best_td}{sp}"
+            f"<td>{capture}</td>"
             f"<td>{note}</td></tr>"
         )
     head = (
-        '<thead><tr><th>scenario</th><th>model + callsite</th><th class="n">shape (rows×N, k)</th>'
-        '<th>calls today</th><th class="n">today µs</th>'
-        '<th class="n ours">ttnn.topk (our routing)</th><th class="n ours">topk_large_indices (our multi-core)</th>'
-        '<th class="n">drop-in speedup</th><th>note</th></tr></thead>'
+        '  <div class="tablewrap"><table style="min-width: 1700px">\n'
+        '    <thead><tr><th>scenario</th><th>model + callsite</th><th class="n">shape (rows\u00d7N, k)</th>'
+        '<th>calls today</th><th class="n">today \u00b5s</th>'
+        '<th class="n ours">best ours \u00b5s (variant)</th>'
+        '<th class="n">speedup (today \u00f7 best ours)</th>'
+        '<th>to capture it</th><th>note</th></tr></thead>'
     )
-    return (
-        f'  <div class="tablewrap"><table>\n    {head}\n    <tbody>\n'
-        + "\n".join(body)
-        + "\n    </tbody>\n  </table></div>"
-    )
-
+    return head + "\n    <tbody>\n" + "\n".join(body) + "\n    </tbody>\n  </table></div>"
 
 def render_exec_numbers(rows, psweep):
     r = next((x for x in rows if int(x["k"]) == ANCHOR_K and int(x["W"]) == ANCHOR_W), None)
