@@ -168,14 +168,19 @@ ProgramDescriptor GridSampleBilinearProgramFactory::create_descriptor(
         });
     }
 
-    const uint32_t scalar_cb_page_size = tt::tile_size(input_cb_data_format);
+    // The bilinear weights are always produced as bf16 by the reader (fp32_to_bf16_truncate +
+    // fill_four_val, which packs uint16 bf16 values). The scalar CB must therefore be bf16 regardless
+    // of the input dtype — declaring it with the (possibly fp32) input format makes the compute unpack
+    // the bf16 weight bytes as a wider dtype, corrupting every weight and inflating the output.
+    const tt::DataFormat scalar_cb_data_format = tt::DataFormat::Float16_b;
+    const uint32_t scalar_cb_page_size = tt::tile_size(scalar_cb_data_format);
     const uint32_t scalar_cb_index_0 = cb_idx++;
     desc.cbs.push_back(CBDescriptor{
         .total_size = BUFFERING_FACTOR * scalar_cb_page_size,
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(scalar_cb_index_0),
-            .data_format = input_cb_data_format,
+            .data_format = scalar_cb_data_format,
             .page_size = scalar_cb_page_size,
             .face_geometry = scalar_face_geometry,
         }}},
@@ -189,7 +194,7 @@ ProgramDescriptor GridSampleBilinearProgramFactory::create_descriptor(
             .core_ranges = all_cores,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(scalar_cb_index_1),
-                .data_format = input_cb_data_format,
+                .data_format = scalar_cb_data_format,
                 .page_size = scalar_cb_page_size,
                 .face_geometry = scalar_face_geometry,
             }}},
