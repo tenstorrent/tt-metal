@@ -38,14 +38,19 @@
 
 3. Support multiple input prompts for the tests
     - Two layers here, and the component tests are worse than "one prompt":
-        - e2e gate: one prompt decides PASS/FAIL for the whole port (E2E_ALL_TASKS=0), and no
+        - e2e gate: one prompt decides PASS/FAIL for the whole port, and no
           flag widens it. One sample cannot separate a systematic error from a lucky prompt.
-        - per-component gates: no prompt at all -- they use torch.randn. Preflight captures
-          real IO for every component (43 MB each for attention and decoder_layer, including the
-          reference output.pt) and prints "per-component PCC tests will use real inputs". The
-          generated tests contain no torch.load at all: 0 hits across all 7 files. Inputs are
-          synthesised from the forward signature by argument name. The captures are opened only to
-          decide which submodule to test.
+        - per-component gates: the captured activations are never used. Preflight captures real
+          IO for every component and prints "per-component PCC tests will use real inputs", but no
+          test loads them -- torch.load appears 0 times anywhere under tests/pcc/, conftest
+          included. The captures are read only for manifest.json, to pick which submodule to test,
+          and a pinned x_0 noise vector. The primary activation is torch.randn.
+        - Out of the box it is worse: the template synthesises inputs from the forward signature by
+          argument name, which for this model gave a 3-D activation where a complex rope table was
+          required, dropped the causal mask (making the golden non-causal), and passed floats where
+          integer codebook ids were needed. The bring-up agent had to hand-write
+          tests/pcc/conftest.py to supply correct cis / bias / codes. Still synthetic, just no
+          longer invalid.
     - Fix (components): load args.pt/kwargs.pt when a capture exists, and compare against the
       captured output.pt so the gate becomes a golden test. Everything needed is already on disk.
     - Fix (e2e): take the sample count from the batch dimension the test already has, or expose a
