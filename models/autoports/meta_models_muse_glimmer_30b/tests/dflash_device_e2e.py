@@ -99,6 +99,8 @@ def main() -> None:
             "32-row tile."
         ),
     )
+    parser.add_argument("--trace-verify", action="store_true", help="capture and replay the verify forward")
+    parser.add_argument("--verify-width", type=int, default=256, help="padded row count of the traced verify")
     parser.add_argument("--out", default=None)
     args = parser.parse_args()
 
@@ -139,6 +141,8 @@ def main() -> None:
             pad_context=args.drafting == "padded",
             aligned_verify=args.verify != "from-zero",
             verify_mode=args.verify if args.verify.startswith("decode") else "prefill",
+            trace_verify=args.trace_verify,
+            verify_width=args.verify_width,
         )
 
         per_prompt = []
@@ -228,6 +232,7 @@ def main() -> None:
             "drafting": args.drafting,
             "page_block": args.page_block,
             "verify": args.verify,
+            "trace_verify": args.trace_verify,
             "dflash": stats.as_dict(),
             "dflash_token_ids": dflash_tokens,
             "baseline_token_ids": baseline_tokens,

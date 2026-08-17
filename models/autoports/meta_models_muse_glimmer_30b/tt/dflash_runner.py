@@ -261,6 +261,29 @@ class DFlashRunner:
         #: does retain a wider hidden/tap set.
         self.verify_width = int(verify_width)
         self._prefill_trace: dict | None = None
+        #: The traced verify's two inputs.  Both addresses are **baked into the trace**
+        #: at capture, so they must be allocated once, outlive the trace, and never be
+        #: rebound.  The first implementation allocated them per ``generate()`` and freed
+        #: the page table at the end of the call, which left every later replay reading a
+        #: buffer the allocator had already handed to something else -- the same ordering
+        #: that produced the fabric ERISC assert documented in ``generator.py``, and the
+        #: reason the first traced run wedged the board rather than returning a wrong
+        #: number.
+        self._verify_tokens: ttnn.Tensor | None = None
+        self._verify_page_table: ttnn.Tensor | None = None
+        self._owns_verify_page_table = False
+        #: DRAM bytes/bank just after capture; the invariant every replay must restore.
+        self._alloc_baseline: int | None = None
+        #: Label of the most recent allocation checkpoint, so the assertion names the stage.
+        self._alloc_where = "?"
+        self._alloc_reported = 0
+        #: Times the per-shard argmax had to fall back because a padding column won.
+        self._argmax_pad_fallbacks = 0
+        #: Bytes/bank of post-capture allocation tolerated across a replay.  Not a
+        #: licence: a *growing* drift is a leak and must fail, while a small flat one is
+        #: a lazily-created cache that the replay is unlikely to collide with.  Set to 0
+        #: to make any drift fatal.
+        self.alloc_drift_budget = 8 * 1024 * 1024
         #: Lazily captured trace for the verify decode step, with taps armed.  The shipped
         #: decode trace cannot be reused: it is captured *without* hidden-state taps, and
         #: DFlash needs them to build the drafter's context.
@@ -385,6 +408,76 @@ class DFlashRunner:
             pieces.append(host.to(torch.bfloat16))
         return torch.cat(pieces, dim=-1)
 
+    def _ensure_verify_inputs(self, tt_page_table: ttnn.Tensor) -> None:
+        """Allocate the traced verify's persistent inputs exactly once.
+
+        Both are read by the captured graph at addresses fixed at capture time, so
+        reallocating either between generations silently detaches the trace from its
+        inputs -- the token buffer would be refreshed while the trace reads the previous
+        one, and freeing the page table leaves the replay reading whatever the allocator
+        handed out next.  The latter is a use-after-free inside a paged attention op and
+        wedges the board rather than failing cleanly.
+        """
+        if self._verify_tokens is not None:
+            return
+        model = self.model
+        host_ids = torch.full((1, self.verify_width), model.embed_pad_id, dtype=torch.int32)
+        self._verify_tokens = ttnn.from_torch(
+            host_ids,
+            device=model.mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.uint32,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(model.mesh_device),
+        )
+        # The page table is the caller's; the trace now depends on it, so generate()
+        # must not free it while the trace lives.
+        self._verify_page_table = tt_page_table
+        self._owns_verify_page_table = True
+
+    def release_prefill_verify_trace(self) -> None:
+        """Release the verify trace and the inputs whose addresses it baked in.
+
+        Order matters and is the whole point: the trace must go first.  Freeing a buffer
+        a live trace still references is what produced the board wedge, and this project
+        already has the same finding recorded for a cloned KV cache.
+        """
+        if self._prefill_trace is None:
+            return
+        try:
+            ttnn.release_trace(self.model.mesh_device, self._prefill_trace["id"])
+            self.model.note_trace_released()
+        finally:
+            self._prefill_trace = None
+            if self._verify_tokens is not None:
+                ttnn.deallocate(self._verify_tokens)
+            self._verify_tokens = None
+            self._verify_page_table = None
+            self._owns_verify_page_table = False
+
+    def _alloc_note(self, where: str) -> None:
+        """Record a checkpoint label and, when tracing, the DRAM delta since capture."""
+        self._alloc_where = where
+        if self._alloc_baseline is not None:
+            delta = self._dram_allocated() - self._alloc_baseline
+            if False:
+                from loguru import logger as _logger
+
+                _logger.info(f"alloc delta after {where}: {delta} bytes/bank")
+
+    def _dram_allocated(self) -> int:
+        """Bytes allocated per DRAM bank, for the allocation-invariant assertion.
+
+        The contract a live trace imposes is that anything allocated between replays is
+        **dead before the next replay** -- its intermediates are freed at capture but
+        their addresses stay baked into the graph, so a buffer handed out from that range
+        while a replay is in flight is overwritten by the replay.  Comparing this value
+        immediately before each replay against its value just after capture turns that
+        from a code review into a runtime check, and names any leak in bytes.
+        """
+        view = ttnn.get_memory_view(self.model.mesh_device, ttnn.BufferType.DRAM)
+        return int(view.total_bytes_allocated_per_bank)
+
     def _ensure_prefill_verify_trace(self) -> None:
         """Capture the fixed-width, from-zero verify forward once, with taps armed.
 
@@ -399,6 +492,12 @@ class DFlashRunner:
         tap_layers = self._tap_layers()
         tokens = self._verify_tokens
         page_table = self._verify_page_table
+        # Make this the only live trace.  How much *address range* sits under the
+        # allocation rule is what decided the shipped prefill-trace configuration in
+        # generator.py; one graph is the smallest that range gets, and it also stops the
+        # verify's persistent inputs from landing inside another trace's replay footprint.
+        self.generator._release_decode_trace()
+        self.generator._release_prefill_traces()
 
         model.arm_hidden_state_taps(tap_layers)
         model.release_sliding_tails()
@@ -419,6 +518,7 @@ class DFlashRunner:
         ttnn.synchronize_device(model.mesh_device)
         model.note_trace_captured()
         self._prefill_trace = {"id": trace_id, "hidden": hidden, "taps": taps}
+        self._alloc_baseline = self._dram_allocated()
 
     def _argmax_range(self, hidden: ttnn.Tensor, start_row: int, count: int) -> list[int]:
         """Argmax for ``[start_row, start_row + count)`` of a prefill hidden state.
@@ -461,6 +561,12 @@ class DFlashRunner:
                 "the eager verify"
             )
 
+        # Captured on first use, after the drafter and the LM head have each run once.
+        # Both allocate lazily (CCL semaphores, sharded matmul configs), and anything
+        # allocated *after* capture stays live across every replay at an address inside
+        # the trace's footprint -- measured at 219 KB/bank when captured any earlier.
+        self._ensure_prefill_verify_trace()
+
         t_forward = time.perf_counter()
         host_ids = torch.full((1, self.verify_width), model.embed_pad_id, dtype=torch.int32)
         host_ids[0, : len(ids)] = torch.tensor(ids, dtype=torch.int32)
@@ -471,6 +577,26 @@ class DFlashRunner:
             mesh_mapper=ttnn.ReplicateTensorToMesh(model.mesh_device),
         )
         ttnn.copy_host_to_device_tensor(host, self._verify_tokens)
+        if self._alloc_baseline is not None:
+            live = self._dram_allocated()
+            drift = live - self._alloc_baseline
+            if drift > self.alloc_drift_budget:
+                raise AssertionError(
+                    f"[{self._alloc_where}] device DRAM grew by {drift} bytes/bank since the verify "
+                    f"trace was captured, over the {self.alloc_drift_budget} budget. Something "
+                    "allocated between replays and is still live; the replay will overwrite it."
+                )
+            if drift and drift != self._alloc_reported:
+                from loguru import logger as _logger
+
+                _logger.warning(
+                    f"verify trace: {drift} bytes/bank live across the replay (budget "
+                    f"{self.alloc_drift_budget}). Under the allocation rule that is a buffer the "
+                    "replay may overwrite; it is tolerated only because it is flat, not growing."
+                )
+                self._alloc_reported = drift
+        # Blocking: the replay must complete before anything allocated after it can be
+        # handed an address inside the trace's footprint.
         ttnn.execute_trace(model.mesh_device, self._prefill_trace["id"], cq_id=0, blocking=True)
         stats.verify_forward_seconds += time.perf_counter() - t_forward
         stats.target_forwards += 1
@@ -478,6 +604,7 @@ class DFlashRunner:
         t_logits = time.perf_counter()
         target_argmax = self._argmax_range(self._prefill_trace["hidden"], anchor_pos, block)
         stats.verify_logits_seconds += time.perf_counter() - t_logits
+        self._alloc_note("verify replay + argmax")
         return target_argmax, self._prefill_trace["taps"]
 
     def _ensure_verify_trace(self) -> None:
@@ -535,21 +662,130 @@ class DFlashRunner:
         finally:
             self._verify_trace = None
 
+    def _argmax_rows_sharded(self, logits: ttnn.Tensor, rows: int) -> list[int]:
+        """Per-shard argmax. **Measured SLOWER than the gathered path; not used.**
+
+        Correct -- it produced byte-identical tokens over 128 tokens -- and a clear loss:
+        26.67 -> 21.12 t/s/u, with the candidate step going 9.7 -> 10.5 ms and the verify
+        logits 4.9 -> 6.5 ms.  The premise was that the all-gather of a 32 x 202752 tile
+        (~13 MB) dominated; it does not.  Replacing one readback of one small tensor with
+        **eight** small per-shard readbacks costs more than the gather saves, which says
+        the cost here is per-transfer latency, not bytes.  Folding ids and maxima into a
+        single tensor per device would halve the count to four and is the only version
+        worth retrying.
+
+        Kept because the reasoning is sound and the measurement is the useful part.
+        Reduced **per shard, in place**: nothing crosses the mesh, and what crosses PCIe
+        is ``4 x rows`` ids plus ``4 x rows`` maxima rather than a ``rows x 202752`` tile.
+        DFlash calls this on every drafted block *and* on the verify block, so it sits on
+        the critical path twice per iteration -- 9.6 ms and 5.0 ms respectively.
+
+        The previous version called ``gather_and_untilize_logits`` first, an all-gather of
+        a ``32 x 50688`` shard into a ``32 x 202752`` replica (~13 MB landed per device)
+        plus an untilize and a 13 MB slice.  Every byte of that is discarded one op later:
+        an argmax needs one winner per row, and the winner of a partitioned max is the
+        best of the per-partition winners.
+
+        The layout that makes this legal is the one the sampler's device-offset table
+        already encodes: shard ``d`` owns the contiguous global range
+        ``[d * local_vocab, (d + 1) * local_vocab)`` in mesh device order -- the order
+        ``ttnn.get_device_tensors`` returns and ``logits_to_torch`` concatenates in.  So
+        ``global_id = d * local_vocab + local_id``.
+
+        THE PADDING.  ``padded_vocab_size`` (202752) exceeds ``vocab_size`` (202048), and
+        the 704 extra columns are not tokens.  They all sit in the **last** shard: shards
+        0-2 are wholly real at 50688 columns, shard 3 is real for 49984.  A ttnn op
+        applies the same slice to every device, so a per-shard reduction cannot simply
+        trim the way the gathered path did.  This *detects* a padded winner by index
+        instead, which needs no assumption about the padded values at all, and redoes
+        only that row from the guarded shard.  It should never fire: those columns are a
+        bias-free matmul against exactly-zero weights, so their logits are exactly +0.0,
+        which can only win if every one of the 202048 real logits is negative.
+        ``_argmax_pad_fallbacks`` counts it -- non-zero after a run is a finding.
+
+        Ties resolve to the lowest global id: shards are scanned in ascending order and
+        only a strictly greater max displaces the incumbent.
+        """
+        model = self.model
+        config = model.config
+        local = int(config.local_vocab_size)
+        vocab = int(config.vocab_size)
+        shards = len(ttnn.get_device_tensors(logits))
+
+        width = int(logits.shape[-1])
+        if width != local:
+            raise ValueError(
+                f"_argmax_rows wants vocab-sharded logits ({local} columns per device), got {width}. "
+                "A gathered tensor reaching here would have its shard-0 ids read as global ids."
+            )
+        # Real columns per shard; everything at or above this on that shard is padding.
+        valid = [max(0, min(vocab - d * local, local)) for d in range(shards)]
+
+        # max off the TILE tensor (multi-core, and the width is a whole number of tiles so
+        # no intra-tile padding joins the reduction); argmax off a ROW_MAJOR copy, because
+        # ttnn.argmax on TILE input with dim=rank-1 runs SINGLE-core, which over 50688
+        # columns would cost more than the gather this replaces.
+        maxima = ttnn.max(logits, dim=-1, keepdim=True)
+        untilized = ttnn.untilize(logits, use_multicore=True)
+        ids = ttnn.argmax(untilized, dim=-1)
+        ttnn.deallocate(untilized)
+
+        shard_ids = [ttnn.to_torch(t).reshape(-1) for t in ttnn.get_device_tensors(ids)]
+        shard_max = [ttnn.to_torch(t).float().reshape(-1) for t in ttnn.get_device_tensors(maxima)]
+        ttnn.deallocate(ids)
+        ttnn.deallocate(maxima)
+        model.counters["readbacks"] += 1
+
+        out: list[int] = []
+        padded_rows: list[int] = []
+        for r in range(rows):
+            best_d, best_v = -1, None
+            for d in range(shards):
+                if valid[d] == 0:
+                    continue  # a wholly-padded shard owns no tokens and never votes
+                value = float(shard_max[d][r])
+                if best_v is None or value > best_v:
+                    best_v, best_d = value, d
+            local_id = int(shard_ids[best_d][r])
+            if local_id >= valid[best_d]:
+                out.append(-1)
+                padded_rows.append(r)
+            else:
+                out.append(best_d * local + local_id)
+
+        if padded_rows:
+            self._argmax_pad_fallbacks += len(padded_rows)
+            guarded = {
+                d: ttnn.to_torch(ttnn.get_device_tensors(logits)[d]).reshape(-1, local).float()
+                for d in range(shards)
+                if 0 < valid[d] < local
+            }
+            model.counters["readbacks"] += 1
+            for r in padded_rows:
+                best_d, best_v, best_i = -1, None, -1
+                for d in range(shards):
+                    if valid[d] == 0:
+                        continue
+                    if d in guarded:
+                        value_t, index_t = guarded[d][r, : valid[d]].max(dim=-1)
+                        value, index = float(value_t), int(index_t)
+                    else:
+                        value, index = float(shard_max[d][r]), int(shard_ids[d][r])
+                    if best_v is None or value > best_v:
+                        best_v, best_d, best_i = value, d, index
+                out[r] = best_d * local + best_i
+        return out
+
     def _argmax_rows(self, logits: ttnn.Tensor, rows: int) -> list[int]:
         """Argmax over the first ``rows`` rows of a vocab-sharded logits tile.
 
-        Reduced **on device**, so what crosses PCIe is ``rows`` token ids rather than a
-        ``rows x 202752`` float tile.  DFlash calls this on the whole verify block *and*
-        on every drafted block, so at OSL 128 the host version moved ~26 MB per tile and
-        cost 16.1 ms per iteration inside the verify plus 14.0 ms inside the draft --
-        together about a quarter of the iteration, spent transferring numbers only to
-        take their argmax.
+        Gathers, trims the vocab padding, and reduces on device, so what crosses PCIe is
+        ``rows`` token ids rather than a ``rows x 202752`` float tile.  The trim is not
+        optional: ``gather_and_untilize_logits`` returns ``padded_vocab_size`` columns and
+        a device argmax over the padded width can return an id that is not a token.
 
-        The vocab padding has to go first.  ``gather_and_untilize_logits`` returns
-        ``padded_vocab_size`` columns and ``logits_to_torch`` drops the tail *after* the
-        transfer; a device argmax over the padded width would happily return a padded id
-        that is not a real token, which would corrupt candidates silently rather than
-        raise.  So slice to ``vocab_size`` and reduce that.
+        A per-shard variant that avoids the all-gather entirely is implemented above and
+        is **slower** -- see ``_argmax_rows_sharded`` for the measurement.
         """
         model = self.model
         gathered = model.gather_and_untilize_logits(logits)
@@ -698,18 +934,6 @@ class DFlashRunner:
         self.generator._stage(page_table=table)
         slot_row = model.page_table_row(table, 0)
         tt_page_table = model.page_table_row_to_device(slot_row)
-        if self.trace_verify and not self.verify_mode.startswith("decode"):
-            host_ids = torch.full((1, self.verify_width), model.embed_pad_id, dtype=torch.int32)
-            self._verify_tokens = ttnn.from_torch(
-                host_ids,
-                device=model.mesh_device,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                dtype=ttnn.uint32,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(model.mesh_device),
-            )
-            self._verify_page_table = tt_page_table
-            self._ensure_prefill_verify_trace()
         if self.verify_mode.startswith("decode"):
             # Every verify row addresses the SAME sequence: they write different positions
             # inside slot 0, which is what makes a batched decode step a block verify.
@@ -730,6 +954,7 @@ class DFlashRunner:
         ttnn.deallocate(tt_tokens)
         hidden = model.prefill_forward(embedded, page_table=tt_page_table, user_id=0, start_pos=0)
         stats.target_forwards += 1
+        self._alloc_note("after prompt prefill")
         # Context for iteration 0 is the whole prompt: positions 0..L-1.
         context_host = self._taps_to_host(prompt_len)
         logits = model.prefill_logits(hidden, last_token_index=prompt_len - 1, apply_softcap=not self.uncapped_argmax)
@@ -738,6 +963,20 @@ class DFlashRunner:
             model.row_within_tile(prompt_len - 1)
         ]
         ttnn.deallocate(logits)
+
+        if self.trace_verify and not self.verify_mode.startswith("decode"):
+            # Capture only once the model is warm.  The prompt prefill lazily allocates
+            # per-length device caches (RoPE tables, norm/memory-config buffers) that
+            # would otherwise be created *after* capture and sit live across every
+            # replay -- measured at 334 KB/bank, which the allocation assertion catches.
+            # Capturing here puts them in the baseline instead.
+            #
+            # The capture executes the graph, so it overwrites the KV cache for rows
+            # 0..verify_width with pad tokens.  That is safe precisely because this verify
+            # is from-zero: the first replay re-forwards the whole prefix and rewrites
+            # every row it will read.  The prompt's taps and anchor have already been
+            # read out above, so nothing else depends on that KV.
+            self._ensure_verify_inputs(tt_page_table)
 
         produced = [anchor]
         # Absolute position of the anchor, i.e. of noise slot 0.
@@ -788,6 +1027,7 @@ class DFlashRunner:
             t0 = time.perf_counter()
             t_noise = time.perf_counter()
             noise = self._noise_embeds(produced[-1])
+            self._alloc_note("noise")
             stats.draft_noise_seconds += time.perf_counter() - t_noise
             t_forward = time.perf_counter()
             if self.padded_drafting:
@@ -823,11 +1063,17 @@ class DFlashRunner:
                     cache=drafter_cache,
                 )
             ttnn.deallocate(tt_context)
+            # _DFlashLayer.forward rebinds its local name rather than freeing the
+            # hidden state it was handed, so `noise` is still live here -- and would stay
+            # live across the verify replay, at an address inside the trace's footprint.
+            ttnn.deallocate(noise)
+            self._alloc_note("after drafter forward")
             stats.draft_forward_seconds += time.perf_counter() - t_forward
             t_candidates = time.perf_counter()
             candidates = self._candidate_ids(drafter_out)
             ttnn.deallocate(drafter_out)
             stats.draft_candidates_seconds += time.perf_counter() - t_candidates
+            self._alloc_note("after candidates")
             stats.draft_seconds += time.perf_counter() - t0
 
             # ------------------------------------------------------ verify
@@ -875,6 +1121,7 @@ class DFlashRunner:
             else:
                 context_host = self._taps_to_host(num, offset=lead)
             stats.taps_seconds += time.perf_counter() - t_taps
+            self._alloc_note("taps")
             # Positions anchor_pos..anchor_pos+n_matches follow the rows already
             # accumulated, so a plain append keeps row i at absolute position i --
             # the invariant forward_padded relies on.
@@ -891,7 +1138,8 @@ class DFlashRunner:
         # and hit the sharded-clone failure above.
         model.arm_hidden_state_taps(None)
         model.release_sliding_tails()
-        ttnn.deallocate(tt_page_table)
+        if not self._owns_verify_page_table:
+            ttnn.deallocate(tt_page_table)
 
         produced = produced[:max_new_tokens]
         stats.tokens = len(produced)

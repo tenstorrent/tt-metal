@@ -1006,4 +1006,10 @@ class DFlashDrafter(LightweightModule):
         ttnn.deallocate(context)
         for tensor in (*rope_q, *rope_kv, mask):
             ttnn.deallocate(tensor)
-        return self.final_norm(hidden)
+        # The last layer's output is not freed by anything else: _feed_forward frees the
+        # hidden state it was *handed*, not the one it returns.  Leaking it per call is
+        # invisible normally and is not invisible under a live trace, where a buffer that
+        # outlives the call sits at an address the replay will overwrite.
+        out = self.final_norm(hidden)
+        ttnn.deallocate(hidden)
+        return out

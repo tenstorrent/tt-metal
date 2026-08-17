@@ -633,6 +633,88 @@ The first run of this A/B pointed `PYTHONPATH` at a path that did not exist, `mo
 silently fell back to the shared checkout, and both arms measured the same tree.  The
 harness prints the resolved package root for exactly that reason -- check it.
 
+### F18 — A traced 32-row prefill costs one decode step. That is the whole remaining win
+
+The single most useful number this project has produced.  Measured with the port's own
+`prefill_trace_probe.py`, warm, 10 replays:
+
+| rows | eager ms | **traced ms** | speedup |
+|---|---|---|---|
+| **32** | 66.77 | **24.48** | **2.73x** |
+| 64 | 61.16 | 40.99 | 1.49x |
+| 128 | 60.65 | 47.28 | 1.28x |
+
+Two things fall out.
+
+**A traced 32-row verify would cost one decode step** (24.48 against 23.3 ms), not the
+45 ms previously assumed.  That earlier figure came from the 44.96 ms on record, which is
+at **128 rows** -- the wrong shape to plan a 16-token verify around.  At 32 rows the
+prefill path already dispatches the *decode* matmuls, the *decode* collectives and
+sharded norms, because `_prefill_projection` branches on `rows == TILE_SIZE` and
+forwards to `_decode_projection`.  So the kernels are not the problem at verify shapes;
+host dispatch is, and tracing removes it.
+
+**32 rows is a cliff, not a slope.**  The DRAM-sharded decode matmul asserts
+`M == per_core_M` *and* `M == 1` -- exactly one tile row -- so 64 rows falls back to
+mcast2d at roughly half the DRAM bandwidth, and the traced time jumps 24.5 -> 41.0 ms.
+Any verify design that needs 33 rows loses most of the win.
+
+That also explains F13's oddity that a 32-row forward measured *slower* than a 128-row
+one eagerly (65.45 vs 54.74): at 32 rows the decode-grade kernels do less device work but
+cost more host calls, and eagerly the host is the binding constraint.
+
+**What it would take.**  The verify window must be exactly 32 rows, which means an
+*aligned* window (`page_block_size = 32`, restart at `32*floor(anchor/32)`, draft
+`31 - (anchor mod 32)` candidates -- 15.5 on average, i.e. today's 15 for free).  A
+traced window at a varying `start_pos` needs either one trace per distinct start (only
+~5 for OSL 128, each ~140 ms to capture, so this is viable) or the runtime-offset form:
+`chunked_scaled_dot_product_attention` accepts a `chunk_start_idx_tensor` read from
+device at replay, documented for exactly this.  Prefill RoPE would also need the
+decode-style on-device gather, since it currently slices with host ints.
+
+### F19 — Tracing the verify needs an allocation-free loop, and the loop is not one yet
+
+The rule a live trace imposes is **lifetime-based**: the allocator's own comment says
+buffers allocated while a trace exists must have "a lifetime that ends before the trace
+is executed".  It is a warning, not a gate, so nothing fails loudly -- it corrupts.
+
+That means the drafter's ~250 per-call intermediates are *fine* (created and freed
+between blocking replays); only what survives a replay matters.  Three real faults were
+found and fixed here, and a fourth is still open:
+
+1. `tt_page_table` was baked into the trace and then freed at the end of `generate()` --
+   a use-after-free inside a paged attention op, which is a **board wedge**, not a wrong
+   number.  This project already has the identical finding recorded for a cloned KV cache.
+2. `_verify_tokens` was reallocated per `generate()` while the trace still read the first
+   buffer, so a second prompt would silently replay the first prompt's tokens.
+3. `DFlashDrafter._forward_with_positions` never freed the last layer's hidden state
+   (`final_norm(hidden)` returns a new tensor and the input is dropped on the floor).
+4. **Open:** ~16 KB/iteration is still allocated and live across the replay, isolated to
+   the replay-plus-argmax region.  It grows linearly and at ~176 KB/bank the run hangs --
+   which is the allocation rule biting exactly as documented.
+
+`DFlashRunner._dram_allocated()` and the drift check are the instrument that made all of
+this visible: it names a leak in bytes at a labelled checkpoint instead of wedging the
+board.  Anyone continuing this work should keep `alloc_drift_budget = 0` and fix (4)
+before anything else; `--trace-verify` is off by default until then.
+
+### F20 — Per-shard argmax is correct and slower
+
+Avoiding the all-gather in `_argmax_rows` by reducing each vocab shard in place and
+combining four (index, max) pairs on the host is exactly equivalent -- it produced
+byte-identical tokens over 128 tokens -- and it is a clear **loss**: 26.67 -> 21.12
+t/s/u, candidates 9.7 -> 10.5 ms, verify logits 4.9 -> 6.5 ms.
+
+The premise was that the all-gather of a `32 x 202752` tile (~13 MB) dominated.  It does
+not.  Trading one readback of one small tensor for **eight** small per-shard readbacks
+costs more than the gather saves, which says this path is bound by per-transfer latency
+rather than by bytes.  Kept as `_argmax_rows_sharded`; the only variant worth retrying
+folds ids and maxima into one tensor per device, halving the readbacks to four.
+
+The vocab padding is handled by *detection* rather than masking, which is worth keeping
+whatever the outcome: only the last shard is padded (49984 real of 50688), and a padded
+winner is identifiable from its index alone, needing no assumption about padded values.
+
 ## Artifacts
 
 | file | what |
