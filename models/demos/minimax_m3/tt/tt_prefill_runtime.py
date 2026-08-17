@@ -468,9 +468,15 @@ class TtPrefillRuntime:
         ttnn.synchronize_device(mesh)
         if warm is not None:
             warm.deallocate(True)
+        # The warm forward has set the device slot metadata (read begins + KV-write slot/kv_actual) to
+        # slot_id; freeze them so the captured forward only reads (a host copy inside the trace would be
+        # illegal). A later replay for another user updates the slot via kv_cache.set_read_user, outside
+        # the trace.
+        kv_cache._slot_frozen = True
         tid = ttnn.begin_trace_capture(mesh, cq_id=0)
         out = self._trace_fwd(buf, cached_len, slot_id, kv_cache)
         ttnn.end_trace_capture(mesh, tid, cq_id=0)
+        kv_cache._slot_frozen = False
         ttnn.synchronize_device(mesh)
         if self._trace_pool is None:
             self._trace_pool = {}
