@@ -244,7 +244,12 @@ def render(report_dir: Path, env: dict) -> str:
     sites, labels, cases, order = _by_site(race_records)
     folded = sum(len(group) for group in leftover.values())
 
-    out = ["# ttnop timing-perturbation findings", "", "| | |", "| --- | --- |"]
+    out = [
+        "# ttnop timing-perturbation findings",
+        "",
+        "| field | value |",
+        "| --- | --- |",
+    ]
     out += [f"| {key} | `{value}` |" for key, value in env.items()]
     out += [
         "",
