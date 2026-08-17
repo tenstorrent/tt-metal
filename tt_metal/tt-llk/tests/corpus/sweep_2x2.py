@@ -102,7 +102,9 @@ OFF_FLAGS = (
     "-mno-tt-tensix-optimize-dst-iteration-fusion "
     "-mno-tt-tensix-optimize-replay-hoist "
     "-mno-tt-tensix-optimize-invariant-loadi "
-    "-mno-tt-tensix-optimize-dst-autoincr"
+    "-mno-tt-tensix-optimize-dst-autoincr "
+    "-mno-tt-tensix-optimize-dst-ownership "
+    "-mno-tt-tensix-optimize-lut-select"
 )
 ON_FLAGS = (
     "-mtt-tensix-optimize-latency-schedule "
@@ -110,6 +112,8 @@ ON_FLAGS = (
     "-mtt-tensix-optimize-replay-hoist "
     "-mtt-tensix-optimize-invariant-loadi "
     "-mtt-tensix-optimize-dst-autoincr "
+    "-mtt-tensix-optimize-dst-ownership "
+    "-mtt-tensix-optimize-lut-select "
     "-mtt-tensix-macro-planner"
 )
 REMOVED_FLAGS = ("-mtt-tensix-emit-loadmacro", "-mtt-tensix-analyze-loadmacro")
@@ -121,6 +125,8 @@ KNOBS = {
     "invariant-loadi": "-mtt-tensix-optimize-invariant-loadi",
     "dst-autoincr": "-mtt-tensix-optimize-dst-autoincr",
     "macro-planner": "-mtt-tensix-macro-planner",
+    "dst-ownership": "-mtt-tensix-optimize-dst-ownership",
+    "lut-select": "-mtt-tensix-optimize-lut-select",
 }
 HARNESS_TOOLCHAIN = TESTS / "sfpi"  # untracked symlink the harness hardcodes
 DEVICE_LOCK = "/tmp/tt-device.lock"
