@@ -9,12 +9,15 @@ cd "${TT_METAL_HOME:?}"
 L=models/autoports/qwen_qwen3_6_35b_a3b/doc/functional_decoder/logs
 T=models/autoports/qwen_qwen3_6_35b_a3b/tests/test_long_context.py
 mkdir -p "$L"
-# one run == one evidence file; the five cases below accumulate into it
+# one run == one evidence file; the six cases below accumulate into it. One pytest process per
+# case: each holds the largest allocations in the stage, and a hung teardown must not poison the
+# next case (see work_log.md section 6).
 rm -f models/autoports/qwen_qwen3_6_35b_a3b/doc/functional_decoder/long_context.jsonl
 for sel in "longest_decode_context and linear" \
            "longest_prefill and linear" \
            "longest_decode_context and full" \
            "longest_prefill and full" \
+           "longest_decode_context_batched" \
            "max_batch_full_context_capacity"; do
   name=$(echo "$sel" | tr ' ' '_')
   timeout 21600 python -m pytest "$T" -q --no-header -p no:cacheprovider -m slow -k "$sel" \

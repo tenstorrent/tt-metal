@@ -15,12 +15,22 @@ summed here and reported separately so device-busy time and dispatch gap are nev
 Also rewrites `perf_host_summary.jsonl` keeping only the newest row per (mode, kind), so the
 host wall-clock rows always correspond to the artifacts currently in `tracy/`.
 
-Each case additionally gets a three-way `blocks` split — token mixer (attention or gated delta
-net), expert matmuls, and the MoE's dense-over-experts elementwise/layout work — because the
-mixer/MoE boundary is what an optimization stage needs and it is not visible in a per-op-code
-total. The boundary is found structurally, not hard-coded: within one iteration the MoE begins at
-the last `LayerNormDeviceOperation` before the first `SparseMatmulDeviceOperation`, which is
-`post_attention_layernorm`.
+Each case additionally gets a three-way `blocks` split, because the mixer/MoE boundary is what an
+optimization stage needs and it is not visible in a per-op-code total:
+
+* `mixer` — everything before `post_attention_layernorm`: the input norm, the token mixer
+  (attention or gated delta net) and the first residual add;
+* `expert_matmul` — the `SparseMatmulDeviceOperation` rows, i.e. the routed experts;
+* `moe_elementwise` — the whole rest of the MoE block. Mostly elementwise/layout work over the
+  dense-over-256-expert intermediates, but **not exclusively**: it also holds the router matmul,
+  the four shared-expert matmuls, `topk`, both scatters and the final residual add. Those are
+  small next to the intermediates, but the bucket is "the MoE minus its expert matmuls", not
+  "elementwise ops".
+
+The boundary is found structurally, not hard-coded: within one iteration the MoE begins at the last
+`LayerNormDeviceOperation` before the first `SparseMatmulDeviceOperation`, which is
+`post_attention_layernorm`. The window is checked to be a whole number of identical iterations
+first, so the split cannot be computed off a ragged window.
 
     python models/autoports/qwen_qwen3_6_35b_a3b/tests/summarize_perf.py
 """
@@ -53,7 +63,16 @@ def block_split(rows, iters):
     on the first iteration and the totals are divided at the end.
     """
     per = len(rows) // iters if iters else len(rows)
-    first = rows[:per] if per else rows
+    if not per or len(rows) % iters:
+        return None
+    first = rows[:per]
+    # The `i % per` bucketing below only means anything if every iteration in the window ran the
+    # same op sequence. Check it rather than assume it: a window that is not a whole number of
+    # identical iterations would silently mis-bucket instead of failing.
+    seq = [r["OP Code"] for r in first]
+    for it in range(1, iters):
+        if [r["OP Code"] for r in rows[it * per : (it + 1) * per]] != seq:
+            return {"error": f"iteration {it} op sequence differs from iteration 0; split not derivable"}
     first_sparse = next((i for i, r in enumerate(first) if "Sparse" in r["OP Code"]), None)
     if first_sparse is None:
         return None
@@ -69,6 +88,7 @@ def block_split(rows, iters):
         else:
             other += dt
     return {
+        "iterations_identical": True,
         "boundary_op_index_in_iteration": boundary,
         "mixer_ms_per_iter": round(mixer / 1e3 / iters, 3),
         "expert_matmul_ms_per_iter": round(expert / 1e3 / iters, 3),

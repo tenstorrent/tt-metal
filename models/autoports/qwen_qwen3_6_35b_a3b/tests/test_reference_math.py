@@ -27,6 +27,7 @@ from transformers.models.qwen3_5_moe.modeling_qwen3_5_moe import (
     torch_recurrent_gated_delta_rule,
 )
 
+from models.autoports.qwen_qwen3_6_35b_a3b.tt import reference as ref
 from models.autoports.qwen_qwen3_6_35b_a3b.tt.reference import load_hf_text_config
 
 CHUNK = 64
@@ -293,3 +294,32 @@ def test_l2norm_as_rms_norm():
     ref = l2norm(x, dim=-1, eps=eps)
     rms = x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + eps / d) * (d**-0.5)
     assert torch.allclose(ref, rms, atol=1e-6), (ref - rms).abs().max()
+
+
+# ---------------------------------------------------------------------------------------
+# 3.6 the long-context tail references are exact
+# ---------------------------------------------------------------------------------------
+# The entire advertised-context claim (README section 4, `context_contract.json`,
+# `long_context.jsonl`) is measured against `hf_prefill_tail` / `hf_linear_prefill_tail` rather
+# than a full `hf_prefill`, because a 262143-token HF forward is not affordable. Those helpers
+# split the sequence: fill the cache / advance the state over the head, then run the layer over
+# the tail. If that split were not exact, every advertised-context PCC in the stage would be
+# measured against the wrong golden and still look fine. These two tests close that gap at a
+# length where the full reference *is* affordable, so the comparison is direct.
+@pytest.mark.parametrize("kind,layer_idx", [("linear", 0), ("full", 3)])
+def test_tail_reference_matches_full_prefill(kind, layer_idx):
+    cfg = load_hf_text_config()
+    layer = ref.build_hf_layer(cfg, layer_idx, ref.synthetic_layer_state_dict(layer_idx))
+    seq, tail = 512, 128
+    x = ref.synthetic_hidden_states(cfg, 1, seq, seed=91)
+
+    full = ref.hf_prefill(layer, cfg, x, start_pos=0, cache=ref.make_cache(cfg)).output[:, -tail:]
+    if kind == "full":
+        got = ref.hf_prefill_tail(layer, cfg, x, tail=tail)
+    else:
+        # chunk smaller than the head so the chunked state advance is actually exercised
+        got, _ = ref.hf_linear_prefill_tail(layer, cfg, x, tail=tail, chunk=128)
+
+    assert got.shape == full.shape, (got.shape, full.shape)
+    # Same math, same dtype (fp32), so this is a tolerance on reassociation only.
+    assert torch.allclose(got, full, atol=2e-4), (got - full).abs().max()

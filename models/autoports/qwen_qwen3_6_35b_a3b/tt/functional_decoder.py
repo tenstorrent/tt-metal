@@ -304,6 +304,31 @@ def _decode_sdpa_program_config(cfg: DecoderConfig):
     )
 
 
+def _tilized(tensor):
+    """``(tile_layout_tensor, owned)``. ``owned`` is False when the input already was TILE.
+
+    ``ttnn.to_layout`` returns the *input* if no conversion is needed, so the caller cannot
+    unconditionally deallocate the result -- the same aliasing trap as ``_subview`` / ``_move``.
+    """
+    if tensor.layout == ttnn.TILE_LAYOUT:
+        return tensor, False
+    return ttnn.to_layout(tensor, ttnn.TILE_LAYOUT), True
+
+
+def _zero_(tensor) -> None:
+    """Zero ``tensor`` in place, keeping its buffer address (so it stays trace-safe).
+
+    Deliberately **not** ``ttnn.mul(t, 0.0, output_tensor=t)``: ``0 * NaN`` and ``0 * Inf`` are
+    ``NaN``, so a multiply cannot clear a poisoned buffer. That matters because zeroing is how a
+    slot is handed to a new sequence -- see ``reset_state`` and ``prefill_forward``'s
+    ``start_pos == 0`` path -- and the contract in the README says a reused slot starts clean
+    unconditionally. ``ttnn.zeros_like`` + ``ttnn.copy`` writes the value rather than scaling it.
+    """
+    zeros = ttnn.zeros_like(tensor)
+    ttnn.copy(zeros, tensor)
+    ttnn.deallocate(zeros)
+
+
 def _dealloc(*tensors) -> None:
     for tensor in tensors:
         if tensor is not None:
@@ -598,14 +623,18 @@ class FunctionalDecoder(LightweightModule):
         self.kv_cache = None
 
     def reset_state(self) -> None:
-        """Zero the persistent state in place (keeps buffer addresses, so trace-safe)."""
+        """Zero the persistent state in place (keeps buffer addresses, so trace-safe).
+
+        All slots. There is deliberately no per-slot variant: a slot is handed to a new sequence by
+        prefilling it from ``start_pos = 0``, which zeroes that slot's carry on its own.
+        """
         if self.cfg.is_linear:
-            ttnn.mul(self.recurrent_state, 0.0, output_tensor=self.recurrent_state)
+            _zero_(self.recurrent_state)
             for tap in self.conv_state:
-                ttnn.mul(tap, 0.0, output_tensor=tap)
+                _zero_(tap)
         else:
             for cache in self.kv_cache:
-                ttnn.mul(cache, 0.0, output_tensor=cache)
+                _zero_(cache)
 
     # -----------------------------------------------------------------------------------
     # forward dispatch
@@ -659,7 +688,7 @@ class FunctionalDecoder(LightweightModule):
             # `conv_state` / `recurrent_state` buffers -- they are updated per slot by
             # `_store_linear_carry` at the end of the call.
             for piece in carry:
-                ttnn.mul(piece, 0.0, output_tensor=piece)
+                _zero_(piece)
 
         pieces = []
         for offset in range(0, padded_len, cfg.prefill_chunk_size):
@@ -756,15 +785,22 @@ class FunctionalDecoder(LightweightModule):
         rope_end = [1, 1, abs_pos + seq, cfg.rotary_dim]
         cos_rows, owns_cos = _subview(self.w["rope_cos"], [0, 0, abs_pos, 0], rope_end)
         sin_rows, owns_sin = _subview(self.w["rope_sin"], [0, 0, abs_pos, 0], rope_end)
-        cos = ttnn.to_layout(cos_rows, ttnn.TILE_LAYOUT)
-        sin = ttnn.to_layout(sin_rows, ttnn.TILE_LAYOUT)
+        # `_tilized` rather than a bare `to_layout`: `to_layout` returns its *input* when the layout
+        # already matches, and the two deallocates below would then double-free. Correct today
+        # because the tables are ROW_MAJOR, but that is exactly the assumption items 1 and 5 of
+        # README section 7 were bugs about, so it is checked rather than assumed.
+        cos, owns_cos_tile = _tilized(cos_rows)
+        sin, owns_sin_tile = _tilized(sin_rows)
         if owns_cos:
             _dealloc(cos_rows)
         if owns_sin:
             _dealloc(sin_rows)
         q = self._partial_rope_prefill(q, cos, sin)
         k = self._partial_rope_prefill(k, cos, sin)
-        _dealloc(cos, sin)
+        if owns_cos_tile:
+            _dealloc(cos)
+        if owns_sin_tile:
+            _dealloc(sin)
 
         keys, values = self.kv_cache
         k_fill = ttnn.typecast(k, dtype=keys.dtype) if k.dtype != keys.dtype else k

@@ -13,11 +13,27 @@ same relationship on every run.
 """
 
 import json
+import re
 
 from models.autoports.qwen_qwen3_6_35b_a3b.tests.harness import ARTIFACT_DIR
 from models.autoports.qwen_qwen3_6_35b_a3b.tt import reference as ref
 
 KIND_LABEL = {"linear": "linear_attention", "full": "full_attention"}
+
+
+def read_dram_probe() -> int:
+    """Usable DRAM in bytes, parsed from the probe's log rather than hardcoded.
+
+    The contract's whole point is that every field traces to recorded evidence, so this one reads
+    `logs/probe_dram_capacity.log` (written by `tests/probe_dram_capacity.py`) instead of carrying a
+    number a reader has to trust.
+    """
+    path = ARTIFACT_DIR / "logs" / "probe_dram_capacity.log"
+    for line in path.read_text().splitlines():
+        m = re.search(r"^CAP allocated .*? = (\d+) bytes", line)
+        if m:
+            return int(m.group(1))
+    raise SystemExit(f"no 'CAP allocated ... = N bytes' line in {path}; run tests/probe_dram_capacity.py")
 
 
 def main():
@@ -37,7 +53,7 @@ def main():
         d = pick("longest-decode", kind)
         tested["prefill"][label] = {
             "seq_len": p["seq_len"],
-            "tile_aligned": p["seq_len"] % 128 == 0,
+            "aligned_to_prefill_align_128": p["seq_len"] % 128 == 0,
             "hf_pcc": round(p["pcc"], 7),
             "hf_reference": "exact tail reference over the last %d query positions" % p["tail"],
             "device_wall_seconds": p["wall_seconds"],
@@ -51,6 +67,7 @@ def main():
         }
 
     capacity = by_label.get("kv-capacity batch32 full context", {})
+    dram_bytes = read_dram_probe()
     contract = {
         "hf_model_id": ref.HF_MODEL_ID,
         "stage": "functional-decoder",
@@ -65,11 +82,10 @@ def main():
         "tested": tested,
         "device_capacity_evidence": {
             "device": "1x Blackhole p300c chip, 1x1 mesh",
-            "usable_dram_bytes": 33822867456,
+            "usable_dram_bytes": dram_bytes,
             "usable_dram_probe": (
                 "tests/probe_dram_capacity.py: allocated 512 MiB DRAM tensors until the bank "
-                "manager refused, 63 x 512 MiB = 33822867456 B = 31.50 GiB "
-                "(doc/functional_decoder/logs/probe_dram_capacity.log)"
+                "manager refused; parsed from doc/functional_decoder/logs/probe_dram_capacity.log"
             ),
             "paged_kv_bytes_batch32_full_context": capacity.get("bytes_total"),
             "paged_kv_blocks_batch32_full_context": capacity.get("blocks"),

@@ -88,7 +88,10 @@ continue the previous occupant's sequence. Two consequences for a serving caller
   inactive slot's state still advances from whatever token sits in its row. That junk stays inside
   that slot (the recurrence is per-slot), its output row is discarded by the caller, and the next
   `start_pos = 0` prefill clears it — so it is self-healing rather than corrupting, but a caller
-  must not read an inactive slot's output.
+  must not read an inactive slot's output. The clearing is unconditional: zeroing goes through
+  `_zero_` (`ttnn.zeros_like` + `ttnn.copy`), **not** `ttnn.mul(x, 0.0)`, because `0 * NaN` is
+  `NaN` and a multiply cannot clear a poisoned buffer. The layer's own math cannot produce one
+  (`g <= 0`, so the recurrence decays), but a caller's input row could.
 
 **Decode batch is fixed at `max_batch_size`.** The linear-attention conv and recurrent state
 buffers are updated whole-tensor and in place, which is what lets one captured trace be
@@ -116,7 +119,7 @@ slots.
 Commands (all from `$TT_METAL_HOME`):
 
 ```bash
-# what logs/test_suite_main.log is: both files in one invocation (97 items)
+# what logs/test_suite_main.log is: both files in one invocation (99 items)
 python -m pytest \
   models/autoports/qwen_qwen3_6_35b_a3b/tests/test_reference_math.py \
   models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py \
@@ -130,19 +133,21 @@ pytest models/autoports/qwen_qwen3_6_35b_a3b/tests/test_long_context.py -m slow
 ```
 
 Logs: `logs/test_suite_main.log` (the CPU algebra tests + the whole device suite, including the
-real-weight cases — **99 passed, 0 failed**: 26 CPU algebra + 73 device cases),
+real-weight cases — **101 passed, 0 failed**: 28 CPU-only + 73 device cases),
 `logs/long_*.log` (one per advertised-context case, **5 passed**), `logs/diag_*.txt` (the §3.8
 diagnostics), `watcher/pytest.log` (**8 passed**). The suite is fast on a warm kernel cache
 because `conftest.py` caches layer pairs per (kind, batch, context, weights) for the session:
-building one costs ~1.5 GiB of weight conversion, and the 71 device cases share about a dozen.
+building one costs ~1.5 GiB of weight conversion, and the 73 device cases share about a dozen.
 Machine-readable PCC rows: `pcc.jsonl` (276), `pcc_real_weights.jsonl` (6),
-`long_context.jsonl` (7). Every number quoted below is re-derivable from those files.
+`long_context.jsonl` (8). Every number quoted below is re-derivable from those files.
 
 ### 3.1 HF-vs-TTNN PCC, synthetic weights (real shapes)
 
-Worst case per test family, re-derived from `pcc.jsonl` (the file holds exactly one whole-file
-run: `harness.reset_log` clears it once per session, and a *filtered* session writes
-`pcc_partial.jsonl` instead so a subset run can neither mix rows in nor delete them):
+Worst case per test family, re-derived from `pcc.jsonl`. The file holds exactly one whole-file
+run: a session may replace it only if it selected nothing **and** collected
+`test_functional_decoder.py` (`tests/conftest.py`, `pytest_collection_modifyitems`); any subset —
+`-k`, `-m`, or a node id, which is what the perf runs pass — writes `pcc_partial.jsonl` instead, so
+a partial run can neither mix rows in nor delete them:
 
 | family | n | worst PCC | worst case |
 |---|---|---|---|
@@ -175,6 +180,36 @@ run: `harness.reset_log` clears it once per session, and a *filtered* session wr
 | `decode[linear] pos=512/513, batch=2` | 0.9999834 / 0.9999946 | 0.58% / 0.34% |
 | `prefill[full] seq=1024` | 0.9999796 | 0.64% |
 | `decode[full] pos=512/513, batch=2` | 0.9999856 / 0.9999908 | 0.54% / 0.44% |
+
+**The `prefill[linear]` max-abs error is 1.2687, and that number is classified rather than
+glossed** (`tests/diag_real_weight_maxabs.py` -> `logs/diag_real_weight_maxabs.txt`). It is 28x the
+synthetic-weight value for the same kind and length (0.0449) and 18x HF's own bf16 divergence
+(0.0706), so it needs a mechanism. Two candidates were tested and **both refuted**: the worst
+element sits at `|want| = 1.08`, only 9.5% of the tensor's max (11.38), with a 118% relative error
+— so it is not a large-magnitude element making a small relative error look big; and neither the
+worst token nor any of the worst eight has a bf16-vs-fp32 top-k expert-set swap (§5.1's
+mechanism), though 4.4% of tokens do.
+
+What it is: **bf16 error accumulating in the gated-delta-rule recurrent state across chunks**,
+shown by two controls —
+
+| real weights, same seed | delta chunks | max abs err | PCC |
+|---|---|---|---|
+| `linear` seq 64 | 1 (no carry at all) | 0.0630 | 0.9999932 |
+| `linear` seq 128 | 2 | 0.1350 | 0.9999908 |
+| `linear` seq 256 | 4 | 0.1910 | 0.9999862 |
+| `linear` seq 512 | 8 | 0.4420 | 0.9999589 |
+| `linear` seq 1024 | 16 | 1.2687 | 0.9999435 |
+| **`full` seq 1024** | **none** | **0.1367** | 0.9999796 |
+
+At one chunk the error is 0.063 — the same order as the synthetic-weight and HF-bf16 controls — and
+it roughly doubles per doubling of sequence, while the no-recurrence `full` layer at the same
+weights and length stays at 0.137. It is **bounded, not divergent**: the delta rule's decay
+(`g <= 0`, so `exp(g) <= 1`) ages old contributions out, which is why the 262143-token prefill is
+*not* worse (0.9999742, §4) despite 4096 chunks. The error also stays localized — 145 of 2.1M
+elements exceed 0.2 abs, across 43 of 1024 tokens. Consistent with the stage's other evidence that
+the recurrent state is its least accurate tensor: `linear recurrent_state` is the worst PCC in the
+suite (0.9999450) and `longest-prefill state recurrent` is 0.9998960.
 
 Context for the rel-RMS: **HF's own bf16-vs-fp32 divergence on the same layers and input is
 0.32% rel-RMS (PCC 0.999995)**, measured with real weights for both layer kinds
@@ -405,8 +440,8 @@ no-config path as well as more accurate. Using 55 of 55 cores per head is both t
 least accurate setting measured — consistent with a decomposition that spends everything on
 cross-core reduction. (16 cores/head is 8x faster again, and unusable below ~4096 keys.)
 
-**C ships** (`DecoderConfig.decode_sdpa_max_cores_per_head = 1`): correct at every context, 6.5x closer
-to HF than A at the advertised context (`1 - PCC` 2.3e-4 vs 1.4e-3) while matching it to the 7th
+**C ships** (`DecoderConfig.decode_sdpa_max_cores_per_head = 1`): correct at every context, 6.2x closer
+to HF than A at the advertised context (`1 - PCC` 2.32e-4 vs 1.43e-3) while matching it to the 7th
 decimal everywhere else, and 2.4x faster there.
 
 **Where it actually matters: small batch.** The field is `max_cores_per_head_*batch*`, and the
@@ -444,7 +479,7 @@ Selection deliberately spans both layer kinds and every device-facing mechanism 
 traced decode capture+replay, chunked prefill continuation, ragged per-slot `current_pos`,
 `current_pos = -1` slot skipping, the paged-cache write path and the linear-attention state.
 
-Result: **8 passed, 0 failed** (`watcher/pytest.log`), watcher log 5404 lines / 365927 bytes raw
+Result: **8 passed, 0 failed** (`watcher/pytest.log`), watcher log 5406 lines / 366146 bytes raw
 (`watcher/generated/watcher/watcher.log.gz`, 15.7 KB gzipped — gzipped so the artifact stays under
 this repo's 500 KB committed-file limit regardless of run length; inspect with `zless`/`zgrep`),
 and **no fatal, sanitize, out-of-bounds, stack/L1 overflow, invalid-NOC, CB-overrun or
@@ -473,6 +508,7 @@ each of these — the largest allocations in the stage — starts from empty dev
 | `longest-prefill[linear]` carried recurrent state | after 262143 tokens | 0.9998960 | |
 | `longest-decode[linear]` | position **262143** after a 262143-token prefill | 0.9999860 | 0.04 s |
 | `longest-decode[full]` | position **262143** after a 262143-token prefill | 0.9997685 | 0.05 s |
+| `batched-longest-decode[full]` | position **262143**, **batch 2**, slot 1 compared while slot 0 sits at `current_pos = -1` | 0.9997685 | |
 | batch-32 full-context paged KV | 131072 blocks, 2 x 8 GiB, **allocated on device** | n/a | |
 
 `longest-decode[full]` is still the lowest number in the table, and §3.8 explains why in full: it
@@ -496,6 +532,7 @@ relationship so it cannot go stale). Summary:
 | batch 32 at full context fits DRAM | `test_max_batch_full_context_capacity` allocates the real 2 x 8 GiB (16 GiB) paged cache on device | leaves ~15 GiB for weights + activations on this 31.5 GiB part (expert weights are 1.61 GB/layer in bf16: 256 x (1024x2048 + 2048x512) x 2) |
 | both layer kinds | `test_layer_kinds_cover_the_whole_model` + every test parameterised over `["linear", "full"]` | none |
 | any logical seq_len | 13 lengths per kind incl. 1/33/65/129/1025/2049/3000/262143 | none |
+| the shipped decode-SDPA decomposition holds above batch 1 | `test_longest_decode_context_batched`: the advertised context decoded with two slots live, the second at `current_pos = -1`, so a slot-indexing error cannot pass | none — this was the one gap where §3.8's conclusion rested on a source derivation rather than a measurement |
 | continuation prefill (`start_pos > 0`) | `test_prefill_chunk_continuation` streams a 1024-token prompt as two 512-token calls and matches HF piece-by-piece off the carried KV cache / conv+recurrent state | `start_pos` must be a multiple of `sdpa_chunk` (128); §9 records the chunked-SDPA integer-division op contract behind it and the only lever. Never limits prompt length — a fresh request prefills any `seq_len` in one call |
 | paged prefill + paged decode, permuted page tables | §3.4 | none |
 | per-slot `current_pos` | `test_decode_ragged_current_positions` | none |
@@ -517,15 +554,19 @@ mode/kind — see `work_log.md` §7). Artifacts per case in `tracy/<kind>_<mode>
 | `<mode>_perf_report.csv` | the same rows as CSV, signpost-filtered (`--csv`) |
 | `<mode>_perf_report.console.log` | `--csv`-run stdout, kept for provenance |
 | `<mode>_perf_report_stacked.csv` / `.png` | tt-perf-report's stacked breakdown |
-| `<mode>_ops.csv.gz` | the raw post-processed Tracy ops CSV the report was built from (1.2-21 MB raw; `run_perf.sh` gzips it after the reports, so `gunzip -k` before re-running `tt-perf-report`). The two **decode** CSVs exceed this repo's 500 KB committed-file limit even gzipped (1.71 MB / 730 KB) and are excluded by `tracy/.gitignore`; both prefill CSVs (431 KB / 151 KB) are committed — see `tracy/README.md` |
+| `<mode>_ops.csv.gz` | the raw post-processed Tracy ops CSV the report was built from (1.2-21 MB raw; `run_perf.sh` gzips it after the reports, so `gunzip -k` before re-running `tt-perf-report`). The two **decode** CSVs exceed this repo's 500 KB committed-file limit even gzipped (1.72 MB / 731 KB) and are excluded by `tracy/.gitignore`; both prefill CSVs (434 KB / 151 KB) are committed — see `tracy/README.md` |
 | `tracy_run.log.gz` | full Tracy + pytest transcript (gzipped) |
 
 Plus `perf_host_summary.jsonl` (host wall-clock rows) and `perf_summary.json` (reduced table,
 produced by `tests/summarize_perf.py`).
 
-All evidence is regenerated in one serialized pass, one hardware command at a time. The order
-is whatever the runner scripts and the dependency between them require, and the artifact mtimes
-are the record of it — not the order narrated in prose, which is easy to get wrong. Two things
+All evidence is regenerated in one serialized pass, one hardware command at a time. Artifact
+mtimes record when each file was *written*, which is mostly when it was measured — with one
+exception worth knowing before reading them as a timeline: the repo's `trailing-whitespace` and
+`end-of-file-fixer` pre-commit hooks rewrite committed text artifacts, so a few files (the
+`tt-perf-report` `.txt` tables, some `logs/*.log`) carry a commit-time mtime rather than a
+measurement-time one. Their *content* is unaffected — each `.txt` table's totals match its own
+`.csv` — but that is why a handful of files share an mtime to the nanosecond. Two things
 about freshness are worth stating precisely, because "everything postdates the code" is a claim
 that is easy to assert and easy to break:
 
@@ -563,14 +604,14 @@ those columns and divides by the iteration count.
 
 | case | shape | ops in window | device kernel / iter | op-to-op gap / iter | host wall / iter |
 |---|---|---|---|---|---|
-| prefill `linear` | seq 2048, batch 1 | 1750 (2 iters) | **341.85 ms** | 0.860 ms | 343.14 ms |
-| prefill `full` | seq 2048, batch 1 | 392 (2 iters) | **281.52 ms** | 0.136 ms | 282.01 ms |
-| decode `linear` (traced) | batch 32, `cur_pos` 4095 | 968 (8 iters) | **57.96 ms** | 0.089 ms | 58.08 ms |
-| decode `full` (traced) | batch 32, `cur_pos` 4095 | 872 (8 iters) | **50.08 ms** | 0.238 ms | 50.35 ms |
+| prefill `linear` | seq 2048, batch 1 | 1754 (2 iters) | **341.71 ms** | 0.898 ms | 343.03 ms |
+| prefill `full` | seq 2048, batch 1 | 392 (2 iters) | **281.50 ms** | 0.125 ms | 281.96 ms |
+| decode `linear` (traced) | batch 32, `cur_pos` 4095 | 968 (8 iters) | **57.84 ms** | 0.089 ms | 57.96 ms |
+| decode `full` (traced) | batch 32, `cur_pos` 4095 | 872 (8 iters) | **50.11 ms** | 0.239 ms | 50.37 ms |
 
 As single-layer host throughput (`perf_host_summary.jsonl`, `tokens_per_s_host`): prefill
-**7270 tok/s** (`full`) / **5963 tok/s** (`linear`) at seq 2048 batch 1, and decode **635 tok/s**
-(`full`) / **551 tok/s** (`linear`) aggregated across the 32-slot batch (i.e. 32 tokens per
+**7264 tok/s** (`full`) / **5970 tok/s** (`linear`) at seq 2048 batch 1, and decode **635 tok/s**
+(`full`) / **552 tok/s** (`linear`) aggregated across the 32-slot batch (i.e. 32 tokens per
 ~50/58 ms traced iteration; `iters * batch / elapsed`, `test_perf.py:163`). These are *per layer*; a 40-layer model at this
 per-layer cost would be far too slow to serve, which is what the `optimize` stage exists for and
 what the two observations below point at.
@@ -582,24 +623,29 @@ iteration, i.e. `post_attention_layernorm` — rather than by hand:
 
 | case | token mixer | expert matmuls | MoE dense-intermediate elementwise | total |
 |---|---|---|---|---|
-| prefill `linear` | 63.60 ms (18.6%) | 227.20 ms (66.5%) | 51.05 ms (14.9%) | 341.85 ms |
-| prefill `full` | 3.81 ms (1.4%) | 226.63 ms (80.5%) | 51.08 ms (18.1%) | 281.52 ms |
-| decode `linear` | 8.83 ms (15.2%) | 18.58 ms (32.1%) | 30.55 ms (52.7%) | 57.96 ms |
-| decode `full` | 1.05 ms (2.1%) | 18.57 ms (37.1%) | 30.46 ms (60.8%) | 50.08 ms |
+| prefill `linear` | 63.51 ms (18.6%) | 227.24 ms (66.5%) | 50.96 ms (14.9%) | 341.71 ms |
+| prefill `full` | 3.81 ms (1.4%) | 226.63 ms (80.5%) | 51.06 ms (18.1%) | 281.50 ms |
+| decode `linear` | 8.83 ms (15.3%) | 18.58 ms (32.1%) | 30.44 ms (52.6%) | 57.84 ms |
+| decode `full` | 1.05 ms (2.1%) | 18.57 ms (37.1%) | 30.49 ms (60.8%) | 50.11 ms |
+
+The third column is "the MoE minus its expert matmuls", not "elementwise ops": besides the
+elementwise/layout work over the dense-over-256-expert intermediates it also holds the router
+matmul, the four shared-expert matmuls, `topk`, both scatters and the final residual add. Those are
+small against the intermediates, but the label is a bucket name, not a claim about op types.
 
 * **The MoE is the whole cost; attention is rounding error.** For `full` layers the token mixer is
   1.4% of prefill and
   2.1% of decode. The optimisation
-  budget belongs to expert routing, and — less obviously — to the **elementwise work over the
-  dense-over-256-expert intermediates**, which is
+  budget belongs to expert routing, and — less obviously — to the **rest of the MoE block**
+  (dominated by elementwise/layout work over the dense-over-256-expert intermediates), which is
   18.1% of prefill and
   60.8% of decode, i.e. larger than
   the expert matmuls themselves in decode. `linear` layers add the gated delta rule on top: mixer
   18.6% of prefill and
   15.2% of decode.
-* **Device-bound, not dispatch-bound.** Op-to-op gap is 0.05-0.48% of device
+* **Device-bound, not dispatch-bound.** Op-to-op gap is 0.04-0.48% of device
   time (`gap/device` = 0.252% / 0.048% / 0.154% / 0.475% for the four rows in table order), and
-  host wall-clock exceeds device kernel time by 0.17-0.54%. The traced decode
+  host wall-clock exceeds device kernel time by 0.16-0.53%. The traced decode
   has essentially no dispatch overhead left to remove.
 
 **These rows are measured at `supported_context = 8192`, not the advertised 262144**
@@ -632,9 +678,9 @@ belong to the `optimize` stage, not here.
    checkable against `tracy/full_prefill/prefill_perf_report.csv`, where the row
    `SparseMatmulDeviceOperation active=?/4096 x 32 x 2048 x 1024` appears **8 times** with
    `Cores` 32.0 — issued 4x per prefill iteration (512 tokens = 16 tile-groups per call,
-   `4096 = 16 groups x 256 experts`) over a 2-iteration window. Those rows sum to 293.95 ms,
-   i.e. 36.74 ms per call and 146.97 ms per iteration, which is the §5 figure. Then
-   `16 groups x 162.3 experts x (32 x 2048 x 1024 x 2) FLOP / 36.74 ms ~= 9.5 TFLOP/s`.
+   `4096 = 16 groups x 256 experts`) over a 2-iteration window. Those rows sum to 294.09 ms,
+   i.e. 36.76 ms per call and 147.04 ms per iteration, which is the §5 figure. Then
+   `16 groups x 162.3 experts x (32 x 2048 x 1024 x 2) FLOP / 36.76 ms ~= 9.5 TFLOP/s`.
    Passing `tt-perf-report --active-experts 162` would make the tool report the utilization
    directly instead; the hand derivation is kept because it is the number quoted here.
 2. **`nnz` is left inferred** for every `sparse_matmul`. A static count that disagrees with
@@ -748,13 +794,14 @@ belong to the `optimize` stage, not here.
 | `tt/reference.py` | HF reference / weight-loading boundary (torch); single-layer state-dict extraction, weight stats, synthetic weights, prefill/decode goldens, O(seq) tail references |
 | `tests/harness.py` | matched (HF, TTNN) pair construction, page tables, state snapshot/restore, `TracedDecode`, PCC logging |
 | `tests/conftest.py` | session device + layer-pair cache (each distinct key holds ~1.5 GiB of expert weights for the session and nothing evicts, so it logs every new key with the live count) |
-| `tests/test_reference_math.py` | 26 CPU-only tests pinning the algebraic rewrites (no device, no checkpoint) |
+| `tests/test_reference_math.py` | CPU-only tests pinning the algebraic rewrites and the exactness of the long-context tail references (no device, no checkpoint) |
 | `tests/test_functional_decoder.py` | the correctness suite |
 | `tests/test_long_context.py` | 262144-token advertised-context evidence |
 | `tests/test_perf.py` | signposted warmed prefill / traced warmed decode |
 | `tests/probe_ttnn_ops.py` | 21 device op-behaviour probes the design was built on |
 | `tests/probe_dram_capacity.py` | allocates until the bank manager refuses, so `context_contract.json`'s `usable_dram_bytes` is a recorded measurement |
 | `tests/diag_long_decode.py`, `tests/diag_sdpa_decode.py`, `tests/diag_decode_sdpa_onmodel.py` | the three diagnostics behind §3.8 (localise / op-only sweep / on-model control) |
+| `tests/diag_real_weight_maxabs.py` | classifies the real-weight `prefill[linear]` max-abs outlier (§3.2): refutes the large-element and router-swap mechanisms, identifies recurrence accumulation |
 | `tests/run_perf.sh`, `tests/run_watcher.sh`, `tests/run_long_context.sh` | reproducible runners |
 | `tests/measure_expert_union.py` | CPU-only: the two MoE routing facts the analyses divide by — experts activated per 32-token sparse-matmul group (§6 limitation 1) and bf16 top-k selection agreement (`work_log.md` §5.1) |
 | `tests/write_context_contract.py`, `tests/summarize_perf.py` | derive `context_contract.json` / `perf_summary.json` from evidence |

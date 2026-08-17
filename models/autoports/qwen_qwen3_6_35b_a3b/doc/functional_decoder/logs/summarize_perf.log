@@ -1,32 +1,33 @@
-2026-08-17 17:01:15.898 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+2026-08-17 18:04:47.142 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
 Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
 wrote /localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/doc/functional_decoder/perf_summary.json
 [
   {
     "kind": "linear",
     "mode": "prefill",
-    "ops_in_window": 1750,
+    "ops_in_window": 1754,
     "iters": 2,
-    "device_kernel_ms_per_iter": 341.847,
-    "op_to_op_gap_ms_per_iter": 0.86,
-    "host_wall_ms_per_iter": 343.143,
+    "device_kernel_ms_per_iter": 341.71,
+    "op_to_op_gap_ms_per_iter": 0.898,
+    "host_wall_ms_per_iter": 343.032,
     "seq_len": 2048,
     "batch": 1,
     "current_pos": null,
     "traced": false,
     "supported_context": 8192,
     "top_ops_device_ms_per_iter": {
-      "SparseMatmulDeviceOperation active=?/4096 x 32 x 2048 x 1024": 147.413,
-      "SparseMatmulDeviceOperation active=?/4096 x 32 x 512 x 2048": 79.784,
-      "BinaryNgDeviceOperation": 25.356,
-      "UnaryDeviceOperation": 21.657,
-      "MatmulDeviceOperation b={1024} x 64 x 64 x 64": 19.185
+      "SparseMatmulDeviceOperation active=?/4096 x 32 x 2048 x 1024": 147.407,
+      "SparseMatmulDeviceOperation active=?/4096 x 32 x 512 x 2048": 79.835,
+      "BinaryNgDeviceOperation": 25.307,
+      "UnaryDeviceOperation": 21.578,
+      "MatmulDeviceOperation b={1024} x 64 x 64 x 64": 19.188
     },
     "blocks": {
-      "boundary_op_index_in_iteration": 687,
-      "mixer_ms_per_iter": 63.605,
-      "expert_matmul_ms_per_iter": 227.197,
-      "moe_elementwise_ms_per_iter": 51.045
+      "iterations_identical": true,
+      "boundary_op_index_in_iteration": 689,
+      "mixer_ms_per_iter": 63.505,
+      "expert_matmul_ms_per_iter": 227.242,
+      "moe_elementwise_ms_per_iter": 50.963
     }
   },
   {
@@ -34,26 +35,27 @@ wrote /localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/doc/fu
     "mode": "prefill",
     "ops_in_window": 392,
     "iters": 2,
-    "device_kernel_ms_per_iter": 281.524,
-    "op_to_op_gap_ms_per_iter": 0.136,
-    "host_wall_ms_per_iter": 282.013,
+    "device_kernel_ms_per_iter": 281.496,
+    "op_to_op_gap_ms_per_iter": 0.125,
+    "host_wall_ms_per_iter": 281.957,
     "seq_len": 2048,
     "batch": 1,
     "current_pos": null,
     "traced": false,
     "supported_context": 8192,
     "top_ops_device_ms_per_iter": {
-      "SparseMatmulDeviceOperation active=?/4096 x 32 x 2048 x 1024": 146.974,
-      "SparseMatmulDeviceOperation active=?/4096 x 32 x 512 x 2048": 79.652,
-      "UnaryDeviceOperation": 21.215,
-      "BinaryNgDeviceOperation": 16.101,
-      "FastReduceNCDeviceOperation": 6.406
+      "SparseMatmulDeviceOperation active=?/4096 x 32 x 2048 x 1024": 147.045,
+      "SparseMatmulDeviceOperation active=?/4096 x 32 x 512 x 2048": 79.588,
+      "UnaryDeviceOperation": 21.169,
+      "BinaryNgDeviceOperation": 16.11,
+      "FastReduceNCDeviceOperation": 6.416
     },
     "blocks": {
+      "iterations_identical": true,
       "boundary_op_index_in_iteration": 28,
-      "mixer_ms_per_iter": 3.815,
-      "expert_matmul_ms_per_iter": 226.626,
-      "moe_elementwise_ms_per_iter": 51.083
+      "mixer_ms_per_iter": 3.807,
+      "expert_matmul_ms_per_iter": 226.633,
+      "moe_elementwise_ms_per_iter": 51.056
     }
   },
   {
@@ -61,26 +63,27 @@ wrote /localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/doc/fu
     "mode": "decode",
     "ops_in_window": 968,
     "iters": 8,
-    "device_kernel_ms_per_iter": 57.96,
+    "device_kernel_ms_per_iter": 57.844,
     "op_to_op_gap_ms_per_iter": 0.089,
-    "host_wall_ms_per_iter": 58.077,
+    "host_wall_ms_per_iter": 57.961,
     "seq_len": 1,
     "batch": 32,
     "current_pos": 4095,
     "traced": true,
     "supported_context": 8192,
     "top_ops_device_ms_per_iter": {
-      "UnaryDeviceOperation": 10.511,
-      "BinaryNgDeviceOperation": 9.518,
+      "UnaryDeviceOperation": 10.509,
+      "BinaryNgDeviceOperation": 9.513,
       "SparseMatmulDeviceOperation active=?/8192 x 32 x 512 x 2048": 9.467,
       "SparseMatmulDeviceOperation active=?/8192 x 32 x 2048 x 1024": 9.11,
-      "FillPadDeviceOperation": 5.74
+      "FillPadDeviceOperation": 5.741
     },
     "blocks": {
+      "iterations_identical": true,
       "boundary_op_index_in_iteration": 68,
-      "mixer_ms_per_iter": 8.834,
-      "expert_matmul_ms_per_iter": 18.578,
-      "moe_elementwise_ms_per_iter": 30.548
+      "mixer_ms_per_iter": 8.829,
+      "expert_matmul_ms_per_iter": 18.577,
+      "moe_elementwise_ms_per_iter": 30.438
     }
   },
   {
@@ -88,31 +91,32 @@ wrote /localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/doc/fu
     "mode": "decode",
     "ops_in_window": 872,
     "iters": 8,
-    "device_kernel_ms_per_iter": 50.076,
-    "op_to_op_gap_ms_per_iter": 0.238,
-    "host_wall_ms_per_iter": 50.346,
+    "device_kernel_ms_per_iter": 50.106,
+    "op_to_op_gap_ms_per_iter": 0.239,
+    "host_wall_ms_per_iter": 50.371,
     "seq_len": 1,
     "batch": 32,
     "current_pos": 4095,
     "traced": true,
     "supported_context": 8192,
     "top_ops_device_ms_per_iter": {
-      "UnaryDeviceOperation": 10.419,
-      "SparseMatmulDeviceOperation active=?/8192 x 32 x 512 x 2048": 9.456,
+      "UnaryDeviceOperation": 10.41,
+      "SparseMatmulDeviceOperation active=?/8192 x 32 x 512 x 2048": 9.457,
       "SparseMatmulDeviceOperation active=?/8192 x 32 x 2048 x 1024": 9.111,
-      "BinaryNgDeviceOperation": 7.895,
+      "BinaryNgDeviceOperation": 7.888,
       "FillPadDeviceOperation": 5.567
     },
     "blocks": {
+      "iterations_identical": true,
       "boundary_op_index_in_iteration": 56,
-      "mixer_ms_per_iter": 1.051,
+      "mixer_ms_per_iter": 1.05,
       "expert_matmul_ms_per_iter": 18.567,
-      "moe_elementwise_ms_per_iter": 30.459
+      "moe_elementwise_ms_per_iter": 30.489
     }
   }
 ]
 nanobind: leaked 1 instances!
- - leaked instance 0x72098ccdaf88 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x79923e1eb5b8 of type "ttnn._ttnn.tensor.CoreRangeSet"
 nanobind: leaked 13 types!
  - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
  - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
@@ -126,13 +130,13 @@ nanobind: leaked 13 types!
  - leaked type "ttnn._ttnn.tensor.Tensor"
  - ... skipped remainder
 nanobind: leaked 199 functions!
- - leaked function "pop_current_command_queue_id_for_thread"
+ - leaked function "buffer_address"
  - leaked function ""
  - leaked function ""
- - leaked function "unpad_from_tile"
- - leaked function "devices"
+ - leaked function "unpad"
+ - leaked function "from_json"
  - leaked function ""
- - leaked function "__init__"
+ - leaked function ""
  - leaked function ""
  - leaked function ""
  - leaked function ""

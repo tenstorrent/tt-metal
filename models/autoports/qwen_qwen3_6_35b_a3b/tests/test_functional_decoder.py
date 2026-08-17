@@ -915,3 +915,17 @@ def test_context_contract_file_is_consistent():
     assert contract["largest_decode_context_tested"] == max(r["position"] for r in decode.values()) + 1
     for row in list(prefill.values()) + list(decode.values()):
         assert row["pcc"] >= PCC_BAR, row
+
+    # Every recorded PCC in the contract must be the one in the evidence, to 7 decimals. This is
+    # what stops the contract from carrying a number the runs no longer produce.
+    for kind, label in (("linear", "linear_attention"), ("full", "full_attention")):
+        p_row = next(r for lab, r in prefill.items() if f"[{kind}]" in lab)
+        d_row = next(r for lab, r in decode.items() if f"[{kind}]" in lab)
+        assert contract["tested"]["prefill"][label]["hf_pcc"] == round(p_row["pcc"], 7)
+        assert contract["tested"]["decode"][label]["hf_pcc"] == round(d_row["pcc"], 7)
+
+    # The DRAM capacity the byte accounting rests on is parsed from the probe log, not asserted.
+    probe = (harness.ARTIFACT_DIR / "logs" / "probe_dram_capacity.log").read_text()
+    match = re.search(r"^CAP allocated .*? = (\d+) bytes", probe, re.M)
+    assert match, "logs/probe_dram_capacity.log has no CAP line — run tests/probe_dram_capacity.py"
+    assert contract["device_capacity_evidence"]["usable_dram_bytes"] == int(match.group(1))

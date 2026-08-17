@@ -268,7 +268,33 @@ The TTNN bf16 implementation lands at 1.06% (linear) / 0.64% (full) rel-RMS agai
 expected cost of bf16 activations plus bf16 sparse matmuls, and it is why the default 0.995 bar
 needs no model-specific exception.
 
-### 5.3 Skipped experts must contribute exactly zero
+### 5.3 The real-weight max-abs outlier is recurrence accumulation
+
+`pcc_real_weights.jsonl`'s `prefill[linear] seq=1024` row carries `maxabs = 1.2687` against 0.0449
+for the same case with synthetic weights and 0.0706 for HF's own bf16 divergence (§5.2). Round 3 of
+the review pointed out that quoting only PCC and rel-RMS there selects the flattering metric, which
+was fair. Measured with `tests/diag_real_weight_maxabs.py`
+(`logs/diag_real_weight_maxabs.txt`):
+
+* **Not a large-magnitude element.** The worst element is at `|want| = 1.08`, 9.5% of the tensor max
+  (11.38), with a 118% relative error — the sign flips. So the absolute number is not "small
+  relatively".
+* **Not the bf16 top-k swap** of §5.1. 4.4% of tokens get a different expert set, but the worst
+  token does not, and **none of the worst eight** do.
+* **It is the recurrent state.** Sweeping sequence length with the same weights and seed:
+  `maxabs` 0.0630 / 0.1350 / 0.1910 / 0.4420 / 1.2687 at 1 / 2 / 4 / 8 / 16 delta chunks, i.e.
+  roughly 2x per doubling; and the no-recurrence control (`full`, same weights, same length) stays
+  at 0.1367. At one chunk — no carry at all — the error is the same order as both controls.
+* **Bounded, not divergent.** The delta rule decays (`g <= 0`), so old error ages out: the
+  262143-token prefill (4096 chunks) is *not* worse at 0.9999742. The error also stays localized:
+  145 of 2.1M elements above 0.2 abs, across 43 of 1024 tokens.
+
+Consistent with the rest of the stage: `linear recurrent_state` is the worst PCC anywhere
+(0.9999450) and `longest-prefill state recurrent` is 0.9998960. Recorded as **controlled** rather
+than fixed — it is the expected cost of a bf16 linear-attention recurrence, and `delta_dtype` is
+already fp32 for the state itself (§5.2 / README §6 limitation 5).
+
+### 5.4 Skipped experts must contribute exactly zero
 
 `_experts` sums the sparse-matmul output over all 256 experts and relies on the routing weight
 being exactly 0 for the experts a token did not select, so a skipped expert's output tile has to be
@@ -279,7 +305,7 @@ hard-check gap rather than claimed as verified. A later stage adding an `nnz`-aw
 gather-by-expert path should assert it explicitly, because that path changes which tiles the op
 writes.
 
-### 5.4 Router weight computation
+### 5.5 Router weight computation
 
 HF softmaxes over all 256 experts, takes the top 8 and renormalises by their sum. Softmax is
 monotonic, so top-k of the raw logits picks the same experts, and a softmax over just those 8
@@ -288,7 +314,7 @@ fp32 max-subtract / exp / sum / div (measured `maxabs 1.7e-3` vs 3.6e-2 for a pl
 `ttnn.softmax`), and keeps a separate binary mask as the sparse-matmul sparsity so the pattern
 is exactly 8 experts per token even when a routing weight rounds to zero in bf16.
 
-### 5.5 Long-context decode-SDPA investigation
+### 5.6 Long-context decode-SDPA investigation
 
 The one visibly-off number in the stage (`test_longest_decode_context[full]`, PCC 0.9986 at
 position 262143 vs ~0.99999 everywhere else) was root-caused to a specific
@@ -506,16 +532,16 @@ evidence in `doc/functional_decoder/` was produced by one serialized pass in the
 |---|---|
 | `tt/functional_decoder.py` with documented prefill/decode contract for both layer kinds | module docstring + README §2; `test_config_matches_hf`, `test_layer_kinds_cover_the_whole_model` |
 | decode runs fully under traced execution | `test_traced_decode_pcc` (PCC from replay), `test_traced_decode_matches_eager` (bit-identical) |
-| every layer kind, real config shapes, paged prefill/decode, page table, current position | README §3.1/§3.4; 276 PCC rows in `pcc.jsonl` |
+| every layer kind, real config shapes, paged prefill/decode, page table, current position | README §3.1/§3.4; 276 PCC rows in `pcc.jsonl` (101 tests: 28 CPU-only + 73 device) |
 | longest feasible seq/context | 262143-token prefill and position-262143 decode for both kinds (`long_context.jsonl`) |
 | non-aligned lengths around chunk/page/tile boundaries | 1/32/33/64/65/128/129/1024/1025/2048/2049/3000/4096 + 262143 per kind |
 | `doc/context_contract.json` | derived from evidence by `tests/write_context_contract.py`, re-checked by `test_context_contract_file_is_consistent`; **no capability reduction** |
 | real-weight test passing | `test_real_weights_prefill_and_decode[linear,full]`, `pcc_real_weights.jsonl` |
-| PCC >= 0.995 prefill and decode | worst in main suite 0.9999450; worst at 262144 context 0.9997685 (§5.5 — root-caused to one `SDPAProgramConfig` field and **fixed**, not waived) |
+| PCC >= 0.995 prefill and decode | worst in main suite 0.9999450; worst at 262144 context 0.9997685 (§5.6 — root-caused to one `SDPAProgramConfig` field and **fixed**, not waived) |
 | warmed prefill + traced warmed decode perf with tt-perf-report tables + CSV/provenance | `tracy/<kind>_<mode>/`, `perf_summary.json`, README §5 |
 | runtime fallback audit clean | `test_no_runtime_host_fallback` (static: 26 runtime methods plus every module-level helper, the helper list derived from the module rather than hand-written) + `test_no_host_ops_during_forward` (dynamic: ttnn host bridges monkeypatched to raise) |
 | determinism / repeated input | `test_prefill_determinism`, `test_decode_determinism` (bit-identical over 3 repeats) |
-| watcher-clean run | `watcher/` — 8 passed, 5404-line log (10 dumps), `watcher_hits.txt` empty (README §3.9) |
+| watcher-clean run | `watcher/` — 8 passed, 5406-line log (10 dumps), `watcher_hits.txt` empty (README §3.9) |
 | README + work log with commands, PCC, perf, limitations, artifacts | this file + `README.md` |
 
 ## 9. Independent stage review (round 1) and the work it produced
@@ -525,7 +551,7 @@ argued down:
 
 | finding | outcome |
 |---|---|
-| P1 — the "dynamic `k_chunk_size`" root cause was confounded: omitting the program config also flips the grid and `exp_approx_mode`, one label was wrong, and `k_chunk_size=0` (dynamic chunk path + explicit config) was never measured | **Superseded by round 2 — the conclusion recorded below was still wrong**; see §10 and §5.5. What round 1 produced: the sweep shows `exp_approx_mode` is *bit-identically irrelevant* and the chunk policy is not the discriminator, and it concluded the presence of a program config was. Added `tests/diag_decode_sdpa_onmodel.py`, the on-model control the reviewer asked for: shipped setting 0.9999954 @ ctx 1024 / 0.9985674 @ 262144 vs explicit config 0.0304429 / 0.9999958. Decision unchanged but now measured on the shipped path; README §3.8 rewritten; the fabricated `8x8` label and the "same cache" claim are gone. |
+| P1 — the "dynamic `k_chunk_size`" root cause was confounded: omitting the program config also flips the grid and `exp_approx_mode`, one label was wrong, and `k_chunk_size=0` (dynamic chunk path + explicit config) was never measured | **Superseded by round 2 — the conclusion recorded below was still wrong**; see §10 and §5.6. What round 1 produced: the sweep shows `exp_approx_mode` is *bit-identically irrelevant* and the chunk policy is not the discriminator, and it concluded the presence of a program config was. Added `tests/diag_decode_sdpa_onmodel.py`, the on-model control the reviewer asked for: shipped setting 0.9999954 @ ctx 1024 / 0.9985674 @ 262144 vs explicit config 0.0304429 / 0.9999958. Decision unchanged but now measured on the shipped path; README §3.8 rewritten; the fabricated `8x8` label and the "same cache" claim are gone. |
 | P1 — unguarded whole-tensor `ttnn.slice` of the persistent RoPE tables frees the layer's weights when `supported_context <= prefill_chunk_size` | **Real bug, fixed.** Both slices go through `_subview`; `_valid_mask` likewise. Regression test `test_prefill_covering_whole_context_does_not_free_weights` reproduces the exact trigger and then runs two more forwards on the same layer. |
 | P2 — `current_pos = -1` reached `ttnn.embedding` as an unsigned index | **Real bug, fixed.** Clamped on device with `ttnn.maximum(idx, 0)` before the lookup; the `-1` test now also asserts the inactive rows are finite. |
 | P2 — the root `.gitignore` (`*.log`, `*.csv`, `generated`) silently kept the test logs, watcher log and filtered perf CSVs out of the commit, while `tracy/README.md` claimed they were committed | **Fixed.** `doc/.gitignore` re-includes them (22 evidence files now commit); the oversized raw ops CSVs stay excluded by the repo's own 500 KB rule, documented in `tracy/README.md`. |
@@ -559,7 +585,7 @@ successfully, and then found one thing that mattered a great deal:
 
 | finding | outcome |
 |---|---|
-| **P1 — the §3.8 root cause was still confounded**: `SDPAProgramConfig::max_cores_per_head_batch` is a struct default (16) that the factory replaces with `num_cores_available` when no config is passed, so "program config present" and "16 vs 55 cores per head" were the same event, and the axis was never swept | **The reviewer was right, and the layer changed because of it.** The 4th axis is now swept (`diag_sdpa_decode.py`), the root cause is cores-per-head, and 1 core/head is the only value correct at every context. It **ships** (`decode_sdpa_max_cores_per_head = 1`): advertised-context decode PCC 0.9985674 -> **0.9997685**, and the op is 2.4x *faster* there (11.5 ms vs 28.1 ms), so there was no trade-off. The old claims "A is the only shippable setting" and "`optimize` must select per position" were both wrong and are gone. Two residual oddities are reported for upstream rather than explained (§5.5). |
+| **P1 — the §3.8 root cause was still confounded**: `SDPAProgramConfig::max_cores_per_head_batch` is a struct default (16) that the factory replaces with `num_cores_available` when no config is passed, so "program config present" and "16 vs 55 cores per head" were the same event, and the axis was never swept | **The reviewer was right, and the layer changed because of it.** The 4th axis is now swept (`diag_sdpa_decode.py`), the root cause is cores-per-head, and 1 core/head is the only value correct at every context. It **ships** (`decode_sdpa_max_cores_per_head = 1`): advertised-context decode PCC 0.9985674 -> **0.9997685**, and the op is 2.4x *faster* there (11.5 ms vs 28.1 ms), so there was no trade-off. The old claims "A is the only shippable setting" and "`optimize` must select per position" were both wrong and are gone. Two residual oddities are reported for upstream rather than explained (§5.6). |
 | P2 — README §5 said the two expert sparse matmuls were 81% of prefill and "the whole attention path is the remainder", overstating attention ~14x and hiding the MoE elementwise cost | Replaced with the measured three-way split (token mixer / expert matmuls / MoE dense-intermediate elementwise) for all four cases. `summarize_perf.py` now *derives* it into `perf_summary.json` — the mixer/MoE boundary is found structurally (last `LayerNormDeviceOperation` before the first sparse matmul in an iteration) rather than hand-counted, so it cannot drift from the CSVs. |
 | Other concern — decode perf measured only at `cur_pos=4095`, so the advertised-context latency is unknown | Measured: the decode SDPA alone is 11.5 ms/call at 262144 keys vs ~1 ms at the profiled shape, so the advertised-context step is ~10 ms slower than the §5 table. Recorded in §5, in `test_perf.py`'s own comment, and in README §3.8's timing table. |
 | P2 — `ttnn.embedding` untilizes a TILE-layout weight on **every** call, so each decode step untilized both full RoPE tables (2 x 32 MiB at the advertised context); and decode perf was measured at `supported_context=8192` without saying so | **Real inefficiency, fixed.** The tables are now stored ROW_MAJOR, so decode gathers `max_batch_size` rows instead of untilizing the whole table, and prefill tilizes only the chunk it slices. The first attempt kept *both* layouts and hit `Out of Memory: Not enough space to allocate 2147483648 B DRAM buffer` in the two real-weight tests — 64 MiB per layer of duplicated tables is real pressure once the session's cached layers are live — which is why one table plus a per-chunk tilize is the right shape. `supported_context` is stated in the perf section. |
@@ -568,11 +594,38 @@ successfully, and then found one thing that mattered a great deal:
 | P2 — `measure_expert_union.py` was untracked and had no log, yet README/work_log cited its numbers; the DRAM capacity probe behind `context_contract.json`'s `usable_dram_bytes` was likewise prose-only | Script tracked, `logs/measure_expert_union.log` committed. Added `tests/probe_dram_capacity.py` + `logs/probe_dram_capacity.log` so the capacity number is a recorded measurement. |
 | P2 — five staged `watcher/generated/inspector/*.yaml.gz` blobs no longer existed on disk, and 3 MB of uncompressed replacements were unignored, so no clean checkpoint commit was possible | `doc/.gitignore` excludes the inspector side-output (it is not evidence — the watcher log is), and the stale blobs are unstaged. |
 | linear-attention state was not self-healing: a slot reused for a new sequence inherited the previous occupant's conv/recurrent state, hidden by every test calling `reset_state()` first | **Real trap, fixed.** A prefill at `start_pos == 0` now zeroes that slot's carry; `test_prefill_resets_linear_state_for_new_sequence` reproduces it without any reset. The `current_pos = -1` case is documented as self-healing (junk stays in-slot and is cleared by the next fresh prefill). Cost a second lesson: the new test first used a `layer_pairs` key no other test had, and since that cache is session-scoped and never evicts, two extra ~1.5 GiB layers pushed the real-weight tests into `Out of Memory`. It now reuses an existing key, and `conftest.py` logs every new key with the live count so a later OOM is traceable. |
-| found while re-running: a **filtered** pytest session (`-k context_contract`) truncated `pcc.jsonl` through the same session fixture that gives the full run one file per run, so a subset run could silently replace 274 rows of committed evidence with nothing | Fixed: filtered sessions write `*_partial.jsonl` (gitignored) and never touch the committed logs. This is the third bug in this logging code: the first attempt truncated per *process* (would have destroyed the five-process long-context accumulation), and the fix for *this* one first diverted **every** log in a filtered session — which silently sent the long-context rows to `long_context_partial.jsonl`, caught two cases into the rerun. The redirect is now a set of log *names* the main suite owns, and all three failure modes are spelled out in `reset_log`'s docstring. |
+| found while re-running: a **filtered** pytest session (`-k context_contract`) truncated `pcc.jsonl` through the same session fixture that gives the full run one file per run, so a subset run could silently replace 274 rows of committed evidence with nothing | Fixed: filtered sessions write `*_partial.jsonl` (gitignored) and never touch the committed logs. This logging code took four attempts, all recorded because the failure mode is always "evidence quietly disappears": (1) truncating per *process* would have destroyed the five-process long-context accumulation; (2) diverting **every** log in a filtered session sent the long-context rows to `long_context_partial.jsonl`; (3) detecting subsets by `-k`/`-m` alone missed **node-id** selection, so `run_perf.sh` (which passes `test_perf.py::test_perf_prefill[linear]`) still deleted `pcc.jsonl` — visible as a `D` in `git status` after a perf run. The rule is now stated as the question that actually matters, in `pytest_collection_modifyitems`: a session may replace an owned log only if it selected nothing *and* collected the file that owns it. Verified against all six invocation shapes the stage uses. |
 | the static fallback audit's helper list was hand-written and missed `_view` | The list is derived from the module now, with an explicit setup-only exemption set, so a new helper cannot drift out of the audit. |
 | `test_real_weights_prefill_and_decode`'s docstring said "traced decode" but the test is eager; `current_pos` had no documented upper bound; README's watcher size and suite command were imprecise; no hard-check for skipped-expert tiles | All corrected or recorded (`work_log.md` §5.3 for the skipped-expert gap). |
 
-## 11. Commits
+## 11. Independent stage review (round 3) and the work it produced
+
+`$stage-review` returned **more-work-needed** a third time. No P1, and it found **no correctness
+defect in the shipped layer** — all five of its targeted checks passed and every headline number it
+re-derived reproduced exactly. The three findings were evidence-level, and one of them was a real
+unclassified anomaly:
+
+| finding | outcome |
+|---|---|
+| P2 — `test_long_context.py`'s docstring still quoted **0.9986** as the current advertised-context decode PCC; that is now the *rejected* setting's number, the shipped one is 0.9997685 | Fixed. The docstring now states 0.9997685, says 0.9986 is what the previous default gave, notes the defect was small-batch-only (which is why this batch-1 test is the one that saw it), and records that two earlier explanations in that same docstring were wrong. |
+| P2 — four README numbers disagreed with the artifacts they cite: "97 items" (log says 99), "71 device cases" (73, contradicting the same paragraph), "6.5x" (the ratio is 6.19x), and prefill "7270/5963 tok/s" (`perf_host_summary.jsonl` says 7262.1/5968.4) | All four corrected against their artifacts. |
+| P2 — the real-weight `prefill[linear]` **max abs error of 1.2687** is 28x the synthetic-weight equivalent and 18x HF's own bf16 divergence, and neither write-up compared the maxabs column at all | **Real anomaly, now measured and classified** — see §5.3. `tests/diag_real_weight_maxabs.py` refutes both candidate mechanisms (it is not a large-magnitude element: `\|want\|` is 9.5% of the tensor max with a 118% relative error; it is not the §5.1 bf16 top-k swap: none of the worst eight tokens has a differing expert set) and identifies it as **bf16 accumulation in the gated-delta-rule recurrent state**: maxabs grows 0.063 -> 1.269 monotonically over 1 -> 16 delta chunks, and the no-recurrence `full` control at the same weights and length stays at 0.137. Bounded, not divergent — the decay ages error out, which is why the 4096-chunk advertised-context prefill is *better* (0.9999742). |
+
+Acted on from the same review's "Other Concerns" and "Hard-Check Gaps", none of which were required:
+
+| concern | outcome |
+|---|---|
+| `ttnn.mul(x, 0.0, output_tensor=x)` cannot clear a NaN/Inf (`0 * NaN = NaN`), so the README's unconditional "a reused slot starts clean" claim did not hold for a poisoned buffer | Fixed in code: both `reset_state()` and the `start_pos == 0` per-slot reset go through `_zero_` (`ttnn.zeros_like` + `ttnn.copy`), which writes the value instead of scaling it. |
+| **no control validated the long-context tail references**, which the entire advertised-context claim is measured against | Closed with `test_tail_reference_matches_full_prefill`: at seq 512 / tail 128 — a length where the *full* `hf_prefill` is affordable — both `hf_prefill_tail` and `hf_linear_prefill_tail` (with a deliberately small 128-token chunk) match it to 2e-4. CPU-only, so it runs in the main suite. |
+| **the shipped SDPA setting was only ever measured at batch 1**, so its batch-independence was a source-level argument | Closed with `test_longest_decode_context_batched`: the advertised context decoded at batch 2, comparing the slot that holds it while the other sits at `current_pos = -1`. Added as a sixth case to `run_long_context.sh`. |
+| the third perf bucket was labelled "elementwise" but also holds the router matmul, the shared-expert matmuls, `topk` and the scatters | README §5 now says what the bucket actually is ("the MoE minus its expert matmuls"), and `summarize_perf.py`'s docstring enumerates the contents. |
+| `block_split` assumed every iteration in the window has an identical op sequence without checking | Now checked: the window must be a whole number of iterations with identical `OP Code` sequences, or the split is not emitted. |
+| `write_context_contract.py` hardcoded `usable_dram_bytes` while claiming the contract is derived from evidence | It parses `logs/probe_dram_capacity.log` now, and `test_context_contract_file_is_consistent` re-checks the parsed value plus every recorded PCC against the evidence rows. |
+| `to_layout` + unconditional deallocate in the prefill RoPE path would double-free if the tables were ever stored TILE — the same class as §7 items 1 and 5 | Routed through a new `_tilized` helper that returns an ownership flag, like `_subview` / `_move`. |
+| README §5 treated artifact mtimes as the run-order record, but pre-commit's whitespace hooks rewrite committed text artifacts | §5 now says so, and points out that content is unaffected (each `.txt` table's totals match its own `.csv`). |
+| `tile_aligned` in the contract actually tested `% 128` (PREFILL_ALIGN, not TILE) | Renamed to `aligned_to_prefill_align_128`. |
+
+## 12. Commits
 
 Local only; nothing pushed.
 

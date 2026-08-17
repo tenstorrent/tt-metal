@@ -1,4 +1,4 @@
-2026-08-17 16:57:19.259 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+2026-08-17 18:20:23.013 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
 Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
 wrote /localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/doc/context_contract.json
 {
@@ -19,17 +19,17 @@ wrote /localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/doc/co
     "prefill": {
       "linear_attention": {
         "seq_len": 262143,
-        "tile_aligned": false,
+        "aligned_to_prefill_align_128": false,
         "hf_pcc": 0.9999742,
         "hf_reference": "exact tail reference over the last 128 query positions",
-        "device_wall_seconds": 43.878
+        "device_wall_seconds": 43.876
       },
       "full_attention": {
         "seq_len": 262143,
-        "tile_aligned": false,
+        "aligned_to_prefill_align_128": false,
         "hf_pcc": 0.9999891,
         "hf_reference": "exact tail reference over the last 128 query positions",
-        "device_wall_seconds": 48.846
+        "device_wall_seconds": 48.843
       }
     },
     "decode": {
@@ -38,21 +38,21 @@ wrote /localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/doc/co
         "context_entries": 262144,
         "hf_pcc": 0.999986,
         "state_source": "262143-token prefill through this layer",
-        "device_wall_seconds": 0.041
+        "device_wall_seconds": 0.042
       },
       "full_attention": {
         "position": 262143,
         "context_entries": 262144,
         "hf_pcc": 0.9997685,
         "state_source": "262143-token prefill through this layer",
-        "device_wall_seconds": 0.045
+        "device_wall_seconds": 0.046
       }
     }
   },
   "device_capacity_evidence": {
     "device": "1x Blackhole p300c chip, 1x1 mesh",
     "usable_dram_bytes": 33822867456,
-    "usable_dram_probe": "allocated 512 MiB DRAM tensors until the bank manager refused: 31.5 GiB (doc/functional_decoder/work_log.md section 1)",
+    "usable_dram_probe": "tests/probe_dram_capacity.py: allocated 512 MiB DRAM tensors until the bank manager refused; parsed from doc/functional_decoder/logs/probe_dram_capacity.log",
     "paged_kv_bytes_batch32_full_context": 17179869184,
     "paged_kv_blocks_batch32_full_context": 131072,
     "paged_kv_allocated_on_device": true,
@@ -74,7 +74,7 @@ wrote /localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/doc/co
   }
 }
 nanobind: leaked 1 instances!
- - leaked instance 0x7682098193c8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x7b922d8199f8 of type "ttnn._ttnn.tensor.CoreRangeSet"
 nanobind: leaked 13 types!
  - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
  - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
@@ -88,15 +88,15 @@ nanobind: leaked 13 types!
  - leaked type "ttnn._ttnn.tensor.Tensor"
  - ... skipped remainder
 nanobind: leaked 199 functions!
- - leaked function "__repr__"
- - leaked function "__repr__"
- - leaked function "empty"
- - leaked function "logical_volume"
  - leaked function ""
- - leaked function "default_core_range"
- - leaked function "__repr__"
  - leaked function "deallocate"
- - leaked function "unpad_from_tile"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "storage_type"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "create_output_tensors"
+ - leaked function ""
  - leaked function ""
  - ... skipped remainder
 nanobind: this is likely caused by a reference counting issue in the binding code.

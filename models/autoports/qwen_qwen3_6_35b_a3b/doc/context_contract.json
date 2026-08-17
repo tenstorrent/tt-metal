@@ -16,17 +16,17 @@
     "prefill": {
       "linear_attention": {
         "seq_len": 262143,
-        "tile_aligned": false,
+        "aligned_to_prefill_align_128": false,
         "hf_pcc": 0.9999742,
         "hf_reference": "exact tail reference over the last 128 query positions",
-        "device_wall_seconds": 43.878
+        "device_wall_seconds": 43.876
       },
       "full_attention": {
         "seq_len": 262143,
-        "tile_aligned": false,
+        "aligned_to_prefill_align_128": false,
         "hf_pcc": 0.9999891,
         "hf_reference": "exact tail reference over the last 128 query positions",
-        "device_wall_seconds": 48.846
+        "device_wall_seconds": 48.843
       }
     },
     "decode": {
@@ -35,21 +35,21 @@
         "context_entries": 262144,
         "hf_pcc": 0.999986,
         "state_source": "262143-token prefill through this layer",
-        "device_wall_seconds": 0.041
+        "device_wall_seconds": 0.042
       },
       "full_attention": {
         "position": 262143,
         "context_entries": 262144,
         "hf_pcc": 0.9997685,
         "state_source": "262143-token prefill through this layer",
-        "device_wall_seconds": 0.045
+        "device_wall_seconds": 0.046
       }
     }
   },
   "device_capacity_evidence": {
     "device": "1x Blackhole p300c chip, 1x1 mesh",
     "usable_dram_bytes": 33822867456,
-    "usable_dram_probe": "tests/probe_dram_capacity.py: allocated 512 MiB DRAM tensors until the bank manager refused, 63 x 512 MiB = 33822867456 B = 31.50 GiB (doc/functional_decoder/logs/probe_dram_capacity.log)",
+    "usable_dram_probe": "tests/probe_dram_capacity.py: allocated 512 MiB DRAM tensors until the bank manager refused; parsed from doc/functional_decoder/logs/probe_dram_capacity.log",
     "paged_kv_bytes_batch32_full_context": 17179869184,
     "paged_kv_blocks_batch32_full_context": 131072,
     "paged_kv_allocated_on_device": true,

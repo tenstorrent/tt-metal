@@ -16,21 +16,47 @@ import torch
 import ttnn
 from models.autoports.qwen_qwen3_6_35b_a3b.tests import harness
 
+#: Logs that only a *whole* run of ``test_functional_decoder.py`` may replace.
+_OWNED_LOGS = ("pcc", "pcc_real_weights")
+#: Set during collection; see ``pytest_collection_modifyitems``.
+_MAY_REPLACE_OWNED_LOGS = False
+
+
+def pytest_collection_modifyitems(session, config, items):
+    """Decide whether this session may replace the suite's provenance logs.
+
+    There are three ways to run a subset here and all three have to be caught, because each one has
+    destroyed evidence at least once during this stage:
+
+    * ``-k`` -- ``run_watcher.sh`` and the contract check; collect tests that record nothing;
+    * ``-m`` -- ``run_long_context.sh``;
+    * a **node id** -- ``run_perf.sh`` passes ``test_perf.py::test_perf_prefill[linear]``, which sets
+      neither option. That is how the perf runs came to delete ``pcc.jsonl``.
+
+    A session may replace the owned logs only if it selected nothing (no ``-k``, no ``-m``, no node
+    id) *and* actually collected the file that owns them. Everything else writes ``*_partial.jsonl``
+    (gitignored) and leaves the committed evidence alone. ``long_context.jsonl`` is never diverted:
+    it is *meant* to be written by six separate filtered runs accumulating into one file.
+    """
+    global _MAY_REPLACE_OWNED_LOGS
+    selected = bool(
+        getattr(config.option, "keyword", "")
+        or getattr(config.option, "markexpr", "")
+        or any("::" in str(arg) for arg in config.args)
+    )
+    owns = any("test_functional_decoder.py" in str(item.fspath) for item in items)
+    _MAY_REPLACE_OWNED_LOGS = owns and not selected
+
 
 @pytest.fixture(scope="session", autouse=True)
-def _fresh_pcc_logs(request):
+def _fresh_pcc_logs():
     """One run == one provenance file for the logs this suite owns.
 
-    In a **filtered** session (``-k`` / ``-m``) *these* logs go to ``*_partial.jsonl`` instead.
-    Without that, ``pytest -k context_contract`` — which collects two tests that record nothing —
-    would delete the ``pcc.jsonl`` the full run had just produced. Only the names listed here are
-    diverted: ``long_context.jsonl`` is written by five deliberately-filtered runs
-    (``tests/run_long_context.sh``) and must keep accumulating into the real file.
+    See ``pytest_collection_modifyitems`` for which sessions are allowed to replace them and why the
+    check is about what was selected rather than about a single flag.
     """
-    owned = ("pcc", "pcc_real_weights")
-    filtered = bool(getattr(request.config.option, "keyword", "") or getattr(request.config.option, "markexpr", ""))
-    harness.PARTIAL_LOGS = set(owned) if filtered else set()
-    for name in owned:
+    harness.PARTIAL_LOGS = set() if _MAY_REPLACE_OWNED_LOGS else set(_OWNED_LOGS)
+    for name in _OWNED_LOGS:
         harness.reset_log(name)
     yield
     harness.PARTIAL_LOGS = set()

@@ -139,14 +139,17 @@ def test_longest_decode_context(long_device, kind):
     and the HF side advances its own cache/state over the same tokens in O(seq), so this is the
     contract's own path rather than a synthetic cache.
 
-    This layer's full-attention decode PCC at the advertised context (0.9986) is below the
-    ~0.99999 the rest of the stage reaches. It is not an artefact of how this test is set up:
-    README section 3.8 traces it to the decode SDPA op's parallel decomposition
-    (``max_cores_per_head_batch``), reproduced with no model code at all in
-    ``tests/diag_sdpa_decode.py`` and confirmed on the real layer with a real prefilled cache in
-    ``tests/diag_decode_sdpa_onmodel.py``. An earlier version of this docstring blamed the
-    conditioning of random K/V; that explanation was refuted by both of those diagnostics and is
-    gone.
+    This case's full-attention decode PCC is **0.9997685** — the lowest number in the stage, and
+    the one that drove README section 3.8. That investigation traced it to the decode SDPA op's
+    parallel decomposition (``SDPAProgramConfig::max_cores_per_head_batch``), reproduced with no
+    model code at all in ``tests/diag_sdpa_decode.py`` and settled on the real layer in
+    ``tests/diag_decode_sdpa_onmodel.py``; the fix — 1 core per (slot, KV head) — ships, and is why
+    this reads 0.9997685 rather than the **0.9986** the previous default gave. The defect only
+    existed at small batch, which is why this batch-1 test is the one that saw it;
+    ``test_longest_decode_context_batched`` covers batch 2 at the same context.
+
+    Two earlier explanations in this docstring were wrong and are gone: the conditioning of random
+    K/V, and (later) 0.9986 quoted as if it were the current value.
     """
     position = LONG_CONTEXT - 1
     pair = build_layer_pair(long_device, kind=kind, max_batch_size=1, supported_context=LONG_CONTEXT)
@@ -184,6 +187,60 @@ def test_longest_decode_context(long_device, kind):
     )
     record(result, "long_context")
     _record_contract("largest_decode_context_tested", position + 1)
+    assert result.pcc >= PCC_BAR, result
+
+
+@pytest.mark.timeout(7200)
+def test_longest_decode_context_batched(long_device):
+    """The advertised context decoded with **two** slots live, not one.
+
+    Why this exists: the decode-SDPA fix in README section 3.8 pins the op to 1 core per
+    (slot, KV head), and how many cores the op would otherwise use depends on the decode batch
+    (``max_cores_per_head_batch`` is divided by it) -- 55/head at batch 1 down to 1/head at batch 32.
+    Every other measurement behind that fix is batch 1, so without this the batch-independence of the
+    shipped decomposition would be a source-level argument rather than a measurement. ``full`` only:
+    the linear recurrence has no cross-slot coupling and no SDPA.
+
+    Slot 1 holds the advertised context and is the one compared; slot 0 holds a shorter sequence with
+    a different seed and decodes with ``current_pos = -1``, so the two slots hold genuinely different
+    state and a slot-indexing error cannot pass unnoticed.
+    """
+    position = LONG_CONTEXT - 1
+    pair = build_layer_pair(long_device, kind="full", max_batch_size=2, supported_context=LONG_CONTEXT)
+    pair.tt.reset_state()
+
+    decoy = _long_hidden(pair.hf_config, 4096, seed=7)
+    tt_decoy = to_tt_prefill(long_device, decoy)
+    ttnn.deallocate(pair.tt.prefill_forward(tt_decoy, user_id=0, page_table=pair.page_table))
+    ttnn.deallocate(tt_decoy)
+    del decoy
+
+    x = _long_hidden(pair.hf_config, position, seed=2)
+    tt_x = to_tt_prefill(long_device, x)
+    ttnn.deallocate(pair.tt.prefill_forward(tt_x, user_id=1, page_table=pair.page_table))
+    ttnn.deallocate(tt_x)
+    hf_cache = ref.hf_fill_full_attention_cache(pair.hf, pair.hf_config, x)
+    del x
+
+    token = ref.synthetic_hidden_states(pair.hf_config, 1, 1, seed=3)
+    both = torch.cat([torch.zeros_like(token), token], dim=0).reshape(2, 1, -1)
+    tt_tok = to_tt_decode(long_device, both)
+    tt_pos = to_tt_positions(long_device, torch.tensor([-1, position]))
+    tt_out = pair.tt.decode_forward(tt_tok, current_pos=tt_pos, page_table=pair.page_table)
+    got = from_tt(tt_out).reshape(2, 1, pair.cfg.hidden_size)[1:2]
+    for t in (tt_tok, tt_pos, tt_out):
+        ttnn.deallocate(t)
+
+    want = ref.hf_decode(pair.hf, pair.hf_config, token, positions=torch.tensor([position]), cache=hf_cache)
+    result = compare(
+        f"batched-longest-decode[full] pos={position} batch=2 slot=1",
+        got,
+        want,
+        position=position,
+        batch=2,
+        slot=1,
+    )
+    record(result, "long_context")
     assert result.pcc >= PCC_BAR, result
 
 
