@@ -49,6 +49,9 @@ import ttnn
 from .dflash_accept import accept_block
 from .dflash_drafter import DFlashDrafter, DFlashDrafterCache, build_noise_ids
 
+#: The LM head and the tile-padded prefill path both work in 32-row M tiles.
+TILE_ROWS = 32
+
 
 @dataclass
 class DFlashStats:
@@ -99,18 +102,22 @@ class DFlashStats:
 class DFlashRunner:
     """Drives target + drafter for one user on cache slot 0."""
 
-    def __init__(self, generator, drafter: DFlashDrafter) -> None:
+    #: Cap on the verify forward's width; see the comment at the verify forward.
+    DEFAULT_MAX_VERIFY_ROWS = 2048
+
+    def __init__(self, generator, drafter: DFlashDrafter, *, max_verify_rows: int | None = None) -> None:
         self.generator = generator
         self.model = generator.model
         self.drafter = drafter
         self.config = drafter.config
+        self.max_verify_rows = int(max_verify_rows or self.DEFAULT_MAX_VERIFY_ROWS)
 
     # ------------------------------------------------------------------ helpers
 
     def _tap_layers(self) -> tuple[int, ...]:
         return self.config.target_layer_ids
 
-    def _taps_to_host(self, num_rows: int) -> torch.Tensor:
+    def _taps_to_host(self, num_rows: int, *, offset: int = 0) -> torch.Tensor:
         """Concatenate the tapped hidden states on the last dim: ``[1, num_rows, 5*H]``.
 
         Assembled on host.  The tap tensors are tile-padded to 32 rows while
@@ -125,7 +132,7 @@ class DFlashRunner:
             tensor = taps[layer_idx]
             host = ttnn.to_torch(tensor, mesh_composer=ttnn.ConcatMeshToTensor(self.model.mesh_device, dim=0))[0:1]
             ttnn.deallocate(tensor)
-            host = host.reshape(1, -1, self.config.hidden_size)[:, :num_rows, :]
+            host = host.reshape(1, -1, self.config.hidden_size)[:, offset : offset + num_rows, :]
             pieces.append(host.float())
         return torch.cat(pieces, dim=-1)
 
@@ -146,11 +153,21 @@ class DFlashRunner:
         apply the embedding norm, which HF deliberately bypasses for the drafter
         ("the assistant needs embedding without norm").
         """
-        ids = build_noise_ids(anchor_token_id, self.config.block_size, self.config.mask_token_id)
+        block = self.config.block_size
+        ids = build_noise_ids(anchor_token_id, block, self.config.mask_token_id)
         tt_ids, _ = self.model.prefill_tokens_to_device(ids)
         embedded = self.model._embed(tt_ids)
         ttnn.deallocate(tt_ids)
-        return embedded
+        # prefill_tokens_to_device pads to a 32-row tile.  The window MUST be exactly
+        # block_size wide: attention here is bidirectional, so pad rows would be
+        # attended to as keys by the real queries and corrupt them, rather than being
+        # harmlessly ignored the way they are on the target's causal prefill path.
+        rows = int(embedded.shape[2])
+        if rows == block:
+            return embedded
+        trimmed = ttnn.slice(embedded, [0, 0, 0, 0], [1, 1, block, int(embedded.shape[3])])
+        ttnn.deallocate(embedded)
+        return trimmed
 
     def _argmax_rows(self, logits: ttnn.Tensor, rows: int) -> list[int]:
         """Host argmax over the first ``rows`` rows of a vocab-sharded logits tile."""
@@ -168,7 +185,12 @@ class DFlashRunner:
         for.  It would matter for sampling, where the distribution differs.
         """
         block = self.config.block_size
-        padded = self.model._slice_rows(drafter_hidden, 0, aligned=True)
+        rows = int(drafter_hidden.shape[2])
+        # The LM head's matmul contract is one 32-row M tile.
+        if rows < TILE_ROWS:
+            padded = ttnn.pad(drafter_hidden, [(0, 0), (0, 0), (0, TILE_ROWS - rows), (0, 0)], value=0.0)
+        else:
+            padded = self.model._slice_rows(drafter_hidden, 0, aligned=True)
         logits = self.model.lm_head.forward(padded)
         ttnn.deallocate(padded)
         ids = self._argmax_rows(logits, block)
@@ -206,9 +228,7 @@ class DFlashRunner:
         tt_tokens, _ = model.prefill_tokens_to_device(prompt)
         embedded = model.embed_prefill(tt_tokens)
         ttnn.deallocate(tt_tokens)
-        hidden = model.prefill_forward(
-            embedded, page_table=tt_page_table, user_id=0, start_pos=0, keep_sliding_tails=True
-        )
+        hidden = model.prefill_forward(embedded, page_table=tt_page_table, user_id=0, start_pos=0)
         stats.target_forwards += 1
         # Context for iteration 0 is the whole prompt: positions 0..L-1.
         context_host = self._taps_to_host(prompt_len)
@@ -232,6 +252,16 @@ class DFlashRunner:
                 break
             if anchor_pos + block >= model.config.max_seq_len:
                 break
+            if anchor_pos + block > self.max_verify_rows:
+                # Guard the O(prefix) verify forward rather than let it quietly become
+                # the dominant cost.  Lifting this needs the aligned-restart tail
+                # threading described at the verify forward below.
+                raise NotImplementedError(
+                    f"DFlash verify re-forwards the whole prefix, which is only cheap while it "
+                    f"stays small; position {anchor_pos + block} exceeds max_verify_rows="
+                    f"{self.max_verify_rows}. Thread sliding K/V tails at a page-aligned "
+                    "restart point to make the verify forward O(block)."
+                )
 
             context_len = int(context_host.shape[1])
             context_positions = torch.arange(context_start, context_start + context_len)
@@ -253,25 +283,54 @@ class DFlashRunner:
             stats.draft_seconds += time.perf_counter() - t0
 
             # ------------------------------------------------------ verify
+            #
+            # ``paged_fill_cache`` always writes from virtual block 0 of the page
+            # table it is handed, so a multi-token prefill MUST start on a page-block
+            # boundary -- ``start_pos=67`` raises.  Speculation needs a forward at an
+            # arbitrary position, so align *down* to the block boundary and re-forward
+            # the committed tokens in between.  That is close to free at batch 1: the
+            # target is weight-bandwidth bound, so an 80-row forward costs about what a
+            # 32-row one does, and re-forwarding committed tokens rewrites byte-identical
+            # K/V at the same positions.
             t0 = time.perf_counter()
-            verify_ids = [produced[-1]] + candidates  # anchor + 15 candidates == 16 positions
+            # Why start at 0 rather than at the nearest page boundary: a sliding-window
+            # layer refuses ANY start_pos > 0 without the previous call's K/V tail --
+            #
+            #   ValueError: continuation prefill at start_pos=64 on a sliding-window
+            #   layer needs sliding_kv_tail: the previous call's last 64 K/V rows.
+            #
+            # and threading that is not a one-liner: prefill_forward consumes its tail
+            # and emits a new one at its *end*, while consecutive verifies restart at the
+            # *same* aligned position and so need the same tail repeatedly.  Starting at
+            # 0 needs no tail, satisfies the page-block rule trivially, and reuses the
+            # well-tested from-scratch prefill path, at the cost of re-forwarding the
+            # whole prefix each iteration.
+            #
+            # COST: this is O(prefix) per iteration, not O(block).  At batch 1 the target
+            # is weight-bandwidth bound, so up to a few hundred rows costs little more
+            # than 32 -- fine for the short-context correctness and acceptance-rate
+            # measurement this drives, and NOT how a production implementation should
+            # work.  ``max_verify_rows`` refuses to pretend otherwise.
+            aligned_start = 0
+            lead = anchor_pos - aligned_start
+            full_sequence = prompt + produced
+            verify_ids = full_sequence[aligned_start:anchor_pos] + [produced[-1]] + candidates
+            assert len(verify_ids) == lead + block, (len(verify_ids), lead, block)
+
             model.arm_hidden_state_taps(self._tap_layers())
             tt_tokens, _ = model.prefill_tokens_to_device(verify_ids)
             embedded = model.embed_prefill(tt_tokens)
             ttnn.deallocate(tt_tokens)
-            hidden = model.prefill_forward(
-                embedded,
-                page_table=tt_page_table,
-                user_id=0,
-                start_pos=anchor_pos,
-                continuation=True,
-                keep_sliding_tails=True,
-            )
+            hidden = model.prefill_forward(embedded, page_table=tt_page_table, user_id=0, start_pos=aligned_start)
             stats.target_forwards += 1
             rows = model.prefill_all_logits(hidden, prompt_len=len(verify_ids))
-            target_argmax = self._argmax_rows(rows[0], len(verify_ids))
-            for row in rows:
+            all_argmax: list[int] = []
+            for tile_index, row in enumerate(rows):
+                remaining = len(verify_ids) - tile_index * TILE_ROWS
+                all_argmax.extend(self._argmax_rows(row, min(TILE_ROWS, remaining)))
                 ttnn.deallocate(row)
+            # Rows [lead, lead + block) are the anchor and the 15 candidates.
+            target_argmax = all_argmax[lead : lead + block]
             stats.verify_seconds += time.perf_counter() - t0
 
             result = accept_block(
@@ -288,14 +347,17 @@ class DFlashRunner:
             # Context for the next iteration: verify_hidden[:n_matches + 1], i.e. the
             # anchor plus the accepted candidates, at positions anchor_pos..+n_matches.
             num = result.n_matches + 1
-            context_host = self._taps_to_host(num)
+            context_host = self._taps_to_host(num, offset=lead)
             ttnn.deallocate(hidden)
             context_start = anchor_pos
             # The new anchor is the last committed token.
             anchor_pos = anchor_pos + result.n_committed
 
         drafter_cache.release()
-        model.release_hidden_state_taps()
+        # Disarm, not merely drain: release_hidden_state_taps() frees captured tensors but
+        # leaves _tap_indices set, so a later non-speculative decode would keep capturing
+        # and hit the sharded-clone failure above.
+        model.arm_hidden_state_taps(None)
         model.release_sliding_tails()
         ttnn.deallocate(tt_page_table)
 

@@ -1190,6 +1190,56 @@ class MuseGlimmerModel(LightweightModule):
                 ttnn.deallocate(zeros)
         self.release_sliding_tails()
 
+    def trim_sliding_tails(self, logical_len: int, padded_len: int) -> None:
+        """Drop the pad positions from retained sliding K/V tails.
+
+        ``prefill_tokens_to_device`` pads a prompt up to a tile, so a prefill of a
+        67-token prompt actually writes K/V for 96 positions and the tails it
+        retains are 96 rows long.  A *continuation* prefill at the logical
+        ``start_pos`` then rejects them, because
+        ``FunctionalDecoder.sliding_kv_tail_len(67)`` is 67::
+
+            ValueError: sliding_kv_tail k must be shaped (1, 1, 67, 128)
+                        for start_pos=67, got (1, 1, 96, 128)
+
+        Nothing in the original bring-up hit this: ``keep_sliding_tails`` exists
+        for *chunked* prefill, whose chunks are tile-aligned, and plain decode
+        starts at ``cur_pos = prompt_len`` and never asks for a tail.  Speculative
+        decoding is the first caller to continue after a padded prompt prefill.
+
+        Exact only while ``padded_len <= sliding_window``: the tail then holds
+        positions ``0..padded_len-1`` in order, so a prefix trim is precisely what
+        an unpadded prefill would have produced.  Past the window the tail holds
+        ``[padded_len - window, padded_len)`` and the range wanted for
+        ``logical_len`` begins earlier than that, so the rows simply are not
+        present - which raises rather than silently approximating.
+        """
+        if not self._sliding_tails or logical_len == padded_len:
+            return
+        window = int(self.config.sliding_window or 0)
+        if window and padded_len > window:
+            raise NotImplementedError(
+                f"cannot trim sliding tails for padded_len={padded_len} > sliding_window={window}: "
+                f"the rows for positions [{logical_len - window}, {padded_len - window}) were never "
+                "retained. Prefill the prompt at a tile-aligned length instead."
+            )
+        trimmed: list[tuple[ttnn.Tensor, ttnn.Tensor] | None] = []
+        for tail in self._sliding_tails:
+            if tail is None:
+                trimmed.append(None)
+                continue
+            kept = []
+            for tensor in tail:
+                shape = tuple(tensor.shape)
+                if int(shape[-2]) == logical_len:
+                    kept.append(tensor)
+                    continue
+                sliced = ttnn.slice(tensor, [0, 0, 0, 0], [shape[0], shape[1], logical_len, shape[3]])
+                ttnn.deallocate(tensor)
+                kept.append(sliced)
+            trimmed.append((kept[0], kept[1]))
+        self._sliding_tails = trimmed
+
     def release_sliding_tails(self) -> None:
         if not self._sliding_tails:
             self._sliding_tails = None
@@ -1532,8 +1582,15 @@ class MuseGlimmerModel(LightweightModule):
         if not self._tap_indices:
             return
         layer_idx = layer.config.layer_idx
-        if layer_idx in self._tap_indices:
-            self._tap_outputs[layer_idx] = ttnn.clone(out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if layer_idx not in self._tap_indices:
+            return
+        # ``ttnn.clone`` refuses to change layout ("mixed sharded/interleaved layout not
+        # currently supported"), and the decode residual crosses layer boundaries
+        # width-sharded in L1.  Convert first when sharded, clone only when not.
+        if out.is_sharded():
+            self._tap_outputs[layer_idx] = ttnn.sharded_to_interleaved(out, ttnn.DRAM_MEMORY_CONFIG)
+        else:
+            self._tap_outputs[layer_idx] = ttnn.clone(out, memory_config=out.memory_config())
 
     def take_hidden_state_taps(self) -> dict[int, ttnn.Tensor]:
         """Hand over the captured tensors; ownership transfers to the caller."""
