@@ -9,66 +9,65 @@ Tell your coding agent:
 
 > run laguna-2.1-xs and then give me a command to point the `pool` coding agent from poolside.ai at the running model.
 
-TTNN bring-up + vLLM serving of [`poolside/Laguna-XS-2.1`](https://huggingface.co/poolside/Laguna-XS-2.1),
+vLLM serving of [`poolside/Laguna-XS-2.1`](https://huggingface.co/poolside/Laguna-XS-2.1),
 a ~31B GLM/Qwen3-style MoE (256 experts, top-8, shared expert; 40 layers, 10 full-attention + 30
 sliding-window(512); hybrid KV; router `sigmoid(logits)+e_bias`, `norm_topk_prob`, no router bias).
 
-- **Target mesh:** Blackhole **P150x4** (1×4), TP=4 / EP=4, `FABRIC_1D_RING`.
-- **Precision (selected policy):** BF16 activations/norms/router, BFP8 attn/dense/shared + KV + LM-head,
-  BFP4 routed experts, fp32/HiFi4 SDPA. See `doc/datatype_sweep/`.
-- **Serving:** stock upstream vLLM 0.24.0 + the public `tenstorrent/vllm-tt-plugin` + this model's
-  `vllm_ext` package — **no vLLM fork**. Adapter: `tt/generator_vllm.py`.
+- **Target mesh:** Blackhole **P150x4** (1x4), TP=4 / EP=4, `FABRIC_1D_RING`.
+- **Precision:** BF16 activations/norms/router, BFP8 attn/dense/shared + KV + LM-head,
+  BFP4 routed experts, fp32/HiFi4 SDPA.
+- **Serving:** vLLM 0.24.0 + the `tenstorrent/vllm-tt-plugin` + this model's `vllm_ext` package.
+  Adapter: `tt/generator_vllm.py`.
 
-This is the single doc for the model — everything to get it running is below.
+Everything needed to run it is below.
 
 ## Context / capability
 
 | Quantity | Value | Note |
 |---|---|---|
 | HF config context | **262,144** | what the checkpoint declares |
-| **Advertised = servable context** | **131,072** | verified on P150x4; the value the server advertises |
-| Verified-servable ISL (2026-07-31 sweep) | 128 … 131,072 | `doc/vllm_integration/sweep_vllm.tsv` |
-| OOM | 262,144 | restoring it is Tier-2 (hybrid-KV + shared-RoPE frees) |
+| **Advertised = servable context** | **131,072** | the value the server advertises |
+| Verified-servable ISL | 128 ... 131,072 | measured on P150x4 |
+| OOM | 262,144 | exceeds P150x4 device memory; not currently servable |
 
 The advertised context **equals** the verified-servable context by construction (`ADVERTISED_MAX_CONTEXT`
-in `tt/generator_vllm.py`): the model never accepts a context it cannot serve. See
-`doc/context_contract.json` for the recorded limiting reason.
+in `tt/generator_vllm.py`): the model never accepts a context it cannot serve.
 
 ## Determinism contract
 
 > **Prefix caching is ON by default (`TT_LAGUNA_PREFIX_CACHE=1`), and partial-hit reads are NOT
-> bit-reproducible.** This is a deliberate, accepted property — read this before interpreting your own
-> results (e.g. a pass@1 number or a replayed trajectory).
+> bit-reproducible.** Read this before interpreting your own results (e.g. a pass@1 number or a
+> replayed trajectory).
 
 - **Full-hit and cold (no cache reuse) reads are bit-exact** vs a no-cache baseline. A prompt re-sent
   verbatim reproduces its previous generation exactly.
 - **Partial-hit reads (cached prefix + new suffix) are NOT bit-exact.** The output matches the cold
   baseline for the deterministic head of generation, then can diverge at a high-entropy (near-tie)
   token. Cause: the suffix read (one chunked-SDPA call from `chunk_start_idx=K`) accumulates in a
-  different floating-point order than the cold path. Same non-determinism prefix caching exhibits on
-  GPUs, inherent to quantized hardware — **not a correctness bug**.
+  different floating-point order than the cold path. This is the same non-determinism prefix caching
+  exhibits on GPUs, inherent to quantized hardware, and is not a correctness bug.
 - **Bit-reproducible mode:** set **`TT_LAGUNA_PREFIX_CACHE=0`** to force every request onto the cold
-  path (bit-exact, at the cost of no cache reuse — long prompts re-prefill in full).
+  path (bit-exact, at the cost of no cache reuse; long prompts re-prefill in full).
 
 ## Serving (P150x4)
 
-The serving env is **self-contained**: a dedicated venv holding `ttnn` built from this checkout, stock
-`vllm==0.24.0`, the public `tenstorrent/vllm-tt-plugin`, and this model's `vllm_ext` package. Everything
-is built from this repo — no hand-prepared environment.
+The serving env is **self-contained**: a dedicated venv holding `ttnn` built from this checkout,
+`vllm==0.24.0`, the `tenstorrent/vllm-tt-plugin`, and this model's `vllm_ext` package. Everything is
+built from this repo.
 
 ### Quick start
-From a fresh clone, one command — it builds the env if it isn't there, then serves:
+From a fresh clone, one command builds the env if it isn't there, then serves:
 ```bash
 models/autoports/poolside_laguna_xs_2_1/serve_vllm.sh
 tail -f /home/ttuser/laguna_serve.log
 ```
-First run builds tt-metal (**~1–3 h**) then vLLM from sdist (**~30–45 min**); after that it is just the
-**~10 min** server boot. Ready when the log says `Application startup complete` and the KV line reads
-`GPU KV cache size: 131,584 tokens ... concurrency 1.00x`.
+The first run builds tt-metal (about 1-3 hours), then builds vLLM from sdist (about 30-45 minutes); after
+that it is just the roughly 10-minute server boot. The server is ready when the log says `Application
+startup complete` and the KV line reads `GPU KV cache size: 131,584 tokens ... concurrency 1.00x`.
 
-**Prerequisites:** Linux x86-64, Python 3.12, a tt-metal build toolchain (repo `INSTALLING.md` →
+**Prerequisites:** Linux x86-64, Python 3.12, a tt-metal build toolchain (repo `INSTALLING.md`,
 `./install_dependencies.sh`), submodules (`git submodule update --init --recursive`), a Tenstorrent
-P150×4 with `tt-smi` on PATH, and the HF model cached (gated — `huggingface-cli login`, ~63 GB).
+P150x4 with `tt-smi` on PATH, and the HF model cached (gated: `huggingface-cli login`, ~63 GB).
 
 ### The env (`setup_vllm.sh`)
 `serve_vllm.sh` calls this for you; run it directly only to rebuild (`--force`) or build elsewhere
@@ -78,20 +77,20 @@ P150×4 with `tt-smi` on PATH, and the HF model cached (gated — `huggingface-c
 | Step | Why |
 |---|---|
 | `uv venv --python 3.12` | Matches the Python the C++ extension is built against. |
-| `./build_metal.sh` (if `_ttnn.so` absent) then `uv pip install -e <repo root>` | **`ttnn` must come from this checkout, not PyPI** (see below). The editable install only wires the built tree in; the build step produces `_ttnn.so`. |
-| `VLLM_TARGET_DEVICE=empty uv pip install --no-binary vllm --extra-index-url …/whl/cpu --index-strategy unsafe-best-match --override overrides.txt vllm==0.24.0` | PyPI vLLM is CUDA, so build from sdist against the `empty` target; the `tt` platform comes from the plugin at runtime. The CPU torch index is required or `torch==2.11.0` pulls ~4 GB of `nvidia-*-cu13` wheels. **Slow step.** |
+| `./build_metal.sh` (if `_ttnn.so` absent) then `uv pip install -e <repo root>` | `ttnn` must come from this checkout, not PyPI (see below). The editable install wires the built tree in; the build step produces `_ttnn.so`. |
+| `VLLM_TARGET_DEVICE=empty uv pip install --no-binary vllm --extra-index-url .../whl/cpu --index-strategy unsafe-best-match --override overrides.txt vllm==0.24.0` | PyPI vLLM is CUDA, so build from sdist against the `empty` target; the `tt` platform comes from the plugin at runtime. The CPU torch index is required or `torch==2.11.0` pulls ~4 GB of `nvidia-*-cu13` wheels. **Slow step.** |
 | `uv pip uninstall torchaudio` | `transformers>=5.12` imports it if present, and the wheel pulled alongside CPU torch is unloadable. |
-| `uv pip install vllm-tt-plugin @ git+…` | The `tt` platform + `EXTRA_MODELS_DIR` model registration. |
-| `uv pip install -e vllm_ext` | The newline-tolerant `poolside_v1` tool-parser override — REQUIRED for `auto` tool-calling (see below). |
+| `uv pip install vllm-tt-plugin @ git+...` | The `tt` platform + `EXTRA_MODELS_DIR` model registration. |
+| `uv pip install -e vllm_ext` | The newline-tolerant `poolside_v1` tool-parser override, required for `auto` tool-calling (see below). |
 
 **Why `ttnn` is built here, not installed from PyPI:** the 30 sliding-window layers pass
 `sliding_window_size` to SDPA. On a prefix-cache hit, prefill resumes at `start_pos > 0` and reads the
 cached prefix through `ttnn.transformer.chunked_scaled_dot_product_attention`
-(`tt/optimized_decoder.py:_prefill_attention`) — and **no released `ttnn` accepts `sliding_window_size`
-on the chunked op** (absent from 0.74.0, 0.75.0, `origin/main`). This branch removes that restriction, so
+(`tt/optimized_decoder.py:_prefill_attention`), and no released `ttnn` accepts `sliding_window_size`
+on the chunked op (absent from 0.74.0, 0.75.0, `origin/main`). This checkout removes that restriction, so
 the serving env must be built from this checkout; a stock wheel raises `TypeError` on the first cache
 hit. **Why `uv` and not `pip`:** `ttnn` pins `numpy<2` while vLLM 0.24.0 wants
-`opencv-python-headless>=4.13.0` (needs `numpy>=2`) — only `uv pip --override` resolves it (`overrides.txt`).
+`opencv-python-headless>=4.13.0` (needs `numpy>=2`); only `uv pip --override` resolves it (`overrides.txt`).
 
 ### Serve by hand (equivalent to `serve_vllm.sh`)
 ```bash
@@ -126,7 +125,7 @@ curl -s localhost:8000/v1/chat/completions -H 'Content-Type: application/json' -
 ```
 
 ### Teardown + mesh reset (ALWAYS between runs)
-Hard-killing a `FABRIC_1D_RING` server dirties eth cores — reset the mesh before reopening it.
+Hard-killing a `FABRIC_1D_RING` server dirties eth cores; reset the mesh before reopening it.
 ```bash
 models/autoports/poolside_laguna_xs_2_1/serve_vllm.sh stop     # TERM/KILL the group + tt-smi -r all
 # by hand:  pkill -TERM -f "vllm serve poolside"; sleep 10; pkill -KILL -f "vllm serve poolside"; tt-smi -r all
@@ -140,62 +139,61 @@ models/autoports/poolside_laguna_xs_2_1/serve_vllm.sh stop     # TERM/KILL the g
   keep one in-flight request per agent. `--max-num-seqs 8` is fine for `vllm bench` throughput runs.
 - **`enable_thinking:true`** is the tool-calling default for this model (both true/false verified).
 - Supported concurrency target is **8**; conc 32 collapses (TTFT into hundreds of seconds).
-- `TT_LAGUNA_PREFILL_FAST=1` ≈ 1.43× prefill. All `TT_LAGUNA_*` env vars are passed through to the worker
-  by the plugin — set them in the serve env.
-- Decode is batch-flat ~27–29 t/s/u @1k; long-context E2EL is prefill-dominated. Bench ONLY with
+- `TT_LAGUNA_PREFILL_FAST=1` gives roughly 1.43x prefill. All `TT_LAGUNA_*` env vars are passed through to
+  the worker by the plugin; set them in the serve env.
+- Decode is batch-flat ~27-29 t/s/u @1k; long-context E2EL is prefill-dominated. Bench ONLY with
   `.venv/bin/vllm bench serve`, never a custom loop.
 - **Warmup:** every prefill program shape is compiled before the decode trace is captured
   (`warmup_model_prefill` warms the power-of-two bucket ladder up to the servable context). Do not set
   `TT_LAGUNA_PREFILL_WARM_CAP` below `--max-model-len` for serving.
 
-## How it runs fork-free (`vllm_ext`)
+## The `vllm_ext` package
 
-The whole tt-metal-side delta to run on **stock** vLLM 0.24.0 + the **public** plugin is the `vllm_ext/`
-package — no plugin edit, no vLLM/plugin PR:
-- The engine-core/launcher hooks that used to require a vLLM fork are **upstreamed in vLLM 0.24.0**, so
-  the public plugin runs on stock vLLM.
-- Laguna registers via the plugin's **`EXTRA_MODELS_DIR`** mechanism — a bundle folder with
-  `vllm_ext/extra_models/laguna/vllm_metadata.json` (`arch=LagunaForCausalLM` →
-  `…tt.generator_vllm:LagunaForCausalLM`; the plugin prefixes `TT`). No plugin source change.
-- The `poolside_v1` tool + reasoning parsers ship **in stock vLLM 0.24.0**. One catch fixed here: the
-  stock tool parser's regex requires a newline after the function name (`<tool_call>NAME\n…`), but this
-  checkpoint emits the arg tags immediately after the name (`<tool_call>NAME<arg_key>…`, no newline), so
-  stock `auto` tool-calling silently returns `finish_reason=stop`. `vllm_ext/laguna_vllm_ext` is a
-  `vllm.general_plugins` entry point that eagerly re-registers `poolside_v1` with a **newline-tolerant**
-  regex (parses both grammars). `setup_vllm.sh` installs it; existing `--tool-call-parser poolside_v1`
-  flags are unchanged.
+`vllm_ext/` is the model-specific glue for serving Laguna on vLLM 0.24.0 + the `tenstorrent/vllm-tt-plugin`:
 
-Refresh just this package in an existing env:
-`.venv/bin/pip install -e vllm_ext`.
+- **Model registration.** `vllm_ext/extra_models/laguna/vllm_metadata.json` registers `LagunaForCausalLM`
+  via the plugin's `EXTRA_MODELS_DIR` mechanism (`arch=LagunaForCausalLM` maps to
+  `...tt.generator_vllm:LagunaForCausalLM`; the plugin prefixes `TT`).
+- **Tool-parser override.** `vllm_ext/laguna_vllm_ext` is a `vllm.general_plugins` entry point that
+  re-registers `poolside_v1` with a newline-tolerant regex. vLLM's `poolside_v1` tool parser requires a
+  newline after the function name (`<tool_call>NAME\n...`), but this checkpoint emits the arg tags
+  immediately after the name (`<tool_call>NAME<arg_key>...`, no newline), so without the override `auto`
+  tool-calling returns `finish_reason=stop`. `setup_vllm.sh` installs it; the `--tool-call-parser
+  poolside_v1` flag is unchanged.
+
+Refresh just this package in an existing env: `.venv/bin/pip install -e vllm_ext`.
 
 ## Coding agent (`pool`)
 
-`pool` (Poolside's terminal agent, github.com/poolsideai/pool) talks to this server in **standalone mode**.
+> **`pool` is a separate tool you must install first.** It is Poolside's terminal agent
+> ([github.com/poolsideai/pool](https://github.com/poolsideai/pool)); follow its own installation
+> instructions there. It is not bundled with this repo.
+
+`pool` talks to this server in **standalone mode**.
 
 ```bash
 # 1. Serve Laguna (above), confirm /v1/models returns poolside/Laguna-XS-2.1.
-# 2. Install pool:
-curl -fsSL https://downloads.poolside.ai/pool/install.sh | sh   # accept EULA; adds ~/.local/bin
-# 3. Point pool at the local endpoint — POOLSIDE_STANDALONE_BASE_URL is the mode switch:
+# 2. Install pool per its own instructions (github.com/poolsideai/pool); confirm `pool --version`.
+# 3. Point pool at the local endpoint. POOLSIDE_STANDALONE_BASE_URL is the mode switch:
 export POOLSIDE_STANDALONE_BASE_URL=http://localhost:8000/v1    # note the /v1 (without it: 404 default-agent)
 export POOLSIDE_API_KEY=EMPTY                                   # any value; local server ignores it
 export POOLSIDE_STANDALONE_MODEL="poolside/Laguna-XS-2.1"
 export POOLSIDE_STANDALONE_CONTEXT_LENGTH=131072
 # 4a. Interactive:      cd <project> && pool
-# 4b. One-shot (CI):    pool exec --unsafe-auto-allow --sandbox disabled -p "…task…"
+# 4b. One-shot (CI):    pool exec --unsafe-auto-allow --sandbox disabled -p "...task..."
 ```
 Tool-calling round-trips automatically through `poolside_v1`. The model is throughput-limited
-(~25–29 t/s/u decode) and re-prefills the growing transcript each turn, so agentic tasks are minutes,
-not seconds — prefer focused prompts and **one active `pool` session at a time**.
+(~25-29 t/s/u decode) and re-prefills the growing transcript each turn, so agentic tasks take minutes,
+not seconds; prefer focused prompts and **one active `pool` session at a time**.
 
 ## Tests
 
 ```bash
-cd /tmp && TT_METAL_HOME=<repo>/.local/… PYTHONPATH=<repo> \
+cd /tmp && PYTHONPATH=<repo> \
   <model dir>/.venv/bin/python -m pytest <test> -q     # run from /tmp, not the repo cwd (JIT kernel path)
 ```
-- `tests/test_prefill_buckets.py` — device-free prefill warm-set / advertised-context invariants (CI).
-- `tests/test_optimized_decoder.py`, `tests/test_multichip_decoder.py` — layer PCC ≥ 0.995 vs HF.
+- `tests/test_prefill_buckets.py`: device-free prefill warm-set / advertised-context invariants (CI).
+- `tests/test_optimized_decoder.py`, `tests/test_multichip_decoder.py`: layer PCC >= 0.995 vs HF.
   (`LAGUNA_MC_CLASS=optimized` exercises the packed gate+up path; default is the unpacked baseline.)
-- `tests/full_model_checks.py` — prefill top-1/5/100 vs the AIME24 reference
+- `tests/full_model_checks.py`: prefill top-1/5/100 vs the AIME24 reference
   (`tests/reference_outputs/readiness_aime24_chat.refpt`).
