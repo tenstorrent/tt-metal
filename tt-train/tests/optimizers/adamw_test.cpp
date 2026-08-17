@@ -9,6 +9,7 @@
 
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "metal/operations.hpp"
 #include "test_utils/random_data.hpp"
 #include "xtensor/core/xtensor_forward.hpp"
 
@@ -567,6 +568,39 @@ TEST_F(AdamWStateDictTest, RestoredBetasDriveBiasCorrection) {
 
 TEST_F(AdamWStateDictTest, BetaSettersRecomputeBiasCorrection) {
     run_effective_betas_step_and_compare(/*use_beta_setters=*/true);
+}
+
+// ====================================================================
+// Validation tests
+// ====================================================================
+
+using AdamWValidationTest = AdamWStateDictTest;
+
+TEST_F(AdamWValidationTest, RejectsLogicalShapeMismatchWithEqualPadding) {
+    using namespace ttml;
+
+    // Logical 31x32 and 32x32 both round up to one 32x32 tile, so only logical-shape
+    // validation can tell them apart.
+    const std::array<std::size_t, 4> param_shape = {1, 1, 32, 32};
+    const std::array<std::size_t, 4> grad_shape = {1, 1, 31, 32};
+    auto param = to_tt_bf16(test_utils::make_uniform_xarray<float>(param_shape, -1.0F, 1.0F, 123U));
+    auto grad = to_tt_bf16(test_utils::make_uniform_xarray<float>(grad_shape, -1.0F, 1.0F, 124U));
+    auto exp_avg = to_tt_bf16(test_utils::make_uniform_xarray<float>(param_shape, -1.0F, 1.0F, 125U));
+    auto exp_avg_sq = to_tt_bf16(test_utils::make_uniform_xarray<float>(param_shape, 0.0F, 1.0F, 126U));
+
+    EXPECT_ANY_THROW(ttml::metal::adamw(
+        param,
+        grad,
+        exp_avg,
+        exp_avg_sq,
+        /* max_exp_avg_sq */ std::nullopt,
+        /* lr */ 1e-3f,
+        /* beta1 */ 0.9f,
+        /* beta2 */ 0.999f,
+        /* beta1_pow */ 0.9f,
+        /* beta2_pow */ 0.999f,
+        /* epsilon */ 1e-8f,
+        /* weight_decay */ 0.0f));
 }
 
 // ====================================================================
