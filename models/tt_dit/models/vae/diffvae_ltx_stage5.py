@@ -68,6 +68,7 @@ from ...layers.module import Module, ModuleList, Parameter
 from ...layers.na3d import neighborhood_attention_3d as na3d_on_device
 from ...layers.na3d import neighborhood_attention_3d_op_sp_w_sharded, window_bounds
 from ...layers.normalization import RMSNorm
+from ...utils.tensor import fast_device_to_host
 from ...utils.tensor import from_torch as sharded_from_torch
 from ...utils.tensor import local_device_to_torch
 from ...utils.tensor import to_torch as gathered_to_torch
@@ -1201,10 +1202,43 @@ class DiffVAEStage5(Module):
         # them apart tells us which one the (large, at 1080p) tail cost actually is.
         cfg = self.config
         if self._w_sharded:
-            # ``out`` is this chip's W-band; gather every band to the host and undo the
-            # (device, t, h, w_local) reordering back to the (t, h, w) volume before unpatchify.
+            # ``out`` is (1, batch, T*H*(W/sp), padded_pc): W-sharded over sp_axis, and REPLICATED
+            # over the other mesh axis (nothing shards it there -- the input was uploaded replicated
+            # on that axis). A composer pull would DMA all `other`x-redundant replicas over PCIe.
+            # Instead pull like the Wan/LTX VAEs do: make every device hold a UNIQUE shard, then
+            # fast_device_to_host reads a different 1/(sp*other) piece from each device concurrently
+            # over all PCIe links. mesh_partition H over the replicated axis is the "keep only my
+            # portion" op -- a comms-free local slice (sub-ms), the same trick fast_device_to_host's
+            # own multi-host branch uses. Reassembled by mesh coordinate into the (t, h, w) volume.
             sp = int(list(self.mesh_device.shape)[self.sp_axis])
+            other_axis = 1 - self.sp_axis
+            other = int(list(self.mesh_device.shape)[other_axis])
             w_local = grid.w // sp
+            padded_pc = self.padded_patch_channels
+            # fast_device_to_host needs a 2D mesh and each device unique along a concatenated axis;
+            # only shard the replicated axis when H splits evenly over it, else fall back to the
+            # (correct but replica-pulling) composer path.
+            can_fast = len(tuple(self.mesh_device.shape)) == 2 and (other == 1 or grid.h % other == 0)
+            if can_fast:
+                with stage_timer(self.mesh_device, "stage5 tail: device->host pull"):
+                    rm = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT)
+                    ttnn.deallocate(out)
+                    vol = ttnn.reshape(rm, (1, grid.t, grid.h, w_local, padded_pc))
+                    concat_dims = [None, None]
+                    concat_dims[self.sp_axis] = 3  # W-band from each sp device
+                    shard_other = other > 1
+                    if shard_other:
+                        vol = ttnn.mesh_partition(vol, dim=2, cluster_axis=other_axis)  # H over the replicated axis
+                        concat_dims[other_axis] = 2
+                    gathered = fast_device_to_host(vol, self.mesh_device, concat_dims, ccl_manager=self.ccl_manager)[
+                        ..., : cfg.patch_channels
+                    ]  # (1, T, H, W, patch_channels)
+                    if shard_other:
+                        ttnn.deallocate(rm)
+                    ttnn.deallocate(vol)
+                with stage_timer(self.mesh_device, "stage5 tail: host unpatchify"):
+                    return unpatchify(gathered.permute(0, 4, 1, 2, 3), cfg.patch_size)
+
             with stage_timer(self.mesh_device, "stage5 tail: device->host pull"):
                 gathered = gathered_to_torch(out, mesh_axes=[None, None, self.sp_axis, None])[..., : cfg.patch_channels]
                 ttnn.deallocate(out)
