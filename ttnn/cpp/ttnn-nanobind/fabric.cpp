@@ -441,6 +441,17 @@ void bind_fabric_api(nb::module_& mod) {
         nb::arg("topology"),
         "Compute {num_hops, is_forward, neighbor_id} for a 1-D unicast (owns the fabric fwd/bwd sign reversal + ring "
         "shorter-way).");
+    mod.def(
+        "make_ccl_semaphore",
+        [](tt::tt_metal::distributed::MeshDevice* mesh_device, uint32_t initial_value) {
+            return ttnn::ccl::dataflow::make_ccl_semaphore(mesh_device, initial_value);
+        },
+        nb::arg("mesh_device"),
+        nb::arg("initial_value") = 0,
+        "Allocate the op-internal cross-device GlobalSemaphore on the mesh's worker cores and run the cache-miss "
+        "cross-device Synchronize barrier. Keep the returned handle alive for the cached workload's lifetime (park "
+        "it on MeshProgramDescriptor.semaphores). Fabric-connection runtime args already have a Python surface via "
+        "setup_fabric_connection.");
 }
 
 }  // namespace ttnn::fabric
