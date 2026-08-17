@@ -86,7 +86,7 @@ single p150b. Seven things worth fixing. Points 5 and 6 are one line each.
       0.99, because the repair loop stops as soon as it clears. Printing the target that was used
       would help too, and the docs could then settle on one number.
 
-6. The correctness gate accepts values that cannot be correlations
+6. The correctness gate accepts impossible scores
     - It reported a PCC of 33.612 and marked it verified against a threshold of 0.99. The number is
       scraped from the log by a pattern loose enough to match any line that mentions pcc, nothing
       checks that it is in range, and the exit code is ignored, so that one number is the only signal
