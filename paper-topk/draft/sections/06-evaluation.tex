@@ -1,0 +1,322 @@
+% Evaluation -- owned by briefs/06-evaluation.md (read the brief before writing).
+% Every number below traces to paper-topk/evidence/paper/evidence.md and the
+% committed CSVs under tests/.../reduction/baselines/ + paper-topk/evidence/tileskip/.
+\section{Evaluation}
+\label{sec:evaluation}
+
+We defend the headline numbers with five exhibits: the 24-cell
+competition across five measured arms (Table~\ref{tab:competition}), the
+small-k routing before/after (\S\ref{sec:eval-competition}), strong
+scaling against the cost model (Fig.~\ref{fig:pscaling}), the chunk-skip
+A/B (Fig.~\ref{fig:skipab}), and eight production call-site scenarios
+(Table~\ref{tab:scenarios}); \S\ref{sec:eval-roofline} closes with
+the measured gap to the vendor's published roofline.
+
+\subsection{Harness and Measurement Methodology}
+\label{sec:eval-method}
+
+All measurements in this paper run on a single Tenstorrent \bh{} \pca{}
+with a $13{\times}10$ worker grid (130 cores) under exclusive access.
+Operator-level timings are device-side kernel durations from the Tracy
+profiler~\cite{tracyprofiler}, taken at operator granularity so that host
+dispatch never contaminates a number. One device process runs at a time,
+each sweep cell in its own subprocess, so program caches,
+allocator state, and JIT artifacts cannot leak between cells.
+Kernel-level cycle constants (\S\ref{sec:characterization}) come from a
+math-isolated two-point slope over iteration counts, canceling marker
+overhead; each slope run carries a paired control that must reproduce its
+known $2.000\times$ ratio or is discarded.
+
+\emph{Correctness gates.} Every performance cell is gated on bit-exact
+agreement with a PyTorch golden --- never a correlation threshold --- so
+a close-but-wrong kernel cannot post a time. The
+competition run of Table~\ref{tab:competition} recorded 0 wrong results
+across its 121 gated cells. The surrounding suites hold the same line: a
+62-cell numerics contract suite, 154 operator tests, 220/220 routed-path
+tests, a 36-check adversarial battery, a $2\times20$-launch hang battery,
+and 51/51 (counting) plus 21/21 (RISC scan) bit-exact benchmark cells.
+
+\emph{Determinism and provenance.} Sweeps are deterministic: fixed seeds,
+\texttt{torch.randn} bf16 stimulus (seed 0 for the chunk-skip cells).
+Every CSV row is provenance-stamped with a build fingerprint and a
+source-tree hash, so each number is attributable to one binary and one
+tree state.
+
+\emph{Trials and spread.} Competition cells report medians of 3 trials;
+chunk-skip cells report medians of 3 trials $\times$ 5 measured
+iterations with spread below 0.1\% everywhere; the single-core baseline
+sweeps carry standard deviations in-file (e.g.,
+$9{,}492{,}327 \pm 1{,}391$\,ns at $N{=}65{,}534$). The anchor cell
+($k{=}2048$, $N{=}65{,}536$) appears in two independent gated runs ---
+34.3\us{} in the competition sweep, 34.4\us{} in the $P$-sweep re-pin;
+each is quoted from its own run, and the 0.1\us{} disagreement bounds
+run-to-run drift. We state the gap plainly: all results come from one
+board on one day, and the 121-cell competition run does not commit
+per-cell standard deviations --- a cross-day, higher-trial repeat is
+scheduled, not done.
+
+\emph{Clock caveat.} Cycle$\to$microsecond conversions in this paper
+assume a 1.35\,GHz busy clock; the clock under load was not captured
+(the idle clock measures 800\,MHz). Every microsecond figure in this
+section is a direct Tracy measurement; the caveat applies only where a
+cycle count is restated in time units, flagged where it occurs.
+
+\subsection{Competition Across Five Measured Arms}
+\label{sec:eval-competition}
+
+Table~\ref{tab:competition} sweeps $k \in \{512, 1024, 2048\}$ across
+$N = 2{,}048$--$262{,}144$ over five measured arms: \emph{pre} --- stock
+\ttnntopk before this work; \emph{now} --- stock \ttnntopk today,
+including the ${\approx}1.17\times$ replay micro-op win that landed in
+the stock kernels; \emph{routed} --- \ttnntopk through the new routing, so the caller
+changes nothing; \emph{op} --- the \topkop operator called directly
+(its columns include the SFPLOADMACRO paths, worth 5--9\%); and a
+\emph{proxy} arm that wraps the byte-identical stock bitonic kernels in
+the operator's row-parallel harness and reports per-row single-core wall
+time. Each speedup chain is named where used and never mixed within one
+claim.
+
+Four headlines. First, the user-facing anchor: at $k{=}2048$,
+$N{=}65{,}536$, the \emph{pre}$\to$\emph{routed} chain is
+$631{,}506\,\text{\textmu s} \to 63.4$\us{} = $9{,}956\times$ --- with no
+call-site change. Second, the direct-op anchor: the same cell measures
+\textbf{34.3\us{} on 32 cores} ($8{\times}4$ rectangle), an
+$18{,}401\times$ \emph{pre}$\to$\emph{op} chain. Third, across all 24
+cells the \emph{pre}$\to$\emph{op} chain spans
+\textbf{632$\times$--51,430$\times$} and \emph{pre}$\to$\emph{routed}
+spans 56$\times$--22,481$\times$. Fourth, the 1M-context decode shape $k{=}512$,
+$N{=}262{,}144$ finishes in \textbf{23.3\us{} on 104 cores}. The table
+keeps its own floor honestly: at $k{=}2048$, $N{=}2{,}048$ op and proxy
+tie (15.74 vs.\ 15.73\us{}) --- a 2,048-wide row admits no column
+parallelism; the proxy$\to$op ratio grows to $43\times$ at $k{=}512$,
+$N{=}262{,}144$.
+
+The closest internal comparison is a fused attention program embedding
+a top-k reduction: at its native cell ($k{=}2048$,
+$N{=}65{,}536$) it measures 24.4\us{} on 129 cores, $1.4\times$ below
+the op's 34.3\us{}. Both caveats matter: that time \emph{includes} the
+attention work fused around the selection, and it is a one-call-site
+fused program, not a callable operator; a per-core breakdown was not
+committed, so we claim no more than the two end-to-end numbers.
+
+\begin{table*}[t]
+\centering
+\caption{Competition across five measured arms, 24 cells.}
+\label{tab:competition}
+\scriptsize
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{@{}rrrrrrrrrrr@{}}
+\toprule
+ & & \multicolumn{2}{c}{stock \ttnntopk (ms)} & routed & op & proxy$^{\dagger}$ & roofline & op gap & pre$\to$routed & pre$\to$op \\
+\cmidrule(lr){3-4}
+$k$ & $N$ & pre & now & \us{} ($P$) & \us{} ($P$) & \us{} & \us{} & & & \\
+\midrule
+512 & 2,048 & 4.4 & 3.7 & 70.4 (4) & 5.9 (4) & 10.0 & 0.32 & 18.4$\times$ & 63$\times$ & 742$\times$ \\
+ & 4,096 & 9.5 & 8.0 & 71.6 (8) & 7.1 (8) & 18.7 & 0.46 & 15.6$\times$ & 132$\times$ & 1,327$\times$ \\
+ & 8,192 & 19.6 & 16.5 & 74.0 (16) & 8.4 (16) & 37.1 & 0.59 & 14.2$\times$ & 265$\times$ & 2,321$\times$ \\
+ & 16,384 & 39.8 & 33.6 & 79.1 (32) & 9.7 (32) & 71.9 & 0.73 & 13.3$\times$ & 503$\times$ & 4,098$\times$ \\
+ & 32,768 & 80.2 & 67.7 & 86.4 (64) & 11.0 (64) & 141.4 & 0.88 & 12.6$\times$ & 928$\times$ & 7,284$\times$ \\
+ & 65,536 & 161.6 & 137.7 & 91.7 (64) & 13.2 (64) & 280.6 & 1.12 & 11.7$\times$ & 1,763$\times$ & 12,279$\times$ \\
+ & 131,072 & 323.9 & 275.8 & 107.4 (88) & 17.4 (88) & 566.5 & 1.56 & 11.1$\times$ & 3,016$\times$ & 18,569$\times$ \\
+ & 262,144 & 648.4 & 552.3 & 136.8 (104) & 23.3 (104) & 1,008.1 & 2.39 & 9.8$\times$ & 4,740$\times$ & 27,817$\times$ \\
+\addlinespace
+1024 & 2,048 & 7.5 & 6.3 & 134.2 (2) & 9.4 (2) & 11.7 & 0.45 & 21.1$\times$ & 56$\times$ & 795$\times$ \\
+ & 4,096 & 17.6 & 14.9 & 135.9 (4) & 11.4 (4) & 21.3 & 0.64 & 18.0$\times$ & 130$\times$ & 1,543$\times$ \\
+ & 8,192 & 37.8 & 31.9 & 138.9 (8) & 13.3 (8) & 41.5 & 0.82 & 16.2$\times$ & 272$\times$ & 2,833$\times$ \\
+ & 16,384 & 78.1 & 65.9 & 144.9 (16) & 15.2 (16) & 79.8 & 1.01 & 15.0$\times$ & 539$\times$ & 5,145$\times$ \\
+ & 32,768 & 158.8 & 133.9 & 152.7 (32) & 17.2 (32) & 156.5 & 1.22 & 14.1$\times$ & 1,040$\times$ & 9,234$\times$ \\
+ & 65,536 & 320.8 & 273.1 & 158.1 (64) & 19.7 (64) & 309.9 & 1.56 & 12.6$\times$ & 2,029$\times$ & 16,281$\times$ \\
+ & 131,072 & 644.2 & 548.2 & 173.0 (64) & 23.5 (64) & 616.7 & 2.17 & 10.8$\times$ & 3,723$\times$ & 27,461$\times$ \\
+ & 262,144 & 1,291.0 & 1,098.6 & 205.6 (88) & 32.1 (88) & 1,230.2 & 3.32 & 9.7$\times$ & 6,280$\times$ & 40,199$\times$ \\
+\addlinespace
+2048 & 2,048 & 10.0 & 8.4 & 29.5 (130) & 15.7 (130) & 15.7 & 0.53 & 29.9$\times$ & 338$\times$ & 632$\times$ \\
+ & 4,096 & 30.1 & 25.4 & 33.1 (2) & 19.6 (2) & 24.6 & 0.75 & 26.2$\times$ & 909$\times$ & 1,535$\times$ \\
+ & 8,192 & 70.3 & 59.4 & 38.4 (4) & 22.9 (4) & 47.7 & 0.97 & 23.6$\times$ & 1,831$\times$ & 3,074$\times$ \\
+ & 16,384 & 150.8 & 127.3 & 46.3 (8) & 26.4 (8) & 91.8 & 1.19 & 22.2$\times$ & 3,260$\times$ & 5,705$\times$ \\
+ & 32,768 & 311.8 & 263.3 & 55.5 (16) & 30.2 (16) & 180.2 & 1.43 & 21.1$\times$ & 5,614$\times$ & 10,311$\times$ \\
+ & 65,536 & 631.5 & 539.5 & 63.4 (32) & 34.3$^{\ddagger}$ (32) & 357.0 & 1.84 & 18.7$\times$ & 9,956$\times$ & 18,401$\times$ \\
+ & 131,072 & 1,273.7 & 1,089.7 & 79.4 (64) & 39.7 (64) & 710.5 & 2.56 & 15.5$\times$ & 16,039$\times$ & 32,092$\times$ \\
+ & 262,144 & 2,557.6 & 2,188.1 & 113.8 (64) & 49.7 (64) & 1,417.4 & 3.90 & 12.8$\times$ & 22,481$\times$ & 51,430$\times$ \\
+\bottomrule
+\end{tabular}
+
+\smallskip
+\raggedright\scriptsize
+Tracy device kernel durations, medians of 3 trials, every cell bit-exact
+against a PyTorch golden (0 wrong of 121); arms as defined in
+\S\ref{sec:eval-competition}. Roofline: the vendor's published
+model~\cite{ttllmperf2026}. $^{\dagger}$Byte-identical stock bitonic
+kernels in the operator's row-parallel harness; per-row single-core wall
+time, a proxy rather than a shipping configuration. $^{\ddagger}$A fused
+attention+top-k program measures 24.4\us{} on 129 cores at this cell
+(caveats in \S\ref{sec:eval-competition}).
+\end{table*}
+
+\emph{Small-k routing.} Against the ${\approx}137$\,ns/element
+single-core factory of Section~\ref{sec:bg-incumbent}, the routed path
+wins 40$\times$--423$\times$ across the measured before/after pairs
+($k \in \{8, 32, 64\}$, $W = 5{,}000$--$65{,}536$): $695\to17.2$\us{} at
+$k{=}32$, $W{=}5{,}000$ ($40\times$); $9.50\,\text{ms}\to38.5$\us{} at
+$W{=}65{,}534$ ($247\times$); $17.95\,\text{ms}\to42.4$\us{} at
+$k{=}64$, $W{=}65{,}536$ ($423\times$). Stock times are 3-trial means
+(in-file standard deviations $\leq 4.4$\,\textmu s); routed cells are
+correctness-gated, multi-core cells bit-stable against the
+pinned baseline sweep. The same routing removes the ${\approx}89\times$
+width cliff at the $W < 65{,}535$ bitonic gate
+(Section~\ref{sec:bg-incumbent}).
+
+\subsection{Strong Scaling Versus the Cost Model}
+\label{sec:eval-scaling}
+
+Fig.~\ref{fig:pscaling} sweeps the slice count $P$ on two cells, 15
+measured points total. At $k{=}2048$, $N{=}65{,}536$ the op falls
+$183.0 \to 34.4$\us{} from $P{=}2$ to $P{=}32$; at $k{=}512$,
+$N{=}262{,}144$ it falls $560.2 \to 23.3$\us{} from $P{=}2$ to
+$P{=}104$. Both curves are monotone in the factory's chosen $P$ ---
+the property the log-tree bought over its serial-chain ancestor
+(\S\ref{sec:system}) --- and the $k{=}512$ curve flattens as $P$
+approaches the 130-core grid capacity. L1 capacity never bounds $P$:
+per-slice fetches run 2--8\,KB and the read stream sits
+10--100$\times$ below the op time --- the scaling limit is the
+$\lceil C/P \rceil$ work term itself.
+
+The overlay is \S\ref{sec:system}'s cost model times its two measured
+merge-unit constants --- no further fitting. The model tracks the $k{=}2048$ curve within 4.3\% at every
+point and predicts the non-monotone bump at $P{=}24$:
+$\lceil 32/24 \rceil = 2$ leaf chunks plus a fifth tree level cost more
+than $P{=}16$'s identical leaf term with four levels (measured
+$42.8$ vs.\ $39.0$\us{}; model 44.1 vs.\ 38.6\us{}). On the $k{=}512$
+curve the model lands within 0.3\% at the factory's operating point
+$P{=}104$ but overestimates the deep-serial tail by up to 33\% at
+$P{=}2$ --- the flat two-units-per-chunk charge is conservative on long
+streams. Since the factory only ever selects cost-minimal $P$, the
+model is accurate where it decides.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.76\columnwidth]{fig-e1-pscaling}
+\caption{Runtime versus core count, with cost-model overlay.}
+\label{fig:pscaling}
+\end{figure}
+
+\subsection{Chunk-Skip A/B}
+\label{sec:eval-skip}
+
+Fig.~\ref{fig:skipab} measures the row-parallel chunk-skip of
+\S\ref{sec:system} on five cells, three arms each: baseline, skip
+ungated, and skip with the compile-time $K/4$ gate. On the shapes the
+small-k routing ships to this path, the gated skip wins
+$\mathbf{279.14 \to 153.19}$\us{} ($-45.1\%$, $1.82\times$) at
+rows${=}2$, $k{=}32$, $N{=}65{,}536$, and $279.14 \to 177.94$\us{}
+($-36.3\%$) at rows${=}8$ --- the rows${=}8$ win is smaller because the
+op time is the slowest of eight i.i.d.\ rows. On the three cells where
+the skip law says no win exists, the gate holds the line: $+0.04\%$ and
+$+0.11\%$ sit within the sub-0.1\% measurement spread, and the largest
+residual, $+0.51\%$ at $k{=}512$, is the gate-off code path itself ---
+loop-code growth on the in-order RISCs, not the skip test. The column-parallel guard cell
+re-measures at 13.15\us{} with byte-identical kernels: the tree path is
+untouched.
+
+These measurements close the pre-build forecast's loop
+(\S\ref{sec:forecast}): the no-go'd column-parallel variant was never
+built; the redirected row-parallel variant landed inside the
+predicted regime. One epistemic limit stands: no on-device skip-rate
+telemetry was captured, so the measured quantity is end-to-end time ---
+the chain runs law $\rightarrow$ simulated skip $\rightarrow$ predicted
+time $\rightarrow$ measured time.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.76\columnwidth]{fig-e2-skip-ab}
+\caption{Chunk-skip runtime relative to baseline.}
+\label{fig:skipab}
+\end{figure}
+
+\subsection{Production Call-Site Scenarios}
+\label{sec:eval-scenarios}
+
+Table~\ref{tab:scenarios} replays eight production call-site shapes on
+the same gated harness --- the three consumer classes of the data
+contract (\S\ref{sec:bg-problem}) at their real shapes. The wins concentrate
+where production is single-core today. The Qwen3 shape that opened the
+paper --- the vocabulary shard padded to the one power-of-two width that
+fails the $W < 65{,}535$ gate --- improves from its 9,596.3\us{}
+single-core chain to 217.0\us{} routed and 193.8\us{} direct
+($44$--$50\times$); split-vocab sampling on a single chip (deliberately
+unpadded, $N{=}64{,}128$) behaves the same:
+$8{,}923.6 \to 215.2$\us{} routed, 188.1\us{} direct.
+
+The table carries its own no-change controls as features. The TP${=}8$
+shape already rides the multi-core bitonic:
+routed measures $1.00\times$ --- the honest already-fast row (the
+direct op still gains $1.4\times$). The sparse-attention indexer rows
+already call the op by name --- today \emph{is} the op, row-parallel
+with the chunk skip live --- and forcing them through generic routing
+would cost 20--25\%. The MoE gate rows are shapes the routing predicate
+declines today ($W \geq 4{,}096$ floor, a measured-region choice); the
+op --- $k$ rounded up to 16 and sliced, the route's own internal
+mechanism --- measures 4.07\us{} and 4.04\us{} against 24.2\us{} and
+77.5\us{} single-core ($5.9\times$/$19.2\times$); a route extension
+still needs an A/B against the layout-envelope cost at these shapes.
+
+One caveat is mandatory: the production sampling call sites pass
+pre-allocated index tensors, sub-core grid pinning, and
+\texttt{stable=True} --- each independently disqualifies routing as-is.
+The routed column is the \emph{canonical} call form with
+those arguments dropped --- a one-line call-site change, not a free
+win --- and the end-to-end tokens/s effect of that change is
+unmeasured.
+
+\begin{table*}[t]
+\centering
+\caption{Production call-site scenarios with built-in controls.}
+\label{tab:scenarios}
+\scriptsize
+\setlength{\tabcolsep}{4.5pt}
+\begin{tabular}{@{}lrrrrrrrr@{}}
+\toprule
+call site & rows & $N$ & $k$ & today \us{} ($P$) & routed \us{} ($P$) & op \us{} ($P$) & today$\to$routed & today$\to$op \\
+\midrule
+Qwen3 decode sampling, TP=4 (pad) & 32 & 65,536 & 32 & 9,596.3 (1) & 217.0 (130) & 193.8 (130) & 44.2$\times$ & 49.5$\times$ \\
+decode sampling, TP=8 (pad, pow-2) & 32 & 32,768 & 32 & 171.4 (65) & 171.3 (65) & 121.0 (130) & 1.00$\times$ & 1.4$\times$ \\
+Llama-3.2 split-vocab sampling & 32 & 64,128 & 32 & 8,923.6 (1) & 215.2 (130) & 188.1 (130) & 41.5$\times$ & 47.4$\times$ \\
+DeepSeek-V3.2 sparse-attn indexer & 160 & 65,536 & 2,048 & 712.5 (130) & 892.7 (130) & 712.5 (130) & 0.80$\times$ & 1.00$\times$ \\
+DeepSeek-V4 sparse-attn indexer & 160 & 65,536 & 512 & 559.5 (130) & 691.1 (130) & 559.5 (130) & 0.81$\times$ & 1.00$\times$ \\
+MiniMax MSA block selection & 1 & 8,192 & 16 & 8.4 (16) & 116.1 (65) & 8.4 (16) & 0.07$\times$ & 1.00$\times$ \\
+MoE expert gate, top-4 of 128 & 32 & 128 & 4 & 24.2 (1) & --- & 4.07 (130)$^{*}$ & --- & 5.9$\times^{*}$ \\
+MoE gate fallback, top-10 of 512 & 32 & 512 & 10 & 77.5 (1) & --- & 4.04 (130)$^{*}$ & --- & 19.2$\times^{*}$ \\
+\bottomrule
+\end{tabular}
+
+\smallskip
+\raggedright\scriptsize
+All rows Tracy-measured, provenance-stamped, iteration counts recorded.
+``today'' is the engine production selects now: single-core linear
+(rows 1, 3, 7, 8), 65-core stock bitonic (rows 2, 6), or the op itself
+(rows 4--5, chunk skip live). Op cells include the values output
+(verified elementwise): $\leq$0.2\% over indices-only at sampling
+shapes, ${\approx}6\%$ at the tiny gate shapes. Core counts are launched
+grids ($\min(\text{rows}, 130)$ active on the row-parallel path).
+$^{*}$$k$ rounds up to 16 (the op's floor) and slices; the routing
+predicate declines these shapes today.
+\end{table*}
+
+\subsection{Gap to the Vendor Roofline}
+\label{sec:eval-roofline}
+
+The last two data columns of Table~\ref{tab:competition} compare the op
+against the vendor's published roofline for this part, including its
+$k$-dependent multipliers (0.612/0.850/1.000 for
+$k{=}512$/1{,}024/2{,}048)~\cite{ttllmperf2026}. The measured gap spans
+$9.7\times$--$29.9\times$ over all 24 cells and narrows to
+$9.7\times$--$21.1\times$ on the $N \geq 32{,}768$ cells, shrinking
+monotonically with $N$ at every $k$. The known contributors are
+measured elsewhere: the comparator critical path inside each $M$-wide
+leaf pass (\S\ref{sec:design-space}), the $\lceil \log_2 P \rceil$ tree
+levels priced by the cost model (\S\ref{sec:system}), and the unpack
+floors that tax every datum entering the SFPU
+(\S\ref{sec:characterization}).
+Whether the roofline is attainable at all for comparator-based kernels
+--- or sits below their critical-path floor --- is a derivation we do
+not print here \missing{roofline-v2 derivation artifact (G6)}; we
+report the measured gap and leave feasibility open.

@@ -1,0 +1,189 @@
+% A Log-Tree Top-K Engine for a NoC Mesh -- owned by briefs/04-system.md.
+% Evidence: C2-1..C2-5, C3-1..C3-6 (evidence.md sections 1.3, 1.4), H11;
+% forecast.md sections 1-5; rowskip-implementation.md sections 1-7;
+% contrast rows from related-work.md section 3.
+% Anonymity: kernels described structurally; no repo paths, no hashes.
+\section{A Log-Tree Top-K Engine for a NoC Mesh}
+\label{sec:system}
+
+The map of Section~\ref{sec:design-space} leaves two live moves. First,
+parallelize the data-oblivious corner (A)+(C)+(E): split the row across
+cores and pay a log-depth rendezvous instead of a shared-memory partition.
+Second, import the shrinking axis (D) in the only form that survives
+without scatter: skip work, never move data. This section builds both:
+Sections~\ref{sec:tree}--\ref{sec:costmodel} the column-parallel log-tree
+operator (\topkop), Sections~\ref{sec:skip-mech}--\ref{sec:forecast}
+chunk-skip and the calibrated forecast that eliminated its losing variant
+pre-build.
+
+\subsection{Operator Structure}
+\label{sec:tree}
+
+Figure~\ref{fig:operator} shows the operator on one row of $N$ elements,
+using the notation of Section~\ref{sec:background}: the leaf window $M$
+snaps to the LLK sort width (\S\ref{sec:bg-incumbent}), and the row
+splits into
+$C = N/M$ chunks. The program places $P$ slices on a rectangle of cores;
+each slice streams $\lceil C/P \rceil$ chunks through a bitonic leaf that
+sorts the arriving chunk, merges it into a resident $M$-wide descending
+window, and rebuilds the window order. A $\lceil \log_2 P \rceil$-level
+in-place merge tree --- the mesh-shaped sibling of FPGA merge-tree
+sorters~\cite{samardzic2020bonsai}, applied to selection --- then folds
+the $P$ windows to a root core, which emits the top-$K$ values and
+indices; every level halves the live cores and merges two $M$-wide
+sequences.
+
+The synchronization fabric is deliberately austere. Tree levels map
+one-to-one onto NoC semaphore levels; each core owns a single receive
+circular buffer sized for two $M$-wide sequences; the writer kernels
+extend to seven partner slots, enough for $P{=}128$. The operator uses no atomics, no
+global barrier, and no dedicated DRAM scratch
+(\S\ref{sec:bg-problem})~\cite{alabi2012kselection,li2024radik}. The tree
+replaced a serial merge-chain ancestor that folded slices one at a time:
+at fixed core counts the swap cut $k{=}2048$, $N{=}65{,}536$ from
+69.6\us{} to 41.9\us{} (1.66$\times$) and $k{=}512$, $N{=}262{,}144$ from
+64.2\us{} to 32.0\us{} (2.01$\times$), and it made runtime monotone in
+$P$ --- the property the cost model below then exploits.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=0.75\linewidth]{fig-s1-operator.pdf}
+  \caption{Column-parallel log-tree top-$k$ operator.}
+  \label{fig:operator}
+\end{figure}
+
+\subsection{Cost Model and Rectangle Embedding}
+\label{sec:costmodel}
+
+The factory chooses $P$ by minimizing a two-term model in leaf merge
+units:
+\begin{equation}
+  \mathrm{cost}(P) \;=\; 2\,\big\lceil C/P \big\rceil
+  \;+\; \big\lceil \log_2 P \big\rceil,
+  \qquad P \in [2,\, \min(C, 128)],
+  \label{eq:costmodel}
+\end{equation}
+with ties resolved toward fewer cores. The factor of two prices the leaf
+honestly: every chunk after the first costs $\approx$2 merge units (sort,
+merge, rebuild) while chunk~0 costs one. The unit constant is measured,
+not assumed: 1.46\us{} per merge unit at $M{=}512$ and 5.51\us{} at
+$M{=}2048$ ($\approx$1{,}966 and $\approx$7{,}440
+cycles\footnote{\label{fn:clock}Cycle forms of Tracy-measured times assume
+a 1.35\,GHz busy clock; the clock under load was not captured (idle
+800\,MHz measured). Section~\ref{sec:evaluation} states the policy; all
+cycle$\rightarrow$time conversions in this section carry it.}). The leaf
+term is mesh-selection theory's multi-packet
+regime~\cite{krizanc1992optimal,krizanc1993fast,multipacket1992} with
+measured constants; the log term is the mesh's rendezvous price.
+
+Minimizing Eq.~\ref{eq:costmodel} is only half the placement problem; the
+winner must also embed in the 13$\times$10 worker grid as a contiguous
+$a{\times}b$ rectangle. An earlier full-rows-only fit silently clamped
+$P$: at $k{=}2048$, $N{=}65{,}536$ it settled for 13$\times$2 = 26 cores
+while an 8$\times$4 = 32-core rectangle sat free. Searching all
+cost-optimal rectangles instead wins 8--27\% at the op level across the
+re-pinned cells: 41.9$\rightarrow$34.4\us{} (26$\rightarrow$32 cores),
+58.6$\rightarrow$49.6\us{} (52$\rightarrow$64), 32.0$\rightarrow$23.3\us{}
+(52$\rightarrow$104), and 15.0$\rightarrow$13.1\us{}
+(52$\rightarrow$64). On a harvested mesh the
+embedding search is part of the cost model, not a detail below it.
+Section~\ref{sec:eval-scaling} defends the model against the measured
+15-point $P$-sweep, including the ceiling-term bump it predicts.
+
+\subsection{Chunk-Skip: Mechanism and Soundness}
+\label{sec:skip-mech}
+
+Ingredient (D) --- shrinking the touched data --- survives on this
+machine only if nothing has to move. Chunk-skip is that import: a
+per-chunk predicate that decides whether the leaf pipeline needs to run
+at all. Let $T$ be the running $K$-th largest survivor, read from the
+resident sorted window. The rule is strict:
+skip chunk $c$ iff $\max(\text{chunk}_c) < T$. Chunk~0 always seeds the
+window; $T$ is monotone nondecreasing because merges only improve the
+window; boundary ties ($\max = T$) are never skipped; and the decision is
+a pure function of the input, so the output is deterministic per input.
+
+Soundness admits a short argument: at most $K{-}1$ elements ever exceed
+the row's final $K$-th largest value $v_K$, so $T \le v_K$ at all times;
+any member $x$ of an exact top-$K$ set satisfies $x \ge v_K \ge T$, so
+the strict test never fires on $x$'s chunk, and $x$, sitting within the
+top-$K \le$ top-$M$, survives every $M$-wide merge to the root. The
+released kernel source carries the full 288-line proof as a header
+comment. The contrast with the GPU running-threshold family is
+threefold: WarpSelect thresholds per element, with no analytic skip
+law~\cite{johnson2019billion}; GVR guesses its threshold from the
+previous decode step and must count, verify, and refine after a
+misprediction~\cite{gvr2026}; chunk-skip prunes at $M$-element
+granularity, sound by construction --- no verification pass exists to
+pay for --- with a distribution-free law and compile-time gate
+(\S\ref{sec:skip-law}) and a pre-build forecast (\S\ref{sec:forecast})
+that neither GPU mechanism has. Adversarial validation
+backs the proof: a 36-check battery (all-equal, ascending, last-chunk
+winners, boundary ties replicated across 64 chunks) is bit-exact in both
+gated and ungated configurations, and a 20-launch hang battery passed
+twice.
+
+\subsection{The Skip Law and Its Compile-Time Gate}
+\label{sec:skip-law}
+
+How often the rule fires is a rank statistic, not a distribution
+property. For i.i.d.\ inputs, chunk $c{+}1$ is skippable iff the top-$K$
+of the first $(c{+}1)M$ elements all lie in the first $cM$:
+\begin{equation}
+  \Pr[\text{skip at } c] \;=\;
+  \binom{cM}{K} \Big/ \binom{(c+1)M}{K}
+  \;\approx\; e^{-K/(c+1)},
+  \label{eq:skiplaw}
+\end{equation}
+identical for normal, uniform, and softmax-shaped inputs because only
+ranks enter. The law is unforgiving at short streams: a
+conservative $K{=}512$ threshold skips with probability
+$2\times10^{-307}$ at $c{=}1$ and reaches only 1.8\% at $c{=}128$, while
+an aggressive user-$K{=}32$ threshold --- sound by the argument of
+Section~\ref{sec:skip-mech} even though the resident window is $M$-wide
+--- reaches 37\% at $c{=}32$ and 78\% at $c{=}128$.
+
+The law hands us the gate. Below $c = K/4$ the skip probability is under
+$e^{-4} \approx 1.8\%$, so the compile-time gate sets the first tested
+chunk to $\max(2, K/4)$ --- a derivation from Eq.~\ref{eq:skiplaw}, not a
+tuned constant (the floor of two: the threshold address needs the
+post-rebuild window layout of Section~\ref{sec:characterization}, which
+exists only after the first merge). The gate zeroes the measured ungated overhead ($+6.8\%$ at
+$K{=}512$ over 128 chunks, $+1.8\%$ at $K{=}1536$ over 25 chunks) while
+forfeiting under one expected skip per row. The decision itself is cheap:
+$\approx$150\,ns per tested chunk at $M{=}512$ and $\approx$350\,ns at
+$M{=}2048$, derived from the ungated A/B (126 tested chunks cost
+$+18.9$\us) and consistent with the 81-cycle rendezvous plus fold
+components of Section~\ref{sec:design-space}
+(footnote~\ref{fn:clock}) --- against $\approx$2.0\us{} and
+$\approx$5.4\us{} saved per skipped chunk.
+
+\subsection{Forecast Before Build: The Variant We Did Not Build}
+\label{sec:forecast}
+
+Before any kernel was written, an exact host-side simulation --- bf16
+sign-magnitude streaming, stimulus matched to the sweep harness,
+calibrated to reproduce all five pinned measured cells to
+$\pm 0.0$\us{} by construction --- priced chunk-skip inside the
+column-parallel tree. The verdict was a no-go with the weight of a
+result: 0.00\% skip on every realistic distribution on every cell, a
+predicted $+0.1$--$0.4$\us{} pure regression from the test overhead. The
+cause is structural: \emph{the rectangle split and the skip law fight
+over the same resource, stream length $c$} --- the cost-minimizing split
+caps each slice at $\lceil C/P \rceil = 1$--$5$ chunks while
+Eq.~\ref{eq:skiplaw} needs $c \gtrsim K/4$. The split already won.
+
+The build therefore went where the law points: the row-parallel path, in
+which each core streams all $C$ chunks of its own row --- long streams,
+small $K$, exactly the shapes the stock small-$k$ routing ships to this
+path. The forecast's redirect predicted 54.3\% skip at $K{=}32$ on a
+128-chunk stream. At rows${=}2$, $K{=}32$, $N{=}65{,}536$ the measured
+time falls 1.82$\times$ ($-45.1\%$), and at rows${=}8$ by 1.57$\times$
+($-36.3\%$) --- both on 130-core programs whose active cores number
+$\min(\text{rows}, 130)$, so the rows${=}2$ cell exercises two cores, not
+the grid. Cells where the law forbids a win are protected by the gate, and the
+column-parallel guard cell holds with byte-identical tree kernels
+(Section~\ref{sec:eval-skip} shows the A/B bars, quotes the guard
+numbers, and carries the epistemic caveat). The forecast said no;
+we did not build that variant --- Section~\ref{sec:methodology} returns to
+forecast-before-build as methodology.

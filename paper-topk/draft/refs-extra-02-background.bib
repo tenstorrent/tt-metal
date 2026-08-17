@@ -1,0 +1,23 @@
+% Extra bibliography entries owned by sections/02-background.tex.
+% Merge into the shared bibliography at assembly time (do not duplicate
+% keys already in refs.bib). Both entries are engineering artifacts, cited
+% per evidence/paper/related-work.md S1 ("Engineering artifacts, not
+% publications") as evidence that the vendor stack routes top-k through a
+% bitonic local sort. Anonymity: vendor documentation/issue tracker, not
+% the authors' artifact.
+
+@misc{ttnn_topk_docs,
+  author       = {{Tenstorrent}},
+  title        = {{TT-NN} Operator Reference: \texttt{ttnn.topk}},
+  howpublished = {TT-NN documentation},
+  year         = {2026},
+  note         = {Accessed 2026-08-16}
+}
+
+@misc{ttmetal_topk_issue33492,
+  author       = {{Tenstorrent}},
+  title        = {\texttt{topk\_local\_sort} Bitonic Top-K Kernel Discussion},
+  howpublished = {tt-metal issue tracker, \#33492},
+  note         = {Engineering artifact; documents the bitonic local-sort
+                  top-k path. [verify year/permalink before camera-ready]}
+}

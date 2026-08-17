@@ -1,0 +1,438 @@
+% =====================================================================
+% Bibliography for "Exact Top-K Selection on a Dataflow Many-Core"
+% Source of record: paper-topk/evidence/paper/related-work.md (2026-08-16)
+%
+% VERIFICATION LEGEND
+%   Entries the related-work sweep flagged as unverified carry
+%   "UNVERIFIED:" in a comment line above the entry AND in the note
+%   field. Resolve every one before camera-ready (action items in
+%   related-work.md: locate archived Blackhole microbench PDF, read
+%   Focus full text, check KForge target list, fill [verify] authors).
+% =====================================================================
+
+% ---------------- GPU top-k lineage (C1) ----------------
+
+@article{alabi2012kselection,
+  author  = {Alabi, Tolu and Blanchard, Jeffrey D. and Gordon, Bradley and Steinbach, Russel},
+  title   = {Fast K-Selection Algorithms for Graphics Processing Units},
+  journal = {ACM Journal of Experimental Algorithmics},
+  volume  = {17},
+  year    = {2012},
+  doi     = {10.1145/2133803.2345676}
+}
+
+@article{johnson2019billion,
+  author  = {Johnson, Jeff and Douze, Matthijs and J{\'e}gou, Herv{\'e}},
+  title   = {Billion-Scale Similarity Search with {GPUs}},
+  journal = {IEEE Transactions on Big Data},
+  volume  = {7},
+  number  = {3},
+  year    = {2019},
+  note    = {WarpSelect. arXiv:1702.08734}
+}
+
+@inproceedings{shanbhag2018topk,
+  author    = {Shanbhag, Anil and Pirk, Holger and Madden, Samuel},
+  title     = {Efficient Top-K Query Processing on Massively Parallel Hardware},
+  booktitle = {Proc. ACM SIGMOD},
+  year      = {2018},
+  doi       = {10.1145/3183713.3183735}
+}
+
+@inproceedings{gaihre2021drtopk,
+  author    = {Gaihre, Anil and others},
+  title     = {Dr. Top-k: Delegate-Centric Top-k on {GPUs}},
+  booktitle = {Proc. SC},
+  year      = {2021},
+  note      = {arXiv:2109.08219}
+}
+
+% UNVERIFIED: author list not confirmed by the related-work sweep.
+@inproceedings{zhang2023paralleltopk,
+  title     = {Parallel Top-K Algorithms on {GPU}: A Comprehensive Study and New Methods},
+  booktitle = {Proc. SC},
+  year      = {2023},
+  doi       = {10.1145/3581784.3607062},
+  note      = {UNVERIFIED: verify authors before camera-ready}
+}
+
+% UNVERIFIED: author list not confirmed by the related-work sweep.
+@inproceedings{li2024radik,
+  title     = {{RadiK}: Scalable and Optimized {GPU}-Parallel Radix Top-K Selection},
+  booktitle = {Proc. ACM ICS},
+  year      = {2024},
+  doi       = {10.1145/3650200.3656596},
+  note      = {arXiv:2501.14336. UNVERIFIED: verify authors}
+}
+
+% UNVERIFIED: authors and venue not confirmed by the related-work sweep.
+@article{xie2024rtopk,
+  title   = {{RTop-K}: Ultra-Fast Row-Wise Top-K Selection for Neural Network Acceleration on {GPUs}},
+  journal = {arXiv preprint},
+  year    = {2024},
+  note    = {arXiv:2409.00822. UNVERIFIED: verify authors/venue}
+}
+
+% UNVERIFIED: author list not confirmed by the related-work sweep.
+@article{gvr2026,
+  title   = {Guess-Verify-Refine: Data-Aware Top-K for Sparse-Attention Decoding on {Blackwell} via Temporal Correlation},
+  journal = {arXiv preprint},
+  year    = {2026},
+  note    = {arXiv:2604.22312. UNVERIFIED: verify authors}
+}
+
+% Grey literature (vendor blog) — cite for completeness only.
+@misc{amd2025adaptivetopk,
+  author       = {{AMD}},
+  title        = {Adaptive Top-K Selection: Eliminating Performance Cliffs Across All K Values on {AMD} {GPUs}},
+  howpublished = {ROCm Blogs, \url{https://rocm.blogs.amd.com/software-tools-optimization/adaptive-topk/README.html}},
+  year         = {2025}
+}
+
+% ---------------- Accelerator top-k / approximation (C1) ----------------
+
+% UNVERIFIED: author list to confirm against the NeurIPS proceedings.
+@inproceedings{chern2022tpuknn,
+  author    = {Chern, Felix and Hechtman, Blake and Davis, Andy and Guo, Ruiqi and Majnemer, David and Kumar, Sanjiv},
+  title     = {{TPU-KNN}: K Nearest Neighbor Search at Peak {FLOP/s}},
+  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)},
+  year      = {2022},
+  note      = {UNVERIFIED: verify author list}
+}
+
+% UNVERIFIED: author list not confirmed by the related-work sweep.
+@article{twostage2025,
+  title   = {A Faster Generalized Two-Stage Approximate Top-K},
+  journal = {arXiv preprint},
+  year    = {2025},
+  note    = {arXiv:2506.04165; OpenReview izqZ1Crpjz. UNVERIFIED: verify authors}
+}
+
+% ---------------- Mesh selection theory (C2, decisive) ----------------
+
+@inproceedings{krizanc1992optimal,
+  author    = {Krizanc, Danny and Narayanan, Lata},
+  title     = {Optimal Algorithms for Selection on a Mesh-Connected Processor Array},
+  booktitle = {Proc. IEEE Symposium on Parallel and Distributed Processing (SPDP)},
+  year      = {1992},
+  doi       = {10.1109/SPDP.1992.242761}
+}
+
+% UNVERIFIED: authors/year to confirm (early 1990s, Krizanc/Narayanan-adjacent).
+@article{krizanc1993fast,
+  title   = {Fast Deterministic Selection on Mesh-Connected Processor Arrays},
+  journal = {Algorithmica},
+  doi     = {10.1007/BF01961542},
+  note    = {1.45n steps on an $n \times n$ mesh vs $2n+o(n)$ sort-based; earlier version LNCS, doi 10.1007/3-540-54967-6\_79. UNVERIFIED: verify authors/year}
+}
+
+% UNVERIFIED: authors not confirmed (ADS 1992ipps.conf...37K).
+@inproceedings{multipacket1992,
+  title     = {Multi-Packet Selection on Mesh-Connected Processor Arrays},
+  booktitle = {Proc. International Parallel Processing Symposium (IPPS)},
+  year      = {1992},
+  note      = {UNVERIFIED: verify authors}
+}
+
+% ---------------- Distributed DB top-k (C2) ----------------
+
+@article{fagin2003optimal,
+  author  = {Fagin, Ronald and Lotem, Amnon and Naor, Moni},
+  title   = {Optimal Aggregation Algorithms for Middleware},
+  journal = {Journal of Computer and System Sciences},
+  volume  = {66},
+  number  = {4},
+  year    = {2003}
+}
+
+@inproceedings{cao2004tput,
+  author    = {Cao, Pei and Wang, Zhe},
+  title     = {Efficient Top-K Query Calculation in Distributed Networks},
+  booktitle = {Proc. ACM PODC},
+  year      = {2004}
+}
+
+@inproceedings{michel2005klee,
+  author    = {Michel, Sebastian and Triantafillou, Peter and Weikum, Gerhard},
+  title     = {{KLEE}: A Framework for Distributed Top-k Query Algorithms},
+  booktitle = {Proc. VLDB},
+  year      = {2005},
+  url       = {https://www.vldb.org/archives/website/2005/program/paper/thu/p637-michel.pdf}
+}
+
+% ---------------- FPGA / hardware sorting and selection (C2) ----------------
+
+@inproceedings{samardzic2020bonsai,
+  author    = {Samardzic, Nikola and Qiao, Weikang and Aggarwal, Vaibhav and Chang, Mau-Chung Frank and Cong, Jason},
+  title     = {Bonsai: High-Performance Adaptive Merge Tree Sorting},
+  booktitle = {Proc. ACM/IEEE ISCA},
+  year      = {2020},
+  doi       = {10.1109/ISCA45697.2020.00033}
+}
+
+@article{papaphilippou2021flims,
+  author  = {Papaphilippou, Philippos and others},
+  title   = {{FLiMS}: a Fast Lightweight 2-way Merger for Sorting},
+  journal = {arXiv preprint},
+  year    = {2021},
+  note    = {arXiv:2112.05607}
+}
+
+% UNVERIFIED: author list not confirmed by the related-work sweep.
+@inproceedings{qiao2022topsort,
+  title     = {{TopSort}: A High-Performance Two-Phase Sorting Accelerator Optimized on {HBM}-Based {FPGAs}},
+  booktitle = {Proc. IEEE FCCM},
+  year      = {2022},
+  note      = {arXiv:2205.07991. UNVERIFIED: verify authors}
+}
+
+@article{jalilvand2023sorting,
+  author  = {Jalilvand, Amir Hossein and others},
+  title   = {Sorting it out in Hardware: A State-of-the-Art Survey},
+  journal = {arXiv preprint},
+  year    = {2023},
+  note    = {arXiv:2310.07903}
+}
+
+@article{heavyhitters2023fpga,
+  title   = {Finding the Top-K Heavy Hitters in Data Streams: A Reconfigurable Accelerator Based on an {FPGA}-Optimized Algorithm},
+  journal = {Electronics},
+  volume  = {12},
+  number  = {11},
+  pages   = {2376},
+  year    = {2023},
+  doi     = {10.3390/electronics12112376}
+}
+
+@inproceedings{parravicini2021topkspmv,
+  author    = {Parravicini, Alberto and others},
+  title     = {Scaling up {HBM} Efficiency of Top-K {SpMV} for Approximate Embedding Similarity on {FPGAs}},
+  booktitle = {Proc. ACM/IEEE DAC},
+  year      = {2021},
+  note      = {arXiv:2103.04808}
+}
+
+@inproceedings{wang2021spatten,
+  author    = {Wang, Hanrui and Zhang, Zhekai and Han, Song},
+  title     = {{SpAtten}: Efficient Sparse Attention Architecture with Cascade Token and Head Pruning},
+  booktitle = {Proc. IEEE HPCA},
+  year      = {2021},
+  note      = {arXiv:2012.09852}
+}
+
+% UNVERIFIED: authors not confirmed; read full text before submission
+% (search snippets suggest a chunked bitonic running-threshold engine).
+@article{focus2025,
+  title   = {Focus: A Streaming Concentration Architecture for Efficient Vision-Language Models},
+  journal = {arXiv preprint},
+  year    = {2025},
+  note    = {arXiv:2512.14661. UNVERIFIED: verify authors; read full text (closest architecture-paper analog to a chunked running-threshold engine)}
+}
+
+% ---------------- Streaming / classic (C3) ----------------
+
+@inproceedings{charikar2002countsketch,
+  author    = {Charikar, Moses and Chen, Kevin and Farach-Colton, Martin},
+  title     = {Finding Frequent Items in Data Streams},
+  booktitle = {Proc. ICALP},
+  year      = {2002}
+}
+
+@inproceedings{metwally2005spacesaving,
+  author    = {Metwally, Ahmed and Agrawal, Divyakant and El Abbadi, Amr},
+  title     = {Efficient Computation of Frequent and Top-k Elements in Data Streams},
+  booktitle = {Proc. ICDT},
+  year      = {2005}
+}
+
+% Rank-statistic / records-theory foundation for the skip law.
+@book{knuth1998taocp3,
+  author    = {Knuth, Donald E.},
+  title     = {The Art of Computer Programming, Volume 3: Sorting and Searching},
+  edition   = {2nd},
+  publisher = {Addison-Wesley},
+  year      = {1998}
+}
+
+% ---------------- Tenstorrent / Tensix (C4) ----------------
+
+@inproceedings{brown2024grayskull,
+  author    = {Brown, Nick and Barton, Ryan},
+  title     = {Accelerating Stencils on the {Tenstorrent} {Grayskull} {RISC-V} Accelerator},
+  booktitle = {Proc. SC Workshops},
+  year      = {2024},
+  note      = {arXiv:2409.18835}
+}
+
+% UNVERIFIED: author list not confirmed by the related-work sweep.
+@article{matmul2025tenstorrent,
+  title   = {Assessing {Tenstorrent's} {RISC-V} {MatMul} Acceleration Capabilities},
+  journal = {arXiv preprint},
+  year    = {2025},
+  note    = {arXiv:2505.06085. UNVERIFIED: verify authors}
+}
+
+% UNVERIFIED: given names of authors to confirm.
+@inproceedings{brown2025fft,
+  author    = {Brown, Nick and Davies, Joseph and Le Clair, Felix},
+  title     = {Exploring Fast {Fourier} Transforms on the {Tenstorrent} {Wormhole}},
+  booktitle = {Proc. ISC High Performance Workshops},
+  year      = {2025},
+  note      = {arXiv:2506.15437. UNVERIFIED: verify given names}
+}
+
+% UNVERIFIED: authors not confirmed. Its related-work section is the
+% authoritative census of Tensix papers (used to verify C4 novelty).
+@article{stencil2026wormhole,
+  title   = {Stencil Computations on {Tenstorrent} {Wormhole}},
+  journal = {arXiv preprint},
+  year    = {2026},
+  note    = {arXiv:2605.07599. UNVERIFIED: verify authors}
+}
+
+% UNVERIFIED: authors not confirmed by the related-work sweep.
+@article{numkernels2026wormhole,
+  title   = {Numerical Kernels on a Spatial Accelerator: A Study of {Tenstorrent} {Wormhole}},
+  journal = {arXiv preprint},
+  year    = {2026},
+  note    = {arXiv:2603.23343. UNVERIFIED: verify authors}
+}
+
+% UNVERIFIED: authors not confirmed by the related-work sweep.
+@article{fusion2026tensix,
+  title   = {Operator Fusion for {LLM} Inference on the {Tensix} Architecture},
+  journal = {arXiv preprint},
+  year    = {2026},
+  note    = {arXiv:2606.09879. UNVERIFIED: verify authors}
+}
+
+% UNVERIFIED: full author list not confirmed.
+@inproceedings{amati2025nbody,
+  author    = {Amati and others},
+  title     = {Accelerating Gravitational N-Body Simulations Using the {RISC-V}-Based {Tenstorrent} {Wormhole}},
+  booktitle = {Proc. SC Workshops},
+  year      = {2025},
+  note      = {arXiv:2605.02744 / 2509.19294. UNVERIFIED: verify full author list}
+}
+
+@inproceedings{vasiljevic2024blackhole,
+  author    = {Vasiljevic, Jasmina and Capalija, Davor},
+  title     = {Blackhole \& {TT-Metalium}: The Standalone {AI} Computer and Its Programming Model},
+  booktitle = {Proc. IEEE Hot Chips 36},
+  year      = {2024}
+}
+
+% UNVERIFIED: informal tech report; PDF link 404 as of 2026-08-16.
+% Locate an archived copy (Wayback Machine) before submission.
+% Cited as ref [8] of arXiv:2605.07599. NOT peer-reviewed ASPLOS
+% despite the hosting domain (asplos.dev is a personal site).
+@techreport{blackholemicrobench2025,
+  title       = {Dissecting the {Tenstorrent} {Blackhole} Architecture via Microbenchmarking},
+  institution = {Informal technical report},
+  year        = {2025},
+  note        = {UNVERIFIED: formerly at asplos.dev (404 as of 2026-08-16); locate archived copy before submission}
+}
+
+@techreport{jia2019ipu,
+  author      = {Jia, Zhe and Tillman, Blake and Maggioni, Marco and Scarpazza, Daniele Paolo},
+  title       = {Dissecting the {Graphcore} {IPU} Architecture via Microbenchmarking},
+  institution = {Citadel},
+  year        = {2019},
+  note        = {arXiv:1912.03413}
+}
+
+@misc{poplar_topk,
+  author       = {{Graphcore}},
+  title        = {{TopK} --- {Poplar} and {PopLibs} {API} Reference (popops), v3.1.0},
+  howpublished = {\url{https://docs.graphcore.ai/projects/poplar-api/en/3.1.0/poplibs/popops/TopK.html}},
+  year         = {2023}
+}
+
+% ---------------- Float ordering software prior art (C4 framing) ----------------
+
+@misc{herf2001radix,
+  author       = {Herf, Michael},
+  title        = {Radix Tricks},
+  year         = {2001},
+  howpublished = {\url{http://stereopsis.com/radix.html}}
+}
+
+@article{merrill2011radix,
+  author  = {Merrill, Duane and Grimshaw, Andrew},
+  title   = {High Performance and Scalable Radix Sorting},
+  journal = {Parallel Processing Letters},
+  volume  = {21},
+  number  = {2},
+  year    = {2011}
+}
+
+@misc{ieee754-2019,
+  author       = {{IEEE}},
+  title        = {{IEEE} Standard for Floating-Point Arithmetic ({IEEE} 754-2019)},
+  howpublished = {IEEE Std 754-2019},
+  year         = {2019},
+  note         = {totalOrder predicate, \S 5.10}
+}
+
+% ---------------- Other many-cores (C1 context) ----------------
+
+@article{zaruba2021manticore,
+  author  = {Zaruba, Florian and Schuiki, Fabian and Benini, Luca},
+  title   = {Manticore: A 4096-Core {RISC-V} Chiplet Architecture for Ultraefficient Floating-Point Computing},
+  journal = {IEEE Micro},
+  volume  = {41},
+  number  = {2},
+  year    = {2021}
+}
+
+% UNVERIFIED: author list not confirmed (PULP/ETH group expected).
+@article{occamy2025,
+  title   = {Occamy: A 432-Core Dual-Chiplet Dual-{HBM2E} 768-{DP-GFLOP/s} {RISC-V} System for 8-to-64-bit Dense and Sparse Computing in 12nm {FinFET}},
+  journal = {arXiv preprint},
+  year    = {2025},
+  note    = {arXiv:2501.07330. UNVERIFIED: verify authors}
+}
+
+% ---------------- Agentic methodology ----------------
+
+% UNVERIFIED: author list beyond first author not confirmed.
+@article{ouyang2025kernelbench,
+  author  = {Ouyang, Anne and others},
+  title   = {{KernelBench}: Can {LLMs} Write Efficient {GPU} Kernels?},
+  journal = {arXiv preprint},
+  year    = {2025},
+  note    = {arXiv:2502.10517. UNVERIFIED: verify author list}
+}
+
+@techreport{sakana2025aicuda,
+  author      = {{Sakana AI}},
+  title       = {The {AI} {CUDA} Engineer},
+  institution = {Sakana AI},
+  year        = {2025},
+  note        = {Includes the reward-hacking cautionary tale motivating verification discipline}
+}
+
+% UNVERIFIED: authors not confirmed by the related-work sweep.
+@article{accelopt2025,
+  title   = {{AccelOpt}: A Self-Improving {LLM} Agentic System for {AI} Accelerator Kernel Optimization},
+  journal = {arXiv preprint},
+  year    = {2025},
+  note    = {arXiv:2511.15915. UNVERIFIED: verify authors}
+}
+
+% UNVERIFIED: authors not confirmed; CHECK whether its accelerator
+% target list includes Tenstorrent before submission.
+@article{kforge2025,
+  title   = {{KForge}: Program Synthesis for Diverse {AI} Hardware Accelerators},
+  journal = {arXiv preprint},
+  year    = {2025},
+  note    = {arXiv:2511.13274; see also arXiv:2606.02963. UNVERIFIED: verify authors; check target list for Tenstorrent}
+}
+
+% UNVERIFIED: authors not confirmed by the related-work sweep.
+@article{peak2025,
+  title   = {{PEAK}: A Performance Engineering {AI}-Assistant for {GPU} Kernels Powered by Natural Language Transformations},
+  journal = {arXiv preprint},
+  year    = {2025},
+  note    = {arXiv:2512.19018. UNVERIFIED: verify authors}
+}

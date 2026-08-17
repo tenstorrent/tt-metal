@@ -1,0 +1,30 @@
+% Extra references introduced by sections/00-abstract.tex + 01-intro.tex.
+% Merge into refs.bib (or add to \bibliography{refs,refs-extra-01-intro})
+% at integration time. All three are motivation citations for the
+% "top-k on the LLM decode critical path" paragraph; entries tagged
+% [verify] follow the shared refs.bib convention and must be resolved
+% before camera-ready.
+
+@inproceedings{fan2018topk,
+  author    = {Fan, Angela and Lewis, Mike and Dauphin, Yann},
+  title     = {Hierarchical Neural Story Generation},
+  booktitle = {ACL},
+  year      = {2018},
+  note      = {Introduces top-$k$ sampling for neural text generation. arXiv:1805.04833}
+}
+
+@inproceedings{shazeer2017moe,
+  author    = {Shazeer, Noam and Mirhoseini, Azalia and Maziarz, Krzysztof and Davis, Andy and Le, Quoc and Hinton, Geoffrey and Dean, Jeff},
+  title     = {Outrageously Large Neural Networks: The Sparsely-Gated Mixture-of-Experts Layer},
+  booktitle = {ICLR},
+  year      = {2017},
+  note      = {Noisy top-$k$ expert gating. arXiv:1701.06538}
+}
+
+@techreport{deepseekv32,
+  author      = {{DeepSeek-AI}},
+  title       = {DeepSeek-V3.2-Exp: Boosting Long-Context Efficiency with DeepSeek Sparse Attention},
+  institution = {DeepSeek-AI},
+  year        = {2025},
+  note        = {Sparse-attention indexer selecting top-2048 keys per layer. [verify exact title/identifier before camera-ready]}
+}

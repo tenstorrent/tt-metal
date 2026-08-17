@@ -1,0 +1,167 @@
+% Characterizing the Tensix Datapath for Selection -- owned by briefs/05-characterization.md (read the brief before writing).
+\section{Characterizing the Tensix Datapath for Selection}
+\label{sec:characterization}
+
+Selection exercises corners of a datapath that matmul studies never touch:
+NaN ordering, signed zeros, compare-exchange operand routing, and the cost of
+getting one count off the SIMD unit. This section banks those facts as an
+archival reference in the
+microbenchmark-dissection genre of Jia et al.~\cite{jia2019ipu}; no prior
+Tensix study, including the general \bh microbenchmark
+report~\cite{blackholemicrobench2025}, reports datapath numerics or
+selection-primitive costs (\S\ref{sec:related}).
+Table~\ref{tab:characterization} anchors the section. Every cycle
+figure is a two-point slope measurement with a $2.000\times$ control
+tripwire (\S\ref{sec:eval-method}), quoted at the
+precision the harness earned; the section stays in cycles, so no busy-clock
+conversion caveat applies.
+
+\begin{table*}[t]
+\centering
+\caption{Measured Tensix datapath laws for selection.}
+\label{tab:characterization}
+\scriptsize
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{@{}p{2.0cm}p{9.6cm}p{5.5cm}@{}}
+\toprule
+\textbf{Property} & \textbf{Measured behavior} \emph{(probe)} & \textbf{Consequence for selection} \\
+\midrule
+bf16 canonicalization &
+NaN (any payload) $\rightarrow$ same-sign Inf; $-0\rightarrow+0$;
+$\pm$subnormal $\rightarrow$ $+0$ (sign dropped); index positions preserved;
+fp32 passes bit-exactly \emph{(identity-op probe; 62-cell contract suite
+with JSONL divergence ledger)} &
+reference models must canonicalize first; enables exact (never-PCC)
+correctness gates \\
+\addlinespace
+Hardware total order &
+$-\mathrm{NaN}<-\mathrm{Inf}<\dots<-0<+0<\dots<+\mathrm{Inf}<+\mathrm{NaN}$,
+native in \texttt{SFPGT}, \texttt{SFPSWAP}, and the packer threshold unit;
+$+$NaN survives the threshold, $-$NaN is zeroed \emph{(failing $\pm$NaN
+differential test)} &
+the compare order \emph{is} the radix-key order; no float$\to$uint bit-flip
+map needed \\
+\addlinespace
+Exponent histogram: sampling &
+enable cost zero ($25.175\rightarrow25.104$ cyc/tile); samples 1-in-8
+positionally ($p \bmod 64 < 8$: exactly 128 increments per 1024-datum tile,
+format-independent) \emph{(38/38 functional $+$ 6/6 perf; marker patterns
+$+$ mod-8 phase sweep)} &
+exact-count designs dead on arrival; survives only as a sampled threshold
+seed \\
+\addlinespace
+Exponent histogram: aliasing and traps &
+bins alias exponent $\wedge$ 31 (32 bins; exp $127\equiv159$); 8-bit
+counters saturate at 255; sign-blind; \texttt{WhichPackers} ignored in read
+modes 6/7 (silent $4\times$ overcount); \texttt{CLREXPHIST} (1 cyc) does not
+fence in-flight packs ($\approx$39-count leak) \emph{(same bench)} &
+consumers must debias $4\times$, guard saturation, and handle sign upstream \\
+\addlinespace
+Threshold filter &
+$T\geq0$: compare-and-zero during pack at 4.034 cyc/vec vs.\ the bench's
+3.855 local floor ($+4.6\%$); $T<0$: documented UB, acts as $|T|$ rounded up
+to the next power of two (mantissa ignored) \emph{(negative-filter bench)} &
+free pre-filter for non-negative data; signed data falls back to
+\texttt{SFPGT}(SET\_VD)$+$\texttt{SFPAND}, 2 issues/vec --- the ISA floor \\
+\addlinespace
+Dst window layout &
+$\mathrm{word}(r) = (r \bmod (M/16))\cdot16 + \lfloor r/(M/16)\rfloor$:
+descending window column-major over $M/16$ physical rows; exhaustive at
+$M{=}512/1024/2048$ \emph{(full-region Dst dumps vs.\ distinct-monotone
+input)} &
+the running-threshold read of \S\ref{sec:system}'s chunk skip lands on the
+right word \\
+\addlinespace
+\texttt{SFPSWAP} operand order &
+mod1${=}$1 routes max$\rightarrow$VC, min$\rightarrow$VD; the in-tree
+comment reads backwards \emph{(decision tracer, $-\infty$ accumulation)} &
+cross-lane max folds accumulate the correct operand \\
+\addlinespace
+Count / rendezvous floors &
+count rate 2.0000 cyc/vec exactly; fp32 unpack-to-dest floor 3.938 cyc/vec;
+rendezvous 81/101/98 cyc (\texttt{tensix\_sync} / semaphore / Dst sentinel);
+no-fold 756--773 cyc; MMIO $\approx$10 cyc/word; PassSync $\geq$25.1 cyc
+\emph{(counting $+$ rendezvous benches, MATH\_ISOLATE two-point slope)} &
+sets \S\ref{sec:design-space}'s counting ceiling; fold-on-SFPU before any
+RISC read is mandatory \\
+\addlinespace
+\texttt{SFPLOADMACRO} co-issue law &
+Load$+$Simple$+$\{MAD$\,|\,$Store\} maps at 1.000--1.003 cyc/vec (three
+sub-units co-issue free); reductions need $\geq$2 issues
+(\texttt{SFPIADD} not macro-schedulable) \emph{(paired arms with mutation
+controls)} &
+counting cannot beat 2 cyc/vec; the law behind the shipped merge/step wins \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+\subsection{Numeric semantics}
+\label{sec:char-numerics}
+
+An identity-op probe shows the bf16 compute datapath rewrites specials
+before any operation touches them --- Table~\ref{tab:characterization},
+row~1, gives the full rules --- while index positions survive and fp32
+passes bit-exactly. Vendor ISA documentation corroborates
+the Dst behavior~\cite{ttisadocs2025}. This rule is the precondition for
+every correctness gate in the paper (\S\ref{sec:bg-problem}): every
+reference model in \S\ref{sec:evaluation} canonicalizes before
+comparing bit-exactly.
+
+A failing differential test on $\pm$NaN specials exposed the second law: the
+comparators implement the sign-magnitude total order of
+Table~\ref{tab:characterization} natively in \texttt{SFPGT}, in
+\texttt{SFPSWAP}, and --- measured here, absent from vendor documentation ---
+in the packer's threshold unit, which passes $+$NaN and zeroes $-$NaN. GPU
+radix sorts build this order in software via the float$\to$orderable-uint
+bit-flip trick~\cite{herf2001radix,merrill2011radix}; IEEE~754-2019 calls
+it \texttt{totalOrder}~\cite{ieee754-2019}; on Tensix the \emph{hardware
+datapath} imposes it, so filtering, bucketing, and the final compare agree
+on one order with no key transform on the critical path.
+
+\subsection{Packer primitives}
+\label{sec:char-packer}
+
+Table~\ref{tab:characterization} rows~3--5 carry the packer findings.
+The exponent histogram costs nothing to enable but samples 1 datum in 8
+in a fixed positional pattern --- where the Wormhole-era documentation
+says per-datum~\cite{ttisadocs2025} --- so it can miss every extreme
+value: exact-count selectors built on it are dead on arrival
+(\S\ref{sec:design-space}), and only a sampled threshold \emph{seed}
+survives. The threshold filter splits the same way: a free
+compare-and-zero for $T\geq0$, unusable for $T<0$, leaving the 2-issue
+SFPU filter as the ISA floor for signed data.
+
+\subsection{Dst window layout and \texttt{SFPSWAP} operand order}
+\label{sec:char-dst}
+
+Reading a running threshold out of the engine's Dst-resident window
+(\S\ref{sec:system}) requires knowing where rank $r$ lives. Full-region Dst
+dumps against distinct-monotone input, checked word-for-word against torch
+rank order at $M{=}512/1024/2048$, fix the law
+(Table~\ref{tab:characterization}): column-major over $M/16$ physical
+rows. An a-priori derivation of this layout was wrong; calibration replaced
+it. A decision tracer that accumulated $-\infty$ on first bring-up fixed
+the companion fact: \texttt{SFPSWAP} with mod1${=}$1 routes max to VC ---
+the in-tree comment reads backwards; the vendor functional model agrees
+with the measurement~\cite{ttisadocs2025}. These two facts make
+\S\ref{sec:system}'s chunk-skip rendezvous implementable.
+
+\subsection{Measured floors and the co-issue law}
+\label{sec:char-floors}
+
+Four floors bound data-dependent designs
+(Table~\ref{tab:characterization}, rows 8--9): counting at 2.0000
+cyc/vector exactly; the fp32 unpack-to-dest floor at 3.938 cyc/vector ---
+a different quantity from the filter bench's 3.855 local floor, kept
+apart deliberately; a rendezvous at 81/101/98 cyc
+(\texttt{tensix\_sync} / semaphore / Dst-sentinel poll), provided the
+SFPU folds lanes first, since raw-lane reads cost 756--773 cyc.
+\S\ref{sec:design-space} prices counting designs with exactly these
+constants. \texttt{SFPLOADMACRO} explains why the count rate is a law:
+Load$+$Simple$+$\{MAD$\,|\,$Store\} maps onto three sub-units that co-issue
+for free (1.000--1.003 cyc/vector), but reductions need $\geq$2 issues
+because \texttt{SFPIADD} is not macro-schedulable --- hence 2 cyc/vector is
+the counting ceiling. Applied constructively, the same law produced the
+shipped micro-op wins on the incumbent: merge $1.195/1.221/1.235\times$ and
+step $1.053/1.074/1.090\times$ at $M{=}512/1024/2048$, from paired
+MATH\_ISOLATE arms whose control read $2.000$ on every quoted run.

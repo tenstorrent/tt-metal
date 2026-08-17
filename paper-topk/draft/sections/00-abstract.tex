@@ -1,0 +1,45 @@
+% Abstract — owned by briefs/01-intro.md.
+% Every number traces to paper-topk/evidence/paper/evidence.md:
+%   H1 (9,956x), H2 (34.3us@32c, 18,401x), H3 (23.3us@104c), H4 (9.7-29.9x),
+%   C1-1/C1-3/C1-5 (counting/decision/materialization), C2-1 (cost model),
+%   C3-1/C3-4 (skip law, 1.82x), C4-1..C4-3 (characterization), C1-6 (honest frame).
+% All microsecond values here are Tracy-measured at op level (no cycle
+% conversion), so the 1.35 GHz caveat does not attach; cycle figures stay in cycles.
+\begin{abstract}
+Exact top-$k$ selection sits on the decode-time critical path of large
+language model serving: sampling selects $k{=}32$--$64$ winners from a padded
+vocabulary shard every token, sparse-attention indexers select
+$k{=}512$--$2048$ keys per layer, and mixture-of-experts gates fire every
+forward pass. GPU practice treats the problem as solved---count, partition,
+scatter, repeat---while accelerator studies either approximate the selection
+or never measure it. We present a measured design-space study of exact
+top-$k$ on a Tenstorrent Blackhole \pca, a dataflow many-core with 130 Tensix
+workers on a 13$\times$10 mesh NoC, software-managed SRAM, and neither
+atomics nor scatter in the compute path. Single-ingredient silicon
+microbenchmarks show why GPU radix-select economics do not transfer: exact
+SFPU counting yields 1 bit per 2.0 cycles/vector, a count-to-decision
+rendezvous costs 81 cycles, and materialization---not counting---is the load-bearing gap
+(dense emission 13.0 cycles/element against a 0.5 bar). The design space
+instead rewards parallelizing the data-oblivious comparison network: a
+column-parallel log-tree operator whose bitonic leaves feed a semaphore-tree
+merge, governed by a validated cost model \costmodel. The operator measures
+34.3\us at $k{=}2048$, $N{=}65{,}536$ (bf16) on 32 cores---18,401$\times$
+over the pre-study stock path---and scales monotonically to 23.3\us at
+$k{=}512$, $N{=}262{,}144$ on 104 cores. A distribution-free chunk-skip law
+$P(\mathrm{skip}) \approx e^{-K/(c+1)}$ with a compile-time $K/4$ gate adds
+1.82$\times$ ($-45.1\%$) at $k{=}32$, $N{=}65{,}536$. End to end, the
+user-facing \ttnntopk call at $k{=}2048$, $N{=}65{,}536$ improves from
+631.5\,ms to 63.4\us---9,956$\times$---and the surviving gap to the vendor
+roofline spans 9.7--29.9$\times$ across all 24 measured cells. The study is
+honest about its own dynamics: the incumbent bitonic engine absorbed the
+study's routing and placement fixes and outran the radix-select model it was
+measured against. We also report the first public characterization of the
+Tensix datapath's numeric semantics: bf16 canonicalization, a native
+sign-magnitude total order including NaN, and a 1-in-8-sampled, 32-bin-aliased
+packer exponent histogram.
+\end{abstract}
+
+\begin{IEEEkeywords}
+top-k selection, dataflow architectures, network-on-chip, many-core,
+Tenstorrent Blackhole, performance characterization
+\end{IEEEkeywords}
