@@ -392,6 +392,22 @@ def test_sigmoid_gated_rms_norm_default_compute_config_matches_explicit_defaults
     assert_bit_identical(implicit, explicit, name="implicit vs explicit production compute defaults")
 
 
+def test_sigmoid_gated_rms_norm_exact_math_changes_program_and_output(device: ttnn.Device) -> None:
+    _, (input_tt, gate_tt, weight_tt) = _device_inputs(device, seed=818)
+    approximate = ttnn.to_torch(_run(input_tt, gate_tt, weight_tt))
+    entries = device.num_program_cache_entries()
+    exact_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+    exact = ttnn.to_torch(_run(input_tt, gate_tt, weight_tt, compute_kernel_config=exact_config))
+    assert device.num_program_cache_entries() == entries + 1
+    assert not torch.equal(approximate, exact)
+
+
 @pytest.mark.parametrize(
     ("compute_kernel_config", "message"),
     [
