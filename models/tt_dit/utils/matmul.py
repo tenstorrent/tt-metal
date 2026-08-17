@@ -303,6 +303,14 @@ def get_fused_mmrs_config(M, K, N, device_core_grid, num_links):
         logger.warning(
             f"No known best MM/RS blocking for (M, K, N) = ({M}, {K}, {N}) on {device_core_grid} core grid; using default"
         )
+    elif (M, K, N) not in config:
+        # Worth a warning even though the grid is known: the default puts the matmul on an 8x7 grid at
+        # subblock 1x1, so on a larger device it is drastically slower than the unfused
+        # matmul + reduce-scatter it is meant to replace, and the fusion reads as a regression.
+        logger.warning(
+            f"No known best MM/RS blocking for (M, K, N) = ({M}, {K}, {N}) on {device_core_grid} core grid; "
+            "using default, which is likely slower than not fusing at all"
+        )
     config = config.get((M, K, N), default_fused_mmrs_config)
     return config.get_params(device_core_grid, num_links)
 

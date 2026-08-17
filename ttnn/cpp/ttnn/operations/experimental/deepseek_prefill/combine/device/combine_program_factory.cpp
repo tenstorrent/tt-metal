@@ -1414,7 +1414,7 @@ tt::tt_metal::WorkloadDescriptor CombineProgramFactory::create_workload_descript
         mesh_device, operation_attributes.worker_core_range_set, 0, sem_buffer_type);
     // Cross-device barrier: ensure every device's GlobalSemaphores have been allocated
     // before any kernel reads them.  Mirrors the previous prepare_resources hook.
-    tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, {});
+    tt::tt_metal::distributed::Synchronize(*mesh_device, std::nullopt, {});
 
     tt::tt_metal::WorkloadDescriptor workload_descriptor;
     workload_descriptor.semaphores.push_back(init_barrier_semaphore);

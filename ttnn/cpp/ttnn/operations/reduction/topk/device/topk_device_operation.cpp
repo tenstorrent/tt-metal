@@ -184,6 +184,19 @@ void TopKDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             !(input_tensor_dtype == DataType::FLOAT32 && indices_tensor_dtype == DataType::UINT16),
             "Optional indices tensor must be UINT32 when input tensor is FLOAT32, got UINT16");
+        // The reader kernels page a caller-supplied indices tensor with the input's page index
+        // (page_id = i * Wt + j), so the two must describe the same tile grid: same padded width
+        // and same total number of tiles. A narrower indices tensor is read past the end of its
+        // buffer and returns indices that do not belong to the returned values. The composite
+        // topk() front-end checks the logical shapes too, but ttnn::prim::topk is a public entry
+        // point of its own. Ranks may legitimately differ (the front-end normalizes only the input
+        // to 4D), so compare the tile grid rather than the full shape.
+        TT_FATAL(
+            indices_tensor->padded_shape()[-1] == input_tensor.padded_shape()[-1] &&
+                indices_tensor->physical_volume() == input_tensor.physical_volume(),
+            "Optional indices tensor must span the same tile grid as the input tensor, got shape: {}, expected: {}",
+            indices_tensor->padded_shape(),
+            input_tensor.padded_shape());
     }
 
     // Preallocated output tensor validation

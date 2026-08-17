@@ -311,6 +311,21 @@
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
+- name: Qwen2.5-Coder-32B e2e tests (Blackhole)
+  cmd: |
+    export HF_MODEL=Qwen/Qwen2.5-Coder-32B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen2.5-Coder-32B-Instruct
+    pytest --timeout 4200 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching"
+    pytest --timeout 1800 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-eval-32"
+  model: qwen2.5-coder-32b
+  model_family: Qwen
+  skus:
+    bh_quietbox_2:
+      timeout: 15
+      tier: 2
+      release_ready: false
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
 - name: Qwen2.5-7B e2e tests
   cmd: |
     export HF_MODEL=Qwen/Qwen2.5-7B-Instruct HF_HUB_OFFLINE=1 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/Qwen/Qwen2.5-7B-Instruct MESH_DEVICE=N300
@@ -876,6 +891,21 @@
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
 
+# ── Z-Image ────────────────────────────────────────────────────────
+
+- name: Z-Image-Turbo e2e tests
+  cmd: |
+    unset HF_HUB_OFFLINE
+    pytest --timeout 600 models/demos/z_image_turbo/tests/test_pipeline.py
+  model: z-image-turbo
+  model_family: Z-Image
+  skus:
+    bh_quietbox_2:
+      timeout: 10
+      tier: 1
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+
 # ── Stable Diffusion XL ────────────────────────────────────────────
 
 - name: Stable Diffusion XL (base) e2e tests
@@ -977,6 +1007,29 @@
   skus:
     wh_llmbox_perf:
       timeout: 20
+      tier: 3
+      release_ready: false
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+
+# ── Mochi (TT-DiT) ─────────────────────────────────────────────────
+# test_tt_mochi_pipeline is named explicitly to keep the CPU-only diffusers
+# reference test in the same file out of CI.
+- name: TT-DiT Mochi e2e tests
+  cmd: |
+    unset HF_HUB_OFFLINE
+    export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE NO_PROMPT=1
+    pytest --timeout 1500 models/tt_dit/tests/models/mochi/test_pipeline_mochi.py::test_tt_mochi_pipeline
+    pytest --timeout 1800 models/tt_dit/tests/models/mochi/test_performance_mochi.py
+  model: mochi
+  model_family: Mochi
+  skus:
+    wh_llmbox_perf:
+      timeout: 105
+      tier: 3
+      release_ready: false
+    wh_galaxy_perf:
+      timeout: 55
       tier: 3
       release_ready: false
   owner_id: U0ATR08RCQ0 # James Lee
