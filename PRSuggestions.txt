@@ -4,97 +4,87 @@
       Bark, Parler-TTS, Moshi, CSM, Dia). Most of what people use ships its own inference code:
       XTTS-v2, StyleTTS2, F5-TTS, CosyVoice, Fish Speech, GPT-SoVITS, ChatTTS, MeloTTS, Kokoro,
       Tortoise, and Voxtral-TTS. Being hosted on the HF Hub is not the same as being loadable by
-      AutoModel.from_pretrained, which is what the loader requires.
-    - You already have a resolver for exactly this, and it is off:
-      scripts/tt_hw_planner/reference_loader_resolver.py targets "non-transformers checkpoints --
-      e.g. Mistral/vLLM-native consolidated.safetensors + params.json, GGUF, or trust_remote_code
-      variants" and is OFF BY DEFAULT unless TT_HW_PLANNER_LOADER_RESOLVER=1. It writes one
-      model-local tests/pcc/_reference_loader.py that the generated PCC tests pick up as a fallback,
-      and correctness stays gated by PCC.
-    - Fix: enable it by default, or at least name it in the failure message when from_pretrained
-      fails. Today a non-transformers model looks unsupported.
-    - We did not test the resolver -- we converted the model to HF format ourselves before starting,
-      so we cannot say how well it works. If converting is the intended path, document what the
-      wrapper must provide: config.json with auto_map, a configuration_*.py + modeling_*.py pair, and
-      a transformers-format tokenizer converted from the native one. It took us several days.
+      transformers, which is what the loader requires.
+    - You already have a resolver for exactly this case. It writes a model-local loader that the
+      generated tests pick up as a fallback, and correctness stays gated by PCC, so it cannot weaken
+      a test. But it is disabled by default and only reachable after a component has already failed
+      to build its reference, so in practice a non-transformers model simply looks unsupported.
+    - Fix: enable it by default, or at least point at it in the error message when loading fails.
+    - We did not exercise it -- we converted the model to HF format ourselves before starting, so we
+      cannot say how well it works. If converting is the intended path, document what the wrapper
+      has to provide. It took us several days.
 
 2. Fix the model bring up from local path
-    - Local path bring-up uses different logic from a Hub model, and the difference surfaces late
-      with a misleading diagnosis. Three instances:
-        - A local model dir gets a degraded probe; the run dies three stages later and the
-          diagnosis points somewhere else.
-        - optimize <local dir> is mistaken for a demo dir, which makes optimize unusable by
-          model id.
-        - The workaround for that (passing the demo dir instead) loses the model id, so optimize
-          cannot build its own correctness gate even though it had already written one. We had to
-          pass --pcc-test explicitly.
-    - Fix: treat a local directory as a first-class model id throughout, and carry it alongside the
-      demo dir rather than instead of it.
-    - Related: trust_remote_code is an allowlist of exactly one model
-      (base_model_name in ["Phi-3-mini-128k-instruct"]). A custom-architecture checkpoint clears
-      preflight and static analysis, then fails at execution with a message blaming the repository
-      rather than the loader. Fix: decide from the checkpoint -- auto_map in config.json is itself
-      the declaration that a model ships custom code. We patched this and it worked.
+    - A local path takes different code paths from a Hub model id, and the difference surfaces late
+      with a misleading diagnosis:
+        - a local model directory gets a reduced probe, and the run dies three stages later with a
+          diagnosis pointing somewhere else
+        - the optimize stage mistakes a local model directory for a demo directory, which makes it
+          unusable by model id
+        - the workaround for that, passing the demo directory instead, loses the model id, so
+          optimize cannot build its own correctness gate even though it had already written one. We
+          had to name the gate test explicitly on the command line to get one at all.
+    - Fix: treat a local directory as a first-class model id everywhere, and carry it alongside the
+      demo directory rather than instead of it.
+    - Related: support for custom-architecture checkpoints is an allowlist containing exactly one
+      model name. Such a model clears preflight and static analysis, then fails at execution with a
+      message blaming the model repository rather than the loader. Fix: decide from the checkpoint
+      instead -- its config already declares that it ships custom code, and HF refuses to load it
+      without permission, so that declaration is decisive and no allowlist is needed. We patched
+      this and it worked.
 
 3. Support multiple input prompts for the tests
-    - Two layers here, and the component tests are worse than "one prompt":
-        - e2e gate: one prompt decides PASS/FAIL for the whole port, and no
-          flag widens it. One sample cannot separate a systematic error from a lucky prompt.
-        - per-component gates: the captured activations are never used. Preflight captures real
-          IO for every component and prints "per-component PCC tests will use real inputs", but no
-          test loads them -- torch.load appears 0 times anywhere under tests/pcc/, conftest
-          included. The captures are read only for manifest.json, to pick which submodule to test,
-          and a pinned x_0 noise vector. The primary activation is torch.randn.
-        - Out of the box it is worse: the template synthesises inputs from the forward signature by
-          argument name, which for this model gave a 3-D activation where a complex rope table was
-          required, dropped the causal mask (making the golden non-causal), and passed floats where
-          integer codebook ids were needed. The bring-up agent had to hand-write
-          tests/pcc/conftest.py to supply correct cis / bias / codes. Still synthetic, just no
-          longer invalid.
-    - Fix (components): load args.pt/kwargs.pt when a capture exists, and compare against the
-      captured output.pt so the gate becomes a golden test. Everything needed is already on disk.
-    - Fix (e2e): take the sample count from the batch dimension the test already has, or expose a
-      flag.
-    - Fix (both): make the log line state what the gate actually ran on.
+    - Two layers, and the per-component tests are in worse shape than "one prompt":
+        - end-to-end gate: a single prompt decides pass/fail for the whole port, and no option
+          widens it. One sample cannot separate a systematic error from a lucky prompt.
+        - per-component gates: the real captured inputs are never used. The pipeline captures real
+          inputs and outputs for every component, and reports that the component tests will use
+          them, but none of them do. The main input is random noise.
+        - and out of the box it is worse than noise: inputs are guessed from the argument names on
+          the component's signature, which for this model produced a wrongly shaped activation where
+          a rotary table was required, silently dropped the causal mask so the reference itself
+          became non-causal, and passed floats where integer codebook ids were needed. Those inputs
+          had to be written by hand during bring-up before the tests meant anything.
+    - Fix (components): use the captured inputs when they exist, and compare against the captured
+      output, so the gate becomes a real golden test. Everything needed is already on disk.
+    - Fix (end-to-end): take the sample count from the batch dimension the test already has, or
+      expose an option.
+    - Fix (both): make the log line say what the gate actually ran on.
 
 4. Model has two implementations of decode step, eager one without KV cache and traced one with KV
    cache:
-    - Correction to sequencing: both live in tt/pipeline.py and are written by emit-e2e, not
-      bring-up. Bring-up produces the _stubs/.
-    - A cache never reaches the component, by two independent routes:
-        - The capture holds a real 208-deep KV cache, but the harness hands the same object (no copy)
-          to the reference and then to the stub. VoxtralAttention.forward mutates it
-          (cache[cache_key] = (k, v)), so the stub would attend over a cache one position longer than
-          the golden did. So the cache is dropped, and the harness records the consequence itself:
-          "Dropping the cache instead makes the test vacuous: at S=1 with no cache the softmax is
-          over a single key, so it returns 1.0 whatever q and k are."
-        - The generated test builds arguments by name and skips unrecognised optional ones
-          (tests/pcc/test_attention.py:461). cache is not in _WELL_KNOWN_INPUTS, and
-          past_key_values / cache_position / use_cache are explicitly nulled.
-      So a cache-using and a cache-ignoring implementation score identically (0.9999). The simpler
-      one was written and graduated.
-    - Why the shipped path then recomputes: Gate 1 requires the demo to route through the graduated
-      stubs, and a cacheless stub leaves only one correct option -- hand it the whole prefix again
-      every frame.
-    - Watch out when fixing: e2e_plan.json gate_2_invoked requires tts_backbone == 1 + n_frames, so a
-      correct fix fails Gate 2 (and Gate 1) as written. Update the expected counts in the same commit
-      or a good change will look like a regression.
-    - On the traced one: decode_step is correct at any position as ordinary Python (pos is a
-      parameter). It is position-locked only when captured, because the Python int is frozen into the
-      recording -- a trace taken at position 200 always writes cache slot 200. To replay it in a loop
-      the position has to be an on-device index tensor.
-    - Impact: the optimizer ranked all 26 attempts and 11 commits against decode_step while the e2e
-      PCC gate ran run_tts. It reported -17.2%; the shipped path improved -13.2% (297.69 -> 258.26 ms
-      per audio frame), because most edits landed in shared helpers that both paths use. So the work
-      is not lost, but nothing measured what ships. For scale, our hand-written port of the same
-      model on the same board is 26.9 ms/frame.
+    - Both are created in the wiring stage, not during bring-up. Bring-up produces the components.
+    - The cache never reaches the component, for two independent reasons:
+        - the captured example does contain a real cache, but the same object is handed to the
+          reference and then to the port. The reference writes into it as it runs, so the port would
+          attend over one position more than the reference did. So the cache is dropped -- and the
+          harness records the consequence itself: with no cache the attention is over a single key
+          and returns 1.0 whatever the inputs are, which makes the test meaningless.
+        - separately, the test builds its inputs from a list of recognised argument names, and the
+          cache is not on that list, so it is always passed as null.
+      A cache-using and a cache-ignoring port therefore score identically, so the simpler one was
+      written and accepted.
+    - Why the shipped path then recomputes: the rules require the demo to run through the accepted
+      components, and a component that ignores the cache leaves only one correct option -- hand it
+      the whole prompt plus everything generated so far, on every frame.
+    - Watch out when fixing: the plan requires the backbone to run once per frame plus once for the
+      prompt, so a correct fix will fail that check, and the component-identity check as well.
+      Update the expected counts in the same change, or a good fix will look like a regression.
+    - On the traced one: it is correct at any position when called normally, because the position is
+      an argument. It is locked to a single position only once recorded, because the position is
+      baked into the recording -- a recording made at position 200 always writes slot 200. To replay
+      it in a loop the position has to live on the device as a tensor.
+    - Impact: every optimizer attempt was measured against the traced path, while the end-to-end
+      correctness gate ran the eager one. It reported a 17.2% gain; the shipped path improved 13.2%
+      (297.69 -> 258.26 ms per audio frame), because most edits landed in code both paths share. So
+      the work is not lost, but nothing measured what actually ships. For scale, our hand-written
+      port of the same model on the same board runs at 26.9 ms per frame.
     - Fix, in order:
-        1. deepcopy the captured args before handing them to each side.
-        2. add cache to the test's recognised inputs, so the component is specified against it.
-        3. let the stub carry the cache -- its signature already declares the parameter and the
-           reference already defines the contract (layer(x, cis, bias, cache)).
-        4. re-derive the plan's invocation counts (tts_backbone == 1), updating Gates 1 and 2 in the
-           same change.
-        5. for the traced path, move the position on-device as an index tensor.
-    - Also cheap and independent: assert that the perf test's hot function is reachable from the
-      demo's entry point before the first measurement. That check alone would have caught this.
+        1. copy the captured inputs before handing them to each side
+        2. add the cache to the list of recognised inputs, so the component is specified against it
+        3. let the component use the cache -- its signature already has the parameter, and the
+           reference already defines the contract
+        4. re-derive the plan's expected call counts, updating both checks in the same change
+        5. for the traced path, move the position onto the device as a tensor
+    - Also cheap and independent: check that the function the perf test measures is actually
+      reachable from the demo's entry point, before measuring. That alone would have caught this.
