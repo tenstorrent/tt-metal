@@ -214,9 +214,7 @@ def _independence_metrics(noise):
     counts = torch.bincount(winners)
     return {
         "max_r_in_sigmas": float(magnitudes.max()) / sigma,
-        "frac_pairs_over_5sigma": float(
-            (magnitudes > 5.0 * sigma).float().mean()
-        ),
+        "frac_pairs_over_5sigma": float((magnitudes > 5.0 * sigma).float().mean()),
         "distinct_winners": int((counts > 0).sum()),
         "max_multiplicity": int(counts.max()),
     }
@@ -293,13 +291,17 @@ def test_gumbel_max_argmax_agreement(device):
         generator=_generator(3),
     )
     reference = S.gumbel_max_sample(logits, temperature, noise=noise)
-    out = ttnn.to_torch(
-        TS.gumbel_max(
-            _to_device(device, logits, dtype=ttnn.bfloat16),
-            temperature,
-            _to_device(device, noise, dtype=ttnn.bfloat16),
+    out = (
+        ttnn.to_torch(
+            TS.gumbel_max(
+                _to_device(device, logits, dtype=ttnn.bfloat16),
+                temperature,
+                _to_device(device, noise, dtype=ttnn.bfloat16),
+            )
         )
-    ).squeeze(-1).to(torch.long)
+        .squeeze(-1)
+        .to(torch.long)
+    )
 
     agreement = float((out == reference).float().mean())
     assert agreement >= 0.95
@@ -311,23 +313,14 @@ def _budget_for_fraction(entropy, fraction):
         dim=-1,
     )
     index = int(fraction * entropy.shape[-1])
-    return float(
-        (
-            sorted_cumulative[0, index - 1]
-            + sorted_cumulative[0, index]
-        )
-        / 2
-    )
+    return float((sorted_cumulative[0, index - 1] + sorted_cumulative[0, index]) / 2)
 
 
 @requires_device_sfpi
 @module_device
 def test_production_entropy_budget_accept_guards_device_sort_at_canvas_256(device):
     torch.manual_seed(47463)
-    entropy = (
-        torch.rand(1, SEQUENCE_LENGTH)
-        + torch.arange(SEQUENCE_LENGTH).float() * 1e-4
-    )
+    entropy = torch.rand(1, SEQUENCE_LENGTH) + torch.arange(SEQUENCE_LENGTH).float() * 1e-4
     budget = _budget_for_fraction(entropy, 0.375)
     reference = S.entropy_budget_accept(entropy, budget, min_accept=0)
     tt_entropy = ttnn.from_torch(
@@ -383,9 +376,7 @@ def test_argmax_last_dim_matches_torch_at_served_width(device):
         device=device,
     )
     try:
-        got = ttnn.to_torch(argmax_last_dim(tt_logits)).reshape(
-            -1
-        )[:SEQUENCE_LENGTH].to(torch.int64)
+        got = ttnn.to_torch(argmax_last_dim(tt_logits)).reshape(-1)[:SEQUENCE_LENGTH].to(torch.int64)
     finally:
         tt_logits.deallocate(True)
 
