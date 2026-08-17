@@ -265,6 +265,13 @@ class NeighborhoodAttention(Module):
         # the output is born 3*dim/tp wide -- and nlp_create_qkv_heads splits it locally.
         self.colpar_qkv = tp_axis is not None and os.environ.get("DIFFVAE_DET_COLPAR_QKV") == "1"
         self.fused_qkv = self.colpar_qkv or (tp_axis is not None and os.environ.get("DIFFVAE_DET_FUSED_QKV") == "1")
+        # DIFFVAE_DET_FUSED_ROPE=1: rotate with one rotary_embedding_hf per lane instead of the
+        # nine-op halves form. The weight fold already puts q/k in HF's rotate_half convention, so
+        # this is the same arithmetic; what it needs is a full-width cos/sin rather than the half
+        # tables that form implies. Applied while still TILE, which is also what lets q and k skip
+        # the ROW_MAJOR trip the hand-rolled version required.
+        self.fused_rope = self.fused_qkv and os.environ.get("DIFFVAE_DET_FUSED_ROPE") == "1"
+        self._fused_rope_cache: dict = {}
         self.tp = int(list(mesh_device.shape)[tp_axis]) if tp_axis is not None else 1
         if self.fused_qkv:
             assert self.num_heads % self.tp == 0, f"num_heads={self.num_heads} not divisible by tp={self.tp}"
@@ -327,6 +334,28 @@ class NeighborhoodAttention(Module):
             if key in state:
                 state[key] = state[key][perm]
 
+    def _fused_rope_tables(self, cos: ttnn.Tensor, sin: ttnn.Tensor, tokens: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """``(cos, sin)`` as ``rotary_embedding_hf`` wants them: full head_dim, flat, TILE.
+
+        The halves form only needs ``head_dim/2`` columns; HF's carries each frequency twice, so
+        the table is its own halves concatenated. Cached because the stage hands the same tables to
+        every block, and this is otherwise three ops per block for a tensor that never changes.
+        """
+        key = (tokens, int(cos.shape[-1]))
+        cached = self._fused_rope_cache.get(key)
+        if cached is None:
+
+            def prepare(table: ttnn.Tensor) -> ttnn.Tensor:
+                doubled = ttnn.concat([table, table], dim=-1)
+                flat = ttnn.reshape(doubled, (1, 1, tokens, self.head_dim))
+                out = ttnn.to_layout(flat, ttnn.TILE_LAYOUT)
+                ttnn.deallocate(doubled)
+                return out
+
+            cached = (prepare(cos), prepare(sin))
+            self._fused_rope_cache[key] = cached
+        return cached
+
     def forward(
         self,
         x: ttnn.Tensor,
@@ -336,7 +365,6 @@ class NeighborhoodAttention(Module):
         sin: ttnn.Tensor,
         device_plan: NA3DDevicePlan,
     ) -> ttnn.Tensor:
-        """``x`` is ``(tokens, dim)`` in TILE layout; returns the same shape. **Consumes** ``x``."""
         t, h, w = dims
         tokens = t * h * w
         heads = self.heads_local
@@ -365,6 +393,13 @@ class NeighborhoodAttention(Module):
         k = self.k_norm(k)
         q = ttnn.multiply(q, self.scale)
 
+        if self.fused_rope:
+            # Rotate here, before the volume reshape: the op wants TILE, and q/k are still in the
+            # (1, heads, tokens, head_dim) form create_heads emitted.
+            cos_full, sin_full = self._fused_rope_tables(cos, sin, tokens)
+            q = _consume(q, ttnn.experimental.rotary_embedding_hf, cos_full, sin_full)
+            k = _consume(k, ttnn.experimental.rotary_embedding_hf, cos_full, sin_full)
+
         # Untilize before splitting out the head axis, never after. TILE rounds both of the last
         # two dims up to 32, so a trailing (num_heads, head_dim) of (4, 64) is padded 8x: at
         # 1920x1088 that turns a 1.35 GB activation into a 10.83 GB allocation, three times over
@@ -380,8 +415,9 @@ class NeighborhoodAttention(Module):
             return ttnn.reshape(part, shape)
 
         q, k, v = (to_volume(part) for part in (q, k, v))
-        q = apply_rope(q, cos, sin)
-        k = apply_rope(k, cos, sin)
+        if not self.fused_rope:
+            q = apply_rope(q, cos, sin)
+            k = apply_rope(k, cos, sin)
 
         if self.na3d_backend == "op_sp_sharded":
             # Full-stage SP: x/q/k/v are this chip's T-slice, so `dims` here is local. The attention
