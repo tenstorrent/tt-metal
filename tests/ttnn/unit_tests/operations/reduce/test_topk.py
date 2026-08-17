@@ -1011,3 +1011,39 @@ def test_topk_large_k_routing_engages(device):
     ttnn.graph.begin_graph_capture()
     ttnn.topk(ttnn_input, 32, dim=-1, largest=True, sorted=True)
     assert not ran_large_indices(ttnn.graph.end_graph_capture())
+
+
+@pytest.mark.parametrize(
+    "W, k",
+    (
+        (64, 4),
+        (64, 8),
+        (64, 16),
+        (64, 32),
+        (64, 64),
+        (8192, 32),  # W >= 8192 -> multi-core path
+        (8192, 64),
+    ),
+)
+@pytest.mark.parametrize("largest", [True, False])
+def test_topk_stable_index_parity(W, k, largest, device):
+    """stable=True must break exact-value ties by lowest original index, matching torch's
+    stable ordering bit-exactly for both values and indices (no tie tolerance)."""
+    torch.manual_seed(0)
+    shape = [1, 1, 32, W]
+    # Only 8 distinct values across W elements per row -> many exact ties in every row.
+    input = torch.randint(0, 8, shape).to(torch.bfloat16)
+
+    # torch.topk is NOT stable, so derive the golden from a stable argsort instead.
+    order = torch.argsort(input, dim=-1, descending=largest, stable=True)[..., :k]
+    golden_values = torch.gather(input, -1, order)
+
+    ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    # k < 32 is padded up to a tile-aligned k internally and sliced back to k on output.
+    ttnn_values, ttnn_indices = ttnn.topk(ttnn_input, k, dim=-1, largest=largest, sorted=True, stable=True)
+
+    ttnn_torch_values = ttnn.to_torch(ttnn_values)
+    ttnn_torch_indices = ttnn.to_torch(ttnn_indices).to(torch.int64)
+
+    assert_equal(golden_values, ttnn_torch_values)
+    assert_equal(order, ttnn_torch_indices)
