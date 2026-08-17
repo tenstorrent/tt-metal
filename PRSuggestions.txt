@@ -19,17 +19,18 @@
       a transformers-format tokenizer converted from the native one. It took us several days.
 
 2. Fix the model bring up from local path
-    - Local path bring-up uses different logic from a Hub model id, and the difference surfaces late
+    - Local path bring-up uses different logic from a Hub model, and the difference surfaces late
       with a misleading diagnosis. Three instances:
-        - F1: a local model dir gets a degraded probe; the run dies three stages later and the
+        - A local model dir gets a degraded probe; the run dies three stages later and the
           diagnosis points somewhere else.
-        - F9: optimize <local dir> is mistaken for a demo dir, which makes optimize unusable by
+        - optimize <local dir> is mistaken for a demo dir, which makes optimize unusable by
           model id.
-        - F10: the workaround for F9 (pass the demo dir) loses the model id, so optimize cannot build
-          its own correctness gate even though it had already written one. We had to pass --pcc-test.
+        - The workaround for that (passing the demo dir instead) loses the model id, so optimize
+          cannot build its own correctness gate even though it had already written one. We had to
+          pass --pcc-test explicitly.
     - Fix: treat a local directory as a first-class model id throughout, and carry it alongside the
       demo dir rather than instead of it.
-    - Related, F21: trust_remote_code is an allowlist of exactly one model
+    - Related: trust_remote_code is an allowlist of exactly one model
       (base_model_name in ["Phi-3-mini-128k-instruct"]). A custom-architecture checkpoint clears
       preflight and static analysis, then fails at execution with a message blaming the repository
       rather than the loader. Fix: decide from the checkpoint -- auto_map in config.json is itself
@@ -37,9 +38,9 @@
 
 3. Support multiple input prompts for the tests
     - Two layers here, and the component tests are worse than "one prompt":
-        - e2e gate (F28): one prompt decides PASS/FAIL for the whole port (E2E_ALL_TASKS=0), and no
+        - e2e gate: one prompt decides PASS/FAIL for the whole port (E2E_ALL_TASKS=0), and no
           flag widens it. One sample cannot separate a systematic error from a lucky prompt.
-        - per-component gates (F36): no prompt at all -- they use torch.randn. Preflight captures
+        - per-component gates: no prompt at all -- they use torch.randn. Preflight captures
           real IO for every component (43 MB each for attention and decoder_layer, including the
           reference output.pt) and prints "per-component PCC tests will use real inputs". The
           generated tests contain no torch.load at all: 0 hits across all 7 files. Inputs are
@@ -61,7 +62,7 @@
           (cache[cache_key] = (k, v)), so the stub would attend over a cache one position longer than
           the golden did. So the cache is dropped, and the harness records the consequence itself:
           "Dropping the cache instead makes the test vacuous: at S=1 with no cache the softmax is
-          over a single key, so it returns 1.0 whatever q and k are." (F27)
+          over a single key, so it returns 1.0 whatever q and k are."
         - The generated test builds arguments by name and skips unrecognised optional ones
           (tests/pcc/test_attention.py:461). cache is not in _WELL_KNOWN_INPUTS, and
           past_key_values / cache_position / use_cache are explicitly nulled.
