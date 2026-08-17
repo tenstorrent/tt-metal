@@ -11,17 +11,6 @@
 
 # For max allowed timeout refer to .github/time_budget.yaml
 
-- name: t3k_DiT_Motif_model_perf_tests
-  cmd: run_t3000_motif_tests
-  skus:
-    wh_llmbox_perf:
-      timeout: 15
-  owner_id: U08TED0JM9D # Samuel Adesoye
-  team: models
-  model-name: motif
-  model-type: DiT
-  save-perf-data: true
-
 - name: t3k_DiT_QwenImage_model_perf_tests
   cmd: run_t3000_qwenimage_tests
   skus:
