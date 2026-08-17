@@ -22,8 +22,8 @@
 //
 // The arrival semaphore is a global semaphore, not a program-local one. Program-local
 // semaphores are re-initialized at every launch, which would race a peer that is one
-// program ahead; a global semaphore is written once and reset here, in kernel, after
-// the wait.
+// program ahead; a global semaphore is written once and consumed here, in kernel, by
+// subtracting what this launch waited for.
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/circular_buffer.h"
@@ -171,8 +171,12 @@ void kernel_main() {
             (uint32_t)inc_headers[slot], packet_header_size_bytes);
     }
 
-    noc_semaphore_wait(arrival_sem_ptr, kPeers);
-    noc_semaphore_set(arrival_sem_ptr, 0);
+    // Consumed by subtraction, not by a store. A peer that is already sending for the
+    // next read site can increment between the load and the store of a plain reset, and
+    // that increment is then lost: the next wait is one arrival short of a count no one
+    // will send again. Subtracting atomically carries any early arrival forward instead.
+    noc_semaphore_wait_min(arrival_sem_ptr, kPeers);
+    noc_semaphore_inc(get_noc_addr(arrival_sem_addr), uint32_t{0} - kPeers);
 
     fabric_connection.close();
 
