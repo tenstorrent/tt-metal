@@ -12,7 +12,10 @@
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "dispatch/kernel_config/relay_mux.hpp"
+#include <enchantum/enchantum.hpp>
+#include <tt_stl/fmt.hpp>
 #include <set>
+#include <string>
 
 namespace tt::tt_fabric {
 

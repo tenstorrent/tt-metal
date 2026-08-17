@@ -676,6 +676,19 @@ FORCE_INLINE constexpr size_t get_downstream_edm_interface_index(eth_chan_direct
     return map_downstream_direction_to_compact_index(downstream_direction);
 }
 
+// Whether this router actually instantiates the downstream slot a direction maps to. The compact
+// index is a property of the direction pair alone, so it is fixed regardless of how many slots the
+// router was built with, and a narrow router leaves the higher ones absent.
+//
+// Express makes this a live question on every arm rather than just the last one. X_RING_ONLY leaves
+// an E/W-facing router a single downstream (its opposite), so slots 1 and 2 do not exist there
+// either; before express the only narrow shape was the 3-wide cardinal router, whose sole missing
+// slot was the Z arm at index 3.
+template <size_t DOWNSTREAM_EDM_SIZE, eth_chan_directions DIRECTION>
+constexpr bool express_arm_is_realizable() {
+    return get_downstream_edm_interface_index<DIRECTION>() < DOWNSTREAM_EDM_SIZE;
+}
+
 template <typename DownstreamSenderT, eth_chan_directions DIRECTION, size_t DOWNSTREAM_EDM_SIZE>
 FORCE_INLINE bool check_downstream_has_space(
     std::array<DownstreamSenderT, DOWNSTREAM_EDM_SIZE>& downstream_edm_interfaces) {
@@ -999,25 +1012,41 @@ FORCE_INLINE bool admit_express_combo(
         ok = !ld || local_relay_interface.template edm_has_space_for_packet<ENABLE_RISC_CPU_DATA_CACHE>();
     }
     if constexpr ((KEY >> 0) & 1) {
-        ok = ok && downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, dirs[0]>(
-                       downstream_edm_interfaces, local_relay_interface);
+        if constexpr (express_arm_is_realizable<DOWNSTREAM_EDM_SIZE, dirs[0]>()) {
+            ok = ok && downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, dirs[0]>(
+                           downstream_edm_interfaces, local_relay_interface);
+        } else {
+            ASSERT(false);
+            ok = false;
+        }
     }
     if constexpr ((KEY >> 1) & 1) {
-        ok = ok && downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, dirs[1]>(
-                       downstream_edm_interfaces, local_relay_interface);
+        if constexpr (express_arm_is_realizable<DOWNSTREAM_EDM_SIZE, dirs[1]>()) {
+            ok = ok && downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, dirs[1]>(
+                           downstream_edm_interfaces, local_relay_interface);
+        } else {
+            ASSERT(false);
+            ok = false;
+        }
     }
     if constexpr ((KEY >> 2) & 1) {
-        ok = ok && downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, dirs[2]>(
-                       downstream_edm_interfaces, local_relay_interface);
+        if constexpr (express_arm_is_realizable<DOWNSTREAM_EDM_SIZE, dirs[2]>()) {
+            ok = ok && downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, dirs[2]>(
+                           downstream_edm_interfaces, local_relay_interface);
+        } else {
+            ASSERT(false);
+            ok = false;
+        }
     }
     if constexpr ((KEY >> 3) & 1) {
-        if constexpr (DOWNSTREAM_EDM_SIZE >= 4) {
+        if constexpr (express_arm_is_realizable<DOWNSTREAM_EDM_SIZE, dirs[3]>()) {
             ok = ok && downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, dirs[3]>(
                            downstream_edm_interfaces, local_relay_interface);
         } else {
-            // 3-wide VC0 (no express links in this fabric): slot 3 is the Z arm for cardinal-facing
-            // routers and has no downstream channel. A key selecting it means the host packed a Z
-            // action into a table for a mesh that has no Z edges.
+            // The arm names a downstream this router does not have: a 3-wide cardinal router has no
+            // Z slot, and an X_RING_ONLY router has only its opposite. A key selecting one means the
+            // host packed an action the router cannot realize, so refuse admission per the invalid
+            // action policy rather than indexing past the array.
             ASSERT(false);
             ok = false;
         }
@@ -1038,34 +1067,46 @@ FORCE_INLINE void forward_express_combo(
     uint8_t transaction_id) {
     constexpr auto dirs = IndexedMeshRoutingFields::fwd_dirs<static_cast<eth_chan_directions>(my_direction)>();
     if constexpr ((KEY >> 0) & 1) {
-        constexpr auto edm_index = get_downstream_edm_interface_index<dirs[0]>();
-        forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
-            packet_start,
-            payload_size_bytes,
-            cached_routing_fields,
-            downstream_edm_interfaces[edm_index],
-            transaction_id);
+        if constexpr (express_arm_is_realizable<DOWNSTREAM_EDM_SIZE, dirs[0]>()) {
+            constexpr auto edm_index = get_downstream_edm_interface_index<dirs[0]>();
+            forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
+                packet_start,
+                payload_size_bytes,
+                cached_routing_fields,
+                downstream_edm_interfaces[edm_index],
+                transaction_id);
+        } else {
+            ASSERT(false);
+        }
     }
     if constexpr ((KEY >> 1) & 1) {
-        constexpr auto edm_index = get_downstream_edm_interface_index<dirs[1]>();
-        forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
-            packet_start,
-            payload_size_bytes,
-            cached_routing_fields,
-            downstream_edm_interfaces[edm_index],
-            transaction_id);
+        if constexpr (express_arm_is_realizable<DOWNSTREAM_EDM_SIZE, dirs[1]>()) {
+            constexpr auto edm_index = get_downstream_edm_interface_index<dirs[1]>();
+            forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
+                packet_start,
+                payload_size_bytes,
+                cached_routing_fields,
+                downstream_edm_interfaces[edm_index],
+                transaction_id);
+        } else {
+            ASSERT(false);
+        }
     }
     if constexpr ((KEY >> 2) & 1) {
-        constexpr auto edm_index = get_downstream_edm_interface_index<dirs[2]>();
-        forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
-            packet_start,
-            payload_size_bytes,
-            cached_routing_fields,
-            downstream_edm_interfaces[edm_index],
-            transaction_id);
+        if constexpr (express_arm_is_realizable<DOWNSTREAM_EDM_SIZE, dirs[2]>()) {
+            constexpr auto edm_index = get_downstream_edm_interface_index<dirs[2]>();
+            forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
+                packet_start,
+                payload_size_bytes,
+                cached_routing_fields,
+                downstream_edm_interfaces[edm_index],
+                transaction_id);
+        } else {
+            ASSERT(false);
+        }
     }
     if constexpr ((KEY >> 3) & 1) {
-        if constexpr (DOWNSTREAM_EDM_SIZE >= 4) {
+        if constexpr (express_arm_is_realizable<DOWNSTREAM_EDM_SIZE, dirs[3]>()) {
             constexpr auto edm_index = get_downstream_edm_interface_index<dirs[3]>();
             forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
                 packet_start,
@@ -1074,9 +1115,9 @@ FORCE_INLINE void forward_express_combo(
                 downstream_edm_interfaces[edm_index],
                 transaction_id);
         } else {
-            // 3-wide VC0 (no express links in this fabric): slot 3 is the Z arm for cardinal-facing
-            // routers and has no downstream channel. A key selecting it means the host packed a Z
-            // action into a table for a mesh that has no Z edges.
+            // The arm names a downstream this router does not have: a 3-wide cardinal router has no
+            // Z slot, and an X_RING_ONLY router has only its opposite. Admission already refused the
+            // key, so reaching here means the two dispatches disagree.
             ASSERT(false);
         }
     }
@@ -2166,8 +2207,19 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
                         const auto boundary_dir = static_cast<eth_chan_directions>(
                             routing_table.inter_mesh_direction_table.get_original_direction(
                                 packet_header->dst_start_mesh_id));
-                        if (boundary_dir >= eth_chan_directions::COUNT ||
-                            boundary_dir == static_cast<eth_chan_directions>(my_direction)) {
+                        // The boundary direction is chosen per destination mesh, so unlike a decoded
+                        // action it is not constrained to the arms this router was built with: any
+                        // receiver can be the one an exit-bound packet arrives on. A router whose
+                        // downstream set does not reach the boundary cannot forward it, and indexing
+                        // the compact array anyway would read past its end and admit on whatever
+                        // followed. Builder wiring is what guarantees the slot exists (contract 4.4
+                        // keeps an INTERMESH egress wired even where dimension order unwires the
+                        // intramesh ones); this is the invariant check, not the mechanism.
+                        const bool boundary_dir_is_addressable =
+                            boundary_dir < eth_chan_directions::COUNT &&
+                            boundary_dir != static_cast<eth_chan_directions>(my_direction) &&
+                            get_downstream_edm_interface_index(boundary_dir) < downstream_edm_interfaces.size();
+                        if (!boundary_dir_is_addressable) {
                             ASSERT(false);
                             can_send_to_all_local_chip_receivers = false;
                         } else {

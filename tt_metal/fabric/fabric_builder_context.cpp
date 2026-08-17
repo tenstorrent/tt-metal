@@ -94,13 +94,25 @@ void FabricBuilderContext::compute_max_channel_counts() {
         any_mesh_uses_express = any_mesh_uses_express || control_plane.express_routing_enabled(mesh_id);
     }
 
+    // The families are named by the one chip fact that distinguishes them: what the Z port is for.
+    // Every cardinal is an ordinary same-mesh edge in all of them, and the shape reads only this
+    // router's own capability and the Z role off the set.
+    const auto chip_with_z = [](std::optional<EdgeCapability> z_capability) {
+        PerDirectionCapabilities caps;
+        for (const auto direction :
+             {RoutingDirection::N, RoutingDirection::E, RoutingDirection::S, RoutingDirection::W}) {
+            caps.at(direction) = EdgeCapability::INTRAMESH_CARDINAL;
+        }
+        caps.at(RoutingDirection::Z) = z_capability;
+        return caps;
+    };
+
     // Always have MESH routers
     bool intermesh_vc_config_active = intermesh_vc_config_.requires_vc1 || intermesh_vc_config_.requires_vc2;
     possible_shapes.push_back(router_vc_shape(
         topology,
         RoutingDirection::N,
-        EdgeCapability::INTRAMESH_CARDINAL,
-        ZPortRole::NONE,
+        chip_with_z(std::nullopt),
         any_mesh_uses_express,
         intermesh_vc_config_active ? &intermesh_vc_config_ : nullptr));
 
@@ -116,18 +128,18 @@ void FabricBuilderContext::compute_max_channel_counts() {
     const bool has_intermesh_z_boundary =
         intermesh_vc_config_.requires_vc1 && fabric_has_intermesh_z_edge(control_plane.get_mesh_graph());
     if (has_intermesh_z_boundary) {
+        const auto boundary_chip = chip_with_z(EdgeCapability::INTERMESH);
         possible_shapes.push_back(router_vc_shape(
             topology,
             RoutingDirection::Z,
-            EdgeCapability::INTERMESH,
-            ZPortRole::INTERMESH_BOUNDARY,
+            boundary_chip,
             any_mesh_uses_express,  // inert for the boundary family, but this is the fabric's state
             &intermesh_vc_config_));
+        // Mesh routers on boundary chips carry the from-Z slot.
         possible_shapes.push_back(router_vc_shape(
             topology,
             RoutingDirection::N,
-            EdgeCapability::INTRAMESH_CARDINAL,
-            ZPortRole::INTERMESH_BOUNDARY,  // mesh routers on boundary chips carry the from-Z slot
+            boundary_chip,
             any_mesh_uses_express,
             intermesh_vc_config_active ? &intermesh_vc_config_ : nullptr));
     }
