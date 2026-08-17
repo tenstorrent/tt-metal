@@ -1,6 +1,45 @@
 # TTNNWhere compiler-flow A/B status
 
-## Current gate
+## Update 2026-08-17: condition-mode unification (Lane AG, after the silicon adjudication)
+
+The Lane AD silicon adjudication
+(`~/sfpi-uplift/where-adjudication-20260817/verdicts/VERDICT.md`, BH p150,
+reset-first, two independent resets) split the WP10 planner-formed shapes:
+
+- separator-kept 4-slot calendar (misc `0x706`, the fp16b/Float32 rows as then
+  written): **silicon-RED deterministically** while the byte-identical binaries
+  pass CRAQ — a generic-sim delivery mis-model around the TTINCRWC barrier
+  (sim owner item), not a device artifact;
+- compact 3-slot separator-absorbed calendar (misc `0x770`, Int32 rows):
+  **silicon-GREEN in both delivery arms** (RISC-pushed and replay-wrapped).
+
+Per the verdict's remediation path, the generated selector's condition is now
+loaded **bitwise** (`DataLayout::U16` for fp16b, `U32` for Float32) and tested
+`!= 0` — the handwritten kernel's own protocol (`ckernel_sfpu_where.h` loads
+the condition raw LO16/INT32 and predicates on `SFPSETCC LREG_EQ0`). The
+earlier paragraph below ("floating conditions are compared numerically,
+preserving `-0 == 0`") describes the pre-unification selector and no longer
+holds: the unified selector treats `-0.0` as true, exactly as the handwritten
+kernel always has. Equivalence proof (exhaustive over all 65536 bf16 condition
+patterns + fp32 pattern classes + every suite stimulus class,
+`~/sfpi-uplift/laneAG-evidence-20260817/`): `-0.0` is the **only** pattern
+distinguishing the two protocols, and no suite stimulus (uniform `[0,1)`,
+exact 0/1 patterns) can produce it — golden results are unchanged.
+
+With every load and the store in one launch-sourced mod0, the planner now
+derives the compact `0x770` calendar on **all three formats** (dump-verified,
+P and R arms), and `-mtt-tensix-macro-planner-replay` wraps the fp16b/Float32
+rows too (R != P there now). Verification on the adjudication toolchain pin
+(cc1plus `a45dbca55824…`): BH+WH CRAQ 36/36 (both flag states, 9 where nodes,
+bit-exact-NaN), and one flocked BH silicon mixed-case PASS per format
+(fp16b / Float32 / Int32, planner-ON). Baseline policy per the verdict: the
+`where:sem_on` p150 cells book the semantic-OFF-class 251.5 (never formed-ON
+numbers) until the compact path books its own cells through the new
+impl-parameterized Int32 profile node
+(`test_sfpu_ternary.py::test_ttnn_where_int32_device_profile`) and the
+now-compact fp16b profile node.
+
+## Current gate (2026-08-15 record, pre-unification)
 
 Blackhole correctness is green for both the production handwritten selector
 and the test-only canonical SFPI selector.  The generated selector is not yet a
