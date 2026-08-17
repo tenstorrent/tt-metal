@@ -51,15 +51,16 @@ static_assert(DRAIN_SINK_OFF < PROD_BUF_OFF, "drain sink overlaps the token ring
 // receiver eRisc. Everything else goes to forwardign buffer. Op manages when will sender cores send
 // "home-made" tokens and when will they send tokens from the forwarding buffer.
 //
-uint32_t fwd_pages_per_chunk(
-    uint32_t seq_len_per_chip,
-    uint32_t num_experts_per_tok,
-    uint32_t num_dispatch_groups,
-    uint32_t ring_extent,
-    uint32_t num_links) {
-    const uint32_t denom = num_dispatch_groups * ring_extent * num_links;
-    const uint32_t mean = (seq_len_per_chip * num_experts_per_tok + denom - 1) / denom;
-    return 4 * mean + 1;
+// Worst case for one chunk, not an estimate: a chunk carries the destination chip's tokens that were routed
+// to experts hosted on the source chip. If every one of the destination's seq_len_per_chip tokens sent all
+// num_experts_per_tok of its copies to experts on that one source chip, the chunk holds all of them. Plus one
+// page for the sentinel that terminates it.
+//
+// Unreachable for every chunk at once — a destination's tokens cannot all be on one source chip and also on
+// another — so provisioning every chunk for it is deliberately wasteful. A later change makes the buffer
+// dense and this bound stops costing anything.
+uint32_t fwd_pages_per_chunk(uint32_t seq_len_per_chip, uint32_t num_experts_per_tok) {
+    return seq_len_per_chip * num_experts_per_tok + 1;
 }
 
 L1Layout compute_l1_layout(
@@ -177,12 +178,7 @@ struct ForwardingBuffer {
 ForwardingBuffer allocate_forwarding_buffer(
     ttnn::MeshDevice* mesh, const CombineFabric2dParams& args, const CombineFabric2dInputs& tensor_args) {
     ForwardingBuffer fwd;
-    fwd.pages_per_chunk = fwd_pages_per_chunk(
-        args.seq_len_per_chip,
-        args.num_experts_per_tok,
-        num_dispatch_groups(args, tensor_args),
-        ring_extent(args),
-        args.num_links);
+    fwd.pages_per_chunk = fwd_pages_per_chunk(args.seq_len_per_chip, args.num_experts_per_tok);
     const uint32_t page_bytes = token_size_bytes(tensor_args) + cmbf2d::FORWARDING_METADATA_SIZE;
     TT_FATAL(
         page_bytes % 64 == 0, "combine_fabric2d: forwarding page {} B must be 64-byte aligned for DRAM", page_bytes);
