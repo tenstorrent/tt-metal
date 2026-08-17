@@ -18,10 +18,19 @@
 // combination reachable: it is primarily a COMPILE-time assertion. If the extraction
 // regresses (either header redeclaring the helper locally), this file stops building.
 //
-// It also runs, so the shared helper is exercised rather than merely compiled: the math
-// thread calls set_dst_write_addr_offset to rebase the Dst write pointer, restores it to
-// 0, and then a plain datacopy must still land correctly. A helper that left the offset
-// dirty would corrupt that copy.
+// It also runs, which proves the combined translation unit executes rather than merely
+// building: a coexistence regression that wedged the math thread would surface as a hang
+// or a corrupted datacopy. The helper is called below so it is code-generated rather than
+// only parsed.
+//
+// What the runtime half does NOT do is validate the offset the helper writes. The datacopy
+// used to read DEST back is _llk_math_eltwise_unary_datacopy_, which itself calls
+// math::set_dst_write_addr<Tile32x32, SrcRegs>(dst_index) (cmath_common.h) -- the same
+// DEST_TARGET_REG_CFG_MATH_Offset_ADDR32 the helper writes -- before anything touches DEST.
+// So whatever offset the helper left is overwritten, and the copy lands identically whether
+// the helper is correct, writes garbage, or is deleted. Measuring the offset's effect needs
+// a DEST consumer that does not reprogram that register first; the helper is covered in its
+// real context by the topk_xl and deepseek_top32_rm kernels themselves.
 //
 // Scope note: the two families' inits are deliberately NOT both called. Measured on BH
 // p100a, calling _top32_rm_init_() and _topk_xl_init_<K, fused>() in one kernel hangs the
@@ -98,12 +107,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_math_wait_for_dest_available_<DST_SYNC>();
 
-    // Exercise the shared helper, then put the Dst write offset back. The datacopy below
-    // must be unaffected; a helper that leaked a non-zero offset would misplace it.
+    // Force the shared helper to be code-generated -- it is the symbol the extraction is
+    // about -- and put the Dst write offset back. Per the note at the top of this file this
+    // is a compile/codegen assertion, not a runtime one: the datacopy below reprograms the
+    // offset register itself, so no golden check downstream can observe this value.
+    // 2 Dst rows is the column-group flip topk_xl performs.
+    static constexpr std::uint32_t SORT_DST_WRITE_OFFSET_ROWS = 2;
     _llk_math_eltwise_unary_sfpu_params_(
         []
         {
-            ckernel::sfpu::set_dst_write_addr_offset(SORT_DST_WRITE_OFFSET);
+            ckernel::sfpu::set_dst_write_addr_offset(SORT_DST_WRITE_OFFSET_ROWS);
             ckernel::sfpu::set_dst_write_addr_offset(0);
         },
         0 /* dst_index */,
