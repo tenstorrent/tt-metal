@@ -167,6 +167,18 @@ static_assert(
     "Express mesh shape requires a larger 2D route buffer than the packet header provides.");
 #endif
 
+// Defined in the indexed codec section below; the express worker path delegates to it.
+inline std::uint8_t fabric_set_indexed_mcast_route(
+    volatile tt_l1_ptr HybridMeshPacketHeader* packet_header,
+    uint16_t dst_dev_id,
+    uint16_t dst_mesh_id,
+    uint16_t e_num_hops,
+    uint16_t w_num_hops,
+    uint16_t n_num_hops,
+    uint16_t s_num_hops,
+    uint8_t mesh_y_size,
+    uint8_t mesh_x_size);
+
 template <bool called_from_router = false>
 void fabric_set_mcast_route(
     volatile tt_l1_ptr HybridMeshPacketHeader* packet_header,
@@ -195,10 +207,27 @@ void fabric_set_mcast_route(
     }
 #if defined(FABRIC_EXPRESS_ENABLED)
     if constexpr (!called_from_router) {
-        // Same-mesh 2D mcast has no indexed encode yet, and the indexed kernel decode would
+        // Same-mesh 2D mcast encodes through the reverse tree; the indexed kernel decode would
         // misread a legacy spine/branch hop program. Remote-mesh carriers already returned above
         // (that leg is unicast-style and takes the indexed path).
-        ASSERT(false);
+        //
+        // Header-only API: the caller sends through a single connection it chose itself, so a
+        // multi-output root would reach one subtree and silently drop the rest. Callers that can
+        // launch every output go through the source multi-inject helper instead, which resolves a
+        // slot per output by direction tag (§7.3.1).
+        const std::uint8_t root_action = fabric_set_indexed_mcast_route(
+            packet_header,
+            dst_dev_id,
+            dst_mesh_id,
+            e_num_hops,
+            w_num_hops,
+            n_num_hops,
+            s_num_hops,
+            FABRIC_EXPRESS_MESH_Y_SIZE,
+            FABRIC_EXPRESS_MESH_X_SIZE);
+        const std::uint8_t root_outputs = root_action & IndexedMeshRoutingFields::ACTION_ETH_MASK;
+        ASSERT((root_outputs & (root_outputs - 1)) == 0);
+        return;
     }
 #endif
 
@@ -429,12 +458,100 @@ inline bool fabric_set_indexed_unicast_route(
     return true;
 }
 
+// Multicast producer (§7.3). Encodes the canonical §5.6 maps for a rectangle expressed as the
+// client's N/S/E/W extents around an anchor, using the reverse trees this chip carries in its own
+// vector table.
+//
+// A remote final mesh takes the unicast-style carrier leg instead (§5.10, "worker mcast with foreign
+// final mesh"): maps toward this mesh's temporary exit, with dst_start_node_id holding the final
+// range_anchor and mcast_params_64 holding the extents, both retained untouched until the
+// destination mesh's landing rebuilds the tree there. No fanout begins on this side of the boundary,
+// so the carrier is indistinguishable from a unicast until it lands.
+//
+// Returns the encode root's own action byte, which is what §7.3.1 source multi-inject resolves
+// connection slots from. Express routing makes multi-output roots ordinary rather than exceptional
+// -- a single northward range can leave the source on both N and Z -- so a caller holding one
+// connection must check the count rather than assume it. The carrier leg always returns a single
+// output, being unicast-style.
+inline std::uint8_t fabric_set_indexed_mcast_route(
+    volatile tt_l1_ptr HybridMeshPacketHeader* packet_header,
+    uint16_t dst_dev_id,
+    uint16_t dst_mesh_id,
+    uint16_t e_num_hops,
+    uint16_t w_num_hops,
+    uint16_t n_num_hops,
+    uint16_t s_num_hops,
+    uint8_t mesh_y_size,
+    uint8_t mesh_x_size) {
+    tt_l1_ptr routing_l1_info_t* routing_table = reinterpret_cast<tt_l1_ptr routing_l1_info_t*>(ROUTING_TABLE_BASE);
+    ASSERT((uint32_t)mesh_y_size + mesh_x_size <= sizeof(packet_header->route_buffer));
+
+    packet_header->dst_start_node_id = ((uint32_t)dst_mesh_id << 16) | (uint32_t)dst_dev_id;
+    packet_header->mcast_params_64 = ((uint64_t)s_num_hops << 48) | ((uint64_t)n_num_hops << 32) |
+                                     ((uint64_t)w_num_hops << 16) | ((uint64_t)e_num_hops);
+    packet_header->is_mcast_active = 0;
+    packet_header->routing_fields.value = 0;
+
+    const uint32_t root_y = routing_table->my_mesh_coord_y;
+    const uint32_t root_x = routing_table->my_mesh_coord_x;
+
+    if (dst_mesh_id < MAX_NUM_MESHES && routing_table->my_mesh_id != dst_mesh_id) {
+        // Carrier leg. widen_indexed_route_to_chip reads dst_start_node_id nowhere, so pointing it at
+        // the exit chip leaves the retained final anchor intact -- which §4.5 requires, a temporary
+        // exit living only in the installed maps.
+        auto exit_node_table = reinterpret_cast<tt_l1_ptr uint8_t*>(EXIT_NODE_TABLE_BASE);
+        const uint16_t exit_dev_id = exit_node_table[dst_mesh_id];
+        ASSERT(exit_dev_id != (uint16_t)eth_chan_magic_values::INVALID_ROUTING_TABLE_ENTRY);
+        // A worker sitting on the exit chip itself would get maps that decode to LOCAL_DELIVER with no
+        // eth bits, and the caller iterates eth bits to decide where to inject -- so it would inject
+        // nowhere and drop the packet silently. Leaving the mesh from here needs the INTERMESH egress
+        // connection, which the source-injection path does not model, so say so rather than drop.
+        ASSERT(exit_dev_id != (uint16_t)((uint32_t)root_y * mesh_x_size + root_x));
+        widen_indexed_route_to_chip(
+            packet_header, routing_table->indexed_route_vectors.data, exit_dev_id, mesh_y_size, mesh_x_size);
+        // Same fall-through as the router's decode: the Y byte wins when nonzero, and at the source's
+        // own row it widens to STOP whenever the exit shares that row, leaving the X byte to carry it.
+        const std::uint8_t action_y = packet_header->route_buffer[root_y];
+        return action_y != 0 ? action_y : packet_header->route_buffer[mesh_y_size + root_x];
+    }
+
+    // Encoded into a local buffer and copied, rather than written through the volatile header, so the
+    // shared host/device encoder needs no volatile-qualified variant of itself.
+    constexpr uint32_t route_buffer_bytes = sizeof(HybridMeshPacketHeader::route_buffer);
+    std::uint8_t maps[route_buffer_bytes];
+    encode_indexed_mcast_maps(
+        maps,
+        routing_table->indexed_route_vectors.data,
+        mesh_y_size,
+        mesh_x_size,
+        root_y,
+        root_x,
+        n_num_hops,
+        s_num_hops,
+        e_num_hops,
+        w_num_hops);
+
+    const uint32_t map_bytes = (uint32_t)mesh_y_size + mesh_x_size;
+    for (uint32_t i = 0; i < map_bytes; ++i) {
+        packet_header->route_buffer[i] = maps[i];
+    }
+
+    // The root action is returned rather than acted on: how many outputs a caller can launch is a
+    // property of the connections it holds, not of the encoding, so the count check belongs at the
+    // call site. Zero outputs is legal and means deliver locally only (§7.3.1).
+    return maps[root_y];
+}
+
 // Intermesh landing encode. Runs on the boundary-facing router BEFORE ordinary decode: the packet
 // still carries source-mesh maps, so they are re-installed from THIS mesh's own vector table.
-// Intermediate landing widens unicast-style maps toward this mesh's next exit for the final mesh
-// (exit_node_table); destination landing widens to the retained final chip. dst_start_node_id and
-// mcast_params_64 are always preserved — temporary exits live only in the installed maps and must
-// never overwrite the final destination.
+// Three cases (§5.10):
+//
+//   intermediate mesh          unicast-style maps toward this mesh's next exit (exit_node_table)
+//   destination mesh, unicast  widen to the retained final chip
+//   destination mesh, mcast    rebuild the multicast maps through T(landing)
+//
+// dst_start_node_id and mcast_params_64 are read but never written — temporary exits live only in
+// the installed maps and must never overwrite the final destination.
 inline void fabric_set_indexed_intermesh_landing_route(
     volatile tt_l1_ptr HybridMeshPacketHeader* packet_header,
     const routing_l1_info_t& routing_table,
@@ -443,20 +560,59 @@ inline void fabric_set_indexed_intermesh_landing_route(
     const uint16_t final_mesh_id = packet_header->dst_start_mesh_id;
     // Bounds before exit_node_table indexing.
     ASSERT(final_mesh_id < MAX_NUM_MESHES);
-    uint16_t target_dev_id;
     if (final_mesh_id != routing_table.my_mesh_id) {
         // Intermediate landing: this mesh's next exit toward the final mesh. Multicast-safe as-is:
-        // anchor/extents stay retained and no target-range fanout begins at an intermediate mesh.
-        target_dev_id = routing_table.exit_node_table[final_mesh_id];
-        ASSERT(target_dev_id != (uint16_t)eth_chan_magic_values::INVALID_ROUTING_TABLE_ENTRY);
-    } else {
-        // Destination landing: widen to the final destination. Destination-landing multicast is not
-        // implemented; producers emit unicast only, so a multicast carrier here fail-stops.
-        ASSERT(packet_header->mcast_params_64 == 0);
-        target_dev_id = packet_header->dst_start_chip_id;
+        // anchor/extents stay retained and no target-range fanout begins at an intermediate mesh
+        // (§5.10 states that as a prohibition, not merely an omission -- starting fanout here would
+        // replicate the carrier into a mesh that holds none of the targets).
+        const uint16_t exit_dev_id = routing_table.exit_node_table[final_mesh_id];
+        ASSERT(exit_dev_id != (uint16_t)eth_chan_magic_values::INVALID_ROUTING_TABLE_ENTRY);
+        widen_indexed_route_to_chip(
+            packet_header, routing_table.indexed_route_vectors.data, exit_dev_id, mesh_y_size, mesh_x_size);
+        return;
     }
-    widen_indexed_route_to_chip(
-        packet_header, routing_table.indexed_route_vectors.data, target_dev_id, mesh_y_size, mesh_x_size);
+
+    if (packet_header->mcast_params_64 == 0) {
+        // Destination landing, unicast: widen to the final chip.
+        widen_indexed_route_to_chip(
+            packet_header,
+            routing_table.indexed_route_vectors.data,
+            packet_header->dst_start_chip_id,
+            mesh_y_size,
+            mesh_x_size);
+        return;
+    }
+
+    // Destination landing, multicast (§5.10): rebuild through T(landing). encode_root is this chip,
+    // because the trees in L1 are the ones rooted here and the packet has to be traced from where it
+    // actually is; range_anchor is the retained dst_start_node_id, because the rectangle the client
+    // asked for is measured from there and crossing a boundary did not move it. Those are two
+    // different chips, which is the whole reason §5.0 names them separately.
+    //
+    // No source-injection handling applies here (§7.5): a landing is already an RX fanout point, so
+    // a multi-output root action clones atomically the way any transit router's does.
+    const uint16_t anchor_dev_id = packet_header->dst_start_chip_id;
+    ASSERT(anchor_dev_id < (uint32_t)mesh_y_size * mesh_x_size);
+
+    constexpr uint32_t route_buffer_bytes = sizeof(HybridMeshPacketHeader::route_buffer);
+    std::uint8_t maps[route_buffer_bytes];
+    encode_indexed_mcast_maps(
+        maps,
+        routing_table.indexed_route_vectors.data,
+        mesh_y_size,
+        mesh_x_size,
+        anchor_dev_id / mesh_x_size,
+        anchor_dev_id % mesh_x_size,
+        routing_table.my_mesh_coord_x,
+        packet_header->mcast_params[eth_chan_directions::NORTH],
+        packet_header->mcast_params[eth_chan_directions::SOUTH],
+        packet_header->mcast_params[eth_chan_directions::EAST],
+        packet_header->mcast_params[eth_chan_directions::WEST]);
+
+    const uint32_t map_bytes = (uint32_t)mesh_y_size + mesh_x_size;
+    for (uint32_t i = 0; i < map_bytes; ++i) {
+        packet_header->route_buffer[i] = maps[i];
+    }
 }
 
 // Single-hop poke. Same client contract as the legacy single-hop helpers (dest is exactly

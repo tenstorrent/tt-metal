@@ -882,6 +882,55 @@ public:
         return hops;
     }
 
+    // The multicasts that cover the anchor's OWN row, which get_full_mcast_hops deliberately does not.
+    //
+    // Codec contract §7.3.1: when N+S > 0 the target rows are the N/S offsets from the anchor and
+    // exclude the anchor's row -- an N/S range names the rows around the anchor, not the anchor. That
+    // is not an oversight to route around; §5.5 relies on it to keep the source's outputs a subset of
+    // N/S/Z. So on a 32x4 a full_mcast reaches 31 rows x 4 columns and misses the four chips beside
+    // and including the sender. The contract's own remedy is the X-only case (§7.3.1: "when
+    // N_extent = S_extent = 0, the operation is X-only"), where target_ys is exactly {anchor_y}.
+    //
+    // Returned as a list because a LINE column axis needs one multicast per side: the test infra's
+    // multicast expansion requires a single non-zero direction unless there is a N/S trunk to hang
+    // E/W spines off, and an X-only pattern has no trunk. A RING closes with one eastward wrap.
+    // Empty when the row has no other chips.
+    std::vector<std::unordered_map<RoutingDirection, uint32_t>> get_anchor_row_mcast_hops(
+        const FabricNodeId& src_node_id) const override {
+        std::vector<std::unordered_map<RoutingDirection, uint32_t>> patterns;
+        const uint32_t x_size = mesh_shape_[EW_DIM];
+        if (x_size <= 1) {
+            return patterns;
+        }
+
+        const auto make_hops = [](RoutingDirection dir, uint32_t count) {
+            std::unordered_map<RoutingDirection, uint32_t> hops;
+            for (const auto& direction : FabricContext::routing_directions) {
+                hops[direction] = 0;
+            }
+            hops[dir] = count;
+            return hops;
+        };
+
+        const auto fabric_type = tt::tt_fabric::get_fabric_type(current_fabric_config_, is_ubb_galaxy());
+        if (has_flag(fabric_type, FabricType::TORUS_X)) {
+            // One eastward sweep all the way round reaches every other column exactly once.
+            patterns.push_back(make_hops(RoutingDirection::E, x_size - 1));
+            return patterns;
+        }
+
+        const auto src_coord = get_device_coord(src_node_id);
+        const uint32_t east_hops = x_size - src_coord[EW_DIM] - 1;
+        const uint32_t west_hops = src_coord[EW_DIM];
+        if (east_hops > 0) {
+            patterns.push_back(make_hops(RoutingDirection::E, east_hops));
+        }
+        if (west_hops > 0) {
+            patterns.push_back(make_hops(RoutingDirection::W, west_hops));
+        }
+        return patterns;
+    }
+
     uint32_t get_full_line_mcast_hops(RoutingDirection direction) const override {
         // Full-line hops in one direction: axis_dim - 1. Uses the GLOBAL mesh shape (mesh_shape_ is
         // initialized with MeshScope::GLOBAL) so big-mesh / multi-host setups hop across the whole

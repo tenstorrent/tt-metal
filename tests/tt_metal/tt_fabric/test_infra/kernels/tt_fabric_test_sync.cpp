@@ -13,14 +13,26 @@ constexpr uint32_t KERNEL_CONFIG_BUFFER_SIZE = get_compile_time_arg_val(3);
 constexpr bool HAS_MUX_CONNECTIONS = get_compile_time_arg_val(4);
 constexpr uint8_t NUM_MUXES_TO_TERMINATE = get_compile_time_arg_val(5);
 constexpr bool USE_UNICAST_SYNC_PACKETS = get_compile_time_arg_val(6);
+constexpr uint8_t NUM_SYNC_CONFIGS = get_compile_time_arg_val(7);
 
-using SyncKernelConfigType =
-    SyncKernelConfig<NUM_SYNC_FABRIC_CONNECTIONS, IS_2D_FABRIC, NUM_LOCAL_SYNC_CORES, USE_UNICAST_SYNC_PACKETS>;
+using SyncKernelConfigType = SyncKernelConfig<
+    NUM_SYNC_FABRIC_CONNECTIONS,
+    IS_2D_FABRIC,
+    NUM_LOCAL_SYNC_CORES,
+    USE_UNICAST_SYNC_PACKETS,
+    NUM_SYNC_CONFIGS>;
 
 // Static assertion to ensure this config fits within the allocated kernel config region
 static_assert(
     sizeof(SyncKernelConfigType) <= KERNEL_CONFIG_BUFFER_SIZE,
     "SyncKernelConfig size exceeds allocated kernel config buffer size");
+
+// Static assertion to ensure we don't exceed max fabric connections. Sync used to be capped at one
+// connection per cardinal direction; an express multicast root can also leave on a chord, so the
+// count can now reach the array bound and needs the same check the sender and receiver carry.
+static_assert(
+    NUM_SYNC_FABRIC_CONNECTIONS <= MAX_NUM_FABRIC_CONNECTIONS,
+    "NUM_SYNC_FABRIC_CONNECTIONS exceeds MAX_NUM_FABRIC_CONNECTIONS");
 
 void kernel_main() {
     size_t rt_args_idx = 0;

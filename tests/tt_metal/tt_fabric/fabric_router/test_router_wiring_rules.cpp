@@ -33,6 +33,22 @@ namespace tt::tt_fabric {
 
 class RouterWiringRulesTest : public ::testing::Test {};
 
+namespace {
+
+// One chip, named by the only fact that distinguishes the families here: what its Z port is for.
+// Every cardinal is an ordinary same-mesh edge, so the router's own capability and the chip's
+// Z-port role are both read back off the set rather than passed beside it.
+PerDirectionCapabilities chip_with_z(std::optional<EdgeCapability> z_capability) {
+    PerDirectionCapabilities caps;
+    for (const auto direction : {RoutingDirection::N, RoutingDirection::E, RoutingDirection::S, RoutingDirection::W}) {
+        caps.at(direction) = EdgeCapability::INTRAMESH_CARDINAL;
+    }
+    caps.at(RoutingDirection::Z) = z_capability;
+    return caps;
+}
+
+}  // namespace
+
 // ============ Non-express mesh / 1D ============
 
 TEST_F(RouterWiringRulesTest, NonExpressMesh_AndTorus_VC0OnlyLayout) {
@@ -40,8 +56,7 @@ TEST_F(RouterWiringRulesTest, NonExpressMesh_AndTorus_VC0OnlyLayout) {
         const auto shape = router_vc_shape(
             topology,
             RoutingDirection::N,
-            EdgeCapability::INTRAMESH_CARDINAL,
-            ZPortRole::NONE,
+            chip_with_z(std::nullopt),
             /*express_routing_enabled=*/false,
             nullptr);
 
@@ -59,8 +74,7 @@ TEST_F(RouterWiringRulesTest, Linear_VC0OnlyLayout) {
     const auto shape = router_vc_shape(
         Topology::Linear,
         RoutingDirection::N,
-        EdgeCapability::INTRAMESH_CARDINAL,
-        ZPortRole::NONE,
+        chip_with_z(std::nullopt),
         /*express_routing_enabled=*/false,
         nullptr);
 
@@ -91,8 +105,7 @@ TEST_F(RouterWiringRulesTest, MeshRouter_IntermeshVC1Layout) {
         const auto shape = router_vc_shape(
             Topology::Mesh,
             RoutingDirection::N,
-            EdgeCapability::INTRAMESH_CARDINAL,
-            ZPortRole::NONE,
+            chip_with_z(std::nullopt),
             /*express_routing_enabled=*/false,
             &config);
 
@@ -111,8 +124,7 @@ TEST_F(RouterWiringRulesTest, BoundaryChipMeshRouter_VC1HasExtraFromBoundarySlot
     const auto shape = router_vc_shape(
         Topology::Mesh,
         RoutingDirection::N,
-        EdgeCapability::INTRAMESH_CARDINAL,
-        ZPortRole::INTERMESH_BOUNDARY,
+        chip_with_z(EdgeCapability::INTERMESH),
         /*express_routing_enabled=*/false,
         &config);
 
@@ -130,8 +142,7 @@ TEST_F(RouterWiringRulesTest, IntermeshBoundaryRouter_CompleteLayout) {
     const auto shape = router_vc_shape(
         Topology::Mesh,
         RoutingDirection::Z,
-        EdgeCapability::INTERMESH,
-        ZPortRole::INTERMESH_BOUNDARY,
+        chip_with_z(EdgeCapability::INTERMESH),
         /*express_routing_enabled=*/false,
         &config);
 
@@ -173,8 +184,7 @@ TEST_F(RouterWiringRulesTest, ExpressMesh_WidenedVC0AndVC1Base) {
     const auto shape = router_vc_shape(
         Topology::Torus,
         RoutingDirection::N,
-        EdgeCapability::INTRAMESH_CARDINAL,
-        ZPortRole::NONE,
+        chip_with_z(std::nullopt),
         /*express_routing_enabled=*/true,
         &config);
 
@@ -193,8 +203,7 @@ TEST_F(RouterWiringRulesTest, ExpressMesh_VC2AtFlatIndex9) {
     const auto shape = router_vc_shape(
         Topology::Torus,
         RoutingDirection::N,
-        EdgeCapability::INTRAMESH_CARDINAL,
-        ZPortRole::NONE,
+        chip_with_z(std::nullopt),
         /*express_routing_enabled=*/true,
         &config);
 
@@ -210,8 +219,7 @@ TEST_F(RouterWiringRulesTest, VC2_NonExpressMeshFlatIndices) {
     const auto shape = router_vc_shape(
         Topology::Mesh,
         RoutingDirection::N,
-        EdgeCapability::INTRAMESH_CARDINAL,
-        ZPortRole::NONE,
+        chip_with_z(std::nullopt),
         /*express_routing_enabled=*/false,
         &config);
 
@@ -238,8 +246,7 @@ TEST_F(RouterWiringRulesTest, VC2_BoundaryChipFlatIndices) {
     const auto shape = router_vc_shape(
         Topology::Mesh,
         RoutingDirection::N,
-        EdgeCapability::INTRAMESH_CARDINAL,
-        ZPortRole::INTERMESH_BOUNDARY,
+        chip_with_z(EdgeCapability::INTERMESH),
         /*express_routing_enabled=*/false,
         &config);
 
@@ -255,8 +262,7 @@ TEST_F(RouterWiringRulesTest, VC2_BoundaryRouterFlatIndexAndNoReceiver) {
     const auto shape = router_vc_shape(
         Topology::Mesh,
         RoutingDirection::Z,
-        EdgeCapability::INTERMESH,
-        ZPortRole::INTERMESH_BOUNDARY,
+        chip_with_z(EdgeCapability::INTERMESH),
         /*express_routing_enabled=*/false,
         &config);
 
@@ -272,8 +278,7 @@ TEST_F(RouterWiringRulesTest, VC2_RequiresExplicitEnable) {
     const auto shape = router_vc_shape(
         Topology::Mesh,
         RoutingDirection::N,
-        EdgeCapability::INTRAMESH_CARDINAL,
-        ZPortRole::NONE,
+        chip_with_z(std::nullopt),
         /*express_routing_enabled=*/false,
         &config);
 
@@ -309,8 +314,7 @@ TEST_F(RouterWiringRulesTest, InvalidQueries_Throw) {
     const auto mesh = router_vc_shape(
         Topology::Mesh,
         RoutingDirection::N,
-        EdgeCapability::INTRAMESH_CARDINAL,
-        ZPortRole::NONE,
+        chip_with_z(std::nullopt),
         /*express_routing_enabled=*/false,
         nullptr);
     EXPECT_THROW((void)mesh.flat_sender_id(5, 0), std::exception);
@@ -320,8 +324,7 @@ TEST_F(RouterWiringRulesTest, InvalidQueries_Throw) {
     const auto boundary = router_vc_shape(
         Topology::Mesh,
         RoutingDirection::Z,
-        EdgeCapability::INTERMESH,
-        ZPortRole::INTERMESH_BOUNDARY,
+        chip_with_z(EdgeCapability::INTERMESH),
         /*express_routing_enabled=*/false,
         &config);
     EXPECT_THROW((void)boundary.flat_receiver_id(1, 5), std::exception);

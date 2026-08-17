@@ -35,6 +35,17 @@ using FabricMuxConfig = tt::tt_fabric::FabricMuxConfig;
 
 namespace tt::tt_fabric::fabric_tests {
 
+// Copies a single traffic config may inject into the fabric, one per canonical root output of an
+// express multicast. Codec contract §7.3.1: the source outputs are a subset of N/S/Z whenever the
+// range has a Y extent, because §5.5 copies the X-root teeth onto target rows only and the target
+// rows exclude the source row; an X-only range stays on the E/W path and yields at most E|W. So three
+// is the true ceiling and the contract sizes the connection manager at four slots.
+//
+// Must match MAX_MCAST_INJECTIONS in kernels/tt_fabric_test_kernels_utils.hpp, which sizes the
+// kernel's array; the count is passed in the args, so a mismatch fails the kernel-side bound assert
+// rather than silently truncating.
+inline constexpr std::size_t MAX_MCAST_INJECTIONS = 4;
+
 // ConnectionKey identifies a unique physical fabric connection from this src device.
 // (direction, link_idx) maps 1:1 to a specific eth channel (eth_chan); we store eth_chan
 // directly to make the dedup intent explicit. The first-hop neighbor through this link is
@@ -224,6 +235,7 @@ public:
         const std::vector<uint32_t>& rt_args,
         const std::vector<uint32_t>& local_args,
         uint32_t local_args_address,
+        uint32_t local_args_capacity_bytes,
         const std::vector<std::pair<size_t, size_t>>& addresses_and_size_to_clear,
         tt::tt_metal::NOC noc_id = tt::tt_metal::NOC::RISCV_0_default) const;
     void collect_results();
@@ -244,15 +256,18 @@ public:
     void add_config(TestTrafficSenderConfig config);
     bool validate_results(std::vector<uint32_t>& data) const override;
 
-    const std::vector<std::pair<TestTrafficSenderConfig, ConnectionKey>>& get_configs() const { return configs_; }
+    const std::vector<std::pair<TestTrafficSenderConfig, std::vector<ConnectionKey>>>& get_configs() const {
+        return configs_;
+    }
 
     // Accessors for progress monitoring
     tt::tt_metal::CoreCoord get_core() const { return logical_core_; }
     uint64_t get_total_packets() const;  // Defined out-of-line
 
-    // stores traffic config and the corresponding fabric connection key
+    // stores traffic config and the fabric connection keys it injects into. All but express multicast
+    // have exactly one; a multi-output multicast root has one per canonical output, in encoder order.
     // Managed by TestDevice::connection_manager_
-    std::vector<std::pair<TestTrafficSenderConfig, ConnectionKey>> configs_;
+    std::vector<std::pair<TestTrafficSenderConfig, std::vector<ConnectionKey>>> configs_;
 };
 
 struct TestReceiver : TestWorker {
@@ -272,9 +287,10 @@ public:
     void add_config(TestTrafficSyncConfig config);
     bool validate_results(std::vector<uint32_t>& data) const override;
 
-    // stores traffic config and the corresponding fabric connection key
+    // stores traffic config and the fabric connection keys it injects into: one per canonical root
+    // output, so more than one only for an express multicast root that leaves on several edges.
     // Managed by TestDevice::sync_connection_manager_
-    std::vector<std::pair<TestTrafficSyncConfig, ConnectionKey>> configs_;
+    std::vector<std::pair<TestTrafficSyncConfig, std::vector<ConnectionKey>>> configs_;
 };
 
 struct TestMux : TestWorker {

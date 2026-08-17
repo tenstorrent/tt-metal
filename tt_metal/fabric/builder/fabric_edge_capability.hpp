@@ -104,4 +104,9 @@ bool is_x_axis_direction(RoutingDirection direction);
 std::optional<EdgeCapability> capability_in_direction(
     const ControlPlane& control_plane, FabricNodeId local, RoutingDirection direction);
 
+// Every direction of one chip, classified in one pass. The live-query spelling of the set that
+// discovery classifies once and threads through ChipRoutingFacts, for callers asking what a
+// router on ANOTHER chip would look like.
+PerDirectionCapabilities chip_capabilities_of(const ControlPlane& control_plane, FabricNodeId local);
+
 }  // namespace tt::tt_fabric
