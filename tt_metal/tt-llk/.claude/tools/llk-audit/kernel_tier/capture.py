@@ -175,12 +175,14 @@ def tu_ledger_status(all_facts: list, pe: int):
     + the kept facts. Returns (kept, status, nf, host_leak).
 
     Exactly one row per TU — a tripwire must NOT emit a *second* ledger row (that
-    double-counts the coverage denominator). A hole marker (HOST-LEAK, PARSE-HOLE) is
-    PREPENDED so it LEADS the status because (a) bootstrap.sh's HOLE grep is anchored at
-    the '[' (`\\[(...|HOST-LEAK|...)`) so the marker must come first to be detected, and
-    (b) a tripwire must NOT read as a clean 'ok' parse in the `ok/N` headline. The
-    surviving non-host device facts are still returned in `kept` so the caller writes
-    them (dropping them would be a real recall loss)."""
+    double-counts the coverage denominator). Every hole marker (HOST-LEAK, PARSE-HOLE) is
+    PREPENDED, so a holed status always has one in the LEADING position, because (a)
+    bootstrap.sh's HOLE grep is anchored at the '[' (`\\[(...|HOST-LEAK|...)`), which only
+    inspects that position, and (b) a tripwire must NOT read as a clean 'ok' parse in the
+    `ok/N` headline. When several apply they stack (`HOST-LEAK=1:PARSE-HOLE:...`) — the
+    outermost satisfies the grep and the rest stay for diagnosis, so ANY new marker must
+    likewise prepend, never append. The surviving non-host device facts are still returned
+    in `kept` so the caller writes them (dropping them would be a real recall loss)."""
     kept = [f for f in all_facts if in_kernel_surface(f.get("file", ""))]
     host_leak = [f for f in all_facts if is_host_path(f.get("file", ""))]
     kept = [f for f in kept if not is_host_path(f.get("file", ""))]
@@ -197,8 +199,11 @@ def tu_ledger_status(all_facts: list, pe: int):
     # writes no envelope for an nf==0 TU, so these parse_errors never reach the audit
     # JSON's `parse_errors` either. `pe > 0` WITH kept facts is deliberately NOT a hole —
     # that envelope IS written, so its parse_errors do surface in the audit JSON (marking
-    # it too would flag nearly every TU and drown the signal).
-    if pe and nf == 0:
+    # it too would flag nearly every TU and drown the signal). Test `pe != 0`, the exact
+    # negation of the `pe == 0` above, so the marker cannot disagree with the
+    # "ok(parse_errors)" label for a non-int `parse_errors` (a JSON null is truthy-false
+    # but `!= 0`, and claiming parse errors while skipping the hole is the bad direction).
+    if pe != 0 and nf == 0:
         status = f"PARSE-HOLE:{status}"
     if host_leak:
         status = f"HOST-LEAK={len(host_leak)}:{status}"

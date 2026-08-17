@@ -2225,6 +2225,16 @@ def test_capture_tu_ledger_one_row_per_tu():
     assert nf == 0 and status == "ok:nonkernel", status
     assert not HOLE.search(f"[{status:16}]"), status
 
+    # The hole predicate must be the exact negation of the one behind the
+    # "ok(parse_errors)" label, so the two can never disagree: whenever the status claims
+    # parse errors, the row is also marked a hole. A JSON-null parse_errors is the case
+    # that separates `pe != 0` from a truthiness test.
+    for bad_pe in (None, -1):
+        kept, status, nf, hl = capture.tu_ledger_status([], bad_pe)
+        assert "ok(parse_errors)" in status, (bad_pe, status)
+        assert status.startswith("PARSE-HOLE:"), (bad_pe, status)
+        assert HOLE.search(f"[{status:16}]"), (bad_pe, status)
+
     # Both tripwires at once: one row, both markers retained, hole still detected.
     kept, status, nf, hl = capture.tu_ledger_status([host], 2)
     assert nf == 0 and len(hl) == 1
