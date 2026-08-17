@@ -6,9 +6,7 @@
 #include <gmock/gmock.h>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
-#include <unistd.h>
 #include <filesystem>
-#include <fstream>
 #include <algorithm>
 #include <optional>
 #include <unordered_set>
@@ -2471,7 +2469,7 @@ void assert_spine_deadlock_free(
 
 // Generate intra-mesh routing tables from the express MeshGraph; assert first-hop directions including Z
 // (express) hops. TopologyMapper solves the placement, so the mesh must be realizable on the hardware.
-TEST(ExpressLinkRouting, IntraMesh8x4Replay) {
+TEST(ExpressLinkRoutingTest, IntraMesh8x4FirstHopDirections) {
     if (!express_link_cluster_available()) {
         GTEST_SKIP() << kNoClusterSkipMsg;
     }
@@ -2499,7 +2497,7 @@ TEST(ExpressLinkRouting, IntraMesh8x4Replay) {
 
 // 8x4 single galaxy (one quad): ex4-only express descriptor. The overlay must keep the whole spine
 // deadlock-free (single ring family -> zero crossovers). Machine-free via mock cluster desc.
-TEST(ExpressLinkRouting, IntraMesh8x4DeadlockFree) {
+TEST(ExpressLinkRoutingTest, IntraMesh8x4DeadlockFree) {
     if (!express_link_cluster_available()) {
         GTEST_SKIP() << kNoClusterSkipMsg;
     }
@@ -2515,7 +2513,7 @@ TEST(ExpressLinkRouting, IntraMesh8x4DeadlockFree) {
 // and ex4 + ex8 fuse into ONE ring for the whole column. The generator must merge them (one family,
 // no ex4<->ex8 crossover) and route shortest-path on the single ring. Validated for reachability +
 // loop-freedom (the merged ring has no crossover to bound). Machine-free via mock cluster desc.
-TEST(ExpressLinkRouting, IntraMesh16x4Merged) {
+TEST(ExpressLinkRoutingTest, IntraMesh16x4MergedFamiliesDeadlockFree) {
     if (!express_link_cluster_available()) {
         GTEST_SKIP() << kNoClusterSkipMsg;
     }
@@ -2533,7 +2531,7 @@ TEST(ExpressLinkRouting, IntraMesh16x4Merged) {
 // 24x4 partial sub-torus (3 quads, NO Y-torus wrap): same merged single-ring regime as 16x4 -- dim-0
 // is LINE, so ex4 + ex8 fuse into ONE ring for the whole column. Validated for reachability +
 // loop-freedom. Machine-free via mock cluster desc.
-TEST(ExpressLinkRouting, IntraMesh24x4Merged) {
+TEST(ExpressLinkRoutingTest, IntraMesh24x4MergedFamiliesDeadlockFree) {
     if (!express_link_cluster_available()) {
         GTEST_SKIP() << kNoClusterSkipMsg;
     }
@@ -2551,7 +2549,7 @@ TEST(ExpressLinkRouting, IntraMesh24x4Merged) {
 // 32x4 four-quad galaxy: ex4 + ex8 sub-torus. Deadlock-free routing along the 32-row spine.
 // Spot-check representative first hops (chip = row*4 in column 0; ex8 chord rows 0<->7, ex4 rows
 // 2<->5), then assert containment + <=1 crossover + loop-free over the entire spine. Machine-free.
-TEST(ExpressLinkRouting, IntraMesh32x4DeadlockFree) {
+TEST(ExpressLinkRoutingTest, IntraMesh32x4DeadlockFree) {
     if (!express_link_cluster_available()) {
         GTEST_SKIP() << kNoClusterSkipMsg;
     }
@@ -2582,41 +2580,27 @@ TEST(ExpressLinkRouting, IntraMesh32x4DeadlockFree) {
 // 32x4 four-quad galaxy with ONLY the wide (ex8) pattern: one ring over the block endpoints with
 // runs of six leaves between them. Drives the full setup phase (mapper, table generation, route
 // validation) for a long-run topology. Rides the same 4-rank binding and cluster mapping as
-// IntraMesh32x4DeadlockFree; the ex8-only descriptor is written per-rank to a temp file (its absolute
-// path flows through build_express_intra_table unchanged) so it needs no committed fixture. Run
-// multi-rank under tt-run with 4 ranks.
-TEST(ExpressLinkRouting, IntraMesh32x4Ex8OnlyDeadlockFree) {
+// IntraMesh32x4DeadlockFree, over the ex8-only descriptor it shares with
+// ExpressRingTopologyTest.Rings32x4Ex8Only. Run multi-rank under tt-run with 4 ranks.
+TEST(ExpressLinkRoutingTest, IntraMesh32x4Ex8OnlyDeadlockFree) {
     if (!express_link_cluster_available()) {
         GTEST_SKIP() << kNoClusterSkipMsg;
     }
     if (world_size() != 4) {
-        GTEST_SKIP() << "32x4 declares 4 host ranks; run under tt-run with 4 ranks";
+        GTEST_SKIP() << "express_links_32x4_ex8_only declares 4 host ranks; run under tt-run with 4 ranks";
     }
-    // Per-process filename: under tt-run the ranks share /tmp, and a shared path would let one rank
-    // truncate the file while another reads it mid-write.
-    const auto desc_path = std::filesystem::temp_directory_path() /
-                           ("express_links_32x4_ex8_only_" + std::to_string(::getpid()) + ".textproto");
-    std::ofstream(desc_path) << R"(
-mesh_descriptors {
-  name: "M0"
-  arch: BLACKHOLE
-  device_topology { dims: [32, 4] dim_types: [RING, RING] }
-  host_topology   { dims: [4, 1] }
-  channels { count: 2 policy: RELAXED }
-  express_links { dim_idx: 0  pattern { start: 0  step: 8 } }
-}
-top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
-)";
     std::unique_ptr<tt::tt_fabric::MeshGraph> mg;
-    const auto intra = build_express_intra_table(desc_path.string(), mg);
+    const auto intra = build_express_intra_table(
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/express_links_32x4_ex8_only_mesh_graph_descriptor.textproto",
+        mg);
     ASSERT_EQ(intra.size(), 1u);
     ASSERT_EQ(intra[0].size(), 128u);
     assert_spine_deadlock_free(*mg, intra, /*L0=*/32, /*row_size=*/4);
 }
 
 // Build the control plane on the 8x4 express descriptor and verify the forwarding directions match
-// IntraMesh8x4Replay, and that direct-hop forwarding channels physically connect src->dst.
-TEST_F(ControlPlaneFixture, PhysicalLowering8x4) {
+// IntraMesh8x4FirstHopDirections, and that direct-hop forwarding channels physically connect src->dst.
+TEST_F(ControlPlaneFixture, TestExpressPhysicalLowering8x4) {
     if (!express_link_cluster_available()) {
         GTEST_SKIP() << kNoClusterSkipMsg;
     }
@@ -2644,7 +2628,7 @@ TEST_F(ControlPlaneFixture, PhysicalLowering8x4) {
         return chans;
     };
 
-    // Same first hops as IntraMesh8x4Replay; `direct` = dst is the immediate first-hop neighbor.
+    // Same first hops as IntraMesh8x4FirstHopDirections; `direct` = dst is the immediate first-hop neighbor.
     struct Hop {
         int src;
         int dst;
@@ -2706,7 +2690,7 @@ TEST_F(ControlPlaneFixture, PhysicalLowering8x4) {
 
 // 32x4 multi-rank express lowering: every express-endpoint pair routes via Z, backed by physical Z channels on
 // the rank that owns the source chip. Run multi-rank under tt-run with a 4-rank subtorus mock mapping.
-TEST_F(ControlPlaneFixture, PhysicalLowering32x4) {
+TEST_F(ControlPlaneFixture, TestExpressPhysicalLowering32x4) {
     if (!express_link_cluster_available()) {
         GTEST_SKIP() << kNoClusterSkipMsg;
     }
