@@ -874,8 +874,8 @@ AUDITED_MAPPINGS = {
         notes="Audited production-header mapping (coverage parity lane): calculate_add1 (SfpuType::add1) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
     ),
     "metal__ckernel_sfpu_add_top_row": dict(
-        functional_modules="test_sfpu_binary.py::test_sfpu_binary_add_top_row[formats:Int32->Int32-mathop:SfpuAddTopRow-dest_acc:No]",
-        notes="Audited production-header mapping (coverage parity lane): calculate_add_top_row (BinaryOp::ADD_TOP_ROW) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+        functional_modules="test_sfpu_binary.py::test_sfpu_binary_add_top_row[formats:Int32->Int32-mathop:SfpuAddTopRow-dest_acc:Yes]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_add_top_row (BinaryOp::ADD_TOP_ROW) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body. dest_acc must be Yes: the test body pytest.skips 32-bit formats with DestAccumulation.No (HW cannot unpack 32-bit into SrcA/SrcB), so the No node collects but never executes (nightly-20260818b gate catch).",
     ),
     "metal__ckernel_sfpu_addcdiv": dict(
         functional_modules="test_sfpu_ternary.py::test_sfpu_ternary[formats:Float16_b->Float16_b-dest_acc:No-mathop:SfpuAddcdiv]",
