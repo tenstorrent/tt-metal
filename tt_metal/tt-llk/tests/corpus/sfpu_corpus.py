@@ -886,7 +886,7 @@ AUDITED_MAPPINGS = {
         notes="Audited production-header mapping (coverage parity lane): calculate_sfpu_atan2 (BinaryOp::ATAN2) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
     ),
     "metal__ckernel_sfpu_binary": dict(
-        functional_modules="test_sfpu_binary.py::test_sfpu_binary_edges[formats:Float16_b->Float16_b-mathop:SfpuElwdiv-dest_acc:No-edge_class:ordinary],test_sfpu_binary.py::test_sfpu_binary_float[formats:Float16_b->Float16_b-bcast_dim:Row-mathop:SfpuElwsub-dest_acc:No]",
+        functional_modules="test_sfpu_binary.py::test_sfpu_binary_edges[formats:Float16_b->Float16_b-mathop:SfpuElwdiv-dest_acc:No-edge_class:both_zero],test_sfpu_binary.py::test_sfpu_binary_float[formats:Float16_b->Float16_b-bcast_dim:Row-mathop:SfpuElwsub-dest_acc:No]",
         notes="Audited production-header mapping (coverage parity lane): calculate_sfpu_binary_div (BinaryOp::DIV); calculate_sfpu_binary (BinaryOp::SUB) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
     ),
     "metal__ckernel_sfpu_binary_bitwise": dict(
