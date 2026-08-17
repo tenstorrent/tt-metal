@@ -169,8 +169,34 @@ gh workflow run on-dispatch.yml --repo tenstorrent/tt-shield \
   -f impl-of-model=default \
   -f tt-metal-git-ref=mvasiljevic/fast-models-fast/gemma4-31b \
   -f inference-server-git-ref=mvasiljevic/fast-models-fast/gemma4-31b \
-  -f vllm-git-ref=dev
+  -f vllm-git-ref=main
 ```
+
+> **`vllm-git-ref` must be `main`, not `dev`.** tt-shield now resolves vLLM from
+> **`tenstorrent/vllm-tt-plugin`** (`workflow_resolve-shas.yml`), not
+> `tenstorrent/vllm`. That repo has no `dev` branch, so a dispatch with `dev`
+> fails `resolve-shas` in ~39s with `HTTP 422` from
+> `/repos/tenstorrent/vllm-tt-plugin/commits/dev` — observed on run
+> [32028283074](https://github.com/tenstorrent/tt-shield/actions/runs/32028283074).
+> `on-nightly.yml` uses `main`. The `EXTRA_MODELS_DIR` bundle mechanism this
+> autoport is selected through is present in the new repo
+> (`src/vllm_tt_plugin/platform.py::_iter_extra_model_bundles`), so the migration
+> does not change how the model registers.
+
+### `release` is the intended lane, not `benchmarks`
+
+`on-nightly.yml` sets `setup-vars.outputs.workflow: "release"` and passes
+`schedule: "nightly"`. So a model registered in `models-ci-config.json` under
+`ci.nightly` is scheduled by the nightly cron, and that cron dispatches the
+**`release`** workflow. This model's registration (`gemma-4-31B`,
+`ci.nightly.devices: [P300X2]`, `inference_engine: vLLM`) mirrors the stock
+`gemma-4-31B-it` entry exactly, so `release` on P300X2 *is* its intended
+coverage.
+
+`release` runs **evals and benchmarks** (`workflow_dispatch.py`:
+`_ENGINE_EVAL_WORKFLOWS` and `_ENGINE_BENCHMARK_WORKFLOWS` both contain
+`WorkflowType.RELEASE`). A `benchmarks`-only pass therefore covers half the
+intended lane.
 
 - `custom-model` is the documented way to test a model absent from the dropdown
   ("⭐ use for testing new models"); `model` is a required placeholder it
@@ -180,9 +206,11 @@ gh workflow run on-dispatch.yml --repo tenstorrent/tt-shield \
 - `impl-of-model=default` because `gemma4_31b_autoport` is not in tt-shield's
   dropdown; the P300X2 spec sets `default_impl: true`. Confirmed working:
   `determine-server-type` resolved on the first dispatch.
-- Use `benchmarks` first, then `evals`, then `release`. Do **not** use
-  `spec_tests`: no Gemma variant has spec-test suites, so it fails with
-  `error=no_blocks` (see below).
+- `release` is the lane the nightly cron actually dispatches (see above), so it
+  is the one that must pass. `benchmarks` is still useful as a fast smoke of the
+  serving path, since it skips the eval half. Do **not** use `spec_tests`: no
+  Gemma variant has spec-test suites, so it fails with `error=no_blocks`
+  (see below).
 - Omit `docker-image` — the autoport must be baked in, so the pinned public
   image (`0.18.0-c49bb76-6b4a3a7`) cannot be reused: `c49bb76` predates
   `models/autoports/google_gemma_4_31b`.
