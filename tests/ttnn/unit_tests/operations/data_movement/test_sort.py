@@ -187,37 +187,52 @@ def test_sort_long_tensor(shape, dim, descending, device):
         assert_equal(torch_sort_values, ttnn.to_torch(ttnn_sort_values))
 
 
+def _sort_fp32_wide(descending, device):
+    # A few finite logits in a sea of -inf, as in masked vocab-size logits.
+    torch.manual_seed(0)
+    n = 151936
+    input = torch.full((1, n), float("-inf"), dtype=torch.float32)
+    input[..., torch.randperm(n)[:328]] = torch.randn(328) * 8.0
+
+    ttnn_input = ttnn.from_torch(input, ttnn.float32, layout=ttnn.Layout.TILE, device=device)
+    ttnn_sort_values, ttnn_sort_indices = ttnn.sort(ttnn_input, dim=-1, descending=descending)
+    return input, ttnn_sort_values, ttnn_sort_indices
+
+
+@pytest.mark.parametrize("descending", [False, True])
+def test_sort_fp32_wide_values(descending, device):
+    input, ttnn_sort_values, ttnn_sort_indices = _sort_fp32_wide(descending, device)
+
+    torch_sort_values, _ = torch.sort(input, dim=-1, descending=descending)
+
+    assert ttnn_sort_indices.dtype == ttnn.uint32
+    assert_equal(torch_sort_values, ttnn.to_torch(ttnn_sort_values))
+
+
 @pytest.mark.parametrize(
     "descending",
     [
         False,
         # Descending order pads the row with -inf, which ties with real -inf
         # entries and can emit padding indices (>= n) into the output.
-        pytest.param(True, marks=pytest.mark.xfail(strict=True, reason="#53326: padding indices leak")),
+        pytest.param(
+            True,
+            marks=pytest.mark.xfail(
+                strict=True,
+                reason="https://github.com/tenstorrent/tt-metal/issues/53326: padding indices leak",
+            ),
+        ),
     ],
 )
 def test_sort_fp32_wide_index_correctness(descending, device):
-    # Sort a wide fp32 row dominated by -inf duplicates. Ties make exact torch
-    # index parity undefined, so check invariants instead: exact sorted values,
-    # uint32 indices forming a valid permutation, and gather-consistency.
-    torch.manual_seed(0)
-    shape = [1, 151936]
-    n = shape[-1]
-    # A few finite logits in a sea of -inf, as in masked vocab-size logits.
-    input = torch.full(shape, float("-inf"), dtype=torch.float32)
-    input[..., torch.randperm(n)[:328]] = torch.randn(328) * 8.0
+    # Ties make exact torch index parity undefined, so check invariants instead:
+    # indices form a valid permutation and gather back the sorted values.
+    input, ttnn_sort_values, ttnn_sort_indices = _sort_fp32_wide(descending, device)
 
-    torch_sort_values, _ = torch.sort(input, dim=-1, descending=descending)
-
-    ttnn_input = ttnn.from_torch(input, ttnn.float32, layout=ttnn.Layout.TILE, device=device)
-    ttnn_sort_values, ttnn_sort_indices = ttnn.sort(ttnn_input, dim=-1, descending=descending)
-
-    assert ttnn_sort_indices.dtype == ttnn.uint32
-
+    n = input.shape[-1]
     values = ttnn.to_torch(ttnn_sort_values)
     indices = ttnn.to_torch(ttnn_sort_indices).reshape(-1).to(torch.int64)
 
-    assert_equal(torch_sort_values, values)
     assert (
         indices.min() >= 0 and indices.max() < n
     ), f"indices out of range [0, {n}): min={int(indices.min())}, max={int(indices.max())}"
