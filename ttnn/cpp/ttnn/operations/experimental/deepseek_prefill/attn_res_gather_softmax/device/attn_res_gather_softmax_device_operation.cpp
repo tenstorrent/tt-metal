@@ -43,11 +43,37 @@ void validate_site(const AttnResGatherSoftmaxParams& args, const AttnResGatherSo
     }
 }
 
+// The semaphore is excluded from the cache key and its address is patched per dispatch,
+// so a cache hit can be carrying a semaphore the program was never built against. It
+// reaches the exchange as a bare L1 address, waited on by the last core of the grid and
+// written by every peer at that same coordinate; built without that core, or in DRAM, it
+// resolves to an address nothing arrives at and the wait never returns — a hang rather
+// than a wrong answer, and one that looks like a fabric fault.
+void validate_semaphore(const AttnResGatherSoftmaxParams& args, const AttnResGatherSoftmaxInputs& tensor_args) {
+    TT_FATAL(
+        args.semaphore.device() == tensor_args.partial.device(),
+        "AttnResGatherSoftmax requires the semaphore on the same device as its operands");
+    // By value: attribute_values() returns a temporary tuple.
+    const auto [semaphore_cores, semaphore_buffer_type] = args.semaphore.attribute_values();
+    const auto grid = tensor_args.partial.device()->compute_with_storage_grid_size();
+    const CoreCoord gather_core{grid.x - 1, grid.y - 1};
+    TT_FATAL(
+        semaphore_cores.contains(gather_core),
+        "AttnResGatherSoftmax exchanges on core {} and needs the semaphore built over it, but the semaphore covers {}",
+        gather_core,
+        semaphore_cores);
+    TT_FATAL(
+        semaphore_buffer_type == tt::tt_metal::BufferType::L1,
+        "AttnResGatherSoftmax waits on the semaphore in L1, got buffer type {}",
+        semaphore_buffer_type);
+}
+
 }  // namespace
 
 void AttnResGatherSoftmaxDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     validate_site(args, tensor_args);
+    validate_semaphore(args, tensor_args);
 }
 
 void AttnResGatherSoftmaxDeviceOperation::validate_on_program_cache_miss(
@@ -153,6 +179,7 @@ void AttnResGatherSoftmaxDeviceOperation::validate_on_program_cache_miss(
     }
     TT_FATAL(partial_shape[1] == 1, "AttnResGatherSoftmax requires a candidate dim of 1, got {}", partial_shape[1]);
     validate_site(args, tensor_args);
+    validate_semaphore(args, tensor_args);
     // The logical inner dims, not the padded ones. The statistics reduce runs the whole
     // padded row, so a logically narrower row folds its own padding into both the sum of
     // squares and the dot product that set the live score.
