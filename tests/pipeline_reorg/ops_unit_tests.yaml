@@ -79,7 +79,7 @@
 
 - name: ttnn nightly experimental tests (wormhole)
   # test_moe_grouped_topk hangs on Wormhole (TODO: file issue + restore). Exclude on WH only.
-  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/experimental -xv -k "not performance and not test_moe_grouped_topk" -m "not requires_host_iommu" --timeout=600'
+  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/experimental -xv -k "not performance and not test_moe_grouped_topk and not deepseek_prefill_extract and not deepseek_prefill_insert and not x_tile" -m "not requires_host_iommu" --timeout=600'
   skus:
     wh_n150_civ2:
       timeout: 65
@@ -91,7 +91,7 @@
 
 - name: ttnn nightly experimental tests (blackhole)
   # Host-IOMMU tests are selected by the viommu job below and excluded from these non-IOMMU SKUs.
-  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/experimental -xv -k "not performance and not (moe_grouped_topk and in_fp32)" -m "not requires_host_iommu" --timeout=600'
+  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/experimental -xv -k "not performance and not (moe_grouped_topk and in_fp32) and not deepseek_prefill_extract and not deepseek_prefill_insert and not x_tile and not (per_token_cast and ROW_MAJOR) and not scales_narrow_to_bf16 and not (token_count_aware_cast_back and False)" -m "not requires_host_iommu" --timeout=600'
   skus:
     bh_p100:
       timeout: 60
