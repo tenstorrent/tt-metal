@@ -407,10 +407,31 @@ std::vector<Tensor> run_topk_large_indices_route(const Tensor& transformed_tenso
     const Tensor op_input =
         tile_native_input ? transformed_tensor : ttnn::to_layout(transformed_tensor, Layout::ROW_MAJOR);
 
+    // Multi-row rectangle trees: when every row can own a concurrent P-core
+    // tree (rows <= grid tiling capacity) and the op's cost model says the
+    // tree wins, pass num_slices explicitly. allow_multi_row=true is
+    // ROUTING'S opt-in, not the op's: routed calls already changed engine vs
+    // stock (tie order re-audited at the I5 relaxation), so the rect engine's
+    // different-but-equal tie identity is within the same acceptance class.
+    // rows > capacity come back disabled and keep nullopt — the op's internal
+    // hybrid row split handles rows > grid on its own. The MoE-gate shapes
+    // (single-chunk rows) also come back disabled. Trade-off: rects are
+    // ROW_MAJOR-output only, so k_rounded <= 1024 cells give up the native
+    // TILE/u16 writer and pay the to_layout(+typecast) tail below — measured
+    // net-positive at the sampling shapes (32 x 65536-class rows).
+    const auto rect_cfg = ttnn::operations::experimental::topk_large_indices::program::compute_column_split_config(
+        k_rounded,
+        lshape[-1],
+        flattened_rows,
+        transformed_tensor.device()->compute_with_storage_grid_size(),
+        std::nullopt,
+        /*allow_multi_row=*/true);
+    const bool use_rects = flattened_rows > 1 && rect_cfg.enabled && rect_cfg.num_slices >= 2;
+
     // Match the device op's index dtype contract: UINT16 iff the tile-padded
     // width fits 16 bits (compute_output_specs compares the padded shape).
     const bool emit_u16 = padded_width <= std::numeric_limits<uint16_t>::max();
-    const bool tile_native_output = k_rounded <= large_k_route_tile_output_max_k;
+    const bool tile_native_output = !use_rects && k_rounded <= large_k_route_tile_output_max_k;
 
     // BFLOAT16 values + (UINT32 or UINT16) indices of the top k_rounded per
     // row, both sorted by value descending; -inf value lanes carry exact
@@ -420,7 +441,7 @@ std::vector<Tensor> run_topk_large_indices_route(const Tensor& transformed_tenso
         op_input,
         k_rounded,
         /*valid_length=*/std::nullopt,
-        /*num_slices=*/std::nullopt,
+        use_rects ? std::optional<uint32_t>(rect_cfg.num_slices) : std::nullopt,
         /*tile_output=*/tile_native_output,
         (tile_native_output && emit_u16) ? std::optional<DataType>(DataType::UINT16) : std::nullopt);
 
