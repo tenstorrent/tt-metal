@@ -4,8 +4,10 @@
 
 #include "ttnn/operations/data_movement/repeat_interleave/codegen/repeat_interleave_codegen_supported.hpp"
 
-#include <tt_stl/assert.hpp>
+#include <algorithm>
+
 #include <tt-metalium/allocator.hpp>
+#include <tt-metalium/device.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
 
@@ -17,7 +19,6 @@ uint32_t normalize_dim(int32_t dim, uint32_t ndim) {
     return static_cast<uint32_t>(dim >= 0 ? dim : dim + static_cast<int32_t>(ndim));
 }
 
-// ops/repeat_interleave/builder.py::_page_alignment.
 uint32_t page_alignment(const MemoryConfig& memory_config) {
     using tt::tt_metal::BufferType;
     return memory_config.buffer_type() == BufferType::L1 ? tt::tt_metal::hal::get_l1_alignment()
@@ -30,6 +31,8 @@ RmCbBudget rm_cb_budget(const Tensor& input, const std::optional<MemoryConfig>& 
     const auto& shape = input.logical_shape();
     const uint32_t stick_size = shape[shape.rank() - 1] * input.element_size();
     const MemoryConfig& out_config = output_mem_config.value_or(input.memory_config());
+    // Reader and writer each page a whole stick through the same slot, so the slot has to satisfy
+    // the stricter of the two sides' page alignments.
     const uint32_t slot_stride = std::max(
         tt::round_up(stick_size, page_alignment(input.memory_config())),
         tt::round_up(stick_size, page_alignment(out_config)));
@@ -42,9 +45,16 @@ RmCbBudget rm_cb_budget(const Tensor& input, const std::optional<MemoryConfig>& 
 
 bool supported_by_codegen(
     const Tensor& input, uint32_t repeats, int32_t dim, const std::optional<MemoryConfig>& output_mem_config) {
-    // Sharded I/O composition (native S2I unshard, then I2S/reshard restore) is not ported;
-    // reject a sharded input and a sharded requested output up front (repeat_interleave.yaml's
-    // hand-authored sharded-input case -- the auto-generated ledger has no memory_config axis).
+    // The gate below asks only about layout, dtype and memory config, and a host tensor answers all
+    // three -- Tensor::is_sharded() is false off-device and memory_config() reads the spec, not a
+    // buffer. Reject up front so a host tensor takes native's own validation rather than tripping
+    // over Tensor::device() in rm_cb_budget() or a null buffer in the program factory.
+    if (input.storage_type() != StorageType::DEVICE || input.buffer() == nullptr) {
+        return false;
+    }
+
+    // Sharded I/O composition (unshard to interleaved, run, reshard) is not implemented here, so
+    // reject a sharded input and a sharded requested output.
     if (input.memory_config().is_sharded()) {
         return false;
     }
@@ -54,7 +64,8 @@ bool supported_by_codegen(
 
     const auto& shape = input.logical_shape();
     const uint32_t ndim = shape.rank();
-    // codegen_repeat_interleave.py invalidate_vector: "repeat_interleave codegen requires >=2D".
+    // A rank-1 tensor's only dim is its within-stick / sub-tile dim, which neither layout's kernels
+    // replicate.
     if (ndim < 2) {
         return false;
     }
@@ -63,12 +74,12 @@ bool supported_by_codegen(
     if (ndim > 4) {
         return false;
     }
-    // invalidate_vector: "repeats must be >=1".
-    if (repeats < 1) {
+    // repeats == 1 is a no-op the native path answers without dispatching anything; repeats == 0
+    // makes the output empty and the kernels have no zero-work path.
+    if (repeats < 2) {
         return false;
     }
-    // RepeatInterleaveCodegen.repeat_interleave takes an allocation-only path for a zero-volume
-    // input and never launches a zero-work kernel; this program factory has no such path.
+    // No zero-work path here either, so a zero-volume input stays on native.
     for (uint32_t i = 0; i < ndim; ++i) {
         if (shape[i] == 0) {
             return false;
@@ -80,33 +91,33 @@ bool supported_by_codegen(
         return false;
     }
 
-    // coverage.dtypes in repeat_interleave.yaml (the ledger's swept/certified dtype set).
+    // The dtypes the port is swept and certified against.
     const DataType dtype = input.dtype();
     if (dtype != DataType::BFLOAT16 && dtype != DataType::FLOAT32 && dtype != DataType::INT32) {
         return false;
     }
 
     if (input.layout() == Layout::TILE) {
-        // Sub-tile (last two) dims subdivide a 32x32 tile: tile-page replication != torch's
-        // element-level interleave along H/W, so those dims are deferred (invalidate_vector:
-        // "sub-tile (last two) dims deferred for TILE path").
+        // The last two dims subdivide a 32x32 tile, and the reader replicates whole tile pages:
+        // page replication is not torch's element-level interleave along H or W.
         return nd < ndim - 2;
     }
 
     if (input.layout() == Layout::ROW_MAJOR) {
-        // invalidate_vector: "RM_LAYOUT requires inner (last) dim >= 2".
+        // The RM reader copies whole sticks, so a stick has to hold at least two elements for the
+        // interleave to be observable within it.
         if (shape[ndim - 1] < 2) {
             return false;
         }
-        // The generator has a working within-stick (last W) reader, but
-        // codegen_repeat_interleave.py's invalidate_vector still defers it ("within-stick
-        // (last W) dim deferred for RM path"). This predicate mirrors that stale ledger, not
-        // device capability, per repeat_interleave.yaml's dim == ndim - 1 out-of-scope case.
-        // Widening the scope means porting that reader, not just relaxing this clause.
+        // The last dim lives within a stick rather than across sticks, so replicating it needs an
+        // addressing scheme the RM reader here does not implement. Widening the scope means writing
+        // that reader, not relaxing this clause.
         if (nd == ndim - 1) {
             return false;
         }
-        // Nothing above bounds the stick width, but an RM CB slot is a whole stick in L1.
+        // Nothing above bounds the stick width, but an RM CB slot is a whole stick in L1: reject a
+        // stick too wide for the smallest viable CB so the case falls back to native instead of
+        // TT_THROWing out of circular-buffer allocation at program-compile time.
         return rm_cb_budget(input, output_mem_config).max_slots >= kRmCbMinSlots;
     }
 
@@ -115,7 +126,8 @@ bool supported_by_codegen(
 
 bool is_demoted(
     const Tensor& input, uint32_t repeats, int32_t dim, const std::optional<MemoryConfig>& /*output_mem_config*/) {
-    // Perf-demoted ledger: [1, 32, 64]|dim=1&repeats=2|float32|row_major.
+    // The one measured shape where the codegen path lost to native on device:
+    // [1, 32, 64] | dim=1 & repeats=2 | float32 | row_major.
     const auto& shape = input.logical_shape();
     if (shape.rank() != 3 || shape[0] != 1 || shape[1] != 32 || shape[2] != 64) {
         return false;
@@ -124,21 +136,6 @@ bool is_demoted(
         return false;
     }
     return input.dtype() == DataType::FLOAT32 && input.layout() == Layout::ROW_MAJOR;
-}
-
-ImplementationSelector parse_implementation(const std::string& implementation) {
-    if (implementation == "auto") {
-        return ImplementationSelector::Auto;
-    }
-    if (implementation == "native") {
-        return ImplementationSelector::Native;
-    }
-    if (implementation == "codegen") {
-        return ImplementationSelector::Codegen;
-    }
-    TT_THROW(
-        "repeat_interleave: implementation must be one of \"auto\", \"native\", \"codegen\"; got \"{}\"",
-        implementation);
 }
 
 }  // namespace ttnn::operations::data_movement::repeat_interleave_codegen

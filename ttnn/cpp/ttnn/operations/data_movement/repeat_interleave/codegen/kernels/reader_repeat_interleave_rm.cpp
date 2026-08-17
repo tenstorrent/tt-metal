@@ -4,9 +4,8 @@
 
 // Reader for repeat_interleave on RM interleaved tensors.
 //
-// Same RM stick addressing as ops/repeat (now common/templates/reader_repeat_higherdim_rm.cpp), but the
-// within-block source page uses the per-element (AABB) interleave formula
-// instead of the modular (ABAB) repeat formula:
+// Same RM stick addressing as repeat's higher-dim reader, but the within-block source page uses
+// the per-element (AABB) interleave formula instead of the modular (ABAB) repeat formula:
 //
 //   SRC_LOWER = REP_DIM_PAGES * LOWER_PAGES
 //   DST_LOWER = NUM_REPEATS * SRC_LOWER
@@ -19,7 +18,7 @@
 //
 // This is valid only when the interleaved dim is a whole-stick (outer or H)
 // dim — i.e. NOT the last (W, within-stick) dim, which needs a different
-// addressing scheme and is outside this port's scope.
+// addressing scheme this reader does not implement.
 //
 // CT args: stick_size, input_page_size, l1_slot_stride, TensorAccessorArgs(in_t),
 //          cb_id, NUM_REPEATS, LOWER_PAGES, REP_DIM_PAGES, BATCH

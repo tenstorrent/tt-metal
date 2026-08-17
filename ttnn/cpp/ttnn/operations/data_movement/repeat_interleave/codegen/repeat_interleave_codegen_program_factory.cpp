@@ -22,20 +22,19 @@ using namespace tt::tt_metal;
 
 namespace {
 
-// ops/repeat/spec.py: READ_BATCH / WRITE_BATCH (shared verbatim by repeat_interleave's TILE and RM
-// builders). Prefixed: unity builds merge anonymous namespaces across TUs, so unprefixed names
-// collide with repeat_codegen_program_factory.cpp.
+// Pages per read / write batch, shared by the TILE and RM branches below. Prefixed: unity builds
+// merge anonymous namespaces across TUs, so unprefixed names collide with
+// repeat_codegen_program_factory.cpp.
 constexpr uint32_t kRiReadBatch = 4;
 constexpr uint32_t kRiWriteBatch = 4;
 // Double-buffers whichever side batches more, so one batch fills while the other drains.
 constexpr uint32_t kRiCbDepth = 2 * std::max(kRiReadBatch, kRiWriteBatch);
 
-// SEQ_REPEAT_INTERLEAVE, see common/kernels/codegen/sequencers.h
-// (ops/repeat_interleave/builder.py's SEQ_REPEAT_INTERLEAVE).
+// SEQ_REPEAT_INTERLEAVE in common/kernels/codegen/sequencers.h, which the unified tile reader
+// switches on at compile time.
 constexpr uint32_t kSeqRepeatInterleave = 9;
 
-// Shared generator output — the tile reader is named by five port manifests, the writer by three —
-// so both live under data_movement/common/ and are not this op's to edit.
+// Shared by several data_movement ops, hence common/ rather than this op's own kernels dir.
 constexpr const char* kTileReaderSrc =
     "ttnn/cpp/ttnn/operations/data_movement/common/kernels/codegen/reader_tile_interleaved_unified.cpp";
 constexpr const char* kTileWriterSrc =
@@ -49,8 +48,6 @@ constexpr const char* kRmWriterSrc =
 
 uint32_t align_up(uint32_t value, uint32_t alignment) { return ((value + alignment - 1) / alignment) * alignment; }
 
-// ops/repeat_interleave/builder.py::_page_alignment: L1 interleaved -> L1 alignment; DRAM -> the
-// architecture's DRAM alignment. Queried from the real device HAL, never a sweep constant.
 uint32_t page_alignment(const MemoryConfig& memory_config) {
     return memory_config.buffer_type() == BufferType::L1 ? hal::get_l1_alignment() : hal::get_dram_alignment();
 }
@@ -108,9 +105,9 @@ ProgramDescriptor RepeatInterleaveCodegenProgramFactory::create_descriptor(
     ProgramDescriptor desc;
 
     if (input.layout() == Layout::TILE) {
-        // TILE outer-dim path: unified seq_id=9 (REPEAT_INTERLEAVE) reader + shared interleaved
-        // writer (ops/repeat_interleave/spec.py::build_repeat_tile, via ops/repeat/spec.py's
-        // shared build_repeat_tile / _plan / _writer_ct).
+        // TILE outer-dim path: unified reader on the REPEAT_INTERLEAVE sequencer + the shared
+        // interleaved writer. The CB slot is one tile whatever the shape, so unlike the RM branch
+        // below its footprint needs no L1 bound.
         constexpr uint32_t cb_id = CBIndex::c_0;
         const auto out_data_format = datatype_to_dataformat_converter(output.dtype());
         const uint32_t cb_page_size = tile_size(out_data_format);
@@ -161,8 +158,7 @@ ProgramDescriptor RepeatInterleaveCodegenProgramFactory::create_descriptor(
         return desc;
     }
 
-    // ROW_MAJOR whole-stick (outer/H) path (ops/repeat_interleave/spec.py::
-    // build_repeat_interleave_rm_factory). supported_by_codegen() unconditionally rejects the
+    // ROW_MAJOR whole-stick (outer/H) path. supported_by_codegen() unconditionally rejects the
     // within-stick (last-dim) case -- validate_on_program_cache_miss TT_FATALs before this
     // factory ever runs -- so no within-stick reader is wired here; it would be unreachable.
     TT_FATAL(

@@ -5,20 +5,18 @@
 #pragma once
 
 #include <optional>
-#include <string>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 
-// Nested per the sibling ports' convention: these names (`supported_by_codegen`, `is_demoted`,
-// `ImplementationSelector`) are generic enough that the bare data_movement namespace cannot hold one
-// port's copy without colliding with the next.
+// Nested per the sibling ports' convention: these names (`supported_by_codegen`, `is_demoted`) are
+// generic enough that the bare data_movement namespace cannot hold one op's copy without colliding
+// with the next.
 namespace ttnn::operations::data_movement::repeat_interleave_codegen {
 
-// Correctness-only: transcribed from codegen_repeat_interleave.py's invalidate_vector plus the
-// op's own guards (RepeatInterleaveCodegen.repeat_interleave). Must agree with every case in
-// repeat_interleave.yaml (`scope: in` -> true, `scope: out` -> false). Consulted by both the
-// free function's `auto`/`codegen` branches and prim::repeat_interleave_codegen's validate.
+// Correctness gate for a whole ttnn::repeat_interleave call, on the caller's arguments before dim
+// normalization. Consulted by the free function's routing, by repeat_interleave_force_codegen, and
+// by prim::repeat_interleave_codegen's validate, so all three agree on the supported scope.
 bool supported_by_codegen(
     const Tensor& input, uint32_t repeats, int32_t dim, const std::optional<MemoryConfig>& output_mem_config);
 
@@ -37,14 +35,9 @@ RmCbBudget rm_cb_budget(const Tensor& input, const std::optional<MemoryConfig>& 
 // is the floor below which the kernels deadlock.
 inline constexpr uint32_t kRmCbMinSlots = 2;
 
-// Perf-only: enumerated cases that supported_by_codegen() accepts but that measured worse than
-// the native prim on device. Consulted ONLY by the free function's `auto` branch -- never by
-// validate -- so a forced implementation="codegen" call still runs these.
+// Perf-demotion gate: correct but not worth the codegen path. Routing-only -- consulted by
+// ttnn::repeat_interleave only, never by validate and never by repeat_interleave_force_codegen.
 bool is_demoted(
     const Tensor& input, uint32_t repeats, int32_t dim, const std::optional<MemoryConfig>& output_mem_config);
-
-enum class ImplementationSelector { Auto, Native, Codegen };
-
-ImplementationSelector parse_implementation(const std::string& implementation);
 
 }  // namespace ttnn::operations::data_movement::repeat_interleave_codegen
