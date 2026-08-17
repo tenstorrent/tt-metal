@@ -93,8 +93,7 @@ def _adapter(layer_types, *, enforce):
     adapter = object.__new__(DF.DenoiseLogitsAdapter)
     adapter.tt_model = SimpleNamespace(
         layers=[
-            SimpleNamespace(self_attn=SimpleNamespace(config=SimpleNamespace(sliding_window=W)))
-            for _ in layer_types
+            SimpleNamespace(self_attn=SimpleNamespace(config=SimpleNamespace(sliding_window=W))) for _ in layer_types
         ],
         hf_config=SimpleNamespace(layer_types=list(layer_types), sliding_window=W),
         mesh_device=None,
@@ -201,9 +200,7 @@ def test_bounded_window_mask_matches_the_full_span_mask_on_shared_columns():
     span = W
     lo = prompt_len - span
     full = _attend(_reveal(prompt_len, layer_type="sliding_attention", enforce=True))
-    bounded = build_canvas_reveal_denoise_window_mask(
-        prompt_len, CANVAS, span, lo, sliding_window=W
-    ) == 0
+    bounded = build_canvas_reveal_denoise_window_mask(prompt_len, CANVAS, span, lo, sliding_window=W) == 0
 
     full_visible = {column for column in range(P_MAX) if bool(full[0, column])}
     bounded_visible = {lo + relative for relative in range(span) if bool(bounded[0, relative])}

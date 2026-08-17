@@ -147,9 +147,7 @@ def _build_tt_model(
 ):
     model_args = Gemma4ModelArgs.from_hf_config(hf_text_config)
     model_args._hf_text_config = hf_text_config
-    tensor_parallel = (
-        mesh_device.shape[1] if hasattr(mesh_device, "shape") else 1
-    )
+    tensor_parallel = mesh_device.shape[1] if hasattr(mesh_device, "shape") else 1
     mesh_config = MeshConfig(
         mesh_device.shape,
         decode=ModeConfig(tp=tensor_parallel),
@@ -158,11 +156,7 @@ def _build_tt_model(
         mesh_device=mesh_device,
         hf_config=model_args,
         state_dict=_hf_model_state_to_tt_state(hf_model),
-        ccl_manager=(
-            CCLManager(mesh_device, num_links=1)
-            if tensor_parallel > 1
-            else None
-        ),
+        ccl_manager=(CCLManager(mesh_device, num_links=1) if tensor_parallel > 1 else None),
         dtype=ttnn.bfloat16,
         tensor_cache_path=None,
         mesh_config=mesh_config,
@@ -174,20 +168,14 @@ def _build_tt_model(
 
 
 def _mesh_mapper(mesh_device):
-    is_mesh = (
-        hasattr(mesh_device, "shape")
-        and mesh_device.get_num_devices() > 1
-    )
+    is_mesh = hasattr(mesh_device, "shape") and mesh_device.get_num_devices() > 1
     if is_mesh:
         return ttnn.ReplicateTensorToMesh(mesh_device)
     return None
 
 
 def _to_torch(tt_tensor, mesh_device):
-    is_mesh = (
-        hasattr(mesh_device, "shape")
-        and mesh_device.get_num_devices() > 1
-    )
+    is_mesh = hasattr(mesh_device, "shape") and mesh_device.get_num_devices() > 1
     if is_mesh:
         return ttnn.to_torch(ttnn.get_device_tensors(tt_tensor)[0])
     return ttnn.to_torch(tt_tensor)
@@ -247,9 +235,7 @@ def _torch_attention_reference(
     query_cosine = cosine[:, -canvas_hidden.shape[1] :, :]
     query_sine = sine[:, -canvas_hidden.shape[1] :, :]
 
-    query = attention.q_norm(
-        attention.q_proj(canvas_hidden).view(query_shape)
-    )
+    query = attention.q_norm(attention.q_proj(canvas_hidden).view(query_shape))
     query = apply_rotary_pos_emb(
         query,
         query_cosine,
@@ -257,11 +243,7 @@ def _torch_attention_reference(
         unsqueeze_dim=2,
     ).transpose(1, 2)
     key_linear = attention.k_proj(kv_hidden).view(kv_shape)
-    value_linear = (
-        attention.v_proj(kv_hidden).view(kv_shape)
-        if attention.v_proj is not None
-        else key_linear
-    )
+    value_linear = attention.v_proj(kv_hidden).view(kv_shape) if attention.v_proj is not None else key_linear
     key = attention.k_norm(key_linear)
     key = apply_rotary_pos_emb(
         key,
@@ -377,11 +359,7 @@ def test_real_attention_denoise_mask_covers_prompt_prefix_for_layer_type(
     prompt_len, canvas_len = 64, 256
     total_len = prompt_len + canvas_len
     base_config = _create_hf_text_config(vocab_size=256, num_layers=1)
-    num_layers = (
-        1
-        if layer_type == "sliding_attention"
-        else num_layers_for_full_attention_group(base_config)
-    )
+    num_layers = 1 if layer_type == "sliding_attention" else num_layers_for_full_attention_group(base_config)
     hf_text_config = _create_hf_text_config(
         vocab_size=256,
         num_layers=num_layers,
@@ -523,9 +501,7 @@ def test_denoise_logits_forward_returns_full_canvas_logits(
     )
     with torch.no_grad():
         prompt_hidden = hf_model.embed_tokens(prompt_tokens)
-        prompt_kv_hidden = hf_model.layers[0].input_layernorm(
-            prompt_hidden
-        )
+        prompt_kv_hidden = hf_model.layers[0].input_layernorm(prompt_hidden)
     mask = build_canvas_denoise_mask(
         prompt_len,
         canvas_len,
@@ -661,10 +637,7 @@ def test_denoise_controller_real_logits_records_decision_flips(
         (1, canvas_len),
         dtype=torch.long,
     )
-    gumbel_noise = [
-        torch.zeros(1, canvas_len, vocab_size)
-        for _ in range(max_steps)
-    ]
+    gumbel_noise = [torch.zeros(1, canvas_len, vocab_size) for _ in range(max_steps)]
     noise_tokens = [
         torch.randint(
             0,
@@ -700,9 +673,7 @@ def test_denoise_controller_real_logits_records_decision_flips(
     ).view(1, 1, canvas_len, total_len)
     with torch.no_grad():
         prompt_hidden = hf_model.embed_tokens(prompt_tokens)
-        prompt_kv_hidden = hf_model.layers[0].input_layernorm(
-            prompt_hidden
-        )
+        prompt_kv_hidden = hf_model.layers[0].input_layernorm(prompt_hidden)
     reference_logits_by_step = []
 
     class TorchLogitsAdapter:
@@ -772,9 +743,7 @@ def test_denoise_controller_real_logits_records_decision_flips(
 
     def tt_adapter(canvas_tokens, step):
         logits = tt_adapter_base(canvas_tokens, step)
-        tt_logits_by_step.append(
-            _to_torch(logits, mesh_device).squeeze(0).float()
-        )
+        tt_logits_by_step.append(_to_torch(logits, mesh_device).squeeze(0).float())
         return logits
 
     tt_result = denoise_block(
@@ -966,9 +935,7 @@ class _TinyGemma4Text(torch.nn.Module):
             padding_idx=config.pad_token_id,
             embed_scale=config.hidden_size**0.5,
         )
-        self.layers = torch.nn.ModuleList(
-            [Gemma4TextDecoderLayer(config, layer_idx=0)]
-        )
+        self.layers = torch.nn.ModuleList([Gemma4TextDecoderLayer(config, layer_idx=0)])
         self.norm = Gemma4RMSNorm(
             config.hidden_size,
             eps=config.rms_norm_eps,
@@ -981,11 +948,7 @@ class _TinyGemma4Text(torch.nn.Module):
 
 
 def _tiny_attention_config(layer_type):
-    layer_types = (
-        ["sliding_attention", "full_attention"]
-        if layer_type == "sliding_attention"
-        else ["full_attention"]
-    )
+    layer_types = ["sliding_attention", "full_attention"] if layer_type == "sliding_attention" else ["full_attention"]
     config = Gemma4TextConfig(
         vocab_size=128,
         hidden_size=128,
@@ -1022,10 +985,7 @@ def _tiny_attention_config(layer_type):
 
 
 def _to_tt_state(hf_model):
-    return {
-        f"model.{key}": value
-        for key, value in hf_model.state_dict().items()
-    }
+    return {f"model.{key}": value for key, value in hf_model.state_dict().items()}
 
 
 def _to_device_hidden(device, value):
@@ -1039,10 +999,7 @@ def _to_device_hidden(device, value):
 
 
 def _to_torch_hidden(device, value):
-    is_mesh = (
-        hasattr(device, "shape")
-        and device.get_num_devices() > 1
-    )
+    is_mesh = hasattr(device, "shape") and device.get_num_devices() > 1
     if is_mesh:
         return ttnn.to_torch(ttnn.get_device_tensors(value)[0])
     return ttnn.to_torch(value)
@@ -1080,27 +1037,21 @@ def _torch_tiny_denoise_attention_reference(
         kv_heads,
         attention.head_dim,
     )
-    query = attention.q_norm(
-        attention.q_proj(canvas_hidden).view(query_shape)
-    )
+    query = attention.q_norm(attention.q_proj(canvas_hidden).view(query_shape))
     query = apply_rotary_pos_emb(
         query,
         query_cosine,
         query_sine,
         unsqueeze_dim=2,
     ).transpose(1, 2)
-    key = attention.k_norm(
-        attention.k_proj(kv_hidden).view(kv_shape)
-    )
+    key = attention.k_norm(attention.k_proj(kv_hidden).view(kv_shape))
     key = apply_rotary_pos_emb(
         key,
         cosine,
         sine,
         unsqueeze_dim=2,
     ).transpose(1, 2)
-    value = attention.v_norm(
-        attention.v_proj(kv_hidden).view(kv_shape)
-    ).transpose(1, 2)
+    value = attention.v_norm(attention.v_proj(kv_hidden).view(kv_shape)).transpose(1, 2)
     out = torch.nn.functional.scaled_dot_product_attention(
         query,
         key,
@@ -1142,11 +1093,7 @@ def test_w2b_integrated_long_prompt_denoise_attention(
         mesh_device=device,
         hf_config=model_args,
         state_dict=_to_tt_state(hf_model),
-        ccl_manager=(
-            CCLManager(device, num_links=1)
-            if tensor_parallel > 1
-            else None
-        ),
+        ccl_manager=(CCLManager(device, num_links=1) if tensor_parallel > 1 else None),
         dtype=ttnn.bfloat16,
         tensor_cache_path=None,
         mesh_config=mesh_config,

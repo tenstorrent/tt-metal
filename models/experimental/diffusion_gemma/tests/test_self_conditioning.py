@@ -104,9 +104,7 @@ def test_self_conditioning_pcc(device):
 
     with torch.no_grad():
         golden = reference(embeddings, signal)
-    out = ttnn.to_torch(
-        device_module.forward(_to_device(embeddings, device), _to_device(signal, device))
-    )[0]
+    out = ttnn.to_torch(device_module.forward(_to_device(embeddings, device), _to_device(signal, device)))[0]
 
     assert_with_pcc(golden, out, 0.99)
 
@@ -121,9 +119,7 @@ def test_zero_signal_is_post_norm_of_embeds(device):
 
     with torch.no_grad():
         golden = reference(embeddings, signal)
-    out = ttnn.to_torch(
-        device_module.forward(_to_device(embeddings, device), _to_device(signal, device))
-    )[0]
+    out = ttnn.to_torch(device_module.forward(_to_device(embeddings, device), _to_device(signal, device)))[0]
 
     assert_with_pcc(golden, out, 0.99)
     assert not torch.allclose(out.float(), embeddings, atol=1e-3)

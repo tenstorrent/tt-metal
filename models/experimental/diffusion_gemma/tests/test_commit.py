@@ -24,11 +24,7 @@ TRACE_REGION = 64 << 20
 def mesh():
     """Use one session so trace-region configuration is consistent on every chip."""
     shape = os.environ.get("MESH_DEVICE", "P150x4")
-    rows, columns = (
-        (1, 4)
-        if shape == "P150x4"
-        else (int(shape.split("x")[0]), int(shape.split("x")[1]))
-    )
+    rows, columns = (1, 4) if shape == "P150x4" else (int(shape.split("x")[0]), int(shape.split("x")[1]))
     device = ttnn.open_mesh_device(
         mesh_shape=ttnn.MeshShape(rows, columns),
         trace_region_size=TRACE_REGION,
@@ -309,8 +305,6 @@ def test_traced_fill_then_sdpa_reads_the_fresh_tail(mesh):
             kv_reference,
             scale=1.0,
         )
-        pcc = torch.corrcoef(
-            torch.stack([outputs[name].flatten(), reference.flatten()])
-        )[0, 1].item()
+        pcc = torch.corrcoef(torch.stack([outputs[name].flatten(), reference.flatten()]))[0, 1].item()
         assert pcc > 0.99
     assert not torch.equal(outputs["a"], outputs["b"])

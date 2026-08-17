@@ -60,9 +60,7 @@ def _torch_oracle(x, weights, routing):
         gate = x_float @ weights.gate_proj[0, expert].float()
         up = x_float @ weights.up_proj[0, expert].float()
         activation = torch.nn.functional.gelu(gate, approximate="tanh") * up
-        out[0, 0] += (
-            activation @ weights.down_proj[0, expert].float()
-        ) * routing[0, 0, :, expert : expert + 1].float()
+        out[0, 0] += (activation @ weights.down_proj[0, expert].float()) * routing[0, 0, :, expert : expert + 1].float()
     return out
 
 

@@ -94,11 +94,7 @@ def _to_tt_state(config):
 
 
 def _alloc_caches(mesh_device, model, prompt_len, *, paged):
-    config = (
-        PagedAttentionConfig(block_size=BLOCK_SIZE, max_num_blocks=prompt_len // BLOCK_SIZE)
-        if paged
-        else None
-    )
+    config = PagedAttentionConfig(block_size=BLOCK_SIZE, max_num_blocks=prompt_len // BLOCK_SIZE) if paged else None
     return [
         init_kv_cache(
             mesh_device=mesh_device,

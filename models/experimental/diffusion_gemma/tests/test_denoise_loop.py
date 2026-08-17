@@ -195,9 +195,7 @@ def test_multi_step_denoise_control_flow_smoke_matches_reference(device):
     )
     init_canvas = torch.randint(0, vocab_size, (batch, length), dtype=torch.long)
     gumbel_noise = [torch.zeros_like(logits) for _ in range(max_steps)]
-    noise_tokens = [
-        torch.randint(0, vocab_size, (batch, length), dtype=torch.long) for _ in range(max_steps)
-    ]
+    noise_tokens = [torch.randint(0, vocab_size, (batch, length), dtype=torch.long) for _ in range(max_steps)]
 
     reference = ref_denoise_block(
         lambda canvas, step: logits,

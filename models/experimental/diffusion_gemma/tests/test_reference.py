@@ -300,9 +300,7 @@ def test_decoder_soft_embedding_matches_reference_scale_and_mask():
 
 
 def test_stage_gate_requires_canonical_production_replay(expect_error):
-    args = build_arg_parser().parse_args(
-        ["--stage-gate", "--noise-mode", "seeded", "--max-denoising-steps", "8"]
-    )
+    args = build_arg_parser().parse_args(["--stage-gate", "--noise-mode", "seeded", "--max-denoising-steps", "8"])
     _validate_stage_gate_args(args)
     args.max_denoising_steps = 1
     with expect_error(ValueError, match="max-denoising-steps 8"):
