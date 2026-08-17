@@ -43,8 +43,10 @@ struct IntermeshVCConfig;
  * pair, computed from both, substituting for neither:
  * - UNRESTRICTED (a Y cardinal port of any capability, or an X landing): no dimension-order
  *   limit; wires into every non-self egress the gates below admit.
- * - X_RING_ONLY (a same-mesh X port): dimension order; may only continue around the X ring,
- *   into the opposite X egress.
+ * - X_RING_ONLY (a same-mesh X port): dimension order; may not turn back into an INTRAMESH Y
+ *   egress. The egress side is capability-keyed too (contract section 4.4), so a mesh seam
+ *   stays wired whatever compass letter it sits on: leaving the mesh is not a turn back into
+ *   the Y rings the ordering protects.
  * - EXPRESS_CHORD (Z carrying a same-mesh chord): a Y resource, like N/S, so
  *   likewise unrestricted; its feed rides every carrier VC.
  * - BOUNDARY (Z crossing a mesh boundary): carries no routing direction, so it
@@ -73,6 +75,7 @@ bool wires_into(
     RoutingDirection producer_direction,
     EdgeCapability producer_capability,
     RoutingDirection egress_direction,
+    std::optional<EdgeCapability> egress_capability,
     ZPortRole chip_z_role,
     bool express_routing_enabled,
     uint32_t vc);
@@ -192,14 +195,14 @@ struct RouterVcShape {
  *
  * The derivation emits prefix sums for every flat base and enforces the num_max_* ceilings,
  * turning the capacity comments elsewhere into guarantees at the one construction site. The
- * chip's Z port arrives as its ZPortRole (boundary, chord, or none) -- the same fact the
- * turn-set derivation reads, with one spelling.
+ * chip arrives as its whole per-direction capability set: this router's own capability and the
+ * chip's Z-port role are both read off it, so a caller cannot spell one chip two ways, and an
+ * impossible pairing of the two is unrepresentable rather than merely rejected.
  */
 RouterVcShape router_vc_shape(
     Topology topology,
     RoutingDirection facing,
-    EdgeCapability edge_capability,
-    ZPortRole chip_z_role,
+    const PerDirectionCapabilities& chip_capabilities,
     bool express_routing_enabled,
     const IntermeshVCConfig* vc_config);
 
@@ -246,13 +249,13 @@ using RouterTurnSet = std::array<std::vector<ConnectionTarget>, builder_config::
  *   VC1 only in pass-through mode); nothing exists without the port.
  *
  * The VC facts arrive as the same IntermeshVCConfig the shape derivation takes, so a caller
- * cannot spell one fabric two ways (e.g. requires_vc1 for the shape but not for the turn set).
+ * cannot spell one fabric two ways (e.g. requires_vc1 for the shape but not for the turn set),
+ * and the chip arrives as the same per-direction capability set for the same reason.
  */
 RouterTurnSet turn_set_for_router(
     Topology topology,
     RoutingDirection facing,
-    EdgeCapability edge_capability,
-    ZPortRole chip_z_role,
+    const PerDirectionCapabilities& chip_capabilities,
     bool express_routing_enabled,
     const IntermeshVCConfig* vc_config);
 
@@ -270,8 +273,7 @@ struct RouterArchetype {
 RouterArchetype router_archetype(
     Topology topology,
     RoutingDirection facing,
-    EdgeCapability edge_capability,
-    ZPortRole chip_z_role,
+    const PerDirectionCapabilities& chip_capabilities,
     bool express_routing_enabled,
     const IntermeshVCConfig* vc_config);
 

@@ -55,6 +55,12 @@ struct ExpressRingTopology {
     std::vector<std::pair<int, int>> cyclic_non_ring_hops() const;
 };
 
+// port_direction of the axis edge between two rows of one line, or nullopt when there is none. `axis`
+// selects which coordinate the rows index and `ortho` fixes the line; a Z chord answers here exactly
+// like a cardinal edge, which is what lets callers name a hop's command without a chord lookup.
+std::optional<RoutingDirection> axis_edge_direction(
+    const MeshGraph& mesh_graph, MeshId mesh_id, int axis, int ortho, int row_a, int row_b);
+
 // std::nullopt when the mesh declares no express links, leaving base routing untouched. Throws on any
 // topology this cut does not define; each check carries its own message.
 std::optional<ExpressRingTopology> derive_express_ring_topology(const MeshGraph& mesh_graph, MeshId mesh_id);

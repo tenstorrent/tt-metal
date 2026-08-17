@@ -83,7 +83,14 @@ bool ExpressInjectionPolicy::producer_is_injection(uint32_t vc, eth_chan_directi
     // and nothing is wired into a Z egress on a chip with no Z port), so a DOR-forbidden turn that
     // still reaches classify_producer_effect genuinely signals map/derivation disagreement, not a
     // correctly unwired slot.
-    if (!wires_into(ingress, *ingress_capability, egress_, chip_z_role_, /*express_routing_enabled=*/true, vc)) {
+    if (!wires_into(
+            ingress,
+            *ingress_capability,
+            egress_,
+            egress_capability_,
+            chip_z_role_,
+            /*express_routing_enabled=*/true,
+            vc)) {
         return false;
     }
     return is_injection_effect(

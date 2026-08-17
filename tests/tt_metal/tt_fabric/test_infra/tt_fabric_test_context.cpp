@@ -425,14 +425,18 @@ void TestContext::compile_programs() {
             // repeated direction can be told apart from a repeated destination.
             std::string eth_info;
             for (const auto& [core, sender] : senders) {
-                for (const auto& [cfg, key] : sender.get_configs()) {
-                    if (!eth_info.empty()) {
-                        eth_info += ", ";
+                for (const auto& [cfg, keys] : sender.get_configs()) {
+                    // One entry per connection: a multi-output multicast root injects into several, and
+                    // printing only the first would make an under-delivering fanout look correct here.
+                    for (const auto& key : keys) {
+                        if (!eth_info.empty()) {
+                            eth_info += ", ";
+                        }
+                        eth_info +=
+                            std::string(enchantum::to_string(key.direction)) + "[" + std::to_string(key.link_idx) +
+                            "]=ch" + std::to_string(static_cast<uint32_t>(key.eth_chan)) + "->D" +
+                            (cfg.dst_node_ids.empty() ? std::string("?") : std::to_string(cfg.dst_node_ids[0].chip_id));
                     }
-                    eth_info +=
-                        std::string(enchantum::to_string(key.direction)) + "[" + std::to_string(key.link_idx) + "]=ch" +
-                        std::to_string(static_cast<uint32_t>(key.eth_chan)) + "->D" +
-                        (cfg.dst_node_ids.empty() ? std::string("?") : std::to_string(cfg.dst_node_ids[0].chip_id));
                 }
             }
 
@@ -685,7 +689,6 @@ void TestContext::process_traffic_config(TestConfig& config) {
             if (dest.hops.has_value()) {
                 traffic_config.hops = dest.hops;
             }
-
             this->add_traffic_config(traffic_config);
         }
     }

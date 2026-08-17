@@ -10,6 +10,12 @@
 
 namespace tt::tt_fabric {
 
+bool is_protected_y_egress(RoutingDirection egress, EdgeCapability egress_capability) {
+    return (egress_capability == EdgeCapability::INTRAMESH_CARDINAL &&
+            (egress == RoutingDirection::N || egress == RoutingDirection::S)) ||
+           (egress_capability == EdgeCapability::INTRAMESH_EXPRESS && egress == RoutingDirection::Z);
+}
+
 bool is_static_dor_forbidden(
     RoutingDirection ingress,
     EdgeCapability ingress_capability,
@@ -20,12 +26,7 @@ bool is_static_dor_forbidden(
     const bool is_intramesh_x_ingress =
         ingress_capability == EdgeCapability::INTRAMESH_CARDINAL && is_x_axis_direction(ingress);
 
-    const bool is_intramesh_y_egress =
-        (egress_capability == EdgeCapability::INTRAMESH_CARDINAL &&
-         (egress == RoutingDirection::N || egress == RoutingDirection::S)) ||
-        (egress_capability == EdgeCapability::INTRAMESH_EXPRESS && egress == RoutingDirection::Z);
-
-    return is_intramesh_x_ingress && is_intramesh_y_egress;
+    return is_intramesh_x_ingress && is_protected_y_egress(egress, egress_capability);
 }
 
 bool is_injection_effect(ProtectedDomainEffect effect) { return effect == ProtectedDomainEffect::ENTER; }

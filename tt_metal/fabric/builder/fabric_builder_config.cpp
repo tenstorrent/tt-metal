@@ -53,9 +53,14 @@ uint32_t get_vc0_downstream_edm_count(bool is_2D_routing, bool express_routing_e
                                    : builder_config::num_downstream_edms_2d_vc0;
 }
 
-uint32_t get_vc1_downstream_edm_count(bool is_2D_routing) {
+uint32_t get_vc1_downstream_edm_count(bool is_2D_routing, bool express_routing_enabled) {
     TT_FATAL(is_2D_routing, "VC1 is only supported for 2D routing");
-    return builder_config::num_downstream_edms_2d_vc1;
+    // Builder contract §3.6: under express a receiving router's cardinal/express fanout needs four
+    // downstream EDMs on VC1 as well as four on VC0, because a landed VC1 carrier feeds N/S/Z/E/W
+    // through the same shared maps. The narrow count is the XY-intermesh shape (three mesh
+    // directions, no chord) and stays for non-express fabrics.
+    return express_routing_enabled ? builder_config::num_downstream_edms_2d_vc1_wide
+                                   : builder_config::num_downstream_edms_2d_vc1;
 }
 
 }  // namespace tt::tt_fabric::builder_config

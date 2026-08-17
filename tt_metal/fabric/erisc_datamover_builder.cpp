@@ -793,8 +793,15 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
         }
     }
 
-    // Apply channel trimming overrides (from imported profile) after normal initialization
-    if (channel_trimming_overrides.has_value()) {
+    // Apply channel trimming overrides (from imported profile) after normal initialization.
+    // Kernel contract §6 holds channel remapping and trim bypass off for an express fabric: an
+    // imported capture describes the queue graph of the configuration it was captured against, and
+    // express gives a router a different sender/downstream shape, so replaying it here can disable
+    // a channel this router genuinely uses.
+    const bool express_routing_enabled =
+        tt::tt_metal::MetalContext::instance().get_control_plane().express_routing_enabled(
+            local_fabric_node_id.mesh_id);
+    if (channel_trimming_overrides.has_value() && !express_routing_enabled) {
         apply_channel_trimming_overrides(channel_trimming_overrides.value());
     }
 
@@ -1009,12 +1016,6 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     uint32_t num_vc1_downstream_edms =
         needs_vc1 ? this->receiver_channel_to_downstream_adapter->get_downstream_edm_count_for_vc(1) : 0;
 
-    log_debug(
-        LogFabric,
-        "needs_vc1: {}, num_vc0_downstream_edms: {}, num_vc1_downstream_edms: {}",
-        needs_vc1,
-        num_vc0_downstream_edms,
-        num_vc1_downstream_edms);
     // Calculate array sizes for downstream EDMs based on masks
     // Size = position of highest set bit + 1 (e.g., mask 0x5 = size 3, mask 0x3 = size 2)
     auto calc_array_size_from_mask = [](uint32_t mask) -> uint32_t {
@@ -1074,20 +1075,31 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     const auto& global_overrides = builder_context.get_channel_trimming_global_overrides();
     const bool router_has_real_capture_entry = has_real_channel_trimming_capture_entry(
         builder_context.get_channel_trimming_overrides(), local_physical_chip_id, my_eth_channel);
+    // Kernel contract §6: speedy, super-speedy, trim bypass, and channel remapping stay off for an
+    // express fabric until each is shown to preserve the same local admission, concrete sender,
+    // remote BFC, and queue graph. Express changes the per-router shape those paths were derived
+    // against -- a cardinal router carries five VC0 and four VC1 senders, and an X-facing router is
+    // DOR-unwired down to a single downstream -- so a topology inferred from the trim capture no
+    // longer describes the queue graph the router actually runs.
+    const bool express_routing_enabled = control_plane.express_routing_enabled(this->local_fabric_node_id.mesh_id);
+
     // Global overrides replace the sender/receiver enablement decision for a VC,
     // but they do not rewrite the imported per-router "forwarded-to" capture.
     // Once a VC is overridden, we stop using that forwarding capture to infer a
     // speedy-safe topology and fall back to the conservative non-speedy path.
     std::array<bool, builder_config::MAX_NUM_VCS> can_use_forwarding_capture_by_vc{};
     for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
-        can_use_forwarding_capture_by_vc[vc] = !global_overrides.per_vc[vc].has_override();
+        can_use_forwarding_capture_by_vc[vc] = !express_routing_enabled && !global_overrides.per_vc[vc].has_override();
     }
 
     // `ComputeMeshRouterBuilder` precomputes the local VC0 trim
     // shape, including whether a terminal-only router has an exact upstream
     // peer that makes the speedy receiver path safe on this link.
+    // Gated with the rest of the trim bypass above. Suppressing these keeps deadlock avoidance and
+    // first-level ack at their untrimmed setting rather than letting a trim shape relax them.
+    const bool vc0_trim_fast_path_usable = !express_routing_enabled && vc0_trim_fast_path_info_.has_value();
     const bool vc0_is_terminal_or_source_only_after_trim =
-        vc0_trim_fast_path_info_.has_value() && vc0_trim_fast_path_info_->terminal_or_source_only;
+        vc0_trim_fast_path_usable && vc0_trim_fast_path_info_->terminal_or_source_only;
     const bool base_enable_deadlock_avoidance =
         fabric_context.need_deadlock_avoidance_support(control_plane, this->local_fabric_node_id, this->direction_);
     const bool final_enable_deadlock_avoidance =
@@ -1109,6 +1121,9 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
         constexpr uint32_t k_bfc_protected_receiver_min_slots =
             builder_config::bubble_flow_control_protected_receiver_min_slots;
         constexpr size_t k_bfc_vc = 0;  // v1 enables bubble flow control on VC0 only
+        static_assert(
+            builder_config::bubble_flow_control_enabled_on_vc(k_bfc_vc),
+            "The protected-receiver slot check must inspect a VC that actually runs bubble flow control");
         constexpr size_t k_receiver_channel = 0;
         const size_t remote_slots =
             static_channel_allocator->get_remote_receiver_channel_number_of_slots(k_bfc_vc, k_receiver_channel);
@@ -1127,10 +1142,12 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     // shape, and optionally enable a terminal-only speedy receiver when the
     // host has already proven that the exact peer on this link is the
     // matching worker-only source router.
-    const bool enable_speedy_vc0 = vc0_speedy_path_enabled(
-        actual_sender_channels_vc0,
-        base_enable_deadlock_avoidance,
-        vc0_trim_fast_path_info_.value_or(Vc0TrimFastPathInfo{}));
+    const bool enable_speedy_vc0 =
+        !express_routing_enabled &&
+        vc0_speedy_path_enabled(
+            actual_sender_channels_vc0,
+            base_enable_deadlock_avoidance,
+            vc0_trim_fast_path_info_.value_or(Vc0TrimFastPathInfo{}));
 
     // ===== Build named compile-time args (all non-pool/channel-mapping args) =====
     std::unordered_map<std::string, uint32_t> named_args;
@@ -1192,7 +1209,15 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     named_args["CHANNEL_BUFFER_SIZE"] = static_cast<uint32_t>(this->channel_buffer_size);
     named_args["FABRIC_TENSIX_EXTENSION_MUX_MODE"] = this->has_tensix_extension;
     named_args["ENABLE_FIRST_LEVEL_ACK_VC0"] = final_enable_first_level_ack_vc0 ? 1 : 0;
-    named_args["ENABLE_FIRST_LEVEL_ACK_VC1"] = 0;  // VC1 does not use bubble flow control
+    // VC1 does not use bubble flow control, and it cannot afford first-level ack independently of
+    // that: turning this on compiles the ack paths into all four VC1 sender channel steps and the
+    // VC1 receiver step, which pushes the router past the ACTIVE_ETH kernel config window
+    // (measured: 25648 against a 25600 limit on an intermesh-bearing rank). The window is fixed by
+    // MEM_AERISC_KERNEL_CONFIG_SIZE in the Blackhole memory map, so this is a space constraint and
+    // not a policy knob. Note also that first-level ack must agree across every VC1 link, since the
+    // acking receiver and the upstream sender are on different routers -- it cannot be enabled for
+    // just the routers that carry landed intermesh traffic.
+    named_args["ENABLE_FIRST_LEVEL_ACK_VC1"] = 0;
     named_args["ENABLE_RISC_CPU_DATA_CACHE"] = enable_risc_cpu_data_cache;
     named_args["VC0_DOWNSTREAM_EDM_SIZE"] = vc0_downstream_edm_size;
     named_args["VC1_DOWNSTREAM_EDM_SIZE"] = vc1_downstream_edm_size;
@@ -1264,7 +1289,7 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     // ComputeMeshRouterBuilder::create_kernel is by construction: both key on
     // express_routing_enabled. The kernel reads these named args only under that define, and a
     // missing arg fails the compile.
-    if (control_plane.express_routing_enabled(this->local_fabric_node_id.mesh_id)) {
+    if (express_routing_enabled) {
         // Same accessor and scope the packer and the worker defines use. The router decodes with
         // these as its coordinate bounds, so any disagreement with the shape the L1 vectors were
         // packed against reads the wrong row.
@@ -1272,13 +1297,16 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
             control_plane.get_physical_mesh_shape(this->local_fabric_node_id.mesh_id, MeshScope::GLOBAL);
         named_args["MESH_Y_SIZE"] = mesh_shape[0];
         named_args["MESH_X_SIZE"] = mesh_shape[1];
-        // Inter-mesh landings arrive on the VC1 receiver channel (flat RX index 1): VC1 is the
-        // intermesh carrier VC, and its receiver maps to flat index 1 on both mesh and Z router
-        // variants. This router's other receiver channels carry same-mesh traffic (VC0 ingress,
-        // intrachip egress relays) and must not be re-encoded. A router receives inter-mesh
-        // landings iff its eth peer is in another mesh.
+        // A router receives inter-mesh landings iff its eth peer is in another mesh, and on such a
+        // router every carrier-VC receiver takes them: a neighbour mesh's locally generated traffic
+        // is injected by its workers on VC0 and therefore arrives here on VC0, which is what the
+        // VC0->VC1 crossover downstream of this receiver exists to handle. Arming only VC1 would
+        // leave that traffic to ordinary decode, which reads the source mesh's stale maps against
+        // this mesh's coordinates and forwards the packet instead of landing it.
+        //
+        // VC2 is excluded because it stays outside the express derivation entirely.
         for (size_t i = 0; i < builder_config::num_max_receiver_channels; i++) {
-            named_args[fmt::format("IS_RECEIVER_CHANNEL_{}_INTERMESH_INGRESS", i)] = (is_inter_mesh && i == 1) ? 1 : 0;
+            named_args[fmt::format("IS_RECEIVER_CHANNEL_{}_INTERMESH_INGRESS", i)] = (is_inter_mesh && i < 2) ? 1 : 0;
         }
     }
 

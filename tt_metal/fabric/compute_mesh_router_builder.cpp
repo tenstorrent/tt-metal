@@ -4,7 +4,9 @@
 
 #include "compute_mesh_router_builder.hpp"
 #include <enchantum/enchantum.hpp>
+#include <cstdlib>
 #include <limits>
+#include <string>
 #include "tt_metal/fabric/erisc_datamover_builder.hpp"
 #include "tt_metal/fabric/fabric_tensix_builder.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
@@ -179,14 +181,17 @@ RouterChannelCounts compute_router_channel_counts(
     // discover_channels() already rejects more than one neighbor mesh per direction, so the
     // direction has exactly one neighbor to classify. This is the archetype query: what shape
     // WOULD a router with these facts have -- no router is constructed to find out.
-    const auto edge_capability =
-        capability_in_direction(control_plane, fabric_node_id, direction).value_or(EdgeCapability::INTRAMESH_CARDINAL);
+    auto chip_capabilities = chip_capabilities_of(control_plane, fabric_node_id);
+    // A direction with no discovered neighbor still has a shape question to answer here, so the
+    // query reads it as an ordinary same-mesh edge rather than refusing.
+    if (!chip_capabilities.at(direction).has_value()) {
+        chip_capabilities.at(direction) = EdgeCapability::INTRAMESH_CARDINAL;
+    }
     const auto& intermesh_config = fabric_context.get_builder_context().get_intermesh_vc_config();
     const auto vc_shape = router_vc_shape(
         topology,
         direction,
-        edge_capability,
-        z_port_role(control_plane, fabric_node_id),
+        chip_capabilities,
         control_plane.express_routing_enabled(fabric_node_id.mesh_id),
         &intermesh_config);
 
@@ -325,7 +330,7 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     // the intermesh Z router and leak same-mesh traffic onto the boundary link.
     const auto& intermesh_config = fabric_context.get_builder_context().get_intermesh_vc_config();
     auto archetype = router_archetype(
-        topology, location.direction, edge_capability, chip_z_role, express_enabled, &intermesh_config);
+        topology, location.direction, chip_facts.per_direction_capabilities, express_enabled, &intermesh_config);
     const auto& vc_shape = archetype.shape;
 
     // Compute injection channel flags at router level BEFORE creating builders
@@ -365,7 +370,14 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
 
     for (uint32_t vc = 0; vc < num_vcs; ++vc) {
         uint32_t num_channels_in_vc = vc_shape.sender_counts[vc];
-        auto vc_injection_flags = compute_sender_channel_injection_flags(producer_slots, vc, injection_policy);
+        // A policy answers whether a slot acquires a protected ring; whether that acquisition is
+        // guarded is the separate question of which VCs realize bubble flow control. The express
+        // derivation classifies a VC1 intermesh landing's first protected egress as an acquisition,
+        // which is the correct classification, but VC1 runs unguarded today -- so emitting the flag
+        // there would demand a bubble the rest of the stack does not provide.
+        auto vc_injection_flags = builder_config::bubble_flow_control_enabled_on_vc(vc)
+                                      ? compute_sender_channel_injection_flags(producer_slots, vc, injection_policy)
+                                      : std::vector<bool>(num_channels_in_vc, false);
         // Flatten into router-level vector
         for (uint32_t ch_idx = 0; ch_idx < num_channels_in_vc; ++ch_idx) {
             router_injection_flags.push_back(vc_injection_flags.at(ch_idx));
@@ -428,11 +440,12 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
 
         // A terminal may become speedy only after its exact peer is resolved;
         // all other conditions use the same predicate as the ERISC builder.
-        const bool local_can_use_speedy_vc0 = vc0_speedy_path_enabled(
-                                                  actual_sender_channels_per_vc[0],
-                                                  fabric_context.need_deadlock_avoidance_support(eth_direction),
-                                                  *local_vc0_fast_path_info) ||
-                                              local_vc0_fast_path_info->terminal_only_nonforwarding;
+        const bool local_can_use_speedy_vc0 =
+            vc0_speedy_path_enabled(
+                actual_sender_channels_per_vc[0],
+                fabric_context.need_deadlock_avoidance_support(control_plane, local_node, eth_direction),
+                *local_vc0_fast_path_info) ||
+            local_vc0_fast_path_info->terminal_only_nonforwarding;
         if (!local_can_use_speedy_vc0) {
             return;
         }
