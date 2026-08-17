@@ -31,7 +31,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 import click
 import yaml
@@ -42,13 +42,19 @@ from ttnn.distributed.ttrun import (
     find_generate_rank_bindings_executable,
     get_generate_rank_bindings_output_paths,
     load_mock_rank_to_descriptors,
-    run_generate_rank_bindings,
 )
 
 PREFIX = "[tt-sweep]"
 # Sleep between every failed command and the next recover / tt-run retry.
 RETRY_DELAY_S = 5
 DEFAULT_RETRIES = 3
+# Consumer poll cadence: how often to re-read the streaming solutions_index.yaml for newly generated
+# solutions while the producer is still running, and the heartbeat cadence while waiting on it.
+POLL_INTERVAL_S = 2.0
+HEARTBEAT_INTERVAL_S = 30.0
+# How long to wait for the producer (generate_rank_bindings) to finish on its own before a whole-cluster
+# recover (which would otherwise disrupt the producer's live MPI job); if it overruns, it is stopped.
+PRODUCER_SETTLE_BEFORE_RECOVER_S = 300.0
 
 
 def _repo_root() -> Path:
@@ -88,7 +94,7 @@ def _inject_solution_flags(cmd: List[str], extra: List[str]) -> List[str]:
     return out
 
 
-def _generate_solutions(
+def _build_producer_cmd(
     *,
     mesh_graph_descriptor: Path,
     hosts: Optional[List[str]],
@@ -98,11 +104,15 @@ def _generate_solutions(
     distinct_host_sets: bool,
     allow_shape_permutations: bool,
     mpi_args: Optional[List[str]],
-    dry_run: bool,
-) -> Path:
-    """Phase 1: run generate_rank_bindings --all-solutions. Returns the solutions dir."""
+) -> List[str]:
+    """Build the ``generate_rank_bindings --all-solutions`` command (the streaming *producer*).
+
+    The producer runs ONCE in the background and streams each solution to ``output_dir`` -- writing a
+    per-solution subdir and rewriting ``solutions_index.yaml`` as the solver finds each one (see the
+    streaming enumerator in generate_rank_bindings.cpp). The consumer loop below picks up solutions as
+    they appear, so a tt-run can run on solution k while solution k+1 is still being searched for.
+    """
     executable = find_generate_rank_bindings_executable()
-    repo_root = _repo_root()
     output_dir.mkdir(parents=True, exist_ok=True)
 
     mock_rank_to_desc: Optional[Dict[int, Path]] = None
@@ -126,17 +136,74 @@ def _generate_solutions(
     if allow_shape_permutations:
         # hidden: turn OFF generate_rank_bindings' always-on solver unique_shapes dedup
         extra += ["--allow-shape-permutations"]
-    cmd = _inject_solution_flags(cmd, extra)
+    return _inject_solution_flags(cmd, extra)
 
-    click.echo(f"{PREFIX} Phase 1 (generate solutions):\n  {' '.join(shlex.quote(c) for c in cmd)}")
-    if dry_run:
-        click.echo(f"{PREFIX} --dry-run: skipping Phase 1 execution.")
-        return output_dir
 
-    rc = run_generate_rank_bindings(cmd, cwd=repo_root)
-    if rc != 0:
-        raise click.ClickException(f"generate_rank_bindings failed (exit {rc}).")
-    return output_dir
+class _Producer:
+    """Handle to the background solution-generation MPI job (the *producer*).
+
+    Runs generate_rank_bindings in its own session so its whole process tree can be reaped as a group.
+    The producer streams solutions to disk; the consumer polls the index for them. Because the producer
+    is a live MPI job on the same hosts as the tt-runs, two consumer operations must be producer-aware:
+      * per-tt-run reap -> pass spare_daemons=alive() so the blanket prted/mpirun kill is skipped;
+      * whole-cluster recover -> settle_for_recover() first, so the reset does not disrupt a live producer.
+    """
+
+    def __init__(self, proc: Optional[subprocess.Popen]):
+        self.proc = proc
+        self.pgid: Optional[int] = None
+        if proc is not None:
+            try:
+                self.pgid = os.getpgid(proc.pid)
+            except (ProcessLookupError, OSError):
+                self.pgid = None
+
+    def alive(self) -> bool:
+        return self.proc is not None and self.proc.poll() is None
+
+    def returncode(self) -> Optional[int]:
+        return self.proc.poll() if self.proc is not None else None
+
+    def stop(self) -> None:
+        """SIGKILL the producer's whole process group (its mpirun + prted tree)."""
+        if self.proc is None or self.proc.poll() is not None:
+            return
+        if self.pgid:
+            try:
+                os.killpg(self.pgid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError, OSError):
+                pass
+        try:
+            self.proc.wait(timeout=15)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def settle_for_recover(self) -> None:
+        """Ensure the producer is not running before a whole-cluster recover (which would disrupt it).
+
+        The producer's enumeration is a CPU SAT solve unaffected by the device state a recover fixes, so
+        we simply wait for it to finish streaming its remaining solutions (bounded); if it overruns the
+        bound we stop it (its already-streamed solutions on disk are kept and still get swept)."""
+        if not self.alive():
+            return
+        click.echo(
+            f"{PREFIX}   waiting up to {int(PRODUCER_SETTLE_BEFORE_RECOVER_S)}s for solution generation to "
+            f"finish before recover (a cluster reset must not run alongside the live producer)..."
+        )
+        try:
+            self.proc.wait(timeout=PRODUCER_SETTLE_BEFORE_RECOVER_S)
+        except subprocess.TimeoutExpired:
+            click.echo(f"{PREFIX}   producer still running after wait; stopping it so recover can proceed.")
+            self.stop()
+
+
+def _start_producer(cmd: List[str], *, cwd: Path, log_path: Path) -> _Producer:
+    """Launch the producer in the background in its own session and return a handle to it."""
+    click.echo(f"{PREFIX} Producer (stream solutions):\n  {' '.join(shlex.quote(c) for c in cmd)}")
+    click.echo(f"{PREFIX} Producer log -> {log_path}")
+    log_fh = open(log_path, "w")  # noqa: SIM115 (kept open for the life of the producer)
+    proc = subprocess.Popen(cmd, cwd=cwd, stdout=log_fh, stderr=subprocess.STDOUT, start_new_session=True)
+    return _Producer(proc)
 
 
 def _load_index(solutions_dir: Path) -> dict:
@@ -145,6 +212,21 @@ def _load_index(solutions_dir: Path) -> dict:
         raise click.ClickException(f"No solutions_index.yaml under {solutions_dir}. Run with --all-solutions first.")
     with open(index_path) as f:
         return yaml.safe_load(f)
+
+
+def _read_index_safe(solutions_dir: Path) -> Optional[dict]:
+    """Read solutions_index.yaml DEFENSIVELY for the streaming consumer: the producer rewrites it in
+    place after every solution, so a mid-rewrite read may miss the file or hit a truncated document.
+    Returns the parsed index, or None if it is not (yet) readable -- the caller just retries next poll."""
+    index_path = solutions_dir / "solutions_index.yaml"
+    try:
+        if not index_path.is_file():
+            return None
+        with open(index_path) as f:
+            data = yaml.safe_load(f)
+        return data if isinstance(data, dict) else None
+    except (OSError, yaml.YAMLError):
+        return None
 
 
 def _select_solutions(index: dict, select: Optional[str], limit: Optional[int]) -> List[dict]:
@@ -180,7 +262,9 @@ def _reap_pattern_for(program: List[str]) -> Optional[str]:
     return program[-1] if program else None
 
 
-def _reap_command_processes(pgid: Optional[int], host_set: Optional[str], reap_pattern: Optional[str]) -> None:
+def _reap_command_processes(
+    pgid: Optional[int], host_set: Optional[str], reap_pattern: Optional[str], spare_daemons: bool = False
+) -> None:
     """Kill every process a launched command left behind — locally and on every host — then verify.
 
     A tt-run that fails/times out leaves worker ranks alive on the remote hosts; they keep holding the
@@ -189,6 +273,13 @@ def _reap_command_processes(pgid: Optional[int], host_set: Optional[str], reap_p
     (mpirun/prterun/ssh) and, on each host in ``host_set``, pkills the workload ranks + ``prted``,
     polling ``pgrep`` until they are actually gone so the next command starts clean. Runs after every
     command (timeout or normal exit). Best-effort; never raises.
+
+    ``spare_daemons`` (set while the background solution *producer* -- an independent generate_rank_bindings
+    MPI job -- is still running): skip the blanket by-NAME ``prted``/``mpirun`` kills, which would also kill
+    the producer's daemons on these shared hosts. The tt-run's own process-GROUP kill (by pgid) and the
+    remote kill of its worker ranks (by the distinctive pytest pattern) are producer-safe and still run --
+    the ranks are what hold the CHIP_IN_USE locks, and killing the local launcher orphans this job's prted
+    so they exit on their own. Once the producer has finished, the caller drops back to the full-strength reap.
     """
     # 1. Local: SIGKILL the command's whole process group (the launched parent -- tt-run/bash -- plus
     #    the ssh's it spawns), AND pkill the MPI launchers by name in case they setsid'd into their own
@@ -200,13 +291,14 @@ def _reap_command_processes(pgid: Optional[int], host_set: Optional[str], reap_p
             os.killpg(pgid, signal.SIGKILL)
         except (ProcessLookupError, PermissionError, OSError):
             pass
-    for launcher in ("mpirun-ulfm", "prterun", "prted"):
-        try:
-            subprocess.run(
-                ["pkill", "-9", "-f", launcher], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10
-            )
-        except (subprocess.TimeoutExpired, OSError):
-            pass
+    if not spare_daemons:
+        for launcher in ("mpirun-ulfm", "prterun", "prted"):
+            try:
+                subprocess.run(
+                    ["pkill", "-9", "-f", launcher], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10
+                )
+            except (subprocess.TimeoutExpired, OSError):
+                pass
     # 2. Remote worker ranks + prted on each host (these hold the CHIP_IN_USE PCIe locks).
     hosts = [h.strip() for h in (host_set or "").split(",") if h.strip()]
     if not hosts or not reap_pattern:
@@ -215,8 +307,11 @@ def _reap_command_processes(pgid: Optional[int], host_set: Optional[str], reap_p
     # necessarily contains the pattern -- is NOT matched by pkill/pgrep -f, avoiding self-kill.
     bracketed = reap_pattern[:-1] + "[" + reap_pattern[-1] + "]" if reap_pattern else reap_pattern
     pat = shlex.quote(bracketed)
-    # prted first (exact process name -x, never self-matches), then the workload ranks by cmdline.
-    kill_sh = f"pkill -9 -x prted >/dev/null 2>&1; pkill -9 -f {pat} >/dev/null 2>&1; true"
+    # Workload ranks by cmdline (always). prted by exact name (-x) UNLESS sparing the producer's daemons:
+    # while the producer is alive, killing prted would take the producer down too, so we rely on the
+    # pattern kill + the local process-group kill (which orphans this job's prted) instead.
+    prted_kill = "" if spare_daemons else "pkill -9 -x prted >/dev/null 2>&1; "
+    kill_sh = f"{prted_kill}pkill -9 -f {pat} >/dev/null 2>&1; true"
     ssh = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", "-o", "StrictHostKeyChecking=no"]
     for h in hosts:
         # Kill, then poll (bounded) until the ranks are gone, re-killing each round.
@@ -241,9 +336,13 @@ def _run_once(
     header: Optional[str] = None,
     host_set: Optional[str] = None,
     reap_pattern: Optional[str] = None,
+    spare_daemons_fn: Optional[Callable[[], bool]] = None,
 ) -> Tuple[str, Optional[int]]:
     """Run ``cmd`` once in its own process group, then reap everything it started (local group +
-    remote ranks) so nothing lingers holding CHIP_IN_USE locks. Returns ``(status, returncode)``."""
+    remote ranks) so nothing lingers holding CHIP_IN_USE locks. Returns ``(status, returncode)``.
+
+    ``spare_daemons_fn`` is evaluated at reap time: when it returns True (the background producer is
+    still running), the reap skips the blanket prted/mpirun kill so the producer's MPI daemons survive."""
     mode = "a" if append else "w"
     status: str = "fail"
     rc: Optional[int] = None
@@ -266,7 +365,8 @@ def _run_once(
         except subprocess.TimeoutExpired:
             status = "timeout"
     # Always reap this command's processes (on timeout AND on normal exit); cheap no-op on a clean pass.
-    _reap_command_processes(pgid, host_set, reap_pattern)
+    # While the producer is alive, spare its shared MPI daemons (evaluate now, not before the run).
+    _reap_command_processes(pgid, host_set, reap_pattern, spare_daemons=bool(spare_daemons_fn and spare_daemons_fn()))
     if proc is not None:
         try:
             proc.wait(timeout=15)  # collect the (now-killed) child so it isn't left a zombie
@@ -288,6 +388,7 @@ def _run_with_retries(
     cmd_display: Optional[str] = None,
     host_set: Optional[str] = None,
     reap_pattern: Optional[str] = None,
+    producer: Optional["_Producer"] = None,
 ) -> _RetryResult:
     """Run ``cmd`` up to ``retries`` times, recovering only after a failure.
 
@@ -325,6 +426,7 @@ def _run_with_retries(
             header=header,
             host_set=host_set,
             reap_pattern=reap_pattern,
+            spare_daemons_fn=(producer.alive if producer is not None else None),
         )
         if last_status == "pass":
             if label == "recover":
@@ -339,6 +441,10 @@ def _run_with_retries(
             click.echo(f"{PREFIX}   -> {last_status} (rc={last_rc}) attempt {attempt}/{attempts}")
 
         if recover_cmd:
+            # A recover is a whole-cluster reset; make sure the background producer is not running
+            # alongside it (it would be disrupted). Its already-streamed solutions on disk are kept.
+            if producer is not None:
+                producer.settle_for_recover()
             click.echo(f"{PREFIX}   recover: {recover_cmd}")
             click.echo(f"{PREFIX}   recovering in {RETRY_DELAY_S}s...")
             time.sleep(RETRY_DELAY_S)
@@ -668,38 +774,40 @@ def main(
     # --sweep-timeout budget covers enumeration (Phase 1) + the per-solution sweep (Phase 2).
     sweep_start = time.time()
 
-    # 1. Obtain the solutions directory.
+    # 1. Obtain solutions: either sweep an existing --solutions-dir (a fixed, already-generated list) or
+    #    generate them with a background STREAMING producer that the consumer loop picks up incrementally.
+    producer_cmd: Optional[List[str]] = None
+    static_solutions: Optional[List[dict]] = None  # set only when a --solutions-dir was given
     if solutions_dir is not None:
         sol_dir = Path(solutions_dir).resolve()
+        static_solutions = _select_solutions(_load_index(sol_dir), select, limit)
+        if not static_solutions:
+            raise click.ClickException(f"No solutions to sweep in {sol_dir} (after --select/--limit).")
+        # Auto-detect mock mode when sweeping an existing solutions dir (per-solution phase2_mock_mapping.yaml).
+        if not mock and (sol_dir / static_solutions[0]["dir"] / "phase2_mock_mapping.yaml").is_file():
+            mock = True
     else:
         if mesh_graph_descriptor is None:
             raise click.ClickException("Provide --solutions-dir, or --mesh-graph-descriptor to generate solutions.")
         if not mock and not parsed_hosts:
             raise click.ClickException("New mode needs --hosts (real cluster) or --mock-cluster-rank-binding (mock).")
-        out = Path(solutions_output_dir).resolve() if solutions_output_dir else (_repo_root() / "generated/ttrun/sweep")
-        sol_dir = _generate_solutions(
+        sol_dir = (
+            Path(solutions_output_dir).resolve() if solutions_output_dir else (_repo_root() / "generated/ttrun/sweep")
+        )
+        producer_cmd = _build_producer_cmd(
             mesh_graph_descriptor=Path(mesh_graph_descriptor),
             hosts=parsed_hosts,
             mock_cluster_rank_binding=Path(mock_cluster_rank_binding) if mock else None,
-            output_dir=out,
+            output_dir=sol_dir,
             max_solutions=max_solutions,
             distinct_host_sets=distinct_host_sets,
             allow_shape_permutations=allow_shape_permutations,
             mpi_args=parsed_mpi_args,
-            dry_run=dry_run,
         )
         if dry_run:
-            click.echo(f"{PREFIX} --dry-run: no solutions generated; nothing to sweep.")
+            click.echo(f"{PREFIX} Producer (stream solutions):\n  {' '.join(shlex.quote(c) for c in producer_cmd)}")
+            click.echo(f"{PREFIX} --dry-run: would stream solutions and sweep each as it appears; nothing executed.")
             return
-
-    index = _load_index(sol_dir)
-    solutions = _select_solutions(index, select, limit)
-    if not solutions:
-        raise click.ClickException(f"No solutions to sweep in {sol_dir} (after --select/--limit).")
-
-    # Auto-detect mock mode when sweeping an existing solutions dir (per-solution phase2_mock_mapping.yaml).
-    if not mock and (sol_dir / solutions[0]["dir"] / "phase2_mock_mapping.yaml").is_file():
-        mock = True
 
     tt_run = _find_tt_run()
 
@@ -726,17 +834,19 @@ def main(
     if not dry_run:
         logs_root.mkdir(parents=True, exist_ok=True)
 
-    click.echo(f"{PREFIX} Sweeping {len(solutions)} solution(s) in {sol_dir}")
+    _total_desc = f"{len(static_solutions)} solution(s)" if static_solutions is not None else "streaming solutions"
+    click.echo(f"{PREFIX} Sweeping {_total_desc} in {sol_dir}")
     click.echo(f"{PREFIX} Per-solution logs -> {logs_root}")
     click.echo(f"{PREFIX} Recover on failure: {recover_command} " f"(retries={retries}, delay={RETRY_DELAY_S}s)")
     results = []
     stopped_early = False
     recover_exhausted = False
 
-    # PROACTIVE reset BEFORE any tt-run: first reap leftover ranks from prior runs on every host (they
-    # hold CHIP_IN_USE PCIe locks), then run the recover command once so the first solution launches on
-    # a clean cluster. This is the SAME command used reactively after a failure -> all recovery + all
-    # process-killing lives in this sweep driver (not the caller). Skipped on --dry-run / "true" no-op.
+    # PROACTIVE reset BEFORE the producer starts and BEFORE any tt-run: first reap leftover ranks from
+    # prior runs on every host (they hold CHIP_IN_USE PCIe locks), then run the recover command once so
+    # both the producer's device discovery and the first tt-run launch on a clean cluster. This is the
+    # SAME command used reactively after a failure -> all recovery + all process-killing lives in this
+    # sweep driver (not the caller). Skipped on --dry-run / "true" no-op.
     if not dry_run:
         all_hosts = ",".join(parsed_hosts) if parsed_hosts else None
         _reap_command_processes(None, all_hosts, _reap_pattern_for(program))
@@ -753,19 +863,16 @@ def main(
                 cmd_display=recover_command,
             )
 
-    for i, sol in enumerate(solutions):
-        # Total-budget check (before launching, so we never interrupt a running solve).
-        if sweep_timeout is not None:
-            elapsed = time.time() - sweep_start
-            if elapsed >= sweep_timeout:
-                click.echo(
-                    f"{PREFIX} WARNING: --sweep-timeout ({sweep_timeout}s) reached after {round(elapsed, 1)}s; "
-                    f"stopping with {len(results)}/{len(solutions)} solution(s) swept "
-                    f"({len(solutions) - len(results)} not run)."
-                )
-                stopped_early = True
-                break
+    # Start the background STREAMING producer AFTER the reset (so it discovers a clean cluster). The
+    # consumer loop below picks up each solution as the producer writes it to the index; tt-runs run one
+    # at a time (serialized). No producer in --solutions-dir mode -- the list is already on disk.
+    producer: Optional[_Producer] = None
+    if producer_cmd is not None and not dry_run:
+        producer = _start_producer(producer_cmd, cwd=_repo_root(), log_path=logs_root / "_producer.log")
 
+    def _consume_one(sol: dict, position_label: str) -> str:
+        """Run one solution's tt-run (with retries/reap/recover) and record it. Returns the loop action:
+        'continue' | 'stop' (stop-on-failure) | 'unrecoverable' (recover exhausted)."""
         cmd = _build_tt_run_cmd(
             tt_run=tt_run,
             solutions_dir=sol_dir,
@@ -777,10 +884,7 @@ def main(
         )
         label = sol.get("id", sol["dir"])
         cmd_str = " ".join(shlex.quote(c) for c in cmd)  # exact, copy-paste-reproducible tt-run command
-        click.echo(
-            f"\n{PREFIX} [{i + 1}/{len(solutions)}] solution {label} "
-            f"({sol.get('num_hosts', '?')} hosts)\n  {cmd_str}"
-        )
+        click.echo(f"\n{PREFIX} [{position_label}] solution {label} ({sol.get('num_hosts', '?')} hosts)\n  {cmd_str}")
 
         if dry_run:
             click.echo(
@@ -800,7 +904,7 @@ def main(
                     recover_command=recover_command,
                 )
             )
-            continue
+            return "continue"
 
         log_path = logs_root / f"{label}.log"
         t0 = time.time()
@@ -813,10 +917,12 @@ def main(
             recover_cmd=recover_command,
             label="tt-run",
             cmd_display=cmd_str,
-            # After every attempt (timeout or exit), reap this solution's ranks on its hosts so the
-            # retry never wedges on a CHIP_IN_USE lock held by the prior attempt's leftover process.
+            # After every attempt (timeout or exit), reap this solution's ranks on its hosts so the retry
+            # never wedges on a CHIP_IN_USE lock held by the prior attempt. While the producer is alive the
+            # reap spares the shared MPI daemons; a recover first settles (waits out) the producer.
             host_set=sol.get("host_set"),
             reap_pattern=_reap_pattern_for(program),
+            producer=producer,
         )
         dur = round(time.time() - t0, 1)
         click.echo(
@@ -842,16 +948,81 @@ def main(
         # Recover failure is unrecoverable: always abort, ignoring --stop-on-failure/--continue-on-failure.
         # Those flags only control whether a *workload* fail/timeout (after all tt-run retries) continues.
         if outcome.recover_exhausted:
-            recover_exhausted = True
             click.echo(
                 f"{PREFIX} UNRECOVERABLE: hardware cannot recover with this command "
                 f"after {retries} attempt(s) (last rc={outcome.recover_returncode}). "
                 f"--stop-on-failure/--continue-on-failure do not apply. Halting after {label}."
             )
-            break
+            return "unrecoverable"
         if outcome.status != "pass" and stop_on_failure:
             click.echo(f"{PREFIX} --stop-on-failure: halting after {label}.")
+            return "stop"
+        return "continue"
+
+    # 2. Consumer: run tt-runs one at a time, pulling solutions as they become available -- the fixed list
+    #    in --solutions-dir mode, or the streaming index as the producer generates them. tt-runs serialized.
+    consumed: set = set()
+    last_heartbeat = time.time()
+    while True:
+        # Total-budget check (before launching, so we never interrupt a running solve).
+        if sweep_timeout is not None and (time.time() - sweep_start) >= sweep_timeout:
+            click.echo(
+                f"{PREFIX} WARNING: --sweep-timeout ({sweep_timeout}s) reached after "
+                f"{round(time.time() - sweep_start, 1)}s; stopping with {len(consumed)} solution(s) swept."
+            )
+            stopped_early = True
             break
+        # --limit is a hard cap on how many solutions we run (the streaming index keeps growing otherwise).
+        if limit is not None and len(consumed) >= limit:
+            break
+
+        # Solutions available to consume right now.
+        if static_solutions is not None:
+            avail = static_solutions
+        else:
+            idx = _read_index_safe(sol_dir)
+            avail = _select_solutions(idx, select, limit) if idx else []
+        new = [s for s in avail if (s.get("id") or s.get("dir")) not in consumed]
+
+        if new:
+            sol = new[0]
+            consumed.add(sol.get("id") or sol.get("dir"))
+            total = str(len(static_solutions)) if static_solutions is not None else "streaming"
+            action = _consume_one(sol, f"{len(consumed)}/{total}")
+            if action == "unrecoverable":
+                recover_exhausted = True
+                break
+            if action == "stop":
+                break
+            continue
+
+        # Nothing new to consume yet.
+        if producer is not None and producer.alive():
+            if time.time() - last_heartbeat >= HEARTBEAT_INTERVAL_S:
+                click.echo(
+                    f"{PREFIX} waiting for producer: {len(consumed)} swept, {len(avail)} generated so far, "
+                    f"generation ongoing..."
+                )
+                last_heartbeat = time.time()
+            time.sleep(POLL_INTERVAL_S)
+            continue
+        break  # producer finished (or none) and nothing new left to consume
+
+    # Stop the producer if it is still running (early stop via --limit / --stop-on-failure / --sweep-timeout).
+    if producer is not None:
+        producer_rc = producer.returncode()
+        if producer.alive():
+            click.echo(f"{PREFIX} Stopping background producer (sweep ending).")
+            producer.stop()
+        elif producer_rc not in (None, 0) and not consumed:
+            # Producer exited non-zero having produced nothing (e.g. no valid topology solutions found).
+            raise click.ClickException(
+                f"Solution generation failed (generate_rank_bindings exit {producer_rc}); nothing swept."
+            )
+
+    # Final solution set + index for the report: the fixed list, or everything the producer streamed to disk.
+    index = _read_index_safe(sol_dir) or {"solutions": []}
+    solutions = static_solutions if static_solutions is not None else _select_solutions(index, select, limit)
 
     # 3. Report.
     report_path, _passed, failed, timed_out = _write_sweep_report(
@@ -866,7 +1037,7 @@ def main(
         dry_run=dry_run,
     )
     # Stopping early on --sweep-timeout is NOT an error -- return what we swept. A sweep that found 0
-    # solutions has already exited non-zero above (_select_solutions / _generate_solutions). Real
+    # solutions has already exited non-zero above (empty --solutions-dir, or a failed producer). Real
     # per-solution failures/timeouts still surface as a non-zero exit. Recover exhausting its retries
     # is a hard error: the machine could not be brought back, so later solutions would be untrustworthy.
     if recover_exhausted:
