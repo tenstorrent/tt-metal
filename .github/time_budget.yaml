@@ -187,6 +187,12 @@ shield:
     bh_p150: 60
 
 scaleout:
+  demo:
+    # blaze_models_prefill_tests.yaml (sc4 job): Kimi-2.7 disaggregated prefill
+    # runner+producer KV-PCC leg (blaze verifies under workflow key "demo"). Distinct from
+    # scaleout.e2e.bh_sc4 below (a different workflow key). Needs scaleout-owner
+    # sign-off before merge. Matches the leg's 15-min timeout.
+    bh_sc4: 15
   merge_gate:
     cpu_medium: 10
     wh_n300_civ2: 10
