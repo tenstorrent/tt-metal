@@ -724,13 +724,14 @@ static conv_op_l1_usage predicted_conv2d_l1_usage(
         has_bias,
         // Match the factory that will execute this op: the width sharded
         // factory always runs the generic path (is_1d_depthwise_conv=false in
-        // its get_cb_info call), while the sharded factory (height/block)
-        // runs the depthwise path. Using depthwise CB math for a width
-        // sharded input mismatches the emitted CBs and fails the
-        // actual_cb_size == l1_usage.CB_allocation_size check.
+        // its get_cb_info call), and the sharded factory runs the depthwise
+        // path only for height sharded configs — a block sharded 1D depthwise
+        // conv runs the generic path there too. Using depthwise CB math for a
+        // width or block sharded input mismatches the emitted CBs and fails
+        // the actual_cb_size == l1_usage.CB_allocation_size check.
         is_1d_depthwise_conv(
             groups, input_tensor_shape[3], output_channels, kernel_dims[0], input_tensor_shape[1], has_bias) &&
-            input_tensor_a.memory_config().memory_layout() != TensorMemoryLayout::WIDTH_SHARDED,
+            input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
         input_channels_padded,
         skip_mcast.skip_activation_mcast,
         reader_indices_actual_page_size);

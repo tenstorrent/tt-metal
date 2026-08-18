@@ -1077,13 +1077,17 @@ core_count_and_size calculate_L1_usage_for_conv_op(
 
     // Depthwise L1/CB math must match the program factory that will run this
     // config: the width sharded factory executes the generic conv path (it
-    // passes is_1d_depthwise_conv=false into get_cb_info), while the sharded
-    // factory (height/block) uses the depthwise path. Estimating depthwise
-    // sizes for a width sharded config produces a CB_allocation_size that
+    // passes is_1d_depthwise_conv=false into get_cb_info), and the sharded
+    // factory runs the depthwise path only for height sharded configs — a
+    // block sharded 1D depthwise conv runs the generic path there too (the
+    // depthwise kernels and the 1D mcast weight-writer kernels are
+    // height-sharded only, and its weights are prepared in the regular
+    // grouped layout). Estimating depthwise sizes for a width or block
+    // sharded config produces a CB_allocation_size that
     // post_conv2d_op_memory_checks_descriptor rejects.
     const bool conv_is_1d_depthwise =
         is_1d_depthwise_conv(groups, in_channels, out_channels, kernel_size[0], input_height, enable_bias) &&
-        input_parallel_config.shard_scheme != TensorMemoryLayout::WIDTH_SHARDED;
+        input_parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED;
 
     auto output_compute_grid_size = get_output_compute_grid_size(compute_grid_size, conv_config, input_parallel_config);
     const ParallelConfig output_parallel_config = determine_output_parallel_config(
