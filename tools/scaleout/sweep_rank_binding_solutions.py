@@ -30,6 +30,7 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass
+from enum import Enum, auto
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
@@ -139,7 +140,7 @@ def _build_producer_cmd(
     return _inject_solution_flags(cmd, extra)
 
 
-class _Producer:
+class SolutionProducer:
     """Handle to the background solution-generation MPI job (the *producer*).
 
     Runs generate_rank_bindings in its own session so its whole process tree can be reaped as a group.
@@ -157,6 +158,15 @@ class _Producer:
                 self.pgid = os.getpgid(proc.pid)
             except (ProcessLookupError, OSError):
                 self.pgid = None
+
+    @classmethod
+    def start(cls, cmd: List[str], *, cwd: Path, log_path: Path) -> "SolutionProducer":
+        """Launch the producer in the background in its own session and return a handle to it."""
+        click.echo(f"{PREFIX} Producer (stream solutions):\n  {' '.join(shlex.quote(c) for c in cmd)}")
+        click.echo(f"{PREFIX} Producer log -> {log_path}")
+        log_fh = open(log_path, "w")  # noqa: SIM115 (kept open for the life of the producer)
+        proc = subprocess.Popen(cmd, cwd=cwd, stdout=log_fh, stderr=subprocess.STDOUT, start_new_session=True)
+        return cls(proc)
 
     def alive(self) -> bool:
         return self.proc is not None and self.proc.poll() is None
@@ -197,15 +207,6 @@ class _Producer:
             self.stop()
 
 
-def _start_producer(cmd: List[str], *, cwd: Path, log_path: Path) -> _Producer:
-    """Launch the producer in the background in its own session and return a handle to it."""
-    click.echo(f"{PREFIX} Producer (stream solutions):\n  {' '.join(shlex.quote(c) for c in cmd)}")
-    click.echo(f"{PREFIX} Producer log -> {log_path}")
-    log_fh = open(log_path, "w")  # noqa: SIM115 (kept open for the life of the producer)
-    proc = subprocess.Popen(cmd, cwd=cwd, stdout=log_fh, stderr=subprocess.STDOUT, start_new_session=True)
-    return _Producer(proc)
-
-
 def _load_index(solutions_dir: Path) -> dict:
     index_path = solutions_dir / "solutions_index.yaml"
     if not index_path.is_file():
@@ -241,13 +242,21 @@ def _select_solutions(index: dict, select: Optional[str], limit: Optional[int]) 
 
 @dataclass
 class _RetryResult:
-    """Outcome of ``_run_with_retries`` (one solution's tt-run, including recover)."""
+    """Outcome of ``TtRunExecutor.run`` (one command's attempts, including any recover)."""
 
     status: str  # pass | fail | timeout
     returncode: Optional[int]
     attempts: int
     recover_returncode: Optional[int] = None
     recover_exhausted: bool = False
+
+
+class LoopAction(Enum):
+    """What the consumer loop should do after running one solution (see SolutionConsumer.run_solution)."""
+
+    CONTINUE = auto()  # solution done (passed, or failed but keep going) -> run the next solution
+    STOP = auto()  # solution failed and --stop-on-failure is set -> stop the sweep, report what ran
+    UNRECOVERABLE = auto()  # recover exhausted its retries -> abort the whole sweep with an error
 
 
 def _reap_pattern_for(program: List[str]) -> Optional[str]:
@@ -406,7 +415,7 @@ def _run_with_retries(
     cmd_display: Optional[str] = None,
     host_set: Optional[str] = None,
     reap_pattern: Optional[str] = None,
-    producer: Optional["_Producer"] = None,
+    producer: Optional["SolutionProducer"] = None,
 ) -> _RetryResult:
     """Run ``cmd`` up to ``retries`` times, recovering only after a failure.
 
@@ -497,6 +506,68 @@ def _run_with_retries(
         attempts=attempts,
         recover_returncode=recover_rc,
     )
+
+
+class TtRunExecutor:
+    """Runs one command with retries + reap + recover, holding the stable per-sweep config as fields.
+
+    Groups the process-management primitives (run once in its own session, reap everything it started on
+    every host, retry with a recover in between) behind one object so call sites pass only what varies --
+    the command plus its log/timeout/host_set. ``producer`` is a field, not a threaded argument: while it
+    is alive the reap spares its shared MPI daemons, and a recover settles it first (see SolutionProducer).
+    The ``reap()``/``run()`` methods delegate to the module-private ``_reap_command_processes`` /
+    ``_run_with_retries`` implementations, which own the (correctness-critical) kill/retry mechanics.
+    """
+
+    def __init__(
+        self,
+        *,
+        cwd: Path,
+        retries: int,
+        reap_pattern: Optional[str] = None,
+        producer: Optional[SolutionProducer] = None,
+    ):
+        self.cwd = cwd
+        self.retries = retries
+        self.reap_pattern = reap_pattern
+        self.producer = producer  # set after the producer is started; drives producer-aware reap/recover
+
+    def reap(self, pgid: Optional[int], host_set: Optional[str]) -> None:
+        """Reap a command's processes locally + on ``host_set``; spares the producer's daemons if it's alive."""
+        _reap_command_processes(
+            pgid,
+            host_set,
+            self.reap_pattern,
+            spare_daemons=bool(self.producer is not None and self.producer.alive()),
+        )
+
+    def run(
+        self,
+        cmd: List[str],
+        *,
+        log_path: Path,
+        timeout: Optional[int],
+        recover_cmd: Optional[str] = None,
+        label: str = "tt-run",
+        append_log: bool = False,
+        cmd_display: Optional[str] = None,
+        host_set: Optional[str] = None,
+    ) -> _RetryResult:
+        """Run ``cmd`` up to ``retries`` times, reaping after each attempt and recovering between failures."""
+        return _run_with_retries(
+            cmd,
+            cwd=self.cwd,
+            log_path=log_path,
+            timeout=timeout,
+            retries=self.retries,
+            recover_cmd=recover_cmd,
+            label=label,
+            append_log=append_log,
+            cmd_display=cmd_display,
+            host_set=host_set,
+            reap_pattern=self.reap_pattern,
+            producer=self.producer,
+        )
 
 
 def _build_tt_run_cmd(
@@ -619,6 +690,231 @@ def _write_sweep_report(
         + (f" (stopped early by --sweep-timeout; {len(solutions) - len(results)} not run)" if stopped_early else "")
     )
     return report_path, passed, failed, timed_out
+
+
+def _sol_key(sol: dict) -> str:
+    """Stable identity of a solution in the index (its content-hash id, or its dir name as a fallback)."""
+    return sol.get("id") or sol.get("dir")
+
+
+def _build_passthrough(
+    *,
+    rankfile_syntax: Optional[str],
+    tcp_interface: Optional[str],
+    bare: bool,
+    tracy_args: Optional[str],
+    debug_gdbserver: bool,
+    skip_executable_check: bool,
+    skip_mgd_check: bool,
+    verbose: bool,
+) -> List[str]:
+    """The tt-run passthrough args forwarded verbatim to every per-solution launch."""
+    out: List[str] = []
+    if rankfile_syntax and rankfile_syntax != "auto":
+        out += ["--rankfile-syntax", rankfile_syntax]
+    if tcp_interface:
+        out += ["--tcp-interface", tcp_interface]
+    if bare:
+        out += ["--bare"]
+    if tracy_args is not None:
+        out += ["--tracy", tracy_args]
+    if debug_gdbserver:
+        out += ["--debug-gdbserver"]
+    if skip_executable_check:
+        out += ["--skip-executable-check"]
+    if skip_mgd_check:
+        out += ["--skip-mgd-check"]
+    if verbose:
+        out += ["-v"]
+    return out
+
+
+@dataclass
+class SweepConfig:
+    """The parsed, stable configuration for one sweep -- everything the consumer needs but nothing that varies
+    per solution. Built once in main() from the CLI, then passed to SolutionConsumer."""
+
+    tt_run: str
+    sol_dir: Path
+    program: List[str]
+    mock: bool
+    mpi_args: Optional[List[str]]
+    passthrough: List[str]
+    dry_run: bool
+    per_solution_timeout: Optional[int]
+    recover_command: str
+    retries: int
+    stop_on_failure: bool
+    logs_root: Path
+    select: Optional[str]
+    limit: Optional[int]
+    sweep_timeout: Optional[int]
+
+
+class SolutionConsumer:
+    """Runs tt-runs ONE AT A TIME (serialized) across solutions, pulling them as they become available.
+
+    The counterpart to SolutionProducer. Solutions come either from a fixed ``--solutions-dir`` list
+    (``static_solutions``) or from the streaming index the producer writes as it enumerates -- the loop is
+    identical either way. Owns the run's mutable state (``results``, ``stopped_early``, ``recover_exhausted``)
+    so main() stays a thin wiring layer.
+    """
+
+    def __init__(
+        self,
+        cfg: SweepConfig,
+        executor: TtRunExecutor,
+        *,
+        static_solutions: Optional[List[dict]],
+        producer: Optional[SolutionProducer],
+        sweep_start: float,
+    ):
+        self.cfg = cfg
+        self.executor = executor
+        self.static_solutions = static_solutions
+        self.producer = producer
+        self.sweep_start = sweep_start
+        self.results: List[dict] = []
+        self.stopped_early = False
+        self.recover_exhausted = False
+
+    def _available(self) -> List[dict]:
+        """Solutions on offer right now: the fixed list, or the producer's streaming index (may be empty)."""
+        if self.static_solutions is not None:
+            return self.static_solutions
+        idx = _read_index_safe(self.cfg.sol_dir)
+        return _select_solutions(idx, self.cfg.select, self.cfg.limit) if idx else []
+
+    def run_solution(self, sol: dict, position_label: str) -> LoopAction:
+        """Run one solution's tt-run (retries/reap/recover) and record it. Returns the next loop action."""
+        cfg = self.cfg
+        cmd = _build_tt_run_cmd(
+            tt_run=cfg.tt_run,
+            solutions_dir=cfg.sol_dir,
+            sol=sol,
+            program=cfg.program,
+            mock=cfg.mock,
+            mpi_args=cfg.mpi_args,
+            passthrough=cfg.passthrough,
+        )
+        label = sol.get("id", sol["dir"])
+        cmd_str = " ".join(shlex.quote(c) for c in cmd)  # exact, copy-paste-reproducible tt-run command
+        click.echo(f"\n{PREFIX} [{position_label}] solution {label} ({sol.get('num_hosts', '?')} hosts)\n  {cmd_str}")
+
+        if cfg.dry_run:
+            click.echo(
+                f"{PREFIX}   --dry-run: would retry tt-run up to {cfg.retries} time(s); "
+                f"recover on fail/timeout then sleep {RETRY_DELAY_S}s:\n  {cfg.recover_command}"
+            )
+            self.results.append(
+                _make_result(
+                    sol=sol,
+                    solutions_dir=cfg.sol_dir,
+                    label=label,
+                    cmd_str=cmd_str,
+                    status="dry-run",
+                    returncode=None,
+                    duration_seconds=0.0,
+                    tt_run_attempts=0,
+                    recover_command=cfg.recover_command,
+                )
+            )
+            return LoopAction.CONTINUE
+
+        log_path = cfg.logs_root / f"{label}.log"
+        t0 = time.time()
+        # After every attempt the executor reaps this solution's ranks on its hosts (sparing the producer's
+        # daemons while it is alive), and recovers between failures -- see TtRunExecutor / SolutionProducer.
+        outcome = self.executor.run(
+            cmd,
+            log_path=log_path,
+            timeout=cfg.per_solution_timeout,
+            recover_cmd=cfg.recover_command,
+            label="tt-run",
+            cmd_display=cmd_str,
+            host_set=sol.get("host_set"),
+        )
+        dur = round(time.time() - t0, 1)
+        click.echo(
+            f"{PREFIX}   -> {outcome.status} (rc={outcome.returncode}, {dur}s, "
+            f"attempts={outcome.attempts})\n     log={log_path}"
+        )
+        self.results.append(
+            _make_result(
+                sol=sol,
+                solutions_dir=cfg.sol_dir,
+                label=label,
+                cmd_str=cmd_str,
+                status=outcome.status,
+                returncode=outcome.returncode,
+                duration_seconds=dur,
+                tt_run_attempts=outcome.attempts,
+                recover_command=cfg.recover_command if outcome.recover_returncode is not None else None,
+                recover_returncode=outcome.recover_returncode,
+                log_path=log_path,
+            )
+        )
+        # Recover failure is unrecoverable: abort regardless of --stop-on-failure (that flag only governs a
+        # *workload* fail/timeout after all tt-run retries).
+        if outcome.recover_exhausted:
+            click.echo(
+                f"{PREFIX} UNRECOVERABLE: hardware cannot recover with this command "
+                f"after {cfg.retries} attempt(s) (last rc={outcome.recover_returncode}). "
+                f"--stop-on-failure/--continue-on-failure do not apply. Halting after {label}."
+            )
+            return LoopAction.UNRECOVERABLE
+        if outcome.status != "pass" and cfg.stop_on_failure:
+            click.echo(f"{PREFIX} --stop-on-failure: halting after {label}.")
+            return LoopAction.STOP
+        return LoopAction.CONTINUE
+
+    def consume(self) -> List[dict]:
+        """The single control loop: pull the next unconsumed solution and run it, until exhausted/stopped.
+
+        tt-runs run one at a time (serialized). In streaming mode, wait (with a heartbeat) while the producer
+        is still generating and nothing new is available. Returns the per-solution results."""
+        cfg = self.cfg
+        consumed: set = set()
+        last_heartbeat = time.time()
+        while True:
+            # Total-budget check (before launching, so we never interrupt a running solve).
+            if cfg.sweep_timeout is not None and (time.time() - self.sweep_start) >= cfg.sweep_timeout:
+                click.echo(
+                    f"{PREFIX} WARNING: --sweep-timeout ({cfg.sweep_timeout}s) reached after "
+                    f"{round(time.time() - self.sweep_start, 1)}s; stopping with {len(consumed)} solution(s) swept."
+                )
+                self.stopped_early = True
+                break
+            # --limit is a hard cap on how many solutions we run (the streaming index keeps growing otherwise).
+            if cfg.limit is not None and len(consumed) >= cfg.limit:
+                break
+
+            avail = self._available()
+            new = [s for s in avail if _sol_key(s) not in consumed]
+            if new:
+                sol = new[0]
+                consumed.add(_sol_key(sol))
+                total = str(len(self.static_solutions)) if self.static_solutions is not None else "streaming"
+                action = self.run_solution(sol, f"{len(consumed)}/{total}")
+                if action is LoopAction.UNRECOVERABLE:
+                    self.recover_exhausted = True
+                    break
+                if action is LoopAction.STOP:
+                    break
+                continue
+
+            # Nothing new to consume yet.
+            if self.producer is not None and self.producer.alive():
+                if time.time() - last_heartbeat >= HEARTBEAT_INTERVAL_S:
+                    click.echo(
+                        f"{PREFIX} waiting for producer: {len(consumed)} swept, {len(avail)} generated so far, "
+                        f"generation ongoing..."
+                    )
+                    last_heartbeat = time.time()
+                time.sleep(POLL_INTERVAL_S)
+                continue
+            break  # producer finished (or none) and nothing new left to consume
+        return self.results
 
 
 @click.command(
@@ -828,211 +1124,76 @@ def main(
             return
 
     tt_run = _find_tt_run()
-
-    # Args forwarded verbatim to every per-solution tt-run launch.
-    passthrough: List[str] = []
-    if rankfile_syntax and rankfile_syntax != "auto":
-        passthrough += ["--rankfile-syntax", rankfile_syntax]
-    if tcp_interface:
-        passthrough += ["--tcp-interface", tcp_interface]
-    if bare:
-        passthrough += ["--bare"]
-    if tracy_args is not None:
-        passthrough += ["--tracy", tracy_args]
-    if debug_gdbserver:
-        passthrough += ["--debug-gdbserver"]
-    if skip_executable_check:
-        passthrough += ["--skip-executable-check"]
-    if skip_mgd_check:
-        passthrough += ["--skip-mgd-check"]
-    if verbose:
-        passthrough += ["-v"]
-
     logs_root = Path(log_dir).resolve() if log_dir else (sol_dir / "sweep_logs")
     if not dry_run:
         logs_root.mkdir(parents=True, exist_ok=True)
+
+    cfg = SweepConfig(
+        tt_run=tt_run,
+        sol_dir=sol_dir,
+        program=program,
+        mock=mock,
+        mpi_args=parsed_mpi_args,
+        passthrough=_build_passthrough(
+            rankfile_syntax=rankfile_syntax,
+            tcp_interface=tcp_interface,
+            bare=bare,
+            tracy_args=tracy_args,
+            debug_gdbserver=debug_gdbserver,
+            skip_executable_check=skip_executable_check,
+            skip_mgd_check=skip_mgd_check,
+            verbose=verbose,
+        ),
+        dry_run=dry_run,
+        per_solution_timeout=per_solution_timeout,
+        recover_command=recover_command,
+        retries=retries,
+        stop_on_failure=stop_on_failure,
+        logs_root=logs_root,
+        select=select,
+        limit=limit,
+        sweep_timeout=sweep_timeout,
+    )
 
     _total_desc = f"{len(static_solutions)} solution(s)" if static_solutions is not None else "streaming solutions"
     click.echo(f"{PREFIX} Sweeping {_total_desc} in {sol_dir}")
     click.echo(f"{PREFIX} Per-solution logs -> {logs_root}")
     click.echo(f"{PREFIX} Recover on failure: {recover_command} " f"(retries={retries}, delay={RETRY_DELAY_S}s)")
-    results = []
-    stopped_early = False
-    recover_exhausted = False
 
-    # PROACTIVE reset BEFORE the producer starts and BEFORE any tt-run: first reap leftover ranks from
-    # prior runs on every host (they hold CHIP_IN_USE PCIe locks), then run the recover command once so
-    # both the producer's device discovery and the first tt-run launch on a clean cluster. This is the
-    # SAME command used reactively after a failure -> all recovery + all process-killing lives in this
-    # sweep driver (not the caller). Skipped on --dry-run / "true" no-op.
+    # One executor owns the process-management config (cwd/retries/reap-pattern) and, once set, the producer.
+    executor = TtRunExecutor(cwd=_repo_root(), retries=retries, reap_pattern=_reap_pattern_for(program))
+
+    # PROACTIVE reset BEFORE the producer starts and BEFORE any tt-run: reap leftover ranks on every host
+    # (they hold CHIP_IN_USE PCIe locks), then run the recover command once so both the producer's device
+    # discovery and the first tt-run launch on a clean cluster. Same command used reactively after a failure.
     if not dry_run:
-        all_hosts = ",".join(parsed_hosts) if parsed_hosts else None
-        _reap_command_processes(None, all_hosts, _reap_pattern_for(program))
+        executor.reap(None, ",".join(parsed_hosts) if parsed_hosts else None)
         if recover_command and recover_command != "true":
             click.echo(f"{PREFIX} Initial reset before sweep:\n  {recover_command}")
-            _run_with_retries(
+            executor.run(
                 ["/bin/bash", "-c", recover_command],
-                cwd=_repo_root(),
                 log_path=logs_root / "_initial_recover.log",
                 timeout=None,
-                retries=retries,
-                recover_cmd=None,
                 label="recover",
                 cmd_display=recover_command,
             )
 
-    # Start the background STREAMING producer AFTER the reset (so it discovers a clean cluster). The
-    # consumer loop below picks up each solution as the producer writes it to the index; tt-runs run one
-    # at a time (serialized). No producer in --solutions-dir mode -- the list is already on disk.
-    producer: Optional[_Producer] = None
+    # Start the streaming producer AFTER the reset (clean cluster). Clear any stale index first so the
+    # consumer waits for THIS run's solutions. No producer in --solutions-dir mode (list already on disk).
+    producer: Optional[SolutionProducer] = None
     if producer_cmd is not None and not dry_run:
-        # Remove any stale solutions_index.yaml from a prior run so the consumer waits for THIS producer's
-        # freshly streamed solutions instead of immediately consuming leftovers (the producer rewrites it
-        # incrementally as it finds each solution).
-        stale_index = sol_dir / "solutions_index.yaml"
         try:
-            stale_index.unlink()
+            (sol_dir / "solutions_index.yaml").unlink()
         except FileNotFoundError:
             pass
-        producer = _start_producer(producer_cmd, cwd=_repo_root(), log_path=logs_root / "_producer.log")
+        producer = SolutionProducer.start(producer_cmd, cwd=_repo_root(), log_path=logs_root / "_producer.log")
+        executor.producer = producer  # from here the reap spares it while alive; a recover settles it first
 
-    def _consume_one(sol: dict, position_label: str) -> str:
-        """Run one solution's tt-run (with retries/reap/recover) and record it. Returns the loop action:
-        'continue' | 'stop' (stop-on-failure) | 'unrecoverable' (recover exhausted)."""
-        cmd = _build_tt_run_cmd(
-            tt_run=tt_run,
-            solutions_dir=sol_dir,
-            sol=sol,
-            program=program,
-            mock=mock,
-            mpi_args=parsed_mpi_args,
-            passthrough=passthrough,
-        )
-        label = sol.get("id", sol["dir"])
-        cmd_str = " ".join(shlex.quote(c) for c in cmd)  # exact, copy-paste-reproducible tt-run command
-        click.echo(f"\n{PREFIX} [{position_label}] solution {label} ({sol.get('num_hosts', '?')} hosts)\n  {cmd_str}")
-
-        if dry_run:
-            click.echo(
-                f"{PREFIX}   --dry-run: would retry tt-run up to {retries} time(s); "
-                f"recover on fail/timeout then sleep {RETRY_DELAY_S}s:\n  {recover_command}"
-            )
-            results.append(
-                _make_result(
-                    sol=sol,
-                    solutions_dir=sol_dir,
-                    label=label,
-                    cmd_str=cmd_str,
-                    status="dry-run",
-                    returncode=None,
-                    duration_seconds=0.0,
-                    tt_run_attempts=0,
-                    recover_command=recover_command,
-                )
-            )
-            return "continue"
-
-        log_path = logs_root / f"{label}.log"
-        t0 = time.time()
-        outcome = _run_with_retries(
-            cmd,
-            cwd=_repo_root(),
-            log_path=log_path,
-            timeout=per_solution_timeout,
-            retries=retries,
-            recover_cmd=recover_command,
-            label="tt-run",
-            cmd_display=cmd_str,
-            # After every attempt (timeout or exit), reap this solution's ranks on its hosts so the retry
-            # never wedges on a CHIP_IN_USE lock held by the prior attempt. While the producer is alive the
-            # reap spares the shared MPI daemons; a recover first settles (waits out) the producer.
-            host_set=sol.get("host_set"),
-            reap_pattern=_reap_pattern_for(program),
-            producer=producer,
-        )
-        dur = round(time.time() - t0, 1)
-        click.echo(
-            f"{PREFIX}   -> {outcome.status} (rc={outcome.returncode}, {dur}s, "
-            f"attempts={outcome.attempts})\n     log={log_path}"
-        )
-
-        results.append(
-            _make_result(
-                sol=sol,
-                solutions_dir=sol_dir,
-                label=label,
-                cmd_str=cmd_str,
-                status=outcome.status,
-                returncode=outcome.returncode,
-                duration_seconds=dur,
-                tt_run_attempts=outcome.attempts,
-                recover_command=recover_command if outcome.recover_returncode is not None else None,
-                recover_returncode=outcome.recover_returncode,
-                log_path=log_path,
-            )
-        )
-        # Recover failure is unrecoverable: always abort, ignoring --stop-on-failure/--continue-on-failure.
-        # Those flags only control whether a *workload* fail/timeout (after all tt-run retries) continues.
-        if outcome.recover_exhausted:
-            click.echo(
-                f"{PREFIX} UNRECOVERABLE: hardware cannot recover with this command "
-                f"after {retries} attempt(s) (last rc={outcome.recover_returncode}). "
-                f"--stop-on-failure/--continue-on-failure do not apply. Halting after {label}."
-            )
-            return "unrecoverable"
-        if outcome.status != "pass" and stop_on_failure:
-            click.echo(f"{PREFIX} --stop-on-failure: halting after {label}.")
-            return "stop"
-        return "continue"
-
-    # 2. Consumer: run tt-runs one at a time, pulling solutions as they become available -- the fixed list
-    #    in --solutions-dir mode, or the streaming index as the producer generates them. tt-runs serialized.
-    consumed: set = set()
-    last_heartbeat = time.time()
-    while True:
-        # Total-budget check (before launching, so we never interrupt a running solve).
-        if sweep_timeout is not None and (time.time() - sweep_start) >= sweep_timeout:
-            click.echo(
-                f"{PREFIX} WARNING: --sweep-timeout ({sweep_timeout}s) reached after "
-                f"{round(time.time() - sweep_start, 1)}s; stopping with {len(consumed)} solution(s) swept."
-            )
-            stopped_early = True
-            break
-        # --limit is a hard cap on how many solutions we run (the streaming index keeps growing otherwise).
-        if limit is not None and len(consumed) >= limit:
-            break
-
-        # Solutions available to consume right now.
-        if static_solutions is not None:
-            avail = static_solutions
-        else:
-            idx = _read_index_safe(sol_dir)
-            avail = _select_solutions(idx, select, limit) if idx else []
-        new = [s for s in avail if (s.get("id") or s.get("dir")) not in consumed]
-
-        if new:
-            sol = new[0]
-            consumed.add(sol.get("id") or sol.get("dir"))
-            total = str(len(static_solutions)) if static_solutions is not None else "streaming"
-            action = _consume_one(sol, f"{len(consumed)}/{total}")
-            if action == "unrecoverable":
-                recover_exhausted = True
-                break
-            if action == "stop":
-                break
-            continue
-
-        # Nothing new to consume yet.
-        if producer is not None and producer.alive():
-            if time.time() - last_heartbeat >= HEARTBEAT_INTERVAL_S:
-                click.echo(
-                    f"{PREFIX} waiting for producer: {len(consumed)} swept, {len(avail)} generated so far, "
-                    f"generation ongoing..."
-                )
-                last_heartbeat = time.time()
-            time.sleep(POLL_INTERVAL_S)
-            continue
-        break  # producer finished (or none) and nothing new left to consume
+    # 2. Consume: run tt-runs one at a time as solutions become available (serialized).
+    consumer = SolutionConsumer(
+        cfg, executor, static_solutions=static_solutions, producer=producer, sweep_start=sweep_start
+    )
+    results = consumer.consume()
 
     # Stop the producer if it is still running (early stop via --limit / --stop-on-failure / --sweep-timeout).
     if producer is not None:
@@ -1040,17 +1201,15 @@ def main(
         if producer.alive():
             click.echo(f"{PREFIX} Stopping background producer (sweep ending).")
             producer.stop()
-        elif producer_rc not in (None, 0) and not consumed:
+        elif producer_rc not in (None, 0) and not results:
             # Producer exited non-zero having produced nothing (e.g. no valid topology solutions found).
             raise click.ClickException(
                 f"Solution generation failed (generate_rank_bindings exit {producer_rc}); nothing swept."
             )
 
-    # Final solution set + index for the report: the fixed list, or everything the producer streamed to disk.
+    # 3. Report. Final solution set + index: the fixed list, or everything the producer streamed to disk.
     index = _read_index_safe(sol_dir) or {"solutions": []}
     solutions = static_solutions if static_solutions is not None else _select_solutions(index, select, limit)
-
-    # 3. Report.
     report_path, _passed, failed, timed_out = _write_sweep_report(
         results=results,
         solutions=solutions,
@@ -1058,7 +1217,7 @@ def main(
         sol_dir=sol_dir,
         program=program,
         recover_command=recover_command,
-        stopped_early=stopped_early,
+        stopped_early=consumer.stopped_early,
         sweep_report=sweep_report,
         dry_run=dry_run,
     )
@@ -1066,7 +1225,7 @@ def main(
     # solutions has already exited non-zero above (empty --solutions-dir, or a failed producer). Real
     # per-solution failures/timeouts still surface as a non-zero exit. Recover exhausting its retries
     # is a hard error: the machine could not be brought back, so later solutions would be untrustworthy.
-    if recover_exhausted:
+    if consumer.recover_exhausted:
         raise click.ClickException(
             f"UNRECOVERABLE: hardware cannot recover with this command "
             f"(--recover-command failed after {retries} attempt(s)). Sweep aborted. See {report_path}."
