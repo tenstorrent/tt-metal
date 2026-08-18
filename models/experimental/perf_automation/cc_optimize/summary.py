@@ -1040,15 +1040,25 @@ def _stage_units(stage, prompt_tokens) -> int:
     recorded item count retires that many per request; one without retires a single item, which is
     what a recurring stage does and the safe answer for a stage nobody has measured that way.
     """
+    # TWO UNITS, AND ONLY ONE OF THEM IS MULTIPLIED BY THE BATCH.
+    #
+    # A count a stage STATES through <stage>_trace_items() is the total for one call, batch included
+    # -- voxtral's prefill_trace_items returns PREFILL_C * B, and its encode traces at batch 1
+    # whatever the pipeline serves. The legacy PERF_ISL_TOKENS marker is the prompt length PER
+    # REQUEST and has to be multiplied. Reading both from one map and multiplying uniformly counted
+    # prefill at 8x its real work and gave encode a batch it does not have.
     try:
-        from cc_optimize.perf_mcp import read_stage_isl_map
+        from cc_optimize.perf_mcp import read_stage_isl_map, read_stage_isl_per_request_map
 
-        _n = int((read_stage_isl_map() or {}).get(str(stage)) or 0)
+        _total = int((read_stage_isl_map() or {}).get(str(stage)) or 0)
+        if _total > 0:
+            return _total
+        _each = int((read_stage_isl_per_request_map() or {}).get(str(stage)) or 0)
     except Exception:  # noqa: BLE001
-        _n = 0
-    if _n <= 0:
+        _each = 0
+    if _each <= 0:
         return 1
-    return int(_n) * max(1, _request_batch())
+    return int(_each) * max(1, _request_batch())
 
 
 def _unit_work_name(unit) -> str:

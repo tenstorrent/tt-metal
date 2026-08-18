@@ -146,16 +146,58 @@ def test_the_parser_records_the_count_for_whatever_stage_stated_it():
     code = "\n".join(ln for ln in src.splitlines() if not ln.lstrip().startswith("#"))
     assert "stage_isl[_nm] = _nv" in code, "the count is still keyed by a hardcoded stage name"
     assert 'stage_isl["prefill"] = _iv' not in code, "the hardcoded writer is back"
-    assert 'stage_isl.setdefault("prefill"' in code, "the legacy marker no longer feeds prefill"
+    assert 'stage_isl_per_request.setdefault("prefill"' in code, "the legacy marker no longer feeds prefill"
 
 
-def test_a_stated_count_wins_over_the_legacy_marker():
-    """setdefault, so PERF_ISL_TOKENS remains the answer for a generated test that predates
-    _trace_items, and yields the moment the stage states its own."""
-    isl = {}
-    isl["prefill"] = 4096  # TRACE_STAGE_ITEMS, whichever order the lines arrived in
-    isl.setdefault("prefill", 128)  # PERF_ISL_TOKENS
-    assert isl["prefill"] == 4096
+def test_a_stated_count_is_a_total_and_is_not_multiplied_by_the_batch(monkeypatch):
+    """TWO UNITS. A count a stage states through <stage>_trace_items() is the total for ONE CALL --
+    voxtral's prefill_trace_items returns PREFILL_C * B, and its encode traces at batch 1 whatever
+    the pipeline serves. The legacy PERF_ISL_TOKENS marker is the prompt length PER REQUEST.
+
+    Read from one map and multiplied uniformly, prefill was counted at 8x its real work and encode
+    was given a batch it does not have -- and the compute ceiling is 2 x params x this."""
+    import cc_optimize.summary as S
+    import cc_optimize.perf_mcp as PM
+
+    monkeypatch.setattr(S, "_request_batch", lambda: 8)
+    monkeypatch.setattr(PM, "read_stage_isl_map", lambda *a, **k: {"prefill": 1024, "encode": 1500})
+    monkeypatch.setattr(PM, "read_stage_isl_per_request_map", lambda *a, **k: {})
+
+    assert S._stage_units("prefill", 128) == 1024, "a stated total was multiplied by the batch"
+    assert S._stage_units("encode", 128) == 1500, "encode was given a batch it does not run at"
+
+
+def test_the_legacy_per_request_marker_is_still_multiplied(monkeypatch):
+    """A generated test that predates _trace_items prints only PERF_ISL_TOKENS, per request. That
+    behaviour must not change: 128 tokens at batch 8 is 1024 items in one unit of work."""
+    import cc_optimize.summary as S
+    import cc_optimize.perf_mcp as PM
+
+    monkeypatch.setattr(S, "_request_batch", lambda: 8)
+    monkeypatch.setattr(PM, "read_stage_isl_map", lambda *a, **k: {})
+    monkeypatch.setattr(PM, "read_stage_isl_per_request_map", lambda *a, **k: {"prefill": 128})
+
+    assert S._stage_units("prefill", 128) == 1024
+
+
+def test_a_stated_total_wins_over_the_legacy_marker(monkeypatch):
+    import cc_optimize.summary as S
+    import cc_optimize.perf_mcp as PM
+
+    monkeypatch.setattr(S, "_request_batch", lambda: 8)
+    monkeypatch.setattr(PM, "read_stage_isl_map", lambda *a, **k: {"prefill": 512})
+    monkeypatch.setattr(PM, "read_stage_isl_per_request_map", lambda *a, **k: {"prefill": 128})
+
+    assert S._stage_units("prefill", 128) == 512
+
+
+def test_a_stage_nobody_counted_retires_one(monkeypatch):
+    import cc_optimize.summary as S
+    import cc_optimize.perf_mcp as PM
+
+    monkeypatch.setattr(PM, "read_stage_isl_map", lambda *a, **k: {})
+    monkeypatch.setattr(PM, "read_stage_isl_per_request_map", lambda *a, **k: {})
+    assert S._stage_units("decode", 128) == 1
 
 
 # ------------------------------------------------------------------- a host row is not a stage

@@ -2431,6 +2431,7 @@ def _persist_stage_ms(
     stage_ops: dict | None = None,
     stage_batch: int = 0,
     prompt_tokens: int = 0,
+    stage_isl_per_request: dict | None = None,
 ) -> None:
     """Record trace_replay's per-stage timings so the report can show a MEASURED phase split.
 
@@ -2464,6 +2465,9 @@ def _persist_stage_ms(
                     # The prompt this run served, kept beside the per-stage counts rather than inside
                     # them: it belongs to the request, and every stage sees it.
                     "prompt_tokens": int(prompt_tokens or 0),
+                    # PER-REQUEST counts, from the legacy marker. "isl" above holds TOTALS a stage
+                    # stated for one call; these must be multiplied by the batch and those must not.
+                    "isl_per_request": stage_isl_per_request or {},
                     # THE BATCH THE RUN ACTUALLY SERVED. Parsed off TRACE_REPLAY_PATH for the
                     # scorecard and then dropped, so the report had to fall back to TT_PERF_BATCH --
                     # which carries 0, the "ask the pipeline" sentinel, and reads as 1. Every ceiling
@@ -2511,6 +2515,19 @@ def read_stage_isl(state_dir_path=None, model="", task="") -> int:
         return _pt if _pt > 0 else int((_doc.get("isl") or {}).get("prefill") or 0)
     except Exception:  # noqa: BLE001
         return 0
+
+
+def read_stage_isl_per_request_map(state_dir_path=None, model="", task="") -> dict:
+    """{stage: items PER REQUEST}, from the legacy prompt-length marker. {} when none recorded.
+
+    The unit is what separates this from read_stage_isl_map: these are multiplied by the batch to
+    reach one unit of work, and the totals in that map must not be.
+    """
+    try:
+        got = _read_stage_doc(state_dir_path, model, task).get("isl_per_request") or {}
+        return {str(k): int(v) for k, v in got.items() if int(v or 0) > 0}
+    except Exception:  # noqa: BLE001
+        return {}
 
 
 def read_stage_isl_map(state_dir_path=None, model="", task="") -> dict:
@@ -2631,6 +2648,9 @@ def _run_full_pipeline_ms():
     stage_ms = {}
     stage_paths = {}
     stage_isl = {}
+    # {stage: items PER REQUEST}, the legacy marker's unit. Kept apart from stage_isl, which holds
+    # the TOTAL a stage states for one call.
+    stage_isl_per_request = {}
     stage_ops = {}
     headline_units = []
     walls = []
@@ -2777,13 +2797,15 @@ def _run_full_pipeline_ms():
                 try:
                     _iv = int(line.split("PERF_ISL_TOKENS=", 1)[1].split()[0])
                     if _iv > 0:
-                        # LEGACY, AND DELIBERATELY NOT OVERRIDING. This was the only writer of this
-                        # map and it hardcoded the key, so "prefill" was the one stage in any model
-                        # that could have an item count -- the reader has taken a {stage: items} map
-                        # since it was written. The marker itself is still the right answer for a
-                        # prompt-consuming stage in a generated test that predates _trace_items, so
-                        # it stays as the default and yields to a count the stage stated itself.
-                        stage_isl.setdefault("prefill", _iv)
+                        # A DIFFERENT UNIT, KEPT IN A DIFFERENT MAP. This marker is the prompt
+                        # length PER REQUEST -- the reader multiplies it by the batch to get what one
+                        # unit of work retires. A count a stage states through <stage>_trace_items()
+                        # is already the TOTAL for one call: voxtral's prefill_trace_items returns
+                        # PREFILL_C * B, and its encode traces at batch 1 whatever the pipeline
+                        # serves. Merging the two into one map made the reader multiply a total by
+                        # the batch again -- prefill counted 8x its real work, and encode 8x for a
+                        # batch it does not have.
+                        stage_isl_per_request.setdefault("prefill", _iv)
                 except Exception:  # noqa: BLE001
                     pass
             if "TRACE_PER_TOKEN_MS=" in line:
@@ -2864,7 +2886,15 @@ def _run_full_pipeline_ms():
     if per_tokens:
         if headline_units:
             os.environ["PERF_MCP_LAST_HEADLINE_UNIT"] = headline_units[-1]
-        _persist_stage_ms(stage_ms, stage_paths, stage_isl, stage_ops, batch, int(stage_isl.get("prefill") or 0))
+        _persist_stage_ms(
+            stage_ms,
+            stage_paths,
+            stage_isl,
+            stage_ops,
+            batch,
+            int(stage_isl_per_request.get("prefill") or 0),
+            stage_isl_per_request,
+        )
         return statistics.median(per_tokens), "trace", None, decode_path
     if walls:
         return statistics.median(walls), "eager", None, None
