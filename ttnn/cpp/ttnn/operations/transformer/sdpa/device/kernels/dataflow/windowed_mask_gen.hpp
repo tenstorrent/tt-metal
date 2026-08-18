@@ -594,7 +594,7 @@ inline void generate_neighborhood_gather_mask_for_q_chunk(
     // Block counts over THIS shard: nb_W is full W (K gather/clamp); the shard's local W = S_local/(T*H).
     // Block mode uses a LOCAL q index and the per-device W origin (which rides q_tok_offset under W-SP).
     const uint32_t hb = nb_bt != 0 ? nb_H / nb_bh : 0;
-    const uint32_t wb = nb_bt != 0 ? ((valid_Sqt * tt::constants::TILE_HEIGHT) / (nb_T * nb_H)) / nb_bw : 0;
+    const uint32_t wb = nb_bt != 0 ? nb_W / nb_bw : 0;  // op-T-sharded: op-W is the full (non-sharded) axis
     const uint32_t w_origin_eff = nb_bt != 0 ? q_tok_offset : static_cast<uint32_t>(nb_w_origin);
     const auto box =
         nb_bt != 0 ? neighborhood_box_block(

@@ -455,11 +455,11 @@ void kernel_main() {
                     if (nb_bt != 0) {  // block-permuted Q: chunk == one (bt,bh,bw) block
                         // Block counts over THIS shard: nb_W is the full W (for the K gather/clamp), but the
                         // shard's local W = S_local / (T*H); derive it so W-SP composes (no-SP: w_local == nb_W).
+                        // op-T-sharded: op-H (nb_H) and op-W (nb_W) are the FULL non-sharded axes; the
+                        // sharded op-T count is implicit (q_chunk / (Wb*Hb)). w_origin (the per-device global
+                        // origin) rides the windowed_q_tok_offset tensor and is applied to op-T in the box.
                         const uint32_t hb = nb_H / nb_bh;
-                        const uint32_t w_local = (valid_Sqt * tt::constants::TILE_HEIGHT) / (nb_T * nb_H);
-                        const uint32_t wb = w_local / nb_bw;
-                        // Under W-SP each shard has a different global W origin; it rides the per-device
-                        // windowed_q_tok_offset tensor (na3d passes shard*w_local there in block mode).
+                        const uint32_t wb = nb_W / nb_bw;
                         nbr_box = neighborhood_box_block(
                             q_chunk,
                             nb_bt,

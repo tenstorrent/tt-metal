@@ -934,84 +934,17 @@ def neighborhood_attention_3d_op_sp_w_sharded(
         scale = head_dim**-0.5
     kt, kh, kw = (min(kk, d) for kk, d in zip(kernel_size, dims))
 
-    persist_ccl = os.environ.get("DIFFVAE_CCL_PERSISTENT", "0") == "1"
-
-    # DIFFVAE_BLOCK=1: 3-D block-permuted Q (block-permute v1). Reorder this shard's Q into (bt,bh,bw)
-    # blocks so the fused kernel's box is a compact cube (grid-independent) instead of a T-strip -- the
-    # fix for the fused-sdpa super-linearity. K/V stay PLAIN-STRIDED (gathered over W to full W); the box
-    # is global, the per-device W origin rides the offset tensor. RoPE commutes with a per-position
-    # permute, so the already-RoPE'd Q just gets reordered. Requires the fused kernel + a tile-legal block.
-    block = None
+    # DIFFVAE_BLOCK=1 (block-permute v1.1): 3-D block-permuted Q on TOP of the cheap t_inner K/V path.
+    # to_seq already emits the W-outer (op) order, so a q_chunk block tiles (w_local, H, T) with op dims
+    # (bw, bh, bt); the K/V prep and the output un-flatten below are reused UNCHANGED (the win was lost in
+    # v1 by reordering K/V to plain-strided -- an 18x costlier gather). The compact block box is what fixes
+    # the fused-sdpa super-linearity. The per-device global-W origin rides the offset tensor, applied to the
+    # op OUTER (T) axis in the kernel (windowed_loop_geometry.hpp). RoPE commutes with the permute.
+    op_block = None
     if os.environ.get("DIFFVAE_BLOCK") == "1" and os.environ.get("DIFFVAE_SP_FUSED", "0") == "1":
-        block = _pick_block(t_full, h_full, w_local)
-    if block is not None:
-        from .block_permute import from_block_order_tt, to_block_order_tt
-
-        block_vol = block[0] * block[1] * block[2]
-
-        def to_plain_seq(x: ttnn.Tensor) -> ttnn.Tensor:
-            # (B, T, H, w_local, NH, HD) -> (B, NH, S_local, HD) in plain (t, h, w) order.
-            x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-            x = ttnn.permute(x, (0, 4, 1, 2, 3, 5))
-            x = ttnn.reshape(x, (batch, heads, t_full * h_full * w_local, head_dim))
-            return ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-
-        def kv_plain_wrow(x: ttnn.Tensor) -> ttnn.Tensor:
-            # gather this chip's W-band into the full W (chip order = W order), then plain wrow-page it:
-            # (B, T, H, W_full, NH, HD) -> (B, NH, T*H, W_full*HD).
-            xg = ccl_manager.all_gather(
-                x, dim=3, mesh_axis=sp_axis, use_hyperparams=False, use_persistent_buffer=persist_ccl
-            )
-            xg = ttnn.to_layout(xg, ttnn.ROW_MAJOR_LAYOUT)
-            xg = ttnn.permute(xg, (0, 4, 1, 2, 3, 5))
-            return ttnn.reshape(xg, (batch, heads, t_full * h_full, w_full * head_dim))
-
-        with _sp_w_prof(mesh, "kv-allgather"):
-            tk = kv_plain_wrow(k)
-            tv = kv_plain_wrow(v)
-        q_block = to_block_order_tt(to_plain_seq(q), (t_full, h_full, w_local), block)
-
-        w_origins = torch.arange(sp, dtype=torch.int32) * w_local  # per-device global W origin
-        off_tt = from_torch(
-            w_origins, device=mesh, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_axes=[sp_axis]
-        )
-        grid_dev = mesh.compute_with_storage_grid_size()
-        prog_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=(grid_dev.x, grid_dev.y),
-            exp_approx_mode=False,
-            q_chunk_size=block_vol,
-            k_chunk_size=int(os.environ.get("DIFFVAE_SDPA_KCHUNK", 32)),
-        )
-        with _sp_w_prof(mesh, "fused-sdpa"):
-            attended = ttnn.transformer.scaled_dot_product_attention(
-                q_block,
-                tk,
-                tv,
-                is_causal=False,
-                neighborhood_3d=(t_full, h_full, w_full, kt, kh, kw),
-                neighborhood_gather=True,
-                neighborhood_block=block,
-                neighborhood_w_shard=(w_full, 0),
-                scale=scale,
-                windowed_q_token_offset=0,
-                windowed_q_token_offset_tensor=off_tt,
-                program_config=prog_config,
-            )
-        for tensor in (q_block, tk, tv):
-            ttnn.deallocate(tensor)
-
-        out_heads = heads
-        if tp_axis is not None:
-            with _sp_w_prof(mesh, "head-allgather"):
-                attended = ccl_manager.all_gather(
-                    attended, dim=1, mesh_axis=tp_axis, use_hyperparams=False, use_persistent_buffer=persist_ccl
-                )
-            out_heads = full_heads
-        # (B, NH, S_block, HD) -> un-permute to plain -> merge heads -> (B, T, H, W_local, width) volume.
-        plain = from_block_order_tt(attended, (t_full, h_full, w_local), block)
-        plain = ttnn.permute(ttnn.to_layout(plain, ttnn.ROW_MAJOR_LAYOUT), (0, 2, 1, 3))  # (B, S_local, NH, HD)
-        plain = ttnn.reshape(plain, (batch, t_full, h_full, w_local, out_heads * head_dim))
-        return ttnn.to_layout(plain, ttnn.TILE_LAYOUT)
+        _blk = _pick_block(t_full, h_full, w_local)
+        if _blk is not None:
+            op_block = (_blk[2], _blk[1], _blk[0])  # op-order (w_local, H, T) block dims = (bw, bh, bt)
 
     # Flatten W-outer so a contiguous sequence is a W-band; heads merged then re-split so the spatial
     # reorder is one 5D permute. ``w_`` is this chip's W extent (K/V and Q are the same shard here).
@@ -1048,8 +981,14 @@ def neighborhood_attention_3d_op_sp_w_sharded(
             to_seq(v, w_local), dim=2, mesh_axis=sp_axis, use_hyperparams=False, use_persistent_buffer=persist_ccl
         )
     tq = to_seq(q, w_local)
+    if op_block is not None:
+        from .block_permute import to_block_order_tt
 
-    offsets = torch.arange(sp, dtype=torch.int32) * seq_local
+        tq = to_block_order_tt(tq, (w_local, h_full, t_full), op_block)  # W-outer op order -> block order
+
+    # Block mode: the offset tensor carries the per-device global-W origin (shard*w_local) for the box;
+    # strided mode: the per-device global token position (shard*seq_local).
+    offsets = torch.arange(sp, dtype=torch.int32) * (w_local if op_block is not None else seq_local)
     off_tt = from_torch(offsets, device=mesh, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_axes=[sp_axis])
 
     # DIFFVAE_SP_FUSED=1 runs the fast fused (neighborhood_gather) kernel instead of the streamed op:
@@ -1077,7 +1016,11 @@ def neighborhood_attention_3d_op_sp_w_sharded(
         prog_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=(grid_dev.x, grid_dev.y),
             exp_approx_mode=False,
-            q_chunk_size=int(os.environ.get("DIFFVAE_SDPA_QCHUNK", 128)),
+            q_chunk_size=(
+                op_block[0] * op_block[1] * op_block[2]
+                if op_block is not None
+                else int(os.environ.get("DIFFVAE_SDPA_QCHUNK", 128))
+            ),
             k_chunk_size=int(os.environ.get("DIFFVAE_SDPA_KCHUNK", 32)),
         )
 
@@ -1090,6 +1033,9 @@ def neighborhood_attention_3d_op_sp_w_sharded(
             # Grid axis order must match the flatten (innermost last): (w,h,t) when t_inner else (w,t,h).
             neighborhood_3d=((w_full, h_full, t_full, kw, kh, kt) if t_inner else (w_full, t_full, h_full, kw, kt, kh)),
             neighborhood_gather=use_fused,
+            # Block-permuted Q: op-order block dims + the per-device W origin on the offset tensor (above).
+            # No neighborhood_w_shard: the block path clamps each op axis with nb_T / nb_W directly.
+            neighborhood_block=op_block,
             scale=scale,
             windowed_q_token_offset=0,
             windowed_q_token_offset_tensor=off_tt,
@@ -1108,6 +1054,12 @@ def neighborhood_attention_3d_op_sp_w_sharded(
             )
         heads = full_heads
         width = heads * head_dim
+
+    # Block mode: un-permute block order back to the W-outer (op) sequence, then the same un-flatten runs.
+    if op_block is not None:
+        from .block_permute import from_block_order_tt
+
+        attended = from_block_order_tt(attended, (w_local, h_full, t_full), op_block)
 
     # (B, NH, seq_local, HD) -> W-outer volume -> (B, T, H, W_local, width), sharded. The un-flatten
     # must mirror to_seq's axis order: (w,h,t) when t_inner, else (w,t,h).

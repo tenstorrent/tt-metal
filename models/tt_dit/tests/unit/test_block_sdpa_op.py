@@ -74,24 +74,24 @@ def test_block_sdpa_matches_strided(*, device, grid, kernel, block):
 
 
 def test_block_sdpa_w_origin(*, device):
-    """W-SP composition: a shard's block-Q over a W-band [w_origin, w_origin+w_local) with FULL-W K/V and
-    a nonzero w_origin (on the per-device offset tensor) must match the full-grid strided reference's band.
-    This exercises exactly what each W-SP shard does, on a single chip."""
-    T, H, W, HD, kernel = 8, 16, 16, 64, (5, 5, 5)
-    SP, block = 2, (4, 8, 4)  # 2 W-shards; block divides (T,H,w_local=8), vol 128
-    W_LOCAL = W // SP
+    """W-SP composition (op-T-sharded convention): a shard's block-Q over a T-band [t0, t0+t_local) with
+    full K/V and w_origin on the OUTER (T) axis (per-device, on the offset tensor) matches the full-grid
+    reference's T-band. This is exactly what a W-SP shard does under t_inner K/V (physical W is op-T)."""
+    T, H, W, HD, kernel = 16, 8, 8, 64, (5, 5, 5)
+    SP, block = 2, (4, 4, 4)  # shard the outer axis; block divides (t_local=8, H, W)
+    T_LOCAL = T // SP
     torch.manual_seed(0)
     qf, kf, vf = (torch.randn(1, 1, T * H * W, HD, dtype=torch.bfloat16) for _ in range(3))
-    dev = lambda t, l=ttnn.TILE_LAYOUT: ttnn.from_torch(t, device=device, layout=l, dtype=ttnn.bfloat16)
+    dev = lambda t: ttnn.from_torch(t, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
     k, v = dev(kf), dev(vf)
     ref = ttnn.to_torch(_fused_sdpa(device, dev(qf), k, v, (T, H, W), kernel)).float().reshape(T, H, W, HD)
 
     for shard in range(SP):
-        w0 = shard * W_LOCAL
-        q_band = qf.reshape(T, H, W, HD)[:, :, w0 : w0 + W_LOCAL, :].reshape(1, 1, T * H * W_LOCAL, HD)
-        qb = to_block_order_tt(dev(q_band), (T, H, W_LOCAL), block)
+        t0 = shard * T_LOCAL
+        q_band = qf.reshape(T, H, W, HD)[t0 : t0 + T_LOCAL].reshape(1, 1, T_LOCAL * H * W, HD)
+        qb = to_block_order_tt(dev(q_band), (T_LOCAL, H, W), block)
         off = ttnn.from_torch(
-            torch.tensor([w0], dtype=torch.int32), device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
+            torch.tensor([t0], dtype=torch.int32), device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
         )
         g = device.compute_with_storage_grid_size()
         pc = ttnn.SDPAProgramConfig(
@@ -108,14 +108,13 @@ def test_block_sdpa_w_origin(*, device):
             neighborhood_3d=(T, H, W, *kernel),
             neighborhood_gather=True,
             neighborhood_block=block,
-            neighborhood_w_shard=(W, 0),
             scale=HD**-0.5,
             windowed_q_token_offset=0,
             windowed_q_token_offset_tensor=off,
             program_config=pc,
         )
-        out = ttnn.to_torch(from_block_order_tt(o, (T, H, W_LOCAL), block)).float().reshape(T, H, W_LOCAL, HD)
-        ref_band = ref[:, :, w0 : w0 + W_LOCAL, :]
+        out = ttnn.to_torch(from_block_order_tt(o, (T_LOCAL, H, W), block)).float().reshape(T_LOCAL, H, W, HD)
+        ref_band = ref[t0 : t0 + T_LOCAL]
         pcc = _pcc(out, ref_band)
-        print(f"\n  shard {shard} (w_origin={w0}): block-band-vs-full PCC = {pcc * 100:.4f} %")
-        assert pcc > 0.99, f"W-SP shard {shard} block band != full reference (PCC {pcc})"
+        print(f"\n  shard {shard} (t_origin={t0}): block-band-vs-full PCC = {pcc * 100:.4f} %")
+        assert pcc > 0.99, f"op-T-sharded shard {shard} block band != full reference (PCC {pcc})"

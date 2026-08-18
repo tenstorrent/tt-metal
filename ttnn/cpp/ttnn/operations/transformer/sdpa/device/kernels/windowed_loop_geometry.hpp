@@ -315,9 +315,10 @@ inline NeighborhoodBox neighborhood_box_block(
     uint32_t kw,
     uint32_t w_origin) {
     const BlockCoord b = block_index_of_chunk(qc, hb, wb);
-    const uint32_t t_lo = b.t * bt, t_hi = t_lo + bt - 1;
+    // w_origin is on the OUTER (T) axis: t_inner K/V make the sharded physical-W axis the op outer axis.
+    const uint32_t t_lo = w_origin + b.t * bt, t_hi = t_lo + bt - 1;
     const uint32_t h_lo = b.h * bh, h_hi = h_lo + bh - 1;
-    const uint32_t w_lo = w_origin + b.w * bw, w_hi = w_lo + bw - 1;
+    const uint32_t w_lo = b.w * bw, w_hi = w_lo + bw - 1;
     const uint32_t ker_t = kt > T ? T : kt, ker_h = kh > H ? H : kh, ker_w = kw > W ? W : kw;
     return {
         nbr_shift_start(t_lo, T, kt),
@@ -334,7 +335,7 @@ inline BlockCoord block_query_coord(
     uint32_t qc, uint32_t wid, uint32_t bt, uint32_t bh, uint32_t bw, uint32_t hb, uint32_t wb, uint32_t w_origin) {
     const BlockCoord b = block_index_of_chunk(qc, hb, wb);
     const uint32_t dw = wid % bw, dh = (wid / bw) % bh, dt = wid / (bw * bh);
-    return {b.t * bt + dt, b.h * bh + dh, w_origin + b.w * bw + dw};
+    return {w_origin + b.t * bt + dt, b.h * bh + dh, b.w * bw + dw};  // w_origin on the OUTER (T) axis
 }
 
 // K-chunk iteration range covering the block's box in the STRIDED K/V table (k = t*HW + h*W + w). The
