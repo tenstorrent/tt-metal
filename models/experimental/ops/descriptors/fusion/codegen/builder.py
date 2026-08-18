@@ -45,7 +45,6 @@ from models.experimental.ops.descriptors.fusion.codegen.args import (
     _validate_fp32_consistency,
 )
 
-
 # =============================================================================
 # Compute Config Validation
 # =============================================================================
@@ -96,27 +95,18 @@ def _create_barrier_segment_config(
     core_ranges: Any,
     arrive_ranges: Any = None,
 ) -> BarrierConfig:
-    """Create a lightweight barrier config for OpGraph segments.
+    """Create the geometry for an OpGraph barrier segment.
 
-    Only allocates ``global_arrive`` and ``global_release`` GlobalSemaphores
-    (2 instead of 4).  The per-core ``compute_done`` / ``writer_done`` flags
-    are shared across all segments and allocated separately in
-    ``OpGraphBuilder.build()``, so per-segment copies would waste L1.
+    Semaphore addresses are assigned after all segments are known, from one
+    command-lifetime fusion semaphore bank.
 
     Args:
-        core_ranges: CoreRangeSet of ALL cores that receive release (and
-            on which GlobalSemaphores are allocated).
+        core_ranges: CoreRangeSet of all cores that receive release and get
+            shards in the command-lifetime bank.
         arrive_ranges: CoreRangeSet of cores that arrive at the barrier.
             If None, all release cores also arrive (symmetric barrier).
     """
     config = BarrierConfig()
-
-    sem_global_arrive = ttnn.create_global_semaphore(device, core_ranges, 0)
-    sem_global_release = ttnn.create_global_semaphore(device, core_ranges, 0)
-
-    config._sem_refs = [sem_global_arrive, sem_global_release]
-    config.global_arrive_addr = ttnn.get_global_semaphore_address(sem_global_arrive)
-    config.global_release_addr = ttnn.get_global_semaphore_address(sem_global_release)
 
     release_coords = _get_core_coords_from_ranges(core_ranges)
     config.num_release_cores = len(release_coords)
@@ -544,9 +534,6 @@ def _build_fused_descriptor(
     merged_descriptor.cbs = merged_cbs
     merged_descriptor.semaphores = all_semaphores
 
-    # Collect semaphore references to prevent GC of GlobalSemaphores
-    sem_refs = tuple(multi_barrier._sem_refs) if multi_barrier is not None else ()
-
     # Build kernel_phase_map: per fused kernel, list of (OpDescriptor, kernel_index)
     # identifying which source phase kernels' RT args were concatenated in.
     kernel_phase_map = []
@@ -563,7 +550,6 @@ def _build_fused_descriptor(
         descriptor=merged_descriptor,
         input_tensors=all_input_tensors,
         output_tensors=[output_tensor] if output_tensor else [],
-        semaphores=sem_refs,
         kernel_labels=tuple(kernel_labels),
         kernel_phase_map=tuple(kernel_phase_map),
         cb_source_map=cb_source_map,

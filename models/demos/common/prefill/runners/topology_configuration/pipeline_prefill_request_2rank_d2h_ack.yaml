@@ -20,12 +20,9 @@ global_env:
   PREFILL_MIGRATION_CMD_QUEUE: "/mig_ep1_cmd"
   PREFILL_MIGRATION_TABLE_QUEUE: "/mig_ep1_table"
   PREFILL_MIGRATION_RESP_QUEUE: "/mig_ep1_resp"
-  PREFILL_MIGRATION_SELFTEST: "0"
-  PREFILL_MIGRATION_INTERLEAVED: "0"
-  PREFILL_MIGRATION_GRANULARITY: "layerwise"
 
   # D2H layer-ack path. Multi-rank always builds the router; this only switches the completion
-  # source to device records (vs the host on_layer_complete callback). Verify via the producer's
-  # _drain_layer_acks; do NOT also set PREFILL_CHECK_COMPLETIONS (its C++ consumer would race the
-  # producer on the same counter channel and split the count).
+  # source to device records (vs the host on_layer_complete callback). The producer's
+  # _drain_layer_acks is the verdict, and the only consumer this channel can have: the cursor is a
+  # destructive read, so a second reader would split the count.
   PREFILL_LAYER_ACK_D2H: "1"
