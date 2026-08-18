@@ -1004,8 +1004,8 @@ def test_mla_chunked_prefill(
 ):
     """Unified chunked-prefill driver crossed with independent mesh and reference axes. Each
     functionality scenario (rotation edges, production depth, multi-user, deep prefix) runs on any mesh
-    and is validated against the CPU torch reference ('cpu'), the GPU trace ('trace', skips without
-    the variant has no registered trace), or run with no reference ('func'). Select with e.g.
+    and is validated against the CPU torch reference ('cpu'), the GPU trace ('trace', asserts if the
+    variant has no registered trace), or run with no reference ('func'). Select with e.g.
     -k 'maxedge-1u and trace and 8x4'. See _run_chunked_prefill.
 
     Real weights on the CPU-reference path: point the variant's HF env var (DEEPSEEK_V3_HF_MODEL /
