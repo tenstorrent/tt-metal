@@ -224,55 +224,104 @@ class TtMoEGateConfig:
     # grid columns for a wider per_core_N and transpose_mcast=True both lose.
     mm_configs_interleaved: dict = field(
         default_factory=lambda: {
-            key: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=ttnn.CoreCoord(grid_x, 10),
-                in0_block_w=in0_block_w,
-                out_subblock_h=1,
-                out_subblock_w=out_subblock_w,
-                out_block_h=2,
-                out_block_w=per_core_N,
-                per_core_M=2,  # 20 M-tiles over the grid's 10 rows
-                per_core_N=per_core_N,
-                transpose_mcast=False,
-                fuse_batch=True,
-            )
-            for key, grid_x, per_core_N, in0_block_w, out_subblock_w in (
-                (
-                    (GATE_PRODUCTION_SP_DIM, DeepSeekV3Config.EMB_SIZE // 4, DeepSeekV3Config.NUM_ROUTED_EXPERTS),
-                    8,
-                    1,
-                    8,
-                    1,
-                ),
-                ((GATE_PRODUCTION_SP_DIM, KimiK26Config.EMB_SIZE // 4, KimiK26Config.NUM_ROUTED_EXPERTS), 6, 2, 8, 2),
-                ((GATE_PRODUCTION_SP_DIM, KimiK3Config.EMB_SIZE // 4, KimiK3Config.NUM_ROUTED_EXPERTS), 10, 3, 14, 3),
-                ((GATE_PRODUCTION_SP_DIM, GLM51Config.EMB_SIZE // 4, GLM51Config.NUM_ROUTED_EXPERTS), 8, 1, 8, 1),
-                (
-                    (GATE_PRODUCTION_SP_DIM, MiniMaxM27Config.EMB_SIZE // 4, MiniMaxM27Config.NUM_ROUTED_EXPERTS),
-                    8,
-                    1,
-                    8,
-                    1,
-                ),
-                (
-                    (
-                        GATE_PRODUCTION_SP_DIM,
-                        DeepSeekV4FlashConfig.EMB_SIZE // 4,
-                        DeepSeekV4FlashConfig.NUM_ROUTED_EXPERTS,
-                    ),
-                    8,
-                    1,
-                    8,
-                    1,
-                ),
-                (
-                    (GATE_PRODUCTION_SP_DIM, GPT_OSS_TEST_PER_DEVICE_EMB_DIM, GptOss120BConfig.NUM_ROUTED_EXPERTS),
-                    4,
-                    1,
-                    23,
-                    1,
-                ),
-            )
+            (GATE_PRODUCTION_SP_DIM, DeepSeekV3Config.EMB_SIZE // 4, DeepSeekV3Config.NUM_ROUTED_EXPERTS): (
+                ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=ttnn.CoreCoord(8, 10),
+                    in0_block_w=8,
+                    out_subblock_h=1,
+                    out_subblock_w=1,
+                    out_block_h=2,
+                    out_block_w=1,
+                    per_core_M=2,
+                    per_core_N=1,
+                    transpose_mcast=False,
+                    fuse_batch=True,
+                )
+            ),
+            (GATE_PRODUCTION_SP_DIM, KimiK26Config.EMB_SIZE // 4, KimiK26Config.NUM_ROUTED_EXPERTS): (
+                ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=ttnn.CoreCoord(6, 10),
+                    in0_block_w=8,
+                    out_subblock_h=1,
+                    out_subblock_w=2,
+                    out_block_h=2,
+                    out_block_w=2,
+                    per_core_M=2,
+                    per_core_N=2,
+                    transpose_mcast=False,
+                    fuse_batch=True,
+                )
+            ),
+            (GATE_PRODUCTION_SP_DIM, KimiK3Config.EMB_SIZE // 4, KimiK3Config.NUM_ROUTED_EXPERTS): (
+                ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=ttnn.CoreCoord(10, 10),
+                    in0_block_w=14,
+                    out_subblock_h=1,
+                    out_subblock_w=3,
+                    out_block_h=2,
+                    out_block_w=3,
+                    per_core_M=2,
+                    per_core_N=3,
+                    transpose_mcast=False,
+                    fuse_batch=True,
+                )
+            ),
+            (GATE_PRODUCTION_SP_DIM, GLM51Config.EMB_SIZE // 4, GLM51Config.NUM_ROUTED_EXPERTS): (
+                ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=ttnn.CoreCoord(8, 10),
+                    in0_block_w=8,
+                    out_subblock_h=1,
+                    out_subblock_w=1,
+                    out_block_h=2,
+                    out_block_w=1,
+                    per_core_M=2,
+                    per_core_N=1,
+                    transpose_mcast=False,
+                    fuse_batch=True,
+                )
+            ),
+            (GATE_PRODUCTION_SP_DIM, MiniMaxM27Config.EMB_SIZE // 4, MiniMaxM27Config.NUM_ROUTED_EXPERTS): (
+                ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=ttnn.CoreCoord(8, 10),
+                    in0_block_w=8,
+                    out_subblock_h=1,
+                    out_subblock_w=1,
+                    out_block_h=2,
+                    out_block_w=1,
+                    per_core_M=2,
+                    per_core_N=1,
+                    transpose_mcast=False,
+                    fuse_batch=True,
+                )
+            ),
+            (GATE_PRODUCTION_SP_DIM, DeepSeekV4FlashConfig.EMB_SIZE // 4, DeepSeekV4FlashConfig.NUM_ROUTED_EXPERTS): (
+                ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=ttnn.CoreCoord(8, 10),
+                    in0_block_w=8,
+                    out_subblock_h=1,
+                    out_subblock_w=1,
+                    out_block_h=2,
+                    out_block_w=1,
+                    per_core_M=2,
+                    per_core_N=1,
+                    transpose_mcast=False,
+                    fuse_batch=True,
+                )
+            ),
+            (GATE_PRODUCTION_SP_DIM, GPT_OSS_TEST_PER_DEVICE_EMB_DIM, GptOss120BConfig.NUM_ROUTED_EXPERTS): (
+                ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=ttnn.CoreCoord(4, 10),
+                    in0_block_w=23,
+                    out_subblock_h=1,
+                    out_subblock_w=1,
+                    out_block_h=2,
+                    out_block_w=1,
+                    per_core_M=2,
+                    per_core_N=1,
+                    transpose_mcast=False,
+                    fuse_batch=True,
+                )
+            ),
         }
     )
 
