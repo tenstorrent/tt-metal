@@ -363,7 +363,7 @@ class GeneratorProxy:
         logger.debug(f"Generator object call with mode {GeneratorProxy.MODE}")
 
         if os.environ.get("PYTEST_CURRENT_TEST", "").startswith(
-            "test_aaa_fused"
+            "test_fused"
         ) or os.environ.get("PYTEST_CURRENT_TEST", "").startswith("test_zzz_pack"):
             return self.wrapped_generator(*args, **kwds)
 
@@ -390,7 +390,7 @@ class GeneratorProxy:
             def wrapper(*args, **kwargs):
                 logger.debug(f"Wrapper call with mode {GeneratorProxy.MODE}")
                 if os.environ.get("PYTEST_CURRENT_TEST", "").startswith(
-                    "test_aaa_fused"
+                    "test_fused"
                 ) or os.environ.get("PYTEST_CURRENT_TEST", "").startswith(
                     "test_zzz_pack"
                 ):
