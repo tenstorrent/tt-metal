@@ -331,6 +331,7 @@ def test_sigmoid_gated_rms_norm_production_is_accurate_and_deterministic(
     _assert_inputs_unchanged(input_snapshots, device_inputs)
 
 
+@pytest.mark.requires_host_iommu
 @pytest.mark.parametrize("case", _PRODUCTION_CASES, ids=lambda case: case.case_id)
 @skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
 @skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
