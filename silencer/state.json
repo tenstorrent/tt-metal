@@ -23,7 +23,8 @@
     31566814739,
     31596449343,
     "32028413134",
-    "32053638633"
+    "32053638633",
+    32101971921
   ],
   "workflows_sampled": [
     "merge-gate.yaml",
@@ -44,7 +45,8 @@
     "galaxy-e2e-tests.yaml",
     "runtime-integration-tests.yaml",
     "models-t2-unit-tests.yaml",
-    "t3000-perf-tests.yaml"
+    "t3000-perf-tests.yaml",
+    "single-card-ttnn-models-frequent-tests"
   ],
   "in_flight_prs": [
     {
@@ -156,10 +158,14 @@
       "source_job_id": "95391393492",
       "workflow": "t3000-perf-tests.yaml",
       "note": "Validation run 32068781845 (t3000-perf-tests, qwenimage) completed/success. Sampled tail (last 5000 lines) of test-execution job 95509799580 showed no occurrence of target warning AND no JIT-compile evidence for writer_permute_interleaved_tiled_row_invariant.cpp \u2014 classified inconclusive per category-2 rules, reported honestly via /codeowners ping comment, PR marked ready for review. No further Silencer action needed unless a future run finds compile evidence."
+    },
+    {
+      "branch": "silencer/conv2d-warn-once-weights-bias",
+      "title": "Silence repeated conv2d weights/bias-not-prepared warnings",
+      "status": "pr_opened_dispatch_sent",
+      "workflow": "single-card-ttnn-models-frequent-tests",
+      "note": "conv2d.cpp log_warning wrapped in std::call_once for weights/bias-not-prepared fallback (issue #31591). Dispatched single-card-ttnn-models-frequent-tests (bge_m3) on branch to validate."
     }
   ],
-  "backlog_cursor": {
-    "next_category": "continue backlog: models-t1-e2e-tests, models-t3-*, single-card-*, tt-metal-l2-nightly, perf-device-models, runtime-perf-tests, runtime-sanity-tests, pipeline-select-profiler",
-    "note": "t3000-perf-tests.yaml sampled this run (run 32028413134, jobs 95391393490/95391393492). BuildKernels info-level compile-time logs found but are an intentional documented opt-in (TT_METAL_LOG_KERNEL_COMPILE set by tt_dit/models/__init__.py) - not a fix target. Found and fixed 2 -Wunused-but-set-variable warnings in permute writer kernel."
-  }
+  "backlog_cursor": "continue backlog: models-t1-e2e-tests, models-t3-*, tt-metal-l2-nightly, perf-device-models, runtime-perf-tests, runtime-sanity-tests, pipeline-select-profiler (single-card-* sampled this run)"
 }
