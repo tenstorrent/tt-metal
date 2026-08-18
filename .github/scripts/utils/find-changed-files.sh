@@ -176,6 +176,13 @@ RAW_LLK_SFPI_CHANGED=$LLK_SFPI_CHANGED
 # deliberately NOT reused here: their patterns also match .py files (and
 # e.g. tools/triage/requirements.txt) because other jobs legitimately fire
 # on Python changes — but a Python-only PR cannot affect clang-tidy output.
+# Each directory needs BOTH a root-level (dir/*.ext) and a nested
+# (dir/**/*.ext) alternative: this script only enables extglob, not
+# globstar, so in case-pattern matching `dir/**/*.ext` requires at least
+# one subdirectory component and would miss files directly in `dir/`.
+# tests/scale_out and tests/tt_eager are included because the clang-tidy
+# CMake preset inherits TT_METAL_BUILD_TESTS=TRUE and TTNN_BUILD_TESTS=TRUE,
+# and tests/CMakeLists.txt builds those trees under exactly those flags.
 CPP_SOURCE_FOR_CLANG_TIDY_CHANGED=false
 # Explicit, human-auditable list of workflow files whose changes affect the
 # clang-tidy scan itself (its definition, implementation, caller/inputs, or
@@ -186,13 +193,15 @@ CPP_SOURCE_FOR_CLANG_TIDY_CHANGED=false
 CLANG_TIDY_KEY_WORKFLOW_CHANGED=false
 while IFS= read -r FILE; do
     case "$FILE" in
-        tt_metal/**/*.@(h|hpp|c|cpp|cc)|\
-        ttnn/**/*.@(h|hpp|c|cpp|cc)|\
-        tests/tt_metal/**/*.@(h|hpp|c|cpp|cc)|\
-        tests/ttnn/**/*.@(h|hpp|c|cpp|cc)|\
-        tt-train/**/*.@(h|hpp|c|cpp|cc)|\
-        tools/**/*.@(h|hpp|c|cpp|cc)|\
-        tt_stl/**/*.@(h|hpp|c|cpp|cc))
+        tt_metal/*.@(h|hpp|c|cpp|cc|inl|tpp)|tt_metal/**/*.@(h|hpp|c|cpp|cc|inl|tpp)|\
+        ttnn/*.@(h|hpp|c|cpp|cc|inl|tpp)|ttnn/**/*.@(h|hpp|c|cpp|cc|inl|tpp)|\
+        tests/tt_metal/*.@(h|hpp|c|cpp|cc|inl|tpp)|tests/tt_metal/**/*.@(h|hpp|c|cpp|cc|inl|tpp)|\
+        tests/ttnn/*.@(h|hpp|c|cpp|cc|inl|tpp)|tests/ttnn/**/*.@(h|hpp|c|cpp|cc|inl|tpp)|\
+        tests/scale_out/*.@(h|hpp|c|cpp|cc|inl|tpp)|tests/scale_out/**/*.@(h|hpp|c|cpp|cc|inl|tpp)|\
+        tests/tt_eager/*.@(h|hpp|c|cpp|cc|inl|tpp)|tests/tt_eager/**/*.@(h|hpp|c|cpp|cc|inl|tpp)|\
+        tt-train/*.@(h|hpp|c|cpp|cc|inl|tpp)|tt-train/**/*.@(h|hpp|c|cpp|cc|inl|tpp)|\
+        tools/*.@(h|hpp|c|cpp|cc|inl|tpp)|tools/**/*.@(h|hpp|c|cpp|cc|inl|tpp)|\
+        tt_stl/*.@(h|hpp|c|cpp|cc|inl|tpp)|tt_stl/**/*.@(h|hpp|c|cpp|cc|inl|tpp))
             CPP_SOURCE_FOR_CLANG_TIDY_CHANGED=true
             ;;
         .github/workflows/code-analysis.yaml|\

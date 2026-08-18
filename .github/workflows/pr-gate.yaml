@@ -164,6 +164,7 @@ jobs:
     runs-on: ubuntu-slim
     outputs:
       any-code-changed: ${{ steps.find-changes.outputs.any-code-changed }}
+      run-clang-tidy: ${{ steps.find-changes.outputs.run-clang-tidy }}
       docs-changed: ${{ steps.find-changes.outputs.docs-changed }}
       cmake-changed: ${{ steps.find-changes.outputs.cmake-changed }}
       tt-metalium-changed: ${{ steps.find-changes.outputs.tt-metalium-changed }}
