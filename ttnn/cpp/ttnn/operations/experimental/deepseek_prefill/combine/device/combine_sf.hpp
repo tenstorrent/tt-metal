@@ -66,6 +66,13 @@ enum Cmd : uint32_t {
 // impossible to observe the close ahead of the last batched increment.
 constexpr uint32_t EOS_BIAS = 1u << 30;
 
+// How many staged pages accumulate before their arrival increment is sent. Batching matters a lot:
+// one increment per token costs roughly a quarter of the link, every fourth about 5%, every eighth
+// about 2%, and every thirty-second is free. A stream boundary always forces one out regardless, or
+// the downstream reader strands on a partial batch. This is the first knob to sweep once there are
+// per-link numbers to sweep against.
+constexpr uint32_t BUMP_EVERY = 8;
+
 // Longest shortest-path hop count on the combine axis.
 constexpr uint32_t max_distance(uint32_t extent, bool is_ring) { return is_ring ? (extent / 2) : (extent - 1); }
 

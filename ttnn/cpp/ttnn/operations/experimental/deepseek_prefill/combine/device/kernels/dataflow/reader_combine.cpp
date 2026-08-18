@@ -388,7 +388,7 @@ void kernel_main() {
         }
 
         constexpr uint32_t SF_SLOT_MASK = sf_slots - 1;
-        constexpr uint32_t SF_BUMP_EVERY = 8;
+        constexpr uint32_t SF_BUMP_EVERY = sf::BUMP_EVERY;
 
         // Control-only queue entries carry no payload but still take a slot, which is why the queue
         // is deeper than the two the non-relaying path needs.

@@ -43,6 +43,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     initialize_test_inputs,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import (
+    COMBINE_SF_TAIL_BYTES,
     TtCombineModule,
     combine_sf_levels,
     make_combine_staging_buffer,
@@ -60,8 +61,14 @@ COMBINE_SF_MAGIC = 0x5AF2C0DE
 COMBINE_SF_TAIL_MAGIC_WORD = 2
 
 
-def count_staged_pages(staging_buffer, emb_dim, use_fp8_output):
-    """Count staging pages whose tail carries the routing magic, i.e. pages actually relayed."""
+def count_staged_slots(staging_buffer, emb_dim, use_fp8_output):
+    """Count staging slots whose tail carries the routing magic.
+
+    This is a witness that the relay path ran, not a token count: a slot keeps its magic once
+    written, and slots are reused round-robin, so the number tracks distinct slots touched. It
+    therefore scales with the stream count (two sender cores means twice as many streams) and only
+    loosely with traffic. Treat it as a lower bound on relayed tokens and nothing more.
+    """
     element_bytes = 1 if use_fp8_output else 2
     alignment = get_dram_alignment()
     token_bytes = ((emb_dim * element_bytes + alignment - 1) // alignment) * alignment
@@ -334,9 +341,9 @@ def run_combine(
     # evidence that the relay path carried traffic.
     if staging_buffer is not None:
         ttnn.synchronize_device(mesh_device)
-        staged_pages = count_staged_pages(staging_buffer, emb_dim, use_fp8_output)
-        logger.debug(f"store-and-forward staged {staged_pages} page(s) across the mesh")
-        assert staged_pages > 0, (
+        staged_slots = count_staged_slots(staging_buffer, emb_dim, use_fp8_output)
+        logger.debug(f"store-and-forward touched {staged_slots} staging slot(s) across the mesh")
+        assert staged_slots > 0, (
             "use_store_and_forward was set on a mesh with relay levels, but no staging page carries a "
             "routing tail -- the relay path did not run, so a passing output proves nothing about it"
         )
@@ -831,6 +838,50 @@ def test_ttnn_combine_store_and_forward_no_relay_levels(mesh_device, device_para
         4,
         4,
         1,
+        ttnn.Topology.Linear,
+        True,
+        True,
+        ttnn.TILE_LAYOUT,
+        False,
+        is_ci_env,
+        is_ci_v2_env,
+        use_store_and_forward=True,
+        invocations=2,
+    )
+
+
+# A staged token is payload plus a routing tail, which overruns the default fabric payload and so
+# chunks into a second packet -- an extra EDM slot and fabric header per relayed token. Widening the
+# device payload by the tail collapses it back to one. This is the A/B counterpart of the default
+# store-and-forward tests: identical work, one packet per staged token instead of two. It only pays
+# for itself once there are per-link numbers, so it is kept as a separate config rather than made
+# the default, and it is device-wide, so nothing else inherits the wider payload.
+@pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2")
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [((4, 2), fabric_to_device_params(ttnn.FabricConfig.FABRIC_2D, payload_tail_bytes=COMBINE_SF_TAIL_BYTES))],
+    indirect=True,
+)
+@pytest.mark.parametrize("num_links", [1, 2], ids=["1link", "2link"])
+def test_ttnn_combine_store_and_forward_single_packet_tail(
+    mesh_device, device_params, num_links, is_ci_env, is_ci_v2_env
+):
+    emb_dim = 7168
+    token_bytes = emb_dim * 2
+    payload = ttnn.get_tt_fabric_max_payload_size_bytes()
+    # Without this the test would silently exercise the two-packet path and prove nothing new.
+    assert payload >= token_bytes + COMBINE_SF_TAIL_BYTES, (
+        f"fabric payload {payload} cannot hold a {token_bytes}-byte token plus a "
+        f"{COMBINE_SF_TAIL_BYTES}-byte tail; the single-packet path is not being tested"
+    )
+    run_combine(
+        mesh_device,
+        128,
+        emb_dim,
+        8,
+        4,
+        4,
+        num_links,
         ttnn.Topology.Linear,
         True,
         True,
