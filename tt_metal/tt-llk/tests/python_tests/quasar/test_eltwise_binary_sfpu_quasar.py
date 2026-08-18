@@ -655,6 +655,7 @@ def _run_max_min(
         "formats": formats,
         "templates": [
             SFPU_BINARY_OP(binary_op),
+            APPROX_MODE(),
             IMPLIED_MATH_FORMAT(implied_math_format),
             DATA_COPY_TYPE(DataCopyType.A2D),
             UNPACKER_ENGINE_SEL(
@@ -908,6 +909,7 @@ def _run_quant(binary_op, tile_indices, sign_magnitude=False):
         formats,
         templates=[
             SFPU_BINARY_OP(binary_op),
+            APPROX_MODE(),
             IMPLIED_MATH_FORMAT(ImpliedMathFormat.No),
             DATA_COPY_TYPE(DataCopyType.A2D),
             UNPACKER_ENGINE_SEL(UnpackerEngine.UnpDest),
