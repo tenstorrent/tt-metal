@@ -1115,6 +1115,16 @@ LONG_CONTEXT_LENGTHS = [32768, 65536, 131072, 262144]
 # truncated history, which is the point of trying it.
 LONG_CONTEXT_CHUNK = int(os.environ.get("GEMMA4_LONG_CONTEXT_CHUNK", max(4096, _SLIDING_WINDOW_TOKENS * _CHUNK_CP)))
 
+# Chunk sizes test_prefill_long_context_traced sweeps. Which are legal depends on the mesh
+# -- the halo rule needs chunk >= window * cp -- so the illegal ones skip with that
+# arithmetic instead of reaching ring_joint's TT_FATAL after a 90 s model load. Bigger is
+# faster (fewer chunks amortising the same per-chunk overhead) with sharply diminishing
+# returns, so the sweep is here to show where that flattens, not to pick a winner.
+# GEMMA4_LONG_CONTEXT_CHUNK pins the sweep to a single size.
+_LONG_CONTEXT_CHUNK_SIZES = (
+    [LONG_CONTEXT_CHUNK] if os.environ.get("GEMMA4_LONG_CONTEXT_CHUNK") else [4096, 8192, 16384, 32768]
+)
+
 # Chunks that pay a one-time program compile rather than steady-state cost: chunk 0 is
 # the first run of the mask CP path, chunk 1 the first run of the ring path. Both are
 # tens of seconds against a sub-second steady state, so every average excludes them.
@@ -1662,9 +1672,10 @@ def test_prefill_long_context_prefix_pcc(mesh_device, context_len, request, rese
 
 @torch.no_grad()
 @parametrize_mesh_with_fabric([GALAXY_MESH], **_MESH_PARAMS)
+@pytest.mark.parametrize("chunk_size", _LONG_CONTEXT_CHUNK_SIZES, ids=[f"chunk{c}" for c in _LONG_CONTEXT_CHUNK_SIZES])
 @pytest.mark.parametrize("context_len", LONG_CONTEXT_LENGTHS, ids=[f"ctx_{c // 1024}k" for c in LONG_CONTEXT_LENGTHS])
 @pytest.mark.parametrize("readback_all", [True, False], ids=["readback_all", "readback_final"])
-def test_prefill_long_context_traced(mesh_device, context_len, readback_all, reset_seeds, request):
+def test_prefill_long_context_traced(mesh_device, context_len, chunk_size, readback_all, reset_seeds, request):
     """Chunked prefill driven entirely by two captured traces.
 
     This is the deployment shape: warm the programs once, capture, then serve every
@@ -1714,12 +1725,22 @@ def test_prefill_long_context_traced(mesh_device, context_len, readback_all, res
     from models.demos.gemma4.tt.attention import ring_prefill
     from models.demos.gemma4.tt.ccl import cp_degree
 
-    chunk = LONG_CONTEXT_CHUNK
+    chunk = chunk_size
     mesh_config = _mesh_config(mesh_device)
     cp = cp_degree(mesh_config)
     if cp <= 1:
         pytest.skip(f"targets CP>1; mesh {tuple(mesh_device.shape)} gives CP={cp}")
-    assert context_len % chunk == 0
+    # The halo rule, as a skip rather than a TT_FATAL 90 s into a model load: under CP the
+    # sliding layers fetch their window from a single predecessor rank, so the per-rank Q slab
+    # has to cover the window. The 10 global layers would be fine; the 50 sliding ones are not.
+    if chunk < _SLIDING_WINDOW_TOKENS * cp:
+        pytest.skip(
+            f"chunk={chunk} gives a {chunk // cp}-token Q slab at CP={cp}, under the "
+            f"{_SLIDING_WINDOW_TOKENS}-token sliding window; ring_joint needs "
+            f"chunk >= window*cp = {_SLIDING_WINDOW_TOKENS * cp} (its halo is single-hop)"
+        )
+    if context_len % chunk != 0:
+        pytest.skip(f"context_len={context_len} is not a whole number of {chunk}-token chunks")
 
     model_path = _model_path()
     n_chunks = context_len // chunk
