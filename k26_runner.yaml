@@ -14,10 +14,11 @@ global_env:
 
   PREFILL_NUM_USERS: "1"
 
-  # ---- KV PCC vs golden — the only gate in this run --------------------------------------------------
-  PREFILL_REQUEST_LOOP_PCC: "1"
+  # Publish the KV address metadata used by producer-side readback, without starting a migration worker.
+  PREFILL_MOCK_MIGRATION: "1"
+  # Emit one completion per layer so the producer reads KV only after all writes have completed.
+  PREFILL_ENABLE_LAYER_ACK: "1"
   PREFILL_TRACE_DIR: "/mnt/models/deepseek-prefill-cache/golden/structured_traces/kimi_debug_55k_vllm"
   PREFILL_STANDALONE_CHUNKED_PCC: "0.88"
 
-  PREFILL_STANDALONE_PCC: "0"     
-  PREFILL_SEND_SHOTDOWN: "1"         # send -1 shutdown signal
+  PREFILL_STANDALONE_PCC: "0"

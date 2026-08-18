@@ -15,10 +15,12 @@ workload:
   chunks: "11"               # full prompt
   max_requests: 1
   interleave: round_robin
-  check_pcc: false           # the RUNNER does the on-device check; see header
-  # The tokens pushed AND the golden the runner PCCs against. MUST equal the runner's PREFILL_TRACE_DIR,
-  # or the check is measured against a different prompt.
+  check_pcc: true            # read KV from device and compare it with the golden trace
+  # The tokens pushed and the golden used for PCC. MUST equal the runner's PREFILL_TRACE_DIR.
   trace_dir: /mnt/models/deepseek-prefill-cache/golden/structured_traces/kimi_debug_55k_vllm
 
 migration:
-  issue: false               # no endpoint, no worker, no table
+  issue: false               # no KV copy; runner mock mode only publishes the readback table/device map
+
+env:
+  PREFILL_SEND_SHUTDOWN: "1" # send the -1/-1/-1 sentinel after PCC so the runner exits cleanly
