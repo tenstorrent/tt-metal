@@ -160,6 +160,32 @@ struct Storage {
     uint32_t num_tiles;  // could eventually be N dimensional, here and below
 };
 
+// This core's own pages, handed to a custom load or store routine. The harness has
+// already reserved them (or waited on them), so these are the facts the routine
+// cannot work out for itself: where the block starts now that the pointer has
+// advanced, and how big a page is.
+//
+// L1, and named for it, because a routine juggles TWO page spaces at once and they
+// are easy to confuse. A TensorAccessor's pages are indices into a tensor that
+// mostly lives somewhere else; these are addresses in this core's L1:
+//
+//     noc_async_read(acc.get_noc_addr(tensor_page), pages.addr(i), pages.page_bytes);
+//                                     ^ index, remote   ^ address, local
+//
+// `count` is the number the handle will push or pop whatever the routine actually
+// touches, so looping on it -- rather than on a tile count the kernel re-derives
+// from a compile-time arg -- is what keeps the two in step.
+struct L1Pages {
+    uint32_t base;
+    uint32_t page_bytes;
+    uint32_t count;
+
+    // Address of page `i`, so a routine never writes the stride arithmetic itself.
+    uint32_t addr(uint32_t i) const { return base + i * page_bytes; }
+
+    uint32_t total_bytes() const { return count * page_bytes; }
+};
+
 // ---------------------------------------------------------------------------
 // Block -- move-only evidence that a Storage was produced into
 //
@@ -614,11 +640,13 @@ NocAsyncReadTx<thread> noc_load(const Storage& storage, const Accessor& acc, uin
 // (via the returned handle) the read barrier and cb_push_back -- and `fn` owns
 // the traffic. It is called as
 //
-//     fn(uint32_t l1_addr, uint32_t page_bytes)
+//     fn(L1Pages pages)
 //
-// with the address of the first page and the CB's page size, and must fill
-// exactly storage.num_tiles consecutive pages from there: that is the count the
-// handle pushes, whatever `fn` actually wrote.
+// and must fill pages.count consecutive pages from pages.base: that is the
+// count the handle pushes, whatever `fn` actually wrote, so loop on pages.count.
+//
+// The built-in overloads above are written this way too, so this path carries the
+// same weight as they do rather than being a side door.
 //
 // `fn` must issue ONLY READS, and only on this thread's assigned NOC. The handle
 // releases with noc_async_read_barrier(), which covers reads on a single NOC --
@@ -694,9 +722,9 @@ void fill_reduce_scaler(const Storage& scaler, uint32_t value_bits = kReduceScal
 template <int thread, typename Accessor>
 NocAsyncWriteTx<thread> noc_store(Block block, const Accessor& acc, uint32_t block_idx);
 
-// Custom store: the mirror of the custom noc_load. `fn` is called with the
-// address of the first page of `block`, and covers block.num_tiles consecutive
-// pages -- the count the handle pops.
+// Custom store: the mirror of the custom noc_load. `fn` is called as
+// fn(L1Pages pages) over `block`'s pages -- pages.count is the number the handle
+// pops.
 //
 // `fn` must issue ONLY WRITES, and only on this thread's assigned NOC. The handle
 // releases the source buffer with noc_async_writes_flushed() and pops, which
