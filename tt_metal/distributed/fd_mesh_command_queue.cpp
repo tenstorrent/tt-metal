@@ -688,8 +688,15 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     // original exception wins over anything a worker reports.
     std::exception_ptr dispatch_exception;
     try {
-        // A go signal is a few hundred bytes, far less work than waking a worker to hand one over,
-        // so the calling thread issues them itself here, overlapping them with the workers above.
+        // This thread's own share of the program writes comes first. What the workload waits on is the
+        // last participating device's launch, while a device outside the workload only needs its go
+        // signal before the next barrier, so writing the go signals first delays every launch by the
+        // time they take.
+        if (num_chunks) {
+            write_chunk(chunk_start(0), chunk_start(1));
+        }
+        // A go signal is a few hundred bytes, far less work than waking a worker to hand one over, so
+        // the calling thread issues them itself, overlapping them with the workers above.
         this->write_go_signal_sequences_to_unused_sub_grids(
             chip_ids_in_workload,
             sub_device_id,
@@ -697,9 +704,6 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
             mcast_go_signals,
             unicast_go_signals,
             dispatch_metadata);
-        if (num_chunks) {
-            write_chunk(chunk_start(0), chunk_start(1));
-        }
     } catch (...) {
         dispatch_exception = std::current_exception();
     }
