@@ -120,6 +120,7 @@ enum class SfpuType : std::uint32_t
     greater_than_zero,
     less_than_equal_zero,
     greater_than_equal_zero,
+    hardsigmoid,
 };
 
 enum class DstSync : std::uint8_t

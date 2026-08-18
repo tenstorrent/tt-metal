@@ -16,6 +16,7 @@
 //    call_unary_sfpu_operation_quasar() (and to init_unary_sfpu_operation_quasar()
 //    if the op needs an init step).
 #include "experimental/ckernel_sfpu_abs.h"
+#include "llk_sfpu/ckernel_sfpu_activations.h"
 #include "llk_sfpu/ckernel_sfpu_clamp.h"
 #include "llk_sfpu/ckernel_sfpu_comp.h"
 #include "llk_sfpu/ckernel_sfpu_exp.h"
@@ -123,6 +124,10 @@ void init_unary_sfpu_operation_quasar()
     else if constexpr (is_trig_op(OPERATION))
     {
         init_trigonometry<OPERATION, is_fp32_dest_acc_en>();
+    }
+    else if constexpr (OPERATION == SfpuType::hardsigmoid)
+    {
+        hardsigmoid_init<APPROX>();
     }
 }
 
@@ -299,6 +304,12 @@ void call_unary_sfpu_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_f
             VectorMode::RC,
             static_cast<std::uint32_t>(0xBF800000),  // min = -1.0 (fp32)
             static_cast<std::uint32_t>(0x3F800000)); // max = +1.0 (fp32)
+    }
+    else if constexpr (OPERATION == SfpuType::hardsigmoid)
+    {
+        // One op-templated activations kernel; ActivationType picks the body at compile time.
+        SFPU_UNARY_CALL(
+            DST_SYNC, is_fp32_dest_acc_en, calculate_activation, (APPROX, ckernel::ActivationType::Hardsigmoid, ITERATIONS), dst_index, VectorMode::RC);
     }
     else if constexpr (is_zero_comp_op(OPERATION))
     {
