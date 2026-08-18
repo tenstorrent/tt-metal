@@ -458,8 +458,22 @@ void kernel_main() {
                         const uint32_t hb = nb_H / nb_bh;
                         const uint32_t w_local = (valid_Sqt * tt::constants::TILE_HEIGHT) / (nb_T * nb_H);
                         const uint32_t wb = w_local / nb_bw;
+                        // Under W-SP each shard has a different global W origin; it rides the per-device
+                        // windowed_q_tok_offset tensor (na3d passes shard*w_local there in block mode).
                         nbr_box = neighborhood_box_block(
-                            q_chunk, nb_bt, nb_bh, nb_bw, hb, wb, nb_T, nb_H, nb_W, nb_kt, nb_kh, nb_kw, nb_w_origin);
+                            q_chunk,
+                            nb_bt,
+                            nb_bh,
+                            nb_bw,
+                            hb,
+                            wb,
+                            nb_T,
+                            nb_H,
+                            nb_W,
+                            nb_kt,
+                            nb_kh,
+                            nb_kw,
+                            windowed_q_tok_offset);
                         const auto range = neighborhood_box_k_chunk_range(
                             nbr_box, nb_H, nb_W, Sk_chunk_t * tt::constants::TILE_HEIGHT, k_num_chunks);
                         windowed_k_lo = range.k_lo;
