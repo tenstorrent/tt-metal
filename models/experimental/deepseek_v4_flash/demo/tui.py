@@ -21,6 +21,11 @@ the newest; ``d`` toggles debug lines, ``p`` pauses scrolling (the status keeps 
 ``c`` clears the log, ``q`` quits the server. The live view owns the alternate screen, so
 these keys, rather than the terminal's own scrollback, are how to read back.
 
+The view follows the window it is drawn in: a resize repaints immediately (on
+``SIGWINCH``, not at the next frame), refolds the log to the new width around the line
+being read rather than jumping elsewhere in the history, and drops the per-slot table
+for a header-only status when the window is too short to carry both.
+
 Everything degrades gracefully: without ``rich`` installed, or when stdout is not a
 terminal (a pipe, ``nohup``, a CI log), :func:`console` yields ``None`` and the server
 just logs to stderr as usual, so nothing here can stop it from serving.
@@ -47,6 +52,11 @@ _LEVEL_STYLE = {
 }
 # Square brackets are rich markup, so the key hints spell the keys out instead.
 _HELP = "keys: up/down pgup/pgdn scroll · end follow · d debug · p pause · c clear · q quit"
+
+# Log lines below which the status pane gives up its per-slot table: a short window
+# would otherwise spend every row on the status and leave the log nothing, or overflow
+# the frame and scroll the status off the top.
+_MIN_LOG_LINES = 3
 
 # Escape sequences for the navigation keys, in both the normal and the application cursor
 # modes a terminal may be in ("\x1b[A" and "\x1bOA" are both Up).
@@ -93,13 +103,17 @@ class ServerConsole:
         self.debug = debug
         self.fps = fps
         self.console = Console(highlight=False, soft_wrap=False)
-        self._lines: deque[tuple[str, str, str]] = deque(maxlen=max_lines)  # (time, level, message)
+        # (sequence, time, level, message). The sequence number identifies a record
+        # across a refold, which rebuilds every folded line (see :meth:`_refold`).
+        self._lines: deque[tuple[int, str, str, str]] = deque(maxlen=max_lines)
         # The same records folded to the message column's width, one entry per *screen*
-        # line. Scrolling and the height budget are both counted in these: a single log
-        # record can be a whole screenful once a request's prompt is in it, so counting
-        # records would overflow the frame and make the window mean nothing.
-        self._display: deque[tuple[str, str, str]] = deque(maxlen=max_lines * 8)
+        # line, each tagged with the record it came from. Scrolling and the height budget
+        # are both counted in these: a single log record can be a whole screenful once a
+        # request's prompt is in it, so counting records would overflow the frame and make
+        # the window mean nothing.
+        self._display: deque[tuple[int, str, str, str]] = deque(maxlen=max_lines * 8)
         self._wrapped_at = 0  # the width _display was folded for
+        self._seq = 0
         self._incoming: queue.Queue = queue.Queue()
         self._lock = threading.Lock()
         self.paused = False
@@ -107,6 +121,11 @@ class ServerConsole:
         self._scroll = 0
         self._log_height = 20  # what the last frame had room for, so a page key can match it
         self._stop = threading.Event()
+        # Set by the SIGWINCH handler; wakes the painter out of its frame wait so a
+        # resize lands at once rather than up to a frame later.
+        self._resized = threading.Event()
+        self._prev_winch = None
+        self._winch_installed = False
         self._painter = threading.Thread(target=self._paint_loop, name="tui-painter", daemon=True)
         self._keys = threading.Thread(target=self._key_loop, name="tui-keys", daemon=True)
         self._dropped = 0
@@ -123,8 +142,16 @@ class ServerConsole:
             self._dropped += 1
 
     def _message_width(self) -> int:
-        """Width the message column gets: the console less the time column and padding."""
-        return max(self.console.width - 16, 20)
+        """Width the message column gets: the console less the time column and padding.
+
+        The floor is deliberately far below any usable width, because the two ways of
+        being wrong are not symmetric. Folding *narrower* than the real column only
+        leaves a ragged right margin, while folding wider makes the table fold again and
+        paint two screen lines where the height budget counted one -- which overflows the
+        frame and scrolls the status off the top. So a window too narrow to honour the
+        subtraction over-folds rather than under-folds.
+        """
+        return max(self.console.width - 16, 4)
 
     @staticmethod
     def _fold(text: str, width: int) -> list[str]:
@@ -135,20 +162,50 @@ class ServerConsole:
 
     def _append(self, stamp: str, level: str, text: str) -> int:
         """Add one record to the log and its folded form; returns the lines added."""
-        self._lines.append((stamp, level, text))
+        self._seq += 1
+        self._lines.append((self._seq, stamp, level, text))
         pieces = self._fold(text, self._message_width())
         for i, piece in enumerate(pieces):
-            self._display.append((stamp if i == 0 else "", level, piece))
+            self._display.append((self._seq, stamp if i == 0 else "", level, piece))
         return len(pieces)
 
     def _refold(self) -> None:
-        """Rebuild the folded log after a resize changed how wide a line may be."""
+        """Rebuild the folded log after a resize changed how wide a line may be.
+
+        The scroll offset counts folded lines back from the newest, and a narrower window
+        turns one record into more of them, so the same offset would land on a different
+        record after the rebuild -- a resize would scroll the log out from under whoever
+        was reading it. The record at the bottom of the window is re-anchored instead, so
+        the view stays where it was and only the wrapping changes.
+        """
         width = self._message_width()
+        anchor = self._anchor_seq()
         self._wrapped_at = width
         self._display.clear()
-        for stamp, level, text in self._lines:
+        for seq, stamp, level, text in self._lines:
             for i, piece in enumerate(self._fold(text, width)):
-                self._display.append((stamp if i == 0 else "", level, piece))
+                self._display.append((seq, stamp if i == 0 else "", level, piece))
+        if anchor is not None:
+            self._scroll = self._offset_of(anchor)
+
+    def _anchor_seq(self) -> int | None:
+        """The record at the bottom of the window, or ``None`` when the log is following
+        the tail -- which needs no anchor, the tail being wherever the log now ends."""
+        if not self._scroll:
+            return None
+        lines = list(self._display)
+        index = len(lines) - self._scroll - 1
+        return lines[index][0] if 0 <= index < len(lines) else None
+
+    def _offset_of(self, seq: int) -> int:
+        """The scroll offset that puts record ``seq``'s last line at the bottom of the
+        window. Falls back to the current offset if the record has since been evicted,
+        leaving the clamp in :meth:`_log_lines` to bring it back into range."""
+        lines = list(self._display)
+        for index in range(len(lines) - 1, -1, -1):
+            if lines[index][0] == seq:
+                return max(len(lines) - index - 1, 0)
+        return self._scroll
 
     def _drain(self) -> int:
         """Move the queued records into the log, returning how many lines they added."""
@@ -165,12 +222,49 @@ class ServerConsole:
 
     # -- lifecycle -------------------------------------------------------------- #
     def start(self) -> None:
+        self._install_resize_hook()
         self._painter.start()
         self._keys.start()
 
     def stop(self) -> None:
         self._stop.set()
+        self._resized.set()  # cut the painter's frame wait short
         self._painter.join(timeout=2)
+        self._remove_resize_hook()
+
+    def _install_resize_hook(self) -> None:
+        """Have SIGWINCH wake the painter, so a resize repaints immediately.
+
+        Both failure modes are harmless: there is no SIGWINCH off POSIX, and only the
+        main thread may install a handler. Without one the view still follows a resize,
+        just at the frame rate rather than at once. Any handler already installed is
+        chained to and put back by :meth:`_remove_resize_hook`, so this cannot swallow
+        another library's (or the shell's) notification.
+        """
+        import signal
+
+        if not hasattr(signal, "SIGWINCH"):
+            return
+
+        def on_winch(signum, frame) -> None:
+            self._resized.set()  # the painter does the work; a handler must stay trivial
+            if callable(self._prev_winch):
+                self._prev_winch(signum, frame)
+
+        try:
+            self._prev_winch = signal.signal(signal.SIGWINCH, on_winch)
+        except ValueError:  # not the main thread
+            return
+        self._winch_installed = True
+
+    def _remove_resize_hook(self) -> None:
+        if not self._winch_installed:
+            return
+        self._winch_installed = False
+        with contextlib.suppress(Exception):
+            import signal
+
+            signal.signal(signal.SIGWINCH, self._prev_winch or signal.SIG_DFL)
 
     def __enter__(self) -> "ServerConsole":
         self.start()
@@ -180,13 +274,15 @@ class ServerConsole:
         self.stop()
 
     # -- rendering -------------------------------------------------------------- #
-    def _status_panel(self):
+    def _status_panel(self, stats: dict, compact: bool = False):
+        """The status pane. ``compact`` drops the per-slot table and the KV pool line,
+        for a window too short to give the log any rows otherwise; the header, which
+        carries the aggregate throughput, is what survives."""
         from rich.console import Group
         from rich.panel import Panel
         from rich.table import Table
         from rich.text import Text
 
-        stats = self.stats()
         active = stats.get("active", [])
         uptime = int(stats.get("uptime", 0))
         head = Text()
@@ -203,7 +299,7 @@ class ServerConsole:
             head.append(f"\nDECODE WEDGED: {stats['broken']}", style="bold red")
 
         pool = stats.get("pool") or {}
-        if pool:
+        if pool and not compact:
             parts = []
             for name, (used, total) in pool.items():
                 share = used / total if total else 0.0
@@ -265,7 +361,8 @@ class ServerConsole:
         if self._dropped:
             flags.append(f"[red]{self._dropped} log lines dropped[/red]")
         subtitle = "  ".join(flags + [f"[dim]{_HELP}[/dim]"])
-        return Panel(Group(head, table), title="DeepSeek-V4-Flash server", subtitle=subtitle, border_style="cyan")
+        body = head if compact else Group(head, table)
+        return Panel(body, title="DeepSeek-V4-Flash server", subtitle=subtitle, border_style="cyan")
 
     def _log_lines(self, height: int):
         """A window of the log, as ``time | message`` rows sized to what is left of the
@@ -292,21 +389,38 @@ class ServerConsole:
         # and the terminal's height, both of which change under the key thread's feet.
         self._scroll = max(0, min(self._scroll, max(len(lines) - height, 0)))
         end = len(lines) - self._scroll
-        for stamp, level, text in lines[max(end - height, 0) : end]:
+        for _seq, stamp, level, text in lines[max(end - height, 0) : end]:
             table.add_row(stamp, text, style=_LEVEL_STYLE.get(level, ""))
         return table
 
     def _frame(self):
         from rich.console import Group
 
-        status = self._status_panel()
         # The console's own height, not shutil's: rich renders into the former, and the two
         # disagree when the terminal is detected differently (env vars against an ioctl).
         # Budgeting from the wrong one overflows the frame and scrolls the status away.
         rows = self.console.size.height
+        # One stats() call for the frame, however many times the status is laid out below.
+        stats = self.stats()
         # Measure the status so the log fills exactly the rest of the screen.
-        used = len(self.console.render_lines(status, self.console.options, pad=False))
+        status = self._status_panel(stats)
+        used = self._measure(status)
+        # A window shrunk to fewer rows than the status needs leaves the log nothing and
+        # pushes the status itself out of the frame; a header-only status keeps both.
+        if rows - used - 1 < _MIN_LOG_LINES:
+            status = self._status_panel(stats, compact=True)
+            used = self._measure(status)
+        # Below about six rows even that does not fit, its border and subtitle alone
+        # filling the window. The log is the pane with something to say at that size, so
+        # it takes the whole frame rather than the status overflowing and scrolling it
+        # away -- and the status returns as soon as there is room for it.
+        if rows - used - 1 < 1:
+            return self._log_lines(rows)
         return Group(status, self._log_lines(rows - used - 1))
+
+    def _measure(self, renderable) -> int:
+        """Screen lines ``renderable`` occupies at the console's *current* size."""
+        return len(self.console.render_lines(renderable, self.console.options, pad=False))
 
     def _paint_loop(self) -> None:
         from rich.live import Live
@@ -327,9 +441,18 @@ class ServerConsole:
                             # Keep the window on the lines being read: without this the
                             # arrivals push them off the top while the eye is on them.
                             self._scroll += added
+                    if self._resized.is_set():
+                        self._resized.clear()
+                        # Growing the window leaves the cells it gained holding whatever
+                        # the terminal had there before the frame moved into them. The
+                        # alternate screen is ours, so wiping it is safe.
+                        with contextlib.suppress(Exception):
+                            self.console.clear()
                     with contextlib.suppress(Exception):  # a resize mid-render, etc.
                         live.update(self._frame())
-                    time.sleep(interval)
+                    # Waits like a sleep, except SIGWINCH cuts it short, so a resize is
+                    # repainted as it happens rather than up to a frame later.
+                    self._resized.wait(interval)
         except Exception as e:  # noqa: BLE001 - the server keeps running without the view
             self._stop.set()
             print(f"[console stopped: {e}]", file=sys.stderr, flush=True)
@@ -448,7 +571,7 @@ def console(logger, stats, on_quit=None, enabled: bool = True, debug: bool = Fal
         logger.remove(sink_id)
         logger.add(sys.stderr, level="DEBUG" if debug else "INFO")
         # Replay what the pane held so a scrollback of the session survives the exit.
-        for stamp, level, text in list(view._lines)[-200:]:
+        for _seq, stamp, level, text in list(view._lines)[-200:]:
             print(f"{stamp:<12} {level:<8} {text}" if stamp else f"{'':<12} {level:<8} {text}", file=sys.stderr)
 
 
