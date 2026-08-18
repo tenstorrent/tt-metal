@@ -97,3 +97,86 @@ Narrow it inside the batch-32 path, cheapest first:
    sampling from detokenization within whichever regime is broken.
 
 Experiment 2 is the highest-information one and directly tests the active-row hypothesis.
+
+---
+
+## Does CI test batch 32 the way that would catch this? No.
+
+Question asked directly, answered from the sweep matrix rather than by inference. CI
+exercises `max_num_seqs 32` in two places, and neither can detect the degradation
+documented above.
+
+### 1. The benchmark phase: batch 32 with all rows live, but only short outputs
+
+The p300x2 text sweep for this model, enumerated from
+`reference_config/benchmarking/benchmark_config.py` via `get_benchmark_config()`:
+
+| isl | **osl** | max_conc | n | has perf targets |
+|---:|---:|---:|---:|:---:|
+| 128 | 128 | 1 | 8 | **yes** |
+| 128 | 128 | 1 | 8 | no |
+| 128 | 128 | **32** | 256 | no |
+| 128 | **1024** | 1 | 4 | no |
+| 128 | **1024** | **32** | 128 | no |
+| 1024 | 128 | 1 / 32 | 4 / 128 | no |
+| 2048 | 128 | 1 / 32 | 4 / 128 | no |
+| 4096 | 128 | 1 / 32 | 4 / 128 | no |
+| 8192 | 128 | 1 / 32 | 2 / 64 | no |
+| 16384 | 128 | 1 / 31 | 2 / 62 | no |
+| 32768 | 128 | 1 / 15 | 1 / 15 | no |
+| 65536 | 128 | 1 / 8 | 1 / 8 | no |
+| 131072 | 128 | 1 / 4 | 1 / 4 | no |
+
+**Output length is pinned at 128 for every point except two.** The sweep scales *input*
+aggressively — to 131,072 tokens — while holding generation at 128 tokens. Measured on
+this port, 128-484 token generations are **clean at batch 32** (the isolation probe's
+trivial and easy prompts were correct in every arm). So these points exercise the batch-32
+path in precisely the regime where it works.
+
+The single longest-output point is `osl=1024` at `max_conc=32`. Degradation appeared at
+~1,800+ tokens, so even that point sits below the threshold.
+
+And decisively: **the benchmark sweep measures throughput and latency, never output
+correctness.** Nothing in it inspects the generated text, so even a point that did
+degrade would pass.
+
+### 2. The eval phase: long outputs at batch 32, but most rows idle and only the answer graded
+
+The eval serves at `max_num_seqs 32` with `num_concurrent=32`, but `CI_NIGHTLY: 0.05`
+yields **10 documents**. So at most 10 of 32 rows are ever live — the configuration in
+which the isolation probe measured corruption. But the eval grades only the extracted
+letter, so degradation surfaces as a low score, which reads as a model-quality problem
+rather than a batch-path defect. That is exactly what happened: the CI-faithful run
+reported 0.10 (truly 0/10) and nothing in the output pointed at batch 32.
+
+### The empty cell
+
+|  | short output (<=1024 tok) | **long output (>1800 tok)** |
+|---|---|---|
+| **batch 1** | benchmark points, clean | eval at conc 1, clean (measured 0.60) |
+| **batch 32** | benchmark points, clean and *throughput-only* | **never checked for correctness** |
+
+The combination that breaks — long generation at batch 32 — is never validated for
+correctness anywhere in the release flow. The eval reaches that cell but cannot attribute
+what it finds; the benchmarks never reach it.
+
+### Two further gaps in the same table
+
+1. **Only one sweep point carries perf targets**: `isl=128 osl=128 max_concurrency=1`. Its
+   own comment reads: *"ASSUMED, NOT VALIDATED. No t3k entry exists for this model, so
+   numbers are inferred from the closest same-size/type model in this file: 'Qwen3-32B' t3k
+   (ttft 62.0 / tput_user 41.0)"*, and it flags both caveats itself — a cross-architecture
+   transplant (8 Wormhole chips vs 4 Blackhole) and that *"Qwen3.6 is a hybrid
+   Gated-DeltaNet/Gated-Attention model whose decode cost profile differs from dense
+   Qwen3-32B."* So the only gated perf number is an unvalidated guess.
+
+2. **That gated point assumes `max_concurrency: 1`** — *"'tput' is set equal to 'tput_user'
+   because max_concurrency is 1"* — while the serving spec sets **32**. The one perf target
+   that gates the release is therefore defined in a configuration the release does not
+   serve in, and `SERVING_BATCH_LATENCY.md` shows the two differ by ~4.8x per token.
+
+### What would close it
+
+One sweep point: **`osl >= 4096` at `max_conc = 32`**, with an output-quality assertion
+rather than a throughput target. Cheap to add to the same matrix, and it is the only cell
+that distinguishes "slow at batch 32" from "wrong at batch 32".
