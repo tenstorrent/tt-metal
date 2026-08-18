@@ -3861,6 +3861,7 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
         input_format: DataFormat = None,
         dest_acc: DestAccumulation = None,
         output_format: DataFormat = None,
+        collect_generated_nan: bool = False,
     ):
         """*dest_acc* and *output_format* enable the Dest-width and pack-path modelling.
 
@@ -3875,6 +3876,11 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
         substitutes a signed infinity for a NaN that a 16-bit Dest cannot hold. UnarySFPUGolden
         has modelled this since revision 8 and ScalarBinopGolden since revision 10; this is the
         same contract, applied to the third family that needs it.
+
+        *collect_generated_nan* additionally returns a per-lane mask of the results that were a
+        NaN this op *invented*, in the same layout as the result. For a caller that has to stop
+        asserting the sign of one: after the pack substitution there is no NaN left to find, and
+        the answer is per lane rather than per tensor -- see _canonicalise_generated_nan.
         """
         if operation not in self.ops:
             raise ValueError(f"Unsupported SFPU operation: {operation}")
@@ -3906,6 +3912,11 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
         dst_start = dst_idx * elements_per_tile
 
         if operation == MathOperation.SfpuAddTopRow:
+            if collect_generated_nan:
+                raise ValueError(
+                    "SfpuAddTopRow returns before the Dest modelling that produces the "
+                    "generated-NaN mask, so it cannot report one"
+                )
             return self._add_top_row(
                 tensor.flatten(),
                 src1_idx,
@@ -3968,6 +3979,9 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
                 .clone()
             )
 
+        # Same layout as `result`, so it survives the untilize below unchanged.
+        generated_nan = torch.zeros(result.numel(), dtype=torch.bool)
+
         for iteration in range(num_iterations):
             row_offset = iteration * elements_per_row
 
@@ -3998,8 +4012,11 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
                 result_row = torch.tensor(
                     [float(v) for v in row_values], dtype=torch.float32
                 )
-                result_row = self._canonicalise_generated_nan(
+                result_row, generated_row = self._canonicalise_generated_nan(
                     result_row, src1_row, src2_row
+                )
+                generated_nan[dst_row_start : dst_row_start + elements_per_row] = (
+                    generated_row
                 )
                 # Two casts, both NaN-sign preserving, for the reason UnarySFPUGolden records:
                 # the first is the Dest write's own rounding, the second the store into
@@ -4023,6 +4040,12 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
             DataFormat.Bfp2_b,
         ):
             result = untilize_block(result, data_format, dimensions)
+            # The same permutation, so the mask keeps pointing at the lanes it was recorded for.
+            # 0.0 and 1.0 are exact in every format this branch runs for, so the round-trip
+            # through untilize_block's format cast cannot lose a lane.
+            generated_nan = untilize_block(
+                generated_nan.to(torch.float32), data_format, dimensions
+            ).flatten()
 
         if model_dest and not nan_survives_to_l1(data_format, output_format, dest_acc):
             # The packer cannot write a NaN through this pipeline, so it substitutes an infinity
@@ -4030,6 +4053,9 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
             # sfpu_domains rather than restated here, so this golden and the gate that decides
             # where the probe is sent cannot disagree about which cells narrow.
             result = convert_nan_to_inf(result)
+
+        if collect_generated_nan:
+            return result, generated_nan.flatten().bool()
 
         return result
 
@@ -4057,13 +4083,17 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
         only becomes observable once the pack path substitutes a *signed* infinity for the NaN --
         see the caller -- and where it does, the assertion is sound on Blackhole and has to be
         gated off on Wormhole.
+
+        Returns the mask as well as the row, because a caller gating that assertion needs to know
+        *which lanes* rather than whether any: this is the only point where the distinction is
+        still legible, since the substitution downstream leaves no NaN to re-derive it from.
         """
         generated = (
             torch.isnan(result_row)
             & ~torch.isnan(src1_row.to(torch.float32))
             & ~torch.isnan(src2_row.to(torch.float32))
         )
-        return torch.where(generated, result_row.abs(), result_row)
+        return torch.where(generated, result_row.abs(), result_row), generated
 
     @staticmethod
     def _dest_format(

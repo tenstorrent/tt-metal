@@ -993,7 +993,9 @@ def test_eltwise_unary_sfpu_int_shift(
     """Sweep the unary shift ops over the amounts worth driving, in range and out.
 
     Not the full axis: _UNARY_SHIFT_AMOUNTS carries 8 of the 32 in-range amounts, chosen the
-    way SHIFT_EDGE_AMOUNTS is, plus the out-of-range ones collapsed to one representative.
+    way SHIFT_EDGE_AMOUNTS is, and all six of its non-negative out-of-range ones. Only the
+    *negative* amounts collapse to a single representative, for the reason recorded there --
+    the `u` suffix makes all four arrive as the same large unsigned value.
     """
     values = _shift_stimulus_values(mathop, shift_amount)
     if not any(v for v in values):

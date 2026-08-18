@@ -520,8 +520,14 @@ def sfpu_binary(
     This is the assertion the audit's section 5.10 asks for -- "a golden that accepts either
     infinity" -- and it is strictly better than withdrawing the variant: the magnitude, the
     finiteness and every finite lane in the tensor are still checked, so a kernel that returned a
-    finite value, a zero, or a NaN where an infinity is due still fails. Only the one bit the ISA
-    declines to pin is excused, and only on elements where *both* sides are already non-finite.
+    finite value, a zero, or a NaN where an infinity is due still fails.
+
+    Scoped per lane, from the mask the golden records while the NaN is still a NaN, and *not* per
+    variant. A tensor holds both kinds of non-finite at once: `specials_in` drives `inf - inf`,
+    whose sign the ISA leaves open, alongside `0 - (-inf)`, whose `+inf` IEEE fully specifies. A
+    variant-wide excusal would stop checking the second kind, and one generated NaN anywhere in
+    the class would be enough to do it -- which is what this argument caller-side used to be, and
+    what test_sfpu_reduce already scopes per lane for the same reason.
     """
 
     # Seed the draw so the stimuli are identical run to run. Nothing below sets a seed,
@@ -619,23 +625,30 @@ def sfpu_binary(
         else formats.input_format
     )
     elements_per_pair = 2 * 32 * 32
-    golden_tensor = torch.cat(
-        [
-            generate_golden(
-                mathop,
-                golden_src[offset : offset + elements_per_pair],
-                0,
-                1,
-                0,
-                32,
-                [64, 32],
-                golden_format,
-                dest_acc=dest_acc,
-                output_format=formats.output_format,
-            ).flatten()
-            for offset in range(0, golden_src.numel(), elements_per_pair)
-        ]
-    )
+    golden_chunks = []
+    generated_nan_chunks = []
+    for offset in range(0, golden_src.numel(), elements_per_pair):
+        chunk = generate_golden(
+            mathop,
+            golden_src[offset : offset + elements_per_pair],
+            0,
+            1,
+            0,
+            32,
+            [64, 32],
+            golden_format,
+            dest_acc=dest_acc,
+            output_format=formats.output_format,
+            collect_generated_nan=unspecified_nonfinite_sign,
+        )
+        # Asked of the return value rather than of the build mode: DummyGoldenGenerator stands in
+        # for the golden during --compile-producer and returns a bare tensor whatever it is asked
+        # for, and that phase skips before the comparison below anyway.
+        if isinstance(chunk, tuple):
+            chunk, generated_nan = chunk
+            generated_nan_chunks.append(generated_nan)
+        golden_chunks.append(chunk.flatten())
+    golden_tensor = torch.cat(golden_chunks)
 
     bcast = broadcast_type if broadcast_type else LlkBroadcastType.None_
 
@@ -686,14 +699,19 @@ def sfpu_binary(
     # format. See BINARY_CUSTOM_TOLERANCES.
     custom_atol, custom_rtol = _custom_tolerances(mathop, formats.output_format)
 
-    if unspecified_nonfinite_sign:
-        # Clear the sign on the elements where *both* sides are non-finite, and only those. A
-        # golden +inf against a hardware 5.0 still compares +inf vs 5.0 and still fails; a golden
-        # +inf against a hardware NaN likewise, because abs() leaves a NaN a NaN and passed_test's
-        # both-NaN clause needs both. So this excuses the sign bit and nothing else.
-        both_nonfinite = ~torch.isfinite(golden_tensor) & ~torch.isfinite(res_tensor)
-        golden_tensor = torch.where(both_nonfinite, golden_tensor.abs(), golden_tensor)
-        res_tensor = torch.where(both_nonfinite, res_tensor.abs(), res_tensor)
+    if unspecified_nonfinite_sign and generated_nan_chunks:
+        # Clear the sign only on the lanes that held a generated NaN *and* where both sides are
+        # non-finite. A golden +inf against a hardware 5.0 still compares +inf vs 5.0 and still
+        # fails; a golden +inf against a hardware NaN likewise, because abs() leaves a NaN a NaN
+        # and passed_test's both-NaN clause needs both. So this excuses one bit on the lanes the
+        # ISA declines to pin, and nothing else anywhere.
+        unspecified = (
+            torch.cat(generated_nan_chunks)
+            & ~torch.isfinite(golden_tensor)
+            & ~torch.isfinite(res_tensor)
+        )
+        golden_tensor = torch.where(unspecified, golden_tensor.abs(), golden_tensor)
+        res_tensor = torch.where(unspecified, res_tensor.abs(), res_tensor)
 
     assert passed_test(
         golden_tensor,
@@ -1395,32 +1413,6 @@ def _edge_pairs_for_class(mathop, formats, edge_class, dest_acc, specials=False)
     ]
 
 
-def _class_generates_a_nan(mathop, pairs):
-    """Does this class contain a pair whose golden NaN the *op* invented?
-
-    Derived from the pairs rather than from the class name, because the two do not line up.
-    _EDGE_CLASS_NAN is a NaN class by definition, but _EDGE_CLASS_BOTH_ZERO is only sometimes
-    one: it is tested first, on the operands alone, so SfpuElwpow's `0**0` lands there with a
-    *finite* golden answer of 1.0. Gating on the class name would take pow's divergence -- a
-    plain 0-vs-1 disagreement with no NaN anywhere near it -- off Wormhole along with the four
-    ops this is meant for.
-
-    "Invented" means *neither operand is a NaN* and the result is one -- not "both operands are
-    finite", which is the same thing only while cat B is off. Once specials are injected,
-    `inf - inf` and `inf * 0` invent a NaN from non-finite operands, and they belong here. This
-    predicate must stay the mirror of BinarySFPUGolden._canonicalise_generated_nan: the golden
-    canonicalises exactly the elements this gate excuses, and the two drifting apart would leave
-    the golden asserting a sign the gate thinks is unasserted.
-    """
-    golden = BinarySFPUGolden()
-    for a, b in pairs:
-        if math.isnan(a) or math.isnan(b):
-            continue  # forwarded, not invented: the sign is the datum's own
-        if math.isnan(float(golden.ops[mathop](torch.tensor(a), torch.tensor(b)))):
-            return True
-    return False
-
-
 def _build_edge_pair_src(mathop, formats, edge_class, dest_acc):
     """Two-tile override: tile 0 holds operand A, tile 1 holds operand B, paired by index.
 
@@ -1595,7 +1587,8 @@ _BINARY_EDGE_REASON = {
     },
     MathOperation.SfpuElwpow: {
         # Survives the retraction above: 0**0 returns 0 against a golden 1, both finite, no NaN
-        # in it. _class_generates_a_nan() is what keeps this entry out of that gate.
+        # in it, so the per-lane generated-NaN mask is empty here and the sign gate excuses
+        # nothing -- this stays a plain 0-vs-1 divergence on both arches.
         _EDGE_CLASS_BOTH_ZERO: "0**0 returns 0; C, torch and the golden all give 1. Not "
         "explained by the ISA — pow evaluates exp(b·ln a), so this is composition.",
     },
@@ -1640,7 +1633,8 @@ assert all(
 # deliberately NOT gated here -- but for a different reason than this comment used to give.
 # Their "kernels' own reciprocal composition, unexplained by the ISA" reading is retracted (see
 # the retraction above _BINARY_EDGE_COMBINATIONS); what remains of them on Wormhole is handled by
-# generated_nan_sign_is_asserted(), which withdraws the variant rather than tolerating it.
+# generated_nan_sign_is_asserted(), which excuses the one unspecified sign bit on the lanes that
+# carry a generated NaN rather than tolerating the class.
 _WORMHOLE_ONLY_EDGE_CLASSES = frozenset({_EDGE_CLASS_NEGATIVE_ZERO})
 
 
@@ -1729,9 +1723,12 @@ def test_sfpu_binary_edges(request, formats, dest_acc, mathop, edge_class):
     # magnitude there instead of the sign, rather than withdrawing the variant: the pole, the
     # finiteness and every finite lane stay checked, which a skip would give up. Blackhole
     # specifies the canonical NaN, so it keeps the full assertion including the sign.
-    unspecified_sign = _class_generates_a_nan(
-        mathop, pairs
-    ) and generated_nan_sign_is_asserted(
+    #
+    # Pipeline and arch only. Which *lanes* carry an invented NaN is the golden's own mask, not a
+    # property of the class: `specials_in` is classified by an operand being non-finite rather than
+    # by what the golden answers, so it mixes `inf - inf` with `0 - (-inf)` and no per-class answer
+    # is right for both. sfpu_binary() applies it per lane.
+    unspecified_sign = generated_nan_sign_is_asserted(
         formats.input_format,
         formats.output_format,
         dest_acc,
