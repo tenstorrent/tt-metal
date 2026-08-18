@@ -5,14 +5,21 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 
 import pytest
 import torch
 import torch.nn.functional as F
+from loguru import logger
 
 import ttnn
-from models.common.utility_functions import run_for_blackhole
-from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_accurate, assert_bit_identical
+from models.common.utility_functions import run_for_blackhole, skip_with_llk_assert, skip_with_watcher
+from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
+from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
+    assert_accurate,
+    assert_bit_identical,
+    assert_equal,
+)
 
 pytestmark = [
     run_for_blackhole(),
@@ -21,6 +28,27 @@ pytestmark = [
 
 _SEQUENCE = 64
 _DEFAULT_WIDTHS = (512, 512, 512)
+
+
+@dataclass(frozen=True)
+class _ProductionCase:
+    case_id: str
+    widths: tuple[int, int, int]
+    expected_duration_ns: int
+
+
+_PRODUCTION_PERF_MARGIN = 0.05
+
+# Calibrated 2026-08-18 on bh_loudbox host bh-lb-42, P150b firmware 19.5.0.0.
+# Seven real-time-profiler samples produced 92583-92681 ns, 50089-50210 ns,
+# and 55299-55348 ns respectively; the inline references are their medians.
+# The 5% symmetric margin covers the <1% observed spread plus board/thermal
+# variance while retaining a meaningful regression gate.
+_PRODUCTION_CASES = (
+    _ProductionCase("single-block", widths=(512, 512, 512), expected_duration_ns=92_606),
+    _ProductionCase("multiple-blocks", widths=(1024, 1024, 1024), expected_duration_ns=50_123),
+    _ProductionCase("asymmetric-split", widths=(512, 256, 128), expected_duration_ns=55_324),
+)
 
 
 def _host_inputs(
@@ -95,6 +123,7 @@ def _run(
     *,
     widths: tuple[int, int, int] = _DEFAULT_WIDTHS,
     memory_config: ttnn.MemoryConfig | None = None,
+    compute_kernel_config: ttnn.DeviceComputeKernelConfig | None = None,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
     return ttnn.experimental.kda.qkv_causal_conv1d_silu(
         input_tt,
@@ -102,6 +131,7 @@ def _run(
         *taps_tt,
         *widths,
         memory_config=memory_config,
+        compute_kernel_config=compute_kernel_config,
     )
 
 
@@ -131,13 +161,6 @@ def test_qkv_causal_conv1d_silu_contract(device: ttnn.Device, widths: tuple[int,
         assert tuple(ttnn.to_torch(output).shape) == (1, _SEQUENCE, width)
         assert all(output.buffer_address() != tensor.buffer_address() for tensor in input_tensors)
 
-    cache_entries = device.num_program_cache_entries()
-    repeated_host, repeated_device = _device_inputs(device, widths=widths, seed=224)
-    repeated_expected = _reference(*repeated_host, widths)
-    repeated_outputs = run(*repeated_device)
-    ttnn.synchronize_device(device)
-    assert device.num_program_cache_entries() == cache_entries
-
     trace_id = ttnn.begin_trace_capture(device, cq_id=0)
     traced_outputs = run()
     ttnn.end_trace_capture(device, trace_id, cq_id=0)
@@ -145,12 +168,9 @@ def test_qkv_causal_conv1d_silu_contract(device: ttnn.Device, widths: tuple[int,
         ttnn.execute_trace(device, trace_id, cq_id=0, blocking=False)
     ttnn.synchronize_device(device)
 
-    for name, golden, repeated_golden, output, repeated, traced in zip(
-        ("q", "k", "v"), expected, repeated_expected, outputs, repeated_outputs, traced_outputs, strict=True
-    ):
+    for name, golden, output, traced in zip(("q", "k", "v"), expected, outputs, traced_outputs, strict=True):
         actual = ttnn.to_torch(output)
         assert_accurate(golden, actual, name=name, pcc_threshold=0.999)
-        assert_accurate(repeated_golden, ttnn.to_torch(repeated), name=f"{name} cache hit", pcc_threshold=0.999)
         assert_bit_identical(actual, ttnn.to_torch(traced), name=f"{name} trace replay")
 
     for name, before, tensor in zip(
@@ -159,6 +179,191 @@ def test_qkv_causal_conv1d_silu_contract(device: ttnn.Device, widths: tuple[int,
         assert_bit_identical(before, ttnn.to_torch(tensor), name=f"{name} immutability")
 
     ttnn.release_trace(device, trace_id)
+
+
+@pytest.mark.parametrize("case", _PRODUCTION_CASES, ids=lambda case: case.case_id)
+def test_qkv_causal_conv1d_silu_is_device_deterministic(device: ttnn.Device, case: _ProductionCase) -> None:
+    """Compare repeated large outputs on device; cache behavior is tested separately."""
+    _, (input_tt, history_tt, taps_tt) = _device_inputs(device, widths=case.widths)
+
+    def run() -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
+        with ttnn.manage_config("throw_exception_on_fallback", True):
+            return _run(input_tt, history_tt, taps_tt, widths=case.widths)
+
+    reference_outputs = run()
+    mismatch_scratch = tuple(
+        ttnn.empty(
+            output.shape,
+            dtype=ttnn.bfloat16,
+            layout=output.layout,
+            device=device,
+            memory_config=output.memory_config(),
+        )
+        for output in reference_outputs
+    )
+    mismatch_markers: list[ttnn.Tensor | None] = [None, None, None]
+    for _ in range(2):
+        current_outputs = run()
+        for index, (reference, current, scratch) in enumerate(
+            zip(reference_outputs, current_outputs, mismatch_scratch, strict=True)
+        ):
+            ttnn.ne(reference, current, dtype=ttnn.bfloat16, output_tensor=scratch)
+            current_marker = ttnn.max(scratch)
+            ttnn.deallocate(current)
+            if mismatch_markers[index] is None:
+                mismatch_markers[index] = current_marker
+            else:
+                updated_marker = ttnn.maximum(mismatch_markers[index], current_marker)
+                ttnn.deallocate(mismatch_markers[index])
+                ttnn.deallocate(current_marker)
+                mismatch_markers[index] = updated_marker
+
+    for name, marker in zip(("q", "k", "v"), mismatch_markers, strict=True):
+        assert marker is not None
+        marker_host = ttnn.to_torch(marker).clone()
+        assert_equal(
+            torch.zeros_like(marker_host),
+            marker_host,
+            name=f"{case.case_id} {name} device-side exact-value determinism marker",
+        )
+        ttnn.deallocate(marker)
+    for tensor in (*reference_outputs, *mismatch_scratch):
+        ttnn.deallocate(tensor)
+
+
+def test_qkv_causal_conv1d_silu_cache_hit_rebinds_fresh_tensors(device: ttnn.Device) -> None:
+    widths = (128, 128, 128)
+    host_a, device_inputs_a = _device_inputs(device, widths=widths, sequence=32, seed=1911)
+    host_b, device_inputs_b = _device_inputs(device, widths=widths, sequence=32, seed=1912)
+
+    output_a = _run(*device_inputs_a, widths=widths)
+    ttnn.synchronize_device(device)
+    entries = device.num_program_cache_entries()
+    output_b = _run(*device_inputs_b, widths=widths)
+    ttnn.synchronize_device(device)
+
+    flat_inputs_a = (device_inputs_a[0], device_inputs_a[1], *device_inputs_a[2])
+    flat_inputs_b = (device_inputs_b[0], device_inputs_b[1], *device_inputs_b[2])
+    assert device.num_program_cache_entries() == entries
+    assert all(
+        tensor_a.buffer_address() != tensor_b.buffer_address()
+        for tensor_a, tensor_b in zip(flat_inputs_a, flat_inputs_b, strict=True)
+    )
+    assert all(
+        tensor_a.buffer_address() != tensor_b.buffer_address()
+        for tensor_a, tensor_b in zip(output_a, output_b, strict=True)
+    )
+
+    expected_a = _reference(*host_a, widths)
+    expected_b = _reference(*host_b, widths)
+    for name, golden_a, golden_b, actual_a_tt, actual_b_tt in zip(
+        ("q", "k", "v"), expected_a, expected_b, output_a, output_b, strict=True
+    ):
+        actual_a = ttnn.to_torch(actual_a_tt)
+        actual_b = ttnn.to_torch(actual_b_tt)
+        assert_accurate(golden_a, actual_a, name=f"{name} cache miss tensors", pcc_threshold=0.999)
+        assert_accurate(golden_b, actual_b, name=f"{name} cache hit fresh tensors", pcc_threshold=0.999)
+        assert not torch.equal(actual_a, actual_b)
+
+
+def test_qkv_causal_conv1d_silu_default_compute_config_matches_explicit_defaults(device: ttnn.Device) -> None:
+    _, (input_tt, history_tt, taps_tt) = _device_inputs(device, sequence=32, widths=(128, 128, 128), seed=817)
+    implicit = _run(input_tt, history_tt, taps_tt, widths=(128, 128, 128))
+    entries = device.num_program_cache_entries()
+    explicit_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=True,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+        dst_full_sync_en=False,
+        throttle_level=ttnn.ThrottleLevel.NO_THROTTLE,
+    )
+    explicit = _run(
+        input_tt,
+        history_tt,
+        taps_tt,
+        widths=(128, 128, 128),
+        compute_kernel_config=explicit_config,
+    )
+    assert device.num_program_cache_entries() == entries
+    for name, implicit_output, explicit_output in zip(("q", "k", "v"), implicit, explicit, strict=True):
+        assert_bit_identical(
+            ttnn.to_torch(implicit_output),
+            ttnn.to_torch(explicit_output),
+            name=f"{name} implicit vs explicit production compute defaults",
+        )
+
+
+def test_qkv_causal_conv1d_silu_exact_math_uses_distinct_accurate_program(device: ttnn.Device) -> None:
+    host, (input_tt, history_tt, taps_tt) = _device_inputs(device, sequence=32, widths=(128, 128, 128), seed=818)
+    approximate = _run(input_tt, history_tt, taps_tt, widths=(128, 128, 128))
+    entries = device.num_program_cache_entries()
+    exact_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+    exact = _run(
+        input_tt,
+        history_tt,
+        taps_tt,
+        widths=(128, 128, 128),
+        compute_kernel_config=exact_config,
+    )
+    assert device.num_program_cache_entries() == entries + 1
+    expected = _reference(*host, (128, 128, 128))
+    for name, golden, approximate_output, exact_output in zip(
+        ("q", "k", "v"), expected, approximate, exact, strict=True
+    ):
+        assert_accurate(golden, ttnn.to_torch(approximate_output), name=f"{name} approximate math", pcc_threshold=0.999)
+        assert_accurate(golden, ttnn.to_torch(exact_output), name=f"{name} exact math", pcc_threshold=0.999)
+
+
+def test_qkv_causal_conv1d_silu_rejects_unsupported_compute_config(device: ttnn.Device, expect_error: Callable) -> None:
+    _, (input_tt, history_tt, taps_tt) = _device_inputs(device, sequence=32, widths=(128, 128, 128))
+    unsupported_config = ttnn.types.BlackholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        packer_l1_acc=True,
+    )
+    with expect_error(RuntimeError, "packer_l1_acc=true is unsupported"):
+        _run(
+            input_tt,
+            history_tt,
+            taps_tt,
+            widths=(128, 128, 128),
+            compute_kernel_config=unsupported_config,
+        )
+
+
+@pytest.mark.requires_host_iommu
+@pytest.mark.parametrize("case", _PRODUCTION_CASES, ids=lambda case: case.case_id)
+@skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
+@skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
+def test_qkv_causal_conv1d_silu_production_performance(device: ttnn.Device, case: _ProductionCase) -> None:
+    if not ttnn.device.IsProgramRealtimeProfilerActive():
+        pytest.fail("Real-time profiler must be active for QKV causal Conv1D plus SiLU performance checks")
+
+    _, (input_tt, history_tt, taps_tt) = _device_inputs(device, widths=case.widths)
+
+    def run() -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
+        return _run(input_tt, history_tt, taps_tt, widths=case.widths)
+
+    outputs, perf_record = profile_realtime_program(device, run)
+    duration_ns = perf_record["duration_ns"]
+    assert tuple(tuple(output.shape) for output in outputs) == tuple((1, _SEQUENCE, width) for width in case.widths)
+    logger.info(
+        f"QKV causal Conv1D plus SiLU {case.case_id}: duration={duration_ns:.0f} ns, "
+        f"profiler_runtime_id={perf_record['runtime_id']}"
+    )
+    lower = case.expected_duration_ns * (1 - _PRODUCTION_PERF_MARGIN)
+    upper = case.expected_duration_ns * (1 + _PRODUCTION_PERF_MARGIN)
+    assert lower <= duration_ns <= upper, (
+        f"{case.case_id} duration {duration_ns:.0f} ns outside [{lower:.0f}, {upper:.0f}] ns "
+        f"(reference {case.expected_duration_ns} ns, margin +/- {_PRODUCTION_PERF_MARGIN * 100:.0f}%)"
+    )
 
 
 def test_qkv_causal_conv1d_silu_program_key_includes_split_widths(device: ttnn.Device) -> None:
