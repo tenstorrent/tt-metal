@@ -954,6 +954,11 @@ def _section_bytes_cached() -> dict:
 
 
 def _roofline_stage_share(mf, stage) -> float:
+    """Fraction of resident weights this stage's subtree holds. See _share_and_basis."""
+    return _share_and_basis(mf, stage)[0]
+
+
+def _share_and_basis(mf, stage):
     """Fraction of the model's resident weights the subtree THIS stage runs holds; 1.0 when unknown.
 
     A stage streams its own tower and nothing else -- a decode token reads the language backbone and
@@ -992,7 +997,7 @@ def _roofline_stage_share(mf, stage) -> float:
         # absence of evidence charged as evidence of two towers.
         _towers = len((mf or {}).get("blocks") or {}) or len(_section_bytes_cached())
         if _towers <= 1:
-            return 1.0
+            return 1.0, "whole-model"
         # OTHERWISE REFUSE, FOR EVERY STAGE ALIKE. This asked perf_target to price the stage and
         # read the ANSWER as the verdict -- accepted means "its read set is the backbone", raised
         # means "refuse" -- which sounds structural and was a stage-name list wearing an exception:
@@ -1010,7 +1015,7 @@ def _roofline_stage_share(mf, stage) -> float:
         #
         # A single-tower model is unaffected: it returns 1.0 above, because there the whole model
         # genuinely IS every stage's subtree.
-        return 0.0
+        return 0.0, "refused"
     _dev = (mf or {}).get("device_section_bytes") or {}
     _res = float((mf or {}).get("device_weight_bytes") or 0.0)
     _mine_dev = float(_dev.get(root) or 0.0)
@@ -1021,11 +1026,19 @@ def _roofline_stage_share(mf, stage) -> float:
         # fall through rather than publish a share the census cannot support.
         _s = _mine_dev / _res
         if _s <= 1.0:
-            return _s
+            return _s, "measured"
     secs = _section_bytes_cached()
     total = float(sum(secs.values()) or 0.0)
     mine = float(secs.get(root) or 0.0)
-    return (mine / total) if (total > 0 and mine > 0) else 1.0
+    # THE CHECKPOINT'S SPLIT, AND THE READER IS TOLD. This states DISK precision: the loader picks a
+    # dtype per tensor, so a tower quantised more heavily than its neighbour is a smaller slice of
+    # what is resident than of what is on the file. Voxtral's backbone is 85.8% of a 9.36 GB bf16
+    # checkpoint, and its decode measurement implies 77.9% of the 1.72 GB actually on the chip --
+    # which is why that row read 109% of peak, a number that looks like a fast model and is a guessed
+    # divisor. The basis travels with the value so the report can say which one it used.
+    return ((mine / total) if (total > 0 and mine > 0) else 1.0), (
+        "checkpoint" if (total > 0 and mine > 0) else "whole-model"
+    )
 
 
 def _stage_units(stage, prompt_tokens) -> int:
@@ -1103,8 +1116,12 @@ def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None, stag
     tp = max(1, int(tp_degree or 1))
     per_dev_bytes = float(active_bytes) / tp
 
+    _share_bases: dict = {}
+
     def _stage_share(stage) -> float:
-        return _roofline_stage_share(mf, stage)
+        _v, _b = _share_and_basis(mf, stage)
+        _share_bases[str(stage)] = _b
+        return _v
 
     def _stage_block(stage):
         """The geometry of the block this stage runs, or None when it cannot be established.
@@ -1277,6 +1294,7 @@ def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None, stag
         _b = _stage_measured_bytes(profile, name) or _bytes_for(name, toks)
         mem_ms = (_b / (float(peak_bw_gbps) * 1e9)) * 1000.0 if _b else None
         out[name] = {
+            "share_basis": _share_bases.get(name, ""),
             "memory_ms": mem_ms,
             "compute_ms": comp_ms,
             "flops": flops or None,
@@ -1842,6 +1860,22 @@ def _roofline_tables(
     _prefill_ms = _pf_measured
     # close the roofline block BEFORE the ladder starts its own, or the two rules stack
     out.append(rule)
+    # SAY WHICH SPLIT PRICED THESE ROWS. A multi-tower stage's ceiling is the resident bytes times
+    # its subtree's share, and that share has two sources: the census, which WALKED the built model,
+    # and the checkpoint, which states the precision the file was written at. The loader picks a
+    # dtype per tensor, so a tower quantised more heavily than its neighbour is a smaller slice of
+    # the chip than of the file -- voxtral's backbone is 85.8% of its checkpoint and its decode
+    # measurement implies 77.9% of what is resident. Priced on the checkpoint, that row read 109% of
+    # peak: a number indistinguishable from a fast model, and actually a guessed divisor. Unmarked,
+    # a reader had no way to tell the two apart, which is the whole reason the row was doubted.
+    _guessed = sorted(st for st, rf in (_roofs or {}).items() if (rf or {}).get("share_basis") == "checkpoint")
+    if _guessed:
+        out.append("")
+        out.append(
+            "  note: %s priced from the CHECKPOINT's tower split (disk precision), not a device "
+            "census -- a stage can read >100%% of peak when the served split differs. Re-run once "
+            "the census records device_section_bytes." % ", ".join(_guessed)
+        )
     out.extend(_fidelity_section())
     disp = _dispatch_ms_per_unit(profile, per_unit_ms)
     cap = _capacity_bytes()
