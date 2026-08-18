@@ -127,13 +127,8 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        # The wheel ships its own copies of the compiled libs and `import ttnn` resolves
-        # to the installed package, so they must precede the tarball's build/lib. Only
-        # differs when wheel and tarball were compiled separately (the manylinux
-        # build-wheel job used by package-and-release); with build-inplace-wheel both
-        # come from one tree and the order is a no-op.
-        # Globbed on a worker: job steps run on the control runner, but the venv holding
-        # the wheel is on the workers, so the python version is a worker-side fact.
+        # Wheel libs first so they win over the tarball when the two were compiled
+        # separately. Glob on a worker: the venv lives there, not on the control runner.
         wheel_lib=$(mpirun --pernode bash -lc \
           'ls -d /opt/venv/lib/python*/site-packages/ttnn/build/lib' | tr -d '\r' | sort -u) || true
         if [ "$(printf '%s' "$wheel_lib" | grep -c '^')" -ne 1 ]; then
