@@ -500,8 +500,22 @@ void kernel_main() {
                     pack_untilize_dest_init<max_tiles_per_iter>(out_cb_id);
                     pack_untilize_dest<max_tiles_per_iter>(out_cb_id, 1, 0);
                 }
+                // [#48552 MP-DEBUG] Split the pack tail. Last PACK line for n1 pins the wedge:
+                //   pre-pack   => in pack_untilize_dest_init / pack_untilize_dest (the pack MOP itself)
+                //   packed     => in tile_regs_release (DEST-recycle / MATH<->PACK dest-sync handshake)
+                //   released   => in out_cb.push_back (output credit / consumer not draining)
+                //   pushed     => iteration completed; wedge is in the NEXT stick's UNPACK path
+                if (n <= 1) {
+                    DPRINT_PACK("[MP] packed n{} c{}\n", n, c_i);
+                }
                 tile_regs_release();
+                if (n <= 1) {
+                    DPRINT_PACK("[MP] released n{} c{}\n", n, c_i);
+                }
                 out_cb.push_back(output_faces);
+                if (n <= 1) {
+                    DPRINT_PACK("[MP] pushed n{} c{}\n", n, c_i);
+                }
 #endif
             }
         }
