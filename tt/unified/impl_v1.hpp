@@ -369,8 +369,8 @@ auto matmul(const ComputeBlock& a, const ComputeBlock& b) {
 
 template <typename Geometry, ReduceAxis Axis>
 ReduceNode<Geometry, Axis, ReducePool::Sum, expr::UnaryChain<>> reduce_sum(
-    const ComputeBlock& b, const Storage& scaler) {
-    return {{}, b.get_cb_id(), scaler.cb_id};
+    const ComputeBlock& b, const ComputeBlock& scaler) {
+    return {{}, b.get_cb_id(), scaler.get_cb_id()};
 }
 
 // --- NocAsyncReadTx ---
@@ -523,7 +523,7 @@ Block NocAsyncWriteCoreTx<thread>::wait(uint32_t num_writers) const {
 // --- Data movement ---
 
 template <int thread>
-void fill_reduce_scaler(const Storage& scaler, uint32_t value_bits) {
+Block fill_reduce_scaler(const Storage& scaler, uint32_t value_bits) {
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     if constexpr (thread == TT_DM_THREAD_ID) {
         cb_reserve_back(scaler.cb_id, 1);
@@ -549,9 +549,9 @@ void fill_reduce_scaler(const Storage& scaler, uint32_t value_bits) {
         cb_push_back(scaler.cb_id, 1);
     }
 #else
-    (void)scaler;
     (void)value_bits;
 #endif
+    return Block(scaler.cb_id, 1);
 }
 
 // The built-in read, written as a custom routine. Every overload here funnels
