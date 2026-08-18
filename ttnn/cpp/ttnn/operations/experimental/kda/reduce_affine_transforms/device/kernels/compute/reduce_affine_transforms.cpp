@@ -28,9 +28,6 @@ void matmul(
     if (send != nullptr) {
         send->reserve_back(Mt * Nt);
     }
-    pack_reconfig_data_format(out_id);
-    reconfig_data_format(b_id, a_id);
-    matmul_init(a_id, b_id);
     for (uint32_t m = 0; m < Mt; m++) {
         for (uint32_t n = 0; n < Nt; n++) {
             tile_regs_acquire();
@@ -141,6 +138,9 @@ TT_KERNEL void compute(uint32_t group) {
         current_b.wait_front(kv);
         remote_a.wait_front(kk);
         remote_b.wait_front(kv);
+        pack_reconfig_data_format(next_a.get_id());
+        reconfig_data_format(remote_a.get_id(), current_a.get_id());
+        matmul_init(current_a.get_id(), remote_a.get_id());
         matmul(current_a, remote_a, next_a, &next_send_a, Kt, Kt, Kt);
         matmul(current_a, remote_b, scratch, nullptr, Kt, Kt, Vt);
         scratch.wait_front(kv);
