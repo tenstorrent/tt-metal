@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
 """Does the in-place cache write take its index as a DEVICE TENSOR?
 
 If it does, one trace suffices for the write and only the positional slice still varies
