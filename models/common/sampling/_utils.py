@@ -62,7 +62,8 @@ def upper_power_of_2(n: int) -> int:
 _TOPK_ROUTE_MIN_K_EXCLUSIVE = 64  # large_k_route_min_k_exclusive
 _TOPK_ROUTE_SMALL_K_MIN_PADDED_WIDTH = 4096  # small_k_route_min_padded_width
 _TOPK_ROUTE_MAX_K = 2048  # large_k_route_max_k
-_TOPK_ROUTE_K_MULTIPLE = 16  # large_k_route_k_multiple
+_TOPK_ROUTE_K_MULTIPLE = 32  # large_k_route_k_multiple (k rounds to the TILE-output
+#   multiple since the routed pipeline requests tile_output; was 16 pre-TILE-native)
 _TOPK_ROUTE_MAX_WIDTH = 1 << 19  # large_k_route_max_width
 _TOPK_ROUTE_UINT16_MAX = 65535  # std::numeric_limits<uint16_t>::max()
 # MoE-gate arm (gate_route_* constants in topk.cpp). UNREACHABLE from every
