@@ -37,7 +37,7 @@ TEST_F(UnitMeshFixture, Host_UAF_WriteToBuffer_SanityCheck) {
         distributed::ReplicatedBufferConfig{.size = 1024},
         {.page_size = 1024, .buffer_type = BufferType::L1},
         &this->device());
-    buffer->deallocate();
+    DeallocateBuffer(*buffer->get_reference_buffer());
 
     std::vector<uint32_t> data(256, 0xABCDEFu);
     EXPECT_DEATH(slow_dispatch::WriteToBuffer(*buffer, data), ".*Use-After-Free.*WriteToBuffer.*");
@@ -50,7 +50,7 @@ TEST_F(UnitMeshFixture, Host_UAF_ReadFromBuffer_SanityCheck) {
         distributed::ReplicatedBufferConfig{.size = 1024},
         {.page_size = 1024, .buffer_type = BufferType::L1},
         &this->device());
-    buffer->deallocate();
+    DeallocateBuffer(*buffer->get_reference_buffer());
 
     std::vector<uint32_t> out;
     EXPECT_DEATH(slow_dispatch::ReadFromBuffer(*buffer, out), ".*Use-After-Free.*ReadFromBuffer.*");
@@ -77,7 +77,7 @@ TEST_F(UnitMeshFixture, Host_UAF_CoreSubsetWriteToBuffer_SanityCheck) {
         distributed::ReplicatedBufferConfig{.size = 1024},
         {.page_size = 1024, .buffer_type = BufferType::L1},
         &this->device());
-    buffer->deallocate();
+    DeallocateBuffer(*buffer->get_reference_buffer());
 
     std::vector<uint32_t> data(256, 0xABCDEFu);
     CoreRangeSet logical_core_filter{CoreRange{CoreCoord{0, 0}, CoreCoord{0, 0}}};
@@ -100,7 +100,7 @@ TEST_F(UnitMeshFixture, Host_UAF_WriteToBuffer_SharedPtrOverload_SanityCheck) {
         distributed::ReplicatedBufferConfig{.size = 1024},
         {.page_size = 1024, .buffer_type = BufferType::L1},
         &this->device());
-    buffer->deallocate();
+    Dea;
 
     std::vector<uint32_t> data(256, 0xABCDEFu);
     EXPECT_DEATH(slow_dispatch::WriteToBuffer(*buffer, data), ".*Use-After-Free.*WriteToBuffer.*");

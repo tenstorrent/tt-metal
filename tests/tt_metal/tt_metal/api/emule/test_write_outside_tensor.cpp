@@ -263,7 +263,7 @@ TEST_F(UnitMeshFixture, OOB_Tensor_HostPoke_Accept_NoViolation) {
     uint32_t poke_addr = static_cast<uint32_t>(anchor->address()) - gap_distance;
 
     std::vector<uint32_t> host_data(32, 0xABCDABCDu);  // 128-byte poked region
-    show_dispatch::WriteToL1(this->device(), logical_core, poke_addr, host_data);
+    slow_dispatch::WriteToL1(this->device(), logical_core, poke_addr, host_data);
 
     std::string kernel_src = R"(
         #include "api/dataflow/dataflow_api.h"
