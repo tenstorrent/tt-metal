@@ -472,7 +472,10 @@ def _resolve_lora_weights_path(
     2) --lora-hf-repo and --lora-hf-filename: download from Hugging Face.
     3) If nothing provided: use the supplied default weights, pinned to
        `default_revision` so an upstream re-upload cannot silently change what
-       the PCC references are compared against. In CI (v1 or v2),
+       the PCC references are compared against. The pin is best-effort: where it
+       cannot be resolved (a baked HF cache holding a different snapshot) the
+       fetch falls back to the default branch with a warning, rather than
+       skipping the test and reporting green on no coverage. In CI (v1 or v2),
        adapters with a `ci_v2_cache_dir` are fetched from the large-file cache
        first: CIv2 runners have no HF egress, and CIv1 runners call
        hf_hub_download with local_files_only=True, so an adapter absent from
@@ -517,22 +520,41 @@ def _resolve_lora_weights_path(
             if cached:
                 return cached
 
-    try:
+    def _download(revision):
         from huggingface_hub import hf_hub_download
 
         return hf_hub_download(
             repo_id=hf_repo_id,
             filename=hf_filename,
-            revision=hf_revision,
+            revision=revision,
             local_files_only=is_ci_env and not is_ci_v2_env,
         )
+
+    if hf_revision:
+        try:
+            return _download(hf_revision)
+        except Exception as e:
+            # The pin guards against an upstream re-upload; it is not worth losing
+            # coverage over. A runner whose baked HF cache holds this adapter under a
+            # different snapshot cannot resolve the pinned revision offline, and giving
+            # up here would drop the whole suite to skips while still reporting green.
+            # Fall back to whatever is reachable, but say so: the bytes under test are
+            # then not the ones the pin describes, which is worth seeing in the log.
+            logger.warning(
+                f"Pinned revision {hf_revision} for {hf_repo_id}/{hf_filename} could not be resolved ({e}). "
+                f"Falling back to the default branch: the adapter under test may differ from the pinned one, "
+                f"so treat a PCC change here as a possible fixture change rather than a model regression."
+            )
+
+    try:
+        return _download(None)
     except Exception as _:
         ci_cache_note = (
             f" Also tried the CIv2 large-file cache ({ci_v2_cache_dir}/{hf_filename}) without success."
             if tried_ci_cache
             else ""
         )
-        revision_note = f" at pinned revision {hf_revision}" if hf_revision else ""
+        revision_note = f" (pinned revision {hf_revision} was unresolvable too)" if hf_revision else ""
         pytest.skip(
             f"LoRA weights not available from HF ({hf_repo_id}, {hf_filename}){revision_note}.{ci_cache_note} "
             f"Use --lora-weights for a local file path, or ensure network/cache for HF."
