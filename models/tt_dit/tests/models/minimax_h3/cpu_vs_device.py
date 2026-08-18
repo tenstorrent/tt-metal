@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
 """CPU reference vs device decode, fp32, scored on real clips.
 
 Per clip: resample to 32 kHz, take one production window (207 latents = 5.17 s), encode with the

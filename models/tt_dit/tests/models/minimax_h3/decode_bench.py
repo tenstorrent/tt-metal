@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
 """Median decode time over N runs, building the decoder once.
 
 Build once, warm once, then time N decodes and report median plus spread. Timing a single call per
