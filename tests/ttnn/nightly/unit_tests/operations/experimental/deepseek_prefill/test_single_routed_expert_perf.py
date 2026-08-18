@@ -11,9 +11,11 @@ Needs a host-IOMMU runner, hence requires_host_iommu: on Blackhole the profiler'
 
 import pytest
 
+import ttnn
 from models.common.utility_functions import is_blackhole, skip_with_llk_assert, skip_with_watcher
 from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import is_p150
 from tests.ttnn.profiling.realtime_profiler_utils import assert_op_duration_merged, require_realtime_profiler
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert import (
     _ISL_ALLOCATED_TOKENS,
     _ISL_EXHAUSTIVE_MODELS,
@@ -62,6 +64,28 @@ _EXPECTED_NS: dict[tuple[str, int], int] = {
 }
 
 
+# Kimi K3 runs SiTU-GLU at the post-projection dims, so its K axis is ROUTED_EXPERT_HIDDEN_SIZE and
+# it cannot be driven from SINGLE_EXPERT_MODELS (which reads config.EMB_SIZE). Same measurement as
+# _EXPECTED_NS: median of 3 dispatches, x_rm layout, on a BH p150b (2026-08-18). The SiLU column at
+# the same dims read 175_024 / 177_389 / 233_381 / 346_628 / 604_844 / 1_186_341 / 1_514_379, so
+# SiTU costs ~6% up to the ~256-token DRAM-read knee and ~14% past it; a regression in either tanh
+# cap moves these well outside the band.
+_K3_SITU_EXPECTED_NS: dict[int, int] = {
+    0: 3_775,
+    128: 185_646,
+    256: 188_005,
+    512: 254_270,
+    1024: 386_543,
+    2048: 690_807,
+    4096: 1_360_016,
+    5120: 1_730_264,
+}
+
+
+def _margin_for(active: int) -> float:
+    return _CEILING_ONLY if active == 0 else _LOW_ISL_MARGIN if active <= 256 else _MARGIN
+
+
 def _perf_params():
     """Baseline and margin per (model, active) over the exhaustive ISL sweep, dims from
     SINGLE_EXPERT_MODELS. No extended_model mark: the markers below already scope where these run."""
@@ -77,7 +101,7 @@ def _perf_params():
                     config.EMB_SIZE,
                     config.MOE_INTERMEDIATE_SIZE,
                     _EXPECTED_NS[(name, active)],
-                    _CEILING_ONLY if active == 0 else _LOW_ISL_MARGIN if active <= 256 else _MARGIN,
+                    _margin_for(active),
                     # "-perf" keeps ids collision-free under -k: "512-perf" is not in "5120-perf".
                     id=f"{name}-isl-{active}-perf",
                 )
@@ -118,6 +142,42 @@ def test_single_routed_expert_perf(
         expected_ns=expected_ns,
         margin=margin,
         label=f'("{model_name}", {active_tokens})',
+        iters=_ITERS,
+        verbose=_VERBOSE,
+    )
+
+
+@pytest.mark.parametrize(
+    "active_tokens, expected_ns, margin",
+    [
+        pytest.param(active, _K3_SITU_EXPECTED_NS[active], _margin_for(active), id=f"k3-isl-{active}-perf")
+        for active in _ISL_EXHAUSTIVE_SWEEP
+    ],
+)
+@pytest.mark.requires_host_iommu
+@pytest.mark.skipif(not is_blackhole(), reason="SiTU-GLU is Blackhole-only")
+@pytest.mark.skipif(not is_p150(), reason="perf baselines are P150-specific; skip on any other board")
+@skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
+@skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
+def test_single_routed_expert_k3_perf(device, active_tokens: int, expected_ns: int, margin: float):
+    """Kimi K3 routed expert (SiTU-GLU) device duration over the same ISL sweep as above."""
+    require_realtime_profiler("single routed expert perf checks")
+
+    assert_op_duration_merged(
+        device,
+        lambda: run_single_routed_expert(
+            device,
+            _ISL_ALLOCATED_TOKENS,
+            KimiK3Config.ROUTED_EXPERT_HIDDEN_SIZE,
+            KimiK3Config.MOE_INTERMEDIATE_SIZE,
+            active_tokens=active_tokens,
+            x_row_major=True,
+            activation=ttnn.RoutedExpertActivation.SituGlu,
+        ),
+        _OP_KERNEL_DIR,
+        expected_ns=expected_ns,
+        margin=margin,
+        label=f'("kimi_k3", {active_tokens})',
         iters=_ITERS,
         verbose=_VERBOSE,
     )
