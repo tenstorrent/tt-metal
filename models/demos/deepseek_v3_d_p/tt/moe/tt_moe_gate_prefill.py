@@ -136,21 +136,29 @@ class TtMoEGateConfig:
             #   experts) and 14 (896) only fit at in0_block_w <= 14, and 28 (896) only at <= 8. The
             #   widest that fits is not automatically fastest -- (8,28) fits and still loses to
             #   (14,14) -- so the pair has to be swept together.
-            #   out_subblock_w wants to be NARROW, not the widest the dest registers allow. Do not
-            #   "fix" it up to 4 to match TTNN's own area-first heuristic (SUBBLOCK_HW_CHOICES): it
-            #   is the slowest legal choice at every width measured.
+            #   out_subblock_w is not simply "as narrow as legal": 1 wins only while in0_block_w is
+            #   full-K. At the quarter-K value above, 2 takes every out_block_w of 8 or 14, and the
+            #   12-wide pair want 4; only out_block_w 4 (128 experts) still prefers 1. TTNN's own
+            #   area-first heuristic (SUBBLOCK_HW_CHOICES) reaches for the widest the dest registers
+            #   allow, which is right for the 12-wide shapes and wrong for the rest.
             # DEVICE KERNEL DURATION per call on a Blackhole QuietBox 2, medians of 15 rounds visited
             # in rotated order (a single-pass sweep drifts enough to invert the ranking), every
             # candidate at PCC >= 0.99998. (in0_block_w, out_block_w) at out_subblock_w=1:
             #     256 experts  (14,8) 37.3 | (28,8) 41.9 | (56,8) 49.9 | default 53.0
             #     384 experts  (14,12) 54.4 | (14,6) 57.6 | (56,6) 77.2 | default 434.9
             #     896 experts  (14,14) 125.1 | (14,7) 130.5 | (56,7) 175.7 | default 435.1
+            # out_subblock_w swept separately on a height-sharded in0, the layout this table serves
+            # now that an interleaved one resolves mm_configs_interleaved first (11 rotated rounds):
+            #     out_block_w 8   osw 2 wins: 36.5 / 31.7 / 19.3 / 23.4 vs 36.9 / 32.5 / 19.9 / 24.4
+            #     out_block_w 12  osw 4 wins by 0.3% over 3 and 2 -- inside the run-to-run spread
+            #     out_block_w 14  osw 2 wins: 120.8 vs 125.4
+            #     out_block_w 4   osw 1 wins: 11.8 vs 12.0
             (GATE_PRODUCTION_SP_DIM, DeepSeekV3Config.EMB_SIZE // 4, DeepSeekV3Config.NUM_ROUTED_EXPERTS): (
                 ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                     compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
                     in0_block_w=14,
                     out_subblock_h=1,
-                    out_subblock_w=1,
+                    out_subblock_w=2,
                     out_block_h=1,
                     out_block_w=8,
                     per_core_M=1,
@@ -164,7 +172,7 @@ class TtMoEGateConfig:
                     compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
                     in0_block_w=14,
                     out_subblock_h=1,
-                    out_subblock_w=1,
+                    out_subblock_w=4,
                     out_block_h=1,
                     out_block_w=12,
                     per_core_M=1,
@@ -178,7 +186,7 @@ class TtMoEGateConfig:
                     compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
                     in0_block_w=14,
                     out_subblock_h=1,
-                    out_subblock_w=1,
+                    out_subblock_w=2,
                     out_block_h=1,
                     out_block_w=14,
                     per_core_M=1,
@@ -201,7 +209,7 @@ class TtMoEGateConfig:
                     compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
                     in0_block_w=12,
                     out_subblock_h=1,
-                    out_subblock_w=1,
+                    out_subblock_w=2,
                     out_block_h=1,
                     out_block_w=8,
                     per_core_M=1,
@@ -215,7 +223,7 @@ class TtMoEGateConfig:
                     compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
                     in0_block_w=8,
                     out_subblock_h=1,
-                    out_subblock_w=1,
+                    out_subblock_w=2,
                     out_block_h=1,
                     out_block_w=8,
                     per_core_M=1,
@@ -233,7 +241,7 @@ class TtMoEGateConfig:
                     compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
                     in0_block_w=8,
                     out_subblock_h=1,
-                    out_subblock_w=1,
+                    out_subblock_w=2,
                     out_block_h=1,
                     out_block_w=8,
                     per_core_M=1,
