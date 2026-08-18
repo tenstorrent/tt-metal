@@ -28,14 +28,14 @@ from vllm.model_executor.models.qwen3_5 import (
 from vllm.multimodal import MULTIMODAL_REGISTRY
 
 import ttnn
-from models.autoports.qwen_qwen3_6_27b.tt.functional_decoder import MODEL_REVISION
+from models.autoports.qwen_qwen3_6_27b.tt.functional_decoder import default_snapshot, MODEL_REVISION
 from models.autoports.qwen_qwen3_6_27b.tt.generator import Qwen36Generator
 from models.autoports.qwen_qwen3_6_27b.tt.model import Qwen36Model, _shard
 from models.autoports.qwen_qwen3_6_27b.tt.precision_config import DEFAULT_PRECISION_CONFIG
 from models.common.sampling import format_sampling_params
 
 MODEL_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_SNAPSHOT = Path("/huggingface/hub/models--Qwen--Qwen3.6-27B/snapshots") / MODEL_REVISION
+DEFAULT_SNAPSHOT = default_snapshot()
 # The datatype-sweep capacity probe proves 2,496,512 tokens with a 4 MB trace
 # region. Serving reserves 200 MB per DRAM bank; at the measured tiled-BFP8
 # cost (8,704 bytes/token/device), runtime prefill and model-owned linear-state

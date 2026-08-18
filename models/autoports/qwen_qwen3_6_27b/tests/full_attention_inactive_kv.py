@@ -10,11 +10,11 @@ import torch
 from transformers import AutoConfig
 
 import ttnn
-from models.autoports.qwen_qwen3_6_27b.tt.functional_decoder import MODEL_REVISION
+from models.autoports.qwen_qwen3_6_27b.tt.functional_decoder import default_snapshot, MODEL_REVISION
 from models.autoports.qwen_qwen3_6_27b.tt.model import SnapshotReader
 from models.autoports.qwen_qwen3_6_27b.tt.multichip_decoder import TARGET_FABRIC, MultichipDecoder
 
-SNAPSHOT = Path("/huggingface/hub/models--Qwen--Qwen3.6-27B/snapshots") / MODEL_REVISION
+SNAPSHOT = default_snapshot()
 
 
 def upload(mesh, value, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT):

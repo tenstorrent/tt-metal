@@ -28,10 +28,34 @@ from collections.abc import Mapping
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 
-MODEL_ID = "Qwen/Qwen3.6-27B"
-MODEL_REVISION = "6a9e13bd6fc8f0983b9b99948120bc37f49c13e9"
+# Checkpoint identity is env-overridable so this port can be exercised against a
+# sibling checkpoint of the same architecture without editing code. Qwen3.8-27B's
+# config.json is identical to Qwen3.6-27B's apart from `transformers_version`
+# (same 64 layers, hidden 5120, 24/4 heads, head_dim 256, vocab 248320, 262144
+# context, 48 linear + 16 full attention layers, one MTP layer), so the same
+# graph applies; only the weights and the tokenizer files differ.
+#
+#   QWEN_AUTOPORT_MODEL_ID / QWEN_AUTOPORT_MODEL_REVISION
+#
+# Defaults stay on Qwen3.6-27B, so unset env reproduces this port exactly as
+# validated.
+MODEL_ID = os.environ.get("QWEN_AUTOPORT_MODEL_ID", "Qwen/Qwen3.6-27B")
+MODEL_REVISION = os.environ.get("QWEN_AUTOPORT_MODEL_REVISION", "6a9e13bd6fc8f0983b9b99948120bc37f49c13e9")
 ADVERTISED_CONTEXT = 262_144
 REPRESENTATIVE_LAYERS = {"linear_attention": 0, "full_attention": 3}
+
+
+def default_snapshot():
+    """Local snapshot dir for MODEL_ID/MODEL_REVISION.
+
+    The port was written on a host whose HF cache lived at ``/huggingface/hub``;
+    deriving the root from ``HF_HOME`` keeps that default while letting a
+    differently-laid-out machine point at its own cache.
+    """
+    from pathlib import Path as _Path
+
+    root = _Path(os.environ.get("HF_HOME", "/huggingface")) / "hub"
+    return root / f"models--{MODEL_ID.replace('/', '--')}" / "snapshots" / MODEL_REVISION
 
 
 def _linear_prefill_chunk_size() -> int:

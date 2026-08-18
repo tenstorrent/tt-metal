@@ -15,6 +15,7 @@ from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5DecoderLayer
 import ttnn
 from models.autoports.qwen_qwen3_6_27b.tt.functional_decoder import (
     MODEL_ID,
+    default_snapshot,
     MODEL_REVISION,
     FunctionalDecoder,
     _to_device,
@@ -23,18 +24,31 @@ from models.autoports.qwen_qwen3_6_27b.tt.optimized_decoder import POLICIES, Opt
 from models.common.utility_functions import comp_pcc
 
 LAYER = 0
-SNAPSHOT = Path("/huggingface/hub/models--Qwen--Qwen3.6-27B/snapshots") / MODEL_REVISION
-SHARDS = (
-    "model-00001-of-00015.safetensors",
-    "model-00006-of-00015.safetensors",
-    "model-00008-of-00015.safetensors",
-)
+SNAPSHOT = default_snapshot()
+
+
+def _layer_shards(prefix):
+    """Shards holding this layer's tensors, read from the checkpoint index.
+
+    The shard set was previously a hardcoded 15-file naming scheme. Resolving it
+    from ``model.safetensors.index.json`` keeps this test correct for any shard
+    count of the same architecture (Qwen3.8-27B ships 18 shards, not 15).
+    """
+    index_path = SNAPSHOT / "model.safetensors.index.json"
+    if not index_path.is_file():
+        raise FileNotFoundError(f"Checkpoint index is missing: {index_path}")
+    with index_path.open() as handle:
+        weight_map = json.load(handle)["weight_map"]
+    shards = sorted({shard for key, shard in weight_map.items() if key.startswith(prefix)})
+    if not shards:
+        raise KeyError(f"No checkpoint tensors found under prefix {prefix!r} in {index_path}")
+    return tuple(shards)
 
 
 def _real_state():
     prefix = f"model.language_model.layers.{LAYER}."
     state = {}
-    for shard_name in SHARDS:
+    for shard_name in _layer_shards(prefix):
         shard = SNAPSHOT / shard_name
         if not shard.is_file():
             raise FileNotFoundError(f"Required official shard is missing: {shard}")
