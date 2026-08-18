@@ -139,7 +139,9 @@ OFF_FLAGS = (
     "-mno-tt-tensix-optimize-lut-select "
     "-mno-tt-tensix-optimize-setexp-fold "
     "-mno-tt-tensix-optimize-prgm-const "
-    "-mno-tt-tensix-optimize-capture-rotation"
+    "-mno-tt-tensix-optimize-capture-rotation "
+    "-mno-tt-tensix-optimize-transp-involution "
+    "-mno-tt-tensix-optimize-replay-exec-record"
 )
 ON_FLAGS = (
     "-mtt-tensix-optimize-latency-schedule "
@@ -153,7 +155,13 @@ ON_FLAGS = (
     "-mtt-tensix-macro-planner "
     "-mtt-tensix-macro-planner-replay "
     "-mtt-tensix-optimize-mop-form "
-    "-mtt-tensix-optimize-capture-rotation"
+    "-mtt-tensix-optimize-capture-rotation "
+    # Lane BF: transp-involution (companion-preserving SFPTRANSP bundle +
+    # Dst-park elision; dump-proven fire on the welford row) and
+    # replay-exec-record (hoisted capture executes while recording;
+    # dump-proven fire on the sigmoidappx rows).
+    "-mtt-tensix-optimize-transp-involution "
+    "-mtt-tensix-optimize-replay-exec-record"
     # M3/prgm-const is NOT in the ON set (un-shipped after pin 9's nightly):
     # its only engagement channel was the trusted TTREGION source markers in
     # the LLK headers, and trusted source annotation of the consumed library
@@ -176,6 +184,8 @@ KNOBS = {
     "planner-replay": "-mtt-tensix-macro-planner-replay",
     "mop-form": "-mtt-tensix-optimize-mop-form",
     "capture-rotation": "-mtt-tensix-optimize-capture-rotation",
+    "transp-involution": "-mtt-tensix-optimize-transp-involution",
+    "replay-exec-record": "-mtt-tensix-optimize-replay-exec-record",
 }
 HARNESS_TOOLCHAIN = TESTS / "sfpi"  # untracked symlink the harness hardcodes
 DEVICE_LOCK = "/tmp/tt-device.lock"
