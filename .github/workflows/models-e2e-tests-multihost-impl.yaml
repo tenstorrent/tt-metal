@@ -26,6 +26,13 @@ on:
         required: true
         type: string
         description: "JSON array of exabox multihost legs (fromJson into strategy.matrix.test-group). Pass [] to skip."
+      prefer-wheel-libs:
+        required: false
+        type: boolean
+        default: false
+        description: >
+          Prepend the installed wheel's ttnn/build/lib onto LD_LIBRARY_PATH.
+          True for a manylinux wheel (P&R); false for an inplace wheel (T1).
 
 # Multihost-ci runner chart may need OIDC. Callers must grant id-token: write on the job that
 # `uses` this workflow (job-level permissions replace inherited defaults) and pass `secrets: inherit`.
@@ -44,8 +51,8 @@ jobs:
       VIRTUAL_ENV: /opt/venv
       HOME: /home/user
       PIP_CACHE_DIR: /home/user/.cache/pip
-      # The cmake tarball. setup-multihost-job prepends the installed wheel's own
-      # build/lib once it knows where the venv put it.
+      # The cmake tarball. When prefer-wheel-libs is true (manylinux),
+      # setup-multihost-job prepends the installed wheel's ttnn/build/lib.
       LD_LIBRARY_PATH: /home/user/tt-metal/build/lib
       TT_METAL_HOME: /home/user/tt-metal
       TT_METAL_RUNTIME_ROOT: /home/user/tt-metal
@@ -77,6 +84,7 @@ jobs:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           extra-pip-packages: pytest==9.0.3 pytest-timeout==2.4.0
+          prefer-wheel-libs: ${{ inputs.prefer-wheel-libs }}
 
       - name: ${{ matrix.test-group.name }}
         id: run-test

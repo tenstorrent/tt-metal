@@ -33,6 +33,13 @@ on:
         type: string
         default: ""
         description: "Optional pre-filtered JSON array of test legs. When set, skip YAML load/filters and only split into single-host vs multihost."
+      prefer-wheel-libs:
+        required: false
+        type: boolean
+        default: false
+        description: >
+          Forwarded to multihost setup. True to put manylinux wheel libs first on
+          LD_LIBRARY_PATH; false (T1 inplace) keeps the tarball build/lib.
     outputs:
       matrix:
         description: "Filtered matrix of single-host legs that ran (consumed by ai_summary/run for INFRA_FAILURE reconciliation)."
@@ -280,3 +287,4 @@ jobs:
       build-artifact-name: ${{ inputs.build-artifact-name }}
       wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       matrix: ${{ needs.load-test-matrix.outputs.matrix_multihost }}
+      prefer-wheel-libs: ${{ inputs.prefer-wheel-libs }}

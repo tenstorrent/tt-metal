@@ -51,6 +51,10 @@ inputs:
     description: Max ttop-ipmi-reset + validation attempts (arg 2 to ttop-recovery)
     required: false
     default: "10"
+  prefer-wheel-libs:
+    description: Prepend the wheel's build/lib onto LD_LIBRARY_PATH (manylinux). Leave false for inplace.
+    required: false
+    default: "false"
 
 runs:
   using: "composite"
@@ -124,6 +128,7 @@ runs:
         fi
 
     - name: Put the installed wheel's native libs first on LD_LIBRARY_PATH
+      if: ${{ inputs.prefer-wheel-libs == 'true' }}
       shell: bash
       run: |
         set -euo pipefail

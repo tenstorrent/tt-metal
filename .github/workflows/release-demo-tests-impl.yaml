@@ -152,3 +152,6 @@ jobs:
       mlperf-read-only: ${{ inputs.mlperf-read-only }}
       tier: ${{ inputs.tier }}
       matrix: ${{ needs.load-test-matrix.outputs.matrix }}
+      # P&R installs the manylinux wheel; put its libs first so pytest does not
+      # mix them with the Ubuntu tarball. T1 inplace leaves this false.
+      prefer-wheel-libs: true
