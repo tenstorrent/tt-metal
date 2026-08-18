@@ -7,9 +7,10 @@
 // Parallelism: one Tensix core per (B*H) head. The T=1 inputs [B,1,H,*] are
 // TILE tensors whose flat 2D view is [B*H rows, D cols] — 32 heads share each
 // row of TILE pages, so the reader GATHERS head bh's row out of the shared
-// pages (face-layout addressing) into private row-0 tiles; the writer SCATTERS
-// o's row back the same way. The state [B,H,K,V] pages are head-aligned
-// (K multiple of 32) and move as full tiles.
+// pages (face-layout addressing) into private row-0 tiles. o is returned
+// ROW_MAJOR so head bh owns DRAM page bh (its [V] stick) exclusively and the
+// writer uses only full-page writes (sub-page writes do not land). The state
+// [B,H,K,V] pages are head-aligned (K multiple of 32) and move as full tiles.
 
 #include "decode_gated_delta_rule_program_factory.hpp"
 
@@ -39,7 +40,11 @@ constexpr uint32_t state = tt::CBIndex::c_5;  // [Kt,Vt] io input state (or zero
 constexpr uint32_t ones = tt::CBIndex::c_6;   // 1 tile fp32 all-ones (rowsum contraction)
 constexpr uint32_t qsq = tt::CBIndex::c_7;    // [1,Kt] fp32 q*q
 constexpr uint32_t ksq = tt::CBIndex::c_8;    // [1,Kt] fp32 k*k
-constexpr uint32_t sc = tt::CBIndex::c_9;     // 2 tiles fp32 rowsum/inv-norm ping-pong
+constexpr uint32_t sc = tt::CBIndex::c_9;     // 1 tile fp32 rowsum of squares
+constexpr uint32_t sc2 = tt::CBIndex::c_28;  // 1 tile fp32 q-chain inv-rms factor
+constexpr uint32_t sc3 = tt::CBIndex::c_29;  // 1 tile fp32 k-chain inv-rms factor
+// (each norm chain gets its OWN factor CB: reusing one ring made the second
+// chain's bcast read the first chain's factor - ttsim gdn_decode_simdiag3)
 constexpr uint32_t qn = tt::CBIndex::c_10;    // [1,Kt] fp32 normalized (scaled) q
 constexpr uint32_t kn = tt::CBIndex::c_11;    // [1,Kt] fp32 normalized k
 constexpr uint32_t kcol = tt::CBIndex::c_12;  // [Kt,1] fp32 transpose(kn)
@@ -50,6 +55,16 @@ constexpr uint32_t delta = tt::CBIndex::c_16; // 2x[1,Vt] fp32 v-v_read, then *b
 constexpr uint32_t outer = tt::CBIndex::c_17; // [Kt,Vt] fp32 kcol @ delta
 constexpr uint32_t sout = tt::CBIndex::c_18;  // [Kt,Vt] io new state
 constexpr uint32_t out = tt::CBIndex::c_19;   // [1,Vt] io  o = q@h
+// fp32 mirrors of the io inputs + fp32 new state: every math operand is fp32
+// (mixed bf16-srcA x fp32-srcB pairs corrupt the fp32 side; chunk-scan pattern).
+constexpr uint32_t qf = tt::CBIndex::c_20;      // [1,Kt] fp32 q
+constexpr uint32_t kf = tt::CBIndex::c_21;      // [1,Kt] fp32 k
+constexpr uint32_t vf = tt::CBIndex::c_22;      // [1,Vt] fp32 v
+constexpr uint32_t gf = tt::CBIndex::c_23;      // 1 tile fp32 g_h
+constexpr uint32_t betaf = tt::CBIndex::c_24;   // 1 tile fp32 beta_h
+constexpr uint32_t sf = tt::CBIndex::c_25;      // [Kt,Vt] fp32 input state
+constexpr uint32_t snew = tt::CBIndex::c_26;    // [Kt,Vt] fp32 new state
+constexpr uint32_t scratch = tt::CBIndex::c_27; // max(Kt,Vt) io staging pages (full-page DMA)
 }  // namespace cb
 
 tt::tt_metal::ProgramDescriptor DecodeGatedDeltaRuleProgramFactory::create_descriptor(
@@ -101,7 +116,9 @@ tt::tt_metal::ProgramDescriptor DecodeGatedDeltaRuleProgramFactory::create_descr
     add_cb(cb::ones, 1, 1, tt::DataFormat::Float32);
     add_cb(cb::qsq, Kt, 1, tt::DataFormat::Float32);
     add_cb(cb::ksq, Kt, 1, tt::DataFormat::Float32);
-    add_cb(cb::sc, 1, 2, tt::DataFormat::Float32);   // 2 pages: in-place inv-norm
+    add_cb(cb::sc, 1, 1, tt::DataFormat::Float32);   // rowsum of squares
+    add_cb(cb::sc2, 1, 1, tt::DataFormat::Float32);  // q-chain inv-rms factor
+    add_cb(cb::sc3, 1, 1, tt::DataFormat::Float32);  // k-chain inv-rms factor
     add_cb(cb::qn, Kt, 1, tt::DataFormat::Float32);
     add_cb(cb::kn, Kt, 1, tt::DataFormat::Float32);
     add_cb(cb::kcol, Kt, 1, tt::DataFormat::Float32);
@@ -112,12 +129,22 @@ tt::tt_metal::ProgramDescriptor DecodeGatedDeltaRuleProgramFactory::create_descr
     add_cb(cb::outer, kv, 1, tt::DataFormat::Float32);
     add_cb(cb::sout, kv, 1, df_io);
     add_cb(cb::out, Vt, 2, df_io);
+    add_cb(cb::qf, Kt, 1, tt::DataFormat::Float32);
+    add_cb(cb::kf, Kt, 1, tt::DataFormat::Float32);
+    add_cb(cb::vf, Vt, 1, tt::DataFormat::Float32);
+    add_cb(cb::gf, 1, 1, tt::DataFormat::Float32);
+    add_cb(cb::betaf, 1, 1, tt::DataFormat::Float32);
+    add_cb(cb::sf, kv, 1, tt::DataFormat::Float32);
+    add_cb(cb::snew, kv, 1, tt::DataFormat::Float32);
+    add_cb(cb::scratch, std::max(Kt, Vt), 1, df_io);
 
     const std::string kdir = "ttnn/cpp/ttnn/operations/transformer/decode_gated_delta_rule/device/kernels/";
     const std::vector<uint32_t> ct_args = {Kt, Vt, has_s0, eps_bits, scale_bits};
 
-    // Reader compile args: {Kt,Vt,has_s0,eps,scale} + TensorAccessorArgs per input (in order).
-    std::vector<uint32_t> reader_ct = ct_args;
+    // Reader compile args: {Kt,Vt,has_s0,eps,scale,H} + TensorAccessorArgs per
+    // input (in order). H decomposes bh = b*H + h for the [B,1,H] scalar gather
+    // (beta/g flat 2D is [B,H]: head (b,h) at row b, col h).
+    std::vector<uint32_t> reader_ct = {Kt, Vt, has_s0, eps_bits, scale_bits, attrs.H};
     TensorAccessorArgs(*in.q.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*in.k.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*in.v.buffer()).append_to(reader_ct);
@@ -166,10 +193,11 @@ tt::tt_metal::ProgramDescriptor DecodeGatedDeltaRuleProgramFactory::create_descr
     for (uint32_t h = 0; h < BH; h++) {
         const auto& core = head_cores[h];
         reader.emplace_runtime_args(core, {h, q_buf, k_buf, v_buf, beta_buf, g_buf, s0_buf});
-        writer.emplace_runtime_args(core, {h, o_buf, s1_buf});
+        // o is ROW_MAJOR: pass its stick page size (page bh == head bh's row).
+        writer.emplace_runtime_args(
+            core, {h, o_buf, static_cast<uint32_t>(o_buf->page_size()), s1_buf});
         compute.emplace_runtime_args(core, {h});
     }
-
     desc.kernels.push_back(std::move(reader));
     desc.kernels.push_back(std::move(writer));
     desc.kernels.push_back(std::move(compute));
