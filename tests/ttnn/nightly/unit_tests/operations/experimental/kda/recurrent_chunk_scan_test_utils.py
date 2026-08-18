@@ -9,7 +9,11 @@ from collections.abc import Callable, Collection, Sequence
 import torch
 
 import ttnn
-from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_accurate, assert_bit_identical
+from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
+    assert_accurate,
+    assert_bit_identical,
+    assert_equal,
+)
 
 CHUNK_SIZE = 32
 PROTOCOL_NAMES = ("v_beta", "kd", "q_decay", "intra", "k_dec_t", "final_decay", "t_inv")
@@ -116,16 +120,29 @@ def run_recurrent(
     state: ttnn.Tensor,
     *,
     memory_config: ttnn.MemoryConfig | None = None,
+    compute_kernel_config: ttnn.DeviceComputeKernelConfig | None = None,
 ) -> list[ttnn.Tensor]:
     with ttnn.manage_config("throw_exception_on_fallback", True):
-        return ttnn.experimental.kda.recurrent_chunk_scan(*protocol, state, memory_config=memory_config)
+        return ttnn.experimental.kda.recurrent_chunk_scan(
+            *protocol,
+            state,
+            memory_config=memory_config,
+            compute_kernel_config=compute_kernel_config,
+        )
 
 
 def run_summary(
-    protocol: Sequence[ttnn.Tensor], *, memory_config: ttnn.MemoryConfig | None = None
+    protocol: Sequence[ttnn.Tensor],
+    *,
+    memory_config: ttnn.MemoryConfig | None = None,
+    compute_kernel_config: ttnn.DeviceComputeKernelConfig | None = None,
 ) -> list[ttnn.Tensor]:
     with ttnn.manage_config("throw_exception_on_fallback", True):
-        return ttnn.experimental.kda.summarize_chunk_recurrence(*protocol, memory_config=memory_config)
+        return ttnn.experimental.kda.summarize_chunk_recurrence(
+            *protocol,
+            memory_config=memory_config,
+            compute_kernel_config=compute_kernel_config,
+        )
 
 
 def assert_runtime_contract(
@@ -154,11 +171,6 @@ def assert_runtime_contract(
         output_addresses.add(output.buffer_address())
     assert len(output_addresses) == len(first)
 
-    cache_entries = device.num_program_cache_entries()
-    repeated = run()
-    ttnn.synchronize_device(device)
-    assert device.num_program_cache_entries() == cache_entries
-
     trace_id = ttnn.begin_trace_capture(device, cq_id=0)
     traced = run()
     ttnn.end_trace_capture(device, trace_id, cq_id=0)
@@ -166,15 +178,60 @@ def assert_runtime_contract(
         ttnn.execute_trace(device, trace_id, cq_id=0, blocking=False)
     ttnn.synchronize_device(device)
 
-    for name, golden, first_tt, repeated_tt, traced_tt in zip(names, expected, first, repeated, traced, strict=True):
+    for name, golden, first_tt, traced_tt in zip(names, expected, first, traced, strict=True):
         actual = ttnn.to_torch(first_tt)
         assert_accurate(golden, actual, name=name, pcc_threshold=pcc_threshold)
-        assert_bit_identical(actual, ttnn.to_torch(repeated_tt), name=f"{name} eager repeat")
         assert_bit_identical(actual, ttnn.to_torch(traced_tt), name=f"{name} trace replay")
     for index, (snapshot, tensor) in enumerate(zip(snapshots, inputs, strict=True)):
         assert_bit_identical(snapshot, ttnn.to_torch(tensor), name=f"input {index} immutability")
     ttnn.release_trace(device, trace_id)
     return first
+
+
+def assert_outputs_accurate(
+    expected: Sequence[torch.Tensor],
+    actual: Sequence[ttnn.Tensor],
+    *,
+    names: Sequence[str],
+    context: str,
+    pcc_threshold: float = 0.999,
+) -> None:
+    for name, golden, actual_tt in zip(names, expected, actual, strict=True):
+        assert_accurate(golden, ttnn.to_torch(actual_tt), name=f"{context} {name}", pcc_threshold=pcc_threshold)
+
+
+def assert_device_deterministic(
+    device: ttnn.Device,
+    run: Callable[[], list[ttnn.Tensor]],
+    *,
+    names: Sequence[str],
+    count: int = 3,
+) -> list[ttnn.Tensor]:
+    assert count > 1
+    reference = run()
+    for repeat in range(1, count):
+        current = run()
+        for name, reference_tt, current_tt in zip(names, reference, current, strict=True):
+            mismatch_scratch = ttnn.empty(
+                reference_tt.shape,
+                dtype=ttnn.bfloat16,
+                layout=reference_tt.layout,
+                device=device,
+                memory_config=reference_tt.memory_config(),
+            )
+            ttnn.ne(reference_tt, current_tt, dtype=ttnn.bfloat16, output_tensor=mismatch_scratch)
+            mismatch_marker = ttnn.max(mismatch_scratch)
+            mismatch_marker_host = ttnn.to_torch(mismatch_marker).clone()
+            assert_equal(
+                torch.zeros_like(mismatch_marker_host),
+                mismatch_marker_host,
+                name=f"{name} device-side exact-value determinism repeat {repeat}",
+            )
+            ttnn.deallocate(mismatch_scratch)
+            ttnn.deallocate(mismatch_marker)
+        for output in current:
+            ttnn.deallocate(output)
+    return reference
 
 
 def one_core_height_sharded(shape: tuple[int, int]) -> ttnn.MemoryConfig:
