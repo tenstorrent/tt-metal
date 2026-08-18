@@ -4,6 +4,7 @@
 #pragma once
 
 #include "prepare_chunk_recurrence_device_operation_types.hpp"
+#include "ttnn/metal_v2_artifacts.hpp"
 
 namespace ttnn::experimental::prim {
 
@@ -15,7 +16,7 @@ uint32_t prepare_chunk_recurrence_cb_size_bytes(
     uint32_t output_bf16_mask);
 
 struct PrepareChunkRecurrenceProgramFactory {
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const PrepareChunkRecurrenceParams&, const PrepareChunkRecurrenceInputs&, std::vector<Tensor>&);
 };
 

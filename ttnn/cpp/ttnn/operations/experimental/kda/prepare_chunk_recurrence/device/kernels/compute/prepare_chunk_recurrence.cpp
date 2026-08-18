@@ -22,224 +22,249 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/transpose.h"
 #include "api/compute/reconfig_data_format.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 namespace {
 
-constexpr uint32_t cb_q = 0, cb_k = 1, cb_v = 2, cb_g = 3, cb_beta = 4;
-constexpr uint32_t cb_eye = 5, cb_tril = 6, cb_ones = 7, cb_S = 8;
-constexpr uint32_t cb_decay = 9, cb_decay_exp = 10, cb_decayfac = 11;
-constexpr uint32_t cb_lmask = 12, cb_Tinv = 13, cb_vbeta = 14, cb_kbeta = 15;
-constexpr uint32_t cb_out = 16, cb_u = 17, cb_w = 18, cb_qdecay = 19;
-constexpr uint32_t cb_intra = 20, cb_s2 = 21, cb_vnew = 22, cb_ointer = 23;
-constexpr uint32_t cb_kdec_t = 24, cb_supd = 25, cb_stmp = 26, cb_final = 27;
-constexpr uint32_t cb_scr1 = 28, cb_scr2 = 29, cb_scr3 = 30, cb_s3 = 31;
-// PHASE A output for the scan step's state decay (reuses a scan-only index, unused in prep).
-constexpr uint32_t cb_dl = cb_vnew;
-// Startup pacing tiles: this three-tile read staggers 110 readers before their bulk q/k/v/g burst.
-constexpr uint32_t cb_mask = cb_u;
-
-inline void WAIT(uint32_t cb, uint32_t n) { CircularBuffer(cb).wait_front(n); }
-inline void POP(uint32_t cb, uint32_t n) { CircularBuffer(cb).pop_front(n); }
+inline void WAIT(DataflowBuffer& buffer, uint32_t n) { buffer.wait_front(n); }
+inline void POP(DataflowBuffer& buffer, uint32_t n) { buffer.pop_front(n); }
 
 // out[Mt,Nt] = A[Mt,Kt] @ (tr ? B[Nt,Kt]^T : B[Kt,Nt]). Inputs must be available.
-void mm(uint32_t a, uint32_t b, uint32_t o, uint32_t Mt, uint32_t Kt, uint32_t Nt, bool tr) {
-    CircularBuffer(o).reserve_back(Mt * Nt);
-    pack_reconfig_data_format(o);  // mixed bf16/fp32 CBs: set packer to this output's format
-    // matmul_tiles(a,b): in0=a->srcB, in1=b->srcA. Reconfig unpack src formats to match (the op
+inline void mm(
+    DataflowBuffer& a, DataflowBuffer& b, DataflowBuffer& o, uint32_t Mt, uint32_t Kt, uint32_t Nt, bool tr) {
+    const uint32_t a_id = a.get_id();
+    const uint32_t b_id = b.get_id();
+    const uint32_t o_id = o.get_id();
+
+    o.reserve_back(Mt * Nt);
+    pack_reconfig_data_format(o_id);  // mixed bf16/fp32 CBs: set packer to this output's format
+    // matmul_tiles(a_id,b_id): in0=a_id->srcB, in1=b_id->srcA. Reconfig unpack src formats to match (the op
     // init only asserts formats, it does not set them), else fp32/bf16 CBs are read at the wrong
     // format and produce garbage.
-    reconfig_data_format(b, a);
-    matmul_init(a, b, tr ? 1 : 0);
+    reconfig_data_format(b_id, a_id);
+    matmul_init(a_id, b_id, tr ? 1 : 0);
     for (uint32_t mi = 0; mi < Mt; mi++) {
         for (uint32_t ni = 0; ni < Nt; ni++) {
             tile_regs_acquire();
             for (uint32_t ki = 0; ki < Kt; ki++) {
                 uint32_t bi = tr ? (ni * Kt + ki) : (ki * Nt + ni);
-                matmul_tiles(a, b, mi * Kt + ki, bi, 0);
+                matmul_tiles(a_id, b_id, mi * Kt + ki, bi, 0);
             }
             tile_regs_commit();
             tile_regs_wait();
-            pack_tile(0, o, mi * Nt + ni);
+            pack_tile(0, o_id, mi * Nt + ni);
             tile_regs_release();
         }
     }
-    CircularBuffer(o).push_back(Mt * Nt);
+    o.push_back(Mt * Nt);
 }
 
 // out = A (op) B elementwise, n tiles. op: 0 add, 1 sub, 2 mul.
-void ew(uint32_t a, uint32_t b, uint32_t o, uint32_t n, int op) {
-    CircularBuffer(o).reserve_back(n);
-    pack_reconfig_data_format(o);
-    reconfig_data_format(a, b);  // binary(a,b): a->srcA, b->srcB
+inline void ew(DataflowBuffer& a, DataflowBuffer& b, DataflowBuffer& o, uint32_t n, int op) {
+    const uint32_t a_id = a.get_id();
+    const uint32_t b_id = b.get_id();
+    const uint32_t o_id = o.get_id();
+
+    o.reserve_back(n);
+    pack_reconfig_data_format(o_id);
+    reconfig_data_format(a_id, b_id);  // binary(a_id,b_id): a_id->srcA, b_id->srcB
     if (op == 0) {
-        add_tiles_init(a, b);
+        add_init(a_id, b_id);
     } else if (op == 1) {
-        sub_tiles_init(a, b);
+        sub_init(a_id, b_id);
     } else {
-        mul_tiles_init(a, b);
+        mul_init(a_id, b_id);
     }
     for (uint32_t i = 0; i < n; i++) {
         tile_regs_acquire();
         if (op == 0) {
-            add_tiles(a, b, i, i, 0);
+            add_tiles(a_id, b_id, i, i, 0);
         } else if (op == 1) {
-            sub_tiles(a, b, i, i, 0);
+            sub_tiles(a_id, b_id, i, i, 0);
         } else {
-            mul_tiles(a, b, i, i, 0);
+            mul_tiles(a_id, b_id, i, i, 0);
         }
         tile_regs_commit();
         tile_regs_wait();
-        pack_tile(0, o, i);
+        pack_tile(0, o_id, i);
         tile_regs_release();
     }
-    CircularBuffer(o).push_back(n);
+    o.push_back(n);
 }
 
 // Square through SFPU destination-register multiply; avoids occupying the matrix FPU used by prep.
-void square_sfpu(uint32_t in, uint32_t o, uint32_t n) {
-    CircularBuffer(o).reserve_back(n);
-    pack_reconfig_data_format(o);
-    reconfig_data_format_srca(in);
-    copy_tile_to_dst_init_short(in);
+inline void square_sfpu(DataflowBuffer& in, DataflowBuffer& o, uint32_t n) {
+    const uint32_t in_id = in.get_id();
+    const uint32_t o_id = o.get_id();
+
+    o.reserve_back(n);
+    pack_reconfig_data_format(o_id);
+    reconfig_data_format_srca(in_id);
+    copy_tile_to_dst_init_short(in_id);
     for (uint32_t i = 0; i < n; i++) {
         tile_regs_acquire();
-        copy_tile(in, i, 0);
-        copy_tile(in, i, 1);
+        copy_tile(in_id, i, 0);
+        copy_tile(in_id, i, 1);
         mul_binary_tile_init();
         mul_binary_tile(0, 1, 0);
         tile_regs_commit();
         tile_regs_wait();
-        pack_tile(0, o, i);
+        pack_tile(0, o_id, i);
         tile_regs_release();
     }
-    CircularBuffer(o).push_back(n);
+    o.push_back(n);
 }
 
-void expc(uint32_t in, uint32_t o, uint32_t n) {
-    CircularBuffer(o).reserve_back(n);
-    pack_reconfig_data_format(o);
-    reconfig_data_format_srca(in);  // unary: in->srcA
-    copy_tile_to_dst_init_short(in);
+inline void expc(DataflowBuffer& in, DataflowBuffer& o, uint32_t n) {
+    const uint32_t in_id = in.get_id();
+    const uint32_t o_id = o.get_id();
+
+    o.reserve_back(n);
+    pack_reconfig_data_format(o_id);
+    reconfig_data_format_srca(in_id);  // unary: in_id->srcA
+    copy_tile_to_dst_init_short(in_id);
     exp_tile_init();
     for (uint32_t i = 0; i < n; i++) {
         tile_regs_acquire();
-        copy_tile(in, i, 0);
+        copy_tile(in_id, i, 0);
         exp_tile(0);
         tile_regs_commit();
         tile_regs_wait();
-        pack_tile(0, o, i);
+        pack_tile(0, o_id, i);
         tile_regs_release();
     }
-    CircularBuffer(o).push_back(n);
+    o.push_back(n);
 }
 
-void halfc(uint32_t in, uint32_t o, uint32_t n) {
-    CircularBuffer(o).reserve_back(n);
-    pack_reconfig_data_format(o);
-    reconfig_data_format_srca(in);
-    copy_tile_to_dst_init_short(in);
+inline void halfc(DataflowBuffer& in, DataflowBuffer& o, uint32_t n) {
+    const uint32_t in_id = in.get_id();
+    const uint32_t o_id = o.get_id();
+
+    o.reserve_back(n);
+    pack_reconfig_data_format(o_id);
+    reconfig_data_format_srca(in_id);
+    copy_tile_to_dst_init_short(in_id);
     for (uint32_t i = 0; i < n; i++) {
         tile_regs_acquire();
-        copy_tile(in, i, 0);
+        copy_tile(in_id, i, 0);
         binop_with_scalar_tile_init();
         mul_unary_tile(0, 0x3f000000);
         tile_regs_commit();
         tile_regs_wait();
-        pack_tile(0, o, i);
+        pack_tile(0, o_id, i);
         tile_regs_release();
     }
-    CircularBuffer(o).push_back(n);
+    o.push_back(n);
 }
 
 // out[Mt,Nt] = A[Mt,Nt] * col[Mt,1]  (broadcast the single column of `col` across N)
-void bcast_cols_mul(uint32_t a, uint32_t col, uint32_t o, uint32_t Mt, uint32_t Nt) {
-    CircularBuffer(o).reserve_back(Mt * Nt);
-    pack_reconfig_data_format(o);
-    reconfig_data_format(a, col);  // bcast(a,col): a->srcA, col->srcB
-    mul_bcast_cols_init_short(a, col);
+inline void bcast_cols_mul(DataflowBuffer& a, DataflowBuffer& col, DataflowBuffer& o, uint32_t Mt, uint32_t Nt) {
+    const uint32_t a_id = a.get_id();
+    const uint32_t col_id = col.get_id();
+    const uint32_t o_id = o.get_id();
+
+    o.reserve_back(Mt * Nt);
+    pack_reconfig_data_format(o_id);
+    reconfig_data_format(a_id, col_id);  // bcast(a_id,col_id): a_id->srcA, col_id->srcB
+    mul_bcast_cols_init(a_id, col_id);
     for (uint32_t mi = 0; mi < Mt; mi++) {
         for (uint32_t ni = 0; ni < Nt; ni++) {
             tile_regs_acquire();
-            mul_tiles_bcast_cols(a, col, mi * Nt + ni, mi, 0);
+            mul_tiles_bcast_cols(a_id, col_id, mi * Nt + ni, mi, 0);
             tile_regs_commit();
             tile_regs_wait();
-            pack_tile(0, o, mi * Nt + ni);
+            pack_tile(0, o_id, mi * Nt + ni);
             tile_regs_release();
         }
     }
-    CircularBuffer(o).push_back(Mt * Nt);
+    o.push_back(Mt * Nt);
 }
 
 // out[Mt,Nt] = A[Mt,Nt] - row[1,Nt]  (broadcast the single row of `row` across M)
-void bcast_rows_sub(uint32_t a, uint32_t row, uint32_t o, uint32_t Mt, uint32_t Nt) {
-    CircularBuffer(o).reserve_back(Mt * Nt);
-    pack_reconfig_data_format(o);
-    reconfig_data_format(a, row);  // bcast(a,row): a->srcA, row->srcB
-    sub_bcast_rows_init_short(a, row);
+inline void bcast_rows_sub(DataflowBuffer& a, DataflowBuffer& row, DataflowBuffer& o, uint32_t Mt, uint32_t Nt) {
+    const uint32_t a_id = a.get_id();
+    const uint32_t row_id = row.get_id();
+    const uint32_t o_id = o.get_id();
+
+    o.reserve_back(Mt * Nt);
+    pack_reconfig_data_format(o_id);
+    reconfig_data_format(a_id, row_id);  // bcast(a_id,row_id): a_id->srcA, row_id->srcB
+    sub_bcast_rows_init(a_id, row_id);
     for (uint32_t mi = 0; mi < Mt; mi++) {
         for (uint32_t ni = 0; ni < Nt; ni++) {
             tile_regs_acquire();
-            sub_tiles_bcast_rows(a, row, mi * Nt + ni, ni, 0);
+            sub_tiles_bcast_rows(a_id, row_id, mi * Nt + ni, ni, 0);
             tile_regs_commit();
             tile_regs_wait();
-            pack_tile(0, o, mi * Nt + ni);
+            pack_tile(0, o_id, mi * Nt + ni);
             tile_regs_release();
         }
     }
-    CircularBuffer(o).push_back(Mt * Nt);
+    o.push_back(Mt * Nt);
 }
 
 // out[0] = copy of src[src_tile] (single 32x32 tile). src must be available.
-void cpy_t(uint32_t src, uint32_t src_tile, uint32_t o) {
-    CircularBuffer(o).reserve_back(1);
-    pack_reconfig_data_format(o);
-    reconfig_data_format_srca(src);
-    copy_tile_to_dst_init_short(src);
+inline void cpy_t(DataflowBuffer& src, uint32_t src_tile, DataflowBuffer& o) {
+    const uint32_t src_id = src.get_id();
+    const uint32_t o_id = o.get_id();
+
+    o.reserve_back(1);
+    pack_reconfig_data_format(o_id);
+    reconfig_data_format_srca(src_id);
+    copy_tile_to_dst_init_short(src_id);
     tile_regs_acquire();
-    copy_tile(src, src_tile, 0);
+    copy_tile(src_id, src_tile, 0);
     tile_regs_commit();
     tile_regs_wait();
-    pack_tile(0, o, 0);
+    pack_tile(0, o_id, 0);
     tile_regs_release();
-    CircularBuffer(o).push_back(1);
+    o.push_back(1);
 }
 
 // Invert (I-N) for a strictly-lower 32x32 N using the exact nilpotent product
 // (I-N)^-1 = (I+N)(I+N^2)(I+N^4)(I+N^8)(I+N^16). Eight tile matmuls replace
 // the masked 16x16 Horner path's thirty full-tile matmuls; the shorter dependency chain is also
 // expected to improve fp32 stability, but that must be validated empirically.
-void invert_doubling(uint32_t src, uint32_t tile, uint32_t out) {
-    uint32_t power = cb_S;
-    uint32_t sum = cb_final;
-    uint32_t next_power = cb_s2;
-    constexpr uint32_t product = cb_s3;
+inline void invert_doubling(
+    DataflowBuffer& src,
+    uint32_t tile,
+    DataflowBuffer& out,
+    DataflowBuffer& state,
+    DataflowBuffer& final_state,
+    DataflowBuffer& state_two,
+    DataflowBuffer& state_three,
+    DataflowBuffer& eye) {
+    DataflowBuffer* power = &state;
+    DataflowBuffer* sum = &final_state;
+    DataflowBuffer* next_power = &state_two;
+    DataflowBuffer* product = &state_three;
 
-    cpy_t(src, tile, power);
-    CircularBuffer(power).wait_front(1);
-    ew(cb_eye, power, sum, 1, 0);  // I + N
-    CircularBuffer(sum).wait_front(1);
-    mm(power, power, next_power, 1, 1, 1, false);  // N^2
-    CircularBuffer(next_power).wait_front(1);
-    CircularBuffer(power).pop_front(1);
+    cpy_t(src, tile, *power);
+    power->wait_front(1);
+    ew(eye, *power, *sum, 1, 0);
+    sum->wait_front(1);
+    mm(*power, *power, *next_power, 1, 1, 1, false);
+    next_power->wait_front(1);
+    power->pop_front(1);
     power = next_power;
-    next_power = cb_S;
+    next_power = &state;
 
-    for (uint32_t step = 0; step < 4; step++) {
-        mm(power, sum, product, 1, 1, 1, false);
-        CircularBuffer(product).wait_front(1);
+    for (uint32_t step = 0; step < 4; ++step) {
+        mm(*power, *sum, *product, 1, 1, 1, false);
+        product->wait_front(1);
         if (step < 3) {
-            mm(power, power, next_power, 1, 1, 1, false);
-            CircularBuffer(next_power).wait_front(1);
+            mm(*power, *power, *next_power, 1, 1, 1, false);
+            next_power->wait_front(1);
         }
-        CircularBuffer(power).pop_front(1);
-        ew(sum, product, power, 1, 0);
-        CircularBuffer(power).wait_front(1);
-        CircularBuffer(sum).pop_front(1);
-        CircularBuffer(product).pop_front(1);
+        power->pop_front(1);
+        ew(*sum, *product, *power, 1, 0);
+        power->wait_front(1);
+        sum->pop_front(1);
+        product->pop_front(1);
         if (step < 3) {
-            const uint32_t old_sum = sum;
+            DataflowBuffer* old_sum = sum;
             sum = power;
             power = next_power;
             next_power = old_sum;
@@ -247,38 +272,40 @@ void invert_doubling(uint32_t src, uint32_t tile, uint32_t out) {
             sum = power;
         }
     }
-
-    cpy_t(sum, 0, out);
-    CircularBuffer(out).wait_front(1);
-    CircularBuffer(sum).pop_front(1);
+    cpy_t(*sum, 0, out);
+    out.wait_front(1);
+    sum->pop_front(1);
 }
 
 // out[1,Ct] row-form = transpose of col[Ct,1]; produces Ct tiles (each row0 = a 32-chunk of col).
-void transpose_col(uint32_t in, uint32_t o, uint32_t Ct) {
-    CircularBuffer(o).reserve_back(Ct);
-    pack_reconfig_data_format(o);
-    reconfig_data_format_srca(in);  // unary: in->srcA
-    transpose_init(in);
+inline void transpose_col(DataflowBuffer& in, DataflowBuffer& o, uint32_t Ct) {
+    const uint32_t in_id = in.get_id();
+    const uint32_t o_id = o.get_id();
+
+    o.reserve_back(Ct);
+    pack_reconfig_data_format(o_id);
+    reconfig_data_format_srca(in_id);  // unary: in_id->srcA
+    transpose_init(in_id);
     for (uint32_t i = 0; i < Ct; i++) {
         tile_regs_acquire();
-        transpose_tile(in, i, 0);
+        transpose_tile(in_id, i, 0);
         tile_regs_commit();
         tile_regs_wait();
-        pack_tile(0, o, i);
+        pack_tile(0, o_id, i);
         tile_regs_release();
     }
-    CircularBuffer(o).push_back(Ct);
+    o.push_back(Ct);
 }
 
 // Exact fp32 row sum for q/k L2 normalization. The shared SFPU reducer avoids four full-tile
 // matrix multiplies and preserves the input for the caller-managed scratch lifetime.
-void rowsum_k(uint32_t Mt, uint32_t Kt) {
+inline void rowsum_k(uint32_t Mt, uint32_t Kt) {
     compute_kernel_lib::reduce<
         ckernel::PoolType::SUM,
         ckernel::ReduceDim::REDUCE_ROW,
-        cb_scr1,
-        cb_ones,
-        cb_scr2,
+        dfb::scratch_one,
+        dfb::ones,
+        dfb::scratch_two,
         compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
         compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
         ReduceFp32Mode::Accurate>(compute_kernel_lib::ReduceInputBlockShape::of(Mt, Kt));
@@ -287,14 +314,18 @@ void rowsum_k(uint32_t Mt, uint32_t Kt) {
 // inv_rms: o[i] = rsqrt(in[i] + eps) [* scale]. in holds per-row sum-of-squares (rowsum_k output);
 // out is the per-row inverse-L2 factor (optionally pre-scaled, for folding q's scale into the norm).
 // eps/scale arrive as fp32-bit-cast uint32 compile args.
-void inv_rms(uint32_t in, uint32_t o, uint32_t n, uint32_t eps_bits, uint32_t scale_bits, bool do_scale) {
-    CircularBuffer(o).reserve_back(n);
-    pack_reconfig_data_format(o);
-    reconfig_data_format_srca(in);
-    copy_tile_to_dst_init_short(in);
+inline void inv_rms(
+    DataflowBuffer& in, DataflowBuffer& o, uint32_t n, uint32_t eps_bits, uint32_t scale_bits, bool do_scale) {
+    const uint32_t in_id = in.get_id();
+    const uint32_t o_id = o.get_id();
+
+    o.reserve_back(n);
+    pack_reconfig_data_format(o_id);
+    reconfig_data_format_srca(in_id);
+    copy_tile_to_dst_init_short(in_id);
     for (uint32_t i = 0; i < n; i++) {
         tile_regs_acquire();
-        copy_tile(in, i, 0);
+        copy_tile(in_id, i, 0);
         binop_with_scalar_tile_init();
         add_unary_tile(0, eps_bits);  // + eps
         rsqrt_tile_init();
@@ -305,206 +336,234 @@ void inv_rms(uint32_t in, uint32_t o, uint32_t n, uint32_t eps_bits, uint32_t sc
         }
         tile_regs_commit();
         tile_regs_wait();
-        pack_tile(0, o, i);
+        pack_tile(0, o_id, i);
         tile_regs_release();
     }
-    CircularBuffer(o).push_back(n);
+    o.push_back(n);
 }
 
 }  // namespace
 
-void kernel_main() {
-    constexpr uint32_t Ct = get_compile_time_arg_val(0);
-    constexpr uint32_t Kt = get_compile_time_arg_val(1);
-    constexpr uint32_t Vt = get_compile_time_arg_val(2);
-    constexpr uint32_t QK_NORM = get_compile_time_arg_val(3);
-    constexpr uint32_t SCALE_BITS = get_compile_time_arg_val(4);
-    constexpr uint32_t EPS_BITS = get_compile_time_arg_val(5);
+template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t SCALE_BITS, uint32_t EPS_BITS>
+TT_KERNEL void compute(uint32_t work_count) {
     static_assert(Ct == 1, "chunk KDA currently requires chunk_size=32");
-    const uint32_t NC = get_arg_val<uint32_t>(0);
 
     constexpr uint32_t cc = Ct * Ct;
     constexpr uint32_t ck = Ct * Kt;
     constexpr uint32_t cv = Ct * Vt;
 
-    compute_kernel_hw_startup(cb_q, cb_k, cb_u);
-    WAIT(cb_eye, cc);
-    WAIT(cb_tril, cc);
-    WAIT(cb_ones, cc);
-    WAIT(cb_mask, 3);
+    DataflowBuffer q(dfb::q);
+    DataflowBuffer k(dfb::k);
+    DataflowBuffer v(dfb::v);
+    DataflowBuffer g(dfb::g);
+    DataflowBuffer beta(dfb::beta);
+    DataflowBuffer eye(dfb::eye);
+    DataflowBuffer tril(dfb::tril);
+    DataflowBuffer ones(dfb::ones);
+    DataflowBuffer state(dfb::state);
+    DataflowBuffer decay(dfb::decay);
+    DataflowBuffer decay_exp(dfb::decay_exp);
+    DataflowBuffer decay_factor(dfb::decay_factor);
+    DataflowBuffer lower_mask(dfb::lower_mask);
+    DataflowBuffer t_inv(dfb::t_inv);
+    DataflowBuffer v_beta(dfb::v_beta);
+    DataflowBuffer k_beta(dfb::k_beta);
+    DataflowBuffer output(dfb::output);
+    DataflowBuffer u(dfb::u);
+    DataflowBuffer w(dfb::w);
+    DataflowBuffer q_decay(dfb::q_decay);
+    DataflowBuffer intra(dfb::intra);
+    DataflowBuffer state_two(dfb::state_two);
+    DataflowBuffer v_new(dfb::v_new);
+    DataflowBuffer output_intermediate(dfb::output_intermediate);
+    DataflowBuffer k_decay_transposed(dfb::k_decay_transposed);
+    DataflowBuffer state_update(dfb::state_update);
+    DataflowBuffer state_temporary(dfb::state_temporary);
+    DataflowBuffer final_state(dfb::final_state);
+    DataflowBuffer scratch_one(dfb::scratch_one);
+    DataflowBuffer scratch_two(dfb::scratch_two);
+    DataflowBuffer scratch_three(dfb::scratch_three);
+    DataflowBuffer state_three(dfb::state_three);
 
-    for (uint32_t c = 0; c < NC; c++) {
-        WAIT(cb_q, ck);
-        WAIT(cb_k, ck);
-        WAIT(cb_v, cv);
-        WAIT(cb_g, ck);
-        WAIT(cb_beta, Ct);
+    compute_kernel_hw_startup(dfb::q, dfb::k, dfb::u);
+    WAIT(eye, cc);
+    WAIT(tril, cc);
+    WAIT(ones, cc);
+    WAIT(u, 3);
 
-        uint32_t Q = cb_q, Kk = cb_k;
-        if constexpr (QK_NORM) {
-            square_sfpu(cb_q, cb_scr1, ck);
-            WAIT(cb_scr1, ck);
+    for (uint32_t c = 0; c < work_count; c++) {
+        WAIT(q, ck);
+        WAIT(k, ck);
+        WAIT(v, cv);
+        WAIT(g, ck);
+        WAIT(beta, Ct);
+
+        DataflowBuffer* Q = &q;
+        DataflowBuffer* Kk = &k;
+        if constexpr (true) {
+            square_sfpu(q, scratch_one, ck);
+            WAIT(scratch_one, ck);
             rowsum_k(Ct, Kt);
-            WAIT(cb_scr2, Ct);
-            POP(cb_scr1, ck);
-            inv_rms(cb_scr2, cb_scr3, Ct, EPS_BITS, SCALE_BITS, true);
-            WAIT(cb_scr3, Ct);
-            POP(cb_scr2, Ct);
-            bcast_cols_mul(cb_q, cb_scr3, cb_stmp, Ct, Kt);
-            WAIT(cb_stmp, ck);
-            POP(cb_scr3, Ct);
-            POP(cb_q, ck);
+            WAIT(scratch_two, Ct);
+            POP(scratch_one, ck);
+            inv_rms(scratch_two, scratch_three, Ct, EPS_BITS, SCALE_BITS, true);
+            WAIT(scratch_three, Ct);
+            POP(scratch_two, Ct);
+            bcast_cols_mul(q, scratch_three, state_temporary, Ct, Kt);
+            WAIT(state_temporary, ck);
+            POP(scratch_three, Ct);
+            POP(q, ck);
 
-            square_sfpu(cb_k, cb_scr1, ck);
-            WAIT(cb_scr1, ck);
+            square_sfpu(k, scratch_one, ck);
+            WAIT(scratch_one, ck);
             rowsum_k(Ct, Kt);
-            WAIT(cb_scr2, Ct);
-            POP(cb_scr1, ck);
-            inv_rms(cb_scr2, cb_scr3, Ct, EPS_BITS, SCALE_BITS, false);
-            WAIT(cb_scr3, Ct);
-            POP(cb_scr2, Ct);
-            bcast_cols_mul(cb_k, cb_scr3, cb_final, Ct, Kt);
-            WAIT(cb_final, ck);
-            POP(cb_scr3, Ct);
-            POP(cb_k, ck);
-            Q = cb_stmp;
-            Kk = cb_final;
+            WAIT(scratch_two, Ct);
+            POP(scratch_one, ck);
+            inv_rms(scratch_two, scratch_three, Ct, EPS_BITS, SCALE_BITS, false);
+            WAIT(scratch_three, Ct);
+            POP(scratch_two, Ct);
+            bcast_cols_mul(k, scratch_three, final_state, Ct, Kt);
+            WAIT(final_state, ck);
+            POP(scratch_three, Ct);
+            POP(k, ck);
+            Q = &state_temporary;
+            Kk = &final_state;
         }
 
         // v_beta and k_beta.
-        bcast_cols_mul(cb_v, cb_beta, cb_vbeta, Ct, Vt);
-        WAIT(cb_vbeta, cv);
-        POP(cb_v, cv);
-        bcast_cols_mul(Kk, cb_beta, cb_kbeta, Ct, Kt);
-        WAIT(cb_kbeta, ck);
-        POP(cb_beta, Ct);
+        bcast_cols_mul(v, beta, v_beta, Ct, Vt);
+        WAIT(v_beta, cv);
+        POP(v, cv);
+        bcast_cols_mul(*Kk, beta, k_beta, Ct, Kt);
+        WAIT(k_beta, ck);
+        POP(beta, Ct);
 
         // G = cumsum(g). Anchor the separable pairwise factors at G_last/2 so neither
         // exp(G-anchor) nor exp(anchor-G) spans the full chunk range. Their products are
         // unchanged, while realistic KDA gates no longer overflow exp(-G).
-        mm(cb_tril, cb_g, cb_decay, Ct, Ct, Kt, false);
-        WAIT(cb_decay, ck);
-        expc(cb_decay, cb_decay_exp, ck);  // exp(G), for scan-facing q_decay/kd
-        WAIT(cb_decay_exp, ck);
+        mm(tril, g, decay, Ct, Ct, Kt, false);
+        WAIT(decay, ck);
+        expc(decay, decay_exp, ck);  // exp(G), for scan-facing q_decay/kd
+        WAIT(decay_exp, ck);
 
-        mm(cb_ones, cb_g, cb_scr1, Ct, Ct, Kt, false);  // replicated G_last
-        WAIT(cb_scr1, ck);
-        POP(cb_g, ck);
-        halfc(cb_scr1, cb_scr2, ck);  // anchor = G_last/2
-        WAIT(cb_scr2, ck);
-        ew(cb_decay, cb_scr2, cb_ointer, ck, 1);  // G-anchor
-        WAIT(cb_ointer, ck);
-        POP(cb_decay, ck);
-        expc(cb_ointer, cb_decay, ck);  // exp(G-anchor); cumsum has already released this full-size CB.
-        WAIT(cb_decay, ck);
+        mm(ones, g, scratch_one, Ct, Ct, Kt, false);  // replicated G_last
+        WAIT(scratch_one, ck);
+        POP(g, ck);
+        halfc(scratch_one, scratch_two, ck);  // anchor = G_last/2
+        WAIT(scratch_two, ck);
+        ew(decay, scratch_two, output_intermediate, ck, 1);  // G-anchor
+        WAIT(output_intermediate, ck);
+        POP(decay, ck);
+        expc(output_intermediate, decay, ck);  // exp(G-anchor); cumsum has already released this full-size CB.
+        WAIT(decay, ck);
 
-        CircularBuffer(cb_decayfac).reserve_back(ck);
-        pack_reconfig_data_format(cb_decayfac);
-        reconfig_data_format_srca(cb_ointer);
-        copy_tile_to_dst_init_short(cb_ointer);
+        decay_factor.reserve_back(ck);
+        pack_reconfig_data_format(decay_factor.get_id());
+        reconfig_data_format_srca(output_intermediate.get_id());
+        copy_tile_to_dst_init_short(output_intermediate.get_id());
         for (uint32_t i = 0; i < ck; i++) {
             tile_regs_acquire();
-            copy_tile(cb_ointer, i, 0);
+            copy_tile(output_intermediate.get_id(), i, 0);
             negative_tile_init();
             negative_tile(0);
             exp_tile_init();
             exp_tile(0);
             tile_regs_commit();
             tile_regs_wait();
-            pack_tile(0, cb_decayfac, i);
+            pack_tile(0, decay_factor.get_id(), i);
             tile_regs_release();
         }
-        CircularBuffer(cb_decayfac).push_back(ck);  // exp(anchor-G)
-        WAIT(cb_decayfac, ck);
-        POP(cb_ointer, ck);
+        decay_factor.push_back(ck);  // exp(anchor-G)
+        WAIT(decay_factor, ck);
+        POP(output_intermediate, ck);
 
-        expc(cb_scr2, cb_supd, ck);  // exp(G_last/2), also exp(G_last-anchor)
-        WAIT(cb_supd, ck);
+        expc(scratch_two, state_update, ck);  // exp(G_last/2), also exp(G_last-anchor)
+        WAIT(state_update, ck);
 
         // Preserve exact scan-facing factors, and use anchored factors only for pairwise products.
-        ew(Q, cb_decay_exp, cb_qdecay, ck, 2);
-        WAIT(cb_qdecay, ck);
-        ew(Q, cb_decay, cb_s3, ck, 2);
-        WAIT(cb_s3, ck);  // q*exp(G-anchor)
-        POP(Q, ck);
-        ew(cb_kbeta, cb_decay_exp, cb_w, ck, 2);
-        WAIT(cb_w, ck);
-        ew(cb_kbeta, cb_decay, cb_s2, ck, 2);
-        WAIT(cb_s2, ck);  // beta*k*exp(G-anchor)
-        POP(cb_kbeta, ck);
-        POP(cb_decay, ck);
-        POP(cb_decay_exp, ck);
-        expc(cb_scr1, cb_decay, ck);  // exp(G_last), for state decay dl
-        WAIT(cb_decay, ck);
-        POP(cb_scr1, ck);
-        POP(cb_scr2, ck);
-        ew(Kk, cb_decayfac, cb_scr1, ck, 2);
-        WAIT(cb_scr1, ck);  // k*exp(anchor-G)
-        POP(Kk, ck);
-        POP(cb_decayfac, ck);
+        ew(*Q, decay_exp, q_decay, ck, 2);
+        WAIT(q_decay, ck);
+        ew(*Q, decay, state_three, ck, 2);
+        WAIT(state_three, ck);  // q*exp(G-anchor)
+        POP(*Q, ck);
+        ew(k_beta, decay_exp, w, ck, 2);
+        WAIT(w, ck);
+        ew(k_beta, decay, state_two, ck, 2);
+        WAIT(state_two, ck);  // beta*k*exp(G-anchor)
+        POP(k_beta, ck);
+        POP(decay, ck);
+        POP(decay_exp, ck);
+        expc(scratch_one, decay, ck);  // exp(G_last), for state decay dl
+        WAIT(decay, ck);
+        POP(scratch_one, ck);
+        POP(scratch_two, ck);
+        ew(*Kk, decay_factor, scratch_one, ck, 2);
+        WAIT(scratch_one, ck);  // k*exp(anchor-G)
+        POP(*Kk, ck);
+        POP(decay_factor, ck);
 
-        // Materialize both anchored pairwise products, then release cb_s2/cb_s3 before
+        // Materialize both anchored pairwise products, then release state_two/state_three before
         // the doubling inverse reuses those CBs as private scratch. Only the masked Aqk is published to
-        // writer-facing cb_intra; publishing the raw matrix creates a second consumer race.
-        mm(cb_s2, cb_scr1, cb_lmask, Ct, Kt, Ct, true);
-        WAIT(cb_lmask, cc);  // raw beta*k_i*k_j*exp(G_i-G_j)
-        POP(cb_s2, ck);
-        mm(cb_s3, cb_scr1, cb_scr2, Ct, Kt, Ct, true);
-        WAIT(cb_scr2, cc);  // raw q_i*k_j*exp(G_i-G_j)
-        POP(cb_s3, ck);
-        ew(cb_scr2, cb_tril, cb_intra, cc, 2);
-        WAIT(cb_intra, cc);
-        POP(cb_scr2, cc);
+        // writer-facing intra; publishing the raw matrix creates a second consumer race.
+        mm(state_two, scratch_one, lower_mask, Ct, Kt, Ct, true);
+        WAIT(lower_mask, cc);  // raw beta*k_i*k_j*exp(G_i-G_j)
+        POP(state_two, ck);
+        mm(state_three, scratch_one, scratch_two, Ct, Kt, Ct, true);
+        WAIT(scratch_two, cc);  // raw q_i*k_j*exp(G_i-G_j)
+        POP(state_three, ck);
+        ew(scratch_two, tril, intra, cc, 2);
+        WAIT(intra, cc);
+        POP(scratch_two, cc);
 
         // T_inv = (I + strictly_lower(Akk))^-1.
-        ew(cb_lmask, cb_tril, cb_scr2, cc, 2);  // lower(A), including diagonal
-        WAIT(cb_scr2, cc);
-        POP(cb_lmask, cc);
-        ew(cb_scr2, cb_eye, cb_scr3, cc, 2);  // diag(A)
-        WAIT(cb_scr3, cc);
-        ew(cb_scr3, cb_scr2, cb_lmask, cc, 1);  // -strictly_lower(A)
-        WAIT(cb_lmask, cc);
-        POP(cb_scr3, cc);
-        POP(cb_scr2, cc);
-        invert_doubling(cb_lmask, 0, cb_Tinv);
-        WAIT(cb_Tinv, cc);
-        POP(cb_lmask, cc);
+        ew(lower_mask, tril, scratch_two, cc, 2);  // lower(A), including diagonal
+        WAIT(scratch_two, cc);
+        POP(lower_mask, cc);
+        ew(scratch_two, eye, scratch_three, cc, 2);  // diag(A)
+        WAIT(scratch_three, cc);
+        ew(scratch_three, scratch_two, lower_mask, cc, 1);  // -strictly_lower(A)
+        WAIT(lower_mask, cc);
+        POP(scratch_three, cc);
+        POP(scratch_two, cc);
+        invert_doubling(lower_mask, 0, t_inv, state, final_state, state_two, state_three, eye);
+        WAIT(t_inv, cc);
+        POP(lower_mask, cc);
 
         // k_dec_t = (kr * exp(G_last))^T.
-        ew(cb_scr1, cb_supd, cb_scr2, ck, 2);
-        WAIT(cb_scr2, ck);
-        POP(cb_scr1, ck);
-        CircularBuffer(cb_kdec_t).reserve_back(Kt * Ct);
-        pack_reconfig_data_format(cb_kdec_t);
-        reconfig_data_format_srca(cb_scr2);
-        transpose_init(cb_scr2);
+        ew(scratch_one, state_update, scratch_two, ck, 2);
+        WAIT(scratch_two, ck);
+        POP(scratch_one, ck);
+        k_decay_transposed.reserve_back(Kt * Ct);
+        pack_reconfig_data_format(k_decay_transposed.get_id());
+        reconfig_data_format_srca(scratch_two.get_id());
+        transpose_init(scratch_two.get_id());
         for (uint32_t ki = 0; ki < Kt; ki++) {
             tile_regs_acquire();
-            transpose_tile(cb_scr2, ki, 0);
+            transpose_tile(scratch_two.get_id(), ki, 0);
             tile_regs_commit();
             tile_regs_wait();
-            pack_tile(0, cb_kdec_t, ki);
+            pack_tile(0, k_decay_transposed.get_id(), ki);
             tile_regs_release();
         }
-        CircularBuffer(cb_kdec_t).push_back(Kt);
-        POP(cb_scr2, ck);
+        k_decay_transposed.push_back(Kt);
+        POP(scratch_two, ck);
 
         // dl [K,1] is the transpose of any replicated exp(G_last) row.
-        CircularBuffer(cb_dl).reserve_back(Kt);
-        pack_reconfig_data_format(cb_dl);
-        reconfig_data_format_srca(cb_decay);
-        transpose_init(cb_decay);
+        v_new.reserve_back(Kt);
+        pack_reconfig_data_format(v_new.get_id());
+        reconfig_data_format_srca(decay.get_id());
+        transpose_init(decay.get_id());
         for (uint32_t ki = 0; ki < Kt; ki++) {
             tile_regs_acquire();
-            transpose_tile(cb_decay, ki, 0);
+            transpose_tile(decay.get_id(), ki, 0);
             tile_regs_commit();
             tile_regs_wait();
-            pack_tile(0, cb_dl, ki);
+            pack_tile(0, v_new.get_id(), ki);
             tile_regs_release();
         }
-        CircularBuffer(cb_dl).push_back(Kt);
-        POP(cb_supd, ck);
-        POP(cb_decay, ck);
+        v_new.push_back(Kt);
+        POP(state_update, ck);
+        POP(decay, ck);
         // v_beta, kd, q_decay, intra, k_dec_t, dl, T_inv stay pushed for the writer.
     }
 }
