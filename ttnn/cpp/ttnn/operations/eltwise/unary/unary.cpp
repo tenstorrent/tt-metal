@@ -24,6 +24,14 @@ Tensor unary_impl(
         op_chain.back().type() == unary::UnaryOpType::BITCAST) {
         output_dtype = static_cast<DataType>(*op_chain.back().get_param_if<float>(1));
     }
+    // A preallocated output is authoritative for the dtype, the same way it already is for the
+    // memory config below. create_descriptor derives the output CB's data format and page size from
+    // it, while compute_program_hash only ever sees this attribute -- so leaving the attribute at
+    // the input dtype lets two calls differing solely in the preallocated output dtype collide, and
+    // the second then writes the first one's page size into a buffer expecting the other.
+    if (optional_output_tensor.has_value()) {
+        output_dtype = optional_output_tensor->dtype();
+    }
     bool preserve_fp32_precision = (input_dtype == DataType::FLOAT32);
     bool fp32_dest_acc_en = preserve_fp32_precision || output_dtype == DataType::UINT32 ||
                             output_dtype == DataType::INT32 || output_dtype == DataType::FLOAT32 ||

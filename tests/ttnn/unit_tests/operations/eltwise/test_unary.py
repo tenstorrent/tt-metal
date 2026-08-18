@@ -2784,3 +2784,48 @@ def test_unary_mish(torch_dtype, ttnn_dtype, fast_and_approximate_mode, device):
     golden_tensor = golden_function(in_data)
     golden_tensor = golden_tensor.to(output_tensor.dtype)
     assert_allclose(golden_tensor, output_tensor, rtol=1e-05, atol=0.008)
+
+
+def test_unary_preallocated_output_dtype_not_cached(device):
+    """The preallocated output tensor's dtype must take part in the program-cache key.
+
+    unary_impl derives output_dtype from the INPUT, and takes only the memory config from the
+    preallocated output -- yet unary_program_factory derives the output CB's data format and page
+    size from the output tensor's dtype, and that page size is what the writer kernel reads out of
+    the CB interface as page_bytes. compute_program_hash sees only the attribute, so two calls
+    differing solely in the preallocated output dtype collided and the second wrote the first's page
+    size: half of each fp32 tile, or a 4096 B write into a 2048 B bfloat16 page.
+
+    validate_on_program_cache_miss checks only shape and layout of the preallocated output, and does
+    not run at all on a cache hit, so nothing else catches it.
+    """
+    device.enable_program_cache()
+    device.clear_program_cache()
+
+    torch.manual_seed(0)
+    torch_input = torch.randn([1, 1, 32, 32], dtype=torch.bfloat16)
+    torch_expected = torch.relu(torch_input.float())
+
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    def run(out_dtype):
+        out = ttnn.from_torch(torch.zeros([1, 1, 32, 32]), dtype=out_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+        ttnn.relu(input_tensor, output_tensor=out)
+        return ttnn.to_torch(out).float()
+
+    # bfloat16 output first: its 2048 B pages are the narrower of the two, so a collision shows up
+    # as an fp32 tile only half written rather than as a page-size overrun.
+    got_bf16 = run(ttnn.bfloat16)
+    entries_after_bf16 = device.num_program_cache_entries()
+
+    got_fp32 = run(ttnn.float32)
+
+    assert device.num_program_cache_entries() > entries_after_bf16, (
+        "FLOAT32 preallocated output reused the BFLOAT16 program: the preallocated output dtype is "
+        "missing from the program-cache key"
+    )
+
+    assert_with_pcc(torch_expected, got_bf16, 0.999)
+    assert_with_pcc(torch_expected, got_fp32, 0.999)
+
+    device.disable_and_clear_program_cache()
