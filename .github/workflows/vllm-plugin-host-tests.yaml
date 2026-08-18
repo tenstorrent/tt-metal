@@ -76,7 +76,7 @@ jobs:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read
-      packages: read
+      packages: write
     with:
       ref: ${{ needs.resolve-inputs.outputs.tt-metal-ref }}
       build-type: Release
