@@ -144,3 +144,83 @@ def from_block_order_tt(x, grid: tuple[int, int, int], block: tuple[int, int, in
         x = ttnn.slice(x, [0, 0, 0, 0, 0], [b * nh, t, h, w, c])
     x = ttnn.reshape(x, (b, nh, t * h * w, c))
     return ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+
+
+# ---------------------------------------------------------------------------
+# Box-sparse tile-skip (Phase 1): per-q-tile packed k-tile band.
+#
+# The fused gather packs a block chunk's neighborhood BOX densely (T-outer/H-mid/W-inner) and the flash
+# runs dense over it, masking the over-included cells. For a block whose H,W are >= the kernel, most of
+# that box is dead for any given 32-query sub-tile -> those k-tiles are entirely -inf (exp(-inf)=0) and
+# can be skipped LOSSLESSLY. This computes, per q-sub-tile, the contiguous packed k-tile band [lo, hi)
+# that can hold a live key; everything outside is skippable. Host twin of block_qtile_k_band in
+# windowed_loop_geometry.hpp -- the kernel runs the identical arithmetic. See tile_skip_phase0.py.
+# ---------------------------------------------------------------------------
+TILE = 32
+
+
+def nbr_shift_start(q: int, length: int, ker: int) -> int:
+    """Edge-clamped neighborhood window start: the window is [start, start+min(ker,length)). Mirrors
+    ``nbr_shift_start`` in windowed_loop_geometry.hpp exactly."""
+    if ker > length:
+        ker = length
+    half = ker // 2
+    last = length - ker
+    start = 0 if q < half else q - half
+    return min(start, last)
+
+
+def neighborhood_box_block(qc, block, grid, kernel, hb, wb, w_origin):
+    """Host twin of ``neighborhood_box_block``: the box (t0,t1,h_lo,h_hi,w_lo,w_hi) for block chunk ``qc``.
+    Coords are op-order (T = op-outer, carrying ``w_origin``; H; W). The block is dilated by the kernel,
+    edge-clamped by :func:`nbr_shift_start`."""
+    bt, bh, bw = block
+    T, H, W = grid
+    kt, kh, kw = kernel
+    bti = qc // (wb * hb)
+    bhi = (qc // wb) % hb
+    bwi = qc % wb
+    t_lo, t_hi = w_origin + bti * bt, w_origin + bti * bt + bt - 1
+    h_lo, h_hi = bhi * bh, bhi * bh + bh - 1
+    w_lo, w_hi = bwi * bw, bwi * bw + bw - 1
+    ker_t, ker_h, ker_w = min(kt, T), min(kh, H), min(kw, W)
+    return (
+        nbr_shift_start(t_lo, T, kt),
+        nbr_shift_start(t_hi, T, kt) + ker_t,
+        nbr_shift_start(h_lo, H, kh),
+        nbr_shift_start(h_hi, H, kh) + ker_h,
+        nbr_shift_start(w_lo, W, kw),
+        nbr_shift_start(w_hi, W, kw) + ker_w,
+    )
+
+
+def qtile_k_band(qc, wid0, block, grid, kernel, hb, wb, w_origin, box=None):
+    """Packed k-tile band [lo, hi) that can hold a live key for the ``TILE``-query sub-tile starting at
+    within-block index ``wid0`` of block chunk ``qc``. Tiles outside [lo, hi) are entirely -inf for every
+    query in the sub-tile -> losslessly skippable. Host twin of block_qtile_k_band."""
+    if box is None:
+        box = neighborhood_box_block(qc, block, grid, kernel, hb, wb, w_origin)
+    bt, bh, bw = block
+    T, H, W = grid
+    kt, kh, kw = kernel
+    t0, _, h_lo, _, w_lo, _ = box
+    bh_box, bw_box = box[3] - box[2], box[5] - box[4]
+    hw_box = bh_box * bw_box
+    vol = bt * bh * bw
+    ker_t, ker_h, ker_w = min(kt, T), min(kh, H), min(kw, W)
+    bti = qc // (wb * hb)
+    bhi = (qc // wb) % hb
+    bwi = qc % wb
+    jmin, jmax = None, None
+    for wid in range(wid0, min(wid0 + TILE, vol)):
+        dw = wid % bw
+        dh = (wid // bw) % bh
+        dt = wid // (bw * bh)
+        wt = nbr_shift_start(w_origin + bti * bt + dt, T, kt) - t0
+        wh = nbr_shift_start(bhi * bh + dh, H, kh) - h_lo
+        ww = nbr_shift_start(bwi * bw + dw, W, kw) - w_lo
+        j_min_q = wt * hw_box + wh * bw_box + ww
+        j_max_q = (wt + ker_t - 1) * hw_box + (wh + ker_h - 1) * bw_box + (ww + ker_w - 1)
+        jmin = j_min_q if jmin is None else min(jmin, j_min_q)
+        jmax = j_max_q if jmax is None else max(jmax, j_max_q)
+    return jmin // TILE, jmax // TILE + 1
