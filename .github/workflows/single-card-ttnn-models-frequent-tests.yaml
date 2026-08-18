@@ -71,6 +71,7 @@ jobs:
 
   build-artifact:
     needs: check-harbor
+    if: ${{ !cancelled() }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read
@@ -84,6 +85,7 @@ jobs:
       tracy: ${{ inputs.enable-ops-recording || false }}
   single-card-ttnn-models-frequent-tests:
     needs: [check-harbor, build-artifact]
+    if: ${{ !cancelled() && needs.build-artifact.result == 'success' }}
     uses: ./.github/workflows/single-card-ttnn-models-frequent-tests-impl.yaml
     secrets: inherit
     with:

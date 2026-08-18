@@ -365,7 +365,6 @@ def test_topk_input_dtypes_raise(torch_input_tensor_dtype, ttnn_input_tensor_dty
         (ttnn.float32, ttnn.uint16),
         (ttnn.uint32, ttnn.uint16),
         (ttnn.int32, ttnn.uint16),
-        (ttnn.bfloat16, ttnn.int32),
         (ttnn.bfloat16, ttnn.float32),
         (ttnn.bfloat16, ttnn.bfloat16),
     ],
@@ -470,3 +469,80 @@ def test_topk_multicore_local_write_correctness(largest, device):
     assert torch.allclose(
         got_s, ref_s, atol=1e-2
     ), f"multi-core topk values mismatch (WAR regression?): max_diff={(got_s - ref_s).abs().max():.4f}"
+
+
+@pytest.mark.parametrize(
+    "N, C, H, W, dim, k",
+    (
+        (1, 1, 32, 64, 3, 32),  # small dim -> single-core path
+        (1, 1, 32, 4096, 3, 32),  # larger dim, still single-core
+        (1, 1, 32, 8192, 3, 50),  # power-of-2 dim, k<=64 -> multi-core path (32-bit indices)
+    ),
+)
+@pytest.mark.parametrize("index_dtype", (ttnn.int32, ttnn.uint32))
+@pytest.mark.parametrize("largest", (True, False))
+def test_topk_int32_indices(N, C, H, W, dim, k, index_dtype, largest, device):
+    # Exercises 32-bit (UINT32/INT32) index outputs on both the single-core and multi-core paths.
+    torch.manual_seed(2005)
+    shape = [N, C, H, W]
+
+    input = torch.randn(shape, dtype=torch.bfloat16) * 0.9
+    ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+
+    pyt_topk_values, _ = torch.topk(input, k, dim=dim, largest=largest, sorted=True)
+
+    # Preallocate the value and (int32/uint32) index output tensors.
+    out_shape = shape.copy()
+    out_shape[dim] = k
+    value_tensor = ttnn.from_torch(
+        torch.zeros(out_shape, dtype=torch.bfloat16), ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device
+    )
+    index_tensor = ttnn.from_torch(
+        torch.zeros(out_shape, dtype=torch.int32), index_dtype, layout=ttnn.Layout.TILE, device=device
+    )
+
+    ttnn_values, ttnn_indices = ttnn.topk(
+        ttnn_input,
+        k,
+        dim=dim,
+        largest=largest,
+        sorted=True,
+        output_tensor=(value_tensor, index_tensor),
+    )
+
+    assert ttnn_indices.dtype == index_dtype
+
+    # The index dtype does not change which elements are selected; validate that the returned
+    # indices point at the correct top-k values (gather + cosine similarity, as in run_topk_test).
+    ttnn_torch_indices = ttnn.to_torch(ttnn_indices, dtype=torch.int32)
+    ttnn_torch_gather_from_indices = torch.gather(input, dim, ttnn_torch_indices.to(torch.int64))
+    cosine = torch.nn.CosineSimilarity(dim=dim)
+    ttnn_torch_cosine = torch.mean(cosine(pyt_topk_values, ttnn_torch_gather_from_indices))
+    assert ttnn_torch_cosine > 0.99, "Cosine similarity between topk values and gather from indices is less than 0.99"
+
+
+@pytest.mark.parametrize("num_rows", [64, 96])
+@pytest.mark.parametrize("largest", [True, False])
+def test_topk_multicore_values_beyond_first_tile_row(num_rows, largest, device):
+    """
+    Regression test for the multi-core final-gather values corruption: topk_final.cpp's values gather
+    ran without re-establishing datacopy unpack state at ht >= 1, so the state left by the previous
+    iteration's index transpose (TRANSPOSE mode, UInt16/UInt32 SRCA format) made the bare copy_tile
+    unpack the bf16 gathered values as garbage. Observable as fabricated ~1e38 values in EVERY row past
+    the first 32 flattened rows (indices unaffected) on any multi-core call with > 32 flattened rows.
+    """
+    torch.manual_seed(2006)
+    W, k = 8192, 32  # multi-core path; > 32 flattened rows => ht >= 1 iterations in the final gather
+    t = torch.randn((1, 1, num_rows, W), dtype=torch.bfloat16)
+    x = ttnn.from_torch(t, ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    v, i = ttnn.topk(x, k, dim=-1, largest=largest, sorted=True)
+    ttnn.synchronize_device(device)
+
+    got = ttnn.to_torch(v).float()
+    ref, _ = torch.topk(t.float(), k, dim=-1, largest=largest, sorted=True)
+    got_s = got.sort(dim=-1, descending=True).values
+    ref_s = ref.sort(dim=-1, descending=True).values
+    # Pre-fix this fails catastrophically (~1e38 magnitudes), not marginally.
+    assert torch.allclose(
+        got_s, ref_s, atol=1e-2
+    ), f"values fabricated past first tile row: max_diff={(got_s - ref_s).abs().max():.4f}"
