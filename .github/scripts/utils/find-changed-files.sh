@@ -193,15 +193,7 @@ CPP_SOURCE_FOR_CLANG_TIDY_CHANGED=false
 CLANG_TIDY_KEY_WORKFLOW_CHANGED=false
 while IFS= read -r FILE; do
     case "$FILE" in
-        tt_metal/*.@(h|hpp|c|cpp|cc|inl|tpp)|tt_metal/**/*.@(h|hpp|c|cpp|cc|inl|tpp)|\
-        ttnn/*.@(h|hpp|c|cpp|cc|inl|tpp)|ttnn/**/*.@(h|hpp|c|cpp|cc|inl|tpp)|\
-        tests/tt_metal/*.@(h|hpp|c|cpp|cc|inl|tpp)|tests/tt_metal/**/*.@(h|hpp|c|cpp|cc|inl|tpp)|\
-        tests/ttnn/*.@(h|hpp|c|cpp|cc|inl|tpp)|tests/ttnn/**/*.@(h|hpp|c|cpp|cc|inl|tpp)|\
-        tests/scale_out/*.@(h|hpp|c|cpp|cc|inl|tpp)|tests/scale_out/**/*.@(h|hpp|c|cpp|cc|inl|tpp)|\
-        tests/tt_eager/*.@(h|hpp|c|cpp|cc|inl|tpp)|tests/tt_eager/**/*.@(h|hpp|c|cpp|cc|inl|tpp)|\
-        tt-train/*.@(h|hpp|c|cpp|cc|inl|tpp)|tt-train/**/*.@(h|hpp|c|cpp|cc|inl|tpp)|\
-        tools/*.@(h|hpp|c|cpp|cc|inl|tpp)|tools/**/*.@(h|hpp|c|cpp|cc|inl|tpp)|\
-        tt_stl/*.@(h|hpp|c|cpp|cc|inl|tpp)|tt_stl/**/*.@(h|hpp|c|cpp|cc|inl|tpp))
+        @(tt_metal|ttnn|tests/tt_metal|tests/ttnn|tests/scale_out|tests/tt_eager|tt-train|tools|tt_stl)/*(*/)*.@(h|hpp|c|cpp|cc|inl|tpp))
             CPP_SOURCE_FOR_CLANG_TIDY_CHANGED=true
             ;;
         .github/workflows/code-analysis.yaml|\
