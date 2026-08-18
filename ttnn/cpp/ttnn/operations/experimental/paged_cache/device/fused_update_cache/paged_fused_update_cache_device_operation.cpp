@@ -124,6 +124,15 @@ void patch_runtime_args(
     }
 }
 
+// Coords excluded from a mesh dispatch got an empty ProgramDescriptor (see the mesh factories) —
+// no kernels, no CBs, nothing to patch.
+bool coord_excluded_from_dispatch(
+    const PagedFusedUpdateCacheParams& operation_attributes,
+    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
+    return operation_attributes.mesh_coords.has_value() && mesh_dispatch_coordinate.has_value() &&
+           !operation_attributes.mesh_coords->contains(mesh_dispatch_coordinate.value());
+}
+
 }  // namespace CMAKE_UNIQUE_NAMESPACE_FUSED_UPDATE_CACHE
 
 PagedFusedUpdateCacheDeviceOperation::program_factory_t PagedFusedUpdateCacheDeviceOperation::select_program_factory(
@@ -379,40 +388,61 @@ ttsl::hash::hash_t PagedFusedUpdateCacheDeviceOperation::compute_program_hash(
         program_factory.index());
 }
 
-void PagedFusedUpdateCacheDeviceOperation::override_runtime_arguments(
+// The four factory cache-hit hooks. Each patches the cached program in place: rebuilding the
+// descriptor would pay the whole cache-miss host cost (work split, CoreRangeSets, compile-time args,
+// per-core arg vectors) on every cache hit. Defined here so the arg-layout constants and the shared
+// patch_runtime_args() above stay in one translation unit.
+void PagedTiledFusedUpdateCacheProgramFactory::override_runtime_arguments(
     tt::tt_metal::Program& program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& /*tensor_return_value*/,
+    const PagedFusedUpdateCacheParams& operation_attributes,
+    const PagedFusedUpdateCacheInputs& tensor_args,
+    PagedFusedUpdateCacheResult& /*tensor_return_value*/,
     const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
     using namespace CMAKE_UNIQUE_NAMESPACE_FUSED_UPDATE_CACHE;
-
-    // Coords excluded from a mesh dispatch got an empty ProgramDescriptor (see the mesh factories) —
-    // no kernels, no CBs, nothing to patch.
-    if (operation_attributes.mesh_coords.has_value() && mesh_dispatch_coordinate.has_value() &&
-        !operation_attributes.mesh_coords->contains(mesh_dispatch_coordinate.value())) {
+    if (coord_excluded_from_dispatch(operation_attributes, mesh_dispatch_coordinate)) {
         return;
     }
+    patch_runtime_args(
+        program, tensor_args, compute_tiled_fused_offsets(operation_attributes, tensor_args), kFirstOptionalCbPosTiled);
+}
 
-    // Patch the cached program in place: rebuilding the descriptor here would pay the whole
-    // cache-miss host cost (work split, CoreRangeSets, compile-time args, per-core arg vectors) on
-    // every cache hit. The mesh factories just delegate to the single-device ones, so the
-    // tiled-vs-row-major split is the only part of select_program_factory that changes the cached
-    // program's shape — mirror it once, here.
-    if (tensor_args.input_tensor1.layout() == Layout::TILE) {
-        patch_runtime_args(
-            program,
-            tensor_args,
-            PagedTiledFusedUpdateCacheProgramFactory::compute_tiled_fused_offsets(operation_attributes, tensor_args),
-            kFirstOptionalCbPosTiled);
-    } else {
-        patch_runtime_args(
-            program,
-            tensor_args,
-            PagedRowMajorFusedUpdateCacheProgramFactory::compute_row_major_fused_offsets(
-                operation_attributes, tensor_args),
-            kFirstOptionalCbPosRowMajor);
+void PagedRowMajorFusedUpdateCacheProgramFactory::override_runtime_arguments(
+    tt::tt_metal::Program& program,
+    const PagedFusedUpdateCacheParams& operation_attributes,
+    const PagedFusedUpdateCacheInputs& tensor_args,
+    PagedFusedUpdateCacheResult& /*tensor_return_value*/,
+    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
+    using namespace CMAKE_UNIQUE_NAMESPACE_FUSED_UPDATE_CACHE;
+    if (coord_excluded_from_dispatch(operation_attributes, mesh_dispatch_coordinate)) {
+        return;
     }
+    patch_runtime_args(
+        program,
+        tensor_args,
+        compute_row_major_fused_offsets(operation_attributes, tensor_args),
+        kFirstOptionalCbPosRowMajor);
+}
+
+// The mesh factories delegate their program build to the single-device ones, so the cached program
+// has the same layout — reuse the same patch.
+void PagedTiledFusedUpdateCacheMeshWorkloadFactory::override_runtime_arguments(
+    tt::tt_metal::Program& program,
+    const PagedFusedUpdateCacheParams& operation_attributes,
+    const PagedFusedUpdateCacheInputs& tensor_args,
+    PagedFusedUpdateCacheResult& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
+    PagedTiledFusedUpdateCacheProgramFactory::override_runtime_arguments(
+        program, operation_attributes, tensor_args, tensor_return_value, mesh_dispatch_coordinate);
+}
+
+void PagedRowMajorFusedUpdateCacheMeshWorkloadFactory::override_runtime_arguments(
+    tt::tt_metal::Program& program,
+    const PagedFusedUpdateCacheParams& operation_attributes,
+    const PagedFusedUpdateCacheInputs& tensor_args,
+    PagedFusedUpdateCacheResult& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
+    PagedRowMajorFusedUpdateCacheProgramFactory::override_runtime_arguments(
+        program, operation_attributes, tensor_args, tensor_return_value, mesh_dispatch_coordinate);
 }
 
 }  // namespace ttnn::experimental::prim
