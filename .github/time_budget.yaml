@@ -360,9 +360,9 @@ models:
     wh_llmbox: 90
     wh_galaxy: 80
     wh_llmbox_perf: 58
-    wh_n150: 41
+    wh_n150: 51
     wh_n300: 33
-    bh_p150: 20
+    bh_p150: 30
     bh_p300: 30
     bh_quietbox_2: 21
   integration:
