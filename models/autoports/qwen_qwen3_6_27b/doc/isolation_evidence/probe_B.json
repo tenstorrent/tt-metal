@@ -1,0 +1,50 @@
+{
+  "label": "B (max_num_seqs=32, all)",
+  "cases": {
+    "trivial": {
+      "finish_reason": "stop",
+      "completion_tokens": 2,
+      "words": 1,
+      "baseline_words": 2,
+      "words_vs_baseline": 0.5,
+      "adjacent_dupes": 0,
+      "intraword_dupes": 0,
+      "repetition_12gram": 0.0,
+      "boxed": null,
+      "gold": null,
+      "correct": null,
+      "head": "4",
+      "tail": "4"
+    },
+    "easy": {
+      "finish_reason": "stop",
+      "completion_tokens": 484,
+      "words": 248,
+      "baseline_words": 472,
+      "words_vs_baseline": 0.525,
+      "adjacent_dupes": 1,
+      "intraword_dupes": 0,
+      "repetition_12gram": 0.0,
+      "boxed": "A",
+      "gold": "A",
+      "correct": true,
+      "head": "The problem asks for the ground state energy of a particle of mass $m$ moving in a one-dimensional potential $V(x) = \\frac{1}{2}kx^2$.\n\n1.  **Identify",
+      "tail": "state energy of a harmonic oscillator is non-zero (zero-point energy).\n\nTherefore, the correct choice is (A).\n\n\\boxed{A}"
+    },
+    "diamond0": {
+      "finish_reason": "length",
+      "completion_tokens": 4096,
+      "words": 1460,
+      "baseline_words": 1849,
+      "words_vs_baseline": 0.79,
+      "adjacent_dupes": 3,
+      "intraword_dupes": 0,
+      "repetition_12gram": 0.1256,
+      "boxed": null,
+      "gold": "A",
+      "correct": false,
+      "head": "To determine the correct energy difference required to clearly distinguish the two energy levels, we must apply the Heisenberg Uncertainty Principle.\n",
+      "tail": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+    }
+  }
+}

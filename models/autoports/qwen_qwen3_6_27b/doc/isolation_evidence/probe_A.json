@@ -1,0 +1,50 @@
+{
+  "label": "A (max_num_seqs=1, decode_only)",
+  "cases": {
+    "trivial": {
+      "finish_reason": "stop",
+      "completion_tokens": 2,
+      "words": 1,
+      "baseline_words": 2,
+      "words_vs_baseline": 0.5,
+      "adjacent_dupes": 0,
+      "intraword_dupes": 0,
+      "repetition_12gram": 0.0,
+      "boxed": null,
+      "gold": null,
+      "correct": null,
+      "head": "4",
+      "tail": "4"
+    },
+    "easy": {
+      "finish_reason": "stop",
+      "completion_tokens": 472,
+      "words": 244,
+      "baseline_words": 472,
+      "words_vs_baseline": 0.517,
+      "adjacent_dupes": 0,
+      "intraword_dupes": 0,
+      "repetition_12gram": 0.0,
+      "boxed": "A",
+      "gold": "A",
+      "correct": true,
+      "head": "The problem asks for the ground state energy of a particle of mass $m$ moving in a one-dimensional potential $V(x) = \\frac{1}{2}kx^2$.\n\n1.  **Identify",
+      "tail": "rent in quantum mechanics due to the Heisenberg uncertainty principle.\n\nTherefore, the correct choice is (A).\n\n\\boxed{A}"
+    },
+    "diamond0": {
+      "finish_reason": "stop",
+      "completion_tokens": 1849,
+      "words": 864,
+      "baseline_words": 1849,
+      "words_vs_baseline": 0.467,
+      "adjacent_dupes": 3,
+      "intraword_dupes": 0,
+      "repetition_12gram": 0.0,
+      "boxed": "A",
+      "gold": "A",
+      "correct": true,
+      "head": "To determine the minimum energy difference required to clearly distinguish (resolve) two quantum states, we use the Heisenberg Uncertainty Principle. ",
+      "tail": " the only option that represents an energy difference large enough to overcome the natural broadening is (A).\n\n\\boxed{A}"
+    }
+  }
+}
