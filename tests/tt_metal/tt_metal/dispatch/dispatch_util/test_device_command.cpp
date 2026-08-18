@@ -96,8 +96,30 @@ TEST(DeviceCommandTest, AddDispatchGoSignalMcast) {
     calculator.add_dispatch_go_signal_mcast();
 
     HostMemDeviceCommand command(calculator.write_offset_bytes());
-    command.add_dispatch_go_signal_mcast(0, 0, 0, 0, 0, 0, DispatcherSelect::DISPATCH_MASTER);
+    constexpr uint32_t kWaitCount = 0x12345678;
+    constexpr uint32_t kGoSignal = 0x87654321;
+    constexpr uint8_t kWaitStream = 0xF1;
+    constexpr uint8_t kProfilerWorkers = 110;
+    constexpr uint16_t kProfilerRuntimeId = 0xBEEF;
+    command.add_dispatch_go_signal_mcast(
+        kWaitCount,
+        kGoSignal,
+        kWaitStream,
+        3,
+        4,
+        5,
+        kProfilerWorkers,
+        kProfilerRuntimeId,
+        DispatcherSelect::DISPATCH_MASTER);
     EXPECT_EQ(command.size_bytes(), command.write_offset_bytes());
+
+    const auto* dispatch_cmd = reinterpret_cast<const CQDispatchCmd*>(
+        reinterpret_cast<const uint8_t*>(command.data()) + sizeof(CQPrefetchCmd));
+    EXPECT_EQ(dispatch_cmd->mcast.wait_count, kWaitCount);
+    EXPECT_EQ(dispatch_cmd->mcast.go_signal, kGoSignal);
+    EXPECT_EQ(dispatch_cmd->mcast.wait_stream, kWaitStream);
+    EXPECT_EQ(dispatch_cmd->mcast.profiler_num_workers, kProfilerWorkers);
+    EXPECT_EQ(dispatch_cmd->mcast.profiler_runtime_id, kProfilerRuntimeId);
 }
 
 TEST(DeviceCommandTest, AddNotifyDispatchSGoSignalCmd) {

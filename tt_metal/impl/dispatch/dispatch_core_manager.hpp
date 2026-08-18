@@ -7,6 +7,7 @@
 #include <stdint.h>
 #include <functional>
 #include <list>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -14,6 +15,7 @@
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/experimental/realtime_profiler.hpp>
 #include "llrt/core_descriptor.hpp"
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <umd/device/types/core_coordinates.hpp>
@@ -25,6 +27,14 @@
 namespace tt::tt_metal {
 
 class MetalContext;
+class IDevice;
+
+struct RealtimeProfilerEligibility {
+    bool enabled = false;
+    CoreCoord core;
+    experimental::ProgramRealtimeProfilerInactiveReason inactive_reason =
+        experimental::ProgramRealtimeProfilerInactiveReason::NotInitialized;
+};
 
 // Dispatch core manager APIs track which cores are assigned to which dispatch functionality
 
@@ -53,7 +63,7 @@ struct dispatch_core_placement_t {
     std::optional<tt_cxy_pair> prefetcher_d = std::nullopt;
     std::optional<tt_cxy_pair> dispatcher_d = std::nullopt;
     std::optional<tt_cxy_pair> dispatcher_s = std::nullopt;
-    std::unordered_map<int, tt_cxy_pair> fabric_mux;       // Fabric Mux indexed by tunnel / link index
+    std::unordered_map<int, tt_cxy_pair> fabric_mux;  // Fabric Mux indexed by tunnel / link index
 };
 
 class dispatch_core_manager {
@@ -170,6 +180,9 @@ public:
     /// @return tt_cxy_pair logical location of the reserved tensix, or empty if no reservation exists
     std::optional<tt_cxy_pair> get_reserved_realtime_profiler_core(ChipId device_id);
 
+    // Authoritative post-dispatch-build capability check shared by dispatch_s and the host manager.
+    RealtimeProfilerEligibility evaluate_realtime_profiler_eligibility(IDevice* device);
+
 private:
     /// @brief reset_dispatch_core_manager initializes vector of cores per device for dispatch kernels
     /// @param dispatch_core_config specifies the core type for dispatch kernels
@@ -214,6 +227,10 @@ private:
     // Tensix reserved at construction time for the real-time profiler kernel.
     // Removed from available_dispatch_cores_by_device so dispatch cannot reach it.
     std::unordered_map<ChipId, tt_cxy_pair> reserved_realtime_profiler_core_by_device_;
+    // Frozen by the first post-dispatch-build evaluation. Dispatch_s kernel creation and the host manager consume
+    // this same decision, so the observer cannot compile out while the manager independently activates.
+    std::unordered_map<ChipId, RealtimeProfilerEligibility> realtime_profiler_eligibility_by_device_;
+    std::mutex realtime_profiler_eligibility_mutex_;
     DispatchCoreConfig dispatch_core_config_;
     uint8_t num_hw_cqs{};
     MetalEnvImpl& env_;

@@ -234,12 +234,30 @@ the unpaired p05–p95 spread:
   upper 95% confidence bound no more than 0.5%;
 - enabled median regression: upper 95% confidence bound no more than 2.0%;
 - unsupported/disabled dispatch adds no cache invalidation or NOC operation;
-- Wormhole compile inspection creates no observer kernel. Wormhole runtime
-  compatibility is intentionally outside scope.
+- Milestone 2 observer creation is source-gated by the eligible-Blackhole
+  decision; Milestone 1 has no completion observer. A later explicit
+  product-owner decision excludes Wormhole build/runtime evidence from this
+  Blackhole-only feature's gates.
 
 Milestone 2 additionally measures device cycles for descriptor publication,
 enabled-idle observation, one active stream, all active streams, completion
 detection latency, and depth-two versus depth-four loss.
+
+### Milestone 1 measurement amendment
+
+Milestone 1 ran the required comment-only rebuild control in the same balanced,
+interleaved 60-block four-arm session as baseline, disabled, and enabled. The
+no-op rebuild's paired bootstrap 95% interval against the original baseline was
+[0.1132%, 0.6083%]. Because its upper bound exceeds the locked 0.5% cross-build
+gate, that gate is not resolvable by the host benchmark. The same-binary enabled
+median was 1.0168%, but process outliers left its interval at
+[0.5214%, 2.5584%], so the 2% host ceiling is also unresolved. Neither result is
+called a pass.
+
+The product owner accepted the correction on 2026-08-18: M1 is adjudicated with
+the direct, full device GO-tail comparison and all host results remain
+descriptive evidence. Exact samples and commands are in
+`docs/realtime_profiler_clean_room_milestone1_evidence.md`.
 
 ## Milestone 0 test scaffolding
 
@@ -256,7 +274,7 @@ that rule.
 ## Open implementation proofs owned by later milestones
 
 - Milestone 1: exact support/inactive reason plumbing, FIFO deadlock regression,
-  Wormhole observer non-creation, trace-command suppression, and matched disable
+  Blackhole observer gating, trace-command suppression, and matched disable
   baselines.
 - Milestone 2: reset ordering under an adversarial pause, protected NOC
   stateful-write window, observer polling error, loss counter behavior, and

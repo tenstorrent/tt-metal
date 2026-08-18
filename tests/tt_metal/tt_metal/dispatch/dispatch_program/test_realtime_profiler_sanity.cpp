@@ -2,24 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Merge-gate sanity check for the real-time (RT) profiler on Wormhole and
-// Blackhole single-chip configurations. Enqueues a handful of compute
-// programs back-to-back on all tensix cores, attaches an RT profiler
-// callback, and asserts that each program produces a record with a
-// plausible start/end timestamp. The goal is to catch coarse regressions
-// in the RT profiler pipeline (mailbox layout, D2H socket init, sync
-// handshake, kernel source propagation, timestamp extraction) before they
-// reach CI's longer-running profiler test suite.
-//
-// Lives in the dispatch "basic" test library so it runs as part of
-// `tt-metalium-validation-basic`, which the merge-gate `metalium-basic-tests`
-// job executes on both N150 (WH) and P150b (BH). On configs where RT
-// profiler cannot be enabled (ETH dispatch, non-MMIO chip, kernels
-// nullified, IOMMU-off on BH, etc.) the test skips gracefully via
-// IsProgramRealtimeProfilerActive().
+// Blackhole real-time-profiler sanity checks. Milestone 1 validates capability,
+// nonblocking launch identity, and device start timestamps. Correlated completion
+// endpoints are deliberately suppressed until the Milestone 2 descriptor protocol.
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <cstdlib>
+#include <limits>
 #include <mutex>
 #include <set>
 #include <stdexcept>
@@ -38,6 +29,7 @@
 #include "impl/dispatch/dispatch_settings.hpp"
 #include "llrt/hal.hpp"
 #include "tt_metal/distributed/mesh_device_impl.hpp"
+#include "tt_metal/impl/program/program_impl.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/distributed.hpp>
@@ -55,8 +47,10 @@
 namespace tt::tt_metal {
 namespace {
 
+using tt::tt_metal::experimental::GetProgramRealtimeProfilerDeviceCapabilities;
 using tt::tt_metal::experimental::IsProgramRealtimeProfilerActive;
 using tt::tt_metal::experimental::ProgramRealtimeProfilerCallbackHandle;
+using tt::tt_metal::experimental::ProgramRealtimeProfilerInactiveReason;
 using tt::tt_metal::experimental::ProgramRealtimeRecord;
 using tt::tt_metal::experimental::ProgramRealtimeRecordBatch;
 using tt::tt_metal::experimental::RegisterProgramRealtimeProfilerCallback;
@@ -67,11 +61,125 @@ constexpr uint32_t kNumPrograms = 5;
 // unrolled NOPs. Even on slow silicon that stays in the tens-of-microseconds
 // range, so 1s is a sanity cap only intended to catch a broken clock /
 // mis-decoded timestamp.
-constexpr double kMaxDurationNs = 1'000'000'000.0;
 
 // Per-program marker embedded in the kernel source so the source-correlation
 // assertion can verify each record carries the correct source.
 constexpr const char* kSourceMarkerPrefix = "rt_profiler_marker_";
+
+TEST(RealtimeProfilerCapability, ReportsSingleCqArchitectureAndActivation) {
+    constexpr int kDeviceId = 0;
+    auto mesh_device = distributed::MeshDevice::create_unit_mesh(
+        kDeviceId, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, DispatchCoreConfig{DispatchCoreType::WORKER});
+    ASSERT_NE(mesh_device, nullptr);
+
+    auto* device = mesh_device->get_devices().front();
+    const auto capabilities = GetProgramRealtimeProfilerDeviceCapabilities();
+    const auto capability = std::find_if(capabilities.begin(), capabilities.end(), [device](const auto& entry) {
+        return entry.chip_id == static_cast<uint32_t>(device->id());
+    });
+    ASSERT_NE(capability, capabilities.end());
+    EXPECT_EQ(capability->active, IsProgramRealtimeProfilerActive());
+
+    auto& core_manager = MetalContext::instance(mesh_device->impl().get_context_id()).get_dispatch_core_manager();
+    if (device->arch() == tt::ARCH::BLACKHOLE) {
+        EXPECT_TRUE(capability->active);
+        EXPECT_EQ(capability->inactive_reason, ProgramRealtimeProfilerInactiveReason::None);
+        EXPECT_TRUE(core_manager.get_reserved_realtime_profiler_core(device->id()).has_value());
+        const uint32_t maximum_completion_contribution =
+            mesh_device->num_worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}) +
+            mesh_device->impl().num_virtual_eth_cores(SubDeviceId{0});
+        EXPECT_LE(maximum_completion_contribution, std::numeric_limits<uint8_t>::max())
+            << "The supported Blackhole topology must fit the validated go-command worker field";
+    } else {
+        EXPECT_FALSE(capability->active);
+        EXPECT_EQ(capability->inactive_reason, ProgramRealtimeProfilerInactiveReason::UnsupportedArchitecture);
+        EXPECT_FALSE(core_manager.get_reserved_realtime_profiler_core(device->id()).has_value());
+    }
+
+    EXPECT_TRUE(mesh_device->close());
+}
+
+TEST(RealtimeProfilerCapability, RejectsBlackholeMultipleHardwareCommandQueues) {
+    constexpr int kDeviceId = 0;
+    auto mesh_device = distributed::MeshDevice::create_unit_mesh(
+        kDeviceId, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 2, DispatchCoreConfig{DispatchCoreType::WORKER});
+    ASSERT_NE(mesh_device, nullptr);
+    auto* device = mesh_device->get_devices().front();
+    if (device->arch() != tt::ARCH::BLACKHOLE) {
+        mesh_device->close();
+        GTEST_SKIP() << "The concurrent realtime profiler is Blackhole-only";
+    }
+
+    const auto capabilities = GetProgramRealtimeProfilerDeviceCapabilities();
+    ASSERT_EQ(capabilities.size(), 1u);
+    EXPECT_FALSE(capabilities.front().active);
+    EXPECT_EQ(
+        capabilities.front().inactive_reason, ProgramRealtimeProfilerInactiveReason::MultipleHardwareCommandQueues);
+    EXPECT_FALSE(IsProgramRealtimeProfilerActive());
+    EXPECT_FALSE(MetalContext::instance(mesh_device->impl().get_context_id())
+                     .get_dispatch_core_manager()
+                     .get_reserved_realtime_profiler_core(device->id())
+                     .has_value());
+    EXPECT_TRUE(mesh_device->close());
+}
+
+TEST(RealtimeProfilerCapability, RejectsBlackholeEthDispatchTopology) {
+    constexpr int kDeviceId = 0;
+    std::shared_ptr<distributed::MeshDevice> mesh_device;
+    try {
+        mesh_device = distributed::MeshDevice::create_unit_mesh(
+            kDeviceId, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, DispatchCoreConfig{DispatchCoreType::ETH});
+    } catch (const std::exception& e) {
+        // Some Blackhole QuietBox descriptors reject ETH dispatch later in allocator setup. The profiler reservation
+        // decision precedes that failure and must already have left the dispatch pool untouched.
+        ASSERT_NE(std::string_view(e.what()).find("No core coordinate found"), std::string_view::npos) << e.what();
+        EXPECT_FALSE(MetalContext::instance()
+                         .get_dispatch_core_manager()
+                         .get_reserved_realtime_profiler_core(kDeviceId)
+                         .has_value());
+        return;
+    }
+    ASSERT_NE(mesh_device, nullptr);
+    auto* device = mesh_device->get_devices().front();
+    if (device->arch() != tt::ARCH::BLACKHOLE) {
+        mesh_device->close();
+        GTEST_SKIP() << "The concurrent realtime profiler is Blackhole-only";
+    }
+
+    const auto capabilities = GetProgramRealtimeProfilerDeviceCapabilities();
+    ASSERT_EQ(capabilities.size(), 1u);
+    EXPECT_FALSE(capabilities.front().active);
+    EXPECT_EQ(capabilities.front().inactive_reason, ProgramRealtimeProfilerInactiveReason::NonWorkerDispatch);
+    EXPECT_FALSE(IsProgramRealtimeProfilerActive());
+    EXPECT_FALSE(MetalContext::instance(mesh_device->impl().get_context_id())
+                     .get_dispatch_core_manager()
+                     .get_reserved_realtime_profiler_core(device->id())
+                     .has_value());
+    EXPECT_TRUE(mesh_device->close());
+}
+
+TEST(RealtimeProfilerCapability, EnvironmentDisableIsLatchedBeforeDispatchBuild) {
+    const char* disabled = std::getenv("TT_METAL_DISABLE_REALTIME_PROFILER");
+    if (disabled == nullptr || std::string_view(disabled) != "1") {
+        GTEST_SKIP() << "Run this test in a fresh process with TT_METAL_DISABLE_REALTIME_PROFILER=1";
+    }
+
+    constexpr int kDeviceId = 0;
+    auto mesh_device = distributed::MeshDevice::create_unit_mesh(
+        kDeviceId, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, DispatchCoreConfig{DispatchCoreType::WORKER});
+    ASSERT_NE(mesh_device, nullptr);
+    auto* device = mesh_device->get_devices().front();
+    const auto capabilities = GetProgramRealtimeProfilerDeviceCapabilities();
+    ASSERT_EQ(capabilities.size(), 1u);
+    EXPECT_FALSE(capabilities.front().active);
+    EXPECT_EQ(capabilities.front().inactive_reason, ProgramRealtimeProfilerInactiveReason::DisabledByEnvironment);
+    EXPECT_FALSE(IsProgramRealtimeProfilerActive());
+    EXPECT_FALSE(MetalContext::instance(mesh_device->impl().get_context_id())
+                     .get_dispatch_core_manager()
+                     .get_reserved_realtime_profiler_core(device->id())
+                     .has_value());
+    EXPECT_TRUE(mesh_device->close());
+}
 
 TEST(RealtimeProfilerProtocol, CleanBaselineL1BudgetAndScratchRegisterOwnership) {
     constexpr int kDeviceId = 0;
@@ -299,8 +407,10 @@ TEST(RealtimeProfilerSanity, FiveProgramsBackToBack) {
     // (ETH dispatch, non-MMIO chip, kernels nullified, no valid RT core) —
     // treat that as a graceful skip rather than a failure.
     if (!IsProgramRealtimeProfilerActive()) {
+        const auto capabilities = GetProgramRealtimeProfilerDeviceCapabilities();
         mesh_device->close();
-        GTEST_SKIP() << "Real-time profiler is not active on this dispatch config";
+        GTEST_SKIP() << "Real-time profiler is not active on this dispatch config; inactive_reason="
+                     << (capabilities.empty() ? -1 : static_cast<int>(capabilities.front().inactive_reason));
     }
 
     std::vector<ProgramRealtimeRecord> records;
@@ -321,10 +431,7 @@ TEST(RealtimeProfilerSanity, FiveProgramsBackToBack) {
     }
 
     mesh_device->quiesce_devices();
-    // Give the RT profiler receiver thread a moment to drain the last
-    // socket pages before we unregister. 500ms mirrors the programming
-    // example at test_realtime_profiler_csv.cpp and has proven sufficient
-    // for small workloads on WH/BH single-chip.
+    // Give the receiver thread a bounded window to drain the final socket pages.
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
     UnregisterProgramRealtimeProfilerCallback(handle);
@@ -333,20 +440,21 @@ TEST(RealtimeProfilerSanity, FiveProgramsBackToBack) {
         << "Expected at least " << kNumPrograms << " RT profiler records (one per program), got " << records.size();
     EXPECT_EQ(dropped, 0u);
 
+    std::vector<uint32_t> records_per_runtime_id(kNumPrograms + 1, 0);
     for (const auto& rec : records) {
-        EXPECT_GT(rec.end_timestamp, rec.start_timestamp)
-            << "RT record end_timestamp must be strictly greater than start_timestamp (runtime_id=" << rec.runtime_id
-            << ", chip=" << rec.chip_id << ")";
+        if (rec.runtime_id >= 1 && rec.runtime_id <= kNumPrograms) {
+            ++records_per_runtime_id[rec.runtime_id];
+        }
+        EXPECT_GT(rec.start_timestamp, 0u);
+        EXPECT_EQ(rec.end_timestamp, 0u)
+            << "Milestone 1 must not publish the legacy observer's off-by-one endpoint as a correlated duration";
         EXPECT_GT(rec.frequency, 0.0) << "RT record frequency must be positive (runtime_id=" << rec.runtime_id
                                       << ", chip=" << rec.chip_id << ")";
-
-        if (rec.frequency > 0.0 && rec.end_timestamp > rec.start_timestamp) {
-            uint64_t duration_cycles = rec.end_timestamp - rec.start_timestamp;
-            double duration_ns = static_cast<double>(duration_cycles) / rec.frequency;
-            EXPECT_LT(duration_ns, kMaxDurationNs)
-                << "RT record duration is implausibly large (runtime_id=" << rec.runtime_id << ", chip=" << rec.chip_id
-                << ", duration_ns=" << duration_ns << ")";
-        }
+    }
+    for (uint32_t runtime_id = 1; runtime_id <= kNumPrograms; ++runtime_id) {
+        EXPECT_EQ(records_per_runtime_id[runtime_id], 1u)
+            << "Each GO must produce exactly one record; duplicate runtime_id=" << runtime_id
+            << " can indicate that terminate published a stale buffer ID";
     }
 
     // Every program embeds "<prefix><runtime_id>" in its source, so we can verify each record carries the correct
@@ -379,8 +487,10 @@ TEST(RealtimeProfilerSanity, CloseDrainsRegisteredCallback) {
     ASSERT_NE(mesh_device, nullptr);
 
     if (!IsProgramRealtimeProfilerActive()) {
+        const auto capabilities = GetProgramRealtimeProfilerDeviceCapabilities();
         mesh_device->close();
-        GTEST_SKIP() << "Real-time profiler is not active on this dispatch config";
+        GTEST_SKIP() << "Real-time profiler is not active on this dispatch config; inactive_reason="
+                     << (capabilities.empty() ? -1 : static_cast<int>(capabilities.front().inactive_reason));
     }
 
     std::vector<ProgramRealtimeRecord> records;
@@ -493,10 +603,11 @@ TEST(RealtimeProfilerSanity, LastProgramRecordDeliveredOnFinish) {
     EXPECT_TRUE(mesh_device->close());
 }
 
-TEST(RealtimeProfilerSanity, TraceReplayResolvesKernelSources) {
+TEST(RealtimeProfilerSanity, TraceReplayIsUnprofiledAndOrdinaryProfilingResumes) {
     constexpr int kDeviceId = 0;
     constexpr uint32_t kWarmupRuntimeId = 0x6001;
     constexpr uint32_t kTraceRuntimeId = 0x6002;
+    constexpr uint32_t kResumeRuntimeId = 0x6003;
     constexpr size_t kTraceRegionSize = 8 * 1024 * 1024;
 
     auto mesh_device = distributed::MeshDevice::create_unit_mesh(
@@ -504,15 +615,15 @@ TEST(RealtimeProfilerSanity, TraceReplayResolvesKernelSources) {
     ASSERT_NE(mesh_device, nullptr);
 
     if (!IsProgramRealtimeProfilerActive()) {
+        const auto capabilities = GetProgramRealtimeProfilerDeviceCapabilities();
         mesh_device->close();
-        GTEST_SKIP() << "Real-time profiler is not active on this dispatch config";
+        GTEST_SKIP() << "Real-time profiler is not active on this dispatch config; inactive_reason="
+                     << (capabilities.empty() ? -1 : static_cast<int>(capabilities.front().inactive_reason));
     }
 
-    std::vector<ProgramRealtimeRecord> records;
-    ProgramRealtimeProfilerCallbackHandle handle =
-        RegisterProgramRealtimeProfilerCallback([&records](const ProgramRealtimeRecordBatch& batch) {
-            records.insert(records.end(), batch.records.begin(), batch.records.end());
-        });
+    test_utils::RealtimeProfilerRecordCollector collector;
+    ProgramRealtimeProfilerCallbackHandle handle = RegisterProgramRealtimeProfilerCallback(
+        [&collector](const ProgramRealtimeRecordBatch& batch) { collector.consume(batch); });
 
     CoreCoord compute_grid = mesh_device->compute_with_storage_grid_size();
     CoreRange all_cores(CoreCoord{0, 0}, CoreCoord{compute_grid.x - 1, compute_grid.y - 1});
@@ -539,6 +650,10 @@ TEST(RealtimeProfilerSanity, TraceReplayResolvesKernelSources) {
     // Warm up before capture (capture cannot load binaries) under kWarmupRuntimeId, then switch to
     // kTraceRuntimeId so the trace-baked id is tied only by create_trace_node, the path under test.
     distributed::EnqueueMeshWorkload(mesh_cq, workload, true);
+    distributed::EnqueueMeshWorkload(mesh_cq, workload, true);
+    const auto warmup_wait = collector.wait_for_runtime_ids({kWarmupRuntimeId}, std::chrono::seconds(10));
+    ASSERT_TRUE(warmup_wait.complete);
+    ASSERT_EQ(warmup_wait.host_dropped, 0u);
     for (auto& [_, prog] : workload.get_programs()) {
         prog.set_runtime_id(static_cast<uint64_t>(kTraceRuntimeId));
     }
@@ -546,30 +661,46 @@ TEST(RealtimeProfilerSanity, TraceReplayResolvesKernelSources) {
     distributed::MeshTraceId trace_id = distributed::BeginTraceCapture(mesh_device.get(), mesh_cq.id());
     distributed::EnqueueMeshWorkload(mesh_cq, workload, false);
     mesh_device->end_mesh_trace(mesh_cq.id(), trace_id);
+    // Negative control for trace suppression: inspect the captured command cache itself, so this test fails if
+    // update_traced_program_dispatch_commands stops clearing either profiler field even when replay happens to emit
+    // no host-visible record for another reason.
+    for (auto& [device_range, captured_program] : workload.get_programs()) {
+        (void)device_range;
+        auto& trace_commands = captured_program.impl().get_trace_cached_program_command_sequences();
+        ASSERT_FALSE(trace_commands.empty());
+        for (const auto& [command_hash, command_sequence] : trace_commands) {
+            (void)command_hash;
+            ASSERT_NE(command_sequence.mcast_go_signal_cmd_ptr, nullptr);
+            EXPECT_EQ(command_sequence.mcast_go_signal_cmd_ptr->profiler_num_workers, 0u);
+            EXPECT_EQ(command_sequence.mcast_go_signal_cmd_ptr->profiler_runtime_id, 0u);
+        }
+    }
     mesh_device->replay_mesh_trace(mesh_cq.id(), trace_id, true);
 
+    // Trace go commands carry zero profiler fields. An ordinary launch after replay must still
+    // carry its runtime ID and prove that trace suppression did not deactivate the profiler.
+    enqueue_sanity_program(mesh_device, kResumeRuntimeId, all_cores);
+
     mesh_device->quiesce_devices();
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    const auto wait_result = collector.wait_for_runtime_ids({kResumeRuntimeId}, std::chrono::seconds(10));
     UnregisterProgramRealtimeProfilerCallback(handle);
     mesh_device->release_mesh_trace(trace_id);
 
-    const std::string expected_marker = kSourceMarkerPrefix + std::to_string(kTraceRuntimeId);
+    const auto records = collector.records();
     uint32_t trace_records = 0;
+    std::set<uint32_t> ordinary_runtime_ids;
     for (const auto& rec : records) {
-        if (rec.runtime_id != kTraceRuntimeId) {
-            continue;
+        if (rec.runtime_id == kTraceRuntimeId) {
+            ++trace_records;
         }
-        ++trace_records;
-        ASSERT_FALSE(rec.kernel_sources.empty())
-            << "Trace-replayed record (runtime_id=" << kTraceRuntimeId
-            << ") carried no kernel sources; its runtime_id was not tied during trace capture";
-        for (const auto& src : rec.kernel_sources) {
-            EXPECT_NE(src.find(expected_marker), std::string_view::npos)
-                << "Trace-replayed record resolved to the wrong program's source: " << src;
+        if (rec.runtime_id == kWarmupRuntimeId || rec.runtime_id == kResumeRuntimeId) {
+            ordinary_runtime_ids.insert(rec.runtime_id);
         }
     }
-    EXPECT_GT(trace_records, 0u) << "No records observed for the trace-replayed program (runtime_id=" << kTraceRuntimeId
-                                 << ")";
+    EXPECT_TRUE(wait_result.complete);
+    EXPECT_EQ(wait_result.host_dropped, 0u);
+    EXPECT_EQ(trace_records, 0u) << "Trace replay must not publish profiler descriptors";
+    EXPECT_EQ(ordinary_runtime_ids, (std::set<uint32_t>{kWarmupRuntimeId, kResumeRuntimeId}));
 
     EXPECT_TRUE(mesh_device->close());
 }

@@ -190,6 +190,11 @@ void RealtimeProfilerTracyHandler::MaybeEmitSkippedZoneSummaryLocked() {
 }
 
 void RealtimeProfilerTracyHandler::HandleRecord(const tt::ProgramRealtimeRecord& record) {
+    if (record.end_timestamp == 0) {
+        // Milestone 1 deliberately exposes identity/start records without rendering the legacy observer's
+        // systematically off-by-one completion endpoint as a plausible Tracy zone.
+        return;
+    }
     if (record.end_timestamp < record.start_timestamp) {
         auto delta = static_cast<int64_t>(record.end_timestamp) - static_cast<int64_t>(record.start_timestamp);
         constexpr int64_t kStartupRaceThreshold = -100000;

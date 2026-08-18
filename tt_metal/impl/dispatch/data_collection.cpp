@@ -81,15 +81,20 @@ void UnregisterProgramRealtimeProfilerCallback(ProgramRealtimeProfilerCallbackHa
 }
 
 bool IsProgramRealtimeProfilerActive() {
-    return tt::tt_metal::MetalContext::instance().data_collector()->IsRealtimeProfilerActive();
+    if (!tt::tt_metal::MetalContext::instance_exists()) {
+        return false;
+    }
+    const auto& data_collector = tt::tt_metal::MetalContext::instance().data_collector();
+    return data_collector && data_collector->IsRealtimeProfilerActive();
 }
 
-void NotifyProgramRealtimeProfilerActivated(uint32_t chip_id) {
-    tt::tt_metal::MetalContext::instance().data_collector()->NotifyRealtimeProfilerActivated(chip_id);
-}
-
-void NotifyProgramRealtimeProfilerDeactivated(uint32_t chip_id) {
-    tt::tt_metal::MetalContext::instance().data_collector()->NotifyRealtimeProfilerDeactivated(chip_id);
+std::vector<ProgramRealtimeProfilerDeviceCapability> GetProgramRealtimeProfilerDeviceCapabilities() {
+    if (!tt::tt_metal::MetalContext::instance_exists()) {
+        return {};
+    }
+    const auto& data_collector = tt::tt_metal::MetalContext::instance().data_collector();
+    return data_collector ? data_collector->GetRealtimeProfilerDeviceCapabilities()
+                          : std::vector<ProgramRealtimeProfilerDeviceCapability>{};
 }
 
 }  // namespace tt
@@ -107,5 +112,9 @@ void UnregisterProgramRealtimeProfilerCallback(ProgramRealtimeProfilerCallbackHa
 }
 
 bool IsProgramRealtimeProfilerActive() { return tt::IsProgramRealtimeProfilerActive(); }
+
+std::vector<ProgramRealtimeProfilerDeviceCapability> GetProgramRealtimeProfilerDeviceCapabilities() {
+    return tt::GetProgramRealtimeProfilerDeviceCapabilities();
+}
 
 }  // namespace tt::tt_metal::experimental

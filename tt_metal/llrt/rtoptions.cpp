@@ -92,33 +92,34 @@ enum class EnvVarID {
     // ========================================
     // HARDWARE CONFIGURATION
     // ========================================
-    TT_METAL_ENABLE_HW_CACHE_INVALIDATION,     // Enable HW cache invalidation
-    TT_METAL_DISABLE_RELAXED_MEM_ORDERING,     // Disable relaxed memory ordering
-    TT_METAL_ENABLE_GATHERING,                 // Enable instruction gathering
-    TT_METAL_FABRIC_BW_TELEMETRY,              // Enable fabric bandwidth telemetry
-    TT_METAL_FABRIC_TELEMETRY,                 // Enable fabric telemetry
-    TT_FABRIC_PROFILE_RX_CH_FWD,               // Enable fabric RX channel forwarding profiling
-    TT_METAL_ENABLE_CHANNEL_TRIMMING_CAPTURE,  // Enable channel trimming resource usage capture
-    TT_METAL_FABRIC_TRIMMING_PROFILE,          // Path to channel trimming profile YAML for import
-    TT_METAL_FABRIC_TRIMMING_OVERRIDE,         // Path to channel trimming global override YAML
-    TT_METAL_ENABLE_FABRIC_VC2,                // Enable fabric VC2 (neighbour exchange)
-    TT_METAL_ENABLE_FABRIC_MESH_PASS_THROUGH,  // Enable experimental VC1 inter-mesh pass-through
-    TT_METAL_FORCE_REINIT,                     // Force context reinitialization
-    TT_METAL_DISABLE_FABRIC_TWO_ERISC,         // Disable fabric 2-ERISC mode
-    TT_METAL_LOG_KERNELS_COMPILE_COMMANDS,     // Log kernel compilation commands
-    TT_METAL_SLOW_DISPATCH_MODE,               // Use slow dispatch mode
-    TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN,      // Skip Ethernet cores during retrain
-    TT_METAL_VALIDATE_PROGRAM_BINARIES,        // Validate kernel binary integrity
-    TT_METAL_DISABLE_DMA_OPS,                  // Disable DMA operations
-    RELIABILITY_MODE,                          // Fabric reliability mode (strict/relaxed)
-    TT_METAL_DISABLE_MULTI_AERISC,             // Disable multi-erisc mode (inverted logic, enabled by default)
-    TT_METAL_USE_MGD_2_0,                      // Use mesh graph descriptor 2.0
-    TT_METAL_FORCE_JIT_COMPILE,                // Force JIT compilation
-    TT_METAL_DISABLE_SFPLOADMACRO,             // Disable use of SFPLOADMACRO instructions
-    TT_METAL_DRAM_BACKED_CQ,                   // Store command queues in device DRAM
-    TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES,   // Simulator tensor preload bypasses FD CQ copies
+    TT_METAL_ENABLE_HW_CACHE_INVALIDATION,              // Enable HW cache invalidation
+    TT_METAL_DISABLE_RELAXED_MEM_ORDERING,              // Disable relaxed memory ordering
+    TT_METAL_ENABLE_GATHERING,                          // Enable instruction gathering
+    TT_METAL_FABRIC_BW_TELEMETRY,                       // Enable fabric bandwidth telemetry
+    TT_METAL_FABRIC_TELEMETRY,                          // Enable fabric telemetry
+    TT_FABRIC_PROFILE_RX_CH_FWD,                        // Enable fabric RX channel forwarding profiling
+    TT_METAL_ENABLE_CHANNEL_TRIMMING_CAPTURE,           // Enable channel trimming resource usage capture
+    TT_METAL_FABRIC_TRIMMING_PROFILE,                   // Path to channel trimming profile YAML for import
+    TT_METAL_FABRIC_TRIMMING_OVERRIDE,                  // Path to channel trimming global override YAML
+    TT_METAL_ENABLE_FABRIC_VC2,                         // Enable fabric VC2 (neighbour exchange)
+    TT_METAL_ENABLE_FABRIC_MESH_PASS_THROUGH,           // Enable experimental VC1 inter-mesh pass-through
+    TT_METAL_FORCE_REINIT,                              // Force context reinitialization
+    TT_METAL_DISABLE_FABRIC_TWO_ERISC,                  // Disable fabric 2-ERISC mode
+    TT_METAL_LOG_KERNELS_COMPILE_COMMANDS,              // Log kernel compilation commands
+    TT_METAL_SLOW_DISPATCH_MODE,                        // Use slow dispatch mode
+    TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN,               // Skip Ethernet cores during retrain
+    TT_METAL_VALIDATE_PROGRAM_BINARIES,                 // Validate kernel binary integrity
+    TT_METAL_DISABLE_DMA_OPS,                           // Disable DMA operations
+    RELIABILITY_MODE,                                   // Fabric reliability mode (strict/relaxed)
+    TT_METAL_DISABLE_MULTI_AERISC,                      // Disable multi-erisc mode (inverted logic, enabled by default)
+    TT_METAL_USE_MGD_2_0,                               // Use mesh graph descriptor 2.0
+    TT_METAL_FORCE_JIT_COMPILE,                         // Force JIT compilation
+    TT_METAL_DISABLE_SFPLOADMACRO,                      // Disable use of SFPLOADMACRO instructions
+    TT_METAL_DRAM_BACKED_CQ,                            // Store command queues in device DRAM
+    TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES,            // Simulator tensor preload bypasses FD CQ copies
     TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES,  // Override Blackhole DRAM programmable cores
-    TT_METAL_MEASURE_DFB_INIT_TIME,                     // Temporary DFB init rdcycle instrumentation (deprecate once device profiler covers this).
+    TT_METAL_MEASURE_DFB_INIT_TIME,  // Temporary DFB init rdcycle instrumentation (deprecate once device profiler
+                                     // covers this).
 
     // ========================================
     // PROFILING & PERFORMANCE
@@ -140,6 +141,7 @@ enum class EnvVarID {
     TT_METAL_TRACY_MID_RUN_PUSH,                   // Force Tracy mid-run pushes
     TT_METAL_PROFILER_DISABLE_DUMP_TO_FILES,       // Disable dumping collected device data to files
     TT_METAL_PROFILER_DISABLE_PUSH_TO_TRACY,       // Disable pushing collected device data to Tracy GUI
+    TT_METAL_DISABLE_REALTIME_PROFILER,            // Disable the always-on realtime profiler
     TT_METAL_GTEST_NUM_HW_CQS,                     // Number of HW command queues in tests
     TT_METAL_ARC_DEBUG_BUFFER_SIZE,                // ARC processor debug buffer size
     TT_METAL_OPERATION_TIMEOUT_SECONDS,            // Operation timeout duration
@@ -1043,6 +1045,14 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             }
             break;
         }
+
+        // TT_METAL_DISABLE_REALTIME_PROFILER
+        // Latched at MetalContext construction so disabled dispatch has no per-launch checks or device work.
+        // Default: false
+        // Usage: export TT_METAL_DISABLE_REALTIME_PROFILER=1
+        case EnvVarID::TT_METAL_DISABLE_REALTIME_PROFILER:
+            this->realtime_profiler_disabled = is_env_enabled(value);
+            break;
 
         // TT_METAL_NOC_DEBUG_DUMP
         // Enable experimental NOC debug dump mode. In this mode,

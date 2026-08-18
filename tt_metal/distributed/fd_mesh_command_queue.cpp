@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <array>
 #include <functional>
+#include <limits>
 #include <optional>
 #include <type_traits>
 #include <utility>
@@ -492,6 +493,18 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
         // prefetcher cache will be overwritten, reset for next workload
         this->reset_prefetcher_cache_manager();
     }
+    uint8_t profiler_num_workers = 0;
+    if (num_workers > 0 && num_workers <= std::numeric_limits<uint8_t>::max()) {
+        profiler_num_workers = static_cast<uint8_t>(num_workers);
+    } else {
+        log_warning(
+            tt::LogMetal,
+            "Realtime profiler disabled for workload {}: completion contribution {} cannot be encoded in the "
+            "8-bit go-command field",
+            mesh_workload.impl().get_id(),
+            num_workers);
+    }
+
     // Iterate over all programs. Update dispatch commands per program to reflect
     // current device state. Write the finalized program command sequence to each
     // physical device tied to the program.
@@ -513,6 +526,7 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
             dispatch_metadata,
             mesh_workload.impl().get_program_binary_status(mesh_device_id),
             std::pair<bool, int>(unicast_go_signals, num_virtual_eth_cores),
+            profiler_num_workers,
             static_cast<uint8_t>(this->id()));
 
         record_program_sub_device_for_range(mesh_device_, device_range, program.get_runtime_id(), sub_device_id);
@@ -691,15 +705,6 @@ void FDMeshCommandQueue::finish_nolock(ttsl::Span<const SubDeviceId> sub_device_
         return;
     }
 
-    if (tt::IsProgramRealtimeProfilerActive()) {
-        for (const auto& sub_device_id : buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids)) {
-            const uint32_t wait_count = expected_num_workers_completed_[*sub_device_id];
-            for (auto* device : mesh_device_->get_devices()) {
-                write_rt_profiler_flush(id_, sub_device_id, device->sysmem_manager(), wait_count);
-            }
-        }
-    }
-
     auto event = this->enqueue_record_event_to_host_nolock(sub_device_ids);
 
     std::unique_lock<std::mutex> lock(reads_processed_cv_mutex_);
@@ -861,13 +866,9 @@ void FDMeshCommandQueue::increment_num_entries_in_completion_queue() {
 }
 
 void FDMeshCommandQueue::submit_memcpy_request(
-    std::unordered_map<IDevice*, uint32_t>& num_txns_per_device,
-    bool blocking,
-    std::vector<MemoryPin> memory_pins) {
+    std::unordered_map<IDevice*, uint32_t>& num_txns_per_device, bool blocking, std::vector<MemoryPin> memory_pins) {
     completion_queue_reads_.push(std::make_shared<MeshCompletionReaderVariant>(
-        std::in_place_type<MeshBufferReadDescriptor>,
-        std::move(num_txns_per_device),
-        std::move(memory_pins)));
+        std::in_place_type<MeshBufferReadDescriptor>, std::move(num_txns_per_device), std::move(memory_pins)));
 
     this->increment_num_entries_in_completion_queue();
 

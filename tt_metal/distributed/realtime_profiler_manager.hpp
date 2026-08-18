@@ -177,6 +177,7 @@ private:
     ContextId context_id_;
     const DataCollector* data_collector_ = nullptr;
     std::vector<DeviceState> devices_;
+    std::vector<uint32_t> evaluated_chip_ids_;
     std::thread receiver_thread_;
     std::atomic<bool> stop_{false};
     std::atomic<bool> finish_sync_requested_{false};

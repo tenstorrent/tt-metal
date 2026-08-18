@@ -60,8 +60,7 @@ enum CQDispatchCmdId : uint8_t {
     CQ_DISPATCH_SET_GO_SIGNAL_NOC_DATA = 17,
     CQ_DISPATCH_CMD_WRITE_PACKED_LARGE_UNICAST = 18,  // unicast packed large write with uint32_t length
     CQ_DISPATCH_SET_SUB_DEVICE_WORKER_COUNTS = 19,
-    CQ_DISPATCH_CMD_RT_PROFILER_FLUSH = 20,  // dispatch_s: wait on the last program and signal its profiler record
-    CQ_DISPATCH_CMD_MAX_COUNT,               // for checking legal IDs
+    CQ_DISPATCH_CMD_MAX_COUNT,  // for checking legal IDs
 };
 
 enum GoSignalMcastSettings : uint8_t {
@@ -402,7 +401,9 @@ struct CQDispatchGoSignalMcastCmd {
     uint8_t num_unicast_txns;
     uint8_t noc_data_start_index;
     uint32_t wait_count;
-    uint32_t wait_stream;  // Index of the stream to wait on
+    uint8_t wait_stream;  // Index of the stream to wait on
+    uint8_t profiler_num_workers;
+    uint16_t profiler_runtime_id;
 } __attribute__((packed));
 
 struct CQDispatchNotifySubordinateGoSignalCmd {
@@ -410,11 +411,6 @@ struct CQDispatchNotifySubordinateGoSignalCmd {
     uint8_t wait;  // if true, issue a write barrier before sending signal to dispatch_s
     uint16_t index_bitmask;
     uint32_t pad3;
-} __attribute__((packed));
-
-struct CQDispatchRtProfilerFlushCmd {
-    uint32_t wait_count;   // worker completion count to wait on
-    uint32_t wait_stream;  // stream index to wait on
 } __attribute__((packed));
 
 struct CQDispatchSetNumWorkerSemsCmd {
@@ -454,7 +450,6 @@ struct CQDispatchCmd {
         CQDispatchSetNumWorkerSemsCmd set_num_worker_sems;
         CQDispatchSetGoSignalNocDataCmd set_go_signal_noc_data;
         CQDispatchSetSubDeviceWorkerCountsCmd set_sub_device_worker_counts;
-        CQDispatchRtProfilerFlushCmd rt_profiler_flush;
     } __attribute__((packed));
 };
 
@@ -471,6 +466,14 @@ struct CQDispatchCmdLarge {
 
 static_assert(sizeof(CQPrefetchBaseCmd) == sizeof(uint8_t));  // if this fails, padding above needs to be adjusted
 static_assert(sizeof(CQDispatchBaseCmd) == sizeof(uint8_t));  // if this fails, padding above needs to be adjusted
+static_assert(sizeof(CQDispatchGoSignalMcastCmd) == 15);
+static_assert(offsetof(CQDispatchGoSignalMcastCmd, wait_stream) == 11);
+static_assert(offsetof(CQDispatchGoSignalMcastCmd, profiler_num_workers) == 12);
+static_assert(offsetof(CQDispatchGoSignalMcastCmd, profiler_runtime_id) == 13);
+static_assert(
+    offsetof(CQDispatchCmd, mcast) + offsetof(CQDispatchGoSignalMcastCmd, wait_count) == 8,
+    "wait_count and profiler metadata must occupy the final aligned command doubleword");
 static_assert((sizeof(CQPrefetchCmd) & (CQ_DISPATCH_CMD_SIZE - 1)) == 0);
 static_assert((sizeof(CQPrefetchCmdLarge) & (CQ_DISPATCH_CMD_SIZE - 1)) == 0);
 static_assert((sizeof(CQDispatchCmd) & (CQ_DISPATCH_CMD_SIZE - 1)) == 0);
+static_assert(sizeof(CQDispatchCmd) == 16);

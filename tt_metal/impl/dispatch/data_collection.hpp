@@ -32,6 +32,7 @@ using ProgramRealtimeRecord = tt::tt_metal::experimental::ProgramRealtimeRecord;
 using ProgramRealtimeRecordBatch = tt::tt_metal::experimental::ProgramRealtimeRecordBatch;
 using ProgramRealtimeProfilerCallback = tt::tt_metal::experimental::ProgramRealtimeProfilerCallback;
 using ProgramRealtimeProfilerCallbackHandle = tt::tt_metal::experimental::ProgramRealtimeProfilerCallbackHandle;
+using ProgramRealtimeProfilerDeviceCapability = tt::tt_metal::experimental::ProgramRealtimeProfilerDeviceCapability;
 
 /* Record a single dispatch write, to be dumped with stats on program exit. Should only be called once per transaction
  * per program (if a program is enqueued multiple times, don't call this multiple times).
@@ -106,8 +107,6 @@ public:
 // has not produced records yet".
 bool IsProgramRealtimeProfilerActive();
 
-// Internal lifecycle hooks wired by MeshDevice (not for end-user calls).
-void NotifyProgramRealtimeProfilerActivated(uint32_t chip_id);
-void NotifyProgramRealtimeProfilerDeactivated(uint32_t chip_id);
+std::vector<ProgramRealtimeProfilerDeviceCapability> GetProgramRealtimeProfilerDeviceCapabilities();
 
 }  // end namespace tt

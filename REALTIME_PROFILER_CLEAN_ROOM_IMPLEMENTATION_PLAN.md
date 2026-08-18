@@ -4,7 +4,7 @@
 **Target:** Blackhole, single hardware command queue, supported local MMIO dispatch topology
 **Reference implementation:** `335393399b602a7d090c5cd4b3ac7652acbfda0f`
 **Clean baseline:** `5fa57f6d18bdc46e0d623a6f86a1b7d4bfcc547b` (`20e839e1ff9032573690c031751ad58b5e967fed^`), the exact pre-concurrent-profiler state
-**Status:** Milestone 0 approved by Claude Opus; Milestone 1 ready to implement
+**Status:** Milestones 0 and 1 approved by Claude Opus; Milestone 1 device-cycle adjudication approved by the product owner on 2026-08-18
 
 ## 1. Purpose
 
@@ -77,12 +77,17 @@ runtime changes from `20e839e1` are inherited by assumption.
   trace replay, or unsupported dispatch topologies. Trace-captured go commands
   are explicitly marked unprofiled while ordinary commands remain active.
 - This feature intentionally disables the realtime profiler on Wormhole and
-  removes the baseline Wormhole monitor TRISC. No Wormhole compatibility is
-  required; Wormhole program execution must remain correct and must not regress
-  in dispatch throughput. The product owner explicitly approved this support
-  removal for the Blackhole-only profiler work.
+  removes the baseline Wormhole monitor TRISC. The product owner explicitly
+  approved excluding Wormhole compatibility, execution, build, and throughput
+  qualification from this Blackhole-only feature. Shared ABI assertions remain
+  architecture-independent, but Wormhole is not a milestone gate.
 - Reject unsupported configurations explicitly at capability/initialization
   boundaries rather than partially activating the profiler.
+- `TT_METAL_DISABLE_REALTIME_PROFILER=1` is a construction-time diagnostic and
+  performance gate. It reserves no profiler core, creates no reserved-core
+  profiler kernel, compiles TRISC0 observer logic out of the shared compute
+  kernel, and reports `DisabledByEnvironment`. Independent TRISC1 telemetry
+  remains available.
 
 ## 3. Non-goals
 
@@ -115,9 +120,10 @@ No unsupported path may report the profiler as active, create the observer
 kernel, or add profiler work to dispatch/`Finish`.
 
 The realtime profiler becomes inactive on Wormhole for this feature. No
-observer kernel is created or launched there; this intended compatibility break
-is tested for clean shutdown and dispatch-throughput non-regression. The new
-protocol is compiled and activated only for eligible Blackhole configurations.
+observer kernel is intended to be created or launched there. Per explicit
+product-owner direction, Wormhole build, execution, and throughput behavior are
+not qualified by this plan. The new protocol is activated only for eligible
+Blackhole configurations.
 
 Trace replay is not an inactive capability reason because capture can begin
 after initialization. Milestone 1 suppresses descriptors in captured commands
@@ -466,15 +472,23 @@ At minimum, measure:
 - sustained and burst interval throughput before counted loss;
 - per-stream descriptor drop rate at the shortest supported program duration
   with at least two active streams, comparing descriptor depths two and four;
-- compile-time confirmation that Wormhole creates no observer kernel; Wormhole
-  profiler runtime compatibility is intentionally outside scope.
+- source inspection that the observer is created only for eligible Blackhole
+  configurations; no Wormhole build or runtime evidence is required.
 
 Measurement method:
 
-- paired ABBA runs on the same QuietBox and build;
+- all host-throughput arms interleaved in one balanced QuietBox session;
+- each binary launched from its own source working directory with an isolated
+  JIT cache; setting `TT_METAL_HOME` alone is insufficient because kernel
+  lookup prefers the process working directory;
 - warmup separated from measured iterations;
 - at least 30 paired samples for noisy host-facing throughput;
-- device-cycle measurements are primary; host throughput is corroborating data;
+- device-cycle measurements are primary;
+- same-binary and cross-build host throughput are corroborating data for M1;
+  they become gates only where their no-op control demonstrates sufficient
+  resolution;
+- a comment-only rebuild control must demonstrate that any proposed
+  cross-build numeric gate is resolvable before that gate is used;
 - report median, p95, range, and confidence interval;
 - preserve raw output and exact commands.
 
@@ -545,12 +559,23 @@ Deliverables:
 - Add compile-time protocol layout and go-command field validation.
 - Carry runtime program ID and completion contribution in one go-command path.
 - Delete the program-ID FIFO append/pop/storage path as a dispatch deadlock fix.
+- Publish start-only M1 records: preserve the device start timestamp and set
+  the public end timestamp to zero. The inherited observer endpoint is for
+  launch N-1 while the Go-carried runtime ID is for launch N; Milestone 2
+  replaces it before intervals are exposed.
+- Delete the legacy completion observer and its wait-loop timestamp sampling.
+  Only profiled GO commands may capture a timestamp or notify the reserved
+  core; M2 introduces the replacement observer.
 - Latch disabled/unsupported state so it has no per-launch cache or NOC work.
-- Prevent creation or launch of the observer TRISC on Wormhole.
+- Publish activation in dependency order (remote address, then activation
+  release) and latch late D2H-socket failure as terminal-disabled so a
+  precompiled dispatch_s cannot add per-command polling.
+- Keep dispatch telemetry independent of the realtime-profiler gate.
 - Encode trace-captured go commands as unprofiled and prove replay emits zero
   descriptors while ordinary profiling resumes afterward.
-- Add negative tests for multi-CQ, unsupported topology, non-Blackhole, and
-  trace replay.
+- Add Blackhole negative tests for multi-CQ and unsupported topology, plus
+  trace-command suppression and replay-resume coverage. Non-Blackhole hardware
+  qualification is explicitly outside scope.
 - Add a regression with more than 32 profiled programs while dispatch_s is
   stalled on a downstream semaphore; dispatch_d must continue making progress.
 - Revisit the profiler-FIFO coverage exclusion documented near
@@ -560,10 +585,14 @@ Exit criteria:
 
 - There is no profiler-owned loop in go-command dispatch.
 - Unsupported configurations fail before activation and never time out later.
-- Existing supported non-concurrent profiler behavior remains intact.
-- Wormhole creates no observer kernel. Runtime compatibility is intentionally
-  not required for this Blackhole-only feature.
-- Disabled-path hard constraints and numeric budget pass.
+- Existing callback delivery and runtime-ID/source correlation remain intact;
+  M1 explicitly exposes no duration.
+- The legacy observer is absent; M1's TRISC0 image is a stub. Wormhole
+  build/runtime qualification is not required.
+- Disabled GO-tail device cycles do not regress the exact clean baseline;
+  the enabled full GO-tail increment is bounded and reported. Host timing is
+  retained with its no-op resolution control and cannot override the primary
+  device measurement.
 - Claude returns exact `APPROVE`.
 
 ### Milestone 2: Minimal concurrent device path
@@ -647,7 +676,7 @@ Deliverables:
   profiler code.
 - Document the timing error distribution, loss behavior, support matrix,
   firmware/L1 cost, and raw evidence.
-- Verify Wormhole does not create/launch the observer kernel; no Wormhole
+- Inspect the Blackhole-only observer-creation gate; no Wormhole build or
   runtime qualification is required.
 - Obtain final Claude Opus approval of the complete profiler diff and evidence.
 
@@ -688,7 +717,8 @@ claude --dangerously-skip-permissions --model opus --effort high --print \
   ownership, bounded/nonblocking behavior, device-only timing semantics, loss \
   visibility, hot-path cost, tests, and evidence. Check that no model, \
   Wormhole feature support, multi-CQ, D2H tensor fallback, or host-duration \
-  substitution entered scope, and verify Wormhole non-regression. Respond with \
+  substitution entered scope. Wormhole build/runtime qualification is explicitly \
+  excluded by product-owner direction. Respond with \
   exactly APPROVE or CHANGES REQUIRED followed by concrete \
   findings."
 ```

@@ -19,6 +19,11 @@ enum RealtimeProfilerState : uint32_t {
     REALTIME_PROFILER_STATE_TERMINATE = 3,  // Signal to terminate the kernel
 };
 
+// Host-published terminal capability marker. A dispatch_s image can contain the
+// observer path before D2H socket construction succeeds; this value latches the
+// late failure without leaving a per-command activation poll.
+constexpr uint32_t REALTIME_PROFILER_REMOTE_STATE_DISABLED = 0xFFFFFFFF;
+
 struct realtime_profiler_timestamp_t {
     uint32_t time_hi;
     uint32_t time_lo;
@@ -37,7 +42,4 @@ struct realtime_profiler_msg_t {
     struct realtime_profiler_timestamp_t kernel_end_b;
     volatile uint32_t sync_request;
     volatile uint32_t sync_host_timestamp;
-    volatile uint32_t program_id_fifo[32];
-    volatile uint32_t program_id_fifo_start;
-    volatile uint32_t program_id_fifo_end;
 };

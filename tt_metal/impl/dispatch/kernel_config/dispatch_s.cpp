@@ -44,14 +44,13 @@ using namespace tt::tt_metal;
 
 namespace {
 
-// Zeros selected realtime_profiler_msg_t fields on dispatch_s L1 (REALTIME_PROFILER_MSG carve); order matches
-// former cq_dispatch_subordinate kernel_main init (signalling fields before FIFO, then timestamp .id words).
+// Zeros selected realtime_profiler_msg_t fields on dispatch_s L1 (REALTIME_PROFILER_MSG carve). Clear every
+// timestamp word, not only IDs, so the first observer publication cannot expose stale L1 ticks.
 void zero_dispatch_s_realtime_profiler_msg_fields(
     IDevice* device, const CoreCoord& logical_core, tt::CoreType core_type, const Hal& hal, uint32_t msg_base_l1_addr) {
     const auto& factory = hal.get_realtime_profiler_msgs_factory(HalProgrammableCoreType::TENSIX);
     // WriteToDeviceL1(..., vector<uint32_t>&) requires a mutable vector (non-const ref overload).
     std::vector<uint32_t> zero_word = {0u};
-    const uint32_t ts_id_byte_off = offsetof(realtime_profiler_timestamp_t, id);
 
     auto write_u32 = [&](uint32_t addr) {
         tt::tt_metal::detail::WriteToDeviceL1(device, logical_core, addr, zero_word, core_type);
@@ -67,25 +66,18 @@ void zero_dispatch_s_realtime_profiler_msg_fields(
     write_u32(
         base + factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
                    realtime_profiler_msgs::realtime_profiler_msg_t::Field::realtime_profiler_state));
-    write_u32(
-        base + factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
-                   realtime_profiler_msgs::realtime_profiler_msg_t::Field::program_id_fifo_start));
-    write_u32(
-        base + factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
-                   realtime_profiler_msgs::realtime_profiler_msg_t::Field::program_id_fifo_end));
-
     const uint32_t ksa = factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
         realtime_profiler_msgs::realtime_profiler_msg_t::Field::kernel_start_a);
-    const uint32_t kea = factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
-        realtime_profiler_msgs::realtime_profiler_msg_t::Field::kernel_end_a);
-    const uint32_t ksb = factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
-        realtime_profiler_msgs::realtime_profiler_msg_t::Field::kernel_start_b);
     const uint32_t keb = factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
         realtime_profiler_msgs::realtime_profiler_msg_t::Field::kernel_end_b);
-    write_u32(base + ksa + ts_id_byte_off);
-    write_u32(base + kea + ts_id_byte_off);
-    write_u32(base + ksb + ts_id_byte_off);
-    write_u32(base + keb + ts_id_byte_off);
+    constexpr uint32_t timestamp_bytes = 4 * sizeof(realtime_profiler_timestamp_t);
+    static_assert(
+        offsetof(realtime_profiler_msg_t, kernel_end_b) + sizeof(realtime_profiler_timestamp_t) -
+            offsetof(realtime_profiler_msg_t, kernel_start_a) ==
+        timestamp_bytes);
+    TT_ASSERT(keb + sizeof(realtime_profiler_timestamp_t) - ksa == timestamp_bytes);
+    std::vector<uint32_t> zero_timestamps(timestamp_bytes / sizeof(uint32_t), 0u);
+    tt::tt_metal::detail::WriteToDeviceL1(device, logical_core, base + ksa, zero_timestamps, core_type);
 }
 
 }  // namespace
@@ -259,6 +251,9 @@ void DispatchSKernel::CreateKernel() {
         get_control_plane_ref().get_active_ethernet_cores(device_->id(), /*skip_reserved_tunnel_cores*/ true).size();
     bool virtualize_num_eth_cores = num_virtual_active_eth_cores > num_physical_active_eth_cores;
 
+    realtime_profiler_enabled_ =
+        descriptor_.metal_context().get_dispatch_core_manager().evaluate_realtime_profiler_eligibility(device_).enabled;
+
     const auto& compute_grid_size = device_->compute_with_storage_grid_size();
     CoreRange device_worker_cores = CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1});
     auto virtual_start = device_->virtual_core_from_logical_core(device_worker_cores.start_coord, CoreType::WORKER);
@@ -312,6 +307,7 @@ void DispatchSKernel::CreateKernel() {
          std::to_string(device_->get_noc_multicast_encoding(noc_selection_.downstream_noc, virtual_core_range))},
         {"NUM_WORKER_CORES_TO_MCAST", std::to_string(device_worker_cores.size())},
         {"REALTIME_PROFILER_MSG_ADDR", std::to_string(static_config_.realtime_profiler_msg_addr.value())},
+        {"REALTIME_PROFILER_ENABLED", std::to_string(realtime_profiler_enabled_)},
         {"DISPATCH_TELEMETRY_ADDR", std::to_string(static_config_.dispatch_telemetry_addr.value())},
         {"DISPATCH_TELEMETRY_DISABLED", std::to_string(static_config_.dispatch_telemetry_disabled.value_or(false))},
         {"DISPATCH_TELEMETRY_CONTROL_ADDR", std::to_string(static_config_.dispatch_telemetry_control_addr.value())},
@@ -338,12 +334,13 @@ void DispatchSKernel::CreateKernel() {
     };
     configure_kernel_variant(dispatch_kernel_file_names[DISPATCH_S], {}, defines);
 
-    if (GetCoreType() == CoreType::WORKER && device_->arch() != tt::ARCH::QUASAR) {
+    const bool dispatch_telemetry_compute_enabled = !static_config_.dispatch_telemetry_disabled.value_or(false) &&
+                                                    GetCoreType() == CoreType::WORKER &&
+                                                    device_->arch() != tt::ARCH::QUASAR;
+    if (dispatch_telemetry_compute_enabled) {
         const std::string compute_kernel_path = "tt_metal/impl/dispatch/kernels/cq_dispatch_subordinate_compute.cpp";
         std::map<std::string, std::string> compute_defines = {
             {"FIRST_STREAM_INDEX", std::to_string(static_config_.first_stream_used.value())},
-            {"NUM_STREAMS_TO_MONITOR", std::to_string(static_config_.max_num_worker_sems.value())},
-            {"REALTIME_PROFILER_MSG_ADDR", std::to_string(static_config_.realtime_profiler_msg_addr.value())},
             {"DISPATCH_TELEMETRY_ADDR", std::to_string(static_config_.dispatch_telemetry_addr.value())},
             {"DISPATCH_TELEMETRY_DISABLED", std::to_string(static_config_.dispatch_telemetry_disabled.value_or(false))},
             {"TOTAL_SUB_DEVICES", std::to_string(static_config_.max_num_worker_sems.value())},

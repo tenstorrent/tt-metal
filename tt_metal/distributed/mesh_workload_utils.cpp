@@ -90,6 +90,8 @@ void write_go_signal(
                                                                               : CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET,
         send_unicasts ? mesh_device->impl().num_virtual_eth_cores(sub_device_id) : 0,
         mesh_device->impl().noc_data_start_index(sub_device_id, send_unicasts), /* noc_data_start_idx */
+        0,
+        0,
         dispatcher_for_go_signal);
 
     TT_ASSERT(go_signal_cmd_sequence.size_bytes() == go_signal_cmd_sequence.write_offset_bytes());
@@ -100,22 +102,4 @@ void write_go_signal(
     sysmem_manager.fetch_queue_write(cmd_sequence_sizeB, cq_id);
 }
 
-void write_rt_profiler_flush(
-    uint8_t cq_id, SubDeviceId sub_device_id, SystemMemoryManager& sysmem_manager, uint32_t wait_count) {
-    DeviceCommandCalculator calculator;
-    calculator.add_dispatch_rt_profiler_flush();
-    uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
-
-    void* cmd_region = sysmem_manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);
-
-    HugepageDeviceCommand flush_cmd_sequence(cmd_region, cmd_sequence_sizeB);
-    const uint32_t wait_stream = MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(*sub_device_id);
-    flush_cmd_sequence.add_dispatch_rt_profiler_flush(wait_count, wait_stream);
-
-    TT_ASSERT(flush_cmd_sequence.size_bytes() == flush_cmd_sequence.write_offset_bytes());
-
-    sysmem_manager.issue_queue_push_back(cmd_sequence_sizeB, cq_id);
-    sysmem_manager.fetch_queue_reserve_back(cq_id);
-    sysmem_manager.fetch_queue_write(cmd_sequence_sizeB, cq_id);
-}
 }  // namespace tt::tt_metal::distributed

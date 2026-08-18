@@ -48,7 +48,6 @@ struct ProgramDispatchMetadata {
     uint32_t sync_count{};
     uint32_t stall_first{};
     uint32_t stall_before_program{};
-
     struct {
         uint32_t mesh_max_program_kernels_sizeB;
         bool is_cached;
@@ -141,6 +140,7 @@ void update_program_dispatch_commands(
     const ProgramDispatchMetadata& dispatch_md,
     ProgramBinaryStatus program_binary_status,
     std::pair<bool, int> unicast_go_signal_update,
+    uint8_t profiler_num_workers,
     uint8_t cq_id);
 
 void update_traced_program_dispatch_commands(

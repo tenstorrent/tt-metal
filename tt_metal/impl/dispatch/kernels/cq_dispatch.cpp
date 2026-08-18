@@ -131,7 +131,8 @@ volatile tt_l1_ptr tt::tt_metal::dispatch_telemetry_types::DispatchTelemetryCont
 constexpr uint8_t upstream_noc_index = UPSTREAM_NOC_INDEX;
 constexpr uint32_t upstream_noc_xy = uint32_t(NOC_XY_ENCODING(UPSTREAM_NOC_X, UPSTREAM_NOC_Y));
 constexpr uint32_t downstream_noc_xy = uint32_t(NOC_XY_ENCODING(DOWNSTREAM_NOC_X, DOWNSTREAM_NOC_Y));
-constexpr uint32_t dispatch_s_noc_xy = uint32_t(NOC_XY_ENCODING(DOWNSTREAM_SUBORDINATE_NOC_X, DOWNSTREAM_SUBORDINATE_NOC_Y));
+constexpr uint32_t dispatch_s_noc_xy =
+    uint32_t(NOC_XY_ENCODING(DOWNSTREAM_SUBORDINATE_NOC_X, DOWNSTREAM_SUBORDINATE_NOC_Y));
 constexpr uint8_t my_noc_index = NOC_INDEX;
 constexpr uint32_t my_noc_xy = uint32_t(NOC_XY_ENCODING(MY_NOC_X, MY_NOC_Y));
 #if !defined(IS_CQ_DRAM_BACKED) || IS_CQ_DRAM_BACKED == 0
@@ -169,8 +170,7 @@ constexpr uint32_t dispatch_cb_pages_per_block = dispatch_cb_pages / dispatch_cb
 // CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG. Address is supplied by host through
 // the REALTIME_PROFILER_MSG_ADDR compile-time define; the same value is wired into the
 // co-located cq_dispatch_subordinate kernel and the reserved RT-profiler tensix core, so
-// all three view the same physical L1. The embedded program_id_fifo is the BRISC
-// (producer) / dispatch_s NCRISC (consumer) handoff.
+// all three view the same physical L1.
 volatile tt_l1_ptr realtime_profiler_msg_t* rt_profiler_msg =
     reinterpret_cast<volatile tt_l1_ptr realtime_profiler_msg_t*>(REALTIME_PROFILER_MSG_ADDR);
 
@@ -1429,12 +1429,6 @@ re_run_command:
                     dispatch_telemetry_base)
                     ->program_count = ++program_counter;
             }
-            if (rt_profiler_msg->realtime_profiler_core_noc_xy != 0 &&
-                cmd->set_write_offset.program_host_id != REALTIME_PROFILER_UNPROFILED_PROGRAM_HOST_ID) {
-                while (!program_id_fifo_append(rt_profiler_msg, cmd->set_write_offset.program_host_id)) {
-                    invalidate_l1_cache();
-                }
-            }
             uint32_t offset_count = cmd->set_write_offset.offset_count;
 
             ASSERT(offset_count <= std::size(write_offset));
@@ -1540,8 +1534,7 @@ FORCE_INLINE NocCounterSnapshot snapshot_dispatch_d_noc_counters() {
         .nonposted_writes_num_issued = noc_nonposted_writes_num_issued[noc_index],
         .nonposted_writes_acked = noc_nonposted_writes_acked[noc_index],
         .nonposted_atomics_acked = noc_nonposted_atomics_acked[noc_index],
-        .posted_writes_num_issued = noc_posted_writes_num_issued[noc_index]
-    };
+        .posted_writes_num_issued = noc_posted_writes_num_issued[noc_index]};
 }
 
 // dispatch_d writes to the NOC1 core, but dispatch_s holds dedicated noc status on it. L1 noc counters
@@ -1572,8 +1565,7 @@ void publish_dispatch_d_noc_count(const NocCounterSnapshot& snapshot) {
         upstream_noc_index, nonposted_writes_acked_delta);
     set_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_ATOMICS_ACKED>(
         upstream_noc_index, nonposted_atomics_acked_delta);
-    set_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(
-        upstream_noc_index, posted_writes_delta);
+    set_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(upstream_noc_index, posted_writes_delta);
 
     Semaphore<programmable_core_type>(dispatch_d_shutdown_sem_id).set(1);
 }
@@ -1617,13 +1609,6 @@ void kernel_main() {
     }
 
     uint32_t l1_cache[l1_cache_elements_rounded];
-
-    // Reset RT profiler mailbox fields on every dispatch core startup.
-    // L1 is not guaranteed to be zero-initialized, and stale values here can
-    // incorrectly enable RT profiler paths when host-side RT setup is skipped.
-    rt_profiler_msg->realtime_profiler_core_noc_xy = 0;
-    rt_profiler_msg->realtime_profiler_remote_state_addr = 0;
-    rt_profiler_msg->realtime_profiler_state = REALTIME_PROFILER_STATE_IDLE;
 
     dispatch_cb_reader.init();
     cmd_ptr = dispatch_cb_base;

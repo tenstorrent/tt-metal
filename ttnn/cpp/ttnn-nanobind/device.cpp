@@ -157,6 +157,63 @@ void py_device_module_types(nb::module_& m_device) {
 
     nb::class_<SubDeviceManagerId>(m_device, "SubDeviceManagerId", "ID of a sub-device manager.");
 
+    nb::enum_<tt::tt_metal::experimental::ProgramRealtimeProfilerInactiveReason>(
+        m_device, "ProgramRealtimeProfilerInactiveReason", "Reason a device's real-time profiler is inactive.")
+        .value("NONE", tt::tt_metal::experimental::ProgramRealtimeProfilerInactiveReason::None)
+        .value("NotInitialized", tt::tt_metal::experimental::ProgramRealtimeProfilerInactiveReason::NotInitialized)
+        .value(
+            "DisabledByEnvironment",
+            tt::tt_metal::experimental::ProgramRealtimeProfilerInactiveReason::DisabledByEnvironment)
+        .value(
+            "UnsupportedArchitecture",
+            tt::tt_metal::experimental::ProgramRealtimeProfilerInactiveReason::UnsupportedArchitecture)
+        .value(
+            "MultipleHardwareCommandQueues",
+            tt::tt_metal::experimental::ProgramRealtimeProfilerInactiveReason::MultipleHardwareCommandQueues)
+        .value("NonMmioDevice", tt::tt_metal::experimental::ProgramRealtimeProfilerInactiveReason::NonMmioDevice)
+        .value("IommuUnavailable", tt::tt_metal::experimental::ProgramRealtimeProfilerInactiveReason::IommuUnavailable)
+        .value(
+            "NonWorkerDispatch", tt::tt_metal::experimental::ProgramRealtimeProfilerInactiveReason::NonWorkerDispatch)
+        .value(
+            "DistributedDispatcher",
+            tt::tt_metal::experimental::ProgramRealtimeProfilerInactiveReason::DistributedDispatcher)
+        .value(
+            "VirtualizedUnicast", tt::tt_metal::experimental::ProgramRealtimeProfilerInactiveReason::VirtualizedUnicast)
+        .value(
+            "NoReservedProfilerCore",
+            tt::tt_metal::experimental::ProgramRealtimeProfilerInactiveReason::NoReservedProfilerCore)
+        .value("InsufficientL1", tt::tt_metal::experimental::ProgramRealtimeProfilerInactiveReason::InsufficientL1)
+        .value("KernelsNullified", tt::tt_metal::experimental::ProgramRealtimeProfilerInactiveReason::KernelsNullified)
+        .value(
+            "SocketInitializationFailed",
+            tt::tt_metal::experimental::ProgramRealtimeProfilerInactiveReason::SocketInitializationFailed);
+
+    nb::class_<tt::tt_metal::experimental::ProgramRealtimeProfilerLossCounts>(
+        m_device, "ProgramRealtimeProfilerLossCounts", "Cumulative device and transport loss counters.")
+        .def_ro("descriptor_full", &tt::tt_metal::experimental::ProgramRealtimeProfilerLossCounts::descriptor_full)
+        .def_ro(
+            "unsupported_launch", &tt::tt_metal::experimental::ProgramRealtimeProfilerLossCounts::unsupported_launch)
+        .def_ro("reset_descriptor", &tt::tt_metal::experimental::ProgramRealtimeProfilerLossCounts::reset_descriptor)
+        .def_ro(
+            "observer_coalesced", &tt::tt_metal::experimental::ProgramRealtimeProfilerLossCounts::observer_coalesced)
+        .def_ro("stuck_head", &tt::tt_metal::experimental::ProgramRealtimeProfilerLossCounts::stuck_head)
+        .def_ro("completed_record", &tt::tt_metal::experimental::ProgramRealtimeProfilerLossCounts::completed_record)
+        .def_ro(
+            "terminal_descriptor", &tt::tt_metal::experimental::ProgramRealtimeProfilerLossCounts::terminal_descriptor)
+        .def_ro("terminal_record", &tt::tt_metal::experimental::ProgramRealtimeProfilerLossCounts::terminal_record)
+        .def_ro(
+            "observer_stop_timeout",
+            &tt::tt_metal::experimental::ProgramRealtimeProfilerLossCounts::observer_stop_timeout)
+        .def_ro("device_ring", &tt::tt_metal::experimental::ProgramRealtimeProfilerLossCounts::device_ring);
+
+    nb::class_<tt::tt_metal::experimental::ProgramRealtimeProfilerDeviceCapability>(
+        m_device, "ProgramRealtimeProfilerDeviceCapability", "Real-time profiler status for one device.")
+        .def_ro("chip_id", &tt::tt_metal::experimental::ProgramRealtimeProfilerDeviceCapability::chip_id)
+        .def_ro("active", &tt::tt_metal::experimental::ProgramRealtimeProfilerDeviceCapability::active)
+        .def_ro(
+            "inactive_reason", &tt::tt_metal::experimental::ProgramRealtimeProfilerDeviceCapability::inactive_reason)
+        .def_ro("loss", &tt::tt_metal::experimental::ProgramRealtimeProfilerDeviceCapability::loss);
+
     nb::class_<tt::tt_metal::experimental::ProgramRealtimeRecord>(
         m_device, "ProgramRealtimeRecord", "Record containing real-time profiler data from a device.")
         .def_ro("runtime_id", &tt::tt_metal::experimental::ProgramRealtimeRecord::runtime_id, "Runtime ID")
@@ -800,6 +857,18 @@ void device_module(nb::module_& m_device) {
                 >>> mesh_device = ttnn.open_mesh_device(...)
                 >>> if not ttnn.device.IsProgramRealtimeProfilerActive():
                 ...     pytest.skip("Real-time profiler not active on this configuration")
+        )doc");
+
+    m_device.def(
+        "GetProgramRealtimeProfilerDeviceCapabilities",
+        []() { return tt::tt_metal::experimental::GetProgramRealtimeProfilerDeviceCapabilities(); },
+        R"doc(
+            Return the real-time profiler capability snapshot for every evaluated open device.
+
+            Each entry reports whether the device is active, the precise inactive reason,
+            and cumulative loss counters. Milestone 1 leaves the frozen loss-counter shape
+            zeroed; the concurrent descriptor transport populates it in Milestone 2. The
+            result is ordered by chip ID.
         )doc");
 }
 

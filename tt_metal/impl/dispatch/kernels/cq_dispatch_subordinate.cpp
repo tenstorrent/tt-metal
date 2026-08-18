@@ -143,7 +143,7 @@ constexpr uintptr_t cb_end = cb_base + cb_size;
 // Dispatch-core-local L1 region assigned by DispatchMemMap via
 // CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG. Address comes from host through the
 // REALTIME_PROFILER_MSG_ADDR compile-time define. See cq_dispatch.cpp for the full mailbox
-// description; this kernel is the consumer side of the embedded program_id_fifo.
+// description.
 volatile tt_l1_ptr realtime_profiler_msg_t* rt_profiler_msg =
     reinterpret_cast<volatile tt_l1_ptr realtime_profiler_msg_t*>(REALTIME_PROFILER_MSG_ADDR);
 
@@ -269,9 +269,6 @@ void wait_for_workers(uint32_t wait_count, uint32_t wait_stream) {
 #else
     while (stream_wrap_gt(wait_count, *worker_sem)) {
 #endif
-        if (rt_profiler_enabled) {
-            record_realtime_timestamp(rt_profiler_msg, false);
-        }
 #if DEVICE_PRINT_DISPATCH_ENABLED
         device_print_dispatcher.execute();
 #endif
@@ -330,12 +327,13 @@ FORCE_INLINE void cb_release_pages_dispatch_s(uint32_t n) {
 #ifdef ARCH_QUASAR
     Semaphore<programmable_core_type>(sem_id).up(n);
 #else
-    dispatch_s_noc_semaphore_inc(get_noc_addr_helper(noc_xy, get_semaphore<programmable_core_type>(sem_id)), n, my_noc_index);
+    dispatch_s_noc_semaphore_inc(
+        get_noc_addr_helper(noc_xy, get_semaphore<programmable_core_type>(sem_id)), n, my_noc_index);
 #endif
 }
 
 FORCE_INLINE
-void process_go_signal_mcast_cmd() {
+void process_go_signal_mcast_cmd([[maybe_unused]] bool record_profiler_start) {
     volatile CQDispatchCmd tt_l1_ptr* cmd = uncached_l1_ptr<CQDispatchCmd>(cmd_ptr);
     uint32_t sync_index = cmd->mcast.wait_stream - first_stream_used;
     // Get semaphore that will be update by dispatch_d, signalling that it's safe to send a go signal
@@ -407,6 +405,13 @@ void process_go_signal_mcast_cmd() {
 #if !DEVICE_PRINT_DISPATCH_ENABLED
         wait_for_workers(wait_count, wait_stream);
 #endif
+#if REALTIME_PROFILER_ENABLED
+        if (record_profiler_start) {
+            // The public start tick excludes the prior same-stream worker wait and is sampled immediately before
+            // the first go-signal NOC write. This local timestamp store does not touch the prepared NOC command state.
+            record_realtime_timestamp(rt_profiler_msg, true);
+        }
+#endif
         cq_noc_async_write_with_state<CQ_NOC_sndl, CQ_NOC_wait>(0, 0, 0, num_dests);
         noc_increment_nonposted_writes_issued(noc_index, 1);
     } else {
@@ -438,6 +443,12 @@ void process_go_signal_mcast_cmd() {
         }
     }
 
+#if REALTIME_PROFILER_ENABLED
+    if (multicast_go_offset == CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET && record_profiler_start) {
+        // Unicast-only launches use the same post-wait boundary immediately before their first go-signal write.
+        record_realtime_timestamp(rt_profiler_msg, true);
+    }
+#endif
     for (uint32_t i = 0; i < num_unicasts; ++i) {
         uint64_t dst = get_noc_addr_helper(go_signal_noc_data[go_signal_noc_data_idx++], unicast_go_signal_addr);
         noc_async_write_one_packet(
@@ -532,8 +543,8 @@ void merge_dispatch_d_noc_counter_deltas() {
 
     constexpr auto dispatch_d_proc_type = static_cast<decltype(proc_type)>(TensixProcessorTypes::DM0);
 
-    volatile tt_l1_ptr uint32_t* shutdown_sem_addr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<programmable_core_type>(dispatch_d_shutdown_sem_id));
+    volatile tt_l1_ptr uint32_t* shutdown_sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+        get_semaphore<programmable_core_type>(dispatch_d_shutdown_sem_id));
     noc_semaphore_wait(shutdown_sem_addr, 1);
 
     invalidate_l1_cache();
@@ -583,11 +594,13 @@ void kernel_main() {
         }
     }
 
-    // realtime_profiler_msg_t signalling + FIFO + kernel_* .id fields are zeroed on the host in
-    // DispatchSKernel::ConfigureCore() before CQ kernels launch.
+    // The shared realtime-profiler mailbox is zeroed by DispatchSKernel::ConfigureCore before CQ kernels launch.
 
     cmd_ptr = cb_base;
     bool done = false;
+#if REALTIME_PROFILER_ENABLED
+    bool rt_profiler_activation_resolved = false;
+#endif
     uint32_t total_pages_acquired = 0;
 #if DEVICE_PRINT_DISPATCH_ENABLED
     device_print_dispatcher.init(
@@ -607,12 +620,14 @@ void kernel_main() {
 #endif
     while (!done) {
         DeviceZoneScopedN("CQ-DISPATCH-SUBORDINATE");
-        rt_profiler_enabled = (rt_profiler_msg->realtime_profiler_core_noc_xy != 0);
-        uint32_t popped_pid = 0;
-        if (rt_profiler_enabled) {
-            record_realtime_timestamp(rt_profiler_msg, true);
-            popped_pid = pop_program_id(rt_profiler_msg);
+#if REALTIME_PROFILER_ENABLED
+        if (!rt_profiler_activation_resolved) {
+            rt_profiler_enabled = (rt_profiler_msg->realtime_profiler_core_noc_xy != 0);
+            rt_profiler_activation_resolved =
+                rt_profiler_enabled ||
+                rt_profiler_msg->realtime_profiler_remote_state_addr == REALTIME_PROFILER_REMOTE_STATE_DISABLED;
         }
+#endif
 #if DEVICE_PRINT_DISPATCH_ENABLED
         device_print_dispatcher.execute();
 #endif
@@ -620,17 +635,34 @@ void kernel_main() {
 
         volatile CQDispatchCmd tt_l1_ptr* cmd = uncached_l1_ptr<CQDispatchCmd>(cmd_ptr);
         DeviceTimestampedData("process_cmd_d_dispatch_subordinate", (uint32_t)cmd->base.cmd_id);
-        if (rt_profiler_enabled) {
-            const bool is_profiled_cmd = cmd->base.cmd_id == CQ_DISPATCH_CMD_SEND_GO_SIGNAL ||
-                                         cmd->base.cmd_id == CQ_DISPATCH_CMD_RT_PROFILER_FLUSH;
-            write_buffer_id(
-                rt_profiler_msg,
-                is_profiled_cmd ? popped_pid : static_cast<uint32_t>(REALTIME_PROFILER_UNPROFILED_PROGRAM_HOST_ID));
+#if REALTIME_PROFILER_ENABLED
+        uint32_t profiler_runtime_id = REALTIME_PROFILER_UNPROFILED_PROGRAM_HOST_ID;
+        bool record_profiler_start = false;
+        // Activation can complete while dispatch_s is parked waiting for its first command. The steady-state
+        // path keeps the single pre-acquire mailbox read; only the unresolved first-command race invalidates and
+        // resamples the host-owned activation fields. A late socket failure publishes a permanent disabled marker.
+        if (!rt_profiler_activation_resolved) {
+            invalidate_l1_cache();
+            rt_profiler_enabled = (rt_profiler_msg->realtime_profiler_core_noc_xy != 0);
+            rt_profiler_activation_resolved =
+                rt_profiler_enabled ||
+                rt_profiler_msg->realtime_profiler_remote_state_addr == REALTIME_PROFILER_REMOTE_STATE_DISABLED;
         }
+        if (rt_profiler_enabled) {
+            const bool is_profiled_cmd = cmd->base.cmd_id == CQ_DISPATCH_CMD_SEND_GO_SIGNAL;
+            profiler_runtime_id =
+                is_profiled_cmd ? cmd->mcast.profiler_runtime_id : REALTIME_PROFILER_UNPROFILED_PROGRAM_HOST_ID;
+            record_profiler_start = profiler_runtime_id != REALTIME_PROFILER_UNPROFILED_PROGRAM_HOST_ID;
+        }
+#endif
         switch (cmd->base.cmd_id) {
             case CQ_DISPATCH_CMD_SEND_GO_SIGNAL:
                 DPRINT("CQ_DISPATCH_CMD_SEND_GO_SIGNAL\n");
-                process_go_signal_mcast_cmd();
+#if REALTIME_PROFILER_ENABLED
+                process_go_signal_mcast_cmd(record_profiler_start);
+#else
+                process_go_signal_mcast_cmd(false);
+#endif
                 break;
             case CQ_DISPATCH_SET_NUM_WORKER_SEMS:
                 DPRINT("CQ_DISPATCH_SET_NUM_WORKER_SEMS\n");
@@ -652,14 +684,12 @@ void kernel_main() {
                 DPRINT("CQ_DISPATCH_CMD_WAIT\n");
                 process_dispatch_s_wait_cmd();
                 break;
-            case CQ_DISPATCH_CMD_RT_PROFILER_FLUSH:
-                DPRINT("CQ_DISPATCH_CMD_RT_PROFILER_FLUSH\n");
-                wait_for_workers(cmd->rt_profiler_flush.wait_count, cmd->rt_profiler_flush.wait_stream);
-                cmd_ptr += sizeof(CQDispatchCmd);
-                break;
-            case CQ_DISPATCH_CMD_TERMINATE:
-                DPRINT("CQ_DISPATCH_CMD_TERMINATE\n");
+            case CQ_DISPATCH_CMD_TERMINATE: DPRINT("CQ_DISPATCH_CMD_TERMINATE\n");
+#if REALTIME_PROFILER_ENABLED
                 if (rt_profiler_enabled) {
+                    // Terminate publishes inside this switch arm. Clear the current ID before making that buffer
+                    // visible; the ordinary post-switch store stays late so GO delivery overlaps its L1 write.
+                    write_buffer_id(rt_profiler_msg, REALTIME_PROFILER_UNPROFILED_PROGRAM_HOST_ID);
                     signal_realtime_profiler_and_switch(rt_profiler_msg);
                     noc_async_writes_flushed();
                     for (volatile uint32_t delay = 0; delay < 5000; delay++) {
@@ -674,6 +704,7 @@ void kernel_main() {
                     dispatch_s_noc_inline_dw_write(
                         realtime_profiler_terminate_addr, REALTIME_PROFILER_STATE_TERMINATE, my_noc_index);
                 }
+#endif
                 if constexpr (telemetry_enabled) {
                     dispatch_telemetry_control->compute_terminate = 1;
                 }
@@ -681,6 +712,13 @@ void kernel_main() {
                 break;
             default: DPRINT("dispatcher_s invalid command\n"); ASSERT(0);
         }
+#if REALTIME_PROFILER_ENABLED
+        if (!done && rt_profiler_enabled && profiler_runtime_id != REALTIME_PROFILER_UNPROFILED_PROGRAM_HOST_ID) {
+            // Keep ID publication after go delivery so its L1 writes overlap worker execution, but before the
+            // profiler state notification that lets the reserved core consume this record.
+            write_buffer_id(rt_profiler_msg, profiler_runtime_id);
+        }
+#endif
         // Dispatch s only supports single page commands for now
         ASSERT(cmd_ptr <= (l1_cached_addr(reinterpret_cast<uintptr_t>(cmd)) + cb_page_size));
         cmd_ptr = round_up_pow2(cmd_ptr, cb_page_size);
@@ -692,9 +730,11 @@ void kernel_main() {
         }
         total_pages_acquired++;
 
-        if (!done && rt_profiler_enabled) {
+#if REALTIME_PROFILER_ENABLED
+        if (!done && rt_profiler_enabled && profiler_runtime_id != REALTIME_PROFILER_UNPROFILED_PROGRAM_HOST_ID) {
             signal_realtime_profiler_and_switch(rt_profiler_msg);
         }
+#endif
     }
     // Confirm expected number of pages, spinning here is a leak
     cb_wait_all_pages<my_dispatch_cb_sem_id>(total_pages_acquired);

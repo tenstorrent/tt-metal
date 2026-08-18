@@ -27,8 +27,7 @@ struct dispatch_s_static_config_t {
     std::optional<uint32_t> max_num_worker_sems;
     std::optional<uint32_t> max_num_go_signal_noc_data_entries;
 
-    // Dispatch-core-local L1 address of the realtime_profiler_msg_t block (includes the
-    // program-id handoff FIFO consumed by this kernel). Assigned by DispatchMemMap via
+    // Dispatch-core-local L1 address of the realtime_profiler_msg_t block. Assigned by DispatchMemMap via
     // CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG. Must match the value passed to the
     // co-located DispatchKernel and to the RT-profiler core kernels.
     std::optional<uint32_t> realtime_profiler_msg_addr;
@@ -84,6 +83,7 @@ public:
 private:
     dispatch_s_static_config_t static_config_;
     dispatch_s_dependent_config_t dependent_config_;
+    bool realtime_profiler_enabled_ = false;
 };
 
 }  // namespace tt::tt_metal

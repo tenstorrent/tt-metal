@@ -2,6 +2,11 @@
 
 This document describes how the **dispatch core** (dispatch_s), **real-time profiler core**, and **host** interact to stream program execution timestamps and metadata to the host for profiling (e.g. Tracy).
 
+Milestone 1 of the Blackhole clean-room protocol publishes a correctly
+identified device **start tick only**. Public records have `end_timestamp == 0`,
+so Tracy deliberately emits no duration zone until Milestone 2 adds the
+completion-gated endpoint. Trace-replay commands are unprofiled.
+
 ---
 
 ## 1. High-Level Architecture
@@ -54,14 +59,13 @@ This document describes how the **dispatch core** (dispatch_s), **real-time prof
 |   |                                                                     |   |
 |   |   L1 carve-out realtime_profiler_msg_t:                              |   |
 |   |     Ping-pong: kernel_start_a/b, kernel_end_a/b                     |   |
-|   |     program_id_fifo, realtime_profiler_core_noc_xy,                 |   |
+|   |     runtime ID slot, realtime_profiler_core_noc_xy,                 |   |
 |   |     realtime_profiler_remote_state_addr                             |   |
 |   |                                                                     |   |
-|   |   Per-command: record start ts, FIFO program id, process cmd,       |   |
-|   |     record end ts, signal_realtime_profiler_and_switch()            |   |
-|   |     ... process command ...                                         |   |
-|   |     record_realtime_timestamp(false); signal_realtime_profiler_and_ |   |
-|   |     switch();  (NOC-write state to profiler core)                   |   |
+|   |   Per profiled GO: wait for prior same-stream workers, record       |   |
+|   |     start ts immediately before the first go-signal write, issue    |   |
+|   |     GO, publish the command-carried runtime ID, then signal the      |   |
+|   |     profiler core. No completion timestamp is published in M1.      |   |
 |   +---------------------------------------------------------------------+   |
 +-----------------------------------------------------------------------------+
 ```
@@ -75,23 +79,23 @@ This document describes how the **dispatch core** (dispatch_s), **real-time prof
   (dispatch_s)               (cq_realtime_profiler)               (receiver thread)
 
        |                              |                                  |
-       | 1. Record start ts,          |                                  |
-       |    program_id into           |                                  |
-       |    mailbox buf A or B        |                                  |
-       | 2. Process command           |                                  |
-       | 3. Record end ts             |                                  |
-       | 4. Update state PUSH_A/B     |                                  |
-       | 5. NOC write state --------> |                                  |
-       |                              | 6. See state PUSH_A or PUSH_B    |
-       |                              | 7. NOC read timestamp data       |
+       | 1. Wait for prior workers    |                                  |
+       | 2. Record device start ts    |                                  |
+       | 3. Issue GO                  |                                  |
+       | 4. Publish runtime ID        |                                  |
+       | 5. Update state PUSH_A/B     |                                  |
+       | 6. NOC write state --------> |                                  |
+       |                              | 7. See state PUSH_A or PUSH_B    |
+       |                              | 8. NOC read timestamp data       |
        | <----------------------------|    from dispatch_s L1 (buf A/B)  |
-       |                              | 8. Push page to D2H socket       |
+       |                              | 9. Push page to D2H socket       |
        |                              |    (PCIe write to host buffer)   |
-       |                              | -------------------------------> | 9. wait_for_pages
-       |                              |                                  |    get_read_ptr
-       |                              |                                  | 10. Parse start/end ts,
-       |                              |                                  |     program_id
-       |                              |                                  | 11. InvokeProgramRealtime
+       |                              | -------------------------------> | 10. wait_for_pages
+       |                              |                                  |     get_read_ptr
+       |                              |                                  | 11. Parse start ts and
+       |                              |                                  |     runtime ID; set public
+       |                              |                                  |     end timestamp to zero
+       |                              |                                  | 12. InvokeProgramRealtime
        |                              |                                  |     Callbacks(record)
        |                              | <------------------------------- | pop_pages, notify_sender
 ```
@@ -129,7 +133,7 @@ Host and device timestamps are aligned so that Tracy (or other consumers) can re
 
 | Location | Contents (`realtime_profiler_msg_t`) |
 |----------|----------------------------------------|
-| **Dispatch_s L1** | Ping-pong buffers, program_id_fifo, **realtime_profiler_core_noc_xy**, **realtime_profiler_remote_state_addr**, realtime_profiler_state. Host writes NOC XY and the profiler tensix L1 address of `realtime_profiler_state` for NOC signaling. |
+| **Dispatch_s L1** | Ping-pong timestamp/runtime-ID buffers, **realtime_profiler_core_noc_xy**, **realtime_profiler_remote_state_addr**, realtime_profiler_state. There is no program-ID FIFO. Host writes the remote state address before publishing the nonzero NOC XY activation release. |
 | **Profiler tensix L1** | **config_buffer_addr**, **realtime_profiler_state**, sync_request, sync_host_timestamp. |
 
 Layout: `tt_metal/hw/inc/hostdev/realtime_profiler_msgs.h`. HAL: `tt::tt_metal::realtime_profiler_msgs`. Not in `mailboxes_t`.

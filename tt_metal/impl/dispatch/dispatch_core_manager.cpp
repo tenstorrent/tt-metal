@@ -11,6 +11,9 @@
 #include <unordered_set>
 
 #include <tt_stl/assert.hpp>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/tt_align.hpp>
 #include "context/metal_env_accessor.hpp"
 #include "core_coord.hpp"
 #include "core_descriptor.hpp"
@@ -20,7 +23,10 @@
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <internal/service/service_core_manager.hpp>
 #include "impl/dispatch/dispatch_engine_cores.hpp"
+#include "impl/dispatch/dispatch_query_manager.hpp"
+#include "impl/dispatch/kernels/realtime_profiler_ring_buffer.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/device/device_manager.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include <llrt/tt_cluster.hpp>
 
@@ -237,6 +243,94 @@ std::optional<tt_cxy_pair> dispatch_core_manager::get_reserved_realtime_profiler
     return it->second;
 }
 
+RealtimeProfilerEligibility dispatch_core_manager::evaluate_realtime_profiler_eligibility(IDevice* device) {
+    const ChipId device_id = device->id();
+    {
+        std::lock_guard<std::mutex> lock(realtime_profiler_eligibility_mutex_);
+        if (const auto it = realtime_profiler_eligibility_by_device_.find(device_id);
+            it != realtime_profiler_eligibility_by_device_.end()) {
+            return it->second;
+        }
+    }
+
+    RealtimeProfilerEligibility eligibility = [&]() -> RealtimeProfilerEligibility {
+        const auto& hal = ctx_.hal();
+        const auto& cluster = ctx_.get_cluster();
+
+        if (ctx_.rtoptions().get_realtime_profiler_disabled()) {
+            return {.inactive_reason = experimental::ProgramRealtimeProfilerInactiveReason::DisabledByEnvironment};
+        }
+        if (hal.get_arch() != tt::ARCH::BLACKHOLE) {
+            return {.inactive_reason = experimental::ProgramRealtimeProfilerInactiveReason::UnsupportedArchitecture};
+        }
+        if (device->num_hw_cqs() != 1) {
+            return {
+                .inactive_reason = experimental::ProgramRealtimeProfilerInactiveReason::MultipleHardwareCommandQueues};
+        }
+        if (get_dispatch_core_type() != CoreType::WORKER) {
+            return {.inactive_reason = experimental::ProgramRealtimeProfilerInactiveReason::NonWorkerDispatch};
+        }
+        if (ctx_.get_dispatch_query_manager().distributed_dispatcher()) {
+            return {.inactive_reason = experimental::ProgramRealtimeProfilerInactiveReason::DistributedDispatcher};
+        }
+
+        const uint16_t channel = cluster.get_assigned_channel_for_device(device_id);
+        if (!is_dispatcher_core_allocated(device_id, channel, 0) ||
+            !is_dispatcher_s_core_allocated(device_id, channel, 0) ||
+            dispatcher_core(device_id, channel, 0) != dispatcher_s_core(device_id, channel, 0)) {
+            return {.inactive_reason = experimental::ProgramRealtimeProfilerInactiveReason::NonWorkerDispatch};
+        }
+
+        const size_t max_active_eth_cores = ctx_.device_manager()->get_max_num_eth_cores_across_all_devices();
+        if (ctx_.get_control_plane().get_active_ethernet_cores(device_id, /*skip_reserved_cores=*/true).size() <
+            max_active_eth_cores) {
+            return {.inactive_reason = experimental::ProgramRealtimeProfilerInactiveReason::VirtualizedUnicast};
+        }
+        if (cluster.is_mock_or_emulated() || cluster.get_target_device_type() == tt::TargetDevice::Simulator) {
+            return {.inactive_reason = experimental::ProgramRealtimeProfilerInactiveReason::UnsupportedArchitecture};
+        }
+        if (!device->is_mmio_capable()) {
+            return {.inactive_reason = experimental::ProgramRealtimeProfilerInactiveReason::NonMmioDevice};
+        }
+        if (hal.get_supports_64_bit_pcie_addressing() && !cluster.is_iommu_enabled()) {
+            return {.inactive_reason = experimental::ProgramRealtimeProfilerInactiveReason::IommuUnavailable};
+        }
+        if (ctx_.get_fabric_tensix_config() != tt_fabric::FabricTensixConfig::DISABLED) {
+            return {.inactive_reason = experimental::ProgramRealtimeProfilerInactiveReason::NoReservedProfilerCore};
+        }
+
+        const std::optional<tt_cxy_pair> reserved = get_reserved_realtime_profiler_core(device_id);
+        if (!reserved.has_value()) {
+            return {.inactive_reason = experimental::ProgramRealtimeProfilerInactiveReason::NoReservedProfilerCore};
+        }
+        const CoreCoord core(reserved->x, reserved->y);
+        const CoreCoord tensix_grid = cluster.get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
+        if (core.x >= tensix_grid.x || core.y >= tensix_grid.y) {
+            return {.inactive_reason = experimental::ProgramRealtimeProfilerInactiveReason::NoReservedProfilerCore};
+        }
+        if (ctx_.rtoptions().get_kernels_nullified()) {
+            return {.inactive_reason = experimental::ProgramRealtimeProfilerInactiveReason::KernelsNullified};
+        }
+
+        const uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
+        const uint32_t required_l1 = tt::align(sizeof(RealtimeProfilerCoreL1), l1_alignment);
+        if (device->allocator()->get_bank_size(BufferType::L1) < required_l1) {
+            return {.inactive_reason = experimental::ProgramRealtimeProfilerInactiveReason::InsufficientL1};
+        }
+
+        return {
+            .enabled = true,
+            .core = core,
+            .inactive_reason = experimental::ProgramRealtimeProfilerInactiveReason::None,
+        };
+    }();
+    {
+        std::lock_guard<std::mutex> lock(realtime_profiler_eligibility_mutex_);
+        const auto [it, inserted] = realtime_profiler_eligibility_by_device_.emplace(device_id, eligibility);
+        return it->second;
+    }
+}
+
 // private methods
 
 dispatch_core_manager::dispatch_core_manager(
@@ -250,6 +344,10 @@ void dispatch_core_manager::reset_dispatch_core_manager(
     std::lock_guard<std::mutex> lock(this->dispatch_core_assignments_mutex);
     this->dispatch_core_assignments.clear();
     this->available_dispatch_cores_by_device.clear();
+    {
+        std::lock_guard<std::mutex> eligibility_lock(this->realtime_profiler_eligibility_mutex_);
+        this->realtime_profiler_eligibility_by_device_.clear();
+    }
     this->reserved_realtime_profiler_core_by_device_.clear();
     this->dispatch_core_config_ = dispatch_core_config;
     for (ChipId device_id : env.get_cluster().all_chip_ids()) {
@@ -286,9 +384,15 @@ void dispatch_core_manager::reset_dispatch_core_manager(
         const bool is_mmio = env.get_cluster().get_associated_mmio_device(device_id) == device_id;
         const bool fabric_tensix_datamover_enabled =
             env.get_fabric_tensix_config() != tt_fabric::FabricTensixConfig::DISABLED;
-        const bool is_quasar = env.get_cluster().arch() == tt::ARCH::QUASAR;
+        const bool is_blackhole = env.get_hal().get_arch() == tt::ARCH::BLACKHOLE;
+        const bool target_supported = !env.get_cluster().is_mock_or_emulated() &&
+                                      env.get_cluster().get_target_device_type() != tt::TargetDevice::Simulator;
+        const bool iommu_available =
+            !env.get_hal().get_supports_64_bit_pcie_addressing() || env.get_cluster().is_iommu_enabled();
         if (is_mmio && get_core_type_from_config(dispatch_core_config) == CoreType::WORKER &&
-            !fabric_tensix_datamover_enabled && !is_quasar && !logical_dispatch_cores.empty()) {
+            !fabric_tensix_datamover_enabled && is_blackhole && target_supported && iommu_available &&
+            num_hw_cqs == 1 && !env.get_rtoptions().get_kernels_nullified() &&
+            !env.get_rtoptions().get_realtime_profiler_disabled() && !logical_dispatch_cores.empty()) {
             CoreCoord rt_core = logical_dispatch_cores.back();
             logical_dispatch_cores.pop_back();
             this->reserved_realtime_profiler_core_by_device_.emplace(

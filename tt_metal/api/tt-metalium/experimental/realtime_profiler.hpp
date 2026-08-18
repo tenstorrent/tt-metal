@@ -8,6 +8,7 @@
 #include <functional>
 #include <span>
 #include <string_view>
+#include <vector>
 
 namespace tt::tt_metal::experimental {
 
@@ -16,7 +17,8 @@ struct ProgramRealtimeRecord {
                                                        // widening tracked in #46103.
     uint32_t chip_id;                                  // Device chip ID
     uint64_t start_timestamp;                          // Device start timestamp (raw ticks)
-    uint64_t end_timestamp;                            // Device end timestamp (raw ticks)
+    uint64_t end_timestamp;                            // Device end timestamp (raw ticks), or 0 when this schema does
+                                                       // not provide a correlated endpoint.
     double frequency;                                  // Device clock frequency (cycles per ns)
     std::span<const std::string_view> kernel_sources;  // Kernel source paths; valid until
                                                        // MetalContext teardown or reinitialization.
@@ -27,6 +29,45 @@ struct ProgramRealtimeRecordBatch {
                                                      // until the callback returns.
     uint64_t dropped;                                // Records lost since this callback last ran; nonzero if the
                                                      // callback could not keep up with incoming profiler data.
+};
+
+enum class ProgramRealtimeProfilerInactiveReason : uint8_t {
+    None,
+    NotInitialized,
+    DisabledByEnvironment,
+    UnsupportedArchitecture,
+    MultipleHardwareCommandQueues,
+    NonMmioDevice,
+    IommuUnavailable,
+    NonWorkerDispatch,
+    DistributedDispatcher,
+    VirtualizedUnicast,
+    NoReservedProfilerCore,
+    InsufficientL1,
+    KernelsNullified,
+    SocketInitializationFailed,
+};
+
+struct ProgramRealtimeProfilerLossCounts {
+    uint64_t descriptor_full = 0;
+    uint64_t unsupported_launch = 0;
+    uint64_t reset_descriptor = 0;
+    uint64_t observer_coalesced = 0;
+    uint64_t stuck_head = 0;
+    uint64_t completed_record = 0;
+    uint64_t terminal_descriptor = 0;
+    uint64_t terminal_record = 0;
+    uint64_t observer_stop_timeout = 0;
+    uint64_t device_ring = 0;
+};
+
+struct ProgramRealtimeProfilerDeviceCapability {
+    uint32_t chip_id = 0;
+    bool active = false;
+    ProgramRealtimeProfilerInactiveReason inactive_reason = ProgramRealtimeProfilerInactiveReason::NotInitialized;
+    // Milestone 1 exposes the frozen shape but leaves all counters at zero. Device-side accounting populates this
+    // snapshot with the concurrent descriptor transport in Milestone 2.
+    ProgramRealtimeProfilerLossCounts loss;
 };
 
 // Callback type for real-time profiler data. Invoked with a batch so a callback can
@@ -60,11 +101,9 @@ void UnregisterProgramRealtimeProfilerCallback(ProgramRealtimeProfilerCallbackHa
 /**
  * Returns true if the real-time profiler is currently running on at least one chip.
  *
- * The real-time profiler is gated on host-accessible dispatch resources: it needs a
- * dedicated tensix core reserved from the dispatch pool and an MMIO-connected device
- * for the D2H socket. On configurations where those are not available (e.g. ETH
- * dispatch, remote chips on multi-host meshes), the profiler bows out silently and
- * no records will ever be delivered to registered callbacks.
+ * The real-time profiler currently runs only on supported single-CQ Blackhole worker-dispatch
+ * configurations with a dedicated tensix core and an MMIO-connected device for the D2H socket.
+ * GetProgramRealtimeProfilerDeviceCapabilities() reports why any evaluated device is inactive.
  *
  * Callers that want to distinguish "profiler is on but has not produced records yet"
  * from "profiler is disabled by the current dispatch config" should query this before
@@ -76,5 +115,8 @@ void UnregisterProgramRealtimeProfilerCallback(ProgramRealtimeProfilerCallbackHa
  * every RT-profiler-enabled device has been closed.
  */
 bool IsProgramRealtimeProfilerActive();
+
+/** Returns one capability snapshot for every device evaluated by an open MeshDevice. */
+std::vector<ProgramRealtimeProfilerDeviceCapability> GetProgramRealtimeProfilerDeviceCapabilities();
 
 }  // namespace tt::tt_metal::experimental

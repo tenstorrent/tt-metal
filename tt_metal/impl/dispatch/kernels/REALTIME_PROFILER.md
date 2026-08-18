@@ -3,8 +3,10 @@
 ## Overview
 
 The real-time profiler streams per-program device-side timestamps to the host
-during execution, enabling 1:1 correlation between host-side Tracy zones
-(`EnqueueMeshWorkload`) and device-side program execution windows.
+during execution. In clean-room Milestone 1, each profiled ordinary GO produces
+a correctly identified device start tick and `end_timestamp == 0`. Tracy skips
+these start-only records; Milestone 2 restores duration zones with a correlated
+completion-gated endpoint. Trace replay is intentionally unprofiled.
 
 ### Components
 
@@ -30,7 +32,7 @@ dispatch_s            BRISC reader          NCRISC pusher          host
     |                      |                      |                      |
     |-- inline_dw_write -->|                      |                      |
     |   PUSH_A / PUSH_B    |                      |                      |
-    |   (NOC 1, ~92 cyc)   |                      |                      |
+    |   (NOC 1)            |                      |                      |
     |                      |-- noc_async_read     |                      |
     |                      |   (read timestamps,  |                      |
     |                      |    NOC 0)            |                      |
@@ -47,17 +49,22 @@ dispatch_s            BRISC reader          NCRISC pusher          host
 ## Double-Buffer Protocol
 
 dispatch_s maintains two timestamp buffers in its own L1 (A/B). On each
-`CQ_DISPATCH_CMD_WAIT` completion it:
+profiled `CQ_DISPATCH_CMD_SEND_GO_SIGNAL` it:
 
-1. Writes the program's start/end timestamps into the next buffer (alternating A/B)
-2. Sends a `PUSH_A` or `PUSH_B` state to the reserved profiler tensix via a NOC
-   inline dword write
+1. Waits for prior same-stream workers.
+2. Captures the device start tick immediately before the first go-signal NOC
+   write.
+3. Issues GO, writes the command-carried runtime ID, and sends a `PUSH_A` or
+   `PUSH_B` state to the reserved profiler tensix via a NOC inline dword write.
+
+There is no program-ID FIFO and no M1 completion timestamp. The public host
+record explicitly sets the end timestamp to zero.
 
 This alternation only hands one in-flight record to the reader at a time;
 dispatch_s never blocks on the profiler.
 
 The **BRISC reader** polls its state mailbox. On `PUSH_A`/`PUSH_B` it issues a
-`noc_async_read` of the 32-byte timestamp pair from the indicated dispatch_s
+`noc_async_read` of the 32-byte transport record from the indicated dispatch_s
 buffer into the next ring slot, then advances `write_index` (records for
 unprofiled programs are read but not committed). If the ring is full it spins
 (heartbeat `ring_full_wait_count`); in practice this does not happen, because the
@@ -80,8 +87,8 @@ ring-wrap, host-FIFO-wrap, and burst-size boundaries — followed by a single
 
 | Metric | Value |
 |--------|-------|
-| `signal_realtime_profiler_and_switch` duration | **~92 cycles (~0.09 us)** |
-| Signal = NOC 1 inline dword write | Negligible overhead on dispatch |
+| Full enabled M1 GO-tail increment over the same binary disabled | **128 cycles (~95 ns at 1.35 GHz)** |
+| Disabled M1 GO-tail median versus exact clean baseline | **817 versus 927 cycles** |
 
 ### Push cost (NCRISC pusher side)
 
@@ -91,16 +98,12 @@ ring-wrap, host-FIFO-wrap, and burst-size boundaries — followed by a single
 
 ### Throughput
 
-The profiler fully keeps up with dispatch. The signal-to-record path is a fast
-NOC read into a deep L1 ring, decoupled from the PCIe push; the pusher
-then drains the entire pending backlog per iteration and coalesces it into a few
-large bursts (~420 ns per push). Because the ring absorbs bursts and the push is cheap,
-signals never outrun the drain and no records are lost.
-
-This is verified under load by `test_realtime_profiler_stress.cpp`, which replays
-a 4096-program blank-kernel trace back-to-back — the peak signal rate dispatch can
-sustain, since blank kernels minimize per-program dispatch overhead — and asserts
-every record arrives with the device ring and host D2H FIFO never filling.
+The signal-to-record path uses a fast NOC read into a deep L1 ring, decoupled
+from the PCIe push; the pusher drains pending entries in coalesced bursts. This
+does not claim losslessness under unbounded pressure. Milestone 1 qualification
+in `test_realtime_profiler_stress.cpp` uses repeated ordinary non-trace launches
+and verifies lossless delivery for the measured peak-load window. Later
+milestones add explicit device-side loss counters and drop behavior.
 
 ## Implementation Notes
 

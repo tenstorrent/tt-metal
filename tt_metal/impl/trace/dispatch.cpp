@@ -122,6 +122,8 @@ void issue_trace_commands(
                 : CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET,
             num_noc_unicast_txns,
             noc_data_start_idx,
+            0,
+            0,
             dispatcher_for_go_signal);
     }
 

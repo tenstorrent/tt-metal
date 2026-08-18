@@ -229,6 +229,27 @@ bool DataCollector::IsRealtimeProfilerActive() const {
     return !realtime_profiler_active_chips_.empty();
 }
 
+void DataCollector::NotifyRealtimeProfilerCapability(tt::ProgramRealtimeProfilerDeviceCapability capability) {
+    std::lock_guard<std::mutex> lock(realtime_profiler_active_chips_mutex_);
+    realtime_profiler_capabilities_[capability.chip_id] = capability;
+}
+
+void DataCollector::RemoveRealtimeProfilerCapability(uint32_t chip_id) {
+    std::lock_guard<std::mutex> lock(realtime_profiler_active_chips_mutex_);
+    realtime_profiler_capabilities_.erase(chip_id);
+}
+
+std::vector<tt::ProgramRealtimeProfilerDeviceCapability> DataCollector::GetRealtimeProfilerDeviceCapabilities() const {
+    std::lock_guard<std::mutex> lock(realtime_profiler_active_chips_mutex_);
+    std::vector<tt::ProgramRealtimeProfilerDeviceCapability> result;
+    result.reserve(realtime_profiler_capabilities_.size());
+    for (const auto& [chip_id, capability] : realtime_profiler_capabilities_) {
+        result.push_back(capability);
+    }
+    std::sort(result.begin(), result.end(), [](const auto& lhs, const auto& rhs) { return lhs.chip_id < rhs.chip_id; });
+    return result;
+}
+
 void DataCollector::DumpData() {
     if (program_id_to_dispatch_data.empty() && program_id_to_kernel_groups.empty() &&
         program_id_to_call_count.empty()) {

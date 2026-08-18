@@ -5,6 +5,11 @@
 This is the Milestone 0 decision record for
 `REALTIME_PROFILER_CLEAN_ROOM_IMPLEMENTATION_PLAN.md`.
 
+Milestone 1 evidence found that its original 0.5% cross-build host-throughput
+gate is smaller than a comment-only rebuild control can resolve. The corrected
+adjudication under Resource and performance gates was accepted by the product
+owner on 2026-08-18.
+
 It defines a Blackhole-only extension of the existing continuous realtime
 profiler. It does not define model integration, operation scheduling, Wormhole
 feature support, multi-command-queue behavior, remote-chip transport, trace
@@ -26,6 +31,7 @@ The manager records one of these inactive reasons before launching the observer:
 
 ```text
 not_initialized
+disabled_by_environment
 unsupported_architecture
 multiple_hardware_command_queues
 non_mmio_device
@@ -33,7 +39,7 @@ iommu_unavailable
 non_worker_dispatch
 distributed_dispatcher
 virtualized_unicast
-    no_reserved_profiler_core
+no_reserved_profiler_core
 insufficient_l1
 kernels_nullified
 socket_initialization_failed
@@ -43,11 +49,15 @@ Unsupported execution continues without concurrent records. It never creates
 the observer TRISC, emits a profiler command from `Finish`, or waits for
 profiler state. Wormhole realtime profiling is intentionally disabled for this
 feature and its baseline monitor TRISC is removed. No Wormhole compatibility is
-required; ordinary Wormhole execution and dispatch throughput must remain
-correct. The product owner explicitly approved this Wormhole profiler-support
-removal while narrowing the work to the Blackhole realtime feature. Milestone 1
-therefore adds an explicit Wormhole capability-negative execution test instead
-of relying on profiler tests that skip when inactive.
+required. The product owner explicitly approved excluding Wormhole build,
+execution, and throughput qualification while narrowing the work to the
+Blackhole realtime feature. Shared host ABI assertions still apply, but no
+Wormhole hardware or compile artifact is a milestone gate.
+
+`TT_METAL_DISABLE_REALTIME_PROFILER=1` is latched when `MetalContext` is
+constructed. It produces `DisabledByEnvironment`, reserves no profiler core,
+and creates no observer or reserved-core kernel. It is the isolated disabled
+mode used by the locked Milestone 1 throughput comparison.
 
 Trace replay is not an initialization-time capability because capture and
 replay occur after the device has opened. The manager remains active for normal
@@ -78,6 +88,12 @@ the final A/B record. The clean protocol deletes that command and does not make
 queue completion responsible for profiler delivery.
 
 ## Timing contract
+
+This section is the Milestone 2 interval contract. Milestone 1 deliberately
+publishes only `runtime_program_id` and the device `start_tick`, with the
+public end timestamp set to zero. The inherited observer endpoint is associated
+with launch N-1 while the Go-carried ID is associated with launch N; exposing
+them together would create a false interval.
 
 Every accepted interval contains two 64-bit raw Blackhole wall-clock ticks:
 
@@ -146,7 +162,8 @@ read lazily after that point.
 
 Narrowing `wait_stream` also changes the shared Wormhole command layout even
 though Wormhole profiling is disabled. Host range assertions apply on every
-architecture, and the Wormhole build/throughput gate covers this ABI change.
+architecture. Per explicit product-owner scope, Wormhole build and throughput
+qualification for this shared ABI change are not milestone gates.
 
 ## State layout and ownership
 
@@ -210,6 +227,14 @@ protocol. Reload repeats the same ordered construction handshake.
 The host is the sole pre-launch initializer; the named device RISC is the sole
 runtime writer of each field. This explicitly replaces the baseline's competing
 dispatch_d/TRISC mailbox clears.
+
+For the M1 legacy mailbox, the host writes the remote state address before the
+nonzero profiler-core NOC coordinate, which is the activation release. If D2H
+socket construction fails after dispatch_s was compiled with profiler support,
+the host writes a permanent disabled sentinel. dispatch_s resolves that
+sentinel once and does not poll activation on later commands. M1 removes the
+legacy completion observer entirely; its TRISC0 image is a stub, and only
+independent TRISC1 telemetry remains.
 
 ### Start descriptors
 
@@ -507,6 +532,7 @@ The final additions are fixed here for Milestones 1–3:
 enum class ProgramRealtimeProfilerInactiveReason : uint8_t {
     None,
     NotInitialized,
+    DisabledByEnvironment,
     UnsupportedArchitecture,
     MultipleHardwareCommandQueues,
     NonMmioDevice,
@@ -636,12 +662,30 @@ Locked gates:
 - depth four must have zero descriptor loss in the shortest-program two-stream
   qualification; depth two may replace it only if it also has zero loss across
   repeated stress and materially improves a locked resource metric;
-- Wormhole compile inspection creates no observer kernel. Wormhole profiler
-  runtime compatibility is intentionally not a gate.
+- Milestone 2 observer creation is source-gated by the eligible-Blackhole
+  decision; Milestone 1 has no completion observer;
+  Wormhole build and runtime evidence are intentionally not gates.
 
 Device-cycle counters, invalidation counts, observer scan latency, L1/image
 deltas, and ABBA throughput samples are required evidence. Host throughput is
 corroborating evidence only.
+
+### Accepted Milestone 1 adjudication correction
+
+The final Milestone 1 comment-only baseline rebuild produced a paired bootstrap
+upper 95% bound of 0.6083%, so the 0.5% cross-build host gate above is not
+resolvable by the measurement machinery. The same-binary enabled comparison
+had a 1.0168% median but a 2.5584% upper bound due process outliers, so the 2%
+host ceiling is likewise unresolved. Neither is silently waived or called a
+pass. Per product-owner approval on 2026-08-18, Milestone 1 is adjudicated by:
+
+- disabled GO-tail device-cycle median no slower than the exact clean baseline;
+- enabled full GO-tail device-cycle increment measured and reported;
+- same-binary and cross-build host timing retained as descriptive evidence,
+  with every sample and the no-op rebuild control shown beside it.
+
+Later milestones retain device cycles as primary evidence and must add their
+own mechanism-specific gates before implementation.
 
 ## Rejected alternatives
 

@@ -5,9 +5,8 @@
 // Stress test for the real-time (RT) profiler. If NCRISC or the host receiver can't drain as fast as
 // BRISC produces, the device ring fills and BRISC drops records.
 //
-// The drain path is expected to absorb peak dispatch without backing up. This test replays a 4096 blank-kernel trace
-// back-to-back to feed BRISC at the peak rate dispatch_s can sustain, then asserts every record arrived, the device
-// ring never filled, the host D2H FIFO never filled, and there was no timestamp corruption.
+// The drain path is expected to absorb peak dispatch without backing up. Trace replay is deliberately unprofiled by
+// the clean-room protocol, so stress traffic is generated with ordinary non-trace bursts.
 
 #include <algorithm>
 #include <atomic>
@@ -35,6 +34,11 @@
 #include <tt-metalium/experimental/realtime_profiler.hpp>
 
 #include "tt_metal/common/env_lib.hpp"
+#include "tt_metal/impl/context/metal_context.hpp"
+#include "tt_metal/impl/dispatch/device_command.hpp"
+#include "tt_metal/impl/dispatch/device_command_calculator.hpp"
+#include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
+#include "tt_metal/impl/dispatch/system_memory_manager.hpp"
 #include "tt_metal/distributed/realtime_profiler_manager.hpp"
 #include "tt_metal/distributed/mesh_device_impl.hpp"
 
@@ -49,70 +53,25 @@ using tt::tt_metal::experimental::ProgramRealtimeRecordBatch;
 using tt::tt_metal::experimental::RegisterProgramRealtimeProfilerCallback;
 using tt::tt_metal::experimental::UnregisterProgramRealtimeProfilerCallback;
 
-// Matches RT_PROFILER_RING_CAPACITY in realtime_profiler_ring_buffer.hpp.
-// Picking the trace length equal to the ring capacity is the worst case for
-// the back-pressure path: BRISC can fill the ring in roughly the time it
-// takes NCRISC to push 1–2 entries over PCIe, so by enqueue ~80 of 4096
-// the ring is at capacity and stays there for the rest of the trace.
-constexpr uint32_t kNumProgramsInTrace = 4096;
 constexpr uint32_t kNumProgramsInNonTraceBurst = 4096;
 
-constexpr uint32_t kDefaultStressReplaySeconds = 60;
+constexpr uint32_t kDefaultStressSeconds = 60;
 
 constexpr uint32_t kDefaultDropAccountingSeconds = 60;
 
-// Trace stores one EnqueueProgram dispatch packet per program. Blank-kernel
-// programs with no CBs / no runtime args are tiny (~hundreds of bytes), so
-// 64 MB is comfortably more than 4096 of them need; sized generously so a
-// future change to the dispatch packet layout can't silently OOM the trace
-// region and turn this into a flake. Lives in DRAM, not L1, so it doesn't
-// interact with the worker_l1_size eligibility check we just added.
-constexpr size_t kTraceRegionSize = 64 * 1024 * 1024;
-
-// Programs in the trace use this runtime_id so every record we receive can
-// be attributed to this test (records with runtime_id == 0 are reserved for
-// infrastructure traffic and dropped host-side).
+// Ordinary launches use this runtime_id so every record we receive can be
+// attributed to this test (runtime_id == 0 is intentionally unprofiled).
 constexpr uint32_t kStressRuntimeId = 0xBEEFu;
-
-// 1s upper bound per record: even a blank kernel still has dispatch_s'
-// kernel_start/end pulse spread by at least a handful of cycles, but it
-// should never be in the millisecond range. Anything beyond 1s means a
-// timestamp got corrupted (e.g. wraparound, swapped halves) under load.
-constexpr double kMaxStressDurationNs = 1'000'000'000.0;
 
 // Quiesce + drain window before unregistering the callback.
 constexpr auto kPostQuiesceDrain = std::chrono::milliseconds(2000);
-
-// Allowed slack for the deterministic startup race where the compute kernel
-// detects dispatch_d's stream-register clearing before dispatch_s has
-// recorded the first start_timestamp, producing one record where
-// end_timestamp < start_timestamp by a handful of cycles. Same value the
-// host/device correlation test tolerates (see test_realtime_profiler.py
-// :: test_host_device_correlation, "startup_race_threshold") and the same
-// value the production Tracy handler uses to distinguish "benign" from
-// "noisy" skips (see realtime_profiler_tracy_handler.cpp,
-// kStartupRaceThreshold).
-constexpr uint64_t kStartupRaceSlackCycles = 100'000;
-
-// Hard upper bound on the fraction of records that can come back with
-// end_timestamp < start_timestamp before this test fails. The production
-// host receiver already silently skips any such record on the Tracy path
-// (see realtime_profiler_tracy_handler.cpp:HandleRecord), so a tiny number
-// of these is tolerated by the live system; we only want this test to flag
-// a *regression* where the corruption rate balloons (e.g. an off-by-one in
-// rt_ring_full leading to systemic slot reuse). Empirically the live
-// system produces ~1 such record per ~4000 launches on Blackhole p100a
-// (rate ≈ 0.025%); 1% gives ~40x headroom over the observed baseline.
-constexpr double kMaxBadTimestampFraction = 0.01;
 
 distributed::MeshWorkload build_blank_kernel_workload(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     Program program = CreateProgram();
 
     // Blank kernels on BRISC + NCRISC + TRISC on a single core. Single-core
     // minimizes dispatch payload (one launch_msg per RISC, one core's worth
-    // of kernel-config state) so the dispatch_s -> RT-profiler mailbox
-    // pulse rate is dominated by trace cmd consumption, not program
-    // launch overhead.
+    // of kernel-config state), maximizing the ordinary-launch record rate.
     const CoreCoord stress_core{0, 0};
     CreateKernel(
         program,
@@ -137,7 +96,7 @@ std::shared_ptr<distributed::MeshDevice> open_full_mesh() {
     return distributed::MeshDevice::create(
         distributed::MeshDeviceConfig(std::nullopt),
         DEFAULT_L1_SMALL_SIZE,
-        kTraceRegionSize,
+        DEFAULT_TRACE_REGION_SIZE,
         1,
         DispatchCoreConfig{DispatchCoreType::WORKER});
 }
@@ -180,6 +139,67 @@ TEST(RealtimeProfilerStress, NonTraceBurstDriverPreservesRecords) {
     EXPECT_TRUE(mesh_device->close());
 }
 
+TEST(RealtimeProfilerStress, DispatchDDoesNotWaitForProfilerWhileDispatchSIsStalled) {
+    auto mesh_device = open_full_mesh();
+    ASSERT_NE(mesh_device, nullptr);
+    if (!IsProgramRealtimeProfilerActive()) {
+        mesh_device->close();
+        GTEST_SKIP() << "Real-time profiler is not active on this dispatch config";
+    }
+
+    constexpr uint32_t kProgramCount = 64;
+    constexpr uint8_t kCqId = 0;
+    const auto& mem_map = MetalContext::instance(mesh_device->impl().get_context_id()).dispatch_mem_map();
+    DeviceCommandCalculator calculator;
+    calculator.add_dispatch_go_signal_mcast();
+    for (uint32_t i = 0; i < kProgramCount; ++i) {
+        calculator.add_dispatch_set_write_offsets(0);
+    }
+    calculator.add_notify_dispatch_s_go_signal_cmd();
+
+    auto* device = mesh_device->get_devices().front();
+    auto& sysmem_manager = device->sysmem_manager();
+    const uint32_t command_bytes = calculator.write_offset_bytes();
+    void* command_region = sysmem_manager.issue_queue_reserve(command_bytes, kCqId);
+    HugepageDeviceCommand command(command_region, command_bytes);
+
+    // Send a subordinate GO without its dispatch_d notification. dispatch_s blocks on its
+    // synchronization semaphore while prefetch continues feeding dispatch_d below.
+    command.add_dispatch_go_signal_mcast(
+        0,
+        MetalContext::instance(mesh_device->impl().get_context_id())
+            .hal()
+            .make_go_msg_u32(dev_msgs::RUN_MSG_RESET_READ_PTR, 0, 0, 0),
+        mem_map.get_dispatch_stream_index(0),
+        CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET,
+        0,
+        0,
+        0,
+        0,
+        DispatcherSelect::DISPATCH_SUBORDINATE);
+
+    const std::array<uint32_t, 0> no_write_offsets{};
+    for (uint32_t i = 0; i < kProgramCount; ++i) {
+        const uint32_t command_offset = command.write_offset_bytes();
+        command.add_dispatch_set_write_offsets(no_write_offsets);
+        auto* dispatch_cmd = reinterpret_cast<CQDispatchCmd*>(
+            reinterpret_cast<uint8_t*>(command.data()) + command_offset + sizeof(CQPrefetchCmd));
+        dispatch_cmd->set_write_offset.program_host_id = static_cast<uint16_t>(i + 1);
+    }
+
+    // This command is processed by dispatch_d only after all 64 program IDs. With the old
+    // 32-entry profiler FIFO, dispatch_d blocked before reaching it and never released dispatch_s.
+    command.add_notify_dispatch_s_go_signal_cmd(false, /*index_bitmask=*/1);
+    ASSERT_EQ(command.size_bytes(), command.write_offset_bytes());
+
+    sysmem_manager.issue_queue_push_back(command_bytes, kCqId);
+    sysmem_manager.fetch_queue_reserve_back(kCqId);
+    sysmem_manager.fetch_queue_write(command_bytes, kCqId);
+    distributed::Finish(mesh_device->mesh_command_queue(kCqId));
+
+    EXPECT_TRUE(mesh_device->close());
+}
+
 TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
     auto mesh_device = open_full_mesh();
     ASSERT_NE(mesh_device, nullptr);
@@ -199,11 +219,8 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
     const uint64_t num_active_devices = rt->num_active_devices();
 
     uint64_t stress_records = 0;
-    uint64_t startup_race_skips = 0;
-    uint64_t large_negative_skips = 0;
     uint64_t bad_frequency = 0;
-    uint64_t implausible_duration = 0;
-    int64_t worst_negative_delta = 0;
+    uint64_t unexpected_end_timestamps = 0;
     uint64_t max_callback_batch = 0;
     ProgramRealtimeProfilerCallbackHandle handle =
         RegisterProgramRealtimeProfilerCallback([&](const ProgramRealtimeRecordBatch& batch) {
@@ -213,23 +230,11 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
                     continue;
                 }
                 ++stress_records;
-                if (rec.end_timestamp < rec.start_timestamp) {
-                    const uint64_t neg_delta = rec.start_timestamp - rec.end_timestamp;
-                    if (neg_delta <= kStartupRaceSlackCycles) {
-                        ++startup_race_skips;
-                    } else {
-                        ++large_negative_skips;
-                        worst_negative_delta = std::min(-static_cast<int64_t>(neg_delta), worst_negative_delta);
-                    }
-                }
                 if (!(rec.frequency > 0.0)) {
                     ++bad_frequency;
-                } else if (rec.end_timestamp >= rec.start_timestamp) {
-                    const double duration_ns =
-                        static_cast<double>(rec.end_timestamp - rec.start_timestamp) / rec.frequency;
-                    if (duration_ns >= kMaxStressDurationNs) {
-                        ++implausible_duration;
-                    }
+                }
+                if (rec.end_timestamp != 0) {
+                    ++unexpected_end_timestamps;
                 }
             }
         });
@@ -237,30 +242,20 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
     distributed::MeshWorkload workload = build_blank_kernel_workload(mesh_device);
     auto& cq = mesh_device->mesh_command_queue(0);
 
-    // Compile + warm up the workload outside the trace capture so the trace
-    // contains only steady-state dispatch packets (no compile/upload hops).
+    // Compile and warm up before the timed ordinary-launch stress loop.
     distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
 
-    // Capture: 4096 back-to-back EnqueueMeshWorkload calls of the same
-    // blank-kernel workload. Reusing one workload (vs. building 4096
-    // distinct programs) keeps compile time near zero and avoids host-side
-    // memory pressure; the dispatch commands captured in the trace are
-    // independent per-enqueue, so dispatch_s still fires 4096 separate
-    // kernel_start pulses on replay.
-    distributed::MeshTraceId trace_id = distributed::BeginTraceCapture(mesh_device.get(), cq.id());
-    for (uint32_t i = 0; i < kNumProgramsInTrace; ++i) {
-        distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
-    }
-    mesh_device->end_mesh_trace(cq.id(), trace_id);
-
-    const std::chrono::seconds replay_window(
-        tt::parse_env<std::uint32_t>("TT_RT_PROFILER_SATURATION_SECONDS", kDefaultStressReplaySeconds));
-    uint64_t num_replays = 0;
-    const auto replay_deadline = std::chrono::steady_clock::now() + replay_window;
+    const std::chrono::seconds stress_window(
+        tt::parse_env<std::uint32_t>("TT_RT_PROFILER_SATURATION_SECONDS", kDefaultStressSeconds));
+    uint64_t num_stress_programs = 0;
+    const auto stress_deadline = std::chrono::steady_clock::now() + stress_window;
     do {
-        mesh_device->replay_mesh_trace(cq.id(), trace_id, true);
-        ++num_replays;
-    } while (std::chrono::steady_clock::now() < replay_deadline);
+        for (uint32_t i = 0; i < kNumProgramsInNonTraceBurst; ++i) {
+            distributed::EnqueueMeshWorkload(cq, workload, false);
+        }
+        distributed::Finish(cq);
+        num_stress_programs += kNumProgramsInNonTraceBurst;
+    } while (std::chrono::steady_clock::now() < stress_deadline);
 
     mesh_device->quiesce_devices();
     std::this_thread::sleep_for(kPostQuiesceDrain);
@@ -271,33 +266,27 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
     const double mean_publish_batch =
         published_batches ? static_cast<double>(rt->num_published_records()) / published_batches : 0.0;
     UnregisterProgramRealtimeProfilerCallback(handle);
-    mesh_device->release_mesh_trace(trace_id);
 
-    const uint64_t expected_stress_records =
-        static_cast<uint64_t>(kNumProgramsInTrace) * num_replays * num_active_devices;
+    const uint64_t expected_stress_records = num_stress_programs * num_active_devices;
 
     log_info(
         tt::LogTest,
-        "[RT profiler stress] {} stress records across {} active device(s) over {} replays, max_callback_batch={}, "
-        "mean_publish_batch={:.1f}, peak_fifo={}/{} pages, ring_full_waits={}, {} startup-race skips, {} "
-        "large-negative-delta skips (worst delta = {} cycles), {} bad-frequency, {} implausible-duration",
+        "[RT profiler stress] {} stress records across {} active device(s) over {} ordinary launches, "
+        "max_callback_batch={}, mean_publish_batch={:.1f}, peak_fifo={}/{} pages, ring_full_waits={}, "
+        "{} bad-frequency, {} unexpected-end",
         stress_records,
         num_active_devices,
-        num_replays,
+        num_stress_programs,
         max_callback_batch,
         mean_publish_batch,
         peak_fifo_pages,
         fifo_capacity_pages,
         ring_full_waits,
-        startup_race_skips,
-        large_negative_skips,
-        worst_negative_delta,
         bad_frequency,
-        implausible_duration);
+        unexpected_end_timestamps);
 
     ASSERT_GE(stress_records, expected_stress_records)
-        << "expected one record per program run: " << kNumProgramsInTrace << " programs per replay x " << num_replays
-        << " replays x " << num_active_devices
+        << "expected one record per ordinary launch: " << num_stress_programs << " launches x " << num_active_devices
         << " active device(s). A shortfall means profiler records were dropped at some point in the pipeline.";
 
     EXPECT_LT(peak_fifo_pages, fifo_capacity_pages)
@@ -306,20 +295,9 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
     EXPECT_EQ(ring_full_waits, 0u)
         << "device ring reached capacity; the receiver drained it slower than the device filled it";
 
-    const uint64_t max_allowed_large_negative =
-        static_cast<uint64_t>(static_cast<double>(stress_records) * kMaxBadTimestampFraction);
-    EXPECT_LE(large_negative_skips, max_allowed_large_negative)
-        << large_negative_skips << " stress record(s) had end_timestamp < start_timestamp by more than "
-        << kStartupRaceSlackCycles << " cycles, exceeding the allowed budget of " << max_allowed_large_negative
-        << " (= " << (kMaxBadTimestampFraction * 100.0) << "% of " << stress_records << " stress records). "
-        << "These are torn 64-bit reads or stale-slot residue from BRISC writing the timestamp slot before "
-        << "bumping write_index; the production Tracy handler silently drops them. A spike here means the "
-        << "corruption rate has become systemic — most likely an off-by-one in the rt_ring_full check or a "
-        << "missing memory barrier between slot write and write_index increment.";
     EXPECT_EQ(bad_frequency, 0u) << bad_frequency << " stress record(s) had a non-positive frequency";
-    EXPECT_EQ(implausible_duration, 0u) << implausible_duration
-                                        << " stress record(s) reported duration >= " << kMaxStressDurationNs
-                                        << " ns (clock corruption / mis-decoded timestamp)";
+    EXPECT_EQ(unexpected_end_timestamps, 0u)
+        << "Milestone 1 must suppress the legacy observer's off-by-one completion endpoint";
 
     EXPECT_TRUE(mesh_device->close());
 }
@@ -345,18 +323,15 @@ TEST(RealtimeProfilerStress, ConsumerDropAccountingUnderLoad) {
     auto& cq = mesh_device->mesh_command_queue(0);
     distributed::EnqueueMeshWorkload(cq, workload, true);
 
-    distributed::MeshTraceId trace_id = distributed::BeginTraceCapture(mesh_device.get(), cq.id());
-    for (uint32_t i = 0; i < kNumProgramsInTrace; ++i) {
-        distributed::EnqueueMeshWorkload(cq, workload, false);
-    }
-    mesh_device->end_mesh_trace(cq.id(), trace_id);
-
     constexpr auto kCalibrationWindow = std::chrono::seconds(2);
     const uint64_t pubs_before = rt->num_published_records();
     const auto cal_start = std::chrono::steady_clock::now();
     const auto cal_deadline = cal_start + kCalibrationWindow;
     while (std::chrono::steady_clock::now() < cal_deadline) {
-        mesh_device->replay_mesh_trace(cq.id(), trace_id, true);
+        for (uint32_t i = 0; i < kNumProgramsInNonTraceBurst; ++i) {
+            distributed::EnqueueMeshWorkload(cq, workload, false);
+        }
+        distributed::Finish(cq);
     }
     const double cal_seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - cal_start).count();
     const double production_rate = static_cast<double>(rt->num_published_records() - pubs_before) / cal_seconds;
@@ -414,7 +389,10 @@ TEST(RealtimeProfilerStress, ConsumerDropAccountingUnderLoad) {
 
     const auto run_deadline = std::chrono::steady_clock::now() + run_window;
     while (std::chrono::steady_clock::now() < run_deadline) {
-        mesh_device->replay_mesh_trace(cq.id(), trace_id, true);
+        for (uint32_t i = 0; i < kNumProgramsInNonTraceBurst; ++i) {
+            distributed::EnqueueMeshWorkload(cq, workload, false);
+        }
+        distributed::Finish(cq);
     }
 
     mesh_device->quiesce_devices();
@@ -469,7 +447,6 @@ TEST(RealtimeProfilerStress, ConsumerDropAccountingUnderLoad) {
     UnregisterProgramRealtimeProfilerCallback(h_keeps_up);
     UnregisterProgramRealtimeProfilerCallback(h_borderline);
     UnregisterProgramRealtimeProfilerCallback(h_slow);
-    mesh_device->release_mesh_trace(trace_id);
 
     EXPECT_LT(peak_fifo_pages, fifo_capacity_pages)
         << "host D2H FIFO reached capacity; the receiver drained it slower than the device filled it";

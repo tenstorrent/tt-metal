@@ -525,11 +525,18 @@ void DeviceCommand<hugepage_write>::add_dispatch_go_signal_mcast(
     uint8_t multicast_go_offset,
     uint8_t num_unicast_txns,
     uint8_t noc_data_start_index,
+    uint8_t profiler_num_workers,
+    uint16_t profiler_runtime_id,
     DispatcherSelect dispatcher_type) {
     TT_ASSERT(
         num_unicast_txns <= std::numeric_limits<uint8_t>::max(),
         "Number of unicast destinations {} exceeds maximum {}",
         num_unicast_txns,
+        std::numeric_limits<uint8_t>::max());
+    TT_FATAL(
+        wait_stream <= std::numeric_limits<uint8_t>::max(),
+        "Dispatch wait stream {} exceeds the go-command ABI maximum {}",
+        wait_stream,
         std::numeric_limits<uint8_t>::max());
     uint32_t lengthB = sizeof(CQDispatchCmd);
     TT_ASSERT(
@@ -544,7 +551,9 @@ void DeviceCommand<hugepage_write>::add_dispatch_go_signal_mcast(
         mcast_cmd->mcast.multicast_go_offset = multicast_go_offset;
         mcast_cmd->mcast.num_unicast_txns = num_unicast_txns;
         mcast_cmd->mcast.noc_data_start_index = noc_data_start_index;
-        mcast_cmd->mcast.wait_stream = wait_stream;
+        mcast_cmd->mcast.wait_stream = static_cast<uint8_t>(wait_stream);
+        mcast_cmd->mcast.profiler_num_workers = profiler_num_workers;
+        mcast_cmd->mcast.profiler_runtime_id = profiler_runtime_id;
     };
     CQDispatchCmd* mcast_cmd_dst = this->reserve_space<CQDispatchCmd*>(sizeof(CQDispatchCmd));
 
@@ -554,26 +563,6 @@ void DeviceCommand<hugepage_write>::add_dispatch_go_signal_mcast(
         this->memcpy(mcast_cmd_dst, &mcast_cmd, sizeof(CQDispatchCmd));
     } else {
         initialize_mcast_cmd(mcast_cmd_dst);
-    }
-    this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
-}
-
-template <bool hugepage_write>
-void DeviceCommand<hugepage_write>::add_dispatch_rt_profiler_flush(uint32_t wait_count, uint32_t wait_stream) {
-    this->add_prefetch_relay_inline(true, sizeof(CQDispatchCmd), DispatcherSelect::DISPATCH_SUBORDINATE);
-    auto initialize_flush_cmd = [&](CQDispatchCmd* flush_cmd) {
-        *flush_cmd = {};
-        flush_cmd->base.cmd_id = CQ_DISPATCH_CMD_RT_PROFILER_FLUSH;
-        flush_cmd->rt_profiler_flush.wait_count = wait_count;
-        flush_cmd->rt_profiler_flush.wait_stream = wait_stream;
-    };
-    CQDispatchCmd* flush_cmd_dst = this->reserve_space<CQDispatchCmd*>(sizeof(CQDispatchCmd));
-    if constexpr (hugepage_write) {
-        alignas(MEMCPY_ALIGNMENT) CQDispatchCmd flush_cmd{};
-        initialize_flush_cmd(&flush_cmd);
-        this->memcpy(flush_cmd_dst, &flush_cmd, sizeof(CQDispatchCmd));
-    } else {
-        initialize_flush_cmd(flush_cmd_dst);
     }
     this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
 }

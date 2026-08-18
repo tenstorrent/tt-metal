@@ -2160,13 +2160,14 @@ public:
         const ProgramTransferInfo& program_transfer_info,
         bool has_multicast_launch_cmds,
         bool has_unicast_launch_cmds) {
+        auto& metal = MetalContext::instance();
         const auto& noc_data_start_idx =
             mesh_device->impl().noc_data_start_index(sub_device_id, has_unicast_launch_cmds);
         const auto& num_noc_unicast_txns =
             has_unicast_launch_cmds ? mesh_device->impl().num_noc_unicast_txns(sub_device_id) : 0;
         DispatcherSelect dispatcher_for_go_signal = DispatcherSelect::DISPATCH_MASTER;
         auto sub_device_index = *sub_device_id;
-        if (tt_metal::MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()) {
+        if (metal.get_dispatch_query_manager().dispatch_s_enabled()) {
             // dispatch_d signals dispatch_s to send the go signal, use a barrier if there are cores active
             uint16_t index_bitmask = 0;
             index_bitmask |= 1 << sub_device_index;
@@ -2185,16 +2186,18 @@ public:
         // Num Workers Resolved when the program is enqueued
         device_command_sequence.add_dispatch_go_signal_mcast(
             0,
-            MetalContext::instance().hal().make_go_msg_u32(
+            metal.hal().make_go_msg_u32(
                 dev_msgs::RUN_MSG_GO,
                 // Dispatch X/Y resolved when the program is enqueued
                 0,
                 0,
-                MetalContext::instance().dispatch_mem_map().get_dispatch_message_update_offset(sub_device_index)),
-            MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(sub_device_index),
+                metal.dispatch_mem_map().get_dispatch_message_update_offset(sub_device_index)),
+            metal.dispatch_mem_map().get_dispatch_stream_index(sub_device_index),
             has_multicast_launch_cmds ? sub_device_index : CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET,
             num_noc_unicast_txns,
             noc_data_start_idx,
+            0,
+            0,
             dispatcher_for_go_signal);
 
         LOG_TRACE_LAZY(
@@ -2205,7 +2208,7 @@ public:
             sub_device_index,
             num_noc_unicast_txns,
             noc_data_start_idx,
-            MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(sub_device_index));
+            metal.dispatch_mem_map().get_dispatch_stream_index(sub_device_index));
 
         program_command_sequence.mcast_go_signal_cmd_ptr =
             &(reinterpret_cast<CQDispatchCmd*>(
@@ -2478,6 +2481,7 @@ void update_program_dispatch_commands(
     const ProgramDispatchMetadata& dispatch_md,
     ProgramBinaryStatus program_binary_status,
     std::pair<bool, int> unicast_go_signal_update,
+    uint8_t profiler_num_workers,
     uint8_t cq_id) {
     uint32_t i = 0;
 
@@ -2528,6 +2532,9 @@ void update_program_dispatch_commands(
     static_assert(
         std::is_same_v<uint16_t, decltype(std::declval<CQDispatchCmd>().set_write_offset.program_host_id)>,
         "program_host_id type should be uint16_t");
+    // Preserve the documented pre-existing 16-bit runtime-ID truncation until #46103 widens the ABI.
+    // This path is shared by profiler-active and profiler-inactive dispatch, so it must not add a
+    // profiler-only fatal to otherwise valid workloads.
     uint16_t runtime_id = static_cast<uint16_t>(program.get_runtime_id());
     cached_program_command_sequence.preamble_command_sequence.update_cmd_sequence(
         program_host_id_offset, &runtime_id, sizeof(runtime_id));
@@ -2655,13 +2662,22 @@ void update_program_dispatch_commands(
         }
     }
     // Update go signal to reflect potentially modified dispatch core and new wait count
+    const auto& dispatch_mem_map = MetalContext::instance().dispatch_mem_map();
+    const uint8_t wait_stream = static_cast<uint8_t>(dispatch_mem_map.get_dispatch_stream_index(*sub_device_id));
     cached_program_command_sequence.mcast_go_signal_cmd_ptr->go_signal = hal.make_go_msg_u32(
         dev_msgs::RUN_MSG_GO,
         dispatch_core.x,
         dispatch_core.y,
-        MetalContext::instance().dispatch_mem_map().get_dispatch_message_update_offset(*sub_device_id) +
-            MetalContext::instance().dispatch_mem_map().get_completion_counter_offset(cq_id));
-    cached_program_command_sequence.mcast_go_signal_cmd_ptr->wait_count = expected_num_workers_completed;
+        dispatch_mem_map.get_dispatch_message_update_offset(*sub_device_id) +
+            dispatch_mem_map.get_completion_counter_offset(cq_id));
+    const uint16_t profiler_runtime_id = profiler_num_workers == 0 ? 0 : runtime_id;
+    const uint64_t wait_and_profiler_fields =
+        static_cast<uint64_t>(expected_num_workers_completed) | (static_cast<uint64_t>(wait_stream) << 32) |
+        (static_cast<uint64_t>(profiler_num_workers) << 40) | (static_cast<uint64_t>(profiler_runtime_id) << 48);
+    std::memcpy(
+        &cached_program_command_sequence.mcast_go_signal_cmd_ptr->wait_count,
+        &wait_and_profiler_fields,
+        sizeof(wait_and_profiler_fields));
     // Update the number of unicast txns based on user provided parameter
     // This is required when a MeshWorkload uses ethernet cores on a set of devices
     // where the number of active eth cores is heterogeneous across devices.
@@ -2867,7 +2883,13 @@ void update_traced_program_dispatch_commands(
         dispatch_core.y,
         MetalContext::instance().dispatch_mem_map().get_dispatch_message_update_offset(*sub_device_id) +
             MetalContext::instance().dispatch_mem_map().get_completion_counter_offset(cq_id));
-    cached_program_command_sequence.mcast_go_signal_cmd_ptr->wait_count = expected_num_workers_completed;
+    const uint64_t trace_wait_and_profiler_fields =
+        static_cast<uint64_t>(expected_num_workers_completed) |
+        (static_cast<uint64_t>(cached_program_command_sequence.mcast_go_signal_cmd_ptr->wait_stream) << 32);
+    std::memcpy(
+        &cached_program_command_sequence.mcast_go_signal_cmd_ptr->wait_count,
+        &trace_wait_and_profiler_fields,
+        sizeof(trace_wait_and_profiler_fields));
     // Update the number of unicast txns based on user provided parameter
     // This is required when a MeshWorkload uses ethernet cores on a set of devices
     // where the number of active eth cores is heterogeneous across devices.
@@ -3185,6 +3207,8 @@ void reset_worker_dispatch_state_on_device(
                 mesh_device->impl().has_noc_mcast_txns(sub_device_id) ? i : CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET,
                 mesh_device->impl().num_noc_unicast_txns(sub_device_id),
                 mesh_device->impl().noc_data_start_index(sub_device_id),
+                0,
+                0,
                 dispatcher_for_go_signal);
         }
     }

@@ -207,6 +207,7 @@ class RunTimeOptions {
     std::atomic<bool> test_mode_enabled = false;
 
     bool profiler_enabled = false;
+    bool realtime_profiler_disabled = false;
     bool profile_dispatch_cores = false;
     bool profiler_sync_enabled = false;
     bool profiler_mid_run_dump = false;
@@ -630,6 +631,7 @@ public:
     void set_test_mode_enabled(bool enable) { test_mode_enabled.store(enable, std::memory_order_relaxed); }
 
     bool get_profiler_enabled() const { return profiler_enabled; }
+    bool get_realtime_profiler_disabled() const { return realtime_profiler_disabled; }
     bool get_profiler_do_dispatch_cores() const { return profile_dispatch_cores; }
     bool get_profiler_sync_enabled() const { return profiler_sync_enabled; }
     bool get_profiler_trace_only() const { return profiler_trace_profiler; }

@@ -86,6 +86,9 @@ public:
     void NotifyRealtimeProfilerActivated(uint32_t chip_id);
     void NotifyRealtimeProfilerDeactivated(uint32_t chip_id);
     bool IsRealtimeProfilerActive() const;
+    void NotifyRealtimeProfilerCapability(tt::ProgramRealtimeProfilerDeviceCapability capability);
+    void RemoveRealtimeProfilerCapability(uint32_t chip_id);
+    std::vector<tt::ProgramRealtimeProfilerDeviceCapability> GetRealtimeProfilerDeviceCapabilities() const;
 
     void DumpData();
 
@@ -125,6 +128,7 @@ private:
 
     mutable std::mutex realtime_profiler_active_chips_mutex_;
     std::unordered_set<uint32_t> realtime_profiler_active_chips_;
+    std::unordered_map<uint32_t, tt::ProgramRealtimeProfilerDeviceCapability> realtime_profiler_capabilities_;
 };
 
 }  // namespace tt::tt_metal
