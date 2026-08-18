@@ -59,7 +59,14 @@ try:
         ttnn.synchronize_device(d)
         s.append(time.perf_counter() - t0)
     os.makedirs(OUT, exist_ok=True)
-    torch.save({"wav": torch.as_tensor(out).float().cpu(), "samples": s}, os.path.join(OUT, f"{LABEL}.pt"))
+    # Both halves of this path come from outside the process (BENCH_OUT, argv[1]), so contain the
+    # result rather than trusting the sanitising above: resolve it and refuse anything that lands
+    # outside OUT. Cheap, and it makes the safety property local instead of two screens away.
+    _out_dir = os.path.realpath(OUT)
+    _dest = os.path.realpath(os.path.join(_out_dir, LABEL + ".pt"))
+    if os.path.commonpath([_out_dir, _dest]) != _out_dir:
+        raise SystemExit(f"refusing to write outside {_out_dir}: {_dest}")
+    torch.save({"wav": torch.as_tensor(out).float().cpu(), "samples": s}, _dest)
     print(
         f"RESULT {LABEL}: median {statistics.median(s):.4f}s  min {min(s):.4f}  max {max(s):.4f}  n={N}  "
         f"[{', '.join(f'{v:.3f}' for v in s)}]",

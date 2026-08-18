@@ -24,7 +24,7 @@ from loguru import logger
 
 import ttnn
 
-from ....layers.audio_ops import Conv1dViaConv3d
+from ....layers.audio_ops import Conv1dViaConv3d, depthwise_tap_filter
 from ....models.audio_vae.minimax_h3.blockings_minimax_h3_audio import register_h3_audio_blockings
 from ....models.audio_vae.minimax_h3.convert_minimax_h3_audio import (
     assert_weight_norm_axes_consistent,
@@ -138,6 +138,62 @@ def test_decode(mesh_device, num_latent_frames):
 
     left, right = actual[0, 0], actual[1, 0]
     assert not torch.allclose(left, right, atol=1e-4), "stereo channels are identical -- a broadcast bug"
+
+
+@pytest.mark.parametrize(("mesh_device", "device_params"), SINGLE_DEVICE, indirect=["mesh_device", "device_params"])
+def test_depthwise_chunked_conv1d_matches_torch(mesh_device):
+    """`depthwise_tap_filter`'s C-chunked `ttnn.conv1d` recovery, against a torch depthwise reference.
+
+    Nothing else covers this path. H3 constructs the decoder with `prefer_mac=True`, and
+    `depthwise_tap_filter` returns the MAC form before reaching the conv1d fallback, so every decode
+    test exercises MAC and none of them touch the slicing, the per-chunk prepared weight, or the concat
+    that reassembles the channel slices. The decode is where it actually runs -- 72 times per sharded
+    clip with `prefer_mac=False` -- but that is a measurement script, not a gate.
+
+    Shape is the one the decode really chunks (T_pad=166, C=512, K=7, stride=1): a depthwise conv1d
+    lays the K kernel-width sticks out contiguously, so the activation block is C*K wide and the DRAM
+    slicer runs out of L1 at full C.
+    """
+    torch.manual_seed(0)
+    B, T_pad, C, K, stride = 1, 166, 512, 7, 1
+
+    x = torch.randn(B, T_pad, C, dtype=torch.float32)
+    taps = torch.randn(K, dtype=torch.float32)
+    x_dev = ttnn.from_torch(x, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
+
+    cache: dict = {}
+    out = depthwise_tap_filter(
+        x_dev,
+        [float(t) for t in taps],
+        stride,
+        mesh_device=mesh_device,
+        dtype=ttnn.float32,
+        cache=cache,
+        prefer_mac=False,
+    )
+    actual = ttnn.to_torch(ttnn.get_device_tensors(out)[0]).float()
+
+    # Valid depthwise conv over T: one tap vector shared by every channel, groups=C.
+    weight = taps.view(1, 1, K).expand(C, 1, K).contiguous()
+    expected = torch.nn.functional.conv1d(x.transpose(1, 2), weight, stride=stride, groups=C).transpose(1, 2)
+
+    assert actual.shape == expected.shape, f"{actual.shape} != {expected.shape}"
+    psnr_db = psnr(expected, actual)
+    logger.info(f"chunked depthwise conv1d vs torch: {psnr_db:.2f} dB")
+    assert psnr_db > 60.0, f"chunked depthwise conv1d diverges from torch: {psnr_db:.2f} dB"
+
+    # And prove the chunked path is what ran. `_depthwise_tap_conv1d_chunked` keys its prepared weight
+    # on the chunk width where the unchunked path keys on C, so a key below C means it chunked. Without
+    # this the test would pass just as happily on the plain conv1d or on a silent MAC fallback -- i.e.
+    # it would assert torch equivalence while covering none of the code it exists for.
+    chunk_widths = [k[1] for k in cache if isinstance(k, tuple) and k and k[0] == "w" and k[1] < C]
+    assert chunk_widths, (
+        f"expected the C-chunked conv1d recovery to run at C={C}, K={K}, T_pad={T_pad}, but the weight "
+        f"cache has no sub-C chunk key: {sorted(k for k in cache if isinstance(k, tuple))}. Either "
+        "conv1d now fits at full C (then this shape no longer covers the chunked path and the test needs "
+        "a new one), or it fell back to MAC (then the recovery is broken)."
+    )
+    logger.info(f"chunked into widths {sorted(set(chunk_widths))} from C={C}")
 
 
 @pytest.mark.parametrize(("mesh_device", "device_params"), SINGLE_DEVICE, indirect=["mesh_device", "device_params"])
