@@ -19,8 +19,15 @@
 # --timeout=0 disables pytest.ini's 300 s per-test limit, which a real 145-frame decode exceeds.
 #
 # Arms measured against it, same line with one variable prefixed:
-#   DIFFVAE_KV_BF8=1  -> 10096.0 ms (-610, -5.7%); all of it kv-allgather, kv-wrow unmoved
-#   DIFFVAE_BLOCK=0   -> 21847.5 ms (2.04x SLOWER); also disables GNA, so sdpa explodes 26x
+#   DIFFVAE_KV_BF8=1       -> 10096.0 ms (-610, -5.7%); all kv-allgather, kv-wrow unmoved
+#   DIFFVAE_KV_RM_GATHER=1 -> 10323.9 ms (-383, -3.6%); kv-wrow GONE (-1213), gather +845
+#   DIFFVAE_BLOCK=0        -> 21847.5 ms (2.04x SLOWER); also disables GNA, so sdpa explodes 26x
+#
+# DIFFVAE_KV_RM_PAGE sweep (with RM_GATHER=1) -- page size is NOT why the tiled gather wins:
+#   9984 B (default) 10324 | 4992 B 11875 | 1664 B 11931 | 768 B 30639 | 256 B 38983
+# Monotonic, and the largest reachable page is already the default. RM at its best page is still
+# 39%/block slower than TILE at 2048 B, so the tiled path's edge is elsewhere (tile-granular
+# chunking, or hyperparams tuned for it). The full win needs the fused reader to read TILE K/V.
 #
 # Extra pytest flags pass straight through: bash ./run_ltx25_diffvae.sh --timeout=0 -k s16
 set -euo pipefail

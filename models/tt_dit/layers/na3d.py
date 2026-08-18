@@ -1039,13 +1039,51 @@ def neighborhood_attention_3d_op_sp_w_sharded(
     else:
         op_stride = None
 
-    def to_seq_flat(x: ttnn.Tensor, w_: int) -> ttnn.Tensor:
-        """(B, NH, S, HD) T-outer -> the same, W-outer. One permute; both reshapes are views."""
+    def _rm_wouter(x: ttnn.Tensor, w_: int) -> ttnn.Tensor:
+        """(B, NH, S, HD) T-outer, any layout -> ROW_MAJOR (NH, w_, ., ., HD) W-outer.
+
+        Extracted so the tiled and the paged K/V paths cannot drift on the axis order -- getting
+        that order wrong does not fail, it silently attends to the wrong neighbourhood.
+        """
         x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
         x = ttnn.reshape(x, (heads, t_full, h_full, w_, head_dim))
-        x = ttnn.permute(x, (0, 3, 2, 1, 4) if t_inner else (0, 3, 1, 2, 4))
+        return ttnn.permute(x, (0, 3, 2, 1, 4) if t_inner else (0, 3, 1, 2, 4))
+
+    def to_seq_flat(x: ttnn.Tensor, w_: int) -> ttnn.Tensor:
+        """(B, NH, S, HD) T-outer -> the same, W-outer. One permute; both reshapes are views."""
+        x = _rm_wouter(x, w_)
         x = ttnn.reshape(x, (batch, heads, w_ * t_full * h_full, head_dim))
         return ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+
+    def _page_split(page_axis: int) -> int:
+        """How many inner-axis elements go in one gathered page.
+
+        The collective's cost turned out to depend on this and not, as assumed, to fall as the page
+        grows: one page per row (9984 B here) gathers 39% slower than the tiled path's 2048 B pages.
+        Everything after the gather is a free ROW_MAJOR view, so the page is tunable -- the only hard
+        constraint is that a shard still contributes whole W rows, which holds for any divisor of the
+        inner axis. DIFFVAE_KV_RM_PAGE is a target in BYTES; the largest divisor that fits wins, and
+        0 (the default) means one page per row.
+        """
+        target = int(os.environ.get("DIFFVAE_KV_RM_PAGE", "0"))
+        if target <= 0:
+            return page_axis
+        row_bytes = head_dim * 2  # bf16; the RM path forbids bfloat8_b (it is TILE-only)
+        fits = [d for d in range(1, page_axis + 1) if page_axis % d == 0 and d * row_bytes <= target]
+        return max(fits) if fits else 1
+
+    def to_seq_paged(x: ttnn.Tensor, w_: int) -> ttnn.Tensor:
+        """W-outer and ROW_MAJOR, already in the paging the fused reader gathers from.
+
+        Same buffer order to_seq_flat produces; the only difference is where the row boundary is
+        drawn, so this is the flat form's reshape with the innermost axis folded into the page.
+        """
+        x = _rm_wouter(x, w_)
+        rows, page_axis = (h_full, t_full) if t_inner else (t_full, h_full)
+        k = _page_split(page_axis)
+        # (w, rows, page_axis, hd) -> rows carry the (page_axis / k) split, so the concat still cuts
+        # on a W boundary and the post-gather merge back to one page per row is a view.
+        return ttnn.reshape(x, (batch, heads, w_ * rows * (page_axis // k), k * head_dim))
 
     def to_seq(x: ttnn.Tensor, w_: int) -> ttnn.Tensor:
         if flat_seq:
@@ -1083,10 +1121,37 @@ def neighborhood_attention_3d_op_sp_w_sharded(
     # collectives that measure ~3.4 GB/s here.
     ag_hyper = os.environ.get("DIFFVAE_AG_HYPERPARAMS", "0") == "1"
     fused_reader = os.environ.get("DIFFVAE_SP_FUSED", "0") == "1"
-    pad_gather = os.environ.get("DIFFVAE_PAD_GATHER") == "1" and fused_reader and seq_local % 32 != 0
+    # DIFFVAE_KV_RM_GATHER=1: gather K/V ALREADY ROW_MAJOR and already paged, instead of tilizing the
+    # shard, gathering tiled, and then untilizing the (8x larger) gathered result. Measured on the
+    # 1080p stage-5 grid, that untilize -- kv-wrow -- is 125.8 ms per block, 5.21 GB of read-reorder-
+    # write, and it buys nothing the gather could not have delivered directly.
+    #
+    # The concat still rebuilds the full W. A shard's rows are (w_local, rows)-ordered with w
+    # outermost, so device-order concatenation on dim 2 lands global row (s*w_local + w)*rows + i --
+    # exactly the W-outer paging wrow produced. Pages get BIGGER, not smaller: the page is the
+    # innermost axis fused with head_dim (9984 B at this grid) against a tile's 2048 B, which is also
+    # why the pad-to-a-whole-tile dance the tiled gather needs disappears with it.
+    rm_gather = os.environ.get("DIFFVAE_KV_RM_GATHER", "0") == "1" and fused_reader and flat_seq
+    if rm_gather and kv_dtype is not None:
+        msg = "DIFFVAE_KV_RM_GATHER and DIFFVAE_KV_BF8 are mutually exclusive: bfloat8_b exists only in TILE layout"
+        raise ValueError(msg)
+    pad_gather = os.environ.get("DIFFVAE_PAD_GATHER") == "1" and fused_reader and not rm_gather and seq_local % 32 != 0
     seq_pad = ((seq_local + 31) // 32) * 32 if pad_gather else seq_local
 
     def gathered(x: ttnn.Tensor) -> ttnn.Tensor:
+        if rm_gather:
+            # No typecast and no pad: neither applies to a ROW_MAJOR gather, and wrow below is skipped
+            # because this already IS wrow's output.
+            out = ccl_manager.all_gather(
+                to_seq_paged(x, w_local),
+                dim=2,
+                mesh_axis=sp_axis,
+                use_hyperparams=ag_hyper,
+                use_persistent_buffer=persist_ccl,
+            )
+            rows, page_axis = (h_full, t_full) if t_inner else (t_full, h_full)
+            # Merge the page split back so the reader sees one page per row. Same buffer, new strides.
+            return ttnn.reshape(out, (batch, heads, w_full * rows, page_axis * head_dim))
         seq = to_seq(x, w_local)
         if kv_dtype is not None and seq.get_dtype() != kv_dtype:
             cast = ttnn.typecast(seq, kv_dtype)
@@ -1136,8 +1201,9 @@ def neighborhood_attention_3d_op_sp_w_sharded(
                 return ttnn.reshape(x, (batch, heads, w_full * h_full, t_full * head_dim))
             return ttnn.reshape(x, (batch, heads, w_full * t_full, h_full * head_dim))
 
-        with _deep_prof(mesh, "kv-wrow (retile gathered K/V)", category=decode_tree.RESHAPE):
-            tk, tv = wrow(tk), wrow(tv)
+        if not rm_gather:
+            with _deep_prof(mesh, "kv-wrow (retile gathered K/V)", category=decode_tree.RESHAPE):
+                tk, tv = wrow(tk), wrow(tv)
         grid_dev = mesh.compute_with_storage_grid_size()
         # Larger q_chunk = fewer chunks = the per-chunk fixed overhead (mask-gen + reader/compute setup)
         # amortizes over more queries. The box grows with q_chunk (its k-tiles are streamed, so L1 is
