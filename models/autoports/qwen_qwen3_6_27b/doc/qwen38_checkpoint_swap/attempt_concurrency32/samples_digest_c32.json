@@ -1,0 +1,1199 @@
+{
+ "note": "digest of the concurrency-32 release eval; raw samples were 2.2MB, over the 256KB artifact guard",
+ "task": "r1_gpqa_diamond",
+ "documents": 198,
+ "empty_responses": 193,
+ "scored_1": 5,
+ "exact_match": 0.025252525252525252,
+ "cause": "server stalled to 0 tok/s with 31 reqs running, then OOM 402653184 B",
+ "rows": [
+  {
+   "doc": 0,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 1,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 2,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 3,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 4,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 5,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 6,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 7,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 8,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 9,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 10,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 11,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 12,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 13,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 14,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 15,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 16,
+   "score": 1,
+   "resp_chars": 566,
+   "head": "\n\nThe complex dissociates slightly:\n\n\\[\n\\text{Ca-EDTA} \\righ"
+  },
+  {
+   "doc": 17,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 18,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 19,
+   "score": 1,
+   "resp_chars": 11,
+   "head": "\n\n\\boxed{A}"
+  },
+  {
+   "doc": 20,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 21,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 22,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 23,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 24,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 25,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 26,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 27,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 28,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 29,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 30,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 31,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 32,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 33,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 34,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 35,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 36,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 37,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 38,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 39,
+   "score": 1,
+   "resp_chars": 1875,
+   "head": "\n\nLooking at this question, I need to consider what \"compoun"
+  },
+  {
+   "doc": 40,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 41,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 42,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 43,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 44,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 45,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 46,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 47,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 48,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 49,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 50,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 51,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 52,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 53,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 54,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 55,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 56,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 57,
+   "score": 1,
+   "resp_chars": 11,
+   "head": "\n\n\\boxed{C}"
+  },
+  {
+   "doc": 58,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 59,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 60,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 61,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 62,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 63,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 64,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 65,
+   "score": 1,
+   "resp_chars": 1363,
+   "head": "\n\nThe correct answer is **(B) 1,2,4**.\n\n**Step-by-step reaso"
+  },
+  {
+   "doc": 66,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 67,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 68,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 69,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 70,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 71,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 72,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 73,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 74,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 75,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 76,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 77,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 78,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 79,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 80,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 81,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 82,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 83,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 84,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 85,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 86,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 87,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 88,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 89,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 90,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 91,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 92,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 93,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 94,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 95,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 96,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 97,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 98,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 99,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 100,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 101,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 102,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 103,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 104,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 105,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 106,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 107,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 108,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 109,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 110,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 111,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 112,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 113,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 114,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 115,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 116,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 117,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 118,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 119,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 120,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 121,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 122,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 123,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 124,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 125,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 126,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 127,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 128,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 129,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 130,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 131,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 132,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 133,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 134,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 135,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 136,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 137,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 138,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 139,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 140,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 141,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 142,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 143,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 144,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 145,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 146,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 147,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 148,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 149,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 150,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 151,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 152,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 153,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 154,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 155,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 156,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 157,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 158,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 159,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 160,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 161,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 162,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 163,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 164,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 165,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 166,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 167,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 168,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 169,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 170,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 171,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 172,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 173,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 174,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 175,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 176,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 177,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 178,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 179,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 180,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 181,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 182,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 183,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 184,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 185,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 186,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 187,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 188,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 189,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 190,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 191,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 192,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 193,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 194,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 195,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 196,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  },
+  {
+   "doc": 197,
+   "score": 0,
+   "resp_chars": 0,
+   "head": ""
+  }
+ ]
+}
