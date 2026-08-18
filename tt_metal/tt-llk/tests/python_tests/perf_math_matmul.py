@@ -57,13 +57,19 @@ MATMUL_COMBINATIONS = sweep_matmul(
     math_matmul=True,
 )
 
-TINY_TILES_MATMUL_COMBINATIONS = sweep_tiny_tiles_matmul(
-    MATMUL_FORMATS,
-    DEST_ACC_MODES,
-    STOCHASTIC_ROUNDING_MODES,
-    DEST_SYNC_MODES,
-    math_matmul=True,
-)
+PERF_CT_DIMS = {1, 8, 16}
+
+TINY_TILES_MATMUL_COMBINATIONS = [
+    cfg
+    for cfg in sweep_tiny_tiles_matmul(
+        MATMUL_FORMATS,
+        DEST_ACC_MODES,
+        STOCHASTIC_ROUNDING_MODES,
+        DEST_SYNC_MODES,
+        math_matmul=True,
+    )
+    if cfg.tile_dimensions.ct_dim in PERF_CT_DIMS and cfg.dst_index == 0
+]
 
 ALL_TEST_PARAMS = list(
     chain(

@@ -5,11 +5,9 @@ from typing import List
 
 import pytest
 from helpers.format_config import DataFormat, FormatConfig, is_dest_acc_needed
+from helpers.golden_generators import TILE_DIM
 from helpers.llk_params import DestAccumulation, MathFidelity, PerfRunType, Transpose
-from helpers.matmul_sweep import (
-    generate_matmul_dimension_combinations,
-    generate_tile_dims,
-)
+from helpers.matmul_sweep import generate_tile_dims
 from helpers.param_config import input_output_formats, parametrize
 from helpers.perf.core import PerfConfig
 from helpers.stimuli_config import StimuliConfig
@@ -24,8 +22,26 @@ from helpers.test_variant_parameters import (
     UNPACK_TRANS_FACES,
 )
 
-# Important K dimensions to test
-KT_DIMS = [1, 2, 3, 4, 8, 32]
+# Cold start, functional-max inner dim, and reuse/bandwidth.
+KT_DIMS = [1, 4, 32]
+
+
+def dest_corner_mn(max_tiles: int) -> List[tuple]:
+    """1×1, 1×max, max×1, and the largest square that fits in dest."""
+    square = int(max_tiles**0.5)
+    corners = [(1, 1), (1, max_tiles), (max_tiles, 1), (square, square)]
+    return list(dict.fromkeys(corners))
+
+
+def generate_dest_corner_combinations(max_tiles: int, kt_dims=KT_DIMS) -> List[tuple]:
+    return [
+        (
+            [mt_dim * TILE_DIM, kt_dim * TILE_DIM],
+            [kt_dim * TILE_DIM, nt_dim * TILE_DIM],
+        )
+        for mt_dim, nt_dim in dest_corner_mn(max_tiles)
+        for kt_dim in kt_dims
+    ]
 
 
 def matmul_combos(
@@ -41,7 +57,7 @@ def matmul_combos(
         _dest_bank_max_tiles(fmt, acc) for fmt in formats for acc in dest_acc
     )
     dimensions = {
-        max_tiles: generate_matmul_dimension_combinations(max_tiles, kt_dims=KT_DIMS)
+        max_tiles: generate_dest_corner_combinations(max_tiles, kt_dims=KT_DIMS)
         for max_tiles in unique_max_tiles
     }
 
