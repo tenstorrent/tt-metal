@@ -105,3 +105,18 @@ TEST(HostThreading, AcceptsValidPositive) {
     ScopedWorkerThreadsEnv env("3");
     EXPECT_EQ(get_host_worker_threads(), static_cast<size_t>(3));
 }
+
+// ULONG_MAX is digit-only and in-range for strtoul (no ERANGE), so it clears
+// the digit/parse guards. It must be clamped to the hardware-concurrency cap
+// rather than returned verbatim, which would drive spawning ~2^64 threads.
+TEST(HostThreading, ClampsUlongMax) {
+    ScopedWorkerThreadsEnv env("18446744073709551615");
+    EXPECT_EQ(get_host_worker_threads(), hardware_concurrency_or_one());
+}
+
+// A plausible typo (10 billion) is well under ULONG_MAX, so it also clears the
+// parse guards and must be clamped rather than returned verbatim.
+TEST(HostThreading, ClampsPlausibleTypo) {
+    ScopedWorkerThreadsEnv env("10000000000");
+    EXPECT_EQ(get_host_worker_threads(), hardware_concurrency_or_one());
+}

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <cerrno>
 #include <cstddef>
 #include <cstdlib>
@@ -35,7 +36,15 @@ inline size_t get_host_worker_threads() {
     if (errno != 0 || end == value || *end != '\0' || parsed == 0) {
         return hardware_concurrency_or_one();
     }
-    return static_cast<size_t>(parsed);
+
+    // Clamp to a sane upper bound. strtoul accepts any digit-only string up to
+    // ULONG_MAX without ERANGE (ERANGE only fires for values *exceeding* the
+    // range), so a typo like "10000000000" or an explicit ULONG_MAX would
+    // otherwise be returned verbatim and drive an attempt to spawn that many
+    // worker threads, exhausting the process. Oversubscribing host worker
+    // threads beyond the detected hardware concurrency yields no benefit, so
+    // that is the natural cap.
+    return std::min(static_cast<size_t>(parsed), hardware_concurrency_or_one());
 }
 
 }  // namespace tt::tt_metal::detail
