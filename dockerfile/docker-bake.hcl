@@ -81,6 +81,10 @@ variable "UV_IMAGE" {
   default = "ghcr.io/astral-sh/uv@sha256:9a23023be68b2ed09750ae636228e903a54a05ea56ed03a934d00fe9fbeded4b"
 }
 
+variable "TT_LLM_ENGINE_IMAGE" {
+  default = "ghcr.io/tenstorrent/tt-llm-engine/migration-worker:598154ddb3b838e5a516c220db83442340a72f74"
+}
+
 # =============================================================================
 # Tool targets (from Dockerfile.tools)
 #
@@ -148,6 +152,13 @@ target "zstd" {
   tags       = ["tool-zstd:local"]
 }
 
+target "curl" {
+  context    = "."
+  dockerfile = "dockerfile/Dockerfile.tools"
+  target     = "curl"
+  tags       = ["tool-curl:local"]
+}
+
 target "sfpi" {
   context    = "."
   dockerfile = "dockerfile/Dockerfile.tools"
@@ -188,7 +199,7 @@ target "dockerfile-frontend" {
 }
 
 group "tools" {
-  targets = ["ccache", "clangbuildanalyzer", "cmake", "dockerfile-frontend", "doxygen", "gdb", "mold", "openmpi", "oras", "sfpi", "syft-scanner", "yq", "zstd"]
+  targets = ["ccache", "clangbuildanalyzer", "cmake", "curl", "dockerfile-frontend", "doxygen", "gdb", "mold", "openmpi", "oras", "sfpi", "syft-scanner", "yq", "zstd"]
 }
 
 # =============================================================================
@@ -256,6 +267,7 @@ target "_main-common" {
     cmake-layer              = "target:cmake"
     yq-layer                 = "target:yq"
     zstd-layer               = "target:zstd"
+    curl-layer               = "target:curl"
     sfpi-layer               = "target:sfpi"
     openmpi-layer            = "target:openmpi"
   }
@@ -316,6 +328,9 @@ target "release-models" {
   inherits = ["_main-common"]
   target   = "release-models"
   tags     = ["tt-metalium-release-models:local"]
+  args = {
+    TT_LLM_ENGINE_IMAGE = TT_LLM_ENGINE_IMAGE
+  }
 }
 
 group "main" {

@@ -10,7 +10,7 @@
 #include <mesh_workload.hpp>
 #include <mesh_command_queue.hpp>
 #include <tt_metal.hpp>
-#include <tt_metal_profiler.hpp>
+#include "tt_metal_profiler.hpp"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -538,6 +538,7 @@ void syncAllDevices(ChipId host_connected_device) {
     for (auto& sender : profiler_state_manager->device_device_time_pair) {
         for (auto& receiver : sender.second) {
             std::vector<std::pair<uint64_t, uint64_t>> timePairs;
+            timePairs.reserve(receiver.second.size() / 2);
             for (int i = 0; i < receiver.second.size(); i += 2) {
                 uint64_t senderTime = (receiver.second[i].first + receiver.second[i + 1].first) / 2;
                 timePairs.push_back({senderTime, receiver.second[i].second});

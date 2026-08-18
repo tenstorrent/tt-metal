@@ -8,6 +8,7 @@
 #include <sstream>
 #include <filesystem>
 #include <algorithm>
+#include <optional>
 #include <unordered_map>
 #include <unordered_set>
 #include <memory>
@@ -17,6 +18,7 @@
 #include <tt_stl/assert.hpp>
 
 #include "protobuf/mesh_graph_descriptor.pb.h"
+#include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
@@ -32,6 +34,22 @@ using namespace tt::tt_metal::distributed;
 namespace tt::tt_fabric {
 
 namespace {
+
+// When DistributedContext is initialized (MPI / tt-run split layout), prefix instance names with mgd{id}_ using
+// subcontext_id() so split-job ranks load disjoint logical names.
+std::optional<int> subcontext_id_for_instance_name_uniquify() {
+    using tt::tt_metal::distributed::multihost::DistributedContext;
+    if (DistributedContext::is_initialized()) {
+        const auto& world = DistributedContext::get_current_world();
+        if (world != nullptr) {
+            const auto sc = world->subcontext_id();
+            if (sc.has_value()) {
+                return *sc.value();
+            }
+        }
+    }
+    return std::nullopt;
+}
 
 std::string read_file_to_string(const std::filesystem::path& file_path) {
     std::ifstream input(file_path);
@@ -166,6 +184,18 @@ MeshGraphDescriptor::MeshGraphDescriptor(const std::string& text_proto, const bo
     proto_ = std::make_shared<proto::MeshGraphDescriptor>(temp_proto);
 
     populate();
+
+    // Prefix mgd{id}_ when DistributedContext reports a split-job sub-context id (MPI / tt-run).
+    if (const auto sid = subcontext_id_for_instance_name_uniquify(); sid.has_value()) {
+        const std::string prefix = "mgd" + std::to_string(*sid) + "_";
+        instances_by_name_.clear();
+        for (auto& [_, inst] : instances_) {
+            inst.name = prefix + inst.name;
+        }
+        for (const auto& [gid, inst] : instances_) {
+            instances_by_name_[inst.name].push_back(gid);
+        }
+    }
 }
 
 MeshGraphDescriptor::MeshGraphDescriptor(
@@ -249,14 +279,17 @@ std::unordered_map<std::string, uint32_t> MeshGraphDescriptor::count_instances_b
     return counts;
 }
 
-FabricType MeshGraphDescriptor::infer_fabric_type_from_dim_types(const proto::MeshDescriptor* mesh_desc) {
-    const auto& dim_types = mesh_desc->device_topology().dim_types();
+namespace {
+
+template <typename Descriptor>
+FabricType infer_declared_fabric_type_from_dim_types(const Descriptor* descriptor) {
+    const auto& dim_types = descriptor->device_topology().dim_types();
     if (dim_types.size() < 2) {
         return FabricType::MESH;
     }
 
-    bool y_is_ring = (dim_types[0] == proto::TorusTopology::RING);
-    bool x_is_ring = (dim_types[1] == proto::TorusTopology::RING);
+    const bool y_is_ring = (dim_types[0] == proto::TorusTopology::RING);
+    const bool x_is_ring = (dim_types[1] == proto::TorusTopology::RING);
 
     if (y_is_ring && x_is_ring) {
         return FabricType::TORUS_XY;
@@ -268,6 +301,16 @@ FabricType MeshGraphDescriptor::infer_fabric_type_from_dim_types(const proto::Me
         return FabricType::TORUS_X;
     }
     return FabricType::MESH;
+}
+
+}  // namespace
+
+FabricType MeshGraphDescriptor::infer_fabric_type_from_dim_types(const proto::MeshDescriptor* mesh_desc) {
+    return infer_declared_fabric_type_from_dim_types(mesh_desc);
+}
+
+FabricType MeshGraphDescriptor::infer_fabric_type_from_dim_types(const proto::SwitchDescriptor* switch_desc) {
+    return infer_declared_fabric_type_from_dim_types(switch_desc);
 }
 
 void MeshGraphDescriptor::set_defaults(proto::MeshGraphDescriptor& proto) {

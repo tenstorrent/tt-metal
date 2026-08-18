@@ -56,9 +56,8 @@ void issue_record_event_commands(
 
     const uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
     const uint32_t num_worker_counters = sub_device_ids.size();
-    const CoreType dispatch_core_type = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
     const uint32_t num_cqs_per_dispatch_core =
-        MetalContext::instance().get_dispatch_query_manager().cq_dispatch_layout(dispatch_core_type).num_cqs_per_core;
+        MetalContext::instance().get_dispatch_query_manager().cq_dispatch_layout().num_cqs_per_core;
     const uint32_t num_dispatch_cores = num_command_queues / num_cqs_per_dispatch_core;
     const uint32_t packed_write_max_unicast_sub_cmds = get_packed_write_max_unicast_sub_cmds(device);
 
@@ -123,6 +122,7 @@ void issue_record_event_commands(
     std::vector<CQDispatchWritePackedUnicastSubCmd> unicast_sub_cmds(num_command_queues);
     std::vector<std::pair<const void*, uint32_t>> event_payloads(num_command_queues);
 
+    const CoreType dispatch_core_type = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
     for (auto cq = 0; cq < num_command_queues; cq++) {
         tt_cxy_pair dispatch_location = MetalContext::instance().get_dispatch_query_manager().get_dispatch_core(cq);
         CoreCoord dispatch_virtual_core = device->virtual_core_from_logical_core(dispatch_location, dispatch_core_type);

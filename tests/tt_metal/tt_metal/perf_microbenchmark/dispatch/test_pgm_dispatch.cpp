@@ -489,9 +489,9 @@ MeshTraceId setup_trace_if_enabled(
     MeshTraceId tid;
     if (info.use_trace) {
         const std::size_t cq_id = 0;
-        tid = BeginTraceCapture(mesh_device.get(), cq_id);
+        tid = mesh_device->begin_mesh_trace(mesh_device->mesh_command_queue(cq_id));
         executor.execute_programs();
-        mesh_device->end_mesh_trace(cq_id, tid);
+        mesh_device->end_mesh_trace(mesh_device->mesh_command_queue(cq_id), tid);
         Finish(mesh_device->mesh_command_queue(cq_id));
     }
     return tid;
@@ -506,12 +506,11 @@ void run_benchmark_timing_loop(
     ProgramExecutor& executor,
     MeshTraceId tid,
     const std::shared_ptr<MeshDevice>& mesh_device) {
-    constexpr std::size_t cq_id = 0;
     auto execute_func = executor.execute_programs;
     for ([[maybe_unused]] auto _ : state) {
         auto start = std::chrono::system_clock::now();
         if (info.use_trace) {
-            mesh_device->replay_mesh_trace(cq_id, tid, false);
+            mesh_device->replay_mesh_trace(mesh_cq, tid, false);
         } else {
             execute_func();
         }
@@ -595,10 +594,8 @@ std::array<tt_metal::Program, 2> create_standard_programs(
 }
 // Helper function to create prefetcher cache load programs
 std::pair<std::vector<tt_metal::Program>, std::unordered_map<std::string, uint32_t>> create_load_prefetcher_programs(
-    const TestInfo& info, const std::shared_ptr<MeshDevice>& mesh_device, DispatchCoreType dispatch_core_type) {
-    uint32_t prefetcher_cache_size = tt::tt_metal::MetalContext::instance()
-                                         .dispatch_mem_map(dispatch_core_type_to_core_type(dispatch_core_type))
-                                         .ringbuffer_size();
+    const TestInfo& info, const std::shared_ptr<MeshDevice>& mesh_device) {
+    uint32_t prefetcher_cache_size = tt::tt_metal::MetalContext::instance().dispatch_mem_map().ringbuffer_size();
     uint32_t target_total_size = (3 * prefetcher_cache_size) / 2;
     uint32_t num_kernels = get_num_kernels(info);
     uint32_t estimated_program_size =
@@ -732,7 +729,7 @@ static int pgm_dispatch(T& state, TestInfo info) {
         ProgramExecutor executor([]() {}, []() {}, 0);  // Initialize with placeholder
         std::vector<MeshWorkload> mesh_workloads;
         if (info.load_prefetcher) {
-            auto [programs, extra_counters] = create_load_prefetcher_programs(info, mesh_device, dispatch_core_type);
+            auto [programs, extra_counters] = create_load_prefetcher_programs(info, mesh_device);
             executor = create_load_prefetcher_executor(info, mesh_workloads, programs, mesh_cq);
             // Store extra counters for later use
             if constexpr (std::is_same_v<T, benchmark::State>) {

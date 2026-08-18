@@ -132,6 +132,32 @@ void check_connections(
         }
     }
 }
+
+// Mirror of internal::get_all_mgd_fabric_types(): pull each mesh instance's MeshDescriptor out
+// of the parsed MGD and infer its FabricType from the wired dim_types, one entry per mesh.
+std::vector<FabricType> infer_fabric_types(const MeshGraphDescriptor& desc) {
+    std::vector<FabricType> types;
+    for (const auto mesh : desc.all_meshes()) {
+        const auto& instance = desc.get_instance(mesh);
+        const auto* mesh_desc = std::get<const proto::MeshDescriptor*>(instance.desc);
+        types.push_back(MeshGraphDescriptor::infer_fabric_type_from_dim_types(mesh_desc));
+    }
+    return types;
+}
+
+std::string single_mesh_proto(const std::string& dim_types) {
+    return R"proto(
+               mesh_descriptors: { name: "M0" arch: WORMHOLE_B0
+                                   device_topology: { dims: [ 4, 4 ]
+                                                      dim_types:)proto" +
+           dim_types + R"proto(
+        }
+        channels: { count: 1 }
+          host_topology: { dims: [ 1, 1 ] }
+        }
+        top_level_instance: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+    )proto";
+}
 }
 
 namespace tt::tt_fabric::fabric_router_tests {
@@ -158,6 +184,91 @@ TEST(MeshGraphDescriptorTests, ParsesFromTextProtoString) {
     EXPECT_NO_THROW(MeshGraphDescriptor desc(text_proto));
 }
 
+TEST(MeshGraphDescriptorTests, InfersDeclaredTorusTypeForDegenerateDimensions) {
+    const std::string text_proto = R"proto(
+        mesh_descriptors: {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology: {
+            dims: [ 2, 4 ]
+            dim_types: [ RING, RING ]
+          }
+          channels: { count: 1 }
+          host_topology: { dims: [ 2, 4 ] }
+        }
+        top_level_instance: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+    )proto";
+
+    MeshGraphDescriptor desc(text_proto);
+    const auto& instance = desc.get_instance(desc.instances_by_name("M0").at(0));
+    const auto* mesh_desc = std::get<const proto::MeshDescriptor*>(instance.desc);
+    EXPECT_EQ(MeshGraphDescriptor::infer_fabric_type_from_dim_types(mesh_desc), FabricType::TORUS_XY);
+}
+
+TEST(MeshGraphDescriptorTests, InfersDeclaredTorusTypeForDegenerateSwitchDimensions) {
+    const std::string text_proto = R"proto(
+        switch_descriptors: {
+          name: "SW0"
+          arch: WORMHOLE_B0
+          device_topology: {
+            dims: [ 2, 4 ]
+            dim_types: [ RING, RING ]
+          }
+          channels: { count: 1 }
+        }
+        top_level_instance: { switch: { switch_descriptor: "SW0" switch_id: 0 } }
+    )proto";
+
+    MeshGraphDescriptor desc(text_proto);
+    const auto& instance = desc.get_instance(desc.instances_by_name("SW0").at(0));
+    const auto* switch_desc = std::get<const proto::SwitchDescriptor*>(instance.desc);
+    EXPECT_EQ(MeshGraphDescriptor::infer_fabric_type_from_dim_types(switch_desc), FabricType::TORUS_XY);
+}
+
+TEST(MeshGraphDescriptorTests, CollapsedTorusSwitchRetainsMeshDirectionsAndEdgePorts) {
+    const std::string text_proto = R"proto(
+        mesh_descriptors: {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 1, 1 ] }
+          channels: { count: 1 }
+          host_topology: { dims: [ 1, 1 ] }
+        }
+        switch_descriptors: {
+          name: "SW0"
+          arch: WORMHOLE_B0
+          device_topology: {
+            dims: [ 2, 4 ]
+            dim_types: [ RING, RING ]
+          }
+          channels: { count: 1 }
+        }
+        graph_descriptors: {
+          name: "G0"
+          type: "FABRIC"
+          instances: { switch: { switch_descriptor: "SW0" switch_id: 0 } }
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 1 } }
+        }
+        top_level_instance: { graph: { graph_descriptor: "G0" graph_id: 0 } }
+    )proto";
+    const auto test_file = std::filesystem::temp_directory_path() / "test_collapsed_torus_switch.textproto";
+    {
+        std::ofstream file(test_file);
+        file << text_proto;
+    }
+
+    tt::tt_fabric::MeshGraph mesh_graph(tt::tt_metal::ClusterType::T3K, test_file.string());
+    std::filesystem::remove(test_file);
+
+    const auto& connectivity = mesh_graph.get_intra_mesh_connectivity().at(0);
+    EXPECT_EQ(connectivity.at(0).at(4).port_direction, RoutingDirection::S);
+    EXPECT_EQ(connectivity.at(4).at(0).port_direction, RoutingDirection::N);
+
+    const auto& edge_ports = mesh_graph.get_mesh_edge_ports_to_chip_id().at(0);
+    EXPECT_EQ(edge_ports.at({RoutingDirection::N, 0}), 0);
+    EXPECT_EQ(edge_ports.at({RoutingDirection::S, 0}), 4);
+}
+
 TEST(MeshGraphDescriptorTests, ParsesFromTextProtoFile) {
     const std::filesystem::path text_proto_file_path =
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/mgd2_syntax_check_mesh_graph_descriptor.textproto";
@@ -169,6 +280,74 @@ TEST(MeshGraphDescriptorTests, ParsesBhGalaxySp4TorusXY) {
     const std::filesystem::path text_proto_file_path =
         "tt_metal/fabric/mesh_graph_descriptors/bh_galaxy_sp4_torus_xy_graph_descriptor.textproto";
     EXPECT_NO_THROW(MeshGraphDescriptor desc(text_proto_file_path));
+}
+
+// Covers the dim_types -> FabricType inference behind get_all_mgd_fabric_types() (the Python API
+// exposed in tt-blaze). dim_types are [Y, X]; a RING axis makes that axis a torus.
+TEST(MeshGraphDescriptorTests, InferFabricTypeFromDimTypes) {
+    struct Case {
+        std::string dim_types;
+        FabricType expected;
+    };
+    const std::vector<Case> cases = {
+        {"[ LINE, LINE ]", FabricType::MESH},
+        {"[ LINE, RING ]", FabricType::TORUS_X},
+        {"[ RING, LINE ]", FabricType::TORUS_Y},
+        {"[ RING, RING ]", FabricType::TORUS_XY},
+    };
+    for (const auto& c : cases) {
+        MeshGraphDescriptor desc(single_mesh_proto(c.dim_types));
+        const auto types = infer_fabric_types(desc);
+        ASSERT_EQ(types.size(), 1u) << "dim_types " << c.dim_types;
+        EXPECT_EQ(types[0], c.expected) << "dim_types " << c.dim_types;
+    }
+}
+
+// One FabricType per compute mesh: a graph of two meshes with different topologies must yield
+// both meshes' inferred types.
+TEST(MeshGraphDescriptorTests, InferFabricTypePerMeshInMultiMeshGraph) {
+    const std::string text_proto = R"proto(
+        mesh_descriptors: {
+          name: "M_TX"
+          arch: WORMHOLE_B0
+          device_topology: {
+            dims: [ 4, 4 ]
+            dim_types: [ LINE, RING ]
+          }
+          channels: { count: 1 }
+          host_topology: { dims: [ 1, 1 ] }
+        }
+        mesh_descriptors: {
+          name: "M_TY"
+          arch: WORMHOLE_B0
+          device_topology: {
+            dims: [ 4, 4 ]
+            dim_types: [ RING, LINE ]
+          }
+          channels: { count: 1 }
+          host_topology: { dims: [ 1, 1 ] }
+        }
+
+        graph_descriptors: {
+          name: "G0"
+          type: "FABRIC"
+          instances: { mesh: { mesh_descriptor: "M_TX" mesh_id: 0 } }
+          instances: { mesh: { mesh_descriptor: "M_TY" mesh_id: 1 } }
+          connections: {
+            nodes: { mesh: { mesh_descriptor: "M_TX" mesh_id: 0 } }
+            nodes: { mesh: { mesh_descriptor: "M_TY" mesh_id: 1 } }
+            channels: { count: 1 }
+          }
+        }
+
+        top_level_instance: { graph: { graph_descriptor: "G0" graph_id: 0 } }
+    )proto";
+
+    MeshGraphDescriptor desc(text_proto);
+    const auto types = infer_fabric_types(desc);
+    ASSERT_EQ(types.size(), 2u) << "one FabricType per compute mesh";
+    const std::set<FabricType> got(types.begin(), types.end());
+    EXPECT_EQ(got, (std::set<FabricType>{FabricType::TORUS_X, FabricType::TORUS_Y}));
 }
 
 TEST(MeshGraphDescriptorTests, InvalidProtoNoMeshDescriptors) {
@@ -2281,6 +2460,33 @@ TEST(MeshGraphDescriptorTests, PinningsRegexOverlappingMeshIdsExpandPerMesh) {
     EXPECT_EQ(groups_per_mesh[1], 1u);
     EXPECT_EQ(groups_per_mesh[2], 2u);
     EXPECT_EQ(groups_per_mesh[3], 1u);
+}
+
+TEST(MeshGraphDescriptorTests, VectorReallocPreservesConnectionsByTypeLookup) {
+    const char* tt_metal_home = std::getenv("TT_METAL_HOME");
+    ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
+    const std::filesystem::path path_4x4 =
+        std::filesystem::path(tt_metal_home) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_galaxy_single_4x4_mesh.textproto";
+    const std::filesystem::path path_dual =
+        std::filesystem::path(tt_metal_home) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_galaxy_dual_2x4_intermesh.textproto";
+    ASSERT_TRUE(std::filesystem::exists(path_4x4));
+    ASSERT_TRUE(std::filesystem::exists(path_dual));
+
+    std::vector<MeshGraphDescriptor> mgds;
+    // No reserve(): second emplace typically reallocates and move-constructs elements — connection-by-type keys must
+    // remain valid (owning std::string keys, not string_views into moved-from InstanceData).
+    mgds.emplace_back(path_4x4);
+    const size_t mesh_conn_count = mgds[0].connections_by_type("MESH").size();
+    EXPECT_GT(mesh_conn_count, 0u) << "4x4 grid MGD should synthesize intra-mesh MESH connections";
+
+    mgds.emplace_back(path_dual);
+
+    EXPECT_EQ(mgds[0].connections_by_type("MESH").size(), mesh_conn_count)
+        << "First MGD's MESH connection index must survive vector reallocation";
+    EXPECT_FALSE(mgds[1].connections_by_type("FABRIC").empty())
+        << "Dual MGD should retain FABRIC connections after emplace";
 }
 
 }  // namespace tt::tt_fabric::fabric_router_tests

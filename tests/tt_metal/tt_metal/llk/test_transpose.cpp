@@ -39,7 +39,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "impl/data_format/bfloat16_utils.hpp"
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
 
 namespace tt::tt_metal {
 class IDevice;
@@ -172,9 +172,9 @@ void run_single_core_transpose(
     uint32_t dram_buffer_size = test_config.single_tile_size * num_tensor_tiles;
 
     auto in_tensor = MeshTensor::allocate_on_device(
-        *mesh_device, make_flat_dram_tensor_spec(test_config.single_tile_size, num_tensor_tiles), TensorTopology{});
+        *mesh_device, make_flat_dram_tensor_spec(test_config.single_tile_size, num_tensor_tiles));
     auto out_tensor = MeshTensor::allocate_on_device(
-        *mesh_device, make_flat_dram_tensor_spec(test_config.single_tile_size, num_tensor_tiles), TensorTopology{});
+        *mesh_device, make_flat_dram_tensor_spec(test_config.single_tile_size, num_tensor_tiles));
 
     constexpr uint32_t num_buffer_tiles = 32;
     constexpr uint32_t num_output_buffer_tiles = 32;

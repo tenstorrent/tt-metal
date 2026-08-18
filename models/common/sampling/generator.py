@@ -23,6 +23,19 @@ DEVICE_SEED_MAX = 1_000_000
 _UINT64_MASK = (1 << 64) - 1
 
 
+def _mark_trace_buffers_corruptible(bucket, value):
+    """Acknowledge bucketed trace I/O that another live trace may overwrite."""
+    if bucket is None or value is None:
+        return
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            _mark_trace_buffers_corruptible(bucket, item)
+        return
+    mark_corruptible = getattr(ttnn, "mark_corruptible", None)
+    if mark_corruptible is not None:
+        mark_corruptible(value)
+
+
 def _hash_request_seed_to_device_seed(seed: int, counter: int) -> int:
     """Derive a stable per-token device seed from a request seed.
 
@@ -68,6 +81,7 @@ class _TraceKey:
     penalties_on: bool
     log_probs_on: bool
     force_argmax: bool
+    bucket: int | None = None
 
 
 class SamplingGenerator:
@@ -105,6 +119,7 @@ class SamplingGenerator:
         self._penalties_active = False
 
         self._trace_states: dict[_TraceKey, dict] = {}
+        self._active_trace_bucket = None
         seed_batch_size = self.tt_sampling.max_batch_size * self.tt_sampling._sampling_dp
         self.seed_manager = SeedManager(
             self.tt_sampling,
@@ -114,8 +129,19 @@ class SamplingGenerator:
     def _new_trace_state(self):
         return {"id": None, "input": None, "output": None, "kwargs": {}}
 
+    def set_trace_bucket(self, bucket: int | None):
+        """Select the trace namespace for subsequent capture/replay. Callers that multiplex the
+        decode-output logits tensor per batch width (decode bucketing) set this to the width, so a
+        sampling trace captured at width B is only ever replayed against width-B logits."""
+        self._active_trace_bucket = bucket
+
     def _trace_slot(self, penalties_on: bool, log_probs_on: bool, force_argmax: bool):
-        key = _TraceKey(penalties_on=penalties_on, log_probs_on=log_probs_on, force_argmax=force_argmax)
+        key = _TraceKey(
+            penalties_on=penalties_on,
+            log_probs_on=log_probs_on,
+            force_argmax=force_argmax,
+            bucket=self._active_trace_bucket,
+        )
         slot = self._trace_states.get(key)
         if slot is None:
             slot = self._new_trace_state()
@@ -124,13 +150,13 @@ class SamplingGenerator:
 
     def reset_trace(self):
         """
-        Drop any cached trace metadata for both penalties/no-penalties and log-probs/no-log-probs paths.
+        Drop any cached trace metadata for all sampling configurations and bucket widths.
         """
         for key, slot in self._trace_states.items():
             if slot["id"] is None:
                 continue
             logger.debug(
-                f"Resetting sampling trace (penalties={key.penalties_on}, log_probs={key.log_probs_on}, force_argmax={key.force_argmax}, trace_id={slot['id']})"
+                f"Resetting sampling trace (bucket={key.bucket}, penalties={key.penalties_on}, log_probs={key.log_probs_on}, force_argmax={key.force_argmax}, trace_id={slot['id']})"
             )
             try:
                 ttnn.release_trace(self.mesh_device, slot["id"])
@@ -334,6 +360,7 @@ class SamplingGenerator:
         slot["input"] = logits
         slot["output"] = output
         slot["kwargs"] = {"tt_out_tok": tt_out_tok}
+        _mark_trace_buffers_corruptible(self._active_trace_bucket, (logits, output))
 
         return slot["output"]
 
@@ -536,6 +563,74 @@ def broadcast_sampling_params(
         else:
             kwargs[f.name] = [chosen] * slot_len
     return SamplingParams(**kwargs)
+
+
+def scatter_sampling_params_to_slots(
+    formatted_sampling_params,
+    empty_slots,
+    slot_len: int = 32,
+):
+    """Move each request's params from its prefill position to its slot row.
+
+    A batched prefill lays its device rows out by physical slot, so the sampling
+    rows must be too: row ``empty_slots[i]`` samples request ``i``'s logits and
+    needs request ``i``'s temperature/top_k/top_p/penalties. Callers receive
+    params in prefill order, which only coincides with the slot order when the
+    slots happen to be ``range(len(empty_slots))``.
+
+    ``seed`` is left in prefill order: ``SeedManager.reset_seed`` takes the slot
+    list separately and does its own mapping. Rows no request occupies inherit the
+    last real request's values rather than the formatter's padding, so they stay
+    valid instead of sampling from a default row. Does not mutate the input.
+    """
+    if not empty_slots:
+        return formatted_sampling_params
+    slots = [int(s) for s in empty_slots]
+
+    def _scatter(values):
+        if not isinstance(values, List):
+            return values
+        values = list(values)
+        if len(values) == 1 and len(slots) > 1:
+            values = values * len(slots)
+        request_values = values[: len(slots)]
+        if not request_values:
+            return values
+        filler = request_values[-1]
+        scattered = [filler] * slot_len
+        for value, slot in zip(request_values, slots):
+            if 0 <= slot < slot_len:
+                scattered[slot] = value
+        return scattered
+
+    kwargs = {}
+    for f in fields(formatted_sampling_params):
+        value = getattr(formatted_sampling_params, f.name)
+        kwargs[f.name] = value if f.name == "seed" else _scatter(value)
+    return SamplingParams(**kwargs)
+
+
+def slice_sampling_params(sampling_params, start: int, stop: int):
+    """Take the ``[start, stop)`` requests out of a prefill-ordered SamplingParams.
+
+    For callers that split one prefill batch into several forward passes: each pass
+    must carry its own requests' params, not the first ``stop - start`` of the batch.
+    List fields are sliced, scalars are shared. Falls back to dataclass defaults for
+    missing attributes so vLLM's ``TTSamplingParams`` works transparently.
+    """
+    if sampling_params is None:
+        return None
+    sliced = {}
+    for field_name in SAMPLING_PARAM_FIELDS:
+        try:
+            value = getattr(sampling_params, field_name)
+        except AttributeError:
+            if hasattr(SamplingParams, field_name):
+                value = getattr(SamplingParams, field_name)
+            else:
+                raise
+        sliced[field_name] = value[start:stop] if isinstance(value, list) else value
+    return SamplingParams(**sliced)
 
 
 def chunk_sampling_params(sampling_params, sampling_dp: int) -> list:

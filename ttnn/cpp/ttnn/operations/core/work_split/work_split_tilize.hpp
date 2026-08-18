@@ -451,6 +451,8 @@ struct BlockRep {
 
         std::vector<BlockRep> first;
         std::vector<BlockRep> second;
+        first.reserve(2);
+        second.reserve(2);
 
         int rep_idx = idx / single_rep();
         if (rep_idx > 0) {
@@ -478,7 +480,7 @@ struct BlockRep {
             second.emplace_back(n_data, n_mixed, n_pads, remaining_times);
         }
 
-        return {first, second};
+        return {std::move(first), std::move(second)};
     }
 };
 
@@ -584,7 +586,7 @@ inline std::vector<std::vector<BlockRep>> distribute_work(
             }
         }
 
-        core_assignments.push_back(core_blocks);
+        core_assignments.push_back(std::move(core_blocks));
     }
 
     return core_assignments;

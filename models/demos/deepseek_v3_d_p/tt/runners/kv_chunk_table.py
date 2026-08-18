@@ -18,7 +18,11 @@ NOTE: per-layer LayerAck channel + scheduler-driven migration are NOT here
 """
 
 import ttnn
-from models.demos.common.prefill.runners.migration import serialize_kv_chunk_table, serialize_prebuilt_kv_chunk_table
+from models.demos.common.prefill.runners.migration import (
+    allgather_kv_stage_layout,
+    serialize_kv_chunk_table,
+    serialize_prebuilt_kv_chunk_table,
+)
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,
     PREFILL_CHUNK_OUTPUT_TOKENS,
@@ -132,7 +136,7 @@ def build_and_serialize_kv_chunk_table(
             mesh_shape=mesh_shape,
             seq_len=seq_len,
             sp_axis=sp_axis,
-            tt_kvpe_cache=primary_cache,
+            kvpe_cache=primary_cache,
             chunk_size_bytes=chunk_size_bytes,
             num_users=num_users,
             first_layer_idx=first_layer_idx,
@@ -178,6 +182,16 @@ def _build_and_serialize_merged_kv_chunk_table(
     table = disagg.KvChunkAddressTable(configs)
 
     for config_id, (cache, cfg) in enumerate(zip(caches, configs)):
+        # The merged table has one config per physical cache, so each config needs a layout with that
+        # cache's DRAM base address. The dual-cache path is single-stage today, but this remains a
+        # collective to match the single-config builder and to produce the mesh/fabric-node metadata.
+        stage_layout = allgather_kv_stage_layout(
+            mesh_device,
+            int(cache.buffer_address()),
+            mesh_shape,
+            first_layer_idx=0,
+            num_my_layers=cfg.num_layers,
+        )
         populate_kv_chunk_address_table_kimi(
             lookup_table=table,
             config=cfg,
@@ -189,6 +203,7 @@ def _build_and_serialize_merged_kv_chunk_table(
             chunk_size_bytes=cfg.chunk_size_bytes,
             num_users=num_users,
             config_id=config_id,
+            stage_layout=stage_layout,
         )
 
     return serialize_prebuilt_kv_chunk_table(table=table, path=path)

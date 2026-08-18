@@ -39,6 +39,7 @@ ttnn::device_operation::ProgramArtifacts MorehFoldOperation::MultiCore::create_p
     auto output_shape_rank = output.logical_shape().rank();
 
     std::vector<uint32_t> ls;
+    ls.reserve(2);
     for (uint32_t i = 0; i < 2; ++i) {
         uint32_t l = (((output_size[i] + 2 * padding[i] - dilation[i] * (kernel_size[i] - 1) - 1) / stride[i]) + 1);
         ls.push_back(l);
