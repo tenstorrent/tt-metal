@@ -17,6 +17,22 @@
 namespace ckernel
 {
 
+enum class ActivationType
+{
+    Celu        = 0,
+    Elu         = 1,
+    Gelu        = 2,
+    Hardtanh    = 3,
+    Hardsigmoid = 4,
+};
+
+enum class RoundingMode : std::uint8_t
+{
+    None  = 0,
+    Trunc = 1,
+    Floor = 2,
+};
+
 // Helper function to convert to underlying type
 // e.g. to_underlying(MathFidelity::HiFi4) -> 4 (underlying type of MathFidelity is std::uint8_t)
 template <typename T>
@@ -76,6 +92,19 @@ enum class BinaryOp : std::uint8_t
     QUANT,
     REQUANT,
     DEQUANT,
+    POW,
+    FMOD,
+    REMAINDER,
+    BITWISE_AND,
+    BITWISE_OR,
+    BITWISE_XOR,
+    DIV_INT32,
+    DIV_INT32_FLOOR,
+    RSUB_INT32,
+    MASK,
+    ATAN2,
+    ISCLOSE,
+    LOGSIGMOID,
 };
 
 // For instructions that address lower/upper 16 bits of a register

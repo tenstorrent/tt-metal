@@ -958,3 +958,111 @@ def test_eltwise_binary_sfpu_quant_quasar(binary_op, sign_magnitude, tile_indice
     (dequant). Exercised on both the 2's-complement and SIGN_MAGNITUDE_FORMAT
     (SMAG32) datapaths."""
     _run_quant(binary_op, tile_indices, sign_magnitude)
+
+
+EXTENDED_SFPU_BINARY_CASES = (
+    (MathOperation.SfpuAtan2, DataFormat.Float16_b),
+    (MathOperation.SfpuBitwiseAnd, DataFormat.Int32),
+    (MathOperation.SfpuBitwiseOr, DataFormat.Int32),
+    (MathOperation.SfpuBitwiseXor, DataFormat.Int32),
+    (MathOperation.SfpuBinaryFmod, DataFormat.Float16_b),
+    (MathOperation.SfpuElwpow, DataFormat.Float16_b),
+    (MathOperation.SfpuBinaryRemainder, DataFormat.Float16_b),
+    # SfpuDivInt32 deliberately covers calculate_div_int32_trunc from the
+    # div_int32_floor header, matching the Blackhole test named SfpuDivInt32.
+    # The separate div_int32 header has a float-output contract and is skipped.
+    (MathOperation.SfpuDivInt32, DataFormat.Int32),
+    (MathOperation.SfpuDivInt32Floor, DataFormat.Int32),
+    (MathOperation.SfpuIsclose, DataFormat.Float16_b),
+    (MathOperation.SfpuLogsigmoid, DataFormat.Float16_b),
+    (MathOperation.SfpuMask, DataFormat.Float16_b),
+    (MathOperation.SfpuRsubInt32, DataFormat.Int32),
+)
+
+
+def _extended_binary_specs_for(mathop):
+    if mathop in {
+        MathOperation.SfpuBitwiseAnd,
+        MathOperation.SfpuBitwiseOr,
+        MathOperation.SfpuBitwiseXor,
+        MathOperation.SfpuRsubInt32,
+    }:
+        spec = StimuliSpec.uniform(low=-1_000_000, high=1_000_000)
+        return spec, spec
+    if mathop in {MathOperation.SfpuDivInt32, MathOperation.SfpuDivInt32Floor}:
+        return StimuliSpec.uniform(low=1, high=1_000_000), StimuliSpec.uniform(
+            low=1, high=10_000
+        )
+    if mathop == MathOperation.SfpuAtan2:
+        spec = StimuliSpec.uniform(low=-5.0, high=5.0)
+        return spec, spec
+    if mathop in {
+        MathOperation.SfpuBinaryFmod,
+        MathOperation.SfpuBinaryRemainder,
+    }:
+        return StimuliSpec.uniform(low=-5.0, high=5.0), StimuliSpec.uniform(
+            low=0.5, high=4.0
+        )
+    if mathop == MathOperation.SfpuElwpow:
+        return StimuliSpec.uniform(low=0.25, high=4.0), StimuliSpec.uniform(
+            low=-2.0, high=2.0
+        )
+    spec = StimuliSpec.uniform(low=-4.0, high=4.0)
+    return spec, spec
+
+
+def _prepare_extended_binary_stimuli(
+    formats, _input_dimensions, src0_idx, src1_idx, mathop
+):
+    spec_A, spec_B = _extended_binary_specs_for(mathop)
+    operand_A, _, operand_B, _ = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=[32, 32],
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=[32, 32],
+        spec_A=spec_A,
+        spec_B=spec_B,
+    )
+
+    flat_A = operand_A.flatten()
+    flat_B = operand_B.flatten()
+    if mathop == MathOperation.SfpuIsclose:
+        # Equal, within-tolerance, and clearly-different lanes keep both result
+        # branches live. The remaining random pairs are intentionally far apart.
+        flat_A[:6] = torch.tensor([0.0, 1.0, -1.0, 100.0, 2.0, -3.0])
+        flat_B[:6] = torch.tensor([0.0, 1.0, -1.0, 100.0, 2.5, -4.0])
+    elif mathop == MathOperation.SfpuLogsigmoid:
+        flat_A[:] = torch.linspace(-8.0, 3.9, MAX_TILE_ELEMENTS)
+        flat_B[:] = torch.exp(-flat_A.to(torch.float32)).to(flat_B.dtype)
+    elif mathop == MathOperation.SfpuMask:
+        flat_B[::2] = 0.0
+        flat_B[1::2] = 1.0
+
+    staged, tile_count = _stage_binary_operands(
+        flat_A, flat_B, (src0_idx, src1_idx, 0), flat_A.dtype
+    )
+    # buffer_B is unused by this UNPACK-to-DEST kernel, but the shared driver
+    # allocates it with the same tile count as staged buffer_A.
+    return staged, tile_count, torch.zeros_like(staged)
+
+
+@pytest.mark.quasar
+@pytest.mark.parametrize(
+    "mathop,data_format",
+    EXTENDED_SFPU_BINARY_CASES,
+    ids=[mathop.name for mathop, _ in EXTENDED_SFPU_BINARY_CASES],
+)
+def test_eltwise_binary_sfpu_extended_quasar(mathop, data_format):
+    torch.manual_seed(0)
+    formats = InputOutputFormat(data_format, data_format)
+    dest_acc = DestAccumulation.Yes if data_format.is_32_bit() else DestAccumulation.No
+
+    _run_sfpu_binary_llk_golden(
+        formats,
+        dest_acc,
+        ImpliedMathFormat.No,
+        DEFAULT_SFPU_BINARY_TILE_INDICES,
+        mathop,
+        binary_op=mathop.cpp_enum_value,
+        prepare_stimuli=_prepare_extended_binary_stimuli,
+    )

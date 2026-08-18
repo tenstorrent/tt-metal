@@ -5,8 +5,10 @@
 
 #pragma once
 
+#include <cstdint>
 #include "ckernel.h"
 #include "ckernel_ops.h"
+#include "ckernel_sfpu_polyval.h"
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
 #include "llk_assert.h"
@@ -42,6 +44,29 @@ sfpi_inline sfpi::vInt _float_to_int32_for_exp_21f_(sfpi::vFloat val) {
         sfpi::exman(val, sfpi::MantissaMode::ImplicitOne);  // get mantissa with implicit bit (man in [1; 2])
     man = sfpi::shft(man, exp, sfpi::ShiftMode::Logical);
     return man;
+}
+
+// Unsafe core used by Blackhole SFPI kernels whose callers have already
+// bounded the input to the representable exp range.
+template <bool is_fp32_dest_acc_en>
+sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_unsafe_(sfpi::vFloat val) {
+    constexpr float ONE_LN2 = 1.4426950216293334961f;
+    sfpi::vFloat xlog2 = (val * ONE_LN2 + 127.f);
+
+    sfpi::vFloat z = sfpi::as<sfpi::vFloat>(_float_to_int32_for_exp_21f_(xlog2));
+
+    sfpi::vInt exponential_part = sfpi::exexp(z, sfpi::ExponentMode::Biased);
+    sfpi::vMag fractional_part = sfpi::exman(z);
+    sfpi::vFloat frac = sfpi::convert<sfpi::vFloat>(fractional_part, sfpi::RoundMode::Nearest);
+
+    frac = PolynomialEvaluator::eval(frac, 1.0017248f, 7.839635491371155e-08f, 4.791750143340323e-15f);
+    sfpi::vFloat y = sfpi::setexp(frac, exponential_part);
+
+    if constexpr (!is_fp32_dest_acc_en) {
+        y = sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::Nearest);
+    }
+
+    return y;
 }
 
 /*
@@ -108,6 +133,8 @@ sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a) {
     return r * two_i;
 }
 
+sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_unsafe_(sfpi::vFloat x) { return _sfpu_exp_fp32_accurate_(x); }
+
 // Calculates EXP over a full tile. Quasar exposes exactly two implementations:
 //   - approximate exp via the HW nonlinear lookup table (sfpi::approx_exp), and
 //   - full-precision fp32 exp (_sfpu_exp_fp32_accurate_, ported from Blackhole).
@@ -144,7 +171,7 @@ void calculate_exponential([[maybe_unused]] const std::uint32_t exp_base_scale_f
 
 template <
     [[maybe_unused]] bool APPROXIMATION_MODE,
-    [[maybe_unused]] uint32_t scale = 0x3F800000,
+    [[maybe_unused]] std::uint32_t scale = 0x3F800000,
     [[maybe_unused]] bool CLAMP_NEGATIVE = true,
     [[maybe_unused]] bool EN_32BIT_DEST>
 void exp_init() {

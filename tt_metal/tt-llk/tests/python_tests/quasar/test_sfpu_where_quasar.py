@@ -1,10 +1,16 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+import struct
+
 import pytest
 import torch
 from helpers.format_config import DataFormat, FormatConfig
-from helpers.golden_generators import WhereGolden, get_golden_generator
+from helpers.golden_generators import (
+    TernarySFPUGolden,
+    WhereGolden,
+    get_golden_generator,
+)
 from helpers.llk_params import (
     DataCopyType,
     DestAccumulation,
@@ -15,13 +21,14 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import (
+    InputOutputFormat,
     generate_sfpu_format_dest_acc_combinations,
     input_output_formats,
     parametrize,
     runtime,
 )
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import generate_stimuli
+from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DATA_COPY_TYPE,
@@ -305,3 +312,92 @@ def test_sfpu_where_mcw_quasar(
     assert passed_test(
         golden_tensor[mask], res_tensor[mask], formats.output_format
     ), "Assert against golden failed"
+
+
+EXTENDED_SFPU_TERNARY_CASES = (
+    MathOperation.SfpuAddcmul,
+    MathOperation.SfpuAddcdiv,
+    MathOperation.SfpuLerp,
+    MathOperation.SfpuSnakeBeta,
+)
+_SCALAR_BITS = struct.unpack("<I", struct.pack("<f", 2.0))[0]
+
+
+@pytest.mark.quasar
+@pytest.mark.parametrize(
+    "mathop",
+    EXTENDED_SFPU_TERNARY_CASES,
+    ids=[mathop.name for mathop in EXTENDED_SFPU_TERNARY_CASES],
+)
+def test_sfpu_ternary_extended_quasar(mathop):
+    torch.manual_seed(0)
+    formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
+    spec_ab = StimuliSpec.uniform(low=-1.0, high=1.0)
+    spec_c = (
+        StimuliSpec.uniform(low=1.0, high=2.0)
+        if mathop in {MathOperation.SfpuAddcdiv, MathOperation.SfpuSnakeBeta}
+        else spec_ab
+    )
+
+    src_A, tile_count, src_B, _ = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=[32, 32],
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=[32, 32],
+        spec_A=spec_ab,
+        spec_B=spec_ab,
+    )
+    src_C, _, _, _ = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=[32, 32],
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=[32, 32],
+        spec_A=spec_c,
+        spec_B=spec_c,
+    )
+
+    golden = get_golden_generator(TernarySFPUGolden)(
+        mathop, src_A, src_B, src_C, _SCALAR_BITS, formats.output_format
+    )
+    staged = torch.cat([src_A.flatten(), src_B.flatten(), src_C.flatten()])
+
+    configuration = TestConfig(
+        "sources/quasar/sfpu_where_quasar_test.cpp",
+        formats,
+        templates=[
+            MATH_OP(mathop=mathop),
+            IMPLIED_MATH_FORMAT(ImpliedMathFormat.No),
+            DATA_COPY_TYPE(DataCopyType.A2D),
+            UNPACKER_ENGINE_SEL(UnpackerEngine.UnpA),
+            DEST_SYNC(),
+            VECTOR_MODE(VectorMode.RC),
+        ],
+        runtimes=[
+            TILE_COUNT(3),
+            NUM_FACES(4),
+            TEST_FACE_DIMS(),
+            DEST_INDEX(0),
+        ],
+        variant_stimuli=StimuliConfig(
+            staged,
+            formats.input_format,
+            torch.zeros_like(src_A),
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=3,
+            tile_count_B=tile_count,
+            tile_count_res=tile_count,
+            num_faces=4,
+        ),
+        unpack_to_dest=False,
+        dest_acc=DestAccumulation.No,
+    )
+
+    result = torch.tensor(
+        configuration.run().result, dtype=format_dict[formats.output_format]
+    )
+    golden_tensor = torch.tensor(
+        golden, dtype=format_dict[formats.output_format]
+    ).flatten()
+    assert len(result) == len(golden_tensor)
+    assert passed_test(golden_tensor, result, formats.output_format)

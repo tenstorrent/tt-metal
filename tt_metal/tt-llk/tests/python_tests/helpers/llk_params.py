@@ -216,6 +216,12 @@ class MathOperation(Enum):
     UnaryMaxUint32 = OpSpec("unary_max_uint32", MathOpType.SFPU_UNARY)
     UnaryMinUint32 = OpSpec("unary_min_uint32", MathOpType.SFPU_UNARY)
     BitwiseNot = OpSpec("bitwise_not", MathOpType.SFPU_UNARY)
+    UnaryBitwiseAnd = OpSpec("unary_bitwise_and", MathOpType.SFPU_UNARY)
+    UnaryBitwiseOr = OpSpec("unary_bitwise_or", MathOpType.SFPU_UNARY)
+    UnaryBitwiseXor = OpSpec("unary_bitwise_xor", MathOpType.SFPU_UNARY)
+    AltComplexRotate90 = OpSpec("alt_complex_rotate90", MathOpType.SFPU_UNARY)
+    IntSumCol = OpSpec("int_sum_col", MathOpType.SFPU_UNARY)
+    IntSumRow = OpSpec("int_sum_row", MathOpType.SFPU_UNARY)
     # logical_not(x) = (x == 0) ? 1 : 0, exercised on the float (DEFAULT-layout)
     # path. cpp_enum_value must match the SfpuType enumerator name.
     # NOTE: main added `LogicalNot` with the same cpp value; keep both so

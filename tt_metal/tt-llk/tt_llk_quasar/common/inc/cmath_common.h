@@ -123,6 +123,14 @@ inline void _reset_counters_()
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, SETRWC);
 }
 
+// Compatibility entry point used by architecture-shared SFPI kernel bodies.
+// Call sites pass a p_setrwc compile-time constant, which the always-inline
+// wrapper preserves as the Quasar instruction immediate.
+__attribute__((always_inline)) inline void reset_counters(const std::uint32_t setrwc)
+{
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, setrwc);
+}
+
 /**
  * @brief Inc dest counter using carriage return (why use the CR?)
  * @tparam NUM_ROWS: number of 16 datum rows to increment dest by, value must be <=255
@@ -223,3 +231,14 @@ inline void eltwise_binary_reuse_dest_as_src()
 }
 
 } // namespace ckernel::math
+
+namespace ckernel::sfpu
+{
+
+// Compatibility name used by architecture-shared SFPI init bodies.
+inline void _init_sfpu_config_reg()
+{
+    math::_init_sfpu_config_reg_();
+}
+
+} // namespace ckernel::sfpu
