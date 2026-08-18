@@ -114,7 +114,7 @@ def test_perf_matmul(
     variant_tile_count = dims.rt_dim * dims.ct_dim * dims.kt_dim
 
     configuration = PerfConfig(
-        "sources/matmul_perf.cpp",
+        "sources/matmul_test.cpp",
         formats,
         run_types,
         templates=[
@@ -126,7 +126,7 @@ def test_perf_matmul(
             UNPACK_TRANS_FACES(Transpose.No),
             NUM_FACES(),
             LOOP_FACTOR(64),
-            TILE_COUNT(variant_tile_count),
+            TILE_COUNT(dims.rt_dim * dims.ct_dim),
             CRK_TILE_DIMM(dims.ct_dim, dims.rt_dim, dims.kt_dim),
         ],
         variant_stimuli=StimuliConfig(
@@ -137,7 +137,7 @@ def test_perf_matmul(
             formats.output_format,
             tile_count_A=variant_tile_count,
             tile_count_B=variant_tile_count,
-            tile_count_res=variant_tile_count,
+            tile_count_res=dims.rt_dim * dims.ct_dim,
         ),
         dest_acc=dest_acc,
     )

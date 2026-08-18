@@ -23,7 +23,9 @@ from helpers.test_variant_parameters import (
     IN_TILE_DIMS,
     LOOP_FACTOR,
     MATH_FIDELITY,
+    NUM_BLOCKS,
     NUM_FACES,
+    NUM_TILES_IN_BLOCK,
     PARTIAL_FACE,
     THROTTLE_LEVEL,
     TILE_COUNT,
@@ -131,7 +133,7 @@ def test_perf_math_matmul(
     )
 
     configuration = PerfConfig(
-        "sources/math_matmul_perf.cpp",
+        "sources/math_matmul_test.cpp",
         formats,
         run_types,
         templates=[
@@ -144,6 +146,11 @@ def test_perf_math_matmul(
             UNPACK_TRANS_FACES(transpose),
             UNPACK_TRANS_WITHIN_FACE(transpose),
             TILE_COUNT(variant_tile_count),
+            NUM_BLOCKS(1),
+            NUM_TILES_IN_BLOCK(
+                matmul_config.tile_dimensions.rt_dim
+                * matmul_config.tile_dimensions.ct_dim
+            ),
             NUM_FACES(
                 num_faces, num_faces_in0, num_faces_in1
             ),  # In0 -> Input A, In1 -> Input B
