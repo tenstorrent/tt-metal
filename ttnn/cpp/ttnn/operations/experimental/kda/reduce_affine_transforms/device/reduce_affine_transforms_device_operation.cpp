@@ -38,6 +38,15 @@ void ReduceAffineTransformsOperation::validate_on_program_cache_miss(
     TT_FATAL(
         !attrs.output_mem_config.is_sharded(),
         "reduce_affine_transforms: output memory configuration must be interleaved");
+    TT_FATAL(
+        !attrs.compute_kernel_config.packer_l1_acc,
+        "reduce_affine_transforms: packer_l1_acc=true is unsupported because the compute kernel does not "
+        "accumulate through L1");
+    TT_FATAL(
+        attrs.compute_kernel_config.throttle_level ==
+            ttnn::operations::compute_throttle_utils::ThrottleLevel::NO_THROTTLE,
+        "reduce_affine_transforms: compute throttling is unsupported because this kernel does not implement "
+        "throttled math");
 
     const auto& a_shape = in.a.logical_shape();
     const auto& b_shape = in.b.logical_shape();
