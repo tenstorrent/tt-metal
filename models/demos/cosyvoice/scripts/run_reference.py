@@ -9,7 +9,7 @@ perf gates (R8: >= 30 tok/s, RTF < 0.5) meaningful rather than absolute.
 
 RUN THIS IN THE CosyVoice VENV:
 
-    PYTHONPATH=/root/tt/CosyVoice:/root/tt/CosyVoice/third_party/Matcha-TTS \
+    PYTHONPATH=/mnt/CosyVoice:/mnt/CosyVoice/third_party/Matcha-TTS \
     /root/tt/cosyvoice_env/bin/python run_reference.py --out <dir>
 
 Mode / checkpoint mapping (CosyVoice-300M alone cannot do all four):
@@ -29,7 +29,7 @@ import time
 
 import torch
 
-DEFAULT_COSYVOICE = os.environ.get("COSYVOICE_ROOT", "/root/tt/CosyVoice")
+DEFAULT_COSYVOICE = os.environ.get("COSYVOICE_ROOT", "/mnt/CosyVoice")
 SEED = 1986
 
 # One sentence per language. Kept short so a CPU run finishes in minutes;
@@ -185,7 +185,10 @@ def run_one(cv, mode, lang, root, out_dir, seed, stream=False):
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--cosyvoice-root", default=DEFAULT_COSYVOICE)
-    ap.add_argument("--out", default="/root/tt/tt-bounty/tt-metal/05/build/reference")
+    # Repo-relative, matching gen_golden.py and export_weights.py. This defaulted to an
+    # absolute path in the author's own working tree, which `os.makedirs` would have
+    # created on anyone else's machine.
+    ap.add_argument("--out", default=None)
     ap.add_argument("--modes", default="sft,zero_shot,cross_lingual,instruct")
     ap.add_argument("--langs", default="zh,en,ja,yue,ko")
     ap.add_argument("--seed", type=int, default=SEED)
@@ -199,6 +202,7 @@ def main() -> int:
     from cosyvoice.cli.cosyvoice import CosyVoice
 
     torch.set_num_threads(args.threads)
+    args.out = args.out or os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "build", "reference")
     os.makedirs(args.out, exist_ok=True)
 
     ckpt_for = {
