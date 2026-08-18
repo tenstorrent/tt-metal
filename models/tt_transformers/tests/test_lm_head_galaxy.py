@@ -95,17 +95,14 @@ def test_llama32_1b_decode_lm_head_composite_all_reduce_galaxy(mesh_device, rese
         prefetcher=None,
     )
 
-    # This is the exact logical shape, dtype, mesh fracture, and L1 sharding
-    # delivered by the token-0 final distributed norm to the no-prefetch LMHead.
-    torch_input = torch.randn(1, 1, 32, model_args.dim, dtype=torch.bfloat16)
+    # Use the production decode helper so the one valid batch row is padded to
+    # 32 with zeros, width-fractured over mesh columns, and placed in the exact
+    # L1 sharding delivered by final norm to the no-prefetch LMHead.
+    torch_input = torch.randn(1, 1, model_args.dim, dtype=torch.bfloat16)
     reference_output = reference_model(torch_input)
-    tt_input = ttnn.from_torch(
+    tt_input = model_args.prepare_residual_tensor_decode(
         torch_input,
-        device=mesh_device,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, -1), mesh_shape=MESH_SHAPE),
-        dtype=ttnn.bfloat16,
-        memory_config=model_args.get_lm_head_input_mem_config(Mode.DECODE, None),
-        layout=ttnn.TILE_LAYOUT,
+        model_args.get_lm_head_input_mem_config(Mode.DECODE, None),
     )
 
     prime_token_zero_axis1_semaphore_parity(tt_ccl)
@@ -123,10 +120,14 @@ def test_llama32_1b_decode_lm_head_composite_all_reduce_galaxy(mesh_device, rese
     # Both calls are intentional: enqueue-only coverage would miss the hang
     # observed when the full model reads the asynchronously produced logits.
     ttnn.synchronize_device(mesh_device)
-    tt_output_torch = ttnn.to_torch(
-        tt_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, MESH_SHAPE, dims=(3, 1)),
-    )[:, 0:1, :, : model_args.vocab_size]
+    tt_output_torch = (
+        ttnn.to_torch(
+            tt_output,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, MESH_SHAPE, dims=(3, 1)),
+        )
+        .permute(2, 1, 0, 3)
+        .squeeze(2)[:1, 0:1, : model_args.vocab_size]
+    )
 
     pcc_required = 0.99
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
