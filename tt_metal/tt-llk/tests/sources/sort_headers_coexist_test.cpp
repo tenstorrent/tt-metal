@@ -117,7 +117,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         []
         {
             ckernel::sfpu::set_dst_write_addr_offset(SORT_DST_WRITE_OFFSET_ROWS);
-            ckernel::sfpu::set_dst_write_addr_offset(0);
+            ckernel::sfpu::set_dst_write_addr_offset(0 /*addr*/);
         },
         0 /* dst_index */,
         VectorMode::None);
