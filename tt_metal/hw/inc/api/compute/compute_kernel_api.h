@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "chlkc_list.h"
 #include "ckernel.h"
 #ifndef ARCH_QUASAR
@@ -130,7 +131,7 @@ ALWI void sigmoid_tile_init() {
  */
 // clang-format on
 template <VectorMode vec_mode = VectorMode::RC, bool fast_and_approx = false>
-ALWI void sigmoid_tile(uint32_t idst) {
+ALWI void sigmoid_tile(std::uint32_t idst) {
 #ifdef ARCH_QUASAR
     MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sigmoid, (8 /*ITERATIONS*/), idst, vec_mode));
 #else
@@ -159,7 +160,7 @@ ALWI void sigmoid_tile(uint32_t idst) {
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void silu_tile(uint32_t idst) {
+ALWI void silu_tile(std::uint32_t idst) {
 #ifdef ARCH_QUASAR
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE, DST_ACCUM_MODE, calculate_silu, (8 /*ITERATIONS*/), idst, ::ckernel::VectorMode::RC));
@@ -212,7 +213,7 @@ ALWI void tanh_tile_init() {
  */
 // clang-format on
 template <bool fast_and_approx = false>
-ALWI void tanh_tile(uint32_t idst) {
+ALWI void tanh_tile(std::uint32_t idst) {
 #ifndef ARCH_QUASAR
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
@@ -241,7 +242,7 @@ ALWI void tanh_tile(uint32_t idst) {
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void square_tile(uint32_t idst) {
+ALWI void square_tile(std::uint32_t idst) {
 #ifndef ARCH_QUASAR
     MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_square, (APPROX), idst, VectorMode::RC));
 #else
@@ -268,7 +269,7 @@ ALWI void sigmoid_tile_init_pack() {
 }
 
 template <VectorMode vec_mode = VectorMode::RC, bool fast_and_approx = false>
-ALWI void sigmoid_tile_pack(uint32_t idst) {
+ALWI void sigmoid_tile_pack(std::uint32_t idst) {
     PACK(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -305,7 +306,7 @@ ALWI void log_tile_init() {
  */
 // clang-format on
 template <bool fast_and_approx = false>
-ALWI void log_tile(uint32_t idst) {
+ALWI void log_tile(std::uint32_t idst) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -358,7 +359,7 @@ ALWI void tanh_tile_init_pack() {
 }
 
 template <bool fast_and_approx = false>
-ALWI void tanh_tile_pack(uint32_t idst) {
+ALWI void tanh_tile_pack(std::uint32_t idst) {
     PACK(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -389,7 +390,7 @@ ALWI void signbit_tile_init() {
  * | idst            | The index of the tile in DST register buffer to modify the sign bit of     | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void signbit_tile(uint32_t idst) {
+ALWI void signbit_tile(std::uint32_t idst) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE, DST_ACCUM_MODE, calculate_signbit, (APPROX, 8 /* ITERATIONS */), idst, VectorMode::RC));
 }
@@ -415,7 +416,7 @@ ALWI void signbit_tile_int32_init() {
  * | idst            | The index of the tile in DST register buffer to modify the sign bit of     | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void signbit_tile_int32(uint32_t idst) {
+ALWI void signbit_tile_int32(std::uint32_t idst) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE, DST_ACCUM_MODE, calculate_signbit_int32, (APPROX, 8 /* ITERATIONS */), idst, VectorMode::RC));
 }
@@ -434,7 +435,7 @@ ALWI void signbit_tile_int32(uint32_t idst) {
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void abs_tile(uint32_t idst) {
+ALWI void abs_tile(std::uint32_t idst) {
     MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_abs, (APPROX), idst, VectorMode::RC));
 }
 
@@ -459,7 +460,7 @@ ALWI void abs_tile_init() { MATH(SFPU_UNARY_INIT(abs)); }
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void abs_tile_int32(uint32_t idst) {
+ALWI void abs_tile_int32(std::uint32_t idst) {
     MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_abs_int32, (APPROX), idst, VectorMode::RC));
 }
 
@@ -477,7 +478,7 @@ ALWI void abs_tile_int32(uint32_t idst) {
  * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void sign_tile(uint32_t idst) {
+ALWI void sign_tile(std::uint32_t idst) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sign, (APPROX), idst, VectorMode::RC, 1 /* exponent_size_8 */));
 }
@@ -501,7 +502,7 @@ ALWI void sign_tile_init() { MATH(SFPU_UNARY_INIT(sign)); }
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void tiled_prod_tile(uint32_t idst) {
+ALWI void tiled_prod_tile(std::uint32_t idst) {
     MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_tiled_prod, (APPROX), idst, VectorMode::RC));
 }
 
@@ -526,7 +527,7 @@ ALWI void tiled_prod_tile_init() { MATH(SFPU_UNARY_INIT(tiled_prod)); }
  * | param0          | The exponent as IEEE 754 float bits                                        | uint32_t |                                                       | True     |
  */
 // clang-format on
-ALWI void power_tile(uint32_t idst, uint32_t param0) {
+ALWI void power_tile(std::uint32_t idst, std::uint32_t param0) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -562,7 +563,7 @@ ALWI void power_tile_init() {
  * | param0          | The integer exponent value                                                 | uint32_t | Must be a non-negative integer exponent               | True     |
  */
 // clang-format on
-ALWI void power_iterative_tile(uint32_t idst, uint32_t param0) {
+ALWI void power_iterative_tile(std::uint32_t idst, std::uint32_t param0) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -593,7 +594,7 @@ ALWI void power_iterative_tile_init() { MATH(SFPU_UNARY_INIT(power)); }
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void exp2_tile(uint32_t idst) {
+ALWI void exp2_tile(std::uint32_t idst) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE, DST_ACCUM_MODE, calculate_exp2, (true /* APPROXIMATE */, DST_ACCUM_MODE), idst, VectorMode::RC));
 }
@@ -619,7 +620,7 @@ ALWI void exp2_tile_init() { MATH(SFPU_UNARY_INIT_FN(exp2, sfpu::exp2_init, (tru
  * | param0          | The value the output is if the input is greater than 0                     | uint32_t |                                                       | True     |
  */
 // clang-format on
-ALWI void heaviside_tile(uint32_t idst, uint32_t param0) {
+ALWI void heaviside_tile(std::uint32_t idst, std::uint32_t param0) {
     MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_heaviside, (APPROX), idst, VectorMode::RC, param0));
 }
 
@@ -644,7 +645,7 @@ ALWI void heaviside_tile_init() { MATH(SFPU_UNARY_INIT(heaviside)); }
  */
 // clang-format on
 template <bool approx = false>
-ALWI void expm1_tile(uint32_t idst) {
+ALWI void expm1_tile(std::uint32_t idst) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -662,7 +663,7 @@ ALWI void expm1_tile_init() {
     MATH(SFPU_UNARY_INIT_FN(expm1, sfpu::expm1_init, (approx, DST_ACCUM_MODE)));
 }
 
-ALWI void silu_tile_pack(uint32_t idst) {
+ALWI void silu_tile_pack(std::uint32_t idst) {
     PACK(SFPU_UNARY_CALL(
         DST_SYNC_MODE, DST_ACCUM_MODE, calculate_silu, (DST_ACCUM_MODE, 8 /* ITERATIONS */), idst, VectorMode::RC));
 }
@@ -708,16 +709,17 @@ ALWI void silu_tile_init_pack() { PACK(SFPU_UNARY_INIT_FN(silu, sfpu::silu_init,
  * | i_end_step      | The end step to perform if i_start_phase == i_end_phase                    | int32    | 4 to 6                                                | False    |
  * | i_start_step    | The start step to perform if i_start_phase == i_end_phase                  | int32    | 4 to 6                                                | False    |
  * | stable_sort     | Maintain order of indices for equal values                                 | bool     | true, false                                           | False    |
+ * | fused           | Sort packed [bf16 value | u16 index] keys with the unstable network        | bool     | true, false                                           | False    |
  */
 // clang-format on
-template <bool stable_sort = false>
+template <bool stable_sort = false, bool fused = false>
 ALWI void topk_local_sort(
-    uint32_t idst, int idir, int i_end_phase, int i_start_phase = 0, int i_end_step = 0, int i_start_step = 0) {
+    std::uint32_t idst, int idir, int i_end_phase, int i_start_phase = 0, int i_end_step = 0, int i_start_step = 0) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_bitonic_topk_phases_steps,
-        (true /* APPROXIMATE */, DST_ACCUM_MODE, stable_sort),
+        (true /* APPROXIMATE */, DST_ACCUM_MODE, stable_sort, fused),
         idst,
         VectorMode::RC_custom,
         idir,
@@ -756,15 +758,16 @@ ALWI void topk_local_sort(
  * | m_iter          | The index of the merge & rebuild iteration of the algorithm                | int32    | 0 to 9                                                | True     |
  * | k               | The number of sorted values to return                                      | int32    | {4, 8, 16, 32, 64}                                    | True     |
  * | stable_sort     | Maintain order of indices for equal values                                 | bool     | true, false                                           | False    |
+ * | fused           | Sort packed [bf16 value | u16 index] keys with the unstable network        | bool     | true, false                                           | False    |
  */
 // clang-format on
-template <bool idir = false, bool stable_sort = false>
-ALWI void topk_merge(uint32_t idst, int m_iter, int k) {
+template <bool idir = false, bool stable_sort = false, bool fused = false>
+ALWI void topk_merge(std::uint32_t idst, int m_iter, int k) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_bitonic_topk_merge,
-        (true /* APPROXIMATE */, DST_ACCUM_MODE, idir, stable_sort),
+        (true /* APPROXIMATE */, DST_ACCUM_MODE, idir, stable_sort, fused),
         idst,
         VectorMode::RC_custom,
         m_iter,
@@ -802,15 +805,16 @@ ALWI void topk_merge(uint32_t idst, int m_iter, int k) {
  * | logk            | The log of K                                                               | int32    | 2 to 6                                                | True     |
  * | skip_second     | Whether or not to skip second tile                                         | int32    | 0 to 1                                                | True     |
  * | stable_sort     | Maintain order of indices for equal values                                 | bool     | true, false                                           | False    |
+ * | fused           | Sort packed [bf16 value | u16 index] keys with the unstable network        | bool     | true, false                                           | False    |
  */
 // clang-format on
-template <bool stable_sort = false>
-ALWI void topk_rebuild(uint32_t idst, bool idir, int m_iter, int k, int logk, int skip_second) {
+template <bool stable_sort = false, bool fused = false>
+ALWI void topk_rebuild(std::uint32_t idst, bool idir, int m_iter, int k, int logk, int skip_second) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_bitonic_topk_rebuild,
-        (true /* APPROXIMATE */, DST_ACCUM_MODE, stable_sort),
+        (true /* APPROXIMATE */, DST_ACCUM_MODE, stable_sort, fused),
         idst,
         VectorMode::RC_custom,
         idir,
@@ -821,9 +825,70 @@ ALWI void topk_rebuild(uint32_t idst, bool idir, int m_iter, int k, int logk, in
 }
 
 /**
- * Please refer to documentation for any_init.
+ * Please refer to documentation for any_init. fused selects the fused-key init (index tracking
+ * off; packed [bf16|u16] keys carry the index inside the sort word).
  */
-ALWI void topk_tile_init() { MATH(SFPU_UNARY_INIT_FN(topk_local_sort, sfpu::topk_init, (true /* APPROXIMATE */))); }
+template <bool fused = false>
+ALWI void topk_tile_init() {
+    MATH(SFPU_UNARY_INIT_FN(topk_local_sort, sfpu::topk_init, (true /* APPROXIMATE */, fused)));
+}
+
+// clang-format off
+/**
+ * Fuses one 2-tile TopK slab into packed [bf16 value | u16 index'] sort keys, in place in DST.
+ * Precondition: value tiles at DST idst..idst+1 as exact-widened [bf16|0x0000] fp32 words (32-bit
+ * DEST required) and u16 index tiles at idst+2..idst+3. The index low bits are complemented iff
+ * (value_sign == 0) XNOR largest, which makes the sign-magnitude SFPSWAP order torch-stable in the
+ * requested GLOBAL direction; run once per freshly loaded slab, never per network call. The index
+ * tiles are consumed (dead afterwards). DST must be in acquired state.
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | largest         | The requested global sort order (true = largest-first)                     | bool     | true, false                                           | True     |
+ * | idst            | The index of the first value tile of the slab in the DST register buffer   | uint32_t | Must be less than the size of the DST register buffer | True     |
+ */
+// clang-format on
+template <bool largest>
+ALWI void topk_fuse_tile(std::uint32_t idst) {
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_topk_fuse,
+        (true /* APPROXIMATE */, largest),
+        idst,
+        VectorMode::RC_custom));
+}
+
+// clang-format off
+/**
+ * Splits num_tiles packed [bf16 value | u16 index'] key tiles (starting at DST idst) back into
+ * value words ([bf16|0x0000], in place — the following Float32->bf16 pack is then exact) and u16
+ * index tiles at idst+2 onward, un-complementing the index with the same largest polarity the fuse
+ * used. The index store uses SFPSTORE mode 9 (low->high) so the packer reads UInt16 out of the
+ * high half of 32-bit DEST. Run once on the final output tiles; DST must be in acquired state.
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | largest         | The requested global sort order (true = largest-first)                     | bool     | true, false                                           | True     |
+ * | idst            | The index of the first packed key tile in the DST register buffer          | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | num_tiles       | The number of packed key tiles to split                                    | uint32_t | 1 to 2                                                | True     |
+ */
+// clang-format on
+template <bool largest>
+ALWI void topk_defuse_tile(std::uint32_t idst, std::uint32_t num_tiles) {
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_topk_defuse,
+        (true /* APPROXIMATE */, largest, 9u /* TOPK_SFPSTORE_MODE_PACK_UINT16 */),
+        idst,
+        VectorMode::RC_custom,
+        num_tiles));
+}
 
 // clang-format off
 /**
@@ -848,8 +913,18 @@ ALWI void topk_set_stable_descending_mode(bool descending) {
  * No-op unless the compute kernel was built with TOPK_UINT16_FP32_DEST. Must run on MATH while DEST is
  * still acquired (before tile_regs_commit / pack_tile). See #50215.
  */
-ALWI void topk_uint16_prepare_value_tile_for_pack(uint32_t idst) {
+ALWI void topk_uint16_prepare_value_tile_for_pack(std::uint32_t idst) {
     MATH((ckernel::sfpu::topk_uint16_prepare_value_tile_for_pack(idst)));
+}
+
+/**
+ * Moves a u16 DEST tile's datums from the low half of each 32-bit DEST word (where a u16 transpose
+ * lands them) into the packer-visible high half, stripping the stale garbage above them. Used by
+ * the fused-key TopK final extraction; unconditional (not gated on TOPK_UINT16_FP32_DEST). Must
+ * run on MATH while DEST is still acquired (before tile_regs_commit / pack_tile).
+ */
+ALWI void topk_uint16_move_dest_tile_to_pack_half(std::uint32_t idst) {
+    MATH((ckernel::sfpu::_topk_uint16_move_dest_tile_to_pack_half_(idst)));
 }
 
 #ifndef ARCH_QUASAR  // BH/WH-only ops below
@@ -877,7 +952,7 @@ template <
     ckernel::DataLayout layout = ckernel::DataLayout::TILE,
     bool accumulate = false,
     int ITERATIONS = 8>
-ALWI void max_reduce_with_indices(uint32_t idst, uint32_t idst_idx, uint32_t chunk = 0) {
+ALWI void max_reduce_with_indices(std::uint32_t idst, std::uint32_t idst_idx, std::uint32_t chunk = 0) {
     static_assert(num_rows <= 32, "num_rows must be <= 32");
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
@@ -923,7 +998,7 @@ ALWI void max_reduce_with_indices_init() {
  */
 // clang-format on
 template <PoolType pool_type, DataFormat format, ReduceDim reduce_dim = ReduceDim::REDUCE_COL>
-ALWI void sfpu_reduce(uint32_t idst, uint32_t ct_dim = 1, uint32_t rt_dim = 1) {
+ALWI void sfpu_reduce(std::uint32_t idst, std::uint32_t ct_dim = 1, std::uint32_t rt_dim = 1) {
     static_assert(
         reduce_dim == ReduceDim::REDUCE_COL ||
             (reduce_dim == ReduceDim::REDUCE_ROW &&
@@ -992,7 +1067,7 @@ ALWI void sfpu_reduce_init() {
  */
 // clang-format on
 template <DataFormat format>
-ALWI void sfpu_add_top_row(uint32_t dst_tile_0, uint32_t dst_tile_1, uint32_t dst_tile_out) {
+ALWI void sfpu_add_top_row(std::uint32_t dst_tile_0, std::uint32_t dst_tile_1, std::uint32_t dst_tile_out) {
     static_assert(
         format == DataFormat::Float32 || format == DataFormat::Int32 || format == DataFormat::UInt32,
         "Unsupported data format. Supported formats: Float32, Int32, UInt32");
@@ -1047,7 +1122,7 @@ ALWI void dbg_unhalt() {
  * Return value: None
  */
 // clang-format on
-ALWI void dbg_read_dest_acc_row(int row_addr, uint32_t* rd_data) {
+ALWI void dbg_read_dest_acc_row(int row_addr, std::uint32_t* rd_data) {
     MATH((dbg_get_array_row(dbg_array_id::DEST, row_addr, rd_data)));
 }
 
@@ -1067,7 +1142,7 @@ ALWI void dbg_read_dest_acc_row(int row_addr, uint32_t* rd_data) {
  * | param0          | The value to be compared with the input tensor                             | uint32_t |                                                       | True     |
  */
 // clang-format on
-ALWI void unary_max_int32_tile(uint32_t idst, uint32_t param0) {
+ALWI void unary_max_int32_tile(std::uint32_t idst, std::uint32_t param0) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -1101,7 +1176,7 @@ ALWI void unary_max_int32_tile_init() {
  * | param0          | The value to be compared with the input tensor                             | uint32_t |                                                       | True     |
  */
 // clang-format on
-ALWI void unary_max_uint32_tile(uint32_t idst, uint32_t param0) {
+ALWI void unary_max_uint32_tile(std::uint32_t idst, std::uint32_t param0) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -1135,7 +1210,7 @@ ALWI void unary_max_uint32_tile_init() {
  * | param0          | The value to be compared with the input tensor                             | uint32_t |                                                       | True     |
  */
 // clang-format on
-ALWI void unary_max_tile(uint32_t idst, uint32_t param0) {
+ALWI void unary_max_tile(std::uint32_t idst, std::uint32_t param0) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -1166,7 +1241,7 @@ ALWI void unary_max_tile_init() { MATH(SFPU_UNARY_INIT_FN(unary_max, sfpu::unary
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void alt_complex_rotate90_tile(uint32_t idst) {
+ALWI void alt_complex_rotate90_tile(std::uint32_t idst) {
     MATH(
         SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_alt_complex_rotate90, (APPROX), idst, VectorMode::RC));
 }
@@ -1192,7 +1267,7 @@ ALWI void alt_complex_rotate90_tile_init() { MATH(SFPU_UNARY_INIT(alt_complex_ro
  * | param0          | The value to be compared with the input tensor                             | uint32_t |                                                       | True     |
  */
 // clang-format on
-ALWI void unary_min_int32_tile(uint32_t idst, uint32_t param0) {
+ALWI void unary_min_int32_tile(std::uint32_t idst, std::uint32_t param0) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -1227,7 +1302,7 @@ ALWI void unary_min_int32_tile_init() {
  * | param0          | The value to be compared with the input tensor                             | uint32_t |                                                       | True     |
  */
 // clang-format on
-ALWI void unary_min_uint32_tile(uint32_t idst, uint32_t param0) {
+ALWI void unary_min_uint32_tile(std::uint32_t idst, std::uint32_t param0) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -1262,7 +1337,7 @@ ALWI void unary_min_uint32_tile_init() {
  * | param0          | The value to be compared with the input tensor                             | uint32_t |                                                       | True     |
  */
 // clang-format on
-ALWI void unary_min_tile(uint32_t idst, uint32_t param0) {
+ALWI void unary_min_tile(std::uint32_t idst, std::uint32_t param0) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -1279,20 +1354,20 @@ ALWI void unary_min_tile(uint32_t idst, uint32_t param0) {
 ALWI void unary_min_tile_init() { MATH(SFPU_UNARY_INIT_FN(unary_min, sfpu::unary_max_min_init, (false /* IS_MAX */))); }
 
 #if defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE)
-ALWI uint32_t get_compute_special_value_flags() {
-    uint32_t ret_val = 0;
+ALWI std::uint32_t get_compute_special_value_flags() {
+    std::uint32_t ret_val = 0;
     MATH((ret_val = llk_math_get_compute_special_value_flags()));
     return ret_val;
 }
 
-ALWI uint32_t get_compute_special_value_flags_fpu(uint32_t special_value_flags_reg) {
-    uint32_t ret_val = 0;
+ALWI std::uint32_t get_compute_special_value_flags_fpu(std::uint32_t special_value_flags_reg) {
+    std::uint32_t ret_val = 0;
     MATH((ret_val = llk_math_extract_compute_special_value_flags<true /* isFpu */>(special_value_flags_reg)));
     return ret_val;
 }
 
-ALWI uint32_t get_compute_special_value_flags_sfpu(uint32_t special_value_flags_reg) {
-    uint32_t ret_val = 0;
+ALWI std::uint32_t get_compute_special_value_flags_sfpu(std::uint32_t special_value_flags_reg) {
+    std::uint32_t ret_val = 0;
     MATH((ret_val = llk_math_extract_compute_special_value_flags<false /* isFpu */>(special_value_flags_reg)));
     return ret_val;
 }

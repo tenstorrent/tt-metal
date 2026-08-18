@@ -149,6 +149,28 @@ inline void topk_uint16_prepare_value_tile_for_pack(std::uint32_t dst_tile_index
     }
 }
 
+// Ungated variant for the fused-key final extraction: a u16 datum transposed into 32-bit DEST
+// lands in the low half with stale garbage above it, while the packer reads the high half.
+// Strip the garbage and move the datum up (SFPSTORE mode 9). Runs on MATH while DEST is acquired,
+// after the transpose has drained.
+inline void _topk_uint16_move_dest_tile_to_pack_half_(std::uint32_t dst_tile_index)
+{
+    sfpi::vConstIntPrgm0 = 0x0000FFFF;
+    TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
+    set_dst_write_addr(0);
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    if (dst_tile_index == 0)
+    {
+        topk_uint16_strip_tile<0, TOPK_SFPSTORE_MODE_PACK_UINT16>();
+    }
+    else
+    {
+        LLK_ASSERT(dst_tile_index == 1, "move_dest_tile_to_pack_half expects dst tile 0 or 1");
+        topk_uint16_strip_tile<1, TOPK_SFPSTORE_MODE_PACK_UINT16>();
+    }
+    set_dst_write_addr(0);
+}
+
 // Fused-key stable topk: pack each datum into one 32-bit word [bf16 value | u16 index'] where
 // index' = index XOR (0xFFFF iff (value_sign == 0) XNOR largest). Sign-magnitude SFPSWAP order on
 // the packed word is then a strict total order whose value-tie order is the requested torch-stable
@@ -168,11 +190,12 @@ inline void topk_uint16_prepare_value_tile_for_pack(std::uint32_t dst_tile_index
 template <bool largest>
 inline void _topk_fuse_tile_()
 {
-    // Mask/complement constant (also the #50215 garbage-high mask). Programming goes through the
-    // SFPCONFIG path (clobbers LREG0 transiently, lane-predicated) so it precedes the SETCC arm
-    // and any live data.
-    sfpi::vConstIntPrgm0 = 0x0000FFFF;
+    // Lanes-on FIRST: the constant programming below goes through the SFPCONFIG path, which is
+    // lane-PREDICATED (and clobbers LREG0 transiently) — programmed under a partially-enabled
+    // ambient CC state, disabled lanes would keep stale LREG12 bits and the mask/complement would
+    // silently misfire in exactly those lanes.
     TTI_SFPENCC(3, 0, 0, 10);
+    sfpi::vConstIntPrgm0 = 0x0000FFFF;
 
     set_dst_write_addr(0);
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
@@ -209,8 +232,9 @@ inline void _topk_fuse_tile_()
 template <bool largest, std::uint32_t index_store_mode = static_cast<std::uint32_t>(InstrModLoadStore::INT32)>
 inline void _topk_defuse_tile_(const int num_tiles)
 {
-    sfpi::vConstIntPrgm0 = 0x0000FFFF;
+    // Lanes-on FIRST — the constant write is lane-predicated (see _topk_fuse_tile_).
     TTI_SFPENCC(3, 0, 0, 10);
+    sfpi::vConstIntPrgm0 = 0x0000FFFF;
 
     set_dst_write_addr(0);
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
