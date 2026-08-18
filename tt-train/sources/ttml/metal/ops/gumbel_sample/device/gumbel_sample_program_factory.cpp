@@ -14,6 +14,7 @@
 
 #include "gumbel_sample_device_operation_types.hpp"
 #include "metal/common/program_utils.hpp"
+#include "ttnn/operations/uniform/uniform_range.hpp"
 
 namespace {
 
@@ -82,14 +83,19 @@ constexpr auto kWriterPositionsCbIndex = tt::CBIndex::c_6;
 // The UPPER bound : `rand_tile` produces values on a CLOSED interval [from, from + scale],
 // so U == 1.0 is attainable, and then log(1) = 0, -log(0) = +inf, g = +inf, which pins the
 // argmax onto that token with certainty. It is a ~2^-32-per-element event, but it is a real one, so
-// here the top of the range is the largest float32 strictly below 1.0 and g stays finite (max
-// ~16.6).
+// the top of the range must be the largest float32 STRICTLY below 1.0, keeping g finite (max
+// ~16.6). That endpoint comes from ttnn's uniform-range helper rather than a hand-typed hex
+// literal: uniform_range.hpp is where "largest value the SFPU can emit below a bound" is
+// centrally maintained (it also owns the subnormal-flushing rules), so if those semantics are
+// ever retuned this op inherits the retune instead of silently reintroducing the +inf pin.
 constexpr float kGumbelUniformLowerBound = 0x1p-32F;
-constexpr float kGumbelUniformUpperBound = 0x1.fffffep-1F;  // nextafterf(1.0F, 0.0F)
+const float kGumbelUniformUpperBound = ttnn::operations::uniform::largest_supported_float32_below(1.0F);
 
 // `rand_tile` is documented as inclusive of `from + scale`. Shrink the scale by one ULP if rounding
-// would push the top of the range past the intended upper bound -- same guard compute_uniform.cpp
-// applies on the device side.
+// would push the top of the range past the intended upper bound. This mirrors the guard in the
+// uniform op's DEVICE kernel (compute_uniform.cpp) -- there is no host-side header that ships it,
+// and this op cannot reuse the kernel's copy because its compute kernel takes `from` and `scale`
+// as runtime args (the scale must be computed here, on the host) rather than the two endpoints.
 uint32_t compute_rand_scale_bits(float lower, float upper) {
     float scale = upper - lower;
     uint32_t scale_bits = std::bit_cast<uint32_t>(scale);
@@ -299,9 +305,11 @@ tt::tt_metal::Program build_program(
     auto* mask_buffer = has_mask ? tensor_args.logits_padding_mask->buffer() : nullptr;
     auto* output_buffer = output.buffer();
 
-    // temperature == 0 selects the greedy variant of the compute kernel: no RNG, no scaling, the
-    // logits go straight through to the writer's running argmax.
-    const bool do_gumbel_noise = args.temperature > 0.0F;
+    // Greedy vs noisy is decided by uses_gumbel_noise, NOT a bare `temperature > 0`: a positive
+    // temperature whose reciprocal overflows float32 (below ~2.9e-39) must build the greedy kernel,
+    // or the +inf scale factor collapses every positive logit to one bit pattern and the argmax
+    // degenerates to "first positive column". The hash uses the same predicate.
+    const bool do_gumbel_noise = uses_gumbel_noise(args.temperature);
 
     std::map<std::string, std::string> defines;
     if (has_mask) {
@@ -389,8 +397,9 @@ tt::tt_metal::Program build_program(
     // -------------------------------------------------------------------------
     const uint32_t rand_from_bits = std::bit_cast<uint32_t>(kGumbelUniformLowerBound);
     const uint32_t rand_scale_bits = compute_rand_scale_bits(kGumbelUniformLowerBound, kGumbelUniformUpperBound);
-    // Guard the reciprocal: temperature == 0 would make this inf. The greedy kernel never reads it,
-    // but an inf sitting in a runtime arg is a trap for anyone who later makes it read it.
+    // Guard the reciprocal: only computed when the noisy kernel will read it. uses_gumbel_noise
+    // guarantees the reciprocal is FINITE here (that is the predicate's whole point); greedy gets a
+    // zero because an inf sitting in a runtime arg is a trap for anyone who later makes it read it.
     const uint32_t inv_temperature_bits = do_gumbel_noise ? std::bit_cast<uint32_t>(1.0F / args.temperature) : 0U;
 
     // Zero when absent: the slot exists in BOTH modes so override_runtime_arguments can patch it
@@ -493,11 +502,15 @@ void GumbelSampleProgramFactory::override_runtime_arguments(
 
     // seed and temperature are runtime-only (deliberately excluded from the program hash so that
     // changing either reuses the cached program), so they must be re-applied on every cache hit
-    // alongside the buffer addresses.
+    // alongside the buffer addresses. The guard is uses_gumbel_noise, matching build_program and
+    // the hash: it keeps the reciprocal finite, and a temperature whose kernel selection CHANGED
+    // (crossing zero or the reciprocal-overflow floor) hashes to a different program anyway, so a
+    // cached program is never patched with the wrong variant's args.
     const uint32_t rand_from_bits = std::bit_cast<uint32_t>(kGumbelUniformLowerBound);
     const uint32_t rand_scale_bits = compute_rand_scale_bits(kGumbelUniformLowerBound, kGumbelUniformUpperBound);
-    const uint32_t inv_temperature_bits =
-        operation_attributes.temperature > 0.0F ? std::bit_cast<uint32_t>(1.0F / operation_attributes.temperature) : 0U;
+    const uint32_t inv_temperature_bits = uses_gumbel_noise(operation_attributes.temperature)
+                                              ? std::bit_cast<uint32_t>(1.0F / operation_attributes.temperature)
+                                              : 0U;
 
     for (auto& [coord_range, program] : cached_workload.workload.get_programs()) {
         auto& vars = cached_workload.shared_variables.at(coord_range);

@@ -4,9 +4,11 @@
 
 #include "gumbel_sample_device_operation.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <enchantum/enchantum.hpp>
 #include <optional>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
 
@@ -86,6 +88,38 @@ void GumbelSampleDeviceOperation::validate_on_program_cache_miss(
     auto* device = logits.device();
     TT_FATAL(device != nullptr, "GumbelSample: logits are not associated with a device");
 
+    // seed_axes name the mesh axes whose devices hold DISTINCT data and must therefore draw
+    // DISTINCT noise. An axis outside the mesh is unconditionally a caller bug (a typo, or a
+    // config reused across topologies): seeded_linear_index() in the program factory skips axes it
+    // cannot find, so every device would fall through to stream id 0 and draw byte-identical
+    // noise -- for GRPO that is duplicate completions with zero-variance advantages, and nothing
+    // downstream flags it. Extent-1 axes are deliberately NOT rejected: a trivial axis is how a
+    // topology-generic caller says "seed this axis if it happens to be sharded here".
+    const auto mesh_shape = device->shape();
+    for (const uint32_t axis : args.seed_axes) {
+        TT_FATAL(
+            axis < mesh_shape.dims(),
+            "GumbelSample: seed_axes entry {} does not exist on this {}-dimensional mesh {}",
+            axis,
+            mesh_shape.dims(),
+            mesh_shape);
+    }
+    // A multi-device mesh where no seeded axis has extent > 1 is LEGAL -- a fully replicated
+    // (TP-only) mesh deliberately draws identical noise so replicas agree on the sampled token --
+    // but it is also exactly what a forgotten seed_axes looks like from a data-parallel caller.
+    // Say so at debug level (as the composite sample() this op replaced used to) rather than
+    // guessing which of the two the caller meant.
+    if (mesh_shape.mesh_size() > 1 && std::none_of(args.seed_axes.begin(), args.seed_axes.end(), [&](uint32_t axis) {
+            return mesh_shape[axis] > 1;
+        })) {
+        log_debug(
+            tt::LogOp,
+            "GumbelSample: all {} devices share one RNG stream (seed_axes selects no axis with extent > 1) and will "
+            "draw identical noise. If these devices hold distinct batch rows, pass the data-parallel mesh axes in "
+            "seed_axes.",
+            mesh_shape.mesh_size());
+    }
+
     TT_FATAL(
         logits.dtype() == tt::tt_metal::DataType::BFLOAT16 || logits.dtype() == tt::tt_metal::DataType::FLOAT32,
         "GumbelSample: logits must be BFLOAT16 or FLOAT32, got '{}'",
@@ -95,8 +129,8 @@ void GumbelSampleDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(
         args.temperature >= 0.0F && std::isfinite(args.temperature),
-        "GumbelSample: temperature must be finite and >= 0, got {}. Zero selects greedy argmax; anything positive "
-        "selects Gumbel-max sampling.",
+        "GumbelSample: temperature must be finite and >= 0, got {}. Zero -- or a positive value below ~2.9e-39, whose "
+        "reciprocal overflows float32 -- selects greedy argmax; other positive values select Gumbel-max sampling.",
         args.temperature);
 
     // NOTE: seed == 0 is deliberately NOT rejected. This op drives the SFPU generator directly via
@@ -233,11 +267,13 @@ ttsl::hash::hash_t GumbelSampleDeviceOperation::compute_program_hash(
     // args that override_runtime_arguments re-applies, so every step of a training loop (new seed
     // each step) reuses one cached program instead of thrashing the cache.
     //
-    // Whether the temperature is zero IS part of the key, though: it selects the DO_GUMBEL_NOISE
-    // define, so greedy and sampled runs compile to different kernels. Omitting it would let a
-    // cached noisy program be reused for a greedy call -- silently sampling when the caller asked
-    // for argmax. `seed_axes` is in the key because it changes which mesh coordinates get distinct
-    // programs.
+    // WHICH KERNEL the temperature selects IS part of the key, though: uses_gumbel_noise picks the
+    // DO_GUMBEL_NOISE define, so greedy and sampled runs compile to different kernels. Omitting it
+    // would let a cached noisy program be reused for a greedy call -- silently sampling when the
+    // caller asked for argmax. It must be the SAME predicate the factory uses (not a bare
+    // `temperature > 0`): a sub-reciprocal-overflow temperature builds the greedy kernel, and
+    // hashing it as "noisy" would collide it with real noisy programs. `seed_axes` is in the key
+    // because it changes which mesh coordinates get distinct programs.
     // Buffer PLACEMENT is part of the key, not just presence. TensorAccessorArgs bakes
     // ArgConfig::IsDram and the buffer's aligned_page_size into the reader/writer COMPILE-TIME args
     // (tensor_accessor_args.cpp), and both differ between DRAM and L1. Two calls that differ only in
@@ -280,7 +316,7 @@ ttsl::hash::hash_t GumbelSampleDeviceOperation::compute_program_hash(
 
     return tt::tt_metal::operation::hash_operation<GumbelSampleDeviceOperation>(
         position_aware,
-        args.temperature > 0.0F,
+        uses_gumbel_noise(args.temperature),
         args.seed_axes,
         logits.dtype(),
         // The padded shape is deliberately NOT hashed alongside the logical one: check_tensor pins
