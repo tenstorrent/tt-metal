@@ -12,7 +12,6 @@ forward over layers 0..layer_idx (as in test_prefill_transformer); otherwise it 
 randomly-initialized HF reference layer so the test still runs without weights.
 """
 
-import copy
 import json
 import os
 from dataclasses import dataclass
@@ -35,7 +34,7 @@ from models.demos.deepseek_v3_d_p.reference.mistral_small4_config import Mistral
 from models.demos.deepseek_v3_d_p.reference.tt.moe.moe import load_moe_weights_from_hf
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_reference import build_weights
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import indexer_layer_is_reused, num_full_indexer_layers
-from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup, interleaved_to_halfsplit_perm
+from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     create_balanced_chunk_order,
     reorder_tensor_chunks,
@@ -51,6 +50,8 @@ from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     PROMPT_5K_PATH,
     PROMPT_25K_PATH,
     create_hf_model,
+    decoder_layer_kwargs,
+    derive_mla_kvpe,
     extract_layer_state_dict,
     get_4d_causal_mask,
     load_and_compute_layer_by_layer,
@@ -77,54 +78,6 @@ MISTRAL4_THRESHOLDS = PrefillBlockThresholds(moe_gate_host=0.950)
 
 # Determinism: every iteration must be bit-identical to the iter-0 baseline (strict).
 DETERMINISM_PCC_THRESHOLD = 1.0
-
-
-def _derive_mla_kvpe(hf_layer, hidden_states, position_embeddings, config):
-    """Compressed MLA KV line [b, 1, seq, kv_lora_rank + qk_rope_head_dim] from a decoder layer.
-
-    For references that cache expanded per-head keys rather than the MLA latent. Mirrors what
-    MLAReference caches: ``kv_a_layernorm(latent)`` concatenated with the ROPE-rotated pe part,
-    computed with the layer's own weights and its own rope convention.
-    """
-    attn = hf_layer.self_attn
-    kv_lora_rank, rope_dim = config.kv_lora_rank, config.qk_rope_head_dim
-    with torch.no_grad():
-        # In float32. The weights are bf16 either way, but accumulating the norm + projection in
-        # bf16 costs ~2e-3 of PCC against the device's own KVPE -- enough to read as a failure
-        # against a 0.999 bar when nothing is actually wrong. This is a reference value; compute it
-        # as precisely as the weights allow.
-        norm_f = copy.deepcopy(hf_layer.input_layernorm).float()
-        proj_f = copy.deepcopy(attn.kv_a_proj_with_mqa).float()
-        kv_norm_f = copy.deepcopy(attn.kv_a_layernorm).float()
-        normed = norm_f(hidden_states.float())
-        compressed = proj_f(normed)
-        latent, k_pe = torch.split(compressed, [kv_lora_rank, rope_dim], dim=-1)
-        bsz, seq_len = hidden_states.shape[0], hidden_states.shape[1]
-        k_nope = kv_norm_f(latent).view(bsz, 1, seq_len, kv_lora_rank)
-        k_pe = k_pe.view(bsz, 1, seq_len, rope_dim)
-
-        assert position_embeddings is not None, "need (cos, sin) to rotate the pe part"
-        cos, sin = (c.float() for c in position_embeddings)
-        # Use the layer's own rope convention. Mistral sets rope_interleave=True and applies
-        # apply_rotary_pos_emb_interleave; getting this wrong silently rotates the wrong pairs.
-        if getattr(config, "rope_interleave", False):
-            from transformers.models.mistral4.modeling_mistral4 import apply_rotary_pos_emb_interleave as _apply
-        else:
-            from transformers.models.mistral4.modeling_mistral4 import apply_rotary_pos_emb as _apply
-        _q_unused, k_pe = _apply(k_pe, k_pe, cos, sin)
-
-        # The rotated pe lands in the HF half-split basis, while both MLAReference and the device
-        # cache it in the Meta-interleaved basis. The two differ by a fixed permutation that cancels
-        # in q.k -- which is why attention output PCC is ~1.0 either way while a direct comparison of
-        # the stored pe reads ~0.03. `interleaved_to_halfsplit_perm` is the canonical index
-        # (interleaved = halfsplit[argsort(p)]); verified exact (PCC 1.0) against MLAReference.
-        perm = torch.argsort(interleaved_to_halfsplit_perm(rope_dim))
-        k_pe = k_pe[..., perm]
-
-        kvpe = k_pe.new_empty(bsz, 1, seq_len, kv_lora_rank + rope_dim)
-        kvpe[:, :, :, :kv_lora_rank] = k_nope
-        kvpe[:, :, :, kv_lora_rank:] = k_pe
-    return kvpe
 
 
 def run_model(
@@ -359,7 +312,7 @@ def run_model(
                         f"Reference caches expanded KV (last dim {ref_kvpe.shape[-1]} != {expected_last}); "
                         "deriving the compressed MLA KVPE line from the layer instead"
                     )
-                    ref_kvpe = _derive_mla_kvpe(
+                    ref_kvpe = derive_mla_kvpe(
                         hf_model.layers[layer_idx], torch_input, layer_kwargs.get("position_embeddings"), config
                     )
                 logger.info(f"Reference KVPE shape: {ref_kvpe.shape}")
