@@ -60,6 +60,7 @@ void bind_conv2d(nb::module_& mod) {
             slice_config (ttnn.Conv2dSliceConfig, optional): Configuration for slicing input & output tensors in DRAM. If set to None and input is in DRAM, DRAM slicing is automatically enabled. Default: None.
             return_output_dim (bool, optional): If true, the op also returns the height and width of the output tensor in [N, H, W, C] format. Default: False
             return_weights_and_bias (bool, optional): If true, the op also returns the preprocessed weight and bias on device. Default: False
+                Exception: when the DRAM channel-chunk path engages with host weights, each chunk prepares its own channel slice, so the original host weight/bias are returned instead.
 
         Returns:
             The output tensor, output height and width, and the preprocessed weights and bias.
