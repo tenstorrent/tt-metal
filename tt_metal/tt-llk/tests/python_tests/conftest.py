@@ -907,7 +907,7 @@ def pytest_sessionstart(session):
     # already present and skip via the fast path (test_config.py:837). Wrap
     # in try/except so a transient build failure doesn't kill the suite —
     # workers will retry on first test if needed.
-    if TestConfig.BUILD_MODE != BuildMode.PRODUCE:
+    if TestConfig.BUILD_MODE == BuildMode.DEFAULT:
         try:
             # build_shared_artefacts doesn't use any instance-specific fields
             # (test_name, templates, etc.), only TestConfig class state

@@ -994,8 +994,13 @@ class TestConfig:
 
         done_marker = shared_obj_dir / ".shared_complete"
 
-        # Fast path: if shared artefacts are already built AND on disk
-        if done_marker.exists() and self._shared_artefacts_present():
+        # Fast path: if shared artefacts are already built AND on disk.
+        # Check the artefacts FIRST and the marker LAST: the builder unlinks
+        # the marker before (re)building and touches it only after all
+        # artefacts are complete, so the marker is absent for the entire
+        # rebuild. Reading it last means a concurrent rebuild is always caught
+        # even if the artefact read observed a partially-linked file (TOCTOU).
+        if self._shared_artefacts_present() and done_marker.exists():
             TestConfig.SHARED_ARTEFACTS_AVAILABLE = True
             return
 
@@ -1003,10 +1008,11 @@ class TestConfig:
         lock = FileLock(lock_file)
 
         with lock:
-            # Check again inside lock — same dual condition. If the marker
-            # exists but the artefact is missing/empty, fall through and
-            # rebuild rather than serving a corrupt cache.
-            if done_marker.exists() and self._shared_artefacts_present():
+            # Check again inside lock — same dual condition (artefacts first,
+            # marker last). If the marker exists but the artefact is
+            # missing/empty, fall through and rebuild rather than serving a
+            # corrupt cache.
+            if self._shared_artefacts_present() and done_marker.exists():
                 TestConfig.SHARED_ARTEFACTS_AVAILABLE = True
                 return
             # Clean up a leaked marker so we don't loop on the same stale
@@ -1288,8 +1294,13 @@ class TestConfig:
                     return False
             return True
 
-        # Fast path: if build is already complete AND elfs are on disk
-        if done_marker.exists() and _variant_artefacts_present():
+        # Fast path: if build is already complete AND elfs are on disk.
+        # Check the artefacts FIRST and the marker LAST: the builder unlinks
+        # the marker before (re)building and touches it only after all ELFs
+        # are complete, so the marker is absent for the entire rebuild.
+        # Reading it last means a concurrent rebuild is always caught even if
+        # the artefact read observed a partially-linked ELF (TOCTOU).
+        if _variant_artefacts_present() and done_marker.exists():
             logger.debug("Build already complete for {}", self.variant_id[:12])
             return
 
@@ -1298,8 +1309,9 @@ class TestConfig:
         lock = FileLock(lock_file)
 
         with lock:
-            # Check again inside lock — same dual condition.
-            if done_marker.exists() and _variant_artefacts_present():
+            # Check again inside lock — same dual condition (artefacts first,
+            # marker last).
+            if _variant_artefacts_present() and done_marker.exists():
                 return
             # Stale marker without artefacts → clean and rebuild.
             if done_marker.exists():
