@@ -57,6 +57,28 @@ class Qwen36DecoderLayer:
                 or (self.is_full_attention and getattr(args, "attn_qkv_fused_weight_memcfg", None) is not None)
             )
         )
+        # ATTEMPTED AND REJECTED (2026-08-17): narrowing attention_norm's prefill all-gather to bf8,
+        # the same trick that is worth -43% on ff_norm's gather below. It is the largest single op in
+        # the layer (1,142us at seq 2048, T3K TP=8) so the prize was ~-450us, but the activation it
+        # produces is consumed by ops with dtype CONTRACTS that bf16 happens to satisfy and bf8 does
+        # not. Two hard failures, one per layer type:
+        #
+        #   full_attention: attention_norm -> QKV -> K/V are written to the paged KV cache, and
+        #     paged_fill_cache_device_operation.cpp:36 requires a fp32/bf16 input against a bf16
+        #     cache. Crashes at trace capture.
+        #   linear_attention: the GDN depthwise FIR (gdn/conv_fir_wh.py:251) does
+        #     ttnn.addcmul(out, x_slice, weight_taps[k]), and ternary.cpp:268 requires all three
+        #     operands to share a dtype -- bf16 taps vs a bf8 slice.
+        #
+        # Each is fixable with a cast back to bf16, but those casts are full passes over the largest
+        # tensors in the layer and give the win straight back. And even fixed, bf8 here feeds the
+        # RECURRENT chunk scan, where error compounds across chunks -- unlike ff_norm's gather, whose
+        # error dies with the token. That needed test_demo_text[traced_64k] to settle and never got
+        # far enough to be asked.
+        #
+        # THE RIGHT UNLOCK IS A bf8 KV CACHE, not casts: it removes the full_attention blocker at
+        # source, and it is independently the top lever at long context (KV bytes exceed all weight
+        # bytes past ~32k ctx). Revisit this only after that lands.
         self.attention_norm = self._make_norm(
             mesh_device,
             args,
@@ -75,8 +97,9 @@ class Qwen36DecoderLayer:
         # hidden and do NOT run the fused gate/up AGMM), so only fuse for the dense MLP.
         self._fuse_ff_agmm = tpc.mlp_gateup_agmm_enabled(self.num_devices) and not args.is_moe_layer(layer_num)
         # Narrow ff_norm's prefill gather to bf8 on the Wormhole 27B: at TP=8 it moves 2.62MB/device
-        # over one ETH link and is the largest op in the MLP block. MLP-scoped (forward deallocates
-        # the norm output right after feed_forward); Blackhole never gathers here, the AGMM fuses it.
+        # over one ETH link and is the largest op in the MLP block. Free -- rms_norm_post_all_gather
+        # takes a dtype, so the norm writes half the bytes and got faster too (49 -> 39us). MLP-scoped
+        # (forward deallocates it right after feed_forward); Blackhole never gathers here.
         _ff_gather_dtype = ttnn.bfloat8_b if (args.dim > 4096 and not is_blackhole()) else None
         self.ffn_norm = self._make_norm(
             mesh_device,
