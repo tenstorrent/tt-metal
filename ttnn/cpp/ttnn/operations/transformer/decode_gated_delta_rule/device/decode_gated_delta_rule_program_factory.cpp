@@ -87,13 +87,17 @@ tt::tt_metal::ProgramDescriptor DecodeGatedDeltaRuleProgramFactory::create_descr
     auto* device = in.q.device();
     const CoreCoord grid = device->compute_with_storage_grid_size();
     const uint32_t grid_y = grid.y;
-    TT_FATAL(BH <= grid.x * grid.y, "num_heads {} exceeds compute cores {}", BH, grid.x * grid.y);
-
-    std::vector<CoreCoord> head_cores(BH);
+    // BH can exceed the grid (decode BH = B*H, e.g. 128*24 = 3072 on a 110-core
+    // die): each active core processes a contiguous chunk of head-instances
+    // [c*per_core, min((c+1)*per_core, BH)). For BH <= ncores, per_core == 1 and
+    // this reduces to the original one-instance-per-core mapping (core c <-> c).
+    const uint32_t ncores = grid.x * grid.y;
+    const uint32_t per_core = (BH + ncores - 1) / ncores;
+    std::vector<CoreCoord> active_cores;
     std::set<CoreRange> core_set;
-    for (uint32_t h = 0; h < BH; h++) {
-        head_cores[h] = CoreCoord{h / grid_y, h % grid_y};
-        core_set.insert(CoreRange{head_cores[h], head_cores[h]});
+    for (uint32_t c = 0; c < ncores && c * per_core < BH; c++) {
+        active_cores.push_back(CoreCoord{c / grid_y, c % grid_y});
+        core_set.insert(CoreRange{active_cores.back(), active_cores.back()});
     }
     CoreRangeSet cores{core_set};
 
@@ -125,7 +129,7 @@ tt::tt_metal::ProgramDescriptor DecodeGatedDeltaRuleProgramFactory::create_descr
     add_cb(cb::gexp, 1, 1, tt::DataFormat::Float32);
     add_cb(cb::sdec, kv, 1, tt::DataFormat::Float32);
     add_cb(cb::vread, Vt, 1, tt::DataFormat::Float32);
-    add_cb(cb::delta, Vt, 2, tt::DataFormat::Float32);  // 2x pages: in-place *beta
+    add_cb(cb::delta, Vt, 2, tt::DataFormat::Float32);  // 2x pages: in-place *beta  // 2x pages: in-place *beta
     add_cb(cb::outer, kv, 1, tt::DataFormat::Float32);
     add_cb(cb::sout, kv, 1, df_io);
     add_cb(cb::out, Vt, 2, df_io);
@@ -136,7 +140,7 @@ tt::tt_metal::ProgramDescriptor DecodeGatedDeltaRuleProgramFactory::create_descr
     add_cb(cb::betaf, 1, 1, tt::DataFormat::Float32);
     add_cb(cb::sf, kv, 1, tt::DataFormat::Float32);
     add_cb(cb::snew, kv, 1, tt::DataFormat::Float32);
-    add_cb(cb::scratch, std::max(Kt, Vt), 1, df_io);
+    add_cb(cb::scratch, 2, 1, df_io);
 
     const std::string kdir = "ttnn/cpp/ttnn/operations/transformer/decode_gated_delta_rule/device/kernels/";
     const std::vector<uint32_t> ct_args = {Kt, Vt, has_s0, eps_bits, scale_bits};
@@ -190,13 +194,17 @@ tt::tt_metal::ProgramDescriptor DecodeGatedDeltaRuleProgramFactory::create_descr
     auto* o_buf = outputs[0].buffer();
     auto* s1_buf = outputs[1].buffer();
 
-    for (uint32_t h = 0; h < BH; h++) {
-        const auto& core = head_cores[h];
-        reader.emplace_runtime_args(core, {h, q_buf, k_buf, v_buf, beta_buf, g_buf, s0_buf});
+    for (uint32_t c = 0; c < active_cores.size(); c++) {
+        const auto& core = active_cores[c];
+        const uint32_t start = c * per_core;
+        const uint32_t n_inst = std::min(per_core, BH - start);
+        // Runtime args carry the instance RANGE [start, start+n_inst); each
+        // kernel derives bh = start + i in its per-instance loop.
+        reader.emplace_runtime_args(core, {start, n_inst, q_buf, k_buf, v_buf, beta_buf, g_buf, s0_buf});
         // o is ROW_MAJOR: pass its stick page size (page bh == head bh's row).
         writer.emplace_runtime_args(
-            core, {h, o_buf, static_cast<uint32_t>(o_buf->page_size()), s1_buf});
-        compute.emplace_runtime_args(core, {h});
+            core, {start, n_inst, o_buf, static_cast<uint32_t>(o_buf->page_size()), s1_buf});
+        compute.emplace_runtime_args(core, {n_inst});
     }
     desc.kernels.push_back(std::move(reader));
     desc.kernels.push_back(std::move(writer));
