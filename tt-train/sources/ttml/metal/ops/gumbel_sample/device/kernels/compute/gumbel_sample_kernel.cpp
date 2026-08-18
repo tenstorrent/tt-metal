@@ -11,22 +11,25 @@
 //
 // and hands the score tile straight to the writer, which folds it into a running per-row argmax.
 // Nothing [B, 1, tokens, V]-sized is ever written to DRAM.
+//
+// The noise chain itself is two SFPU passes over DST, not seven: rand_tile draws the raw uniforms,
+// then one op-local SFPI sweep (gumbel_sfpu.h) folds both logs, both negations, the temperature
+// scale and the add into LREGs, storing each score datum exactly once.
 
 #include <cstdint>
 
 #include "api/compute/bcast.h"  // unary_bcast, for the [1, V] padding mask
 #include "api/compute/cb_api.h"
-#include "api/compute/compute_kernel_api.h"  // log_tile, pack_tile, tile_regs_*
+#include "api/compute/compute_kernel_api.h"  // pack_tile, tile_regs_*
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/eltwise_binary_sfpu.h"
-#include "api/compute/eltwise_unary/binop_with_scalar.h"  // mul_unary_tile
 #include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "api/compute/eltwise_unary/negative.h"
 #include "api/compute/eltwise_unary/rand.h"
 #include "api/compute/pack.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/reg_api.h"
 #include "api/compute/tile_move_copy.h"
+#include "gumbel_sfpu.h"  // gumbel_score_tile, the fused noise/scale/add pass
 
 constexpr uint32_t num_tiles = get_compile_time_arg_val(0);
 constexpr uint32_t block_size = get_compile_time_arg_val(1);
@@ -77,6 +80,9 @@ void kernel_main() {
     compute_kernel_hw_startup(cb_logits, cb_scores);
     init_sfpu(cb_logits, cb_scores);
 
+    // The packer only ever emits cb_scores, so its format is loop-invariant.
+    pack_reconfig_data_format(cb_scores);
+
     // One init for the whole core: the LFSR then advances monotonically across every rand_tile call
     // below. Combined with the (device, core) specific stream id this makes the noise reproducible
     // for a given seed and work split, and disjoint across cores and data-parallel devices.
@@ -101,31 +107,22 @@ void kernel_main() {
                 tile_regs_acquire();
 
                 if constexpr (do_gumbel_noise) {
-                    // ---- Gumbel noise: g = -log(-log(U)), U ~ Uniform[from, from + scale] ----
-                    //
-                    // Every SFPU step below re-runs its *_init. That is not boilerplate: rand_tile
-                    // records replay slots 0-15/0-16 and (on Wormhole) programs LREG12/LREG13, so
-                    // any SFPU op that follows it must reprogram what it depends on. Dropping these
-                    // inits would leave log/neg reading whatever rand left behind.
+                    // ---- pass 1: U ~ Uniform[from, from + scale] into the score slot ----
+                    // rand_tile stays a standalone pass: the PRNG's per-tile draw order defines the
+                    // reproducible noise stream, and the generator owns LREG0-6 plus replay slots
+                    // 0-16 while it runs, so nothing may interleave with it.
                     rand_tile(score_reg, rand_from_bits, rand_scale_bits);
-                    log_tile_init();
-                    log_tile(score_reg);
-                    negative_tile_init();
-                    negative_tile(score_reg);
-                    log_tile_init();
-                    log_tile(score_reg);
-                    negative_tile_init();
-                    negative_tile(score_reg);
 
-                    // ---- logits / temperature, accumulated onto the noise ----
-                    // The scaling is applied to the LOGITS, never to the noise: score = logits/T + g.
-                    // Scaling the noise instead would invert the temperature's meaning entirely.
                     copy_tile_init(cb_logits);
                     copy_tile(cb_logits, block_idx, operand_reg);
-                    binop_with_scalar_tile_init();
-                    mul_unary_tile(operand_reg, inv_temperature_bits);
-                    add_binary_tile_init();
-                    add_binary_tile(score_reg, operand_reg, score_reg);
+
+                    // ---- pass 2: score = logits * (1/T) + (-log(-log(U))), one SFPI sweep ----
+                    // The scaling is applied to the LOGITS, never to the noise: score = logits/T + g.
+                    // Scaling the noise instead would invert the temperature's meaning entirely.
+                    // The init reprograms what rand_tile left behind (counters, SFPU config);
+                    // the fused pass itself relies on no replay slots or const LREGs.
+                    gumbel_score_tile_init();
+                    gumbel_score_tile<operand_reg - score_reg>(score_reg, inv_temperature_bits);
                 } else {
                     // ---- greedy (temperature == 0): the logits ARE the scores ----
                     // No 1/temperature scaling: it would be a division by zero on the host, and a
@@ -146,7 +143,6 @@ void kernel_main() {
                 tile_regs_commit();
 
                 tile_regs_wait();
-                pack_reconfig_data_format(cb_scores);
                 pack_tile(score_reg, cb_scores);
                 tile_regs_release();
 
