@@ -85,12 +85,23 @@ void py_module(nb::module_& mod) {
                const CoreRangeSet& grid,
                kh::Mcast1DShape shape,
                uint32_t sender_index,
-               const kh::McastConfig& config) { new (self) kh::Mcast1D(device, grid, shape, sender_index, config); },
+               const kh::McastConfig& config,
+               std::optional<CoreRangeSet> sender_grid) {
+                new (self) kh::Mcast1D(
+                    device,
+                    grid,
+                    shape,
+                    sender_index,
+                    config,
+                    kh::Mcast1DSenderPlacement::Uniform,
+                    std::move(sender_grid));
+            },
             nb::arg("device"),
             nb::arg("grid"),
             nb::arg("shape"),
             nb::arg("sender_index") = 0,
-            nb::arg("config") = kh::McastConfig{})
+            nb::arg("config") = kh::McastConfig{},
+            nb::arg("sender_grid") = std::optional<CoreRangeSet>{})
         .def(
             "__init__",
             [](kh::Mcast1D* self,
@@ -99,15 +110,18 @@ void py_module(nb::module_& mod) {
                kh::Mcast1DShape shape,
                uint32_t starting_sender_index,
                kh::Mcast1DSenderPlacement sender_placement,
-               const kh::McastConfig& config) {
-                new (self) kh::Mcast1D(device, grid, shape, starting_sender_index, config, sender_placement);
+               const kh::McastConfig& config,
+               std::optional<CoreRangeSet> sender_grid) {
+                new (self) kh::Mcast1D(
+                    device, grid, shape, starting_sender_index, config, sender_placement, std::move(sender_grid));
             },
             nb::arg("device"),
             nb::arg("grid"),
             nb::arg("shape"),
             nb::arg("starting_sender_index"),
             nb::arg("sender_placement"),
-            nb::arg("config") = kh::McastConfig{})
+            nb::arg("config") = kh::McastConfig{},
+            nb::arg("sender_grid") = std::optional<CoreRangeSet>{})
         .def(
             "owned_semaphores",
             &kh::Mcast1D::owned_semaphores,
@@ -127,7 +141,7 @@ void py_module(nb::module_& mod) {
         .def(
             "num_active",
             &kh::Mcast1D::num_active,
-            R"doc(The sender's handshake ACK wait-count on the wire (Mcast1D is always dense: the EXCLUDE fan-out span-1).)doc")
+            R"doc(The sender's handshake ACK policy on the wire: a dense fan-out count when uniform, or ACK_EQUALS_FANOUT when inside and outside senders differ.)doc")
         .def(
             "num_senders",
             &kh::Mcast1D::num_senders,
@@ -142,9 +156,9 @@ void py_module(nb::module_& mod) {
             R"doc(base_sem_id the next family on the same grid should use so their ids don't overlap.)doc")
         .def("active", &kh::Mcast1D::active);
 
-    // Mcast2D — ONE mcast over a single rectangle. sender ∈ rect => fully-inside (rotating OK,
-    // fan-out area-1); sender ∉ rect => separate sender (fixed only, fan-out area). num_active is the
-    // handshake ack wait-count (0 => the dense fan-out).
+    // Mcast2D — ONE mcast over a receiver rectangle. Fixed mode uses `sender` directly. Rotating mode
+    // walks sender_grid when provided, otherwise the receiver rectangle. num_active is the handshake
+    // ack wait-count (0 => the dense fan-out).
     static_cast<nb::class_<kh::Mcast2D>>(mod.attr("Mcast2D"))
         .def(
             "__init__",
@@ -153,12 +167,16 @@ void py_module(nb::module_& mod) {
                const CoreRangeSet& mcast_rect,
                const CoreCoord& sender,
                const kh::McastConfig& config,
-               uint32_t num_active) { new (self) kh::Mcast2D(device, mcast_rect, sender, config, num_active); },
+               uint32_t num_active,
+               std::optional<CoreRangeSet> sender_grid) {
+                new (self) kh::Mcast2D(device, mcast_rect, sender, config, num_active, std::move(sender_grid));
+            },
             nb::arg("device"),
             nb::arg("mcast_rect"),
             nb::arg("sender"),
             nb::arg("config") = kh::McastConfig{},
-            nb::arg("num_active") = 0)
+            nb::arg("num_active") = 0,
+            nb::arg("sender_grid") = std::optional<CoreRangeSet>{})
         .def(
             "owned_semaphores",
             &kh::Mcast2D::owned_semaphores,
