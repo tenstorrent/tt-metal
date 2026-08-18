@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Producer kernel (writer RISC, NOC_1). Owns the ONE fabric sender connection its eth channel allows (the
+// Sender kernel (writer RISC, NOC_1). Owns the ONE fabric sender connection its eth channel allows (the
 // L1 connection table is indexed by eth channel and the EDM stores a single worker_xy per channel, so a
 // second core on the same channel would just hang) and drains the L1 ring the reader on this same core
 // fills, one fabric packet per token. Every send is a single hop to the chip across this cable; tokens
@@ -21,18 +21,19 @@
 #include "tt_metal/fabric/hw/inc/linear/api.h"
 #include "tt_metal/fabric/hw/inc/linear/addrgen_api.h"
 #include "fabric/fabric_edm_packet_header.hpp"
-#define CMBF2D_PRODUCER_KERNEL
+#define CMBF2D_SENDER_KERNEL
 #include "combine_fabric2d_kernel_interface.hpp"
 
 // Forwarded tokens between semaphore bumps to the downstream reader. A bump always follows a sentinel
 // regardless, so this only sets how finely that reader can pipeline within a chunk.
 constexpr uint32_t FWD_BUMP_EVERY = 32;
 
+constexpr cmbf2d::SenderCtArgs ct{};
+
 void kernel_main() {
     using namespace cmbf2d;
-    using ct = ProducerCtArgs;
-    // cmd 2 also sends the tail's final address + dst chip, which sit immediately after the token, so the
-    // two together are one contiguous run.
+    // cmd 2 also sends the forwarding metadata's final address + dst chip, which sit immediately after the token, so
+    // the two together are one contiguous run.
     constexpr uint32_t FWD_EXTRA_BYTES = 16;
 
     std::size_t rt_args_idx = 0;
@@ -45,24 +46,23 @@ void kernel_main() {
     // One prebuilt header per ring slot. Every send is a single hop, so the route is constant for the whole
     // run; only the write address varies per token, and a slot's header is untouched until the ring wraps.
     auto slot_hdr = [](uint32_t slot) -> volatile PACKET_HEADER_TYPE* {
-        return reinterpret_cast<volatile PACKET_HEADER_TYPE*>(
-            ct::pkt_hdr_ring_addr + slot * sizeof(PACKET_HEADER_TYPE));
+        return reinterpret_cast<volatile PACKET_HEADER_TYPE*>(ct.pkt_hdr_ring_addr + slot * sizeof(PACKET_HEADER_TYPE));
     };
-    for (uint32_t slot = 0; slot < ct::num_l1_slots; slot++) {
+    for (uint32_t slot = 0; slot < ct.num_l1_slots; slot++) {
         fabric_set_unicast_route(
-            (volatile tt::tt_fabric::HybridMeshPacketHeader*)slot_hdr(slot), ct::peer_chip_id, ct::peer_mesh_id);
+            (volatile tt::tt_fabric::HybridMeshPacketHeader*)slot_hdr(slot), ct.peer_chip_id, ct.peer_mesh_id);
     }
     // Shares the drain's scratch header: the drain only runs once the send loop is done with it.
-    volatile PACKET_HEADER_TYPE* hdr_bump = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(ct::pkt_hdr_drain_addr);
+    volatile PACKET_HEADER_TYPE* hdr_bump = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(ct.pkt_hdr_drain_addr);
     fabric_set_unicast_route(
-        (volatile tt::tt_fabric::HybridMeshPacketHeader*)hdr_bump, ct::peer_chip_id, ct::peer_mesh_id);
-    const uint64_t fwd_sem_noc = get_noc_addr(ct::fwd_sem_noc_x, ct::fwd_sem_noc_y, ct::fwd_sem_addr);
+        (volatile tt::tt_fabric::HybridMeshPacketHeader*)hdr_bump, ct.peer_chip_id, ct.peer_mesh_id);
+    const uint64_t fwd_sem_noc = get_noc_addr(ct.fwd_sem_noc_x, ct.fwd_sem_noc_y, ct.fwd_sem_addr);
 
-    volatile tt_l1_ptr uint32_t* filled = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct::filled_addr);
-    const uint64_t my_freed_noc = get_noc_addr(ct::freed_addr);
+    volatile tt_l1_ptr uint32_t* filled = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct.filled_addr);
+    const uint64_t my_freed_noc = get_noc_addr(ct.freed_addr);
 
     uint32_t sent = 0;
-    // The stream's length is not known here: it is this producer's own tokens plus everything the reader
+    // The stream's length is not known here: it is this sender's own tokens plus everything the reader
     // re-forwards for other chips, which depends on chunk sizes decided upstream. The reader terminates the
     // stream with a CMD_END slot instead, and we batch over whatever it has already published.
     bool end_of_stream = false;
@@ -76,27 +76,27 @@ void kernel_main() {
                 break;
             }
         }
-        const uint32_t n = avail < ct::batch ? avail : ct::batch;
+        const uint32_t n = avail < ct.batch ? avail : ct.batch;
 
         uint32_t processed = 0;
         for (uint32_t i = 0; i < n; i++) {
-            const uint32_t slot = (sent + i) % ct::num_l1_slots;
-            const uint32_t slot_addr = ct::ring_addr + slot * ct::slot_stride;
+            const uint32_t slot = (sent + i) % ct.num_l1_slots;
+            const uint32_t slot_addr = ct.ring_addr + slot * ct.slot_stride();
             volatile tt_l1_ptr uint64_t* tail =
-                reinterpret_cast<volatile tt_l1_ptr uint64_t*>(slot_addr + ct::token_size_bytes);
-            const uint64_t cmd = tail[TAIL_CMD];
+                reinterpret_cast<volatile tt_l1_ptr uint64_t*>(slot_addr + ct.token_size_bytes);
+            const uint64_t cmd = tail[FWD_META_CMD];
             processed++;
             if (cmd == CMD_END) {
                 end_of_stream = true;
                 break;
             }
             const bool forwarding = (cmd == CMD_FORWARD);
-            const uint32_t payload_bytes = forwarding ? (ct::token_size_bytes + FWD_EXTRA_BYTES) : ct::token_size_bytes;
+            const uint32_t payload_bytes = forwarding ? (ct.token_size_bytes + FWD_EXTRA_BYTES) : ct.token_size_bytes;
 
             volatile PACKET_HEADER_TYPE* hdr = slot_hdr(slot);
             // Header first, THEN wait for the slot: building it while the EDM may still be busy is free
             // overlap, and reversing the two costs ~8% of the bandwidth.
-            hdr->to_noc_unicast_write(tt::tt_fabric::NocUnicastCommandHeader{tail[TAIL_THIS_ADDR]}, payload_bytes);
+            hdr->to_noc_unicast_write(tt::tt_fabric::NocUnicastCommandHeader{tail[FWD_META_THIS_ADDR]}, payload_bytes);
             sender.wait_for_empty_write_slot();
             sender.send_payload_without_header_non_blocking_from_address(slot_addr, payload_bytes);
             // No flush per token: a slot's header is untouched until the ring wraps and the payload is
@@ -110,7 +110,7 @@ void kernel_main() {
             // is the chunk boundary that reader switches on, so leaving it uncounted would strand it.
             if (forwarding) {
                 fwd_since_bump++;
-                if (tail[TAIL_DST_CHIP] == SENTINEL_DST_CHIP || fwd_since_bump >= FWD_BUMP_EVERY) {
+                if (tail[FWD_META_DST_CHIP] == SENTINEL_DST_CHIP || fwd_since_bump >= FWD_BUMP_EVERY) {
                     // Header-only atomic inc, NOT the fused write+inc: that is documented to hang Blackhole
                     // when the payload destination is DRAM, and the forwarding buffer is DRAM.
                     hdr_bump->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
@@ -142,14 +142,14 @@ void kernel_main() {
     // fabric packets (there is no NOP send type) that change nothing. Their own completion is never
     // awaited. Reaching a free slot cannot deadlock, since the reverse direction is a different eth channel.
     if (sent > 0) {
-        volatile PACKET_HEADER_TYPE* hdr_drain = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(ct::pkt_hdr_drain_addr);
+        volatile PACKET_HEADER_TYPE* hdr_drain = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(ct.pkt_hdr_drain_addr);
         // Any legal L1 address on the chip across our cable will do; the downstream worker we already
         // address for semaphore bumps sits on exactly that chip.
-        const uint64_t peer_drain_sink_noc = get_noc_addr(ct::fwd_sem_noc_x, ct::fwd_sem_noc_y, ct::drain_sink_addr);
+        const uint64_t peer_drain_sink_noc = get_noc_addr(ct.fwd_sem_noc_x, ct.fwd_sem_noc_y, ct.drain_sink_addr);
         hdr_drain->to_noc_unicast_atomic_inc(
             tt::tt_fabric::NocUnicastAtomicIncCommandHeader{peer_drain_sink_noc, /*val=*/0, /*flush=*/false});
         fabric_set_unicast_route(
-            (volatile tt::tt_fabric::HybridMeshPacketHeader*)hdr_drain, ct::peer_chip_id, ct::peer_mesh_id);
+            (volatile tt::tt_fabric::HybridMeshPacketHeader*)hdr_drain, ct.peer_chip_id, ct.peer_mesh_id);
         for (uint32_t d = 0; d + 1 < sender.num_buffers_per_channel; d++) {
             sender.wait_for_empty_write_slot();
             sender.send_payload_flush_blocking_from_address((uint32_t)hdr_drain, sizeof(PACKET_HEADER_TYPE));
