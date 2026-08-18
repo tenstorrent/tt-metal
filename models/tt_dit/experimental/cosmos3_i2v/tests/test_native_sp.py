@@ -25,8 +25,6 @@ the test compares directly against the torch reference for the full
 trunk; the attention and decoder-layer tests read the sp-sharded gen
 output with ConcatMesh2dToTensor and slice the padded rows off.
 
-The SP path is gated behind `TT_COSMOS3_ENABLE_SP_RING`. The
-`enable_sp_ring` fixture toggles it on for these tests via monkeypatch.
 """
 
 from __future__ import annotations
@@ -40,13 +38,6 @@ from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils.check import assert_quality
 from models.tt_dit.utils.tensor import bf16_tensor
 from models.tt_dit.utils.test import line_params
-
-
-@pytest.fixture
-def enable_sp_ring(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Opt into the SP ring-SDPA branch in `model/attention.py`."""
-    monkeypatch.setenv("TT_COSMOS3_ENABLE_SP_RING", "1")
-
 
 # On BH Galaxy you must open the FULL (4, 8) mesh up front and carve the SP
 # submesh from it — opening a (2, 4) mesh directly fails the fabric router
@@ -125,9 +116,7 @@ def _gather_sp_sharded(
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.timeout(300)
-def test_native_joint_attention_sp(
-    mesh_device: ttnn.MeshDevice, submesh_shape: tuple[int, int], enable_sp_ring: None
-) -> None:
+def test_native_joint_attention_sp(mesh_device: ttnn.MeshDevice, submesh_shape: tuple[int, int]) -> None:
     """SP=2 ring-joint-SDPA PCC against the torch reference attention."""
     from models.tt_dit.experimental.cosmos3_i2v.model.attention import Cosmos3JointAttention
     from models.tt_dit.experimental.cosmos3_i2v.reference.transformer_cosmos3 import (
@@ -221,9 +210,7 @@ def test_native_joint_attention_sp(
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.timeout(300)
-def test_native_decoder_layer_sp(
-    mesh_device: ttnn.MeshDevice, submesh_shape: tuple[int, int], enable_sp_ring: None
-) -> None:
+def test_native_decoder_layer_sp(mesh_device: ttnn.MeshDevice, submesh_shape: tuple[int, int]) -> None:
     """SP=2 full-decoder-layer PCC. Validates RMSNorm + MLP + residual stay correct on sp-sharded gen."""
     from models.tt_dit.experimental.cosmos3_i2v.model.decoder_layer import (
         Cosmos3VLTextMoTDecoderLayer as TTDecoderLayer,
@@ -324,7 +311,6 @@ def test_native_transformer_sp(
     mesh_device: ttnn.MeshDevice,
     submesh_shape: tuple[int, int],
     num_hidden_layers: int,
-    enable_sp_ring: None,
 ) -> None:
     """SP=2 full-trunk PCC. The trunk all-gathers gen at exit, so we read replicated outputs."""
     from diffusers.models.normalization import RMSNorm as RefRMSNorm
@@ -446,9 +432,7 @@ _REAL_N_GEN = 256  # k_chunk_size * sp = 128 * 2 = 256, so pad_n = 0
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.timeout(900)
-def test_native_decoder_layer_real_sp(
-    mesh_device: ttnn.MeshDevice, submesh_shape: tuple[int, int], enable_sp_ring: None
-) -> None:
+def test_native_decoder_layer_real_sp(mesh_device: ttnn.MeshDevice, submesh_shape: tuple[int, int]) -> None:
     """SP=2 PCC on a single decoder layer at PRODUCTION dims.
 
     The small-config tests above (hidden=256, 4 layers) pass at ≥99.9%.
@@ -566,7 +550,6 @@ def test_native_transformer_real_sp(
     mesh_device: ttnn.MeshDevice,
     submesh_shape: tuple[int, int],
     num_hidden_layers: int,
-    enable_sp_ring: None,
 ) -> None:
     """SP=2 PCC with depth-bisect at PRODUCTION dims (hidden=5120, 64Q/8KV).
 
@@ -771,9 +754,7 @@ def test_sp_scatter_gather_roundtrip(mesh_device: ttnn.MeshDevice, submesh_shape
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.timeout(1800)
-def test_native_decoder_layer_real_weights_sp(
-    mesh_device: ttnn.MeshDevice, submesh_shape: tuple[int, int], enable_sp_ring: None
-) -> None:
+def test_native_decoder_layer_real_weights_sp(mesh_device: ttnn.MeshDevice, submesh_shape: tuple[int, int]) -> None:
     """SP=2 single-layer PCC using REAL HF Cosmos3 weights (not random init).
 
     Loads the actual `Cosmos3OmniTransformer` from HF, grabs layer 0's
@@ -904,7 +885,6 @@ def test_native_transformer_real_weights_sp(
     mesh_device: ttnn.MeshDevice,
     submesh_shape: tuple[int, int],
     num_hidden_layers: int,
-    enable_sp_ring: None,
 ) -> None:
     """SP=2 trunk PCC with REAL HF Cosmos3 weights at multiple depths.
 
@@ -1176,9 +1156,6 @@ def test_sp_vs_tp_only_direct_diff(
     drops too — SP path produces materially different output even though
     forward correctness against torch looks similar.
     """
-    import os as _os
-
-    from models.tt_dit.experimental.cosmos3_i2v.model.attention import sp_ring_enabled  # noqa: F401
     from models.tt_dit.experimental.cosmos3_i2v.model.transformer import Cosmos3OmniTransformer as TTTransformer
     from models.tt_dit.experimental.cosmos3_i2v.model_config import HF_REPO, TRANSFORMER_CONFIG
     from models.tt_dit.experimental.cosmos3_i2v.reference.transformer_cosmos3 import (
@@ -1224,72 +1201,62 @@ def test_sp_vs_tp_only_direct_diff(
     und_seq = torch.randn(_REAL_N_UND, hidden, dtype=torch.bfloat16)
     gen_seq = torch.randn(_REAL_N_GEN, hidden, dtype=torch.bfloat16)
 
-    def _run_trunk(submesh_shape: tuple[int, int], sp_ring: bool) -> tuple[torch.Tensor, torch.Tensor]:
-        prev_env = _os.environ.get("TT_COSMOS3_ENABLE_SP_RING")
-        _os.environ["TT_COSMOS3_ENABLE_SP_RING"] = "1" if sp_ring else "0"
-        try:
-            submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
-            sp_factor = submesh_shape[0]
-            tp_factor = submesh_shape[1]
-            parallel_config = DiTParallelConfig(
-                cfg_parallel=ParallelFactor(1, 0),
-                sequence_parallel=ParallelFactor(sp_factor, 0),
-                tensor_parallel=ParallelFactor(tp_factor, 1),
+    def _run_trunk(submesh_shape: tuple[int, int]) -> tuple[torch.Tensor, torch.Tensor]:
+        submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
+        sp_factor = submesh_shape[0]
+        tp_factor = submesh_shape[1]
+        parallel_config = DiTParallelConfig(
+            cfg_parallel=ParallelFactor(1, 0),
+            sequence_parallel=ParallelFactor(sp_factor, 0),
+            tensor_parallel=ParallelFactor(tp_factor, 1),
+        )
+        ccl_manager = CCLManager(mesh_device=submesh, num_links=1, topology=ttnn.Topology.Linear)
+
+        trunk = TTTransformer(
+            hidden_size=hidden,
+            head_dim=head_dim,
+            num_attention_heads=nq,
+            num_key_value_heads=nkv,
+            intermediate_size=intermediate,
+            num_hidden_layers=num_hidden_layers,
+            attention_bias=False,
+            rms_norm_eps=rms_eps,
+            mesh_device=submesh,
+            parallel_config=parallel_config,
+            ccl_manager=ccl_manager,
+        )
+        trunk.load_torch_state_dict(state)
+
+        # Layout: the SP path (sp_factor > 1) scatters gen on sp_axis=0; the
+        # TP-only path keeps gen replicated.
+        if sp_factor > 1:
+            gen_tt = bf16_tensor(gen_seq.reshape(1, 1, _REAL_N_GEN, hidden), device=submesh, mesh_axis=0, shard_dim=2)
+            cos_gen_tt = bf16_tensor(
+                cos_gen.reshape(1, 1, _REAL_N_GEN, head_dim), device=submesh, mesh_axis=0, shard_dim=2
             )
-            ccl_manager = CCLManager(mesh_device=submesh, num_links=1, topology=ttnn.Topology.Linear)
-
-            trunk = TTTransformer(
-                hidden_size=hidden,
-                head_dim=head_dim,
-                num_attention_heads=nq,
-                num_key_value_heads=nkv,
-                intermediate_size=intermediate,
-                num_hidden_layers=num_hidden_layers,
-                attention_bias=False,
-                rms_norm_eps=rms_eps,
-                mesh_device=submesh,
-                parallel_config=parallel_config,
-                ccl_manager=ccl_manager,
+            sin_gen_tt = bf16_tensor(
+                sin_gen.reshape(1, 1, _REAL_N_GEN, head_dim), device=submesh, mesh_axis=0, shard_dim=2
             )
-            trunk.load_torch_state_dict(state)
+        else:
+            gen_tt = bf16_tensor(gen_seq.reshape(1, 1, _REAL_N_GEN, hidden), device=submesh)
+            cos_gen_tt = bf16_tensor(cos_gen.reshape(1, 1, _REAL_N_GEN, head_dim), device=submesh)
+            sin_gen_tt = bf16_tensor(sin_gen.reshape(1, 1, _REAL_N_GEN, head_dim), device=submesh)
 
-            # Layout: SP path scatters gen on sp_axis=0; TP-only path keeps gen replicated.
-            scatter = sp_factor > 1 and sp_ring
-            if scatter:
-                gen_tt = bf16_tensor(
-                    gen_seq.reshape(1, 1, _REAL_N_GEN, hidden), device=submesh, mesh_axis=0, shard_dim=2
-                )
-                cos_gen_tt = bf16_tensor(
-                    cos_gen.reshape(1, 1, _REAL_N_GEN, head_dim), device=submesh, mesh_axis=0, shard_dim=2
-                )
-                sin_gen_tt = bf16_tensor(
-                    sin_gen.reshape(1, 1, _REAL_N_GEN, head_dim), device=submesh, mesh_axis=0, shard_dim=2
-                )
-            else:
-                gen_tt = bf16_tensor(gen_seq.reshape(1, 1, _REAL_N_GEN, hidden), device=submesh)
-                cos_gen_tt = bf16_tensor(cos_gen.reshape(1, 1, _REAL_N_GEN, head_dim), device=submesh)
-                sin_gen_tt = bf16_tensor(sin_gen.reshape(1, 1, _REAL_N_GEN, head_dim), device=submesh)
+        und_tt = bf16_tensor(und_seq.reshape(1, 1, _REAL_N_UND, hidden), device=submesh)
+        cos_und_tt = bf16_tensor(cos_und.reshape(1, 1, _REAL_N_UND, head_dim), device=submesh)
+        sin_und_tt = bf16_tensor(sin_und.reshape(1, 1, _REAL_N_UND, head_dim), device=submesh)
 
-            und_tt = bf16_tensor(und_seq.reshape(1, 1, _REAL_N_UND, hidden), device=submesh)
-            cos_und_tt = bf16_tensor(cos_und.reshape(1, 1, _REAL_N_UND, head_dim), device=submesh)
-            sin_und_tt = bf16_tensor(sin_und.reshape(1, 1, _REAL_N_UND, head_dim), device=submesh)
+        und_out_tt, gen_out_tt = trunk(
+            und_tt, gen_tt, cos_und_tt, sin_und_tt, cos_gen_tt, sin_gen_tt, logical_n_gen=_REAL_N_GEN
+        )
+        und_out = ttnn.to_torch(ttnn.get_device_tensors(und_out_tt)[0]).reshape(_REAL_N_UND, hidden)
+        gen_out = ttnn.to_torch(ttnn.get_device_tensors(gen_out_tt)[0]).reshape(_REAL_N_GEN, hidden)
+        return und_out, gen_out
 
-            und_out_tt, gen_out_tt = trunk(
-                und_tt, gen_tt, cos_und_tt, sin_und_tt, cos_gen_tt, sin_gen_tt, logical_n_gen=_REAL_N_GEN
-            )
-            und_out = ttnn.to_torch(ttnn.get_device_tensors(und_out_tt)[0]).reshape(_REAL_N_UND, hidden)
-            gen_out = ttnn.to_torch(ttnn.get_device_tensors(gen_out_tt)[0]).reshape(_REAL_N_GEN, hidden)
-            return und_out, gen_out
-        finally:
-            if prev_env is None:
-                _os.environ.pop("TT_COSMOS3_ENABLE_SP_RING", None)
-            else:
-                _os.environ["TT_COSMOS3_ENABLE_SP_RING"] = prev_env
-
-    print("[sp-vs-tp] running SP path (2x8 sp_ring=on) ...", flush=True)
-    sp_und, sp_gen = _run_trunk((2, 8), sp_ring=True)
-    print("[sp-vs-tp] running TP-only path (1x8 sp_ring=off) ...", flush=True)
-    tp_und, tp_gen = _run_trunk((1, 8), sp_ring=False)
+    print("[sp-vs-tp] running SP path (2x8) ...", flush=True)
+    sp_und, sp_gen = _run_trunk((2, 8))
+    print("[sp-vs-tp] running TP-only path (1x8) ...", flush=True)
+    tp_und, tp_gen = _run_trunk((1, 8))
 
     print("[sp-vs-tp] SP vs TP-only direct comparison:", flush=True)
     assert_quality(tp_und, sp_und, pcc=0.5)
@@ -1311,7 +1278,6 @@ def test_native_decoder_layer_real_weights_sp_n_gen_sweep(
     mesh_device: ttnn.MeshDevice,
     submesh_shape: tuple[int, int],
     n_gen: int,
-    enable_sp_ring: None,
 ) -> None:
     """Real-weights single-layer SP PCC across N_gen values to localize pad-path bug.
 
@@ -1563,9 +1529,7 @@ def _attn_probe_inner(mesh_device, submesh_shape, sp_factor_cfg):
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.timeout(600)
-def test_single_attn_ring_dump(
-    mesh_device: ttnn.MeshDevice, submesh_shape: tuple[int, int], enable_sp_ring: None
-) -> None:
+def test_single_attn_ring_dump(mesh_device: ttnn.MeshDevice, submesh_shape: tuple[int, int]) -> None:
     """One Cosmos3JointAttention forward at sp=2 (ring path), real layer-0 weights.
     Dumps gen output to TT_COSMOS3_ATTN_DUMP_PATH for cross-run diff."""
     _attn_probe_inner(mesh_device, submesh_shape, sp_factor_cfg=2)

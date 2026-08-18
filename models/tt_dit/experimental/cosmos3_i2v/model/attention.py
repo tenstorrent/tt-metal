@@ -64,8 +64,6 @@ config — preserves the single-device contract from the MVP.
 
 from __future__ import annotations
 
-import os
-
 import ttnn
 
 from ....layers.linear import ColParallelLinear, RowParallelLinear
@@ -75,27 +73,6 @@ from ....parallel.config import DiTParallelConfig, ParallelFactor
 from ....utils.matmul import get_matmul_core_grid
 
 
-def sp_ring_enabled() -> bool:
-    """SP ring SDPA on by default: the native-cfg dual-submesh path builds each trunk with
-    sequence_parallel factor=2, and the ring SDPA + scatter must match that sharding or the
-    denoised latent is corrupt. Set TT_COSMOS3_ENABLE_SP_RING=0 to disable if the ring op
-    trips power on a given board."""
-    return os.environ.get("TT_COSMOS3_ENABLE_SP_RING", "1") not in ("", "0", "false", "False")
-
-
-def tp_shard_enabled() -> bool:
-    """Feature-sharded gen residual stream: the post-attention span (to_add_out output →
-    residual → norm → MLP → residual) stays TP-fractured [.., hidden/tp] instead of being
-    re-replicated after every RowParallel, halving the trunk's exposed all-gathers. The und
-    pathway is unaffected."""
-    return os.environ.get("TT_COSMOS3_TP_SHARD") in ("1", "true", "True")
-
-
-# Module-level latch so TT_COSMOS3_DUMP_ATTN_DIR captures the FIRST attention call
-# of the process (layer 0, step 0, cond pass). Reset is not needed — process is short-lived.
-_attn_dump_done = False
-
-
 def _default_parallel_config() -> DiTParallelConfig:
     """Single-device fallback: tp=1, sp=1, cfg=1."""
     return DiTParallelConfig(
@@ -103,41 +80,6 @@ def _default_parallel_config() -> DiTParallelConfig:
         tensor_parallel=ParallelFactor(1, 1),
         sequence_parallel=ParallelFactor(1, 0),
     )
-
-
-def _use_grouped_kv() -> bool:
-    """Feed ring-joint SDPA grouped K/V (n_local_kv_heads) instead of broadcasting to
-    n_local_heads — skips the 8x `_gqa_interleave_broadcast` and moves 8x less KV over
-    the ring. Perf opt-in (default off) because it needs a ttnn build that accepts
-    joint tensors in GQA grouped-KV mode (ring_joint_sdpa_device_operation.cpp); an
-    older build fails fast with the joint+GQA TT_FATAL. Output is a different valid
-    sample vs the broadcast path (bf16 accumulation order shift)."""
-    return os.environ.get("TT_COSMOS3_GQA_KV") in ("1", "true", "True")
-
-
-def _gqa_interleave_broadcast(t, kv_repeat: int, n_kv_heads: int, sub_core_grids):
-    """Emulate `repeat_interleave(t, kv_repeat, dim=1)` while staying within `sub_core_grids`.
-
-    `ttnn.repeat_interleave` defaults to the full grid — a power-trip risk on BH
-    Galaxy. `concat([t] * kv_repeat, dim=1)` matches repeat_interleave only when
-    `n_kv_heads == 1`. For `n_kv_heads > 1` this slices per-head, replicates each
-    slice `kv_repeat` times in order, then concats: `[h0,h0,...,h0, h1,h1,...,h1]`.
-    """
-    if kv_repeat == 1:
-        return t
-    if n_kv_heads == 1:
-        return ttnn.concat([t] * kv_repeat, dim=1, sub_core_grids=sub_core_grids)
-    B, _, N, D = t.shape
-    slices = []
-    per_head = []
-    for h in range(n_kv_heads):
-        head_h = ttnn.slice(t, [0, h, 0, 0], [B, h + 1, N, D])
-        per_head.append(head_h)
-        slices.extend([head_h] * kv_repeat)
-    result = ttnn.concat(slices, dim=1, sub_core_grids=sub_core_grids)
-    for head_t in per_head:
-        ttnn.deallocate(head_t)
-    return result
 
 
 class Cosmos3JointAttention(Module):
@@ -199,14 +141,10 @@ class Cosmos3JointAttention(Module):
         self.parallel_config = parallel_config
         self.ccl_manager = ccl_manager
 
-        _use_fsdp = os.environ.get("TT_COSMOS3_FSDP_ON_SP") in ("1", "true", "True") and sp_factor > 1
-        fsdp_axis = sp_axis if _use_fsdp else None
-
         col_kw = {
             "bias": attention_bias,
             "mesh_device": mesh_device,
             "mesh_axis": tp_axis,
-            "fsdp_mesh_axis": fsdp_axis,
             "ccl_manager": ccl_manager,
             "dtype": dtype,
         }
@@ -214,7 +152,6 @@ class Cosmos3JointAttention(Module):
             "bias": attention_bias,
             "mesh_device": mesh_device,
             "mesh_axis": tp_axis,
-            "fsdp_mesh_axis": fsdp_axis,
             "ccl_manager": ccl_manager,
             "dtype": dtype,
         }
@@ -242,34 +179,16 @@ class Cosmos3JointAttention(Module):
         self.norm_added_q = RMSNorm(head_dim, **norm_kw)
         self.norm_added_k = RMSNorm(head_dim, **norm_kw)
 
-        # SDPA precision: HiFi4 + fp32 accumulator. At Cosmos3-scale (hidden=5120, 64 layers,
-        # num_attention_heads=64, head_dim=128), HiFi2 + bf16-acc produced 100% NaN end-to-end
-        # on Galaxy even though small-config PCC tests passed at HiFi2. The softmax inside
-        # ttnn.transformer.scaled_dot_product_attention is the most likely overflow point at
-        # scale — exp() on slightly-out-of-range logits saturates fast in bf16. fp32 destination
-        # accumulation gives the softmax enough headroom; HiFi4 matches what diffusers uses
-        # downstream for the attention math.
-        # The NaN was attributed to bf16 accumulation, not the math fidelity. fp32_dest_acc
-        # defaults on; TT_COSMOS3_SDPA_HIFI2=1 drops the QK/PV matmul fidelity to
-        # HiFi2 (~half the math cycles) to test whether HiFi4 is actually required for parity.
-        # TT_COSMOS3_SDPA_FP32_ACC=0 disables the fp32 accumulator: the ring-joint op only
-        # takes its streaming compute path (pipelined QK^T->softmax->PV, full-depth DST) with
-        # bf16 dst (ring_joint_sdpa_program_factory.cpp use_streaming_compute), and wan
-        # production ships that exact config (HiFi2 + bf16-acc) at 75K-token scale, so the
-        # NaN attribution above is testable rather than load-bearing.
-        import os as _os_sdpa
-
-        _sdpa_fidelity = (
-            ttnn.MathFidelity.HiFi2
-            if _os_sdpa.environ.get("TT_COSMOS3_SDPA_HIFI2") in ("1", "true", "True")
-            else ttnn.MathFidelity.HiFi4
-        )
-        _sdpa_fp32_acc = _os_sdpa.environ.get("TT_COSMOS3_SDPA_FP32_ACC", "1") not in ("0", "false", "False")
+        # SDPA precision: HiFi2 + bf16 accumulator. bf16 dst is required for the ring-joint
+        # op's streaming compute path (pipelined QK^T->softmax->PV, full-depth DST,
+        # ring_joint_sdpa_program_factory.cpp use_streaming_compute) — 23.8 vs 32.2 ms/layer
+        # against fp32 dst. Wan production ships the same HiFi2 + bf16-acc config at
+        # 75K-token scale; visually gated at 720p/189f.
         self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
-            math_fidelity=_sdpa_fidelity,
+            math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
-            fp32_dest_acc_en=_sdpa_fp32_acc,
+            fp32_dest_acc_en=False,
         )
         # Clamp SDPA's compute grid to 11x10 on Blackhole Galaxy. The raw
         # compute_with_storage_grid_size() returns 13x10 on BH P150, which can
@@ -278,22 +197,18 @@ class Cosmos3JointAttention(Module):
         # class as the trunk's linears, which already use get_matmul_core_grid.
         grid = get_matmul_core_grid(mesh_device)
         # Chunk sizes tile the SDPA over the query/KV sequence; larger chunks trade L1
-        # footprint for fewer iterations. 256/384 is ~9% faster end-to-end than 128/128
-        # at 720p/189f (the large-sequence regime where the fewer-iterations win outweighs
-        # the coarser padding); q=512 overflows L1. These defaults are tuned for that
-        # regime — small shapes (T2I / low-frame) may prefer 128 via the env overrides,
-        # since k_chunk also sets the N_gen padding granularity (k_chunk * sp_factor).
-        self.sdpa_q_chunk_size = int(os.environ.get("TT_COSMOS3_SDPA_Q_CHUNK", "256"))
-        self.sdpa_k_chunk_size = int(os.environ.get("TT_COSMOS3_SDPA_K_CHUNK", "384"))
-        # SFPU exp precision in the softmax. The SDPA op itself defaults to approx exp when
-        # the program config leaves it unset; False opts into the precise (slower) mode.
-        # TT_COSMOS3_SDPA_EXP_APPROX=1 switches to the op-default approx exp.
-        self.sdpa_exp_approx = os.environ.get("TT_COSMOS3_SDPA_EXP_APPROX") in ("1", "true", "True")
+        # footprint for fewer iterations. Tuned for the large-sequence 720p/189f regime;
+        # q=512 overflows L1, and k_chunk also sets the N_gen padding granularity
+        # (k_chunk * sp_factor), so small shapes (T2I / low-frame) pay more padding.
+        self.sdpa_q_chunk_size = 256
+        self.sdpa_k_chunk_size = 512
+        # exp_approx_mode=False: precise SFPU exp in the softmax (approx measured −0.8%
+        # end-to-end — not worth the precision loss).
         self.sdpa_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=grid,
             q_chunk_size=self.sdpa_q_chunk_size,
             k_chunk_size=self.sdpa_k_chunk_size,
-            exp_approx_mode=self.sdpa_exp_approx,
+            exp_approx_mode=False,
         )
         # Ring-joint SDPA needs cores reserved for the CCL fabric workers.
         # Mirror the Flux/Motif pattern (blocks/attention.py:70-73, 301): reserve the
@@ -305,30 +220,13 @@ class Cosmos3JointAttention(Module):
                 compute_with_storage_grid_size=self.ring_sdpa_worker_grid,
                 q_chunk_size=self.sdpa_q_chunk_size,
                 k_chunk_size=self.sdpa_k_chunk_size,
-                exp_approx_mode=self.sdpa_exp_approx,
+                exp_approx_mode=False,
             )
         else:
             self.ring_sdpa_worker_grid = None
             self.ring_sdpa_program_config = None
 
-        # Power-safe sub_core_grids for ttnn.pad / ttnn.concat in the SP path. Without
-        # this, those ops default to the full 13x10 BH P150 grid and can trip the PDU
-        # when stacked on top of the ring SDPA workers. Reuses the same 11x10 clamp the
-        # matmul path already enforces.
-        self.safe_core_range_set = ttnn.CoreRangeSet(
-            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))}
-        )
-
         self._k_pad_mask_cache: dict[tuple[int, int, int], tuple[ttnn.Tensor, ttnn.Tensor]] = {}
-
-        # und (text) K/V cache for the ring joint SDPA. und is step-invariant (no
-        # timestep/adaLN reaches it), so its per-layer K/V are identical across denoise
-        # steps. When TT_COSMOS3_UND_CACHE is on, step 0 captures them here and later
-        # steps skip the entire und pathway, feeding the cached joint K/V into the ring
-        # op. Only the sp>1 ring path is cached (the production path).
-        self._und_cache_enabled = os.environ.get("TT_COSMOS3_UND_CACHE") in ("1", "true", "True")
-        self._capture_und_kv = False
-        self._und_kv_cache: tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor] | None = None
 
     def _k_pad_mask(self, padded_n_gen: int, logical_n_gen: int, head_dim: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         key = (padded_n_gen, logical_n_gen, head_dim)
@@ -386,23 +284,6 @@ class Cosmos3JointAttention(Module):
         sin_11NE: ttnn.Tensor,
     ) -> ttnn.Tensor:
         return ttnn.experimental.rotary_embedding_hf(x_BHNE, cos_11NE, sin_11NE, is_decode_mode=False)
-
-    def _dump_attn_stage(self, t: ttnn.Tensor, dump_dir: str, name: str) -> None:
-        """Gather an sp-sharded-or-replicated tensor (seq dim=2) and save as torch .pt."""
-        import torch as _torch
-
-        mesh_shape = tuple(self.mesh_device.shape)
-        devs = ttnn.get_device_tensors(t)
-        if self.sp_factor > 1 and sp_ring_enabled():
-            tp_factor = mesh_shape[1 - self.sp_axis]
-            if self.sp_axis == 0:
-                slices = [ttnn.to_torch(devs[i * tp_factor]) for i in range(self.sp_factor)]
-            else:
-                slices = [ttnn.to_torch(devs[i]) for i in range(self.sp_factor)]
-            full = _torch.cat(slices, dim=2)
-        else:
-            full = ttnn.to_torch(devs[0])
-        _torch.save(full.detach().cpu(), f"{dump_dir}/{name}.pt")
 
     def _pathway(
         self,
@@ -480,83 +361,6 @@ class Cosmos3JointAttention(Module):
         out_replicated = self.ccl_manager.all_gather_persistent_buffer(out_fractured, dim=3, mesh_axis=self._tp_axis())
         return out_replicated
 
-    def _forward_gen_only(
-        self,
-        gen_seq_11Mh: ttnn.Tensor,
-        cos_gen_11ME: ttnn.Tensor,
-        sin_gen_11ME: ttnn.Tensor,
-        logical_n_gen: int,
-    ) -> tuple[None, ttnn.Tensor]:
-        """Gen-only ring attention using the cached step-invariant und K/V.
-
-        Mirrors the sp>1 ring path of `forward`, but skips the und pathway (projection,
-        norm, RoPE, causal SDPA, MLP) entirely — the joint Q/K/V come from
-        `_und_kv_cache`. und_out is not produced (discarded for I2V). The cached tensors
-        are never deallocated; they are read on every replay of the gen-only trace.
-        """
-        q_gen, k_gen, v_gen = self._pathway(
-            gen_seq_11Mh,
-            cos_gen_11ME,
-            sin_gen_11ME,
-            proj_q=self.add_q_proj,
-            proj_k=self.add_k_proj,
-            proj_v=self.add_v_proj,
-            norm_q=self.norm_added_q,
-            norm_k=self.norm_added_k,
-        )
-        kv_repeat = 1 if _use_grouped_kv() else self.n_local_heads // self.n_local_kv_heads
-        if kv_repeat > 1:
-            crs = self.safe_core_range_set
-            k_gen_b = _gqa_interleave_broadcast(k_gen, kv_repeat, self.n_local_kv_heads, crs)
-            v_gen_b = _gqa_interleave_broadcast(v_gen, kv_repeat, self.n_local_kv_heads, crs)
-            ttnn.deallocate(k_gen)
-            ttnn.deallocate(v_gen)
-        else:
-            k_gen_b, v_gen_b = k_gen, v_gen
-
-        padded_n_gen = k_gen_b.shape[2] * self.sp_factor
-        if logical_n_gen < padded_n_gen:
-            head_dim = k_gen_b.shape[3]
-            mask_tt, neg_pad_tt = self._k_pad_mask(padded_n_gen, logical_n_gen, head_dim)
-            k_real_tt = ttnn.multiply(k_gen_b, mask_tt)
-            k_masked = ttnn.add(k_real_tt, neg_pad_tt)
-            ttnn.deallocate(k_real_tt)
-            ttnn.deallocate(k_gen_b)
-            k_gen_b = k_masked
-
-        q_und_c, k_und_c, v_und_c = self._und_kv_cache
-        gen_attn_BHME, und_attn_via_ring, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
-            q_gen,
-            k_gen_b,
-            v_gen_b,
-            q_und_c,
-            k_und_c,
-            v_und_c,
-            persistent_output_buffer_k=self.ccl_manager.get_ag_ping_pong_buffer(k_gen_b.shape, 2, self.sp_axis),
-            persistent_output_buffer_v=self.ccl_manager.get_ag_ping_pong_buffer(v_gen_b.shape, 2, self.sp_axis),
-            joint_strategy="rear",
-            logical_n=logical_n_gen,
-            program_config=self.ring_sdpa_program_config,
-            compute_kernel_config=self.sdpa_compute_kernel_config,
-            dim=2,
-            multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(self.sp_axis),
-            num_links=self.ccl_manager.num_links,
-            cluster_axis=self.sp_axis,
-            mesh_device=self.mesh_device,
-            # Keep the ring-joint SDPA on Linear regardless of TT_COSMOS3_CCL_RING: the Ring
-            # variant deadlocks when the two cfg submeshes run it concurrently. The knob is
-            # only meant to flip the RowParallel RS/AG topology, not this op.
-            topology=ttnn.Topology.Linear,
-            subdevice_id=self.ccl_manager.ccl_sub_device_id,
-            ccl_core_grid_offset=(0, self.ring_sdpa_worker_grid.y),
-        )
-        ttnn.deallocate(q_gen)
-        ttnn.deallocate(k_gen_b)
-        ttnn.deallocate(v_gen_b)
-        ttnn.deallocate(und_attn_via_ring)
-        gen_out = self._project_out(gen_attn_BHME, self.to_add_out, gather_output=not tp_shard_enabled())
-        return None, gen_out
-
     def forward(
         self,
         und_seq_11Nh: ttnn.Tensor,
@@ -581,17 +385,6 @@ class Cosmos3JointAttention(Module):
         Returns:
             (und_out, gen_out). und is replicated. At sp>1, gen stays sp-sharded.
         """
-        # Steps after the first reuse the cached step-invariant und K/V and run gen only.
-        if self._und_kv_cache is not None and self.sp_factor > 1 and sp_ring_enabled():
-            return self._forward_gen_only(gen_seq_11Mh, cos_gen_11ME, sin_gen_11ME, logical_n_gen)
-
-        global _attn_dump_done
-        _dump_dir = os.environ.get("TT_COSMOS3_DUMP_ATTN_DIR")
-        _do_dump = _dump_dir is not None and not _attn_dump_done
-        if _do_dump:
-            os.makedirs(_dump_dir, exist_ok=True)
-            _attn_dump_done = True
-
         q_und, k_und, v_und = self._pathway(
             und_seq_11Nh,
             cos_und_11NE,
@@ -617,10 +410,6 @@ class Cosmos3JointAttention(Module):
             norm_q=self.norm_added_q,
             norm_k=self.norm_added_k,
         )
-        if _do_dump:
-            self._dump_attn_stage(q_gen, _dump_dir, "01_q_gen_post_pathway")
-            self._dump_attn_stage(k_gen, _dump_dir, "02_k_gen_post_pathway")
-            self._dump_attn_stage(v_gen, _dump_dir, "03_v_gen_post_pathway")
 
         # Understanding pathway: causal self-attention on local heads only.
         und_attn_BHNE = ttnn.transformer.scaled_dot_product_attention(
@@ -634,7 +423,7 @@ class Cosmos3JointAttention(Module):
         if getattr(self, "_capture", False):
             self._cap_und_attn = ttnn.to_torch(ttnn.get_device_tensors(und_attn_BHNE)[0])
 
-        if self.sp_factor <= 1 or not sp_ring_enabled():
+        if self.sp_factor <= 1:
             ttnn.deallocate(q_und)
             # Generation pathway: full attention, K/V = concat(und, gen) on seq dim.
             # Each chip concatenates ITS local-heads slice — no cross-chip comms needed.
@@ -660,23 +449,10 @@ class Cosmos3JointAttention(Module):
             if logical_n_gen is None:
                 msg = "logical_n_gen is required when sp_factor > 1"
                 raise ValueError(msg)
-            # Cosmos3 is GQA (64 Q-heads / 8 KV-heads). Ring-joint SDPA handles grouped
-            # K/V natively when TT_COSMOS3_GQA_KV is set (needs the joint+GQA guard
-            # lifted in ttnn); otherwise broadcast K/V from n_local_kv_heads to
-            # n_local_heads via a per-head interleave that stays within
-            # `safe_core_range_set` (see `_gqa_interleave_broadcast`).
-            kv_repeat = 1 if _use_grouped_kv() else self.n_local_heads // self.n_local_kv_heads
-            if kv_repeat > 1:
-                crs = self.safe_core_range_set
-                k_gen_b = _gqa_interleave_broadcast(k_gen, kv_repeat, self.n_local_kv_heads, crs)
-                v_gen_b = _gqa_interleave_broadcast(v_gen, kv_repeat, self.n_local_kv_heads, crs)
-                ttnn.deallocate(k_gen)
-                ttnn.deallocate(v_gen)
-            else:
-                k_gen_b, v_gen_b = k_gen, v_gen
-            if _do_dump:
-                self._dump_attn_stage(k_gen_b, _dump_dir, "04_k_gen_post_broadcast")
-                self._dump_attn_stage(v_gen_b, _dump_dir, "05_v_gen_post_broadcast")
+            # Cosmos3 is GQA (64 Q-heads / 8 KV-heads). Ring-joint SDPA consumes grouped
+            # K/V (n_local_kv_heads) natively — 8x less KV moved over the ring than
+            # broadcasting to n_local_heads.
+            k_gen_b, v_gen_b = k_gen, v_gen
 
             # Defensive: the ring kernel already skips gen K chunks past logical_n and
             # masks the partial boundary chunk via global_n_padded_tiles. The explicit
@@ -691,8 +467,6 @@ class Cosmos3JointAttention(Module):
                 ttnn.deallocate(k_real_tt)
                 ttnn.deallocate(k_gen_b)
                 k_gen_b = k_masked
-            if _do_dump:
-                self._dump_attn_stage(k_gen_b, _dump_dir, "06_k_gen_post_mask")
             # Pass und at its logical seq length (ttnn TILE-pads physically). Pre-padding
             # to k_chunk_size hides logical L from the ring kernel — joint_has_padding
             # becomes false and the joint K-pad rows go through softmax unmasked. With
@@ -700,25 +474,7 @@ class Cosmos3JointAttention(Module):
             # masks for the last joint chunk. Confirmed via test_ring_sdpa_unpadded_und_at_cosmos3_shape:
             # PCC 0.9997 vs 0.700 with the pre-pad.
             q_und_pad = q_und
-            if kv_repeat > 1:
-                crs = self.safe_core_range_set
-                k_und_pad_b = _gqa_interleave_broadcast(k_und, kv_repeat, self.n_local_kv_heads, crs)
-                v_und_pad_b = _gqa_interleave_broadcast(v_und, kv_repeat, self.n_local_kv_heads, crs)
-                ttnn.deallocate(k_und)
-                ttnn.deallocate(v_und)
-            else:
-                k_und_pad_b, v_und_pad_b = k_und, v_und
-
-            # und is step-invariant (no timestep/adaLN reaches it), so these ring-format
-            # joint Q/K/V are identical every denoise step. Clone them to persistent DRAM on
-            # the first full forward; later steps take `_forward_gen_only` and skip the whole
-            # und pathway. Cloned because the originals are deallocated below.
-            if self._und_cache_enabled and self._und_kv_cache is None:
-                self._und_kv_cache = (
-                    ttnn.clone(q_und_pad, memory_config=ttnn.DRAM_MEMORY_CONFIG),
-                    ttnn.clone(k_und_pad_b, memory_config=ttnn.DRAM_MEMORY_CONFIG),
-                    ttnn.clone(v_und_pad_b, memory_config=ttnn.DRAM_MEMORY_CONFIG),
-                )
+            k_und_pad_b, v_und_pad_b = k_und, v_und
 
             gen_attn_BHME, und_attn_via_ring, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
                 q_gen,
@@ -738,12 +494,12 @@ class Cosmos3JointAttention(Module):
                 num_links=self.ccl_manager.num_links,
                 cluster_axis=self.sp_axis,
                 mesh_device=self.mesh_device,
+                # Stays Linear even though the trunk CCLs run Ring: the Ring variant of
+                # this op deadlocks when the two cfg submeshes run it concurrently.
                 topology=ttnn.Topology.Linear,
                 subdevice_id=self.ccl_manager.ccl_sub_device_id,
                 ccl_core_grid_offset=(0, self.ring_sdpa_worker_grid.y),
             )
-            if _do_dump:
-                self._dump_attn_stage(gen_attn_BHME, _dump_dir, "07_gen_attn_post_sdpa")
             ttnn.deallocate(q_gen)
             ttnn.deallocate(k_gen_b)
             ttnn.deallocate(v_gen_b)
@@ -755,10 +511,6 @@ class Cosmos3JointAttention(Module):
             # the local causal SDPA above. Discard the joint output.
             ttnn.deallocate(und_attn_via_ring)
 
-        if _do_dump and (self.sp_factor <= 1 or not sp_ring_enabled()):
-            self._dump_attn_stage(gen_attn_BHME, _dump_dir, "07_gen_attn_post_sdpa")
         und_out = self._project_out(und_attn_BHNE, self.to_out)
-        gen_out = self._project_out(gen_attn_BHME, self.to_add_out, gather_output=not tp_shard_enabled())
-        if _do_dump:
-            self._dump_attn_stage(gen_out, _dump_dir, "08_gen_out_post_project")
+        gen_out = self._project_out(gen_attn_BHME, self.to_add_out)
         return und_out, gen_out

@@ -22,6 +22,17 @@ HF_REPO = os.environ.get("COSMOS3_HF_REPO", "nvidia/Cosmos3-Super-Image2Video")
 HF_REVISION = "8ec97da4ec5afc56754b1ff67de96fbbb87c76f5"
 
 
+def use_ring_ccl() -> bool:
+    """Ring topology for the trunk RowParallel RS / ColParallel AG collectives (−7% warm
+    step vs Linear). Ring needs the mesh opened with FABRIC_1D_RING, which is incompatible
+    with TT_METAL_WATCHER on Blackhole: the two erisc ring-router binaries plus watcher
+    instrumentation overflow the 25600 B ACTIVE_ETH kernel-config buffer. Fall back to
+    Linear there so watcher debug runs still work. Note: Ring perturbs bf16 CCL
+    accumulation order, so same-seed runs are valid but not bit-identical across trace
+    re-captures."""
+    return not os.environ.get("TT_METAL_WATCHER")
+
+
 # Cosmos3OmniTransformer — the 64B MoT diffusion+text trunk.
 # Per-layer weights are duplicated: one "und" (text/AR) set and one "_moe_gen"
 # (diffusion) set; they join only in the attention softmax via the two-way

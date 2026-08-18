@@ -40,8 +40,7 @@ the proxy's forward path. We could `del` them to recover ~100 GB host
 RAM at the cost of preventing fallback; that's a separate optimization.
 
 Constraint: `tp_factor` must divide `num_key_value_heads=8` (so tp ∈ {1, 2, 4, 8}).
-Default assigns TP to the larger axis: LoudBox 1x8 → TP=8, Galaxy 4x8 → TP=8@axis1 ✓.
-TT_COSMOS3_SWAP_TP_SP=1 assigns TP to the smaller axis: Galaxy 2x8 submesh → TP=2, SP=8 ✓.
+TP goes on the larger axis: LoudBox 1x8 → TP=8, Galaxy 4x8 → TP=8@axis1 ✓.
 """
 
 from __future__ import annotations
@@ -86,12 +85,7 @@ class NativeLayerProxy(nn.Module):
         # (which has different attribute layout). The native trunk lives in its own world.
         object.__setattr__(self, "_native_trunk", native_trunk)
         object.__setattr__(self, "_mesh_device", mesh_device)
-        from models.tt_dit.experimental.cosmos3_i2v.model.attention import sp_ring_enabled
-
-        cfg_sp_factor = native_trunk.parallel_config.sequence_parallel.factor
-        # Effective sp_factor for the proxy's scatter path follows the same env gate as
-        # the attention's SP branch. If SP is disabled, treat gen as replicated.
-        sp_factor = cfg_sp_factor if sp_ring_enabled() else 1
+        sp_factor = native_trunk.parallel_config.sequence_parallel.factor
         sp_axis = native_trunk.parallel_config.sequence_parallel.mesh_axis
         object.__setattr__(self, "_sp_factor", sp_factor)
         object.__setattr__(self, "_sp_axis", sp_axis)
@@ -191,7 +185,6 @@ class NativeLayerProxy(nn.Module):
         mesh_device: ttnn.MeshDevice,
         sp_axis: int,
         gen_seq_multiple: int,
-        shard_features: bool = False,
     ) -> tuple[ttnn.Tensor, int]:
         """Host torch [N, D] → sp-sharded TILE ttnn `[1, 1, N_padded/sp, D]`, plus pad_n.
 
@@ -216,12 +209,7 @@ class NativeLayerProxy(nn.Module):
         if len(mesh_shape) != 2:
             msg = f"sp sharding expects 2D mesh, got {mesh_shape}"
             raise ValueError(msg)
-        if shard_features:
-            # Feature-sharded residual stream (TT_COSMOS3_TP_SHARD): tokens on the sp
-            # axis, hidden features on the tp axis.
-            dims = (2, 3) if sp_axis == 0 else (3, 2)
-        else:
-            dims = (2 if sp_axis == 0 else None, 2 if sp_axis == 1 else None)
+        dims = (2 if sp_axis == 0 else None, 2 if sp_axis == 1 else None)
         mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=dims)
         tensor = ttnn.from_torch(
             host,
@@ -240,7 +228,6 @@ class NativeLayerProxy(nn.Module):
         cached: ttnn.Tensor | None,
         sp_axis: int,
         gen_seq_multiple: int,
-        shard_features: bool = False,
     ) -> tuple[ttnn.Tensor, int]:
         """Sharded upload with the same in-place refresh contract as _refresh_replicated."""
         n, d = x.shape
@@ -249,10 +236,7 @@ class NativeLayerProxy(nn.Module):
             padded = torch.cat([x, x.new_zeros(pad_n, d)], dim=0) if pad_n > 0 else x
             host = padded.detach().to(torch.bfloat16).contiguous().view(1, 1, n + pad_n, d)
             mesh_shape = tuple(mesh_device.shape)
-            if shard_features:
-                dims = (2, 3) if sp_axis == 0 else (3, 2)
-            else:
-                dims = (2 if sp_axis == 0 else None, 2 if sp_axis == 1 else None)
+            dims = (2 if sp_axis == 0 else None, 2 if sp_axis == 1 else None)
             host_tt = ttnn.from_torch(
                 host,
                 dtype=ttnn.bfloat16,
@@ -261,7 +245,7 @@ class NativeLayerProxy(nn.Module):
             )
             ttnn.copy_host_to_device_tensor(host_tt, cached)
             return cached, pad_n
-        return NativeLayerProxy._to_tile_ttnn_sharded(x, mesh_device, sp_axis, gen_seq_multiple, shard_features)
+        return NativeLayerProxy._to_tile_ttnn_sharded(x, mesh_device, sp_axis, gen_seq_multiple)
 
     @staticmethod
     def _from_replicated_ttnn(x_tt: ttnn.Tensor, target_shape: tuple[int, ...]) -> torch.Tensor:
@@ -387,18 +371,9 @@ class NativeLayerProxy(nn.Module):
             trunk_kwargs["time_embed"] = time_embed_tt
             trunk_kwargs["noisy_mask_gen"] = noisy_mask_tt
 
-        und_cache = _os.environ.get("TT_COSMOS3_UND_CACHE") in ("1", "true", "True")
         trace_enabled = _os.environ.get("TT_COSMOS3_DISABLE_TRACE") in (None, "", "0", "false", "False")
 
-        if und_cache and not getattr(self, "_und_prime_done", False):
-            # First step runs eager and full so each layer clones its step-invariant und
-            # K/V into a persistent buffer. The gen-only trace captured on the next step
-            # then reads those buffers, skipping the und pathway for all later steps.
-            und_out_tt, gen_out_tt = self._native_trunk(
-                und_tt, gen_tt, cos_und_tt, sin_und_tt, cos_gen_tt, sin_gen_tt, **trunk_kwargs
-            )
-            object.__setattr__(self, "_und_prime_done", True)
-        elif trace_enabled:
+        if trace_enabled:
             if self._trunk_tracer is None:
                 from models.tt_dit.utils.tracing import Tracer
 
@@ -446,26 +421,6 @@ class NativeLayerProxy(nn.Module):
                 f"[timing] proxy tid={_tid:04x} downloads={(_t_end - _t_trunk_done) * 1000:.1f}ms "
                 f"total_proxy={(_t_end - _t0) * 1000:.1f}ms",
                 flush=True,
-            )
-
-        # Diagnostic: dump per-call (und_in, gen_in, und_out, gen_out) to
-        # `${TT_COSMOS3_DUMP_TRUNK_DIR}/call{N}.pt`. Enables direct A/B between
-        # SP and no-SP runs at the same step. No-op when env unset.
-        import os as _os
-
-        dump_dir = _os.environ.get("TT_COSMOS3_DUMP_TRUNK_DIR")
-        if dump_dir:
-            _os.makedirs(dump_dir, exist_ok=True)
-            call_idx = getattr(self, "_dump_call_idx", 0)
-            object.__setattr__(self, "_dump_call_idx", call_idx + 1)
-            torch.save(
-                {
-                    "und_in": und_seq.detach().cpu(),
-                    "gen_in": gen_seq.detach().cpu(),
-                    "und_out": und_out.detach().cpu(),
-                    "gen_out": gen_out.detach().cpu(),
-                },
-                f"{dump_dir}/call{call_idx:03d}.pt",
             )
 
         return und_out, gen_out
@@ -770,8 +725,7 @@ def build_cosmos3_i2v_native_pipeline(
         from models.tt_dit.parallel.manager import CCLManager as _CCLManager
 
         mesh_shape_vae = tuple(device.shape)
-        _tp_key_vae = min if os.getenv("TT_COSMOS3_SWAP_TP_SP", "0") == "1" else max
-        tp_axis_vae = _tp_key_vae(range(len(mesh_shape_vae)), key=lambda i: mesh_shape_vae[i])
+        tp_axis_vae = max(range(len(mesh_shape_vae)), key=lambda i: mesh_shape_vae[i])
         tp_factor_vae = mesh_shape_vae[tp_axis_vae]
         sp_axis_vae = 1 - tp_axis_vae if len(mesh_shape_vae) == 2 else 0
         sp_factor_vae = mesh_shape_vae[sp_axis_vae] if len(mesh_shape_vae) == 2 else 1
@@ -1034,8 +988,7 @@ def build_cosmos3_i2v_native_pipeline(
     # Step 3: pull config off the loaded HF transformer + sanity-check the GQA constraint.
     config = pipe.transformer.config
     mesh_shape = tuple(device.shape)
-    _tp_key = min if os.getenv("TT_COSMOS3_SWAP_TP_SP", "0") == "1" else max
-    tp_axis = _tp_key(range(len(mesh_shape)), key=lambda i: mesh_shape[i])
+    tp_axis = max(range(len(mesh_shape)), key=lambda i: mesh_shape[i])
     tp_factor = mesh_shape[tp_axis]
     sp_axis = 1 - tp_axis if len(mesh_shape) == 2 else 0
     sp_factor = mesh_shape[sp_axis] if len(mesh_shape) == 2 else 1
@@ -1054,12 +1007,11 @@ def build_cosmos3_i2v_native_pipeline(
         sequence_parallel=ParallelFactor(sp_factor, sp_axis),
         tensor_parallel=ParallelFactor(tp_factor, tp_axis),
     )
-    # TT_COSMOS3_CCL_RING routes the trunk collectives (RowParallel RS/AG + ring SDPA)
-    # over Ring instead of Linear — the prerequisite for fusing matmul+reduce-scatter,
-    # which only supports Ring topology.
-    _ccl_topology = (
-        ttnn.Topology.Ring if os.environ.get("TT_COSMOS3_CCL_RING") in ("1", "true", "True") else ttnn.Topology.Linear
-    )
+    # Trunk collectives (RowParallel RS / ColParallel AG) run over Ring by default; must
+    # match the fabric mode the mesh was opened with (see demo/generate.py open_mesh).
+    from models.tt_dit.experimental.cosmos3_i2v.model_config import use_ring_ccl
+
+    _ccl_topology = ttnn.Topology.Ring if use_ring_ccl() else ttnn.Topology.Linear
     ccl_manager = (
         CCLManager(mesh_device=device, num_links=num_links, topology=_ccl_topology)
         if tp_factor > 1 or sp_factor > 1
@@ -1162,8 +1114,6 @@ def build_cosmos3_i2v_native_pipeline(
         _cache_subfolder = "transformer-native"
     # Sharded post-attn gen norm weights (DistributedRMSNorm) have a different on-disk
     # layout than replicated RMSNorm under the same cache key -- fork the subfolder.
-    if os.environ.get("TT_COSMOS3_TP_SHARD") in ("1", "true", "True"):
-        _cache_subfolder += "-tpshard"
     cache.load_model(
         native_trunk,
         model_name=cache_namespace,

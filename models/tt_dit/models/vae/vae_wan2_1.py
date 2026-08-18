@@ -635,12 +635,14 @@ class DupUp3D(Module):
         out_channels: int,
         factor_t: int,
         factor_s: int = 1,
+        chunks: int = 1,
     ) -> None:
         super().__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.factor_t = factor_t
         self.factor_s = factor_s
+        self.chunks = chunks
         self.factor = factor_t * factor_s * factor_s
         assert out_channels * self.factor % in_channels == 0, (
             f"DupUp3D: out_channels*factor ({out_channels}*{self.factor}) "
@@ -697,9 +699,8 @@ class DupUp3D(Module):
         # Each chunk processes in_channels/K input channels → out_channels/K
         # output channels. K must divide both; for configs where out_channels <
         # in_channels (e.g. 1024→512), K must additionally divide in/out so the
-        # group structure stays consistent. Tunable via env so we can dial it
-        # for the largest decoder block under transformer pressure.
-        K = int(os.environ.get("TT_DIT_VAE_DUPUP_CHUNKS", "1"))
+        # group structure stays consistent.
+        K = self.chunks
         if K > 1 and (self.in_channels % K or self.out_channels % K):
             K = 1
         c_step = self.in_channels // K
@@ -1489,15 +1490,6 @@ class WanResidualDownBlock(Module):
 
         shortcut_BTHWC = ttnn.to_layout(shortcut_BTHWC, ttnn.TILE_LAYOUT)
 
-        # Diagnostic mode: TT_DIT_VAE_SHORTCUT_MODE = "main_only" returns the
-        # main path without the avg_shortcut addition; "shortcut_only" returns
-        # just the shortcut. Lets us bisect which branch of the residual is
-        # producing the wrong values vs host.
-        _short_mode = os.environ.get("TT_DIT_VAE_SHORTCUT_MODE", "both")
-        if _short_mode == "main_only":
-            return x_BTHWC, logical_h, logical_w
-        if _short_mode == "shortcut_only":
-            return shortcut_BTHWC, logical_h, logical_w
         x_BTHWC = ttnn.add(x_BTHWC, shortcut_BTHWC)
         return x_BTHWC, logical_h, logical_w
 

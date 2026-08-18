@@ -24,7 +24,7 @@ prompt/seed/steps/image stay warm.
 Launch via ttq so the broker holds the device lock for the server's lifetime:
 
     ttq -H g03blx04 run-bg -t 86400 "cd ~/tt-metal && \\
-      TT_DIT_CACHE_DIR=~/.tt-dit-cache TT_COSMOS3_SDPA_HIFI2=1 \\
+      TT_DIT_CACHE_DIR=~/.tt-dit-cache \\
       TT_METAL_HOME=$(pwd) PYTHONPATH=$(pwd) \\
       python -m models.tt_dit.experimental.cosmos3_i2v.demo.serve \\
         --image ~/ref.jpg --port 8080 --mesh-shape 4x8 \\

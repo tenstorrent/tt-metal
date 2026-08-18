@@ -46,14 +46,12 @@ The single-mesh `native` builder still exists in the tree because `native-cfg`
 *uses* it as its per-submesh builder and 1×8 fallback. It is just no longer
 selectable as a top-level pipeline.
 
-### SP-ring SDPA is required and on by default
+### SP-ring SDPA is required
 
 `native-cfg` builds each trunk with `sequence_parallel factor=2`. The ring SDPA
 and the token scatter/gather **must** match that sharding, or the denoised
-latent is corrupt (clean conditioning frame, pure noise everywhere else). This
-is gated by `sp_ring_enabled()` (`model/attention.py`), now **on by default**.
-Set `TT_COSMOS3_ENABLE_SP_RING=0` only if the ring op trips power on a specific
-board — expect garbage output on native-cfg if you do.
+latent is corrupt (clean conditioning frame, pure noise everywhere else). The
+sp>1 path always runs the ring SDPA.
 
 ## How a run flows
 
@@ -103,18 +101,19 @@ byte-identical whether or not the positive is JSON.
 
 ## Environment
 
+The measured-fastest configuration is the default — no env vars are needed
+beyond the cache dir. Baked-in defaults: ring trunk CCLs (`FABRIC_1D_RING` +
+`Topology.Ring`, −7% warm step; falls back to Linear under `TT_METAL_WATCHER`,
+whose instrumentation overflows the 25600 B ACTIVE_ETH kernel-config buffer
+with the ring router on Blackhole), grouped-K/V ring-joint SDPA (8x less ring
+KV transport), SDPA HiFi2 + bf16 accumulation (unlocks the ring-joint op's
+streaming compute path: 32.2 → 23.8 ms/layer at 720p), and SDPA chunks
+q=256/k=512. Ring perturbs bf16 CCL accumulation order, so same-seed runs are
+valid but not bit-reproducible across trace re-captures.
+
 | Var | Default | Meaning |
 |---|---|---|
 | `TT_DIT_CACHE_DIR` | **unset — you must set it** | On-disk tensor cache root. Required: the second trunk loads weights only from cache (it has no state-dict source), so an unset dir fails the build. |
-| `TT_COSMOS3_ENABLE_SP_RING` | `1` (on) | Ring SDPA + matching scatter for the sp=2 path. Leave on. `0` disables (produces noise on native-cfg). |
-| `TT_COSMOS3_CFG_SPLIT_LARGER` | unset | `1` splits the larger axis instead (4×8 → dual 4×4: TP=4, SP=4). Rebalances TP↔SP; not more parallelism. |
-| `TT_COSMOS3_CCL_RING` | unset | `1` opens the mesh with `FABRIC_1D_RING` and routes the trunk RowParallel RS / ColParallel AG over `Topology.Ring` on the TP axis: warm step 6.74s → 6.27s (−7%). Incompatible with `TT_METAL_WATCHER` on Blackhole — the ring router + watcher instrumentation overflows the 25600 B ACTIVE_ETH kernel-config buffer at mesh open (`open_mesh` fails fast with the escape hatches). Ring also perturbs bf16 CCL accumulation order, so same-seed runs are valid but not bit-reproducible across trace re-captures. |
-| `TT_COSMOS3_GQA_KV` | unset | `1` feeds ring-joint SDPA grouped K/V (per-device 8Q/1KV) instead of broadcasting to 64 heads — 8x less ring KV transport. Requires a ttnn build where joint+grouped-KV validation is lifted in `ring_joint_sdpa_device_operation.cpp`; older builds fail fast with the joint+GQA TT_FATAL. |
-| `TT_COSMOS3_SDPA_HIFI2` | unset | `1` drops SDPA QK/PV matmul fidelity from HiFi4 to HiFi2 (~half the math cycles). Visually gated at 720p. |
-| `TT_COSMOS3_SDPA_FP32_ACC` | `1` | `0` disables the fp32 SDPA accumulator, which is what unlocks the ring-joint op's streaming compute path (`use_streaming_compute = !fp32_dest_acc_en`): 32.2 → 23.8 ms/layer at 720p with `K_CHUNK=512`. bf16 accumulation matches the wan production config; NaN-free and visually gated at 720p/35 steps. |
-| `TT_COSMOS3_SDPA_Q_CHUNK` / `TT_COSMOS3_SDPA_K_CHUNK` | `256` / `384` | SDPA tiling chunk sizes. With the streaming path (`SDPA_FP32_ACC=0`), `K_CHUNK=512` is fastest at 720p/189f; `Q_CHUNK=512` and `K_CHUNK=768` overflow L1. `k_chunk` also sets the N_gen padding granularity (`k_chunk * sp_factor`) — small shapes may prefer the defaults. |
-| `TT_COSMOS3_SDPA_EXP_APPROX` | unset | `1` uses the SFPU approx exp in the SDPA softmax (the op's own default). Measured −0.8% — kept off. |
-| `TT_COSMOS3_RS_FUSED` | unset | `1` routes trunk RowParallel layers with a validated `(M,K,N)` entry over fused matmul+strided-reduce-scatter (ring topology only). Currently a no-op on the BH-Galaxy 10x10 clamp: the fused-table entry is withheld because the op's L1-resident MM window clashes with downstream matmul CBs in the traced trunk (see `utils/matmul.py`). |
 
 ## Cache
 
@@ -127,10 +126,9 @@ minutes.
 ## Performance notes
 
 - 720p / 189 frames / 35 steps on a BH Galaxy 4×8: warm gen + decode ≈ 196s
-  with the full recipe — `TT_COSMOS3_SDPA_FP32_ACC=0 TT_COSMOS3_SDPA_K_CHUNK=512
-  TT_COSMOS3_GQA_KV=1 TT_COSMOS3_CCL_RING=1 TT_COSMOS3_SDPA_HIFI2=1`, a short
-  negative prompt, resident weights, and per-generation trace re-capture (see
-  `demo/serve.py`). Cold runs pay a one-time kernel JIT on the first step.
+  with the default configuration, a short negative prompt, resident weights,
+  and per-generation trace re-capture (see `demo/serve.py`). Cold runs pay a
+  one-time kernel JIT on the first step.
 - The mesh is fully occupied: TP=8 × SP=2 per submesh × 2 submeshes = 32 chips.
   CFG parallelism is not spare capacity — it *is* what fills the second half of
   the mesh. There is no fourth parallel axis to add; the remaining win is moving

@@ -72,8 +72,6 @@ class Cosmos3VLTextMLP(Module):
 
         tp_factor = parallel_config.tensor_parallel.factor
         tp_axis = parallel_config.tensor_parallel.mesh_axis
-        sp_factor = parallel_config.sequence_parallel.factor
-        sp_axis = parallel_config.sequence_parallel.mesh_axis
 
         if intermediate_size % tp_factor != 0:
             msg = f"intermediate_size ({intermediate_size}) must be divisible by tp_factor ({tp_factor})"
@@ -88,19 +86,10 @@ class Cosmos3VLTextMLP(Module):
         self.parallel_config = parallel_config
         self.ccl_manager = ccl_manager
 
-        # `TT_COSMOS3_FSDP_ON_SP=1` shards Linear weights along the sp_axis too;
-        # trades an extra all_gather per Linear for halving per-chip weight footprint.
-        # Cache-invalidating: use a distinct cache_namespace when this is set.
-        import os as _os_fsdp
-
-        _use_fsdp = _os_fsdp.environ.get("TT_COSMOS3_FSDP_ON_SP") in ("1", "true", "True") and sp_factor > 1
-        fsdp_axis = sp_axis if _use_fsdp else None
-
         col_kw = {
             "bias": False,
             "mesh_device": mesh_device,
             "mesh_axis": tp_axis,
-            "fsdp_mesh_axis": fsdp_axis,
             "ccl_manager": ccl_manager,
             "dtype": dtype,
         }
@@ -108,7 +97,6 @@ class Cosmos3VLTextMLP(Module):
             "bias": False,
             "mesh_device": mesh_device,
             "mesh_axis": tp_axis,
-            "fsdp_mesh_axis": fsdp_axis,
             "ccl_manager": ccl_manager,
             "dtype": dtype,
         }
@@ -151,23 +139,8 @@ class Cosmos3VLTextMLP(Module):
     def _tp_axis(self) -> int:
         return self.parallel_config.tensor_parallel.mesh_axis
 
-    def forward(self, x_11NH: ttnn.Tensor, fractured_io: bool = False) -> ttnn.Tensor:
-        """Replicated `[1, 1, N, hidden_size]` → replicated `[1, 1, N, hidden_size]`.
-
-        With fractured_io=True (feature-sharded residual stream), input is the TP-fractured
-        `[1, 1, N, hidden_size / tp]`: it is all-gathered here, immediately before gate_up —
-        the one consumer that needs full width — and the down_proj reduce-scatter output is
-        returned fractured, skipping the trailing all-gather.
-        """
-        if fractured_io and self._tp_factor() > 1:
-            if self.ccl_manager.topology == ttnn.Topology.Ring:
-                # Fuse the gather into the gate_up matmul (AG+MM) — the all-gather
-                # overlaps the compute instead of running exposed on the ring.
-                h = self.fused_gate_up(x_11NH, parallel_config=self.parallel_config)
-                out_fractured = self.down_proj(h)
-                ttnn.deallocate(h)
-                return out_fractured
-            x_11NH = self.ccl_manager.all_gather_persistent_buffer(x_11NH, dim=3, mesh_axis=self._tp_axis())
+    def forward(self, x_11NH: ttnn.Tensor) -> ttnn.Tensor:
+        """Replicated `[1, 1, N, hidden_size]` → replicated `[1, 1, N, hidden_size]`."""
         # Fused gate+up + swiglu: per chip output is [1, 1, N, intermediate_size / tp].
         h = self.fused_gate_up(x_11NH)
         # RowParallelLinear: partial-sum matmul + reduce-scatter on TP axis.
@@ -175,7 +148,7 @@ class Cosmos3VLTextMLP(Module):
         out_fractured = self.down_proj(h)
         ttnn.deallocate(h)
 
-        if self._tp_factor() <= 1 or fractured_io:
+        if self._tp_factor() <= 1:
             return out_fractured
 
         # All-gather on TP axis → replicated [1, 1, N, hidden_size] for the tt-symbiote caller.

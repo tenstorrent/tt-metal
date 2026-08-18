@@ -223,20 +223,19 @@ def resolve_weight_dtype(spec: str, mesh_shape: tuple[int, int]):
 def open_mesh(mesh_shape: tuple[int, int]):
     """Open a mesh device with FABRIC_1D config; caller closes via close_mesh()."""
     import ttnn
+    from models.tt_dit.experimental.cosmos3_i2v.model_config import use_ring_ccl
 
-    # Ring-topology trunk collectives (TT_COSMOS3_CCL_RING) need the fabric itself in
-    # ring mode; FABRIC_1D is a line and rejects a ring op's wraparound hop. FABRIC_1D_RING
-    # also serves the Linear collectives (VAE), so it is safe as the single run-wide config.
-    _ring = os.environ.get("TT_COSMOS3_CCL_RING") in ("1", "true", "True")
-    # On Blackhole the two erisc ring-router binaries plus watcher instrumentation
-    # overflow the 25600 B ACTIVE_ETH kernel-config buffer, failing open_mesh_device
-    # with a cryptic "Program size too large" TT_FATAL. Refuse the combination here.
-    if _ring and os.environ.get("TT_METAL_WATCHER"):
-        raise RuntimeError(
-            "TT_COSMOS3_CCL_RING=1 is incompatible with TT_METAL_WATCHER: the ring fabric "
-            "router does not fit the ACTIVE_ETH kernel-config buffer with watcher enabled. "
-            "Unset TT_METAL_WATCHER, or set TT_METAL_DISABLE_FABRIC_TWO_ERISC=1 or "
-            "TT_METAL_FABRIC_OPT_LEVEL=Oz to reclaim code space."
+    # Ring trunk collectives need the fabric itself in ring mode; FABRIC_1D is a line and
+    # rejects a ring op's wraparound hop. FABRIC_1D_RING also serves the Linear collectives
+    # (VAE), so it is safe as the single run-wide config. Watcher runs fall back to a
+    # Linear fabric (see use_ring_ccl).
+    _ring = use_ring_ccl()
+    if not _ring:
+        print(
+            "[open_mesh] TT_METAL_WATCHER set: falling back to Linear trunk CCLs "
+            "(ring fabric router does not fit the ACTIVE_ETH kernel-config buffer "
+            "with watcher enabled)",
+            flush=True,
         )
     _fabric = ttnn.FabricConfig.FABRIC_1D_RING if _ring else ttnn.FabricConfig.FABRIC_1D
     ttnn.set_fabric_config(

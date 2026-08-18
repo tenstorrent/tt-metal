@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
-import os as _os_for_fidelity
 
 import torch
 
@@ -24,12 +23,7 @@ from .module import Module, Parameter
 # look up with .get(dtype, HiFi2). This compute_config is a dead default for any op handed an
 # explicit compute_kernel_config (every LTX matmul is), so the fallback only has to construct.
 MATH_FIDELITY = {
-    # TT_DIT_BF16_HIFI4=1 forces bf16 matmuls to HiFi4 (full 8-bit mantissa per multiply).
-    # Cost: ~2x matmul time. Used to probe whether SP-vs-noSP divergence at production
-    # 64-layer depth is precision-bound or structural.
-    ttnn.bfloat16: ttnn.MathFidelity.HiFi4
-    if _os_for_fidelity.environ.get("TT_DIT_BF16_HIFI4") in ("1", "true", "True")
-    else ttnn.MathFidelity.HiFi2,
+    ttnn.bfloat16: ttnn.MathFidelity.HiFi2,
     ttnn.float32: ttnn.MathFidelity.HiFi4,
     # bfloat8_b weights are already 1-byte quantized; LoFi math is the
     # conventional pairing (matches the BFP8 weight precision). HiFi2 is
@@ -450,6 +444,8 @@ class RowParallelLinear(Module):
         mesh_axis=0,
         fsdp_mesh_axis=None,
         ccl_manager=None,
+        use_fused_mmrs=False,
+        rs_overlap_chunks=0,
     ):
         super().__init__()
 
@@ -459,6 +455,11 @@ class RowParallelLinear(Module):
         self.mesh_axis = mesh_axis
         self.fsdp_mesh_axis = fsdp_mesh_axis
         self.ccl_manager = ccl_manager
+        # Fused matmul+strided-RS (Ring-only) and the hand-rolled M-chunk overlap it
+        # supersedes. Both default off: no shape in the fused table is enabled on the
+        # BH Galaxy 10x10 power clamp yet (see utils/matmul.py fused_mmrs_configs).
+        self.use_fused_mmrs = use_fused_mmrs
+        self.rs_overlap_chunks = rs_overlap_chunks
 
         if self.fsdp_mesh_axis is not None:
             assert self.mesh_axis != self.fsdp_mesh_axis
@@ -535,7 +536,7 @@ class RowParallelLinear(Module):
             self._mesh_axis_size > 1
             and self.ccl_manager is not None
             and self.ccl_manager.topology == ttnn.Topology.Ring
-            and _os_for_fidelity.environ.get("TT_COSMOS3_RS_FUSED") in ("1", "true", "True")
+            and self.use_fused_mmrs
             and has_fused_mmrs_config(M, K, N, core_grid)
         ):
             needs_reshape = len(x.shape) <= 3
@@ -567,8 +568,8 @@ class RowParallelLinear(Module):
         # RS (fabric workers) overlaps chunk i+1's matmul (tensix). The RS scatters on the
         # output-feature dim (3), independent across M rows, so M-chunking is exact. Only
         # worth it for large M (the gen stream); tiny-M (und) chunks add launch overhead
-        # with no matmul to hide behind. Gated by TT_COSMOS3_RS_OVERLAP.
-        _rs_chunks = int(_os_for_fidelity.environ.get("TT_COSMOS3_RS_OVERLAP", "0"))
+        # with no matmul to hide behind.
+        _rs_chunks = self.rs_overlap_chunks
         _rank = len(x.shape)
         if self._mesh_axis_size > 1 and _rs_chunks > 1 and M >= _rs_chunks * 1024:
             m_dim = _rank - 2

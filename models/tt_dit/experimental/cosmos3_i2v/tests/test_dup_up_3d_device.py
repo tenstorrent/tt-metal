@@ -120,9 +120,7 @@ def test_dup_up_3d_on_device_pcc(
     out_C: int,
     ft: int,
     fs: int,
-    monkeypatch,
 ) -> None:
-    monkeypatch.setenv("TT_DIT_VAE_DUPUP_CHUNKS", str(chunks))
     """Candidate A (resurrected) against DupUp3D.host_forward.
 
     Submesh (1,1) verifies math without sharding interaction.
@@ -170,7 +168,7 @@ def test_dup_up_3d_on_device_pcc(
         dtype=ttnn.bfloat16,
     )
 
-    dup_up = DupUp3D(in_channels=in_C, out_channels=out_C, factor_t=ft, factor_s=fs)
+    dup_up = DupUp3D(in_channels=in_C, out_channels=out_C, factor_t=ft, factor_s=fs, chunks=chunks)
     y_dev = dup_up(x_BTHWC_dev, first_chunk=first_chunk)
 
     # Gather back. Output is (B, T*ft, H*fs, W*fs, out_C); H/W still sharded.

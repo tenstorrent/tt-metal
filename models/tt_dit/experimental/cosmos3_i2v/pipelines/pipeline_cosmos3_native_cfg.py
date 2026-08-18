@@ -103,10 +103,8 @@ def _build_second_trunk(
     from models.tt_dit.utils import cache
 
     mesh_shape = tuple(submesh.shape)
-    # TT_COSMOS3_SWAP_TP_SP=1 puts SP on the larger axis (cols) and TP on the smaller.
-    # On a 2x8 submesh: default is TP=8@axis1, SP=2@axis0; swapped is TP=2@axis0, SP=8@axis1.
-    _tp_key = min if os.getenv("TT_COSMOS3_SWAP_TP_SP", "0") == "1" else max
-    tp_axis = _tp_key(range(len(mesh_shape)), key=lambda i: mesh_shape[i])
+    # TP on the larger axis: 2x8 submesh → TP=8@axis1, SP=2@axis0.
+    tp_axis = max(range(len(mesh_shape)), key=lambda i: mesh_shape[i])
     tp_factor = mesh_shape[tp_axis]
     sp_axis = 1 - tp_axis if len(mesh_shape) == 2 else 0
     sp_factor = mesh_shape[sp_axis] if len(mesh_shape) == 2 else 1
@@ -118,12 +116,11 @@ def _build_second_trunk(
     )
     if num_links is None:
         num_links = 2 if ttnn.device.is_blackhole() else (4 if mesh_shape == (4, 8) else 1)
-    # TT_COSMOS3_CCL_RING routes the trunk RowParallel RS / ColParallel AG over Ring
-    # (prerequisite for fused matmul+reduce-scatter). Requires the mesh opened with
-    # FABRIC_1D_RING (see demo/generate.py open_mesh).
-    _ccl_topology = (
-        ttnn.Topology.Ring if os.environ.get("TT_COSMOS3_CCL_RING") in ("1", "true", "True") else ttnn.Topology.Linear
-    )
+    # Trunk RowParallel RS / ColParallel AG run over Ring by default; must match the
+    # fabric mode the mesh was opened with (see demo/generate.py open_mesh).
+    from models.tt_dit.experimental.cosmos3_i2v.model_config import use_ring_ccl
+
+    _ccl_topology = ttnn.Topology.Ring if use_ring_ccl() else ttnn.Topology.Linear
     ccl_manager = (
         CCLManager(mesh_device=submesh, num_links=num_links, topology=_ccl_topology)
         if tp_factor > 1 or sp_factor > 1
@@ -158,10 +155,6 @@ def _build_second_trunk(
         _subfolder = "transformer-native-proj-in"
     else:
         _subfolder = "transformer-native"
-    # Sharded post-attn gen norm weights (DistributedRMSNorm) have a different on-disk
-    # layout than replicated RMSNorm under the same cache key -- fork the subfolder.
-    if os.environ.get("TT_COSMOS3_TP_SHARD") in ("1", "true", "True"):
-        _subfolder += "-tpshard"
     cache.load_model(
         trunk,
         model_name=cache_namespace,
@@ -356,16 +349,9 @@ def build_cosmos3_i2v_native_cfg_pipeline(
             enable_device_proj_out=enable_device_proj_out,
         )
 
-    # Split along the smaller axis (default): each submesh keeps the TP axis intact.
-    # `TT_COSMOS3_CFG_SPLIT_LARGER=1` flips to the larger axis, trading TP for SP
-    # per submesh. On 4x8 BH Galaxy this turns dual 2x8 (tp=8, sp=2) into dual 4x4
-    # (tp=4, sp=4) — doubles SP at the cost of halving TP.
-    import os as _os
-
-    if _os.environ.get("TT_COSMOS3_CFG_SPLIT_LARGER") in ("1", "true", "True"):
-        cfg_axis = max(range(2), key=lambda i: mesh_shape[i])
-    else:
-        cfg_axis = min(range(2), key=lambda i: mesh_shape[i] if mesh_shape[i] > 0 else 9999)
+    # Split along the smaller axis: each submesh keeps the TP axis intact.
+    # On 4x8 BH Galaxy this yields dual 2x8 submeshes (tp=8, sp=2).
+    cfg_axis = min(range(2), key=lambda i: mesh_shape[i] if mesh_shape[i] > 0 else 9999)
     if mesh_shape[cfg_axis] % 2 != 0:
         msg = f"cfg-parallel requires even count on the smaller axis; got mesh={mesh_shape}"
         raise ValueError(msg)
@@ -559,29 +545,6 @@ def _install_device_proj_out_forward(pipe) -> None:
             _n_clean = packed_tokens_vision.shape[0] - _n_noisy
             packed_tokens_vision[_n_clean:].add_(single_embed)
             t_after_vision_pre = _time.perf_counter() if _hoist_timing_enabled else 0.0
-
-            import _thread as _thr
-            import os as _os_dbg
-
-            _dump_step = int(_os_dbg.environ.get("TT_COSMOS3_DUMP_GEN_SEQ_STEP", "-1"))
-            _call_key = f"_baseline_gen_seq_call_{_thr.get_ident()}"
-            _call_idx = getattr(self, _call_key, 0)
-            object.__setattr__(self, _call_key, _call_idx + 1)
-            if _dump_step >= 0 and _call_idx == _dump_step:
-                import torch as _torch
-
-                _dump_dir = _os_dbg.environ.get("TT_COSMOS3_DUMP_GEN_SEQ_DIR", "/tmp")
-                _os_dbg.makedirs(_dump_dir, exist_ok=True)
-                _path = (
-                    f"{_dump_dir}/baseline_gen_seq_after_projin_step{_call_idx}_tid{_thr.get_ident() & 0xFFFF:04x}.pt"
-                )
-                _torch.save(packed_tokens_vision.detach().cpu(), _path)
-                print(
-                    f"[baseline-debug] step={_call_idx} shape={tuple(packed_tokens_vision.shape)} "
-                    f"mean={packed_tokens_vision.float().mean():.4f} std={packed_tokens_vision.float().std():.4f} "
-                    f"saved={_path}",
-                    flush=True,
-                )
 
             layer_kwargs = {}
 
