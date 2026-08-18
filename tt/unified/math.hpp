@@ -614,6 +614,7 @@ struct Strategy<ReduceFusion> {
 #if defined(ASSERT_ENABLED) && ASSERT_ENABLED
         ASSERT(num_tiles == kOut);
 #endif
+        (void)num_tiles;  // the assert above is its only reader
 
         // The scaler is read by every reduce_tile and never popped, so waiting is
         // idempotent -- one page stays at the front for the kernel's lifetime.

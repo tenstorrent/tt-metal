@@ -511,6 +511,7 @@ Block NocAsyncWriteCoreTx<thread>::wait(uint32_t num_writers) const {
     waited = true;
 #endif
 #endif
+    (void)num_writers;  // read only by the reader's collect, above
     return Block(dst_cb, dst_tiles);
 }
 
@@ -803,6 +804,7 @@ NocAsyncWriteCoreTx<thread> noc_core_write(
     }
 #else
     (void)coord;
+    (void)write_predicate;
     (void)byte_offset;
 #endif
     return NocAsyncWriteCoreTx<thread>(dst, src, coord, kCopyArrivedSem<thread>);
@@ -853,6 +855,7 @@ NocAsyncWriteCoreTx<thread> noc_core_write(
     }
 #else
     (void)mcast;
+    (void)write_predicate;
     (void)byte_offset;
 #endif
     return NocAsyncWriteCoreTx<thread>(dst, src, mcast, kCopyArrivedSem<thread>);
