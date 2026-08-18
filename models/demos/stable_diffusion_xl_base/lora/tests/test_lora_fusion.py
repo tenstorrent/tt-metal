@@ -291,9 +291,14 @@ def test_text_encoder_lora_zero_clip_scale_skips_fusion(mesh_device, te_lora_pat
     assert status["unet"] is True, "UNet should still fuse at its own scale when the clip scale is 0.0"
 
     # Byte-for-byte, not PCC: a skipped fuse must not perturb the weights at all.
+    #
+    # Skipping the fuse also skips the unload that strips the PEFT wrapper, so the live
+    # encoders still carry it and their raw keys read ...q_proj.base_layer.weight. The
+    # reference pipeline never had an adapter, so normalize the live side to its plain
+    # names before comparing; otherwise every weight looks like it went missing.
     for component in components:
         base_sd = getattr(reference_pipeline, component).state_dict()
-        live_sd = getattr(tt_pipeline.torch_pipeline, component).state_dict()
+        live_sd = _get_lora_impacted_weights(getattr(tt_pipeline.torch_pipeline, component).state_dict())
         for name, base_tensor in base_sd.items():
             assert name in live_sd, f"{component}: weight {name} disappeared"
             assert torch.equal(
