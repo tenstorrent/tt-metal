@@ -107,9 +107,20 @@ _FIDELITY_PHASES = {
 
 
 def _fidelities(mathop):
-    """LoFi only for ELWADD -- see the module docstring."""
+    """LoFi only for ELWADD -- see the module docstring.
+
+    All four phase counts for ELWMUL, HiFi3 included. HiFi3 is the odd one: its phase
+    count is 3, so unlike HiFi2 and HiFi4 it is not a power of two, and an implementation
+    that derived the loop bound by shifting rather than from _FIDELITY_PHASES would pass
+    the other three and fail only here. It was missing from every sweep in the suite.
+    """
     if mathop == MathOperation.Elwmul:
-        return [MathFidelity.LoFi, MathFidelity.HiFi2, MathFidelity.HiFi4]
+        return [
+            MathFidelity.LoFi,
+            MathFidelity.HiFi2,
+            MathFidelity.HiFi3,
+            MathFidelity.HiFi4,
+        ]
     return [MathFidelity.LoFi]
 
 
@@ -257,7 +268,7 @@ def test_rmsnorm_bcast_scalar_dest_reuse(
     """The whole-tile case: every DEST row the pack reads is covered by the MOP.
 
     This is the shape the production caller uses -- one broadcast scalar applied across
-    num_tiles tiles from a single unpack -- swept over both ops, all three fidelities that
+    num_tiles tiles from a single unpack -- swept over both ops, all four fidelities that
     reach distinct ELWMUL code, and the DEST-capacity range of num_tiles.
     """
     _skip_unsupported(formats, dest_acc)
@@ -277,7 +288,7 @@ def test_rmsnorm_bcast_scalar_dest_reuse(
 @parametrize(
     formats=FORMATS,
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-    math_fidelity=[MathFidelity.LoFi, MathFidelity.HiFi2, MathFidelity.HiFi4],
+    math_fidelity=_fidelities(MathOperation.Elwmul),
 )
 def test_rmsnorm_bcast_scalar_dest_reuse_mul_accumulates_into_dirty_dest(
     formats, dest_acc, math_fidelity
@@ -373,16 +384,33 @@ def test_rmsnorm_bcast_scalar_dest_reuse_add_overwrites_dirty_dest(
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     mathop=OPS,
     num_faces=[1, 2],
+    num_tiles=[1, 2],
+    math_fidelity=lambda mathop: _fidelities(mathop),
 )
 def test_rmsnorm_bcast_scalar_dest_reuse_partial_faces(
-    formats, dest_acc, mathop, num_faces
+    formats, dest_acc, mathop, num_faces, num_tiles, math_fidelity
 ):
-    """num_faces < 4: the MOP covers only the leading faces of the tile.
+    """num_faces < 4: the MOP covers only the leading faces of each tile.
 
-    The pack still emits a full 4-face tile, so the trailing (4 - num_faces) * 256 elements
-    are whatever DEST held. With clear_dest=True the ZEROACC wiped them to zero, which is
-    what this asserts -- and it is the only configuration in which that flag is observable
-    for ELWADD at all, since the add overwrites everything the MOP does cover.
+    The pack still emits full 4-face tiles, so the trailing (4 - num_faces) * 256 elements
+    of every tile are whatever DEST held. With clear_dest=True the ZEROACC wiped them to
+    zero, which is what this asserts -- and it is the only configuration in which that flag
+    is observable for ELWADD at all, since the add overwrites everything the MOP does cover.
+
+    Why the covered region is per-tile rather than one run from the start: the addr_mod the
+    init programs increments DEST by ``8 + (4 - num_faces) * 16``
+    (llk_math_rmsnorm_bcast_scalar_dest_reuse.h), i.e. after a tile's covered faces it
+    skips the uncovered ones and lands on the next tile's base. The unpack side, by
+    contrast, reads ``num_tiles * num_faces`` faces contiguously out of L1. So the k-th
+    face of the input goes to tile k's leading face-slot, and input faces the MOP never
+    reads simply stay in L1 -- which is why the golden below slices the input contiguously
+    while indexing the device output per tile.
+
+    That is also what the num_tiles axis is for. At num_tiles=1 the skip term is
+    unobservable: there is no second tile for a wrong stride to land in, so
+    ``(4 - num_faces) * 16`` could be any value and the test would still pass. At
+    num_tiles=2 it is pinned -- halving the term on BH p100a leaves tile 0's uncovered
+    faces non-zero and fails here.
     """
     _skip_unsupported(formats, dest_acc)
 
@@ -390,38 +418,45 @@ def test_rmsnorm_bcast_scalar_dest_reuse_partial_faces(
         formats,
         dest_acc,
         mathop,
-        MathFidelity.LoFi,
-        num_tiles=1,
+        math_fidelity,
+        num_tiles=num_tiles,
         num_faces=num_faces,
         clear_dest=True,
     )
 
     covered = num_faces * ELEMENTS_PER_FACE
-    golden_covered = _expected(
-        seen_A[:covered], scalar, mathop, MathFidelity.LoFi, formats.output_format
-    )
+    for tile in range(num_tiles):
+        source = seen_A[tile * covered : (tile + 1) * covered]
+        golden_covered = _expected(
+            source, scalar, mathop, math_fidelity, formats.output_format
+        )
+        base = tile * ELEMENTS_PER_TILE
 
-    assert passed_test(golden_covered, device[:covered], formats.output_format), (
-        f"the {num_faces} face(s) the MOP covers are wrong (op={mathop.name}, "
-        f"scalar={scalar:.6f})"
-    )
+        assert passed_test(
+            golden_covered, device[base : base + covered], formats.output_format
+        ), (
+            f"the {num_faces} face(s) the MOP covers in tile {tile} are wrong "
+            f"(op={mathop.name}, fidelity={math_fidelity.name}, num_tiles={num_tiles}, "
+            f"scalar={scalar:.6f})"
+        )
 
-    tail = device[covered:ELEMENTS_PER_TILE]
-    nonzero = torch.count_nonzero(tail).item()
-    assert nonzero == 0, (
-        f"clear_dest=True left {nonzero} non-zero elements in the {4 - num_faces} face(s) "
-        "the MOP does not cover -- the ZEROACC between the MOVD2B and the MOP did not "
-        "clear DEST"
-    )
+        tail = device[base + covered : base + ELEMENTS_PER_TILE]
+        nonzero = torch.count_nonzero(tail).item()
+        assert nonzero == 0, (
+            f"clear_dest=True left {nonzero} non-zero elements in the {4 - num_faces} "
+            f"face(s) of tile {tile} the MOP does not cover -- the ZEROACC between the "
+            "MOVD2B and the MOP did not clear DEST"
+        )
 
 
 @parametrize(
     formats=FORMATS,
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     mathop=OPS,
+    math_fidelity=lambda mathop: _fidelities(mathop),
 )
 def test_rmsnorm_bcast_scalar_dest_reuse_unpack_full_transpose(
-    formats, dest_acc, mathop
+    formats, dest_acc, mathop, math_fidelity
 ):
     """The transpose-fold path, which exists only in blaze's version of the header.
 
@@ -433,6 +468,13 @@ def test_rmsnorm_bcast_scalar_dest_reuse_unpack_full_transpose(
 
     This is reachable surface the demo-tree version did not have, so a failure here is a
     reconciliation regression rather than a numerical one.
+
+    Swept over fidelity rather than pinned at LoFi: for ELWMUL the transpose and the
+    fidelity phase loop touch the same operands from opposite ends -- the replay buffer
+    reorders which face lands in which SrcA bank, and each phase masks a different slice of
+    the operand mantissas -- and nothing else in the suite runs the two together. The
+    golden composes them in the obvious order (transpose the input, then apply the phase
+    sum), so a fidelity-dependent failure here means they do not actually compose.
     """
     _skip_unsupported(formats, dest_acc)
 
@@ -440,7 +482,7 @@ def test_rmsnorm_bcast_scalar_dest_reuse_unpack_full_transpose(
         formats,
         dest_acc,
         mathop,
-        MathFidelity.LoFi,
+        math_fidelity,
         num_tiles=1,
         clear_dest=True,
         unpack_full_transpose=True,
@@ -451,11 +493,10 @@ def test_rmsnorm_bcast_scalar_dest_reuse_unpack_full_transpose(
     faces = seen_A[:ELEMENTS_PER_TILE].reshape(2, 2, 16, 16)
     transposed = faces.permute(1, 0, 3, 2).reshape(-1)
 
-    golden = _expected(
-        transposed, scalar, mathop, MathFidelity.LoFi, formats.output_format
-    )
+    golden = _expected(transposed, scalar, mathop, math_fidelity, formats.output_format)
 
     assert passed_test(golden, device, formats.output_format), (
-        f"unpack_full_transpose mismatch (op={mathop.name}, scalar={scalar:.6f}) -- the "
-        "transpose-fold path is the axis blaze's version of rmsnorm.h added"
+        f"unpack_full_transpose mismatch (op={mathop.name}, "
+        f"fidelity={math_fidelity.name}, scalar={scalar:.6f}) -- the transpose-fold path "
+        "is the axis blaze's version of rmsnorm.h added"
     )
