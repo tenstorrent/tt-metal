@@ -133,8 +133,8 @@ std::vector<uint32_t> ring_chip_ids(ttnn::MeshDevice* mesh, const ttnn::MeshCoor
     return ids;
 }
 
-// The reader/producer ring handshake is two monotonic single-writer counters, plus one counter the upstream
-// chip's producer bumps as it fills this stream's forwarding region.
+// The reader/sender ring handshake is two monotonic single-writer counters, plus one counter the upstream
+// chip's sender bumps as it fills this stream's forwarding region.
 //
 // GlobalSemaphores rather than the op's own L1 region for one reason: the framework ZEROES them before
 // launch. Raw L1 keeps whatever the previous program left there, and a stale `freed` underflows the reader's
@@ -152,7 +152,7 @@ struct RingSemaphores {
 RingSemaphores allocate_ring_semaphores(ttnn::MeshDevice* mesh) {
     // Allocated on the full worker grid so the addresses are uniform across the mesh. One fwd_arrived
     // semaphore serves every stream: each stream is drained by a different worker core, so the per-core copy
-    // at this uniform L1 offset already separates them, and the producer simply targets the right core.
+    // at this uniform L1 offset already separates them, and the sender simply targets the right core.
     const auto grid = mesh->compute_with_storage_grid_size();
     const CoreRangeSet all_workers(CoreRange(CoreCoord{0, 0}, CoreCoord{grid.x - 1, grid.y - 1}));
     RingSemaphores sems{
@@ -253,20 +253,20 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         const auto& downstream = placement.at(self.downstream_coord).at(stream);
         const auto& work = work_by_stream.at(stream);
 
-        tt::tt_metal::KernelDescriptor prod;
-        prod.kernel_source =
+        tt::tt_metal::KernelDescriptor snd;
+        snd.kernel_source =
             "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/kernels/dataflow/"
-            "producer_combine_fabric2d.cpp";
-        prod.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
-        prod.core_ranges = CoreRangeSet(CoreRange(self.worker_logical));
-        prod.compile_time_args = pack_producer_args(tensor_args, self, downstream, l1, plan);
-        prod.config = tt::tt_metal::DataMovementConfigDescriptor{
+            "sender_combine_fabric2d.cpp";
+        snd.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
+        snd.core_ranges = CoreRangeSet(CoreRange(self.worker_logical));
+        snd.compile_time_args = cmbf2d::SenderCtArgs(tensor_args, self, downstream, l1, plan).to_ct_word_arr();
+        snd.config = tt::tt_metal::DataMovementConfigDescriptor{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             // NOC_1 routes -Y first, so worker (eth row + 1) -> eth core is a single hop.
             .noc = tt::tt_metal::NOC::NOC_1,
         };
-        auto prod_id = static_cast<tt::tt_metal::KernelHandle>(desc.kernels.size());
-        desc.kernels.push_back(std::move(prod));
+        auto snd_id = static_cast<tt::tt_metal::KernelHandle>(desc.kernels.size());
+        desc.kernels.push_back(std::move(snd));
 
         tt::tt_metal::KernelDescriptor rdr;
         rdr.kernel_source =
@@ -274,7 +274,8 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             "reader_combine_fabric2d.cpp";
         rdr.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
         rdr.core_ranges = CoreRangeSet(CoreRange(self.worker_logical));
-        rdr.compile_time_args = pack_reader_args(args, tensor_args, coord, self, work, l1, plan, dram);
+        rdr.compile_time_args =
+            cmbf2d::ReaderCtArgs(args, tensor_args, coord, self, work, l1, plan, dram).to_ct_word_arr();
         for (auto* buf : {dram.in, dram.out, dram.fwd, dram.meta, dram.counts, dram.region, dram.expert_offsets}) {
             tt::tt_metal::TensorAccessorArgs(buf).append_to(rdr.compile_time_args);
         }
@@ -290,12 +291,12 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             std::vector<tt::tt_fabric::FabricNodeId>{self.downstream_node},
             std::vector<uint32_t>{stream / 2},
             desc,
-            prod_id,
+            snd_id,
             self.worker_logical,
             rt_raw);
         tt::tt_metal::KernelDescriptor::RTArgList rt;
         rt.append(rt_raw);
-        desc.kernels[prod_id].emplace_runtime_args(self.worker_logical, rt);
+        desc.kernels[snd_id].emplace_runtime_args(self.worker_logical, rt);
     }
 
     return desc;
@@ -320,7 +321,7 @@ tt::tt_metal::WorkloadDescriptor CombineFabric2dProgramFactory::create_workload_
     const auto placement = decide_placement(mesh_device, operation_attributes.axis, operation_attributes.num_links);
     const auto fwd = allocate_forwarding_buffer(mesh_device, operation_attributes, tensor_args);
 
-    // Every buffer here is interleaved DRAM whose base address is uniform across the mesh, so a producer can
+    // Every buffer here is interleaved DRAM whose base address is uniform across the mesh, so a sender can
     // address the same buffer on any chip by page index. That is what lets a token carry a final destination
     // address computed on the chip it started from.
     const DramBuffers dram{
