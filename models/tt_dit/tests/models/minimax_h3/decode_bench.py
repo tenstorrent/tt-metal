@@ -1,7 +1,17 @@
 """Median decode time over N runs, building the decoder once.
 
-Timing one call per process, as an earlier script did, is where the session's ~1% run-to-run spread
-came from. Build once, warm once, then time N decodes; report median and spread.
+Build once, warm once, then time N decodes and report median plus spread. Timing a single call per
+process is where an earlier script's run-to-run noise came from.
+
+Usage -- the label names the saved waveform:
+
+    export MINIMAX_H3_MODEL_PATH=/path/to/MiniMax-H3-diffusers
+    python models/tt_dit/tests/models/minimax_h3/decode_bench.py baseline
+
+Env: BENCH_N (default 5), BENCH_OUT (default `generated/minimax_h3_audio/bench`).
+
+For latency *with* PSNR against a CPU reference, and for mesh/sharding/trace configurations, use
+`cpu_vs_device.py` instead; this script is single-device and reports timing only.
 """
 import json
 import os
@@ -17,15 +27,13 @@ import ttnn
 from models.tt_dit.models.audio_vae.minimax_h3.convert_minimax_h3_audio import convert_minimax_h3_audio_state_dict
 from models.tt_dit.models.audio_vae.minimax_h3.decoder_minimax_h3_audio import MiniMaxH3AudioDecoder
 
-# Label reaches a filename below, so keep it to one path-safe component: a caller passing
-# "../../etc/x" or an absolute path must not escape OUT.
+# Reaches a filename below, so keep it to one path-safe component.
 LABEL = re.sub(r"[^A-Za-z0-9._-]", "_", os.path.basename(sys.argv[1])) or "bench"
 N = int(os.environ.get("BENCH_N", "5"))
 OUT = os.environ.get("BENCH_OUT") or os.path.join(
-    os.environ.get("TT_METAL_HOME", os.getcwd()), "generated", "audio_perf", "bench"
+    os.environ.get("TT_METAL_HOME", os.getcwd()), "generated", "minimax_h3_audio", "bench"
 )
-# `MINIMAX_H3_MODEL_PATH` is what the test suite uses (`common.weights_subdir`); the older
-# `MINIMAX_H3_DIFFUSERS_DIR` is still accepted so existing shells keep working.
+# `MINIMAX_H3_MODEL_PATH` matches the test suite; the older var is still accepted.
 _root = os.environ.get("MINIMAX_H3_MODEL_PATH") or os.environ.get("MINIMAX_H3_DIFFUSERS_DIR", "")
 if not _root:
     raise SystemExit("set MINIMAX_H3_MODEL_PATH to a MiniMax-H3 diffusers snapshot")
@@ -59,9 +67,8 @@ try:
         ttnn.synchronize_device(d)
         s.append(time.perf_counter() - t0)
     os.makedirs(OUT, exist_ok=True)
-    # Both halves of this path come from outside the process (BENCH_OUT, argv[1]), so contain the
-    # result rather than trusting the sanitising above: resolve it and refuse anything that lands
-    # outside OUT. Cheap, and it makes the safety property local instead of two screens away.
+    # Both halves come from outside the process (BENCH_OUT, argv[1]), so contain the result here
+    # rather than relying on the sanitising above.
     _out_dir = os.path.realpath(OUT)
     _dest = os.path.realpath(os.path.join(_out_dir, LABEL + ".pt"))
     if os.path.commonpath([_out_dir, _dest]) != _out_dir:

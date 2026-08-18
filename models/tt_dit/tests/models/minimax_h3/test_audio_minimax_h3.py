@@ -144,15 +144,10 @@ def test_decode(mesh_device, num_latent_frames):
 def test_depthwise_chunked_conv1d_matches_torch(mesh_device):
     """`depthwise_tap_filter`'s C-chunked `ttnn.conv1d` recovery, against a torch depthwise reference.
 
-    Nothing else covers this path. H3 constructs the decoder with `prefer_mac=True`, and
-    `depthwise_tap_filter` returns the MAC form before reaching the conv1d fallback, so every decode
-    test exercises MAC and none of them touch the slicing, the per-chunk prepared weight, or the concat
-    that reassembles the channel slices. The decode is where it actually runs -- 72 times per sharded
-    clip with `prefer_mac=False` -- but that is a measurement script, not a gate.
-
-    Shape is the one the decode really chunks (T_pad=166, C=512, K=7, stride=1): a depthwise conv1d
-    lays the K kernel-width sticks out contiguously, so the activation block is C*K wide and the DRAM
-    slicer runs out of L1 at full C.
+    Nothing else covers it: H3 defaults to `prefer_mac=True`, which returns before the conv1d fallback,
+    so no decode test touches the slicing, the per-chunk weight, or the concat. Shape is the one the
+    decode really chunks (T_pad=166, C=512, K=7, stride=1), where the activation block is C*K wide and
+    the slicer runs out of L1 at full C.
     """
     torch.manual_seed(0)
     B, T_pad, C, K, stride = 1, 166, 512, 7, 1
@@ -182,10 +177,9 @@ def test_depthwise_chunked_conv1d_matches_torch(mesh_device):
     logger.info(f"chunked depthwise conv1d vs torch: {psnr_db:.2f} dB")
     assert psnr_db > 60.0, f"chunked depthwise conv1d diverges from torch: {psnr_db:.2f} dB"
 
-    # And prove the chunked path is what ran. `_depthwise_tap_conv1d_chunked` keys its prepared weight
-    # on the chunk width where the unchunked path keys on C, so a key below C means it chunked. Without
-    # this the test would pass just as happily on the plain conv1d or on a silent MAC fallback -- i.e.
-    # it would assert torch equivalence while covering none of the code it exists for.
+    # Prove the chunked path ran: it keys its prepared weight on the chunk width where the unchunked
+    # path keys on C. Without this the test would pass on plain conv1d or a silent MAC fallback, i.e.
+    # assert torch equivalence while covering none of the code it exists for.
     chunk_widths = [k[1] for k in cache if isinstance(k, tuple) and k and k[0] == "w" and k[1] < C]
     assert chunk_widths, (
         f"expected the C-chunked conv1d recovery to run at C={C}, K={K}, T_pad={T_pad}, but the weight "
@@ -496,16 +490,12 @@ MESH = [
 # because the partition indexes by the device's coordinate along the axis and assumes it covers it.
 # That is why this list is (4, axis 0) and (8, axis 1) rather than a scan.
 #
-# `KNOWN_BROKEN` is deliberately empty, and adding to it should be a last resort -- an entry here
-# silences the PSNR assert, which is the only thing separating a speedup from a fast wrong answer.
-# It formerly held (8, 1) at -6.3 dB, blamed on 256/8 = 32 being exactly one tile per shard. That was
-# the wrong suspect: *every* factor was wrong, and the cause was `conv_pre` (2048 -> 1024, k=7)
-# returning uninitialized memory under T-sharding while every other conv shape was bit-exact. It now
-# runs unsharded on the full sequence -- see the comment on `Vocoder.conv_pre` -- and both factors
-# measure 57.4 dB against the unsharded path (t_factor=4 axis=0 at 2.51x, t_factor=8 axis=1 at 3.25x),
-# comfortably above the 40 dB bar below, with `audio_perf/cpu_vs_device.py` scoring the sharded
-# configuration at the same PSNR vs the CPU reference as single device (45.80 dB at the all-fast
-# levers, 67.37 dB at the constructed defaults -- sharding buys latency, not accuracy).
+# `KNOWN_BROKEN` is deliberately empty; an entry silences the PSNR assert, which is the only thing
+# separating a speedup from a fast wrong answer. It formerly held (8, 1) at -6.3 dB, blamed on one tile
+# per shard -- the wrong suspect, since every factor was wrong and the cause was `conv_pre` returning
+# uninitialized memory when sharded. Both factors now measure 83.4 dB against the unsharded path
+# (1.87x at axis 0, 2.20x at axis 1), and `cpu_vs_device.py` scores sharded at the same PSNR as single
+# device (81.89 vs 81.99 dB at the constructed defaults): sharding buys latency, not accuracy.
 FACTORS = [(1, 1), (4, 0), (8, 1)]
 KNOWN_BROKEN: set[tuple[int, int]] = set()
 
@@ -588,9 +578,7 @@ def _localize_divergence(baseline, parallel, *, factor: int, logger) -> None:
     )
 
 
-# ~14 min: three decoder builds plus a decode per factor. `pytest.ini` defaults to 300 s, so without
-# this marker plain `pytest` kills the test rather than running it, and callers should not have to know
-# to pass `--timeout`.
+# ~14 min: three decoder builds plus a decode per factor, against `pytest.ini`'s 300 s default.
 @pytest.mark.timeout(2400)
 @pytest.mark.parametrize(("mesh_device", "device_params"), MESH, indirect=["mesh_device", "device_params"])
 def test_audio_decode_t_parallel(mesh_device):
@@ -623,11 +611,9 @@ def test_audio_decode_t_parallel(mesh_device):
             out = decoder(latents)
             seconds = _best(lambda: decoder(latents))
         except Exception as exc:
-            # Every entry in FACTORS is a layout this stage claims to support, so a raise here is a
-            # regression, not a "result". Recording it as unsupported let factor 4 break while factor 8
-            # kept the test green -- the assertions below only require *some* parallel factor to run,
-            # so one of the two supported layouts could silently lose coverage. Anything genuinely
-            # optional belongs in KNOWN_BROKEN, which is explicit and reviewable.
+            # Every FACTORS entry is a supported layout, so a raise is a regression, not a "result":
+            # recording it as unsupported let factor 4 break while factor 8 kept the test green, since
+            # the asserts below need only *some* factor to run. Optional layouts go in KNOWN_BROKEN.
             logger.warning(f"t_factor={factor} axis={axis} FAILED: {str(exc)[:160]}")
             results.append((factor, axis, None, None))
             if (factor, axis) not in KNOWN_BROKEN:

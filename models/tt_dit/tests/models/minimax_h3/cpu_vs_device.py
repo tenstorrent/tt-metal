@@ -1,16 +1,26 @@
-"""CPU reference vs device decode, fp32, over several real clips including speech.
+"""CPU reference vs device decode, fp32, scored on real clips.
 
-For each clip: resample to 32 kHz, take one production window (207 latents = 5.17 s), encode with the
-torch/diffusers reference, then decode twice -- once on CPU (the ground truth) and once on device --
-and score the device output against the CPU one. Every WAV is written so the difference can be heard
-rather than only read off a table.
+Per clip: resample to 32 kHz, take one production window (207 latents = 5.17 s), encode with the
+torch/diffusers reference, decode on CPU (ground truth) and on device, score device against CPU. WAVs
+are written so the difference can be heard. Batch 2 throughout, matching the shipping working point,
+so times are comparable to `decode_bench.py`. The decoder is built once, so times are steady-state.
 
-Batch is 2 throughout, matching the shipping working point ("stereo" is carried as batch 2; the
-autoencoder itself is mono). Mono clips are duplicated across the two batch slots, so the device time
-here is directly comparable to `decode_bench.py`'s medians.
+Usage -- single device, shipping defaults:
 
-The decoder is built once and reused across clips, so the reported time is steady-state decode and
-excludes model construction, weight upload and JIT.
+    export MINIMAX_H3_MODEL_PATH=/path/to/MiniMax-H3-diffusers
+    python models/tt_dit/tests/models/minimax_h3/cpu_vs_device.py
+
+8-way T-shard on a 4x8 mesh with trace, all-fast levers (the sub-300 ms configuration):
+
+    env CVD_MESH=4x8 CVD_T_FACTOR=8 CVD_MESH_AXIS=1 CVD_TRACED=1 \
+        CVD_SPLIT_MODE=off CVD_TAP_MATMUL=0 CVD_PREFER_MAC=0 python .../cpu_vs_device.py
+
+Env: CVD_MESH (default 1x1), CVD_T_FACTOR, CVD_MESH_AXIS, CVD_TRACED, CVD_SPLIT_MODE (off|weight|full),
+CVD_TAP_MATMUL, CVD_PREFER_MAC, CVD_MAX_C_IN_BLOCK, CVD_OUT_DIR, CVD_BASELINE_PSNR.
+
+Accuracy is scored against the CPU reference, i.e. an absolute number; the T-parallel test only scores
+sharded against unsharded, which is a looser bar. Unset levers keep the constructor default (accurate
+mode), so `=0` is not the same as omitting. Read each run's `levers:` line rather than the filename.
 """
 
 import json
@@ -27,46 +37,27 @@ import ttnn
 SR = 32000
 HOP = 800
 NUM_LATENT_FRAMES = 207
-# Default under the repo's `generated/` (gitignored, and where the rest of the stack already writes)
-# rather than any particular developer's filesystem, so this runs on CI and on a fresh clone.
+# Under `generated/` rather than any developer's filesystem, so this runs on CI and a fresh clone.
 OUT_DIR = os.environ.get("CVD_OUT_DIR") or os.path.join(
-    os.environ.get("TT_METAL_HOME", os.getcwd()), "generated", "audio_perf", "clips"
+    os.environ.get("TT_METAL_HOME", os.getcwd()), "generated", "minimax_h3_audio", "clips"
 )
-# `MINIMAX_H3_MODEL_PATH` is what the test suite uses (`common.weights_subdir`); the older
-# `MINIMAX_H3_DIFFUSERS_DIR` is still accepted so existing shells keep working.
+# `MINIMAX_H3_MODEL_PATH` matches the test suite; the older var is still accepted.
 WEIGHTS = os.environ.get("MINIMAX_H3_MODEL_PATH") or os.environ.get("MINIMAX_H3_DIFFUSERS_DIR", "")
 if not WEIGHTS:
     raise SystemExit("set MINIMAX_H3_MODEL_PATH to a MiniMax-H3 diffusers snapshot")
 
-# Mesh / sharding / trace, all env-gated so the default stays exactly the single-device run this
-# script has always been. The acceptance criterion is PSNR **against the CPU reference**, and the
-# T-parallel test only ever scores sharded against unsharded -- a different, looser bar (40 dB). So the
-# shipping configuration has to be scored here, not there.
-#
-#   CVD_MESH=4x8 CVD_T_FACTOR=8 CVD_MESH_AXIS=1 CVD_TRACED=1 python cpu_vs_device.py
-#
-# The T-shard factor must equal the mesh axis length: on a 4x8 mesh only (4, axis 0) and (8, axis 1)
-# work; anything else dies in `_partition_t` on a non-tile-aligned slice.
+# T_FACTOR must equal the length of the axis it shards: on a 4x8 mesh only (4, axis 0) and
+# (8, axis 1) work, anything else dies in `_partition_t` on a non-tile-aligned slice.
 MESH = tuple(int(v) for v in os.environ.get("CVD_MESH", "1x1").split("x"))
 T_FACTOR = int(os.environ.get("CVD_T_FACTOR", "1"))
 MESH_AXIS = int(os.environ.get("CVD_MESH_AXIS", "1"))
 TRACED = os.environ.get("CVD_TRACED", "0") == "1"
 
 
-# The precision levers, which dominate both latency and PSNR. The decoder's own defaults are accurate
-# mode -- split_mode="full", tap_matmul=True, prefer_mac=True -- so leaving these unset measures what
-# ships. Setting all three to the fast values selects a *different operator set*, not just a different
-# speed:
-#
-#   CVD_SPLIT_MODE=off CVD_TAP_MATMUL=0 CVD_PREFER_MAC=0     # fast
-#
-# Measured on a 4x8 mesh, t_factor=8 axis=1, traced (see README for the whole curve): all-fast is
-# 279 ms / 45.80 dB, `prefer_mac` alone is 840 ms / 49.45 dB. Those two rows are worth knowing
-# together, because pairing the first one's latency with the second one's PSNR is exactly the mistake
-# that produced the retired "281.6 ms at 49.45 dB" claim.
-#
-# `None` means "leave the constructor default alone" so a run that sets nothing cannot silently pin a
-# lever to a value that later changes upstream.
+# The precision levers select a different operator set, not just a different speed: all-fast
+# measures 292 ms / 45.80 dB where `prefer_mac` alone is 841 ms / 49.45 dB. Quoting one row's latency
+# with another's PSNR is what produced the retired "281.6 ms at 49.45 dB" claim. `None` means "leave
+# the constructor default alone".
 def _flag(name):
     raw = os.environ.get(name)
     return None if raw is None else raw not in ("0", "false", "False", "")
@@ -75,9 +66,8 @@ def _flag(name):
 SPLIT_MODE = os.environ.get("CVD_SPLIT_MODE")
 TAP_MATMUL = _flag("CVD_TAP_MATMUL")
 PREFER_MAC = _flag("CVD_PREFER_MAC")
-# conv3d's C_in_block cap for the H3 audio blocking table. Not a boolean and easy to overlook, but it
-# moves accuracy on its own: conv_pre's error falls monotonically as the block grows (2.40e-03 at 32,
-# 1.86e-03 at 128), because a larger block means fewer partial sums to round.
+# conv3d's C_in_block cap. Moves accuracy on its own -- conv_pre's error falls as the block grows
+# (2.40e-03 at 32, 1.86e-03 at 128) -- but 256 buys 0.02 dB and 512 exceeds L1.
 MAX_C_IN_BLOCK = os.environ.get("CVD_MAX_C_IN_BLOCK")
 LEVERS = {
     k: v

@@ -334,16 +334,13 @@ def depthwise_tap_filter(x_BTC, taps, stride, *, mesh_device, dtype, cache, pref
         # HEIGHT_SHARDED conv1d needs enough rows to spread over the core grid. Every LTX call
         # site has tens of thousands of frames, but MiniMax-H3's BigVGAN starts at the latent
         # rate (T=207, and T=40 in a short test), where the DRAM slicer cannot find any valid
-        # configuration. The exact threshold is internal to the slicer's core-grid search and
-        # its error text is not a stable API, so any RuntimeError from the conv takes a fallback.
+        # configuration. Its error text is not a stable API, so any RuntimeError takes a fallback.
         #
-        # Before giving up on conv1d, try it on slices of the channel axis. The failure here is
-        # usually the DRAM slicer running out of L1: a depthwise conv1d lays the K kernel-width sticks
-        # out contiguously, so the activation block is C*K wide -- 3584 elements at C=512, K=7, which
-        # does not fit however finely T is sliced ("requires more memory than available even with
-        # maximum slicing"). Splitting C does fit, and the filter is *depthwise*, so channel slices are
-        # completely independent and reassembly is a concat. Worth doing because it is ~9 ops instead
-        # of MAC's 3K-1, on a faster op.
+        # Before giving up, retry on channel slices. The failure is the slicer running out of L1: a
+        # depthwise conv1d lays the K sticks out contiguously, so the activation block is C*K wide
+        # (3584 at C=512, K=7) and does not fit however finely T is sliced. Splitting C fits, and the
+        # filter is depthwise so slices are independent and reassembly is a concat -- ~9 ops against
+        # MAC's 3K-1, on a faster op.
         for chunk in (128, 64, 32):
             if C % chunk or chunk >= C:
                 continue
@@ -396,11 +393,10 @@ def _depthwise_tap_conv1d_chunked(
 ):
     """``_depthwise_tap_conv1d`` over independent ``chunk``-wide channel slices, concatenated back.
 
-    Depthwise means each output channel depends only on its own input channel, so slicing C is exact --
-    no partial sums to reconcile. The reassembly is a last-dim concat, which is lossy in fp32 unless the
-    row is a multiple of the 64B buffer alignment (see `_pad_channels_to_aligned`); every chunk here is
-    a multiple of 32 fp32 elements = 128B, so it holds, and the assert keeps a future chunk size from
-    silently truncating the mantissa to TF32.
+    Slicing C is exact for a depthwise filter -- no partial sums to reconcile. The reassembly is a
+    last-dim concat, lossy in fp32 unless the row is a multiple of the 64B buffer alignment; every chunk
+    here is 32 fp32 elements = 128B, and the assert keeps a future chunk size from silently truncating
+    the mantissa to TF32.
     """
     assert (chunk * 4) % 64 == 0, f"C-chunk {chunk} would make ttnn.concat(dim=-1) lossy in fp32"
     wkey = ("w", chunk, stride, K, tuple(taps))
@@ -954,16 +950,10 @@ class Conv1dViaConv3d(Module):
 
         self.same_pad = same_pad
         self.eff_k = eff_k
-        # The shifted-matmul form (see `_forward_tap_matmul`) needs stride 1 to index taps directly and
-        # fp32 to be worth doing at all. T-sharding is supported: the tap path takes its own halo from
-        # `_t_neighbor_pad`, the same exchange the conv3d route uses. Channel-TP is still excluded --
-        # there the conv3d route owns the C_in gather, and duplicating that here would be a second place
-        # for the same invariant to be wrong.
-        #
-        # This used to also require `not sharded`, which made the sharded tap path unreachable and hid
-        # two bugs in it (halo width at even `eff_k`, and freeing the ccl_manager's ping-pong buffer).
-        # Both are fixed; leaving it enabled is what keeps sharded output equal to unsharded at the same
-        # levers (83.4 dB agreement, against 57.4 dB when the two paths ran different math).
+        # Needs stride 1 to index taps directly and fp32 to be worth doing. T-sharding is supported --
+        # the tap path takes its own halo -- but channel-TP is not, since the conv3d route owns the C_in
+        # gather. Dropping the old `not sharded` term is what keeps sharded output equal to unsharded at
+        # the same levers (83.4 dB, against 57.4 dB when the two paths ran different math).
         self.tap_matmul = tap_matmul and dtype == ttnn.float32 and stride == 1 and channel_axis(parallel_config) is None
 
         self._alloc_weight_bias()
@@ -1104,13 +1094,10 @@ class Conv1dViaConv3d(Module):
         #
         sharded = self.parallel_config is not None and self.parallel_config.factor > 1
         if sharded:
-            # Context comes from the neighbouring chip, as the conv3d path does it: `_zero_pad_t` is a
-            # *local* pad and would put zeros where the neighbour's rows belong.
-            #
-            # The widths must sum to `eff_k - 1`, which is what the taps below consume, or `t_out` is not
-            # the shard's own T and the resblock's residual add rejects the result ("Invalid subtile
-            # broadcast type"). `halo_pad_left/right` are both `eff_k // 2`, which sums correctly only
-            # for odd `eff_k`; at the even ones (the K=12 anti-aliased downsamplers) it over-pads by one.
+            # Context must come from the neighbour; `_zero_pad_t` is local and would zero its rows. The
+            # widths have to sum to `eff_k - 1` (what the taps consume) or `t_out` is not the shard's own
+            # T and the residual add rejects it. `halo_pad_left/right` are both `eff_k // 2`, which only
+            # sums right for odd `eff_k`, so derive it here.
             pad_left = self.halo_pad_left
             pad_right = (self.eff_k - 1) - pad_left
             x_padded = _t_neighbor_pad(
@@ -1121,9 +1108,7 @@ class Conv1dViaConv3d(Module):
                 ccl_manager=self.ccl_manager,
                 padding_mode="zeros",
             )
-            # BORROWED: this is the ccl_manager's ping-pong buffer, not ours to free. See the
-            # deallocate below.
-            owns_padded = False
+            owns_padded = False  # borrowed: the ccl_manager's ping-pong buffer, not ours to free
         else:
             pad_left = self.external_pad_front + self.internal_padding[0]
             pad_right = self.internal_padding[0]
@@ -1172,10 +1157,9 @@ class Conv1dViaConv3d(Module):
                 ttnn.deallocate(accumulator)
                 ttnn.deallocate(term)
                 accumulator = new_accumulator
-        # Only free what we allocated. Under T-sharding `x_padded` is the ccl_manager's cached ping-pong
-        # buffer, handed back as `neighbor_pad_async`'s output; freeing it left a dead buffer in that
-        # cache, and the next halo call with the same shape died on `input_tensor.is_allocated()` inside
-        # an unrelated op. `x_padded is not x_BTC` was the wrong test for ownership.
+        # Only free what we allocated. Sharded, `x_padded` is the ccl_manager's cached ping-pong buffer,
+        # and freeing it left a dead entry there -- the next halo call with that shape then failed
+        # `is_allocated()` inside an unrelated op. `x_padded is not x_BTC` was the wrong ownership test.
         if owns_padded:
             ttnn.deallocate(x_padded)
 

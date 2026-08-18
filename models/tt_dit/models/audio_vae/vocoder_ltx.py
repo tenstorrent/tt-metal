@@ -273,22 +273,13 @@ class Vocoder(Module):
         # the pipeline warms the decode eagerly at warmup, which the vocoder frees back to a
         # deterministic state, so capture and replay share one free-list.
 
-        # conv_pre stays UNSHARDED even when the rest of the graph is T-sharded, the same way
-        # ConvTranspose1dViaConv3d keeps its inner conv unsharded. This is a correctness fix, not a
-        # preference: at (C_in=2048, C_out=1024, k=7) -- by far the widest conv in the decode -- the
-        # sharded path returns uninitialized memory (measured absmax 2.6e+11 against a reference absmax
-        # of 1.391, i.e. -204 dB), which is what made every T-sharded decode return wrong audio. A
-        # sharded-vs-unsharded sweep over conv shapes found this to be the only one affected: 1024->512
-        # k=7, 256->256 k=7 and 64->64 at kernels 1/3/7 and dilation 5 are all bit-exact under
-        # T-sharding, and both `_partition_t` and `_t_neighbor_pad` were verified exact at this shape.
-        #
-        # Replicating it is close to free: conv_pre runs on the *input* sequence, 207 latents (256
-        # padded), which is 1/800th of the final waveform length -- the cheapest row-work in the graph.
-        # `_forward_device` therefore runs conv_pre first and partitions T afterwards.
-        #
-        # Only when there is no channel-TP. Under channel-TP conv_pre's own `gather_channel_to_full` is
-        # what reconstructs full C_in, so taking its parallel_config away would hand it a C-shard; that
-        # path keeps the original ordering untouched.
+        # conv_pre stays UNSHARDED under T-sharding: at (2048 -> 1024, k=7), the widest conv in the
+        # decode, the sharded path returns uninitialized memory (absmax 2.6e+11 vs a reference 1.391,
+        # -204 dB), which made every T-sharded decode wrong. A shape sweep found it the only one
+        # affected; `_partition_t` and `_t_neighbor_pad` were exact here. Replicating is near-free --
+        # conv_pre sees the 207-latent input, ~1/800th of the waveform -- so `_forward_device` runs it
+        # first and partitions T after. Not under channel-TP, where conv_pre's own
+        # `gather_channel_to_full` rebuilds C_in and removing parallel_config would hand it a C-shard.
         self._conv_pre_unsharded = channel_factor(parallel_config) == 1
         self.conv_pre = _AlignedOutConv1d(
             in_channels=in_channels,
