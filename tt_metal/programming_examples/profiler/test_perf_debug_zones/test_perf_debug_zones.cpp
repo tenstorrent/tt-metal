@@ -36,6 +36,7 @@ int main(int argc, char** argv) {
     uint32_t zone_scale = 1;
     bool knee_mode = false;     // set by --delay, including --delay 0
     bool atomic_zones = false;  // --atomic 1: kernels emit 3-word complete-zone records (FW wrappers stay split)
+    bool selftime = false;      // --selftime 1: kernels self-time N_ITERS empty zones and DPRINT cycles
     for (int i = 1; i + 1 < argc; i += 2) {
         std::string a = argv[i];
         uint32_t v = (uint32_t)std::strtoul(argv[i + 1], nullptr, 10);
@@ -52,6 +53,8 @@ int main(int argc, char** argv) {
             zone_scale = v == 0 ? 1u : v;
         } else if (a == "--atomic") {
             atomic_zones = v != 0;
+        } else if (a == "--selftime") {
+            selftime = v != 0;
         }
     }
 
@@ -90,6 +93,9 @@ int main(int argc, char** argv) {
         {"ZONE_SCALE", std::to_string(zone_scale) + "u"}};
     if (atomic_zones) {
         defs["PROFILER_ATOMIC_ZONES"] = "1";
+    }
+    if (selftime) {
+        defs["ZONE_SELFTIME"] = "1";
     }
     const std::string kdir = "tt_metal/programming_examples/profiler/test_perf_debug_zones/kernels/";
 

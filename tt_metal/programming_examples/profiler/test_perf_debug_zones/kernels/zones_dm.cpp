@@ -89,6 +89,54 @@
         }                                                                                                       \
     }
 
+#if defined(ZONE_SELFTIME)
+// Self-timed DeviceZoneScopedN overhead. Two device-timed brackets (zones, so the durations ride the
+// normal pipeline -- DPRINT and the profiler are mutually exclusive): N_ITERS iterations of a nop spin
+// alone, then the same spin with one zone per iteration. Overhead per zone = (STTOT - STBASE) / N.
+// The spin (ZONE_CYC, --delay) appears in BOTH brackets so it cancels; its job is to hold the zone
+// rate below the ring-stall knee so no stall time lands inside the brackets.
+void kernel_main() {
+    {
+        DeviceZoneScopedN(ZTAG "_STBASE");
+        for (uint32_t i = 0; i < (uint32_t)N_ITERS; i++) {
+            for (volatile uint32_t j = 0; j < (uint32_t)ZONE_CYC; j++) {
+                asm volatile("nop");
+            }
+        }
+    }
+    {
+        DeviceZoneScopedN(ZTAG "_STTOT");
+        for (uint32_t i = 0; i < (uint32_t)N_ITERS; i++) {
+            DeviceZoneScopedN(ZTAG "_S");
+            for (volatile uint32_t j = 0; j < (uint32_t)ZONE_CYC; j++) {
+                asm volatile("nop");
+            }
+        }
+    }
+    // Component brackets: one 64-bit clock read / one fence per iteration, same spin, so
+    // (X - STBASE) / N prices the primitive the zone path is built from.
+    {
+        DeviceZoneScopedN(ZTAG "_STCLK");
+        for (uint32_t i = 0; i < (uint32_t)N_ITERS; i++) {
+            uint32_t h, l;
+            kernel_profiler::read_wall_clock(h, l);
+            asm volatile("" ::"r"(h), "r"(l));
+            for (volatile uint32_t j = 0; j < (uint32_t)ZONE_CYC; j++) {
+                asm volatile("nop");
+            }
+        }
+    }
+    {
+        DeviceZoneScopedN(ZTAG "_STFEN");
+        for (uint32_t i = 0; i < (uint32_t)N_ITERS; i++) {
+            asm volatile("fence" ::: "memory");
+            for (volatile uint32_t j = 0; j < (uint32_t)ZONE_CYC; j++) {
+                asm volatile("nop");
+            }
+        }
+    }
+}
+#else
 void kernel_main() {
 #if ZONE_MODE
     // KNEE: 10 FLAT sequential zones. This shape is load-bearing: the marker-wire GB/s numbers and the
@@ -132,3 +180,4 @@ void kernel_main() {
     }
 #endif
 }
+#endif

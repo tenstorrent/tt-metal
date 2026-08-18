@@ -247,10 +247,18 @@ static constexpr uint32_t SPSC_MARKER_WORDS = 2;
 // backend definition file needn't change; constant-folds to a per-RISC .bss word.
 [[maybe_unused]] static uint32_t g_prev_timer_hi = 0xFFFFFFFFu;
 
-// 64-bit wall-clock read. Reading LOW latches HIGH (see c_tensix_core.h "latches high"; Quasar names
-// the register WALL_CLOCK_H_LATCHED), so LOW-then-HIGH is one coherent snapshot in exactly two loads
-// -- no tear is possible and no retry loop is needed. HIGH must be read AFTER LOW: on its own it
-// returns the latch from whenever LOW was last read, which is arbitrarily stale.
+// Cached drainer head. HEAD lives in the L1 control buffer and only ever advances, so a stale copy is
+// a conservative credit: while (wIndex - cache) leaves room, no load is needed at all, and a refresh
+// is amortized over RING_CAPACITY-ish words instead of paid per marker.
+[[maybe_unused]] static uint32_t g_head_cache = 0;
+
+// Publish cadence for the atomic-zone path: fence + TAIL store amortized over batches of ring words
+// instead of paid per zone. finish_profiler()'s unconditional publish flushes the residue at kernel
+// end, and holding <= kPublishBatchWords unpublished can never deadlock the room wait (the head can
+// always reach wIndex - pending, and pending is far below RING_CAPACITY - need).
+[[maybe_unused]] static uint32_t g_last_pub = 0;
+constexpr uint32_t kPublishBatchWords = 16;
+
 inline __attribute__((always_inline)) void read_wall_clock(uint32_t& hi, uint32_t& lo) {
     volatile tt_reg_ptr uint32_t* p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
     lo = p_reg[WALL_CLOCK_LOW_INDEX];
@@ -268,7 +276,10 @@ inline __attribute__((always_inline)) void read_wall_clock(uint32_t& hi, uint32_
 // the host reconstructs stall_end with the pre-tick hi -> a ~2^32 backwards jump on that lane (was a
 // deterministic ~lanes*ticks batch of ts regressions). Reserve room for both stall markers + up to 2
 // stickies so the whole zone is written without a mid-zone re-check.
+inline void publish_tail();
+
 __attribute__((noinline)) void ring_ensure_room_slow(uint32_t nwords) {
+    publish_tail();  // expose any batched, unpublished words before blocking on the drainer
     uint32_t start_hi, start_lo;
     read_wall_clock(start_hi, start_lo);
     const uint32_t need = nwords + 2 * SPSC_MARKER_WORDS + 2;  // caller marker + {START,END} + up to 2 TIMER stickies
@@ -298,11 +309,16 @@ __attribute__((noinline)) void ring_ensure_room_slow(uint32_t nwords) {
     }
     profiler_data_buffer[myRiscID].data[wIndex++ % RING_CAPACITY] = ppfmt::w0(ZONE_END, PROFILER_STALL_ZONE_ID);
     profiler_data_buffer[myRiscID].data[wIndex++ % RING_CAPACITY] = end_lo;
+    g_head_cache = profiler_control_buffer[HEAD_INDEX];
 }
 
-// Fast path stays inline (just the room check); the full-ring path is out-of-line above.
+// Fast path stays inline (just the credit check); the full-ring path is out-of-line above.
 inline __attribute__((always_inline)) void ring_ensure_room(uint32_t nwords) {
-    if ((wIndex - profiler_control_buffer[HEAD_INDEX]) <= (RING_CAPACITY - nwords)) {
+    if ((wIndex - g_head_cache) <= (RING_CAPACITY - nwords)) {
+        return;
+    }
+    g_head_cache = profiler_control_buffer[HEAD_INDEX];
+    if ((wIndex - g_head_cache) <= (RING_CAPACITY - nwords)) {
         return;
     }
     ring_ensure_room_slow(nwords);
@@ -384,7 +400,10 @@ inline __attribute__((always_inline)) void mark_zone_atomic(uint32_t timer_id, u
     ring_write_word(ppfmt::w0(ppfmt::T_ZONE_ATOMIC, timer_id & ppfmt::HASH16_MASK));
     ring_write_word(lo);
     ring_write_word(static_cast<uint32_t>(d));
-    publish_tail();
+    if (wIndex - g_last_pub >= kPublishBatchWords) {
+        publish_tail();
+        g_last_pub = wIndex;
+    }
 }
 
 // Emit the STICKY_META context packet (2 words) into ALL of this core's RISC rings, not just the
