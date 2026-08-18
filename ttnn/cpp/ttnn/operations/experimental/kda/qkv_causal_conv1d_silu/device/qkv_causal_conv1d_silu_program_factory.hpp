@@ -4,11 +4,12 @@
 #pragma once
 
 #include "qkv_causal_conv1d_silu_device_operation_types.hpp"
+#include "ttnn/metal_v2_artifacts.hpp"
 
 namespace ttnn::experimental::prim {
 
 struct QkvCausalConv1dSiluProgramFactory {
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const QkvCausalConv1dSiluParams&, const QkvCausalConv1dSiluInputs&, std::vector<Tensor>&);
 };
 

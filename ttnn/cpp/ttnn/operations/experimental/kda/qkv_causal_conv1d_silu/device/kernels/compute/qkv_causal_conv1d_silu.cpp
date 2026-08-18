@@ -1,77 +1,84 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-#include "api/compute/tilize.h"
-#include "api/compute/eltwise_binary.h"
 #include "api/compute/bcast.h"
 #include "api/compute/compute_kernel_api.h"
+#include "api/compute/eltwise_binary.h"
 #include "api/compute/reconfig_data_format.h"
+#include "api/compute/tilize.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 
-void kernel_main() {
-    constexpr uint32_t block_ct = get_compile_time_arg_val(0);
-    constexpr uint32_t num_blocks = get_compile_time_arg_val(1);
-    constexpr uint32_t act_rm_cb = 0;
-    constexpr uint32_t act_tile_cb = 1;
-    constexpr uint32_t weights_cb = 2;
-    constexpr uint32_t partial_a_cb = 3;
-    constexpr uint32_t partial_b_cb = 4;
-    constexpr uint32_t output_cb = 5;
-    const uint32_t mt_count = get_arg_val<uint32_t>(0);
-
-    compute_kernel_hw_startup(act_rm_cb, act_tile_cb);
-    DataflowBuffer activation(act_tile_cb);
-    DataflowBuffer weights(weights_cb);
-    DataflowBuffer partial_a(partial_a_cb);
-    DataflowBuffer partial_b(partial_b_cb);
-    DataflowBuffer output(output_cb);
+template <uint32_t block_ct, uint32_t num_blocks>
+TT_KERNEL void compute(uint32_t wi_count) {
+    compute_kernel_hw_startup(dfb::act_rm, dfb::act_tile, dfb::output);
+    DataflowBuffer activation(dfb::act_tile);
+    DataflowBuffer weights(dfb::weights);
+    DataflowBuffer partial_a(dfb::partial_a);
+    DataflowBuffer partial_b(dfb::partial_b);
+    DataflowBuffer output(dfb::output);
     silu_tile_init();
 
     if constexpr (num_blocks == 1) {
         weights.wait_front(4 * block_ct);
     }
-    for (uint32_t item = 0; item < mt_count; ++item) {
+    for (uint32_t item = 0; item < wi_count; ++item) {
         if constexpr (num_blocks > 1) {
             weights.wait_front(4 * block_ct);
         }
         for (uint32_t tap = 0; tap < 4; ++tap) {
-            compute_kernel_lib::tilize<block_ct, act_rm_cb, act_tile_cb>(1);
+            compute_kernel_lib::tilize<block_ct, dfb::act_rm, dfb::act_tile>(1);
             activation.wait_front(block_ct);
 
-            DataflowBuffer source_partial = (tap == 1 || tap == 3) ? partial_a : partial_b;
-            DataflowBuffer destination = tap == 0 || tap == 2 ? partial_a : (tap == 1 ? partial_b : output);
-            const uint32_t source_partial_cb = source_partial.get_id();
-            const uint32_t destination_cb = destination.get_id();
-            if (tap != 0) {
-                source_partial.wait_front(block_ct);
+            const uint32_t source_partial_dfb = (tap == 1 || tap == 3) ? dfb::partial_a : dfb::partial_b;
+            const uint32_t destination_dfb =
+                (tap == 0 || tap == 2) ? dfb::partial_a : (tap == 1 ? dfb::partial_b : dfb::output);
+            if (tap == 1 || tap == 3) {
+                partial_a.wait_front(block_ct);
+            } else if (tap == 2) {
+                partial_b.wait_front(block_ct);
             }
 
             for (uint32_t ct = 0; ct < block_ct; ++ct) {
                 tile_regs_acquire();
-                reconfig_data_format_srca(act_tile_cb);
-                reconfig_data_format_srcb(weights_cb);
-                mul_bcast_rows_init_short(act_tile_cb, weights_cb);
-                mul_tiles_bcast_rows(act_tile_cb, weights_cb, ct, tap * block_ct + ct, 0);
+                reconfig_data_format_srca(dfb::act_tile);
+                reconfig_data_format_srcb(dfb::weights);
+                mul_bcast_rows_init(dfb::act_tile, dfb::weights);
+                mul_tiles_bcast_rows(dfb::act_tile, dfb::weights, ct, tap * block_ct + ct, 0);
 
                 if (tap != 0) {
-                    reconfig_data_format_srca(source_partial_cb);
-                    binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
-                        source_partial_cb);
-                    binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
-                        source_partial_cb, 0, 0);
-                    source_partial.pop_front(1);
-                    reconfig_data_format_srca(act_tile_cb);
+                    reconfig_data_format_srca(source_partial_dfb);
+                    add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(source_partial_dfb);
+                    add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(source_partial_dfb, 0, 0);
+                    if (tap == 1 || tap == 3) {
+                        partial_a.pop_front(1);
+                    } else {
+                        partial_b.pop_front(1);
+                    }
+                    reconfig_data_format_srca(dfb::act_tile);
                 }
                 if (tap == 3) {
                     silu_tile(0);
                 }
                 tile_regs_commit();
 
-                destination.reserve_back(1);
+                if (tap == 0 || tap == 2) {
+                    partial_a.reserve_back(1);
+                } else if (tap == 1) {
+                    partial_b.reserve_back(1);
+                } else {
+                    output.reserve_back(1);
+                }
                 tile_regs_wait();
-                pack_tile(0, destination_cb);
-                destination.push_back(1);
+                pack_tile(0, destination_dfb);
+                if (tap == 0 || tap == 2) {
+                    partial_a.push_back(1);
+                } else if (tap == 1) {
+                    partial_b.push_back(1);
+                } else {
+                    output.push_back(1);
+                }
                 tile_regs_release();
             }
             activation.pop_front(block_ct);
