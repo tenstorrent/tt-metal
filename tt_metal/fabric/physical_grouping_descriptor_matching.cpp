@@ -1086,6 +1086,7 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
                         comps[find(i)].push_back(blocks[i]);
                     }
                     std::vector<std::vector<tt::tt_metal::experimental::tt_fabric::PinningConstraint>> profiles;
+                    profiles.reserve(comps.size());
                     for (auto& [_, v] : comps) {
                         profiles.push_back(std::move(v));
                     }
