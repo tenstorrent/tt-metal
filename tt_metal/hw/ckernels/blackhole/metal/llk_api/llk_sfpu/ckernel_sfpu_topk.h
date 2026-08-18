@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpu/ckernel_sfpu_topk.h"
@@ -14,28 +15,59 @@ using namespace sfpi;
 namespace ckernel {
 namespace sfpu {
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, bool STABLE_SORT = false>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, bool STABLE_SORT = false, bool FUSED = false>
 inline void calculate_bitonic_topk_phases_steps(
-    uint idir, uint i_end_phase, uint i_start_phase, uint i_end_step, uint i_start_step) {
-    _bitonic_topk_phases_steps<APPROXIMATION_MODE, is_fp32_dest_acc_en, STABLE_SORT>(
+    std::uint32_t idir,
+    std::uint32_t i_end_phase,
+    std::uint32_t i_start_phase,
+    std::uint32_t i_end_step,
+    std::uint32_t i_start_step) {
+    _bitonic_topk_phases_steps<APPROXIMATION_MODE, is_fp32_dest_acc_en, STABLE_SORT, FUSED>(
         idir, i_end_phase, i_start_phase, i_end_step, i_start_step);
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, bool idir = false, bool STABLE_SORT = false>
-inline void calculate_bitonic_topk_merge(uint m_iter, uint k) {
-    _bitonic_topk_merge<APPROXIMATION_MODE, is_fp32_dest_acc_en, idir, STABLE_SORT>(m_iter, k);
+template <
+    bool APPROXIMATION_MODE,
+    bool is_fp32_dest_acc_en,
+    bool idir = false,
+    bool STABLE_SORT = false,
+    bool FUSED = false>
+inline void calculate_bitonic_topk_merge(std::uint32_t m_iter, std::uint32_t k) {
+    _bitonic_topk_merge<APPROXIMATION_MODE, is_fp32_dest_acc_en, idir, STABLE_SORT, FUSED>(m_iter, k);
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, bool STABLE_SORT = false>
-inline void calculate_bitonic_topk_rebuild(uint idir, uint m_iter, uint k, uint logk, uint skip_second) {
-    _bitonic_topk_rebuild<APPROXIMATION_MODE, is_fp32_dest_acc_en, STABLE_SORT>(idir, m_iter, k, logk, skip_second);
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, bool STABLE_SORT = false, bool FUSED = false>
+inline void calculate_bitonic_topk_rebuild(
+    std::uint32_t idir, std::uint32_t m_iter, std::uint32_t k, std::uint32_t logk, std::uint32_t skip_second) {
+    _bitonic_topk_rebuild<APPROXIMATION_MODE, is_fp32_dest_acc_en, STABLE_SORT, FUSED>(
+        idir, m_iter, k, logk, skip_second);
 }
 
-template <bool APPROXIMATION_MODE>
+// Fused-key stable topk sweeps (see _topk_fuse_tile_/_topk_defuse_tile_ in the LLK header).
+// largest is the op's GLOBAL sort order; fuse runs once per fresh 2-tile slab, defuse once on the
+// final output tiles.
+template <bool APPROXIMATION_MODE, bool largest>
+inline void calculate_topk_fuse() {
+    _topk_fuse_tile_<largest>();
+}
+
+template <
+    bool APPROXIMATION_MODE,
+    bool largest,
+    std::uint32_t index_store_mode = static_cast<std::uint32_t>(InstrModLoadStore::INT32)>
+inline void calculate_topk_defuse(std::uint32_t num_tiles) {
+    _topk_defuse_tile_<largest, index_store_mode>(num_tiles);
+}
+
+template <bool APPROXIMATION_MODE, bool FUSED = false>
 inline void topk_init() {
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 32}}.set(ADDR_MOD_6);
     math::reset_counters(p_setrwc::SET_ABD_F);
-    _init_topk();
+    if constexpr (FUSED) {
+        _init_topk_fused_();
+    } else {
+        _init_topk();
+    }
 }
 
 }  // namespace sfpu

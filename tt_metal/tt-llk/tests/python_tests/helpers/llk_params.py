@@ -595,6 +595,17 @@ class StableSort(Enum):
         return str(self.value).lower()
 
 
+class FusedSort(Enum):
+    """Fused-key stable topk: [bf16|u16] packed keys sorted by the unstable network."""
+
+    Yes = True
+    No = False
+
+    @property
+    def cpp_enum_value(self):
+        return str(self.value).lower()
+
+
 class Mailboxes(Enum):
     Unpacker = 0x1FFB8
     Math = Unpacker + 4
