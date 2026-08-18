@@ -159,6 +159,12 @@ class PrefillTokenGenerator:
         self.sp_factor = sp_factor
         self.isl_per_chip = isl_per_chip
         self.chunk_order = chunk_order
+        # Trace state: None until enable_trace() captures. _temperature is set per request
+        # because the eagerly-run tail samples outside the trace.
+        self._controller = None
+        self._trace_input = None
+        self._trace_hidden = None
+        self._temperature = 0.0
 
         self.pad_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else 11
         # Gemma4 lesson: seed the stop set from the model's generation_config, not just the
@@ -196,6 +202,90 @@ class PrefillTokenGenerator:
             ),
         )
 
+    def enable_trace(self):
+        """Capture the block stack once so each token is a trace replay instead of 2316 dispatches.
+
+        Measured on this model: 1715 ms/token eager -> 80.1 ms/token traced, a 21x speedup, with the
+        traced path sampling the identical token. The forward is ~95% host-bound (80 ms of device
+        kernel time under a 1760 ms wall clock), so removing per-op dispatch is the whole win --
+        80.1 ms is essentially the device kernel time, i.e. we now pay for silicon.
+
+        Capture is done ONCE at startup with ``actual_isl = isl_total`` -- the entire window marked
+        real -- which makes it independent of any request's prompt length, so one capture serves
+        every conversation. That is safe for the same causality reason the whole re-prefill trick is
+        safe: the LM head reads row ``n-1`` and nothing attends past it, so positions after the real
+        tokens cannot influence the logits we read, whether they hold pad or garbage. The tail
+        (norm/LM-head/sample) stays eager -- it ends in a blocking D2H that cannot be traced -- which
+        is also what lets each step select the CORRECT row ``n-1`` while the captured block stack
+        stays invariant.
+        """
+        from models.demos.deepseek_v3_d_p.utils.sub_device_trace import SubDeviceTraceController
+
+        window = torch.full((1, self.isl_total), self.pad_id, dtype=torch.int64)
+        self._trace_input = self._upload(window)
+
+        # Warm-compile before capturing: a capture records dispatch, not compilation.
+        self.transformer(
+            self._trace_input, self.kvpe_cache, actual_isl=self.isl_total, return_intermediates=False,
+            read_profiler=False, temperature=0.0, index_kv_cache=self.index_kv_cache, stop_after_blocks=True,
+        )
+        ttnn.synchronize_device(self.mesh_device)
+
+        self._controller = SubDeviceTraceController(self.mesh_device)
+        self.transformer.set_trace_controller(self._controller)
+        self._controller.begin_capture()
+        self._trace_hidden = self.transformer(
+            self._trace_input, self.kvpe_cache, actual_isl=self.isl_total, return_intermediates=False,
+            read_profiler=False, temperature=0.0, index_kv_cache=self.index_kv_cache, stop_after_blocks=True,
+        )
+        self._controller.end_capture()
+        logger.success(
+            f"serve: trace captured ({self._controller.num_segments} segments) — "
+            f"expect ~20x faster tokens than the eager path"
+        )
+
+    def release_trace(self):
+        """Release traces + MoE sub-device managers. Leaving either registered segfaults
+        close_mesh_device at teardown, so this must run even on a failed startup."""
+        if self._controller is not None:
+            try:
+                self._controller.release()
+            finally:
+                self._controller = None
+                self.transformer.set_trace_controller(None)
+                self.transformer.release_sub_device_managers()
+
+    def _forward_token(self, window: torch.Tensor, n: int) -> int:
+        """One token: traced replay when captured, otherwise the plain eager forward."""
+        if self._controller is None:
+            tt_tokens = self._upload(window)
+            token_id, _prob, _ = self.transformer(
+                tt_tokens, self.kvpe_cache, actual_isl=n, return_intermediates=False,
+                read_profiler=False, temperature=self._temperature, index_kv_cache=self.index_kv_cache,
+            )
+            ttnn.synchronize_device(self.mesh_device)
+            ttnn.deallocate(tt_tokens)
+            return int(token_id)
+
+        # Traced: write this step's tokens into the tensor the capture recorded -- a fresh
+        # from_torch would land elsewhere and the replay would keep reading the old address.
+        host = ttnn.from_torch(
+            window.reshape(self.sp_factor, 1, self.isl_per_chip),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=(0, None)
+            ),
+        )
+        ttnn.copy_host_to_device_tensor(host, self._trace_input)
+        self._controller.replay()
+        # Tail runs eagerly on the replay's output, which stays at its captured address. `n` -- the
+        # true token count -- selects the row here, so a single capture serves every step.
+        h = self.transformer.norm(self._trace_hidden)
+        _logits, first_token_logits = self.transformer._lm_head_and_extract(h, n)
+        token_id, _prob, _sweep = self.transformer._sample(first_token_logits, n, self._temperature)
+        return int(token_id)
+
     def generate(self, prompt_ids: list[int], max_tokens: int, temperature: float):
         """Yield (token_id, text_piece, seconds_for_this_token) until stop/limit/window-full."""
         n = len(prompt_ids)
@@ -213,18 +303,8 @@ class PrefillTokenGenerator:
                 logger.warning(f"serve: hit the {self.isl_total}-token window, stopping generation")
                 break
             t0 = time.time()
-            tt_tokens = self._upload(window)
-            token_id, _prob, _ = self.transformer(
-                tt_tokens,
-                self.kvpe_cache,
-                actual_isl=n,
-                return_intermediates=False,
-                read_profiler=False,
-                temperature=temperature,
-                index_kv_cache=self.index_kv_cache,
-            )
-            ttnn.synchronize_device(self.mesh_device)
-            ttnn.deallocate(tt_tokens)
+            self._temperature = temperature
+            token_id = self._forward_token(window, n)
             dt = time.time() - t0
             # Log EVERY token's latency, not just the request average. The first token of the first
             # request in a process pays program compilation and can be seconds slower than the rest,
@@ -432,12 +512,31 @@ def serve_hook(**ctx: Any) -> None:
     import uvicorn
 
     gen = PrefillTokenGenerator(**ctx)
+
+    # Capture the trace once at startup: ~21x faster tokens (1715 ms -> 80 ms measured), same
+    # sampled token. Falls back to the eager path rather than failing the demo, since eager is
+    # merely slow while no server at all is useless.
+    if os.environ.get("PREFILL_SERVE_TRACE", "1") not in ("0", "false", "no"):
+        try:
+            gen.enable_trace()
+        except Exception as e:
+            logger.exception(f"serve: trace capture failed ({e}); falling back to the eager path")
+            gen.release_trace()
+    else:
+        logger.warning("serve: PREFILL_SERVE_TRACE disabled — using the ~21x slower eager path")
+
     app = _build_app(gen)
     logger.success(
         f"Mistral Small 4 prefill-only chat server on :{PORT} | window={gen.isl_total} tokens "
         f"| mesh={tuple(gen.mesh_device.shape)} | re-prefills the whole window per token"
     )
-    uvicorn.run(app, host="0.0.0.0", port=PORT, log_level="info")
+    try:
+        uvicorn.run(app, host="0.0.0.0", port=PORT, log_level="info")
+    finally:
+        # Ctrl-C lands here. Releasing before the mesh_device fixture tears down avoids the
+        # close_mesh_device segfault that registered sub-device managers cause.
+        gen.release_trace()
+        logger.info("serve: trace + sub-device managers released")
 
 
 # --- pytest entry: reuses the bring-up's fixtures so the served model == the tested model ---

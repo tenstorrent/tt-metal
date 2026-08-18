@@ -415,8 +415,52 @@ shuts down):
 "What is the capital of France?" -> "Paris."          (streamed token-by-token, stopped on eos id 2)
 ```
 
-Ready in ~60 s from the warm TTNN cache. **At window 512: ~1.05 s/token, TTFT 979 ms** (17-token
-reply, `"tell me a joke"` → *"Why don't skeletons fight each other? They don't have the guts."*).
+**~8 tok/s (0.13 s/token), after the trace fix below.** Ready in ~96 s from the warm TTNN cache
+(~60 s of that is the model, the rest is capturing the trace once). Before tracing it was ~1.05
+s/token; the answers are identical either way.
+
+### Why it was slow, and why it is not any more
+
+Profiling said the forward was **~95% host-bound**, which was not what anyone assumed:
+
+```
+device kernel time     80.5 ms   (per device; mesh range 52-112, mean 73)
+wall clock           1760    ms
+=> host share        ~95%, spread over 2316 op dispatches at ~0.55 ms each
+```
+
+The 32 chips were idle ~95% of the wall clock while Python dispatched ops one at a time. Worse,
+**1051 of those 2316 calls (45%) account for 5.9 ms of device time but ~578 ms of host time** —
+`Slice` alone is 216 calls costing 0.2 ms on device and ~119 ms to launch, a **565x** ratio. A
+prefill that "does too much arithmetic" was never the problem.
+
+One bug blocked the fix. `get_rope_tensors()` recomputed cos/sin on host and uploaded three tensors
+**every forward**, though its only argument (`self.seq_len`) is fixed for the life of the object. That
+is wasted host work, and it is fatal to tracing — a host→device write inside a capture raises
+`TT_FATAL: Writes are not supported during trace capture`. The chunked path already prebuilds its
+tables once (`self.indexed_rope`); the single-shot path now does too. **Eagerly this bug is invisible,
+just slow; it only announces itself when you try to trace.**
+
+With that fixed, capturing the block stack gives **1715 ms → 80.1 ms per token, 21.4x, same sampled
+token**. That 80.1 ms against 80.5 ms of measured device kernel time is the tell: dispatch overhead is
+gone and what is left is silicon. In the server it lands at ~0.13 s/token — the extra ~50 ms is the
+SSE/HTTP layer and the eagerly-run tail, which only became visible once the big cost went away.
+
+Three things make the capture work, all worth knowing before touching it:
+
+- `SubDeviceTraceController` splits the capture at the MoE's sub-device swaps (**73 segments**). A
+  single naive capture cannot survive them.
+- `actual_isl` is held **constant** so the op sequence and the MoE's memoized padding config stay
+  invariant. Safe by causality: the LM head reads row `n-1` and nothing attends past it, so marking
+  not-yet-generated positions "real" cannot change those logits. The server captures once at startup
+  with `actual_isl = isl_total`, which makes the capture independent of prompt length.
+- The tail (norm/LM-head/sample) ends in a blocking D2H and is excluded via `stop_after_blocks`, run
+  eagerly instead. That is ~36 of 2316 ops, and it is also what lets each step pick the correct row
+  `n-1` while the captured stack stays fixed.
+
+**Release traces and MoE sub-device managers in a `finally`.** Leaving either registered segfaults
+`close_mesh_device` in teardown, and one failed capture stranded the 32-chip galaxy for ~3 hours
+before anyone noticed. Run these harnesses under `timeout`.
 
 The very first run of a *new* serve configuration is much slower — 90.8 s for 6 tokens — because it
 compiles programs. That cost does **not** recur: tt-metal caches JIT artifacts on disk, so later
