@@ -79,7 +79,8 @@ struct TopologyMappingInputs {
  * 2. Builds logical multi-mesh graph from MGD (via MeshGraph)
  * 3. Configures topology mapping (validation modes, MGD + galaxy-corner pinnings, mesh-rank bindings)
  *
- * The result feeds both run_topology_mapping (single solution) and run_topology_mapping_n (all solutions).
+ * The result feeds both run_topology_mapping (single solution) and the streaming MultiMeshSolutionEnumerator
+ * (all solutions, --all-solutions).
  */
 TopologyMappingInputs build_topology_mapping_inputs(
     const PhysicalSystemDescriptor& psd,
@@ -205,29 +206,6 @@ TopologyMappingResult run_topology_mapping(
 // whose meshes are smaller than a host (e.g. 8-chip blitz meshes on 128-chip galaxies), two shape-distinct
 // solutions can still occupy the same set of hosts. Host-set dedup (--distinct-host-sets) is applied later,
 // in main(), on the resolved hostnames — see the write loop.
-std::vector<TopologyMappingResult> run_topology_mapping_n(
-    const PhysicalSystemDescriptor& psd,
-    const PhysicalGroupingDescriptor& pgd,
-    const MeshGraphDescriptor& mgd,
-    const std::filesystem::path& mgd_path,
-    std::size_t max_solutions,
-    bool unique_shapes) {
-    auto inputs = build_topology_mapping_inputs(psd, pgd, mgd, mgd_path);
-    log_info(
-        tt::LogFabric,
-        "Enumerating topology mapping solutions (max_solutions={}, unique_shapes={})...",
-        max_solutions,
-        unique_shapes);
-    return map_multi_mesh_to_physical_n(
-        inputs.logical_graph,
-        inputs.physical_graph,
-        inputs.config,
-        max_solutions,
-        unique_shapes,
-        inputs.asic_id_to_mesh_rank,
-        inputs.fabric_node_id_to_mesh_rank);
-}
-
 /**
  * @brief Extract rank bindings from topology mapping result with topology-aware splitting.
  *
