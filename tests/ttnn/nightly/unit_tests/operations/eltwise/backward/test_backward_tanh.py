@@ -30,6 +30,54 @@ def test_bw_tanh(input_shapes, device):
     assert status
 
 
+def test_bw_tanh_preallocated_output_buffer_type_not_cached(device):
+    """The preallocated input_grad's buffer type must take part in the program-cache key.
+
+    The writer kernel bakes the output buffer's TensorAccessorArgs -- IsDram included -- into its
+    compile-time args, and the host wrapper takes output_memory_config from the input tensor, so
+    nothing in operation_attributes distinguishes a DRAM output from an L1 one. validate only
+    compares memory_layout (INTERLEAVED both ways), so an L1 input_grad is accepted. When the two
+    calls collided, the second ran a DRAM accessor against an L1 address and the L1 tensor kept
+    stale data.
+    """
+    device.enable_program_cache()
+    device.clear_program_cache()
+
+    torch.manual_seed(0)
+    shape = torch.Size([1, 1, 32, 32])
+
+    in_data, input_tensor = data_gen_with_range(shape, -1.45, 1.45, device, True)
+    grad_data, grad_tensor = data_gen_with_range(shape, -1e4, 1e4, device)
+
+    golden_function = ttnn.get_golden_function(ttnn.tanh_bw)
+    golden_tensor = golden_function(grad_data, in_data)
+
+    # Call 1: no preallocated output -> created interleaved DRAM, writer compiled for DRAM.
+    dram_result = ttnn.tanh_bw(grad_tensor, input_tensor)
+    entries_after_dram = device.num_program_cache_entries()
+
+    # Call 2: identical inputs, preallocated output in L1. Same operation_attributes, so this must
+    # miss the cache on the buffer type alone.
+    l1_input_grad = ttnn.from_torch(
+        torch.zeros(shape, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    ttnn.tanh_bw(grad_tensor, input_tensor, input_grad=l1_input_grad)
+
+    assert device.num_program_cache_entries() > entries_after_dram, (
+        "L1 preallocated output reused the DRAM program: the output buffer type is missing from "
+        "the program-cache key"
+    )
+
+    assert compare_pcc(dram_result, golden_tensor, 0.95)
+    assert compare_pcc([l1_input_grad], golden_tensor, 0.95)
+
+    device.disable_and_clear_program_cache()
+
+
 @pytest.mark.parametrize(
     "input_shapes",
     (
