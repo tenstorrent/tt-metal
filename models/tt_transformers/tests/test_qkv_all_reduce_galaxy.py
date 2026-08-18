@@ -10,7 +10,7 @@ from models.tt_transformers.tt.ccl import TT_CCL, tt_all_reduce
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 MESH_SHAPE = (8, 4)
-LOCAL_SHAPE = (1, 1, 32, 384)
+GLOBAL_SHAPE = (1, 1, 32, 3072)
 
 
 @pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
@@ -21,18 +21,20 @@ LOCAL_SHAPE = (1, 1, 32, 384)
 )
 def test_llama32_1b_decode_qkv_all_reduce_bh_galaxy(mesh_device):
     torch.manual_seed(0)
-    host_input = torch.randn(*MESH_SHAPE, *LOCAL_SHAPE[-2:], dtype=torch.bfloat16)
+    host_input = torch.randn(*GLOBAL_SHAPE, dtype=torch.bfloat16)
     device_input = ttnn.from_torch(
         host_input,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.bfloat8_b,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=MESH_SHAPE),
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(3, None), mesh_shape=MESH_SHAPE),
     )
 
     tt_ccl = TT_CCL(mesh_device)
     assert tt_ccl.get_num_links(cluster_axis=1) == 2
+    tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=1)
+    tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=1)
     output_memory_config = ttnn.create_sharded_memory_config(
         shape=(128, 32),
         core_grid=ttnn.CoreGrid(x=6, y=2),
@@ -57,9 +59,9 @@ def test_llama32_1b_decode_qkv_all_reduce_bh_galaxy(mesh_device):
 
     host_output = ttnn.to_torch(
         device_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, 1), mesh_shape=MESH_SHAPE),
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(3, 0), mesh_shape=MESH_SHAPE),
     )
-    expected = host_input.float().sum(dim=1, keepdim=True).expand(*MESH_SHAPE, *LOCAL_SHAPE[-2:])
+    expected = (host_input.float() * MESH_SHAPE[1]).repeat(MESH_SHAPE[1], 1, 1, 1)
     assert_with_pcc(expected, host_output.float(), pcc=0.999)
 
     device_output.deallocate(True)
