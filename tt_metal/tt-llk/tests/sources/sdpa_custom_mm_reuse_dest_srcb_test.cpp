@@ -26,10 +26,9 @@
 //   that channel (matches the demo default; mirrors sdpa_custom_mm_test.cpp's "MATH never WAITS on SFPU" reasoning,
 //   here inverted: MATH waits, UNPACK fakes the post). See harness_needs in the comparison verdict.
 //
-// Blackhole-only. Deliverable here is compile-green (compile-producer). On-device numerical verification is pending
-// Blackhole hardware/CI; this host is Wormhole. The MatmulGolden below validates standard LoFi matmul numerics and,
-// like the custom_mm / sdpa_custom_mm analog tests, does not model the primitive's exact partial-tile DEST layout;
-// exact numerical agreement is validated only when run on Blackhole hardware.
+// Blackhole-only. The golden is verified on Blackhole silicon (p100a), not compile-green only. The paired test takes
+// the standard LoFi matmul numerics from custom_mm_utils.matmul_lofi_golden and repacks them into this primitive's
+// partial-tile DEST layout (sdpa_dest_tile_golden) before comparing.
 
 #include <algorithm>
 #include <cstdint>

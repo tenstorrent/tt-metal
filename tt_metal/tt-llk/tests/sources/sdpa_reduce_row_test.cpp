@@ -32,8 +32,7 @@
 // PACK thread with its own MATH/SFPU init, fed a Float16_b 8x32 (single-face) input tile seeded into DEST by an A2D
 // datacopy on the MATH thread.
 //
-// Blackhole-only. Deliverable here is compile-green (compile-producer). On-device numerical verification is pending
-// Blackhole hardware/CI; this host is Wormhole.
+// Blackhole-only. The golden is verified on Blackhole silicon (p100a), not compile-green only.
 
 #include <cstdint>
 
@@ -49,9 +48,9 @@ std::uint32_t math_sync_tile_dst_index = 0;
 // Single 8x32 "tiny" tile = one 16x16 face's worth of lanes (num_faces == 1 for the SFPU reduce span). The row source
 // lives in DEST[SRC_INDEX]; the per-row max is written back to DEST[DST_INDEX]. Reuse-in-place: SRC and DST are the
 // same tile. block_width == 1 => a single tile is reduced (no cross-tile accumulation), the minimal instantiation.
-static constexpr std::uint32_t SRC_INDEX    = 0;
-static constexpr std::uint32_t DST_INDEX    = 0;
-static constexpr std::uint32_t BLOCK_WIDTH  = 1;
+static constexpr std::uint32_t SRC_INDEX   = 0;
+static constexpr std::uint32_t DST_INDEX   = 0;
+static constexpr std::uint32_t BLOCK_WIDTH = 1;
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -119,14 +118,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #endif
 
-#include "llk_math_eltwise_unary_sfpu.h"
-
 #ifdef LLK_TRISC_PACK
 
+// ckernel_sfpu_load_config.h must precede the primitive header: _init_sdpa_reduce_row_8x32_ is a template that calls
+// _init_sfpu_config_reg() with no dependent arguments, so -Wtemplate-body wants the declaration visible at the point
+// the template is parsed. Sorts ahead of the primitive anyway, so clang-format keeps this valid.
+#include "ckernel_sfpu_load_config.h" // _init_sfpu_config_reg
 // PRIMITIVE symbol under test (NOT the forked llk_math_sdpa_reduce_row.h wrapper / compute_kernel_api sdpa.h entry).
 // On promotion, repoint the -I in test_config.py so this resolves to the canonical header and this line is unchanged.
 #include "ckernel_sfpu_sdpa_reduce_row.h"
 #include "llk_lib_pack_wrappers.h"
+#include "llk_math_eltwise_unary_sfpu.h" // _llk_math_eltwise_unary_sfpu_init_ / _llk_math_eltwise_sfpu_start_ / _done_
 #include "llk_pack_common.h"
 #include "params.h"
 
