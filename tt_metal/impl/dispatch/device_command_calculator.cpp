@@ -12,13 +12,6 @@
 
 namespace tt::tt_metal {
 
-DeviceCommandCalculator::DeviceCommandCalculator() {
-    // TODO(N2c/C3): remove once all callers pass a MetalContext.
-    const auto& hal = MetalContext::instance().hal();
-    this->pcie_alignment = hal.get_alignment(HalMemType::HOST);
-    this->l1_alignment = hal.get_alignment(HalMemType::L1);
-}
-
 DeviceCommandCalculator::DeviceCommandCalculator(MetalContext& ctx) {
     this->pcie_alignment = ctx.hal().get_alignment(HalMemType::HOST);
     this->l1_alignment = ctx.hal().get_alignment(HalMemType::L1);
