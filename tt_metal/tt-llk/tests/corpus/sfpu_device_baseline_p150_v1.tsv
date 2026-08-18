@@ -47,7 +47,9 @@
 #   9. ac81ede3827d… — the pin-cycle-5 wave-7 union build (sfpi-gcc 69a885b9f67: AT
 #      where-prefix-elision WP11, AX MOP outward-ownership refusal, AS capture-rotation).
 #      Its nightly 20260819 measured pin-9 cells; RED only on the new lb gate.
-#  10. 2911f0e680e4… (CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256) — the pin-cycle-6
+#  10. 2911f0e680e4… — the pin-cycle-6 union; nightly 20260819b measured its cells,
+#      confirming 20260819c GREEN 80/80.
+#  11. 87688520648a… (CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256) — the pin-cycle-7
 #      overnight five-lane union (sfpi-gcc f433762fe5b: BD raw-boundary decode, BG
 #      ccmask/lreg-rename + exp restructure, BC prgm-const scan fix/TTREGION retirement,
 #      BF transp-involution/exec-while-record, BH WP12 mul_int formation).  Expected
