@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <optional>
+
 #include <tt-metalium/program_descriptors.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
@@ -30,6 +32,7 @@ struct RepeatCodegenParams {
 
 struct RepeatCodegenInputs {
     Tensor input;
+    std::optional<Tensor> optional_output_tensor;
 };
 
 struct RepeatCodegenProgramFactory {
