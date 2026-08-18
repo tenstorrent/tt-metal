@@ -1,104 +1,94 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 //
-// Phase B (scan) writer, value-parallel. This core produced ONE V-block (vb) of head h:
-// columns [vb*Vt, vb*Vt+Vt) of the full V dimension. It writes that slice back into the full
-// tensors o [BH, NC, C, V] and final_state [BH, K, V] using DRAM row stride Vt_full.
+// Phase B (scan) writer, value-parallel. This core produced ONE V-block of one head and writes that slice back into
+// the full output tensors using their full-V row stride.
+
+#include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
-constexpr uint32_t cb_out = 16, cb_final = 27;
-
-void kernel_main() {
-    constexpr uint32_t Ct = get_compile_time_arg_val(0);
-    constexpr uint32_t Kt = get_compile_time_arg_val(1);
-    constexpr uint32_t Vt = get_compile_time_arg_val(2);  // per-core V-block width (tiles)
-    constexpr uint32_t has_s0 = get_compile_time_arg_val(3);
-    constexpr uint32_t Vt_full = get_compile_time_arg_val(4);  // full V (tiles) for row stride
-    constexpr bool summary_pair = get_compile_time_arg_val(6) == 1;
-    (void)has_s0;
-
-    constexpr auto o_a = TensorAccessorArgs<7>();
-    constexpr auto fs_a = TensorAccessorArgs<o_a.next_compile_time_args_offset()>();
-
-    const uint32_t h = get_arg_val<uint32_t>(0);
-    const uint32_t vb = get_arg_val<uint32_t>(1);
-    const uint32_t NC = get_arg_val<uint32_t>(2);
-    const uint32_t o_addr = get_arg_val<uint32_t>(3);
-    const uint32_t fs_addr = get_arg_val<uint32_t>(4);
-
-    // Mixed precision: o is bf16 (cb_out), the final state is fp32 (cb_final). Each write MUST use
-    // its own tile size, else the fp32 state written at the bf16 stride is garbage (and vice versa).
-    const uint32_t tb_o = get_tile_size(cb_out);
-    const uint32_t tb_fs = get_tile_size(cb_final);
-    const auto o_acc = TensorAccessor(o_a, o_addr, tb_o);
-    const auto fs_acc = TensorAccessor(fs_a, fs_addr, tb_fs);
-
-    constexpr uint32_t cv = Ct * Vt;  // per-core [C, Vt] output slab
-    constexpr uint32_t kv = Kt * Vt;  // per-core [K, Vt] final-state slab
-
+template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t Vt_full>
+TT_KERNEL void writer(uint32_t head, uint32_t value_block, uint32_t num_chunks) {
+    const auto output_accessor = TensorAccessor(tensor::output);
+    const auto final_state_accessor = TensorAccessor(tensor::final_state);
+    DataflowBuffer output(dfb::output);
+    DataflowBuffer final_state(dfb::final_state);
     Noc noc;
-    CircularBuffer cbout(cb_out);
 
-    if constexpr (summary_pair) {
-        // The summary scan emits semantic A in cb_out and B in cb_final,
-        // each [K, V]. Unlike the normal token path, there are no NC output slabs.
-        cbout.wait_front(kv);
-        const uint32_t row_base = h * Kt * Vt_full;
-        auto src = use<CircularBuffer::AddrSelector::READ_PTR>(cbout);
-        for (uint32_t r = 0; r < Kt; r++) {
-            const uint32_t dst = row_base + r * Vt_full + vb * Vt;
-            for (uint32_t vt = 0; vt < Vt; vt++) {
-                noc.async_write(src, o_acc, tb_o, {.offset_bytes = (r * Vt + vt) * tb_o}, {.page_id = dst + vt});
-            }
-        }
-        noc.async_write_barrier();
-        cbout.pop_front(kv);
+    constexpr uint32_t cv = Ct * Vt;
+    constexpr uint32_t kv = Kt * Vt;
+    const uint32_t output_entry_size = output.get_entry_size();
+    const uint32_t final_state_entry_size = final_state.get_entry_size();
 
-        CircularBuffer cbfs(cb_final);
-        cbfs.wait_front(kv);
-        auto final_src = use<CircularBuffer::AddrSelector::READ_PTR>(cbfs);
-        for (uint32_t r = 0; r < Kt; r++) {
-            const uint32_t dst = row_base + r * Vt_full + vb * Vt;
-            for (uint32_t vt = 0; vt < Vt; vt++) {
-                noc.async_write(
-                    final_src, fs_acc, tb_fs, {.offset_bytes = (r * Vt + vt) * tb_fs}, {.page_id = dst + vt});
-            }
-        }
-        noc.async_write_barrier();
-        cbfs.pop_front(kv);
-        return;
-    }
-
-    // o [BH, NC, C, V]: scatter this V-block back — row stride Vt_full, column offset vb*Vt.
-    for (uint32_t c = 0; c < NC; c++) {
-        cbout.wait_front(cv);
-        const uint32_t row_base = (h * NC + c) * Ct * Vt_full;
-        auto src = use<CircularBuffer::AddrSelector::READ_PTR>(cbout);
-        for (uint32_t r = 0; r < Ct; r++) {
-            const uint32_t dst = row_base + r * Vt_full + vb * Vt;
-            for (uint32_t vt = 0; vt < Vt; vt++) {
-                noc.async_write(src, o_acc, tb_o, {.offset_bytes = (r * Vt + vt) * tb_o}, {.page_id = dst + vt});
-            }
-        }
-        noc.async_write_barrier();
-        cbout.pop_front(cv);
-    }
-
-    // final_state [BH, K, V]: same V-block slicing (row stride Vt_full over K rows).
-    CircularBuffer cbfs(cb_final);
-    cbfs.wait_front(kv);
-    const uint32_t row_base = h * Kt * Vt_full;
-    auto src = use<CircularBuffer::AddrSelector::READ_PTR>(cbfs);
-    for (uint32_t r = 0; r < Kt; r++) {
-        const uint32_t dst = row_base + r * Vt_full + vb * Vt;
-        for (uint32_t vt = 0; vt < Vt; vt++) {
-            noc.async_write(src, fs_acc, tb_fs, {.offset_bytes = (r * Vt + vt) * tb_fs}, {.page_id = dst + vt});
+#if SUMMARY_PAIR
+    output.wait_front(kv);
+    const uint32_t row_base = head * Kt * Vt_full;
+    for (uint32_t row = 0; row < Kt; row++) {
+        const uint32_t destination = row_base + row * Vt_full + value_block * Vt;
+        for (uint32_t value_tile = 0; value_tile < Vt; value_tile++) {
+            noc.async_write(
+                output,
+                output_accessor,
+                output_entry_size,
+                {.offset_bytes = (row * Vt + value_tile) * output_entry_size},
+                {.page_id = destination + value_tile});
         }
     }
     noc.async_write_barrier();
-    cbfs.pop_front(kv);
+    output.pop_front(kv);
+
+    final_state.wait_front(kv);
+    for (uint32_t row = 0; row < Kt; row++) {
+        const uint32_t destination = row_base + row * Vt_full + value_block * Vt;
+        for (uint32_t value_tile = 0; value_tile < Vt; value_tile++) {
+            noc.async_write(
+                final_state,
+                final_state_accessor,
+                final_state_entry_size,
+                {.offset_bytes = (row * Vt + value_tile) * final_state_entry_size},
+                {.page_id = destination + value_tile});
+        }
+    }
+    noc.async_write_barrier();
+    final_state.pop_front(kv);
+#else
+    for (uint32_t chunk = 0; chunk < num_chunks; chunk++) {
+        output.wait_front(cv);
+        const uint32_t row_base = (head * num_chunks + chunk) * Ct * Vt_full;
+        for (uint32_t row = 0; row < Ct; row++) {
+            const uint32_t destination = row_base + row * Vt_full + value_block * Vt;
+            for (uint32_t value_tile = 0; value_tile < Vt; value_tile++) {
+                noc.async_write(
+                    output,
+                    output_accessor,
+                    output_entry_size,
+                    {.offset_bytes = (row * Vt + value_tile) * output_entry_size},
+                    {.page_id = destination + value_tile});
+            }
+        }
+        noc.async_write_barrier();
+        output.pop_front(cv);
+    }
+
+    final_state.wait_front(kv);
+    const uint32_t row_base = head * Kt * Vt_full;
+    for (uint32_t row = 0; row < Kt; row++) {
+        const uint32_t destination = row_base + row * Vt_full + value_block * Vt;
+        for (uint32_t value_tile = 0; value_tile < Vt; value_tile++) {
+            noc.async_write(
+                final_state,
+                final_state_accessor,
+                final_state_entry_size,
+                {.offset_bytes = (row * Vt + value_tile) * final_state_entry_size},
+                {.page_id = destination + value_tile});
+        }
+    }
+    noc.async_write_barrier();
+    final_state.pop_front(kv);
+#endif
 }

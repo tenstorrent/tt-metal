@@ -2,234 +2,282 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Phase B (scan) compute kernel: the sequential-over-chunk recurrence for one head.
-// Consumes the state-independent per-chunk quantities produced by the prep phase
-// (u, w, q_decay, intra, k_dec_t, dl) and carries the recurrent state S [K,V] on-core.
-//
-// Per chunk (Ct=C/32, Kt=K/32, Vt=V/32):
-//   v_prime = w @ S ; v_new = u - v_prime
-//   o       = q_decay @ S + intra @ v_new
-//   s_upd   = k_dec_t @ v_new
-//   S       = S * dl + s_upd        (dl = exp(g_sum), scalar in dl tile [0,0])
-// No matrix inverse here — that (the expensive part) lives entirely in the prep phase.
 
 #include <cstdint>
-#include "api/compute/common.h"
-#include "api/compute/matmul.h"
-#include "api/compute/eltwise_binary.h"
+
 #include "api/compute/bcast.h"
-#include "api/compute/tile_move_copy.h"
+#include "api/compute/common.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/matmul.h"
 #include "api/compute/reconfig_data_format.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 namespace {
 
-constexpr uint32_t cb_dl = 11, cb_Tinv = 13;
-constexpr uint32_t cb_S = 8, cb_out = 16;
-constexpr uint32_t cb_vbeta = 17, cb_kd = 18, cb_qdecay = 19, cb_intra = 20;
-constexpr uint32_t cb_s2 = 21, cb_vnew = 22, cb_ointer = 23, cb_kdec_t = 24;
-constexpr uint32_t cb_supd = 25, cb_stmp = 26, cb_final = 27;
-constexpr uint32_t cb_scr1 = 28, cb_summary_raw = 29, cb_s3 = 31;
-constexpr uint32_t cb_summary_S = cb_qdecay, cb_summary_s2 = cb_intra, cb_summary_s3 = cb_ointer;
-
-inline void WAIT(uint32_t cb, uint32_t n) { CircularBuffer(cb).wait_front(n); }
-inline void POP(uint32_t cb, uint32_t n) { CircularBuffer(cb).pop_front(n); }
-
-// out[Mt,Nt] = A[Mt,Kt] @ (tr ? B[Nt,Kt]^T : B[Kt,Nt]). Inputs must be available.
-void mm(uint32_t a, uint32_t b, uint32_t o, uint32_t Mt, uint32_t Kt, uint32_t Nt, bool tr) {
-    cb_reserve_back(o, Mt * Nt);
-    pack_reconfig_data_format(o);  // mixed bf16/fp32 CBs: set packer to this output's format
-    // matmul_tiles(a,b): in0=a->srcB, in1=b->srcA. The op init only asserts formats, it does not
-    // set them, so reconfig the unpack src formats explicitly (else CBs read at the wrong format).
-    reconfig_data_format(b, a);
-    matmul_init(a, b, tr ? 1 : 0);
-    for (uint32_t mi = 0; mi < Mt; mi++) {
-        for (uint32_t ni = 0; ni < Nt; ni++) {
+inline __attribute__((always_inline)) void matrix_multiply(
+    uint32_t a_id,
+    uint32_t b_id,
+    uint32_t output_id,
+    DataflowBuffer& output,
+    uint32_t rows,
+    uint32_t inner,
+    uint32_t columns,
+    bool transpose_b) {
+    output.reserve_back(rows * columns);
+    pack_reconfig_data_format(output_id);
+    reconfig_data_format(b_id, a_id);
+    matmul_init(a_id, b_id, transpose_b ? 1 : 0);
+    for (uint32_t row = 0; row < rows; row++) {
+        for (uint32_t column = 0; column < columns; column++) {
             tile_regs_acquire();
-            for (uint32_t ki = 0; ki < Kt; ki++) {
-                uint32_t bi = tr ? (ni * Kt + ki) : (ki * Nt + ni);
-                matmul_tiles(a, b, mi * Kt + ki, bi, 0);
+            for (uint32_t index = 0; index < inner; index++) {
+                const uint32_t b_index = transpose_b ? (column * inner + index) : (index * columns + column);
+                matmul_tiles(a_id, b_id, row * inner + index, b_index, 0);
             }
             tile_regs_commit();
             tile_regs_wait();
-            pack_tile(0, o, mi * Nt + ni);
+            pack_tile(0, output_id, row * columns + column);
             tile_regs_release();
         }
     }
-    cb_push_back(o, Mt * Nt);
+    output.push_back(rows * columns);
 }
 
-// out = A (op) B elementwise, n tiles. op: 0 add, 1 sub, 2 mul.
-void ew(uint32_t a, uint32_t b, uint32_t o, uint32_t n, int op) {
-    cb_reserve_back(o, n);
-    pack_reconfig_data_format(o);
-    reconfig_data_format(a, b);  // binary(a,b): a->srcA, b->srcB
-    if (op == 0) {
-        add_tiles_init(a, b);
-    } else if (op == 1) {
-        sub_tiles_init(a, b);
+inline __attribute__((always_inline)) void elementwise(
+    uint32_t a_id, uint32_t b_id, uint32_t output_id, DataflowBuffer& output, uint32_t count, uint32_t operation) {
+    output.reserve_back(count);
+    pack_reconfig_data_format(output_id);
+    reconfig_data_format(a_id, b_id);
+    if (operation == 0) {
+        add_init(a_id, b_id);
+    } else if (operation == 1) {
+        sub_init(a_id, b_id);
     } else {
-        mul_tiles_init(a, b);
+        mul_init(a_id, b_id);
     }
-    for (uint32_t i = 0; i < n; i++) {
+    for (uint32_t index = 0; index < count; index++) {
         tile_regs_acquire();
-        if (op == 0) {
-            add_tiles(a, b, i, i, 0);
-        } else if (op == 1) {
-            sub_tiles(a, b, i, i, 0);
+        if (operation == 0) {
+            add_tiles(a_id, b_id, index, index, 0);
+        } else if (operation == 1) {
+            sub_tiles(a_id, b_id, index, index, 0);
         } else {
-            mul_tiles(a, b, i, i, 0);
+            mul_tiles(a_id, b_id, index, index, 0);
         }
         tile_regs_commit();
         tile_regs_wait();
-        pack_tile(0, o, i);
+        pack_tile(0, output_id, index);
         tile_regs_release();
     }
-    cb_push_back(o, n);
+    output.push_back(count);
 }
 
-// out[K,V] = A[K,V] * decay[K,1].
-void bcast_decay_mul(uint32_t a, uint32_t decay, uint32_t o, uint32_t Kt, uint32_t Vt) {
-    cb_reserve_back(o, Kt * Vt);
-    pack_reconfig_data_format(o);
-    reconfig_data_format(a, decay);
-    mul_bcast_cols_init_short(a, decay);
-    for (uint32_t ki = 0; ki < Kt; ki++) {
-        for (uint32_t vi = 0; vi < Vt; vi++) {
-            const uint32_t i = ki * Vt + vi;
+inline __attribute__((always_inline)) void multiply_by_decay(
+    uint32_t state_id,
+    uint32_t decay_id,
+    uint32_t output_id,
+    DataflowBuffer& output,
+    uint32_t key_tiles,
+    uint32_t value_tiles) {
+    output.reserve_back(key_tiles * value_tiles);
+    pack_reconfig_data_format(output_id);
+    reconfig_data_format(state_id, decay_id);
+    mul_bcast_cols_init(state_id, decay_id);
+    for (uint32_t key = 0; key < key_tiles; key++) {
+        for (uint32_t value = 0; value < value_tiles; value++) {
+            const uint32_t index = key * value_tiles + value;
             tile_regs_acquire();
-            mul_tiles_bcast_cols(a, decay, i, ki, 0);
+            mul_tiles_bcast_cols(state_id, decay_id, index, key, 0);
             tile_regs_commit();
             tile_regs_wait();
-            pack_tile(0, o, i);
+            pack_tile(0, output_id, index);
             tile_regs_release();
         }
     }
-    cb_push_back(o, Kt * Vt);
+    output.push_back(key_tiles * value_tiles);
 }
 
-void summary_step(uint32_t cur_S, uint32_t dst, uint32_t Ct, uint32_t Kt, uint32_t Vt) {
-    const uint32_t cv = Ct * Vt, kv = Kt * Vt;
-    WAIT(cur_S, kv);
-    mm(cb_kd, cur_S, cb_scr1, Ct, Kt, Vt, false);
-    WAIT(cb_scr1, cv);
-    ew(cb_vbeta, cb_scr1, cb_vnew, cv, 1);
-    WAIT(cb_vnew, cv);
-    POP(cb_scr1, cv);
-    mm(cb_Tinv, cb_vnew, cb_scr1, Ct, Ct, Vt, false);
-    WAIT(cb_scr1, cv);
-    POP(cb_vnew, cv);
-    mm(cb_kdec_t, cb_scr1, cb_supd, Kt, Ct, Vt, false);
-    WAIT(cb_supd, kv);
-    POP(cb_scr1, cv);
-    bcast_decay_mul(cur_S, cb_dl, cb_stmp, Kt, Vt);
-    WAIT(cb_stmp, kv);
-    POP(cur_S, kv);
-    ew(cb_stmp, cb_supd, dst, kv, 0);
-    POP(cb_stmp, kv);
-    POP(cb_supd, kv);
+inline __attribute__((always_inline)) void summary_step(
+    DataflowBuffer& current_state,
+    DataflowBuffer& destination,
+    DataflowBuffer& kd,
+    DataflowBuffer& v_beta,
+    DataflowBuffer& t_inv,
+    DataflowBuffer& k_decay_transposed,
+    DataflowBuffer& final_decay,
+    DataflowBuffer& scratch,
+    DataflowBuffer& value_new,
+    DataflowBuffer& state_update,
+    DataflowBuffer& state_temporary,
+    uint32_t chunk_tiles,
+    uint32_t key_tiles,
+    uint32_t value_tiles) {
+    const uint32_t cv = chunk_tiles * value_tiles;
+    const uint32_t kv = key_tiles * value_tiles;
+    current_state.wait_front(kv);
+    matrix_multiply(dfb::kd, current_state.get_id(), dfb::scratch, scratch, chunk_tiles, key_tiles, value_tiles, false);
+    scratch.wait_front(cv);
+    elementwise(dfb::v_beta, dfb::scratch, dfb::value_new, value_new, cv, 1);
+    value_new.wait_front(cv);
+    scratch.pop_front(cv);
+    matrix_multiply(dfb::t_inv, dfb::value_new, dfb::scratch, scratch, chunk_tiles, chunk_tiles, value_tiles, false);
+    scratch.wait_front(cv);
+    value_new.pop_front(cv);
+    matrix_multiply(
+        dfb::k_decay_transposed,
+        dfb::scratch,
+        dfb::state_update,
+        state_update,
+        key_tiles,
+        chunk_tiles,
+        value_tiles,
+        false);
+    state_update.wait_front(kv);
+    scratch.pop_front(cv);
+    multiply_by_decay(
+        current_state.get_id(), dfb::final_decay, dfb::state_temporary, state_temporary, key_tiles, value_tiles);
+    state_temporary.wait_front(kv);
+    current_state.pop_front(kv);
+    elementwise(dfb::state_temporary, dfb::state_update, destination.get_id(), destination, kv, 0);
+    state_temporary.pop_front(kv);
+    state_update.pop_front(kv);
 }
 
 }  // namespace
 
-void kernel_main() {
-    constexpr uint32_t Ct = get_compile_time_arg_val(0);
-    constexpr uint32_t Kt = get_compile_time_arg_val(1);
-    constexpr uint32_t Vt = get_compile_time_arg_val(2);
-    const uint32_t NC = get_arg_val<uint32_t>(0);
+template <uint32_t Ct, uint32_t Kt, uint32_t Vt>
+TT_KERNEL void compute(uint32_t num_chunks) {
+    DataflowBuffer state(dfb::state);
+    DataflowBuffer t_inv(dfb::t_inv);
+    DataflowBuffer v_beta(dfb::v_beta);
+    DataflowBuffer kd(dfb::kd);
+    DataflowBuffer q_decay(dfb::q_decay);
+    DataflowBuffer intra(dfb::intra);
+    DataflowBuffer state_two(dfb::state_two);
+    DataflowBuffer value_new(dfb::value_new);
+    DataflowBuffer final_decay(dfb::final_decay);
+    DataflowBuffer output(dfb::output);
+    DataflowBuffer output_intermediate(dfb::output_intermediate);
+    DataflowBuffer k_decay_transposed(dfb::k_decay_transposed);
+    DataflowBuffer state_update(dfb::state_update);
+    DataflowBuffer state_temporary(dfb::state_temporary);
+    DataflowBuffer final_state(dfb::final_state);
+    DataflowBuffer scratch(dfb::scratch);
+    DataflowBuffer summary_raw(dfb::summary_raw);
+    DataflowBuffer state_three(dfb::state_three);
 
     constexpr uint32_t cc = Ct * Ct;
     constexpr uint32_t ck = Ct * Kt;
     constexpr uint32_t cv = Ct * Vt;
     constexpr uint32_t kv = Kt * Vt;
     constexpr uint32_t kc = Kt * Ct;
-    constexpr bool summary_pair = get_compile_time_arg_val(6) == 1;
 
-    compute_kernel_hw_startup(cb_kd, cb_vbeta, cb_out);
+    compute_kernel_hw_startup(kd.get_id(), v_beta.get_id(), output.get_id());
 
-    if constexpr (summary_pair) {
-        for (uint32_t c = 0; c < NC; c++) {
-            const uint32_t cur_b = (c == 0) ? cb_S : ((c & 1u) ? cb_s2 : cb_s3);
-            const uint32_t nxt_b = (c & 1u) ? cb_s3 : cb_s2;
-            const uint32_t cur_ab = (c == 0) ? cb_summary_S : ((c & 1u) ? cb_summary_s2 : cb_summary_s3);
-            const uint32_t nxt_ab = (c & 1u) ? cb_summary_s3 : cb_summary_s2;
-            const bool last = c == NC - 1;
+#if SUMMARY_PAIR
+    for (uint32_t chunk = 0; chunk < num_chunks; chunk++) {
+        DataflowBuffer* current_b = chunk == 0 ? &state : ((chunk & 1U) ? &state_two : &state_three);
+        DataflowBuffer* next_b = (chunk & 1U) ? &state_three : &state_two;
+        DataflowBuffer* current_ab = chunk == 0 ? &q_decay : ((chunk & 1U) ? &intra : &output_intermediate);
+        DataflowBuffer* next_ab = (chunk & 1U) ? &output_intermediate : &intra;
+        const bool last = chunk == num_chunks - 1;
 
-            WAIT(cb_kd, ck);
-            WAIT(cb_vbeta, cv);
-            WAIT(cb_Tinv, cc);
-            WAIT(cb_kdec_t, kc);
-            WAIT(cb_dl, Kt);
-            summary_step(cur_b, last ? cb_final : nxt_b, Ct, Kt, Vt);
-            summary_step(cur_ab, last ? cb_summary_raw : nxt_ab, Ct, Kt, Vt);
-            POP(cb_kd, ck);
-            POP(cb_vbeta, cv);
-            POP(cb_Tinv, cc);
-            POP(cb_kdec_t, kc);
-            POP(cb_dl, Kt);
-        }
-        WAIT(cb_summary_raw, kv);
-        WAIT(cb_final, kv);
-        ew(cb_summary_raw, cb_final, cb_out, kv, 1);  // A = F(I) - F(0)
-        POP(cb_summary_raw, kv);
-        return;
+        kd.wait_front(ck);
+        v_beta.wait_front(cv);
+        t_inv.wait_front(cc);
+        k_decay_transposed.wait_front(kc);
+        final_decay.wait_front(Kt);
+        summary_step(
+            *current_b,
+            last ? final_state : *next_b,
+            kd,
+            v_beta,
+            t_inv,
+            k_decay_transposed,
+            final_decay,
+            scratch,
+            value_new,
+            state_update,
+            state_temporary,
+            Ct,
+            Kt,
+            Vt);
+        summary_step(
+            *current_ab,
+            last ? summary_raw : *next_ab,
+            kd,
+            v_beta,
+            t_inv,
+            k_decay_transposed,
+            final_decay,
+            scratch,
+            value_new,
+            state_update,
+            state_temporary,
+            Ct,
+            Kt,
+            Vt);
+        kd.pop_front(ck);
+        v_beta.pop_front(cv);
+        t_inv.pop_front(cc);
+        k_decay_transposed.pop_front(kc);
+        final_decay.pop_front(Kt);
     }
+    summary_raw.wait_front(kv);
+    final_state.wait_front(kv);
+    elementwise(dfb::summary_raw, dfb::final_state, dfb::output, output, kv, 1);
+    summary_raw.pop_front(kv);
+#else
+    for (uint32_t chunk = 0; chunk < num_chunks; chunk++) {
+        DataflowBuffer* current_state = chunk == 0 ? &state : ((chunk & 1U) ? &state_two : &state_three);
+        DataflowBuffer* next_state = (chunk & 1U) ? &state_three : &state_two;
+        DataflowBuffer& destination = chunk == num_chunks - 1 ? final_state : *next_state;
 
-    for (uint32_t c = 0; c < NC; c++) {
-        // State uses THREE single-producer CBs so no CB is produced by both the reader and
-        // compute (that reader->compute producer switch desyncs CB page pointers and deadlocks):
-        //   cb_S      : reader-produced initial state, consumed only by chunk 0.
-        //   cb_s2/cb_s3: compute-only ping-pong for chunk outputs.
-        const uint32_t cur_S = (c == 0) ? cb_S : ((c & 1u) ? cb_s2 : cb_s3);
-        const uint32_t nxt_S = (c & 1u) ? cb_s3 : cb_s2;
-        const bool last = (c == NC - 1);
-        const uint32_t dst = last ? cb_final : nxt_S;
+        kd.wait_front(ck);
+        current_state->wait_front(kv);
+        matrix_multiply(dfb::kd, current_state->get_id(), dfb::scratch, scratch, Ct, Kt, Vt, false);
+        scratch.wait_front(cv);
+        kd.pop_front(ck);
+        v_beta.wait_front(cv);
+        elementwise(dfb::v_beta, dfb::scratch, dfb::output_intermediate, output_intermediate, cv, 1);
+        output_intermediate.wait_front(cv);
+        v_beta.pop_front(cv);
+        scratch.pop_front(cv);
+        t_inv.wait_front(cc);
+        matrix_multiply(dfb::t_inv, dfb::output_intermediate, dfb::value_new, value_new, Ct, Ct, Vt, false);
+        value_new.wait_front(cv);
+        t_inv.pop_front(cc);
+        output_intermediate.pop_front(cv);
 
-        // v_new = T_inv @ (v_beta - kd@S)  -- apply the inverse AFTER the subtraction so the WY
-        // inverse's fp error is not amplified by the cancellation (vs the u - w@S form).
-        WAIT(cb_kd, ck);
-        WAIT(cur_S, kv);
-        mm(cb_kd, cur_S, cb_scr1, Ct, Kt, Vt, false);  // kdS = kd @ S -> scr1
-        WAIT(cb_scr1, cv);
-        POP(cb_kd, ck);
-        WAIT(cb_vbeta, cv);
-        ew(cb_vbeta, cb_scr1, cb_ointer, cv, 1);  // diff = v_beta - kdS -> ointer
-        WAIT(cb_ointer, cv);
-        POP(cb_vbeta, cv);
-        POP(cb_scr1, cv);
-        WAIT(cb_Tinv, cc);
-        mm(cb_Tinv, cb_ointer, cb_vnew, Ct, Ct, Vt, false);  // v_new = T_inv @ diff -> vnew
-        WAIT(cb_vnew, cv);
-        POP(cb_Tinv, cc);
-        POP(cb_ointer, cv);
+        q_decay.wait_front(ck);
+        matrix_multiply(
+            dfb::q_decay, current_state->get_id(), dfb::output_intermediate, output_intermediate, Ct, Kt, Vt, false);
+        output_intermediate.wait_front(cv);
+        q_decay.pop_front(ck);
+        intra.wait_front(cc);
+        matrix_multiply(dfb::intra, dfb::value_new, dfb::scratch, scratch, Ct, Ct, Vt, false);
+        scratch.wait_front(cv);
+        intra.pop_front(cc);
+        elementwise(dfb::output_intermediate, dfb::scratch, dfb::output, output, cv, 0);
+        output_intermediate.pop_front(cv);
+        scratch.pop_front(cv);
 
-        // o = q_decay @ S + intra @ v_new
-        WAIT(cb_qdecay, ck);
-        mm(cb_qdecay, cur_S, cb_ointer, Ct, Kt, Vt, false);  // o_inter = q_decay @ S
-        WAIT(cb_ointer, cv);
-        POP(cb_qdecay, ck);
-        WAIT(cb_intra, cc);
-        mm(cb_intra, cb_vnew, cb_scr1, Ct, Ct, Vt, false);  // intra_v = intra @ v_new
-        WAIT(cb_scr1, cv);
-        POP(cb_intra, cc);
-        ew(cb_ointer, cb_scr1, cb_out, cv, 0);  // o -> cb_out (drained by writer)
-        POP(cb_ointer, cv);
-        POP(cb_scr1, cv);
+        k_decay_transposed.wait_front(kc);
+        matrix_multiply(dfb::k_decay_transposed, dfb::value_new, dfb::state_update, state_update, Kt, Ct, Vt, false);
+        state_update.wait_front(kv);
+        k_decay_transposed.pop_front(kc);
+        value_new.pop_front(cv);
 
-        // s_upd = k_dec_t @ v_new
-        WAIT(cb_kdec_t, kc);
-        mm(cb_kdec_t, cb_vnew, cb_supd, Kt, Ct, Vt, false);
-        WAIT(cb_supd, kv);
-        POP(cb_kdec_t, kc);
-        POP(cb_vnew, cv);
-
-        // S_new = cur_S * dl + s_upd  (dl is a K-vector column)
-        WAIT(cb_dl, Kt);
-        bcast_decay_mul(cur_S, cb_dl, cb_stmp, Kt, Vt);
-        WAIT(cb_stmp, kv);
-        POP(cb_dl, Kt);
-        POP(cur_S, kv);
-        ew(cb_stmp, cb_supd, dst, kv, 0);
-        POP(cb_stmp, kv);
-        POP(cb_supd, kv);
+        final_decay.wait_front(Kt);
+        multiply_by_decay(current_state->get_id(), dfb::final_decay, dfb::state_temporary, state_temporary, Kt, Vt);
+        state_temporary.wait_front(kv);
+        final_decay.pop_front(Kt);
+        current_state->pop_front(kv);
+        elementwise(dfb::state_temporary, dfb::state_update, destination.get_id(), destination, kv, 0);
+        state_temporary.pop_front(kv);
+        state_update.pop_front(kv);
     }
+#endif
 }
