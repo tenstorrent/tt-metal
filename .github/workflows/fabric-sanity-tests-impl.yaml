@@ -29,11 +29,6 @@ on:
         required: false
         type: boolean
         default: false
-      timeout-minutes-override:
-        required: false
-        type: number
-        default: 0
-        description: "When > 0, overrides each test's per-SKU timeout (used for watcher runs)."
       ref:
         required: false
         type: string
@@ -141,37 +136,20 @@ jobs:
         timeout-minutes: 10
 
       - name: ${{ matrix.test-group.name }}
-        timeout-minutes: ${{ inputs.timeout-minutes-override > 0 && inputs.timeout-minutes-override || matrix.test-group.timeout }}
-        env:
-          # Coverage: on WH-LB, wrap the cmd in tt_power_sidecar.py to sample SoC
-          # power for the downstream power dashboard. Other SKUs run the raw cmd.
-          _TEST_CMD: ${{ matrix.test-group.cmd }}
+        timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
-          mkdir -p generated/test_reports
-          if [[ "${{ matrix.test-group.sku }}" == wh_llmbox* ]]; then
-            python3 tools/tt-power-sidecar/tt_power_sidecar.py \
-              --backend sysfs \
-              --out /work/power_report.json \
-              -- bash -c "$_TEST_CMD"
-          else
-            bash -c "$_TEST_CMD"
-          fi
+          mkdir -p generated/test_reports generated/test_logs
+          SAFE_NAME=$(echo "${{ matrix.test-group.name }}" | tr ' /' '__')
+          LOG_FILE="generated/test_logs/${SAFE_NAME}_${{ job.check_run_id }}.log"
+          {
+            ${{ matrix.test-group.cmd }}
+          } 2>&1 | tee "$LOG_FILE"
+          exit "${PIPESTATUS[0]}"
 
       - name: Print tt-smi data on failure
         if: ${{ failure() && startsWith(matrix.test-group.sku, 'bh_') }}
         run: |
           tt-smi -s
-
-      # Coverage: publish the per-leg power_report.json produced by the
-      # tt_power_sidecar wrap for offline power analysis. WH-LB only.
-      - name: Upload power report
-        if: ${{ !cancelled() && startsWith(matrix.test-group.sku, 'wh_llmbox') }}
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
-        with:
-          name: power-report-${{ matrix.test-group.name }}
-          path: ${{ github.workspace }}/docker-job/power_report.json
-          if-no-files-found: warn
-          retention-days: 30
 
       - name: 📊 CCache Report
         if: ${{ !cancelled() && contains(matrix.test-group.sku, 'wh_llmbox') }}

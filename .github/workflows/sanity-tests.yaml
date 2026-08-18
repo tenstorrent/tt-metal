@@ -389,7 +389,6 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
-      timeout-minutes-override: ${{ inputs.enable-watcher && 80 || 0 }}
       ref: ${{ inputs.ref || github.sha }}
 
   # Ops sanity (Wormhole + Blackhole via ops_sanity_tests.yaml)
