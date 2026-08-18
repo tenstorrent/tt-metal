@@ -141,7 +141,7 @@ ttnn::device_operation::ProgramArtifacts RecurrentChunkScanProgramFactory::creat
         make_dfb(STATE_TWO, kv, fp32),
         make_dfb(VALUE_NEW, cv, fp32),
         make_dfb(FINAL_DECAY, Kt, input_format(in.final_decay)),
-        make_dfb(OUTPUT, summary ? kv : cv * 2, output_format),
+        make_dfb(OUTPUT, summary ? kv : cv, output_format),
         make_dfb(OUTPUT_INTERMEDIATE, summary ? kv : cv, fp32),
         make_dfb(K_DECAY_TRANSPOSED, kc, input_format(in.k_dec_t)),
         make_dfb(STATE_UPDATE, kv, fp32),
