@@ -367,6 +367,14 @@ def test_perf_unary_max_min_fresh_cpp(
         MathOperation.Log,
         MathOperation.Sqrt,
         MathOperation.Rsqrt,
+        # Batch 3 (Lane BR).
+        MathOperation.Sigmoid,
+        MathOperation.Cbrt,
+        MathOperation.Softplus,
+        MathOperation.Hardsigmoid,
+        MathOperation.Gelu,
+        MathOperation.Expm1Cw,
+        MathOperation.I1,
     ],
     fresh_cpp_impl=[0, 1],
 )

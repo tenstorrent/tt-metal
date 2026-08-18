@@ -312,6 +312,58 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 SFPU_UNARY_CALL(
                     DST_SYNC, is_fp32_dest_acc_en, calculate_xielu_fresh_cpp, (iterations), block_tile, VectorMode::None, FRESH_XIELU_ALPHA, FRESH_XIELU_ALPHA);
             }
+            else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::sigmoid)
+            {
+                static_assert(
+                    FRESH_CPP_IMPL != 1 || SFPU_UNARY_OPERATION != SfpuType::sigmoid || (!APPROX_MODE && !is_fp32_dest_acc_en),
+                    "fresh sigmoid selector supports only non-approx, bf16 dest");
+                SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_sigmoid_fresh_cpp, (iterations), block_tile, VectorMode::None);
+            }
+            else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::cbrt)
+            {
+                static_assert(
+                    FRESH_CPP_IMPL != 1 || SFPU_UNARY_OPERATION != SfpuType::cbrt || (!APPROX_MODE && !is_fp32_dest_acc_en),
+                    "fresh cbrt selector supports only non-approx, bf16 dest");
+                SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_cbrt_fresh_cpp, (iterations), block_tile, VectorMode::None);
+            }
+            else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::softplus)
+            {
+                static_assert(
+                    FRESH_CPP_IMPL != 1 || SFPU_UNARY_OPERATION != SfpuType::softplus || (!APPROX_MODE && !is_fp32_dest_acc_en),
+                    "fresh softplus selector supports only non-approx, bf16 dest");
+                SFPU_UNARY_CALL(
+                    DST_SYNC,
+                    is_fp32_dest_acc_en,
+                    calculate_softplus_fresh_cpp,
+                    (iterations),
+                    block_tile,
+                    VectorMode::None,
+                    FRESH_SOFTPLUS_BETA,
+                    FRESH_SOFTPLUS_BETA_RECIP,
+                    FRESH_SOFTPLUS_THRESHOLD);
+            }
+            else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::hardsigmoid)
+            {
+                SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_hardsigmoid_fresh_cpp, (iterations), block_tile, VectorMode::None);
+            }
+            else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::gelu)
+            {
+                static_assert(
+                    FRESH_CPP_IMPL != 1 || SFPU_UNARY_OPERATION != SfpuType::gelu || (!APPROX_MODE && !is_fp32_dest_acc_en),
+                    "fresh gelu selector supports only non-approx, bf16 dest");
+                SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_gelu_fresh_cpp, (iterations), block_tile, VectorMode::None);
+            }
+            else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::expm1_cw)
+            {
+                SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_expm1_cw_fresh_cpp, (iterations), block_tile, VectorMode::None);
+            }
+            else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::i1)
+            {
+                static_assert(
+                    FRESH_CPP_IMPL != 1 || SFPU_UNARY_OPERATION != SfpuType::i1 || (!APPROX_MODE && !is_fp32_dest_acc_en),
+                    "fresh i1 selector supports only non-approx, bf16 dest");
+                SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_i1_fresh_cpp, (iterations), block_tile, VectorMode::None);
+            }
             else if constexpr (RECIPROCAL_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::reciprocal)
             {
                 _llk_math_eltwise_unary_sfpu_params_(
