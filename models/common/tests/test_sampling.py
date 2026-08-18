@@ -859,6 +859,51 @@ def test_num_single_device_vocab_splits(padded_vocab_size, expected_splits):
     assert TTSampling.num_single_device_vocab_splits(padded_vocab_size) == expected_splits
 
 
+@pytest.mark.parametrize(
+    "vocab_size",
+    [
+        # Qwen3: 4-way split, chunked untilize in the argmax fast path.
+        pytest.param(151936, id="v151936_chunked_untilize"),
+        # Gemma-2-2B: a single full-row untilize threw a circular-buffer/L1 clash at
+        # program compile; the chunked untilize must keep the fast path working.
+        pytest.param(256000, id="v256000_chunked_untilize_gemma"),
+    ],
+)
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+def test_ttsampling_force_argmax_matches_row_max_on_wide_vocab(vocab_size, mesh_device):
+    """Greedy params through the force-argmax fast path must pick the row maximum."""
+    torch.manual_seed(42)
+    batch_size = 32
+
+    args = _single_device_sampling_args(mesh_device, vocab_size)
+    args.model_config = {"SAMPLING_AG_CONFIG": {"allow_force_argmax": True, "num_links": 1, "topology": None}}
+    sampler = TTSampling(
+        args=args,
+        mesh_device=mesh_device,
+        tt_ccl=None,
+        k=torch.ones(batch_size),
+        p=torch.zeros(batch_size),
+        temp=torch.ones(batch_size),
+    )
+    assert sampler.force_argmax_sampling, "greedy params must take the argmax fast path"
+
+    logits_host = torch.randn(1, 1, batch_size, vocab_size)
+    logits_tt = ttnn.from_torch(logits_host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+    logits_bf16 = ttnn.to_torch(logits_tt).float().reshape(batch_size, vocab_size)
+
+    tokens_tt, _log_probs = sampler(logits_tt)
+    tokens = ttnn.to_torch(tokens_tt).flatten()[:batch_size].long()
+
+    row_max = logits_bf16.max(dim=-1).values
+    for user in range(batch_size):
+        token = int(tokens[user])
+        assert 0 <= token < vocab_size, f"user {user}: token {token} outside [0, {vocab_size})"
+        assert logits_bf16[user, token].item() == row_max[user].item(), (
+            f"user {user}: token {token} has logit {logits_bf16[user, token].item():.6f}, "
+            f"but the row maximum is {row_max[user].item():.6f}"
+        )
+
+
 def _single_device_sampling_args(mesh_device, vocab_size, max_top_k=32, max_batch_size=32):
     """Minimal args for TTSampling on a 1x1 mesh: no vocab padding, no force-argmax."""
     grid = mesh_device.compute_with_storage_grid_size()
