@@ -3,7 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //
-// Auto-generated file, do not modify!
+// Auto-generated file, do not modify -- except for the intrinsic redirect
+// block guarded by #if defined(__riscv_xtttensixwh) near the end.  That block is
+// maintained by hand and appended after the generated content.
+// Regenerating this file drops it; keep it, or the .ttinsn asm comes back
+// and every Tensix instruction is a barrier to pass_rvtt_config again.
 //
 
 #pragma once
@@ -1022,11 +1026,13 @@
 #undef TTI_ADDDMAREG
 #define TTI_ADDDMAREG(a0, a1, a2, a3) TT_ADDDMAREG(a0, a1, a2, a3)
 #undef TT_ADDRCRXY
-#define TT_ADDRCRXY(a0, a1, a2, a3, a4, a5) __builtin_rvtt_addrcrxy((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3), (unsigned)(a4), (unsigned)(a5))
+#define TT_ADDRCRXY(a0, a1, a2, a3, a4, a5) \
+    __builtin_rvtt_addrcrxy((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3), (unsigned)(a4), (unsigned)(a5))
 #undef TTI_ADDRCRXY
 #define TTI_ADDRCRXY(a0, a1, a2, a3, a4, a5) TT_ADDRCRXY(a0, a1, a2, a3, a4, a5)
 #undef TT_ADDRCRZW
-#define TT_ADDRCRZW(a0, a1, a2, a3, a4, a5) __builtin_rvtt_addrcrzw((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3), (unsigned)(a4), (unsigned)(a5))
+#define TT_ADDRCRZW(a0, a1, a2, a3, a4, a5) \
+    __builtin_rvtt_addrcrzw((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3), (unsigned)(a4), (unsigned)(a5))
 #undef TTI_ADDRCRZW
 #define TTI_ADDRCRZW(a0, a1, a2, a3, a4, a5) TT_ADDRCRZW(a0, a1, a2, a3, a4, a5)
 #undef TT_APOOL3S1
@@ -1050,7 +1056,8 @@
 #undef TTI_ATINCGET
 #define TTI_ATINCGET(a0, a1, a2, a3, a4) TT_ATINCGET(a0, a1, a2, a3, a4)
 #undef TT_ATINCGETPTR
-#define TT_ATINCGETPTR(a0, a1, a2, a3, a4, a5, a6) __builtin_rvtt_atincgetptr((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3), (unsigned)(a4), (unsigned)(a5), (unsigned)(a6))
+#define TT_ATINCGETPTR(a0, a1, a2, a3, a4, a5, a6) \
+    __builtin_rvtt_atincgetptr((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3), (unsigned)(a4), (unsigned)(a5), (unsigned)(a6))
 #undef TTI_ATINCGETPTR
 #define TTI_ATINCGETPTR(a0, a1, a2, a3, a4, a5, a6) TT_ATINCGETPTR(a0, a1, a2, a3, a4, a5, a6)
 #undef TT_ATRELM
@@ -1194,7 +1201,8 @@
 #undef TTI_MVMUL
 #define TTI_MVMUL(a0, a1, a2, a3) TT_MVMUL(a0, a1, a2, a3)
 #undef TT_PACR
-#define TT_PACR(a0, a1, a2, a3, a4, a5, a6) __builtin_rvtt_wh_pacr((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3), (unsigned)(a4), (unsigned)(a5), (unsigned)(a6))
+#define TT_PACR(a0, a1, a2, a3, a4, a5, a6) \
+    __builtin_rvtt_wh_pacr((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3), (unsigned)(a4), (unsigned)(a5), (unsigned)(a6))
 #undef TTI_PACR
 #define TTI_PACR(a0, a1, a2, a3, a4, a5, a6) TT_PACR(a0, a1, a2, a3, a4, a5, a6)
 #undef TT_RDCFG
@@ -1202,7 +1210,8 @@
 #undef TTI_RDCFG
 #define TTI_RDCFG(a0, a1) TT_RDCFG(a0, a1)
 #undef TT_REG2FLOP
-#define TT_REG2FLOP(a0, a1, a2, a3, a4, a5) __builtin_rvtt_reg2flop((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3), (unsigned)(a4), (unsigned)(a5))
+#define TT_REG2FLOP(a0, a1, a2, a3, a4, a5) \
+    __builtin_rvtt_reg2flop((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3), (unsigned)(a4), (unsigned)(a5))
 #undef TTI_REG2FLOP
 #define TTI_REG2FLOP(a0, a1, a2, a3, a4, a5) TT_REG2FLOP(a0, a1, a2, a3, a4, a5)
 #undef TT_RMWCIB0
@@ -1246,11 +1255,13 @@
 #undef TTI_SETADCXX
 #define TTI_SETADCXX(a0, a1, a2) TT_SETADCXX(a0, a1, a2)
 #undef TT_SETADCXY
-#define TT_SETADCXY(a0, a1, a2, a3, a4, a5) __builtin_rvtt_setadcxy((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3), (unsigned)(a4), (unsigned)(a5))
+#define TT_SETADCXY(a0, a1, a2, a3, a4, a5) \
+    __builtin_rvtt_setadcxy((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3), (unsigned)(a4), (unsigned)(a5))
 #undef TTI_SETADCXY
 #define TTI_SETADCXY(a0, a1, a2, a3, a4, a5) TT_SETADCXY(a0, a1, a2, a3, a4, a5)
 #undef TT_SETADCZW
-#define TT_SETADCZW(a0, a1, a2, a3, a4, a5) __builtin_rvtt_setadczw((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3), (unsigned)(a4), (unsigned)(a5))
+#define TT_SETADCZW(a0, a1, a2, a3, a4, a5) \
+    __builtin_rvtt_setadczw((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3), (unsigned)(a4), (unsigned)(a5))
 #undef TTI_SETADCZW
 #define TTI_SETADCZW(a0, a1, a2, a3, a4, a5) TT_SETADCZW(a0, a1, a2, a3, a4, a5)
 #undef TT_SETASHRMH
@@ -1446,7 +1457,8 @@
 #undef TTI_STALLWAIT
 #define TTI_STALLWAIT(a0, a1) TT_STALLWAIT(a0, a1)
 #undef TT_STOREIND
-#define TT_STOREIND(a0, a1, a2, a3, a4, a5, a6) __builtin_rvtt_storeind((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3), (unsigned)(a4), (unsigned)(a5), (unsigned)(a6))
+#define TT_STOREIND(a0, a1, a2, a3, a4, a5, a6) \
+    __builtin_rvtt_storeind((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3), (unsigned)(a4), (unsigned)(a5), (unsigned)(a6))
 #undef TTI_STOREIND
 #define TTI_STOREIND(a0, a1, a2, a3, a4, a5, a6) TT_STOREIND(a0, a1, a2, a3, a4, a5, a6)
 #undef TT_STOREREG

@@ -389,8 +389,7 @@ inline void cfg_store(volatile std::uint32_t tt_reg_ptr *cfg, std::uint32_t addr
     // The builtin's operands are 'unsigned int'; std::uint32_t is 'unsigned
     // long' on this target, so cast explicitly rather than relying on the
     // implicit conversion (which the builtin's argument check rejects).
-    __builtin_rvtt_cfg_store(
-        static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(cfg)), static_cast<unsigned>(addr32), static_cast<unsigned>(data));
+    __builtin_rvtt_cfg_store(static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(cfg)), static_cast<unsigned>(addr32), static_cast<unsigned>(data));
 }
 
 inline void cfg_write(std::uint32_t cfg_addr32, std::uint32_t data)
