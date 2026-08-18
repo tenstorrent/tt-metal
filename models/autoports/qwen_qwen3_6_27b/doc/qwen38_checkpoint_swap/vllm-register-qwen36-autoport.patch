@@ -1,20 +1,24 @@
 diff --git a/plugins/vllm-tt-plugin/src/vllm_tt_plugin/platform.py b/plugins/vllm-tt-plugin/src/vllm_tt_plugin/platform.py
-index c75be7a..bb43279 100644
+index c75be7a..12d930c 100644
 --- a/plugins/vllm-tt-plugin/src/vllm_tt_plugin/platform.py
 +++ b/plugins/vllm-tt-plugin/src/vllm_tt_plugin/platform.py
-@@ -464,10 +464,31 @@ def register_tt_models(register_test_models=False) -> None:
+@@ -464,10 +464,35 @@ def register_tt_models(register_test_models=False) -> None:
      _register_model_if_missing(ModelRegistry, "TTQwen3ForCausalLM", path_qwen3_text)
  
      # Qwen3.5 - Text
-+    # Two implementations serve this architecture. Selected the same way the
-+    # Mistral entry below selects between tt_transformers and its autoport, so
-+    # the default is unchanged:
++    # Two implementations serve this architecture, selected the same way the
++    # Mistral entry below selects between tt_transformers and its autoport:
++    #   qwen3_6_27b_autoport  -> models/autoports/qwen_qwen3_6_27b (DEFAULT)
 +    #   demo                  -> models/demos/blackhole/qwen36 (hand-written)
-+    #   qwen3_6_27b_autoport  -> models/autoports/qwen_qwen3_6_27b (pipeline port)
-+    # The autoport path is what lets a sibling checkpoint of the same
-+    # architecture (e.g. Qwen/Qwen3.8-27B via QWEN_AUTOPORT_MODEL_ID) be served
-+    # by the pipeline-produced implementation rather than the demo.
-+    qwen3_5_text_version = os.getenv("TT_QWEN3_5_TEXT_VER", "demo")
++    #
++    # The autoport is the default because it is the implementation this
++    # architecture ships with: it carries the full bringup evidence chain and it
++    # is what serves sibling checkpoints of the same architecture (e.g.
++    # Qwen/Qwen3.8-27B via QWEN_AUTOPORT_MODEL_ID). Defaulting to the demo meant
++    # any caller that did not know about this variable -- including the
++    # tt-inference-server release workflow, which spawns its own server --
++    # silently got the demo instead.
++    qwen3_5_text_version = os.getenv("TT_QWEN3_5_TEXT_VER", "qwen3_6_27b_autoport")
 +    if qwen3_5_text_version == "demo":
 +        path_qwen3_5_text = "models.demos.blackhole.qwen36.tt.qwen36_vllm:Qwen36ForCausalLM"
 +    elif qwen3_5_text_version == "qwen3_6_27b_autoport":
