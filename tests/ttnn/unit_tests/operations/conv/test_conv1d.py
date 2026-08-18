@@ -1026,9 +1026,7 @@ def test_conv1d_unchunked_c10240_default(device):
     torch.manual_seed(0)
     torch_input_ncl = torch.randn(1, 10240, 12, dtype=torch.bfloat16).float()
     torch_weight = torch.randn(10240, 1, 4, dtype=torch.bfloat16).float()
-    golden = torch.nn.functional.conv1d(
-        torch_input_ncl, torch_weight, bias=None, stride=1, padding=3, groups=10240
-    )
+    golden = torch.nn.functional.conv1d(torch_input_ncl, torch_weight, bias=None, stride=1, padding=3, groups=10240)
 
     input_tt = ttnn.from_torch(
         torch_input_ncl.permute(0, 2, 1),  # NLC for conv1d
