@@ -1,0 +1,59 @@
+diff --git a/workflows/model_spec.py b/workflows/model_spec.py
+index 563aa735..33a4664a 100644
+--- a/workflows/model_spec.py
++++ b/workflows/model_spec.py
+@@ -294,6 +294,16 @@ qwen36_blackhole_impl = ImplSpec(
+     repo_url="https://github.com/tenstorrent/tt-metal",
+     code_path="models/demos/blackhole/qwen36",
+ )
++# Qwen3.6/3.8-27B served by the agentic-pipeline autoport rather than the
++# hand-written demo. Same architecture, different implementation: code_path is
++# under models/autoports/, like muse_glimmer above, and it exists on the
++# tt-metal branch mvasiljevic/fmf/qwen-qwen3-8-27b-via-3-6 rather than on main.
++qwen36_autoport_impl = ImplSpec(
++    impl_id="qwen36_autoport",
++    impl_name="qwen36-autoport",
++    repo_url="https://github.com/tenstorrent/tt-metal",
++    code_path="models/autoports/qwen_qwen3_6_27b",
++)
+ training_lora_impl = ImplSpec(
+     impl_id="training_lora",
+     impl_name="training-lora",
+@@ -338,6 +348,7 @@ _IMPL_REGISTRY: Dict[str, ImplSpec] = {
+     "tt_vllm_plugin": tt_vllm_plugin_impl,
+     "sdxl_forge": sdxl_forge_impl,
+     "qwen36_blackhole": qwen36_blackhole_impl,
++    "qwen36_autoport": qwen36_autoport_impl,
+     "training_lora": training_lora_impl,
+     "qwen36_blackhole_b8": qwen36_blackhole_b8_impl,
+     "muse_glimmer": muse_glimmer_impl,
+diff --git a/workflows/model_specs/dev/llm.yaml b/workflows/model_specs/dev/llm.yaml
+index 15831842..03ebfad4 100644
+--- a/workflows/model_specs/dev/llm.yaml
++++ b/workflows/model_specs/dev/llm.yaml
+@@ -479,7 +479,7 @@ templates:
+ # matching how the Qwen3.6-27B spec above handles the same situation.
+ - weights:
+     - Qwen/Qwen3.8-27B
+-  impl: qwen36_blackhole
++  impl: qwen36_autoport
+   inference_engine: VLLM
+   model_type: LLM
+   supported_modalities:
+@@ -493,10 +493,14 @@ templates:
+       max_tokens_all_users_override: 525312
+       default_impl: true
+       env_vars:
+-        TT_QWEN35_TEXT_VER: qwen36_blackhole
++        TT_QWEN35_TEXT_VER: qwen36_autoport
++        QWEN_AUTOPORT_MODEL_ID: Qwen/Qwen3.8-27B
++        QWEN_AUTOPORT_MODEL_REVISION: 1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0
+         HF_MODEL: Qwen/Qwen3.8-27B
+         MESH_DEVICE: "(1, 4)"
+-        TT_MESH_GRAPH_DESC_PATH: "../../tt-metal/tt_metal/fabric/mesh_graph_descriptors/p300_x2_mesh_graph_descriptor.textproto"
++        # Absolute: the shipped relative path assumes the release Docker image
++        # layout and cannot resolve under --local-server with a checkout elsewhere.
++        TT_MESH_GRAPH_DESC_PATH: "/home/mvasiljevic/tt-metal-q36/tt_metal/fabric/mesh_graph_descriptors/p300_x2_mesh_graph_descriptor.textproto"
+         QWEN36_MAX_TOKENS_ALL_USERS: "525312"
+       vllm_args:
+         enable_auto_tool_choice: true

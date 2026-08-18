@@ -162,6 +162,44 @@ Two deviations, printed into every run log so the number is never mistaken for a
 `max_gen_toks=32768` (spec 81920; at ~56 ms/token 80K is up to ~76 min per document) and
 `--limit 0.05` (the ~10-document CI subset, not the full 198).
 
+## Running the release workflow: five blockers in the branch itself
+
+Running tt-inference-server `run.py --workflow release` for this model at
+`vvukoman/add-8-models-to-release-flow` (60f80c4b) required five changes, none of them
+about the model. Patch: `tt-inference-server-onboard-qwen38-autoport.patch`.
+
+1. **The spec is dev-only.** `Qwen3.8-27B` exists in `workflows/model_specs/dev/llm.yaml`
+   but not `prod/`, so `--model Qwen3.8-27B` is not offered unless `--dev-mode` is passed
+   (`MODEL_SPECS_ENV` defaults to `prod`). Easy to misread as "the model is not onboarded".
+2. **The spec selects the demo.** As shipped: `impl: qwen36_blackhole` and
+   `TT_QWEN35_TEXT_VER: qwen36_blackhole`, with a comment stating "no tt-metal or plugin
+   change should be needed — that is the hypothesis under test". Changed to
+   `qwen36_autoport`, which needed a new `ImplSpec` (`code_path:
+   models/autoports/qwen_qwen3_6_27b`, following the existing `muse_glimmer` precedent for
+   an autoport that lives on a branch).
+3. **`TT_MESH_GRAPH_DESC_PATH` is Docker-relative.**
+   `../../tt-metal/tt_metal/fabric/mesh_graph_descriptors/p300_x2_mesh_graph_descriptor.textproto`
+   resolves only inside the release image's layout; under `--local-server` it fails at
+   engine-core init with `TT_FATAL: std::filesystem::exists(mesh_graph_desc_path)`. The
+   **Qwen3.6-27B entry has the identical value**, so this breaks `--local-server` for both.
+4. **The memory tuning is copied from the demo and OOMs.** The spec's own words: "ASSUMED:
+   concurrency, context and every tuning value below are copied from the Qwen3.6-27B P300X2
+   entry above and are not tuned for this checkpoint." With its `trace_region_size:
+   1073741824` the engine dies with `Out of Memory: Not enough space to allocate 476544000 B
+   DRAM buffer across 8 banks`. Overriding to the 200 MB the autoport's own vLLM bridge
+   derives its capacity against (`--override-tt-config {"trace_region_size":200000000}`)
+   starts cleanly. The spec also caps `max_tokens_all_users_override` at 525,312 while the
+   port advertises 1,726,400.
+5. **The benchmark reference misattributes the code path.**
+   `reference_config/benchmarking/benchmark_targets/model_performance_reference.json` says
+   this model "rides the same tt-metal code path (models/demos/blackhole/qwen36)". Its
+   targets (`ttft_ms 62.0`, `tput_user 41.0`) are self-flagged "ASSUMED, NOT VALIDATED",
+   extrapolated from Qwen3-32B on a **t3k (8 devices)**; this model runs on 4.
+
+Also note the release workflow runs the **full 198-document** GPQA Diamond set, not the
+10-document CI subset, so a release eval on this hardware is roughly a 15-hour job at the
+measured ~4.7 min/document.
+
 ## Open decisions (not measurements)
 
 - Should the vLLM registration change be upstreamed? It decides which implementation owns

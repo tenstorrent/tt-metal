@@ -1,8 +1,8 @@
 diff --git a/plugins/vllm-tt-plugin/src/vllm_tt_plugin/platform.py b/plugins/vllm-tt-plugin/src/vllm_tt_plugin/platform.py
-index c75be7a..12d930c 100644
+index c75be7a..9a97fac 100644
 --- a/plugins/vllm-tt-plugin/src/vllm_tt_plugin/platform.py
 +++ b/plugins/vllm-tt-plugin/src/vllm_tt_plugin/platform.py
-@@ -464,10 +464,35 @@ def register_tt_models(register_test_models=False) -> None:
+@@ -464,10 +464,40 @@ def register_tt_models(register_test_models=False) -> None:
      _register_model_if_missing(ModelRegistry, "TTQwen3ForCausalLM", path_qwen3_text)
  
      # Qwen3.5 - Text
@@ -18,17 +18,22 @@ index c75be7a..12d930c 100644
 +    # any caller that did not know about this variable -- including the
 +    # tt-inference-server release workflow, which spawns its own server --
 +    # silently got the demo instead.
-+    qwen3_5_text_version = os.getenv("TT_QWEN3_5_TEXT_VER", "qwen3_6_27b_autoport")
-+    if qwen3_5_text_version == "demo":
++    # Variable name and value vocabulary follow tt-inference-server's release
++    # spec, which already sets TT_QWEN35_TEXT_VER=qwen36_blackhole for this
++    # architecture (release_model_spec.json, id_qwen36-blackhole_Qwen3.6-27B_*).
++    # Using that exact name is what lets a model spec select the autoport;
++    # a differently-named variable would simply be ignored by the release flow.
++    qwen3_5_text_version = os.getenv("TT_QWEN35_TEXT_VER", "qwen36_autoport")
++    if qwen3_5_text_version == "qwen36_blackhole":
 +        path_qwen3_5_text = "models.demos.blackhole.qwen36.tt.qwen36_vllm:Qwen36ForCausalLM"
-+    elif qwen3_5_text_version == "qwen3_6_27b_autoport":
++    elif qwen3_5_text_version == "qwen36_autoport":
 +        path_qwen3_5_text = (
 +            "models.autoports.qwen_qwen3_6_27b.tt.generator_vllm:Qwen36ForCausalLM"
 +        )
 +    else:
 +        raise ValueError(
 +            f"Unsupported TT Qwen3.5 version: {qwen3_5_text_version}, "
-+            "pick one of [demo, qwen3_6_27b_autoport]"
++            "pick one of [qwen36_autoport, qwen36_blackhole]"
 +        )
 +
      _register_model_if_missing(
