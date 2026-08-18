@@ -1190,6 +1190,10 @@ class TT_CCL:
                     input_tensor_mesh, (1, 1, B * input_tensor_mesh.shape[-2], input_tensor_mesh.shape[-1])
                 )
                 seqlen = input_tensor_mesh.shape[-2]
+                # num_workers_per_link keeps us on the ring backend. After the main rebase,
+                # ttnn.reduce_scatter auto-dispatches to reduce_scatter_minimal_direct, whose
+                # static CBs clash with resident L1 scratch on BH worker cols 4-7 during prefill
+                # warmup ("CBs end at 514624, L1 buffer at 346816").
                 ttnn_tensor_out = ttnn.reduce_scatter(
                     input_tensor_mesh,
                     dim,
@@ -1197,6 +1201,7 @@ class TT_CCL:
                     memory_config=memory_config,
                     topology=self.model_config["CCL_TOPOLOGY"],
                     num_links=num_links,
+                    num_workers_per_link=1,
                     subdevice_id=self.worker_sub_device_id,
                 )
                 ttnn_tensor_out = ttnn.reshape(ttnn_tensor_out, (1, B, seqlen // B, ttnn_tensor_out.shape[-1]))
