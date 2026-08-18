@@ -139,7 +139,9 @@ OFF_FLAGS = (
     "-mno-tt-tensix-optimize-lut-select "
     "-mno-tt-tensix-optimize-setexp-fold "
     "-mno-tt-tensix-optimize-prgm-const "
-    "-mno-tt-tensix-optimize-capture-rotation"
+    "-mno-tt-tensix-optimize-capture-rotation "
+    "-mno-tt-tensix-optimize-ccmask "
+    "-mno-tt-tensix-optimize-interlock-schedule"
 )
 ON_FLAGS = (
     "-mtt-tensix-optimize-latency-schedule "
@@ -153,7 +155,13 @@ ON_FLAGS = (
     "-mtt-tensix-macro-planner "
     "-mtt-tensix-macro-planner-replay "
     "-mtt-tensix-optimize-mop-form "
-    "-mtt-tensix-optimize-capture-rotation"
+    "-mtt-tensix-optimize-capture-rotation "
+    # Pin 10 (Lane BG, fire-witness: ccmask fire set == exactly the exp node,
+    # dump-proven; interlock's 18-op pre-existing fire set CRAQ'd 42/42).
+    # COUPLED with the exp semantic-source restructure merge: that source
+    # without ccmask compiles to 28-slot rows.
+    "-mtt-tensix-optimize-ccmask "
+    "-mtt-tensix-optimize-interlock-schedule"
     # M3/prgm-const is NOT in the ON set (un-shipped after pin 9's nightly):
     # its only engagement channel was the trusted TTREGION source markers in
     # the LLK headers, and trusted source annotation of the consumed library
@@ -176,6 +184,8 @@ KNOBS = {
     "planner-replay": "-mtt-tensix-macro-planner-replay",
     "mop-form": "-mtt-tensix-optimize-mop-form",
     "capture-rotation": "-mtt-tensix-optimize-capture-rotation",
+    "ccmask": "-mtt-tensix-optimize-ccmask",
+    "interlock-schedule": "-mtt-tensix-optimize-interlock-schedule",
 }
 HARNESS_TOOLCHAIN = TESTS / "sfpi"  # untracked symlink the harness hardcodes
 DEVICE_LOCK = "/tmp/tt-device.lock"
