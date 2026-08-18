@@ -511,7 +511,7 @@ ttnn/ttnn/graph_report.py @tenstorrent/thirdparty-lights-on-software @tenstorren
 tests/ttnn/unit_tests/base_functionality/test_graph_report.py @tenstorrent/thirdparty-lights-on-software @tenstorrent/metalium-developers-ttnn-core @tenstorrent/codeowner-bypass
 
 # models
-/models/ @uaydonat @yieldthought @cglagovichTT @tenstorrent/codeowner-bypass
+/models/ @uaydonat @yieldthought @cglagovichTT @jonathansuTT @tenstorrent/codeowner-bypass
 /models/tt_cnn/ @esmalTT @tenstorrent/metalium-developers-convolutions @tenstorrent/codeowner-bypass
 /**/functional_*/ @uaydonat @esmalTT @tenstorrent/codeowner-bypass
 models/common @yieldthought @mtairum @uaydonat @gwangTT @tenstorrent/codeowner-bypass
