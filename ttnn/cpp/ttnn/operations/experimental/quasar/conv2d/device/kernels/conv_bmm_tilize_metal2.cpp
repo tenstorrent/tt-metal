@@ -964,13 +964,13 @@ void kernel_main() {
 #ifdef ARCH_QUASAR
                 // [#48552 / TEN-4746] Guard the K-block-boundary input pops. They were BARE: on Quasar a
                 // bare pop_front lets the unpacker's POP_TILES race past its last pending UNPACR and trap the
-                // unpacker (POP racing WAIT). Interpose a REAL unpack TDMA (dummy copy_tile of tile 0) to
-                // drain the unpacker pipeline before the pops; ONE UNPACR covers BOTH pops (the trap is
-                // per-unpacker, not per-CB), and the second pop needs no extra TDMA because nothing re-arms
-                // the unpacker between the two. srcA is already on in1 here (the SrcOrder::Reverse matmul
-                // leaves srcA=in1 in steady state), so no reconfig is needed. The matmul is re-init'd after
-                // the pops. NOP/TTI_NOP are insufficient (LLK-team guidance; mirrors the partials-pop guards
-                // above).
+                // unpacker (POP racing WAIT). The trap is PER-CB-BUFFER: draining one CB does NOT cover the
+                // other's POP_TILES (proven -- an in1-only drain left UNPACK wedged at cb_mm_in0.pop_front,
+                // the FIRST pop). So interpose a REAL unpack TDMA (dummy copy_tile of tile 0) before EACH
+                // pop, from THAT CB. srcA starts on in1 (the SrcOrder::Reverse matmul leaves srcA=in1 in
+                // steady state); reconfig to mm_in0 for its copy, back to in1 for in1's, then re-init the
+                // matmul (srcA left on in1). NOP/TTI_NOP are insufficient (LLK-team guidance; mirrors the
+                // partials-pop guards above).
                 //
                 // WHY NO wait_front IS ADDED: cb_mm_in0 / cb_in1 are already wait_front'd ONCE at the K-block
                 // start (~line 610/620) and consumed by the entire subblock matmul loop, then pop'd ONCE here
@@ -984,21 +984,32 @@ void kernel_main() {
                 // untilize/exit and works bare today (the single-K-block stem, nbw=1, passes) -- leave it
                 // untouched so this cannot regress the stem.
                 if (!last_inner_dim_block) {
+                    // drain mm_in0, then pop it
+                    reconfig_data_format_srca(in1_cb_id, mm_in0_cb_id);
+                    copy_tile_to_dst_init_short(mm_in0_cb_id);
+                    tile_regs_acquire();
+                    copy_tile(mm_in0_cb_id, /*in_tile_index=*/0, /*dst_tile_index=*/0);
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    tile_regs_release();
+                    cb_mm_in0.pop_front(in0_block_num_tiles);
+                    // drain in1, then pop it
+                    reconfig_data_format_srca(mm_in0_cb_id, in1_cb_id);
                     copy_tile_to_dst_init_short(in1_cb_id);
                     tile_regs_acquire();
                     copy_tile(in1_cb_id, /*in_tile_index=*/0, /*dst_tile_index=*/0);
                     tile_regs_commit();
                     tile_regs_wait();
                     tile_regs_release();
-                }
-#endif
-                cb_mm_in0.pop_front(in0_block_num_tiles);
-                cb_in1.pop_front(in1_block_num_tiles);
-#ifdef ARCH_QUASAR
-                if (!last_inner_dim_block) {
+                    cb_in1.pop_front(in1_block_num_tiles);
+                    // restore matmul (srcA already on in1)
                     matmul_block_init(mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
-                }
+                } else
 #endif
+                {
+                    cb_mm_in0.pop_front(in0_block_num_tiles);
+                    cb_in1.pop_front(in1_block_num_tiles);
+                }
                 if (in0_block_h_i == 0) {
                     DPRINT("[DS] post-pop kb{}\n", in0_block_w_i);
                 }
