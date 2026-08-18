@@ -13,23 +13,18 @@
  *        and baked into the kernel. The path picked provides the fastest access that keeps the
  *        semaphore operations atomic.
  *
- *  - LOCAL_NONATOMIC: L1 read-modify-write. Picked only when at most one binder instance exists.
- *  - DM_LOCAL_CACHED: Touched only by DM threads on the semaphore's one node -- any number of
- *      binder kernels/threads (the node's DM harts are mutually coherent). Increments are a
- *      32-bit RISC-V AMO and down() an LR/SC conditional decrement, both on the CACHED alias.
- *      The word lives in a dedicated cached-only pool that the NoC path never addresses; the
- *      host census guarantees no NoC or remote access exists (runtime watcher ASSERTs back it).
- *      Generated entry/exit stubs seed the pool row once per program and self-restore it when
- *      the last binder hart exits (see genfiles.cpp).
- *  - EXTERNAL: reachable over the NoC. All ops go through self-targeted NoC atomics; down() is
- *      multi-consumer-safe on Quasar DM via a NoC-CAS lock. Values must never legitimately be
- *      0xFFFFFFFF (the CAS-return sentinel).
+ *  - LOCAL_NONATOMIC: Stored in L1 and accessed by read-modify-write. Picked only when at most
+ *.                    one binder instance exists.
+ *  - DM_LOCAL_CACHED: Stored in a dedicated L1 pool and accessed through the DM cache via
+ *                     RISC-V AMO. Picked only when all binders are DMs on the same node where
+ *                     the semaphore exists.
+ *  - EXTERNAL:        Stored in L1 and accessed through atomics operations via the NOC. Picked
+ *                     whenever the semaphore is reachable beyond a single node. An EXTERNAL
+ *                     semaphore's value can never be 0xFFFFFFFF, it would look like a NoC
+ *                     atomic's reply that has not yet arrived.
  *
- * The host-side mirror of this enum lives in jit_build/jit_build_settings.hpp; the generated
- * per-kernel scope table (numeric values) is the bridge. Two emitted tripwires guard it
- * (kernel_bindings_generated.h): one static_asserts this enum's numbering against the host
- * mirror's values, one static_asserts per bound id that the table was visible when this header
- * was compiled (include-order regression).
+ * Per-kernel scope tables are constructed at build time by the host and baked into the kernel.
+ * The kernel code can then query the scope of a semaphore for the appropriate mechanism to use.
  */
 enum class SemScope : uint8_t {
     LOCAL_NONATOMIC = 0,
@@ -37,12 +32,9 @@ enum class SemScope : uint8_t {
     EXTERNAL = 2,
 };
 
-// The host's chosen mechanism for each bound semaphore id, injected invisibly by codegen:
-// kernel_bindings_generated.h #defines TT_METAL2_SEM_SCOPE_TABLE before this header is ever
-// seen in a Metal 2.0 kernel TU. Unbound ids -- and every id in a legacy kernel, which has no
-// generated header -- resolve to LOCAL_NONATOMIC, the historical plain-word behavior. For a
-// compile-time id (`sem::x` is constexpr) the lookup and the mechanism dispatch below fold
-// away entirely; a genuinely runtime id keeps a small predictable branch and stays correct.
+// Looks up the host-chosen mechanism for a semaphore id. Codegen injects the table
+// (TT_METAL2_SEM_SCOPE_TABLE) into each Metal 2.0 kernel at build time, any id without
+// a table entry uses LOCAL_NONATOMIC.
 inline __attribute__((always_inline)) constexpr SemScope sem_scope_of(uint32_t semaphore_id) {
 #ifdef TT_METAL2_SEM_SCOPE_TABLE
     constexpr SemScope table[] = TT_METAL2_SEM_SCOPE_TABLE;
@@ -60,10 +52,7 @@ inline __attribute__((always_inline)) constexpr SemScope sem_scope_of(uint32_t s
  * The Semaphore class provides a simple interface for semaphore-based synchronization
  * between programmable cores. It allows incrementing and decrementing the semaphore value,
  * as well as waiting for the semaphore to reach a desired value. The semaphore can be
- * manipulated locally or remotely via the NoC.
- *
- * The physical mechanism is host-chosen and invisible (see SemScope / sem_scope_of above):
- * construct with the semaphore id and call the methods.
+ * manipulated locally or remotely via the NoC. The physical mechanism is host-chosen.
  *
  * Usage:
  *   - Construct a Semaphore with a given semaphore ID.
@@ -78,7 +67,7 @@ inline __attribute__((always_inline)) constexpr SemScope sem_scope_of(uint32_t s
  *  - wait(value): Block until the semaphore is set to the specified value.  Does not decrement the semaphore.
  *  - wait_min(value): Block until the semaphore is at least the specified value.  Does not decrement the semaphore.
  *  - set(value): Set the semaphore to the specified value.
- *  - value(): Read the current semaphore value (via this scope's coherent view).
+ *  - value(): Read the current semaphore value.
  *  - set_multicast(...): Set the semaphore value on multiple cores.
  *  - set_multicast_loopback_src(...): Set the semaphore value on multiple cores including the source.
  *  - relay_unicast(dst_sem, ...): Set a different remote semaphore on one core to this semaphore's local value.
@@ -90,19 +79,7 @@ class Semaphore {
     template <ProgrammableCoreType OT>
     friend class Semaphore;
 
-    // LOCAL_NONATOMIC and EXTERNAL access the local word through the uncached alias on Quasar
-    // (coherent with NoC atomics landing at TL1). DM_LOCAL_CACHED uses the cached alias (AMOs
-    // hang on the uncached alias; DM cores are mutually coherent on the cached one).
-    // Each scope keeps its word in exactly one view, so no flush or invalidate is required
-    // here; the one mandatory alias-discipline step lives in the generated pool seeder
-    // (genfiles.cpp), which reads the ring slot through the UNCACHED alias.
-    // LOAD-BEARING: the invalidate_l1_cache() calls below (and in noc_semaphore_wait/wait_min)
-    // are a documented NO-OP on Quasar DM cores (tt-2xx/risc_common.h). If that ever becomes a
-    // real discard-without-writeback, a cached semaphore would silently lose increments.
-
-    // Physical L1 offset of semaphore `id`: DM_LOCAL_CACHED lives in the dedicated cached-only
-    // pool (MEM_DM_CACHED_SEM_BASE); every other scope uses the normal ring (get_semaphore).
-    // MEM_L1_BASE == 0, so the offset is also the cached-alias address.
+    // DM_LOCAL_CACHED semaphores live in their own dedicated pool
     static __attribute__((always_inline)) inline uintptr_t sem_l1_offset(uint32_t id) {
 #if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)
         if (sem_scope_of(id) == SemScope::DM_LOCAL_CACHED) {
@@ -114,16 +91,15 @@ class Semaphore {
     }
 
 #if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC) && !defined(TT_EMULE_USE_L1_POOL)
-    // This EXTERNAL semaphore's lock word on THIS node (firmware-zeroed at boot; only ever 0/1).
-    // One lock per 16B row, so the 4-bit NoC-CAS always addresses lane 0 of its row (see
-    // MEM_NOC_SEM_LOCK_SIZE in dev_mem_map.h for why lane 0).
+    // This EXTERNAL semaphore's lock word on this node. Locks are spaced one per 16B row so
+    // the NoC-CAS always targets the first 4-byte word.
     uint32_t external_lock_l1_offset() const {
         const uint32_t id =
             (static_cast<uint32_t>(l1_offset_) - static_cast<uint32_t>(get_semaphore<core_type>(0))) / L1_ALIGNMENT;
         ASSERT(id * L1_ALIGNMENT < MEM_NOC_SEM_LOCK_SIZE);
         return MEM_NOC_SEM_LOCK_BASE + id * L1_ALIGNMENT;
     }
-    // This hart's private CAS-return slot (R_SRC_ADDR is per-hart sticky).
+    // This hart's private CAS-return slot.
     static uint32_t cas_ret_slot() {
         uint64_t hart;
         asm volatile("csrr %0, mhartid" : "=r"(hart));
@@ -133,17 +109,16 @@ class Semaphore {
 #endif
 
 public:
-    // l1_offset_ holds the physical L1 offset of the semaphore word (the cached-alias
-    // address; MEM_L1_BASE == 0). Local views and NoC addresses are derived from it.
+    // l1_offset_ holds the physical L1 offset of the semaphore word.
     explicit __attribute__((always_inline)) Semaphore(uint32_t semaphore_id) :
         l1_offset_(sem_l1_offset(semaphore_id)), scope_(sem_scope_of(semaphore_id)) {}
 
     /**
-     * @brief Increment the semaphore by the specified value (local).
+     * @brief Increment the semaphore by the specified value.
      *
      * DM_LOCAL_CACHED: atomic 32-bit AMO on the cached alias.
-     * EXTERNAL:        self-targeted NoC atomic increment (local + remote writers serialize at one NIU).
-     * LOCAL_NONATOMIC: plain L1 read-modify-write (NOT atomic; legacy default).
+     * EXTERNAL:        self-targeted NoC atomic increment.
+     * LOCAL_NONATOMIC: L1 read-modify-write (not atomic).
      *
      * @param value The value to increment the semaphore by.
      */
@@ -159,7 +134,7 @@ public:
             noc_semaphore_inc(::get_noc_addr(l1_offset_), value);
             noc_async_atomic_barrier();
 #else
-            ASSERT(false);  // compute kernels cannot bind semaphores (host-rejected)
+            ASSERT(false);  // compute kernels cannot bind semaphores
 #endif
         } else {  // LOCAL_NONATOMIC
             *local_ptr() += value;
@@ -169,9 +144,6 @@ public:
     /**
      * @brief Atomically increment the semaphore by the specified value on a remote core.
      *
-     * Not valid on a DM_LOCAL_CACHED semaphore (its word must never be touched via the NoC);
-     * the host census never picks CACHED for a semaphore with a remote writer.
-     *
      * @param noc The Noc object representing the NoC to use for the transaction.
      * @param noc_x The X coordinate of the remote core in the NoC.
      * @param noc_y The Y coordinate of the remote core in the NoC.
@@ -180,7 +152,7 @@ public:
      */
     __attribute__((always_inline)) void up(
         const Noc& noc, uint32_t noc_x, uint32_t noc_y, uint32_t value, uint8_t vc = NOC_UNICAST_WRITE_VC) {
-        ASSERT(scope_ != SemScope::DM_LOCAL_CACHED);
+        ASSERT(scope_ != SemScope::DM_LOCAL_CACHED);  // Not valid on a DM_LOCAL_CACHED semaphore
         const uint64_t dest_noc_addr = get_noc_addr(noc_x, noc_y, noc.get_noc_id());
         noc_semaphore_inc(dest_noc_addr, value, noc.get_noc_id(), vc);
     }
@@ -188,14 +160,9 @@ public:
     /**
      * @brief Decrement the semaphore by the specified value, blocking until the semaphore is sufficient.
      *
-     * DM_LOCAL_CACHED: LR/SC conditional-decrement retry loop — MULTI-CONSUMER-SAFE.
-     * EXTERNAL (Quasar DM): MULTI-CONSUMER-SAFE — a 4-bit NoC-CAS spinlock on the semaphore's
-     *   lock word guards the >=value check + INCR_GET subtract; consumers must run on the
-     *   semaphore's node. Gen1 and emule (TT_EMULE_USE_L1_POOL) keep the historical
-     *   single-consumer spin+subtract — the caller owns that invariant there.
-     * INVARIANT (EXTERNAL, Quasar): the semaphore value must never legitimately be 0xFFFFFFFF —
-     *   it is the CAS-return sentinel.
-     * LOCAL_NONATOMIC: legacy single-owner (non-atomic) decrement after an uncached spin.
+     * DM_LOCAL_CACHED: multi-consumer-safe via LR/SC retry loop.
+     * EXTERNAL:        multi-consumer-safe via a NoC-CAS lock, consumers must run on the semaphore's node.
+     * LOCAL_NONATOMIC: single-owner (non-atomic) decrement.
      *
      * @param value The value to decrement the semaphore by.
      */
@@ -204,15 +171,11 @@ public:
         WAYPOINT("NSDW");
         if (scope_ == SemScope::DM_LOCAL_CACHED) {
 #if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)
-            // Conditional decrement via LR/SC strong CAS on the CACHED alias (LR/SC and AMOs hang
-            // uncached). A losing CAS re-enters the >= check, so two consumers can never both take
-            // the same credit. A plain AMO subtract after the spin would NOT be multi-consumer-safe.
             auto* word = reinterpret_cast<uint32_t*>(l1_offset_);  // cached alias
             uint32_t observed = __atomic_load_n(word, __ATOMIC_RELAXED);
             do {
-                // Re-arm each retry so a starved consumer dumps as waiting (NSDW), not NSDD.
                 WAYPOINT("NSDW");
-                while (observed < value) {  // DM cores are mutually coherent; no invalidate needed
+                while (observed < value) {
                     observed = __atomic_load_n(word, __ATOMIC_RELAXED);
                 }
                 WAYPOINT("NSDD");
@@ -222,66 +185,51 @@ public:
             ASSERT(false);  // the host census never bakes CACHED for this platform
 #endif
         } else if (scope_ == SemScope::EXTERNAL) {
-            // TT_EMULE_USE_L1_POOL: emule compiles the Gen1 arm (its shims cover those primitives).
 #if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC) && !defined(TT_EMULE_USE_L1_POOL)
-            // Lock protocol and sentinel invariant: see the down() doc block. Producers bypass the
-            // lock safely: CAS and INCR_GET serialize mutually at the NIU (TestSelfCasLockVsIncr).
-            // Every atomic's pre-op return lands at this hart's sticky ret slot and is consumed by
-            // a sentinel pre-write + poll.
-            // Drain any prior in-flight atomic FIRST (e.g. a remote up() does not barrier): its
-            // pre-op return landing after our acquire CAS's would corrupt the lock verdict.
-            noc_async_atomic_barrier();
+            // Only consumers need to lock; producers can NoC-increment without contention.
+            noc_async_atomic_barrier();  // Wait until all prior NoC atomics have completed.
             const uint64_t sem_noc = ::get_noc_addr(l1_offset_);
             const uint64_t lock_noc = ::get_noc_addr(external_lock_l1_offset());
             const uint32_t ret_slot = cas_ret_slot();
             auto* ret_word =
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(static_cast<uintptr_t>(MEM_L1_UNCACHED_BASE) + ret_slot);
             constexpr uint32_t kCasSentinel = 0xFFFFFFFFu;
-            // One consumed NoC atomic: sentinel, issue, fence, poll the returned pre-op value.
             auto consumed_cas4 = [&](uint32_t cmp4, uint32_t swap4) -> uint32_t {
                 *ret_word = kCasSentinel;
                 noc_fast_atomic_cas4<DM_DEDICATED_NOC>(
                     noc_index, lock_noc, NOC_UNICAST_WRITE_VC, cmp4, swap4, ret_slot);
                 noc_async_atomic_barrier();
-                // Re-arm: the barrier's waypoints overwrote ours; a hang here must dump as NSDD.
                 WAYPOINT("NSDD");
                 while (*ret_word == kCasSentinel) {
                 }
                 return *ret_word;
             };
             for (;;) {
-                // Lock-free pre-wait: don't contend the lock until credit is plausibly there.
+                // Wait until the semaphore has enough credit(s)
                 WAYPOINT("NSDW");
                 do {
                     invalidate_l1_cache();
                 } while ((*sem_addr) < value);
                 if (consumed_cas4(/*cmp4=*/0, /*swap4=*/1) != 0) {
-                    continue;  // contended: back to the lock-free wait
+                    continue;  // another consumer holds the lock, wait for it to release
                 }
-                // Re-check under the lock: no other consumer can decrement now; producers only add.
+                // Re-check under the lock, no other consumer can decrement now.
                 invalidate_l1_cache();
                 const bool ok = (*sem_addr) >= value;
                 if (ok) {
                     WAYPOINT("NSDD");
-                    // The atomic subtract (INCR_GET of the two's complement, wrap=31). Its pre-op
-                    // return also lands at ret_slot; consume it before the release CAS's sentinel.
-                    *ret_word = kCasSentinel;
+                    // Atomic subtract: the NoC only has atomic ADD (INCR_GET), so add the two's complement.
                     noc_semaphore_inc(sem_noc, (uint32_t)(0u - value));
                     noc_async_atomic_barrier();
-                    WAYPOINT("NSDD");  // re-arm past the barrier's internal waypoints
-                    // BOUNDED poll: the barrier already orders the return write (keystone-pinned:
-                    // TestAtomicCasReturnsPreOpValue), so this exits on its first check. The bound
-                    // exists so a semaphore that VIOLATES the 0xFFFFFFFF invariant (its pre-op value
-                    // equals the sentinel) cannot spin forever inside the lock and wedge every other
-                    // consumer of this id; the subtract itself completed at the barrier either way.
+                    WAYPOINT("NSDD");
+                    // confirm the subtract's reply was received
                     for (uint32_t spin = 0; spin < 1024u && *ret_word == kCasSentinel; spin++) {
                     }
                 }
-                consumed_cas4(/*cmp4=*/1, /*swap4=*/0);  // release (holder-only, always succeeds)
+                consumed_cas4(/*cmp4=*/1, /*swap4=*/0);  // release
                 if (ok) {
                     return;
                 }
-                // Credit vanished before we locked: released; back to the lock-free wait.
             }
 #elif !defined(COMPILE_FOR_TRISC)
             // Gen1 single-consumer path: spin, then atomic subtract.
@@ -292,9 +240,9 @@ public:
             noc_semaphore_inc(::get_noc_addr(l1_offset_), (uint32_t)(0u - value));
             noc_async_atomic_barrier();
 #else
-            ASSERT(false);  // compute kernels cannot bind semaphores (host-rejected)
+            ASSERT(false);  // compute kernels cannot bind semaphores.
 #endif
-        } else {  // LOCAL_NONATOMIC (legacy)
+        } else {  // LOCAL_NONATOMIC
             do {
                 invalidate_l1_cache();
             } while ((*sem_addr) < value);
@@ -322,8 +270,7 @@ public:
     /**
      * @brief Set the semaphore to the specified value.
      *
-     * A non-atomic destructive store under every scope: use it for init/reset only, never
-     * concurrently with up()/down().
+     * @note A non-atomic destructive store under every scope.
      *
      * @param value The value to set the semaphore to.
      */
@@ -343,9 +290,6 @@ public:
      *       same semaphore on a remote core, use up(noc, noc_x, noc_y, value) instead.
      *       Writes 4 bytes from this->l1_offset_ to dst_sem.l1_offset_ on the remote core
      *       (noc_x, noc_y).
-     *       Neither endpoint may be DM_LOCAL_CACHED (a relay is a NoC write; the cached pool
-     *       must never be NoC-written) -- guarded by the runtime ASSERT below (the census sees topology, not method
-     * calls).
      *
      * @param noc The Noc object representing the NoC to use for the transaction.
      * @param dst_sem The destination Semaphore whose L1 offset receives the value.
@@ -385,7 +329,7 @@ public:
         uint32_t noc_y_end,
         uint32_t num_dests,
         bool linked = false) {
-        ASSERT(scope_ != SemScope::DM_LOCAL_CACHED);  // a multicast set is a NoC write
+        ASSERT(scope_ != SemScope::DM_LOCAL_CACHED);
         const uint64_t multicast_addr =
             get_noc_multicast_addr(noc_x_start, noc_y_start, noc_x_end, noc_y_end, noc.get_noc_id());
         const uintptr_t src_l1_addr = get_l1_addr();
@@ -457,7 +401,7 @@ public:
         uint32_t noc_y_end,
         uint32_t value,
         uint32_t num_dests) {
-        ASSERT(scope_ != SemScope::DM_LOCAL_CACHED);  // a multicast increment is a NoC write
+        ASSERT(scope_ != SemScope::DM_LOCAL_CACHED);
         const uint64_t multicast_addr =
             get_noc_multicast_addr(noc_x_start, noc_y_start, noc_x_end, noc_y_end, noc.get_noc_id());
         noc_semaphore_inc_multicast(multicast_addr, value, num_dests, noc.get_noc_id());
@@ -465,10 +409,9 @@ public:
 
 private:
     uintptr_t l1_offset_;  // physical L1 offset of the semaphore word (cached-alias address)
-    SemScope scope_;       // host-chosen mechanism (from the invisible codegen table)
+    SemScope scope_;       // host-chosen mechanism (from the codegen table)
 
-    // Local access pointer for reads / non-atomic writes. Uncached alias on Quasar for
-    // LOCAL_NONATOMIC and EXTERNAL; cached alias for DM_LOCAL_CACHED.
+    // Local access pointer for reads / non-atomic writes.
     __attribute__((always_inline)) volatile tt_l1_ptr uint32_t* local_ptr() const {
         uintptr_t addr = l1_offset_;
 #ifdef ARCH_QUASAR
@@ -479,7 +422,7 @@ private:
         return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr);
     }
 
-    // Physical L1 offset used to form NoC addresses (the NoC addresses TL1 directly).
+    // Physical L1 offset used to form NoC addresses.
     uintptr_t get_l1_addr() const { return l1_offset_; }
 
     uint64_t get_noc_multicast_addr(
