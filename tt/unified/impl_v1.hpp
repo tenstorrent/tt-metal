@@ -362,6 +362,12 @@ inline auto relu(const ComputeBlock& b) { return expr::Un<ReluOp, TileSource>{{}
 
 inline auto exp_(const ComputeBlock& b) { return expr::Un<ExpOp, TileSource>{{}, as_node(b)}; }
 
+inline auto recip(const ComputeBlock& b) { return expr::Un<RecipOp, TileSource>{{}, as_node(b)}; }
+
+inline auto sqrt_(const ComputeBlock& b) { return expr::Un<SqrtOp, TileSource>{{}, as_node(b)}; }
+
+inline auto rsqrt(const ComputeBlock& b) { return expr::Un<RsqrtOp, TileSource>{{}, as_node(b)}; }
+
 template <typename Geometry>
 auto matmul(const ComputeBlock& a, const ComputeBlock& b) {
     return matmul<Geometry>(as_node(a), as_node(b));
