@@ -494,3 +494,38 @@ def test_ng_cache_correctness_broadcast_repeated(device, isolate_program_cache):
     for _ in range(3):
         torch_ref, tt_out = run_binary_ng_op(device, ttnn.add, shape_a, shape_b, dtype=ttnn.float32)
         assert_with_pcc(torch_ref, tt_out, 0.9999)
+
+
+def test_ng_cache_miss_sharded_evenness(device, isolate_program_cache):
+    """Same MemoryConfig, differing only in shard evenness -> different cache entries.
+
+    On the tensor-scalar path is_native_L1_sharding() reduces to !is_uneven(a), which reads
+    padded_shape -- and tensor_args_t::to_hash() carries no shape at all. The three shard-volume
+    attributes are the only ones expressing that decision: get_shard_specs() returns nullopt for the
+    uneven case, so they stay nullopt there and are set for the even one. Leaving them unset on both,
+    as the scalar overload of prim::binary_ng did, collides two calls that create_descriptor compiles
+    different reader/writer variants for.
+
+    Uneven runs first on purpose: the even-then-uneven order drives the cached SRC_SHARDED reader
+    with a_num_tiles == 0, which pushes no tiles and hangs the compute kernel in cb_wait_front.
+
+    On the unfixed build the second call fails its PCC check, having run the interleaved program
+    the first call compiled. The entry count is asserted as well because that corruption depends on
+    the shape pair, while the missing cache key does not.
+    """
+    shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))}),
+        (64, 32),
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+
+    # 96 rows over a 64-row shard leaves a partial shard -> interleaved program.
+    torch_ref1, tt_out1 = run_scalar_ng_op(device, ttnn.add, [1, 1, 96, 32], 5.0, memory_config=mem_config)
+    assert_with_pcc(torch_ref1, tt_out1, 0.999)
+
+    # 128 rows divides evenly -> native L1 sharded program, with nothing else in the key changed.
+    torch_ref2, tt_out2 = run_scalar_ng_op(device, ttnn.add, [1, 1, 128, 32], 5.0, memory_config=mem_config)
+    assert_with_pcc(torch_ref2, tt_out2, 0.999)
+
+    assert device.cache_entries_counter.total == 2
