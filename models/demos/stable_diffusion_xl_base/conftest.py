@@ -443,7 +443,8 @@ def _fetch_lora_from_ci_v2_cache(cache_dir, filename):
     HF). CIv2 runners have no HF egress, so for adapters that are not already in
     the baked HF cache this is the only route that works there.
     """
-    import subprocess
+    import shutil
+    import urllib.request
 
     target_dir = Path("/tmp/ttnn_model_cache/lora") / cache_dir
     target = target_dir / filename
@@ -451,8 +452,16 @@ def _fetch_lora_from_ci_v2_cache(cache_dir, filename):
         return str(target)
     target_dir.mkdir(parents=True, exist_ok=True)
     endpoint = f"{_LORA_CI_V2_CACHE_ENDPOINT}/{cache_dir}/{filename}"
+    # Fetched in-process rather than by shelling out to wget: no OS command means
+    # nothing for the endpoint override to be injected into, and no dependency on
+    # wget being installed on the runner. The scheme is checked because urlopen
+    # would otherwise honour file:// and turn the override into a local file read.
+    if not endpoint.startswith(("http://", "https://")):
+        logger.warning(f"Refusing non-HTTP CIv2 LoRA cache endpoint: {endpoint}")
+        return None
     try:
-        subprocess.run(["wget", "-q", "-O", str(target), endpoint], check=True, timeout=300)
+        with urllib.request.urlopen(endpoint, timeout=300) as response, open(target, "wb") as out:  # noqa: S310
+            shutil.copyfileobj(response, out)
     except Exception as e:
         logger.warning(f"CIv2 LoRA cache fetch failed for {endpoint}: {e}")
         target.unlink(missing_ok=True)
