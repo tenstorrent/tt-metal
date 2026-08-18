@@ -243,3 +243,45 @@ def test_the_target_does_not_announce_a_regime_nobody_set():
 
     src = inspect.getsource(PerfTarget)
     assert 'regime: str = "decode"' not in src, "the label defaults to a stage again"
+
+
+# ------------------------------------- "is this model generative" is a contract, not a substring
+
+
+def test_a_demo_is_not_generative_because_it_contains_a_for_loop(tmp_path):
+    """`for _ in range` was one of six substrings that classed a demo generative, and it appears in
+    very nearly every Python file. Almost every model was therefore told its perf test must cap a
+    decode loop, and the test was regenerated until it did -- a requirement a classifier cannot
+    satisfy honestly, burning correction rounds on it."""
+    from agent.perf_test_gen import _pipeline_is_generative
+
+    (tmp_path / "tt").mkdir()
+    (tmp_path / "tt" / "pipeline.py").write_text(
+        "class P:\n"
+        "    def forward(self, x):\n"
+        "        for _ in range(4):\n"
+        "            x = self.block(x)\n"
+        "        return x\n"
+    )
+    demo = "for _ in range(10):\n    out = pipe.forward(img)\n"
+    assert _pipeline_is_generative(tmp_path, demo) is False
+
+
+def test_a_pipeline_keeping_the_decode_contract_is_generative(tmp_path):
+    from agent.perf_test_gen import _pipeline_is_generative
+
+    (tmp_path / "tt").mkdir()
+    (tmp_path / "tt" / "pipeline.py").write_text(
+        "class P:\n    def decode_prefill(self, ids): ...\n    def decode_step(self, state): ...\n"
+    )
+    assert _pipeline_is_generative(tmp_path, "") is True
+
+
+def test_an_unreadable_source_falls_back_to_generation_apis_only(tmp_path):
+    """The fallback keeps the two markers that ARE generation APIs and drops the four that are
+    incidental words."""
+    from agent.perf_test_gen import _pipeline_is_generative
+
+    assert _pipeline_is_generative(tmp_path / "nope", "out = m.generate(x, max_new_tokens=32)") is True
+    assert _pipeline_is_generative(tmp_path / "nope", "for _ in range(3): y = net(x)") is False
+    assert _pipeline_is_generative(tmp_path / "nope", "next_token = argmax(logits)") is False

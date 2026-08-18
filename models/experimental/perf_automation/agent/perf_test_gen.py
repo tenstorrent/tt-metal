@@ -1119,6 +1119,39 @@ def _component_prompt(
     )
 
 
+def _pipeline_is_generative(model_root, demo_src: str) -> bool:
+    """Whether this model retires tokens one at a time, from the contract its pipeline keeps.
+
+    The decode contract is the signal: decode_step(state) advances exactly one token per call, which
+    is what the perf test's capped loop is for. A declared PIPELINE_STAGES entry that is
+    autoregressive counts too -- that is the same test model_contract._c_decode_contract applies
+    before demanding the hooks.
+
+    Falls back to the demo text ONLY for the two markers that are generation APIs rather than
+    incidental words, and never for "for _ in range", which classed almost every demo generative.
+    """
+    try:
+        from .model_contract import Source
+
+        src = Source.load(model_root)
+        if src.mentions("def decode_step"):
+            return True
+        for _p, node in src.assigns("PIPELINE_STAGES"):
+            import ast as _ast
+
+            if isinstance(node.value, (_ast.List, _ast.Tuple)):
+                names = [e.value for e in node.value.elts if isinstance(e, _ast.Constant)]
+                # An AR stage is one the pipeline also gives a decode contract to; absent that, a
+                # declared stage set alone does not make a model generative -- an encoder-decoder
+                # translation model declares stages and retires one output per call.
+                if any(isinstance(n, str) and src.mentions("def %s_trace_step" % n) for n in names):
+                    return bool(src.mentions("def decode_step"))
+    except Exception:  # noqa: BLE001 -- an unreadable source falls back to the text below
+        pass
+    low = (demo_src or "").lower()
+    return ("max_new_tokens" in low) or ("decode_step" in low)
+
+
 def generate_perf_test(
     model_root: str | Path,
     task: str,
@@ -1449,10 +1482,20 @@ def generate_perf_test(
                 f"      · agentic builder unavailable ({str(_exc)[:100]}); using one-shot", file=sys.stderr, flush=True
             )
     # A generative demo's perf test must exercise the (capped) decode loop, not a prefill-only slice.
-    demo_is_generative = any(
-        k in demo_src.lower()
-        for k in ("max_new_tokens", "generate(", ".generate", "next_token", "decode_step", "for _ in range")
-    )
+    #
+    # ASKED OF THE PIPELINE CONTRACT, NOT OF A BAG OF SUBSTRINGS. This matched any of six strings in
+    # the demo source, one of which was "for _ in range" -- present in very nearly every Python file
+    # ever written. So almost every demo was classed generative, and its perf test was then REJECTED
+    # and regenerated until it contained PERF_OSL_TOKENS: a decode-loop cap forced onto models with
+    # no decode loop, burning correction rounds on a requirement that could not be satisfied
+    # honestly. The remaining five are the same guess in kinder clothes -- ".generate" is a method
+    # any wrapper may expose, "next_token" is a variable name.
+    #
+    # What makes a pipeline generative is the contract it keeps: a decode_step(state) hook (one token
+    # per call, by definition -- PipelineDecodeAdapter raises NotTraceCapable without it), or a
+    # declared PIPELINE_STAGES set containing an autoregressive stage. model_contract already reads
+    # both, from the pipeline's own source, and _c_decode_contract already reports on them.
+    demo_is_generative = _pipeline_is_generative(model_root, demo_src)
     gen = runner or _claude
     if validate is None:
         validate = runner is None
