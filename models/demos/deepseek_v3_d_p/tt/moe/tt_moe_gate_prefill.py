@@ -280,22 +280,45 @@ class TtMoEGateConfig:
     #
     # These are not a tuning variant of the 1D entries, they are a different parallelisation. The 1D
     # mcast_in0=False config splits the work over M alone, and at 640 tokens per_core_M=1 leaves 20
-    # M-tiles on 20 of the 110 cores. Splitting N as well puts 40-80 cores to work, and the speedup
+    # M-tiles on 20 of the 110 cores. Splitting N as well puts 40-100 cores to work, and the speedup
     # tracks the core count almost exactly.
     #
     # They cannot serve a height-sharded in0, which is why the layout picks the table rather than the
     # entry carrying both: that path additionally requires K == in0_block_w (forfeiting the
     # in0_block_w win) and a single-column shard grid, which the gate's 11-wide grid is not.
     #
+    # Core count is set by how many output blocks the grid can hold, and the op only requires
+    # ceil(N_tiles / per_core_N) <= grid.x and ceil(M_tiles / per_core_M) <= grid.y -- per_core_N need
+    # NOT divide N_tiles. That is what 896 experts turns on: 28 N-tiles at per_core_N=4 is 7 columns,
+    # but at per_core_N=3 it is 10 (the last covering 2 tiles of padding), for 100 cores instead of 70.
+    # Exact division would have missed it. The usable grid is 11x10: compute_with_storage_grid_size()
+    # reports 12x10 but a column goes to op dispatch, which is why the gate's core_grid is 11 wide.
+    #
+    # Given that, these ceilings are structural rather than untuned -- 20 M-tiles over at most 10 rows
+    # forces per_core_M >= 2, so the row count is always 10 and only the column count is in play:
+    #     128 experts (4 N-tiles)   4 cols  ->  40 cores
+    #     256 experts (8 N-tiles)   8 cols  ->  80 cores
+    #     384 experts (12 N-tiles)  6 cols  ->  60 cores, since 12 cols would exceed the 11 available
+    #     896 experts (28 N-tiles) 10 cols  -> 100 cores
+    # Trading columns for per_core_N always loses (~20% at half the cores), and transpose_mcast=True
+    # loses badly even at equal core count (gpt_oss 14.2 vs 8.7us), so mcast direction is not free.
+    #
+    # in0_block_w does not follow the 1D table's quarter-of-K rule -- that rule is a property of the 1D
+    # parallelisation, where a core owns the whole N. Here an exhaustive sweep over the divisors of K
+    # put it at 8 for every entry except 896 experts (14) and gpt_oss, whose 736/32 = 23 tiles is prime,
+    # leaving 1 and 23 as the sole legal widths with 1 running 2.2x slower. in0_block_w and the subblock
+    # have to be swept together, not in sequence: at 384 experts, 14 beats 8 while out_subblock is
+    # pinned to 1x1 and loses to it once the subblock is free.
+    #
     # DEVICE KERNEL DURATION per call on Blackhole, 640 tokens/chip, DRAM-interleaved in0, medians of
-    # 5 rotated rounds, PCC >= 0.999, measured independently on all 8 chips (spread <= 0.2x):
-    #     256 experts / K 1792   37.5 -> 17.5us (2.14x, 80 cores)
-    #     384 experts / K 1792   54.6 -> 18.6us (2.94x, 60 cores)
-    #     896 experts / K 1792  126.4 -> 32.1us (3.93x, 70 cores)
-    #     256 experts / K 1536   33.0 -> 14.9us (2.22x, 80 cores)
-    #     256 experts / K  768   20.3 ->  8.7us (2.33x, 80 cores)
-    #     256 experts / K 1024   24.8 -> 10.7us (2.32x, 80 cores)
-    #     128 experts / K  736   12.4 ->  8.6us (1.44x, 40 cores)
+    # 9 rotated rounds, PCC >= 0.999, measured independently on all 32 chips (spread <= 0.5us):
+    #     256 experts / K 1792   37.1 -> 16.2us (2.29x,  80 cores)
+    #     384 experts / K 1792   53.2 -> 19.0us (2.80x,  60 cores)
+    #     896 experts / K 1792  121.3 -> 25.2us (4.81x, 100 cores)
+    #     256 experts / K 1536   32.3 -> 14.5us (2.23x,  80 cores)
+    #     256 experts / K  768   19.7 ->  8.8us (2.24x,  80 cores)
+    #     256 experts / K 1024   23.8 -> 10.6us (2.25x,  80 cores)
+    #     128 experts / K  736   12.4 ->  8.7us (1.43x,  40 cores)
     mm_configs_interleaved: dict = field(
         default_factory=lambda: {
             key: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
@@ -315,12 +338,12 @@ class TtMoEGateConfig:
                     (GATE_PRODUCTION_SP_DIM, DeepSeekV3Config.EMB_SIZE // 4, DeepSeekV3Config.NUM_ROUTED_EXPERTS),
                     8,
                     1,
-                    14,
+                    8,
                     1,
                 ),
-                ((GATE_PRODUCTION_SP_DIM, KimiK26Config.EMB_SIZE // 4, KimiK26Config.NUM_ROUTED_EXPERTS), 6, 2, 14, 2),
-                ((GATE_PRODUCTION_SP_DIM, KimiK3Config.EMB_SIZE // 4, KimiK3Config.NUM_ROUTED_EXPERTS), 7, 4, 14, 2),
-                ((GATE_PRODUCTION_SP_DIM, GLM51Config.EMB_SIZE // 4, GLM51Config.NUM_ROUTED_EXPERTS), 8, 1, 12, 1),
+                ((GATE_PRODUCTION_SP_DIM, KimiK26Config.EMB_SIZE // 4, KimiK26Config.NUM_ROUTED_EXPERTS), 6, 2, 8, 2),
+                ((GATE_PRODUCTION_SP_DIM, KimiK3Config.EMB_SIZE // 4, KimiK3Config.NUM_ROUTED_EXPERTS), 10, 3, 14, 3),
+                ((GATE_PRODUCTION_SP_DIM, GLM51Config.EMB_SIZE // 4, GLM51Config.NUM_ROUTED_EXPERTS), 8, 1, 8, 1),
                 (
                     (GATE_PRODUCTION_SP_DIM, MiniMaxM27Config.EMB_SIZE // 4, MiniMaxM27Config.NUM_ROUTED_EXPERTS),
                     8,
