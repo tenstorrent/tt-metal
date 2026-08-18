@@ -254,7 +254,14 @@ void kernel_main() {
 
     constexpr uint32_t kv = Kt * Vt;
 
+    // Runtime arg: instance count for this core (BH = B*H can exceed the grid;
+    // each core loops over its contiguous instance chunk — the math below is
+    // per-instance, CB-mediated against the reader/writer per instance).
+    const uint32_t n_inst = get_arg_val<uint32_t>(0);
+
     compute_kernel_hw_startup(cb_q, cb_k, cb_out);
+
+    for (uint32_t it = 0; it < n_inst; ++it) {
 
     WAIT(cb_q, Kt);
     WAIT(cb_k, Kt);
@@ -358,4 +365,5 @@ void kernel_main() {
     // ---- new state -> io for the writer ----
     copy_tiles(cb_snew, cb_sout, kv);
     POP(cb_snew, kv);
+    }
 }

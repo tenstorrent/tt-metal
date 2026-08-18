@@ -14,7 +14,8 @@
 // also written exclusively per head.
 //
 // Compile args: {Kt, Vt} + accessor args for (o, new_state).
-// Runtime args: {bh, o addr, o page bytes, state addr}.
+// Runtime args: {bh_start, n_inst, o addr, o page bytes, state addr}: this
+// core loops over its contiguous instance chunk [bh_start, bh_start+n_inst).
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -32,10 +33,11 @@ void kernel_main() {
     constexpr auto o_a = TensorAccessorArgs<2>();
     constexpr auto s_a = TensorAccessorArgs<o_a.next_compile_time_args_offset()>();
 
-    const uint32_t bh = get_arg_val<uint32_t>(0);
-    const uint32_t o_addr = get_arg_val<uint32_t>(1);
-    const uint32_t o_page = get_arg_val<uint32_t>(2);  // RM stick page bytes
-    const uint32_t s_addr = get_arg_val<uint32_t>(3);
+    const uint32_t bh_start = get_arg_val<uint32_t>(0);
+    const uint32_t n_inst = get_arg_val<uint32_t>(1);
+    const uint32_t o_addr = get_arg_val<uint32_t>(2);
+    const uint32_t o_page = get_arg_val<uint32_t>(3);  // RM stick page bytes
+    const uint32_t s_addr = get_arg_val<uint32_t>(4);
 
     const uint32_t tb_io = get_tile_size(cb_out);
     const uint32_t elem = tb_io / 1024;
@@ -68,6 +70,8 @@ void kernel_main() {
         asm volatile("" ::: "memory");
     };
 
+    // Per-instance loop: this core owns [bh_start, bh_start + n_inst).
+    for (uint32_t bh = bh_start; bh < bh_start + n_inst; ++bh) {
     // o: stage head bh's [V] stick in scratch, then ONE full-page write to
     // o page bh via the o accessor's page_id form (the same write shape the
     // new-state write below uses and that ttsim/silicon both land). Tile t's
@@ -106,4 +110,5 @@ void kernel_main() {
         noc.async_write_barrier();
         cb.pop_front(kv);
     }
+    }  // per-instance loop
 }

@@ -384,6 +384,7 @@ def recurrent_delta_rule_step_ttnn(
 
 _FUSED_DECODE_OP_MISSING = object()  # resolved-and-absent sentinel
 _fused_decode_op_cache = None  # None = unresolved; MISSING = absent (warn once)
+_fused_decode_engaged_logged = False  # one-shot engagement marker (log-evidence)
 
 
 def _fused_decode_enabled():
@@ -421,6 +422,17 @@ def _decode_gated_delta_rule_fused(
     into the caller's state buffer (the fused _inplace variant).
     """
     K = q.shape[3]
+    global _fused_decode_engaged_logged
+    if not _fused_decode_engaged_logged:
+        _fused_decode_engaged_logged = True
+        # One-shot engagement evidence: proves the env opt-in resolved the
+        # binding AND this call site routed through it (grep in demo logs).
+        print(
+            "QWEN_GDN_FUSED_DECODE engaged: ttnn.transformer.decode_gated_delta_rule"
+            f" T=1 fused path (B={q.shape[0]} H={q.shape[2]} K={q.shape[3]} V={v.shape[3]}"
+            f" inplace_state={inplace_state})",
+            flush=True,
+        )
     if high_precision:
         q = ttnn.typecast(q, ttnn.float32)
         k = ttnn.typecast(k, ttnn.float32)
@@ -438,7 +450,10 @@ def _decode_gated_delta_rule_fused(
         scale=scale if scale is not None else K**-0.5,
         initial_state=initial_state,
         inplace_state=inplace_state,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
+        # Both outputs share one memory config and the new state is [B,H,K,V]
+        # fp32 (192 MiB per die at decode B=128) — L1 is impossible; DRAM is
+        # the proven standalone configuration.
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     return o, h
 
