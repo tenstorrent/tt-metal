@@ -1674,10 +1674,17 @@ void MeshDeviceImpl::quiesce_internal() {
             submesh_ptr->quiesce_devices();
         }
     }
-    bool have_reset_launch_msg_state = false;
-    for (auto& command_queue : mesh_command_queues_) {
-        command_queue->wait_for_completion(!have_reset_launch_msg_state);
-        have_reset_launch_msg_state = true;
+    // The launch message ring buffer and the worker GO mailboxes are shared across hardware CQs, so exactly
+    // one CQ resets them. Pick the last CQ that has work outstanding: wait_for_completion finishes each CQ in
+    // turn, so by then no other CQ can still have workers in flight whose GO mailboxes would be reset.
+    size_t launch_msg_reset_cq = mesh_command_queues_.size();
+    for (size_t cq_id = 0; cq_id < mesh_command_queues_.size(); ++cq_id) {
+        if (mesh_command_queues_[cq_id]->in_use()) {
+            launch_msg_reset_cq = cq_id;
+        }
+    }
+    for (size_t cq_id = 0; cq_id < mesh_command_queues_.size(); ++cq_id) {
+        mesh_command_queues_[cq_id]->wait_for_completion(/*reset_launch_msg_state=*/cq_id == launch_msg_reset_cq);
     }
     for (auto& command_queue : mesh_command_queues_) {
         command_queue->finish_and_reset_in_use();

@@ -839,6 +839,57 @@ void bind_binary_composite(
 }
 
 template <ttnn::unique_string Name, typename Fn>
+void bind_situ_glu(nb::module_& mod, const std::string& description, const std::string& math, Fn fn) {
+    auto doc = fmt::format(
+        R"doc(
+        {2}
+
+        .. math::
+            {3}
+
+        Args:
+            gate (ttnn.Tensor): the gate input tensor.
+            up (ttnn.Tensor): the up input tensor.
+            beta1 (float): the softcap beta applied to the gate half. Must be non-zero.
+            beta2 (float): the softcap beta applied to the up half. Must be non-zero.
+
+        Keyword args:
+            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
+        Note:
+            Supported dtypes and layouts:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+               * - BFLOAT16, BFLOAT8_B
+                 - TILE
+
+            Implemented for Blackhole only.
+        )doc",
+        std::string(Name),
+        "ttnn." + std::string(Name),
+        description,
+        math);
+
+    ttnn::bind_function<Name>(
+        mod,
+        doc.c_str(),
+        fn,
+        nb::arg("gate"),
+        nb::arg("up"),
+        nb::arg("beta1"),
+        nb::arg("beta2"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none());
+}
+
+template <ttnn::unique_string Name, typename Fn>
 void bind_binary_composite_with_rtol_atol(
     nb::module_& mod,
     const std::string& description,
@@ -2036,6 +2087,12 @@ void py_module(nb::module_& mod) {
         &detail::hypot_composite_wrapper,
         detail::kFloatOnlyDtypes,
         detail::kSameDtypeRequiredFootnote);
+
+    detail::bind_situ_glu<"situ_glu">(
+        mod,
+        R"doc(Computes Moonshot's SiTU-GLU activation over the pre-split :attr:`gate` and :attr:`up` tensors.)doc",
+        R"doc(\mathrm{output\_tensor}_i = \left(\verb|beta1| \cdot \tanh(\mathrm{gate}_i / \verb|beta1|) \cdot \sigma(\mathrm{gate}_i)\right) \cdot \left(\verb|beta2| \cdot \tanh(\mathrm{up}_i / \verb|beta2|)\right))doc",
+        &ttnn::situ_glu);
 
     detail::bind_binary_composite<"nextafter">(
         mod,
