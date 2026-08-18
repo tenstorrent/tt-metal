@@ -718,6 +718,13 @@ class ttMLA:
         candidates = entry if isinstance(entry, (list, tuple)) else (entry,)
         return next((cfg for cfg in candidates if self._cfg_matches(cfg)), None)
 
+    # Gating tags that tie a tuned config to the dimensions/mode it was tuned for. A config
+    # declaring none of them applies to ANY variant that reaches its seq_len_local. Read by
+    # `_cfg_matches`, except `kt`, which needs the live weight and is read by `_cfg_fits_weight`.
+    _CFG_DIM_TAGS = ("num_heads", "q_lora_rank", "chunked_only", "dense_head_cap_non_dsa", "kt")
+    # One log line per (weight, seq_len_local) per process, not per layer per forward.
+    _untagged_cfg_warned: set = set()
+
     def _resolve_mm_cfg(self, weight_name: str, seq_len_local: int) -> dict | None:
         """Resolve the tuned matmul config for this weight/seq_len, applying the gating tags.
         Returns None when no tuned config applies (caller falls back to defaults)."""
@@ -726,6 +733,20 @@ class ttMLA:
         cfg = self._select_cfg(self.mm_configs[weight_name].get(seq_len_local))
         if cfg is not None and not self._cfg_fits_weight(cfg, weight_name):
             return None
+        if cfg is not None and not any(cfg.get(t) is not None for t in self._CFG_DIM_TAGS):
+            # The table is keyed on (weight_name, seq_len_local) only. An untagged row is therefore
+            # applied to whatever model reaches this seq_len, tuned for it or not -- and where the
+            # block width happens to divide, `_cfg_fits_weight` cannot tell. The assert is the LUCKY
+            # case; this is the unlucky one, so at least say so once.
+            key = (weight_name, seq_len_local)
+            if key not in ttMLA._untagged_cfg_warned:
+                ttMLA._untagged_cfg_warned.add(key)
+                logger.info(
+                    f"MLA tuned matmul config for {weight_name}@seq_len_local={seq_len_local} declares no "
+                    f"{'/'.join(self._CFG_DIM_TAGS)} tag, so it is applied to this model "
+                    f"(num_heads={self.num_heads}, q_lora_rank={self.q_lora_rank}) without having been "
+                    "tuned for it -- perf only, not numerics. See test_mla_matmul_config_tags."
+                )
         return cfg
 
     def _cfg_fits_weight(self, cfg: dict, weight_name: str) -> bool:
@@ -742,12 +763,26 @@ class ttMLA:
 
         Falling back to the default program config keeps such a model running (untuned, so possibly
         slower) instead of dying. Note the crash is the LUCKY case: where the block width happens to
-        divide, another model's tuning is applied silently and nobody finds out. The real fix is to
-        key the table on the variant or on the actual (K, N); this is the guard until then.
+        divide, another model's tuning is applied silently and nobody finds out.
+
+        A row can now say which K it was tuned for by declaring ``kt`` (the weight's K in tiles);
+        when it does, this rejects any other K outright rather than inferring from divisibility.
+        That is the "key it on the actual (K, N)" fix, available per row -- populate ``kt`` as rows
+        get retuned and drop the seq_len from KNOWN_UNTAGGED_SEQ_LENS in
+        ``test_mla_matmul_config_tags``. Rows without it keep the divisibility guard below.
         """
         pc = cfg.get("program_config")
         in0_block_w = getattr(pc, "in0_block_w", None)
         weight = getattr(self, f"{weight_name}_weight", None)
+        declared_kt = cfg.get("kt")
+        if declared_kt is not None and weight is not None:
+            if weight.shape[-2] // ttnn.TILE_SIZE != declared_kt:
+                logger.debug(
+                    f"tuned config for {weight_name} declares kt={declared_kt}, this model's is "
+                    f"{weight.shape[-2] // ttnn.TILE_SIZE}; falling back to defaults"
+                )
+                return False
+            return True
         if in0_block_w is None or weight is None:
             return True  # nothing to check against; keep the tuned config
         # Weights are [K, N]; only the K dim participates in the in0 block tiling.
