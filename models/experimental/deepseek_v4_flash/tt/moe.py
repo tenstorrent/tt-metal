@@ -6,6 +6,7 @@ import torch
 from .common import DeepSeekV4Module, _profile, _region
 from .decode_prefetch import check_decode_layout, decode_prefetch_page_bytes, make_decode_prefetch_buffers
 from .layers import Linear, LinearDecode
+from .system_config import active_system_config
 from .weight_cache import WeightCache, _as_cache, _load_weight, _materialize, _memo
 
 # ---------------------------------------------------------------------------- #
@@ -53,8 +54,8 @@ class SparseRouting(NamedTuple):
     indices: ttnn.Tensor
 
 
-# Guards the per-token renormalize against an all-zero score row.
-_ROUTING_EPS = 1.0e-20
+# Guards the per-token renormalize against an all-zero score row. Configured by
+# ``moe.routing_eps`` in the system profile.
 
 
 class DeepSeekV4MLP(DeepSeekV4Module):
@@ -291,21 +292,28 @@ class DeepSeekV4HashRouter(DeepSeekV4Module):
 # distinct from the plain matmul weights used by the prefill loop, so the decode
 # path keeps its own copy.
 # --------------------------------------------------------------------------- #
-_FUSED_HIDDEN = 4096  # op requires H == 64 cores * 2 tiles * 32 = 4096
+# The tile is a hardware invariant, unlike the core count and bank count, which are
+# ``moe.fused_num_cores`` / ``moe.fused_dram_banks`` in the system profile.
 _FUSED_TILE = 32
-_FUSED_NUM_CORES = 64  # 8x8 compute grid
-_FUSED_DRAM_BANKS = 8  # Blackhole DRAM banks (round-robin shard target)
 
 
-def _swiglu_cols_per_core(intermediate: int) -> int:
-    """SwiGLU output columns each core owns, i.e. the I dim spread over the 64 cores.
+def _fused_hidden(num_cores: int) -> int:
+    """The only hidden size the op accepts: each of ``num_cores`` cores owns exactly
+    2 output tiles of the H row (4096 on a 64-core grid)."""
+    return num_cores * 2 * _FUSED_TILE
+
+
+def _swiglu_cols_per_core(intermediate: int, num_cores: Optional[int] = None) -> int:
+    """SwiGLU output columns each core owns, i.e. the I dim spread over every core.
 
     The op splits I across *all* cores (one 32-column tile each at I == 2048) rather than
     giving 64 columns to half of them: gate_up is the DRAM-bound phase, so every core's NoC
     port should be fetching. Mirrors ``swiglu_tiles_per_core_for`` in the program factory.
     """
+    if num_cores is None:
+        num_cores = active_system_config().moe.fused_num_cores
     i_tiles = intermediate // _FUSED_TILE
-    return _FUSED_TILE * max(1, i_tiles // _FUSED_NUM_CORES)
+    return _FUSED_TILE * max(1, i_tiles // num_cores)
 
 
 def _interleave_gate_up(w: torch.Tensor, block: int) -> torch.Tensor:
@@ -322,12 +330,12 @@ def _interleave_gate_up(w: torch.Tensor, block: int) -> torch.Tensor:
     return w.reshape(k, 2, blocks, block).permute(0, 2, 1, 3).reshape(k, two_i).contiguous()
 
 
-def _fused_nd_dram_config(rows: int, cols: int, shard_width: int) -> ttnn.MemoryConfig:
+def _fused_nd_dram_config(rows: int, cols: int, shard_width: int, dram_banks: int) -> ttnn.MemoryConfig:
     """DRAM ND-shard config: ``rows x shard_width`` shards round-robined over the
     DRAM banks (one shard per compute core), as ``fused_experts`` expects."""
     assert cols % shard_width == 0, f"last dim {cols} must divide into shards of {shard_width}"
     dram_core_range_set = ttnn.CoreRangeSet(
-        [ttnn.CoreRange(ttnn.CoreCoord(bank, 0), ttnn.CoreCoord(bank, 0)) for bank in range(_FUSED_DRAM_BANKS)]
+        [ttnn.CoreRange(ttnn.CoreCoord(bank, 0), ttnn.CoreCoord(bank, 0)) for bank in range(dram_banks)]
     )
     return ttnn.MemoryConfig(
         ttnn.BufferType.DRAM,
@@ -397,9 +405,20 @@ class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
         config,
         provider,
         device: ttnn.MeshDevice,
-        dtype: ttnn.DataType = ttnn.bfloat4_b,
+        dtype: Optional[ttnn.DataType] = None,
         cache: Optional[WeightCache] = None,
+        system_config=None,
     ):
+        # The system profile supplies the fused-op geometry, the L1 expert block size
+        # and the default weight precision; an explicit ``dtype`` still wins.
+        sys_cfg = system_config or active_system_config()
+        self.system_config = sys_cfg
+        self.experts_block_size = sys_cfg.moe.experts_block_size
+        self.routing_eps = sys_cfg.moe.routing_eps
+        num_cores = sys_cfg.moe.fused_num_cores
+        dram_banks = sys_cfg.moe.fused_dram_banks
+        dtype = dtype if dtype is not None else sys_cfg.decode.ttnn_weight_dtype
+
         self.device = device
         self.num_experts = config.num_local_experts
         self.top_k = config.num_experts_per_tok
@@ -414,15 +433,16 @@ class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
         # ``fused_experts`` is hard-wired to the real V4-Flash sizes: ``H == 4096``
         # on the 64-core grid and ``I`` a multiple of the per-core SwiGLU column slice.
         # There is no fallback path -- this class is for that config only.
-        swiglu_cols = _swiglu_cols_per_core(self.intermediate)
-        if self.hidden != _FUSED_HIDDEN or self.intermediate % swiglu_cols != 0:
+        fused_hidden = _fused_hidden(num_cores)
+        swiglu_cols = _swiglu_cols_per_core(self.intermediate, num_cores)
+        if self.hidden != fused_hidden or self.intermediate % swiglu_cols != 0:
             raise ValueError(
                 f"DeepSeekV4PreloadedExperts requires the fused_experts layout "
-                f"(H == {_FUSED_HIDDEN}, I % {swiglu_cols} == 0); "
+                f"(H == {fused_hidden} for moe.fused_num_cores={num_cores}, I % {swiglu_cols} == 0); "
                 f"got H={self.hidden}, I={self.intermediate}"
             )
-        gate_up_nd = _fused_nd_dram_config(self.hidden, 2 * self.intermediate, 2 * swiglu_cols)
-        down_nd = _fused_nd_dram_config(self.intermediate, self.hidden, self.hidden // _FUSED_NUM_CORES)
+        gate_up_nd = _fused_nd_dram_config(self.hidden, 2 * self.intermediate, 2 * swiglu_cols, dram_banks)
+        down_nd = _fused_nd_dram_config(self.intermediate, self.hidden, self.hidden // num_cores, dram_banks)
 
         # Upload every expert once as the op's DRAM ND-sharded weights (gate_up
         # interleaved per core, down ND-sharded), stored in low precision. With
@@ -458,6 +478,11 @@ class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
         experts, so the op's program -- and any trace holding it -- is the same every step.
         Both tensors go in exactly as the router produced them: the op reads the ids and
         the score row out of their tiles and applies the normalize-and-scale tail itself.
+
+        ``experts_block_size`` (``moe.experts_block_size``) is how many experts' SwiGLU
+        activations are resident at once. It sizes the op's dominant per-core CB, so it is
+        the knob to turn when the op's static CBs collide with the L1 buffers live at the
+        call; the cost is one extra chip-wide gather/broadcast barrier per block.
         """
         out = ttnn.experimental.deepseek.moe.fused_experts(
             x_tok,
@@ -470,7 +495,8 @@ class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
             swiglu_limit=self.limit,
             top_k=self.top_k,
             routed_scaling_factor=self.routed_scaling_factor,
-            routing_eps=_ROUTING_EPS,
+            routing_eps=self.routing_eps,
+            experts_block_size=self.experts_block_size,
         )  # [1, 1, H]
         return ttnn.reshape(out, [1, 1, 1, self.hidden])
 

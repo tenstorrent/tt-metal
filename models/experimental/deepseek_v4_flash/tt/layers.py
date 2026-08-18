@@ -4,6 +4,7 @@ from typing import Callable, Optional
 import ttnn
 
 from .common import DeepSeekV4Module, _HIFI4, width_sharded_l1_config
+from .system_config import active_system_config
 from .weight_cache import _CachePath, _load_weight, _materialize
 import torch
 
@@ -396,7 +397,7 @@ class LinearDecode(DeepSeekV4Module):
         k_blocks: Optional[int] = None,
         n_blocks: Optional[int] = None,
         use_prefetcher: bool = False,
-        num_prefetch_slabs: int = 2,
+        num_prefetch_slabs: Optional[int] = None,
         global_cb=None,
         global_cb_page_bytes: Optional[int] = None,
         keep_weights_in_l1: bool = False,
@@ -437,7 +438,11 @@ class LinearDecode(DeepSeekV4Module):
                 num_inputB_cores,
                 shard_shape,
                 preferred_width=preferred_width,
-                num_slabs=num_prefetch_slabs,
+                num_slabs=(
+                    num_prefetch_slabs
+                    if num_prefetch_slabs is not None
+                    else active_system_config().prefetcher.num_prefetch_slabs
+                ),
                 shared_cb=global_cb,
                 shared_cb_page_bytes=global_cb_page_bytes,
             )
@@ -772,7 +777,7 @@ class BatchedLinearDecode(DeepSeekV4Module):
         num_inputA_cores: int = 32,
         preprocess: Optional[Callable[[torch.Tensor], torch.Tensor]] = None,
         use_prefetcher: bool = False,
-        num_prefetch_slabs: int = 2,
+        num_prefetch_slabs: Optional[int] = None,
         global_cb=None,
         global_cb_page_bytes: Optional[int] = None,
     ):
@@ -820,7 +825,11 @@ class BatchedLinearDecode(DeepSeekV4Module):
                 preprocess,
                 fold,
                 slab_shape=(self.bc * K, self.nc),
-                num_slabs=num_prefetch_slabs,
+                num_slabs=(
+                    num_prefetch_slabs
+                    if num_prefetch_slabs is not None
+                    else active_system_config().prefetcher.num_prefetch_slabs
+                ),
                 shared_cb=global_cb,
                 shared_cb_page_bytes=global_cb_page_bytes,
             )

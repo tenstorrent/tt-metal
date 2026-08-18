@@ -41,6 +41,7 @@ from typing import Optional
 import ttnn
 
 from .layers import decode_gcb_page_bytes, make_shared_decode_gcb
+from .system_config import active_system_config
 
 # Every prefetched decode weight, by name, with the layout ``decode_weight_layout`` reads.
 # Hardcoded rather than derived from the config because the buffer is built before any layer
@@ -121,7 +122,7 @@ def decode_prefetch_page_bytes(weight_dtype: ttnn.DataType) -> int:
 
 
 def make_decode_prefetch_buffers(
-    device: ttnn.MeshDevice, weight_dtype: ttnn.DataType, num_prefetch_pages: int = 16
+    device: ttnn.MeshDevice, weight_dtype: ttnn.DataType, num_prefetch_pages: Optional[int] = None
 ) -> dict:
     """The GCB every prefetched decode weight on ``device`` streams through.
 
@@ -131,11 +132,14 @@ def make_decode_prefetch_buffers(
     can still be handed per-weight buffers in a test without the blocks caring.
 
     ``num_prefetch_pages`` is the ring depth, and the knob for how far ahead the prefetcher
-    may run: at the default it is 16 pages, several weights' worth.
+    may run: at the profile default of 16 pages that is several weights' worth. ``None``
+    takes it from the active system profile (``prefetcher.num_prefetch_pages``).
 
     Build this **once per device and pass it to every layer on that device** -- see the module
     docstring for why, and for the ordering contract that comes with sharing.
     """
+    if num_prefetch_pages is None:
+        num_prefetch_pages = active_system_config().prefetcher.num_prefetch_pages
     global_cb = make_shared_decode_gcb(
         device,
         [DECODE_LAYOUTS[name] for name in DECODE_GCB_GROUP],
