@@ -117,7 +117,11 @@ this unambiguous:
 | 4 | **1024** | 0.7847 | **0.1750** |
 
 GPQA fell 20 points, to **below the 25% random floor** for 4-choice questions,
-while MMLU moved by ~2 samples. The mechanism fits: GPQA's 5-shot science prompts
+while MMLU moved by ~2 samples. For scale, Google publishes GPQA Diamond 84.3 for
+the instruction-tuned model (thinking mode), TTI measures 83.33 for it on H100,
+and the n-shot variant costs the instruct model ~30 points -- so ~53 is the
+instruct expectation on this task and 37.5 was a credible base-model result.
+17.5 is not. The mechanism fits: GPQA's 5-shot science prompts
 are long and cross 1024 into the chunked path, whereas most MMLU prompts stay
 under it.
 

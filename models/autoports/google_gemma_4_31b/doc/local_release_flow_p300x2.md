@@ -101,12 +101,43 @@ emit the literal `Answer: (C)` format, which is why the config scores
 | `gpqa_diamond_generative_n_shot` | Qwen2.5-72B-Instruct (H100 ref) | 42.93 |
 | `gpqa_diamond_generative_n_shot` | Qwen2.5-7B-Instruct (H100 ref) | 33.80 |
 
-Do **not** compare against the `gemma-4-31B-it` entry's 84.3: its own
-`published_score_ref` is `https://huggingface.co/Qwen/Qwen3.6-27B`, i.e. a
-transplant from a different model, and it is a different task
-(`r1_gpqa_diamond`, thinking mode). The genuine Gemma figure there is
-`gpu_reference_score=83.33` on H100 with thinking enabled, and the config notes
-the n-shot variant costs it ~30 points (~53%).
+### What Google actually publishes
+
+Checked the model cards directly (2026-08-18). Both
+`huggingface.co/google/gemma-4-31B` and `...-31B-it` carry the same table:
+
+| Benchmark | Gemma 4 31B |
+| --- | ---: |
+| GPQA Diamond | 84.3% |
+| MMLU **Pro** | 85.2% |
+| AIME 2026 (no tools) | 89.2% |
+
+Both cards state: *"Evaluation results marked in the table are for
+instruction-tuned models."* So there is still **no published base-checkpoint
+figure**, which is why this entry keeps `published_score=None`. Two further
+caveats:
+
+- The published number is **MMLU Pro**, not plain MMLU, so it is not comparable
+  to `mmlu_generative` at all.
+- 84.3 **is** Gemma's own GPQA Diamond value. tt-inference-server's
+  `gemma-4-31B-it` entry has the right number with a misattributed
+  `published_score_ref` (it cites `huggingface.co/Qwen/Qwen3.6-27B`). Do not
+  compare our score against it directly regardless: it is the instruct model on
+  `r1_gpqa_diamond` with thinking enabled, and TTI's own H100 measurement for that
+  configuration is 83.33.
+
+Placing our result in that chain, each step a plausible drop:
+
+| Configuration | GPQA |
+| --- | ---: |
+| Published, `-it`, thinking/CoT | 84.3 |
+| TTI H100 measured, `-it`, `r1_gpqa_diamond` + thinking | 83.33 |
+| `-it` on the n-shot variant (TTI note: costs ~30 points) | ~53 |
+| **This port: base, n-shot, 40 samples** | **37.5** |
+
+Note some secondary aggregators (e.g. datalearner.com) describe 84.3/85.2 as
+*base* scores; that contradicts the primary card text, which is what this document
+follows.
 
 ### Benchmarks: 17/17 sweep points, zero failed requests
 
