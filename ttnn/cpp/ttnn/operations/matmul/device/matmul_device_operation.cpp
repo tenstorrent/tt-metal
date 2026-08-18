@@ -758,6 +758,17 @@ void validate_matmul_work_distribution_and_gather_ring_topology(
                             Mt,
                             per_core_M,
                             num_blocks_y);
+                    } else {
+                        TT_FATAL(
+                            num_blocks_x == 1,
+                            "{}: mcast_in1 requires N ({}) to fit within a single per_core_N block ({}), got "
+                            "num_blocks_x={}. A single in1 sender multicasts one per_core_N-wide weight slice to "
+                            "the whole grid, so multi-column N is not supported here; use "
+                            "MatmulMultiCoreReuseMultiCastProgramConfig (the 2D factory) for multi-column N.",
+                            config_name,
+                            Nt,
+                            per_core_N,
+                            num_blocks_x);
                     }
                     check_output_shard_grid_within_extent(output_mem_config, grid, config_name);
                 }
