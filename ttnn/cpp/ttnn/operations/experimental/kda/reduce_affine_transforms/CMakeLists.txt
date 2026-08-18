@@ -31,10 +31,16 @@ target_sources(
         FILES ${kernels}
     PRIVATE
         ${TTNN_OP_EXPERIMENTAL_KDA_REDUCE_AFFINE_TRANSFORMS_SRCS}
-        ${TTNN_OP_EXPERIMENTAL_KDA_SHARED_SRCS}
 )
 
-target_link_libraries(ttnn_op_experimental_kda_reduce_affine_transforms PRIVATE TT::Metalium PUBLIC TTNN::Core)
+target_link_libraries(
+    ttnn_op_experimental_kda_reduce_affine_transforms
+    PRIVATE
+        TT::Metalium
+        TTNN::Ops::Experimental::KDA::Common
+    PUBLIC
+        TTNN::Core
+)
 
 install(
     TARGETS
