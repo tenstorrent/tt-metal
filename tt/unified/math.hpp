@@ -68,7 +68,7 @@ inline constexpr uint32_t kMaxDstTiles = 8;
 // One tile out of a circular buffer, copied into a DST slot. The allocator picks
 // the slot, not the caller -- that is what keeps operands from clobbering
 // intermediates.
-struct TileSource {
+struct TileSource : expr::Fluent<TileSource> {
     using is_expr_node = std::true_type;
     static constexpr uint32_t need = 1;
 
@@ -163,7 +163,7 @@ struct MatmulGeometry {
 };
 
 template <typename Geometry, typename Chain>
-struct MatmulNode {
+struct MatmulNode : expr::Fluent<MatmulNode<Geometry, Chain>> {
     using fusion_kind = FPUFusion;
     using geometry = Geometry;
     using chain = Chain;
@@ -236,7 +236,7 @@ struct ReduceGeometry {
 
 // `scaler_cb` holds the constant reduce_tile folds in: see fill_reduce_scaler.
 template <typename Geometry, ReduceAxis Axis, ReducePool Pool, typename Chain>
-struct ReduceNode {
+struct ReduceNode : expr::Fluent<ReduceNode<Geometry, Axis, Pool, Chain>> {
     using fusion_kind = ReduceFusion;
     using geometry = Geometry;
     using chain = Chain;
@@ -249,12 +249,12 @@ struct ReduceNode {
 
 template <typename G, ReduceAxis A, ReducePool P, typename Chain>
 auto relu(const ReduceNode<G, A, P, Chain>& r) {
-    return ReduceNode<G, A, P, expr::chain_append_t<Chain, ReluOp>>{r.in_cb, r.scaler_cb};
+    return ReduceNode<G, A, P, expr::chain_append_t<Chain, ReluOp>>{{}, r.in_cb, r.scaler_cb};
 }
 
 template <typename G, ReduceAxis A, ReducePool P, typename Chain>
 auto exp_(const ReduceNode<G, A, P, Chain>& r) {
-    return ReduceNode<G, A, P, expr::chain_append_t<Chain, ExpOp>>{r.in_cb, r.scaler_cb};
+    return ReduceNode<G, A, P, expr::chain_append_t<Chain, ExpOp>>{{}, r.in_cb, r.scaler_cb};
 }
 
 // --- Operand plumbing ---
@@ -275,7 +275,7 @@ template <typename A, typename B, typename = std::enable_if_t<is_operand<A>::val
 auto operator+(const A& a, const B& b) {
     using LN = std::decay_t<decltype(as_node(a))>;
     using RN = std::decay_t<decltype(as_node(b))>;
-    return expr::Bin<AddOp, LN, RN>{as_node(a), as_node(b)};
+    return expr::Bin<AddOp, LN, RN>{{}, as_node(a), as_node(b)};
 }
 
 // relu() on a tree wraps it; relu() on an FPU node folds into that node's
@@ -283,27 +283,41 @@ auto operator+(const A& a, const B& b) {
 // parameter would otherwise be threading through every combinator.
 template <typename N, typename = std::enable_if_t<expr::is_expr<N>::value>>
 auto relu(const N& n) {
-    return expr::Un<ReluOp, N>{n};
+    return expr::Un<ReluOp, N>{{}, n};
 }
 
 template <typename N, typename = std::enable_if_t<expr::is_expr<N>::value>>
 auto exp_(const N& n) {
-    return expr::Un<ExpOp, N>{n};
+    return expr::Un<ExpOp, N>{{}, n};
 }
 
 template <typename Geometry, typename Chain>
 auto relu(const MatmulNode<Geometry, Chain>& m) {
-    return MatmulNode<Geometry, expr::chain_append_t<Chain, ReluOp>>{m.in0_cb, m.in1_cb};
+    return MatmulNode<Geometry, expr::chain_append_t<Chain, ReluOp>>{{}, m.in0_cb, m.in1_cb};
 }
 
 template <typename Geometry, typename Chain>
 auto exp_(const MatmulNode<Geometry, Chain>& m) {
-    return MatmulNode<Geometry, expr::chain_append_t<Chain, ExpOp>>{m.in0_cb, m.in1_cb};
+    return MatmulNode<Geometry, expr::chain_append_t<Chain, ExpOp>>{{}, m.in0_cb, m.in1_cb};
 }
+
+// The hooks expr.hpp's Fluent calls. Unqualified inside, so ordinary lookup finds
+// the overloads above for the expression shapes, and ADL finds the ones declared
+// later for the core types -- ComputeBlock's live in tt/unified/api.h.
+namespace expr {
+template <typename N>
+auto fluent_relu(const N& n) {
+    return relu(n);
+}
+template <typename N>
+auto fluent_exp(const N& n) {
+    return exp_(n);
+}
+}  // namespace expr
 
 template <typename Geometry>
 auto matmul(TileSource a, TileSource b) {
-    return MatmulNode<Geometry, expr::UnaryChain<>>{a.cb_id, b.cb_id};
+    return MatmulNode<Geometry, expr::UnaryChain<>>{{}, a.cb_id, b.cb_id};
 }
 
 // An FPU fusion cannot be an operand of a binary op: it already owns every DST

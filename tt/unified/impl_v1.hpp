@@ -348,16 +348,14 @@ inline ComputeBlock::~ComputeBlock() {
 #endif
 }
 
-inline expr::Un<ExpOp, TileSource> ComputeBlock::exp() const { return {TileSource{cb_id}}; }
-
 // --- Expression-leaf adaptors ---
 
 // TileSource identifies a circular buffer, so this must be the cb id.
-inline TileSource as_node(const ComputeBlock& b) { return TileSource{b.get_cb_id()}; }
+inline TileSource as_node(const ComputeBlock& b) { return TileSource{{}, b.get_cb_id()}; }
 
-inline auto relu(const ComputeBlock& b) { return expr::Un<ReluOp, TileSource>{as_node(b)}; }
+inline auto relu(const ComputeBlock& b) { return expr::Un<ReluOp, TileSource>{{}, as_node(b)}; }
 
-inline auto exp_(const ComputeBlock& b) { return expr::Un<ExpOp, TileSource>{as_node(b)}; }
+inline auto exp_(const ComputeBlock& b) { return expr::Un<ExpOp, TileSource>{{}, as_node(b)}; }
 
 template <typename Geometry>
 auto matmul(const ComputeBlock& a, const ComputeBlock& b) {
@@ -367,7 +365,7 @@ auto matmul(const ComputeBlock& a, const ComputeBlock& b) {
 template <typename Geometry, ReduceAxis Axis>
 ReduceNode<Geometry, Axis, ReducePool::Sum, expr::UnaryChain<>> reduce_sum(
     const ComputeBlock& b, const Storage& scaler) {
-    return {b.get_cb_id(), scaler.cb_id};
+    return {{}, b.get_cb_id(), scaler.cb_id};
 }
 
 // --- NocAsyncReadTx ---

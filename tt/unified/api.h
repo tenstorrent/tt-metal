@@ -312,7 +312,7 @@ private:
 // ComputeBlock -- compute-side consumption of a Block, and an expression leaf
 // ---------------------------------------------------------------------------
 
-class ComputeBlock {
+class ComputeBlock : public expr::Fluent<ComputeBlock> {
 public:
     ComputeBlock(Block block);
     ~ComputeBlock();
@@ -325,12 +325,42 @@ public:
     uint32_t get_cb_id() const { return cb_id; }
     uint32_t get_num_tiles() const { return num_tiles; }
 
-    expr::Un<ExpOp, TileSource> exp() const;
-
 private:
     uint32_t cb_id;
     uint32_t num_tiles;
 };
+
+// ---------------------------------------------------------------------------
+// Adaptors letting a ComputeBlock stand in for an expression leaf. These are the
+// hooks tt/unified/math.hpp declares; they live here because this is the only
+// place the math layer needs to know about a core type.
+// ---------------------------------------------------------------------------
+
+// Without this the operator+ in tt/unified/math.hpp is SFINAE'd out and
+// `lhs + rhs` does not resolve.
+template <>
+struct is_operand<ComputeBlock> : std::true_type {};
+
+TileSource as_node(const ComputeBlock& b);
+
+auto relu(const ComputeBlock& b);
+auto exp_(const ComputeBlock& b);
+
+template <typename Geometry>
+auto matmul(const ComputeBlock& a, const ComputeBlock& b);
+
+// Reduce `b`'s tile grid down one axis, within and across tiles. `Geometry` is
+// the INPUT grid, `Axis` says which dimension collapses, and the destination
+// Storage must hold Geometry::out_tiles(Axis) tiles -- see ReduceAxis in
+// tt/unified/math.hpp for the shapes.
+//
+//     u::Storage out(kCbOut, u::ReduceGeometry<4, 4>::out_tiles(u::ReduceAxis::Rows));
+//     out.store(u::reduce_sum<u::ReduceGeometry<4, 4>, u::ReduceAxis::Rows>(block, scaler));
+//
+// `scaler` must have been filled by fill_reduce_scaler and is never consumed.
+template <typename Geometry, ReduceAxis Axis>
+ReduceNode<Geometry, Axis, ReducePool::Sum, expr::UnaryChain<>> reduce_sum(
+    const ComputeBlock& b, const Storage& scaler);
 
 // ---------------------------------------------------------------------------
 // Reserved multicast semaphores
@@ -463,38 +493,6 @@ private:
     ::Semaphore<ProgrammableCoreType::TENSIX> sem;
 #endif
 };
-
-// ---------------------------------------------------------------------------
-// Adaptors letting a ComputeBlock stand in for an expression leaf. These are the
-// hooks tt/unified/math.hpp declares; they live here because this is the only
-// place the math layer needs to know about a core type.
-// ---------------------------------------------------------------------------
-
-// Without this the operator+ in tt/unified/math.hpp is SFINAE'd out and
-// `lhs + rhs` does not resolve.
-template <>
-struct is_operand<ComputeBlock> : std::true_type {};
-
-TileSource as_node(const ComputeBlock& b);
-
-auto relu(const ComputeBlock& b);
-auto exp_(const ComputeBlock& b);
-
-template <typename Geometry>
-auto matmul(const ComputeBlock& a, const ComputeBlock& b);
-
-// Reduce `b`'s tile grid down one axis, within and across tiles. `Geometry` is
-// the INPUT grid, `Axis` says which dimension collapses, and the destination
-// Storage must hold Geometry::out_tiles(Axis) tiles -- see ReduceAxis in
-// tt/unified/math.hpp for the shapes.
-//
-//     u::Storage out(kCbOut, u::ReduceGeometry<4, 4>::out_tiles(u::ReduceAxis::Rows));
-//     out.store(u::reduce_sum<u::ReduceGeometry<4, 4>, u::ReduceAxis::Rows>(block, scaler));
-//
-// `scaler` must have been filled by fill_reduce_scaler and is never consumed.
-template <typename Geometry, ReduceAxis Axis>
-ReduceNode<Geometry, Axis, ReducePool::Sum, expr::UnaryChain<>> reduce_sum(
-    const ComputeBlock& b, const Storage& scaler);
 
 // ---------------------------------------------------------------------------
 // NOC transaction handles
