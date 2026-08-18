@@ -66,6 +66,9 @@ struct DataflowBufferConfig {
     // instead of allocating its own L1 region. The actual base address must be
     // supplied before launch via DataflowBufferImpl::set_borrowed_memory_base_addr.
     bool borrows_memory = false;
+    // When true, this local DFB is a CrossNode/Persistent relay (borrowed ring +
+    // DM/TRISC credit bridge). Host binding generation emits RelayDFBBindingToken.
+    bool is_relay = false;
 };
 
 // Note: This API and the DataflowBufferConfig are placeholder only, the final DataflowBuffer APIs will conform with

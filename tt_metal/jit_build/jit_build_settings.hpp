@@ -100,8 +100,12 @@ public:
     //  - DFB bindings
     //  - Semaphore bindings
     //  - Tensor bindings
+    // persistent_dfb_id is 0xFF unless the binding is a PersistentDFB relay, in which case
+    // it identifies the persistent slot the relay-token constructor aligns from on TRISC.
     virtual void process_dataflow_buffer_binding_handles(
-        std::function<void(const std::string& accessor_name, uint16_t logical_dfb_id)>) const {}
+        std::function<
+            void(const std::string& accessor_name, uint16_t logical_dfb_id, bool is_relay, uint8_t persistent_dfb_id)>)
+        const {}
     virtual void process_semaphore_binding_handles(
         std::function<void(const std::string& accessor_name, uint16_t semaphore_id)>) const {}
 

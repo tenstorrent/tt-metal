@@ -16,6 +16,12 @@
 #include "internal/circular_buffer_interface.h"
 #endif
 
+// Persistent-relay checkpoint align, called from the RelayDFBBindingToken constructor on
+// TRISC (unpack/pack). DM aligns in PersistentDFB::bind_relay().
+#if defined(COMPILE_FOR_TRISC) && !defined(ARCH_QUASAR) && !defined(UCK_CHLKC_MATH)
+#include "internal/persistent_dfb_init.h"
+#endif
+
 #ifndef COMPILE_FOR_TRISC
 #include "api/dataflow/noc.h"
 #include "tools/profiler/noc_debugging_profiler.hpp"
@@ -96,6 +102,31 @@ private:
     uint16_t id_;
 };
 
+// Compile-time handle for a CrossNode/Persistent *relay* local DFB binding.
+// Distinct from DFBBindingToken so kernels cannot silently treat a normal DFB as a
+// relay (or vice versa) without a cast — no runtime "am I a relay?" check needed.
+// Emitted into kernel_bindings_generated.h when the host DFB was created as a relay.
+//
+// Persistent relays additionally carry the persistent_dfb_id so the TRISC-side
+// DataflowBuffer constructor can O(1)-index that slot in the launch-msg persistent
+// region and snap the borrowed local iface to the durable fifo_ptr checkpoint.
+// CrossNode relays omit it (NO_PERSISTENT_DFB): CrossNode state is re-zeroed every
+// launch, so the dispatch-written local CB config is already correct.
+struct RelayDFBBindingToken {
+    static constexpr uint8_t NO_PERSISTENT_DFB = 0xFF;
+
+    explicit constexpr RelayDFBBindingToken(uint16_t id, uint8_t persistent_dfb_id = NO_PERSISTENT_DFB) noexcept :
+        id_(id), persistent_dfb_id_(persistent_dfb_id) {}
+
+    constexpr operator uint32_t() const noexcept { return id_; }
+
+    constexpr uint8_t persistent_dfb_id() const noexcept { return persistent_dfb_id_; }
+
+private:
+    uint16_t id_;
+    uint8_t persistent_dfb_id_;
+};
+
 class DataflowBuffer {
 public:
 #ifdef ARCH_QUASAR
@@ -109,7 +140,19 @@ public:
     //   DataflowBuffer dfb(my_dfb_name);
     DataflowBuffer(DFBBindingToken token) : DataflowBuffer(static_cast<uint16_t>(token)) {}
 
-    // Low-level constructor: prefer DFBBindingToken overload above for new kernel code.
+    // Relay local DFB (CrossNode / Persistent bridge to compute). Same runtime object;
+    // the token type is how the host marks the binding as a relay at compile time.
+    // For Persistent relays on TRISC, construction snaps the borrowed local iface to the
+    // durable checkpoint via a launch-msg slot lookup keyed by token.persistent_dfb_id()
+    DataflowBuffer(RelayDFBBindingToken token) : DataflowBuffer(static_cast<uint16_t>(token)) {
+#if defined(COMPILE_FOR_TRISC) && !defined(ARCH_QUASAR) && !defined(UCK_CHLKC_MATH)
+        if (token.persistent_dfb_id() != RelayDFBBindingToken::NO_PERSISTENT_DFB) {
+            experimental::align_local_dfb_to_persistent_slot(logical_dfb_id_, token.persistent_dfb_id());
+        }
+#endif
+    }
+
+    // Low-level constructor: prefer DFBBindingToken / RelayDFBBindingToken for new kernel code.
     DataflowBuffer(uint16_t logical_dfb_id);
 
     uint16_t get_id() const { return logical_dfb_id_; }

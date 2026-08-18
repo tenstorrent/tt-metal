@@ -315,9 +315,11 @@ void Kernel::process_named_compile_time_args(
 }
 
 void Kernel::process_dataflow_buffer_binding_handles(
-    const std::function<void(const std::string& accessor_name, uint16_t logical_dfb_id)> callback) const {
-    for (const auto& [accessor_name, logical_dfb_id] : this->dataflow_buffer_binding_handles_) {
-        callback(accessor_name, logical_dfb_id);
+    const std::function<void(
+        const std::string& accessor_name, uint16_t logical_dfb_id, bool is_relay, uint8_t persistent_dfb_id)> callback)
+    const {
+    for (const auto& [accessor_name, handle] : this->dataflow_buffer_binding_handles_) {
+        callback(accessor_name, handle.logical_dfb_id, handle.is_relay, handle.persistent_dfb_id);
     }
 }
 
@@ -571,7 +573,9 @@ uint64_t Kernel::compute_hash() const {
     }
     for (const auto& it : sorted_iters(this->dataflow_buffer_binding_handles_)) {
         hasher.update(it->first);
-        hasher.update(static_cast<uint64_t>(it->second));
+        hasher.update(static_cast<uint64_t>(it->second.logical_dfb_id));
+        hasher.update(static_cast<uint64_t>(it->second.is_relay ? 1 : 0));
+        hasher.update(static_cast<uint64_t>(it->second.persistent_dfb_id));
     }
     for (const auto& it : sorted_iters(this->semaphore_binding_handles_)) {
         hasher.update(it->first);

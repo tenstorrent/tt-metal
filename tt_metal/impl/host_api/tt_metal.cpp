@@ -1171,6 +1171,35 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
                     uint64_t addr = kernel_config_base + cross_node_dfb_offset;
                     metal_ctx.get_cluster().write_core(device_id, physical_core, cross_node_dfb_vec, addr);
                 }
+
+                // PersistentDFB dense index only config pages written to device when the PersistentDFB is created.
+                const uint32_t persistent_dfb_offset = program_config.persistent_dfb_offset;
+                const auto& per_core_persistent_dfbs = program.impl().get_per_core_persistent_dfbs();
+                auto persistent_it = per_core_persistent_dfbs.find(logical_core);
+                if (persistent_it != per_core_persistent_dfbs.end() && !persistent_it->second.empty()) {
+                    TT_FATAL(
+                        persistent_dfb_offset != PERSISTENT_DFB_OFFSET_NONE,
+                        "PersistentDFB participants present but persistent_dfb_offset is NONE");
+                    const uint8_t num_program_slots = program.impl().num_persistent_dfb_slots();
+                    const uint32_t payload_words = persistent_dfb_config_region_words(num_program_slots);
+                    std::vector<uint32_t> persistent_dfb_vec(payload_words, 0u);
+                    persistent_dfb_vec[0] = num_program_slots;
+                    for (const auto& participant : persistent_it->second) {
+                        TT_FATAL(
+                            participant.persistent_dfb_id < num_program_slots,
+                            "PersistentDFB sparse participant persistent_dfb_id {} exceeds program slot count {}",
+                            participant.persistent_dfb_id,
+                            num_program_slots);
+                        const uint32_t base = PERSISTENT_DFB_REGION_HEADER_WORDS +
+                                              participant.persistent_dfb_id * UINT32_WORDS_PER_PERSISTENT_DFB_CONFIG;
+                        persistent_dfb_vec[base + 0] = participant.config_page_addr;
+                        persistent_dfb_vec[base + 1] = participant.entry_size;
+                        persistent_dfb_vec[base + 2] = participant.relay_dfb_id;
+                    }
+                    uint64_t addr = kernel_config_base + persistent_dfb_offset;
+                    MetalContext::instance().get_cluster().write_core(
+                        device_id, physical_core, persistent_dfb_vec, addr);
+                }
             }
             program.impl().init_semaphores(*device, logical_core, index);
         }

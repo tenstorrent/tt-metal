@@ -43,6 +43,7 @@
 #include "buffer_types.hpp"
 #include "impl/buffers/circular_buffer.hpp"
 #include "impl/dataflow_buffer/cross_node_dfb.hpp"
+#include "impl/dataflow_buffer/persistent_dfb.hpp"
 #include "circular_buffer_constants.h"
 #include "core_coord.hpp"
 #include "impl/context/metal_context.hpp"
@@ -1307,6 +1308,10 @@ CBHandle detail::ProgramImpl::add_circular_buffer(
         this->per_core_cross_node_dfbs_.empty(),
         "Cannot add a GlobalCircularBuffer to a program that already has CrossNodeDFB participants. "
         "GlobalCircularBuffer and CrossNodeDFB are mutually exclusive within a program.");
+    TT_FATAL(
+        this->per_core_persistent_dfbs_.empty(),
+        "Cannot add a GlobalCircularBuffer to a program that already has PersistentDFB attachments. "
+        "GlobalCircularBuffer and PersistentDFB are mutually exclusive within a program.");
     // Merge ranges to reduce the number of multicasts needed to initialize CBs.
     std::shared_ptr<CircularBufferImpl> circular_buffer =
         std::make_shared<CircularBufferImpl>(core_range_set.merge_ranges(), config, global_circular_buffer);
@@ -1349,6 +1354,141 @@ uint8_t detail::ProgramImpl::add_cross_node_dfb(experimental::CrossNodeDFB gdfb)
     }
     cross_node_dfbs_.emplace(remote_dfb_id, std::move(gdfb));
     return remote_dfb_id;
+}
+
+uint8_t detail::ProgramImpl::add_persistent_dfb_attachment(
+    experimental::PersistentDFB& persistent_dfb,
+    const CoreRangeSet& cores,
+    std::optional<uint32_t> entry_size_override) {
+    TT_FATAL(this->compiled_.empty(), "Cannot attach PersistentDFB to an already compiled program {}", this->id);
+
+    for (const auto& [core, remote_bits] : per_core_remote_cb_indices_) {
+        TT_FATAL(
+            !remote_bits.any(),
+            "Cannot attach PersistentDFB to a program that already has GlobalCircularBuffers. "
+            "GlobalCircularBuffer and PersistentDFB are mutually exclusive within a program.");
+    }
+
+    constexpr uint8_t max_persistent_dfbs = static_cast<uint8_t>(MAX_PERSISTENT_DFBS);
+    TT_FATAL(
+        next_persistent_dfb_slot_ < max_persistent_dfbs,
+        "Exceeded maximum number ({}) of PersistentDFBs per program",
+        max_persistent_dfbs);
+
+    TT_FATAL(cores.num_cores() > 0, "AttachPersistentDFB requires a non-empty core set");
+    const CoreRangeSet& all_cores = persistent_dfb.all_cores();
+    TT_FATAL(
+        all_cores.intersection(cores).num_cores() == cores.num_cores(),
+        "AttachPersistentDFB cores must be a subset of the PersistentDFB mapping cores");
+
+    const uint8_t persistent_dfb_id = next_persistent_dfb_slot_++;
+    const uint32_t dense_entry_size = entry_size_override.value_or(persistent_dfb.entry_size());
+    TT_FATAL(dense_entry_size > 0, "PersistentDFB dense entry_size must be > 0");
+
+    for (const auto& core_range : cores.ranges()) {
+        for (const auto& core : core_range) {
+            auto& participants = per_core_persistent_dfbs_[core];
+            for (const auto& a : participants) {
+                TT_FATAL(
+                    a.persistent_dfb_id != persistent_dfb_id,
+                    "PersistentDFB slot {} already has a participant on core {}",
+                    persistent_dfb_id,
+                    core.str());
+            }
+            participants.push_back(
+                {persistent_dfb_id,
+                 persistent_dfb.config_address(),
+                 dense_entry_size,
+                 std::numeric_limits<uint8_t>::max()});
+        }
+    }
+    persistent_dfb_attachments_[persistent_dfb_id] = &persistent_dfb;
+    return persistent_dfb_id;
+}
+
+const experimental::PersistentDFB& detail::ProgramImpl::get_persistent_dfb_attachment(uint8_t persistent_dfb_id) const {
+    auto it = persistent_dfb_attachments_.find(persistent_dfb_id);
+    TT_FATAL(
+        it != persistent_dfb_attachments_.end(),
+        "get_persistent_dfb_attachment: slot {} is not attached to program {}",
+        persistent_dfb_id,
+        this->id);
+    TT_FATAL(it->second != nullptr, "PersistentDFB attachment slot {} is null", persistent_dfb_id);
+    return *it->second;
+}
+
+void detail::ProgramImpl::register_persistent_relay_dfb(
+    const CoreRangeSet& receiver_cores, uint8_t persistent_dfb_id, uint32_t relay_dfb_host_id) {
+    TT_FATAL(
+        this->compiled_.empty(), "Cannot register a PersistentDFB relay on an already compiled program {}", this->id);
+
+    const experimental::PersistentDFB& pdfb = get_persistent_dfb_attachment(persistent_dfb_id);
+
+    auto relay_dfb = get_dataflow_buffer(relay_dfb_host_id);
+    TT_FATAL(relay_dfb != nullptr, "Relay DFB host id {} does not exist", relay_dfb_host_id);
+    TT_FATAL(relay_dfb->borrows_memory(), "Persistent relay DFB {} must use borrowed memory", relay_dfb_host_id);
+    TT_FATAL(
+        pdfb.ring_size() % relay_dfb->config.entry_size == 0,
+        "Persistent relay entry size {} must divide PersistentDFB ring size {}",
+        relay_dfb->config.entry_size,
+        pdfb.ring_size());
+    TT_FATAL(
+        relay_dfb->config.num_entries == pdfb.ring_size() / relay_dfb->config.entry_size,
+        "Persistent relay depth {} must equal ring_size/entry_size ({})",
+        relay_dfb->config.num_entries,
+        pdfb.ring_size() / relay_dfb->config.entry_size);
+    TT_FATAL(
+        relay_dfb->core_ranges == receiver_cores.merge_ranges(),
+        "Relay DFB core ranges must match the declared relay receiver cores");
+    TT_FATAL(
+        pdfb.receiver_cores().merge(receiver_cores).num_cores() == pdfb.receiver_cores().num_cores(),
+        "Persistent relay cores must be a subset of the PersistentDFB receiver cores");
+    TT_FATAL(
+        relay_dfb->device_slot < std::numeric_limits<uint8_t>::max(),
+        "Relay DFB device slot {} cannot be represented in Persistent receiver metadata",
+        relay_dfb->device_slot);
+
+    auto relay_it = persistent_relay_host_ids_.find(persistent_dfb_id);
+    TT_FATAL(
+        relay_it == persistent_relay_host_ids_.end() || relay_it->second == relay_dfb_host_id,
+        "PersistentDFB slot {} already has relay DFB host id {}",
+        persistent_dfb_id,
+        relay_it != persistent_relay_host_ids_.end() ? relay_it->second : 0);
+    persistent_relay_host_ids_[persistent_dfb_id] = relay_dfb_host_id;
+
+    relay_dfb->set_borrowed_memory_base_addr(pdfb.buffer_address());
+    const uint8_t relay_device_slot = static_cast<uint8_t>(relay_dfb->device_slot);
+
+    for (const CoreCoord& core : corerange_to_cores(receiver_cores)) {
+        auto participant_it = per_core_persistent_dfbs_.find(core);
+        TT_FATAL(
+            participant_it != per_core_persistent_dfbs_.end(),
+            "PersistentDFB must be attached on relay receiver core {} before registering its relay",
+            core.str());
+        auto& participants = participant_it->second;
+        auto participant = std::find_if(participants.begin(), participants.end(), [persistent_dfb_id](const auto& a) {
+            return a.persistent_dfb_id == persistent_dfb_id;
+        });
+        TT_FATAL(
+            participant != participants.end(),
+            "PersistentDFB slot {} is not present on relay receiver core {}",
+            persistent_dfb_id,
+            core.str());
+        TT_FATAL(
+            participant->entry_size == relay_dfb->config.entry_size,
+            "Persistent relay entry size {} must match Attach dense entry_size {} on core {}",
+            relay_dfb->config.entry_size,
+            participant->entry_size,
+            core.str());
+        TT_FATAL(
+            participant->relay_dfb_id == std::numeric_limits<uint8_t>::max() ||
+                participant->relay_dfb_id == relay_device_slot,
+            "PersistentDFB slot {} already has relay device slot {} on core {}",
+            persistent_dfb_id,
+            participant->relay_dfb_id,
+            core.str());
+        participant->relay_dfb_id = relay_device_slot;
+    }
 }
 
 const experimental::CrossNodeDFB& detail::ProgramImpl::get_cross_node_dfb(uint8_t remote_dfb_id) const {
@@ -2859,6 +2999,7 @@ void detail::ProgramImpl::set_program_offsets_and_sizes(uint32_t index, const Pr
     program_config.dfb_offset = state.dfb_offset;
     program_config.dfb_size = state.dfb_size;
     program_config.cross_node_dfb_offset = state.cross_node_dfb_offset;
+    program_config.persistent_dfb_offset = state.persistent_dfb_offset;
     program_config.kernel_text_offset = state.kernel_text_offset;
     program_config.kernel_text_size = state.kernel_text_size;
     program_config_sizes_[index] = state.offset;
@@ -2976,6 +3117,14 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
         state.cross_node_dfb_offset = (state.offset > prev_offset_before_cross_node_dfb)
                                           ? (prev_offset_before_cross_node_dfb - state.config_base_offset)
                                           : CROSS_NODE_DFB_OFFSET_NONE;
+
+        TT_ASSERT(state.offset == tt::align(state.offset, hal.get_alignment(HalMemType::L1)));
+
+        uint32_t prev_offset_before_persistent_dfb = state.offset;
+        state.offset = program_dispatch::finalize_persistent_dfbs(index, programs, state.offset);
+        state.persistent_dfb_offset = (state.offset > prev_offset_before_persistent_dfb)
+                                          ? (prev_offset_before_persistent_dfb - state.config_base_offset)
+                                          : PERSISTENT_DFB_OFFSET_NONE;
 
         TT_ASSERT(state.offset == tt::align(state.offset, hal.get_alignment(HalMemType::L1)));
 

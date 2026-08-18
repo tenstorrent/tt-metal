@@ -14,6 +14,7 @@
 #include <filesystem>
 #include <functional>
 #include <iterator>
+#include <tuple>
 // Blaze-only experimental named args (removal tracked by issue #50953): <map>/<set> below
 #include <map>
 #include <set>
@@ -132,10 +133,14 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     // Get the DFB bindings from the settings callback
     // Sort them to ensure the file output is deterministic for the JIT build cache
     // (aka the on-disk per-object dephash cache)
-    vector<pair<string, uint16_t>> dfb_entries;
+    vector<tuple<string, uint16_t, bool, uint8_t>> dfb_entries;
     settings.process_dataflow_buffer_binding_handles(
-        [&dfb_entries](const string& name, uint16_t id) { dfb_entries.emplace_back(name, id); });
-    sort(dfb_entries.begin(), dfb_entries.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+        [&dfb_entries](const string& name, uint16_t id, bool is_relay, uint8_t persistent_dfb_id) {
+            dfb_entries.emplace_back(name, id, is_relay, persistent_dfb_id);
+        });
+    sort(dfb_entries.begin(), dfb_entries.end(), [](const auto& a, const auto& b) {
+        return std::get<0>(a) < std::get<0>(b);
+    });
 
     // Get the semaphore bindings from the settings callback
     // Sort them to ensure the file output is deterministic, as explained above
@@ -231,8 +236,19 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
 
         if (!dfb_entries.empty()) {
             content << "namespace dfb {\n";
-            for (const auto& [name, id] : dfb_entries) {
-                content << "constexpr DFBBindingToken " << name << "{" << id << "};\n";
+            for (const auto& [name, id, is_relay, persistent_dfb_id] : dfb_entries) {
+                if (is_relay) {
+                    // Persistent relays bake the persistent slot into the token so the TRISC
+                    // constructor can O(1)-align to the durable checkpoint; CrossNode relays
+                    // use the single-arg form (NO_PERSISTENT_DFB default, no align needed).
+                    content << "constexpr RelayDFBBindingToken " << name << "{" << id;
+                    if (persistent_dfb_id != 0xFF) {
+                        content << ", " << static_cast<uint32_t>(persistent_dfb_id);
+                    }
+                    content << "};\n";
+                } else {
+                    content << "constexpr DFBBindingToken " << name << "{" << id << "};\n";
+                }
             }
             content << "}  // namespace dfb\n";
         }
