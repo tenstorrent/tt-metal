@@ -139,15 +139,14 @@ place to start. Points 5 and 6 are one line each.
 - PCC is right for a component against its reference, but not as the end to end verdict. The model
   emits discrete codes and feeds them back, so a change can score near perfect on tensors while the
   codes diverge, and one flipped code redirects the rest of the utterance.
-- The rest of this is a suggestion rather than a recommendation, since we are not specialists in
-  measuring speech quality and someone who is may have better answers. What we used, and what caught
-  things a correlation could not: pin the random draw the model makes each frame, so two runs of the
-  same code produce the same audio and can be compared at all; count how many emitted codes exactly
-  match the reference's, which is free and stricter than any correlation; feed the reference's
-  frames in at every step instead of the model's own, which isolates a change from the drift that
-  follows it, known as teacher forcing; word error rate, by transcribing the output with Whisper and
-  comparing against the text you asked for; a predicted naturalness score, where a model trained on
-  human ratings estimates from the waveform alone how a listener would rate it out of five; and
-  whether every prompt terminates on its own, which is nearly free.
+- What we used, and what caught things a correlation could not: pin the random draw the model makes
+  each frame, so two runs of the same code produce the same audio and can be compared at all; count
+  how many emitted codes exactly match the reference's, which is free and stricter than any
+  correlation; feed the reference's frames in at every step instead of the model's own, which
+  isolates a change from the drift that follows it, known as teacher forcing; word error rate, by
+  transcribing the output with Whisper and comparing against the text you asked for; a predicted
+  naturalness score, where a model trained on human ratings estimates from the waveform alone how a
+  listener would rate it out of five; and whether every prompt terminates on its own, which is
+  nearly free.
 - Fix: a correlation alone is not enough for a model like this, and it is worth deciding
   deliberately what it should be gated on instead.
