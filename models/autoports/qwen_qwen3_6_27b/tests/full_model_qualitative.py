@@ -15,7 +15,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 import ttnn
 from models.autoports.qwen_qwen3_6_27b.tt.generator import build_generator
-from models.autoports.qwen_qwen3_6_27b.tt.functional_decoder import default_snapshot, MODEL_REVISION
+from models.autoports.qwen_qwen3_6_27b.tt.functional_decoder import default_snapshot, MODEL_ID, MODEL_REVISION
 
 
 def main() -> None:
@@ -59,7 +59,7 @@ def main() -> None:
         ttnn.close_mesh_device(mesh)
 
     result = {
-        "model": "Qwen/Qwen3.6-27B", "revision": MODEL_REVISION,
+        "model": MODEL_ID, "revision": MODEL_REVISION,
         "tokenizer_class": type(tokenizer).__name__, "chat_template_present": bool(tokenizer.chat_template),
         "rendering_method": "apply_chat_template(add_generation_prompt=True)",
         "prompt_source": str(args.prompts), "generation": {"greedy": True, "max_new_tokens": args.max_new_tokens},
