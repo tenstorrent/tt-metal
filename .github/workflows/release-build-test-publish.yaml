@@ -64,6 +64,7 @@ jobs:
     uses: ./.github/workflows/check-harbor.yaml
   build-artifact:
     needs: [check-harbor, parse-platform]
+    if: ${{ !cancelled() && needs.parse-platform.result == 'success' }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read
