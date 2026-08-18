@@ -298,6 +298,8 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         self._perf_decode_tokens = 0
         self._perf_decode_s = 0.0
         self._perf_log_every = max(1, int(os.environ.get("GEMMA4_VLLM_PERF_LOG_EVERY", "32")))
+        # Batch-keyed decode traces (mixin); must exist before first sample.
+        self._prev_decode_batch = None
         # Extra synchronize_device stalls async overlap (#51186). Default off;
         # set GEMMA4_VLLM_DECODE_SYNC_EVERY=log/1 for sync wall-clock parity.
         _sync_default = "0" if self.model_capabilities.get("supports_async_decode") else "log"
