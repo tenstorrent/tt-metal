@@ -159,15 +159,6 @@ void kernel_main() {
 #else
     constexpr uint32_t pack_target_cb_id = tilize_untilize_cb;
 #endif
-    // [#48552] Avg-pool-only band-aid: raise the compute MOP timeout so the avg-pool reduce MOP does not
-    // trip a 0x19 (MOP timeout) on a slow reader/handshake. Scoped via is_avg_pool so maxpool is unaffected.
-    // See project_quasar_0x19_mop_timeout. This masks the symptom, not the root cause.
-    if constexpr (is_avg_pool) {
-#ifndef CSR_TIMEOUT_COUNT
-#define CSR_TIMEOUT_COUNT 0xBD0
-#endif
-        asm volatile("csrw %0, %1" : : "i"(CSR_TIMEOUT_COUNT), "r"(0x100000));
-    }
     compute_kernel_hw_startup(in_cb_id_0, in_scalar_cb_id_0, pack_target_cb_id);
     tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(in_cb_id_0, in_scalar_cb_id_0, max_tiles_per_iter);
 
