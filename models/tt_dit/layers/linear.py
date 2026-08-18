@@ -480,6 +480,79 @@ class ColParallelLinear(Module):
 
         return _apply_activation_fn(output, self.activation_fn)
 
+    def forward_fused_addcmul(
+        self,
+        x: ttnn.Tensor,
+        addcmul_residual: ttnn.Tensor,
+        addcmul_gate: ttnn.Tensor,
+        compute_kernel_config=None,
+        parallel_config=None,
+        dtype=None,
+        core_grid=None,
+    ) -> ttnn.Tensor:
+        """Fused to_out projection + addcmul: output = residual + (matmul(x, W) + bias) * gate."""
+
+        # Handle FSDP weight gathering (mirrors ColParallelLinear.forward)
+        if self.fsdp_mesh_axis is not None and self.mesh_device.shape[self.fsdp_mesh_axis] > 1:
+            unsqueezed_weight = ttnn.unsqueeze_to_4D(self.weight.data)
+            weight = self.ccl_manager.all_gather_persistent_buffer(
+                unsqueezed_weight, dim=2, mesh_axis=self.fsdp_mesh_axis
+            )
+            weight = ttnn.reshape(weight, (weight.shape[-2], weight.shape[-1]))
+        else:
+            weight = self.weight.data
+
+        if parallel_config is not None and parallel_config.tensor_parallel.factor > 1:
+            M, K, N = x.padded_shape[-2], weight.padded_shape[-2], weight.padded_shape[-1]
+            full_grid = self.mesh_device.compute_with_storage_grid_size()
+            core_grid = core_grid or ttnn.CoreCoord(full_grid.x, full_grid.y - 1)
+            matmul_config = get_matmul_config(M, K, N, core_grid)
+
+            ag_persistent_buffer = self.ccl_manager.get_ag_ping_pong_buffer(
+                x.shape, -1, parallel_config.tensor_parallel.mesh_axis, dtype=x.get_dtype()
+            )
+            ag_global_semaphores = self.ccl_manager.get_ag_ping_pong_semaphore(
+                parallel_config.tensor_parallel.mesh_axis
+            )
+            output = ttnn.experimental.all_gather_minimal_matmul_async(
+                input_tensor=x,
+                weight_tensor=weight,
+                bias_tensor=self.bias.data if self.bias is not None else None,
+                config=matmul_config,
+                compute_kernel_config=compute_kernel_config or self.compute_config,
+                persistent_output_buffer=ag_persistent_buffer,
+                multi_device_global_semaphore=ag_global_semaphores,
+                num_links=self.ccl_manager.num_links,
+                topology=self.ccl_manager.topology,
+                cluster_axis=parallel_config.tensor_parallel.mesh_axis,
+                barrier_semaphore=None,
+                force_transpose=True,
+                num_workers_per_link=full_grid.x // self.ccl_manager.num_links,
+                num_buffers_per_channel=48 if not is_blackhole() else 24,
+                scalar=1.0,
+                addcmul_input_tensor1=addcmul_residual,
+                addcmul_input_tensor2=addcmul_gate,
+                dtype=dtype,
+            )[0]
+        else:
+            M, K, N_out = x.padded_shape[-2], x.padded_shape[-1], weight.padded_shape[-1]
+            core_grid = self.mesh_device.compute_with_storage_grid_size()
+            matmul_config = get_matmul_config(M, K, N_out, core_grid)
+
+            output = ttnn.experimental.dit_minimal_matmul_addcmul_fused(
+                x,
+                weight,
+                1.0,  # scalar
+                addcmul_residual,
+                addcmul_gate,
+                bias_tensor=self.bias.data if self.bias is not None else None,
+                config=matmul_config,
+                compute_kernel_config=compute_kernel_config or self.compute_config,
+                dtype=dtype,
+            )
+
+        return output
+
 
 class RowParallelLinear(Module):
     """

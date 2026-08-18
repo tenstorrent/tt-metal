@@ -22,6 +22,7 @@ class FeedForward(Module):
         inner_dim=None,
         bias: bool = True,
         mesh_device=None,
+        fuse_swiglu: bool = False,
     ):
         super().__init__()
 
