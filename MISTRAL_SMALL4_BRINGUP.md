@@ -1027,19 +1027,111 @@ falling to ~1.17-1.20x at 256k. `(4,2)` is never worth it. Tracing is not option
 the hand-off must be device-to-device — a host round-trip moves 42 MB per hop and costs more than
 the entire pipeline.
 
+### What `/data/kmabee/mistral4_golden_traces` is, and how to regenerate it
+
+**What it is.** One golden reference trace for Mistral Small 4, at
+`/data/kmabee/mistral4_golden_traces/mistral4_15360_36L` (4.9 GB). It is the reference that
+`test_prefill_transformer_chunked` PCC-checks chunked prefill against. Every other resident in this
+folder uses a **recorded vLLM** trace under `/mnt/models/deepseek-prefill-cache/golden/`; Mistral has
+none, so this one is **generated on the host** from the HF reference implementation instead.
+
+**Layout** — the "single_file" trace layout (`variant.prefill_trace_layout`, the default):
+
+```
+mistral4_15360_36L/
+  metadata.json                     {token_ids: [15360 ints], n_layers: 36, next_token_id: 2}
+  hidden_states/layer_{0..35}.safetensors   key decoder_output_layer_N -> [15360, 4096] bf16
+  kv_cache/layer_{0..35}.safetensors        key kv_post_transform_layer_N -> [15360, 320] fp32
+```
+
+320 = `kv_lora_rank 256 + qk_rope_head_dim 64`, the compressed MLA line the device actually caches.
+The pe half is stored in the HF half-split basis (`_meta_pe_to_hf` inverts the Meta-interleaved form
+the reference produces), because the consumer re-interleaves on load.
+
+**How it was generated.** `tt/runners/generate_prompt_trace.py`, host-only, no device: it runs the HF
+reference forward layer-by-layer (`load_and_compute_layer_by_layer`, memory-flat) and writes the
+per-layer decoder outputs plus the derived compressed KVPE line. ~30 s/layer, ~20 min for 36 layers.
+
+**Which prompt.** `models/demos/deepseek_v3_d_p/demo/test_prompt_25k.json` — **in-repo**, a JSON list,
+172,465 characters, tokenized and truncated to exactly 15,360 tokens (all real, no padding, so
+`next_token_id` is meaningful; the generator omits that key rather than record a pad position's
+argmax). Worth knowing what the text is: **synthetic repetitive English filler** ("A traveler walked
+through the old town noticing details in windows, doors, and stone pathways...", a paragraph that
+loops). Fine for PCC and for timing — it exercises the real routing and real weights — but it is not a
+natural-language benchmark, and a repetitive prompt probably gives the MoE gate less routing diversity
+than real text would. Do not read anything about model quality off it.
+
+**Why 15,360.** `3 x CHUNK` at `CHUNK = 5120`, i.e. the smallest whole number of chunks that exercises
+the chunked path (first chunk, a middle chunk, and a last chunk). It is also the ceiling on what can be
+PCC-checked today: the chunked test's deeper rows (11 chunks = 56,320, 51 chunks = 261,120) have no
+golden, which is why the long-context work uses the no-PCC timing path with synthetic token ids.
+
+**To regenerate** (host-only, no device needed, so it does not contend for the galaxy):
+
+```bash
+export TT_METAL_HOME=$PWD PYTHONPATH=$PWD
+export MISTRAL4_HF_MODEL=/data/kmabee/models/Mistral-Small-4-119B-2603
+export PREFILL_HF_MODEL=$MISTRAL4_HF_MODEL          # the generator reads this one
+OMP_NUM_THREADS=24 ./python_env/bin/python -m models.demos.deepseek_v3_d_p.tt.runners.generate_prompt_trace \
+  --model mistral_small4 \
+  --prompt-file models/demos/deepseek_v3_d_p/demo/test_prompt_25k.json \
+  --isl 15360 --num-layers 36 \
+  --out /data/kmabee/mistral4_golden_traces/mistral4_15360_36L
+# wrapper: /data/kmabee/mistral4_repro_logs/night2/run_golden_15k.sh
+```
+
+`--isl` and `--num-layers` are free: a deeper golden (e.g. `--isl 56320` for the 11-chunk row) is the
+same command with a longer prompt file, and costs roughly linearly in ISL x layers. `--no-hidden-states`
+writes only `kv_cache/`, which is enough for the prefill producer's KV validation but NOT for the
+transformer PCC test.
+
+**To use it**, point `PREFILL_TRACE_DIR` at it — `MistralSmall4Adapter.prefill_trace_default` is
+deliberately empty rather than a personal path, so the chunked rows skip cleanly on a machine that has
+no trace:
+
+```bash
+export PREFILL_TRACE_DIR=/data/kmabee/mistral4_golden_traces/mistral4_15360_36L
+```
+
 ### Re-running all of this on a higher-power machine
 
 This box is **8 kW**; a **12 kW** machine should raise every number here, and prefill is exactly the
 regime that benefits (device-bound at large windows — at 25.6k eager and traced are within 1%, so
 the device, not the host, is the limit). Everything needed to reproduce the whole table:
 
+**First, what is and is NOT shared between machines.** `/data` is NFS (`10.32.13.1:/data`), so
+everything under `/data/kmabee` is visible from any box in the fleet. **`/home/kmabee` is the local
+root disk and is NOT shared** — which matters, because every cache this session built lived there. The
+caches are therefore staged to `/data/kmabee/mistral4_caches/` and the env below points at those.
+
+| asset | path | shared? |
+|---|---|---|
+| checkout + build + venv | `/data/kmabee/tt-metal` | ✅ NFS |
+| model checkpoint | `/data/kmabee/models/Mistral-Small-4-119B-2603` | ✅ NFS |
+| golden trace | `/data/kmabee/mistral4_golden_traces/mistral4_15360_36L` | ✅ NFS |
+| wrapper scripts + logs | `/data/kmabee/mistral4_repro_logs/{night2,pp}` | ✅ NFS |
+| **TTNN weight caches** | `/data/kmabee/mistral4_caches/` (staged from `/home`) | ✅ NFS |
+| ~~original caches~~ | `/home/kmabee/mistral4_ttnn_cache*` | ❌ local only |
+
+**The caches are reusable, not machine-specific.** They are keyed
+`{name}_{arch}_{N}dev/{sp}x{tp}` — `mistral_small4_bh_32dev/8x4`, `.../8x1`, `mistral_small4_bh_8dev/8x1`
+— so on any **32-chip Blackhole galaxy** they hit as-is and save ~25 min of cold build each. They do
+NOT apply to a different device count or arch (the 8-chip-carve cache is separately keyed `8dev`,
+which is why both exist). The 4x2 PP cache was deliberately not staged: that variant measured worse
+than no PP, so it is not worth 65 GB of shared storage — rebuild it if you want to re-confirm.
+
+The one thing worth testing early on a new box: whether `/data/kmabee/tt-metal/python_env` and
+`build_Release` run there directly. Same absolute path on both machines, so the venv's paths resolve;
+if the kernels or driver bindings disagree, rebuild in place (`00_build.sh`) before anything else.
+
 ```bash
-# 0. environment (same on any box; caches are keyed by {arch}_{Ndev}/{sp}x{tp} so they do NOT
-#    transfer between machines with different device counts -- expect cold builds)
+# 0. environment -- all paths on shared /data, so this block is copy-paste on either machine
 cd <checkout> && export TT_METAL_HOME=$PWD PYTHONPATH=$PWD
 export MISTRAL4_HF_MODEL=<path to Mistral-Small-4-119B-2603>
-export TT_MISTRAL4_PREFILL_TTNN_CACHE=$HOME/mistral4_ttnn_cache          # 65 GB, single-rank 8x4
-export TT_MISTRAL4_PREFILL_HOST_REF_CACHE=$HOME/mistral4_ref_cache
+export MISTRAL4_CACHES=/data/kmabee/mistral4_caches                       # staged, shared, reusable
+export TT_MISTRAL4_PREFILL_TTNN_CACHE=$MISTRAL4_CACHES/ttnn_cache_8x4     # 65 GB, single-rank 8x4
+export TT_MISTRAL4_PREFILL_HOST_REF_CACHE=$MISTRAL4_CACHES/ref_cache
+export PREFILL_TRACE_DIR=/data/kmabee/mistral4_golden_traces/mistral4_15360_36L   # for PCC rows
 
 # 1. single-rank baseline: 5,120 / 25,600 (single-shot) -- the 26,203 / 33,552 row
 PROFILE_SEQ_LEN=25600 PROFILE_ISL=25600 TRACE_MAX_NEW=0 PROFILE_REPS=3 PROFILE_WARMUP=1   pytest models/demos/deepseek_v3_d_p/demo/profile_prefill.py::test_trace -s -q   # "traced min"
@@ -1048,14 +1140,14 @@ PROFILE_SEQ_LEN=25600 PROFILE_ISL=25600 TRACE_MAX_NEW=0 PROFILE_REPS=3 PROFILE_W
 PREFILL_NOPCC_SEQ_CACHE=261120 pytest   models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py   -k "chunked_no_pcc and mistral4 and mesh-8x4 and L36 and chunks51 and two_iters and traced" -q -s
 
 # 3. PP=4 caches, one per stage shape (65 GB each, ~25 min, built through a submesh)
-TT_MISTRAL4_PREFILL_TTNN_CACHE=$HOME/mistral4_ttnn_cache_pp   python <repro>/pp/build_pp_cache.py            # PP_SP=8 PP_TP=1 ; repeat with PP_SP=4 PP_TP=2
+TT_MISTRAL4_PREFILL_TTNN_CACHE=$MISTRAL4_CACHES/ttnn_cache_pp   python <repro>/pp/build_pp_cache.py            # PP_SP=8 PP_TP=1 ; repeat with PP_SP=4 PP_TP=2
 
 # 4. PP=4 concurrent throughput at 5,120 / 25,600 -- the 34,270 / 41,384 row
-TT_MISTRAL4_PREFILL_TTNN_CACHE=$HOME/mistral4_ttnn_cache_pp PP_WINDOW=25600 PP_ITERS=12 PP_HANDOFF=none   pytest models/demos/deepseek_v3_d_p/tests/test_prefill_pipeline_concurrent.py -k 8x1 -q -s
+TT_MISTRAL4_PREFILL_TTNN_CACHE=$MISTRAL4_CACHES/ttnn_cache_pp PP_WINDOW=25600 PP_ITERS=12 PP_HANDOFF=none   pytest models/demos/deepseek_v3_d_p/tests/test_prefill_pipeline_concurrent.py -k 8x1 -q -s
 #   PP_HANDOFF=host shows what a naive host hand-off costs; -k 4x2 runs the losing variant
 
 # 5. PP=4 long context, MEASURED: all four stages chunked and concurrent -- the 22,917 / 12,332 row
-TT_MISTRAL4_PREFILL_TTNN_CACHE=$HOME/mistral4_ttnn_cache_pp \
+TT_MISTRAL4_PREFILL_TTNN_CACHE=$MISTRAL4_CACHES/ttnn_cache_pp \
 PP_CONTEXT=261120 PP_WINDOW=5120 PP_HANDOFF=none \
   pytest models/demos/deepseek_v3_d_p/tests/test_prefill_pipeline_concurrent.py -k "longctx and 8x1" -q -s
 #   PP_CONTEXT=102400 for the 100k row. Prints both "total ... -> N tok/s" (whole request, incl.
@@ -1065,7 +1157,7 @@ PP_CONTEXT=261120 PP_WINDOW=5120 PP_HANDOFF=none \
 # 5b. the cheap sweep: ONE stage chunked at depth, summed -- 8 chips, one stage's cache, ~1 min.
 #     Landed within 0.7-3.5% of step 5 on this box, so use it to triage a new machine first.
 TT_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
-TT_MISTRAL4_PREFILL_TTNN_CACHE=$HOME/mistral4_ttnn_cache_8x1 \
+TT_MISTRAL4_PREFILL_TTNN_CACHE=$MISTRAL4_CACHES/ttnn_cache_stage \
 PREFILL_NOPCC_SEQ_CACHE=261120 pytest \
   models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py \
   -k "chunked_no_pcc and mistral4 and mesh-8x1 and L9 and chunks51 and two_iters and traced" -q -s
