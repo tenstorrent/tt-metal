@@ -13,6 +13,7 @@ import pytest
 import torch
 import ttnn
 
+from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
 from ttnn.operations.moe_fused_swiglu.moe_fused_swiglu_helpers import weight_memory_configs
@@ -36,6 +37,7 @@ def to_device(tensor, dtype, layout, device, memory_config=ttnn.DRAM_MEMORY_CONF
 
 
 @pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
+@pytest.mark.skipif(not is_blackhole(), reason="moe_fused_swiglu is Blackhole-only")
 @pytest.mark.parametrize("model_config", MODELS, ids=["kimi-k26", "glm-51"])
 @pytest.mark.parametrize(
     "input_dtype,input_layout",
