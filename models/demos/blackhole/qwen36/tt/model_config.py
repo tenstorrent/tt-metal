@@ -142,7 +142,9 @@ class Qwen36ModelArgs(ModelArgs):
         assert self.gdn_nk % tp == 0 and self.gdn_nv % tp == 0, "GDN head counts must divide by TP"
         self.n_local_heads = self.n_heads // tp
         self.n_local_kv_heads = max(1, self.n_kv_heads // tp)
-        self.kv_replication = tp > self.n_kv_heads  # False at TP=4 (4 KV heads)
+        # 35B-A3B has 2 KV heads on 4 devices -> True (each KV head replicated across tp/n_kv_heads
+        # devices); dense 27B has n_kv_heads >= tp -> False (even shard).
+        self.kv_replication = tp > self.n_kv_heads
         self.gdn_nk_tp = self.gdn_nk // tp
         self.gdn_nv_tp = self.gdn_nv // tp
         self.gdn_qkv_dim_tp = self.gdn_qkv_dim // tp
@@ -310,18 +312,19 @@ class Qwen36ModelArgs(ModelArgs):
         return (layer_idx + 1) % self.moe_decoder_sparse_step == 0
 
     def is_distributed_norm(self, mode):
-        """Force the distributed-norm path for multi-device prefill.
+        """Force the distributed-norm path for multi-device MoE prefill.
 
         The prefill norm-all-gather fusion (all_gather_minimal_matmul_async in-proj) needs the norm
         to honor enable_all_gather and leave its output hidden-fractured for the fused matmul to
         gather. The base enables the distributed-norm path only for dim>4096 (an L1 heuristic the
-        27B's 5120 hits but the 35B-A3B's 2048 misses) — on the miss it force-gathers the norm output,
-        so the AGMM in-proj double-gathers (K mismatch). Forcing it on for multi-device prefill routes
-        every Qwen3.5/3.6 config through the same path 27B already uses; decode is unchanged.
+        dense 27B's 5120 hits but the MoE 35B-A3B's 2048 misses) — on the miss it force-gathers the
+        norm output, so the AGMM in-proj double-gathers (K mismatch). Only the MoE configs need this
+        override (dense variants either hit the dim>4096 heuristic like the 27B, or are validated on
+        the base path), so gate it on moe_num_experts to avoid diverging the dense path from base.
         """
         from models.tt_transformers.tt.common import Mode
 
-        if self.is_multichip and mode == Mode.PREFILL:
+        if self.moe_num_experts > 0 and self.is_multichip and mode == Mode.PREFILL:
             return True
         return super().is_distributed_norm(mode)
 

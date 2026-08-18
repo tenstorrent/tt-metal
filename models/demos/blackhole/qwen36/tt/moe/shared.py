@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Gated shared expert for Qwen3.5-MoE.
+"""Gated shared expert.
 
 HF: out = sigmoid(shared_expert_gate(x)) * shared_expert_mlp(x), added to the routed
 experts. The SwiGLU body is the same shape as a dense MLP, so it reuses Qwen36MLP —
@@ -20,6 +20,17 @@ class Qwen36SharedExpert:
     def __init__(self, mesh_device, mlp_state, tensor_cache_path=None, args=None, tt_ccl=None):
         shared_state = substate(mlp_state, "shared_expert")  # gate_proj/up_proj/down_proj .weight
         shared_cache = (tensor_cache_path / "shared_expert") if tensor_cache_path else None
+        # The shared expert reuses Qwen36MLP, whose TP matmul program configs / weight memcfgs are
+        # sized from ModelArgs.hidden_dim — which on a MoE config is the injected moe_intermediate_size
+        # stand-in, not shared_expert_intermediate_size. That is only correct while the two sizes are
+        # equal (they are on the shipped 35B-A3B: both 512). Fail fast if a checkpoint diverges them,
+        # rather than emitting an opaque program-config/weight-width mismatch at decode.
+        if args is not None and getattr(args, "moe_shared_intermediate_size", None):
+            assert args.moe_shared_intermediate_size == args.moe_intermediate_size, (
+                f"shared_expert_intermediate_size ({args.moe_shared_intermediate_size}) != "
+                f"moe_intermediate_size ({args.moe_intermediate_size}); the shared expert reuses the "
+                f"routed-expert MLP program configs and needs them equal (see tt/moe/shared.py)."
+            )
         # The shared expert receives already-gathered (full/replicated) hidden — the MoE layer's
         # ff_norm does its own all-gather (layer._fuse_ff_agmm is off for MoE). So it must NOT run
         # the fused gate/up all-gather-matmul (that would re-gather full input → K mismatch).
