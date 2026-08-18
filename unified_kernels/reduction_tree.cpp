@@ -75,8 +75,11 @@ void kernel_main() {
     const auto in0 = TensorAccessor(in0_args, in0_addr);
     const auto out = TensorAccessor(out_args, out_addr);
 
-    // Once, before any reduction: every reduce_tile re-reads this page.
-    u::fill_reduce_scaler<1>(scaler_storage);
+    // KERNEL SCOPE, exactly like a fused bias: every reduce_tile re-reads this
+    // page, and a ComputeBlock pops in its destructor -- here, the end of the
+    // kernel. Inside the loop it would be popped after the first reduction and the
+    // next one would wait forever for a refill nobody issues.
+    u::ComputeBlock scaler = u::fill_reduce_scaler<1>(scaler_storage);
 
     const auto this_core = u::LogicalCoord::this_core();
 
@@ -92,7 +95,7 @@ void kernel_main() {
         // Column x owns its own input block, the same index its result goes to.
         u::ComputeBlock a = u::noc_load<1>(in0_storage, in0, b * u::kCoreGridW + this_core.x).wait();
 
-        u::Block per_core_sum = tmp0_storage.store(u::reduce_sum<PerCore, kAxis>(a, scaler_storage));
+        u::Block per_core_sum = tmp0_storage.store(u::reduce_sum<PerCore, kAxis>(a, scaler));
 
         // Nobody writes the next round until every root has drained this one.
         u::synchronize_cores<0>();
@@ -102,7 +105,7 @@ void kernel_main() {
             u::noc_core_write<0>(tmp1_storage, std::move(per_core_sum), root, true, byte_offset).wait(num_cores_y);
 
         if (this_core == root) {
-            u::Block result = out_storage.store(u::reduce_sum<PerColumn, kAxis>(all_per_core_sums, scaler_storage));
+            u::Block result = out_storage.store(u::reduce_sum<PerColumn, kAxis>(all_per_core_sums, scaler));
             // Every column has a root, and they all finish block b together, so the
             // block index alone would have them all writing the same pages. Give
             // each column its own slot: `out` is num_blocks rows of kCoreGridW

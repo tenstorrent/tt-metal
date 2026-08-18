@@ -73,6 +73,14 @@ inline void reduce_tile(uint32_t icb, uint32_t iscaler, uint32_t itile, uint32_t
     T("    reduce_tile(cb" + n(icb) + ",tile=" + n(itile) + ",scaler=cb" + n(iscaler) + " -> dst" + n(idst) + ")");
 }
 inline void reduce_uninit(uint32_t icb = 0) { T("  reduce_uninit(cb" + n(icb) + ")"); }
+
+inline void add_bcast_rows_init_short(uint32_t icb0, uint32_t icb1) {
+    T("  add_bcast_rows_init(cb" + n(icb0) + ",cb" + n(icb1) + ")");
+}
+inline void add_tiles_bcast_rows(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
+    T("    add_bcast_rows(cb" + n(icb0) + ",tile=" + n(itile0) + " + cb" + n(icb1) + ",tile=" + n(itile1) + " -> dst" +
+      n(idst) + ")");
+}
 inline void pack_tile(uint32_t dst, uint32_t cb) { T("  pack_tile(dst" + n(dst) + " -> cb" + n(cb) + ")"); }
 inline void add_binary_tile_init() {}
 inline void add_binary_tile(uint32_t a, uint32_t b, uint32_t o) {
@@ -313,8 +321,9 @@ void example_syntax_free() {
         noc_store<0>(out.store(relu(matmul<Geom>(a, b))), t2, 0);
     }
     {  // ReduceNode -- likewise
+        ComputeBlock sc = noc_load<1>(scaler, t0, 0).wait();  // resident operand
         ComputeBlock a = noc_load<1>(in0, t0, 0).wait();
-        noc_store<0>(red.store(exp_(reduce_sum<RG, ReduceAxis::Rows>(a, scaler))), t2, 0);
+        noc_store<0>(red.store(exp_(reduce_sum<RG, ReduceAxis::Rows>(a, sc))), t2, 0);
     }
 }
 
@@ -344,8 +353,9 @@ void example_syntax_method() {
         noc_store<0>(out.store(matmul<Geom>(a, b).relu()), t2, 0);
     }
     {  // ReduceNode -- likewise
+        ComputeBlock sc = noc_load<1>(scaler, t0, 0).wait();  // resident operand
         ComputeBlock a = noc_load<1>(in0, t0, 0).wait();
-        noc_store<0>(red.store(reduce_sum<RG, ReduceAxis::Rows>(a, scaler).exp()), t2, 0);
+        noc_store<0>(red.store(reduce_sum<RG, ReduceAxis::Rows>(a, sc).exp()), t2, 0);
     }
 }
 
