@@ -6,8 +6,6 @@ set(TTNN_OP_EXPERIMENTAL_KDA_AFFINE_EXCLUSIVE_SCAN_SRCS
     device/affine_exclusive_scan_program_factory.cpp
 )
 
-set(TTNN_OP_EXPERIMENTAL_KDA_SHARED_SRCS ../factory/kda_factory_utils.cpp)
-
 set(TTNN_OP_EXPERIMENTAL_KDA_AFFINE_EXCLUSIVE_SCAN_NANOBIND_SRCS
     affine_exclusive_scan_nanobind.cpp
     ../kda_nanobind.cpp

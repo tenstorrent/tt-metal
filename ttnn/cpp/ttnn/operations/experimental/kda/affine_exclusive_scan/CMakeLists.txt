@@ -28,10 +28,16 @@ target_sources(
         FILES ${kernels}
     PRIVATE
         ${TTNN_OP_EXPERIMENTAL_KDA_AFFINE_EXCLUSIVE_SCAN_SRCS}
-        ${TTNN_OP_EXPERIMENTAL_KDA_SHARED_SRCS}
 )
 
-target_link_libraries(ttnn_op_experimental_kda_affine_exclusive_scan PRIVATE TT::Metalium PUBLIC TTNN::Core)
+target_link_libraries(
+    ttnn_op_experimental_kda_affine_exclusive_scan
+    PRIVATE
+        TT::Metalium
+        TTNN::Ops::Experimental::KDA::Common
+    PUBLIC
+        TTNN::Core
+)
 
 install(
     TARGETS
