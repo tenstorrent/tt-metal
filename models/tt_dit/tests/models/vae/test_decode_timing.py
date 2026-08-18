@@ -72,9 +72,12 @@ def test_decode_wsp_timing(*, mesh_device, latent_hw):
     config = decoder_config(CHECKPOINT)
     lh, lw = latent_hw
     torch.manual_seed(0)
-    latent = torch.randn(1, config["in_channels"], 4, lh, lw)
-    ccl = CCLManager(mesh_device, num_links=int(os.environ.get("DIFFVAE_NUM_LINKS", 1)), topology=ttnn.Topology.Linear)
-    # DIFFVAE_TP_HEADS=1 adds TP-over-heads on the orthogonal (rows, size-4) mesh axis: stage-5
+    # 145-frame (6s) is the target resolution -- default here so the timing test exercises the real
+    # workload. output_frames = 8 * latent_T - 7, so latent_T=19 -> 145 frames; override with
+    # DIFFVAE_LATENT_T (e.g. 4 -> 25 frames) for a quick smaller run.
+    t_lat = int(os.environ.get("DIFFVAE_LATENT_T", 19))
+    latent = torch.randn(1, config["in_channels"], t_lat, lh, lw)
+    ccl = CCLManager(mesh_device, num_links=int(os.environ.get("DIFFVAE_NUM_LINKS", 1)), topology=ttnn.Topology.Linear)    # DIFFVAE_TP_HEADS=1 adds TP-over-heads on the orthogonal (rows, size-4) mesh axis: stage-5
     # attention runs on heads/4 of the 4 heads per chip, gathered back before the output proj.
     tp_axis = 0 if os.environ.get("DIFFVAE_TP_HEADS") == "1" else None
     # DIFFVAE_STAGES_WSP=1 also W-shards the deterministic stages (stage 0 stays replicated), so the
@@ -104,7 +107,7 @@ def test_decode_wsp_timing(*, mesh_device, latent_hw):
     tp = "+TP4" if tp_axis is not None else ""
     det = "+detSP" if stages_wsp else ""
     print(
-        f"\n[decode W-SP({backend}){tp}{det} 4x8] latent(1,{config['in_channels']},4,{lh},{lw}) -> {px_shape}: {dt * 1000:8.0f} ms\n"
+        f"\n[decode W-SP({backend}){tp}{det} 4x8] latent(1,{config['in_channels']},{t_lat},{lh},{lw}) -> {px_shape}: {dt * 1000:8.0f} ms\n"
     )
 
 

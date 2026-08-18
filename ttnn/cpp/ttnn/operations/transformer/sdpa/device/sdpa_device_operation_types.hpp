@@ -46,6 +46,12 @@ struct SDPAParams {
     // flash over only real window tokens. Only meaningful when neighborhood_3d is set. Off => the
     // existing streamed-active-tile path. (Build-out in progress; off by default.)
     bool neighborhood_gather = false;
+    // Block-permuted Q (block-permute v1): {bt, bh, bw}. When set (with neighborhood_gather), a Q chunk
+    // is one (bt,bh,bw) block of the block-order sequence, so its box is that block dilated by the kernel
+    // (see windowed_loop_geometry.hpp::neighborhood_box_block) and each query's coord is decoded from its
+    // within-block position. K/V stay strided -- only the Q coord decode changes. Zero-pad blocks only
+    // (bt|T, bh|H, bw|W). Absent => strided Q (existing path).
+    std::optional<std::array<uint32_t, 3>> neighborhood_block;
     // Chunked/paged geometry overrides (shared with paged decode). See
     // ttnn::operations::transformer::PagedCacheGeometryOverride.
     ttnn::operations::transformer::PagedCacheGeometryOverride paged_cache_geometry;

@@ -281,3 +281,78 @@ inline bool neighborhood_chunk_active(
     }
     return false;
 }
+
+/**
+ * Block-permuted Q (block-permute v1). Under a 3-D block token permutation a Q chunk is exactly ONE
+ * (bt, bh, bw) block, so its physical extent is known directly -- no strided decode, and the box is
+ * that block dilated by the kernel. K/V stay STRIDED, so the box is in physical (t, h, w) and the K-side
+ * helpers above (neighborhood_chunk_active, the packed->flat map) are UNCHANGED; only the Q->box and the
+ * per-query coord decode differ. Requires zero-pad blocks (bt|T, bh|H, bw|W) so q_chunk == one block and
+ * the block counts are Tb=T/bt, Hb=H/bh, Wb=W/bw. ``w_origin`` shifts a per-shard W-band to global W (0
+ * when replicated) -- the only spot the W-shard enters this path. Mirrors block_permute.py exactly.
+ */
+struct BlockCoord {
+    uint32_t t, h, w;
+};
+
+// Q chunk index -> its (bt_i, bh_i, bw_i) block position (block-major order, W innermost).
+inline BlockCoord block_index_of_chunk(uint32_t qc, uint32_t hb, uint32_t wb) {
+    return {qc / (wb * hb), (qc / wb) % hb, qc % wb};
+}
+
+inline NeighborhoodBox neighborhood_box_block(
+    uint32_t qc,
+    uint32_t bt,
+    uint32_t bh,
+    uint32_t bw,
+    uint32_t hb,
+    uint32_t wb,
+    uint32_t T,
+    uint32_t H,
+    uint32_t W,
+    uint32_t kt,
+    uint32_t kh,
+    uint32_t kw,
+    uint32_t w_origin) {
+    const BlockCoord b = block_index_of_chunk(qc, hb, wb);
+    // w_origin is on the OUTER (T) axis: t_inner K/V make the sharded physical-W axis the op outer axis.
+    const uint32_t t_lo = w_origin + b.t * bt, t_hi = t_lo + bt - 1;
+    const uint32_t h_lo = b.h * bh, h_hi = h_lo + bh - 1;
+    const uint32_t w_lo = b.w * bw, w_hi = w_lo + bw - 1;
+    const uint32_t ker_t = kt > T ? T : kt, ker_h = kh > H ? H : kh, ker_w = kw > W ? W : kw;
+    return {
+        nbr_shift_start(t_lo, T, kt),
+        nbr_shift_start(t_hi, T, kt) + ker_t,
+        nbr_shift_start(h_lo, H, kh),
+        nbr_shift_start(h_hi, H, kh) + ker_h,
+        nbr_shift_start(w_lo, W, kw),
+        nbr_shift_start(w_hi, W, kw) + ker_w,
+    };
+}
+
+// Physical coord of the query at within-block position ``wid`` in chunk ``qc`` (for its mask window).
+inline BlockCoord block_query_coord(
+    uint32_t qc, uint32_t wid, uint32_t bt, uint32_t bh, uint32_t bw, uint32_t hb, uint32_t wb, uint32_t w_origin) {
+    const BlockCoord b = block_index_of_chunk(qc, hb, wb);
+    const uint32_t dw = wid % bw, dh = (wid / bw) % bh, dt = wid / (bw * bh);
+    return {w_origin + b.t * bt + dt, b.h * bh + dh, b.w * bw + dw};  // w_origin on the OUTER (T) axis
+}
+
+// K-chunk iteration range covering the block's box in the STRIDED K/V table (k = t*HW + h*W + w). The
+// reader iterates [k_lo, k_hi) and neighborhood_chunk_active filters to the box's real cells; the mask
+// walks the same range. Both call this so their counts agree (the CB contract). Returns >= 1 chunk.
+inline WindowedKChunkRange neighborhood_box_k_chunk_range(
+    const NeighborhoodBox& box, uint32_t H, uint32_t W, uint32_t chunk_toks, uint32_t k_num_chunks) {
+    const uint32_t HW = H * W;
+    uint32_t k_lo = (box.t0 * HW + box.h_lo * W + box.w_lo) / chunk_toks;
+    const uint32_t last = (box.t1 - 1) * HW + (box.h_hi - 1) * W + (box.w_hi - 1);
+    uint32_t k_hi = last / chunk_toks + 1;
+    if (k_hi > k_num_chunks) {
+        k_hi = k_num_chunks;
+    }
+    if (k_lo >= k_hi) {
+        k_lo = k_hi > 0 ? k_hi - 1 : 0;
+        k_hi = k_lo + 1;
+    }
+    return {k_lo, k_hi};
+}

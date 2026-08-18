@@ -89,6 +89,10 @@ void kernel_main() {
     // W-sharded (mask uses local == global W).
     const uint32_t nb_W_full = get_arg_val<uint32_t>(20);
     const int32_t nb_w_origin = static_cast<int32_t>(get_arg_val<uint32_t>(21));
+    // Block-permuted Q descriptor {bt,bh,bw} (bt==0 => strided). Reader/mask decode Q coords from it.
+    const uint32_t nb_bt = get_arg_val<uint32_t>(22);
+    const uint32_t nb_bh = get_arg_val<uint32_t>(23);
+    const uint32_t nb_bw = get_arg_val<uint32_t>(24);
 
     constexpr uint32_t mask_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;  // non-streaming drain only
@@ -231,7 +235,10 @@ void kernel_main() {
                 nb_kh,
                 nb_kw,
                 nb_W_full,
-                nb_w_origin);
+                nb_w_origin,
+                nb_bt,
+                nb_bh,
+                nb_bw);
             windowed_generate_if_enabled<use_windowed_mask && !neighborhood_gather, cb_mask_in, cb_cu_window_in>(
                 noc,
                 q_chunk,

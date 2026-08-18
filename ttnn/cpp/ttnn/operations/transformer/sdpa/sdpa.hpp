@@ -48,7 +48,11 @@ ttnn::Tensor scaled_dot_product_attention(
     /// each Q chunk's window rows from a ROW_MAJOR K/V table into a contiguous cb_k/cb_v so the compute
     /// runs dense flash over only real window tokens (the writer generates the neighborhood mask on
     /// device). Requires neighborhood_3d.
-    bool neighborhood_gather = false);
+    bool neighborhood_gather = false,
+    /// Block-permuted Q (block-permute v1): {bt, bh, bw}. When set (with neighborhood_gather) a Q chunk is
+    /// one (bt,bh,bw) block of the block-order sequence, so its box is that block dilated and each query's
+    /// coord is decoded from its within-block position. K/V stay strided. Zero-pad blocks (bt|T,bh|H,bw|W).
+    const std::optional<std::array<uint32_t, 3>>& neighborhood_block = std::nullopt);
 
 /// Chunked SDPA over paged K/V: one Q chunk per call, K/V in paged layout.
 /// Two overloads: legacy (chunk_start_idx as int) or flexible (chunk_start_idx_tensor on device).

@@ -203,6 +203,11 @@ void kernel_main() {
     uint32_t nb_kt = 0;
     uint32_t nb_kh = 0;
     uint32_t nb_kw = 0;
+    // Block-permuted Q (bt==0 => strided path). {bt,bh,bw} + this shard's global w-origin.
+    uint32_t nb_bt = 0;
+    uint32_t nb_bh = 0;
+    uint32_t nb_bw = 0;
+    uint32_t nb_w_origin = 0;
     if constexpr (use_windowed_narrowing) {
         cu_window_seqlens_addr = get_arg_val<uint32_t>(argidx++);
         cu_window_seqlens_eles = get_arg_val<uint32_t>(argidx++);
@@ -214,6 +219,10 @@ void kernel_main() {
         nb_kt = get_arg_val<uint32_t>(argidx++);  // 17: kt
         nb_kh = get_arg_val<uint32_t>(argidx++);  // 18: kh
         nb_kw = get_arg_val<uint32_t>(argidx++);  // 19: kw
+        nb_bt = get_arg_val<uint32_t>(argidx++);
+        nb_bh = get_arg_val<uint32_t>(argidx++);
+        nb_bw = get_arg_val<uint32_t>(argidx++);
+        nb_w_origin = get_arg_val<uint32_t>(argidx++);
     }
 
     // When chunked: only process K/V up to (chunk_start_idx + Q_chunk_length) tokens.
@@ -442,33 +451,61 @@ void kernel_main() {
                     windowed_k_hi = range.k_hi;
                     ctrl_lo = windowed_k_lo;
                     ctrl_hi = windowed_k_hi;
-                } else {  // 3D-neighborhood: T band for the loop, packed active count for the compute
-                    const auto range = neighborhood_t_k_chunk_range(
-                        q_chunk,
-                        Sq_chunk_t,
-                        valid_Sqt,
-                        windowed_q_tok_offset,
-                        nb_T,
-                        nb_H,
-                        nb_W,
-                        nb_kt,
-                        Sk_chunk_t,
-                        k_num_chunks,
-                        tt::constants::TILE_HEIGHT);
-                    windowed_k_lo = range.k_lo;
-                    windowed_k_hi = range.k_hi;
-                    nbr_box = neighborhood_box(
-                        q_chunk,
-                        Sq_chunk_t,
-                        valid_Sqt,
-                        windowed_q_tok_offset,
-                        nb_T,
-                        nb_H,
-                        nb_W,
-                        nb_kt,
-                        nb_kh,
-                        nb_kw,
-                        tt::constants::TILE_HEIGHT);
+                } else {               // 3D-neighborhood (block-permuted or strided Q); packed active count for compute
+                    if (nb_bt != 0) {  // block-permuted Q: chunk == one (bt,bh,bw) block
+                        // Block counts over THIS shard: nb_W is the full W (for the K gather/clamp), but the
+                        // shard's local W = S_local / (T*H); derive it so W-SP composes (no-SP: w_local == nb_W).
+                        // op-T-sharded: op-H (nb_H) and op-W (nb_W) are the FULL non-sharded axes; the
+                        // sharded op-T count is implicit (q_chunk / (Wb*Hb)). w_origin (the per-device global
+                        // origin) rides the windowed_q_tok_offset tensor and is applied to op-T in the box.
+                        const uint32_t hb = nb_H / nb_bh;
+                        const uint32_t wb = nb_W / nb_bw;
+                        nbr_box = neighborhood_box_block(
+                            q_chunk,
+                            nb_bt,
+                            nb_bh,
+                            nb_bw,
+                            hb,
+                            wb,
+                            nb_T,
+                            nb_H,
+                            nb_W,
+                            nb_kt,
+                            nb_kh,
+                            nb_kw,
+                            windowed_q_tok_offset);
+                        const auto range = neighborhood_box_k_chunk_range(
+                            nbr_box, nb_H, nb_W, Sk_chunk_t * tt::constants::TILE_HEIGHT, k_num_chunks);
+                        windowed_k_lo = range.k_lo;
+                        windowed_k_hi = range.k_hi;
+                    } else {  // strided Q: T band for the loop
+                        const auto range = neighborhood_t_k_chunk_range(
+                            q_chunk,
+                            Sq_chunk_t,
+                            valid_Sqt,
+                            windowed_q_tok_offset,
+                            nb_T,
+                            nb_H,
+                            nb_W,
+                            nb_kt,
+                            Sk_chunk_t,
+                            k_num_chunks,
+                            tt::constants::TILE_HEIGHT);
+                        windowed_k_lo = range.k_lo;
+                        windowed_k_hi = range.k_hi;
+                        nbr_box = neighborhood_box(
+                            q_chunk,
+                            Sq_chunk_t,
+                            valid_Sqt,
+                            windowed_q_tok_offset,
+                            nb_T,
+                            nb_H,
+                            nb_W,
+                            nb_kt,
+                            nb_kh,
+                            nb_kw,
+                            tt::constants::TILE_HEIGHT);
+                    }
                     ctrl_lo = 0;
                     if constexpr (neighborhood_gather) {
                         // Fused gather: compute walks n_packed_chunks dense chunks (the box's n_box
