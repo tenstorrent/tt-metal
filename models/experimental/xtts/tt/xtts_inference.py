@@ -7,6 +7,7 @@ import torch
 import ttnn
 
 from models.common.lightweightmodule import LightweightModule
+from models.experimental.xtts.config import NUM_LATENTS
 from models.experimental.xtts.reference.xtts_conditioning import chunk_wav
 from models.experimental.xtts.reference.xtts_gpt_block import HIDDEN_SIZE
 from models.experimental.xtts.reference.xtts_gpt_generate import MAX_AUDIO_TOKENS
@@ -128,6 +129,7 @@ class TtXtts(LightweightModule):
         top_p=1.0,
         repetition_penalty=1.0,
         min_new_tokens=0,
+        real_len=None,
     ):
         """Run fully traced setup, decode, and vocoder inference."""
         dev = self.device
@@ -137,6 +139,10 @@ class TtXtts(LightweightModule):
         wav_devs = [self._wav_chunk_to_device(c) for c in chunk_wav(cond_wav)]
         text_dev = gpt.text_ids_to_device(text_ids)
         gpt.alloc_static_kv(max_seq)
+        # Even a single pass tile-pads its text with STOP, and the model speaks that padding
+        # rather than ignoring it (see TtXttsTracedSession.run). Hide those keys too.
+        text_len = text_ids.shape[1]
+        gpt.stack.set_key_pad(NUM_LATENTS + (text_len if real_len is None else real_len), NUM_LATENTS + text_len)
 
         def _setup():
             """Compute speaker emb and prefill for setup capture."""
@@ -240,7 +246,7 @@ class TtXttsTracedSession:
         self.text_dev = gpt.text_ids_to_device(torch.zeros(1, text_len, dtype=torch.long))
         self.ref_wav_spk = ref_wav_spk
         gpt.alloc_static_kv(max_seq)
-        prompt_len = 32 + text_len
+        self.prompt_len = prompt_len = NUM_LATENTS + text_len
         self.decoder = TtTracedDecoder(
             gpt,
             prompt_len,
@@ -293,12 +299,18 @@ class TtXttsTracedSession:
         """Convert latent frames to output sample count."""
         return _interp_len(frames) * self.upsample
 
-    def run(self, text_ids):
+    def run(self, text_ids, real_len=None):
         """Replay traced session for new text ids."""
         dev = self.device
         assert text_ids.shape[1] == self.text_dev.shape[1], (
             f"session captured for {self.text_dev.shape[1]} text tokens, got {text_ids.shape[1]} — "
             "every chunk must be padded to the same length"
+        )
+        # Chunks share ONE padded length, so a short chunk trails a long run of STOP padding. Left
+        # visible, the model reads that run as text still to be spoken and babbles to fill it (a
+        # 5-word chunk stretched to ~9s). Hiding those keys makes decode see only the real text.
+        self.tt.gpt.stack.set_key_pad(
+            NUM_LATENTS + (self.text_dev.shape[1] if real_len is None else real_len), self.prompt_len
         )
         text_tmp = self.tt.gpt.text_ids_to_device(text_ids)
         ttnn.copy(text_tmp, self.text_dev)

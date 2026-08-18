@@ -210,7 +210,7 @@ def _log_perf_metrics(
     logger.info(f"{prefix}---------------------------------------")
 
 
-def _generate_one(tt, wrapped, cond_wav, spk_wav_tt, cfg):
+def _generate_one(tt, wrapped, real_len, cond_wav, spk_wav_tt, cfg):
     """Run one device generation, vocode, and onset post-processing."""
     # FULL-MODEL TRACE: the entire model runs inside ttnn traces — SETUP trace (on-device
     # conditioning mel + speaker encoder + prefill that seeds the KV cache), the DECODE-step trace
@@ -230,6 +230,7 @@ def _generate_one(tt, wrapped, cond_wav, spk_wav_tt, cfg):
         top_p=gen.top_p,
         repetition_penalty=gen.repetition_penalty,
         min_new_tokens=gen.min_tokens,
+        real_len=real_len,
     )
     wav_np = ttnn.to_torch(wav_dev).float().reshape(-1).numpy()  # [T_out]
     logger.info(
@@ -264,8 +265,8 @@ def _generate_chunked(tt, chunks, cond_wav, spk_wav_tt, cfg):
             f"({text_len} text tokens, {budget}-code budget) — chunks now replay only"
         )
         out = []
-        for j, (_, w) in enumerate(chunks):
-            wav_t, codes_j, perf = session.run(w)
+        for j, (_, w, real_len) in enumerate(chunks):
+            wav_t, codes_j, perf = session.run(w, real_len)
             logger.info(
                 f"  chunk {j + 1}/{len(chunks)} replay split: setup {perf['setup_replay_s']:.3f}s | "
                 f"decode {perf['decode_replay_s']:.3f}s ({codes_j.shape[1]} codes) | "
@@ -292,7 +293,7 @@ def _take_on_device(sd, ref_decoder_full, chunks, cond_wav, spk_wav, cfg, seed_o
             # runs regardless, so takes differ even without this).
             ttnn.manual_seed(cfg.generation.seed + seed_offset, device=device)
         if len(chunks) == 1:
-            wav_np, codes, dt, compile_s = _generate_one(tt, chunks[0][1], cond_wav, spk_wav_tt, cfg)
+            wav_np, codes, dt, compile_s = _generate_one(tt, chunks[0][1], chunks[0][2], cond_wav, spk_wav_tt, cfg)
             return [(wav_np, codes, dt)], compile_s
         return _generate_chunked(tt, chunks, cond_wav, spk_wav_tt, cfg)
     finally:
@@ -370,16 +371,19 @@ def main():
     ]
     # Pad to a COMMON length (not just each to its own tile): chunks are replayed off one capture,
     # whose prompt_len — and so the whole KV geometry — is fixed at capture time. The padding is
-    # STOP_TEXT_TOKEN, which the model already reads as end-of-text, so a chunk padded past its own
-    # length behaves exactly as it did when padded only to its own tile.
+    # STOP_TEXT_TOKEN, but the model does NOT read a long run of it as "nothing left to say" — it
+    # reads it as text still to be spoken and babbles to fill the time. Each chunk therefore carries
+    # its real (pre-padding) length, and the session hides the padded keys from decode attention.
     pad_to = -(-max(w.shape[1] for _, w in wrapped_chunks) // TILE) * TILE
-    chunks = [(clean, F.pad(w, (0, pad_to - w.shape[1]), value=STOP_TEXT_TOKEN)) for clean, w in wrapped_chunks]
+    chunks = [
+        (clean, F.pad(w, (0, pad_to - w.shape[1]), value=STOP_TEXT_TOKEN), w.shape[1]) for clean, w in wrapped_chunks
+    ]
     if len(chunks) == 1:
         logger.info(f"text fits ONE pass ({chunks[0][1].shape[1]} tokens): {chunks[0][0]!r}")
     else:
         logger.info(f"text exceeds the single-pass budget -> CHUNKED into {len(chunks)} passes:")
-        for i, (clean, w) in enumerate(chunks):
-            logger.info(f"  [{i + 1}/{len(chunks)}] {w.shape[1]:3d} tokens  {clean!r}")
+        for i, (clean, _, real_len) in enumerate(chunks):
+            logger.info(f"  [{i + 1}/{len(chunks)}] {real_len:3d} tokens (padded to {pad_to})  {clean!r}")
 
     # Resolve the STOP-suppression floor. Auto (negative) scales with the text, clamped below the
     # code budget, so a longer prompt is protected from stopping short while a short one isn't
