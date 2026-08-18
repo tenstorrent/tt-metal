@@ -163,8 +163,9 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryGeneralWSmall::create_program_artif
                  .accessor_name = "sum_scaler",
                  .endpoint_type = DFBEndpointType::PRODUCER}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = SRC, .accessor_name = "src"}},
-        .compile_time_args = {{"is_fp32", static_cast<std::uint32_t>(input_tensor.dtype() == DataType::FLOAT32)}},
-        .runtime_arg_schema = {.runtime_arg_names = {"num_rows", "tile_offset", "Wt", "mask_w"}},
+        .compile_time_args =
+            {{"is_fp32", static_cast<std::uint32_t>(input_tensor.dtype() == DataType::FLOAT32)}, {"mask_w", mask_w}},
+        .runtime_arg_schema = {.runtime_arg_names = {"num_rows", "tile_offset", "Wt"}},
         .hw_config = ttnn::create_reader_datamovement_config(arch),
     };
 
@@ -298,7 +299,7 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryGeneralWSmall::create_program_artif
         AddRuntimeArgsForNode(
             reader_ra.runtime_arg_values,
             core,
-            {{"num_rows", num_tiles_per_core}, {"tile_offset", tile_offset}, {"Wt", Wt}, {"mask_w", mask_w}});
+            {{"num_rows", num_tiles_per_core}, {"tile_offset", tile_offset}, {"Wt", Wt}});
         AddRuntimeArgsForNode(
             writer_ra.runtime_arg_values,
             core,
