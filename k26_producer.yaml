@@ -15,12 +15,12 @@ workload:
   chunks: "11"               # full prompt
   max_requests: 1
   interleave: round_robin
-  check_pcc: true            # read KV from device and compare it with the golden trace
-  # The tokens pushed and the golden used for PCC. MUST equal the runner's PREFILL_TRACE_DIR.
+  check_pcc: false           # runner validates its device-owned KV after the shutdown sentinel
+  # The pushed tokens must match the runner's PREFILL_TRACE_DIR golden.
   trace_dir: /mnt/models/deepseek-prefill-cache/golden/structured_traces/kimi_debug_55k_vllm
 
 migration:
-  issue: false               # no KV copy; runner mock mode only publishes the readback table/device map
+  issue: false               # no endpoint, migration worker, or KV copy
 
 env:
-  PREFILL_SEND_SHUTDOWN: "1" # send the -1/-1/-1 sentinel after PCC so the runner exits cleanly
+  PREFILL_SEND_SHUTDOWN: "1" # end the request loop so the runner performs its post-loop PCC check
