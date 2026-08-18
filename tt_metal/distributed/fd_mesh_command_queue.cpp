@@ -117,6 +117,8 @@ constexpr size_t k_max_dispatch_fanout = 8;
 struct ProgramDispatchEntry {
     Program* program = nullptr;
     ProgramCommandSequence* cmd_seq = nullptr;
+    // Command-stream bytes one device pays to run this program, used to place the chunk boundaries.
+    size_t cmd_bytes = 0;
     std::once_flag prepared;
 };
 
@@ -596,9 +598,9 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
             program_tasks.push_back(DeviceDispatchTask{device, &entry});
             chip_ids_in_workload.insert(device->id());
         });
-        total_command_bytes += static_cast<size_t>(entry.cmd_seq->get_one_shot_fetch_size(
-                                   dispatch_metadata.stall_first, dispatch_metadata.stall_before_program, true)) *
-                               (program_tasks.size() - tasks_before_program);
+        entry.cmd_bytes = entry.cmd_seq->get_one_shot_fetch_size(
+            dispatch_metadata.stall_first, dispatch_metadata.stall_before_program, true);
+        total_command_bytes += entry.cmd_bytes * (program_tasks.size() - tasks_before_program);
         if (program_tasks.size() == tasks_before_program) {
             // The program runs entirely on devices owned by another host, so no task will claim it.
             // Still update its dispatch commands here, to match what a single-host mesh would do.
@@ -673,12 +675,32 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
         const size_t upper_bound = std::min(num_tasks, k_max_dispatch_fanout);
         num_chunks = std::clamp(total_command_bytes / k_bytes_worth_a_wake, size_t{1}, upper_bound);
     }
-    // Chunk c covers [num_tasks * c / num_chunks, num_tasks * (c + 1) / num_chunks), splitting the
-    // devices as evenly as an uneven division allows.
-    const auto chunk_start = [&](size_t chunk) { return num_chunks ? (num_tasks * chunk) / num_chunks : 0; };
-    for (size_t c = 1; c < num_chunks; c++) {
-        const size_t begin = chunk_start(c);
-        const size_t end = chunk_start(c + 1);
+    // Place the boundaries by cumulative bytes rather than by device count, so that a workload whose
+    // programs differ in size splits by the work each chunk carries. Splitting by device count would
+    // put all the copying in whichever chunk held the largest program while the others were woken to
+    // do nothing. Closing a chunk once it holds its even share also collapses the fan-out on its own
+    // when the bytes are lopsided: a single large program among small ones ends up alone in one chunk
+    // with the remainder in the next, rather than spread across all of them.
+    std::array<size_t, k_max_dispatch_fanout + 1> chunk_bounds{};
+    size_t num_bounds = 0;
+    chunk_bounds[num_bounds++] = 0;
+    if (num_chunks) {
+        const size_t target_bytes = total_command_bytes / num_chunks;
+        size_t bytes_this_chunk = 0;
+        for (size_t i = 0; i < num_tasks; i++) {
+            bytes_this_chunk += program_tasks[i].program_entry->cmd_bytes;
+            const bool more_chunks_allowed = num_bounds < num_chunks;
+            const bool more_tasks_left = i + 1 < num_tasks;
+            if (bytes_this_chunk >= target_bytes && more_chunks_allowed && more_tasks_left) {
+                chunk_bounds[num_bounds++] = i + 1;
+                bytes_this_chunk = 0;
+            }
+        }
+    }
+    chunk_bounds[num_bounds] = num_tasks;
+    for (size_t c = 1; c < num_bounds; c++) {
+        const size_t begin = chunk_bounds[c];
+        const size_t end = chunk_bounds[c + 1];
         dispatch_thread_pool_->enqueue(
             [&write_chunk, begin, end]() { write_chunk(begin, end); }, program_tasks[begin].device->id());
     }
@@ -692,8 +714,8 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
         // last participating device's launch, while a device outside the workload only needs its go
         // signal before the next barrier, so writing the go signals first delays every launch by the
         // time they take.
-        if (num_chunks) {
-            write_chunk(chunk_start(0), chunk_start(1));
+        if (num_tasks) {
+            write_chunk(chunk_bounds[0], chunk_bounds[1]);
         }
         // A go signal is a few hundred bytes, far less work than waking a worker to hand one over, so
         // the calling thread issues them itself, overlapping them with the workers above.
@@ -707,7 +729,7 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     } catch (...) {
         dispatch_exception = std::current_exception();
     }
-    if (num_chunks > 1) {
+    if (num_bounds > 1) {
         try {
             dispatch_thread_pool_->wait();
         } catch (...) {
