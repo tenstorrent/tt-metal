@@ -72,6 +72,12 @@ class _TraceKey:
     penalties_on: bool
     log_probs_on: bool
     force_argmax: bool
+    # Decode-batch bucket. A captured sampling trace binds one specific logits
+    # tensor, and each decode-batch bucket has its own decode trace and so its
+    # own logits buffer — keying by bucket lets every bucket hold its own
+    # sampling trace instead of forcing the non-max buckets to sample eagerly.
+    # None preserves the single-slot behavior for callers that don't bucket.
+    bucket: object = None
 
 
 class SamplingGenerator:
@@ -119,8 +125,8 @@ class SamplingGenerator:
     def _new_trace_state(self):
         return {"id": None, "input": None, "output": None, "kwargs": {}}
 
-    def _trace_slot(self, penalties_on: bool, log_probs_on: bool, force_argmax: bool):
-        key = _TraceKey(penalties_on=penalties_on, log_probs_on=log_probs_on, force_argmax=force_argmax)
+    def _trace_slot(self, penalties_on: bool, log_probs_on: bool, force_argmax: bool, bucket=None):
+        key = _TraceKey(penalties_on=penalties_on, log_probs_on=log_probs_on, force_argmax=force_argmax, bucket=bucket)
         slot = self._trace_states.get(key)
         if slot is None:
             slot = self._new_trace_state()
@@ -203,9 +209,20 @@ class SamplingGenerator:
 
         max_batch_size = self.tt_sampling.max_batch_size
 
-        if chunks_per_model == 1:
+        # Decode calls this once per token with the same chunk objects, and
+        # format_sampling_params() rebuilds every field (clamp, pad to
+        # max_batch_size) each time. Skip when nothing changed; identity of the
+        # frozen SamplingParams objects is enough, and reset_batch still falls
+        # through so prompt/output state is reset as before.
+        format_key = (tuple(id(c) for c in sampling_params_chunks), max_batch_size)
+        if not reset_batch and getattr(self, "_decode_state_key", None) == format_key:
+            formatted_params = self._decode_state_formatted
+        elif chunks_per_model == 1:
             formatted_params = format_sampling_params(sampling_params_chunks[0], max_batch_size)
             self.reset_sampling_params(formatted_params)
+            self._decode_state_key = format_key
+            self._decode_state_formatted = formatted_params
+            self._decode_state_chunks = sampling_params_chunks  # keep alive so id() stays unique
         else:
             # Row-sharded case: format each chunk to max_batch_size, concatenate.
             # After (0, None) sharding each row gets its own chunk of max_batch_size entries.
@@ -220,6 +237,9 @@ class SamplingGenerator:
                     concat_fields[field] = sum((v if isinstance(v, list) else [v] for v in lists), [])
             formatted_params = SamplingParams(**concat_fields)
             self.reset_sampling_params(formatted_params)
+            self._decode_state_key = format_key
+            self._decode_state_formatted = formatted_params
+            self._decode_state_chunks = sampling_params_chunks  # keep alive so id() stays unique
 
         if reset_batch:
             self.reset_prompt_tokens(prompt_tokens)
@@ -314,15 +334,19 @@ class SamplingGenerator:
         *,
         tt_out_tok: Optional[ttnn.Tensor] = None,
         skip_precompile: bool = False,
+        trace_bucket=None,
     ) -> ttnn.Tensor:
         """
         Capture a trace of the sampling pipeline for the given configuration.
+
+        ``trace_bucket`` separates traces that bind different logits tensors —
+        pass the decode batch so each decode bucket gets its own slot.
         """
         penalties_on = self._penalties_active
         log_probs_on = getattr(self, "_log_probs_active", False)
         force_argmax = self.tt_sampling.force_argmax_sampling
 
-        key, slot = self._trace_slot(penalties_on, log_probs_on, force_argmax)
+        key, slot = self._trace_slot(penalties_on, log_probs_on, force_argmax, bucket=trace_bucket)
 
         if not skip_precompile:
             logger.debug(
@@ -375,10 +399,14 @@ class SamplingGenerator:
         enable_trace: bool = True,
         tt_out_tok: Optional[ttnn.Tensor] = None,
         skip_precompile: bool = False,
+        trace_bucket=None,
     ) -> ttnn.Tensor:
         """
         Convenience wrapper that either runs the sampling module directly or
         replays a captured trace.
+
+        ``trace_bucket`` selects the trace slot (see ``capture_trace``); it must
+        match the value used at capture time for this logits tensor.
         """
 
         penalties_on = self._penalties_active
@@ -406,12 +434,13 @@ class SamplingGenerator:
                 tt_out_tok=tt_out_tok,
             )
         else:
-            key, slot = self._trace_slot(penalties_on, log_probs_on, force_argmax)
+            key, slot = self._trace_slot(penalties_on, log_probs_on, force_argmax, bucket=trace_bucket)
             if slot["id"] is None:
                 return self.capture_trace(
                     logits,
                     tt_out_tok=tt_out_tok,
                     skip_precompile=skip_precompile,
+                    trace_bucket=trace_bucket,
                 )
 
             self._validate_trace_inputs(slot, logits, tt_out_tok)

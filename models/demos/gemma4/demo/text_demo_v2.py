@@ -63,6 +63,7 @@ import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.gemma4.demo.sampling_utils import (
     build_device_sampling_params,
+    device_tracks_decode_on_device,
     log_sampling_mode,
     model_can_sample_on_device,
 )
@@ -145,6 +146,12 @@ def load_and_cache_context(context_url, cache_dir, max_length=None):
         context_text = context_text[:max_length]
         logger.info(f"Clipped context to {max_length} chars")
     return context_text
+
+
+# Tokens detokenized for the per-step progress line. The line keeps at most 97
+# characters and a token averages ~4, so this tail always covers it while making
+# the decode-loop detokenize O(1) per step instead of O(tokens generated).
+_LOG_TAIL_TOKENS = 48
 
 
 def load_inputs(user_input, batch, instruct):
@@ -680,6 +687,11 @@ def test_demo_text(
         "true",
         "yes",
     )
+    device_tracks_pos = device_tracks_decode_on_device(
+        generator.model[0],
+        device_sampling=device_sampling_params is not None,
+        enable_trace=enable_trace,
+    )
     pending = []
 
     def _consume_tokens(host_out, read_events):
@@ -706,12 +718,18 @@ def test_demo_text(
                 # Detokenize the GENERATED slice only. Decoding all_outputs whole
                 # re-detokenized the entire prompt every step — O(prompt) host work
                 # per token, which at long context dominates the decode step itself.
-                text = tokenizer.decode(all_outputs[user][prefill_lens[user] :])
-                text = ("..." + text[-97:]) if len(text) > 100 else text
+                generated = all_outputs[user][prefill_lens[user] :]
+                text = tokenizer.decode(generated[-_LOG_TAIL_TOKENS:])
+                if len(generated) > _LOG_TAIL_TOKENS or len(text) > 100:
+                    text = "..." + text[-97:]
                 logger.info(f"[User {user}] {text.replace(chr(10), ' ')}")
         return keep_going
 
-    logger.info(f"Starting decode loop... (pipelined token reads: {pipeline_reads})")
+    logger.info(
+        "Starting decode loop... (pipelined token reads: {}, positions on device: {})",
+        pipeline_reads,
+        device_tracks_pos,
+    )
     profiler.start("inference_decode")
     while users_decoding:
         # One timer per loop pass, closed at the bottom. In the pipelined path a
@@ -742,7 +760,10 @@ def test_demo_text(
             else:
                 out_tok = _host_sample(decode_out, temperature, top_p)
 
-        current_pos += 1
+        if not device_tracks_pos:
+            # The traced decode runs ttnn.plus_one on the device position buffers
+            # and the Generator skips restaging them, so this is dead bookkeeping.
+            current_pos += 1
         iteration += 1
 
         if pipeline_reads:

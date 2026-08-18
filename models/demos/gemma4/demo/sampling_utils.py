@@ -33,6 +33,19 @@ def build_device_sampling_params(sampling_params: dict | None, *, can_sample: bo
     )
 
 
+def device_tracks_decode_on_device(model, *, device_sampling: bool, enable_trace: bool) -> bool:
+    """True when traced decode advances positions on device (``ttnn.plus_one``).
+
+    Non-PLI models (12B/31B) keep token/position state in the decode trace
+    buffers after the first step; host ``current_pos += 1`` is redundant in
+    steady state. The host tensor is still passed for the mode-switch reset on
+    step 0 and whenever the generator fully restages trace inputs.
+    """
+    if not device_sampling or not enable_trace:
+        return False
+    return not getattr(model, "_tt_vllm_always_refresh_decode_trace_inputs", True)
+
+
 def log_sampling_mode(can_sample: bool, sampling_params: dict | None = None) -> None:
     sp = sampling_params or {}
     greedy = (sp.get("temperature", 0) or 0) <= 0

@@ -1107,7 +1107,9 @@ class ChunkedPrefillPageTableGuardMixin:
                 orig_sample = sampling_module.sample
 
                 def _make_sample(orig, fb):
-                    def _sample(logits, *, enable_trace=True, tt_out_tok=None, skip_precompile=False):
+                    def _sample(
+                        logits, *, enable_trace=True, tt_out_tok=None, skip_precompile=False, trace_bucket=None
+                    ):
                         nonlocal wrote_feedback
                         # Inject whenever the parent omitted writeback. Traced
                         # sampling already bound tt_out_tok at capture time; eager
@@ -1121,6 +1123,7 @@ class ChunkedPrefillPageTableGuardMixin:
                             enable_trace=enable_trace,
                             tt_out_tok=tt_out_tok,
                             skip_precompile=skip_precompile,
+                            trace_bucket=trace_bucket,
                         )
 
                     return _sample

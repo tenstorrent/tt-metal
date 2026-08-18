@@ -1295,9 +1295,16 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         B = tokens.shape[0]
         decode_trace_key = (on_device_sampling, B)
 
-        tokens = torch.chunk(tokens, self.data_parallel, 0)
-        start_pos = torch.chunk(start_pos, self.data_parallel, 0)
-        page_table = torch.chunk(page_table, self.data_parallel, 0) if page_table is not None else None
+        if self.data_parallel == 1:
+            # torch.chunk(x, 1, 0) allocates a tuple and a view every decode step
+            # to hand back the tensor unchanged.
+            tokens = (tokens,)
+            start_pos = (start_pos,)
+            page_table = (page_table,) if page_table is not None else None
+        else:
+            tokens = torch.chunk(tokens, self.data_parallel, 0)
+            start_pos = torch.chunk(start_pos, self.data_parallel, 0)
+            page_table = torch.chunk(page_table, self.data_parallel, 0) if page_table is not None else None
 
         # vLLM under async scheduling supplies a one-step-stale last token at
         # reset steps (its host state lags device sampling). The device token
@@ -1541,33 +1548,29 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             ttnn.end_trace_capture(self.model_args[i].mesh_device, trace_id, cq_id=0)
 
             if sampling_trace_enabled:
-                # Sampling traces bind a specific logits tensor (and its batch).
-                # Only capture when decode batch matches the sampling module's
-                # wired max batch — smaller decode buckets (e.g. Gemma4 B=1)
-                # must sample eagerly so a prior B=max sampling trace is not
-                # replayed against a different logits allocation.
-                sampling_max = getattr(getattr(sampling_module, "tt_sampling", None), "max_batch_size", None)
+                # A sampling trace binds one specific logits tensor, and every
+                # decode bucket has its own decode trace and so its own logits
+                # buffer. Capture under the decode batch as the trace bucket so
+                # each bucket replays its own sampling trace, instead of the
+                # non-max buckets (e.g. Gemma4 B=1) having to sample eagerly —
+                # that cost ~20 host-dispatched ops per token.
+                # NOTE: sampling trace can be keyed depending on sampling params,
+                # this traces only for the current ones.
+                # tt_out_tok feeds the sampled token back into the decode token
+                # buffer (device_inputs[0]) for the next traced step. Only do this
+                # for models that rely on on-device token feedback. Models that
+                # re-stage decode inputs from host every step
+                # (_tt_vllm_always_refresh_decode_trace_inputs) don't, and their
+                # token buffer may not be a valid sampling output — pass None so
+                # sampling allocates its own output.
                 decode_batch = int(tokens[i].shape[0]) if tokens is not None else None
-                if sampling_max is not None and decode_batch is not None and decode_batch != int(sampling_max):
-                    logger.info(
-                        "Skipping sampling-trace capture for decode_batch={} "
-                        "(sampling max_batch_size={}); will sample eagerly",
-                        decode_batch,
-                        sampling_max,
-                    )
-                else:
-                    # NOTE: sampling trace can be keyed depending on sampling params,
-                    # this traces only for the current ones.
-                    # tt_out_tok feeds the sampled token back into the decode token
-                    # buffer (device_inputs[0]) for the next traced step. Only do this
-                    # for models that rely on on-device token feedback. Models that
-                    # re-stage decode inputs from host every step (e.g. gemma4, via
-                    # _tt_vllm_always_refresh_decode_trace_inputs) don't, and their
-                    # token buffer is not shaped as a sampling output (gemma4's is
-                    # rank-2; ttnn.sampling requires a rank-4 preallocated output) —
-                    # pass None so sampling allocates its own output.
-                    tt_out_tok = self._decode_token_feedback_buffer(self.model[i], device_inputs[i])
-                    sampling_module.capture_trace(logits=tt_out_trace[i], tt_out_tok=tt_out_tok)
+                tt_out_tok = self._decode_token_feedback_buffer(self.model[i], device_inputs[i])
+                sampling_module.capture_trace(
+                    logits=tt_out_trace[i],
+                    tt_out_tok=tt_out_tok,
+                    trace_bucket=decode_batch,
+                )
+
         logger.info("Done Capturing Decode Trace")
 
         return trace_ids, tt_out_trace, *device_inputs
@@ -1605,9 +1608,15 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         sampling_mode_changed = prev_on_device_sampling is not None and prev_on_device_sampling != on_device_sampling
         batch_changed = prev_decode_batch is not None and prev_decode_batch != batch
         reset_inputs = reset_batch or not on_device_sampling or sampling_mode_changed or batch_changed
+        # Callers that hold one page table for the whole run (the demos) hand back
+        # the same tensor objects every step, so an identity check settles it
+        # without an element-wise compare per decode step.
         page_table_changed = page_table is not None and (
             self.prev_page_table is None
-            or any(not torch.equal(prev, curr) for prev, curr in zip(self.prev_page_table, page_table))
+            or (
+                not all(prev is curr for prev, curr in zip(self.prev_page_table, page_table))
+                and any(not torch.equal(prev, curr) for prev, curr in zip(self.prev_page_table, page_table))
+            )
         )
 
         for i in range(self.data_parallel):
@@ -1666,7 +1675,17 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         # (one is always 1). If a future model needs both DP>1 and row-sharded
         # sampling, this should become data_parallel * sampling_dp_values[0].
         sampling_dp = max(self.data_parallel, sampling_dp_values[0])
-        sampling_params_list = chunk_sampling_params(sampling_params, sampling_dp)
+        # Decode passes the same SamplingParams object every step; re-chunking it
+        # per token rebuilds identical lists. Cache on object identity + dp, which
+        # SamplingParams being frozen makes safe.
+        cache_key = (id(sampling_params), sampling_dp)
+        if getattr(self, "_sampling_chunk_cache_key", None) == cache_key:
+            sampling_params_list = self._sampling_chunk_cache
+        else:
+            sampling_params_list = chunk_sampling_params(sampling_params, sampling_dp)
+            self._sampling_chunk_cache_key = cache_key
+            self._sampling_chunk_cache = sampling_params_list
+            self._sampling_chunk_cache_obj = sampling_params  # keep alive so id() stays unique
         prompt_chunks = (
             torch.chunk(prompt_tokens, sampling_dp, 0) if prompt_tokens is not None else [None] * sampling_dp
         )
@@ -1719,7 +1738,14 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             # flow). Position alignment then keeps the stream reproducible even
             # when vLLM evicts a running request and re-admits it in a different
             # slot under async scheduling. Mirrors the llama3_70b_galaxy decode path.
-            if active_seed_slots:
+            # format_sampling_params() below rebuilds every field to read .seed.
+            # With no request seeds there is nothing to register, and both
+            # reset_seed_from_slots_if_needed and align_seed_counters_to_positions
+            # are no-ops on an all-None seed list, so skip the whole block.
+            # reset_batch is kept in the condition so the first decode step after
+            # prefill behaves exactly as before; only steady-state steps skip.
+            has_request_seed = any(getattr(chunk, "seed", None) is not None for chunk in model_chunks)
+            if active_seed_slots and (has_request_seed or reset_batch):
                 seed_bs = sampling_module.tt_sampling.max_batch_size
                 if len(model_chunks) == 1:
                     seed_values = format_sampling_params(model_chunks[0], seed_bs).seed
@@ -1750,16 +1776,10 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             # semaphore and the gather corrupts from the 2nd decode step (#48037). Running
             # sampling eagerly re-acquires a fresh semaphore each step.
             sampling_enable_trace = enable_trace and not getattr(self.model[i], "_tt_disable_sampling_trace", False)
-            # Eager-sample when decode batch != sampling max (multi-batch decode
-            # traces); sampling traces are only captured at sampling max_batch.
-            sampling_max = getattr(getattr(sampling_module, "tt_sampling", None), "max_batch_size", None)
-            if (
-                sampling_enable_trace
-                and sampling_max is not None
-                and self._prev_decode_batch is not None
-                and int(self._prev_decode_batch) != int(sampling_max)
-            ):
-                sampling_enable_trace = False
+            # Each decode bucket has its own sampling trace slot, captured in
+            # _capture_decode_trace_text under this same bucket, so a non-max
+            # decode batch no longer has to sample eagerly.
+            trace_bucket = int(self._prev_decode_batch) if self._prev_decode_batch is not None else None
             # Must match the capture-time decision in _capture_decode_trace_text:
             # only feed the sampled token back into device_inputs[0] for models
             # that use on-device token feedback (see _decode_token_feedback_buffer).
@@ -1776,6 +1796,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     logits=logits_i,
                     tt_out_tok=tt_out_tok,
                     enable_trace=sampling_enable_trace,
+                    trace_bucket=trace_bucket,
                 )
             )
         return sampled_outputs

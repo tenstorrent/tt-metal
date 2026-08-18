@@ -95,7 +95,10 @@ def create_rope_caches(mesh_device, hf_config, max_seq_len):
     replicate = ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None
 
     rope = Gemma4TextRotaryEmbedding(hf_config)
-    x_dummy = torch.randn(1, max_seq_len, hf_config.hidden_size)
+    # Gemma4TextRotaryEmbedding.forward reads only x.device and x.dtype (the
+    # frequencies come from position_ids), so a full [1, max_seq_len, hidden]
+    # randn is a pointless host allocation — ~2.7 GB at 128k on 31B.
+    x_dummy = torch.empty(1, 1, 1)
     pos_ids = torch.arange(max_seq_len).unsqueeze(0)
 
     caches_4d = {}
