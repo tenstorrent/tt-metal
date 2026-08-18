@@ -135,6 +135,27 @@ minutes.
   the per-step CFG combine + scheduler step off the host.
 - The broker enforces a job timeout; a full 720p run needs `run-bg -t 1800`.
 
+### Fused MM+RS status
+
+`RowParallelLinear(use_fused_mmrs=True)` can route Ring-topology reduce-scatters
+through `minimal_matmul_strided_reduce_scatter_async`, but no cosmos3 trunk shape
+is enabled in the `fused_mmrs_configs` table for the 10x10 power-clamped grid.
+Every candidate passes the op's unit ladder (35-replay trace, two-instance
+adjacency, batch protocol) yet corrupts the full traced trunk:
+
+- und stream (M=2720): 9-step latent std 7.3 vs 0.7 — and at 12% of the gen RS
+  payload the fusion win is negligible anyway.
+- gen `to_out`/`to_add_out` (22144, 1024, 5120): 35-step visual smear (frame std
+  46 vs 71 gold), isolated by per-shape trunk bisect; trunk-context-dependent and
+  unreproduced at unit level.
+- `down_proj` (22144, 3200, 5120): the windowed op's L1-resident MM window
+  (512 KB/core, alive across the captured graph) clashes with downstream matmul
+  CBs at trace capture. Re-adding it needs DRAM staging or window/CB budget
+  coordination with every op captured alongside.
+
+The regression suite for the underlying CCL fixes lives with the MMRS tests in
+`tests/nightly/tg/ccl/`.
+
 ## Diagnostics (non-default)
 
 - `--cfg-serial-dispatch` — run the two submeshes sequentially instead of in

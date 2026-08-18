@@ -145,6 +145,10 @@ grid_11_10_configs = {
 
 
 _BH_GALAXY_MIN_DEVICES = 32
+# Per-tray power clamp, not a perf choice. Models with larger matmuls override these
+# module globals at import (e.g. cosmos3 clamps to (10, 10) and lowers the device
+# threshold in experimental/cosmos3_i2v/__init__.py — its FF matmuls are ~3.7x Wan2.2's
+# and trip the tray PDU at 11x10).
 _BH_GALAXY_MAX_CORE_GRID = (11, 10)
 
 
@@ -311,26 +315,9 @@ fused_mmrs_configs = {
         # LTX video FFN ff2 (RowParallel): per-device [4864,4096]@[4096,4096]
         (4864, 4096, 4096): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 7, 5, 6, 1, 3, None, 1, 3),
     },
-    # Cosmos3 trunk on BH Galaxy (grid power-clamped to 10x10): mm on rows 0-7,
-    # RS zone rows 8-9 (20 cores). down_proj (M=22144, K=3200) only. Blocking
-    # follows the tuned (9472, 3456, 5120) entry above.
-    # Do NOT add the other trunk RowParallel shapes — both pass the op's unit
-    # test in isolation (including 35-replay trace and two-instance adjacency)
-    # but corrupt the full trunk output:
-    #  - und stream (M=2720): 9-step latent std 7.3 vs 0.7, and at 12% of the
-    #    gen RS payload the fusion win is negligible anyway.
-    #  - gen to_out/to_add_out (22144, 1024, 5120): 35-step visual smear
-    #    (frame std 46 vs 71 gold) isolated by per-shape trunk bisect; the
-    #    mechanism is trunk-context-dependent and unreproduced at unit level.
-    # Repro suite: tests/nightly/tg/ccl/test_mmrs_cosmos3_repro.py.
-    # Cosmos3 down_proj (22144, 3200, 5120) on the 10x10 clamp is deliberately
-    # ABSENT. The windowed op passes its full unit ladder at that shape
-    # (window 2; 35-replay trace, adjacency, batch protocol — see the repro
-    # suite), but in the traced trunk its L1-resident MM window (512 KB/core,
-    # alive across the captured graph) clashes with downstream matmul CBs at
-    # capture. Re-adding it needs DRAM staging or window/CB budget coordination
-    # with every op captured alongside.
-    ttnn.CoreCoord(10, 10): {},
+    # The cosmos3 10x10 power-clamped grid has no entries — the trunk shapes that
+    # pass unit tests corrupt the traced trunk. Rationale in
+    # models/tt_dit/experimental/cosmos3_i2v/README.md (Fused MM+RS status).
 }
 
 
