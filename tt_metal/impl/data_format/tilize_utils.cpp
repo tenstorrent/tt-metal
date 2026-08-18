@@ -4,7 +4,7 @@
 
 #include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 #include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/tilize_utils.hpp>
+#include "tilize_utils.hpp"
 #include <cstddef>
 #include <functional>
 #include <numeric>

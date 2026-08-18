@@ -10,6 +10,7 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/bfloat8.hpp>
 #include <tt-metalium/tilize_utils.hpp>
+#include "impl/data_format/bfloat16_utils.hpp"
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 

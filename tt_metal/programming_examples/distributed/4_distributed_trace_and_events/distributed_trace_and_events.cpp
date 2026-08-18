@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/bfloat16.hpp>
+#include "impl/data_format/bfloat16_utils.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/sub_device.hpp>

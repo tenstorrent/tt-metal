@@ -65,7 +65,12 @@ function(CREATE_PGM_EXAMPLES_EXE TESTLIST SUBDIR)
                 pthread
         )
 
-        target_include_directories(${TEST_TARGET} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+        target_include_directories(
+            ${TEST_TARGET}
+            PRIVATE
+                ${CMAKE_CURRENT_SOURCE_DIR}
+                ${PROJECT_SOURCE_DIR}/tt_metal
+        )
 
         if(TARGET TT::CommonPCH)
             target_precompile_headers(${TEST_TARGET} REUSE_FROM TT::CommonPCH)

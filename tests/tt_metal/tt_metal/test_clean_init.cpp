@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <tt-metalium/bfloat16.hpp>
+#include "impl/data_format/bfloat16_utils.hpp"
 #include <tt-metalium/host_api.hpp>
 #include <array>
 #include <exception>

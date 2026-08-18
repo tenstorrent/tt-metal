@@ -10,7 +10,8 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/tilize_utils.hpp>
+#include "impl/data_format/tilize_utils.hpp"
+#include "impl/data_format/bfloat16_utils.hpp"
 #include <algorithm>
 #include <bit>
 #include <cstdint>

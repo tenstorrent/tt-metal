@@ -10,6 +10,7 @@
 
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/bfloat16.hpp>
+#include "impl/data_format/bfloat16_utils.hpp"
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>

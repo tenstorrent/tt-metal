@@ -12,6 +12,7 @@
 
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/bfloat16.hpp>
+#include "impl/data_format/bfloat16_utils.hpp"
 #include <tt-metalium/circular_buffer.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "impl/buffers/circular_buffer.hpp"

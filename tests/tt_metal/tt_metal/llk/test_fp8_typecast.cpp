@@ -9,7 +9,9 @@
 
 #include <tt-metalium/float8.hpp>
 #include <tt-metalium/bfloat16.hpp>
+#include "impl/data_format/bfloat16_utils.hpp"
 #include <tt-metalium/bfloat8.hpp>
+#include "impl/data_format/float8.hpp"
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/distributed.hpp>

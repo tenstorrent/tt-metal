@@ -30,7 +30,6 @@ struct Tile {
     uint32_t get_width() const { return tile_shape[1]; }
     uint32_t get_num_faces() const { return num_faces; }
     uint32_t get_tile_hw() const { return tile_hw; }
-    uint32_t get_face_hw() const { return face_hw; }
     uint32_t get_partial_face() const { return partial_face; }
     uint32_t get_narrow_tile() const { return narrow_tile; }
     std::array<uint32_t, 2> get_tile_shape() const { return tile_shape; }

@@ -5,7 +5,7 @@
 #include <fmt/base.h>
 #include <cmath>
 #include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/tilize_utils.hpp>
+#include "impl/data_format/tilize_utils.hpp"
 #include <algorithm>
 #include <limits>
 #include <set>

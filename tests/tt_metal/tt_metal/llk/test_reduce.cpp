@@ -43,7 +43,7 @@
 #include "impl/data_format/bfloat16_utils.hpp"
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
-#include <tt-metalium/mxfp4.hpp>
+#include "impl/data_format/mxfp4.hpp"
 #include <tt-metalium/tile.hpp>
 
 namespace tt::tt_metal {

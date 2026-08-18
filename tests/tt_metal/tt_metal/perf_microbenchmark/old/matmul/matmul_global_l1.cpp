@@ -10,7 +10,8 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/tilize_utils.hpp>
+#include "impl/data_format/tilize_utils.hpp"
+#include "impl/data_format/bfloat16_utils.hpp"
 #include <tt-metalium/tt_metal.hpp>
 #include <algorithm>
 #include <cstdint>

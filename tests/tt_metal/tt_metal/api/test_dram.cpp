@@ -6,6 +6,7 @@
 #include <fmt/base.h>
 #include <cstddef>
 #include <tt-metalium/bfloat16.hpp>
+#include "impl/data_format/bfloat16_utils.hpp"
 #include <tt-metalium/host_api.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <cstdint>

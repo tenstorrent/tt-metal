@@ -25,8 +25,9 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/float8.hpp>
-#include <tt-metalium/int8.hpp>
-#include <tt-metalium/uint8.hpp>
+#include "impl/data_format/float8.hpp"
+#include "impl/data_format/int8.hpp"
+#include "impl/data_format/uint8.hpp"
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>

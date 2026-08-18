@@ -8,6 +8,7 @@
 #include <functional>
 #include <iostream>
 #include <random>
+#include <string>
 #include <vector>
 
 #include <tt_stl/assert.hpp>

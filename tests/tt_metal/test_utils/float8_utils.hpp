@@ -8,8 +8,10 @@
 #include <vector>
 
 #include <tt-metalium/bfloat16.hpp>
+#include "impl/data_format/bfloat16_utils.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/float8.hpp>
+#include "impl/data_format/float8.hpp"
 
 namespace tt::test_utils {
 

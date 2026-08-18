@@ -23,6 +23,7 @@
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/bfloat16.hpp>
+#include "impl/data_format/bfloat16_utils.hpp"
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
@@ -45,7 +46,7 @@
 #include <tt-metalium/tile.hpp>
 #include <umd/device/types/arch.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/int8.hpp>
+#include "impl/data_format/int8.hpp"
 
 namespace tt::tt_metal {
 

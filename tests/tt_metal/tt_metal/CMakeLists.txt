@@ -43,6 +43,7 @@ target_include_directories(
         ${PROJECT_SOURCE_DIR}/tests
         ${PROJECT_SOURCE_DIR}/tests/tt_metal/test_utils
         ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/common
+        ${PROJECT_SOURCE_DIR}/tt_metal
         ${CMAKE_CURRENT_SOURCE_DIR}
 )
 set_target_properties(

@@ -11,7 +11,8 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tilize_utils.hpp>
+#include "impl/data_format/tilize_utils.hpp"
+#include "impl/data_format/bfloat16_utils.hpp"
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"

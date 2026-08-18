@@ -10,6 +10,28 @@
 #include <functional>
 #include <tt-metalium/bfloat16.hpp>
 
+std::vector<std::uint32_t> create_random_vector_of_bfloat16(
+    size_t num_bytes, int rand_max_float, int seed, float offset = 0.0f);
+
+std::vector<std::uint32_t> create_constant_vector_of_bfloat16(size_t num_bytes, float value);
+
+// creates a bfloat16 identity matrix with dims (rows x cols)
+// each 2 cols will be packed as a single uint32_t
+std::vector<bfloat16> create_identity_matrix(int rows, int cols, int num_ones);
+
+std::vector<uint32_t> pack_bfloat16_vec_into_uint32_vec(const std::vector<bfloat16>& data);
+
+bfloat16 bfloat16_identity_transform(const bfloat16& input);
+
+std::vector<bfloat16> unpack_uint32_vec_into_bfloat16_vec(
+    const std::vector<std::uint32_t>& data,
+    const std::function<bfloat16(const bfloat16&)>& transform = bfloat16_identity_transform);
+
+bool equal_within_n_sig_figs(float a, float b, int n);
+
+// this follows the implementation of numpy's is_close
+bool is_close(float a, float b, float rtol = 0.01f, float atol = 0.001f);
+
 std::pair<bfloat16, bfloat16> unpack_two_bfloat16_from_uint32(uint32_t uint32_data);
 
 std::vector<std::uint32_t> create_arange_vector_of_bfloat16(size_t num_bytes, bool print = true);
