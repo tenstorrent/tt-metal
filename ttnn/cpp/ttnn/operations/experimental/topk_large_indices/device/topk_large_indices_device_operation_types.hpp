@@ -34,16 +34,15 @@ struct operation_attributes_t {
     // without physically slicing the input. nullopt = search the full width. Runtime-only (hash-excluded,
     // validated on cache hit) so a serving loop growing valid_length reuses one program.
     std::optional<uint32_t> valid_length{};
-    // Also emit the top-k VALUES (ROW_MAJOR BFLOAT16, sorted descending to match the indices;
-    // exact bf16 -inf on the sentinel-index lanes). Changes kernel selection, CBs, and output
-    // specs, so it is part of the program hash. Default off: indices-only, byte-identical
-    // program to before this option existed.
+    // Also emit the top-k VALUES (BFLOAT16; ROW_MAJOR, or TILE under tile_output, sorted descending to match the
+    // indices; exact bf16 -inf on the sentinel-index lanes). Changes kernel selection, CBs, and output specs, so it is
+    // part of the program hash. Default off: indices-only, byte-identical program to before this option existed.
     bool return_values{false};
     // Override the column-parallel slice count P (tree cores splitting each row). Single row:
     // the classic column-parallel tree. Multiple rows: opts into the multi-rectangle variant —
     // one P-core tree per rectangle, rows split contiguously over as many rectangles as tile the
     // worker grid, all concurrent (ROW_MAJOR output only; the cost model never auto-selects this
-    // form). Values outside [2, 64] or above the row's chunk count are loud errors; P is clamped
+    // form). Values outside [2, 128] or above the row's chunk count are loud errors; P is clamped
     // only against the physical core grid (with a warning). Changes the program structure, so it
     // is part of the program hash. nullopt = the built-in cost model.
     std::optional<uint32_t> num_slices{};

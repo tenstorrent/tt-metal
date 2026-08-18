@@ -60,7 +60,7 @@ struct ColumnSplitConfig {
 };
 
 // num_slices_override: user-requested P (operation_attributes_t::num_slices). Validated loudly
-// against [2, 64] and the row's chunk count, clamped only against the physical grid; setting it
+// against [2, 128] and the row's chunk count, clamped only against the physical grid; setting it
 // when the column-parallel path is not selected is an error.
 // FUSED_E2E compute-kernel gate: true when every possible chunk count of the
 // row fits the 5-bit chunk-id stamp (<= 32 chunks of the LLK window over the
