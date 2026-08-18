@@ -27,12 +27,6 @@ void DeviceCommand<hugepage_write>::init_from_context(MetalContext& ctx) {
 }
 
 template <bool hugepage_write>
-DeviceCommand<hugepage_write>::DeviceCommand() {
-    // TODO(N2c/C3): remove once all callers pass a MetalContext.
-    this->init_from_context(MetalContext::instance());
-}
-
-template <bool hugepage_write>
 DeviceCommand<hugepage_write>::DeviceCommand(void* cmd_region, uint32_t cmd_sequence_sizeB) :
     cmd_sequence_sizeB(cmd_sequence_sizeB), cmd_region(cmd_region) {
     // TODO(N2c/C3): remove once all callers pass a MetalContext.
