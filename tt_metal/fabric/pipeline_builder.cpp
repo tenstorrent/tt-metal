@@ -305,7 +305,7 @@ GraphLayoutResult resolve_graph_layout(
     // still register every node.  Every endpoint referenced by an edge must
     // appear in `nodes`; an edge referencing an unlisted node is an error.
     // ------------------------------------------------------------------
-    std::vector<std::string> all_nodes = nodes;
+    const std::vector<std::string>& all_nodes = nodes;
     {
         // Check all nodes in edges to ensure they are all registered.
         std::set<std::string> node_set(nodes.begin(), nodes.end());
