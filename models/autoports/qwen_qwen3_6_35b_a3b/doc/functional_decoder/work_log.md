@@ -924,6 +924,7 @@ Local only; nothing pushed.
 | `e1c0248979bb56d154a3c2a8bdea99873266e501` (`e1c0248979b`) | **review round 6** (§14): the `start_pos` alignment fix (§7 item 10), the corrected evidence-pass ordering, §3.2 + the work-log counts + the freshness list moved into `render_docs.py`, `_row_major`, the `run_perf.sh` partial-run guard, and every artifact regenerated against that code |
 | `051a5da981ce42d0840014e802da6f1613d33139` (`051a5da981c`) | **review round 7** (§15): the prefill-continuation guard, the sentinel-anchored (and now fatal) freshness renderer plus the tally-regex fix, the corrected chunked-SDPA validation claim, the §5 device-vs-program-creation split, the k-chunk-straddling traced replay |
 | `3d40b51f646ea340ff56201d7799861286420325` (`3d40b51f646`) | restores the Commits section this renderer deleted, and makes a duplicated marker fatal (§15's last row) |
+| `1c05b286efa8065b4647467d3ff3f2352ba74336` (`1c05b286efa`) | **review round 8** (§16): the rebuilt §15 and the freshness block returned to its section, the continuation contract documented in five places plus the contract generator, the check-ordering and high-water-mark fixes, and every artifact regenerated |
 | later commits | documentation only: SHA records and analysis notes that could not be written before the commits they describe |
 
 A table cannot contain its own SHA, so the last rows are deliberately open-ended rather than
