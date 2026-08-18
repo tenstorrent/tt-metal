@@ -70,13 +70,12 @@ struct RecRingHolder {
 };
 
 // Ring capacity in RECORDS (rounded up to a power of two by BroadcastRing), TT_METAL_PERF_DEBUG_RING_RECS.
-// Default 4M == the standalone drain harness's --mqcap default (~96 MB at 24 B/Rec). A lagging consumer DROPS rather
-// than back-pressuring, so this sizes the burst it can absorb, not a correctness bound.
+// Default 256M records (~6.4 GB at 24 B/Rec).
 size_t ring_capacity_recs() {
     static const size_t v = [] {
         const char* s = std::getenv("TT_METAL_PERF_DEBUG_RING_RECS");
         if (s == nullptr || *s == '\0') {
-            return static_cast<size_t>(4u << 20);
+            return static_cast<size_t>(256u) << 20;
         }
         return static_cast<size_t>(std::strtoull(s, nullptr, 10));
     }();
@@ -2971,9 +2970,22 @@ void PerfDebugProfiler::consumer_thread() {
         }
         cnt += b.size();
     };
+    // ZONE_START and ZONE_END are separate records, so dropping either half leaves markers no
+    // downstream consumer can pair back up. The longer-term fixes for this are to make records self-contained and
+    // to optimize the Tracy consumer to not drop records.
+    const size_t cap_recs = ring_->ring.capacity();  // effective, i.e. the env var rounded up to a power of two
+    const auto fail_on_drop = [&rd, cap_recs]() {
+        TT_FATAL(
+            rd.dropped() == 0,
+            "[perf-debug profiler] Host record buffer overflowed. Current capacity: {} records "
+            "(~{:.1f} GB). Raise TT_METAL_PERF_DEBUG_RING_RECS and re-run.",
+            cap_recs,
+            static_cast<double>(cap_recs * sizeof(PerfDebugRec)) / (1024.0 * 1024.0 * 1024.0));
+    };
     for (;;) {
         auto tok = rd.wait_token();
         auto got = rd.read_batch(std::span<PerfDebugRec>(scratch));
+        fail_on_drop();
         if (!got.empty()) {
             emit_batch(got);
             continue;
@@ -2981,6 +2993,7 @@ void PerfDebugProfiler::consumer_thread() {
         if (writer_done_.load(std::memory_order_acquire)) {  // writer finished -> drain the tail, then exit
             for (;;) {
                 auto g = rd.read_batch(std::span<PerfDebugRec>(scratch));
+                fail_on_drop();
                 if (g.empty()) {
                     break;
                 }
