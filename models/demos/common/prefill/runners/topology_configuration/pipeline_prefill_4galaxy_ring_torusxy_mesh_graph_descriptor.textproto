@@ -1,0 +1,50 @@
+# RING 4-galaxy mesh graph descriptor for the D2D-socket pipeline prefill, intra-galaxy torus XY.
+#
+# Inter-mesh graph is a 4-cycle (mesh 0<->1<->2<->3<->0), degree histogram {2:4}, matching the
+# physically discovered c04/c05 ring; a chain MGD ({1:2,2:2}) fails TopologyMapper here because its
+# degree-1 endpoints have no degree-1 physical mesh to map onto. The runner pipeline stays linear
+# (rank r -> r+1); the 3->0 edge is unused capacity.
+#
+# dim_types [RING, RING]: each galaxy wraps both SP (rows) and TP (cols), so this pairs with
+# PREFILL_FABRIC_MODE=2d_torus_xy. Host order (mesh 0->1->2->3) must be a ring traversal starting at
+# the producer-colocated rank 0: c04u02 -> c04u08 -> c05u08 -> c05u02.
+
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 8, 4 ] dim_types: [ RING, RING ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: RELAXED }
+}
+
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 3 } }
+
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+    channels { count: 8 policy: RELAXED }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
+    channels { count: 8 policy: RELAXED }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 3 } }
+    channels { count: 8 policy: RELAXED }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 3 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    channels { count: 8 policy: RELAXED }
+  }
+}
+
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
