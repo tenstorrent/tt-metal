@@ -4,19 +4,20 @@
 
 // Fused Gumbel-max sampling, reduction half -- entirely on device, spread across the whole grid.
 //
-// The work unit is a TILE, so a token row's vocabulary is spread over many cores and no core owns a
-// whole row. The price of tile units is that the argmax becomes a
-// cross-core reduction, arranged here so the common case never pays for it:
+// The work unit is a TILE, so a token row's vocabulary MAY be split across cores. The price of
+// tile units is that the argmax then becomes a cross-core reduction, arranged here so the common
+// case never pays for it:
 //
-//   * A row whose tiles lie ENTIRELY inside this core's run is reduced and written right here. In
-//     prefill nearly every row is like that, so the exchange below is almost never used.
-//   * A row split across cores is merged by the row's OWNER -- the core holding the row's first
-//     tile. The split hands each core one contiguous tile range, so a core can hold a foreign shard
-//     only of its FIRST row (at most one record to send) and can own a split row only as its LAST
-//     (at most one merge to run). Senders NOC-write their record into a host-assigned slot in the
-//     owner's L1 and bump the owner's semaphore; the owner waits for exactly its shard count, folds
-//     the records into its own accumulators, and writes the row. Every split row merges on a
-//     different core, in parallel -- there is no global rendezvous core to serialize on.
+//   * A FULLY LOCAL row -- every tile inside this core's run -- is reduced and written right here.
+//     In prefill nearly every row is like that, so the exchange below is almost never used.
+//   * A split row is merged by the row's OWNER, which throughout this file means exactly one
+//     thing: the core holding the row's first tile. The split hands each core one contiguous tile
+//     range, so a core can hold a foreign shard only of its FIRST row (at most one record to send)
+//     and can own a split row only as its LAST (at most one merge to run). Senders NOC-write their
+//     record into a host-assigned slot in the owner's L1 and bump the owner's semaphore; the owner
+//     waits for exactly its shard count, folds the records into its accumulators, and writes the
+//     row. Every split row merges on a different core, in parallel -- there is no global
+//     rendezvous core to serialize on.
 //
 // Comparison is on raw FP32 bit patterns via float32_greater: the data-movement RISCs have no FPU.
 
@@ -35,8 +36,10 @@ constexpr uint32_t kFaceWidth = 16U;
 constexpr uint32_t kFaceSize = kFaceHeight * kFaceWidth;
 
 // A boundary record: [valid, row_id, 32 max bit-patterns, 32 indices], padded to a NOC-friendly
-// multiple of 16 bytes. The records CB holds the receive slots for the one row this core may own,
-// then one staging slot for the record it may send.
+// multiple of 16 bytes. The merge reads only the maxima and indices; valid and row_id are
+// watcher/debug breadcrumbs (the split geometry already fixes which row a record belongs to).
+// The records CB holds the receive slots for the one row this core may own, then one staging slot
+// for the record it may send.
 constexpr uint32_t kRecordStrideU32 = 72U;  // 66 used, padded to 288 bytes
 constexpr uint32_t kRecordBytes = kRecordStrideU32 * sizeof(uint32_t);
 
@@ -168,6 +171,8 @@ void kernel_main() {
     auto send_shard = [&](uint32_t tile_row) {
         const uint32_t staging = records_base + max_foreign_shards * kRecordBytes;
         auto* rec = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(staging);
+        // Watcher/debug breadcrumbs only -- the merge never reads them (the split geometry admits
+        // exactly one row per owner, so no row-id matching is needed).
         rec[0] = 1U;
         rec[1] = tile_row;
         for (uint32_t h = 0U; h < kTileHeight; ++h) {
@@ -186,6 +191,7 @@ void kernel_main() {
 
     auto finish_row = [&](uint32_t tile_row, uint32_t valid_rows) {
         const uint32_t row_first = tile_row * Wt;
+        // Fully local row: every tile was scanned here, so the write-out completes here too.
         if (row_first >= start_tile && row_first + Wt <= start_tile + num_tiles) {
             if (valid_rows != 0U) {
                 write_row(tile_row, valid_rows);
@@ -283,7 +289,7 @@ void kernel_main() {
         noc_semaphore_wait(sem_ptr, expected_shards);
         noc_semaphore_set(sem_ptr, 0U);  // re-arm for the next dispatch of this cached program
 
-        // The accumulators still hold this core's own shard: finish_row deferred exactly this row,
+        // The accumulators still hold this core's local shard: finish_row deferred exactly this row,
         // and it is the run's last, so no reset ran after it. Every received record is a shard of
         // this same row -- the split geometry admits no other sender -- so no row-id matching is
         // needed.

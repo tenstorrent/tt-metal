@@ -44,9 +44,9 @@ constexpr auto kOutputStagingCbIndex = tt::CBIndex::c_3;
 constexpr auto kRecordsCbIndex = tt::CBIndex::c_4;
 
 // Boundary-row partials exchanged between cores: [valid, row, 32 maxima, 32 indices]
-// padded to 288 bytes. Each split row is merged by the core holding its FIRST tile, so a core
-// sends at most one record (its first row's shard) and receives at most the row's shard fan-in --
-// see writer_gumbel_sample.cpp.
+// padded to 288 bytes; valid and row are watcher/debug breadcrumbs the merge never reads. Each
+// split row is merged by the core holding its FIRST tile, so a core sends at most one record (its
+// first row's shard) and receives at most the row's shard fan-in -- see writer_gumbel_sample.cpp.
 constexpr uint32_t kRecordBytes = 72U * sizeof(uint32_t);
 
 const std::string kDoLogitsMaskDefineKey = "DO_LOGITS_MASK";
@@ -74,9 +74,13 @@ constexpr auto kWriterPositionsCbIndex = tt::CBIndex::c_6;
 //
 // The UPPER bound : `rand_tile` produces values on a CLOSED interval [from, from + scale],
 // so U == 1.0 is attainable, and then log(1) = 0, -log(0) = +inf, g = +inf, which pins the
-// argmax onto that token with certainty. It is a ~2^-32-per-element event, but it is a real one, so
-// here the top of the range is the largest float32 strictly below 1.0 and g stays finite (max
-// ~16.6).
+// argmax onto that token with certainty. It is a ~2^-32-per-element event, but it is a real one,
+// so here the top of the range is the largest float32 strictly below 1.0 and g stays FINITE --
+// that finiteness is the point of the bound. The ceiling itself is ~16.6 with an exact log; the
+// approximate log in gumbel_sfpu.h caps it lower, near 13.75.
+//
+// gumbel_sfpu.h's approximate log drops its zero guard on the strength of exactly these bounds --
+// change them only together with that header.
 constexpr float kGumbelUniformLowerBound = 0x1p-32F;
 constexpr float kGumbelUniformUpperBound = 0x1.fffffep-1F;  // nextafterf(1.0F, 0.0F)
 
@@ -377,6 +381,10 @@ tt::tt_metal::Program build_program(
     // nothing never wait on it.
     const uint32_t reduction_sem_id = tt::tt_metal::CreateSemaphore(program, layout.all_cores, 0);
 
+    // Keep this count in step with TensorAccessorArgs<7> in writer_gumbel_sample.cpp -- the
+    // accessor offset is hard-coded there and the positions accessor chains off it, so a mismatch
+    // misdecodes the accessor words (page size read as the config flags) instead of failing to
+    // compile.
     std::vector<uint32_t> writer_ct_args{
         layout.Wt,
         layout.logical_vocab,

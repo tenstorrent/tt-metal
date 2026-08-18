@@ -4,17 +4,17 @@
 
 // Fused Gumbel-max sampling, compute half.
 //
-// Per vocab tile this kernel does, entirely inside DST, what a composite sample would spell as five
-// separate ttnn ops (rand -> log -> neg -> log -> neg -> mul -> add -> sub):
+// Per vocab tile this kernel does, entirely inside DST, what a composite sample would spell as a
+// chain of separate ttnn ops (rand -> log -> neg -> log -> neg -> mul -> add -> sub):
 //
 //     score = logits * (1 / temperature) + (-log(-log(U)))  [ - padding_mask ]
 //
 // and hands the score tile straight to the writer, which folds it into a running per-row argmax.
 // Nothing [B, 1, tokens, V]-sized is ever written to DRAM.
 //
-// The noise chain itself is two SFPU passes over DST, not seven: rand_tile draws the raw uniforms,
-// then one op-local SFPI sweep (gumbel_sfpu.h) folds both logs, both negations, the temperature
-// scale and the add into LREGs, storing each score datum exactly once.
+// The noise chain is two SFPU passes over DST: rand_tile draws the raw uniforms, then one op-local
+// SFPI sweep (gumbel_sfpu.h) folds both logs, both negations, the temperature scale and the add
+// into LREGs, storing each score datum exactly once.
 
 #include <cstdint>
 
@@ -109,8 +109,9 @@ void kernel_main() {
                 if constexpr (do_gumbel_noise) {
                     // ---- pass 1: U ~ Uniform[from, from + scale] into the score slot ----
                     // rand_tile stays a standalone pass: the PRNG's per-tile draw order defines the
-                    // reproducible noise stream, and the generator owns LREG0-6 plus replay slots
-                    // 0-16 while it runs, so nothing may interleave with it.
+                    // reproducible noise stream, and rand owns the mutable LREG file (LREG0-7),
+                    // programs const LREG12/13 on Wormhole, and a 16-instruction replay row;
+                    // nothing may interleave with it (see ckernel_sfpu_rand.h).
                     rand_tile(score_reg, rand_from_bits, rand_scale_bits);
 
                     copy_tile_init(cb_logits);
@@ -122,6 +123,9 @@ void kernel_main() {
                     // The init reprograms what rand_tile left behind (counters, SFPU config);
                     // the fused pass itself relies on no replay slots or const LREGs.
                     gumbel_score_tile_init();
+                    // The offset template arg is unsigned, so a reversed pair would wrap into a
+                    // silent out-of-bounds DST read rather than a negative offset.
+                    static_assert(operand_reg > score_reg, "logits tile must sit above the noise tile in DST");
                     gumbel_score_tile<operand_reg - score_reg>(score_reg, inv_temperature_bits);
                 } else {
                     // ---- greedy (temperature == 0): the logits ARE the scores ----
