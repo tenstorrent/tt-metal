@@ -16,10 +16,8 @@
 
 #include <tt_stl/assert.hpp>
 
-// Host-side mirror of the device SemScope enum (tt_metal/hw/inc/api/dataflow/noc_semaphore.h).
-// The values are the contract: codegen emits them numerically into each kernel's scope table,
-// plus a tripwire static_assert comparing these numerals against the device enum by name --
-// renumbering either enum without the other fails every kernel build.
+// Host-side mirror of the device SemScope enum.
+// Codegen emits these values into each kernel's scope table.
 enum class SemScope : uint8_t {
     LOCAL_NONATOMIC = 0,
     DM_LOCAL_CACHED = 1,
@@ -28,10 +26,7 @@ enum class SemScope : uint8_t {
 
 namespace tt::tt_metal {
 
-// One resolved semaphore binding, as both codegen backends consume it. For a DM_LOCAL_CACHED
-// semaphore, total_binder_harts is the semaphore's TOTAL binder hart count across ALL its binder
-// kernels (the census sum) -- the generated exit stub uses it to know when the last binder hart
-// has left so it can self-restore the pool row for the next program. 0 for other scopes.
+// One resolved semaphore binding.
 struct SemBindingEntry {
     std::string name;
     uint16_t id = 0;
@@ -39,12 +34,9 @@ struct SemBindingEntry {
     uint32_t total_binder_harts = 0;
 };
 
-// The two halves of the generated sem section, shared by BOTH codegen backends (genfiles.cpp and
-// emulated_program_runner.cpp) so their emitted text cannot drift.
-//
-// emit_sem_scope_table: the TT_METAL2_SEM_SCOPE_TABLE define -- must be the FIRST emitted line of
-// the generated header, before any include, so no include chain can compile noc_semaphore.h
-// without it. Sized by `table_size` (NUM_SEMAPHORES); unbound ids default to LOCAL_NONATOMIC.
+// The generated semaphore section.
+// Emits the TT_METAL2_SEM_SCOPE_TABLE define. Must be the FIRST line of the generated header,
+// before any include, so no include chain can compile noc_semaphore.h without it.
 inline void emit_sem_scope_table(std::ostream& os, const std::vector<SemBindingEntry>& entries, size_t table_size) {
     std::vector<SemScope> table(table_size, SemScope::LOCAL_NONATOMIC);
     for (const auto& entry : entries) {
@@ -62,14 +54,11 @@ inline void emit_sem_scope_table(std::ostream& os, const std::vector<SemBindingE
     os << "}\n\n";
 }
 
-// emit_sem_ids_and_tripwires: `#include <cstdint>`, the DM-guarded noc_semaphore.h include (first
-// inclusion in the TU precedes any other chain), `namespace sem {` with the plain uint32_t ids,
-// and the two tripwires: the enum-numbering cross-check (numerals from the HOST enum, compared
-// against the DEVICE enum by name -- renumbering either side without the other fails every kernel
-// build) and the per-binding table-visibility assert (an include compiling noc_semaphore.h before
-// the define fails loudly instead of silently degrading to LOCAL_NONATOMIC).
-// LEAVES `namespace sem {` OPEN: the caller appends backend-specific symbols (genfiles: the
-// cached-pool seeder) and closes it.
+// Emits the sem:: ids plus two static_asserts: one fails the kernel build if the host
+// and device SemScope enums are renumbered out of sync; the other if anything compiled
+// noc_semaphore.h before the scope table was defined (which would silently degrade every id
+// to LOCAL_NONATOMIC). Leaves `namespace sem {` open so the caller can append symbols (the
+// cached-pool seeder) before closing it.
 inline void emit_sem_ids_and_tripwires(std::ostream& os, const std::vector<SemBindingEntry>& entries) {
     os << "#include <cstdint>\n";
     os << "#ifndef COMPILE_FOR_TRISC\n";

@@ -173,41 +173,30 @@
 // Packet header pool sizing constants
 #define PACKET_HEADER_MAX_SIZE 144  // sizeof(UDMHybridMeshPacketHeader)
 #define NUM_PACKET_HEADERS \
-    (6 * 2 * MaxDMProcessorsPerCoreType)  // (EAST, WEST, NORTH, SOUTH, UP, DOWN) * convention * per-DM-hart
+    (6 * 2 * MaxDMProcessorsPerCoreType)  // (EAST, WEST, NORTH, SOUTH, UP, DOWN) * convention * (DM0, DM1)
 
 // Packet header pool for fabric networking
-// Size: 144 * (6 * 2 * 8) = 13824 on Quasar (MaxDMProcessorsPerCoreType = 8)
+// Size: 144 * 6 * 2 * 2 = 3456
 #define MEM_PACKET_HEADER_POOL_BASE (MEM_TENSIX_FABRIC_CONNECTIONS_BASE + MEM_TENSIX_FABRIC_CONNECTIONS_SIZE)
 #define MEM_PACKET_HEADER_POOL_SIZE (PACKET_HEADER_MAX_SIZE * NUM_PACKET_HEADERS)
 #if (MEM_PACKET_HEADER_POOL_BASE % 16 != 0) || (MEM_PACKET_HEADER_POOL_SIZE % 16 != 0)
 #error "Packet header pool base and size must be 16-byte aligned"
 #endif
 
-// Per-hart NoC-atomic return slots (EXTERNAL down()'s CAS readback). The SCMDBUF R_SRC_ADDR
-// register is per-hart sticky, so each hart needs a private word for returned pre-op values.
-// 8 harts x 4B, rounded up to one 64B line; accessed only via NoC responses and the uncached
-// alias (never cache-dirtied). No init needed: every use pre-writes a sentinel and polls.
+// Per-hart NoC-atomic return slots (EXTERNAL down()'s CAS readback): R_SRC_ADDR is per-hart, so each
+// hart gets a private word. Written only by NoC responses; every use pre-writes a sentinel and polls.
 #define MEM_NOC_CAS_RET_BASE (((MEM_PACKET_HEADER_POOL_BASE + MEM_PACKET_HEADER_POOL_SIZE) + 63) & ~63)
 #define MEM_NOC_CAS_RET_SIZE 64
 
-// Per-semaphore EXTERNAL down() lock words (4-bit NoC-CAS spinlock; values only 0/1).
-// One lock per 16B row, so the CAS always addresses 32-bit LANE 0 of its row: a 4B-packed
-// layout would put some ids on lane 2, which showed an anomalous CAS return on the emulator
-// RTL (DISABLED_TestSelfCasLockLane2Anomaly). Touched only by NoC atomics. Zeroed once by DM
-// firmware at boot (dm.cc hart 0); the lock protocol returns each word to 0 on release.
-// Grow with NUM_SEMAPHORES.
+// Per-semaphore EXTERNAL down() lock words, one per 16B row so the NoC-CAS always addresses
+// the first 4-byte word. Grow with NUM_SEMAPHORES.
 #define MEM_NOC_SEM_LOCK_BASE (MEM_NOC_CAS_RET_BASE + MEM_NOC_CAS_RET_SIZE)
 #define MEM_NOC_SEM_LOCK_SIZE 256  // NUM_SEMAPHORES * 16 (one 16B row per lock)
 
-// Dedicated cached-only pool: DM_LOCAL_CACHED semaphores live HERE, in node L1 but disjoint
-// from the NoC-written kernel_config ring (which starts at MEM_MAP_END). Whole, aligned 64B
-// cache lines, so a DM cached-AMO's write-back line can never overlap any word written over
-// the NoC / uncached alias -> no cross-domain clobber by construction. Sized to
-// NUM_SEMAPHORES=16 rows * 8B = 128B, indexed by the semaphore's normal id.
-// Row layout: [0]=counter, [1]=protocol word for the generated entry/exit stubs' seed-once
-// protocol -- entered[15:0] (amoadd +1), exited[30:16] (amoadd +0x10000), seeded[31] (amoor).
-// Boot-zeroed by dm.cc, self-restored per program by the last binder hart's single store of 0.
-// See tt_metal/hw/inc/api/dataflow/noc_semaphore.h (DM_LOCAL_CACHED routing).
+// Dedicated cached-only pool for DM_LOCAL_CACHED semaphores: whole 64B cache lines that
+// nothing on the NoC/uncached path ever writes, so a cached AMO's line write-back can never
+// clobber NoC-written data. 8B rows indexed by semaphore id: [0] = counter, [1] = the seed
+// protocol word for the generated entry/exit stubs.
 #define MEM_DM_CACHED_SEM_BASE (MEM_NOC_SEM_LOCK_BASE + MEM_NOC_SEM_LOCK_SIZE)
 #define MEM_DM_CACHED_SEM_ROW 8
 #define MEM_DM_CACHED_SEM_SIZE 128  // keep >= NUM_SEMAPHORES * MEM_DM_CACHED_SEM_ROW
@@ -219,7 +208,7 @@
 
 // Read-only reserved memory boundary for watcher checks
 #define MEM_MAP_READ_ONLY_END (MEM_TENSIX_FABRIC_CONNECTIONS_BASE + MEM_TENSIX_FABRIC_OFFSET_OF_ALIGNED_INFO)
-// Read-write reserved memory boundary for watcher checks (the kernel_config ring begins here).
+// Read-write reserved memory boundary for watcher checks
 #define MEM_MAP_END (MEM_DM_CACHED_SEM_BASE + MEM_DM_CACHED_SEM_SIZE)
 
 // Kernel config region size after MEM_MAP_END (see create_tensix_mem_map()).

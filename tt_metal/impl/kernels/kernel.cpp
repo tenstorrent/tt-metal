@@ -577,8 +577,6 @@ uint64_t Kernel::compute_hash() const {
     for (const auto& it : sorted_iters(this->semaphore_binding_handles_)) {
         hasher.update(it->first);
         hasher.update(static_cast<uint64_t>(it->second.id));
-        // The scope is baked into the emitted scope table (and, for cached sems, the binder-hart
-        // total into the exit stub), so kernels differing in either must not share a cached artifact.
         hasher.update(static_cast<uint64_t>(it->second.scope));
         hasher.update(static_cast<uint64_t>(it->second.total_binder_harts));
     }

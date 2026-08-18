@@ -6,13 +6,6 @@
 
 #include <stdint.h>
 
-// assert.h only where ASSERT is used (the Quasar DM wait_threads guard): its watcher chain
-// pulls device-only mailbox definitions, and this header is also compiled host-side
-// (tensor_accessor.h includes it for get_num_threads()).
-#if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)
-#include "api/debug/assert.h"
-#endif
-
 #if defined(ARCH_QUASAR)
 
 // Per-processor kernel thread info, set by Quasar dm.cc/trisc.cc from kernel_config before kernel runs.
@@ -43,28 +36,9 @@ struct KernelBarrier {
 // DM rendezvous group per worker. Two co-resident same-role multi-thread DM kernels with
 // different thread counts would still share a slot (host validation admits at most one
 // same-role DFB instance per node today, so this is not a reachable topology); if that
-// ever becomes supported, key the barrier per kernel-group instead of per DFB role.
-// [0] = DFB producer side, [1] = DFB consumer side. Any slot tolerates at most ONE
-// rendezvous group (one participant count) per worker at a time -- mixed counts on one
-// slot deadlock or release early (see wait_threads_on).
-constexpr uint32_t NUM_KERNEL_BARRIERS = 2;
+// ever becomes supported, key the barrier per kernel-group instead of the fixed 2 slots.
+constexpr uint32_t NUM_KERNEL_BARRIERS = 2;  // [0] = producer side, [1] = consumer side
 extern volatile KernelBarrier g_kernel_barrier[NUM_KERNEL_BARRIERS];
-
-// Generation-based barrier body for wait_threads(); reusable (each pass advances the generation).
-inline void wait_threads_on(volatile KernelBarrier& barrier, uint32_t participants) {
-    if (participants <= 1) {
-        return;
-    }
-    uint32_t next_generation = __atomic_load_n(&barrier.generation, __ATOMIC_ACQUIRE) + 1;
-    uint32_t arrived = __atomic_add_fetch(&barrier.arrived, 1, __ATOMIC_ACQ_REL);
-    if (arrived == participants) {
-        __atomic_store_n(&barrier.arrived, 0, __ATOMIC_RELAXED);
-        __atomic_store_n(&barrier.generation, next_generation, __ATOMIC_RELEASE);
-    } else {
-        while (__atomic_load_n(&barrier.generation, __ATOMIC_ACQUIRE) != next_generation) {
-        }
-    }
-}
 
 #endif // !COMPILE_FOR_TRISC
 
@@ -115,16 +89,22 @@ inline void thread_sync_init() {
 
 // barrier_idx selects an independent barrier so co-resident kernels with different
 // participant counts (e.g. a DFB's producer vs consumer kernel) don't share a counter.
-// Out of range would RMW whatever firmware global follows the array -- watcher ASSERT,
-// like dataflow_api.h's runtime-arg index guard.
 inline void wait_threads(uint32_t participants, uint32_t barrier_idx = 0) {
     if (participants <= 1) {
         return;
     }
 
 #if defined(ARCH_QUASAR)
-    ASSERT(barrier_idx < NUM_KERNEL_BARRIERS);
-    wait_threads_on(g_kernel_barrier[barrier_idx], participants);
+    volatile KernelBarrier& barrier = g_kernel_barrier[barrier_idx];
+    uint32_t next_generation = __atomic_load_n(&barrier.generation, __ATOMIC_ACQUIRE) + 1;
+    uint32_t arrived = __atomic_add_fetch(&barrier.arrived, 1, __ATOMIC_ACQ_REL);
+    if (arrived == participants) {
+        __atomic_store_n(&barrier.arrived, 0, __ATOMIC_RELAXED);
+        __atomic_store_n(&barrier.generation, next_generation, __ATOMIC_RELEASE);
+    } else {
+        while (__atomic_load_n(&barrier.generation, __ATOMIC_ACQUIRE) != next_generation) {
+        }
+    }
 #endif
 }
 
