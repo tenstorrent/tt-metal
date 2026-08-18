@@ -862,6 +862,13 @@ void kernel_main() {
                     }  // for in1_num_subblocks
                     in0_index_subblock_offset += in0_subblock_num_tiles;
                 }
+                // [#48552 DS-DEBUG] kb subblock loop done. UNWRAPPED so each compute thread (TRISC0=UNPACK,
+                // 1=MATH, 2=PACK) prints to its own file -> shows which threads reached the K-block
+                // transition. The hang is between here and kb1's "blk" (the multi-K-block partials
+                // spill/reload/accumulate path, which only runs for nbw>1). Gated h==0.
+                if (in0_block_h_i == 0) {
+                    DPRINT("[DS] kbend kb{}\n", in0_block_w_i);
+                }
                 if (curr_matmul_out_cb == matmul_partials_cb) {
                     if constexpr (!partials_cb_uses_output) {
                         UNPACK(RESTORE_PARTIALS_RD(partials_cb_read_ptr, cb_matmul_partials);)
@@ -950,8 +957,18 @@ void kernel_main() {
                     }
                 }
 
+                // [#48552 DS-DEBUG] pre-pop: transition (RESTORE_PARTIALS / any reload) done; about to free
+                // the input CBs. enrl = enable_reload set for the next K-block. post-pop: the bare in0/in1
+                // pop_fronts completed (these are NOT TEN-4746-guarded -> a bare-pop-front unpacker trap here
+                // is a prime suspect). If pre-pop prints but post-pop does not -> wedged in the pop_fronts.
+                if (in0_block_h_i == 0) {
+                    DPRINT("[DS] pre-pop kb{} enrl{}\n", in0_block_w_i, (uint32_t)enable_reload);
+                }
                 cb_mm_in0.pop_front(in0_block_num_tiles);
                 cb_in1.pop_front(in1_block_num_tiles);
+                if (in0_block_h_i == 0) {
+                    DPRINT("[DS] post-pop kb{}\n", in0_block_w_i);
+                }
             }  // for in0_num_blocks_w
             if constexpr (matmul_partials_cb == mm_out_cb_id && partials_cb_uses_output) {
                 UNPACK(RESTORE_PARTIALS_RD(partials_cb_read_ptr, cb_matmul_partials));
