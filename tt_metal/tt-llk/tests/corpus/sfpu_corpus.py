@@ -158,8 +158,8 @@ AUDITED_SEEDS = {
         silicon_source="LERP_COMPILER_SILICON_AB.md; sfpu_device_baseline_v1.tsv; audited BH device archive",
     ),
     "legacy__ckernel_sfpu_welfords": dict(
-        semantic_cpp_class="typed_wrapper_needed",
-        semantic_cpp_blocker="Generated vFloat body exists; raw LREG live-in/live-out ABI remains an explicit typed-boundary requirement.",
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Lane BB clean rewrite: vfloat body is plain typed sfpi (dst_reg gather + subvec_transp, plain vFloat accumulators, constexpr recips) — no raw-LREG ABI; accumulators park in Dst scratch across each transpose (SFPTRANSP permutes both lreg banks; sfpi lacks the involution spelling — compiler work item, AUDIT-DELREG.md).",
         paired_selector_status="implemented",
         test_status="pass",
         perf_status="measured",
