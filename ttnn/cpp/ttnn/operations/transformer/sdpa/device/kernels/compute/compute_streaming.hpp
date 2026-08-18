@@ -2333,7 +2333,10 @@ void sdpa_ring_v2(
     // True (unpadded) joint length in tiles; joint K chunks starting at/after it are pure padding.
     const uint32_t logical_lt = 0,
     // Tile offset of this call's Q chunk within cb_q_in (head-serial passes; 0 otherwise).
-    const uint32_t q_base_tiles = 0) {
+    const uint32_t q_base_tiles = 0,
+    // Rotated Q split only: runtime-arg index of this ring iteration's flat chunk-id list; the q
+    // loop then runs [0, global_q_end) as positions and maps each to its flat id from the list.
+    [[maybe_unused]] const uint32_t rot_list_arg_base = 0) {
     init_sdpa_streaming_semaphores();
 
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
@@ -2474,7 +2477,12 @@ void sdpa_ring_v2(
         // Compute Q chunk index (with optional zigzag remapping for causal balancing).
         // num_q_chunks is total per-head chunks (local + joint), matching the divisor the
         // writer/reader use to flatten (batch, head, q_chunk) — see ring_joint_sdpa.cpp.
-        uint32_t q_chunk = remap_q_index(q, num_q_chunks, use_zigzag_balancing) % num_q_chunks;
+#ifdef ROTATED_Q_SPLIT
+        const uint32_t q_flat = get_arg_val<uint32_t>(rot_list_arg_base + q);
+#else
+        const uint32_t q_flat = q;
+#endif
+        uint32_t q_chunk = remap_q_index(q_flat, num_q_chunks, use_zigzag_balancing) % num_q_chunks;
 
         // Causal K-chunk limit and Q start tile for this Q chunk
         uint32_t causal_k_limit = num_kv_chunks;

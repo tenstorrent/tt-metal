@@ -6137,11 +6137,15 @@ def test_ring_mla_create_chunked_perf_table(model_name, q_chunk_size, k_chunk_si
 if MESH_CONFIG.is_galaxy:
     RING_MLA_CHUNKED_PERF_CHECK_CONFIGS = [
         # (model_name, q_chunk_size, k_chunk_size, ring_size, expected_util)
-        # 8-device ring (Galaxy, sp=8 tp=4, 100 SDPA cores)
+        # 8-device ring (Galaxy, sp=8 tp=4, 110 SDPA cores)
         ("kimi50k", 32, 640, 8, 68.5),
-        # Kimi-K3: same chunk and tuned q32/k640, H_loc 24 vs 16. Measured 2026-08-05 on
-        # bh_sc1_high_power -- 9.680 ms vs kimi50k's 5.722, i.e. 1.69x time for 1.5x ideal work.
-        ("kimi_k3", 32, 640, 8, 61.03),
+        # Kimi-K3: same chunk and tuned q32/k640, H_loc 24 vs 16. Was 61.03 (measured 2026-08-05,
+        # bh_sc1_high_power, 9.680 ms) before the rotated Q split. PROJECTED 2026-08-18: the
+        # rotated per-ring-iteration split lifts the 480-unit/110-core occupancy ceiling from
+        # 8*ceil(480/110)=40 to 36 K-stream slots (61.03 * 40/36 * 0.989 stall factor measured on
+        # the QuietBox 9x10-grid emulation, which went 5.708 -> 5.290 ms). Replace with the first
+        # bh_sc1_high_power measurement.
+        ("kimi_k3", 32, 640, 8, 67.0),
     ]
 else:
     RING_MLA_CHUNKED_PERF_CHECK_CONFIGS = [
@@ -6200,6 +6204,16 @@ def test_ring_mla_chunked_perf_check(model_name, q_chunk_size, k_chunk_size, rin
 
     config_id = f"{get_test_case_id(model, q_chunk_size, k_chunk_size)}-chunk{chunk_size}-fresh_kv"
     runtime = open_ring_joint_sdpa_runtime(MESH_CONFIG)
+    # Debug aid: RING_MLA_SDPA_GRID_OVERRIDE="9x10" shrinks the SDPA compute grid to emulate a
+    # different core count's work-split quantization (e.g. Galaxy's 480 units / 110 cores ratio on a
+    # QuietBox). Utilization is then normalized to the overridden core count, and the band assert is
+    # skipped (the committed expectation only applies to the standard grid).
+    grid_override = os.environ.get("RING_MLA_SDPA_GRID_OVERRIDE")
+    sdpa_cores_for_util = MESH_CONFIG.sdpa_cores
+    if grid_override:
+        cols, rows = (int(v) for v in grid_override.lower().split("x"))
+        runtime.sdpa_compute_grid = (cols, rows)
+        sdpa_cores_for_util = cols * rows
     try:
         with mock.patch.dict(os.environ, {CHUNKED_PREFILL_CHUNK_ID_ENV: str(perf_chunk)}):
             duration_ns, perf_records = profile_ring_joint_runtime_duration_ns(
@@ -6220,7 +6234,7 @@ def test_ring_mla_chunked_perf_check(model_name, q_chunk_size, k_chunk_size, rin
         close_ring_joint_sdpa_runtime(runtime)
 
     utilization, _ = compute_chunked_prefill_perf_check_utilization(
-        MESH_CONFIG, model, chunk_size, perf_chunk, duration_ns, MESH_CONFIG.sdpa_cores
+        MESH_CONFIG, model, chunk_size, perf_chunk, duration_ns, sdpa_cores_for_util
     )
 
     lower = expected_util * (1 - RING_JOINT_PERF_MARGIN)
@@ -6232,6 +6246,10 @@ def test_ring_mla_chunked_perf_check(model_name, q_chunk_size, k_chunk_size, rin
         f"(expected {expected_util:.2f}%, band [{lower:.2f}, {upper:.2f}]), "
         f"profiler_records={len(perf_records)}"
     )
+
+    if grid_override:
+        logger.info(f"RING_MLA_SDPA_GRID_OVERRIDE={grid_override}: skipping band assert")
+        return
 
     assert lower <= utilization <= upper, (
         f"Math utilization {utilization:.2f}% outside band [{lower:.2f}, {upper:.2f}] "

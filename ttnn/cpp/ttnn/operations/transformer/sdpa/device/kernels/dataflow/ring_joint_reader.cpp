@@ -391,6 +391,16 @@ void kernel_main() {
         true, /* wait_for_op_signal */
         argidx);
 
+#ifdef ROTATED_Q_SPLIT
+    // Rotated per-ring-iteration Q distribution: the factory appends, per ring iteration,
+    // [row_loop_count, my_count, chunk ids x ROTATED_Q_SPLIT]. ROTATED_Q_SPLIT's value is the
+    // fixed chunk-list stride (base chunks + 1 float slot). The static global_q_start/global_q_end
+    // range is superseded; only q_per_core > 1 gating still relies on it.
+    constexpr uint32_t rot_max_slots = ROTATED_Q_SPLIT;
+    constexpr uint32_t rot_iter_stride = 2 + rot_max_slots;
+    const uint32_t rot_args_base = argidx;
+#endif
+
     // Compile-time semaphore ids and chain flags are appended after all TensorAccessorArgs().
     // ChainLink takes semaphore IDs directly (the new Semaphore<> wrapper resolves them to L1 addrs).
     constexpr uint32_t chain_sender_semaphore_arg_offset = ring_joint::kChainSenderSemaphoreCompileArgOffset;
@@ -749,15 +759,36 @@ void kernel_main() {
         }
         uint32_t gqa_group_q_iter = 0;
 
+#ifdef ROTATED_Q_SPLIT
+        const uint32_t rot_iter_base = rot_args_base + ring_iter * rot_iter_stride;
+        loop_q_count = get_arg_val<uint32_t>(rot_iter_base);  // this row's mcast slot count this iteration
+        const uint32_t rot_my_count = get_arg_val<uint32_t>(rot_iter_base + 1);
+#endif
+
         for (uint32_t q_iter = 0; q_iter < loop_q_count; ++q_iter) {
             // Check if this is a real iteration or only padded chain/mcast synchronization.
+#ifdef ROTATED_Q_SPLIT
+            const bool is_padded_iter = (q_iter >= rot_my_count);
+            // Padded iterations only handshake; decode a valid owned chunk so downstream index
+            // math stays in range (its values are never used for reads or pushes).
+            const uint32_t rot_flat_q =
+                get_arg_val<uint32_t>(rot_iter_base + 2 + (is_padded_iter ? rot_my_count - 1 : q_iter));
+#else
             const bool is_padded_iter = (q_iter >= q_per_core);
+#endif
 
             // Same-core GQA uses group-major (batch, Q chunk, head) scheduling so consecutive
             // iterations reuse one K/V window.  Every other specialization retains the ordinary
             // head-major flat order and optional causal zigzag remap.
-            const auto decoded_q =
-                decompose_global_q_index(global_q_start + q_iter, num_q_chunks, NH, use_zigzag_balancing);
+            const auto decoded_q = decompose_global_q_index(
+#ifdef ROTATED_Q_SPLIT
+                rot_flat_q,
+#else
+                global_q_start + q_iter,
+#endif
+                num_q_chunks,
+                NH,
+                use_zigzag_balancing);
             const uint32_t nb = decoded_q.nb;
             const uint32_t nq = decoded_q.nq;
             const uint32_t q_chunk = decoded_q.q_chunk;

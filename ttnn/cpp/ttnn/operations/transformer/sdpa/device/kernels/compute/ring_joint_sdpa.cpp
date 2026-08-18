@@ -151,6 +151,14 @@ void kernel_main() {
     uint32_t kv_pad_q_valid_tile_count = get_arg_val<uint32_t>(argidx++);
     uint32_t active_ring_iter_mask = get_arg_val<uint32_t>(argidx++);
 
+#ifdef ROTATED_Q_SPLIT
+    // Rotated per-ring-iteration Q distribution: per ring iteration the factory appends
+    // [my_count, chunk ids x ROTATED_Q_SPLIT] (fixed stride). See the program factory comment.
+    constexpr uint32_t rot_max_slots = ROTATED_Q_SPLIT;
+    constexpr uint32_t rot_iter_stride = 1 + rot_max_slots;
+    const uint32_t rot_args_base = argidx;
+#endif
+
     RingSDPAOpIndexer fused_op_indexer(
         ring_size_runtime, ring_index_runtime, forward_writes_expected, backward_writes_expected);
 
@@ -436,8 +444,15 @@ void kernel_main() {
                 cb_attention_sink,
                 has_gathered_joint_k,
                 Lt_local>(
+#ifdef ROTATED_Q_SPLIT
+                // Rotated: iterate [0, my_count) and map each index to its flat chunk id via the
+                // per-iteration runtime-arg list (rot_list_arg_base below).
+                0,
+                get_arg_val<uint32_t>(rot_args_base + ring_iter * rot_iter_stride),
+#else
                 global_q_start,
                 global_q_end,
+#endif
                 iter_num_kv_chunks,
                 num_q_chunks,
                 ring_iter,
@@ -452,13 +467,23 @@ void kernel_main() {
                 joint_n_mask_chunk_id,
                 acc_state,
                 is_last_ring_iter,
+#ifdef ROTATED_Q_SPLIT
+                get_arg_val<uint32_t>(rot_args_base + ring_iter * rot_iter_stride),
+#else
                 q_per_core,
+#endif
                 lw_mask,
                 skip_first_half_q,
                 use_zigzag_balancing,
                 chunked_context,
                 is_first_active_iter,
-                logical_lt);
+                logical_lt
+#ifdef ROTATED_Q_SPLIT
+                ,
+                /*q_base_tiles=*/0,
+                rot_args_base + ring_iter * rot_iter_stride + 1
+#endif
+            );
         } else {
             assert_kv_pad_rotation_streaming_only<kv_pad_rotation_enabled>();
             sdpa_ring<

@@ -2569,6 +2569,138 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         }
     }
 
+    // ---------------------------------------------------------------------------
+    // Rotated per-ring-iteration Q distribution ("rotated q split").
+    //
+    // With row-wide K mcast, each grid row is an independent lockstep pipe that pays
+    // ring_size * max(chunks per core in the row) K-stream slots. The flat split pins the
+    // total_q_chunks % num_cores remainder ("float") chunks to fixed cores, so their rows pay the
+    // +1 slot on EVERY ring iteration: grid time = ring_size * ceil(U/C) slots vs the ideal
+    // U * ring_size / C (e.g. 40 vs 34.9 slots on a 110-core grid -> 87% occupancy ceiling).
+    // The (m, l, O) accumulators already round-trip through DRAM between ring iterations addressed
+    // by chunk identity, so a float chunk may change owner core between ring iterations: rotate the
+    // floats across rows so each row runs the +1-slot mode only ~ring_size*F/C of the time.
+    // Cross-core ordering (donor's accumulator save must land in DRAM before the receiver's restore
+    // read) uses one handoff semaphore per ring iteration: the donor writer increments the
+    // receiver's semaphore after a write barrier on the save TRID; the receiver waits before
+    // issuing the float's restore reads. Floats sit LAST in every owner's per-iteration list, so
+    // the deferred save flushes at the start of iteration t+1 while the restore is needed near the
+    // end of iteration t+1 — about one ring iteration of slack.
+    // ---------------------------------------------------------------------------
+    constexpr uint32_t kRotNoDest = 0xFFFFFFFF;
+    const uint32_t rot_base_chunks = num_cores ? total_q_chunks / num_cores : 0;
+    const uint32_t rot_float_chunks = num_cores ? total_q_chunks % num_cores : 0;
+    const uint32_t full_ring_iter_mask = ring_size >= 32 ? 0xFFFFFFFFu : ((1u << ring_size) - 1);
+    // v_shares_k_buffer is required: separate-V modes stream V through the per-head
+    // store-and-forward chain, whose per-core forwarding counts are built from the flat split and
+    // would desync under rotated per-iteration ownership. Latent/shared-buffer V never touches the
+    // V chain (V is materialized from, or read in place of, the mcast K^T).
+    const bool use_rotated_q_split =
+        kernel_chunked && !has_sliding_window && use_streaming_compute && enable_kv_chains && k_uses_batch_chain &&
+        build_kv_chains && k_mcast_enabled && v_shares_k_buffer && !enable_zigzag_balancing && !args.is_balanced &&
+        B == 1 && L == 0 && !kv_pad_rotation_enabled && !kv_pad_from_metadata && !use_attention_sink &&
+        ring_size >= 2 && ring_size <= 8 && active_ring_iter_mask == full_ring_iter_mask && rot_float_chunks != 0 &&
+        rot_base_chunks >= 2;
+
+    struct RotatedIterSched {
+        std::vector<uint32_t> my_chunks;   // flat chunk ids; base chunks first, float (if any) last
+        uint32_t row_loop = 0;             // row max chunk count this iteration (mcast slot count)
+        uint32_t mig_in = 0;               // 1 if the last chunk was owned by another core last iteration
+        uint32_t float_dest = kRotNoDest;  // packed phys (x<<8)|y of this float's owner next iteration
+    };
+    std::vector<std::vector<RotatedIterSched>> rot_sched;  // [core][ring_iter]
+    std::vector<uint32_t> rot_handoff_sem_ids;
+    if (use_rotated_q_split) {
+        const uint32_t rowcap = grid_size.x;
+        const uint32_t num_rows = grid_size.y;
+        const uint32_t rows_needed = tt::div_up(rot_float_chunks, rowcap);
+        // The row-wide mcast machinery assumes the injector never runs a padded iteration (it is
+        // chosen among row-max cores; padded members freeze their K-CB write phase, and the mcast
+        // lands at the injector's phase). Preserve that invariant per iteration: within a row
+        // hosting floats, the injector's column takes the first float.
+        std::vector<uint32_t> injector_col(num_rows, 0);
+        for (uint32_t row = 0; row < num_rows; ++row) {
+            for (uint32_t col = 0; col < rowcap; ++col) {
+                if (batch_chain_configs[row * grid_size.x + col].is_injector) {
+                    injector_col[row] = col;
+                    break;
+                }
+            }
+        }
+        // Float f's owner at iteration t: rows rotate by rows_needed each iteration so every row
+        // hosts floats (the +1 mcast slot) an equal ~ring_size*rows_needed/num_rows share of
+        // iterations. (row, position) is unique per f within an iteration, so a core owns at most
+        // one float at a time; position 0 maps to the row's injector column.
+        auto float_owner = [&](uint32_t t, uint32_t f) {
+            const uint32_t row = ((t * rows_needed) + (f / rowcap)) % num_rows;
+            const uint32_t pos = f % rowcap;
+            const uint32_t inj = injector_col[row];
+            const uint32_t col = pos == 0 ? inj : (pos <= inj ? pos - 1 : pos);
+            return row * grid_size.x + col;
+        };
+        rot_sched.assign(num_cores, std::vector<RotatedIterSched>(ring_size));
+        for (uint32_t i = 0; i < num_cores; ++i) {
+            for (uint32_t t = 0; t < ring_size; ++t) {
+                auto& s = rot_sched[i][t];
+                s.my_chunks.reserve(rot_base_chunks + 1);
+                for (uint32_t b = 0; b < rot_base_chunks; ++b) {
+                    s.my_chunks.push_back(i * rot_base_chunks + b);
+                }
+            }
+        }
+        for (uint32_t t = 0; t < ring_size; ++t) {
+            for (uint32_t f = 0; f < rot_float_chunks; ++f) {
+                auto& s = rot_sched[float_owner(t, f)][t];
+                s.my_chunks.push_back(rot_base_chunks * num_cores + f);
+                s.mig_in = (t > 0 && float_owner(t - 1, f) != float_owner(t, f)) ? 1 : 0;
+                if (t + 1 < ring_size && float_owner(t + 1, f) != float_owner(t, f)) {
+                    const auto& dest_phys = core_work[float_owner(t + 1, f)].physical_core;
+                    s.float_dest = (static_cast<uint32_t>(dest_phys.x) << 8) | static_cast<uint32_t>(dest_phys.y);
+                }
+            }
+            for (uint32_t row = 0; row < num_rows; ++row) {
+                uint32_t row_max = 0;
+                for (uint32_t col = 0; col < rowcap; ++col) {
+                    row_max = std::max(
+                        row_max, static_cast<uint32_t>(rot_sched[row * grid_size.x + col][t].my_chunks.size()));
+                }
+                for (uint32_t col = 0; col < rowcap; ++col) {
+                    rot_sched[row * grid_size.x + col][t].row_loop = row_max;
+                }
+            }
+        }
+        // The mcast injector's forward gate (q_iter_local < next_core_q_chunks) must cover the
+        // +1-slot iterations of every row, not just the injector's static flat-split count.
+        for (auto& cfg : batch_chain_configs) {
+            if (cfg.participates && cfg.is_injector) {
+                cfg.next_core_q_chunks = rot_base_chunks + 1;
+            }
+        }
+        // One handoff semaphore per ring iteration; receiver resets it to 0 after its wait so a
+        // cached program replays cleanly.
+        for (uint32_t t = 0; t < ring_size; ++t) {
+            const uint32_t sem_id = static_cast<uint32_t>(desc.semaphores.size());
+            desc.semaphores.push_back(SemaphoreDescriptor{
+                .id = sem_id,
+                .core_type = tt::CoreType::WORKER,
+                .core_ranges = core_grid_set,
+                .initial_value = 0,
+            });
+            rot_handoff_sem_ids.push_back(sem_id);
+        }
+        // Define value = max chunk-list slots per iteration (fixed runtime-arg stride).
+        defines["ROTATED_Q_SPLIT"] = std::to_string(rot_base_chunks + 1);
+        log_debug(
+            tt::LogOp,
+            "Rotated Q split: base={} floats={} rows_needed={} ring_size={} (ideal slots {} vs flat {})",
+            rot_base_chunks,
+            rot_float_chunks,
+            rows_needed,
+            ring_size,
+            total_q_chunks * ring_size / num_cores,
+            ring_size * (rot_base_chunks + 1));
+    }
+
     // Update mcast compile-time args
     const bool head_mcast_enabled = (mcast_chains > 0);
 
@@ -2744,6 +2876,18 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(reader_signaler_args);
         reader_args.append(reader_signaler_args);
 
+        // Rotated Q split: per ring iteration [row_loop_count, my_count, chunk ids (fixed stride)].
+        if (use_rotated_q_split) {
+            for (uint32_t t = 0; t < ring_size; ++t) {
+                const auto& s = rot_sched[i][t];
+                reader_args.push_back(s.row_loop);
+                reader_args.push_back(static_cast<uint32_t>(s.my_chunks.size()));
+                for (uint32_t k = 0; k < rot_base_chunks + 1; ++k) {
+                    reader_args.push_back(k < s.my_chunks.size() ? s.my_chunks[k] : 0);
+                }
+            }
+        }
+
         reader_kernel.emplace_runtime_args(core, reader_args.args);
 
         // Writer args
@@ -2763,6 +2907,22 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         std::vector<uint32_t> writer_signaler_args;
         sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(writer_signaler_args);
         writer_args.append(writer_signaler_args);
+        // Rotated Q split: handoff semaphore ids, then per ring iteration
+        // [my_count, migrated_in_count, float_dest, chunk ids (fixed stride)].
+        if (use_rotated_q_split) {
+            for (uint32_t t = 0; t < ring_size; ++t) {
+                writer_args.push_back(rot_handoff_sem_ids[t]);
+            }
+            for (uint32_t t = 0; t < ring_size; ++t) {
+                const auto& s = rot_sched[i][t];
+                writer_args.push_back(static_cast<uint32_t>(s.my_chunks.size()));
+                writer_args.push_back(s.mig_in);
+                writer_args.push_back(s.float_dest);
+                for (uint32_t k = 0; k < rot_base_chunks + 1; ++k) {
+                    writer_args.push_back(k < s.my_chunks.size() ? s.my_chunks[k] : 0);
+                }
+            }
+        }
         writer_kernel.emplace_runtime_args(core, writer_args.args);
 
         // Compute args
@@ -2792,6 +2952,16 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             "compute.q_valid_tile_count");
         compute_args.push_checked(
             runtime_arg_layout.compute_active_ring_iter_mask, active_ring_iter_mask, "compute.active_ring_iter_mask");
+        // Rotated Q split: per ring iteration [my_count, chunk ids (fixed stride)].
+        if (use_rotated_q_split) {
+            for (uint32_t t = 0; t < ring_size; ++t) {
+                const auto& s = rot_sched[i][t];
+                compute_args.push_back(static_cast<uint32_t>(s.my_chunks.size()));
+                for (uint32_t k = 0; k < rot_base_chunks + 1; ++k) {
+                    compute_args.push_back(k < s.my_chunks.size() ? s.my_chunks[k] : 0);
+                }
+            }
+        }
         compute_kernel.emplace_runtime_args(core, compute_args.args);
     }
 

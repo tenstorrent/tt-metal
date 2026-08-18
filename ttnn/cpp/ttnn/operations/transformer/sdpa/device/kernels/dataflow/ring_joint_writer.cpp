@@ -489,6 +489,26 @@ void kernel_main() {
         false, /* wait_for_op_signal */
         argidx);
 
+#ifdef ROTATED_Q_SPLIT
+    // Rotated per-ring-iteration Q distribution: the factory appends ring_size handoff semaphore
+    // ids, then per ring iteration [my_count, migrated_in_count, float_dest, chunk ids x
+    // ROTATED_Q_SPLIT]. float_dest is the packed (x<<8)|y physical core owning this core's last
+    // ("float") chunk next iteration, or ROT_NO_DEST when it does not migrate. The donor signals
+    // the receiver's per-iteration handoff semaphore after its accumulator save has landed in
+    // DRAM; the receiver waits before issuing the float's restore reads.
+    // The signaler pushes 6 rt args but the non-waiting RingSDPAOpReceiver above consumes only 4
+    // (it skips the two all-gather semaphore ids) — step over them to reach the rotated block.
+    argidx += 2;
+    constexpr uint32_t rot_max_slots = ROTATED_Q_SPLIT;
+    constexpr uint32_t rot_iter_stride = 3 + rot_max_slots;
+    constexpr uint32_t ROT_NO_DEST = 0xFFFFFFFF;
+    uint32_t rot_sem_ids[ring_size];
+    for (uint32_t r = 0; r < ring_size; ++r) {
+        rot_sem_ids[r] = get_arg_val<uint32_t>(argidx++);
+    }
+    const uint32_t rot_args_base = argidx;
+#endif
+
     // The stats CB is aliased by role: cb_max_* for deferred norm, cb_lse_* for eager norm.
     constexpr uint32_t cb_arg_offset =
         kv_pad_from_metadata ? meta_args.next_compile_time_args_offset() : stats_args.next_compile_time_args_offset();
@@ -601,6 +621,10 @@ void kernel_main() {
         uint32_t nb = 0;
         uint32_t nq = 0;
         QChunkInfo qi = {};
+#ifdef ROTATED_Q_SPLIT
+        // Packed (x<<8)|y of the core owning this chunk next iteration (ROT_NO_DEST if none).
+        uint32_t mig_dest = 0xFFFFFFFF;
+#endif
     } deferred = {};
 
     // Track non-skipped iters so the first active iter starts with fresh accumulators (matches compute).
@@ -720,7 +744,18 @@ void kernel_main() {
             constexpr uint32_t sum_offset = q_local_padded_Nt + Lt;
             constexpr uint32_t out_num_tiles = Sq_chunk_t * vDHt;
 
+#ifdef ROTATED_Q_SPLIT
+            const uint32_t rot_iter_base = rot_args_base + ring_iter * rot_iter_stride;
+            const uint32_t q_per_core = get_arg_val<uint32_t>(rot_iter_base);
+            const uint32_t rot_mig_in = get_arg_val<uint32_t>(rot_iter_base + 1);
+            const uint32_t rot_float_dest = get_arg_val<uint32_t>(rot_iter_base + 2);
+            // Flat chunk id at position idx of ring iteration `iter`'s list for this core.
+            auto rot_flat_at = [&](uint32_t iter, uint32_t idx) {
+                return get_arg_val<uint32_t>(rot_args_base + iter * rot_iter_stride + 3 + idx);
+            };
+#else
             const uint32_t q_per_core = global_q_end - global_q_start;
+#endif
             const uint32_t last_q_index = q_per_core - 1;
             const bool flush_before_prefetch = single_valid_kv_chunk || q_per_core == 2;
 
@@ -734,12 +769,11 @@ void kernel_main() {
             // Issue NOC reads to fill staging for Q[pf_q_index] of the current ring_iter (or
             // ring_iter+1 for cross-ring at q==last_q_index, when the caller passes 0). Optionally
             // barriers on pf_trid first to ensure the prior save with that TRID has landed.
-            auto prefetch_for = [&](uint32_t pf_q_index, uint32_t pf_trid, bool barrier_first) {
+            auto prefetch_for = [&](uint32_t pf_flat_q, uint32_t pf_trid, bool barrier_first) {
                 if (barrier_first) {
                     noc.async_write_barrier<NocOptions::TXN_ID>({.trid = pf_trid});
                 }
-                const auto decoded_q =
-                    decompose_global_q_index(global_q_start + pf_q_index, num_q_chunks, NH, use_zigzag_balancing);
+                const auto decoded_q = decompose_global_q_index(pf_flat_q, num_q_chunks, NH, use_zigzag_balancing);
                 const uint32_t nb_pf = decoded_q.nb;
                 const uint32_t nq_pf = decoded_q.nq;
                 const uint32_t qc_pf = decoded_q.q_chunk;
@@ -780,9 +814,26 @@ void kernel_main() {
                 if (next_q_index >= q_per_core) {
                     return;
                 }
+#ifdef ROTATED_Q_SPLIT
+                // The migrated-in float sits last in this iteration's list. Its accumulators were
+                // saved by another core; wait for that donor's handoff signal before issuing the
+                // restore reads, then reset the semaphore for the next (possibly cached) run.
+                if (rot_mig_in != 0 && next_q_index == last_q_index) {
+                    Semaphore<> handoff_sem(rot_sem_ids[ring_iter]);
+                    handoff_sem.wait_min(rot_mig_in);
+                    handoff_sem.set(0);
+                }
+#endif
                 const uint32_t next_trid = trid_for_q(next_q_index);
                 const bool need_barrier = (next_trid != TRID_INNER || next_q_index == 1);
-                prefetch_for(next_q_index, next_trid, need_barrier);
+                prefetch_for(
+#ifdef ROTATED_Q_SPLIT
+                    rot_flat_at(ring_iter, next_q_index),
+#else
+                    global_q_start + next_q_index,
+#endif
+                    next_trid,
+                    need_barrier);
             };
 
             // Drain pending deferred save (raw accumulators -> DRAM) for the prior Q. Called at
@@ -818,12 +869,30 @@ void kernel_main() {
                     stats_tile_bytes,
                     out_subblock_h,
                     deferred.trid);
+#ifdef ROTATED_Q_SPLIT
+                // Donor half of the float handoff: this chunk's owner next iteration is another
+                // core. The flush always runs at the start of the RECEIVER's use iteration
+                // (floats are last in the list, so the deferred save crosses the ring-iteration
+                // boundary), hence signalling sem[ring_iter] matches the receiver's wait. Barrier
+                // first: flushed-but-not-landed writes must not be visible as "ready".
+                if (deferred.mig_dest != ROT_NO_DEST) {
+                    noc.async_write_barrier<NocOptions::TXN_ID>({.trid = deferred.trid});
+                    Semaphore<>(rot_sem_ids[ring_iter]).up(noc, deferred.mig_dest >> 8, deferred.mig_dest & 0xFFu, 1);
+                    deferred.mig_dest = ROT_NO_DEST;
+                }
+#endif
                 deferred.pending = false;
             };
 
+#ifdef ROTATED_Q_SPLIT
+            for (uint32_t q_index = 0; q_index < q_per_core; ++q_index) {
+                const auto decoded_q =
+                    decompose_global_q_index(rot_flat_at(ring_iter, q_index), num_q_chunks, NH, use_zigzag_balancing);
+#else
             for (uint32_t q_index = 0; q_index + global_q_start < global_q_end; ++q_index) {
                 const auto decoded_q =
                     decompose_global_q_index(global_q_start + q_index, num_q_chunks, NH, use_zigzag_balancing);
+#endif
                 const uint32_t nb = decoded_q.nb;
                 const uint32_t nq = decoded_q.nq;
                 const uint32_t q_chunk = decoded_q.q_chunk;
@@ -869,9 +938,18 @@ void kernel_main() {
                 if (!single_q_chunk && !is_first_active_iter && !defer_prefetch) {
                     prefetch_intra_ring(q_index + 1);
                 }
-                // Cross-ring: Q[N-1] -> Q[0] of next ring iter.
+                // Cross-ring: Q[N-1] -> Q[0] of next ring iter. Under the rotated split the next
+                // iteration's slot 0 is always a base chunk this core owned all along (floats sit
+                // last), so no handoff wait is needed here.
                 if (!single_q_chunk && !is_last_ring_iter && q_index == last_q_index) {
-                    prefetch_for(/*pf_q_index=*/0, TRID_FIRST, /*barrier_first=*/true);
+                    prefetch_for(
+#ifdef ROTATED_Q_SPLIT
+                        rot_flat_at(ring_iter + 1, 0),
+#else
+                        /*pf_flat_q=*/global_q_start,
+#endif
+                        TRID_FIRST,
+                        /*barrier_first=*/true);
                 }
 
                 // 4. Late flush (>= 2 valid K chunks, q_per_core >= 3): drain during K-loop
@@ -917,6 +995,10 @@ void kernel_main() {
                     deferred.nb = nb;
                     deferred.nq = nq;
                     deferred.qi = qi;
+#ifdef ROTATED_Q_SPLIT
+                    // Only the last (float) slot can migrate; base chunks keep ROT_NO_DEST.
+                    deferred.mig_dest = (q_index == last_q_index) ? rot_float_dest : ROT_NO_DEST;
+#endif
                 }
 
                 // Delayed intra-ring prefetch for normalize-only Qs: skipped earlier to avoid
