@@ -1343,6 +1343,7 @@ tests:
 
   912:
     name: "Quasar Cache Write Sizes"
+    directory: "quasar_cache_perf"
     comment: |
       Compares single-DM-core write performance to Tensix L1 via the uncached
       port (+4MB alias) versus cacheable writes followed by flush_l2_cache_range.
