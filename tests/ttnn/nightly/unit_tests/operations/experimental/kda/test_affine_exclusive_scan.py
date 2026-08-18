@@ -5,18 +5,46 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 
 import pytest
 import torch
+from loguru import logger
 
 import ttnn
-from models.common.utility_functions import run_for_blackhole
-from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_accurate, assert_bit_identical
+from models.common.utility_functions import run_for_blackhole, skip_with_llk_assert, skip_with_watcher
+from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
+from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
+    assert_accurate,
+    assert_bit_identical,
+    assert_equal,
+)
 
 pytestmark = [
     run_for_blackhole(),
     pytest.mark.parametrize("device_params", [{"l1_small_size": 24576, "trace_region_size": 2_000_000}], indirect=True),
 ]
+
+
+@dataclass(frozen=True)
+class _ProductionCase:
+    case_id: str
+    batch_heads: int
+    groups_per_head: int
+    key_dim: int
+    value_dim: int
+    expected_duration_ns: int | None
+
+
+_PRODUCTION_PERF_MARGIN = 0.05
+_PRODUCTION_CASE = _ProductionCase(
+    "bh2-g4-k32-v64",
+    batch_heads=2,
+    groups_per_head=4,
+    key_dim=32,
+    value_dim=64,
+    expected_duration_ns=8087,
+)
 
 
 def _host_inputs(
@@ -95,6 +123,7 @@ def _run(
     groups_per_head: int,
     *,
     memory_config: ttnn.MemoryConfig | None = None,
+    compute_kernel_config: ttnn.DeviceComputeKernelConfig | None = None,
 ) -> ttnn.Tensor:
     with ttnn.manage_config("throw_exception_on_fallback", True):
         return ttnn.experimental.kda.affine_exclusive_scan(
@@ -103,6 +132,7 @@ def _run(
             initial_state,
             groups_per_head,
             memory_config=memory_config,
+            compute_kernel_config=compute_kernel_config,
         )
 
 
@@ -140,9 +170,9 @@ def _composed_ttnn_baseline(
 @pytest.mark.parametrize("sharded_inputs", [False, True], ids=("interleaved", "height-sharded-l1"))
 @pytest.mark.parametrize(
     ("batch_heads", "groups_per_head", "key_dim", "value_dim"),
-    [(2, 4, 32, 32), (3, 2, 32, 64)],
+    [(2, 1, 32, 32), (2, 3, 32, 32), (2, 4, 32, 32), (3, 2, 32, 64)],
 )
-def test_affine_exclusive_scan_contract_cache_trace_and_determinism(
+def test_affine_exclusive_scan_contract_and_trace(
     device: ttnn.Device,
     summary_dtype: ttnn.DataType,
     sharded_inputs: bool,
@@ -175,11 +205,6 @@ def test_affine_exclusive_scan_contract_cache_trace_and_determinism(
     assert tuple(ttnn.to_torch(first).shape) == (batch_heads * groups_per_head, key_dim, value_dim)
     assert first.buffer_address() not in (a_tt.buffer_address(), b_tt.buffer_address(), state_tt.buffer_address())
 
-    cache_entries = device.num_program_cache_entries()
-    repeated = _run(a_tt, b_tt, state_tt, groups_per_head, memory_config=output_memory)
-    ttnn.synchronize_device(device)
-    assert device.num_program_cache_entries() == cache_entries
-
     trace_id = ttnn.begin_trace_capture(device, cq_id=0)
     traced = _run(a_tt, b_tt, state_tt, groups_per_head, memory_config=output_memory)
     ttnn.end_trace_capture(device, trace_id, cq_id=0)
@@ -195,11 +220,195 @@ def test_affine_exclusive_scan_contract_cache_trace_and_determinism(
         name="exclusive first entry",
         pcc_threshold=0.999,
     )
-    assert_bit_identical(actual, ttnn.to_torch(repeated), name="eager repeat")
     assert_bit_identical(actual, ttnn.to_torch(traced), name="trace replay")
     for name, snapshot, tensor in zip(("a", "b", "initial_state"), snapshots, (a_tt, b_tt, state_tt), strict=True):
         assert_bit_identical(snapshot, ttnn.to_torch(tensor), name=f"{name} immutability")
     ttnn.release_trace(device, trace_id)
+
+
+def _collect_accuracy_and_determinism_results(
+    device: ttnn.Device,
+    run: Callable[[], ttnn.Tensor],
+    *,
+    count: int = 3,
+) -> tuple[ttnn.Tensor, torch.Tensor, torch.Tensor]:
+    assert count > 1
+    reference_output = run()
+    mismatch_scratch = ttnn.empty(
+        reference_output.shape,
+        dtype=ttnn.bfloat16,
+        layout=reference_output.layout,
+        device=device,
+        memory_config=reference_output.memory_config(),
+    )
+    mismatch_marker = None
+    for _ in range(1, count):
+        output_tt = run()
+        ttnn.ne(reference_output, output_tt, dtype=ttnn.bfloat16, output_tensor=mismatch_scratch)
+        current_mismatch = ttnn.max(mismatch_scratch)
+        ttnn.deallocate(output_tt)
+        if mismatch_marker is None:
+            mismatch_marker = current_mismatch
+        else:
+            updated_marker = ttnn.maximum(mismatch_marker, current_mismatch)
+            ttnn.deallocate(mismatch_marker)
+            ttnn.deallocate(current_mismatch)
+            mismatch_marker = updated_marker
+
+    assert mismatch_marker is not None
+    reference_output_host = ttnn.to_torch(reference_output).clone()
+    mismatch_marker_host = ttnn.to_torch(mismatch_marker).clone()
+    ttnn.deallocate(mismatch_scratch)
+    ttnn.deallocate(mismatch_marker)
+    return reference_output, reference_output_host, mismatch_marker_host
+
+
+@pytest.mark.parametrize("summary_dtype", [ttnn.float32, ttnn.bfloat16])
+def test_affine_exclusive_scan_is_device_deterministic(device: ttnn.Device, summary_dtype: ttnn.DataType) -> None:
+    case = _PRODUCTION_CASE
+    host = _host_inputs(case.batch_heads, case.groups_per_head, case.key_dim, case.value_dim, seed=1441)
+    device_inputs = (
+        _to_device(host[0], device, summary_dtype),
+        _to_device(host[1], device, summary_dtype),
+        _to_device(host[2], device),
+    )
+    expected = _oracle(*host, case.batch_heads, case.groups_per_head)
+
+    def run() -> ttnn.Tensor:
+        return _run(*device_inputs, case.groups_per_head)
+
+    output_tt, output, mismatch_marker = _collect_accuracy_and_determinism_results(device, run)
+    assert_equal(
+        torch.zeros_like(mismatch_marker),
+        mismatch_marker,
+        name=f"{summary_dtype} exclusive scan device-side exact-value determinism marker",
+    )
+    assert_accurate(expected, output, name=f"{summary_dtype} exclusive entry states", pcc_threshold=0.999)
+    ttnn.deallocate(output_tt)
+
+
+def test_affine_exclusive_scan_cache_hit_rebinds_fresh_tensors(device: ttnn.Device) -> None:
+    case = _PRODUCTION_CASE
+    host_a = _host_inputs(case.batch_heads, case.groups_per_head, case.key_dim, case.value_dim, seed=1911)
+    host_b = _host_inputs(case.batch_heads, case.groups_per_head, case.key_dim, case.value_dim, seed=1912)
+    device_a = (
+        _to_device(host_a[0], device),
+        _to_device(host_a[1], device),
+        _to_device(host_a[2], device),
+    )
+    device_b = (
+        _to_device(host_b[0], device),
+        _to_device(host_b[1], device),
+        _to_device(host_b[2], device),
+    )
+
+    output_a = _run(*device_a, case.groups_per_head)
+    ttnn.synchronize_device(device)
+    entries = device.num_program_cache_entries()
+    output_b = _run(*device_b, case.groups_per_head)
+    ttnn.synchronize_device(device)
+
+    assert device.num_program_cache_entries() == entries
+    assert all(a.buffer_address() != b.buffer_address() for a, b in zip(device_a, device_b, strict=True))
+    assert output_a.buffer_address() != output_b.buffer_address()
+    expected_a = _oracle(*host_a, case.batch_heads, case.groups_per_head)
+    expected_b = _oracle(*host_b, case.batch_heads, case.groups_per_head)
+    actual_a = ttnn.to_torch(output_a)
+    actual_b = ttnn.to_torch(output_b)
+    assert_accurate(expected_a, actual_a, name="cache miss tensors", pcc_threshold=0.999)
+    assert_accurate(expected_b, actual_b, name="cache hit fresh tensors", pcc_threshold=0.999)
+    assert not torch.equal(actual_a, actual_b)
+
+
+def test_affine_exclusive_scan_default_compute_config_matches_explicit_defaults(device: ttnn.Device) -> None:
+    case = _PRODUCTION_CASE
+    host = _host_inputs(case.batch_heads, case.groups_per_head, case.key_dim, case.value_dim, seed=817)
+    device_inputs = tuple(_to_device(tensor, device) for tensor in host)
+    implicit = _run(*device_inputs, case.groups_per_head)
+    entries = device.num_program_cache_entries()
+    explicit_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+        dst_full_sync_en=False,
+        throttle_level=ttnn.ThrottleLevel.NO_THROTTLE,
+    )
+    explicit = _run(*device_inputs, case.groups_per_head, compute_kernel_config=explicit_config)
+    assert device.num_program_cache_entries() == entries
+    assert_bit_identical(
+        ttnn.to_torch(implicit),
+        ttnn.to_torch(explicit),
+        name="implicit vs explicit compute defaults",
+    )
+
+
+def test_affine_exclusive_scan_approximate_math_uses_distinct_accurate_program(device: ttnn.Device) -> None:
+    case = _PRODUCTION_CASE
+    host = _host_inputs(case.batch_heads, case.groups_per_head, case.key_dim, case.value_dim, seed=818)
+    device_inputs = tuple(_to_device(tensor, device) for tensor in host)
+    exact = _run(*device_inputs, case.groups_per_head)
+    entries = device.num_program_cache_entries()
+    approximate_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=True,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+    approximate = _run(*device_inputs, case.groups_per_head, compute_kernel_config=approximate_config)
+    assert device.num_program_cache_entries() == entries + 1
+    expected = _oracle(*host, case.batch_heads, case.groups_per_head)
+    assert_accurate(expected, ttnn.to_torch(exact), name="exact math", pcc_threshold=0.999)
+    assert_accurate(expected, ttnn.to_torch(approximate), name="approximate math", pcc_threshold=0.999)
+
+
+def test_affine_exclusive_scan_rejects_unsupported_compute_config(device: ttnn.Device, expect_error: Callable) -> None:
+    case = _PRODUCTION_CASE
+    host = _host_inputs(case.batch_heads, case.groups_per_head, case.key_dim, case.value_dim)
+    device_inputs = tuple(_to_device(tensor, device) for tensor in host)
+    unsupported_config = ttnn.types.BlackholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        packer_l1_acc=True,
+    )
+    with expect_error(RuntimeError, "packer_l1_acc=true is unsupported"):
+        _run(*device_inputs, case.groups_per_head, compute_kernel_config=unsupported_config)
+
+
+@pytest.mark.requires_host_iommu
+@skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
+@skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
+def test_affine_exclusive_scan_production_performance(device: ttnn.Device) -> None:
+    case = _PRODUCTION_CASE
+    if not ttnn.device.IsProgramRealtimeProfilerActive():
+        pytest.fail("Real-time profiler must be active for affine exclusive-scan performance checks")
+
+    host = _host_inputs(case.batch_heads, case.groups_per_head, case.key_dim, case.value_dim, seed=117)
+    device_inputs = tuple(_to_device(tensor, device) for tensor in host)
+
+    def run() -> ttnn.Tensor:
+        return _run(*device_inputs, case.groups_per_head)
+
+    output, perf_record = profile_realtime_program(device, run)
+    duration_ns = perf_record["duration_ns"]
+    assert tuple(output.shape) == (
+        case.batch_heads * case.groups_per_head,
+        case.key_dim,
+        case.value_dim,
+    )
+    assert output.dtype == ttnn.float32
+    logger.info(
+        f"affine exclusive scan {case.case_id}: duration={duration_ns:.0f} ns, "
+        f"profiler_runtime_id={perf_record['runtime_id']}"
+    )
+    if case.expected_duration_ns is not None:
+        lower = case.expected_duration_ns * (1 - _PRODUCTION_PERF_MARGIN)
+        upper = case.expected_duration_ns * (1 + _PRODUCTION_PERF_MARGIN)
+        assert lower <= duration_ns <= upper, (
+            f"{case.case_id} duration {duration_ns:.0f} ns outside [{lower:.0f}, {upper:.0f}] ns "
+            f"(reference {case.expected_duration_ns} ns, margin +/- {_PRODUCTION_PERF_MARGIN * 100:.0f}%)"
+        )
 
 
 def test_affine_exclusive_scan_matches_composed_ttnn_baseline(device: ttnn.Device) -> None:
