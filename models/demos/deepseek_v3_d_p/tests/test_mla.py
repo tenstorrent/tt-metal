@@ -590,9 +590,9 @@ def _run_chunked_prefill(
     `reference` selects how inputs + ground truth are produced -- independent of prefill_len / env:
       * "cpu"   -> synthetic inputs + torch MLA reference (k_pe in Meta basis). Partial-chunk iters
                    (rotation) allowed; any prefix is preloaded from the CPU reference KV.
-      * "trace" -> GPU-trace inputs + reference (k_pe in HF basis, re-interleaved to compare). TRACE
-                    ONLY: dirs come from variant.mla_trace_defaults (or MLA_CHUNKED_TRACE_PATH);
-                    supports partial iters.
+      * "trace" -> GPU-trace inputs + reference (k_pe re-interleaved for a roped trace, compared
+                    directly under NoPE). TRACE ONLY: dirs come from variant.mla_trace_defaults (or
+                    MLA_CHUNKED_TRACE_PATH); supports partial iters.
       * None    -> no reference (functional/perf): random inputs + random prefix, finite-output check.
     Multi-user partitions iters_isl across users (last gets the remainder); each user is independent in
     its own cache slot, so cross-user contamination surfaces as a per-user output PCC drop.
@@ -655,8 +655,8 @@ def _run_chunked_prefill(
     config.max_seq_len = seq_len_cache
     kvpe_dim = config.kv_lora_rank + config.qk_rope_head_dim
     hidden_size = config.hidden_size
-    # The GPU trace stores k_pe HF half-split while the device cache is Meta interleaved. Under NoPE
-    # (Kimi-K3) neither side rotates.
+    # A roped GPU trace stores k_pe HF half-split while the device cache is Meta interleaved; under NoPE
+    # (Kimi-K3) neither side rotates, so there is no basis difference to correct.
     trace_pe_interleave = use_trace and not getattr(config, "mla_use_nope", False)
 
     logger.info(
