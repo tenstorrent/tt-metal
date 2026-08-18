@@ -829,7 +829,7 @@
 #   PREFILL_TRACE_DIR -> /mnt/models/MiniMaxAI/MiniMax-M3-ref/golden
 #   TT_CACHE_PATH     -> optional; defaults under HF_MODEL. Prefill the tilized
 #                       tensor_cache_bfp8_{MeshShape(8,4)} there or CI will cold-build for hours.
-- name: "MiniMax-M3 chunked prefill KV accuracy longbook 55k@5k"
+- name: "MiniMax-M3-428B chunked prefill KV accuracy longbook 55k@5k"
   cmd: |
     export LOGURU_LEVEL=INFO
     export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
@@ -859,7 +859,7 @@
 # Allowed range: ~3825–5175 tok/s (4500 +/- 15%).
 # If this test fails: first check whether it is a true regression or a performance improvement.
 # If neither (CI noise), widen this range or comment out this test due to CI instability.
-- name: "MiniMax-M3 chunked prefill perf longbook 55k@5k"
+- name: "MiniMax-M3-428B chunked prefill perf longbook 55k@5k"
   cmd: |
     export LOGURU_LEVEL=INFO
     export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
