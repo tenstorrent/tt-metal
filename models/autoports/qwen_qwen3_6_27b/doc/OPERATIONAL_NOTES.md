@@ -174,3 +174,51 @@ Stated so it is not mistaken for coverage:
 - No check anywhere asserts that a generation is *well formed*. Every quality judgement in
   this directory came from reading samples by hand after the fact. That gap is the same one
   `BATCH32_DEGRADATION.md` identifies in CI, and it applies to my own tooling too.
+
+---
+
+## A7. A "data-only" edit that rewrote 1,900 lines
+
+Adding one model entry to two JSON config files, I wrote them back with
+`json.dump(d, f, indent=2)`. Both files use **4-space** indent, so the result was correct JSON
+with the intended entry — and a diff of **978 insertions, 966 deletions** across 1,813 and 131
+lines. A six-line addition presented as a whole-file rewrite.
+
+Caught only by reading `git show --stat` before pushing; the content was right, so nothing else
+would have flagged it. Had it landed, the actual change would have been invisible in review.
+
+**Fixed** by checking round-trip fidelity first:
+
+```python
+orig = open(p).read()
+out = json.dumps(json.loads(orig), indent=4) + "\n"
+assert out == orig      # byte-identical for both files
+```
+
+With `indent=4` the same script produces **13 insertions, 1 deletion** — the intended diff and
+nothing else. The general rule: before rewriting a config file programmatically, prove that
+dumping it unchanged reproduces it byte-for-byte. If it does not, match the formatting or edit
+textually instead.
+
+This is the same shape as A1-A3: the tool reported success, the output looked right, and the
+defect was in what it did *besides* what was asked.
+
+## A8. Two different failures that both render as a clean "FAIL"
+
+The `spec_tests` workflow produced this report twice, for two unrelated reasons:
+
+```
+Spec Tests: ❌ FAIL (0/1 passed, 1 failed)
+Blockers:
+  - spec.spec_tests:Vllm Chat Completions: reported status=fail (attempts=1)
+  - task:spec_tests: Task 'spec_tests' failed (exit=1) after producing a report block
+```
+
+The first time, the model was in no spec-test matrix, so zero tests were selected. The second
+time, the suite ran against a server that had started two seconds earlier and every case died
+with `ConnectionRefusedError: [Errno 111]`. Neither is a conformance failure, and the summary
+table cannot tell them apart — only the `report_data_*.json` payload contains the connection
+error.
+
+Worth carrying: a red cell in one of these reports is a *pointer*, not a verdict. Read the JSON
+before believing the markdown.

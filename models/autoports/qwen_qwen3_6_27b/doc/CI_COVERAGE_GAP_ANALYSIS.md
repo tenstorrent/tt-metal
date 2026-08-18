@@ -77,3 +77,102 @@ configuration choice — serving at the allocated batch of 32 — accounts for e
 failure and for the eval collapse, and it is separable from the port's correctness at batch 1.**
 The remaining genuine defect is the sampled-text degradation, which is present at batch 1 too
 and is the most serious open item.
+
+---
+
+## Spec tests / API conformance: the check was never run because the model was never onboarded
+
+The fleet coverage report lists "Spec tests / API conformance" as `·` (never run) for this model,
+against Gemma-4-31B's ✓ 21/21. Ran it as CI would:
+
+```
+run.py --model Qwen3.6-27B --workflow spec_tests --tt-device p300x2 --local-server \
+       --ci-mode --limit-samples-mode ci-nightly --no-auth --skip-system-sw-validation \
+       --override-tt-config '{"trace_region_size": 200000000}'
+```
+
+First attempt exited immediately:
+
+```
+[ERROR] workflow.spec_tests: No blocks accumulated — cannot generate report.
+[ERROR] workflow_module.runner: ❌ command=workflow rc=1 error=no_blocks
+```
+
+### Why: the same under-onboarding shape as the eval catalog
+
+Spec tests dispatch on `model_spec.model_type` (`workflow_dispatch.py:_is_llm_spec_test_run`),
+so the *workflow* applies to any LLM. But the *tests* come from
+`test_module/test_suites/llm.json`, whose matrices gate on a model key:
+
+```json
+{"models": ["qwen3_32b", "llama_3_1_8b", "llama_70b_family", "gpt_oss_20b"],
+ "devices": ["n150", ..., "p300x2"],
+ "test_cases": [{"template": "VLLMParamConformanceTest", "enabled": true}]}
+```
+
+`test_categorization_system/test_filter.py:filter_by_model` selects suites by
+`model_name in suite["weights"]`, and `weights` comes from
+`test_module/server_tests_config.json:model_configs.<key>.weights`. **Qwen3.6-27B has no
+`model_configs` entry, so it can never match any suite** — the workflow is dispatchable but
+selects zero tests.
+
+This is the third instance of the same pattern on this model: no standard evals in the eval
+catalog upstream (`RELEASE_CONFIG_DIVERGENCE.md`), no spec-test matrix entry, and — the one that
+is *not* silent — an empty eval selection recorded as a successful no-op. Here at least the
+workflow exits rc=1 rather than reporting success.
+
+### Onboarded, data-only, mirroring the sibling
+
+`tests/tti_add_spec_tests.py` on this branch applies two additions:
+
+```json
+// test_module/server_tests_config.json
+"qwen36_27b": {
+  "id_name": "qwen3.6-27b",
+  "weights": ["Qwen3.6-27B"],
+  "category": "LLM",
+  "compatible_devices": ["p300x2", "p150x8"]
+}
+```
+plus `"qwen36_27b"` appended to the `models` list of the `VLLMParamConformanceTest` matrix.
+Both files re-validated as JSON. The model then resolves and the workflow produces a report.
+
+**Deliberately not added:** `VLLMQwen3StreamingParamConformanceTest`, described in the same file
+as *"Qwen3-32B streaming reasoning/tool-call regressions"* and currently scoped to `qwen3_32b`
+alone. It is arguably the most relevant suite for this model — a Qwen3-family reasoning model
+whose release spec configures **both** `reasoning_parser: qwen3` and
+`tool_call_parser: qwen3_coder`, neither of which any check on this branch exercises — but it may
+carry 32B-specific assertions. Adding it is a deliberate follow-up, not an assumption.
+
+### A false result worth recording, so it is not repeated
+
+The first run after onboarding reported `VLLMParamConformanceTest` **FAILED** with acceptance
+`FAIL (2 blockers)` and a tidy report. That verdict was meaningless: it was invoked with
+`--list-tests` and no server, and the underlying error is
+
+```
+ConnectionRefusedError: [Errno 111] Connection refused
+HTTPConnectionPool(host='127.0.0.1', port=8000): Max retries exceeded with url:
+  /v1/chat/completions
+```
+
+The suite does contain real cases (`test_coherence_verbatim_echo`,
+`test_determinism_parameters`, …), so a server-backed run gives a genuine answer. Recording this
+because a spec-test FAIL is indistinguishable from a real conformance failure in the summary
+table — only the JSON payload reveals it was a connection error.
+
+### The report records spec-declared pins, not what ran
+
+The generated report's metadata reads:
+
+```json
+"tt_metal_commit": "de59f8a",
+"vllm_commit": "03fa3af",
+"model_impl": "qwen36-blackhole"
+```
+
+None of those describe this run: tt-metal is this branch (the prod pin is not fetchable into a
+shallow clone), vLLM is `03fa3af2e` **plus** the one-line registry redirect, and the implementation
+served is the autoport, not `models/demos/blackhole/qwen36`. The report states what the spec
+*declares*, not what was measured. Worth knowing before any such report is used as evidence of
+what was verified.
