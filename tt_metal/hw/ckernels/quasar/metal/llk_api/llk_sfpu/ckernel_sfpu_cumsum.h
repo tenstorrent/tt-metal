@@ -25,9 +25,6 @@ constexpr std::uint32_t CUMSUM_FACE_STRIDE = FACE_R_DIM;
 constexpr std::uint32_t CUMSUM_QUAD_ROWS = 4;
 constexpr std::uint32_t CUMSUM_ROW_QUADS = TILE_R_DIM / CUMSUM_QUAD_ROWS;
 
-// Addr units one quad advances Dest by. A quad's four rows are four consecutive units of its face.
-constexpr std::uint32_t CUMSUM_QUAD_STRIDE = CUMSUM_QUAD_ROWS;
-
 // Quads walk a face pair - faces 0/1, then faces 2/3 - so after the last quad of a pair Dest sits at
 // the end of the left face, one whole face short of where the next pair begins.
 constexpr std::uint32_t CUMSUM_QUADS_PER_FACE_PAIR = FACE_R_DIM / CUMSUM_QUAD_ROWS;
@@ -131,7 +128,7 @@ inline void cumsum_init() {
     addr_mod_t{
         .srca = {.incr = 0},
         .srcb = {.incr = 0},
-        .dest = {.incr = CUMSUM_QUAD_STRIDE},
+        .dest = {.incr = CUMSUM_QUAD_ROWS},
     }
         .set(CUMSUM_ADDR_MOD);
 
