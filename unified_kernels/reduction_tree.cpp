@@ -41,6 +41,19 @@ constexpr uint32_t kCbTmp1 = 2;
 constexpr uint32_t kCbScaler = 3;
 constexpr uint32_t kCbOut = 16;
 
+// Which fold. Sum is the default because it is the only one the TWO-STAGE tree
+// can do: stage 2 reduces stage-1 results whose non-result rows the packer zeroed,
+// and zeros are harmless to a sum but not to a max (they win when every value is
+// negative) or a mean (they are counted, dividing by 32x too many). Use
+// RT_SINGLE_STAGE with those.
+#if defined(RT_MAX)
+#define RT_REDUCE(Geom, x) u::reduce_max<Geom, kAxis>(x, scaler)
+#elif defined(RT_MEAN)
+#define RT_REDUCE(Geom, x) u::reduce_mean<Geom, kAxis>(x, scaler)
+#else
+#define RT_REDUCE(Geom, x) u::reduce_sum<Geom, kAxis>(x, scaler)
+#endif
+
 void kernel_main() {
     constexpr uint32_t num_blocks = get_compile_time_arg_val(0);
     constexpr uint32_t in_ht = get_compile_time_arg_val(1);
@@ -52,7 +65,9 @@ void kernel_main() {
     // stage-1 results, which the gather has laid out as num_cores_y x in_wt.
     constexpr auto kAxis = u::ReduceAxis::Rows;
     using PerCore = u::ReduceGeometry<in_ht, in_wt>;
+#if !defined(RT_SINGLE_STAGE)
     using PerColumn = u::ReduceGeometry<num_cores_y, in_wt>;
+#endif
     constexpr uint32_t reduced_tiles_per_block = PerCore::out_tiles(kAxis);
 
     // TensorAccessor compile-time args, laid out in0, in1, out -- starting AFTER
@@ -75,11 +90,19 @@ void kernel_main() {
     const auto in0 = TensorAccessor(in0_args, in0_addr);
     const auto out = TensorAccessor(out_args, out_addr);
 
+    // The scaler metal folds into every reduce_tile: 1 for sum and max, 1/N for a
+    // mean. Getting this wrong turns a mean into a sum with nothing to say so.
+#if defined(RT_MEAN)
+    const uint32_t scaler_bits = u::bf16_pair(1.0f / static_cast<float>(PerCore::elements(kAxis)));
+#else
+    const uint32_t scaler_bits = u::kReduceScalerOne;
+#endif
+
     // KERNEL SCOPE, exactly like a fused bias: every reduce_tile re-reads this
     // page, and a ComputeBlock pops in its destructor -- here, the end of the
     // kernel. Inside the loop it would be popped after the first reduction and the
     // next one would wait forever for a refill nobody issues.
-    u::ComputeBlock scaler = u::fill_reduce_scaler<1>(scaler_storage);
+    u::ComputeBlock scaler = u::fill_reduce_scaler<1>(scaler_storage, scaler_bits);
 
     const auto this_core = u::LogicalCoord::this_core();
 
@@ -95,8 +118,16 @@ void kernel_main() {
         // Column x owns its own input block, the same index its result goes to.
         u::ComputeBlock a = u::noc_load<1>(in0_storage, in0, b * u::kCoreGridW + this_core.x).wait();
 
-        u::Block per_core_sum = tmp0_storage.store(u::reduce_sum<PerCore, kAxis>(a, scaler));
+        u::Block per_core_sum = tmp0_storage.store(RT_REDUCE(PerCore, a));
 
+#if defined(RT_SINGLE_STAGE)
+        // Stage 1 only -- no gather, no second fold. This is the shape that
+        // isolates the reduction itself, and the only one max and mean are correct
+        // in; see RT_REDUCE above.
+        u::noc_store<0>(std::move(per_core_sum), out, b * u::kCoreGridW + this_core.x);
+    }
+}
+#else
         // Nobody writes the next round until every root has drained this one.
         u::synchronize_cores<0>();
 
@@ -105,7 +136,7 @@ void kernel_main() {
             u::noc_core_write<0>(tmp1_storage, std::move(per_core_sum), root, true, byte_offset).wait(num_cores_y);
 
         if (this_core == root) {
-            u::Block result = out_storage.store(u::reduce_sum<PerColumn, kAxis>(all_per_core_sums, scaler));
+            u::Block result = out_storage.store(RT_REDUCE(PerColumn, all_per_core_sums));
             // Every column has a root, and they all finish block b together, so the
             // block index alone would have them all writing the same pages. Give
             // each column its own slot: `out` is num_blocks rows of kCoreGridW
@@ -116,3 +147,4 @@ void kernel_main() {
         }
     }
 }
+#endif
