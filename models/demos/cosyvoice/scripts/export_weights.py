@@ -12,7 +12,7 @@ into the runtime that has to stay clean.
 
 So this runs ONCE in the CosyVoice venv and emits a flat array dictionary:
 
-    PYTHONPATH=/root/tt/CosyVoice:/root/tt/CosyVoice/third_party/Matcha-TTS \
+    PYTHONPATH=/mnt/CosyVoice:/mnt/CosyVoice/third_party/Matcha-TTS \
     /root/tt/cosyvoice_env/bin/python export_weights.py --out hift_weights.npz
 
 weight_norm is folded with torch's own machinery rather than by reimplementing
@@ -42,7 +42,7 @@ import sys
 import numpy as np
 import torch
 
-DEFAULT_ROOT = os.environ.get("COSYVOICE_ROOT", "/root/tt/CosyVoice")
+DEFAULT_ROOT = os.environ.get("COSYVOICE_ROOT", "/mnt/CosyVoice")
 
 
 def load_module(model_dir: str, which: str):

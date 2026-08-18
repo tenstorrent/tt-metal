@@ -15,7 +15,7 @@ So the boundary is drawn here, the same two-environment boundary as
 `.npz` per case that the TTNN side loads without importing cosyvoice or
 onnxruntime.
 
-    PYTHONPATH=/root/tt/CosyVoice:/root/tt/CosyVoice/third_party/Matcha-TTS \
+    PYTHONPATH=/mnt/CosyVoice:/mnt/CosyVoice/third_party/Matcha-TTS \
     /root/tt/cosyvoice_env/bin/python prepare_inputs.py --out-dir /tmp/sweep
 
 The texts, speakers and instruct descriptions are imported from
@@ -44,7 +44,7 @@ import sys
 import numpy as np
 import torch
 
-DEFAULT_ROOT = os.environ.get("COSYVOICE_ROOT", "/root/tt/CosyVoice")
+DEFAULT_ROOT = os.environ.get("COSYVOICE_ROOT", "/mnt/CosyVoice")
 MODES = ("sft", "zero_shot", "cross_lingual", "instruct")
 
 

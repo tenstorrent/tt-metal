@@ -68,9 +68,8 @@ different token sequence from `speech_tokenizer_v1.onnx` than 1.18.0 does; that 
 and desynchronises every downstream RNG draw, giving an e2e waveform at PCC 0.01. Version-pinning
 an ONNX runtime is a numerical decision here, not a security one.
 
-A reproduction that needs the reference venv should create it in a container —
-`tt-oxmiq/Dockerfile.cosy-voice` does exactly that, with the eval dependencies in a separate
-`/opt/evalenv` for the same isolation reason.
+A reproduction that needs the reference venv should create it in a container, keeping the eval
+dependencies in a separate virtualenv for the same isolation reason.
 
 `torch` and `torchaudio` are reported as un-auditable by `pip-audit` (`2.6.0+cpu` is not a PyPI
 version string), so their advisories were tracked from the Cycode scan instead.
@@ -109,7 +108,7 @@ Check that a pin change has not moved the reference — the step that makes a bu
 and the one worth repeating before any future bump:
 
 ```bash
-export PYTHONPATH=/root/tt/CosyVoice:/root/tt/CosyVoice/third_party/Matcha-TTS
+export PYTHONPATH=/mnt/CosyVoice:/mnt/CosyVoice/third_party/Matcha-TTS
 /root/tt/cosyvoice_env/bin/python scripts/gen_golden.py --mode zero_shot --out /tmp/golden-check
 ```
 
