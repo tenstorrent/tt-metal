@@ -180,10 +180,28 @@ if [ -n "$LLKBASE" ]; then
   if [ -n "$REPO_ROOT" ] && git -C "$REPO_ROOT" cat-file -e "$LLKBASE^{commit}" 2>/dev/null; then
     # Diff the WORKTREE against the base (not HEAD) so an uncommitted edit —
     # or an uncommitted revert — is judged by what would actually compile.
+    # Owner ruling 2026-08-18: the rule extends to the metal LLK-API layer
+    # (tt_metal/hw/ckernels/*/metal/llk_api) — the consumed kernel surface,
+    # same doctrine.  Individually reviewed exceptions are named in the
+    # conf's _REVIEWED_LLK_API_EXCEPTIONS (space-separated repo-relative
+    # paths, reviewed like a pin; "keep quant.h for now").
     LLK_DIRT=$(git -C "$REPO_ROOT" diff --name-only "$LLKBASE" -- \
-      tt_metal/tt-llk/tt_llk_blackhole tt_metal/tt-llk/tt_llk_wormhole_b0 tt_metal/tt-llk/tt_llk_quasar)
+      tt_metal/tt-llk/tt_llk_blackhole tt_metal/tt-llk/tt_llk_wormhole_b0 tt_metal/tt-llk/tt_llk_quasar \
+      ':(glob)tt_metal/hw/ckernels/*/metal/llk_api/**')
+    # Untracked NEW files under the guarded trees evade `git diff` — catch
+    # them via status (an added header is as much an edit as a changed one).
+    LLK_NEW=$(git -C "$REPO_ROOT" status --porcelain -- \
+      tt_metal/tt-llk/tt_llk_blackhole tt_metal/tt-llk/tt_llk_wormhole_b0 tt_metal/tt-llk/tt_llk_quasar \
+      ':(glob)tt_metal/hw/ckernels/*/metal/llk_api/**' | sed -n 's/^?? //p')
+    [ -n "$LLK_NEW" ] && LLK_DIRT=$(printf '%s\n%s' "$LLK_DIRT" "$LLK_NEW" | sed '/^$/d')
+    LLK_EXC=$(sed -n 's/^_REVIEWED_LLK_API_EXCEPTIONS="\(.*\)"$/\1/p' "$CONF")
+    if [ -n "$LLK_DIRT" ] && [ -n "$LLK_EXC" ]; then
+      LLK_DIRT=$(printf '%s\n' "$LLK_DIRT" | while read -r p; do
+        case " $LLK_EXC " in *" $p "*) ;; *) printf '%s\n' "$p";; esac
+      done)
+    fi
     if [ -n "$LLK_DIRT" ]; then
-      fail R7 "LLK library trees differ from the reviewed upstream base $LLKBASE (LLK-pristine rule: no edits to consumed LLK headers, ever):"
+      fail R7 "LLK library/API trees differ from the reviewed upstream base $LLKBASE (LLK-pristine rule: no edits to the consumed LLK surface; exceptions only via _REVIEWED_LLK_API_EXCEPTIONS):"
       printf '%s\n' "$LLK_DIRT" | sed 's|^|    |'
     fi
   else

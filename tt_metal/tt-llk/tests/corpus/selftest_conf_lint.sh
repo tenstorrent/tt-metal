@@ -42,11 +42,13 @@ _REVIEWED_COMPILER_SHA256=$drv
 _REVIEWED_SIM_BH_SHA256=$sbh
 _REVIEWED_SIM_WH_SHA256=$swh
 _REVIEWED_LLK_UPSTREAM_BASE=${LLK_BASE_FOR_FIXTURES}
+_REVIEWED_LLK_API_EXCEPTIONS="${LLK_EXC_FOR_FIXTURES}"
 EOF
 }
 # R7 fixtures inherit the real conf's reviewed upstream base (the repo's LLK
 # trees are pristine against it, so GREEN fixtures stay GREEN).
 LLK_BASE_FOR_FIXTURES=$(sed -n 's/^_REVIEWED_LLK_UPSTREAM_BASE=//p' "$(dirname "$0")/sweep_2x2.conf")
+LLK_EXC_FOR_FIXTURES=$(sed -n 's/^_REVIEWED_LLK_API_EXCEPTIONS="\(.*\)"$/\1/p' "$(dirname "$0")/sweep_2x2.conf")
 
 write_baseline() { # write_baseline <file> <cc1-prefix> <sbh-prefix>
   cat > "$1" <<EOF
