@@ -138,24 +138,16 @@ def test_api_owners_non_api_files_no_special_case(monkeypatch, tmp_path):
     assert len(owners) == 2  # standard pick-two, no forced akerteszTT
 
 
-def test_eltwise_key_member_approved_skips_group(monkeypatch, tmp_path):
-    owners, groups, no_owners = run(
+def test_non_owner_approval_does_not_skip_group(monkeypatch, tmp_path):
+    # dchenTT used to suppress the eltwise group ping by name, even without owning the
+    # file. That special case is gone: only an approval from an actual owner of every
+    # file the team owns skips the ping.
+    _, groups, _ = run(
         monkeypatch,
         {
             "TEAMS": "@tenstorrent/metalium-developers-eltwise:src/e.cpp",
             "APPROVED_REVIEWERS": "dchenTT",
         },
-        members_file_content="@tenstorrent/metalium-developers-eltwise:dchenTT,x1",
-        tmp_path=tmp_path,
-    )
-    assert groups == []
-    assert no_owners is True
-
-
-def test_eltwise_no_key_member_pings_group(monkeypatch, tmp_path):
-    _, groups, _ = run(
-        monkeypatch,
-        {"TEAMS": "@tenstorrent/metalium-developers-eltwise:src/e.cpp"},
         members_file_content="@tenstorrent/metalium-developers-eltwise:x1,x2",
         tmp_path=tmp_path,
     )

@@ -74,8 +74,6 @@ TEAM_MEMBER_ERROR_SENTINELS = {
 BYPASS_TEAM = "@tenstorrent/codeowner-bypass"
 API_OWNERS_TEAM = "@tenstorrent/metalium-api-owners"
 API_REQUIRED_REVIEWER = "akerteszTT"
-ELTWISE_TEAM = "@tenstorrent/metalium-developers-eltwise"
-ELTWISE_KEY_MEMBERS = ("dchenTT", "mateusznowakTT", "cmaryanTT")
 
 
 def log(msg: str) -> None:
@@ -274,15 +272,8 @@ class Selector:
 
             gid = slack_group_id(team)
             if gid:
-                if team == ELTWISE_TEAM:
-                    if any(approved(k, self.approved_reviewers) for k in ELTWISE_KEY_MEMBERS):
-                        log("Key eltwise member approved, skipping group ping")
-                    else:
-                        selected_slack_groups.append(gid)
-                        log(f"Added pending Slack group: {team} -> {gid}")
-                else:
-                    selected_slack_groups.append(gid)
-                    log(f"Added pending Slack group: {team} -> {gid}")
+                selected_slack_groups.append(gid)
+                log(f"Added pending Slack group: {team} -> {gid}")
                 continue
 
             # No Slack group -> individual selection from team members.
