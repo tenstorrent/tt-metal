@@ -313,11 +313,22 @@ def _print_callstack(risc_name: str, callstack: list[CallstackEntry]) -> str:
     for idx, entry in enumerate(callstack):
         # Format PC hex like Rust does
         pc = f"0x{entry.pc:016x}" if entry.pc is not None else "0x????????????????"
-        file_path = (TESTS_DIR / Path(entry.file)).resolve()
-        # first line: idx, pc, function
-        temp_str += f"{idx:>4}: {pc} - {entry.function_name}\n"
-        # second line: file, line, column
-        temp_str += f"{' '*25}| at {file_path}:{entry.line}:{entry.column}\n"
+        function = entry.function_name or "??"
+        temp_str += f"{idx:>4}: {pc} - {function}\n"
+
+        # ttexalens moved file/line/column onto DwarfFileLine (`file_info`).
+        # Frames without DWARF have file_info is None; do not assume `.file`.
+        file_info = getattr(entry, "file_info", None)
+        if file_info is not None and getattr(file_info, "file", None):
+            file_path = (TESTS_DIR / Path(file_info.file)).resolve()
+            temp_str += (
+                f"{' '*25}| at {file_path}:{file_info.line}:{file_info.column}\n"
+            )
+        elif getattr(entry, "file", None):
+            file_path = (TESTS_DIR / Path(entry.file)).resolve()
+            temp_str += f"{' '*25}| at {file_path}:{entry.line}:{entry.column}\n"
+        else:
+            temp_str += f"{' '*25}| at ??:?:?\n"
 
     return temp_str
 

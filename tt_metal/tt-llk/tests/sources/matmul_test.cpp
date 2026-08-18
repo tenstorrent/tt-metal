@@ -81,9 +81,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t j = 0; j < KT_DIM; j++)
                 {
+                    // Golden (LOOP_FACTOR==1) reads unique stimuli tiles. Perf loops many
+                    // times over K=32 dest-fill Float32 tensors that do not fit in L1; use
+                    // the 16-tile PERF_ADDRESS ring like the old matmul_perf kernel.
+                    const std::uint32_t addr_a = LOOP_FACTOR > 1 ? PERF_ADDRESS(PERF_INPUT_A, j) : L1_ADDRESS(buffer_A[0]);
+                    const std::uint32_t addr_b = LOOP_FACTOR > 1 ? PERF_ADDRESS(PERF_INPUT_B, j) : L1_ADDRESS(buffer_B[0]);
                     _llk_unpack_AB_matmul_<>(
-                        L1_ADDRESS(buffer_A[0]),
-                        L1_ADDRESS(buffer_B[0]),
+                        addr_a,
+                        addr_b,
                         j,
                         j * CT_DIM,
                         TILE_SIZE_UNPACK_A,
@@ -237,7 +242,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 for (std::uint32_t i = 0; i < TILE_CNT; i++)
                 {
                     LLK_ASSERT((i < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()), "i exceeds max dest tiles");
-                    _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(i, L1_ADDRESS(buffer_Res[i]));
+                    // Golden packs unique result tiles. Perf K=32 dest-fill Float32
+                    // places buffer_Res past L1; use the PERF_ADDRESS ring like matmul_perf.
+                    const std::uint32_t addr = LOOP_FACTOR > 1 ? PERF_ADDRESS(PERF_OUTPUT, i) : L1_ADDRESS(buffer_Res[i]);
+                    _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(i, addr);
                 }
                 _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
             }
