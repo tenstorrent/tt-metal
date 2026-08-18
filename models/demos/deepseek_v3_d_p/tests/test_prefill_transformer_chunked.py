@@ -217,14 +217,25 @@ GLM_BASELINE_AGGREGATE_S = {
     ("glm_5_2", 78, 11, 10): 1.770,
 }
 # Aggregate band. The worst healthy run sits +4.5% off baseline, so 8% leaves ~1.8x headroom over
-# observed CI noise; the currently-open regression (see below) sits at +12.3%, so 8% still detects it
-# with ~1.5x margin. 8% is roughly the midpoint of the empty gap between those two populations (4.5% ..
-# 12.3%) -- there are no observed runs in between, which is what makes the band pickable at all.
+# observed CI noise; the open regression (see below) sits at +12.3%, so 8% still detects it with ~1.5x
+# margin. 8% is roughly the midpoint of the empty gap between those two populations (4.5% .. 12.3%) --
+# there are no observed runs in between, which is what makes the band pickable at all. Kept alongside
+# the per-chunk gate because it is the more sensitive of the two for a small UNIFORM drift: a +9%
+# shift leaves every chunk inside the 10% per-chunk band but trips this one.
 GLM_AGGREGATE_MARGIN = 0.08
-# Coarse per-chunk blow-up guard only -- NOT a regression detector (see the note above). The worst
-# healthy per-chunk deviation is 29.7% and no healthy chunk sample of 341 exceeds 35%, so 45% is ~1.5x
-# clear of observed noise while still catching a chunk that regresses by half or worse.
-GLM_PER_CHUNK_MARGIN = 0.45
+# Per-chunk band, applied to every chunk against its own baseline -- same shape as the Kimi gates, with
+# one addition forced by the eager-dispatch noise: up to GLM_MAX_CHUNKS_OUT_OF_BAND chunks may sit
+# outside it before the run fails. Measured over 39 runs (352 healthy chunk samples):
+#   * 9.4% of healthy chunk samples land >+10% off baseline (p90 +8.5%, p99 +27.2%, max +29.7%), and the
+#     spikes hit an arbitrary chunk -- so a strict all-chunks-must-pass rule at 10% greens only 14 of 32
+#     healthy runs. Widening it to the ~30% those spikes demand instead misses the regression entirely
+#     (it catches 4 of 7, since a uniform +12% shift is well inside a 30% band).
+#   * But the COUNT separates perfectly: at a 10% band no healthy run has more than 3 chunks out, while
+#     all 7 regressed runs have all 11 out. A real regression moves every chunk; noise moves one or two.
+# Hence a tight 10% band plus a tolerance of 4 (3 observed + 1 spare): 32/32 healthy green, 7/7
+# regressed caught. Tighten the band, not the tolerance, if this ever needs to be more sensitive.
+GLM_PER_CHUNK_MARGIN = 0.10
+GLM_MAX_CHUNKS_OUT_OF_BAND = 4
 
 # Deepest config whose per-layer PCC is asserted; deeper runs (L61) stay record-only until their
 # accumulation headroom is pinned.
@@ -1193,6 +1204,7 @@ def run_chunked_transformer_updated(
     perf_margin=None,
     baseline_aggregate_s=None,
     aggregate_margin=None,
+    max_chunks_out_of_band=None,
     preload_isl=0,
     check_pcc=False,
     use_trace=False,
@@ -1219,8 +1231,10 @@ def run_chunked_transformer_updated(
     from a known-good CI run), each chunk's measured median must stay within +/- `perf_margin` of its
     baseline; a single `perf_margin` covers every chunk. Independently, when `baseline_aggregate_s` is
     provided, the MEDIAN ACROSS the per-chunk medians must stay within +/- `aggregate_margin` of it --
-    the statistic to gate on when the per-chunk medians are individually too noisy to band (see the
-    GLM_* constants). Either gate alone, both, or neither may be armed. The table appends the baseline,
+    the statistic to gate on for a small uniform drift (see the GLM_* constants). Either gate alone,
+    both, or neither may be armed. `max_chunks_out_of_band` relaxes the per-chunk rule from
+    all-must-pass (None, the Kimi behaviour) to at-most-N-out, for paths where a single chunk's
+    median is spiky but the count of out-of-band chunks still separates noise from a regression. The table appends the baseline,
     tolerance band,
     and PASS/FAIL per chunk, and the run fails if any chunk is out of band. When no baseline is given the
     table is record-only (perf-exploration combos)."""
@@ -1259,6 +1273,7 @@ def run_chunked_transformer_updated(
         rows = []
         failures: list[str] = []
         medians: list[float] = []
+        chunk_failures: list[str] = []
         for chunk_idx in range(n_chunks):
             chunk_samples = [row[chunk_idx] for row in samples]
             median_time = statistics.median(chunk_samples)
@@ -1277,11 +1292,31 @@ def run_chunked_transformer_updated(
                     "PASS" if ok else "FAIL",
                 ]
                 if not ok:
-                    failures.append(
+                    chunk_failures.append(
                         f"chunk {chunk_idx} median {median_time:.3f}s outside "
                         f"baseline {baseline:.3f}s +/- {margin * 100:.1f}% band [{low:.3f}s, {high:.3f}s]"
                     )
             rows.append(row)
+
+        # A strict all-chunks-must-pass rule is right when each chunk's median is itself stable (the Kimi
+        # gates, max_chunks_out_of_band=None). Where it is not -- eager dispatch, where a few slow
+        # iterations drag one chunk's median-of-9 -- tolerate up to N out-of-band chunks so isolated
+        # spikes do not fail the run, while a regression that moves EVERY chunk still does. See the GLM_*
+        # constants for the measurements behind the band/tolerance pair.
+        if max_chunks_out_of_band is None:
+            failures.extend(chunk_failures)
+        elif chunk_failures:
+            n_out = len(chunk_failures)
+            verdict = "over" if n_out > max_chunks_out_of_band else "within"
+            logger.info(
+                f"{n_out}/{n_chunks} chunks outside the +/- {margin * 100:.1f}% band "
+                f"({verdict} the tolerance of {max_chunks_out_of_band})"
+            )
+            if n_out > max_chunks_out_of_band:
+                failures.append(
+                    f"{n_out}/{n_chunks} chunks outside the +/- {margin * 100:.1f}% band, over the "
+                    f"tolerance of {max_chunks_out_of_band}:\n    " + "\n    ".join(chunk_failures)
+                )
 
         # Aggregate gate: the MEDIAN ACROSS the per-chunk medians. Independent of, and complementary to,
         # the per-chunk band -- see the GLM_* constants for why a flat eager-dispatch profile needs this
@@ -1822,7 +1857,8 @@ def kimi_chunked_perf_gate(use_trace, num_layers, n_chunks, num_iters, preload_i
 
 def glm_chunked_perf_gate(variant_name, num_layers, n_chunks, num_iters, preload_isl):
     """Resolve the chunked-GLM perf gate for one parametrization: returns
-    ``(baseline_chunk_times_s, per_chunk_margin, baseline_aggregate_s, aggregate_margin)``.
+    ``(baseline_chunk_times_s, per_chunk_margin, max_chunks_out_of_band, baseline_aggregate_s,
+    aggregate_margin)``.
 
     All-None leaves the run fully record-only, which is what every combo outside the single calibrated
     CI config gets. Conditions on top of the table lookup:
@@ -1833,17 +1869,18 @@ def glm_chunked_perf_gate(variant_name, num_layers, n_chunks, num_iters, preload
       preload_isl  -- the baseline only means anything at 0 (the recorded runs started from an empty
                       cache); any preload depth stays record-only.
 
-    The aggregate is the regression detector and the per-chunk band is only a coarse blow-up guard --
-    see the GLM_* constants for the measurements behind that split.
+    Both gates are armed together: a tight per-chunk band that tolerates a few spiking chunks, plus the
+    aggregate for small uniform drift. See the GLM_* constants for the measurements behind both.
     """
     if preload_isl != 0:
-        return None, None, None, None
+        return None, None, None, None, None
     key = (variant_name, num_layers, n_chunks, num_iters)
     per_chunk = GLM_BASELINE_CHUNK_TIMES_S.get(key)
     aggregate = GLM_BASELINE_AGGREGATE_S.get(key)
     return (
         per_chunk,
         GLM_PER_CHUNK_MARGIN if per_chunk is not None else None,
+        GLM_MAX_CHUNKS_OUT_OF_BAND if per_chunk is not None else None,
         aggregate,
         GLM_AGGREGATE_MARGIN if aggregate is not None else None,
     )
@@ -2184,9 +2221,13 @@ def test_glm_prefill_transformer_chunked_no_pcc(
 ):
     if preload_isl + n_chunks * CHUNK > SEQ_CACHE_NOPCC:
         pytest.skip(f"preload_isl {preload_isl} + {n_chunks} chunks exceeds the {SEQ_CACHE_NOPCC}-token cache")
-    baseline_chunk_times_s, per_chunk_margin, baseline_aggregate_s, aggregate_margin = glm_chunked_perf_gate(
-        variant.name, num_layers, n_chunks, num_iters, preload_isl
-    )
+    (
+        baseline_chunk_times_s,
+        per_chunk_margin,
+        max_chunks_out_of_band,
+        baseline_aggregate_s,
+        aggregate_margin,
+    ) = glm_chunked_perf_gate(variant.name, num_layers, n_chunks, num_iters, preload_isl)
     run_chunked_transformer_updated(
         variant,
         config_only,
@@ -2201,6 +2242,7 @@ def test_glm_prefill_transformer_chunked_no_pcc(
         routing_use_l1_small_for_semaphores=True,
         baseline_chunk_times_s=baseline_chunk_times_s,
         perf_margin=per_chunk_margin,
+        max_chunks_out_of_band=max_chunks_out_of_band,
         baseline_aggregate_s=baseline_aggregate_s,
         aggregate_margin=aggregate_margin,
         preload_isl=preload_isl,
