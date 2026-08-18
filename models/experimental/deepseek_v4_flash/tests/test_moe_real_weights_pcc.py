@@ -50,9 +50,9 @@ from models.common.utility_functions import comp_allclose, comp_pcc
 from models.experimental.deepseek_v4_flash.tt.moe import (
     DeepSeekV4PreloadedExperts,
     DeepSeekV4SparseMoeBlock,
-    _ROUTING_EPS,
     _swiglu_cols_per_core,
 )
+from models.experimental.deepseek_v4_flash.tt.system_config import active_system_config
 from models.experimental.deepseek_v4_flash.tt.quant import dequantize_weight
 from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache
 from models.experimental.deepseek_v4_flash.tt.weight_loader import (
@@ -389,7 +389,8 @@ def _routing(expert_sets: list[list[int]], num_experts: int, scaling: float):
     scores = (torch.rand(len(expert_sets), num_experts, dtype=torch.float32) + 0.5).to(torch.bfloat16).float()
     selected = torch.gather(scores, -1, ids)
     dense = torch.zeros_like(scores)
-    dense.scatter_(-1, ids, scaling * selected / (selected.sum(dim=-1, keepdim=True) + _ROUTING_EPS))
+    routing_eps = active_system_config().moe.routing_eps
+    dense.scatter_(-1, ids, scaling * selected / (selected.sum(dim=-1, keepdim=True) + routing_eps))
     return ids, scores, dense
 
 
@@ -434,7 +435,7 @@ def _run_fused_experts(
         swiglu_limit=cfg.swiglu_limit,
         top_k=cfg.num_experts_per_tok,
         routed_scaling_factor=cfg.routed_scaling_factor,
-        routing_eps=_ROUTING_EPS,
+        routing_eps=active_system_config().moe.routing_eps,
         experts_block_size=EXPERTS_BLOCK_SIZE,
     )  # [1, B, H]
     return ttnn.to_torch(out).float().reshape(batch, hidden)

@@ -1,0 +1,319 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# DeepSeek-V4-Flash per-system tuning profiles.
+#
+# Everything here is a *deployment* knob: a value that a different machine wants
+# set differently. Model geometry (hidden size, layer count, expert count) is NOT
+# here -- that comes from the checkpoint's own config, and putting it in two
+# places is how the two drift apart.
+#
+# HOW A PROFILE IS PICKED (see tt/system_config.py:load_system_config):
+#   1. an explicit profile= argument, or
+#   2. $DEEPSEEK_V4_SYSTEM_PROFILE, or
+#   3. the profile whose `num_devices` matches the open mesh, or
+#   4. `default_profile` below.
+#
+# Profiles inherit with `extends`, merged key-by-key, so a profile only states
+# what it changes. Any single field can still be overridden at runtime by its
+# environment variable (listed per field below), which wins over the file --
+# handy for a one-off A/B without editing a shared config.
+
+version: 1
+
+# Used when nothing else selects a profile (no explicit name, no env var, and no
+# profile matching the device count -- e.g. a 1-chip unit test).
+default_profile: p150x8
+
+profiles:
+  # ------------------------------------------------------------------------- #
+  # base: every field the loader understands, at its documented default. Real
+  # systems extend this, so a field added here reaches every profile at once.
+  # `num_devices: 0` means "matches nothing", i.e. base is never auto-selected.
+  # ------------------------------------------------------------------------- #
+  base:
+    num_devices: 0
+    description: documented defaults; concrete systems extend this
+
+    device:
+      # Submesh pipeline sockets require 2D fabric. env: DEEPSEEK_V4_FABRIC_CONFIG
+      fabric_config: FABRIC_2D
+      # Two queues so weight prefetch and compute dispatch do not serialize.
+      # env: DEEPSEEK_V4_NUM_COMMAND_QUEUES
+      num_command_queues: 2
+      # Bytes reserved for captured traces; 0 leaves the ttnn default.
+      # env: DEEPSEEK_V4_TRACE_REGION_SIZE
+      trace_region_size: 0
+      # null = open the whole system flattened to a 1xN line, which is the shape
+      # the submesh pipeline is built against. A [rows, cols] pair opens exactly
+      # that. env: DEEPSEEK_V4_MESH_SHAPE (as "RxC")
+      mesh_shape: null
+      # 0 leaves the ttnn default. env: DEEPSEEK_V4_WORKER_L1_SIZE
+      worker_l1_size: 0
+
+    pipeline:
+      # Devices per pipeline group (see model.plan_layer_placement). 1 gives each
+      # device one contiguous slice of layers, which minimizes socket hops on the
+      # critical path; 0 means "one group spanning the whole mesh" (round-robin).
+      # env: DEEPSEEK_V4_PIPELINE_GROUP_SIZE
+      group_size: 1
+      # Decode steps allowed in flight across batches; 0 = one per batch.
+      # env: DEEPSEEK_V4_PIPELINE_DEPTH
+      depth: 0
+      # L1 bytes per cross-submesh activation socket.
+      # env: DEEPSEEK_V4_SOCKET_L1_BYTES
+      socket_l1_bytes: 16384
+      # Host->device per-step packet socket: PCIe page alignment, and how many
+      # such pages the FIFO holds (how far the host may run ahead).
+      # env: DEEPSEEK_V4_PCIE_ALIGNMENT / DEEPSEEK_V4_H2D_FIFO_PAGES
+      pcie_alignment: 64
+      h2d_fifo_pages: 64
+      # Device->host output socket FIFO. One 4 KB system page minus the
+      # bytes_acked counter: larger fails to pin on an IOMMU-less host.
+      # env: DEEPSEEK_V4_D2H_FIFO_BYTES
+      d2h_fifo_bytes: 4032
+
+    prefetcher:
+      # null = enable wherever the device supports it.
+      # env: DEEPSEEK_V4_PREFETCHER (0/1)
+      enabled: null
+      # Shared GCB ring depth in pages, i.e. how far the DRISC senders may run
+      # ahead. Costs ~18 KB of L1 per receiver core per page at bf4.
+      # env: DEEPSEEK_V4_PREFETCH_PAGES
+      num_prefetch_pages: 16
+      # Slabs per private (non-shared) decode GCB.
+      # env: DEEPSEEK_V4_PREFETCH_SLABS
+      num_prefetch_slabs: 2
+
+    moe:
+      # Experts whose activations are held in L1 at once by fused_experts. The
+      # activation CB is act_slots * block * i_tiles tiles on EVERY core and is
+      # the op's dominant L1 consumer, so this is the knob to turn when static
+      # CBs clash with L1 buffers. Blocking double-buffers the block, so 3 costs
+      # exactly what 6 does -- only 1 and 2 actually save L1. 0 = all selected
+      # experts in one block. env: DEEPSEEK_V4_EXPERTS_BLOCK_SIZE
+      experts_block_size: 2
+      # Renormalization floor for the routing weights inside the op.
+      routing_eps: 1.0e-20
+      # Per-chip fused_experts geometry: the 8x8 compute grid it shards the I dim
+      # over, and the DRAM banks its expert weights round-robin across. These
+      # describe the CHIP, not the cluster, so they are identical on 8 and 32
+      # chips -- they live here only so a different chip generation is a config
+      # change rather than a code change.
+      fused_num_cores: 64
+      fused_dram_banks: 8
+
+    attention:
+      # Causal SDPA (bounded by cur_pos) instead of an additive mask wherever the
+      # valid KV set is a contiguous prefix. Off collapses the traced capture to
+      # one variant per pool phase, at the cost of walking the whole max_seq KV
+      # axis every step. env: DEEPSEEK_V4_SDPA_CAUSAL
+      sdpa_causal: true
+      # SDPA-decode program config. max_cores_per_head_batch is an L1 lever, not
+      # a throughput one: the per-core reduction scratch CB grows linearly in
+      # (cores_per_head - 1), and at 4 it runs past the resident projection
+      # weight and fails to build. Raise only if keep_weights_in_l1 is off.
+      # env: DEEPSEEK_V4_SDPA_Q_CHUNK / _K_CHUNK / _MAX_CORES_PER_HEAD
+      sdpa_q_chunk_size: 0
+      sdpa_k_chunk_size: 32
+      sdpa_max_cores_per_head_batch: 2
+      sdpa_exp_approx_mode: false
+      # Run q_a and kv as ONE matmul over their concatenated weight (halved again
+      # in _qkv) instead of two. One dispatch and one activation read instead of
+      # two, but it only works with the prefetcher off: the fused 1536-wide weight
+      # cuts into 3-tile rows per B core and so shares no page size with the
+      # model's single decode GCB, which is why it cannot be streamed.
+      #   null  -> fuse wherever the prefetcher is off (what the code intended)
+      #   false -> never fuse; the two projections stay separate (current default,
+      #            so the prefetched and L1 paths run the same op sequence)
+      #   true  -> always fuse; rejected if the prefetcher is on, since that would
+      #            hang rather than merely slow down
+      # env: DEEPSEEK_V4_FUSE_QA_KV (0/1/auto)
+      fuse_qa_kv_proj: false
+      # Keep that fused q_a/kv projection weight resident in L1 (~55 KB/core at
+      # bf4) instead of re-copying it from DRAM per call. Only reachable when
+      # fuse_qa_kv_proj resolves true. Note it competes with SDPA's static
+      # reduction CBs, so raising sdpa_max_cores_per_head_batch may need this off.
+      # env: DEEPSEEK_V4_KEEP_WEIGHTS_IN_L1
+      keep_qa_kv_weights_in_l1: false
+
+    decode:
+      # On-device weight precision for the whole stack.
+      # env: DEEPSEEK_V4_WEIGHT_DTYPE
+      weight_dtype: bfloat4_b
+      # Paged KV block size in rows; must be a multiple of the 32-row tile.
+      # env: DEEPSEEK_V4_BLOCK_SIZE
+      block_size: 32
+      # Users decoded in ONE traced step. Every shape below the input packet is
+      # parameterized by it. Raising it trades per-user latency for aggregate
+      # throughput. env: DEEPSEEK_V4_DECODE_BATCH
+      batch: 1
+      # Session slots allocated at startup (cannot grow once traces exist).
+      # env: DEEPSEEK_V4_NUM_USERS
+      num_users: 2
+      # Tokens one user's caches are addressed for, rounded up.
+      # env: DEEPSEEK_V4_MAX_CONTEXT
+      max_context: 131072
+      # Tokens the shared block pool holds across all users; 0 = one max_context.
+      # env: DEEPSEEK_V4_TOTAL_CONTEXT
+      total_context: 0
+      # env: DEEPSEEK_V4_MAX_NEW_TOKENS
+      max_new_tokens: 2048
+      # Cap the decoder stack; 0 = every layer in the checkpoint.
+      # env: DEEPSEEK_V4_DECODE_LAYERS
+      num_layers: 0
+      # Traced decode rather than eager. env: DEEPSEEK_V4_TRACED_DECODE
+      traced: true
+
+  # ------------------------------------------------------------------------- #
+  # p150x8 -- 8x Blackhole P150. The measured configuration: 16.2 tok/s/user at
+  # batch 1 with 43 layers (see PERFORMANCE_LOG.md).
+  #
+  # PGS=1 is what the log's numbers were taken at: 43 layers over 8 devices is
+  # ~5 contiguous layers each and only 7 socket hops per token.
+  # ------------------------------------------------------------------------- #
+  p150x8:
+    extends: base
+    num_devices: 8
+    description: 8x Blackhole P150, pipeline-parallel, latency-tuned (16.2 tok/s/u @ B=1)
+
+    pipeline:
+      group_size: 1
+
+    prefetcher:
+      num_prefetch_pages: 16
+
+    moe:
+      # 2, not the op default of "all 6": at batch 1 the 6-expert activation
+      # block is 408 KB/core and the static CBs collide with the resident L1
+      # buffers (prefetcher GCB + L1 weights). 2 costs two extra chip-wide
+      # gather/broadcast barriers and buys back 136 KB/core.
+      experts_block_size: 2
+
+    decode:
+      batch: 1
+      num_users: 2
+      max_context: 131072
+      total_context: 0
+
+  # ------------------------------------------------------------------------- #
+  # galaxy32 -- 32x Blackhole (Galaxy). STARTING POINT, NOT A MEASURED TUNE.
+  #
+  # Important: with the pipeline-parallel-only implementation, 32 chips does not
+  # by itself improve tok/s/user -- per-token latency is the sum of all 43
+  # layers' compute wherever those layers live, and 4x more chips means ~1-2
+  # layers per chip plus ~31 socket hops instead of ~5 layers and 7 hops. What
+  # 32 chips does buy immediately is capacity: ~4x the DRAM for KV cache, hence
+  # the much larger context and user counts below.
+  #
+  # Turning the extra chips into per-user speed needs intra-stage tensor/expert
+  # parallelism (8 pipeline stages x 4-chip submeshes with the 256 experts
+  # sharded 64-per-chip), which is not implemented yet. When it is, it belongs
+  # here as a `tensor_parallel` / `expert_parallel` block rather than as new
+  # hardcoded constants.
+  # ------------------------------------------------------------------------- #
+  galaxy32:
+    extends: base
+    num_devices: 32
+    description: 32x Blackhole Galaxy; capacity-tuned starting point, latency needs TP/EP
+
+    pipeline:
+      # Still 1: contiguous slices keep each token's socket hops at the minimum
+      # the placement allows. Worth A/B-ing against 2 and 4 once the machine is
+      # up -- at 43 layers over 32 devices most devices own a single layer, so
+      # hop latency is a much larger share of the step than it is on 8 chips.
+      group_size: 1
+      # A deeper pipeline has more stages to keep busy, so allow more steps in
+      # flight. Only affects aggregate throughput, not single-user latency.
+      depth: 4
+
+    prefetcher:
+      # Each chip holds far fewer layers, so its DRAM read stream per step is
+      # shorter and a deeper ring has more slack to hide the hops. Retune with
+      # tools/analyze_profile.py: too deep starves the activation multicast.
+      num_prefetch_pages: 24
+
+    moe:
+      # Same per-chip L1 budget as the 8-chip system (L1 is per chip), so the
+      # same block size. Once experts are sharded across a stage this can rise:
+      # 64 resident experts per chip means fewer hits per chip per token.
+      experts_block_size: 2
+
+    decode:
+      # ~4x the aggregate DRAM, so the KV budget scales with it.
+      batch: 1
+      num_users: 8
+      max_context: 524288
+      total_context: 4194304
+
+  # ------------------------------------------------------------------------- #
+  # WORKLOAD VARIANTS: `<machine>_<variant>`. A caller passing
+  # `variant="server"` to load_system_config gets `p150x8_server` on an 8-chip
+  # box and `galaxy32_server` on a 32-chip one, automatically -- so "which
+  # machine" and "what is it serving" stay independent. `num_devices: 0` keeps
+  # variants out of the device-count match; they are reached through the variant
+  # rule or by name.
+  #
+  # server: many concurrent conversations, each with a long addressable context.
+  # The rounds interleave rather than batch, so the device's token rate is shared
+  # -- more users is more aggregate throughput and a slower reply each.
+  # ------------------------------------------------------------------------- #
+  p150x8_server:
+    extends: p150x8
+    num_devices: 0
+    description: 8x P150 serving many concurrent conversations
+    decode:
+      num_users: 8
+      # The model handles 524288, but that much per user costs page-table width
+      # and pool blocks for every session, so this is sized for a busy server.
+      max_context: 524288
+      total_context: 2097152
+
+  galaxy32_server:
+    extends: galaxy32
+    num_devices: 0
+    description: 32x Blackhole serving many concurrent conversations
+    decode:
+      num_users: 32
+      max_context: 524288
+      total_context: 16777216
+
+  # ------------------------------------------------------------------------- #
+  # throughput: batched decode (one traced step serves `batch` users at once),
+  # trading per-user latency for aggregate tokens/s.
+  # ------------------------------------------------------------------------- #
+  p150x8_throughput:
+    extends: p150x8
+    num_devices: 0
+    description: 8x P150 batched for aggregate tok/s (~4.3 tok/s/u at B=64)
+    decode:
+      batch: 8
+      num_users: 64
+      max_context: 32768
+      total_context: 2097152
+
+  galaxy32_throughput:
+    extends: galaxy32
+    num_devices: 0
+    description: 32x Blackhole batched for aggregate tok/s
+    decode:
+      batch: 8
+      num_users: 256
+      max_context: 32768
+      total_context: 8388608
+
+  # ------------------------------------------------------------------------- #
+  # Single-chip development: a capped stack that fits one 32 GB Blackhole.
+  # ------------------------------------------------------------------------- #
+  single_chip:
+    extends: base
+    num_devices: 1
+    description: one Blackhole, capped layer count, for PCC tests and bring-up
+    pipeline:
+      group_size: 1
+    decode:
+      # The full 43-layer bf4 stack does not fit one chip.
+      num_layers: 4
+      num_users: 1
+      max_context: 8192
