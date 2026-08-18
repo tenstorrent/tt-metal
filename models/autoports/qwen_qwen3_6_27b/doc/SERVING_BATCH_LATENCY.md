@@ -88,3 +88,82 @@ Match the stage: `--max_num_seqs 1 --max_num_batched_tokens 262144`. Using 32
 neither reproduces the recorded configuration nor merely costs a little time — it
 runs the whole eval ~4.8× slower, which turns a `max_gen_toks=32768` task into a
 multi-hour-per-document proposition.
+
+---
+
+## Prefill also pays the full allocated batch — and 28x worse than decode
+
+Measured 2026-08-18 by running tt-inference-server's **benchmarks** workflow, which is where
+CI exercises this configuration. Sweep point 1 is `isl=128 osl=128 max_conc=1 n=8`, served by
+the release spec's `max_concurrency: 32` server:
+
+```
+Mean TTFT (ms):                          105353.92
+Median TTFT (ms):                        105326.86
+P99 TTFT (ms):                           105540.48
+Mean TPOT (ms):                             251.16
+Mean ITL (ms):                              249.20
+Median ITL (ms):                            243.63
+Output token throughput (tok/s):              0.93
+Mean E2EL (ms):                          137251.81
+```
+
+Server batch confirmed from its own log: `GPU KV cache size: 1,752,000 tokens`, which matches
+the figure stage 09 recorded for "the capacity profile at max-num-seqs 32".
+
+### The scaling
+
+| | batch 1 | batch 32 | ratio |
+|---|---:|---:|---:|
+| TTFT, 128-token prompt | 3,784 ms | **105,354 ms** | **27.8x** |
+| per-token decode (ITL) | 55.8 ms | 243.6 ms | 4.4x |
+
+The allocated batch is 32x larger. Decode degrades 4.4x; **prefill degrades 27.8x, i.e.
+essentially linearly with the allocated batch.** `SERVING_BATCH_LATENCY.md` established that
+decode cost follows the allocated batch rather than the active rows. This extends that finding
+to prefill, where the effect is far larger — a 128-token prompt takes **105 seconds** to
+prefill on a 32-slot server with one active request.
+
+E2EL confirms the decomposition: 105 s TTFT + 128 tokens x 250 ms = 137 s, against a measured
+mean E2EL of 137.25 s.
+
+### It completes the timeout explanation
+
+`CI_FAITHFUL_RUN.md` attributed the eval's five timeouts to decode being ~4.8x slower at batch
+32. That was only part of it. With 105 s consumed by prefill before the first token, the
+1800 s budget leaves `(1800 - 105) / 0.25 = 6,780` tokens — which matches the ~6,600 estimated
+there from decode alone, but for a different reason than stated. Prefill is the larger term
+per request.
+
+### The only gated perf number misses by 1,700x
+
+The single sweep point carrying perf targets is exactly this one, and its target is
+`ttft_ms: 62.0` with `tput_user: 41.0`. Measured: **105,354 ms TTFT** and **0.93 tok/s output
+throughput**. That is a ~1,700x miss on TTFT and a ~44x miss on throughput.
+
+Two things to hold together here:
+
+1. The target is self-described as *"ASSUMED, NOT VALIDATED"*, transplanted from Qwen3-32B on
+   t3k, and — crucially — **it assumes `max_concurrency: 1`** (*"'tput' is set equal to
+   'tput_user' because max_concurrency is 1"*) while the spec serves at 32. So the target and
+   the measurement are not describing the same configuration. A 62 ms TTFT target is not
+   reachable by *any* configuration of this port; the closest measured value is 3,784 ms at
+   batch 1.
+2. Nevertheless the benchmark phase **does** surface this, and loudly. That is worth stating
+   because it qualifies the coverage claim above: CI cannot catch the *text degradation* at
+   batch 32, but it would catch the *performance collapse* — if the target is enforced.
+   At `EXPERIMENTAL` status evals and benchmarks are informational, so today it would be
+   logged and not blocked.
+
+### What this changes about the recommendations
+
+The batch-adaptive decode lever recorded in `SERVING_BATCH_LATENCY.md` was scoped to decode.
+It should be scoped to **prefill and decode**, and prefill is now the bigger prize: 27.8x
+against 4.4x. A single traced graph built for the maximum batch is being replayed for one
+active row in both phases.
+
+It also means the `max_concurrency: 32` choice in the spec is not merely a latency trade for
+throughput. At one active request it costs 105 s before the first token, which is not a
+serving configuration any user would accept, and it is the configuration the release ships.
+Either the spec should serve a lower batch, or the port needs to size prefill and decode work
+to the live rows.
