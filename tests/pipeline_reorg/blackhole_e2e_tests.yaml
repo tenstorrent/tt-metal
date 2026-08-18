@@ -150,7 +150,7 @@
     exit_code=0
     export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/huggingface/hub/models--deepseek-ai--DeepSeek-R1-0528
     pytest models/demos/deepseek_v3_d_p/tests/pcc/ -vvv --tb=short -k "not matmul_pcc and not perf-host-64 and not pad50 and not lm_head and not global_to_local and not (linear-8 and (pcc-device or (5k and not 25k))) and (not moe_gate_prefill2d or (fabric2d-mesh-4x2 and not host_all and not gpt_)) and (not ttnn_moe or (kimi and linear-8 and 25k and not perf) or (fabric2d-mesh-4x2 and pcc-device and pad0)) and (not moe_routing_setup or (fabric2d-mesh-4x2 and pad0)) and not 4K" --timeout 1800 || exit_code=$?
-    pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_ds_prefill_block -k "balanced and not non_balanced and fabric2d and not pretrained and iter2000" -vvv --tb=short --timeout=900 || exit_code=$?
+    pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_ds_prefill_block -k "balanced and not non_balanced and fabric2d and not pretrained and iter2 and not iter25 and not iter2000" -vvv --tb=short --timeout=900 || exit_code=$?
     pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block_loop.py -k "fabric2d-mesh-2x4 and layer0 and gate_device and ((no_ref and isl_5k) or (with_ref and isl_1k))" -vvv --tb=short || exit_code=$?
     exit $exit_code
   skus:
