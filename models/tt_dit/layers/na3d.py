@@ -841,6 +841,28 @@ def neighborhood_attention_3d_op_sp_w(
     return ttnn.permute(full, (0, 2, 3, 1, 4))  # (B, T, H, W, width)
 
 
+def _pick_block(t_full: int, h_full: int, w_local: int, kmax: int = 11):
+    """Largest tile-legal (bt,bh,bw) block for this shard's (T, H, w_local): each dim divides its axis,
+    block_vol is a multiple of 32 and in [128, 512]. Ties broken by the smallest neighborhood box. Returns
+    None if no legal block exists (caller falls back to the strided path). See box_model.py / Phase 0."""
+
+    def divs(n):
+        return [d for d in range(1, n + 1) if n % d == 0]
+
+    best = None
+    for bt in divs(t_full):
+        for bh in divs(h_full):
+            for bw in divs(w_local):
+                vol = bt * bh * bw
+                if vol % 32 or not (128 <= vol <= 512):
+                    continue
+                box = (bt + kmax - 1) * (bh + kmax - 1) * (bw + kmax - 1)
+                key = (-vol, box)  # prefer larger vol (fewer chunks), then smaller box
+                if best is None or key < best[0]:
+                    best = (key, (bt, bh, bw))
+    return best[1] if best else None
+
+
 def neighborhood_attention_3d_op_sp_w_sharded(
     q: ttnn.Tensor,
     k: ttnn.Tensor,
@@ -911,6 +933,85 @@ def neighborhood_attention_3d_op_sp_w_sharded(
     if scale is None:
         scale = head_dim**-0.5
     kt, kh, kw = (min(kk, d) for kk, d in zip(kernel_size, dims))
+
+    persist_ccl = os.environ.get("DIFFVAE_CCL_PERSISTENT", "0") == "1"
+
+    # DIFFVAE_BLOCK=1: 3-D block-permuted Q (block-permute v1). Reorder this shard's Q into (bt,bh,bw)
+    # blocks so the fused kernel's box is a compact cube (grid-independent) instead of a T-strip -- the
+    # fix for the fused-sdpa super-linearity. K/V stay PLAIN-STRIDED (gathered over W to full W); the box
+    # is global, the per-device W origin rides the offset tensor. RoPE commutes with a per-position
+    # permute, so the already-RoPE'd Q just gets reordered. Requires the fused kernel + a tile-legal block.
+    block = None
+    if os.environ.get("DIFFVAE_BLOCK") == "1" and os.environ.get("DIFFVAE_SP_FUSED", "0") == "1":
+        block = _pick_block(t_full, h_full, w_local)
+    if block is not None:
+        from .block_permute import from_block_order_tt, to_block_order_tt
+
+        block_vol = block[0] * block[1] * block[2]
+
+        def to_plain_seq(x: ttnn.Tensor) -> ttnn.Tensor:
+            # (B, T, H, w_local, NH, HD) -> (B, NH, S_local, HD) in plain (t, h, w) order.
+            x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+            x = ttnn.permute(x, (0, 4, 1, 2, 3, 5))
+            x = ttnn.reshape(x, (batch, heads, t_full * h_full * w_local, head_dim))
+            return ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+
+        def kv_plain_wrow(x: ttnn.Tensor) -> ttnn.Tensor:
+            # gather this chip's W-band into the full W (chip order = W order), then plain wrow-page it:
+            # (B, T, H, W_full, NH, HD) -> (B, NH, T*H, W_full*HD).
+            xg = ccl_manager.all_gather(
+                x, dim=3, mesh_axis=sp_axis, use_hyperparams=False, use_persistent_buffer=persist_ccl
+            )
+            xg = ttnn.to_layout(xg, ttnn.ROW_MAJOR_LAYOUT)
+            xg = ttnn.permute(xg, (0, 4, 1, 2, 3, 5))
+            return ttnn.reshape(xg, (batch, heads, t_full * h_full, w_full * head_dim))
+
+        with _sp_w_prof(mesh, "kv-allgather"):
+            tk = kv_plain_wrow(k)
+            tv = kv_plain_wrow(v)
+        q_block = to_block_order_tt(to_plain_seq(q), (t_full, h_full, w_local), block)
+
+        w_origins = torch.arange(sp, dtype=torch.int32) * w_local  # per-device global W origin
+        off_tt = from_torch(
+            w_origins, device=mesh, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_axes=[sp_axis]
+        )
+        grid_dev = mesh.compute_with_storage_grid_size()
+        prog_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=(grid_dev.x, grid_dev.y),
+            exp_approx_mode=False,
+            q_chunk_size=block_vol,
+            k_chunk_size=int(os.environ.get("DIFFVAE_SDPA_KCHUNK", 32)),
+        )
+        with _sp_w_prof(mesh, "fused-sdpa"):
+            attended = ttnn.transformer.scaled_dot_product_attention(
+                q_block,
+                tk,
+                tv,
+                is_causal=False,
+                neighborhood_3d=(t_full, h_full, w_full, kt, kh, kw),
+                neighborhood_gather=True,
+                neighborhood_block=block,
+                neighborhood_w_shard=(w_full, 0),
+                scale=scale,
+                windowed_q_token_offset=0,
+                windowed_q_token_offset_tensor=off_tt,
+                program_config=prog_config,
+            )
+        for tensor in (q_block, tk, tv):
+            ttnn.deallocate(tensor)
+
+        out_heads = heads
+        if tp_axis is not None:
+            with _sp_w_prof(mesh, "head-allgather"):
+                attended = ccl_manager.all_gather(
+                    attended, dim=1, mesh_axis=tp_axis, use_hyperparams=False, use_persistent_buffer=persist_ccl
+                )
+            out_heads = full_heads
+        # (B, NH, S_block, HD) -> un-permute to plain -> merge heads -> (B, T, H, W_local, width) volume.
+        plain = from_block_order_tt(attended, (t_full, h_full, w_local), block)
+        plain = ttnn.permute(ttnn.to_layout(plain, ttnn.ROW_MAJOR_LAYOUT), (0, 2, 1, 3))  # (B, S_local, NH, HD)
+        plain = ttnn.reshape(plain, (batch, t_full, h_full, w_local, out_heads * head_dim))
+        return ttnn.to_layout(plain, ttnn.TILE_LAYOUT)
 
     # Flatten W-outer so a contiguous sequence is a W-band; heads merged then re-split so the spatial
     # reorder is one 5D permute. ``w_`` is this chip's W extent (K/V and Q are the same shard here).
