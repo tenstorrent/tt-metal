@@ -665,7 +665,6 @@ def _unsqueeze(smaller, larger, fill):
 )
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32, ttnn.uint16, ttnn.bfloat8_b])
 def test_pad_tile(shape, padding, dtype, device):
-    # Padding upper dims of a rank>4 tensor used to xfail; supported since issue #38144.
     if len(shape) < len(padding):
         shape = _unsqueeze(shape, padding, 1)
     elif len(padding) < len(shape):
@@ -1338,6 +1337,7 @@ def test_pad_nd_sharded_front_padding_tile_layout_not_supported(device, dtype, e
 
 def _ttnn_padding_to_torch(padding):
     """Convert ttnn per-dim (before, after) padding to torch.nn.functional.pad format."""
+    # torch.nn.functional.pad expects (last_dim_before, last_dim_after, ..., first_dim_before, first_dim_after).
     return tuple(v for i in reversed(range(len(padding))) for v in padding[i])
 
 
@@ -1366,45 +1366,30 @@ def _assert_pad_body_matches(output_tensor, input_tensor, padding, *, atol=0.0):
         assert_allclose(body_out.float(), input_tensor.float(), rtol=0, atol=atol)
 
 
-# Rank > 4 regression coverage below exercises ttnn.pad on device. The Quasar mirror
-# (ttnn.experimental.quasar.pad / experimental/quasar/pad/pad.cpp) carries the same
-# logic and is verified-by-inspection, same as the Quasar slice fix in #52902.
-
-
 @pytest.mark.parametrize(
     "shape,padding",
     [
-        # Issue #38144 repro: rank 5, pad dim 1 (reshape path)
         ((1, 4, 4, 4, 128), ((0, 0), (1, 1), (0, 0), (0, 0), (0, 0))),
-        # Rank 5: leading dims (reshape path)
         ((2, 4, 4, 4, 128), ((1, 0), (0, 0), (0, 0), (0, 0), (0, 0))),
         ((1, 4, 4, 4, 128), ((0, 0), (0, 2), (0, 0), (0, 0), (0, 0))),
-        # Rank 5: dim rank-3 is the first dim surviving squeeze-to-4D; the old shape
-        # restoration dropped padding on every dim above the last two.
         ((1, 4, 4, 4, 128), ((0, 0), (0, 0), (1, 2), (0, 0), (0, 0))),
-        # Rank 5: trailing dims (squeeze-to-4D path)
         ((1, 4, 4, 4, 128), ((0, 0), (0, 0), (0, 0), (0, 2), (0, 0))),
         ((1, 4, 4, 4, 128), ((0, 0), (0, 0), (0, 0), (0, 0), (0, 3))),
-        # Rank 6: leading dims (reshape path)
         ((1, 2, 3, 4, 4, 128), ((0, 0), (1, 0), (0, 0), (0, 0), (0, 0), (0, 0))),
         ((1, 2, 3, 4, 4, 128), ((0, 0), (0, 0), (0, 2), (0, 0), (0, 0), (0, 0))),
-        # Rank 6: trailing dims (squeeze-to-4D path)
         ((1, 2, 3, 4, 4, 128), ((0, 0), (0, 0), (0, 0), (0, 1), (0, 0), (0, 0))),
         ((1, 2, 3, 4, 4, 128), ((0, 0), (0, 0), (0, 0), (0, 0), (0, 2), (0, 0))),
         ((1, 2, 3, 4, 4, 128), ((0, 0), (0, 0), (0, 0), (0, 0), (0, 0), (0, 1))),
-        # Several dims at once: each leading dim is padded by its own reshape pass,
-        # so later passes must see the shape produced by the earlier ones.
         ((2, 4, 4, 4, 128), ((1, 1), (0, 2), (0, 0), (0, 0), (0, 0))),
         ((2, 3, 4, 5, 8), ((1, 1), (0, 1), (2, 0), (0, 2), (1, 1))),
         ((2, 2, 3, 4, 4, 16), ((0, 1), (0, 0), (1, 0), (0, 0), (0, 0), (0, 2))),
-        # Rank 7/8, and shapes that are not tile/page aligned.
         ((2, 2, 2, 2, 2, 4, 16), ((0, 0), (0, 0), (1, 1), (0, 0), (0, 0), (0, 0), (0, 0))),
         ((2, 2, 2, 2, 2, 2, 2, 8), ((0, 0), (1, 1), (0, 0), (0, 0), (0, 0), (0, 0), (0, 0), (0, 0))),
         ((2, 2, 2, 2, 2, 2, 2, 8), ((0, 0), (0, 0), (0, 0), (0, 0), (0, 0), (0, 1), (0, 0), (0, 0))),
         ((3, 3, 5, 7, 13), ((0, 0), (1, 2), (0, 0), (0, 0), (0, 0))),
     ],
     ids=[
-        "rank5_dim1_issue38144",
+        "rank5_dim1",
         "rank5_dim0",
         "rank5_dim1_after_only",
         "rank5_dim2",
@@ -1426,7 +1411,6 @@ def _assert_pad_body_matches(output_tensor, input_tensor, padding, *, atol=0.0):
 )
 @pytest.mark.parametrize("value", [0.0, 3.5])
 def test_pad_rank_gt4_all_dimensions(device, shape, padding, value):
-    """Regression test for issue #38144: ttnn.pad must support padding across ranks > 4."""
     torch.manual_seed(0)
 
     torch_padding = _ttnn_padding_to_torch(padding)
@@ -1468,7 +1452,6 @@ def test_pad_rank_gt4_all_dimensions(device, shape, padding, value):
 )
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
 def test_pad_rank_gt4_tile_layout(device, shape, padding, dtype):
-    """Issue #38144 for tile layout: rank > 4 upper dims must round-trip through the 4D kernel."""
     torch.manual_seed(0)
     value = 0.0
 

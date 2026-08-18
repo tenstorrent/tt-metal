@@ -27,6 +27,8 @@ using ttnn::operations::data_movement::ShardStrategy;
 using ttnn::operations::data_movement::squeeze_from_ND_to_4D;
 using ttnn::operations::data_movement::squeeze_or_unsqueeze_shape_to_ND;
 
+namespace {
+
 bool eq_spans(const auto a, const auto b) { return std::equal(a.begin(), a.end(), b.begin(), b.end()); }
 
 ttnn::Shape compute_padded_logical_shape(const ttnn::Shape& input_shape, const ttsl::SmallVector<PadSpecDim>& padding) {
@@ -86,14 +88,34 @@ ttnn::Tensor pad_leading_dimensions(
     auto result = input_tensor;
     const int rank = static_cast<int>(input_tensor.logical_shape().rank());
     const int leading_dims_end = rank - 3;
+    const int defer_dim = rank - 4;
     for (int dim = 0; dim < leading_dims_end; dim++) {
         if (padding[dim].before_elements == 0 && padding[dim].after_elements == 0) {
             continue;
+        }
+        if (dim == defer_dim) {
+            const auto shape_view = result.logical_shape().view();
+            const uint32_t squeezed_axis0 = std::accumulate(
+                shape_view.begin(), shape_view.begin() + leading_dims_end, 1u, std::multiplies<uint32_t>());
+            if (squeezed_axis0 == shape_view[defer_dim]) {
+                continue;
+            }
         }
         result = pad_leading_dimension_via_reshape(result, dim, padding[dim], value, use_multicore, sub_core_grids);
         padding[dim] = {0, 0};
     }
     return result;
+}
+
+}  // namespace
+
+ttnn::Tensor apply_leading_dimension_padding(
+    const ttnn::Tensor& input_tensor,
+    ttsl::SmallVector<PadSpecDim>& padding,
+    const float value,
+    const bool use_multicore,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    return pad_leading_dimensions(input_tensor, padding, value, use_multicore, sub_core_grids);
 }
 
 ttnn::Tensor pad_impl(
@@ -471,18 +493,28 @@ ttnn::Tensor pad(
 
     ttnn::Tensor working_tensor = input_tensor;
     if (original_rank > 4) {
-        // Mirror of ttnn/cpp/ttnn/operations/data_movement/pad/pad.cpp. Rank > 4 coverage is exercised
-        // through ttnn.pad device tests(see #52870).
-        working_tensor = operations::experimental::quasar::detail::pad_leading_dimensions(
-            working_tensor, working_padding, value, use_multicore, sub_core_grids);
-        if (std::all_of(working_padding.begin(), working_padding.end(), [](auto& p) {
-                return p.before_elements == 0 && p.after_elements == 0;
-            })) {
-            if (memory_config_arg.has_value()) {
-                return ttnn::operations::experimental::quasar::to_memory_config(
-                    working_tensor, memory_config_arg.value());
+        if (input_tensor.storage_type() != StorageType::DEVICE) {
+            const auto first_pad_idx = static_cast<int>(
+                std::find_if(
+                    working_padding.begin(),
+                    working_padding.end(),
+                    [](const PadSpecDim& p) { return p.after_elements != 0; }) -
+                working_padding.begin());
+            TT_FATAL(
+                first_pad_idx >= original_rank - 3,
+                "ttnn::pad only supports padding on the lowest 3 dimensions for host tensors with rank > 4");
+        } else {
+            working_tensor = operations::experimental::quasar::detail::apply_leading_dimension_padding(
+                working_tensor, working_padding, value, use_multicore, sub_core_grids);
+            if (std::all_of(working_padding.begin(), working_padding.end(), [](auto& p) {
+                    return p.before_elements == 0 && p.after_elements == 0;
+                })) {
+                if (memory_config_arg.has_value()) {
+                    return ttnn::operations::experimental::quasar::to_memory_config(
+                        working_tensor, memory_config_arg.value());
+                }
+                return working_tensor;
             }
-            return working_tensor;
         }
     }
 
