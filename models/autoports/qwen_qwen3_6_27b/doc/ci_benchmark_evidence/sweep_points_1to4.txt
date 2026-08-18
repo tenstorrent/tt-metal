@@ -1,0 +1,45 @@
+2026-08-18 12:13:33,497 [INFO] test_module.llm_tests.llm_benchmark_tests: Running LLM benchmark: tool=vllm over 20 sweep point(s)
+2026-08-18 12:28:43,640 [INFO] llm_module.runner: Running vllm sweep point 1/20  isl=128 osl=128 max_conc=1 n=8
+Request throughput (req/s):              0.01
+Output token throughput (tok/s):         0.93
+Total token throughput (tok/s):          1.87
+Mean TTFT (ms):                          105353.92
+Median TTFT (ms):                        105326.86
+P99 TTFT (ms):                           105540.48
+Mean TPOT (ms):                          251.16
+Median ITL (ms):                         243.63
+Mean E2EL (ms):                          137251.81
+2026-08-18 12:49:26,584 [INFO] llm_module.runner: Running vllm sweep point 2/20  isl=128 osl=128 max_conc=32 n=256
+Request throughput (req/s):              0.13
+Output token throughput (tok/s):         16.88
+Total token throughput (tok/s):          33.77
+Mean TTFT (ms):                          202859.56
+Median TTFT (ms):                        210654.66
+P99 TTFT (ms):                           210798.36
+Mean TPOT (ms):                          313.04
+Median ITL (ms):                         243.77
+Mean E2EL (ms):                          242615.51
+2026-08-18 13:24:11,856 [WARNING] llm_module.target_checks: No perf targets for sweep point isl=128 osl=128 max_concurrency=32; benchmark block is reported as NA (ungraded).
+2026-08-18 13:24:11,858 [INFO] llm_module.runner: Running vllm sweep point 3/20  isl=128 osl=1024 max_conc=1 n=4
+Request throughput (req/s):              0.00
+Output token throughput (tok/s):         2.87
+Total token throughput (tok/s):          3.23
+Mean TTFT (ms):                          105309.75
+Median TTFT (ms):                        105310.14
+P99 TTFT (ms):                           105317.02
+Mean TPOT (ms):                          245.66
+Median ITL (ms):                         243.87
+Mean E2EL (ms):                          356622.97
+2026-08-18 13:54:02,038 [WARNING] llm_module.target_checks: No perf targets for sweep point isl=128 osl=1024 max_concurrency=1; benchmark block is reported as NA (ungraded).
+2026-08-18 13:54:02,040 [INFO] llm_module.runner: Running vllm sweep point 4/20  isl=128 osl=1024 max_conc=32 n=128
+Request throughput (req/s):              0.07
+Output token throughput (tok/s):         70.86
+Total token throughput (tok/s):          79.72
+Mean TTFT (ms):                          202422.13
+Median TTFT (ms):                        210641.16
+P99 TTFT (ms):                           210673.31
+Mean TPOT (ms):                          254.15
+Median ITL (ms):                         244.20
+Mean E2EL (ms):                          462417.42
+2026-08-18 14:30:56,061 [WARNING] llm_module.target_checks: No perf targets for sweep point isl=128 osl=1024 max_concurrency=32; benchmark block is reported as NA (ungraded).
+2026-08-18 14:30:56,062 [INFO] llm_module.runner: Running vllm sweep point 5/20  isl=1024 osl=128 max_conc=1 n=4

@@ -167,3 +167,95 @@ throughput. At one active request it costs 105 s before the first token, which i
 serving configuration any user would accept, and it is the configuration the release ships.
 Either the spec should serve a lower batch, or the port needs to size prefill and decode work
 to the live rows.
+
+---
+
+## The CI benchmark sweep, measured: two constants, and a sweep that cannot finish
+
+Ran tt-inference-server's **benchmarks** workflow (`run.py --workflow benchmarks
+--local-server --ci-mode --limit-samples-mode ci-nightly`), i.e. the phase where CI actually
+exercises batch 32. Stopped deliberately after the four short-input points; the reason is
+below.
+
+### Measured
+
+Server: the release spec's `max_concurrency: 32` (confirmed from its own log,
+`GPU KV cache size: 1,752,000 tokens`, matching the figure stage 09 recorded for that
+profile). `trace_region_size` lowered to 200 MB, everything else from the spec.
+
+| point | isl | osl | conc | n | Mean TTFT (ms) | Median ITL (ms) | out tok/s | Mean E2EL (ms) |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 128 | 128 | 1 | 8 | 105,353.92 | 243.63 | 0.93 | 137,251.81 |
+| 2 | 128 | 128 | 32 | 256 | 202,859.56 | 243.77 | 16.88 | 242,615.51 |
+| 3 | 128 | 1024 | 1 | 4 | 105,309.75 | 243.87 | 2.87 | 356,622.97 |
+| 4 | 128 | 1024 | 32 | 128 | 202,422.13 | 244.20 | 70.86 | 462,417.42 |
+
+### Three invariants
+
+1. **`ITL = 243.63 / 243.77 / 243.87 / 244.20 ms`** — a spread of 0.57 ms, 0.23%, across
+   1 vs 32 active rows *and* 128 vs 1024 output tokens. The decode step cost is a constant
+   fixed by the allocated batch; neither the number of live rows nor the generation length
+   moves it.
+2. **TTFT is bimodal on concurrency alone**: ~105.3 s at `conc=1` (points 1 and 3 agree to
+   0.04%), ~202.6 s at `conc=32` (points 2 and 4 agree to 0.2%). It does not depend on output
+   length. The conc-32 value is queueing: 256 requests through 32 slots is 8 waves, 128
+   requests is 4.
+3. **`E2EL = TTFT + osl x ITL`** to within ~0.5% on every point. Point 3:
+   105.3 + 1024 x 0.2439 = 355.0 s against 356.6 s measured. Point 4:
+   202.4 + 1024 x 0.2442 = 452.5 s against 462.4 s.
+
+So this port at batch 32 is fully described by **two constants**: a ~105 s prefill for a
+128-token prompt and a ~244 ms decode step, both set by the allocated batch rather than by
+the work actually present.
+
+### Concurrency does pay — for throughput
+
+| | osl=128 | osl=1024 |
+|---|---:|---:|
+| conc 1 | 0.93 tok/s | 2.87 tok/s |
+| conc 32 | 16.88 tok/s (**18.2x**) | 70.86 tok/s (**24.7x**) |
+
+Filling the rows is nearly free, because the step cost is already being paid. Longer outputs
+amortise the fixed prefill better, so the concurrency gain is larger at `osl=1024` (24.7x)
+than at `osl=128` (18.2x). Peak observed aggregate throughput is **70.86 tok/s**.
+
+This is the honest case *for* `max_concurrency: 32`: as a throughput configuration it works.
+The problem is that the same configuration costs 105 s before the first token for a single
+user, and the release ships it as the serving default.
+
+### Batch 32 with all rows live is clean — which is why the sweep cannot catch the defect
+
+Point 2 ran **256 requests at concurrency 32 to completion with zero errors**, and point 4 ran
+128 requests at 1024 output tokens likewise. Combined with the isolation result — clean at
+batch 32 for 472-484 token generations, broken at ~1,800+ — this confirms the coverage
+argument above rather than contradicting it: the sweep exercises batch 32 only in the regime
+where it works, and never inspects the text in any case.
+
+Note point 4 reaches `osl=1024`, the sweep's longest output, and still completed. Degradation
+appeared at ~1,800 tokens, so the sweep's own maximum output length sits below the threshold.
+
+### Why the sweep was stopped, and why it could not have finished
+
+Points 5-20 scale the **input** to 131,072 tokens. Prefill at batch 32 measured 105.3 s for a
+128-token prompt. Projecting linearly — **a projection, not a measurement** — the remaining
+points cost per prefill:
+
+| isl | projected TTFT |
+|---:|---:|
+| 1,024 | ~14 min |
+| 8,192 | ~1.9 h |
+| 32,768 | ~7.5 h |
+| 131,072 | ~30 h |
+
+`run.py` runs under a 21,600 s (6 h) timeout. The sweep began at 12:13, so it would have been
+killed somewhere around the `isl=4096`-`8192` points with most of the matrix unmeasured. So:
+**the release benchmark sweep is not completable on this port within its own time budget**, for
+the same allocated-batch reason. That is a CI-relevant fact in its own right, and it is not
+caused by the sweep being unreasonable — a 131,072-token prefill is a legitimate thing to
+benchmark on a model advertising 262,144 context. It is the ~28x prefill penalty that makes it
+impossible.
+
+Caveat stated plainly: the linear projection is unverified. Only `isl=128` was measured at
+batch 32. Prefill could scale worse than linearly (the chunked-scan and per-chunk host-upload
+terms in `PREFILL_CHUNK_LEVER.md` both grow with S) or better. Measuring one long-input point
+would settle it and is the cheapest way to bound the real cost.
