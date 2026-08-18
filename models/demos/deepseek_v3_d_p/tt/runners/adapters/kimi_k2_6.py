@@ -30,6 +30,10 @@ class KimiK26Adapter(MLAPrefillAdapter):
     ttnn_cache_default = "/mnt/models/Kimi-K2_6-Cache/Kimi-K2_6-Cache-prefill"
     default_gate_mode = "DEVICE_FP32"  # Kimi (1 expert group)
     prefill_trace_default = "/mnt/models/deepseek-prefill-cache/golden/kimi-26/kimi_longbook_56320"
+    mla_trace_defaults = (
+        "/mnt/models/deepseek-prefill-cache/golden/mla_sdpa_traces/kimi_math_56320_sdpa_mla",
+        "/mnt/models/deepseek-prefill-cache/golden/mla_sdpa_traces/kimi_metal_56320_sdpa_mla",
+    )
 
     # Single expert group + device gate: route routing-all-gather semaphores to L1_SMALL.
     # Routing consumes 512 B; leave 256 B for MLA high-bandwidth-gather semaphores.

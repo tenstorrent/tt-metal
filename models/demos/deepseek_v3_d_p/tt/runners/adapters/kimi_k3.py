@@ -63,6 +63,7 @@ class KimiK3Adapter(MLAPrefillAdapter):
     # MLA alone is loadable: quantization_config.ignore covers self_attn, so those weights are bf16.
     # The first full-attention layer, not 0 -- layers 0-2 are KDA and hold no MLA tensors.
     pretrained_mla_layer = KimiK3Config.mla_layer_ids()[0]
+    mla_trace_defaults = ("/mnt/models/deepseek-prefill-cache/golden/structured_traces/kimi_k3_100k_vllm",)
     # Left as None: shared_path feeds conftest's state_dict fixture, which pytest would resolve --
     # loading all 1.5 TB -- before the supports_pretrained skip in the fixture body runs.
     shared_path = None

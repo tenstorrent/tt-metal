@@ -118,7 +118,6 @@
 - name: "Kimi-K3-2.8T MLA chunked accuracy 55k@5k (vs golden trace)"
   cmd: |
     export KIMI_K3_HF_MODEL=/mnt/models/blaze/moonshotai/Kimi-K3
-    export MLA_CHUNKED_TRACE_PATH=/mnt/models/deepseek-prefill-cache/golden/structured_traces/kimi_k3_100k_vllm
 
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)

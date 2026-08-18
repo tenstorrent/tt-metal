@@ -62,39 +62,22 @@ def _ref_cache_key(config, weights, hidden_2d) -> str:
     return h.hexdigest()[:16]
 
 
-def discover_traces(root, num_users, variant_name=None):
-    """Immediate subdirs of `root`, one per user (cycled if fewer than num_users). Assert mla_io/ + kv_cache/.
+def resolve_traces(paths, num_users):
+    """One trace dir per user, cycled if there are fewer dirs than users. `paths` is either the
+    variant's own mla_trace_defaults or a single explicit override.
 
-    `root` may hold both kimi and deepseek traces as sibling subdirs (e.g. kimi_*_sdpa_mla next to
-    deepseek_*_sdpa_mla). When `variant_name` is given, select by whether the dir name contains 'kimi':
-    a kimi variant keeps the kimi_* dirs, any other variant keeps the rest.
-
-    NOTE the filter is a substring test on the VARIANT name, so it cannot separate two variants of one
-    family: `kimi_k2_6` and `kimi_k3` both select every kimi_* dir. Renaming the dirs does not help --
-    ``want_kimi`` comes from the variant name. Such a variant must be given MLA_CHUNKED_TRACE_PATH; with
-    a root it silently gets its sibling's traces and the comparison fails at ~0 PCC.
-    _run_chunked_prefill additionally asserts ``variant.pretrained_mla_layer`` is not None, since a
-    variant with no checkpoint never had a trace recorded at all.
+    Raises FileNotFoundError when a registered dir is simply not staged on this box (the caller turns
+    that into a skip); asserts when a dir is there but is not a trace.
     """
-    dirs = sorted(d for d in Path(root).iterdir() if d.is_dir())
-    assert dirs, f"no trace subdirs under {root}"
-    if variant_name is not None:
-        want_kimi = "kimi" in variant_name.lower()
-        dirs = [d for d in dirs if ("kimi" in d.name.lower()) == want_kimi]
-        assert dirs, f"no {'kimi' if want_kimi else 'non-kimi'} trace subdirs under {root} (variant={variant_name})"
+    assert paths, "no trace dirs given"
+    dirs = [Path(p) for p in paths]
+    missing = [str(d) for d in dirs if not d.is_dir()]
+    if missing:
+        raise FileNotFoundError(f"MLA trace dir(s) not present: {missing}")
     for d in dirs:
         assert (d / "mla_io").is_dir(), f"trace dir {d} is missing mla_io/"
         assert (d / "kv_cache").is_dir(), f"trace dir {d} is missing kv_cache/"
     return [dirs[u % len(dirs)] for u in range(num_users)]
-
-
-def single_trace(path, num_users):
-    """Use `path` directly as ONE trace dir (the leaf holding mla_io/ + kv_cache/), shared across all
-    users. For MLA_CHUNKED_TRACE_PATH, which points at a specific trace rather than the root of many."""
-    d = Path(path)
-    assert (d / "mla_io").is_dir(), f"trace dir {d} is missing mla_io/"
-    assert (d / "kv_cache").is_dir(), f"trace dir {d} is missing kv_cache/"
-    return [d for _ in range(num_users)]
 
 
 def load_trace(d):
