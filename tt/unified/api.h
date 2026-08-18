@@ -369,6 +369,23 @@ template <typename Geometry, ReduceAxis Axis>
 ReduceNode<Geometry, Axis, ReducePool::Sum, expr::UnaryChain<>> reduce_sum(
     const ComputeBlock& b, const ComputeBlock& scaler);
 
+// Same shape, different fold. The SCALER differs though, and silently: metal folds
+// it into every reduce_tile, so
+//
+//   sum, max   scaler 1               -- kReduceScalerOne
+//   mean       scaler 1/N             -- bf16_pair(1.0f / Geometry::elements(Axis))
+//              (1/sqrt(N) when both axes collapse)
+//
+// A mean fed a scaler of 1 is just a sum, with nothing to say so. The scaler is
+// the kernel's to fill, so the kernel has to match it to the fold it asks for.
+template <typename Geometry, ReduceAxis Axis>
+ReduceNode<Geometry, Axis, ReducePool::Max, expr::UnaryChain<>> reduce_max(
+    const ComputeBlock& b, const ComputeBlock& scaler);
+
+template <typename Geometry, ReduceAxis Axis>
+ReduceNode<Geometry, Axis, ReducePool::Avg, expr::UnaryChain<>> reduce_mean(
+    const ComputeBlock& b, const ComputeBlock& scaler);
+
 // ---------------------------------------------------------------------------
 // Reserved multicast semaphores
 //
@@ -418,6 +435,15 @@ inline constexpr uint32_t kCoreGridW = 1;
 // Two bfloat16 1.0 values in one 32-bit word -- the scaler a SUM reduction wants.
 // A float32 CB would want a single 0x3F800000 instead.
 inline constexpr uint32_t kReduceScalerOne = 0x3F803F80u;
+
+// The same word for any value: bfloat16 is the top half of a float32, twice over.
+// A mean needs it, because its scaler is 1/N rather than 1 -- see reduce_mean.
+inline uint32_t bf16_pair(float v) {
+    uint32_t bits = 0;
+    __builtin_memcpy(&bits, &v, sizeof(bits));
+    const uint32_t half = bits >> 16;
+    return (half << 16) | half;
+}
 
 // ---------------------------------------------------------------------------
 // synchronize_cores -- barrier across the CORES of a region
