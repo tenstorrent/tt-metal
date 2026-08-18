@@ -73,13 +73,17 @@ def run_voc_trace_replay(device):
     return maxabs == 0.0, f"maxabs {maxabs:.3e}"
 
 
-def test_voc_bucket_selection():
+def run_voc_bucket_selection():
     assert VOC_BUCKETS[-1] == VOC_L, "the top bucket must be the model cap, or long utterances have none"
     assert list(VOC_BUCKETS) == sorted(VOC_BUCKETS), "_voc_bucket scans in order, so buckets must ascend"
     lo, nxt = VOC_BUCKETS[0], VOC_BUCKETS[1]
     for L, want in ((1, lo), (lo - 1, lo), (lo, lo), (lo + 1, nxt), (VOC_L, VOC_L)):
         assert _voc_bucket(L) == want, f"_voc_bucket({L}) should be {want}"
-    with pytest.raises(AssertionError):
+
+
+def test_voc_bucket_selection(expect_error):
+    run_voc_bucket_selection()
+    with expect_error(AssertionError, "exceeds the fixed cap"):
         _voc_bucket(VOC_L + 1)
 
 
@@ -102,7 +106,7 @@ def test_voc_trace_replay(device):
 if __name__ == "__main__":
     import sys
 
-    test_voc_bucket_selection()
+    run_voc_bucket_selection()
     dev = ttnn.open_device(device_id=0, l1_small_size=262144, trace_region_size=120_000_000)
     try:
         dev.enable_program_cache()
