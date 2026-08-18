@@ -36,7 +36,7 @@ sfpi_inline sfpi::vFloat _sfpu_reciprocal_(const sfpi::vFloat x) {
         if constexpr (max_iter == 2) {
             sfpi::vFloat y1 = y * -t - 0.0f;
             // If t=NaN, then t>=0.  This check consumes the SFPNOP slot of the preceding SFPMAD.
-            v_if (t < 0) {
+            v_if(t < 0) {
                 t = x * y1 - sfpi::vConstFloatPrgm0;
                 y = y1 * -t - 0.0f;
             }
@@ -44,14 +44,24 @@ sfpi_inline sfpi::vFloat _sfpu_reciprocal_(const sfpi::vFloat x) {
         } else {
             // If t=NaN, then t>=0.  This check cannot be hidden in a SFPNOP slot as it depends on the result of the
             // preceding SFPMAD.
-            v_if (t < 0) {
-                y = y * -t - 0.0f;
-            }
+            v_if(t < 0) { y = y * -t - 0.0f; }
             v_endif;
         }
     }
 
     return y;
+}
+
+// Portable-SFPI compatibility surface used by operation headers shared with
+// Blackhole. Quasar's native helper names above remain the implementation.
+template <int max_iter = 2>
+sfpi_inline sfpi::vFloat sfpu_reciprocal_iter(const sfpi::vFloat x) {
+    return _sfpu_reciprocal_<max_iter>(x);
+}
+
+template <bool APPROXIMATE = false, [[maybe_unused]] bool save_reg = true>
+sfpi_inline sfpi::vFloat sfpu_reciprocal(const sfpi::vFloat x) {
+    return _sfpu_reciprocal_<APPROXIMATE ? 0 : 2>(x);
 }
 
 // Programs vConstFloatPrgm0 = 2.0f, the Newton-Raphson constant read only by the non-approximate path.
@@ -60,6 +70,11 @@ inline void _init_reciprocal_() {
     if constexpr (!APPROXIMATION_MODE) {
         sfpi::vConstFloatPrgm0 = 2.0f;
     }
+}
+
+template <bool APPROXIMATE = false>
+inline void sfpu_reciprocal_init() {
+    _init_reciprocal_<APPROXIMATE>();
 }
 
 /**

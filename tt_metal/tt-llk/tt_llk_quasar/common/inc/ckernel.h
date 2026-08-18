@@ -8,6 +8,8 @@
 #define NOCLONE          __attribute__((noclone))
 #define tt_l1_ptr        __attribute__((rvtt_l1_ptr))
 #define tt_reg_ptr       __attribute__((rvtt_reg_ptr))
+#include <stddef.h>
+
 #include <cstdint>
 
 #include "ckernel_addrmod.h"
@@ -25,6 +27,12 @@ namespace ckernel
 constexpr std::uint32_t RESET_VAL          = 0;
 constexpr std::uint32_t KERNEL_IN_PROGRESS = 15;
 constexpr std::uint32_t KERNEL_COMPLETE    = 0xFF;
+
+// Blackhole-port compatibility API. Quasar uses the same portable subset for SFPI integer load/store modes.
+inline constexpr bool is_valid_instruction_mode(InstrModLoadStore mode)
+{
+    return mode == InstrModLoadStore::INT32_2S_COMP || mode == InstrModLoadStore::INT32 || mode == InstrModLoadStore::LO16;
+}
 
 // MM Oct 13 2021: Now only 1024 rows in dest
 static int const DEST_MAX_ADDR_HALF_16B = 512;

@@ -54,6 +54,25 @@ enum class EltwiseBinaryReuseDestType
     DEST_TO_SRCB = 2,
 };
 
+// Logical source/destination layout selected by integer SFPI APIs. Quasar's
+// kernels map these modes to sfpi::DataLayout rather than encoding them into
+// SFPLOAD/SFPSTORE instruction fields as Blackhole does.
+enum class InstrModLoadStore : std::uint8_t
+{
+    DEFAULT       = 0,
+    FP16A         = 1,
+    FP16B         = 2,
+    FP32          = 3,
+    INT32         = 4,
+    INT8          = 5,
+    LO16          = 6,
+    HI16          = 7,
+    INT32_2S_COMP = 12,
+    INT8_2S_COMP  = 13,
+    LO16_ONLY     = 14,
+    HI16_ONLY     = 15,
+};
+
 // Broadcasts only occur on SrcB
 enum class BroadcastType : std::uint8_t
 {
@@ -120,6 +139,67 @@ enum class SfpuType : std::uint32_t
     greater_than_zero,
     less_than_equal_zero,
     greater_than_equal_zero,
+    // Portable-SFPI operations ported from Blackhole. Keep these append-only:
+    // SfpuType values are consumed by generated kernels and test dispatch.
+    hardtanh,
+    cast_fp32_to_fp16a,
+    sign,
+    exp2,
+    heaviside,
+    expm1,
+    erf,
+    erfc,
+    erfinv,
+    i0,
+    i1,
+    logical_not_unary,
+    add1,
+    div_int32,
+    div_int32_floor,
+    unary_ne,
+    unary_eq,
+    unary_gt,
+    unary_lt,
+    unary_ge,
+    unary_le,
+    tiled_prod,
+    bitwise_not,
+    right_shift,
+    left_shift,
+    remainder,
+    fmod,
+    isclose,
+    prelu,
+    alt_complex_rotate90,
+    softshrink,
+    tanhshrink,
+    hardshrink,
+    hardsigmoid,
+    softsign,
+    celu,
+    elu,
+    selu,
+    rpow,
+    cbrt,
+    hardmish,
+    rdiv,
+    addcmul,
+    addcdiv,
+    lerp,
+    snake_beta,
+    xielu,
+    lgamma,
+    polygamma,
+    digamma,
+    identity,
+    power,
+    int_sum_col,
+    int_sum_row,
+    unary_bitwise_and,
+    unary_bitwise_or,
+    unary_bitwise_xor,
+    mask,
+    int_mask,
 };
 
 enum class DstSync : std::uint8_t

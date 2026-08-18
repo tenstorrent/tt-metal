@@ -121,6 +121,7 @@ def _run_sfpu_binary_llk_golden(
     is_perf=False,
     perf_report=None,
     dst_rounding_mode=DstRoundingMode.Default,
+    extra_templates=(),
 ):
     """Shared driver for the unpack-to-dest, LLK-golden binary SFPU ops.
 
@@ -173,6 +174,7 @@ def _run_sfpu_binary_llk_golden(
             # branch that references the non-dependent globals TYPECAST_IN_FORMAT /
             # TYPECAST_OUT_FORMAT, so every build that includes it must define them.
             TYPECAST_FORMATS(),
+            *extra_templates,
         ],
         "runtimes": [
             TILE_COUNT(tile_cnt_A),

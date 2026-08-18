@@ -123,6 +123,13 @@ inline void _reset_counters_()
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, SETRWC);
 }
 
+// Blackhole-port compatibility API. The runtime spelling programs the same SETRWC field as Quasar's templated helper
+// and lets copied SFPI kernels retain their Blackhole init bodies.
+inline void reset_counters(const std::uint32_t setrwc)
+{
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, setrwc);
+}
+
 /**
  * @brief Inc dest counter using carriage return (why use the CR?)
  * @tparam NUM_ROWS: number of 16 datum rows to increment dest by, value must be <=255

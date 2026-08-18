@@ -61,6 +61,22 @@ enum class DstRoundingMode : std::uint8_t
     NearestEven = 1, // IEEE 754 round-to-nearest-even, applied in software before the store
 };
 
+enum class ActivationType : std::uint8_t
+{
+    Celu        = 0,
+    Elu         = 1,
+    Gelu        = 2,
+    Hardtanh    = 3,
+    Hardsigmoid = 4,
+};
+
+enum class RoundingMode : std::uint8_t
+{
+    None  = 0,
+    Trunc = 1,
+    Floor = 2,
+};
+
 enum class BinaryOp : std::uint8_t
 {
     ADD,
@@ -76,6 +92,19 @@ enum class BinaryOp : std::uint8_t
     QUANT,
     REQUANT,
     DEQUANT,
+    // Portable-SFPI operations ported from Blackhole. Keep these append-only.
+    ATAN2,
+    BITWISE_AND,
+    BITWISE_OR,
+    BITWISE_XOR,
+    FMOD,
+    POW,
+    REMAINDER,
+    DIV_INT32,
+    DIV_INT32_FLOOR,
+    ISCLOSE,
+    LOGSIGMOID,
+    RSUB_INT32,
 };
 
 // For instructions that address lower/upper 16 bits of a register

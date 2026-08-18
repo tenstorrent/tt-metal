@@ -5,6 +5,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "ckernel.h"
 #include "ckernel_ops.h"
 #include "ckernel_trisc_common.h"
@@ -26,6 +27,16 @@ sfpi_inline sfpi::vFloat _sfpu_round_to_nearest_int32_(sfpi::vFloat z, sfpi::vIn
     sfpi::vFloat tmp = z + c231;
     k_int = sfpi::as<sfpi::vInt>(tmp) - sfpi::as<sfpi::vInt>(c231);
     return tmp - c231;
+}
+
+// Quasar-port compatibility for Blackhole kernels that deliberately round through vSMag16. Blackhole's vInt abs and
+// copysgn sequence treats those raw bits as sign-magnitude; Quasar's vInt ALU is two's-complement. Preserve the
+// sign-magnitude conversion, then translate it explicitly only where an exponent needs signed integer arithmetic.
+sfpi_inline sfpi::vInt _sfpu_smag16_to_int32_(sfpi::vSMag16 value, sfpi::vFloat signed_value) {
+    sfpi::vInt result = sfpi::as<sfpi::vInt>(sfpi::setsgn(sfpi::as<sfpi::vSMag>(value), 0));
+    v_if(signed_value < 0.0f) { result = -result; }
+    v_endif;
+    return result;
 }
 
 /*
@@ -108,6 +119,12 @@ sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a) {
     return r * two_i;
 }
 
+sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_unsafe_(sfpi::vFloat x) {
+    // Blackhole-port callers already range-bound x. Quasar's accurate core has the same unsafe contract, so expose
+    // the shared helper name without duplicating the implementation.
+    return _sfpu_exp_fp32_accurate_(x);
+}
+
 // Calculates EXP over a full tile. Quasar exposes exactly two implementations:
 //   - approximate exp via the HW nonlinear lookup table (sfpi::approx_exp), and
 //   - full-precision fp32 exp (_sfpu_exp_fp32_accurate_, ported from Blackhole).
@@ -144,7 +161,7 @@ void calculate_exponential([[maybe_unused]] const std::uint32_t exp_base_scale_f
 
 template <
     [[maybe_unused]] bool APPROXIMATION_MODE,
-    [[maybe_unused]] uint32_t scale = 0x3F800000,
+    [[maybe_unused]] std::uint32_t scale = 0x3F800000,
     [[maybe_unused]] bool CLAMP_NEGATIVE = true,
     [[maybe_unused]] bool EN_32BIT_DEST>
 void exp_init() {
