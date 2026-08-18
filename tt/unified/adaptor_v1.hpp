@@ -54,6 +54,7 @@
 #include "api/compute/eltwise_unary/relu.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/matmul.h"
+#include "api/compute/bcast.h"
 #include "api/compute/pack.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/reduce.h"

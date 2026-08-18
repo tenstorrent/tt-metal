@@ -162,14 +162,32 @@ struct MatmulGeometry {
     static constexpr uint32_t out_subblock_num_tiles = RtDim * CtDim;
 };
 
+// No bias. A real cb id could be 0, so the sentinel has to be out of range.
+inline constexpr uint32_t kNoBias = ~uint32_t(0);
+
 template <typename Geometry, typename Chain>
 struct MatmulNode : expr::Fluent<MatmulNode<Geometry, Chain>> {
     using fusion_kind = FPUFusion;
     using geometry = Geometry;
     using chain = Chain;
 
+    // Fuse a bias, added ONCE to the finished total -- never per k-block, which
+    // would scale it by the block count. It lands before the epilogue chain, so
+    // matmul(a, b).bias(v).relu() is relu(A@B + v), the usual fusion.
+    //
+    // `operand` is duck-typed rather than named: this header does not know the
+    // core types, and all it needs is the circular buffer behind one. Pass a
+    // ComputeBlock held at KERNEL scope -- the bias is read by every finishing
+    // block and must not be popped until the kernel ends. See unified_kernels.
+    template <typename Operand>
+    auto bias(const Operand& operand) const {
+        MatmulNode<Geometry, Chain> out{{}, in0_cb, in1_cb, operand.get_cb_id()};
+        return out;
+    }
+
     uint32_t in0_cb;
     uint32_t in1_cb;
+    uint32_t bias_cb = kNoBias;
 };
 
 // --- Reduction ---
@@ -293,12 +311,12 @@ auto exp_(const N& n) {
 
 template <typename Geometry, typename Chain>
 auto relu(const MatmulNode<Geometry, Chain>& m) {
-    return MatmulNode<Geometry, expr::chain_append_t<Chain, ReluOp>>{{}, m.in0_cb, m.in1_cb};
+    return MatmulNode<Geometry, expr::chain_append_t<Chain, ReluOp>>{{}, m.in0_cb, m.in1_cb, m.bias_cb};
 }
 
 template <typename Geometry, typename Chain>
 auto exp_(const MatmulNode<Geometry, Chain>& m) {
-    return MatmulNode<Geometry, expr::chain_append_t<Chain, ExpOp>>{{}, m.in0_cb, m.in1_cb};
+    return MatmulNode<Geometry, expr::chain_append_t<Chain, ExpOp>>{{}, m.in0_cb, m.in1_cb, m.bias_cb};
 }
 
 // The hooks expr.hpp's Fluent calls. Unqualified inside, so ordinary lookup finds
@@ -317,7 +335,7 @@ auto fluent_exp(const N& n) {
 
 template <typename Geometry>
 auto matmul(TileSource a, TileSource b) {
-    return MatmulNode<Geometry, expr::UnaryChain<>>{{}, a.cb_id, b.cb_id};
+    return MatmulNode<Geometry, expr::UnaryChain<>>{{}, a.cb_id, b.cb_id, kNoBias};
 }
 
 // An FPU fusion cannot be an operand of a binary op: it already owns every DST
@@ -437,6 +455,57 @@ struct Strategy<SFPUFusion> {
 //              final block.
 template <>
 struct Strategy<FPUFusion> {
+    // The finishing pass when a bias is fused. Both modes converge here: the
+    // total is in acc_cb, so this adds the broadcast bias into DST, applies the
+    // epilogue, and packs to out_cb.
+    //
+    // It has to be a second pass over an intermediate, because metal's bcast add
+    // reads BOTH operands from circular buffers -- there is no "add a buffer tile
+    // into a DST slot". L1 mode pays nothing for that: this replaces the copy-out
+    // it already did. Dst mode pays one extra pack, into acc_cb, which it leaves
+    // idle at finish anyway -- so neither mode needs a new buffer.
+    template <typename Node, typename EpilogueChain>
+    static void bias_finish(const Node& node, uint32_t acc_cb, uint32_t out_cb, EpilogueChain) {
+#if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
+        using G = typename Node::geometry;
+        constexpr uint32_t kAccTiles = G::out_subblock_num_tiles;
+        constexpr uint32_t kTranspose = 0;
+
+        ckernel::tile_regs_acquire();
+        ckernel::reconfig_data_format(acc_cb, node.bias_cb);
+        ckernel::add_bcast_rows_init_short(acc_cb, node.bias_cb);
+
+        cb_wait_front(acc_cb, kAccTiles);
+        for (uint32_t t = 0; t < kAccTiles; ++t) {
+            // Bias is 1 x ct_dim tiles broadcast DOWN the rows, so the tile for
+            // output (r, c) is c -- and the output block is row-major.
+            ckernel::add_tiles_bcast_rows(acc_cb, node.bias_cb, t, t % G::ct_dim, t);
+        }
+        cb_pop_front(acc_cb, kAccTiles);
+
+        if constexpr (!EpilogueChain::empty) {
+            for (uint32_t t = 0; t < kAccTiles; ++t) {
+                EpilogueChain::apply_in_place(t);
+            }
+        }
+
+        ckernel::tile_regs_commit();
+        cb_reserve_back(out_cb, kAccTiles);
+        ckernel::tile_regs_wait();
+        ckernel::pack_block(0, out_cb, kAccTiles);
+        ckernel::tile_regs_release();
+        cb_push_back(out_cb, kAccTiles);
+
+        // Put back what matmul_block needs, so the next output block can run.
+        ckernel::reconfig_data_format_srca(acc_cb, node.in1_cb);
+        ckernel::matmul_block_init(node.in0_cb, node.in1_cb, kTranspose, G::ct_dim, G::rt_dim, G::kt_dim);
+#else
+        (void)node;
+        (void)acc_cb;
+        (void)out_cb;
+#endif
+    }
+
     // Single-shot: one k-block, no accumulation buffer. This is the shape
     // Storage::store() uses, so `out.store(matmul<Geom>(a, b))` still works for a
     // one-round matmul. With reload=false and finish=true the accumulation buffer
@@ -509,10 +578,13 @@ struct Strategy<FPUFusion> {
         }
 
         // In L1 mode the total is not in DST yet, so the epilogue runs in the
-        // copy-out stage below instead.
+        // copy-out stage below instead. A fused bias moves it later in Dst mode
+        // too: the epilogue has to see the BIASED total, so bias_finish applies
+        // it and this must not, or the chain runs twice and the first run sees
+        // A@B without the bias -- relu(relu(A@B) + v) instead of relu(A@B + v).
         if constexpr (Mode == AccumulatorMode::Dst) {
             if constexpr (!EpilogueChain::empty) {
-                if (finish) {
+                if (finish && node.bias_cb == kNoBias) {
                     for (uint32_t t = 0; t < kAccTiles; ++t) {
                         EpilogueChain::apply_in_place(t);
                     }
@@ -523,12 +595,18 @@ struct Strategy<FPUFusion> {
         ckernel::tile_regs_commit();
 
         if constexpr (Mode == AccumulatorMode::Dst) {
-            const uint32_t dest = finish ? out_cb : acc_cb;
+            // A fused bias needs the total in a buffer to add against, so the
+            // finishing pack goes to acc_cb and bias_finish carries it to out_cb.
+            const bool via_bias = finish && node.bias_cb != kNoBias;
+            const uint32_t dest = (finish && !via_bias) ? out_cb : acc_cb;
             cb_reserve_back(dest, kAccTiles);
             ckernel::tile_regs_wait();
             ckernel::pack_block(0, dest, kAccTiles);
             ckernel::tile_regs_release();
             cb_push_back(dest, kAccTiles);
+            if (via_bias) {
+                bias_finish(node, acc_cb, out_cb, EpilogueChain{});
+            }
         } else {
             // L1: the packer adds this block's product into what is already at the
             // destination, so the running total lives in L1 and never occupies DST.
@@ -551,6 +629,10 @@ struct Strategy<FPUFusion> {
             if (!finish) {
                 cb_wait_front(acc_cb, kAccTiles);
                 cb_pop_front(acc_cb, kAccTiles);
+            } else if (node.bias_cb != kNoBias) {
+                // The copy-out below, with the bias folded into it -- same wait,
+                // same pop, same pack, one op different.
+                bias_finish(node, acc_cb, out_cb, EpilogueChain{});
             } else {
                 // Move the completed total into the output buffer. Copying it
                 // through DST rather than letting the DM writer drain acc_cb keeps
@@ -616,9 +698,8 @@ struct Strategy<ReduceFusion> {
 #endif
         (void)num_tiles;  // the assert above is its only reader
 
-        // The scaler is read by every reduce_tile and never popped, so waiting is
-        // idempotent -- one page stays at the front for the kernel's lifetime.
-        cb_wait_front(node.scaler_cb, 1);
+        // No cb_wait_front on the scaler: it is a ComputeBlock at kernel scope, so
+        // its constructor waited once and nothing pops it until the kernel ends.
 
         if constexpr (kDim == ckernel::ReduceDim::REDUCE_ROW && kPool != ckernel::PoolType::MAX) {
             // SUM/AVG along a row is an MVMUL with the operands swapped, so the
