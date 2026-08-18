@@ -44,7 +44,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t num_faces       = params.num_faces;
     const Operand& buffer_A             = params.buffer_A;
 #endif
-    const std::uint32_t buf_desc_id = 0;
+    const std::uint32_t buf_desc_id         = 0;
+    const ckernel::TensorShape tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
 
     {
         ZONE_SCOPED("INIT")
@@ -95,7 +96,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             _llk_unpack_configure_unary_<UNPACKER_ENGINE_SEL>(td_val);
         }
 
-        _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, TILE_CNT);
+        _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(buf_desc_id, tensor_shape, TILE_CNT);
         PROFILER_SYNC();
     }
     {
@@ -113,7 +114,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
-                _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(0 /*l1_tile_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
+                _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(0 /*l1_tile_idx*/, tensor_shape);
                 if constexpr (unpack_to_dest && PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                 {
                     _llk_unpack_dest_dvalid_section_done_<dest_sync>();
@@ -161,7 +162,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // written out tile, e.g. max/min's tile 2), or 4 for the result-aliasing
     // variant that places operands at Dest tiles 2/3. Guard against any other count.
     LLK_ASSERT(TILE_CNT == 2 || TILE_CNT == 4, "Binary SFPU expects TILE_CNT of 2 or 4");
-    const DataFormat math_format = static_cast<DataFormat>(formats.math);
+    const DataFormat math_format            = static_cast<DataFormat>(formats.math);
+    const ckernel::TensorShape tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
+    const VectorMode vector_mode            = tensor_shape.total_num_faces() == 4   ? VectorMode::RC
+                                              : tensor_shape.total_num_faces() == 1 ? VectorMode::None
+                                              : tensor_shape.num_faces_r_dim == 1   ? VectorMode::R
+                                                                                    : VectorMode::C;
 
     {
         ZONE_SCOPED("INIT")
@@ -219,7 +225,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // ADDR_MOD_0/1 or bank-0 programming, so both initializers can remain in
         // the INIT zone before the measured TILE_LOOP.
         _llk_math_eltwise_sfpu_init_();
-        test_utils::init_binary_sfpu_operation_quasar<SFPU_BINARY_OP, SFPU_SIGN_MAGNITUDE>(params.ZERO_POINT);
+        test_utils::init_binary_sfpu_operation_quasar<SFPU_BINARY_OP, SFPU_SIGN_MAGNITUDE, is_fp32_dest_acc_en>(params.ZERO_POINT);
         PROFILER_SYNC();
     }
     {
@@ -252,7 +258,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     is_fp32_dest_acc_en,
                     SFPU_DST_ROUNDING_MODE,
                     SFPU_ITERATIONS,
-                    SFPU_SIGN_MAGNITUDE>(SRC0_TILE_IDX, SRC1_TILE_IDX, DST_TILE_IDX, math_format);
+                    SFPU_SIGN_MAGNITUDE>(SRC0_TILE_IDX, SRC1_TILE_IDX, DST_TILE_IDX, math_format, vector_mode);
                 if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                 {
                     _llk_math_set_dvalid_<p_cleardvalid::SFPU, dest_sync>();
@@ -289,8 +295,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t DST_TILE_IDX    = params.DST_TILE_IDX;
     const Operand& buffer_Res           = params.buffer_Res;
 #endif
-    std::uint32_t const buf_desc_id        = 8;
-    const std::uint32_t num_tiles_per_pack = 1; // only the SFPU result tile is packed
+    std::uint32_t const buf_desc_id         = 8;
+    const std::uint32_t num_tiles_per_pack  = 1; // only the SFPU result tile is packed
+    const ckernel::TensorShape tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
 
     {
         ZONE_SCOPED("INIT")
@@ -326,7 +333,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _configure_buf_desc_table_(tdma_desc.buf_desc_id, tdma_desc.buf_desc);
 
         _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(tdma_desc, ckernel::ReluConfig::none());
-        _llk_pack_init_(buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, num_tiles_per_pack);
+        _llk_pack_init_(buf_desc_id, tensor_shape, num_tiles_per_pack);
         PROFILER_SYNC();
     }
     {
@@ -335,7 +342,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
-                _llk_pack_(DST_TILE_IDX, 0 /*tile index*/, ckernel::DEFAULT_TENSOR_SHAPE);
+                _llk_pack_(DST_TILE_IDX, 0 /*tile index*/, tensor_shape);
                 if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                 {
                     _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();

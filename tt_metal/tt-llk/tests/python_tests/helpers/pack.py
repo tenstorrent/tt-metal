@@ -38,6 +38,13 @@ def pack_fp32(torch_tensor):
     return torch_tensor.cpu().numpy().astype(np.float32).tobytes()
 
 
+def pack_tf32(torch_tensor):
+    """Pack E8M10 TF32 values into their 32-bit Tensix L1 containers."""
+    fp32 = torch_tensor.cpu().numpy().astype(np.float32)
+    tf32_bits = fp32.view(np.uint32) & np.uint32(0xFFFFE000)
+    return tf32_bits.tobytes()
+
+
 def pack_int32(torch_tensor, twos_complement=False):
     if twos_complement:
         return torch_tensor.cpu().numpy().astype(np.int32).tobytes()

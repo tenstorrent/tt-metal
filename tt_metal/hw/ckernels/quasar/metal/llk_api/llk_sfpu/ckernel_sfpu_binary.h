@@ -11,6 +11,7 @@
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_recip.h"
 #include "sfpi.h"
+#include "sfpu/ckernel_sfpu_compat.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -93,15 +94,15 @@ inline void calculate_sfpu_binary(
             constexpr int reciprocal_iterations = 2;  // Two Newton-Raphson iterations
             result = in0 * _sfpu_reciprocal_<reciprocal_iterations>(in1);
 
-            v_if(in1 == 0) {
-                v_if(in0 == 0) { result = std::numeric_limits<float>::quiet_NaN(); }
+            v_if(compat::fp_eq(in1, 0.0f)) {
+                v_if(compat::fp_eq(in0, 0.0f)) { result = std::numeric_limits<float>::quiet_NaN(); }
                 v_else {
                     result = std::numeric_limits<float>::infinity();
                     result = sfpi::copysgn(result, in0);
                 }
                 v_endif;
             }
-            v_elseif(in0 == in1) { result = 1.0f; }
+            v_elseif(compat::fp_eq(in0, in1)) { result = 1.0f; }
             v_endif;
 
             if constexpr (!is_fp32_dest_acc_en) {

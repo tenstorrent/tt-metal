@@ -14,6 +14,7 @@
 #include "cmath_common.h"
 #include "llk_math_eltwise_unary_sfpu_init.h"
 #include "sfpi.h"
+#include "sfpu/ckernel_sfpu_compat.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -53,7 +54,7 @@ sfpi_inline sfpi::vFloat _sfpu_rsqrt_body_(const sfpi::vFloat x) {
     v_else { y = sfpi::as<sfpi::vFloat>(infinity_minus_x_bits); }
     v_endif;
 
-    v_if(x < 0.0f) { y = std::numeric_limits<float>::quiet_NaN(); }
+    v_if(compat::fp_lt(x, 0.0f)) { y = std::numeric_limits<float>::quiet_NaN(); }
     v_endif;
 
     return y;

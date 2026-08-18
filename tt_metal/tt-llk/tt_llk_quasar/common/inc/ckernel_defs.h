@@ -61,6 +61,24 @@ enum class DstRoundingMode : std::uint8_t
     NearestEven = 1, // IEEE 754 round-to-nearest-even, applied in software before the store
 };
 
+// Shared SFPU activation headers use these operation selectors as compile-time
+// parameters.  They describe kernel behavior and are not ISA-specific.
+enum class ActivationType
+{
+    Celu        = 0,
+    Elu         = 1,
+    Gelu        = 2,
+    Hardtanh    = 3,
+    Hardsigmoid = 4,
+};
+
+enum class RoundingMode : std::uint8_t
+{
+    None  = 0,
+    Trunc = 1,
+    Floor = 2,
+};
+
 enum class BinaryOp : std::uint8_t
 {
     ADD,
@@ -76,6 +94,20 @@ enum class BinaryOp : std::uint8_t
     QUANT,
     REQUANT,
     DEQUANT,
+    // SFPI parity operations. Keep the pre-existing Quasar values above stable;
+    // these selectors are consumed by the shared test/LLK dispatch only.
+    POW,
+    FMOD,
+    REMAINDER,
+    DIV_INT32,
+    DIV_INT32_FLOOR,
+    MASK,
+    ATAN2,
+    ISCLOSE,
+    LOGSIGMOID,
+    REMAINDER_INT32,
+    REMAINDER_UINT32,
+    FMOD_INT32,
 };
 
 // For instructions that address lower/upper 16 bits of a register
@@ -101,3 +133,10 @@ constexpr std::uint32_t DEST_NUM_TILES_FP16_HALF = DEST_NUM_TILES_FP16 / 2;
 static_assert((DEST_NUM_TILES_FP16 & (DEST_NUM_TILES_FP16 - 1)) == 0);
 
 } // namespace ckernel
+
+// Source-compatible spellings for the reciprocal implementation exported by
+// Quasar.  Object-like aliases preserve explicit template arguments, e.g.
+// sfpu_reciprocal_iter<4>(x) -> _sfpu_reciprocal_<4>(x).
+#ifndef sfpu_reciprocal_iter
+#define sfpu_reciprocal_iter _sfpu_reciprocal_
+#endif

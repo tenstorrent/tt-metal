@@ -60,7 +60,9 @@ class DataFormat(Enum):
     Bfp2_b = DataFormatInfo("Bfp2_b", 1)  # WH/BH specific
     Float32 = DataFormatInfo("Float32", 4)
     Int32 = DataFormatInfo("Int32", 4)
-    Tf32 = DataFormatInfo("Tf32", 3)
+    # Tensix stores E8M10 TF32 datums in 32-bit L1 containers with the low
+    # 13 mantissa bits cleared.
+    Tf32 = DataFormatInfo("Tf32", 4)
     UInt32 = DataFormatInfo("UInt32", 4)  # WH/BH specific
     Int16 = DataFormatInfo("Int16", 2)  # QSR specific
     UInt16 = DataFormatInfo("UInt16", 2)  # WH/BH specific
@@ -120,7 +122,12 @@ class DataFormat(Enum):
 
     def is_32_bit(self) -> bool:
         """Checks if the data format is a 32-bit type."""
-        return self in {DataFormat.Float32, DataFormat.Int32, DataFormat.UInt32}
+        return self in {
+            DataFormat.Float32,
+            DataFormat.Tf32,
+            DataFormat.Int32,
+            DataFormat.UInt32,
+        }
 
     def is_exponent_A(self) -> bool:
         """Checks if the data format is an exponent A format."""

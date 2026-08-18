@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #include "sfpi.h"
+#include "sfpu/ckernel_sfpu_compat.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -56,7 +57,7 @@ sfpi_inline void _calculate_log_body_(const std::uint32_t log_base_scale_factor,
     ////////////////////////////
     // Base case when input is 0. ln(0) = -inf
     ////////////////////////////
-    v_if(in == 0.0F) {  // Reload for register pressure
+    v_if(compat::fp_eq(in, 0.0F)) {  // Reload for register pressure
         result = -std::numeric_limits<float>::infinity();
     }
     v_endif;
@@ -80,7 +81,7 @@ sfpi_inline sfpi::vFloat _calculate_log_body_no_init_(sfpi::vFloat base) {
     sfpi::vFloat log_result = expf * vConstLn2 + series_result;  // exp correction: ln(1+x) + exp*ln(2)
 
     // Base case when input is 0. ln(0) = -inf
-    v_if(base == 0.0f) { log_result = -std::numeric_limits<float>::infinity(); }
+    v_if(compat::fp_eq(base, 0.0f)) { log_result = -std::numeric_limits<float>::infinity(); }
     v_endif;
 
     return log_result;

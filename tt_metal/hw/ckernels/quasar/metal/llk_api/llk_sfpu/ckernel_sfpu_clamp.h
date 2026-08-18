@@ -11,6 +11,7 @@
 #include "cmath_common.h"
 #include "llk_math_eltwise_unary_sfpu_init.h"
 #include "sfpi.h"
+#include "sfpu/ckernel_sfpu_compat.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -36,12 +37,8 @@ inline void calculate_clamp(std::uint32_t min_val, std::uint32_t max_val) {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat val = sfpi::dst_reg[0];
 
-        v_if (val < min_bound) {
-            val = min_bound;
-        }
-        v_elseif (val >= max_bound) {
-            val = max_bound;
-        }
+        v_if(compat::fp_lt(val, min_bound)) { val = min_bound; }
+        v_elseif(compat::fp_ge(val, max_bound)) { val = max_bound; }
         v_endif;
 
         sfpi::dst_reg[0] = val;

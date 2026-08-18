@@ -47,6 +47,8 @@ from helpers.test_variant_parameters import (
     IMPLIED_MATH_FORMAT,
     LOOP_FACTOR,
     NUM_FACES,
+    NUM_FACES_C_DIM,
+    NUM_FACES_R_DIM,
     PERF_RUN_TYPE,
     SFPU_BINARY_OP,
     SFPU_DST_ROUNDING_MODE,
@@ -74,6 +76,12 @@ _CPP_SOURCE = "sources/quasar/eltwise_binary_sfpu_quasar_test.cpp"
 # binary SFPU family
 _TILE_INDEX_VARIANTS = [(0, 1, 0), (2, 3, 0)]
 DEFAULT_SFPU_BINARY_TILE_INDICES = _TILE_INDEX_VARIANTS[0]
+
+
+def _quantize_tf32(tensor):
+    """Mirror Quasar's E8M10 truncation in its 32-bit L1 container."""
+    fp32 = tensor.to(torch.float32).contiguous()
+    return torch.bitwise_and(fp32.view(torch.int32), -8192).view(torch.float32)
 
 
 def _stage_binary_operands(op0_flat, op1_flat, tile_indices, dtype):
@@ -121,6 +129,7 @@ def _run_sfpu_binary_llk_golden(
     is_perf=False,
     perf_report=None,
     dst_rounding_mode=DstRoundingMode.Default,
+    unpack_to_dest_override=None,
 ):
     """Shared driver for the unpack-to-dest, LLK-golden binary SFPU ops.
 
@@ -138,25 +147,41 @@ def _run_sfpu_binary_llk_golden(
     )
 
     generate_golden = get_golden_generator(BinarySFPUGolden)
+    golden_src = (
+        _quantize_tf32(src_A) if formats.input_format == DataFormat.Tf32 else src_A
+    )
     golden_full = generate_golden(
         mathop,
-        src_A,
+        golden_src,
         src0_idx,
         src1_idx,
         dst_idx,
         32,
         input_dimensions,
         formats.input_format,
+        input_format=formats.input_format,
     ).flatten()
     dst_start = dst_idx * MAX_TILE_ELEMENTS
     torch_format_out = format_dict[formats.output_format]
     golden_tensor = golden_full[dst_start : dst_start + MAX_TILE_ELEMENTS].to(
         torch_format_out
     )
+    if formats.output_format.is_mx_format():
+        # The SFPU golden models values in Dest. Model the subsequent packer
+        # conversion as well: narrow MX outputs share one scale per 32 values,
+        # which matters for zeros/NaNs and mixed-magnitude results.
+        golden_tensor = quantize_mx_stimuli(
+            golden_tensor, formats.output_format, num_faces
+        )
+    elif formats.output_format == DataFormat.Tf32:
+        golden_tensor = _quantize_tf32(golden_tensor)
 
     if is_perf and perf_report is None:
         raise ValueError("perf_report must be provided when is_perf=True")
 
+    unpack_to_dest = (
+        unpack_to_dest_override if unpack_to_dest_override is not None else True
+    )
     test_config_kwargs = {
         "test_name": _CPP_SOURCE,
         "formats": formats,
@@ -164,7 +189,9 @@ def _run_sfpu_binary_llk_golden(
             SFPU_BINARY_OP(binary_op),
             IMPLIED_MATH_FORMAT(implied_math_format),
             DATA_COPY_TYPE(DataCopyType.A2D),
-            UNPACKER_ENGINE_SEL(UnpackerEngine.UnpDest),
+            UNPACKER_ENGINE_SEL(
+                UnpackerEngine.UnpDest if unpack_to_dest else UnpackerEngine.UnpA
+            ),
             DEST_SYNC(),
             # 2's-complement datapath (default); only the quant family reads this.
             SIGN_MAGNITUDE_FORMAT(False),
@@ -177,6 +204,8 @@ def _run_sfpu_binary_llk_golden(
         "runtimes": [
             TILE_COUNT(tile_cnt_A),
             NUM_FACES(num_faces),
+            NUM_FACES_R_DIM(2),
+            NUM_FACES_C_DIM(2),
             TEST_FACE_DIMS(),
             DEST_INDEX(0),
             SFPU_TILE_INDICES(src0_idx, src1_idx, dst_idx),
@@ -195,7 +224,7 @@ def _run_sfpu_binary_llk_golden(
             num_faces=num_faces,
             twos_complement=formats.input_format.is_integer(),
         ),
-        "unpack_to_dest": True,
+        "unpack_to_dest": unpack_to_dest,
         "dest_acc": dest_acc,
     }
 
@@ -655,6 +684,8 @@ def _run_max_min(
         "runtimes": [
             TILE_COUNT(tile_cnt),
             NUM_FACES(num_faces),
+            NUM_FACES_R_DIM(2),
+            NUM_FACES_C_DIM(2),
             TEST_FACE_DIMS(),
             DEST_INDEX(0),
             SFPU_TILE_INDICES(src0_idx, src1_idx, dst_idx),
@@ -903,6 +934,8 @@ def _run_quant(binary_op, tile_indices, sign_magnitude=False):
         runtimes=[
             TILE_COUNT(tile_cnt),
             NUM_FACES(num_faces),
+            NUM_FACES_R_DIM(2),
+            NUM_FACES_C_DIM(2),
             TEST_FACE_DIMS(),
             DEST_INDEX(0),
             SFPU_TILE_INDICES(src0_idx, src1_idx, dst_idx),
@@ -958,3 +991,212 @@ def test_eltwise_binary_sfpu_quant_quasar(binary_op, sign_magnitude, tile_indice
     (dequant). Exercised on both the 2's-complement and SIGN_MAGNITUDE_FORMAT
     (SMAG32) datapaths."""
     _run_quant(binary_op, tile_indices, sign_magnitude)
+
+
+# ===========================================================================
+# Blackhole-SFPI parity ports — exact Quasar llk_sfpu headers.
+#
+# Fp8R/Fp8P, MxFp6R/MxFp6P, and Quasar's MxFp4 2x modes are documented by the
+# Tensix Formats page but are not representable by the Python DataFormat enum.
+# The matrix below is therefore the complete set the current LLK model can
+# encode, including all exposed MX integer and floating-point formats.
+#
+# These kernels retain the Blackhole contract of full 32x32 operand tiles and
+# 32 SFPI rows between staged Dest tiles, so reduced tile shapes are not a
+# relevant/supported parameter for this multi-input group.  Unary ports cover
+# the complete TensorShape axis independently.
+# ===========================================================================
+_SFPI_PARITY_BINARY_FLOAT_FORMATS = tuple(
+    InputOutputFormat(data_format, data_format)
+    for data_format in (
+        DataFormat.Float16,
+        DataFormat.Float16_b,
+        DataFormat.Float32,
+        DataFormat.Tf32,
+        DataFormat.MxFp8R,
+        DataFormat.MxFp8P,
+        DataFormat.MxFp4,
+        DataFormat.MxInt8,
+        DataFormat.MxInt4,
+        DataFormat.MxInt2,
+    )
+)
+
+_SFPI_PARITY_BINARY_FLOAT_OPS = (
+    ("POW", MathOperation.SfpuElwpow),
+    ("FMOD", MathOperation.SfpuBinaryFmod),
+    ("REMAINDER", MathOperation.SfpuBinaryRemainder),
+    ("ATAN2", MathOperation.SfpuAtan2),
+    ("ISCLOSE", MathOperation.SfpuIsclose),
+    ("LOGSIGMOID", MathOperation.SfpuLogsigmoid),
+    ("MASK", MathOperation.SfpuMask),
+)
+
+
+def _canonical_parity_dest_acc(data_format):
+    if data_format in (DataFormat.Float32, DataFormat.Tf32):
+        return DestAccumulation.Yes
+    return DestAccumulation.No
+
+
+def _parity_binary_float_cases():
+    """Orthogonal format/control sweep without a redundant Cartesian product."""
+    cases = []
+    for binary_op, mathop in _SFPI_PARITY_BINARY_FLOAT_OPS:
+        for formats in _SFPI_PARITY_BINARY_FLOAT_FORMATS:
+            cases.append(
+                (
+                    binary_op,
+                    mathop,
+                    formats,
+                    _canonical_parity_dest_acc(formats.input_format),
+                    ImpliedMathFormat.Yes,
+                    runtime(DEFAULT_SFPU_BINARY_TILE_INDICES),
+                )
+            )
+
+        # Independent Dest-width, implied-math, and operand/result-alias axes.
+        bf16 = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
+        cases.extend(
+            (
+                binary_op,
+                mathop,
+                bf16,
+                dest_acc,
+                implied,
+                runtime(tile_indices),
+            )
+            for dest_acc, implied, tile_indices in (
+                (DestAccumulation.No, ImpliedMathFormat.No, (0, 1, 0)),
+                (DestAccumulation.Yes, ImpliedMathFormat.Yes, (0, 1, 0)),
+                (DestAccumulation.No, ImpliedMathFormat.Yes, (2, 3, 0)),
+            )
+            if not (mathop == MathOperation.SfpuMask and tile_indices != (0, 1, 0))
+        )
+    return cases
+
+
+def _repeat_pattern(values, count, dtype):
+    pattern = torch.tensor(values, dtype=dtype)
+    return pattern.repeat((count + len(values) - 1) // len(values))[:count]
+
+
+def _prepare_parity_float_stimuli(
+    formats, input_dimensions, src0_idx, src1_idx, mathop
+):
+    dtype = format_dict[formats.input_format]
+    count = MAX_TILE_ELEMENTS
+
+    if mathop == MathOperation.SfpuElwpow:
+        if formats.input_format in (DataFormat.MxFp4, DataFormat.MxInt4):
+            # Keep every block finite and within MXFP4's shared-scale dynamic
+            # range. A quantized zero raised to a negative exponent becomes
+            # infinity, which then dominates the block output scale and erases
+            # otherwise valid lanes.
+            lhs = _repeat_pattern([2.0, -2.0], count, dtype)
+            rhs = _repeat_pattern([2.0, 3.0], count, dtype)
+        else:
+            lhs = _repeat_pattern(
+                [0.0, 0.25, 0.5, 1.0, 2.0, 4.0, -2.0, -3.0], count, dtype
+            )
+            rhs = _repeat_pattern(
+                [0.0, -2.0, 0.5, 1.0, 2.0, 3.0, 2.0, 3.0], count, dtype
+            )
+    elif mathop in (
+        MathOperation.SfpuBinaryFmod,
+        MathOperation.SfpuBinaryRemainder,
+    ):
+        lhs = _repeat_pattern([-9.5, -5.0, -1.0, 0.0, 1.0, 5.0, 9.5], count, dtype)
+        rhs = _repeat_pattern([-4.0, -2.5, -1.0, 1.0, 2.5, 4.0], count, dtype)
+    elif mathop == MathOperation.SfpuAtan2:
+        # Cover every non-axis quadrant. Signed-zero atan2 behavior depends on
+        # sign-bit predicates rather than numeric vFloat ordering and is not
+        # part of this arithmetic-kernel parity contract.
+        lhs = _repeat_pattern([-5.0, -1.0, 1.0, 5.0], count, dtype)
+        rhs = _repeat_pattern([-5.0, -1.0, 1.0, 5.0, 0.5], count, dtype)
+    elif mathop == MathOperation.SfpuIsclose:
+        lhs = torch.linspace(-10.0, 10.0, count, dtype=torch.float32).to(dtype)
+        rhs = lhs.clone()
+        rhs[1::3] += 1.0
+        rhs[2::3] += 1.0e-6
+    elif mathop == MathOperation.SfpuLogsigmoid:
+        if formats.input_format in (DataFormat.MxFp8R, DataFormat.MxFp8P):
+            # Avoid mixing the near-zero positive tail with large negative
+            # outputs under one narrow shared block scale. Native formats and
+            # MXFP4 still cover the x>4 tail below.
+            lhs_values = [-8.0, -4.0, -2.0, -1.0, 0.0]
+        else:
+            lhs_values = [-12.0, -8.0, -4.0, -1.0, 0.0, 1.0, 4.0, 8.0, 12.0]
+        lhs = _repeat_pattern(lhs_values, count, dtype)
+        # The production kernel contract supplies exp(-x) in operand 1.  This
+        # explicitly exercises the x>4 tail that the shared BH test skipped.
+        rhs = torch.exp(-lhs.to(torch.float32)).to(dtype)
+    else:
+        lhs = torch.linspace(-4.0, 4.0, count, dtype=torch.float32).to(dtype)
+        rhs = _repeat_pattern([0.0, 1.0, -1.0, 0.5], count, dtype)
+
+    staged, tile_count = _stage_binary_operands(
+        lhs, rhs, (src0_idx, src1_idx, 0), dtype
+    )
+    return staged, tile_count, torch.zeros_like(staged)
+
+
+@pytest.mark.quasar
+@parametrize(parity_case=_parity_binary_float_cases())
+def test_eltwise_binary_sfpi_parity_float_quasar(parity_case):
+    """Exercise the seven float/mask binary headers newly ported from BH."""
+    binary_op, mathop, formats, dest_acc, implied_math, tile_indices = parity_case[0]
+    _run_sfpu_binary_llk_golden(
+        formats,
+        dest_acc,
+        implied_math,
+        tile_indices,
+        mathop,
+        binary_op,
+        prepare_stimuli=_prepare_parity_float_stimuli,
+        # Tf32 and the narrow/MX storage formats are converted through the FPU
+        # datacopy path before SFPU. Only native Float32 can be unpacked
+        # directly into a 32-bit destination register.
+        unpack_to_dest_override=formats.input_format == DataFormat.Float32,
+    )
+
+
+_SFPI_PARITY_INT_DIV_OPS = (
+    ("DIV_INT32", MathOperation.SfpuDivInt32),
+    ("DIV_INT32_FLOOR", MathOperation.SfpuDivInt32Floor),
+)
+
+
+def _prepare_parity_int_div_stimuli(
+    formats, input_dimensions, src0_idx, src1_idx, mathop
+):
+    dtype = torch.int32
+    lhs = _repeat_pattern(
+        [-2_000_000, -101, -17, -1, 0, 1, 17, 101, 2_000_000],
+        MAX_TILE_ELEMENTS,
+        dtype,
+    )
+    rhs = _repeat_pattern([-101, -9, -2, 1, 2, 9, 101], MAX_TILE_ELEMENTS, dtype)
+    staged, tile_count = _stage_binary_operands(
+        lhs, rhs, (src0_idx, src1_idx, 0), dtype
+    )
+    return staged, tile_count, torch.zeros_like(staged)
+
+
+@pytest.mark.quasar
+@pytest.mark.parametrize(
+    "binary_op,mathop", _SFPI_PARITY_INT_DIV_OPS, ids=lambda value: str(value)
+)
+@pytest.mark.parametrize("tile_indices", _TILE_INDEX_VARIANTS)
+def test_eltwise_binary_sfpi_parity_int_div_quasar(binary_op, mathop, tile_indices):
+    """Signed-divisor coverage distinguishes truncating and floor division."""
+    formats = InputOutputFormat(DataFormat.Int32, DataFormat.Int32)
+    _run_sfpu_binary_llk_golden(
+        formats,
+        DestAccumulation.Yes,
+        ImpliedMathFormat.No,
+        tile_indices,
+        mathop,
+        binary_op,
+        prepare_stimuli=_prepare_parity_int_div_stimuli,
+    )
