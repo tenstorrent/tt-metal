@@ -14,9 +14,6 @@ void kernel_main() {
     uint64_t noc_remote_sem_addr = get_noc_addr(waiter_core_x, waiter_core_y, sem_addr);
     noc_semaphore_inc(noc_remote_sem_addr, 1);
 #ifndef ARCH_QUASAR
-    // Skipped on Quasar: noc_async_atomic_barrier() waits on an atomic ack that never arrives there
-    // (observed as a permanent NABW stall). The increment itself still lands, and the waiter polls
-    // until it has seen every one.
     noc_async_atomic_barrier();
 #endif
 }
