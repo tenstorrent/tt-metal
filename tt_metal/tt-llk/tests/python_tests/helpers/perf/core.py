@@ -604,6 +604,12 @@ class PerfConfig(TestConfig):
     TEST_COUNTER: ClassVar[int] = 0
     COUNTER_REPORT: ClassVar[Any] = None  # Set by counter_report fixture
 
+    # Session-wide run-type selection, set from --perf-run-types. None means
+    # "whatever the test asked for". Each run type is a separate ELF and a
+    # separate device run, so narrowing this is what makes a gate-sized sweep
+    # possible: cost scales with variants x selected run types.
+    RUN_TYPE_FILTER: ClassVar[list[PerfRunType] | None] = None
+
     def __init__(
         self,
         test_name: str,
@@ -626,6 +632,12 @@ class PerfConfig(TestConfig):
         self.passed_templates = templates.copy()
         self.passed_runtimes = runtimes.copy()
         self.current_run_type = None
+
+        # --perf-run-types narrows what the test declared. Applied here so every
+        # perf test honours it without touching the per-module run-type lists,
+        # and so both the compile and the measure loop in run() shrink together.
+        if PerfConfig.RUN_TYPE_FILTER is not None:
+            run_types = [r for r in run_types if r in PerfConfig.RUN_TYPE_FILTER]
 
         # TODO Add check here for all selected runs, to see if the profiler/counter supports them
         self.run_configs = [
@@ -749,6 +761,11 @@ class PerfConfig(TestConfig):
         results = []
         counter_results_list = []
         code_sizes = {}
+
+        # --perf-run-types kept nothing this test declares: skip rather than
+        # contribute an empty row to the report.
+        if not self.run_configs:
+            pytest.skip("no run type left after --perf-run-types filtering")
 
         if TestConfig.BUILD_MODE in [BuildMode.PRODUCE, BuildMode.DEFAULT]:
             for templates, runtimes, run_type in self.run_configs:

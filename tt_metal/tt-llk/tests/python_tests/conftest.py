@@ -42,6 +42,7 @@ from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.device import LLKAssertException
 from helpers.exalens_server import ExalensServer
 from helpers.format_config import InputOutputFormat
+from helpers.llk_params import PerfRunType
 from helpers.logger import configure_logger, logger
 from helpers.perf.core import PerfConfig, PerfReport, combine_perf_reports
 from helpers.test_config import BuildMode, TestConfig, process_coverage_run_artefacts
@@ -213,6 +214,18 @@ def pytest_addoption(parser):
     )
 
     parser.addoption(
+        "--perf-run-types",
+        action="store",
+        default=None,
+        metavar="TYPES",
+        help="Comma-separated PerfRunType names to keep, e.g. "
+        "'L1_TO_L1' or 'UNPACK_ISOLATE,MATH_ISOLATE,PACK_ISOLATE'. Narrows what "
+        "every perf test measures; each run type is a separate ELF and device "
+        "run, so this is the main cost knob for a time-budgeted perf gate. "
+        "Default: whatever each test declares.",
+    )
+
+    parser.addoption(
         "--record-test-order",
         action="store",
         nargs="?",
@@ -314,6 +327,26 @@ _RECORD_TEST_ORDER: bool = False
 _UNIFIED_ORDER_FILE: str = "DEFAULT"
 
 
+def _parse_perf_run_types(value):
+    """--perf-run-types 'A,B' -> [PerfRunType.A, PerfRunType.B]; None -> None.
+
+    Fails loudly on an unknown name: a typo must not silently widen the sweep
+    back to every run type, which is exactly the cost the flag exists to bound.
+    """
+    if value is None:
+        return None
+    names = [n.strip().upper() for n in value.split(",") if n.strip()]
+    if not names:
+        raise pytest.UsageError("--perf-run-types was given no run type name")
+    try:
+        return [PerfRunType[n] for n in names]
+    except KeyError as e:
+        valid = ", ".join(r.name for r in PerfRunType)
+        raise pytest.UsageError(
+            f"--perf-run-types: unknown run type {e.args[0]!r} (valid: {valid})"
+        ) from e
+
+
 def pytest_configure(config):
     # Configure loguru log level from CLI option or environment variable.
     log_level = config.getoption("--logging-level", default=None)
@@ -368,6 +401,10 @@ def pytest_configure(config):
         config.getoption("--detailed-artefacts", default=False),
         config.getoption("--no-debug-symbols", default=False),
         config.getoption("--speed-of-light", default=False),
+    )
+
+    PerfConfig.RUN_TYPE_FILTER = _parse_perf_run_types(
+        config.getoption("--perf-run-types", default=None)
     )
 
     worker_id = getattr(config, "workerinput", {}).get("workerid", "master")

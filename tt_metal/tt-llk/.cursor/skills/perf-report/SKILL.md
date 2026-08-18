@@ -72,6 +72,14 @@ Rules:
 - SFPU sweep modules need `--mode perf`; the selector defaults to `accuracy`
   and deselects the perf sweep.
 - Do not pass `--coverage`. Instrumentation invalidates perf numbers.
+- `--perf-run-types` narrows which `PerfRunType`s are measured, e.g.
+  `--perf-run-types L1_TO_L1` or
+  `--perf-run-types UNPACK_ISOLATE,MATH_ISOLATE,PACK_ISOLATE`. Each run type
+  is a separate ELF and a separate device run, so this is the main cost knob
+  for a time-budgeted sweep. A narrowed report is valid but partial: the
+  `mean(...)` columns of the run types you dropped are absent, so say which
+  selection produced the report and never compare it against a full one
+  per-column. Leave it off for a report meant for analysis.
 - Avoid `-x` on a report run. It aborts mid-sweep and the combined CSV is
   silently partial. Use it only while debugging.
 - Never hand-edit a CSV. Fix the test or rerun.
