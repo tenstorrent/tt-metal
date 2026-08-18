@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "distributed.hpp"
+#include "hostdev/remote_dfb_config_layout.h"
 #include "mesh_buffer.hpp"
 #include "mesh_device.hpp"
 
@@ -93,8 +94,7 @@ struct ConfigPageLayout {
 };
 
 ConfigPageLayout compute_config_page_layout(uint32_t max_num_receivers_per_sender, uint32_t l1_alignment) {
-    constexpr uint32_t num_header_words = 8;
-    const uint32_t noc_xy_offset = num_header_words * sizeof(uint32_t);
+    const uint32_t noc_xy_offset = cross_node_dfb_noc_xy_byte_offset();
     const uint32_t counters_offset = tt::align(
         noc_xy_offset + 2 * max_num_receivers_per_sender * static_cast<uint32_t>(sizeof(uint32_t)), l1_alignment);
     const uint32_t page_size = counters_offset + 2 * max_num_receivers_per_sender * l1_alignment;
@@ -172,7 +172,7 @@ void CrossNodeDFB::allocate_config_buffer(BufferType config_buffer_type) {
     config_buffer_ = distributed::AnyBuffer::create(config);
 }
 
-void CrossNodeDFB::rebuild_config_pages() {
+void CrossNodeDFB::build_config_pages() {
     TT_FATAL(config_buffer_.get_buffer() != nullptr, "CrossNodeDFB config buffer must exist before building pages");
     TT_FATAL(data_address_ != 0, "CrossNodeDFB data address must be set before building config pages");
 
@@ -204,7 +204,7 @@ void CrossNodeDFB::rebuild_config_pages() {
         sender_page[si++] = num_recv;        // num_receivers
         sender_page[si++] = data_base_addr;  // fifo_start_addr
         sender_page[si++] = ring_size;       // fifo_size
-        sender_page[si++] = data_base_addr;  // word[4]: reserved checkpoint
+        sender_page[si++] = data_base_addr;  // word[4]: reserved fifo_ptr_checkpoint (CrossNode ctor ignores)
         sender_page[si++] = layout.noc_xy_offset;
         sender_page[si++] = layout.counters_offset;
         sender_page[si++] = layout.counters_offset;
@@ -223,7 +223,7 @@ void CrossNodeDFB::rebuild_config_pages() {
             receiver_page[rci++] = num_recv;
             receiver_page[rci++] = data_base_addr;
             receiver_page[rci++] = ring_size;
-            receiver_page[rci++] = data_base_addr;
+            receiver_page[rci++] = data_base_addr;  // word[4]: reserved fifo_ptr_checkpoint (CrossNode ctor ignores)
             receiver_page[rci++] = layout.noc_xy_offset;
             receiver_page[rci++] = layout.counters_offset + 2 * ri * l1_alignment;
             receiver_page[rci++] = layout.counters_offset + 2 * ri * l1_alignment + l1_alignment;
@@ -255,7 +255,7 @@ void CrossNodeDFB::setup_buffers(BufferType buffer_type) {
     owned_dfb_buffer_ = distributed::AnyBuffer::create(data_shard_cfg);
     data_address_ = static_cast<uint32_t>(owned_dfb_buffer_.get_buffer()->address());
     allocate_config_buffer(buffer_type);
-    rebuild_config_pages();
+    build_config_pages();
 }
 
 void CrossNodeDFB::validate_data_buffer(Buffer& data_buffer) const {
@@ -306,7 +306,7 @@ void CrossNodeDFB::setup_buffers_with_borrowed_data(Buffer& data_buffer) {
     validate_data_buffer(data_buffer);
     set_data_address(static_cast<uint32_t>(data_buffer.address()));
     allocate_config_buffer(data_buffer.buffer_type());
-    rebuild_config_pages();
+    build_config_pages();
 }
 
 void CrossNodeDFB::retarget_data_buffer(Buffer& data_buffer) {
@@ -314,7 +314,7 @@ void CrossNodeDFB::retarget_data_buffer(Buffer& data_buffer) {
     TT_FATAL(config_buffer_.get_buffer() != nullptr, "CrossNodeDFB config buffer must already exist for retarget");
     set_data_address(static_cast<uint32_t>(data_buffer.address()));
     // Host-only rebuild; device L1 is unchanged until the next program launch.
-    rebuild_config_pages();
+    build_config_pages();
 }
 
 // Accessors -------------------------------------------------------------------
@@ -394,6 +394,7 @@ uint32_t CreateCrossNodeRelayDataflowBuffer(
 
     auto relay_config = config;
     relay_config.borrows_memory = true;
+    relay_config.is_relay = true;
     const uint32_t relay_dfb_id = dfb::CreateDataflowBuffer(program, receiver_cores, relay_config);
     program.impl().register_cross_node_relay_dfb(receiver_cores, remote_dfb_id, relay_dfb_id);
     return relay_dfb_id;

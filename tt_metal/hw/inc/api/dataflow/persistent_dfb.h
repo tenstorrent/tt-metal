@@ -8,11 +8,13 @@
 #ifndef ARCH_QUASAR
 
 #include <cstdint>
-#include "internal/cross_node_dfb_init.h"
+#include "internal/persistent_dfb_init.h"
 #include "internal/circular_buffer_interface.h"
 #include "api/alignment.h"
 #include "api/debug/assert.h"
 #include "api/debug/waypoint.h"
+#include "hostdev/remote_dfb_config_layout.h"
+#include "hostdev/remote_dfb_constants.h"
 #include "internal/risc_attribs.h"
 
 #if defined(KERNEL_BUILD) && !defined(COMPILE_FOR_TRISC)
@@ -38,122 +40,189 @@ static_assert(
 
 namespace experimental {
 
-// CrossNodeDFB: device-side kernel class for a globally-allocated ring FIFO shared across
-// kernels within a single program (WH/BH only).
-// Not persistent across programs: firmware resets fifo ptrs and credit counters on every
-// program init. Cross-program persistence is GlobalDFB.
+// PersistentDFB: device-side kernel class for a cross-program durable remote DFB (WH/BH).
+// Config pages + credits persist across programs; ctor loads word[4]
+// (PERSISTENT_DFB_CFG_FIFO_PTR_CHECKPOINT — durable sender wr / receiver rd cursor)
+// and may resize to this launch's dense entry_size. commit() / dtor store ptr back
+// when the epoch (word[2] fifo_start, word[5] applied_entry_size) matches the iface.
 //
-// entry_size is fixed at Create for the life of a CrossNodeDFB. Mid-flight entry_size
-// reconfiguration (remote CB / prefetcher style) is intentionally omitted here — CrossNode
-// is reset-on-init and same-program only. Add set_*_entry_size later if a same-program
-// multi-phase op needs it; prefer that path on GlobalDFB where the ring outlives programs.
+// Same push/pop/write API as CrossNodeDFB. Mid-flight page-size changes use
+// set_entry_size / set_receiver_entry_size at author-defined
+// safe points; unilateral Attach(E2) while a peer is still live on E1 is illegal.
 //
 // Sync counters (pages_sent / pages_acked) are in L1_ALIGNMENT-byte units.
 //
-// Each receiver owns a private ring, so the sender needs an independent write position per
-// receiver. No cursor state is stored anywhere: a receiver's write offset is derived from
-// its local entries_sent counter (sent % ring_entries), which dispatch resets to zero on
-// every launch.
+// Each receiver owns a private ring, so the sender needs an independent write position
+// per receiver. No cursor state is stored for that: a receiver's write offset is derived
+// from its local entries_sent counter (sent % ring), which persists across programs
+// (unlike CrossNode, which zeros credits every launch).
 //
 // Writes are contiguous: a reserve/write/push of n entries must fit from the current
-// write position to fifo_limit without straddling the wrap (same rule as local CBs). The
-// derived position wraps only when the credited entries reach a multiple of the ring
-// depth. If fewer than n slots remain before the limit, issue a smaller batch (or drain
-// to wrap), then continue.
+// write position to fifo_limit without straddling the wrap (same rule as local CBs).
 //
 // ═══════════════════════════════════════════════════════════════════════
 //  SENDER FLOWS
 // ═══════════════════════════════════════════════════════════════════════
 //
 //  Flow A — Broadcast (same data to all receivers):
-//    reserve_back(n);                         // wait for space on all receivers
-//    write_broadcast(src, n);                 // post NOC writes to all receivers
-//    flush_writes();                          // flush posted writes before credit
-//    push_back(n);                            // credit all receivers (advances positions)
+//    reserve_back(n);
+//    write_broadcast(src, n);
+//    flush_writes();
+//    push_back(n);
 //
 //  Flow B — Receiver-contiguous / unique-per-receiver:
 //    reserve_back(n);
-//    write_to_receiver(0, src_a, n);          // receiver 0 gets tensor shard A
-//    write_to_receiver(1, src_b, n);          // receiver 1 gets tensor shard B
-//    ...
+//    write_to_receiver(0, src_a, n);
+//    write_to_receiver(1, src_b, n);
 //    flush_writes();
-//    push_back(n);                            // one collective credit to all receivers
+//    push_back(n);
 //
-//  Flow C — Per-receiver credit (round-robin, uneven shards):
-//    Use reserve_back_for_receiver(r, n) to check only receiver r's space; reserve_back(n)
-//    would poll ALL receivers and block on the slowest even when receiver r is ready.
+//  Flow C — Per-receiver credit:
 //    for r in 0..num_recv:
-//      reserve_back_for_receiver(r, n);         // polls only receiver r, no head-of-line block
-//      write_to_receiver(r, src, n);            // NOC write only to receiver r
+//      reserve_back_for_receiver(r, n);
+//      write_to_receiver(r, src, n);
 //      flush_writes();
-//      push_back_to_receiver(r, n);             // credit receiver r (advances its position)
+//      push_back_to_receiver(r, n);
 //
-//  Flow D — Interleaved scatter (prefetcher / write_strided):
-//    write_strided is a single call that handles ALL receivers simultaneously.
-//    Staging buffer layout: [recv0_chunk][recv1_chunk]...[recvN_chunk]
-//    Each chunk is written to the corresponding receiver's FIFO in one loop.
+//  Flow D — Interleaved scatter (write_strided):
 //    reserve_back(n);
-//    write_strided(src, num_rows, pages_per_row, page_size);  // all receivers, one call
+//    write_strided(src, num_rows, pages_per_row, page_size);
 //    flush_writes();
-//    push_back(n);                              // credit all receivers (advances positions)
+//    push_back(n);
+//
+//  Mid-flight resize (sender, coordinated with peers):
+//    // only at an author-defined safe point
+//    set_entry_size(E2);           // default: NOC credit fixup + barrier
+//    // then continue with E2-sized pushes, or signal host to Attach a new consumer
 //
 // ═══════════════════════════════════════════════════════════════════════
 //  RECEIVER FLOW
 // ═══════════════════════════════════════════════════════════════════════
 //
-//  Standard receiver (NCRISC/BRISC consumes data):
+//  Standard receiver (DM consumes data):
 //    wait_front(n);
-//    rd_ptr = get_read_ptr();
-//    // process data at rd_ptr ...
-//    pop_front(n);                            // advance rd_ptr + NOC-ack sender
+//    auto rd = get_read_ptr();  // CoreLocalMem at fifo front
+//    // process data at rd.get_address() / rd.get_unsafe_ptr() ...
+//    pop_front(n);
+//
+//  Mid-flight resize (receiver):
+//    set_receiver_entry_size(E2);  // use on receiver cores only
 //
 // ═══════════════════════════════════════════════════════════════════════
-//  RELAY DFB FLOW — bridging CrossNodeDFB to Compute
+//  RELAY DFB FLOW — bridging PersistentDFB to Compute
 // ═══════════════════════════════════════════════════════════════════════
 //
 //  Compute cannot issue NOC atomics. Data is bridged via a host-declared local
-//  DataflowBuffer that aliases the CrossNode ring. DM owns CrossNode credits;
+//  DataflowBuffer that aliases the Persistent ring. DM owns Persistent credits;
 //  TRISC consumes through the normal local DFB API.
 //
-//  Host writes the relay local DFB's device slot into the receiver interface.
+//  Host: AttachPersistentDFB(..., receivers) then CreatePersistentRelayDataflowBuffer.
 //  DM deliberately receives no relay binding token and must use bind_relay().
 //
 //  DM (receiver kernel):
-//    auto relay = cn_dfb.bind_relay();                 // constructs the real local DFB
+//    PersistentDFB pdfb(id);
+//    auto relay = pdfb.bind_relay();  // aligns DM's local iface to post-resize cursor
 //    while (has_more) {
-//        relay.reserve_back(n);                       // wait for local free space
-//        cn_dfb.wait_front(n);                        // wait for sender's data (pages_sent)
-//        relay.push_back(n);                          // publish via CB credits
-//        relay.wait_consumed(n);                      // wait for TRISC to free the local slots
-//        cn_dfb.pop_front(n);                         // advance DM rd_ptr + NOC-ack sender
+//        relay.reserve_back(n);       // wait for local free space
+//        pdfb.wait_front(n);          // wait for sender's data (pages_sent)
+//        relay.push_back(n);          // publish via CB credits
+//        relay.wait_consumed(n);      // wait for TRISC to free the local slots
+//        pdfb.pop_front(n);           // advance DM rd_ptr + NOC-ack sender
 //    }
 //
-//  Compute kernel (reads relay DFB, no CrossNodeDFB or NOC knowledge):
-//    DataflowBuffer relay(dfb::relay_name);           // normal generated binding token
+//  Compute kernel (reads relay DFB, no PersistentDFB or NOC knowledge):
+//    DataflowBuffer relay(RelayDFBBindingToken{relay_id, persistent_dfb_id});
+//    // or dfb::relay from kernel_bindings_generated.h — construction snaps the
+//    // borrowed iface to the durable checkpoint (O(1) launch-msg slot lookup)
 //    relay.wait_front(n);
 //    // consume ...
 //    relay.pop_front(n);
-class CrossNodeDFB {
+//
+class PersistentDFB {
 public:
-    FORCE_INLINE explicit CrossNodeDFB(uint8_t remote_dfb_id) {
+    FORCE_INLINE explicit PersistentDFB(uint8_t persistent_dfb_id) : persistent_dfb_id_(persistent_dfb_id) {
         const uint32_t launch_index = *GET_MAILBOX_ADDRESS_DEV(launch_msg_rd_ptr);
         const auto* launch_msg = GET_MAILBOX_ADDRESS_DEV(launch[launch_index]);
         const auto& kernel_config = launch_msg->kernel_config;
-        ASSERT(kernel_config.cross_node_dfb_offset != CROSS_NODE_DFB_OFFSET_NONE);
+        ASSERT(kernel_config.persistent_dfb_offset != PERSISTENT_DFB_OFFSET_NONE);
 
         const uint32_t kernel_config_base = kernel_config.kernel_config_base[PROGRAMMABLE_CORE_TYPE];
         volatile tt_l1_ptr uint32_t* region =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kernel_config_base + kernel_config.cross_node_dfb_offset);
-        ASSERT(remote_dfb_id < region[0]);
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kernel_config_base + kernel_config.persistent_dfb_offset);
+        ASSERT(persistent_dfb_id < region[0]);
 
         volatile tt_l1_ptr uint32_t* slot =
-            region + CROSS_NODE_DFB_REGION_HEADER_WORDS + remote_dfb_id * UINT32_WORDS_PER_CROSS_NODE_DFB_CONFIG;
-        setup_cross_node_dfb_interface(
+            region + PERSISTENT_DFB_REGION_HEADER_WORDS + persistent_dfb_id * UINT32_WORDS_PER_PERSISTENT_DFB_CONFIG;
+        setup_persistent_dfb_interface(
             interface_, /*config_page_addr=*/slot[0], /*entry_size=*/slot[1], /*relay_dfb_id=*/slot[2]);
+
+#if defined(KERNEL_BUILD) && !defined(COMPILE_FOR_TRISC)
+
+        volatile tt_l1_ptr uint32_t* l1_config =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(interface_.sender.config_ptr);
+        const bool is_sender = static_cast<bool>(l1_config[REMOTE_DFB_CFG_IS_SENDER]);
+        const uint32_t dense_entry_size = slot[1];
+        const uint8_t noc_id = noc_index;
+        if (is_sender) {
+            sync_sender_wr_ptr_from_credits();
+            resize_sender_interface<true>(dense_entry_size, noc_id);
+            l1_config[PERSISTENT_DFB_CFG_APPLIED_ENTRY_SIZE] = interface_.sender.fifo_page_size;
+            barrier_sender_credits();
+        } else {
+            resize_receiver_interface<true>(dense_entry_size, noc_id);
+            l1_config[PERSISTENT_DFB_CFG_APPLIED_ENTRY_SIZE] = interface_.receiver.fifo_page_size;
+        }
+#endif
     }
 
+    FORCE_INLINE ~PersistentDFB() { commit(); }
+
+    FORCE_INLINE void commit() {
+        volatile tt_l1_ptr uint32_t* l1_config =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(interface_.sender.config_ptr);
+        const bool is_sender = static_cast<bool>(l1_config[REMOTE_DFB_CFG_IS_SENDER]);
+        const uint32_t epoch_fifo_start = l1_config[REMOTE_DFB_CFG_FIFO_START];
+        const uint32_t epoch_entry_size = l1_config[PERSISTENT_DFB_CFG_APPLIED_ENTRY_SIZE];
+        if (is_sender) {
+            CrossNodeSenderDFBInterface& iface = interface_.sender;
+            if (iface.fifo_start_addr == epoch_fifo_start && iface.fifo_page_size == epoch_entry_size) {
+                l1_config[PERSISTENT_DFB_CFG_FIFO_PTR_CHECKPOINT] = iface.fifo_start_addr + derived_wr_offset(iface, 0);
+            }
+        } else {
+            CrossNodeReceiverDFBInterface& iface = interface_.receiver;
+            if (iface.fifo_start_addr == epoch_fifo_start && iface.fifo_page_size == epoch_entry_size) {
+                l1_config[PERSISTENT_DFB_CFG_FIFO_PTR_CHECKPOINT] = iface.fifo_rd_ptr;
+            }
+        }
+    }
+
+#if defined(KERNEL_BUILD) && !defined(COMPILE_FOR_TRISC)
+    // Coordinated sender resize. Credit fixup is mandatory: exposing a local-only
+    // option would let the local cursor diverge silently from live receivers.
+    FORCE_INLINE void set_entry_size(uint32_t entry_size) {
+        volatile tt_l1_ptr uint32_t* l1_config =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(interface_.sender.config_ptr);
+        ASSERT(static_cast<bool>(l1_config[REMOTE_DFB_CFG_IS_SENDER]));
+        const uint8_t noc_id = noc_index;
+        sync_sender_wr_ptr_from_credits();
+        resize_sender_interface<true>(entry_size, noc_id);
+        barrier_sender_credits();
+        l1_config[PERSISTENT_DFB_CFG_APPLIED_ENTRY_SIZE] = interface_.sender.fifo_page_size;
+    }
+
+    // Coordinated receiver resize. Credit fixup is mandatory for the public API.
+    FORCE_INLINE void set_receiver_entry_size(uint32_t entry_size) {
+        volatile tt_l1_ptr uint32_t* l1_config =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(interface_.receiver.config_ptr);
+        ASSERT(!static_cast<bool>(l1_config[REMOTE_DFB_CFG_IS_SENDER]));
+        const uint8_t noc_id = noc_index;
+        resize_receiver_interface<true>(entry_size, noc_id);
+        l1_config[PERSISTENT_DFB_CFG_APPLIED_ENTRY_SIZE] = interface_.receiver.fifo_page_size;
+    }
+#endif
+
     // -----------------------------------------------------------------------
-    // Sender-side API
+    // Sender-side API (same as CrossNodeDFB)
     // -----------------------------------------------------------------------
 
     // Spin until ALL receivers have space for num_entries entries of the current entry_size.
@@ -428,13 +497,30 @@ public:
     }
 #endif  // KERNEL_BUILD && !COMPILE_FOR_TRISC
 
+    // -----------------------------------------------------------------------
+    // Accessors
+    // -----------------------------------------------------------------------
+
+    // Number of receivers connected to this PersistentDFB (sender participant cores only).
+    FORCE_INLINE uint32_t num_receivers() {
+        const CrossNodeSenderDFBInterface& iface = interface_.sender;
+        return cross_node_dfb_num_receivers(iface.num_receivers_and_remote_pages_sent_ptr);
+    }
+
+    // Front of the receiver ring as a typed L1 handle (raw address via .get_address()).
+    FORCE_INLINE CoreLocalMem<uint32_t> get_read_ptr() {
+        return CoreLocalMem<uint32_t>(interface_.receiver.fifo_rd_ptr);
+    }
+
+    FORCE_INLINE uint32_t get_entry_size() { return interface_.sender.fifo_page_size; }
+
 #if defined(KERNEL_BUILD) && !defined(COMPILE_FOR_TRISC)
     // -----------------------------------------------------------------------
-    // Host-declared relay DFB
+    // Host-declared relay DFB (DM → compute)
     // -----------------------------------------------------------------------
 
     // Producer-only view. It intentionally exposes only the local operations the
-    // receiver DM owns; TRISC constructs the same local DFB from a RelayDFBBindingToken.
+    // receiver DM owns; TRISC constructs the same local DFB from its normal token.
     class RelayView {
     public:
         FORCE_INLINE explicit RelayView(uint16_t relay_dfb_id) : dfb_(RelayDFBBindingToken{relay_dfb_id}) {}
@@ -442,14 +528,9 @@ public:
         FORCE_INLINE void reserve_back(uint16_t num_entries) { dfb_.reserve_back(num_entries); }
         FORCE_INLINE void push_back(uint16_t num_entries) { dfb_.push_back(num_entries); }
 
-        // Wait until TRISC has consumed the num_entries just published via push_back.
-        // Call after push_back and before cn.pop_front so the remote ack cannot free
-        // L1 that TRISC is still reading.
         FORCE_INLINE void wait_consumed(uint16_t num_entries) {
             ASSERT(num_entries <= dfb_.get_local_num_entries());
-            WAYPOINT("CNCW");
-            // entries_received is written by this RISC in push_back; entries_acked is a
-            // register-mapped counter TRISC updates as uint16, so compare at uint16.
+            WAYPOINT("PDCW");
             const uint16_t relay_dfb_id = dfb_.get_id();
             volatile tt_reg_ptr uint32_t* entries_received_ptr = get_cb_tiles_received_ptr(relay_dfb_id);
             const uintptr_t entries_acked_ptr = reinterpret_cast<uintptr_t>(get_cb_tiles_acked_ptr(relay_dfb_id));
@@ -460,47 +541,31 @@ public:
                 entries_received = static_cast<uint16_t>(entries_received_ptr[0]);
                 entries_acked = static_cast<uint16_t>(reg_read(entries_acked_ptr));
             } while (entries_received != entries_acked);
-            WAYPOINT("CNCD");
+            WAYPOINT("PDCD");
         }
 
     private:
         DataflowBuffer dfb_;
     };
 
-    // Open the relay declared by CreateCrossNodeRelayDataflowBuffer on the host.
-    // No token is accepted here: receiver DM kernels cannot select an arbitrary
-    // local DFB.
+    // Open the relay declared by CreatePersistentRelayDataflowBuffer. Aligns the local
+    // DFB iface to the post-resize Persistent receiver cursor (TRISC is JIT-aligned separately).
     FORCE_INLINE RelayView bind_relay() {
         const CrossNodeReceiverDFBInterface& iface = interface_.receiver;
         ASSERT(iface.relay_id != RELAY_DFB_INVALID);
+        align_local_dfb_to_persistent_receiver_iface(iface.relay_id, iface);
         return RelayView(iface.relay_id);
     }
 #endif
 
-    // -----------------------------------------------------------------------
-    // Accessors
-    // -----------------------------------------------------------------------
-
-    // Number of receivers connected to this CrossNodeDFB (sender participant cores only).
-    FORCE_INLINE uint32_t num_receivers() {
-        const CrossNodeSenderDFBInterface& iface = interface_.sender;
-        return cross_node_dfb_num_receivers(iface.num_receivers_and_remote_pages_sent_ptr);
-    }
-
-    // Next write address in one receiver's ring, derived from that receiver's credits.
-    // Every receiver has its own position, so callers that fan out unevenly must ask
-    // per receiver.
-    FORCE_INLINE uint32_t get_write_ptr(uint32_t receiver_idx = 0) {
-        CrossNodeSenderDFBInterface& iface = interface_.sender;
-        return iface.fifo_start_addr + derived_wr_offset(iface, receiver_idx);
-    }
-
-    FORCE_INLINE uint32_t get_read_ptr() { return interface_.receiver.fifo_rd_ptr; }
-
-    FORCE_INLINE uint32_t get_entry_size() { return interface_.sender.fifo_page_size; }
-
 private:
     CrossNodeDFBInterface interface_;
+    uint8_t persistent_dfb_id_ = 0;
+
+#ifdef PERSISTENT_DFB_TEST_HELPERS
+    friend void test_stale_commit_after_resize(
+        PersistentDFB&, uint32_t new_entry_size, uint32_t stale_entry_size, uint32_t poison_wr_ptr);
+#endif
 
     // Read a word from the config page.
     FORCE_INLINE uint32_t get_config_word(uint32_t config_ptr, uint32_t word_idx) {
@@ -532,6 +597,20 @@ private:
         return wr_offset_from_sent(iface, *local_sent_ptr(iface, receiver_idx));
     }
 
+    // Sender resize has one cursor/checkpoint but a sender may otherwise advance receivers
+    // independently. Resizing is valid only at a coordinated point where all receiver
+    // credit-derived cursors agree.
+    FORCE_INLINE void sync_sender_wr_ptr_from_credits() {
+        CrossNodeSenderDFBInterface& iface = interface_.sender;
+        const uint32_t num_recv = cross_node_dfb_num_receivers(iface.num_receivers_and_remote_pages_sent_ptr);
+        ASSERT(num_recv > 0);
+        const uint32_t wr_offset = derived_wr_offset(iface, 0);
+        for (uint32_t i = 1; i < num_recv; ++i) {
+            ASSERT(derived_wr_offset(iface, i) == wr_offset);
+        }
+        iface.fifo_wr_ptr = iface.fifo_start_addr + wr_offset;
+    }
+
     // Producer writes must be contiguous (same rule as local CBs): wr_offset + len must
     // land at or before the limit. Crossing the wrap in one call is illegal.
     FORCE_INLINE static void assert_contiguous_bytes(
@@ -548,6 +627,150 @@ private:
     FORCE_INLINE static uint32_t units_for_write(const CrossNodeSenderDFBInterface& iface, uint32_t num_entries) {
         return (num_entries * iface.fifo_page_size) / L1_ALIGNMENT;
     }
+
+#if defined(KERNEL_BUILD) && !defined(COMPILE_FOR_TRISC)
+    // Snap sender wr_ptr / page size to `page_size`. When update_remote_over_noc, also NOC-adjust
+    // remote pages_sent for any pad/wrap introduced by the snap.
+    template <bool update_remote_over_noc = false>
+    FORCE_INLINE void resize_sender_interface(
+        uint32_t page_size,
+        uint8_t noc,
+        uint8_t nm = detail::default_noc_mode,
+        bool posted = true,
+        uint8_t cmd_buf = detail::default_cmd_buf) {
+        CrossNodeSenderDFBInterface& sender_cb_interface = interface_.sender;
+        ASSERT(static_cast<bool>(
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sender_cb_interface.config_ptr)[REMOTE_DFB_CFG_IS_SENDER]));
+        ASSERT(page_size % REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE == 0);
+        uint32_t fifo_size = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sender_cb_interface.config_ptr)[3];
+        uint32_t fifo_start_addr = sender_cb_interface.fifo_start_addr;
+        uint32_t fifo_wr_ptr = sender_cb_interface.fifo_wr_ptr;
+        uint32_t cb_size_page_aligned = fifo_size - fifo_size % page_size;
+        uint32_t fifo_limit_page_aligned = fifo_start_addr + cb_size_page_aligned;
+
+        uint32_t next_fifo_wr_ptr = fifo_start_addr + align(fifo_wr_ptr - fifo_start_addr, page_size);
+        if constexpr (update_remote_over_noc) {
+            uint32_t aligned_page_adjustment = 0;
+            if (next_fifo_wr_ptr >= fifo_limit_page_aligned) {
+                aligned_page_adjustment =
+                    (fifo_start_addr + fifo_size - fifo_wr_ptr) / REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE;
+                next_fifo_wr_ptr = fifo_start_addr;
+            } else if (next_fifo_wr_ptr != fifo_wr_ptr) {
+                aligned_page_adjustment = (next_fifo_wr_ptr - fifo_wr_ptr) / REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE;
+            }
+            if (aligned_page_adjustment != 0) {
+                if (nm == DM_DYNAMIC_NOC) {
+                    detail::update_pages_sent<DM_DYNAMIC_NOC>(
+                        reinterpret_cast<const RemoteSenderCBInterface&>(sender_cb_interface),
+                        aligned_page_adjustment,
+                        noc,
+                        posted,
+                        cmd_buf);
+                } else {
+                    detail::update_pages_sent<DM_DEDICATED_NOC>(
+                        reinterpret_cast<const RemoteSenderCBInterface&>(sender_cb_interface),
+                        aligned_page_adjustment,
+                        noc,
+                        posted,
+                        cmd_buf);
+                }
+            }
+        } else if (next_fifo_wr_ptr >= fifo_limit_page_aligned) {
+            next_fifo_wr_ptr = fifo_start_addr;
+        }
+        sender_cb_interface.fifo_wr_ptr = next_fifo_wr_ptr;
+        sender_cb_interface.fifo_limit_page_aligned = fifo_limit_page_aligned;
+        sender_cb_interface.fifo_page_size = page_size;
+    }
+
+    // Snap receiver rd_ptr / page size to `page_size`. When update_remote_over_noc, also NOC-adjust
+    // remote pages_acked for any pad/wrap introduced by the snap.
+    template <bool update_remote_over_noc = false>
+    FORCE_INLINE void resize_receiver_interface(
+        uint32_t page_size,
+        uint8_t noc,
+        uint8_t nm = detail::default_noc_mode,
+        bool posted = true,
+        uint8_t cmd_buf = detail::default_cmd_buf) {
+        CrossNodeReceiverDFBInterface& receiver_cb_interface = interface_.receiver;
+        ASSERT(!static_cast<bool>(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+            receiver_cb_interface.config_ptr)[REMOTE_DFB_CFG_IS_SENDER]));
+        ASSERT(page_size % REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE == 0);
+        uint32_t fifo_size = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receiver_cb_interface.config_ptr)[3];
+        uint32_t fifo_start_addr = receiver_cb_interface.fifo_start_addr;
+        uint32_t fifo_rd_ptr = receiver_cb_interface.fifo_rd_ptr;
+        uint32_t cb_size_page_aligned = fifo_size - fifo_size % page_size;
+        uint32_t fifo_limit_page_aligned = fifo_start_addr + cb_size_page_aligned;
+
+        uint32_t next_fifo_rd_ptr = fifo_start_addr + align(fifo_rd_ptr - fifo_start_addr, page_size);
+        if constexpr (update_remote_over_noc) {
+            uint32_t aligned_page_adjustment = 0;
+            if (next_fifo_rd_ptr >= fifo_limit_page_aligned) {
+                aligned_page_adjustment =
+                    (fifo_start_addr + fifo_size - fifo_rd_ptr) / REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE;
+                next_fifo_rd_ptr = fifo_start_addr;
+            } else if (next_fifo_rd_ptr != fifo_rd_ptr) {
+                aligned_page_adjustment = (next_fifo_rd_ptr - fifo_rd_ptr) / REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE;
+            }
+            if (aligned_page_adjustment != 0) {
+                uint32_t pages_acked = 0;
+                uint32_t pages_sent = 0;
+                uint32_t num_pages_recv = 0;
+                volatile tt_l1_ptr uint32_t* pages_acked_ptr =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receiver_cb_interface.aligned_pages_acked_ptr);
+                volatile tt_l1_ptr uint32_t* pages_sent_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                    receiver_cb_interface.aligned_pages_acked_ptr - L1_ALIGNMENT);
+                do {
+                    invalidate_l1_cache();
+                    pages_acked = *pages_acked_ptr;
+                    pages_sent = *pages_sent_ptr;
+                    num_pages_recv = pages_sent - pages_acked;
+                } while (num_pages_recv < aligned_page_adjustment);
+
+                if (nm == DM_DYNAMIC_NOC) {
+                    detail::update_pages_acked<DM_DYNAMIC_NOC>(
+                        reinterpret_cast<const RemoteReceiverCBInterface&>(receiver_cb_interface),
+                        aligned_page_adjustment,
+                        noc,
+                        posted,
+                        cmd_buf);
+                } else {
+                    detail::update_pages_acked<DM_DEDICATED_NOC>(
+                        reinterpret_cast<const RemoteReceiverCBInterface&>(receiver_cb_interface),
+                        aligned_page_adjustment,
+                        noc,
+                        posted,
+                        cmd_buf);
+                }
+            }
+        } else if (next_fifo_rd_ptr >= fifo_limit_page_aligned) {
+            next_fifo_rd_ptr = fifo_start_addr;
+        }
+        receiver_cb_interface.fifo_rd_ptr = next_fifo_rd_ptr;
+        receiver_cb_interface.fifo_limit_page_aligned = fifo_limit_page_aligned;
+        receiver_cb_interface.fifo_page_size = page_size;
+    }
+
+    // Wait until every receiver has acked all locally recorded pages_sent (post-resize barrier).
+    FORCE_INLINE void barrier_sender_credits() {
+        const CrossNodeSenderDFBInterface& iface = interface_.sender;
+        ASSERT(static_cast<bool>(
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(iface.config_ptr)[REMOTE_DFB_CFG_IS_SENDER]));
+        const uint32_t num_recv = cross_node_dfb_num_receivers(iface.num_receivers_and_remote_pages_sent_ptr);
+        volatile tt_l1_ptr uint32_t* base =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(iface.aligned_pages_sent_ptr);
+        for (uint32_t i = 0; i < num_recv; ++i) {
+            volatile tt_l1_ptr uint32_t* sent_ptr = base + (2 * i * L1_ALIGNMENT / sizeof(uint32_t));
+            volatile tt_l1_ptr uint32_t* acked_ptr = sent_ptr + (L1_ALIGNMENT / sizeof(uint32_t));
+            while (true) {
+                invalidate_l1_cache();
+                if (*acked_ptr == *sent_ptr) {
+                    break;
+                }
+            }
+        }
+    }
+#endif  // KERNEL_BUILD && !COMPILE_FOR_TRISC
 };
 
 }  // namespace experimental
