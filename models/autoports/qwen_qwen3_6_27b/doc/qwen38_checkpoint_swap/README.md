@@ -115,9 +115,20 @@ In-tree, on the branch:
 Out of tree (vLLM checkout is not part of this repo):
 
 5. `TTQwen3_5ForConditionalGeneration` was hardwired to
-   `models.demos.blackhole.qwen36.tt.qwen36_vllm`. Added an env-gated selector mirroring the Mistral
-   entry — `TT_QWEN3_5_TEXT_VER=demo|qwen3_6_27b_autoport`, default `demo` so nothing changes for
-   existing users. Patch: `vllm-register-qwen36-autoport.patch`.
+   `models.demos.blackhole.qwen36.tt.qwen36_vllm`. Added a selector mirroring the Mistral entry,
+   `TT_QWEN3_5_TEXT_VER=qwen3_6_27b_autoport|demo`, **defaulting to the autoport** — this
+   architecture is meant to be served by `models/autoports/qwen_qwen3_6_27b`, not the demo (user's
+   call, 2026-08-18). The default matters rather than being cosmetic: the tt-inference-server release
+   workflow spawns its own server and knows nothing about this variable, so a demo default would
+   silently evaluate the demo. Patch: `vllm-register-qwen36-autoport.patch`.
+
+   **Consequently the release-flow branch is wrong about this model's code path.** In
+   `reference_config/benchmarking/benchmark_targets/model_performance_reference.json`, the
+   Qwen3.8-27B entry's comment states it "rides the same tt-metal code path
+   (models/demos/blackhole/qwen36)". That should say `models/autoports/qwen_qwen3_6_27b`. Its
+   performance targets (`ttft_ms 62.0`, `tput_user 41.0`) are themselves flagged "ASSUMED, NOT
+   VALIDATED", extrapolated from Qwen3-32B on a **t3k (8 devices)** while this model runs on 4, so
+   they need real measurement before they mean anything.
 
 ## Serving environment recipe (undocumented gap)
 
