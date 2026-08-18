@@ -86,37 +86,36 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreShardedFac
     // ---------------------------------------------------------------------
     // DataflowBufferSpecs (replaces the legacy c_1 / c_0 / c_2 / c_16 CBDescriptors)
     // ---------------------------------------------------------------------
-    // Sharded input DFB — built on the input buffer's borrowed memory.
-    spec.dataflow_buffers.push_back(DataflowBufferSpec{
-        .unique_id = SRC_SHARD,
-        .entry_size = input_shard_width_bytes,
-        .num_entries = num_input_rows,
-        .data_format_metadata = input_cb_data_format,
-        .borrowed_from = src_sharded ? std::optional<TensorParamName>{INPUT} : std::nullopt,
-    });
-
-    spec.dataflow_buffers.push_back(DataflowBufferSpec{
-        .unique_id = STAGE,
-        .entry_size = input_single_tile_size,
-        .num_entries = ntiles_per_batch * 2,
-        .data_format_metadata = input_cb_data_format,
-    });
-
-    spec.dataflow_buffers.push_back(DataflowBufferSpec{
-        .unique_id = PAD,
-        .entry_size = input_shard_width_bytes,
-        .num_entries = 1,
-        .data_format_metadata = input_cb_data_format,
-    });
-
-    // Sharded output DFB — built on the output buffer's borrowed memory.
-    spec.dataflow_buffers.push_back(DataflowBufferSpec{
-        .unique_id = OUT_SHARD,
-        .entry_size = output_single_tile_size,
-        .num_entries = ntiles_per_core,
-        .data_format_metadata = output_cb_data_format,
-        .borrowed_from = out_sharded ? std::optional<TensorParamName>{OUTPUT} : std::nullopt,
-    });
+    spec.dataflow_buffers = {
+        // Sharded input DFB — built on the input buffer's borrowed memory.
+        DataflowBufferSpec{
+            .unique_id = SRC_SHARD,
+            .entry_size = input_shard_width_bytes,
+            .num_entries = num_input_rows,
+            .data_format_metadata = input_cb_data_format,
+            .borrowed_from = src_sharded ? std::optional<TensorParamName>{INPUT} : std::nullopt,
+        },
+        DataflowBufferSpec{
+            .unique_id = STAGE,
+            .entry_size = input_single_tile_size,
+            .num_entries = ntiles_per_batch * 2,
+            .data_format_metadata = input_cb_data_format,
+        },
+        DataflowBufferSpec{
+            .unique_id = PAD,
+            .entry_size = input_shard_width_bytes,
+            .num_entries = 1,
+            .data_format_metadata = input_cb_data_format,
+        },
+        // Sharded output DFB — built on the output buffer's borrowed memory.
+        DataflowBufferSpec{
+            .unique_id = OUT_SHARD,
+            .entry_size = output_single_tile_size,
+            .num_entries = ntiles_per_core,
+            .data_format_metadata = output_cb_data_format,
+            .borrowed_from = out_sharded ? std::optional<TensorParamName>{OUTPUT} : std::nullopt,
+        },
+    };
 
     /** reader
      */

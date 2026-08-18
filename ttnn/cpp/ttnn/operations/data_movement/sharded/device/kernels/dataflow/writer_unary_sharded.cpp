@@ -13,8 +13,8 @@
 // The duplication is temporary. Once the last legacy consumer is ported, delete this file and rename
 // the fork over it.
 //
-// Tracking issue (why the duplication exists, the consumer list, and the sunset plan):
-// https://github.com/tenstorrent/tt-metal/issues/52228
+// TODO(#52228): retire this duplication. The issue records why it exists, the full consumer
+// list, and the sunset plan: https://github.com/tenstorrent/tt-metal/issues/52228
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"

@@ -15,8 +15,8 @@
 // original. The two are functionally identical (that one names the accessor `tensor::output`). They
 // should be consolidated onto this copy; until then a change here likely belongs there too.
 //
-// Tracking issue (why the duplication exists, the consumer list, the consolidation and sunset plan):
-// https://github.com/tenstorrent/tt-metal/issues/52228
+// TODO(#52228): retire this duplication. The issue records why it exists, the full consumer
+// list, and the sunset plan: https://github.com/tenstorrent/tt-metal/issues/52228
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"

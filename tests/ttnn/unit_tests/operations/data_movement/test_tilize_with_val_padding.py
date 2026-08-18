@@ -12,7 +12,7 @@ from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc
 from tests.ttnn.python_api_testing.sweep_tests.ttnn_pytorch_ops import (
     tilize_with_val_padding as pytorch_tilize_with_val_padding,
 )
-from models.common.utility_functions import is_blackhole
+from models.common.utility_functions import skip_for_blackhole
 
 torch.manual_seed(0)
 
@@ -816,56 +816,21 @@ def test_tilize_with_val_padding_fp8_unaligned_row_width(device):
     ), f"Expected pad_value={pad_value} in padding column, got unique values: {torch_output[..., 63:].unique()}"
 
 
-@pytest.mark.parametrize(
-    "config",
-    ["sharded_width_l1", "interleaved_dram_multicore", "single_core"],
-)
-def test_tilize_with_val_padding_program_cache_addr_change(device, config):
-    """Program-cache hit path: re-running the op on freshly allocated inputs (so every
-    iteration sits at a DIFFERENT buffer address) must hit the same cached program and stay
-    correct.
+def _assert_program_cache_reuse_across_new_allocations(
+    device, tensor_shape, output_padded_shape, in_mem_cfg, out_mem_cfg, use_multicore
+):
+    """Run tilize_with_val_padding four times, allocating a fresh input and output every
+    iteration so each dispatch sees a DIFFERENT buffer address, and assert that the results stay
+    correct while the program cache is only ever populated once.
 
-    This covers the two ways a tensor address reaches the device in this op, both of which are
-    re-resolved on every cache hit rather than baked into the program:
-      - sharded_width_l1 selects the sharded factory, where the input and output shards back
-        borrowed-memory dataflow buffers (their L1 addresses are reattached per dispatch);
-      - the two interleaved configs select the multicore-default and single-core factories,
-        where the addresses ride typed tensor bindings.
-    A stale address on the second dispatch corrupts results silently, which a single-shot test
-    cannot catch."""
+    A tensor address reaches this op's kernels one of two ways, and both are re-resolved on every
+    cache hit rather than baked into the program: the sharded factory backs borrowed-memory
+    dataflow buffers with the input and output shards (their L1 addresses are reattached per
+    dispatch), and the interleaved factories carry the addresses on typed tensor bindings. A stale
+    address on the second dispatch corrupts results silently, which a single-shot test cannot
+    catch."""
     torch.manual_seed(0)
     pad_value = 3.5
-
-    if config == "sharded_width_l1":
-        if is_blackhole():
-            pytest.skip("BH LLK Issue with tilize, #14609")
-        tensor_shape = (50, 256)
-        output_padded_shape = [64, 256]
-        num_cores = 4
-        shard_spec = ttnn.ShardSpec(
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))}),
-            [tensor_shape[0], tensor_shape[1] // num_cores],
-            ttnn.ShardOrientation.ROW_MAJOR,
-        )
-        in_mem_cfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
-        # The op derives the output shard spec itself (height becomes the padded height), so pass
-        # the layout only -- supplying a stale shard shape here would fight that.
-        out_mem_cfg = ttnn.MemoryConfig(
-            memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED, buffer_type=ttnn.BufferType.L1
-        )
-        use_multicore = True
-    elif config == "interleaved_dram_multicore":
-        tensor_shape = (1, 1, 100, 128)
-        output_padded_shape = [1, 1, 128, 128]
-        in_mem_cfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
-        out_mem_cfg = in_mem_cfg
-        use_multicore = True
-    else:  # single_core
-        tensor_shape = (1, 1, 50, 64)
-        output_padded_shape = [1, 1, 64, 64]
-        in_mem_cfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
-        out_mem_cfg = in_mem_cfg
-        use_multicore = False
 
     device.enable_program_cache()
     device.clear_program_cache()
@@ -899,8 +864,58 @@ def test_tilize_with_val_padding_program_cache_addr_change(device, config):
             entries = device.num_program_cache_entries()
             assert entries >= 1, "the first invocation should have populated the program cache"
         else:
-            # Not an exact count: the sharded config also runs from_torch / sharded_to_interleaved,
+            # Not an exact count: the sharded case also runs from_torch / sharded_to_interleaved,
             # which cache programs of their own. What matters is that iteration 2+ adds none.
             assert (
                 device.num_program_cache_entries() == entries
             ), "tilize_with_val_padding must reuse the cached program on a hit"
+
+
+@skip_for_blackhole("BH LLK Issue with tilize, #14609")
+def test_tilize_with_val_padding_program_cache_addr_change_sharded(device):
+    """Sharded factory: the input and output shards back borrowed-memory dataflow buffers."""
+    tensor_shape = (50, 256)
+    num_cores = 4
+    shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))}),
+        [tensor_shape[0], tensor_shape[1] // num_cores],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    _assert_program_cache_reuse_across_new_allocations(
+        device,
+        tensor_shape=tensor_shape,
+        output_padded_shape=[64, 256],
+        in_mem_cfg=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec),
+        # The op derives the output shard spec itself (height becomes the padded height), so pass
+        # the layout only -- supplying a stale shard shape here would fight that.
+        out_mem_cfg=ttnn.MemoryConfig(
+            memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED, buffer_type=ttnn.BufferType.L1
+        ),
+        use_multicore=True,
+    )
+
+
+def test_tilize_with_val_padding_program_cache_addr_change_interleaved_multicore(device):
+    """Multicore-default factory: addresses ride typed tensor bindings."""
+    dram = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+    _assert_program_cache_reuse_across_new_allocations(
+        device,
+        tensor_shape=(1, 1, 100, 128),
+        output_padded_shape=[1, 1, 128, 128],
+        in_mem_cfg=dram,
+        out_mem_cfg=dram,
+        use_multicore=True,
+    )
+
+
+def test_tilize_with_val_padding_program_cache_addr_change_single_core(device):
+    """Single-core factory: addresses ride typed tensor bindings."""
+    dram = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+    _assert_program_cache_reuse_across_new_allocations(
+        device,
+        tensor_shape=(1, 1, 50, 64),
+        output_padded_shape=[1, 1, 64, 64],
+        in_mem_cfg=dram,
+        out_mem_cfg=dram,
+        use_multicore=False,
+    )

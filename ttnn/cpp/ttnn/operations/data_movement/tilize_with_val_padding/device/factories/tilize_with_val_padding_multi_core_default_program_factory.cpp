@@ -71,18 +71,20 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreDefaultFac
     // ---------------------------------------------------------------------
     // DataflowBufferSpecs (replaces the legacy c_0 / c_16 CBDescriptors)
     // ---------------------------------------------------------------------
-    spec.dataflow_buffers.push_back(DataflowBufferSpec{
-        .unique_id = IN,
-        .entry_size = input_single_tile_size,
-        .num_entries = num_tiles_per_row,
-        .data_format_metadata = input_cb_data_format,
-    });
-    spec.dataflow_buffers.push_back(DataflowBufferSpec{
-        .unique_id = OUT,
-        .entry_size = output_single_tile_size,
-        .num_entries = num_tiles_per_row,
-        .data_format_metadata = output_cb_data_format,
-    });
+    spec.dataflow_buffers = {
+        DataflowBufferSpec{
+            .unique_id = IN,
+            .entry_size = input_single_tile_size,
+            .num_entries = num_tiles_per_row,
+            .data_format_metadata = input_cb_data_format,
+        },
+        DataflowBufferSpec{
+            .unique_id = OUT,
+            .entry_size = output_single_tile_size,
+            .num_entries = num_tiles_per_row,
+            .data_format_metadata = output_cb_data_format,
+        },
+    };
 
     // ---------------------------------------------------------------------
     // Tensor parameters (typed bindings replace the Buffer* RTA slots and the
