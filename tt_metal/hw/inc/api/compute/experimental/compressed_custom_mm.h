@@ -261,12 +261,6 @@ ALWI void compressed_custom_mm_block_uninit() {
         // Restore default packing stride of 64 rows between tiles
         PACK((cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>(TILE_NUM_FACES * FACE_C_DIM * FACE_R_DIM * 2)));
     }
-    // Deliberately no packer-MOP write. Under the poison-pack-ambient contract
-    // (tt-blaze#3014) an op may not leave the packer at ambient Default on exit:
-    // hw cleanup poisons the pack MOP/strides/PAC X, and a follow-on op must run
-    // its own pack_init / pack_reconfig_data_format<true>. A no-arg
-    // _llk_pack_mop_config_<Default>() would also install fixed 32x32 geometry and
-    // clobber the 1x32 configuration this family targets.
 }
 
 #endif  // ARCH_BLACKHOLE
