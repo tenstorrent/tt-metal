@@ -13,7 +13,7 @@
 namespace ttnn::operations::experimental::deepseek_prefill::combine_fabric2d {
 
 // A stream is one routing plane travelled in one direction along the ring axis. Every chip runs one
-// reader+producer pair per stream, and a stream keeps its identity across chips: the pair on the next chip
+// reader+sender pair per stream, and a stream keeps its identity across chips: the pair on the next chip
 // with the same id continues in the same direction on the same plane.
 using StreamId = uint32_t;
 
@@ -22,8 +22,8 @@ constexpr uint32_t stream_count(uint32_t num_links) { return num_links * 2; }
 
 struct StreamPlacement {
     CoreCoord worker_logical;                     // where this stream's kernels go
-    CoreCoord worker_virtual;                     // what a producer on another chip addresses
-    CoreCoord eth_logical;                        // the fabric router this stream's producer connects to
+    CoreCoord worker_virtual;                     // what a sender on another chip addresses
+    CoreCoord eth_logical;                        // the fabric router this stream's sender connects to
     ttnn::MeshCoordinate downstream_coord{0, 0};  // chip across the cable
     tt::tt_fabric::FabricNodeId downstream_node{tt::tt_fabric::MeshId{0}, 0};
 };
@@ -32,7 +32,7 @@ using StreamPlacements = std::map<StreamId, StreamPlacement>;
 using MeshPlacement = std::map<ttnn::MeshCoordinate, StreamPlacements>;
 
 // Placement for every chip and every stream on the mesh. Decided for the whole mesh at once because a
-// producer's arguments name the worker serving the same stream on the downstream chip.
+// sender's arguments name the worker serving the same stream on the downstream chip.
 MeshPlacement decide_placement(ttnn::MeshDevice* mesh, uint32_t axis, uint32_t num_links);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::combine_fabric2d
