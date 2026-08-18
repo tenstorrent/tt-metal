@@ -44,7 +44,9 @@ void bind_topk_large_indices(nb::module_& mod) {
             * restricts the search to the first ``valid_length`` columns of each row;
             * the remaining columns are ignored -- neither read nor ranked -- so an
               over-allocated row whose tail is stale can be searched without slicing it;
-            * must be in [k, last dimension]; defaults to the full last dimension;
+            * must be in (0, last dimension]; defaults to the full last dimension. A
+              prefix shorter than k is allowed: the lanes past its capacity emit the
+              sentinel index 0xFFFFFFFF;
             * applied at runtime (no recompile), so a loop growing valid_length reuses one program.
 
         Args:
