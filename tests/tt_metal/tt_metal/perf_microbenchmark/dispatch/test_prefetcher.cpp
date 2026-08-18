@@ -1592,12 +1592,13 @@ public:
         helper.add_paged_dram_read(worker_range, 0, 0, 128, 128, 0);
         helper.add_paged_dram_read(worker_range, 4, dram_alignment, 2048, num_banks_ + 4, 0);
         helper.add_paged_dram_read(worker_range, 5, dram_alignment, 2048, (num_banks_ * 3) + 1, 0);
-        helper.add_paged_dram_read(worker_range, 3, tt::align(128, dram_alignment), 6144, num_banks_ - 1, 0);
-        helper.add_paged_dram_read(worker_range, 3, tt::align(128, dram_alignment), 6144, num_banks_ - 1, 0);
+        const uint32_t num_banks_minus_one = std::max(num_banks_, 2u) - 1;  // 1-bank sim would give 0 pages
+        helper.add_paged_dram_read(worker_range, 3, tt::align(128, dram_alignment), 6144, num_banks_minus_one, 0);
+        helper.add_paged_dram_read(worker_range, 3, tt::align(128, dram_alignment), 6144, num_banks_minus_one, 0);
         helper.add_paged_dram_read(worker_range, 0, 0, 128, 128, 32);
         helper.add_paged_dram_read(worker_range, 4, dram_alignment, 2048, num_banks_ * 2, 1536);
         helper.add_paged_dram_read(worker_range, 5, dram_alignment, 2048, (num_banks_ * 2) + 1, 256);
-        helper.add_paged_dram_read(worker_range, 3, tt::align(128, dram_alignment), 6144, num_banks_ - 1, 640);
+        helper.add_paged_dram_read(worker_range, 3, tt::align(128, dram_alignment), 6144, num_banks_minus_one, 640);
         // Large pages
         helper.add_paged_dram_read(worker_range, 0, 0, DEFAULT_SCRATCH_DB_SIZE / 2 + dram_alignment, 2, 128);
         helper.add_paged_dram_read(worker_range, 0, 0, DEFAULT_SCRATCH_DB_SIZE, 2, 0);
