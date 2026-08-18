@@ -1935,6 +1935,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     // L1 allocation on the far banks.
     uint32_t last_per_core_N = N % per_core_N == 0 ? per_core_N : N % per_core_N;
     uint32_t last_out_block_w = last_per_core_N % out_block_w == 0 ? out_block_w : last_per_core_N % out_block_w;
+    uint32_t last_out_num_blocks_w = ((last_per_core_N - 1) / out_block_w) + 1;
     uint32_t last_block_num_nonzero_subblocks_w = ((last_out_block_w - 1) / out_subblock_w) + 1;
     uint32_t last_subblock_of_last_block_w =
         last_out_block_w % out_subblock_w == 0 ? out_subblock_w : last_out_block_w % out_subblock_w;
@@ -1957,6 +1958,10 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
 
         // in0 sender and in1 sender
         if (core == start_core) {
+            // W-dim tail for the last X block. start_core is always output_idx_y == 0,
+            // so no H tail applies here; but when num_blocks_x == 1 (e.g. per_core_N > Nt)
+            // start_core is itself the last X block and must trim its W writes.
+            bool last_x = (output_idx_x == num_blocks_x - 1);
             std::vector<uint32_t> mm_in1_sender_writer_args = {
                 // READER
                 // in1 tensor args
@@ -1978,16 +1983,17 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
                     (output_idx_y * per_core_M * N),  // out_tensor_start_tile_id
 
                 // padding args (READER)
-                (std::uint32_t)out_block_w,  // last_block_w
-                // padding args (WRITER)
+                (std::uint32_t)(last_x ? last_out_block_w : out_block_w),  // last_block_w
+                // padding args (WRITER): H stays full (start_core is output_idx_y == 0);
+                // W tail is trimmed when start_core is the last X block.
                 (std::uint32_t)out_block_h / out_subblock_h,
                 (std::uint32_t)out_subblock_h,
                 (std::uint32_t)0,
                 (std::uint32_t)out_block_w / out_subblock_w,
-                (std::uint32_t)out_block_w / out_subblock_w,
-                (std::uint32_t)out_subblock_w,
-                (std::uint32_t)0,
-                (std::uint32_t)0};
+                (std::uint32_t)(last_x ? last_block_num_nonzero_subblocks_w : out_block_w / out_subblock_w),
+                (std::uint32_t)(last_x ? last_subblock_of_last_block_w : out_subblock_w),
+                (std::uint32_t)(last_x ? last_block_padded_subblock_tiles_addr_skip : 0),
+                (std::uint32_t)(last_x ? last_block_padded_block_tiles_w_skip : 0)};
 
             if (bias_tensor.has_value()) {
                 // Bias base address; patched on program-cache hit by override_mcast_in1_program_parameters (idx 18).
@@ -1999,7 +2005,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
                 mm_in1_sender_writer_args.push_back(0);
             }
             if (!output_is_sharded) {
-                mm_in1_sender_writer_args.push_back(out_num_blocks_x);
+                mm_in1_sender_writer_args.push_back(last_x ? last_out_num_blocks_w : out_num_blocks_x);
             }
 
             tt_metal::SetRuntimeArgs(
@@ -2039,13 +2045,10 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
                 mm_in1_receiver_writer_args.push_back(last_x ? last_block_padded_block_tiles_w_skip : 0);
             }
             if (!output_is_sharded) {
-                if (output_idx_y == num_blocks_y - 1) {
-                    mm_in1_receiver_writer_args.push_back(last_out_num_blocks_h);
-                    mm_in1_receiver_writer_args.push_back(out_num_blocks_x);
-                } else {
-                    mm_in1_receiver_writer_args.push_back(out_num_blocks_y);
-                    mm_in1_receiver_writer_args.push_back(out_num_blocks_x);
-                }
+                mm_in1_receiver_writer_args.push_back(
+                    output_idx_y == num_blocks_y - 1 ? last_out_num_blocks_h : out_num_blocks_y);
+                mm_in1_receiver_writer_args.push_back(
+                    output_idx_x == num_blocks_x - 1 ? last_out_num_blocks_w : out_num_blocks_x);
             }
 
             tt_metal::SetRuntimeArgs(
@@ -4916,6 +4919,7 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
     // L1 allocation on the far banks.
     uint32_t last_per_core_N = N % per_core_N == 0 ? per_core_N : N % per_core_N;
     uint32_t last_out_block_w = last_per_core_N % out_block_w == 0 ? out_block_w : last_per_core_N % out_block_w;
+    uint32_t last_out_num_blocks_w = ((last_per_core_N - 1) / out_block_w) + 1;
     uint32_t last_block_num_nonzero_subblocks_w = ((last_out_block_w - 1) / out_subblock_w) + 1;
     uint32_t last_subblock_of_last_block_w =
         last_out_block_w % out_subblock_w == 0 ? out_subblock_w : last_out_block_w % out_subblock_w;
@@ -4938,6 +4942,10 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
 
         // in0 sender and in1 sender
         if (core == start_core) {
+            // W-dim tail for the last X block. start_core is always output_idx_y == 0,
+            // so no H tail applies here; but when num_blocks_x == 1 (e.g. per_core_N > Nt)
+            // start_core is itself the last X block and must trim its W writes.
+            bool last_x = (output_idx_x == num_blocks_x - 1);
             std::vector<std::variant<uint32_t, std::reference_wrapper<const MeshTensor>>> mm_in1_sender_writer_args = {
                 // READER
                 // in1 tensor args
@@ -4959,16 +4967,17 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
                     (output_idx_y * per_core_M * N),  // out_tensor_start_tile_id
 
                 // padding args (READER)
-                (std::uint32_t)out_block_w,  // last_block_w
-                // padding args (WRITER)
+                (std::uint32_t)(last_x ? last_out_block_w : out_block_w),  // last_block_w
+                // padding args (WRITER): H stays full (start_core is output_idx_y == 0);
+                // W tail is trimmed when start_core is the last X block.
                 (std::uint32_t)out_block_h / out_subblock_h,
                 (std::uint32_t)out_subblock_h,
                 (std::uint32_t)0,
                 (std::uint32_t)out_block_w / out_subblock_w,
-                (std::uint32_t)out_block_w / out_subblock_w,
-                (std::uint32_t)out_subblock_w,
-                (std::uint32_t)0,
-                (std::uint32_t)0};
+                (std::uint32_t)(last_x ? last_block_num_nonzero_subblocks_w : out_block_w / out_subblock_w),
+                (std::uint32_t)(last_x ? last_subblock_of_last_block_w : out_subblock_w),
+                (std::uint32_t)(last_x ? last_block_padded_subblock_tiles_addr_skip : 0),
+                (std::uint32_t)(last_x ? last_block_padded_block_tiles_w_skip : 0)};
 
             if (bias_tensor.has_value()) {
                 mm_in1_sender_writer_args.push_back(*bias_tensor);
@@ -4979,7 +4988,7 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
                 mm_in1_sender_writer_args.push_back(0u);
             }
             if (!output_is_sharded) {
-                mm_in1_sender_writer_args.push_back(out_num_blocks_x);
+                mm_in1_sender_writer_args.push_back(last_x ? last_out_num_blocks_w : out_num_blocks_x);
             }
 
             {
@@ -5028,13 +5037,10 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
                 mm_in1_receiver_writer_args.push_back(last_x ? last_block_padded_block_tiles_w_skip : 0u);
             }
             if (!output_is_sharded) {
-                if (output_idx_y == num_blocks_y - 1) {
-                    mm_in1_receiver_writer_args.push_back(last_out_num_blocks_h);
-                    mm_in1_receiver_writer_args.push_back(out_num_blocks_x);
-                } else {
-                    mm_in1_receiver_writer_args.push_back(out_num_blocks_y);
-                    mm_in1_receiver_writer_args.push_back(out_num_blocks_x);
-                }
+                mm_in1_receiver_writer_args.push_back(
+                    output_idx_y == num_blocks_y - 1 ? last_out_num_blocks_h : out_num_blocks_y);
+                mm_in1_receiver_writer_args.push_back(
+                    output_idx_x == num_blocks_x - 1 ? last_out_num_blocks_w : out_num_blocks_x);
             }
 
             {
