@@ -98,15 +98,16 @@ MAX_PREFIX = LATENTS + 404  # 32 cond latents + start/text/stop (<= 404 embedded
 # and the 22050 -> 24000 output resample — both applied as host linear interpolates on z.
 AR_COMP, HOP, ISR, OSR = 1024, 256, 22050, 24000
 OUTPUT_SR = OSR
-# The vocoder always runs at this FIXED frame count (the model cap: 605 codes -> 2420 frames
-# @22.05kHz -> 2634 @24kHz); shorter z is zero-padded and the waveform trimmed back. WHY:
-# ttnn conv/conv_transpose sliding-window ("halo") config tensors are pinned in L1_SMALL for
-# the lifetime of their program-cache entry, so every DISTINCT input length permanently
-# consumes L1_SMALL — with per-utterance lengths the second generate() OOMs
-# ("Not enough space to allocate ... L1_SMALL buffer"). One fixed length = one compiled
-# shape set, reused by every request (pad to the fixed length, trim the waveform back;
-# the trimmed tail only ever sees zero context beyond its own end).
+# The vocoder runs at one of a FIXED set of frame counts (the cap: 605 codes -> 2420 frames
+# @22.05kHz -> 2634 @24kHz); z is zero-padded up to its bucket and the waveform trimmed back.
+# WHY a fixed set: ttnn conv/conv_transpose sliding-window ("halo") config tensors are pinned
+# in L1_SMALL for the lifetime of their program-cache entry, so every DISTINCT input length
+# permanently consumes L1_SMALL — with per-utterance lengths the second generate() OOMs
+# ("Not enough space to allocate ... L1_SMALL buffer"). Buckets bound the compiled shapes and
+# keep short utterances off the cap, whose cost per frame is also the worst (0.41 vs 0.25 ms).
+# The trimmed tail only ever sees zero context beyond its own end.
 VOC_L = (GPT_MAX_AUDIO * AR_COMP // HOP) * OSR // ISR  # 2634
+VOC_BUCKETS = tuple(round(VOC_L * k / 4) for k in range(1, 5))  # 658, 1317, 1976, 2634
 
 
 @dataclass
@@ -115,6 +116,12 @@ class Voice:
 
     gpt_cond_latent: torch.Tensor  # [1, 32, 1024] — Block 1 (cond encoder + Perceiver) output
     speaker_embedding: torch.Tensor  # [1, 512, 1]  — Block 2 (ResNet d-vector) output
+
+
+def _voc_bucket(L):
+    """Smallest VOC_BUCKETS frame count that fits L."""
+    assert L <= VOC_L, f"vocoder input {L} frames exceeds the fixed cap {VOC_L}"
+    return next(b for b in VOC_BUCKETS if b >= L)
 
 
 def _sample_token(latent, seen, gen, mh_w, mh_b, penalty=REPETITION_PENALTY):
@@ -165,7 +172,7 @@ class XttsV2:
         if mesh_device is None:
             # l1_small >= 64K is REQUIRED for the fp32 vocoder convs (BUG-2/3). We open with
             # 256K because conv halo-config tensors are PINNED in L1_SMALL per compiled shape
-            # (see VOC_L): the vocoder is held to one shape, but compute_voice legitimately
+            # (see VOC_BUCKETS): the vocoder is held to 4 shapes, and compute_voice legitimately
             # sees a new speaker-encoder conv shape per distinct reference-clip length, and
             # each pins a few KB. The trace region holds the captured 30-layer decode step.
             self.mesh_device = ttnn.open_mesh_device(
@@ -218,13 +225,10 @@ class XttsV2:
 
         Order matters (same discipline as z_image_turbo): programs compiled after capture
         risk landing where the trace keeps intermediates, so compile Blocks 1/2 (a full 6 s
-        conditioning chunk — the shape every long reference hits), one prefill, and the
-        decode step BEFORE `capture()`. The tiny generate below then compiles the vocoder
-        at its single fixed shape (VOC_L) — one compile-after-capture event, after which the
-        request path compiles nothing new for same-length inputs; the teacher-forced trace
-        check in the bringup validation verifies it is harmless on this stack. (Per-request
-        prefill at a NEW prompt length still compiles a few programs post-capture — also
-        covered by that check.)"""
+        conditioning chunk — the shape every long reference hits), the vocoder at every
+        VOC_BUCKETS shape, one prefill, and the decode step BEFORE `capture()`. (Per-request
+        prefill at a NEW prompt length still compiles a few programs post-capture — covered
+        by the teacher-forced trace check in the bringup validation.)"""
         t0 = time.time()
         # 1) Blocks 1+2 on a dummy full-length (6 s) reference clip.
         g = torch.Generator().manual_seed(0)
@@ -232,7 +236,13 @@ class XttsV2:
         voice = self.compute_voice(dummy, 22050)
         logger.info(f"[XttsV2] warmup: Blocks 1+2 compiled in {time.time() - t0:.1f}s")
 
-        # 2) One eager prefill (compiles fill_cache/SDPA/etc.), then capture the step trace.
+        # 2) Vocoder at every bucket shape.
+        t1 = time.time()
+        for Lb in VOC_BUCKETS:
+            self._vocode(torch.zeros(1, 1024, Lb), voice.speaker_embedding)
+        logger.info(f"[XttsV2] warmup: vocoder compiled at {len(VOC_BUCKETS)} buckets in {time.time() - t1:.1f}s")
+
+        # 3) One eager prefill (compiles fill_cache/SDPA/etc.), then capture the step trace.
         t1 = time.time()
         prefix = assemble_prompt(
             self.tokenizer.encode("Warm up the decoder.", "en"), voice.gpt_cond_latent, self.tables
@@ -245,11 +255,10 @@ class XttsV2:
             f"[XttsV2] warmup: GPT prefill + trace captured in {time.time() - t1:.1f}s (max_seq={self.decoder.max_seq})"
         )
 
-        # 3) Tiny end-to-end generate: replays the fresh trace and compiles the vocoder
-        #    convs (first HiFi-GAN run pays the conv compile cost).
+        # 4) Tiny end-to-end generate: replays the fresh trace over the whole request path.
         t1 = time.time()
-        self.generate("Warm up the vocoder.", voice, seed=0, max_new_tokens=24)
-        logger.info(f"[XttsV2] warmup: tiny generate (decode + vocoder compile) in {time.time() - t1:.1f}s")
+        self.generate("Warm up the pipeline.", voice, seed=0, max_new_tokens=24)
+        logger.info(f"[XttsV2] warmup: tiny generate in {time.time() - t1:.1f}s")
         logger.info(f"[XttsV2] warmup total {time.time() - t0:.1f}s")
 
     # ------------------------------------------------------------ voice cloning
@@ -292,6 +301,18 @@ class XttsV2:
         return Voice(gpt_cond_latent=cond, speaker_embedding=spk)
 
     # --------------------------------------------------------------- generation
+    def _vocode(self, z, speaker_embedding):
+        """z torch [1,1024,L] + d-vector -> waveform torch [1,1,L*HOP], padded to z's bucket."""
+        dev = self.mesh_device
+        L, Lb = z.shape[-1], _voc_bucket(z.shape[-1])
+        z_nhwc = F.pad(z, (0, Lb - L)).permute(0, 2, 1).reshape(1, 1, Lb, 1024)
+        z_tt = ttnn.from_torch(z_nhwc, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev)
+        g_tt = ttnn.from_torch(
+            speaker_embedding.reshape(1, 512), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=dev
+        )
+        wav = ttnn.to_torch(self.vocoder(z_tt, g_tt)).to(torch.float32).reshape(1, 1, -1)
+        return wav[:, :, : L * HOP]  # trim the zero-padded tail
+
     def generate(self, text, voice: Voice, language="en", seed=None, max_new_tokens=GPT_MAX_AUDIO):
         """text + Voice -> waveform torch [1,1,N] float @ 24 kHz.
 
@@ -386,23 +407,11 @@ class XttsV2:
             return torch.zeros(1, 1, 0)
         gpt_latents = torch.cat(vlat, dim=1)  # [1,T,1024]
 
-        # --- vocoder: two host interpolates (HifiDecoder.forward) + HiFi-GAN on device.
-        # z is zero-padded to the FIXED VOC_L and the waveform trimmed back, so the vocoder
-        # conv programs (whose halo configs are pinned in L1_SMALL per shape) are compiled
-        # exactly once, at warmup — see the VOC_L comment. ---
+        # --- vocoder: two host interpolates (HifiDecoder.forward) + HiFi-GAN on device. ---
         t0 = time.time()
         z = F.interpolate(gpt_latents.transpose(1, 2), scale_factor=AR_COMP / HOP, mode="linear")
         z = F.interpolate(z, scale_factor=OSR / ISR, mode="linear")  # [1,1024,L_true]
-        L_true = z.shape[-1]
-        assert L_true <= VOC_L, f"vocoder input {L_true} frames exceeds the fixed cap {VOC_L}"
-        z_pad = F.pad(z, (0, VOC_L - L_true))  # [1,1024,VOC_L]
-        z_nhwc = z_pad.permute(0, 2, 1).reshape(1, 1, VOC_L, 1024)
-        z_tt = ttnn.from_torch(z_nhwc, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev)
-        g_tt = ttnn.from_torch(
-            voice.speaker_embedding.reshape(1, 512), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=dev
-        )
-        wav = ttnn.to_torch(self.vocoder(z_tt, g_tt)).to(torch.float32).reshape(1, 1, -1)
-        wav = wav[:, :, : L_true * HOP]  # trim the zero-padded tail
+        wav = self._vocode(z, voice.speaker_embedding)
         t_voc = time.time() - t0
 
         self.last_timings.update(
