@@ -39,7 +39,7 @@ Ensure **`LD_LIBRARY_PATH`** includes `<build>/lib` (or your install `lib`) when
 | `--mesh-graph-descriptor` | `-m` | **Yes** | Path to the Mesh Graph Descriptor (`.textproto`). |
 | `--physical-grouping-descriptor` | `-p` | No | Path to the Physical Grouping Descriptor (`.textproto`). If omitted, a default file is chosen automatically (see [Default Physical Grouping Descriptor](#default-physical-grouping-descriptor-omitting--p)). |
 | `--output-dir` | `-o` | No | Directory for outputs. Default: `generated/ttrun` (created if needed). |
-| `--rank-pinning-file` | `-r` | No | Path to an optional YAML pinning specific mesh IDs to hosts (see [Rank pinning file](#rank-pinning-file-optional)). |
+| `--mesh-pinning-file` | | No | Path to an optional YAML pinning specific mesh IDs to hosts (see [Mesh pinning file](#mesh-pinning-file-optional)). |
 | `--help` | `-h` | No | Print usage and exit (does not require MPI work beyond parsing). |
 
 Example:
@@ -64,14 +64,14 @@ mpirun -np <N> <mpi-args> \
 
 ---
 
-## Rank pinning file (optional)
+## Mesh pinning file (optional)
 
 By default the auto-mapper decides which physical host backs each logical mesh. Pass
-`--rank-pinning-file` to hard-pin **a subset** of meshes to named hosts; every mesh you do not list keeps
+`--mesh-pinning-file` to hard-pin **a subset** of meshes to named hosts; every mesh you do not list keeps
 the fully automatic placement. Omitting the option leaves behavior unchanged.
 
 ```yaml
-rank_pinnings:
+mesh_pinnings:
   - mesh_id: 0                           # logical mesh
     host: host-A                         # physical host
     TT_VISIBLE_DEVICES: "0,1,2,3"        # optional device visibility for its process

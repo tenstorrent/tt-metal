@@ -129,37 +129,37 @@ class TestCommandLineArguments:
         assert result.exit_code != 0
         assert "--hosts is required" in result.output.lower()
 
-    def test_rank_pinning_file_rejected_in_legacy_mode(self, runner, sample_rank_binding_yaml, tmp_path):
-        """--rank-pinning-file only applies to new mode."""
-        pins = tmp_path / "pinned_ranks.yaml"
-        pins.write_text("rank_pinnings: []\n")
+    def test_mesh_pinning_file_rejected_in_legacy_mode(self, runner, sample_rank_binding_yaml, tmp_path):
+        """--mesh-pinning-file only applies to new mode."""
+        pins = tmp_path / "pinned_meshes.yaml"
+        pins.write_text("mesh_pinnings: []\n")
         result = runner.invoke(
             main,
             [
                 "--rank-binding",
                 str(sample_rank_binding_yaml),
-                "--rank-pinning-file",
+                "--mesh-pinning-file",
                 str(pins),
                 "echo",
                 "test",
             ],
         )
         assert result.exit_code != 0
-        assert "--rank-pinning-file requires new mode" in result.output
+        assert "--mesh-pinning-file requires new mode" in result.output
 
-    def test_rank_pinning_file_rejected_with_multi_mgd_mapping(self, runner, tmp_path):
-        """Rank pinning currently has an unambiguous mesh-id space only for single-MGD mode."""
+    def test_mesh_pinning_file_rejected_with_multi_mgd_mapping(self, runner, tmp_path):
+        """Mesh pinning currently has an unambiguous mesh-id space only for single-MGD mode."""
         mapping = tmp_path / "mgd_mapping.yaml"
         mapping.write_text("subcontext_id_to_mesh_graph_descriptor:\n  0: mesh.textproto\n")
-        pins = tmp_path / "pinned_ranks.yaml"
-        pins.write_text("rank_pinnings: []\n")
+        pins = tmp_path / "pinned_meshes.yaml"
+        pins.write_text("mesh_pinnings: []\n")
 
         result = runner.invoke(
             main,
             [
                 "--mesh-graph-descriptor-mapping",
                 str(mapping),
-                "--rank-pinning-file",
+                "--mesh-pinning-file",
                 str(pins),
                 "--hosts",
                 "node1",
@@ -316,42 +316,31 @@ class TestPhase2Helpers:
         assert rank_bindings_path == output_dir / "rank_bindings.yaml"
         assert rankfile_path == output_dir / "rankfile"
 
-    def test_build_generate_rank_bindings_mpi_cmd_forwards_rank_pinning_file(self, temp_dir):
-        """--rank-pinning-file is forwarded to Phase 1 for a real cluster."""
+    def test_build_generate_rank_bindings_mpi_cmd_forwards_mesh_pinning_file(self, temp_dir):
+        """--mesh-pinning-file is forwarded to Phase 1 for a real cluster."""
         executable = temp_dir / "generate_rank_bindings"
         executable.touch()
         mgd_path = temp_dir / "mesh.textproto"
         mgd_path.touch()
-        pinning_file = temp_dir / "pinned_ranks.yaml"
-        pinning_file.write_text("rank_pinnings:\n  - mesh_id: 0\n    host: node1\n")
+        pinning_file = temp_dir / "pinned_meshes.yaml"
+        pinning_file.write_text("mesh_pinnings:\n  - mesh_id: 0\n    host: node1\n")
         output_dir = temp_dir / "output"
 
         cmd = build_generate_rank_bindings_mpi_cmd(
-            executable, mgd_path, ["node1", "node2"], output_dir, rank_pinning_file=pinning_file
+            executable, mgd_path, ["node1", "node2"], output_dir, mesh_pinning_file=pinning_file
         )
 
-        assert "--rank-pinning-file" in cmd
-        assert cmd[cmd.index("--rank-pinning-file") + 1] == str(pinning_file.resolve())
+        assert "--mesh-pinning-file" in cmd
+        assert cmd[cmd.index("--mesh-pinning-file") + 1] == str(pinning_file.resolve())
 
-    def test_build_generate_rank_bindings_mpi_cmd_omits_rank_pinning_file_when_unset(self, temp_dir):
-        """Without the option the Phase 1 command is unchanged."""
+    def test_build_generate_rank_bindings_mpi_cmd_forwards_mesh_pinning_file_mock(self, temp_dir):
+        """--mesh-pinning-file is forwarded on every per-rank segment in mock mode."""
         executable = temp_dir / "generate_rank_bindings"
         executable.touch()
         mgd_path = temp_dir / "mesh.textproto"
         mgd_path.touch()
-
-        cmd = build_generate_rank_bindings_mpi_cmd(executable, mgd_path, ["node1"], temp_dir / "output")
-
-        assert "--rank-pinning-file" not in cmd
-
-    def test_build_generate_rank_bindings_mpi_cmd_forwards_rank_pinning_file_mock(self, temp_dir):
-        """--rank-pinning-file is forwarded on every per-rank segment in mock mode."""
-        executable = temp_dir / "generate_rank_bindings"
-        executable.touch()
-        mgd_path = temp_dir / "mesh.textproto"
-        mgd_path.touch()
-        pinning_file = temp_dir / "pinned_ranks.yaml"
-        pinning_file.write_text("rank_pinnings: []\n")
+        pinning_file = temp_dir / "pinned_meshes.yaml"
+        pinning_file.write_text("mesh_pinnings: []\n")
         mock_desc = temp_dir / "mock0.yaml"
         mock_desc.touch()
 
@@ -361,10 +350,10 @@ class TestPhase2Helpers:
             None,
             temp_dir / "output",
             mock_rank_to_desc={0: mock_desc, 1: mock_desc},
-            rank_pinning_file=pinning_file,
+            mesh_pinning_file=pinning_file,
         )
 
-        assert cmd.count("--rank-pinning-file") == 2
+        assert cmd.count("--mesh-pinning-file") == 2
 
     def test_build_generate_rank_bindings_mpi_cmd_hosts(self, temp_dir):
         """Test build_generate_rank_bindings_mpi_cmd with hosts."""
@@ -771,29 +760,21 @@ class TestFindGenerateRankBindingsExecutable:
 class TestPhase1CacheId:
     """Tests for Phase 1 cache fingerprint (content-based MGD, order-invariant hosts)."""
 
-    def test_cache_id_changes_with_rank_pinning_file(self, temp_dir):
-        """Editing the rank pinning file must invalidate the Phase 1 cache directory."""
+    def test_cache_id_changes_with_mesh_pinning_file(self, temp_dir):
+        """Editing the mesh pinning file must invalidate the Phase 1 cache directory."""
         mgd = temp_dir / "m.textproto"
         mgd.write_bytes(b"x")
-        pins = temp_dir / "pinned_ranks.yaml"
+        pins = temp_dir / "pinned_meshes.yaml"
 
         without_file = compute_phase1_cache_id(mgd, sorted(["h1"]), None)
 
-        pins.write_text("rank_pinnings:\n  - mesh_id: 0\n    host: h1\n")
+        pins.write_text("mesh_pinnings:\n  - mesh_id: 0\n    host: h1\n")
         with_file = compute_phase1_cache_id(mgd, sorted(["h1"]), None, pins)
         assert with_file != without_file
 
-        pins.write_text("rank_pinnings:\n  - mesh_id: 0\n    host: h2\n")
+        pins.write_text("mesh_pinnings:\n  - mesh_id: 0\n    host: h2\n")
         edited = compute_phase1_cache_id(mgd, sorted(["h1"]), None, pins)
         assert edited != with_file
-
-    def test_cache_id_unchanged_without_rank_pinning_file(self, temp_dir):
-        """Omitting the option keeps the historical fingerprint."""
-        mgd = temp_dir / "m.textproto"
-        mgd.write_bytes(b"x")
-        assert compute_phase1_cache_id(mgd, sorted(["h1"]), None) == compute_phase1_cache_id(
-            mgd, sorted(["h1"]), None, None
-        )
 
     def test_cache_id_is_short_hex(self, temp_dir):
         mgd = temp_dir / "m.textproto"

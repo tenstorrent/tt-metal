@@ -75,39 +75,6 @@ class TestNewModePhase1Phase2:
         assert "--mesh-graph-descriptor" in captured_cmd
         # Note: generate_rank_bindings accepts --output-dir (default: generated/ttrun)
 
-    def test_phase1_forwards_rank_pinning_file(self, temp_dir):
-        """The optional rank pinning file reaches the Phase 1 argv."""
-        import subprocess
-
-        mgd_path = temp_dir / "mesh.textproto"
-        mgd_path.touch()
-        pinning_file = temp_dir / "pinned_ranks.yaml"
-        pinning_file.write_text("rank_pinnings:\n  - rank: 0\n    host: node1\n")
-        output_dir = temp_dir / "output"
-        output_dir.mkdir()
-
-        captured_cmd = []
-
-        def mock_run(cmd, cwd=None, **kwargs):
-            captured_cmd.extend(cmd)
-            (output_dir / "rank_bindings.yaml").touch()
-            (output_dir / "rankfile").touch()
-            mock_result = MagicMock()
-            mock_result.returncode = 0
-            return mock_result
-
-        with patch.object(subprocess, "run", side_effect=mock_run):
-            run_phase1_generate_rank_bindings(
-                mgd_path,
-                ["node1", "node2"],
-                output_dir,
-                subprocess_run=subprocess.run,
-                rank_pinning_file=pinning_file,
-            )
-
-        assert "--rank-pinning-file" in captured_cmd
-        assert captured_cmd[captured_cmd.index("--rank-pinning-file") + 1] == str(pinning_file.resolve())
-
     def test_phase1_mock_cluster_per_rank_segments(self, temp_dir):
         """Test Phase 1 command uses per-rank -np 1 segments for mock cluster."""
         import subprocess

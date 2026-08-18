@@ -40,7 +40,7 @@
 #include <llrt/tt_cluster.hpp>
 
 #include "generate_rank_bindings_helpers.hpp"
-#include "rank_pinning_file.hpp"
+#include "mesh_pinning_file.hpp"
 
 #ifdef OPEN_MPI
 #include <mpi.h>
@@ -271,7 +271,7 @@ TopologyMappingWithLocalMaps run_topology_mapping(
     if (!mesh_pinnings.empty()) {
         if (mesh_graphs.size() != 1) {
             throw std::runtime_error(
-                "Rank pinning is currently supported only with a single Mesh Graph Descriptor (-m), not a "
+                "Mesh pinning is currently supported only with a single Mesh Graph Descriptor (-m), not a "
                 "multi-MGD mapping (-M).");
         }
 
@@ -711,7 +711,7 @@ struct ProgramArgs {
     std::map<int, std::filesystem::path> subcontext_id_to_mgd_path;
     std::optional<std::string> physical_grouping_descriptor_path;
     std::optional<std::string> output_dir;
-    std::optional<std::string> rank_pinning_file_path;
+    std::optional<std::string> mesh_pinning_file_path;
 };
 
 /**
@@ -742,7 +742,7 @@ ProgramArgs parse_arguments(int argc, char** argv) {
         "o,output-dir",
         "Output directory for rank_bindings.yaml, rankfile, etc. (default: generated/ttrun)",
         cxxopts::value<std::string>())(
-        "r,rank-pinning-file",
+        "mesh-pinning-file",
         "Path to optional YAML pinning specific mesh IDs to hosts - OPTIONAL",
         cxxopts::value<std::string>())("h,help", "Print usage information");
 
@@ -777,8 +777,8 @@ ProgramArgs parse_arguments(int argc, char** argv) {
         if (result.contains("output-dir")) {
             args.output_dir = result["output-dir"].as<std::string>();
         }
-        if (result.contains("rank-pinning-file")) {
-            args.rank_pinning_file_path = result["rank-pinning-file"].as<std::string>();
+        if (result.contains("mesh-pinning-file")) {
+            args.mesh_pinning_file_path = result["mesh-pinning-file"].as<std::string>();
         }
 
         return args;
@@ -837,14 +837,14 @@ int main(int argc, char** argv) {
             &psd);
 
         std::vector<MeshPinning> mesh_pinnings;
-        if (args.rank_pinning_file_path.has_value()) {
+        if (args.mesh_pinning_file_path.has_value()) {
             if (mgds.size() != 1) {
                 throw std::runtime_error(
-                    "--rank-pinning-file supports only a single Mesh Graph Descriptor (-m), not a multi-MGD "
+                    "--mesh-pinning-file supports only a single Mesh Graph Descriptor (-m), not a multi-MGD "
                     "mapping (-M)");
             }
-            log_info(tt::LogFabric, "Stage: Loading mesh pinning file from: {}", *args.rank_pinning_file_path);
-            mesh_pinnings = parse_rank_pinning_file(*args.rank_pinning_file_path);
+            log_info(tt::LogFabric, "Stage: Loading mesh pinning file from: {}", *args.mesh_pinning_file_path);
+            mesh_pinnings = parse_mesh_pinning_file(*args.mesh_pinning_file_path);
             log_info(tt::LogFabric, "Loaded {} mesh pinning(s)", mesh_pinnings.size());
         }
 

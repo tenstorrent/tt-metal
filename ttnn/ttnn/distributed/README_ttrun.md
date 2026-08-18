@@ -54,12 +54,12 @@ tt-run -m path/to/mgd.textproto \
 
 ### Pinning meshes to hosts (optional)
 
-By default the auto-mapper picks which host backs each mesh. Pass `--rank-pinning-file` to pin **a subset**
+By default the auto-mapper picks which host backs each mesh. Pass `--mesh-pinning-file` to pin **a subset**
 of meshes to named hosts; unlisted meshes stay fully auto-placed, and omitting the option changes nothing.
 
 ```yaml
-# pinned_ranks.yaml
-rank_pinnings:
+# pinned_meshes.yaml
+mesh_pinnings:
   - mesh_id: 0                           # logical mesh
     host: nodeA                          # physical host
     TT_VISIBLE_DEVICES: "0,1,2,3"        # optional process device visibility
@@ -70,7 +70,7 @@ rank_pinnings:
 ```bash
 tt-run --mesh-graph-descriptor path/to/mgd.textproto \
   --hosts nodeA,nodeB \
-  --rank-pinning-file pinned_ranks.yaml \
+  --mesh-pinning-file pinned_meshes.yaml \
   ./my_app
 ```
 
@@ -81,7 +81,7 @@ rank and a single MGD (`-m`) — see
 [`README_generate_rank_bindings.md`](../../../tools/scaleout/README_generate_rank_bindings.md) for details.
 
 The pinning file's contents feed the Phase 1 cache fingerprint, so editing it forces a fresh Phase 1 run; a
-copy is saved into the cache directory as `rank_pinnings.yaml`.
+copy is saved into the cache directory as `mesh_pinnings.yaml`.
 
 ### Phase 1 cache directory
 
@@ -89,7 +89,7 @@ Outputs live in a **per-configuration subdirectory** of the launch directory:
 
 `generated/ttrun/<cache_id>/`
 
-- **`<cache_id>`** is a short hexadecimal prefix (16 characters) of a SHA-256 fingerprint over the same inputs **Phase 1** uses: single **`.textproto`** bytes, **or** mapping YAML bytes **plus** each referenced MGD in sub-context order—plus either the **sorted** host list (real cluster) or mock cluster descriptor contents per rank (mock mode), and the contents of `--rank-pinning-file` when given. The original path and host **order** in `--hosts` do not change the id as long as the multiset of hosts is the same.
+- **`<cache_id>`** is a short hexadecimal prefix (16 characters) of a SHA-256 fingerprint over the same inputs **Phase 1** uses: single **`.textproto`** bytes, **or** mapping YAML bytes **plus** each referenced MGD in sub-context order—plus either the **sorted** host list (real cluster) or mock cluster descriptor contents per rank (mock mode), and the contents of `--mesh-pinning-file` when given. The original path and host **order** in `--hosts` do not change the id as long as the multiset of hosts is the same.
 - **Canonical host order:** `--hosts` is passed to Phase 1 in **lexicographic sorted** order so MPI rank order matches the cache fingerprint. If you relied on “first host in the list is rank 0,” use sorted hostnames instead.
 
 **Truncation collision:** If another configuration shares the same short id but a different full fingerprint, tt-run detects the mismatch via `.phase1_cache_key` and writes to a disambiguated path `generated/ttrun/<full_64_char_hex>/` instead of overwriting the short-id directory.
@@ -255,7 +255,7 @@ Both modes support:
 - `--tcp-interface` – NIC for MPI TCP (e.g., `cnx1`)
 - `--bare` – Disable default multi-host MPI settings
 - `--mock-cluster-rank-binding` – Mock cluster descriptor mapping file (rank → descriptor path). When used with auto allocation mode, `--hosts` is not required; processes run locally with one rank per mapping entry, each rank getting its corresponding descriptor via `TT_METAL_MOCK_CLUSTER_DESC_PATH`.
-- `--rank-pinning-file` – **New mode only.** Optional YAML pinning specific mesh IDs to hosts (see [Pinning meshes to hosts](#pinning-meshes-to-hosts-optional)). Rejected with `--rank-binding` / `--rank-bindings-mapping`.
+- `--mesh-pinning-file` – **New mode only.** Optional YAML pinning specific mesh IDs to hosts (see [Pinning meshes to hosts](#pinning-meshes-to-hosts-optional)). Rejected with `--rank-binding` / `--rank-bindings-mapping`.
 - `--force-rediscovery` – **New mode only.** Always run Phase 1 and refresh the Phase 1 cache even when a cache hit would otherwise skip `generate_rank_bindings`. Ignored with `--rank-binding` (legacy mode). When new mode continues to **Phase 2**, failures there (config, mpirun, non-zero program exit, or Ctrl+C during a hang) log a hint to try **`--force-rediscovery`**.
 
 Run `tt-run --help` for the full list.

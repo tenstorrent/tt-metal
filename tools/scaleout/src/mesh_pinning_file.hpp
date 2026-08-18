@@ -18,7 +18,7 @@
 
 // Optional Phase 1 mesh pinning YAML. Unlisted meshes stay auto-mapped.
 //
-//   rank_pinnings:
+//   mesh_pinnings:
 //     - mesh_id: 0
 //       host: host-A
 //       TT_VISIBLE_DEVICES: "0,1,2,3"  # optional
@@ -38,21 +38,21 @@ struct ResolvedMeshPinning {
 
 using MeshHostRanksByMesh = std::map<int, std::vector<int>>;
 
-inline std::vector<MeshPinning> parse_rank_pinning_file(const std::string& path) {
+inline std::vector<MeshPinning> parse_mesh_pinning_file(const std::string& path) {
     YAML::Node root;
     try {
         root = YAML::LoadFile(path);
     } catch (const YAML::Exception& e) {
-        throw std::runtime_error(fmt::format("Failed to parse rank pinning file {}: {}", path, e.what()));
+        throw std::runtime_error(fmt::format("Failed to parse mesh pinning file {}: {}", path, e.what()));
     }
 
-    if (!root.IsMap() || !root["rank_pinnings"]) {
+    if (!root.IsMap() || !root["mesh_pinnings"]) {
         throw std::runtime_error(
-            fmt::format("Rank pinning file {} must contain a top-level 'rank_pinnings' key", path));
+            fmt::format("Mesh pinning file {} must contain a top-level 'mesh_pinnings' key", path));
     }
-    const YAML::Node& entries = root["rank_pinnings"];
+    const YAML::Node& entries = root["mesh_pinnings"];
     if (!entries.IsSequence()) {
-        throw std::runtime_error(fmt::format("'rank_pinnings' in {} must be a sequence", path));
+        throw std::runtime_error(fmt::format("'mesh_pinnings' in {} must be a sequence", path));
     }
 
     static const std::set<std::string> allowed_keys = {"mesh_id", "host", "TT_VISIBLE_DEVICES"};
@@ -63,7 +63,7 @@ inline std::vector<MeshPinning> parse_rank_pinning_file(const std::string& path)
     for (std::size_t i = 0; i < entries.size(); ++i) {
         const YAML::Node& entry = entries[i];
         if (!entry.IsMap()) {
-            throw std::runtime_error(fmt::format("rank_pinnings[{}] in {} must be a map", i, path));
+            throw std::runtime_error(fmt::format("mesh_pinnings[{}] in {} must be a map", i, path));
         }
 
         MeshPinning pinning;
@@ -71,7 +71,7 @@ inline std::vector<MeshPinning> parse_rank_pinning_file(const std::string& path)
             const auto key = kv.first.as<std::string>();
             if (!allowed_keys.contains(key)) {
                 throw std::runtime_error(fmt::format(
-                    "Unknown key '{}' in rank_pinnings[{}] of {}. Allowed keys: mesh_id, host, TT_VISIBLE_DEVICES",
+                    "Unknown key '{}' in mesh_pinnings[{}] of {}. Allowed keys: mesh_id, host, TT_VISIBLE_DEVICES",
                     key,
                     i,
                     path));
@@ -79,10 +79,10 @@ inline std::vector<MeshPinning> parse_rank_pinning_file(const std::string& path)
         }
 
         if (!entry["host"]) {
-            throw std::runtime_error(fmt::format("rank_pinnings[{}] in {} is missing key 'host'", i, path));
+            throw std::runtime_error(fmt::format("mesh_pinnings[{}] in {} is missing key 'host'", i, path));
         }
         if (!entry["mesh_id"]) {
-            throw std::runtime_error(fmt::format("rank_pinnings[{}] in {} is missing key 'mesh_id'", i, path));
+            throw std::runtime_error(fmt::format("mesh_pinnings[{}] in {} is missing key 'mesh_id'", i, path));
         }
 
         pinning.mesh_id = entry["mesh_id"].as<int>();
@@ -92,11 +92,11 @@ inline std::vector<MeshPinning> parse_rank_pinning_file(const std::string& path)
         }
 
         if (pinning.host.empty()) {
-            throw std::runtime_error(fmt::format("rank_pinnings[{}] in {} has an empty 'host'", i, path));
+            throw std::runtime_error(fmt::format("mesh_pinnings[{}] in {} has an empty 'host'", i, path));
         }
         if (pinning.mesh_id < 0) {
             throw std::runtime_error(
-                fmt::format("rank_pinnings[{}] in {} has a negative mesh_id ({})", i, path, pinning.mesh_id));
+                fmt::format("mesh_pinnings[{}] in {} has a negative mesh_id ({})", i, path, pinning.mesh_id));
         }
         if (!seen_mesh_ids.insert(pinning.mesh_id).second) {
             throw std::runtime_error(fmt::format("Duplicate pinning for mesh_id {} in {}", pinning.mesh_id, path));
@@ -116,11 +116,11 @@ inline std::vector<ResolvedMeshPinning> resolve_mesh_pinnings(
         const auto mesh_it = host_ranks_by_mesh.find(pinning.mesh_id);
         if (mesh_it == host_ranks_by_mesh.end()) {
             throw std::runtime_error(fmt::format(
-                "Rank pinning file pins mesh_id {}, which the mesh graph descriptor does not define", pinning.mesh_id));
+                "Mesh pinning file pins mesh_id {}, which the mesh graph descriptor does not define", pinning.mesh_id));
         }
         if (mesh_it->second.size() != 1) {
             throw std::runtime_error(fmt::format(
-                "Rank pinning file pins mesh_id {}, which spans {} host ranks. Pinning is currently supported "
+                "Mesh pinning file pins mesh_id {}, which spans {} host ranks. Pinning is currently supported "
                 "only for meshes that occupy a single host",
                 pinning.mesh_id,
                 mesh_it->second.size()));
