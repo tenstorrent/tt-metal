@@ -125,10 +125,7 @@ class TTNNHifiganGenerator:
         self.cc = _compute_config()
         self.dtype = dtype  # activation dtype
         self.weights_dtype = weights_dtype or dtype
-        # preprocess_* keeps conv weights on host, so ttnn re-prepares and re-uploads them on
-        # every call (78 convs per forward). Keep the device-prepared pair it hands back, keyed
-        # by (weight, input length) — the layout it prepares depends on the conv's geometry.
-        self._prepared = {}
+        self._prepared_weights = {}  # device-prepared conv weights, keyed by (weight, input length)
 
     def _conv_config(self):
         # Fresh Conv2dConfig per call: ttnn conv ops may write auto-selected sharding back into
@@ -152,7 +149,7 @@ class TTNNHifiganGenerator:
         """x: [1,1,L,in_ch] (any layout) -> [1,1,Lout,out_ch] TILE. Length-preserving 'same' pad."""
         x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
         key = (id(w), L)
-        wp, bp = self._prepared.get(key, (w, b))
+        wp, bp = self._prepared_weights.get(key, (w, b))
         out, lo, wb = ttnn.conv1d(
             input_tensor=x,
             weight_tensor=wp,
@@ -174,7 +171,7 @@ class TTNNHifiganGenerator:
             return_output_dim=True,
             return_weights_and_bias=True,
         )
-        self._prepared.setdefault(key, wb)
+        self._prepared_weights.setdefault(key, wb)
         return self._post(out, lo, out_ch), lo
 
     def _convT(self, x, w, b, in_ch, out_ch, L, k, s, pad):
@@ -185,7 +182,7 @@ class TTNNHifiganGenerator:
         if slice_cfg is not None:
             kwargs["dram_slice_config"] = slice_cfg
         key = (id(w), L)
-        wp, bp = self._prepared.get(key, (w, b))
+        wp, bp = self._prepared_weights.get(key, (w, b))
         out, [ho, wo], wb = ttnn.conv_transpose2d(
             input_tensor=x,
             weight_tensor=wp,
@@ -209,7 +206,7 @@ class TTNNHifiganGenerator:
             dtype=self.dtype,
             **kwargs,
         )
-        self._prepared.setdefault(key, wb)
+        self._prepared_weights.setdefault(key, wb)
         return self._post(out, ho * wo, out_ch), wo
 
     def _cond(self, g2d, lin_w, lin_b, out_ch):
