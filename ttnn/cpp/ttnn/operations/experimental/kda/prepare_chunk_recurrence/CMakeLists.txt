@@ -31,10 +31,16 @@ target_sources(
         FILES ${kernels}
     PRIVATE
         ${TTNN_OP_EXPERIMENTAL_KDA_PREPARE_CHUNK_RECURRENCE_SRCS}
-        ${TTNN_OP_EXPERIMENTAL_KDA_SHARED_SRCS}
 )
 
-target_link_libraries(ttnn_op_experimental_kda_prepare_chunk_recurrence PRIVATE TT::Metalium PUBLIC TTNN::Core)
+target_link_libraries(
+    ttnn_op_experimental_kda_prepare_chunk_recurrence
+    PRIVATE
+        TT::Metalium
+        TTNN::Ops::Experimental::KDA::Common
+    PUBLIC
+        TTNN::Core
+)
 
 install(
     TARGETS
