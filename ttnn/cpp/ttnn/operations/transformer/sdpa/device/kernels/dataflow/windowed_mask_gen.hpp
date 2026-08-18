@@ -585,8 +585,9 @@ inline void generate_neighborhood_gather_mask_for_q_chunk(
     uint32_t nb_bh = 0,
     uint32_t nb_bw = 0) {
     const uint32_t q_row_start_tile = std::min(q_chunk * Sq_chunk_t, valid_Sqt);
+    // Block counts over THIS shard: nb_W is full W (K gather/clamp); the shard's local W = S_local/(T*H).
     const uint32_t hb = nb_bt != 0 ? nb_H / nb_bh : 0;
-    const uint32_t wb = nb_bt != 0 ? nb_W / nb_bw : 0;
+    const uint32_t wb = nb_bt != 0 ? ((valid_Sqt * tt::constants::TILE_HEIGHT) / (nb_T * nb_H)) / nb_bw : 0;
     const auto box = nb_bt != 0 ? neighborhood_box_block(
                                       q_chunk,
                                       nb_bt,

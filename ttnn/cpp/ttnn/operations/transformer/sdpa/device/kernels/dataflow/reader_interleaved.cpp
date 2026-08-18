@@ -453,8 +453,11 @@ void kernel_main() {
                     ctrl_hi = windowed_k_hi;
                 } else {               // 3D-neighborhood (block-permuted or strided Q); packed active count for compute
                     if (nb_bt != 0) {  // block-permuted Q: chunk == one (bt,bh,bw) block
+                        // Block counts over THIS shard: nb_W is the full W (for the K gather/clamp), but the
+                        // shard's local W = S_local / (T*H); derive it so W-SP composes (no-SP: w_local == nb_W).
                         const uint32_t hb = nb_H / nb_bh;
-                        const uint32_t wb = nb_W / nb_bw;
+                        const uint32_t w_local = (valid_Sqt * tt::constants::TILE_HEIGHT) / (nb_T * nb_H);
+                        const uint32_t wb = w_local / nb_bw;
                         nbr_box = neighborhood_box_block(
                             q_chunk, nb_bt, nb_bh, nb_bw, hb, wb, nb_T, nb_H, nb_W, nb_kt, nb_kh, nb_kw, nb_w_origin);
                         const auto range = neighborhood_box_k_chunk_range(
