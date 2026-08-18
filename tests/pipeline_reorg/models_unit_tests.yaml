@@ -448,8 +448,8 @@
 
 - name: Gemma-4-E4B unit tests
   cmd: |
+    export TT_METAL_WATCHER=30
     uv pip install -r models/demos/gemma4/requirements.txt
-    unset TT_METAL_WATCHER  # blocked by #50886
     export HF_MODEL=models/demos/gemma4/configs/gemma-4-E4B-it
     pytest --timeout 600 \
       --ignore=models/demos/gemma4/tests/unit/test_lm_head.py \
@@ -479,7 +479,7 @@
 
 - name: Gemma-4-26B-A4B unit tests
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886
+    export TT_METAL_WATCHER=30
     uv pip install -r models/demos/gemma4/requirements.txt
     export HF_MODEL=models/demos/gemma4/configs/gemma-4-26B-A4B-it
     pytest --timeout 900 \
@@ -514,8 +514,8 @@
 
 - name: Gemma-4-31B unit tests
   cmd: |
+    export TT_METAL_WATCHER=30
     uv pip install -r models/demos/gemma4/requirements.txt
-    unset TT_METAL_WATCHER  # blocked by #50886
     export HF_MODEL=models/demos/gemma4/configs/gemma-4-31B-it
     pytest --timeout 900 \
       --ignore=models/demos/gemma4/tests/unit/test_lm_head.py \
@@ -547,7 +547,7 @@
 
 - name: Gemma-4-12B unit tests
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886
+    export TT_METAL_WATCHER=30
     uv pip install -r models/demos/gemma4/requirements.txt
     export HF_MODEL=models/demos/gemma4/configs/gemma-4-12B-it
     pytest --timeout 900 \
