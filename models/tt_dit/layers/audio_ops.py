@@ -1105,12 +1105,10 @@ class Conv1dViaConv3d(Module):
                 ccl_manager=self.ccl_manager,
                 padding_mode="zeros",
             )
-            owns_padded = False  # borrowed: the ccl_manager's ping-pong buffer, not ours to free
         else:
             pad_left = self.external_pad_front + self.internal_padding[0]
             pad_right = self.internal_padding[0]
             x_padded = _zero_pad_t(x_BTC, pad_left, pad_right, self.mesh_device) if pad_left or pad_right else x_BTC
-            owns_padded = x_padded is not x_BTC
         t_out = x_padded.shape[1] - (self.eff_k - 1)
         batch, _, channels = x_padded.shape
 
@@ -1154,10 +1152,8 @@ class Conv1dViaConv3d(Module):
                 ttnn.deallocate(accumulator)
                 ttnn.deallocate(term)
                 accumulator = new_accumulator
-        # Only free what we allocated. Sharded, `x_padded` is the ccl_manager's cached ping-pong buffer,
-        # and freeing it left a dead entry there -- the next halo call with that shape then failed
-        # `is_allocated()` inside an unrelated op. `x_padded is not x_BTC` was the wrong ownership test.
-        if owns_padded:
+        # Sharded, `x_padded` is the ccl_manager's ping-pong buffer, so freeing it corrupts that cache.
+        if not sharded and x_padded is not x_BTC:
             ttnn.deallocate(x_padded)
 
         if self.bias is not None:

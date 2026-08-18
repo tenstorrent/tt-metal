@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-from loguru import logger
 
 import ttnn
 
@@ -643,19 +642,6 @@ class CCLManager:
             output_shape[dims[0] - 1] += t_front_pad
 
         cache_key = ("np", tuple(output_shape), dtype)
-
-        # These buffers are handed out as `neighbor_pad_async`'s output, so a caller that treats the
-        # result as its own and deallocates it leaves a freed buffer in the cache -- and the next caller
-        # with the same shape gets it, failing `input_tensor.is_allocated()` inside an unrelated op, with
-        # nothing in the message pointing back here. Re-create rather than hand out a dead buffer.
-        cached = self._ping_pong_buffer_cache.get(cache_key)
-        if cached is not None and not all(buf.is_allocated() for buf in cached):
-            logger.warning(
-                f"neighbor-pad ping-pong buffer {cache_key} was deallocated by a consumer; re-creating. "
-                "The caller is freeing a buffer this manager owns."
-            )
-            del self._ping_pong_buffer_cache[cache_key]
-            self._ping_pong_buffer_indices.pop(cache_key, None)
 
         if cache_key not in self._ping_pong_buffer_cache:
             ttnn.synchronize_device(self.mesh_device)
