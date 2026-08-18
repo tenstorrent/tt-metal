@@ -10,11 +10,13 @@
 //
 //   * A row whose tiles lie ENTIRELY inside this core's run is reduced and written right here. In
 //     prefill nearly every row is like that, so the exchange below is almost never used.
-//   * A row this core only partially covers is a BOUNDARY row. A core has at most two (its first and
-//     its last), so the exchange is bounded at 2 records per core whatever the shape. Those records
-//     are NOC-written into the origin core's L1, which merges by row id and writes those rows.
-//     Follows frobenius_normalize: partials to origin's L1, noc_semaphore_inc, origin waits on
-//     num_cores - 1.
+//   * A row split across cores is merged by the row's OWNER -- the core holding the row's first
+//     tile. The split hands each core one contiguous tile range, so a core can hold a foreign shard
+//     only of its FIRST row (at most one record to send) and can own a split row only as its LAST
+//     (at most one merge to run). Senders NOC-write their record into a host-assigned slot in the
+//     owner's L1 and bump the owner's semaphore; the owner waits for exactly its shard count, folds
+//     the records into its own accumulators, and writes the row. Every split row merges on a
+//     different core, in parallel -- there is no global rendezvous core to serialize on.
 //
 // Comparison is on raw FP32 bit patterns via float32_greater: the data-movement RISCs have no FPU.
 
@@ -33,10 +35,10 @@ constexpr uint32_t kFaceWidth = 16U;
 constexpr uint32_t kFaceSize = kFaceHeight * kFaceWidth;
 
 // A boundary record: [valid, row_id, 32 max bit-patterns, 32 indices], padded to a NOC-friendly
-// multiple of 16 bytes. Two per core is the hard bound (the first and last row of a core's run).
+// multiple of 16 bytes. The records CB holds the receive slots for the one row this core may own,
+// then one staging slot for the record it may send.
 constexpr uint32_t kRecordStrideU32 = 72U;  // 66 used, padded to 288 bytes
 constexpr uint32_t kRecordBytes = kRecordStrideU32 * sizeof(uint32_t);
-constexpr uint32_t kRecordsPerCore = 2U;
 
 // Bytes per staged output value: a NOC write needs its L1 source aligned, so each token id gets its
 // own slot rather than sitting packed 4 bytes apart.
@@ -49,10 +51,16 @@ void kernel_main() {
     const uint32_t output_address = get_arg_val<uint32_t>(rt_idx++);
     const uint32_t num_tiles = get_arg_val<uint32_t>(rt_idx++);
     const uint32_t start_tile = get_arg_val<uint32_t>(rt_idx++);
-    const uint32_t core_index = get_arg_val<uint32_t>(rt_idx++);
     // Base address of the positions tensor, 0 when absent; emitted in both modes so the host can
     // patch the slot unconditionally.
     const uint32_t positions_address = get_arg_val<uint32_t>(rt_idx++);
+    // Merge routing, host-derived from the same work split that produced num_tiles/start_tile:
+    // where this core's first-row shard goes (meaningful only when that row began on an earlier
+    // core), and how many foreign shards of its last row to wait for (0 when that row ends here).
+    const uint32_t owner_phys_x = get_arg_val<uint32_t>(rt_idx++);
+    const uint32_t owner_phys_y = get_arg_val<uint32_t>(rt_idx++);
+    const uint32_t send_slot = get_arg_val<uint32_t>(rt_idx++);
+    const uint32_t expected_shards = get_arg_val<uint32_t>(rt_idx++);
 
     constexpr uint32_t cb_scores_idx = tt::CBIndex::c_2;
     constexpr uint32_t cb_output_staging_idx = tt::CBIndex::c_3;
@@ -63,11 +71,11 @@ void kernel_main() {
     constexpr uint32_t logical_vocab = get_compile_time_arg_val(1);
     constexpr uint32_t logical_tokens = get_compile_time_arg_val(2);
     constexpr uint32_t Ht = get_compile_time_arg_val(3);
-    constexpr uint32_t num_cores = get_compile_time_arg_val(4);
-    constexpr uint32_t reduction_sem_id = get_compile_time_arg_val(5);
-    constexpr uint32_t origin_phys_x = get_compile_time_arg_val(6);
-    constexpr uint32_t origin_phys_y = get_compile_time_arg_val(7);
-    constexpr uint32_t num_entries = get_compile_time_arg_val(8);
+    constexpr uint32_t reduction_sem_id = get_compile_time_arg_val(4);
+    // Receive-slot count in the records CB (the grid-wide worst-case shard fan-in for one row);
+    // the outgoing record is staged in the slot just past them.
+    constexpr uint32_t max_foreign_shards = get_compile_time_arg_val(5);
+    constexpr uint32_t num_entries = get_compile_time_arg_val(6);
 
 #ifdef DO_POSITIONS
     constexpr bool do_positions = true;
@@ -75,16 +83,17 @@ void kernel_main() {
     constexpr bool do_positions = false;
 #endif
 
-    constexpr auto output_args = TensorAccessorArgs<9>();
+    constexpr auto output_args = TensorAccessorArgs<7>();
     constexpr auto positions_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
     const auto output_address_generator = TensorAccessor(output_args, output_address);
 
     const uint32_t staging_address = get_write_ptr(cb_output_staging_idx);
     const uint32_t records_base = get_write_ptr(cb_records_idx);
 
-    // Stage the full local position list, as the reader does. This core needs entries beyond its own
-    // run: the origin re-derives the target row of every boundary entry it merges, which keeps that
-    // row out of the record format entirely.
+    // Stage the full local position list, as the reader does. Only this core's own entries are ever
+    // consumed -- the rows it scans and the one row it may merge all lie inside its run -- but the
+    // slots are indexed by absolute entry id, so staging the whole list keeps the addressing
+    // trivial and the reads hide under the scores wait below.
     //
     // The read is free here -- the next thing this kernel does is block on cb_wait_front(scores),
     // which cannot clear until the reader has already fetched logits from DRAM. BRISC issues reads
@@ -149,36 +158,47 @@ void kernel_main() {
         noc_async_write_barrier();
     };
 
-    uint32_t staged_records = 0U;
-
-    // All 32 slots travel verbatim: rows this core never scanned are still NEG_INF from
-    // reset_accumulators, so the merge below leaves them alone whichever mode is compiled.
-    auto stage_record = [&](uint32_t tile_row, uint32_t /*valid_rows*/) {
-        auto* rec = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-            records_base + (core_index * kRecordsPerCore + staged_records) * kRecordBytes);
+    // Ship this core's shard of its first row to that row's owner. All 32 slots travel verbatim:
+    // rows this core never scanned are still NEG_INF from reset_accumulators, so the merge leaves
+    // them alone whichever mode is compiled. Fires even for all-padding rows: the owner's expected
+    // count is derived from the split geometry alone, so a withheld record would deadlock it.
+    //
+    // The records CB sits at the same L1 address on every core, so the local base doubles as the
+    // remote destination base.
+    auto send_shard = [&](uint32_t tile_row) {
+        const uint32_t staging = records_base + max_foreign_shards * kRecordBytes;
+        auto* rec = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(staging);
         rec[0] = 1U;
         rec[1] = tile_row;
         for (uint32_t h = 0U; h < kTileHeight; ++h) {
             rec[2U + h] = max_values[h];
             rec[2U + kTileHeight + h] = arg_max[h];
         }
-        ++staged_records;
-    };
-
-    auto row_is_owned = [&](uint32_t tile_row) -> bool {
-        const uint32_t row_first = tile_row * Wt;
-        return (row_first >= start_tile) && (row_first + Wt <= start_tile + num_tiles);
+        // Record first, then the increment: the write barrier orders them, so the owner's
+        // semaphore never counts a record that has not landed.
+        noc_async_write(
+            staging,
+            get_noc_addr(owner_phys_x, owner_phys_y, records_base + send_slot * kRecordBytes),
+            kRecordBytes);
+        noc_async_write_barrier();
+        noc_semaphore_inc(get_noc_addr(owner_phys_x, owner_phys_y, get_semaphore(reduction_sem_id)), 1U);
     };
 
     auto finish_row = [&](uint32_t tile_row, uint32_t valid_rows) {
-        if (valid_rows == 0U) {
+        const uint32_t row_first = tile_row * Wt;
+        if (row_first >= start_tile && row_first + Wt <= start_tile + num_tiles) {
+            if (valid_rows != 0U) {
+                write_row(tile_row, valid_rows);
+            }
             return;
         }
-        if (row_is_owned(tile_row)) {
-            write_row(tile_row, valid_rows);
-        } else {
-            stage_record(tile_row, valid_rows);
+        if (row_first < start_tile) {
+            // A shard of a row that began on an earlier core -- necessarily this core's first row.
+            send_shard(tile_row);
+            return;
         }
+        // The row starts here but spills onto later cores -- necessarily this core's LAST row, so
+        // leaving the accumulators untouched hands them straight to the merge in pass 2.
     };
 
     auto reset_accumulators = [&]() {
@@ -257,59 +277,33 @@ void kernel_main() {
 
     finish_row(current_row, current_valid);
 
-    // ---- pass 2: combine boundary rows on the origin core ----
-    if constexpr (num_cores > 1U) {
-        const uint32_t local_base = records_base + core_index * kRecordsPerCore * kRecordBytes;
-        // Blank the unused slots so the origin can tell live records from stale L1.
-        for (uint32_t k = staged_records; k < kRecordsPerCore; ++k) {
-            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_base + k * kRecordBytes) = 0U;
+    // ---- pass 2: merge the foreign shards of the one row this core owns but did not finish ----
+    if (expected_shards > 0U) {
+        auto* sem_ptr = get_sem_ptr(reduction_sem_id);
+        noc_semaphore_wait(sem_ptr, expected_shards);
+        noc_semaphore_set(sem_ptr, 0U);  // re-arm for the next dispatch of this cached program
+
+        // The accumulators still hold this core's own shard: finish_row deferred exactly this row,
+        // and it is the run's last, so no reset ran after it. Every received record is a shard of
+        // this same row -- the split geometry admits no other sender -- so no row-id matching is
+        // needed.
+        for (uint32_t s = 0U; s < expected_shards; ++s) {
+            auto* rec = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(records_base + s * kRecordBytes);
+            for (uint32_t h = 0U; h < kTileHeight; ++h) {
+                const uint32_t v = rec[2U + h];
+                const uint32_t i = rec[2U + kTileHeight + h];
+                // Ties keep the lower index, matching the in-row scan.
+                if (float32_greater(v, max_values[h]) || (v == max_values[h] && i < arg_max[h])) {
+                    max_values[h] = v;
+                    arg_max[h] = i;
+                }
+            }
         }
 
-        if (core_index != 0U) {
-            // One write and one increment per core, so the origin waits on a core count.
-            const uint64_t dst = get_noc_addr(origin_phys_x, origin_phys_y, local_base);
-            noc_async_write(local_base, dst, kRecordsPerCore * kRecordBytes);
-            noc_async_write_barrier();
-            noc_semaphore_inc(get_noc_addr(origin_phys_x, origin_phys_y, get_semaphore(reduction_sem_id)), 1U);
-        } else {
-            auto* sem_ptr = get_sem_ptr(reduction_sem_id);
-            noc_semaphore_wait(sem_ptr, num_cores - 1U);
-            noc_semaphore_set(sem_ptr, 0U);
-
-            // Merge by row id: fold every later record carrying the same row into the first one,
-            // then write that row once. Records number 2 per core, so the quadratic scan is cheap.
-            constexpr uint32_t total_records = num_cores * kRecordsPerCore;
-            for (uint32_t a = 0U; a < total_records; ++a) {
-                auto* ra = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(records_base + a * kRecordBytes);
-                if (ra[0] == 0U) {
-                    continue;
-                }
-                const uint32_t row = ra[1];
-                for (uint32_t h = 0U; h < kTileHeight; ++h) {
-                    max_values[h] = ra[2U + h];
-                    arg_max[h] = ra[2U + kTileHeight + h];
-                }
-                ra[0] = 0U;
-
-                for (uint32_t b = a + 1U; b < total_records; ++b) {
-                    auto* rb = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(records_base + b * kRecordBytes);
-                    if (rb[0] == 0U || rb[1] != row) {
-                        continue;
-                    }
-                    for (uint32_t h = 0U; h < kTileHeight; ++h) {
-                        const uint32_t v = rb[2U + h];
-                        const uint32_t i = rb[2U + kTileHeight + h];
-                        // Ties keep the lower index, matching the in-row scan.
-                        if (float32_greater(v, max_values[h]) || (v == max_values[h] && i < arg_max[h])) {
-                            max_values[h] = v;
-                            arg_max[h] = i;
-                        }
-                    }
-                    rb[0] = 0U;
-                }
-
-                write_row(row, valid_rows_of(row));
-            }
+        const uint32_t owned_row = (start_tile + num_tiles - 1U) / Wt;
+        const uint32_t valid = valid_rows_of(owned_row);
+        if (valid != 0U) {
+            write_row(owned_row, valid);
         }
     }
 }

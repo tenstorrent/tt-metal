@@ -5,6 +5,7 @@
 #include "gumbel_sample_program_factory.hpp"
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cmath>
 #include <cstdint>
@@ -43,26 +44,27 @@ constexpr auto kOutputStagingCbIndex = tt::CBIndex::c_3;
 constexpr auto kRecordsCbIndex = tt::CBIndex::c_4;
 
 // Boundary-row partials exchanged between cores: [valid, row, 32 maxima, 32 indices]
-// padded to 288 bytes, two per core (a core's first and last row). Bounded by core
-// count, never by shape -- see writer_gumbel_sample.cpp.
+// padded to 288 bytes. Each split row is merged by the core holding its FIRST tile, so a core
+// sends at most one record (its first row's shard) and receives at most the row's shard fan-in --
+// see writer_gumbel_sample.cpp.
 constexpr uint32_t kRecordBytes = 72U * sizeof(uint32_t);
-constexpr uint32_t kRecordsPerCore = 2U;
 
 const std::string kDoLogitsMaskDefineKey = "DO_LOGITS_MASK";
 const std::string kDoGumbelNoiseDefineKey = "DO_GUMBEL_NOISE";
 const std::string kDoPositionsDefineKey = "DO_POSITIONS";
 
-// The reader carries Ht as a runtime arg at slot 4 (see reader_gumbel_sample.cpp), so the positions
-// BUFFER ADDRESS that follows sits one slot later than the writer's. These two MUST diverge --
-// bumping them together would make the writer read its core_index as the positions address.
+// The reader carries Ht as a runtime arg at slot 4 (see reader_gumbel_sample.cpp), the writer does
+// not, so the positions BUFFER ADDRESS lands at a different slot in each kernel. These two MUST
+// stay independent -- equalizing them would make one kernel read a neighbouring arg as the
+// positions address.
 constexpr uint32_t kReaderHtIdx = 4U;
 constexpr uint32_t kReaderPositionsBufferIdx = 5U;
-constexpr uint32_t kWriterPositionsBufferIdx = 4U;
+constexpr uint32_t kWriterPositionsBufferIdx = 3U;
 static_assert(kReaderPositionsBufferIdx == kReaderHtIdx + 1U);
 
 // Per-entry token positions live in a small device TENSOR, not in runtime args. Each core stages the
-// whole local list into L1 once at kernel start (the origin core needs all of it to re-derive target
-// rows during the boundary merge).
+// whole local list into L1 once at kernel start (slots are indexed by absolute entry id, so the full
+// list keeps the addressing uniform even though only local entries are consumed).
 constexpr auto kReaderPositionsCbIndex = tt::CBIndex::c_5;
 constexpr auto kWriterPositionsCbIndex = tt::CBIndex::c_6;
 
@@ -237,6 +239,47 @@ tt::tt_metal::Program build_program(
     const uint32_t score_tile_bytes = tt::tile_size(tt::DataFormat::Float32);
 
     // -------------------------------------------------------------------------
+    // Split-row merge routing. The owner of a row is the core holding its FIRST tile; the split
+    // hands each core one contiguous tile range, so a core can hold a foreign shard only of its
+    // first row (=> at most one record to send) and can own a split row only as its last (=> one
+    // wait). Senders to a given owner are enumerated in core order, which hands each one a
+    // collision-free slot in the owner's records CB. Derived from the same core_layout as the
+    // work-split runtime args, so the two can never disagree.
+    // -------------------------------------------------------------------------
+    const auto work = core_layout(layout);
+    std::vector<uint32_t> expected_shards(layout.num_cores, 0U);
+    std::vector<std::array<uint32_t, 3U>> send_routing(layout.num_cores, {0U, 0U, 0U});  // x, y, slot
+    for (uint32_t sender = 1U; sender < layout.num_cores; ++sender) {
+        if (work[sender].start_tile % layout.Wt == 0U) {
+            continue;  // first row starts here: nothing to send
+        }
+        const uint32_t row_first_tile = (work[sender].start_tile / layout.Wt) * layout.Wt;
+        uint32_t owner = sender - 1U;
+        while (work[owner].start_tile > row_first_tile) {
+            --owner;
+        }
+        const auto owner_phys = logits.device()->worker_core_from_logical_core(work[owner].core);
+        send_routing[sender] = {
+            static_cast<uint32_t>(owner_phys.x), static_cast<uint32_t>(owner_phys.y), expected_shards[owner]};
+        ++expected_shards[owner];
+    }
+    const uint32_t max_foreign_shards = *std::max_element(expected_shards.begin(), expected_shards.end());
+    // Every sender's run BEGINS strictly inside the owned row's Wt tiles, and consecutive starts
+    // are at least the smaller group's tile count apart, which bounds the fan-in by the split
+    // rather than the core count. The CB is sized from the exact fan-in above; this guards the
+    // derivation against a work-split change.
+    const uint32_t min_tiles_per_core =
+        layout.core_group_2.ranges().empty()
+            ? layout.tiles_per_core_group_1
+            : std::min(layout.tiles_per_core_group_1, layout.tiles_per_core_group_2);
+    TT_FATAL(
+        max_foreign_shards <= (layout.Wt - 1U) / std::max(min_tiles_per_core, 1U) + 1U,
+        "GumbelSample: merge fan-in {} exceeds the split-derived bound (Wt={}, min tiles/core={})",
+        max_foreign_shards,
+        layout.Wt,
+        min_tiles_per_core);
+
+    // -------------------------------------------------------------------------
     // Circular buffers. Peak L1 is a handful of tiles regardless of V: this is the whole point of
     // the fusion -- avoiding materializing several full [B, 1, tokens, V] tensors in DRAM.
     // -------------------------------------------------------------------------
@@ -261,14 +304,15 @@ tt::tt_metal::Program build_program(
         tt::DataFormat::UInt32,
         tt::constants::TILE_HEIGHT * kOutputSlotBytes);
 
-    // Boundary-row partials. Every core reserves the FULL table so the origin can receive each
-    // core's records at that core's own offset -- a fixed 2 records per core, independent of shape.
+    // Boundary-row partials: `max_foreign_shards` receive slots for the one row this core may own,
+    // plus one staging slot for the record it may send. Sized by the actual split fan-in (a few
+    // records), never by the core count.
     create_circular_buffer_bytes(
         program,
         layout.all_cores,
         kRecordsCbIndex,
         tt::DataFormat::UInt32,
-        layout.num_cores * kRecordsPerCore * kRecordBytes);
+        (max_foreign_shards + 1U) * kRecordBytes);
 
     // Positions staging. One ALIGNED page per entry, not four packed bytes: a DRAM read moves a
     // whole aligned page, and the NOC requires the L1 destination to match the DRAM alignment
@@ -329,10 +373,9 @@ tt::tt_metal::Program build_program(
     shared_vars.reader_kernel_id =
         create_reader_kernel(program, layout.all_cores, reader_ct_args, defines, kReaderKernelPath);
 
-    // Origin core (index 0) merges the boundary rows; the others signal it once each.
+    // Each split row's owner counts its senders on its own copy of this semaphore; cores that own
+    // nothing never wait on it.
     const uint32_t reduction_sem_id = tt::tt_metal::CreateSemaphore(program, layout.all_cores, 0);
-    const auto origin_logical = tt::tt_metal::CoreCoord{0, 0};
-    const auto origin_phys = logits.device()->worker_core_from_logical_core(origin_logical);
 
     std::vector<uint32_t> writer_ct_args{
         layout.Wt,
@@ -346,10 +389,8 @@ tt::tt_metal::Program build_program(
         // guard is ever refactored away.
         layout.position_aware ? 1U : layout.logical_tokens,
         layout.position_aware ? 1U : layout.Ht,
-        layout.num_cores,
         reduction_sem_id,
-        static_cast<uint32_t>(origin_phys.x),
-        static_cast<uint32_t>(origin_phys.y),
+        max_foreign_shards,
         layout.num_entries};
     tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_ct_args);
     if (layout.position_aware) {
@@ -383,8 +424,8 @@ tt::tt_metal::Program build_program(
     // unconditionally, exactly as it does for Ht.
     const uint32_t positions_address = layout.position_aware ? tensor_args.positions->buffer()->address() : 0U;
 
-    uint32_t core_index = 0U;
-    for (const auto& [core, num_tiles, start_tile] : core_layout(layout)) {
+    for (uint32_t core_index = 0U; core_index < layout.num_cores; ++core_index) {
+        const auto& [core, num_tiles, start_tile] = work[core_index];
         SetRuntimeArgs(
             program,
             shared_vars.reader_kernel_id,
@@ -400,7 +441,14 @@ tt::tt_metal::Program build_program(
             program,
             shared_vars.writer_kernel_id,
             core,
-            {output_buffer->address(), num_tiles, start_tile, core_index, positions_address});
+            {output_buffer->address(),
+             num_tiles,
+             start_tile,
+             positions_address,
+             send_routing[core_index][0],
+             send_routing[core_index][1],
+             send_routing[core_index][2],
+             expected_shards[core_index]});
 
         const auto compute_kernel = layout.core_group_1.contains(core) ? shared_vars.compute_kernel_group_1_id
                                                                        : shared_vars.compute_kernel_group_2_id;
@@ -413,7 +461,6 @@ tt::tt_metal::Program build_program(
              rand_scale_bits,
              inv_temperature_bits,
              rand_stream_id(layout, device_index, start_tile)});
-        ++core_index;
     }
 
     shared_vars.core_group_1 = layout.core_group_1;
@@ -494,8 +541,9 @@ void GumbelSampleProgramFactory::override_runtime_arguments(
                                     ? compute_g1_args
                                     : GetRuntimeArgs(program, vars.compute_kernel_group_2_id);
 
-        // core_index is not re-patched here: it is a property of the work split, which is identical
-        // on every dispatch. Only the buffer addresses and the seed change.
+        // The merge routing (owner coords, slot, expected shard count) is not re-patched here: it
+        // is a property of the work split, which is identical on every dispatch. Only the buffer
+        // addresses and the seed change.
         for (const auto& [core, num_tiles, start_tile] : work) {
             {
                 auto& core_args = reader_args[core.x][core.y];
