@@ -15,7 +15,6 @@ from copy import copy, deepcopy
 from typing import Optional
 
 import torch
-
 from transformers.activations import ACT2FN
 
 from models.demos.common.prefill.adapter import PrefillModelAdapter as TestVariant

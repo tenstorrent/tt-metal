@@ -816,6 +816,12 @@ void kernel_main() {
     constexpr uint32_t cb_down_bias = 0;
 #endif
 
+    // First Compute API call in the kernel, as compute_kernel_hw_startup.h requires: it does MMIO
+    // config of MATH/PACK/UNPACK and needs those units idle. Nothing below it depends on the count
+    // handshake, and the SFPU init that follows must not run before it (SiTU-GLU's tanh_init loads
+    // the vConstFloatPrgm registers the activation reads back on every tile).
+    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_in0_x, cb_in1_gate, cb_partials_gu);
+
     CircularBuffer counts_scratch_cb(cb_counts_scratch);
     CircularBuffer idx_scratch_cb(cb_idx_scratch);
 
@@ -853,11 +859,6 @@ void kernel_main() {
     const uint32_t effective_chunks_runtime = adaptive_chunk::num_chunks(count_tiles, chunk_M_max);
     const uint32_t effective_chunks =
         effective_chunks_runtime < num_chunks_max ? effective_chunks_runtime : num_chunks_max;
-
-    // Must precede every other Compute API call, init included: it does MMIO config of
-    // MATH/PACK/UNPACK requiring those units idle, so an earlier SFPU init risks the startup
-    // writes racing the constants it loaded (SiTU-GLU's tanh_init in particular).
-    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_in0_x, cb_in1_gate, cb_partials_gu);
 
     // SiLU is now applied as a MATH-thread SFPU pass on dst (silu_tile)
     // between copy_tile and pack_tile — not packer-fused via
