@@ -44,6 +44,7 @@ from helpers.test_variant_parameters import (
     DATA_COPY_TYPE,
     DEST_INDEX,
     DEST_SYNC,
+    FILL_CONSTANT,
     IMPLIED_MATH_FORMAT,
     LOOP_FACTOR,
     NUM_FACES,
@@ -173,6 +174,9 @@ def _run_sfpu_binary_llk_golden(
             # branch that references the non-dependent globals TYPECAST_IN_FORMAT /
             # TYPECAST_OUT_FORMAT, so every build that includes it must define them.
             TYPECAST_FORMATS(),
+            # fill_value_quasar() in the same shared source references the non-dependent
+            # global FILL_CONSTANT, so every build that includes it must define it too.
+            FILL_CONSTANT(),
         ],
         "runtimes": [
             TILE_COUNT(tile_cnt_A),
@@ -651,6 +655,9 @@ def _run_max_min(
             # branch that references the non-dependent globals TYPECAST_IN_FORMAT /
             # TYPECAST_OUT_FORMAT, so every build that includes it must define them.
             TYPECAST_FORMATS(),
+            # fill_value_quasar() in the same shared source references the non-dependent
+            # global FILL_CONSTANT, so every build that includes it must define it too.
+            FILL_CONSTANT(),
         ],
         "runtimes": [
             TILE_COUNT(tile_cnt),
@@ -899,6 +906,7 @@ def _run_quant(binary_op, tile_indices, sign_magnitude=False):
             SIGN_MAGNITUDE_FORMAT(sign_magnitude),
             SFPU_DST_ROUNDING_MODE(),
             TYPECAST_FORMATS(),
+            FILL_CONSTANT(),
         ],
         runtimes=[
             TILE_COUNT(tile_cnt),
