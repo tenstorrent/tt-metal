@@ -176,19 +176,31 @@ def test_r5_a_refusal_exits_with_its_own_code():
     assert m.EXIT_REFUSED != 0 and m.EXIT_REFUSED != 1, m.EXIT_REFUSED
 
 
-def test_r5_the_supervisor_does_not_restart_a_refusal():
-    """Anchored on the BRANCH, not on the first mention of the name.
+def test_r5_a_refusal_is_retried_but_bounded():
+    """REVERSED 2026-08-18, and the reasoning that justified the old rule no longer applies.
 
-    It used to slice a 2000-character window from `sup.index("_EXIT_REFUSED")` -- which lands on the
-    IMPORT, not on the test. Any code added between the import and the loop pushed the branch out of
-    the window and failed a test whose subject had not changed (the tree-reaping supervisor did
-    exactly that). A window measured in characters is a guess about layout; the branch is the thing.
+    It used to return immediately on EXIT_REFUSED: "relaunching re-derives the same decision from
+    the same evidence". True for a refusal grounded in something fixed -- a red preflight, a dirty
+    tree -- and false for the one that actually fires. The refusal that occurs in practice is the
+    lead review rejecting a discovery plan an AGENT wrote, and the next attempt writes a different
+    plan. The verdict is not re-derived; it is re-earned.
+
+    The harm that made this non-retryable was never the retry. It was the restart leaving the
+    previous attempt's process tree alive, so two runs loaded the model onto one board and wedged it
+    past what tt-smi -r could restart. That is fixed at its source: the supervisor reaps the tree and
+    refuses to start again if anything survives SIGKILL.
+
+    Still bounded by the same restart limit, so a refusal grounded in something fixed costs a few
+    attempts and stops rather than looping.
     """
     sup = (_PA.parent.parent.parent / "scripts/tt_hw_planner/commands/optimize.py").read_text()
     i = sup.index("if _rc == _EXIT_REFUSED:")
-    body = sup[i : i + 700]
-    assert "return _rc" in body, "a refusal no longer returns; it would be restarted"
-    assert "not a crash" in body.lower() or "Not restarting" in body
+    body = sup[i : i + 2000]
+    assert "retrying" in body, "a refusal is not retried"
+    assert "if _n >= _max:" in body, "a refusal retries without a bound"
+    assert "return _rc" in body, "an exhausted refusal never terminates"
+    # the tree reaping is what makes a retry safe; it must still be there
+    assert "survived SIGKILL" in sup, "the retry is safe only while a leaked tree stops the next attempt"
 
 
 def test_r5_the_exit_code_has_one_definition():

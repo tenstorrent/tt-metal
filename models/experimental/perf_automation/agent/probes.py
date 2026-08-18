@@ -1477,10 +1477,40 @@ def cli_lead_review_gate(
     )
     if r.returncode != 0:
         raise DiscoveryRejected(f"cc lead review (claude CLI) exit {r.returncode}: {(r.stderr or '')[-200:]}")
+    # A VERDICT THAT WILL NOT PARSE IS UNKNOWN, NOT A REFUSAL. Two separate mistakes lived here.
+    #
+    # strict=False, because the failure was never about the DECISION. Run 9, 2026-08-17:
+    #
+    #     lead review returned unparseable verdict:
+    #     Invalid control character at: line 1 column 1029 (char 1028)
+    #
+    # The answer WAS json; it carried a literal newline or tab inside one of its text fields, which
+    # json.loads rejects by default and accepts with strict=False. The review may well have said
+    # continue -- nobody knows, because the text went out with the exception. A run was refused, the
+    # supervisor restarted it, and the retry only passed because the agent happened to phrase itself
+    # without a stray newline the second time.
+    #
+    # And a parse failure is not a decision. "I could not read the verdict" and "the plan is
+    # rejected" are different states, and conflating them turns a formatting glitch into a stopped
+    # run. The rule the preflight already follows applies: something that could not RUN has not
+    # decided anything, so it proceeds and SAYS SO rather than asserting a verdict it does not have.
+    # A genuine `stop` still stops, and a non-zero exit above still refuses.
+    verdict = None
     try:
-        verdict = json.loads(_extract_json_object(r.stdout or ""))
+        verdict = json.loads(_extract_json_object(r.stdout or ""), strict=False)
     except json.JSONDecodeError as exc:
-        raise DiscoveryRejected(f"lead review returned unparseable verdict: {exc}") from exc
+        print(
+            "  [probes] lead review verdict did not parse (%s) -- treating as UNKNOWN and continuing; "
+            "a formatting fault in the answer is not a decision about the plan" % exc,
+            file=sys.stderr,
+            flush=True,
+        )
+        return {
+            "decision": "continue",
+            "reasoning": "verdict unparseable: %s" % exc,
+            "model": "claude-cli",
+            "usage": None,
+        }
     decision = verdict.get("decision")
     reasoning = str(verdict.get("reasoning", ""))
     if decision not in ("continue", "stop"):

@@ -627,12 +627,35 @@ def cmd_optimize(args) -> int:
             # bury the reason under three "likely native crash" lines that misdescribe it. See
             # cc_optimize/run.py:EXIT_REFUSED.
             if _rc == _EXIT_REFUSED:
+                # A REFUSAL IS RETRIED NOW, because discovery is REGENERATED on each attempt.
+                #
+                # It used to return here, on the reasoning that "relaunching re-derives the same
+                # decision from the same evidence". That holds for a refusal grounded in something
+                # fixed -- a red preflight, a dirty tree -- and not for the one that actually fires:
+                # the lead review rejecting a plan that an AGENT wrote. The next attempt writes a
+                # different plan, so the verdict is not re-derived, it is re-earned.
+                #
+                # The harm that made this non-retryable was never the retry itself. It was run 9's
+                # sibling failure: a restart that left the previous attempt's process tree alive, so
+                # two runs loaded the model onto one board and wedged it past what tt-smi -r could
+                # restart. That is fixed at the source -- the supervisor now reaps the tree and
+                # REFUSES to start again if anything survives SIGKILL -- so a retry no longer races
+                # anything.
+                #
+                # Still bounded by the same restart limit, so a refusal that IS grounded in something
+                # fixed costs three attempts and stops, rather than looping.
                 print(
-                    f"  [optimize/supervisor] child REFUSED to start (rc={_rc}) — a decision, not a crash. "
-                    "Not restarting; the reason is above.",
+                    f"  [optimize/supervisor] child REFUSED (rc={_rc}) — a decision, not a crash. "
+                    f"Discovery is regenerated per attempt, so retrying (restart {_n + 1}/{_max}); "
+                    "the reason is above.",
                     flush=True,
                 )
-                return _rc
+                if _n >= _max:
+                    print(
+                        f"  [optimize/supervisor] refused {_max + 1} times; the decision is not going to change.",
+                        flush=True,
+                    )
+                    return _rc
             if _rc == 0 or _n >= _max:
                 if _rc != 0:
                     print(f"  [optimize/supervisor] child exited rc={_rc}; {_max} restart(s) exhausted.", flush=True)
