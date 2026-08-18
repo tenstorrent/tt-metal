@@ -11,6 +11,7 @@
 #include <vector>
 
 #include <tt-metalium/memory_pin.hpp>
+#include "common/memory_pin_impl.hpp"
 
 namespace tt::tt_metal {
 namespace {
@@ -59,7 +60,7 @@ TEST(MemoryPinTest, FinalReleaseCallbackRunsBeforeLastDecrement) {
     std::vector<std::string> events;
     {
         MemoryPin pin([]() {}, [&events]() { events.push_back("decrement"); });
-        pin.add_final_release_callback([&events]() { events.push_back("final_release"); });
+        pin.impl().add_final_release_callback([&events]() { events.push_back("final_release"); });
 
         {
             MemoryPin pin_copy(pin);
