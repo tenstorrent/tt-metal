@@ -1,14 +1,13 @@
 """
-Common utilities, memory configurations, and weight loaders for Qwen2.5 TTNN bring-up.
+Common configurations, presets, and memory layouts for Qwen3 & Qwen2.5 TTNN bring-up.
 """
 
 import torch
-import torch.nn as nn
 from dataclasses import dataclass
 from typing import Optional, Dict, Any
 
 @dataclass
-class Qwen2_5Config:
+class QwenConfig:
     vocab_size: int = 151936
     hidden_size: int = 896
     intermediate_size: int = 4864
@@ -20,16 +19,50 @@ class Qwen2_5Config:
     rms_norm_eps: float = 1e-6
     rope_theta: float = 1000000.0
     tie_word_embeddings: bool = True
-    dtype: str = "bfloat16"
+    is_reasoning_model: bool = False   # For QwQ & Qwen3 dual-thinking mode
 
     @classmethod
-    def from_dict(cls, d: Dict[str, Any]) -> "Qwen2_5Config":
-        return cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})
+    def qwen3_27b(cls) -> "QwenConfig":
+        """Configuration for Qwen3.8-27B flagship model."""
+        return cls(
+            vocab_size=152064,
+            hidden_size=5120,
+            intermediate_size=27648,
+            num_hidden_layers=64,
+            num_attention_heads=40,
+            num_key_value_heads=8,
+            max_position_embeddings=131072,
+            is_reasoning_model=True
+        )
+
+    @classmethod
+    def qwq_32b(cls) -> "QwenConfig":
+        """Configuration for QwQ-32B deep reasoning model."""
+        return cls(
+            vocab_size=152064,
+            hidden_size=5120,
+            intermediate_size=27648,
+            num_hidden_layers=64,
+            num_attention_heads=40,
+            num_key_value_heads=8,
+            max_position_embeddings=131072,
+            is_reasoning_model=True
+        )
+
+    @classmethod
+    def qwen2_5_coder_0_5b(cls) -> "QwenConfig":
+        """Configuration for lightweight edge Qwen2.5-Coder-0.5B."""
+        return cls(
+            vocab_size=151936,
+            hidden_size=896,
+            intermediate_size=4864,
+            num_hidden_layers=24,
+            num_attention_heads=14,
+            num_key_value_heads=2
+        )
 
 def comp_pcc(expr_out: torch.Tensor, golden_out: torch.Tensor, pcc_threshold: float = 0.99) -> tuple[bool, float]:
-    """
-    Standard Tenstorrent PCC (Pearson Correlation Coefficient) verification function.
-    """
+    """Tenstorrent PCC (Pearson Correlation Coefficient) verification function."""
     x = expr_out.detach().flatten().float()
     y = golden_out.detach().flatten().float()
     vx = x - torch.mean(x)
@@ -40,9 +73,10 @@ def comp_pcc(expr_out: torch.Tensor, golden_out: torch.Tensor, pcc_threshold: fl
     return passed, pcc
 
 def comp_allclose(expr_out: torch.Tensor, golden_out: torch.Tensor, atol: float = 1e-2, rtol: float = 1e-2) -> tuple[bool, str]:
-    """
-    Standard Tenstorrent AllClose verification helper.
-    """
+    """Tenstorrent AllClose verification helper."""
     passed = torch.allclose(expr_out.float(), golden_out.float(), atol=atol, rtol=rtol)
     max_diff = (expr_out.float() - golden_out.float()).abs().max().item()
     return passed, f"Max diff: {max_diff:.6f}"
+
+# Backward compatibility alias
+Qwen2_5Config = QwenConfig
