@@ -44,6 +44,7 @@ class TtTransformer(LightweightModule):
         self.model_config = args.get_model_config()
         self.grid_size = self.args.max_grid_size
         self.enable_prefetcher_performance_mode = enable_prefetcher_performance_mode
+        self.use_prefetcher = args.use_prefetcher
         state_dict_prefix = args.get_state_dict_prefix("", None)
         self.allocate_prefill_buffers = allocate_prefill_buffers
         self.paged_attention_config = paged_attention_config
@@ -73,6 +74,12 @@ class TtTransformer(LightweightModule):
         self.prefetcher_setup = None
         self.mesh_sub_device_manager_id_decode = None
         self.mesh_sub_device_manager_id_prefill = None
+        # Cached CCLs so the no-prefetcher path can reuse them across mode switches instead of
+        # recreating (TT_CCL.close() only resets the stall group and leaves buffers/semaphores
+        # intact, so the cached objects stay valid). Recreating a CCL on each prefill<->decode
+        # switch corrupts state on repeat batches (garbage output on batch 1+).
+        self.tt_ccl_prefill = None
+        self.tt_ccl_decode = None
 
         # First initialization of decode CCLs and prefetcher
         self.setup_decode()
@@ -111,6 +118,9 @@ class TtTransformer(LightweightModule):
             args,
             tt_ccl=self.tt_ccl,
             ccl_topology=self.model_config["CCL_TOPOLOGY"],
+            # Match the decoder layers: BH no-prefetch uses the distributed (non-sharded) decode
+            # norm path; the sharded fused decode norm is prefetcher-only.
+            use_sharded_decode=not args.blackhole_no_prefetcher,
         )
 
         state_dict_prefix = args.get_state_dict_prefix("", None)
@@ -133,7 +143,7 @@ class TtTransformer(LightweightModule):
                 self.setup_prefill()
             self.is_prefill_setup = True
 
-        if mode == "decode":
+        if mode == "decode" and self.use_prefetcher:
             self.tt_tensors = self.prefetcher_setup.get_input_tensors()
         self.tt_rot_mats_prefill = None
 
@@ -162,10 +172,32 @@ class TtTransformer(LightweightModule):
                 seq_len=int(self.args.max_seq_len),
                 scale_factor=self.args.rope_scaling_factor,
                 start_pos=0,
+                theta=self.args.rope_theta,
             )
         return self.tt_rot_mats_prefill
 
     def setup_prefill(self, mesh_sub_device_manager_id_prefill=None):
+        if not self.use_prefetcher:
+            self.prefetcher_setup = None
+            self.mesh_sub_device_manager_id_prefill = mesh_sub_device_manager_id_prefill
+            if self.tt_ccl_prefill is not None:
+                # Reuse the previously-created prefill CCL (close() leaves it intact). Recreating it
+                # on every repeat batch corrupts state and yields garbage output on batch 1+.
+                self.tt_ccl = self.tt_ccl_prefill
+            elif mesh_sub_device_manager_id_prefill is None:
+                self.tt_ccl = TT_CCL(
+                    self.mesh_device,
+                    self.args,
+                    None,
+                    mode="prefill",
+                    allocate_prefill_buffers=self.allocate_prefill_buffers,
+                    is_qwen=True if self.args.is_qwen else False,
+                )
+                self.tt_ccl_prefill = self.tt_ccl
+            else:
+                self.tt_ccl = self.tt_ccl_prefill
+            return
+
         self.prefetcher_setup = TtLlamaPrefetcherSetup(
             self.mesh_device,
             n_tensors=0,
@@ -190,6 +222,30 @@ class TtTransformer(LightweightModule):
             self.tt_ccl = self.tt_ccl_prefill
 
     def setup_decode(self, mesh_sub_device_manager_id_decode=None):
+        if not self.use_prefetcher:
+            self.prefetcher_setup = None
+            self.mesh_sub_device_manager_id_decode = mesh_sub_device_manager_id_decode
+            if self.tt_ccl_decode is not None:
+                # Reuse the previously-created decode CCL (and its SamplingGenerator); see note in
+                # setup_prefill. Avoids the recreate-per-batch corruption on repeat batches.
+                self.tt_ccl = self.tt_ccl_decode
+            elif mesh_sub_device_manager_id_decode is None:
+                self.tt_ccl = TT_CCL(
+                    self.mesh_device,
+                    self.args,
+                    None,
+                    is_qwen=True if self.args.is_qwen else False,
+                )
+                self.tt_ccl_decode = self.tt_ccl
+                self.sampling = SamplingGenerator(
+                    args=self.args,
+                    mesh_device=self.mesh_device,
+                    tt_ccl=self.tt_ccl,
+                )
+            else:
+                self.tt_ccl = self.tt_ccl_decode
+            return
+
         self.prefetcher_setup = TtLlamaPrefetcherSetup(
             self.mesh_device,
             n_tensors=5,
@@ -477,7 +533,15 @@ class TtTransformer(LightweightModule):
         rot_current_pos = torch.maximum(
             current_pos, torch.tensor(0, dtype=torch.int64)
         )  # Ensure position indices are non-negative
-        rope_idxs = self.rope_setup.get_rm_rot_idxs(rot_current_pos, on_host=True)
+        # The no-prefetcher (Blackhole) decode uses the NON-fused rotary op, which needs the simple
+        # get_rot_idxs/get_rot_mats tables. get_rm_rot_idxs/get_rm_rot_mats produce the FUSED-qk
+        # expanded layout ([1, expanded_batch, heads, head_dim]); feeding that to the non-fused op
+        # (via the slice branch in forward_decode) yields a wrong rotary at pos>0 (pos0 is rotary-
+        # independent, so it hides the bug) and collapses multi-layer decode PCC.
+        if self.use_prefetcher:
+            rope_idxs = self.rope_setup.get_rm_rot_idxs(rot_current_pos, on_host=True)
+        else:
+            rope_idxs = self.rope_setup.get_rot_idxs(rot_current_pos, on_host=True)
         cur_pos_shard_dim = 0
         if is_cur_pos_sharded:
             cur_pos_shard_dim = 1
@@ -522,7 +586,10 @@ class TtTransformer(LightweightModule):
         Get rope sin/cos
         Embed tokens
         """
-        tt_rot_mats = self.rope_setup.get_rm_rot_mats(rope_idxs)
+        if self.use_prefetcher:
+            tt_rot_mats = self.rope_setup.get_rm_rot_mats(rope_idxs)
+        else:
+            tt_rot_mats = self.rope_setup.get_rot_mats(rope_idxs)
         tt_tokens = self.embd(tokens)
         return tt_tokens, current_pos, tt_rot_mats, page_table
 
@@ -594,7 +661,7 @@ class TtTransformer(LightweightModule):
             tt_logits = self.tt_ccl.line_all_gather(
                 tt_logits[0],
                 dim=3,
-                num_links=3,
+                num_links=3 if self.use_prefetcher else self.model_config["GALAXY_NUM_LINKS"],
                 cluster_axis=0,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 buffer_key="SAMPLING",
@@ -710,7 +777,10 @@ class TtTransformer(LightweightModule):
         This method will take device tensors and any other args to run forward.
         It returns ttnn device tensors.
         """
-        rot_mats = self.rope_setup.get_rm_rot_mats(rot_mat_idxs)
+        if self.use_prefetcher:
+            rot_mats = self.rope_setup.get_rm_rot_mats(rot_mat_idxs)
+        else:
+            rot_mats = self.rope_setup.get_rot_mats(rot_mat_idxs)
         x_embd = self.embd(x)
         tt_logits = self.forward(
             x_embd,
@@ -726,7 +796,7 @@ class TtTransformer(LightweightModule):
             tt_logits = self.tt_ccl.line_all_gather(
                 tt_logits[0],
                 dim=3,
-                num_links=3,
+                num_links=3 if self.use_prefetcher else self.model_config["GALAXY_NUM_LINKS"],
                 cluster_axis=0,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 buffer_key="SAMPLING",
@@ -760,14 +830,20 @@ class TtTransformer(LightweightModule):
             if self.is_decode_setup is False:
                 self.setup_decode(self.mesh_sub_device_manager_id_decode)
                 self.is_decode_setup = True
-                # prefetch
+                # Re-point every submodule at the (new) decode CCL. The prefetcher tensor inserts
+                # inside layer.prefetch are guarded on prefetcher_setup, so this is safe for the
+                # no-prefetcher Blackhole path too (otherwise layers keep the stale prefill CCL).
                 for layer in self.layers:
                     layer.prefetch(self.prefetcher_setup, self.tt_ccl)
                 self.norm.tt_ccl = self.tt_ccl
                 self.lm_head.tt_ccl = self.tt_ccl
-                self.tt_tensors = self.prefetcher_setup.get_input_tensors()
-                # Re-create global CB for decode (if it was not already created)
-                self.prefetcher_setup.create_global_cb()
+                if self.use_prefetcher:
+                    self.tt_tensors = self.prefetcher_setup.get_input_tensors()
+                    # Re-create global CB for decode (if it was not already created)
+                    self.prefetcher_setup.create_global_cb()
+                else:
+                    # No-prefetcher path reuses the cached decode CCL; clear its semaphore drift.
+                    self.tt_ccl.reset_global_semaphores()
 
         else:
             if self.is_decode_setup:
@@ -778,10 +854,16 @@ class TtTransformer(LightweightModule):
             if self.is_prefill_setup is False:
                 self.setup_prefill(self.mesh_sub_device_manager_id_prefill)
                 self.is_prefill_setup = True
+                # Re-point every submodule at the (new) prefill CCL. Without this the no-prefetcher
+                # Blackhole layers keep the decode CCL and prefill hits the decode all_reduce_async
+                # path (which rejects DRAM input on BH).
                 for layer in self.layers:
                     layer.prefetch(self.prefetcher_setup, self.tt_ccl)
                 self.norm.tt_ccl = self.tt_ccl
                 self.lm_head.tt_ccl = self.tt_ccl
+                if not self.use_prefetcher:
+                    # No-prefetcher path reuses the cached prefill CCL; clear its semaphore drift.
+                    self.tt_ccl.reset_global_semaphores()
 
     def forward(
         self,
@@ -798,7 +880,7 @@ class TtTransformer(LightweightModule):
         kv_cache=None,
         batch_size=1,
     ):
-        if mode == "decode":
+        if mode == "decode" and self.use_prefetcher:
             self.prefetcher_setup.create_global_cb()
             garbage_tensor = ttnn.dram_prefetcher(
                 self.tt_tensors,
@@ -853,9 +935,10 @@ class TtTransformer(LightweightModule):
                 batch_size=batch_size,
             )
         # ttnn.deallocate(h)
-        if mode == "decode":
+        if mode == "decode" and self.use_prefetcher:
             ttnn.deallocate(garbage_tensor)
 
+        if mode == "decode":
             # Pre-allocated output of AllReduce in LM Head to avoid memory cloberring
             self.tt_ccl.tt_lm_head_buffer_l1 = ttnn.to_memory_config(
                 self.tt_ccl.tt_lm_head_buffer, self.tt_ccl.lm_head_buffer_mem_cfg
@@ -870,7 +953,9 @@ class TtTransformer(LightweightModule):
             x = x[:, :, get_last_token:, :]
 
         lm_head_output = self.lm_head(
-            x, None if mode == "prefill" else self.prefetcher_setup.worker_sub_device_id, mode=mode
+            x,
+            None if mode == "prefill" or not self.use_prefetcher else self.prefetcher_setup.worker_sub_device_id,
+            mode=mode,
         )
         # if mode is decode and Qwen model
         if mode == "decode" and self.args.is_qwen:
@@ -878,7 +963,10 @@ class TtTransformer(LightweightModule):
         return lm_head_output
 
     def __del__(self):
-        self.tt_ccl.close()
+        try:
+            self.tt_ccl.close()
+        except Exception:
+            pass
 
         # clear global saved addresses
         global global_tt_tensor_address

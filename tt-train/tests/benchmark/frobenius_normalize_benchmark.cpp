@@ -57,7 +57,7 @@ void BM_FrobeniusNormalize_Fused(benchmark::State& state) {
 
     for (int i = 0; i < test_config.num_warmup_iterations; ++i) {
         auto result = ttml::metal::frobenius_normalize(input, kEps);
-        tt::tt_metal::distributed::Synchronize(device.get(), std::nullopt);
+        tt::tt_metal::distributed::Synchronize(*device, std::nullopt);
         result.deallocate();
     }
 
@@ -65,7 +65,7 @@ void BM_FrobeniusNormalize_Fused(benchmark::State& state) {
         const double avg_time_s =
             ttml::benchmark_utils::measure_average_iteration_time_s(test_config.num_measurement_iterations, [&]() {
                 auto result = ttml::metal::frobenius_normalize(input, kEps);
-                tt::tt_metal::distributed::Synchronize(device.get(), std::nullopt);
+                tt::tt_metal::distributed::Synchronize(*device, std::nullopt);
                 result.deallocate();
             });
         state.SetIterationTime(avg_time_s);
@@ -93,7 +93,7 @@ void BM_FrobeniusNormalize_Composite(benchmark::State& state) {
 
     for (int i = 0; i < test_config.num_warmup_iterations; ++i) {
         auto result = composite_frobenius_normalize(input, kEps);
-        tt::tt_metal::distributed::Synchronize(device.get(), std::nullopt);
+        tt::tt_metal::distributed::Synchronize(*device, std::nullopt);
         result.deallocate();
     }
 
@@ -101,7 +101,7 @@ void BM_FrobeniusNormalize_Composite(benchmark::State& state) {
         const double avg_time_s =
             ttml::benchmark_utils::measure_average_iteration_time_s(test_config.num_measurement_iterations, [&]() {
                 auto result = composite_frobenius_normalize(input, kEps);
-                tt::tt_metal::distributed::Synchronize(device.get(), std::nullopt);
+                tt::tt_metal::distributed::Synchronize(*device, std::nullopt);
                 result.deallocate();
             });
         state.SetIterationTime(avg_time_s);

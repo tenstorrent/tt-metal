@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import pytest
 import torch
 import ttnn
 
@@ -681,3 +682,123 @@ def run_sharded_norm_logical_width_multicore(
         **_LOGICAL_WIDTH_NORM_BUDGET[dtype],
         check_pcc=False,  # PCC is scale-invariant; a padded-width normalization is a (near-)pure scale
     )
+
+
+# Non-rectangular shard grids, as (full_lines, cores_in_last_line, origin, line_length) for
+# non_rectangular_width_shard_config. A "line" is a row under ROW_MAJOR and a column under COL_MAJOR, so
+# the same case describes the shape that is natural for either orientation (see the helper). Every case
+# leaves holes in the grid's bounding box, which is what the reduction multicasts over. Beyond the
+# trailing-partial-line shape, two properties are varied independently and then together:
+#   - origin: a grid that does not start at (0, 0), so the op must apply a grid offset to the mcast
+#     ranges while the shard grid already carries it.
+#   - line_length: lines shorter than the device grid, so the grid does not take up an entire row/column
+#     and the holes are bounded by the grid's own edge rather than the device's.
+NON_RECTANGULAR_GRID_CASES = [
+    (1, 1, (0, 0), None),
+    (2, 3, (0, 0), None),
+    (4, 1, (0, 0), None),
+    (2, 3, (0, 0), 5),
+    (2, 3, (1, 1), None),
+    (1, 2, (2, 1), 4),
+]
+NON_RECTANGULAR_GRID_IDS = [
+    "1_line_plus_1",
+    "2_lines_plus_3",
+    "4_lines_plus_1",
+    "short_lines",
+    "offset_origin",
+    "offset_and_short",
+]
+
+
+def cores_of(core_range_set):
+    """Expand a CoreRangeSet into a set of (x, y) tuples."""
+    return {
+        (x, y)
+        for r in core_range_set.ranges()
+        for x in range(r.start.x, r.end.x + 1)
+        for y in range(r.start.y, r.end.y + 1)
+    }
+
+
+def non_rectangular_width_shard_config(
+    device,
+    full_lines,
+    cores_in_last_line,
+    h,
+    shard_width,
+    origin=(0, 0),
+    line_length=None,
+    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+):
+    """A width-sharded config whose shard grid has a partially-filled trailing line, so it is not a
+    rectangle and its bounding box contains holes. Skips if the geometry does not fit the device grid.
+
+    The shape follows the orientation, matching how shards are laid out: under ROW_MAJOR the lines are
+    rows and the partial line is a short row along the bottom, and under COL_MAJOR they are columns and
+    the partial line is a short column along the right. So the holes always sit at the end of the
+    traversal order, which is the shape a partially-filled grid actually takes.
+
+    Args:
+        full_lines: Number of completely-filled lines before the partial one.
+        cores_in_last_line: Cores in the trailing partial line; the rest of that line are the holes.
+        origin: (x, y) of the top-left core, so the grid need not start at (0, 0).
+        line_length: Cores per full line. Defaults to filling to the far edge of the device grid; pass a
+            smaller value for a grid that does not span an entire row/column.
+        orientation: Shard orientation, which also selects the shape as described above.
+
+    Returns:
+        (grid, memory_config, w) where w is the resulting full tensor width.
+    """
+    device_grid = device.compute_with_storage_grid_size()
+    row_wise = orientation == ttnn.ShardOrientation.ROW_MAJOR
+    origin_x, origin_y = origin
+
+    # Work in (along, across) coordinates: "along" runs down a line, "across" steps between lines.
+    # For ROW_MAJOR that is (x, y); for COL_MAJOR it is (y, x).
+    origin_along, origin_across = (origin_x, origin_y) if row_wise else (origin_y, origin_x)
+    device_along, device_across = (device_grid.x, device_grid.y) if row_wise else (device_grid.y, device_grid.x)
+    if line_length is None:
+        line_length = device_along - origin_along
+
+    if (
+        origin_along + line_length > device_along
+        or origin_across + full_lines + 1 > device_across
+        or not 0 < cores_in_last_line < line_length
+    ):
+        pytest.skip(
+            f"{full_lines}x{line_length}+{cores_in_last_line} at {origin} ({orientation}) does not fit a "
+            f"{device_grid.x}x{device_grid.y} device grid"
+        )
+
+    def core(along, across):
+        return ttnn.CoreCoord(along, across) if row_wise else ttnn.CoreCoord(across, along)
+
+    ranges = []
+    if full_lines > 0:
+        ranges.append(
+            ttnn.CoreRange(
+                core(origin_along, origin_across),
+                core(origin_along + line_length - 1, origin_across + full_lines - 1),
+            )
+        )
+    ranges.append(
+        ttnn.CoreRange(
+            core(origin_along, origin_across + full_lines),
+            core(origin_along + cores_in_last_line - 1, origin_across + full_lines),
+        )
+    )
+    grid = ttnn.CoreRangeSet(ranges)
+
+    num_cores = full_lines * line_length + cores_in_last_line
+    assert grid.num_cores() == num_cores, f"expected {num_cores} cores, built {grid.num_cores()}"
+    assert cores_of(grid) != cores_of(
+        ttnn.CoreRangeSet([grid.bounding_box()])
+    ), "grid should not fill its own bounding box"
+
+    memory_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
+        shard_spec=ttnn.ShardSpec(grid, [h, shard_width], orientation),
+    )
+    return grid, memory_config, num_cores * shard_width

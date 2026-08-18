@@ -18,7 +18,8 @@ void kernel_main() {
     DataflowBuffer dfb_out0(dfb::out0);
     DataflowBuffer dfb_out1(dfb::out1);
 
-    init_bcast<EltwiseBinaryType::ELWMUL, BroadcastType::SCALAR>(dfb::in2, dfb::in0, dfb::out0);
+    compute_kernel_hw_startup(dfb::in2, dfb::in0, dfb::out0);
+    bcast_init<EltwiseBinaryType::ELWMUL, BroadcastType::SCALAR>(dfb::in2, dfb::in0);
     dfb_in0.wait_front(onetile);
     for (uint32_t block = 0; block < per_core_block_cnt; ++block) {
         if (has_input_grad) {

@@ -462,7 +462,7 @@ void kernel_main() {
     if constexpr (compute_only) {
         // Non-posted matmul->combine writes need ACK-barrier (not just issuer-queue flush)
         // so destination L1 is committed before host reads matmul_output_tensor.
-        noc1_obj.async_write_barrier();
+        noc1_obj.async_full_barrier();
     } else {
         // wait for combine to do its final semaphore increment before resetting. Otherwise, leads to hang.
         combine_sem.wait(combine_semaphore_val);

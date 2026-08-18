@@ -25,6 +25,7 @@ struct StridedAllGatherMinimalMatmulAsyncParams {
     const bool read_local_slice_from_input;
     const std::vector<tt::tt_metal::IDevice*> devices;
     const StridedAllGatherAsync ag_op;
+    const MMSignalAggregatorMode mm_signal_aggregator_mode = MMSignalAggregatorMode::Auto;
 
     // Compile-time attributes select exactly the program-structure-affecting fields for the default
     // program-cache reflection hash + canonical key
@@ -42,7 +43,8 @@ struct StridedAllGatherMinimalMatmulAsyncParams {
         "mm_block_wt",
         "matmul_struct",
         "all_gather_core_grid_offset",
-        "read_local_slice_from_input");
+        "read_local_slice_from_input",
+        "mm_signal_aggregator_mode");
     auto attribute_values() const {
         return std::make_tuple(
             strided_all_gather_async_struct.dim,
@@ -58,7 +60,8 @@ struct StridedAllGatherMinimalMatmulAsyncParams {
             std::cref(strided_all_gather_async_struct.mm_block_wt),
             std::cref(matmul_struct),
             std::cref(all_gather_core_grid_offset),
-            read_local_slice_from_input);
+            read_local_slice_from_input,
+            mm_signal_aggregator_mode);
     }
 };
 
@@ -67,6 +70,10 @@ struct StridedAllGatherMinimalMatmulAsyncInputs {
     const Tensor weight_tensor;
     const std::optional<Tensor> persistent_output_buffer;
     const std::optional<const Tensor> bias = std::nullopt;
+
+    // Fused addcmul: matmul_output = ternary_a + fused_ternary_scalar * matmul_out * ternary_b
+    const std::optional<const Tensor> fused_ternary_input_a = std::nullopt;
+    const std::optional<const Tensor> fused_ternary_input_b = std::nullopt;
 };
 
 }  // namespace ttnn::experimental::prim

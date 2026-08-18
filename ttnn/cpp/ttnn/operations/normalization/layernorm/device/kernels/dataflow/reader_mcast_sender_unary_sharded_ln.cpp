@@ -54,6 +54,7 @@ void kernel_main() {
     constexpr uint32_t num_blocks_second_stage = get_compile_time_arg_val(15);
     constexpr bool rms_norm = get_compile_time_arg_val(17) == 1;
     constexpr bool use_welford = get_compile_time_arg_val(18) == 1;
+    constexpr uint32_t num_mcast_dests = get_compile_time_arg_val(19);
 
     // ---------------------------------------------------------------------------
     // Runtime arguments
@@ -131,7 +132,7 @@ void kernel_main() {
                 mcast_dest_noc_start_y,
                 mcast_dest_noc_end_x,
                 mcast_dest_noc_end_y,
-                num_blocks - 1);
+                num_mcast_dests);
         }
 
         // ============================================================================
@@ -265,7 +266,7 @@ void kernel_main() {
                     dfb_ex_global_obj,
                     mcast_ep,
                     num_tiles_scaler * num_tiles_bytes,
-                    num_blocks - 1,
+                    num_mcast_dests,
                     {.offset_bytes = mcast_src_offset},
                     {.noc_x_start = mcast_dest_noc_start_x,
                      .noc_y_start = mcast_dest_noc_start_y,
@@ -279,7 +280,7 @@ void kernel_main() {
                     mcast_dest_noc_start_y,
                     mcast_dest_noc_end_x,
                     mcast_dest_noc_end_y,
-                    num_blocks - 1);
+                    num_mcast_dests);
 
                 mcast_src_offset += num_tiles_scaler * num_tiles_bytes;
                 noc.async_write_barrier();

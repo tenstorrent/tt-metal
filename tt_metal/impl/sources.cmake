@@ -37,6 +37,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/drisc_l1_arena.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/tensor_prefetcher_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/global_circular_buffer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/buffers/cross_node_dfb.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/global_semaphore.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/semaphore.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/bfloat2.cpp
@@ -91,6 +92,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/dispatch_query_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/dispatch_core_common.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/dispatch_engine_kernel.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/internal/cluster_noc_helpers.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/internal/service/service_core_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/simple_trace_allocator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/dispatch_core_manager.cpp
