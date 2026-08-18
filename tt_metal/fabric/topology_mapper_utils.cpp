@@ -922,27 +922,6 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
         const auto mesh_layouts = mesh_physical_layouts_from_psd_placements(placements);
         mesh_physical_graphs[mesh_name] = build_hierarchical_from_flat_graph(flat_graph, mesh_layouts);
 
-        // DIAG(temp): placement count + physical mesh-level degree histogram for this shape.
-        {
-            const auto& pml = mesh_physical_graphs.at(mesh_name).mesh_level_graph_;
-            std::map<std::size_t, std::size_t> h;
-            for (const auto& n : pml.get_nodes()) {
-                const auto& nb = pml.get_neighbors(n);
-                h[std::set<MeshId>(nb.begin(), nb.end()).size()]++;
-            }
-            std::string s;
-            for (const auto& [d, c] : h) {
-                s += fmt::format("{}deg{}:{}", s.empty() ? "" : " ", d, c);
-            }
-            log_info(
-                tt::LogFabric,
-                "DIAG shape '{}': {} PSD placement(s), physical mesh-level {} node(s) [{}]",
-                mesh_name,
-                placements.size(),
-                pml.get_nodes().size(),
-                s);
-        }
-
         // Pre-compute one bitmask per candidate placement for this shape, straight from each placement's footprint.
         auto& gbits = group_bits_by_name[mesh_name];
         gbits.reserve(placements.size());
@@ -1766,27 +1745,6 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
         // Build the shape graph from placements: ASIC footprints and PGD pinning both come from each PsdPlacement.
         const auto mesh_layouts = mesh_physical_layouts_from_psd_placements(placements);
         mesh_physical_graphs[mesh_name] = build_hierarchical_from_flat_graph(flat_graph, mesh_layouts);
-
-        // DIAG(temp): placement count + physical mesh-level degree histogram for this shape.
-        {
-            const auto& pml = mesh_physical_graphs.at(mesh_name).mesh_level_graph_;
-            std::map<std::size_t, std::size_t> h;
-            for (const auto& n : pml.get_nodes()) {
-                const auto& nb = pml.get_neighbors(n);
-                h[std::set<MeshId>(nb.begin(), nb.end()).size()]++;
-            }
-            std::string s;
-            for (const auto& [d, c] : h) {
-                s += fmt::format("{}deg{}:{}", s.empty() ? "" : " ", d, c);
-            }
-            log_info(
-                tt::LogFabric,
-                "DIAG shape '{}': {} PSD placement(s), physical mesh-level {} node(s) [{}]",
-                mesh_name,
-                placements.size(),
-                pml.get_nodes().size(),
-                s);
-        }
 
         // Pre-compute one bitmask per candidate placement for this shape, straight from each placement's footprint.
         auto& gbits = group_bits_by_name[mesh_name];
