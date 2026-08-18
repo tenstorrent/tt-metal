@@ -10,6 +10,18 @@
 
 namespace ckernel::sfpu {
 
+// Replay slot and length shared by mac_init() (which records) and calculate_mac()
+// (which replays).  lltt::record() captures exactly `length` instructions, so the two
+// must agree: an under-count leaves the tail of the body out of the buffer, an
+// over-count swallows whatever the caller emits next.
+//
+// The lengths below are the instructions sfpi emits for mac_init()'s body:
+//   3x SFPLOAD, SFPMAD, SFPNOP (SFPMAD write latency), [SFPSTOCHRND for bf16,] SFPSTORE
+// If mac_init()'s body changes, re-check them against the generated kernel.
+inline constexpr int MAC_REPLAY_SLOT = 0;
+template <bool is_fp32_dest_acc_en>
+inline constexpr int mac_replay_len = is_fp32_dest_acc_en ? 6 : 7;
+
 // mac: out = a * b + c, computed in FP32 accumulator via SFPMAD.
 //
 // The replay sequence is recorded once in mac_init (with fixed dest offsets 0, 64, 128
@@ -37,12 +49,9 @@ inline void calculate_mac(
         data_format == DataFormat::Float32 || data_format == DataFormat::Float16_b,
         "Unsupported data format for calculate_mac(). Supported data formats are: Float32, Float16_b.");
 
-    // The replay buffer was recorded in mac_init with fixed offsets (0, 64, 128, 0).
-    // All call sites use tile indices (0, 1, 2, 0), so the recorded sequence matches.
-    constexpr int num_instrs = is_fp32_dest_acc_en ? 6 : 7;
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        lltt::replay(0, num_instrs);
+        lltt::replay(MAC_REPLAY_SLOT, mac_replay_len<is_fp32_dest_acc_en>);
     }
 }
 

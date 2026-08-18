@@ -25,32 +25,32 @@ inline void mac_init() {
         .set(ADDR_MOD_6);
 
     // Record the replay sequence once at init time with fixed dest offsets.
-    // All callers use tile indices (0, 1, 2, 0) → offsets (0, 64, 128, 0).
+    // All callers use tile indices (0, 1, 2, 0), i.e. dst_reg[0], dst_reg[32], dst_reg[64]
+    // (sfpi indexes dst_reg in rows; the row stride is 2, so tile n starts at row n * 32).
+    //
     // The SFPLOAD/SFPSTORE instruction mod describes the DST register layout, which is
     // 32-bit only when fp32 dest accumulation is enabled - it is not a property of the
     // input tensor's data format.  Keying it off data_format would issue FP32-mode
     // accesses against a 16-bit DST whenever the inputs are fp32 but the output dtype
     // (which is what drives fp32_dest_acc_en) is bf16, and 16-bit accesses against a
-    // 32-bit DST in the mirrored case.
-    constexpr InstrModLoadStore mod0 = is_fp32_dest_acc_en ? InstrModLoadStore::FP32 : InstrModLoadStore::DEFAULT;
+    // 32-bit DST in the mirrored case.  DataLayout::FSrcB is mod 0, i.e. "whatever
+    // format DST is configured with".
+    //
+    // sfpi defaults the loads to the arch's no-increment addr_mod (ADDR_MOD_3 here), which
+    // is what we want; only the store overrides it, with the auto-advancing mod set above.
+    constexpr sfpi::DataLayout dst_fmt = is_fp32_dest_acc_en ? sfpi::DataLayout::F32 : sfpi::DataLayout::FSrcB;
+
+    lltt::record<lltt::NoExec>(MAC_REPLAY_SLOT, mac_replay_len<is_fp32_dest_acc_en>);
+    sfpi::vFloat a = sfpi::dst_reg[0].mode<dst_fmt>();
+    sfpi::vFloat b = sfpi::dst_reg[32].mode<dst_fmt>();
+    sfpi::vFloat c = sfpi::dst_reg[64].mode<dst_fmt>();
     if constexpr (is_fp32_dest_acc_en) {
-        lltt::record(0, 6);
-        TT_SFPLOAD(p_sfpu::LREG0, mod0, ADDR_MOD_3, 0);
-        TT_SFPLOAD(p_sfpu::LREG1, mod0, ADDR_MOD_3, 64);
-        TT_SFPLOAD(p_sfpu::LREG2, mod0, ADDR_MOD_3, 128);
-        TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LREG3, 0);
-        TTI_SFPNOP;
-        TT_SFPSTORE(p_sfpu::LREG3, mod0, ADDR_MOD_2, 0);
+        sfpi::dst_reg[0].mode<dst_fmt>(ADDR_MOD_2) = a * b + c;
     } else {
-        lltt::record(0, 7);
-        TT_SFPLOAD(p_sfpu::LREG0, mod0, ADDR_MOD_3, 0);
-        TT_SFPLOAD(p_sfpu::LREG1, mod0, ADDR_MOD_3, 64);
-        TT_SFPLOAD(p_sfpu::LREG2, mod0, ADDR_MOD_3, 128);
-        TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LREG3, 0);
-        TTI_SFPNOP;
-        TTI_SFP_STOCH_RND(
-            sfpi::SFPSTOCHRND_RND_EVEN, 0, 0, p_sfpu::LREG3, p_sfpu::LREG3, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
-        TT_SFPSTORE(p_sfpu::LREG3, mod0, ADDR_MOD_2, 0);
+        // SFPMAD accumulates in fp32; an SFPSTORE into a 16-bit DST truncates the
+        // mantissa, so round to nearest-even on the way down to bf16 instead.
+        sfpi::dst_reg[0].mode<dst_fmt>(ADDR_MOD_2) =
+            sfpi::convert<sfpi::vFloat16b>(a * b + c, sfpi::RoundMode::Nearest);
     }
 }
 
