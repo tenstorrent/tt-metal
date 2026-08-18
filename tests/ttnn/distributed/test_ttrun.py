@@ -766,14 +766,14 @@ class TestPhase1CacheId:
         mgd.write_bytes(b"x")
         pins = temp_dir / "pinned_meshes.yaml"
 
-        without_file = compute_phase1_cache_id(mgd, sorted(["h1"]), None)
+        without_file = compute_phase1_cache_fingerprint_full(mgd, sorted(["h1"]), None)
 
         pins.write_text("mesh_pinnings:\n  - mesh_id: 0\n    host: h1\n")
-        with_file = compute_phase1_cache_id(mgd, sorted(["h1"]), None, pins)
+        with_file = compute_phase1_cache_fingerprint_full(mgd, sorted(["h1"]), None, pins)
         assert with_file != without_file
 
         pins.write_text("mesh_pinnings:\n  - mesh_id: 0\n    host: h2\n")
-        edited = compute_phase1_cache_id(mgd, sorted(["h1"]), None, pins)
+        edited = compute_phase1_cache_fingerprint_full(mgd, sorted(["h1"]), None, pins)
         assert edited != with_file
 
     def test_cache_id_is_short_hex(self, temp_dir):

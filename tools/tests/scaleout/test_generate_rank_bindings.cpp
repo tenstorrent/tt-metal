@@ -301,15 +301,18 @@ TEST(MeshPinningFileTest, ParsesMeshToHostMappings) {
     EXPECT_EQ(pinnings[1].mesh_id, 3);
     EXPECT_EQ(pinnings[1].host, "host-B");
     EXPECT_FALSE(pinnings[1].tt_visible_devices.has_value());
+
+    const auto empty_path = write_pinning_file(dir, "mesh_pinnings: []\n");
+    EXPECT_TRUE(parse_mesh_pinning_file(empty_path.string()).empty());
 }
 
 TEST(MeshPinningFileTest, RejectsInvalidDocuments) {
     const std::vector<std::string> invalid_documents = {
         "pinnings:\n  - mesh_id: 0\n    host: host-A\n",
+        "mesh_pinnings: {}\n",
         "mesh_pinnings:\n  - mesh_id: 0\n    host: host-A\n    slot: 1\n",
         "mesh_pinnings:\n  - mesh_id: 0\n",
         "mesh_pinnings:\n  - host: h\n",
-        "mesh_pinnings:\n  - mesh_id: 0\n    host: h\n    mesh_host_rank: 0\n",
         "mesh_pinnings:\n  - mesh_id: -1\n    host: h\n",
         "mesh_pinnings:\n  - mesh_id: 1\n    host: hA\n  - mesh_id: 1\n    host: hB\n",
     };
@@ -319,32 +322,4 @@ TEST(MeshPinningFileTest, RejectsInvalidDocuments) {
         const auto path = write_pinning_file(dir, invalid_documents[i]);
         EXPECT_THROW(parse_mesh_pinning_file(path.string()), std::runtime_error) << "case " << i;
     }
-}
-
-TEST(MeshPinningFileTest, DerivesSoleMeshHostRank) {
-    const MeshHostRanksByMesh host_ranks_by_mesh = {{0, {7}}, {1, {4}}};
-    std::vector<MeshPinning> pinnings(2);
-    pinnings[0].host = "host-A";
-    pinnings[0].mesh_id = 0;
-    pinnings[1].host = "host-B";
-    pinnings[1].mesh_id = 1;
-
-    const auto resolved = resolve_mesh_pinnings(pinnings, host_ranks_by_mesh);
-    ASSERT_EQ(resolved.size(), 2u);
-    EXPECT_EQ(resolved[0].mesh_id, 0);
-    EXPECT_EQ(resolved[0].mesh_host_rank, 7);
-    EXPECT_EQ(resolved[0].host, "host-A");
-    EXPECT_EQ(resolved[1].mesh_id, 1);
-    EXPECT_EQ(resolved[1].mesh_host_rank, 4);
-}
-
-TEST(MeshPinningFileTest, ResolveRejectsUnsupportedMeshes) {
-    MeshPinning pinning;
-    pinning.host = "host-A";
-
-    pinning.mesh_id = 7;
-    EXPECT_THROW(resolve_mesh_pinnings({pinning}, {{0, {0}}}), std::runtime_error);
-
-    pinning.mesh_id = 0;
-    EXPECT_THROW(resolve_mesh_pinnings({pinning}, {{0, {0, 1}}}), std::runtime_error);
 }

@@ -2668,14 +2668,19 @@ std::map<AsicPosition, std::set<tt::tt_metal::AsicID>> build_asic_positions_map(
 
     // Restrict each pinned logical mesh to physical meshes wholly backed by the named host.
     for (const auto& [logical_mesh_id, hostname] : config.mesh_host_pinnings) {
+        const auto host_it = config.hostname_to_asics.find(hostname);
+        if (host_it == config.hostname_to_asics.end()) {
+            TT_THROW("Mesh pinning: host '{}' was not found by physical system discovery.", hostname);
+        }
+        const auto& host_asics = host_it->second;
+
         std::set<MeshId> allowed_physical_meshes;
         for (const auto& [physical_mesh_id, physical_mesh_graph] : physical_graph.mesh_adjacency_graphs_) {
             const auto& asic_ids = physical_mesh_graph.get_nodes();
             const bool entirely_on_pinned_host =
                 !asic_ids.empty() &&
-                std::all_of(asic_ids.begin(), asic_ids.end(), [&config, &hostname](const tt::tt_metal::AsicID asic_id) {
-                    const auto asic_hostname = hostname_for_asic_from_hostname_map(asic_id, config.hostname_to_asics);
-                    return asic_hostname.has_value() && *asic_hostname == hostname;
+                std::all_of(asic_ids.begin(), asic_ids.end(), [&host_asics](const tt::tt_metal::AsicID asic_id) {
+                    return host_asics.contains(asic_id);
                 });
             if (entirely_on_pinned_host) {
                 allowed_physical_meshes.insert(physical_mesh_id);
@@ -2689,10 +2694,11 @@ std::map<AsicPosition, std::set<tt::tt_metal::AsicID>> build_asic_positions_map(
         }
         if (!inter_mesh_constraints.add_required_constraint(logical_mesh_id, allowed_physical_meshes)) {
             TT_THROW(
-                "Mesh pinning: pinning logical mesh {} to its named host conflicts with the other required "
+                "Mesh pinning: pinning logical mesh {} to host '{}' conflicts with the other required "
                 "constraints (MGD pinnings or galaxy corner pinnings). Relax the pinning file or the MGD "
                 "pinnings.",
-                *logical_mesh_id);
+                *logical_mesh_id,
+                hostname);
         }
     }
 

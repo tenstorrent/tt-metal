@@ -93,7 +93,7 @@ host rank within a multi-host mesh. Such meshes are rejected rather than silentl
 
 Failures reported before launch include:
 
-- a pinned hostname that physical system discovery did not find (the discovered hosts are listed);
+- a pinned hostname that physical system discovery did not find;
 - `TT_VISIBLE_DEVICES` requesting more devices than the host has;
 - a pinned mesh ID the MGD does not define;
 - a pin that conflicts with MGD or galaxy corner pinnings.

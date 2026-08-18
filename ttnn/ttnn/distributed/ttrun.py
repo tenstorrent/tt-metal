@@ -549,7 +549,6 @@ def compute_phase1_cache_id(
     mgd_path: Path,
     hosts: Optional[List[str]],
     mock_rank_to_desc: Optional[Dict[int, Path]],
-    mesh_pinning_file: Optional[Path] = None,
     *,
     mgd_is_mapping_yaml: Optional[bool] = None,
 ) -> str:
@@ -575,7 +574,6 @@ def compute_phase1_cache_id(
         hosts,
         mock_rank_to_desc,
         mgd_is_mapping_yaml=mgd_is_mapping_yaml,
-        mesh_pinning_file=mesh_pinning_file,
     )[:PHASE1_CACHE_ID_HEX_LEN]
 
 
@@ -958,6 +956,9 @@ def build_generate_rank_bindings_mpi_cmd(
         if use_mapping
         else ["--mesh-graph-descriptor", str(mgd_path.resolve())]
     )
+    mesh_pinning_args = (
+        ["--mesh-pinning-file", str(Path(mesh_pinning_file).resolve())] if mesh_pinning_file is not None else []
+    )
 
     if mock_rank_to_desc:
         # Mock cluster: all processes on localhost
@@ -977,8 +978,7 @@ def build_generate_rank_bindings_mpi_cmd(
             cmd.append(str(executable.resolve()))
             cmd.extend(mgd_arg)
             cmd.extend(["--output-dir", str(output_dir.resolve())])
-            if mesh_pinning_file is not None:
-                cmd.extend(["--mesh-pinning-file", str(Path(mesh_pinning_file).resolve())])
+            cmd.extend(mesh_pinning_args)
 
         # Return early for mock mode (already added executable and args per rank)
         return cmd
@@ -994,8 +994,7 @@ def build_generate_rank_bindings_mpi_cmd(
         cmd.append(str(executable.resolve()))
         cmd.extend(mgd_arg)
         cmd.extend(["--output-dir", str(output_dir.resolve())])
-        if mesh_pinning_file is not None:
-            cmd.extend(["--mesh-pinning-file", str(Path(mesh_pinning_file).resolve())])
+        cmd.extend(mesh_pinning_args)
     else:
         raise ValueError("Either hosts or mock_rank_to_desc must be provided")
 

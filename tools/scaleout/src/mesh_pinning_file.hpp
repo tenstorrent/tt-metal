@@ -5,7 +5,6 @@
 #pragma once
 
 #include <cstddef>
-#include <map>
 #include <optional>
 #include <set>
 #include <stdexcept>
@@ -28,15 +27,6 @@ struct MeshPinning {
     std::string host;
     std::optional<std::string> tt_visible_devices;
 };
-
-struct ResolvedMeshPinning {
-    int mesh_id = 0;
-    int mesh_host_rank = 0;
-    std::string host;
-    std::optional<std::string> tt_visible_devices;
-};
-
-using MeshHostRanksByMesh = std::map<int, std::vector<int>>;
 
 inline std::vector<MeshPinning> parse_mesh_pinning_file(const std::string& path) {
     YAML::Node root;
@@ -106,34 +96,4 @@ inline std::vector<MeshPinning> parse_mesh_pinning_file(const std::string& path)
     }
 
     return pinnings;
-}
-
-inline std::vector<ResolvedMeshPinning> resolve_mesh_pinnings(
-    const std::vector<MeshPinning>& pinnings, const MeshHostRanksByMesh& host_ranks_by_mesh) {
-    std::vector<ResolvedMeshPinning> resolved;
-
-    for (const auto& pinning : pinnings) {
-        const auto mesh_it = host_ranks_by_mesh.find(pinning.mesh_id);
-        if (mesh_it == host_ranks_by_mesh.end()) {
-            throw std::runtime_error(fmt::format(
-                "Mesh pinning file pins mesh_id {}, which the mesh graph descriptor does not define", pinning.mesh_id));
-        }
-        if (mesh_it->second.size() != 1) {
-            throw std::runtime_error(fmt::format(
-                "Mesh pinning file pins mesh_id {}, which spans {} host ranks. Pinning is currently supported "
-                "only for meshes that occupy a single host",
-                pinning.mesh_id,
-                mesh_it->second.size()));
-        }
-
-        ResolvedMeshPinning out;
-        out.mesh_id = pinning.mesh_id;
-        out.mesh_host_rank = mesh_it->second.front();
-        out.host = pinning.host;
-        out.tt_visible_devices = pinning.tt_visible_devices;
-
-        resolved.push_back(std::move(out));
-    }
-
-    return resolved;
 }
