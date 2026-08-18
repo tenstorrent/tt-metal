@@ -4,16 +4,58 @@
 
 #include "permute_codegen_supported.hpp"
 
-#include <tt_stl/assert.hpp>
+#include <algorithm>
+
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/math.hpp>
 
 #include "permute_codegen_device_operation.hpp"
 
-namespace ttnn::operations::data_movement {
+namespace ttnn::operations::data_movement::permute_codegen {
+
+namespace {
+
+uint32_t page_alignment(const MemoryConfig& memory_config) {
+    return memory_config.buffer_type() == tt::tt_metal::BufferType::DRAM ? tt::tt_metal::hal::get_dram_alignment()
+                                                                         : tt::tt_metal::hal::get_l1_alignment();
+}
+
+}  // namespace
+
+bool is_row_invariant(ttsl::Span<const uint32_t> dims) {
+    return !dims.empty() && dims[dims.size() - 1] == dims.size() - 1;
+}
+
+RmCbBudget rm_cb_budget(const Tensor& input_tensor, const std::optional<MemoryConfig>& output_mem_config) {
+    const auto& shape = input_tensor.logical_shape();
+    const uint32_t stick_bytes = shape[shape.rank() - 1] * input_tensor.element_size();
+    const MemoryConfig& out_config = output_mem_config.value_or(input_tensor.memory_config());
+    // The permutation leaves the last dim in place on this path, so both sides share one stick
+    // width; only the per-buffer-type alignment differs, and one slot serves reader and writer.
+    const uint32_t slot_stride = std::max(
+        tt::round_up(stick_bytes, page_alignment(input_tensor.memory_config())),
+        tt::round_up(stick_bytes, page_alignment(out_config)));
+
+    auto* device = input_tensor.device();
+    const uint32_t l1_capacity =
+        device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    return {slot_stride, slot_stride == 0 ? 0 : l1_capacity / slot_stride};
+}
 
 bool supported_by_codegen(
     const Tensor& input_tensor,
     const ttsl::SmallVector<uint32_t>& dims,
     const std::optional<MemoryConfig>& output_mem_config) {
+    // Everything below asks about layout, dtype, shape and memory config, all of which a host
+    // tensor answers too -- Tensor::is_sharded() is false off-device and memory_config() reads the
+    // spec, not a buffer. Reject up front so a host tensor takes native's own validation instead of
+    // tripping over Tensor::device() in rm_cb_budget() or a null buffer in the program factory.
+    if (input_tensor.storage_type() != StorageType::DEVICE || input_tensor.buffer() == nullptr) {
+        return false;
+    }
+
     const auto& shape = input_tensor.logical_shape();
     const uint32_t rank = shape.rank();
     if (rank != dims.size() || rank < 2 || rank > PermuteCodegenDeviceOperation::kMaxDims) {
@@ -25,7 +67,7 @@ bool supported_by_codegen(
     // Both readers and both writers bind interleaved TensorAccessorArgs (a two-element compile-time
     // ABI); a sharded buffer on either side widens that and the program factory rejects it. The
     // output side is gated here rather than at validate because native supports interleaved-to-
-    // sharded, so "auto" has somewhere to fall back to.
+    // sharded, so the routed entry has somewhere to fall back to.
     if (input_tensor.memory_config().is_sharded()) {
         return false;
     }
@@ -42,20 +84,20 @@ bool supported_by_codegen(
         }
     }
 
-    // Manifest coverage restricts the RM port to these three dtypes. bfloat8_b + ROW_MAJOR is also
-    // independently invalid (codegen_permute.py's invalidate_vector: no row-major representation
-    // for the shared-exponent block-float layout) — see permute.yaml's real-kernel-limit case.
+    // The dtypes the row-major port is swept and certified against. bfloat8_b + ROW_MAJOR is also
+    // independently invalid: the shared-exponent block-float layout has no row-major
+    // representation.
     const DataType dtype = input_tensor.dtype();
     if (dtype != DataType::BFLOAT16 && dtype != DataType::FLOAT32 && dtype != DataType::INT32) {
         return false;
     }
 
-    // Reject the fused-WH-permute delegation this port does not implement (ops/permute/permute.py's
-    // _fused_wh_ok, transcribed per permute.yaml's "left-out-for-now" case): dims[-1]==rank-2 with
-    // enough outer batch and tile-aligned H/W routes the whole call to TransposeCodegen's fused-WH
-    // kernels instead of this op's row-invariant/blocked-generic kernels.
+    // The fused width-height permutation -- last axis moving to the second-to-last position, with
+    // enough outer batch and tile-aligned H/W to make the fused transpose kernels worthwhile --
+    // belongs to the transpose op's fused path, not to the row-invariant/blocked-generic kernels
+    // here.
     if (dims[rank - 1] == rank - 2) {
-        constexpr uint32_t kFusedMinNc = 6;  // _PERMUTE_FUSED_MIN_NC
+        constexpr uint32_t kFusedMinNc = 6;
         constexpr uint32_t kTileH = 32;
         constexpr uint32_t kTileW = 32;
         uint32_t nc = 1;
@@ -69,12 +111,21 @@ bool supported_by_codegen(
         }
     }
 
+    // Nothing above bounds the stick width, but a row-invariant CB slot is a whole stick in L1:
+    // reject a stick too wide for kRmCbSlots of them so the case falls back to native instead of
+    // TT_THROWing out of circular-buffer allocation at program-compile time. Only the row-invariant
+    // factory pages whole sticks; the blocked-generic one pages fixed 32-element chunks, so its
+    // footprint does not scale with any tensor dimension.
+    if (is_row_invariant(dims) && rm_cb_budget(input_tensor, output_mem_config).max_slots < kRmCbSlots) {
+        return false;
+    }
+
     return true;
 }
 
 bool is_demoted(const Tensor& input_tensor, const ttsl::SmallVector<uint32_t>& dims) {
-    // Perf-only demotion, consulted by the "auto" selector alone: the case stays correct and
-    // supported, so a forced implementation="codegen" call still runs it.
+    // Perf-only demotion, consulted by the routed entry alone: the case stays correct and
+    // supported, so a forced permute_force_codegen call still runs it.
     //
     // A permutation that moves the last axis selects the blocked path (tilize -> transpose_tile ->
     // pack_untilize). That trip through the compute engine costs about what it saves, so the whole
@@ -87,20 +138,7 @@ bool is_demoted(const Tensor& input_tensor, const ttsl::SmallVector<uint32_t>& d
     if (rank < 2 || rank != dims.size()) {
         return false;
     }
-    return dims[rank - 1] != rank - 1;
+    return !is_row_invariant(dims);
 }
 
-ImplementationSelector parse_implementation(const std::string& value) {
-    if (value == "auto") {
-        return ImplementationSelector::Auto;
-    }
-    if (value == "native") {
-        return ImplementationSelector::Native;
-    }
-    if (value == "codegen") {
-        return ImplementationSelector::Codegen;
-    }
-    TT_THROW("permute: invalid implementation '{}' (expected 'auto', 'native', or 'codegen')", value);
-}
-
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn::operations::data_movement::permute_codegen

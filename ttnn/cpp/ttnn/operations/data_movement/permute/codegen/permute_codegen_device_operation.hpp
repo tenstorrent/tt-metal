@@ -29,7 +29,6 @@ struct PermuteCodegenDeviceOperation {
         const std::array<uint32_t, kMaxDims> input_shape;
         const std::array<uint32_t, kMaxDims> output_strides;
         const uint32_t num_rows;
-        const uint32_t aligned_stick_bytes;
         const uint32_t elem_size;
         const uint32_t num_blocks_total;
         const MemoryConfig output_mem_config;

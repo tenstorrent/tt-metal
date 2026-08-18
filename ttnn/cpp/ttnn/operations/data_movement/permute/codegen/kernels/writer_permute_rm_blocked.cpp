@@ -130,7 +130,10 @@ void kernel_main() {
                 {.offset_bytes = l1_offset},
                 {.page_id = dest_linear_idx, .offset_bytes = x_offset});
         }
-        noc.async_write_barrier();
+        // Releasing the slot only needs the data out of local L1, not the destination's acks; the
+        // trailing barrier below is what guarantees the writes landed.
+        noc.async_writes_flushed();
         cb_out.pop_front(w_block_size);
     }
+    noc.async_write_barrier();
 }

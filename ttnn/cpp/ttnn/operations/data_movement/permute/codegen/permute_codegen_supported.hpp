@@ -4,18 +4,23 @@
 
 #pragma once
 
-#include <string>
+#include <algorithm>
+#include <optional>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 #include <tt_stl/span.hpp>
 
-namespace ttnn::operations::data_movement {
+// Nested per the sibling ports' convention: these names (`supported_by_codegen`, `is_demoted`) are
+// generic enough that the bare data_movement namespace cannot hold one op's copy without colliding
+// with the next.
+namespace ttnn::operations::data_movement::permute_codegen {
 
-// Dispatch predicate deciding whether a call lands on PermuteCodegenDeviceOperation vs. the
-// native prim. Must replicate PermuteCodegen.permute's ops/permute/spec.py gating (row-major only,
-// and rejecting the fused-WH delegation to TransposeCodegen — see permute.yaml's scope=out cases).
-// Correctness-only: never folds in perf demotions (see is_demoted below).
+// Correctness gate deciding whether a call lands on PermuteCodegenDeviceOperation vs. the native
+// prim: row-major only, and declining the fused width-height permutation this port does not
+// implement. Consulted by ttnn::permute's routing, by permute_force_codegen, and by
+// prim::permute_codegen's validate, so all three agree on the supported scope.
+// Never folds in perf demotions (see is_demoted below).
 // `output_mem_config` is the caller's requested memory_config, not the input's: native permute
 // accepts an interleaved input with a sharded output, which these kernels cannot produce.
 bool supported_by_codegen(
@@ -23,14 +28,30 @@ bool supported_by_codegen(
     const ttsl::SmallVector<uint32_t>& dims,
     const std::optional<MemoryConfig>& output_mem_config);
 
-// Perf-only routing gate, consulted by the "auto" selector alone (never by validate or a forced
-// "codegen" call). Demotes the blocked path as a whole -- any permutation that moves the last axis
-// -- because it measures at parity with native; only the row-invariant path is routed here.
+// Row-invariant CB batching. The reader fills `kRmReadBatch` slots per round; the writer waits on
+// the previous batch plus the current one before releasing either, so the CB has to hold two
+// write batches at once.
+inline constexpr uint32_t kRmReadBatch = 4;
+inline constexpr uint32_t kRmWriteBatch = 4;
+inline constexpr uint32_t kRmCbSlots = 2 * std::max(kRmReadBatch, kRmWriteBatch);
+
+// One row-invariant CB slot holds a whole row-major stick, so its byte size scales with the input's
+// last dim. Shared by supported_by_codegen() (which rejects a stick too wide for kRmCbSlots of them
+// to fit in one core's L1) and by the program factory (which sizes the CB from it); the two must
+// agree or the gate would claim a config the factory cannot instantiate.
+struct RmCbBudget {
+    uint32_t slot_stride;  // bytes per CB slot
+    uint32_t max_slots;    // slots that fit in per-core L1
+};
+RmCbBudget rm_cb_budget(const Tensor& input_tensor, const std::optional<MemoryConfig>& output_mem_config);
+
+// True when the permutation leaves the last axis in place, which is what selects the row-invariant
+// program factory (and with it the stick-sized CB above).
+bool is_row_invariant(ttsl::Span<const uint32_t> dims);
+
+// Perf-only routing gate, consulted by ttnn::permute alone -- never by validate and never by
+// permute_force_codegen. Demotes the blocked path as a whole -- any permutation that moves the last
+// axis -- because it measures at parity with native; only the row-invariant path is routed here.
 bool is_demoted(const Tensor& input_tensor, const ttsl::SmallVector<uint32_t>& dims);
 
-enum class ImplementationSelector { Auto, Native, Codegen };
-
-// Parses the "implementation" kwarg ("auto" | "native" | "codegen"); TT_THROWs otherwise.
-ImplementationSelector parse_implementation(const std::string& value);
-
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn::operations::data_movement::permute_codegen

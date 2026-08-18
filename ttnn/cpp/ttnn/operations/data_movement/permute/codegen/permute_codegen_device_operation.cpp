@@ -9,7 +9,6 @@
 #include "permute_codegen_supported.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
-#include <tt-metalium/hal.hpp>
 
 namespace ttnn::operations::data_movement {
 
@@ -26,8 +25,7 @@ static std::array<uint32_t, PermuteCodegenDeviceOperation::kMaxDims> get_row_str
 
 PermuteCodegenDeviceOperation::program_factory_t PermuteCodegenDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
-    // dims[-1] == rank - 1: last dim unchanged -> row-invariant. Otherwise -> blocked-generic.
-    if (operation_attributes.dims[operation_attributes.rank - 1] == operation_attributes.rank - 1) {
+    if (permute_codegen::is_row_invariant({operation_attributes.dims.data(), operation_attributes.rank})) {
         return MultiCoreRowInvariant{};
     }
     return MultiCoreBlockedGeneric{};
@@ -41,10 +39,25 @@ void PermuteCodegenDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         tensor_args.input_tensor.layout() == Layout::ROW_MAJOR,
         "PermuteCodegen: only ROW_MAJOR is supported by the codegen port");
+    // supported_by_codegen() answers over layout, dtype, shape and memory config, all of which a
+    // host tensor answers too, so the structural preconditions are asserted separately -- otherwise
+    // a host tensor reaching the prim directly reads as an out-of-scope shape.
+    TT_FATAL(
+        tensor_args.input_tensor.storage_type() == StorageType::DEVICE,
+        "PermuteCodegen: input tensor must be on device");
+    TT_FATAL(tensor_args.input_tensor.buffer() != nullptr, "PermuteCodegen: input tensor has no allocated buffer");
     ttsl::SmallVector<uint32_t> dims(attributes.dims.begin(), attributes.dims.begin() + attributes.rank);
     TT_FATAL(
-        supported_by_codegen(tensor_args.input_tensor, dims, attributes.output_mem_config),
+        permute_codegen::supported_by_codegen(tensor_args.input_tensor, dims, attributes.output_mem_config),
         "PermuteCodegen: call does not satisfy supported_by_codegen()");
+    // A caller-supplied output is adopted verbatim by compute_output_specs, so the kernels would
+    // page it against the spec they were sized from rather than the one it actually has.
+    if (tensor_args.optional_output_tensor.has_value()) {
+        TT_FATAL(
+            tensor_args.optional_output_tensor->tensor_spec() ==
+                compute_output_specs(attributes, {tensor_args.input_tensor, std::nullopt}),
+            "PermuteCodegen: preallocated output tensor spec does not match the spec this permute produces");
+    }
 }
 
 void PermuteCodegenDeviceOperation::validate_on_program_cache_hit(
@@ -67,6 +80,8 @@ PermuteCodegenDeviceOperation::spec_return_value_t PermuteCodegenDeviceOperation
         [&](uint32_t dim) { return input_shape[dim]; });
     auto output_shape = Shape(std::move(output_shape_vec));
 
+    // supported_by_codegen() admits ROW_MAJOR only, and a row-major page config carries no tile at
+    // all, so building it from the layout drops nothing: input and output are paged identically.
     return tt::tt_metal::TensorSpec(
         output_shape,
         tt::tt_metal::TensorLayout(
@@ -83,17 +98,6 @@ PermuteCodegenDeviceOperation::tensor_return_value_t PermuteCodegenDeviceOperati
 }
 
 }  // namespace ttnn::operations::data_movement
-
-namespace {
-uint32_t permute_codegen_buffer_alignment(tt::tt_metal::BufferType buffer_type) {
-    return buffer_type == tt::tt_metal::BufferType::DRAM ? tt::tt_metal::hal::get_dram_alignment()
-                                                         : tt::tt_metal::hal::get_l1_alignment();
-}
-
-uint32_t permute_codegen_round_up(uint32_t bytes, uint32_t alignment) {
-    return ((bytes + alignment - 1) / alignment) * alignment;
-}
-}  // namespace
 
 namespace ttnn::prim {
 ttnn::operations::data_movement::PermuteCodegenDeviceOperation::tensor_return_value_t permute_codegen(
@@ -119,28 +123,15 @@ ttnn::operations::data_movement::PermuteCodegenDeviceOperation::tensor_return_va
 
     const auto output_mem_config = memory_config.value_or(input_tensor.memory_config());
 
-    // Total rows (=volume/W) uses the INPUT's last dim on both branches: build_permute_rm_blocked's
-    // own num_rows is volume/W (input W), which differs from volume/output_shape[-1] (== X) on the
-    // W-changing branch. Row-invariant permutes keep input W == output W, so this is unchanged there.
+    // Total rows (=volume/W) uses the INPUT's last dim on both branches: the blocked-generic
+    // kernels count input rows, which differs from volume/output_shape[-1] (== X) on the W-changing
+    // branch. Row-invariant permutes keep input W == output W, so this is the same count there.
     const uint32_t num_rows = static_cast<uint32_t>(input_shape.volume() / input_shape[rank - 1]);
 
-    const bool row_invariant = dims[rank - 1] == rank - 1;
-    uint32_t aligned_stick_bytes = 0;
     uint32_t num_blocks_total = 0;
-    if (row_invariant) {
-        // ops/permute/spec.py's build_permute_rm: CB page_size = max(source, destination)
-        // interleaved-accessor page size. W is unchanged by the permutation, so both sides share one
-        // stick_bytes; only the per-buffer-type alignment (DRAM vs L1) differs.
-        const uint32_t stick_bytes = input_shape[rank - 1] * input_tensor.element_size();
-        const uint32_t source_pitch = permute_codegen_round_up(
-            stick_bytes, permute_codegen_buffer_alignment(input_tensor.memory_config().buffer_type()));
-        const uint32_t dest_pitch =
-            permute_codegen_round_up(stick_bytes, permute_codegen_buffer_alignment(output_mem_config.buffer_type()));
-        aligned_stick_bytes = std::max(source_pitch, dest_pitch);
-    } else {
-        // W-changing (blocked-generic) block count, transcribed from
-        // ops/permute/spec.py's build_permute_rm_blocked host section.
-        constexpr uint32_t kBlockSize = 32;  // _X_BLOCK / _W_BLOCK
+    if (!ttnn::operations::data_movement::permute_codegen::is_row_invariant(dims)) {
+        // W-changing (blocked-generic) block count.
+        constexpr uint32_t kBlockSize = 32;
         const uint32_t x_dim = dims[rank - 1];
         const uint32_t X = input_shape[x_dim];
         const uint32_t x_blocks = (X + kBlockSize - 1) / kBlockSize;
@@ -156,7 +147,6 @@ ttnn::operations::data_movement::PermuteCodegenDeviceOperation::tensor_return_va
             .input_shape = padded_input_shape,
             .output_strides = ttnn::operations::data_movement::get_row_strides(output_shape),
             .num_rows = num_rows,
-            .aligned_stick_bytes = aligned_stick_bytes,
             .elem_size = input_tensor.element_size(),
             .num_blocks_total = num_blocks_total,
             .output_mem_config = output_mem_config},

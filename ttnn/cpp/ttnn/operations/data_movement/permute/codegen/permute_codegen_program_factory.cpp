@@ -6,6 +6,7 @@
 
 #include "permute_codegen_device_operation.hpp"
 #include "permute_codegen_program_factory.hpp"
+#include "permute_codegen_supported.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program_descriptors.hpp>
@@ -36,8 +37,7 @@ std::array<uint32_t, PermuteCodegenDeviceOperation::kMaxDims> row_strides_of(
 
 // Row-invariant RM permute (W unchanged): reader_stick_interleaved_unified.cpp (MODE_SEQUENCED,
 // SEQ_IDENTITY) feeding a NON-sequential writer_permute_rm_interleaved.cpp that scatters each row to
-// its inverse-permuted output page. No compute. Byte-identical to ops/permute/spec.py's
-// build_permute_rm.
+// its inverse-permuted output page. No compute.
 tt::tt_metal::ProgramDescriptor PermuteCodegenDeviceOperation::MultiCoreRowInvariant::create_descriptor(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
@@ -50,12 +50,11 @@ tt::tt_metal::ProgramDescriptor PermuteCodegenDeviceOperation::MultiCoreRowInvar
     const uint32_t stick_bytes = operation_attributes.input_shape[rank - 1] * elem_size;
     const uint32_t num_rows = operation_attributes.num_rows;
 
-    // Legacy batch defaults (ops/permute/spec.py: permute builders have no env override / L1 clamp).
-    constexpr uint32_t kReadBatch = 4;           // _RM_READ_BATCH
-    constexpr uint32_t kWriteBatch = 4;          // _RM_WRITE_BATCH
     constexpr uint32_t kModeSequencedStick = 4;  // reader_stick_interleaved_unified.cpp MODE_SEQUENCED
     constexpr uint32_t kSeqIdentity = 0;         // sequencers.h SEQ_IDENTITY
-    const uint32_t cb_depth = std::max(kReadBatch, kWriteBatch) * 2;
+    constexpr uint32_t kReadBatch = permute_codegen::kRmReadBatch;
+    constexpr uint32_t kWriteBatch = permute_codegen::kRmWriteBatch;
+    constexpr uint32_t cb_depth = permute_codegen::kRmCbSlots;
 
     TensorAccessorArgs src_accessor_args(*input_tensor.buffer());
     TensorAccessorArgs dst_accessor_args(*output_tensor.buffer());
@@ -65,7 +64,26 @@ tt::tt_metal::ProgramDescriptor PermuteCodegenDeviceOperation::MultiCoreRowInvar
     TT_FATAL(dst_ct.size() == 2, "permute row-invariant writer expects an interleaved TensorAccessorArgs ABI");
     const uint32_t source_page_size = src_ct[1];
     const uint32_t destination_page_size = dst_ct[1];
-    const uint32_t cb_page_size = std::max(source_page_size, destination_page_size);
+
+    // A slot is a whole stick, so the CB footprint scales with the input's last dim. The gate
+    // rejects a stick too wide for cb_depth of them to fit in one core's L1 -- the same helper, so
+    // that what is admitted here is exactly what was admitted there.
+    const auto cb_budget = permute_codegen::rm_cb_budget(input_tensor, output_tensor.memory_config());
+    const uint32_t cb_page_size = cb_budget.slot_stride;
+    TT_FATAL(
+        cb_page_size == std::max(source_page_size, destination_page_size),
+        "PermuteCodegen: CB slot stride {} B disagrees with the accessors' aligned page sizes "
+        "(source {} B, destination {} B)",
+        cb_page_size,
+        source_page_size,
+        destination_page_size);
+    TT_FATAL(
+        cb_budget.max_slots >= cb_depth,
+        "PermuteCodegen: a {} B row-major stick needs {} CB slots' worth of per-core L1 but only {} "
+        "fit; supported_by_codegen() must reject this config",
+        stick_bytes,
+        cb_depth,
+        cb_budget.max_slots);
 
     IDevice* device = input_tensor.device();
     auto [num_cores, all_cores, core_group_1, core_group_2, rows_per_core_1, rows_per_core_2] =
@@ -80,7 +98,7 @@ tt::tt_metal::ProgramDescriptor PermuteCodegenDeviceOperation::MultiCoreRowInvar
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/data_movement/permute/codegen/kernels/reader_stick_interleaved_unified.cpp";
+        "ttnn/cpp/ttnn/operations/data_movement/common/kernels/codegen/reader_stick_interleaved_unified.cpp";
     reader_desc.core_ranges = all_cores;
     reader_desc.compile_time_args = src_ct;
     reader_desc.named_compile_time_args = {
@@ -92,7 +110,7 @@ tt::tt_metal::ProgramDescriptor PermuteCodegenDeviceOperation::MultiCoreRowInvar
         {"batch", kReadBatch},
         {"nabatch", 1},
         // Benign MODE_TILEROW_PAD defaults: kernel_main is not a template, so its `if constexpr`
-        // branch is name-resolved for every mode that includes this shared reader (see spec.py).
+        // branch is name-resolved for every mode that includes this shared reader.
         {"elem_size", elem_size},
         {"tile_height", 32},
         {"tile_row_shift_bits", 0},
@@ -154,7 +172,7 @@ tt::tt_metal::ProgramDescriptor PermuteCodegenDeviceOperation::MultiCoreRowInvar
 
 // Single-pass blocked-generic RM permute for the W-CHANGING class (dims[-1] != rank-1): reader reads
 // 32x32 row-major blocks -> compute (tilize -> transpose_tile -> pack_untilize) -> writer scatters
-// transposed rows to permuted pages. Byte-identical to ops/permute/spec.py's build_permute_rm_blocked.
+// transposed rows to permuted pages.
 tt::tt_metal::ProgramDescriptor PermuteCodegenDeviceOperation::MultiCoreBlockedGeneric::create_descriptor(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
@@ -162,7 +180,9 @@ tt::tt_metal::ProgramDescriptor PermuteCodegenDeviceOperation::MultiCoreBlockedG
     const Tensor& input_tensor = tensor_args.input_tensor;
     Tensor& output_tensor = tensor_return_value;
 
-    constexpr uint32_t kBlockSize = 32;  // _X_BLOCK / _W_BLOCK
+    // Fixed block edge: every CB below is sized from it, so this factory's L1 footprint does not
+    // scale with any tensor dimension.
+    constexpr uint32_t kBlockSize = 32;
 
     const uint32_t rank = operation_attributes.rank;
     const uint32_t elem_size = operation_attributes.elem_size;
@@ -204,8 +224,8 @@ tt::tt_metal::ProgramDescriptor PermuteCodegenDeviceOperation::MultiCoreBlockedG
     // 4-byte (int32/float32) datums need 32-bit DEST accumulation through the
     // tilize -> transpose_tile -> pack_untilize compute; bf16 (2-byte) does not.
     const bool fp32_dest_acc = (elem_size == 4);
-    // ops/permute/spec.py's build_permute_rm_blocked: transpose_tile rounds float32 through TF32
-    // (and its UInt32 format is corrupt on WH), but the compute only moves 32-bit datums, so
+    // transpose_tile rounds float32 through TF32 (and its UInt32 format is corrupt on Wormhole),
+    // but the compute only moves 32-bit datums, so
     // float32/uint32 are carried through the CB reinterpreted as int32 to preserve every raw bit.
     // Reader/writer byte math and the tensor's own dtype are unchanged; only the CB DataFormat flips.
     const DataType input_dtype = input_tensor.dtype();
