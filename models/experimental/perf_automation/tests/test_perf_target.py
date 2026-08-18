@@ -156,7 +156,7 @@ def test_prefill_bytes_are_costed_and_unknown_regimes_are_not():
     report printed one memory ceiling twice and called it physics.
 
     An unknown regime is still refused, because accepting anything would let a typo silently return a
-    decode figure. prefill_ceiling remains a stub -- the compute side is served by compute_ceiling
+    decode figure. prefill_ceiling is gone -- the compute side is served by compute_ceiling
     with tokens_per_unit, and a second entry point for the same question is what this suite exists to
     prevent."""
     assert pt.active_bytes({"total_params": 1}, regime="prefill") > 0
@@ -169,12 +169,10 @@ def test_prefill_bytes_are_costed_and_unknown_regimes_are_not():
     # "encode". A typo now cannot change the number, which is asserted directly below.
     assert pt.active_bytes({"total_params": 1}, regime="nonsense") > 0
 
-    raised = None
-    try:
-        pt.prefill_ceiling()
-    except NotImplementedError as exc:
-        raised = exc
-    assert raised is not None, "prefill_ceiling"
+    # prefill_ceiling is GONE, not stubbed. It raised NotImplementedError, nothing in the tool ever
+    # called it, and the compute side it stood in for is served by compute_ceiling -- so all it did
+    # was keep a stage name alive in the module that owns the byte model.
+    assert not hasattr(pt, "prefill_ceiling"), "the dead stub is back"
 
 
 # --- junk inputs must DEGRADE, never crash or invert (found by fuzzing the ceiling path) ---

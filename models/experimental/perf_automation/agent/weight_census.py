@@ -391,6 +391,8 @@ def census(root, scope: str = "model", max_nodes: int = 2_000_000, checkpoint=No
                     # tower from the bounded marker.
                     _b = int(n) * bytes_per_elem(name)
                     for seg in set(path[:-1]):
+                        if not _is_section_name(seg):
+                            continue
                         sections[seg] = sections.get(seg, 0.0) + _b
                     if _have_ckpt:
                         # KEPT APART, because the two vocabularies can collide -- a checkpoint
@@ -465,6 +467,25 @@ def census(root, scope: str = "model", max_nodes: int = 2_000_000, checkpoint=No
 
 
 _SECTIONS_IN_MARKER = 48
+
+
+def _is_section_name(seg) -> bool:
+    """Whether a path segment names a SUBTREE a stage could run, or is walk bookkeeping.
+
+    Two kinds of segment reach here that are not towers, and both rank high by bytes -- so both
+    displace real names from the bounded marker, and one of them is wrong outright:
+
+      _parameters / _modules / _buffers -- torch's own containers. Every tensor is inside one, so
+      each is credited the WHOLE model. A share taken against them is 1.0 by construction.
+
+      0 / 1 / 2 ... -- ModuleList indices, and they are not scoped to a parent: layer 3 of the audio
+      tower and layer 3 of the language backbone are credited to the SAME key "3". The number that
+      comes out is a sum across towers, describing no subtree that exists.
+
+    `weight`/`bias` are already excluded by path[:-1], which drops the tensor's own attribute.
+    """
+    t = str(seg or "")
+    return bool(t) and not t.startswith("_") and not t.isdigit()
 
 
 def sections_marker(c: dict) -> str:

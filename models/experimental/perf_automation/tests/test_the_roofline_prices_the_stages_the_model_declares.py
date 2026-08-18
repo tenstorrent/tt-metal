@@ -213,8 +213,8 @@ def _roofs_at_batch(monkeypatch, batch, items=128):
     import cc_optimize.summary as S
 
     monkeypatch.setattr(S, "_model_facts", lambda: _MF)
-    monkeypatch.setattr(S, "_prefill_tokens", lambda: 128)
-    monkeypatch.setattr(S, "_prefill_batch", lambda: batch)
+    monkeypatch.setattr(S, "_prompt_tokens", lambda: 128)
+    monkeypatch.setattr(S, "_request_batch", lambda: batch)
     # The item count comes from what the RUN recorded, so it is stated here rather than inferred:
     # inferring it from the byte model classified decode as processing the whole prompt, because
     # decode READS the KV history to emit one token.
@@ -263,8 +263,8 @@ def _roofs_with_roots(monkeypatch, roots=_ROOTS, secs=_SECS):
     import cc_optimize.summary as S
 
     monkeypatch.setattr(S, "_model_facts", lambda: dict(_MF, stage_roots=roots))
-    monkeypatch.setattr(S, "_prefill_tokens", lambda: 128)
-    monkeypatch.setattr(S, "_prefill_batch", lambda: 8)
+    monkeypatch.setattr(S, "_prompt_tokens", lambda: 128)
+    monkeypatch.setattr(S, "_request_batch", lambda: 8)
     monkeypatch.setattr(S, "_SECTION_BYTES", secs)
     return S._stage_roofs(_BYTES, _BW, 1, "tok/s/u", None, {"encode": 12.8, "prefill": 110.1, "decode": 6.11})
 
@@ -287,8 +287,8 @@ def test_the_backbone_stops_paying_for_the_tower_it_never_reads(monkeypatch):
     import cc_optimize.summary as S
 
     monkeypatch.setattr(S, "_model_facts", lambda: dict(_MF, stage_roots=_ROOTS))
-    monkeypatch.setattr(S, "_prefill_tokens", lambda: 0)  # nothing in flight: weights only
-    monkeypatch.setattr(S, "_prefill_batch", lambda: 8)
+    monkeypatch.setattr(S, "_prompt_tokens", lambda: 0)  # nothing in flight: weights only
+    monkeypatch.setattr(S, "_request_batch", lambda: 8)
     monkeypatch.setattr(S, "_SECTION_BYTES", _SECS)
     r = S._stage_roofs(_BYTES, _BW, 1, "tok/s/u", None, {"encode": 12.8, "decode": 6.11})
     assert r["decode"]["bytes"] < _BYTES, "decode still carries the audio tower's weights"
@@ -304,8 +304,8 @@ def test_the_shares_are_the_checkpoints_own_split(monkeypatch):
     import cc_optimize.summary as S
 
     monkeypatch.setattr(S, "_model_facts", lambda: dict(_MF, stage_roots=_ROOTS))
-    monkeypatch.setattr(S, "_prefill_tokens", lambda: 0)
-    monkeypatch.setattr(S, "_prefill_batch", lambda: 8)
+    monkeypatch.setattr(S, "_prompt_tokens", lambda: 0)
+    monkeypatch.setattr(S, "_request_batch", lambda: 8)
     monkeypatch.setattr(S, "_SECTION_BYTES", _SECS)
     r = S._stage_roofs(_BYTES, _BW, 1, "tok/s/u", None, {"encode": 12.8, "prefill": 110.1, "decode": 6.11})
     share = r["encode"]["bytes"] / _BYTES
@@ -320,7 +320,7 @@ def test_the_encoder_carries_its_activations_once_it_is_no_longer_refused(monkey
 
     import cc_optimize.summary as S
 
-    monkeypatch.setattr(S, "_prefill_tokens", lambda: 0)
+    monkeypatch.setattr(S, "_prompt_tokens", lambda: 0)
     weights_only = S._stage_roofs(_BYTES, _BW, 1, "tok/s/u", None, {"encode": 12.8, "decode": 6.11})["encode"]["bytes"]
     assert with_work > weights_only > 0, (with_work, weights_only)
 

@@ -180,12 +180,12 @@ class PipelineDecodeAdapter:
         # the same manufactured speedup PipelineStageAdapter._inputs_dict had, by a different route.
         # Replication is attempted only for batch > 1, and falls back to the raw prompt: a pipeline
         # whose decode_prefill wants a 1-D sequence must keep working exactly as before.
-        self._state = self._prefill_batch(prefill) if callable(prefill) else None
+        self._state = self._request_batch(prefill) if callable(prefill) else None
         if bool(getattr(self._pipe, "self_traced", False)):
             self.self_traced = True
             self.trace_path = getattr(self._pipe, "trace_path", None)
 
-    def _prefill_batch(self, prefill):
+    def _request_batch(self, prefill):
         """Prefill state for ALL `batch` users, falling back to the single-sequence call.
 
         Whether a pipeline accepts a batched prompt is settled by CALLING it, not by inspecting a

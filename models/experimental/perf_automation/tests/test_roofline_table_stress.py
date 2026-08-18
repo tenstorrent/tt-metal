@@ -569,12 +569,12 @@ def test_the_prompt_length_is_stated_once(monkeypatch, fid):
     assert DEFAULT_ISL_TOKENS == _skeleton_default("TT_PERF_ISL_TOKENS") > 0
 
     monkeypatch.setattr(S, "_perf_mcp", lambda: type("m", (), {"read_stage_isl": staticmethod(lambda *a, **k: 0)}))
-    assert S._prefill_tokens() == DEFAULT_ISL_TOKENS
+    assert S._prompt_tokens() == DEFAULT_ISL_TOKENS
     assert "PREFILL" in _render(stage_ms={"prefill": 35.80, "decode": 138.49})
 
     # ...and an OBSERVED length wins over it, so an overridden ISL is never priced as the default
     monkeypatch.setattr(S, "_perf_mcp", lambda: type("m", (), {"read_stage_isl": staticmethod(lambda *a, **k: 512)}))
-    assert S._prefill_tokens() == 512
+    assert S._prompt_tokens() == 512
 
 
 def test_the_observed_isl_beats_the_default(monkeypatch, fid):
@@ -591,11 +591,11 @@ def test_the_observed_isl_beats_the_default(monkeypatch, fid):
     # patch through summary's OWN accessor: it resolves perf_mcp itself and caches the module, so
     # patching a separately-imported copy is not the object it calls
     monkeypatch.setattr(S, "_perf_mcp", lambda: type("m", (), {"read_stage_isl": staticmethod(lambda *a, **k: 512)}))
-    assert S._prefill_tokens() == 512
+    assert S._prompt_tokens() == 512
 
     # and the env still overrides nothing above it: observed wins
     monkeypatch.setenv("TT_PERF_ISL_TOKENS", "64")
-    assert S._prefill_tokens() == 512
+    assert S._prompt_tokens() == 512
 
 
 def test_the_model_root_is_given_not_guessed(monkeypatch, fid, tmp_path):
@@ -641,10 +641,10 @@ def test_the_two_stages_never_disagree_about_the_weights_they_share():
         "kv_heads": 8,
         "head_dim": 256,
     }
-    _saved_f, _saved_t = S._model_facts, S._prefill_tokens
+    _saved_f, _saved_t = S._model_facts, S._prompt_tokens
     try:
         S._model_facts = lambda: mf
-        S._prefill_tokens = lambda: 128
+        S._prompt_tokens = lambda: 128
         ab = int(11.18e9)
         r = S._stage_roofs(active_bytes=ab, peak_bw_gbps=512.0, tp_degree=1, unit="tok/s/u", profile=None)
         # THE SHARED WEIGHTS ARE THE ANCHOR, and each stage adds only what IT alone reads on top.
@@ -660,15 +660,15 @@ def test_the_two_stages_never_disagree_about_the_weights_they_share():
         assert _kv_only["decode"]["bytes"] >= ab
         assert r["prefill"]["bytes"] > r["decode"]["bytes"], "prefill must add its KV + activations"
         # and with no context there is nothing extra to add, so it IS the anchor
-        _saved_pt = S._prefill_tokens
-        S._prefill_tokens = lambda: 0
+        _saved_pt = S._prompt_tokens
+        S._prompt_tokens = lambda: 0
         try:
             r0 = S._stage_roofs(active_bytes=ab, peak_bw_gbps=512.0, tp_degree=1, unit="tok/s/u", profile=None)
             assert abs(r0["decode"]["bytes"] - ab) < 1.0, "decode invented a second byte count"
         finally:
-            S._prefill_tokens = _saved_pt
+            S._prompt_tokens = _saved_pt
     finally:
-        S._model_facts, S._prefill_tokens = _saved_f, _saved_t
+        S._model_facts, S._prompt_tokens = _saved_f, _saved_t
 
 
 def test_prefill_crosses_from_memory_bound_to_compute_bound_with_the_prompt():
@@ -687,18 +687,18 @@ def test_prefill_crosses_from_memory_bound_to_compute_bound_with_the_prompt():
         "kv_heads": 8,
         "head_dim": 256,
     }
-    _saved_f, _saved_t = S._model_facts, S._prefill_tokens
+    _saved_f, _saved_t = S._model_facts, S._prompt_tokens
     try:
         S._model_facts = lambda: mf
         binds = {}
         for isl in (128, 8192):
-            S._prefill_tokens = lambda i=isl: i
+            S._prompt_tokens = lambda i=isl: i
             r = S._stage_roofs(active_bytes=int(11.18e9), peak_bw_gbps=512.0, tp_degree=1, unit="tok/s/u", profile=None)
             binds[isl] = r["prefill"]["binds"]
         assert binds[128] == "memory", binds
         assert binds[8192] == "compute", binds
     finally:
-        S._model_facts, S._prefill_tokens = _saved_f, _saved_t
+        S._model_facts, S._prompt_tokens = _saved_f, _saved_t
 
 
 def test_the_prefill_roof_prices_the_whole_batch_not_one_sequence():
@@ -726,9 +726,9 @@ def test_the_prefill_roof_prices_the_whole_batch_not_one_sequence():
         "kv_heads": 8,
         "head_dim": 256,
     }
-    _f, _t, _b = S._model_facts, S._prefill_tokens, os.environ.get("TT_PERF_BATCH")
+    _f, _t, _b = S._model_facts, S._prompt_tokens, os.environ.get("TT_PERF_BATCH")
     try:
-        S._model_facts, S._prefill_tokens = (lambda: mf), (lambda: 128)
+        S._model_facts, S._prompt_tokens = (lambda: mf), (lambda: 128)
         got = {}
         for batch in (1, 8):
             os.environ["TT_PERF_BATCH"] = str(batch)
@@ -741,7 +741,7 @@ def test_the_prefill_roof_prices_the_whole_batch_not_one_sequence():
         assert got[1]["prefill"]["binds"] == "memory", got[1]["prefill"]["binds"]
         assert got[8]["prefill"]["binds"] == "compute", got[8]["prefill"]["binds"]
     finally:
-        S._model_facts, S._prefill_tokens = _f, _t
+        S._model_facts, S._prompt_tokens = _f, _t
         os.environ.pop("TT_PERF_BATCH", None)
         if _b is not None:
             os.environ["TT_PERF_BATCH"] = _b

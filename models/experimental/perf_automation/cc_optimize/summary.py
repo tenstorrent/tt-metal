@@ -819,7 +819,7 @@ def _model_facts():
         return None
 
 
-def _prefill_tokens() -> int:
+def _prompt_tokens() -> int:
     """The input length the PREFILL STAGE ACTUALLY RAN, so the FLOP term describes the request the
     harness issued rather than a number from a neighbouring knob.
 
@@ -868,7 +868,7 @@ def _prefill_tokens() -> int:
         return 0
 
 
-def _prefill_batch() -> int:
+def _request_batch() -> int:
     """How many requests the prefill stage processed at once. 1 when nothing says otherwise.
 
     THE UNIT OF WORK IS A BATCH, NOT A SEQUENCE. Both the byte and the FLOP term were computed from
@@ -1048,7 +1048,7 @@ def _stage_units(stage, prompt_tokens) -> int:
         _n = 0
     if _n <= 0:
         return 1
-    return int(_n) * max(1, _prefill_batch())
+    return int(_n) * max(1, _request_batch())
 
 
 def _unit_work_name(unit) -> str:
@@ -1144,13 +1144,13 @@ def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None, stag
         # `toks` here conflated the two -- decode's unit count of 1 became a context of one token -- so
         # the run's ISL is passed uniformly and batch is passed beside it, exactly as the byte model
         # expects. For a prompt-consuming stage that reproduces seq_len x batch as before.
-        _seq = int(_prefill_tokens() or 0)
+        _seq = int(_prompt_tokens() or 0)
         if not _seq:
             return base
         try:
             from agent.perf_target import active_bytes as _ab
 
-            _b = max(1, _prefill_batch())
+            _b = max(1, _request_batch())
             # ITEMS PER REQUEST is what this stage does in one unit -- `toks` already includes the
             # batch, so dividing it out keeps the two factors from being applied twice.
             _items = max(1, int(round(float(toks or 1) / float(_b)))) if toks else 0
@@ -1213,7 +1213,7 @@ def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None, stag
     #
     # stage_ms is written from the model's own PIPELINE_STAGES by the run that measured them, so it
     # is the authority. Declared order is kept: it is the order the pipeline runs in.
-    _pt = _prefill_tokens() if str(unit or "").strip().lower().startswith("tok") else 0
+    _pt = _prompt_tokens() if str(unit or "").strip().lower().startswith("tok") else 0
     _declared = [str(k) for k in (stage_ms or {}) if k]
     if _declared:
         stages = [(n, _stage_units(n, _pt)) for n in _declared]
@@ -1232,7 +1232,7 @@ def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None, stag
         if str(unit or "").strip().lower().startswith("tok"):
             stages = [("decode", 1)]
             if _pt:
-                stages.insert(0, ("prefill", _pt * max(1, _prefill_batch())))
+                stages.insert(0, ("prefill", _pt * max(1, _request_batch())))
         else:
             stages = [(_unit_work_name(unit), 1)]
     for name, toks in stages:
@@ -1448,7 +1448,7 @@ def _roofline_tables(
     # Stated as UNKNOWN rather than 1 when nothing resolved it: TT_PERF_BATCH carries 0 for "ask the
     # pipeline", so a 1 here would be a guess dressed as a fact, and it is exactly the guess that made
     # an 8-user step get priced as a 1-user step.
-    _bs = _prefill_batch()
+    _bs = _request_batch()
     # A RESOLVED batch counts as reported, however it was resolved: the run recording 8 is a stronger
     # statement than the operator exporting it, and reading only the environment is what let a real
     # eight-user run print "not reported".

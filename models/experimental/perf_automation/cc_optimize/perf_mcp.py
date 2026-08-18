@@ -5270,12 +5270,69 @@ def _select_perf_target(rep: dict):
             mf = _anchored_ceiling_facts()
         if mf:
             tp = int(os.environ.get("TT_PERF_MESH_COLS", "1") or "1")
+            # THE GATE AND THE REPORT MUST DIVIDE BY THE SAME BYTES. The report prices each stage by
+            # the subtree it streams -- a decode token reads the language backbone and never the
+            # audio encoder -- while this handed compute_target the WHOLE model. On a two-tower model
+            # that ceiling is too LOW, so the measured rate looks closer to it than it is and the run
+            # can be declared at-the-floor while the report, dividing correctly, still shows headroom.
+            #
+            # Applied only when the model's own facts carry both halves -- which stage runs which
+            # subtree, and that subtree's MEASURED resident bytes. A checkpoint ratio is not used
+            # here: it states disk precision, and a wrong ceiling in the stop gate is worse than a
+            # conservative one. Absent either, the whole model is the read set, exactly as before.
+            _share = _recurring_subtree_share(mf)
+            mf = (
+                dict(mf, device_weight_bytes=int(float(mf.get("device_weight_bytes") or 0) * _share))
+                if (_share < 1.0 and mf.get("device_weight_bytes"))
+                else mf
+            )
+            anchored = anchored * _share if (anchored and _share < 1.0) else anchored
+            if _share < 1.0:
+                print(
+                    "  [perf-mcp] stop-gate ceiling scaled to the recurring stage's subtree "
+                    "(%.1f%% of resident weights), matching the roofline table" % (100.0 * _share),
+                    file=sys.stderr,
+                    flush=True,
+                )
             return (
                 perf_target.compute_target(mf, _ENV, tp_degree=tp, bytes_per_unit=anchored),
                 "model",
                 True,
             )
     return perf_target.target_from_floor_ms(rep.get("modeled_floor_ms")), ("module" if module_level else "model"), False
+
+
+def _recurring_subtree_share(mf: dict) -> float:
+    """Fraction of resident weights the RECURRING stage streams; 1.0 when it cannot be established.
+
+    MEASURED ONLY. device_section_bytes is the census walking the built model, so this is the served
+    split; the checkpoint's ratio is deliberately not accepted as a substitute here, because it
+    states disk precision and the stop gate acts on the answer. stage_roots says which subtree each
+    stage runs, and the recurring stage is the one the headline unit counts.
+
+    1.0 means "the whole model", which is both the honest answer for a single-tower model and the
+    behaviour that predates this.
+    """
+    try:
+        roots = (mf or {}).get("stage_roots") or {}
+        dev = (mf or {}).get("device_section_bytes") or {}
+        total = float((mf or {}).get("device_weight_bytes") or 0.0)
+        if not roots or not dev or total <= 0:
+            return 1.0
+        # The stage the per-unit ceiling is about: the one the run measured its headline against.
+        _rec = str(os.environ.get("PERF_MCP_RECURRING_STAGE", "") or "").strip()
+        if not _rec:
+            _isl = read_stage_isl_map() or {}
+            _ones = [k for k, v in _isl.items() if int(v or 0) == 1]
+            _rec = _ones[0] if len(_ones) == 1 else ""
+        if not _rec or _rec not in roots:
+            return 1.0
+        mine = float(dev.get(str(roots[_rec])) or 0.0)
+        if mine <= 0 or mine > total:
+            return 1.0
+        return mine / total
+    except Exception:  # noqa: BLE001 -- an unestablished share is the whole model, never a failure
+        return 1.0
 
 
 def _anchored_ceiling_bytes(mf: dict) -> float:

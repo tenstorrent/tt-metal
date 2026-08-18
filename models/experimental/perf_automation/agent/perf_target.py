@@ -784,7 +784,3 @@ def score(target: PerfTarget, forward_ms: float) -> dict:
         "band": (round(target.band[0], 3), round(target.band[1], 3)),
         "effective_bw_bytes_s": eff_bw,
     }
-
-
-def prefill_ceiling(*_a, **_k):
-    raise NotImplementedError("prefill is FLOP-bound; v1 models decode only (peak_TFLOPs/model_FLOPs stub)")
