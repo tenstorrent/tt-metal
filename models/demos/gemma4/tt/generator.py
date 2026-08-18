@@ -1011,7 +1011,9 @@ class ChunkedPrefillPageTableGuardMixin:
         pad_w = getattr(model, "_DECODE_TOKEN_FEEDBACK_WIDTH", None)
         if pad_w is None:
             return None
-        sampling_trace_key = (True, self._prev_decode_batch) if self._prev_decode_batch is not None else None
+        # Gemma4ForCausalLM may not have run Gemma4Generator.__init__; use getattr.
+        prev_batch = getattr(self, "_prev_decode_batch", None)
+        sampling_trace_key = (True, prev_batch) if prev_batch is not None else None
         if sampling_trace_key is None or not self.trace_inputs_decode[sampling_trace_key]:
             return None
         feedback = self._decode_token_feedback_buffer(model, self.trace_inputs_decode[sampling_trace_key][model_id])
