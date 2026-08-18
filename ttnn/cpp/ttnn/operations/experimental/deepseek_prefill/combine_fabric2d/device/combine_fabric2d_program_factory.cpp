@@ -5,7 +5,8 @@
 #include "combine_fabric2d_program_factory.hpp"
 #include "combine_fabric2d_placement.hpp"
 #include "combine_fabric2d_assignments.hpp"
-#include "kernels/dataflow/combine_fabric2d_kernel_interface.hpp"
+#include "kernels/dataflow/combine_fabric2d_reader_ct_args.hpp"
+#include "kernels/dataflow/combine_fabric2d_sender_ct_args.hpp"
 
 #include <algorithm>
 #include <map>
