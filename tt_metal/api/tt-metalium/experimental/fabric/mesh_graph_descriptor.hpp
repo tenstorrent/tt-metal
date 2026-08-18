@@ -102,6 +102,14 @@ using AsicPosition = tt::tt_metal::ASICPosition;
 struct AsicPinningGroup {
     std::vector<FabricNodeId> fabric_nodes;
     std::vector<AsicPosition> asic_positions;
+
+    bool operator==(const AsicPinningGroup& other) const {
+        return fabric_nodes == other.fabric_nodes && asic_positions == other.asic_positions;
+    }
+    bool operator<(const AsicPinningGroup& other) const {
+        return fabric_nodes == other.fabric_nodes ? asic_positions < other.asic_positions
+                                                  : fabric_nodes < other.fabric_nodes;
+    }
 };
 
 // TODO: Try make efficient by storing stringviews?

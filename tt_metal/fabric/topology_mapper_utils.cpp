@@ -73,16 +73,11 @@ std::vector<PinningConstraint> get_galaxy_fixed_asic_position_pinnings_for_mesh(
     corner_fabric_node_ids.emplace_back(FabricNodeId{mesh_id, mesh_shape[1] * (mesh_shape[0] - 1)});
     corner_fabric_node_ids.emplace_back(FabricNodeId{mesh_id, (mesh_shape[1] * mesh_shape[0]) - 1});
 
-    // The four corners form ONE many-to-many pinning group: the four corner fabric nodes map bijectively to
-    // the four tray-corner ASIC positions (asic_location 1 on trays 1..4). Emitting them as a SINGLE group
-    // (rather than one group per corner) is essential: a group is applied all-or-nothing, so the four corner
-    // constraints land in the same solve and jointly determine the mesh orientation. As four separate groups
-    // each corner would be an independent pin that can apply on its own, and a grouping covering only part of
-    // the tray layout would still match -- leaving the host-rank tray layout under-determined.
+    // The corners go in as ONE many-to-many group. A group is applied all-or-nothing, so keeping them together
+    // is what makes the four constraints jointly determine the mesh orientation.
     pinning_groups.push_back({corner_fabric_node_ids, corner_asic_positions});
 
-    // Optionally also hard-pin the NW corner (node 0) to tray 1 asic 1 to remove the remaining
-    // rotational/reflective ambiguity (used on a single host, where the layout should be fully deterministic).
+    // Optionally hard-pin the NW corner to remove the remaining rotational/reflective ambiguity.
     if (hard_pin_node_0) {
         pinning_groups.push_back({{corner_fabric_node_ids.front()}, {AsicPosition{1, 1}}});
     }
@@ -92,25 +87,19 @@ std::vector<PinningConstraint> get_galaxy_fixed_asic_position_pinnings_for_mesh(
 
 namespace {
 
-// Apply many-to-many pinning groups as a single required constraint per group. Fabric nodes belonging to
-// another logical mesh are dropped, so a group that says nothing about this mesh is skipped. Every group
-// that does apply must resolve to at least one ASIC present in this physical mesh and must stay satisfiable
-// alongside the constraints already added; otherwise an error is returned so the caller skips this mesh
-// pairing and tries the next candidate.
+// Apply many-to-many pinning groups as one required constraint per group, skipping groups that only name
+// another logical mesh. Returns an error when a group that does apply resolves to no ASIC present here or
+// cannot hold alongside the constraints already added, and the caller then tries the next candidate.
 std::optional<std::string> apply_pinning_groups(
     ::tt::tt_fabric::MappingConstraints<FabricNodeId, tt::tt_metal::AsicID>& intra_mesh_constraints,
     const std::vector<PinningConstraint>& pinning_groups,
     MeshId logical_mesh_id,
     const std::map<AsicPosition, std::set<tt::tt_metal::AsicID>>& asic_positions_to_asic_ids) {
-    // A mesh may carry more than one profile (e.g. a Middle profile {corners->asic 3, chip1->asic 7} AND an
-    // Edge profile {corners->asic 2, chip2->asic 6}); the intended semantics are "satisfy ONE full profile".
-    // For a given candidate placement (a single physical column), only the matching profile's positions are
-    // present. So skip any group whose column is absent here, and require that at least one group actually
-    // applied -- if none did, this placement fits no profile for the mesh and the pairing is rejected.
+    // A mesh may be pinned for several placements and only one of them is present on any given candidate, so
+    // skip groups whose positions are absent here but reject the candidate if that leaves no group applied.
     bool any_group_for_mesh = false;
     bool any_group_applied = false;
     for (const auto& group : pinning_groups) {
-        // If its related to another logical mesh skip it.
         std::set<FabricNodeId> fabric_nodes;
         for (const auto& fabric_node : group.fabric_nodes) {
             if (fabric_node.mesh_id == logical_mesh_id) {
@@ -137,9 +126,7 @@ std::optional<std::string> apply_pinning_groups(
         }
 
         if (asic_ids.empty()) {
-            // This group's column is not present on the candidate placement: it belongs to a different profile
-            // than the one this placement can host. Skip it rather than rejecting, so a mesh pinned with both a
-            // Middle and an Edge profile can flexibly bind to whichever column the placement provides.
+            // None of this group's positions exist here, so it targets a placement this candidate cannot host.
             continue;
         }
 
@@ -153,7 +140,7 @@ std::optional<std::string> apply_pinning_groups(
 
     if (any_group_for_mesh && !any_group_applied) {
         return fmt::format(
-            "No pinned profile fits this placement for mesh {}: every pinning group's ASIC positions were not found "
+            "No pinning group for mesh {} could be placed here: none of their pinned ASIC positions were found "
             "among the physical ASICs participating in this mesh",
             logical_mesh_id.get());
     }
