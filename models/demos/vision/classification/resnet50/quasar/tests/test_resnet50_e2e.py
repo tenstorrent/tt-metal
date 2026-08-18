@@ -56,9 +56,11 @@ def test_resnet50_e2e(device, use_pretrained_weight, model_location_generator):
     # No TT_METAL_QSR_RESNET_STOP_AFTER_LAYER3 -> the model runs the FULL network including layer4/avgpool/fc.
     os.environ["TT_METAL_QSR_CONV_SPLIT_PROGRAM"] = "1"  # HS convs -> split path (off the fused conv_bmm 0x19)
     os.environ["RESNET_PCC_LOG"] = "1"  # per-op [GOLDENPCC] so the FIRST diverging op is visible on failure
-    # Host-fallback the stem + all downsamples (see module docstring): they have separate unfixed 2-core bugs.
+    # Stem now runs ON DEVICE (DRAM-slice width tile-pad slice_write fixed in op_slicing.cpp; verified by
+    # test_conv2d_stem.py). Maxpool also on device now (_MAXPOOL_ON_DEVICE=True). Only the downsamples stay
+    # host-fallback: the block-sharded / N-halving s2 downsamples hit the fused conv_bmm multi-K-block
+    # transition hang (tt-metal #48679 / tt-llk #48504); pending the split plain-matmul route.
     _saved_cod = dict(_rn._CONV_ON_DEVICE)
-    _rn._CONV_ON_DEVICE["stem"] = False
     _rn._CONV_ON_DEVICE["downsample"] = False
     try:
         test_infra = create_test_infra(
