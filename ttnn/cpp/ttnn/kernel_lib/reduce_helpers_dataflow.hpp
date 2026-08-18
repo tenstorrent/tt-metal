@@ -60,6 +60,16 @@ FORCE_INLINE void prepare_reduce_scaler(
     float scaler_f, uint32_t valid_reduce_dim_elements_in_tile = tt::constants::TILE_WIDTH);
 
 /**
+ * @brief Fill the 0/1 mask tile consumed by an AccumulateViaAdd partial reduction.
+ *
+ * REDUCE_ROW writes the first valid_elems columns in the row-0 broadcast layout;
+ * REDUCE_COL writes the first valid_elems rows in the col-0 broadcast layout.
+ * REDUCE_SCALAR partial masks are not representable by a single broadcast tile.
+ */
+template <uint32_t dfb_id, ReduceDim reduce_dim>
+FORCE_INLINE void prepare_reduce_mask(uint32_t valid_elems);
+
+/**
  * @brief Generate a reduce scaler tile with format and tile shape deduced from dfb_id
  *
  * Computes the appropriate scaler value based on pool type, reduce dimension,

@@ -104,6 +104,20 @@ enum class ReduceDataFormatReconfigMode { NONE, INPUT, OUTPUT, INPUT_AND_OUTPUT 
 enum class ReduceInputPolicy { WaitAndPopPerTile, BulkWaitBulkPop, WaitUpfrontNoPop, NoWaitNoPop };
 
 // =============================================================================
+// Algorithm - which datapath implements the reduce
+// =============================================================================
+
+/**
+ * @brief Which datapath implements the reduce.
+ *
+ * Auto is the default and currently always resolves to ReduceTile.  AccumulateViaAdd is an
+ * explicitly selected float SUM/AVG datapath: it adds the reduce-dimension tiles into one DST
+ * register, then performs the within-tile collapse with sfpu_reduce.  Keeping Auto mapped to
+ * ReduceTile makes this addition behavior-neutral for every existing caller.
+ */
+enum class ReduceAlgorithm { Auto, ReduceTile, AccumulateViaAdd };
+
+// =============================================================================
 // Configuration Types
 // =============================================================================
 
@@ -192,10 +206,18 @@ enum class ReducePartialScalerMode : uint8_t {
 
 struct ReducePartialScaler {
     ReducePartialScalerMode mode = ReducePartialScalerMode::None;
+    // AccumulateViaAdd only: 0/1 mask tile and number of valid lanes in the final reduce-axis tile.
+    // These fields are deliberately separate from mode so the existing ReduceTile partial-scaler API
+    // (including its single-tile OnlyTile form) remains unchanged.
+    uint32_t mask_tile_idx = 0;
+    uint32_t valid_reduce_dim_elements = 0;
 
-    static constexpr ReducePartialScaler none() { return {ReducePartialScalerMode::None}; }
-    static constexpr ReducePartialScaler last_tile() { return {ReducePartialScalerMode::LastTile}; }
-    static constexpr ReducePartialScaler only_tile() { return {ReducePartialScalerMode::OnlyTile}; }
+    static constexpr ReducePartialScaler none() { return {ReducePartialScalerMode::None, 0, 0}; }
+    static constexpr ReducePartialScaler last_tile() { return {ReducePartialScalerMode::LastTile, 0, 0}; }
+    static constexpr ReducePartialScaler only_tile() { return {ReducePartialScalerMode::OnlyTile, 0, 0}; }
+    static constexpr ReducePartialScaler partial_mask(uint32_t valid, uint32_t mask_idx = 0) {
+        return {ReducePartialScalerMode::None, mask_idx, valid};
+    }
 
     constexpr bool uses_partial() const { return mode != ReducePartialScalerMode::None; }
     constexpr uint32_t scaler_tile_count() const { return mode == ReducePartialScalerMode::LastTile ? 2 : 1; }
@@ -457,6 +479,7 @@ template <
     ReduceInputPolicy input_policy = ReduceInputPolicy::WaitAndPopPerTile,
     ReduceDataFormatReconfigMode reconfig_mode = ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
     ReduceFp32Mode fp32_mode = ReduceFp32Mode::Fast,
+    ReduceAlgorithm algorithm = ReduceAlgorithm::Auto,
     typename AccumulateT = NoAccumulation,
     typename PostReduceOp = NoOp>
 ALWI void reduce(
@@ -464,6 +487,27 @@ ALWI void reduce(
     ReduceInputMemoryLayout input_memory_layout = ReduceInputMemoryLayout::contiguous(),
     AccumulateT accumulate = AccumulateT{},
     PostReduceOp post_reduce_op = PostReduceOp{},
+    ReducePartialScaler partial_scaler = ReducePartialScaler::none());
+
+/**
+ * @brief Mean reduction implemented as a SUM followed by an explicit caller-supplied 1/N.
+ *
+ * Unlike reduce<AVG>, n_reduced may describe a logical reduction containing partial tiles or an
+ * otherwise caller-defined element count.
+ */
+template <
+    ReduceDim reduce_dim,
+    uint32_t input_dfb_id,
+    uint32_t scaler_dfb_id,
+    uint32_t output_dfb_id,
+    ReduceInputPolicy input_policy = ReduceInputPolicy::WaitAndPopPerTile,
+    ReduceDataFormatReconfigMode reconfig_mode = ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+    ReduceFp32Mode fp32_mode = ReduceFp32Mode::Fast,
+    ReduceAlgorithm algorithm = ReduceAlgorithm::AccumulateViaAdd>
+ALWI void reduce_mean(
+    ReduceInputBlockShape input_block_shape,
+    uint32_t n_reduced,
+    ReduceInputMemoryLayout input_memory_layout = ReduceInputMemoryLayout::contiguous(),
     ReducePartialScaler partial_scaler = ReducePartialScaler::none());
 
 }  // namespace compute_kernel_lib
