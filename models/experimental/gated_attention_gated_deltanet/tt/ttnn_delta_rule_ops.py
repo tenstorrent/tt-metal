@@ -8,6 +8,7 @@ FLA layout: q,k [B,T,H,K]; v [B,T,H,V]; beta,g [B,T,H]; state [B,H,K,V].
 """
 
 import math
+import os
 
 import torch
 import ttnn
@@ -380,6 +381,42 @@ def recurrent_delta_rule_step_ttnn(
     return o_t, h
 
 
+def _fused_decode_enabled():
+    """QWEN_GDN_FUSED_DECODE: use the single-kernel C++ T=1 decode op (default OFF)."""
+    return os.environ.get("QWEN_GDN_FUSED_DECODE", "0") not in ("", "0")
+
+
+def _decode_gated_delta_rule_fused(q, k, v, beta, g, scale, initial_state, device, high_precision, inplace_state=False):
+    """Drive the fused C++ op (ttnn.transformer.decode_gated_delta_rule) for T=1.
+
+    Implements the same graph as recurrent_gated_delta_rule_decode_ttnn in one
+    device program: L2-norm q/k, q*scale, h*=exp(g), v_read=k@h, delta=v-v_read,
+    rank-1 beta*(k outer delta) write, o=q@h. inplace_state writes new_state
+    into the caller's state buffer (the fused _inplace variant).
+    """
+    K = q.shape[3]
+    if high_precision:
+        q = ttnn.typecast(q, ttnn.float32)
+        k = ttnn.typecast(k, ttnn.float32)
+        v = ttnn.typecast(v, ttnn.float32)
+        beta = ttnn.typecast(beta, ttnn.float32)
+        g = ttnn.typecast(g, ttnn.float32)
+        if initial_state is not None and initial_state.dtype != ttnn.float32:
+            initial_state = ttnn.typecast(initial_state, ttnn.float32)
+    o, h = ttnn.transformer.decode_gated_delta_rule(
+        q=q,
+        k=k,
+        v=v,
+        beta=beta,
+        g=g,
+        scale=scale if scale is not None else K**-0.5,
+        initial_state=initial_state,
+        inplace_state=inplace_state,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    return o, h
+
+
 def recurrent_gated_delta_rule_decode_ttnn(
     q,
     k,
@@ -396,6 +433,10 @@ def recurrent_gated_delta_rule_decode_ttnn(
     H = q.shape[2]
     K = q.shape[3]
     V = v.shape[3]
+
+    # QWEN_GDN_FUSED_DECODE: single-kernel C++ path (fallback graph unchanged).
+    if _fused_decode_enabled():
+        return _decode_gated_delta_rule_fused(q, k, v, beta, g, scale, initial_state, device, high_precision)
 
     # high_precision: fp32 step avoids bf16 decay quantization error over long decode.
     if high_precision:
@@ -493,6 +534,11 @@ def recurrent_gated_delta_rule_decode_inplace_ttnn(
     high_precision=False,
 ):
     """Decode with in-place state copy to pre-allocated buffer (trace-safe addresses)."""
+    if _fused_decode_enabled():
+        # Fused path: the kernel writes new_state straight into state_buffer.
+        return _decode_gated_delta_rule_fused(
+            q, k, v, beta, g, scale, state_buffer, device, high_precision, inplace_state=True
+        )
     o, new_h = recurrent_gated_delta_rule_decode_ttnn(
         q=q,
         k=k,
