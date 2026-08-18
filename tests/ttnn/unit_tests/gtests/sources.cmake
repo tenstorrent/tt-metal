@@ -33,6 +33,7 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_matmul_multicore.cpp
     test_matmul_sweep.cpp
     test_reduction.cpp
+    test_reduction_branches.cpp
     test_relational_int.cpp
     test_rsub_int.cpp
     test_sub_int.cpp
