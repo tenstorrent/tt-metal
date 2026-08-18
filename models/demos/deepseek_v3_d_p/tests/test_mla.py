@@ -629,10 +629,7 @@ def _run_chunked_prefill(
             "trace was ever recorded for it (mla_trace_defaults is empty). Use reference='cpu' or "
             "reference='func', or point MLA_CHUNKED_TRACE_PATH at a trace."
         )
-        try:
-            traces = resolve_traces(trace_paths, num_users)
-        except FileNotFoundError as e:  # registered but not staged here -- out of scope, not a failure
-            pytest.skip(f"{trace_variant.name}: {e}")
+        traces = resolve_traces(trace_paths, num_users)
         # The trace is a DENSE token sequence; iters_isl just chunks it variably. Partial iters pad
         # the device's fixed-width chunk (masked by causality) -- they are not pad in the sequence --
         # so any iters_isl / prefill works exactly like the CPU ref. The only trace constraint is
@@ -746,10 +743,8 @@ def _run_chunked_prefill(
         for u in range(num_users):
             kv_prior = users[u]["kv_prior"]
             if trace_pe_interleave:
-                # Re-interleave the k_pe block before preload (k_nope is basis-agnostic) -- same
-                # transform the post-run cache comparison applies. Without this the 50k preloaded
-                # prefix attends in the wrong basis and only the output PCC (not the cache PCC, which
-                # checks just the new region) shows the ~0.92 drop.
+                # Same transform the post-run cache comparison applies (k_nope is basis-agnostic);
+                # without it the preloaded prefix attends in the wrong basis.
                 kv_prior = kv_prior.clone()
                 d = kvpe_dim - config.kv_lora_rank
                 pe = kv_prior[:, config.kv_lora_rank :]

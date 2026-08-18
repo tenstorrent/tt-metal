@@ -64,17 +64,11 @@ def _ref_cache_key(config, weights, hidden_2d) -> str:
 
 def resolve_traces(paths, num_users):
     """One trace dir per user, cycled if there are fewer dirs than users. `paths` is either the
-    variant's own mla_trace_defaults or a single explicit override.
-
-    Raises FileNotFoundError when a registered dir is simply not staged on this box (the caller turns
-    that into a skip); asserts when a dir is there but is not a trace.
-    """
+    variant's own mla_trace_defaults or a single explicit override."""
     assert paths, "no trace dirs given"
     dirs = [Path(p) for p in paths]
-    missing = [str(d) for d in dirs if not d.is_dir()]
-    if missing:
-        raise FileNotFoundError(f"MLA trace dir(s) not present: {missing}")
     for d in dirs:
+        assert d.is_dir(), f"trace dir {d} does not exist"
         assert (d / "mla_io").is_dir(), f"trace dir {d} is missing mla_io/"
         assert (d / "kv_cache").is_dir(), f"trace dir {d} is missing kv_cache/"
     return [dirs[u % len(dirs)] for u in range(num_users)]

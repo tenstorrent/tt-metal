@@ -983,12 +983,8 @@ def random_weights(config_only):
 
 
 def _load_mla_weights(state_dict, hf_config, prefix: str, layer_idx: int) -> dict:
-    """One layer's MLA weights, read without the rest of the layer.
-
-    The narrow `self_attn.` prefix is load-bearing: a whole-layer view drags in the MoE experts, and
-    Kimi-K3 packs those as MXFP4, which `convert_state_dict` raises on. Attention is exempt from
-    quantization in every checkpoint here, so this view is plain bf16.
-    """
+    """One layer's MLA weights, read without the rest of the layer: a whole-layer view drags in the
+    MoE experts, which Kimi-K3 packs as MXFP4 and convert_state_dict raises on."""
     sd = convert_state_dict(sub_state_dict(state_dict, f"{prefix}model.layers.{layer_idx}.self_attn."), hf_config)
     names = [
         "q_a_proj.weight",

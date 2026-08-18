@@ -206,9 +206,7 @@ class PrefillModelAdapter(ABC):
     moe_pcc_threshold: float = 0.999
     mla_pcc_threshold: float = 0.999
     supports_pretrained: bool = True
-    # Model layer whose ``self_attn.*`` holds the MLA weights. Distinct from ``supports_pretrained``,
-    # which means the FULL transformer loads: Kimi-K3's attention is loadable (bf16, layer 3) while its
-    # MXFP4 MoE is not. ``None`` = no reachable checkpoint, hence no GPU trace either.
+    # Model layer whose ``self_attn.*`` holds the MLA weights; None if no checkpoint is reachable.
     pretrained_mla_layer: Optional[int] = 0
     # This variant's OWN golden MLA-trace dirs (each holding mla_io/ + kv_cache/), for the
     # MLA-level trace tests; one per user, cycled. Empty = no trace was ever recorded for it.
