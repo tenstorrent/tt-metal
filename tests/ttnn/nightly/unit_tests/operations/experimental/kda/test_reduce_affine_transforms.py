@@ -5,18 +5,46 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 
 import pytest
 import torch
+from loguru import logger
 
 import ttnn
-from models.common.utility_functions import run_for_blackhole
-from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_accurate, assert_bit_identical
+from models.common.utility_functions import run_for_blackhole, skip_with_llk_assert, skip_with_watcher
+from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
+from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
+    assert_accurate,
+    assert_bit_identical,
+    assert_equal,
+)
 
 pytestmark = [
     run_for_blackhole(),
     pytest.mark.parametrize("device_params", [{"l1_small_size": 24576, "trace_region_size": 2_000_000}], indirect=True),
 ]
+
+
+@dataclass(frozen=True)
+class _ProductionCase:
+    case_id: str
+    batch_heads: int
+    groups_per_head: int
+    key_dim: int
+    value_dim: int
+    expected_duration_ns: int | None
+
+
+_PRODUCTION_PERF_MARGIN = 0.05
+_PRODUCTION_CASE = _ProductionCase(
+    "bh2-g4-k32-v64",
+    batch_heads=2,
+    groups_per_head=4,
+    key_dim=32,
+    value_dim=64,
+    expected_duration_ns=6616,
+)
 
 
 def _host_inputs(
@@ -96,6 +124,7 @@ def _run(
     groups_per_head: int,
     *,
     memory_config: ttnn.MemoryConfig | None = None,
+    compute_kernel_config: ttnn.DeviceComputeKernelConfig | None = None,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
     with ttnn.manage_config("throw_exception_on_fallback", True):
         return ttnn.experimental.kda.reduce_affine_transforms(
@@ -103,6 +132,7 @@ def _run(
             b,
             groups_per_head,
             memory_config=memory_config,
+            compute_kernel_config=compute_kernel_config,
         )
 
 
@@ -137,7 +167,7 @@ def _composed_ttnn_baseline(
     ("batch_heads", "groups_per_head", "key_dim", "value_dim"),
     [(2, 1, 32, 32), (2, 3, 32, 32), (2, 4, 32, 32), (3, 2, 32, 64)],
 )
-def test_reduce_affine_transforms_contract_cache_trace_and_determinism(
+def test_reduce_affine_transforms_contract_and_trace(
     device: ttnn.Device,
     summary_dtype: ttnn.DataType,
     sharded_inputs: bool,
@@ -169,11 +199,6 @@ def test_reduce_affine_transforms_contract_cache_trace_and_determinism(
         assert tuple(ttnn.to_torch(output).shape) == shape
         assert output.buffer_address() not in (a_tt.buffer_address(), b_tt.buffer_address())
 
-    cache_entries = device.num_program_cache_entries()
-    repeated = _run(a_tt, b_tt, groups_per_head)
-    ttnn.synchronize_device(device)
-    assert device.num_program_cache_entries() == cache_entries
-
     trace_id = ttnn.begin_trace_capture(device, cq_id=0)
     traced = _run(a_tt, b_tt, groups_per_head)
     ttnn.end_trace_capture(device, trace_id, cq_id=0)
@@ -181,17 +206,185 @@ def test_reduce_affine_transforms_contract_cache_trace_and_determinism(
         ttnn.execute_trace(device, trace_id, cq_id=0, blocking=False)
     ttnn.synchronize_device(device)
 
-    for name, golden, actual_tt, repeated_tt, traced_tt in zip(
-        ("A", "B"), (expected_a, expected_b), first, repeated, traced, strict=True
-    ):
+    for name, golden, actual_tt, traced_tt in zip(("A", "B"), (expected_a, expected_b), first, traced, strict=True):
         actual = ttnn.to_torch(actual_tt)
         assert_accurate(golden, actual, name=f"{summary_dtype} reduced {name}", pcc_threshold=0.999)
-        assert_bit_identical(actual, ttnn.to_torch(repeated_tt), name=f"{name} eager repeat")
         assert_bit_identical(actual, ttnn.to_torch(traced_tt), name=f"{name} trace replay")
 
     assert_bit_identical(snapshots[0], ttnn.to_torch(a_tt), name="a immutability")
     assert_bit_identical(snapshots[1], ttnn.to_torch(b_tt), name="b immutability")
     ttnn.release_trace(device, trace_id)
+
+
+@pytest.mark.parametrize("summary_dtype", [ttnn.float32, ttnn.bfloat16])
+def test_reduce_affine_transforms_is_device_deterministic(device: ttnn.Device, summary_dtype: ttnn.DataType) -> None:
+    case = _PRODUCTION_CASE
+    host = _host_inputs(case.batch_heads, case.groups_per_head, case.key_dim, case.value_dim, seed=1441)
+    a_tt, b_tt = (_to_device(tensor, device, summary_dtype) for tensor in host)
+    expected = _oracle(*host, case.batch_heads, case.groups_per_head)
+
+    reference_outputs = _run(a_tt, b_tt, case.groups_per_head)
+    mismatch_scratch = tuple(
+        ttnn.empty(
+            output.shape,
+            dtype=ttnn.bfloat16,
+            layout=output.layout,
+            device=device,
+            memory_config=output.memory_config(),
+        )
+        for output in reference_outputs
+    )
+    mismatch_markers: list[ttnn.Tensor | None] = [None, None]
+    for _ in range(2):
+        current_outputs = _run(a_tt, b_tt, case.groups_per_head)
+        for index, (reference, current, scratch) in enumerate(
+            zip(reference_outputs, current_outputs, mismatch_scratch, strict=True)
+        ):
+            ttnn.ne(reference, current, dtype=ttnn.bfloat16, output_tensor=scratch)
+            current_marker = ttnn.max(scratch)
+            ttnn.deallocate(current)
+            if mismatch_markers[index] is None:
+                mismatch_markers[index] = current_marker
+            else:
+                updated_marker = ttnn.maximum(mismatch_markers[index], current_marker)
+                ttnn.deallocate(mismatch_markers[index])
+                ttnn.deallocate(current_marker)
+                mismatch_markers[index] = updated_marker
+
+    for name, golden, output, marker in zip(("A", "B"), expected, reference_outputs, mismatch_markers, strict=True):
+        assert marker is not None
+        marker_host = ttnn.to_torch(marker).clone()
+        assert_equal(
+            torch.zeros_like(marker_host),
+            marker_host,
+            name=f"{summary_dtype} reduced {name} device-side exact-value determinism marker",
+        )
+        assert_accurate(golden, ttnn.to_torch(output), name=f"{summary_dtype} reduced {name}", pcc_threshold=0.999)
+        ttnn.deallocate(marker)
+    for tensor in (*reference_outputs, *mismatch_scratch):
+        ttnn.deallocate(tensor)
+
+
+def test_reduce_affine_transforms_cache_hit_rebinds_fresh_tensors(device: ttnn.Device) -> None:
+    case = _PRODUCTION_CASE
+    host_a = _host_inputs(case.batch_heads, case.groups_per_head, case.key_dim, case.value_dim, seed=1911)
+    host_b = _host_inputs(case.batch_heads, case.groups_per_head, case.key_dim, case.value_dim, seed=1912)
+    device_a = tuple(_to_device(tensor, device) for tensor in host_a)
+    device_b = tuple(_to_device(tensor, device) for tensor in host_b)
+
+    output_a = _run(*device_a, case.groups_per_head)
+    ttnn.synchronize_device(device)
+    entries = device.num_program_cache_entries()
+    output_b = _run(*device_b, case.groups_per_head)
+    ttnn.synchronize_device(device)
+
+    assert device.num_program_cache_entries() == entries
+    assert all(a.buffer_address() != b.buffer_address() for a, b in zip(device_a, device_b, strict=True))
+    assert all(a.buffer_address() != b.buffer_address() for a, b in zip(output_a, output_b, strict=True))
+    expected_a = _oracle(*host_a, case.batch_heads, case.groups_per_head)
+    expected_b = _oracle(*host_b, case.batch_heads, case.groups_per_head)
+    for name, golden_a, golden_b, actual_a_tt, actual_b_tt in zip(
+        ("A", "B"), expected_a, expected_b, output_a, output_b, strict=True
+    ):
+        actual_a = ttnn.to_torch(actual_a_tt)
+        actual_b = ttnn.to_torch(actual_b_tt)
+        assert_accurate(golden_a, actual_a, name=f"{name} cache miss tensors", pcc_threshold=0.999)
+        assert_accurate(golden_b, actual_b, name=f"{name} cache hit fresh tensors", pcc_threshold=0.999)
+        assert not torch.equal(actual_a, actual_b)
+
+
+def test_reduce_affine_transforms_default_compute_config_matches_explicit_defaults(device: ttnn.Device) -> None:
+    case = _PRODUCTION_CASE
+    host = _host_inputs(case.batch_heads, case.groups_per_head, case.key_dim, case.value_dim, seed=817)
+    a_tt, b_tt = (_to_device(tensor, device) for tensor in host)
+    implicit = _run(a_tt, b_tt, case.groups_per_head)
+    entries = device.num_program_cache_entries()
+    explicit_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+        dst_full_sync_en=False,
+        throttle_level=ttnn.ThrottleLevel.NO_THROTTLE,
+    )
+    explicit = _run(a_tt, b_tt, case.groups_per_head, compute_kernel_config=explicit_config)
+    assert device.num_program_cache_entries() == entries
+    for name, implicit_output, explicit_output in zip(("A", "B"), implicit, explicit, strict=True):
+        assert_bit_identical(
+            ttnn.to_torch(implicit_output),
+            ttnn.to_torch(explicit_output),
+            name=f"{name} implicit vs explicit compute defaults",
+        )
+
+
+def test_reduce_affine_transforms_approximate_math_uses_distinct_accurate_program(device: ttnn.Device) -> None:
+    case = _PRODUCTION_CASE
+    host = _host_inputs(case.batch_heads, case.groups_per_head, case.key_dim, case.value_dim, seed=818)
+    a_tt, b_tt = (_to_device(tensor, device) for tensor in host)
+    exact = _run(a_tt, b_tt, case.groups_per_head)
+    entries = device.num_program_cache_entries()
+    approximate_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=True,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+    approximate = _run(a_tt, b_tt, case.groups_per_head, compute_kernel_config=approximate_config)
+    assert device.num_program_cache_entries() == entries + 1
+    expected = _oracle(*host, case.batch_heads, case.groups_per_head)
+    for name, golden, exact_output, approximate_output in zip(("A", "B"), expected, exact, approximate, strict=True):
+        assert_accurate(golden, ttnn.to_torch(exact_output), name=f"{name} exact math", pcc_threshold=0.999)
+        assert_accurate(golden, ttnn.to_torch(approximate_output), name=f"{name} approximate math", pcc_threshold=0.999)
+
+
+def test_reduce_affine_transforms_rejects_unsupported_compute_config(
+    device: ttnn.Device, expect_error: Callable
+) -> None:
+    case = _PRODUCTION_CASE
+    host = _host_inputs(case.batch_heads, case.groups_per_head, case.key_dim, case.value_dim)
+    a_tt, b_tt = (_to_device(tensor, device) for tensor in host)
+    unsupported_config = ttnn.types.BlackholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        packer_l1_acc=True,
+    )
+    with expect_error(RuntimeError, "packer_l1_acc=true is unsupported"):
+        _run(a_tt, b_tt, case.groups_per_head, compute_kernel_config=unsupported_config)
+
+
+@pytest.mark.requires_host_iommu
+@skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
+@skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
+def test_reduce_affine_transforms_production_performance(device: ttnn.Device) -> None:
+    case = _PRODUCTION_CASE
+    if not ttnn.device.IsProgramRealtimeProfilerActive():
+        pytest.fail("Real-time profiler must be active for affine-transform reduction performance checks")
+
+    host = _host_inputs(case.batch_heads, case.groups_per_head, case.key_dim, case.value_dim, seed=117)
+    a_tt, b_tt = (_to_device(tensor, device) for tensor in host)
+
+    def run() -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        return _run(a_tt, b_tt, case.groups_per_head)
+
+    outputs, perf_record = profile_realtime_program(device, run)
+    duration_ns = perf_record["duration_ns"]
+    assert tuple(tuple(output.shape) for output in outputs) == (
+        (case.batch_heads, case.key_dim, case.key_dim),
+        (case.batch_heads, case.key_dim, case.value_dim),
+    )
+    assert all(output.dtype == ttnn.float32 for output in outputs)
+    logger.info(
+        f"affine-transform reduction {case.case_id}: duration={duration_ns:.0f} ns, "
+        f"profiler_runtime_id={perf_record['runtime_id']}"
+    )
+    if case.expected_duration_ns is not None:
+        lower = case.expected_duration_ns * (1 - _PRODUCTION_PERF_MARGIN)
+        upper = case.expected_duration_ns * (1 + _PRODUCTION_PERF_MARGIN)
+        assert lower <= duration_ns <= upper, (
+            f"{case.case_id} duration {duration_ns:.0f} ns outside [{lower:.0f}, {upper:.0f}] ns "
+            f"(reference {case.expected_duration_ns} ns, margin +/- {_PRODUCTION_PERF_MARGIN * 100:.0f}%)"
+        )
 
 
 def test_reduce_affine_transforms_matches_composed_ttnn_baseline(device: ttnn.Device) -> None:
