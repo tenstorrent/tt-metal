@@ -232,9 +232,13 @@ void kernel_main() {
                  (in_c % TILE_WIDTH == FACE_WIDTH || single_partial_fits_in_face))
                     ? (number_of_tiles - 1) * num_faces_in_output_tile + num_faces_in_last_output_tile
                     : number_of_tiles * num_faces_in_output_tile;
-            // [#48552 MP-DEBUG] Coarse heartbeat (ungated): the LAST line before the hang/fault names the
-            // stick n and channel-block c. t2r = tiles this reduce strides over; of = output faces reserved.
-            DPRINT_UNPACK("[MP] n{} c{} t2r{} of{}\n", n, c_i, tiles_to_reduce, output_faces);
+            // [#48552 MP-DEBUG] Coarse heartbeat, THROTTLED to n<=1 and every 128th stick. Per-stick DPRINT
+            // (3 lines * 1568 sticks) can overflow the device DPRINT ring and stall the kernel inside the
+            // DPRINT call itself -> a FALSE hang. Throttling cuts volume ~100x to isolate DPRINT backpressure
+            // from a real compute hang. The LAST milestone printed still names how far it got.
+            if (n <= 1 || (n & 0x7f) == 0) {
+                DPRINT_UNPACK("[MP] n{} c{} t2r{} of{}\n", n, c_i, tiles_to_reduce, output_faces);
+            }
             // [DEBUG pool compute stall] Which call blocks the WFD/UPTW deadlock? Newest ring marker per
 #if PACK_TO_SCRATCH == 0
             if constexpr (!is_output_tiled) {
@@ -283,13 +287,17 @@ void kernel_main() {
                 // [#48552 MP-DEBUG] THE suspect: main rewrote llk_unpack_reduce_col_tilizeA_strided (tiny-tile
                 // Nx32 path + dropped *face_r_dim stride). UNGATED pre/post so the LAST line always shows it:
                 // pre-unpack with no post-unpack => the strided reduce-col unpack faulted/hung (LLK regression).
-                DPRINT_UNPACK("[MP] pre-unpack n{} c{} ch{}\n", n, c_i, chunk);
+                if (n <= 1 || (n & 0x7f) == 0) {
+                    DPRINT_UNPACK("[MP] pre-unpack n{} c{} ch{}\n", n, c_i, chunk);
+                }
                 unpack_tilizeA_B_block<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
                     curr_in_cb_id,
                     curr_scalar_cb_id,
                     tiles_to_reduce,
                     0 /*tile idx for Src b is 0 because only 1 tile of constants is loaded*/);
-                DPRINT_UNPACK("[MP] post-unpack n{} c{} ch{}\n", n, c_i, chunk);
+                if (n <= 1 || (n & 0x7f) == 0) {
+                    DPRINT_UNPACK("[MP] post-unpack n{} c{} ch{}\n", n, c_i, chunk);
+                }
                 for (uint32_t math_tile_idx = 0; math_tile_idx < tiles_to_reduce; ++math_tile_idx) {
                     reduce_tile_math<REDUCE_OP, REDUCE_DIM>(math_tile_idx, num_faces_in_input_tile);
                 }
