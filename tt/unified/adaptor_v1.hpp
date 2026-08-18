@@ -102,6 +102,11 @@ struct TensorAccessor {
 // business touching the NOC, and the dead bodies strip out of the TRISC binary.
 inline void noc_async_read(std::uint64_t, uint32_t, uint32_t, uint8_t = 0) { ASSERT(false); }
 inline void noc_async_write(uint32_t, std::uint64_t, uint32_t, uint8_t = 0) { ASSERT(false); }
+// Named by the multicast noc_load, which is itself written as a custom routine --
+// so its body reaches here the same way a user's would.
+inline void noc_async_write_multicast(uint32_t, std::uint64_t, uint32_t, uint32_t, bool = false, uint8_t = 0) {
+    ASSERT(false);
+}
 inline std::uint64_t get_noc_addr(uint32_t, uint32_t, uint32_t, uint8_t = 0) {
     ASSERT(false);
     return 0;
