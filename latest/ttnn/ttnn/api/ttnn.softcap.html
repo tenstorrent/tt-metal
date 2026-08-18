@@ -4,12 +4,12 @@
   <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ttnn.log1p &mdash; TT-NN&amp;trade;  documentation</title>
+  <title>ttnn.softcap &mdash; TT-NN&amp;trade;  documentation</title>
       <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
     <link rel="shortcut icon" href="../../_static/favicon.png"/>
-    <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.log1p.html" />
+    <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.softcap.html" />
   <!--[if lt IE 9]>
     <script src="../../_static/js/html5shiv.min.js"></script>
   <![endif]-->
@@ -26,8 +26,8 @@
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="ttnn.log2" href="ttnn.log2.html" />
-    <link rel="prev" title="ttnn.log10" href="ttnn.log10.html" />
+    <link rel="next" title="ttnn.softplus" href="ttnn.softplus.html" />
+    <link rel="prev" title="ttnn.sinh" href="ttnn.sinh.html" />
  <link rel="stylesheet" href="https://docs.tenstorrent.com/_static/tt_theme.css">
 
 <script>
@@ -300,7 +300,7 @@
 <li class="toctree-l4"><a class="reference internal" href="ttnn.lgamma.html">ttnn.lgamma</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.log.html">ttnn.log</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.log10.html">ttnn.log10</a></li>
-<li class="toctree-l4 current"><a class="current reference internal" href="#">ttnn.log1p</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.log1p.html">ttnn.log1p</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.log2.html">ttnn.log2</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.log_sigmoid.html">ttnn.log_sigmoid</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.logical_left_shift.html">ttnn.logical_left_shift</a></li>
@@ -338,7 +338,7 @@
 <li class="toctree-l4"><a class="reference internal" href="ttnn.silu.html">ttnn.silu</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.sin.html">ttnn.sin</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.sinh.html">ttnn.sinh</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.softcap.html">ttnn.softcap</a></li>
+<li class="toctree-l4 current"><a class="current reference internal" href="#">ttnn.softcap</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.softplus.html">ttnn.softplus</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.softshrink.html">ttnn.softshrink</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.softsign.html">ttnn.softsign</a></li>
@@ -436,9 +436,9 @@
   <ul class="wy-breadcrumbs">
       <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
           <li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
-      <li class="breadcrumb-item active">ttnn.log1p</li>
+      <li class="breadcrumb-item active">ttnn.softcap</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../../_sources/ttnn/api/ttnn.log1p.rst.txt" rel="nofollow"> View page source</a>
+            <a href="../../_sources/ttnn/api/ttnn.softcap.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -446,28 +446,31 @@
           <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
            <div itemprop="articleBody">
              
-  <section id="ttnn-log1p">
-<h1>ttnn.log1p<a class="headerlink" href="#ttnn-log1p" title="Permalink to this heading"></a>
+  <section id="ttnn-softcap">
+<h1>ttnn.softcap<a class="headerlink" href="#ttnn-softcap" title="Permalink to this heading"></a>
 </h1>
 <span class="target" id="id1"></span><dl class="py function">
-<dt class="sig sig-object py" id="ttnn.log1p">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">log1p</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">fast_and_approximate_mode</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.MemoryConfig</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">output_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sub_core_grids</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.CoreRangeSet</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.log1p" title="Permalink to this definition"></a>
+<dt class="sig sig-object py" id="ttnn.softcap">
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">softcap</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">beta</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.MemoryConfig</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">output_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sub_core_grids</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.CoreRangeSet</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.softcap" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<p>Performs the element-wise natural logarithm operation of one plus the <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>.</p>
+<p>Applies softcap to <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> element-wise with beta.</p>
+<p>Bounds the input smoothly to +/-beta: near-linear well inside beta, saturating at the limits. Known as soft capping (e.g. Gemma logit softcapping); also the up half of Moonshot’s SiTU activation.</p>
 <div class="math notranslate nohighlight">
-\[\mathrm{{output\_tensor}}_i = \ln(1 + \mathrm{{input\_tensor}}_i)\]</div>
+\[\mathrm{output\_tensor}_i = \verb|beta| \cdot \tanh(\mathrm{input\_tensor}_i / \verb|beta|)\]</div>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
-<p><strong>input_tensor</strong> (<em>ttnn.Tensor</em>) – the input tensor. [Supported range: input &gt; -1]</p>
+<ul class="simple">
+<li><p><strong>input_tensor</strong> (<em>ttnn.Tensor</em>) – the input tensor.</p></li>
+<li><p><strong>beta</strong> (<em>float</em>) – The beta parameter. Bounds the output to +/-beta. Must be non-zero.</p></li>
+</ul>
 </dd>
 <dt class="field-even">Keyword Arguments<span class="colon">:</span>
 </dt>
 <dd class="field-even">
 <ul class="simple">
-<li><p><strong>fast_and_approximate_mode</strong> (<em>bool</em><em>, </em><em>optional</em>) – Use the fast and approximate mode. Defaults to <cite>False</cite>.</p></li>
 <li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – Memory configuration for the operation. Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>output_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – preallocated output tensor. Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>sub_core_grids</strong> (<em>ttnn.CoreRangeSet</em><em>, </em><em>optional</em>) – sub core grids for the operation. Defaults to <cite>None</cite>.</p></li>
@@ -491,28 +494,11 @@
 </thead>
 <tbody>
 <tr class="row-even">
-<td><p>BFLOAT16, BFLOAT8_B, FLOAT32</p></td>
+<td><p>BFLOAT16, BFLOAT8_B</p></td>
 <td><p>TILE, ROW_MAJOR</p></td>
 </tr>
 </tbody>
 </table>
-</div>
-<div class="admonition-example admonition">
-<p class="admonition-title">Example</p>
-<div class="highlight-python notranslate">
-<div class="highlight"><pre><span></span><span class="c1"># Create a tensor with specific values</span>
-<span class="n">tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span>
-    <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">([[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">],</span> <span class="p">[</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">]],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">),</span>
-    <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span>
-    <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span>
-    <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span>
-<span class="p">)</span>
-
-<span class="c1"># Compute log(1 + x)</span>
-<span class="n">output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">log1p</span><span class="p">(</span><span class="n">tensor</span><span class="p">,</span> <span class="n">fast_and_approximate_mode</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Log(1 + x): </span><span class="si">{</span><span class="n">output</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
-</pre></div>
-</div>
 </div>
 </dd>
 </dl>
@@ -524,8 +510,8 @@
            </div>
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
-        <a href="ttnn.log10.html" class="btn btn-neutral float-left" title="ttnn.log10" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
-        <a href="ttnn.log2.html" class="btn btn-neutral float-right" title="ttnn.log2" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="ttnn.sinh.html" class="btn btn-neutral float-left" title="ttnn.sinh" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="ttnn.softplus.html" class="btn btn-neutral float-right" title="ttnn.softplus" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>

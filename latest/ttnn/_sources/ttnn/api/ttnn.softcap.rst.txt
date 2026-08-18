@@ -1,0 +1,8 @@
+﻿ttnn.softcap
+============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.softcap:
+
+.. autooperation:: ttnn.softcap

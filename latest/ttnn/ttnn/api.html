@@ -401,6 +401,7 @@
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.silu.html">ttnn.silu</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.sin.html">ttnn.sin</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.sinh.html">ttnn.sinh</a></li>
+<li class="toctree-l4"><a class="reference internal" href="api/ttnn.softcap.html">ttnn.softcap</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.softplus.html">ttnn.softplus</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.softshrink.html">ttnn.softshrink</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.softsign.html">ttnn.softsign</a></li>
@@ -477,6 +478,7 @@
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.rpow.html">ttnn.rpow</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.rsub.html">ttnn.rsub</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.rsub_.html">ttnn.rsub_</a></li>
+<li class="toctree-l4"><a class="reference internal" href="api/ttnn.situ_glu.html">ttnn.situ_glu</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.squared_difference.html">ttnn.squared_difference</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.squared_difference_.html">ttnn.squared_difference_</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.subalpha.html">ttnn.subalpha</a></li>
@@ -1566,74 +1568,78 @@ use <code class="docutils literal notranslate"><span class="pre">align_shape_to_
 <td><p>Applies sinh to <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> element-wise.</p></td>
 </tr>
 <tr class="row-even">
+<td><p><a class="reference internal" href="api/ttnn.softcap.html#ttnn.softcap" title="ttnn.softcap"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.softcap</span></code></a></p></td>
+<td><p>Applies softcap to <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> element-wise with beta.</p></td>
+</tr>
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.softplus.html#ttnn.softplus" title="ttnn.softplus"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.softplus</span></code></a></p></td>
 <td><p>Applies softplus to <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> element-wise.</p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.softshrink.html#ttnn.softshrink" title="ttnn.softshrink"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.softshrink</span></code></a></p></td>
 <td><p>Applies softshrink to <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> element-wise with lambd.</p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.softsign.html#ttnn.softsign" title="ttnn.softsign"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.softsign</span></code></a></p></td>
 <td><p>Applies softsign to <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> element-wise.</p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.sqrt.html#ttnn.sqrt" title="ttnn.sqrt"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.sqrt</span></code></a></p></td>
 <td><p>Performs the element-wise square root operation on the <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>.</p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.square.html#ttnn.square" title="ttnn.square"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.square</span></code></a></p></td>
 <td><p>Applies square to <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> element-wise.</p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.std_hw.html#ttnn.std_hw" title="ttnn.std_hw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.std_hw</span></code></a></p></td>
 <td><p>Computes the standard deviation across the height (H) and width (W) dimensions for each batch and channel.</p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.swiglu.html#ttnn.swiglu" title="ttnn.swiglu"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.swiglu</span></code></a></p></td>
 <td><p>Applies swiglu to <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> element-wise.</p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.swish.html#ttnn.swish" title="ttnn.swish"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.swish</span></code></a></p></td>
 <td><p>Applies swish to <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> element-wise.</p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.tan.html#ttnn.tan" title="ttnn.tan"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.tan</span></code></a></p></td>
 <td><p>Applies tan to <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> element-wise.</p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.tanh.html#ttnn.tanh" title="ttnn.tanh"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.tanh</span></code></a></p></td>
 <td><p>Applies tanh to <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> element-wise.</p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.tanhshrink.html#ttnn.tanhshrink" title="ttnn.tanhshrink"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.tanhshrink</span></code></a></p></td>
 <td><p>Applies tanhshrink to <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> element-wise.</p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.threshold.html#ttnn.threshold" title="ttnn.threshold"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.threshold</span></code></a></p></td>
 <td><p>Performs threshold function on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>, <code class="xref py py-attr docutils literal notranslate"><span class="pre">threshold</span></code>, <code class="xref py py-attr docutils literal notranslate"><span class="pre">value</span></code>.</p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.tril.html#ttnn.tril" title="ttnn.tril"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.tril</span></code></a></p></td>
 <td><p>Returns the lower triangular part of <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> by zeroing out elements above the specified <code class="xref py py-attr docutils literal notranslate"><span class="pre">diagonal</span></code>.</p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.triu.html#ttnn.triu" title="ttnn.triu"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.triu</span></code></a></p></td>
 <td><p>Returns the upper triangular part of <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> by zeroing out elements below the specified <code class="xref py py-attr docutils literal notranslate"><span class="pre">diagonal</span></code>.</p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.trunc.html#ttnn.trunc" title="ttnn.trunc"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.trunc</span></code></a></p></td>
 <td><p>Applies trunc to <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> element-wise.</p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.unary_chain.html#ttnn.unary_chain" title="ttnn.unary_chain"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.unary_chain</span></code></a></p></td>
 <td><p>Applies unary_chain to <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> element-wise.</p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.var_hw.html#ttnn.var_hw" title="ttnn.var_hw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.var_hw</span></code></a></p></td>
 <td><p>Computes the variance across the height (H) and width (W) dimensions for each batch and channel.</p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.xielu.html#ttnn.xielu" title="ttnn.xielu"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.xielu</span></code></a></p></td>
 <td><p>Applies xIELU (Expanded Integral of the Exponential Linear Unit) to <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> element-wise.</p></td>
 </tr>
@@ -1866,26 +1872,30 @@ use <code class="docutils literal notranslate"><span class="pre">align_shape_to_
 <td><p>Subtracts <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_a</span></code> from <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_b</span></code> in-place and returns the tensor with the same layout as <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code></p></td>
 </tr>
 <tr class="row-even">
+<td><p><a class="reference internal" href="api/ttnn.situ_glu.html#ttnn.situ_glu" title="ttnn.situ_glu"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.situ_glu</span></code></a></p></td>
+<td><p>Computes Moonshot's SiTU-GLU activation over the pre-split <code class="xref py py-attr docutils literal notranslate"><span class="pre">gate</span></code> and <code class="xref py py-attr docutils literal notranslate"><span class="pre">up</span></code> tensors.</p></td>
+</tr>
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.squared_difference.html#ttnn.squared_difference" title="ttnn.squared_difference"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.squared_difference</span></code></a></p></td>
 <td><p>Computes squared difference of <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_a</span></code> and <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_b</span></code> and returns the tensor with the same layout as <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_a</span></code></p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.squared_difference_.html#ttnn.squared_difference_" title="ttnn.squared_difference_"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.squared_difference_</span></code></a></p></td>
 <td><p>Performs squared_difference in-place operation on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_a</span></code> and <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_b</span></code> and returns the tensor with the same layout as <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code></p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.subalpha.html#ttnn.subalpha" title="ttnn.subalpha"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.subalpha</span></code></a></p></td>
 <td><p>Computes subalpha for <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_a</span></code> and <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_b</span></code> and returns the tensor with the same layout as <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_a</span></code></p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.subtract.html#ttnn.subtract" title="ttnn.subtract"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.subtract</span></code></a></p></td>
 <td><p>Subtracts <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_b</span></code> from <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_a</span></code> and returns the tensor with the same layout as <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_a</span></code></p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.subtract_.html#ttnn.subtract_" title="ttnn.subtract_"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.subtract_</span></code></a></p></td>
 <td><p>Subtracts <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_b</span></code> from <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_a</span></code> and returns the tensor with the same layout as <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_a</span></code> in-place</p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.xlogy.html#ttnn.xlogy" title="ttnn.xlogy"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.xlogy</span></code></a></p></td>
 <td><p>Computes xlogy <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_a</span></code> and <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_b</span></code> and returns the tensor with the same layout as <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_a</span></code></p></td>
 </tr>
@@ -2084,7 +2094,7 @@ use <code class="docutils literal notranslate"><span class="pre">align_shape_to_
 </tr>
 <tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.fold.html#ttnn.fold" title="ttnn.fold"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.fold</span></code></a></p></td>
-<td><p>Fold TT Tensor.</p></td>
+<td><p>NHWC space-to-depth.</p></td>
 </tr>
 <tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.gather.html#ttnn.gather" title="ttnn.gather"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.gather</span></code></a></p></td>

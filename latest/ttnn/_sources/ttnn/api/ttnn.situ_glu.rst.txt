@@ -1,0 +1,8 @@
+﻿ttnn.situ\_glu
+==============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.situ_glu:
+
+.. autooperation:: ttnn.situ_glu
