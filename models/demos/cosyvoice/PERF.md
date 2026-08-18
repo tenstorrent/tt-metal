@@ -29,10 +29,18 @@ That 5 % is the same order as several real optimisations in this document, so **
 are separate columns and neither backfills the other's missing cells.** `p150a` is the headline
 part.
 
-**One measurement postdates that commit** and is marked where it appears: the `ttnn.cumsum` occupancy
-measurement below (`2026-08-13`, same two machines, branch head `23d1e63aa85`). Same hardware, later
-tree — noted rather than folded in, because the table's claim is that one commit produced everything
-under it, and quietly widening that is how an environment table stops meaning anything.
+**Two sets of measurements postdate that commit** and are marked where they appear, because the
+table's claim is that one commit produced everything under it and quietly widening that is how an
+environment table stops meaning anything:
+
+- the `ttnn.cumsum` occupancy measurement below (`2026-08-13`, branch head `23d1e63aa85`);
+- **the `p150a` RTF rows (`2026-08-18`, branch head `384c7c6504f`)**. That board was unreachable from
+  `2026-08-06` until `2026-08-18`, so its figures had gone stale by a GroupNorm rewrite, a Wormhole
+  convolution fix and the vocoder trace work. They are re-measured on the current tree; every other
+  row is unchanged.
+- **the Wormhole re-verification and `COSYVOICE_KV_INPLACE` default switch (`2026-08-18`, same
+  branch head)**. n300 was also unreachable for part of that window; see *Wormhole re-verified*
+  below for what was re-measured and why.
 
 ## Benchmark commands
 ```bash
@@ -48,11 +56,14 @@ Measured on the captured utterance: 164 generated tokens producing 3.27 s of aud
 | Metric | Value | Target |
 |---|---:|---:|
 | **End-to-end RTF, best measured** (`p150b`, everything on) | **`0.365`** | `< 0.5` ✅ |
-| End-to-end RTF, Wormhole n300, everything on | `0.575` | `< 0.5` ❌ |
-| End-to-end RTF, `p150a` default † | `0.477` | `< 0.5` ✅ |
+| End-to-end RTF, Wormhole n300, default (in-place KV is now default there) | `0.559` | `< 0.5` ❌ |
+| End-to-end RTF, Wormhole n300, default + `COSYVOICE_FF2_GRID=8x2` | `0.557` | `< 0.5` ❌ |
+| End-to-end RTF, `p150a` default | `0.377` | `< 0.5` ✅ |
+| End-to-end RTF, `p150a` + `COSYVOICE_FF2_GRID=8x2` | **`0.354`** | `< 0.5` ✅ |
 | End-to-end RTF, `p150a` + `COSYVOICE_KV_INPLACE=1` † | `0.449` | `< 0.5` ✅ |
-| **LLM throughput, best measured** (`p150a`, in-place KV) | **`200.8 tok/s`** | `>= 60` ✅ |
-| LLM throughput, `p150a` default | `179.2 tok/s` | `>= 60` ✅ |
+| **LLM throughput, best measured** (`p150a`, `FF2_GRID`) | **`190.0 tok/s`** | `>= 60` ✅ |
+| LLM throughput, `p150a` default | `175.1 tok/s` | `>= 60` ✅ |
+| LLM throughput, n300 default (in-place KV) | `127.6 tok/s` | `>= 60` ✅ |
 | LLM throughput, `p150b` + in-place KV | `190.8 tok/s` | `>= 60` ✅ |
 | LLM decode latency, best measured (`p150a`) | `4.98 ms` | — |
 | Token agreement, teacher-forced | `99.04 %` | `> 95 %` ✅ |
@@ -63,10 +74,12 @@ Measured on the captured utterance: 164 generated tokens producing 3.27 s of aud
 | Streaming vs non-streamed, mel-space PCC (n300) | `0.9024` | content-equal ✅ |
 | tokens → waveform PCC | `0.9951` | `>= 0.99` ✅ |
 
-† `p150a` rows predate the GroupNorm rewrite and the Wormhole convolution fix below; that board has
-been unavailable since. They are its last measured values on the older code, not a comparison
-against the two rows above it, and are kept rather than deleted because backfilling one board's
-cell from another's is what the cooling note above forbids.
+† The `COSYVOICE_KV_INPLACE` row alone still predates the GroupNorm rewrite and the Wormhole
+convolution fix; it has not been re-run since that board came back. The two rows above it were
+re-measured on `2026-08-18` at branch head `384c7c6504f` — **`p150a` default moved `0.477 -> 0.377`**,
+a 21 % gain that had been sitting unrecorded while the board was unreachable. That is what the
+footnote was for: it kept a stale figure from reading as current and named what was missing, so the
+gap closed the day the hardware returned.
 
 **The single Wormhole test failure is gone.** `test_device_streamed_matches_non_streamed` scored
 mel-space PCC `0.218` on n300 against a `0.85` gate from F42 until now; it was a `ttnn.conv1d`
@@ -81,10 +94,15 @@ by side*.
 
 | Stage | Cost | RTF | Share |
 |---|---:|---:|---:|
-| LLM (14-block AR decoder, traced, fused attention) | `5.58 ms/token × 164` | `0.280` | 59 % |
-| Flow decoder (10 Euler steps, traced, SDPA) | `0.589 s` | `0.180` | 38 % |
-| HiFT vocoder | `0.056 s` | `0.017` | 4 % |
-| **Total** | `1.561 s` | **`0.477`** | |
+| LLM (14-block AR decoder, traced, fused attention) | `5.71 ms/token × 164` | `0.286` | 76 % |
+| Flow decoder (10 Euler steps, traced, SDPA) | `0.253 s` | `0.077` | 21 % |
+| HiFT vocoder | `0.045 s` | `0.014` | 4 % |
+| **Total** | `1.234 s` | **`0.377`** | |
+
+**The LLM is now 76 % of an utterance, up from 59 %.** The flow stage more than halved
+(`0.589 -> 0.253 s`) between the CFM trace cache and the permute-free GroupNorm, and the vocoder came
+down with it, while the decode step did not move. Whatever is left to win is in the decode step, and
+it is a larger share of the total than when this document started.
 
 **`COSYVOICE_KV_INPLACE=1`** writes the KV cache in place with `ttnn.update_cache` instead of
 rebuilding it, taking the decode step to `4.98 ms` (`200.8 tok/s`) and the total to `1.470 s`,
@@ -94,7 +112,32 @@ the moving cache's exact `1.0`, non-accumulating. The width it needs has to keep
 **even tile count**; a one-tile scratch zone made it *slower*. Findings F45 and F46 in the notes
 carry that account.
 
-RTF has come down **1.096 → 0.477** (and **2.120 → 0.477** since before either stage was traced),
+**`COSYVOICE_FF2_GRID=8x2`** hands the FFN's second linear an explicit 16-core grid during decode,
+taking the step to `5.26 ms` (`190.0 tok/s`) and the total to `1.160 s`, **RTF `0.354`** — measured
+A/B on one board in one session, one environment variable apart.
+
+That op is the largest in a decode step, and it is bound by its `K = d_ff` reduction rather than by
+weight traffic: `w_1` holds an *identical* number of weight bytes and responds to `bfloat8_b` weights
+by `−37 %` where `w_2` responds by `−2 %`. So the lever is parallelism over the reduction, and it
+runs the counter-intuitive way — at one output row, spreading a 4096-deep reduction across the whole
+grid leaves each core a sliver and the gather dominates, so **fewer cores is faster**. Standalone,
+`[1,1,4096] x [4096,1024]` at bf16: `8x2` is `1.98×` the default on `p150b` and `1.50×` on n300,
+while `4x8` — the same 32 cores, transposed — manages only `1.15×` on n300. Grid *shape* matters
+independently of grid *area*.
+
+Three things about it are worth stating plainly:
+
+- **It applies at `T == 1` only.** The optimum is a property of `M = 1`; prefill runs the same linear
+  at `M = 209`, where a 16-core grid would be a pessimisation. The flow and vocoder stage timings are
+  bit-identical across the A/B, which is the evidence the guard holds.
+- **It is free on accuracy.** `test_device_end_to_end_rtf` asserts PCC against the goldens and passes
+  with the flag on; separately, bf8-alone and bf8-plus-grid measure identically to ten digits, so the
+  grid changes scheduling and not arithmetic.
+- **It is opt-in because the best shape is not portable**, not because it is risky. `8x2` is a good
+  choice on both parts measured, but a default tuned on one architecture and mediocre on another is
+  worse than a flag that says so.
+
+RTF has come down **1.096 → 0.354** (and **2.120 → 0.354** since before either stage was traced),
 and **the `< 0.5` target is met**. The rest of this section is the account of where the time went,
 because the last step of it was the one that had been ruled out on a false premise.
 
@@ -332,11 +375,12 @@ gain was error cancellation over components that individually got worse. HiFi4 s
 This paragraph used to read: *"neither is reachable by further op-level fusion on this decomposition.
 What would move it is a fused attention kernel (new C++, outside this bring-up's scope)."* The first
 half was right and the second was wrong in a way worth leaving on the record — **the fused attention
-kernel existed already**, and the section above is what it was worth. `RTF < 0.5` is met at `0.477`,
-or `0.449` with the in-place cache.
+kernel existed already**, and the section above is what it was worth. `RTF < 0.5` was met at `0.477`
+when this was written; it now stands at `0.377`, or `0.354` with `COSYVOICE_FF2_GRID=8x2`.
 
-`RTF < 0.2` needs `0.654 s`, which at 164 tokens is under `1.5 ms` per token for the LLM with the
-flow's `0.589 s` already consuming `0.180` of the budget on its own. That one is **not** reachable by
+`RTF < 0.2` needs `0.654 s`, which at 164 tokens is under `1.5 ms` per token for the LLM. The flow
+stage has since more than halved — `0.589 -> 0.253 s`, `0.077` of RTF — so it no longer consumes the
+budget on its own the way it did, and the whole of `< 0.2` now rests on the decode step. That one is **not** reachable by
 op-level work: it needs the flow decoder to cost a fraction of what it does, or batching across
 utterances, which single-utterance TTS does not offer.
 
@@ -465,7 +509,9 @@ capture is a larger share of what is left. The corollary is uncomfortable and wo
 faster the silicon, the more of this stage was setup.**
 
 **The in-place KV cache runs the other way**, `1.42×` on Wormhole against `1.12–1.15×` on Blackhole,
-which is why it stays opt-in on `p150a` and is worth turning on by default on n300.
+which is why it stays opt-in on `p150a` and — as of `2026-08-18` — **is the default on Wormhole**:
+`kv_inplace_default(device)` in `tt/llm/decoder.py` follows the architecture, and
+`COSYVOICE_KV_INPLACE` still overrides either way. See *Wormhole re-verified* below.
 
 ### Where the time goes, at the best setting
 
@@ -497,6 +543,52 @@ The overall ratio, `1.58×`, sits well inside the **2.03× ratio in core count**
 neither part is disproportionately hurt. The spread between stages is wider than it looks — the
 vocoder is nearly architecture-neutral at `1.22×` because it is dominated by two large
 `conv_transpose2d` calls, while the flow at `1.82×` is the most core-hungry stage in the model.
+
+### Wormhole re-verified — the recipe held; a benchmarking mistake in between did not
+
+`0.575` above was measured before `COSYVOICE_HIFT_TRACE` existed as a flag — the GroupNorm/conv1d fix
+that produced it (`f1f27cf2322`) predates the vocoder-trace work (`63fd351d6de`) by several commits.
+Re-checking it after Titan came back from a 26 h outage, a run that also set `HIFT_TRACE=1` — assuming
+it was part of "everything on" by name rather than by commit history — gave `0.611`–`0.629`, ~10 %
+worse, and looked at first like the hardware itself had degraded.
+
+**It had not.** `tt-smi` telemetry showed the chip idle, cool, unthrottled and sole-tenant; the
+degradation tracked one specific flag, not the board. Re-run with the flag that actually produced
+`0.575` — `COSYVOICE_KV_INPLACE=1` alone, nothing else — over four runs (three explicit, one from
+verifying the new default below):
+
+| | ms/token | RTF |
+|---|---:|---:|
+| `0.566, 0.562, 0.555, 0.550` | `7.97, 7.94, 7.74, 7.63` | median **`0.559`** |
+
+Within the historical `0.557`–`0.583` band. **The number was never wrong; the flag set used to check it
+was.** `HIFT_TRACE` itself is not implicated by this — its own effect was not isolated here — but it is
+no longer assumed to be part of the Wormhole recipe until measured as such on its own.
+
+**`COSYVOICE_KV_INPLACE` is now the default on Wormhole**, matching what this document already
+recommended (*"is worth turning on by default on n300"*, above). `kv_inplace_default(device)` in
+`tt/llm/decoder.py` checks `device.arch()`; `model.py` and `test_pipeline_perf.py` both call it rather
+than each re-implementing the check, and `COSYVOICE_KV_INPLACE` still overrides either direction.
+Verified on both architectures with no flags set: n300 moved `0.731`(old default, moving cache)
+`→ 0.550`(new default, matching the table above); Blackhole `p150a` stayed at `0.379`, unchanged from
+its own already-default in-place-free measurement — confirmed by `device.arch()` correctly resolving
+`Arch.WORMHOLE_B0` and `Arch.BLACKHOLE` on the two parts. `test_device_end_to_end_rtf` passes on both
+with the new default active, so the PCC gates hold.
+
+**`COSYVOICE_FF2_GRID=8x2`, at the corrected Wormhole baseline**, three runs:
+
+| | ms/token | RTF |
+|---|---:|---:|
+| `0.564, 0.546, 0.557` | `7.68, 7.59, 7.53` | median **`0.557`** |
+
+`7.84 → 7.59 ms/token` median, **`0.559 → 0.557`** — real (every run favoured the grid) but much
+smaller than `p150a`'s `6.1 %` end-to-end gain from the same flag. Both measurements are single-chip
+at the same `K = 4096`, so this is not the TP/grid interaction below — the standalone sweep already
+showed the same direction: `8x2` measured `1.50×` on n300's own `[1,1,4096]x[4096,1024]` linear in
+isolation against `1.98×` on `p150b`'s. Wormhole's default grid is `8×8 = 64` cores against
+Blackhole's `13×10 = 130` — half the "too many cores for one row" problem the small grid fixes is
+smaller to begin with on the part with fewer cores. `RTF < 0.5` remains missed on Wormhole, now
+honestly at `0.557` rather than at a figure built on the wrong flag set.
 
 ### Decode step, and what each change is worth
 
@@ -819,3 +911,42 @@ Source suites: `tests/perf/`, `tests/e2e/`, `tests/pcc/`
 | host | 111 | none |
 | device | 44 | Blackhole `p150a` — **155 pass** |
 | device | 44 | Wormhole n300 — **155 pass**; the F42 streaming failure was a conv defect, now fixed |
+
+## Tensor parallelism — measured, and it does not move the needle
+
+Tried on `2026-08-18`: combining the `COSYVOICE_FF2_GRID` finding above with the tensor-parallel
+decoder prototype (2-chip Megatron sharding of the AR decoder, `tt-bounty/tt-metal/05/probe_tp_decode.py`
+— a probe, not shipped code). TP's own value stands on its own from an earlier session (`1.18×` on
+the decode step, `PCC 0.99994`) and is unaffected by this result. The question was narrower: does the
+core-grid win from earlier in this document *also* apply once TP has already sharded the same linear.
+
+**It does not, and the reason is mechanical, not architectural.** TP shards the FFN's second linear
+row-parallel: each chip's reduction is `K = d_ff / 2 = 2048` instead of the un-sharded `4096`. Sweeping
+the same grid candidates against that halved `K` on an n300 T3000 (2 chips), median of 30 traced
+replays per point:
+
+| grid | ms/token | vs default |
+|---|---:|---:|
+| default | `5.536` | 1.00× |
+| **`8x2`** | **`5.388`** | **1.03×** |
+| `8x1` | `5.440` | 1.02× |
+| `4x4` | `5.539` | 1.00× |
+| `8x4` | `5.546` | 1.00× |
+| `4x2` | `5.589` | 0.99× (slightly worse) |
+
+At `K = 4096` (single chip, this document's opening section) the same op and the same grid candidates
+gave `1.50×`–`2.11×`. At `K = 2048` the best case is `1.03×` — three percent, not a fraction of the
+original effect but essentially none of it. `4x2` landing *below* the default shows the effect has a
+floor: past some point there is no further "too many cores for too little work" left to fix, and
+pushing the grid smaller than that just adds scheduling overhead for nothing back.
+
+**TP and the core grid are not two independent levers — they are the same lever, applied at different
+granularities.** Sharding the reduction across chips already does most of what a small grid does on
+one chip: both exist to stop a one-row matmul from being spread across more parallelism than the work
+justifies. Having sharded once, there is almost nothing left for the grid to shard again.
+
+**Practically:** there is nothing to integrate. Building a shipped, mesh-aware TP path would still be
+worth roughly the `1.18×` measured on the decode step in isolation — real, and, transferred to the
+shipped decoder's current Wormhole baseline (`0.559` above), not enough on its own to reach `0.5`. It
+would not additionally benefit from `COSYVOICE_FF2_GRID`, so the two should not be quoted as if their
+gains stack. Raw sweep output: `tt-bounty/tt-metal/05/21_tp-ff2-grid-k2048.txt`.
