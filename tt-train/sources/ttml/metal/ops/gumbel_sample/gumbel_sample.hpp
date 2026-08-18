@@ -16,9 +16,9 @@ namespace ttml::metal {
  * Single-kernel Gumbel-max sampling.
  *
  * Computes argmax_v( logits[..., v] / temperature + g_v  [- mask[..., v]] ), with
- * g_v = -log(-log(U_v)) and U ~ Uniform, in ONE device op. The composed spelling in
- * ttnn_fixed::sample runs eight ttnn ops and stages several [B, 1, tokens, V] tensors through DRAM;
- * this streams a couple of tiles at a time and reduces on the fly, so peak L1/DRAM for the
+ * g_v = -log(-log(U_v)) and U ~ Uniform, in ONE device op. When spelled out as a composed
+ * implementation, it would run eight ttnn ops and stage several [B, 1, tokens, V] tensors through DRAM;
+ * this fused op streams a couple of tiles at a time and reduces on the fly, so peak L1/DRAM for the
  * intermediates is O(1) in V rather than O(B * tokens * V).
  *
  * @param logits      TILE layout, [B, 1, tokens, V], BFLOAT16 or FLOAT32.
@@ -31,11 +31,11 @@ namespace ttml::metal {
  *                    must vary the seed themselves.
  * @param seed_axes   Mesh axes that must draw DISTINCT noise per device (the data-parallel axes).
  *                    Axes omitted stay in lockstep across devices. Empty (default) => identical
- *                    noise everywhere, matching ttnn_fixed::sample's default.
+ *                    noise everywhere.
  * @param logits_padding_mask Optional additive mask, same dtype as `logits` but shape [1, 1, 1, V], subtracted from
  *                    the scores.
  * @param positions   Optional per-batch-entry token position: [B, 1, 1, 1] UINT32 ROW_MAJOR
- *                    INTERLEAVED, i.e. this op's own position-mode output spec. Absent samples every
+ *                    INTERLEAVED, i.e. this op's own position-mode output spec. When absent, samples every
  *                    position. When supplied, ONLY row positions[b] of batch entry b is read,
  *                    reduced and written, and the result is [B, 1, 1, 1]. Shard it with the SAME
  *                    mapper the batch was sharded with; the op does no global->local mapping.

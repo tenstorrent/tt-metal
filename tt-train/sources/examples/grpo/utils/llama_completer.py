@@ -431,11 +431,6 @@ class LlamaGRPOCompleter(GRPOCompleter):
                 arr[:, j] = column.to_numpy(composer).reshape(B)
             return arr
 
-        # Positions are hoisted out of the loop, not rebuilt per step. Both phases are uniform, so
-        # there is nothing to recompute: prompts are LEFT-padded, so every row's last real token sits
-        # at column N-1 for prefill, and new_tokens is pinned to 1 for decode so its position is 0
-        # forever. Building inside the loop would add ~255 numpy->shard->H2D uploads and as many DRAM
-        # allocations per generate, on a loop whose whole design is to stay device-resident.
         prefill_positions = positions_to_tensor([N - 1] * B, B, N, self._dp_mapper)
         decode_positions = positions_to_tensor([0] * B, B, 1, self._dp_mapper)
 
@@ -490,8 +485,7 @@ class LlamaGRPOCompleter(GRPOCompleter):
                 chunk_columns = []
 
         completions_np = to_np(generated_columns)
-        deallocate_tensors(generated_columns + [prefill_positions, decode_positions])
-        deallocate_tensors([logits_mask_tensor])
+        deallocate_tensors(generated_columns + [prefill_positions, decode_positions, logits_mask_tensor])
         kv_cache.reset()
 
         completions: List[List[int]] = []

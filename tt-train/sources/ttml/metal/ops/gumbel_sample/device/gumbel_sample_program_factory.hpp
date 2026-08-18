@@ -26,9 +26,8 @@ struct GumbelSampleSharedVariables {
 // NOTE: this factory builds a MESH WORKLOAD (one program per mesh coordinate) rather than a single
 // program, because the RNG seed has to differ per device on data-parallel axes. The plain
 // `create()` factories used by the other tt-train ops emit one program broadcast to every device,
-// which would make every data-parallel replica draw identical noise and emit identical samples --
-// exactly the GRPO duplicate-completion bug that ttnn_fixed::sample's seed_axes plumbing exists to
-// avoid. See RingSDPAFwProgramFactory for the same pattern.
+// which would make every data-parallel replica draw identical noise and emit identical samples.
+// See RingSDPAFwProgramFactory for the same pattern.
 struct GumbelSampleProgramFactory {
     using shared_variables_t = GumbelSampleSharedVariables;
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;

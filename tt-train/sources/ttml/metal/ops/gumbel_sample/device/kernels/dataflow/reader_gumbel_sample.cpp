@@ -3,12 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Streams logits (and, when present, the padding mask) for a contiguous run of TILES.
-//
-// The work unit is one tile, not one 32-token tile row. That distinction is the whole performance
-// story of this op: with a row-based split, decode (tokens == 1 => Ht == 1) yields only B_local work
-// units, so a handful of cores carried the entire vocabulary while the rest of the grid idled, and
-// the fused kernel measured ~2.9x SLOWER than the six separate ttnn ops it replaces -- each of which
-// splits by tile across the full grid. Splitting by tile puts this op on the same footing.
 
 #include <cstdint>
 
@@ -62,11 +56,6 @@ void kernel_main() {
 
     // Stage the whole local position list into L1 up front. It cannot be deferred: the very first
     // logits page address depends on it.
-    //
-    // One ALIGNED page per entry rather than four packed bytes -- a DRAM read moves a whole aligned
-    // page, and the NOC requires the L1 destination to be congruent with the DRAM address modulo the
-    // DRAM alignment (64 B on Blackhole), not L1's own 16 B. The CB base satisfies that, so
-    // base + entry * slot does too.
     uint32_t positions_l1_base = 0U;
     uint32_t positions_slot_bytes = 0U;
     if constexpr (do_positions) {
@@ -99,10 +88,10 @@ void kernel_main() {
             // multiply also contains the uint32 overflow case.
             //
             // The host can no longer range-check positions (they live in device memory), so without
-            // this a bad value reads outside the logits buffer entirely: interleaved accessors do no
+            // this clamp, a bad value reads outside the logits buffer entirely: interleaved accessors do no
             // bounds checking, and watcher validates the whole DRAM window rather than the buffer, so
-            // it would not be caught there either. With it, the worst case degrades to the
-            // already-documented silent-wrong-row class.
+            // it would not be caught there either. It is the caller's responsibility to ensure the passed-in positions
+            // are valid.
             const uint32_t tile_row = position >> 5U;
             const uint32_t clamped_row = (tile_row < Ht) ? tile_row : (Ht - 1U);
             return (entry * Ht + clamped_row) * Wt + column;

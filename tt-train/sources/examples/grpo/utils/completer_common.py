@@ -27,10 +27,8 @@ def positions_to_tensor(positions: Sequence[int], B: int, tokens: int, dp_mapper
     construction, rather than by two separately-written mapper configs happening to agree.
 
     The op cannot range-check these: they live in device memory, and reading them back would mean a
-    blocking sync on the dispatch path. So the loud check lives here, once, against the global list
-    while the values are still on the host. The kernel clamps the tile row as a backstop, but a
-    clamped position is silently the wrong row rather than an error -- which is why this assert
-    matters more than it looks.
+    blocking sync on the dispatch path. So the loud check asserts live here, once, against the global list
+    while the values are still on the host.
     """
     positions = [int(p) for p in positions]
     assert len(positions) == B, f"expected {B} positions, got {len(positions)}"

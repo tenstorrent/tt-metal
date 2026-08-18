@@ -28,9 +28,9 @@ struct GumbelSampleParams {
     uint32_t seed = 0U;
 
     // Indices into the mesh shape whose device coordinate should contribute a distinct RNG stream.
-    // Mirrors ttnn_fixed::sample's `seed_axes`: axes listed here are treated as data-parallel (each
-    // device must draw different noise), axes omitted are treated as replicated (every device must
-    // draw the SAME noise or the replicas desync). Empty => every device draws identical noise.
+    // Axes listed here are treated as data-parallel (each device must draw different noise),
+    // axes omitted are treated as replicated (every device must draw the SAME noise or the replicas desync).
+    // Empty => every device draws identical noise.
     std::vector<uint32_t> seed_axes{};
 };
 

@@ -99,7 +99,7 @@ void GumbelSampleDeviceOperation::validate_on_program_cache_miss(
         // padding is a property of the vocabulary, not of sequence position, so a single row covers
         // every token. That is what every caller builds (_sample_logits_mask in generate.py,
         // _build_logits_mask in llama_completer.py). A per-token mask is rejected rather than
-        // silently mis-applied -- supporting it would mean a second kernel variant with no user.
+        // silently mis-applied.
         TT_FATAL(
             mask.logical_shape()[-1] == logits.logical_shape()[-1],
             "GumbelSample: mask width {} must match logits width {}",
@@ -158,8 +158,7 @@ void GumbelSampleDeviceOperation::validate_on_program_cache_miss(
             name,
             enchantum::to_string(t.memory_config().memory_layout()));
         // The exact shape is what guarantees page e is in bounds for every entry the kernels index.
-        // It also removes the old local-vs-global length ambiguity: a device tensor's shape IS its
-        // local shard, so there is exactly one correct length and no heuristic to get wrong.
+        // A device tensor's shape IS its local shard.
         const auto expected = expected_output_shape(position_aware, logits);
         TT_FATAL(
             t.logical_shape() == expected,
@@ -170,13 +169,7 @@ void GumbelSampleDeviceOperation::validate_on_program_cache_miss(
     };
 
     if (tensor_args.positions.has_value()) {
-        // NOTE: the per-element bound (position < tokens) can no longer be checked here -- the values
-        // live in device memory, and reading them back would mean a blocking sync on exactly the
-        // dispatch path this op exists to keep async. Two things stand in for it: callers range-check
-        // when they BUILD this tensor, where the values are still on the host, and the reader clamps
-        // the tile row so a bad value cannot read outside the logits buffer.
         check_index_tensor(*tensor_args.positions, "positions", /*position_aware=*/true);
-
         TT_FATAL(
             tensor_args.positions->tensor_topology() == logits.tensor_topology(),
             "GumbelSample: 'positions' must be distributed across the mesh exactly as the logits are "

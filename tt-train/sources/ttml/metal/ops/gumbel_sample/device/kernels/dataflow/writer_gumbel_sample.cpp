@@ -5,9 +5,7 @@
 // Fused Gumbel-max sampling, reduction half -- entirely on device, spread across the whole grid.
 //
 // The work unit is a TILE, so a token row's vocabulary is spread over many cores and no core owns a
-// whole row. That is what fixes decode: with a row-based unit, tokens == 1 gave only B_local work
-// units, most of the grid idled, and the fused elementwise half measured ~2.9x slower than the six
-// tile-parallel ttnn ops it replaces. The price of tile units is that the argmax becomes a
+// whole row. The price of tile units is that the argmax becomes a
 // cross-core reduction, arranged here so the common case never pays for it:
 //
 //   * A row whose tiles lie ENTIRELY inside this core's run is reduced and written right here. In

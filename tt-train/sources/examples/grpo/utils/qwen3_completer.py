@@ -360,16 +360,11 @@ class Qwen3GRPOCompleter(GRPOCompleter):
                 # The model emits logits for all Np prompt positions, but exactly ONE per row is ever
                 # read: row b's prediction comes from pred_pos[b] = len_b - 1, and the prompts have
                 # different lengths so every row wants a different position. Sampling the whole
-                # [B, 1, Np, V] therefore did Np times the necessary work and dominated generate --
-                # ~2.9 s per prefill against ~7 ms per decode step, i.e. one prefill cost as much as
-                # ~400 decode steps to produce a single token per row.
+                # [B, 1, Np, V] therefore did Np times the necessary work.
                 #
                 # Hand the positions to the op instead. It reads only the tiles those rows live in,
                 # so prefill sampling costs one decode step's worth of work whatever the context
-                # length, and returns [B, 1, 1, 1]. The positions are in GLOBAL batch order; the op
-                # maps them onto each device's own shard the same way the batch is sharded. (A host
-                # gather cannot do this: row b lives on one device, and ttnn.slice would apply the
-                # same indices to every shard.)
+                # length, and returns [B, 1, 1, 1].
                 #
                 # Seed uniquely only over the batch-sharded axes (dp/fsdp) so each device's rollout
                 # draws independent noise; a replicated (tp) axis, if any, is excluded via _seed_axes.

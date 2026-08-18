@@ -278,11 +278,6 @@ TEST_F(TrivialTnnFixedTest, TestSamplingPositiveTemperatureNoMask) {
 }
 
 TEST_F(TrivialTnnFixedTest, TestSamplingPositiveTemperatureWithMask) {
-    // TODO: Accuracy issue with BH. Tracking issue: https://github.com/tenstorrent/tt-metal/issues/37342
-    auto board = tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0);
-    if (board == tt::BoardType::P100 || board == tt::BoardType::P150) {
-        GTEST_SKIP() << "Skipping on P100/P150 boards";
-    }
     // Test sampling with positive temperature, with mask, and xarray of shape {1, 1, 32, 65}
     xt::xarray<float>::shape_type shape = {1, 1, 32, 65};
     xt::xarray<float> a = ttml::test_utils::make_uniform_xarray<float>(shape, 0.0F, 1.0F, 84U);
@@ -346,8 +341,7 @@ TEST_F(TrivialTnnFixedTest, TestSamplingDoesNotMutateInputs) {
     EXPECT_EQ(ttml::core::to_vector(tensor_mask), mask_before) << "positive temperature, mask operand";
 
     // Zero temperature with a mask: nothing has been allocated yet, so the working tensor still
-    // aliases the caller's logits and the subtract must NOT be in place. This is the path the
-    // out_is_owned flag exists to protect, and it is otherwise untested.
+    // aliases the caller's logits and the subtract must NOT be in place.
     (void)ttml::ttnn_fixed::sample(tensor_a, 0.0F, 42, tensor_mask);
     EXPECT_EQ(ttml::core::to_vector(tensor_a), logits_before) << "zero temperature, with mask";
     EXPECT_EQ(ttml::core::to_vector(tensor_mask), mask_before) << "zero temperature, mask operand";
@@ -390,12 +384,6 @@ TEST_F(TrivialTnnFixedTest, TestSamplingBroadcastPaddingMask) {
     // The padding mask every real caller builds is [1, 1, 1, V] -- ONE row, because which vocab
     // columns are padding does not depend on the token position (see _sample_logits_mask in
     // generate.py and _build_logits_mask in llama_completer.py). It must apply to every token row.
-    //
-    // The other masked tests in this file hand in a FULL-SIZE [1, 1, rows, V] mask, which exercises
-    // a shape no caller passes and cannot catch a missing broadcast. This one can: in TILE layout a
-    // height-1 tensor carries data only in row 0 of each tile, with rows 1..31 zero-filled, so an
-    // implementation that subtracts tile-for-tile masks only token row 0 and lets every other row
-    // argmax onto the first padding column.
     //
     // The mask is independent of the BATCH for the same reason one level up: every sequence is
     // decoded by the same lm_head, so the same columns are padding for all of them. kBatch > 1 makes
@@ -443,16 +431,10 @@ TEST_F(TrivialTnnFixedTest, TestSamplingBroadcastPaddingMask) {
     // compiled out), so the broadcast has to hold there too. The noise makes the winner among the
     // real columns unpredictable, but the 1e4 penalty is far beyond the noise span, so a padding
     // column must never win.
-    // TODO: shares the BH accuracy issue guarding TestSamplingPositiveTemperatureWithMask
-    // (https://github.com/tenstorrent/tt-metal/issues/37342); the greedy half above still runs.
-    auto board = tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0);
-    if (board != tt::BoardType::P100 && board != tt::BoardType::P150) {
-        auto sampled =
-            ttml::core::to_vector<uint32_t>(ttml::ttnn_fixed::sample(tensor_logits, 1.0F, 4242, tensor_mask));
-        ASSERT_EQ(sampled.size(), kBatch * kRows);
-        for (uint32_t r = 0; r < kBatch * kRows; ++r) {
-            EXPECT_LT(sampled[r], kVocab) << "row " << r << " sampled a masked padding column";
-        }
+    auto sampled = ttml::core::to_vector<uint32_t>(ttml::ttnn_fixed::sample(tensor_logits, 1.0F, 4242, tensor_mask));
+    ASSERT_EQ(sampled.size(), kBatch * kRows);
+    for (uint32_t r = 0; r < kBatch * kRows; ++r) {
+        EXPECT_LT(sampled[r], kVocab) << "row " << r << " sampled a masked padding column";
     }
 }
 
@@ -543,8 +525,9 @@ TEST_F(TrivialTnnFixedTest, TestSamplingHonoursBufferPlacement) {
     EXPECT_EQ(from_l1, expected) << "L1 logits must sample identically to DRAM logits";
 
     // ---- mask placement ----
-    // Only the mask's has_value() reaches the program hash, never where it lives. The decoy column
-    // outranks every real winner, so a mask read from the wrong memory space cannot go unnoticed.
+    // The mask's placement is hashed (placement_of) precisely because accessors are compiled per memory space — this
+    // guards that. The decoy column outranks every real winner, so a mask read from the wrong memory space cannot go
+    // unnoticed.
     xt::xarray<float> decoyed = a;
     for (uint32_t r = 0; r < kRows; ++r) {
         decoyed(0, 0, r, kDecoy) = 2.0F;
@@ -711,13 +694,10 @@ TEST_F(TrivialTnnFixedTest, TestSamplingAtPerRowPositionsAcrossTokenCounts) {
     EXPECT_EQ(second.first, second.second) << "134-token call reusing the 70-token program";
 }
 
-TEST_F(TrivialTnnFixedTest, TestSamplingAtPerRowPositionsAboveOldRuntimeArgCap) {
-    // The positions used to ride in per-core RUNTIME ARGS, which capped the batch at 336 rows and
-    // TT_FATALed above it -- this case could not be expressed at all. Now they live in a small
-    // tensor each core stages into L1, so the batch is bounded only by memory. This is the single
-    // test that proves the change achieved its purpose, and it also exercises the positions CB at a
-    // size where an off-by-one in its bound would trip watcher.
-    constexpr uint32_t kBatch = 512U;  // > the old 336 cap
+TEST_F(TrivialTnnFixedTest, TestSamplingAtPerRowPositionsLargeBatch) {
+    // Positions live in a small tensor each core stages into L1, so the batch is bounded only by memory.
+    // This test also exercises the positions CB at a size where an off-by-one in its bound would trip watcher.
+    constexpr uint32_t kBatch = 512U;
     constexpr uint32_t kTokens = 64U;
     constexpr uint32_t kVocab = 33U;
 
@@ -932,4 +912,73 @@ TEST_F(TrivialTnnFixedTest, TestSamplingGumbelMatchesSoftmaxDistribution) {
     EXPECT_EQ(first, again) << "same seed must reproduce the same samples";
     auto other = ttml::core::to_vector<uint32_t>(ttml::ttnn_fixed::sample(tensor_a, 1.0F, 5678U));
     EXPECT_NE(first, other) << "different seeds must produce different samples";
+
+    // ---- the same guarantee through the positions + mask path ----
+    //
+    // Position mode is a different program: its own work split (NC * Wt virtual tiles), its own RNG
+    // stream layout, and the single-row writer path. Nothing above proves the distribution survives
+    // it, so it is re-proven here with the BATCH as the sample axis: 2050 entries x 4 seeds is the
+    // same 8200 samples, so the 5-sigma bounds carry over unchanged.
+    //
+    // Two tripwires ride along:
+    //   * every NON-target row holds its mass on a sentinel column instead of the four weighted
+    //     ones, so reading the wrong row samples the sentinel almost surely and trips col_to_slot;
+    //   * a decoy column outweighs every active column but is suppressed by the padding mask, so a
+    //     dropped or misapplied mask hands the decoy ~98.5% of the samples and shreds every bound.
+    constexpr uint32_t kPosBatch = 2050U;
+    constexpr uint32_t kPosTokens = 70U;          // Ht = 3; the last tile row keeps only 6 real rows
+    constexpr uint32_t kSentinelCol = 20U;        // tile 0, face 1 -- not an active column
+    constexpr uint32_t kDecoyCol = 100U;          // tile 3, face 0 -- masked below
+    const float decoy_logit = std::log(1000.0F);  // outranks log(8) by far more than the noise span
+
+    xt::xarray<float>::shape_type pos_shape = {kPosBatch, 1, kPosTokens, kVocab};
+    xt::xarray<float> pos_logits = xt::zeros<float>(pos_shape);
+    pos_logits.fill(kSuppressed);
+    std::vector<uint32_t> entry_positions(kPosBatch);
+    for (uint32_t b = 0; b < kPosBatch; ++b) {
+        entry_positions[b] = (b * 13U) % kPosTokens;  // 13 is coprime with 70: every row gets hit
+        for (uint32_t t = 0; t < kPosTokens; ++t) {
+            if (t == entry_positions[b]) {
+                for (uint32_t c = 0; c < kActive; ++c) {
+                    pos_logits(b, 0, t, kActiveCols[c]) = std::log(kWeights[c]);
+                }
+                pos_logits(b, 0, t, kDecoyCol) = decoy_logit;
+            } else {
+                pos_logits(b, 0, t, kSentinelCol) = 0.0F;
+            }
+        }
+    }
+
+    xt::xarray<float>::shape_type mask_shape = {1, 1, 1, kVocab};
+    xt::xarray<float> mask = xt::zeros<float>(mask_shape);
+    mask(0, 0, 0, kDecoyCol) = 1e4F;
+
+    auto* device = &ttml::autograd::ctx().get_device();
+    auto pos_tensor = ttml::core::from_xtensor(pos_logits, device);
+    auto mask_tensor = ttml::core::from_xtensor(mask, device);
+    auto positions_tensor = make_positions(entry_positions);
+
+    std::array<uint32_t, kActive> pos_counts{};
+    uint32_t pos_total = 0U;
+    for (auto seed : seeds) {
+        auto picks = ttml::core::to_vector<uint32_t>(ttml::ttnn_fixed::sample(
+            pos_tensor, 1.0F, seed, mask_tensor, /* seed_axes */ std::nullopt, positions_tensor));
+        ASSERT_EQ(picks.size(), kPosBatch);
+        for (auto pick : picks) {
+            ASSERT_LT(pick, kVocab) << "sampled index left the logical vocabulary";
+            ASSERT_NE(col_to_slot[pick], -1) << "sampled column " << pick << ": a wrong row (sentinel " << kSentinelCol
+                                             << "), an unmasked decoy (" << kDecoyCol << "), or a suppressed column";
+            ++pos_counts[static_cast<uint32_t>(col_to_slot[pick])];
+            ++pos_total;
+        }
+    }
+
+    for (uint32_t c = 0; c < kActive; ++c) {
+        const double p = static_cast<double>(kWeights[c]) / kWeightTotal;
+        const double expected_count = p * pos_total;
+        const double tolerance = 5.0 * std::sqrt(pos_total * p * (1.0 - p));
+        EXPECT_NEAR(static_cast<double>(pos_counts[c]), expected_count, tolerance)
+            << "positions+mask: column " << kActiveCols[c] << " (weight " << kWeights[c] << ") selected "
+            << pos_counts[c] << " / " << pos_total;
+    }
 }

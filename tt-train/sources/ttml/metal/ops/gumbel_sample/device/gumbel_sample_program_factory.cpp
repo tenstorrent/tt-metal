@@ -62,19 +62,16 @@ static_assert(kReaderPositionsBufferIdx == kReaderHtIdx + 1U);
 
 // Per-entry token positions live in a small device TENSOR, not in runtime args. Each core stages the
 // whole local list into L1 once at kernel start (the origin core needs all of it to re-derive target
-// rows during the boundary merge). Carrying it in runtime args instead capped the batch at ~336 rows
-// and wrote B_local words into every core's args on both kernels, every dispatch.
+// rows during the boundary merge).
 constexpr auto kReaderPositionsCbIndex = tt::CBIndex::c_5;
 constexpr auto kWriterPositionsCbIndex = tt::CBIndex::c_6;
 
 // Uniform draw bounds for the Gumbel transform g = -log(-log(U)).
 //
-// Lower bound 2^-32 matches ttnn_fixed::sample's gumbel_uniform_lower_bound and caps the noise at
-// g <= -log(-log(2^-32)) ~ -3.1 on the low side.
+// Lower bound 2^-32 caps the noise at g <= -log(-log(2^-32)) ~ -3.1 on the low side.
 //
-// The UPPER bound deliberately differs from the composed implementation. `rand_tile` produces
-// values on a CLOSED interval [from, from + scale], and the composed path passes 1.0F as the upper
-// bound -- so U == 1.0 is attainable, and then log(1) = 0, -log(0) = +inf, g = +inf, which pins the
+// The UPPER bound : `rand_tile` produces values on a CLOSED interval [from, from + scale],
+// so U == 1.0 is attainable, and then log(1) = 0, -log(0) = +inf, g = +inf, which pins the
 // argmax onto that token with certainty. It is a ~2^-32-per-element event, but it is a real one, so
 // here the top of the range is the largest float32 strictly below 1.0 and g stays finite (max
 // ~16.6).
@@ -166,8 +163,7 @@ GumbelSampleLayout compute_layout(const ttnn::Tensor& logits, bool position_awar
 
     // Split over TILES, not tile rows. A row-based split yields only NC*Ht units, and in decode
     // (tokens == 1 => Ht == 1) that is just the local batch: a few dozen units on an ~80 core grid,
-    // leaving most of it idle while each active core carried a whole vocabulary. Every ttnn op this
-    // kernel replaces splits by tile, which is why six of them beat one of this.
+    // leaving most of it idle while each active core carried a whole vocabulary.
     //
     // When positions were supplied the tile space shrinks further, to one tile ROW per batch entry
     // instead of Ht of them: a "virtual" tile vt maps to entry vt / Wt, column vt % Wt, and the
@@ -242,7 +238,7 @@ tt::tt_metal::Program build_program(
 
     // -------------------------------------------------------------------------
     // Circular buffers. Peak L1 is a handful of tiles regardless of V: this is the whole point of
-    // the fusion -- the composed path materializes several full [B, 1, tokens, V] tensors in DRAM.
+    // the fusion -- avoiding materializing several full [B, 1, tokens, V] tensors in DRAM.
     // -------------------------------------------------------------------------
     const uint32_t streamed_tiles = 2U * layout.block_size;  // double-buffered
 
@@ -514,8 +510,7 @@ void GumbelSampleProgramFactory::override_runtime_arguments(
                 core_args[kReaderHtIdx] = layout.Ht;
                 // The positions BUFFER moves between dispatches (each prefill builds a new one), and
                 // a cached program replayed against a stale address reads whatever DRAM now occupies
-                // that region -- in bounds, no fault, a plausible-looking token. This patch is the
-                // only thing preventing that.
+                // that region -- in bounds, no fault, a plausible-looking token. This patch prevents that.
                 core_args[kReaderPositionsBufferIdx] = positions_address;
             }
             {
