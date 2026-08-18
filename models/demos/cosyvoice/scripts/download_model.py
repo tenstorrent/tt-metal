@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
 """Download CosyVoice-300M checkpoints from HuggingFace.
 
 Stdlib only -- no huggingface_hub, no modelscope -- so it can run before (or
