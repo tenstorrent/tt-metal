@@ -986,6 +986,9 @@ def _single_device_sampling_args(mesh_device, vocab_size, max_top_k=32, max_batc
         sub_core_grids=sub_core_grids,
         sub_core_grid_topk=sub_core_grids,
         start_core=ttnn.CoreCoord(0, 0),
+        # A/B experiment branch: exercise the per-chunk pad-to-power-of-2 branch
+        # so correctness of the padded multi-core topk path is device-verified.
+        pad_logits_to_power_of_2=True,
     )
 
 

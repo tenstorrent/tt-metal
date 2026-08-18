@@ -2795,11 +2795,18 @@ class ModelArgs:
             )
 
         if self.num_devices > 0:
-            sampling_splits = self.num_devices if self.cluster_shape != [1, 1] else 2
-            # Only enable this optimization on the non-multi-step sampling path.
-            # The [1, 1] mesh path splits logits before TopK today and would need
-            # matching input padding in `TTSampling.sample()` to safely use it.
-            self.pad_logits_to_power_of_2 = self.cluster_shape != [1, 1] and (
+            if self.cluster_shape != [1, 1]:
+                sampling_splits = self.num_devices
+                pad_gate = True
+            else:
+                # A/B experiment: enable the per-chunk pad on the [1, 1] multi-step
+                # path for the small Qwen3 models only, to measure whether the
+                # multi-core topk factory beats single-core despite the wider row.
+                sampling_splits = 2
+                while self.padded_vocab_size // sampling_splits > 64 * 1024:
+                    sampling_splits *= 2
+                pad_gate = self.base_model_name in ("Qwen3-0.6B", "Qwen3-1.7B")
+            self.pad_logits_to_power_of_2 = pad_gate and (
                 should_pad_sampling_logits_to_power_of_2(self.base_model_name, self.padded_vocab_size, sampling_splits)
             )
         else:
