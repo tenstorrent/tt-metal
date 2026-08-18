@@ -15,6 +15,10 @@
 
 #include "combine_fabric2d_kernel_interface.hpp"
 
+#ifdef KERNEL_BUILD
+#include "api/tensor/tensor_accessor_args.h"
+#endif
+
 namespace cmbf2d {
 
 // Scalars packed before the variable-length blocks, i.e. the index the schedule starts at.
@@ -75,7 +79,10 @@ struct ReaderCtArgs {
         dram_fwd_base_addr(static_cast<uint32_t>(dram.fwd->address())),
         fwd_chunks_per_quarter(op::relay_chunks_per_stream(op::ring_extent(args))),
         fwd_pages_per_chunk(plan.pages_per_chunk),
-        // Doubles as this stream's share of the same-chip run, which it copies after the fabric work.
+        // Our quarter of the forwarding buffer. (plane, direction) identifies the upstream sender uniquely
+        // from the downstream chip's point of view, so the reader WRITES quarter q of the neighbour's buffer
+        // and READS quarter q of its own — the same q, because every chip runs the same code. Doubles as
+        // this stream's share of the same-chip run, which it copies after the fabric work.
         my_quarter(plan.stream),
         num_incoming_chunks(op::relay_chunks_per_stream(op::ring_extent(args))),
         fwd_sem_addr(plan.fwd_arrived_addr),
@@ -181,12 +188,24 @@ struct ReaderCtArgs {
         my_row(get_compile_time_arg_val(28)),
         control_addr(get_compile_time_arg_val(29)),
         meta_prefetch_cap(get_compile_time_arg_val(30)) {}
+
+    static constexpr uint32_t schedule_base = READER_SCALAR_CT_ARGS;
+    static constexpr uint32_t assignment_base = schedule_base + get_compile_time_arg_val(17);  // schedule_len
+    static constexpr uint32_t accessor_base =
+        assignment_base + ASSIGNMENT_WORDS * get_compile_time_arg_val(16);  // num_assignments
+
+    // One accessor per DRAM buffer the program factory chained on, in that order.
+    static constexpr auto dram_in_args = TensorAccessorArgs<accessor_base>();
+    static constexpr auto dram_out_args = TensorAccessorArgs<dram_in_args.next_compile_time_args_offset()>();
+    static constexpr auto dram_fwd_args = TensorAccessorArgs<dram_out_args.next_compile_time_args_offset()>();
+    static constexpr auto dram_meta_args = TensorAccessorArgs<dram_fwd_args.next_compile_time_args_offset()>();
+    static constexpr auto dram_counts_args = TensorAccessorArgs<dram_meta_args.next_compile_time_args_offset()>();
+    static constexpr auto dram_region_args = TensorAccessorArgs<dram_counts_args.next_compile_time_args_offset()>();
+    static constexpr auto dram_expert_offsets_args =
+        TensorAccessorArgs<dram_region_args.next_compile_time_args_offset()>();
 #endif
 
     constexpr uint32_t slot_stride() const { return token_size_bytes + forwarding_metadata_size; }
-    constexpr uint32_t schedule_base() const { return READER_SCALAR_CT_ARGS; }
-    constexpr uint32_t assignment_base() const { return schedule_base() + schedule_len; }
-    constexpr uint32_t accessor_base() const { return assignment_base() + ASSIGNMENT_WORDS * num_assignments; }
 
 #ifndef KERNEL_BUILD
 private:

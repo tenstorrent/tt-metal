@@ -22,9 +22,7 @@
 #include "../../combine_fabric2d_assignments.hpp"
 #include "../../combine_fabric2d_placement.hpp"
 #include "../../combine_fabric2d_types.hpp"
-#endif
 
-#ifndef KERNEL_BUILD
 namespace ttnn::operations::experimental::deepseek_prefill::combine_fabric2d {
 
 // Derived geometry. One-liners off the two structs the framework passes everywhere, named because
@@ -82,13 +80,13 @@ struct KernelPlan {
 };
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::combine_fabric2d
+
+namespace cmbf2d {
+namespace op = ttnn::operations::experimental::deepseek_prefill::combine_fabric2d;
+}
 #endif
 
 namespace cmbf2d {
-
-#ifndef KERNEL_BUILD
-namespace op = ttnn::operations::experimental::deepseek_prefill::combine_fabric2d;
-#endif
 
 // Depth of the reader -> sender L1 ring, in tokens, and the half-ring batch slots move in. Both are
 // packed as compile-time args, so this is their one definition.
