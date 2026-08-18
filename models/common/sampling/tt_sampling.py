@@ -772,7 +772,21 @@ class TTSampling(LightweightModule):
                 )
             if slice_valid_vocab:
                 x = self._slice_valid_vocab_for_argmax(x)
-            x_untilized = ttnn.untilize(x, use_multicore=True)
+            if self.multi_step_reduction and self._num_vocab_splits > 2 and x.shape[-1] % self._num_vocab_splits == 0:
+                # Untilizing the full row in one program needs a static circular-buffer
+                # region proportional to the row width; past ~150K elements it clashes
+                # with the model's resident L1 buffers at compile (Gemma-2's 256000-wide
+                # logits throw "circular buffers ... clash with L1 buffers"). Untilize
+                # the same chunks the top-k path uses and concat row-major instead.
+                x_chunks = ttnn.split(x, x.shape[-1] // self._num_vocab_splits, dim=3)
+                untilized_chunks = [ttnn.untilize(chunk, use_multicore=True) for chunk in x_chunks]
+                for chunk in x_chunks:
+                    chunk.deallocate()
+                x_untilized = ttnn.concat(untilized_chunks, dim=3)
+                for chunk in untilized_chunks:
+                    ttnn.deallocate(chunk)
+            else:
+                x_untilized = ttnn.untilize(x, use_multicore=True)
             tt_out_tok = ttnn.argmax(
                 x_untilized,
                 dim=-1,
