@@ -1,5 +1,5 @@
 {
-  "last_scan_date": "2026-08-12",
+  "last_scan_date": "2026-08-17",
   "scanned_run_ids": [
     "30387358745",
     "30493606319",
@@ -22,7 +22,8 @@
     "31229899895",
     31566814739,
     31596449343,
-    "32028413134"
+    "32028413134",
+    "32053638633"
   ],
   "workflows_sampled": [
     "merge-gate.yaml",
@@ -147,14 +148,14 @@
       "note": "No CI run found on branch for models-t2-unit-tests; posted status comment and marked ready for review on 2026-08-17. Awaiting maintainer/CI action."
     },
     {
-      "number": null,
+      "number": 53431,
       "branch": "silencer/permute-writer-unused-vars",
       "pattern": "-Wunused-but-set-variable: input_padded_shape / output_tiled_shape in writer_permute_interleaved_tiled_row_invariant.cpp",
-      "status": "pr_opened_pending_ci",
+      "status": "reported-inconclusive-ready-for-review",
       "source_run_id": "32028413134",
       "source_job_id": "95391393492",
       "workflow": "t3000-perf-tests.yaml",
-      "note": "Dispatched t3000-perf-tests (model=qwenimage) on this branch this run to validate warnings gone."
+      "note": "Validation run 32068781845 (t3000-perf-tests, qwenimage) completed/success. Sampled tail (last 5000 lines) of test-execution job 95509799580 showed no occurrence of target warning AND no JIT-compile evidence for writer_permute_interleaved_tiled_row_invariant.cpp \u2014 classified inconclusive per category-2 rules, reported honestly via /codeowners ping comment, PR marked ready for review. No further Silencer action needed unless a future run finds compile evidence."
     }
   ],
   "backlog_cursor": {
