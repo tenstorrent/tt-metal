@@ -425,15 +425,26 @@ class TPAttention:
         no kernel-CB clash."""
         return ttnn.experimental.nlp_concat_heads(gated, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-    def _make_heads_decode(self, qg, kp, vp, B):
+    def _make_heads_decode(self, qg, kp, vp, B, skip_v_reshard=False):
         """Decode head-split via nlp_create_qkv_heads_decode (the batched-decode idiom).
 
-        Returns (q, gate, k, v): q [1,B,NH,HD], gate [1,B,NH,HD], k/v [1,B,NKV,HD], all L1-interleaved.
+        Returns (q, gate, k, v): q [1,B,NH,HD], gate [1,B,NH,HD], k/v [1,B,NKV,HD]. q/k/gate are
+        always L1-interleaved (q/k feed rms_norm, which categorically rejects HEIGHT_SHARDED input --
+        ttnn's layernorm_device_operation.cpp -- so this reshard is not optional there). v is
+        interleaved too UNLESS ``skip_v_reshard``: v has no norm/RoPE consumer, its only use is the
+        paged-cache write, and nlp_create_qkv_heads_decode's native HEIGHT_SHARDED output already
+        uses the same one-user-per-core grid/shape as ``self.args.kv_update_shard_cfg`` (both derive
+        it from B the same way) -- so for the paged decode path (see forward_decode) the
+        sharded_to_interleaved here immediately followed by a to_memory_config back to
+        kv_update_shard_cfg is a pure round trip. VERIFIED byte-identical (nlp_create_qkv_heads_decode
+        v output memory_config == kv_update_shard_cfg for B=32, both HD=128 and HD=256) and re-checked
+        at runtime below (falls back to the reshard if the configs ever diverge, e.g. B != max_batch_
+        size). WH-only: gated off on Blackhole, which pads v before its own reshard (_WH_KV_PAD_NOTE)
+        and has not been checked against this shortcut from this host.
+
         The kernel only shuffles a fused Q|K|V, so the gate half of qg is split off first and applied
         post-SDPA exactly like the reshape path. The fused tensor is kept in L1 to dodge the Blackhole
-        interleaved-reader bug (tt-metal #16667: DRAM input zeros odd-indexed Q rows). The height-sharded
-        output is returned to L1-interleaved so the existing rms_norm / partial-rope / SDPA-decode path
-        is unchanged.
+        interleaved-reader bug (tt-metal #16667: DRAM input zeros odd-indexed Q rows).
         """
         NH, NKV, HD = self.NH, self.NKV, self.HD
         _L1 = ttnn.L1_MEMORY_CONFIG
@@ -466,7 +477,10 @@ class TPAttention:
         ttnn.deallocate(qkv)
         q = ttnn.sharded_to_interleaved(q, _L1)
         k = ttnn.sharded_to_interleaved(k, _L1)
-        v = ttnn.sharded_to_interleaved(v, _L1)
+        if skip_v_reshard and v.memory_config() == self.args.kv_update_shard_cfg:
+            pass  # v feeds straight into the paged-cache write in its native sharded layout
+        else:
+            v = ttnn.sharded_to_interleaved(v, _L1)
         gate = ttnn.reshape(gate_flat, (1, B, NH, HD), memory_config=_L1)
         ttnn.deallocate(gate_flat)
         return q, gate, k, v
@@ -627,7 +641,14 @@ class TPAttention:
         qg, kp, vp = self._qkv(x)
 
         if self._use_nlp_decode_heads:
-            q, gate, k, v = self._make_heads_decode(qg, kp, vp, B)
+            # The per-head test/generate_tp oracle path below (use_paged=False, k_caches loop) slices
+            # v per-KV-head, which wants it interleaved -- only the paged production path can take it
+            # natively sharded straight into the cache write. SCOPED TO WORMHOLE 9B ON N300
+            # (tpc.wh_9b_n300): the shard-spec equality this relies on was verified on that config,
+            # and _make_heads_decode's runtime guard makes a mismatch fall back safely anyway.
+            q, gate, k, v = self._make_heads_decode(
+                qg, kp, vp, B, skip_v_reshard=use_paged and tpc.wh_9b_n300(self.args)
+            )
         elif vp is None:
             # Fused [q|k|v|gate] weight (_qkv sentinel vp=None): qg is contiguous [q|k|v], kp is gate.
             # Slice q/k/v heads directly from qg; gate is the separate block.
@@ -662,6 +683,18 @@ class TPAttention:
         q = self._qk_norm(q, tw["q_norm"], _L1)
         k = self._qk_norm(k, tw["k_norm"], _L1)
 
+        # REVERTED Q+K merged RoPE (was here briefly): an isolated microbenchmark measured -2.3%
+        # (172.3us -> 168.4us) for concatenating Q+K before rotating once. A REAL full-layer Tracy
+        # capture (test_profile_single_layer_attention_decode.py, tt-perf-report) caught what the
+        # isolated test missed: concatenating NH=16 + NKV=4 = 20 heads is not a clean tile multiple,
+        # so the concat forces Untilize -> Concat -> TilizeWithValPadding round-trips on BOTH sides of
+        # the merge (6+5+1+18+9+22 = 61us of new ops) that the synthetic benchmark's tensors never
+        # hit. Net effect in the real layer: this section went from 46us to 98us (+113%), swamping
+        # every other win this session found. Lesson: an isolated op-shape microbenchmark cannot
+        # decide a change like this -- the exact same caution mlp.py's _CKC_MLP_KPASS1 comment already
+        # gives ("the isolated sweep... CANNOT decide this... trust the full-layer capture"). Confirm
+        # any future attempt at this fusion against a full-layer Tracy capture, not just the isolated
+        # op timing.
         q = apply_partial_rope_decode(q, cos_tt, sin_tt, NH, B, self.rope_dim)
         k = apply_partial_rope_decode(k, cos_tt, sin_tt, NKV, B, self.rope_dim)
 
@@ -696,14 +729,41 @@ class TPAttention:
                 v_sh = ttnn.to_memory_config(v_p, _kv_cfg)
                 ttnn.deallocate(k_p)
                 ttnn.deallocate(v_p)
+            elif getattr(self.args, "kv_cache_write_fused_enabled", False):
+                # Fused K+V cache write (paged_fused_update_cache): needs K and V on DISJOINT shard
+                # grids. V is pointed at the NATURAL half -- the grid nlp_create_qkv_heads_decode
+                # already emits -- so the equality guard below short-circuits and V pays NO reshard,
+                # exactly as it did before the fused write existed; K takes the SHIFTED half, which is
+                # free for K because it arrives interleaved from RoPE and owes a reshard either way.
+                # See model_config.py's kv_cache_write_{k,v}_shard_cfg for why this assignment (and
+                # not the reverse) is the cheap one, and for the NaN footgun in trying to make the
+                # head split emit onto the shifted half instead.
+                # VERIFIED (test_kv_cache_sdpa_decode_sweep.py + test_attn_head_split_v_reshard_sweep.py
+                # ::test_kv_write_grid_swap_removes_v_reshard, N300, per-user-distinct paged cache):
+                # bit-identical cache contents, 20.3us (2 separate writes) -> 18.3us fused (-9.9%),
+                # then 26.7us/4 programs -> 26.0us/3 programs (-3.0%) from this grid assignment.
+                k_sh = ttnn.to_memory_config(k, self.args.kv_cache_write_k_shard_cfg)
+                ttnn.deallocate(k)
+                if v.memory_config() == self.args.kv_cache_write_v_shard_cfg:
+                    v_sh = v  # already on the natural half straight from the head split; no reshard
+                else:
+                    v_sh = ttnn.to_memory_config(v, self.args.kv_cache_write_v_shard_cfg)
+                    ttnn.deallocate(v)
+                ttnn.experimental.paged_fused_update_cache(
+                    keys, k_sh, values, v_sh, update_idxs_tensor=cur_pos_tt, page_table=page_table
+                )
             else:
                 k_sh = ttnn.to_memory_config(k, _kv_cfg)
-                v_sh = ttnn.to_memory_config(v, _kv_cfg)
                 ttnn.deallocate(k)
-                ttnn.deallocate(v)
-            # paged_update_cache takes bf16/fp32 and casts to bf8 cache; decode K/V stay bf16 (prefill fill needs bf8)
-            ttnn.experimental.paged_update_cache(keys, k_sh, update_idxs_tensor=cur_pos_tt, page_table=page_table)
-            ttnn.experimental.paged_update_cache(values, v_sh, update_idxs_tensor=cur_pos_tt, page_table=page_table)
+                if v.memory_config() == _kv_cfg:
+                    # _make_heads_decode's skip_v_reshard already left v exactly here; no-op.
+                    v_sh = v
+                else:
+                    v_sh = ttnn.to_memory_config(v, _kv_cfg)
+                    ttnn.deallocate(v)
+                # paged_update_cache takes bf16/fp32 and casts to bf8 cache; decode K/V stay bf16 (prefill fill needs bf8)
+                ttnn.experimental.paged_update_cache(keys, k_sh, update_idxs_tensor=cur_pos_tt, page_table=page_table)
+                ttnn.experimental.paged_update_cache(values, v_sh, update_idxs_tensor=cur_pos_tt, page_table=page_table)
             ttnn.deallocate(k_sh)
             ttnn.deallocate(v_sh)
             attn_out = ttnn.transformer.paged_scaled_dot_product_attention_decode(
@@ -773,7 +833,25 @@ class TPAttention:
             )
             ttnn.deallocate(q)
 
-        gated = ttnn.multiply(attn_out, ttnn.sigmoid(gate, memory_config=_L1), memory_config=_L1)
+        # Fused sigmoid-multiply (input_tensor_b_activations): one kernel instead of two. Unlike the
+        # GDN module's silu-gate (gdn/tp.py's _silu_mul, kept UNFUSED because fusing silu overflowed
+        # to NaN for large-magnitude z), sigmoid is bounded to [0,1] for any input magnitude -- no
+        # overflow mode to inherit. VERIFIED (gate values swept to +/-50, well past realistic
+        # magnitudes): zero NaN, output bit-identical to the unfused sequence (same bf16 rounding
+        # noise vs an fp32 reference either way). MEASURED (device kernel duration): 9.86us -> 8.64us
+        # (-12.4%).
+        #
+        # SCOPED TO WORMHOLE 9B ON N300 (tpc.wh_9b_n300) like the other decode changes, even though
+        # this one is shape-agnostic and would very likely be safe everywhere: the NaN sweep that
+        # justifies it was run on this config only, and the GDN precedent right next door shows this
+        # exact fusion mechanism CAN blow up for a different activation. Widening the scope wants its
+        # own numerical check per config, not an assumption.
+        if tpc.wh_9b_n300(self.args):
+            gated = ttnn.multiply(
+                attn_out, gate, input_tensor_b_activations=[ttnn.UnaryOpType.SIGMOID], memory_config=_L1
+            )
+        else:
+            gated = ttnn.multiply(attn_out, ttnn.sigmoid(gate, memory_config=_L1), memory_config=_L1)
         ttnn.deallocate(attn_out)
         ttnn.deallocate(gate)
 
@@ -785,6 +863,11 @@ class TPAttention:
         wo_partial = self._wo_proj(gated_flat, tw["wo"])
         ttnn.deallocate(gated_flat)
         wo_partial = ttnn.reshape(wo_partial, (1, 1, B, wo_partial.shape[-1]))
+        # DECODE reduce-scatter tuning: checked wpl in {1,2,4,8} at this shape
+        # (test_attn_output_reduce_sweep.py). wpl=1 and wpl=8 are consistently worse across repeated
+        # runs; wpl=2 (upstream default) vs wpl=4 FLIPS direction run-to-run (+-4-7% either way across
+        # 5 repeated measurements) -- that comparison is noise, not signal, so it stays at upstream's
+        # default (wpl=2, implicit) rather than "fixing" something that isn't broken.
         return tt_all_reduce(
             wo_partial,
             self.mesh,
