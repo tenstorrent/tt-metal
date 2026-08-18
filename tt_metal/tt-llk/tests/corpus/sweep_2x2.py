@@ -143,7 +143,11 @@ OFF_FLAGS = (
     "-mno-tt-tensix-optimize-ccmask "
     "-mno-tt-tensix-optimize-interlock-schedule "
     "-mno-tt-tensix-optimize-transp-involution "
-    "-mno-tt-tensix-optimize-replay-exec-record"
+    "-mno-tt-tensix-optimize-replay-exec-record "
+    "-mno-tt-tensix-optimize-drain-schedule "
+    "-mno-tt-tensix-macro-planner-residency "
+    "-mno-tt-tensix-optimize-const-remat "
+    "-mno-tt-tensix-optimize-const-residency"
 )
 ON_FLAGS = (
     "-mtt-tensix-optimize-latency-schedule "
@@ -185,7 +189,25 @@ ON_FLAGS = (
     # (1 register + dominated reuses, was L12+L13+L14); exp corr CRAQ
     # 7574->5630 and sdpa num_tiles:2 CRAQ 4886->4081 sim-cycles, both
     # bit-exact PASS on the pinned BH sim.
-    "-mtt-tensix-optimize-prgm-const"
+    "-mtt-tensix-optimize-prgm-const "
+    # Lane AY (next pin): drain-aware boundary placement (WP13) -- per-
+    # boundary drain proofs from the derived descriptor calendars; fire
+    # witness = the wired minmax-max/min rows (planner dump line
+    # "Macro-planner drain-schedule: run-boundary drain elided", 3 per
+    # kernel; SFPNOP 12->3 per tile).  Refusals keep the full drain
+    # byte-identically; unarymaxmin/sdpa proven unmoved.
+    "-mtt-tensix-optimize-drain-schedule "
+    # Lane BN (pin 11): descriptor-program residency — outward span extension
+    # + content-equality dedup; fire witness = the where impl-1 rows (dump
+    # "resident=elided", descriptor block once per kernel; ON inventory =
+    # exactly the 5 where impl-1 math.elfs, CRAQ 25/25, laneBN evidence).
+    "-mtt-tensix-macro-planner-residency "
+    # Lane BS (pin 11): value const-remat + PRGM const-residency; fire
+    # witnesses = the ICE-repro-now-compiles dg test + the 12-row designed
+    # fire (where x7, sdpa-exp x2, binop-scalar x3; CRAQ 142/142, laneBS
+    # evidence).  The spill-diag tier is unconditional (no flag).
+    "-mtt-tensix-optimize-const-remat "
+    "-mtt-tensix-optimize-const-residency"
 )
 REMOVED_FLAGS = ("-mtt-tensix-emit-loadmacro", "-mtt-tensix-analyze-loadmacro")
 # Weekly per-knob attribution: OFF set plus exactly one positive knob.
@@ -207,6 +229,10 @@ KNOBS = {
     "transp-involution": "-mtt-tensix-optimize-transp-involution",
     "replay-exec-record": "-mtt-tensix-optimize-replay-exec-record",
     "prgm-const": "-mtt-tensix-optimize-prgm-const",
+    "drain-schedule": "-mtt-tensix-optimize-drain-schedule",
+    "planner-residency": "-mtt-tensix-macro-planner-residency",
+    "const-remat": "-mtt-tensix-optimize-const-remat",
+    "const-residency": "-mtt-tensix-optimize-const-residency",
 }
 HARNESS_TOOLCHAIN = TESTS / "sfpi"  # untracked symlink the harness hardcodes
 DEVICE_LOCK = "/tmp/tt-device.lock"
