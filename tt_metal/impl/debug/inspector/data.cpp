@@ -376,11 +376,15 @@ void Data::rpc_get_blocks_by_type(rpc::Inspector::GetBlocksByTypeResults::Builde
         std::vector<std::pair<uint32_t, uint32_t>> active_eth_xy;
         std::vector<std::pair<uint32_t, uint32_t>> idle_eth_xy;
 
-        for (const CoreCoord& logical_core : control_plane.get_active_ethernet_cores(device_id)) {
+        const auto active_eth_cores = control_plane.get_active_ethernet_cores(device_id);
+        active_eth_xy.reserve(active_eth_cores.size());
+        for (const CoreCoord& logical_core : active_eth_cores) {
             active_eth_xy.emplace_back(logical_core.x, logical_core.y);
         }
 
-        for (const CoreCoord& logical_core : control_plane.get_inactive_ethernet_cores(device_id)) {
+        const auto idle_eth_cores = control_plane.get_inactive_ethernet_cores(device_id);
+        idle_eth_xy.reserve(idle_eth_cores.size());
+        for (const CoreCoord& logical_core : idle_eth_cores) {
             idle_eth_xy.emplace_back(logical_core.x, logical_core.y);
         }
 

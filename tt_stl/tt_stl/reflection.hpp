@@ -1772,6 +1772,7 @@ template <typename T>
 struct from_json_t<std::vector<T>> {
     std::vector<T> operator()(const nlohmann::json& json_object) noexcept {
         std::vector<T> vector;
+        vector.reserve(json_object.size());
         for (const auto& element : json_object) {
             vector.push_back(from_json<T>(element));
         }

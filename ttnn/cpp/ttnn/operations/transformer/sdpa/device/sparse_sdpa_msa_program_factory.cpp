@@ -13,8 +13,16 @@
 #include <bit>
 #include <map>
 #include <string>
+#include <variant>
+#include <vector>
 
 namespace ttnn::prim {
+
+namespace {
+// emplace_runtime_args' vector overload registers each Buffer* as an address binding at its slot,
+// so the args can be filled by enum index instead of positionally.
+using RtArgs = std::vector<std::variant<uint32_t, tt::tt_metal::Buffer*>>;
+}  // namespace
 
 tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFactory::create_descriptor(
     const SparseSDPAMsaParams& attrs,
@@ -96,13 +104,13 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
     const tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     const uint32_t out_tile_bytes = tt::tile_size(out_df);
 
-    auto* device = t.q.device();
-    tt::tt_metal::CoreCoord grid = device->compute_with_storage_grid_size();
+    // Work split and the hash-excluded per-dispatch scalars (K/V slot offsets, group strides, per-coordinate
+    // causal chunk_start) come from the helper override_runtime_arguments also uses, so the values baked here
+    // and the ones patched on a cache hit cannot drift.
+    const auto dyn = SparseSDPAMsaOperation::compute_dispatch_args(attrs, t, mesh_dispatch_coordinate);
+    const tt::tt_metal::CoreCoord grid = dyn.grid;
     auto core_grid = tt::tt_metal::CoreRangeSet(tt::tt_metal::CoreRange({0, 0}, {grid.x - 1, grid.y - 1}));
-    const uint32_t num_cores = grid.x * grid.y;
-    const uint32_t total_work = S * n_kv;
-    const uint32_t base_work = total_work / num_cores;
-    const uint32_t extra = total_work % num_cores;
+    const uint32_t num_cores = dyn.num_cores;
 
     // ---- CBs (fixed order = SparseCB enum) ----
     const auto cb = [&](uint32_t page_size, uint32_t num_pages, tt::DataFormat df) {
@@ -285,47 +293,47 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
     auto* v_buf = t.v.buffer();
     auto* idx_buf = t.indices.buffer();
     auto* out_buf = output.buffer();
-    const uint32_t cache_batch_idx = attrs.cache_batch_idx.value_or(0);
-    const uint32_t T = t.k.logical_shape()[2];
-    const uint32_t tiles_per_row = T / tt::constants::TILE_HEIGHT;
-    const uint32_t k_group_tile_stride = tiles_per_row * DHt;
-    const uint32_t v_group_tile_stride = tiles_per_row * vDHt;
-    const uint32_t k_batch_tile_offset = cache_batch_idx * n_kv * k_group_tile_stride;
-    const uint32_t v_batch_tile_offset = cache_batch_idx * n_kv * v_group_tile_stride;
-    // Baked per coordinate (one program per device) so each rank masks against its own global position.
-    const uint32_t chunk_start_local =
-        SparseSDPAMsaOperation::compute_chunk_start_local(attrs, t, mesh_dispatch_coordinate);
     for (uint32_t i = 0; i < num_cores; ++i) {
         tt::tt_metal::CoreCoord core = {i % grid.x, i / grid.x};
-        uint32_t work_start = i * base_work + std::min(i, extra);
-        uint32_t work_count = base_work + (i < extra ? 1u : 0u);
-        // Cache slot offsets are patched on hits because cache_batch_idx is not hashed.
-        reader_desc.emplace_runtime_args(
-            core,
-            {q_buf,
-             k_buf,
-             v_buf,
-             idx_buf,
-             work_start,
-             work_count,
-             k_batch_tile_offset,
-             v_batch_tile_offset,
-             k_group_tile_stride,
-             v_group_tile_stride,
-             chunk_start_local});  // arg 10: baked per-coordinate; re-patched on cache hits (get_dynamic_runtime_args)
-        // Writer args 5/6 are the K/V cache-slot offsets patched on cache hits.
-        writer_desc.emplace_runtime_args(
-            core,
-            {out_buf,
-             work_start,
-             work_count,
-             k_buf,
-             v_buf,
-             k_batch_tile_offset,
-             v_batch_tile_offset,
-             k_group_tile_stride,
-             v_group_tile_stride});
-        compute_desc.emplace_runtime_args(core, {work_start, work_count});
+        uint32_t work_start = i * dyn.base_work + std::min(i, dyn.extra);
+        uint32_t work_count = dyn.base_work + (i < dyn.extra ? 1u : 0u);
+        // Both sides index the same slot enums, so a reorder here cannot silently desync the
+        // cache-hit patch in override_runtime_arguments; Buffer* slots stay address bindings.
+        using RArg = SparseSDPAMsaOperation::ReaderArg;
+        RtArgs reader_rt(RArg::kReaderArgCount);
+        reader_rt[RArg::kReaderQAddr] = q_buf;
+        reader_rt[RArg::kReaderKAddr] = k_buf;
+        reader_rt[RArg::kReaderVAddr] = v_buf;
+        reader_rt[RArg::kReaderIdxAddr] = idx_buf;
+        reader_rt[RArg::kReaderWorkStart] = work_start;
+        reader_rt[RArg::kReaderWorkCount] = work_count;
+        reader_rt[RArg::kReaderKBatchOffset] = dyn.k_batch_tile_offset;
+        reader_rt[RArg::kReaderVBatchOffset] = dyn.v_batch_tile_offset;
+        reader_rt[RArg::kReaderKGroupStride] = dyn.k_group_tile_stride;
+        reader_rt[RArg::kReaderVGroupStride] = dyn.v_group_tile_stride;
+        // Baked per-coordinate (one program per device, so each rank masks against its own global
+        // position) and re-applied on cache hits.
+        reader_rt[RArg::kReaderChunkStart] = dyn.chunk_start_local;
+        reader_desc.emplace_runtime_args(core, reader_rt);
+
+        using WArg = SparseSDPAMsaOperation::WriterArg;
+        RtArgs writer_rt(WArg::kWriterArgCount);
+        writer_rt[WArg::kWriterOutAddr] = out_buf;
+        writer_rt[WArg::kWriterWorkStart] = work_start;
+        writer_rt[WArg::kWriterWorkCount] = work_count;
+        writer_rt[WArg::kWriterKAddr] = k_buf;
+        writer_rt[WArg::kWriterVAddr] = v_buf;
+        writer_rt[WArg::kWriterKBatchOffset] = dyn.k_batch_tile_offset;
+        writer_rt[WArg::kWriterVBatchOffset] = dyn.v_batch_tile_offset;
+        writer_rt[WArg::kWriterKGroupStride] = dyn.k_group_tile_stride;
+        writer_rt[WArg::kWriterVGroupStride] = dyn.v_group_tile_stride;
+        writer_desc.emplace_runtime_args(core, writer_rt);
+
+        using CArg = SparseSDPAMsaOperation::ComputeArg;
+        RtArgs compute_rt(CArg::kComputeArgCount);
+        compute_rt[CArg::kComputeWorkStart] = work_start;
+        compute_rt[CArg::kComputeWorkCount] = work_count;
+        compute_desc.emplace_runtime_args(core, compute_rt);
     }
 
     desc.kernels.push_back(std::move(reader_desc));

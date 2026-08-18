@@ -1014,6 +1014,7 @@ dev_msgs::core_info_msg_t RiscFirmwareInitializer::populate_core_info_msg(
         cluster_.get_soc_desc(device_id).arch, cluster_.get_harvesting_mask(device_id));
     uint32_t max_along_axis =
         hal_.get_tensix_harvest_axis() == HalTensixHarvestAxis::ROW ? soc_d.grid_size.y : soc_d.grid_size.x;
+    harvested_axis_coord.reserve(max_along_axis);
     for (uint32_t idx = 0; idx < max_along_axis; idx++) {
         bool harvested_axis = (harvested_noc_coords >> idx) & 0x1;
         if (harvested_axis) {

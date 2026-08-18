@@ -14,6 +14,11 @@
 #include "llk_operands.h"
 #include "llk_sync.h"
 
+namespace llk_math_detail {
+template <auto...>
+inline constexpr bool always_false_v = false;
+}  // namespace llk_math_detail
+
 /*************************************************************************
  * LLK MATH COMMON
  *************************************************************************/
@@ -83,14 +88,20 @@ inline constexpr MathFidelity get_effective_math_fidelity() {
  * @brief Sets the dest dvalid for FPU/SFPU
  *
  * @tparam SET_DEST_DVALID: which client to set data valid for, values = p_cleardvalid::FPU/SFPU
+ * @tparam DST: Destination register banking mode: SyncHalf = double banked (math/pack overlap), SyncFull = one bank
+ *(serialized)
  *
  * @warning SYNC SCHEME: dest-dvalid. There are two mutually exclusive Dest register synchronization schemes: the
  * dest-dvalid scheme and the semaphore scheme. Never mix them. Currently the semaphore scheme is used in llk and
  * compute APIs.
  **/
-template <std::uint8_t SET_DEST_DVALID>
+template <std::uint8_t SET_DEST_DVALID, DstSync DST>
 inline void llk_math_set_dvalid() {
-    _llk_math_set_dvalid_<SET_DEST_DVALID>();
+    static_assert(
+        llk_math_detail::always_false_v<SET_DEST_DVALID, DST>,
+        "llk_math_set_dvalid belongs to the dest-dvalid sync scheme, should not be mixed with semaphores which are "
+        "currently used in tt-metal.");
+    _llk_math_set_dvalid_<SET_DEST_DVALID, DST>();
 }
 
 /**

@@ -89,7 +89,7 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
     for (auto block : generic::blocks(Wt, blk)) {
         // Fused pre-add
         reconfig_data_format(dfb_in, dfb_inb);
-        add_tiles_init(dfb_in, dfb_inb);
+        add_init(dfb_in, dfb_inb);
         dfb_in_obj.wait_front(block.full_block_size());
         dfb_inb_obj.wait_front(block.full_block_size());
         tile_regs_acquire();
@@ -374,7 +374,7 @@ void kernel_main() {
     // that will be done
     if constexpr (fuse_pre_add) {
         // Init for x = in + b
-        binary_op_init_common(dfb_in, dfb_inb, dfb_interm_pre_add);
+        compute_kernel_hw_startup(dfb_in, dfb_inb, dfb_interm_pre_add);
     } else {
         // Init for transpose
         constexpr auto first_out_dfb = dfb_ex;
@@ -467,7 +467,7 @@ void kernel_main() {
         // Calculate 1/(√(Var(X) + ε))
         // =====================================
         reconfig_data_format(dfb_ex2, dfb_eps);
-        add_tiles_init(dfb_ex2, dfb_eps);
+        add_init(dfb_ex2, dfb_eps);
 
         dfb_ex2_obj.wait_front(onetile);
         tile_regs_acquire();
@@ -487,7 +487,9 @@ void kernel_main() {
         dfb_ex2pe_obj.wait_front(onetile);
         tile_regs_acquire();
         reconfig_data_format_srca(dfb_ex2pe);
-        unary_bcast_init<BroadcastType::COL>(dfb_ex2pe, dfb_ex2pe);
+        // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
+        compute_kernel_hw_startup(dfb_ex2pe, dfb_ex2pe);
+        unary_bcast_init<BroadcastType::COL>(dfb_ex2pe);
         unary_bcast<BroadcastType::COL>(dfb_ex2pe, 0, dst0);
         dfb_ex2pe_obj.pop_front(onetile);
         tile_regs_commit();
@@ -528,7 +530,7 @@ void kernel_main() {
             }
             tile_regs_acquire();
             reconfig_data_format(dfb_in, dfb_ex);
-            sub_bcast_cols_init_short(dfb_in, dfb_ex);
+            sub_bcast_cols_init(dfb_in, dfb_ex);
             // x-E[x]
             for (auto i : block.local()) {
                 sub_tiles_bcast_cols(dfb_in, dfb_ex, i, 0, i);
@@ -541,11 +543,11 @@ void kernel_main() {
             if constexpr (fuse_pre_add) {
                 // Fuse in = in + b
                 reconfig_data_format_srca(dfb_in, dfb_inb);
-                binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
+                add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
                     dfb_inb);
                 dfb_inb_obj.wait_front(block.full_block_size());
                 for (auto i : block.local()) {
-                    binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
+                    add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
                         dfb_inb, i, i);
                 }
                 dfb_inb_obj.pop_front(block.full_block_size());
@@ -554,9 +556,9 @@ void kernel_main() {
             // Multiply by 1/(√(Var(X) + ε)). SrcA currently holds cb_inb (fused) or cb_in
             // (non-fused), the last operand read above; switch it to cb_ex2pe's format.
             reconfig_data_format_srca(fuse_pre_add ? dfb_inb : dfb_in, dfb_ex2pe);
-            binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(dfb_ex2pe);
+            mul_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(dfb_ex2pe);
             for (auto i : block.local()) {
-                binary_dest_reuse_tiles<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
+                mul_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
                     dfb_ex2pe, 0 /*in_tile_index*/, i);
             }
             tile_regs_commit();
@@ -581,7 +583,7 @@ void kernel_main() {
                 tile_regs_acquire();
                 dfb_gamma_obj.wait_front(block.full_block_size());
                 DataflowBuffer(dfb_xmm).wait_front(block.full_block_size());
-                mul_bcast_rows_init_short(dfb_xmm, dfb_gamma);
+                mul_bcast_rows_init(dfb_xmm, dfb_gamma);
                 for (auto i : block.local()) {
                     mul_tiles_bcast_rows(dfb_xmm, dfb_gamma, i, i, i);
                 }
@@ -613,7 +615,7 @@ void kernel_main() {
                 // Add beta
                 tile_regs_acquire();
                 reconfig_data_format(dfb_xmm, dfb_beta);
-                add_bcast_rows_init_short(dfb_xmm, dfb_beta);
+                add_bcast_rows_init(dfb_xmm, dfb_beta);
                 DataflowBuffer(dfb_xmm).wait_front(block.full_block_size());
                 dfb_beta_obj.wait_front(block.full_block_size());
                 for (auto i : block.local()) {

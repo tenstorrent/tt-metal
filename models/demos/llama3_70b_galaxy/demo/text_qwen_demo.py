@@ -27,6 +27,7 @@ from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM
 
 # Qwen-specific imports
 from models.demos.llama3_70b_galaxy.tt.qwen_model_config import TtQwenModelArgs
+from models.demos.llama3_70b_galaxy.tests.unit_tests.qwen_test_utils import DECODE_FABRIC_CONFIG as _FABRIC_CONFIG
 from transformers import AutoTokenizer
 from models.demos.llama3_70b_galaxy.demo.demo_common import load_inputs_advanced
 
@@ -75,16 +76,20 @@ class TokenAccuracy:
 
 def get_accuracy_thresholds(model_args, seq_len, batch_size=1):
     """Resolve token accuracy thresholds from the centralized model targets."""
+    # Use the runtime cluster SKU (e.g. wh_galaxy_perf / bh_galaxy_perf) so Wormhole and
+    # Blackhole Galaxy resolve their own targets. model_args.device_name only encodes device
+    # count ("TG" for any 32-chip mesh) and would collapse Blackhole onto the Wormhole entry.
+    sku = get_current_device_sku_name()
     centralized_targets = resolve_accuracy_targets(
         model_name="qwen3-32b-galaxy",
-        sku=model_args.device_name,
+        sku=sku,
         batch_size=batch_size,
         seq_len=seq_len,
     )
     if not centralized_targets or "top1" not in centralized_targets or "top5" not in centralized_targets:
         raise ValueError(
             "Could not find centralized accuracy targets for qwen3-32b-galaxy on "
-            f"{model_args.device_name} (batch_size={batch_size}, seq_len={seq_len})"
+            f"{sku} (batch_size={batch_size}, seq_len={seq_len})"
         )
 
     # Preserve previous behavior for integer-rounded CI checks.
@@ -483,7 +488,7 @@ def create_tt_qwen_model(
             "num_command_queues": 1,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "worker_l1_size": 1345000,
-            "fabric_config": True,
+            "fabric_config": _FABRIC_CONFIG,
         }
     ],
     indirect=True,

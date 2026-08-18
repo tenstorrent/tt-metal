@@ -4,7 +4,7 @@
 
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/fmt.hpp>
-#include <tt-metalium/experimental/tensor/spec/layout/page_config.hpp>
+#include <tt-metalium/tensor/spec/layout/page_config.hpp>
 
 #include <tt-metalium/shape2d.hpp>
 #include <numeric>
@@ -27,6 +27,7 @@ size_t rm_element_size_bytes(DataType dtype) {
         case DataType::UINT16: return sizeof(uint16_t);
         case DataType::FP8_E4M3: return sizeof(float8_e4m3);
         case DataType::UINT8: return sizeof(uint8_t);
+        case DataType::INT8: return sizeof(int8_t);
         case DataType::BFLOAT8_B:
         case DataType::BFLOAT4_B:
             // To store block floats in RowMajor layout, we use a fallback and store full floats instead

@@ -46,6 +46,7 @@ void MorehSumBackwardOperation::validate_inputs(
         }
     } else {
         std::vector<uint32_t> expected_output_grad_shape;
+        expected_output_grad_shape.reserve(input_rank);
         std::vector<uint32_t> reduced_dims(input_rank, 0);
         for (auto dim : dims) {
             TT_FATAL(dim < input_rank, "dim {} < input_rank {}", dim, input_rank);

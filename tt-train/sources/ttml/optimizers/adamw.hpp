@@ -17,6 +17,8 @@ struct AdamWConfig {
     float weight_decay{1e-2F};
     bool amsgrad{false};
     bool stochastic_rounding{false};
+    // Skip weight decay on 1-D params (RMSNorm gains, biases); standard decoupled-AdamW behavior.
+    bool weight_decay_skip_1d{false};
 };
 
 class AdamW : public OptimizerBase {

@@ -43,6 +43,7 @@ HostBuffer allocate_host_buffer(const TensorSpec& tensor_spec) {
     switch (tensor_spec.data_type()) {
         case DataType::BFLOAT16: return HostBuffer(std::vector<bfloat16>(size_bytes / sizeof(bfloat16)));
         case DataType::FLOAT32: return HostBuffer(std::vector<float>(size_bytes / sizeof(float)));
+        case DataType::INT8: return HostBuffer(std::vector<int8_t>(size_bytes / sizeof(int8_t)));
         case DataType::INT32: return HostBuffer(std::vector<int32_t>(size_bytes / sizeof(int32_t)));
         case DataType::FP8_E4M3: return HostBuffer(std::vector<float8_e4m3>(size_bytes / sizeof(float8_e4m3)));
         case DataType::UINT8: return HostBuffer(std::vector<uint8_t>(size_bytes / sizeof(uint8_t)));
@@ -262,6 +263,8 @@ template std::vector<float> encode_tensor_data<float>(
     ttsl::Span<const float> logical_data, const TensorSpec& tensor_spec, float pad_value);
 template std::vector<int32_t> encode_tensor_data<int32_t>(
     ttsl::Span<const int32_t> logical_data, const TensorSpec& tensor_spec, int32_t pad_value);
+template std::vector<int8_t> encode_tensor_data<int8_t>(
+    ttsl::Span<const int8_t> logical_data, const TensorSpec& tensor_spec, int8_t pad_value);
 template std::vector<uint32_t> encode_tensor_data<uint32_t>(
     ttsl::Span<const uint32_t> logical_data, const TensorSpec& tensor_spec, uint32_t pad_value);
 template std::vector<uint16_t> encode_tensor_data<uint16_t>(
@@ -276,6 +279,8 @@ template std::vector<float> to_tile_major_layout<float>(
     const Shape2D& shape, const Tile& tile, ttsl::Span<const float> data_to_convert);
 template std::vector<int32_t> to_tile_major_layout<int32_t>(
     const Shape2D& shape, const Tile& tile, ttsl::Span<const int32_t> data_to_convert);
+template std::vector<int8_t> to_tile_major_layout<int8_t>(
+    const Shape2D& shape, const Tile& tile, ttsl::Span<const int8_t> data_to_convert);
 template std::vector<uint32_t> to_tile_major_layout<uint32_t>(
     const Shape2D& shape, const Tile& tile, ttsl::Span<const uint32_t> data_to_convert);
 template std::vector<uint16_t> to_tile_major_layout<uint16_t>(
@@ -341,6 +346,8 @@ template std::vector<float> decode_tensor_data<float>(
     ttsl::Span<const float> physical_data, const TensorSpec& tensor_spec);
 template std::vector<int32_t> decode_tensor_data<int32_t>(
     ttsl::Span<const int32_t> physical_data, const TensorSpec& tensor_spec);
+template std::vector<int8_t> decode_tensor_data<int8_t>(
+    ttsl::Span<const int8_t> physical_data, const TensorSpec& tensor_spec);
 template std::vector<uint32_t> decode_tensor_data<uint32_t>(
     ttsl::Span<const uint32_t> physical_data, const TensorSpec& tensor_spec);
 template std::vector<uint16_t> decode_tensor_data<uint16_t>(

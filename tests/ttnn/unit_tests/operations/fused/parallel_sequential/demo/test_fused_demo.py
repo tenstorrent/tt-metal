@@ -44,7 +44,6 @@ from models.common.utility_functions import is_watcher_enabled, skip_with_llk_as
 from models.experimental.ops.descriptors.op_descriptor import OpDescriptor
 from models.experimental.ops.descriptors.fusion import clear_build_cache
 
-
 # =============================================================================
 # Helpers
 # =============================================================================
@@ -1267,7 +1266,7 @@ class TestPerfDemos:
     def _sharded_tree_container(self, ops):
         from models.experimental.ops.descriptors.fusion import Sequential, Parallel
 
-        (ln_stem, sl_top, sl_bot, mm_left, mm_right, sl_tl, sl_bl, sl_tr, sl_br, ln_ll, ln_lr, ln_rl, ln_rr) = ops
+        ln_stem, sl_top, sl_bot, mm_left, mm_right, sl_tl, sl_bl, sl_tr, sl_br, ln_ll, ln_lr, ln_rl, ln_rr = ops
         return Sequential(
             ln_stem,
             Parallel(

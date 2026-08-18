@@ -49,14 +49,14 @@ _GLM52_CHUNK_PICKS = [
 # Key is (topo, nlinks, layer, col). Baselines are single tracy runs on LB 8x1
 # (run-to-run spread measured at ~0.5%, well inside the margins below).
 _DISPATCH_DS_CHUNK_EXPECTED_NS: dict[tuple[str, int, int, int], int] = {
-    ("linear", 2, 19, 2): 1_532_188,
-    ("linear", 2, 29, 0): 2_013_572,
-    ("linear", 2, 4, 2): 868_328,
-    ("linear", 2, 56, 3): 1_195_248,
-    ("ring", 2, 19, 2): 969_226,
-    ("ring", 2, 29, 0): 1_074_814,
-    ("ring", 2, 4, 2): 561_040,
-    ("ring", 2, 56, 3): 753_133,
+    ("linear", 2, 19, 2): 1_436_892,
+    ("linear", 2, 29, 0): 1_611_611,
+    ("linear", 2, 4, 2): 828_157,
+    ("linear", 2, 56, 3): 1_121_669,
+    ("ring", 2, 19, 2): 872_934,
+    ("ring", 2, 29, 0): 837_074,
+    ("ring", 2, 4, 2): 552_136,
+    ("ring", 2, 56, 3): 634_804,
 }
 _COMBINE_DS_CHUNK_EXPECTED_NS: dict[tuple[str, int, int, int], int] = {
     ("linear", 2, 19, 2): 1_716_614,
@@ -69,14 +69,14 @@ _COMBINE_DS_CHUNK_EXPECTED_NS: dict[tuple[str, int, int, int], int] = {
     ("ring", 2, 56, 3): 905_037,
 }
 _DISPATCH_KIMI_CHUNK_EXPECTED_NS: dict[tuple[str, int, int, int], int] = {
-    ("linear", 2, 45, 2): 1_525_048,
-    ("linear", 2, 48, 0): 2_051_422,
-    ("linear", 2, 30, 3): 984_699,
-    ("linear", 2, 32, 1): 813_274,
-    ("ring", 2, 45, 2): 1_011_584,
-    ("ring", 2, 48, 0): 995_205,
-    ("ring", 2, 30, 3): 594_741,
-    ("ring", 2, 32, 1): 623_676,
+    ("linear", 2, 45, 2): 1_236_188,
+    ("linear", 2, 48, 0): 1_459_057,
+    ("linear", 2, 30, 3): 788_904,
+    ("linear", 2, 32, 1): 797_993,
+    ("ring", 2, 45, 2): 878_836,
+    ("ring", 2, 48, 0): 806_776,
+    ("ring", 2, 30, 3): 553_826,
+    ("ring", 2, 32, 1): 555_157,
 }
 _COMBINE_KIMI_CHUNK_EXPECTED_NS: dict[tuple[str, int, int, int], int] = {
     ("linear", 2, 45, 2): 1_558_296,
@@ -90,14 +90,14 @@ _COMBINE_KIMI_CHUNK_EXPECTED_NS: dict[tuple[str, int, int, int], int] = {
 }
 
 _DISPATCH_GLM52_CHUNK_EXPECTED_NS: dict[tuple[str, int, int, int], int] = {
-    ("linear", 2, 3, 0): 3_219_833,
-    ("linear", 2, 8, 0): 1_399_270,
-    ("linear", 2, 14, 2): 838_546,
-    ("linear", 2, 10, 0): 809_860,
-    ("ring", 2, 3, 0): 2_006_807,
-    ("ring", 2, 8, 0): 977_686,
-    ("ring", 2, 14, 2): 543_524,
-    ("ring", 2, 10, 0): 512_407,
+    ("linear", 2, 3, 0): 1_859_463,
+    ("linear", 2, 8, 0): 1_331_674,
+    ("linear", 2, 14, 2): 766_664,
+    ("linear", 2, 10, 0): 819_157,
+    ("ring", 2, 3, 0): 1_247_679,
+    ("ring", 2, 8, 0): 815_378,
+    ("ring", 2, 14, 2): 493_043,
+    ("ring", 2, 10, 0): 473_592,
 }
 _COMBINE_GLM52_CHUNK_EXPECTED_NS: dict[tuple[str, int, int, int], int] = {
     ("linear", 2, 3, 0): 2_071_561,

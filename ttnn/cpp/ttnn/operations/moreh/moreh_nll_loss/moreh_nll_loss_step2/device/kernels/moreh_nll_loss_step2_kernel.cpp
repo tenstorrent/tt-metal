@@ -31,7 +31,7 @@ void kernel_main() {
     constexpr uint32_t dst0 = 0;
     constexpr uint32_t onetile = 1;
 
-    binary_op_init_common(cb_tmp_weight, cb_tmp_input, cb_output);
+    compute_kernel_hw_startup(cb_tmp_weight, cb_tmp_input, cb_output);
 
 #if defined(DIVISOR)
     dfb_divisor_obj.wait_front(onetile);
@@ -96,7 +96,7 @@ void kernel_main() {
 #if defined FP32_DEST_ACC_EN
         reconfig_data_format(cb_tmp3, cb_divisor_recip);
 #endif
-        mul_tiles_bcast_scalar_init_short(cb_tmp3, cb_divisor_recip);
+        mul_bcast_scalar_init(cb_tmp3, cb_divisor_recip);
         mul_tiles_bcast_scalar(cb_tmp3, cb_divisor_recip, 0, 0, dst0);
         tile_regs_commit();
         dfb_tmp3_obj.pop_front(onetile);
@@ -128,7 +128,7 @@ void kernel_main() {
 #if defined FP32_DEST_ACC_EN
         reconfig_data_format(cb_tmp1, cb_divisor_recip);
 #endif
-        mul_tiles_bcast_scalar_init_short(cb_tmp1, cb_divisor_recip);
+        mul_bcast_scalar_init(cb_tmp1, cb_divisor_recip);
         mul_tiles_bcast_scalar(cb_tmp1, cb_divisor_recip, 0, 0, dst0);
         tile_regs_commit();
 

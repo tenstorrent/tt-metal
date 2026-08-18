@@ -329,16 +329,22 @@ def _resolve_attention_config(config: BgeM3AttentionConfig) -> BgeM3AttentionCon
 
     if config.qkv_compute_kernel_cfg is None:
         to_set["qkv_compute_kernel_cfg"] = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
-            fp32_dest_acc_en=False,
+            # #46445: matmul auto-blocking (#49621) can shrink in0_block_w, spreading K over
+            # more accumulation steps; fp32 dest keeps that accumulation exact. These matmuls
+            # pass program_config=None, so they depend on that auto-selection.
+            fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
     if config.output_compute_kernel_cfg is None:
         to_set["output_compute_kernel_cfg"] = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
-            fp32_dest_acc_en=False,
+            # #46445: matmul auto-blocking (#49621) can shrink in0_block_w, spreading K over
+            # more accumulation steps; fp32 dest keeps that accumulation exact. These matmuls
+            # pass program_config=None, so they depend on that auto-selection.
+            fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
 

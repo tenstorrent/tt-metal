@@ -412,6 +412,15 @@ int main(int argc, char** argv) {
     } else {
         log_warning(
             tt::LogTest, "Result: no test groups executed (all {} filtered, skipped, or unsupported)", total_groups);
+        // Fail if every group was excluded solely by the filter – guards against a vacuous
+        // run caused by a non-matching --filter expression (e.g. a typo or an unresolved
+        // wildcard like 'name.*_short' that silently matches nothing).
+        if (total_groups > 0 && groups_skipped_filter == total_groups) {
+            TT_THROW(
+                "No tests ran: all {} group(s) were excluded by the --filter expression. "
+                "Check that the filter matches at least one test name.",
+                total_groups);
+        }
     }
     log_info(tt::LogTest, "========================================");
 

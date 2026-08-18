@@ -29,6 +29,24 @@ DEFAULT_LTX_PROMPT = (
     "shallow depth of field, warm color grade emphasizing skin tones."
 )
 
+# Second prompt for the traced steady-state pass, so its encode is a real one rather than a hit on
+# the prompt-embedding cache that the first pass just populated.
+STEADY_STATE_LTX_PROMPT = (
+    "A grey tabby cat sits on a windowsill in afternoon light, tail curled around its paws. "
+    "The camera holds a steady medium shot as the cat blinks slowly and turns its head toward "
+    "the window. Dust drifts through the sunbeam behind it. Shot with a 50mm lens at f/2.0, "
+    "shallow depth of field, natural warm color grade. "
+    "Audio: faint birdsong through glass, a quiet purr, soft room tone."
+)
+
+# Third prompt, for the pass after the encode trace is captured: a second unseen prompt is what makes
+# that pass replay every trace rather than capture one.
+STEADY_STATE_REPLAY_LTX_PROMPT = (
+    "A red paper boat drifts across a still pond at dusk, ripples spreading behind it. "
+    "The camera holds a low steady shot near the waterline as the light fades. "
+    "Audio: gentle water laps, distant crickets, soft evening air."
+)
+
 
 def ceil_to(x: int, multiple: int) -> int:
     """Smallest multiple of ``multiple`` that is >= ``x``."""

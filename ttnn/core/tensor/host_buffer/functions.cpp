@@ -6,7 +6,7 @@
 #include <type_traits>
 #include <vector>
 
-#include <tt-metalium/experimental/tensor/host_tensor.hpp>
+#include <tt-metalium/tensor/host_tensor.hpp>
 #include <ttnn/tensor/host_buffer/functions.hpp>
 #include <ttnn/tensor/tensor.hpp>
 #include <ttnn/tensor/tensor_utils.hpp>
@@ -41,6 +41,7 @@ INSTANTIATE_HOST_BUFFER_FUNCTIONS(float)
 INSTANTIATE_HOST_BUFFER_FUNCTIONS(bfloat16)
 INSTANTIATE_HOST_BUFFER_FUNCTIONS(uint16_t)
 INSTANTIATE_HOST_BUFFER_FUNCTIONS(uint8_t)
+INSTANTIATE_HOST_BUFFER_FUNCTIONS(int8_t)
 
 #undef INSTANTIATE_HOST_BUFFER_FUNCTIONS
 

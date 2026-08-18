@@ -3,6 +3,8 @@
 # QKT matmul, reduce max, sub+exp (Elwsub+SFPU), attn_v matmul,
 # reciprocal (datacopy+SFPU), normalize (eltwise broadcast multiply).
 
+# buongiorno
+
 operands:
   # Q: query tile block
   - name: "Q"

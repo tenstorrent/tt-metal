@@ -25,10 +25,10 @@ void kernel_main() {
     constexpr uint32_t num_rows_in_one_tile = 32;
 
 #ifdef REPEAT_INTERLEAVE_IN1
-    binary_op_init_common(
+    compute_kernel_hw_startup(
         cb_in0_transposed, cb_in1_bcast_row, cb_id_out);  // TODO: Is there a specific one for bcast mul?
 #else
-    binary_op_init_common(cb_id_in0, cb_id_in1, cb_id_out);
+    compute_kernel_hw_startup(cb_id_in0, cb_id_in1, cb_id_out);
 #endif
 
     CircularBuffer cb_in0(cb_id_in0);
@@ -73,7 +73,7 @@ void kernel_main() {
 
 // If input b is not repeat_interleaved, then no need to transpose, bcast row
 #ifndef REPEAT_INTERLEAVE_IN1
-            mul_tiles_init(cb_id_in0, cb_id_in1);
+            mul_init(cb_id_in0, cb_id_in1);
             reconfig_data_format_srca(cb_id_out, cb_id_in0);
             pack_reconfig_data_format(cb_in0_transposed, cb_id_out);
             mul_tiles(cb_id_in0, cb_id_in1, 0, 0, 0);
@@ -127,7 +127,7 @@ void kernel_main() {
                 tile_regs_acquire();
                 tile_regs_wait();
 
-                mul_bcast_rows_init_short(cb_in0_transposed, cb_in1_bcast_row);
+                mul_bcast_rows_init(cb_in0_transposed, cb_in1_bcast_row);
                 reconfig_data_format_srca(cb_in0_transposed);
                 pack_reconfig_data_format(cb_out_transposed);
                 mul_tiles_bcast_rows(cb_in0_transposed, cb_in1_bcast_row, 0, 0, 0);

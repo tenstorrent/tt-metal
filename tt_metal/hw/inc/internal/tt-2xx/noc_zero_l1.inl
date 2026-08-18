@@ -31,9 +31,11 @@ inline void Noc::async_write_zeros(const Dst& dst, uint32_t size_bytes, const ds
     // src_protocol / decouple_aw via set_axi_opt_1_cmdbuf_0.
     //
     // The cmdbuf splits the transaction into packets and round-robins them across
-    // the 8 backend engines via per-packet VC autoincrement wrapping the 8 write-VCs
-    // (CMDBUF_WR_REQ_VC..+7). idma_acked_cmdbuf_0 returns true only after every
-    // backend packet has acked.
+    // the 8 backend engines via per-packet VC autoincrement wrapping the 8 iDMA
+    // backend VCs (CMDBUF_FIRST_IDMA_VC..+7). idma_acked_cmdbuf_0 returns true only
+    // after every backend packet has acked. The range is pinned to the backend VCs
+    // rather than derived from CMDBUF_WR_REQ_VC so it cannot walk into the multicast
+    // request VCs when the unicast write VC moves.
     //
     // No reset_cmdbuf_0() here: resetting per-call would be unsafe when callers batch
     // several async_write_zeros before a single barrier — a CMDBUF_RESET on the next
@@ -48,8 +50,8 @@ inline void Noc::async_write_zeros(const Dst& dst, uint32_t size_bytes, const ds
         /*resp_vc_inc_en=*/false);
     overlay::setup_wrapping_vcs_cmdbuf_0(
         /*wr=*/true,
-        /*req_start_vc=*/overlay::CMDBUF_WR_REQ_VC,
-        /*req_end_vc=*/overlay::CMDBUF_WR_REQ_VC + 7);                       // wrap across all 8 write-VCs
+        /*req_start_vc=*/overlay::CMDBUF_FIRST_IDMA_VC,
+        /*req_end_vc=*/overlay::CMDBUF_FIRST_IDMA_VC + overlay::CMDBUF_NUM_IDMA_VCS - 1);  // all 8 iDMA VCs
     overlay::setup_trids_cmdbuf_0(overlay::CMDBUF_DEF_TRID);
     overlay::set_dest_cmdbuf_0(local_addr);
     overlay::set_len_cmdbuf_0(size_bytes);

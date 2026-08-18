@@ -342,6 +342,12 @@ std::vector<std::pair<DeviceAddr, DeviceAddr>> FreeListOpt::available_addresses(
     size_t size_segregated_index = get_size_segregated_index(alloc_size);
     std::vector<std::pair<DeviceAddr, DeviceAddr>> addresses;
 
+    size_t max_candidate_blocks = 0;
+    for (size_t i = size_segregated_index; i < size_segregated_count; i++) {
+        max_candidate_blocks += free_blocks_segregated_by_size_[i].size();
+    }
+    addresses.reserve(max_candidate_blocks);
+
     for (size_t i = size_segregated_index; i < size_segregated_count; i++) {
         for (size_t block_index : free_blocks_segregated_by_size_[i]) {
             if (block_size_[block_index] >= alloc_size) {

@@ -454,11 +454,11 @@ ProgramDescriptor PagedUpdateCacheMeshWorkloadFactory::create_descriptor(
     return PagedUpdateCacheProgramFactory::create_descriptor(operation_attributes, tensor_args, tensor_return_value);
 }
 
-void PagedUpdateCacheDeviceOperation::override_runtime_arguments(
+void PagedUpdateCacheProgramFactory::override_runtime_arguments(
     tt::tt_metal::Program& program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& /*tensor_return_value*/,
+    const PagedUpdateCacheParams& operation_attributes,
+    const PagedUpdateCacheInputs& tensor_args,
+    Tensor& /*tensor_return_value*/,
     const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
     // Patch the cached program in place — no descriptor rebuild. This runs on EVERY cache hit, so it must
     // re-derive only per-dispatch state: buffer addresses (this hook supersedes resolve_bindings, so all
@@ -517,6 +517,16 @@ void PagedUpdateCacheDeviceOperation::override_runtime_arguments(
 
     tt::tt_metal::UpdateDynamicCircularBufferAddress(
         program, program.circular_buffers().at(kInputCbPos)->id(), *tensor_args.input_tensor.buffer());
+}
+
+void PagedUpdateCacheMeshWorkloadFactory::override_runtime_arguments(
+    tt::tt_metal::Program& program,
+    const PagedUpdateCacheParams& operation_attributes,
+    const PagedUpdateCacheInputs& tensor_args,
+    Tensor& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
+    PagedUpdateCacheProgramFactory::override_runtime_arguments(
+        program, operation_attributes, tensor_args, tensor_return_value, mesh_dispatch_coordinate);
 }
 
 }  // namespace ttnn::experimental::prim

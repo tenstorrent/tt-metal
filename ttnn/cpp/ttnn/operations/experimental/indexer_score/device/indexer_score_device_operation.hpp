@@ -131,7 +131,8 @@ ttnn::Tensor indexer_score_msa(
 
 // FUSED DSA (ttnn.experimental.ring_indexer_score_dsa): subsumes the SP all-gather. Instead of pre-gathering
 // K, the caller hands this chip's LOCAL K shard `k_local` [B,1,sll,D] (the all-gather input) plus a
-// pre-allocated `k` [B,1,T,D] persistent buffer (the gather output). One program
+// pre-allocated `k` persistent buffer (the gather output). With cache_batch_idx, k_local may be a multi-slot
+// ND-sharded cache and k is [1,1,T,D]; only the selected slot and populated block-cyclic slabs are gathered.
 // co-schedules the ring_attention all-gather + the indexer compute, overlapping fabric transport with scoring:
 // the reader gates each K band on only the SP shards its tiles land in (per-band overlap, not a coarse whole-
 // gather barrier), then scores exactly as indexer_score_dsa. Same score semantics +

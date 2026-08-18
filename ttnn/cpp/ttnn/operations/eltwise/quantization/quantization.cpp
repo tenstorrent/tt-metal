@@ -87,37 +87,6 @@ void check_per_tensor_zero_point(const std::variant<Ts...>&) = delete;
 template <typename T>
 void check_per_tensor_zero_point(const T&) {}
 
-void check_per_channel_tensor_args(
-    const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor* scale_p,
-    const ttnn::Tensor* zero_point_p,
-    const int32_t axis,
-    const int32_t rank) {
-    TT_FATAL(
-        scale_p != nullptr && scale_p->logical_shape().rank() == 1,
-        "Per-channel quantization expects 1D scale tensors");
-    TT_FATAL(
-        zero_point_p != nullptr && zero_point_p->logical_shape().rank() == 1,
-        "Per-channel quantization expects 1D zero-point tensors");
-    TT_FATAL(
-        scale_p->logical_shape() == zero_point_p->logical_shape(),
-        "Per-channel quantization expects scale & zero-point tensors of matching shapes");
-    TT_FATAL(axis >= -rank && axis < rank, "Axis {} is outside the range [{}, {}]", axis, -rank, rank - 1);
-    TT_FATAL(
-        input_tensor.logical_shape()[axis] == scale_p->logical_volume(),
-        "Size of the scale tensor doesn't match the size of the input tensor along the given axis");
-    TT_FATAL(
-        input_tensor.logical_shape()[axis] == zero_point_p->logical_volume(),
-        "Size of the zero-point tensor doesn't match the size of the input tensor along the given axis");
-
-    const auto scale_dtype = scale_p->dtype();
-    TT_FATAL(tt::tt_metal::is_floating_point(scale_dtype), "Quantization only takes floating-point number scales");
-    TT_FATAL(!tt::tt_metal::is_block_float(scale_dtype), "Unsupported quantization scale data type");
-
-    const auto zero_point_dtype = zero_point_p->dtype();
-    TT_FATAL(zero_point_dtype == ttnn::DataType::INT32, "Quantization only takes int32 zero-points for now");
-}
-
 void check_scale_tensor_args(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor* scale_p,
@@ -183,6 +152,26 @@ ttnn::Tensor reshape_per_channel_vector_args(
     return result;
 }
 
+// A per-channel call differs from a per-tensor one only in the shape of its tensor arguments, so
+// reshape the 1D per-channel vectors into a form that broadcasts against the input and let the
+// per-tensor dispatch handle both. Scalars pass through untouched.
+//
+// The caller picks out_dtype because the two ops want different things: quantize casts the
+// zero-point to the input's (floating-point) dtype, while dequantize must never cast a scale to
+// the input's dtype, which is integral there.
+template <typename T>
+std::variant<ttnn::Tensor, T> reshape_per_channel_arg(
+    const std::variant<ttnn::Tensor, T>& arg,
+    const ttnn::Shape& input_shape,
+    const std::optional<int32_t> axis,
+    const ttnn::DataType out_dtype) {
+    const ttnn::Tensor* tensor_p = axis.has_value() ? std::get_if<ttnn::Tensor>(&arg) : nullptr;
+    if (tensor_p == nullptr) {
+        return arg;
+    }
+    return reshape_per_channel_vector_args(*tensor_p, input_shape, axis.value(), out_dtype);
+}
+
 }  // anonymous namespace
 
 namespace ttnn {
@@ -217,24 +206,31 @@ Tensor quantize(
     constexpr ttsl::Span<const operations::unary::EltwiseUnaryWithParam> none{};
 
     const bool is_per_channel = axis.has_value();
+    const ttnn::Shape& input_shape = input_a.logical_shape();
+
     if (is_per_channel) {
-        const Tensor* scale_p = std::get_if<Tensor>(&scale);
-        const Tensor* zero_point_p = std::get_if<Tensor>(&zero_point);
-
-        const int32_t axis_v = axis.value();
-        const ttnn::Shape& input_shape = input_a.logical_shape();
-
-        check_per_channel_tensor_args(input_a, scale_p, zero_point_p, axis_v, input_shape.rank());
-
-        const Tensor scale_full = reshape_per_channel_vector_args(*scale_p, input_shape, axis_v, a_dtype);
-        const Tensor zero_point_full = reshape_per_channel_vector_args(*zero_point_p, input_shape, axis_v, a_dtype);
-        const Tensor input_scaled =
-            ttnn::divide(input_a, scale_full, a_dtype, std::nullopt, std::nullopt, none, none, none);
-        return ttnn::typecast(
-            ttnn::add(
-                input_scaled, zero_point_full, std::nullopt, memory_config, optional_output_tensor, none, none, none),
-            c_dtype);
+        const int32_t rank = static_cast<int32_t>(input_shape.rank());
+        TT_FATAL(std::holds_alternative<Tensor>(scale), "Per-channel quantization expects 1D scale tensors");
+        check_scale_tensor_args(input_a, std::get_if<Tensor>(&scale), axis.value(), rank, /*is_per_channel=*/true);
+        if (const Tensor* zero_point_p = std::get_if<Tensor>(&zero_point)) {
+            check_zero_point_tensor_args(input_a, zero_point_p, axis.value(), rank, /*is_per_channel=*/true);
+        }
+    } else {
+        if (const Tensor* scale_p = std::get_if<Tensor>(&scale)) {
+            check_per_tensor_scale(*scale_p);
+        }
+        if (const Tensor* zero_point_p = std::get_if<Tensor>(&zero_point)) {
+            check_per_tensor_zero_point(*zero_point_p);
+        }
     }
+
+    // Reshaping the per-channel vectors is all that separates a per-channel call from a per-tensor
+    // one; the dispatch below then serves both. In particular a per-channel scale rides operand B
+    // of the QUANT LLK exactly like a scalar-tensor scale does, with binary_ng broadcasting it, so
+    // a per-channel call with a scalar zero-point gets the same single fused pass instead of the
+    // slower divide+add composite.
+    const auto scale_arg = reshape_per_channel_arg(scale, input_shape, axis, DataType::FLOAT32);
+    const auto zero_point_arg = reshape_per_channel_arg(zero_point, input_shape, axis, a_dtype);
 
     return std::visit(
         ttsl::overloaded{
@@ -257,7 +253,6 @@ Tensor quantize(
                     std::nullopt);
             },
             [&](const Tensor& scale, const int32_t zero_point) {
-                check_per_tensor_scale(scale);
                 const std::array post_activation{operations::unary::EltwiseUnaryWithParam{
                     operations::unary::UnaryOpType::ZERO_POINT, static_cast<float>(zero_point)}};
 
@@ -275,7 +270,6 @@ Tensor quantize(
                     std::nullopt);
             },
             [&](const float scale, const Tensor& zero_point) {
-                check_per_tensor_zero_point(zero_point);
                 const Tensor input_scaled =
                     ttnn::divide(input_a, scale, std::nullopt, std::nullopt, std::nullopt, none, none, none);
                 return ttnn::typecast(
@@ -288,11 +282,11 @@ Tensor quantize(
                         none,
                         none,
                         none),
-                    c_dtype);
+                    c_dtype,
+                    memory_config,
+                    optional_output_tensor);
             },
             [&](const Tensor& scale, const Tensor& zero_point) {
-                check_per_tensor_scale(scale);
-                check_per_tensor_zero_point(zero_point);
                 const Tensor input_scaled = ttnn::divide(
                     input_a,
                     scale.dtype() == a_dtype ? scale : ttnn::typecast(scale, a_dtype),
@@ -312,10 +306,12 @@ Tensor quantize(
                         none,
                         none,
                         none),
-                    c_dtype);
+                    c_dtype,
+                    memory_config,
+                    optional_output_tensor);
             }},
-        scale,
-        zero_point);
+        scale_arg,
+        zero_point_arg);
 }
 
 Tensor requantize(
@@ -491,32 +487,39 @@ Tensor dequantize(
     constexpr ttsl::Span<const operations::unary::EltwiseUnaryWithParam> none{};
 
     const bool is_per_channel = axis.has_value();
+    const ttnn::Shape& input_shape = input_tensor.logical_shape();
+
     if (is_per_channel) {
-        const Tensor* scale_p = std::get_if<Tensor>(&scale);
-        const Tensor* zero_point_p = std::get_if<Tensor>(&zero_point);
-
-        const int32_t axis_v = axis.value();
-        const ttnn::Shape& input_shape = input_tensor.logical_shape();
-
-        check_per_channel_tensor_args(input_tensor, scale_p, zero_point_p, axis_v, input_shape.rank());
-
-        const Tensor scale_full = reshape_per_channel_vector_args(*scale_p, input_shape, axis_v, DataType::FLOAT32);
-        const Tensor zero_point_full =
-            reshape_per_channel_vector_args(*zero_point_p, input_shape, axis_v, DataType::FLOAT32);
-        const Tensor input_shifted = ttnn::subtract(
-            ttnn::typecast(input_tensor, DataType::FLOAT32),
-            zero_point_full,
-            std::nullopt,
-            std::nullopt,
-            std::nullopt,
-            none,
-            none,
-            none);
-        return ttnn::typecast(
-            ttnn::multiply(
-                input_shifted, scale_full, std::nullopt, memory_config, optional_output_tensor, none, none, none),
-            c_dtype);
+        const int32_t rank = static_cast<int32_t>(input_shape.rank());
+        TT_FATAL(std::holds_alternative<Tensor>(scale), "Per-channel quantization expects 1D scale tensors");
+        check_scale_tensor_args(input_tensor, std::get_if<Tensor>(&scale), axis.value(), rank, /*is_per_channel=*/true);
+        if (const Tensor* zero_point_p = std::get_if<Tensor>(&zero_point)) {
+            check_zero_point_tensor_args(input_tensor, zero_point_p, axis.value(), rank, /*is_per_channel=*/true);
+        }
+    } else {
+        if (const Tensor* scale_p = std::get_if<Tensor>(&scale)) {
+            check_per_tensor_scale(*scale_p);
+        }
+        if (const Tensor* zero_point_p = std::get_if<Tensor>(&zero_point)) {
+            check_per_tensor_zero_point(*zero_point_p);
+        }
     }
+
+    // Reshaping the per-channel vectors is all that separates a per-channel call from a per-tensor
+    // one; the dispatch below then serves both. In particular a per-channel scale rides operand B
+    // of the DEQUANT LLK exactly like a scalar-tensor scale does, with binary_ng broadcasting it,
+    // so a per-channel call with a scalar zero-point gets the same single fused pass instead of the
+    // slower subtract+multiply composite. The scale is reshaped as f32 rather than as the input's
+    // dtype, which is integral here.
+    const auto scale_arg = reshape_per_channel_arg(scale, input_shape, axis, DataType::FLOAT32);
+    const auto zero_point_arg = reshape_per_channel_arg(zero_point, input_shape, axis, DataType::INT32);
+
+    // The tensor-zero-point composites below subtract the zero-point straight off the input, but
+    // BinaryOpType::SUB has no UINT8 entry in dtype_sets::arithmetic_fpu, so a uint8 input has to
+    // be widened first. int32 is the natural width: the zero-point is already int32, and the
+    // subtraction stays exact. The scalar-zero-point paths skip this and feed binary_ng directly.
+    const Tensor input_for_shift =
+        a_dtype == DataType::UINT8 ? ttnn::typecast(input_tensor, DataType::INT32) : input_tensor;
 
     return std::visit(
         ttsl::overloaded{
@@ -538,7 +541,6 @@ Tensor dequantize(
                     std::nullopt);
             },
             [&](const Tensor& scale, const int32_t zero_point) {
-                check_per_tensor_scale(scale);
                 const std::array post_activation{operations::unary::EltwiseUnaryWithParam{
                     operations::unary::UnaryOpType::ZERO_POINT, static_cast<float>(-zero_point)}};
                 return ttnn::prim::binary_ng(
@@ -554,25 +556,26 @@ Tensor dequantize(
                     post_activation,
                     std::nullopt);
             },
+            // The shifted input and the scale are both carried at f32 and the multiply packs
+            // c_dtype directly, so a bf16 output is rounded once, in the packer. Narrowing either
+            // operand to bf16 before the multiply instead would round three times: the shifted
+            // input, the scale, and the bf16 product.
             [&](const float scale, const Tensor& zero_point) {
-                check_per_tensor_zero_point(zero_point);
                 const Tensor input_shifted = ttnn::typecast(
                     ttnn::subtract(
-                        input_tensor, zero_point, std::nullopt, std::nullopt, std::nullopt, none, none, none),
-                    c_dtype);
+                        input_for_shift, zero_point, std::nullopt, std::nullopt, std::nullopt, none, none, none),
+                    DataType::FLOAT32);
                 return ttnn::multiply(
                     input_shifted, scale, c_dtype, memory_config, optional_output_tensor, none, none, none);
             },
             [&](const Tensor& scale, const Tensor& zero_point) {
-                check_per_tensor_scale(scale);
-                check_per_tensor_zero_point(zero_point);
                 const Tensor input_shifted = ttnn::typecast(
                     ttnn::subtract(
-                        input_tensor, zero_point, std::nullopt, std::nullopt, std::nullopt, none, none, none),
-                    c_dtype);
+                        input_for_shift, zero_point, std::nullopt, std::nullopt, std::nullopt, none, none, none),
+                    DataType::FLOAT32);
                 return ttnn::multiply(
                     input_shifted,
-                    scale.dtype() == c_dtype ? scale : ttnn::typecast(scale, c_dtype),
+                    scale.dtype() == DataType::FLOAT32 ? scale : ttnn::typecast(scale, DataType::FLOAT32),
                     c_dtype,
                     memory_config,
                     optional_output_tensor,
@@ -580,8 +583,8 @@ Tensor dequantize(
                     none,
                     none);
             }},
-        scale,
-        zero_point);
+        scale_arg,
+        zero_point_arg);
 }
 
 }  // namespace ttnn

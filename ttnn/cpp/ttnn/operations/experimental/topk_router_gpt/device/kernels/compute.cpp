@@ -150,18 +150,17 @@ void kernel_main() {
     // =====================================================================
     cb_partial_recv.wait_front(2);
 
-    binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
-        cb_partial_recv_id);
-    binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
+    add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_partial_recv_id);
+    add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
         cb_partial_recv_id, 0, 0);
-    binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
+    add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
         cb_partial_recv_id, 1, 0);
 
     cb_partial_recv.pop_front(2);
 
     // Add bias
     cb_bias.wait_front(1);
-    binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_bias_id, 0, 0);
+    add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_bias_id, 0, 0);
     cb_bias.pop_front(1);
 
     // Pack complete logits to cb_topk_val_id
@@ -243,9 +242,8 @@ void kernel_main() {
     transpose_init(cb_intermed_val_id);
     transpose_tile(cb_intermed_val_id, 0, 0);
 
-    binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
-        cb_softmax_mask_id);
-    binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
+    add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_softmax_mask_id);
+    add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
         cb_softmax_mask_id, 0, 0);
 
     transpose_init(cb_intermed_ind_id);
@@ -287,7 +285,7 @@ void kernel_main() {
     cb_reduce_scalar.wait_front(1);
 
     tile_regs_acquire();
-    sub_bcast_cols_init_short(cb_softmax_tmp_id, cb_reduce_scalar_id);
+    sub_bcast_cols_init(cb_softmax_tmp_id, cb_reduce_scalar_id);
     sub_tiles_bcast_cols(cb_softmax_tmp_id, cb_reduce_scalar_id, 0, 0, 0);
     exp_tile_init</*APPROX=*/1>();
     exp_tile</*APPROX=*/1>(0);
@@ -327,7 +325,7 @@ void kernel_main() {
     cb_final_out.reserve_back(2);
 
     tile_regs_acquire();
-    mul_bcast_cols_init_short(cb_softmax_tmp_id, cb_reduce_scalar_id);
+    mul_bcast_cols_init(cb_softmax_tmp_id, cb_reduce_scalar_id);
     mul_tiles_bcast<BroadcastType::COL>(cb_softmax_tmp_id, cb_reduce_scalar_id, 0, 0, 0);
 
     copy_tile_to_dst_init_short(cb_intermed_val_id);

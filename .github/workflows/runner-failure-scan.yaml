@@ -39,8 +39,8 @@ env:
     repository: tenstorrent/tt-metal
 
     workflows:
-      - name: vllm-nightly-tests
-        workflow_id: vllm-nightly-tests.yaml
+      - name: vllm-model-tests
+        workflow_id: vllm-model-tests.yaml
         include_prefixes:
           - "vllm-tests /"
 

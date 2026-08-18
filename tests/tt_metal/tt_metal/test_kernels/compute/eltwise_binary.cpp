@@ -21,13 +21,11 @@ void kernel_main() {
     constexpr auto cb_inp1 = cb_in1;
     constexpr auto cb_out0 = tt::CBIndex::c_16;
     constexpr auto cb_in2 = tt::CBIndex::c_2;
-    binary_op_init_common(cb_inp0, cb_inp1, cb_out0);
+    compute_kernel_hw_startup(cb_inp0, cb_inp1, cb_out0);
 #if not defined ELTWISE_DEST_REUSE_TYPE
-#ifdef FULL_INIT
+    // full_init=true: compute_kernel_hw_startup does not run llk_unpack_AB_init, so a math-only
+    // (binary_tiles_init<false>) init is no longer sufficient on its own; always do the full init.
     binary_tiles_init<true, ELTWISE_OP_TYPE>(cb_in0, cb_in1);
-#else
-    binary_tiles_init<false, ELTWISE_OP_TYPE>(cb_in0, cb_in1);
-#endif
 #endif
 
 #ifdef PACK_RELU
@@ -59,12 +57,27 @@ void kernel_main() {
 #endif
 
 #ifdef ELTWISE_DEST_REUSE_TYPE
-        binary_dest_reuse_tiles_init<ELTWISE_OP_TYPE, ELTWISE_DEST_REUSE_TYPE>(cb_inp0);
+        // Dest-reuse init is the per-op {add,sub,mul}_reuse_dest_init<reuse_dest>; dispatch on the
+        // compile-time op type since there is no generic binary_init.
+        if constexpr (ELTWISE_OP_TYPE == EltwiseBinaryType::ELWADD) {
+            add_reuse_dest_init<ELTWISE_DEST_REUSE_TYPE>(cb_inp0);
+        } else if constexpr (ELTWISE_OP_TYPE == EltwiseBinaryType::ELWSUB) {
+            sub_reuse_dest_init<ELTWISE_DEST_REUSE_TYPE>(cb_inp0);
+        } else {
+            mul_reuse_dest_init<ELTWISE_DEST_REUSE_TYPE>(cb_inp0);
+        }
 #endif
 
         for (uint32_t i = 0; i < per_core_block_size; ++i) {
 #ifdef ELTWISE_DEST_REUSE_TYPE
-            binary_dest_reuse_tiles<ELTWISE_OP_TYPE, ELTWISE_DEST_REUSE_TYPE>(cb_inp0, i, i);
+            // Dispatch on the compile-time op type; the dest-reuse execute is per-op.
+            if constexpr (ELTWISE_OP_TYPE == EltwiseBinaryType::ELWADD) {
+                add_reuse_dest_tiles<ELTWISE_DEST_REUSE_TYPE>(cb_inp0, i, i);
+            } else if constexpr (ELTWISE_OP_TYPE == EltwiseBinaryType::ELWSUB) {
+                sub_reuse_dest_tiles<ELTWISE_DEST_REUSE_TYPE>(cb_inp0, i, i);
+            } else {
+                mul_reuse_dest_tiles<ELTWISE_DEST_REUSE_TYPE>(cb_inp0, i, i);
+            }
 #else
             ELTWISE_OP(cb_inp0, cb_inp1, i, i, i);
 #endif

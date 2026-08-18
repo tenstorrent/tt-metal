@@ -8,6 +8,7 @@ add_subdirectory(insert)
 add_subdirectory(masked_bincount)
 add_subdirectory(moe_grouped_topk)
 add_subdirectory(moe_hash_gate)
+add_subdirectory(moe_padding_config)
 add_subdirectory(offset_cumsum)
 add_subdirectory(outbound_socket_service_sync)
 add_subdirectory(pack_scaled_fp8_kv_cache)
@@ -34,6 +35,7 @@ target_link_libraries(
         TTNN::Ops::Experimental::DeepSeekPrefill::MaskedBincount
         TTNN::Ops::Experimental::DeepSeekPrefill::MoeGroupedTopk
         TTNN::Ops::Experimental::DeepSeekPrefill::MoeHashGate
+        TTNN::Ops::Experimental::DeepSeekPrefill::MoePaddingConfig
         TTNN::Ops::Experimental::DeepSeekPrefill::OffsetCumsum
         TTNN::Ops::Experimental::DeepSeekPrefill::D2dSocketSync
         TTNN::Ops::Experimental::DeepSeekPrefill::PackScaledFp8KvCache
@@ -67,6 +69,7 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::MaskedBincount>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::MoeGroupedTopk>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::MoeHashGate>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::MoePaddingConfig>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::OffsetCumsum>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::D2dSocketSync>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::PackScaledFp8KvCache>

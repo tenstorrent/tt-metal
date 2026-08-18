@@ -16,16 +16,16 @@ from ....utils.check import assert_quality
 from ....utils.mochi import get_rot_transformation_mat, stack_cos_sin
 from ....utils.padding import pad_vision_seq_parallel
 from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard, from_torch
-from ....utils.test import line_params, ring_params
+from ....utils.test import line_params_req_exact_devices, ring_params_req_exact_devices
 
 
 @pytest.mark.parametrize(
     ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
     [
-        pytest.param((2, 4), 0, 1, 1, line_params, ttnn.Topology.Linear, True, id="2x4sp0tp1"),
-        pytest.param((2, 4), 1, 0, 1, line_params, ttnn.Topology.Linear, True, id="2x4sp1tp0"),
-        pytest.param((4, 8), 1, 0, 4, ring_params, ttnn.Topology.Ring, True, id="wh_4x8sp1tp0"),
-        pytest.param((4, 8), 1, 0, 2, line_params, ttnn.Topology.Linear, False, id="bh_4x8sp1tp0"),
+        pytest.param((2, 4), 0, 1, 1, line_params_req_exact_devices, ttnn.Topology.Linear, True, id="2x4sp0tp1nl1"),
+        pytest.param((2, 4), 1, 0, 1, line_params_req_exact_devices, ttnn.Topology.Linear, True, id="2x4sp1tp0nl1"),
+        pytest.param((4, 8), 1, 0, 4, ring_params_req_exact_devices, ttnn.Topology.Ring, True, id="4x8sp1tp0nl4"),
+        pytest.param((4, 8), 1, 0, 2, line_params_req_exact_devices, ttnn.Topology.Linear, False, id="4x8sp1tp0nl2"),
     ],
     indirect=["mesh_device", "device_params"],
 )

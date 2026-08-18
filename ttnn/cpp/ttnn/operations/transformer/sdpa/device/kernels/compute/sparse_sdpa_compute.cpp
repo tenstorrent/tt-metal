@@ -208,7 +208,7 @@ void kernel_main() {
                         scale_bcast_cb.wait_front(scale_blocks);
                         reconfig_data_format(cb_k_latent_tile, cb_k_scale_bcast);
                         pack_reconfig_data_format(cb_k_in);
-                        mul_bcast_cols_init_short(cb_k_latent_tile, cb_k_scale_bcast);
+                        mul_bcast_cols_init(cb_k_latent_tile, cb_k_scale_bcast);
                         for (uint32_t block = 0; block < scale_blocks; ++block) {
                             for (uint32_t tile = 0; tile < tiles_per_scale_block; ++tile) {
                                 tile_regs_acquire();
@@ -248,7 +248,7 @@ void kernel_main() {
             // fp8 K tilize leaves srcA in fp8. QK reads K (transposed -> srcA) and Q (srcB), so restore
             // srcA=cb_k_in (bfp8 for fp8 K), srcB=cb_q_in. Reconfigure the tiled descriptor geometry/strides;
             // mm_no_mop_init_short only programs the matmul MOP.
-            reconfig_data_format<SrcOrder::Regular, /*is_tile_dim_reconfig_en=*/true>(cb_k_in, cb_q_in);
+            reconfig_full_operand(cb_k_in, cb_q_in);
             // K tilize also leaves the packer in cb_k_in's format+strides (bfp8 for fp8). Restore bf16 once per
             // chunk for the downstream packs (cb_qk_im/max/sum/out share its geometry); configure_pack_width in
             // the qg loop refreshes only the MOP. No-op for bf16.
@@ -368,7 +368,7 @@ void kernel_main() {
                         // (cb_qk_im row row_base+r, key tile t = (row_base+r)*Skt + t).
                         if (full_start < Skt) {
                             neginf_cb.wait_front(1);
-                            add_bcast_rows_init_short(cb_qk_im, cb_neginf);
+                            add_bcast_rows_init(cb_qk_im, cb_neginf);
                             configure_single_tile_pack(cb_qk_im);
                             for (uint32_t r = 0; r < qsb; ++r) {
                                 for (uint32_t t = full_start; t < Skt; ++t) {
@@ -378,7 +378,7 @@ void kernel_main() {
                         }
                         if (has_part_mask) {
                             mask_part_cb.wait_front(1);  // persistent until popped after the group loop
-                            add_bcast_rows_init_short(cb_qk_im, cb_mask_part);
+                            add_bcast_rows_init(cb_qk_im, cb_mask_part);
                             configure_single_tile_pack(cb_qk_im);
                             for (uint32_t r = 0; r < qsb; ++r) {
                                 add_bcast_row_mask_tile(cb_qk_im, cb_mask_part, (row_base + r) * Skt + part_t);

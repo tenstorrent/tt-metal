@@ -60,6 +60,7 @@ std::vector<uint32_t> calculate_actual_stride_patterns(
     uint32_t /*pad_before*/,
     uint32_t /*pad_after*/) {
     std::vector<uint32_t> actual_strides;
+    actual_strides.reserve(output_size);
 
     // Calculate the actual start positions in the padded input for each output
     for (uint32_t out_idx = 1; out_idx < output_size; out_idx++) {

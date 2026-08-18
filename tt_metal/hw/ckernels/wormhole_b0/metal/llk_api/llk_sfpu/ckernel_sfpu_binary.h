@@ -82,7 +82,12 @@ sfpi_inline sfpi::vFloat calculate_sfpu_binary_power(sfpi::vFloat base, sfpi::vF
     return result;
 }
 
-template <bool APPROXIMATION_MODE, BinaryOp BINOP, int ITERATIONS = 8, bool is_fp32_dest_acc_en = false>
+template <
+    bool APPROXIMATION_MODE,
+    BinaryOp BINOP,
+    int ITERATIONS = 8,
+    bool is_fp32_dest_acc_en = false,
+    DstRoundingMode dst_rounding_mode = DstRoundingMode::Default>
 inline void calculate_sfpu_binary(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     static constexpr float nan = std::numeric_limits<float>::quiet_NaN();
@@ -114,6 +119,12 @@ inline void calculate_sfpu_binary(
                 result = sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] * in0;
             }
             v_endif;
+        }
+
+        if constexpr (
+            (BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::RSUB) && !is_fp32_dest_acc_en &&
+            dst_rounding_mode == DstRoundingMode::NearestEven) {
+            result = float32_to_bf16_rne(result);
         }
 
         sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;

@@ -97,6 +97,26 @@ enum class CoreAllocationStrategy {
     COL_MAJOR,
 };
 
+struct WorkerCoreSelection {
+    CoreRangeSet core_range_set;
+    std::vector<CoreCoord> cores;
+    // Selected cores that core_grid_offset shifted off the device's worker grid. Kernels cannot be placed on these.
+    std::vector<CoreCoord> unplaceable_cores;
+
+    bool all_placeable() const { return unplaceable_cores.empty(); }
+};
+
+// Selects worker cores without asserting on the result. Callers that can adapt to a selection which does not fit at
+// core_grid_offset use this; everyone else should use choose_worker_cores(), which rejects such a selection.
+WorkerCoreSelection try_choose_worker_cores(
+    size_t num_links,
+    size_t num_workers_per_link,
+    IDevice* device,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    CoreCoord core_grid_offset = CoreCoord(0, 0),
+    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt,
+    CoreAllocationStrategy strategy = CoreAllocationStrategy::ROW_MAJOR);
+
 std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
     size_t num_links,
     size_t num_workers_per_link,

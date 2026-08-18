@@ -600,8 +600,8 @@ The compute kernel uses circular buffers ``c_0`` and ``c_1`` for the two input t
 There are 32 circular buffers in total (0-31), and the exact indices used are up to programmer's discretion, provided they are used consistently
 (i.e. reader and writer kernels must use the corresponding indices as the compute kernel).
 
-The kernel initializes the Tensix Engine for elementwise binary operations, first calling ``binary_op_init_common``
-to set up the general binary operation hardware infrastructure, followed by ``add_tiles_init`` to configure the FPU
+The kernel initializes the Tensix Engine for elementwise binary operations, first calling ``compute_kernel_hw_startup``
+to set up the general hardware infrastructure, followed by ``add_init`` to configure the FPU
 specifically for addition.
 This initialization only needs to be done once before the main loop, since all tiles use the same operation.
 
@@ -1164,8 +1164,9 @@ Then, adjust the code to perform matrix multiplication, by making the following 
    To initialize the Tensix Engine for matrix multiplication, you will need to call ``compute_kernel_hw_startup<SrcOrder::Reverse>`` once (declared in ``tt_metal/hw/inc/api/compute/compute_kernel_hw_startup.h``)
    followed by ``matmul_init`` (in ``tt_metal/hw/inc/api/compute/matmul.h``). The ``SrcOrder::Reverse`` template argument to
    ``compute_kernel_hw_startup`` ensures that CBs are mapped to internal hardware registers in the manner required for matrix multiplication.
-   Do not use any other initialization functions for matrix multiplication (specifically do **not** use ``binary_op_init_common``, because that function is only
-   applicable to elementwise operations, not to matrix multiplication).
+   Do not use any other initialization functions for matrix multiplication (in particular, do **not** use the default
+   ``compute_kernel_hw_startup(icb0, icb1, ocb)`` without ``SrcOrder::Reverse``, because its operand-to-register mapping
+   is for elementwise operations, not matrix multiplication).
    To multiply two tiles, you will need to use the ``matmul_tiles`` function provided in ``tt_metal/hw/inc/api/compute/matmul.h``.
    This function accumulates the result into the destination register; i.e. it adds to the existing values in the register rather than overwriting existing content.
    By judiciously choosing when to call ``tile_regs_acquire``, which initializes all tiles in the destination register array to zero, and when to call

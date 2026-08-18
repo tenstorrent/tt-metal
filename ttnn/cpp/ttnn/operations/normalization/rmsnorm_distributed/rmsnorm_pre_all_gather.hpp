@@ -19,6 +19,7 @@ ttnn::Tensor rms_norm_pre_all_gather(
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     const std::optional<const ttnn::prim::LayerNormProgramConfig>& program_config = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<bool>& use_2d_core_grid = std::nullopt);
+    const std::optional<bool>& use_2d_core_grid = std::nullopt,
+    bool fast_and_approximate_mode = false);
 
 }  // namespace ttnn

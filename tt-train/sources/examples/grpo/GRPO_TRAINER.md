@@ -516,45 +516,68 @@ dataset = load_dataset("google/boolq", split="train").map(format_fn)
 
 ## Examples
 
-### Training
+Each task lives in its own subdirectory; the model-specific completers in
+[`utils/`](utils/) are shared between them.
 
-[`boolq_training_example.py`](boolq_training_example.py) — trains
+### BoolQ Training
+
+[`boolq/boolq_training_example.py`](boolq/boolq_training_example.py) — trains
 Llama-3.2-1B-Instruct on BoolQ using `GRPOTrainer` with a custom reward
 function, CSV logging via `GRPOMonitor` callback, and DDP on 2 devices.
 
 ```bash
-python3 boolq_training_example.py
+python3 boolq/boolq_training_example.py
 ```
 
 To train Qwen3 32B sharded across all 32 galaxy cards with FSDP:
 
 ```bash
-python3 boolq_training_example.py --model qwen3 \
+python3 boolq/boolq_training_example.py --model qwen3 \
     --config ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/grpo_boolq_qwen3_32b_fsdp.yaml
 ```
 
-### Accuracy Evaluation
+### BoolQ Accuracy Evaluation
 
-[`boolq_accuracy_example.py`](boolq_accuracy_example.py) — evaluates a
+[`boolq/boolq_accuracy_example.py`](boolq/boolq_accuracy_example.py) — evaluates a
 model on the BoolQ validation set with greedy decoding (`temperature=0`)
 and writes per-question results to a CSV. Runs on 1 device (p150) with
 `PROMPTS_TO_VALIDATE=20` by default.
 
 ```bash
-python3 boolq_accuracy_example.py
+python3 boolq/boolq_accuracy_example.py
 ```
 
 To evaluate a fine-tuned checkpoint, change `MODEL_ID` to the directory
 containing `model.safetensors`.
 
-### Tests
+### Reverse Text Training
 
-[`test_batched_vs_single_completion.py`](test_batched_vs_single_completion.py) —
-verifies that batched inference produces identical outputs to one-by-one
-inference under greedy decoding. Runs on a single device.
+[`reverse_text/reverse_text_training_example.py`](reverse_text/reverse_text_training_example.py) —
+trains Qwen3-0.6B to reverse text character-by-character on a single p150,
+ported from the prime-rl / verifiers TRL example. Rewards the similarity ratio
+between the text in the `<reversed_text>` tags and the true reversal, and runs a
+greedy eval on a held-out split every step.
 
 ```bash
-pytest test_batched_vs_single_completion.py
+python3 reverse_text/reverse_text_training_example.py
+```
+
+### Plotting
+
+[`boolq/boolq_plot_example.py`](boolq/boolq_plot_example.py) — plots any column of the `grpo_metrics.csv` written by a `GRPOMonitor` callback.
+
+```bash
+python3 boolq/boolq_plot_example.py <output_dir>/grpo_metrics.csv reward
+```
+
+[`reverse_text/reverse_text_plot_example.py`](reverse_text/reverse_text_plot_example.py) —
+plots every reverse-text metric (reward, the three eval scores, completion
+length, and the step / generation times) as one grid. With no arguments it picks
+the newest run under `generated/tt-train/grpo_reverse_text_run/` and writes
+`grpo_metrics.png` beside its CSV.
+
+```bash
+python3 reverse_text/reverse_text_plot_example.py
 ```
 
 ---

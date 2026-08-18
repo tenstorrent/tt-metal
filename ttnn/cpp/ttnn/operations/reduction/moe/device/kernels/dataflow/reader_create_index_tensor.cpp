@@ -8,6 +8,7 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 /**
  * add a dfb full of indices for the tile
@@ -15,7 +16,7 @@
  * first 32 elements are {0,..31}, then next 32 are {32,..64}
  * wt is which tile it is along the row [0, Wt) so j + 32*wt is the value in the tile at each element
  */
-FORCE_INLINE void generate_index_tile(const uint32_t dfb_id, const uint32_t wt) {
+FORCE_INLINE void generate_index_tile(const DFBBindingToken dfb_id, const uint32_t wt) {
     // TODO: investigate moving to compile time (binary size is at risk)
     DataflowBuffer dfb(dfb_id);
     dfb.reserve_back(1);
@@ -38,45 +39,31 @@ FORCE_INLINE void generate_index_tile(const uint32_t dfb_id, const uint32_t wt) 
 }
 
 void kernel_main() {
-    uint32_t src_addr = get_arg_val<uint32_t>(0);
-    uint32_t topk_addr = get_arg_val<uint32_t>(1);
-    uint32_t expert_addr = get_arg_val<uint32_t>(2);
-
-    constexpr uint32_t dfb_id_in0 = get_compile_time_arg_val(0);
-    constexpr uint32_t dfb_intermed_index = get_compile_time_arg_val(1);
-    constexpr uint32_t dfb_topk_mask = get_compile_time_arg_val(2);
-    constexpr uint32_t dfb_expert_mask = get_compile_time_arg_val(3);
-
-    constexpr uint32_t Ht = get_compile_time_arg_val(4);
-    constexpr uint32_t Wt = get_compile_time_arg_val(5);
-    constexpr uint32_t K = get_compile_time_arg_val(6);
+    constexpr auto Ht = get_arg(args::Ht);
+    constexpr auto Wt = get_arg(args::Wt);
+    constexpr auto K = get_arg(args::K);
     constexpr uint32_t Kt = K % 32 == 0 ? K / 32 : K / 32 + 1;
 
-    constexpr auto s0_args = TensorAccessorArgs<7>();
-    constexpr auto s1_args = TensorAccessorArgs<s0_args.next_compile_time_args_offset()>();
-    constexpr auto s2_args = TensorAccessorArgs<s1_args.next_compile_time_args_offset()>();
-
     constexpr uint32_t onetile = 1;
-    constexpr uint32_t tile_bytes_input = get_tile_size(dfb_id_in0);
 
-    const auto s0 = TensorAccessor(s0_args, src_addr);
+    const auto s0 = TensorAccessor(tensor::input);
 
-    constexpr uint32_t tile_bytes_topk = get_tile_size(dfb_topk_mask);
+    const auto s1 = TensorAccessor(tensor::topk_mask);
 
-    const auto s1 = TensorAccessor(s1_args, topk_addr);
-
-    constexpr uint32_t tile_bytes_expert = get_tile_size(dfb_expert_mask);
-
-    const auto s2 = TensorAccessor(s2_args, expert_addr);
+    const auto s2 = TensorAccessor(tensor::expert_mask);
 
     Noc noc;
-    DataflowBuffer dfb_in0(dfb_id_in0);
-    DataflowBuffer dfb_topk(dfb_topk_mask);
-    DataflowBuffer dfb_expert(dfb_expert_mask);
+    DataflowBuffer dfb_in0(dfb::input);
+    DataflowBuffer dfb_topk(dfb::topk_mask);
+    DataflowBuffer dfb_expert(dfb::expert_mask);
+
+    const uint32_t tile_bytes_input = dfb_in0.get_tile_size();
+    const uint32_t tile_bytes_topk = dfb_topk.get_tile_size();
+    const uint32_t tile_bytes_expert = dfb_expert.get_tile_size();
 
     // Load all Wt expert mask tiles once, in a single burst, before the input stream loop.
     // The expert mask row is identical for every input row, so it is read once and the
-    // tiles stay resident in the CB for all Ht rows. Loading the whole row up front gives
+    // tiles stay resident in the buffer for all Ht rows. Loading the whole row up front gives
     // the NoC a dedicated window for the expert reads before any input reads begin.
     dfb_expert.reserve_back(Wt);
     for (uint32_t j = 0; j < Wt; ++j) {
@@ -87,7 +74,7 @@ void kernel_main() {
 
     // Stream in input tensor, buffer has four tiles as we double-buffer to continue streaming while waiting for compute
     // and we need two tiles for the bitonic sort llk We could load in an entire row of tiles at a time but that would
-    // require substantially more memory (we would be double buffering four Wt sized CBs)
+    // require substantially more memory (we would be double buffering four Wt sized buffers)
     uint32_t tile_id = 0;
     for (uint32_t i = 0; i < Ht; ++i) {
         // input: stream two tiles at a time (Wt is guaranteed to be a multiple of 2 for this kernel).
@@ -95,10 +82,10 @@ void kernel_main() {
             dfb_in0.reserve_back(2);
             noc.async_read(s0, dfb_in0, tile_bytes_input, {.page_id = tile_id}, {.offset_bytes = 0});
             tile_id++;
-            generate_index_tile(dfb_intermed_index, j);
+            generate_index_tile(dfb::index, j);
             noc.async_read(s0, dfb_in0, tile_bytes_input, {.page_id = tile_id}, {.offset_bytes = tile_bytes_input});
             tile_id++;
-            generate_index_tile(dfb_intermed_index, j + 1);
+            generate_index_tile(dfb::index, j + 1);
             noc.async_read_barrier();
             dfb_in0.push_back(2);
         }

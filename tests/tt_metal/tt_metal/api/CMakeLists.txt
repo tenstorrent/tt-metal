@@ -87,6 +87,7 @@ target_include_directories(
     PRIVATE
         ${PROJECT_SOURCE_DIR}/tests
         ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/common
+        ${PROJECT_SOURCE_DIR}
 )
 target_link_libraries(unit_tests_per_core_allocation PRIVATE test_metal_common_libs)
 target_precompile_headers(unit_tests_per_core_allocation REUSE_FROM metal_common_pch)
@@ -125,6 +126,7 @@ set_target_properties(
 
 if(TT_METAL_USE_EMULE)
     target_link_options(unit_tests_api PRIVATE -rdynamic)
+    target_link_libraries(unit_tests_api_lib PRIVATE tt-emule::headers)
 
     # Per-fiber ASAN sanitizer-state isolation test. Its own binary because it
     # includes the emule kernel-side context header (jit_hw/internal/

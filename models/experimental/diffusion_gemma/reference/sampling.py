@@ -4,11 +4,10 @@
 """Discrete-diffusion sampling primitives (pure-torch reference).
 
 This is the algorithmic oracle for the denoise loop (#47463) and on-device
-canvas sampling (#47472), and the reference for the device-side **entropy-budget
-acceptance spike** (plan.md §6 #47463, risk R1). It is intentionally pure torch
-(CPU-runnable, no checkpoint / ttnn / hardware) so the exact semantics — most
-importantly the **sort-by-confidence + cumulative-entropy cutoff + scatter-back**
-the device path must replicate — are pinned and unit-tested before any kernel
+canvas sampling (#47472). It is intentionally pure torch (CPU-runnable, no
+checkpoint / ttnn / hardware) so the exact semantics — most importantly the
+**sort-by-confidence + cumulative-entropy cutoff + scatter-back** the device
+path must replicate — are pinned and unit-tested independently of any kernel
 work.
 
 Per denoise step (reconciled against transformers `generation_diffusion_gemma.py`):
@@ -28,8 +27,8 @@ won't match torch's multinomial. The two only affect the *intermediate* canvas
 carried between steps; the validated **decisions** (clean argmax commit, per-step
 entropy, accept mask) are deterministic in the logits and identical either way.
 
-Determinism (risk R5): for token-for-token PCC vs torch, the caller injects the
-torch run's exact Gumbel noise (`gumbel_noise=`) and renoise token ids
+Determinism: for token-for-token PCC vs torch, the caller injects the torch
+run's exact Gumbel noise (`gumbel_noise=`) and renoise token ids
 (`noise_tokens=`) — on-device RNG will not match bit-exactly.
 """
 
@@ -106,7 +105,7 @@ def sample_canvas(
     ``denoiser_canvas = multinomial(softmax(logits / T))`` over the vocab axis.
     ``logits``: ``[B, L, vocab]`` -> token ids ``[B, L]``. Uses fp32 softmax like
     HF. Equivalent in distribution to :func:`gumbel_max_sample`; use that instead
-    when you need injectable, device-reproducible noise (R5).
+    when you need injectable, device-reproducible noise.
     """
     probs = F.softmax(logits / temperature, dim=-1, dtype=torch.float32)
     flat = probs.reshape(-1, probs.shape[-1])
@@ -128,7 +127,7 @@ def entropy_budget_accept(
     entropy: torch.Tensor,
     budget: float,
     *,
-    min_accept: int = 1,
+    min_accept: int = 0,
 ) -> torch.Tensor:
     """Entropy-bound acceptance — exact reproduction of HF ``EntropyBoundSampler.accept_canvas``.
 
@@ -144,10 +143,10 @@ def entropy_budget_accept(
 
     This is the upper bound on the joint mutual information of the accepted set
     (sum_i^k H_i - max_i H_i <= bound, https://arxiv.org/pdf/2505.24857), so the
-    accepted tokens are ~independent. The most-confident position always has an
-    exclusive prefix of 0, so it is always accepted (>=1 accepted per step) — HF
-    has no explicit ``min_accept``. ``min_accept`` is retained only for the
-    device spike's API (#47463) and is a no-op for the HF-default ``<=1``.
+    accepted tokens are ~independent. HF has no explicit ``min_accept``; for a
+    negative budget it accepts zero positions because even the most-confident
+    token's exclusive prefix (0) exceeds the budget. ``min_accept`` is retained
+    only for the device path's API (#47463).
 
     The scatter-back is the inverse-permutation the device path must replicate.
     """
@@ -172,7 +171,7 @@ def renoise(
     """Keep accepted token ids; renoise rejected positions to RANDOM tokens.
 
     Uniform discrete diffusion (no ``[MASK]`` / absorbing state). Pass
-    ``noise_tokens`` to inject the torch run's exact renoise ids (PCC, R5).
+    ``noise_tokens`` to inject the torch run's exact renoise ids (PCC).
     """
     if noise_tokens is None:
         noise_tokens = torch.randint(0, vocab_size, token_ids.shape, generator=generator, device=token_ids.device)
@@ -188,22 +187,6 @@ def random_canvas(
 ) -> torch.Tensor:
     """Initialize a canvas to random token ids (the diffusion noise prior)."""
     return torch.randint(0, vocab_size, shape, generator=generator, device=device)
-
-
-def is_converged(
-    prev_tokens: torch.Tensor,
-    cur_tokens: torch.Tensor,
-    entropy: torch.Tensor,
-    entropy_threshold: float,
-) -> bool:
-    """Halt when the argmax canvas is stable AND mean entropy < threshold.
-
-    Whole-canvas (batch-collapsed) convergence; per-request halting for batched
-    decode is #47557.
-    """
-    stable = torch.equal(prev_tokens, cur_tokens)
-    low_entropy = entropy.mean().item() < entropy_threshold
-    return stable and low_entropy
 
 
 class DenoiseStepResult(NamedTuple):
@@ -222,7 +205,7 @@ class DenoiseStepResult(NamedTuple):
 #                   reference / reconstructed torch oracle trajectory.
 #   "gumbel"      — argmax(logits/T + gumbel). Use for the DEVICE-comparison
 #                   trajectory with the torch run's *injected* Gumbel noise, so
-#                   on-device decisions are token-for-token comparable (R5).
+#                   on-device decisions are token-for-token comparable.
 SAMPLER_MULTINOMIAL = "multinomial"
 SAMPLER_GUMBEL = "gumbel"
 
@@ -237,7 +220,7 @@ def denoise_step(
     gumbel_noise: Optional[torch.Tensor] = None,
     noise_tokens: Optional[torch.Tensor] = None,
     generator: Optional[torch.Generator] = None,
-    min_accept: int = 1,
+    min_accept: int = 0,
 ) -> DenoiseStepResult:
     """Compose one denoise step over a ``[B, L, vocab]`` logits tensor.
 

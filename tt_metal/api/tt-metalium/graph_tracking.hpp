@@ -65,6 +65,18 @@ public:
         bool /*is_globally_allocated*/,
         const IDevice* /*device*/) {};
 
+    // borrows_memory: a view onto a tensor's buffer, so counting its bytes again double-counts.
+    virtual void track_allocate_dataflow_buffer(
+        const CoreRangeSet& /*core_range_set*/,
+        uint64_t /*addr*/,
+        uint64_t /*size*/,
+        bool /*borrows_memory*/,
+        const IDevice* /*device*/) {};
+
+    virtual void track_allocate_scratchpad(
+        const CoreRangeSet& /*core_range_set*/, uint64_t /*addr*/, uint64_t /*size*/, const IDevice* /*device*/) {};
+
+    // Releases every kind of program-scope L1 above: they share one lifetime.
     virtual void track_deallocate_cb(const IDevice* /*device*/) {};
 
     virtual void track_program(tt::tt_metal::Program* /*program*/, const IDevice* /*device*/) {};
@@ -138,6 +150,12 @@ public:
         uint64_t size,
         bool is_globally_allocated,
         const IDevice* device);
+
+    void track_allocate_dataflow_buffer(
+        const CoreRangeSet& core_range_set, uint64_t addr, uint64_t size, bool borrows_memory, const IDevice* device);
+
+    void track_allocate_scratchpad(
+        const CoreRangeSet& core_range_set, uint64_t addr, uint64_t size, const IDevice* device);
 
     void track_deallocate_cb(const IDevice* device);
 

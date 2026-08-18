@@ -21,7 +21,7 @@ from ...models.vae.vae_ltx import upsample_latent
 from ...utils.ltx import load_conditioning_image
 from ...utils.patchifiers import AudioLatentShape, VideoPixelShape
 from ...utils.tensor import bf16_tensor
-from ...utils.video import export_video_audio
+from ...utils.video import export_video_audio, export_video_audio_yuv
 from .pipeline_ltx import SPATIAL_COMPRESSION, TEMPORAL_COMPRESSION, LTXPipeline, LTXTransformerState, latent_grid
 
 # Distilled sigma schedules for the two stages.
@@ -43,6 +43,7 @@ class LTXDistilledPipeline(LTXPipeline):
     """Distilled 2-stage AV pipeline: half-res denoise → upsample → full-res refine."""
 
     HAS_UPSAMPLER = True
+    DEFERS_ENCODE_TRACE = True
 
     @staticmethod
     def _post_process_latent_tt(
@@ -185,6 +186,10 @@ class LTXDistilledPipeline(LTXPipeline):
 
             # Compile VAE decode at full-res (only s2 feeds decode in generate).
             self._warmup_decode(num_frames, height, width)
+
+            # Programs are now compiled
+            if self._traced and self.vae_decoder is not None:
+                self.vae_decoder._vae_traced = True
 
             # Warm the on-device audio decode eagerly at the real latent shape: compiles kernels,
             # initializes lazy device state, and frees back to a deterministic allocator free-list,
@@ -594,11 +599,14 @@ class LTXDistilledPipeline(LTXPipeline):
         timings: list[tuple[str, float]] = []
 
         t0 = time.time()
-        # Only load the Gemma encoder (coresident-evicts DiT/VAE) on a cache miss.
-        cached = os.path.exists(self._device_embed_cache_path([prompt]))
+        # A served request encodes a prompt nothing has seen, so a cache hit would drop the encoder
+        # out of the reported total and out of the traced path it belongs in. dynamic_load keeps the
+        # cache: there the encoder is coresident-excluded from the DiT, so re-encoding every request
+        # would reload it and evict the captured model state.
+        cached = self.dynamic_load and os.path.exists(self._device_embed_cache_path([prompt]))
         if not cached:
             self.gemma_encoder_pair.ensure_loaded()
-        enc = self.encode_prompts([prompt])
+        enc = self.encode_prompts([prompt], use_cache=self.dynamic_load)
         v_embeds, a_embeds = enc[0][0].float(), enc[0][1].float()
         t_encode = time.time() - t0
         timings.append(("Encoder (cache)" if cached else "Encoder", t_encode))
@@ -696,8 +704,10 @@ class LTXDistilledPipeline(LTXPipeline):
             logger.info(f"VAE prepare: {time.time() - t0:.1f}s")
 
         latent_h, latent_w = height // SPATIAL_COMPRESSION, width // SPATIAL_COMPRESSION
+        # LTX_YUV_EXPORT routes the mp4 path through the on-device YUV 4:2:0 fast gather
+        yuv_export = output_path is not None and os.environ.get("LTX_YUV_EXPORT", "0") != "0"
         # export_video_audio needs float [-1,1]; the frame-return path uses the requested output_type.
-        decode_type = "float" if output_path is not None else output_type
+        decode_type = ("yuv" if yuv_export else "float") if output_path is not None else output_type
         t0 = time.time()
         video_pixels = self.decode_latents(s2_video, latent_frames, latent_h, latent_w, output_type=decode_type)
         t_vae_decode = time.time() - t0
@@ -716,7 +726,14 @@ class LTXDistilledPipeline(LTXPipeline):
             return video_pixels, audio_obj
 
         t0 = time.time()
-        export_video_audio(video_pixels, output_path, fps=fps, audio=audio_obj)
+        if yuv_export:
+            export_video_audio_yuv(video_pixels, output_path, fps=fps, audio=audio_obj)
+        else:
+            export_video_audio(video_pixels, output_path, fps=fps, audio=audio_obj)
         logger.info(f"Video export: {time.time() - t0:.1f}s")
         logger.info(f"Total (compute): {sum(s for _, s in timings):.1f}s | Output: {output_path}")
+        # Every trace this pipeline takes is captured by now, so the encoder can start tracing: its
+        # capture is last and nothing left will reclaim its activation region.
+        if self._traced and not self.dynamic_load:
+            self.gemma_encoder_pair.open_trace_gate()
         return output_path

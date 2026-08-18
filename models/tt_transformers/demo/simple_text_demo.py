@@ -31,9 +31,6 @@ from models.tt_transformers.tt.generator import Generator, SamplingParams, creat
 from models.tt_transformers.tt.model_config import DecodersPrecision, determine_device_name, parse_decoder_json
 from models.tt_transformers.tt.prefetcher import is_prefetcher_supported
 
-# Issue: https://github.com/tenstorrent/tt-metal/issues/34763
-models_not_supported_for_device_sampling = ["Mistral-7B"]
-
 
 class TokenAccuracy:
     def __init__(self, model_name):
@@ -1202,11 +1199,6 @@ def test_demo_text(
             if model[0]._supports_on_device_sampling
             else None
         )
-
-        # Override the sampling params for some models
-        # Issue: https://github.com/tenstorrent/tt-metal/issues/34763
-        if model_args[0].base_model_name in models_not_supported_for_device_sampling:
-            device_sampling_params = None
 
         if device_sampling_params is None and isinstance(sampling_params["temperature"], List):
             # host sampling only supports single sample param for all users in a batch

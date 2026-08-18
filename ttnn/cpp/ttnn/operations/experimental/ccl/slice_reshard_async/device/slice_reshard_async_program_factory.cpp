@@ -150,9 +150,11 @@ SliceReshardAsyncProgramFactory::cached_program_t SliceReshardAsyncProgramFactor
     CreateCircularBuffer(program, worker_core_ranges, cb_sender_config);
 
     // KERNEL CREATION
-    std::vector<tt::tt_metal::KernelHandle> reader_kernel_ids;
-    std::vector<tt::tt_metal::KernelHandle> writer_kernel_ids;
     uint32_t num_directions = 2;
+    std::vector<tt::tt_metal::KernelHandle> reader_kernel_ids;
+    reader_kernel_ids.reserve(args.num_links * num_directions);
+    std::vector<tt::tt_metal::KernelHandle> writer_kernel_ids;
+    writer_kernel_ids.reserve(args.num_links * num_directions);
     uint32_t stick_start_id = 0;
     for (uint32_t link = 0; link < args.num_links; link++) {
         uint32_t num_sticks_to_read = 0;

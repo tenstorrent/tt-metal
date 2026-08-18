@@ -21,7 +21,6 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
@@ -29,6 +28,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include <umd/device/types/xy_pair.hpp>
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
@@ -44,9 +44,8 @@ struct hlk_args_t {
 };
 }  // namespace unary_datacopy
 
-TEST_F(MeshDeviceSingleCardFixture, DramCopySticksMultiCore) {
+TEST_F(UnitMeshFixture, DramCopySticksMultiCore) {
     bool pass = true;
-    IDevice* dev = devices_[0]->get_devices()[0];
 
     try {
         tt_metal::Program program = tt_metal::CreateProgram();
@@ -61,13 +60,10 @@ TEST_F(MeshDeviceSingleCardFixture, DramCopySticksMultiCore) {
         int stick_size = num_elements_in_stick * 2;
         uint32_t dram_buffer_size =
             num_sticks * stick_size;  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
-        tt_metal::InterleavedBufferConfig dram_config{
-            .device = dev,
-            .size = dram_buffer_size,
-            .page_size = dram_buffer_size,
-            .buffer_type = tt_metal::BufferType::DRAM};
-
-        auto src_dram_buffer = CreateBuffer(dram_config);
+        auto src_dram_buffer = distributed::MeshBuffer::create(
+            distributed::ReplicatedBufferConfig{.size = dram_buffer_size},
+            {.page_size = dram_buffer_size, .buffer_type = BufferType::DRAM},
+            &this->device());
         uint32_t dram_buffer_src_addr = src_dram_buffer->address();
 
         ASSERT_EQ(src_dram_buffer->size() % (num_cores_r * num_cores_c), 0)
@@ -77,12 +73,10 @@ TEST_F(MeshDeviceSingleCardFixture, DramCopySticksMultiCore) {
         for (int i = start_core.y; i < start_core.y + num_cores_r; i++) {
             for (int j = start_core.x; j < start_core.x + num_cores_c; j++) {
                 CoreCoord core = {(std::size_t)j, (std::size_t)i};
-                tt_metal::InterleavedBufferConfig l1_config{
-                    .device = dev,
-                    .size = per_core_l1_size,
-                    .page_size = per_core_l1_size,
-                    .buffer_type = tt_metal::BufferType::L1};
-                auto l1_b0 = CreateBuffer(l1_config);
+                auto l1_b0 = distributed::MeshBuffer::create(
+                    distributed::ReplicatedBufferConfig{.size = per_core_l1_size},
+                    {.page_size = per_core_l1_size, .buffer_type = BufferType::L1},
+                    &this->device());
                 core_to_l1_addr[core] = l1_b0->address();
             }
         }
@@ -102,7 +96,7 @@ TEST_F(MeshDeviceSingleCardFixture, DramCopySticksMultiCore) {
         ////////////////////////////////////////////////////////////////////////////
         std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
             dram_buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
-        tt_metal::detail::WriteToBuffer(src_dram_buffer, src_vec);
+        slow_dispatch::WriteToBuffer(*src_dram_buffer, src_vec);
 
         std::cout << "Num cores " << num_cores_r * num_cores_c << std::endl;
         uint32_t core_index = 0;
@@ -122,9 +116,9 @@ TEST_F(MeshDeviceSingleCardFixture, DramCopySticksMultiCore) {
             }
         }
 
-        tt_metal::detail::LaunchProgram(dev, program);
+        slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true);
         // std::vector<uint32_t> result_vec;
-        // tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);
+        // slow_dispatch::ReadFromBuffer(*dst_dram_buffer, result_vec);
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////

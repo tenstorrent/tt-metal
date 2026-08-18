@@ -6,15 +6,15 @@ from typing import List
 
 from fuser.block_data import BlockData
 from fuser.fpu_node import FpuNode
-from fuser.fused_loop import FusedLoop, LoopBlock
-from fuser.fused_operation import FusedOperation
 from fuser.fuser_config import GlobalConfig
+from fuser.l1_operation import L1Operation
+from fuser.tile_loop import LoopBlock, TileLoop
 
 from .matmul import MatmulFpu
 
 
 class MatmulNoMopFpu(MatmulFpu):
-    loop: FusedLoop = LoopBlock()
+    loop: TileLoop = LoopBlock()
     per_block_init = True
 
     def get_headers(self) -> List[str]:
@@ -26,14 +26,14 @@ class MatmulNoMopFpu(MatmulFpu):
 
     def init(
         self,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
         stage = operation.stage_id
         math_fidelity = compute_unit.math_fidelity.cpp_enum_value
-        transpose = compute_unit.unpack_transpose_faces.cpp_enum_value
+        transpose = compute_unit.transpose_within_face.cpp_enum_value
         rt_dim = block.block_tiles_y
         ct_dim = block.block_tiles_x
 
@@ -52,7 +52,7 @@ class MatmulNoMopFpu(MatmulFpu):
 
     def calculate(
         self,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         compute_unit: FpuNode,
         block: BlockData,
@@ -72,7 +72,7 @@ class MatmulNoMopFpu(MatmulFpu):
 
     def uninit(
         self,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         compute_unit: FpuNode,
         block: BlockData,

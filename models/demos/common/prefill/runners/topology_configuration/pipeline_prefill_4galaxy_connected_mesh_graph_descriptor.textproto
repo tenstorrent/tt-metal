@@ -8,11 +8,15 @@
 # connections require consecutive hosts to be physically cabled. List the --host slots in the order
 # the galaxies are cabled in the superpod chain (verify with the UMD topology tool if a boundary's
 # fabric fails to train).
+#
+# dim_types [RING, RING]: each galaxy is an XY torus (rows/SP and cols/TP both wrap). This MUST be
+# paired with PREFILL_FABRIC_MODE=2d_torus_xy in the rank binding — a mismatch between the descriptor
+# wrap and the fabric mode hangs at fabric bring-up. Requires the 2d_torus_* modes from #48711.
 
 mesh_descriptors {
   name: "M0"
   arch: BLACKHOLE
-  device_topology { dims: [ 8, 4 ] dim_types: [ LINE, RING ] }
+  device_topology { dims: [ 8, 4 ] dim_types: [ RING, RING ] }
   host_topology   { dims: [ 1, 1 ] }
   channels { count: 2 policy: RELAXED }
 }

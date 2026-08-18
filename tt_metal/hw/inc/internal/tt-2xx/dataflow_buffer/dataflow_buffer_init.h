@@ -57,26 +57,27 @@ FORCE_INLINE uint32_t dfb_read_blob_u32(uintptr_t blob_addr, uint32_t byte_off) 
 }
 
 // Device-side shadow of dfb_hart_init_entry_t, populated by dfb_read_init_entry_header.
-// Mirrors the 28B on-disk layout captured in 7 u32 reads.
 struct dfb_init_entry_hdr_t {
+    uint32_t entry_size;
+    uint32_t stride_size_precomp;  // host pre-computed: DM=raw bytes, TRISC=tile units
+    uint16_t num_entries;
+    uint16_t capacity;
     uint8_t logical_dfb_id;
     uint8_t num_tcs;
     uint8_t flags;
-    uint8_t capacity;
-    uint32_t entry_size;
-    uint32_t stride_size_precomp;  // host pre-computed: DM=raw bytes, TRISC=tile units (no device multiply needed)
     uint8_t stride_size_tiles;
     uint8_t num_txn_ids;
     uint8_t threshold;
     uint8_t num_entries_per_txn_id;
     uint8_t num_entries_per_txn_id_per_tc;
     uint8_t producer_signal_bit;  // bit position in dfb_signal[dfb_id]; 0xFF if consumer
-    uint8_t txn_ids[dfb::NUM_TXN_IDS];  // bytes 18–21 (DM only; 0 elsewhere)
+    uint8_t txn_ids[dfb::NUM_TXN_IDS];
     uint8_t broadcast_tc;         // DM pack byte 22 → iface.broadcast_tc (DM unpack only)
     uint8_t remapper_pair_index;  // TRISC byte 22; DM pack byte 23
     uint8_t intra_shadow_tc_id;   // TRISC byte 23: intra-tensix ClientR shadow TC; 0xFF / unused on DM
-    uint16_t num_entries;         // bytes 24–25
 };
+static_assert(sizeof(dfb_init_entry_hdr_t) == 28, "dfb_init_entry_hdr_t must pack to 28B with no padding");
+static_assert(alignof(dfb_init_entry_hdr_t) == 4, "dfb_init_entry_hdr_t alignment should follow uint32_t");
 
 // Read the entire 28B dfb_hart_init_entry_t (__attribute__((packed))) as 7 u32s.
 // Two variants with identical unpack logic; only the pointer type differs:
@@ -84,14 +85,14 @@ struct dfb_init_entry_hdr_t {
 //   - dfb_read_init_entry_header_cached — cached TL1 pointer (DM path, after L2 invalidate)
 //
 // Little-endian byte layout:
-//   w0 [7:0]=logical_dfb_id  [15:8]=num_tcs  [23:16]=flags  [31:24]=capacity
+//   w0 [7:0]=logical_dfb_id  [15:8]=num_tcs  [23:16]=flags  [31:24]=_reserved0
 //   w1 = entry_size (u32)
 //   w2 = stride_size_precomp (u32): host pre-computed per hart type — DM=raw bytes, TRISC=tile units
 //   w3 [7:0]=stride_size_tiles  [15:8]=num_txn_ids  [23:16]=threshold  [31:24]=num_entries_per_txn_id
 //   w4 [7:0]=num_entries_per_txn_id_per_tc  [15:8]=producer_signal_bit  [23:16]=txn_ids[0]  [31:24]=txn_ids[1]
 //   w5 [7:0]=txn_ids[2]  [15:8]=txn_ids[3]  [23:16]=remapper_pair_index
 //      [31:24]=intra_shadow_tc_id (TRISC) / remapper_pair_index (DM pack)
-//   w6 [15:0]=num_entries  [31:16]=_pad2
+//   w6 [15:0]=num_entries  [31:16]=capacity
 
 // Shared unpack helper: TRISC blob w3–w6 (legacy SoA byte layout).
 template <typename PtrT>
@@ -100,8 +101,7 @@ FORCE_INLINE dfb_init_entry_hdr_t dfb_unpack_entry_header(PtrT s) {
     dfb_init_entry_hdr_t h;
     h.logical_dfb_id             = static_cast<uint8_t>(w0);
     h.num_tcs                    = static_cast<uint8_t>(w0 >> 8);
-    h.flags                      = static_cast<uint8_t>(w0 >> 16);
-    h.capacity                   = static_cast<uint8_t>(w0 >> 24);
+    h.flags = static_cast<uint8_t>(w0 >> 16);
     h.entry_size                 = w1;
     h.stride_size_precomp        = w2;
     h.stride_size_tiles          = static_cast<uint8_t>(w3);
@@ -118,6 +118,7 @@ FORCE_INLINE dfb_init_entry_hdr_t dfb_unpack_entry_header(PtrT s) {
     h.remapper_pair_index        = static_cast<uint8_t>(w5 >> 16);
     h.intra_shadow_tc_id = static_cast<uint8_t>(w5 >> 24);
     h.num_entries                = static_cast<uint16_t>(w6);
+    h.capacity = static_cast<uint16_t>(w6 >> 16);
     return h;
 }
 
@@ -129,8 +130,7 @@ FORCE_INLINE dfb_init_entry_hdr_t dfb_unpack_entry_header_dm(PtrT s) {
     dfb_init_entry_hdr_t h;
     h.logical_dfb_id             = static_cast<uint8_t>(w0);
     h.num_tcs                    = static_cast<uint8_t>(w0 >> 8);
-    h.flags                      = static_cast<uint8_t>(w0 >> 16);
-    h.capacity                   = static_cast<uint8_t>(w0 >> 24);
+    h.flags = static_cast<uint8_t>(w0 >> 16);
     h.entry_size                 = w1;
     h.stride_size_precomp        = w2;
     h.stride_size_tiles          = 0;
@@ -147,6 +147,7 @@ FORCE_INLINE dfb_init_entry_hdr_t dfb_unpack_entry_header_dm(PtrT s) {
     h.remapper_pair_index        = static_cast<uint8_t>(w5 >> 24);
     h.intra_shadow_tc_id = 0xFFu;  // intra-tensix never targets a DM hart
     h.num_entries                = static_cast<uint16_t>(w6);
+    h.capacity = static_cast<uint16_t>(w6 >> 16);
     return h;
 }
 

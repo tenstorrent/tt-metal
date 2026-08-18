@@ -96,7 +96,7 @@ void add_bias_inplace(uint32_t inout_cb, uint32_t bias_cb) {
     CircularBuffer inout_cb_obj(inout_cb);
     CircularBuffer bias_cb_obj(bias_cb);
 
-    add_bcast_rows_init_short(inout_cb, bias_cb);
+    add_bcast_rows_init(inout_cb, bias_cb);
     inout_cb_obj.wait_front(num_tiles);
     bias_cb_obj.wait_front(cols);
     for (uint32_t i = 0; i < rows; ++i) {
@@ -124,7 +124,7 @@ void add_block_inplace_math(uint32_t inout_cb, uint32_t add_cb) {
     CircularBuffer inout_cb_obj(inout_cb);
     CircularBuffer add_cb_obj(add_cb);
 
-    add_tiles_init(inout_cb, add_cb);
+    add_init(inout_cb, add_cb);
     for (uint32_t i = 0; i < num_tiles; i += add_dst_tiles) {
         const uint32_t tiles_cur = std::min(add_dst_tiles, num_tiles - i);
         tile_regs_acquire();

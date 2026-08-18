@@ -51,12 +51,12 @@ inline void llk_math_eltwise_unary_sfpu_topk_xl_remove_msb_values_init() {
     ckernel::sfpu::_topk_xl_remove_msb_values_init_();
 }
 
-template <uint32_t K, bool APPROXIMATE>
+template <uint32_t K, bool APPROXIMATE, DstSync Dst>
 inline void llk_math_eltwise_unary_sfpu_topk_xl_remove_msb_values(uint dst_index) {
     TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, dst_index + get_dest_buffer_base());
     TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH | p_stall::PACK);
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-    ckernel::sfpu::_topk_xl_remove_msb_values_<K>();
+    ckernel::sfpu::_topk_xl_remove_msb_values_<K, Dst>();
 }
 
 template <bool APPROXIMATE>

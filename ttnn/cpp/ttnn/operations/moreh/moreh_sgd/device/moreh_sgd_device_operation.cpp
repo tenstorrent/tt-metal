@@ -44,6 +44,7 @@ MorehSgdOperation::spec_return_value_t MorehSgdOperation::compute_output_specs(
     Layout layout{Layout::TILE};
 
     std::vector<std::optional<tt::tt_metal::TensorSpec>> ret;
+    ret.reserve(2);
 
     if (tensor_args.param_out.has_value()) {
         ret.push_back(tensor_args.param_out->tensor_spec());
@@ -71,6 +72,7 @@ MorehSgdOperation::tensor_return_value_t MorehSgdOperation::create_output_tensor
     auto* device = tensor_args.param_in.device();
 
     std::vector<std::optional<Tensor>> ret;
+    ret.reserve(2);
 
     if (tensor_args.param_out.has_value()) {
         ret.push_back(tensor_args.param_out);

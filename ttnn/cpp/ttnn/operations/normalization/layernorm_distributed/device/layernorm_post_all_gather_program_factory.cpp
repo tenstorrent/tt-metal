@@ -3,17 +3,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "layernorm_post_all_gather_device_operation.hpp"
+#include "layernorm_distributed_metal2_helpers.hpp"
 
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/circular_buffer.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include "ttnn/operations/math.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 #include <bit>
-#include <map>
 #include <string>
 #include <variant>
 
@@ -22,11 +23,49 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
+namespace {
+namespace m2 = tt::tt_metal::experimental;
+using namespace ttnn::prim::layernorm_distributed_metal2;
+
+const m2::KernelSpecName POST_READER{"post_reader"};
+const m2::KernelSpecName POST_WRITER{"post_writer"};
+const m2::KernelSpecName POST_COMPUTE{"post_compute"};
+
+const m2::DFBSpecName POST_INPUT{"post_input"};
+const m2::DFBSpecName POST_STATS{"post_stats"};
+const m2::DFBSpecName POST_GAMMA{"post_gamma"};
+const m2::DFBSpecName POST_BETA{"post_beta"};
+const m2::DFBSpecName POST_EPS{"post_eps"};
+const m2::DFBSpecName POST_REDUCE{"post_reduce"};
+const m2::DFBSpecName POST_STATS_REDUCED{"post_stats_reduced"};
+const m2::DFBSpecName POST_MEAN_SQUARED{"post_mean_squared"};
+const m2::DFBSpecName POST_VAR{"post_var"};
+const m2::DFBSpecName POST_RECIP_SQRT_VAR{"post_recip_sqrt_var"};
+const m2::DFBSpecName POST_X_MINUS_MEAN{"post_x_minus_mean"};
+const m2::DFBSpecName POST_X_NORMED{"post_x_normed"};
+const m2::DFBSpecName POST_TIMES_GAMMA_OUT{"post_times_gamma_out"};
+const m2::DFBSpecName POST_OUT{"post_out"};
+
+const m2::TensorParamName POST_INPUT_T{"post_input_t"};
+const m2::TensorParamName POST_STATS_T{"post_stats_t"};
+const m2::TensorParamName POST_GAMMA_T{"post_gamma_t"};
+const m2::TensorParamName POST_BETA_T{"post_beta_t"};
+const m2::TensorParamName POST_OUTPUT_T{"post_output_t"};
+
+constexpr const char* POST_READER_KERNEL =
+    "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/dataflow/"
+    "reader_unary_interleaved_ln_rm_gb_post_allgather.cpp";
+constexpr const char* POST_WRITER_KERNEL =
+    "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/dataflow/"
+    "writer_unary_interleaved_start_id_blocked.cpp";
+
+}  // namespace
+
 // =============================================================================
 // LayerNormPostAllGatherProgramFactory - Normal (non-Welford) operation
 // =============================================================================
 
-tt::tt_metal::ProgramDescriptor LayerNormPostAllGatherProgramFactory::create_descriptor(
+ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherProgramFactory::create_program_artifacts(
     const LayerNormPostAllGatherParams& operation_attributes,
     const LayerNormPostAllGatherInputs& tensor_args,
     Tensor& output) {
@@ -68,6 +107,10 @@ tt::tt_metal::ProgramDescriptor LayerNormPostAllGatherProgramFactory::create_des
     log_debug(tt::LogOp, "stats_tiles_cols: {}", stats_tiles_cols);
     log_debug(tt::LogOp, "num_devices: {}", num_devices);
 
+    const auto& input_mesh = a.mesh_tensor();
+    const auto& stats_mesh = stats.mesh_tensor();
+    const auto& output_mesh = output.mesh_tensor();
+
     IDevice* device = a.device();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
@@ -76,9 +119,9 @@ tt::tt_metal::ProgramDescriptor LayerNormPostAllGatherProgramFactory::create_des
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat stats_data_format = tt::tt_metal::datatype_to_dataformat_converter(stats.dtype());
     tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    // FP32 input/stats require fp32_dest_acc_en: the intermediate CBs (cb_data_format) only become
-    // Float32 when it is set, otherwise a Float32 input/stats CB feeds Float16_b intermediates and
-    // precision is silently lost. Reject the unsupported combination up front.
+    // FP32 input/stats require fp32_dest_acc_en: the intermediate buffers (cb_data_format) only
+    // become Float32 when it is set, otherwise a Float32 input/stats buffer feeds Float16_b
+    // intermediates and precision is silently lost. Reject the unsupported combination up front.
     TT_FATAL(
         !((in_data_format == tt::DataFormat::Float32 || stats_data_format == tt::DataFormat::Float32) &&
           !fp32_dest_acc_en),
@@ -106,10 +149,6 @@ tt::tt_metal::ProgramDescriptor LayerNormPostAllGatherProgramFactory::create_des
     log_debug(tt::LogOp, "math_fidelity: {}", math_fidelity);
     log_debug(tt::LogOp, "math_approx_mode: {}", math_approx_mode);
     log_debug(tt::LogOp, "fp32_dest_acc_en: {}", fp32_dest_acc_en);
-
-    // Optional gamma/beta: bind the Buffer* when present, else nullptr (framework emits 0u).
-    Buffer* gamma_buffer = gamma.has_value() ? gamma.value().buffer() : nullptr;
-    Buffer* beta_buffer = beta.has_value() ? beta.value().buffer() : nullptr;
 
     [[maybe_unused]] uint32_t num_gamma_tiles = gamma.has_value() ? gamma.value().physical_volume() / tile_hw : 0;
     [[maybe_unused]] uint32_t num_beta_tiles = beta.has_value() ? beta.value().physical_volume() / tile_hw : 0;
@@ -204,17 +243,11 @@ tt::tt_metal::ProgramDescriptor LayerNormPostAllGatherProgramFactory::create_des
     const uint32_t intermed0_tiles = tile_cols_per_device;
     const uint32_t intermed1_tiles = 1;
     const uint32_t intermed2_tiles = 1;
-    const uint32_t intermed3_tiles = 1;
     const uint32_t intermed4_tiles = 1;
     const uint32_t intermed5_tiles = cb_length;
     const uint32_t intermed6_tiles = cb_length;
     const uint32_t intermed7_tiles = cb_length;
     const uint32_t out0_tiles = cb_length;
-
-    std::vector<uint32_t> reader_compile_time_args = {
-        block_size,
-        stats_tiles_cols,
-    };
 
     uint32_t gamma_stick_size = 0;
     uint32_t gamma_is_row_major = 0;
@@ -224,8 +257,6 @@ tt::tt_metal::ProgramDescriptor LayerNormPostAllGatherProgramFactory::create_des
         bool gamma_stick_size_is_power_of_two = tt::tt_metal::is_power_of_two_at_least_32(gamma_stick_size);
         TT_FATAL(gamma_stick_size_is_power_of_two, "Only power of 2 gammas are supported");
         gamma_is_row_major = 1;
-    } else if (gamma.has_value() and gamma.value().layout() == Layout::TILE) {
-        gamma_stick_size = gamma.value().element_size() * 1024;  // size of tile in bytes bf16
     }
     uint32_t beta_stick_size = 0;
     if (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR) {
@@ -233,37 +264,9 @@ tt::tt_metal::ProgramDescriptor LayerNormPostAllGatherProgramFactory::create_des
         bool beta_stick_size_is_power_of_two = tt::tt_metal::is_power_of_two_at_least_32(beta_stick_size);
         TT_FATAL(beta_stick_size_is_power_of_two, "Only power of 2 betas are supported");
         beta_is_row_major = 1;
-    } else if (beta.has_value() and beta.value().layout() == Layout::TILE) {
-        beta_stick_size = beta.value().element_size() * 1024;  // size of tile in bytes bf16
     }
-    reader_compile_time_args.push_back(gamma_stick_size);
-    reader_compile_time_args.push_back(beta_stick_size);
-    reader_compile_time_args.push_back(gamma_is_row_major);
-    reader_compile_time_args.push_back(beta_is_row_major);
-    reader_compile_time_args.push_back(cb_length);
-    reader_compile_time_args.push_back(tiles_per_core_y);
-    const uint32_t reduce_factor = logical_W * num_devices;
     // Reader uses this compile-time reduction width to generate the AVG scaler tile.
-    reader_compile_time_args.push_back(reduce_factor);
-
-    tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(stats.buffer()).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(gamma.has_value() ? gamma.value().buffer() : nullptr)
-        .append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(beta.has_value() ? beta.value().buffer() : nullptr)
-        .append_to(reader_compile_time_args);
-
-    std::vector<uint32_t> writer_compile_time_args = {block_size};
-    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
-
-    std::map<std::string, std::string> reader_defines;
-    std::map<std::string, std::string> compute_defines;
-    if (gamma.has_value()) {
-        reader_defines["FUSE_GAMMA"] = "1";
-    }
-    if (beta.has_value()) {
-        reader_defines["FUSE_BETA"] = "1";
-    }
+    const uint32_t reduce_factor = logical_W * num_devices;
 
     // Get program config
     ttnn::prim::LayerNormDefaultProgramConfig program_config;
@@ -272,30 +275,259 @@ tt::tt_metal::ProgramDescriptor LayerNormPostAllGatherProgramFactory::create_des
     }
 
     bool float32_reduction = fp32_dest_acc_en && !program_config.legacy_reduction;
-    std::vector<uint32_t> compute_args = {
-        tiles_per_core_y,
-        block_size,
-        stats_tiles_cols,
-        static_cast<uint32_t>(gamma.has_value()),
-        static_cast<uint32_t>(beta.has_value()),
-        static_cast<uint32_t>(fp32_dest_acc_en),
-        static_cast<uint32_t>(float32_reduction),
-        static_cast<uint32_t>(program_config.legacy_rsqrt),
-        cb_length};
 
     const auto* compute_kernel_file =
         is_rmsnorm ? "ttnn/cpp/ttnn/operations/normalization/rmsnorm_distributed/device/kernels/compute/"
-                     "rmsnorm_post_allgather.cpp"
+                     "rmsnorm_post_allgather_metal2.cpp"
                    : "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/compute/"
                      "layernorm_post_allgather.cpp";
 
     uint32_t eps_u = std::bit_cast<uint32_t>(operation_attributes.eps);  // epsilon
 
-    // Build runtime args per core.  Buffer base addresses are bound via
-    // emplace_runtime_args() so the framework patches them on cache hits.
-    KernelDescriptor reader_kernel_desc;
-    KernelDescriptor writer_kernel_desc;
-    KernelDescriptor compute_kernel_desc;
+    // gamma and beta are optional, and the kernel-side handle for a buffer exists only where the host
+    // binds that buffer: the build emits `dfb::gamma` into a kernel's generated bindings only if this
+    // factory gave that kernel a gamma binding. So when gamma is absent, a kernel's source must not
+    // contain the text `dfb::gamma` at all. Gating the use with `if constexpr` does not achieve that,
+    // the gate has to be `#ifdef`, which removes the text before the compiler sees it.
+    // These two defines are what the kernels gate on.
+    m2::KernelSpec::CompilerOptions::Defines gb_defines;
+    if (gamma.has_value()) {
+        gb_defines.emplace("FUSE_GAMMA", "1");
+    }
+    if (beta.has_value()) {
+        gb_defines.emplace("FUSE_BETA", "1");
+    }
+
+    // The normalized result is staged in its own buffer only while gamma or beta still has to be
+    // applied; otherwise it is packed straight into the output. RMSNorm applies beta only in the
+    // company of gamma, so a beta without a gamma leaves it staged nowhere.
+    const bool uses_x_normed = is_rmsnorm ? (gamma.has_value()) : (gamma.has_value() || beta.has_value());
+    // The gamma product needs a buffer of its own only when beta still has to be added to it.
+    const bool uses_times_gamma_out = gamma.has_value() && beta.has_value();
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Dataflow buffers
+    ////////////////////////////////////////////////////////////////////////////
+    const tt::DataFormat scaler_data_format =
+        in_data_format == tt::DataFormat::Float32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    const uint32_t scaler_tile_size = tt::tile_size(scaler_data_format);
+
+    m2::Group<m2::DataflowBufferSpec> dfbs;
+    dfbs.push_back(make_dfb(POST_INPUT, in0_tiles, in_single_tile_size, in_data_format));
+    dfbs.push_back(make_dfb(POST_STATS, in1_tiles, stats_single_tile_size, stats_data_format));
+    if (gamma.has_value()) {
+        dfbs.push_back(make_dfb(POST_GAMMA, in2_tiles, gamma_single_tile_size, gamma_cb_data_format));
+    }
+    if (beta.has_value()) {
+        dfbs.push_back(make_dfb(POST_BETA, in3_tiles, beta_single_tile_size, beta_cb_data_format));
+    }
+    dfbs.push_back(make_dfb(POST_EPS, in4_tiles, bfloat16_tile_size, tt::DataFormat::Float16_b));
+    dfbs.push_back(make_dfb(POST_REDUCE, in5_tiles, scaler_tile_size, scaler_data_format));
+    // [mean(x**2), mean(x)], layernorm only. RMSNorm reduces the stats straight into the variance
+    // buffer and never touches this one.
+    if (!is_rmsnorm) {
+        dfbs.push_back(make_dfb(POST_STATS_REDUCED, intermed0_tiles, single_tile_size, cb_data_format));
+        // mean(x)**2
+        dfbs.push_back(make_dfb(POST_MEAN_SQUARED, intermed1_tiles, single_tile_size, cb_data_format));
+        // x - mean(x)
+        dfbs.push_back(make_dfb(POST_X_MINUS_MEAN, intermed5_tiles, single_tile_size, cb_data_format));
+    }
+    // var = mean(x**2) - mean(x)**2, or mean(x**2) for RMSNorm
+    dfbs.push_back(make_dfb(POST_VAR, intermed2_tiles, single_tile_size, cb_data_format));
+    // 1/sqrt(var + epsilon)
+    dfbs.push_back(make_dfb(POST_RECIP_SQRT_VAR, intermed4_tiles, single_tile_size, cb_data_format));
+    if (uses_x_normed) {
+        // (x - mean(x)) * 1/sqrt(var + epsilon)
+        dfbs.push_back(make_dfb(POST_X_NORMED, intermed6_tiles, single_tile_size, cb_data_format));
+    }
+    if (uses_times_gamma_out) {
+        // (x - mean(x)) * 1/sqrt(var + epsilon) * gamma
+        dfbs.push_back(make_dfb(POST_TIMES_GAMMA_OUT, intermed7_tiles, single_tile_size, cb_data_format));
+    }
+    dfbs.push_back(make_dfb(POST_OUT, out0_tiles, out_single_tile_size, out_data_format));
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Kernels
+    ////////////////////////////////////////////////////////////////////////////
+    m2::KernelSpec reader{
+        .unique_id = POST_READER,
+        .source = POST_READER_KERNEL,
+        .compiler_options = {.defines = gb_defines},
+        .dfb_bindings =
+            {
+                m2::DFBBinding{
+                    .dfb_spec_name = POST_INPUT,
+                    .accessor_name = "inp",
+                    .endpoint_type = m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{
+                    .dfb_spec_name = POST_STATS,
+                    .accessor_name = "stats",
+                    .endpoint_type = m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{
+                    .dfb_spec_name = POST_EPS, .accessor_name = "eps", .endpoint_type = m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{
+                    .dfb_spec_name = POST_REDUCE,
+                    .accessor_name = "reduce",
+                    .endpoint_type = m2::DFBEndpointType::PRODUCER},
+            },
+        .tensor_bindings =
+            {
+                m2::TensorBinding{.tensor_parameter_name = POST_INPUT_T, .accessor_name = "src"},
+                m2::TensorBinding{.tensor_parameter_name = POST_STATS_T, .accessor_name = "stats_src"},
+            },
+        .compile_time_args =
+            {{"blk", block_size},
+             {"stats_tiles_cols", stats_tiles_cols},
+             {"gamma_is_row_major", gamma_is_row_major},
+             {"beta_is_row_major", beta_is_row_major},
+             {"dfb_length", cb_length},
+             {"Wt", tiles_per_core_y},
+             {"reduce_factor", reduce_factor}},
+        .runtime_arg_schema = {.runtime_arg_names = {"NCHt", "tile_offset", "stats_tile_offset", "eps", "y_offset"}},
+        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+    };
+    if (gamma.has_value()) {
+        reader.dfb_bindings.push_back(m2::DFBBinding{
+            .dfb_spec_name = POST_GAMMA, .accessor_name = "gamma", .endpoint_type = m2::DFBEndpointType::PRODUCER});
+        reader.tensor_bindings.push_back(
+            m2::TensorBinding{.tensor_parameter_name = POST_GAMMA_T, .accessor_name = "gamma_src"});
+    }
+    if (beta.has_value()) {
+        reader.dfb_bindings.push_back(m2::DFBBinding{
+            .dfb_spec_name = POST_BETA, .accessor_name = "beta", .endpoint_type = m2::DFBEndpointType::PRODUCER});
+        reader.tensor_bindings.push_back(
+            m2::TensorBinding{.tensor_parameter_name = POST_BETA_T, .accessor_name = "beta_src"});
+    }
+
+    m2::KernelSpec writer{
+        .unique_id = POST_WRITER,
+        .source = POST_WRITER_KERNEL,
+        .dfb_bindings = {m2::DFBBinding{
+            .dfb_spec_name = POST_OUT, .accessor_name = "out", .endpoint_type = m2::DFBEndpointType::CONSUMER}},
+        .tensor_bindings = {m2::TensorBinding{.tensor_parameter_name = POST_OUTPUT_T, .accessor_name = "dst"}},
+        .compile_time_args = {{"blk", block_size}},
+        .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "tile_offset"}},
+        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+    };
+
+    m2::KernelSpec compute{
+        .unique_id = POST_COMPUTE,
+        .source = compute_kernel_file,
+        .compiler_options = {.defines = gb_defines, .opt_level = KernelBuildOptLevel::O3},
+        .dfb_bindings =
+            {
+                m2::DFBBinding{
+                    .dfb_spec_name = POST_INPUT,
+                    .accessor_name = "inp",
+                    .endpoint_type = m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{
+                    .dfb_spec_name = POST_STATS,
+                    .accessor_name = "stats",
+                    .endpoint_type = m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{
+                    .dfb_spec_name = POST_EPS, .accessor_name = "eps", .endpoint_type = m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{
+                    .dfb_spec_name = POST_REDUCE,
+                    .accessor_name = "reduce",
+                    .endpoint_type = m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{
+                    .dfb_spec_name = POST_OUT, .accessor_name = "out", .endpoint_type = m2::DFBEndpointType::PRODUCER},
+            },
+        .compile_time_args =
+            {{"Wt", tiles_per_core_y},
+             {"blk", block_size},
+             {"stats_tiles_cols", stats_tiles_cols},
+             {"fp32_dtype", static_cast<uint32_t>(fp32_dest_acc_en)},
+             {"float32_reduction", static_cast<uint32_t>(float32_reduction)},
+             {"legacy_rsqrt", static_cast<uint32_t>(program_config.legacy_rsqrt)},
+             {"dfb_length", cb_length}},
+        .runtime_arg_schema = {.runtime_arg_names = {"NCHt"}},
+        .hw_config = ttnn::to_compute_hardware_config(device->arch(), operation_attributes.compute_kernel_config),
+    };
+    // Every intermediate below is private to the compute kernel: it packs into the buffer and
+    // unpacks it back, so it is that buffer's only endpoint on both sides.
+    if (!is_rmsnorm) {
+        bind_self_loop(compute, POST_STATS_REDUCED, "stats_reduced");
+        bind_self_loop(compute, POST_MEAN_SQUARED, "mean_squared");
+        bind_self_loop(compute, POST_X_MINUS_MEAN, "x_minus_mean");
+    }
+    bind_self_loop(compute, POST_VAR, "var");
+    bind_self_loop(compute, POST_RECIP_SQRT_VAR, "recip_sqrt_var");
+    if (uses_x_normed) {
+        bind_self_loop(compute, POST_X_NORMED, "x_normed");
+    }
+    if (uses_times_gamma_out) {
+        bind_self_loop(compute, POST_TIMES_GAMMA_OUT, "times_gamma_out");
+    }
+    if (gamma.has_value()) {
+        compute.dfb_bindings.push_back(m2::DFBBinding{
+            .dfb_spec_name = POST_GAMMA, .accessor_name = "gamma", .endpoint_type = m2::DFBEndpointType::CONSUMER});
+    }
+    if (beta.has_value()) {
+        compute.dfb_bindings.push_back(m2::DFBBinding{
+            .dfb_spec_name = POST_BETA, .accessor_name = "beta", .endpoint_type = m2::DFBEndpointType::CONSUMER});
+    }
+    auto& compute_gen1 = gen1_compute_config(std::get<m2::ComputeHardwareConfig>(compute.hw_config));
+    // With the 32-bit Dest register enabled, every Float32 buffer the compute kernel consumes needs an
+    // explicit unpack mode. In this kernel every consumed buffer is read by an FPU op (the stats row
+    // reduce, mul_tiles / sub_tiles / add_tiles for the variance, and the broadcast multiplies and adds
+    // of the gamma / beta chain), and the FPU takes its operands from SrcA/SrcB, so SrcA/B is the mode
+    // for all of them. They are listed one by one on purpose: any "catch all" clever method that set
+    // unpack_via_src on all of them could  accidentally include a future DFB where unpack_via_src would
+    // not be appropriate.
+    if (compute_gen1.enable_32_bit_dest) {
+        // The intermediates all carry cb_data_format, which is Float32 exactly when the Dest register is.
+        unpack_via_src(compute_gen1, POST_VAR);
+        unpack_via_src(compute_gen1, POST_RECIP_SQRT_VAR);
+        if (!is_rmsnorm) {
+            unpack_via_src(compute_gen1, POST_STATS_REDUCED);
+            unpack_via_src(compute_gen1, POST_MEAN_SQUARED);
+            unpack_via_src(compute_gen1, POST_X_MINUS_MEAN);
+        }
+        if (uses_x_normed) {
+            unpack_via_src(compute_gen1, POST_X_NORMED);
+        }
+        if (uses_times_gamma_out) {
+            unpack_via_src(compute_gen1, POST_TIMES_GAMMA_OUT);
+        }
+        // The inputs carry their own tensor's dtype. The epsilon buffer is always Float16_b.
+        if (in_data_format == tt::DataFormat::Float32) {
+            unpack_via_src(compute_gen1, POST_INPUT);
+            unpack_via_src(compute_gen1, POST_REDUCE);  // the scaler tile mirrors the input's dtype
+        }
+        if (stats_data_format == tt::DataFormat::Float32) {
+            unpack_via_src(compute_gen1, POST_STATS);
+        }
+        if (gamma.has_value() && gamma_cb_data_format == tt::DataFormat::Float32) {
+            unpack_via_src(compute_gen1, POST_GAMMA);
+        }
+        if (beta.has_value() && beta_cb_data_format == tt::DataFormat::Float32) {
+            unpack_via_src(compute_gen1, POST_BETA);
+        }
+    }
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Tensor parameters
+    ////////////////////////////////////////////////////////////////////////////
+    m2::Group<m2::TensorParameter> tensor_parameters;
+    tensor_parameters.push_back(m2::TensorParameter{.unique_id = POST_INPUT_T, .spec = input_mesh.tensor_spec()});
+    tensor_parameters.push_back(m2::TensorParameter{.unique_id = POST_STATS_T, .spec = stats_mesh.tensor_spec()});
+    tensor_parameters.push_back(m2::TensorParameter{.unique_id = POST_OUTPUT_T, .spec = output_mesh.tensor_spec()});
+    if (gamma.has_value()) {
+        tensor_parameters.push_back(
+            m2::TensorParameter{.unique_id = POST_GAMMA_T, .spec = gamma.value().mesh_tensor().tensor_spec()});
+    }
+    if (beta.has_value()) {
+        tensor_parameters.push_back(
+            m2::TensorParameter{.unique_id = POST_BETA_T, .spec = beta.value().mesh_tensor().tensor_spec()});
+    }
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Runtime arguments
+    ////////////////////////////////////////////////////////////////////////////
+    m2::KernelRunArgs reader_run{.kernel = POST_READER};
+    m2::KernelRunArgs writer_run{.kernel = POST_WRITER};
+    m2::KernelRunArgs compute_run{.kernel = POST_COMPUTE};
 
     if (use_2d_kernel) {
         for (uint32_t x = 0; x < cores_x; ++x) {
@@ -311,21 +543,19 @@ tt::tt_metal::ProgramDescriptor LayerNormPostAllGatherProgramFactory::create_des
                     core.x,
                     tile_offset,
                     tiles_per_core_y);
-                reader_kernel_desc.emplace_runtime_args(
+                m2::AddRuntimeArgsForNode(
+                    reader_run.runtime_arg_values,
                     core,
-                    {a.buffer(),
-                     tiles_per_core_x,
-                     tiles_per_core_y,
-                     tile_offset,
-                     stats_offset,
-                     eps_u,
-                     gamma_buffer,
-                     beta_buffer,
-                     stats.buffer(),
-                     y * tiles_per_core_y});
-                compute_kernel_desc.emplace_runtime_args(core, {tiles_per_core_x});
-                writer_kernel_desc.emplace_runtime_args(
-                    core, {output.buffer(), tiles_per_core_x * tiles_per_core_y, tile_offset});
+                    {{"NCHt", tiles_per_core_x},
+                     {"tile_offset", tile_offset},
+                     {"stats_tile_offset", stats_offset},
+                     {"eps", eps_u},
+                     {"y_offset", y * tiles_per_core_y}});
+                m2::AddRuntimeArgsForNode(compute_run.runtime_arg_values, core, {{"NCHt", tiles_per_core_x}});
+                m2::AddRuntimeArgsForNode(
+                    writer_run.runtime_arg_values,
+                    core,
+                    {{"num_tiles", tiles_per_core_x * tiles_per_core_y}, {"tile_offset", tile_offset}});
             }
         }
     } else {
@@ -346,215 +576,48 @@ tt::tt_metal::ProgramDescriptor LayerNormPostAllGatherProgramFactory::create_des
             uint32_t stats_offset = curr_row * stats_tiles_cols;
             uint32_t y_offset = 0;
 
-            reader_kernel_desc.emplace_runtime_args(
+            m2::AddRuntimeArgsForNode(
+                reader_run.runtime_arg_values,
                 core,
-                {a.buffer(),
-                 num_tile_rows_per_core,
-                 Wt,
-                 tile_offset,
-                 stats_offset,
-                 eps_u,
-                 gamma_buffer,
-                 beta_buffer,
-                 stats.buffer(),
-                 y_offset});
-            compute_kernel_desc.emplace_runtime_args(core, {num_tile_rows_per_core});
-            writer_kernel_desc.emplace_runtime_args(core, {output.buffer(), num_tile_rows_per_core * Wt, tile_offset});
+                {{"NCHt", num_tile_rows_per_core},
+                 {"tile_offset", tile_offset},
+                 {"stats_tile_offset", stats_offset},
+                 {"eps", eps_u},
+                 {"y_offset", y_offset}});
+            m2::AddRuntimeArgsForNode(compute_run.runtime_arg_values, core, {{"NCHt", num_tile_rows_per_core}});
+            m2::AddRuntimeArgsForNode(
+                writer_run.runtime_arg_values,
+                core,
+                {{"num_tiles", num_tile_rows_per_core * Wt}, {"tile_offset", tile_offset}});
             curr_row += num_tile_rows_per_core;
         }
     }
 
     ////////////////////////////////////////////////////////////////////////////
-    //                      Build ProgramDescriptor
+    //                      Assemble
     ////////////////////////////////////////////////////////////////////////////
-    ProgramDescriptor program_descriptor;
+    m2::ProgramSpec spec{
+        .name = "layernorm_post_all_gather",
+        .kernels = {std::move(reader), std::move(writer), std::move(compute)},
+        .dataflow_buffers = std::move(dfbs),
+        .tensor_parameters = std::move(tensor_parameters),
+        .work_units = {m2::WorkUnitSpec{
+            .name = "main", .kernels = {POST_READER, POST_WRITER, POST_COMPUTE}, .target_nodes = all_cores}},
+    };
 
-    // Reader kernel
-    reader_kernel_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/dataflow/"
-        "reader_unary_interleaved_ln_rm_gb_post_allgather.cpp";
-    reader_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_kernel_desc.core_ranges = all_cores;
-    reader_kernel_desc.compile_time_args = std::move(reader_compile_time_args);
-    reader_kernel_desc.defines = KernelDescriptor::Defines(reader_defines.begin(), reader_defines.end());
-    reader_kernel_desc.config = ReaderConfigDescriptor{};
-    program_descriptor.kernels.push_back(std::move(reader_kernel_desc));
-
-    // Writer kernel
-    writer_kernel_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/dataflow/"
-        "writer_unary_interleaved_start_id_blocked.cpp";
-    writer_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_kernel_desc.core_ranges = all_cores;
-    writer_kernel_desc.compile_time_args = std::move(writer_compile_time_args);
-    writer_kernel_desc.config = WriterConfigDescriptor{};
-    program_descriptor.kernels.push_back(std::move(writer_kernel_desc));
-
-    // Compute kernel
-    compute_kernel_desc.kernel_source = compute_kernel_file;
-    compute_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    compute_kernel_desc.core_ranges = all_cores;
-    compute_kernel_desc.compile_time_args = std::move(compute_args);
-    compute_kernel_desc.defines = KernelDescriptor::Defines(compute_defines.begin(), compute_defines.end());
-    compute_kernel_desc.config = ComputeConfigDescriptor{
-        .math_fidelity = math_fidelity,
-        .fp32_dest_acc_en = fp32_dest_acc_en,
-        .dst_full_sync_en = dst_full_sync_en,
-        .math_approx_mode = math_approx_mode};
-    program_descriptor.kernels.push_back(std::move(compute_kernel_desc));
-
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Build CBDescriptors
-    ////////////////////////////////////////////////////////////////////////////
-    // c_in0 -> a
-    program_descriptor.cbs.push_back(CBDescriptor{
-        .total_size = in0_tiles * in_single_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_0),
-            .data_format = in_data_format,
-            .page_size = in_single_tile_size}}}});
-
-    // c_in1 -> stats
-    program_descriptor.cbs.push_back(CBDescriptor{
-        .total_size = in1_tiles * stats_single_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_1),
-            .data_format = stats_data_format,
-            .page_size = stats_single_tile_size}}}});
-
-    // c_in2 -> gamma
+    m2::ProgramRunArgs run_args;
+    run_args.kernel_run_args = {std::move(reader_run), std::move(writer_run), std::move(compute_run)};
+    run_args.tensor_args.emplace(POST_INPUT_T, input_mesh);
+    run_args.tensor_args.emplace(POST_STATS_T, stats_mesh);
+    run_args.tensor_args.emplace(POST_OUTPUT_T, output_mesh);
     if (gamma.has_value()) {
-        program_descriptor.cbs.push_back(CBDescriptor{
-            .total_size = in2_tiles * gamma_single_tile_size,
-            .core_ranges = all_cores,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_2),
-                .data_format = gamma_cb_data_format,
-                .page_size = gamma_single_tile_size}}}});
+        run_args.tensor_args.emplace(POST_GAMMA_T, gamma.value().mesh_tensor());
     }
-
-    // c_in3 -> beta
     if (beta.has_value()) {
-        program_descriptor.cbs.push_back(CBDescriptor{
-            .total_size = in3_tiles * beta_single_tile_size,
-            .core_ranges = all_cores,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_3),
-                .data_format = beta_cb_data_format,
-                .page_size = beta_single_tile_size}}}});
+        run_args.tensor_args.emplace(POST_BETA_T, beta.value().mesh_tensor());
     }
 
-    // c_in4 -> epsilon
-    program_descriptor.cbs.push_back(CBDescriptor{
-        .total_size = in4_tiles * bfloat16_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_4),
-            .data_format = tt::DataFormat::Float16_b,
-            .page_size = bfloat16_tile_size}}}});
-
-    // c_in5 -> reduce scalar
-    const tt::DataFormat scaler_data_format =
-        in_data_format == tt::DataFormat::Float32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
-    const uint32_t scaler_tile_size = tt::tile_size(scaler_data_format);
-    program_descriptor.cbs.push_back(CBDescriptor{
-        .total_size = in5_tiles * scaler_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_5),
-            .data_format = scaler_data_format,
-            .page_size = scaler_tile_size}}}});
-
-    // LN and RMS shared intermediates
-    // c_intermed0 -> [mean(x**2), mean(x)] (CB 6)
-    program_descriptor.cbs.push_back(CBDescriptor{
-        .total_size = intermed0_tiles * single_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_6),
-            .data_format = cb_data_format,
-            .page_size = single_tile_size}}}});
-
-    // c_intermed2 -> var = mean(x**2) - mean(x)**2 (CB 8)
-    program_descriptor.cbs.push_back(CBDescriptor{
-        .total_size = intermed2_tiles * single_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_8),
-            .data_format = cb_data_format,
-            .page_size = single_tile_size}}}});
-
-    // c_intermed3 -> var + epsilon (CB 9)
-    program_descriptor.cbs.push_back(CBDescriptor{
-        .total_size = intermed3_tiles * single_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_9),
-            .data_format = cb_data_format,
-            .page_size = single_tile_size}}}});
-
-    // c_intermed4 -> 1/sqrt(var + epsilon) (CB 10)
-    program_descriptor.cbs.push_back(CBDescriptor{
-        .total_size = intermed4_tiles * single_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_10),
-            .data_format = cb_data_format,
-            .page_size = single_tile_size}}}});
-
-    // c_intermed6 -> (x - mean(x)) * 1/sqrt(var + epsilon) (CB 12)
-    program_descriptor.cbs.push_back(CBDescriptor{
-        .total_size = intermed6_tiles * single_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_12),
-            .data_format = cb_data_format,
-            .page_size = single_tile_size}}}});
-
-    // LN-specific intermediates
-    if (!is_rmsnorm) {
-        // c_intermed1 -> mean(x)**2 (CB 7)
-        program_descriptor.cbs.push_back(CBDescriptor{
-            .total_size = intermed1_tiles * single_tile_size,
-            .core_ranges = all_cores,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_7),
-                .data_format = cb_data_format,
-                .page_size = single_tile_size}}}});
-
-        // c_intermed5 -> x - mean(x) (CB 11)
-        program_descriptor.cbs.push_back(CBDescriptor{
-            .total_size = intermed5_tiles * single_tile_size,
-            .core_ranges = all_cores,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_11),
-                .data_format = cb_data_format,
-                .page_size = single_tile_size}}}});
-
-        if (beta.has_value()) {
-            // c_intermed7 -> (x - mean(x)) * 1/sqrt(var + epsilon) * gamma (CB 13)
-            program_descriptor.cbs.push_back(CBDescriptor{
-                .total_size = intermed7_tiles * single_tile_size,
-                .core_ranges = all_cores,
-                .format_descriptors = {{CBFormatDescriptor{
-                    .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_13),
-                    .data_format = cb_data_format,
-                    .page_size = single_tile_size}}}});
-        }
-    }
-
-    // Output (CB 14)
-    program_descriptor.cbs.push_back(CBDescriptor{
-        .total_size = out0_tiles * out_single_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_14),
-            .data_format = out_data_format,
-            .page_size = out_single_tile_size}}}});
-
-    return program_descriptor;
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
 }  // namespace ttnn::prim

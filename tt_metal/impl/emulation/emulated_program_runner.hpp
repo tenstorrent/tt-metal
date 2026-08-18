@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <vector>
+
 namespace tt::tt_metal {
 class IDevice;
 class Program;
@@ -24,10 +26,22 @@ void execute_program_emulated(IDevice* device, Program& program);
 void begin_mesh_dispatch();
 void run_mesh_dispatch();
 
+/// Hold across begin_mesh_dispatch()..run_mesh_dispatch(): pump() drives the same worker pool.
+class MeshDispatchLock {
+public:
+    MeshDispatchLock();
+    ~MeshDispatchLock();
+    MeshDispatchLock(const MeshDispatchLock&) = delete;
+    MeshDispatchLock& operator=(const MeshDispatchLock&) = delete;
+};
+
 /// Host-interleaved socket dispatch: drive a parked (run_persistent) device forward one scheduler
 /// quantum. Called from the host's H2D/D2H socket credit-wait loops (distributed/{h2d,d2h}_socket.cpp)
 /// so kernels blocked on a host-fed socket wait resume as the host streams tokens after program.run().
 /// No-op unless a run is parked in HostWait. See tt-emule docs/socket-emulation.md §7.
 void pump_device();
+
+/// Drive a parked run this caller owns to completion, so Finish means what it does on silicon. Throws.
+void drain_device(const std::vector<int>& device_ids);
 
 }  // namespace tt::tt_metal::emule

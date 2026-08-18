@@ -47,7 +47,7 @@ void kernel_main() {
     constexpr uint32_t dst0 = 0;
     constexpr uint32_t scaler0 = 0;
 
-    binary_op_init_common(cb_in0, cb_in0, cb_out);
+    compute_kernel_hw_startup(cb_in0, cb_in0, cb_out);
 
     // ============================================================================
     // Phase 1: Local Partial Reduction - Reduce across width (row-wise SUM)

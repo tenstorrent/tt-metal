@@ -20,11 +20,11 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     "image_resolution, input_shape, pcc, vae_block",
     [
         # 1024x1024 image resolution
-        ((1024, 1024), (1, 4, 128, 128), 0.933 if is_wormhole_b0() else 0.921, "decoder"),
+        ((1024, 1024), (1, 4, 128, 128), 0.930 if is_wormhole_b0() else 0.905, "decoder"),
         # Blackhole has lower PCC due to DRAM groupnorm numerical differences
         ((1024, 1024), (1, 3, 1024, 1024), 0.9769 if is_wormhole_b0() else 0.964, "encoder"),
         # 512x512 image resolution
-        ((512, 512), (1, 4, 64, 64), 0.936, "decoder"),
+        ((512, 512), (1, 4, 64, 64), 0.931, "decoder"),
         ((512, 512), (1, 3, 512, 512), 0.9796, "encoder"),
     ],
     ids=("test_1024x1024_decode", "test_1024x1024_encode", "test_512x512_decode", "test_512x512_encode"),

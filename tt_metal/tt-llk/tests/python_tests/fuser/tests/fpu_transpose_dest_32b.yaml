@@ -1,0 +1,32 @@
+# Transpose dest operation on 32-bit data (dest_acc=Yes selects the 32-bit format-switching path).
+# Operation is unified with the 16-bit path; is_32bit is derived from dest_acc.
+# Datacopy must precede TransposeDest so Dst contains pre-existing data.
+
+dest_acc: Yes
+
+operands:
+  - name: "input_A"
+    dims: [128, 128]
+    format: "Float32"
+  - name: "output"
+    dims: [128, 128]
+    format: "Float32"
+
+operations:
+  - math:
+      - type: "Fpu"
+        src_a: "input_A"
+        src_b: "input_A"
+        operation: "Datacopy"
+        unpacker: "UnpackerA"
+      - type: "Fpu"
+        src_a: "input_A"
+        src_b: "input_A"
+        operation: "TransposeDest"
+        unpacker: "TransposeDestUnpacker"
+        transpose_within_face: true
+        transpose_faces: true
+    block_size: [64, 64]
+    pack:
+      - output: "output"
+        packer: "Packer"

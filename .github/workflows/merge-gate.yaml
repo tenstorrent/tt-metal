@@ -139,6 +139,9 @@ jobs:
       platform: "Ubuntu 22.04"
       enable-lto: false
       skip-tt-train: false
+      # CI-internal only: consumers of these packages all run in docker images that
+      # already stage SFPI, so skip the redundant download. Never set for release builds.
+      use-system-sfpi: true
       ci-build-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-ci-build-tag }}
       ci-test-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-ci-test-tag }}
       dev-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-dev-tag }}
@@ -168,6 +171,9 @@ jobs:
       toolchain: cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake
       skip-tt-train: false
       publish-artifact: false
+      # CI-internal only: consumers of these packages all run in docker images that
+      # already stage SFPI, so skip the redundant download. Never set for release builds.
+      use-system-sfpi: true
       ci-build-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-ci-build-tag }}
       ci-test-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-ci-test-tag }}
       dev-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-dev-tag }}
@@ -197,6 +203,9 @@ jobs:
       toolchain: cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake
       skip-tt-train: false
       publish-artifact: false
+      # CI-internal only: consumers of these packages all run in docker images that
+      # already stage SFPI, so skip the redundant download. Never set for release builds.
+      use-system-sfpi: true
       ci-build-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-ci-build-tag }}
       ci-test-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-ci-test-tag }}
       dev-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-dev-tag }}
@@ -231,6 +240,7 @@ jobs:
 
   resolve-docker-pull-refs:
     needs: [check-harbor, build]
+    if: ${{ !cancelled() && needs.build.result == 'success' }}
     uses: ./.github/workflows/resolve-docker-pull-refs.yaml
     with:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
@@ -240,6 +250,7 @@ jobs:
 
   resolve-docker-pull-refs-tsan:
     needs: [check-harbor, build-tsan]
+    if: ${{ !cancelled() && needs.build-tsan.result == 'success' }}
     uses: ./.github/workflows/resolve-docker-pull-refs.yaml
     with:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
@@ -247,6 +258,7 @@ jobs:
 
   resolve-docker-pull-refs-asan:
     needs: [check-harbor, build-asan]
+    if: ${{ !cancelled() && needs.build-asan.result == 'success' }}
     uses: ./.github/workflows/resolve-docker-pull-refs.yaml
     with:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
@@ -297,6 +309,7 @@ jobs:
 
   triage-tests:
     needs: [build, resolve-docker-pull-refs, find-changes, check-harbor]
+    if: ${{ !cancelled() && needs.build.result == 'success' && needs.resolve-docker-pull-refs.result == 'success' && needs.find-changes.result == 'success' }}
     secrets: inherit
     uses: ./.github/workflows/triage-tests-impl.yaml
     with:

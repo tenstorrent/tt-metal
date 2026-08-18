@@ -523,6 +523,7 @@ static ProgramDescriptor create_program_batch_sharded_descriptor(
     std::set<CoreCoord> worker_cores_set(all_worker_cores_ordered.begin(), all_worker_cores_ordered.end());
 
     std::vector<uint32_t> bank_ids;
+    bank_ids.reserve(all_worker_cores_ordered.size());
 
     // Idle cores in the bounding box
     for (const auto& core : all_cores_in_rect_grid_vec) {

@@ -97,8 +97,8 @@ void kernel_main() {
 
 // pre-add x + y
 #ifdef FUSE_PRE_ADD
-    binary_op_init_common(dfb_in0, dfb_in1, dfb_in_id);
-    add_tiles_init(dfb_in0, dfb_in1);
+    compute_kernel_hw_startup(dfb_in0, dfb_in1, dfb_in_id);
+    add_init(dfb_in0, dfb_in1);
     dfb_in.reserve_back(num_tiles_per_block);
     for (uint32_t i = 0; i < block_h; i++) {
         index_subblock_w_offset = 0;
@@ -122,7 +122,8 @@ void kernel_main() {
     dfb_in.wait_front(num_tiles_per_block);
     pack_reconfig_data_format(dfb_in_id, dfb_x2_id);
 #else
-    binary_op_init_common(dfb_in_id, dfb_in_id, dfb_x2_id);
+    // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
+    compute_kernel_hw_startup(dfb_in_id, dfb_in_id, dfb_x2_id);
 #endif
 
 #ifdef DO_COL_MASK
@@ -149,7 +150,7 @@ void kernel_main() {
     // width only. dfb_col_mask_packed is the writer-generated mask (1.0 valid / 0.0 padding),
     // waited on above and read by tile index.
     reconfig_data_format(dfb_in_id, dfb_col_mask_packed_id);
-    mul_tiles_init(dfb_in_id, dfb_col_mask_packed_id);
+    mul_init(dfb_in_id, dfb_col_mask_packed_id);
     dfb_x2.reserve_back(num_tiles_per_block);
     index_h_offset = 0;
     for (uint32_t i = 0; i < block_h; i++) {
@@ -199,7 +200,7 @@ void kernel_main() {
 #endif  // not RMSNORM
 
     // X^2
-    mul_tiles_init(dfb_in0, dfb_in0);
+    mul_init(dfb_in0, dfb_in0);
     index_h_offset = 0;
     dfb_x2.reserve_back(num_tiles_per_block);
     for (uint32_t i = 0; i < block_h; i++) {

@@ -18,8 +18,13 @@ struct OperationInfo {
 };
 
 struct PeakMemoryUsagePerCore {
+    /** circular buffers only; a Metal 2.0 program has none, so this is legitimately 0 for a ported op */
     size_t peak_cb = 0;
     size_t peak_l1 = 0;
+    /** Metal 2.0 program-scope L1, reported per kind rather than folded into peak_cb */
+    size_t peak_dataflow_buffer = 0;
+    size_t peak_scratchpad = 0;
+    /** every kind above, so a "does this fit in L1" check needs this one number */
     size_t peak_total = 0;
 };
 

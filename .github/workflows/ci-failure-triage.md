@@ -46,10 +46,11 @@ concurrency:
 safe-outputs:
   mentions: false
   create-issue:
+    # Shadow: write-only PAT → tt-auto-triage. Prod: target-repo=tt-metal, drop token (GITHUB_TOKEN), add issues:write.
     target-repo: "tenstorrent/tt-auto-triage"
     title-prefix: "[gh-aw-pilot] "
     labels: [gh-aw-pilot]
-    github-token: ${{ secrets.TT_METAL_TICKETING_TOKEN }}
+    github-token: ${{ secrets.TT_AUTO_TRIAGE_PILOT_ISSUE_CREATION_TOKEN }}
     # A run may fail several jobs with distinct signatures; allow one issue per
     # distinct failure (default is 1, which would silently drop the rest).
     max: 5
@@ -63,7 +64,7 @@ safe-outputs:
     deduplicate-by-title: true
   add-comment:
     target-repo: "tenstorrent/tt-auto-triage"
-    github-token: ${{ secrets.TT_METAL_TICKETING_TOKEN }}
+    github-token: ${{ secrets.TT_AUTO_TRIAGE_PILOT_ISSUE_CREATION_TOKEN }}
     max: 5
   # Shadow pilot must not write to tt-metal: disable the auto-enabled
   # framework outputs that would otherwise file issues in the source repo.
@@ -73,16 +74,14 @@ safe-outputs:
   report-incomplete: false
 
 tools:
+  bash: [] # no shell access needed — triage works entirely through the GitHub MCP toolset
   github:
     # Only the toolsets triage needs: run/job/log access plus issue search.
     toolsets: [actions, repos, issues, search, context]
     lockdown: false
     min-integrity: none # reads CI logs and cross-repo triage issues
-    # Read searches (Phase 1/5 dedup) must use the same token as the writes so
-    # they stay authorized if tt-auto-triage ever becomes private — the default
-    # GITHUB_TOKEN can only read it while it is public, which would silently
-    # break dedup and duplicate every run.
-    github-token: ${{ secrets.TT_METAL_TICKETING_TOKEN }}
+    # Pin reads to job-scoped GITHUB_TOKEN (omitting = broader cascade); dedup breaks if tt-auto-triage goes private.
+    github-token: ${{ secrets.GITHUB_TOKEN }}
   cache-memory:
     retention-days: 30
 

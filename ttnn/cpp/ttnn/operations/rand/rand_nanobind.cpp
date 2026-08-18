@@ -19,13 +19,15 @@ void bind_rand_operation(nb::module_& mod) {
     std::string doc =
         R"doc(
         Generates a tensor with the given shape, filled with random values from a uniform distribution.
-        based on the specified data type:
+        Output semantics depend on the specified data type:
 
-        - DataType.float32 / bfloat16 / bfloat4_b / bfloat8_b:
-            Floating-point values in range [0.0, 1.0)
+        - DataType.float32 / bfloat16:
+            Values are generated natively in the half-open range [`low`, `high`).
 
-        - Integer data types:
-            Not supported for uniform random generation.
+        - DataType.bfloat4_b / bfloat8_b / int8 / int32 / uint16 / uint32:
+            These legacy outputs are generated in float32 and then typecast. Typecast rounding applies, so the
+            converted values are not guaranteed to remain in [`low`, `high`). Integer output is not a discrete
+            uniform distribution. DataType.uint8 and fp8_e4m3 are not supported.
 
         Args:
             shape (list[int]) - a list of integers defining the shape of the output tensor.

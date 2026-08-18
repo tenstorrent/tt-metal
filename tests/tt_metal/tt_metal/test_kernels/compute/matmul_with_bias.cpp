@@ -28,6 +28,7 @@ void kernel_main() {
     CircularBuffer cb1(tt::CBIndex::c_1);
     CircularBuffer cb16(tt::CBIndex::c_16);
 
+    // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
     compute_kernel_hw_startup<SrcOrder::Reverse>(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
     matmul_init(tt::CBIndex::c_0, tt::CBIndex::c_1);
     for (uint32_t b = 0; b < block_cnt; ++b) {
@@ -71,7 +72,7 @@ void kernel_main() {
 
         tile_regs_acquire();
 
-        add_bcast_rows_init_short(tt::HlkOperand::intermed0, tt::HlkOperand::in2);
+        add_bcast_rows_init(tt::HlkOperand::intermed0, tt::HlkOperand::in2);
         cb24.wait_front(out_block_tile_cnt);
         cb2.wait_front(dst_tile_cols);
         int dst_tile_index = 0;

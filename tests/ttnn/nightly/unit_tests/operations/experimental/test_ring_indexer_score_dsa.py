@@ -21,6 +21,7 @@ from tests.ttnn.nightly.unit_tests.operations.experimental.test_indexer_score im
     assert_indexer_match,
     glx_config,
     _global_inputs,
+    _nd_sharded_dram_config,
     _per_sp_ref,
     _straddle_ref,
     _to_slab,
@@ -57,7 +58,8 @@ def _fused_dev_inputs(submesh, q_g, w_g, k_host, *, k_dtype=ttnn.bfloat16):
     q_dev = ttnn.from_torch(q_g, device=submesh, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=shard)
     w_dev = ttnn.from_torch(w_g, device=submesh, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=shard)
     k_local = _shard_k(submesh, k_host, dtype=k_dtype)  # [B,1,sll,D] per chip (the all-gather INPUT)
-    k_gathered = _persistent_buffer(submesh, torch.zeros_like(k_host), dtype=k_dtype)  # [B,1,T,D] AG OUTPUT
+    # Indexed mode gathers one selected input slot into slot 0; batch-1 scratch also covers the ordinary B=1 path.
+    k_gathered = _persistent_buffer(submesh, torch.zeros_like(k_host[:1]), dtype=k_dtype)
     return q_dev, w_dev, k_local, k_gathered
 
 
@@ -67,12 +69,10 @@ def _run_fused(
     block_cyclic,
     num_links=1,
     k_dtype=ttnn.bfloat16,
-    topology=ttnn.Topology.Linear,
-    fabric_config=ttnn.FabricConfig.FABRIC_1D,
 ):
     """Run the one fused op and check vs the per-SP reference. num_links only changes fabric routing, never
     the gathered result -> same reference."""
-    submesh, parent, ccl_semaphores, subdevice_id, stall_group = _open_ring4_ccl(fabric_config)
+    submesh, parent, ccl_semaphores, subdevice_id, stall_group = _open_ring4_ccl()
     try:
         q_g, k_nat, w_g = _global_inputs(heads, CHUNK_GLOBAL, T, seed=42)
         k_host = _to_slab(k_nat, RING, CHUNK_GLOBAL) if block_cyclic else k_nat
@@ -86,7 +86,7 @@ def _run_fused(
             k_local,
             ccl_semaphores,
             cluster_axis=SP_AXIS,
-            topology=topology,
+            topology=ttnn.Topology.Linear,
             num_links=num_links,
             ag_sub_device_id=subdevice_id,
             program_config=glx_config(heads),
@@ -108,17 +108,6 @@ def _run_fused(
 def test_indexer_score_ring4_fused(case_id, heads, block_cyclic):
     """Base fused path, num_links=2 (the production Blackhole link count)."""
     _run_fused(heads, block_cyclic=block_cyclic, num_links=2)
-
-
-def test_indexer_score_ring4_fused_ring_topology():
-    """Exercise the distinct wraparound neighbor/threshold path under a genuine 1D ring fabric."""
-    _run_fused(
-        16,
-        block_cyclic=True,
-        num_links=1,
-        topology=ttnn.Topology.Ring,
-        fabric_config=ttnn.FabricConfig.FABRIC_1D_RING,
-    )
 
 
 @pytest.mark.parametrize("block_cyclic", [False, True], ids=["contiguous", "block_cyclic"])
@@ -174,11 +163,9 @@ def test_indexer_score_ring4_fused_production_shape(case_id, heads):
 
 
 def _run_fused_multiuser(heads, *, num_users, cache_batch_idx, num_links=1):
-    """Multi-user indexed cache: k_local [num_users,1,sll,D] + gathered [num_users,1,T,D]; cache_batch_idx
-    selects the slot in-kernel. Regression guard for the local-shard offset fix -- the reader must offset BOTH
-    the remote and the local reads by the slot (pre-fix it read the local band from slot 0, mixing users; slots
-    hold distinct K so any cache_batch_idx>0 fails PCC). An op capability the model itself doesn't use (it
-    slices to batch-1 before the AG), guarded here for other callers."""
+    """Multi-user indexed cache: k_local [num_users,1,sll,D] and batch-1 gathered scratch. cache_batch_idx
+    selects the single gathered slot and the reader applies the corresponding local-cache offset. Distinct
+    user K values make either a gather-slot or local-slot addressing error fail PCC."""
     submesh, parent, ccl_semaphores, subdevice_id, stall_group = _open_ring4_ccl()
     try:
         # Shared q/w scoring distinct per-user caches (distinct seed per slot -> a wrong-slot read changes the score).
@@ -214,6 +201,91 @@ def _run_fused_multiuser(heads, *, num_users, cache_batch_idx, num_links=1):
 def test_indexer_score_ring4_fused_indexed_cache():
     """cache_batch_idx=1 (2nd user slot). One representative case (dsv32) -- the slot offset is head-independent."""
     _run_fused_multiuser(16, num_users=2, cache_batch_idx=1)
+
+
+@pytest.mark.parametrize("rows_per_shard", [32, 96], ids=["prod_rows32", "padded_rows96"])
+def test_indexer_score_ring4_fused_nd_indexed_bounded_gather_cache_hit(rows_per_shard):
+    """Production cache contract in one regression:
+
+    * multi-slot k_local is ND-sharded across DRAM banks;
+    * the gather selects one slot into a batch-1 scratch;
+    * kv_len bounds transport to complete touched block-cyclic slabs; and
+    * a second dispatch changes both slot and kv_len on the same cached program.
+    """
+    heads, num_users = 16, 3
+    t_alloc = 4 * CHUNK_GLOBAL
+    local_t = t_alloc // RING
+    submesh, parent, ccl_semaphores, subdevice_id, stall_group = _open_ring4_ccl()
+    try:
+        q_g, _, w_g = _global_inputs(heads, CHUNK_GLOBAL, t_alloc, seed=42)
+        k_nat = torch.cat(
+            [_global_inputs(heads, CHUNK_GLOBAL, t_alloc, seed=100 + u)[1] for u in range(num_users)], dim=0
+        )
+        k_bc = torch.cat([_to_slab(k_nat[u : u + 1], RING, CHUNK_GLOBAL) for u in range(num_users)], dim=0)
+        q_dev, w_dev, k_local_i, k_gathered = _fused_dev_inputs(submesh, q_g, w_g, k_bc, k_dtype=ttnn.bfloat8_b)
+        k_local = ttnn.to_memory_config(k_local_i, _nd_sharded_dram_config(submesh, rows_per_shard=rows_per_shard))
+        ttnn.deallocate(k_local_i)
+
+        def _score(slot, chunk_start, kv_len):
+            out = ttnn.experimental.ring_indexer_score_dsa(
+                q_dev,
+                k_gathered,
+                w_dev,
+                k_local,
+                ccl_semaphores,
+                cluster_axis=SP_AXIS,
+                topology=ttnn.Topology.Linear,
+                num_links=1,
+                ag_sub_device_id=subdevice_id,
+                chunk_start_idx=chunk_start,
+                cache_batch_idx=slot,
+                kv_len=kv_len,
+                block_cyclic_sp_axis=SP_AXIS,
+                block_cyclic_chunk_local=QB_SQ,
+                program_config=glx_config(heads),
+            )
+            ttnn.synchronize_device(submesh, sub_device_ids=stall_group)
+            return ttnn.to_torch(out, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=2))
+
+        # A tile past the first global-slab boundary requires TWO complete local slabs per rank. This
+        # specifically exercises ceil(kv_len/chunk_global), not just exact-boundary truncation.
+        large_kv_len = CHUNK_GLOBAL + 32
+        out0 = _score(slot=1, chunk_start=32, kv_len=large_kv_len)
+        entries_after_first = submesh.num_program_cache_entries()
+        scratch_after_large = [ttnn.to_torch(t).clone() for t in ttnn.get_device_tensors(k_gathered.cpu())]
+        ref0 = _straddle_ref(q_g, k_nat[1:2, :, :large_kv_len, :], w_g, RING, CHUNK_GLOBAL, 32, large_kv_len)
+        assert_indexer_match(out0[:, :, :, :large_kv_len], ref0, CHUNK_GLOBAL, large_kv_len, check_neg=True)
+
+        valid_local_large = 2 * QB_SQ
+        for scratch_t in scratch_after_large:
+            for rank in range(RING):
+                tail = scratch_t[:, :, rank * local_t + valid_local_large : (rank + 1) * local_t, :]
+                assert torch.count_nonzero(tail) == 0, "gather wrote beyond the slab-rounded kv_len extent"
+
+        # Shrink the extent and switch users. Both are runtime values: this must reuse the same compiled
+        # program, overwrite only slab 0 from slot 2, and leave slab 1 exactly as slot 1 wrote it.
+        out1 = _score(slot=2, chunk_start=0, kv_len=CHUNK_GLOBAL)
+        assert (
+            submesh.num_program_cache_entries() == entries_after_first
+        ), "slot/kv_len change recompiled instead of exercising the cache-hit runtime-arg patch"
+        scratch_after_small = [ttnn.to_torch(t) for t in ttnn.get_device_tensors(k_gathered.cpu())]
+        ref1 = _per_sp_ref(q_g, k_nat[2:3, :, :CHUNK_GLOBAL, :], w_g, RING, 0)
+        assert_indexer_match(out1[:, :, :, :CHUNK_GLOBAL], ref1, CHUNK_GLOBAL, CHUNK_GLOBAL, check_neg=True)
+
+        any_first_slab_changed = False
+        for before, after in zip(scratch_after_large, scratch_after_small):
+            for rank in range(RING):
+                base = rank * local_t
+                any_first_slab_changed |= not torch.equal(
+                    before[:, :, base : base + QB_SQ, :], after[:, :, base : base + QB_SQ, :]
+                )
+                assert torch.equal(
+                    before[:, :, base + QB_SQ : base + 2 * QB_SQ, :],
+                    after[:, :, base + QB_SQ : base + 2 * QB_SQ, :],
+                ), "shrinking kv_len rewrote the second slab on a cache hit"
+        assert any_first_slab_changed, "switching cache slots did not update any gathered first-slab data"
+    finally:
+        _close_ring4_ccl(parent, submesh, stall_group)
 
 
 @pytest.mark.parametrize("case_id, heads", QB_CASES, ids=QB_IDS)

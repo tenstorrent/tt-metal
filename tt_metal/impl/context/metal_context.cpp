@@ -229,7 +229,7 @@ void MetalContext::initialize(
 
     // Initialize dispatch state
     dispatch_core_manager_ = std::make_unique<dispatch_core_manager>(
-        dispatch_core_config_, num_hw_cqs, MetalEnvAccessor(*this->env_).impl());
+        dispatch_core_config_, num_hw_cqs, MetalEnvAccessor(*this->env_).impl(), *this);
     dispatch_query_manager_ =
         std::make_unique<DispatchQueryManager>(*this->env_, *dispatch_core_manager_, dispatch_core_config_, num_hw_cqs);
     const bool is_galaxy_cluster = get_cluster().is_galaxy_cluster();
@@ -243,8 +243,7 @@ void MetalContext::initialize(
         dispatch_core_type =
             resolve_dispatch_core_type(MetalEnvAccessor(*env_).impl(), device_id, dispatch_core_config_);
     }
-    const CommandQueueDispatchLayout& cq_dispatch_layout =
-        dispatch_query_manager_->cq_dispatch_layout(dispatch_core_type);
+    const CommandQueueDispatchLayout& cq_dispatch_layout = dispatch_query_manager_->cq_dispatch_layout();
     dispatch_mem_map_ = std::make_unique<DispatchMemMap>(
         dispatch_core_type, num_hw_cqs, hal(), is_galaxy_cluster, cq_dispatch_layout, rtoptions());
     // Initialize debug servers. Attaching individual devices done below
@@ -271,10 +270,10 @@ void MetalContext::initialize(
     }
 
     if (rtoptions().get_profiler_enabled()) {
-        profiler_state_manager_ = std::make_unique<ProfilerStateManager>();
+        profiler_state_manager_ = std::make_unique<ProfilerStateManager>(MetalEnvAccessor(*this->env_).impl());
     }
 
-    data_collector_ = std::make_unique<DataCollector>();
+    data_collector_ = std::make_unique<DataCollector>(MetalEnvAccessor(*this->env_).impl());
 
     // Minimal setup, don't initialize FW/Dispatch/etc.
     if (minimal) {
@@ -320,7 +319,7 @@ void MetalContext::reinitialize_dispatch_managers() {
     // Reinitialize dispatch core manager and query manager to pick up current dispatch mode
     // This refreshes cached dispatch/compute core allocations when transitioning SD<->FD
     dispatch_core_manager_ = std::make_unique<dispatch_core_manager>(
-        dispatch_core_config_, num_hw_cqs_, MetalEnvAccessor(*this->env_).impl());
+        dispatch_core_config_, num_hw_cqs_, MetalEnvAccessor(*this->env_).impl(), *this);
     dispatch_query_manager_ = std::make_unique<DispatchQueryManager>(
         *this->env_, *dispatch_core_manager_, dispatch_core_config_, num_hw_cqs_);
 }
@@ -521,7 +520,7 @@ MetalContext::MetalContext(ContextId context_id, tt::tt_metal::MetalEnv& metal_e
     check_context_id(context_id);
     // Construct before the dispatch managers: dispatch core (re)initialization queries it to exclude
     // claimed service cores from the FD pool.
-    service_core_manager_ = std::make_unique<internal::ServiceCoreManager>(MetalEnvAccessor(*this->env_).impl());
+    service_core_manager_ = std::make_unique<internal::ServiceCoreManager>(MetalEnvAccessor(*this->env_).impl(), *this);
     device_manager_ = std::make_unique<DeviceManager>(metal_env, *this);
 }
 

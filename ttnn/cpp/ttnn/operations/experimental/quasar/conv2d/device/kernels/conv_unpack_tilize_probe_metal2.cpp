@@ -42,7 +42,6 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
-#include "api/debug/dprint.h"
 
 // MAX reduce: neginf srcA padding, no zero srcA (mirror the pool's maxpool config).
 static constexpr bool neginf_srca = true;
@@ -93,13 +92,6 @@ void kernel_main() {
     tilizeA_B_reduce_init<neginf_srca, zero_srca>(in_cb_id, in_scalar_cb_id, CHUNK);
     pack_untilize_dest_init<CHUNK>(out_cb_id);
 
-    UNPACK(DPRINT(
-        "UTPROBE start K={} CHUNK={} num_chunks={} total={}\n",
-        (uint32_t)in0_block_w,
-        (uint32_t)CHUNK,
-        (uint32_t)num_chunks,
-        (uint32_t)total_tiles));
-
     for (uint32_t iter = 0; iter < num_chunks; ++iter) {
         // Re-init unpack+math for this chunk WITHOUT re-running hw_configure. Re-running
         // hw_configure per chunk corrupts unpacker state on Quasar (pool comment) — this keeps unpack+math in
@@ -124,7 +116,5 @@ void kernel_main() {
 
         // Per-chunk progress: the LAST UTPROBE line before a fault shows exactly how far the unpack-tilize
         // path got (compare to conv_tilize_only, which 0x19s after ~5 tilize_block blocks).
-        UNPACK(DPRINT("UTPROBE iter={}/{} done\n", (uint32_t)(iter + 1), (uint32_t)num_chunks));
     }
-    UNPACK(DPRINT("UTPROBE COMPLETE all {} chunks (no 0x19)\n", (uint32_t)num_chunks));
 }  // void kernel_main()

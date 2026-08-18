@@ -14,7 +14,7 @@ import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import TilizeGolden, get_golden_generator
-from helpers.llk_params import DestAccumulation, format_dict
+from helpers.llk_params import DestAccumulation, PerfRunType, format_dict
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
@@ -23,6 +23,7 @@ from helpers.test_variant_parameters import (
     LOOP_FACTOR,
     NUM_FACES,
     NUM_GUARD_TILES,
+    PERF_RUN_TYPE,
     TILE_COUNT,
     generate_input_dim,
 )
@@ -82,7 +83,7 @@ def test_fast_tilize_full(formats, dest_acc, dimensions):
     configuration = TestConfig(
         "sources/fast_tilize_bh_test.cpp",
         formats,
-        templates=[],
+        templates=[PERF_RUN_TYPE(PerfRunType.L1_TO_L1)],
         runtimes=[
             generate_input_dim(input_dimensions, input_dimensions),
             TILE_COUNT(tile_count),
@@ -191,7 +192,7 @@ def test_fast_tilize_large(formats, dest_acc, dimensions):
     configuration = TestConfig(
         "sources/fast_tilize_bh_test.cpp",
         formats,
-        templates=[],
+        templates=[PERF_RUN_TYPE(PerfRunType.L1_TO_L1)],
         runtimes=[
             generate_input_dim(input_dimensions, input_dimensions),
             TILE_COUNT(tile_count),
@@ -270,7 +271,7 @@ def test_fast_tilize_overflow_guard(formats, dest_acc, dimensions):
     configuration = TestConfig(
         "sources/fast_tilize_bh_test.cpp",
         formats,
-        templates=[],
+        templates=[PERF_RUN_TYPE(PerfRunType.L1_TO_L1)],
         runtimes=[
             generate_input_dim(input_dimensions, input_dimensions),
             TILE_COUNT(tile_count),

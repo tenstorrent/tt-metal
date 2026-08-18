@@ -263,23 +263,6 @@ inline void cfg_rmw(std::uint32_t cfg_addr32, std::uint32_t cfg_shamt, std::uint
 // 	TTI_WRCFG(tmp_gpr2,p_cfg::WRCFG_32b,cfg_addr32);
 // }
 
-// CHECKME: does this need to change now that BRISC is gone?
-inline void mailbox_write(const std::uint8_t thread, const std::uint32_t data)
-{
-    mailbox_base[thread][0] = data;
-}
-
-// Blocking read
-inline std::uint32_t mailbox_read(const std::uint8_t thread)
-{
-    return mailbox_base[thread][0];
-}
-
-inline bool mailbox_not_empty(const std::uint8_t thread)
-{
-    return mailbox_base[thread][1] > 0;
-}
-
 // If the TRACK_x bit is set, then the Tensix hardware will automatically
 // stall TRISC memory accesses and/or Tensix instructions to x in order
 // to guarantee correct ordering. This should eliminate most cases where
@@ -465,6 +448,54 @@ inline void csr_write(std::uint32_t val)
         asm volatile("fence");
     }
     asm volatile("csrw %[csr_num], %[val] \n" : : [csr_num] "i"(csr_num), [val] "r"(val));
+}
+
+// llk_assert.h (when ENABLE_LLK_ASSERT is set) pulls in api/debug/assert.h -> risc_common.h, whose
+// TRISC-side setup_isr_csrs() references ckernel::csr_read<CSR::TRISC_ID>() -- this include must
+// stay below the CSR/csr_read/csr_write definitions above, or that reference fails to compile.
+// It must also stay OUTSIDE namespace ckernel (which spans most of this file): with ENABLE_LLK_ASSERT
+// set, everything llk_assert.h transitively includes would otherwise be nested into ckernel::, and
+// global-scope users of those declarations (e.g. trisck.cc) would stop resolving.
+} // namespace ckernel
+
+#include "llk_assert.h"
+
+namespace ckernel
+{
+
+// NOTE: loopback (a thread writing or reading its OWN mailbox slot) is legal hardware behavior,
+// but these helpers exist to synchronize threads with one another -- in that scenario loopback
+// must be avoided: every slot is written and read by threads OTHER than its owner, and an
+// accidental self-loopback (from stale slot numbering) is what tripped the Watcher IB-interrupt
+// fault (0x19), not the MMIO access mechanism itself. The self-check below only applies to TRISC
+// callers (COMPILE_FOR_TRISC); a DM-context caller (COMPILE_FOR_DM) is never one of the 4 TRISC
+// roles this ThreadId enum represents, so it can never collide with itself here.
+// COMPILE_FOR_TRISC is the cluster-global processor id (NEO_n_COMPUTE_m = n*4 + m, see
+// QuasarComputeProcessor), while mailbox slots are indexed by NEO-cluster-local role (0..3), so the
+// self-check compares against the local id, COMPILE_FOR_TRISC % 4.
+inline void mailbox_write(const std::uint8_t thread, const std::uint32_t data)
+{
+#ifdef COMPILE_FOR_TRISC
+    LLK_ASSERT(thread != COMPILE_FOR_TRISC % 4, "mailbox_write: self-loopback not valid for inter-thread sync");
+#endif
+    mailbox_base[thread][0] = data;
+}
+
+// Blocking read
+inline std::uint32_t mailbox_read(const std::uint8_t thread)
+{
+#ifdef COMPILE_FOR_TRISC
+    LLK_ASSERT(thread != COMPILE_FOR_TRISC % 4, "mailbox_read: self-loopback not valid for inter-thread sync");
+#endif
+    return mailbox_base[thread][0];
+}
+
+inline bool mailbox_not_empty(const std::uint8_t thread)
+{
+#ifdef COMPILE_FOR_TRISC
+    LLK_ASSERT(thread != COMPILE_FOR_TRISC % 4, "mailbox_not_empty: self-loopback not valid for inter-thread sync");
+#endif
+    return mailbox_base[thread][1] > 0;
 }
 
 union qstatus_u

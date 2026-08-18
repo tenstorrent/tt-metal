@@ -306,6 +306,7 @@ void MeshCommandQueueBase::enqueue_write_with_core_filter(
     auto lock = lock_api_function_();
     // Iterate over global coordinates; skip host-remote coordinates, as per `host_buffer` configuration.
     std::vector<distributed::ShardDataTransfer> shard_data_transfers;
+    shard_data_transfers.reserve(host_buffer.shard_coords().size());
     for (const auto& host_buffer_coord : host_buffer.shard_coords()) {
         auto buf = host_buffer.get_shard(host_buffer_coord);
         if (buf.has_value()) {
@@ -373,11 +374,15 @@ void MeshCommandQueueBase::enqueue_read(
     bool blocking) {
     auto lock = lock_api_function_();
     std::vector<distributed::ShardDataTransfer> shard_data_transfers;
+    shard_data_transfers.reserve(buffer->device()->shape().mesh_size());
     // For non-blocking reads, capture a MemoryPin for each shard so the host
     // buffer stays alive until the async reader thread finishes the memcpy
     // (fixes use-after-free, issue #43638). For blocking reads finish_nolock()
     // ensures the copy is complete before we return, so no pin is needed.
     std::vector<MemoryPin> memory_pins;
+    if (!blocking) {
+        memory_pins.reserve(buffer->device()->shape().mesh_size());
+    }
     for (const auto& coord : MeshCoordinateRange(buffer->device()->shape())) {
         if (shards.has_value() && !shards->contains(coord)) {
             continue;

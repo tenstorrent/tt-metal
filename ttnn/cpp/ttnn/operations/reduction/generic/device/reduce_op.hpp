@@ -24,14 +24,12 @@ Tensor reduce(
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids = std::nullopt,
     bool negate = false,
-    // When true, eligible mean/sum reduces consume ROW_MAJOR input directly via the dense
-    // row-major fast path. When false (default), the op always tilizes and uses the classic
-    // tile-reduce kernels. Default-off pending fixes to the dense RM path (perf regression +
-    // multi-H-tile hang); see reduce_op.cpp for the eligibility constraints.
-    bool use_row_major_support = false,
-    // When false (default), fp32 mean runs on the accurate SFPU path (full fp32); true selects the FPU. Ignored for
-    // non-fp32/non-AVG.
-    bool fast_and_approximate_mode = false);
+    // When false (default), fp32 mean and max run on the accurate SFPU path (full fp32); true selects the FPU.
+    // Ignored for non-fp32 and for math ops other than AVG/MAX.
+    bool fast_and_approximate_mode = false,
+    // Requested layout of the result; std::nullopt means "whatever the selected path emits":
+    // ROW_MAJOR on the dense RM paths, TILE on the tilized ones.
+    const std::optional<tt::tt_metal::Layout>& output_layout = std::nullopt);
 
 }  // namespace ttnn::operations::reduction::generic::detail
 

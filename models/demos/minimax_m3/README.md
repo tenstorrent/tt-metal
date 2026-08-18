@@ -59,6 +59,13 @@ PREFILL_CHUNKED=1 PREFILL_CHUNK_SIZE=5120 PREFILL_TRACE_DIR=/path/to/golden/long
 
 Module-level PCC tests (vs torch reference / HF) live under [`tests/unit/`](tests/unit/); golden generation is in [`scripts/`](scripts/).
 
+### Environment variables
+
+| Variable | Default | Effect |
+|---|---|---|
+| `M3_SHARDED_RESIDUAL` | `1` | Residual-stream layout (`tt/residual.py`): `1` = `emb/tp`-sharded per TP column (attention and the MLPs close with a reduce-scatter only); `0` = full-emb replicated (the layout older baselines were measured on, kept for bisects). |
+| `M3_SHARDED_RESIDUAL_NORM` | `gather_first` | Only with a sharded residual: `gather_first` = all-gather the residual shard, then one single-pass norm (measured fastest); `distributed` = 3-op distributed RMSNorm on the shard, then all-gather (the DeepSeek/Kimi/GLM shape, kept for A/Bs). |
+
 Multi-galaxy pipeline-parallel prefill (2 / 4 galaxies) — running, KV-cache accuracy, and throughput/overlap measurement — is documented in [`docs/PIPELINE_PREFILL_TESTING.md`](docs/PIPELINE_PREFILL_TESTING.md).
 
 ## Layout

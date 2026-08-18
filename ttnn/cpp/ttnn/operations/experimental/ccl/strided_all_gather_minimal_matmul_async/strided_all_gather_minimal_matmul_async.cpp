@@ -25,7 +25,13 @@ std::vector<ttnn::Tensor> strided_all_gather_minimal_matmul_async(
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel,
-    std::optional<bool> read_local_slice_from_input) {
+    std::optional<bool> read_local_slice_from_input,
+    const std::optional<const Tensor>& fused_ternary_input_a,
+    const std::optional<const Tensor>& fused_ternary_input_b,
+    std::optional<float> fused_ternary_scalar,
+    int32_t chunks,
+    ttnn::experimental::prim::MMSignalAggregatorMode mm_signal_aggregator_mode,
+    bool fuse_swiglu) {
     return ttnn::prim::strided_all_gather_minimal_matmul_async(
         input_tensor,
         weight_tensor,
@@ -45,7 +51,13 @@ std::vector<ttnn::Tensor> strided_all_gather_minimal_matmul_async(
         num_workers_per_link.value_or(
             1),  // Conservatively 1 right now since the all gather core grid is hardcoded from the outside
         num_buffers_per_channel,
-        read_local_slice_from_input);
+        read_local_slice_from_input,
+        fused_ternary_input_a,
+        fused_ternary_input_b,
+        fused_ternary_scalar,
+        chunks,
+        mm_signal_aggregator_mode,
+        fuse_swiglu);
 }
 
 }  // namespace ttnn::experimental

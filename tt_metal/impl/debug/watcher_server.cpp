@@ -130,7 +130,7 @@ void WatcherServer::Impl::attach_devices() {
         auto all_devices = env_.get_cluster().all_chip_ids();
         for (ChipId device_id : all_devices) {
             device_id_to_reader_.try_emplace(device_id, logfile_, device_id, kernel_names_, env_, watcher_server_);
-            log_info(LogLLRuntime, "Watcher attached device {}", device_id);
+            log_debug(LogLLRuntime, "Watcher attached device {}", device_id);
             fprintf(logfile_, "At %.3lfs attach device %d\n\n", get_elapsed_secs(), device_id);
             fflush(logfile_);  // Ensure attach message is committed before watcher server thread writes
         }
@@ -188,7 +188,7 @@ void WatcherServer::Impl::detach_devices() {
         for (ChipId device_id : all_devices) {
             TT_ASSERT(device_id_to_reader_.contains(device_id));
             device_id_to_reader_.erase(device_id);
-            log_info(LogLLRuntime, "Watcher detached device {}", device_id);
+            log_debug(LogLLRuntime, "Watcher detached device {}", device_id);
             fprintf(logfile_, "At %.3lfs detach device %d\n", get_elapsed_secs(), device_id);
         }
 
@@ -212,7 +212,7 @@ void WatcherServer::Impl::isolated_dump(std::vector<ChipId>& device_ids) {
     read_kernel_ids_from_file();
     for (ChipId device_id : device_ids) {
         device_id_to_reader_.try_emplace(device_id, logfile_, device_id, kernel_names_, env_, watcher_server_);
-        log_info(LogLLRuntime, "Watcher attached device {}", device_id);
+        log_debug(LogLLRuntime, "Watcher attached device {}", device_id);
         fprintf(logfile_, "At %.3lfs attach device %d\n", get_elapsed_secs(), device_id);
     }
     dump();

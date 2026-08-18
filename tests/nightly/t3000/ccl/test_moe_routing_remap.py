@@ -136,3 +136,177 @@ def test_gen_tensors(mesh_device, non_zero_size, expert_parallel_size, num_clust
             idx = tuple(i[1] for i in idx.tolist())
             idxs.add(idx)
         assert len(idxs) == 1
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=["mesh_device"])
+@pytest.mark.parametrize(
+    "cluster_axis, invalid_expert_parallel_size",
+    [
+        # Issue #51214 bug 11: on main the TT_FATAL parsed as
+        # (expert_parallel_size == (cluster_axis == 0)) ? num_cols : num_rows,
+        # so mismatched sizes were never rejected. A 2x4 mesh has 2 rows / 4 cols.
+        # Use sizes that divide num_cluster_experts=32 so we reach the mesh-axis check
+        # (not the earlier "evenly divisible by cluster" TT_FATAL).
+        (0, 4),  # axis 0 = rows (size 2), 4 != 2
+        (1, 2),  # axis 1 = cols (size 4), 2 != 4
+    ],
+    ids=["cluster_axis0_rows", "cluster_axis1_cols"],
+)
+def test_moe_routing_remap_rejects_mismatched_expert_parallel_size(
+    mesh_device, cluster_axis, invalid_expert_parallel_size, expect_error
+):
+    """Regression for #51214 item 11: expert_parallel_size must match the cluster axis extent.
+
+    On main the validation TT_FATAL is dead code due to operator precedence, so this call
+    silently runs with a bogus per-device partition. With the fix it must fail loudly.
+    """
+    mesh_shape = tuple(mesh_device.shape)
+    assert invalid_expert_parallel_size != mesh_shape[cluster_axis]
+
+    routing_weights_torch = _gen_input_routing_weights(non_zero_size=8, num_cluster_experts=32)
+    tt_routing_weights = ttnn.from_torch(
+        routing_weights_torch,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    with expect_error(RuntimeError, "expert parallel size .* should be the same as size of cluster axis"):
+        ttnn.moe_routing_remap(
+            tt_routing_weights,
+            non_zero_weight_size=8,
+            expert_parallel_size=invalid_expert_parallel_size,
+            cluster_axis=cluster_axis,
+        )
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=["mesh_device"])
+def test_moe_routing_remap_rejects_non_divisible_non_zero_weight_size(mesh_device, expect_error):
+    """Regression for the non_zero_weight_size % expert_parallel_size guard.
+
+    The program factory integer-divides these (`non_zero_per_device = nnz / ep`); without the
+    check a remainder is silently truncated. Use a matching axis size (rows=2) so we reach this
+    TT_FATAL rather than the mesh-axis mismatch check.
+    """
+    cluster_axis = 0
+    expert_parallel_size = 2  # matches mesh rows
+    non_zero_weight_size = 3  # 3 % 2 != 0
+
+    routing_weights_torch = _gen_input_routing_weights(non_zero_size=8, num_cluster_experts=32)
+    tt_routing_weights = ttnn.from_torch(
+        routing_weights_torch,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    with expect_error(RuntimeError, "Number of non zero weights .* must be evenly divisible by expert parallel size"):
+        ttnn.moe_routing_remap(
+            tt_routing_weights,
+            non_zero_weight_size=non_zero_weight_size,
+            expert_parallel_size=expert_parallel_size,
+            cluster_axis=cluster_axis,
+        )
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=["mesh_device"])
+def test_moe_routing_remap_rejects_zero_expert_parallel_size(mesh_device, expect_error):
+    """Regression for expert_parallel_size > 0 guard ordering.
+
+    Without this check, `num_cluster_experts % expert_parallel_size` with eps=0 is a SIGFPE
+    rather than a catchable RuntimeError. The guard must run before any modulo on eps.
+    """
+    routing_weights_torch = _gen_input_routing_weights(non_zero_size=8, num_cluster_experts=32)
+    tt_routing_weights = ttnn.from_torch(
+        routing_weights_torch,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    with expect_error(RuntimeError, "expert parallel size must be non-zero"):
+        ttnn.moe_routing_remap(
+            tt_routing_weights,
+            non_zero_weight_size=8,
+            expert_parallel_size=0,
+            cluster_axis=0,
+        )
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=["mesh_device"])
+def test_moe_routing_remap_rejects_zero_non_zero_weight_size(mesh_device, expect_error):
+    """Regression for the non_zero_weight_size > 0 guard.
+
+    nnz=0 satisfies both `<= num_cluster_experts` and `0 % eps == 0`, so without an explicit
+    guard it reaches the program factory as non_zero_per_device=0 and builds the c_1 index CB
+    with a zero page size and total size.
+    """
+    routing_weights_torch = _gen_input_routing_weights(non_zero_size=8, num_cluster_experts=32)
+    tt_routing_weights = ttnn.from_torch(
+        routing_weights_torch,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    with expect_error(RuntimeError, "Number of non zero weights must be non-zero"):
+        ttnn.moe_routing_remap(
+            tt_routing_weights,
+            non_zero_weight_size=0,
+            expert_parallel_size=2,
+            cluster_axis=0,
+        )
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=["mesh_device"])
+def test_moe_routing_remap_gpt_oss_decode_call_on_2x4(mesh_device):
+    """Numeric coverage of the gpt_oss decode argument triple on a 2x4 mesh.
+
+    decode.py previously hardcoded (nnz=4, ep=4, axis=0), which the live mesh-axis check now
+    rejects on a 2-row mesh; the fixed caller produces (nnz=4, ep=2, axis=0). This asserts
+    that triple routes correctly on device. That decode.py actually passes those values is a
+    separate, host-only assertion in
+    models/demos/gpt_oss/tests/unit/test_expert_parallel_config.py.
+    """
+    mesh_shape = tuple(mesh_device.shape)
+    assert mesh_shape == (2, 4)
+
+    # Mirrors gpt_oss decode: num_experts_per_tok=4, ep=rows, cluster_axis=ep_axis=0
+    non_zero_weight_size = 4
+    expert_parallel_size = mesh_shape[0]
+    cluster_axis = 0
+
+    routing_weights_torch, reference_outputs_torch = _gen_tensors(
+        non_zero_weight_size,
+        expert_parallel_size,
+        num_cluster_experts=32,
+        mesh_shape=mesh_shape,
+        cluster_axis=cluster_axis,
+    )
+    tt_routing_weights = ttnn.from_torch(
+        routing_weights_torch,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    tt_output = ttnn.moe_routing_remap(
+        tt_routing_weights,
+        non_zero_weight_size,
+        expert_parallel_size,
+        cluster_axis,
+    )
+    tt_outputs = ttnn.get_device_tensors(tt_output)
+    assert len(tt_outputs) == len(reference_outputs_torch)
+    for test, ref in zip(tt_outputs, reference_outputs_torch):
+        assert_with_pcc(ttnn.to_torch(test), ref)

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <cstdint>
 #include "llk_unpack_binary_broadcast_operands.h"
 #include "llk_unpack_binary_operands.h"
 #include "llk_unpack_common_api.h"
@@ -28,6 +29,16 @@ inline void llk_unpack_AB_init(
     // TODO (tt-metal #42916): Once runtime asserts are added for Quasar, assert that transpose is unused
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
+
+    // Neither LLK below takes a TensorShape, so neither scales its L1 tile index by the face count
+    // (a tiny tile is registered as one HW tile per face, so they would move only a fraction of the
+    // tile and step L1 by a single face). Full-tile only until they are converted (tt-metal #47597).
+    LLK_ASSERT(
+        get_operand_tensor_shape(operandA_id).total_num_faces() == ckernel::MAX_NUM_FACES,
+        "this path indexes L1 in whole tiles, so it supports full 32x32 tiles only");
+    LLK_ASSERT(
+        get_operand_tensor_shape(operandB_id).total_num_faces() == ckernel::MAX_NUM_FACES,
+        "this path indexes L1 in whole tiles, so it supports full 32x32 tiles only");
 
     if constexpr (BType == BroadcastType::NONE) {
         _llk_unpack_binary_operands_init_(operandA_id, operandB_id, 1);
@@ -59,6 +70,8 @@ inline void llk_unpack_AB(
     const std::uint32_t tile_index_b,
     [[maybe_unused]] const std::uint32_t bcast_row_idx = 0) {
     // TODO (tt-metal #42916): Once runtime asserts are added for Quasar, assert that bcast_row_idx is unused
+    LLK_TDMA_GUARD_NOTE_TDMA(operandA);  // TEN-4746: real unpack (UNPACR) disarms these dfbs
+    LLK_TDMA_GUARD_NOTE_TDMA(operandB);
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
 

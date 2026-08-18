@@ -161,7 +161,12 @@ struct kernel_config_msg_t {
     volatile uint16_t remote_cb_offset;
     rta_offset_t rta_offset[MaxProcessorsPerCoreType];
     volatile uint8_t mode;     // dispatch mode host/dev
-    volatile uint8_t pad2[3];  // CODEGEN:skip
+    volatile uint8_t pad2;     // CODEGEN:skip — align cross_node_dfb_offset
+    // Byte offset of CrossNodeDFB kernel-config region from kernel_config_base.
+    // CROSS_NODE_DFB_OFFSET_NONE (0xFF) means no CrossNodeDFBs on this launch.
+    // Valid offsets are L1-aligned and therefore never equal 0xFF. Region layout:
+    //   word[0] = num_slots; then dense [config_page_addr, entry_size, relay_dfb_id] slots.
+    volatile uint16_t cross_node_dfb_offset;
     volatile uint32_t kernel_text_offset[MaxProcessorsPerCoreType];
     volatile uint32_t kernel_text_size[MaxProcessorsPerCoreType];
     volatile uint8_t pad4[(MaxProcessorsPerCoreType % 2) * 12]; // CODEGEN:skip
@@ -196,6 +201,7 @@ static_assert(offsetof(kernel_config_msg_t, kernel_config_base) % sizeof(uint32_
 static_assert(offsetof(kernel_config_msg_t, sem_offset) % sizeof(uint16_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, local_cb_offset) % sizeof(uint16_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, remote_cb_offset) % sizeof(uint16_t) == 0);
+static_assert(offsetof(kernel_config_msg_t, cross_node_dfb_offset) % sizeof(uint16_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, rta_offset) % sizeof(uint16_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, kernel_text_offset) % sizeof(uint32_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, kernel_text_size) % sizeof(uint32_t) == 0);

@@ -19,6 +19,10 @@
 
 // SPLIT REDUCE across Cores
 void kernel_main() {
+#ifdef IDLE_CORE
+    return;
+#endif
+
     constexpr uint32_t is_top_row = get_compile_time_arg_val(0);
     constexpr uint32_t do_gamma = get_compile_time_arg_val(1);
     constexpr uint32_t do_beta = get_compile_time_arg_val(2);
@@ -126,7 +130,7 @@ void kernel_main() {
     DataflowBuffer dfb_fusion(dfb_fusion_id);
     DataflowBuffer dfb_out(dfb_out_id);
 
-    binary_op_init_common(dfb_in0, dfb_in0, dfb_x);
+    compute_kernel_hw_startup(dfb_in0, dfb_in0, dfb_x);
 
 #ifdef DO_COL_MASK
     // The column mask has block_w tiles, one per tile across the shard width.
@@ -162,7 +166,7 @@ void kernel_main() {
 // pre-add x + y
 #ifdef FUSE_PRE_ADD
     reconfig_data_format_srcb(dfb_in0, dfb_in1);
-    add_tiles_init(dfb_in0, dfb_in1);
+    add_init(dfb_in0, dfb_in1);
     dfb_in.reserve_back(num_tiles_per_block);
     for (uint32_t i = 0; i < block_h; i++) {
         index_subblock_w_offset = 0;
@@ -203,7 +207,7 @@ void kernel_main() {
     // writer-generated mask (1.0 valid / 0.0 padding), already waited on above and read by
     // tile index.
     reconfig_data_format(dfb_in_id, dfb_col_mask_packed_id);
-    mul_tiles_init(dfb_in_id, dfb_col_mask_packed_id);
+    mul_init(dfb_in_id, dfb_col_mask_packed_id);
     dfb_mask_scratch.reserve_back(num_tiles_per_block);
     index_h_offset = 0;
     for (uint32_t i = 0; i < block_h; i++) {
@@ -276,7 +280,7 @@ void kernel_main() {
     }
     index_h_offset = 0;
     reconfig_data_format_srca(dfb_ex_external_id, dfb_in_id);
-    sub_bcast_cols_init_short(dfb_in_id, dfb_ex_global_id);
+    sub_bcast_cols_init(dfb_in_id, dfb_ex_global_id);
     dfb_xmm.reserve_back(num_tiles_per_block);
     for (uint32_t i = 0; i < block_h; i++) {
         index_subblock_w_offset = 0;
@@ -323,7 +327,7 @@ void kernel_main() {
 #endif
 
     // (x - E[x])^2, cb_mm2 <-- cb_xmm_id
-    mul_tiles_init(dfb_xmm_id, dfb_xmm_id);
+    mul_init(dfb_xmm_id, dfb_xmm_id);
     index_h_offset = 0;
     dfb_xmm2.reserve_back(num_tiles_per_block);
     for (uint32_t i = 0; i < block_h; i++) {
@@ -417,7 +421,7 @@ void kernel_main() {
                 dfb_ex2.wait_front(1);
                 dfb_ex2pe.reserve_back(1);
                 tile_regs_acquire();
-                add_tiles_init(dfb_ex2_id, dfb_eps);
+                add_init(dfb_ex2_id, dfb_eps);
                 add_tiles(dfb_ex2_id, dfb_eps, i, 0, dst0);
                 tile_regs_wait();
                 rsqrt_tile_init<LEGACY_RSQRT>();
@@ -446,7 +450,7 @@ void kernel_main() {
         reconfig_data_format(dfb_xmm_id, dfb_ex_global_id);
     }
 #endif
-    mul_bcast_cols_init_short(dfb_xmm_id, dfb_ex_global_id);
+    mul_bcast_cols_init(dfb_xmm_id, dfb_ex_global_id);
     index_h_offset = 0;
     dfb_im.reserve_back(num_tiles_per_block);
     for (uint32_t i = 0; i < block_h; i++) {
@@ -491,7 +495,7 @@ void kernel_main() {
         if constexpr (do_beta == 0) {
             pack_reconfig_data_format(dfb_out_id);
         }
-        mul_bcast_rows_init_short(dfb_im_id, dfb_gamma_id);
+        mul_bcast_rows_init(dfb_im_id, dfb_gamma_id);
         dfb_gamma.wait_front(block_w);
         index_h_offset = 0;
         dfb_outgamma.reserve_back(num_tiles_per_block);
@@ -530,7 +534,7 @@ void kernel_main() {
     if constexpr (do_beta) {
         reconfig_data_format(dfb_fusion_id, dfb_beta_id);
         pack_reconfig_data_format(dfb_out_id);
-        add_bcast_rows_init_short(dfb_fusion_id, dfb_beta_id);
+        add_bcast_rows_init(dfb_fusion_id, dfb_beta_id);
         dfb_beta.wait_front(block_w);
         index_h_offset = 0;
         dfb_out.reserve_back(num_tiles_per_block);

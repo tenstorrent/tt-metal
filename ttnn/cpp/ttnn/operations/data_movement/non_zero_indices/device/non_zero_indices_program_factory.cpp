@@ -180,6 +180,7 @@ ProgramDescriptor NonZeroIndicesProgramFactory::create_descriptor(
     // Buffer* slots are auto-patched by the framework on program cache hits.
     // Geometry uint32_t args are fixed by the tensor spec (part of the program cache key).
     std::vector<std::variant<uint32_t, Buffer*>> runtime_args_list;
+    runtime_args_list.reserve(3 + geom_args.size());
     runtime_args_list.push_back(input.buffer());
     runtime_args_list.push_back(out_num_indices.buffer());
     runtime_args_list.push_back(out_indices.buffer());

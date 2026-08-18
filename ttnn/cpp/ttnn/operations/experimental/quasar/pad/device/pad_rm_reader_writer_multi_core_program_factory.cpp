@@ -9,7 +9,7 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/tensor/tensor_apis.hpp>
+#include <tt-metalium/tensor/tensor_apis.hpp>
 
 #include <cmath>
 #include <filesystem>
@@ -184,7 +184,7 @@ MeshTensor build_pad_value_const_mesh_tensor(const PadInputs& tensor_args, float
     auto& cq = device->mesh_command_queue();
     // NOTE: The const buffer is always in L1 (mirrors the legacy factory).
     const MemoryConfig mem_cfg{TensorMemoryLayout::INTERLEAVED, BufferType::L1};
-    return tt::tt_metal::enqueue_write_tensor(cq, host_pad.host_tensor(), *device, mem_cfg);
+    return cq.enqueue_write_tensor(host_pad.host_tensor(), mem_cfg);
 }
 
 }  // namespace CMAKE_UNIQUE_NAMESPACE

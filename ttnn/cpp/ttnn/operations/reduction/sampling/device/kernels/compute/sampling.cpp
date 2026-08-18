@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include <cstring>
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
@@ -19,6 +18,7 @@
 #include "ckernel_sfpu.h"
 #include "api/compute/tilize.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 #define DEBUG_PRINT 0
@@ -29,10 +29,11 @@ void generate_rand_tile(const uint32_t dfb_id, const uint32_t seed) {
 
     DataflowBuffer dfb_obj(dfb_id);
 
-    uint32_t rand_scale = 0;
-    const float one_f = 1.0f;
-    std::memcpy(&rand_scale, &one_f, sizeof(uint32_t));  // Alternative to std::bit_cast
-    uint32_t rand_from = 0;
+    // The random tile is packed to BF16 before the strict cumulative-probability
+    // comparison. Keep the FP32 endpoint below the BF16 midpoint to 1.0 so the
+    // packed threshold remains strictly less than 1.0.
+    constexpr uint32_t rand_scale = 0x3F7F7FFFU;
+    constexpr uint32_t rand_from = 0;
 
     if (seed != 0) {
         rand_tile_init(seed);
@@ -59,7 +60,7 @@ void sub_exp_block_bcast_cols_inplace() {
     DataflowBuffer in0_dfb_obj(in0_dfb);
     DataflowBuffer in1_dfb_obj(in1_dfb);
 
-    sub_bcast_cols_init_short(in0_dfb, in1_dfb);
+    sub_bcast_cols_init(in0_dfb, in1_dfb);
     exp_tile_init<true>();
     in0_dfb_obj.wait_front(rows * cols);
     in1_dfb_obj.wait_front(rows);
@@ -97,7 +98,7 @@ void add_block_inplace(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t num_tiles) {
     DataflowBuffer in1_dfb_obj(in1_dfb);
 
     reconfig_data_format(in0_dfb, in1_dfb);
-    add_tiles_init(in0_dfb, in1_dfb);
+    add_init(in0_dfb, in1_dfb);
     in0_dfb_obj.wait_front(num_tiles);
     in1_dfb_obj.wait_front(num_tiles);
     for (uint32_t i = 0; i < num_tiles; i++) {
@@ -128,7 +129,7 @@ void mul_block_bcast_cols(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t out_dfb, 
     DataflowBuffer out_dfb_obj(out_dfb);
 
     uint32_t num_tiles = rows * cols;
-    mul_bcast_cols_init_short(in0_dfb, in1_dfb);
+    mul_bcast_cols_init(in0_dfb, in1_dfb);
     in0_dfb_obj.wait_front(num_tiles);
     in1_dfb_obj.wait_front(rows);
     for (uint32_t i = 0; i < rows; ++i) {
@@ -392,7 +393,7 @@ void mul_block_bcast_scalar_inplace() {
     uint32_t granularity = 1;
 
     reconfig_data_format(in0_dfb, in1_scalar_dfb);
-    mul_tiles_bcast_scalar_init_short(in0_dfb, in1_scalar_dfb);
+    mul_bcast_scalar_init(in0_dfb, in1_scalar_dfb);
     in0_dfb_obj.wait_front(num_tiles);
     in1_scalar_dfb_obj.wait_front(1);
 
@@ -417,50 +418,35 @@ void mul_block_bcast_scalar_inplace() {
 }
 
 void kernel_main() {
-    constexpr uint32_t input_values_dfb_index = get_compile_time_arg_val(0);
-    constexpr uint32_t index_dfb_index = get_compile_time_arg_val(1);
-    constexpr uint32_t input_transposed_dfb_index = get_compile_time_arg_val(2);
-    constexpr uint32_t index_transposed_dfb_index = get_compile_time_arg_val(3);
-    constexpr uint32_t values_dfb_index = get_compile_time_arg_val(4);
-    constexpr uint32_t output_ind_dfb_index = get_compile_time_arg_val(5);
-
-    constexpr uint32_t topk_mask_dfb_index = get_compile_time_arg_val(6);
-    constexpr uint32_t scaler_max_dfb_index = get_compile_time_arg_val(7);
-    constexpr uint32_t scaler_sum_dfb_index = get_compile_time_arg_val(8);
-    constexpr uint32_t dfb_cur_max = get_compile_time_arg_val(9);
-    constexpr uint32_t dfb_cur_sum = get_compile_time_arg_val(10);
-    constexpr uint32_t Ht = get_compile_time_arg_val(11);
-    constexpr uint32_t Wt = get_compile_time_arg_val(12);
-    constexpr uint32_t logWt = get_compile_time_arg_val(13);
-    constexpr uint32_t rand_tile_index = get_compile_time_arg_val(14);
-    constexpr uint32_t seed = get_compile_time_arg_val(15);
-    constexpr uint32_t dfb_local_vals = get_compile_time_arg_val(16);
-    constexpr uint32_t temp_dfb_index = get_compile_time_arg_val(17);
-    constexpr uint32_t tile_width = get_compile_time_arg_val(18);
+    constexpr auto Ht = get_arg(args::Ht);
+    constexpr auto Wt = get_arg(args::Wt);
+    constexpr auto logWt = get_arg(args::logWt);
+    constexpr auto seed = get_arg(args::seed);
+    constexpr auto tile_width = get_arg(args::tile_width);
     // Stable top-k: on exact value ties the candidate at the lowest position wins, so the sampled
     // token does not depend on how the bitonic network happens to swap equal values. Set by the
     // host only on architectures whose top-k LLK implements a stable network; elsewhere it is 0
     // and ties keep the previous (network-order) behaviour rather than failing to compile.
-    constexpr bool stable_sort = get_compile_time_arg_val(19) == 1;
-    generate_rand_tile(rand_tile_index, seed);
+    constexpr bool stable_sort = get_arg(args::stable_sort) == 1;
+    generate_rand_tile(dfb::rand_tile, seed);
 
     const uint32_t nearest32_K = 32;
     const uint32_t logk = 5;  // log(32)
 
     // top-k
-    compute_kernel_hw_startup(input_values_dfb_index, index_dfb_index, input_transposed_dfb_index);
+    compute_kernel_hw_startup(dfb::input_values, dfb::index, dfb::input_transposed);
     top_k<
         Ht,
         Wt,
         nearest32_K,
         logWt,
         logk,
-        input_values_dfb_index,
-        index_dfb_index,
-        input_transposed_dfb_index,
-        index_transposed_dfb_index,
-        values_dfb_index,
-        output_ind_dfb_index,
+        dfb::input_values,
+        dfb::index,
+        dfb::input_transposed,
+        dfb::index_transposed,
+        dfb::values,
+        dfb::output_ind,
         tile_width,
         true,
         stable_sort>();
@@ -469,15 +455,15 @@ void kernel_main() {
     // scale temperature
 
     // mask out all values except the top-k
-    DataflowBuffer topk_mask_dfb(topk_mask_dfb_index);
+    DataflowBuffer topk_mask_dfb(dfb::topk_mask);
     topk_mask_dfb.wait_front(Kt);
-    add_block_inplace(values_dfb_index, topk_mask_dfb_index, Ht * Kt);
-    mul_block_bcast_scalar_inplace<values_dfb_index, temp_dfb_index, Ht * Kt>();
+    add_block_inplace(dfb::values, dfb::topk_mask, Ht * Kt);
+    mul_block_bcast_scalar_inplace<dfb::values, dfb::temp, Ht * Kt>();
     // softmax
-    reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, values_dfb_index, scaler_max_dfb_index, dfb_cur_max, Ht, Kt>();
+    reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, dfb::values, dfb::scaler_max, dfb::cur_max, Ht, Kt>();
 
-    sub_exp_block_bcast_cols_inplace<values_dfb_index, dfb_cur_max, Ht, Kt>();
-    reduce_c<PoolType::SUM, ReduceDim::REDUCE_ROW, values_dfb_index, scaler_sum_dfb_index, dfb_cur_sum, Ht, Kt>();
-    recip_block_inplace(dfb_cur_sum, Ht);
-    mul_block_bcast_cols(values_dfb_index, dfb_cur_sum, dfb_local_vals, Ht, Kt);
+    sub_exp_block_bcast_cols_inplace<dfb::values, dfb::cur_max, Ht, Kt>();
+    reduce_c<PoolType::SUM, ReduceDim::REDUCE_ROW, dfb::values, dfb::scaler_sum, dfb::cur_sum, Ht, Kt>();
+    recip_block_inplace(dfb::cur_sum, Ht);
+    mul_block_bcast_cols(dfb::values, dfb::cur_sum, dfb::local_vals, Ht, Kt);
 }

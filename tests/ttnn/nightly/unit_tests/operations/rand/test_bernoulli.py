@@ -148,6 +148,19 @@ def test_bernoulli_seed_distinguishes_cache_entries(device):
     device.disable_and_clear_program_cache()
 
 
+def test_bernoulli_decorrelates_neighboring_core_seeds(device):
+    """Neighboring host seeds must not collapse to the same per-core RNG stream."""
+    shape = (64, 32)  # Two tiles are split across two cores.
+    cpu_input = torch.full(shape, 0.5, dtype=torch.float32)
+    npu_input = ttnn.from_torch(cpu_input, device=device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
+
+    output = ttnn.to_torch(ttnn.bernoulli(npu_input, seed=0xFFFFFFFE, dtype=ttnn.float32)).reshape(2, 32, 32)
+
+    # The host assigns 0xFFFFFFFE and 0xFFFFFFFF to these cores. rand_init remaps
+    # the all-ones LFSR lock state, so a missing core salt makes both streams equal.
+    assert not torch.equal(output[0], output[1]), "neighboring cores emitted duplicate Bernoulli streams"
+
+
 @pytest.mark.parametrize(
     "shape",
     [[512, 512], [5, 8, 70, 40]],

@@ -16,8 +16,8 @@ void kernel_main() {
     // output circular buffer. Which is then picked up by the writer kernel and written back to DRAM.
 
     // Metalium API Calls                              Involved Cores
-    binary_op_init_common(cb_in0, cb_in1, cb_out0);  // Unpack, Math, Pack
-    add_tiles_init(cb_in0, cb_in1);                  // Unpack, Math
+    compute_kernel_hw_startup(cb_in0, cb_in1, cb_out0);  // Unpack, Math, Pack
+    add_init(cb_in0, cb_in1);                  // Unpack, Math
 
     // wait for a tile to be ready in the input CBs
     cb_wait_front(cb_in0, 1);  // Unpack

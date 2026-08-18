@@ -305,6 +305,142 @@ static const AdamWCase kWeightDecayCases[] = {
 INSTANTIATE_TEST_SUITE_P(AdamWWeightDecay, AdamWComparisonTest, ::testing::ValuesIn(kWeightDecayCases), CaseName);
 
 // ====================================================================
+// weight_decay_skip_1d Tests
+// With the flag enabled, 1-D params (RMSNorm gains/biases, shape {1,1,1,N})
+// must not be weight-decayed, while 2-D params still are.
+// ====================================================================
+
+class AdamWWeightDecaySkip1DTest : public ::testing::Test {
+public:
+    static void SetUpTestSuite() {
+        ttml::autograd::ctx().open_device();
+    }
+    static void TearDownTestSuite() {
+        ttml::autograd::ctx().close_device();
+    }
+
+protected:
+    void TearDown() override {
+        ttml::autograd::ctx().reset_graph();
+    }
+};
+
+TEST_F(AdamWWeightDecaySkip1DTest, SkipsDecayOn1DParamsOnly) {
+    using namespace ttml;
+
+    const std::array<std::size_t, 4> shape_1d = {1, 1, 1, 4096};   // RMSNorm-gain-like
+    const std::array<std::size_t, 4> shape_2d = {1, 1, 128, 256};  // matmul-weight-like
+
+    const float lr = 1e-2f;
+    const float beta1 = 0.9f;
+    const float beta2 = 0.999f;
+    const float epsilon = 1e-8f;
+    // Large wd so the decay term (lr*wd*param) is well above tolerance: makes the "would-be-decayed"
+    // reference clearly separable from the (correctly) undecayed 1-D result.
+    const float weight_decay = 1.0f;
+    const size_t initial_steps = 10;
+
+    autograd::ctx().set_seed(123U);
+    auto& gen = autograd::ctx().get_generator();
+    const uint32_t seed_1d_w = gen();
+    const uint32_t seed_1d_g = gen();
+    const uint32_t seed_1d_m = gen();
+    const uint32_t seed_1d_v = gen();
+    const uint32_t seed_2d_w = gen();
+    const uint32_t seed_2d_g = gen();
+    const uint32_t seed_2d_m = gen();
+    const uint32_t seed_2d_v = gen();
+
+    xt::xarray<float> w1_0 = test_utils::make_uniform_xarray<float>(shape_1d, -1.0F, 1.0F, seed_1d_w);
+    xt::xarray<float> g1_0 = test_utils::make_uniform_xarray<float>(shape_1d, -1.0F, 1.0F, seed_1d_g);
+    xt::xarray<float> m1_0 = test_utils::make_uniform_xarray<float>(shape_1d, -1.0F, 1.0F, seed_1d_m);
+    xt::xarray<float> v1_0 = test_utils::make_uniform_xarray<float>(shape_1d, 0.0F, 1.0F, seed_1d_v);
+
+    xt::xarray<float> w2_0 = test_utils::make_uniform_xarray<float>(shape_2d, -1.0F, 1.0F, seed_2d_w);
+    xt::xarray<float> g2_0 = test_utils::make_uniform_xarray<float>(shape_2d, -1.0F, 1.0F, seed_2d_g);
+    xt::xarray<float> m2_0 = test_utils::make_uniform_xarray<float>(shape_2d, -1.0F, 1.0F, seed_2d_m);
+    xt::xarray<float> v2_0 = test_utils::make_uniform_xarray<float>(shape_2d, 0.0F, 1.0F, seed_2d_v);
+
+    // References: 1-D param stepped WITHOUT weight decay, 2-D param stepped WITH weight decay.
+    xt::xarray<float> w1_no_wd = w1_0;
+    CPUAdamW cpu_1d_no_wd(lr, beta1, beta2, epsilon, /*weight_decay=*/0.0f, /*amsgrad=*/false);
+    cpu_1d_no_wd.set_state(m1_0, v1_0, initial_steps);
+    cpu_1d_no_wd.step(w1_no_wd, g1_0);
+
+    xt::xarray<float> w2_with_wd = w2_0;
+    CPUAdamW cpu_2d_with_wd(lr, beta1, beta2, epsilon, weight_decay, false);
+    cpu_2d_with_wd.set_state(m2_0, v2_0, initial_steps);
+    cpu_2d_with_wd.step(w2_with_wd, g2_0);
+
+    // What the 1-D param WOULD be if it were (incorrectly) decayed — used to prove the decay is
+    // large enough to matter, so the "no decay" match below isn't a vacuous pass.
+    xt::xarray<float> w1_with_wd = w1_0;
+    CPUAdamW cpu_1d_with_wd(lr, beta1, beta2, epsilon, weight_decay, false);
+    cpu_1d_with_wd.set_state(m1_0, v1_0, initial_steps);
+    cpu_1d_with_wd.step(w1_with_wd, g1_0);
+
+    // Device AdamW: both params in one optimizer, weight_decay_skip_1d enabled.
+    auto gain = autograd::create_tensor(to_tt_bf16(w1_0), true);
+    gain->set_grad(to_tt_bf16(g1_0));
+    auto weight = autograd::create_tensor(to_tt_bf16(w2_0), true);
+    weight->set_grad(to_tt_bf16(g2_0));
+    serialization::NamedParameters params{{"gain", gain}, {"weight", weight}};
+
+    optimizers::AdamWConfig cfg;
+    cfg.lr = lr;
+    cfg.beta1 = beta1;
+    cfg.beta2 = beta2;
+    cfg.epsilon = epsilon;
+    cfg.weight_decay = weight_decay;
+    cfg.weight_decay_skip_1d = true;
+    optimizers::AdamW opt(params, cfg);
+
+    // Inject momentum state (weight_decay_skip_1d is config-only, not serialized, so it is preserved).
+    {
+        serialization::StateDict state;
+        state["exp_avg"] = serialization::NamedParameters{
+            {"gain", autograd::create_tensor(to_tt_bf16(m1_0), false)},
+            {"weight", autograd::create_tensor(to_tt_bf16(m2_0), false)}};
+        state["exp_avg_sq"] = serialization::NamedParameters{
+            {"gain", autograd::create_tensor(to_tt_bf16(v1_0), false)},
+            {"weight", autograd::create_tensor(to_tt_bf16(v2_0), false)}};
+        state["steps"] = initial_steps;
+        state["lr"] = lr;
+        state["beta1"] = beta1;
+        state["beta2"] = beta2;
+        state["epsilon"] = epsilon;
+        state["weight_decay"] = weight_decay;
+        state["amsgrad"] = false;
+        state["stochastic_rounding"] = false;
+        opt.set_state_dict(state);
+    }
+
+    opt.step();
+
+    auto gain_result = core::to_xtensor(gain->get_value());
+    auto weight_result = core::to_xtensor(weight->get_value());
+
+    const float mean_error_tolerance = 1e-3f;
+    const float max_error_tolerance = 1e-2f;
+
+    // 1-D param must match the NO-weight-decay reference.
+    auto gain_metrics = compute_error_metrics(w1_no_wd, gain_result, "gain_1d");
+    EXPECT_LE(gain_metrics.mean_error, mean_error_tolerance) << "1-D param should not be weight-decayed";
+    EXPECT_LE(gain_metrics.max_error, max_error_tolerance) << "1-D param should not be weight-decayed";
+
+    // 2-D param must match the weight-decayed reference.
+    auto weight_metrics = compute_error_metrics(w2_with_wd, weight_result, "weight_2d");
+    EXPECT_LE(weight_metrics.mean_error, mean_error_tolerance) << "2-D param should be weight-decayed";
+    EXPECT_LE(weight_metrics.max_error, max_error_tolerance) << "2-D param should be weight-decayed";
+
+    // Guard against a vacuous pass: the undecayed 1-D result must be clearly distinct from the
+    // would-be-decayed reference, i.e. the weight decay is actually large enough to observe.
+    auto skip_vs_decay = compute_error_metrics(w1_with_wd, gain_result, "gain_skip_vs_decay");
+    EXPECT_GT(skip_vs_decay.mean_error, mean_error_tolerance)
+        << "weight decay too small to distinguish skipping from applying it; test is not meaningful";
+}
+
+// ====================================================================
 // AMSGrad Tests
 // Test AdamW with AMSGrad variant enabled
 // ====================================================================

@@ -17,6 +17,7 @@ from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.tt.mla.utils import rotated_chip_real_token_counts
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 
@@ -98,6 +99,23 @@ class TtMoEGateConfig:
                     mcast_in0=False,
                 )
             ),
+            # per_core_M is not free: for a height-sharded in0 the matmul asserts
+            # per_core_M == roundup32(ceil(sp_dim / num_cores)) / 32, which is 1 at K3's depths and 2
+            # at the other models' 4096. out_block_h follows it.
+            (KimiK3Config.MAX_GATE_SEQ_LEN_PER_CHIP, KimiK3Config.EMB_SIZE // 4, KimiK3Config.NUM_ROUTED_EXPERTS): (
+                ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                    compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
+                    in0_block_w=56,
+                    out_subblock_h=1,
+                    out_subblock_w=4,
+                    out_block_h=1,
+                    out_block_w=4,
+                    per_core_M=1,
+                    per_core_N=28,
+                    fuse_batch=True,
+                    mcast_in0=False,
+                )
+            ),
             "COMPUTE_CONFIG": ttnn.types.BlackholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.HiFi4,
                 math_approx_mode=False,
@@ -109,6 +127,9 @@ class TtMoEGateConfig:
 
     dim: int = DeepSeekV3Config.EMB_SIZE
     sp_dim: int = 4096  # ISL per chip
+    # Enforced in __post_init__. At high expert counts moe_grouped_topk's circular buffers stop
+    # fitting L1 alongside the height-sharded scores, and the clash names nothing useful.
+    max_sp_dim: int | None = None
     n_routed_experts: int = DeepSeekV3Config.NUM_ROUTED_EXPERTS
     n_shared_experts: int = DeepSeekV3Config.NUM_SHARED_EXPERTS  # PREVIOUS VALUE: 2 @ddjekic to check
     n_activated_experts: int = DeepSeekV3Config.NUM_EXPERTS_PER_TOKEN
@@ -127,6 +148,13 @@ class TtMoEGateConfig:
     )
 
     def __post_init__(self):
+        if self.max_sp_dim is not None and self.sp_dim > self.max_sp_dim:
+            raise ValueError(
+                f"sp_dim={self.sp_dim} exceeds this model's gate ceiling max_sp_dim={self.max_sp_dim} "
+                f"({self.n_routed_experts} experts). moe_grouped_topk's circular buffers scale with "
+                f"experts/32 and will fail L1 allocation above it. Raise the ceiling only alongside "
+                f"the op-side CB work that makes it true."
+            )
         # The mm_configs tuple keys are authored with a placeholder seq-len. Re-key them to the
         # actual per-chip sequence length (sp_dim) so _device_matmul's lookup
         # (sp_dim, per_device_emb_dim, n_routed_experts) hits the tuned program config instead of
@@ -143,6 +171,13 @@ class TtMoEGateConfig:
     @classmethod
     def from_model_cfg(cls, model_cfg: type, **overrides) -> "TtMoEGateConfig":
         """Build from a TestVariant.model_config class. Extra kwargs override per-instance."""
+        # Merged under **overrides so an explicit kwarg still wins.
+        model_defaults = {
+            "score_func": getattr(model_cfg, "SCORE_FUNC", cls.score_func),
+            # Serves as both the default depth and the ceiling an explicit sp_dim cannot exceed.
+            "sp_dim": getattr(model_cfg, "MAX_GATE_SEQ_LEN_PER_CHIP", cls.sp_dim),
+            "max_sp_dim": getattr(model_cfg, "MAX_GATE_SEQ_LEN_PER_CHIP", None),
+        }
         return cls(
             dim=model_cfg.EMB_SIZE,
             n_routed_experts=model_cfg.NUM_ROUTED_EXPERTS,
@@ -151,9 +186,7 @@ class TtMoEGateConfig:
             n_expert_groups=model_cfg.NUM_EXPERT_GROUPS,
             n_limited_groups=model_cfg.NUM_LIMITED_GROUPS,
             route_scale=model_cfg.ROUTE_SCALE,
-            # V4 variants ship SCORE_FUNC="sqrtsoftplus"; V3/Kimi omit it and keep the sigmoid default.
-            score_func=getattr(model_cfg, "SCORE_FUNC", cls.score_func),
-            **overrides,
+            **{**model_defaults, **overrides},
         )
 
 
@@ -313,6 +346,15 @@ class TtMoEGatePrefill(LightweightModule):
         self.tt_ccl = get_tt_ccl(mesh_device)
         self.fallback_mode = fallback_mode
         self.is_balanced = is_balanced
+        # Memoization of the per-(actual_isl, padding_side, actual_start) padding_config built on HOST.
+        # build_padding_config ends in a ttnn.from_torch, so re-issuing it per chunk costs a host
+        # transfer; caching the device tensor avoids that. Owned here => callers must NOT deallocate it.
+        self._padding_config_cache: dict = {}
+        # Persistent output row for the DEVICE-built padding config (build_padding_config_device). A
+        # host from_torch is illegal inside a trace capture, so the traced path derives the config
+        # on-device instead and refreshes THIS buffer in place — a stable address the capture can keep
+        # writing across replays. Allocated lazily on first use (warm-up, before any capture).
+        self._padding_config_device: Optional[ttnn.Tensor] = None
 
         if weight is not None and bias is not None:
             weights = self._convert_and_cache_gate_weights(
@@ -608,6 +650,16 @@ class TtMoEGatePrefill(LightweightModule):
         if padding_side not in ("right", "left"):
             raise ValueError(f"padding_side must be 'right' or 'left', got {padding_side!r}")
 
+        # actual_start MUST be part of the key: under rotated chunked prefill the per-chip real-token
+        # counts are derived from it (rotated_chip_real_token_counts below), so two chunks with the same
+        # actual_isl but different starts need different configs. Keying on (actual_isl, padding_side)
+        # alone returned the first chunk's config for every later chunk of equal length, sentinel-marking
+        # real tokens and dispatching pad rows as real.
+        cache_key = (actual_isl, padding_side, actual_start or 0)
+        cached = self._padding_config_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
         sp_factor = self.mesh_device.shape[0]
         seq_len_per_chip = self.config.sp_dim
         total_tokens = sp_factor * seq_len_per_chip
@@ -662,7 +714,7 @@ class TtMoEGatePrefill(LightweightModule):
 
                 padding_config.append([local_real_tokens, pad_side])
 
-        return ttnn.from_torch(
+        config_tensor = ttnn.from_torch(
             torch.tensor(padding_config, dtype=torch.int32),
             device=self.mesh_device,
             dtype=ttnn.uint32,
@@ -673,6 +725,68 @@ class TtMoEGatePrefill(LightweightModule):
                 dims=(0, None),
                 mesh_shape=self.mesh_device.shape,
             ),
+        )
+        self._padding_config_cache[cache_key] = config_tensor
+        return config_tensor
+
+    def build_padding_config_device(self, metadata, padding_side: str = "right") -> ttnn.Tensor:
+        """Trace-safe twin of build_padding_config: derive the per-device
+        ``[local_real_tokens, pad_side]`` row ON DEVICE from this chunk's metadata tensors.
+
+        The host builder ends in a ``ttnn.from_torch``, which is an illegal host->device write inside a
+        trace capture, so a captured program can only ever replay the config of the chunk it was
+        captured with. This path instead hands the op the two 1-element uint32 tensors the runtime
+        already advances per chunk, and the kernel recomputes the row on-device — so one capture
+        replays correctly across chunks with padding awareness left ON.
+
+        ``metadata`` is the runtime's ``(slot_id, actual_start, actual_end)`` tuple; only actual_start
+        and actual_end are read (the count needs no separate ISL — valid_end == actual_end).
+
+        The output is a persistent buffer allocated once here and refreshed in place, so its address is
+        stable across replays. Owned here => callers must NOT deallocate it.
+
+        is_balanced=True is rejected: the zigzag per-device count is not expressible in the op's
+        closed form. Rotated chunked prefill implies is_balanced=False (ttMLA._chunked_attn asserts
+        it), so a traced run can never legitimately need it — fail loudly rather than silently
+        compute a wrong config.
+        """
+        if padding_side not in ("right", "left"):
+            raise ValueError(f"padding_side must be 'right' or 'left', got {padding_side!r}")
+        if self.is_balanced:
+            raise ValueError(
+                "build_padding_config_device (the traced padding-config path) does not support "
+                "is_balanced=True: the zigzag placement's per-device real-token count is not "
+                "expressible in the device op's closed form. Run with is_balanced=False, or run "
+                "untraced so the host builder (build_padding_config) handles the balanced layout."
+            )
+
+        sp_factor = self.mesh_device.shape[0]
+        if self._padding_config_device is None:
+            # Allocate the persistent row once. Same spec the host builder produces, so the consumers
+            # (moe_grouped_topk / dispatch) see an identical tensor either way.
+            self._padding_config_device = ttnn.from_torch(
+                torch.zeros((sp_factor, 2), dtype=torch.int32),
+                device=self.mesh_device,
+                dtype=ttnn.uint32,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    self.mesh_device,
+                    dims=(0, None),
+                    mesh_shape=self.mesh_device.shape,
+                ),
+            )
+
+        _, actual_start, actual_end = metadata
+        return ttnn.experimental.deepseek_prefill.moe_padding_config(
+            self._padding_config_device,
+            actual_start,
+            actual_end,
+            tokens_per_chip=self.config.sp_dim,
+            pad_side=0 if padding_side == "right" else 1,
+            # SP is mesh axis 0 — the same axis sp_factor is read from above and that the config is
+            # sharded along, so the op's per-chip coordinate matches the host builder's row order.
+            cluster_axis=0,
         )
 
     def _device_grouped_gate_fp32(
@@ -694,9 +808,10 @@ class TtMoEGatePrefill(LightweightModule):
         combine skip them.  For SP > 1, the padding config tensor carries
         per-device local real-token counts.
 
-        If a caller-owned ``padding_config`` is provided it is used as-is (and the
-        caller is responsible for deallocating it, since it may be shared with the
-        dispatch op). Otherwise one is built locally and freed here.
+        A caller-supplied ``padding_config`` is used as-is; otherwise one is fetched from
+        build_padding_config. Either way the tensor is owned by build_padding_config's memo cache
+        (it is reused across forwards and trace replays), so neither this method nor the caller
+        deallocates it.
         """
         owns_padding_config = padding_config is None
         if owns_padding_config:
@@ -720,8 +835,8 @@ class TtMoEGatePrefill(LightweightModule):
             score_func=self.config.score_func,
             padding_config=padding_config,
         )
-        if owns_padding_config and padding_config is not None:
-            ttnn.deallocate(padding_config)
+        # padding_config is memoized + owned by build_padding_config (reused across forwards/replays). Do
+        # NOT deallocate it here even on the owns_padding_config path — freeing it breaks the next cache hit.
         return ttnn_scores, ttnn_top_k_experts_indices
 
     def _device_hash_gate(
@@ -762,8 +877,8 @@ class TtMoEGatePrefill(LightweightModule):
         )
         ttnn.deallocate(logits_f32)
         ttnn.deallocate(input_ids_dev)
-        if owns_padding_config and padding_config is not None:
-            ttnn.deallocate(padding_config)
+        # padding_config is memoized + owned by build_padding_config (reused across forwards/replays). Do
+        # NOT deallocate it here even on the owns_padding_config path — freeing it breaks the next cache hit.
         return ttnn_scores, ttnn_top_k_experts_indices
 
     def _host_grouped_gate(self, host_logits: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:

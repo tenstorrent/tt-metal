@@ -491,6 +491,7 @@ std::vector<SharedMemoryStatsProvider::ProcessInfo> SharedMemoryStatsProvider::g
         return result;
     }
 
+    result.reserve(MAX_PROCESSES);
     for (auto & processe : region_->processes) {
         if (processe.pid.load(std::memory_order_relaxed) != 0) {
             ProcessInfo info;
@@ -618,6 +619,7 @@ std::vector<SharedMemoryStatsProvider::ChipInfo> SharedMemoryStatsProvider::get_
         return result;
     }
 
+    result.reserve(MAX_CHIPS_PER_DEVICE);
     for (auto & chip_stat : region_->chip_stats) {
         if (chip_stat.chip_id.load(std::memory_order_relaxed) != CHIP_STATS_UNUSED) {
             ChipInfo info{};

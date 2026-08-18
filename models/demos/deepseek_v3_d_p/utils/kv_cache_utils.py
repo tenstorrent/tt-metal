@@ -446,7 +446,7 @@ def create_kv_chunk_address_table_kimi(
         mesh_shape=mesh_shape,
         seq_len=seq_len,
         sp_axis=sp_axis,
-        kvpe_cache=kvpe_cache,
+        tt_kvpe_cache=kvpe_cache,
         chunk_size_bytes=chunk_size_bytes,
         num_users=num_users,
         config_id=0,
@@ -461,7 +461,7 @@ def populate_kv_chunk_address_table_kimi(
     mesh_shape,
     seq_len,
     sp_axis,
-    kvpe_cache,
+    tt_kvpe_cache,
     chunk_size_bytes,
     num_users=1,
     config_id=0,
@@ -486,59 +486,133 @@ def populate_kv_chunk_address_table_kimi(
     Returns:
         lookup_table: the same table, with config_id populated.
     """
-    # Per-stage device groups + host tags are built inside the stage loop below (one group per
-    # (stage, SP row)); no rank-local single-stage device-group pass here — the multi-stage merge
-    # supersedes it, and a rank-local set_fabric_node_host(localhost) would fight the per-stage host.
-    rows = mesh_shape[0]
+    if stage_layout is not None:
+        # ---- stage_layout-driven path (PP-capable, #48826). ----
+        # Per-stage device groups + host tags are built inside the stage loop below (one group per
+        # (stage, SP row)); no rank-local single-stage device-group pass here — the multi-stage merge
+        # supersedes it, and a rank-local set_fabric_node_host(localhost) would fight the per-stage host.
+        rows = mesh_shape[0]
 
-    tokens_per_chunk_local = PREFILL_CHUNK_OUTPUT_TOKENS // mesh_shape[sp_axis]  # 640 for 5k chunks
-    num_chunks_per_seq_len = seq_len // PREFILL_CHUNK_OUTPUT_TOKENS  # number of 5k chunks in the seq len
+        tokens_per_chunk_local = PREFILL_CHUNK_OUTPUT_TOKENS // mesh_shape[sp_axis]  # 640 for 5k chunks
+        num_chunks_per_seq_len = seq_len // PREFILL_CHUNK_OUTPUT_TOKENS  # number of 5k chunks in the seq len
+
+        assert (
+            seq_len % PREFILL_CHUNK_OUTPUT_TOKENS == 0
+        ), f"seq_len {seq_len} must be a multiple of {PREFILL_CHUNK_OUTPUT_TOKENS}"
+
+        assert tokens_per_chunk_local % NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK == 0, (
+            f"{PREFILL_CHUNK_OUTPUT_TOKENS} tokens / sp({mesh_shape[sp_axis]}) = {tokens_per_chunk_local}, "
+            f"not a multiple of {NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK}"
+        )
+
+        # tt-blaze-style merge: for every STAGE place its layers' chunks on ITS mesh at ITS base addr.
+        # Within a stage we replay the original single-stage build exactly (one device group per SP row, an
+        # independent bank round-robin per row sequencing slot -> local layer -> chunk), but write to the
+        # GLOBAL layer index (first_layer + local_layer) so every stage lands in one table.
+        for stage in stage_layout:
+            dram_bank_base_addr = stage["base_addr"]
+            num_dram_banks = stage["num_banks"]
+            host_name = f"host-{stage['host_tag']:08x}"  # crc32 tag rebuilt to a string (int-only allgather)
+            first = stage["first_layer"]
+            count = stage["count"]
+            stage_fnids = stage["fnids"]
+            for row in range(rows):
+                # Data is replicated across each TP column, so one device group per (stage, SP row).
+                fnids_row = stage_fnids[row]
+                group_idx = lookup_table.add_device_group(fnids_row)
+                for fid in fnids_row:
+                    lookup_table.set_fabric_node_host(fid, host_name=host_name)
+                curr_bank_id = 0
+                curr_bank_offset = 0
+                for slot in range(num_users):
+                    for local_layer in range(count):
+                        global_layer = first + local_layer
+                        for seq_chunk in range(num_chunks_per_seq_len):
+                            chunk_token_start = seq_chunk * PREFILL_CHUNK_OUTPUT_TOKENS + row * tokens_per_chunk_local
+                            chunk_token_end = chunk_token_start + tokens_per_chunk_local
+                            for position in range(
+                                chunk_token_start, chunk_token_end, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
+                            ):
+                                location = ttnn.experimental.disaggregation.KvCacheLocation()
+                                location.noc_addr = (curr_bank_id << 32) | (dram_bank_base_addr + curr_bank_offset)
+                                location.size_bytes = chunk_size_bytes
+                                location.device_group_index = group_idx
+                                lookup_table.set(global_layer, position, slot, location, config_id)
+
+                                curr_bank_id = (curr_bank_id + 1) % num_dram_banks
+                                if curr_bank_id == 0:
+                                    curr_bank_offset += chunk_size_bytes
+        return lookup_table
+
+    # ---- Legacy single-stage path (direct call, stage_layout is None). ----
+    # The pre-#48826 behavior, still exercised by direct callers that don't build a stage_layout
+    # (e.g. test_glm52_kv_cache_table and the kv_chunk_table runner): one replicated device group per
+    # SP row, base addr / bank count derived from the cache itself.
+    host_name = socket.gethostname()
+
+    rank = ttnn.distributed_context_get_rank()
+    size = ttnn.distributed_context_get_size()
+    total_rows = mesh_shape[0]
+    rank_row_start = int(rank) * total_rows // int(size)
+    rank_row_end = rank_row_start + total_rows // int(size)
+
+    num_layers = config.num_layers
 
     assert (
         seq_len % PREFILL_CHUNK_OUTPUT_TOKENS == 0
     ), f"seq_len {seq_len} must be a multiple of {PREFILL_CHUNK_OUTPUT_TOKENS}"
+    num_chunks_per_seq_len = seq_len // PREFILL_CHUNK_OUTPUT_TOKENS
 
+    assert (
+        tt_kvpe_cache.shape[0] == num_users * num_layers
+    ), f"cache batch dim {tt_kvpe_cache.shape[0]} != num_users({num_users}) * num_layers({num_layers})"
+
+    tokens_per_chunk_local = PREFILL_CHUNK_OUTPUT_TOKENS // mesh_shape[sp_axis]  # 640 for 5k chunks
     assert tokens_per_chunk_local % NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK == 0, (
         f"{PREFILL_CHUNK_OUTPUT_TOKENS} tokens / sp({mesh_shape[sp_axis]}) = {tokens_per_chunk_local}, "
         f"not a multiple of {NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK}"
     )
 
-    # tt-blaze-style merge: for every STAGE place its layers' chunks on ITS mesh at ITS base addr.
-    # Within a stage we replay the original single-stage build exactly (one device group per SP row, an
-    # independent bank round-robin per row sequencing slot -> local layer -> chunk), but write to the
-    # GLOBAL layer index (first_layer + local_layer) so every stage lands in one table.
-    for stage in stage_layout:
-        dram_bank_base_addr = stage["base_addr"]
-        num_dram_banks = stage["num_banks"]
-        host_name = f"host-{stage['host_tag']:08x}"  # crc32 tag rebuilt to a string (int-only allgather)
-        first = stage["first_layer"]
-        count = stage["count"]
-        stage_fnids = stage["fnids"]
-        for row in range(rows):
-            # Data is replicated across each TP column, so one device group per (stage, SP row).
-            fnids_row = stage_fnids[row]
-            group_idx = lookup_table.add_device_group(fnids_row)
-            for fid in fnids_row:
-                lookup_table.set_fabric_node_host(fid, host_name=host_name)
-            curr_bank_id = 0
-            curr_bank_offset = 0
-            for slot in range(num_users):
-                for local_layer in range(count):
-                    global_layer = first + local_layer
-                    for seq_chunk in range(num_chunks_per_seq_len):
-                        chunk_token_start = seq_chunk * PREFILL_CHUNK_OUTPUT_TOKENS + row * tokens_per_chunk_local
-                        chunk_token_end = chunk_token_start + tokens_per_chunk_local
-                        for position in range(chunk_token_start, chunk_token_end, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
-                            location = ttnn.experimental.disaggregation.KvCacheLocation()
-                            location.noc_addr = (curr_bank_id << 32) | (dram_bank_base_addr + curr_bank_offset)
-                            location.size_bytes = chunk_size_bytes
-                            location.device_group_index = group_idx
-                            lookup_table.set(global_layer, position, slot, location, config_id)
-
-                            curr_bank_id = (curr_bank_id + 1) % num_dram_banks
-                            if curr_bank_id == 0:
-                                curr_bank_offset += chunk_size_bytes
+    dram_bank_base_addr = tt_kvpe_cache.buffer_address()
     # Must match the bank count the cache was ND-sharded across (see get_num_dram_banks).
+    num_dram_banks = get_num_dram_banks(mesh_device)
+
+    device_group_idx_per_row = []
+    all_fabric_node_ids = []
+    for row in range(rank_row_start, rank_row_end):
+        fabric_node_ids = []
+        for col in range(mesh_shape[1]):
+            fabric_node_ids.append(mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(row, col)))
+        all_fabric_node_ids.extend(fabric_node_ids)
+        device_group_idx_per_row.append(lookup_table.add_device_group(fabric_node_ids))
+
+    for fid in all_fabric_node_ids:
+        lookup_table.set_fabric_node_host(fid, host_name=host_name)
+        logger.debug(
+            f"Set host name for fabric node id: mesh_id={int(fid.mesh_id)}, chip_id={int(fid.chip_id)} "
+            f"to {host_name}"
+        )
+
+    for local_idx, global_row in enumerate(range(rank_row_start, rank_row_end)):
+        group_idx = device_group_idx_per_row[local_idx]
+        curr_bank_id = 0
+        curr_bank_offset = 0
+
+        for slot in range(num_users):
+            for layer in range(num_layers):
+                for seq_chunk in range(num_chunks_per_seq_len):
+                    chunk_token_start = seq_chunk * PREFILL_CHUNK_OUTPUT_TOKENS + global_row * tokens_per_chunk_local
+                    chunk_token_end = chunk_token_start + tokens_per_chunk_local
+                    for position in range(chunk_token_start, chunk_token_end, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
+                        location = ttnn.experimental.disaggregation.KvCacheLocation()
+                        location.noc_addr = (curr_bank_id << 32) | (dram_bank_base_addr + curr_bank_offset)
+                        location.size_bytes = chunk_size_bytes
+                        location.device_group_index = group_idx
+                        lookup_table.set(layer, position, slot, location, config_id)
+
+                        curr_bank_id = (curr_bank_id + 1) % num_dram_banks
+                        if curr_bank_id == 0:
+                            curr_bank_offset += chunk_size_bytes
     return lookup_table
 
 

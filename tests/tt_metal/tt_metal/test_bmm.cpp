@@ -16,8 +16,8 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
-#include <tt-metalium/experimental/tensor/tensor_apis.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
+#include <tt-metalium/tensor/tensor_apis.hpp>
 #include "test_gold_impls.hpp"
 #include "impl/data_format/bfloat16_utils.hpp"
 
@@ -201,10 +201,9 @@ bool validate_bmm_result(
 
 TEST_F(AnyDispatchMeshDeviceSingleCardFixture, Bmm) {
     auto& mesh_device = *devices_[0];
-    IDevice* dev = mesh_device.get_devices()[0];
 
     BmmParams p;
-    if (dev->arch() != ARCH::QUASAR) {
+    if (mesh_device.arch() != ARCH::QUASAR) {
         p.Mt = 4; p.Kt = 2; p.Nt = 3;
         p.B_total = 2; p.B_per_core = 2;
         p.num_input_tiles = 2; p.num_output_tiles = 2;
@@ -220,7 +219,7 @@ TEST_F(AnyDispatchMeshDeviceSingleCardFixture, Bmm) {
     const uint32_t bytesB = p.single_tile_size * p.Kt * p.Nt * p.B_total;
 
     const experimental::NodeCoord node{0, 0};
-    const bool use_implicit_sync = (dev->arch() == ARCH::QUASAR);
+    const bool use_implicit_sync = (mesh_device.arch() == ARCH::QUASAR);
     auto spec = build_bmm_program_spec(p, tensors, node, use_implicit_sync);
     auto workload = experimental::MakeMeshWorkloadFromSpec(mesh_device, spec);
     Program& program = workload.get_programs().begin()->second;
@@ -259,12 +258,12 @@ TEST_F(AnyDispatchMeshDeviceSingleCardFixture, Bmm) {
     auto src1_vec = create_random_vector_of_bfloat16(bytesB, 1.0f, 0x1234, -0.45f);
     auto src0_host = HostTensor::from_vector(src0_vec, tensors.src0.tensor_spec());
     auto src1_host = HostTensor::from_vector(src1_vec, tensors.src1.tensor_spec());
-    enqueue_write_tensor(cq, src0_host, tensors.src0);
-    enqueue_write_tensor(cq, src1_host, tensors.src1);
+    cq.enqueue_write_tensor(src0_host, tensors.src0);
+    cq.enqueue_write_tensor(src1_host, tensors.src1);
 
     distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
 
-    auto result_vec = enqueue_read_tensor(cq, tensors.dst).to_vector<uint32_t>();
+    auto result_vec = cq.enqueue_read_tensor(tensors.dst).to_vector<uint32_t>();
 
     int argfail = -1;
     bool pass = validate_bmm_result(p, src0_vec, src1_vec, result_vec, &argfail);

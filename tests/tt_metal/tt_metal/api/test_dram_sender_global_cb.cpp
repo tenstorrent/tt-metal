@@ -32,6 +32,7 @@
 #include <tt-metalium/experimental/dispatch_context.hpp>
 
 #include "device_fixture.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "impl/context/metal_context.hpp"
 #include "llrt/hal.hpp"
 #include "llrt/tt_cluster.hpp"
@@ -50,11 +51,9 @@ protected:
             GTEST_SKIP() << "DRAM programmable cores not enabled";
         }
         mesh_device_ = devices_[0].get();
-        device_ = mesh_device_->get_devices()[0];
     }
 
     distributed::MeshDevice* mesh_device_{};
-    IDevice* device_{};
 };
 
 TEST_F(DramSenderGCBFixture, SmokeOneSenderFourReceivers) {
@@ -111,7 +110,7 @@ TEST_F(DramSenderGCBFixture, SmokeOneSenderFourReceivers) {
             pattern[r * kPageSize / sizeof(uint32_t) + w] = 0xABCD0000u + r * 0x100u + w;
         }
     }
-    auto sender_virtual = device_->virtual_core_from_logical_core(sender_logical, CoreType::DRAM);
+    auto sender_virtual = mesh_device_->virtual_core_from_logical_core(sender_logical, CoreType::DRAM);
     const uint64_t drisc_l1_noc_addr_base =
         hal.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
     const uint64_t data_noc_addr = drisc_l1_noc_addr_base + (data_addr - drisc_l1_unreserved);
@@ -174,8 +173,8 @@ TEST_F(DramSenderGCBFixture, SmokeOneSenderFourReceivers) {
     auto receivers_vec = corerange_to_cores(receiver_cores);
     for (uint32_t r = 0; r < receivers_vec.size(); ++r) {
         std::vector<uint32_t> result;
-        tt::tt_metal::detail::ReadFromDeviceL1(
-            device_, receivers_vec[r], gcb.buffer_address(), kPageSize, result, CoreType::WORKER);
+        slow_dispatch::ReadFromL1(
+            *mesh_device_, receivers_vec[r], gcb.buffer_address(), kPageSize, result, CoreType::WORKER);
         for (uint32_t w = 0; w < kPageSize / sizeof(uint32_t); ++w) {
             uint32_t expected = 0xABCD0000u + r * 0x100u + w;
             EXPECT_EQ(result[w], expected) << "Receiver " << r << " word " << w << " mismatch (expected 0x" << std::hex
@@ -244,7 +243,7 @@ TEST_F(DramSenderGCBFixture, SmokeTwoProgramsAsyncSlowDispatch) {
             pattern[r * kPageSize / sizeof(uint32_t) + w] = 0x55AA0000u + r * 0x100u + w;
         }
     }
-    auto sender_virtual = device_->virtual_core_from_logical_core(sender_logical, CoreType::DRAM);
+    auto sender_virtual = mesh_device_->virtual_core_from_logical_core(sender_logical, CoreType::DRAM);
     const uint64_t drisc_l1_noc_addr_base =
         hal.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
     MetalContext::instance().get_cluster().write_core(
@@ -312,8 +311,8 @@ TEST_F(DramSenderGCBFixture, SmokeTwoProgramsAsyncSlowDispatch) {
     auto receivers_vec = corerange_to_cores(receiver_cores);
     for (uint32_t r = 0; r < receivers_vec.size(); ++r) {
         std::vector<uint32_t> result;
-        tt::tt_metal::detail::ReadFromDeviceL1(
-            device_, receivers_vec[r], gcb.buffer_address(), kPageSize, result, CoreType::WORKER);
+        slow_dispatch::ReadFromL1(
+            *mesh_device_, receivers_vec[r], gcb.buffer_address(), kPageSize, result, CoreType::WORKER);
         for (uint32_t w = 0; w < kPageSize / sizeof(uint32_t); ++w) {
             uint32_t expected = 0x55AA0000u + r * 0x100u + w;
             EXPECT_EQ(result[w], expected) << "Receiver " << r << " word " << w;
@@ -364,7 +363,7 @@ TEST_F(DramSenderGCBFixture, MultiGcbDisjointPagesSent) {
     const uint32_t drisc_l1_unreserved = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
     const uint64_t drisc_l1_noc_addr_base =
         hal.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
-    auto sender_virtual = device_->virtual_core_from_logical_core(sender_logical, CoreType::DRAM);
+    auto sender_virtual = mesh_device_->virtual_core_from_logical_core(sender_logical, CoreType::DRAM);
     auto align_up = [&](uint32_t a) { return (a + l1_alignment - 1) & ~(l1_alignment - 1); };
 
     // Run one GCB's data flow end-to-end. The pages_sent address comes from the GCB
@@ -454,8 +453,8 @@ TEST_F(DramSenderGCBFixture, MultiGcbDisjointPagesSent) {
     // Verify receiver A got pattern A.
     {
         std::vector<uint32_t> result;
-        tt::tt_metal::detail::ReadFromDeviceL1(
-            device_, CoreCoord{0, 0}, gcb_a.buffer_address(), kPageSize, result, CoreType::WORKER);
+        slow_dispatch::ReadFromL1(
+            *mesh_device_, CoreCoord{0, 0}, gcb_a.buffer_address(), kPageSize, result, CoreType::WORKER);
         for (uint32_t w = 0; w < kPageSize / sizeof(uint32_t); ++w) {
             uint32_t expected = 0xAAAA0000u + w;
             EXPECT_EQ(result[w], expected) << "Receiver A word " << w;
@@ -464,8 +463,8 @@ TEST_F(DramSenderGCBFixture, MultiGcbDisjointPagesSent) {
     // Verify receiver B got pattern B.
     {
         std::vector<uint32_t> result;
-        tt::tt_metal::detail::ReadFromDeviceL1(
-            device_, CoreCoord{1, 0}, gcb_b.buffer_address(), kPageSize, result, CoreType::WORKER);
+        slow_dispatch::ReadFromL1(
+            *mesh_device_, CoreCoord{1, 0}, gcb_b.buffer_address(), kPageSize, result, CoreType::WORKER);
         for (uint32_t w = 0; w < kPageSize / sizeof(uint32_t); ++w) {
             uint32_t expected = 0xBBBB0000u + w;
             EXPECT_EQ(result[w], expected) << "Receiver B word " << w;

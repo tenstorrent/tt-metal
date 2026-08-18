@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
 // Transaction-id space is [0, HW_TXN_ID_MAX]. Id 0 is NOC_V2_TRID_STATIC (untagged).
@@ -194,7 +195,7 @@ struct dfb_hart_init_entry_t {
     uint8_t  logical_dfb_id;
     uint8_t  num_tcs;
     uint8_t  flags;                          // DFB_HART_FLAG_* bits above; bits3:0 = tensix_trisc_mask
-    uint8_t  capacity;                       // producer: TC capacity; consumer: 0
+    uint8_t _reserved0;                      // kept zeroed for 28B layout stability
     uint32_t entry_size;                     // raw bytes; device applies >> cb_addr_shift
     // Host precomputes the ready-to-copy stride_size per hart type:
     //   DM harts:    stride_size_precomp = entry_size_raw * stride_in_entries  (raw bytes)
@@ -212,9 +213,11 @@ struct dfb_hart_init_entry_t {
                                              // Intra-tensix never targets a DM hart, so DM pack p[11]
                                              // reclaims this byte for remapper_pair_index.
     uint16_t num_entries;                    // bytes 24-25; ring entry count (main update_size path)
-    uint8_t  _pad2[2];                       // pad header to 28B → 4B-aligned TC arrays follow
+    uint16_t capacity;  // bytes 26-27; producer: TC capacity; consumer: 0
 } __attribute__((packed));
 static_assert(sizeof(dfb_hart_init_entry_t) == 28, "dfb_hart_init_entry_t must be 28B");
+static_assert(offsetof(dfb_hart_init_entry_t, capacity) == 26, "capacity must occupy former pad bytes 26-27");
+static_assert(offsetof(dfb_hart_init_entry_t, num_entries) == 24, "num_entries must stay at bytes 24-25");
 
 // DM only: bytes [12,24) of the init entry header mirror LocalDFBInterface bytes [8,20)
 // (num_tcs_to_rr through _tc_align_pad). Host writes this 12B span in DTCM order; device

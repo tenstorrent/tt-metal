@@ -22,6 +22,8 @@
 
 namespace tt::tt_metal {
 
+class MetalEnvImpl;
+
 // Class to hold dispatch write data for the DataCollector
 class DispatchData {
 public:
@@ -42,7 +44,7 @@ private:
 // Class to manage & dump dispatch data for each program
 class DataCollector {
 public:
-    DataCollector() = default;
+    explicit DataCollector(MetalEnvImpl& env);
     ~DataCollector() = default;
 
     void RecordData(
@@ -103,6 +105,8 @@ private:
         std::vector<KernelData> kernels;
         CoreRangeSet core_ranges;
     };
+
+    MetalEnvImpl& env_;
     std::map<uint64_t, std::vector<DispatchData>> program_id_to_dispatch_data;
     std::map<uint64_t, std::map<HalProgrammableCoreType, std::vector<KernelGroupData>>> program_id_to_kernel_groups;
     std::map<uint64_t, int> program_id_to_call_count;

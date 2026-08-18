@@ -288,7 +288,8 @@ inline void read_k_chunk(
  *  (k_local_acc) -- the all-gather omits the local band from the gathered buffer. shard(logical tile L) =
  *  bc_ktile(L)/tiles_per_shard; local page = k_batch_page_offset/ring_size +
  *  (bc_ktile(L) - ring_index*tiles_per_shard)*head_dim_tiles (the slot offset is 1/ring of the gathered
- *  buffer's since k_local holds only sll=T/ring keys per slot). Same mcast wrapper + pad/stale as read_k_chunk. */
+ *  buffer's since k_local holds only sll=T/ring keys per slot). In indexed fused mode the gathered buffer is
+ *  batch-1 (remote offset 0) while local_batch_page_offset selects the original cache slot. */
 template <typename KAcc, typename KLocalAcc>
 inline void read_k_chunk_fused(
     Noc noc,
@@ -300,7 +301,8 @@ inline void read_k_chunk_fused(
     uint32_t k_tile_start,
     uint32_t k_tiles_in_unit,
     const McastDir& k_dir,
-    uint32_t k_batch_page_offset) {
+    uint32_t gathered_batch_page_offset,
+    uint32_t local_batch_page_offset) {
     read_block_or_mcast<cb_k, k_mcast_on, k_send_sem, k_recv_sem, k_valid_sem>(
         noc, k_chunk_tiles, k_chunk_tiles * k_tile_bytes, k_dir, [&](uint32_t addr) {
             uint32_t ptr = addr;
@@ -308,19 +310,12 @@ inline void read_k_chunk_fused(
                 const uint32_t seq_tile = bc_ktile(k_tile_start + k_col);
                 const uint32_t shard = seq_tile / tiles_per_shard;
                 if (shard == ring_index) {
-                    // Indexed multi-user cache: the remote branch adds k_batch_page_offset (= cache_batch_idx *
-                    // Tt * Dt, a full-T slot stride) into the gathered [B,1,T,D] buffer. k_local is [B,1,sll,D]
-                    // with sll = T/ring_size, so its per-slot stride is 1/ring_size of the gathered one; T =
-                    // ring_size * sll EXACTLY (validate-pinned), so the division is integral. Offset 0 when not
-                    // indexed. ASSERT the integrality as a REQUIREMENT (not just an observation): if the offset
-                    // were ever derived from a non-slot-aligned quantity the local pages would silently shift.
-                    ASSERT(k_batch_page_offset % ring_size == 0);
-                    const uint32_t local_batch_offset = k_batch_page_offset / ring_size;
                     const uint32_t local_base =
-                        local_batch_offset + (seq_tile - ring_index * tiles_per_shard) * head_dim_tiles;
+                        local_batch_page_offset + (seq_tile - ring_index * tiles_per_shard) * head_dim_tiles;
                     read_ktile_dims(noc, k_local_acc, ptr, local_base);  // OWN shard from the SP-local cache
                 } else {
-                    read_ktile_dims(noc, k_acc, ptr, k_batch_page_offset + seq_tile * head_dim_tiles);  // remote slab
+                    read_ktile_dims(
+                        noc, k_acc, ptr, gathered_batch_page_offset + seq_tile * head_dim_tiles);  // remote slab
                 }
             }
         });
@@ -345,6 +340,7 @@ struct FusedRingGate {
     uint32_t tiles_per_shard;           // tiles per SP shard in the gathered buffer
     uint32_t sem_id[2];                 // the two direction semaphore ids
     KLocalAcc k_local_acc;              // local SP shard cache (the all-gather INPUT; AG omits it from gathered)
+    uint32_t local_batch_page_offset;   // selected slot in k_local; gathered k may be batch-1
     uint32_t perm_base;                 // rt slot of the band-visit permutation (one entry per band)
     uint32_t shard_dir[max_ring_size];  // shard -> direction semaphore index
     uint32_t shard_val[max_ring_size];  // shard -> wait threshold
@@ -357,6 +353,7 @@ struct FusedRingGate {
         tiles_per_shard(k_len_tiles / recv.seq.ring_size),
         sem_id{recv.signal_op_semaphore_ids[0], recv.signal_op_semaphore_ids[1]},
         k_local_acc(TensorAccessor(kl_args, get_arg_val<uint32_t>(argidx++), k_tile_bytes)),
+        local_batch_page_offset(get_arg_val<uint32_t>(argidx++)),
         perm_base(argidx),
         shard_dir{},
         shard_val{} {
@@ -413,7 +410,8 @@ struct FusedRingGate {
             k_tile_start,
             k_tiles_in_unit,
             k_dir,
-            k_batch_page_offset);
+            k_batch_page_offset,
+            local_batch_page_offset);
     }
 };
 

@@ -230,7 +230,9 @@ TEST(CanonicalKeyTest, DistinguishesVectorBool) {
     // For each length 1..10, an all-true vector and an all-false vector (opposite at every index)
     // must encode differently.
     std::vector<bool> mixed_left;
+    mixed_left.reserve(10);
     std::vector<bool> mixed_right;
+    mixed_right.reserve(10);
     for (std::size_t len = 1; len <= 10; ++len) {
         const std::vector<bool> all_true(len, true);
         const std::vector<bool> all_false(len, false);

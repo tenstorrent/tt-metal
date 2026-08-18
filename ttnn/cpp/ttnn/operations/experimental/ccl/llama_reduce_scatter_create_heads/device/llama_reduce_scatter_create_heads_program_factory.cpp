@@ -196,6 +196,11 @@ uint32_t find_atomic_inc_core(std::vector<std::vector<ReadRequest>> schedule) {
 std::vector<ReadRequest> flatten_schedule(const std::vector<std::vector<ReadRequest>>& schedule) {
     // create a flattened schedule
     std::vector<ReadRequest> schedule_flattened;
+    size_t total_num_requests = 0;
+    for (const auto& chunk : schedule) {
+        total_num_requests += chunk.size();
+    }
+    schedule_flattened.reserve(total_num_requests);
     for (const auto& chunk : schedule) {
         schedule_flattened.insert(schedule_flattened.end(), chunk.begin(), chunk.end());
     }
@@ -596,6 +601,7 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
                                std::optional<uint32_t> num_max_cores = std::nullopt) -> std::vector<CoreCoord> {
         std::vector<CoreCoord> worker_cores;
         auto num_cores = num_max_cores.has_value() ? num_max_cores.value() : cores.size();
+        worker_cores.reserve(num_cores);
         for (uint32_t i = 0; i < num_cores; ++i) {
             const auto& core = cores[i];
             worker_cores.push_back(mesh_device->worker_core_from_logical_core(core));

@@ -134,7 +134,12 @@ jobs:
         run: |
           set -euo pipefail
           apt update
-          apt install -y ./pkgs/tt-metalium_*.deb ./pkgs/tt-metalium-jit_*.deb ./pkgs/tt-metalium-dev_*.deb ./pkgs/tt-metalium-examples_*.deb
+          # tt-metalium-jit is optional: TT_USE_SYSTEM_SFPI builds don't produce it, since this
+          # container already has /opt/tenstorrent/sfpi for the JIT-build runtime fallback
+          # (see tt_metal/jit_build/build.cpp).
+          shopt -s nullglob
+          pkgs=(./pkgs/tt-metalium_*.deb ./pkgs/tt-metalium-jit_*.deb ./pkgs/tt-metalium-dev_*.deb ./pkgs/tt-metalium-examples_*.deb)
+          apt install -y "${pkgs[@]}"
 
       - name: ⬇️  Setup TTSim
         uses: ./.github/actions/setup-ttsim

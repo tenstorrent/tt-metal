@@ -78,18 +78,17 @@
 // advance Dst by configurable strides without a separate INCRWC issue:
 //
 //   ADDR_MOD_7 : zero advance (used by SFPLOAD/SFPSTORE that don't move Dst).
-//                Left at the kernel-startup default of all-zero increments —
-//                no `topk_xl` init reprograms it.
+//                On MATH it arrives via `_llk_math_eltwise_unary_sfpu_init_`,
+//                and PACK gets it through `_topk_xl_remove_msb_values_init_`.
 //   ADDR_MOD_6 : +32 (one face row)
 //   ADDR_MOD_5 : +16 (half face row)
 //   ADDR_MOD_4 : +8     (unfused) / +16 (add_lsb_indices reuses this slot)
 //   ADDR_MOD_3 : +40 = 32 + 8     (folds trailing +8 into the last store)
 //   ADDR_MOD_2 : +24 = 16 + 8     (same idea at 16-stride)
 //   ADDR_MOD_1 : +48 = 32 + 16    (folds trailing +16 into the last store)
-//   ADDR_MOD_0 : +2  (hi16 / lo16 stride for the post-reduction phases —
-//                     `remove_msb_values` and `separate_indices`. Not
-//                     touched by `_topk_xl_init_` so it never collides with
-//                     the +24 / +40 / +48 folds above.)
+//   ADDR_MOD_0 : +2 (one 32-lane group, which is the two Dest rows a single
+//                SFPU load/store covers). Used by the post-reduction phases
+//                `remove_msb_values` and `separate_indices`.
 //
 // "Folding" means the trailing INCRWC(0, X, ...) advance that would normally
 // follow a store gets absorbed into the store's own ADDR_MOD increment,
@@ -2215,8 +2214,6 @@ inline void _topk_xl_rebuild_generic_(const std::uint32_t dst_index, const bool 
 // Programs the ADDR_MODs used by `_topk_xl_add_lsb_indices_`. Reuses
 // ADDR_MOD_4 for a +16 advance — the other ADDR_MOD_4 user is the unfused
 // topk path, but `distributed_topk` runs fused, so the reuse is safe.
-// ADDR_MOD_7 (zero advance) is left at its kernel-startup default and
-// not touched here.
 inline void _topk_xl_add_lsb_indices_init_()
 {
     // ADDR_MOD_6 — +4 (one element).
@@ -2353,17 +2350,15 @@ inline void _topk_xl_add_lsb_indices_()
 //
 // `remove_msb_values` runs on the PACK thread (TRISC2): the >64K (extended
 // 256K) flow needs to pack values out first, then overwrite the value half
-// of each DST word with zero, then pack out indices. Owning that overwrite
-// on PACK lets the value pack and the zero-overwrite overlap with MATH's
-// final merge tail, see the `op.hpp` wiring.
+// of each DST word with zero, then pack out indices.
 
-// Program ADDR_MOD_0 with a +2 increment — the stride between the lo16
-// and hi16 halves of an FP32 DST word. Used by both `remove_msb_values`
-// (overwrite hi16 with 0) and `separate_indices` (write index into the
-// neighbouring DST word's hi16).
+// Program ADDR_MOD_0 with a +2 increment: the two Dest rows of an SFPU
+// load/store. Used by both `remove_msb_values` and `separate_indices`,
+// which both walk the K-element region 32 datums at a time. Also sets
+// ADDR_MOD_7 (zero advance) for the load part of the sequence.
 inline void _topk_xl_remove_msb_values_init_()
 {
-    // ADDR_MOD_0 — +2 (hi16 vs lo16 stride). Not programmed by
+    // ADDR_MOD_0, +2 (one group of 32 lanes). Not programmed by
     // `_topk_xl_init_`, so this never collides with the unfused +24
     // fold living in ADDR_MOD_2.
     addr_mod_t {
@@ -2372,6 +2367,14 @@ inline void _topk_xl_remove_msb_values_init_()
         .dest = {.incr = 2},
     }
         .set(ADDR_MOD_0);
+
+    // ADDR_MOD_7 with zero advance for the SFPLOAD.
+    addr_mod_t {
+        .srca = {.incr = 0},
+        .srcb = {.incr = 0},
+        .dest = {.incr = 0},
+    }
+        .set(ADDR_MOD_7);
 }
 
 // Store zero into the hi16 half of every DST word in the K-sized region.
@@ -2379,25 +2382,32 @@ inline void _topk_xl_remove_msb_values_init_()
 // already been packed out by the time we get here, so blanking the hi16
 // half leaves clean indices in DST ready for the second pack.
 //
-// K=2048 → 64 iters; K=1024 → 32 iters; K=512 → 16 iters. The body is one
-// instruction so there's nothing to replay or MOP across — TRISC2's issue
-// rate is fine at this volume.
-template <std::uint32_t K>
+// K=2048 → 64 iters; K=1024 → 32 iters; K=512 → 16 iters, 32 lanes each.
+template <std::uint32_t K, DstSync Dst>
 inline void _topk_xl_remove_msb_values_()
 {
     static_assert(K == 512 || K == 1024 || K == 2048, "K must be 512, 1024, or 2048");
+
+    // The loop below holds a value in LREG0 across instructions while running on
+    // PACK, and MATH does SFPU work itself, so this is only safe under SyncFull.
+    static_assert(Dst == DstSync::SyncFull, "_topk_xl_remove_msb_values_ needs MATH quiesced: SyncFull only");
+
     constexpr int row_scale_factor = K == 512 ? 1 : K == 1024 ? 2 : 4;
+
+    // Drain any SFPU work still in flight before touching LREG0.
+    TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::WAIT_SFPU);
+
     for (int i = 0; i < row_scale_factor * 16; i++)
     {
-        // store 0 to the hi-16 bits of DST
-        TTI_SFPSTORE(p_sfpu::LCONST_0, InstrModLoadStore::FP16B, ADDR_MOD_0, 0);
+        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);  // fused [value|index]
+        TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0);            // clear hi16, keep the index
+        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_0, 0); // [0|index], advance one group
     }
+
+    // Hold the packer until those stores drain.
+    TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU);
 }
 
-// Same +2-stride ADDR_MOD setup as `remove_msb_values_init`. Kept as a
-// separate function to keep the LLK API surface 1:1 with the compute
-// kernel API; the bodies are identical but the calling site differs.
-//
 // In addition to programming ADDR_MOD_0, this also stashes the runtime
 // `group_id_bit_shift` into LREG12 so that `_topk_xl_separate_indices_`
 // can SFPSHFT the (template-static) `group_id` by it at body issue time.

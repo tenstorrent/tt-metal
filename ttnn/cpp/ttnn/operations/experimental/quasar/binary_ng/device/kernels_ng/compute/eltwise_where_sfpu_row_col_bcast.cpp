@@ -51,11 +51,13 @@ ALWI void process_tile(
 
     exp_cb_bcast.wait_front(num_tiles_per_cycle);
 
+    compute_kernel_hw_startup(CB_OTHER, cb_llk_post);
     for (uint32_t j = tile_start; j < freq; ++j) {
         exp_cb_other.wait_front(num_tiles_per_cycle);
         exp_cb_llk_post.reserve_back(num_tiles_per_cycle);
         pack_reconfig_data_format(cb_out, cb_llk_post);
-        unary_bcast_init<BroadcastType::ROW>(CB_OTHER, cb_llk_post);
+        reconfig_data_format(CB_OTHER, CB_OTHER);
+        unary_bcast_init<BroadcastType::ROW>(CB_OTHER);
 
         tile_regs_acquire();
         unary_bcast<BroadcastType::ROW>(CB_OTHER, 0, 0);

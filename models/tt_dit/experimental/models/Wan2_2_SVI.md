@@ -188,9 +188,9 @@ defaults are the intended starting point.
   caveat above. A native `DPMSolverSDESolver` is the follow-up that would
   close the gap.
 - **Anchor encoding differs slightly from upstream.** Our implementation
-  reuses `WanPipelineI2V.prepare_latents`, which encodes a full anchor-at-
-  frame-0 / zero-elsewhere video and overwrites the non-anchor frames with
-  the motion-latent splice and zero-padding. Upstream's `wan_video_svi_pro`
+  reuses `WanPipelineI2V.prepare_latents`, which encodes an anchor-at-frame-0 /
+  zero-elsewhere video and then overwrites the non-anchor latents with the
+  motion-latent splice and zero-padding. Upstream's `wan_video_svi_pro`
   encodes only the single anchor frame and concatenates. Both produce the
   same anchor latent at frame 0 and zeros / motion at the rest, but the
   encode path is not byte-identical.

@@ -136,7 +136,7 @@ int main(int argc, char **argv) {
     send_weights_to_aggregator(socket_manager, aggregator_and_optimizer_ctx, sorted_model_parameters);
 
     uint32_t global_step = 0;
-    for (uint32_t epoch = 0; epoch < config.num_epochs; ++epoch) {
+    for (uint32_t epoch = 0; config.num_epochs == 0 || epoch < config.num_epochs; ++epoch) {
         for (uint32_t step = 0; step < steps_per_dataset; ++step, ++global_step) {
             receive_gradients_from_aggregator(socket_manager, aggregator_and_optimizer_ctx, sorted_model_parameters);
             optimizer->step();

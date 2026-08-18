@@ -27,7 +27,7 @@ void kernel_main() {
     CircularBuffer cbout0(tt::CBIndex::c_16);
     CircularBuffer cbout1(tt::CBIndex::c_17);
 
-    binary_op_init_common(cb_in0, cb_in1, cb_out0);
+    compute_kernel_hw_startup(cb_in0, cb_in1, cb_out0);
     binary_tiles_init<false, EltwiseBinaryType::ELWADD>(cb_in0, cb_in1);
     for (uint32_t block = 0; block < num_tiles; ++block) {
         cbin0.wait_front(ublock_size_tiles);
@@ -80,7 +80,7 @@ void kernel_main() {
 #endif  // EXPLICIT_RECONFIG
 
         // Init like CB_0 is in A and CB_1 is in B
-        add_tiles_init(cb_in1, cb_in0, true);
+        add_init(cb_in1, cb_in0, true);
 
         for (uint32_t i = 0; i < ublock_size_tiles; ++i) {
             add_tiles(cb_in1, cb_in0, i, i, i);

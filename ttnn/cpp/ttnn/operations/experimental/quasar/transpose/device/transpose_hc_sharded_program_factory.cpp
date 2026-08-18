@@ -41,11 +41,13 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
     std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> ret_val(num_cores);
 
     std::vector<uint32_t> shard_grid_x_map;
+    shard_grid_x_map.reserve(num_cores_x);
     for (uint32_t i = 0; i < num_cores_x; ++i) {
         auto physical_core = device->worker_core_from_logical_core(CoreCoord(i, 0));
         shard_grid_x_map.push_back(physical_core.x);
     }
     std::vector<uint32_t> shard_grid_y_map;
+    shard_grid_y_map.reserve(num_cores_y);
     for (uint32_t i = 0; i < num_cores_y; ++i) {
         auto physical_core = device->worker_core_from_logical_core(CoreCoord(0, i));
         shard_grid_y_map.push_back(physical_core.y);
@@ -108,6 +110,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
 
     uint32_t height = 0;
     std::vector<CoreCoord> cores;
+    cores.reserve(num_cores);
     for (uint32_t i = 0; i < num_cores; i++) {
         CoreCoord core;
         if (row_major) {
@@ -135,8 +138,13 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
         std::vector<uint32_t> read_stick_offset;
 
         uint32_t num_sticks_per_core = shard_height;
+        read_cores_indices.reserve(num_sticks_per_core);
+        read_cores_noc_x.reserve(num_sticks_per_core);
+        read_cores_noc_y.reserve(num_sticks_per_core);
+        read_stick_offset.reserve(num_sticks_per_core);
 
         std::vector<uint32_t> stick_ids_per_core;
+        stick_ids_per_core.reserve(num_sticks_per_core);
         for (uint32_t j = 0; j < num_sticks_per_core; ++j) {
             stick_ids_per_core.push_back(curr_sticks_read);
             curr_c++;
@@ -188,6 +196,9 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
         uint32_t num_C_blocks_per_core_reader = num_C_blocks_per_core, num_C_blocks_per_core_writer = 0;
 
         uint32_t num_non_repeat_cores = read_cores_indices.size();
+        non_repeat_stick_offset_values.reserve(num_non_repeat_cores);
+        non_repeat_noc_x_values.reserve(num_non_repeat_cores);
+        non_repeat_noc_y_values.reserve(num_non_repeat_cores);
         uint32_t read_stick_stride = read_stick_offset.size() > 1 ? read_stick_offset[1] - read_stick_offset[0] : 0;
 
         if (num_H_per_core == 1) {  // each core only has one H block or part of H block

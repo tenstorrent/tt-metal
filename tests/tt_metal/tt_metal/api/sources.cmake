@@ -27,6 +27,8 @@ set(UNIT_TESTS_API_SOURCES
     dataflow_buffer/test_dataflow_buffer_edge_cases.cpp
     dataflow_buffer/test_dataflow_buffer_overrides.cpp
     dataflow_buffer/test_dataflow_buffer_configs.cpp
+    dataflow_buffer/test_dataflow_buffer_disjoint_slots.cpp
+    dataflow_buffer/test_dataflow_buffer_scoped_lock_cache.cpp
     dataflow_buffer/test_borrowed_memory_dataflow_buffer.cpp
     distribution_spec/test_buffer_distribution_spec.cpp
     metal2_host_api/test_mesh_workload_factories_hw.cpp
@@ -53,6 +55,7 @@ set(UNIT_TESTS_API_SOURCES
     test_dram_to_l1_multicast.cpp
     test_dram.cpp
     test_global_circular_buffers.cpp
+    test_cross_node_dfb.cpp
     test_global_semaphores.cpp
     test_host_buffer.cpp
     test_kernel_compile_cache.cpp

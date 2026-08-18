@@ -131,6 +131,12 @@ class Attention(LightweightModule):
         self.sdpa_decode_compute_kernel_cfg = decoders_optimizations.get_math_fidelity(
             decoder_id=layer_num, op=OpGroup.SDPA_DECODE, configuration=configuration
         )
+        # Some architectures (e.g. Gemma-2, head_dim=256) need the flash-decode op's
+        # internal default compute config instead of the framework's forced
+        # fp32_dest_acc_en/packer_l1_acc, which corrupts the cross-chunk online-softmax
+        # reduction for large head_dim. Config-gated flag; False for every other model.
+        if getattr(configuration, "sdpa_decode_use_default_compute_config", False):
+            self.sdpa_decode_compute_kernel_cfg = None
         self.li_o_decode_compute_kernel_cfg = decoders_optimizations.get_math_fidelity(
             decoder_id=layer_num, op=OpGroup.LI_O_DECODE, configuration=configuration
         )

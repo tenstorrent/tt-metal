@@ -62,6 +62,7 @@ compute_width_sharding_reshard_segments(
     const uint32_t remote_stride_bytes = tt::align(element_size * remote_shard_width, remote_alignment);
 
     std::vector<WidthShardingReshardSegmentForSingleCore> runtime_args_for_each_core;
+    runtime_args_for_each_core.reserve(num_local_shards);
 
     bool is_final_transfer = false;
     uint32_t local_shard_offset = 0;
@@ -100,7 +101,7 @@ compute_width_sharding_reshard_segments(
             }
         }
         local_shard_offset = 0;
-        runtime_args_for_each_core.push_back(core_args);
+        runtime_args_for_each_core.push_back(std::move(core_args));
     }
 
     TT_FATAL(
@@ -109,7 +110,7 @@ compute_width_sharding_reshard_segments(
         num_local_shards,
         runtime_args_for_each_core.size());  // sanity check
 
-    return {runtime_args_for_each_core, total_num_sticks, local_stride_bytes, remote_stride_bytes};
+    return {std::move(runtime_args_for_each_core), total_num_sticks, local_stride_bytes, remote_stride_bytes};
 }
 
 }  // namespace ttnn::operations::data_movement::detail

@@ -40,6 +40,7 @@ def get_tensors(
     keepdim=False,
     npu_dtype=ttnn.bfloat16,
     cpu_dtype=torch.bfloat16,
+    int_range=None,
 ):
     npu_layout = ttnn.TILE_LAYOUT
     output_shape = input_shape.copy()
@@ -60,8 +61,11 @@ def get_tensors(
         tt_output_shape = filter_indices_with_last_two(output_shape, dim)
 
     if use_randint:
-        int_min = 0 if is_npu_dtype_uint32(npu_dtype) else -2
-        int_max = 10 if is_npu_dtype_uint32(npu_dtype) else 3
+        if int_range is not None:
+            int_min, int_max = int_range
+        else:
+            int_min = 0 if is_npu_dtype_uint32(npu_dtype) else -2
+            int_max = 10 if is_npu_dtype_uint32(npu_dtype) else 3
         requires_grad = True if is_npu_dtype_float(npu_dtype) else False
         torch_input = torch.randint(int_min, int_max, input_shape, dtype=cpu_dtype, requires_grad=requires_grad)
         torch_output = torch.randint(int_min, int_max, tt_output_shape, dtype=cpu_dtype)
@@ -523,6 +527,52 @@ def test_moreh_sum_integer(input_shape, dim, data_type, device):
     compute_kernel_config = get_compute_kernel_options(True)
     (tt_input, tt_output, tt_output_shape, _, torch_input) = get_tensors(
         input_shape, dim, device, use_randint=True, keepdim=True, npu_dtype=data_type, cpu_dtype=torch.int64
+    )
+
+    normalized_dim = dim if dim >= 0 else len(input_shape) + dim
+
+    torch_output = torch.sum(torch_input, normalized_dim, True)
+
+    tt_output_cpu = ttnn.to_torch(
+        ttnn.operations.moreh.sum(
+            tt_input, dim=normalized_dim, keepdim=True, output=tt_output, compute_kernel_config=compute_kernel_config
+        )
+    )
+
+    logger.debug(f"{torch.equal(torch_output, tt_output_cpu)}")
+
+    assert torch.equal(torch_output, tt_output_cpu)
+
+
+@pytest.mark.parametrize(
+    "input_shape",
+    [
+        [3, 1, TILE_HEIGHT - 1, TILE_WIDTH - 1],
+        [2, 2, 3, TILE_HEIGHT * 2, TILE_WIDTH * 2],
+    ],
+    ids=["3, 1, TILE_HEIGHT - 1, TILE_WIDTH - 1", "2, 2, 3, TILE_HEIGHT * 2, TILE_WIDTH * 2"],
+)
+@pytest.mark.parametrize(
+    "dim",
+    [-1, -2, 0],
+    ids=["dim-w", "dim-h", "dim-b0"],
+)
+def test_moreh_sum_large_integer_magnitude(input_shape, dim, device):
+    if (dim == 0 or dim == 1) and (len(input_shape) - dim <= 2):
+        pytest.skip(f"skip sum for batch-dim with this config. {input_shape} and {dim}")
+
+    torch.manual_seed(3072)
+
+    compute_kernel_config = get_compute_kernel_options(True)
+    (tt_input, tt_output, tt_output_shape, _, torch_input) = get_tensors(
+        input_shape,
+        dim,
+        device,
+        use_randint=True,
+        keepdim=True,
+        npu_dtype=ttnn.int32,
+        cpu_dtype=torch.int64,
+        int_range=(-(2**24), 2**24),
     )
 
     normalized_dim = dim if dim >= 0 else len(input_shape) + dim

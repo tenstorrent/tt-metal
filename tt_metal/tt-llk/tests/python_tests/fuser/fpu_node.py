@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Tuple
 import torch
 
 if TYPE_CHECKING:
-    from .fused_operation import FusedOperation
+    from .l1_operation import L1Operation
     from .fuser_config import GlobalConfig
 
 from helpers.llk_params import (
@@ -22,10 +22,10 @@ from helpers.llk_params import (
     UnpackToDest,
 )
 
+from .base_fpu import Fpu
+from .base_unpacker import Unpacker
 from .block_data import BlockData
-from .fused_fpu import Fpu
-from .fused_operand import Operand
-from .fused_unpacker import Unpacker
+from .operand import Operand
 
 
 class FpuNode:
@@ -35,9 +35,10 @@ class FpuNode:
         src_a: Operand,
         src_b: Operand,
         unpacker: Unpacker = None,
-        unpack_transpose_faces: Transpose = Transpose.No,
-        unpack_transpose_within_face: Transpose = Transpose.No,
+        transpose_faces: Transpose = Transpose.No,
+        transpose_within_face: Transpose = Transpose.No,
         broadcast_type: BroadcastType = BroadcastType.None_,
+        broadcast_tile: int = None,
         data_copy_type: DataCopyType = DataCopyType.A2D,
         reuse_dest: EltwiseBinaryReuseDestType = EltwiseBinaryReuseDestType.NONE,
         math_fidelity: MathFidelity = MathFidelity.LoFi,
@@ -51,9 +52,10 @@ class FpuNode:
         self.unpacker = unpacker
         self.src_a = src_a
         self.src_b = src_b
-        self.unpack_transpose_faces = unpack_transpose_faces
-        self.unpack_transpose_within_face = unpack_transpose_within_face
+        self.transpose_faces = transpose_faces
+        self.transpose_within_face = transpose_within_face
         self.broadcast_type = broadcast_type
+        self.broadcast_tile = broadcast_tile
         self.reuse_dest = reuse_dest
         self.math_fidelity = math_fidelity
         self.enforce_fp32_accumulation = enforce_fp32_accumulation
@@ -75,18 +77,9 @@ class FpuNode:
         else:
             self.data_copy_type = data_copy_type
 
-    def unpack_reconfig(
-        self,
-        operation: "FusedOperation",
-        config: "GlobalConfig",
-    ):
-        if self.unpacker is None or config.skip_unpack_init:
-            return ""
-        return config.sentinel.configure_unpack(config, operation, self)
-
     def unpack_init(
         self,
-        operation: "FusedOperation",
+        operation: "L1Operation",
         config: "GlobalConfig",
         block: BlockData,
     ):
@@ -96,7 +89,7 @@ class FpuNode:
 
     def unpack_run(
         self,
-        operation: "FusedOperation",
+        operation: "L1Operation",
         config: "GlobalConfig",
         block: BlockData,
     ):
@@ -106,7 +99,7 @@ class FpuNode:
 
     def unpack_uninit(
         self,
-        operation: "FusedOperation",
+        operation: "L1Operation",
         config: "GlobalConfig",
         block: BlockData,
     ):
@@ -114,18 +107,9 @@ class FpuNode:
             return ""
         return self.unpacker.uninit(operation, config, self, block)
 
-    def math_reconfig(
-        self,
-        operation: "FusedOperation",
-        config: "GlobalConfig",
-    ):
-        if config.skip_math_init:
-            return ""
-        return config.sentinel.configure_math(config, operation, self)
-
     def fpu_init(
         self,
-        operation: "FusedOperation",
+        operation: "L1Operation",
         config: "GlobalConfig",
         block: BlockData,
     ):
@@ -135,7 +119,7 @@ class FpuNode:
 
     def fpu_run(
         self,
-        operation: "FusedOperation",
+        operation: "L1Operation",
         config: "GlobalConfig",
         block: BlockData,
     ):
@@ -143,7 +127,7 @@ class FpuNode:
 
     def fpu_uninit(
         self,
-        operation: "FusedOperation",
+        operation: "L1Operation",
         config: "GlobalConfig",
         block: BlockData,
     ):
@@ -158,7 +142,7 @@ class FpuNode:
         tensor_a,
         tensor_b,
         tensor_dst,
-        operation: "FusedOperation",
+        operation: "L1Operation",
         config: "GlobalConfig",
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         if self.unpacker is not None:

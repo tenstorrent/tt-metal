@@ -56,7 +56,7 @@ void kernel_main() {
     deepseek_compute_kernel_init();
 
     // Initial HW config (in1→srcA bfp8, in0→srcB bf16)
-    reconfig_data_format<SrcOrder::Reverse, true>(cb_in0, cb_in1);
+    reconfig_full_operand<SrcOrder::Reverse>(cb_in0, cb_in1);
     pack_reconfig_data_format<true>(cb_out);
 
     // Wait for inputs

@@ -727,14 +727,12 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         const auto build_tensor_descriptor_args = [&]() {
             std::vector<uint32_t> tensor_descriptor_args;
             for (uint32_t i = 0; i < num_inputs; i++) {
-                const auto input_tensor_num_pages = input_tensor[i].buffer()->num_pages();
                 const auto input_tensor_shape = input_tensor[i].padded_shape();
                 const auto output_tensor_shape = output_tensor[i].padded_shape();
                 const uint32_t num_heads = input_tensor_shape[1];
                 // single_batch_head_num_pages is always pages-per-(batch,head); independent of slicing.
                 const uint32_t full_batch_head_size = input_tensor_shape[0] * num_heads;
 
-                uint32_t single_batch_head_num_pages = input_tensor_num_pages / full_batch_head_size;
                 const uint32_t input_tensor_Wt = input_tensor_shape[3] / tt::constants::TILE_WIDTH;
                 const uint32_t input_tensor_Ht = input_tensor_shape[2] / tt::constants::TILE_HEIGHT;
                 const uint32_t output_tensor_Wt = output_tensor_shape[3] / tt::constants::TILE_WIDTH;
@@ -742,6 +740,11 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
                 TT_ASSERT(!(input_tensor_shape[3] % tt::constants::TILE_WIDTH));
                 TT_ASSERT(!(output_tensor_shape[3] % tt::constants::TILE_WIDTH));
 
+                // TensorAccessor page IDs address the logical padded tensor volume. For ND-sharded buffers,
+                // buffer()->num_pages() can additionally include physical padding in the final shard; treating
+                // those pages as tensor data would overrun a selected batch/head slice and can write past the
+                // corresponding logical output band.
+                const uint32_t single_batch_head_num_pages = input_tensor_Ht * input_tensor_Wt;
                 const uint32_t base_pages_per_worker = single_batch_head_num_pages / num_links;
                 const uint32_t remainder = single_batch_head_num_pages % num_links;
                 const uint32_t input_tile_id_start = (link * base_pages_per_worker) + std::min(link, remainder);

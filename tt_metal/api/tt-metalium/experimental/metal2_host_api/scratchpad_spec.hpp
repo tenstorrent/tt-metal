@@ -21,7 +21,8 @@ namespace tt::tt_metal::experimental {
 //
 // A scratchpad is private to its bound kernel. Both DM and compute kernels may use
 // scratchpads. The kernel accesses it via the device-side accessor:
-//   auto s = Scratchpad(scratch::<accessor_name>);
+//   Scratchpad<uint32_t> s(scratch::<accessor_name>);
+// The template argument is the element type the kernel views the region as.
 //
 // KERNEL BINDING: By default, a scratchpad instance is private to a single kernel
 //   instance. It is legal for more than one KernelSpec to bind to the same

@@ -112,7 +112,8 @@ jobs:
             --build-type "$BUILD_TYPE" \
             --enable-ccache \
             --without-distributed \
-            --without-python-bindings
+            --without-python-bindings \
+            --disable-profiler
 
       - name: "📦 Pack CPM cache"
         if: steps.cpm-cache.outputs.cache-hit != 'true'

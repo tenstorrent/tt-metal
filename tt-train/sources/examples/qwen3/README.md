@@ -177,7 +177,6 @@ qwen3/
     ├── dataset.py               # TextDataset, SourceCodeDataset loaders
     ├── device_setup.py          # Device/mesh initialization
     ├── dist_helpers.py          # Sharded/replicated tensor constructors
-    ├── distributed_ops.py       # AllGather/Scatter autograd ops, VocabParallelEmbedding
     ├── kv_cache.py              # KV cache, causal/decode masks
     ├── lora.py                  # LoRA adapter injection
     ├── memory.py                # Memory usage tracking
@@ -191,9 +190,16 @@ qwen3/
 
 Device initialisation lives in `utils/device_setup.py` and is shared by all
 three entry-point scripts (`generate.py`, `gradients.py`, `train.py`).
-In distributed mode it calls `ttml.core.distributed.enable_fabric()` which
-automatically selects the fabric config (including wrap-around / torus
-connections) from the Mesh Graph Descriptor (MGD) file.
+In distributed mode it calls `ttml.open_device_mesh(ttml.Mesh((dp, tp), ("dp",
+"tp")))`, which enables TT-Fabric — automatically selecting the fabric config
+(including wrap-around / torus connections) from the Mesh Graph Descriptor
+(MGD) file — validates the requested mesh shape against that MGD, and registers
+the mesh under the axis names `"dp"` and `"tp"`.
+
+Registering the *named* mesh is what lets the model use the shared
+`ttml.modules` parallel layers: `VocabParallelEmbedding` and
+`FeatureParallelEmbedding` resolve their cluster axis via
+`ttml.mesh().axis_index("tp")`, and raise if no mesh has been opened.
 
 ### Setting the MGD file
 
@@ -226,8 +232,10 @@ the [Distributed Training documentation](https://github.com/tenstorrent/tt-metal
 
 ## Nice-to-Have TODOs
 
-- **VocabParallelEmbedding** — `_vocab_parallel_embedding`
-  (`utils/distributed_ops.py`) is a composite op with NumPy host-side logic.
-  Implement as a proper device kernel.  (The TP cross-entropy already runs
-  through the C++ `ttml.ops.distributed.vocab_parallel_cross_entropy_loss`
-  op, which `train.py` selects automatically when TP is enabled.)
+- **Embedding as a device kernel** — the TP embeddings are composite ops built
+  from `ttnn` primitives (`ttml.modules.VocabParallelEmbedding` for tied
+  weights, `FeatureParallelEmbedding` for untied). Everything runs on device
+  and no host round-trip remains, but a fused kernel would still save the
+  intermediate mask/gather traffic. (The TP cross-entropy already runs through
+  the C++ `ttml.ops.distributed.vocab_parallel_cross_entropy_loss` op, which
+  `train.py` selects automatically when TP is enabled.)

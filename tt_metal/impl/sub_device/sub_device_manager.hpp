@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <tt-metalium/vector_aligned.hpp>
+#include "impl/dispatch/vector_aligned.hpp"
 #include <tt_stl/span.hpp>
 #include <array>
 #include <atomic>
