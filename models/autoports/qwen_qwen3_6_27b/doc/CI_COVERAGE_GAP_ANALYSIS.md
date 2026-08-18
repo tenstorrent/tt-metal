@@ -176,3 +176,98 @@ shallow clone), vLLM is `03fa3af2e` **plus** the one-line registry redirect, and
 served is the autoport, not `models/demos/blackhole/qwen36`. The report states what the spec
 *declares*, not what was measured. Worth knowing before any such report is used as evidence of
 what was verified.
+
+---
+
+## Spec-test verdict: 4/22, and not one genuine conformance failure
+
+Ran against a healthy server in external-server mode with the full release flags
+(`max_num_seqs 32`, `FABRIC_1D`, `l1_small_size 24576`, `sample_on_device_mode decode_only`,
+`reasoning_parser qwen3`, `tool_call_parser qwen3_coder`, `enable-auto-tool-choice`; trace region
+lowered to 200 MB). Server healthy 15:56:27, suite ran 15:56:28 to 17:22:33 — **86 minutes**.
+
+### Per-case result
+
+| test case | status | passed |
+|---|---|---|
+| `test_max_tokens` | ✅ PASS | 2/2 |
+| `test_n` | ❌ FAIL | 1/2 |
+| `test_penalties` | ❌ FAIL | 1/9 |
+| `test_coherence_verbatim_echo` | ❌ FAIL | 0/1 |
+| `test_determinism_parameters` | ❌ FAIL | 0/3 |
+| `test_logprobs` | ❌ FAIL | 0/1 |
+| `test_non_uniform_seeding` | ❌ FAIL | 0/1 |
+| `test_seed_reproducibility` | ❌ FAIL | 0/1 |
+| `test_stop` | ❌ FAIL | 0/2 |
+
+`Spec Tests: ❌ FAIL`, acceptance FAIL. **4 of 22 parametrizations passed.**
+
+### Every failure is environmental. None is a parameter-conformance failure.
+
+Classifying all 22 by failure mode:
+
+| class | count |
+|---|---:|
+| `ReadTimeout ... (read timeout=30)` | **9** |
+| `AttributeError` / `TypeError` on `NoneType` | **9** |
+| PASS | 4 |
+| **genuine assertion failures** | **0** |
+
+**Nine timeouts at a 30-second client read timeout.** This is the fourth CI check defeated by
+the allocated-batch prefill cost: a single request on this `max_num_seqs 32` server needs ~105 s
+of prefill before its first token (`SERVING_BATCH_LATENCY.md`), so any conformance case that
+requires a real generation cannot answer inside 30 s. The four that passed are the cheapest ones
+— `test_max_tokens[5]`, `test_max_tokens[10]`, `test_n[3]`, and one `test_penalties`
+parametrization.
+
+**Nine `NoneType` crashes**, all in `test_penalties` (8) and `test_stop` (1), with the
+representative traceback:
+
+```
+AttributeError: 'NoneType' object has no attribute 'lower'
+```
+
+i.e. the test called `.lower()` on a response body that was `None`. The strongly-indicated cause
+is the one predicted in `RELEASE_CONFIG_DIVERGENCE.md` and `SAMPLING_TEXT_QUALITY.md`: with
+`reasoning_parser: qwen3` active and thinking mode on by default, a generation that does not
+reach `</think>` has **everything routed to `reasoning_content` and `content` left empty** —
+`qwen3_reasoning_parser.py` returns `(model_output, None)` in exactly that case. Conformance
+prompts use small `max_tokens`, so they stop mid-reasoning and `content` is `None`.
+
+Stated as *indicated* rather than proven: the traceback shows the error shape and the attribute,
+not the variable name, so I have not established beyond doubt that the `None` is
+`message.content`. The prediction, the configuration, and the failure shape all agree, and the
+cheap confirmation is one request at small `max_tokens` against this configuration reporting
+`content` and `reasoning_content` separately — which `tests/release_grading_probe.py` already
+does.
+
+### What this means
+
+The conformance suite **cannot currently return a meaningful verdict for this model**, and the
+red cell it produces is doubly misleading: 9 failures are the port being slow, 9 are the release's
+own parser configuration making the response body empty, and 0 are the model mishandling a
+parameter. A reviewer reading `Spec Tests: FAIL (0/1 passed)` would reasonably conclude the port
+does not honour vLLM sampling parameters. Nothing measured here supports that.
+
+Two fixes, neither in the model:
+
+1. **Raise the conformance read timeout, or run the suite at low batch.** 30 s is unreachable at
+   `max_num_seqs 32`. At `max_num_seqs 1` prefill is ~3.8 s and these cases would fit comfortably.
+   The same argument as for lm-eval's 1800 s default: the harness timeouts assume a much faster
+   prefill than this configuration delivers.
+2. **Make the suite defensive about `content is None`.** A reasoning model served with a reasoning
+   parser will legitimately return `content: null` when a generation is truncated mid-thought. The
+   suite should skip or fail such a case with a clear message, not crash with `AttributeError`.
+   This affects every reasoning model on the fleet, not just this one.
+
+### Where this leaves the coverage question
+
+With this run, the fleet report's `·` for spec tests becomes a measured `✗` — but the
+attribution matters: **one configuration choice (serving at the allocated batch of 32) now
+accounts for the graded benchmark point, the unfinishable sweep, the eval's five timeouts, and
+nine of eighteen spec-test failures.** The remaining nine spec-test failures share a root cause
+with the GPQA extraction problem: thinking mode plus a reasoning parser, with no budget to close
+the thought.
+
+Neither is the sampled-text degradation, which remains the one genuine port defect and is
+present at batch 1 too.
