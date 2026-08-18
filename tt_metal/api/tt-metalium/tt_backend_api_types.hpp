@@ -61,16 +61,6 @@ enum class DataFormat : uint8_t {
  */
 bool is_integer_format(DataFormat format);
 
-/**
- * @brief Evaluates to true if the data format is an 8-bit float type (Fp8_e4m3 or Lf8).
- */
-bool is_fp8_format(DataFormat format);
-
-/**
- * @brief Whether the data format is supported by the Tensix compute engine of a given architecture.
- */
-bool is_data_format_supported(DataFormat format, ARCH arch);
-
 std::ostream& operator<<(std::ostream& os, const DataFormat& format);
 
 constexpr static uint32_t datum_size(const DataFormat& format) {
