@@ -12,8 +12,7 @@
 // POSTs semaphore::FPU_SFPU (non-blocking t6_semaphore_post) and never WAITS on SFPU, so the isolated UNPACK/MATH/PACK
 // kernel does not deadlock; the un-drained FPU_SFPU increments are harmless.
 //
-// Blackhole-only. Deliverable here is compile-green (compile-producer). On-device numerical verification is pending
-// Blackhole hardware/CI; this host is Wormhole.
+// Blackhole-only. The golden is verified on Blackhole silicon (p100a), not compile-green only.
 
 #include <algorithm>
 #include <cstdint>

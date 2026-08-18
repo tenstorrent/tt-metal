@@ -33,13 +33,14 @@ from helpers.advance_llk_includes import (  # noqa: F401  (module-scoped autouse
 from helpers.custom_mm_utils import (
     IN0_ROWS_SDPA,
     KT_DIMS,
+    face_result_leading,
+    matmul_lofi_golden,
     pack_sdpa_dest_tile,
     sdpa_dest_tile_golden,
 )
 from helpers.device import BootMode
 from helpers.format_config import DataFormat
-from helpers.golden_generators import MatmulGolden
-from helpers.llk_params import DestAccumulation, MathFidelity, format_dict
+from helpers.llk_params import DestAccumulation, format_dict
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
@@ -50,7 +51,6 @@ from helpers.test_variant_parameters import (
     NUM_FACES,
     TILE_COUNT,
 )
-from helpers.tile_constants import FACE_C_DIM, MAX_FACE_R_DIM
 from helpers.tilize_untilize import tilize_block
 from helpers.utils import matmul_acc_atol, passed_test
 
@@ -102,22 +102,10 @@ def test_sdpa_custom_mm_reuse_dest_srcb(
         src_B, dimensions=in1_dimensions, stimuli_format=formats.input_format
     )
 
-    # Golden in the same flat DEST-row order the packer writes back. MatmulGolden (not a raw torch matmul) because
-    # the FPU runs LoFi here: it truncates the SrcA/SrcB mantissas before multiplying, which biases a K-deep sum of
-    # positive values low by ~2% -- far outside atol if the golden multiplies at full bf16 precision. Instantiated
-    # directly rather than through get_golden_generator: the harness swaps in a DummyGoldenGenerator during
-    # compile-producer, whose zeros(1024) would break the reshape for this narrow output.
-    matmul_rowmajor = MatmulGolden()(
-        in0,
-        in1,
-        formats.output_format,
-        MathFidelity.LoFi,
-        input_A_dimensions=in0_dimensions,
-        input_B_dimensions=in1_dimensions,
-        tilize=False,
-        input_A_format=formats.input_format,
-        input_B_format=formats.input_format,
-    ).reshape(in0_rows, NT_DIM * 32)
+    # Row-major LoFi matmul, then repacked into the one-16x16-face-per-output-tile order the packer writes back.
+    matmul_rowmajor = matmul_lofi_golden(
+        in0, in1, formats, in0_dimensions, in1_dimensions
+    )
     golden_tensor = sdpa_dest_tile_golden(matmul_rowmajor, torch_format)
 
     configuration = TestConfig(
@@ -146,18 +134,8 @@ def test_sdpa_custom_mm_reuse_dest_srcb(
     )
 
     res_from_L1 = configuration.run().result
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
-
-    # Each output tile is a single 16x16 DEST face written at the start of a full 32x32 L1 tile, so keep that face
-    # and drop the three faces of L1 the kernel never touches. StimuliConfig's num_faces would narrow the readback
-    # for us, but it narrows the buffer_A / buffer_B *writes* too, which would truncate the in1 K-tiles.
-    face_datums = MAX_FACE_R_DIM * FACE_C_DIM
-    tile_datums = len(res_tensor) // NT_DIM
-    res_tensor = torch.cat(
-        [
-            res_tensor[n * tile_datums : n * tile_datums + face_datums]
-            for n in range(NT_DIM)
-        ]
+    res_tensor = face_result_leading(
+        torch.tensor(res_from_L1, dtype=torch_format), NT_DIM
     )
 
     assert len(res_tensor) == len(
