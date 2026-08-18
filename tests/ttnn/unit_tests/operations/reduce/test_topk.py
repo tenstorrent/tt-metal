@@ -519,3 +519,30 @@ def test_topk_int32_indices(N, C, H, W, dim, k, index_dtype, largest, device):
     cosine = torch.nn.CosineSimilarity(dim=dim)
     ttnn_torch_cosine = torch.mean(cosine(pyt_topk_values, ttnn_torch_gather_from_indices))
     assert ttnn_torch_cosine > 0.99, "Cosine similarity between topk values and gather from indices is less than 0.99"
+
+
+@pytest.mark.parametrize("num_rows", [64, 96])
+@pytest.mark.parametrize("largest", [True, False])
+def test_topk_multicore_values_beyond_first_tile_row(num_rows, largest, device):
+    """
+    Regression test for the multi-core final-gather values corruption: topk_final.cpp's values gather
+    ran without re-establishing datacopy unpack state at ht >= 1, so the state left by the previous
+    iteration's index transpose (TRANSPOSE mode, UInt16/UInt32 SRCA format) made the bare copy_tile
+    unpack the bf16 gathered values as garbage. Observable as fabricated ~1e38 values in EVERY row past
+    the first 32 flattened rows (indices unaffected) on any multi-core call with > 32 flattened rows.
+    """
+    torch.manual_seed(2006)
+    W, k = 8192, 32  # multi-core path; > 32 flattened rows => ht >= 1 iterations in the final gather
+    t = torch.randn((1, 1, num_rows, W), dtype=torch.bfloat16)
+    x = ttnn.from_torch(t, ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    v, i = ttnn.topk(x, k, dim=-1, largest=largest, sorted=True)
+    ttnn.synchronize_device(device)
+
+    got = ttnn.to_torch(v).float()
+    ref, _ = torch.topk(t.float(), k, dim=-1, largest=largest, sorted=True)
+    got_s = got.sort(dim=-1, descending=True).values
+    ref_s = ref.sort(dim=-1, descending=True).values
+    # Pre-fix this fails catastrophically (~1e38 magnitudes), not marginally.
+    assert torch.allclose(
+        got_s, ref_s, atol=1e-2
+    ), f"values fabricated past first tile row: max_diff={(got_s - ref_s).abs().max():.4f}"
