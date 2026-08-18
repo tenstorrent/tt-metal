@@ -11,6 +11,7 @@
 #include <memory>
 #include <filesystem>
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
+#include <tt-metalium/distributed_context.hpp>
 #include "tt_metal/impl/context/metal_context.hpp"
 #include "tools/scaleout/validation/utils/ethernet_link_metrics.hpp"
 #include <board/board.hpp>
@@ -76,8 +77,17 @@ bool generate_link_metrics(
     uint32_t data_size,
     const ConnectivityValidationConfig& validation_config);
 
+// Reset the ethernet links in `asic_topology`. Collective over `distributed_context`, which defaults to the world.
+//
+// PRECONDITION: `distributed_context` must be the SAME context that produced `physical_system_descriptor` — the
+// PSD's host_to_rank_ values are stamped from whatever context discovery ran on, and the cross-node reset fan-out
+// addresses ranks in that numbering space. Passing a world context alongside a subgroup-scoped PSD (or vice versa)
+// makes the controller blind to hosts it cannot see and leaves ranks outside its view blocked in recv.
 void reset_ethernet_links(
-    const PhysicalSystemDescriptor& physical_system_descriptor, const tt_metal::AsicTopology& asic_topology);
+    const PhysicalSystemDescriptor& physical_system_descriptor,
+    const tt_metal::AsicTopology& asic_topology,
+    const tt_metal::distributed::multihost::DistributedContext& distributed_context =
+        tt_metal::MetalContext::instance().global_distributed_context());
 
 std::vector<EthChannelIdentifier> collect_retrained_link_identifiers(
     const tt_metal::AsicTopology& missing_topology, const PhysicalSystemDescriptor& physical_system_descriptor);
@@ -117,21 +127,16 @@ fsd::proto::FactorySystemDescriptor get_factory_system_descriptor(
     const std::optional<std::string>& fsd_path,
     const std::vector<std::string>& hostnames);
 
+// `scope`, when set, restricts the expected connections to one hierarchy tier of one subgroup (see
+// HierarchyTierScope) instead of "every FSD connection whose endpoints were both discovered". The returned
+// topology is then already tier-scoped, so callers need no post-filter.
 tt_metal::AsicTopology validate_connectivity(
     const fsd::proto::FactorySystemDescriptor& fsd_proto,
     const YAML::Node& gsd_yaml_node,
     bool fail_on_warning,
     PhysicalSystemDescriptor& physical_system_descriptor,
-    std::optional<uint32_t> min_connections = std::nullopt);
-
-// Filter a missing-connections topology down to the links whose two endpoint hosts sit at the given
-// hierarchy tier (instance_path common-prefix length == depth), per fsd_query. Used to bring the cluster
-// up tier by tier, deepest (closest) first.
-tt_metal::AsicTopology filter_topology_by_tier(
-    const tt_metal::AsicTopology& topology,
-    const FsdQuery& fsd_query,
-    uint32_t depth,
-    const PhysicalSystemDescriptor& physical_system_descriptor);
+    std::optional<uint32_t> min_connections = std::nullopt,
+    const HierarchyTierScope* scope = nullptr);
 
 // Phased (per-hierarchy-node) discovery for one tier: split the world into subgroups by depth-`depth`
 // instance_path prefix (via FsdQuery::hierarchy_partition), discover each subgroup independently on its own
@@ -142,7 +147,11 @@ tt_metal::AsicTopology filter_topology_by_tier(
 // assembling a single global PSD across subgroups needs a cross-subgroup gather, and no public PSD
 // serialization exists today (see PHASED_DISCOVERY_DESIGN.md). Until that lands, a caller using this must
 // scope validation per subgroup rather than validate a global PSD.
-void rediscover_by_hierarchy_subgroups(
+//
+// Returns this rank's sub-context. The merged PSD's host_to_rank_ is in the SUB-CONTEXT's rank space (discovery
+// stamps ranks from whatever context it ran on), so any rank-addressed collective driven off that PSD must run on
+// the returned context — passing the world instead deadlocks ranks outside the controller's subgroup.
+tt_metal::distributed::multihost::ContextPtr rediscover_by_hierarchy_subgroups(
     PhysicalSystemDescriptor& physical_system_descriptor, const FsdQuery& fsd_query, uint32_t depth);
 
 // Per-subgroup phased bring-up for one tier (option-(b) validation): each iteration collectively splits into
@@ -151,9 +160,12 @@ void rediscover_by_hierarchy_subgroups(
 // scopes the result to intra-subgroup connections, so no global PSD is needed. Ranks stay globally lockstepped
 // (all_gather of a per-rank converged flag) so the collective split/reset can't deadlock when subgroups
 // converge at different rates. Retrained link endpoints accumulate into `link_retrain_counts`. Runs at most
-// `max_retrains` reset rounds for this tier; returns the number of reset rounds performed. Requires ethernet
-// link retraining support.
-uint32_t phased_bring_up_tier(
+// `max_retrains` reset rounds for this tier. Requires ethernet link retraining support.
+//
+// Returns whether the tier converged — true iff every subgroup's tier links came up within `max_retrains`. How
+// many rounds it took is an internal detail. The result is world-consistent: every rank leaves the retrain loop
+// on the same iteration via the same branch, so all ranks agree and may branch on it collectively.
+bool phased_bring_up_tier(
     const fsd::proto::FactorySystemDescriptor& fsd_proto,
     const FsdQuery& fsd_query,
     uint32_t depth,

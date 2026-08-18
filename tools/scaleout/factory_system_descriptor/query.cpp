@@ -36,6 +36,14 @@ FsdQuery::FsdQuery(const fsd::proto::FactorySystemDescriptor& fsd) : fsd_(fsd) {
     max_hierarchy_depth_ = hierarchy_tiers_.empty() ? 0 : hierarchy_tiers_.front();
 }
 
+const std::string& FsdQuery::get_hostname(uint32_t host_id) const {
+    const auto num_hosts = static_cast<uint32_t>(fsd_.hosts().size());
+    if (host_id >= num_hosts) {
+        throw std::out_of_range(fmt::format("host_id out of range (id={}, num_hosts={})", host_id, num_hosts));
+    }
+    return fsd_.hosts()[host_id].hostname();
+}
+
 std::vector<std::string> FsdQuery::get_instance_path(uint32_t host_id) const {
     const auto num_hosts = static_cast<uint32_t>(fsd_.hosts().size());
     if (host_id >= num_hosts) {
@@ -105,6 +113,57 @@ std::vector<std::vector<uint32_t>> FsdQuery::hierarchy_partition(uint32_t depth)
         partition.push_back(std::move(ids));
     }
     return partition;
+}
+
+// Shared by subgroup_index / subgroup_hosts: locate the hierarchy_partition group holding `hostname`.
+// Compares depth-prefixes rather than searching for the id so that the grouping rule (including the
+// shorter-than-depth path case) lives in exactly one place: hierarchy_partition.
+uint32_t FsdQuery::subgroup_index(const std::string& hostname, uint32_t depth) const {
+    const auto prefix_of = [depth](const std::vector<std::string>& path) {
+        return std::vector<std::string>(path.begin(), path.begin() + std::min<size_t>(depth, path.size()));
+    };
+    const auto my_prefix = prefix_of(get_instance_path(hostname));
+
+    const auto partition = hierarchy_partition(depth);
+    for (size_t i = 0; i < partition.size(); ++i) {
+        if (prefix_of(get_instance_path(partition[i].front())) == my_prefix) {
+            return static_cast<uint32_t>(i);
+        }
+    }
+    // hierarchy_partition covers every host in the FSD, so a host present in the index is always in some group.
+    throw std::runtime_error(fmt::format("Host '{}' not found in any hierarchy subgroup at depth {}", hostname, depth));
+}
+
+std::set<std::string> FsdQuery::subgroup_hosts(const std::string& hostname, uint32_t depth) const {
+    // hierarchy_partition returns by value; bind the whole partition to a named local before indexing into it.
+    // Binding a reference straight to `hierarchy_partition(depth)[i]` does NOT extend the temporary's lifetime
+    // (the reference binds to operator[]'s result, not the temporary), leaving `group` dangling.
+    const auto partition = hierarchy_partition(depth);
+    const auto& group = partition[subgroup_index(hostname, depth)];
+    std::set<std::string> hosts;
+    for (uint32_t id : group) {
+        hosts.insert(fsd_.hosts()[id].hostname());
+    }
+    return hosts;
+}
+
+uint32_t FsdQuery::count_subgroup_tier_connections(const std::string& hostname, uint32_t depth) const {
+    const auto hosts = subgroup_hosts(hostname, depth);
+    const auto num_hosts = static_cast<uint32_t>(fsd_.hosts().size());
+    uint32_t count = 0;
+    for (const auto& connection : fsd_.eth_connections().connection()) {
+        const uint32_t host_a = connection.endpoint_a().host_id();
+        const uint32_t host_b = connection.endpoint_b().host_id();
+        if (host_a >= num_hosts || host_b >= num_hosts) {
+            continue;
+        }
+        // An LCP of exactly `depth` means both endpoints share the depth-`depth` prefix, so they are necessarily in
+        // the SAME subgroup — testing one endpoint's membership is sufficient.
+        if (lcp_length(host_a, host_b) == depth && hosts.contains(fsd_.hosts()[host_a].hostname())) {
+            ++count;
+        }
+    }
+    return count;
 }
 
 uint32_t FsdQuery::host_id_for(const std::string& hostname) const {

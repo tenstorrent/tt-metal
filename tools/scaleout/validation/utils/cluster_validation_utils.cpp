@@ -10,6 +10,8 @@
 #include <fstream>
 #include <sstream>
 #include <algorithm>
+#include <array>
+#include <limits>
 #include <random>
 #include <future>
 #include <chrono>
@@ -1257,9 +1259,11 @@ LinkMetricsResult send_traffic_and_validate_links(
 
 void forward_link_reset_metadata_from_controller(
     std::unordered_map<uint32_t, std::vector<EthChannelIdentifier>>& ordered_exit_nodes,
-    std::vector<EthChannelIdentifier>& exit_nodes_to_reset) {
+    std::vector<EthChannelIdentifier>& exit_nodes_to_reset,
+    const tt::tt_metal::distributed::multihost::DistributedContext& distributed_context) {
+    // Rank 0 OF `distributed_context` is the controller. Ranks here must be in the same numbering space as the
+    // PhysicalSystemDescriptor that produced `ordered_exit_nodes` (see reset_ethernet_links).
     constexpr uint32_t CONTROLLER_RANK = 0;
-    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
 
     if (*distributed_context.rank() == CONTROLLER_RANK) {
         for (const auto& [rank, exit_nodes] : ordered_exit_nodes) {
@@ -1537,10 +1541,9 @@ void reset_local_ethernet_links(
 void get_cross_node_ethernet_links_to_reset(
     const PhysicalSystemDescriptor& physical_system_descriptor,
     const tt::tt_metal::AsicTopology& asic_topology,
-    std::vector<EthChannelIdentifier>& cross_node_links_to_reset) {
+    std::vector<EthChannelIdentifier>& cross_node_links_to_reset,
+    const tt::tt_metal::distributed::multihost::DistributedContext& distributed_context) {
     constexpr uint32_t CONTROLLER_RANK = 0;
-
-    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
 
     std::unordered_map<uint32_t, std::vector<EthChannelIdentifier>> ordered_exit_nodes;
     std::unordered_map<uint64_t, std::unordered_set<uint64_t>> paired_asic_ids;
@@ -1584,12 +1587,13 @@ void get_cross_node_ethernet_links_to_reset(
             }
         }
     }
-    forward_link_reset_metadata_from_controller(ordered_exit_nodes, cross_node_links_to_reset);
+    forward_link_reset_metadata_from_controller(ordered_exit_nodes, cross_node_links_to_reset, distributed_context);
 }
 
 void reset_cross_node_ethernet_links(
     const PhysicalSystemDescriptor& physical_system_descriptor,
-    const std::vector<EthChannelIdentifier>& cross_node_links_to_reset) {
+    const std::vector<EthChannelIdentifier>& cross_node_links_to_reset,
+    const tt::tt_metal::distributed::multihost::DistributedContext& distributed_context) {
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     std::unordered_map<uint64_t, ChipId> asic_id_to_chip_id;
 
@@ -1616,13 +1620,13 @@ void reset_cross_node_ethernet_links(
     send_reset_msg_to_links(links_to_reset);
 
     // Final barrier ensures all hosts have completed their cross-node ethernet link resets before proceeding
-    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
     distributed_context.barrier();
 }
 
 void reset_ethernet_links(
-    const PhysicalSystemDescriptor& physical_system_descriptor, const tt::tt_metal::AsicTopology& asic_topology) {
-    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+    const PhysicalSystemDescriptor& physical_system_descriptor,
+    const tt::tt_metal::AsicTopology& asic_topology,
+    const tt::tt_metal::distributed::multihost::DistributedContext& distributed_context) {
     // Reset All Local Ethernet Links, specified in the topology. Ethernet Links on Exit Nodes are reset separately.
     reset_local_ethernet_links(physical_system_descriptor, asic_topology);
     // Barrier ensures all hosts have completed local link resets before starting cross-node resets.
@@ -1632,8 +1636,9 @@ void reset_ethernet_links(
 
     // Reset All Cross-Node Ethernet Links, specified in the topology.
     std::vector<EthChannelIdentifier> cross_node_links_to_reset;
-    get_cross_node_ethernet_links_to_reset(physical_system_descriptor, asic_topology, cross_node_links_to_reset);
-    reset_cross_node_ethernet_links(physical_system_descriptor, cross_node_links_to_reset);
+    get_cross_node_ethernet_links_to_reset(
+        physical_system_descriptor, asic_topology, cross_node_links_to_reset, distributed_context);
+    reset_cross_node_ethernet_links(physical_system_descriptor, cross_node_links_to_reset, distributed_context);
 
     // Give everything 5 more seconds to stabilize after reset completion
     std::this_thread::sleep_for(std::chrono::seconds(5));
@@ -1693,9 +1698,25 @@ tt::tt_metal::AsicTopology generate_asic_topology_from_connections(
     tt::tt_metal::AsicTopology asic_topology;
     std::unordered_map<tt_metal::AsicID, std::set<tt_metal::AsicID>> visited;
     std::unordered_map<tt_metal::AsicID, std::unordered_map<tt_metal::AsicID, uint32_t>> visited_idx;
+
+    // A missing connection can name an ASIC that discovery never produced a descriptor for — an un-enumerated
+    // board, or (with hierarchy-scoped validation) a host absent from this GSD. get_asic_id THROWS in that case,
+    // so resolve against the descriptor set first and skip what cannot be resolved: there is no ASIC to reset, and
+    // aborting here would replace a clear connectivity report with a failed-lookup crash.
+    std::set<std::tuple<std::string, uint32_t, uint32_t>> resolvable_asics;
+    for (const auto& [asic_id, desc] : physical_system_descriptor.get_asic_descriptors()) {
+        resolvable_asics.emplace(desc.host_name, *desc.tray_id, *desc.asic_location);
+    }
+    const auto resolvable = [&resolvable_asics](const PhysicalChannelEndpoint& ep) {
+        return resolvable_asics.contains({ep.hostname, *ep.tray_id, ep.asic_channel.asic_location});
+    };
+
     for (const auto& connection : physical_connections) {
         auto src = connection.first;
         auto dst = connection.second;
+        if (!resolvable(src) || !resolvable(dst)) {
+            continue;
+        }
         auto src_asic_id = physical_system_descriptor.get_asic_id(
             src.hostname, tt::tt_metal::TrayID(*src.tray_id), tt_metal::ASICLocation(src.asic_channel.asic_location));
         auto dst_asic_id = physical_system_descriptor.get_asic_id(
@@ -1728,54 +1749,17 @@ tt::tt_metal::AsicTopology generate_asic_topology_from_connections(
     return asic_topology;
 }
 
-tt::tt_metal::AsicTopology filter_topology_by_tier(
-    const tt::tt_metal::AsicTopology& topology,
-    const FsdQuery& fsd_query,
-    uint32_t depth,
-    const PhysicalSystemDescriptor& physical_system_descriptor) {
-    tt::tt_metal::AsicTopology filtered;
-    for (const auto& [src_asic_id, edges] : topology) {
-        const std::string src_host = physical_system_descriptor.get_host_name_for_asic(src_asic_id);
-        for (const auto& [dst_asic_id, eth_connections] : edges) {
-            const std::string dst_host = physical_system_descriptor.get_host_name_for_asic(dst_asic_id);
-            if (fsd_query.hierarchy_depth(src_host, dst_host) == depth) {
-                filtered[src_asic_id].push_back({dst_asic_id, eth_connections});
-            }
-        }
-    }
-    return filtered;
-}
-
-void rediscover_by_hierarchy_subgroups(
+tt::tt_metal::distributed::multihost::ContextPtr rediscover_by_hierarchy_subgroups(
     PhysicalSystemDescriptor& physical_system_descriptor, const FsdQuery& fsd_query, uint32_t depth) {
     namespace mh = tt::tt_metal::distributed::multihost;
     auto& context = tt::tt_metal::MetalContext::instance();
     const auto world = context.get_distributed_context_ptr();
 
-    // Every rank computes the same partition, then finds its own subgroup = the group whose depth-`depth`
-    // instance_path prefix matches this host's. Deterministic across ranks (same FSD everywhere).
-    const auto partition = fsd_query.hierarchy_partition(depth);
-    const auto my_path = fsd_query.get_instance_path(physical_system_descriptor.my_host_name());
-    const auto prefix_of = [depth](const std::vector<std::string>& path) {
-        return std::vector<std::string>(path.begin(), path.begin() + std::min<size_t>(depth, path.size()));
-    };
-    const auto my_prefix = prefix_of(my_path);
-
-    int color = -1;
-    for (size_t i = 0; i < partition.size(); ++i) {
-        if (prefix_of(fsd_query.get_instance_path(partition[i].front())) == my_prefix) {
-            color = static_cast<int>(i);
-            break;
-        }
-    }
-    TT_FATAL(
-        color >= 0,
-        "Host {} not found in any hierarchy subgroup at depth {}",
-        physical_system_descriptor.my_host_name(),
-        depth);
+    // Every rank derives its own subgroup from the FSD, so the colors agree across ranks without communicating.
+    const auto color = fsd_query.subgroup_index(physical_system_descriptor.my_host_name(), depth);
 
     // One collective split forms all subgroups' sub-contexts in parallel; each rank receives its own.
-    const auto subgroup_ctx = world->split(mh::Color(color), mh::Key(*world->rank()));
+    const auto subgroup_ctx = world->split(mh::Color(static_cast<int>(color)), mh::Key(*world->rank()));
 
     // Discover within this subgroup only, then merge into the PSD. NOTE (see header): this leaves each rank
     // with its subgroup's connectivity; a global PSD needs a cross-subgroup gather that has no public API yet.
@@ -1787,9 +1771,13 @@ void rediscover_by_hierarchy_subgroups(
         /*run_global_discovery=*/true,
         /*run_live_discovery=*/true);
     physical_system_descriptor.merge(std::move(subgroup_psd));
+
+    // Hand the sub-context back: the PSD's host_to_rank_ is now in THIS context's rank space, so any subsequent
+    // rank-addressed collective over the PSD (notably reset_ethernet_links) must run on this context, not the world.
+    return subgroup_ctx;
 }
 
-uint32_t phased_bring_up_tier(
+bool phased_bring_up_tier(
     const fsd::proto::FactorySystemDescriptor& fsd_proto,
     const FsdQuery& fsd_query,
     uint32_t depth,
@@ -1799,7 +1787,17 @@ uint32_t phased_bring_up_tier(
     std::unordered_map<EthChannelIdentifier, uint32_t>& link_retrain_counts) {
     const auto world = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
     const uint32_t world_size = *world->size();
-    uint32_t rounds = 0;
+    bool converged = false;
+
+    // Per-subgroup reporting to the world controller. All console output is gated on WORLD rank 0, which may sit in
+    // a subgroup with nothing to do at this tier (a host alone in its pod owns no cross-host links) — so its own
+    // view is not evidence of what the tier covered. Everything except the MISSING counts is derivable from the FSD,
+    // and the partition is identical on every rank, so rank 0 computes labels / host counts / in-scope counts for
+    // every color locally. Only the measured missing counts need a collective, contributed by each subgroup's LOCAL
+    // rank 0 (every rank in a subgroup gets the same assembled PSD, so all-rank reporting would duplicate).
+    constexpr uint32_t NOT_SUBGROUP_LEADER = std::numeric_limits<uint32_t>::max();
+    uint32_t my_color = NOT_SUBGROUP_LEADER;
+    uint32_t my_missing_channels = 0;
 
     // Collective agreement across all ranks: true iff EVERY rank's subgroup has converged this tier. Keeps the
     // shared loop bound identical on every rank so the collective split/reset stay in lockstep.
@@ -1814,17 +1812,34 @@ uint32_t phased_bring_up_tier(
 
     for (uint32_t iter = 0; iter <= max_retrains; ++iter) {
         // Collectively split into hierarchy-node subgroups and discover each subgroup independently.
-        rediscover_by_hierarchy_subgroups(physical_system_descriptor, fsd_query, depth);
-        // Validate this subgroup's own connections (guard scopes it intra-subgroup); keep only this tier's links.
-        auto missing = validate_connectivity(
+        const auto subgroup_ctx = rediscover_by_hierarchy_subgroups(physical_system_descriptor, fsd_query, depth);
+        // Validate against the FSD-derived expectation for THIS subgroup at THIS tier, so the result is already
+        // scoped: deeper links this tier does not own are never compared. Host presence is a precondition checked
+        // once before phasing begins (see run_cluster_validation.cpp), so every member of this subgroup is known
+        // to be in the PSD by the time we get here.
+        const HierarchyTierScope tier_scope{
+            .query = &fsd_query, .member_hostname = physical_system_descriptor.my_host_name(), .depth = depth};
+        auto tier_missing = validate_connectivity(
             fsd_proto,
             physical_system_descriptor.generate_yaml_node(),
             false /* never assert mid bring-up */,
             physical_system_descriptor,
-            min_connections);
-        auto tier_missing = filter_topology_by_tier(missing, fsd_query, depth, physical_system_descriptor);
+            min_connections,
+            &tier_scope);
 
+        // One contributor per subgroup (its local rank 0), refreshed every iteration so the reported figures
+        // describe the tier's FINAL state rather than its first attempt. Channel endpoints, not links: tier_missing
+        // holds both directions of each connection, and endpoints are what actually get reset.
+        if (*subgroup_ctx->rank() == 0) {
+            my_color = fsd_query.subgroup_index(physical_system_descriptor.my_host_name(), depth);
+            my_missing_channels = static_cast<uint32_t>(
+                collect_retrained_link_identifiers(tier_missing, physical_system_descriptor).size());
+        }
+
+        // Both exits below are taken by EVERY rank on the same iteration — the vote is unanimous by construction and
+        // `iter` is identical everywhere — so `converged` is world-consistent and safe for the caller to branch on.
         if (all_converged(tier_missing.empty())) {
+            converged = true;
             break;
         }
         if (iter == max_retrains) {
@@ -1836,14 +1851,65 @@ uint32_t phased_bring_up_tier(
         for (const auto& link_id : collect_retrained_link_identifiers(tier_missing, physical_system_descriptor)) {
             link_retrain_counts[link_id]++;
         }
-        reset_ethernet_links(physical_system_descriptor, tier_missing);  // collective; a no-op for converged subgroups
-        ++rounds;
+        // Collective over the SUBGROUP, matching the subgroup-scoped PSD above: each subgroup's local rank 0 drives
+        // its own reset fan-out over hosts it can actually see. A converged subgroup runs it over an empty topology.
+        reset_ethernet_links(physical_system_descriptor, tier_missing, *subgroup_ctx);
     }
+    // Collect each subgroup leader's missing-channel count, tagged with its color. Unconditional collective: every
+    // rank reaches here via one of the two uniform loop exits above, non-leaders reporting NOT_SUBGROUP_LEADER.
+    std::array<uint32_t, 2> my_report{my_color, my_missing_channels};
+    std::vector<uint32_t> reports(static_cast<size_t>(world_size) * my_report.size(), 0u);
+    world->all_gather(
+        ttsl::as_writable_bytes(ttsl::Span<uint32_t>(my_report.data(), my_report.size())),
+        ttsl::as_writable_bytes(ttsl::Span<uint32_t>(reports.data(), reports.size())));
+
+    const auto partition = fsd_query.hierarchy_partition(depth);
+    std::vector<uint32_t> missing_by_color(partition.size(), 0u);
+    for (uint32_t rank = 0; rank < world_size; ++rank) {
+        const uint32_t color = reports[static_cast<size_t>(rank) * 2];
+        if (color < partition.size()) {
+            missing_by_color[color] = reports[static_cast<size_t>(rank) * 2 + 1];
+        }
+    }
+
+    // Build the per-color rows first so the header can carry this tier's TOTAL. Without it, each row's count reads as
+    // though it were "out of" the whole FSD, and the only way to see what the tier actually covered is to add the
+    // rows up by hand. Subgroup scopes are disjoint (a connection sits at exactly one LCP depth, inside exactly one
+    // subgroup), so the tier total is a plain sum, and the per-tier totals across all tiers sum to the FSD size.
+    std::vector<std::string> rows;
+    rows.reserve(partition.size());
+    uint32_t tier_in_scope = 0;
+    uint32_t tier_missing_channels = 0;
+    for (uint32_t color = 0; color < partition.size(); ++color) {
+        const auto& group = partition[color];
+        const auto path = fsd_query.get_instance_path(group.front());
+        std::string prefix;
+        for (uint32_t segment = 0; segment < std::min<uint32_t>(depth, path.size()); ++segment) {
+            prefix += (prefix.empty() ? "" : "/") + path[segment];
+        }
+        const uint32_t in_scope =
+            fsd_query.count_subgroup_tier_connections(fsd_query.get_hostname(group.front()), depth);
+        tier_in_scope += in_scope;
+        tier_missing_channels += missing_by_color[color];
+        rows.push_back(
+            "  color " + std::to_string(color) + ": " + (prefix.empty() ? "<root>" : prefix) + " | " +
+            std::to_string(group.size()) + " host(s) | " + std::to_string(in_scope) + " in scope | " +
+            std::to_string(missing_by_color[color]) + " missing");
+    }
+
+    log_output_rank0(
+        "Tier depth " + std::to_string(depth) + ": " + std::to_string(partition.size()) + " subgroup(s), " +
+        std::to_string(tier_in_scope) + " of " + std::to_string(fsd_proto.eth_connections().connection().size()) +
+        " FSD connection(s) owned by this tier, " + std::to_string(tier_missing_channels) + " missing channel(s)");
+    for (const auto& row : rows) {
+        log_output_rank0(row);
+    }
+
     // Phase barrier: ensure every subgroup has finished this tier's discovery/reset collectives before any rank
     // begins the next tier's split. The per-iteration all_gather already keeps ranks in lockstep, so this is
     // defensive, but it makes the phase boundary explicit and robust to future changes.
     world->barrier();
-    return rounds;
+    return converged;
 }
 
 tt::tt_metal::AsicTopology build_reset_topology(
@@ -1969,7 +2035,8 @@ tt::tt_metal::AsicTopology validate_connectivity(
     const YAML::Node& gsd_yaml_node,
     bool fail_on_warning,
     PhysicalSystemDescriptor& physical_system_descriptor,
-    std::optional<uint32_t> min_connections) {
+    std::optional<uint32_t> min_connections,
+    const HierarchyTierScope* scope) {
     log_output_rank0(
         "Validating Factory System Descriptor (Golden Representation) against Global System Descriptor (in-memory)");
     const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
@@ -1979,7 +2046,8 @@ tt::tt_metal::AsicTopology validate_connectivity(
         true /* strict_validation */,
         fail_on_warning,
         *distributed_context.rank() == 0 /* log_output */,
-        min_connections);
+        min_connections,
+        scope);
     log_output_rank0("Factory System Descriptor (Golden Representation) Validation Complete");
     return generate_asic_topology_from_connections(missing_physical_connections, physical_system_descriptor);
 }

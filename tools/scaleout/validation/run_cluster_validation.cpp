@@ -373,6 +373,30 @@ int main(int argc, char* argv[]) {
             physical_system_descriptor.get_all_hostnames());
         FsdQuery fsd_query(fsd_proto);
 
+        // Prerequisite for phasing: every host the FSD describes must actually be present. The hierarchy split
+        // cannot enforce this — world is whatever mpirun launched, and a split color with no participants is legal
+        // — and discovery only reports what gathered. Without this check a run launched against fewer hosts than
+        // the FSD describes validates a fragment and reports success, because the absent hosts' connections simply
+        // never enter scope.
+        {
+            const auto discovered = physical_system_descriptor.get_all_hostnames();
+            const std::set<std::string> discovered_hosts(discovered.begin(), discovered.end());
+            std::string absent;
+            for (const auto& host : fsd_proto.hosts()) {
+                if (!discovered_hosts.contains(host.hostname())) {
+                    absent += (absent.empty() ? "" : ", ") + host.hostname();
+                }
+            }
+            TT_FATAL(
+                absent.empty(),
+                "Factory System Descriptor describes {} host(s) but discovery found {}; absent: {}. Launch one rank "
+                "per FSD host (mpirun --pernode over the full host list), or supply a descriptor matching the hosts "
+                "actually under test.",
+                fsd_proto.hosts().size(),
+                discovered_hosts.size(),
+                absent);
+        }
+
         auto rediscover = [&physical_system_descriptor]() {
             auto& context_ref = tt::tt_metal::MetalContext::instance();
             physical_system_descriptor.clear();
@@ -394,6 +418,7 @@ int main(int argc, char* argv[]) {
         };
 
         uint32_t tier_num = 0;
+        bool tier_bring_up_failed = false;
         for (uint32_t depth : fsd_query.hierarchy_tiers_deepest_first()) {
             ++tier_num;
             log_output_rank0("Starting Tier " + std::to_string(tier_num) + " (depth " + std::to_string(depth) + ")");
@@ -401,7 +426,7 @@ int main(int argc, char* argv[]) {
             // retrain each subgroup's own tier links to convergence. No global PSD needed (subgroup-scoped
             // validation via the both-endpoints-discovered guard).
             if (link_retrain_supported) {
-                total_retrains += phased_bring_up_tier(
+                tier_bring_up_failed = !phased_bring_up_tier(
                     fsd_proto,
                     fsd_query,
                     depth,
@@ -411,8 +436,27 @@ int main(int argc, char* argv[]) {
                     link_retrain_counts);
             }
             log_output_rank0("Ending Tier " + std::to_string(tier_num) + " (depth " + std::to_string(depth) + ")");
+            // Stop widening if this tier's links never came up: later tiers own strictly different links (the
+            // `== depth` filter excludes this tier's), so they cannot recover it — they would only burn retrain
+            // budget and re-report the same failure at every tier. `converged` is world-consistent, so every rank
+            // leaves the loop here together. Fall through to the authoritative pass, which produces the
+            // whole-system diagnosis (log_unretrainable_channels) and fails the run.
+            if (tier_bring_up_failed) {
+                log_output_rank0(
+                    "Tier " + std::to_string(tier_num) + " (depth " + std::to_string(depth) +
+                    ") did not converge; skipping remaining tiers and proceeding to authoritative validation");
+                break;
+            }
         }
         links_reset = !link_retrain_counts.empty();
+        // Retrain attempts to report: the most any single link was retrained. Tiers retrain disjoint link sets, so a
+        // per-link maximum is what the summary and the unretrainable-channel YAML actually describe ("failed to
+        // retrain after N attempts") — summing rounds across tiers would overstate what any one link endured.
+        for (const auto& [link_id, count] : link_retrain_counts) {
+            if (count > total_retrains) {
+                total_retrains = count;
+            }
+        }
 
         // Authoritative pass: one whole-system discovery, then a global validation with real fail semantics.
         rediscover();
