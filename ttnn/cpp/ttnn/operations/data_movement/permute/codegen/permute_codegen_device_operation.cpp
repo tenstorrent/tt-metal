@@ -12,6 +12,35 @@
 
 namespace ttnn::operations::data_movement {
 
+namespace {
+
+// A caller-supplied output is adopted verbatim by compute_output_specs, so nothing downstream
+// re-derives what the kernels were sized against. Run from both validators, not just the miss one:
+// the program hash covers tensor specs only -- DeviceStorage contributes an empty attribute tuple --
+// so an output with the right spec sitting on a different device hashes identically to one on the
+// input's device and would reach a cached program as a hit.
+void validate_optional_output(
+    const PermuteCodegenDeviceOperation::operation_attributes_t& attributes,
+    const PermuteCodegenDeviceOperation::tensor_args_t& tensor_args) {
+    if (!tensor_args.optional_output_tensor.has_value()) {
+        return;
+    }
+    const auto& output_tensor = *tensor_args.optional_output_tensor;
+    TT_FATAL(
+        output_tensor.storage_type() == StorageType::DEVICE,
+        "PermuteCodegen: preallocated output tensor must be on device");
+    TT_FATAL(output_tensor.buffer() != nullptr, "PermuteCodegen: preallocated output tensor has no allocated buffer");
+    TT_FATAL(
+        output_tensor.device() == tensor_args.input_tensor.device(),
+        "PermuteCodegen: preallocated output tensor must live on the same device as the input");
+    TT_FATAL(
+        output_tensor.tensor_spec() ==
+            PermuteCodegenDeviceOperation::compute_output_specs(attributes, {tensor_args.input_tensor, std::nullopt}),
+        "PermuteCodegen: preallocated output tensor spec does not match the spec this permute produces");
+}
+
+}  // namespace
+
 static std::array<uint32_t, PermuteCodegenDeviceOperation::kMaxDims> get_row_strides(const ttnn::Shape& shape) {
     std::array<uint32_t, PermuteCodegenDeviceOperation::kMaxDims> strides{};
     const uint32_t rank = shape.rank();
@@ -50,18 +79,13 @@ void PermuteCodegenDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         permute_codegen::supported_by_codegen(tensor_args.input_tensor, dims, attributes.output_mem_config),
         "PermuteCodegen: call does not satisfy supported_by_codegen()");
-    // A caller-supplied output is adopted verbatim by compute_output_specs, so the kernels would
-    // page it against the spec they were sized from rather than the one it actually has.
-    if (tensor_args.optional_output_tensor.has_value()) {
-        TT_FATAL(
-            tensor_args.optional_output_tensor->tensor_spec() ==
-                compute_output_specs(attributes, {tensor_args.input_tensor, std::nullopt}),
-            "PermuteCodegen: preallocated output tensor spec does not match the spec this permute produces");
-    }
+    validate_optional_output(attributes, tensor_args);
 }
 
 void PermuteCodegenDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& /*attributes*/, const tensor_args_t& /*tensor_args*/) {}
+    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    validate_optional_output(attributes, tensor_args);
+}
 
 PermuteCodegenDeviceOperation::spec_return_value_t PermuteCodegenDeviceOperation::compute_output_specs(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
@@ -109,6 +133,28 @@ ttnn::operations::data_movement::PermuteCodegenDeviceOperation::tensor_return_va
 
     const auto& input_shape = input_tensor.logical_shape();
     const uint32_t rank = input_shape.rank();
+
+    // Asserted here rather than in validate, which the framework runs only after this function has
+    // already filled rank-indexed fixed-size arrays and divided by the trailing extent. A call
+    // arriving through ttnn::permute or permute_force_codegen has cleared supported_by_codegen()
+    // and satisfies all of this; a direct prim call has not.
+    TT_FATAL(
+        rank >= 2 && rank <= OperationType::kMaxDims,
+        "prim::permute_codegen: rank must be between 2 and {}, got {}",
+        OperationType::kMaxDims,
+        rank);
+    TT_FATAL(
+        dims.size() == rank,
+        "prim::permute_codegen: permutation has {} entries for a rank-{} input",
+        dims.size(),
+        rank);
+    TT_FATAL(
+        ttnn::operations::data_movement::permute_codegen::is_permutation(dims),
+        "prim::permute_codegen: dims must be a permutation of [0, {}) with no repeated axis",
+        rank);
+    for (uint32_t i = 0; i < rank; i++) {
+        TT_FATAL(input_shape[i] > 0, "prim::permute_codegen: input dim {} is zero", i);
+    }
 
     std::array<uint32_t, OperationType::kMaxDims> padded_dims{};
     std::array<uint32_t, OperationType::kMaxDims> padded_input_shape{};

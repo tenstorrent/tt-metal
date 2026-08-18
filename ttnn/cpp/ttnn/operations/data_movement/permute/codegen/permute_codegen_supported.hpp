@@ -49,6 +49,12 @@ RmCbBudget rm_cb_budget(const Tensor& input_tensor, const std::optional<MemoryCo
 // program factory (and with it the stick-sized CB above).
 bool is_row_invariant(ttsl::Span<const uint32_t> dims);
 
+// True when `dims` is a genuine permutation of [0, dims.size()): every axis in range, none repeated.
+// Nothing upstream establishes this -- ttnn::permute normalizes each axis independently, so a
+// repeated axis survives normalization -- and the kernels here derive their output extents and row
+// counts from it, so both the scope gate and the prim check it.
+bool is_permutation(ttsl::Span<const uint32_t> dims);
+
 // Perf-only routing gate, consulted by ttnn::permute alone -- never by validate and never by
 // permute_force_codegen. Demotes the blocked path as a whole -- any permutation that moves the last
 // axis -- because it measures at parity with native; only the row-invariant path is routed here.

@@ -231,3 +231,21 @@ def test_permute_takes_no_implementation_argument(device, expect_error):
     xt = ttnn.from_torch(_make_input(shape, dtype), dtype=dtype, layout=layout, device=device)
     with expect_error(TypeError, "incompatible function arguments"):
         ttnn.permute(xt, **kwargs, implementation="codegen")
+
+
+# A repeated axis is not a permutation, but it survives ttnn.permute's per-axis normalization, and
+# it is not inert for these kernels: [1, 1, 2] leaves the last axis in place, so it selects the
+# row-invariant factory, whose output extents come from the permuted shape while its row count comes
+# from the input. For an input whose leading dim exceeds its second, the kernels are then asked to
+# write more rows than the output tensor holds.
+#
+# Only the forced leg is exercised. The routed entry declines the case and hands it to native, which
+# has no validation of its own for a malformed permutation -- calling it here to observe the fallback
+# would dispatch native's kernels for the same ill-defined request.
+@pytest.mark.parametrize("dims", [[1, 1, 2], [0, 0, 2]])
+def test_forced_codegen_refuses_a_repeated_axis(device, expect_error, dims):
+    xt = ttnn.from_torch(
+        _make_input([5, 2, 64], ttnn.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    with expect_error(RuntimeError, "does not support"):
+        _force_codegen(xt, dims)

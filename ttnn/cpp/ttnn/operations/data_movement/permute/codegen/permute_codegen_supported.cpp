@@ -28,6 +28,26 @@ bool is_row_invariant(ttsl::Span<const uint32_t> dims) {
     return !dims.empty() && dims[dims.size() - 1] == dims.size() - 1;
 }
 
+bool is_permutation(ttsl::Span<const uint32_t> dims) {
+    // The seen-set is a bitmask, so the rank has to fit its width. kMaxDims is far below 64, and a
+    // rank that large is out of scope on its own.
+    if (dims.empty() || dims.size() > 64) {
+        return false;
+    }
+    uint64_t seen = 0;
+    for (const uint32_t dim : dims) {
+        if (dim >= dims.size()) {
+            return false;
+        }
+        const uint64_t bit = uint64_t{1} << dim;
+        if ((seen & bit) != 0) {
+            return false;
+        }
+        seen |= bit;
+    }
+    return true;
+}
+
 RmCbBudget rm_cb_budget(const Tensor& input_tensor, const std::optional<MemoryConfig>& output_mem_config) {
     const auto& shape = input_tensor.logical_shape();
     const uint32_t stick_bytes = shape[shape.rank() - 1] * input_tensor.element_size();
@@ -59,6 +79,15 @@ bool supported_by_codegen(
     const auto& shape = input_tensor.logical_shape();
     const uint32_t rank = shape.rank();
     if (rank != dims.size() || rank < 2 || rank > PermuteCodegenDeviceOperation::kMaxDims) {
+        return false;
+    }
+    // A repeated axis survives ttnn::permute's per-axis normalization, and it is not benign here:
+    // dims == [1, 1, 2] is row-invariant, so it selects the row-invariant factory, whose output
+    // extents come from the permuted shape while its row count comes from the input -- for an input
+    // whose leading dim exceeds its second the kernels then write more rows than the output holds.
+    // Declining it hands the call to native, which keeps whatever behaviour it has for malformed
+    // dims rather than the port inventing a new one.
+    if (!is_permutation(dims)) {
         return false;
     }
     if (input_tensor.layout() != Layout::ROW_MAJOR) {
@@ -128,12 +157,15 @@ bool is_demoted(const Tensor& input_tensor, const ttsl::SmallVector<uint32_t>& d
     // supported, so a forced permute_force_codegen call still runs it.
     //
     // A permutation that moves the last axis selects the blocked path (tilize -> transpose_tile ->
-    // pack_untilize). That trip through the compute engine costs about what it saves, so the whole
-    // path measures at parity: across the swept surface every blocked config lands between 0.95x
-    // and 1.03x native device time, inside the run-to-run spread, while the row-invariant path
-    // (last axis fixed, no compute, batched stick reads) wins on every config at 0.69x-0.88x.
-    // Routing the blocked path to native keeps the win and gives up nothing measurable. Measured on
-    // Blackhole; the mechanism is not arch-specific, so the predicate stays unconditional.
+    // pack_untilize). That trip through the compute engine costs about what it saves, and the result
+    // is not a uniform parity: over the 66 blocked configs of the swept surface, forced codegen
+    // reaches 1.24x native device time on Blackhole while winning on 13 of them (best 1.12x), and on
+    // Wormhole it is never worse than 1.03x and wins on 47 (best 1.26x). The spread straddles parity
+    // on both, and differs enough between them that one measured range would not describe both.
+    // The predicate stays unconditional and demotes the class as a whole: it trades the measured
+    // wins away to avoid the measured losses, and native is what shipped for these configs, so a
+    // demoted call is never a regression. The row-invariant path (last axis fixed, no compute,
+    // batched stick reads) wins on every config and is what this port routes.
     const uint32_t rank = input_tensor.logical_shape().rank();
     if (rank < 2 || rank != dims.size()) {
         return false;
