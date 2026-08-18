@@ -10,6 +10,22 @@
 #include "api/compute/transpose_dest.h"
 #include "api/dataflow/circular_buffer.h"
 
+#include "topk_large_indices_chunk_skip.hpp"
+
+// Data-dependent chunk-skip early-out (row-parallel path only; see
+// topk_large_indices_chunk_skip.hpp for design + soundness proof).
+// One-line A/B toggle: flip to false to reproduce the pre-skip kernel
+// (kernels JIT-compile, no host rebuild needed for the toggle).
+constexpr bool kChunkSkipEnable = true;
+
+// Bring-up diagnostic: dump the post-rebuild DST values region over DPRINT to
+// calibrate rank_to_values_word against torch rank order. Never enable
+// together with performance runs.
+// #define CHUNK_SKIP_DIAG 1
+#ifdef CHUNK_SKIP_DIAG
+#include "api/debug/dprint.h"
+#endif
+
 #ifdef TRISC_MATH
 namespace ckernel::sfpu {
 
@@ -82,15 +98,24 @@ FORCE_INLINE void mark_neginf_indices(uint32_t idst) {
         ckernel::sfpu::_topk_large_indices_mark_neginf_indices_<K>, idst, VectorMode::RC_custom)));
 }
 
+// First half of chunk processing: pull the chunk from the input CB into DST.
+// Always runs -- the chunk must be resident in DST to be inspected at all.
 template <uint32_t K>
-FORCE_INLINE void process_chunk(CircularBuffer& input_cb, uint32_t dst_base, uint32_t active_elements, bool ascending) {
+FORCE_INLINE void copy_chunk(CircularBuffer& input_cb, uint32_t dst_base, uint32_t active_elements) {
     constexpr uint32_t tiles_per_sequence = (K + elements_per_tile - 1) / elements_per_tile;
     const uint32_t input_cb_id = input_cb.get_cb_id();
     input_cb.wait_front(tiles_per_sequence);
     topk_xl_copy_tile_init(input_cb_id);
     topk_xl_copy_tile<K>(input_cb_id, dst_base, 0, active_elements);
     input_cb.pop_front(tiles_per_sequence);
+}
 
+// Second half: stamp fused LSB indices, locally sort, split into unfused
+// values + row-major indices, and advance the chunk base. Skipped (except for
+// the chunk-base advance) when the chunk-skip test proves the chunk cannot
+// contribute to the final top-k.
+template <uint32_t K>
+FORCE_INLINE void finish_chunk(uint32_t dst_base, bool ascending) {
     topk_xl_add_lsb_indices_init();
     topk_xl_add_lsb_indices<K, 0>(dst_base);
 
@@ -100,6 +125,12 @@ FORCE_INLINE void process_chunk(CircularBuffer& input_cb, uint32_t dst_base, uin
     topk_xl_separate_indices_row_major_reinit();
     topk_xl_separate_indices_row_major<K>(dst_base);
     topk_xl_separate_indices_row_major_advance_chunk_base<K>();
+}
+
+template <uint32_t K>
+FORCE_INLINE void process_chunk(CircularBuffer& input_cb, uint32_t dst_base, uint32_t active_elements, bool ascending) {
+    copy_chunk<K>(input_cb, dst_base, active_elements);
+    finish_chunk<K>(dst_base, ascending);
 }
 
 }  // namespace
@@ -112,6 +143,7 @@ void kernel_main() {
     constexpr uint32_t input_cb = get_compile_time_arg_val(0);
     constexpr uint32_t indices_cb = get_compile_time_arg_val(1);
     constexpr uint32_t K = get_compile_time_arg_val(2);
+    constexpr uint32_t USER_K = get_compile_time_arg_val(3);
 
     static_assert(K == 512 || K == 1024 || K == 2048, "K must be 512, 1024, or 2048");
     constexpr uint32_t tiles_per_sequence = (K + elements_per_tile - 1) / elements_per_tile;
@@ -119,14 +151,22 @@ void kernel_main() {
     constexpr uint32_t slot0 = 0;
     constexpr uint32_t slot1 = sequence_tiles;
 
+    namespace skip = topk_large_indices_chunk_skip;
+
     compute_kernel_hw_startup(input_cb, indices_cb);
     pack_untilize_dest_init<tiles_per_sequence, tiles_per_sequence>(indices_cb);
+    if constexpr (kChunkSkipEnable) {
+        skip::chunk_skip_configure();
+    }
 
     CircularBuffer input_cb_obj(input_cb);
     CircularBuffer indices_cb_obj(indices_cb);
 
     for (uint32_t row = 0; row < num_rows; ++row) {
         tile_regs_acquire();
+#ifdef CHUNK_SKIP_TELEMETRY
+        skip::telemetry_row_begin(num_chunks);
+#endif
 
         topk_xl_separate_indices_row_major_init_static<0, 0>();
 
@@ -140,12 +180,57 @@ void kernel_main() {
 
         for (uint32_t chunk = 1; chunk < num_chunks; ++chunk) {
             const uint32_t active_elements = (chunk + 1 == num_chunks) ? tail_elements : K;
-            process_chunk<K>(input_cb_obj, slot1, active_elements, true);
+            copy_chunk<K>(input_cb_obj, slot1, active_elements);
+
+            if constexpr (kChunkSkipEnable) {
+#ifdef CHUNK_SKIP_TELEMETRY
+                // Telemetry variant: identical gate predicate and identical
+                // per-chunk mailbox traffic on every TRISC; the decision is
+                // recorded (MATH only) before the skip acts.
+                if (chunk >= skip::first_tested_chunk<USER_K>()) {
+                    const bool skipped = skip::chunk_skip_decide<K, USER_K>(slot1);
+                    skip::telemetry_record(chunk, skipped);
+                    if (skipped) {
+                        topk_xl_separate_indices_row_major_advance_chunk_base<K>();
+                        continue;
+                    }
+                }
+#else
+                // Gated start: chunk >= max(2, USER_K/4). The floor of 2 is a
+                // layout requirement (threshold address valid only after the
+                // first merge+rebuild); USER_K/4 amortizes the test to where
+                // skips are actually probable (see the header).
+                if (chunk >= skip::first_tested_chunk<USER_K>() && skip::chunk_skip_decide<K, USER_K>(slot1)) {
+                    // Chunk proven irrelevant (all elements strictly below
+                    // the running USER_K-th survivor). The chunk was popped;
+                    // only the MATH-side chunk-base bookkeeping must advance.
+                    topk_xl_separate_indices_row_major_advance_chunk_base<K>();
+                    continue;
+                }
+#endif
+            }
+
+            finish_chunk<K>(slot1, true);
 
             topk_xl_init<K, false>();
             topk_xl_merge<K, false>(slot0);
             topk_xl_rebuild<K, false>(slot0, false);
         }
+#ifdef CHUNK_SKIP_TELEMETRY
+        skip::telemetry_row_end<USER_K>(row, num_chunks);
+#endif
+
+#if defined(CHUNK_SKIP_DIAG) && defined(TRISC_MATH)
+        // Calibration dump: raw post-rebuild values-region words of slot0.
+        if (row == 0) {
+            skip::chunk_skip_configure();
+            ckernel::tensix_sync();
+            volatile uint32_t* mm = reinterpret_cast<volatile uint32_t*>(RISCV_DEST_START_ADDR);
+            for (uint32_t w = 0; w < tiles_per_sequence * 1024; ++w) {
+                DPRINT("DW {} {}\n", w, mm[w]);
+            }
+        }
+#endif
 
         mark_neginf_indices<K>(slot0);
         materialize_index_rank_order<K>(slot0, indices_cb);

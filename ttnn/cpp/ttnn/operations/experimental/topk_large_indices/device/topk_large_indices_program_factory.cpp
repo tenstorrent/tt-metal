@@ -4,12 +4,17 @@
 
 #include "topk_large_indices_program_factory.hpp"
 
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 
+#include <algorithm>
+#include <cmath>
+#include <map>
 #include <optional>
+#include <string>
 #include <tuple>
 
 namespace ttnn::operations::experimental::topk_large_indices::program {
@@ -81,13 +86,64 @@ uint32_t rows_for_core(
     return 0;
 }
 
+// BFLOAT16 element size of the optional values output.
+constexpr uint32_t values_element_bytes = 2;
+
+// Creates the values-output CB (+ reorder scratch for LLK windows > 512) on `cores`.
+// Mirrors the indices output CBs' structure with bf16-sized rows/slices.
+void create_values_output_cbs(
+    tt::tt_metal::Program& program,
+    const CoreRangeSet& cores,
+    LlkTargetK llk_target_k,
+    uint32_t k,
+    uint32_t cb_values,
+    uint32_t cb_values_scratch) {
+    const uint32_t llk_k = to_uint32(llk_target_k);
+    const uint32_t values_cb_row_bytes = llk_k * values_element_bytes;
+    constexpr uint32_t cb_depth = 2;
+    auto values_cb_config =
+        tt::tt_metal::CircularBufferConfig(cb_depth * values_cb_row_bytes, {{cb_values, tt::DataFormat::Float16_b}})
+            .set_page_size(cb_values, values_cb_row_bytes);
+    if (llk_target_k == LlkTargetK::K512) {
+        values_cb_config.set_unpack_face_geometry(cb_values, tt::constants::FACE_HEIGHT, 2);
+    }
+    tt::tt_metal::CreateCircularBuffer(program, cores, values_cb_config);
+
+    if (llk_target_k != LlkTargetK::K512) {
+        const uint32_t values_row_bytes = k * values_element_bytes;
+        const auto values_scratch_cb_config =
+            tt::tt_metal::CircularBufferConfig(values_row_bytes, {{cb_values_scratch, tt::DataFormat::Float16_b}})
+                .set_page_size(cb_values_scratch, values_row_bytes);
+        tt::tt_metal::CreateCircularBuffer(program, cores, values_scratch_cb_config);
+    }
+}
+
+// True when any output-format opt-in is active: the program then uses the flex
+// writer kernels instead of the default (byte-identical) writer sources.
+bool uses_flex_writer(const operation_attributes_t& attrs) {
+    return attrs.tile_output || attrs.index_dtype == DataType::UINT16;
+}
+
+// Rows of one 2D slice of the (flattened) row space: TILE layouts pad the last
+// two dims per slice, so tile-row addressing needs this alongside the flat row.
+uint32_t rows_2d_of(const ttnn::Shape& shape) { return shape.rank() >= 2 ? shape[shape.rank() - 2] : 1; }
+
+constexpr uint32_t pad_zero_slab_bytes = 2048;  // covers the largest zero run: 512 uint32 elements
+
 void set_runtime_args(
     tt::tt_metal::Program& program,
     const TopkLargeIndicesSharedVariables& shared,
     const Tensor& input,
-    const Tensor& indices,
-    LlkTargetK llk_target_k,
-    std::optional<uint32_t> valid_length) {
+    const tensor_return_value_t& outputs,
+    const operation_attributes_t& attrs) {
+    const LlkTargetK llk_target_k = snap_to_llk_target_k(attrs.k);
+    const std::optional<uint32_t> valid_length = attrs.valid_length;
+    const Tensor& indices = outputs[0];
+    const bool return_values = outputs.size() > 1;
+    const bool tile_input = input.layout() == Layout::TILE;
+    const bool flex_writer = uses_flex_writer(attrs);
+    const uint32_t rows_2d = rows_2d_of(input.logical_shape());
+    const uint32_t w_tiles = input.padded_shape()[-1] / tt::constants::TILE_WIDTH;
     const auto runtime_args = get_runtime_shape_args(input, llk_target_k, valid_length);
     const auto work_split = tt::tt_metal::split_work_to_cores(
         input.device()->compute_with_storage_grid_size(), runtime_args.num_rows, true);
@@ -108,20 +164,57 @@ void set_runtime_args(
             rows,
             num_rows_per_core_group_1);
 
-        tt::tt_metal::SetRuntimeArgs(
-            program,
-            shared.reader_kernel_id,
-            core,
-            {input.buffer()->address(),
-             start_row,
-             rows,
-             runtime_args.num_chunks,
-             runtime_args.input_tail_chunk_bytes,
-             runtime_args.input_row_bytes});
+        if (tile_input) {
+            tt::tt_metal::SetRuntimeArgs(
+                program,
+                shared.reader_kernel_id,
+                core,
+                {input.buffer()->address(),
+                 start_row,
+                 rows,
+                 runtime_args.num_chunks,
+                 tt::div_up(runtime_args.tail_elements, tt::constants::FACE_WIDTH),
+                 w_tiles,
+                 rows_2d,
+                 start_row % rows_2d,
+                 start_row / rows_2d,
+                 0 /* start_element */});
+        } else {
+            tt::tt_metal::SetRuntimeArgs(
+                program,
+                shared.reader_kernel_id,
+                core,
+                {input.buffer()->address(),
+                 start_row,
+                 rows,
+                 runtime_args.num_chunks,
+                 runtime_args.input_tail_chunk_bytes,
+                 runtime_args.input_row_bytes});
+        }
         tt::tt_metal::SetRuntimeArgs(
             program, shared.compute_kernel_id, core, {rows, runtime_args.num_chunks, runtime_args.tail_elements});
-        tt::tt_metal::SetRuntimeArgs(
-            program, shared.writer_kernel_id, core, {indices.buffer()->address(), start_row, rows});
+        if (flex_writer) {
+            tt::tt_metal::SetRuntimeArgs(
+                program,
+                shared.writer_kernel_id,
+                core,
+                {indices.buffer()->address(),
+                 start_row,
+                 rows,
+                 return_values ? outputs[1].buffer()->address() : 0,
+                 rows_2d,
+                 start_row % rows_2d,
+                 start_row / rows_2d});
+        } else if (return_values) {
+            tt::tt_metal::SetRuntimeArgs(
+                program,
+                shared.writer_kernel_id,
+                core,
+                {indices.buffer()->address(), start_row, rows, outputs[1].buffer()->address()});
+        } else {
+            tt::tt_metal::SetRuntimeArgs(
+                program, shared.writer_kernel_id, core, {indices.buffer()->address(), start_row, rows});
+        }
 
         start_row += rows;
     }
@@ -141,7 +234,7 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     auto program = tt::tt_metal::CreateProgram();
 
     const auto& input = tensor_args.input_tensor;
-    auto& indices = tensor_return_value;
+    auto& indices = tensor_return_value[0];
 
     const uint32_t k = operation_attributes.k;
     const auto llk_target_k = snap_to_llk_target_k(k);
@@ -154,9 +247,18 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     // Runtime row counts are intentionally patched through runtime args instead of the program hash.
     // Create kernels/CBs across the full worker grid so cache hits can use a different active core subset.
 
+    const bool return_values = operation_attributes.return_values;
+    const bool tile_input = input.layout() == Layout::TILE;
+    const bool tile_output = operation_attributes.tile_output;
+    const bool index_u16 = operation_attributes.index_dtype == DataType::UINT16;
+    const bool flex_writer = uses_flex_writer(operation_attributes);
     constexpr uint32_t cb_in = tt::CBIndex::c_0;
     constexpr uint32_t cb_indices = tt::CBIndex::c_1;
     constexpr uint32_t cb_indices_scratch = tt::CBIndex::c_2;
+    constexpr uint32_t cb_values = tt::CBIndex::c_3;
+    constexpr uint32_t cb_values_scratch = tt::CBIndex::c_4;
+    constexpr uint32_t cb_pad_zero = tt::CBIndex::c_5;
+    constexpr uint32_t cb_stage = tt::CBIndex::c_6;
 
     const uint32_t input_chunk_bytes = llk_k * input.element_size();
     const uint32_t input_tile_bytes = tt::constants::TILE_HW * input.element_size();
@@ -165,7 +267,9 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     const uint32_t output_slices_per_row = k / row_slice_elements;
     const uint32_t indices_slice_bytes = row_slice_elements * indices.element_size();
     const uint32_t indices_row_bytes = k * indices.element_size();
-    const uint32_t indices_cb_row_bytes = llk_k * indices.element_size();
+    // The indices CB carries the raw 32-bit index words the packer produces,
+    // independent of the (possibly narrowed) output tensor dtype.
+    const uint32_t indices_cb_row_bytes = llk_k * static_cast<uint32_t>(sizeof(uint32_t));
 
     const uint32_t cb_depth = 2;
     const auto input_cb_config =
@@ -182,26 +286,68 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     }
     tt::tt_metal::CreateCircularBuffer(program, all_cores, indices_cb_config);
 
-    if (llk_target_k != LlkTargetK::K512) {
+    // The scratch also serves as the UINT16 narrowing row (sized with the
+    // output element size either way), so it exists for every LLK window when
+    // narrowing is requested.
+    if (llk_target_k != LlkTargetK::K512 || index_u16) {
         const auto indices_scratch_cb_config =
             tt::tt_metal::CircularBufferConfig(indices_row_bytes, {{cb_indices_scratch, tt::DataFormat::Float32}})
                 .set_page_size(cb_indices_scratch, indices_row_bytes);
         tt::tt_metal::CreateCircularBuffer(program, all_cores, indices_scratch_cb_config);
     }
 
-    std::vector<uint32_t> reader_compile_args = {cb_in, input_chunk_bytes, input_tile_bytes, tiles_per_sequence};
+    if (return_values) {
+        create_values_output_cbs(program, all_cores, llk_target_k, k, cb_values, cb_values_scratch);
+    }
+
+    if (tile_output) {
+        const auto pad_cb_config =
+            tt::tt_metal::CircularBufferConfig(pad_zero_slab_bytes, {{cb_pad_zero, tt::DataFormat::UInt32}})
+                .set_page_size(cb_pad_zero, pad_zero_slab_bytes);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, pad_cb_config);
+    }
+    // TILE-input staging: one 64-byte slot per 16-element chunk slice, plus
+    // 64 bytes of slack for in-kernel 64-byte alignment of the slot base.
+    const uint32_t stage_bytes = (llk_k / row_slice_elements) * 64 + 64;
+    if (tile_input) {
+        const auto stage_cb_config =
+            tt::tt_metal::CircularBufferConfig(stage_bytes, {{cb_stage, tt::DataFormat::UInt32}})
+                .set_page_size(cb_stage, stage_bytes);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, stage_cb_config);
+    }
+
+    std::vector<uint32_t> reader_compile_args;
+    if (tile_input) {
+        reader_compile_args = {cb_in, cb_stage, llk_k / row_slice_elements, tiles_per_sequence};
+    } else {
+        reader_compile_args = {cb_in, input_chunk_bytes, input_tile_bytes, tiles_per_sequence};
+    }
     interleaved_accessor_args(input).append_to(reader_compile_args);
 
     auto reader_kernel = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/reader.cpp",
+        tile_input ? "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/reader_tile.cpp"
+                   : "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/reader.cpp",
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_args));
 
+    // return_values swaps in dedicated with-values kernel sources so the
+    // default (indices-only) program's kernel sources — and therefore its JIT
+    // binaries and perf behavior — stay byte-identical.
     std::vector<uint32_t> compute_compile_args = {cb_in, cb_indices, llk_k};
+    if (return_values) {
+        compute_compile_args.push_back(cb_values);
+    }
+    // User-requested k (<= llk_k): the data-dependent chunk-skip early-out in
+    // the row-parallel compute kernels thresholds against the running k-th
+    // survivor (not the llk_k-th), which is what makes skipping profitable at
+    // small k. attrs.k is already part of the program hash.
+    compute_compile_args.push_back(k);
     auto compute_kernel = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/compute.cpp",
+        return_values
+            ? "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/compute_with_values.cpp"
+            : "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/compute.cpp",
         all_cores,
         tt::tt_metal::ComputeConfig{
             // TopK XL stores fused BF16-value/u16-index words and unfused UINT32 indices in 32-bit DEST lanes.
@@ -210,27 +356,79 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
             .dst_full_sync_en = true,
             .compile_args = compute_compile_args});
 
-    std::vector<uint32_t> writer_compile_args = {
-        cb_indices,
-        cb_indices_scratch,
-        indices_row_bytes,
-        source_slices_per_row,
-        output_slices_per_row,
-        indices_slice_bytes};
-    interleaved_accessor_args(indices).append_to(writer_compile_args);
+    tt::tt_metal::KernelHandle writer_kernel;
+    if (flex_writer) {
+        // Opt-in output formats (TILE layout and/or UINT16 indices): dedicated
+        // flex writer, gated by defines so the default program's writer
+        // binaries stay byte-identical.
+        const uint32_t idx_es = indices.element_size();
+        const uint32_t indices_page_bytes = tile_output ? tt::constants::TILE_HW * idx_es : indices_row_bytes;
+        const uint32_t values_page_bytes =
+            tile_output ? tt::constants::TILE_HW * values_element_bytes : k * values_element_bytes;
+        std::vector<uint32_t> flex_compile_args = {
+            cb_indices,
+            cb_indices_scratch,
+            indices_page_bytes,
+            source_slices_per_row,
+            output_slices_per_row,
+            cb_values,
+            cb_values_scratch,
+            values_page_bytes,
+            cb_pad_zero,
+            tile_output ? k / tt::constants::TILE_WIDTH : 0};
+        interleaved_accessor_args(indices).append_to(flex_compile_args);
+        if (return_values) {
+            interleaved_accessor_args(tensor_return_value[1]).append_to(flex_compile_args);
+        }
+        std::map<std::string, std::string> flex_defines;
+        if (return_values) {
+            flex_defines["FLEX_WITH_VALUES"] = "1";
+        }
+        if (tile_output) {
+            flex_defines["FLEX_OUT_TILE"] = "1";
+        }
+        if (index_u16) {
+            flex_defines["FLEX_INDEX_U16"] = "1";
+        }
+        writer_kernel = tt::tt_metal::CreateKernel(
+            program,
+            "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/writer_flex.cpp",
+            all_cores,
+            tt::tt_metal::WriterDataMovementConfig(flex_compile_args, flex_defines));
+    } else {
+        std::vector<uint32_t> writer_compile_args = {
+            cb_indices,
+            cb_indices_scratch,
+            indices_row_bytes,
+            source_slices_per_row,
+            output_slices_per_row,
+            indices_slice_bytes};
+        if (return_values) {
+            writer_compile_args.push_back(cb_values);
+            writer_compile_args.push_back(cb_values_scratch);
+            writer_compile_args.push_back(k * values_element_bytes);
+            writer_compile_args.push_back(row_slice_elements * values_element_bytes);
+        }
+        interleaved_accessor_args(indices).append_to(writer_compile_args);
+        if (return_values) {
+            interleaved_accessor_args(tensor_return_value[1]).append_to(writer_compile_args);
+        }
 
-    auto writer_kernel = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/writer.cpp",
-        all_cores,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_args));
+        writer_kernel = tt::tt_metal::CreateKernel(
+            program,
+            return_values
+                ? "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/writer_with_values.cpp"
+                : "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/writer.cpp",
+            all_cores,
+            tt::tt_metal::WriterDataMovementConfig(writer_compile_args));
+    }
 
     TopkLargeIndicesSharedVariables shared{
         .reader_kernel_id = reader_kernel,
         .compute_kernel_id = compute_kernel,
         .writer_kernel_id = writer_kernel,
         .cores = cores};
-    set_runtime_args(program, shared, input, indices, llk_target_k, operation_attributes.valid_length);
+    set_runtime_args(program, shared, input, tensor_return_value, operation_attributes);
 
     return cached_program_t{std::move(program), std::move(shared)};
 }
@@ -245,8 +443,646 @@ void TopkLargeIndicesProgramFactory::override_runtime_arguments(
         cached_program.shared_variables,
         tensor_args.input_tensor,
         tensor_return_value,
-        snap_to_llk_target_k(operation_attributes.k),
-        operation_attributes.valid_length);
+        operation_attributes);
+}
+
+// ---------------------------------------------------------------------------
+// Column-parallel (intra-row multi-core) path
+// ---------------------------------------------------------------------------
+
+// Slice-count cap: the in-place merge tree needs only one 2-sequence recv CB
+// per core (16 KB at K=2048), so L1 does not bind P; the envelope is 7 tree
+// levels (128 slices). In practice P is bound first by the worker-grid
+// rectangle capacity (e.g. 13x10 = 130 on P150) and the chunk count.
+constexpr uint32_t max_column_slices = 128;
+
+namespace {
+
+// ceil(log2(p)) for p >= 1: number of pairwise merge-tree levels.
+uint32_t tree_levels(uint32_t p) {
+    uint32_t levels = 0;
+    while ((1u << levels) < p) {
+        ++levels;
+    }
+    return levels;
+}
+
+// The built-in cost-model pick (no user override).
+ColumnSplitConfig compute_model_column_split_config(uint32_t k, uint32_t n, uint32_t num_rows, const CoreCoord& grid) {
+    constexpr uint32_t max_slices = max_column_slices;
+
+    ColumnSplitConfig config{};
+    // Intra-row parallelism only pays off when rows cannot saturate the grid;
+    // restrict to the single-row case this path is built for. Every other
+    // shape keeps the row-parallel factory (and its shape-free program hash)
+    // unchanged.
+    if (num_rows != 1) {
+        return config;
+    }
+    if (static_cast<uint32_t>(grid.x * grid.y) < 2) {
+        return config;
+    }
+
+    const uint32_t llk_k = to_uint32(snap_to_llk_target_k(k));
+    // Physical width only: valid_length must stay runtime-only, so the split
+    // never depends on it (short valid prefixes empty out trailing slices at
+    // runtime instead of changing the program).
+    const uint32_t num_chunks = tt::div_up(n, llk_k);
+    if (num_chunks < 2) {
+        return config;
+    }
+
+    // Cost model in merge units: processing one chunk locally
+    // (copy + lsb + fused sort + index split + merge + rebuild) ~ 2 units,
+    // one tree merge+rebuild ~ 1 unit. With the log-tree the serial term is
+    // ceil(log2 P), so cost(P) = 2*ceil(chunks/P) + ceil(log2 P). Tree cores
+    // must form a rectangle, so search every a x b rectangle that fits the
+    // grid (a <= grid.x, b <= grid.y, a*b <= min(chunks, max_slices)) and
+    // take the cheapest P; ties prefer fewer cores. This beats the previous
+    // full-rows-only fit (e.g. 32 chunks on a 13x10 grid: 8x4 = 32 slices vs
+    // 13x2 = 26; 128+ chunks: 8x8 = 64 vs 13x4 = 52).
+    const uint32_t slice_ceiling = std::min(num_chunks, max_slices);
+    uint32_t num_slices = 0;
+    uint32_t local_grid_x = 0;
+    uint32_t local_grid_y = 0;
+    uint32_t best_cost = std::numeric_limits<uint32_t>::max();
+    for (uint32_t a = 1; a <= static_cast<uint32_t>(grid.x); ++a) {
+        for (uint32_t b = 1; b <= static_cast<uint32_t>(grid.y); ++b) {
+            const uint32_t p = a * b;
+            if (p < 2 || p > slice_ceiling) {
+                continue;
+            }
+            const uint32_t cost = 2 * tt::div_up(num_chunks, p) + tree_levels(p);
+            if (cost < best_cost || (cost == best_cost && p < num_slices)) {
+                best_cost = cost;
+                num_slices = p;
+                local_grid_x = a;
+                local_grid_y = b;
+            }
+        }
+    }
+    if (num_slices < 2) {
+        return config;
+    }
+
+    const uint32_t cost_row = 2 * num_chunks;  // single row -> single core on the row-parallel path
+    if (best_cost >= cost_row) {
+        return config;
+    }
+
+    config.enabled = true;
+    config.num_slices = num_slices;
+    config.local_grid_x = local_grid_x;
+    config.local_grid_y = local_grid_y;
+    return config;
+}
+
+}  // namespace
+
+ColumnSplitConfig compute_column_split_config(
+    uint32_t k, uint32_t n, uint32_t num_rows, const CoreCoord& grid, std::optional<uint32_t> num_slices_override) {
+    ColumnSplitConfig config = compute_model_column_split_config(k, n, num_rows, grid);
+    if (!num_slices_override.has_value()) {
+        return config;
+    }
+
+    // Explicit beats ignored: the override has no meaning on the row-parallel
+    // path, so reject it loudly instead of silently dropping it.
+    TT_FATAL(
+        config.enabled,
+        "topk_large_indices num_slices={} was given, but the column-parallel path is not selected for this call "
+        "(it requires a single row and a row wide enough to split; got {} rows, last dim {}). Remove num_slices "
+        "or reshape to a single-row call.",
+        *num_slices_override,
+        num_rows,
+        n);
+
+    const uint32_t requested = *num_slices_override;
+    TT_FATAL(
+        requested >= 2 && requested <= max_column_slices,
+        "topk_large_indices num_slices must be in [2, {}], got {}",
+        max_column_slices,
+        requested);
+    const uint32_t llk_k = to_uint32(snap_to_llk_target_k(k));
+    const uint32_t num_chunks = tt::div_up(n, llk_k);
+    TT_FATAL(
+        requested <= num_chunks,
+        "topk_large_indices num_slices={} exceeds the row's chunk count {} (last dim {} / LLK window {}); every "
+        "slice must own at least one chunk",
+        requested,
+        num_chunks,
+        n,
+        llk_k);
+
+    // Clamp only against the physical grid (rectangle capacity), with a warning.
+    // Honor the requested count with an exact a x b rectangle when one fits
+    // the grid (e.g. 32 = 8x4 on 13x10); otherwise fall back to the largest
+    // achievable product <= requested, with a warning. The old full-rows-only
+    // fit silently clamped 16->13, 24->13, 32->26, mislabeling P-sweeps.
+    uint32_t num_slices = 0;
+    uint32_t local_grid_x = 0;
+    uint32_t local_grid_y = 0;
+    for (uint32_t a = 1; a <= static_cast<uint32_t>(grid.x); ++a) {
+        for (uint32_t b = 1; b <= static_cast<uint32_t>(grid.y); ++b) {
+            const uint32_t p = a * b;
+            if (p <= requested && p > num_slices) {
+                num_slices = p;
+                local_grid_x = a;
+                local_grid_y = b;
+            }
+        }
+    }
+    if (num_slices != requested) {
+        log_warning(
+            tt::LogOp,
+            "topk_large_indices num_slices={} does not fit the {}x{} worker grid's local-core rectangle; "
+            "clamped to {} ({}x{} local cores + 1 merge core)",
+            requested,
+            grid.x,
+            grid.y,
+            num_slices,
+            local_grid_x,
+            local_grid_y);
+    }
+
+    config.num_slices = num_slices;
+    config.local_grid_x = local_grid_x;
+    config.local_grid_y = local_grid_y;
+    return config;
+}
+
+namespace {
+
+struct SliceRuntime {
+    uint32_t start_chunk = 0;    // index of the slice's first chunk within the row
+    uint32_t start_element = 0;  // start_chunk * llk_k
+    uint32_t num_chunks = 0;     // active chunks after the valid_length cut (0 = empty slice)
+    uint32_t tail_elements = 0;  // active elements in the slice's last chunk
+};
+
+// Splits the physical chunk range evenly over the slices, then bounds each
+// slice by the runtime search width (valid_length). Slices wholly beyond the
+// search width come back empty and are serviced by the writer's -inf fill.
+std::vector<SliceRuntime> compute_slice_runtime(
+    uint32_t n, uint32_t llk_k, uint32_t num_slices, std::optional<uint32_t> valid_length) {
+    const uint32_t search_len = valid_length.value_or(n);
+    const uint32_t num_chunks_phys = tt::div_up(n, llk_k);
+    const uint32_t base_chunks = num_chunks_phys / num_slices;
+    const uint32_t extra_chunks = num_chunks_phys % num_slices;
+
+    std::vector<SliceRuntime> slices(num_slices);
+    uint32_t start_chunk = 0;
+    for (uint32_t s = 0; s < num_slices; ++s) {
+        const uint32_t chunk_count = base_chunks + (s < extra_chunks ? 1 : 0);
+        const uint32_t start_element = start_chunk * llk_k;
+        const uint32_t end_element = std::min((start_chunk + chunk_count) * llk_k, n);
+        const uint32_t active_end = std::min(end_element, search_len);
+
+        SliceRuntime& slice = slices[s];
+        slice.start_chunk = start_chunk;
+        slice.start_element = start_element;
+        if (active_end > start_element) {
+            const uint32_t active_len = active_end - start_element;
+            slice.num_chunks = tt::div_up(active_len, llk_k);
+            slice.tail_elements = active_len - ((slice.num_chunks - 1) * llk_k);
+        }
+        start_chunk += chunk_count;
+    }
+    TT_FATAL(
+        start_chunk == num_chunks_phys,
+        "topk_large_indices column split assigned {} chunks, expected {}",
+        start_chunk,
+        num_chunks_phys);
+    return slices;
+}
+
+void set_runtime_args_multi_core(
+    tt::tt_metal::Program& program,
+    const TopkLargeIndicesMultiCoreSharedVariables& shared,
+    const Tensor& input,
+    const tensor_return_value_t& outputs,
+    const operation_attributes_t& attrs) {
+    const LlkTargetK llk_target_k = snap_to_llk_target_k(attrs.k);
+    const std::optional<uint32_t> valid_length = attrs.valid_length;
+    const Tensor& indices = outputs[0];
+    const bool return_values = outputs.size() > 1;
+    const bool tile_input = input.layout() == Layout::TILE;
+    const bool flex_writer = uses_flex_writer(attrs);
+    const uint32_t llk_k = to_uint32(llk_target_k);
+    const auto& shape = input.logical_shape();
+    const uint32_t n = shape[shape.rank() - 1];
+    const uint32_t num_rows = flattened_rows_excluding_last_dim(shape);
+    const uint32_t input_row_bytes = n * input.element_size();
+    const uint32_t num_slices = static_cast<uint32_t>(shared.cores.size());
+    const uint32_t num_levels = tree_levels(num_slices);
+    TT_FATAL(
+        num_levels <= 7, "topk_large_indices merge tree supports at most 7 levels (128 slices), got {}", num_levels);
+
+    const auto slices = compute_slice_runtime(n, llk_k, num_slices, valid_length);
+    auto* device = input.device();
+
+    const uint32_t rows_2d = rows_2d_of(shape);
+    const uint32_t w_tiles = input.padded_shape()[-1] / tt::constants::TILE_WIDTH;
+
+    for (uint32_t i = 0; i < num_slices; ++i) {
+        const auto& core = shared.cores[i];
+        const auto& slice = slices[i];
+        if (tile_input) {
+            tt::tt_metal::SetRuntimeArgs(
+                program,
+                shared.reader_kernel_id,
+                core,
+                {input.buffer()->address(),
+                 0 /* start_row */,
+                 num_rows,
+                 slice.num_chunks,
+                 tt::div_up(slice.tail_elements, tt::constants::FACE_WIDTH),
+                 w_tiles,
+                 rows_2d,
+                 0 /* start_in_slice */,
+                 0 /* start_slice */,
+                 slice.start_element});
+        } else {
+            tt::tt_metal::SetRuntimeArgs(
+                program,
+                shared.reader_kernel_id,
+                core,
+                {input.buffer()->address(),
+                 0 /* start_row */,
+                 num_rows,
+                 slice.num_chunks,
+                 slice.tail_elements * input.element_size(),
+                 input_row_bytes,
+                 slice.start_element * input.element_size()});
+        }
+
+        // Tree schedule for slice i: it wins levels [0, t) where t is the
+        // index of i's lowest set bit (root i=0 wins every level), merging
+        // partner i + 2^level whenever that slice exists (byes otherwise),
+        // then ships its survivor to i with the lowest set bit cleared.
+        const bool is_root = (i == 0);
+        uint32_t winning_levels = num_levels;
+        if (!is_root) {
+            winning_levels = 0;
+            while (((i >> winning_levels) & 1u) == 0) {
+                ++winning_levels;
+            }
+        }
+        uint32_t num_merges = 0;
+        // 7 (x, y) pairs — must match the writer kernels' partner_x/y[7] and
+        // the positional offsets of the args that follow (do_ship at 16).
+        std::vector<uint32_t> partner_coords(14, 0);
+        for (uint32_t level = 0; level < winning_levels; ++level) {
+            const uint32_t partner = i + (1u << level);
+            if (partner < num_slices) {
+                const CoreCoord partner_physical = device->worker_core_from_logical_core(shared.cores[partner]);
+                partner_coords[2 * num_merges] = static_cast<uint32_t>(partner_physical.x);
+                partner_coords[2 * num_merges + 1] = static_cast<uint32_t>(partner_physical.y);
+                ++num_merges;
+            }
+        }
+
+        tt::tt_metal::SetRuntimeArgs(
+            program,
+            is_root ? shared.compute_root_kernel_id : shared.compute_node_kernel_id,
+            core,
+            {num_rows, slice.num_chunks, slice.tail_elements, slice.start_chunk, num_merges});
+
+        uint32_t winner_x = 0;
+        uint32_t winner_y = 0;
+        if (!is_root) {
+            const uint32_t winner = i & (i - 1);  // clear the lowest set bit
+            const CoreCoord winner_physical = device->worker_core_from_logical_core(shared.cores[winner]);
+            winner_x = static_cast<uint32_t>(winner_physical.x);
+            winner_y = static_cast<uint32_t>(winner_physical.y);
+        }
+        // A shipping core with an empty slice AND no adopted partners has no
+        // survivor in DST; its writer sends the prefilled -inf sequence.
+        const uint32_t is_empty_ship = (!is_root && slice.num_chunks == 0 && num_merges == 0) ? 1u : 0u;
+
+        std::vector<uint32_t> writer_args;
+        writer_args.reserve(20);
+        writer_args.push_back(num_rows);
+        writer_args.push_back(num_merges);
+        for (uint32_t v : partner_coords) {
+            writer_args.push_back(v);
+        }
+        writer_args.push_back(is_root ? 0u : 1u);  // do_ship
+        writer_args.push_back(winner_x);
+        writer_args.push_back(winner_y);
+        writer_args.push_back(is_empty_ship);
+        writer_args.push_back(indices.buffer()->address());
+        if (return_values) {
+            writer_args.push_back(outputs[1].buffer()->address());
+        } else if (flex_writer) {
+            writer_args.push_back(0);  // flex writer arg-layout parity: unused values address
+        }
+        tt::tt_metal::SetRuntimeArgs(program, shared.writer_kernel_id, core, writer_args);
+    }
+}
+
+}  // namespace
+
+TopkLargeIndicesMultiCoreProgramFactory::cached_program_t TopkLargeIndicesMultiCoreProgramFactory::create(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    auto program = tt::tt_metal::CreateProgram();
+
+    const auto& input = tensor_args.input_tensor;
+    auto& indices = tensor_return_value[0];
+    const bool return_values = operation_attributes.return_values;
+    const bool tile_input = input.layout() == Layout::TILE;
+    const bool tile_output = operation_attributes.tile_output;
+    const bool index_u16 = operation_attributes.index_dtype == DataType::UINT16;
+    const bool flex_writer = uses_flex_writer(operation_attributes);
+
+    const uint32_t k = operation_attributes.k;
+    const auto llk_target_k = snap_to_llk_target_k(k);
+    const uint32_t llk_k = to_uint32(llk_target_k);
+    const uint32_t tiles_per_sequence = (llk_k + tt::constants::TILE_HW - 1) / tt::constants::TILE_HW;
+
+    const auto& shape = input.logical_shape();
+    const uint32_t n = shape[shape.rank() - 1];
+    const uint32_t num_rows = flattened_rows_excluding_last_dim(shape);
+    const auto grid = input.device()->compute_with_storage_grid_size();
+    const auto config = compute_column_split_config(k, n, num_rows, grid, operation_attributes.num_slices);
+    TT_FATAL(config.enabled, "topk_large_indices multi-core factory selected for a shape it does not support");
+    const uint32_t num_slices = config.num_slices;
+
+    // The merge tree lives IN PLACE on the slice rectangle: slice i is
+    // rectangle core (i % sx, i / sx) in row-major order; slice 0 (core
+    // (0,0)) is the root and produces the output. Winners keep their
+    // survivor in DST across levels — only the shipped operand crosses the
+    // NoC, once, per losing core.
+    const CoreRange rect({0, 0}, {config.local_grid_x - 1, config.local_grid_y - 1});
+    const CoreRangeSet all_cores(rect);
+    const auto cores = corerange_to_cores(all_cores, std::nullopt, true);
+    TT_FATAL(
+        cores.size() == num_slices,
+        "topk_large_indices column split expected {} tree cores, got {}",
+        num_slices,
+        cores.size());
+    const CoreCoord root_core = cores.front();
+    const CoreRangeSet root_core_set(CoreRange(root_core, root_core));
+    // All rectangle cores except the root run the node compute kernel.
+    std::vector<CoreRange> node_ranges;
+    if (config.local_grid_x > 1) {
+        node_ranges.emplace_back(CoreCoord(1, 0), CoreCoord(config.local_grid_x - 1, 0));
+    }
+    if (config.local_grid_y > 1) {
+        node_ranges.emplace_back(CoreCoord(0, 1), CoreCoord(config.local_grid_x - 1, config.local_grid_y - 1));
+    }
+    TT_FATAL(!node_ranges.empty(), "topk_large_indices merge tree needs at least 2 slices");
+    const CoreRangeSet node_cores_set(node_ranges);
+
+    constexpr uint32_t cb_in = tt::CBIndex::c_0;
+    constexpr uint32_t cb_indices_out = tt::CBIndex::c_1;
+    constexpr uint32_t cb_indices_scratch = tt::CBIndex::c_2;
+    constexpr uint32_t cb_recv = tt::CBIndex::c_3;
+    constexpr uint32_t cb_ship_values = tt::CBIndex::c_5;
+    constexpr uint32_t cb_ship_indices = tt::CBIndex::c_6;
+    constexpr uint32_t cb_neginf_scratch = tt::CBIndex::c_7;
+    // Root-only values output CBs (return_values only).
+    constexpr uint32_t cb_values_out = tt::CBIndex::c_8;
+    constexpr uint32_t cb_values_scratch = tt::CBIndex::c_9;
+    // Root-only tile-padding zero slab (tile_output only).
+    constexpr uint32_t cb_pad_zero = tt::CBIndex::c_10;
+    // TILE-input read staging (all cores, tile input only).
+    constexpr uint32_t cb_stage = tt::CBIndex::c_11;
+
+    const uint32_t input_chunk_bytes = llk_k * input.element_size();
+    const uint32_t input_tile_bytes = tt::constants::TILE_HW * input.element_size();
+    // The unfused sequences travel as opaque 32-bit words (FP32 values /
+    // UINT32 indices packed raw from DST); one 32x32 tile is 4 KB.
+    const uint32_t tile32_bytes = tt::constants::TILE_HW * sizeof(uint32_t);
+    const uint32_t sequence_bytes = tiles_per_sequence * tile32_bytes;
+    constexpr uint32_t row_slice_elements = tt::constants::FACE_WIDTH;
+    const uint32_t source_slices_per_row = llk_k / row_slice_elements;
+    const uint32_t output_slices_per_row = k / row_slice_elements;
+    const uint32_t indices_slice_bytes = row_slice_elements * indices.element_size();
+    const uint32_t indices_row_bytes = k * indices.element_size();
+    // The indices CB carries the raw 32-bit index words the packer produces,
+    // independent of the (possibly narrowed) output tensor dtype.
+    const uint32_t indices_cb_row_bytes = llk_k * static_cast<uint32_t>(sizeof(uint32_t));
+    constexpr uint32_t cb_depth = 2;
+
+    // The recv CB spans the whole rectangle so every core sees the same L1
+    // address (a shipping core derives its winner's destination from its own
+    // copy). Sized to exactly one sequence: capacity IS the level-to-level
+    // backpressure. Created FIRST so the multi-range address has no gaps.
+    const auto recv_cb_config =
+        tt::tt_metal::CircularBufferConfig(2 * sequence_bytes, {{cb_recv, tt::DataFormat::UInt32}})
+            .set_page_size(cb_recv, tile32_bytes);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, recv_cb_config);
+
+    const auto input_cb_config =
+        tt::tt_metal::CircularBufferConfig(
+            cb_depth * tiles_per_sequence * input_tile_bytes, {{cb_in, tt::DataFormat::Float16_b}})
+            .set_page_size(cb_in, input_tile_bytes);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, input_cb_config);
+
+    const auto ship_values_cb_config =
+        tt::tt_metal::CircularBufferConfig(
+            cb_depth * tiles_per_sequence * tile32_bytes, {{cb_ship_values, tt::DataFormat::UInt32}})
+            .set_page_size(cb_ship_values, tile32_bytes);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, ship_values_cb_config);
+
+    const auto ship_indices_cb_config =
+        tt::tt_metal::CircularBufferConfig(
+            cb_depth * tiles_per_sequence * tile32_bytes, {{cb_ship_indices, tt::DataFormat::UInt32}})
+            .set_page_size(cb_ship_indices, tile32_bytes);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, ship_indices_cb_config);
+
+    // Writer-owned scratch for the empty-slice -inf sequence (values + indices).
+    const auto neginf_scratch_cb_config =
+        tt::tt_metal::CircularBufferConfig(2 * sequence_bytes, {{cb_neginf_scratch, tt::DataFormat::UInt32}})
+            .set_page_size(cb_neginf_scratch, tile32_bytes);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, neginf_scratch_cb_config);
+
+    // Root-only output CBs: identical shape to the row-parallel factory's.
+    auto indices_cb_config =
+        tt::tt_metal::CircularBufferConfig(cb_depth * indices_cb_row_bytes, {{cb_indices_out, tt::DataFormat::Float32}})
+            .set_page_size(cb_indices_out, indices_cb_row_bytes);
+    if (llk_target_k == LlkTargetK::K512) {
+        indices_cb_config.set_unpack_face_geometry(cb_indices_out, tt::constants::FACE_HEIGHT, 2);
+    }
+    tt::tt_metal::CreateCircularBuffer(program, root_core_set, indices_cb_config);
+
+    // Also the UINT16 narrowing row when narrowing is requested (see the
+    // row-parallel factory).
+    if (llk_target_k != LlkTargetK::K512 || index_u16) {
+        const auto indices_scratch_cb_config =
+            tt::tt_metal::CircularBufferConfig(indices_row_bytes, {{cb_indices_scratch, tt::DataFormat::Float32}})
+                .set_page_size(cb_indices_scratch, indices_row_bytes);
+        tt::tt_metal::CreateCircularBuffer(program, root_core_set, indices_scratch_cb_config);
+    }
+
+    if (return_values) {
+        create_values_output_cbs(program, root_core_set, llk_target_k, k, cb_values_out, cb_values_scratch);
+    }
+
+    if (tile_output) {
+        const auto pad_cb_config =
+            tt::tt_metal::CircularBufferConfig(pad_zero_slab_bytes, {{cb_pad_zero, tt::DataFormat::UInt32}})
+                .set_page_size(cb_pad_zero, pad_zero_slab_bytes);
+        tt::tt_metal::CreateCircularBuffer(program, root_core_set, pad_cb_config);
+    }
+    if (tile_input) {
+        const uint32_t stage_bytes = (llk_k / row_slice_elements) * 64 + 64;
+        const auto stage_cb_config =
+            tt::tt_metal::CircularBufferConfig(stage_bytes, {{cb_stage, tt::DataFormat::UInt32}})
+                .set_page_size(cb_stage, stage_bytes);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, stage_cb_config);
+    }
+
+    // Pairwise tree flow control (see writer_tree.cpp): ready = "my winner's
+    // recv slot is free", data = "my current partner's sequence landed".
+    const uint32_t ready_sem_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
+    const uint32_t data_sem_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
+
+    // Leaf reader: the row-parallel reader plus a per-core slice offset
+    // (reader_local.cpp is reused unchanged from the gather design;
+    // reader_tile.cpp serves TILE-layout inputs on both factories).
+    std::vector<uint32_t> reader_compile_args;
+    if (tile_input) {
+        reader_compile_args = {cb_in, cb_stage, llk_k / row_slice_elements, tiles_per_sequence};
+    } else {
+        reader_compile_args = {cb_in, input_chunk_bytes, input_tile_bytes, tiles_per_sequence};
+    }
+    interleaved_accessor_args(input).append_to(reader_compile_args);
+    auto reader_kernel = tt::tt_metal::CreateKernel(
+        program,
+        tile_input ? "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/reader_tile.cpp"
+                   : "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/reader_local.cpp",
+        all_cores,
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_args));
+
+    const std::vector<uint32_t> compute_node_compile_args = {cb_in, cb_ship_values, cb_ship_indices, cb_recv, llk_k};
+    auto compute_node_kernel = tt::tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/compute_tree.cpp",
+        node_cores_set,
+        tt::tt_metal::ComputeConfig{// Same DST configuration as the row-parallel compute kernel: the
+                                    // unfused K=2048 merge occupies DEST slots 0..7 (FP32, full sync).
+                                    .fp32_dest_acc_en = true,
+                                    .dst_full_sync_en = true,
+                                    .compile_args = compute_node_compile_args});
+
+    std::vector<uint32_t> compute_root_compile_args = {cb_in, cb_indices_out, cb_recv, llk_k};
+    if (return_values) {
+        compute_root_compile_args.push_back(cb_values_out);
+    }
+    auto compute_root_kernel = tt::tt_metal::CreateKernel(
+        program,
+        return_values ? "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/"
+                        "compute_tree_root_with_values.cpp"
+                      : "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/compute_tree_root.cpp",
+        root_core_set,
+        tt::tt_metal::ComputeConfig{
+            .fp32_dest_acc_en = true, .dst_full_sync_en = true, .compile_args = compute_root_compile_args});
+
+    tt::tt_metal::KernelHandle writer_kernel;
+    if (flex_writer) {
+        const uint32_t idx_es = indices.element_size();
+        const uint32_t indices_page_bytes = tile_output ? tt::constants::TILE_HW * idx_es : indices_row_bytes;
+        const uint32_t values_page_bytes =
+            tile_output ? tt::constants::TILE_HW * values_element_bytes : k * values_element_bytes;
+        std::vector<uint32_t> flex_compile_args = {
+            cb_ship_values,
+            cb_ship_indices,
+            cb_neginf_scratch,
+            cb_recv,
+            ready_sem_id,
+            data_sem_id,
+            tiles_per_sequence,
+            tile32_bytes,
+            cb_indices_out,
+            cb_indices_scratch,
+            indices_page_bytes,
+            source_slices_per_row,
+            output_slices_per_row,
+            cb_values_out,
+            cb_values_scratch,
+            values_page_bytes,
+            cb_pad_zero,
+            tile_output ? k / tt::constants::TILE_WIDTH : 0};
+        interleaved_accessor_args(indices).append_to(flex_compile_args);
+        if (return_values) {
+            interleaved_accessor_args(tensor_return_value[1]).append_to(flex_compile_args);
+        }
+        std::map<std::string, std::string> flex_defines;
+        if (return_values) {
+            flex_defines["FLEX_WITH_VALUES"] = "1";
+        }
+        if (tile_output) {
+            flex_defines["FLEX_OUT_TILE"] = "1";
+        }
+        if (index_u16) {
+            flex_defines["FLEX_INDEX_U16"] = "1";
+        }
+        writer_kernel = tt::tt_metal::CreateKernel(
+            program,
+            "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/writer_tree_flex.cpp",
+            all_cores,
+            tt::tt_metal::WriterDataMovementConfig(flex_compile_args, flex_defines));
+    } else {
+        std::vector<uint32_t> writer_compile_args = {
+            cb_ship_values,
+            cb_ship_indices,
+            cb_neginf_scratch,
+            cb_recv,
+            ready_sem_id,
+            data_sem_id,
+            tiles_per_sequence,
+            tile32_bytes,
+            cb_indices_out,
+            cb_indices_scratch,
+            indices_row_bytes,
+            source_slices_per_row,
+            output_slices_per_row,
+            indices_slice_bytes};
+        if (return_values) {
+            writer_compile_args.push_back(cb_values_out);
+            writer_compile_args.push_back(cb_values_scratch);
+            writer_compile_args.push_back(k * values_element_bytes);
+            writer_compile_args.push_back(row_slice_elements * values_element_bytes);
+        }
+        interleaved_accessor_args(indices).append_to(writer_compile_args);
+        if (return_values) {
+            interleaved_accessor_args(tensor_return_value[1]).append_to(writer_compile_args);
+        }
+        writer_kernel = tt::tt_metal::CreateKernel(
+            program,
+            return_values
+                ? "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/writer_tree_with_values.cpp"
+                : "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/writer_tree.cpp",
+            all_cores,
+            tt::tt_metal::WriterDataMovementConfig(writer_compile_args));
+    }
+
+    TopkLargeIndicesMultiCoreSharedVariables shared{
+        .reader_kernel_id = reader_kernel,
+        .compute_node_kernel_id = compute_node_kernel,
+        .compute_root_kernel_id = compute_root_kernel,
+        .writer_kernel_id = writer_kernel,
+        .cores = cores};
+    set_runtime_args_multi_core(program, shared, input, tensor_return_value, operation_attributes);
+
+    return cached_program_t{std::move(program), std::move(shared)};
+}
+
+void TopkLargeIndicesMultiCoreProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    set_runtime_args_multi_core(
+        cached_program.program,
+        cached_program.shared_variables,
+        tensor_args.input_tensor,
+        tensor_return_value,
+        operation_attributes);
 }
 
 }  // namespace ttnn::operations::experimental::topk_large_indices::program

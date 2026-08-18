@@ -119,8 +119,9 @@ ALWI void topk_xl_rebuild(uint32_t idst, bool ascending) {
  * Programs all of:
  *   * ADDR_MOD_1..7 for the bitonic load/store strides (incl. the +24 / +40 /
  *     +48 stride-folding slots that the inner loops depend on),
- *   * the math-thread MOP Expander with the merge body template (`fused`
- *     selects the body length: 16 for fused, 18 for unfused),
+ *   * the math-thread MOP Expander with the merge body template (16-issue
+ *     body for fused AND for the default macro-scheduled unfused path;
+ *     18 for unfused only when built with -DDISABLE_TOPK_XL_SFPLOADMACRO),
  *   * the SFPU index-tracking config in unfused mode.
  *
  * Because every merge/rebuild/local_sort relies on the ADDR_MOD programming
@@ -213,6 +214,16 @@ ALWI void topk_xl_add_lsb_indices_init() { MATH((llk_math_eltwise_unary_sfpu_top
 template <uint32_t K, uint32_t core_id>
 ALWI void topk_xl_add_lsb_indices(uint32_t idst) {
     MATH((llk_math_eltwise_unary_sfpu_topk_xl_add_lsb_indices<K, APPROX, core_id>(idst)));
+}
+
+/**
+ * Runtime-chunk-id variant of topk_xl_add_lsb_indices: the 5-bit id in index
+ * bits [15:11] is a runtime argument, so one instantiation stamps every chunk
+ * of a fused end-to-end row (chunk_id in 0..31). Same init.
+ */
+template <uint32_t K>
+ALWI void topk_xl_add_lsb_indices_rt(uint32_t idst, uint32_t chunk_id) {
+    MATH((llk_math_eltwise_unary_sfpu_topk_xl_add_lsb_indices_rt<K, APPROX>(idst, chunk_id)));
 }
 
 /**
@@ -333,6 +344,23 @@ ALWI void topk_xl_separate_indices(uint32_t idst) {
 template <uint32_t K>
 ALWI void topk_xl_separate_indices_row_major(uint32_t idst) {
     MATH((llk_math_eltwise_unary_sfpu_topk_xl_separate_indices_row_major<K, false>(idst)));
+}
+
+/**
+ * Fused end-to-end split: runs ONCE per row on the final fused survivor.
+ * Each u16 payload carries [chunk_id 15:11 | within-chunk 10:0]; the global
+ * index chunk_id * K + row-major(within-chunk) is recovered from the stamp
+ * itself — no chunk-base bookkeeping. Pair with
+ * topk_xl_separate_indices_row_major_global_init. Sound only for rows of
+ * <= 32 chunks (the FUSED_E2E factory gate).
+ */
+ALWI void topk_xl_separate_indices_row_major_global_init() {
+    MATH((llk_math_eltwise_unary_sfpu_topk_xl_separate_indices_row_major_global_init<false>()));
+}
+
+template <uint32_t K>
+ALWI void topk_xl_separate_indices_row_major_global(uint32_t idst) {
+    MATH((llk_math_eltwise_unary_sfpu_topk_xl_separate_indices_row_major_global<K, false>(idst)));
 }
 
 template <uint32_t K>
