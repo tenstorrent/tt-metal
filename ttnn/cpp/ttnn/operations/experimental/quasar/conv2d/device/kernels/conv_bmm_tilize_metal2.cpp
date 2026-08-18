@@ -862,13 +862,6 @@ void kernel_main() {
                     }  // for in1_num_subblocks
                     in0_index_subblock_offset += in0_subblock_num_tiles;
                 }
-                // [#48552 DS-DEBUG] kb subblock loop done. UNWRAPPED so each compute thread (TRISC0=UNPACK,
-                // 1=MATH, 2=PACK) prints to its own file -> shows which threads reached the K-block
-                // transition. The hang is between here and kb1's "blk" (the multi-K-block partials
-                // spill/reload/accumulate path, which only runs for nbw>1). Gated h==0.
-                if (in0_block_h_i == 0) {
-                    DPRINT("[DS] kbend kb{}\n", in0_block_w_i);
-                }
                 if (curr_matmul_out_cb == matmul_partials_cb) {
                     if constexpr (!partials_cb_uses_output) {
                         UNPACK(RESTORE_PARTIALS_RD(partials_cb_read_ptr, cb_matmul_partials);)
@@ -957,80 +950,8 @@ void kernel_main() {
                     }
                 }
 
-                // [#48552 DS-DEBUG] pre-pop / post-pop bracket the K-block-boundary input pops.
-                if (in0_block_h_i == 0) {
-                    DPRINT("[DS] pre-pop kb{} enrl{}\n", in0_block_w_i, (uint32_t)enable_reload);
-                }
-#ifdef ARCH_QUASAR
-                // [#48552 / TEN-4746] Guard the K-block-boundary input pops. They were BARE: on Quasar a
-                // bare pop_front lets the unpacker's POP_TILES race past its last pending UNPACR and trap the
-                // unpacker (POP racing WAIT). The trap is PER-CB-BUFFER: draining one CB does NOT cover the
-                // other's POP_TILES (proven -- an in1-only drain left UNPACK wedged at cb_mm_in0.pop_front,
-                // the FIRST pop). So interpose a REAL unpack TDMA (dummy copy_tile of tile 0) before EACH
-                // pop, from THAT CB. srcA starts on in1 (the SrcOrder::Reverse matmul leaves srcA=in1 in
-                // steady state); reconfig to mm_in0 for its copy, back to in1 for in1's, then re-init the
-                // matmul (srcA left on in1). NOP/TTI_NOP are insufficient (LLK-team guidance; mirrors the
-                // partials-pop guards above).
-                //
-                // WHY NO wait_front IS ADDED: cb_mm_in0 / cb_in1 are already wait_front'd ONCE at the K-block
-                // start (~line 610/620) and consumed by the entire subblock matmul loop, then pop'd ONCE here
-                // -- a balanced 1:1 wait/pop per K-block. A second wait_front immediately before the pop would
-                // return instantly (the tiles are still resident, never popped) and does NOT address the trap,
-                // which is the unpacker's POP racing its own pending work -- fixed by an interposed UNPACR,
-                // not a semaphore wait. So a real-TDMA guard is correct; an extra wait_front is not.
-                //
-                // Gated to !last_inner_dim_block: only NON-last K-block pops feed a following K-block (the
-                // kb0->kb1 transition where the downsample hangs). The last K-block's pop is followed by the
-                // untilize/exit and works bare today (the single-K-block stem, nbw=1, passes) -- leave it
-                // untouched so this cannot regress the stem.
-                if (!last_inner_dim_block) {
-                    // [#48552 DS-DEBUG] intra-guard markers (unwrapped -> UNPACK prints). Decisive:
-                    //   no g-mm0copy      -> UNPACK wedged in the mm_in0 copy_tile itself (unpacker cannot
-                    //                        issue ANY UNPACR at the transition; NOT a pop trap)
-                    //   g-mm0copy, no g-mm0pop -> wedged in cb_mm_in0.pop_front (POP_TILES NOT drained by the
-                    //                        preceding copy_tile -> a real UNPACR does not cure this trap)
-                    //   g-mm0pop, no g-in1copy -> in1 copy_tile; etc.
-                    // drain mm_in0, then pop it
-                    reconfig_data_format_srca(in1_cb_id, mm_in0_cb_id);
-                    copy_tile_to_dst_init_short(mm_in0_cb_id);
-                    tile_regs_acquire();
-                    copy_tile(mm_in0_cb_id, /*in_tile_index=*/0, /*dst_tile_index=*/0);
-                    tile_regs_commit();
-                    tile_regs_wait();
-                    tile_regs_release();
-                    if (in0_block_h_i == 0) {
-                        DPRINT("[DS] g-mm0copy kb{}\n", in0_block_w_i);
-                    }
-                    cb_mm_in0.pop_front(in0_block_num_tiles);
-                    if (in0_block_h_i == 0) {
-                        DPRINT("[DS] g-mm0pop kb{}\n", in0_block_w_i);
-                    }
-                    // drain in1, then pop it
-                    reconfig_data_format_srca(mm_in0_cb_id, in1_cb_id);
-                    copy_tile_to_dst_init_short(in1_cb_id);
-                    tile_regs_acquire();
-                    copy_tile(in1_cb_id, /*in_tile_index=*/0, /*dst_tile_index=*/0);
-                    tile_regs_commit();
-                    tile_regs_wait();
-                    tile_regs_release();
-                    if (in0_block_h_i == 0) {
-                        DPRINT("[DS] g-in1copy kb{}\n", in0_block_w_i);
-                    }
-                    cb_in1.pop_front(in1_block_num_tiles);
-                    if (in0_block_h_i == 0) {
-                        DPRINT("[DS] g-in1pop kb{}\n", in0_block_w_i);
-                    }
-                    // restore matmul (srcA already on in1)
-                    matmul_block_init(mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
-                } else
-#endif
-                {
-                    cb_mm_in0.pop_front(in0_block_num_tiles);
-                    cb_in1.pop_front(in1_block_num_tiles);
-                }
-                if (in0_block_h_i == 0) {
-                    DPRINT("[DS] post-pop kb{}\n", in0_block_w_i);
-                }
+                cb_mm_in0.pop_front(in0_block_num_tiles);
+                cb_in1.pop_front(in1_block_num_tiles);
             }  // for in0_num_blocks_w
             if constexpr (matmul_partials_cb == mm_out_cb_id && partials_cb_uses_output) {
                 UNPACK(RESTORE_PARTIALS_RD(partials_cb_read_ptr, cb_matmul_partials));
