@@ -10,7 +10,7 @@
 #
 # Until that is settled, regenerate locally -- it takes ~40 s on CPU:
 #
-#   export PYTHONPATH=/root/tt/CosyVoice:/root/tt/CosyVoice/third_party/Matcha-TTS
+#   export PYTHONPATH=/mnt/CosyVoice:/mnt/CosyVoice/third_party/Matcha-TTS
 #   /root/tt/cosyvoice_env/bin/python ../../scripts/gen_golden.py --mode zero_shot
 #
 # Tests that need a golden skip cleanly when it is absent (see `needs_golden` in

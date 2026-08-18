@@ -12,7 +12,7 @@ side-by-side has its own section.
 
 | | Blackhole `p150a` | Blackhole `p150b` | Wormhole n300 |
 |---|---|---|---|
-| Machine | Tavern | Tiptoe (Quietbox) | Titan (T3000) |
+| Form factor | single card | Quietbox, 4 cards | T3000, 4 cards |
 | Devices | 1 × 32 GB | 4 × 32 GB, one used | 4 × 12 GB, one used |
 | Compute grid | **13 × 10 = 130** | **13 × 10 = 130** | **8 × 8 = 64** |
 | Host | 16 cores, 62 GB | 32 cores, 512 GB | 32 cores, 512 GB |
@@ -63,7 +63,7 @@ Measured on the captured utterance: 164 generated tokens producing 3.27 s of aud
 | Streaming vs non-streamed, mel-space PCC (n300) | `0.9024` | content-equal ✅ |
 | tokens → waveform PCC | `0.9951` | `>= 0.99` ✅ |
 
-† `p150a` rows predate the GroupNorm rewrite and the Wormhole convolution fix below; Tavern has
+† `p150a` rows predate the GroupNorm rewrite and the Wormhole convolution fix below; that board has
 been unavailable since. They are its last measured values on the older code, not a comparison
 against the two rows above it, and are kept rather than deleted because backfilling one board's
 cell from another's is what the cooling note above forbids.
@@ -409,8 +409,8 @@ Wormhole is the architecture the bounty names (*"N150 or N300"*), so it gets a c
 footnote; the second Blackhole board is there because `p150a` became unreachable partway through and
 the substitution is worth being explicit about rather than quietly making.
 
-**Why `p150a` has gaps.** Tavern stayed unavailable through 13 retries over ~25 minutes — longer
-than its daily reboot window — so the CFM trace cache was measured on Tiptoe (`p150b`) instead.
+**Why `p150a` has gaps.** The `p150a` host stayed unavailable through 13 retries over ~25 minutes —
+longer than its daily reboot window — so the CFM trace cache was measured on the `p150b` box instead.
 Before any timing was taken, `p150b` was checked to report `Arch.BLACKHOLE` and the same 13×10 grid;
 it does, and it runs ~5 % slower per token on identical work. **`p150a`'s numbers are kept as
 measured, not replaced.** A missing cell is more honest than a substituted one.
@@ -694,7 +694,7 @@ solves with different conditioning — the test that would catch a stale `_packe
 
 ‡ `p150b` and n300 were re-run on `2026-08-13` at branch head `23d1e63aa85`, which adds two vocoder
 trace tests to `tests/perf/test_trace.py` — hence `157` where the earlier run counted `155`. The
-`p150a` cell is the older count on the older tree; Tavern has been unavailable since, so it is left
+`p150a` cell is the older count on the older tree; that board has been unavailable since, so it is left
 as measured rather than assumed to have gained the same two.
 
 **Every device test now passes on both architectures.** n300 stood at 154 passed / 1 failed from F42
