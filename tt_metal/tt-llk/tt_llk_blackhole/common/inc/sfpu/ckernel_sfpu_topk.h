@@ -270,10 +270,11 @@ TT_ALWAYS_INLINE void topk_cmp_swap_stable_directional()
 
     // Primary key: value compare-exchange.
     TTI_SFPSWAP(0, VC, VD, MODE);
-    TTI_SFPSWAP(0, VC, VD, MODE);
 
-    // Predicate lanes where compared values are exactly equal.
-    TTI_SFPENCC(3, 0, 0, 10);
+    // Predicate lanes where compared values are exactly equal. Lanes-on/flags-true CC state
+    // is an entry invariant established once per LLK entry point (see the STABLE_SORT branch
+    // of _bitonic_topk_{phases_steps,merge,rebuild}) and re-established by the trailing
+    // SFPENCC of every comparator body.
     TTI_SFPXOR(0, VC, VD, 0);
     TTI_SFPSETCC(0, VD, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);
 
@@ -567,6 +568,14 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
     // UInt16-in-32b-DEST: clear garbage high bits before compare-swap (#50215).
     topk_uint16_clear_value_tiles_high_bits();
 
+    if constexpr (STABLE_SORT)
+    {
+        // Establish the lanes-on/flags-true CC entry invariant once; every stable comparator
+        // body re-establishes it via its trailing SFPENCC, and the intervening loads/stores/
+        // transposes/SFPCONFIG writes preserve CC state.
+        TTI_SFPENCC(3, 0, 0, 10);
+    }
+
     // init the replay buffer for local sort if uninitialized
     bool init_load  = (topk_replay_init >= 0) ? true : false;
     bool init_store = (topk_replay_init >= 0) ? true : false;
@@ -788,6 +797,15 @@ inline void _bitonic_topk_merge(const int m_iter, const int k)
     // UInt16-in-32b-DEST: clear garbage high bits before compare-swap (#50215).
     topk_uint16_clear_value_tiles_high_bits();
 
+    if constexpr (STABLE_SORT)
+    {
+        // Establish the lanes-on/flags-true CC entry invariant once, before the quadrant
+        // loops, so it dominates every per-iteration comparator execution; each comparator
+        // body re-establishes it via its trailing SFPENCC, and the intervening loads/stores
+        // preserve CC state.
+        TTI_SFPENCC(3, 0, 0, 10);
+    }
+
     std::uint32_t dst_addr_offset = 0;
     for (int face = 0; face < 2; face++)
     {
@@ -858,6 +876,14 @@ inline void _bitonic_topk_rebuild(const bool idir, const int m_iter, const int k
     // merge requires, misordering equal values on wide multi-core shapes.
     // UInt16-in-32b-DEST: clear garbage high bits before compare-swap (#50215).
     topk_uint16_clear_value_tiles_high_bits();
+
+    if constexpr (STABLE_SORT)
+    {
+        // Establish the lanes-on/flags-true CC entry invariant once; every stable comparator
+        // body re-establishes it via its trailing SFPENCC, and the intervening loads/stores/
+        // transposes/SFPCONFIG writes preserve CC state.
+        TTI_SFPENCC(3, 0, 0, 10);
+    }
 
     // init replay buffer for rebuild iteration 'm_iter' if uninitialized
     bool init_rebuild = (topk_replay_init != m_iter + 1) ? true : false;
