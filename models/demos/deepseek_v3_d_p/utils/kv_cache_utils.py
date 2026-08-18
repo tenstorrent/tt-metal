@@ -370,6 +370,25 @@ def create_kv_chunk_address_table_ds(
     return lookup_table
 
 
+def merged_num_layers(stage_layout):
+    """Layers a merged (all-stage) table config spans: the sum of every stage's owned count.
+
+    Also enforces tt-blaze's missing-layer guard — the stages must tile ``[0, total)`` with no gaps or
+    overlaps, or the table would carry layers no stage ever addresses. compute_layer_split produces a
+    contiguous partition, so this should hold.
+    """
+    total = sum(s["count"] for s in stage_layout)
+    expected = 0
+    for s in sorted(stage_layout, key=lambda s: s["first_layer"]):
+        if s["first_layer"] != expected:
+            raise RuntimeError(
+                f"gathered layer ranges are not contiguous: expected next stage at layer {expected} but got "
+                f"first_layer={s['first_layer']} (stages={[(x['first_layer'], x['count']) for x in stage_layout]})"
+            )
+        expected += s["count"]
+    return total
+
+
 def create_kv_chunk_address_table_kimi(
     config,
     mesh_device,
@@ -424,20 +443,8 @@ def create_kv_chunk_address_table_kimi(
         kvpe_cache.shape[0] == num_users * num_my_layers
     ), f"cache batch dim {kvpe_cache.shape[0]} != num_users({num_users}) * num_my_layers({num_my_layers})"
 
-    # Stages must tile [0, effective_num_layers) contiguously, no gaps/overlaps (tt-blaze's
-    # missing-layer guard). compute_layer_split produces a contiguous partition, so this should hold.
-    effective_num_layers = sum(s["count"] for s in stage_layout)
-    expected = 0
-    for s in sorted(stage_layout, key=lambda s: s["first_layer"]):
-        if s["first_layer"] != expected:
-            raise RuntimeError(
-                f"gathered layer ranges are not contiguous: expected next stage at layer {expected} but got "
-                f"first_layer={s['first_layer']} (stages={[(x['first_layer'], x['count']) for x in stage_layout]})"
-            )
-        expected += s["count"]
-
     # The merged table spans ALL layers (not just this rank's), so size the table to the global total.
-    config.num_layers = effective_num_layers
+    config.num_layers = merged_num_layers(stage_layout)
     lookup_table = ttnn.experimental.disaggregation.KvChunkAddressTable(config)
     return populate_kv_chunk_address_table_kimi(
         lookup_table=lookup_table,
@@ -515,6 +522,15 @@ def populate_kv_chunk_address_table_kimi(
             host_name = f"host-{stage['host_tag']:08x}"  # crc32 tag rebuilt to a string (int-only allgather)
             first = stage["first_layer"]
             count = stage["count"]
+            # A stage's tensor is not always sized to the layers it owns: a cache allocated from the
+            # model's UNSLICED config (the GLM-5.2 cross-layer-reuse index cache) holds every rank's
+            # slots on every rank, each rank writing only its own. The bank round-robin below IS that
+            # physical allocation order, so it must walk all `stride` physical layers -- advancing the
+            # bank/offset cursor through the slots this stage never writes -- and emit an entry only
+            # for the layers the stage owns. stride == count (per-stage tensor) collapses to the
+            # original walk, with every physical layer owned.
+            stride = stage.get("stride", count)
+            base_layer = stage.get("base_layer", first)
             stage_fnids = stage["fnids"]
             for row in range(rows):
                 # Data is replicated across each TP column, so one device group per (stage, SP row).
@@ -525,19 +541,21 @@ def populate_kv_chunk_address_table_kimi(
                 curr_bank_id = 0
                 curr_bank_offset = 0
                 for slot in range(num_users):
-                    for local_layer in range(count):
-                        global_layer = first + local_layer
+                    for physical_layer in range(stride):
+                        global_layer = base_layer + physical_layer
+                        stage_owns_layer = first <= global_layer < first + count
                         for seq_chunk in range(num_chunks_per_seq_len):
                             chunk_token_start = seq_chunk * PREFILL_CHUNK_OUTPUT_TOKENS + row * tokens_per_chunk_local
                             chunk_token_end = chunk_token_start + tokens_per_chunk_local
                             for position in range(
                                 chunk_token_start, chunk_token_end, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
                             ):
-                                location = ttnn.experimental.disaggregation.KvCacheLocation()
-                                location.noc_addr = (curr_bank_id << 32) | (dram_bank_base_addr + curr_bank_offset)
-                                location.size_bytes = chunk_size_bytes
-                                location.device_group_index = group_idx
-                                lookup_table.set(global_layer, position, slot, location, config_id)
+                                if stage_owns_layer:
+                                    location = ttnn.experimental.disaggregation.KvCacheLocation()
+                                    location.noc_addr = (curr_bank_id << 32) | (dram_bank_base_addr + curr_bank_offset)
+                                    location.size_bytes = chunk_size_bytes
+                                    location.device_group_index = group_idx
+                                    lookup_table.set(global_layer, position, slot, location, config_id)
 
                                 curr_bank_id = (curr_bank_id + 1) % num_dram_banks
                                 if curr_bank_id == 0:

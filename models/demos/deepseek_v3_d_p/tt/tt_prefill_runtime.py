@@ -581,11 +581,59 @@ class TtPrefillRuntime:
             self._controller.set_layer_ack_callback(on_layer_complete)
 
     def kv_migration_base_address(self, kv_caches: MlaKvCaches) -> int:
-        """This stage's KV base DRAM address — the engine's per-rank anchor for the migration
-        all-gather (it holds the cache but must not introspect its layout). The pipeline-parallel
-        path migrates the primary KVPE cache, so that is the base; `.kvpe` is an MlaKvCache wrapper
-        rather than a bare tensor, hence `.storage`."""
+        """This stage's primary KV base DRAM address — the engine's single-anchor hook for the
+        migration all-gather (it holds the cache but must not introspect its layout). `.kvpe` is an
+        MlaKvCache wrapper rather than a bare tensor, hence `.storage`. A sparse/DSA model migrates a
+        second cache too: see `kv_migration_stage_anchors`, which the engine prefers."""
         return int(kv_caches.kvpe.storage.buffer_address())
+
+    def kv_migration_stage_anchors(self, kv_caches: MlaKvCaches, first_layer_idx=None, num_my_layers=None):
+        """This stage's migration anchor per merged-table config: KVPE first, then the sparse/DSA
+        index-key cache when present. The engine all-gathers one stage layout per anchor (on ALL ranks)
+        and hands them to `build_kv_chunk_table`.
+
+        The two caches do NOT share a layer-index space, which is the whole reason an anchor is
+        per-cache rather than per-rank:
+
+          * KVPE holds exactly this stage's layers, numbered globally.
+          * The index cache is numbered in COMPACTED full-indexer space (`full_indexer_rank`), since
+            only `full` layers own an indexer and write a slot; `shared` layers reuse a prior full
+            layer's top-k. Under GLM-5.2 cross-layer reuse `allocate_kv_cache` also sizes it from the
+            UNSLICED config, so every rank allocates all `num_full` slots and writes only the ones its
+            own layers compact to — the anchor therefore reports the global stride alongside this
+            stage's owned sub-range.
+        """
+        from models.demos.common.prefill.runners.migration import KvMigrationAnchor
+        from models.demos.deepseek_v3_d_p.tt.mla.indexer import full_indexer_rank, num_full_indexer_layers
+
+        first_layer_idx = self.config.first_layer_idx if first_layer_idx is None else int(first_layer_idx)
+        num_my_layers = self.config.num_layers if num_my_layers is None else int(num_my_layers)
+        anchors = [
+            KvMigrationAnchor.per_stage(self.kv_migration_base_address(kv_caches), first_layer_idx, num_my_layers)
+        ]
+
+        index_cache = kv_caches.index
+        if index_cache is not None:
+            base_addr = int(index_cache.buffer_address())
+            stride = index_cache.shape[0] // self.config.num_users
+            first_full = full_indexer_rank(self.hf_config, first_layer_idx)
+            count_full = full_indexer_rank(self.hf_config, first_layer_idx + num_my_layers) - first_full
+            num_full_global = num_full_indexer_layers(self.hf_config)
+            if stride == count_full:
+                # Sized to this stage (GLM-5.1 / dense DSA: every layer owns an indexer, so the cache
+                # follows the KVPE slicing).
+                anchors.append(KvMigrationAnchor.per_stage(base_addr, first_full, count_full))
+            elif stride == num_full_global:
+                # Sized to the whole model on every rank: physical slot i is compacted layer i
+                # everywhere, so physical layer 0 is compacted rank 0 regardless of the stage.
+                anchors.append(KvMigrationAnchor(base_addr, first_full, count_full, stride, 0))
+            else:
+                raise RuntimeError(
+                    f"index cache holds {stride} layers per slot, matching neither this stage's "
+                    f"{count_full} full-indexer layers nor the model's {num_full_global}; the table "
+                    "cannot place its layers without knowing which layer physical slot 0 is."
+                )
+        return anchors
 
     def build_kv_chunk_table(
         self,
@@ -594,7 +642,7 @@ class TtPrefillRuntime:
         *,
         first_layer_idx: int = 0,
         num_my_layers: Optional[int] = None,
-        stage_layout=None,
+        stage_layouts=None,
     ) -> str:
         """Build + serialize the KV-chunk address table for the engine-owned `MlaKvCaches` to
         `path` and return it.
@@ -605,32 +653,14 @@ class TtPrefillRuntime:
         cache layout; it issues no migration comms.
 
         Multi-rank (pipeline-parallel): this rank owns layers [first_layer_idx, first_layer_idx +
-        num_my_layers). The runner runs the all-ranks all-gather and passes the merged `stage_layout`
-        so ONLY rank 0 builds the table spanning every stage; the single-rank default (stage_layout
-        None) covers config.num_layers == the full model.
+        num_my_layers). The runner runs the all-ranks all-gathers and passes `stage_layouts` — one
+        layout per cache, in config order, from `kv_migration_stage_anchors` — so ONLY rank 0 builds
+        the table spanning every stage. The single-rank default (None) gathers inline.
 
         For a sparse/DSA model (``.index`` present) the result is a single MERGED table describing BOTH
         caches — config 0 = the KVPE cache, config 1 = the index-key cache. A dense model (``.index`` None)
-        → the usual single-config table over the KVPE cache alone. The index-cache merge is single-rank
-        only; the pipeline-parallel path (stage_layout given) migrates the KVPE cache alone."""
+        → the usual single-config table over the KVPE cache alone."""
         from models.demos.deepseek_v3_d_p.tt.runners.kv_chunk_table import build_and_serialize_kv_chunk_table
-
-        # The CROSS-STAGE merge migrates the primary (KVPE) cache only; the sparse/DSA index cache
-        # isn't wired through it yet (port it into _build_and_serialize_merged_kv_chunk_table to add
-        # it) — fail loudly rather than silently drop it.
-        #
-        # A SINGLE-stage layout is not that case: the runner all-gathers one unconditionally whenever
-        # migration is enabled (prefill_runner._serve_request), so a single-galaxy sparse run arrived
-        # here with a 1-element stage_layout and tripped the assert before it could ever reach the
-        # endpoint. The merged builder does not consume stage_layout — it gathers its OWN layout per
-        # cache, since each config needs that cache's DRAM base — so dropping it here is lossless and
-        # keeps the dual-cache table reachable single-rank.
-        if stage_layout is not None and kv_caches.index is not None:
-            assert len(stage_layout) == 1, (
-                "build_kv_chunk_table: index-cache (sparse/DSA) migration is not supported on the "
-                f"pipeline-parallel path yet (got {len(stage_layout)} stages)."
-            )
-            stage_layout = None
 
         return build_and_serialize_kv_chunk_table(
             mesh_device=self.mesh_device,
@@ -645,7 +675,7 @@ class TtPrefillRuntime:
             index_kv_cache=kv_caches.index,
             first_layer_idx=first_layer_idx,
             num_my_layers=num_my_layers,
-            stage_layout=stage_layout,
+            stage_layouts=stage_layouts,
         )
 
     def read_slot_kv(self, kv_caches: MlaKvCaches, slot: int):

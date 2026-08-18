@@ -6,7 +6,7 @@
 The RUNNER owns the control flow; this module provides the generic (model-free) pieces and the model
 runtime owns the table build. The split for a migration bring-up:
 
-    1. deliver_device_map_and_gather_stage_layout(...)   # ALL RANKS: deliver local FNID->UMD map to
+    1. deliver_device_map_and_gather_stage_layouts(...)  # ALL RANKS: deliver local FNID->UMD map to
                                                           #   the co-located worker + all-gather barrier
     2. runtime.build_kv_chunk_table(kv_cache, path, ...) # RANK 0: model builds + serializes the table
                                                           #   (via serialize_kv_chunk_table here)
@@ -29,12 +29,50 @@ import sys
 import time
 import zlib
 from ctypes import c_int32
+from typing import NamedTuple
 
 from loguru import logger
 
 import ttnn
 
 _DEFAULT_DEVICE_MAP_FILE = "/tmp/prefill_device_map.txt"
+
+
+class KvMigrationAnchor(NamedTuple):
+    """One migratable device cache, as the model runtime describes it to the engine.
+
+    A model may own SEVERAL physical caches (a sparse/DSA model has the MLA KVPE cache plus the
+    lightning-indexer key cache) and they need not share a layer-index space, so each cache is
+    anchored separately -- one anchor per config of the merged table, in config order.
+
+    An anchor separates the layers a stage OWNS from the tensor it owns them in, because the two can
+    differ: a cache allocated from the model's UNSLICED config holds every rank's slots on every rank
+    (each rank writing only its own), so walking it needs the physical stride while the table needs
+    the owned range.
+
+    base_addr:       DRAM base address of THIS rank's tensor.
+    first_layer_idx: first layer this stage owns, in THIS cache's layer-index space (which is the
+                     compacted full-indexer space for a cross-layer-reuse index cache, not the
+                     model's global layer numbering).
+    num_my_layers:   how many layers this stage owns.
+    stride_layers:   physical layers per slot in this rank's tensor -- how far the address math must
+                     walk. Equals num_my_layers for a per-stage tensor, larger for a globally sized one.
+    base_layer_idx:  the layer index physical layer 0 corresponds to; turns a physical layer into an
+                     index-space one.
+    """
+
+    base_addr: int
+    first_layer_idx: int
+    num_my_layers: int
+    stride_layers: int
+    base_layer_idx: int
+
+    @classmethod
+    def per_stage(cls, base_addr, first_layer_idx, num_my_layers):
+        """Anchor for a tensor sized to exactly this stage's layers -- the common case (the KVPE
+        cache, and any single-cache model): stride is the owned count and physical layer 0 is the
+        stage's first layer."""
+        return cls(int(base_addr), int(first_layer_idx), int(num_my_layers), int(num_my_layers), int(first_layer_idx))
 
 
 def migration_file_export_enabled() -> bool:
@@ -300,26 +338,22 @@ def export_device_map_to_file(mesh_device, mesh_shape, path: str) -> str:
     return path
 
 
-def export_device_map_file_and_gather_stage_layout(
-    mesh_device, kv_base_addr, mesh_shape, first_layer_idx, num_my_layers, device_map_path: str
-):
-    """ALL RANKS: file-export counterpart of :func:`deliver_device_map_and_gather_stage_layout` —
+def export_device_map_file_and_gather_stage_layouts(mesh_device, anchors, mesh_shape, device_map_path: str):
+    """ALL RANKS: file-export counterpart of :func:`deliver_device_map_and_gather_stage_layouts` —
     drop the local FNID->UMD map to a host-local text file instead of pushing it to a co-located
-    worker, then join the same collective all-gather. Returns the gathered ``stage_layout``."""
+    worker, then join the same collective all-gather. Returns one gathered layout per anchor."""
     export_device_map_to_file(mesh_device, mesh_shape, device_map_path)
-    return allgather_kv_stage_layout(mesh_device, kv_base_addr, mesh_shape, first_layer_idx, num_my_layers)
+    return allgather_kv_stage_layouts(mesh_device, anchors, mesh_shape)
 
 
-def deliver_device_map_and_gather_stage_layout(
-    mesh_device, kv_base_addr, mesh_shape, first_layer_idx, num_my_layers, rank
-):
+def deliver_device_map_and_gather_stage_layouts(mesh_device, anchors, mesh_shape, rank):
     """ALL RANKS run this (the runner drives it for every rank). Deliver THIS rank's local FNID->UMD
     device map to its co-located worker, then join the collective all-gather that merges every stage
-    into one table. Returns the gathered ``stage_layout`` (the runner passes it to rank 0's
-    ``runtime.build_kv_chunk_table``; non-rank-0 callers just needed to join the collective).
+    into one table. Returns the gathered layouts, one per anchor (the runner passes them to rank
+    0's ``runtime.build_kv_chunk_table``; non-rank-0 callers just needed to join the collective).
 
-    ``kv_base_addr`` is this stage's KV base address, supplied by the model via
-    ``runtime.kv_migration_base_address`` -- the engine never introspects the cache struct itself.
+    ``anchors`` are this stage's per-cache migration anchors, supplied by the model via
+    ``runtime.kv_migration_stage_anchors`` -- the engine never introspects the cache struct itself.
 
     The delivery happens BEFORE the gather so every rank's map is in place before rank 0 SET_TABLEs;
     the all-gather doubles as the barrier that guarantees it. The gather is an MPI collective -- EVERY
@@ -327,7 +361,7 @@ def deliver_device_map_and_gather_stage_layout(
     """
     device_map = _build_device_map(mesh_device, mesh_shape)
     _deliver_local_device_map(device_map, rank)
-    return allgather_kv_stage_layout(mesh_device, kv_base_addr, mesh_shape, first_layer_idx, num_my_layers)
+    return allgather_kv_stage_layouts(mesh_device, anchors, mesh_shape)
 
 
 def publish_serialized_table_and_wait_ready(*, table_path: str, wait_ready_timeout_ms: int = 120_000):
@@ -336,7 +370,7 @@ def publish_serialized_table_and_wait_ready(*, table_path: str, wait_ready_timeo
 
     The table is built + serialized by the model runtime (``runtime.build_kv_chunk_table`` — the model
     owns the cache layout / block-cyclic address math), and the runner runs the all-ranks device-map
-    delivery + all-gather barrier (``deliver_device_map_and_gather_stage_layout``) FIRST, so by the
+    delivery + all-gather barrier (``deliver_device_map_and_gather_stage_layouts``) FIRST, so by the
     time this attaches the endpoint ``MigrationLayerClient`` on the master cmd/table/resp queues and
     SET_TABLEs, every rank's local device map has landed and the worker can reach WORKER_READY.
     """
@@ -365,7 +399,30 @@ def _host_tag_int():
     return zlib.crc32(socket.gethostname().encode()) & 0x7FFFFFFF
 
 
-def allgather_kv_stage_layout(mesh_device, kv_base_addr, mesh_shape, first_layer_idx, num_my_layers):
+def allgather_kv_stage_layouts(mesh_device, anchors, mesh_shape):
+    """COLLECTIVE (all ranks): :func:`allgather_kv_stage_layout` once per anchor, in anchor order.
+
+    EVERY rank must pass the same number of anchors in the same order: each anchor costs a fixed
+    sequence of allgathers, so an asymmetric anchor list desynchronizes the communicator (a rank
+    would read another anchor's gather as its own, or block forever).
+    """
+    return [
+        allgather_kv_stage_layout(
+            mesh_device,
+            anchor.base_addr,
+            mesh_shape,
+            anchor.first_layer_idx,
+            anchor.num_my_layers,
+            stride_layers=anchor.stride_layers,
+            base_layer_idx=anchor.base_layer_idx,
+        )
+        for anchor in anchors
+    ]
+
+
+def allgather_kv_stage_layout(
+    mesh_device, kv_base_addr, mesh_shape, first_layer_idx, num_my_layers, stride_layers=None, base_layer_idx=None
+):
     """COLLECTIVE (all ranks): all-gather each rank's pipeline-STAGE layout so one merged table can
     span every layer across every host -- tt-blaze's layer->mesh merge strategy.
 
@@ -378,20 +435,27 @@ def allgather_kv_stage_layout(mesh_device, kv_base_addr, mesh_shape, first_layer
       * its layer range ``(first_layer_idx, num_my_layers)`` -- the analog of tt-blaze's my_layer_id
       * KV-cache base address (64-bit, split lo/hi for the 32-bit int gather)
       * usable DRAM bank count (harvested parts differ, so gather it rather than assume)
+      * the tensor's physical layer stride and the index its physical layer 0 maps to, which are the
+        owned range itself unless the cache is sized beyond this stage (see :class:`KvMigrationAnchor`)
       * a per-host tag (see :func:`_host_tag_int`)
       * the ``(mesh_id, chip_id)`` of every ``(row, col)`` fabric node in its FULL mesh
 
     EVERY rank must call this with identical ``mesh_shape`` (the per-(row,col) loop must be symmetric
     for the collective to line up). Returns a per-rank list of stage dicts:
-    ``{rank, first_layer, count, base_addr, num_banks, host_tag, fnids[row][col]}``.
+    ``{rank, first_layer, count, stride, base_layer, base_addr, num_banks, host_tag, fnids[row][col]}``.
     """
     rows = mesh_shape[0]
     cols = mesh_shape[1]
     base_addr = int(kv_base_addr)
     num_banks = get_num_dram_banks(mesh_device)
+    # Per-stage tensor is the default: it holds exactly the layers the stage owns, at their own offset.
+    stride_layers = num_my_layers if stride_layers is None else stride_layers
+    base_layer_idx = first_layer_idx if base_layer_idx is None else base_layer_idx
 
     all_first = ttnn.distributed_context_allgather_int(int(first_layer_idx))
     all_count = ttnn.distributed_context_allgather_int(int(num_my_layers))
+    all_stride = ttnn.distributed_context_allgather_int(int(stride_layers))
+    all_base_layer = ttnn.distributed_context_allgather_int(int(base_layer_idx))
     # allgather_int carries a SIGNED int32, but a KV base word can set bit 31 (a per-rank buffer
     # landing >= 2 GB in a ~3.98 GB DRAM bank), overflowing the binding. c_int32 reinterprets the
     # low 32 bits as two's-complement, keeping the raw bits; the receiver re-masks with 0xFFFFFFFF.
@@ -423,6 +487,8 @@ def allgather_kv_stage_layout(mesh_device, kv_base_addr, mesh_shape, first_layer
                 "rank": rk,
                 "first_layer": all_first[rk],
                 "count": all_count[rk],
+                "stride": all_stride[rk],
+                "base_layer": all_base_layer[rk],
                 "base_addr": base,
                 "num_banks": all_banks[rk],
                 "host_tag": all_host[rk],

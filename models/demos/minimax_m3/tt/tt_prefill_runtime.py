@@ -439,17 +439,18 @@ class TtPrefillRuntime:
         *,
         first_layer_idx: int = 0,
         num_my_layers: Optional[int] = None,
-        stage_layout=None,
+        stage_layouts=None,
     ) -> str:
         """Build + serialize M3's multi-config KV chunk address table (k_h0..N, v_h0..N, index_k) to
         ``path`` and return it. The engine then PUBLISHES it to the migration worker (this issues no
         comms). Called by the runner when PREFILL_ENABLE_MIGRATION=1 / PREFILL_MOCK_MIGRATION=1.
 
         Single-rank only: this describes the whole-model cache and has no cross-stage merge, so a
-        gathered layout spanning more than this rank's stage is rejected rather than silently dropped."""
-        if stage_layout is not None and len(stage_layout) > 1:
+        gathered layout spanning more than this rank's stage is rejected rather than silently dropped.
+        ``stage_layouts`` holds one gathered layout per anchored cache; M3 anchors only the K tensor."""
+        if stage_layouts and len(stage_layouts[0]) > 1:
             raise NotImplementedError(
-                f"MiniMax-M3 KV migration is single-rank only; got a {len(stage_layout)}-stage layout. "
+                f"MiniMax-M3 KV migration is single-rank only; got a {len(stage_layouts[0])}-stage layout. "
                 "The multi-config (per head-shard) table has no cross-stage merge."
             )
         from models.demos.minimax_m3.tt.runners.kv_chunk_table import build_and_serialize_kv_chunk_table
