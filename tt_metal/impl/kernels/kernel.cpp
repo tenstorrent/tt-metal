@@ -33,7 +33,6 @@
 #include <umd/device/types/arch.hpp>
 #include "common/stable_hash.hpp"
 #include "kernel.hpp"
-#include "impl/program/runtime_args_data.hpp"
 #include <impl/debug/watcher_server.hpp>
 
 namespace tt::tt_metal {
@@ -779,7 +778,7 @@ void Kernel::set_runtime_args(const CoreCoord& logical_core, stl::Span<const uin
             user_arg_count,
             runtime_args.size());
         std::memcpy(
-            detail::RuntimeArgsDataAccess::ptr(this->core_to_runtime_args_data_[logical_core.x][logical_core.y]),
+            this->core_to_runtime_args_data_[logical_core.x][logical_core.y].data(),
             runtime_args.data(),
             runtime_args.size() * sizeof(uint32_t));
     }
@@ -821,9 +820,9 @@ void Kernel::set_runtime_args_count(CoreRangeSet& core_ranges, uint32_t count) {
                     continue;
                 }
 
-                TT_ASSERT(count >= core_to_runtime_args_data_[x][y].size());
-                detail::RuntimeArgsDataAccess::count(core_to_runtime_args_data_[x][y]) =
-                    count - watcher_count_word_offset_;
+                auto& rta = core_to_runtime_args_data_[x][y];
+                TT_ASSERT(count >= rta.size());
+                rta = RuntimeArgsData{rta.data(), count - watcher_count_word_offset_};
             }
         }
     }
@@ -833,7 +832,8 @@ void Kernel::set_common_runtime_args_count(uint32_t count) {
     TT_ASSERT(count >= this->common_runtime_args_.size());
 
     this->common_runtime_args_count_ = count;
-    detail::RuntimeArgsDataAccess::count(this->common_runtime_args_data_) = count - watcher_count_word_offset_;
+    this->common_runtime_args_data_ =
+        RuntimeArgsData{this->common_runtime_args_data_.data(), count - watcher_count_word_offset_};
 }
 
 bool Kernel::is_idle_eth() const { return this->programmable_core_type_ == HalProgrammableCoreType::IDLE_ETH; }
