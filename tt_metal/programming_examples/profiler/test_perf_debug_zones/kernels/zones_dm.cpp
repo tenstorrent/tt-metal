@@ -102,6 +102,7 @@
 
 namespace stv {
 constexpr uint32_t kHash = 0x1234u;
+static uint32_t g_scratch_w = 0;
 using namespace kernel_profiler;
 // Clone of the atomic close path with one line removed per variant (see brackets below).
 inline __attribute__((always_inline)) void emit_variant(uint64_t start, bool do_dur, bool do_sticky, bool do_credit) {
@@ -136,7 +137,32 @@ inline __attribute__((always_inline)) uint64_t rd64() {
     kernel_profiler::read_wall_clock(hi, lo);
     return (static_cast<uint64_t>(hi) << 32) | lo;
 }
+inline __attribute__((always_inline)) void three_stores(uint32_t a, uint32_t b, uint32_t c) {
+    volatile uint32_t* scr = reinterpret_cast<volatile uint32_t*>(0x80000);
+    scr[g_scratch_w % 512u] = a;
+    g_scratch_w++;
+    scr[g_scratch_w % 512u] = b;
+    g_scratch_w++;
+    scr[g_scratch_w % 512u] = c;
+    g_scratch_w++;
+}
+inline __attribute__((always_inline)) void dram_marker(uint32_t timer_id) {
+    volatile uint32_t* scr = reinterpret_cast<volatile uint32_t*>(0x80000);
+    volatile tt_reg_ptr uint32_t* p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
+    if (g_scratch_w + 2u < 512u) {
+        scr[g_scratch_w] =
+            0x80000000u | ((timer_id & 0x7FFFFu) << 12) | (p_reg[kernel_profiler::WALL_CLOCK_HIGH_INDEX] & 0xFFFu);
+        scr[g_scratch_w + 1] = p_reg[kernel_profiler::WALL_CLOCK_LOW_INDEX];
+        g_scratch_w += 2u;
+    } else {
+        g_scratch_w = 0;
+    }
+}
 }  // namespace stv
+struct ZDramClone {
+    __attribute__((always_inline)) ZDramClone() { stv::dram_marker(0x111u); }
+    __attribute__((always_inline)) ~ZDramClone() { stv::dram_marker(0x222u); }
+};
 struct ZCtorOnly {
     uint64_t s;
     __attribute__((always_inline)) ZCtorOnly() { s = stv::rd64(); }
@@ -221,6 +247,20 @@ void kernel_main() {
         DeviceZoneScopedN(ZTAG "_STNOCRD");
         for (uint32_t i = 0; i < (uint32_t)N_ITERS; i++) {
             ZNoCredit z{};
+            SELFTIME_SPIN();
+        }
+    }
+    {  // faithful clone of the DRAM-push backend's zone (2 markers), into scratch L1
+        DeviceZoneScopedN(ZTAG "_STDRAM");
+        for (uint32_t i = 0; i < (uint32_t)N_ITERS; i++) {
+            ZDramClone z{};
+            SELFTIME_SPIN();
+        }
+    }
+    {  // just our record's 3 volatile L1 stores + index math, nothing else
+        DeviceZoneScopedN(ZTAG "_STL1SW");
+        for (uint32_t i = 0; i < (uint32_t)N_ITERS; i++) {
+            stv::three_stores(0x5234u, 42u, 7u);
             SELFTIME_SPIN();
         }
     }
