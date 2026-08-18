@@ -853,6 +853,7 @@ def neighborhood_attention_3d_op_sp_w_sharded(
     scale: float | None = None,
     tp_axis: int | None = None,
     heads_presharded: bool = False,
+    flat_seq: bool = False,
 ) -> ttnn.Tensor:
     """SP-over-W with SHARDED input AND output, for full-stage spatial parallelism.
 
@@ -880,7 +881,15 @@ def neighborhood_attention_3d_op_sp_w_sharded(
     mesh = q.device()
     sp = int(list(mesh.shape)[sp_axis])
     t_full, h_full, w_full = dims
-    batch, t, h, w_local, heads, head_dim = tuple(q.shape)
+    if flat_seq:
+        # q/k/v arrive as the (B, NH, S, HD) TILE that nlp_create_qkv_heads emits, S in (t,h,w)
+        # order, and the result comes back as (tokens, NH*HD). Building the 6-D volume the other
+        # backends take costs a permute in and two more out for a reorder of S alone.
+        assert heads_presharded, "flat_seq expects the caller's heads to be presharded"
+        batch, heads, _seq_in, head_dim = tuple(q.shape)
+        t, h, w_local = t_full, h_full, w_full // sp
+    else:
+        batch, t, h, w_local, heads, head_dim = tuple(q.shape)
     assert batch == 1, f"batched NA3D is not implemented; got batch={batch}"
     assert (t, h) == (t_full, h_full), f"q dims {(t, h)} != full {(t_full, h_full)}"
     assert w_local * sp == w_full, f"W={w_full} must split evenly over sp={sp} (got W_local={w_local})"
@@ -923,7 +932,17 @@ def neighborhood_attention_3d_op_sp_w_sharded(
     # a pure host reorder: the op decodes coords from the grid arg, agnostic to which axis is which.
     t_inner = os.environ.get("DIFFVAE_SP_TINNER", "1") == "1"
 
+    def to_seq_flat(x: ttnn.Tensor, w_: int) -> ttnn.Tensor:
+        """(B, NH, S, HD) T-outer -> the same, W-outer. One permute; both reshapes are views."""
+        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+        x = ttnn.reshape(x, (heads, t_full, h_full, w_, head_dim))
+        x = ttnn.permute(x, (0, 3, 2, 1, 4) if t_inner else (0, 3, 1, 2, 4))
+        x = ttnn.reshape(x, (batch, heads, w_ * t_full * h_full, head_dim))
+        return ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+
     def to_seq(x: ttnn.Tensor, w_: int) -> ttnn.Tensor:
+        if flat_seq:
+            return to_seq_flat(x, w_)
         x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
         x = ttnn.reshape(x, (batch, t_full, h_full, w_, width))
         # (B, w_, H, T, width) [T innermost] or (B, w_, T, H, width) [H innermost].
@@ -1007,6 +1026,19 @@ def neighborhood_attention_3d_op_sp_w_sharded(
             )
         heads = full_heads
         width = heads * head_dim
+
+    if flat_seq:
+        # Straight to (tokens, NH*HD): one permute puts T,H,W back in order and heads next to
+        # head_dim, so the caller's out-projection reads the result as a view.
+        attended = ttnn.to_layout(attended, ttnn.ROW_MAJOR_LAYOUT)
+        if t_inner:
+            attended = ttnn.reshape(attended, (heads, w_local, h_full, t_full, head_dim))
+            attended = ttnn.permute(attended, (3, 2, 1, 0, 4))  # (T, H, W_local, NH, HD)
+        else:
+            attended = ttnn.reshape(attended, (heads, w_local, t_full, h_full, head_dim))
+            attended = ttnn.permute(attended, (2, 3, 1, 0, 4))  # (T, H, W_local, NH, HD)
+        flat = ttnn.reshape(attended, (t_full * h_full * w_local, heads * head_dim))
+        return ttnn.to_layout(flat, ttnn.TILE_LAYOUT)
 
     # (B, NH, seq_local, HD) -> W-outer volume -> (B, T, H, W_local, width), sharded. The un-flatten
     # must mirror to_seq's axis order: (w,h,t) when t_inner, else (w,t,h).

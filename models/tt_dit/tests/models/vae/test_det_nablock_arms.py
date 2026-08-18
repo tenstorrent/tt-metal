@@ -32,6 +32,7 @@ FLAGS = (
     "DIFFVAE_DET_FUSED_QKV",
     "DIFFVAE_DET_COLPAR_QKV",
     "DIFFVAE_DET_FUSED_ROPE",
+    "DIFFVAE_DET_FLAT_SEQ",
     "DIFFVAE_DET_FUSED_SWIGLU",
     "DIFFVAE_DET_TP_MLP",
 )
@@ -42,6 +43,12 @@ ARMS = {
     "fused_swiglu": ("DIFFVAE_DET_FUSED_SWIGLU",),
     "tp_mlp": ("DIFFVAE_DET_TP_MLP",),
     "recommended": ("DIFFVAE_DET_COLPAR_QKV", "DIFFVAE_DET_FUSED_ROPE", "DIFFVAE_DET_FUSED_SWIGLU"),
+    "flat_seq": (
+        "DIFFVAE_DET_COLPAR_QKV",
+        "DIFFVAE_DET_FUSED_ROPE",
+        "DIFFVAE_DET_FUSED_SWIGLU",
+        "DIFFVAE_DET_FLAT_SEQ",
+    ),
 }
 
 #: (label, dim, kernel, full dims, blocks in that stage) for the W-sharded deterministic stages.
@@ -98,6 +105,7 @@ def _build(mesh, dim, kernel, enabled: tuple[str, ...]):
     assert block.attn.colpar_qkv is colpar
     assert block.attn.fused_qkv is (colpar or "DIFFVAE_DET_FUSED_QKV" in enabled)
     assert block.attn.fused_rope is ("DIFFVAE_DET_FUSED_ROPE" in enabled)
+    assert block.attn.flat_seq is ("DIFFVAE_DET_FLAT_SEQ" in enabled)
     assert block.mlp.tp_mlp is tp_mlp
     assert block.mlp.fused is (tp_mlp or "DIFFVAE_DET_FUSED_SWIGLU" in enabled)
     return block

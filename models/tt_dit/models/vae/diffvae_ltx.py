@@ -271,6 +271,12 @@ class NeighborhoodAttention(Module):
         # tables that form implies. Applied while still TILE, which is also what lets q and k skip
         # the ROW_MAJOR trip the hand-rolled version required.
         self.fused_rope = self.fused_qkv and os.environ.get("DIFFVAE_DET_FUSED_ROPE") == "1"
+        # DIFFVAE_DET_FLAT_SEQ=1: hand the attention the (B, NH, S, HD) that create_heads emits and
+        # take (tokens, dim) back, instead of routing through the 6-D volume its other backends
+        # take. The volume is an interface, not a computation: to_seq tears down what to_volume just
+        # built, and the round trip copies q/k/v three times where the reorder needs one.
+        # Needs the fused RoPE, which is the only form that leaves q/k in TILE (B, NH, S, HD).
+        self.flat_seq = self.fused_rope and os.environ.get("DIFFVAE_DET_FLAT_SEQ") == "1"
         self._fused_rope_cache: dict = {}
         self.tp = int(list(mesh_device.shape)[tp_axis]) if tp_axis is not None else 1
         if self.fused_qkv:
@@ -413,6 +419,29 @@ class NeighborhoodAttention(Module):
                 # create_heads emits (1, heads, tokens, head_dim); the volume wants heads innermost.
                 part = _consume(part, ttnn.permute, (0, 2, 1, 3))
             return ttnn.reshape(part, shape)
+
+        if self.flat_seq:
+            # The attention takes the (B, NH, S, HD) it was handed and returns (tokens, dim), so the
+            # volume never exists: building it costs a permute here and two more to undo, for a
+            # reorder of the sequence axis that one permute inside does on its own.
+            attended = neighborhood_attention_3d_op_sp_w_sharded(
+                q,
+                k,
+                v,
+                dims=(t, h, w * int(list(q.device().shape)[self.sp_axis])),
+                kernel_size=self.kernel_size,
+                sp_axis=self.sp_axis,
+                ccl_manager=self.ccl_manager,
+                scale=1.0,
+                tp_axis=self.tp_axis,
+                heads_presharded=True,
+                flat_seq=True,
+            )
+            for part in (q, k, v):
+                ttnn.deallocate(part)
+            out = self.proj(attended)
+            ttnn.deallocate(attended)
+            return out
 
         q, k, v = (to_volume(part) for part in (q, k, v))
         if not self.fused_rope:
