@@ -31,7 +31,7 @@
 // now -- the load is indexed by block alone -- so the columns are redundant
 // copies; index the load per column too to make them independent.
 
-#include <tt/unified>
+#include <tt/unified/core>
 
 namespace u = tt::unified;
 

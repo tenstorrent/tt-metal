@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// Definitions for the core API declared in tt/unified_api.h, targeting the
+// Definitions for the core API declared in tt/unified/api.h, targeting the
 // Metal v1 programming model (Wormhole / Blackhole: 2 DM threads + a compute
 // thread that metal splits three ways).
 //
-// Include <tt/unified>, not this header directly.
+// Include <tt/unified/core>, not this header directly.
 
 #pragma once
 
-#include <tt/unified_api.h>
+#include <tt/unified/api.h>
 
 namespace tt {
 namespace unified {
