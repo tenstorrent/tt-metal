@@ -1299,8 +1299,30 @@ MatmulProgramConfig create_simple_matmul_program_config(
                 per_core_M, per_core_N, /*M_eq_h=*/false, /*N_eq_w=*/false, fp32_dest_acc_en);
             out_subblock_h = std::get<0>(subblock_hw);
             out_subblock_w = std::get<1>(subblock_hw);
-            if (out_subblock_w != per_core_N) {
-                out_subblock_h = 1;
+            // A sharded out CB aliases the shard, so the compute kernel's pack order is the shard
+            // layout; validation requires out_subblock_w == per_core_N || out_subblock_h == 1.
+            // Interleaved output has a writer that repositions tiles and needs no such rule.
+            // Prefer a full-width subblock (h > 1 keeps in1 reuse) over a one-row strip.
+            if (mem_config.is_sharded() && out_subblock_w != per_core_N) {
+                const uint32_t max_subblock_tiles = fp32_dest_acc_en ? 4 : 8;
+                uint32_t full_width_h = 0;
+                if (per_core_N <= max_subblock_tiles) {
+                    for (uint32_t h = max_subblock_tiles / per_core_N; h > 1; --h) {
+                        if (per_core_M % h == 0) {
+                            full_width_h = h;
+                            break;
+                        }
+                    }
+                }
+                if (full_width_h > 0) {
+                    out_subblock_h = full_width_h;
+                    out_subblock_w = per_core_N;
+                } else {
+                    // per_core_N exceeds dest, or no h > 1 divides per_core_M: widest w at h == 1.
+                    out_subblock_h = 1;
+                    out_subblock_w = std::get<1>(bmm_op_utils::get_matmul_subblock_params(
+                        /*per_core_M=*/1, per_core_N, /*M_eq_h=*/false, /*N_eq_w=*/false, fp32_dest_acc_en));
+                }
             }
             if (all_dram_interleaved) {
                 in0_block_w = !transpose_mcast ? (Kt % num_cores_x == 0 ? Kt / num_cores_x : 1)
