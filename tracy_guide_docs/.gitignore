@@ -1,0 +1,7 @@
+# Local profiler snapshots can be many gigabytes. Keep the guide and analyzer,
+# but do not accidentally commit copied raw artifacts.
+captures/*.csv
+logs/*.csv
+
+# Local isolated installation used to generate tt-perf-report examples.
+.tt-perf-report-venv/

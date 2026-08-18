@@ -1,0 +1,12 @@
+Detected CSV format: v2.1 (with device arch and worker core count)
+Using architecture from CSV: blackhole
+Architecture: blackhole, Worker cores: 120
+Sorting CSV by 'HOST START TS' column...
+Using operations after 'start'.
+Using operations until 'stop'.
+Detected data from 4 devices. Merging device data...
+Writing CSV output to tracy_guide_docs/tt_perf_report/gemma4-prefill-detailed.csv
+Overall DRAM roofline (modeled ops): 38.1% (195 GB/s)
+Warning: Unclassified operation 'PagedFillCacheDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Writing CSV stacked report to tracy_guide_docs/tt_perf_report/gemma4-prefill-by-op.csv
+Plotting PNG stacked report to tracy_guide_docs/tt_perf_report/gemma4-prefill-by-op.png
