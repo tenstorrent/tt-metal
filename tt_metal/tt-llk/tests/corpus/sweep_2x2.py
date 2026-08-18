@@ -143,7 +143,8 @@ OFF_FLAGS = (
     "-mno-tt-tensix-optimize-ccmask "
     "-mno-tt-tensix-optimize-interlock-schedule "
     "-mno-tt-tensix-optimize-transp-involution "
-    "-mno-tt-tensix-optimize-replay-exec-record"
+    "-mno-tt-tensix-optimize-replay-exec-record "
+    "-mno-tt-tensix-optimize-counted-row-formation"
 )
 ON_FLAGS = (
     "-mtt-tensix-optimize-latency-schedule "
@@ -169,7 +170,13 @@ ON_FLAGS = (
     # replay-exec-record (exec-while-record capture; fire witness =
     # sigmoidappx 33->32 launch shape).
     "-mtt-tensix-optimize-transp-involution "
-    "-mtt-tensix-optimize-replay-exec-record"
+    "-mtt-tensix-optimize-replay-exec-record "
+    # Lane BM (next pin): counted-row parameterized formation (fire
+    # witness = the welford perf body dump: one 5-member parameterized
+    # record, 7 clones, body issue census 234 -> 218; dg fire twins in
+    # sfpi-gcc counted-row-formation-*).  MERGE-ORDER: this line lands
+    # only with the pin cycle whose toolchain accepts the flag.
+    "-mtt-tensix-optimize-counted-row-formation"
     # M3/prgm-const is NOT in the ON set (un-shipped after pin 9's nightly):
     # its only engagement channel was the trusted TTREGION source markers in
     # the LLK headers, and trusted source annotation of the consumed library
@@ -196,6 +203,7 @@ KNOBS = {
     "interlock-schedule": "-mtt-tensix-optimize-interlock-schedule",
     "transp-involution": "-mtt-tensix-optimize-transp-involution",
     "replay-exec-record": "-mtt-tensix-optimize-replay-exec-record",
+    "counted-row-formation": "-mtt-tensix-optimize-counted-row-formation",
 }
 HARNESS_TOOLCHAIN = TESTS / "sfpi"  # untracked symlink the harness hardcodes
 DEVICE_LOCK = "/tmp/tt-device.lock"
