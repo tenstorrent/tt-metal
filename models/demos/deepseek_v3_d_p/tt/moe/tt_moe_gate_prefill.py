@@ -267,6 +267,81 @@ class TtMoEGateConfig:
         }
     )
 
+    # 2D program configs, used only when in0 arrives INTERLEAVED (the layout TtMoe feeds in the
+    # deployed model). Keyed like mm_configs; a missing key falls back to the 1D entry there.
+    #
+    # These are not a tuning variant of the 1D entries, they are a different parallelisation. The 1D
+    # mcast_in0=False config splits the work over M alone, and at 640 tokens per_core_M=1 leaves 20
+    # M-tiles on 20 of the 110 cores. Splitting N as well puts 40-80 cores to work, and the speedup
+    # tracks the core count almost exactly.
+    #
+    # They cannot serve a height-sharded in0, which is why the layout picks the table rather than the
+    # entry carrying both: that path additionally requires K == in0_block_w (forfeiting the
+    # in0_block_w win) and a single-column shard grid, which the gate's 11-wide grid is not.
+    #
+    # DEVICE KERNEL DURATION per call on Blackhole, 640 tokens/chip, DRAM-interleaved in0, medians of
+    # 5 rotated rounds, PCC >= 0.999, measured independently on all 8 chips (spread <= 0.2x):
+    #     256 experts / K 1792   37.5 -> 17.5us (2.14x, 80 cores)
+    #     384 experts / K 1792   54.6 -> 18.6us (2.94x, 60 cores)
+    #     896 experts / K 1792  126.4 -> 32.1us (3.93x, 70 cores)
+    #     256 experts / K 1536   33.0 -> 14.9us (2.22x, 80 cores)
+    #     256 experts / K  768   20.3 ->  8.7us (2.33x, 80 cores)
+    #     256 experts / K 1024   24.8 -> 10.7us (2.32x, 80 cores)
+    #     128 experts / K  736   12.4 ->  8.6us (1.44x, 40 cores)
+    mm_configs_interleaved: dict = field(
+        default_factory=lambda: {
+            key: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(grid_x, 10),
+                in0_block_w=in0_block_w,
+                out_subblock_h=1,
+                out_subblock_w=out_subblock_w,
+                out_block_h=2,
+                out_block_w=per_core_N,
+                per_core_M=2,  # 20 M-tiles over the grid's 10 rows
+                per_core_N=per_core_N,
+                transpose_mcast=False,
+                fuse_batch=True,
+            )
+            for key, grid_x, per_core_N, in0_block_w, out_subblock_w in (
+                (
+                    (GATE_PRODUCTION_SP_DIM, DeepSeekV3Config.EMB_SIZE // 4, DeepSeekV3Config.NUM_ROUTED_EXPERTS),
+                    8,
+                    1,
+                    14,
+                    1,
+                ),
+                ((GATE_PRODUCTION_SP_DIM, KimiK26Config.EMB_SIZE // 4, KimiK26Config.NUM_ROUTED_EXPERTS), 6, 2, 14, 2),
+                ((GATE_PRODUCTION_SP_DIM, KimiK3Config.EMB_SIZE // 4, KimiK3Config.NUM_ROUTED_EXPERTS), 7, 4, 14, 2),
+                ((GATE_PRODUCTION_SP_DIM, GLM51Config.EMB_SIZE // 4, GLM51Config.NUM_ROUTED_EXPERTS), 8, 1, 12, 1),
+                (
+                    (GATE_PRODUCTION_SP_DIM, MiniMaxM27Config.EMB_SIZE // 4, MiniMaxM27Config.NUM_ROUTED_EXPERTS),
+                    8,
+                    1,
+                    8,
+                    1,
+                ),
+                (
+                    (
+                        GATE_PRODUCTION_SP_DIM,
+                        DeepSeekV4FlashConfig.EMB_SIZE // 4,
+                        DeepSeekV4FlashConfig.NUM_ROUTED_EXPERTS,
+                    ),
+                    8,
+                    1,
+                    8,
+                    1,
+                ),
+                (
+                    (GATE_PRODUCTION_SP_DIM, GPT_OSS_TEST_PER_DEVICE_EMB_DIM, GptOss120BConfig.NUM_ROUTED_EXPERTS),
+                    4,
+                    1,
+                    23,
+                    1,
+                ),
+            )
+        }
+    )
+
     dim: int = DeepSeekV3Config.EMB_SIZE
     sp_dim: int = 4096  # ISL per chip
     # Enforced in __post_init__. At high expert counts moe_grouped_topk's circular buffers stop
@@ -297,6 +372,7 @@ class TtMoEGateConfig:
                 f"experts/32 and will fail L1 allocation above it. Raise the ceiling only alongside "
                 f"the op-side CB work that makes it true."
             )
+
         # Resolve mm_configs against the depth actually in use, so _device_matmul's lookup
         # (sp_dim, per_device_emb_dim, n_routed_experts) hits a tuned entry instead of silently
         # falling back to TTNN's default tiling:
@@ -304,15 +380,19 @@ class TtMoEGateConfig:
         #   sp_dim int  -> applies only at that depth, and wins there over the any-depth entry
         # setdefault is what enforces that precedence: a re-keyed any-depth entry never displaces a
         # depth-specific one, whichever order the two were authored in.
-        resolved = {}
-        for key, value in self.mm_configs.items():
-            if not isinstance(key, tuple):
-                resolved[key] = value
-            elif key[0] is None:
-                resolved.setdefault((self.sp_dim, *key[1:]), value)
-            elif key[0] == self.sp_dim:
-                resolved[key] = value
-        self.mm_configs = resolved
+        def resolve(configs):
+            resolved = {}
+            for key, value in configs.items():
+                if not isinstance(key, tuple):
+                    resolved[key] = value
+                elif key[0] is None:
+                    resolved.setdefault((self.sp_dim, *key[1:]), value)
+                elif key[0] == self.sp_dim:
+                    resolved[key] = value
+            return resolved
+
+        self.mm_configs = resolve(self.mm_configs)
+        self.mm_configs_interleaved = resolve(self.mm_configs_interleaved)
 
     @property
     def num_cores(self):
@@ -726,7 +806,15 @@ class TtMoEGatePrefill(LightweightModule):
             per_device_dim * n_tp_devices == self.config.dim
         ), f"Expected per-device dim {self.config.dim // n_tp_devices}, got {per_device_dim}"
         config_key = (self.config.sp_dim, per_device_dim, self.config.n_routed_experts)
-        program_config = self.config.mm_configs.get(config_key)
+        # The 2D configs parallelise over N as well as M and are 1.4-3.9x the 1D ones, but the matmul
+        # rejects them for a sharded in0 (it requires K == in0_block_w and a single-column shard grid).
+        # Interleaved therefore prefers the 2D table and falls back to the 1D entry, which is legal on
+        # either layout; anything sharded goes straight to 1D.
+        program_config = None
+        if x.memory_config().memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED:
+            program_config = self.config.mm_configs_interleaved.get(config_key)
+        if program_config is None:
+            program_config = self.config.mm_configs.get(config_key)
         if program_config is None:
             logger.warning(f"[MoeGate] No matmul program config for {config_key}, using TTNN default")
 
