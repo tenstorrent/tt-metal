@@ -723,21 +723,16 @@ public:
 
     std::unordered_map<RoutingDirection, uint32_t> get_hops_to_chip(
         FabricNodeId src_node_id, FabricNodeId dst_node_id) const override {
-        // Prefer a direct Z-link hop whenever the destination is a direct Z-neighbor of the
-        // source, regardless of whether it lives in the same mesh. Two cases require this:
-        //   1. Inter-mesh Z stitching: a hop map cannot express a cardinal count in the *other*
-        //      mesh's coordinate space (coordinate subtraction across meshes is meaningless), so
-        //      a direct Z-neighbor in another mesh must be emitted as {Z: 1}.
-        //   2. Intra-mesh Z skip-links: the fabric routing table always prefers the (strictly
-        //      shorter) skip over the cardinal ring for a direct skip endpoint. If we instead
-        //      emitted the displacement-based cardinal hop map (e.g. {S: 3} for a 3-row skip),
-        //      the worker would attach to the cardinal (South) router while the fabric routes
-        //      the packet over the Z skip — a first-hop direction mismatch that drops every
-        //      packet and hangs the flow.
-        // Non-Z-neighbor pairs — cardinal-stitched multi-mesh (no Z direction in the MGD) and
-        // ordinary cardinal intra-mesh routes — fall through to the displacement-based path,
-        // preserving prior behavior. On architectures without Z-links get_all_neighbor_node_ids
-        // returns empty here, so this is a no-op for those meshes.
+        // A direct Z-neighbor is emitted as {Z: 1}, whether or not it lives in the same mesh. Across
+        // meshes a hop map cannot express a cardinal count at all, since subtracting coordinates in
+        // two different meshes is meaningless. Within a mesh the skip is strictly shorter than the
+        // cardinal ring, so the fabric routing table takes it: a displacement-based map ({S: 3} for
+        // a 3-row skip) would attach the worker to the South router while the fabric routes the
+        // packet over Z, a first-hop mismatch that drops every packet and hangs the flow.
+        //
+        // Everything else -- cardinal-stitched multi-mesh and ordinary intra-mesh routes -- falls
+        // through to the displacement path. get_all_neighbor_node_ids returns empty on
+        // architectures without Z-links, so this is a no-op there.
         const auto z_neighbors = get_all_neighbor_node_ids(src_node_id, RoutingDirection::Z);
         const bool dst_is_direct_z_neighbor =
             std::find(z_neighbors.begin(), z_neighbors.end(), dst_node_id) != z_neighbors.end();
@@ -883,18 +878,6 @@ public:
     }
 
     // The multicasts that cover the anchor's OWN row, which get_full_mcast_hops deliberately does not.
-    //
-    // Codec contract §7.3.1: when N+S > 0 the target rows are the N/S offsets from the anchor and
-    // exclude the anchor's row -- an N/S range names the rows around the anchor, not the anchor. That
-    // is not an oversight to route around; §5.5 relies on it to keep the source's outputs a subset of
-    // N/S/Z. So on a 32x4 a full_mcast reaches 31 rows x 4 columns and misses the four chips beside
-    // and including the sender. The contract's own remedy is the X-only case (§7.3.1: "when
-    // N_extent = S_extent = 0, the operation is X-only"), where target_ys is exactly {anchor_y}.
-    //
-    // Returned as a list because a LINE column axis needs one multicast per side: the test infra's
-    // multicast expansion requires a single non-zero direction unless there is a N/S trunk to hang
-    // E/W spines off, and an X-only pattern has no trunk. A RING closes with one eastward wrap.
-    // Empty when the row has no other chips.
     std::vector<std::unordered_map<RoutingDirection, uint32_t>> get_anchor_row_mcast_hops(
         const FabricNodeId& src_node_id) const override {
         std::vector<std::unordered_map<RoutingDirection, uint32_t>> patterns;

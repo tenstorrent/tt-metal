@@ -44,9 +44,7 @@ struct LocalArgsBuffer {
         static_assert("Error: only 4B args are supported" && sizeof(T) == 4);
 
         uint32_t current_offset = arg_idx * sizeof(T);
-        // Against the buffer's size, not its end address: current_offset is an offset, so comparing it
-        // to an absolute L1 address made this guard unfireable.
-        ASSERT(current_offset + sizeof(T) <= buffer_size);
+        ASSERT(current_offset + sizeof(T) <= buffer_size);  // Check bounds
 
         tt_l1_ptr T* local_args_ptr = reinterpret_cast<tt_l1_ptr T*>(base_address);
         return local_args_ptr[arg_idx];
@@ -743,21 +741,14 @@ struct FabricConnectionArray {
     }
 };
 
-// Copies a single traffic config may inject into the fabric, one per canonical root output of an
-// express multicast. Codec contract §7.3.1 bounds the source outputs to N/S/Z, which the four-slot
-// connection manager is sized for. Must match MAX_MCAST_INJECTIONS on the host
-// (tt_fabric_test_device_setup.hpp).
+// Line sync for each fabric connection (used by SyncKernelConfig)
+// Can have up to 4 connections per sync config in express link scenarios
+
 constexpr uint8_t MAX_MCAST_INJECTIONS = 4;
 static_assert(
     MAX_MCAST_INJECTIONS <= MAX_NUM_FABRIC_CONNECTIONS,
     "a single traffic config cannot claim more connections than the core's whole array holds");
 
-// Line sync for one sync config (used by SyncKernelConfig). Usually one connection. A sync multicast
-// is encoded by the same codec as test traffic, so on an express mesh its canonical root action can
-// name several output edges, and then the sync packet has to go out all of them: injection bypasses
-// the source RX that lets a transit router clone, so nothing downstream can split it for us
-// (codec contract §7.3.1). Miss one and the subtree behind it never increments its sync semaphore,
-// which is a hang before the first test packet rather than a wrong result.
 template <typename EdmSenderT = WorkerToFabricEdmSender>
 struct LineSyncConfig {
     LineSyncConfig(
@@ -1159,10 +1150,7 @@ struct SenderKernelTrafficConfig {
             if (has_payload) {
                 payload_buffer_->fill_data(metadata.seed);
             }
-            // STEP 3: Send packet, once per connection. A multi-output multicast root has to launch
-            // each of its subtrees itself: a transit router clones through its source RX, but a worker
-            // injecting from L1 has no such thing, so one copy per canonical output is the split.
-            // Identical header and payload every time -- the routers decide who gets what.
+            // STEP 3: Send packet, once per connection.
             for (uint8_t i = 0; i < num_connections_; i++) {
                 connection_manager_->template wait_for_empty_write_slot<BENCHMARK_MODE>(
                     connection_ptrs_[i], connection_indices_[i]);
@@ -1234,7 +1222,6 @@ public:
     uint8_t connection_idx_;  // Index into the connection array (== connection_indices_[0])
 
     // Every connection this config injects into. Length 1 unless this is an express multicast root
-    // whose canonical action names more than one output edge.
     void* connection_ptrs_[MAX_MCAST_INJECTIONS];
     uint8_t connection_indices_[MAX_MCAST_INJECTIONS];
     uint8_t num_connections_;
@@ -2285,10 +2272,6 @@ private:
 /* ********************
  * SyncKernelConfig   *
  **********************/
-// NUM_SYNC_CONFIGS and NUM_SYNC_FABRIC_CONNECTIONS are no longer the same number. One sync config is
-// one multicast pattern, and an express root can inject a pattern into several edges at once, so a
-// config owns between one and MAX_MCAST_INJECTIONS connections. Connections are also deduped across
-// configs when two of them leave on the same eth chan.
 template <
     uint8_t NUM_SYNC_FABRIC_CONNECTIONS,
     bool IS_2D_FABRIC,
@@ -2334,7 +2317,7 @@ struct SyncKernelConfig {
         std::array<char, sizeof(LocalSyncConfig<true, NUM_LOCAL_SYNC_CORES>)> local_sync_config_storage;
 
     // Connections per sync config, laid out MAX_MCAST_INJECTIONS-strided so config i owns
-    // [i * MAX_MCAST_INJECTIONS, i * MAX_MCAST_INJECTIONS + count). Only the first `count` are valid.
+    // [i * MAX_MCAST_INJECTIONS, i * MAX_MCAST_INJECTIONS + count).
     std::array<uint8_t, NUM_SYNC_CONFIGS> sync_config_connection_counts;
     std::array<uint8_t, NUM_SYNC_CONFIGS * MAX_MCAST_INJECTIONS> sync_config_to_fabric_connection_map;
 
