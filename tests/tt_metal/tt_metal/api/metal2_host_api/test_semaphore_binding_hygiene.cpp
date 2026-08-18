@@ -438,7 +438,9 @@ TEST(Metal2SemaphoreHygiene, NoRawSemaphoreAccessInMetal2Kernels) {
         // Adjacent-literal split: the CI layering lint caps whole-word mentions of this
         // namespace under tests/tt_metal; a scan PATH is not a layering violation, so keep it
         // (and this comment) off that budget.
-        root / "tt" "nn",
+        root /
+            "tt"
+            "nn",
     };
 
     std::vector<std::string> violations;

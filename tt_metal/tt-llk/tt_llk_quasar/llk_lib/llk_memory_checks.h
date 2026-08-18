@@ -73,7 +73,7 @@ namespace ckernel
 //   → MEM_TENSIX_ROUTING_TABLE_BASE
 //   → MEM_TENSIX_FABRIC_CONNECTIONS_BASE
 //   → MEM_PACKET_HEADER_POOL_BASE
-//   → MEM_NOC_CAS_RET_BASE (per-hart NoC-atomic return slots; source of truth: quasar/dev_mem_map.h)
+//   → MEM_NOC_CAS_RET_BASE (per-hart NoC-atomic return slots)
 //   → MEM_NOC_SEM_LOCK_BASE (EXTERNAL semaphore lock words)
 //   → MEM_DM_CACHED_SEM_BASE (DM cached-only semaphore pool)
 //   → MEM_MAP_END = MEM_DM_CACHED_SEM_BASE + MEM_DM_CACHED_SEM_SIZE
