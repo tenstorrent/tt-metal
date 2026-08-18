@@ -17,7 +17,7 @@ the two decode ops CSVs exceed it even gzipped (`linear_decode` 1.72 MB,
 `full_decode` 731 KB — one traced decode of this layer records 109 (full) /
 121 (linear) ops per iteration and the committed window holds 8 iterations). They are therefore
 excluded by `.gitignore` in this directory; the two prefill ops CSVs
-(`full_prefill` 151 KB, `linear_prefill` 433 KB)
+(`full_prefill` 151 KB, `linear_prefill` 432 KB)
 are under the limit and committed.
 Everything derived from them *is*: the filtered per-op CSV and the human-readable table above
 are exactly the signpost-filtered view of those rows.

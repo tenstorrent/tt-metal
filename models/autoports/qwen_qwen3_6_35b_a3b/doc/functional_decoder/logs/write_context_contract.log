@@ -1,4 +1,4 @@
-2026-08-18 00:25:49.857 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+2026-08-18 00:59:59.104 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
 Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
 wrote /localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/doc/context_contract.json
 {
@@ -22,7 +22,7 @@ wrote /localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/doc/co
         "aligned_to_prefill_align_128": false,
         "hf_pcc": 0.9999742,
         "hf_reference": "exact tail reference over the last 128 query positions",
-        "device_wall_seconds": 43.871
+        "device_wall_seconds": 43.872
       },
       "full_attention": {
         "seq_len": 262143,
@@ -38,14 +38,14 @@ wrote /localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/doc/co
         "context_entries": 262144,
         "hf_pcc": 0.999986,
         "state_source": "262143-token prefill through this layer",
-        "device_wall_seconds": 0.042
+        "device_wall_seconds": 0.043
       },
       "full_attention": {
         "position": 262143,
         "context_entries": 262144,
         "hf_pcc": 0.9999939,
         "state_source": "262143-token prefill through this layer",
-        "device_wall_seconds": 0.045
+        "device_wall_seconds": 0.047
       }
     }
   },
@@ -76,7 +76,7 @@ wrote /localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/doc/co
   }
 }
 nanobind: leaked 1 instances!
- - leaked instance 0x7dfa72e419c8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x793e15b85a58 of type "ttnn._ttnn.tensor.CoreRangeSet"
 nanobind: leaked 13 types!
  - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
  - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
@@ -90,15 +90,15 @@ nanobind: leaked 13 types!
  - leaked type "ttnn._ttnn.tensor.Tensor"
  - ... skipped remainder
 nanobind: leaked 199 functions!
- - leaked function ""
- - leaked function ""
- - leaked function ""
- - leaked function ""
- - leaked function ""
+ - leaked function "subtract"
+ - leaked function "__repr__"
  - leaked function "__init__"
- - leaked function "default_core_range"
- - leaked function "get_layout"
+ - leaked function "__init__"
  - leaked function ""
+ - leaked function ""
+ - leaked function "to_list"
+ - leaked function ""
+ - leaked function "buffer_aligned_page_size"
  - leaked function ""
  - ... skipped remainder
 nanobind: this is likely caused by a reference counting issue in the binding code.

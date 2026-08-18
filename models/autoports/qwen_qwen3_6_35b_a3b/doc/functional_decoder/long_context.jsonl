@@ -1,8 +1,8 @@
-{"label": "longest-decode[linear] pos=262143", "pcc": 0.9999860446684867, "maxabs": 0.026400327682495117, "rel_rms": 0.005306625738739967, "position": 262143, "wall_seconds": 0.042}
-{"label": "longest-prefill[linear] seq=262143 tail=128", "pcc": 0.9999741695060327, "maxabs": 0.04034233093261719, "rel_rms": 0.0071876500733196735, "seq_len": 262143, "tail": 128, "wall_seconds": 43.871}
+{"label": "longest-decode[linear] pos=262143", "pcc": 0.9999860446684867, "maxabs": 0.026400327682495117, "rel_rms": 0.005306625738739967, "position": 262143, "wall_seconds": 0.043}
+{"label": "longest-prefill[linear] seq=262143 tail=128", "pcc": 0.9999741695060327, "maxabs": 0.04034233093261719, "rel_rms": 0.0071876500733196735, "seq_len": 262143, "tail": 128, "wall_seconds": 43.872}
 {"label": "longest-prefill state conv", "pcc": 0.9999698119845646, "maxabs": 0.04438042640686035, "rel_rms": 0.01345156505703926}
 {"label": "longest-prefill state recurrent", "pcc": 0.9998960104018043, "maxabs": 0.0013736635446548462, "rel_rms": 0.017726872116327286}
-{"label": "longest-decode[full] pos=262143", "pcc": 0.9999939126423377, "maxabs": 0.017606258392333984, "rel_rms": 0.003546085674315691, "position": 262143, "wall_seconds": 0.045}
+{"label": "longest-decode[full] pos=262143", "pcc": 0.9999939126423377, "maxabs": 0.017606258392333984, "rel_rms": 0.003546085674315691, "position": 262143, "wall_seconds": 0.047}
 {"label": "longest-prefill[full] seq=262143 tail=128", "pcc": 0.9999891171642479, "maxabs": 0.034212589263916016, "rel_rms": 0.004725347273051739, "seq_len": 262143, "tail": 128, "wall_seconds": 48.843}
 {"label": "batched-longest-decode[full] pos=262143 batch=2 slot=1", "pcc": 0.9999939126423377, "maxabs": 0.017606258392333984, "rel_rms": 0.003546085674315691, "position": 262143, "batch": 2, "slot": 1}
 {"label": "kv-capacity batch32 full context", "batch": 32, "context": 262144, "blocks": 131072, "bytes_per_cache": 8589934592, "bytes_total": 17179869184, "allocated": true}

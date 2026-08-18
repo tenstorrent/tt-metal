@@ -599,15 +599,28 @@ for _kind in ("linear", "full"):
         "excess_s": (_meas - POS_CHUNKS * _per / 1000) if _meas else None,
         "mixer_pct": 100 * rows[(_kind, "prefill")]["blocks"]["mixer_ms_per_iter"] / _per,
     }
-# Split the excess into the part that is device attention growth and the part that is per-chunk
-# program creation. Chunked SDPA cost scales with Sk = chunk_start_idx + Sq, so chunk i costs
-# (i+1) x the first chunk's SDPAOperation time; summing that over the chunks gives the device
-# component directly from the committed CSV, and the remainder is host-side program creation.
+# Split the excess into device attention growth and per-chunk program creation. How chunk i scales
+# is *measured*, not assumed: `diag_prefill_sdpa_scaling.py` times the op at real prefill shapes for
+# a spread of chunk indices. An earlier version assumed cost ~ Sk = chunk_start_idx + Sq, i.e.
+# (i+1)x, which ignores that the chunked entry point is always causal -- it understates the growth by
+# ~1.9x and therefore invents a program-creation residual that is not there.
 _fp_rows = list(csv.DictReader((D / "tracy/full_prefill/prefill_perf_report.csv").open()))
 _sdpa_us = [float(r["Device Time"]) for r in _fp_rows if r["OP Code"].startswith("SDPAOperation")]
-_iters_fp = rows[("full", "prefill")]["iters"]
 _sdpa_first_ms = (sum(_sdpa_us) / len(_sdpa_us)) / 1000 if _sdpa_us else 0.0
-_sdpa_total_s = _sdpa_first_ms * (POS_CHUNKS * (POS_CHUNKS + 1) / 2) / 1000
+_scale_rows = re.findall(
+    r"^SCALE +(\d+) +\d+ +([\d.]+) +([\d.]+)x", (D / "logs/diag_prefill_sdpa_scaling.txt").read_text(), re.M
+)
+assert len(_scale_rows) >= 3, "diag_prefill_sdpa_scaling.txt has too few rows to fit"
+_xs = [float(i) for i, _ms, _r in _scale_rows]
+_ys = [float(r) for _i, _ms, r in _scale_rows]
+_n = len(_xs)
+_mx, _my = sum(_xs) / _n, sum(_ys) / _n
+_slope = sum((x - _mx) * (y - _my) for x, y in zip(_xs, _ys)) / sum((x - _mx) ** 2 for x in _xs)
+_intercept = _my - _slope * _mx
+# ratio(i) = slope*i + intercept, summed over the 128 chunks, in units of chunk 0's SDPA time
+_ratio_sum = _slope * (POS_CHUNKS * (POS_CHUNKS - 1) / 2) + _intercept * POS_CHUNKS
+_sdpa_total_s = _sdpa_first_ms * _ratio_sum / 1000
+_rect_sum = POS_CHUNKS * (POS_CHUNKS + 1) / 2
 _fx = pos["full"]["excess_s"] or 0.0
 _fm = pos["full"]["measured_s"] or 1.0
 _full_attn_pct = 100 * (rows[("full", "prefill")]["blocks"]["mixer_ms_per_iter"] * POS_CHUNKS / 1000 + _fx) / _fm
@@ -671,14 +684,24 @@ work**, and the only structural difference between the two kinds is the token mi
 attention path is on the order of **{_full_attn_pct:.0f}% of an advertised-context prefill**, not the
 {pos["full"]["mixer_pct"]:.1f}% the profiled row shows.
 
-That excess splits into two costs with **different fixes**, and the committed CSV separates them.
-Chunked SDPA scales with `Sk = chunk_start_idx + Sq`, so chunk *i* costs `(i+1)x` the first chunk's
-`SDPAOperation` ({_sdpa_first_ms:.3f} ms here); summing over {POS_CHUNKS} chunks gives
-**~{_sdpa_total_s:.1f} s of device attention** ({100*_sdpa_total_s/_fm:.0f}% of the prefill), leaving
-~{_fx - _sdpa_total_s:.1f} s of per-chunk **program creation** for {POS_CHUNKS} distinct
-`chunk_start_idx` values (§6 limitation 6). The first wants a better SDPA configuration; the second
-wants the device-tensor offset form, which `probe_ttnn_ops.py` shows works on this build. Quoting only
-the combined figure would hand `optimize` one problem where there are two.
+**Almost all of that excess is the attention op itself.** How chunk *i* scales is measured rather
+than assumed — `diag_prefill_sdpa_scaling.py` times
+`chunked_scaled_dot_product_attention` at the real prefill shapes across chunk indices, and the growth
+is linear at **{_slope:.2f}x per chunk** (fit over {_n} measured points; chunk 15 costs
+{_ys[-1]:.1f}x chunk 0). Summing that fit over the {POS_CHUNKS} chunks gives {_ratio_sum:.0f}x the
+first chunk's `SDPAOperation` ({_sdpa_first_ms:.3f} ms), i.e. **~{_sdpa_total_s:.1f} s of device
+attention** — {100*_sdpa_total_s/_fm:.0f}% of the prefill, and {_sdpa_total_s/_fx:.0%} of the
+{_fx:.1f} s excess. Per-chunk program creation for {POS_CHUNKS} distinct `chunk_start_idx` values
+(§6 limitation 6) is whatever is left, ~{max(_fx - _sdpa_total_s, 0.0):.1f} s.
+
+An earlier version of this paragraph assumed the cost scales with `Sk = chunk_start_idx + Sq`, i.e.
+`(i+1)x`, which would sum to {_rect_sum:.0f}x instead of {_ratio_sum:.0f}x. That is wrong because the
+chunked entry point is **always causal** (`sdpa.cpp`: `is_causal=true`), so q-chunk *j* of call *i*
+walks `16i + j + 1` k-chunks rather than all of them — the true growth is ~1.9x steeper, and assuming
+otherwise manufactured a multi-second program-creation residual that the measurement does not support.
+So the handoff to `optimize` is **one** problem, not two: the advertised-context prefill is dominated
+by attention work that grows with position, and the device-tensor `chunk_start_idx_tensor` form
+(§6 limitation 6) addresses program count, which is the small remainder.
 These are cold single-process wall times, not warmed latencies, so treat the {POS_CHUNKS}x figures as an
 order-of-magnitude split rather than a benchmark. `optimize` should not read the 1.3% row as
 permission to skip prefill attention.
@@ -1182,6 +1205,35 @@ def render_counts():
 
 
 render_counts()
+
+
+def check_no_duplicated_paragraphs():
+    """Fail if either document repeats a substantial paragraph.
+
+    Round 9 found 49 lines duplicated between two sections of the work log -- created by a manual
+    repair, then reported as removed by the next round's write-up while still present. The
+    freshness-marker guard is cardinal (one begin, one end); it cannot see prose that was copied.
+    This is the cheap structural check that can, and it is the one that would have caught the damage
+    the renderer itself did two rounds earlier.
+    """
+    for path, name in ((README, "README.md"), (WORKLOG, "work_log.md")):
+        seen, dupes = {}, []
+        for para in path.read_text().split("\n\n"):
+            key = " ".join(para.split())
+            # Long enough to be prose rather than a table row, a heading or a shared boilerplate line.
+            if len(key) < 400:
+                continue
+            if key in seen:
+                dupes.append(key[:70])
+            seen[key] = True
+        if dupes:
+            report.append(f"  MISS     {name} repeats {len(dupes)} paragraph(s), first: {dupes[0]!r}")
+        else:
+            report.append(f"  ok       {name} has no duplicated paragraphs ({len(seen)} checked)")
+
+
+check_no_duplicated_paragraphs()
+
 
 print("render_docs --check:" if CHECK else "render_docs:")
 print("\n".join(report))

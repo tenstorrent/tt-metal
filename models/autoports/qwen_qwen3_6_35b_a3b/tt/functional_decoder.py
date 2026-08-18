@@ -37,11 +37,16 @@ construction happens there; the two forward methods below run pure TTNN on devic
     ``page_table`` : ``int32 [max_batch, ceil(supported_context / block_size)]``, ROW_MAJOR.
                      Required for ``full_attention`` layers, ignored for ``linear_attention``.
     ``start_pos``  : absolute position of ``x[..., 0, :]``. Must be a multiple of
-                     ``PREFILL_ALIGN`` (128) == ``sdpa_chunk``, because chunked SDPA turns the
-                     offset into a chunk index by integer division and a misaligned offset is
-                     silently wrong rather than an error (see ``prefill_forward``). Lets a
-                     caller stream a long prompt through several calls; the KV cache, conv
-                     state and recurrent state all carry over. A fresh request needs
+                     ``PREFILL_ALIGN`` (128). That constant is the **maximum** of three
+                     independent constraints -- the SDPA chunk index (``sdpa_chunk``), the
+                     paged fill's block offset (``block_size``), and the padded length --
+                     so lowering ``sdpa_chunk`` alone does *not* lower the accepted
+                     alignment; see ``prefill_forward`` and README section 9. Of those, the
+                     SDPA offset is validated loudly by the op
+                     (``sdpa_device_operation.cpp:277-292``); the one that fails **silently**
+                     is the paged fill, which truncates ``abs_pos // block_size``.
+                     Lets a caller stream a long prompt through several calls; the KV cache,
+                     conv state and recurrent state all carry over. A fresh request needs
                      ``start_pos = 0``, so this never restricts prompt length.
     returns        : ``[1, 1, seq_len, hidden]``, TILE, DRAM.
 
