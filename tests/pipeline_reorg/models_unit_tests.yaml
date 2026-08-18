@@ -586,7 +586,6 @@
 
 - name: Mixtral-8x7B unit tests
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886
     export HF_MODEL=mistralai/Mixtral-8x7B-v0.1 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/mistralai/Mixtral-8x7B-v0.1
     pytest --timeout 300 models/tt_transformers/tests/mixtral/test_mixtral_rms_norm.py  # PREFILL-4096 layernorm first-compile can exceed 120s
     pytest --timeout 120 models/tt_transformers/tests/mixtral/test_mixtral_mlp.py
