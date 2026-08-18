@@ -185,6 +185,47 @@ KIMI_UNTRACED_BASELINE_CHUNK_TIMES_S = {
 TRACED_PERF_MARGIN = 0.03
 UNTRACED_PERF_MARGIN = 0.05
 
+# ---------------------------------------------------------------------------
+# GLM chunked-prefill perf gate (test_glm_prefill_transformer_chunked_no_pcc).
+#
+# GLM chunked runs FABRIC_2D EAGER dispatch -- there is no trace-capture mode here -- so like the
+# untraced Kimi twin it is host-dispatch bound: the per-chunk profile is FLAT (~1.77 s on every chunk,
+# no depth ramp) and the within-run per-chunk stddev is 0.24-0.34 s (14-19%).
+#
+# Why this gate is on an AGGREGATE and not per chunk. Measured over 34 green CI runs of the gated
+# config (glm52 / L78 / 11 chunks / 10 iters, 2026-08-14..08-18):
+#   * The PER-CHUNK median is unusable as a regression gate. 17 of the 31 healthy runs have at least one
+#     chunk whose median lands >8% off baseline, worst case +29.7%, because a handful of slow iterations
+#     drags that single chunk's median-of-9. A per-chunk band would have to exceed ~30% to stay green --
+#     wider than any regression worth catching, so it could not resolve one.
+#   * The MEDIAN ACROSS the 11 chunk medians is tight: healthy runs span -2.6% .. +4.5%. Isolated
+#     single-chunk spikes are noise and the outer median rejects them, while a real (uniform) slowdown
+#     moves it one-for-one.
+# So the regression detector is the aggregate at GLM_AGGREGATE_MARGIN, and the per-chunk band is kept
+# only as a coarse blow-up guard at GLM_PER_CHUNK_MARGIN. They are complementary, not redundant: the
+# outer median is robust, so ONE chunk doubling moves the aggregate by under 2% and only the per-chunk
+# band catches it.
+GLM_BASELINE_CHUNK_TIMES_S = {
+    # test_glm_prefill_transformer_chunked_no_pcc[blackhole-glm52-mesh-8x4-L78-preload0-chunks_eleven-ten_iters].
+    # Per chunk, the MEDIAN OVER 31 green CI runs of that run's own per-chunk median. Deliberately the
+    # median over many runs, not one run's table: a single GLM run's per-chunk numbers carry the
+    # single-chunk spikes described above.
+    ("glm_5_2", 78, 11, 10): [1.769, 1.778, 1.767, 1.771, 1.775, 1.775, 1.761, 1.770, 1.772, 1.774, 1.765],
+}
+GLM_BASELINE_AGGREGATE_S = {
+    # Median across the 11 per-chunk baselines above -- the statistic the gate actually asserts on.
+    ("glm_5_2", 78, 11, 10): 1.770,
+}
+# Aggregate band. The worst healthy run sits +4.5% off baseline, so 8% leaves ~1.8x headroom over
+# observed CI noise; the currently-open regression (see below) sits at +12.3%, so 8% still detects it
+# with ~1.5x margin. 8% is roughly the midpoint of the empty gap between those two populations (4.5% ..
+# 12.3%) -- there are no observed runs in between, which is what makes the band pickable at all.
+GLM_AGGREGATE_MARGIN = 0.08
+# Coarse per-chunk blow-up guard only -- NOT a regression detector (see the note above). The worst
+# healthy per-chunk deviation is 29.7% and no healthy chunk sample of 341 exceeds 35%, so 45% is ~1.5x
+# clear of observed noise while still catching a chunk that regresses by half or worse.
+GLM_PER_CHUNK_MARGIN = 0.45
+
 # Deepest config whose per-layer PCC is asserted; deeper runs (L61) stay record-only until their
 # accumulation headroom is pinned.
 GATED_LAYER_DEPTH = 10
@@ -1150,6 +1191,8 @@ def run_chunked_transformer_updated(
     routing_use_l1_small_for_semaphores=False,
     baseline_chunk_times_s=None,
     perf_margin=None,
+    baseline_aggregate_s=None,
+    aggregate_margin=None,
     preload_isl=0,
     check_pcc=False,
     use_trace=False,
@@ -1174,7 +1217,11 @@ def run_chunked_transformer_updated(
 
     Perf gate: when `baseline_chunk_times_s` is provided (a per-chunk list of baseline medians pulled
     from a known-good CI run), each chunk's measured median must stay within +/- `perf_margin` of its
-    baseline; a single `perf_margin` covers every chunk. The table appends the baseline, tolerance band,
+    baseline; a single `perf_margin` covers every chunk. Independently, when `baseline_aggregate_s` is
+    provided, the MEDIAN ACROSS the per-chunk medians must stay within +/- `aggregate_margin` of it --
+    the statistic to gate on when the per-chunk medians are individually too noisy to band (see the
+    GLM_* constants). Either gate alone, both, or neither may be armed. The table appends the baseline,
+    tolerance band,
     and PASS/FAIL per chunk, and the run fails if any chunk is out of band. When no baseline is given the
     table is record-only (perf-exploration combos)."""
     if weight_cache_path is None:
@@ -1211,10 +1258,12 @@ def run_chunked_transformer_updated(
             headers += ["baseline", "low", "high", "status"]
         rows = []
         failures: list[str] = []
+        medians: list[float] = []
         for chunk_idx in range(n_chunks):
             chunk_samples = [row[chunk_idx] for row in samples]
             median_time = statistics.median(chunk_samples)
             stddev_time = statistics.stdev(chunk_samples) if len(chunk_samples) >= 2 else 0.0
+            medians.append(median_time)
             row = [f"chunk {chunk_idx}", format_duration(median_time), format_duration(stddev_time)]
             if gated:
                 baseline = baseline_chunk_times_s[chunk_idx]
@@ -1234,9 +1283,49 @@ def run_chunked_transformer_updated(
                     )
             rows.append(row)
 
-        margin_note = f", baseline gate +/- {margin * 100:.1f}%" if gated else ", record-only (no baseline)"
-        logger.info(f"chunk timing stats computed over {len(samples)} iterations (iter 0 omitted){margin_note}")
-        return failures, render_table(headers, rows)
+        # Aggregate gate: the MEDIAN ACROSS the per-chunk medians. Independent of, and complementary to,
+        # the per-chunk band -- see the GLM_* constants for why a flat eager-dispatch profile needs this
+        # statistic (single-chunk spikes are noise the outer median rejects; a uniform slowdown is not).
+        agg_lines: list[str] = []
+        agg_note = ""
+        if baseline_aggregate_s is not None:
+            if aggregate_margin is None:
+                # Same reasoning as perf_margin above: falling through to a zero-width band would fail
+                # every run rather than surfacing the miswiring.
+                raise ValueError("baseline_aggregate_s was given without an aggregate_margin")
+            measured_agg = statistics.median(medians)
+            agg_low = baseline_aggregate_s * (1.0 - aggregate_margin)
+            agg_high = baseline_aggregate_s * (1.0 + aggregate_margin)
+            agg_ok = agg_low <= measured_agg <= agg_high
+            agg_dev = 100.0 * (measured_agg - baseline_aggregate_s) / baseline_aggregate_s
+            agg_lines = [
+                "",
+                f"aggregate (median of the {n_chunks} chunk medians): {measured_agg:.3f}s "
+                f"({agg_dev:+.1f}% vs baseline {baseline_aggregate_s:.3f}s), band "
+                f"+/- {aggregate_margin * 100:.1f}% [{agg_low:.3f}s, {agg_high:.3f}s] -> "
+                f"{'PASS' if agg_ok else 'FAIL'}",
+            ]
+            for line in agg_lines[1:]:
+                logger.info(line)
+            if not agg_ok:
+                failures.append(
+                    f"aggregate median {measured_agg:.3f}s ({agg_dev:+.1f}%) outside baseline "
+                    f"{baseline_aggregate_s:.3f}s +/- {aggregate_margin * 100:.1f}% band "
+                    f"[{agg_low:.3f}s, {agg_high:.3f}s]"
+                )
+            agg_note = f", aggregate gate +/- {aggregate_margin * 100:.1f}%"
+
+        if gated:
+            margin_note = f", per-chunk gate +/- {margin * 100:.1f}%"
+        elif agg_note:
+            margin_note = ", per-chunk record-only"
+        else:
+            margin_note = ", record-only (no baseline)"
+        logger.info(
+            f"chunk timing stats computed over {len(samples)} iterations (iter 0 omitted)"
+            f"{margin_note}{agg_note}"
+        )
+        return failures, render_table(headers, rows) + agg_lines
 
     profiler.clear()
     profiler.start("total_test_time")
@@ -1731,6 +1820,35 @@ def kimi_chunked_perf_gate(use_trace, num_layers, n_chunks, num_iters, preload_i
     return baseline, (default_margin if perf_margin is None else perf_margin)
 
 
+def glm_chunked_perf_gate(variant_name, num_layers, n_chunks, num_iters, preload_isl):
+    """Resolve the chunked-GLM perf gate for one parametrization: returns
+    ``(baseline_chunk_times_s, per_chunk_margin, baseline_aggregate_s, aggregate_margin)``.
+
+    All-None leaves the run fully record-only, which is what every combo outside the single calibrated
+    CI config gets. Conditions on top of the table lookup:
+
+      variant_name -- glm_5_1 and glm_5_2 are different models (5.2 adds DSA cross-layer indexer reuse),
+                      so the variant is part of the key rather than a shared table; only the variant CI
+                      actually measures is calibrated.
+      preload_isl  -- the baseline only means anything at 0 (the recorded runs started from an empty
+                      cache); any preload depth stays record-only.
+
+    The aggregate is the regression detector and the per-chunk band is only a coarse blow-up guard --
+    see the GLM_* constants for the measurements behind that split.
+    """
+    if preload_isl != 0:
+        return None, None, None, None
+    key = (variant_name, num_layers, n_chunks, num_iters)
+    per_chunk = GLM_BASELINE_CHUNK_TIMES_S.get(key)
+    aggregate = GLM_BASELINE_AGGREGATE_S.get(key)
+    return (
+        per_chunk,
+        GLM_PER_CHUNK_MARGIN if per_chunk is not None else None,
+        aggregate,
+        GLM_AGGREGATE_MARGIN if aggregate is not None else None,
+    )
+
+
 # No-PCC perf/smoke variant: runs the full n_chunks-chunk prefill `num_iters` times with no golden
 # trace dependency, no intermediate readback, and no PCC. Requires only the Kimi TTNN weight cache (set
 # TT_KIMI_PREFILL_TTNN_CACHE + KIMI_K2_6_HF_MODEL); the golden trace is optional.
@@ -2066,6 +2184,9 @@ def test_glm_prefill_transformer_chunked_no_pcc(
 ):
     if preload_isl + n_chunks * CHUNK > SEQ_CACHE_NOPCC:
         pytest.skip(f"preload_isl {preload_isl} + {n_chunks} chunks exceeds the {SEQ_CACHE_NOPCC}-token cache")
+    baseline_chunk_times_s, per_chunk_margin, baseline_aggregate_s, aggregate_margin = glm_chunked_perf_gate(
+        variant.name, num_layers, n_chunks, num_iters, preload_isl
+    )
     run_chunked_transformer_updated(
         variant,
         config_only,
@@ -2078,6 +2199,10 @@ def test_glm_prefill_transformer_chunked_no_pcc(
         topology,
         num_iters,
         routing_use_l1_small_for_semaphores=True,
+        baseline_chunk_times_s=baseline_chunk_times_s,
+        perf_margin=per_chunk_margin,
+        baseline_aggregate_s=baseline_aggregate_s,
+        aggregate_margin=aggregate_margin,
         preload_isl=preload_isl,
     )
 
