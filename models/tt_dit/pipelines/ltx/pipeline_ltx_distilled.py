@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 import time
 from dataclasses import dataclass
@@ -27,6 +28,13 @@ from .pipeline_ltx import SPATIAL_COMPRESSION, TEMPORAL_COMPRESSION, LTXPipeline
 # Distilled sigma schedules for the two stages.
 DISTILLED_SIGMA_VALUES = [1.0, 0.99375, 0.9875, 0.98125, 0.975, 0.909375, 0.725, 0.421875, 0.0]
 STAGE_2_DISTILLED_SIGMA_VALUES = [0.909375, 0.725, 0.421875, 0.0]
+
+# Warn when a post-denoise latent's whiteness exceeds this. 1.0 is indistinguishable from
+# the Gaussian the sampler started from; 21 healthy 1080p generations measured 0.25-0.71
+# (mean 0.49), so this sits above the observed good range while still catching a partially
+# corrupted latent. These are log warnings, not request rejections -- a false positive is
+# cheap, a missed corruption costs us the next occurrence.
+WHITENESS_WARN_THRESHOLD = 0.85
 
 
 @dataclass
@@ -570,6 +578,71 @@ class LTXDistilledPipeline(LTXPipeline):
         ).squeeze(0)
         return v_final[:, :video_N_real, :], a_final[:, :audio_N_real, :]
 
+    @staticmethod
+    def _latent_stats(x: torch.Tensor) -> dict:
+        """Numeric fingerprint of a latent, for triaging noise outputs after the fact.
+
+        ``whiteness`` is the mean absolute difference between adjacent tokens divided by
+        what iid Gaussian noise of the same std would give (2/sqrt(pi) * std). It is ~1.0
+        when the tensor is statistically indistinguishable from the noise the sampler
+        started from -- i.e. the transformer's output never landed -- and well below 1
+        for a latent carrying real spatial structure. std alone cannot tell these apart:
+        LTX latents are per-channel normalised, so a correctly denoised latent is also
+        ~unit variance.
+
+        ``zeros`` is the fraction of exactly-zero elements. Diffusion output is never
+        exactly zero, so a non-trivial value means part of the buffer was never written --
+        the flat rectangles seen in corrupted decodes.
+        """
+        t = x.detach().float()
+        if t.dim() == 3:
+            t = t[0]
+        flat = t.reshape(-1)
+        std = flat.std().item()
+        whiteness = float("nan")
+        if t.dim() == 2 and t.shape[0] > 1 and std > 0:
+            adjacent = (t[1:] - t[:-1]).abs().mean().item()
+            whiteness = adjacent / (std * 2.0 * math.sqrt(1.0 / math.pi))
+        return {
+            "mean": flat.mean().item(),
+            "std": std,
+            "whiteness": whiteness,
+            "zeros": (flat == 0).float().mean().item(),
+            "nonfinite": int((~torch.isfinite(flat)).sum().item()),
+        }
+
+    def _log_latent_stats(
+        self, label: str, video: torch.Tensor, audio: torch.Tensor | None, *, warn: bool = False
+    ) -> None:
+        """Log a fingerprint per latent; optionally flag the corrupted-generation signature.
+
+        Good and bad generations are otherwise indistinguishable in the log -- same steps,
+        same sigmas, same timings -- so without this a noise report has nothing to correlate.
+        """
+        for name, tensor in (("video", video), ("audio", audio)):
+            if tensor is None:
+                continue
+            s = self._latent_stats(tensor)
+            logger.info(
+                f"  latent[{label}/{name}]: mean={s['mean']:+.3f} std={s['std']:.3f} "
+                f"whiteness={s['whiteness']:.2f} zeros={s['zeros']:.2%} nonfinite={s['nonfinite']}"
+            )
+            if not warn:
+                continue
+            if s["whiteness"] > WHITENESS_WARN_THRESHOLD:
+                logger.warning(
+                    f"{label}/{name}: post-denoise latent is ~white noise "
+                    f"(whiteness={s['whiteness']:.2f}); the transformer output never landed -- "
+                    "expect a noise result"
+                )
+            if s["zeros"] > 0.01:
+                logger.warning(
+                    f"{label}/{name}: post-denoise latent is {s['zeros']:.2%} exactly zero; "
+                    "part of the buffer was never written -- expect flat patches in the decode"
+                )
+            if s["nonfinite"]:
+                logger.warning(f"{label}/{name}: {s['nonfinite']} non-finite elements in post-denoise latent")
+
     def generate(
         self,
         prompt: str,
@@ -663,6 +736,7 @@ class LTXDistilledPipeline(LTXPipeline):
         t_stage1 = time.time() - t0
         timings.append(("Stage 1 denoise", t_stage1))
         logger.info(f"Stage 1 denoise: {t_stage1:.1f}s")
+        self._log_latent_stats("s1", s1_video, s1_audio)
 
         latent_frames = (num_frames - 1) // TEMPORAL_COMPRESSION + 1
         s1_h, s1_w = s1_height // SPATIAL_COMPRESSION, s1_width // SPATIAL_COMPRESSION
@@ -697,6 +771,9 @@ class LTXDistilledPipeline(LTXPipeline):
         t_stage2 = time.time() - t0
         timings.append(("Stage 2 denoise", t_stage2))
         logger.info(f"Stage 2 denoise: {t_stage2:.1f}s")
+        # Last point before the VAE: if this latent is white or partly unwritten, the
+        # decode cannot recover and the served MP4 will be noise.
+        self._log_latent_stats("s2", s2_video, s2_audio, warn=True)
 
         t0 = time.time()
         self._prepare_vae()
