@@ -40,4 +40,8 @@ def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
     return torch.div(input_tensor_a, input_tensor_b)
 
 
+# Attach the existing complex division reference, which was previously left unregistered.
+ttnn.attach_golden_function(ttnn.div, golden_function=_golden_function)
+
+
 __all__ = []

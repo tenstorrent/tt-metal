@@ -80,4 +80,12 @@ def pearson_correlation_coefficient(expected, actual):
     return float(output)
 
 
+def _golden_function(expected, actual, *args, **kwargs):
+    # Reuse the metric implementation so its NaN and constant-tensor handling remains identical.
+    return pearson_correlation_coefficient.function(expected, actual)
+
+
+ttnn.attach_golden_function(ttnn.pearson_correlation_coefficient, golden_function=_golden_function)
+
+
 __all__ = []

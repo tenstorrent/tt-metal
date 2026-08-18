@@ -187,7 +187,25 @@ def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
     return torch.divide(input_tensor_a, input_tensor_b)
 
 
+# `divide` and `divide_` are separate registered operations and both need the same reference.
+ttnn.attach_golden_function(ttnn.divide, golden_function=_golden_function)
 ttnn.attach_golden_function(ttnn.divide_, golden_function=_golden_function)
+
+
+def _golden_function_assign(input_tensor_a, input_tensor_b=None, *args, **kwargs):
+    # Both assign overloads return the source values, independently of the destination storage.
+    return input_tensor_a.clone()
+
+
+ttnn.attach_golden_function(ttnn.assign, golden_function=_golden_function_assign)
+
+
+def _golden_function_broadcast(input_tensor, sender_coord, *args, **kwargs):
+    # Host comparison has no mesh communication context, so preserve the tensor values.
+    return input_tensor
+
+
+ttnn.attach_golden_function(ttnn.broadcast, golden_function=_golden_function_broadcast)
 
 
 def _golden_function(a, b, *args, **kwargs):
