@@ -12,6 +12,7 @@ from .decode_prefetch import (
 )
 from .layers import BatchedLinearDecode, DeepSeekV4RMSNorm, LinearDecode, _rms_norm_unweighted
 from .paged_cache import PagedLayerView
+from .system_config import active_system_config
 from .weight_cache import WeightCache, _as_cache, _load_weight, _materialize
 
 
@@ -514,7 +515,7 @@ class DeepSeekV4HCACompressor:
         cache: Optional[WeightCache] = None,
         weight_dtype: ttnn.DataType = ttnn.bfloat16,
         use_prefetcher: bool = False,
-        num_prefetch_pages: int = 16,
+        num_prefetch_pages: Optional[int] = None,
         prefetch_buffers: Optional[dict] = None,
     ):
         self.device = device
@@ -524,6 +525,8 @@ class DeepSeekV4HCACompressor:
         self.head_dim = config.head_dim
         self.compress_rate = config.compress_rates["heavily_compressed_attention"]
         cache = _as_cache(cache)
+        if num_prefetch_pages is None:
+            num_prefetch_pages = active_system_config().prefetcher.num_prefetch_pages
         self.kv_proj, self.gate_proj = _compressor_projections(
             "heavily_compressed_attention",
             config,
@@ -651,7 +654,7 @@ class DeepSeekV4CSACompressor:
         cache: Optional[WeightCache] = None,
         weight_dtype: ttnn.DataType = ttnn.bfloat16,
         use_prefetcher: bool = False,
-        num_prefetch_pages: int = 16,
+        num_prefetch_pages: Optional[int] = None,
         prefetch_buffers: Optional[dict] = None,
     ):
         self.device = device
@@ -661,6 +664,8 @@ class DeepSeekV4CSACompressor:
         self.head_dim = config.head_dim
         self.compress_rate = config.compress_rates["compressed_sparse_attention"]
         cache = _as_cache(cache)
+        if num_prefetch_pages is None:
+            num_prefetch_pages = active_system_config().prefetcher.num_prefetch_pages
         self.kv_proj, self.gate_proj = _compressor_projections(
             "compressed_sparse_attention",
             config,
@@ -882,9 +887,16 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         cache: Optional[WeightCache] = None,
         weight_dtype: ttnn.DataType = ttnn.bfloat16,
         use_prefetcher: bool = False,
-        num_prefetch_pages: int = 16,
+        num_prefetch_pages: Optional[int] = None,
         prefetch_buffers: Optional[dict] = None,
+        system_config=None,
     ):
+        # SDPA program config, the resident-weight choice and the prefetch ring depth all
+        # come from the system profile unless the caller pinned them.
+        sys_cfg = system_config or active_system_config()
+        self.system_config = sys_cfg
+        if num_prefetch_pages is None:
+            num_prefetch_pages = sys_cfg.prefetcher.num_prefetch_pages
         self.use_prefetcher = use_prefetcher
         self.config = config
         self.layer_idx = layer_idx
@@ -920,22 +932,23 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         # q_a and kv both read the block's hidden, so one matmul over their concatenated
         # weight replaces two and ``_qkv`` splits the halves back out. Only on the L1 path:
         # the fused weight cannot join the shared decode GCB (see DECODE_LAYOUTS), so under
-        # the prefetcher the two projections stay separate.
+        # the prefetcher the two projections stay separate. ``attention.fuse_qa_kv_proj`` in
+        # the system profile picks between that and never fusing (see
+        # :meth:`AttentionSettings.resolve_fuse_qa_kv`).
         # The split width is q_a's output, read off the layout registry rather than the
         # config: the layouts are fixed constants anyway (``check_decode_layout`` below is
         # what ties them to this config), and not every caller's config object carries
         # ``q_lora_rank``.
         self.q_lora_rank = DECODE_LAYOUTS["q_a_proj"]["N"]
-        self.fused_qa_kv = True  # not use_prefetcher
+        self.fused_qa_kv = sys_cfg.attention.resolve_fuse_qa_kv(use_prefetcher)
         if self.fused_qa_kv:
-            print("use fused qa_kv_proj")
             check_decode_layout("qa_kv_proj", config.hidden_size, self.q_lora_rank + self.head_dim)
             self.qa_kv_proj = LinearDecode(
                 _concat_weight(weights["q_a_proj.weight"], weights["kv_proj.weight"]),
                 device,
                 cache.file("qa_kv_proj"),
                 dtype=weight_dtype,
-                keep_weights_in_l1=True,
+                keep_weights_in_l1=sys_cfg.attention.keep_qa_kv_weights_in_l1,
                 **DECODE_LAYOUTS["qa_kv_proj"],
             )
         else:
@@ -1005,20 +1018,15 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         # ``head_dim == 256`` that overflows L1 (~1.8 MB > 1.5 MB), independent of
         # the grid.
         #
-        # 2 rather than 4 because these CBs are *statically* allocated and so have to fit
-        # under whatever L1 buffers are live at the call -- which now includes a resident
-        # projection weight (``keep_weights_in_l1``, ~55 KB/core at bf4). At 4 the CB region
-        # runs ~60 KB past the resident buffer and the program fails to build; the term above
-        # is linear in ``cores_per_head - 1``, so dropping to 2 cuts that scratch CB to a
-        # third of what 4 asks for. The cost is the KV reduction splitting 2 ways instead of
-        # 4, which is the part of the op that scales with the (short) KV axis.
-        self._sdpa_pcfg = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
-            q_chunk_size=0,
-            k_chunk_size=32,
-            exp_approx_mode=False,
-            max_cores_per_head_batch=2,
-        )
+        # The profile's default is 2 rather than 4 because these CBs are *statically*
+        # allocated and so have to fit under whatever L1 buffers are live at the call --
+        # which now includes a resident projection weight (``keep_weights_in_l1``, ~55
+        # KB/core at bf4). At 4 the CB region runs ~60 KB past the resident buffer and the
+        # program fails to build; the term above is linear in ``cores_per_head - 1``, so
+        # dropping to 2 cuts that scratch CB to a third of what 4 asks for. The cost is the
+        # KV reduction splitting 2 ways instead of 4, which is the part of the op that
+        # scales with the (short) KV axis.
+        self._sdpa_pcfg = sys_cfg.attention.sdpa_program_config(device)
 
         # The rotate-half matrix must stay precise (a bf4 rotation would corrupt RoPE).
         self.rot = _load_weight(_interleaved_rotate_matrix(self.rope_dim), device, cache_file_name=cache.file("rot"))

@@ -136,6 +136,7 @@ from models.experimental.deepseek_v4_flash.encoding_dsv4 import (
 )
 from models.experimental.deepseek_v4_flash.tt.common import _region
 from models.experimental.deepseek_v4_flash.tt.paged_cache import PagedCacheFull
+from models.experimental.deepseek_v4_flash.tt.system_config import load_system_config
 
 _VENDOR = "tenstorrent"
 _THINK_OPEN = "<think>"
@@ -409,6 +410,15 @@ def _parse_tool_calls(block: str) -> list[dict]:
 
 
 SAMPLER_TOP_K = 64
+
+# Generated tokens the live decode rate is averaged over, as
+# ``tests/test_full_model_decode_demo.py`` reports throughput over a rolling window
+# rather than a whole run. A session's first ``sliding_window`` positions replay the
+# masked SDPA variant, whose cost is set by ``--max-context`` instead of by the
+# position, so a turn that starts on a cold cache is slow for that prefix and then
+# speeds up mid-reply when the causal variant takes over. Averaged over the whole
+# reply that prefix hides the rate the turn actually settled at.
+DECODE_RATE_WINDOW = 16
 
 
 def _make_sampler(temperature, top_p):
@@ -687,7 +697,15 @@ class _Turn:
     PREFILL = "prefill"
     DECODE = "decode"
 
-    def __init__(self, user_key: str, slot: int, body: dict, sampler, max_tokens: int):
+    def __init__(
+        self,
+        user_key: str,
+        slot: int,
+        body: dict,
+        sampler,
+        max_tokens: int,
+        rate_window: int = DECODE_RATE_WINDOW,
+    ):
         self.user_key = user_key
         self.slot = slot
         self.body = body
@@ -723,6 +741,9 @@ class _Turn:
         self.t_admit = 0.0
         self.t_prefill_done = 0.0
         self.t_done = 0.0
+        # One mark per generated token, for the trailing-window rate. Bounded, so the
+        # window slides rather than growing into a whole-reply average.
+        self._marks: deque[float] = deque(maxlen=max(2, rate_window) + 1)
 
     @property
     def prompt_left(self) -> int:
@@ -739,9 +760,28 @@ class _Turn:
             return 0.0
         return max((self.t_done or time.perf_counter()) - self.t_prefill_done, 0.0)
 
+    def mark_token(self) -> None:
+        """Record that a generated token was dispatched, for :attr:`decode_rate`."""
+        self._marks.append(time.perf_counter())
+
     @property
     def decode_rate(self) -> float:
-        """Tokens per second this turn has generated, for this user alone."""
+        """Tokens per second over the last few generated tokens, for this user alone.
+
+        The trailing window is what the turn is decoding at *now*, which is the useful
+        number both for the status pane and for judging the effect of a cold cache: a
+        turn admitted at position 0 climbs to its steady rate part-way through the
+        reply (see :data:`DECODE_RATE_WINDOW`), and this shows that instead of
+        flattening it. Falls back to the mean until two tokens have been marked.
+        """
+        if len(self._marks) < 2:
+            return self.mean_decode_rate
+        span = self._marks[-1] - self._marks[0]
+        return (len(self._marks) - 1) / span if span > 0 else 0.0
+
+    @property
+    def mean_decode_rate(self) -> float:
+        """Tokens per second averaged over the whole reply, for this user alone."""
         seconds = self.decode_seconds
         return len(self.generated) / seconds if seconds > 0 else 0.0
 
@@ -757,6 +797,7 @@ class _Turn:
             "max_tokens": self.max_tokens,
             "prefill_seconds": self.prefill_seconds,
             "decode_rate": self.decode_rate,
+            "mean_decode_rate": self.mean_decode_rate,
             "cancelled": self.cancelled.is_set(),
         }
 
@@ -1090,11 +1131,14 @@ class _Scheduler:
             self._finish(turn)
             return
         turn.generated.append(turn.next_id)
+        turn.mark_token()
         turn.stream.push(turn.generated)
         if len(turn.generated) % 32 == 0:
             logger.debug(
                 f"user {turn.user_key!r}: {len(turn.generated)}/{turn.max_tokens} tokens "
-                f"at {turn.decode_rate:.2f} tok/s, cache at {user.pos}/{self.engine.max_seq}"
+                f"at {turn.decode_rate:.2f} tok/s over the last {DECODE_RATE_WINDOW} "
+                f"({turn.mean_decode_rate:.2f} tok/s for the reply so far), "
+                f"cache at {user.pos}/{self.engine.max_seq}"
             )
         user.activate()
         self._send(turn, user, turn.next_id, last_prompt_token=False)
@@ -1141,7 +1185,8 @@ class _Scheduler:
         self._retire(turn)
         logger.info(
             f"user {turn.user_key!r} (slot {user.index}): prefill {len(turn.ids)} tokens in "
-            f"{turn.prefill_seconds:.2f}s, decoded {len(turn.generated)} at {turn.decode_rate:.2f} tok/s, "
+            f"{turn.prefill_seconds:.2f}s, decoded {len(turn.generated)} at "
+            f"{turn.mean_decode_rate:.2f} tok/s mean, {turn.decode_rate:.2f} tok/s at the end, "
             f"context {user.pos}/{self.engine.max_seq}, finish={'length' if turn.hit_cap else 'stop'}"
             f"{', client gone' if turn.cancelled.is_set() else ''}, {len(self._active)} turns still active"
         )
@@ -1647,10 +1692,16 @@ class _ModelHTTPServer(ThreadingHTTPServer):
         self.api = api
 
 
-def _add_model_args(p: argparse.ArgumentParser) -> None:
-    """The model/engine flags, identical to ``chat_cli.parse_args``."""
+def _add_model_args(p: argparse.ArgumentParser, sys_cfg) -> None:
+    """The model/engine flags, identical to ``chat_cli.parse_args``.
+
+    The sizing defaults come from ``sys_cfg``, the machine's system profile (its
+    ``server`` variant -- see :mod:`...tt.system_config`), so they follow the hardware
+    instead of being restated here.
+    """
     from models.experimental.deepseek_v4_flash.tests.test_full_model_decode_demo import _DEFAULT_MODEL_DIR
 
+    decode = sys_cfg.decode
     p.add_argument("--model-dir", default=_DEFAULT_MODEL_DIR, help="HF snapshot (or hub cache) of the checkpoint")
     p.add_argument(
         "--cache-dir",
@@ -1660,13 +1711,13 @@ def _add_model_args(p: argparse.ArgumentParser) -> None:
     p.add_argument(
         "--num-layers",
         type=int,
-        default=int(os.environ.get("DEEPSEEK_V4_DECODE_LAYERS", "0")) or None,
+        default=decode.num_layers or None,
         help="cap the decoder stack (the full 43 layers do not fit one Blackhole)",
     )
     p.add_argument(
         "--num-users",
         type=int,
-        default=int(os.environ.get("DEEPSEEK_V4_NUM_USERS", "8")),
+        default=decode.num_users,
         help="turns that can generate at once, each with its own KV session (fixed at "
         "startup: their cache blocks cannot be allocated once the traces exist). Note "
         "the rounds interleave rather than batch, so the device's token rate is shared: "
@@ -1675,22 +1726,25 @@ def _add_model_args(p: argparse.ArgumentParser) -> None:
     p.add_argument(
         "--max-context",
         type=int,
-        default=int(os.environ.get("DEEPSEEK_V4_MAX_CONTEXT", "524288")),
+        default=decode.max_context,
         help="tokens (all turns) one user's caches are addressed for; rounded up. The "
-        "model handles 524288, but that much per user costs page-table width and pool "
-        "blocks for every session, so the default is sized for a busy server",
+        "model handles 524288, but this is a throughput knob as much as a capacity one: "
+        "a session's opening steps attend through a mask that the kernel walks over the "
+        "whole addressed axis, so a reply decoded on a cold cache costs in proportion to "
+        "this value until it passes the sliding window (see the profile's comment). "
+        "Raise it for long conversations and expect slower first replies",
     )
     p.add_argument(
         "--total-context",
         type=int,
-        default=int(os.environ.get("DEEPSEEK_V4_TOTAL_CONTEXT", "2097152")) or None,
+        default=decode.total_context or None,
         help="total tokens the shared block pool holds across all users "
         "(default: --num-users x --max-context, i.e. every user can fill its context)",
     )
     p.add_argument(
         "--max-new-tokens",
         type=int,
-        default=int(os.environ.get("DEEPSEEK_V4_MAX_NEW_TOKENS", "2048")),
+        default=decode.max_new_tokens,
         help="cap on the tokens generated per reply",
     )
     p.add_argument(
@@ -1713,14 +1767,20 @@ def _add_model_args(p: argparse.ArgumentParser) -> None:
         default=None,
         help="reasoning-effort hint, only meaningful with --think",
     )
-    p.add_argument("--trace-region-size", type=int, default=int(os.environ.get("DEEPSEEK_V4_TRACE_REGION_SIZE", "0")))
-    p.add_argument("--no-trace", dest="traced", action="store_false", help="eager decode instead of traced decode")
+    p.add_argument("--trace-region-size", type=int, default=sys_cfg.device.trace_region_size)
+    p.add_argument(
+        "--no-trace",
+        dest="traced",
+        action="store_false",
+        default=decode.traced,
+        help="eager decode instead of traced decode",
+    )
     p.add_argument(
         "--no-prefetcher",
         dest="prefetcher",
         action="store_const",
         const=False,
-        default=None,
+        default=sys_cfg.prefetcher.enabled,
         help="feed the attention projections with a DRAM->L1 copy per call instead of the "
         "DRISC tensor prefetcher (default: use it wherever the device supports it)",
     )
@@ -1728,8 +1788,28 @@ def _add_model_args(p: argparse.ArgumentParser) -> None:
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    # See ``chat_cli.parse_args``: the profile has to be resolved before the parser is
+    # built, since it supplies the sizing defaults. ``variant="server"`` picks the
+    # server flavour of whichever machine profile applies.
+    pre = argparse.ArgumentParser(add_help=False)
+    pre.add_argument("--system-profile", default=None)
+    pre.add_argument("--system-config-file", default=None)
+    pre_args, _ = pre.parse_known_args(argv)
+    sys_cfg = load_system_config(profile=pre_args.system_profile, path=pre_args.system_config_file, variant="server")
+
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    _add_model_args(p)
+    p.add_argument(
+        "--system-profile",
+        default=pre_args.system_profile,
+        help=f"machine tuning profile to load (default: {sys_cfg.name}); "
+        f"see configs/system_configs.yaml, or $DEEPSEEK_V4_SYSTEM_PROFILE",
+    )
+    p.add_argument(
+        "--system-config-file",
+        default=pre_args.system_config_file,
+        help="alternate profile file (default: configs/system_configs.yaml)",
+    )
+    _add_model_args(p, sys_cfg)
     p.add_argument(
         "--host", default=os.environ.get("DEEPSEEK_V4_HOST", "0.0.0.0"), help="interface to bind (default: all)"
     )
@@ -1769,6 +1849,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "stdout is not a terminal, e.g. under nohup or in CI)",
     )
     args = p.parse_args(argv)
+    args.system_config = sys_cfg
+    # ``ChatEngine`` re-resolves the profile once the mesh is open; keep it on the
+    # server flavour when it does.
+    args.system_variant = "server"
     if args.system_prompt_file:
         args.system_prompt = Path(args.system_prompt_file).expanduser().read_text().strip()
     if args.reasoning_effort and not args.think:
@@ -1818,7 +1902,7 @@ def main(argv: list[str] | None = None) -> int:
         f"shared pool {args.total_context} tokens. The rounds interleave rather than batch, so "
         f"expect the device's token rate to be split across the users that are decoding."
     )
-    with open_mesh_device(args.trace_region_size) as mesh_device:
+    with open_mesh_device(args.trace_region_size, system_config=args.system_config) as mesh_device:
         # The prefetcher session spans the trace capture, the warmup and every served
         # turn, so it is opened inside ``ChatEngine`` (once the model exists) against
         # this stack, and the senders are stopped before the mesh device is closed.

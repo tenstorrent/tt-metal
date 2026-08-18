@@ -1,6 +1,5 @@
 import contextlib
 import math
-import os
 from typing import Optional
 
 import torch
@@ -32,6 +31,7 @@ from .hyperconnection import DeepSeekV4HyperHead
 from .layers import DeepSeekV4RMSNorm
 from .moe import DeepSeekV4HashRouter, DeepSeekV4PreloadedExperts
 from .quant import dequantize_weight
+from .system_config import SystemConfig, load_system_config, set_active_system_config
 from .weight_cache import WeightCache, _as_cache
 from .weight_loader import DeepseekV4WeightLoader
 
@@ -56,18 +56,6 @@ from .weight_loader import DeepseekV4WeightLoader
 #     whole stack); on the real 43-layer checkpoint cap with ``max_layers`` /
 #     a populated ``cache`` or run the per-layer load/free loop in the demo.
 # ---------------------------------------------------------------------------- #
-
-
-def _env_pipeline_group_size() -> int:
-    """``DEEPSEEK_V4_PIPELINE_GROUP_SIZE``: devices per pipeline group (see
-    :func:`plan_layer_placement`). Unset (or <= 0) means "one group spanning every
-    device", i.e. plain round-robin over the whole mesh."""
-    raw = os.environ.get("DEEPSEEK_V4_PIPELINE_GROUP_SIZE", "1")
-    try:
-        pgs = int(raw)
-    except ValueError:
-        return 0
-    return pgs if pgs > 0 else 0
 
 
 def plan_layer_placement(num_layers: int, num_devices: int, group_size: int) -> list[int]:
@@ -142,11 +130,12 @@ def _window_indices(compress_rate: int, pos: int) -> tuple[int, int]:
 # host-side ``copy_host_to_device_tensor`` around it.
 #
 # The socket moves whole pages over PCIe, so the packet's page (its single row) must
-# be PCIe-aligned; the three meaningful INT32 slots are padded out to that page.
-_PKT_PCIE_ALIGNMENT = 64
-# Room for many steps' packets, so the host can run ahead of the device without
-# blocking in ``H2DSocket::write`` while the FIFO drains.
-_PKT_FIFO_BYTES = 64 * _PKT_PCIE_ALIGNMENT
+# be PCIe-aligned; the three meaningful INT32 slots are padded out to that page. The
+# alignment and the FIFO's page count are ``pipeline.pcie_alignment`` /
+# ``pipeline.h2d_fifo_pages`` in the system profile: the FIFO holds many steps'
+# packets so the host can run ahead of the device without blocking in
+# ``H2DSocket::write`` while it drains.
+#
 # Receiver core for the packet socket, disjoint from the (0,0) / (0,1) cores the
 # cross-submesh direct sockets use.
 _PKT_SOCKET_CORE = (0, 2)
@@ -168,27 +157,27 @@ _OUT_SOCKET_CORE = (0, 3)
 # may run ahead of the host -- barely at all -- so a step's output has to be read back
 # promptly, and by someone who is not simultaneously dispatching the next step (see
 # :meth:`DeepSeekV4Model.decode_traced_async`).
-_OUT_FIFO_BYTES = 4032
-# So one output row — which *is* one socket page — has to fit the FIFO. The output is
-# reshaped into rows of at most this size (see :func:`_d2h_page_plan`) rather than sent
-# as one enormous vocab-wide page.
-_OUT_PAGE_CAP_BYTES = _OUT_FIFO_BYTES
+# configured by ``pipeline.d2h_fifo_bytes``.
+#
+# One output row — which *is* one socket page — has to fit the FIFO, so the FIFO size
+# doubles as the page cap: the output is reshaped into rows of at most that size (see
+# :func:`_d2h_page_plan`) rather than sent as one enormous vocab-wide page.
 
 
-def _d2h_page_plan(numel: int, elem_bytes: int) -> tuple[int, int]:
+def _d2h_page_plan(numel: int, elem_bytes: int, page_cap_bytes: int, pcie_alignment: int) -> tuple[int, int]:
     """``(rows, cols)`` to reshape a flat ``numel`` output into for a D2H socket.
 
     ``send_async_d2h`` streams whole tensor pages, and a row-major tensor's page is
     one row, so the row width *is* the socket page size: it has to be PCIe-aligned
     and divide the output evenly. Returns the widest such row up to
-    ``_OUT_PAGE_CAP_BYTES``.
+    ``page_cap_bytes``.
     """
-    for cols in range(min(numel, _OUT_PAGE_CAP_BYTES // elem_bytes), 0, -1):
-        if numel % cols == 0 and (cols * elem_bytes) % _PKT_PCIE_ALIGNMENT == 0:
+    for cols in range(min(numel, page_cap_bytes // elem_bytes), 0, -1):
+        if numel % cols == 0 and (cols * elem_bytes) % pcie_alignment == 0:
             return numel // cols, cols
     raise ValueError(
         f"cannot page a {numel}-element ({elem_bytes} B/elem) output for a D2H socket: no row width "
-        f"divides it into {_PKT_PCIE_ALIGNMENT} B-aligned pages of at most {_OUT_PAGE_CAP_BYTES} B"
+        f"divides it into {pcie_alignment} B-aligned pages of at most {page_cap_bytes} B"
     )
 
 
@@ -220,13 +209,14 @@ class DeepSeekV4Model(DeepSeekV4Module):
         full_device: ttnn.MeshDevice,
         cache: Optional[WeightCache] = None,
         cache_dir: Optional[str] = None,
-        weight_dtype: ttnn.DataType = ttnn.bfloat4_b,
+        weight_dtype: Optional[ttnn.DataType] = None,
         max_layers: Optional[int] = None,
         use_submeshes: bool = False,
         require_cache: bool = False,
         pipeline_group_size: Optional[int] = None,
         use_prefetcher: Optional[bool] = None,
-        num_prefetch_pages: int = 16,
+        num_prefetch_pages: Optional[int] = None,
+        system_config: Optional[SystemConfig] = None,
     ):
         """Build the V4-Flash model off the checkpoint.
 
@@ -249,13 +239,30 @@ class DeepSeekV4Model(DeepSeekV4Module):
         :meth:`prefetcher_session`. One GCB is built per device and shared by every prefetched
         weight on it (see :func:`make_decode_prefetch_buffers`), so the cost is 288 KB of L1 per
         receiver core for the whole model rather than per layer.
+
+        ``system_config`` is the per-machine tuning profile (see
+        :mod:`.system_config`); it defaults to the one matching ``full_device``'s device
+        count, and supplies every hardware knob left unset here -- pipeline group size,
+        prefetcher depth, socket sizes, weight precision, the MoE expert block size and
+        the SDPA program config. The explicit arguments above still win, so a caller (or
+        a test) can pin one value without writing a profile. The resolved profile is
+        published process-wide with :func:`set_active_system_config` so the leaf modules
+        built below pick up the same one.
         """
         self.config = config
         self.loader = loader
-        self.weight_dtype = weight_dtype
+        if system_config is None:
+            system_config = load_system_config(mesh_device=full_device).log()
+        self.system_config = system_config
+        set_active_system_config(system_config)
+
+        self.weight_dtype = weight_dtype if weight_dtype is not None else system_config.decode.ttnn_weight_dtype
+        weight_dtype = self.weight_dtype
         if use_prefetcher is None:
-            use_prefetcher = ttnn.experimental.is_tensor_prefetcher_supported(full_device)
+            use_prefetcher = system_config.prefetcher.resolve_enabled(full_device)
         self.use_prefetcher = use_prefetcher
+        if num_prefetch_pages is None:
+            num_prefetch_pages = system_config.prefetcher.num_prefetch_pages
         self._prefetch_buffers_by_device: dict[int, dict] = {}
         if cache is None and cache_dir is not None:
             cache = WeightCache(cache_dir)
@@ -284,7 +291,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
         n = config.num_hidden_layers if max_layers is None else min(max_layers, config.num_hidden_layers)
         self.num_layers = n
         if pipeline_group_size is None:
-            pipeline_group_size = _env_pipeline_group_size()
+            pipeline_group_size = max(0, system_config.pipeline.group_size)
         self.pipeline_group_size = pipeline_group_size
         if use_submeshes:
             self.layer_submesh_ids = plan_layer_placement(self.num_layers, self.num_submeshes, pipeline_group_size)
@@ -321,7 +328,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
             # is revisited for layers S, 2S, ...); under a smaller pipeline group size
             # they are the per-group rings plus the single group-to-group edge.
             self.submesh_socket_pairs = {}
-            socket_memconfig = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, 16 * 1024)
+            socket_memconfig = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, system_config.pipeline.socket_l1_bytes)
             for from_id, to_id in self.pipeline_edges:
                 from_submesh = self.submeshes[from_id]
                 to_submesh = self.submeshes[to_id]
@@ -609,10 +616,13 @@ class DeepSeekV4Model(DeepSeekV4Module):
     # rest. That makes attention cost track the actual position rather than
     # ``max_seq``, and drops the per-step per-layer head-broadcast of the mask row.
     # The sub-window steps (whose valid set has a hole) keep the mask.
-    # ``DEEPSEEK_V4_SDPA_CAUSAL=0`` forces the mask everywhere -- the previous
+    # ``attention.sdpa_causal: false`` in the system profile (or
+    # ``DEEPSEEK_V4_SDPA_CAUSAL=0``) forces the mask everywhere -- the previous
     # behaviour, and on the traced path it collapses the capture back to one variant
     # per pool phase.
-    _SDPA_CAUSAL = os.environ.get("DEEPSEEK_V4_SDPA_CAUSAL", "1") not in ("0", "", "false", "False")
+    @property
+    def _SDPA_CAUSAL(self) -> bool:
+        return self.system_config.attention.sdpa_causal
 
     def _sdpa_causal_at(self, layer_type: str, pos: int) -> bool:
         """Should ``layer_type`` at absolute ``pos`` use causal SDPA over the mask?"""
@@ -1424,8 +1434,9 @@ class DeepSeekV4Model(DeepSeekV4Module):
         # Slots past the prefix are padding: the packet's row is one H2D socket page,
         # so its width is rounded to the PCIe alignment, not set by the payload. Nothing
         # reads them.
+        alignment = self.system_config.pipeline.pcie_alignment
         self._pkt_int_prefix = 3 * batch  # [tokens | pos_sliding | pos_compress]
-        self._pkt_page_bytes = math.ceil(self._pkt_int_prefix * 4 / _PKT_PCIE_ALIGNMENT) * _PKT_PCIE_ALIGNMENT
+        self._pkt_page_bytes = math.ceil(self._pkt_int_prefix * 4 / alignment) * alignment
         self._pkt_w = self._pkt_page_bytes // 4
         self._pkt_rd = rd
 
@@ -1531,7 +1542,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
                         device,
                         ttnn.MeshCoreCoord(ttnn.MeshCoordinate(0, 0), ttnn.CoreCoord(*_PKT_SOCKET_CORE)),
                         ttnn.BufferType.L1,
-                        _PKT_FIFO_BYTES,
+                        self.system_config.pipeline.h2d_fifo_bytes,
                         ttnn.H2DMode.HOST_PUSH,
                     )
                     # ``recv_async_h2d`` cross-checks this against the packet's aligned
@@ -1554,7 +1565,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
             self._out_socket = ttnn.D2HSocket(
                 self.submeshes_io[self._output_sm_index]["device"],
                 ttnn.MeshCoreCoord(ttnn.MeshCoordinate(0, 0), ttnn.CoreCoord(*_OUT_SOCKET_CORE)),
-                _OUT_FIFO_BYTES,
+                self.system_config.pipeline.d2h_fifo_bytes,
             )
 
         # The held-aside compressor buffers, allocated now: once a trace exists on a
@@ -1900,10 +1911,17 @@ class DeepSeekV4Model(DeepSeekV4Module):
         and dtype are finally known; the op re-checks it against the tensor on every
         program-cache miss.
         """
+        out = ttnn.reshape(out, [1, 1, -1, 2020])
         out_rm = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT)
         if self._out_plan is None:
             numel = math.prod(tuple(out_rm.shape))
-            self._out_plan = _d2h_page_plan(numel, out_rm.element_size())
+            self._out_plan = _d2h_page_plan(
+                numel,
+                out_rm.element_size(),
+                # One row is one socket page, so it has to fit the FIFO.
+                page_cap_bytes=self.system_config.pipeline.d2h_fifo_bytes,
+                pcie_alignment=self.system_config.pipeline.pcie_alignment,
+            )
             self._out_torch_dtype = {ttnn.bfloat16: torch.bfloat16, ttnn.float32: torch.float32}[out_rm.dtype]
             self._out_socket.set_page_size(self._out_plan[1] * out_rm.element_size())
         ttnn.experimental.send_async_d2h(ttnn.reshape(out_rm, list(self._out_plan)), self._out_socket)
@@ -2067,7 +2085,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
 
         Whoever reads the outputs must not be the thread that dispatches, or the steps in
         flight have to be kept to a handful. The output socket's FIFO is a single pinned
-        host page (:data:`_OUT_FIFO_BYTES`), so a step whose output nobody is reading
+        host page (``pipeline.d2h_fifo_bytes``), so a step whose output nobody is reading
         stalls the sender kernel inside the last submesh's trace; further steps back up
         behind it through the cross-submesh sockets until every submesh's command queue is
         full, at which point a host that is still dispatching blocks on a full queue while

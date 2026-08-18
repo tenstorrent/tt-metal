@@ -18,6 +18,7 @@
 #include "api/compute/bcast.h"
 #include "api/compute/common.h"
 #include "api/compute/compute_kernel_api.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
@@ -90,7 +91,7 @@ void sub_max_exp_mask(uint32_t cb_comb, uint32_t cb_red, uint32_t cb_mask) {
     cb_wait_front(cb_red, 1);
     cb_wait_front(cb_mask, 1);
 
-    sub_bcast_cols_init_short(cb_comb, cb_red);
+    sub_bcast_cols_init(cb_comb, cb_red);
     tile_regs_acquire();
     sub_tiles_bcast_cols(cb_comb, cb_red, 0, 0, 0);
     exp_tile_init();
@@ -120,9 +121,9 @@ void mul_bcast_recip(uint32_t cb_comb, uint32_t cb_red, bool is_col, uint32_t cb
     cb_wait_front(cb_red, 1);
 
     if (is_col) {
-        mul_bcast_cols_init_short(cb_comb, cb_red);
+        mul_bcast_cols_init(cb_comb, cb_red);
     } else {
-        mul_bcast_rows_init_short(cb_comb, cb_red);
+        mul_bcast_rows_init(cb_comb, cb_red);
     }
     tile_regs_acquire();
     if (is_col) {
@@ -186,7 +187,7 @@ void kernel_main() {
     constexpr uint32_t eps_bits = get_compile_time_arg_val(11);
     (void)num_streams;
 
-    binary_op_init_common(cb_comb_w, cb_comb_bias, cb_comb);
+    compute_kernel_hw_startup(cb_comb_w, cb_comb_bias, cb_comb);
 
     cb_wait_front(cb_scaler, 1);
     cb_wait_front(cb_comb_bias, 1);
