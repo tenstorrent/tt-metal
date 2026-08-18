@@ -454,6 +454,178 @@ inline void _llk_math_matmul_uninit_no_mop_()
     // No state to restore - all states are transient or default
 }
 
+// --- Tiny-tile pair (16x32 in0, full 32x32 in1) with SrcA held across the pair ---
+//
+// Two GENUINE 16x32 @ 32x32 matmuls that share one SrcA (in1) residency: the unpacker fills a
+// single SrcB bank with two 16x32 row tiles (face-slots 0..1 and 2..3), and per output column the
+// math runs ONE 16-MVMUL replay that interleaves the two row tiles' face-row-confined walks —
+// alternating 2-MVMUL groups between row-tile 0 (SrcB rows 0..31 -> its own DEST slot) and
+// row-tile 1 (SrcB rows 32..63 -> the adjacent DEST slot). Interleaving matters twice over:
+// SrcA unpack traffic halves (each streamed tile serves both row tiles before release), and every
+// DEST row-group accumulation revisit sits ~7 instructions apart instead of 4, hiding the DEST
+// read-modify-write latency that otherwise stalls the tiny walk (only 4 dest row-groups exist in
+// a 16x32 tile, so the non-interleaved walk cannot space its revisits any further).
+//
+// This does NOT fuse the pair into a classic 32x32 matmul: each 2-MVMUL group is a plain tiny-tile
+// face-MAC targeting its own 16x32 DEST tile; only the ISSUE ORDER interleaves.
+//
+// DEST layout is column-major: row-tile 0 of column c at slot (2c), row-tile 1 at slot (2c + 1);
+// the +-56/-88 dest jumps in the walk encode the fixed 64-row distance between adjacent slots.
+
+template <MathFidelity math_fidelity, bool transpose>
+inline void matmul_configure_addrmod_tiny_pair()
+{
+    constexpr std::uint32_t fidelity_increment = (math_fidelity != MathFidelity::LoFi) ? 1 : 0;
+
+    // Within a 2-MVMUL group: next 8 SrcB rows, next 8 DEST rows, same SrcA face.
+    addr_mod_t {
+        .srca = {.incr = 0, .clr = 0, .cr = 0},
+        .srcb = {.incr = 8, .clr = 0, .cr = 0},
+        .dest = {.incr = 8, .clr = 0, .cr = 0},
+    }
+        .set(ADDR_MOD_0);
+
+    // Row-tile 0 -> row-tile 1, same SrcA face: SrcB 8+24=32 into the pair's second tile
+    // (mod-64 wrap), DEST +56 into the adjacent slot.
+    addr_mod_t {
+        .srca = {.incr = 0, .clr = 0, .cr = 0},
+        .srcb = {.incr = 24, .clr = 0, .cr = 0},
+        .dest = {.incr = 56, .clr = 0, .cr = 0},
+    }
+        .set(ADDR_MOD_1);
+
+    // Row-tile 1 -> row-tile 0, next SrcA face (within the same contraction half): SrcB wraps back
+    // (+24 mod 64), DEST -56 back to the first slot's next face rows.
+    if constexpr (transpose)
+    {
+        addr_mod_t {
+            .srca = {.incr = 32, .clr = 0, .cr = 0},
+            .srcb = {.incr = 24, .clr = 0, .cr = 0},
+            .dest = {.incr = -56, .clr = 0, .cr = 0},
+        }
+            .set(ADDR_MOD_2);
+    }
+    else
+    {
+        addr_mod_t {
+            .srca = {.incr = 16, .clr = 0, .cr = 0},
+            .srcb = {.incr = 24, .clr = 0, .cr = 0},
+            .dest = {.incr = -56, .clr = 0, .cr = 0},
+        }
+            .set(ADDR_MOD_2);
+    }
+
+    // Half-way turn (into the second contraction half): SrcB advances to face 1 rows (+40 mod 64),
+    // DEST rewinds to the first slot's first face rows (-88), SrcA moves to the half's first face.
+    if constexpr (transpose)
+    {
+        addr_mod_t {
+            .srca = {.incr = 16, .clr = 0, .cr = 1}, // CR 0+16 -> counter 16
+            .srcb = {.incr = 40, .clr = 0, .cr = 0},
+            .dest = {.incr = -88, .clr = 0, .cr = 0},
+        }
+            .set(ADDR_MOD_3);
+    }
+    else
+    {
+        addr_mod_t {
+            .srca = {.incr = 16, .clr = 0, .cr = 0},
+            .srcb = {.incr = 40, .clr = 0, .cr = 0},
+            .dest = {.incr = -88, .clr = 0, .cr = 0},
+        }
+            .set(ADDR_MOD_3);
+    }
+
+    // Trailing: reset all counters (and CR bases), advance the fidelity phase.
+    addr_mod_t {
+        .srca     = {.incr = 0, .clr = 1, .cr = 1},
+        .srcb     = {.incr = 0, .clr = 1, .cr = 1},
+        .dest     = {.incr = 0, .clr = 1, .cr = 1},
+        .fidelity = {.incr = fidelity_increment, .clr = 0},
+    }
+        .set(ADDR_MOD_5);
+}
+
+inline void matmul_configure_mop_tiny_pair()
+{
+    // One 16-MVMUL walk covers the whole pair per output column and per fidelity phase.
+    // Group order (SrcB rows -> DEST rows): A f0 c1 (0..15 -> slot0 0..15), B f0 c1 (32..47 ->
+    // slot1 0..15), A f0 c2' (0..15 -> slot0 16..31), B f0 c2' (32..47 -> slot1 16..31), then the
+    // same four groups over SrcB face 1 accumulating onto the same DEST rows. Bank releases are
+    // issued by the execute via explicit SETRWCs, never inside the replay.
+    load_replay_buf(
+        ckernel::math::replay_buf_offset,
+        16,
+        []
+        {
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0);
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, 0);
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0);
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_5, 0);
+        });
+}
+
+template <MathFidelity math_fidelity>
+inline void _llk_math_matmul_init_no_mop_tiny_pair_(
+    const std::uint32_t in0_tile_r_dim,
+    const std::uint32_t in0_tile_c_dim,
+    const std::uint32_t in1_tile_r_dim,
+    const std::uint32_t in1_tile_c_dim,
+    const bool partial_face,
+    const std::uint32_t transpose)
+{
+    LLK_ASSERT(
+        (in0_tile_r_dim <= FACE_R_DIM) && (in0_tile_c_dim > FACE_C_DIM) && (in1_tile_r_dim == TILE_R_DIM) && (in1_tile_c_dim == TILE_C_DIM) && !partial_face,
+        "tiny-pair no-mop matmul requires 16x32 in0 tiles and full 32x32 in1 tiles");
+    if (transpose)
+    {
+        matmul_configure_addrmod_tiny_pair<math_fidelity, true>();
+    }
+    else
+    {
+        matmul_configure_addrmod_tiny_pair<math_fidelity, false>();
+    }
+    matmul_configure_mop_tiny_pair();
+    math::reset_counters(p_setrwc::SET_ABD_F);
+}
+
+template <MathFidelity math_fidelity>
+inline void _llk_math_matmul_no_mop_tiny_pair_(const std::uint32_t dst_index, const std::uint32_t ct_dim)
+{
+    constexpr bool high_fidelity      = math_fidelity != MathFidelity::LoFi;
+    constexpr int num_fidelity_phases = get_math_num_fidelity_phases(math_fidelity);
+    constexpr int replays_per_column  = high_fidelity ? num_fidelity_phases : 1;
+
+    for (std::uint32_t rut = 0; rut < ct_dim; rut++)
+    {
+        // Column-major DEST: row-tile 0 at slot (dst_index + 2*rut), row-tile 1 at the adjacent
+        // slot (reached inside the walk via the fixed +-slot dest jumps). Counters and CR bases
+        // are zero on entry (init / trailing ADDR_MOD_5 / the SETRWCs below).
+        math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index + 2 * rut);
+        for (int phase = 0; phase < replays_per_column; phase++)
+        {
+            lltt::replay(ckernel::math::replay_buf_offset, 16);
+        }
+        // Release SrcA for this column (the next streamed tile lands in the freed bank) and reset
+        // all counters including the fidelity phase.
+        TTI_SETRWC(p_setrwc::CLR_A, 0, 0, 0, 0, p_setrwc::SET_ABD_F);
+    }
+    // Release the SrcB bank shared by the pair and reset all counters for the next call.
+    TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD_F);
+}
+
 template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0>
 inline void _llk_math_matmul_no_mop_(
     std::uint32_t dst_index,

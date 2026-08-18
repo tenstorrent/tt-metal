@@ -72,3 +72,18 @@ inline void llk_math_matmul_reinit_no_mop(
         transpose, g.in0_tile_r_dim, g.in0_tile_c_dim, g.in1_tile_r_dim, g.in1_tile_c_dim, g.partial_face);
     math::reset_counters(p_setrwc::SET_ABD_F);
 }
+
+// Tiny-pair variant: two genuine 16x32 @ 32x32 matmuls per streamed SrcA tile (SrcA held across
+// the pair). High fidelity re-runs the recorded walk per phase; see _llk_math_matmul_no_mop_tiny_pair_.
+template <MathFidelity math_fidelity>
+inline void llk_math_matmul_init_no_mop_tiny_pair(
+    const std::uint32_t operandA, const std::uint32_t operandB, const bool transpose = false) {
+    const MatmulNoMopGeom g = matmul_no_mop_geom(operandA, operandB);
+    _llk_math_matmul_init_no_mop_tiny_pair_<math_fidelity>(
+        g.in0_tile_r_dim, g.in0_tile_c_dim, g.in1_tile_r_dim, g.in1_tile_c_dim, g.partial_face, transpose);
+}
+
+template <MathFidelity math_fidelity>
+inline void llk_math_matmul_no_mop_tiny_pair(const uint dst_index, const std::uint32_t ct_dim) {
+    _llk_math_matmul_no_mop_tiny_pair_<math_fidelity>(dst_index, ct_dim);
+}

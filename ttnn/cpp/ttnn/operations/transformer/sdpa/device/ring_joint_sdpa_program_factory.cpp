@@ -1026,7 +1026,20 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
 
     const bool q_tiny_tile = q_chunk_size == tt::constants::FACE_HEIGHT;
     const uint32_t q_tile_height = q_tiny_tile ? tt::constants::FACE_HEIGHT : tt::constants::TILE_HEIGHT;
-    const uint32_t Sq_chunk_t = q_chunk_size / q_tile_height;
+    // Tiny-Q pairing: keep genuine 16x32 tiny tiles (per-16-row softmax stats and diag masks)
+    // but walk each K chunk once per PAIR of 16-row chunks (Sq_chunk_t = 2). The K-chunk unpack
+    // stream and per-chunk fixed costs dominate q16 (K traffic is independent of Q rows), so an
+    // unpaired 16-row pass pays q32's per-chunk cost for half the rows. Each matmul issue stays a
+    // 16x32 @ 32x32 tiny-tile matmul (subblock_h = 2 issues two tiny replays, one per row tile).
+    // Requires both the local and joint Q regions to split into whole 32-row pairs; sliding
+    // windows plan Q work in single-chunk units and keep the unpaired path.
+    const bool q_tiny_pair = q_tiny_tile && !has_sliding_window &&
+                             (q_local_padded_N % (2 * tt::constants::FACE_HEIGHT) == 0) &&
+                             (L_local % (2 * tt::constants::FACE_HEIGHT) == 0);
+    // Q rows consumed per compute chunk. The op-level q_chunk_size stays 16; only the kernel-side
+    // chunking pairs it. All num-Q-chunk math below must use kernel_q_chunk_size.
+    const std::size_t kernel_q_chunk_size = q_tiny_pair ? 2 * q_chunk_size : q_chunk_size;
+    const uint32_t Sq_chunk_t = kernel_q_chunk_size / q_tile_height;
     const uint32_t Sk_chunk_t = k_chunk_size / tt::constants::TILE_HEIGHT;
 
     // Chunked-prefill balanced layout: each device holds one per-chunk K region per chunk.
@@ -1093,9 +1106,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // Single CB holds neginf, either the causal diagonal or sliding edge palette, and partial masks.
     const uint32_t total_lightweight_mask_tiles = 1 + edge_mask_tiles + partial_mask_tiles;
 
-    const uint32_t num_local_q_chunks = tt::div_up(q_local_padded_N, q_chunk_size);
+    const uint32_t num_local_q_chunks = tt::div_up(q_local_padded_N, kernel_q_chunk_size);
     // Q chunking uses L_local (per-device shard on sharded path, full L on replicated).
-    const uint32_t num_joint_q_chunks = tt::div_up(L_local, q_chunk_size);
+    const uint32_t num_joint_q_chunks = tt::div_up(L_local, kernel_q_chunk_size);
     const uint32_t num_q_chunks = num_local_q_chunks + num_joint_q_chunks;
     const uint32_t num_local_k_chunks = tt::div_up(kv_local_padded_N, k_chunk_size);
     // Sharded joint: per-iteration K chunk count for one shard (L_local). Replicated: full L.
@@ -1213,7 +1226,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // (an L1->L1 transfer) we read the first vDHt rows of K^T directly. V is never produced and the
     // phase-2 matmul consumes one V column tile per issue (out_subblock_w=1). The kernels derive the
     // same predicate from their compile-time args via the shared kt_inplace_v_enabled() helper.
-    const bool kt_inplace_v = kt_inplace_v_enabled(v_shares_k_buffer, Sq_chunk_t);
+    const bool kt_inplace_v = kt_inplace_v_enabled(v_shares_k_buffer, Sq_chunk_t, q_tiny_tile);
 
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
     uint32_t q_tiles = Sq_chunk_t * DHt * q_buffer_factor;
@@ -1686,6 +1699,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
     if (q_tiny_tile) {
         defines["Q_TINY_TILE"] = "1";
+    }
+    if (q_tiny_pair) {
+        defines["Q_TINY_PAIR"] = "1";
     }
 
     // NOTE: CreateKernel calls are deferred until after chain construction so that

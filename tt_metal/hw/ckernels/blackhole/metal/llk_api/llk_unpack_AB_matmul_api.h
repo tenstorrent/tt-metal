@@ -127,3 +127,47 @@ inline void llk_unpack_AB_matmul(
         kt_dim);
     WAYPOINT("UPMD");
 }
+
+// Tiny-pair variant: two 16x32 in0 row tiles share one SrcB bank and one streamed SrcA pass.
+// Feeds llk_math_matmul_no_mop_tiny_pair; see _llk_unpack_AB_matmul_tiny_pair_.
+__attribute__((always_inline)) inline void llk_unpack_AB_matmul_init_tiny_pair(
+    const std::uint32_t operandA,
+    const std::uint32_t operandB,
+    const std::uint32_t transpose = 0,
+    const std::uint32_t ct_dim = 1,
+    const std::uint32_t kt_dim = 1) {
+    // In0 -> srcB, In1 -> srcA (same swapped-id convention as llk_unpack_AB_matmul_init)
+    const uint32_t operandA_id = get_operand_id(operandB);
+    const uint32_t operandB_id = get_operand_id(operandA);
+
+    const uint32_t unpA_face_r_dim = get_operand_face_r_dim(operandA_id);
+    const uint32_t unpB_face_r_dim = get_operand_face_r_dim(operandB_id);
+    const uint32_t unpA_num_faces = get_operand_num_faces(operandA_id);
+    const uint32_t unpB_num_faces = get_operand_num_faces(operandB_id);
+
+    _llk_unpack_AB_matmul_init_tiny_pair_(
+        transpose, ct_dim, kt_dim, unpA_face_r_dim, unpB_face_r_dim, unpA_num_faces, unpB_num_faces);
+}
+
+inline void llk_unpack_AB_matmul_tiny_pair(
+    const std::uint32_t operandA,
+    const std::uint32_t operandB,
+    const std::uint32_t tile_index_a0,
+    const std::uint32_t tile_index_a1,
+    const std::uint32_t tile_index_b,
+    const std::uint32_t ct_dim = 1) {
+    // In0/InA -> srcB, In1/InB -> srcA
+    const std::uint32_t operandA_id = get_operand_id(operandA);
+    const std::uint32_t operandB_id = get_operand_id(operandB);
+
+    const std::uint32_t base_address_a = get_local_cb_interface(operandA_id).fifo_rd_ptr - 1;
+    const std::uint32_t base_address_b = get_local_cb_interface(operandB_id).fifo_rd_ptr - 1;
+
+    const std::uint32_t tile_size_a = get_local_cb_interface(operandA_id).fifo_page_size;
+    const std::uint32_t tile_size_b = get_local_cb_interface(operandB_id).fifo_page_size;
+
+    WAYPOINT("UPMW");
+    _llk_unpack_AB_matmul_tiny_pair_(
+        base_address_a, base_address_b, tile_index_a0, tile_index_a1, tile_index_b, tile_size_a, tile_size_b, ct_dim);
+    WAYPOINT("UPMD");
+}

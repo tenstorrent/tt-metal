@@ -44,9 +44,11 @@ constexpr uint32_t chunks_until_next_multiple(uint32_t processed_chunks, uint32_
 // Single source of truth for the in-place latent-V predicate, derived identically by the
 // program factory, the reader, and the compute kernel. In-place latent-V reads V straight
 // from K^T (skipping V materialization) when the latent K/V buffer is shared AND the Q chunk
-// is a single tile, where the softmax@V matmul is data-movement bound.
-constexpr bool kt_inplace_v_enabled(bool v_shares_k_buffer, uint32_t Sq_chunk_t) {
-    return v_shares_k_buffer && (Sq_chunk_t == 1);
+// is a single tile, where the softmax@V matmul is data-movement bound. Tiny-Q pairing keeps
+// the same single-full-tile row height as two 16x32 tiles (Sq_chunk_t == 2), so it stays on
+// the in-place path.
+constexpr bool kt_inplace_v_enabled(bool v_shares_k_buffer, uint32_t Sq_chunk_t, bool q_tiny_tile = false) {
+    return v_shares_k_buffer && (Sq_chunk_t == (q_tiny_tile ? 2u : 1u) || Sq_chunk_t == 1);
 }
 
 template <bool v_shares_k_buffer, bool kt_inplace_v = false>

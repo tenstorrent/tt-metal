@@ -327,7 +327,15 @@ void kernel_main() {
     constexpr bool use_head_chain = enable_kv_chains && !gqa_grouped_kv;
     // In-place latent-V (single-tile Q): the compute kernel reads V straight from K^T, so the
     // reader never materializes V. Shared with the program factory and compute kernel.
-    constexpr bool kt_inplace_v = kt_inplace_v_enabled(v_shares_k_buffer, Sq_chunk_t);
+    constexpr bool kt_inplace_v = kt_inplace_v_enabled(
+        v_shares_k_buffer,
+        Sq_chunk_t,
+#ifdef Q_TINY_TILE
+        true
+#else
+        false
+#endif
+    );
     constexpr uint32_t q_heads_per_v = NH / NHV;
     // Slots 37-39: sharded-joint scalars appended by the factory after upstream's attention-sink /
     // sliding-window / metadata fields (slots 32-36 above).

@@ -108,4 +108,40 @@ ALWI void mm_no_mop_reinit_short(
     MATH((llk_math_matmul_reinit_no_mop<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
 }
 
+#ifdef ARCH_BLACKHOLE
+// clang-format off
+/**
+ * Tiny-pair no-MOP matmul (Blackhole): two GENUINE 16x32 @ 32x32 matmuls that share one
+ * SrcA residency per streamed in1 tile. in0 supplies two 16x32 row tiles (arbitrary tile stride);
+ * each is multiplied against the same ct_dim streamed in1 tiles by its own face-row-confined tiny
+ * replay into its own DEST tile (column-major: row 0 of column c at idst+2c, row 1 at idst+2c+1).
+ * Halves SrcA unpack traffic versus issuing the rows as independent subblock rows.
+ *
+ * Init and execute must use the same ct_dim. DEST must hold 2*ct_dim tiles.
+ */
+// clang-format on
+// Function template (trivial parameter) so the pair LLK templates are instantiated only at call
+// sites; a plain inline function would instantiate them in every kernel including this header.
+template <bool Enable = true>
+ALWI void mm_no_mop_tiny_pair_init_short(
+    uint32_t in0_cb_id, uint32_t in1_cb_id, const bool transpose = false, uint32_t ct_dim = 1, uint32_t kt_dim = 1) {
+    UNPACK((llk_unpack_AB_matmul_init_tiny_pair(in0_cb_id, in1_cb_id, transpose, ct_dim, kt_dim)));
+    MATH((llk_math_matmul_init_no_mop_tiny_pair<MATH_FIDELITY>(in0_cb_id, in1_cb_id, transpose)));
+}
+
+template <bool Enable = true>
+ALWI void matmul_block_no_mop_tiny_pair(
+    uint32_t in0_cb_id,
+    uint32_t in1_cb_id,
+    uint32_t in0_tile_index0,
+    uint32_t in0_tile_index1,
+    uint32_t in1_tile_index,
+    uint32_t idst,
+    uint32_t ct_dim) {
+    UNPACK((llk_unpack_AB_matmul_tiny_pair(
+        in0_cb_id, in1_cb_id, in0_tile_index0, in0_tile_index1, in1_tile_index, ct_dim)));
+    MATH((llk_math_matmul_no_mop_tiny_pair<MATH_FIDELITY>(idst, ct_dim)));
+}
+#endif  // ARCH_BLACKHOLE
+
 }  // namespace ckernel

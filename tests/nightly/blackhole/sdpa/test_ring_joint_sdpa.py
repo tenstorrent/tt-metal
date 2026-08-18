@@ -5721,9 +5721,12 @@ else:
         # Kimi-K3, measured 2026-08-05 on bh_quietbox_2 (run 31003064713): 4.845 ms. Inert until
         # #52190 ungates this test here; kimi50k read 65.89 vs its committed 66.05 in the same run.
         ("kimi_k3", 32, 640, 4, 67.07),
-        # Genuine 16x32 tiny tiles with strided-wide in-place latent V and q16-specific
-        # approximate/LoFi compute. Measured 2026-08-10: 8.354 ms, 38.90% math utilization on QB.
-        ("kimi_k3", 16, 640, 4, 38.90),
+        # Genuine 16x32 tiny tiles, processed as paired chunks: each K chunk is walked once per
+        # PAIR of 16-row chunks (Sq_chunk_t=2), and the Blackhole tiny-pair no-mop matmul holds
+        # each streamed SrcA (K^T) tile across the pair's two genuine 16x32 @ 32x32 walks,
+        # halving SrcA unpack traffic (the q16 bottleneck: K streaming is independent of Q rows).
+        # Beats the q32 row. Measured 2026-08-17: 4.533 ms, 71.68% math utilization on QB.
+        ("kimi_k3", 16, 640, 4, 71.68),
     ]
 
 

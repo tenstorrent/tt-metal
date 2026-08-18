@@ -307,6 +307,113 @@ inline void _llk_unpack_AB_matmul_uninit_()
 }
 
 /**
+ * @brief Init for @ref _llk_unpack_AB_matmul_tiny_pair_: reuse-A MOP with face-stepped SrcB fills.
+ *
+ * Identical to @ref _llk_unpack_AB_matmul_init_ with rt_dim=1 (reuse-A SrcA streaming), except the
+ * SrcB unpacker is programmed face-by-face (one 16x16 face per UNPACR with explicit z stepping) so
+ * the pair execute can stack two 16x32 row tiles into face-slots 0..3 of a single SrcB bank.
+ */
+__attribute__((always_inline)) inline void _llk_unpack_AB_matmul_init_tiny_pair_(
+    const std::uint32_t transpose,
+    const std::uint32_t ct_dim,
+    const std::uint32_t kt_dim,
+    const std::uint32_t unpA_face_r_dim,
+    const std::uint32_t unpB_face_r_dim,
+    const std::uint32_t unpA_num_faces,
+    const std::uint32_t unpB_num_faces)
+{
+    LLK_ASSERT(unpB_num_faces == 2 && unpB_face_r_dim == FACE_R_DIM, "tiny-pair init requires 16x32 in0 tiles");
+    LLK_ASSERT(unpA_num_faces == 4, "tiny-pair init requires full 32x32 in1 tiles");
+
+    // See _llk_unpack_AB_matmul_init_: restore within-face transpose in case datacopy disabled it.
+    cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(transpose);
+
+    TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
+
+    // SrcA (in1): full-tile unpacks, streamed by the MOP.
+    const std::uint32_t unpA_x_end = unpA_num_faces * unpA_face_r_dim * FACE_C_DIM - 1;
+    TT_SETADCXX(p_setadc::UNP_A, unpA_x_end, 0x0);
+
+    // SrcB (in0): face-by-face so each UNPACR advances the face counters by exactly one 16x16
+    // face, letting the execute stack two row tiles into one bank.
+    config_unpacker_x_end<p_setadc::UNP_B>(unpB_face_r_dim);
+
+    TT_SETDMAREG(0, LOWER_HALFWORD(kt_dim), 0, LO_16(p_gpr_unpack::KT_DIM)); // store kt_dim to gpr for scaling tile size
+
+    _llk_unpack_AB_matmul_mop_config_<0, 0>(ct_dim, /*rt_dim=*/1, /*unpA_partial_face=*/false, /*unpB_partial_face=*/false);
+}
+
+/**
+ * @brief Unpack one SrcA (in1) tile stream and a PAIR of 16x32 in0 row tiles into a single SrcB bank.
+ *
+ * Feeds @ref _llk_math_matmul_no_mop_tiny_pair_ on the math thread: the two 16x32 row tiles land in
+ * face-slots 0..1 and 2..3 of one SrcB bank (one Dvalid for the pair), and the ct_dim SrcA tiles are
+ * streamed by the reuse-A MOP exactly as in @ref _llk_unpack_AB_matmul_ (each SrcA tile is consumed
+ * by BOTH row tiles before the math releases it). The row tiles may sit at any tile stride in L1;
+ * the L1-side face counter jumps to row-tile 1 between the fills (SETADC, no engine drain).
+ *
+ * @param base_address_a: L1 base address of operand A's (in0) tile buffer.
+ * @param base_address_b: L1 base address of operand B's (in1) tile buffer.
+ * @param tile_index_a0: in0 row-tile 0 index.
+ * @param tile_index_a1: in0 row-tile 1 index (arbitrary stride from row-tile 0).
+ * @param tile_index_b: starting in1 tile index for the SrcA stream.
+ * @param tile_size_a / tile_size_b: operand tile sizes in bytes.
+ * @param ct_dim: number of streamed SrcA tiles (output columns).
+ * @note Call @ref _llk_unpack_AB_matmul_init_ with (ct_dim, rt_dim=1) so the reuse-A MOP is recorded.
+ */
+inline void _llk_unpack_AB_matmul_tiny_pair_(
+    const std::uint32_t base_address_a,
+    const std::uint32_t base_address_b,
+    const std::uint32_t tile_index_a0,
+    const std::uint32_t tile_index_a1,
+    const std::uint32_t tile_index_b,
+    const std::uint32_t tile_size_a,
+    const std::uint32_t tile_size_b,
+    const std::uint32_t ct_dim)
+{
+    volatile std::uint32_t *cfg = get_cfg_pointer();
+
+    const std::uint32_t address_a0 = base_address_a + tile_size_a * tile_index_a0;
+    const std::uint32_t address_b  = base_address_b + tile_size_b * tile_index_b;
+
+    // Wait for free context
+    wait_for_next_context(2);
+
+    // note: address_b (in1) goes to SEC0 (SrcA), address_a0 (in0) to SEC1 (SrcB) for matmul
+    _llk_unpack_configure_addresses_(address_b, address_a0, cfg);
+
+    semaphore_post(semaphore::UNPACK_SYNC); // Trisc::SEMPOST for context acquire
+
+    // Stall unpacker until pending CFG writes from Trisc have completed
+    TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
+
+    // Row-tile 0, face by face (ch0/ch1 z advance per face); Dvalid deferred to the pair's last face.
+    TTI_UNPACR(SrcB, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+    TTI_UNPACR(SrcB, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+
+    // Jump the L1-side (ch0) face counter to row-tile 1 (arbitrary tile stride from row-tile 0);
+    // the SrcB-side (ch1) counter keeps advancing so it lands in face-slots 2..3 of the same bank.
+    // A plain counter set stays ordered in the THCON queue with no engine drain, unlike a base-
+    // register WRCFG which would need a STALLWAIT that serializes both unpack engines per call.
+    TT_SETADC(p_setadc::UNP_B, p_setadc::CH_0, p_setadc::SET_Z, 2 * (tile_index_a1 - tile_index_a0));
+
+    // Row-tile 1: second half of the pair bank; last face publishes the bank's Dvalid.
+    TTI_UNPACR(SrcB, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+    TTI_UNPACR(SrcB, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+
+    // Reset both channels' face counters for the next context.
+    TTI_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b1111);
+
+    TT_MOP(0, ct_dim - 1, unp_cfg_context == 0 ? 0 : 0xff); // Stream the SrcA tiles
+
+    // T6::SEMGET for context release
+    t6_semaphore_get(semaphore::UNPACK_SYNC);
+
+    // Switch unpacker config context
+    switch_config_context(unp_cfg_context);
+}
+
+/**
  * @brief Unpack the operand tiles for a matmul (A x B) into SrcA and SrcB.
  *
  * Iterates over the reused dimension, computing per-tile L1 addresses (with optional kernel-
