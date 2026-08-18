@@ -178,21 +178,30 @@ def _collect_eager_results(
     run: Callable[[], ttnn.Tensor],
     *,
     count: int = 3,
-) -> tuple[list[ttnn.Tensor], list[torch.Tensor]]:
-    device_outputs = []
-    host_outputs = []
-    cache_entries = None
-    for _ in range(count):
+) -> tuple[ttnn.Tensor, torch.Tensor, torch.Tensor]:
+    assert count > 1
+    reference_output = None
+    mismatch_marker = None
+    for invocation in range(count):
+        cache_entries_before = device.num_program_cache_entries()
         output_tt = run()
-        ttnn.synchronize_device(device)
-        output = ttnn.to_torch(output_tt).clone()
-        device_outputs.append(output_tt)
-        host_outputs.append(output)
-        if cache_entries is None:
-            cache_entries = device.num_program_cache_entries()
+        if invocation > 0:
+            assert device.num_program_cache_entries() == cache_entries_before
+
+        if reference_output is None:
+            reference_output = output_tt
         else:
-            assert device.num_program_cache_entries() == cache_entries
-    return device_outputs, host_outputs
+            current_mismatch = ttnn.max(ttnn.ne(reference_output, output_tt, dtype=ttnn.bfloat16))
+            mismatch_marker = (
+                current_mismatch if mismatch_marker is None else ttnn.maximum(mismatch_marker, current_mismatch)
+            )
+
+    assert reference_output is not None
+    assert mismatch_marker is not None
+    ttnn.synchronize_device(device)
+    reference_output_host = ttnn.to_torch(reference_output).clone()
+    mismatch_marker_host = ttnn.to_torch(mismatch_marker).clone()
+    return reference_output, reference_output_host, mismatch_marker_host
 
 
 def _assert_output_contract(
@@ -213,11 +222,19 @@ def _assert_output_contract(
     assert all(output_tt.buffer_address() != tensor.buffer_address() for tensor in device_inputs)
 
 
-def _assert_accurate_and_deterministic(expected: torch.Tensor, actual: list[torch.Tensor], *, name: str) -> None:
-    for invocation, output in enumerate(actual):
-        assert_accurate(expected, output, name=f"{name} invocation {invocation}", pcc_threshold=0.999)
-    for invocation, output in enumerate(actual[1:], start=1):
-        assert_bit_identical(actual[0], output, name=f"{name} invocation 0 vs {invocation}")
+def _assert_accurate_and_deterministic(
+    expected: torch.Tensor,
+    actual: torch.Tensor,
+    mismatch_marker: torch.Tensor,
+    *,
+    name: str,
+) -> None:
+    assert_accurate(expected, actual, name=f"{name} invocation 0", pcc_threshold=0.999)
+    assert_bit_identical(
+        torch.zeros_like(mismatch_marker),
+        mismatch_marker,
+        name=f"{name} device-side determinism marker",
+    )
 
 
 def _assert_inputs_unchanged(
@@ -249,10 +266,10 @@ def test_sigmoid_gated_rms_norm_is_accurate_and_deterministic(
         with ttnn.manage_config("throw_exception_on_fallback", True):
             return _run(input_tt, gate_tt, weight_tt, output_dtype=output_dtype)
 
-    device_outputs, host_outputs = _collect_eager_results(device, run)
+    output_tt, output, mismatch_marker = _collect_eager_results(device, run)
     _assert_output_contract(
-        device_outputs[0],
-        host_outputs[0],
+        output_tt,
+        output,
         device_inputs,
         batch=_BATCH,
         sequence=_SEQUENCE,
@@ -260,7 +277,7 @@ def test_sigmoid_gated_rms_norm_is_accurate_and_deterministic(
         value_dim=_VALUE_DIM,
         output_dtype=output_dtype,
     )
-    _assert_accurate_and_deterministic(expected, host_outputs, name=f"{input_dtype} to {output_dtype}")
+    _assert_accurate_and_deterministic(expected, output, mismatch_marker, name=f"{input_dtype} to {output_dtype}")
     _assert_inputs_unchanged(input_snapshots, device_inputs)
 
 
@@ -299,10 +316,10 @@ def test_sigmoid_gated_rms_norm_production_is_accurate_and_deterministic(
                 output_dtype=_PRODUCTION_OUTPUT_DTYPE,
             )
 
-    device_outputs, host_outputs = _collect_eager_results(device, run)
+    output_tt, output, mismatch_marker = _collect_eager_results(device, run)
     _assert_output_contract(
-        device_outputs[0],
-        host_outputs[0],
+        output_tt,
+        output,
         device_inputs,
         batch=_PRODUCTION_BATCH,
         sequence=case.sequence,
@@ -310,7 +327,7 @@ def test_sigmoid_gated_rms_norm_production_is_accurate_and_deterministic(
         value_dim=_PRODUCTION_VALUE_DIM,
         output_dtype=_PRODUCTION_OUTPUT_DTYPE,
     )
-    _assert_accurate_and_deterministic(expected, host_outputs, name=case.case_id)
+    _assert_accurate_and_deterministic(expected, output, mismatch_marker, name=case.case_id)
     _assert_inputs_unchanged(input_snapshots, device_inputs)
 
 
