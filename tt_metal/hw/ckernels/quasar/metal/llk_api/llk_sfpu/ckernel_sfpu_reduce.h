@@ -84,11 +84,7 @@ constexpr std::uint32_t REDUCE_COL_FINAL_ADDRS[2][2] = {
 //   [0, 16) horizontal-max phases 2-4       REDUCE_HMAX_REPLAY_LEN
 //   A later column calculate needs a fresh init_reduce.
 //
-// Lengths assume _reduce_needs_neg_pair_fix_ is false (1 Tensix insn per SWAP).
-// Re-enabling the fix adds REDUCE_NEG_FIX_LEN per SWAP; phases 2-4 then no
-// longer fit in 32 slots (record phase 2 only and emit 3+4 inline).
 constexpr std::uint32_t REDUCE_REPLAY_BUF_LEN = 32;
-constexpr std::uint32_t REDUCE_NEG_FIX_LEN = 4;  // 2 SETCC + SWAP + ENCC
 constexpr std::uint32_t REDUCE_TREE_ADD_FULL_LEN = 6;
 constexpr std::uint32_t REDUCE_TREE_ADD_HALF_LEN = 3;
 constexpr std::uint32_t REDUCE_HADD_TAIL_SLOT = REDUCE_TREE_ADD_FULL_LEN + REDUCE_TREE_ADD_HALF_LEN;
@@ -120,17 +116,10 @@ inline constexpr bool _reduce_is_float_() {
 
 // Quasar SFPSWAP imm12 bit 0 selects the compare: 0 = int32 2's-complement, 1 = fp32
 // (assembly.yaml). Int32 Dest is already 2's-complement. Float uses the fp32 mode so
-// IEEE ordering (including both-negative pairs) does not need a software re-swap.
+// IEEE ordering (including both-negative pairs) is correct without a software re-swap.
 template <DataFormat FMT>
 inline constexpr std::uint32_t _reduce_swap_imm12_() {
     return _reduce_is_float_<FMT>() ? 1u : 0u;
-}
-
-// Software both-negative re-swap for SFPSWAP imm12=0 on sign-magnitude payloads.
-// Unused while float uses imm12=1; kept so it can be re-enabled if silicon disagrees.
-template <DataFormat FMT>
-inline constexpr bool _reduce_needs_neg_pair_fix_() {
-    return false;
 }
 
 template <DataFormat FMT>
@@ -171,27 +160,6 @@ inline void _reduce_store_(const std::uint32_t lreg, const std::uint32_t sfpmem,
 }
 
 /**
- * @brief Undo an SFPSWAP that ordered two negatives backwards.
- *
- * SFPSWAP(imm12=0) ranks positives above negatives, then compares magnitudes ascending within a
- * sign, so of two negatives it keeps the one further from zero for MAX (closer to zero for MIN).
- * Re-swapping under a CC that selects those lanes restores the true extremum.
- *
- * The CC must require *both* operands negative. A negative winner is not enough: for MIN a mixed
- * pair already has the negative (the true min) in FIRST, and a winner-only re-swap would replace
- * it with the positive. Matches Wormhole `_emit_int32_signed_cswap_`. Unused while float
- * uses SFPSWAP imm12=1.
- */
-template <std::uint32_t A, std::uint32_t B>
-inline void _reduce_fix_neg_pair_() {
-    // Successive SFPSETCC calls AND into CC: CC = (A<0 AND B<0).
-    TTI_SFPSETCC(REDUCE_SETCC_INT32_SIGNBIT, A, sfpi::SFPSETCC_MOD1_LREG_LT0);
-    TTI_SFPSETCC(REDUCE_SETCC_INT32_SIGNBIT, B, sfpi::SFPSETCC_MOD1_LREG_LT0);
-    TTI_SFPSWAP(0 /* int32 compare */, A, B, p_sfpswap::UNCONDITIONALLY);
-    TTI_SFPENCC(0, 0);
-}
-
-/**
  * @brief Compare-and-swap keeping the extremum in FIRST.
  *
  * SFPSWAP places the smaller operand in lreg_dest and the larger in lreg_c. MAX therefore issues
@@ -206,9 +174,6 @@ inline void _reduce_cswap_() {
     } else {
         TTI_SFPSWAP(IMM12, SECOND, FIRST, p_sfpswap::ALL_ROWS_MAX);
     }
-    if constexpr (_reduce_needs_neg_pair_fix_<FMT>()) {
-        _reduce_fix_neg_pair_<FIRST, SECOND>();
-    }
 }
 
 template <DataFormat FMT, bool IS_MAX, std::uint32_t A0, std::uint32_t B0, std::uint32_t A1, std::uint32_t B1>
@@ -220,10 +185,6 @@ inline void _reduce_cswap_pair_() {
     } else {
         TTI_SFPSWAP(IMM12, B0, A0, p_sfpswap::ALL_ROWS_MAX);
         TTI_SFPSWAP(IMM12, B1, A1, p_sfpswap::ALL_ROWS_MAX);
-    }
-    if constexpr (_reduce_needs_neg_pair_fix_<FMT>()) {
-        _reduce_fix_neg_pair_<A0, B0>();
-        _reduce_fix_neg_pair_<A1, B1>();
     }
 }
 
@@ -351,7 +312,6 @@ inline void _horizontal_reduce_sum_() {
 
 template <DataFormat FMT, bool IS_MAX>
 inline void _reduce_record_horizontal_max_() {
-    static_assert(!_reduce_needs_neg_pair_fix_<FMT>(), "replay lengths assume 1 insn per SWAP");
     static_assert(REDUCE_HMAX_REPLAY_LEN <= REDUCE_REPLAY_BUF_LEN, "horizontal-max replay exceeds 32-slot buffer");
     lltt::record(0, REDUCE_HMAX_REPLAY_LEN);
 
@@ -689,7 +649,6 @@ inline void init_reduce([[maybe_unused]] std::uint32_t block_ct_dim = 1) {
         pool_type == PoolType::SUM || pool_type == PoolType::AVG || pool_type == PoolType::MAX ||
             pool_type == PoolType::MIN,
         "Unsupported pool_type. Supported: SUM, AVG, MAX, MIN");
-    static_assert(!_reduce_needs_neg_pair_fix_<format>(), "replay lengths assume 1 insn per SWAP");
     ckernel::math::_reset_counters_<p_setrwc::SET_ABD_F>();
     if constexpr (is_fp32_dest_acc_en && _reduce_is_uint16_<format>()) {
         // Mask for SFPAND after UINT16 loads from a 32-bit dest word. 16-bit dest does not need it.
