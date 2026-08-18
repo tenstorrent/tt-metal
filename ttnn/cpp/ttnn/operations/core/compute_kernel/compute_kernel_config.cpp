@@ -122,7 +122,7 @@ tt::tt_metal::experimental::ComputeHardwareConfig to_compute_hardware_config(
             .enable_32_bit_dest = config.fp32_dest_acc_en,
             .double_buffer_dest = !config.dst_full_sync_en,
             // Per-DFB unpack_modes is left default for the program factory to set.
-            // The temporary Gen2 field enable_2x_src_register is left default.
+            // 2x-packed src format is opted into per kernel via the ENABLE_2X_SRC_FORMAT define.
         };
     }
     return tt::tt_metal::experimental::ComputeGen1Config{

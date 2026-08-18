@@ -2547,12 +2547,7 @@ TEST_F(ProgramSpecTestQuasar, ComputeGen2ConfigDefaultsMapToInternalDefaults) {
     EXPECT_FALSE(built.fp32_dest_acc_en);
     EXPECT_FALSE(built.dst_full_sync_en);      // double_buffer_dest defaults true -> !true
     EXPECT_FALSE(built.math_approx_mode);      // sfpu_precision_mode defaults Precise
-<<<<<<< HEAD
-    EXPECT_FALSE(built.enable_2x_src_format);  // enable_2x_src_register defaults false
-=======
     EXPECT_FALSE(built.enable_2x_src_format);  // no ENABLE_2X_SRC_FORMAT define -> false
-    EXPECT_FALSE(built.unpack_to_dest_en);
->>>>>>> 9f93388c0f8 (First inital set of changes for removing 2x flag from HW configure.)
 }
 
 TEST_F(ProgramSpecTestQuasar, ComputeGen2ConfigInversionAndEnumMapToInternal) {

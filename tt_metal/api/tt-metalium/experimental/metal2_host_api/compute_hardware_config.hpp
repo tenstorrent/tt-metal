@@ -166,23 +166,16 @@ struct ComputeGen2Config {
     // Temporary configs (these will change!)
     ///////////////////////////////////////////
 
-    // When true, the unpacker packs two values into each source-register slot instead of one.
-    // The math engine reads twice as many elements per pass, effectively doubling throughput.
+    // NOTE: The former `enable_2x_src_register` bool has been removed from this hardware config.
+    // The 2x-packed source-register format is now opted into per kernel via the compile-time
+    // define `ENABLE_2X_SRC_FORMAT` (see k2xSrcFormatDefine above): add it to the kernel's
+    // KernelSpec::compiler_options.defines. When present, jit_build emits the 2x-packed
+    // src-register format as the unpack_dst_format for 2x-capable (Mxfp4) inputs, so the math
+    // engine reads two elements per source-register slot, effectively doubling throughput.
     //
-    // This is currently ONLY supported for Mxfp4 data format. The setting is ignored for all
-    // other formats.
-    //
-    // WARNING: Only the matmul family of instructions work with this format:
-    //  - matmul (MVMUL/MVMULDI)
-    //  - the GAPOOL instruction that column reduce ops are built on
-    //
-    // Invoking other instructions on Mxfp4 data with the setting enabled will produce garbage
-    // math results! Enable this setting ONLY for kernels whose inputs are consumed solely by
-    // a matmul or a column reduce.
-    //
-    // This API is not final and subject to change!
-    // It should most likely become a per-DFB setting, similar to unpack_modes.
-    bool enable_2x_src_register = false;
+    // WARNING: Mxfp4 only, and matmul-family instructions only (MVMUL/MVMULDI and the GAPOOL
+    // that column reduce is built on). Enabling it for any other op or format produces garbage
+    // math results.
 
     ///////////////////////////////////////////////////////////////////////////////////////////////
 };
