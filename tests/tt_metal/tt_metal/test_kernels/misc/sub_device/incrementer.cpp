@@ -13,7 +13,5 @@ void kernel_main() {
 
     uint64_t noc_remote_sem_addr = get_noc_addr(waiter_core_x, waiter_core_y, sem_addr);
     noc_semaphore_inc(noc_remote_sem_addr, 1);
-#ifndef ARCH_QUASAR
     noc_async_atomic_barrier();
-#endif
 }

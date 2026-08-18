@@ -22,8 +22,11 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr);
 #endif
     noc_semaphore_wait(sem, num_inc);
-#ifndef ARCH_QUASAR
+
+#ifdef ARCH_QUASAR
+    *sem -= num_inc;
+#else
     noc_semaphore_inc(get_noc_addr(sem_addr), -num_inc);
-    noc_async_atomic_barrier();
 #endif
+    noc_async_atomic_barrier();
 }
