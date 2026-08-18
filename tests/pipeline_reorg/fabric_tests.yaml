@@ -5,8 +5,9 @@
 #   cmd: Shell command(s) to run from TT_METAL_HOME (/work).
 #   skus: SKU -> { timeout } (minutes). Multi-SKU entries fan out one leg per SKU.
 #   team: Required for time_budget verification (scaleout for all fabric tests).
-#   arch: Architecture string (wormhole_b0 or blackhole) for downstream tooling.
 #   owner_id: Slack user ID to notify on failure.
+# `arch` is derived from the SKU prefix (wh_* -> wormhole_b0, bh_* -> blackhole)
+# inside the impl workflow's DERIVED_ARCH env, not authored per entry.
 #   upload_benchmarks: (optional) When true and github.ref_name==main, impl runs
 #     check-latency-bw-results + SFTP uploads (fabric BW / latency).
 #   auto_triage: (optional, default true) Set false for multi-process legs where
@@ -26,7 +27,6 @@
     wh_n300_civ2:
       timeout: 15
   team: scaleout
-  arch: wormhole_b0
   owner_id: U08RRAU5E15 # Ridvan Song
 
 # ============================================================================
@@ -44,7 +44,6 @@
     wh_llmbox_civ2:
       timeout: 30
   team: scaleout
-  arch: wormhole_b0
   owner_id: U06US5C7M7X # Sean Nijjar
   upload_benchmarks: true
 
@@ -57,7 +56,6 @@
     wh_llmbox_civ2:
       timeout: 30
   team: scaleout
-  arch: wormhole_b0
   owner_id: U06US5C7M7X # Sean Nijjar
 
 # ============================================================================
@@ -80,7 +78,6 @@
     wh_galaxy:
       timeout: 25
   team: scaleout
-  arch: wormhole_b0
   owner_id: U0845EV7A5U # Umair Cheema
   upload_benchmarks: true
 
@@ -103,7 +100,6 @@
     wh_galaxy:
       timeout: 25
   team: scaleout
-  arch: wormhole_b0
   owner_id: U0845EV7A5U # Umair Cheema
   auto_triage: false
 
@@ -121,7 +117,6 @@
     bh_quietbox_2:
       timeout: 15
   team: scaleout
-  arch: blackhole
   owner_id: U06US5C7M7X # Sean Nijjar
 
 - name: BH fabric 2D fixture unit tests
@@ -136,7 +131,6 @@
     bh_quietbox_2:
       timeout: 15
   team: scaleout
-  arch: blackhole
   owner_id: U06US5C7M7X # Sean Nijjar
 
 - name: BH fabric mux v2 unit tests
@@ -149,7 +143,6 @@
     bh_quietbox_2:
       timeout: 5
   team: scaleout
-  arch: blackhole
   owner_id: U06US5C7M7X # Sean Nijjar
 
 - name: BH fabric UDM mode unit tests
@@ -165,7 +158,6 @@
     bh_quietbox_2:
       timeout: 15
   team: scaleout
-  arch: blackhole
   owner_id: U06US5C7M7X # Sean Nijjar
 
 - name: BH ttnn UDM unit tests
@@ -178,7 +170,6 @@
     bh_quietbox_2:
       timeout: 10
   team: scaleout
-  arch: blackhole
   owner_id: U06US5C7M7X # Sean Nijjar
 
 - name: BH fabric system health tests
@@ -191,7 +182,6 @@
     bh_quietbox_2:
       timeout: 15
   team: scaleout
-  arch: blackhole
   owner_id: U06US5C7M7X # Sean Nijjar
 
 - name: BH fabric stability nightly tests
@@ -206,7 +196,6 @@
     bh_quietbox_2:
       timeout: 30
   team: scaleout
-  arch: blackhole
   owner_id: U06US5C7M7X # Sean Nijjar
 
 - name: BH ccl nightly tests
@@ -219,7 +208,6 @@
     bh_quietbox_2:
       timeout: 60
   team: scaleout
-  arch: blackhole
   owner_id: U06US5C7M7X # Sean Nijjar
 
 - name: BH fabric infra unit tests
@@ -236,5 +224,4 @@
     bh_quietbox_2:
       timeout: 15
   team: scaleout
-  arch: blackhole
   owner_id: U06US5C7M7X # Sean Nijjar

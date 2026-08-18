@@ -1,6 +1,8 @@
 # Fabric N300 merge-gate matrix.
 #
-# Each entry: name, cmd, skus: { <sku>: { timeout: N } }, team, arch, owner_id.
+# Each entry: name, cmd, skus: { <sku>: { timeout: N } }, team, owner_id.
+# `arch` is derived from the SKU prefix (wh_* -> wormhole_b0, bh_* -> blackhole)
+# inside the impl workflow's DERIVED_ARCH env, not authored per entry.
 # For max allowed timeout refer to .github/time_budget.yaml (scaleout -> merge_gate).
 # Logical SKUs only; merge_group prio routing is via sku_config merge_queue_sku.
 #
@@ -22,5 +24,4 @@
     wh_n300_civ2:
       timeout: 10
   team: scaleout
-  arch: wormhole_b0
   owner_id: U08RRAU5E15 # Ridvan Song
