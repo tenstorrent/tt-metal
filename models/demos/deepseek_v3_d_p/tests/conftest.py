@@ -285,21 +285,20 @@ def pytest_collection_modifyitems(config, items):
         if mesh_shape is None or topology is None:
             continue
 
-        if on_ci:
-            # Unsupported fabric rings on QB/LB meshes
-            allowed_fabric_cfgs = DEFAULT_ALLOWED_FABRICS
-            if cluster_type in CI_ALLOWED_FABRICS.keys():
-                allowed_fabric_dct = CI_ALLOWED_FABRICS[cluster_type]
-                if mesh_shape in allowed_fabric_dct.keys():
-                    allowed_fabric_cfgs = allowed_fabric_dct[mesh_shape]
+        # Unsupported fabric rings on QB/LB meshes
+        allowed_fabric_cfgs = DEFAULT_ALLOWED_FABRICS
+        if cluster_type in CI_ALLOWED_FABRICS.keys():
+            allowed_fabric_dct = CI_ALLOWED_FABRICS[cluster_type]
+            if mesh_shape in allowed_fabric_dct.keys():
+                allowed_fabric_cfgs = allowed_fabric_dct[mesh_shape]
 
-            if requested_fabric_cfg not in allowed_fabric_cfgs:
-                item.add_marker(
-                    pytest.mark.skip(
-                        reason="requested combination of fabric config and mesh, unfeasible on the given hardware"
-                    )
+        if requested_fabric_cfg not in allowed_fabric_cfgs:
+            item.add_marker(
+                pytest.mark.skip(
+                    reason="requested combination of fabric config and mesh, unfeasible on the given hardware"
                 )
-                continue
+            )
+            continue
 
         devices_needed = mesh_shape[0] * mesh_shape[1]
         is_ring = topology == "ring"
