@@ -750,11 +750,12 @@ void generate_runtime_args_cmds(
 // so a large per-core payload forces far fewer than 35 cores per command; exceeding it silently overflows
 // the eth cmddat queue and hangs the device. Returns >=1 (a single core's payload is L1-fit-checked at
 // finalize, so it is expected to fit).
-uint32_t max_cores_per_large_unicast_cmd(uint32_t rta_payload_sizeB, uint32_t max_prefetch_command_size) {
-    const uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
+uint32_t max_cores_per_large_unicast_cmd(
+    MetalContext& metal_ctx, uint32_t rta_payload_sizeB, uint32_t max_prefetch_command_size) {
+    const uint32_t l1_alignment = metal_ctx.hal().get_alignment(HalMemType::L1);
     const uint32_t aligned_core_payload = tt::align(rta_payload_sizeB, l1_alignment);
     for (uint32_t n = CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_UNICAST_MAX_SUB_CMDS; n >= 1; --n) {
-        DeviceCommandCalculator calculator;
+        DeviceCommandCalculator calculator(metal_ctx);
         calculator.add_dispatch_write_packed_large_unicast(n, n * aligned_core_payload);
         if (calculator.write_offset_bytes() <= max_prefetch_command_size) {
             return n;
@@ -766,7 +767,7 @@ uint32_t max_cores_per_large_unicast_cmd(uint32_t rta_payload_sizeB, uint32_t ma
     // guard is a TT_ASSERT and compiles out in release builds). The kernel-side RTA ceiling
     // (validate_runtime_args_size) is set before the dispatch core type is known, so this is the first point
     // that can enforce the dispatch-core-specific prefetch command size.
-    DeviceCommandCalculator single_core;
+    DeviceCommandCalculator single_core(metal_ctx);
     single_core.add_dispatch_write_packed_large_unicast(1, aligned_core_payload);
     TT_FATAL(
         false,
@@ -805,7 +806,8 @@ void generate_runtime_args_cmds_large_unicast(
     const uint32_t aligned_core_payload = tt::align(rta_payload_sizeB, l1_alignment);
     const uint32_t count_word_offset = is_watcher_assert_enabled() ? 1 : 0;
     // Cap cores/command by the prefetcher command size, not just the sub-cmd count (see helper above).
-    const uint32_t max_cores_per_cmd = max_cores_per_large_unicast_cmd(rta_payload_sizeB, max_prefetch_command_size);
+    const uint32_t max_cores_per_cmd =
+        max_cores_per_large_unicast_cmd(metal_ctx, rta_payload_sizeB, max_prefetch_command_size);
 
     const uint32_t num_cores = sub_cmds.size();
     uint32_t offset_idx = 0;
@@ -946,7 +948,8 @@ BatchedTransfers assemble_runtime_args_commands(
                 if (unique_rta_requires_large_unicast(kg->total_rta_size)) {
                     command_count += div_up(
                         num_sub_cmds,
-                        max_cores_per_large_unicast_cmd(kg->total_rta_size, constants.max_prefetch_command_size));
+                        max_cores_per_large_unicast_cmd(
+                            metal_ctx, kg->total_rta_size, constants.max_prefetch_command_size));
                 } else {
                     uint32_t max_runtime_args_len = kg->total_rta_size / sizeof(uint32_t);
                     uint32_t max_packed_cmds =
@@ -1667,13 +1670,14 @@ public:
         const CommandConstants& constants,
         DeviceCommandCalculator& calculator,
         bool using_prefetcher_cache) {
-        const auto& hal = MetalContext::instance().hal();
-        const uint32_t max_length_per_sub_cmd = MetalContext::instance().dispatch_mem_map().scratch_db_size() / 2;
+        MetalContext& metal_ctx = MetalContext::instance(extract_context_id(device));
+        const auto& hal = metal_ctx.hal();
+        const uint32_t max_length_per_sub_cmd = metal_ctx.dispatch_mem_map().scratch_db_size() / 2;
         const uint32_t max_paged_length_per_sub_cmd =
             max_length_per_sub_cmd / HostMemDeviceCommand::PROGRAM_PAGE_SIZE * HostMemDeviceCommand::PROGRAM_PAGE_SIZE;
 
-        const uint32_t unicast_cmd_sequence_sizeB = [using_prefetcher_cache]() {
-            DeviceCommandCalculator calc;
+        const uint32_t unicast_cmd_sequence_sizeB = [using_prefetcher_cache, &metal_ctx]() {
+            DeviceCommandCalculator calc(metal_ctx);
             constexpr bool flush_prefetch = false;
             calc.add_dispatch_write_linear<flush_prefetch>(0);
             if (not using_prefetcher_cache) {
@@ -1723,7 +1727,7 @@ public:
                             },
                             cores);
                     }
-                    kernel_bins_unicast_cmds.emplace_back(unicast_cmd_sequence_sizeB);
+                    kernel_bins_unicast_cmds.emplace_back(metal_ctx, unicast_cmd_sequence_sizeB);
                     calculator.update_write_offset_bytes(unicast_cmd_sequence_sizeB);
                     constexpr bool flush_prefetch = false;
 
@@ -3458,7 +3462,8 @@ void reset_worker_dispatch_state_on_device(
     bool reset_launch_msg_state) {
     auto num_sub_devices = mesh_device->num_sub_devices();
 
-    tt::tt_metal::DeviceCommandCalculator calculator;
+    MetalContext& metal_ctx = MetalContext::instance(manager.get_context_id());
+    tt::tt_metal::DeviceCommandCalculator calculator(metal_ctx);
     if (reset_launch_msg_state) {
         for (int i = 0; i < num_sub_devices; ++i) {
             calculator.add_dispatch_go_signal_mcast();
@@ -3477,7 +3482,7 @@ void reset_worker_dispatch_state_on_device(
     const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
 
     void* cmd_region = manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);
-    HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
+    HugepageDeviceCommand command_sequence(metal_ctx, cmd_region, cmd_sequence_sizeB);
     DispatcherSelect dispatcher_for_go_signal = DispatcherSelect::DISPATCH_MASTER;
     if (reset_launch_msg_state) {
         if (MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()) {
@@ -3544,14 +3549,15 @@ void set_num_worker_sems_on_dispatch(
     ttsl::Span<const uint32_t> workers_per_sub_device) {
     TT_ASSERT(num_worker_sems <= DispatchSettings::DISPATCH_MESSAGE_ENTRIES);
     TT_ASSERT(workers_per_sub_device.size() == num_worker_sems);
-    tt::tt_metal::DeviceCommandCalculator calculator;
+    MetalContext& metal_ctx = MetalContext::instance(manager.get_context_id());
+    tt::tt_metal::DeviceCommandCalculator calculator(metal_ctx);
     if (MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()) {
         calculator.add_dispatch_set_num_worker_sems();
     }
     calculator.add_dispatch_set_sub_device_worker_counts(num_worker_sems);
     const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
     void* cmd_region = manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);
-    HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
+    HugepageDeviceCommand command_sequence(metal_ctx, cmd_region, cmd_sequence_sizeB);
     if (MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()) {
         command_sequence.add_dispatch_set_num_worker_sems(num_worker_sems, DispatcherSelect::DISPATCH_SUBORDINATE);
         command_sequence.add_dispatch_set_sub_device_worker_counts(
@@ -3567,11 +3573,12 @@ void set_num_worker_sems_on_dispatch(
 
 void set_go_signal_noc_data_on_dispatch(
     const vector_aligned<uint32_t>& go_signal_noc_data, SystemMemoryManager& manager, uint8_t cq_id) {
-    tt::tt_metal::DeviceCommandCalculator calculator;
+    MetalContext& metal_ctx = MetalContext::instance(manager.get_context_id());
+    tt::tt_metal::DeviceCommandCalculator calculator(metal_ctx);
     calculator.add_dispatch_set_go_signal_noc_data(go_signal_noc_data.size());
     const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
     void* cmd_region = manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);
-    HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
+    HugepageDeviceCommand command_sequence(metal_ctx, cmd_region, cmd_sequence_sizeB);
     DispatcherSelect dispatcher_for_go_signal =
         MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()
             ? DispatcherSelect::DISPATCH_SUBORDINATE
@@ -3585,7 +3592,8 @@ void set_go_signal_noc_data_on_dispatch(
 // Wait for number of workers to complete and then reset the counter on the device
 void reset_expected_num_workers_completed_on_device(
     Device* device, SubDeviceId sub_device_id, uint32_t num_expected_workers, uint8_t cq_id) {
-    tt::tt_metal::DeviceCommandCalculator calculator;
+    MetalContext& metal_ctx = MetalContext::instance(device->get_context_id());
+    tt::tt_metal::DeviceCommandCalculator calculator(metal_ctx);
     bool distributed_dispatcher =
         tt::tt_metal::MetalContext::instance().get_dispatch_query_manager().distributed_dispatcher();
     if (distributed_dispatcher) {
@@ -3596,7 +3604,7 @@ void reset_expected_num_workers_completed_on_device(
     auto& manager = device->sysmem_manager();
     const auto cmd_sequence_sizeB = calculator.write_offset_bytes();
     void* cmd_region = manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);
-    HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
+    HugepageDeviceCommand command_sequence(metal_ctx, cmd_region, cmd_sequence_sizeB);
     const auto populate_dispatch_wait_cmd = [&](DispatcherSelect dispatcher_type) {
         command_sequence.add_dispatch_wait(
             CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM,
@@ -3645,9 +3653,9 @@ void set_core_go_message_mapping_on_device(
     const std::vector<std::pair<CoreRangeSet, uint32_t>>& core_go_message_mapping,
     SystemMemoryManager& manager,
     uint8_t cq_id) {
-    tt::tt_metal::DeviceCommandCalculator calculator;
-    uint32_t go_msg_size =
-        MetalContext::instance().hal().get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::GO_MSG);
+    MetalContext& metal_ctx = MetalContext::instance(device->get_context_id());
+    tt::tt_metal::DeviceCommandCalculator calculator(metal_ctx);
+    uint32_t go_msg_size = metal_ctx.hal().get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::GO_MSG);
     calculator.add_dispatch_write_linear<true, true>(go_msg_size);
     calculator.add_dispatch_wait();
 
@@ -3655,7 +3663,7 @@ void set_core_go_message_mapping_on_device(
     std::vector<CQDispatchWritePackedMulticastSubCmd> sub_cmds;
     std::vector<std::pair<uint32_t, uint32_t>> payload;
     uint32_t noc_index = k_dispatch_downstream_noc;
-    uint32_t max_prefetch_command_size = MetalContext::instance().dispatch_mem_map().max_prefetch_command_size();
+    uint32_t max_prefetch_command_size = metal_ctx.dispatch_mem_map().max_prefetch_command_size();
     uint32_t packed_write_max_unicast_sub_cmds = get_packed_write_max_unicast_sub_cmds(device);
 
     size_t num_core_ranges = 0;
@@ -3685,7 +3693,7 @@ void set_core_go_message_mapping_on_device(
 
     const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
     void* cmd_region = manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);
-    HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
+    HugepageDeviceCommand command_sequence(metal_ctx, cmd_region, cmd_sequence_sizeB);
 
     const auto& compute_grid_size = device->compute_with_storage_grid_size();
 
