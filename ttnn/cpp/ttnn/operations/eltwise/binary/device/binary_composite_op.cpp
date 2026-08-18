@@ -481,8 +481,9 @@ Tensor remainder(
     ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     const std::optional<CoreRangeSet>& sub_core_grids,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
-    if (!output_dtype.has_value() && !sub_device_id.has_value() && post_activations.empty() &&
-        lhs_activations.empty() && rhs_activations.empty()) {
+    // The unary SFPU fast path has no int32 kernel and would reinterpret the tile as float.
+    if (input.dtype() != DataType::INT32 && !output_dtype.has_value() && !sub_device_id.has_value() &&
+        post_activations.empty() && lhs_activations.empty() && rhs_activations.empty()) {
         return ttnn::unary_remainder(input, scalar, output_mem_config, output_tensor, sub_core_grids);
     }
     return ttnn::detail::invoke_binary_ng(
@@ -526,8 +527,24 @@ Tensor fmod(
     const Tensor& input,
     unary::ScalarVariant scalar,
     const std::optional<MemoryConfig>& output_mem_config,
-    const std::optional<CoreRangeSet>& /*sub_core_grids*/,
-    const std::optional<tt::tt_metal::SubDeviceId>& /*sub_device_id*/) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    // The unary SFPU fast path has no int32 kernel and would reinterpret the tile as float.
+    if (input.dtype() == DataType::INT32) {
+        return ttnn::detail::invoke_binary_ng(
+            input,
+            scalar,
+            binary::BinaryOpType::FMOD,
+            std::nullopt,
+            output_mem_config,
+            std::nullopt,
+            {},
+            {},
+            {},
+            std::nullopt,
+            sub_core_grids,
+            sub_device_id);
+    }
     float scalar_f = std::visit([](auto v) -> float { return static_cast<float>(v); }, scalar);
     return ttnn::unary_fmod(input, scalar_f, output_mem_config);
 }
