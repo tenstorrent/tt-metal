@@ -385,7 +385,7 @@ def main() -> int:
         default="large-v3",
         help="whisper size; Seed-TTS Eval uses large-v3. 'medium'/'small' iterate faster.",
     )
-    ap.add_argument("--cosyvoice-root", default=os.environ.get("COSYVOICE_ROOT", "/root/tt/CosyVoice"))
+    ap.add_argument("--cosyvoice-root", default=os.environ.get("COSYVOICE_ROOT", "/mnt/CosyVoice"))
     ap.add_argument("--no-campplus", action="store_true")
     ap.add_argument("--out", default=None, help="default <run-dir>/scores.json")
     args = ap.parse_args()

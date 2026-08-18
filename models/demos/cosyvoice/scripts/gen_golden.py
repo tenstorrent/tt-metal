@@ -10,7 +10,7 @@ against, so they are the definition of correct for this bring-up.
 
 RUN THIS IN THE CosyVoice VENV, NOT THE TT-METAL ONE:
 
-    PYTHONPATH=/root/tt/CosyVoice:/root/tt/CosyVoice/third_party/Matcha-TTS \
+    PYTHONPATH=/mnt/CosyVoice:/mnt/CosyVoice/third_party/Matcha-TTS \
     /root/tt/cosyvoice_env/bin/python gen_golden.py --out <dir>
 
 Why the reference is not deterministic, and what this script does about it
@@ -41,7 +41,7 @@ import numpy as np
 import torch
 from torch.distributions.uniform import Uniform
 
-DEFAULT_COSYVOICE = os.environ.get("COSYVOICE_ROOT", "/root/tt/CosyVoice")
+DEFAULT_COSYVOICE = os.environ.get("COSYVOICE_ROOT", "/mnt/CosyVoice")
 SEED = 1986  # the seed cosyvoice.yaml itself sets, kept for continuity
 
 
