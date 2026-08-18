@@ -6,6 +6,7 @@ METALIUM_GUIDE.md @davorchap @tenstorrent/metalium-developers-infra @tenstorrent
 
 # CI/CD
 .github/ @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
+.github/deprecations.json
 .github/actions/sweep-run-analysis/ @stevendae @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 .github/time_budget.yaml @roseli-TT @tdowdallTT @tenstorrent/codeowner-bypass
 .github/TESTOWNERS @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
@@ -105,7 +106,6 @@ tt_metal/ @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass #
 tt_metal/sources.cmake @tenstorrent/metalium-api-owners @tenstorrent/codeowner-bypass
 tt_metal/api/ @tenstorrent/metalium-api-owners @tenstorrent/codeowner-bypass
 tt_metal/api/tt-metalium/experimental/fabric @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @Riddy21 @cfjchu @p1-0tr @tenstorrent/codeowner-bypass # fabric experimental APIs
-tt_metal/api/tt-metalium/experimental/tensor/ @akerteszTT @riverwuTT @tenstorrent/codeowner-bypass # tensor WIP
 tt_metal/common/ @abhullar-tt @tt-aho @tt-asaigal @cfjchu @tenstorrent/codeowner-bypass
 tt_metal/common/**/CMakeLists.txt @abhullar-tt @tt-aho @tt-asaigal @cfjchu @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 tt_metal/common/broadcast_ring.hpp @yusufbashiTT @mo-tenstorrent @abhullar-tt @tt-aho @tt-asaigal @cfjchu @tenstorrent/codeowner-bypass
@@ -206,6 +206,7 @@ tt_metal/hw/inc/experimental/udm/ @yugaoTT @SeanNijjar @tenstorrent/codeowner-by
 tt_metal/api/tt-metalium/experimental/noc_estimator/ @nstamatovicTT @atatuzunerTT @tenstorrent/codeowner-bypass
 tt_metal/impl/experimental/noc_estimator/ @nstamatovicTT @atatuzunerTT @tenstorrent/codeowner-bypass
 tt_metal/impl/experimental/noc_estimator/**/CMakeLists.txt @nstamatovicTT @atatuzunerTT @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
+tt_metal/impl/experimental/offline_compile/ @ruizhangTT @tenstorrent/metalium-runtime @tenstorrent/codeowner-bypass
 tt_metal/impl/emulation/ @smeydanshahiTT @xanderchin @arminaleTT @sgholamiTT @tenstorrent/codeowner-bypass
 
 # metal misc
@@ -286,6 +287,7 @@ ttnn/ttnn/operations/activations.py @tenstorrent/metalium-developers-mmfusedredu
 ttnn/ttnn/operations/normalization.py @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/codeowner-bypass
 ttnn/ttnn/operations/reduction.py @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/codeowner-bypass
 ttnn/**/kernels/ @tenstorrent/metalium-developers-ops-leads @tenstorrent/codeowner-bypass # Removes the owners above from owning kernels unless specified afterwards
+ttnn/**/kernel/ @tenstorrent/metalium-developers-ops-leads @tenstorrent/codeowner-bypass # Same, for the singular kernel/ dir the pattern above misses
 ttnn/core/tensor/ @tenstorrent/metalium-developers-ttnn-core @tenstorrent/codeowner-bypass
 ttnn/**/CMakeLists.txt @tenstorrent/metalium-developers-ttnn-core @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 
@@ -334,7 +336,7 @@ ttnn/cpp/ttnn/kernel_lib/**/CMakeLists.txt @tenstorrent/metalium-developers-conv
 # it's the status-quo fallback owner for several ops here that have no
 # team-specific CODEOWNERS rule of their own — not a deliberate, active
 # owner, just what already resolves today.
-ttnn/cpp/ttnn/operations/experimental/CMakeLists.txt @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/metalium-developers-sdpa @tenstorrent/metallium-maintainers-llama-models @tenstorrent/metalium-developers-external-experience @cglagovichTT @jonathansuTT @tenstorrent/metalium-developers-ops-leads @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
+ttnn/cpp/ttnn/operations/experimental/CMakeLists.txt @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/metalium-developers-sdpa @tenstorrent/metallium-maintainers-llama-models @tenstorrent/metalium-developers-external-experience @cglagovichTT @jonathansuTT @tenstorrent/metalium-developers-ops-leads @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/experimental/adaptive_pool/ @tenstorrent/metalium-developers-convolutions @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/experimental/adaptive_pool/**/CMakeLists.txt @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/experimental/ccl/ @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/codeowner-bypass @jonathansuTT
@@ -454,6 +456,7 @@ tests/ttnn/unit_tests/operations/sdpa/ @tenstorrent/metalium-developers-sdpa @te
 tests/ttnn/nightly/unit_tests/operations/sdpa/ @tenstorrent/metalium-developers-sdpa @tenstorrent/codeowner-bypass
 tests/ttnn/nightly/unit_tests/operations/experimental/quasar/ @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/codeowner-bypass
 tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/ @tenstorrent/metalium-developers-ds-prefill @tenstorrent/codeowner-bypass
+tests/ttnn/unit_tests/operations/experimental/kda/ @tenstorrent/metalium-developers-sdpa @tenstorrent/codeowner-bypass
 tests/ttnn/nightly/unit_tests/operations/experimental/test_topk_large_indices.py @tenstorrent/metalium-developers-sdpa @tenstorrent/codeowner-bypass
 tests/ttnn/nightly/unit_tests/operations/experimental/test_indexer_score.py @tenstorrent/metalium-developers-sdpa @tenstorrent/codeowner-bypass
 tests/ttnn/nightly/unit_tests/operations/experimental/test_rgb_to_yuv.py @cglagovichTT @jonathansuTT @tenstorrent/codeowner-bypass
@@ -512,7 +515,7 @@ tests/ttnn/unit_tests/base_functionality/test_graph_report.py @tenstorrent/third
 /models/tt_cnn/ @esmalTT @tenstorrent/metalium-developers-convolutions @tenstorrent/codeowner-bypass
 /**/functional_*/ @uaydonat @esmalTT @tenstorrent/codeowner-bypass
 models/common @yieldthought @mtairum @uaydonat @gwangTT @tenstorrent/codeowner-bypass
-models/common/sampling/ @sraizada-tt @djordje-tt @tchedaTT @tenstorrent/codeowner-bypass
+models/common/sampling/ @sraizada-tt @djordje-tt @tchedaTT @mtairum @tenstorrent/codeowner-bypass
 models/common/warmup/ @nostojicTT @sraizada-tt @djordje-tt @tchedaTT @tenstorrent/codeowner-bypass
 models/datasets/llm_dataset_utils.py @mtairum @uaydonat @tenstorrent/codeowner-bypass
 models/demos @uaydonat @yieldthought @cglagovichTT @tenstorrent/codeowner-bypass
@@ -576,7 +579,6 @@ models/perf/ @yieldthought @esmalTT @mtairum @uaydonat @tenstorrent/codeowner-by
 models/perf/benchmarking_utils.py @williamlyTT @mtairum @uaydonat @tenstorrent/codeowner-bypass
 models/demos/utils/llm_demo_utils.py @mtairum @esmalTT @uaydonat @tenstorrent/codeowner-bypass
 models/experimental/bevformer/ @mbezuljTT @ddjekicTT @tenstorrent/codeowner-bypass
-models/experimental/oft @mbezuljTT @pavlepopovic @ianastasijevicTT @ddjekicTT @tenstorrent/codeowner-bypass
 models/experimental/panoptic_deeplab @mbezuljTT @ianastasijevicTT @pavlepopovic @ddjekicTT @tenstorrent/codeowner-bypass
 models/demos/stable_diffusion_xl_base @mbezuljTT @pavlepopovic @ipotkonjak-tt @tenstorrent/codeowner-bypass
 models/demos/vision/classification/mobilenetv2 @dvartaniansTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
@@ -648,3 +650,12 @@ tt-train/tests/**/CMakeLists.txt @mdragulaTT @vmelnykovTT @dyurshevichTT @zbacze
 tech_reports/LLMs/vLLM_integration.md @viktorpusTT @tchedaTT @tenstorrent/codeowner-bypass
 tech_reports/real_time_profiler/ @mo-tenstorrent @yusufbashiTT @tenstorrent/codeowner-bypass
 models/experimental/yunet @tvardhineniTT @dvartaniansTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
+
+# ── LLK perf infrastructure: restricted ownership ──
+# Later than the broad tt_metal/tt-llk/tests/ and .github/ rules above, so these
+# win for perf paths only (CODEOWNERS = last match wins). codeowner-bypass kept as
+# the emergency escape hatch. Layout-agnostic: helpers/perf* matches both today's
+# flat modules and the future helpers/perf/ package.
+tt_metal/tt-llk/tests/python_tests/helpers/perf* @nstojicTT @ndivnicTT @sstanisicTT @mvlahovicTT @skrsmanovicTT @tenstorrent/codeowner-bypass
+tt_metal/tt-llk/tests/python_tests/**/perf_*.py @nstojicTT @ndivnicTT @sstanisicTT @mvlahovicTT @skrsmanovicTT @tenstorrent/codeowner-bypass
+tt_metal/tt-llk/tests/python_tests/**/test_perf_*.py @nstojicTT @ndivnicTT @sstanisicTT @mvlahovicTT @skrsmanovicTT @tenstorrent/codeowner-bypass

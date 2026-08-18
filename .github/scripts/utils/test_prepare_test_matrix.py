@@ -49,13 +49,14 @@ def run_matrix(
     enabled: str,
     *extra: str,
     env: dict | None = None,
+    sku_config: Path | None = None,
 ) -> list:
     cmd = [
         sys.executable,
         str(SCRIPT),
         str(tests_yaml),
         enabled,
-        str(SKU_CONFIG),
+        str(sku_config or SKU_CONFIG),
         *extra,
     ]
     run_env = os.environ.copy()
@@ -407,6 +408,100 @@ def test_sku_config_aliases_point_at_grouped_prio_skus():
         alias = cfg[logical]["merge_queue_sku"]
         assert alias in cfg
         assert "runs_on" in cfg[alias]
+
+
+# ---------------------------------------------------------------------------
+# Multihost routing (single-host vs exabox workflow split)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "sku_name,sku_yaml,expected_multihost",
+    [
+        (
+            "legacy_alloc",
+            """\
+              legacy_alloc:
+                runs_on: [exabox-multihost-with-nfs]
+                allocation:
+                  type: Count
+                  count: 4
+            """,
+            True,
+        ),
+        (
+            "exabox_label",
+            """\
+              exabox_label:
+                runs_on: [exabox-multihost-ci-sc4]
+            """,
+            True,
+        ),
+        (
+            "ordinary",
+            """\
+              ordinary:
+                runs_on: [arch-blackhole, in-service]
+            """,
+            False,
+        ),
+    ],
+    ids=["legacy_allocation", "exabox_multihost_label", "ordinary_runner"],
+)
+def test_multihost_flag_from_sku_config(tmp_path: Path, sku_name: str, sku_yaml: str, expected_multihost: bool):
+    """Legs with allocation or an exabox-multihost* runs_on label are multihost."""
+    tests = tmp_path / "tests.yaml"
+    tests.write_text(
+        textwrap.dedent(
+            f"""\
+            - name: routing probe
+              cmd: echo ok
+              skus:
+                {sku_name}:
+                  timeout: 10
+              team: models
+            """
+        )
+    )
+    cfg = tmp_path / "sku_config.yaml"
+    cfg.write_text(textwrap.dedent(f"skus:\n{sku_yaml}"))
+    matrix = run_matrix(tests, "ALL_SKUS_IN_TESTS", sku_config=cfg)
+    assert len(matrix) == 1
+    assert matrix[0]["sku"] == sku_name
+    assert matrix[0]["multihost"] is expected_multihost
+
+
+def test_real_exabox_skus_are_marked_multihost(tmp_path: Path):
+    """Production bh_sc* SKUs route via exabox-multihost-ci-* labels in sku_config."""
+    tests = tmp_path / "tests.yaml"
+    tests.write_text(
+        textwrap.dedent(
+            """\
+            - name: sc1 probe
+              cmd: echo ok
+              skus:
+                bh_sc1:
+                  timeout: 10
+              team: models
+            - name: sc4 probe
+              cmd: echo ok
+              skus:
+                bh_sc4:
+                  timeout: 10
+              team: models
+            - name: single-host probe
+              cmd: echo ok
+              skus:
+                bh_p150:
+                  timeout: 10
+              team: models
+            """
+        )
+    )
+    by_sku = {e["sku"]: e for e in run_matrix(tests, "bh_sc1,bh_sc4,bh_p150")}
+    assert by_sku["bh_sc1"]["multihost"] is True
+    assert by_sku["bh_sc4"]["multihost"] is True
+    assert by_sku["bh_p150"]["multihost"] is False
 
 
 # ---------------------------------------------------------------------------

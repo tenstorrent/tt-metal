@@ -8,6 +8,7 @@ import torch
 from loguru import logger
 from transformers import AutoTokenizer
 
+from models.common.sampling import slice_sampling_params
 from models.demos.gemma4.tt.common import create_tt_model
 from models.demos.gemma4.tt.generator_trace import (
     apply_gemma4_prefill_trace_policy,
@@ -19,7 +20,7 @@ from models.demos.gemma4.tt.generator_trace import (
     warmup_gemma4_model_prefill,
 )
 from models.tt_transformers.tt.common import get_block_size, get_padded_prefill_len, num_blocks_in_seq
-from models.tt_transformers.tt.generator import MAX_BATCHED_PREFILL_SEQ_LEN, SUPPORTED_PREFILL_BATCH_SIZES, Generator
+from models.tt_transformers.tt.generator import MAX_BATCHED_PREFILL_SEQ_LEN, Generator, batched_prefill_padded_batch
 from models.tt_transformers.tt.model_config import determine_device_name
 
 # Same 128k batched-prefill token ceiling as the shared Generator
@@ -355,10 +356,7 @@ class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):
                 can_batch_prefill = False
 
         if can_batch_prefill:
-            padded_batch = next(
-                (b for b in SUPPORTED_PREFILL_BATCH_SIZES if b >= batch_size),
-                self.model_args[0].max_batch_size,
-            )
+            padded_batch = batched_prefill_padded_batch(batch_size, empty_slots, self.model_args[0].max_batch_size)
             if (
                 padded_batch <= self.model_args[0].max_batch_size
                 and padded_batch * prefill_seq_lens[0] >= GEMMA4_MAX_BATCHED_PREFILL_SEQ_LEN
@@ -387,10 +385,23 @@ class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):
                 for chunk_start in range(0, batch_size, max_users_per_chunk):
                     chunk_end = min(chunk_start + max_users_per_chunk, batch_size)
                     chunk_size = chunk_end - chunk_start
+                    # The chunk's requests keep the slots the caller assigned:
+                    # per-slot device state (seed RNG, row-sharded user id) is
+                    # addressed by slot, so renumbering the chunk would write it
+                    # to slots other requests own.
+                    chunk_slots = (
+                        list(empty_slots[chunk_start:chunk_end])
+                        if empty_slots is not None
+                        else list(range(chunk_start, chunk_end))
+                    )
                     chunk_enable_trace = apply_gemma4_prefill_trace_policy(
                         enable_trace,
                         prefill_seq_lens[0],
-                        chunk_size,
+                        # Keeping the real slots means the chunk runs as many rows as
+                        # its highest slot needs, so the policy has to weigh that span
+                        # and not the request count, or it captures a trace whose real
+                        # token count is past the documented OOM-risk limit.
+                        batched_prefill_padded_batch(chunk_size, chunk_slots, self.model_args[0].max_batch_size),
                         self.model[0],
                     )
                     chunk_result = super().prefill_forward_text(
@@ -398,10 +409,13 @@ class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):
                         page_table=page_table[chunk_start:chunk_end] if page_table is not None else None,
                         kv_cache=kv_cache,
                         prompt_lens=prompt_lens_list[chunk_start:chunk_end],
-                        empty_slots=list(range(chunk_size)),
+                        empty_slots=chunk_slots,
                         enable_trace=chunk_enable_trace,
                         model_id_warmup=model_id_warmup,
-                        sampling_params=sampling_params,
+                        # Each chunk carries its own requests' params. Passing the whole
+                        # prefill-ordered set gave every chunk the first ``chunk_size``
+                        # temperatures, penalties and seeds instead of its own.
+                        sampling_params=slice_sampling_params(sampling_params, chunk_start, chunk_end),
                         start_pos=num_cached_per_user[chunk_start:chunk_end] if start_pos is not None else None,
                         return_hidden_states=return_hidden_states,
                         warmup_prefill=warmup_prefill and chunk_start == 0,
@@ -462,6 +476,7 @@ class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):
             batch_size=batch_size,
             prefill_seq_lens=prefill_seq_lens,
             can_batch_prefill=can_batch_prefill,
+            empty_slots=empty_slots,
         )
 
         return super().prefill_forward_text(

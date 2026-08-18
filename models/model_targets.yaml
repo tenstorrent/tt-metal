@@ -958,7 +958,7 @@ targets:
             seq_len: 744
             status: active
             perf:
-              decode_t/s/u: 21.9
+              decode_t/s/u: 25.3
               prefill_time_to_first_token: 118
               prefill_time_to_first_token_tolerance: 0.2
             accuracy: {}
@@ -1214,6 +1214,25 @@ targets:
               decode_t/s/u: 20.0
               decode_t_s_u_tolerance: 0.2
               prefill_time_to_first_token: 105
+            accuracy: {}
+      bh_quietbox_2:
+        entries:
+          - batch_size: 1
+            seq_len: 512
+            status: active
+            perf: {}
+            accuracy:
+              top1: 96
+              top5: 99
+          - batch_size: 32
+            seq_len: 1024
+            status: active
+            perf:
+              decode_t/s: 665.9
+              decode_t/s/u: 20.81
+              decode_t_s_u_tolerance: 0.2
+              prefill_time_to_first_token: 83.3
+              prefill_time_to_first_token_tolerance: 0.2
             accuracy: {}
   qwen2.5-vl-32b:
     aliases: ["Qwen2.5-VL-32B", "Qwen/Qwen2.5-VL-32B-Instruct"]
@@ -1515,3 +1534,47 @@ targets:
             accuracy: {}
             owner_id: U088413NP0Q # Ashai Reddy Ginuga
             team: models
+
+  # ResNet-50 is tier 1, so unlike the tier-3 models migrated alongside it, it is not
+  # exempt from targets. The values below are measured, not placeholders:
+  #   wh_n150        batch 16   top1 75.375   fps 28.43   (run 31590127406)
+  #   wh_llmbox_perf batch 128  top1 75.456   fps 29.05   (run 31606078371)
+  #
+  # Only the two e2e SKUs are listed -- validate_perf_targets.py's
+  # _collect_active_test_combos walks models_e2e_tests.yaml alone, so unit and device-perf
+  # combos are never gap-checked.
+  #
+  # top1 and fps come from the vision measurement pair registered in
+  # validate_perf_targets.py: ("inference", "top1_accuracy") and ("inference", "fps"),
+  # emitted by run_resnet_imagenet_inference. Accuracy is held tight at 1% because it was
+  # reproducible to three decimals across both SKUs; fps gets 15% because throughput on
+  # shared CI hosts is far noisier than correctness.
+  resnet50:
+    aliases: ["ResNet-50", "resnet50", "ResNet50", "microsoft/resnet-50"]
+    skus:
+      wh_n150:
+        entries:
+          - batch_size: 16
+            seq_len: null
+            status: active
+            perf:
+              fps: 28.43
+              fps_tolerance: 0.15
+            accuracy:
+              top1: 75.375
+              top1_tolerance: 0.01
+            owner_id: U085GDCAZTN # Pavle Josipovic
+            team: ttnn
+      wh_llmbox_perf:
+        entries:
+          - batch_size: 128
+            seq_len: null
+            status: active
+            perf:
+              fps: 29.05
+              fps_tolerance: 0.15
+            accuracy:
+              top1: 75.456
+              top1_tolerance: 0.01
+            owner_id: U085GDCAZTN # Pavle Josipovic
+            team: ttnn

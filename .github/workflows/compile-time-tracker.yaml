@@ -15,6 +15,7 @@ jobs:
 
   track-compile-time:
     needs: check-harbor
+    if: ${{ !cancelled() }}
     name: "⏱️ Track Compile Time"
     runs-on: tt-ubuntu-2204-large-stable
     timeout-minutes: 120

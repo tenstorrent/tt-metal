@@ -1,4 +1,4 @@
-# REQUEST mode (unbounded, H2D-driven), 1 rank. No PREFILL_STANDALONE => request loop. rank0 builds the
+# REQUEST mode (unbounded, H2D-driven), 1 rank. rank0 builds the
 # H2D service + waits; drive it with prefill_producer.py on this host. Cache sized to 11 chunks.
 rank_bindings:
   - {rank: 0, mesh_id: 0, mesh_host_rank: 0, env_overrides: {}}

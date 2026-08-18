@@ -25,9 +25,9 @@ class SpeedrunScheduler:
         peak = self.cfg.max_lr
         min_lr = self.cfg.min_lr
 
-        if s <= w:
-            # linear warmup 0 -> lr_max
-            return peak * (s / max(1, w))
+        if s < w:
+            # Linear warmup to lr_max over exactly w steps.
+            return peak * ((s + 1) / w)
         elif s <= w + h:
             # hold at lr_max
             return peak

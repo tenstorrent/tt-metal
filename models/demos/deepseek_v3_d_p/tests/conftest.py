@@ -39,6 +39,12 @@ DSV3 = get_adapter("deepseek_v3_d_p")
 from models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_2 import GLM52Adapter
 
 TEST_VARIANTS["glm_5_2"] = GLM52Adapter()
+
+# kimi_k3 is TEST-ONLY for the same reason, more strongly: 69 of its 93 layers are KDA
+# linear-attention layers with no TT implementation, so only its MLA layer is testable.
+from models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k3 import KimiK3Adapter
+
+TEST_VARIANTS["kimi_k3"] = KimiK3Adapter()
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_max_payload_size
 from models.demos.deepseek_v3_d_p.utils.test_utils import convert_state_dict, detect_language_model_prefix
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import download_infinitebench_subset
@@ -222,10 +228,104 @@ def pytest_collection_modifyitems(config, items):
         ttnn.FabricConfig.FABRIC_1D_RING,
     }
 
-    def _is_ring_or_torus(item):
+    CT = ttnn.cluster.ClusterType
+    FC = ttnn.FabricConfig
+    DEFAULT_ALLOWED_FABRICS = frozenset({FC.FABRIC_1D, FC.FABRIC_2D})
+    CI_ALLOWED_FABRICS = {
+        CT.P150: {(1, 1): [FC.FABRIC_1D, FC.FABRIC_2D]},  # single chip
+        CT.P300: {(2, 1): [FC.FABRIC_1D, FC.FABRIC_2D], (1, 2): [FC.FABRIC_1D, FC.FABRIC_2D]},  # 2 chips
+        CT.P300_X2: {  # 4 chips (bh_quietbox_2), no ring cables in any configuration
+            (4, 1): [FC.FABRIC_1D, FC.FABRIC_2D],
+            (2, 2): [FC.FABRIC_1D, FC.FABRIC_2D],
+            (1, 4): [FC.FABRIC_1D, FC.FABRIC_2D],
+        },
+        CT.P150_X8: {
+            (8, 1): [FC.FABRIC_1D, FC.FABRIC_1D_RING, FC.FABRIC_2D, FC.FABRIC_2D_TORUS_Y],
+            (4, 2): [FC.FABRIC_1D, FC.FABRIC_2D],
+            (2, 4): [FC.FABRIC_1D, FC.FABRIC_2D],
+            (1, 8): [FC.FABRIC_1D, FC.FABRIC_1D_RING, FC.FABRIC_2D, FC.FABRIC_2D_TORUS_X],
+        },
+        CT.T3K: {
+            (8, 1): [FC.FABRIC_1D, FC.FABRIC_1D_RING, FC.FABRIC_2D, FC.FABRIC_2D_TORUS_Y],
+            (4, 2): [FC.FABRIC_1D, FC.FABRIC_2D],
+            (2, 4): [FC.FABRIC_1D, FC.FABRIC_2D],
+            (1, 8): [FC.FABRIC_1D, FC.FABRIC_1D_RING, FC.FABRIC_2D, FC.FABRIC_2D_TORUS_X],
+        },
+        CT.BLACKHOLE_GALAXY: {
+            (32, 1): [FC.FABRIC_1D, FC.FABRIC_2D],
+            (16, 2): [FC.FABRIC_1D, FC.FABRIC_2D],
+            (8, 4): [
+                FC.FABRIC_1D,
+                FC.FABRIC_1D_RING,
+                FC.FABRIC_2D,
+                FC.FABRIC_2D_TORUS_X,
+                FC.FABRIC_2D_TORUS_Y,
+                FC.FABRIC_2D_TORUS_XY,
+            ],
+            (4, 8): [
+                FC.FABRIC_1D,
+                FC.FABRIC_1D_RING,
+                FC.FABRIC_2D,
+                FC.FABRIC_2D_TORUS_X,
+                FC.FABRIC_2D_TORUS_Y,
+                FC.FABRIC_2D_TORUS_XY,
+            ],
+            (2, 16): [FC.FABRIC_1D, FC.FABRIC_2D],
+            (1, 32): [FC.FABRIC_1D, FC.FABRIC_2D],
+        },
+        CT.GALAXY: {
+            (32, 1): [FC.FABRIC_1D, FC.FABRIC_2D],
+            (16, 2): [FC.FABRIC_1D, FC.FABRIC_2D],
+            (8, 4): [
+                FC.FABRIC_1D,
+                FC.FABRIC_1D_RING,
+                FC.FABRIC_2D,
+                FC.FABRIC_2D_TORUS_X,
+                FC.FABRIC_2D_TORUS_Y,
+                FC.FABRIC_2D_TORUS_XY,
+            ],
+            (4, 8): [
+                FC.FABRIC_1D,
+                FC.FABRIC_1D_RING,
+                FC.FABRIC_2D,
+                FC.FABRIC_2D_TORUS_X,
+                FC.FABRIC_2D_TORUS_Y,
+                FC.FABRIC_2D_TORUS_XY,
+            ],
+            (2, 16): [FC.FABRIC_1D, FC.FABRIC_2D],
+            (1, 32): [FC.FABRIC_1D, FC.FABRIC_2D],
+        },
+        CT.TG: {
+            (32, 1): [FC.FABRIC_1D, FC.FABRIC_2D],
+            (16, 2): [FC.FABRIC_1D, FC.FABRIC_2D],
+            (8, 4): [
+                FC.FABRIC_1D,
+                FC.FABRIC_1D_RING,
+                FC.FABRIC_2D,
+                FC.FABRIC_2D_TORUS_X,
+                FC.FABRIC_2D_TORUS_Y,
+                FC.FABRIC_2D_TORUS_XY,
+            ],
+            (4, 8): [
+                FC.FABRIC_1D,
+                FC.FABRIC_1D_RING,
+                FC.FABRIC_2D,
+                FC.FABRIC_2D_TORUS_X,
+                FC.FABRIC_2D_TORUS_Y,
+                FC.FABRIC_2D_TORUS_XY,
+            ],
+            (2, 16): [FC.FABRIC_1D, FC.FABRIC_2D],
+            (1, 32): [FC.FABRIC_1D, FC.FABRIC_2D],
+        },
+    }
+
+    def _get_requested_fabric_cfg(item):  # returns fabric cfg that a particular test case requested for the test
         params = getattr(getattr(item, "callspec", None), "params", {})
         dp = params.get("device_params")
-        return isinstance(dp, dict) and dp.get("fabric_config") in ring_or_torus_fabrics
+        if isinstance(dp, dict):
+            return dp.get("fabric_config")
+        else:
+            return None
 
     # Only skip ring/torus on a galaxy; LoudBox rings are native. Galaxy detection via
     # get_cluster_type() OPENS the chip cluster as a side effect, so only call it when this session
@@ -234,21 +334,20 @@ def pytest_collection_modifyitems(config, items):
     # hold CHIP_IN_USE, deadlocking the child (get_num_devices() below is likewise gated by a marker).
     # On detection failure default to skipping (a missed skip on a galaxy hangs, worse than over-skip on LB).
     skip_rings = False
-    if on_ci and any(_is_ring_or_torus(item) for item in items):
+    cluster_type = None
+    if on_ci and any((_get_requested_fabric_cfg(item) in ring_or_torus_fabrics) for item in items):
         try:
-            skip_rings = ttnn.cluster.get_cluster_type() in (
-                ttnn.cluster.ClusterType.GALAXY,
-                ttnn.cluster.ClusterType.TG,
-                ttnn.cluster.ClusterType.BLACKHOLE_GALAXY,
-            )
+            cluster_type = ttnn.cluster.get_cluster_type()
+            skip_rings = cluster_type in [CT.GALAXY, CT.BLACKHOLE_GALAXY, CT.TG]
         except Exception:
             skip_rings = True
 
     for item in items:
         # Galaxy ring/subtorus guard — runs before the marker check so it catches configs whether or
         # not they carry a requires_mesh_topology mark.
+        requested_fabric_cfg = _get_requested_fabric_cfg(item)
         if skip_rings:
-            if _is_ring_or_torus(item):
+            if requested_fabric_cfg in ring_or_torus_fabrics:
                 item.add_marker(
                     pytest.mark.skip(
                         reason="ring/subtorus config on a CI galaxy runner: an 8-/4-ring on one galaxy "
@@ -270,6 +369,21 @@ def pytest_collection_modifyitems(config, items):
         topology = marker.kwargs.get("topology") or (marker.args[1] if len(marker.args) > 1 else None)
 
         if mesh_shape is None or topology is None:
+            continue
+
+        # Unsupported fabric rings on QB/LB meshes
+        allowed_fabric_cfgs = DEFAULT_ALLOWED_FABRICS
+        if cluster_type in CI_ALLOWED_FABRICS.keys():
+            allowed_fabric_dct = CI_ALLOWED_FABRICS[cluster_type]
+            if mesh_shape in allowed_fabric_dct.keys():
+                allowed_fabric_cfgs = allowed_fabric_dct[mesh_shape]
+
+        if requested_fabric_cfg not in allowed_fabric_cfgs:
+            item.add_marker(
+                pytest.mark.skip(
+                    reason="requested combination of fabric config and mesh, unfeasible on the given hardware"
+                )
+            )
             continue
 
         devices_needed = mesh_shape[0] * mesh_shape[1]
@@ -852,6 +966,17 @@ def random_weights(config_only):
             * std
         ).to(torch.bfloat16),
     }
+
+    # Kimi-K3 output gate. Appended AFTER the block above so the manual_seed(42) draw order for every
+    # non-gated variant is unchanged (the cached reference results depend on it — see above).
+    if getattr(config, "mla_use_output_gate", False):
+        weights["g_proj.weight"] = (
+            torch.randn(
+                config.num_attention_heads * config.v_head_dim,
+                config.hidden_size,
+            )
+            * std
+        ).to(torch.bfloat16)
 
     logger.info(f"Generated {len(weights)} random weight tensors using config dimensions")
     return config, weights
