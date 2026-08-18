@@ -117,6 +117,7 @@ from models.autoports.meta_models_muse_glimmer_30b.tt.functional_decoder import 
     TILE_SIZE,
     MuseGlimmerLayerConfig,
     PagedAttentionConfig,
+    PrefillRuntimeOffset,
     _get_layer_tensor,
     _require_muse_glimmer_text_config,
     _rope_cos_sin,
@@ -1524,6 +1525,7 @@ class OptimizedDecoder(FusedDecoder):
         start_pos: int,
         sliding_tail: tuple[ttnn.Tensor, ttnn.Tensor] | None,
         need_tail: bool,
+        offset: PrefillRuntimeOffset | None = None,
     ) -> tuple[ttnn.Tensor, tuple[ttnn.Tensor, ttnn.Tensor] | None]:
         """Prefill attention.
 
@@ -1557,7 +1559,10 @@ class OptimizedDecoder(FusedDecoder):
         q, k = q_normed, k_normed
 
         if cfg.uses_rope:
-            cos, sin, owns_tables = self._prefill_rope_tables(start_pos, q.shape[-2])
+            if offset is not None:
+                cos, sin, owns_tables = self._prefill_rope_tables_gathered(offset.rope_pos_ids)
+            else:
+                cos, sin, owns_tables = self._prefill_rope_tables(start_pos, q.shape[-2])
             q_rot = ttnn.experimental.rotary_embedding_hf(
                 q, cos, sin, is_decode_mode=False, compute_kernel_config=self.rope_compute_kernel_config
             )
@@ -1578,7 +1583,12 @@ class OptimizedDecoder(FusedDecoder):
         block_size = cfg.paged_attention_config.block_size
         k_fill = k if k.dtype == self.kv_cache_dtype else ttnn.typecast(k, self.kv_cache_dtype)
         v_fill = v if v.dtype == self.kv_cache_dtype else ttnn.typecast(v, self.kv_cache_dtype)
-        chunk_page_table, owns_chunk_pt = self._chunk_page_table(page_table, user_id, start_pos, seq_len)
+        if offset is not None:
+            # The block shift that was a host slice is now the tensor's contents,
+            # refreshed per replay; this call does not own it.
+            chunk_page_table, owns_chunk_pt = offset.chunk_page_table, False
+        else:
+            chunk_page_table, owns_chunk_pt = self._chunk_page_table(page_table, user_id, start_pos, seq_len)
         ttnn.experimental.paged_fill_cache(self.k_cache, k_fill, chunk_page_table, batch_idx=0, block_size=block_size)
         ttnn.experimental.paged_fill_cache(self.v_cache, v_fill, chunk_page_table, batch_idx=0, block_size=block_size)
         if owns_chunk_pt:
@@ -1593,7 +1603,17 @@ class OptimizedDecoder(FusedDecoder):
         # so take the paged path: it needs no K/V tail, which is what lets a continuation
         # prefill start at an arbitrary page-aligned offset. See sliding_window_is_inert.
         if cfg.is_sliding and not self.sliding_window_is_inert(start_pos, seq_len):
+            if offset is not None:
+                # Graph structure, not a runtime value: this predicate selects which op
+                # the layer dispatches, so one capture cannot span both sides of it.
+                raise ValueError(
+                    "a runtime-offset prefill cannot be used where the sliding window is "
+                    f"live (start_pos={start_pos}, seq_len={seq_len}, window={cfg.sliding_window}); "
+                    "the caller must keep every replayed offset inside the window"
+                )
             attn, next_tail = self._prefill_sdpa_sliding(q, k, v, sliding_tail, need_tail)
+        elif offset is not None:
+            attn = self._prefill_sdpa_full_runtime(q, k, v, offset)
         else:
             attn = self._prefill_sdpa_full(q, k, v, page_table, user_id, start_pos)
         ttnn.deallocate(q)
@@ -1668,6 +1688,7 @@ class OptimizedDecoder(FusedDecoder):
         start_pos: int,
         sliding_tail: tuple[ttnn.Tensor, ttnn.Tensor] | None,
         need_tail: bool,
+        runtime_offset: PrefillRuntimeOffset | None = None,
     ) -> tuple[ttnn.Tensor, tuple[ttnn.Tensor, ttnn.Tensor] | None]:
         """As ``FunctionalDecoder._prefill_chunk``, with the four norms routed
         through :meth:`_prefill_norm`.
@@ -1684,6 +1705,7 @@ class OptimizedDecoder(FusedDecoder):
             start_pos=start_pos,
             sliding_tail=sliding_tail,
             need_tail=need_tail,
+            offset=runtime_offset,
         )
         ttnn.deallocate(normed)
         attn = self._prefill_norm(self.post_attention_layernorm, attn)

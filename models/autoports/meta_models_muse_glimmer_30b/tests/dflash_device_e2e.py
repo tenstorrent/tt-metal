@@ -120,6 +120,15 @@ def main() -> None:
             "rows and 40.99 at 64."
         ),
     )
+    parser.add_argument(
+        "--offset-free-verify",
+        action="store_true",
+        help=(
+            "capture the verify graph once per generation instead of once per 32-row "
+            "window, by moving start_pos into device tensors. Off by default: it runs "
+            "without fatals but currently diverges from greedy past the first window."
+        ),
+    )
     parser.add_argument("--out", default=None)
     args = parser.parse_args()
 
@@ -168,6 +177,7 @@ def main() -> None:
             trace_verify=args.trace_verify,
             verify_width=args.verify_width,
             verify_rows=args.verify_rows,
+            offset_free_verify=args.offset_free_verify,
         )
 
         per_prompt = []

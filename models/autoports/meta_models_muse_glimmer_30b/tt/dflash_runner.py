@@ -77,6 +77,10 @@ class DFlashStats:
     #: 202k-wide logits tile to host per 32-row tile just to take an argmax.
     verify_forward_seconds: float = 0.0
     verify_logits_seconds: float = 0.0
+    #: Warm compile plus ``begin/end_trace_capture`` for the verify window, measured
+    #: rather than inferred.  It was previously read off as "whatever verify_seconds does
+    #: not account for", which attributed the whole remainder to capture and was wrong.
+    trace_capture_seconds: float = 0.0
     #: Pulling the five tapped hidden-state tensors to host and concatenating them.
     #: Charged to neither draft nor verify, so it hid in the unaccounted remainder.
     taps_seconds: float = 0.0
@@ -115,6 +119,7 @@ class DFlashStats:
             "verify_seconds": self.verify_seconds,
             "verify_forward_seconds": self.verify_forward_seconds,
             "verify_logits_seconds": self.verify_logits_seconds,
+            "trace_capture_seconds": self.trace_capture_seconds,
             "taps_seconds": self.taps_seconds,
             "context_upload_seconds": self.context_upload_seconds,
             "total_seconds": self.total_seconds,
@@ -143,6 +148,7 @@ class DFlashRunner:
         trace_verify: bool = True,
         verify_width: int = 256,
         verify_rows: int = 32,
+        offset_free_verify: bool = False,
         max_verify_traces: int = 24,
     ) -> None:
         self.generator = generator
@@ -268,6 +274,13 @@ class DFlashRunner:
         #: back to mcast2d and costs 40.99.  The candidate count bends around this, not
         #: the window.
         self.verify_rows = int(verify_rows)
+        #: Capture the verify graph **once per generation** instead of once per 32-row
+        #: window, by moving ``start_pos`` out of the program and into device tensors
+        #: (``PrefillRuntimeOffset``).  Per-window capture measured at 1.08 s of a 3.92 s
+        #: 128-token run -- 26 % of runtime spent compiling and capturing rather than
+        #: computing.  Falls back to the per-window path automatically once the window
+        #: would leave the sliding window, where the graph genuinely differs.
+        self.offset_free_verify = bool(offset_free_verify)
         #: How many 32-row windows may hold a trace at once.  Beyond this the verify falls
         #: back to the eager path rather than evicting: releasing a trace mid-generation
         #: while its addresses are still live is what wedged the board twice here.
@@ -288,6 +301,13 @@ class DFlashRunner:
         #: generation needs about five, each ~140 ms to capture and reused for every
         #: iteration that lands in the same 32-row block.
         self._verify_traces: dict[int, dict] = {}
+        #: The single offset-free verify trace, plus its device-resident offset inputs.
+        #: Where ``_verify_traces`` holds one capture per 32-row window, this holds one
+        #: capture for the whole generation -- see ``_verify_offset_free``.
+        self._offset_trace: dict | None = None
+        self._last_capture_seconds = 0.0
+        self._offset_inputs = None
+        self._offset_host_pt: torch.Tensor | None = None
         #: The traced verify's two inputs.  Both addresses are **baked into the trace**
         #: at capture, so they must be allocated once, outlive the trace, and never be
         #: rebound.  The first implementation allocated them per ``generate()`` and freed
@@ -435,7 +455,7 @@ class DFlashRunner:
             pieces.append(host.to(torch.bfloat16))
         return torch.cat(pieces, dim=-1)
 
-    def _ensure_verify_inputs(self, tt_page_table: ttnn.Tensor) -> None:
+    def _ensure_verify_inputs(self, tt_page_table: ttnn.Tensor, *, host_page_row=None) -> None:
         """Allocate the traced verify's persistent inputs exactly once.
 
         Both are read by the captured graph at addresses fixed at capture time, so
@@ -463,6 +483,86 @@ class DFlashRunner:
         # must not free it while the trace lives.
         self._verify_page_table = tt_page_table
         self._owns_verify_page_table = True
+        if self.offset_free_verify and host_page_row is not None:
+            self._offset_host_pt = torch.as_tensor(host_page_row).reshape(1, -1).to(torch.int32)
+            self._ensure_offset_inputs()
+
+    def _ensure_offset_inputs(self) -> None:
+        """Allocate the device tensors that stand in for the baked ``start_pos``.
+
+        Three of the four vary per window and are refreshed in place before each replay;
+        ``user_page_table`` is the caller's own table, constant across windows.  All are
+        read by the captured graph at addresses fixed at capture time, so like the token
+        buffer they are allocated exactly once and never reallocated.
+
+        Building the per-chunk table means naming the *physical* block behind a virtual
+        one, so it needs the table's contents.  ``generate`` already has them as the host
+        row it uploaded, and that row is used directly -- reading the device table back
+        would be the same values by a longer and more fragile route.
+        """
+        from models.autoports.meta_models_muse_glimmer_30b.tt.functional_decoder import PrefillRuntimeOffset
+
+        model = self.model
+        mesh = model.mesh_device
+        rows = self.verify_rows
+        page_block = int(model.config.page_block_size)
+        blocks = max(1, rows // page_block)
+
+        def make(host: torch.Tensor, dtype) -> ttnn.Tensor:
+            return ttnn.from_torch(
+                host,
+                device=mesh,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                dtype=dtype,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+            )
+
+        self._offset_inputs = PrefillRuntimeOffset(
+            rope_pos_ids=make(torch.zeros((1, rows), dtype=torch.int32), ttnn.uint32),
+            chunk_page_table=make(torch.zeros((1, blocks), dtype=torch.int32), ttnn.int32),
+            user_page_table=self._verify_page_table,
+            chunk_start_idx=make(torch.zeros((1,), dtype=torch.int32), ttnn.int32),
+        )
+
+    def _stage_offset(self, aligned_start: int) -> None:
+        """Refresh the offset tensors in place for this window.
+
+        In place, via ``copy_host_to_device_tensor``, because the captured graph reads
+        fixed addresses: rebinding any of these would leave the replay reading the
+        previous buffer.  Each is a handful of int32s, so the whole update is negligible
+        against the ~25 ms forward it configures.
+        """
+        model = self.model
+        mesh = model.mesh_device
+        rows = self.verify_rows
+        page_block = int(model.config.page_block_size)
+        first_block = aligned_start // page_block
+        blocks = max(1, rows // page_block)
+
+        def push(host: torch.Tensor, dtype, target: ttnn.Tensor) -> None:
+            ttnn.copy_host_to_device_tensor(
+                ttnn.from_torch(
+                    host,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    dtype=dtype,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+                ),
+                target,
+            )
+
+        offset = self._offset_inputs
+        push(
+            torch.arange(aligned_start, aligned_start + rows, dtype=torch.int32).reshape(1, rows),
+            ttnn.uint32,
+            offset.rope_pos_ids,
+        )
+        push(
+            self._offset_host_pt[:, first_block : first_block + blocks].contiguous(),
+            ttnn.int32,
+            offset.chunk_page_table,
+        )
+        push(torch.tensor([aligned_start], dtype=torch.int32), ttnn.int32, offset.chunk_start_idx)
 
     def release_prefill_verify_trace(self) -> None:
         """Release the verify trace and the inputs whose addresses it baked in.
@@ -573,6 +673,128 @@ class DFlashRunner:
                     out.append(value)
         return out
 
+    def _ensure_offset_trace(self, aligned_start: int) -> dict:
+        """Capture the offset-free verify graph once for the whole generation.
+
+        The per-window path (:meth:`_trace_for`) pays a warm compile plus a capture every
+        32 tokens because ``start_pos`` is compiled in.  With the offset in device memory
+        nothing about the graph changes between windows, so this captures once and every
+        later window is a pure replay.
+        """
+        if self._offset_trace is not None:
+            return self._offset_trace
+        t_capture = time.perf_counter()
+        model = self.model
+        tap_layers = self._tap_layers()
+        offset = self._offset_inputs
+        self._stage_offset(aligned_start)
+
+        # Warm compile first, for the same reason as everywhere else here: a capture that
+        # has to compile fails with "Cannot load new binaries during trace capture".  The
+        # difference is that this happens once per generation rather than once per window.
+        self.generator._release_decode_trace()
+        self.generator._release_prefill_traces()
+        model.arm_hidden_state_taps(tap_layers)
+        model.release_sliding_tails()
+        warm_embedded = model.embed_prefill(self._verify_tokens)
+        ttnn.deallocate(
+            model.prefill_forward(
+                warm_embedded,
+                page_table=self._verify_page_table,
+                user_id=0,
+                start_pos=aligned_start,
+                runtime_offset=offset,
+            )
+        )
+        for tensor in model.take_hidden_state_taps().values():
+            ttnn.deallocate(tensor)
+        ttnn.synchronize_device(model.mesh_device)
+
+        model.release_sliding_tails()
+        trace_id = ttnn.begin_trace_capture(model.mesh_device, cq_id=0)
+        model.arm_hidden_state_taps(tap_layers)
+        embedded = model.embed_prefill(self._verify_tokens)
+        hidden = model.prefill_forward(
+            embedded,
+            page_table=self._verify_page_table,
+            user_id=0,
+            start_pos=aligned_start,
+            runtime_offset=offset,
+        )
+        taps = model.take_hidden_state_taps()
+        ttnn.end_trace_capture(model.mesh_device, trace_id, cq_id=0)
+        ttnn.synchronize_device(model.mesh_device)
+        model.note_trace_captured()
+        self._offset_trace = {"id": trace_id, "hidden": hidden, "taps": taps}
+        self._last_capture_seconds = time.perf_counter() - t_capture
+        return self._offset_trace
+
+    def _verify_offset_free(self, full_sequence, candidates, anchor_pos: int, stats):
+        """Verify the block with the single offset-free trace, or ``None`` to fall back.
+
+        Identical arithmetic to :meth:`_verify_traced32` -- same 32-row window, same
+        ``lead``/candidate budget, same argmax range -- and identical output.  The only
+        difference is that the offset reaches the graph as tensor contents instead of as
+        a compiled constant, so there is one capture instead of one per 32 tokens.
+
+        Returns ``None`` when the window would cross out of the sliding window, because
+        past that point a sliding layer dispatches a *different op* and no single capture
+        can cover both sides.  The caller then uses the per-window traced path, which
+        recaptures and is correct there.
+        """
+        model = self.model
+        rows = self.verify_rows
+        page_block = int(model.config.page_block_size)
+        aligned_start = (anchor_pos // page_block) * page_block
+        window = int(getattr(model.config, "sliding_window", 0) or 0)
+        if window and aligned_start + rows > window:
+            return None
+
+        lead = anchor_pos - aligned_start
+        usable = max(0, rows - lead - 1)
+        n_cand = min(len(candidates), usable)
+        used = list(candidates[:n_cand])
+
+        self._last_capture_seconds = 0.0
+        entry = self._ensure_offset_trace(aligned_start)
+        stats.trace_capture_seconds += self._last_capture_seconds
+
+        t_forward = time.perf_counter()
+        host_ids = torch.full((1, rows), model.embed_pad_id, dtype=torch.int32)
+        ids = list(full_sequence[aligned_start:anchor_pos]) + [full_sequence[anchor_pos]] + used
+        host_ids[0, : len(ids)] = torch.tensor(ids, dtype=torch.int32)
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(
+                host_ids,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                dtype=ttnn.uint32,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(model.mesh_device),
+            ),
+            self._verify_tokens,
+        )
+        self._stage_offset(aligned_start)
+        ttnn.execute_trace(model.mesh_device, entry["id"], cq_id=0, blocking=True)
+        stats.verify_forward_seconds += time.perf_counter() - t_forward
+        stats.target_forwards += 1
+
+        t_logits = time.perf_counter()
+        target_argmax = self._argmax_range(entry["hidden"], lead, n_cand + 1)
+        stats.verify_logits_seconds += time.perf_counter() - t_logits
+        return target_argmax, entry["taps"], lead, used
+
+    def _release_offset_trace(self) -> None:
+        """Release the offset-free trace, drained on both sides like every other."""
+        if self._offset_trace is None:
+            return
+        ttnn.synchronize_device(self.model.mesh_device)
+        try:
+            ttnn.release_trace(self.model.mesh_device, self._offset_trace["id"])
+            self.model.note_trace_released()
+        except Exception:  # noqa: BLE001 - teardown must not mask the real error
+            pass
+        self._offset_trace = None
+        ttnn.synchronize_device(self.model.mesh_device)
+
     def _trace_for(self, aligned_start: int) -> dict | None:
         """Capture (once) and return the verify trace for this 32-row window.
 
@@ -592,6 +814,7 @@ class DFlashRunner:
         # 128-token run that hung, at three live traces and at five alike.  Released
         # before the next capture, never during a replay.
         self._release_all_verify_traces()
+        t_capture = time.perf_counter()
         model = self.model
         tap_layers = self._tap_layers()
         rows = self.verify_rows
@@ -631,6 +854,7 @@ class DFlashRunner:
         model.note_trace_captured()
         entry = {"id": trace_id, "hidden": hidden, "taps": taps, "rows": rows}
         self._verify_traces[aligned_start] = entry
+        self._last_capture_seconds = time.perf_counter() - t_capture
         return entry
 
     def _release_all_verify_traces(self) -> None:
@@ -658,6 +882,7 @@ class DFlashRunner:
     def release_verify_traces(self) -> None:
         """Release every 32-row verify trace, then the buffers they baked in."""
         self._release_all_verify_traces()
+        self._release_offset_trace()
         if self._verify_tokens is not None:
             ttnn.deallocate(self._verify_tokens)
         self._verify_tokens = None
@@ -700,9 +925,11 @@ class DFlashRunner:
         n_cand = min(len(candidates), usable)
         used = list(candidates[:n_cand])
 
+        self._last_capture_seconds = 0.0
         entry = self._trace_for(aligned_start)
         if entry is None:
             return None  # cache full: caller falls back to the eager verify
+        stats.trace_capture_seconds += self._last_capture_seconds
 
         t_forward = time.perf_counter()
         host_ids = torch.full((1, rows), model.embed_pad_id, dtype=torch.int32)
@@ -1169,7 +1396,7 @@ class DFlashRunner:
             # range, and it is what hung every earlier 128-token attempt while 48-token
             # runs -- which never leave their first bucket -- worked.
             self.pinned_context_bucket = context_bucket(prompt_len + max_new_tokens)
-            self._ensure_verify_inputs(tt_page_table)
+            self._ensure_verify_inputs(tt_page_table, host_page_row=slot_row)
 
         produced = [anchor]
         # Absolute position of the anchor, i.e. of noise slot 0.
@@ -1282,7 +1509,10 @@ class DFlashRunner:
             t0 = time.perf_counter()
             traced32 = None
             if self.trace_verify and not self.verify_mode.startswith("decode"):
-                traced32 = self._verify_traced32(prompt + produced, candidates, anchor_pos, stats)
+                if self.offset_free_verify:
+                    traced32 = self._verify_offset_free(prompt + produced, candidates, anchor_pos, stats)
+                if traced32 is None:
+                    traced32 = self._verify_traced32(prompt + produced, candidates, anchor_pos, stats)
             if traced32 is not None:
                 target_argmax, verify_taps, lead, candidates = traced32
                 hidden = None

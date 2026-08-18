@@ -99,6 +99,7 @@ from models.autoports.meta_models_muse_glimmer_30b.tt.functional_decoder import 
     FunctionalDecoder,
     MuseGlimmerLayerConfig,
     PagedAttentionConfig,
+    PrefillRuntimeOffset,
     _get_layer_tensor,
     _require_muse_glimmer_text_config,
     _rope_cos_sin,
@@ -796,6 +797,60 @@ class FusedDecoder(FunctionalDecoder):
         cos = ttnn.slice(self.cos_cache_tile, [0, 0, start_pos, 0], [1, 1, start_pos + length, head_dim])
         sin = ttnn.slice(self.sin_cache_tile, [0, 0, start_pos, 0], [1, 1, start_pos + length, head_dim])
         return cos, sin, True
+
+    def _prefill_rope_tables_gathered(self, rope_pos_ids: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor, bool]:
+        """cos/sin for arbitrary positions, gathered on device (offset-free).
+
+        The runtime twin of :meth:`_prefill_rope_tables`, which slices the tiled table
+        at a host ``start_pos`` and so bakes the offset into the program.  This reads the
+        rows from ``rope_pos_ids`` instead, using the inherited 2-D ROW_MAJOR
+        ``cos_cache`` -- the same table and the same ``ttnn.embedding`` gather the decode
+        path uses, which is already proven trace-safe here.
+
+        ``rotary_embedding_hf`` reads rows ``[0, seq_len)`` of a ``[1, 1, seq, head_dim]``
+        table, which is exactly the gather's shape, so the slice path's layout is
+        reproduced without a tilize round trip.  Always owned by the caller.
+        """
+        cos = ttnn.unsqueeze_to_4D(ttnn.embedding(rope_pos_ids, self.cos_cache, layout=ttnn.TILE_LAYOUT))
+        sin = ttnn.unsqueeze_to_4D(ttnn.embedding(rope_pos_ids, self.sin_cache, layout=ttnn.TILE_LAYOUT))
+        return cos, sin, True
+
+    def _prefill_sdpa_full_runtime(
+        self, q: ttnn.Tensor, k: ttnn.Tensor, v: ttnn.Tensor, offset: PrefillRuntimeOffset
+    ) -> ttnn.Tensor:
+        """Chunked paged SDPA that reads its start index from device memory.
+
+        Three host integers are removed relative to :meth:`_prefill_sdpa_full`, and each
+        one would otherwise be compiled into the program:
+
+        * the offset itself, now ``offset.chunk_start_idx``, a ``[1]`` int32 the kernel
+          reads at runtime -- ttnn documents this as the trace convention and states the
+          trace key excludes the runtime offset;
+        * ``q_chunk_size``, pinned to ``TILE_SIZE`` rather than computed by
+          :meth:`chunked_sdpa_chunk_size`, which derives it *from* ``start_pos`` and is
+          therefore precisely the dependency being removed.  ``TILE_SIZE`` divides every
+          legal offset and pads Q by zero, so both of that method's constraints hold for
+          all offsets at once;
+        * the ``start_pos == 0`` branch, which dispatches unpaged causal SDPA -- a
+          different op, and two ops cannot be one captured graph.  The chunked form is
+          correct at zero too, since this chunk's K/V is in the paged cache before it runs.
+        """
+        cfg = self.config
+        return ttnn.transformer.chunked_scaled_dot_product_attention(
+            q,
+            self.k_cache,
+            self.v_cache,
+            offset.user_page_table,
+            chunk_start_idx_tensor=offset.chunk_start_idx,
+            scale=cfg.sdpa_scale,
+            program_config=ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=self.prefill_sdpa_grid,
+                q_chunk_size=TILE_SIZE,
+                k_chunk_size=TILE_SIZE,
+                exp_approx_mode=False,
+            ),
+            compute_kernel_config=self.sdpa_compute_kernel_config,
+        )
 
     def chunked_sdpa_chunk_size(self, start_pos: int, seq_len: int, blocks_per_seq: int) -> int:
         """q/k chunk for the paged prefill SDPA at this offset.

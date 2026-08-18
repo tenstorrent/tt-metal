@@ -862,19 +862,66 @@ Acceptance is unchanged at 2.72 accepted per target forward, which is the correc
 outcome and a useful check: this changes how the verify forward is *dispatched*, not
 what it computes, so any movement in acceptance would have indicated a bug.
 
-**The remaining gap is now measured rather than estimated.**  Of 3.92 s for 128 tokens,
-the instrumented stages account for 2.84 s and 1.08 s is unattributed.  Five window
-captures at ~206 ms each — ~66 ms warm compile plus ~140 ms capture — accounts for it to
-within noise.  So **26 % of DFlash runtime is spent capturing traces**, and it is a cost
-that scales with tokens generated (one capture per 32) rather than with useful work.
+**The remaining gap, now measured rather than subtracted.**  F23 originally inferred the
+capture cost by attributing everything `verify_seconds` did not otherwise explain to it.
+That is a weak form of evidence, so `trace_capture_seconds` was added to time the warm
+compile and `begin/end_trace_capture` directly.  It confirms the inference:
 
-That makes the offset-independent design from F22 the whole remaining story, and its
-projection is now anchored to a measured number instead of an inferred one: removing
-1.08 s of capture from 3.92 s gives 2.84 s, i.e. **~45 t/s/u, or ~1.05x over
-non-speculative decode**, before touching the drafter's 27.6 ms. The two pieces are
-`chunk_start_idx_tensor` for the chunked SDPA offset and the decode path's on-device
-RoPE gather for prefill; together they turn one capture per 32 tokens into one capture
-per generation.
+| stage | seconds (OSL 128) |
+|---|---|
+| verify forward (47 replays) | 1.159 |
+| **trace capture (warm + capture)** | **1.069** |
+| verify logits | 0.109 |
+| *verify remainder* | *0.010* |
+| verify total | 2.348 |
+
+The remainder falls from 1.08 s to **0.010 s**, so the verify is now fully accounted for
+and capture is **27 % of the whole 3.93 s run**.  The opportunity is real and is the
+largest single item left.
+
+### F24 — Offset-free capture reaches parity with non-speculative decode, and breaks at window advance
+
+The design F22 proposed was built.  ``PrefillRuntimeOffset`` moves all four host integers
+that bake ``start_pos`` into a prefill graph onto the device: ``chunk_start_idx_tensor``
+for the chunked SDPA, a ``ttnn.embedding`` gather for prefill RoPE (the decode path's own
+mechanism, already proven trace-safe here), the per-chunk page table as tensor contents
+rather than a host slice, and the user page table carried whole.  ``q_chunk_size`` is
+pinned to ``TILE_SIZE`` because the shipped path *derives* it from the offset, and the
+``start_pos == 0`` branch is dropped because it dispatches a different op — two ops cannot
+be one graph.
+
+**It works, and it is the largest result this project has produced.**  At OSL 128:
+
+| | captures | capture time | total | t/s/u | vs baseline |
+|---|---|---|---|---|---|
+| per-window capture (shipped) | 5 | 1.069 s | 3.931 s | 32.56 | 0.76x |
+| **one capture per generation** | **1** | **0.226 s** | **2.995 s** | **42.74** | **0.996x** |
+
+That is **parity with non-speculative decode** — the thing this whole effort was for — and
+it lands almost exactly where the measured capture cost predicted, which is the first time
+a projection here has been confirmed rather than revised.
+
+**A cold-cache trap nearly buried it.**  The first offset-free run measured 3.912 s, i.e.
+no gain at all, and the obvious reading was that capture had never been the cost.  That
+run was compiling the offset-free programs for the first time; the second run, hitting the
+on-disk kernel cache, measured 2.995 s.  The same confound is recorded in F5 and it caught
+this project twice.  A first run of a *new graph shape* is not a measurement.
+
+**It is not correct yet, and the failure is precisely localised.**  Against greedy, the
+first **32** generated tokens are identical and every token from index 32 onward differs,
+contiguously.  That is not the bf16 divergence of F2 — that one starts late and is
+scattered (index 107, 20 tokens).  Identical-then-contiguous, beginning exactly one 32-row
+window in, says the captured graph is right *within* a window and something is stale
+*across* one: the first replay after the offset tensors change is where it goes wrong.
+Acceptance stays healthy (2.78/forward), which is exactly why acceptance must never be the
+correctness signal — F16 recorded the same trap for the batched decode verify.
+
+So it ships **off**, behind ``offset_free_verify=False`` and ``--offset-free-verify``.
+The next step is narrow and does not need a redesign: replay the same window twice with
+the offset tensors rewritten in between and compare against the eager verify, which
+isolates whether the staleness is in ``rope_pos_ids``, ``chunk_page_table`` or
+``chunk_start_idx``.  All three are refreshed with ``copy_host_to_device_tensor`` before
+``execute_trace``, so the suspicion is ordering against the replay rather than the values.
 
 ## Artifacts
 

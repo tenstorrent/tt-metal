@@ -1443,6 +1443,7 @@ class MuseGlimmerModel(LightweightModule):
         start_pos: int = 0,
         continuation: bool = False,
         keep_sliding_tails: bool = False,
+        runtime_offset=None,
     ) -> ttnn.Tensor:
         """Run the layer stack over a prompt; returns the final hidden state.
 
@@ -1453,6 +1454,12 @@ class MuseGlimmerModel(LightweightModule):
         by this model, so a caller doing chunked prefill only has to say whether
         this call continues the last one.
         """
+        if runtime_offset is not None and continuation:
+            raise ValueError(
+                "a runtime-offset prefill cannot be a continuation: the sliding tails it "
+                "would thread are per-offset state, and the point of runtime_offset is that "
+                "the graph carries no offset at all"
+            )
         if continuation and start_pos == 0:
             raise ValueError("continuation prefill needs start_pos > 0")
         if continuation and self._sliding_tails is None:
@@ -1476,6 +1483,7 @@ class MuseGlimmerModel(LightweightModule):
                 start_pos=start_pos,
                 sliding_kv_tail=tails[position] if sliding else None,
                 return_sliding_kv_tail=want_tail,
+                runtime_offset=runtime_offset,
             )
             if want_tail:
                 out, next_tails[position] = result

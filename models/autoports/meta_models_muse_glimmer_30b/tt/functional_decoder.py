@@ -199,6 +199,50 @@ class MuseGlimmerLayerConfig:
         return _as_float32(self.qk_scale_factor / math.sqrt(self.head_dim))
 
 
+@dataclass(frozen=True)
+class PrefillRuntimeOffset:
+    """Device-resident stand-ins for the Python ints that bake ``start_pos`` into a graph.
+
+    A prefill forward is *shape*-static but not *offset*-static: four separate things
+    read ``start_pos`` as a host integer, and each one bakes it into the dispatched
+    program, so a trace captured at one offset cannot be replayed at another.  That is
+    what makes speculative decoding re-capture a trace every 32 tokens, which measured at
+    26 % of DFlash runtime (F23).
+
+    Supplying this bundle moves all four to device memory, so one capture serves every
+    window and only the tensor contents change between replays:
+
+    ``rope_pos_ids``
+        ``[1, seq_len]`` ``uint32`` absolute positions, gathered with ``ttnn.embedding``
+        instead of slicing the cos/sin tables at a host offset -- the same op the decode
+        path already uses for exactly this reason.
+    ``chunk_page_table``
+        ``[1, blocks]`` ``int32``, the physical blocks this chunk writes.  ``paged_fill_cache``
+        always writes from virtual block 0 of the table it is handed, so the shift that
+        was a host slice becomes the tensor's contents.
+    ``user_page_table``
+        ``[1, blocks_per_seq]`` ``int32``, the whole row the chunked SDPA reads.  Constant
+        across windows; carried here so the attention never has to slice one out.
+    ``chunk_start_idx``
+        ``[1]`` ``int32``, read by ``chunked_scaled_dot_product_attention`` at runtime.
+
+    Two constraints the caller owns, because neither can be enforced from inside a
+    replayed graph:
+
+    * Every offset used with one capture must keep ``sliding_window_is_inert`` true, i.e.
+      ``start_pos + seq_len <= sliding_window``.  That predicate selects which *op* a
+      sliding layer dispatches, so it is graph structure, not a runtime value.
+    * Every offset must be a multiple of ``TILE_SIZE``, which is why the SDPA chunk size
+      is pinned to ``TILE_SIZE`` here rather than derived from the offset as the host-int
+      path does.
+    """
+
+    rope_pos_ids: ttnn.Tensor
+    chunk_page_table: ttnn.Tensor
+    user_page_table: ttnn.Tensor
+    chunk_start_idx: ttnn.Tensor
+
+
 def _text_config(hf_config: Any) -> Any:
     """Accept either ``MuseGlimmerConfig`` or its ``text_config`` sub-config."""
     text_config = getattr(hf_config, "text_config", None)
@@ -661,6 +705,20 @@ class FunctionalDecoder(LightweightModule):
             ttnn.deallocate(sin)
         return cos_t, sin_t
 
+    def _prefill_rope_tables_gathered(self, rope_pos_ids: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """cos/sin for arbitrary positions, gathered on device from a position tensor.
+
+        The offset-free twin of ``_prefill_rope_tables``.  That one calls ``ttnn.slice``
+        with host ints, which fixes the rows at dispatch; this reads them from
+        ``rope_pos_ids`` at runtime, so the same captured graph serves any window.  It is
+        the identical mechanism ``_decode_rope_tables`` already relies on -- prefill just
+        gathers ``seq_len`` contiguous positions where decode gathers one per user -- so
+        the shape falls out as ``[1, 1, seq_len, head_dim]`` with no reshaping.
+        """
+        cos = ttnn.unsqueeze_to_4D(ttnn.embedding(rope_pos_ids, self.cos_cache, layout=ttnn.TILE_LAYOUT))
+        sin = ttnn.unsqueeze_to_4D(ttnn.embedding(rope_pos_ids, self.sin_cache, layout=ttnn.TILE_LAYOUT))
+        return cos, sin
+
     def _prefill_attention(
         self,
         normed: ttnn.Tensor,
@@ -670,6 +728,7 @@ class FunctionalDecoder(LightweightModule):
         start_pos: int,
         sliding_tail: tuple[ttnn.Tensor, ttnn.Tensor] | None,
         need_tail: bool,
+        offset: PrefillRuntimeOffset | None = None,
     ) -> tuple[ttnn.Tensor, tuple[ttnn.Tensor, ttnn.Tensor] | None]:
         cfg = self.config
         seq_len = normed.shape[-2]
@@ -694,7 +753,10 @@ class FunctionalDecoder(LightweightModule):
         q, k = q_normed, k_normed
 
         if cfg.uses_rope:
-            cos, sin = self._prefill_rope_tables(start_pos, seq_len)
+            if offset is not None:
+                cos, sin = self._prefill_rope_tables_gathered(offset.rope_pos_ids)
+            else:
+                cos, sin = self._prefill_rope_tables(start_pos, seq_len)
             q_rot = self._apply_rope(q, cos, sin)
             ttnn.deallocate(q)
             k_rot = self._apply_rope(k, cos, sin)
@@ -708,7 +770,12 @@ class FunctionalDecoder(LightweightModule):
         block_size = cfg.paged_attention_config.block_size
         k_fill = k if k.dtype == self.kv_cache_dtype else ttnn.typecast(k, self.kv_cache_dtype)
         v_fill = v if v.dtype == self.kv_cache_dtype else ttnn.typecast(v, self.kv_cache_dtype)
-        chunk_page_table, owns_chunk_pt = self._chunk_page_table(page_table, user_id, start_pos, seq_len)
+        if offset is not None:
+            # The shift that was a host slice is now the tensor's contents, refreshed per
+            # replay; nothing here owns it.
+            chunk_page_table, owns_chunk_pt = offset.chunk_page_table, False
+        else:
+            chunk_page_table, owns_chunk_pt = self._chunk_page_table(page_table, user_id, start_pos, seq_len)
         ttnn.experimental.paged_fill_cache(self.k_cache, k_fill, chunk_page_table, batch_idx=0, block_size=block_size)
         ttnn.experimental.paged_fill_cache(self.v_cache, v_fill, chunk_page_table, batch_idx=0, block_size=block_size)
         if owns_chunk_pt:
@@ -723,7 +790,17 @@ class FunctionalDecoder(LightweightModule):
         # so take the paged path: it needs no K/V tail, which is what lets a continuation
         # prefill start at an arbitrary page-aligned offset. See sliding_window_is_inert.
         if cfg.is_sliding and not self.sliding_window_is_inert(start_pos, seq_len):
+            if offset is not None:
+                # Graph structure, not a runtime value: this predicate chooses which op
+                # the layer dispatches, so a single capture cannot span both sides of it.
+                raise ValueError(
+                    "a runtime-offset prefill cannot be used where the sliding window is "
+                    f"live (start_pos={start_pos}, seq_len={seq_len}, window={cfg.sliding_window}); "
+                    "the caller must keep every replayed offset inside the window"
+                )
             attn, next_tail = self._prefill_sdpa_sliding(q, k, v, sliding_tail, need_tail)
+        elif offset is not None:
+            attn = self._prefill_sdpa_full_runtime(q, k, v, offset)
         else:
             attn = self._prefill_sdpa_full(q, k, v, page_table, user_id, start_pos)
         ttnn.deallocate(q)
@@ -873,6 +950,41 @@ class FunctionalDecoder(LightweightModule):
             out = trimmed
         return out
 
+    def _prefill_sdpa_full_runtime(self, q: ttnn.Tensor, k: ttnn.Tensor, v: ttnn.Tensor, offset) -> ttnn.Tensor:
+        """Chunked paged SDPA reading its start index from device memory.
+
+        Three things differ from ``_prefill_sdpa_full``, and each is the removal of a
+        host integer that would otherwise be baked into the program:
+
+        * The offset comes from ``offset.chunk_start_idx``, a ``[1]`` int32 the kernel
+          reads at runtime.  ttnn documents this as the trace/prefix-caching convention
+          and states that the trace key does not include the runtime offset.
+        * ``q_chunk_size`` is pinned to ``TILE_SIZE`` instead of shrunk until it divides
+          ``start_pos``.  The host-int path derives it *from* the offset, so it is exactly
+          the kind of dependency this exists to remove; ``TILE_SIZE`` divides every legal
+          offset, so one config is valid for all of them.
+        * There is no ``start_pos == 0`` special case.  The host-int path dispatches a
+          different op entirely at zero -- unpaged causal SDPA -- and two ops cannot be
+          one graph.  The chunked form is correct at offset zero as well, because this
+          chunk's K/V is already in the paged cache by the time it runs.
+        """
+        cfg = self.config
+        return ttnn.transformer.chunked_scaled_dot_product_attention(
+            q,
+            self.k_cache,
+            self.v_cache,
+            offset.user_page_table,
+            chunk_start_idx_tensor=offset.chunk_start_idx,
+            scale=cfg.sdpa_scale,
+            program_config=ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=self.prefill_sdpa_grid,
+                q_chunk_size=TILE_SIZE,
+                k_chunk_size=TILE_SIZE,
+                exp_approx_mode=False,
+            ),
+            compute_kernel_config=self.sdpa_compute_kernel_config,
+        )
+
     def _prefill_sdpa_sliding(
         self,
         q: ttnn.Tensor,
@@ -976,6 +1088,7 @@ class FunctionalDecoder(LightweightModule):
         start_pos: int,
         sliding_tail: tuple[ttnn.Tensor, ttnn.Tensor] | None,
         need_tail: bool,
+        runtime_offset: PrefillRuntimeOffset | None = None,
     ) -> tuple[ttnn.Tensor, tuple[ttnn.Tensor, ttnn.Tensor] | None]:
         residual = hidden_states
         normed = self.input_layernorm(residual)
@@ -986,6 +1099,7 @@ class FunctionalDecoder(LightweightModule):
             start_pos=start_pos,
             sliding_tail=sliding_tail,
             need_tail=need_tail,
+            offset=runtime_offset,
         )
         ttnn.deallocate(normed)
         attn = self.post_attention_layernorm(attn)
@@ -1016,8 +1130,15 @@ class FunctionalDecoder(LightweightModule):
         start_pos: int = 0,
         sliding_kv_tail: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
         return_sliding_kv_tail: bool = False,
+        runtime_offset: PrefillRuntimeOffset | None = None,
     ) -> ttnn.Tensor | tuple[ttnn.Tensor, tuple[ttnn.Tensor, ttnn.Tensor] | None]:
-        """Paged prefill for one user; see the module docstring for the contract."""
+        """Paged prefill for one user; see the module docstring for the contract.
+
+        ``runtime_offset`` makes the graph independent of ``start_pos`` so one trace
+        capture serves every offset; see ``PrefillRuntimeOffset``.  It requires a single
+        tile-aligned internal chunk, because the chunk loop's slicing and the tail
+        hand-off between chunks are themselves host-offset operations.
+        """
         cfg = self.config
         seq_len = int(hidden_states.shape[-2])
         if hidden_states.shape[-1] != cfg.hidden_size:
@@ -1072,6 +1193,12 @@ class FunctionalDecoder(LightweightModule):
             padded_input = ttnn.pad(hidden_states, [(0, 0), (0, 0), (0, padded_len - seq_len), (0, 0)], value=0.0)
 
         chunk = cfg.prefill_chunk_size
+        if runtime_offset is not None and (padded_len != seq_len or padded_len > chunk):
+            raise ValueError(
+                f"a runtime-offset prefill needs one tile-aligned chunk, got seq_len={seq_len} "
+                f"against chunk size {chunk}: the chunk loop slices at host offsets, which is "
+                "exactly the dependency runtime_offset exists to remove"
+            )
         outputs: list[ttnn.Tensor] = []
         sliding_tail: tuple[ttnn.Tensor, ttnn.Tensor] | None = sliding_kv_tail
         offset = 0
@@ -1092,6 +1219,7 @@ class FunctionalDecoder(LightweightModule):
                 # The tail is only worth building for the next internal chunk or
                 # for the caller's next continuation call.
                 need_tail=return_sliding_kv_tail or not is_last_chunk,
+                runtime_offset=runtime_offset,
             )
             if piece is not padded_input:
                 ttnn.deallocate(piece)
