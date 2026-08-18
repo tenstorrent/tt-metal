@@ -2,9 +2,10 @@
 //
 // Expression-tree register allocation.
 //
-// Deliberately domain-free: it knows nothing about circular buffers, the NOC, or
-// Tensix. It provides the tree shapes, a compile-time register allocator, and the
-// emission walk; tt/unified/math.hpp supplies the policies.
+// Deliberately op-agnostic: it knows nothing about circular buffers, the NOC, or
+// Tensix, and does not name a single op. It provides the tree shapes, a
+// compile-time register allocator, the emission walk, and the method spelling of
+// the ops; tt/unified/math.hpp supplies the policies.
 //
 // A compute expression is a tree encoded in its own type, e.g.
 //     x + y + z   ==>   Bin<AddOp, Bin<AddOp, Leaf, Leaf>, Leaf>
@@ -16,6 +17,8 @@
 //                  void emit(uint32_t dst, uint32_t tile) const;  // tile -> dst
 //   Binary op Op:  static void apply(uint32_t lhs_dst, uint32_t rhs_dst, uint32_t out_dst);
 //   Unary  op Op:  static void apply(uint32_t src_dst, uint32_t out_dst);
+//   Method hooks:  fluent_relu(node) / fluent_exp(node), one per op the mixin
+//                  spells as a method -- see Fluent below.
 //
 // ALLOCATION is Sethi-Ullman numbering. A binary node evaluates its left child
 // into `base`; once that finishes only the child's *result* is live, so the right
@@ -49,14 +52,41 @@ namespace expr {
 
 // ---------------------------------------------------------------- shapes ---
 
+// Method syntax for the ops, so `relu(x)` and `x.relu()` are the same call: the
+// method delegates, so the two spellings cannot drift and per-kind behaviour comes
+// along unasked.
+//
+// Which ops exist is domain knowledge, so this layer does not name them. It calls
+// a hook declared here and defined by the domain (tt/unified/math.hpp). That
+// indirection is not decoration -- it is what frees the mixin from the domain's
+// declaration ORDER. The hook's body is looked up where a method is used, by which
+// time every overload is in; a direct qualified call would instead bind at the
+// point Fluent is defined, which would force it below the last op declaration,
+// halfway down the public header, and would keep any concrete node defined before
+// that point from carrying it at all.
+template <typename N>
+auto fluent_relu(const N& n);
+template <typename N>
+auto fluent_exp(const N& n);
+
+template <typename Self>
+struct Fluent {
+    auto relu() const { return fluent_relu(self()); }
+    auto exp() const { return fluent_exp(self()); }
+
+private:
+    const Self& self() const { return static_cast<const Self&>(*this); }
+};
+
+// Aggregates with a base, so brace-init leads with {} for it.
 template <typename Op, typename Lhs, typename Rhs>
-struct Bin {
+struct Bin : Fluent<Bin<Op, Lhs, Rhs>> {
     Lhs lhs;
     Rhs rhs;
 };
 
 template <typename Op, typename Child>
-struct Un {
+struct Un : Fluent<Un<Op, Child>> {
     Child child;
 };
 

@@ -18,7 +18,7 @@
 //         adaptor_v1.hpp   -- binds the model's intrinsics to metal v1
 //         api.h            -- core API declarations (version-agnostic)
 //           math.hpp       -- leaves, ops, fusion kinds, strategies
-//             expr.hpp     -- domain-free expression tree + allocator
+//             expr.hpp     -- op-agnostic tree, allocator, method syntax
 //         impl_v1.hpp      -- definitions for the v1 target
 //
 // To bind against something other than metal -- the host trace harness, say --
