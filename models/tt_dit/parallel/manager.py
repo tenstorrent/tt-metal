@@ -2,26 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os as _os_trace
-
 import torch
 
 import ttnn
 
 from ..utils.tensor import bf16_tensor, local_device_to_torch
-
-
-def _ccl_trace(msg):
-    if _os_trace.environ.get("TT_COSMOS3_CCL_TRACE") in ("1", "true", "True"):
-        print(f"[ccl-trace] {msg}", flush=True)
-
-
-def _ccl_trace_exit(mesh_device, label):
-    # Synchronize so EXIT only prints once the op actually drains on-device; the op
-    # whose ENTER prints but EXIT does not is the one that deadlocks.
-    if _os_trace.environ.get("TT_COSMOS3_CCL_TRACE") in ("1", "true", "True"):
-        ttnn.synchronize_device(mesh_device)
-        print(f"[ccl-trace] {label} EXIT", flush=True)
 
 
 class CCLManager:
@@ -801,7 +786,6 @@ class CCLManager:
 
         params = self.get_ag_hyperparams(tensor.shape) if use_hyperparams else {}
 
-        _ccl_trace(f"all_gather ENTER dim={dim} axis={mesh_axis} topo={self.topology} shape={tuple(tensor.shape)}")
         tensor = ttnn.experimental.all_gather_async(
             tensor,
             persistent_output_buffer=(
@@ -817,7 +801,6 @@ class CCLManager:
             cluster_axis=mesh_axis,
             **params,
         )
-        _ccl_trace_exit(self.mesh_device, f"all_gather axis={mesh_axis}")
 
         if rank < 4:
             shape = list(tensor.shape)[4 - rank :]
@@ -851,10 +834,6 @@ class CCLManager:
             tensor = ttnn.reshape(tensor, shape)
             dim += 4 - rank
 
-        _ccl_trace(
-            f"reduce_scatter ENTER dim={dim} axis={mesh_axis} topo={self.topology} "
-            f"persist={use_persistent_buffer} shape={tuple(tensor.shape)}"
-        )
         tensor = ttnn.experimental.reduce_scatter_minimal_async(
             tensor,
             persistent_output_buffers=(
@@ -869,7 +848,6 @@ class CCLManager:
             cluster_axis=mesh_axis,
             **self.get_rs_hyperparams(tensor.shape),
         )
-        _ccl_trace_exit(self.mesh_device, f"reduce_scatter axis={mesh_axis}")
 
         if rank < 4:
             shape = list(tensor.shape)[4 - rank :]

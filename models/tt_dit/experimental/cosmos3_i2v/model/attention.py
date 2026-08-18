@@ -525,8 +525,6 @@ class Cosmos3JointAttention(Module):
             k_gen_b = k_masked
 
         q_und_c, k_und_c, v_und_c = self._und_kv_cache
-        if os.environ.get("TT_COSMOS3_CCL_TRACE") in ("1", "true", "True"):
-            print("[ccl-trace] ring_joint_sdpa ENTER", flush=True)
         gen_attn_BHME, und_attn_via_ring, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
             q_gen,
             k_gen_b,
@@ -552,9 +550,6 @@ class Cosmos3JointAttention(Module):
             subdevice_id=self.ccl_manager.ccl_sub_device_id,
             ccl_core_grid_offset=(0, self.ring_sdpa_worker_grid.y),
         )
-        if os.environ.get("TT_COSMOS3_CCL_TRACE") in ("1", "true", "True"):
-            ttnn.synchronize_device(self.mesh_device)
-            print("[ccl-trace] ring_joint_sdpa EXIT", flush=True)
         ttnn.deallocate(q_gen)
         ttnn.deallocate(k_gen_b)
         ttnn.deallocate(v_gen_b)
@@ -725,8 +720,6 @@ class Cosmos3JointAttention(Module):
                     ttnn.clone(v_und_pad_b, memory_config=ttnn.DRAM_MEMORY_CONFIG),
                 )
 
-            if os.environ.get("TT_COSMOS3_CCL_TRACE") in ("1", "true", "True"):
-                print("[ccl-trace] ring_joint_sdpa ENTER", flush=True)
             gen_attn_BHME, und_attn_via_ring, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
                 q_gen,
                 k_gen_b,
