@@ -15,7 +15,6 @@ from tqdm import tqdm
 
 import ttnn
 from models.common.rmsnorm import RMSNorm
-from models.common.weight_cache import build_cached_state_dict, mark_weight_cache_complete, weight_cache_is_complete
 from models.demos.blackhole.qwen36.tt.layer import Qwen36DecoderLayer
 from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
 from models.demos.blackhole.qwen36.tt.rope import Qwen36RoPESetup
@@ -533,7 +532,6 @@ class Qwen36Model:
         n_layers=None,
         layer_indices=None,
         hf_model=None,
-        text_only=False,
     ):
         # HF_MODEL env var (hub or local path) is canonical; hf_model sets it for back-compat.
         if hf_model is not None:
@@ -561,44 +559,18 @@ class Qwen36Model:
             args.n_layers = n_layers
             args.attention_type_list = args.attention_type_list[:n_layers]
 
-        # Warm ttnn cache => skip the HF from_pretrained load; the text weights all rebuild from
-        # .tensorbin. TEXT-ONLY callers only: with a vision tower attached, the multimodal splice
-        # path reads weights out of this state_dict that a dataless placeholder cannot supply, and
-        # vision_demo.py then generates token soup while still passing (its only output check is
-        # `len(set(generated)) > 1`). Anyone calling init_vision_model() must leave text_only=False
-        # until those host-consumed weights are captured to the sidecar via is_host_weight, as
-        # gemma3-vision does. Only for a full build (layer truncation => partial cache). (#45400)
+        # NOTE: the warm-ttnn-cache HF-load skip is DISABLED for qwen3.6.
+        # Its Gated-DeltaNet loader consumes conv weights on the host without a cache_file_name --
+        # gdn/weights.py::load_conv_weight does ttnn.from_torch(state_dict[name], ...) for q/k/v_conv in
+        # every DeltaNet layer, and gdn/tp.py derives taps the same way -- so a dataless placeholder
+        # feeds those layers garbage while the HF load is skipped. This is the same failure that made
+        # the vision demo emit token soup, on the text path. Re-enabling needs those conv weights either
+        # cache-backed or captured to the sidecar via an is_host_weight predicate. (#45400 review)
         cache_path = args.weight_cache_path()
-        full_build = n_layers is None and layer_indices is None
-        cache_identity = dict(
-            model_name=args.model_name,
-            n_layers=args.n_layers,
-            mesh_shape=tuple(args.mesh_device.shape),
-            components=["text"] if text_only else ["text", "vision"],
-        )
-        loaded_real_weights = False
-        if (
-            text_only
-            and full_build
-            and not getattr(args, "dummy_weights", False)
-            and weight_cache_is_complete(cache_path, **cache_identity)
-        ):
-            logger.info("Warm ttnn weight cache detected -- skipping HF state_dict load (text-only build).")
-            state_dict = build_cached_state_dict(cache_path)
-        else:
-            logger.info("Loading + remapping weights via Qwen36ModelArgs.load_state_dict()...")
-            state_dict = args.load_state_dict()
-            loaded_real_weights = bool(state_dict) and not getattr(args, "dummy_weights", False)
+        logger.info("Loading + remapping weights via Qwen36ModelArgs.load_state_dict()...")
+        state_dict = args.load_state_dict()
 
         model = cls(device, args, state_dict, tensor_cache_path=cache_path)
-        # Seed the marker from any full cold build. The recorded `components` says which parts this
-        # build actually wrote: the vision tower is NOT reference-only, its modules
-        # (vision/vision_attention.py, vision_mlp.py, patch_merger.py, vision_layernorm.py) pass
-        # cache_file_name rooted at this same weight_cache_path, so a text-only build leaves those
-        # tensorbins unwritten. Component matching is superset-based, so a vision run's cache still
-        # satisfies a later text-only warm run, but not the reverse. (#45400 review)
-        if loaded_real_weights and full_build:
-            mark_weight_cache_complete(cache_path, state_dict, **cache_identity)
         return model
 
     def prefill_tp(self, token_ids, valid_len=None, vision_tokens=None):

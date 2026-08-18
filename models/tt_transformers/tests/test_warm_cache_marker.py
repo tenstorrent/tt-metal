@@ -282,3 +282,26 @@ def test_cached_state_dict_contract():
         raise AssertionError("a deleted key must raise KeyError, even when the sidecar still has it")
     except KeyError:
         pass
+
+
+def test_build_variant_must_match_exactly(tmp_path):
+    """Build options that change an as_tensor cache FILENAME (prefetcher, precision) are matched
+    exactly, not as a superset: a different variant needs DIFFERENT files, and any it is missing
+    would be regenerated from the placeholder rather than cold-loaded."""
+    perf = {"prefetcher": False, "precision": "aaaaaaaaaaaa"}
+    _touch_tensorbin(tmp_path)
+    mark_weight_cache_complete(tmp_path, SAMPLE_SD, build_variant=perf, **SHARED_ID)
+
+    assert weight_cache_is_complete(tmp_path, build_variant=perf, **SHARED_ID) is True
+    # different precision config
+    assert (
+        weight_cache_is_complete(tmp_path, build_variant={"prefetcher": False, "precision": "bbbb"}, **SHARED_ID)
+        is False
+    )
+    # prefetcher flips the dtypes and adds ring-matmul splits
+    assert (
+        weight_cache_is_complete(tmp_path, build_variant={"prefetcher": True, "precision": "aaaaaaaaaaaa"}, **SHARED_ID)
+        is False
+    )
+    # a caller that records no variant must not be satisfied by one that did
+    assert weight_cache_is_complete(tmp_path, **SHARED_ID) is False

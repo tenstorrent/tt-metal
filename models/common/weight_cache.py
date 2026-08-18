@@ -42,7 +42,9 @@ HOST_WEIGHTS_SIDECAR = ".host_weights.pt"
 #       per-file on read. That last one is load-bearing: ttnn.as_tensor PERSISTS whatever tensor it
 #       is handed on a cache miss, so a marker that outlives some of its tensorbins would otherwise
 #       dump placeholders to disk as real cache entries -- silent, permanent corruption. Verifying
-#       the recorded file set turns every such case back into a plain cold load.
+#       the recorded file set turns every such case back into a plain cold load. Also `build_variant`
+#       -- the build options (prefetcher, precision) that change an as_tensor cache FILENAME, matched
+#       exactly, because a different variant needs different files rather than fewer.
 WEIGHT_CACHE_FORMAT_VERSION = 3
 
 DEFAULT_FORCE_ENV = "TT_TRANSFORMERS_FORCE_MODEL_LOAD"
@@ -97,7 +99,14 @@ def load_host_sidecar(cache_path):
 
 
 def weight_cache_is_complete(
-    cache_path, *, model_name, n_layers, mesh_shape, components=None, force_env=DEFAULT_FORCE_ENV
+    cache_path,
+    *,
+    model_name,
+    n_layers,
+    mesh_shape,
+    components=None,
+    build_variant=None,
+    force_env=DEFAULT_FORCE_ENV,
 ):
     """True when the on-disk ttnn weight cache at ``cache_path`` was fully built by a previous run
     for this exact build, and every tensorbin that build produced is still present.
@@ -128,6 +137,11 @@ def weight_cache_is_complete(
     # make as_tensor dump placeholders for them).
     if not set(_normalize_components(components)).issubset(set(meta.get("components") or [])):
         return False
+    # Build options that change an as_tensor cache FILENAME (prefetcher, precision) must match
+    # exactly. A superset rule is wrong here: a different variant does not need fewer files, it
+    # needs DIFFERENT ones, and any it is missing would be regenerated from the placeholder.
+    if meta.get("build_variant") != build_variant:
+        return False
     if not meta.get("weights"):
         return False
     # If host weights were captured, the sidecar must be present AND loadable. A torn/corrupt
@@ -154,6 +168,7 @@ def mark_weight_cache_complete(
     n_layers,
     mesh_shape,
     components=None,
+    build_variant=None,
     is_moe=False,
     is_host_weight=None,
 ):
@@ -204,6 +219,7 @@ def mark_weight_cache_complete(
                 "n_layers": n_layers,
                 "mesh_shape": normalize_mesh_shape(mesh_shape),
                 "components": _normalize_components(components),
+                "build_variant": build_variant,
                 "cache_files": cache_files,
                 "is_moe": bool(is_moe),
                 "host_weights": sorted(host.keys()),
@@ -314,6 +330,12 @@ def build_cached_state_dict(cache_path, host=None, args=None):
     manifest = meta["weights"]
     if args is not None and hasattr(args, "__dict__"):
         args.is_mixture_of_experts = bool(meta.get("is_moe", False))
+        # fuse_qkv / fuse_mlp are normally sniffed from the checkpoint keys inside load_state_dict,
+        # which the warm path skips -- leaving them at their __init__ defaults and silently changing
+        # how the decoder is built. The manifest holds the same key set, so derive them identically.
+        keys = manifest.keys()
+        args.fuse_qkv = any("qkv" in k for k in keys)
+        args.fuse_mlp = any("gate_up" in k for k in keys)
     if host is None and meta.get("host_weights"):
         host = load_host_sidecar(cache_path)
     host = host or {}

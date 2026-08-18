@@ -253,8 +253,6 @@ def test_demo_text(
         device,
         max_batch_size=batch,
         max_seq_len=max_seq_len,
-        # No vision tower here, so the warm ttnn cache skip is safe (see from_pretrained).
-        text_only=True,
         # n_layers=4,  # fast iteration
         # layer_indices=[0, 3],  # profile specific layers
     )
