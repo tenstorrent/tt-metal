@@ -257,3 +257,22 @@ def test_gather_codegen_tiled_honours_a_partial_core_grid(device):
     sub_core_grids = ttnn.CoreRangeSet([ttnn.CoreRange((0, 0), (4, 0))])
     golden, out = _codegen_vs_native(device, shape, kwargs, sub_core_grids=sub_core_grids)
     assert_equal(golden, ttnn.to_torch(out))
+
+
+def test_gather_codegen_strided_split_honours_a_multi_range_core_grid(device):
+    # Two ranges, one per core row: the splitter consumes a core set range by range, so its
+    # extra-work group is the front of range 0, not whichever core a device-grid sweep reaches
+    # second. Ht=100 over 14 cores leaves a remainder of 2, so the two orders disagree, and
+    # Wt_index=1 selects the row-buffered factory, whose kernels stride tile-rows from the core
+    # ordinal -- an ordinal past the remainder runs one tile-row off the end of the tensor and
+    # leaves the row its neighbour gave up unwritten.
+    shape, kwargs = ([1, 1, 3200, 64], {"dim": -1, "index": [1, 1, 3200, 32]})
+    sub_core_grids = ttnn.CoreRangeSet([ttnn.CoreRange((0, 0), (6, 0)), ttnn.CoreRange((0, 1), (6, 1))])
+    # Preallocated and poisoned, because the golden's device buffer is freed the moment it is read
+    # back and the allocator hands the same DRAM straight to this call: a tile-row the kernels never
+    # write would otherwise still read back the golden's own values and match.
+    poisoned = ttnn.from_torch(
+        torch.full(kwargs["index"], float("nan")), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    golden, out = _codegen_vs_native(device, shape, kwargs, sub_core_grids=sub_core_grids, out=poisoned)
+    assert_equal(golden, ttnn.to_torch(out))

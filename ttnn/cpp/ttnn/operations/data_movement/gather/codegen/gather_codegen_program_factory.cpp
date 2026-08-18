@@ -6,10 +6,12 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <optional>
 #include <utility>
 #include <vector>
 
 #include <tt_stl/assert.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
@@ -86,17 +88,16 @@ struct CoreSplit {
     CoreRangeSet group2;
     uint32_t work_per_core_1;
     uint32_t work_per_core_2;
-    CoreCoord grid;
 };
 
 // An explicit sub_core_grids is authoritative and goes straight to the splitter; otherwise the
 // candidate set is exactly min(total_work, device cores) cores, so the splitter always sees
 // units >= candidate cores and hands back the candidate set verbatim.
 //
-// The column-major group order row_wise=false produces is load-bearing rather than cosmetic: it makes
-// gather_assigned_cores()' walk visit the extra-work group first, and the row-buffered/streaming
-// kernels stride by num_cores from their ordinal, so an ordinal at or above the extra-work core
-// count must never receive a second work unit.
+// row_wise=false is load-bearing rather than cosmetic: the row-buffered/streaming kernels stride by
+// num_cores from their ordinal, so an ordinal at or above the extra-work core count must never
+// receive a second work unit -- which holds only while gather_assigned_cores() numbers ordinals in
+// the same order the splitter carved the extra-work group, and that order is column-major.
 CoreSplit split_gather_work(IDevice* device, const std::optional<CoreRangeSet>& sub_core_grids, uint32_t total_work) {
     const auto grid = device->compute_with_storage_grid_size();
     const uint32_t device_cores = static_cast<uint32_t>(grid.x * grid.y);
@@ -105,31 +106,34 @@ CoreSplit split_gather_work(IDevice* device, const std::optional<CoreRangeSet>& 
                                        : gather_rect_core_range_set(std::min(total_work, device_cores), grid);
     const auto [num_cores, core_range, group1, group2, wpc1, wpc2] =
         tt::tt_metal::split_work_to_cores(candidate, total_work, /*row_wise=*/false);
-    return CoreSplit{num_cores, core_range, group1, group2, wpc1, wpc2, grid};
+    return CoreSplit{num_cores, core_range, group1, group2, wpc1, wpc2};
 }
 
-// Walk the whole device grid x-outer/y-inner, yielding each assigned core with its clamped work
-// count. Both the per-core ordinal (row-buffered, streaming) and the contiguous [start, n) offsets
-// (tiled) are numbered in exactly this order.
+// Yield each assigned core with its work count, in the order the splitter itself consumed the core
+// set: its ranges in the order they were supplied, column-major within each. Both the per-core
+// ordinal (row-buffered, streaming) and the contiguous [start, n) offsets (tiled) are numbered in
+// exactly this order.
+//
+// split_work_to_cores() carves the extra-work group off the FRONT of that order, so an enumeration
+// that disagrees with it -- which a multi-range sub_core_grids makes possible -- hands the extra
+// unit to a core whose ordinal is past the extra-work count: the strided kernels then drop one
+// tile-row and address another past the end of the tensor.
 std::vector<std::pair<CoreCoord, uint32_t>> gather_assigned_cores(const CoreSplit& split, uint32_t total_work) {
     std::vector<std::pair<CoreCoord, uint32_t>> assigned;
     assigned.reserve(split.num_cores);
     uint32_t emitted = 0;
-    for (uint32_t x = 0; x < static_cast<uint32_t>(split.grid.x); ++x) {
-        for (uint32_t y = 0; y < static_cast<uint32_t>(split.grid.y); ++y) {
-            const CoreCoord core(x, y);
-            uint32_t work = 0;
-            if (split.group1.contains(core)) {
-                work = split.work_per_core_1;
-            } else if (split.group2.contains(core)) {
-                work = split.work_per_core_2;
-            } else {
-                continue;
-            }
-            work = std::min(work, total_work - emitted);
-            emitted += work;
-            assigned.emplace_back(core, work);
+    for (const auto& core : corerange_to_cores(split.core_range, std::nullopt, /*row_wise=*/false)) {
+        uint32_t work = 0;
+        if (split.group1.contains(core)) {
+            work = split.work_per_core_1;
+        } else if (split.group2.contains(core)) {
+            work = split.work_per_core_2;
+        } else {
+            continue;
         }
+        work = std::min(work, total_work - emitted);
+        emitted += work;
+        assigned.emplace_back(core, work);
     }
     return assigned;
 }
