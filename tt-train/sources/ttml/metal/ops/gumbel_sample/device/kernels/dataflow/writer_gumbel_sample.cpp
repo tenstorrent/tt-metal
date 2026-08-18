@@ -53,6 +53,13 @@ void kernel_main() {
     // Base address of the positions tensor, 0 when absent; emitted in both modes so the host can
     // patch the slot unconditionally.
     const uint32_t positions_address = get_arg_val<uint32_t>(rt_idx++);
+    // Logical token count -- a RUNTIME arg in BOTH modes, and the only form it exists in here. In
+    // position mode it bounds the clamp in target_row_of and must not enter the program-cache key
+    // (the hash normalizes the token dimension away); in non-position mode it bounds the row scan
+    // and the output page math, where it is only multiplied and compared, so nothing is lost by
+    // not having it constexpr. Ht below stays compile-time instead: it sits in / and %, which fold
+    // to shift/multiply only for a constant.
+    const uint32_t logical_tokens = get_arg_val<uint32_t>(rt_idx++);
 
     constexpr uint32_t cb_scores_idx = tt::CBIndex::c_2;
     constexpr uint32_t cb_output_staging_idx = tt::CBIndex::c_3;
@@ -61,13 +68,12 @@ void kernel_main() {
 
     constexpr uint32_t Wt = get_compile_time_arg_val(0);
     constexpr uint32_t logical_vocab = get_compile_time_arg_val(1);
-    constexpr uint32_t logical_tokens = get_compile_time_arg_val(2);
-    constexpr uint32_t Ht = get_compile_time_arg_val(3);
-    constexpr uint32_t num_cores = get_compile_time_arg_val(4);
-    constexpr uint32_t reduction_sem_id = get_compile_time_arg_val(5);
-    constexpr uint32_t origin_phys_x = get_compile_time_arg_val(6);
-    constexpr uint32_t origin_phys_y = get_compile_time_arg_val(7);
-    constexpr uint32_t num_entries = get_compile_time_arg_val(8);
+    constexpr uint32_t Ht = get_compile_time_arg_val(2);
+    constexpr uint32_t num_cores = get_compile_time_arg_val(3);
+    constexpr uint32_t reduction_sem_id = get_compile_time_arg_val(4);
+    constexpr uint32_t origin_phys_x = get_compile_time_arg_val(5);
+    constexpr uint32_t origin_phys_y = get_compile_time_arg_val(6);
+    constexpr uint32_t num_entries = get_compile_time_arg_val(7);
 
 #ifdef DO_POSITIONS
     constexpr bool do_positions = true;
@@ -75,7 +81,7 @@ void kernel_main() {
     constexpr bool do_positions = false;
 #endif
 
-    constexpr auto output_args = TensorAccessorArgs<9>();
+    constexpr auto output_args = TensorAccessorArgs<8>();
     constexpr auto positions_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
     const auto output_address_generator = TensorAccessor(output_args, output_address);
 
@@ -104,11 +110,19 @@ void kernel_main() {
         noc_async_read_barrier();
     }
 
-    // Only the low 5 bits are consumed here; the reader consumes the tile row (position >> 5) and
-    // clamps it. Disjoint bit fields, so the reader's clamp needs no mirror in this kernel.
+    // Only the low 5 bits are consumed here; the reader consumes the high bits (position >> 5).
+    // The clamp against the logical token count MIRRORS the reader's exactly: both bit fields must
+    // come from the same clamped value or the pair desynchronizes (the reader would fetch one
+    // tile while this kernel scans a different position's row inside it). Without the clamp, a
+    // position in the tile-padding band [logical_tokens, Ht*32) lands on a zero-filled padding row
+    // and the argmax silently returns token 0 (greedy) or a near-uniform token (sampled). See the
+    // reader's source_page for the full rationale.
     auto target_row_of = [&](uint32_t entry) -> uint32_t {
-        return *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(positions_l1_base + entry * positions_slot_bytes) &
-               (kTileHeight - 1U);
+        const uint32_t position =
+            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(positions_l1_base + entry * positions_slot_bytes);
+        ASSERT(position < logical_tokens);
+        const uint32_t clamped_position = (position < logical_tokens) ? position : (logical_tokens - 1U);
+        return clamped_position & (kTileHeight - 1U);
     };
 
     uint32_t max_values[kTileHeight];
@@ -117,10 +131,11 @@ void kernel_main() {
     // How many of a tile row's 32 rows are real tokens. This bounds the SCAN, not just the
     // write-out: decode produces one token per step, so 31 of 32 rows are padding and scanning them
     // anyway costs 32x.
-    auto valid_rows_of = [](uint32_t tile_row) -> uint32_t {
+    auto valid_rows_of = [&](uint32_t tile_row) -> uint32_t {
         if constexpr (do_positions) {
-            // One row per batch entry, always real: the host validated every position against the
-            // logical token count.
+            // One row per batch entry, always real: target_row_of clamps every position against
+            // the logical token count (mirroring the reader), so the selected row is never
+            // padding. The host does NOT validate positions -- they live in device memory.
             return 1U;
         }
         const uint32_t first_token = (tile_row % Ht) * kTileHeight;

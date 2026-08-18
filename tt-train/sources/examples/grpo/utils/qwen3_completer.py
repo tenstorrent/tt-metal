@@ -36,7 +36,9 @@ from huggingface_hub import snapshot_download
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
 from ttml.trainers.grpo_trainer import GRPOCompleter
-from .completer_common import deallocate_tensors, async_read_to_host, positions_to_tensor
+from ttml.common.sampling import positions_to_tensor
+
+from .completer_common import deallocate_tensors, async_read_to_host
 from ttml.common.utils import build_mesh
 from ttml.models.qwen3.weights import load_weights_from_hf
 from ttml.models.qwen3.kv_cache import KVCache

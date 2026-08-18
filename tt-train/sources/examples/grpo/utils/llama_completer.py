@@ -21,7 +21,9 @@ from huggingface_hub import snapshot_download
 from transformers import AutoTokenizer
 
 from ttml.trainers.grpo_trainer import GRPOCompleter
-from .completer_common import deallocate_tensors, async_read_to_host, positions_to_tensor
+from ttml.common.sampling import positions_to_tensor
+
+from .completer_common import deallocate_tensors, async_read_to_host
 from .llama_overrides import LlamaCompositeKV
 
 TILE_SIZE = 32

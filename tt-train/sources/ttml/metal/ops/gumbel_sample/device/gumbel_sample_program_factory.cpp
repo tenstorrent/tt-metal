@@ -59,6 +59,15 @@ constexpr uint32_t kReaderHtIdx = 4U;
 constexpr uint32_t kReaderPositionsBufferIdx = 5U;
 constexpr uint32_t kWriterPositionsBufferIdx = 4U;
 static_assert(kReaderPositionsBufferIdx == kReaderHtIdx + 1U);
+// Logical token count, appended LAST in both kernels so every earlier slot keeps its index. It
+// bounds the position clamp in both kernels (they consume disjoint bit fields of the SAME clamped
+// value, so both need it). A RUNTIME arg for the same reason Ht is: it derives from the token
+// dimension, which the program hash normalizes away in position mode -- as a compile-time arg it
+// would put every prompt length back on the JIT-miss path.
+constexpr uint32_t kReaderLogicalTokensIdx = 6U;
+constexpr uint32_t kWriterLogicalTokensIdx = 5U;
+static_assert(kReaderLogicalTokensIdx == kReaderPositionsBufferIdx + 1U);
+static_assert(kWriterLogicalTokensIdx == kWriterPositionsBufferIdx + 1U);
 
 // Per-entry token positions live in a small device TENSOR, not in runtime args. Each core stages the
 // whole local list into L1 once at kernel start (the origin core needs all of it to re-derive target
@@ -337,14 +346,19 @@ tt::tt_metal::Program build_program(
     std::vector<uint32_t> writer_ct_args{
         layout.Wt,
         layout.logical_vocab,
-        // Both of these are dead under DO_POSITIONS -- their only uses sit past unconditional
-        // returns -- but a compile-time arg is hashed into the kernel binary whether it is read or
-        // not, so they are pinned to keep the build independent of the token dimension. ONE, never
-        // zero: the dead fallback divides by Ht in code that is still compiled, and the JIT builds
-        // with -Wall -Werror, so a zero here is a -Werror=div-by-zero build failure. At 1 the dead
-        // path degenerates to exactly what the position path does, which keeps it harmless if the
-        // guard is ever refactored away.
-        layout.position_aware ? 1U : layout.logical_tokens,
+        // logical_tokens is NOT here: it rides as a runtime arg in both modes (see
+        // kWriterLogicalTokensIdx) -- in position mode it must stay out of the program-cache key,
+        // and in non-position mode its uses are multiplies and compares that gain nothing from
+        // being constexpr. Ht cannot follow it: the writer divides by Ht, which folds to
+        // shift/multiply only for a compile-time constant.
+        //
+        // Ht is dead under DO_POSITIONS -- its only uses sit past unconditional returns -- but a
+        // compile-time arg is hashed into the kernel binary whether it is read or not, so it is
+        // pinned to keep the build independent of the token dimension. ONE, never zero: the dead
+        // fallback divides by Ht in code that is still compiled, and the JIT builds with
+        // -Wall -Werror, so a zero here is a -Werror=div-by-zero build failure. At 1 the dead path
+        // degenerates to exactly what the position path does, which keeps it harmless if the guard
+        // is ever refactored away.
         layout.position_aware ? 1U : layout.Ht,
         layout.num_cores,
         reduction_sem_id,
@@ -394,13 +408,14 @@ tt::tt_metal::Program build_program(
              num_tiles,
              start_tile,
              layout.Ht,
-             positions_address});
+             positions_address,
+             layout.logical_tokens});
 
         SetRuntimeArgs(
             program,
             shared_vars.writer_kernel_id,
             core,
-            {output_buffer->address(), num_tiles, start_tile, core_index, positions_address});
+            {output_buffer->address(), num_tiles, start_tile, core_index, positions_address, layout.logical_tokens});
 
         const auto compute_kernel = layout.core_group_1.contains(core) ? shared_vars.compute_kernel_group_1_id
                                                                        : shared_vars.compute_kernel_group_2_id;
@@ -512,11 +527,16 @@ void GumbelSampleProgramFactory::override_runtime_arguments(
                 // a cached program replayed against a stale address reads whatever DRAM now occupies
                 // that region -- in bounds, no fault, a plausible-looking token. This patch prevents that.
                 core_args[kReaderPositionsBufferIdx] = positions_address;
+                // Like Ht: runtime-only and token-derived, so a cached program replayed without
+                // this patch would clamp positions against a STALE token count -- either rejecting
+                // valid rows or readmitting the padding band the clamp exists to keep out.
+                core_args[kReaderLogicalTokensIdx] = layout.logical_tokens;
             }
             {
                 auto& core_args = writer_args[core.x][core.y];
                 core_args[kWriterOutputBufferIdx] = output_address;
                 core_args[kWriterPositionsBufferIdx] = positions_address;
+                core_args[kWriterLogicalTokensIdx] = layout.logical_tokens;
             }
             {
                 auto& core_args = vars.core_group_1.contains(core) ? compute_g1_args[core.x][core.y]

@@ -7,6 +7,8 @@
 #include <cmath>
 #include <enchantum/enchantum.hpp>
 #include <optional>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/math.hpp>
 
 #include "gumbel_sample_program_factory.hpp"
 #include "ttnn/device_operation.hpp"
@@ -16,9 +18,9 @@ namespace ttml::metal::ops::gumbel_sample::device {
 namespace {
 
 // The shape this op WILL write, derived from the logits alone. Single-sourced because the writer
-// derives its output page indices from the logits geometry (its logical_tokens / Ht compile-time
-// args), never from the output tensor -- so validation and the output spec drifting apart would not
-// be caught anywhere downstream.
+// derives its output page indices from the logits geometry (its logical_tokens runtime arg and Ht
+// compile-time arg), never from the output tensor -- so validation and the output spec drifting
+// apart would not be caught anywhere downstream.
 tt::tt_metal::Shape expected_output_shape(bool position_aware, const ttnn::Tensor& logits) {
     // Matches ttnn::argmax(dim=3, keepdim=true): [B, 1, tokens, 1] -- or [B, 1, 1, 1] when a
     // position per batch entry was given, since then only one row per entry is sampled.
@@ -46,6 +48,26 @@ void GumbelSampleDeviceOperation::validate_on_program_cache_miss(
             "GumbelSample: tensor '{}' must be TILE layout, got '{}'",
             name,
             enchantum::to_string(tensor.layout()));
+
+        const auto tile = tensor.tensor_spec().tile();
+        TT_FATAL(
+            tile.get_height() == tt::constants::TILE_HEIGHT && tile.get_width() == tt::constants::TILE_WIDTH,
+            "GumbelSample: tensor '{}' must use the default {}x{} tile, got {}x{}",
+            name,
+            tt::constants::TILE_HEIGHT,
+            tt::constants::TILE_WIDTH,
+            tile.get_height(),
+            tile.get_width());
+        auto expected_padded = tensor.logical_shape();
+        expected_padded[-2] = tt::round_up(expected_padded[-2], tt::constants::TILE_HEIGHT);
+        expected_padded[-1] = tt::round_up(expected_padded[-1], tt::constants::TILE_WIDTH);
+        TT_FATAL(
+            tensor.padded_shape() == expected_padded,
+            "GumbelSample: tensor '{}' padded shape {} must be its logical shape {} rounded up to the 32x32 tile; "
+            "custom alignments are not supported",
+            name,
+            tensor.padded_shape(),
+            tensor.logical_shape());
         TT_FATAL(
             tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
             "GumbelSample: tensor '{}' must be INTERLEAVED, got '{}'",
@@ -230,22 +252,25 @@ ttsl::hash::hash_t GumbelSampleDeviceOperation::compute_program_hash(
     const bool position_aware = tensor_args.positions.has_value();
 
     // In position mode the program does not depend on the token dimension AT ALL: the work split is
-    // NC * Wt (see the program factory), the reader's Ht is a runtime arg, and the writer's
-    // token-dim compile-time args are pinned. Normalizing dim -2 out of the key is therefore what
-    // lets one program serve every prompt length. Without it, a rollout whose prompts round to a new
-    // Np missed the cache on every prefill and paid a fresh JIT build of all three kernels -- ~6 s
-    // against ~3 ms for the dispatch itself, measured across 17 generates.
+    // NC * Wt (see the program factory), the reader's Ht and both kernels' logical_tokens (the
+    // position-clamp bound) are runtime args, and the writer's compile-time Ht is pinned.
+    // Normalizing dim -2 out of the key is therefore what lets one program serve every
+    // prompt length. Without it, a rollout whose prompts round to a new Np missed the cache on
+    // every prefill and paid a fresh JIT build of all three kernels -- ~6 s against ~3 ms for the
+    // dispatch itself, measured across 17 generates.
     //
-    // The dim is NORMALIZED rather than omitted because hash_operation forwards a variadic pack with
-    // no arity tag, and both shapes must be treated: the host tile-rounds Np, so padded == logical
-    // and normalizing one alone would leave the other as a live source of misses.
+    // The dim is NORMALIZED rather than omitted because hash_operation forwards a variadic pack
+    // with no arity tag: conditionally dropping an argument would change the key's structure and
+    // let unrelated argument combinations alias.
     //
-    // Two invariants keep the relaxation sound, and both are load-bearing: the reader's Ht MUST be
-    // re-applied in override_runtime_arguments (a cached program is otherwise replayed with the Ht
-    // it was built at, reading a real but WRONG token row -- in bounds, no fault, silently wrong),
-    // and total_tiles MUST stay NC * Wt in position mode. It also means a captured trace would
-    // freeze Ht into its recorded runtime args; nothing in tt-train captures traces today, but a
-    // trace taken at one Np and replayed at another would read the wrong pages.
+    // Two invariants keep the relaxation sound, and both are load-bearing: every token-derived
+    // runtime arg (the reader's Ht, both kernels' logical_tokens) MUST be re-applied in
+    // override_runtime_arguments (a cached program is otherwise replayed with the values it was
+    // built at, reading a real but WRONG token row or clamping positions against a stale bound --
+    // in bounds, no fault, silently wrong), and total_tiles MUST stay NC * Wt in position mode. It
+    // also means a captured trace would freeze those args as recorded; nothing in tt-train
+    // captures traces today, but a trace taken at one Np and replayed at another would read the
+    // wrong pages.
     auto token_normalized = [position_aware](tt::tt_metal::Shape shape) {
         if (position_aware) {
             shape[-2] = 1U;
@@ -258,14 +283,19 @@ ttsl::hash::hash_t GumbelSampleDeviceOperation::compute_program_hash(
         args.temperature > 0.0F,
         args.seed_axes,
         logits.dtype(),
+        // The padded shape is deliberately NOT hashed alongside the logical one: check_tensor pins
+        // it to the logical shape's default-tile round-up, so it is fully derived and would only
+        // duplicate key material. Everything the program factory takes from padded dims (Wt, Ht,
+        // NC) is therefore a function of what IS in the key.
         token_normalized(logits.logical_shape()),
-        token_normalized(logits.padded_shape()),
         static_cast<int>(logits.memory_config().buffer_type()),
         tensor_args.logits_padding_mask.has_value(),
         placement_of(tensor_args.logits_padding_mask),
-        // The positions SHAPE is not hashed separately: its entry count is NC = padded_shape[0] *
-        // padded_shape[1], already in the key via dims 0 and 1, which token_normalized leaves alone.
-        // Only its placement matters, for the accessor reason above.
+        // The positions SHAPE is not hashed separately: its entry count is NC, which the factory
+        // computes from PADDED dims 0 and 1 of the logits. Tile rounding only touches the last two
+        // dims (check_tensor enforces exactly that), so padded dims 0 and 1 equal the logical ones
+        // already in the key -- and token_normalized leaves them alone. Only the placement of
+        // positions matters, for the accessor reason above.
         placement_of(tensor_args.positions),
         placement_of(tensor_args.preallocated_output));
 }
