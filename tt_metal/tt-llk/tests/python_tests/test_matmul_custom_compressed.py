@@ -199,3 +199,49 @@ def test_matmul_custom_compressed_deepseek(shape, seed):
     M, K, N = shape
     assignment = generate_exact_assignment(K, N, DEEPSEEK_T420, seed=seed)
     run_tile_compressed(M, K, N, assignment)
+
+
+# ---------------------------------------------------------------------------
+# Metadata-word boundary.
+#
+# The unpacker walks the format metadata 10 tile indices per u32
+# (llk_unpack_AB_compressed_custom_mm.h): full_iters = kt*ct / 10 whole words, then a
+# remainder word for the leftover kt*ct % 10 tiles. encode_meta above sizes the buffer
+# at ceil(kt*ct / 10) words to match, so when kt*ct is an exact multiple of 10 there is
+# no remainder word at all -- the buffer ends after full_iters.
+#
+# That is the case the kernel used to read one word past (fixed on this branch: the
+# remainder load is now guarded on rem_iters != 0). Nothing else reaches it: every shape
+# in SHAPES has kt*ct in {2,4,8,16,28,32,56,64,112,128,192,224,448,512}, none divisible
+# by 10. Hence this test.
+
+
+METADATA_WORD_BOUNDARY_SHAPES = [
+    (1, 320, 32),  # kt=10, ct=1 -> 10 tiles, exactly 1 metadata word
+    (1, 64, 160),  # kt= 2, ct=5 -> 10 tiles, and ct>1 so the use_b bit cycles
+    (1, 320, 64),  # kt=10, ct=2 -> 20 tiles, exactly 2 metadata words
+]
+
+
+@blackhole_only
+@parametrize(
+    shape=METADATA_WORD_BOUNDARY_SHAPES,
+    formats=SINGLE_FORMATS,
+)
+def test_matmul_custom_compressed_metadata_word_boundary(shape, formats):
+    """kt*ct an exact multiple of 10 -> no remainder metadata word.
+
+    Be clear about what this does and does not catch. It does **not** detect the
+    out-of-bounds read itself, and cannot: at rem_iters == 0 the remainder loop never
+    runs, so the word loaded from past the buffer is never used, and the result is
+    unaffected by construction. Verified rather than assumed -- these six variants pass
+    against the unguarded kernel too. Catching that read needs a memory-safety check on
+    L1, not a golden comparison.
+
+    What it does buy is coverage of the exact-multiple shape class, which nothing else
+    reached, so a future change to the metadata walk that mishandles it -- consuming a
+    stale word, or dropping the final group of 10 tiles -- fails here on the golden.
+    """
+    M, K, N = shape
+    assignment = assign_clustered(K, N, formats, COMPRESSION_GRANULARITY)
+    run_tile_compressed(M, K, N, assignment)
