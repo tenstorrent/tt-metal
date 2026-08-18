@@ -140,23 +140,39 @@ class Qwen36ModelArgs(ModelArgs):
         # (gdn_nv_tp isn't necessarily one). Splitting the fused ab tensor into a=[0:Nv)/b=[Nv:2*Nv)
         # forces an Untilize->Slice->TilizeWithValPadding round-trip in _project_qkvzab, because a
         # ttnn.slice's STARTING offset must be tile-aligned to stay tile-native (a non-tile-aligned
-        # END is free — confirmed empirically: slice[0:24] and slice[32:56] on a TILE tensor both
+        # END is free -- confirmed empirically: slice[0:24] and slice[32:56] on a TILE tensor both
         # dispatch as a single SliceDeviceOperation, only slice[24:48] triggers the 3-op
         # untilize/retilize sequence). Moving b to start at the next tile boundary makes both a and b
         # single-op tile-native slices with no change to Nv/v/state/conv1d/the GQA ratio anywhere
-        # else — see tests/perf/test_gdn_ab_pad_check.py, which confirmed this padding lands inside
+        # else -- see tests/perf/test_gdn_ab_pad_check.py, which confirmed this padding lands inside
         # per-core tile capacity already being paid for.
         #
-        # SCOPED TO WORMHOLE 9B (dim 4096). The gap changes gdn_qkvzab_dim_tp, and with it the fused
-        # weight geometry, its cache key and every progcfg derived from that width -- so it is held
-        # to the one config it was measured on. Blackhole keeps its separately tuned decode grid
-        # (num_cores=44) against the unpadded width, and the 27B (dim 5120, gdn_nv=48 so EVERY TP
-        # split is unaligned) keeps its validated geometry. Gate on dim, not model_name: HF_MODEL is
-        # often a hashed snapshot dir -- same reasoning as _qkv_l1_tuned_for_this_model in gdn/tp.py.
-        # 0 restores the pre-gap width exactly, and gdn/tp.py falls back to its enclosing-tile ab
-        # slice dance when the gap is 0.
-        _ab_gap_scoped = (not tpc.is_blackhole()) and self.dim <= 4096
-        self.gdn_ab_gap = (-(-self.gdn_nv_tp // 32) * 32 - self.gdn_nv_tp) if _ab_gap_scoped else 0
+        # TWO INDEPENDENT GATES, ONE MECHANISM. The 9B and the 27B were measured separately, on
+        # different hosts, at different TP -- so each keeps its own scope test and its own
+        # provenance rather than being folded into a single "align whenever nv_tp % 32" rule that
+        # would silently re-tune whichever model was not measured. They are mutually exclusive by
+        # construction (dim <= 4096 vs dim > 4096), asserted below, so the two contributions sum.
+        # Blackhole is excluded from both: its decode grid (num_cores=44) is tuned against the
+        # unpadded width. Gate on dim, not model_name: HF_MODEL is often a hashed snapshot dir --
+        # same reasoning as _qkv_l1_tuned_for_this_model in gdn/tp.py. 0 restores the pre-gap width
+        # exactly, and gdn/tp.py falls back to its enclosing-tile ab slice dance when the gap is 0.
+        #
+        # GATE 1 -- WORMHOLE 9B (dim 4096), from the base branch.
+        _ab_gap_9b = (not tpc.is_blackhole()) and self.dim <= 4096
+        _gap_9b = (-(-self.gdn_nv_tp // 32) * 32 - self.gdn_nv_tp) if _ab_gap_9b else 0
+        #
+        # GATE 2 -- WORMHOLE 27B (dim 5120). Same defect, measured independently at T3K TP=8, where
+        # gdn_nv_tp is 6 so `b` lands at offset 6 inside the tile. MEASURED (seq 2048, single-layer
+        # profile) on the two identical 6-wide tensors:
+        #     a  (offset 0,  aligned)    slice                              2.1us
+        #     b  (offset 6, misaligned)  untilize 13.9 + slice 27.9 + tilize 5.6 = 47.4us
+        # -- that row-major slice moves 24KB at ~0.9 GB/s, which is the tell. Aligning b took the
+        # pair 50.5us -> 12.1us and removed 2 device ops, for one extra tile of matmul N (65 -> 66)
+        # that measured free: the in-projection was 566.4us before and 565.6us after.
+        _ab_gap_27b = (not tpc.is_blackhole()) and self.dim > 4096
+        _gap_27b = (-(-self.gdn_nv_tp // 32) * 32 - self.gdn_nv_tp) if _ab_gap_27b else 0
+        assert not (_ab_gap_9b and _ab_gap_27b), "a/b gap gates must be mutually exclusive"
+        self.gdn_ab_gap = _gap_9b + _gap_27b
         self.gdn_qkvzab_dim_tp = self.gdn_qkvz_dim_tp + 2 * self.gdn_nv_tp + self.gdn_ab_gap
         # NO PAD (was: prefill_kpass_width padded 6176 -> 6912 on Wormhole). Kept at 0 so the weight
         # geometry, cache key and decode progcfgs all use the natural width; see the history below,
