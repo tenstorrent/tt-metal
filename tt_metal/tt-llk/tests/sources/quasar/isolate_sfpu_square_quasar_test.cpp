@@ -84,7 +84,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     bd_unpack.f.z_dim         = PARAM_SRCS_ZDIM;
     td_unpack.buf_desc        = bd_unpack;
     td_unpack.buf_desc_id     = buf_desc_id_unpack;
-    td_unpack.reg_data_format = static_cast<std::uint8_t>(formats.unpack_S_dst);
+    td_unpack.reg_data_format = static_cast<DataFormat>(formats.unpack_S_dst);
     _configure_buf_desc_table_(td_unpack.buf_desc_id, td_unpack.buf_desc);
     _llk_unpack_configure_unary_<p_unpacr::UNP_S>(td_unpack.reg_data_format);
 
@@ -96,7 +96,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     bd_pack.f.z_dim         = PARAM_SRCS_ZDIM;
     td_pack.buf_desc        = bd_pack;
     td_pack.buf_desc_id     = buf_desc_id_pack;
-    td_pack.reg_data_format = static_cast<std::uint8_t>(formats.pack_S_src);
+    td_pack.reg_data_format = static_cast<DataFormat>(formats.pack_S_src);
     _configure_buf_desc_table_(td_pack.buf_desc_id, td_pack.buf_desc);
     _llk_pack_hw_configure_<p_pacr::PACK1, false>(td_pack.reg_data_format, ckernel::ReluConfig::none());
 

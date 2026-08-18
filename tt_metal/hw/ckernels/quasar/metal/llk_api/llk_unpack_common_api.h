@@ -57,7 +57,8 @@ inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std:
     const std::uint32_t unpB_operand_id = get_operand_id(unpB_operand);
 
     _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
-        unpack_dst_format[unpA_operand_id], unpack_dst_format[unpB_operand_id]);
+        static_cast<DataFormat>(unpack_dst_format[unpA_operand_id]),
+        static_cast<DataFormat>(unpack_dst_format[unpB_operand_id]));
 }
 
 /**

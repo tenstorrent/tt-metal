@@ -29,7 +29,7 @@ enum class p_dim_stride_target
  * @param reg_data_format: Source register (out) data format.
  */
 template <std::uint32_t UNP_SEL>
-inline void _llk_unpack_hw_configure_(const std::uint32_t reg_data_format)
+inline void _llk_unpack_hw_configure_(const DataFormat reg_data_format)
 {
     static_assert(
         (UNP_SEL == p_unpacr::UNP_A) || (UNP_SEL == p_unpacr::UNP_B) || (UNP_SEL == p_unpacr::UNP_S) || (UNP_SEL == p_unpacr::UNP_DEST),
@@ -59,7 +59,7 @@ inline void _llk_unpack_hw_configure_(const std::uint32_t reg_data_format)
  * @param reg_data_format_src: Source register (out) data format.
  */
 template <std::uint32_t UNP_SEL>
-inline void _llk_unpack_configure_unary_(const std::uint32_t reg_data_format_src)
+inline void _llk_unpack_configure_unary_(const DataFormat reg_data_format_src)
 {
     _llk_unpack_hw_configure_<UNP_SEL>(reg_data_format_src);
 }
@@ -71,7 +71,7 @@ inline void _llk_unpack_configure_unary_(const std::uint32_t reg_data_format_src
  * @param reg_data_format_src0/1: Source register (out) data format for each unpacker.
  */
 template <std::uint32_t UNP_SEL_0, std::uint32_t UNP_SEL_1>
-inline void _llk_unpack_configure_binary_(const std::uint32_t reg_data_format_src0, const std::uint32_t reg_data_format_src1)
+inline void _llk_unpack_configure_binary_(const DataFormat reg_data_format_src0, const DataFormat reg_data_format_src1)
 {
     _llk_unpack_hw_configure_<UNP_SEL_0>(reg_data_format_src0);
     _llk_unpack_hw_configure_<UNP_SEL_1>(reg_data_format_src1);

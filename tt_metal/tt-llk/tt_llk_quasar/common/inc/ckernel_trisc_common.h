@@ -501,7 +501,7 @@ template <L1AccessMode MODE = L1AccessMode::Continuous>
 inline tdma_descriptor_t construct_tdma_desc(
     const TensorShape& tensor_shape, unsigned base_l1_16B, unsigned data_format, std::uint32_t buf_desc_id, unsigned reg_data_format)
 {
-    tdma_descriptor_t tdma_desc = {construct_buf_desc<MODE>(tensor_shape, base_l1_16B, data_format), buf_desc_id, static_cast<std::uint8_t>(reg_data_format)};
+    tdma_descriptor_t tdma_desc = {construct_buf_desc<MODE>(tensor_shape, base_l1_16B, data_format), buf_desc_id, static_cast<DataFormat>(reg_data_format)};
 
     return tdma_desc;
 }

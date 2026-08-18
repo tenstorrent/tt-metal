@@ -61,7 +61,8 @@ template <bool EN_32BIT_DEST>
 inline void llk_pack_hw_configure(const std::uint32_t pack_output) {
     const std::uint32_t output_id = get_output_id(pack_output);
 
-    _llk_pack_hw_configure_<p_pacr::PACK0, EN_32BIT_DEST>(pack_src_format[output_id], ckernel::ReluConfig::none());
+    _llk_pack_hw_configure_<p_pacr::PACK0, EN_32BIT_DEST>(
+        static_cast<DataFormat>(pack_src_format[output_id]), ckernel::ReluConfig::none());
 }
 
 inline bool should_reconfig_pack_in_data_format(const std::uint32_t old_output, const std::uint32_t new_output) {

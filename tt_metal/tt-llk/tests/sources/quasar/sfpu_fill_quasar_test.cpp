@@ -79,7 +79,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     tdma_descriptor_t td_val;
     td_val.buf_desc        = bd_val;
     td_val.buf_desc_id     = buf_desc_id;
-    td_val.reg_data_format = static_cast<std::uint8_t>(formats.unpack_A_dst);
+    td_val.reg_data_format = static_cast<DataFormat>(formats.unpack_A_dst);
     _configure_buf_desc_table_(td_val.buf_desc_id, td_val.buf_desc);
 
     // Configure unpacker → init unary operand path → unpack tile 0 from L1 into DEST.
@@ -201,7 +201,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     tdma_descriptor_t tdma_desc;
     tdma_desc.buf_desc        = bd_val;
     tdma_desc.buf_desc_id     = buf_desc_id;
-    tdma_desc.reg_data_format = static_cast<std::uint8_t>(formats.pack_src);
+    tdma_desc.reg_data_format = static_cast<DataFormat>(formats.pack_src);
     _configure_buf_desc_table_(tdma_desc.buf_desc_id, tdma_desc.buf_desc);
 
     // Configure pack engine 0 → init → pack tile from DST_INDEX into buffer_Res → release section.

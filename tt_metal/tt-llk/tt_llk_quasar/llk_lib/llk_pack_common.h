@@ -75,7 +75,7 @@ inline void _llk_pack_relu_config_(const ckernel::ReluConfig& relu_config = cker
  * @param relu_config: ReLU config (mode + threshold).
  */
 template <std::uint32_t PACK_SEL, bool EN_32BIT_DEST>
-inline void _llk_pack_hw_configure_(const std::uint32_t pack_src_format, const ckernel::ReluConfig& relu_config)
+inline void _llk_pack_hw_configure_(const DataFormat pack_src_format, const ckernel::ReluConfig& relu_config)
 {
     static_assert((PACK_SEL == p_pacr::PACK0) || (PACK_SEL == p_pacr::PACK1), "PACK_SEL can only be set to p_pacr::PACK0/PACK1");
 

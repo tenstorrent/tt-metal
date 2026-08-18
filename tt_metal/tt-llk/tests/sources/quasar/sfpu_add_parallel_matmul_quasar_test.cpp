@@ -42,7 +42,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     tdma_desc_src_a.buf_desc.f.y_dim        = FACE_R_DIM;
     tdma_desc_src_a.buf_desc.f.z_dim        = params.num_faces_A;
     tdma_desc_src_a.buf_desc_id             = buf_desc_id_src_a;
-    tdma_desc_src_a.reg_data_format         = static_cast<std::uint32_t>(formats.unpack_A_dst);
+    tdma_desc_src_a.reg_data_format         = static_cast<DataFormat>(formats.unpack_A_dst);
 
     tdma_descriptor_t tdma_desc_src_b;
     tdma_desc_src_b.buf_desc.f.l1_addr_16B  = L1_ADDRESS(params.buffer_B[0]);
@@ -52,7 +52,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     tdma_desc_src_b.buf_desc.f.y_dim        = FACE_R_DIM;
     tdma_desc_src_b.buf_desc.f.z_dim        = params.num_faces_B;
     tdma_desc_src_b.buf_desc_id             = buf_desc_id_src_b;
-    tdma_desc_src_b.reg_data_format         = static_cast<std::uint32_t>(formats.unpack_B_dst);
+    tdma_desc_src_b.reg_data_format         = static_cast<DataFormat>(formats.unpack_B_dst);
 
     _configure_buf_desc_table_(tdma_desc_src_a.buf_desc_id, tdma_desc_src_a.buf_desc);
     _configure_buf_desc_table_(tdma_desc_src_b.buf_desc_id, tdma_desc_src_b.buf_desc);
@@ -139,7 +139,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     bd_unpack_0.f.z_dim         = PARAM_SRCS_ZDIM;
     td_unpack_0.buf_desc        = bd_unpack_0;
     td_unpack_0.buf_desc_id     = buf_desc_id_unpack_0;
-    td_unpack_0.reg_data_format = static_cast<std::uint8_t>(formats.unpack_S_dst);
+    td_unpack_0.reg_data_format = static_cast<DataFormat>(formats.unpack_S_dst);
     _configure_buf_desc_table_(td_unpack_0.buf_desc_id, td_unpack_0.buf_desc);
     _llk_unpack_configure_unary_<p_unpacr::UNP_S>(td_unpack_0.reg_data_format);
 
@@ -152,7 +152,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     bd_unpack_1.f.z_dim         = PARAM_SRCS_ZDIM;
     td_unpack_1.buf_desc        = bd_unpack_1;
     td_unpack_1.buf_desc_id     = buf_desc_id_unpack_1;
-    td_unpack_1.reg_data_format = static_cast<std::uint8_t>(formats.unpack_S_dst);
+    td_unpack_1.reg_data_format = static_cast<DataFormat>(formats.unpack_S_dst);
     _configure_buf_desc_table_(td_unpack_1.buf_desc_id, td_unpack_1.buf_desc);
     _llk_unpack_configure_unary_<p_unpacr::UNP_S>(td_unpack_1.reg_data_format);
 
@@ -163,7 +163,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     bd_pack.f.z_dim         = PARAM_SRCS_ZDIM;
     td_pack.buf_desc        = bd_pack;
     td_pack.buf_desc_id     = buf_desc_id_pack;
-    td_pack.reg_data_format = static_cast<std::uint8_t>(formats.pack_S_src);
+    td_pack.reg_data_format = static_cast<DataFormat>(formats.pack_S_src);
     _configure_buf_desc_table_(td_pack.buf_desc_id, td_pack.buf_desc);
     _llk_pack_hw_configure_<p_pacr::PACK1, false>(td_pack.reg_data_format, ckernel::ReluConfig::none());
 
@@ -259,7 +259,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     tdma_desc_dst.buf_desc.f.y_dim        = FACE_R_DIM;
     tdma_desc_dst.buf_desc.f.z_dim        = params.num_faces;
     tdma_desc_dst.buf_desc_id             = buf_desc_id_dst;
-    tdma_desc_dst.reg_data_format         = static_cast<std::uint8_t>(formats.pack_src);
+    tdma_desc_dst.reg_data_format         = static_cast<DataFormat>(formats.pack_src);
 
     _configure_buf_desc_table_(tdma_desc_dst.buf_desc_id, tdma_desc_dst.buf_desc);
     _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(tdma_desc_dst.reg_data_format, ckernel::ReluConfig::none());

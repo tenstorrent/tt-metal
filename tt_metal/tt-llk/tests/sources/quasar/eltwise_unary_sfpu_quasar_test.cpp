@@ -86,7 +86,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         tdma_descriptor_t td_val;
         td_val.buf_desc        = bd_val;
         td_val.buf_desc_id     = buf_desc_id;
-        td_val.reg_data_format = static_cast<std::uint8_t>(formats.unpack_A_dst);
+        td_val.reg_data_format = static_cast<DataFormat>(formats.unpack_A_dst);
         _configure_buf_desc_table_(td_val.buf_desc_id, td_val.buf_desc);
 
         if constexpr (is_fp32_dest_acc_en && !unpack_to_dest)
@@ -317,7 +317,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         tdma_descriptor_t tdma_desc;
         tdma_desc.buf_desc        = bd_val;
         tdma_desc.buf_desc_id     = buf_desc_id;
-        tdma_desc.reg_data_format = static_cast<std::uint8_t>(formats.pack_src);
+        tdma_desc.reg_data_format = static_cast<DataFormat>(formats.pack_src);
         _configure_buf_desc_table_(tdma_desc.buf_desc_id, tdma_desc.buf_desc);
 
         _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(tdma_desc.reg_data_format, ckernel::ReluConfig::none());
