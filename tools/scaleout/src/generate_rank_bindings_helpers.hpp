@@ -219,7 +219,7 @@ inline std::string compute_solution_signature_string(const std::vector<RankBindi
 // for exact collision disambiguation.
 inline std::string compute_solution_signature_hash(const std::vector<RankBindingConfig>& rank_bindings) {
     const std::string signature = compute_solution_signature_string(rank_bindings);
-    std::uint64_t hash = 1469598103934665603ULL;  // FNV-1a 64-bit offset basis
+    std::uint64_t hash = 14695981039346656037ULL;  // FNV-1a 64-bit offset basis
     for (unsigned char c : signature) {
         hash ^= static_cast<std::uint64_t>(c);
         hash *= 1099511628211ULL;  // FNV-1a 64-bit prime

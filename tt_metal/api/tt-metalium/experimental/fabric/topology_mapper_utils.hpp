@@ -617,12 +617,14 @@ public:
     std::size_t solutions_returned() const { return emitted_; }
 
 private:
-    // Caller-owned inputs -- must outlive this enumerator.
+    // Caller-owned graph/config inputs -- must outlive this enumerator (passed by reference, no defaults).
     const LogicalMultiMeshGraph& adjacency_map_logical_;
     const PhysicalMultiMeshGraph& adjacency_map_physical_;
     const TopologyMappingConfig& config_;
-    const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank_;
-    const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank_;
+    // The rank maps have default {} args, so store them BY VALUE: a const& member would dangle if the
+    // enumerator were constructed with the defaults (temporary destroyed after the constructor).
+    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank_;
+    std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> fabric_node_id_to_mesh_rank_;
     bool unique_shapes_;
 
     // Derived once from config/graphs.

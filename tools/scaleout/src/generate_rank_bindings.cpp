@@ -683,10 +683,14 @@ int main(int argc, char** argv) {
                 // emitted counts solutions returned by the enumerator (matches the batch --max-solutions cap
                 // semantics, which bound the enumeration before host-set dedup); cap_reached distinguishes
                 // "stopped at the cap (more may exist)" from "enumeration genuinely exhausted".
+                // Safety cap for the unbounded (max_solutions==0) case: match the batch solver's internal
+                // enumeration cap so the streaming path can't run beyond the documented bound / unbounded disk.
+                constexpr std::size_t kEnumerationSafetyCap = 500000;
+                const std::size_t effective_cap = args.max_solutions != 0 ? args.max_solutions : kEnumerationSafetyCap;
                 std::size_t emitted = 0;
                 bool cap_reached = false;
                 while (true) {
-                    if (args.max_solutions != 0 && emitted >= args.max_solutions) {
+                    if (emitted >= effective_cap) {
                         cap_reached = true;
                         break;
                     }
@@ -707,8 +711,26 @@ int main(int argc, char** argv) {
                         continue;
                     }
 
-                    const std::string solution_id = compute_solution_signature_hash(rank_bindings);
-                    const std::filesystem::path solution_dir = output_dir / solution_id;
+                    // Disambiguate short-hash collisions BEFORE writing: if the natural dir already holds a
+                    // DIFFERENT solution (its .solution_key differs from this one's canonical signature), pick a
+                    // suffixed id instead of overwriting it. Same signature => reuse the dir (idempotent re-run).
+                    const std::string signature = compute_solution_signature_string(rank_bindings);
+                    const std::string base_id = compute_solution_signature_hash(rank_bindings);
+                    std::string solution_id = base_id;
+                    std::filesystem::path solution_dir = output_dir / solution_id;
+                    for (int suffix = 1;; ++suffix) {
+                        std::ifstream existing_key(solution_dir / ".solution_key");
+                        std::string existing;
+                        if (!existing_key || (std::getline(existing_key, existing), existing == signature)) {
+                            break;  // free dir, or the same solution already there -> use it
+                        }
+                        log_warning(
+                            tt::LogFabric,
+                            "Short-hash collision on {}: a different solution already occupies it; disambiguating",
+                            solution_id);
+                        solution_id = base_id + "-" + std::to_string(suffix);
+                        solution_dir = output_dir / solution_id;
+                    }
 
                     write_solution_artifacts(rank_bindings, solution_dir);
 
@@ -716,7 +738,7 @@ int main(int argc, char** argv) {
                     const std::filesystem::path key_path = solution_dir / ".solution_key";
                     {
                         std::ofstream key_file(key_path);
-                        key_file << compute_solution_signature_string(rank_bindings) << std::endl;
+                        key_file << signature << std::endl;
                     }
                     const std::filesystem::path meta_path = solution_dir / "solution_meta.yaml";
                     write_solution_meta_yaml(

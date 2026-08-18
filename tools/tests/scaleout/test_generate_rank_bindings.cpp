@@ -238,7 +238,8 @@ TEST(GenerateRankBindingsHelpersTest, WriteSolutionsIndex_HasEnumerationAndSolut
     EXPECT_EQ(root["solutions"][0]["dir"].as<std::string>(), "3f9c1a20");
     EXPECT_EQ(root["solutions"][0]["num_hosts"].as<int>(), 2);
     EXPECT_EQ(root["solutions"][0]["rank_bindings"].as<std::string>(), "3f9c1a20/rank_bindings.yaml");
-    EXPECT_EQ(root["solutions"][0]["host_set"].size(), 2u);
+    // host_set is emitted as a comma-joined scalar (host_set_csv), not a YAML sequence.
+    EXPECT_EQ(root["solutions"][0]["host_set"].as<std::string>(), "host-a,host-b");
 }
 
 TEST(GenerateRankBindingsHelpersTest, WriteSolutionMeta_ListsHostsAndCounts) {
@@ -257,5 +258,6 @@ TEST(GenerateRankBindingsHelpersTest, WriteSolutionMeta_ListsHostsAndCounts) {
     EXPECT_EQ(root["solution_id"].as<std::string>(), "deadbeef00000000");
     EXPECT_EQ(root["num_ranks"].as<int>(), 3);
     EXPECT_EQ(root["num_hosts"].as<int>(), 2);  // host-a, host-b
-    EXPECT_EQ(root["host_set"].size(), 2u);
+    // host_set is emitted as a comma-joined scalar (host_set_csv), not a YAML sequence.
+    EXPECT_EQ(root["host_set"].as<std::string>(), "host-a,host-b");
 }
