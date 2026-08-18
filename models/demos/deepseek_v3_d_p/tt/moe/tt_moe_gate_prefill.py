@@ -59,12 +59,9 @@ class GateComputeMode(Enum):
 # drive. Every tuned matmul entry is keyed to it; other depths fall back to TTNN's default tiling.
 GATE_PRODUCTION_SP_DIM = 640
 
-# GPT-OSS is the one model whose per-device gate width is not tile-aligned: EMB_SIZE 2880 over TP 4
-# is 720, i.e. 22.5 tiles. The gate tests' adjust_shapes_for_testing rounds the model dim up to a
-# multiple of 32*TP (2880 -> 2944), so the width _device_matmul actually looks up under test is 736.
-# Its entry below is keyed to that width deliberately; a production run at the raw 2880 would look
-# up (640, 720, 128), miss, and fall back to TTNN's default tiling. Closing that gap needs the
-# non-tile-aligned width handled on the gate path, not another mm_configs entry.
+# GPT-OSS's per-device gate width is the one that is not tile-aligned: 2880 over TP 4 is 720, i.e.
+# 22.5 tiles, which the tests' adjust_shapes_for_testing rounds to 736. A production run at the raw
+# 2880 looks up 720, misses, and takes TTNN's default tiling -- that needs a fix on the gate path.
 GPT_OSS_TEST_PER_DEVICE_EMB_DIM = 736
 
 
@@ -88,39 +85,17 @@ class TtMoEGateConfig:
             # An entry applies only at the depth it is keyed to; a missing key → TTNN auto-picks.
             # per_core_N = n_routed_experts / 32 (tile width).
             #
-            # per_core_M is not free. It must equal max(1, ceil(sp_dim / (32 * num_cores))): below
-            # that the 1D matmul needs more blocks than the grid has cores ("num_blocks_total <=
-            # num_cores"), and for a height-sharded in0 it must also equal shard_shape[0] / 32. Both
-            # rules give 1 up to 3520 tokens/chip and 2 at 4096. out_block_h follows it.
+            # per_core_M is not free: it must equal max(1, ceil(sp_dim / (32 * num_cores))), below
+            # which the 1D matmul wants more blocks than the grid has cores ("num_blocks_total <=
+            # num_cores"), and a height-sharded in0 additionally pins it to shard_shape[0] / 32.
+            # out_block_h follows it, and at 640 tokens it is 1: one M-tile per block.
             #
-            # 640 tokens/chip: 20 M-tiles, so per_core_M=1 spreads them over 20 cores rather than 10.
-            #
-            # The other three block sizes are measured, not derived, and none of them wants the value
-            # a first reading suggests:
-            #   in0_block_w wants roughly a QUARTER of K, not all of it. Kernel time is U-shaped in
-            #   it, and full-K is the slow end: a single K block leaves no weight read to overlap
-            #   with math, and its L1 footprint bars the widest out_block_w below.
-            #   out_block_w trades against in0_block_w for L1, so the two are not separable: 12 (384
-            #   experts) and 14 (896) only fit at in0_block_w <= 14, and 28 (896) only at <= 8. The
-            #   widest that fits is not automatically fastest -- (8,28) fits and still loses to
-            #   (14,14) -- so the pair has to be swept together.
-            #   out_subblock_w is not simply "as narrow as legal": 1 wins only while in0_block_w is
-            #   full-K. At the quarter-K value above, 2 takes every out_block_w of 8 or 14, and the
-            #   12-wide pair want 4; only out_block_w 4 (128 experts) still prefers 1. TTNN's own
-            #   area-first heuristic (SUBBLOCK_HW_CHOICES) reaches for the widest the dest registers
-            #   allow, which is right for the 12-wide shapes and wrong for the rest.
-            # DEVICE KERNEL DURATION per call on a Blackhole QuietBox 2, medians of 15 rounds visited
-            # in rotated order (a single-pass sweep drifts enough to invert the ranking), every
-            # candidate at PCC >= 0.99998. (in0_block_w, out_block_w) at out_subblock_w=1:
-            #     256 experts  (14,8) 37.3 | (28,8) 41.9 | (56,8) 49.9 | default 53.0
-            #     384 experts  (14,12) 54.4 | (14,6) 57.6 | (56,6) 77.2 | default 434.9
-            #     896 experts  (14,14) 125.1 | (14,7) 130.5 | (56,7) 175.7 | default 435.1
-            # out_subblock_w swept separately on a height-sharded in0, the layout this table serves
-            # now that an interleaved one resolves mm_configs_interleaved first (11 rotated rounds):
-            #     out_block_w 8   osw 2 wins: 36.5 / 31.7 / 19.3 / 23.4 vs 36.9 / 32.5 / 19.9 / 24.4
-            #     out_block_w 12  osw 4 wins by 0.3% over 3 and 2 -- inside the run-to-run spread
-            #     out_block_w 14  osw 2 wins: 120.8 vs 125.4
-            #     out_block_w 4   osw 1 wins: 11.8 vs 12.0
+            # The other three are measured, and none takes the value a first reading suggests:
+            #   in0_block_w wants roughly a QUARTER of K: one K block leaves no weight read to overlap
+            #   with math, and its L1 footprint caps out_block_w -- the two couple through L1, so they
+            #   are swept as a pair, and the widest that fits is not the fastest.
+            #   out_subblock_w=1 wins only at a full-K in0_block_w; TTNN's area-first SUBBLOCK_HW_CHOICES
+            #   (widest the dest allows) is right only for the 12-wide out_block_w.
             (GATE_PRODUCTION_SP_DIM, DeepSeekV3Config.EMB_SIZE // 4, DeepSeekV3Config.NUM_ROUTED_EXPERTS): (
                 ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                     compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
@@ -163,15 +138,6 @@ class TtMoEGateConfig:
                     mcast_in0=False,
                 )
             ),
-            # The four below are these models' only entries at any depth; without them all four fall
-            # back to TTNN's default tiling at 640. Same three rules as above, and timed the same way.
-            # These kernels are 12-46us, small enough that per-call host overhead swamps the spread
-            # between candidates, so only DEVICE KERNEL DURATION ranks them. (in0_block_w, out_block_w):
-            #   glm_5_1      K/dev 1536, 256 exp  (12,8) 32.7 | (24,8) 36.2 | (48,8) 42.8 | default 45.7
-            #   dsv4_flash   K/dev 1024, 256 exp  (8,8) 24.6 | (16,8) 26.1 | (32,8) 29.0 | default 31.5
-            #   minimax_m2_7 K/dev  768, 256 exp  (8,8) 20.1 | (4,8) 22.1 | (24,8) 22.7 | default 24.5
-            #   gpt_oss_120b K/dev  736, 128 exp  (23,4) 12.4 | default 21.8
-            # gpt_oss is the one model with no in0_block_w to choose: 736/32 = 23 tiles is prime.
             (GATE_PRODUCTION_SP_DIM, GLM51Config.EMB_SIZE // 4, GLM51Config.NUM_ROUTED_EXPERTS): (
                 ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                     compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
@@ -243,50 +209,19 @@ class TtMoEGateConfig:
         }
     )
 
-    # 2D program configs, used only when in0 arrives INTERLEAVED (the layout TtMoe feeds in the
-    # deployed model). Keyed like mm_configs; a missing key falls back to the 1D entry there.
+    # 2D program configs for an INTERLEAVED in0 (what TtMoe feeds); keyed like mm_configs, and a miss
+    # falls back to the 1D entry there. The pick is by layout, not tuning: a height-sharded in0 also
+    # requires K == in0_block_w and a single-column shard grid, which the gate's 11-wide grid is not.
     #
-    # These are not a tuning variant of the 1D entries, they are a different parallelisation. The 1D
-    # mcast_in0=False config splits the work over M alone, and at 640 tokens per_core_M=1 leaves 20
-    # M-tiles on 20 of the 110 cores. Splitting N as well puts 40-100 cores to work, and the speedup
-    # tracks the core count almost exactly.
+    # The op only requires ceil(N_tiles / per_core_N) <= grid.x and ceil(M_tiles / per_core_M) <=
+    # grid.y, so per_core_N need NOT divide N_tiles: 896 experts' 28 N-tiles reach 10 columns at
+    # per_core_N=3 (the last padded) where exact division stops at 7. The usable grid is 11x10, and 20
+    # M-tiles over 10 rows forces per_core_M=2, so only the column count varies.
     #
-    # They cannot serve a height-sharded in0, which is why the layout picks the table rather than the
-    # entry carrying both: that path additionally requires K == in0_block_w (forfeiting the
-    # in0_block_w win) and a single-column shard grid, which the gate's 11-wide grid is not.
-    #
-    # Core count is set by how many output blocks the grid can hold, and the op only requires
-    # ceil(N_tiles / per_core_N) <= grid.x and ceil(M_tiles / per_core_M) <= grid.y -- per_core_N need
-    # NOT divide N_tiles. That is what 896 experts turns on: 28 N-tiles at per_core_N=4 is 7 columns,
-    # but at per_core_N=3 it is 10 (the last covering 2 tiles of padding), for 100 cores instead of 70.
-    # Exact division would have missed it. The usable grid is 11x10: compute_with_storage_grid_size()
-    # reports 12x10 but a column goes to op dispatch, which is why the gate's core_grid is 11 wide.
-    #
-    # Given that, these ceilings are structural rather than untuned -- 20 M-tiles over at most 10 rows
-    # forces per_core_M >= 2, so the row count is always 10 and only the column count is in play:
-    #     128 experts (4 N-tiles)   4 cols  ->  40 cores
-    #     256 experts (8 N-tiles)   8 cols  ->  80 cores
-    #     384 experts (12 N-tiles)  6 cols  ->  60 cores, since 12 cols would exceed the 11 available
-    #     896 experts (28 N-tiles) 10 cols  -> 100 cores
-    # Trading columns for per_core_N always loses (~20% at half the cores), and transpose_mcast=True
-    # loses badly even at equal core count (gpt_oss 14.2 vs 8.7us), so mcast direction is not free.
-    #
-    # in0_block_w does not follow the 1D table's quarter-of-K rule -- that rule is a property of the 1D
-    # parallelisation, where a core owns the whole N. Here an exhaustive sweep over the divisors of K
-    # put it at 8 for every entry except 896 experts (14) and gpt_oss, whose 736/32 = 23 tiles is prime,
-    # leaving 1 and 23 as the sole legal widths with 1 running 2.2x slower. in0_block_w and the subblock
-    # have to be swept together, not in sequence: at 384 experts, 14 beats 8 while out_subblock is
-    # pinned to 1x1 and loses to it once the subblock is free.
-    #
-    # DEVICE KERNEL DURATION per call on Blackhole, 640 tokens/chip, DRAM-interleaved in0, medians of
-    # 9 rotated rounds, PCC >= 0.999, measured independently on all 32 chips (spread <= 0.5us):
-    #     256 experts / K 1792   37.1 -> 16.2us (2.29x,  80 cores)
-    #     384 experts / K 1792   53.2 -> 19.0us (2.80x,  60 cores)
-    #     896 experts / K 1792  121.3 -> 25.2us (4.81x, 100 cores)
-    #     256 experts / K 1536   32.3 -> 14.5us (2.23x,  80 cores)
-    #     256 experts / K  768   19.7 ->  8.8us (2.24x,  80 cores)
-    #     256 experts / K 1024   23.8 -> 10.6us (2.25x,  80 cores)
-    #     128 experts / K  736   12.4 ->  8.7us (1.43x,  40 cores)
+    # The block sizes are swept, not derived: in0_block_w does NOT follow the 1D table's quarter-of-K
+    # rule (that one belongs to a 1D core owning all of N), it must be swept jointly with out_subblock_w
+    # because the ranking inverts once the subblock is free, and neither mcast knob is free -- trading
+    # grid columns for a wider per_core_N and transpose_mcast=True both lose.
     mm_configs_interleaved: dict = field(
         default_factory=lambda: {
             key: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
@@ -800,7 +735,7 @@ class TtMoEGatePrefill(LightweightModule):
             per_device_dim * n_tp_devices == self.config.dim
         ), f"Expected per-device dim {self.config.dim // n_tp_devices}, got {per_device_dim}"
         config_key = (self.config.sp_dim, per_device_dim, self.config.n_routed_experts)
-        # The 2D configs parallelise over N as well as M and are 1.4-3.9x the 1D ones, but the matmul
+        # The 2D configs parallelise over N as well as M and are the faster of the two, but the matmul
         # rejects them for a sharded in0 (it requires K == in0_block_w and a single-column shard grid).
         # Interleaved therefore prefers the 2D table and falls back to the 1D entry, which is legal on
         # either layout; anything sharded goes straight to 1D.
