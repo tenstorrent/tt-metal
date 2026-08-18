@@ -241,6 +241,11 @@ void kernel_main() {
                 out_cb.reserve_back(output_faces);
             }
 #endif
+            // [#48552 MP-DEBUG] If this is the last line for stick n, the wedge is in out_cb.reserve_back
+            // above (output CB full -> consumer not draining). n<=1 so we see stick 0 AND the hanging stick 1.
+            if (n <= 1) {
+                DPRINT_UNPACK("[MP] post-reserve n{} c{}\n", n, c_i);
+            }
             // Re-init the fused tilize+reduce for THIS stick/c-block through the compute API rather than
             // hand-issuing individual UNPACK/MATH llk_* calls. This re-programs UNPACK and MATH together, which
             // is required because both change per iteration:
@@ -249,20 +254,27 @@ void kernel_main() {
             //   (b) tiles_to_reduce changes across c-blocks (e.g. 4 then 2 for 6 tiles / 192c) -- UNPACK and
             //       MATH must both be re-programmed for the new count (PACK is re-init'd via
             //       pack_untilize_dest_init below).
-            if (n == 0) {
-                DPRINT_UNPACK("[MP] pre-init c{} t2r{}\n", c_i, tiles_to_reduce);
+            if (n <= 1) {
+                DPRINT_UNPACK("[MP] pre-init n{} c{} t2r{}\n", n, c_i, tiles_to_reduce);
             }
             tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(
                 curr_in_cb_id, curr_scalar_cb_id, tiles_to_reduce);
-            if (n == 0) {
-                DPRINT_UNPACK("[MP] post-init c{}\n", c_i);
+            // [#48552 MP-DEBUG] post-init last => wedged in tilizeA_B_reduce_init (the strided reduce-col
+            // init LLK main rewrote). acq last => wedged in tile_regs_acquire (DEST recycle / dest-sync).
+            if (n <= 1) {
+                DPRINT_UNPACK("[MP] post-init n{} c{}\n", n, c_i);
             }
             tile_regs_acquire();
+            if (n <= 1) {
+                DPRINT_UNPACK("[MP] acq n{} c{}\n", n, c_i);
+            }
             for (uint32_t chunk = 0; chunk < interm_reduction_chunks; chunk++) {
                 // [#48552 MP-DEBUG] pre-waitin: if this is the last line, the reader never delivered the
                 // input stick (curr_in_cb.wait_front hang). Ungated on n==0 for phase detail.
-                if (n == 0) {
-                    DPRINT_UNPACK("[MP] pre-waitin c{} ch{}\n", c_i, chunk);
+                // pre-waitin last (no pre-unpack) => wedged in curr_in_cb.wait_front (reader never delivered
+                // this stick's input window).
+                if (n <= 1) {
+                    DPRINT_UNPACK("[MP] pre-waitin n{} c{} ch{}\n", n, c_i, chunk);
                 }
                 curr_in_cb.wait_front(1);
                 // [DIAG] reduce-input geometry (Bug 1 straddle check): rd = strided-read base, esz = bytes
@@ -281,8 +293,8 @@ void kernel_main() {
                 for (uint32_t math_tile_idx = 0; math_tile_idx < tiles_to_reduce; ++math_tile_idx) {
                     reduce_tile_math<REDUCE_OP, REDUCE_DIM>(math_tile_idx, num_faces_in_input_tile);
                 }
-                if (n == 0) {
-                    DPRINT_MATH("[MP] post-reduce c{} ch{}\n", c_i, chunk);
+                if (n <= 1) {
+                    DPRINT_MATH("[MP] post-reduce n{} c{} ch{}\n", n, c_i, chunk);
                 }
                 curr_in_cb.pop_front(1);
             }
@@ -290,8 +302,8 @@ void kernel_main() {
             tile_regs_wait();
             // [#48552 MP-DEBUG] Reduce done, MATH committed to DEST. If pre-pack is the last line, the wedge
             // is on the PACK side (pack_untilize / out_cb), not the strided reduce.
-            if (n == 0) {
-                DPRINT_PACK("[MP] pre-pack c{}\n", c_i);
+            if (n <= 1) {
+                DPRINT_PACK("[MP] pre-pack n{} c{}\n", n, c_i);
             }
             if constexpr (is_output_tiled) {
                 // TILED output: accumulate sticks and perform tilization when needed.
