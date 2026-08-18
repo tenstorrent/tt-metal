@@ -2373,7 +2373,12 @@ class TtModelArgs:
             if self.from_hf_url:
                 from transformers import AutoModelForCausalLM
 
-                model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR, local_files_only=os.getenv("CI") == "true")
+                model = AutoModelForCausalLM.from_pretrained(
+                    self.CKPT_DIR,
+                    torch_dtype="auto",
+                    trust_remote_code=self.trust_remote_code_hf,
+                    local_files_only=os.getenv("CI") == "true",
+                )
                 state_dict = model.state_dict()
             else:
                 state_dict = load_hf_state_dict(self.CKPT_DIR)
