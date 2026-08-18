@@ -23,6 +23,21 @@
 #   SKIP_MAIN_CHECK=1         allow a HEAD that is not origin/main
 #   ALLOW_DIRTY=1             allow a dirty working tree
 #   PERF_RUN_TYPES=<A,B>      pass --perf-run-types to narrow the sweep (cost knob)
+#   BUILD_ROOT=<dir>          private build tree (artefacts land in <dir>/tt-llk-build)
+#
+# BUILD_ROOT is strongly recommended on a shared machine. The default artefact
+# path is the shared /tmp/tt-llk-build that every other user also builds into;
+# a run of several hours there can have its ELFs wiped or rebuilt underneath it.
+# The build tree is intentionally NOT wiped between iterations: iteration 1 pays
+# the compile, iterations 2..N reuse identical ELFs and measure only. Rebuilding
+# the same sources yields byte-identical ELFs, so nothing is lost, and what is
+# left is the device-side noise the gate threshold has to survive.
+#
+# On this branch --perf-run-types is not yet on main, so the branch differs from
+# origin/main in conftest.py and helpers/perf/core.py and the main check trips.
+# Those two files only SELECT which run types are measured; they change no kernel
+# and no test body, so the cycles still describe main. Set SKIP_MAIN_CHECK=1.
+# Drop the override once --perf-run-types lands.
 set -euo pipefail
 
 ARCH="${1:?usage: run_perf_noise_baseline.sh <wormhole|blackhole> [iterations]}"
@@ -39,6 +54,13 @@ esac
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LLK_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 export LLK_HOME="${LLK_HOME:-$LLK_ROOT}"
+
+# TestConfig.resolve_artefacts_path() reads RUNNER_TEMP, so this is how a run
+# claims a build tree of its own.
+if [ -n "${BUILD_ROOT:-}" ]; then
+    mkdir -p "$BUILD_ROOT"
+    export RUNNER_TEMP="$BUILD_ROOT"
+fi
 PERF_DATA="$LLK_HOME/perf_data"
 
 # --- provenance: a threshold is only meaningful next to the commit it came from
@@ -85,6 +107,7 @@ fi
     echo "speed_of_light: off"
     echo "host: $(hostname)"
     echo "perf_run_types: ${PERF_RUN_TYPES:-<test default>}"
+    echo "build_root: ${BUILD_ROOT:-<shared default>}"
 } | tee "$OUT_DIR/run_metadata.txt"
 
 cd "$LLK_HOME/tests/python_tests"
