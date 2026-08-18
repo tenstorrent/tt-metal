@@ -1280,11 +1280,20 @@ _CAUSAL_LIFT_B2_F32_OPS = [
     MathOperation.Xielu,
     MathOperation.UnaryPower,
     MathOperation.Expm1,
+    # Batch 3 (F32 corr rows).
+    MathOperation.Sigmoid,
+    MathOperation.Cbrt,
+    MathOperation.Softplus,
+    MathOperation.Expm1Cw,
+    MathOperation.I1,
 ]
 _CAUSAL_LIFT_B2_F16B_OPS = [
     MathOperation.Log,
     MathOperation.Sqrt,
     MathOperation.Rsqrt,
+    # Batch 3 (F16b corr rows).
+    MathOperation.Hardsigmoid,
+    MathOperation.Gelu,
 ]
 
 

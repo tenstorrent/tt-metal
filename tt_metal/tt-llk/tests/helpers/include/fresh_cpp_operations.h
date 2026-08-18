@@ -435,6 +435,13 @@ constexpr float FRESH_FMOD_DIVISOR_RECIP     = 0.5f;
 constexpr std::uint32_t FRESH_POWER_EXPONENT = 0x40000000u; // 2.0f
 constexpr std::uint32_t FRESH_XIELU_ALPHA    = 0x3f800000u; // 1.0f
 
+// Batch-3 fixed dispatch scalars (production dispatch: softplus beta = 1.0,
+// 1/beta = 1.0, threshold = 20.0 — shared with golden_generators
+// _SOFTPLUS_BETA/_SOFTPLUS_THRESHOLD).
+constexpr float FRESH_SOFTPLUS_BETA       = 1.0f;
+constexpr float FRESH_SOFTPLUS_BETA_RECIP = 1.0f;
+constexpr float FRESH_SOFTPLUS_THRESHOLD  = 20.0f;
+
 // Ceil (production: raw-TTI _ceil_body_ over l_reg-pinned _trunc_body_,
 // tt_llk_blackhole ckernel_sfpu_rounding_ops.h).  Semantic statement: round
 // to nearest via the 2^23 mantissa-shift (the clean idiom the same file's
@@ -1095,6 +1102,411 @@ __attribute__((noinline)) void calculate_xielu_fresh_cpp(const std::uint32_t par
         }
         v_endif;
         sfpi::dst_reg[0] = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
+        sfpi::dst_reg++;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Lane BR causal-tier lift, batch 3.  Same doctrine.
+// ---------------------------------------------------------------------------
+
+// Shared: exp(x) by the exp_21f exponent/mantissa recombination, clamped form
+// (the production _sfpu_exp_21f_bf16_<true> contract: fp32 result, no bf16
+// store rounding — callers own the store).  Same golden-math constants as
+// calculate_exp_fresh_cpp; kept separate so the measured exp row's fresh body
+// stays byte-stable.
+sfpi_inline sfpi::vFloat fresh_exp_21f(const sfpi::vFloat val)
+{
+    constexpr float ONE_LN2 = 1.4426950216293334961f;
+    constexpr float C0      = 1.0017248f;
+    constexpr float C1      = 7.839635491371155e-08f;
+    constexpr float C2      = 4.791750143340323e-15f;
+
+    sfpi::vFloat xlog2   = val * ONE_LN2 + 127.0f;
+    xlog2                = sfpi::clamp(xlog2, 0.0f, 255.0f);
+    const sfpi::vInt zi  = sfpi::shft(sfpi::exman(xlog2, sfpi::MantissaMode::ImplicitOne), sfpi::exexp(xlog2), sfpi::ShiftMode::Logical);
+    const sfpi::vFloat z = sfpi::as<sfpi::vFloat>(zi);
+
+    sfpi::vFloat frac = sfpi::convert<sfpi::vFloat>(sfpi::exman(z), sfpi::RoundMode::Nearest);
+    frac              = (C2 * frac + C1) * frac + C0;
+    return sfpi::setexp(frac, sfpi::exexp(z, sfpi::ExponentMode::Biased));
+}
+
+// Shared: reciprocal with Newton refinement, all constants literal (the
+// production sfpu_reciprocal_iter reads its 2.0 from vConstFloatPrgm0 —
+// the hand-ism these bodies remove).  Same NaN-by-sign-check contract.
+template <int NEWTON_ITERATIONS>
+sfpi_inline sfpi::vFloat fresh_recip(const sfpi::vFloat x)
+{
+    sfpi::vFloat y = sfpi::approx_recip(x);
+    if constexpr (NEWTON_ITERATIONS > 0)
+    {
+        sfpi::vFloat t = x * y - 2.0f;
+        if constexpr (NEWTON_ITERATIONS > 1)
+        {
+            const sfpi::vFloat y1 = y * -t - 0.0f;
+            v_if (t < 0.0f)
+            {
+                t = x * y1 - 2.0f;
+                y = y1 * -t - 0.0f;
+            }
+            v_endif;
+        }
+        else
+        {
+            v_if (t < 0.0f)
+            {
+                y = y * -t - 0.0f;
+            }
+            v_endif;
+        }
+    }
+    return y;
+}
+
+// Sigmoid, bf16 non-approx contract (production: _sfpu_sigmoid_ spread across
+// three headers — exp_21f helper + sfpu_reciprocal_iter<1> reading its 2.0
+// from vConstFloatPrgm0).  sigmoid(x) = 1/(1 + exp(-x)) stated in one place,
+// every constant local.
+template <int ITERATIONS>
+__attribute__((noinline)) void calculate_sigmoid_fresh_cpp()
+{
+    for (int d = 0; d < ITERATIONS; ++d)
+    {
+        const sfpi::vFloat x = sfpi::dst_reg[0];
+        const sfpi::vFloat e = fresh_exp_21f(-x);
+        const sfpi::vFloat y = fresh_recip<1>(1.0f + e);
+        sfpi::dst_reg[0]     = sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::Nearest);
+        sfpi::dst_reg++;
+    }
+}
+
+// Cube root, bf16 contract (production: calculate_cube_root — Moroz magic
+// seed via float-MAD-as-integer-divide with the refinement polynomial parked
+// in vConstFloatPrgm0/1/2).  Identical algorithm, all constants local.
+template <int ITERATIONS>
+__attribute__((noinline)) void calculate_cbrt_fresh_cpp()
+{
+    constexpr float NEG_THIRD_256 = -0x1.555556p-10f;
+    constexpr float MAGIC         = 1418472267.0f / 256.0f + 8388608.0f; // 0x548c2b4b/256 + 2^23
+    constexpr float Q0            = 0x1.c09806p0f;
+    constexpr float Q1            = -0x1.403e6cp0f;
+    constexpr float Q2            = 0x1.04cdb2p-1f;
+    for (int d = 0; d < ITERATIONS; ++d)
+    {
+        const sfpi::vFloat a = sfpi::dst_reg[0];
+        const sfpi::vFloat x = sfpi::abs(a);
+
+        // Integer seed 0x548c2b4b - bits(x)/3 computed in float at 1/256 scale
+        // (golden math: the paper's integer divide has no SFPU equivalent).
+        sfpi::vFloat f = sfpi::convert<sfpi::vFloat>(sfpi::as<sfpi::vSMag>(x), sfpi::RoundMode::Nearest);
+        f              = f * NEG_THIRD_256 + MAGIC;
+        sfpi::vFloat y = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vInt>(f) << 8);
+
+        sfpi::vFloat dd      = x * (y * y);
+        const sfpi::vFloat c = dd * y;
+        const sfpi::vFloat t = c * (Q2 * c + Q1) + Q0;
+        dd                   = sfpi::copysgn(dd, a);
+        y                    = dd * (t * t);
+        sfpi::dst_reg[0]     = sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::Nearest);
+        sfpi::dst_reg++;
+    }
+}
+
+// Softplus (production: calculate_softplus — bit-punned scalar params and a
+// store-only-under-predicate linear region; the arithmetic itself is already
+// constexpr-clean).  Same residual polynomials and tail handling per format
+// arm (the format arm is the contract, selected the same way production
+// selects it); the linear region is stated as an explicit identity arm with
+// one unconditional store.  Scalars are the golden's fixed dispatch values.
+template <int ITERATIONS>
+__attribute__((noinline)) void calculate_softplus_fresh_cpp(const float beta, const float beta_reciprocal, const float threshold)
+{
+    for (int d = 0; d < ITERATIONS; ++d)
+    {
+        const sfpi::vFloat val = sfpi::dst_reg[0];
+        sfpi::vFloat t         = beta * val;
+        // Linear region softplus(t)/beta = val: explicit identity arm.
+        sfpi::vFloat result = val;
+        v_if (t < threshold)
+        {
+            const sfpi::vFloat a = sfpi::abs(t);
+#ifdef INP_FLOAT32
+            // f(a) = ln(1+exp(-a)) on [0, 5], degree 8 (production constants).
+            sfpi::vFloat residual = 6.9310557842e-01f;
+            {
+                sfpi::vFloat p = -4.8245715334e-07f;
+                p              = p * a + 2.1285692128e-05f;
+                p              = p * a + -3.4358495031e-04f;
+                p              = p * a + 2.7290175203e-03f;
+                p              = p * a + -1.0528374463e-02f;
+                p              = p * a + 5.6753782555e-03f;
+                p              = p * a + 1.2186349183e-01f;
+                p              = p * a + -4.9926245213e-01f;
+                residual       = p * a + 6.9310557842e-01f;
+            }
+            // Tail: f(a) ~= e - e^2/2 + e^3/3 with e = exp(-a).
+            v_if (a > 5.0f)
+            {
+                const sfpi::vFloat e = fresh_exp_21f(-a);
+                residual             = e * (1.0f + e * (-0.5f + e * 0.333333343f));
+            }
+            v_endif;
+#else
+            // Degree-6 bf16 fit (production constants); past the fit domain the
+            // true residual is below bf16 rounding, so it clamps to zero.
+            sfpi::vFloat residual;
+            {
+                sfpi::vFloat p = -3.1273466851e-05f;
+                p              = p * a + 5.0152968088e-04f;
+                p              = p * a + -1.8627923291e-03f;
+                p              = p * a + -1.3000584069e-02f;
+                p              = p * a + 1.4279095486e-01f;
+                p              = p * a + -5.0932420424e-01f;
+                residual       = p * a + 6.9423984729e-01f;
+            }
+            v_if (a > 5.0f)
+            {
+                residual = 0.0f;
+            }
+            v_endif;
+#endif
+            const sfpi::vFloat sp = sfpi::max(t, 0.0f) + residual;
+            result                = sfpi::convert<sfpi::vFloat16b>(beta_reciprocal * sp, sfpi::RoundMode::Nearest);
+        }
+        v_endif;
+        sfpi::dst_reg[0] = result;
+        sfpi::dst_reg++;
+    }
+}
+
+// Hardsigmoid (production: calculate_activation reads slope/offset from
+// vConstFloatPrgm0/1 programmed by hardsigmoid_init and clamps through the
+// shared _relu_max_body_ helper).  hardsigmoid(x) = clamp(x/6 + 1/2, 0, 1)
+// with both constants local; the same predicate order as the helper.
+template <int ITERATIONS>
+__attribute__((noinline)) void calculate_hardsigmoid_fresh_cpp()
+{
+    constexpr float ONE_SIXTH = 0.1666666716337204f;
+    for (int d = 0; d < ITERATIONS; ++d)
+    {
+        const sfpi::vFloat v = sfpi::dst_reg[0];
+        sfpi::vFloat t       = v * ONE_SIXTH + 0.5f;
+        v_if (t > 1.0f)
+        {
+            t = 1.0f;
+        }
+        v_endif;
+        v_if (t < 0.0f)
+        {
+            t = 0.0f;
+        }
+        v_endif;
+        sfpi::dst_reg[0] = t;
+        sfpi::dst_reg++;
+    }
+}
+
+// GELU, bf16 non-approx contract (production: calculate_gelu_piecewise —
+// progressive v_and CC-narrowing inside one predicate block).  The same
+// four-region piecewise CDF (identical constants, including the 2^-25
+// ROUND_TO_GRID staircase snap, which is golden math reproducing torch's
+// float32 erfc tail) stated as independent typed regions.
+template <int ITERATIONS>
+__attribute__((noinline)) void calculate_gelu_fresh_cpp()
+{
+    constexpr float GELU_SAT         = -5.54259443f;
+    constexpr float NEG_HALF_ONE_LN2 = -0.72134752044f; // -0.5 / ln(2)
+    constexpr float HC0              = 3.0369991064e-01f;
+    constexpr float HC1              = 9.5413386822e-02f;
+    constexpr float HC2              = 1.3809983619e-02f;
+    constexpr float HC3              = 7.5950479368e-04f;
+    constexpr float ROUND_TO_GRID    = 0.375f;
+    constexpr float E0               = 1.0017248f;
+    constexpr float E1               = 7.839635491371155e-08f;
+    constexpr float E2               = 4.791750143340323e-15f;
+    constexpr float P0               = 5.000000000e-01f;
+    constexpr float P1               = 3.9894227818e-01f;
+    constexpr float P3               = -6.6361041488e-02f;
+    constexpr float P5               = 9.7720050615e-03f;
+    constexpr float P7               = -1.0717806322e-03f;
+    constexpr float P9               = 8.1812159812e-05f;
+    constexpr float P11              = -3.8082057209e-06f;
+    constexpr float P13              = 7.9821413868e-08f;
+    for (int d = 0; d < ITERATIONS; ++d)
+    {
+        const sfpi::vFloat x = sfpi::dst_reg[0];
+        // Identity region (x >= 2.78125) as the all-lane default.
+        sfpi::vFloat r = x;
+        v_if (x <= GELU_SAT)
+        {
+            r = 0.0f;
+        }
+        v_elseif (x < -3.125f)
+        {
+            // H = exp(-x^2/2) * corr_H(x), snapped to the 2^-25 grid.
+            const sfpi::vFloat xlog2   = (x * x) * NEG_HALF_ONE_LN2 + 127.0f;
+            const sfpi::vInt zi        = sfpi::shft(sfpi::exman(xlog2, sfpi::MantissaMode::ImplicitOne), sfpi::exexp(xlog2), sfpi::ShiftMode::Logical);
+            const sfpi::vFloat z       = sfpi::as<sfpi::vFloat>(zi);
+            sfpi::vFloat frac          = sfpi::convert<sfpi::vFloat>(sfpi::exman(z), sfpi::RoundMode::Nearest);
+            frac                       = (E2 * frac + E1) * frac + E0;
+            const sfpi::vFloat exp_val = sfpi::setexp(frac, sfpi::exexp(z, sfpi::ExponentMode::Biased));
+
+            const sfpi::vFloat H  = exp_val * (((HC3 * x + HC2) * x + HC1) * x + HC0);
+            const sfpi::vFloat Hs = (H + ROUND_TO_GRID) - ROUND_TO_GRID;
+            r                     = x * Hs;
+        }
+        v_elseif (x < 2.78125f)
+        {
+            const sfpi::vFloat x2 = x * x;
+            sfpi::vFloat odd      = P13;
+            odd                   = odd * x2 + P11;
+            odd                   = odd * x2 + P9;
+            odd                   = odd * x2 + P7;
+            odd                   = odd * x2 + P5;
+            odd                   = odd * x2 + P3;
+            odd                   = odd * x2 + P1;
+            r                     = x * (P0 + x * odd);
+        }
+        v_endif;
+        sfpi::dst_reg[0] = sfpi::convert<sfpi::vFloat16b>(r, sfpi::RoundMode::Nearest);
+        sfpi::dst_reg++;
+    }
+}
+
+// Component-wise expm1 (production: tt-llk expm1_cw_clamped — Cody-Waite with
+// the raw 0x4B400000 rounding-bias constant and the fused 0x4B3FFF81 ISUB;
+// looped by a test adapter).  Same reduction, polynomials, and clamp; the
+// round-nearest and the 2^k reconstruction stated typed.
+template <int ITERATIONS>
+__attribute__((noinline)) void calculate_expm1_cw_fresh_cpp()
+{
+    constexpr float INV_LN2    = 1.4426950408889634f;
+    constexpr float LN2_HI_NEG = -0.6931152343750000f;
+    constexpr float LN2_LO_NEG = -3.19461832987e-05f;
+    for (int d = 0; d < ITERATIONS; ++d)
+    {
+        sfpi::vFloat x = sfpi::dst_reg[0];
+        x              = sfpi::max(x, -87.0f);
+
+        sfpi::vInt k_int;
+        const sfpi::vFloat k = fresh_round_nearest(x * INV_LN2, k_int);
+        sfpi::vFloat r       = k * LN2_HI_NEG + x;
+        r                    = r + k * LN2_LO_NEG;
+
+        // expm1(r) = r * h(r) (production Sollya fits per format arm).
+#ifdef INP_FLOAT32
+        sfpi::vFloat h = 1.3948583510e-03f;
+        h              = h * r + 8.3691505715e-03f;
+        h              = h * r + 4.1666239500e-02f;
+        h              = h * r + 1.6666504741e-01f;
+        h              = h * r + 5.0000000000e-01f;
+        h              = h * r + 1.0f;
+#else
+        sfpi::vFloat h = 8.3751315251e-03f;
+        h              = h * r + 4.1875664145e-02f;
+        h              = h * r + 1.6666433215e-01f;
+        h              = h * r + 4.9999371171e-01f;
+        h              = h * r + 1.0f;
+#endif
+        h = r * h;
+
+        const sfpi::vFloat two_k = sfpi::setexp(sfpi::vFloat(1.0f), k_int + 127);
+        sfpi::dst_reg[0]         = (two_k - 1.0f) + two_k * h;
+        sfpi::dst_reg++;
+    }
+}
+
+// i1 (production: calculate_i1 — forced #pragma GCC unroll 1 and a
+// compute-then-overwrite shape managing the SFPU register allocator, with the
+// reciprocal's 2.0 in vConstFloatPrgm0).  Same rational/asymptotic algorithm
+// and constants; the unroll pragma is dropped (unrolling is the compiler's)
+// and every helper constant is literal.
+inline sfpi::vFloat calculate_i1_asymptotic_fresh_cpp(const sfpi::vFloat abs_x, const sfpi::vFloat x_signed)
+{
+    // exp(|x|): |x| in [10, 88.5] precludes over/underflow, so the unclamped
+    // recombination is exact here (the production kernel's _unsafe_ contract).
+    constexpr float ONE_LN2    = 1.4426950216293334961f;
+    constexpr float C0         = 1.0017248f;
+    constexpr float C1         = 7.839635491371155e-08f;
+    constexpr float C2         = 4.791750143340323e-15f;
+    const sfpi::vFloat xlog2   = abs_x * ONE_LN2 + 127.0f;
+    const sfpi::vInt zi        = sfpi::shft(sfpi::exman(xlog2, sfpi::MantissaMode::ImplicitOne), sfpi::exexp(xlog2), sfpi::ShiftMode::Logical);
+    const sfpi::vFloat z       = sfpi::as<sfpi::vFloat>(zi);
+    sfpi::vFloat frac          = sfpi::convert<sfpi::vFloat>(sfpi::exman(z), sfpi::RoundMode::Nearest);
+    frac                       = (C2 * frac + C1) * frac + C0;
+    const sfpi::vFloat exp_abs = sfpi::setexp(frac, sfpi::exexp(z, sfpi::ExponentMode::Biased));
+
+    // 1/sqrt(|x|): the same SQRT_23 seed/coefficients as the fresh sqrt body.
+    sfpi::vFloat rsqrt_y = sfpi::as<sfpi::vFloat>(sfpi::vInt(0x5f1110a0) - sfpi::as<sfpi::vInt>(sfpi::as<sfpi::vUInt>(abs_x) >> 1));
+    sfpi::vFloat c0      = (-rsqrt_y) * (abs_x * rsqrt_y);
+    rsqrt_y              = rsqrt_y * (2.2825186f + c0 * (2.2533049f + c0));
+    c0                   = 1.0f + (-rsqrt_y) * (abs_x * rsqrt_y);
+    rsqrt_y              = c0 * sfpi::addexp(rsqrt_y, -1) + rsqrt_y;
+
+    const sfpi::vFloat inv_abs_x = rsqrt_y * rsqrt_y;
+
+    // P(1/|x|), degree-5 minimax (production constants).
+    sfpi::vFloat correction = -3.3467922914e-01f;
+    correction              = correction * inv_abs_x + -1.9748322314e-02f;
+    correction              = correction * inv_abs_x + -4.3674591560e-02f;
+    correction              = correction * inv_abs_x + -4.6652925320e-02f;
+    correction              = correction * inv_abs_x + -1.4960495444e-01f;
+    correction              = correction * inv_abs_x + 3.9894228967e-01f;
+
+    return sfpi::copysgn(exp_abs * rsqrt_y * correction, x_signed);
+}
+
+template <int ITERATIONS>
+__attribute__((noinline)) void calculate_i1_fresh_cpp()
+{
+    for (int d = 0; d < ITERATIONS; ++d)
+    {
+        sfpi::vFloat x           = sfpi::symmetric_clamp(sfpi::dst_reg[0], 88.5f);
+        const sfpi::vFloat abs_x = sfpi::abs(x);
+
+        // Rational path (valid for |x| <= 10), production constants per arm.
+        sfpi::vFloat val;
+        {
+            const sfpi::vFloat t = x * x;
+#ifdef INP_FLOAT32
+            sfpi::vFloat number = 1.2293555930e-12f;
+            number              = number * t + 7.7937084564e-10f;
+            number              = number * t + 2.0916867527e-07f;
+            number              = number * t + 2.8397364076e-05f;
+            number              = number * t + 1.9247245509e-03f;
+            number              = number * t + 5.6819390506e-02f;
+            number              = number * t + 5.0000000000e-01f;
+            sfpi::vFloat denom  = 7.4301498523e-19f;
+            denom               = denom * t + -3.0635529988e-16f;
+            denom               = denom * t + -3.1218170410e-13f;
+            denom               = denom * t + 3.8127551116e-10f;
+            denom               = denom * t + -1.9771712800e-07f;
+            denom               = denom * t + 6.1268139689e-05f;
+            denom               = denom * t + -1.1361218989e-02f;
+            denom               = denom * t + 1.0f;
+#else
+            sfpi::vFloat number = 2.0223499130e-05f;
+            number              = number * t + 1.6126291630e-03f;
+            number              = number * t + 5.4503594600e-02f;
+            number              = number * t + 4.9992737740e-01f;
+            sfpi::vFloat denom  = -2.5076132990e-07f;
+            denom               = denom * t + 1.0333660750e-04f;
+            denom               = denom * t + -1.6242591070e-02f;
+            denom               = denom * t + 1.0f;
+#endif
+            val = number * x * fresh_recip<2>(denom);
+        }
+
+        v_if (abs_x > 10.0f)
+        {
+            val = calculate_i1_asymptotic_fresh_cpp(abs_x, x);
+        }
+        v_endif;
+#ifndef INP_FLOAT32
+        val = sfpi::convert<sfpi::vFloat16b>(val, sfpi::RoundMode::Nearest);
+#endif
+        sfpi::dst_reg[0] = val;
         sfpi::dst_reg++;
     }
 }
