@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
+#include <algorithm>
 #include <cstddef>
 #include <cstdlib>
 #include <string>
@@ -100,10 +101,11 @@ TEST(HostThreading, UnsetFallsBackToHardwareConcurrency) {
     EXPECT_EQ(get_host_worker_threads(), hardware_concurrency_or_one());
 }
 
-// A valid positive value must still parse exactly.
+// A valid positive value must parse — subject to the hardware-concurrency
+// clamp, so on a 1-2 CPU runner the result is the cap, not 3 verbatim.
 TEST(HostThreading, AcceptsValidPositive) {
     ScopedWorkerThreadsEnv env("3");
-    EXPECT_EQ(get_host_worker_threads(), static_cast<size_t>(3));
+    EXPECT_EQ(get_host_worker_threads(), std::min<size_t>(3, hardware_concurrency_or_one()));
 }
 
 // ULONG_MAX is digit-only and in-range for strtoul (no ERANGE), so it clears
