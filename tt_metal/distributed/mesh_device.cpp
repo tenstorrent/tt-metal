@@ -33,7 +33,6 @@
 #include <tt_stl/assert.hpp>
 #include "buffer.hpp"
 #include "device/device_impl.hpp"
-#include "impl/program/program_cache_impl.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "host_api.hpp"
 #include "mesh_config.hpp"
@@ -1065,23 +1064,23 @@ std::vector<std::shared_ptr<MeshDevice>> MeshDeviceImpl::get_submeshes() const {
 
 void MeshDeviceImpl::enable_program_cache() {
     log_info(tt::LogMetal, "Enabling program cache on MeshDevice {}", this->id());
-    program_cache_->impl().enable();
+    program_cache_->enable();
 }
 
 void MeshDeviceImpl::clear_program_cache() {
     log_info(tt::LogMetal, "Clearing program cache on MeshDevice {}", this->id());
-    program_cache_->impl().clear();
+    program_cache_->clear();
 }
 
 void MeshDeviceImpl::disable_and_clear_program_cache() {
     log_info(tt::LogMetal, "Disabling and clearing program cache on MeshDevice {}", this->id());
     if (program_cache_->is_enabled()) {
-        program_cache_->impl().disable();
+        program_cache_->disable();
     }
-    program_cache_->impl().clear();
+    program_cache_->clear();
 }
 
-size_t MeshDeviceImpl::num_program_cache_entries() { return program_cache_->impl().num_entries(); }
+size_t MeshDeviceImpl::num_program_cache_entries() { return program_cache_->num_entries(); }
 
 void MeshDeviceImpl::validate_sub_device_manager_tracker() const {
     if (!sub_device_manager_tracker_) {

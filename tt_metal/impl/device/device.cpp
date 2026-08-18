@@ -17,7 +17,6 @@
 #include "impl/sub_device/sub_device_impl.hpp"
 #include "impl/device/mock_allocator.hpp"
 #include <tt-metalium/program_cache.hpp>
-#include "impl/program/program_cache_impl.hpp"
 #include <tt-metalium/hal.hpp>
 #include <tt_align.hpp>
 #include <tt_metal.hpp>
@@ -74,7 +73,7 @@
 namespace tt::tt_metal {
 
 void IDevice::set_program_cache_misses_allowed(bool allowed) {
-    this->get_program_cache().impl().set_cache_misses_allowed(allowed);
+    this->get_program_cache().set_cache_misses_allowed(allowed);
 }
 
 Device::Device(
@@ -560,7 +559,7 @@ bool Device::initialize(
     bool minimal) {
     ZoneScoped;
     // Every initialization call should enable program cache
-    this->program_cache_.impl().enable();
+    this->program_cache_.enable();
     log_debug(
         tt::LogMetal,
         "Initializing device {}. Program cache is {}enabled",
@@ -898,21 +897,21 @@ SystemMemoryManager& Device::sysmem_manager() {
 
 void Device::enable_program_cache() {
     log_info(tt::LogMetal, "Enabling program cache on device {}", this->id_);
-    program_cache_.impl().enable();
+    program_cache_.enable();
 }
 void Device::clear_program_cache() {
     log_info(tt::LogMetal, "Clearing program cache on device {}", this->id_);
-    program_cache_.impl().clear();
+    program_cache_.clear();
 }
 
 void Device::disable_and_clear_program_cache() {
     log_trace(tt::LogMetal, "Disabling and clearing program cache on device {}", this->id_);
     if (this->program_cache_.is_enabled()) {
-        program_cache_.impl().disable();
+        program_cache_.disable();
     }
-    program_cache_.impl().clear();
+    program_cache_.clear();
 }
-std::size_t Device::num_program_cache_entries() { return program_cache_.impl().num_entries(); }
+std::size_t Device::num_program_cache_entries() { return program_cache_.num_entries(); }
 
 // NOLINTNEXTLINE(readability-make-member-function-const)
 void Device::mark_allocations_unsafe() { this->allocator_impl()->mark_allocations_unsafe(); }
