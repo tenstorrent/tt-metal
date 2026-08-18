@@ -2265,6 +2265,7 @@ class UnarySFPUGolden:
             MathOperation.LogicalNotUnary: self._logical_not,
             MathOperation.ReduceColumn: self._reduce_columns,
             MathOperation.ReduceRow: self._reduce_rows,
+            MathOperation.Cumsum: self._cumsum,
             MathOperation.Typecast: self._typecast,
             # Integer unary ops (routed through the integer path in __call__).
             MathOperation.LeftShift: self._left_shift,
@@ -2372,8 +2373,25 @@ class UnarySFPUGolden:
 
         result = tensor.clone().flatten()
 
+        # Cumsum accumulates down each tile's columns, so it cannot go through the
+        # per-element map below and is evaluated here on the untilized (row-major) view.
+        # The tilize that follows puts it in the layout the element-wise path produces, so
+        # every later stage (dest rounding, untilize, output conversion) stays shared.
+        whole_tensor_res = (
+            self._cumsum(result, dimensions)
+            if operation == MathOperation.Cumsum
+            else None
+        )
+
         if not skip_tilize:
             result = tilize_block(result, dimensions, input_format).flatten()
+            if whole_tensor_res is not None:
+                # Tilized as Float32 so this permutation does not round the accumulated
+                # values; the single Dest-format rounding is applied below, together with
+                # the element-wise path's.
+                whole_tensor_res = tilize_block(
+                    whole_tensor_res, dimensions, DataFormat.Float32
+                ).flatten()
 
         start = ELEMENTS_PER_TILE * dest_idx
         elements_to_process = TILE_SIZE * iterations
@@ -2385,17 +2403,18 @@ class UnarySFPUGolden:
                 f"but tensor has only {tensor.numel()} elements)"
             )
 
-        op_res = [
-            (
-                self.ops[operation](x, fill_const_value)
-                if operation == MathOperation.Fill
-                else self.ops[operation](x)
-            )
-            for x in result.tolist()[
-                ELEMENTS_PER_TILE * dest_idx : ELEMENTS_PER_TILE * dest_idx
-                + TILE_SIZE * iterations
+        window = slice(start, start + elements_to_process)
+        if whole_tensor_res is not None:
+            op_res = whole_tensor_res.tolist()[window]
+        else:
+            op_res = [
+                (
+                    self.ops[operation](x, fill_const_value)
+                    if operation == MathOperation.Fill
+                    else self.ops[operation](x)
+                )
+                for x in result.tolist()[window]
             ]
-        ]
 
         op_dtype = (
             torch.float32
@@ -3072,6 +3091,19 @@ class UnarySFPUGolden:
     def _sigmoid_appx(self, x):
         # Golden is the exact sigmoid; the kernel is a LUT approximation of it.
         return self._torch_unary(x, torch.sigmoid)
+
+    def _cumsum(self, x, dimensions: tuple[int, int]):
+        """Column-wise (top-to-bottom) cumulative sum inside each 32x32 tile.
+
+        Reached through the whole-tensor branch of __call__, so ``x`` is the untilized
+        (row-major) view of the [H, W] tensor already in the Dest format. Tiles are
+        independent: the kernel runs once per tile with ``first = true``, zeroing the
+        cross-tile carry. Accumulated in float32 to match the SFPU's FP32 running total —
+        the caller applies the single Dest-format rounding.
+        """
+        rows, cols = dimensions[0], dimensions[1]
+        tiles = x.reshape(rows // TILE_DIM, TILE_DIM, cols // TILE_DIM, TILE_DIM)
+        return torch.cumsum(tiles.to(torch.float32), dim=1).flatten()
 
     def _reduce_columns(self, x, reduce_pool: ReducePool):
         """Reduce columns across tiles, computing sum, average, or max."""
@@ -5076,3 +5108,62 @@ class SamplingGolden:
         if op in self.ROUND_TO_NEAREST_OPS:
             return values.to(torch.bfloat16).to(torch.float32)
         return truncate_to_bfloat16(values)
+
+
+def rope_bands(
+    ht: int,
+    wt: int,
+    x_base: int,
+    x_stride: int,
+    cos_base: int,
+    sin_base: int,
+    cs_stride: int,
+):
+    """(x_row, cos_row, sin_row) for every vector sfpu_rope_all_rows issues."""
+    for w in range(wt):
+        for face in range(2):
+            cs_offset = w * cs_stride + face * FACE_DIM
+            for head in range(ht):
+                x_row = x_base + w * x_stride + face * FACE_DIM + head * wt * x_stride
+                yield x_row, cos_base + cs_offset, sin_base + cs_offset
+
+
+def rope_rotated_rows(**geometry) -> list[int]:
+    """Every Dest row the rotation writes, ascending."""
+    return sorted(
+        x_row + i for x_row, _, _ in rope_bands(**geometry) for i in range(4)  # rows
+    )
+
+
+@register_golden
+class RopeGolden:
+    """
+    Adjacent columns of a Dest row contain these pairs:
+        x'_even = cos*x_even - sin*x_odd
+        x'_odd  = sin*x_even + cos*x_odd
+    The golden returns the entire Dest register.
+    """
+
+    def __call__(
+        self, dest: torch.Tensor, scale: float = None, **geometry
+    ) -> torch.Tensor:
+        source = dest.to(torch.float32)
+        golden = source.clone()
+
+        even = torch.arange(0, source.shape[1], 2)
+        odd = even + 1
+        factor = 1.0 if scale is None else scale
+
+        for x_row, cos_row, sin_row in rope_bands(**geometry):
+            for i in range(4):  # rows
+                cos = source[cos_row + i, even] * factor
+                sin = source[sin_row + i, even] * factor
+                x_even = source[x_row + i, even]
+                x_odd = source[x_row + i, odd]
+                golden[x_row + i, even] = truncate_to_bfloat16(
+                    cos * x_even - sin * x_odd
+                )
+                golden[x_row + i, odd] = truncate_to_bfloat16(
+                    sin * x_even + cos * x_odd
+                )
+        return golden

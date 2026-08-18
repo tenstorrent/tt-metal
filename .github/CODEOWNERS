@@ -353,6 +353,9 @@ ttnn/CMakeLists.txt @mbezuljTT @ppetrovicTT @pavlepopovic @tenstorrent/metalium-
 ttnn/sources.cmake @mbezuljTT @ppetrovicTT @pavlepopovic @tenstorrent/metalium-developers-ttnn-core @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/experimental/indexer_score/ @tenstorrent/metalium-developers-sdpa @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/experimental/indexer_score/**/CMakeLists.txt @tenstorrent/metalium-developers-sdpa @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
+ttnn/cpp/ttnn/operations/experimental/kda/ @tenstorrent/metalium-developers-sdpa @tenstorrent/codeowner-bypass
+ttnn/cpp/ttnn/operations/experimental/kda/**/CMakeLists.txt @tenstorrent/metalium-developers-sdpa @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
+tests/ttnn/nightly/unit_tests/operations/experimental/kda/ @tenstorrent/metalium-developers-sdpa @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/experimental/high_bw_all_gather/ @tenstorrent/metalium-developers-sdpa @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/experimental/high_bw_all_gather/**/CMakeLists.txt @tenstorrent/metalium-developers-sdpa @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/experimental/matmul/ @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/codeowner-bypass
@@ -511,7 +514,7 @@ ttnn/ttnn/graph_report.py @tenstorrent/thirdparty-lights-on-software @tenstorren
 tests/ttnn/unit_tests/base_functionality/test_graph_report.py @tenstorrent/thirdparty-lights-on-software @tenstorrent/metalium-developers-ttnn-core @tenstorrent/codeowner-bypass
 
 # models
-/models/ @uaydonat @yieldthought @cglagovichTT @tenstorrent/codeowner-bypass
+/models/ @uaydonat @yieldthought @cglagovichTT @jonathansuTT @tenstorrent/codeowner-bypass
 /models/tt_cnn/ @esmalTT @tenstorrent/metalium-developers-convolutions @tenstorrent/codeowner-bypass
 /**/functional_*/ @uaydonat @esmalTT @tenstorrent/codeowner-bypass
 models/common @yieldthought @mtairum @uaydonat @gwangTT @tenstorrent/codeowner-bypass

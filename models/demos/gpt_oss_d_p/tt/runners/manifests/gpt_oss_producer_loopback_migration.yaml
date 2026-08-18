@@ -1,15 +1,16 @@
-# Producer manifest: GPT-OSS loopback migration (slot 0,1 -> 2,3) via migration_driver.
+# Producer manifest: GPT-OSS Gate 2 (loopback migration, slots 0,1 -> 2,3) via migration_driver.
 #
 # MODEL-SPECIFIC transport: SP=4 TP=8 (TP cols == num_kv_heads). Pair with
-# topology_configuration/pipeline_prefill_request_1rank_gpt_oss_migration.yaml.
+# gpt_oss_binding_loopback_migration.yaml.
 #
 # Run (after endpoint + runner are up / WORKER_READY):
 #   export PREFILL_MIGRATION_CLIENT_DIR=<tt-llm-engine>/disaggregation/migration/build_RelWithDebInfo/python
 #   export PREFILL_TRACE_DIR=<golden trace dir>
 #   python -m models.demos.common.prefill.runners.migration_driver \
-#     --manifest models/demos/common/prefill/runners/producer_manifests/producer_manifest_gpt_oss_migration_loopback.yaml
+#     --manifest models/demos/gpt_oss_d_p/tt/runners/manifests/gpt_oss_producer_loopback_migration.yaml
 #
-# Expect in the RUNNER log: [kv-migrate-validate] ... ALL <N> pair(s) dst==src PASSED
+# Every verdict is logged HERE — the runner validates nothing. Sources come from check_pcc below,
+# destinations from --verify-migration (default dst-bytes).
 
 transport:
   sp: 4
@@ -28,7 +29,7 @@ workload:
   chunks: "11"
   max_requests: 2
   interleave: round_robin
-  check_pcc: false
+  check_pcc: true                 # SOURCE-slot golden PCC; --verify-migration covers the destinations
 
 migration:
   issue: true
