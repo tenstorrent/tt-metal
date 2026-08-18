@@ -282,20 +282,30 @@ def get_value_tiles_from_topk_tensor(
     # in the ttnn-level topk tests.
     K=[32],
     sort_direction=[TopKSortDirection.Descending, TopKSortDirection.Ascending],
-    stable_sort=[False, True],
+    # unstable / comparator-stable / fused-key-stable (packed [bf16|u16] keys, unstable network).
+    sort_mode=["unstable", "stable", "fused"],
 )
 def test_topk_sfpu(
     formats: InputOutputFormat,
     input_dimensions: list,
     K: int,
     sort_direction: TopKSortDirection,
-    stable_sort: bool,
+    sort_mode: str,
 ):
+    stable_sort = sort_mode == "stable"
+    fused_stable = sort_mode == "fused"
 
     if input_dimensions == [32, 1024]:
         # For 32x1024 input we have observed some discrepancies in the topk values between hardware and golden.
         # TODO: Fix issue #1344 on tt-llk.
         pytest.skip("Skipping test for 32x1024 input due to observed discrepancies.")
+
+    if fused_stable and input_dimensions[1] != 128:
+        # The fused kernel path handles a single 2-tile slab per pipeline (TOPK_NUM_ITERATIONS == 1);
+        # multi-iteration fused slabs need the packed-CB round-trip that lands with the ttnn milestone.
+        pytest.skip(
+            "Fused stable mode currently covers single-iteration widths (W == 128) only."
+        )
 
     sfpu_false_spec = StimuliSpec.uniform(low=0.0, high=1.0)
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
@@ -328,6 +338,7 @@ def test_topk_sfpu(
                 topk_matrix_width=input_dimensions[1],
                 topk_sort_direction=sort_direction,
                 topk_stable_sort=stable_sort,
+                topk_fused_stable=fused_stable,
             ),
         ],
         runtimes=[
@@ -344,7 +355,8 @@ def test_topk_sfpu(
             tile_count_B=tile_cnt_B,
             tile_count_res=tile_cnt_A,
         ),
-        dest_acc=DestAccumulation.No,
+        # Fused keys are 32-bit words: values must be exact-widened into 32-bit DEST.
+        dest_acc=DestAccumulation.Yes if fused_stable else DestAccumulation.No,
         unpack_to_dest=False,
     )
 
@@ -361,8 +373,16 @@ def test_topk_sfpu(
 
     # TODO: Fix issue #1344 on tt-llk.
     if input_dimensions[1] == 128 and not _RECORD_TEST_ORDER:
+        # Fused mode promises the same torch-stable tie order as comparator-stable, so it gets the
+        # strict (no tie-escape) index comparison too.
         assert validate_topk_indices(
-            res_tensor, golden_tensor, src_A, formats, input_dimensions, K, stable_sort
+            res_tensor,
+            golden_tensor,
+            src_A,
+            formats,
+            input_dimensions,
+            K,
+            stable_sort or fused_stable,
         )
 
     # Get value tiles from result and golden tensors
