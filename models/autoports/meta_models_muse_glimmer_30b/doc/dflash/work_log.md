@@ -824,6 +824,58 @@ of growing it, then re-run OSL 128.  If that is the cause, the fix is one line a
 0.83x should hold at length; if it is not, `_dram_allocated()` at `alloc_drift_budget = 0`
 will name whatever else is live across a replay.
 
+### F23 — The `TT_FATAL` was a deleted function body, and the traced verify now ships on
+
+F22 left the traced verify off by default because capturing any window past the first
+hit `TT_FATAL: Cannot load new binaries during trace capture`, and called that "not
+fully isolated".  It is now isolated, and the answer is duller and more instructive than
+the trace-lifetime theories it displaced.
+
+An earlier refactor rewrote the warm-compile step in `_trace_for` and replaced the
+**entire block, code included, with only its comment**.  What was left read as a
+paragraph explaining why the warm pass is mandatory, followed immediately by
+`begin_trace_capture` with nothing compiled.  The capture then compiled the graph
+itself — which is exactly, and only, what that error reports.  The word `capture` in
+`Cannot load new binaries during trace capture` was the whole diagnosis, and it was
+sitting in the log the entire time: it says the compile happened *inside* the capture,
+not that some other trace was live outside it.
+
+Two lessons worth carrying:
+
+* Three successive hypotheses (number of live traces, eager-fallback ordering,
+  release-then-drain semantics) were all about *interactions between traces*, and all
+  were wrong, because the code being reasoned about was not the code that was running.
+  A comment describing a mandatory step is not evidence the step executes.
+* The distinction between `during trace` and `during trace capture` in the tt-metal
+  error text is load-bearing and worth reading closely.
+
+Restoring the body — and releasing the generator's own decode and prefill traces first,
+which `_ensure_prefill_verify_trace` already did and `_trace_for` did not — makes the
+path clean end to end at OSL 128, with no fatal and no board reset:
+
+| | verify forward | ms/token | t/s/u | vs baseline |
+|---|---|---|---|---|
+| untraced verify (previous default) | 64.2 ms | 37.6 | 26.56 | 0.62x |
+| **32-row traced verify (now default)** | **24.7 ms** | **30.6** | **32.64** | **0.76x** |
+
+Acceptance is unchanged at 2.72 accepted per target forward, which is the correct
+outcome and a useful check: this changes how the verify forward is *dispatched*, not
+what it computes, so any movement in acceptance would have indicated a bug.
+
+**The remaining gap is now measured rather than estimated.**  Of 3.92 s for 128 tokens,
+the instrumented stages account for 2.84 s and 1.08 s is unattributed.  Five window
+captures at ~206 ms each — ~66 ms warm compile plus ~140 ms capture — accounts for it to
+within noise.  So **26 % of DFlash runtime is spent capturing traces**, and it is a cost
+that scales with tokens generated (one capture per 32) rather than with useful work.
+
+That makes the offset-independent design from F22 the whole remaining story, and its
+projection is now anchored to a measured number instead of an inferred one: removing
+1.08 s of capture from 3.92 s gives 2.84 s, i.e. **~45 t/s/u, or ~1.05x over
+non-speculative decode**, before touching the drafter's 27.6 ms. The two pieces are
+`chunk_start_idx_tensor` for the chunked SDPA offset and the decode path's on-device
+RoPE gather for prefill; together they turn one capture per 32 tokens into one capture
+per generation.
+
 ## Artifacts
 
 | file | what |
