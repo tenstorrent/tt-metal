@@ -784,10 +784,6 @@ class TtMoEGatePrefill(LightweightModule):
             per_device_dim * n_tp_devices == self.config.dim
         ), f"Expected per-device dim {self.config.dim // n_tp_devices}, got {per_device_dim}"
         config_key = (self.config.sp_dim, per_device_dim, self.config.n_routed_experts)
-        # The 2D configs parallelise over N as well as M and are the faster of the two, but the matmul
-        # rejects them for a sharded in0 (it requires K == in0_block_w and a single-column shard grid).
-        # Interleaved therefore prefers the 2D table and falls back to the 1D entry, which is legal on
-        # either layout; anything sharded goes straight to 1D.
         program_config = None
         if x.memory_config().memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED:
             program_config = self.config.mm_configs_interleaved.get(config_key)
