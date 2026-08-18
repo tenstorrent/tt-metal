@@ -285,6 +285,56 @@ void run_kernel(RUNTIME_PARAMETERS params)
                                 VectorMode::None,
                                 FRESH_UNARY_MAX_MIN_FLOAT_VALUE);
                         }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::ceil)
+                        {
+                            SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_ceil_fresh_cpp, (ITERATIONS), block_tile, VectorMode::None);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::equal_zero)
+                        {
+                            SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_eqz_fresh_cpp, (ITERATIONS), block_tile, VectorMode::None);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::clamp)
+                        {
+                            SFPU_UNARY_CALL(
+                                DST_SYNC_MODE,
+                                is_fp32_dest_acc_en,
+                                calculate_clamp_fresh_cpp,
+                                (ITERATIONS),
+                                block_tile,
+                                VectorMode::None,
+                                ckernel::sfpu::FRESH_CLAMP_LO,
+                                ckernel::sfpu::FRESH_CLAMP_HI);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::hardtanh)
+                        {
+                            SFPU_UNARY_CALL(
+                                DST_SYNC_MODE,
+                                is_fp32_dest_acc_en,
+                                calculate_hardtanh_fresh_cpp,
+                                (ITERATIONS),
+                                block_tile,
+                                VectorMode::None,
+                                ckernel::sfpu::FRESH_CLAMP_LO,
+                                ckernel::sfpu::FRESH_CLAMP_HI);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::tanh)
+                        {
+                            // The fresh tanh states the bf16 production contract; guard
+                            // only variants that actually select this branch.
+                            static_assert(
+                                FRESH_CPP_IMPL != 1 || SFPU_UNARY_OPERATION != SfpuType::tanh || (!APPROX_MODE && !is_fp32_dest_acc_en),
+                                "fresh tanh selector supports only non-approx, bf16 dest");
+                            SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_tanh_fresh_cpp, (ITERATIONS), block_tile, VectorMode::None);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::tanh_derivative_lut)
+                        {
+                            SFPU_UNARY_CALL(
+                                DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_tanh_derivative_lut_fresh_cpp, (ITERATIONS), block_tile, VectorMode::None);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::silu)
+                        {
+                            SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_silu_fresh_cpp, (ITERATIONS), block_tile, VectorMode::None);
+                        }
                         else
                         {
                             test_utils::call_unary_sfpu_operation<
@@ -378,6 +428,56 @@ void run_kernel(RUNTIME_PARAMETERS params)
                                 block_tile,
                                 VectorMode::None,
                                 FRESH_UNARY_MAX_MIN_FLOAT_VALUE);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::ceil)
+                        {
+                            SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_ceil_fresh_cpp, (ITERATIONS), block_tile, VectorMode::None);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::equal_zero)
+                        {
+                            SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_eqz_fresh_cpp, (ITERATIONS), block_tile, VectorMode::None);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::clamp)
+                        {
+                            SFPU_UNARY_CALL(
+                                DST_SYNC_MODE,
+                                is_fp32_dest_acc_en,
+                                calculate_clamp_fresh_cpp,
+                                (ITERATIONS),
+                                block_tile,
+                                VectorMode::None,
+                                ckernel::sfpu::FRESH_CLAMP_LO,
+                                ckernel::sfpu::FRESH_CLAMP_HI);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::hardtanh)
+                        {
+                            SFPU_UNARY_CALL(
+                                DST_SYNC_MODE,
+                                is_fp32_dest_acc_en,
+                                calculate_hardtanh_fresh_cpp,
+                                (ITERATIONS),
+                                block_tile,
+                                VectorMode::None,
+                                ckernel::sfpu::FRESH_CLAMP_LO,
+                                ckernel::sfpu::FRESH_CLAMP_HI);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::tanh)
+                        {
+                            // The fresh tanh states the bf16 production contract; guard
+                            // only variants that actually select this branch.
+                            static_assert(
+                                FRESH_CPP_IMPL != 1 || SFPU_UNARY_OPERATION != SfpuType::tanh || (!APPROX_MODE && !is_fp32_dest_acc_en),
+                                "fresh tanh selector supports only non-approx, bf16 dest");
+                            SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_tanh_fresh_cpp, (ITERATIONS), block_tile, VectorMode::None);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::tanh_derivative_lut)
+                        {
+                            SFPU_UNARY_CALL(
+                                DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_tanh_derivative_lut_fresh_cpp, (ITERATIONS), block_tile, VectorMode::None);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::silu)
+                        {
+                            SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_silu_fresh_cpp, (ITERATIONS), block_tile, VectorMode::None);
                         }
                         else
                         {
