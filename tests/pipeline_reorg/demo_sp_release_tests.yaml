@@ -67,7 +67,8 @@
     # deepseek and kimi moe blocks. NOTE: pcc-device-256 (DSv3) is pinned exact + `not pad50` so it stays
     # 1 test — bare `pcc-device` would substring-match `pcc-device-glm-256` and inflate the count.
     EXPECT_NUM_TESTS=1 pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_ds_moe -k "linear-8 and pcc-device-256 and not pad50" -vvv --tb=short --timeout=1800
-    EXPECT_NUM_TESTS=1 pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_kimi_moe -k "linear-8 and 5k and not 25k and not perf" -vvv --tb=short --timeout=1800
+    # Run the unified, fused-interleaved, and fused-ND production-chunk PCC cases.
+    EXPECT_NUM_TESTS=3 pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_kimi_moe -k "linear-8 and kimi-5k-pcc" -vvv --tb=short --timeout=1800
   model: deepseek_prefill
   skus:
     bh_loudbox:

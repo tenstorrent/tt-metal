@@ -7,6 +7,7 @@ import pytest
 import torch
 import ttnn
 
+from models.common.utility_functions import is_blackhole
 from ttnn.operations.moe_fused_swiglu.moe_fused_swiglu_helpers import weight_memory_configs
 
 TILE = 32
@@ -77,6 +78,7 @@ def _reference(x, weights):
 
 @pytest.mark.parametrize("emb,hidden", [(6144, 2048), (7168, 2048)], ids=["glm", "kimi-ds"])
 @pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
+@pytest.mark.skipif(not is_blackhole(), reason="moe_fused_swiglu is Blackhole-only")
 def test_fused_placement_and_unified_scale_sweep(device, emb, hidden, expect_error):
     torch.manual_seed(20260818)
     base_x = torch.randn((1, 1, COUNT, emb), dtype=torch.bfloat16)
