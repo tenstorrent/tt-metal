@@ -90,6 +90,12 @@ inline void exp_tile_init() {}
 inline void exp_tile(uint32_t o) { T("    exp_tile (dst" + n(o) + ")"); }
 inline void relu_tile_init() {}
 inline void relu_tile(uint32_t o) { T("    relu_tile(dst" + n(o) + ")"); }
+inline void recip_tile_init() {}
+inline void recip_tile(uint32_t o) { T("    recip_tile(dst" + n(o) + ")"); }
+inline void sqrt_tile_init() {}
+inline void sqrt_tile(uint32_t o) { T("    sqrt_tile(dst" + n(o) + ")"); }
+inline void rsqrt_tile_init() {}
+inline void rsqrt_tile(uint32_t o) { T("    rsqrt_tile(dst" + n(o) + ")"); }
 inline void copy_tile_to_dst_init_short_with_dt(uint32_t old_cb, uint32_t new_cb) {
     T("  copy_tile_to_dst_init_short_with_dt(cb" + n(old_cb) + " -> cb" + n(new_cb) + ")");
 }
@@ -291,7 +297,7 @@ void example_peer_hop() {
 // what keeps that true rather than merely intended. Keep the pair in lockstep --
 // a new op belongs in both.
 //
-// Only the COMPUTE projection can actually catch a divergence: relu and exp emit
+// Only the COMPUTE projection can actually catch a divergence: the unaries emit
 // nothing on a data-movement thread, so DM0/DM1 compare identical traces however
 // wrong the mixin is. Verified by making Fluent::relu delegate to exp_ -- COMPUTE
 // reported it and exited non-zero, DM0 passed regardless.
@@ -311,19 +317,19 @@ void example_syntax_free() {
         ComputeBlock a = noc_load<1>(in0, t0, 0).wait();
         noc_store<0>(out.store(exp_(a)), t2, 0);
     }
-    {  // Un, chained
+    {  // Un, chained -- EVERY unary, in one chain
         ComputeBlock a = noc_load<1>(in0, t0, 0).wait();
-        noc_store<0>(out.store(exp_(relu(a))), t2, 0);
+        noc_store<0>(out.store(rsqrt(sqrt_(recip(exp_(relu(a)))))), t2, 0);
     }
     {  // MatmulNode -- appends to the epilogue chain
         ComputeBlock a = noc_load<1>(in0, t0, 0).wait();
         ComputeBlock b = noc_load<1>(in1, t0, 0).wait();
-        noc_store<0>(out.store(relu(matmul<Geom>(a, b))), t2, 0);
+        noc_store<0>(out.store(rsqrt(sqrt_(recip(exp_(relu(matmul<Geom>(a, b))))))), t2, 0);
     }
     {  // ReduceNode -- likewise
         ComputeBlock sc = noc_load<1>(scaler, t0, 0).wait();  // resident operand
         ComputeBlock a = noc_load<1>(in0, t0, 0).wait();
-        noc_store<0>(red.store(exp_(reduce_sum<RG, ReduceAxis::Rows>(a, sc))), t2, 0);
+        noc_store<0>(red.store(rsqrt(sqrt_(recip(exp_(relu(reduce_sum<RG, ReduceAxis::Rows>(a, sc))))))), t2, 0);
     }
 }
 
@@ -343,19 +349,19 @@ void example_syntax_method() {
         ComputeBlock a = noc_load<1>(in0, t0, 0).wait();
         noc_store<0>(out.store(a.exp()), t2, 0);
     }
-    {  // Un, chained
+    {  // Un, chained -- EVERY unary, in one chain
         ComputeBlock a = noc_load<1>(in0, t0, 0).wait();
-        noc_store<0>(out.store(a.relu().exp()), t2, 0);
+        noc_store<0>(out.store(a.relu().exp().recip().sqrt().rsqrt()), t2, 0);
     }
     {  // MatmulNode -- appends to the epilogue chain
         ComputeBlock a = noc_load<1>(in0, t0, 0).wait();
         ComputeBlock b = noc_load<1>(in1, t0, 0).wait();
-        noc_store<0>(out.store(matmul<Geom>(a, b).relu()), t2, 0);
+        noc_store<0>(out.store(matmul<Geom>(a, b).relu().exp().recip().sqrt().rsqrt()), t2, 0);
     }
     {  // ReduceNode -- likewise
         ComputeBlock sc = noc_load<1>(scaler, t0, 0).wait();  // resident operand
         ComputeBlock a = noc_load<1>(in0, t0, 0).wait();
-        noc_store<0>(red.store(reduce_sum<RG, ReduceAxis::Rows>(a, sc).exp()), t2, 0);
+        noc_store<0>(red.store(reduce_sum<RG, ReduceAxis::Rows>(a, sc).relu().exp().recip().sqrt().rsqrt()), t2, 0);
     }
 }
 
