@@ -306,29 +306,6 @@ void run_sliced_op(
                             {batch_size, output_slice_height, padded_ow, sliced_output_tensor.padded_shape()[3]}));
                 }
             }
-            // [#48552 STEM-DEBUG] Dump the exact shapes feeding slice_write.cpp's
-            // `actual_shape.volume() == input.logical_volume()` assert. actual_shape is derived from the
-            // {output_slice_*_start/end} bounds below; input.logical_volume() is sliced_output_tensor's
-            // logical volume. A mismatch (e.g. 401408 vs 458752, an 8/7 per-core pad ratio) means the
-            // per-slice conv output still carries per-core padding in its LOGICAL extent — i.e.
-            // fix_conv_output_logical_nhw() did not fire / did not match for this geometry.
-            log_warning(
-                tt::LogOp,
-                "[#48552 STEM-DEBUG] slice_write in: logical={}, padded={}, layout={}, mem_layout={}; "
-                "slice bounds N={} h=[{},{}] w=[{},{}] C={}; actual_slice_volume={}, input_logical_volume={}",
-                sliced_output_tensor.logical_shape(),
-                sliced_output_tensor.padded_shape(),
-                sliced_output_tensor.layout() == tt::tt_metal::Layout::TILE ? "TILE" : "ROW_MAJOR",
-                static_cast<int>(sliced_output_tensor.memory_config().memory_layout()),
-                batch_size,
-                output_slice_height_start,
-                output_slice_height_end,
-                output_slice_width_start,
-                output_slice_width_end,
-                output_channels,
-                static_cast<uint64_t>(batch_size) * (output_slice_height_end - output_slice_height_start) *
-                    (output_slice_width_end - output_slice_width_start) * output_channels,
-                sliced_output_tensor.logical_volume());
             // Quasar fork: unconditionally use the quasar Metal-2 slice_write.
             ttnn::operations::experimental::quasar::slice_write(
                 sliced_output_tensor,

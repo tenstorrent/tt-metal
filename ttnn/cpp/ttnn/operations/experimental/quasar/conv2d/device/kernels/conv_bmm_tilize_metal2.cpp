@@ -31,7 +31,6 @@
 #include "api/compute/tilize.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
-#include "api/debug/dprint.h"  // [#48552 DS-DEBUG] MEM_READ_NO_RESPONSE localization
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
@@ -436,22 +435,6 @@ void kernel_main() {
 #endif
     UNPACK(SAVE_PARTIALS_RD(partials_cb_read_ptr, cb_matmul_partials);)
     PACK(SAVE_PARTIALS_WR(partials_cb_write_ptr, cb_matmul_partials);)
-    // [#48552 DS-DEBUG] One-time reference frame. Compare the per-subblock in0i/in1i printed below
-    // against in0bnt/in1bnt (the CB tile counts): a MEM_READ_NO_RESPONSE means the matmul unpack is
-    // reading a tile index >= its CB's tile count (OOB L1 read).
-    DPRINT_UNPACK(
-        "[DS] cfg hs{} in0bnt{} in1bnt{} in0nsb{} in1nsb{} in0bw{} in1bw{} osnt{} nbw{} nbh{} pou{}\n",
-        (uint32_t)height_sharded,
-        in0_block_num_tiles,
-        in1_block_num_tiles,
-        in0_num_subblocks,
-        in1_num_subblocks,
-        in0_block_w,
-        in1_block_w,
-        out_subblock_num_tiles,
-        in0_num_blocks_w,
-        in0_num_blocks_h,
-        (uint32_t)partials_cb_uses_output);
     for (uint32_t in1_block_w_i = 0; in1_block_w_i < in1_num_blocks_w; ++in1_block_w_i) {
         for (uint32_t in0_block_h_i = 0; in0_block_h_i < in0_num_blocks_h; ++in0_block_h_i) {
             bool enable_reload = false;
@@ -466,13 +449,6 @@ void kernel_main() {
             uint32_t curr_matmul_out_cb = matmul_partials_cb;
             for (uint32_t in0_block_w_i = 0; in0_block_w_i < in0_num_blocks_w; ++in0_block_w_i) {
                 bool last_inner_dim_block = (in0_block_w_i == in0_num_blocks_w - 1);
-                // [#48552 DS-DEBUG] Coarse progress: last one printed before the fault = the faulting K-block.
-                DPRINT_UNPACK(
-                    "[DS] blk w{} h{} kb{} last{}\n",
-                    in1_block_w_i,
-                    in0_block_h_i,
-                    in0_block_w_i,
-                    (uint32_t)last_inner_dim_block);
                 // TRISC1) so the LAST BS* line in that file before the 0x19 pins the stall point:
                 //   BSLOOP present but no "mmin0-ok" -> stuck in cb_mm_in0.wait_front (tilized act never
                 //     delivered by the mcast reader / tilize never completed for this K-block).
@@ -592,18 +568,9 @@ void kernel_main() {
 #endif
                     // (TZHWCFG/TZBD/TZBDTAB/TILIZEPACK probes removed — they confirmed the tilize pack BD is
 
-                    // [#48552 DS-DEBUG] Block-sharded tilize reads in0_cb (pretilize) into tilized_in0.
-                    // If pre-tilize prints but post-tilize / mmin0-ok never do, the OOB read is the tilize
-                    // unpack (in0_cb), not the matmul.
-                    if (in0_block_h_i == 0) {
-                        DPRINT_UNPACK("[DS] pre-tilize kb{} nsub{}\n", in0_block_w_i, in0_num_subblocks_read);
-                    }
                     if constexpr (!activation_reuse) {
                         tilize_in<in0_block_w, in0_cb_id, tilized_in0_cb_id, true, !split_reader>(
                             in0_num_subblocks_read);
-                    }
-                    if (in0_block_h_i == 0) {
-                        DPRINT_UNPACK("[DS] post-tilize kb{}\n", in0_block_w_i);
                     }
 
 #ifdef SPLIT_READER
@@ -641,7 +608,6 @@ void kernel_main() {
                 }
 
                 cb_mm_in0.wait_front(in0_block_num_tiles);
-                DPRINT_UNPACK("[DS] mmin0-ok kb{}\n", in0_block_w_i);
 
                 uint32_t in0_index_subblock_offset = 0;
 #ifdef CHECK_SKIP_COMPUTE
@@ -652,7 +618,6 @@ void kernel_main() {
 #endif
 
                 cb_in1.wait_front(in1_block_num_tiles);
-                DPRINT_UNPACK("[DS] in1-ok kb{}\n", in0_block_w_i);
 
                 if (last_inner_dim_block) {
                     if constexpr (!fuse_bias) {
@@ -710,16 +675,6 @@ void kernel_main() {
                             copy_tile_to_dst_init_short(matmul_partials_cb);
 #endif
                             cb_matmul_partials.wait_front(out_subblock_num_tiles);
-                            // [#48552 DS-DEBUG] The reload copy_block READS matmul_partials[0..osnt-1].
-                            // If the partials ring rewind is wrong, this read can go OOB -> MEM_READ_NO_RESPONSE.
-                            if (in0_block_h_i == 0) {
-                                DPRINT_UNPACK(
-                                    "[DS] reload-read kb{} i0{} i1{} osnt{}\n",
-                                    in0_block_w_i,
-                                    in0_subblock_i,
-                                    in1_subblock_i,
-                                    out_subblock_num_tiles);
-                            }
                             tile_regs_acquire();
 
                             uint32_t start_dst_index = 0;
@@ -737,21 +692,6 @@ void kernel_main() {
                         uint32_t dst_index = 0;
                         uint32_t in0_index = in0_index_subblock_offset;
                         uint32_t in1_index = in1_index_subblock_offset;
-                        // [#48552 DS-DEBUG] The matmul reads mm_in0[in0_index..+in0bw-1] and
-                        // in1[in1_index..+(in0bw-1)*in1bw]. If the last-printed max exceeds in0bnt/in1bnt
-                        // from the cfg line, that's the OOB read -> MEM_READ_NO_RESPONSE. Gated to h==0.
-                        if (in0_block_h_i == 0) {
-                            DPRINT_UNPACK(
-                                "[DS] SB kb{} i0{} i1{} in0i{} in1i{} in0max{} in1max{} rld{}\n",
-                                in0_block_w_i,
-                                in0_subblock_i,
-                                in1_subblock_i,
-                                in0_index,
-                                in1_index,
-                                in0_index + in0_block_w - 1,
-                                in1_index + (in0_block_w - 1) * in1_block_w,
-                                (uint32_t)enable_reload);
-                        }
                         // prints for (i0,i1) but MMMVOK does NOT, the MATH 0x19 is in that subblock's matmul_block.
                         // Gated to the first height block (bsp1 faulted there, ~3 MMPACKs in).
                         for (uint32_t inner_dim_idx = 0; inner_dim_idx < in0_block_w; inner_dim_idx++) {
@@ -777,11 +717,6 @@ void kernel_main() {
                             in1_index += in1_block_w;
                         }
                         // [#48552] all MVMULs for this subblock completed (MATH survived the matmul_block loop).
-                        // [#48552 DS-DEBUG] If [DS] SB prints for (i0,i1) but MVdone does NOT, MATH faulted
-                        // inside that subblock's matmul_block (the OOB read is in this subblock's MVMULs).
-                        if (in0_block_h_i == 0) {
-                            DPRINT_MATH("[DS] MVdone kb{} i0{} i1{}\n", in0_block_w_i, in0_subblock_i, in1_subblock_i);
-                        }
 
 #ifdef SFPU_OP_INIT_ACTIVATION
                         if constexpr (!fuse_bias) {
@@ -796,24 +731,8 @@ void kernel_main() {
                         {
                             DataflowBuffer curr_out_cb =
                                 curr_matmul_out_cb == matmul_partials_cb ? cb_matmul_partials : cb_mm_out;
-                            // reserve; PKgot=PACK got MATH's committed DEST (tile_regs_wait returned); PKdone=PACK
-                            // packed+pushed. If PKrsv i0=0 prints but PKgot i0=0 does NOT -> PACK stuck waiting on
-                            // MATH's subblock-0 commit = MATH<->PACK deadlock. If PKdone i0=0 prints then PKrsv i0=1
-                            // stalls -> PACK is fine and MATH is the sole bottleneck (MATH-internal MVMUL stall).
-                            // [#48552 DS-DEBUG] PACK-side markers. PKrsv (before reserve) / PKgot (after
-                            // tile_regs_wait, PACK got MATH's committed DEST) / PKdone (after push). Cross
-                            // with MATH's MVdone: MVdone i1X present + no PKdone i1X => PACK is the stall;
-                            // MVdone i1X ABSENT => MATH stuck (DEST acquire starved by PACK, or MVMUL).
-                            if (in0_block_h_i == 0) {
-                                DPRINT_PACK(
-                                    "[DS] PKrsv kb{} i0{} i1{}\n", in0_block_w_i, in0_subblock_i, in1_subblock_i);
-                            }
                             curr_out_cb.reserve_back(out_subblock_num_tiles);
                             tile_regs_wait();
-                            if (in0_block_h_i == 0) {
-                                DPRINT_PACK(
-                                    "[DS] PKgot kb{} i0{} i1{}\n", in0_block_w_i, in0_subblock_i, in1_subblock_i);
-                            }
 
                             if constexpr (packer_l1_acc) {
                                 if (in0_block_w_i == 0) {
@@ -852,10 +771,6 @@ void kernel_main() {
 
                             tile_regs_release();
                             curr_out_cb.push_back(out_subblock_num_tiles);
-                            if (in0_block_h_i == 0) {
-                                DPRINT_PACK(
-                                    "[DS] PKdone kb{} i0{} i1{}\n", in0_block_w_i, in0_subblock_i, in1_subblock_i);
-                            }
                         }
 
                         in1_index_subblock_offset += out_subblock_w;

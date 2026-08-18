@@ -14,7 +14,6 @@
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
-#include "api/debug/dprint.h"  // [#48552 MP-DEBUG] maxpool hang/fault localization
 
 //   0 = production path: narrow pack_untilize straight into the real output CB (out_cb), then DPRINT it.
 //   1 = experiment:      full-tile (32x32) pack of the reduced DEST into the scratch CB, then DPRINT it
@@ -183,29 +182,7 @@ void kernel_main() {
 
     uint32_t tilize_stick_counter = 0;
     uint32_t tilize_stick_total = 0;
-    // [#48552 MP-DEBUG] One-time geometry. num_faces_in_input_tile drives whether the strided reduce-col
-    // unpack takes main's NEW tiny-tile (Nx32, N<=8) path vs the 32x32 path. nsticks = outer loop trip,
-    // irc = inner reduction chunks, nblkc = channel blocks, t2r base = max_tiles_per_iter.
-    DPRINT_UNPACK(
-        "[MP] cfg nblkc{} irc{} maxt2r{} partt{} nfin{} nfout{} inntc{} tiled{} nsticks{} winhw{} lth{}\n",
-        in_nblocks_c,
-        interm_reduction_chunks,
-        max_tiles_per_iter,
-        partial_iter_output_tiles,
-        num_faces_in_input_tile,
-        num_faces_in_output_tile,
-        in_ntiles_c,
-        (uint32_t)is_output_tiled,
-        num_out_sticks_this_core,
-        window_size_hw,
-        last_tile_height);
     for (uint32_t n = 0; n < num_out_sticks_this_core; ++n) {
-        // [#48552 MP-DEBUG] The hang localized to ~stick 872 (UNPACK reached the n872 heartbeat, not its
-        // pre-unpack). mp_dbg = full per-stick phase detail in a window around the hang (n>=768) plus n<=1;
-        // mp_hb = coarse every-128 heartbeat for gross progress before the window. This is a REAL hang
-        // (reproduces with DPRINT off + watcher on), so per-stick detail in the window is safe.
-        const bool mp_dbg = (n <= 1) || (n >= 768);
-        const bool mp_hb = mp_dbg || ((n & 0x7f) == 0);
         const bool reader0 = !(use_split_reader && (n & 0x1));
         const bool use_reader1_scalar = !reader0 && !one_scalar_per_core;
         // The reader1 (split) DFB tokens only exist under SPLIT_READER; gate the selection at
@@ -238,24 +215,11 @@ void kernel_main() {
                  (in_c % TILE_WIDTH == FACE_WIDTH || single_partial_fits_in_face))
                     ? (number_of_tiles - 1) * num_faces_in_output_tile + num_faces_in_last_output_tile
                     : number_of_tiles * num_faces_in_output_tile;
-            // [#48552 MP-DEBUG] Coarse heartbeat, THROTTLED to n<=1 and every 128th stick. Per-stick DPRINT
-            // (3 lines * 1568 sticks) can overflow the device DPRINT ring and stall the kernel inside the
-            // DPRINT call itself -> a FALSE hang. Throttling cuts volume ~100x to isolate DPRINT backpressure
-            // from a real compute hang. The LAST milestone printed still names how far it got.
-            if (mp_hb) {
-                DPRINT_UNPACK("[MP] n{} c{} t2r{} of{}\n", n, c_i, tiles_to_reduce, output_faces);
-            }
-            // [DEBUG pool compute stall] Which call blocks the WFD/UPTW deadlock? Newest ring marker per
 #if PACK_TO_SCRATCH == 0
             if constexpr (!is_output_tiled) {
                 out_cb.reserve_back(output_faces);
             }
 #endif
-            // [#48552 MP-DEBUG] If this is the last line for stick n, the wedge is in out_cb.reserve_back
-            // above (output CB full -> consumer not draining). n<=1 so we see stick 0 AND the hanging stick 1.
-            if (mp_dbg) {
-                DPRINT_UNPACK("[MP] post-reserve n{} c{}\n", n, c_i);
-            }
             // Re-init the fused tilize+reduce for THIS stick/c-block through the compute API rather than
             // hand-issuing individual UNPACK/MATH llk_* calls. This re-programs UNPACK and MATH together, which
             // is required because both change per iteration:
@@ -264,61 +228,23 @@ void kernel_main() {
             //   (b) tiles_to_reduce changes across c-blocks (e.g. 4 then 2 for 6 tiles / 192c) -- UNPACK and
             //       MATH must both be re-programmed for the new count (PACK is re-init'd via
             //       pack_untilize_dest_init below).
-            if (mp_dbg) {
-                DPRINT_UNPACK("[MP] pre-init n{} c{} t2r{}\n", n, c_i, tiles_to_reduce);
-            }
             tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(
                 curr_in_cb_id, curr_scalar_cb_id, tiles_to_reduce);
-            // [#48552 MP-DEBUG] post-init last => wedged in tilizeA_B_reduce_init (the strided reduce-col
-            // init LLK main rewrote). acq last => wedged in tile_regs_acquire (DEST recycle / dest-sync).
-            if (mp_dbg) {
-                DPRINT_UNPACK("[MP] post-init n{} c{}\n", n, c_i);
-            }
             tile_regs_acquire();
-            if (mp_dbg) {
-                DPRINT_UNPACK("[MP] acq n{} c{}\n", n, c_i);
-            }
             for (uint32_t chunk = 0; chunk < interm_reduction_chunks; chunk++) {
-                // [#48552 MP-DEBUG] pre-waitin: if this is the last line, the reader never delivered the
-                // input stick (curr_in_cb.wait_front hang). Ungated on n==0 for phase detail.
-                // pre-waitin last (no pre-unpack) => wedged in curr_in_cb.wait_front (reader never delivered
-                // this stick's input window).
-                if (mp_dbg) {
-                    DPRINT_UNPACK("[MP] pre-waitin n{} c{} ch{}\n", n, c_i, chunk);
-                }
                 curr_in_cb.wait_front(1);
-                // [DIAG] reduce-input geometry (Bug 1 straddle check): rd = strided-read base, esz = bytes
-                // per entry, t2r = tiles this reduce strides over. If the strided row walk for t2r tiles
-                // exceeds esz it reads into the next entry (wrong rows). First few sticks only (flood guard).
-                // [#48552 MP-DEBUG] THE suspect: main rewrote llk_unpack_reduce_col_tilizeA_strided (tiny-tile
-                // Nx32 path + dropped *face_r_dim stride). UNGATED pre/post so the LAST line always shows it:
-                // pre-unpack with no post-unpack => the strided reduce-col unpack faulted/hung (LLK regression).
-                if (mp_hb) {
-                    DPRINT_UNPACK("[MP] pre-unpack n{} c{} ch{}\n", n, c_i, chunk);
-                }
                 unpack_tilizeA_B_block<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
                     curr_in_cb_id,
                     curr_scalar_cb_id,
                     tiles_to_reduce,
                     0 /*tile idx for Src b is 0 because only 1 tile of constants is loaded*/);
-                if (mp_hb) {
-                    DPRINT_UNPACK("[MP] post-unpack n{} c{} ch{}\n", n, c_i, chunk);
-                }
                 for (uint32_t math_tile_idx = 0; math_tile_idx < tiles_to_reduce; ++math_tile_idx) {
                     reduce_tile_math<REDUCE_OP, REDUCE_DIM>(math_tile_idx, num_faces_in_input_tile);
-                }
-                if (mp_dbg) {
-                    DPRINT_MATH("[MP] post-reduce n{} c{} ch{}\n", n, c_i, chunk);
                 }
                 curr_in_cb.pop_front(1);
             }
             tile_regs_commit();
             tile_regs_wait();
-            // [#48552 MP-DEBUG] Reduce done, MATH committed to DEST. If pre-pack is the last line, the wedge
-            // is on the PACK side (pack_untilize / out_cb), not the strided reduce.
-            if (mp_dbg) {
-                DPRINT_PACK("[MP] pre-pack n{} c{}\n", n, c_i);
-            }
             if constexpr (is_output_tiled) {
                 // TILED output: accumulate sticks and perform tilization when needed.
                 // pre_tilize_cb_id / fast_tilize_cb_id are only emitted under OUTPUT_TILED; even
@@ -514,22 +440,8 @@ void kernel_main() {
                     pack_untilize_dest_init<max_tiles_per_iter>(out_cb_id);
                     pack_untilize_dest<max_tiles_per_iter>(out_cb_id, 1, 0);
                 }
-                // [#48552 MP-DEBUG] Split the pack tail. Last PACK line for n1 pins the wedge:
-                //   pre-pack   => in pack_untilize_dest_init / pack_untilize_dest (the pack MOP itself)
-                //   packed     => in tile_regs_release (DEST-recycle / MATH<->PACK dest-sync handshake)
-                //   released   => in out_cb.push_back (output credit / consumer not draining)
-                //   pushed     => iteration completed; wedge is in the NEXT stick's UNPACK path
-                if (mp_dbg) {
-                    DPRINT_PACK("[MP] packed n{} c{}\n", n, c_i);
-                }
                 tile_regs_release();
-                if (mp_dbg) {
-                    DPRINT_PACK("[MP] released n{} c{}\n", n, c_i);
-                }
                 out_cb.push_back(output_faces);
-                if (mp_dbg) {
-                    DPRINT_PACK("[MP] pushed n{} c{}\n", n, c_i);
-                }
 #endif
             }
         }

@@ -341,40 +341,16 @@ static ttnn::Tensor fix_conv_output_logical_nhw(
     const ttnn::Tensor& out, uint32_t batch_size, uint32_t output_height, uint32_t output_width) {
     const auto& logical = out.logical_shape();
     const uint32_t true_nhw = batch_size * output_height * output_width;
-    // [#48552 STEM-DEBUG] Report whether this relabel fires for the caller's geometry.
-    log_warning(
-        tt::LogOp,
-        "[#48552 STEM-DEBUG] fix_conv_output_logical_nhw: in logical={}, padded={}, rank={}; "
-        "N={} oh={} ow={} -> true_nhw={} (logical[2]={})",
-        logical,
-        out.padded_shape(),
-        logical.rank(),
-        batch_size,
-        output_height,
-        output_width,
-        true_nhw,
-        logical.rank() == 4 ? static_cast<uint32_t>(logical[2]) : 0u);
     // Only the flattened conv-as-matmul output form [1, 1, NHW, C] is over-counted here; leave anything else
     // (already-unflattened, rank != 4, or batch/H folded differently) untouched to avoid mislabeling a real
     // spatial dim as NHW.
     if (logical.rank() != 4 || logical[0] != 1 || logical[1] != 1) {
-        log_warning(tt::LogOp, "[#48552 STEM-DEBUG] fix_conv_output_logical_nhw: BAILED (not [1,1,NHW,C] form)");
         return out;
     }
     if (static_cast<uint32_t>(logical[2]) == true_nhw || static_cast<uint32_t>(logical[2]) < true_nhw) {
         // Already correct, or somehow smaller (never over-count) -- do not touch.
-        log_warning(
-            tt::LogOp,
-            "[#48552 STEM-DEBUG] fix_conv_output_logical_nhw: NO-OP (logical[2]={} <= true_nhw={})",
-            static_cast<uint32_t>(logical[2]),
-            true_nhw);
         return out;
     }
-    log_warning(
-        tt::LogOp,
-        "[#48552 STEM-DEBUG] fix_conv_output_logical_nhw: RELABEL logical[2] {}->{}",
-        static_cast<uint32_t>(logical[2]),
-        true_nhw);
     ttnn::SmallVector<uint32_t> new_logical{
         static_cast<uint32_t>(logical[0]),
         static_cast<uint32_t>(logical[1]),
@@ -708,23 +684,6 @@ Result conv2d_L1(
     if (force_1x1_nonmm_split) {
         conv_config.full_inner_dim = true;
     }
-    // [#48552 DS-SPLIT] Host-side probe: did the 1x1 split route engage for this conv? If fired=0 for the
-    // downsample, one of the gate conditions failed (which is visible below) and it fell to the fused path
-    // (-> conv_bmm hang). If fired=1 but it still hangs, the hang is in the split (Program A tilize / Program
-    // B matmul::linear), not the fused conv.
-    log_warning(
-        tt::LogOp,
-        "[#48552 DS-SPLIT] force_1x1_nonmm_split={} (quasar={} split_env={} HS={} BS={} mm_conv={} k1x1={} "
-        "Ktiles={} max={})",
-        force_1x1_nonmm_split,
-        arch_is_quasar,
-        split_env_requested,
-        height_sharded_conv,
-        block_sharded_conv,
-        mm_conv,
-        (kernel_size[0] == 1 && kernel_size[1] == 1),
-        full_inner_dim_k_ntiles,
-        kQuasarConvNoSpillMaxKTiles);
 
     // ---- Quasar SPLIT-PROGRAM stem OOM guard: DRAM height-slicing for large per-core M ----
     // Program A of the split (TT_METAL_QSR_CONV_SPLIT_PROGRAM) gathers + tilizes and MATERIALIZES the
