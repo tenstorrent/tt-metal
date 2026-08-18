@@ -28,10 +28,16 @@ target_sources(
         FILES ${kernels}
     PRIVATE
         ${TTNN_OP_EXPERIMENTAL_KDA_QKV_CAUSAL_CONV1D_SILU_SRCS}
-        ${TTNN_OP_EXPERIMENTAL_KDA_SHARED_SRCS}
 )
 
-target_link_libraries(ttnn_op_experimental_kda_qkv_causal_conv1d_silu PRIVATE TT::Metalium PUBLIC TTNN::Core)
+target_link_libraries(
+    ttnn_op_experimental_kda_qkv_causal_conv1d_silu
+    PRIVATE
+        TT::Metalium
+        TTNN::Ops::Experimental::KDA::Common
+    PUBLIC
+        TTNN::Core
+)
 
 install(
     TARGETS
