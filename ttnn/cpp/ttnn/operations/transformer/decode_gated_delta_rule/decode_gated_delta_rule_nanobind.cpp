@@ -13,7 +13,7 @@ namespace ttnn::operations::transformer {
 
 void bind_decode_gated_delta_rule(nb::module_& mod) {
     const auto* doc =
-        R\"doc(
+        R"doc(
         Fused T=1 (decode step) Gated Delta Rule forward: one reader/compute/writer
         program, one core per head, replacing the ~12-kernel python decode graph.
 
@@ -34,7 +34,7 @@ void bind_decode_gated_delta_rule(nb::module_& mod) {
 
         Returns:
             tuple[ttnn.Tensor, ttnn.Tensor]: o [B,1,H,V] TILE, new_state [B,H,K,V] TILE.
-        )doc\";
+        )doc";
 
     ttnn::bind_function<"decode_gated_delta_rule", "ttnn.transformer.">(
         mod,
