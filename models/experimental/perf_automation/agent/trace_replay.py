@@ -244,6 +244,14 @@ def measure_adapter(adapter, device) -> float:
         ms, path = _measure_stage(device, st)
         results.append((st.name, ms, path))
         print("TRACE_STAGE_MS[%s]=%.4f path=%s" % (st.name, ms, path), flush=True)
+        # BESIDE THE TIME THAT MEASURED IT. The compute ceiling is 2 x params x items-in-the-unit,
+        # and the run recorded that number for exactly one stage -- the parser wrote it to the key
+        # "prefill", by hand -- so every other stage was priced at one item however much work it did.
+        # Printed per stage, from what the pipeline declares, so a third tower can have a real
+        # arithmetic ceiling instead of a placeholder. Silent when unstated: 1 stays the fallback.
+        _n = int(getattr(st, "items", 0) or 0)
+        if _n > 0:
+            print("TRACE_STAGE_ITEMS[%s]=%d" % (st.name, _n), flush=True)
 
     pipeline_ms = sum(ms for _, ms, _ in results)
     # THE UNIT IS A STRUCTURAL FACT, so read the STRUCTURE, not a name. This matched

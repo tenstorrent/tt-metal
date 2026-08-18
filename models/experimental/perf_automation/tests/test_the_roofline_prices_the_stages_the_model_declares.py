@@ -82,12 +82,32 @@ def test_nothing_declared_falls_back_to_the_recurring_unit():
     assert list(_roofs(None)) == ["prefill", "decode"]
 
 
-def test_a_stage_with_no_known_read_set_gets_a_row_but_no_roof():
-    """Borrowing the backbone's byte count for a separate tower would be wrong, not approximate."""
+def test_a_stage_with_no_known_read_set_gets_a_row_but_no_roof(monkeypatch):
+    """Borrowing the backbone's byte count for a separate tower would be wrong, not approximate.
+
+    WHICH STAGES THOSE ARE IS STRUCTURAL, NOT A NAME. This used to hold only for `encode`, because
+    the refusal came from perf_target rejecting any regime but decode|prefill -- a spelling test
+    wearing an exception. What actually decides it is how many subtrees the model has: on a
+    multi-tower model an UNMAPPED stage has no known read set, whichever stage it is, and charging
+    decode for the audio tower is the same error as charging encode for the backbone."""
+    import cc_optimize.summary as S
+
+    monkeypatch.setattr(S, "_model_facts", lambda: {"blocks": {"audio_tower": {}, "language_model": {}}})
     r = _roofs({"encode": 12.79, "decode": 6.11})
-    assert r["encode"]["memory_ms"] is None
-    assert r["encode"]["bytes"] == 0
+    for st in ("encode", "decode"):
+        assert r[st]["memory_ms"] is None, st
+        assert r[st]["bytes"] == 0, st
+
+
+def test_a_single_tower_model_still_prices_every_stage(monkeypatch):
+    """The refusal above must not leak onto ordinary models: with one subtree, the whole model IS
+    every stage's read set, and that is the behaviour that predates any of this."""
+    import cc_optimize.summary as S
+
+    monkeypatch.setattr(S, "_model_facts", lambda: {"blocks": {"model": {}}})
+    r = _roofs({"prefill": 110.12, "decode": 6.11})
     assert r["decode"]["memory_ms"] is not None
+    assert r["prefill"]["memory_ms"] is not None
 
 
 def test_a_stage_with_measured_bytes_does_get_a_roof():
@@ -150,10 +170,19 @@ def test_an_unresolved_batch_says_so_instead_of_printing_one(monkeypatch):
     assert "batch: 1" not in line, "a sentinel was rendered as a measured batch of 1"
 
 
-def test_an_unpriced_stage_still_shows_its_measurement():
+def test_an_unpriced_stage_still_shows_its_measurement(monkeypatch):
     """A declared stage with no modelled read set has a real time. Blanking that column made the row
-    look like a failed measurement rather than an unpriced one."""
+    look like a failed measurement rather than an unpriced one.
+
+    The model is stated multi-tower here because that is now what makes a read set unknown: two
+    subtrees and no mapping. It used to be the stage's name -- perf_target refused anything but
+    decode|prefill -- which rendered "not modelled" for a third tower on a single-tower model too."""
     T = _stress()
+    # PATCHED ON THE RENDERER'S OWN MODULE OBJECT. _stress() execs the stress file by path, which
+    # imports summary under a second identity -- `T.S is cc_optimize.summary` is False -- so patching
+    # the canonical spelling here silently does nothing and the assertion reads whatever the host's
+    # real facts file says.
+    monkeypatch.setattr(T.S, "_model_facts", lambda: {"blocks": {"audio_tower": {}, "language_model": {}}})
 
     out = T._render(stage_ms={"encode": 35.80, "generate": 138.49})
     row = next(l for l in out.splitlines() if "memory" in l and "35.80" in l)
@@ -266,18 +295,48 @@ def test_the_backbone_stops_paying_for_the_tower_it_never_reads(monkeypatch):
 
 
 def test_the_shares_are_the_checkpoints_own_split(monkeypatch):
-    """Not a guess: tensor names state the tower and the header states the bytes."""
-    r = _roofs_with_roots(monkeypatch)
+    """Not a guess: tensor names state the tower and the header states the bytes.
+
+    Asserted with NOTHING IN FLIGHT, so the comparison is against the weights alone. With a prompt
+    loaded encode's read set legitimately exceeds its share of the checkpoint -- it carries its own
+    activations, a term it was previously denied because active_bytes refused any regime it could not
+    name, and the caller turned that refusal into a weights-only figure."""
+    import cc_optimize.summary as S
+
+    monkeypatch.setattr(S, "_model_facts", lambda: dict(_MF, stage_roots=_ROOTS))
+    monkeypatch.setattr(S, "_prefill_tokens", lambda: 0)
+    monkeypatch.setattr(S, "_prefill_batch", lambda: 8)
+    monkeypatch.setattr(S, "_SECTION_BYTES", _SECS)
+    r = S._stage_roofs(_BYTES, _BW, 1, "tok/s/u", None, {"encode": 12.8, "prefill": 110.1, "decode": 6.11})
     share = r["encode"]["bytes"] / _BYTES
     assert abs(share - 1278000000 / sum(_SECS.values())) < 0.01, share
 
 
-def test_an_unmapped_third_stage_is_refused_not_guessed(monkeypatch):
+def test_the_encoder_carries_its_activations_once_it_is_no_longer_refused(monkeypatch):
+    """THE TERM THE NAME GATE COST IT. active_bytes raised for any regime but decode|prefill and every
+    caller swallows that into a weights-only base, so an audio tower doing real work was priced as
+    though it moved nothing but its parameters."""
+    with_work = _roofs_with_roots(monkeypatch)["encode"]["bytes"]
+
+    import cc_optimize.summary as S
+
+    monkeypatch.setattr(S, "_prefill_tokens", lambda: 0)
+    weights_only = S._stage_roofs(_BYTES, _BW, 1, "tok/s/u", None, {"encode": 12.8, "decode": 6.11})["encode"]["bytes"]
+    assert with_work > weights_only > 0, (with_work, weights_only)
+
+
+def test_an_unmapped_stage_is_refused_not_guessed(monkeypatch):
     """Pricing an audio encoder at the language model's byte count is the wrong divisor, not an
-    approximation. A refused ceiling beside a real measurement is more use than a confident wrong one."""
+    approximation. A refused ceiling beside a real measurement is more use than a confident wrong one.
+
+    AND THE SAME GOES FOR THE BACKBONE STAGES. This asserted that decode kept a whole-model ceiling
+    when the mapping was missing -- the "backbone fallback" -- which charges a decode token for an
+    audio tower it never reads: exactly what test_the_backbone_stops_paying_for_the_tower_it_never_
+    reads calls the bug, tolerated here because perf_target happened to accept the name `decode`.
+    With three sections and no mapping, nothing is known about any stage's read set."""
     r = _roofs_with_roots(monkeypatch, roots={})
-    assert r["encode"]["memory_ms"] is None
-    assert r["decode"]["memory_ms"] is not None, "the backbone fallback must still work"
+    for st in ("encode", "decode"):
+        assert r[st]["memory_ms"] is None, "%s was priced from a subtree nobody established" % st
 
 
 def test_there_is_one_byte_rule_and_no_per_stage_branches():

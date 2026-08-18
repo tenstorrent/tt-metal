@@ -980,20 +980,37 @@ def _roofline_stage_share(mf, stage) -> float:
         # two or more towers there is no such answer: pricing one at another's byte count is the
         # wrong divisor rather than an approximation, and a refused ceiling beside a real
         # measurement is more use to a reader than a confident wrong one.
-        if len(_section_bytes_cached()) == 1:
-            return 1.0  # one tower: every stage streams all of it, so the whole model IS its share
-        # OTHERWISE ASK THE BYTE MODEL, not a list of stage names. perf_target owns which regimes
-        # it can price and raises for the rest; a regime it prices is one whose read set IS the
-        # backbone, which is what the whole-model figure describes. Keeping a second list here
-        # meant summary.py had to be edited every time perf_target learned a regime -- and it is
-        # exactly the hardcoding that left a third tower unpriced.
-        try:
-            from agent.perf_target import active_bytes as _ab
-
-            _ab(mf or {}, regime=str(stage), seq_len=0, batch=1)
+        # HOW MANY TOWERS, FROM THE MODEL'S OWN FACTS. `blocks` is one entry per subtree with its own
+        # geometry, published by the run; the checkpoint's section map answers the same question for a
+        # model whose census never ran. Either is structural. The stage's NAME is not, and was what
+        # decided this before: perf_target accepted `decode` and `prefill`, so those two were handed
+        # the whole model and a third tower was refused, by spelling.
+        #
+        # ONE TOWER, OR NO EVIDENCE OF MORE THAN ONE: the whole model is every stage's subtree, which
+        # is the behaviour before any of this existed. Refusing on an EMPTY map would strip the
+        # ceiling off every model whose census never ran and whose checkpoint could not be read --
+        # absence of evidence charged as evidence of two towers.
+        _towers = len((mf or {}).get("blocks") or {}) or len(_section_bytes_cached())
+        if _towers <= 1:
             return 1.0
-        except Exception:  # noqa: BLE001 -- not a regime the byte model knows: refuse the share
-            return 0.0
+        # OTHERWISE REFUSE, FOR EVERY STAGE ALIKE. This asked perf_target to price the stage and
+        # read the ANSWER as the verdict -- accepted means "its read set is the backbone", raised
+        # means "refuse" -- which sounds structural and was a stage-name list wearing an exception:
+        # perf_target accepted exactly `decode` and `prefill`, so those two got the whole-model
+        # figure and everything else got nothing, by name, from a function whose comment said it was
+        # not doing that. Deleting the name gate there (it prices from `items` now, not from what a
+        # stage is called) left this handing 1.0 to every unmapped stage instead.
+        #
+        # The right answer is the one this file already argues for one test above: on a model with
+        # more than one tower, an unmapped stage has NO known read set. The whole-model figure is
+        # not a conservative approximation of it -- it charges a stage for a tower it never touches,
+        # which is the precise defect `test_the_backbone_stops_paying_for_the_tower_it_never_reads`
+        # exists to catch. A refused ceiling beside a real measurement beats a confident wrong one,
+        # and that holds for the backbone stages too, not only for the third one.
+        #
+        # A single-tower model is unaffected: it returns 1.0 above, because there the whole model
+        # genuinely IS every stage's subtree.
+        return 0.0
     _dev = (mf or {}).get("device_section_bytes") or {}
     _res = float((mf or {}).get("device_weight_bytes") or 0.0)
     _mine_dev = float(_dev.get(root) or 0.0)
@@ -1093,7 +1110,14 @@ def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None, stag
         cancel and this can never become a second opinion on them -- which is what kept decode
         excluded before, two ceilings 2.18x apart with the gate and the report disagreeing.
         """
-        base = per_dev_bytes * _stage_share(stage)
+        _share = _stage_share(stage)
+        # A REFUSED SHARE IS NOT A SMALL ONE. 0.0 means "this stage's subtree is unknown on a model
+        # with more than one", and the terms below ADD to the base -- so a refused stage came back
+        # with a ceiling built from its activations alone, a confident number resting on no weights
+        # at all. Nothing is the answer here, and the caller renders the row without a roof.
+        if _share <= 0.0:
+            return 0
+        base = per_dev_bytes * _share
         if not mf:
             return base
         # NO NAME TEST. perf_target owns which regimes it can price and raises for the rest, so ASK
@@ -1204,17 +1228,17 @@ def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None, stag
         _attn = (4.0 * _L * float(toks) * float(toks) * _H) if (_L and _H) else 0.0
         flops = ((2.0 * float(_params) * float(toks) + _attn) / tp) if _params else 0.0
         comp_ms = ((flops / peak_flops) * 1000.0) if (flops and peak_flops > 0) else None
-        _b = _bytes_for(name, toks)
-        if not _b:
-            # A THIRD TOWER IS NOT THE BACKBONE. active_bytes prices the read set of an autoregressive
-            # step; an audio encoder streams its own weights and nothing of the language model, so the
-            # params rule is the wrong divisor for it -- perf_target says exactly this under
-            # MULTI-TOWER ("a token reads the language backbone, not the audio encoder"). The read set
-            # it recorded is the only honest figure, so the roof exists when the profile carries
-            # per-stage bytes and is WITHHELD when it does not. A stage with no roof still gets its
-            # row: the measurement is real and the gap is worth seeing, which is the whole complaint
-            # against leaving it out.
-            _b = _stage_measured_bytes(profile, name)
+        # MEASURED FIRST, APPORTIONED SECOND -- which is what _roofline_stage_share's docstring has
+        # always claimed and what the order here contradicted. The profile records what a stage
+        # ACTUALLY read; a share is that same quantity estimated from the checkpoint's split. Asking
+        # the estimate first meant a recorded read set was consulted only when apportionment produced
+        # nothing at all, so the better evidence was reachable only through the worse one's failure.
+        #
+        # A THIRD TOWER IS NOT THE BACKBONE. An audio encoder streams its own weights and nothing of
+        # the language model, so the whole-model divisor is wrong for it rather than approximate. When
+        # neither a measurement nor a subtree share is available the roof is WITHHELD -- and the stage
+        # still gets its row, because the measurement is real and the gap is worth seeing.
+        _b = _stage_measured_bytes(profile, name) or _bytes_for(name, toks)
         mem_ms = (_b / (float(peak_bw_gbps) * 1e9)) * 1000.0 if _b else None
         out[name] = {
             "memory_ms": mem_ms,

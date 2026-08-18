@@ -211,7 +211,7 @@ class PerfTarget:
 def active_bytes(
     model_facts: dict,
     *,
-    regime: str = "decode",
+    regime: str = "",
     seq_len: int = 0,
     batch: int = 1,
     items: int = 0,
@@ -219,9 +219,11 @@ def active_bytes(
 ) -> int:
     """Bytes streamed from DRAM per unit of work, summed per-tensor at each tensor's real dtype.
 
-    `regime` selects the unit: "decode" is one token, "prefill" is one request of `seq_len` tokens.
-    Both stream the whole weight set exactly once -- that is why a decode token and a prefill request
-    share a floor -- and prefill adds the KV it writes plus its activations, both linear in seq_len.
+    THE UNIT IS `items`, NOT A NAME. One unit of work streams the whole weight set exactly once --
+    that is why a decode token and a prefill request share a floor -- and adds two terms that scale
+    with the work it does: the KV it writes and the activations it carries, both linear in `items`.
+    A recurring stage passes items=1, a prompt-consuming stage passes the prompt length, an encoder
+    passes its frame count. `regime` is an optional label and is not consulted.
 
     Dense: Σ tensor_bytes(all weight tensors). MoE: shared_bytes + top_k * per_expert_bytes
     (the reachable read set — NOT all experts). Optional KV term when seq_len>0.
@@ -233,8 +235,15 @@ def active_bytes(
 
     Omitting the factor made batch free: an 8-user step was costed as a 1-user step, the ceiling came
     out too high, and every at-floor verdict computed against it inherited the error."""
-    if regime not in ("decode", "prefill"):
-        raise NotImplementedError("regimes: decode | prefill (got %r)" % (regime,))
+    # NO NAME GATE. The math below has been items-driven since the KV/activation terms stopped
+    # branching on `regime == "prefill"` -- `regime` reaches nothing but this guard. It nevertheless
+    # REFUSED any stage whose name was not one of two, and the caller's `except Exception: return
+    # base` turned that refusal into a weights-only ceiling, silently: an audio encoder was priced as
+    # though it carried no activations at all, because of what it is CALLED.
+    #
+    # A stage's read set is decided by what it processes -- `seq_len`, `items`, `batch`, and the
+    # geometry of the block it runs -- every one of which the caller passes. None of them is a name.
+    # `regime` survives as a label a caller may pass for diagnostics; it is not consulted.
     mf = model_facts or {}
 
     if mf.get("is_moe"):

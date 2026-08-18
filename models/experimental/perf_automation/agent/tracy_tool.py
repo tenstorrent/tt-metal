@@ -130,7 +130,12 @@ def host_overhead_bucket(buckets: Sequence[dict[str, Any]], device_ms: float) ->
             "op_class": "host_fallback",
             "bound": "host",
             "rank": "time",
-            "regime": "decode",
+            # NOT A STAGE. This is the gap between the device ops -- host time, belonging to no
+            # phase of the model -- and it was tagged `decode`, which is a real stage name that a
+            # per-stage reader will match: summary's _stage_measured_bytes selects buckets by
+            # `stage or regime`, so a synthetic host row could be counted as a decode measurement.
+            # "na" is in the router's vocabulary for exactly this.
+            "regime": "na",
             "source": "op_gap" if host_from_gaps else "unavailable",
         },
         "lever_state": {},

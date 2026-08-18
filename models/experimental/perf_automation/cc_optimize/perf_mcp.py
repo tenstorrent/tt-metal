@@ -2430,6 +2430,7 @@ def _persist_stage_ms(
     stage_isl: dict | None = None,
     stage_ops: dict | None = None,
     stage_batch: int = 0,
+    prompt_tokens: int = 0,
 ) -> None:
     """Record trace_replay's per-stage timings so the report can show a MEASURED phase split.
 
@@ -2460,6 +2461,9 @@ def _persist_stage_ms(
                     "stages": stage_ms,
                     "paths": stage_paths or {},
                     "isl": stage_isl or {},
+                    # The prompt this run served, kept beside the per-stage counts rather than inside
+                    # them: it belongs to the request, and every stage sees it.
+                    "prompt_tokens": int(prompt_tokens or 0),
                     # THE BATCH THE RUN ACTUALLY SERVED. Parsed off TRACE_REPLAY_PATH for the
                     # scorecard and then dropped, so the report had to fall back to TT_PERF_BATCH --
                     # which carries 0, the "ask the pipeline" sentinel, and reads as 1. Every ceiling
@@ -2497,7 +2501,14 @@ def read_stage_isl(state_dir_path=None, model="", task="") -> int:
     generated test prints it after tokenizing, so it is the length that reached the model rather than
     the length the environment asked for."""
     try:
-        return int((_read_stage_doc(state_dir_path, model, task).get("isl") or {}).get("prefill") or 0)
+        _doc = _read_stage_doc(state_dir_path, model, task)
+        # THE WORKLOAD'S PROMPT LENGTH, NOT A STAGE'S. Every stage in a run sees the same prompt --
+        # the byte model takes it as `seq_len` for all of them -- so it is a property of the request.
+        # It was read out of the per-stage map under the key "prefill", which made a workload fact
+        # reachable only through one stage's name, and only for models that have a stage so called.
+        # The map keeps its old entry for docs written before this key existed.
+        _pt = int(_doc.get("prompt_tokens") or 0)
+        return _pt if _pt > 0 else int((_doc.get("isl") or {}).get("prefill") or 0)
     except Exception:  # noqa: BLE001
         return 0
 
@@ -2741,11 +2752,28 @@ def _run_full_pipeline_ms():
             # price prefill's arithmetic (2 x params x ISL), and an optimize run exports no ISL
             # variable, so the renderer was left guessing and withheld the whole PREFILL stage.
             # Observed beats declared beats defaulted, and this is the observed one.
+            # THE COUNT THE STAGE ITSELF STATED, for whatever stage stated it. TRACE_STAGE_ITEMS is
+            # printed beside TRACE_STAGE_MS by the same loop that measured the stage, so a third
+            # tower can carry a real item count instead of inheriting the fallback of 1.
+            if "TRACE_STAGE_ITEMS[" in line:
+                try:
+                    _nm = line.split("TRACE_STAGE_ITEMS[", 1)[1].split("]", 1)[0].strip()
+                    _nv = int(line.split("]=", 1)[1].split()[0])
+                    if _nm and _nv > 0:
+                        stage_isl[_nm] = _nv
+                except Exception:  # noqa: BLE001
+                    pass
             if "PERF_ISL_TOKENS=" in line:
                 try:
                     _iv = int(line.split("PERF_ISL_TOKENS=", 1)[1].split()[0])
                     if _iv > 0:
-                        stage_isl["prefill"] = _iv
+                        # LEGACY, AND DELIBERATELY NOT OVERRIDING. This was the only writer of this
+                        # map and it hardcoded the key, so "prefill" was the one stage in any model
+                        # that could have an item count -- the reader has taken a {stage: items} map
+                        # since it was written. The marker itself is still the right answer for a
+                        # prompt-consuming stage in a generated test that predates _trace_items, so
+                        # it stays as the default and yields to a count the stage stated itself.
+                        stage_isl.setdefault("prefill", _iv)
                 except Exception:  # noqa: BLE001
                     pass
             if "TRACE_PER_TOKEN_MS=" in line:
@@ -2826,7 +2854,7 @@ def _run_full_pipeline_ms():
     if per_tokens:
         if headline_units:
             os.environ["PERF_MCP_LAST_HEADLINE_UNIT"] = headline_units[-1]
-        _persist_stage_ms(stage_ms, stage_paths, stage_isl, stage_ops, batch)
+        _persist_stage_ms(stage_ms, stage_paths, stage_isl, stage_ops, batch, int(stage_isl.get("prefill") or 0))
         return statistics.median(per_tokens), "trace", None, decode_path
     if walls:
         return statistics.median(walls), "eager", None, None

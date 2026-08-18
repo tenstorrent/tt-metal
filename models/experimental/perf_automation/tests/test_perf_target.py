@@ -161,13 +161,20 @@ def test_prefill_bytes_are_costed_and_unknown_regimes_are_not():
     prevent."""
     assert pt.active_bytes({"total_params": 1}, regime="prefill") > 0
 
-    for call in (lambda: pt.active_bytes({"total_params": 1}, regime="nonsense"), pt.prefill_ceiling):
-        raised = None
-        try:
-            call()
-        except NotImplementedError as exc:
-            raised = exc
-        assert raised is not None, call
+    # THE NAME IS NOT CONSULTED, so an unknown one is costed rather than refused. This used to raise,
+    # on the reasoning that accepting anything would let a typo return a decode figure -- true while
+    # `regime` selected the math, and false since the KV and activation terms started keying on
+    # `items`. What the refusal actually did was price any THIRD stage as weights-only, because the
+    # caller catches and falls back: an audio encoder lost its activation term for being called
+    # "encode". A typo now cannot change the number, which is asserted directly below.
+    assert pt.active_bytes({"total_params": 1}, regime="nonsense") > 0
+
+    raised = None
+    try:
+        pt.prefill_ceiling()
+    except NotImplementedError as exc:
+        raised = exc
+    assert raised is not None, "prefill_ceiling"
 
 
 # --- junk inputs must DEGRADE, never crash or invert (found by fuzzing the ceiling path) ---

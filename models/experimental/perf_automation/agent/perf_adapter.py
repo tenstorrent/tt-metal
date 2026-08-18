@@ -208,13 +208,19 @@ class PipelineDecodeAdapter:
 class _Stage:
     """One profilable unit emit-e2e emitted: a name and a host-op-free traceable step."""
 
-    __slots__ = ("name", "step", "self_traced", "trace_path")
+    __slots__ = ("name", "step", "self_traced", "trace_path", "items")
 
-    def __init__(self, name, step, self_traced=False, trace_path=None):
+    def __init__(self, name, step, self_traced=False, trace_path=None, items=0):
         self.name = name
         self.step = step
         self.self_traced = bool(self_traced)
         self.trace_path = trace_path
+        # HOW MANY ITEMS ONE CALL RETIRES: tokens for a prompt-consuming stage, frames for an
+        # encoder, 1 for a recurring step. The compute ceiling is 2 x params x THIS, so a stage that
+        # cannot state it is priced at one item -- which is right for a recurring stage and is why
+        # the audio encoder's compute roof read 0.041 ms against a measurement in the tens of ms.
+        # 0 means "not stated", which the reader turns into 1; it is not a claim of one.
+        self.items = max(0, int(items or 0))
 
 
 class PipelineStageAdapter:
@@ -314,12 +320,25 @@ class PipelineStageAdapter:
             # omitting it here meant declaring PIPELINE_STAGES turned a working self-traced pipeline
             # into a nested-capture TT_FATAL.
             _selft = bool(getattr(p, "%s_self_traced" % name, None) or getattr(p, "self_traced", False))
+            # <stage>_trace_items() -- the same optional, model-agnostic seam as _trace_inputs, for
+            # the one number the compute ceiling needs and nothing else could supply. Only the
+            # pipeline knows what one call of this stage retires: an encoder's frame count is not the
+            # prompt length and is not derivable from the byte model, which is why every stage but
+            # the prompt-consuming one was priced at a single item. Absent, nothing changes.
+            _n = 0
+            _items_fn = getattr(p, "%s_trace_items" % name, None)
+            if callable(_items_fn):
+                try:
+                    _n = max(0, int(_items_fn() or 0))
+                except Exception:  # noqa: BLE001 -- an unstated count is 0, never a broken run
+                    _n = 0
             stages.append(
                 _Stage(
                     name,
                     step,
                     _selft,
                     getattr(p, "trace_path", None) if _selft else None,
+                    _n,
                 )
             )
         if stages:

@@ -79,13 +79,20 @@ def test_the_extra_terms_scale_with_the_prompt():
     assert abs((b - w) - 8 * (a - w)) < 0.02 * (b - w), (a, b, w)
 
 
-def test_an_unknown_regime_is_still_refused():
-    """Accepting anything would let a typo silently return a decode figure."""
-    try:
-        PT.active_bytes(MF, regime="denoise", seq_len=128)
-    except NotImplementedError:
-        return
-    raise AssertionError("an unknown regime must not be costed")
+def test_a_stage_is_costed_by_what_it_processes_not_by_what_it_is_called():
+    """THE REFUSAL WAS THE BUG. active_bytes raised on any regime but decode|prefill, and every
+    caller wraps it in `except Exception: return base` -- so a third stage did not get an error, it
+    got a weights-only ceiling, silently. Voxtral's audio encoder was priced with no activation term
+    at all because of its NAME, while the math it needed had been items-driven for weeks.
+
+    Two properties, together: an unknown name is costed, and the name changes nothing."""
+    assert PT.active_bytes(MF, regime="denoise", seq_len=128, items=128) > 0
+
+    same = {
+        PT.active_bytes(MF, regime=r, seq_len=128, items=128, batch=2)
+        for r in ("decode", "prefill", "encode", "denoise", "", "TYPO")
+    }
+    assert len(same) == 1, "the stage's NAME moved its byte count: %s" % same
 
 
 def test_the_facts_producer_emits_the_geometry_the_prefill_term_needs():
