@@ -2666,30 +2666,31 @@ std::map<AsicPosition, std::set<tt::tt_metal::AsicID>> build_asic_positions_map(
         }
     }
 
-    // Restrict each pinned logical mesh to physical meshes that contain the named host's ASICs.
-    for (const auto& [logical_mesh_id, host_to_rank] : config.host_rank_pinnings) {
+    // Restrict each pinned logical mesh to physical meshes wholly backed by the named host.
+    for (const auto& [logical_mesh_id, hostname] : config.mesh_host_pinnings) {
         std::set<MeshId> allowed_physical_meshes;
-        for (const auto& [hostname, _] : host_to_rank) {
-            for (const auto& [physical_mesh_id, physical_mesh_graph] : physical_graph.mesh_adjacency_graphs_) {
-                for (const auto& asic_id : physical_mesh_graph.get_nodes()) {
-                    auto asic_hostname = hostname_for_asic_from_hostname_map(asic_id, config.hostname_to_asics);
-                    if (asic_hostname.has_value() && *asic_hostname == hostname) {
-                        allowed_physical_meshes.insert(physical_mesh_id);
-                        break;
-                    }
-                }
+        for (const auto& [physical_mesh_id, physical_mesh_graph] : physical_graph.mesh_adjacency_graphs_) {
+            const auto& asic_ids = physical_mesh_graph.get_nodes();
+            const bool entirely_on_pinned_host =
+                !asic_ids.empty() &&
+                std::all_of(asic_ids.begin(), asic_ids.end(), [&config, &hostname](const tt::tt_metal::AsicID asic_id) {
+                    const auto asic_hostname = hostname_for_asic_from_hostname_map(asic_id, config.hostname_to_asics);
+                    return asic_hostname.has_value() && *asic_hostname == hostname;
+                });
+            if (entirely_on_pinned_host) {
+                allowed_physical_meshes.insert(physical_mesh_id);
             }
         }
         if (allowed_physical_meshes.empty()) {
             TT_THROW(
-                "Rank pinning: no physical mesh contains ASICs on the host(s) pinned to logical mesh {}. "
-                "Check that the pinned hostnames appear in physical system discovery.",
+                "Mesh pinning: no physical mesh is wholly backed by the host pinned to logical mesh {}. "
+                "Check the pinned hostname and physical grouping descriptor.",
                 *logical_mesh_id);
         }
         if (!inter_mesh_constraints.add_required_constraint(logical_mesh_id, allowed_physical_meshes)) {
             TT_THROW(
-                "Rank pinning: pinning logical mesh {} to its named host(s) conflicts with the other required "
-                "constraints (MGD pinnings or galaxy corner pinnings). Relax the rank pinning file or the MGD "
+                "Mesh pinning: pinning logical mesh {} to its named host conflicts with the other required "
+                "constraints (MGD pinnings or galaxy corner pinnings). Relax the pinning file or the MGD "
                 "pinnings.",
                 *logical_mesh_id);
         }

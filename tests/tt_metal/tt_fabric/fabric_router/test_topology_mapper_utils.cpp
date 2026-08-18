@@ -1160,6 +1160,49 @@ TEST_F(TopologyMapperUtilsTest, Pinning_MapMultiMeshToPhysical_MeshLevelPinnings
     }
 }
 
+TEST_F(TopologyMapperUtilsTest, MeshHostPinning_RequiresPhysicalMeshWhollyOnPinnedHost) {
+    using namespace ::tt::tt_fabric;
+
+    const MeshId logical_mesh{0};
+    const MeshId mixed_physical_mesh{0};
+    const MeshId local_physical_mesh{1};
+    const std::vector<FabricNodeId> logical_nodes = {FabricNodeId(logical_mesh, 0), FabricNodeId(logical_mesh, 1)};
+
+    LogicalMultiMeshGraph logical;
+    logical.mesh_adjacency_graphs_[logical_mesh] = AdjacencyGraph<FabricNodeId>(build_chain_adjacency(logical_nodes));
+    logical.mesh_level_graph_ = AdjacencyGraph<MeshId>({{logical_mesh, {}}});
+
+    const std::vector<tt::tt_metal::AsicID> mixed_asics = {make_asic(100), make_asic(101)};
+    const std::vector<tt::tt_metal::AsicID> local_asics = {make_asic(200), make_asic(201)};
+    PhysicalMultiMeshGraph physical;
+    physical.mesh_adjacency_graphs_[mixed_physical_mesh] =
+        AdjacencyGraph<tt::tt_metal::AsicID>(build_chain_adjacency(mixed_asics));
+    physical.mesh_adjacency_graphs_[local_physical_mesh] =
+        AdjacencyGraph<tt::tt_metal::AsicID>(build_chain_adjacency(local_asics));
+    physical.mesh_level_graph_ = AdjacencyGraph<MeshId>({{mixed_physical_mesh, {}}, {local_physical_mesh, {}}});
+
+    std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> fabric_node_id_to_mesh_rank;
+    for (const auto& node : logical_nodes) {
+        fabric_node_id_to_mesh_rank[logical_mesh][node] = rank0_;
+    }
+    const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
+
+    TopologyMappingConfig config;
+    config.inter_mesh_validation_mode = ConnectionValidationMode::RELAXED;
+    config.hostname_to_asics["host-A"] = {mixed_asics[0], local_asics[0], local_asics[1]};
+    config.hostname_to_asics["host-B"] = {mixed_asics[1]};
+    config.mesh_host_pinnings[logical_mesh] = "host-A";
+
+    const auto result =
+        map_multi_mesh_to_physical(logical, physical, config, asic_id_to_mesh_rank, fabric_node_id_to_mesh_rank);
+
+    ASSERT_TRUE(result.success) << result.error_message;
+    EXPECT_THAT(
+        std::set<tt::tt_metal::AsicID>(
+            {result.fabric_node_to_asic.at(logical_nodes[0]), result.fabric_node_to_asic.at(logical_nodes[1])}),
+        ::testing::ContainerEq(std::set<tt::tt_metal::AsicID>(local_asics.begin(), local_asics.end())));
+}
+
 // =============================================================================
 // Failure Case Tests
 // =============================================================================

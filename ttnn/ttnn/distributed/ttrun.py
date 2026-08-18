@@ -2677,7 +2677,7 @@ def new_mode_flow(
         bare: If True, disable tt-run defaults
         tcp_interface: Network interface for MPI TCP communication
         force_rediscovery: If True, always run Phase 1 and refresh cache (skip cache hit)
-        rank_pinning_file: Optional rank pinning YAML pinning a subset of ranks to specific hosts
+        rank_pinning_file: Optional pinning YAML mapping a subset of mesh IDs to specific hosts
     """
     program = ctx.args
 
@@ -2946,7 +2946,7 @@ def new_mode_flow(
     "--rank-pinning-file",
     type=click.Path(path_type=Path),
     required=False,
-    help="New mode only: optional YAML pinning specific ranks to specific hosts. Ranks not listed are placed "
+    help="New mode only: optional YAML pinning specific mesh IDs to hosts. Meshes not listed are placed "
     "automatically by the auto-mapper. Requires --mesh-graph-descriptor.",
 )
 @click.option(

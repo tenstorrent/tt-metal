@@ -147,6 +147,30 @@ class TestCommandLineArguments:
         assert result.exit_code != 0
         assert "--rank-pinning-file requires new mode" in result.output
 
+    def test_rank_pinning_file_rejected_with_multi_mgd_mapping(self, runner, tmp_path):
+        """Rank pinning currently has an unambiguous mesh-id space only for single-MGD mode."""
+        mapping = tmp_path / "mgd_mapping.yaml"
+        mapping.write_text("subcontext_id_to_mesh_graph_descriptor:\n  0: mesh.textproto\n")
+        pins = tmp_path / "pinned_ranks.yaml"
+        pins.write_text("rank_pinnings: []\n")
+
+        result = runner.invoke(
+            main,
+            [
+                "--mesh-graph-descriptor-mapping",
+                str(mapping),
+                "--rank-pinning-file",
+                str(pins),
+                "--hosts",
+                "node1",
+                "echo",
+                "test",
+            ],
+        )
+
+        assert result.exit_code != 0
+        assert "currently supports only a single MGD" in result.output
+
     def test_hosts_rejects_duplicates(self, runner, sample_mesh_graph_descriptor):
         """Duplicate hostnames in --hosts are rejected."""
         result = runner.invoke(
@@ -299,7 +323,7 @@ class TestPhase2Helpers:
         mgd_path = temp_dir / "mesh.textproto"
         mgd_path.touch()
         pinning_file = temp_dir / "pinned_ranks.yaml"
-        pinning_file.write_text("rank_pinnings:\n  - rank: 0\n    host: node1\n")
+        pinning_file.write_text("rank_pinnings:\n  - mesh_id: 0\n    host: node1\n")
         output_dir = temp_dir / "output"
 
         cmd = build_generate_rank_bindings_mpi_cmd(
@@ -755,11 +779,11 @@ class TestPhase1CacheId:
 
         without_file = compute_phase1_cache_id(mgd, sorted(["h1"]), None)
 
-        pins.write_text("rank_pinnings:\n  - rank: 0\n    host: h1\n")
+        pins.write_text("rank_pinnings:\n  - mesh_id: 0\n    host: h1\n")
         with_file = compute_phase1_cache_id(mgd, sorted(["h1"]), None, pins)
         assert with_file != without_file
 
-        pins.write_text("rank_pinnings:\n  - rank: 0\n    host: h2\n")
+        pins.write_text("rank_pinnings:\n  - mesh_id: 0\n    host: h2\n")
         edited = compute_phase1_cache_id(mgd, sorted(["h1"]), None, pins)
         assert edited != with_file
 
