@@ -469,7 +469,7 @@ def test_sigmoid_gated_rms_norm_exact_math_changes_program_and_output(device: tt
     ("compute_kernel_config", "message"),
     [
         (
-            ttnn.WormholeComputeKernelConfig(
+            ttnn.types.BlackholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.HiFi4,
                 packer_l1_acc=True,
             ),
