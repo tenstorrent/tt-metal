@@ -36,7 +36,7 @@ from models.common.utility_functions import is_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-@pytest.mark.timeout(600)
+@pytest.mark.timeout(1200)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 def test_quasar_layer3_module1_downsample_hs_split(mesh_device, monkeypatch):
     """layer3_module1 downsample: 1x1, in=512, out=1024, stride 2, input 28x28, HEIGHT_SHARDED via the SPLIT

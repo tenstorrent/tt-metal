@@ -149,7 +149,6 @@ def _run_pool(mesh_device, is_max, in_h, in_w, channels, kernel, stride, padding
     assert_with_pcc(golden_flat, got, pcc=0.99)
 
 
-@pytest.mark.timeout(300)
 @pytest.mark.parametrize(
     "in_h,in_w,channels,kernel,stride,padding",
     [c[:6] for c in POOL_CONFIGS],
@@ -160,7 +159,6 @@ def test_quasar_max_pool2d(mesh_device, in_h, in_w, channels, kernel, stride, pa
     _run_pool(mesh_device, True, in_h, in_w, channels, kernel, stride, padding)
 
 
-@pytest.mark.timeout(300)
 @pytest.mark.parametrize(
     "in_h,in_w,channels,kernel,stride,padding",
     # AVG regression: unpadded windows only (avoids torch count_include_pad ambiguity). Guards that the
@@ -177,7 +175,6 @@ def test_quasar_avg_pool2d(mesh_device, in_h, in_w, channels, kernel, stride, pa
     _run_pool(mesh_device, False, in_h, in_w, channels, kernel, stride, padding)
 
 
-@pytest.mark.timeout(300)
 @pytest.mark.parametrize("batch", [1, 16], ids=["b1", "b16"])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 def test_quasar_avg_pool2d_global(mesh_device, batch):

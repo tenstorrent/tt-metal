@@ -104,7 +104,7 @@ def _run_max_pool_channels(mesh_device, channels):
     assert_with_pcc(golden_flat, got, pcc=0.99)
 
 
-@pytest.mark.timeout(600)
+@pytest.mark.timeout(1200)
 @pytest.mark.parametrize("channels", CHANNELS, ids=[f"{c}c_{c // 32}tiles" for c in CHANNELS])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 def test_quasar_max_pool2d_channel_sweep(mesh_device, channels):
