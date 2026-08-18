@@ -96,8 +96,7 @@ class TtMoEGateConfig:
             #
             # The None entries below were tuned at 4096 and carry per_core_M=2, which is why 640 --
             # the production depth -- needs its own entries: at 640 per_core_M=2 splits 20 M-tiles
-            # over 10 cores instead of 20. K3's per_core_M was already 1 (MAX_GATE_SEQ_LEN_PER_CHIP
-            # keeps it under 3520), so its 640 entry exists only for out_block_w.
+            # over 10 cores instead of 20.
             (None, DeepSeekV3Config.EMB_SIZE // 4, DeepSeekV3Config.NUM_ROUTED_EXPERTS): (
                 ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                     compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
@@ -128,21 +127,28 @@ class TtMoEGateConfig:
             ),
             # 640 tokens/chip: 20 M-tiles, so per_core_M=1 spreads them over 20 cores rather than 10.
             #
-            # out_block_w and out_subblock_w are swept, not inherited: out_block_w wants to be the
-            # widest divisor of per_core_N that still builds (12 fails L1 allocation for 384 experts,
-            # 14 and 28 for 896), and out_subblock_w wants to be NARROW, not the widest the dest
-            # registers allow. Measured per call on a Blackhole Galaxy at 640 tokens/chip, medians of
-            # 7 rounds visited in rotated order (a single-pass sweep drifts enough to invert the
-            # ranking), every candidate at PCC 0.999999. Best three per model plus the alternatives:
-            #     256 experts  (8,1) 51.2  (8,2) 51.2  (8,4) 51.7 | default 54.7 | (4,1) 57.1 | shipped 89.3
-            #     384 experts  (6,1) 77.9  (6,2) 78.2  (6,3) 78.5 | (4,1) 84.2 | shipped 130.0 | default 436.5
-            #     896 experts  (7,1) 177.6 | (4,1) 194.3 | shipped 198.8 | default 437.6
-            # Do not "fix" out_subblock_w back up to 4 to match TTNN's own area-first heuristic
-            # (SUBBLOCK_HW_CHOICES): it is the slowest legal choice at every width measured.
+            # The other three block sizes are measured, not derived, and none of them wants the value
+            # a first reading suggests:
+            #   in0_block_w wants roughly a QUARTER of K, not all of it. Kernel time is U-shaped in
+            #   it, and full-K is the slow end: a single K block leaves no weight read to overlap
+            #   with math, and its L1 footprint bars the widest out_block_w below.
+            #   out_block_w trades against in0_block_w for L1, so the two are not separable: 12 (384
+            #   experts) and 14 (896) only fit at in0_block_w <= 14, and 28 (896) only at <= 8. The
+            #   widest that fits is not automatically fastest -- (8,28) fits and still loses to
+            #   (14,14) -- so the pair has to be swept together.
+            #   out_subblock_w wants to be NARROW, not the widest the dest registers allow. Do not
+            #   "fix" it up to 4 to match TTNN's own area-first heuristic (SUBBLOCK_HW_CHOICES): it
+            #   is the slowest legal choice at every width measured.
+            # DEVICE KERNEL DURATION per call on a Blackhole QuietBox 2, medians of 15 rounds visited
+            # in rotated order (a single-pass sweep drifts enough to invert the ranking), every
+            # candidate at PCC >= 0.99998. (in0_block_w, out_block_w) at out_subblock_w=1:
+            #     256 experts  (14,8) 37.3 | (28,8) 41.9 | (56,8) 49.9 | default 53.0
+            #     384 experts  (14,12) 54.4 | (14,6) 57.6 | (56,6) 77.2 | default 434.9
+            #     896 experts  (14,14) 125.1 | (14,7) 130.5 | (56,7) 175.7 | default 435.1
             (GATE_PRODUCTION_SP_DIM, DeepSeekV3Config.EMB_SIZE // 4, DeepSeekV3Config.NUM_ROUTED_EXPERTS): (
                 ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                     compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
-                    in0_block_w=56,
+                    in0_block_w=14,
                     out_subblock_h=1,
                     out_subblock_w=1,
                     out_block_h=1,
@@ -156,11 +162,11 @@ class TtMoEGateConfig:
             (GATE_PRODUCTION_SP_DIM, KimiK26Config.EMB_SIZE // 4, KimiK26Config.NUM_ROUTED_EXPERTS): (
                 ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                     compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
-                    in0_block_w=56,
+                    in0_block_w=14,
                     out_subblock_h=1,
                     out_subblock_w=1,
                     out_block_h=1,
-                    out_block_w=6,
+                    out_block_w=12,
                     per_core_M=1,
                     per_core_N=12,
                     fuse_batch=True,
@@ -170,32 +176,30 @@ class TtMoEGateConfig:
             (GATE_PRODUCTION_SP_DIM, KimiK3Config.EMB_SIZE // 4, KimiK3Config.NUM_ROUTED_EXPERTS): (
                 ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                     compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
-                    in0_block_w=56,
+                    in0_block_w=14,
                     out_subblock_h=1,
                     out_subblock_w=1,
                     out_block_h=1,
-                    out_block_w=7,
+                    out_block_w=14,
                     per_core_M=1,
                     per_core_N=28,
                     fuse_batch=True,
                     mcast_in0=False,
                 )
             ),
-            # The four below are these models' only entries at any depth; without them all four fell
-            # back to TTNN's default tiling at 640. Swept like the three above, but timed with the
-            # DEVICE profiler (python -m tracy -r -p): a call here is ~130us of enqueue overhead
-            # around a 12-43us kernel, so host wall time cannot rank candidates. DEVICE KERNEL
-            # DURATION, medians of 11 rotated rounds, PCC >= 0.999, spread 0.1-0.7us:
-            #   glm_5_1      K/dev 1536, 256 exp  (8,1) 42.6 | (4,1) 45.4 | default 46.3 | (1,1) 52.0
-            #   dsv4_flash   K/dev 1024, 256 exp  (8,1) 29.0 | default 29.5 | (4,1) 30.9 | (1,1) 37.8
-            #   minimax_m2_7 K/dev  768, 256 exp  (8,1) 22.7 | default 23.3 | (4,1) 24.1 | (1,1) 30.6
-            #   gpt_oss_120b K/dev  736, 128 exp  (4,1) 11.8 | default 12.5 | (2,1) 13.1 | (1,1) 14.4
-            # Widest out_block_w wins and out_subblock_w wants to be narrow, as at 4096; (4,1) is
-            # slower than TTNN's default at every 256-expert shape, as it was there too.
+            # The four below are these models' only entries at any depth; without them all four fall
+            # back to TTNN's default tiling at 640. Same three rules as above, and timed the same way.
+            # These kernels are 12-46us, small enough that per-call host overhead swamps the spread
+            # between candidates, so only DEVICE KERNEL DURATION ranks them. (in0_block_w, out_block_w):
+            #   glm_5_1      K/dev 1536, 256 exp  (12,8) 32.7 | (24,8) 36.2 | (48,8) 42.8 | default 45.7
+            #   dsv4_flash   K/dev 1024, 256 exp  (8,8) 24.6 | (16,8) 26.1 | (32,8) 29.0 | default 31.5
+            #   minimax_m2_7 K/dev  768, 256 exp  (8,8) 20.1 | (4,8) 22.1 | (24,8) 22.7 | default 24.5
+            #   gpt_oss_120b K/dev  736, 128 exp  (23,4) 12.4 | default 21.8
+            # gpt_oss is the one model with no in0_block_w to choose: 736/32 = 23 tiles is prime.
             (GATE_PRODUCTION_SP_DIM, GLM51Config.EMB_SIZE // 4, GLM51Config.NUM_ROUTED_EXPERTS): (
                 ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                     compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
-                    in0_block_w=48,
+                    in0_block_w=12,
                     out_subblock_h=1,
                     out_subblock_w=1,
                     out_block_h=1,
@@ -209,7 +213,7 @@ class TtMoEGateConfig:
             (GATE_PRODUCTION_SP_DIM, MiniMaxM27Config.EMB_SIZE // 4, MiniMaxM27Config.NUM_ROUTED_EXPERTS): (
                 ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                     compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
-                    in0_block_w=24,
+                    in0_block_w=8,
                     out_subblock_h=1,
                     out_subblock_w=1,
                     out_block_h=1,
@@ -227,7 +231,7 @@ class TtMoEGateConfig:
             ): (
                 ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                     compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
-                    in0_block_w=32,
+                    in0_block_w=8,
                     out_subblock_h=1,
                     out_subblock_w=1,
                     out_block_h=1,
