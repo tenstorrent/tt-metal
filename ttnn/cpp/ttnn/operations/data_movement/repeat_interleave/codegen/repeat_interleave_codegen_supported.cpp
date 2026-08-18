@@ -100,11 +100,15 @@ bool supported_by_codegen(
 
     if (input.layout() == Layout::TILE) {
         // Both the host-side page map and the program factory's CB page size are built from the
-        // 32x32 constants, so an off-default tile gives the kernels a page count and a page size
-        // the buffer does not have. Declining is not a correctness guarantee for the case, only a
-        // refusal to claim support this factory does not have.
+        // 32x32 constants, so an off-default tile shape gives the kernels a page count and a page
+        // size the buffer does not have. A transposed tile keeps both but swizzles the datums
+        // within the page, and compute_output_specs() derives the output tile from the layout
+        // alone, so the copied pages would come back labelled untransposed. Declining is not a
+        // correctness guarantee for either case, only a refusal to claim support this factory
+        // does not have.
         const auto tile = input.tensor_spec().tile();
-        if (tile.get_height() != tt::constants::TILE_HEIGHT || tile.get_width() != tt::constants::TILE_WIDTH) {
+        if (tile.get_height() != tt::constants::TILE_HEIGHT || tile.get_width() != tt::constants::TILE_WIDTH ||
+            tile.get_transpose_within_face() || tile.get_transpose_of_faces()) {
             return false;
         }
         // The last two dims subdivide a 32x32 tile, and the reader replicates whole tile pages:

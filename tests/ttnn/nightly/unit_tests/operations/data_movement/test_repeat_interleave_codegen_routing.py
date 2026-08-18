@@ -131,17 +131,25 @@ def test_forced_codegen_refuses_out_of_scope_case(device, expect_error):
         _force_codegen(xt, 2, 3)
 
 
-# Hand-added: tile-geometry routing. The host-side page map and the program factory's CB page size
-# are both built from the 32x32 constants, so a tensor carrying any other tile has to reach native.
-# dim 1 is above the two dims the tile subdivides and the dtype/layout are in scope, so only the
-# tile geometry can drive the route.
+# Hand-added: tile-geometry routing, over both axes a tile varies on. An off-default *shape* changes
+# the page count and the page size, which the host-side page map and the program factory's CB both
+# take from the 32x32 constants. A transposed 32x32 leaves those two quantities alone -- so no
+# page-geometry check can see it -- but the datums inside the page are swizzled, and the codegen
+# output spec is derived from the layout alone and so comes back with the flags cleared. Both have
+# to reach native. dim 1 is above the two dims the tile subdivides and the dtype/layout are in
+# scope, so only the tile can drive the route.
 #
-# Route only, no value assertion: native is itself unreliable for a non-default tile -- two native
-# calls on the same input disagree with each other, and both differ from torch. This port owes a
-# refusal, not a matching answer, so native is not a value reference here.
-def test_repeat_interleave_non_default_tile_routes_to_native(device):
+# Route only, no value assertion: native is itself unreliable for either tile -- for 16x16 two
+# native calls on the same input disagree with each other, and for a transposed 32x32 native and
+# codegen both differ from torch. This port owes a refusal, not a matching answer.
+_OFF_DEFAULT_TILES = [ttnn.Tile([16, 16]), ttnn.Tile([32, 32], transpose_tile=True)]
+_OFF_DEFAULT_TILE_IDS = ["shape_16x16", "transposed_32x32"]
+
+
+@pytest.mark.parametrize("tile", _OFF_DEFAULT_TILES, ids=_OFF_DEFAULT_TILE_IDS)
+def test_repeat_interleave_non_default_tile_routes_to_native(device, tile):
     x = _make_input([1, 2, 32, 64], ttnn.bfloat16)
-    xt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, tile=ttnn.Tile([16, 16]))
+    xt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
     # Primes the cache with the native program, so an unchanged count means native served the call.
     _force_native(xt, 2, 1)
     entries_before = device.num_program_cache_entries()
@@ -150,8 +158,9 @@ def test_repeat_interleave_non_default_tile_routes_to_native(device):
     assert device.num_program_cache_entries() == entries_before, msg
 
 
-def test_forced_codegen_refuses_non_default_tile(device, expect_error):
+@pytest.mark.parametrize("tile", _OFF_DEFAULT_TILES, ids=_OFF_DEFAULT_TILE_IDS)
+def test_forced_codegen_refuses_non_default_tile(device, expect_error, tile):
     x = _make_input([1, 2, 32, 64], ttnn.bfloat16)
-    xt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, tile=ttnn.Tile([16, 16]))
+    xt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
     with expect_error(RuntimeError, "does not support"):
         _force_codegen(xt, 2, 1)
