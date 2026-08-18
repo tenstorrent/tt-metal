@@ -55,12 +55,12 @@ def main():
 
     import soundfile as sf
 
-    # 1) Load + warmup (compile all programs + capture the GPT decode trace), then the voice.
+    # 1) Load + warmup (compile all programs + capture the traces), then the voice.
     tts = XttsV2(ckpt_path=args.ckpt)
 
     bar = "=" * 72
     print(bar)
-    print("Warming up (first run is slow: compile all programs + decode trace capture)")
+    print("Warming up (first run is slow: compile all programs + trace captures)")
     print(bar)
     t0 = time.time()
     tts.warmup()

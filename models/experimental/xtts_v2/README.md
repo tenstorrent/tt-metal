@@ -23,10 +23,11 @@ All four neural blocks run on device; the text/audio front-end and token samplin
 | 1 | Conditioning encoder + Perceiver resampler → `gpt_cond_latent` `[1,32,1024]` | device | fp32 | > 0.999 |
 | 2 | ResNet speaker encoder → d-vector `[1,512,1]` | device | bf16 | > 0.99 |
 | 3 | GPT decoder (30 layers): one-shot parallel **prefill** + Metal-Traced KV-cached **decode** | device | bf16 | > 0.999 |
-| 4 | HiFi-GAN vocoder → waveform | device | fp32 | > 0.99 |
+| 4 | HiFi-GAN vocoder → waveform, at one of 4 bucketed lengths | device | fp32 | > 0.99 |
 
-The GPT decode step is captured as a single Metal Trace at warmup and replayed for every
-token of every request (no host dispatch overhead). Sampling (mel head, repetition penalty,
+The GPT decode step and the vocoder are captured as Metal Traces at warmup and replayed (no
+host dispatch overhead) — the decode step for every token of every request, the vocoder once
+per request at whichever bucket fits the utterance. Sampling (mel head, repetition penalty,
 temperature/top-k/top-p) runs on host between traced steps with coqui's default parameters.
 
 ## Dependencies
@@ -78,7 +79,7 @@ many requests:
 from models.experimental.xtts_v2.tt.ttnn_xtts_model import XttsV2
 
 tts = XttsV2()                        # opens the device, loads + preprocesses weights
-tts.warmup()                          # once: compile all programs + capture the decode trace
+tts.warmup()                          # once: compile all programs + capture the traces
 voice = tts.compute_voice(wav, sr)    # once per speaker: reference clip -> Voice
 audio = tts.generate("Hello!", voice, seed=0)  # torch [1,1,N] float @ 24 kHz; repeatable
 tts.close()
@@ -109,12 +110,12 @@ Measured on Wormhole N150 (warm, program cache + trace in place):
 | `compute_voice` | ~2–6 s | once per speaker (Blocks 1+2); the first clip of a new length pays one-time conv compiles |
 | GPT prefill | ~18–30 ms | one-shot (18 ms @ 61-token prompt; ~30 ms @ ≈425) |
 | GPT decode | ~10 ms/token | traced; each token = 46.4 ms of audio → **~4.7x real-time** decode |
-| HiFi-GAN vocoder | ~1.2 s | fixed-length (compiled once at the 605-code model cap) |
+| HiFi-GAN vocoder | 0.18–0.71 s | traced, per length bucket: 0.18 s ≤ 7 s of audio … 0.71 s ≤ 28 s |
 
-A short sentence (~3.7 s of audio) generates end-to-end in ~2.0 s (~1.9x real-time — the
-fixed-length vocoder dominates short utterances; longer utterances amortize it). One-time
-warmup (program compiles + trace capture) takes ~20 s with a hot kernel JIT cache, longer
-on a first-ever run when kernels build from scratch.
+End to end at seed 0, with a 5.4 s reference clip: 3.16 s of audio in 0.87 s (**3.6x
+real-time**), 10.26 s in 2.60 s (**4.0x**), 27.07 s in 6.79 s (**4.0x**). One-time warmup
+(program compiles + trace captures) takes ~22 s with a hot kernel JIT cache, longer on a
+first-ever run when kernels build from scratch.
 
 ## Known limitations
 

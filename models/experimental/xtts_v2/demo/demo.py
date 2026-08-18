@@ -43,7 +43,7 @@ def run(text, ref, out="out.wav", seed=None, language="en", ckpt=None, sr_hint=2
 
     bar = "=" * 72
     print(bar)
-    print("Warming up (compile all programs + capture the GPT decode Metal Trace) ...")
+    print("Warming up (compile all programs + capture the Metal Traces) ...")
     print(bar)
     t0 = time.time()
     tts.warmup()
@@ -78,7 +78,7 @@ def run(text, ref, out="out.wav", seed=None, language="en", ckpt=None, sr_hint=2
         f"  decode           {tm['decode_s']:8.2f} s   "
         f"({tm['codes']} codes, {tm['decode_ms_per_token']:.1f} ms/token)"
     )
-    print(f"  vocoder          {tm['vocoder_s']:8.2f} s   (fixed-length HiFi-GAN)")
+    print(f"  vocoder          {tm['vocoder_s']:8.2f} s   (traced HiFi-GAN at its length bucket)")
     print(f"  generate total   {t_gen:8.2f} s   ({dur / t_gen:.1f}x real-time)")
 
     tts.close()

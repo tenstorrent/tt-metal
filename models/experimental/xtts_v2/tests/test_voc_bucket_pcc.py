@@ -4,14 +4,16 @@
 
 """Tests for the request path's vocoder length bucketing (tt/ttnn_xtts_model.py).
 
-The vocoder is compiled at a fixed set of frame counts (VOC_BUCKETS); each request pads z up
-to its bucket and trims the waveform back. Two properties: the bucket a length maps to, and
-that the padding is inert — the trimmed waveform must not depend on how much zero padding
-followed it, which is what lets a short utterance skip the 2634-frame cap.
+The vocoder is compiled and traced at a fixed set of frame counts (VOC_BUCKETS); each request
+pads z up to its bucket and trims the waveform back. Three properties: the bucket a length maps
+to, that the padding is inert (the trimmed waveform must not depend on how much zero padding
+followed it, which is what lets a short utterance skip the 2634-frame cap), and that replaying
+one bucket's trace leaves the other buckets' output unchanged.
 """
 import types
 
 import pytest
+import torch
 import torch.nn.functional as F
 import ttnn
 
@@ -32,10 +34,12 @@ def run_voc_bucket_invariance(device):
     L = z.shape[-1]
     assert _voc_bucket(L) < VOC_L, f"reference z (L={L}) must sit below the cap or this compares nothing"
 
-    # _vocode reads only self.mesh_device and self.vocoder, so drive it on a stand-in rather
-    # than building the whole model (all four blocks + traced decoder) for a Block-4 property.
+    # _vocode reads only these three, so drive it on a stand-in rather than building the whole
+    # model (all four blocks + traced decoder) for a Block-4 property. No traces -> eager path.
     model = types.SimpleNamespace(
-        mesh_device=device, vocoder=TTNNHifiganGenerator(device, preprocess_hifigan_parameters(device))
+        mesh_device=device,
+        vocoder=TTNNHifiganGenerator(device, preprocess_hifigan_parameters(device)),
+        _voc_traces={},
     )
     bucketed = XttsV2._vocode(model, z, g)  # pads L -> _voc_bucket(L)
     at_cap = XttsV2._vocode(model, F.pad(z, (0, VOC_L - L)), g)[:, :, : L * HOP]  # pre-bucketing behaviour
@@ -43,6 +47,30 @@ def run_voc_bucket_invariance(device):
     passed, msg = comp_pcc(at_cap, bucketed, pcc=TARGET_PCC)
     print(f"L={L} -> bucket {_voc_bucket(L)} vs cap {VOC_L}, wav {tuple(bucketed.shape)}  pcc: {msg}")
     return passed, msg
+
+
+def run_voc_trace_replay(device):
+    """Replay every bucket, then re-check the largest: a capture frees its intermediates, so a
+    later shape's persistent buffers can land there and a replay would scribble over them."""
+    g = torch.randn(1, 512, 1, generator=torch.Generator().manual_seed(0))
+    model = types.SimpleNamespace(
+        mesh_device=device,
+        vocoder=TTNNHifiganGenerator(device, preprocess_hifigan_parameters(device)),
+        _voc_traces={},
+    )
+    XttsV2._capture_vocoder(model, g)
+    assert sorted(model._voc_traces) == sorted(VOC_BUCKETS), "every bucket should be traced"
+
+    gen = torch.Generator().manual_seed(1)
+    z = {Lb: torch.randn(1, 1024, Lb, generator=gen) for Lb in VOC_BUCKETS}
+    first = XttsV2._vocode(model, z[VOC_L], g)
+    for Lb in VOC_BUCKETS[:-1]:
+        XttsV2._vocode(model, z[Lb], g)
+    again = XttsV2._vocode(model, z[VOC_L], g)
+
+    maxabs = (first - again).abs().max().item()
+    print(f"largest bucket re-replayed after {len(VOC_BUCKETS) - 1} others, maxabs diff {maxabs:.3e}")
+    return maxabs == 0.0, f"maxabs {maxabs:.3e}"
 
 
 def test_voc_bucket_selection():
@@ -64,15 +92,23 @@ def test_voc_bucket_invariance(device):
     assert passed, f"bucketed waveform differs from the cap-padded one below {TARGET_PCC}: {msg}"
 
 
+# Traces need their own region on top of the L1_SMALL the conv shapes want.
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 262144, "trace_region_size": 120_000_000}], indirect=True)
+def test_voc_trace_replay(device):
+    passed, msg = run_voc_trace_replay(device)
+    assert passed, f"replaying other buckets changed the largest bucket's output: {msg}"
+
+
 if __name__ == "__main__":
     import sys
 
     test_voc_bucket_selection()
-    dev = ttnn.open_device(device_id=0, l1_small_size=262144)
+    dev = ttnn.open_device(device_id=0, l1_small_size=262144, trace_region_size=120_000_000)
     try:
         dev.enable_program_cache()
         ok, msg = run_voc_bucket_invariance(dev)
+        ok2, msg2 = run_voc_trace_replay(dev)
     finally:
         ttnn.close_device(dev)
-    print(("PASSED " if ok else "FAILED ") + str(msg))
-    sys.exit(0 if ok else 1)
+    print(("PASSED " if ok and ok2 else "FAILED ") + f"{msg}; {msg2}")
+    sys.exit(0 if ok and ok2 else 1)
