@@ -591,7 +591,8 @@ bug, not a test-ordering nuisance, and `tt-smi -r` must not be used to paper ove
 1. ~~**#52713** — is `llk_api/experimental/llk_sfpu/llk_math_deepseek_top32_rm.h` intentionally
    promoted?~~ **Answered** while building the branch: yes. The PR body is simply stale — commit
    `d577a2d4a5f "Promote llk_math_deepseek_top32_rm SFPU wrappers"` adds it deliberately, after the
-   description was written. It remains seven public entry points with **no in-tree caller and no test**,
+   description was written. (That SHA is on `pmilenkovic/promote-top32-rm`, #52713's own branch —
+   it will not resolve in a checkout of this one, which is expected, not a stale reference.) It remains seven public entry points with **no in-tree caller and no test**,
    which is what OPEN #4 (§6) should cover.
 2. **#52727** — `restore_tile_pack_mop` defaults to `false`, but the PR body describes the restore as
    unconditional. Which of the ten demo `*_block_uninit()` call sites opt in to `true`? The +22-instruction

@@ -46,8 +46,14 @@ Both are still blocked — #52727 and #52713 were re-checked on 2026-08-18 and a
 
 ## Closed on 2026-08-18
 
-All on `ldjurovic/llk-tests-blaze-promotions`, all verified on BH p100a. Eleven commits,
-`3275792fb37..a4710d7550e`.
+All on `ldjurovic/llk-tests-blaze-promotions`, all verified on BH p100a. **Thirteen commits,
+`f6b27ef87b7..495adc689c9`.**
+
+> **SHAs were rewritten on 2026-08-18** when the branch was rebased onto `main`
+> (`b62ff4a6af1`). Every SHA in this document is post-rebase and reachable from the branch
+> tip; the pre-rebase tip is kept locally as `backup/pre-rebase-2026-08-18` on the machine
+> that did it, and nowhere else. If a SHA here does not resolve, you are looking at a
+> checkout from before that rebase — fetch again.
 
 ### PR #53130 review comments — 6 fixed, 3 already fixed, 2 reply-only
 
@@ -55,20 +61,20 @@ The eleven open threads were triaged against the tree. Fixed:
 
 | Commit | Comment |
 |---|---|
-| `3275792fb37` | Copilot 🔴 — out-of-bounds remainder metadata read in `llk_unpack_AB_compressed_custom_mm.h`, reachable at `kt_dim=10, ct_dim=1` |
-| `09bf9af4e9b` | dead `unpack_{src,dst}_format` deleted end to end — **3** files, not the 2 the bot predicted (the new tt-llk driver also passed them) |
-| `0eaf76f95dd` | imperative `pytest.xfail()` → marker (see Correction 1) |
-| `db2c08e2a5d` | `add_rsqrt` asserted the sign of a value the implementation leaves undefined |
-| `b35270f3016` | `restore_tile_pack_mop` documented as an *install*, not a restore |
-| `45af290eb70` | bare `0` → `0 /*addr*/` |
+| `f6b27ef87b7` | Copilot 🔴 — out-of-bounds remainder metadata read in `llk_unpack_AB_compressed_custom_mm.h`, reachable at `kt_dim=10, ct_dim=1` |
+| `7fa1d84d59c` | dead `unpack_{src,dst}_format` deleted end to end — **3** files, not the 2 the bot predicted (the new tt-llk driver also passed them) |
+| `d0287a5ca08` | imperative `pytest.xfail()` → marker (see Correction 1) |
+| `643a488cad2` | `add_rsqrt` asserted the sign of a value the implementation leaves undefined |
+| `5164448a50b` | `restore_tile_pack_mop` documented as an *install*, not a restore |
+| `6b4f9ae2901` | bare `0` → `0 /*addr*/` |
 
 Already fixed by earlier commits, reply-and-resolve only: the sampling import order
-(`800be4b3541`), the `split_acc`/`finalize` doc tables (`8aa13bcd455`), and the sort-header
-coverage claims (`98adad44829`). Two need a written answer rather than a change: Copilot's
+(`42e32a4f12c`), the `split_acc`/`finalize` doc tables (`3a8344de46e`), and the sort-header
+coverage claims (`73102b8d911`). Two need a written answer rather than a change: Copilot's
 "exercise the real uninit API" (that is B1, and the limitation is already documented in the
 test) and "PR metadata is still the template" (that is E).
 
-### A3 — `set_dst_write_addr_offset` behaviour, `1f155839b07`
+### A3 — `set_dst_write_addr_offset` behaviour, `85eec3d9750`
 
 `tests/sources/set_dst_write_addr_offset_test.cpp` +
 `tests/python_tests/test_set_dst_write_addr_offset.py` + a `DST_WRITE_ADDR_OFFSET` template
@@ -100,7 +106,7 @@ the old plan listed as step 4. Nothing in the suite expects an LLK assert — co
 `LLKAssertException` as a failure — and tripping one mid-kernel risks wedging the device for
 whatever runs next. If that is wanted, the harness needs an expected-assert mechanism first.
 
-### A6 — thin spots, `16b4a2f60ab`
+### A6 — thin spots, `743eb198b66`
 
 `test_rmsnorm_bcast_scalar_dest_reuse.py`: **114 passed, up from 66.** Three of the five rows
 in the old A6 table; the other two were "leave it" and "fine as-is" and still are.
@@ -121,13 +127,13 @@ in the old A6 table; the other two were "leave it" and "fine as-is" and still ar
   fails every `num_tiles=2` variant and **no** `num_tiles=1` variant, so that term was
   previously unpinned.
 
-### Boundary coverage nothing reached, `5f2177bc2d5`
+### Boundary coverage nothing reached, `e6152740873`
 
 `test_matmul_custom_compressed_metadata_word_boundary`, 3 shapes with `kt*ct` divisible by 10
 (`kt=10/ct=1`, `kt=2/ct=5`, `kt=10/ct=2`). **588 passed**, was 582.
 
 The 16 shapes in `SHAPES` have products 2, 4, 8, 16, 28, 32, 56, 64, 112, 128, 192, 224, 448,
-512 — **none divisible by 10**, so nothing exercised the path `3275792fb37` fixed.
+512 — **none divisible by 10**, so nothing exercised the path `f6b27ef87b7` fixed.
 
 **Scope, stated in the test:** this does **not** detect the out-of-bounds read, and cannot. At
 `rem_iters == 0` the remainder loop never runs, so the word read past the buffer is never used
@@ -136,7 +142,7 @@ kernel, where they also pass. Catching that read needs an L1 memory-safety check
 test buys is the exact-multiple shape class, so a later change that mishandles it (stale word,
 or dropping the final group of 10 tiles) fails on the golden.
 
-### D2 — `176aea5e866`
+### D2 — `89343664332`
 
 `false, false, icb0` → `false /*transpose_of_faces*/, false /*within_face_16x16_transpose*/,
 icb0` in `rmsnorm_bcast_scalar_reuse_tiles_init`, matching the `_fidelity` variant below it.
@@ -152,7 +158,7 @@ moment either lands, so the test tells you when it is fixed." That was **not tru
 written**: `test_custom_mm_uninit_restore.py` used imperative `pytest.xfail()`, which raises
 immediately and aborts the body, so the variant never built, never ran, and could never report
 XPASS. C1's owner decision was resting on a detector that was not armed. Fixed in
-`0eaf76f95dd`; the sentence is true now, and the fix is visible in the run as a real
+`d0287a5ca08`; the sentence is true now, and the fix is visible in the run as a real
 golden-vs-device comparison under XFAIL rather than a bare skip.
 
 **Correction 2 — A4's hypothesis was too coarse.** The old A4 said the prime suspect was "that
@@ -190,7 +196,7 @@ is `block_uninit`, and only via a replicated body (see B1).
 5. Reuse the existing matmul golden and `helpers/matmul_sweep.py`. Do **not** write a new
    golden generator.
 6. **New:** include shapes with `kt*ct` divisible by 10 if the plain family has an equivalent
-   metadata walk. On the compressed side nothing reached that boundary until `5f2177bc2d5`.
+   metadata walk. On the compressed side nothing reached that boundary until `e6152740873`.
 
 **Watch for.** The `-Werror` prerequisite (Finding 5) — budget for a build fix before any test
 compiles.
@@ -265,7 +271,7 @@ say the same thing. The metal-side test calling the real entry points is still w
 still the item that needs an owner. What the guard buys is that divergence now fails loudly
 instead of silently, which was the specific risk.
 
-**Note.** `b35270f3016` reduced the blast radius a little — the flag's documentation now says
+**Note.** `5164448a50b` reduced the blast radius a little — the flag's documentation now says
 what it actually does.
 
 ---
@@ -291,7 +297,7 @@ restores 2048 where 4096 is correct. Measured at 0.25 match.
   `matmul_custom_compressed_kernel.cpp` all call.
 
 The `xfail` in `test_custom_mm_uninit_restore.py` flips to XPASS when either lands — **and as of
-`0eaf76f95dd` that is actually true**; see Correction 1.
+`d0287a5ca08` that is actually true**; see Correction 1.
 
 ### C2. The `eltwise_mul_scalar` HiFi workaround's mechanism does not survive review
 
@@ -322,7 +328,7 @@ owner. See also F, which may or may not be the same thing.
 
 ### C4. `mul_reduce_scalar` re-entry needs a DEST-section boundary — **defect, NEW**
 
-This is what A4 turned into. `a4710d7550e` adds a ~40-line driver
+This is what A4 turned into. `03cf8b4b3d8` adds a ~40-line driver
 (`tests/sources/mul_reduce_scalar_reenter_test.cpp` +
 `tests/python_tests/test_mul_reduce_scalar_reenter.py`) that runs the known-good non-chunked
 sequence twice over the same input. On BH p100a:
@@ -367,9 +373,9 @@ the number.
 - **D1 — `mul_reduce_scalar_chunked_tile` ships with no caller and no test.** C4 now says the
   op is broken as written, not merely untested. Removal is a legitimate outcome, and is now the
   cheaper one unless someone wants the chunked form to work.
-- ~~**D2**~~ — done, `176aea5e866`.
+- ~~**D2**~~ — done, `89343664332`.
 - **D3 — `restore_tile_pack_mop` is end-of-call-cleanup with no consumer.** Still kept: it
-  defaults to `false` and nothing in the tree opts in. `b35270f3016` corrected its
+  defaults to `false` and nothing in the tree opts in. `5164448a50b` corrected its
   documentation — it *installs* fixed 32x32/4-face geometry rather than restoring anything, it
   restores nothing at all on the `_init_short` path, it leaves `set_packer_strides`/`SETADCXX`
   untouched, and its body is byte-identical to the pre-existing
@@ -382,13 +388,29 @@ the number.
 
 - **The title still reads `[do not review]`.** Re-checked 2026-08-18: still there, and the PR
   shows `REVIEW_REQUIRED`. This is the single thing blocking anyone from looking at it.
+- **CI was red for a reason that predates this session's work, and is now fixed.**
+  `llk_smoke_blackhole group 2/2` failed on
+  `test_perf_header_gate.py::test_parameter_field_names_are_globally_unique` — `RMSNORM_DEST_REUSE`
+  declared bare `num_tiles` / `num_faces`, names already owned by `PACK_NUM_TILES` and
+  `NUM_FACES`. The identical failure was present on the pre-session tip, so it arrived with the
+  commit that added that class, not with any later work. Fixed in `30840ceb386` by renaming to
+  `rmsnorm_num_tiles` / `rmsnorm_num_faces`, which also matches the constants they emit.
+  **Note that job runs `pytest -x`**, so it aborted at the gate: anything after it in the split
+  was never reached, and may surface now that it passes. That would be newly *visible*, not
+  newly broken.
 - **The body is still the untouched template**, with an empty Summary, which Copilot also
-  raised. A drafted title plus Summary and Notes-for-reviewers exists — ask for
-  `pr-53130-replies.md` from the session that wrote it, or rewrite from the commit log, which
-  is now detailed enough to generate one.
-- **Rebase again once #52713 and #52727 merge.** The branch still carries their promotion
-  payload. Expect one conflict in `tt_metal/hw/sources.cmake`, where all three promotions add
-  entries.
+  raised. Drafted title, Summary and Notes-for-reviewers are committed alongside this file as
+  [`pr-53130-replies.md`](pr-53130-replies.md), together with a reply for each of the eleven
+  review threads. Copy-paste ready; nothing in it has been posted, because the session that
+  wrote it had no GitHub write access.
+- **Rebased onto `main` (`b62ff4a6af1`) on 2026-08-18** — 49 commits replayed with **zero
+  conflicts**. Two predictions in the earlier version of this document were wrong and are worth
+  correcting for next time: the expected `tt_metal/hw/sources.cmake` conflict did **not**
+  happen (main has not touched that file since the merge-base), and the only file both sides
+  touched was `helpers/test_variant_parameters.py`, where main's four new parameter classes and
+  this branch's seven merged without conflict (91 base + 7 + 4 = 102, verified by count).
+- **Rebase again once #52713 and #52727 merge** — both re-checked 2026-08-18 and **still
+  open**, so the branch still carries their promotion payload and it did not drop out.
 - `backup/llk-tests-pre-rebase` is a local-only safety ref from the first rebase; delete it
   once you are satisfied.
 
