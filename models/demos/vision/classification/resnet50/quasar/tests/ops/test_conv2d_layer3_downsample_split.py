@@ -3,25 +3,25 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Validate the BLOCK_SHARDED 1x1 stride-2 downsample on the Quasar SPLIT plain-matmul route.
+Validate the layer3_module1 1x1 stride-2 downsample on the Quasar HEIGHT_SHARDED SPLIT plain-matmul route.
 
-WHY THIS SHAPE
---------------
+WHY THIS SHAPE / PIVOT FROM BLOCK
+--------------------------------
 The resnet50 layer3_module1 downsample (in=512, out=1024, 1x1, stride 2, input 28x28) is the ONE downsample
-the model forces BLOCK_SHARDED: HEIGHT_SHARDED N-halves the stride-2 1x1 channel-expansion (device out = 512
-not 1024), and @28 it cannot go height-sharded. On the FUSED conv_bmm path a block-sharded 1x1 splits K
-across grid columns (in0_num_blocks_w>1 -> nbw2) and does the multi-K-block matmul-partials accumulate, which
-DEADLOCKS in the kb0->kb1 transition / kb1 accumulate-pack (tt-metal #48679 / tt-llk #48504). It is the last
-host-bypassed conv in the e2e (a single global _CONV_ON_DEVICE["downsample"] flag).
+the model forces BLOCK_SHARDED, historically because the FUSED HEIGHT_SHARDED full-N path N-halves the
+stride-2 1x1 channel-expansion (device out = 512 not 1024). But on the FUSED path a block-sharded 1x1 splits
+K across the GRID columns (in0_num_blocks_w>1 -> nbw2 on the 2-core grid) and deadlocks in the multi-K-block
+accumulate (tt-metal #48679 / tt-llk #48504). A block-sharded SPLIT extension was tried and FAILED: the grid
+splits K regardless of act_block_w, so it can't be made single-K-block. HEIGHT_SHARDED is the only
+single-K-block shape.
 
 WHAT THIS VALIDATES
 -------------------
-The [#48552 Stage2] extension of `force_1x1_nonmm_split` (conv2d.cpp) to BLOCK_SHARDED 1x1: forcing
-act_block_w = full_K makes it a SINGLE K-block (in0_num_blocks_w == 1), so the conv takes the SPLIT path
-(Program A gather+tilize -> Program B quasar matmul::linear, a single-K-block 2D-mcast GEMM with the N-split
-in its 2D config). That dodges BOTH the fused multi-K accumulate hang AND the HEIGHT_SHARDED N-halving. If
-this passes (all 1024 out channels, PCC ~1.0), the layer3_module1 downsample has a working device path and
-the last host bypass can be removed (per-downsample or global flip).
+Routing this downsample HEIGHT_SHARDED so `force_1x1_nonmm_split` (conv2d.cpp) engages -> SPLIT path (Program A
+gather+tilize -> Program B quasar matmul::linear, single-K-block). That path EXPLICITLY dodges the fused-HS
+full-N N-halving (its own comment), exactly as it does for the layer2 @56 and layer4 @14 downsamples that
+already pass HS+split. If this passes (all 1024 out channels, PCC ~0.99), the model can route @28 HS too
+(drop the forced-BLOCK) and the last host bypass (_CONV_ON_DEVICE["downsample"]) can be removed.
 
 RUN (emulator, forced JIT; SPLIT env set inside the test):
   TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_FORCE_JIT_COMPILE=1 \
@@ -38,9 +38,10 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 @pytest.mark.timeout(600)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
-def test_quasar_layer3_module1_downsample_block_split(mesh_device, monkeypatch):
-    """layer3_module1 downsample: 1x1, in=512, out=1024, stride 2, input 28x28, BLOCK_SHARDED via the SPLIT
-    plain-matmul route. Must keep all 1024 out channels and match a torch golden (PCC ~0.99)."""
+def test_quasar_layer3_module1_downsample_hs_split(mesh_device, monkeypatch):
+    """layer3_module1 downsample: 1x1, in=512, out=1024, stride 2, input 28x28, HEIGHT_SHARDED via the SPLIT
+    plain-matmul route (force_1x1_nonmm_split). Must keep all 1024 out channels (no N-halving) and match a
+    torch golden (PCC ~0.99). If this passes, the model can drop the forced-BLOCK for @28."""
     if is_wormhole_b0():
         pytest.skip("Quasar-only: exercises the force_1x1_nonmm_split BLOCK_SHARDED extension (arch_is_quasar).")
 
@@ -83,10 +84,11 @@ def test_quasar_layer3_module1_downsample_block_split(mesh_device, monkeypatch):
     tt_weight = ttnn.from_torch(torch_weight, dtype=ttnn.bfloat16)
     tt_bias = ttnn.from_torch(torch_bias.reshape(1, 1, 1, out_ch), dtype=ttnn.bfloat16)
 
-    # Verbatim from run_downsample_if_req for input_height == 28 (the BLOCK_SHARDED branch).
+    # PROPOSED model routing for @28: HEIGHT_SHARDED (like layer2 @56 / layer4 @14) so force_1x1_nonmm_split
+    # engages and the split's Program B does the full GEMM (no N-halving). The rest mirrors run_downsample_if_req.
     conv_config = ttnn.Conv2dConfig(
         weights_dtype=ttnn.bfloat16,
-        shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         deallocate_activation=True,
         reallocate_halo_output=True,
         act_block_h_override=32,
