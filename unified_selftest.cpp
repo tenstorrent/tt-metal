@@ -1,6 +1,6 @@
 // Compile + trace harness for the unified programming model.
 //
-//   tt/unified/expr.hpp    -- domain-free expression tree + DST allocator
+//   tt/unified/expr.hpp    -- op-agnostic tree, DST allocator, method syntax
 //   tt/unified/math.hpp    -- leaves, ops, fusion kinds, driver strategies
 //   tt/unified/api.h       -- core API (Storage / Block / ComputeBlock / noc_*)
 //   tt/unified/impl_v1.hpp -- its definitions
@@ -8,13 +8,19 @@
 // Those headers are a design sketch: the CB / NOC / Tensix intrinsics they call
 // come from the metal kernel headers in a real build. This file supplies traced
 // versions of just those, then runs the example kernels once per thread
-// projection and checks that every circular buffer balances.
+// projection, checks that every circular buffer balances, and checks that the
+// method and free-function spellings of the ops emit the same instructions.
+//
+// -Werror is deliberate. This is the only build that compiles the headers with
+// -Wextra: the JIT uses -Wall -Werror without it, so -Wunused-parameter and friends
+// are simply off there. A warning only this build can see should fail it rather
+// than scroll past.
 //
 //   for s in "DM0 -DIS_DM_THREAD=1 -DTT_DM_THREAD_ID=0" \
 //            "DM1 -DIS_DM_THREAD=1 -DTT_DM_THREAD_ID=1" \
 //            "COMPUTE -DIS_COMPUTE_THREAD=1"; do
 //     set -- $s; l=$1; shift
-//     clang++-20 -std=c++17 -Wall -Wextra -I. "$@" -DTT_LABEL="\"$l\"" \
+//     clang++-20 -std=c++17 -Wall -Wextra -Werror -I. "$@" -DTT_LABEL="\"$l\"" \
 //       unified_selftest.cpp -o /tmp/u_$l && /tmp/u_$l
 //   done
 
