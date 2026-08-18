@@ -124,7 +124,7 @@ def _skip_unsupported(formats, dest_acc):
         pytest.skip("Float32 inputs with dest_acc=No are not supported")
 
 
-def _run_add_rsqrt(
+def _build_add_rsqrt(
     formats,
     dest_acc,
     addend,
@@ -132,10 +132,10 @@ def _run_add_rsqrt(
     fast_approx=False,
     spec_A=None,
 ):
-    """Compile+run one variant, returning (device_tensor, input_tensor) as fp32.
+    """Build one variant without running it, returning (configuration, src_A).
 
-    Deliberately returns raw tensors instead of asserting: the negative/zero-argument
-    tests need exact NaN/inf predicates rather than a tolerance comparison.
+    Split out of _run_add_rsqrt so a test that needs two variants can prepare()
+    both before running either -- see test_sfpu_add_rsqrt_fast_approx_negative_guard.
     """
     torch.manual_seed(0)
     spec_a = StimuliSpec.uniform(low=0.1, high=4.0) if spec_A is None else spec_A
@@ -173,6 +173,15 @@ def _run_add_rsqrt(
         compile_time_formats=True,
     )
 
+    return configuration, src_A
+
+
+def _finish_add_rsqrt(configuration, src_A, formats, dest_acc):
+    """Run a prepared variant, returning (device_tensor, input_tensor) as fp32.
+
+    Deliberately returns raw tensors instead of asserting: the negative/zero-argument
+    tests need exact NaN/inf predicates rather than a tolerance comparison.
+    """
     res_from_L1 = configuration.run().result[:ELEMENTS_PER_TILE]
     torch_format = format_dict[formats.output_format]
     device = torch.tensor(res_from_L1, dtype=torch_format).flatten().to(torch.float32)
@@ -182,6 +191,21 @@ def _run_add_rsqrt(
         src_A.flatten()[:ELEMENTS_PER_TILE].to(torch.float32), dest_acc
     )
     return device, seen
+
+
+def _run_add_rsqrt(
+    formats,
+    dest_acc,
+    addend,
+    approx=ApproximationMode.No,
+    fast_approx=False,
+    spec_A=None,
+):
+    """Compile+run one variant, returning (device_tensor, input_tensor) as fp32."""
+    configuration, src_A = _build_add_rsqrt(
+        formats, dest_acc, addend, approx=approx, fast_approx=fast_approx, spec_A=spec_A
+    )
+    return _finish_add_rsqrt(configuration, src_A, formats, dest_acc)
 
 
 @parametrize(
@@ -218,11 +242,8 @@ def test_sfpu_add_rsqrt(formats, dest_acc, addend, approx):
     formats=FORMATS,
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     approx=[ApproximationMode.No, ApproximationMode.Yes],
-    fast_approx=[False, True],
 )
-def test_sfpu_add_rsqrt_fast_approx_negative_guard(
-    formats, dest_acc, approx, fast_approx
-):
+def test_sfpu_add_rsqrt_fast_approx_negative_guard(formats, dest_acc, approx):
     """The one case that tells FAST_APPROX=true from FAST_APPROX=false.
 
     _calculate_sqrt_body_ ends with
@@ -235,46 +256,66 @@ def test_sfpu_add_rsqrt_fast_approx_negative_guard(
     ---------------------------------------------
     x < 0 is outside rsqrt's domain, and the header states no result for it beyond
     the guard itself, so this pins only the guard's *observable effect* -- it must
-    not be read as blessing any particular invalid value.
+    not be read as blessing any particular invalid value. Both assertions below are
+    independent of the un-guarded value:
 
-    Measured on Blackhole p100a across all six live (format, dest_acc) x approx
-    combinations, the guard's effect is a sign guarantee:
+      1. FAST_APPROX=false leaves no negative lane. That follows from the guard
+         itself, which replaces the result with quiet_NaN -- and on the bf16-input
+         paths that arrives as +inf. Neither is negative. `isnan` specifically is
+         NOT asserted: the NaN-vs-+inf split is format-dependent, so an isnan-based
+         assertion would fail on Float16_b while the guard is working correctly.
+      2. The two builds differ somewhere, which is what makes the flag observable
+         at all and the reason this test exists.
 
-      FAST_APPROX=false -> no lane is negative (fp32 dest gives NaN on every lane;
-                           bf16-input paths give +inf on every lane)
-      FAST_APPROX=true  -> the un-guarded body leaves negative results (-inf on
-                           most lanes, plus a handful of NaN / finite lanes)
-
-    The NaN-vs-+inf split is format-dependent, so `isnan` specifically is NOT
-    asserted: with Float16_b input the guard's NaN arrives as +inf, and an
-    isnan-based assertion would fail there while the guard is working correctly.
-    The sign predicate holds in every configuration and still fails loudly if the
-    guard is dropped.
+    Assertion 2 replaces an earlier `negative_lanes > 0` check on the FAST_APPROX=true
+    side. Measured on Blackhole p100a the un-guarded body does leave negative results
+    (-inf on most lanes, plus a handful of NaN / finite lanes), but nothing specifies
+    that: the sign falls out of `vConstIntPrgm0 - i` going negative for these exponents,
+    i.e. from the current LUT seed rather than from an invariant. An accuracy-motivated
+    retune of that seed or the Newton constants could make the un-guarded result
+    non-negative while the guard still works, failing the old assertion for no real
+    defect. Comparing the two builds pins the same intent without depending on a value
+    the implementation does not define.
     """
     _skip_unsupported(formats, dest_acc)
 
-    # Strictly negative even after the addend is applied.
-    device, _ = _run_add_rsqrt(
-        formats,
-        dest_acc,
+    # Strictly negative even after the addend is applied. Both builds seed the same, so
+    # the two runs see identical stimuli and can be compared lane by lane.
+    variant = dict(
         addend=0.0,
         approx=approx,
-        fast_approx=fast_approx,
         spec_A=StimuliSpec.uniform(low=-4.0, high=-0.1),
     )
+    guarded_cfg, guarded_src = _build_add_rsqrt(
+        formats, dest_acc, fast_approx=False, **variant
+    )
+    unguarded_cfg, unguarded_src = _build_add_rsqrt(
+        formats, dest_acc, fast_approx=True, **variant
+    )
+    # Build both before running either: `prepare()` is the build half of `run()`, and
+    # under --compile-producer `run()` skips as soon as the first variant is built, so
+    # the second would otherwise never emit its ELF.
+    guarded_cfg.prepare()
+    unguarded_cfg.prepare()
+    guarded, _ = _finish_add_rsqrt(guarded_cfg, guarded_src, formats, dest_acc)
+    unguarded, _ = _finish_add_rsqrt(unguarded_cfg, unguarded_src, formats, dest_acc)
 
-    negative_lanes = int((device < 0).sum())
-    if fast_approx:
-        assert negative_lanes > 0, (
-            "FAST_APPROX=true must skip the negative-input guard, leaving the "
-            "un-guarded body's negative results, but no lane is negative"
-        )
-    else:
-        assert negative_lanes == 0, (
-            "FAST_APPROX=false must replace every negative-input result with the "
-            f"guard's invalid value, but {negative_lanes}/{device.numel()} lanes "
-            "are negative -- the v_if(x < 0) guard looks dropped"
-        )
+    negative_lanes = int((guarded < 0).sum())
+    assert negative_lanes == 0, (
+        "FAST_APPROX=false must replace every negative-input result with the "
+        f"guard's invalid value, but {negative_lanes}/{guarded.numel()} lanes "
+        "are negative -- the v_if(x < 0) guard looks dropped"
+    )
+
+    # NaN != NaN, so exclude lanes where both builds returned NaN before comparing.
+    both_nan = guarded.isnan() & unguarded.isnan()
+    differs = ~both_nan & (guarded != unguarded)
+    assert bool(differs.any()), (
+        "FAST_APPROX=true and FAST_APPROX=false returned identical results on a "
+        "strictly negative domain, so the v_if(x < 0) guard the flag gates is no "
+        "longer observable -- either it was dropped from both builds, or FAST_APPROX "
+        "stopped reaching _calculate_sqrt_body_"
+    )
 
 
 @parametrize(
