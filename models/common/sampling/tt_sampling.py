@@ -87,6 +87,20 @@ class TTSampling(LightweightModule):
             return None
         return num_splits
 
+    @staticmethod
+    def _untilize_chunk_count(width):
+        """Fewest tile-aligned even chunks of at most TOPK_MAX_WIDTH each, or 1
+        when the row is narrow enough (<= 2 * TOPK_MAX_WIDTH, the widest row
+        known to untilize in one program) or no such cut exists."""
+        if width <= 2 * TOPK_MAX_WIDTH:
+            return 1
+        num_chunks = -(-width // TOPK_MAX_WIDTH)
+        while num_chunks <= width // ttnn.TILE_SIZE:
+            if width % num_chunks == 0 and (width // num_chunks) % ttnn.TILE_SIZE == 0:
+                return num_chunks
+            num_chunks += 1
+        return 1
+
     def _is_force_argmax_sampling(self, k, p, temp):
         """Detect whether all users request deterministic greedy decoding.
 
@@ -772,13 +786,16 @@ class TTSampling(LightweightModule):
                 )
             if slice_valid_vocab:
                 x = self._slice_valid_vocab_for_argmax(x)
-            if self.multi_step_reduction and self._num_vocab_splits > 2 and x.shape[-1] % self._num_vocab_splits == 0:
+            num_untilize_chunks = self._untilize_chunk_count(x.shape[-1])
+            if num_untilize_chunks > 1:
                 # Untilizing the full row in one program needs a static circular-buffer
                 # region proportional to the row width; past ~150K elements it clashes
                 # with the model's resident L1 buffers at compile (Gemma-2's 256000-wide
-                # logits throw "circular buffers ... clash with L1 buffers"). Untilize
-                # the same chunks the top-k path uses and concat row-major instead.
-                x_chunks = ttnn.split(x, x.shape[-1] // self._num_vocab_splits, dim=3)
+                # logits throw "circular buffers ... clash with L1 buffers"). The gate
+                # is width-based, not mesh-based: multi-device force-argmax gathers the
+                # full padded vocab onto every device and hits the same wall. Untilize
+                # in tile-aligned chunks and concat row-major instead.
+                x_chunks = ttnn.split(x, x.shape[-1] // num_untilize_chunks, dim=3)
                 untilized_chunks = [ttnn.untilize(chunk, use_multicore=True) for chunk in x_chunks]
                 for chunk in x_chunks:
                     chunk.deallocate()

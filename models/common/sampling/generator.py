@@ -753,6 +753,49 @@ class SeedManager:
             salt += 1
         return salt
 
+    def _set_slot_seed(self, slot: int, seed, *, keep_existing_salt: bool):
+        """Single writer for a slot's (seed, counter, salt, rng) state.
+
+        With ``keep_existing_salt`` (decode-path re-registration of a running
+        request), a slot that already holds the same request seed is left
+        untouched: salts are collision-free among live same-seed slots by
+        construction, and recomputing one mid-generation (the unconditional
+        re-registration on the first decode after any admission) would splice
+        the request onto a finished sibling's RNG stream. Without it (prefill
+        admission of a new request) the slot is fully reset, including a fresh
+        smallest-free salt, so a unique-seed request always lands on salt 0.
+        """
+        if keep_existing_salt and seed is not None and self.seeds[slot] == seed:
+            return
+        self.seeds[slot] = seed
+        self.seed_counters[slot] = 0
+        if seed is None:
+            self.seed_salts[slot] = 0
+            self.rngs[slot].seed(self._next_unseeded_rng_seed())
+        else:
+            self.seed_salts[slot] = self._next_free_salt(slot, seed)
+            self.rngs[slot].seed(int(seed))
+
+    def deactivate_slots_except(self, live_slots) -> None:
+        """Drop seed state of slots that are no longer live.
+
+        Nothing else clears a finished request's slot when condense has no
+        move to make (a request finishing at the tail of the batch leaves its
+        seed behind), so the ghost would keep counting toward _next_free_salt
+        and hand a later unique-seed request a salt > 0, breaking seeded
+        reproducibility. Callers pass the current live-slot set (decode
+        positions >= 0).
+        """
+        if not self._seed_active:
+            return
+        live = {int(slot) for slot in live_slots}
+        for slot in range(self.max_batch_size):
+            if slot not in live and self.seeds[slot] is not None:
+                self.seeds[slot] = None
+                self.seed_counters[slot] = 0
+                self.seed_salts[slot] = 0
+        self._seed_active = any(s is not None for s in self.seeds)
+
     def _seed_from_slot_params(self, seeds, slot: int):
         if seeds is None:
             return None
@@ -783,14 +826,7 @@ class SeedManager:
         for user in user_ids:
             slot = int(user)
             seed = self._seed_from_slot_params(seeds, slot)
-            self.seeds[slot] = seed
-            self.seed_counters[slot] = 0
-            if seed is None:
-                self.seed_salts[slot] = 0
-                self.rngs[slot].seed(self._next_unseeded_rng_seed())
-            else:
-                self.seed_salts[slot] = self._next_free_salt(slot, seed)
-                self.rngs[slot].seed(int(seed))
+            self._set_slot_seed(slot, seed, keep_existing_salt=True)
         self._seed_active = any(s is not None for s in self.seeds)
         self._reseted = True
 
@@ -903,14 +939,7 @@ class SeedManager:
         for i, user in enumerate(user_ids):
             slot = int(user)
             seed = self._seed_from_slot_params(seeds, i)
-            self.seeds[slot] = seed
-            self.seed_counters[slot] = 0
-            if seed is None:
-                self.seed_salts[slot] = 0
-                self.rngs[slot].seed(self._next_unseeded_rng_seed())
-            else:
-                self.seed_salts[slot] = self._next_free_salt(slot, seed)
-                self.rngs[slot].seed(int(seed))
+            self._set_slot_seed(slot, seed, keep_existing_salt=False)
         self._seed_active = any(s is not None for s in self.seeds)
         self._reseted = True
 

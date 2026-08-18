@@ -223,6 +223,61 @@ def test_seed_salt_does_not_recollide_with_surviving_duplicate():
     assert seed_manager.seed_salts[2] != seed_manager.seed_salts[survivor_slot]
 
 
+def test_seed_salt_survives_decode_re_registration_after_sibling_finishes():
+    """The unconditional decode-path re-registration (first decode after any
+    admission) must not recompute a running request's salt: after its same-seed
+    sibling finishes, the recomputed salt would drop to the sibling's and the
+    survivor's remaining tokens would replay the finished stream."""
+    seed_manager = _make_host_only_seed_manager(max_batch_size=4)
+    seed_manager.reset_seed([42, 42], [0, 1])  # A salt 0, B salt 1
+    assert seed_manager.seed_salts[1] == 1
+
+    # A finishes; condense moves B down into slot 0 (salt travels).
+    seed_manager.apply_slot_remap(torch.tensor([1, 1, 2, 3], dtype=torch.int32))
+    assert seed_manager.seed_salts[0] == 1
+
+    # An unrelated admission triggers reset_batch: every active slot re-registers.
+    seed_manager.reset_seed([7], [2])
+    seed_manager.reset_seed_from_slots([42, None, 7, None], [0, 2])
+
+    assert seed_manager.seed_salts[0] == 1  # B keeps its stream mid-generation
+
+
+def test_finished_tail_request_ghost_seed_is_cleared():
+    """A request finishing at the batch tail is never vacated by condense; the
+    decode-path deactivate must drop it so a later unique-seed request still
+    gets salt 0 (seeded reproducibility)."""
+    seed_manager = _make_host_only_seed_manager(max_batch_size=4)
+    seed_manager.reset_seed([42], [3])
+    # Tail completion: identity remap makes no moves, the ghost stays.
+    seed_manager.apply_slot_remap(torch.tensor([0, 1, 2, 3], dtype=torch.int32))
+    assert seed_manager.seeds[3] == 42
+
+    seed_manager.deactivate_slots_except([0])
+    assert seed_manager.seeds[3] is None
+
+    # A fresh unique seed-42 request must land on salt 0.
+    seed_manager.reset_seed([42], [1])
+    assert seed_manager.seed_salts[1] == 0
+
+
+def test_prefill_admission_into_same_slot_fully_resets_seed_state():
+    """reset_seed registers a NEW request: even when the slot already holds the
+    same seed value, the counter must restart and the salt must be recomputed
+    (its old salt may reflect siblings that no longer exist)."""
+    seed_manager = _make_host_only_seed_manager(max_batch_size=4)
+    seed_manager.reset_seed([42, 42], [0, 1])
+    assert seed_manager.seed_salts[1] == 1
+    seed_manager._next_device_seed_for_slot(1)
+    assert seed_manager.seed_counters[1] == 1
+
+    seed_manager.deactivate_slots_except([1])  # slot 0's request finished
+    seed_manager.reset_seed([42], [1])  # new same-seed request admitted into slot 1
+
+    assert seed_manager.seed_salts[1] == 0
+    assert seed_manager.seed_counters[1] == 0
+
+
 def test_broadcast_sampling_params_preserves_none_list_fields():
     params = SamplingParams(temperature=[1.0, 1.0], top_k=[1, 1], top_p=[1.0, 1.0], seed=[None, 42])
 
@@ -857,6 +912,20 @@ def test_top_k_logprobs_pcc_torch_vs_tt(shape, mesh_device):
 )
 def test_num_single_device_vocab_splits(padded_vocab_size, expected_splits):
     assert TTSampling.num_single_device_vocab_splits(padded_vocab_size) == expected_splits
+
+
+@pytest.mark.parametrize(
+    "width, expected",
+    [
+        (32768, 1),
+        (131072, 1),  # exactly 2*TOPK_MAX_WIDTH: full-row untilize known good (Galaxy padded vocab)
+        (151936, 4),  # Qwen3
+        (256000, 4),  # Gemma-2
+        (262144, 4),  # 4*TOPK_MAX_WIDTH exactly
+    ],
+)
+def test_untilize_chunk_count(width, expected):
+    assert TTSampling._untilize_chunk_count(width) == expected
 
 
 @pytest.mark.parametrize(
