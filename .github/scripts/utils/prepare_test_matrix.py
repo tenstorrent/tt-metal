@@ -304,8 +304,11 @@ def build_test_matrix(tests, enabled_skus, sku_config, event=None, allow_missing
             substitute_cmd_placeholders(entry, allow_missing_cmd=allow_missing_cmd)
             filtered_tests.append(entry)
 
-    if not filtered_tests:
-        print(f"::warning::No tests selected for enabled SKUs '{','.join(enabled_skus)}'.")
+    if not tests:
+        return []
+    elif not filtered_tests:
+        print(f"::error::No tests selected for enabled SKUs '{','.join(enabled_skus)}'.")
+        sys.exit(1)
 
     return filtered_tests
 
@@ -394,6 +397,10 @@ def main(argv=None):
     filtered_matrix = build_test_matrix(
         tests, enabled_skus, sku_config, event=args.event, allow_missing_cmd=args.allow_missing_cmd
     )
+
+    if not filtered_matrix:
+        print(f"::warning::No tests present in test YAML '{args.tests_yaml_path}'.")
+
     write_matrix_output(filtered_matrix)
     return 0
 

@@ -5,7 +5,7 @@
 # Each entry: name, cmd, skus: { <sku>: { timeout: N } }, team, owner_id.
 # Optional: fast_runtime_mode_off.
 #
-# sim_wh_n300 / sim_bh_p150 SKUs run the same cmd under the ttsim simulator
+# sim_wh_n150 / sim_bh_p150 SKUs run the same cmd under the ttsim simulator
 # on ubuntu-latest; ttnn-sanity-tests-impl.yaml invokes setup-ttsim for these.
 # See .github/actions/setup-ttsim/action.yml.
 
@@ -44,7 +44,7 @@
       timeout: 5
     bh_p150b_civ2:
       timeout: 5
-    sim_wh_n300:
+    sim_wh_n150:
       timeout: 40
     sim_bh_p150:
       timeout: 40
@@ -60,7 +60,7 @@
       timeout: 40
     bh_p150b_civ2:
       timeout: 40
-    sim_wh_n300:
+    sim_wh_n150:
       timeout: 40
     sim_bh_p150:
       timeout: 40
@@ -76,7 +76,7 @@
       timeout: 40
     bh_p150b_civ2:
       timeout: 40
-    sim_wh_n300:
+    sim_wh_n150:
       timeout: 40
     sim_bh_p150:
       timeout: 40
@@ -92,7 +92,7 @@
       timeout: 40
     bh_p150b_civ2:
       timeout: 40
-    sim_wh_n300:
+    sim_wh_n150:
       timeout: 40
     sim_bh_p150:
       timeout: 40
@@ -108,7 +108,7 @@
       timeout: 40
     bh_p150b_civ2:
       timeout: 40
-    sim_wh_n300:
+    sim_wh_n150:
       timeout: 40
     sim_bh_p150:
       timeout: 40
@@ -124,7 +124,7 @@
       timeout: 40
     bh_p150b_civ2:
       timeout: 40
-    sim_wh_n300:
+    sim_wh_n150:
       timeout: 60
     sim_bh_p150:
       timeout: 60
@@ -140,7 +140,7 @@
       timeout: 40
     bh_p150b_civ2:
       timeout: 40
-    sim_wh_n300:
+    sim_wh_n150:
       timeout: 40
     sim_bh_p150:
       timeout: 40
@@ -156,7 +156,7 @@
       timeout: 40
     bh_p150b_civ2:
       timeout: 40
-    sim_wh_n300:
+    sim_wh_n150:
       timeout: 60
     sim_bh_p150:
       timeout: 60
@@ -172,7 +172,7 @@
       timeout: 40
     bh_p150b_civ2:
       timeout: 40
-    sim_wh_n300:
+    sim_wh_n150:
       timeout: 60
     sim_bh_p150:
       timeout: 60
@@ -188,7 +188,7 @@
       timeout: 40
     bh_p150b_civ2:
       timeout: 40
-    sim_wh_n300:
+    sim_wh_n150:
       timeout: 60
     sim_bh_p150:
       timeout: 60
@@ -204,7 +204,7 @@
       timeout: 40
     bh_p150b_civ2:
       timeout: 40
-    sim_wh_n300:
+    sim_wh_n150:
       timeout: 40
     sim_bh_p150:
       timeout: 40
@@ -220,7 +220,7 @@
       timeout: 15
     bh_p150b_civ2:
       timeout: 15
-    sim_wh_n300:
+    sim_wh_n150:
       timeout: 40
     sim_bh_p150:
       timeout: 40
@@ -239,7 +239,7 @@
       timeout: 10
     bh_p150b_civ2:
       timeout: 10
-    sim_wh_n300:
+    sim_wh_n150:
       timeout: 40
     sim_bh_p150:
       timeout: 40
@@ -255,7 +255,7 @@
       timeout: 40
     bh_p150b_civ2:
       timeout: 40
-    sim_wh_n300:
+    sim_wh_n150:
       timeout: 40
     sim_bh_p150:
       timeout: 40
@@ -275,7 +275,7 @@
       timeout: 40
     bh_p150b_civ2:
       timeout: 40
-    sim_wh_n300:
+    sim_wh_n150:
       timeout: 40
     sim_bh_p150:
       timeout: 40

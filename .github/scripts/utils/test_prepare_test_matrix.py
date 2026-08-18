@@ -751,10 +751,26 @@ def test_sim_libs_empty_for_hardware_only_matrix(tmp_path: Path, tests_yaml: Pat
     assert sim_libs_line(result) == "[]"
 
 
-def test_empty_matrix_is_not_fatal(tmp_path: Path, tests_yaml: Path):
-    """A SKU set that matches nothing warns and emits matrix=[]; impls gate on '[]'."""
+def test_tests_present_but_no_enabled_sku_is_fatal(tests_yaml: Path):
+    """Tests exist and the SKU set cannot run any of them: a miswired pipeline, so fail."""
     result = _run_with_skus(tests_yaml, "bh_galaxy")
+    assert result.returncode != 0, result.stdout
+    assert "No tests selected for enabled SKUs" in result.stdout
+
+
+@pytest.mark.parametrize("body", ["", "# placeholder, no tests yet\n"])
+@pytest.mark.parametrize("enabled", ["wh_n150_civ2", "ALL_SKUS_IN_TESTS"])
+def test_no_tests_in_yaml_warns_and_passes(tmp_path: Path, body: str, enabled: str):
+    """An empty / placeholder tests YAML is vacuously correct: warn, emit matrix=[], exit 0.
+
+    Covers both SKU forms because the explicit-list form reaches build_test_matrix while
+    ALL_SKUS_IN_TESTS short-circuits in main; e.g. l2-nightly drives the placeholder
+    ttsim_unit_tests.yaml with an explicit list.
+    """
+    path = tmp_path / "tests.yaml"
+    path.write_text(body)
+    result = _run_with_skus(path, enabled)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "No tests selected" in result.stdout
+    assert "Traceback" not in result.stderr
     assert re.search(r"^matrix=\[\]$", result.stdout, re.M)
     assert sim_libs_line(result) == "[]"
