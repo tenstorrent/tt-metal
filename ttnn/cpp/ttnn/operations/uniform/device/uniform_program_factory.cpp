@@ -143,7 +143,7 @@ static constexpr const char* WRITER_KERNEL_PATH =
 static constexpr const char* COMPUTE_KERNEL_PATH =
     "ttnn/cpp/ttnn/operations/uniform/device/kernels/compute_uniform_metal2.cpp";
 
-ttnn::device_operation::ProgramArtifacts UniformDeviceOperation::ProgramFactory::create_program_artifacts(
+ttnn::device_operation::ProgramArtifacts UniformDeviceOperation::UniformProgramFactory::create_program_artifacts(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& /*tensor_args*/,
     tensor_return_value_t& output) {
@@ -160,8 +160,13 @@ ttnn::device_operation::ProgramArtifacts UniformDeviceOperation::ProgramFactory:
     constexpr uint32_t in_out_num_tiles = 1;
     constexpr uint32_t intermed_num_tiles = 2;
 
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
+    // The op resolves a TTNN compute config but does not pass fp32_dest_acc_en through: it forces
+    // the knob on regardless of what the caller asked for. Translate the resolved config, then
+    // re-apply that override, or the translation would hand the caller's value back.
+    auto compute_hw = ttnn::to_compute_hardware_config(device->arch(), operation_attributes.compute_kernel_config);
+    // if enable_32_bit_dest set to false a precision error may occur which makes
+    // generated number out of range [from, to)
+    std::get<ComputeGen1Config>(compute_hw).enable_32_bit_dest = true;
 
     // Intermediate DFB (Float32): compute packs into it, the writer drains it.
     DataflowBufferSpec intermed_dfb{
@@ -221,9 +226,7 @@ ttnn::device_operation::ProgramArtifacts UniformDeviceOperation::ProgramFactory:
         .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
     };
 
-    // Compute kernel. The legacy op resolves a TTNN ComputeKernelConfig but then overrides
-    // fp32_dest_acc_en, so the Gen1 config is built field-by-field rather than through
-    // to_compute_hardware_config, which would restore the user's value.
+    // Compute kernel
     KernelSpec compute{
         .unique_id = COMPUTE,
         .source = COMPUTE_KERNEL_PATH,
@@ -239,15 +242,7 @@ ttnn::device_operation::ProgramArtifacts UniformDeviceOperation::ProgramFactory:
                 },
             },
         .runtime_arg_schema = {.runtime_arg_names = {"seed", "f2u_from", "f2u_to", "start_id", "num_tiles"}},
-        .hw_config =
-            ComputeGen1Config{
-                .fpu_math_fidelity = math_fidelity,
-                .sfpu_precision_mode = math_approx_mode ? Precision::Approximate : Precision::Precise,
-                // if enable_32_bit_dest set to false a precision error may occur which makes
-                // generated number out of range [from, to)
-                .enable_32_bit_dest = true,
-                .double_buffer_dest = !dst_full_sync_en,
-            },
+        .hw_config = std::move(compute_hw),
     };
 
     ProgramSpec spec{
@@ -281,7 +276,7 @@ ttnn::device_operation::ProgramArtifacts UniformDeviceOperation::ProgramFactory:
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
-ProgramRunArgs UniformDeviceOperation::ProgramFactory::override_runtime_arguments(
+ProgramRunArgs UniformDeviceOperation::UniformProgramFactory::override_runtime_arguments(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& /*tensor_args*/,
     tensor_return_value_t& output,

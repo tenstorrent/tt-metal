@@ -38,7 +38,10 @@ struct UniformDeviceOperation {
     using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
 
-    struct ProgramFactory {
+    // The factory methods live in a program_factory_t variant rather than directly on this struct:
+    // the framework shim that accepts factory methods on the device-operation itself recognizes only
+    // create_descriptor, so a spec factory has to be reachable through the variant.
+    struct UniformProgramFactory {
         static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
@@ -55,7 +58,7 @@ struct UniformDeviceOperation {
             const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
     };
 
-    using program_factory_t = std::variant<ProgramFactory>;
+    using program_factory_t = std::variant<UniformProgramFactory>;
 
     static void validate_inputs(const operation_attributes_t& attributes, const tensor_args_t& tensor_args);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);

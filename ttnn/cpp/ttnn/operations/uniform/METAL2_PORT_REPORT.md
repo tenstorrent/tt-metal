@@ -38,11 +38,12 @@ instruction to check this.
   never referenced `create_descriptor`. The file is byte-identical.
 - **Custom `compute_program_hash`:** none. **Backdoor hash left intact, byte-identical**, at
   `device/uniform_device_operation.hpp:28-29`.
-- **Forced restructure (see Friction → Gaps):** `create_descriptor` / `override_runtime_arguments` moved off the
-  device-op struct into a nested `UniformDeviceOperation::ProgramFactory`, with
-  `using program_factory_t = std::variant<ProgramFactory>;` added. Header-only; no behavioral surface changed.
-  Everything else in the class (`validate_inputs`, `validate_on_program_cache_miss`, `compute_output_specs`,
-  `create_output_tensors`, `operation_attributes_t`, `tensor_args_t`) is untouched.
+- **Exception 3 — direct-descriptor conversion.** The op arrived in the direct-descriptor shape
+  (`create_descriptor` on the device-operation itself, no `program_factory_t`). Its factory methods moved into a
+  nested `UniformDeviceOperation::UniformProgramFactory`, with
+  `using program_factory_t = std::variant<UniformProgramFactory>;` added. Header-only; no behavioral surface
+  changed. Everything else in the class (`validate_inputs`, `validate_on_program_cache_miss`,
+  `compute_output_specs`, `create_output_tensors`, `operation_attributes_t`, `tensor_args_t`) is untouched.
 
 ### Open items
 
@@ -120,12 +121,16 @@ instruction to check this.
   This is a third, and it is *mandatory* — a porter reading the scope rules literally has no sanctioned move.
   The recipe's own gloss ("the program factory body is the port") arguably covers it, since the declarations
   being moved *are* the factory's entry points, but that requires the porter to reason past an explicit
-  two-item list. Suggested fix: name it as a third exception in
-  [`ttnn_factory.md` — Device-operation-class edits the port forces](../../../../../docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/shared/ttnn_factory.md#device-operation-class-edits-the-port-forces),
-  e.g. *"3. Introduce a `program_factory_t` when the ported-from op used the direct-descriptor form. The spec
-  concepts have no direct-on-device-op shortcut, so `create_descriptor`'s removal forces a nested factory struct
-  and a `program_factory_t` alias. Purely structural; nothing else in the class changes."* Realized at
-  `device/uniform_device_operation.hpp:39-58`.
+  two-item list.
+
+  **RESOLVED** — the recipe now carries this as **exception 3**
+  ([`ttnn_factory.md` §3](../../../../../docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/shared/ttnn_factory.md#3-give-a-direct-descriptor-op-a-conventional-program-factory)),
+  and it went further than this entry asked: it also records the `DirectSpecFactory` counterpart as a settled
+  TTNN non-goal (so the next porter reads the asymmetry as a decision rather than refiling it), names the
+  `<OpName>ProgramFactory` struct convention, notes that some ops arrive already converted, and pushes detection
+  earlier into the legacy inventory so the shape is planned rather than met as a concept error at first build.
+  This port was re-aligned to the convention afterwards — the struct is now `UniformProgramFactory`
+  (`device/uniform_device_operation.hpp:41-58`); it was originally the bare `ProgramFactory`.
 
 - **The audit brief's `fifo_page_size` breadcrumb contradicts the CB→DFB whitelist, and the brief is the document
   the porter is told to act on.** Detail in [Successes](#successes) — the substance landed right, but only
@@ -198,10 +203,27 @@ instruction to check this.
   (`uniform_program_factory.cpp:182` pre-port), and drops `packer_l1_acc` entirely. Read literally it is Style A,
   and Style A's prescription — `to_compute_hardware_config(device->arch(), config)` — would have **silently
   restored the user's `fp32_dest_acc_en`**, defeating a deliberate, commented override that the op says exists to
-  stop generated values leaving `[from, to)`. Style B mechanics were used instead
-  (`uniform_program_factory.cpp:244-252`). The section's own warning ("the two config structs default *opposite*
-  ways") is what made the hazard visible, but the A/B fork could say that **any** field the op overrides after
-  resolving a TTNN config puts it on Style B.
+  stop generated values leaving `[from, to)`. The section's own warning ("the two config structs default
+  *opposite* ways") is what made the hazard visible.
+
+  **RESOLVED, and with a better fix than this entry proposed.** This entry suggested reclassifying such ops onto
+  Style B (hand-build the `ComputeGen1Config`). The recipe instead **keeps the helper and patches the returned
+  config** — which retains the Gen2 branch a hand-built Gen1 config gives up. The port was reworked to that form
+  (`device/uniform_program_factory.cpp:163-169`): translate via `to_compute_hardware_config`, then re-apply the
+  op's override with `std::get<ComputeGen1Config>(compute_hw).enable_32_bit_dest = true`. The substitution is
+  exact — `operation_attributes.compute_kernel_config` is already resolved
+  (`init_device_compute_kernel_config` at `device/uniform_device_operation.cpp:55`), and the
+  `get_compute_kernel_config_args` the legacy factory called ignores its `arch` argument and is a pure field
+  splat (`ttnn/cpp/ttnn/operations/core/compute_kernel/compute_kernel_config.cpp:99-107`).
+
+  **One residual gap, and `uniform` is its proof case.** The new guidance is scoped to a *dropped* field:
+  *"compare the fields the op resolves against the fields it **sets**… for each resolved-but-**unset** field
+  assign the legacy-default result."* `uniform`'s `fp32_dest_acc_en` is not dropped — it is **overridden**,
+  resolved and then set to a literal `true`. Run that test on `uniform` and every resolved field *is* set except
+  `packer_l1_acc`, which the text correctly says needs no action; the procedure therefore yields "nothing to
+  do," and the helper hands the caller's value back. Same failure mode, same one-line fix, but the stated test
+  does not reach it. A clause covering *resolved-but-not-passed-through* — unset **or** overridden — would close
+  it.
 
 ## Open items for downstream
 

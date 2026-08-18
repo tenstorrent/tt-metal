@@ -114,12 +114,13 @@ binding vocabulary at sunset, bindings are named for the **kernel's** role vocab
   `create_descriptor`, and `DeviceOperationConcept` requires `HasDirectDescriptor || HasProgramFactoryType`. So the
   moment `create_descriptor` goes away, the op *must* grow a `program_factory_t`.
 
-  The port therefore introduces a nested `UniformDeviceOperation::ProgramFactory` struct carrying both
+  The port therefore introduces a nested `UniformDeviceOperation::UniformProgramFactory` struct carrying both
   `create_program_artifacts` and `override_runtime_arguments`, plus
-  `using program_factory_t = std::variant<ProgramFactory>;`. This is a device-op-**header** edit that the port
-  forces and that the recipe's two documented exceptions do not cover — flagged in the port report. Nothing else
-  in the device-op class changes: `validate_inputs`, `validate_on_program_cache_miss`, `compute_output_specs`,
-  `create_output_tensors`, `operation_attributes_t`, `tensor_args_t` and the backdoor hash are untouched.
+  `using program_factory_t = std::variant<UniformProgramFactory>;`. This is the recipe's **exception 3**
+  (a device-op-**header** edit the port forces); the struct name follows the `<OpName>ProgramFactory`
+  convention. Nothing else in the device-op class changes: `validate_inputs`,
+  `validate_on_program_cache_miss`, `compute_output_specs`, `create_output_tensors`,
+  `operation_attributes_t`, `tensor_args_t` and the backdoor hash are untouched.
 
   No pybind change is forced: `uniform_nanobind.cpp` binds only the user-facing `ttnn::uniform` — it never
   referenced `create_descriptor`.
@@ -157,10 +158,22 @@ reserved / peeked / pushed in **both** dtype configs, and its entry size is read
 
 - **`WRITER`** — legacy `WriterConfigDescriptor{}` resolves to the writer default triple
   (`RISCV_0` / `NOC_1` / `DM_DEDICATED_NOC`) → `ttnn::create_writer_datamovement_config(device->arch())`.
-- **`COMPUTE`** — the legacy config is a hybrid (TTNN-resolved values, then a hardcoded override), so it is
-  ported as **Style B**: a `ComputeGen1Config` built field-by-field. Routing it through
-  `to_compute_hardware_config` would silently restore the user's `fp32_dest_acc_en` in place of the op's
-  deliberate `true`, and flip any field the op left at a Metal default onto the helper's high-performance one.
+- **`COMPUTE`** — **Style A with a re-applied override.** The op resolves a TTNN `ComputeKernelConfig` but does
+  not pass `fp32_dest_acc_en` through: it forces the knob on regardless of the caller. So the helper
+  `to_compute_hardware_config(device->arch(), …)` is used for the translation — keeping the Gen2 branch it
+  supplies for free — and the op's override is re-applied on the returned config:
+
+  ```cpp
+  auto compute_hw = ttnn::to_compute_hardware_config(device->arch(), operation_attributes.compute_kernel_config);
+  std::get<ComputeGen1Config>(compute_hw).enable_32_bit_dest = true;
+  ```
+
+  Without that second line the helper would hand the caller's `fp32_dest_acc_en` back, silently defeating an
+  override the op documents as necessary to keep generated values inside `[from, to)`. The substitution is exact:
+  `operation_attributes.compute_kernel_config` is already the resolved config (`init_device_compute_kernel_config`
+  runs at invoke, `device/uniform_device_operation.cpp:55`), and `get_compute_kernel_config_args` — which the
+  legacy factory called — ignores its `arch` argument and is a pure field splat
+  (`ttnn/cpp/ttnn/operations/core/compute_kernel/compute_kernel_config.cpp:99-107`).
 
   | legacy `ComputeConfigDescriptor` field | value | Metal 2.0 `ComputeGen1Config` |
   |---|---|---|
@@ -168,8 +181,9 @@ reserved / peeked / pushed in **both** dtype configs, and its entry size is read
   | `math_approx_mode` (bool) | resolved from `compute_kernel_config` | `sfpu_precision_mode` — `true → Approximate`, `false → Precise` |
   | `fp32_dest_acc_en` | **hardcoded `true`** @ `:182` | `enable_32_bit_dest = true` — 1:1 |
   | `dst_full_sync_en` | resolved from `compute_kernel_config` | `double_buffer_dest = !dst_full_sync_en` — **inverted** |
-  | `unpack_to_dest_mode` | **unset** (legacy default: all `Default`) | `unpack_modes` — **left empty** |
-  | `bfp8_pack_precise` | **unset** (`false`) | `bfp_pack_precision_mode` — left at its `Approximate` default (defaults coincide) |
+  | `unpack_to_dest_mode` | **unset** (legacy default: all `Default`) | `unpack_modes` — **left empty** (helper leaves it default) |
+  | `bfp8_pack_precise` | **unset** (`false`) | `bfp_pack_precision_mode` — left at its `Approximate` default (helper leaves it default; defaults coincide) |
+  | `packer_l1_acc` | resolved, **never read** by the legacy factory | no Metal 2.0 counterpart — no action |
 
   **`unpack_modes` stays empty, and the FP32 required-entry rule does not fire.** The validator's rule is scoped
   to `binding.endpoint_type == CONSUMER` (`tt_metal/impl/metal2_host_api/program_spec.cpp:1056-1078`), and the
