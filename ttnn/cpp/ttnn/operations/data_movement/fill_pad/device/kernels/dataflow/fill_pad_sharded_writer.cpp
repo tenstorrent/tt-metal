@@ -13,15 +13,21 @@
  *   No cross-core NOC access.
  *
  * Metal 2.0 named resources:
- *   CTAs:  W_tiles; W_mod32 (only when the right mask is bound), H_mod32 (only
- *          when the bottom mask is bound).
- *   Defines: HAS_RIGHT_PAD / HAS_BOTTOM_PAD gate the
- *            conditionally-bound right / bottom mask DFBs (per compute group).
- *   DFBs:  dfb::right_mask (PRODUCER, conditional), dfb::bot_mask (PRODUCER,
- *          conditional), dfb::data_out (this writer is its CONSUMER).
+ *   CTAs:  W_tiles; W_mod32 / H_mod32 (present whenever the program globally has a
+ *          right / bottom pad — the mask DFBs are bound uniformly on all cores).
+ *   Defines: HAS_RIGHT_PAD / HAS_BOTTOM_PAD gate the right / bottom mask DFB
+ *            binding + push. They reflect the GLOBAL pad flags (same for every
+ *            sharded core), not this core's edge status, so the mask DFBs are placed
+ *            uniformly. This core's actual edge status comes from the runtime
+ *            has_right_pad_core / has_bottom_pad_core args, which drive the
+ *            write-back pattern. (Non-uniform mask placement previously left the
+ *            data_out rendezvous unsatisfiable on bottom-only cores — sim deadlock.)
+ *   DFBs:  dfb::right_mask (PRODUCER), dfb::bot_mask (PRODUCER), dfb::data_out
+ *          (this writer is its CONSUMER).
  *   tensor: tensor::dst — bound only to recover this core's shard L1 base
  *           (Case 2: get_bank_base_address()); raw self-write arithmetic unchanged.
- *   RTAs:  shard_H_tiles, has_bottom_pad_core, num_work, local_right_col.
+ *   RTAs:  shard_H_tiles, has_bottom_pad_core, num_work, local_right_col,
+ *          has_right_pad_core.
  *
  * Tile ordering mirrors fill_pad_sharded_reader.cpp and fill_pad_compute.cpp exactly.
  */
@@ -38,18 +44,14 @@
 void kernel_main() {
     constexpr auto W_tiles = get_arg(args::W_tiles);
 
-    // has_right_pad is carried as a preprocessor define (not a CTA) because it gates
-    // references to the conditionally-bound right mask DFB.
-#ifdef HAS_RIGHT_PAD
-    constexpr std::uint32_t has_right_pad = 1;
-#else
-    constexpr std::uint32_t has_right_pad = 0;
-#endif
-
     const auto shard_H_tiles = get_arg(args::shard_H_tiles);
     const auto has_bottom_pad_core = get_arg(args::has_bottom_pad_core);
     const auto num_work = get_arg(args::num_work);
     const auto local_right_col = get_arg(args::local_right_col);
+    // The mask DFBs are bound uniformly on all cores, so this core's actual right-edge status is
+    // carried as a runtime arg and drives the write-back pattern (the compile-time HAS_RIGHT_PAD
+    // only gates the — now uniform — right-mask binding/push).
+    const auto has_right_pad_core = get_arg(args::has_right_pad_core);
 
     if (num_work == 0) {
         return;
@@ -81,9 +83,9 @@ void kernel_main() {
 #endif
 #ifdef HAS_BOTTOM_PAD
     constexpr auto H_mod32 = get_arg(args::H_mod32);
-    if (has_bottom_pad_core) {
-        push_bottom_mask_tile<mask_t, H_mod32, TILE>(dfb_bot_mask, static_cast<mask_t>(MASK_VALUE));
-    }
+    // Pushed on every working core: the compute waits for bot_mask uniformly (uniform DFB
+    // placement). Cores with no bottom work simply never consume it.
+    push_bottom_mask_tile<mask_t, H_mod32, TILE>(dfb_bot_mask, static_cast<mask_t>(MASK_VALUE));
 #endif
 
     // ---- Phase 2: write-back loop ----
@@ -97,7 +99,7 @@ void kernel_main() {
         // ---- Mode B ----
 
         // Step 1: right non-corner tiles (rows 0..shard_H_tiles-2, col local_right_col)
-        if constexpr (has_right_pad) {
+        if (has_right_pad_core) {
             for (std::uint32_t r = 0; r < shard_H_tiles - 1u; r++) {
                 const std::uint32_t dst = shard_l1_base + (r * W_tiles + local_right_col) * tile_bytes;
                 dfb_data_out.wait_front(1);
@@ -115,7 +117,7 @@ void kernel_main() {
         }
 
         // Step 2: bottom row
-        if constexpr (has_right_pad) {
+        if (has_right_pad_core) {
             // Non-corner bottom tiles: cols 0..local_right_col-1
             for (std::uint32_t c = 0; c < local_right_col; c++) {
                 const std::uint32_t dst = shard_l1_base + ((shard_H_tiles - 1u) * W_tiles + c) * tile_bytes;
@@ -164,7 +166,7 @@ void kernel_main() {
     } else {
         // ---- Mode A: right-column tiles only ----
 
-        if constexpr (has_right_pad) {
+        if (has_right_pad_core) {
             for (std::uint32_t r = 0; r < shard_H_tiles; r++) {
                 const std::uint32_t dst = shard_l1_base + (r * W_tiles + local_right_col) * tile_bytes;
                 dfb_data_out.wait_front(1);

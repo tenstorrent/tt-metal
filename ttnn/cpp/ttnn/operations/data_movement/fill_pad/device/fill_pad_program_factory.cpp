@@ -542,8 +542,14 @@ ttnn::device_operation::ProgramArtifacts FillPadL1ShardedProgramFactory::create_
             .writer_run = KernelRunArgs{.kernel = KernelSpecName{"writer_" + gs}},
             .compute_run = KernelRunArgs{.kernel = KernelSpecName{"compute_" + gs}}};
 
-        const bool k_right = key.has_right_pad != 0u;
-        const bool k_bottom = key.has_bottom_pad != 0u;
+        // Bind/define the mask DFBs uniformly on ALL sharded cores (matching the interleaved
+        // factory and main's all-cores CB allocation). Per-core right/bottom behavior is driven
+        // by the runtime tile counts and has_right_pad_core / has_bottom_pad_core, not by the
+        // binding. Non-uniform mask placement (only on rp/bp cores) left the data_out DFB
+        // producer/consumer rendezvous unsatisfiable on bottom-only cores, deadlocking the
+        // simulator (#50804); uniform placement keeps every core's DFB layout identical.
+        const bool k_right = has_right_pad;
+        const bool k_bottom = has_bottom_pad;
 
         // Mask defines for this group's writer + compute.
         auto mask_defines = fill_defines;
@@ -591,7 +597,8 @@ ttnn::device_operation::ProgramArtifacts FillPadL1ShardedProgramFactory::create_
             .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "dst"}},
             .compile_time_args = std::move(writer_cta),
             .runtime_arg_schema =
-                {.runtime_arg_names = {"shard_H_tiles", "has_bottom_pad_core", "num_work", "local_right_col"}},
+                {.runtime_arg_names =
+                     {"shard_H_tiles", "has_bottom_pad_core", "num_work", "local_right_col", "has_right_pad_core"}},
             .hw_config = ttnn::create_writer_datamovement_config(input_tensor.device()->arch()),
         };
         writer_spec.compiler_options.defines = mask_defines;
@@ -669,7 +676,8 @@ ttnn::device_operation::ProgramArtifacts FillPadL1ShardedProgramFactory::create_
             {{"shard_H_tiles", ci.shard_H_tiles},
              {"has_bottom_pad_core", ci.has_bottom_pad},
              {"num_work", ci.num_work},
-             {"local_right_col", ci.local_right_col}});
+             {"local_right_col", ci.local_right_col},
+             {"has_right_pad_core", ci.has_right_pad}});
 
         std::uint32_t num_right = 0, num_bottom = 0, num_corner = 0;
         if (ci.has_bottom_pad == 0u) {
