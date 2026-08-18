@@ -19,4 +19,5 @@ global_env:
   PREFILL_TRACE_DIR: "/mnt/models/deepseek-prefill-cache/golden/structured_traces/kimi_debug_55k_vllm"
   PREFILL_STANDALONE_CHUNKED_PCC: "0.88"
 
-  PREFILL_STANDALONE_PCC: "0"              # request mode; the standalone hook is not the gate here
+  PREFILL_STANDALONE_PCC: "0"     
+  PREFILL_SEND_SHOTDOWN: "1"         # send -1 shutdown signal
