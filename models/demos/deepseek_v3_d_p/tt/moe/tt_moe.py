@@ -34,6 +34,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_reduce import TtReduceModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
 from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import TtSharedExpert
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
+from models.demos.deepseek_v3_d_p.utils.expert_dtypes import DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE
 
 
 class TtMoe(LightweightModule):
@@ -59,12 +60,25 @@ class TtMoe(LightweightModule):
     """
 
     @staticmethod
-    def check_cache_complete(cache_path: Path, layer_idx: int, experts_per_chip: int) -> bool:
-        """Check if MoE cache is complete (gate + routed experts + shared expert)."""
+    def check_cache_complete(
+        cache_path: Path,
+        layer_idx: int,
+        experts_per_chip: int,
+        routed_expert_weights_dtype: ttnn.DataType = DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE,
+    ) -> bool:
+        """Check if MoE cache is complete (gate + routed experts + shared expert).
+
+        routed_expert_weights_dtype: dtype the routed experts were/will be BUILT at.
+        as_tensor stamps it into the tensorbin filename, so the completeness check must pin the
+        same value it will later request -- otherwise a stale cache at another dtype reports
+        complete and the empty placeholder is loaded as the weights.
+        """
         prefix = f"layer_{layer_idx}"
         if not TtMoEGatePrefill.check_cache_complete(cache_path, f"{prefix}.gate"):
             return False
-        if not TtRoutedExpert.check_cache_complete(cache_path, f"{prefix}.routed_expert", experts_per_chip):
+        if not TtRoutedExpert.check_cache_complete(
+            cache_path, f"{prefix}.routed_expert", experts_per_chip, routed_expert_weights_dtype
+        ):
             return False
         if not TtSharedExpert.check_cache_complete(cache_path, f"{prefix}.shared_expert"):
             return False
@@ -150,7 +164,7 @@ class TtMoe(LightweightModule):
         routed_expert_weights: list[dict] = None,
         shared_expert_weights: dict = None,
         routed_expert_activations_dtype=ttnn.bfloat8_b,
-        routed_expert_weights_dtype=ttnn.bfloat4_b,
+        routed_expert_weights_dtype=DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE,
         shared_expert_activations_dtype=ttnn.bfloat16,
         shared_expert_weights_dtype=ttnn.bfloat8_b,
         gate_fallback_mode: GateComputeMode = GateComputeMode.HOST_ALL,
