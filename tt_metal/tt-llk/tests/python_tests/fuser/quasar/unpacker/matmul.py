@@ -67,7 +67,7 @@ class MatmulUnpacker(Unpacker):
             compute_unit.src_b.dimensions[1]
             // compute_unit.src_b.tile_shape.total_col_dim()
         )
-        output_ct_dim = compute_unit.src_a.tile_count_x
+        output_ct_dim = compute_unit.src_b.tile_count_x
 
         return (
             f"{{\n"
