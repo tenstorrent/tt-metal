@@ -205,7 +205,7 @@ re-discover them.
 | `ttnn.softplus` | fp32 relmax 3.4e-4, bf16 relmax 3.2e-2 | the `a + dt_bias` path is forced to fp32 (`dt_bias` reaches +15.6) | no — development finding |
 | `ttnn.exp` with a `-1e30` additive mask | -> 0, no NaN | decay masks are added **before** `exp`; cumulative gates reach ~-1e5 so `exp` of the unmasked upper triangle would overflow to `inf` and produce `0*inf = NaN` | no — development finding; the behaviour it justifies is exercised by every `linear` test |
 | `ttnn.permute` `(0,3,2,1)` / `(2,3,0,1)` | ok | gets `beta`/`g` from `[1,1,T,32]` into the `[.., heads, .., 1]` broadcast layout without a relayout | no — development finding; exercised by every `linear` test |
-| `chunked_scaled_dot_product_attention` with `chunk_start_idx_tensor` | ok, pcc 0.999777 | the device-tensor offset form **works** on this build; not adopted because feeding it without a host write needs a setup-time offsets table plus a per-chunk device slice, and its only benefit is one program instead of 128 for a full-context prefill (README §6 limitation 6, handed to `optimize`) | yes |
+| `chunked_scaled_dot_product_attention` with `chunk_start_idx_tensor` | ok, pcc 0.999774 | the device-tensor offset form **works** on this build; not adopted because feeding it without a host write needs a setup-time offsets table plus a per-chunk device slice, and its only benefit is one program instead of 128 for a full-context prefill (README §6 limitation 6, handed to `optimize`) | yes |
 
 Three further aliasing facts were **not** established by `probe_ttnn_ops.py` (which only checks
 buffer addresses for the in-place case, `p_inplace`) but by ad-hoc buffer-address comparisons while
@@ -621,7 +621,7 @@ evidence in `doc/functional_decoder/` was produced by one serialized pass in the
 | warmed prefill + traced warmed decode perf with tt-perf-report tables + CSV/provenance | `tracy/<kind>_<mode>/`, `perf_summary.json`, README §5 |
 | runtime fallback audit clean | `test_no_runtime_host_fallback` (static: 26 runtime methods plus every module-level helper, the helper list derived from the module rather than hand-written) + `test_no_host_ops_during_forward` (dynamic: ttnn host bridges monkeypatched to raise) |
 | determinism / repeated input | `test_prefill_determinism`, `test_decode_determinism` (bit-identical over 3 repeats) |
-| watcher-clean run | `watcher/` — 8 passed, 6483-line log (12 dumps), `watcher_hits.txt` empty (README §3.9) |
+| watcher-clean run | `watcher/` — 8 passed, 5405-line log (10 dumps), `watcher_hits.txt` empty (README §3.9) |
 | README + work log with commands, PCC, perf, limitations, artifacts | this file + `README.md` |
 
 ## 9. Independent stage review (round 1) and the work it produced
@@ -784,12 +784,45 @@ Acted on from the same review's "Other Concerns":
 `$stage-review` returned **more-work-needed** a seventh time. No P1, and it re-derived the substance
 of the stage independently — §3.1, §3.2, §4, §5's four perf rows and the sparse derivation, §3.8's
 identity control and all four tables, the watcher log, 24/24 probes — and confirmed the `start_pos`
-contract is now correct against every consumer. Four findings, two of which were mechanisms this
-stage had added and which were not actually working.
+contract is correct against every consumer. Four findings, two of which were mechanisms this stage
+had added and which were not actually working.
 
 | finding | outcome |
 |---|---|
-| **P2 — the freshness-list generator was self-disabling.** Its anchor regex required the block to *end* on the line `` `functional_decoder`. ``, but the block it writes continues past that sentence — so it could rewrite the block exactly once and never match again. It reported `WARN`, which (unlike `MISS`) does not fail the run, while both documents asserted "the list is generated ... so it cannot describe a different set than the command returns" | **Fixed and negative-tested.** The block is delimited by explicit `<!-- render_docs: freshness list (generated) -->
+| **P2 — a prefill writes zero-valued K/V for its padded tail into the paged cache, and a continuation would attend over it.** The fill works in whole `block_size` pages, so a `seq_len` of 1000 writes rows 1000..1023 as exact zeros (`rms_norm(0) = 0`, bias-free projections, `RoPE(0) = 0`). Harmless inside the call — causal masking and the output slice discard them — but a later chunk scores `q . 0 = 0` on those slots, takes `exp(0) = 1` of softmax weight each and returns a silently diluted result. And since `start_pos` must itself be `PREFILL_ALIGN`-aligned, a non-aligned chunk has **no** legal continuation at all | **Real hazard, now guarded.** `prefill_forward` tracks a per-slot logical high-water mark and requires a continued prefill to resume exactly where the previous one ended; `start_pos == 0` always starts fresh, and `reset_state()` clears it. `test_prefill_continuation_must_be_contiguous` pins the rejection and the legal contiguous case, per slot, for both kinds. The bookkeeping is a host-side `dict[int, int]` — never a tensor, never read by the device path — so it does not touch the fallback audit or trace safety. The first version of the check sat *before* the context-bound checks and changed an existing contract message; it now sits after them. |
+| **P2 — the freshness-list generator was self-disabling.** Its anchor required the block to end on a specific prose line, but the block it writes continues past that line — so it could rewrite the block exactly once and never match again. It reported `WARN`, which (unlike `MISS`) does not fail the run, while both documents asserted the list was generated and therefore could not disagree with the command | **Fixed and negative-tested.** The block is delimited by explicit HTML-comment markers (see `render_freshness_list`), a missing marker is now **`MISS`** like every other anchor, and `--check` exits 1 when one is removed. Verified idempotent. Fixing it surfaced the same class once more: `render_counts`' regex had stopped matching the tally sentence its own previous run wrote, so the suite count silently stayed at 106 while the log said 108. That pattern now matches on structure and reports `MISS`. |
+| **P2 — the committed `render_docs*.log` / `test_docs.log` did not reproduce from the committed tree**, because I re-ran the renderer by hand after the pass had captured them. Same ordering class round 6 recorded as fixed at the source | The closing sequence is re-run as the last step and its logs committed, so `diff <(render_docs.py --check) logs/render_docs_check.log` is empty. Round 6's fix was to the *pass*; what it missed is that a manual render afterwards silently invalidates the captured proof. |
+| **P2 — "chunked SDPA is silently wrong on a misaligned `chunk_start_idx`" is false for the path this layer takes.** With an explicit `program_config` and the scalar offset — exactly what `_full_attention_prefill` passes — `sdpa_device_operation.cpp:277-292` `TT_FATAL`s on `chunk_start_idx % q_chunk_size` and `% k_chunk_size`. Only the device-tensor form skips those checks, and this layer does not use it | Corrected in README §7 and §9, the `prefill_forward` comment and the test docstring. The `PREFILL_ALIGN` bound is unchanged and still necessary, but for the **right reason**: the genuinely silent consumer is the paged fill's `abs_pos // block_size`, which truncates. Worth recording that this stage cited the `>= 0` check as if it were the only validation for three rounds, in a section whose whole subject is reading op contracts carefully. |
+
+Acted on from the same review's "Other Concerns" and "Hard-Check Gaps":
+
+| concern | outcome |
+|---|---|
+| §5's 27% figure mixes device attention growth with host program creation, and the split is derivable from the committed CSV | Split, and generated so it stays honest: chunked SDPA scales with `Sk = chunk_start_idx + Sq`, so the first chunk's `SDPAOperation` summed over 128 chunks is **~7.2 s of device attention** (15% of the prefill), leaving ~5.6 s of program creation. They have different fixes — an SDPA configuration versus the device-tensor offset form — so quoting only the combined number would hand `optimize` one problem where there are two. |
+| no traced-replay correctness case crossed a change in the decode SDPA's **k-chunk count** — `test_traced_decode_pcc` replayed at 256/257, both inside the first 512-key chunk | Replay positions moved to **511 and 512**, which straddle the boundary (1 chunk -> 2) through one captured program, at no extra memory since the `layer_pairs` key is unchanged. 511 also makes the prefill non-aligned, so the padded-tail path is in the mix. |
+| `__post_init__` asserted `PREFILL_ALIGN % sdpa_chunk` and `% block_size` but not `% delta_chunk_size`, the one leg of the triangle `PREFILL_ALIGN`'s own docstring names | Added for linear layers. |
+| README §2 justified not bounding `current_pos` above by "would need a host read, which the runtime path forbids" — but `_decode_rope` already clamps the other end on device, so a symmetric `ttnn.minimum` needs no host read either | Re-justified honestly: an exact *rejection* would need a host read; a clamp would not. The bound is unchecked because nothing has needed it, not because it is impossible, and the note says what a serving stage should add. |
+| §9 said "the accuracy question is closed" next to an attention branch measured at 0.987 | Scoped to "closed **at the layer contract**", with the branch number and an explicit instruction that stage 5 measure it end to end rather than inherit the word. |
+
+**A postscript that belongs in the record.** While writing the row above about the self-disabling
+sentinel, I quoted the sentinel *literally* in this table. `render_freshness_list` matches
+`BEGIN .*? END` non-greedily, found that quote first, and rewrote everything from it to the real end
+marker — destroying the rest of this section, which was then committed. It reported `same`, because
+from its point of view it had rewritten a block successfully. The repair added a cardinality guard
+(exactly one marker pair or refuse, negative-tested), and round 8 found the guard was satisfied by
+the *stray* marker while the real block sat elsewhere, so the section stayed broken through another
+round. Written down because three separate self-checks failed quietly in two rounds, and the shape
+was the same every time: the mechanism reported success for something it had not done.
+
+Check it rather than trust it — but check it against the right reference. The shipped layer is
+`tt/functional_decoder.py`:
+
+```bash
+find models/autoports/qwen_qwen3_6_35b_a3b/doc -type f \
+  ! -newer models/autoports/qwen_qwen3_6_35b_a3b/tt/functional_decoder.py
+```
+
+<!-- render_docs: freshness list (generated) -->
 It currently lists exactly these, and each is explained:
 
 * `.gitignore`
@@ -853,7 +886,30 @@ or semantic changes) and rejected two >500 KB artifacts; the full suite was re-r
 reformat (**95 passed** — the suite as it stood at that commit; it has grown since, and §8 records
 the current count) before committing, and the artifact policy is documented in `tracy/README.md`.
 
-## 16. Commits
+## 16. Independent stage review (round 8) and the work it produced
+
+`$stage-review` returned **more-work-needed** an eighth time — but with a materially different
+shape: **no P1 and no correctness defect in the shipped layer.** The reviewer re-derived §3.1, §3.2,
+§4, §5 (all four perf rows, the three-way split, the sparse derivation, the 27% extrapolation),
+§3.8's identity control and all four tables, the maxabs sweep, the watcher run and the probe count
+from the committed artifacts, and re-checked the whole `start_pos` alignment contract against every
+consumer in source. All of it reproduced. Both findings were in the documentation / self-check layer.
+
+| finding | outcome |
+|---|---|
+| **P2 — this work log was still broken, and every guard passed.** The round-7 write-up quoted the freshness sentinel literally inside a table cell; that stray marker was the *only* pair in the file, so round 7's new "exactly one begin / one end or refuse" guard was satisfied and the renderer kept writing its block **into §15's finding table**. §15 was left with one truncated row, 43 lines duplicated from the next section, and its other three findings gone; §17 carried a stale hand-maintained copy of the list, one entry short of what the command returns. `render_docs --check`, `test_docs_match_artifacts` and the committed check log all reported success | §15 rebuilt from the review record with the marker escaped, the duplicate block removed, the stale hand copy deleted, and the generated block returned to the section whose prose introduces it. The guard was cardinal but not positional — it counted markers without asking whether they were in the right place — which is why a *misplaced single* marker sailed through. §15 now carries a postscript describing the whole sequence, because three separate self-checks failed quietly across two rounds and the shape was identical every time: **the mechanism reported success for something it had not done.** |
+| **P2 — the round-7 continuation guard was an undocumented public rejection path**, and three documented statements contradicted it: README §2's `start_pos` block described streaming with no contiguity condition, §4's continuation row listed alignment as the only requirement, §9 enumerated the consequences for later stages as alignment only, and `context_contract.json` recorded `start_pos_alignment` and nothing else | Documented in all five places plus the module docstring, with the consequence stated plainly rather than implied: a chunk whose `seq_len` is not a multiple of 128 **cannot be continued at all**, and a KV cache restored outside this layer object cannot be continued into — which is exactly the prefix-cache handoff §9 exists to warn a serving stage about. The hazard itself is now README §7 item 11. The goal contract asks for a *documented* prefill/decode contract; a guard that only exists in code and a commit message does not satisfy it. |
+
+Acted on from the same review's "Other Concerns":
+
+| concern | outcome |
+|---|---|
+| the continuity check ran before the `page_table is None` and `user_id >= max_batch_size` checks, so an out-of-range `user_id` reported "must continue from 0" | Moved after them. The round-7 fix had moved it after the *context-bound* checks only, which was two of the four. |
+| `self._prefill_end[user_id]` was written **before** the chunk loop, so an exception mid-prefill left a mark claiming work that never completed | Recorded at the end of `prefill_forward`, after every chunk has run. |
+| `decode_forward` does not advance the high-water mark, so prefilling a slot that has since decoded is accepted | Left as is and **documented** at the record site: decode is replayed from a captured trace, so host bookkeeping inside it would differ between eager and traced execution. That pattern is out of contract rather than rejected — `reset_state()` and start from `start_pos = 0`. |
+| §3.8's "`1` is the only `max_cores_per_head_batch` value with no bad cell **anywhere in the grid**" overstates it — the `(k_chunk 32, 1 core)` row is 0.7664 at 262143 keys | Scoped to the cores axis, which is the claim actually being made. |
+
+## 17. Commits
 
 Local only; nothing pushed.
 
@@ -894,25 +950,6 @@ Check it rather than trust it — but check it against the right reference. The 
 find models/autoports/qwen_qwen3_6_35b_a3b/doc -type f \
   ! -newer models/autoports/qwen_qwen3_6_35b_a3b/tt/functional_decoder.py
 ```
-
-It currently lists exactly these, and each is explained:
-
-* `.gitignore`
-* `functional_decoder/logs/measure_expert_union.log`
-* `functional_decoder/logs/probe_dram_capacity.log`
-* `functional_decoder/tracy/.gitignore`
-* `functional_decoder/triage/tt-triage-perf-hang.txt`
-* `functional_decoder/triage/tt-triage.txt`
-* `functional_decoder/weight_stats/layer_00.json`
-* `functional_decoder/weight_stats/layer_03.json`
-
-None of them can have been produced by a different version of the shipped layer: the
-`weight_stats/*.json` are checkpoint-derived, the `.gitignore` files describe the artifact policy,
-`triage/` records the two incidents in work_log section 6, and the `logs/` entries are the
-expert-union and DRAM-capacity probes, neither of which imports `functional_decoder`. The list is
-generated by `tests/render_docs.py`, which excludes only the three logs the pass writes *after*
-rendering (`render_docs.log`, `render_docs_check.log`, `test_docs.log`) -- running the raw command
-may show those, and their age says nothing about the layer.
 
 **That command deliberately does not use the newest file under `tests/`, and round 4 was right to
 flag the earlier wording for glossing over it.** Test and harness files are edited after the layer

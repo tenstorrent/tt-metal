@@ -110,6 +110,19 @@ def main():
                 "covered by tests."
             ),
             "start_pos_alignment": 128,
+            # A continuation has to satisfy *both* conditions; recording only the alignment is what
+            # round 8 found, and it is the half a serving stage is more likely to get wrong.
+            "start_pos_must_be_contiguous": True,
+            "continuation_note": (
+                "start_pos must equal where the previous prefill_forward on the same user_id ended "
+                "(0 for a fresh slot); start_pos=0 always starts a new sequence. Enforced by "
+                "prefill_forward. Required because a prefill pads to PREFILL_ALIGN and the paged "
+                "fill writes the padded, zero-valued K/V into the cache, so a non-contiguous "
+                "continuation would attend over zero keys and be silently diluted (README section 7 "
+                "item 11). Consequences: a chunk whose seq_len is not a multiple of 128 cannot be "
+                "continued at all, and a KV cache restored outside this layer object cannot be "
+                "continued into."
+            ),
         },
         "evidence": {
             "long_context_rows": "doc/functional_decoder/long_context.jsonl",

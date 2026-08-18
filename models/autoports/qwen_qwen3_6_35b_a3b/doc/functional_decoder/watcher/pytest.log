@@ -1,80 +1,80 @@
-2026-08-17 23:30:41.742 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+2026-08-18 00:17:31.880 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
 Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
 ============================= test session starts ==============================
 collecting ... collected 77 items / 69 deselected / 8 selected
 
-models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_chunk_continuation[linear] 2026-08-17 23:30:43.048 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
-2026-08-17 23:30:43.049 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
-2026-08-17 23:30:43.049 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
-2026-08-17 23:30:43.049 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
-2026-08-17 23:30:43.050 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:569)
-2026-08-17 23:30:43.050 | info     |             UMD | Firmware bundle version 19.9.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
-2026-08-17 23:30:43.055 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
-2026-08-17 23:30:43.277 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:168)
-2026-08-17 23:30:43.277 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
-2026-08-17 23:30:43.277 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:145)
-2026-08-17 23:30:43.277 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
-2026-08-17 23:30:43.279 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
-2026-08-17 23:30:43.552 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
-2026-08-17 23:30:43.670 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
-2026-08-17 23:30:43.671 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
-2026-08-17 23:30:43.671 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
-2026-08-17 23:30:43.671 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
-2026-08-17 23:30:43.671 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
-2026-08-17 23:30:43.671 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
-2026-08-17 23:30:43.671 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
-2026-08-17 23:30:43.671 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
-2026-08-17 23:30:43.671 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
-2026-08-17 23:30:43.671 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
-2026-08-17 23:30:43.671 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
-2026-08-17 23:30:43.671 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
-2026-08-17 23:30:43.671 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
-2026-08-17 23:30:43.671 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
-2026-08-17 23:30:43.726 | info     |       LLRuntime | Watcher log file: models/autoports/qwen_qwen3_6_35b_a3b/doc/functional_decoder/watcher/generated/watcher/watcher.log (watcher_server.cpp:286)
-2026-08-17 23:30:43.726 | info     |       LLRuntime | Watcher attached device 0 (watcher_server.cpp:132)
-2026-08-17 23:30:43.726 | info     |       LLRuntime | Watcher attached device 1 (watcher_server.cpp:132)
-2026-08-17 23:30:43.726 | info     |       LLRuntime | Watcher attached device 2 (watcher_server.cpp:132)
-2026-08-17 23:30:43.726 | info     |       LLRuntime | Watcher attached device 3 (watcher_server.cpp:132)
-2026-08-17 23:30:43.726 | info     |       LLRuntime | Watcher server initialized, disabled features: None (watcher_server.cpp:547)
-2026-08-17 23:30:43.726 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
-2026-08-17 23:30:43.726 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
-2026-08-17 23:30:43.730 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
-2026-08-17 23:30:43.735 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
-2026-08-17 23:30:43.739 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
-2026-08-17 23:30:43.780 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681929248_memory' (shm_resource_tracker.cpp:282)
-2026-08-17 23:30:44.357 | info     |           Metal | [Real-time profiler] Device 3 sync complete: 100 samples, frequency=1.349945 GHz, device_time_at_sync=256751688646790 cycles (realtime_profiler_manager.cpp:1127)
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_chunk_continuation[linear] 2026-08-18 00:17:33.198 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-18 00:17:33.198 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-08-18 00:17:33.198 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-08-18 00:17:33.198 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-08-18 00:17:33.199 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:569)
+2026-08-18 00:17:33.199 | info     |             UMD | Firmware bundle version 19.9.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-08-18 00:17:33.203 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-08-18 00:17:33.426 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:168)
+2026-08-18 00:17:33.427 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-08-18 00:17:33.427 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:145)
+2026-08-18 00:17:33.427 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-08-18 00:17:33.428 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-08-18 00:17:33.695 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+2026-08-18 00:17:33.810 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-08-18 00:17:33.810 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-08-18 00:17:33.810 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-08-18 00:17:33.810 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-08-18 00:17:33.810 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-18 00:17:33.810 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-18 00:17:33.810 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-18 00:17:33.810 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-18 00:17:33.810 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-18 00:17:33.810 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-18 00:17:33.810 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-18 00:17:33.810 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-18 00:17:33.810 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-08-18 00:17:33.810 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-08-18 00:17:33.865 | info     |       LLRuntime | Watcher log file: models/autoports/qwen_qwen3_6_35b_a3b/doc/functional_decoder/watcher/generated/watcher/watcher.log (watcher_server.cpp:286)
+2026-08-18 00:17:33.865 | info     |       LLRuntime | Watcher attached device 0 (watcher_server.cpp:132)
+2026-08-18 00:17:33.865 | info     |       LLRuntime | Watcher attached device 1 (watcher_server.cpp:132)
+2026-08-18 00:17:33.865 | info     |       LLRuntime | Watcher attached device 2 (watcher_server.cpp:132)
+2026-08-18 00:17:33.865 | info     |       LLRuntime | Watcher attached device 3 (watcher_server.cpp:132)
+2026-08-18 00:17:33.865 | info     |       LLRuntime | Watcher server initialized, disabled features: None (watcher_server.cpp:547)
+2026-08-18 00:17:33.865 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-08-18 00:17:33.865 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-08-18 00:17:33.869 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-08-18 00:17:33.874 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-08-18 00:17:33.878 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-08-18 00:17:33.919 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681929248_memory' (shm_resource_tracker.cpp:282)
+2026-08-18 00:17:34.497 | info     |           Metal | [Real-time profiler] Device 3 sync complete: 100 samples, frequency=1.349981 GHz, device_time_at_sync=259566152082662 cycles (realtime_profiler_manager.cpp:1127)
 [transformers] The fast path is not available because one of the required library is not installed. Falling back to torch implementation. To install follow https://github.com/fla-org/flash-linear-attention#installation and https://github.com/Dao-AILab/causal-conv1d
 [transformers] You tried to access the `ExpertsInterface` with a `config._experts_implementation` set to `None`. This is expected if you use an Expert Module as a standalone Module. If this is not the case, something went wrong with the dispatch of `config._experts_implementation`
 [layer_pairs] building ('linear', 1, 8192, False, ()) (live pairs: 0)
 PASSED
-models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_chunk_continuation[full] 2026-08-17 23:30:53.754 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
-2026-08-17 23:30:53.758 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
-2026-08-17 23:30:53.762 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
-2026-08-17 23:30:53.766 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_chunk_continuation[full] 2026-08-18 00:17:43.893 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-08-18 00:17:43.898 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-08-18 00:17:43.902 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-08-18 00:17:43.906 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
 [layer_pairs] building ('full', 1, 8192, False, ()) (live pairs: 1)
 PASSED
 models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_ragged_current_positions [layer_pairs] building ('full', 4, 2048, False, ()) (live pairs: 2)
 PASSED
-models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_skips_inactive_slots_with_negative_position 2026-08-17 23:31:03.784 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
-2026-08-17 23:31:03.788 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
-2026-08-17 23:31:03.793 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
-2026-08-17 23:31:03.797 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_skips_inactive_slots_with_negative_position 2026-08-18 00:17:53.923 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-08-18 00:17:53.928 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-08-18 00:17:53.932 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-08-18 00:17:53.936 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
 [layer_pairs] building ('full', 4, 1024, False, ()) (live pairs: 3)
 PASSED
 models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_paged_kv_cache_contents_match_hf PASSED
 models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_from_seeded_random_linear_state [layer_pairs] building ('linear', 2, 1024, False, ()) (live pairs: 4)
 PASSED
-models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_traced_decode_pcc[linear] 2026-08-17 23:31:13.819 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
-2026-08-17 23:31:13.823 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
-2026-08-17 23:31:13.827 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
-2026-08-17 23:31:13.832 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
-2026-08-17 23:31:21.693 | warning  |           Metal | Allocating device buffers is unsafe due to the existence of an active trace. These buffers may be corrupted once a trace is executed. (allocator.cpp:110)
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_traced_decode_pcc[linear] 2026-08-18 00:18:03.955 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-08-18 00:18:03.959 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-08-18 00:18:03.964 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-08-18 00:18:03.968 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-08-18 00:18:10.864 | warning  |           Metal | Allocating device buffers is unsafe due to the existence of an active trace. These buffers may be corrupted once a trace is executed. (allocator.cpp:110)
 [layer_pairs] building ('linear', 8, 2048, False, ()) (live pairs: 5)
 PASSED
-models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_traced_decode_pcc[full] 2026-08-17 23:31:23.850 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
-2026-08-17 23:31:23.854 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
-2026-08-17 23:31:23.859 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
-2026-08-17 23:31:23.863 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_traced_decode_pcc[full] 2026-08-18 00:18:13.985 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-08-18 00:18:13.995 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-08-18 00:18:14.006 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-08-18 00:18:14.018 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
 [layer_pairs] building ('full', 8, 2048, False, ()) (live pairs: 6)
 PASSED
 
@@ -89,23 +89,23 @@ PASSED
 ==================================== PASSES ====================================
 - generated xml file: /localdev/vkovacevic/tt-metal/generated/test_reports/most_recent_tests.xml -
 ============================== slowest durations ===============================
-9.99s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_traced_decode_pcc[linear]
-8.51s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_traced_decode_pcc[full]
-6.06s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_chunk_continuation[linear]
-5.52s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_ragged_current_positions
-5.50s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_chunk_continuation[full]
-4.67s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_skips_inactive_slots_with_negative_position
-3.98s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_from_seeded_random_linear_state
+9.07s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_traced_decode_pcc[linear]
+8.04s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_traced_decode_pcc[full]
+6.07s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_chunk_continuation[linear]
+5.53s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_chunk_continuation[full]
+5.50s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_ragged_current_positions
+4.66s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_skips_inactive_slots_with_negative_position
+4.02s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_from_seeded_random_linear_state
 1.81s teardown models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_traced_decode_pcc[full]
-1.53s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_chunk_continuation[linear]
-0.51s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_paged_kv_cache_contents_match_hf
-0.22s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_paged_kv_cache_contents_match_hf
-0.22s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_traced_decode_pcc[linear]
+1.52s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_chunk_continuation[linear]
+0.50s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_paged_kv_cache_contents_match_hf
 0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_prefill_chunk_continuation[full]
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_ragged_current_positions
-0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_skips_inactive_slots_with_negative_position
+0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_traced_decode_pcc[linear]
+0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_from_seeded_random_linear_state
+0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_paged_kv_cache_contents_match_hf
 0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_traced_decode_pcc[full]
-0.20s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_from_seeded_random_linear_state
+0.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_skips_inactive_slots_with_negative_position
+0.20s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_ragged_current_positions
 
 (7 durations < 0.005s hidden.  Use -vv to show these durations.)
 =========================== short test summary info ============================
@@ -117,14 +117,10 @@ PASSED models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::t
 PASSED models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_decode_from_seeded_random_linear_state
 PASSED models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_traced_decode_pcc[linear]
 PASSED models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_traced_decode_pcc[full]
-================ 8 passed, 69 deselected, 2 warnings in 49.60s =================
+================ 8 passed, 69 deselected, 2 warnings in 48.24s =================
 sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
-2026-08-17 23:31:33.884 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
-2026-08-17 23:31:33.888 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
-2026-08-17 23:31:33.893 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
-2026-08-17 23:31:33.897 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
 nanobind: leaked 1 instances!
- - leaked instance 0x7c2b5eb057e8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x7635f47456f8 of type "ttnn._ttnn.tensor.CoreRangeSet"
 nanobind: leaked 13 types!
  - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
  - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
@@ -138,27 +134,27 @@ nanobind: leaked 13 types!
  - leaked type "ttnn._ttnn.tensor.Tensor"
  - ... skipped remainder
 nanobind: leaked 199 functions!
- - leaked function ""
- - leaked function ""
- - leaked function ""
+ - leaked function "is_allocated"
  - leaked function "subtract"
- - leaked function "get_tile"
- - leaked function ""
- - leaked function ""
+ - leaked function "devices"
  - leaked function ""
  - leaked function "to_json"
  - leaked function ""
+ - leaked function ""
+ - leaked function "host_buffer"
+ - leaked function ""
+ - leaked function ""
  - ... skipped remainder
 nanobind: this is likely caused by a reference counting issue in the binding code.
-See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-17 23:31:34.440 | info     |    BuildKernels | JIT cache stats: 1245/1257 hits (99.0%) [1245 cached, 1121 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
-2026-08-17 23:31:34.440 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
-2026-08-17 23:31:34.443 | info     |       LLRuntime | Watcher thread stopped watching... (watcher_server.cpp:595)
-2026-08-17 23:31:34.443 | info     |       LLRuntime | Watcher detached device 0 (watcher_server.cpp:181)
-2026-08-17 23:31:34.443 | info     |       LLRuntime | Watcher detached device 1 (watcher_server.cpp:181)
-2026-08-17 23:31:34.443 | info     |       LLRuntime | Watcher detached device 2 (watcher_server.cpp:181)
-2026-08-17 23:31:34.443 | info     |       LLRuntime | Watcher detached device 3 (watcher_server.cpp:181)
-2026-08-17 23:31:34.456 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
-2026-08-17 23:31:34.456 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
-2026-08-17 23:31:34.908 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
-2026-08-17 23:31:34.909 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
-2026-08-17 23:31:34.909 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-18 00:18:23.202 | info     |    BuildKernels | JIT cache stats: 1257/1257 hits (100.0%) [1257 cached, 1121 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-18 00:18:23.202 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-18 00:18:23.205 | info     |       LLRuntime | Watcher thread stopped watching... (watcher_server.cpp:595)
+2026-08-18 00:18:23.205 | info     |       LLRuntime | Watcher detached device 0 (watcher_server.cpp:181)
+2026-08-18 00:18:23.205 | info     |       LLRuntime | Watcher detached device 1 (watcher_server.cpp:181)
+2026-08-18 00:18:23.205 | info     |       LLRuntime | Watcher detached device 2 (watcher_server.cpp:181)
+2026-08-18 00:18:23.205 | info     |       LLRuntime | Watcher detached device 3 (watcher_server.cpp:181)
+2026-08-18 00:18:23.217 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-08-18 00:18:23.217 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-08-18 00:18:23.745 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-08-18 00:18:23.745 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-08-18 00:18:23.745 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)

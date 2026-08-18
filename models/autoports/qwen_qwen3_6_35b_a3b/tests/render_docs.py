@@ -448,7 +448,8 @@ context and silently wrong at some shorter context, and the boundary moves with 
 {multicore_table()}
 
 Bold cells are silently wrong answers -- no error, no warning, just a wrong tensor. The unbolded
-0.98-0.999 values in the 1-core rows are the accumulation floor, not wrongness. `1` is the only
+0.98-0.999 values in the 1-core rows are the accumulation floor, not wrongness. Along the **cores**
+axis, `1` is the only
 `max_cores_per_head_batch` value with no such cell anywhere in the grid, and it is also what the op
 already does by default; the config pins it so that a later stage has to read why before changing
 it. `exp_approx_mode` is bit-identically irrelevant (held-axis rows), and an `8x8` grid at 1

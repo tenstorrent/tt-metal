@@ -19,14 +19,14 @@
         "aligned_to_prefill_align_128": false,
         "hf_pcc": 0.9999742,
         "hf_reference": "exact tail reference over the last 128 query positions",
-        "device_wall_seconds": 43.876
+        "device_wall_seconds": 43.871
       },
       "full_attention": {
         "seq_len": 262143,
         "aligned_to_prefill_align_128": false,
         "hf_pcc": 0.9999891,
         "hf_reference": "exact tail reference over the last 128 query positions",
-        "device_wall_seconds": 48.832
+        "device_wall_seconds": 48.843
       }
     },
     "decode": {
@@ -35,14 +35,14 @@
         "context_entries": 262144,
         "hf_pcc": 0.999986,
         "state_source": "262143-token prefill through this layer",
-        "device_wall_seconds": 0.043
+        "device_wall_seconds": 0.042
       },
       "full_attention": {
         "position": 262143,
         "context_entries": 262144,
         "hf_pcc": 0.9999939,
         "state_source": "262143-token prefill through this layer",
-        "device_wall_seconds": 0.047
+        "device_wall_seconds": 0.045
       }
     }
   },
@@ -60,7 +60,9 @@
     "accepts_any_logical_seq_len": true,
     "internal_alignment": 128,
     "note": "prefill_forward pads to a multiple of PREFILL_ALIGN=128 internally, masks the padded tokens out of the linear-attention recurrence, and slices the output back to the logical length. Non-aligned lengths 1/33/65/129/1025/2049/3000/262143 are covered by tests.",
-    "start_pos_alignment": 128
+    "start_pos_alignment": 128,
+    "start_pos_must_be_contiguous": true,
+    "continuation_note": "start_pos must equal where the previous prefill_forward on the same user_id ended (0 for a fresh slot); start_pos=0 always starts a new sequence. Enforced by prefill_forward. Required because a prefill pads to PREFILL_ALIGN and the paged fill writes the padded, zero-valued K/V into the cache, so a non-contiguous continuation would attend over zero keys and be silently diluted (README section 7 item 11). Consequences: a chunk whose seq_len is not a multiple of 128 cannot be continued at all, and a KV cache restored outside this layer object cannot be continued into."
   },
   "evidence": {
     "long_context_rows": "doc/functional_decoder/long_context.jsonl",

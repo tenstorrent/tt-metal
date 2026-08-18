@@ -51,10 +51,22 @@ prefill_forward(x, *, user_id=0, page_table=None, start_pos=0) -> ttnn.Tensor
     user_id     sequence slot: page_table row (full attention) / state slot (linear).
     page_table  int32 [max_batch, supported_context // 64] ROW_MAJOR. Required for
                 full_attention, ignored for linear_attention.
-    start_pos   absolute position of x[..., 0, :]; multiple of PREFILL_ALIGN (128) — an op
-                contract, derived in §9. Lets a caller stream a long prompt across several
-                calls (KV cache, conv state and recurrent state all carry over). Any single
-                prefill of any seq_len needs start_pos = 0, so this never limits prompt length.
+    start_pos   absolute position of x[..., 0, :]. Two conditions, both enforced:
+                  * a multiple of PREFILL_ALIGN (128) — an op contract, derived in §9;
+                  * **contiguous with this slot's previous prefill**. start_pos must equal
+                    where the last prefill_forward on this user_id ended (0 for a fresh
+                    slot, and start_pos = 0 always starts a new sequence). Otherwise it
+                    raises `must continue from N`.
+                Contiguity is required because a prefill pads up to PREFILL_ALIGN and the
+                paged fill writes the **padded** K/V — exact zeros — into the cache, so a
+                later chunk that skipped them would attend over zero keys and be silently
+                diluted (§7 item 11). A consequence worth stating plainly: a chunk whose
+                seq_len is not a multiple of 128 **cannot be continued at all**. Chunk on
+                128-token boundaries, or prefill the whole prompt in one call — any single
+                prefill of any seq_len works at start_pos = 0, so this never limits prompt
+                length. Note the state is per layer object: a stage that restores a KV cache
+                externally and then calls prefill_forward(start_pos=prefix_len) on a fresh
+                layer is rejected, because this layer has not written that prefix.
     returns     [1, 1, seq_len, 2048]
 
 decode_forward(x, *, current_pos=None, page_table=None) -> ttnn.Tensor
@@ -285,6 +297,9 @@ non-aligned, so the longest test also exercises the pad/mask/slice path.
 * `test_decode_forward_rejects_out_of_contract_inputs` covers the documented raise paths:
   missing `page_table` / `current_pos`, `batch != max_batch_size`, misaligned `start_pos`,
   `start_pos + seq_len` past the context, and `user_id >= max_batch_size`.
+  `test_prefill_continuation_must_be_contiguous` covers the two remaining ones — a `start_pos`
+  past the padded end of the context, and a **non-contiguous continuation** (§2, §7 item 11) —
+  for both kinds and per slot.
 
 ### 3.5 Traced decode
 
@@ -342,8 +357,8 @@ Three diagnostics, all kept in `tests/` with their output in `logs/`. The short 
 variable is **`SDPAProgramConfig::k_chunk_size`** -- how many keys the decode SDPA accumulates per
 chunk, i.e. the depth of the sequential bf16 accumulation -- and shipping the largest chunk the L1
 allows fixes it, while also making the op 3.7x faster than the op's own default
-(27.37 -> 7.45 ms/call at 262144 keys; passing no config at all measures
-28.19 ms, the same program within run-to-run variance).
+(27.35 -> 7.45 ms/call at 262144 keys; passing no config at all measures
+28.17 ms, the same program within run-to-run variance).
 
 **Read this first: "pass no program config" is not a neutral choice.** The paged decode entry point
 substitutes a full config of its own before the device op ever sees one
@@ -430,7 +445,7 @@ is 8192 sequential accumulation steps and 512 is 512:
 
 | `k_chunk_size` | 257 | 1024 | 4096 | 32768 | 131072 | 262143 | op time @262144 | verdict |
 |---|---|---|---|---|---|---|---|---|
-| 32 | 0.9998 | 0.9998 | 0.9995 | 0.9875 | 0.9170 | 0.7664 | **27.37 ms** | the op's own default -- worst measured |
+| 32 | 0.9998 | 0.9998 | 0.9995 | 0.9875 | 0.9170 | 0.7664 | **27.35 ms** | the op's own default -- worst measured |
 | 64 | 0.9998 | 0.9998 | 0.9997 | 0.9939 | 0.9707 | 0.9179 | -- |  |
 | 128 | 0.9998 | 0.9998 | 0.9998 | 0.9980 | 0.9839 | 0.9704 | **11.53 ms** | what `k_chunk_size=0` resolves to; shipped in round 2 |
 | 256 | 0.9998 | 0.9998 | 0.9998 | 0.9989 | 0.9857 | 0.9809 | **8.73 ms** |  |
@@ -459,7 +474,8 @@ context and silently wrong at some shorter context, and the boundary moves with 
 | 512 | 16 | 0.9998 | **0.6918** | **0.2514** | 0.9998 | 0.9998 | 0.9998 |
 
 Bold cells are silently wrong answers -- no error, no warning, just a wrong tensor. The unbolded
-0.98-0.999 values in the 1-core rows are the accumulation floor, not wrongness. `1` is the only
+0.98-0.999 values in the 1-core rows are the accumulation floor, not wrongness. Along the **cores**
+axis, `1` is the only
 `max_cores_per_head_batch` value with no such cell anywhere in the grid, and it is also what the op
 already does by default; the config pins it so that a later stage has to read why before changing
 it. `exp_approx_mode` is bit-identically irrelevant (held-axis rows), and an `8x8` grid at 1
@@ -469,17 +485,17 @@ core/head equals `11x10` at 1 core/head to the last digit, so neither is the var
 
 | setting | op time @262144 | op PCC @262143 | |
 |---|---|---|---|
-| `no config` | **28.194 ms** | 0.7664 | = k32, 1 core -- what the layer ran before any sweep |
-| `op default (k32, 1 core)` | **27.368 ms** | 0.7664 | the substituted default, spelled out |
-| `k0 dynamic, 1 core` | **11.533 ms** | 0.9704 | k128; shipped in round 2 |
-| `k256, 1 core` | **8.727 ms** | 0.9809 |  |
-| `k512, 1 core` | **7.453 ms** | 0.9825 | **ships** |
-| `k256, 16 cores` | **1.385 ms** | 0.9997 | fastest overall -- and unshippable, see above |
-| `k32, 16 cores` | **1.885 ms** | 0.0000 | the op default's chunk at 16 cores |
+| `no config` | **28.174 ms** | 0.7664 | = k32, 1 core -- what the layer ran before any sweep |
+| `op default (k32, 1 core)` | **27.348 ms** | 0.7664 | the substituted default, spelled out |
+| `k0 dynamic, 1 core` | **11.534 ms** | 0.9704 | k128; shipped in round 2 |
+| `k256, 1 core` | **8.733 ms** | 0.9809 |  |
+| `k512, 1 core` | **7.451 ms** | 0.9825 | **ships** |
+| `k256, 16 cores` | **1.382 ms** | 0.9997 | fastest overall -- and unshippable, see above |
+| `k32, 16 cores` | **1.933 ms** | 0.0000 | the op default's chunk at 16 cores |
 
 There is **no accuracy/latency trade-off inside the safe family**: bigger chunks are both faster and
 more accurate, so the largest legal chunk wins on both counts. The genuinely fastest setting in the
-whole grid is `k256, 16 cores` at 1.39 ms -- 5.4x faster than what
+whole grid is `k256, 16 cores` at 1.38 ms -- 5.4x faster than what
 ships -- and it is unshippable because it returns a wrong answer at 257, 1024 and 4096 keys.
 
 **Step 4 -- the on-model decision (`diag_decode_sdpa_onmodel.py` ->
@@ -539,15 +555,15 @@ Selection deliberately spans both layer kinds and every device-facing mechanism 
 traced decode capture+replay, chunked prefill continuation, ragged per-slot `current_pos`,
 `current_pos = -1` slot skipping, the paged-cache write path and the linear-attention state.
 
-Result: **8 passed, 0 failed** (`watcher/pytest.log`), watcher log 6483 lines / 439253 bytes raw
+Result: **8 passed, 0 failed** (`watcher/pytest.log`), watcher log 5405 lines / 365999 bytes raw
 (`watcher/generated/watcher/watcher.log.gz`, 15.7 KB gzipped — gzipped so the artifact stays under
 this repo's 500 KB committed-file limit regardless of run length; inspect with `zless`/`zgrep`),
 and **no fatal, sanitize, out-of-bounds, stack/L1 overflow, invalid-NOC, CB-overrun or
 watcher-assert findings** — the automated grep in `run_watcher.sh` writes any hit to
 `watcher/watcher_hits.txt`, which is empty.
 
-The log's content is the expected benign mix: 12 periodic core-status dumps (`Dump #` blocks)
-holding 3168 `Device ...` core-state rows and 3169 `k_ids:` kernel-id lines, stack-usage
+The log's content is the expected benign mix: 10 periodic core-status dumps (`Dump #` blocks)
+holding 2640 `Device ...` core-state rows and 2641 `k_ids:` kernel-id lines, stack-usage
 summaries, a legend and attach/detach lines — no diagnostic classes. The line count is a function
 of how many 10-second polls the run spans, not of correctness, so it varies between runs of the
 same selector depending on how much kernel compilation is cached.
@@ -593,7 +609,7 @@ relationship so it cannot go stale). Summary:
 | both layer kinds | `test_layer_kinds_cover_the_whole_model` + every test parameterised over `["linear", "full"]` | none |
 | any logical seq_len | 13 lengths per kind incl. 1/33/65/129/1025/2049/3000/262143 | none |
 | the shipped decode-SDPA decomposition holds above batch 1 | `test_longest_decode_context_batched`: the advertised context decoded with two slots live, the second at `current_pos = -1`, so a slot-indexing error cannot pass | none — this was the one gap where §3.8's conclusion rested on a source derivation rather than a measurement |
-| continuation prefill (`start_pos > 0`) | `test_prefill_chunk_continuation` streams a 1024-token prompt as two 512-token calls and matches HF piece-by-piece off the carried KV cache / conv+recurrent state | `start_pos` must be a multiple of `sdpa_chunk` (128); §9 records the chunked-SDPA integer-division op contract behind it and the only lever. Never limits prompt length — a fresh request prefills any `seq_len` in one call |
+| continuation prefill (`start_pos > 0`) | `test_prefill_chunk_continuation` streams a 1024-token prompt as two 512-token calls and matches HF piece-by-piece off the carried KV cache / conv+recurrent state; `test_prefill_continuation_must_be_contiguous` pins the two rejections | **Two** conditions, not one: `start_pos` must be a multiple of 128 (§9's op contract) **and** contiguous with this slot's previous prefill, so a chunk whose `seq_len` is not a multiple of 128 cannot be continued (§7 item 11). A stage that restores KV externally and continues on a fresh layer object is rejected. Never limits prompt length — a fresh request prefills any `seq_len` in one call |
 | paged prefill + paged decode, permuted page tables | §3.4 | none |
 | per-slot `current_pos` | `test_decode_ragged_current_positions` | none |
 | carried state across prefill calls | `test_prefill_chunk_continuation` | none |
@@ -614,7 +630,7 @@ mode/kind — see `work_log.md` §7). Artifacts per case in `tracy/<kind>_<mode>
 | `<mode>_perf_report.csv` | the same rows as CSV, signpost-filtered (`--csv`) |
 | `<mode>_perf_report.console.log` | `--csv`-run stdout, kept for provenance |
 | `<mode>_perf_report_stacked.csv` / `.png` | tt-perf-report's stacked breakdown |
-| `<mode>_ops.csv.gz` | the raw post-processed Tracy ops CSV the report was built from (1.2-21 MB raw; `run_perf.sh` gzips it after the reports, so `gunzip -k` before re-running `tt-perf-report`). The two **decode** CSVs exceed this repo's 500 KB committed-file limit even gzipped (1.72 MB / 731 KB) and are excluded by `tracy/.gitignore`; both prefill CSVs (432 KB / 151 KB) are committed — see `tracy/README.md` |
+| `<mode>_ops.csv.gz` | the raw post-processed Tracy ops CSV the report was built from (1.2-21 MB raw; `run_perf.sh` gzips it after the reports, so `gunzip -k` before re-running `tt-perf-report`). The two **decode** CSVs exceed this repo's 500 KB committed-file limit even gzipped (1.72 MB / 731 KB) and are excluded by `tracy/.gitignore`; both prefill CSVs (433 KB / 151 KB) are committed — see `tracy/README.md` |
 | `tracy_run.log.gz` | full Tracy + pytest transcript (gzipped) |
 
 Plus `perf_host_summary.jsonl` (host wall-clock rows) and `perf_summary.json` (reduced table,
@@ -686,13 +702,13 @@ those columns and divides by the iteration count.
 
 | case | shape | ops in window | device kernel / iter | op-to-op gap / iter | host wall / iter |
 |---|---|---|---|---|---|
-| prefill `linear` | seq 2048, batch 1 | 1750 (2 iters) | **341.85 ms** | 0.875 ms | 343.16 ms |
-| prefill `full` | seq 2048, batch 1 | 392 (2 iters) | **281.30 ms** | 0.121 ms | 281.73 ms |
-| decode `linear` (traced) | batch 32, `cur_pos` 4095 | 968 (8 iters) | **57.86 ms** | 0.089 ms | 57.98 ms |
-| decode `full` (traced) | batch 32, `cur_pos` 4095 | 872 (8 iters) | **49.99 ms** | 0.236 ms | 50.26 ms |
+| prefill `linear` | seq 2048, batch 1 | 1750 (2 iters) | **342.06 ms** | 0.877 ms | 343.38 ms |
+| prefill `full` | seq 2048, batch 1 | 392 (2 iters) | **281.66 ms** | 0.137 ms | 282.15 ms |
+| decode `linear` (traced) | batch 32, `cur_pos` 4095 | 968 (8 iters) | **57.91 ms** | 0.089 ms | 58.03 ms |
+| decode `full` (traced) | batch 32, `cur_pos` 4095 | 872 (8 iters) | **50.10 ms** | 0.236 ms | 50.36 ms |
 
 As single-layer host throughput (`perf_host_summary.jsonl`, `tokens_per_s_host`): prefill
-**7269 tok/s** (`full`) / **5968 tok/s** (`linear`) at seq 2048 batch 1, and decode **637 tok/s**
+**7258 tok/s** (`full`) / **5964 tok/s** (`linear`) at seq 2048 batch 1, and decode **635 tok/s**
 (`full`) / **552 tok/s** (`linear`) aggregated across the 32-slot batch (i.e. 32 tokens per
 ~50/58 ms traced iteration; `iters * batch / elapsed`, `test_perf.py:163`). These are *per layer*; a 40-layer model at this
 per-layer cost would be far too slow to serve, which is what the `optimize` stage exists for and
@@ -705,10 +721,10 @@ iteration, i.e. `post_attention_layernorm` — rather than by hand:
 
 | case | token mixer | expert matmuls | MoE dense-intermediate elementwise | total |
 |---|---|---|---|---|
-| prefill `linear` | 63.55 ms (18.6%) | 227.24 ms (66.5%) | 51.06 ms (14.9%) | 341.85 ms |
-| prefill `full` | 3.81 ms (1.4%) | 226.57 ms (80.5%) | 50.91 ms (18.1%) | 281.30 ms |
-| decode `linear` | 8.82 ms (15.2%) | 18.58 ms (32.1%) | 30.46 ms (52.6%) | 57.86 ms |
-| decode `full` | 1.05 ms (2.1%) | 18.57 ms (37.1%) | 30.37 ms (60.8%) | 49.99 ms |
+| prefill `linear` | 63.67 ms (18.6%) | 227.17 ms (66.4%) | 51.23 ms (15.0%) | 342.06 ms |
+| prefill `full` | 3.81 ms (1.4%) | 226.76 ms (80.5%) | 51.09 ms (18.1%) | 281.66 ms |
+| decode `linear` | 8.83 ms (15.3%) | 18.57 ms (32.1%) | 30.50 ms (52.7%) | 57.91 ms |
+| decode `full` | 1.05 ms (2.1%) | 18.57 ms (37.1%) | 30.48 ms (60.8%) | 50.10 ms |
 
 * **At the profiled shape the MoE is the whole cost.** (Only at the profiled shape — see the
   position-dependence table below, which is the part that matters for the advertised context.)
@@ -721,10 +737,10 @@ iteration, i.e. `post_attention_layernorm` — rather than by hand:
   60.8% of decode, i.e. larger than
   the expert matmuls themselves in decode. `linear` layers add the gated delta rule on top: mixer
   18.6% of prefill and
-  15.2% of decode.
-* **Device-bound, not dispatch-bound.** Op-to-op gap is 0.04-0.47% of device
-  time (`gap/device` = 0.256% / 0.043% / 0.154% / 0.472% for the four rows in table order), and
-  host wall-clock exceeds device kernel time by 0.15-0.53%. The traced decode
+  15.3% of decode.
+* **Device-bound, not dispatch-bound.** Op-to-op gap is 0.05-0.47% of device
+  time (`gap/device` = 0.256% / 0.049% / 0.154% / 0.471% for the four rows in table order), and
+  host wall-clock exceeds device kernel time by 0.17-0.51%. The traced decode
   has essentially no dispatch overhead left to remove.
 
 **These rows are measured at `supported_context = 8192`, not the advertised 262144**
@@ -743,10 +759,10 @@ with `linear` as the control — its mixer is position-independent, so its extra
 
 | kind | per chunk | x 128 chunks | measured | unexplained by the position-independent model |
 |---|---|---|---|---|
-| `linear` (control) | 341.85 ms | 43.76 s | 43.876 s | +0.12 s |
-| `full` | 281.30 ms | 36.01 s | 48.832 s | **+12.83 s** |
+| `linear` (control) | 342.06 ms | 43.78 s | 43.871 s | +0.09 s |
+| `full` | 281.66 ms | 36.05 s | 48.843 s | **+12.79 s** |
 
-The control lands within 0.12 s (0.3%), which is what makes the `full` row
+The control lands within 0.09 s (0.2%), which is what makes the `full` row
 readable: **12.8 s, 26% of that prefill, is not explained by position-independent
 work**, and the only structural difference between the two kinds is the token mixer. So the `full`
 attention path is on the order of **27% of an advertised-context prefill**, not the
@@ -788,9 +804,9 @@ belong to the `optimize` stage, not here.
    checkable against `tracy/full_prefill/prefill_perf_report.csv`, where the row
    `SparseMatmulDeviceOperation active=?/4096 x 32 x 2048 x 1024` appears **8 times** with
    `Cores` 32.0 — issued 4x per prefill iteration (512 tokens = 16 tile-groups per call,
-   `4096 = 16 groups x 256 experts`) over a 2-iteration window. Those rows sum to 294.02 ms,
-   i.e. 36.75 ms per call and 147.01 ms per iteration, which is the §5 figure. Then
-   `16 groups x 162.3 experts x (32 x 2048 x 1024 x 2) FLOP / 36.75 ms ~= 9.5 TFLOP/s`.
+   `4096 = 16 groups x 256 experts`) over a 2-iteration window. Those rows sum to 294.13 ms,
+   i.e. 36.77 ms per call and 147.06 ms per iteration, which is the §5 figure. Then
+   `16 groups x 162.3 experts x (32 x 2048 x 1024 x 2) FLOP / 36.77 ms ~= 9.5 TFLOP/s`.
    Passing `tt-perf-report --active-experts 162` would make the tool report the utilization
    directly instead; the hand derivation is kept because it is the number quoted here.
 2. **`nnz` is left inferred** for every `sparse_matmul`. A static count that disagrees with
@@ -814,7 +830,7 @@ belong to the `optimize` stage, not here.
    program is compiled per distinct prefill-chunk offset — 128 of them for a full-context prefill
    (262144 / 2048). The op's device-tensor form (`chunk_start_idx_tensor`) would make the offset a
    runtime argument and collapse that to one program; `probe_ttnn_ops.py` confirms it works on this
-   build (PCC 0.999777). It is not used here only because feeding it without a host write needs a
+   build (PCC 0.999774). It is not used here only because feeding it without a host write needs a
    setup-time offsets table plus a per-chunk device slice, which is program-cache tuning rather
    than correctness — exactly the `optimize` stage's job. Nothing about the current path is wrong,
    it just compiles more programs than it needs to.
@@ -869,7 +885,7 @@ belong to the `optimize` stage, not here.
    clamped row is discarded because SDPA skips that slot. `test_decode_skips_inactive_slots_with_negative_position`
    now also asserts the inactive rows are finite. Cost: exactly one extra device op per traced
    `full` decode iteration — the scalar `maximum` lowers to a `UnaryDeviceOperation`, so the report
-   shows 12 unary ops/iteration instead of 11 with the group total unchanged at 10.39 ms/iter, i.e.
+   shows 12 unary ops/iteration instead of 11 with the group total unchanged at 10.44 ms/iter, i.e.
    below run-to-run noise at this resolution.
 7. **The RoPE tables were in the wrong layout, and it cost an O(context) op per decode step.**
    `ttnn.embedding` converts a TILE-layout weight to ROW_MAJOR **on every call**
@@ -916,6 +932,21 @@ belong to the `optimize` stage, not here.
     explicitly. `test_sdpa_chunk_and_start_pos_alignment_agree` asserts the block-alignment property
     rather than the "lowering can only widen" claim that was the bug.
 
+11. **A prefill's zero-padded tail lands in the paged KV cache, so a non-contiguous continuation
+    attends over zero keys.** `prefill_forward` pads up to `PREFILL_ALIGN` and the paged fill writes
+    in whole `block_size` pages, so a `seq_len` of 1000 puts exact zeros at rows 1000..1023
+    (`rms_norm(0) = 0`, bias-free projections, `RoPE(0) = 0`). Inside that call they are harmless —
+    causal masking and the output slice discard them — but a later chunk scores `q . 0 = 0` on those
+    slots, so each takes `exp(0) = 1` of softmax weight and contributes zero value: the result is
+    diluted by roughly `Z / (Z + n_pad)` with nothing raised. Combined with the 128-alignment rule it
+    means a non-aligned chunk has **no** legal continuation at all — the only accepted offset would
+    skip the missing tokens *and* read the zeros. `prefill_forward` now tracks a per-slot logical
+    high-water mark and requires a continuation to resume exactly where the previous one ended
+    (§2 has the contract; `test_prefill_continuation_must_be_contiguous` pins it). The linear kind's
+    equivalent hazard was closed earlier (item 2 above); this was the full-attention cache side of
+    the same question, and it survived six review rounds because every continuation test used
+    aligned chunks.
+
 ## 8. Repository files this stage owns
 
 | path | role |
@@ -958,7 +989,10 @@ One repo file outside the autoport directory was touched: `conftest.py` (§7 ite
   is what `prefill_forward`'s check is protecting, and why its bound is `PREFILL_ALIGN` — a multiple
   of `block_size` — rather than the SDPA chunk alone. Consequences for later stages: a chunked-prefill or prefix-cache boundary
   that is page-aligned (64) but not 128-aligned is not usable as a `start_pos`, and **no knob changes
-  that.** The accepted alignment is the *maximum* of three independent constraints — the SDPA chunk
+  that.** Nor is alignment the whole contract: the offset must also be **contiguous** with this
+  layer object's previous prefill for that slot (§2, §7 item 11), so a prefix cache restored from
+  elsewhere cannot simply be continued into — that is the limitation to design around, and it is the
+  one most likely to bite a serving stage. The accepted alignment is the *maximum* of three independent constraints — the SDPA chunk
   index (`sdpa_chunk`), the paged fill's block offset (`block_size` = 64), and the padding, which
   rounds up to `PREFILL_ALIGN` and must still fit the RoPE and page-table rows — so lowering
   `sdpa_chunk` alone changes nothing. An earlier revision of this stage *did* make the check divide by

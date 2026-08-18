@@ -1,34 +1,34 @@
 postprocess_docs:
   updated  section 3.1 table (17 families, overall 0.9999450)
   updated  section 3.8 (generated from the two diagnostic logs)
-  updated  section 5 (gap 0.043-0.472%, context 8192)
+  updated  section 5 (gap 0.049-0.471%, context 8192)
   updated  perf table
   updated  three-way split table
-  updated  gap/host percentages (0.04-0.47% / 0.15-0.53%)
+  updated  gap/host percentages (0.05-0.47% / 0.17-0.51%)
   updated  host throughput
-  updated  sparse derivation (8 rows, 36.75 ms/call, 9.5 TFLOP/s)
-  updated  watcher (8 passed, 6483 lines, 12 dumps)
-  updated  tracy sizes {'linear_prefill': 432262, 'linear_decode': 1715644, 'full_decode': 731170, 'full_prefill': 150993} ops/iter {'full': 109, 'linear': 121}
+  updated  sparse derivation (8 rows, 36.77 ms/call, 9.5 TFLOP/s)
+  updated  watcher (8 passed, 5405 lines, 10 dumps)
+  updated  tracy sizes {'linear_prefill': 432573, 'linear_decode': 1717036, 'full_decode': 731096, 'full_prefill': 151003} ops/iter {'full': 109, 'linear': 121}
   updated  advertised-context table
   updated  row counts (276/6/8)
   updated  batched long-context row (0.9999939)
 render_docs --check:
   updated  section 3.1 table (17 families, overall 0.9999450)
   updated  section 3.8 (generated from the two diagnostic logs)
-  updated  section 5 (gap 0.043-0.472%, context 8192)
+  updated  section 5 (gap 0.049-0.471%, context 8192)
   updated  perf table
   updated  three-way split table
-  updated  gap/host percentages (0.04-0.47% / 0.15-0.53%)
+  updated  gap/host percentages (0.05-0.47% / 0.17-0.51%)
   updated  host throughput
-  updated  sparse derivation (8 rows, 36.75 ms/call, 9.5 TFLOP/s)
-  updated  watcher (8 passed, 6483 lines, 12 dumps)
-  updated  tracy sizes {'linear_prefill': 432262, 'linear_decode': 1715644, 'full_decode': 731170, 'full_prefill': 150993} ops/iter {'full': 109, 'linear': 121}
+  updated  sparse derivation (8 rows, 36.77 ms/call, 9.5 TFLOP/s)
+  updated  watcher (8 passed, 5405 lines, 10 dumps)
+  updated  tracy sizes {'linear_prefill': 432573, 'linear_decode': 1717036, 'full_decode': 731096, 'full_prefill': 151003} ops/iter {'full': 109, 'linear': 121}
   updated  advertised-context table
   updated  row counts (276/6/8)
   updated  batched long-context row (0.9999939)
   same     freshness list in README.md (9 files)
   same     freshness list in work_log.md (9 files)
   same     real-weight table (§3.2, 4 rows)
-  same     unary group total (12/iter, 10.392 ms/iter)
+  same     unary group total (12/iter, 10.439 ms/iter)
   same     counts (108 passed = 32 CPU + 77 device, 24 probes, 18 layer keys)
 render_docs --check: committed docs match the artifacts

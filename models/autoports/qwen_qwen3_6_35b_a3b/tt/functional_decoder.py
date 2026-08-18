@@ -73,6 +73,13 @@ round-trip; see ``tests/test_functional_decoder.py::test_no_runtime_host_fallbac
 Implementation notes for the non-obvious parts live in
 ``doc/functional_decoder/work_log.md`` §3 and are unit-tested on CPU in
 ``tests/test_reference_math.py``.
+
+Prefill continuation contract, because it is the one thing a caller can get silently wrong:
+``prefill_forward(start_pos=N)`` requires ``N`` to be a multiple of ``PREFILL_ALIGN`` **and** equal
+to where the previous prefill on that ``user_id`` ended. A prefill pads up to ``PREFILL_ALIGN`` and
+the paged fill writes the padded, zero-valued K/V into the cache, so a chunk whose ``seq_len`` is not
+a multiple of ``PREFILL_ALIGN`` cannot be continued at all. Chunk on 128-token boundaries, or prefill
+the whole prompt in one call at ``start_pos = 0``. See README section 7 item 11.
 """
 
 from __future__ import annotations
@@ -763,6 +770,11 @@ class FunctionalDecoder(LightweightModule):
                 f"{math.ceil(seq_len / PREFILL_ALIGN) * PREFILL_ALIGN} exceeds supported context "
                 f"{cfg.supported_context}"
             )
+        if not cfg.is_linear and page_table is None:
+            raise ValueError("full_attention prefill requires a page_table")
+        if user_id >= cfg.max_batch_size:
+            raise ValueError(f"user_id {user_id} >= max_batch_size {cfg.max_batch_size}")
+
         # A continued prefill must resume exactly where the previous one ended. This is not
         # bookkeeping pedantry: a prefill pads its input up to `PREFILL_ALIGN` and, for
         # `full_attention`, writes the **padded** K/V into the paged cache (the fill works in whole
@@ -784,10 +796,6 @@ class FunctionalDecoder(LightweightModule):
                     "cache. Start a new sequence with start_pos=0, or chunk on "
                     f"{PREFILL_ALIGN}-token boundaries."
                 )
-        if not cfg.is_linear and page_table is None:
-            raise ValueError("full_attention prefill requires a page_table")
-        if user_id >= cfg.max_batch_size:
-            raise ValueError(f"user_id {user_id} >= max_batch_size {cfg.max_batch_size}")
 
         padded_len = math.ceil(seq_len / PREFILL_ALIGN) * PREFILL_ALIGN
         if padded_len != seq_len:
@@ -795,8 +803,6 @@ class FunctionalDecoder(LightweightModule):
 
         # linear-attention layers thread the conv left-context and the recurrent state
         # across the internal chunks of this call.
-        self._prefill_end[user_id] = start_pos + seq_len
-
         carry = self._load_linear_carry(user_id) if cfg.is_linear else None
         if carry is not None and start_pos == 0:
             # `start_pos == 0` means this slot is starting a new sequence, so the carry must not
@@ -839,6 +845,15 @@ class FunctionalDecoder(LightweightModule):
             if owns:
                 _dealloc(out)
             out = sliced
+        # Record the slot's logical end only now, after every chunk has actually run. Setting it
+        # before the loop would leave a mark claiming work that an exception aborted, and the next
+        # continuation would be accepted on top of a half-written cache.
+        #
+        # This tracks *prefill* only. `decode_forward` does not advance it, deliberately: decode is
+        # replayed from a captured trace, so host bookkeeping inside it would be inconsistent between
+        # eager and traced execution. Prefilling a slot that has since decoded is therefore out of
+        # contract rather than rejected -- call `reset_state()` and start from `start_pos = 0`.
+        self._prefill_end[user_id] = start_pos + seq_len
         return out
 
     def _prefill_chunk(self, x, *, user_id, page_table, abs_pos, carry, valid_len):
