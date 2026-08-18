@@ -278,9 +278,9 @@
   team: models
 
 # The two small Qwen3 models carry the full 151936 vocab on a single card, which exercises
-# TTSampling's N-way (here 4-way) single-device vocab split for on-device sampling (#53064) --
-# no other tiered model runs a >128K vocab on one device. No reference tokens exist yet, so
-# these run the functional CI demos; add ci-token-matching once a refpt is generated.
+# TTSampling's N-way (here 4-way) single-device vocab split for on-device sampling (#53064);
+# Gemma-2-2B on wh_n150 covers the same path with a 256000 vocab. No reference tokens exist
+# yet, so these run the functional CI demos; add ci-token-matching once a refpt is generated.
 - name: Qwen3-0.6B e2e tests
   cmd: |
     # MESH_DEVICE is set by the runner (this entry runs on both wh_n150 and bh_p150).
