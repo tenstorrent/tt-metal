@@ -957,15 +957,48 @@ void kernel_main() {
                     }
                 }
 
-                // [#48552 DS-DEBUG] pre-pop: transition (RESTORE_PARTIALS / any reload) done; about to free
-                // the input CBs. enrl = enable_reload set for the next K-block. post-pop: the bare in0/in1
-                // pop_fronts completed (these are NOT TEN-4746-guarded -> a bare-pop-front unpacker trap here
-                // is a prime suspect). If pre-pop prints but post-pop does not -> wedged in the pop_fronts.
+                // [#48552 DS-DEBUG] pre-pop / post-pop bracket the K-block-boundary input pops.
                 if (in0_block_h_i == 0) {
                     DPRINT("[DS] pre-pop kb{} enrl{}\n", in0_block_w_i, (uint32_t)enable_reload);
                 }
+#ifdef ARCH_QUASAR
+                // [#48552 / TEN-4746] Guard the K-block-boundary input pops. They were BARE: on Quasar a
+                // bare pop_front lets the unpacker's POP_TILES race past its last pending UNPACR and trap the
+                // unpacker (POP racing WAIT). Interpose a REAL unpack TDMA (dummy copy_tile of tile 0) to
+                // drain the unpacker pipeline before the pops; ONE UNPACR covers BOTH pops (the trap is
+                // per-unpacker, not per-CB), and the second pop needs no extra TDMA because nothing re-arms
+                // the unpacker between the two. srcA is already on in1 here (the SrcOrder::Reverse matmul
+                // leaves srcA=in1 in steady state), so no reconfig is needed. The matmul is re-init'd after
+                // the pops. NOP/TTI_NOP are insufficient (LLK-team guidance; mirrors the partials-pop guards
+                // above).
+                //
+                // WHY NO wait_front IS ADDED: cb_mm_in0 / cb_in1 are already wait_front'd ONCE at the K-block
+                // start (~line 610/620) and consumed by the entire subblock matmul loop, then pop'd ONCE here
+                // -- a balanced 1:1 wait/pop per K-block. A second wait_front immediately before the pop would
+                // return instantly (the tiles are still resident, never popped) and does NOT address the trap,
+                // which is the unpacker's POP racing its own pending work -- fixed by an interposed UNPACR,
+                // not a semaphore wait. So a real-TDMA guard is correct; an extra wait_front is not.
+                //
+                // Gated to !last_inner_dim_block: only NON-last K-block pops feed a following K-block (the
+                // kb0->kb1 transition where the downsample hangs). The last K-block's pop is followed by the
+                // untilize/exit and works bare today (the single-K-block stem, nbw=1, passes) -- leave it
+                // untouched so this cannot regress the stem.
+                if (!last_inner_dim_block) {
+                    copy_tile_to_dst_init_short(in1_cb_id);
+                    tile_regs_acquire();
+                    copy_tile(in1_cb_id, /*in_tile_index=*/0, /*dst_tile_index=*/0);
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    tile_regs_release();
+                }
+#endif
                 cb_mm_in0.pop_front(in0_block_num_tiles);
                 cb_in1.pop_front(in1_block_num_tiles);
+#ifdef ARCH_QUASAR
+                if (!last_inner_dim_block) {
+                    matmul_block_init(mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
+                }
+#endif
                 if (in0_block_h_i == 0) {
                     DPRINT("[DS] post-pop kb{}\n", in0_block_w_i);
                 }
