@@ -339,6 +339,12 @@ class TTPhi1Attention:
                 # Prefill: seed the cache with this call's full K/V starting at current_pos, then
                 # attend over the full sequence exactly as before (unchanged SDPA call/is_causal=True).
                 # current_pos must be tile-aligned (fill_cache's update_idx is divided by TILE_HEIGHT).
+                # Only current callers ever prefill at current_pos=0; guard defensively in case a future
+                # caller (e.g. multi-turn/context-extension) ever prefills at a non-zero position.
+                if current_pos % 32 != 0:
+                    raise ValueError(
+                        f"fill_cache requires a tile-aligned update_idx (multiple of 32), got current_pos={current_pos}"
+                    )
                 ttnn.fill_cache(self.k_cache, k, batch_idx=0, update_idx=current_pos)
                 ttnn.fill_cache(self.v_cache, v, batch_idx=0, update_idx=current_pos)
                 attn_out = ttnn.transformer.scaled_dot_product_attention(
