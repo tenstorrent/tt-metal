@@ -122,14 +122,9 @@ GROUP_NORM_NON_TILE_ALIGNED_SHIFT_CASES = [
 
 SDXL_BASE_GROUP_NORM_SPLIT_SHAPES = [
     # (1, 256, 1024, 1024, 32, 32), # does not fit -> input is [16384, 8] per core (~260kB) gets tilized internally to [16384, 32] which is ~1MB, and 2 buffers are of that size (cb_x and cb_in)
-    (
-        1,
-        256,
-        512,
-        512,
-        32,
-        8,
-    ),  # Can fit in 8 slices, each slice does: (0,8ms for split, 0.3ms for interleavedToSharded + 0.68ms for GN) = 1.78ms, 8 slices x 1.78ms = 14.24ms + 4.6ms for concat = 18.84ms (original is 15.7ms)
+    # The two 512x512 entries, (1, 256, 512, 512, 32, 8) and (1, 512, 512, 512, 32, 16), moved to
+    # nightly: 8-10 min each on the simulator, past the pipeline's own --timeout 300, and they were
+    # already skipped on Blackhole under watcher (#37645).
     (
         1,
         512,
@@ -146,14 +141,6 @@ SDXL_BASE_GROUP_NORM_SPLIT_SHAPES = [
         32,
         4,
     ),  # Can fit in 4 slice, split= 0.3ms i2s = 0.1ms GN = 0.6ms, s2i = 0.421ms = 5.6ms + 1ms for concat = 6.6ms (original is 6.1ms)
-    (
-        1,
-        512,
-        512,
-        512,
-        32,
-        16,
-    ),  # Can fit in 16 slice, split= 0.8ms i2s = 0.33ms GN = 0.38ms, s2i = 1.58ms = 49.44ms + 7.806ms for concat = 57.246ms (original is 24ms)
     # (1, 128, 1024, 1024, 32, 32), # does not fit -> input is [16384, 4] per core (~130kB) gets tilized internally to [16384, 32] which is ~1MB, and 2 buffers are of that size (cb_x and cb_in). in addition to that, RM stick of size 4 is not L1 aligned
 ]
 
@@ -1028,9 +1015,32 @@ GN_INTERLEAVED_SHAPES = [
 
 
 @pytest.mark.parametrize("N, C, H, W, num_groups, num_out_blocks, grid_y, grid_x", GN_INTERLEAVED_SHAPES)
-@pytest.mark.parametrize("gb_dtype", [ttnn.bfloat16, ttnn.float32], ids=["gb_bf16", "gb_fp32"])
-@pytest.mark.parametrize("in_dtype", [ttnn.bfloat16, ttnn.float32], ids=["bf16", "fp32"])
-@pytest.mark.parametrize("welford_mode", WELFORD_MODES)
+# One case per (reduction path x input dtype) pair, instead of the welford_mode x in_dtype x
+# gb_dtype product. Those two axes interact: the thresholds below branch on use_welford x in_dtype,
+# and fp32 input on the welford path additionally aliases cb_x onto cb_in0 and enables
+# UnpackToDestFp32. gamma/beta dtype interacts with neither -- it only selects the gamma/beta CB
+# format, and the thresholds are already pinned across the gamma-beta matrix (see the comment on
+# them below) -- so it is varied across the six cases rather than crossed with them, giving each
+# welford_mode and each in_dtype both gamma/beta formats.
+@pytest.mark.parametrize(
+    "welford_mode, in_dtype, gb_dtype",
+    [
+        ("legacy", ttnn.bfloat16, ttnn.bfloat16),
+        ("legacy", ttnn.float32, ttnn.float32),
+        ("welford_normal", ttnn.bfloat16, ttnn.float32),
+        ("welford_normal", ttnn.float32, ttnn.bfloat16),
+        ("welford_reciprocal", ttnn.bfloat16, ttnn.bfloat16),
+        ("welford_reciprocal", ttnn.float32, ttnn.float32),
+    ],
+    ids=[
+        "legacy-bf16-gb_bf16",
+        "legacy-fp32-gb_fp32",
+        "welford_normal-bf16-gb_fp32",
+        "welford_normal-fp32-gb_bf16",
+        "welford_reciprocal-bf16-gb_bf16",
+        "welford_reciprocal-fp32-gb_fp32",
+    ],
+)
 def test_group_norm_interleaved_all_config(
     device, N, C, H, W, num_groups, num_out_blocks, grid_y, grid_x, in_dtype, gb_dtype, welford_mode
 ):
