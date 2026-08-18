@@ -3,7 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import os
+import time
+
 import torch
+from loguru import logger
 from tqdm import tqdm
 
 import ttnn
@@ -21,6 +25,8 @@ from models.tt_transformers.tt.rope import HfRotarySetup, RotarySetup
 
 
 class Transformer(LightweightModule):
+    _GALAXY_STAGE_SYNC_DIAG_ENV = "TT_TRANSFORMERS_GALAXY_STAGE_SYNC_DIAG"
+
     def __init__(
         self,
         args,
@@ -163,6 +169,25 @@ class Transformer(LightweightModule):
             )
         else:
             self.sampling = None
+
+    def _galaxy_stage_sync_diag(self, stage):
+        if os.getenv(self._GALAXY_STAGE_SYNC_DIAG_ENV) != "1":
+            return
+
+        started_at = time.time()
+        logger.info(
+            "[galaxy-stage-sync-diag] stage={} event=begin timestamp={:.6f}",
+            stage,
+            started_at,
+        )
+        ttnn.synchronize_device(self.mesh_device)
+        completed_at = time.time()
+        logger.info(
+            "[galaxy-stage-sync-diag] stage={} event=complete timestamp={:.6f} elapsed_s={:.6f}",
+            stage,
+            completed_at,
+            completed_at - started_at,
+        )
 
     def process_logits_after_prefill_trace(self, logits, last_token_idx):
         get_last_token = (last_token_idx // 32) * 32
@@ -935,6 +960,8 @@ class Transformer(LightweightModule):
                 batch_size=batch_size,
             )
 
+        self._galaxy_stage_sync_diag("decoder_loop")
+
         if mode == Mode.DECODE:
             if self.prefetcher is not None:
                 self.prefetcher.stop()
@@ -948,6 +975,7 @@ class Transformer(LightweightModule):
 
         # Output norm
         x = self.norm(x, mode=mode, norm_config=self.args.get_norm_config("lm_head", mode, self.prefetcher))
+        self._galaxy_stage_sync_diag("final_norm")
 
         lm_head_input_mem_cfg = self.args.get_lm_head_input_mem_config(
             mode, None if mode == Mode.PREFILL else self.prefetcher
@@ -958,6 +986,7 @@ class Transformer(LightweightModule):
             x = ttnn.to_memory_config(x, self.args.get_lm_head_input_mem_config(mode, self.prefetcher))
 
         x = self.lm_head(x)
+        self._galaxy_stage_sync_diag("lm_head")
         x = self._apply_final_logit_softcapping(x)
         if mode == Mode.PREFILL:
             x = ttnn.to_memory_config(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
