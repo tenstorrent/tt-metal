@@ -240,13 +240,18 @@ inline void _llk_unpack_AB_compressed_custom_mm_(
         ckernel::instrn_buffer[0] = data8;
         ckernel::instrn_buffer[0] = data9;
     }
-    std::uint32_t meta = meta_ptr[full_iters];
-    for (std::uint32_t i = 0; i < rem_iters; ++i)
+    // Guarded: when (kt_dim * ct_dim) is a multiple of 10 the metadata buffer holds exactly
+    // full_iters words, so meta_ptr[full_iters] would read one word past it.
+    if (rem_iters != 0)
     {
-        std::uint32_t idx0        = (meta >> 0) & 0b11111;
-        std::uint32_t data0       = FMTABLE[idx0];
-        ckernel::instrn_buffer[0] = data0;
-        meta >>= 3;
+        std::uint32_t meta = meta_ptr[full_iters];
+        for (std::uint32_t i = 0; i < rem_iters; ++i)
+        {
+            std::uint32_t idx0        = (meta >> 0) & 0b11111;
+            std::uint32_t data0       = FMTABLE[idx0];
+            ckernel::instrn_buffer[0] = data0;
+            meta >>= 3;
+        }
     }
 
     t6_semaphore_get(semaphore::UNPACK_SYNC);
