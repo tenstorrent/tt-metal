@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Japanese STT on tt-metal: Whisper large-v3, language=ja, one N150 chip.
 
-    TT_VISIBLE_DEVICES=2 python run_jp_stt.py --wav /tmp/jp_tts.wav
+See japanese_demo_readme.md in this folder.
 """
 
 from __future__ import annotations
@@ -14,6 +14,16 @@ from pathlib import Path
 
 import numpy as np
 from scipy.io import wavfile
+
+
+def _metal_home() -> str:
+    env = os.environ.get("TT_METAL_HOME")
+    if env:
+        return env
+    for parent in Path(__file__).resolve().parents:
+        if (parent / "tt_metal").is_dir() and (parent / "models").is_dir():
+            return str(parent)
+    raise SystemExit("Could not find TT_METAL_HOME (set the env var or run from a tt-metal checkout)")
 
 
 def _load_wav(path: str) -> tuple[int, np.ndarray]:
@@ -48,9 +58,7 @@ def main() -> int:
         print(f"ERROR: wav not found: {wav_path}", file=sys.stderr)
         return 1
 
-    metal_home = os.environ.get("TT_METAL_HOME")
-    if not metal_home:
-        metal_home = str(Path(__file__).resolve().parents[3])
+    metal_home = _metal_home()
     if metal_home not in sys.path:
         sys.path.insert(0, metal_home)
 
