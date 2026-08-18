@@ -66,10 +66,8 @@ _EXPECTED_NS: dict[tuple[str, int], int] = {
 
 # Kimi K3 runs SiTU-GLU at the post-projection dims, so its K axis is ROUTED_EXPERT_HIDDEN_SIZE and
 # it cannot be driven from SINGLE_EXPERT_MODELS (which reads config.EMB_SIZE). Same measurement as
-# _EXPECTED_NS: median of 3 dispatches, x_rm layout, on a BH p150b (2026-08-18). The SiLU column at
-# the same dims read 175_024 / 177_389 / 233_381 / 346_628 / 604_844 / 1_186_341 / 1_514_379, so
-# SiTU costs ~6% up to the ~256-token DRAM-read knee and ~14% past it; a regression in either tanh
-# cap moves these well outside the band.
+# _EXPECTED_NS: median of 3 dispatches, x_rm layout, on a BH p150b (2026-08-18). Flat to ~256 tokens
+# (the op sits on its DRAM weight-read floor there), linear in tokens past that.
 _K3_SITU_EXPECTED_NS: dict[int, int] = {
     0: 3_775,
     128: 185_646,
