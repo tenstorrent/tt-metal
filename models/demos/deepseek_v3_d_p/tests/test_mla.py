@@ -197,8 +197,7 @@ def run_model(
 
     # Conditionally load fixtures - only load what we need!
     if use_pretrained:
-        config, sd = request.getfixturevalue("pretrained_transformer_weights")
-        weights = sd["layers"][0]["mla_weights"]
+        config, weights = request.getfixturevalue("pretrained_mla_layer_weights")
     else:
         config, weights = request.getfixturevalue("random_weights")
 
@@ -650,15 +649,14 @@ def _run_chunked_prefill(
     if use_pretrained:
         # MLA-only fixture: this driver uses nothing but the attention weights, and the full-layer one
         # cannot load Kimi-K3's MXFP4 MoE side.
-        config, weights = request.getfixturevalue("pretrained_mla_weights")
+        config, weights = request.getfixturevalue("pretrained_mla_layer_weights")
     else:
         config, weights = request.getfixturevalue("random_weights")
     config.max_seq_len = seq_len_cache
     kvpe_dim = config.kv_lora_rank + config.qk_rope_head_dim
     hidden_size = config.hidden_size
     # The GPU trace stores k_pe HF half-split while the device cache is Meta interleaved. Under NoPE
-    # (Kimi-K3) neither side rotates, so the bases coincide and re-interleaving would corrupt k_pe:
-    # measured 1.000000 raw against 0.078 re-interleaved.
+    # (Kimi-K3) neither side rotates.
     trace_pe_interleave = use_trace and not getattr(config, "mla_use_nope", False)
 
     logger.info(

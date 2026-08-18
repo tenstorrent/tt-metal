@@ -1094,7 +1094,7 @@ def pretrained_transformer_weights(variant, model_path, hf_config, state_dict, r
 
 
 @pytest.fixture
-def pretrained_mla_weights(variant, model_path, hf_config, state_dict):
+def pretrained_mla_layer_weights(variant, model_path, hf_config, state_dict):
     """Pretrained MLA weights from ``variant.pretrained_mla_layer``, as ``(hf_config, weights)``.
 
     Same shape ``random_weights`` returns, so an MLA test swaps one fixture for the other. Separate
@@ -1110,15 +1110,13 @@ def pretrained_mla_weights(variant, model_path, hf_config, state_dict):
     if state_dict is None:
         pytest.skip(f"{variant.name}: failed to load state dict. Check model path and weights.")
 
-    # The torch MLA reference reads these with no defaults, and Kimi-K3's checkpoint config omits all
-    # three -- transformers synthesizes a factor-less rope_scaling, on which _init_rope KeyErrors.
-    # Inert for a NoPE bias-free model; only filled when absent, so DeepSeek-V3 / Kimi-K2.6 (real YaRN)
-    # are untouched.
+    # The torch MLA reference reads all three with no defaults. Kimi-K3's checkpoint config omits the
+    # first two, and for the third transformers synthesizes {'rope_type': 'default'}, on which
+    # _init_rope KeyErrors -- a NoPE model has no scaling, so None is the value it wants.
     for field, default in (("attention_bias", False), ("attention_dropout", 0.0)):
         if not hasattr(hf_config, field):
             setattr(hf_config, field, default)
-    rope_scaling = getattr(hf_config, "rope_scaling", None)
-    if rope_scaling is not None and not {"type", "factor"} & set(rope_scaling):
+    if getattr(hf_config, "mla_use_nope", False):
         hf_config.rope_scaling = None
 
     layer_idx = variant.pretrained_mla_layer
