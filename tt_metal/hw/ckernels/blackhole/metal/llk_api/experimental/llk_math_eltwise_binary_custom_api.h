@@ -80,6 +80,34 @@ inline void llk_math_eltwise_binary_mul_bcast_cols_init_custom(
  * @param ct_dim: Number of column tiles written, into dest range [dst_index, dst_index + ct_dim).
  * @note Run @ref llk_math_eltwise_binary_mul_bcast_cols_init_custom first.
  */
+/**
+ * @brief Shape- and fidelity-aware blocked bcast-col MUL over ct_dim column tiles at dst_index.
+ *
+ * Unlike the two-arg overload below (full-tile, single-pass; indexer_score), this derives the
+ * operand tile geometry (2 faces for 16x32 tiny tiles, 4 faces for full 32x32), routes dst_index
+ * through the scaffold's per-tile dest addressing, and runs the multiply's fidelity phases
+ * (MAC-accumulated re-walks of the held src banks) so precision matches the standard
+ * per-tile mul at the kernel's fidelity.
+ *
+ * @tparam math_fidelity: Math fidelity; high fidelity re-walks each tile per phase.
+ * @param operandA: CB id of srcA; its tensor shape drives the face walk.
+ * @param dst_index: First destination tile index.
+ * @param ct_dim: Number of column tiles written, into dest range [dst_index, dst_index + ct_dim).
+ * @note Run @ref llk_math_eltwise_binary_mul_bcast_cols_init_custom first.
+ */
+template <MathFidelity math_fidelity>
+inline void llk_math_eltwise_binary_mul_bcast_cols_custom(
+    const std::uint32_t operandA, const std::uint32_t dst_index, const std::uint32_t ct_dim) {
+    LLK_ASSERT(
+        (dst_index + ct_dim <= get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()),
+        "dst range out of bounds");
+
+    const std::uint32_t operand_id = get_operand_id(operandA);
+    const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
+
+    _llk_math_bcast_cols_reuse_custom_<EltwiseBinaryType::ELWMUL, math_fidelity>(ct_dim, tensor_shape, dst_index);
+}
+
 inline void llk_math_eltwise_binary_mul_bcast_cols_custom(
     const std::uint32_t dst_index, const std::uint32_t ct_dim = 1) {
     LLK_ASSERT(

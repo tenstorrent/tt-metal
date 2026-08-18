@@ -5727,11 +5727,14 @@ else:
         # pair's two genuine 16x32 @ 32x32 walks — interleaved per column so DEST accumulation
         # revisits sit 8 MVMULs apart (a 16-row tile alone can only manage 4, which exposes the
         # DEST read-modify-write latency). Math-thread matmul time measures ~1.25 cycles/MVMUL,
-        # the tiny-tile floor. The residual gap to the q32 row is per-16-row softmax granularity:
-        # 2x the per-tile softmax launches/packs per 32 rows; the tiny-specialized drain
-        # (sub_exp_drain_tiny) hoists the per-subblock init/ReLU/pack-configure costs.
-        # Measured 2026-08-18: 5.290 ms, 61.44% math utilization on QB.
-        ("kimi_k3", 16, 640, 4, 61.44),
+        # the tiny-tile floor. The residual gap to the q32 row is per-16-row softmax granularity
+        # (2x the per-tile launches/packs per 32 rows): the tiny-specialized drain
+        # (sub_exp_drain_tiny) hoists the per-subblock init/ReLU/pack-configure costs, and the
+        # SALAD correction uses the blocked fidelity-phased bcast-col MUL (one unpack context per
+        # row-run). Removing all reader/writer NoC data traffic moves this row only ~1.4 points,
+        # so the remaining gap is compute-side phase serialization, not data movement.
+        # Measured 2026-08-18: 5.207 ms, 62.40% math utilization on QB.
+        ("kimi_k3", 16, 640, 4, 62.40),
     ]
 
 

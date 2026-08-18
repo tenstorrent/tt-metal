@@ -100,13 +100,18 @@ inline void _bcast_cols_op_()
  *                   lands on its own dest slots; single-tile-row callers leave it at 0.
  * @note Canonical description of the shared blocked bcast-col mechanism; other files reference this one.
  */
-template <EltwiseBinaryType eltwise_binary_type>
+template <EltwiseBinaryType eltwise_binary_type, MathFidelity math_fidelity = MathFidelity::LoFi>
 inline void _llk_math_bcast_cols_reuse_custom_(
     const std::uint32_t ct_dim = 1, const ckernel::TensorShape& tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE, const std::uint32_t dst_index = 0)
 {
     static_assert(
         eltwise_binary_type == EltwiseBinaryType::ELWMUL || eltwise_binary_type == EltwiseBinaryType::ELWSUB,
         "blocked bcast-col reuse scaffold supports ELWMUL and ELWSUB only");
+    // Fidelity phases apply to the multiply only (SUB is exact for the mantissa widths in play).
+    // Each extra phase re-walks the tile with the next srcA/srcB mantissa slice, MAC-accumulating
+    // onto the same dest rows — same contract as the standard eltwise binary at high fidelity.
+    constexpr int num_phases =
+        (eltwise_binary_type == EltwiseBinaryType::ELWMUL && math_fidelity != MathFidelity::LoFi) ? ckernel::to_underlying(math_fidelity) : 1;
 
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
 
@@ -134,6 +139,29 @@ inline void _llk_math_bcast_cols_reuse_custom_(
     }
         .set(ADDR_MOD_5);
 
+    if constexpr (num_phases > 1)
+    {
+        // Phase turn: rewind srcA/srcB/dest to the tile start and advance the fidelity phase; the
+        // held srcA/srcB banks are re-read (no unpack traffic) and dest MACs the correction term.
+        addr_mod_t {
+            .srca     = {.incr = 0, .clr = 1, .cr = 1},
+            .srcb     = {.incr = 0, .clr = 1, .cr = 1},
+            .dest     = {.incr = 0, .clr = 1, .cr = 1},
+            .fidelity = {.incr = 1, .clr = 0},
+        }
+            .set(ADDR_MOD_4);
+
+        // Final-phase tail: strides are irrelevant (the per-tile SETRWC below resets the counters);
+        // only the fidelity clear matters so the next tile starts at phase 0.
+        addr_mod_t {
+            .srca     = {.incr = 8},
+            .srcb     = {.incr = 24},
+            .dest     = {.incr = 8},
+            .fidelity = {.incr = 0, .clr = 1},
+        }
+            .set(ADDR_MOD_3);
+    }
+
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_AB); // reset both src counters to 0
 
     // Per tile: walk srcA/dest across 4 faces while srcB reuses one face per pair (F0/F1 -> srcB face
@@ -150,15 +178,36 @@ inline void _llk_math_bcast_cols_reuse_custom_(
         math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index + i);
         math::clear_dst_reg_addr();
 
-        for (std::uint32_t face_row = 0; face_row < num_face_rows; face_row++)
+#pragma GCC unroll 1
+        for (int phase = 0; phase < num_phases; phase++)
         {
-            // Even face (F0 / F2): op then rewind srcB by one face (ADDR_MOD_5) so the odd face reads it.
-            _bcast_cols_op_<eltwise_binary_type, ADDR_MOD_7>(); // srcB: 0 -> 8
-            _bcast_cols_op_<eltwise_binary_type, ADDR_MOD_5>(); // srcB: 8 -> 0
+            for (std::uint32_t face_row = 0; face_row < num_face_rows; face_row++)
+            {
+                // Even face (F0 / F2): op then rewind srcB by one face (ADDR_MOD_5) so the odd face reads it.
+                _bcast_cols_op_<eltwise_binary_type, ADDR_MOD_7>(); // srcB: 0 -> 8
+                _bcast_cols_op_<eltwise_binary_type, ADDR_MOD_5>(); // srcB: 8 -> 0
 
-            // Odd face (F1 / F3): op then advance srcB +24 (ADDR_MOD_6) to the next face-row / tile.
-            _bcast_cols_op_<eltwise_binary_type, ADDR_MOD_7>(); // srcB: 0 -> 8
-            _bcast_cols_op_<eltwise_binary_type, ADDR_MOD_6>(); // srcB: 8 -> 32 (next face-row)
+                // Odd face (F1 / F3): op then advance srcB +24 (ADDR_MOD_6) to the next face-row / tile.
+                _bcast_cols_op_<eltwise_binary_type, ADDR_MOD_7>(); // srcB: 0 -> 8
+                if constexpr (num_phases > 1)
+                {
+                    if (face_row == num_face_rows - 1)
+                    {
+                        // Last op of this phase: turn the phase (rewind + fidelity++) or, on the
+                        // final phase, clear the fidelity counter for the next tile.
+                        if (phase < num_phases - 1)
+                        {
+                            _bcast_cols_op_<eltwise_binary_type, ADDR_MOD_4>();
+                        }
+                        else
+                        {
+                            _bcast_cols_op_<eltwise_binary_type, ADDR_MOD_3>();
+                        }
+                        continue;
+                    }
+                }
+                _bcast_cols_op_<eltwise_binary_type, ADDR_MOD_6>(); // srcB: 8 -> 32 (next face-row)
+            }
         }
 
         // Rewind srcB to 0 for the next srcA tile (CLR_A clears srcA's dvalid); srcA keeps advancing.

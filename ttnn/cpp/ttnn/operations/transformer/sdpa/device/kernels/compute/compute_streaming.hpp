@@ -18,6 +18,7 @@
 #if defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE)
 #include "api/compute/experimental/matmul_custom.h"
 #include "api/compute/experimental/sdpa_sub_custom.h"
+#include "api/compute/experimental/indexer_mul_custom.h"
 #endif
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/dataflow/circular_buffer.h"
@@ -876,7 +877,14 @@ void salad_correct_fused(
     const uint32_t sum_row_base = sum_q_subblock * tiles_per_row;
     const uint32_t write_row_base = write_q_subblock * tiles_per_row;
 
+#ifdef ARCH_BLACKHOLE
+    // Blocked bcast-col MUL: one unpack context per row-run instead of one per tile, at the
+    // kernel's fidelity. Salad touches every output tile of the chunk, so per-launch costs
+    // dominate at tiny-tile granularity (2x the tiles per 32 rows).
+    mul_bcast_cols_init_short_custom(out_in_cb, bcast_cb);
+#else
     mul_bcast_cols_init(out_in_cb, bcast_cb);
+#endif
 
     CircularBuffer(out_in_cb).wait_front((ob_q_subblock + 1) * tiles_per_row * tiles_per_column);
     CircularBuffer(sum_in_cb).wait_front((sum_q_subblock + 1) * tiles_per_row);
@@ -893,13 +901,24 @@ void salad_correct_fused(
         uint32_t dst_index = 0;
         for (uint32_t i = 0; i < tiles_per_row; i++) {
             uint32_t in0_tile_index = (ob_row_base + i) * tiles_per_column + col_base;
+#ifdef ARCH_BLACKHOLE
+            mul_tiles_bcast_cols_custom_shaped(
+                out_in_cb, bcast_cb, in0_tile_index, ob_row_base + i, dst_index, cur_cols);
+            dst_index += cur_cols;
+#else
             for (uint32_t j = 0; j < cur_cols; j++) {
                 mul_tiles_bcast_cols(out_in_cb, bcast_cb, in0_tile_index + j, ob_row_base + i, dst_index++);
             }
+#endif
         }
         if (fuse_sum_here) {
             for (uint32_t i = 0; i < tiles_per_row; i++) {
+#ifdef ARCH_BLACKHOLE
+                mul_tiles_bcast_cols_custom_shaped(
+                    sum_in_cb, bcast_cb, sum_row_base + i, ob_row_base + i, dst_index++, 1);
+#else
                 mul_tiles_bcast_cols(sum_in_cb, bcast_cb, sum_row_base + i, ob_row_base + i, dst_index++);
+#endif
             }
         }
         tile_regs_commit();
@@ -918,7 +937,11 @@ void salad_correct_fused(
     if constexpr (!can_fuse_last) {
         tile_regs_acquire();
         for (uint32_t i = 0; i < tiles_per_row; i++) {
+#ifdef ARCH_BLACKHOLE
+            mul_tiles_bcast_cols_custom_shaped(sum_in_cb, bcast_cb, sum_row_base + i, ob_row_base + i, i, 1);
+#else
             mul_tiles_bcast_cols(sum_in_cb, bcast_cb, sum_row_base + i, ob_row_base + i, i);
+#endif
         }
         tile_regs_commit();
         tile_regs_wait();

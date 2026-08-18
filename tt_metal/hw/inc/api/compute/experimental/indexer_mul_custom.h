@@ -31,6 +31,16 @@ ALWI void mul_bcast_cols_init_short_custom(uint32_t icb0, uint32_t icb1, uint32_
     UNPACK((llk_unpack_AB_sub_bcast_col_init_custom(icb0)));
 }
 
+// Shape- and fidelity-aware variant: derives the srcA tile geometry (16x32 tiny vs full 32x32),
+// routes idst through the scaffold's per-tile dest addressing, and runs the kernel's fidelity
+// phases. Plain per-batch product (fresh dest range), no in-place head reduction. Used by the
+// SDPA SALAD correction.
+ALWI void mul_tiles_bcast_cols_custom_shaped(
+    uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst, uint32_t ct_dim) {
+    MATH((llk_math_eltwise_binary_mul_bcast_cols_custom<MATH_FIDELITY>(icb0, idst, ct_dim)));
+    UNPACK((llk_unpack_AB_sub_bcast_col_custom(icb0, icb1, itile0, itile1, ct_dim)));
+}
+
 // itile0 = base SrcA (qk) tile of head h's column run (ct_dim consecutive tiles); itile1 = w[h].
 ALWI void mul_tiles_bcast_cols_custom(
     uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst, uint32_t ct_dim) {
