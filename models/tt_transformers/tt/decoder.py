@@ -2,6 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+import time
+
+from loguru import logger
+
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
@@ -15,6 +20,8 @@ from models.tt_transformers.tt.model_config import TensorGroup
 
 
 class TransformerBlock(LightweightModule):
+    _GALAXY_STAGE_SYNC_DIAG_ENV = "TT_TRANSFORMERS_GALAXY_STAGE_SYNC_DIAG"
+
     def __init__(
         self,
         args,
@@ -216,6 +223,26 @@ class TransformerBlock(LightweightModule):
             # If post_feedforward_layernorm is not in state_dict, we do not use it
             self.post_ff_norm = None
 
+    def _galaxy_stage_sync_diag(self, stage):
+        if os.getenv(self._GALAXY_STAGE_SYNC_DIAG_ENV) != "1":
+            return
+
+        stage = f"decoder_layer_{self.layer_num}_{stage}"
+        started_at = time.time()
+        logger.info(
+            "[galaxy-stage-sync-diag] stage={} event=begin timestamp={:.6f}",
+            stage,
+            started_at,
+        )
+        ttnn.synchronize_device(self.mesh_device)
+        completed_at = time.time()
+        logger.info(
+            "[galaxy-stage-sync-diag] stage={} event=complete timestamp={:.6f} elapsed_s={:.6f}",
+            stage,
+            completed_at,
+            completed_at - started_at,
+        )
+
     def forward(
         self,
         x: ttnn.Tensor,
@@ -248,6 +275,7 @@ class TransformerBlock(LightweightModule):
         # Norms take fractured inputs and output replicated across devices
         attn_norm_config = self.args.get_norm_config("attn", mode, self.prefetcher)
         attn_in = self.attention_norm(x, mode, norm_config=attn_norm_config)
+        self._galaxy_stage_sync_diag("attention_norm")
 
         # Reshape to [B, 1, S_per_user, H] so attention infers batch_size from shape[0]
         if batch_size > 1:
@@ -264,6 +292,7 @@ class TransformerBlock(LightweightModule):
             chunk_start_idx=chunk_start_idx,
             kv_cache=kv_cache,
         )
+        self._galaxy_stage_sync_diag("attention")
         # To match the batch-related reshape inside the attention module
         # Use the batch_size parameter instead of inferring from shape[-3]
         # because for [32, 1, S, H] tensors, shape[-3] is 1, not 32
@@ -277,6 +306,7 @@ class TransformerBlock(LightweightModule):
             hidden_states = ttnn.add(
                 residual, attn_out, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None
             )
+            self._galaxy_stage_sync_diag("attention_residual_add")
             residual = hidden_states
             if mode == "prefill":
                 x.deallocate(True)
@@ -285,6 +315,7 @@ class TransformerBlock(LightweightModule):
 
         ff_norm_config = self.args.get_norm_config("ff", mode, self.prefetcher)
         hidden_states = self.ff_norm(hidden_states, mode, norm_config=ff_norm_config)
+        self._galaxy_stage_sync_diag("ff_norm")
 
         if self.pre_ff_norm is not None:
             # Mesh partition ff_norm output to match residual sharding, skip if using distributed norm, because output is already sharded
@@ -299,6 +330,7 @@ class TransformerBlock(LightweightModule):
             hidden_states = ttnn.add(
                 residual, hidden_states, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None
             )
+            self._galaxy_stage_sync_diag("attention_residual_add")
             residual = hidden_states
             pre_ff_norm_config = self.args.get_norm_config("ff", mode, self.prefetcher)
             hidden_states = self.pre_ff_norm(hidden_states, mode, norm_config=pre_ff_norm_config)
@@ -310,6 +342,7 @@ class TransformerBlock(LightweightModule):
         # MLP takes replicated inputs and produces fractured outputs
 
         hidden_states = self.feed_forward.forward(hidden_states, mode)
+        self._galaxy_stage_sync_diag("feed_forward")
 
         activation_dtype = self.args.decoders_optimizations.get_tensor_dtype(
             decoder_id=self.layer_num, tensor=TensorGroup.ACTIVATION
@@ -334,5 +367,6 @@ class TransformerBlock(LightweightModule):
             if TG and not self.args.is_distributed_norm(mode)
             else activation_dtype or ttnn.bfloat16,
         )
+        self._galaxy_stage_sync_diag("final_residual_add")
 
         return out  # fractured across devices
