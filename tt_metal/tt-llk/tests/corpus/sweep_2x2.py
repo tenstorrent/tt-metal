@@ -143,7 +143,8 @@ OFF_FLAGS = (
     "-mno-tt-tensix-optimize-ccmask "
     "-mno-tt-tensix-optimize-interlock-schedule "
     "-mno-tt-tensix-optimize-transp-involution "
-    "-mno-tt-tensix-optimize-replay-exec-record"
+    "-mno-tt-tensix-optimize-replay-exec-record "
+    "-mno-tt-tensix-optimize-drain-schedule"
 )
 ON_FLAGS = (
     "-mtt-tensix-optimize-latency-schedule "
@@ -169,7 +170,14 @@ ON_FLAGS = (
     # replay-exec-record (exec-while-record capture; fire witness =
     # sigmoidappx 33->32 launch shape).
     "-mtt-tensix-optimize-transp-involution "
-    "-mtt-tensix-optimize-replay-exec-record"
+    "-mtt-tensix-optimize-replay-exec-record "
+    # Lane AY (next pin): drain-aware boundary placement (WP13) -- per-
+    # boundary drain proofs from the derived descriptor calendars; fire
+    # witness = the wired minmax-max/min rows (planner dump line
+    # "Macro-planner drain-schedule: run-boundary drain elided", 3 per
+    # kernel; SFPNOP 12->3 per tile).  Refusals keep the full drain
+    # byte-identically; unarymaxmin/sdpa proven unmoved.
+    "-mtt-tensix-optimize-drain-schedule"
     # M3/prgm-const is NOT in the ON set (un-shipped after pin 9's nightly):
     # its only engagement channel was the trusted TTREGION source markers in
     # the LLK headers, and trusted source annotation of the consumed library
@@ -196,6 +204,7 @@ KNOBS = {
     "interlock-schedule": "-mtt-tensix-optimize-interlock-schedule",
     "transp-involution": "-mtt-tensix-optimize-transp-involution",
     "replay-exec-record": "-mtt-tensix-optimize-replay-exec-record",
+    "drain-schedule": "-mtt-tensix-optimize-drain-schedule",
 }
 HARNESS_TOOLCHAIN = TESTS / "sfpi"  # untracked symlink the harness hardcodes
 DEVICE_LOCK = "/tmp/tt-device.lock"
