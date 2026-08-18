@@ -57,7 +57,7 @@ void py_module(nb::module_& mod) {
 
     mod.def(
         "get_global_semaphore_address",
-        nb::overload_cast<const GlobalSemaphore&>(&get_global_semaphore_address),
+        &get_global_semaphore_address,
         nb::arg("global_semaphore"),
         R"doc(
             Get the address of the global semaphore.
@@ -68,7 +68,7 @@ void py_module(nb::module_& mod) {
 
     mod.def(
         "reset_global_semaphore_value",
-        nb::overload_cast<const GlobalSemaphore&, uint32_t>(&reset_global_semaphore_value),
+        &reset_global_semaphore_value,
         nb::arg("global_semaphore"),
         nb::arg("reset_value"),
         R"doc(

@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <optional>
+
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/data_movement/repeat/codegen/repeat_codegen_program_factory.hpp"
 #include "ttnn/types.hpp"
@@ -35,6 +37,8 @@ struct RepeatCodegenDeviceOperation {
 };
 
 RepeatCodegenDeviceOperation::tensor_return_value_t repeat_codegen(
-    const Tensor& input, const RepeatCodegenParams& params);
+    const Tensor& input,
+    const RepeatCodegenParams& params,
+    std::optional<Tensor> optional_output_tensor = std::nullopt);
 
 }  // namespace ttnn::prim
