@@ -942,6 +942,67 @@ the shape — which points at (1) or (3) and makes a direct numerical comparison
 RoPE table paths, at one offset, the cheapest decisive next test.  Both are single-op
 comparisons that need no generation loop.
 
+### F25 — DFlash is faster than not using it, and the external comparison that got it there
+
+An external single-p150 bring-up (`github.com/Codys12/MuseGlimmer`) reports **119.99 AR
+tok/s** against our then-32.6, on *one* Blackhole chip against our *four* p300c.  Chasing
+that claim produced both a correction and the win.
+
+**The comparison is not like-for-like, and the arithmetic says where the difference is.**
+Decomposing their published 255 tokens / 2.121 s / 240 accepted drafts / 18 verifies
+against ours:
+
+| | theirs | ours (then) |
+|---|---|---|
+| ms per token | 8.32 | 30.71 |
+| ms per **iteration** | 117.83 | **85.46** |
+| tokens per iteration | 14.17 | 2.78 |
+| acceptance | 83.3 % | 18.2 % |
+
+Our loop was already *faster*; the entire gap was acceptance.  And their 83 % comes from
+the workload: the figure is `test_server_e2e.py`'s *"Write a numbered list from 1 through
+100... the number followed by ': glimmer'"*, whose output is a fixed repeating pattern.
+That is the trap F16 recorded in this very project -- degenerate output makes acceptance
+look excellent because repetition is trivial to draft.  Their own README reports **56.01**
+and **20.13** true AR tok/s on real tool-call content, and 20.13 was *below* our 32.6.  On
+the axis that does not depend on acceptance we were already ahead: **5,117 prompt tok/s**
+at ISL 130,560 against their 1,549, i.e. about what four chips should buy.
+
+**Running their prompt on our stack is what exposed the real cost.**  At OSL 256 our
+acceptance did rise (4.20/verify, 26 %) and throughput *fell* to 20.98 t/s/u, because
+`trace_capture_seconds` was **4.83 s of 12.20 s** — capture scales with tokens generated,
+one per 32.  Two inefficiencies, capture and the recompute-the-whole-context drafter, were
+83 % of runtime.
+
+**The fix was already built and wrongly rejected.**  F24 held the offset-free capture back
+on token-divergence, graded by equality with greedy — which **F2 established is not a valid
+gate for this port**.  `tests/dflash_offset_free_probe.py` grades per window instead, with
+no generation cascade: bit-identical hidden states at offsets 64/96/160, argmax agreement
+**32/32 at all four** probed offsets, and the single differing offset (128, PCC 0.9991) is
+where the shipped path picks SDPA chunk 128 against this path's fixed `TILE_SIZE` — a
+reduction-order difference, not a wiring one.  Acceptance had *risen* all along (2.783
+against 2.723), which is the signal a broken graph cannot fake.
+
+**Result, both measured on this branch:**
+
+| | OSL 128, free-form code | OSL 256, structured |
+|---|---|---|
+| per-window capture | 32.56 t/s/u (0.759x) | 20.98 t/s/u (0.490x) |
+| **offset-free (shipped)** | **42.71 t/s/u (0.995x)** | **51.82 t/s/u (1.211x)** |
+| capture time | 1.069 → 0.224 s | 4.833 → 0.219 s |
+
+**DFlash now beats non-speculative decode**, and the margin grows with output length
+because the cost removed was per-32-tokens while the benefit is per-token.  The drafter
+forward also halved at OSL 256 (5.27 → 2.47 s), unpredicted: per-window capture released
+the generator's traces and warm-compiled every 32 tokens, churning the ttnn program cache
+the drafter shares.
+
+**Two lessons worth more than the speedup.** A published headline is a workload before it
+is a number — theirs is a repeating pattern, and ours was free-form code, and that alone
+was a 4.6x difference in acceptance. And an invalid gate is worse than no gate: token
+equality kept a 1.21x path switched off for a day, while the metric that mattered
+(acceptance) was pointing the other way the whole time.
+
 ## Artifacts
 
 | file | what |
