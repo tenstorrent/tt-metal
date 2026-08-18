@@ -60,7 +60,12 @@ inline void _llk_math_eltwise_unary_datacopy_(
     if (unpack_to_dest && is_32bit_input(src_format, dst_format))
     {
         math_unpack_to_dest_math_ready();
+        // #53416: hold mutex::REG_RMW across the dest-index handoff so this mailbox write is
+        // ordered against the unpacker's guarded dest-base RMW section; released before the
+        // MATH|WAIT_SFPU semaphore wait in math_unpack_to_dest_tile_ready().
+        t6_mutex_acquire(mutex::REG_RMW);
         math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::DestReg>(dst_index);
+        t6_mutex_release(mutex::REG_RMW);
         math::math_unpack_to_dest_tile_ready();
 
         // Due to bug in Blackhole Tensix (more details in budabackend/#2730) when an event with side effect of clearing DEST zero flags
