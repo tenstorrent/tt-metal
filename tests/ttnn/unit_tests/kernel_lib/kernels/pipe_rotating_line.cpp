@@ -4,11 +4,11 @@
 // mcast_pipe + mcast_host END-TO-END rotating-LINE test kernel.
 //
 // Every core on a 1D line runs this ONE kernel and plays BOTH faces of the channel over `span`
-// rounds, decoding the host::Mcast1D(rotating) wire with McastArgs<CT=1, RT=5, SPAN=span>.
+// rounds, decoding the host::Mcast1D(rotating) wire with McastArgs<CT=1, RT=5>.
 //
-// On round r == my_index this core is the SENDER; on every other round it RECEIVES the shard the
-// round-r sender broadcasts and records it to DRAM. This is the 1D mirror of the block-sharded
-// matmul in0 reader.
+// On round r == my_sender_round this core is the SENDER. Receiver-rectangle cores receive every
+// other round; an independent sender outside that rectangle stays sender-only. This is the 1D mirror
+// of the block-sharded matmul in0 reader.
 //
 // The dest rect is the FULL line (it includes the sender), so the sender does an IN-PLACE mcast: it
 // stages its own shard into cb (the landing region the receivers also use) and calls send(dst, dst)
@@ -28,21 +28,19 @@ using namespace dataflow_kernel_lib;
 
 void kernel_main() {
     constexpr uint32_t cb = get_compile_time_arg_val(0);  // mcast + landing region (one per core)
-    // `span` is the first scalar after the mcast CT block; read it via a SPAN-less view of the args,
-    // then form the SPAN-typed McastArgs (rotating).
-    constexpr uint32_t SCALARS = McastArgs</*CT=*/1, /*RT=*/5>::next_compile_time_args_offset();  // = 6
-    constexpr uint32_t span = get_compile_time_arg_val(SCALARS + 0);
-    constexpr auto mc = McastArgs</*CT=*/1, /*RT=*/5, span>();
-    constexpr uint32_t payload_pages = get_compile_time_arg_val(SCALARS + 1);
-    constexpr uint32_t page_bytes = get_compile_time_arg_val(SCALARS + 2);
-    constexpr auto in_args = TensorAccessorArgs<SCALARS + 3>();
+    constexpr auto mc = McastArgs</*CT=*/1, /*RT=*/5>();
+    constexpr uint32_t SCALARS = mc.next_compile_time_args_offset();  // = 7
+    constexpr uint32_t span = mc.rotating_span;
+    constexpr uint32_t payload_pages = get_compile_time_arg_val(SCALARS + 0);
+    constexpr uint32_t page_bytes = get_compile_time_arg_val(SCALARS + 1);
+    constexpr auto in_args = TensorAccessorArgs<SCALARS + 2>();
     constexpr auto out_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
 
     const uint32_t input_addr = get_arg_val<uint32_t>(0);
     const uint32_t input_start_id = get_arg_val<uint32_t>(1);
     const uint32_t output_addr = get_arg_val<uint32_t>(2);
     const uint32_t output_start_id = get_arg_val<uint32_t>(3);  // first DRAM slot this core writes
-    const uint32_t my_index = get_arg_val<uint32_t>(4);         // this core's axis position == its sender round
+    const uint32_t my_sender_round = get_arg_val<uint32_t>(4);  // UINT32_MAX for receiver-only cores
 
     constexpr uint32_t payload_bytes = payload_pages * page_bytes;
 
@@ -61,7 +59,8 @@ void kernel_main() {
     auto recv_pipe = mc.receiver(noc);
 
     for (uint32_t r = 0; r < span; ++r) {
-        if (r == my_index) {
+        const bool is_sender = r == my_sender_round;
+        if (is_sender) {
             // SENDER: stage my shard into cb, then broadcast it IN PLACE (src == dst => EXCLUDE_SRC) to
             // the other span-1 cores on the line.
             for (uint32_t i = 0; i < payload_pages; ++i) {
@@ -70,20 +69,21 @@ void kernel_main() {
             }
             noc.async_read_barrier();
             send_pipe.send(cb_addr, cb_addr, payload_bytes);
-        } else {
+        } else if (send_pipe.core_in_receiver_rect()) {
             // RECEIVER: the shard the round-r sender broadcasts lands in cb.
             recv_pipe.receive(r);
         }
-        // record this round's shard (mine when sending, the sender's when receiving) to DRAM, before
-        // the next round overwrites the landing buffer.
-        for (uint32_t i = 0; i < payload_pages; ++i) {
-            noc.async_write(
-                cb_obj,
-                out,
-                page_bytes,
-                {.offset_bytes = i * page_bytes},
-                {.page_id = output_start_id + r * payload_pages + i});
+        // Receiver-rectangle cores record every round. An outside sender records only its own round.
+        if (is_sender || send_pipe.core_in_receiver_rect()) {
+            for (uint32_t i = 0; i < payload_pages; ++i) {
+                noc.async_write(
+                    cb_obj,
+                    out,
+                    page_bytes,
+                    {.offset_bytes = i * page_bytes},
+                    {.page_id = output_start_id + r * payload_pages + i});
+            }
+            noc.async_write_barrier();
         }
-        noc.async_write_barrier();
     }
 }
