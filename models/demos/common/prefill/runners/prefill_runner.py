@@ -380,6 +380,31 @@ def _d2d_recv(inbound, *, decode_meta: bool) -> tuple:
     return act, meta, metadata_msg
 
 
+_dbg_send_meta_calls = 0
+
+
+def _dbg_dump_send_meta(md_tensor, rank: int) -> None:
+    """DEBUG (PREFILL_DEBUG_META_SHARDS=1): read the metadata tensor back per shard immediately before
+    the outbound socket send. Pairs with the runtime's receive-side dump: send-side clean here but
+    receive-side garbage downstream localizes the fault to the cross-rack transport; send-side already
+    garbage localizes it to this rank's held buffer being stomped (e.g. by trace replay)."""
+    global _dbg_send_meta_calls
+    if os.environ.get("PREFILL_DEBUG_META_SHARDS", "0") != "1" or _dbg_send_meta_calls >= 3:
+        return
+    _dbg_send_meta_calls += 1
+    import torch
+
+    dev = md_tensor.device()
+    rows = ttnn.to_torch(md_tensor, mesh_composer=ttnn.ConcatMeshToTensor(dev, dim=0)).reshape(-1, 3).to(torch.int64)
+    uniq = torch.unique(rows, dim=0)
+    allsame = uniq.shape[0] == 1
+    logger.info(
+        f"[dbg-meta-send rank {rank}] call={_dbg_send_meta_calls - 1} shards={rows.shape[0]} all_same={allsame} "
+        f"shard0={rows[0].tolist()} n_distinct={uniq.shape[0]} "
+        f"first_diff_shard={None if allsame else int((rows != rows[0]).any(dim=1).nonzero()[0].item())}"
+    )
+
+
 def _d2d_send(
     outbound, activation: ttnn.Tensor, rank: int, meta: Optional[dict], *, deallocate: bool = True, metadata_msg=None
 ) -> None:
@@ -415,6 +440,7 @@ def _d2d_send(
                 ttnn.MeshMapperConfig(placements=[ttnn.PlacementReplicate(), ttnn.PlacementReplicate()]),
             ),
         )
+    _dbg_dump_send_meta(md_tensor, rank)
     ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(outbound, activation, metadata=md_tensor)
     if deallocate:
         ttnn.deallocate(activation)
@@ -487,15 +513,22 @@ def _compute_and_send(
     )
     if not runtime.config.is_last_rank:
         # Traced: `out` is the runtime's persistent _trace_output (the next replay overwrites it in place),
-        # so the send copies it into the socket backing but must not free it; the received metadata_msg is
-        # forwarded verbatim (no host rebuild, meta is None). Eager: `out` is fresh — free it, rebuild md.
+        # so the send copies it into the socket backing but must not free it. Forward the runtime's
+        # persistent metadata, NOT the raw received metadata_msg: that raw tensor is a fresh socket output
+        # the replay's writes can land on, so it can arrive corrupted downstream (per-shard-inconsistent),
+        # tripping the D2H ack's cross-socket identity check. The persistent buffer survives replay. Eager:
+        # `out` is fresh — free it, rebuild md from meta.
+        forward_md = None
+        if runtime.config.use_trace:
+            persistent_md = getattr(runtime, "trace_metadata_msg", None)
+            forward_md = persistent_md if persistent_md is not None else metadata_msg
         _d2d_send(
             d2d_out,
             out,
             rank,
             meta,
             deallocate=not runtime.config.use_trace,
-            metadata_msg=metadata_msg if runtime.config.use_trace else None,
+            metadata_msg=forward_md,
         )  # grant below ships it
     if d2d_out is not None:
         d2d_out.release_fabric_links()
