@@ -86,6 +86,18 @@ inline void add_binary_tile_init() {}
 inline void add_binary_tile(uint32_t a, uint32_t b, uint32_t o) {
     T("    add_binary_tile(dst" + n(a) + ",dst" + n(b) + " -> dst" + n(o) + ")");
 }
+inline void sub_binary_tile_init() {}
+inline void sub_binary_tile(uint32_t a, uint32_t b, uint32_t o) {
+    T("      sub_binary_tile(dst" + n(a) + ",dst" + n(b) + " -> dst" + n(o) + ")");
+}
+inline void mul_binary_tile_init() {}
+inline void mul_binary_tile(uint32_t a, uint32_t b, uint32_t o) {
+    T("      mul_binary_tile(dst" + n(a) + ",dst" + n(b) + " -> dst" + n(o) + ")");
+}
+inline void div_binary_tile_init() {}
+inline void div_binary_tile(uint32_t a, uint32_t b, uint32_t o) {
+    T("      div_binary_tile(dst" + n(a) + ",dst" + n(b) + " -> dst" + n(o) + ")");
+}
 inline void exp_tile_init() {}
 inline void exp_tile(uint32_t o) { T("    exp_tile (dst" + n(o) + ")"); }
 inline void relu_tile_init() {}
@@ -308,10 +320,11 @@ void example_syntax_free() {
     using Geom = MatmulGeometry</*rt=*/2, /*ct=*/2, /*kt=*/2>;
     using RG = ReduceGeometry</*ht=*/2, /*wt=*/1>;
 
-    {  // Bin
+    {  // Bin -- EVERY binary. Left-associated and non-commutative on purpose:
+       // a swapped operand order shows up as swapped dst indices in the trace.
         ComputeBlock a = noc_load<1>(in0, t0, 0).wait();
         ComputeBlock b = noc_load<1>(in1, t0, 0).wait();
-        noc_store<0>(out.store(relu(a + b)), t2, 0);
+        noc_store<0>(out.store(relu(((a + b) - a) * b / a)), t2, 0);
     }
     {  // ComputeBlock
         ComputeBlock a = noc_load<1>(in0, t0, 0).wait();
@@ -340,10 +353,11 @@ void example_syntax_method() {
     using Geom = MatmulGeometry</*rt=*/2, /*ct=*/2, /*kt=*/2>;
     using RG = ReduceGeometry</*ht=*/2, /*wt=*/1>;
 
-    {  // Bin
+    {  // Bin -- EVERY binary. Left-associated and non-commutative on purpose:
+       // a swapped operand order shows up as swapped dst indices in the trace.
         ComputeBlock a = noc_load<1>(in0, t0, 0).wait();
         ComputeBlock b = noc_load<1>(in1, t0, 0).wait();
-        noc_store<0>(out.store((a + b).relu()), t2, 0);
+        noc_store<0>(out.store((((a + b) - a) * b / a).relu()), t2, 0);
     }
     {  // ComputeBlock
         ComputeBlock a = noc_load<1>(in0, t0, 0).wait();
