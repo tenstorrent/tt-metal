@@ -15,7 +15,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 import ttnn
 from models.autoports.qwen_qwen3_6_27b.tt.generator import build_generator
-from models.autoports.qwen_qwen3_6_27b.tt.functional_decoder import MODEL_REVISION
+from models.autoports.qwen_qwen3_6_27b.tt.functional_decoder import default_snapshot, MODEL_REVISION
 
 
 def main() -> None:
@@ -24,7 +24,7 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--max-new-tokens", type=int, default=50)
     args = parser.parse_args()
-    snapshot = Path("/huggingface/hub/models--Qwen--Qwen3.6-27B/snapshots") / MODEL_REVISION
+    snapshot = default_snapshot()
     tokenizer = AutoTokenizer.from_pretrained(snapshot, local_files_only=True)
     prompts = [line.strip() for line in args.prompts.read_text().splitlines() if line.strip()]
     rendered = [

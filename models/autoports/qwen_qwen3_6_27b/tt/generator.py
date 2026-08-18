@@ -13,7 +13,7 @@ import torch
 from transformers import AutoTokenizer
 
 import ttnn
-from models.autoports.qwen_qwen3_6_27b.tt.functional_decoder import LINEAR_PREFILL_CHUNK_SIZE, MODEL_REVISION
+from models.autoports.qwen_qwen3_6_27b.tt.functional_decoder import default_snapshot, LINEAR_PREFILL_CHUNK_SIZE, MODEL_REVISION
 from models.autoports.qwen_qwen3_6_27b.tt.model import Qwen36Model
 from models.common.modules.tt_ccl import get_tt_ccl
 from models.common.readiness_check.contract import Generator as ReadinessGenerator
@@ -625,7 +625,7 @@ class Qwen36Generator(ReadinessGenerator):
 
 def build_generator(model_dir, mesh_device, **kwargs):
     snapshot = Path(
-        kwargs.pop("snapshot", Path("/huggingface/hub/models--Qwen--Qwen3.6-27B/snapshots") / MODEL_REVISION)
+        kwargs.pop("snapshot", default_snapshot())
     )
     host_sampling_compatibility = kwargs.pop("host_sampling_compatibility", False)
     force_argmax_greedy = kwargs.pop("force_argmax_greedy", False)

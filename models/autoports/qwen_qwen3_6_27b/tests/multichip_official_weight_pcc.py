@@ -18,14 +18,14 @@ from safetensors import safe_open
 from transformers import AutoConfig
 
 import ttnn
-from models.autoports.qwen_qwen3_6_27b.tt.functional_decoder import MODEL_ID, MODEL_REVISION, _to_device
+from models.autoports.qwen_qwen3_6_27b.tt.functional_decoder import default_snapshot, MODEL_ID, MODEL_REVISION, _to_device
 from models.autoports.qwen_qwen3_6_27b.tt.multichip_decoder import TARGET_FABRIC, MultichipDecoder
 from models.autoports.qwen_qwen3_6_27b.tt.optimized_decoder import OptimizedDecoder
 from models.common.utility_functions import comp_pcc
 
 LINEAR_LAYER = 0
 FULL_LAYER = 3
-SNAPSHOT = Path("/huggingface/hub/models--Qwen--Qwen3.6-27B/snapshots") / MODEL_REVISION
+SNAPSHOT = default_snapshot()
 
 
 def load_official_layers():

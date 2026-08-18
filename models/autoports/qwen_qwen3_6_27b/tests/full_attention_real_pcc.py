@@ -15,6 +15,7 @@ from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5DecoderLayer, Qw
 import ttnn
 from models.autoports.qwen_qwen3_6_27b.tt.functional_decoder import (
     MODEL_ID,
+    default_snapshot,
     MODEL_REVISION,
     FunctionalDecoder,
     _to_device,
@@ -23,7 +24,7 @@ from models.autoports.qwen_qwen3_6_27b.tt.optimized_decoder import POLICIES, Opt
 from models.common.utility_functions import comp_pcc
 
 LAYER = 3
-SNAPSHOT = Path("/huggingface/hub/models--Qwen--Qwen3.6-27B/snapshots") / MODEL_REVISION
+SNAPSHOT = default_snapshot()
 
 
 def _real_state():
