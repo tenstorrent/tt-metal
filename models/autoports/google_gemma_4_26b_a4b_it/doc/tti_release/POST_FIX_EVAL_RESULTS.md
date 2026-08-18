@@ -450,3 +450,43 @@ from a 157-token prompt). Doc 1 here generates 12,708 tokens, crossing that boun
 about **12 times**, and still lands a correct boxed answer — so the read-wrap fix
 holds across repeated wraps, not just the first one. That was the specific doubt
 `AUTODEBUG_GPQA_DIVERGENCE.md` raised about "32 wraps" and it is now evidenced to 12.
+
+## The CI-nightly GPQA number, measured
+
+`r1_gpqa_diamond` at the graded limit (`--limit-samples-mode ci-nightly` → 0.2 →
+**40 of 198 documents**), through the TTI evals workflow against the autoport on the
+release recipe. 15,301 s (4 h 15 m), workflow rc=0.
+
+| | value |
+|---|---|
+| `exact_match,none` | **0.775 — 31 of 40** |
+| stderr | 0.0669 |
+| published GPQA Diamond (card) | ~82.3 % → this is **94 % of card** |
+| the report's derived bar (card × 0.95) | 78.2 → **0.7 points under**, well inside ±6.7 stderr |
+| graded status | still **`NA`** — no `published_score`, `gpu_reference_score_ref="TBD"` |
+
+Generation is long in thinking mode: min 3,274 tokens, **median 9,819**, p90 21,033,
+max 32,760.
+
+### The nine failures, classified
+
+| kind | count | detail |
+|---|---:|---|
+| genuine wrong answer, boxed letter present | **7** | docs 17, 21, 22, 24, 27, 30, 33 — 10.0k–17.7k tokens each |
+| cap-exhausted at 32,768 | **2** | doc 8 (32,754, boxed but wrong), doc 10 (32,760, **no extractable answer**) |
+
+So seven of nine are the model reasoning at length and getting the answer wrong —
+ordinary quality loss against a hard benchmark, not corruption. Two of forty (5 %)
+fail to terminate inside the 32,768-token budget, which is the residual
+long-generation concern; at temperature 1.0 some non-termination is expected of a
+reasoning model, but it is worth watching.
+
+### What this run also proves about the wrap fix
+
+A median document generates 9,819 tokens, which crosses the 1,024-token
+sliding-window boundary about **nine times**, and the longest crosses it **32
+times** — the exact figure `AUTODEBUG_GPQA_DIVERGENCE.md` worried about ("a
+32,768-token generation wraps the sliding cache about 32 times"). Thirty-one of
+forty such documents land a correct answer. Before the fix, every generation past
+absolute position 1024 was token soup. That is the strongest evidence to date that
+the read-wrap fix holds under sustained repeated wrapping, not just the first one.
