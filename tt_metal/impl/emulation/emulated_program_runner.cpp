@@ -582,8 +582,6 @@ struct Metal2BindingsSnapshot {
             s += ":dfb:" + name + "=" + std::to_string(id);
         }
         for (const auto& [name, h] : sem_accessors) {
-            // Fold the baked scope too: same id under a different scope compiles a different
-            // scope table and must not reuse the first kernel's .so.
             s += ":sem:" + name + "=" + std::to_string(h.id) + "@" + std::to_string(static_cast<int>(h.scope));
         }
         for (const auto& ta : ta_accessors) {
@@ -849,8 +847,7 @@ static void emit_metal2_namespaces(
         sem_entries.push_back({name, h.id, h.scope});
     }
     if (!sem_entries.empty()) {
-        // Scope table FIRST -- shared emission with genfiles.cpp (emit_sem_scope_table), so the
-        // two backends' text cannot drift.
+        // Scope table first, so the sem:: namespace can reference it.
         tt::tt_metal::emit_sem_scope_table(f, sem_entries, tt::tt_metal::NUM_SEMAPHORES);
     }
     if (has_args) {
@@ -907,10 +904,6 @@ static void emit_metal2_namespaces(
         f << "}  // namespace dfb\n";
     }
     if (!sem_entries.empty()) {
-        // Each bound semaphore is its plain id; the mechanism travels in the scope table above.
-        // Backend-capability refusals live in collect_kernels, not here: this emitter runs only
-        // on a JIT-cache miss. Shared emission with genfiles.cpp; the helper leaves the
-        // namespace open (emule injects no seeder, so close it right away).
         tt::tt_metal::emit_sem_ids_and_tripwires(f, sem_entries);
         f << "}  // namespace sem\n";
     }
@@ -1760,9 +1753,6 @@ static void collect_kernels(
             // Metal 2.0 bindings — same across this Kernel's TRISC variants, so
             // capture the cache-key suffix once and append it to every variant key.
             Metal2BindingsSnapshot bindings = build_metal2_snapshot(*kernel);
-            // Backend-capability refusals live HERE, not in the emitter: the emitter runs only on
-            // a JIT-cache MISS, so a check there is silently vacated by a .so reuse (the cache key
-            // folds scope/access but deliberately not program shape).
             for (const auto& [sem_name, h] : bindings.sem_accessors) {
                 TT_FATAL(
                     h.scope != SemScope::DM_LOCAL_CACHED,
@@ -1770,9 +1760,6 @@ static void collect_kernels(
                     "backend does not model the cached pool (no seeder is emitted); the classifier "
                     "(ResolveSemaphoreScope) must never pick the cached tier for this backend.",
                     sem_name);
-                // KNOWN LIMIT: emule compiles the single-consumer Gen1 down() arm for EXTERNAL
-                // (see the down() doc block); a multi-consumer down() under emule is the user's
-                // responsibility.
             }
             const std::string metal2_key_suffix = bindings.cache_key_suffix();
 

@@ -92,13 +92,10 @@ KernelHandle CreateKernelFromString(
 
 // Metal 2.0: DFB accessor names -> logical DFB ids
 using DataflowBufferBindingHandleMap = std::unordered_map<std::string, uint16_t>;
-// Metal 2.0: per-binding semaphore handle: id and the host-baked scope (ResolveSemaphoreScope).
-// The scope reaches the kernel through the invisible codegen scope table; kernel code sees only
-// the plain uint32_t id.
+// Metal 2.0: per-binding semaphore handle -> id and the host-baked scope; kernel code sees only a uint32_t id.
 struct SemaphoreBindingHandle {
     uint16_t id = 0;
     SemScope scope = SemScope::LOCAL_NONATOMIC;
-    // DM_LOCAL_CACHED only: the semaphore's total binder hart count (see SemBindingEntry).
     uint32_t total_binder_harts = 0;
 };
 // Metal 2.0: semaphore accessor names -> {semaphore id, scope}
