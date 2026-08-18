@@ -57,6 +57,15 @@ void RecurrentChunkScanOperation::validate_on_program_cache_miss(
     TT_FATAL(
         attrs.mode == RecurrentChunkScanMode::SUMMARY || !attrs.output_mem_config.is_sharded(),
         "recurrent_chunk_scan: output memory must be interleaved");
+    TT_FATAL(
+        !attrs.compute_kernel_config.packer_l1_acc,
+        "recurrent_chunk_scan: packer_l1_acc=true is unsupported because the compute kernel does not accumulate "
+        "through L1");
+    TT_FATAL(
+        attrs.compute_kernel_config.throttle_level ==
+            ttnn::operations::compute_throttle_utils::ThrottleLevel::NO_THROTTLE,
+        "recurrent_chunk_scan: compute throttling is unsupported because this kernel does not implement throttled "
+        "math");
     TT_FATAL(attrs.batch_heads > 0, "recurrent_chunk_scan: batch_heads must be positive");
     TT_FATAL(attrs.num_chunks > 0, "recurrent_chunk_scan: num_chunks must be positive");
     TT_FATAL(
