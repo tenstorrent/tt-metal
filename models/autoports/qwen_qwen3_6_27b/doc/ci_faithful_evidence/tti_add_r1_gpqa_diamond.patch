@@ -1,0 +1,133 @@
+From fa86cb6429e41d4c4a6aec7182fa5ffffb287cb2 Mon Sep 17 00:00:00 2001
+From: mvasiljevic <mvasiljevic@tenstorrent.com>
+Date: Tue, 18 Aug 2026 07:41:37 +0000
+Subject: [PATCH] Qwen3.6-27B: add r1_gpqa_diamond, mirroring the Qwen3.8-27B
+ entry
+
+Upstream this EvalConfig has only the agentic terminal_bench_2, so standard eval
+selection returns [] and the release workflow records that empty result as a
+successful no-op: the model is currently released without any standard eval running.
+
+Chooses r1_gpqa_diamond over gpqa_diamond_cot_zeroshot on four measured grounds.
+cot_zeroshot sets no max_gen_toks, so lm-eval falls back to 256 tokens, which cannot
+escape this model thinking block. It sets greedy decoding, which drives this model
+into a repetition loop on hard items: 16,384 tokens at 50.06% duplicate 12-grams, one
+12-gram repeated 1,241 times, while the same question answers correctly in 1,849
+tokens with thinking disabled. Its until list is not a Qwen stop token. And its
+strict-match regex looks for "The answer is" while its own prompt asks for a boxed
+answer, so that arm is always 0.00.
+
+gen_kwargs carry the card thinking-mode sampling (do_sample true, temperature 1.0,
+top_k 20, top_p 0.95) because greedy is the failure mode. max_gen_toks is 32*1024
+rather than the sibling 80*1024: decode measures ~56 ms/token on this hardware, and
+observed convergence on real Diamond documents under this sampling ranged about 5k to
+19k tokens, with one of ten reaching the cap.
+
+published_score 87.8 from the model card; no gpu_reference_score, so the bar is
+87.8 * 0.95 = 83.41% and early runs should be expected to fail. Informational at
+EXPERIMENTAL.
+
+Measured with this configuration on TT silicon: exact_match,none = 0.60 at n=10,
+against 0.30 for the same port on cot_zeroshot at the 256-token greedy default.
+---
+ reference_config/evals/eval_config.py | 84 +++++++++++++++++++++++++++
+ 1 file changed, 84 insertions(+)
+
+diff --git a/reference_config/evals/eval_config.py b/reference_config/evals/eval_config.py
+index 21addb8b..fdffb443 100644
+--- a/reference_config/evals/eval_config.py
++++ b/reference_config/evals/eval_config.py
+@@ -1262,6 +1262,90 @@ _eval_config_list = [
+     EvalConfig(
+         hf_model_repo="Qwen/Qwen3.6-27B",
+         tasks=[
++            EvalTask(
++                # R1-style zero-shot reasoning GPQA Diamond, mirroring the
++                # Qwen/Qwen3.8-27B entry. Chosen over gpqa_diamond_cot_zeroshot
++                # for four reasons, each measured on TT silicon for THIS model
++                # (see tt-metal models/autoports/qwen_qwen3_6_27b/doc/):
++                #   * cot_zeroshot sets no max_gen_toks, so lm-eval falls back to
++                #     256 tokens, which cannot escape this model's <think> block;
++                #   * cot_zeroshot sets greedy decoding, which drives this model
++                #     into a repetition loop on hard items -- 16,384 tokens at
++                #     50.06% duplicate 12-grams, one 12-gram repeated 1,241 times,
++                #     while the same question answers correctly in 1,849 tokens
++                #     with thinking disabled;
++                #   * cot_zeroshot's `until` is ["</s>"], not a Qwen stop token;
++                #   * cot_zeroshot's strict-match regex looks for "The answer is"
++                #     while its own prompt asks for \boxed{}, so that arm is
++                #     always 0.00.
++                # r1_gpqa_diamond fixes all four: a 32768 budget in its YAML, the
++                # correct <|im_end|> stop list, non-greedy sampling, and its own
++                # extractor scoring exact_match,none.
++                task_name="r1_gpqa_diamond",
++                score=EvalTaskScore(
++                    published_score=87.8,
++                    published_score_ref="https://huggingface.co/Qwen/Qwen3.6-27B",
++                    # No gpu_reference_score: this checkpoint has not been run on an
++                    # H100 reference server. Via resolve_eval_reference() +
++                    # compute_accuracy_check() the bar becomes
++                    # published_score * (1 - tolerance) = 87.8 * 0.95 = 83.41% on TT
++                    # silicon. That is strict and early runs should be expected to
++                    # fail; published numbers run optimistic against a real serving
++                    # stack. Status is EXPERIMENTAL so evals are informational
++                    # (evals_enforced is False) and a failure does not block
++                    # acceptance -- it becomes a real gate at FUNCTIONAL and above.
++                    # Replace with a measured gpu_reference_score before promoting.
++                    #
++                    # Also no mode_reference_scores, so under --ci-mode the subset
++                    # score is compared against the FULL-set 87.8 and will read low
++                    # until a subset reference is measured.
++                    score_func=score_task_single_key,
++                    score_func_kwargs={
++                        "result_keys": [
++                            "exact_match,none",
++                        ],
++                        "unit": "percent",
++                    },
++                ),
++                workflow_venv_type=WorkflowVenvType.EVALS_COMMON,
++                # Chat endpoint so the SERVER applies the chat template, which is
++                # what carries thinking mode; client-side apply_chat_template on
++                # /v1/completions would bypass it.
++                use_chat_api=True,
++                model_kwargs={
++                    # Matches the P300X2 spec's max_context. Declared explicitly
++                    # because lm-eval's local backends otherwise default to
++                    # max_length=2048 and truncate prompts client-side.
++                    "max_length": 262144,
++                },
++                gen_kwargs={
++                    # stream=false is REQUIRED: lm-eval's local-chat-completions
++                    # streaming parser raises KeyError 'message' on every response.
++                    "stream": "false",
++                    # 32*1024 rather than the sibling's 80*1024. Measured on this
++                    # hardware decode is ~56 ms/token, so 80*1024 is up to ~76 min
++                    # PER DOCUMENT and ~12.7 h for the 10-document CI subset, while
++                    # 32768 is ~31 min worst case. Observed convergence on real
++                    # Diamond documents under this sampling ranged ~5k to ~19k
++                    # tokens, so 32768 has headroom; raise it for a published-number
++                    # run on faster silicon.
++                    "max_gen_toks": 32 * 1024,
++                    "until": [],
++                    "do_sample": "true",
++                    # Qwen3.6-27B generation_config.json, thinking mode:
++                    # temperature 1.0 / top_k 20 / top_p 0.95. Greedy is what breaks
++                    # this model, so these are not optional.
++                    "temperature": 1.0,
++                    "top_k": 20,
++                    "top_p": 0.95,
++                },
++                # Reasoning eval at low batch: documents run effectively
++                # sequentially and dominate CI runtime.
++                limit_samples_map={
++                    EvalLimitMode.CI_NIGHTLY: 0.05,
++                    EvalLimitMode.SMOKE_TEST: 0.01,
++                },
++            ),
+             EvalTask(
+                 task_name="terminal_bench_2",
+                 workflow_venv_type=WorkflowVenvType.EVALS_AGENTIC,
+-- 
+2.43.0
+
