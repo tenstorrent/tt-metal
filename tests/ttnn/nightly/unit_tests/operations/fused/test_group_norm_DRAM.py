@@ -75,6 +75,12 @@ GROUP_NORM_ROW_MAJOR_SHAPES = [
         (1, 256 // 4, 1024, 1024, 32 // 4, 16, 8, 8),
         # for test below, PCC drops to 0.9565977077851433 of welford_normal and welford_reciprocal
         (1, 128 // 4, 1024, 1024, 32 // 4, 8, 8, 8),
+        # SD 1.4 VAE Issue #21131. Same "largest inputs" criterion as the shapes above: 33.5M
+        # elements on 32 of 64 cores with num_out_blocks=64, ~16 min per welford mode on the
+        # simulator. Was in base.GROUP_NORM_DRAM_SHAPES, which reached nightly only through
+        # test_group_norm_DRAM_unit_shapes (specify_grid=False); listing it here covers both
+        # specify_grid values.
+        (1, 128, 1, 262144, 32, 64, 8, 4),
         # mochi
         # (21, 128, 480, 848, 32, 140, 8, 8), Failing on single device CI.
     ],
