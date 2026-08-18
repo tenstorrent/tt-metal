@@ -305,9 +305,15 @@ ttnn::Tensor repeat_via_codegen(
 namespace {
 
 // Strips shard_spec off a sharded input's memory config; the device op re-derives one for the
-// new output shape.
+// new output shape. A preallocated output is where the result has to land, so its own memory
+// config outranks both the requested one and the input's.
 MemoryConfig derive_output_mem_config(
-    const ttnn::Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config) {
+    const ttnn::Tensor& input_tensor,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
+    if (optional_output_tensor.has_value()) {
+        return optional_output_tensor->memory_config();
+    }
     const auto& input_mc = input_tensor.memory_config();
     return memory_config.value_or(
         input_mc.is_sharded() ? MemoryConfig(input_mc.memory_layout(), input_mc.buffer_type()) : input_mc);
@@ -342,6 +348,57 @@ bool codegen_can_serve(
     return repeat_codegen::supported_by_codegen(working_tensor, working_repetition_vector);
 }
 
+// Everything a preallocated output has to satisfy. Both routes run this, so a case that lands on
+// codegen is held to the same standard as one that lands on native.
+void validate_optional_output(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& working_tensor,
+    const ttsl::SmallVector<uint32_t>& working_repetition_vector,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    if (!optional_output_tensor.has_value()) {
+        return;
+    }
+    const auto& out = optional_output_tensor.value();
+
+    if (memory_config.has_value()) {
+        TT_FATAL(
+            memory_config->buffer_type() == out.memory_config().buffer_type() &&
+                memory_config->memory_layout() == out.memory_config().memory_layout(),
+            "repeat: memory_config must match optional_output_tensor memory config");
+        // An omitted shard_spec is derived from the prealloc; an explicit one has to agree with it.
+        if (memory_config->shard_spec().has_value()) {
+            TT_FATAL(
+                memory_config->shard_spec() == out.memory_config().shard_spec(),
+                "repeat: memory_config shard_spec must match optional_output_tensor");
+        }
+    }
+
+    auto expected_logical_shape = working_tensor.logical_shape();
+    for (size_t i = 0; i < working_repetition_vector.size(); ++i) {
+        expected_logical_shape[i] *= working_repetition_vector[i];
+    }
+    TT_FATAL(out.device() == input_tensor.device(), "repeat optional output must be on the same device");
+    TT_FATAL(out.dtype() == input_tensor.dtype(), "repeat optional output dtype mismatch");
+    TT_FATAL(out.layout() == input_tensor.layout(), "repeat optional output layout mismatch");
+    TT_FATAL(out.logical_shape() == expected_logical_shape, "repeat optional output shape mismatch");
+    // Direct-write kernels read the input while writing the output, so a shared buffer corrupts both.
+    TT_FATAL(out.buffer() != input_tensor.buffer(), "repeat: optional_output_tensor must not alias the input buffer");
+}
+
+// Copies into the preallocated output when the path that ran could not write it directly.
+ttnn::Tensor finalize_into_preallocated(
+    const ttnn::Tensor& result, const std::optional<Tensor>& optional_output_tensor) {
+    if (!optional_output_tensor.has_value() || result.storage_type() != StorageType::DEVICE) {
+        return result;
+    }
+    const auto& dst = optional_output_tensor.value();
+    if (result.buffer() == dst.buffer()) {
+        return result;
+    }
+    return ttnn::copy(result, dst);
+}
+
 }  // namespace
 
 // The existing composite/native implementation, unconditionally. Callers that have already been
@@ -353,35 +410,11 @@ ttnn::Tensor repeat_native(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
     auto [working_tensor, working_repetition_vector] = match_input_rank(input_tensor, repetition_vector);
-    MemoryConfig output_mem_config = derive_output_mem_config(input_tensor, memory_config);
+    MemoryConfig output_mem_config = derive_output_mem_config(input_tensor, memory_config, optional_output_tensor);
     auto working_output_mem_config = output_mem_config;
 
-    auto expected_logical_shape = working_tensor.logical_shape();
-    for (size_t i = 0; i < working_repetition_vector.size(); ++i) {
-        expected_logical_shape[i] *= working_repetition_vector[i];
-    }
-    if (optional_output_tensor.has_value()) {
-        const auto& out = optional_output_tensor.value();
-        TT_FATAL(out.device() == input_tensor.device(), "repeat optional output must be on the same device");
-        TT_FATAL(out.dtype() == input_tensor.dtype(), "repeat optional output dtype mismatch");
-        TT_FATAL(out.layout() == input_tensor.layout(), "repeat optional output layout mismatch");
-        TT_FATAL(out.logical_shape() == expected_logical_shape, "repeat optional output shape mismatch");
-        // Direct-write kernels read input while writing output; shared storage corrupts (slice forbids this).
-        TT_FATAL(
-            out.buffer() != input_tensor.buffer(), "repeat: optional_output_tensor must not alias the input buffer");
-    }
-
-    // Copy into preallocated when the composite path could not write it directly.
-    auto finalize_into_preallocated = [&](const ttnn::Tensor& result) -> ttnn::Tensor {
-        if (!optional_output_tensor.has_value() || result.storage_type() != StorageType::DEVICE) {
-            return result;
-        }
-        const auto& dst = optional_output_tensor.value();
-        if (result.buffer() == dst.buffer()) {
-            return result;
-        }
-        return ttnn::copy(result, dst);
-    };
+    validate_optional_output(
+        input_tensor, working_tensor, working_repetition_vector, memory_config, optional_output_tensor);
 
     if (std::any_of(
             working_repetition_vector.cbegin(), working_repetition_vector.cend(), [](auto x) { return x == 0; })) {
@@ -404,7 +437,7 @@ ttnn::Tensor repeat_native(
             input_tensor.layout(),
             *input_tensor.device(),
             zero_mc);
-        return finalize_into_preallocated(zeros_out);
+        return finalize_into_preallocated(zeros_out, optional_output_tensor);
     }
 
     TT_FATAL(working_tensor.logical_shape().rank() > 0, "repeat does not support rank 0 tensors");
@@ -412,7 +445,7 @@ ttnn::Tensor repeat_native(
     // nothing to do!
     if (std::all_of(
             working_repetition_vector.cbegin(), working_repetition_vector.cend(), [](auto x) { return x == 1; })) {
-        return finalize_into_preallocated(input_tensor);
+        return finalize_into_preallocated(input_tensor, optional_output_tensor);
     }
 
     // Direct prim write only when no later layout/reshard hop will reallocate.
@@ -514,7 +547,8 @@ ttnn::Tensor repeat_native(
             if (synth.has_value()) {
                 final_mc = MemoryConfig(final_mc.memory_layout(), final_mc.buffer_type(), synth);
             } else {
-                return finalize_into_preallocated(working_tensor);  // No valid spec; keep interleaved.
+                // No valid spec; keep interleaved.
+                return finalize_into_preallocated(working_tensor, optional_output_tensor);
             }
         }
         auto i2s_out = optional_output_tensor.has_value() ? optional_output_tensor : std::nullopt;
@@ -522,7 +556,7 @@ ttnn::Tensor repeat_native(
             working_tensor, final_mc, /*data_type_arg=*/std::nullopt, /*keep_l1_aligned=*/std::nullopt, i2s_out);
     }
 
-    return finalize_into_preallocated(working_tensor);
+    return finalize_into_preallocated(working_tensor, optional_output_tensor);
 }
 
 ttnn::Tensor repeat_force_native(
@@ -557,24 +591,41 @@ namespace ttnn {
 ttnn::Tensor repeat(
     const ttnn::Tensor& input_tensor,
     const ttsl::SmallVector<uint32_t>& repetition_vector,
-    const std::optional<MemoryConfig>& memory_config) {
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
     namespace detail = operations::data_movement::detail;
     namespace repeat_codegen = operations::data_movement::repeat_codegen;
 
     auto [working_tensor, working_repetition_vector] = detail::match_input_rank(input_tensor, repetition_vector);
-    const MemoryConfig output_mem_config = detail::derive_output_mem_config(input_tensor, memory_config);
+    const MemoryConfig output_mem_config =
+        detail::derive_output_mem_config(input_tensor, memory_config, optional_output_tensor);
+    // Ahead of the routing decision, so a rejected preallocated output raises the same way whichever
+    // route the case would have taken.
+    detail::validate_optional_output(
+        input_tensor, working_tensor, working_repetition_vector, memory_config, optional_output_tensor);
 
     if (detail::codegen_can_serve(working_tensor, working_repetition_vector, output_mem_config) &&
         !repeat_codegen::is_demoted(working_tensor, working_repetition_vector)) {
-        return detail::repeat_via_codegen(working_tensor, working_repetition_vector, output_mem_config);
+        // The codegen path writes an interleaved output in the input's buffer type and adds no layout
+        // or resharding hop after it, so its last per-dim step can land in the prealloc directly.
+        return detail::finalize_into_preallocated(
+            detail::repeat_via_codegen(
+                working_tensor, working_repetition_vector, output_mem_config, optional_output_tensor),
+            optional_output_tensor);
     }
 
-    return detail::repeat_native(input_tensor, repetition_vector, memory_config, std::nullopt);
+    return detail::repeat_native(input_tensor, repetition_vector, memory_config, optional_output_tensor);
 }
 
-ttnn::Tensor repeat(const ttnn::Tensor& input_tensor, const ttnn::Shape& repeat_dims) {
+ttnn::Tensor repeat(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Shape& repeat_dims,
+    const std::optional<Tensor>& optional_output_tensor) {
     return ttnn::repeat(
-        input_tensor, ttsl::SmallVector<uint32_t>(repeat_dims.cbegin(), repeat_dims.cend()), std::nullopt);
+        input_tensor,
+        ttsl::SmallVector<uint32_t>(repeat_dims.cbegin(), repeat_dims.cend()),
+        std::nullopt,
+        optional_output_tensor);
 }
 
 }  // namespace ttnn

@@ -27,6 +27,7 @@ void bind_repeat(nb::module_& mod) {
 
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            optional_output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -35,12 +36,16 @@ void bind_repeat(nb::module_& mod) {
     ttnn::bind_function<"repeat">(
         mod,
         doc,
-        nb::overload_cast<const ttnn::Tensor&, const ttsl::SmallVector<uint32_t>&, const std::optional<MemoryConfig>&>(
-            &ttnn::repeat),
+        nb::overload_cast<
+            const ttnn::Tensor&,
+            const ttsl::SmallVector<uint32_t>&,
+            const std::optional<MemoryConfig>&,
+            const std::optional<ttnn::Tensor>&>(&ttnn::repeat),
         nb::arg("input_tensor"),
         nb::arg("repeat_dims"),
         nb::kw_only(),
-        nb::arg("memory_config") = nb::none());
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("optional_output_tensor") = nb::none());
 
     // Bound with a plain def rather than ttnn::bind_function: the latter tags the callable for
     // auto_register_ttnn_cpp_operations, which would republish these as ttnn.* operations. They are
