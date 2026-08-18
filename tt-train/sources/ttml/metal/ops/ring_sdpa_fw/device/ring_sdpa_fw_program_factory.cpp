@@ -15,7 +15,6 @@
 
 namespace ttml::metal::ops::ring_sdpa_fw {
 
-using ttml::metal::AttentionMaskType;
 
 RingSDPAFwProgramFactory::cached_mesh_workload_t RingSDPAFwProgramFactory::create_mesh_workload(
     const operation_attributes_t& operation_attributes,
