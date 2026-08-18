@@ -16,7 +16,13 @@ to make that possible, and what is verified versus still open.
 | [31858340006](https://github.com/tenstorrent/tt-shield/actions/runs/31858340006) | `benchmarks` | **success** — 17 sweep points, 0 failed requests, but every block `NA (ungraded)`. See `shield_ci_results_audit.md` |
 | [32006778390](https://github.com/tenstorrent/tt-shield/actions/runs/32006778390) | `release` | queued 3h+ behind other tenants, never started; **cancelled** once the watchdog and eval fixes landed, because `resolve-shas` pins SHAs at dispatch time and it would have tested the superseded config |
 | [32028283074](https://github.com/tenstorrent/tt-shield/actions/runs/32028283074) | `release` | failed `resolve-shas` in 39s — dispatched with the stale `vllm-git-ref=dev`. Never reached a runner, no device time. See the `main` note above |
-| [32028455474](https://github.com/tenstorrent/tt-shield/actions/runs/32028455474) | `release` | dispatched with the watchdog restored, the base-model eval config in place, and `vllm-git-ref=main` |
+| [32028455474](https://github.com/tenstorrent/tt-shield/actions/runs/32028455474) | `release` | watchdog restored, eval config in place, `vllm-git-ref=main`. **Image build failed**: `error: pathspec 'c127c17' did not match any file(s) known to git`. `resolve-shas` resolves the SHA from `vllm-tt-plugin`, but this branch's Dockerfile still ran `git clone https://github.com/tenstorrent/vllm.git` and checked that SHA out there. Fixed by merging `origin/main`, which had already migrated the Dockerfile to clone `vllm-tt-plugin` |
+| [32031270481](https://github.com/tenstorrent/tt-shield/actions/runs/32031270481) | `release` | dispatched on the merged branch; resolve-shas and determine-server-type passed and the image build started. **Cancelled deliberately** when the decision was taken to work locally only, so the shared `bh-qb-ge` runner was not held |
+
+Both `dev` and `main` fail until the branch carries main's Dockerfile: `dev`
+fails SHA resolution (no such branch in `vllm-tt-plugin`) and `main` resolves a
+SHA that does not exist in the old `tenstorrent/vllm` the stale Dockerfile
+clones. Merging `origin/main` is the fix, not a different ref.
 
 ### `bh-qb-ge` is a single host, so release jobs queue behind each other
 
