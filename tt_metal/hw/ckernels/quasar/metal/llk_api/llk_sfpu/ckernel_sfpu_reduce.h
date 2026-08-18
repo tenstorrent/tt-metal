@@ -25,8 +25,7 @@ namespace sfpu {
 // dispatches to one of four paths:
 //   COL + SUM/AVG → _calculate_reduce_col_sum_avg_
 //   COL + MAX/MIN → _calculate_reduce_col_max_min_
-//   ROW + SUM/AVG → _calculate_reduce_row_
-//   ROW + MAX/MIN → _calculate_reduce_row_  (records horiz-max first)
+//   ROW           → _calculate_reduce_row_
 //
 // init_reduce records dest-address-free instruction windows into the 32-slot
 // replay buffer (NoExec; TEN-4690). Calculate replays those windows. Dest
@@ -82,10 +81,7 @@ constexpr std::uint32_t REDUCE_COL_FINAL_ADDRS[MAX_NUM_FACES_C_DIM][MAX_NUM_FACE
 //
 // MAX/MIN (init_reduce):
 //   [0, 3)  tree cswap LREG4-7 → LREG4      REDUCE_TREE_CSWAP_LEN
-//
-// Row MAX/MIN (calculate) overwrites the buffer:
-//   [0, 16) horizontal-max phases 2-4       REDUCE_HMAX_REPLAY_LEN
-//   A later column calculate needs a fresh init_reduce.
+//   [3, 19) horizontal-max phases 2-4       REDUCE_HMAX_REPLAY_LEN
 //
 constexpr std::uint32_t REDUCE_REPLAY_BUF_LEN = 32;
 constexpr std::uint32_t REDUCE_TREE_ADD_FULL_LEN = 6;
@@ -94,7 +90,9 @@ constexpr std::uint32_t REDUCE_HADD_TAIL_SLOT = REDUCE_TREE_ADD_FULL_LEN + REDUC
 constexpr std::uint32_t REDUCE_HADD_TAIL_LEN = 14;  // horizontal-sum phases 2-3
 constexpr std::uint32_t REDUCE_SUM_AVG_REPLAY_LEN = REDUCE_HADD_TAIL_SLOT + REDUCE_HADD_TAIL_LEN;
 constexpr std::uint32_t REDUCE_TREE_CSWAP_LEN = 3;    // SWAP+SWAP + SWAP
+constexpr std::uint32_t REDUCE_HMAX_SLOT = REDUCE_TREE_CSWAP_LEN;
 constexpr std::uint32_t REDUCE_HMAX_REPLAY_LEN = 16;  // phases 2+3+4 (8+6+2)
+constexpr std::uint32_t REDUCE_MAX_MIN_REPLAY_LEN = REDUCE_HMAX_SLOT + REDUCE_HMAX_REPLAY_LEN;
 
 // =============================================================================
 // Format predicates
@@ -314,10 +312,7 @@ inline void _horizontal_reduce_sum_() {
 }
 
 template <DataFormat FMT, bool IS_MAX>
-inline void _reduce_record_horizontal_max_() {
-    static_assert(REDUCE_HMAX_REPLAY_LEN <= REDUCE_REPLAY_BUF_LEN, "horizontal-max replay exceeds 32-slot buffer");
-    lltt::record(0, REDUCE_HMAX_REPLAY_LEN);
-
+inline void _horizontal_reduce_max_tail_() {
     // Phase 2: rotate-by-2 and keep extremum (2 MOV + 4 SHFT2 + 2 SWAP).
     TTI_SFPMOV(p_sfpu::LREG0, p_sfpu::LREG1, 0);
     TTI_SFPMOV(p_sfpu::LREG4, p_sfpu::LREG5, 0);
@@ -353,7 +348,7 @@ inline void _horizontal_reduce_max_() {
     TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 3);
     TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, 3);
     _reduce_cswap_pair_<FMT, IS_MAX, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG4, p_sfpu::LREG5>();
-    lltt::replay(0, REDUCE_HMAX_REPLAY_LEN);
+    lltt::replay(REDUCE_HMAX_SLOT, REDUCE_HMAX_REPLAY_LEN);
 }
 
 // Toward-zero signed divide-by-32 of LREG0 (two's-complement). Logical right shift of the magnitude,
@@ -604,13 +599,6 @@ inline void _calculate_reduce_row_(const std::uint32_t block_ct_dim, const std::
     // LO16 only on the packer-visible store (single-tile row, or the combine into tile 0).
     const std::uint32_t tile_store_sfpmem = (PACK_LOW16 && block_ct_dim == 1) ? p_sfpu::sfpmem::LO16 : SFPMEM;
 
-    // Overwrites the LREG4-7 cswap buffer from init_reduce. Column MAX/MIN does not
-    // call this path; a later column calculate needs a fresh init_reduce.
-    if constexpr (POOL == PoolType::MAX || POOL == PoolType::MIN) {
-        constexpr bool IS_MAX = (POOL == PoolType::MAX);
-        _reduce_record_horizontal_max_<FMT, IS_MAX>();
-    }
-
     for (std::uint32_t r = 0; r < block_rt_dim; r++) {
         const std::uint32_t tile_row_base = TILE_STRIDE * block_ct_dim * r;
         for (std::uint32_t c = 0; c < block_ct_dim; c++) {
@@ -661,9 +649,10 @@ inline void init_reduce([[maybe_unused]] std::uint32_t block_ct_dim = 1) {
     // Dest-address-free trees/tails. lltt::record is NoExec (TEN-4690).
     if constexpr (pool_type == PoolType::MAX || pool_type == PoolType::MIN) {
         constexpr bool IS_MAX = (pool_type == PoolType::MAX);
-        static_assert(REDUCE_TREE_CSWAP_LEN <= REDUCE_REPLAY_BUF_LEN, "LREG4-7 cswap replay exceeds 32-slot buffer");
-        lltt::record(0, REDUCE_TREE_CSWAP_LEN);
+        static_assert(REDUCE_MAX_MIN_REPLAY_LEN <= REDUCE_REPLAY_BUF_LEN, "MAX/MIN replay exceeds 32-slot buffer");
+        lltt::record(0, REDUCE_MAX_MIN_REPLAY_LEN);
         _reduce_tree_cswap_lreg4_7_<format, IS_MAX>();
+        _horizontal_reduce_max_tail_<format, IS_MAX>();
     } else {
         constexpr bool IS_INTEGER = _reduce_is_integer_<format>();
         static_assert(REDUCE_SUM_AVG_REPLAY_LEN <= REDUCE_REPLAY_BUF_LEN, "SUM/AVG replay exceeds 32-slot buffer");
