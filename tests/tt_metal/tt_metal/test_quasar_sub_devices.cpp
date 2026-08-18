@@ -27,7 +27,6 @@ using namespace tt::tt_metal;
 namespace {
 
 constexpr uint32_t kLocalL1Size = 3200;
-constexpr uint32_t kL1CacheLineBytes = 64;
 
 std::vector<experimental::NodeCoord> worker_nodes(const CoreCoord& worker_grid) {
     return experimental::grid_to_nodes(
@@ -267,6 +266,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TestSubDeviceShardedL1BufferAllocation
                         "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
     }
 
+    constexpr uint32_t page_size = 64;
+
     auto mesh_device = devices_[0];
     const CoreCoord worker_grid = mesh_device->compute_with_storage_grid_size();
     const uint32_t num_nodes = worker_grid.x * worker_grid.y;
@@ -290,15 +291,13 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TestSubDeviceShardedL1BufferAllocation
         ShardSpecBuffer shard_spec(
             grid, {1, 16}, ShardOrientation::ROW_MAJOR, {1, 16}, {static_cast<uint32_t>(partition.size()), 1});
         distributed::DeviceLocalBufferConfig local_config{
-            .page_size = kL1CacheLineBytes,
+            .page_size = page_size,
             .buffer_type = BufferType::L1,
             .sharding_args = BufferShardingArgs(std::move(shard_spec), TensorMemoryLayout::HEIGHT_SHARDED),
             .bottom_up = false,
             .sub_device_id = sub_device_id};
         return distributed::MeshBuffer::create(
-            distributed::ReplicatedBufferConfig{.size = partition.size() * kL1CacheLineBytes},
-            local_config,
-            mesh_device.get());
+            distributed::ReplicatedBufferConfig{.size = partition.size() * page_size}, local_config, mesh_device.get());
     };
 
     const DeviceAddr l1_unreserved_base = mesh_device->allocator()->get_base_allocator_addr(HalMemType::L1);
@@ -326,8 +325,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TestSubDeviceShardedL1BufferAllocation
     std::vector<std::vector<uint32_t>> outputs(partitions.size());
     for (size_t i = 0; i < partitions.size(); ++i) {
         inputs[i].assign(
-            partitions[i].size() * kL1CacheLineBytes / sizeof(uint32_t),
-            0x11110000u + (static_cast<uint32_t>(i) << 16));
+            partitions[i].size() * page_size / sizeof(uint32_t), 0x11110000u + (static_cast<uint32_t>(i) << 16));
         distributed::EnqueueWriteMeshBuffer(cq, buffers[i], inputs[i]);
     }
     for (size_t i = 0; i < partitions.size(); ++i) {
