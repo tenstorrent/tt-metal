@@ -76,27 +76,27 @@ void HWCommandQueue::terminate() {
     log_debug(tt::LogDispatch, "Terminating dispatch kernels for command queue {}", this->id_);
     // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_TERMINATE
     // CQ_PREFETCH_CMD_TERMINATE
-    uint32_t cmd_sequence_sizeB =
-        MetalContext::instance(this->device_->get_context_id()).hal().get_alignment(HalMemType::HOST);
+    MetalContext& metal_ctx = MetalContext::instance(this->device_->get_context_id());
+    uint32_t cmd_sequence_sizeB = metal_ctx.hal().get_alignment(HalMemType::HOST);
 
     // dispatch and prefetch terminate commands each needs to be a separate fetch queue entry
     void* cmd_region = this->manager_.issue_queue_reserve(cmd_sequence_sizeB, this->id_);
-    HugepageDeviceCommand dispatch_d_command_sequence(cmd_region, cmd_sequence_sizeB);
+    HugepageDeviceCommand dispatch_d_command_sequence(metal_ctx, cmd_region, cmd_sequence_sizeB);
     dispatch_d_command_sequence.add_dispatch_terminate(DispatcherSelect::DISPATCH_MASTER);
     this->manager_.issue_queue_push_back(cmd_sequence_sizeB, this->id_);
     this->manager_.fetch_queue_reserve_back(this->id_);
     this->manager_.fetch_queue_write(cmd_sequence_sizeB, this->id_);
-    if (MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()) {
+    if (metal_ctx.get_dispatch_query_manager().dispatch_s_enabled()) {
         // Terminate dispatch_s if enabled
         cmd_region = this->manager_.issue_queue_reserve(cmd_sequence_sizeB, this->id_);
-        HugepageDeviceCommand dispatch_s_command_sequence(cmd_region, cmd_sequence_sizeB);
+        HugepageDeviceCommand dispatch_s_command_sequence(metal_ctx, cmd_region, cmd_sequence_sizeB);
         dispatch_s_command_sequence.add_dispatch_terminate(DispatcherSelect::DISPATCH_SUBORDINATE);
         this->manager_.issue_queue_push_back(cmd_sequence_sizeB, this->id_);
         this->manager_.fetch_queue_reserve_back(this->id_);
         this->manager_.fetch_queue_write(cmd_sequence_sizeB, this->id_);
     }
     cmd_region = this->manager_.issue_queue_reserve(cmd_sequence_sizeB, this->id_);
-    HugepageDeviceCommand prefetch_command_sequence(cmd_region, cmd_sequence_sizeB);
+    HugepageDeviceCommand prefetch_command_sequence(metal_ctx, cmd_region, cmd_sequence_sizeB);
     prefetch_command_sequence.add_prefetch_terminate();
     this->manager_.issue_queue_push_back(cmd_sequence_sizeB, this->id_);
     this->manager_.fetch_queue_reserve_back(this->id_);
