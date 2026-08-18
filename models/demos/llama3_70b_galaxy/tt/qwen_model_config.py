@@ -217,9 +217,10 @@ class TtQwenModelArgs(TtModelArgs):
 
         if self.num_devices == 32:
             self.use_prefetcher = not self.is_blackhole
-            # Blackhole galaxy decode uses the dram_prefetcher by default. Set QWEN_BH_PREFETCHER=0
-            # to fall back to the no-prefetcher path.
-            if self.is_blackhole and os.environ.get("QWEN_BH_PREFETCHER", "1") == "1":
+            # The Blackhole galaxy dram_prefetcher decode path is opt-in (QWEN_BH_PREFETCHER=1):
+            # external runners (e.g. vLLM) stay on the proven no-prefetcher path by default, while
+            # the tt-metal CI yamls export the flag to keep the prefetcher path covered.
+            if self.is_blackhole and os.environ.get("QWEN_BH_PREFETCHER", "0") == "1":
                 self.use_prefetcher = True
 
         # On Blackhole galaxy the fused galaxy CCLs (fused_rms_minimal, llama_rs_create_heads,
