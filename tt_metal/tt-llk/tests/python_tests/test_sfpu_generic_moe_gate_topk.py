@@ -96,8 +96,9 @@ from helpers.golden_generators import (
     MoeGateTopkGolden,
     get_golden_generator,
 )
-from helpers.llk_params import DestAccumulation, format_dict
+from helpers.llk_params import DestAccumulation, PerfRunType, format_dict
 from helpers.param_config import parametrize
+from helpers.perf.core import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
@@ -338,3 +339,73 @@ def test_sfpu_generic_moe_gate_topk(
         assert_odd_columns_untouched(
             result_indices, result_scores, scores, emitted_rows
         )
+
+
+@skip_for_wormhole
+def test_sfpu_generic_moe_gate_topk_device_profile(perf_report):
+    """One on-device MATH-zone sample of the MOE_GATE_TOPK body (Lane BK perf vehicle).
+
+    Welford device-profile recipe around MOE_GATE_TOPK_BODY. Pinned to one
+    representative template point (top-8, full_sort=False, normalize=True,
+    zero_tail=False) so the module keeps a single PerfConfig schema; the
+    kernel is pure SFPU (no MOP/replay) so the MATH zone is the honest scope.
+    Correctness stays owned by test_sfpu_generic_moe_gate_topk.
+    """
+    torch.manual_seed(0)
+    formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
+    torch_format = format_dict[formats.input_format]
+
+    biased = _distinct_bf16_keys()
+    scores = (
+        torch.empty(NUM_TOTAL_EXPERTS, dtype=torch.float32)
+        .uniform_(0.05, 0.95)
+        .to(torch_format)
+        .to(torch.float32)
+    )
+    src_A = torch.cat(
+        [
+            tilize_block(
+                _face0_tile(t, torch_format).flatten(),
+                [TILE_DIM, TILE_DIM],
+                stimuli_format=formats.input_format,
+            ).flatten()
+            for t in (scores, biased)
+        ]
+    )
+    src_B = torch.zeros(ELEMENTS_PER_TILE, dtype=torch_format)
+
+    configuration = PerfConfig(
+        "sources/sfpu_generic_moe_gate_topk_test.cpp",
+        formats,
+        run_types=[PerfRunType.MATH_ISOLATE],
+        templates=[
+            MOE_GATE_TOPK(
+                num_selected_experts=8,
+                num_total_experts=NUM_TOTAL_EXPERTS,
+                normalize=True,
+                zero_tail=False,
+                full_sort=False,
+            ),
+            MOE_GATE_NORMALIZE_PARAMS(eps_bits=EPS_BITS, scale_bits=SCALE_BITS),
+        ],
+        runtimes=[],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=2,
+            tile_count_B=1,
+            tile_count_res=NUM_RESULT_TILES,
+        ),
+        dest_acc=DestAccumulation.No,
+        unpack_to_dest=False,
+    )
+    configuration.run(perf_report, run_count=1)
+    frame = perf_report.frame()
+    rows = frame[frame["marker"] == "MOE_GATE_TOPK_BODY"]
+    assert len(rows) == 1, frame.to_string(index=False)
+    cycles = float(rows.iloc[0]["mean(MATH_ISOLATE)"])
+    assert cycles > 0
+    print(f"MOE_GATE_TOPK_DEVICE_PROFILE top8 math_cycles={int(cycles)}")

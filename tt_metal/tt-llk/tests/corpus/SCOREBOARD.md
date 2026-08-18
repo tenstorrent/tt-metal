@@ -104,11 +104,17 @@ weekly-scheduled (unengaged by current passes; deferrals scoreboard-visible, nev
 
 ## Not yet measured — every exclusion named
 
-- `topk-perf` — multi-result frontier: no perf claim until a sourced impl exists (blocked, AN epoch scoping)
+Lane BK (2026-08-18) closed the measurement gap: the 26 corr-only rows and 42 unmapped
+headers are now all measured-or-cited — 152/152 BH headers are wired (105 corpus ids),
+skip-cited (8), or unmapped-cited in the manifest (39). Zero silent absences.
+
+- `topk-perf` / `topkmetal` — multi-result frontier: no perf claim until a sourced impl exists (owner decision; joint value+index contract needs a fresh HANDOFF-§1 A/B)
 - `addtoprow` — ZERO executable BH perf variant upstream (perf test skips all runnable combos) — upstream fix filed
-- `mulint` — machine-readable alias of mul_int32 (same kernel; no double-booking)
-- 26 corr-only mapped rows (compile+correctness gated nightly; per-row missing perf vehicle named in AUDIT.md)
-- 42 BH headers unmapped ([C]/[D]/[E] classes — no upstream BH test surface / deprecated; re-audited by Lane AZ, one rescued)
+- `mulint` — machine-readable alias of mul_int32; `sdpaexpmetal` — alias of the measured legacy sdpa_exp_unclamped row (no double-booking)
+- `topkxl` — MOP/replay-bearing: no single honest zone (per-chunk cost, MOP-issue under-count without a drain barrier); needs a marker-seam design (skip row cites it)
+- `gmgsingleface` / `gmgsinglefacemetal` — 12-step SFPU+FPU-MOP pipeline: a single MATH zone would measure RISC-side MOP issue, not retirement; per-stage marker design required (skip rows cite it)
+- 24 newly wired rows (21 former corr-only + rsqrt_compat/abs-int32/bitwise_not rescues) are schedule=weekly: first numbers ride the weekly sweep — no perf claims until then
+- 39 BH headers remain unmapped, each with a per-row class + exact-evidence citation IN THE MANIFEST (B-TRANSITIVE 11, D-ABSENT 21, D-SHADOWED 7; three classes corrected honest-direction by the Lane BK re-verification, three rows rescued to mapped)
 
 ## Standing guarantees
 - LLK library trees byte-identical to upstream (conf-lint R7); zero markers or trusted annotations anywhere;

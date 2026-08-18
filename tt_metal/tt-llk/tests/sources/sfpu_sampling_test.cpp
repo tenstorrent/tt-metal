@@ -45,8 +45,10 @@
 #include <cstdint>
 
 #include "ckernel.h"
+#include "counters.h"
 #include "llk_defs.h"
 #include "params.h"
+#include "profiler.h"
 
 // Globals required by the test framework.
 std::uint32_t unp_cfg_context          = 0;
@@ -164,7 +166,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // helper twice with an inc_dst_face_addr between, so it pins down whether the
     // helper's internal `dst_reg += 2` is a per-instruction immediate offset (second
     // pass lands on face 2, as intended) or a persistent RWC advance (it does not).
-    _llk_math_eltwise_unary_sfpu_params_([] { run_sampling_op(); }, 0 /* dst_index */, VECTOR_MODE);
+    {
+        // Isolated device-profile zone (test_sfpu_sampling_device_profile):
+        // profiler-only L1 bookkeeping, compiles away in functional builds.
+        START_PERF_MEASURE("SAMPLING_BODY")
+        _llk_math_eltwise_unary_sfpu_params_([] { run_sampling_op(); }, 0 /* dst_index */, VECTOR_MODE);
+    }
 
     _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
 }

@@ -26,8 +26,10 @@
 #include <cstdint>
 
 #include "ckernel.h"
+#include "counters.h"
 #include "llk_defs.h"
 #include "params.h"
+#include "profiler.h"
 
 // Globals
 std::uint32_t unp_cfg_context          = 0;
@@ -124,7 +126,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, dest_sync, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
         SDPA_FW_DST_INDEX, formats.math, formats.math);
 
-    sdpa_fw_op(SDPA_FW_DST_INDEX);
+    {
+        // Isolated device-profile zone (test_sfpu_sdpa_fw_device_profile):
+        // profiler-only L1 bookkeeping, compiles away in functional builds.
+        START_PERF_MEASURE("SDPA_FW_BODY")
+        sdpa_fw_op(SDPA_FW_DST_INDEX);
+    }
 
     _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
 }

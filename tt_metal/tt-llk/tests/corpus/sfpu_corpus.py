@@ -266,13 +266,13 @@ AUDITED_SEEDS = {
         semantic_cpp_blocker="Semantic scoring can be fresh C++; TopK paired state, destination/RWC movement, transpose, and MOP/replay ownership need typed architectural models.",
         paired_selector_status="absent",
         test_status="not_run",
-        perf_status="blocked",
+        perf_status="not_run",
         correctness_metric="tolerance",
         correctness_threshold="values must pass the test's format tolerance/PCC gate and indices must preserve value/index association",
         correctness_source="test_sfpu_generic_moe_gate_topk.py",
-        silicon_status="blocked",
-        silicon_result="No paired isolated profiler fixture.",
-        silicon_source="f1_candidates.tsv rank 7",
+        silicon_status="not_run",
+        silicon_result="Isolated MOE_GATE_TOPK_BODY device-profile fixture landed (Lane BK 2026-08-18); no measurement yet — first numbers ride the scheduled sweeps.",
+        silicon_source="f1_candidates.tsv rank 7; test_sfpu_generic_moe_gate_topk.py::test_sfpu_generic_moe_gate_topk_device_profile",
     ),
     "legacy__ckernel_sfpu_sdpa_exp_unclamped": dict(
         semantic_cpp_class="ready",
@@ -292,13 +292,13 @@ AUDITED_SEEDS = {
         semantic_cpp_blocker="No architectural conversion blocker identified at the vFloat leaf boundary; transcendental approximation and precision parity must be characterized before promotion.",
         paired_selector_status="absent",
         test_status="not_run",
-        perf_status="blocked",
+        perf_status="not_run",
         correctness_metric="pcc",
         correctness_threshold="PCC > 0.99 plus per-format element tolerance unless the paired test establishes a stricter contract",
         correctness_source="test_sfpu_softmax_k.py; helpers/utils.py:548-785",
-        silicon_status="blocked",
-        silicon_result="No isolated paired profiler module.",
-        silicon_source="f1_candidates.tsv rank 9",
+        silicon_status="not_run",
+        silicon_result="Isolated SOFTMAX_K_BODY device-profile fixture landed (Lane BK 2026-08-18); no measurement yet — first numbers ride the scheduled sweeps.",
+        silicon_source="f1_candidates.tsv rank 9; test_sfpu_softmax_k.py::test_sfpu_softmax_k_device_profile",
     ),
     "metal__ckernel_sfpu_addcmul": dict(
         semantic_cpp_class="ready",
@@ -436,6 +436,10 @@ AUDITED_SEEDS = {
         semantic_cpp_class="typed_wrapper_needed",
         semantic_cpp_blocker="Coverage-parity mapping only: the production header carries explicit architectural markers (raw_tti=1, replay=0, mop=0), so a fresh semantic-C++ conversion still needs typed boundary work; the recorded node(s) exercise the production header under the compiler path either way.",
     ),
+    "legacy__ckernel_sfpu_rsqrt_compat": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
     "legacy__ckernel_sfpu_silu": dict(
         semantic_cpp_class="ready",
         semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
@@ -464,9 +468,17 @@ AUDITED_SEEDS = {
         semantic_cpp_class="ready",
         semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
     ),
+    "metal__ckernel_sfpu_abs": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production int32 body is pure typed SFPI (sfpi::abs on the I32 view, M32 magnitude store): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped through the new exact functional node (Lane BK). The float calculate_abs arm is dispatched from the legacy abs header (already mapped).",
+    ),
     "metal__ckernel_sfpu_atan2": dict(
         semantic_cpp_class="ready",
         semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "metal__ckernel_sfpu_bitwise_not": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (~ on the raw I32 view): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped through the new exact functional node (Lane BK).",
     ),
     "metal__ckernel_sfpu_binary": dict(
         semantic_cpp_class="ready",
@@ -750,6 +762,205 @@ AUDITED_SEEDS = {
         semantic_cpp_class="ready",
         semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
     ),
+    # ---- Lane BK 2026-08-18: unmapped-row citations (class + exact evidence),
+    # per-row re-verified at bb52e0fc33; three classes corrected (legacy sigmoid/
+    # tanh -> D-ABSENT-on-BH, metal relu -> D-SHADOWED). rsqrt_compat, metal abs
+    # and bitwise_not were rescued to mapped rows instead. ----
+    "legacy__ckernel_sfpu_cdf": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class B-TRANSITIVE (Lane BK re-verification 2026-08-18 at bb52e0fc33): no standalone BH test node exists; the header is compiled through mapped consumers — included by metal ckernel_sfpu_gelu.h:16 -> sfpu_operations.h:169 -> mapped Gelu nodes; NOTE _calculate_cdf_appx_/_calculate_pos_cdf_appx_ have zero callers repo-wide, so the body is compiled dead code through gelu. Hand path equally uncovered as a standalone surface; optional upstream standalone test.",
+        notes="Unmapped-cited, class B-TRANSITIVE (Lane BK re-verification 2026-08-18 at bb52e0fc33): no standalone BH test node exists; the header is compiled through mapped consumers — included by metal ckernel_sfpu_gelu.h:16 -> sfpu_operations.h:169 -> mapped Gelu nodes; NOTE _calculate_cdf_appx_/_calculate_pos_cdf_appx_ have zero callers repo-wide, so the body is compiled dead code through gelu. Hand path equally uncovered as a standalone surface; optional upstream standalone test.",
+    ),
+    "legacy__ckernel_sfpu_converter": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class B-TRANSITIVE (Lane BK re-verification 2026-08-18 at bb52e0fc33): no standalone BH test node exists; the header is compiled through mapped consumers — STRONGER than include-only: directly included by tests/sources/deepseek_moe_gate_test.cpp:132 AND directly used by the test harness (helpers/include/fresh_cpp_operations.h:181,395 Converter::as_float inside measured fresh_cpp bodies), plus legacy relu/fill/threshold and ~30 metal consumers. Hand path equally uncovered as a standalone surface; optional upstream standalone test.",
+        notes="Unmapped-cited, class B-TRANSITIVE (Lane BK re-verification 2026-08-18 at bb52e0fc33): no standalone BH test node exists; the header is compiled through mapped consumers — STRONGER than include-only: directly included by tests/sources/deepseek_moe_gate_test.cpp:132 AND directly used by the test harness (helpers/include/fresh_cpp_operations.h:181,395 Converter::as_float inside measured fresh_cpp bodies), plus legacy relu/fill/threshold and ~30 metal consumers. Hand path equally uncovered as a standalone surface; optional upstream standalone test.",
+    ),
+    "legacy__ckernel_sfpu_generic_moe_gate_topk_top16": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class B-TRANSITIVE (Lane BK re-verification 2026-08-18 at bb52e0fc33): no standalone BH test node exists; the header is compiled through mapped consumers — body EXECUTED, not merely compiled: consumer legacy experimental/ckernel_sfpu_generic_moe_gate_topk.h:294 calls _generic_moe_gate_top16_, and that consumer row is mapped AND wired (moegatetopk sweep row, corr + MOE_GATE_TOPK_BODY perf fixture). Hand path equally uncovered as a standalone surface; optional upstream standalone test.",
+        notes="Unmapped-cited, class B-TRANSITIVE (Lane BK re-verification 2026-08-18 at bb52e0fc33): no standalone BH test node exists; the header is compiled through mapped consumers — body EXECUTED, not merely compiled: consumer legacy experimental/ckernel_sfpu_generic_moe_gate_topk.h:294 calls _generic_moe_gate_top16_, and that consumer row is mapped AND wired (moegatetopk sweep row, corr + MOE_GATE_TOPK_BODY perf fixture). Hand path equally uncovered as a standalone surface; optional upstream standalone test.",
+    ),
+    "legacy__ckernel_sfpu_generic_moe_gate_topk_top8": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class B-TRANSITIVE (Lane BK re-verification 2026-08-18 at bb52e0fc33): no standalone BH test node exists; the header is compiled through mapped consumers — body EXECUTED, not merely compiled: consumer legacy experimental/ckernel_sfpu_generic_moe_gate_topk.h:298 calls _generic_moe_gate_top8_ (the wired moegatetopk row's top-8 point exercises exactly this half). Hand path equally uncovered as a standalone surface; optional upstream standalone test.",
+        notes="Unmapped-cited, class B-TRANSITIVE (Lane BK re-verification 2026-08-18 at bb52e0fc33): no standalone BH test node exists; the header is compiled through mapped consumers — body EXECUTED, not merely compiled: consumer legacy experimental/ckernel_sfpu_generic_moe_gate_topk.h:298 calls _generic_moe_gate_top8_ (the wired moegatetopk row's top-8 point exercises exactly this half). Hand path equally uncovered as a standalone surface; optional upstream standalone test.",
+    ),
+    "legacy__ckernel_sfpu_is_fp16_zero": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class B-TRANSITIVE (Lane BK re-verification 2026-08-18 at bb52e0fc33): no standalone BH test node exists; the header is compiled through mapped consumers — called by metal ckernel_sfpu_sign.h:30 (_sfpu_is_fp16_zero_) -> sfpu_operations.h:149 -> mapped Sign nodes; also included by metal mask/comp headers. Helper predicate, no kernel entry of its own. Hand path equally uncovered as a standalone surface; optional upstream standalone test.",
+        notes="Unmapped-cited, class B-TRANSITIVE (Lane BK re-verification 2026-08-18 at bb52e0fc33): no standalone BH test node exists; the header is compiled through mapped consumers — called by metal ckernel_sfpu_sign.h:30 (_sfpu_is_fp16_zero_) -> sfpu_operations.h:149 -> mapped Sign nodes; also included by metal mask/comp headers. Helper predicate, no kernel entry of its own. Hand path equally uncovered as a standalone surface; optional upstream standalone test.",
+    ),
+    "legacy__ckernel_sfpu_load_config": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class B-TRANSITIVE (Lane BK re-verification 2026-08-18 at bb52e0fc33): no standalone BH test node exists; the header is compiled through mapped consumers — STRONGER than include-only: ckernel::sfpu::_init_sfpu_config_reg() is called directly by tests/sources/sfpu_reduce_sdpa_test.cpp:202 (the MEASURED reduce-sdpa row) and _sfpu_load_config32_ is referenced by test_topk_xl.py:505; also included via tt_llk ckernel_sfpu.h -> sfpu_operations.h:9. Helper header, no kernel entry. Hand path equally uncovered as a standalone surface; optional upstream standalone test.",
+        notes="Unmapped-cited, class B-TRANSITIVE (Lane BK re-verification 2026-08-18 at bb52e0fc33): no standalone BH test node exists; the header is compiled through mapped consumers — STRONGER than include-only: ckernel::sfpu::_init_sfpu_config_reg() is called directly by tests/sources/sfpu_reduce_sdpa_test.cpp:202 (the MEASURED reduce-sdpa row) and _sfpu_load_config32_ is referenced by test_topk_xl.py:505; also included via tt_llk ckernel_sfpu.h -> sfpu_operations.h:9. Helper header, no kernel entry. Hand path equally uncovered as a standalone surface; optional upstream standalone test.",
+    ),
+    "legacy__ckernel_sfpu_polyval": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class B-TRANSITIVE (Lane BK re-verification 2026-08-18 at bb52e0fc33): no standalone BH test node exists; the header is compiled through mapped consumers — legacy ckernel_sfpu_silu.h:7 includes it and calls POLYVAL5 at :22 (mapped Silu nodes, sfpu_operations.h:1059); ~14 metal consumers (exp, gelu, tanh, log, trigonometry, unary_power ...). Helper evaluator, no kernel entry. Hand path equally uncovered as a standalone surface; optional upstream standalone test.",
+        notes="Unmapped-cited, class B-TRANSITIVE (Lane BK re-verification 2026-08-18 at bb52e0fc33): no standalone BH test node exists; the header is compiled through mapped consumers — legacy ckernel_sfpu_silu.h:7 includes it and calls POLYVAL5 at :22 (mapped Silu nodes, sfpu_operations.h:1059); ~14 metal consumers (exp, gelu, tanh, log, trigonometry, unary_power ...). Helper evaluator, no kernel entry. Hand path equally uncovered as a standalone surface; optional upstream standalone test.",
+    ),
+    "metal__ckernel_sfpu_binary_pow": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class B-TRANSITIVE (Lane BK re-verification 2026-08-18 at bb52e0fc33): no standalone BH test node exists; the header is compiled through mapped consumers — sfpu_binary_pow_init is dispatched DIRECTLY at sfpu_operations.h:599 (SfpuType::rpow init) and _sfpu_binary_power_ is called by metal ckernel_sfpu_rpow.h:18 -> mapped Rpow nodes; calculate_sfpu_binary_pow itself has zero standalone hits. Hand path equally uncovered as a standalone surface; optional upstream standalone test.",
+        notes="Unmapped-cited, class B-TRANSITIVE (Lane BK re-verification 2026-08-18 at bb52e0fc33): no standalone BH test node exists; the header is compiled through mapped consumers — sfpu_binary_pow_init is dispatched DIRECTLY at sfpu_operations.h:599 (SfpuType::rpow init) and _sfpu_binary_power_ is called by metal ckernel_sfpu_rpow.h:18 -> mapped Rpow nodes; calculate_sfpu_binary_pow itself has zero standalone hits. Hand path equally uncovered as a standalone surface; optional upstream standalone test.",
+    ),
+    "metal__ckernel_sfpu_conversions": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class B-TRANSITIVE (Lane BK re-verification 2026-08-18 at bb52e0fc33): no standalone BH test node exists; the header is compiled through mapped consumers — float32_to_bf16_rne called by metal binary.h:126,146,193 and binop_with_unary.h:51; _float_to_int32_positive_ called by unary_power.h:96,108 and binary_pow.h:96,109 — all mapped families. Helper conversions, no kernel entry. Hand path equally uncovered as a standalone surface; optional upstream standalone test.",
+        notes="Unmapped-cited, class B-TRANSITIVE (Lane BK re-verification 2026-08-18 at bb52e0fc33): no standalone BH test node exists; the header is compiled through mapped consumers — float32_to_bf16_rne called by metal binary.h:126,146,193 and binop_with_unary.h:51; _float_to_int32_positive_ called by unary_power.h:96,108 and binary_pow.h:96,109 — all mapped families. Helper conversions, no kernel entry. Hand path equally uncovered as a standalone surface; optional upstream standalone test.",
+    ),
+    "metal__ckernel_sfpu_log": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class B-TRANSITIVE (Lane BK re-verification 2026-08-18 at bb52e0fc33): no standalone BH test node exists; the header is compiled through mapped consumers — metal ckernel_sfpu_erfinv.h:10 includes it and calls calculate_log_body<false,false,false> at :27 -> mapped Erfinv nodes. NOTE the tested Log mathop dispatches the LEGACY log header (_calculate_log_, sfpu_operations.h:1009); lgamma/digamma use the legacy _calculate_log_body_no_init_, not this file. Hand path equally uncovered as a standalone surface; optional upstream standalone test.",
+        notes="Unmapped-cited, class B-TRANSITIVE (Lane BK re-verification 2026-08-18 at bb52e0fc33): no standalone BH test node exists; the header is compiled through mapped consumers — metal ckernel_sfpu_erfinv.h:10 includes it and calls calculate_log_body<false,false,false> at :27 -> mapped Erfinv nodes. NOTE the tested Log mathop dispatches the LEGACY log header (_calculate_log_, sfpu_operations.h:1009); lgamma/digamma use the legacy _calculate_log_body_no_init_, not this file. Hand path equally uncovered as a standalone surface; optional upstream standalone test.",
+    ),
+    "metal__ckernel_sfpu_piecewise_rational": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class B-TRANSITIVE (Lane BK re-verification 2026-08-18 at bb52e0fc33): no standalone BH test node exists; the header is compiled through mapped consumers — piecewise_rational_eval called by metal erf.h:61, erfc.h:70, digamma.h:73; piecewise_rational_eval_parity_numer_denom by gelu.h:323 — all mapped families (sfpu_operations.h:126,127,123,169). Helper evaluator, no kernel entry. Hand path equally uncovered as a standalone surface; optional upstream standalone test.",
+        notes="Unmapped-cited, class B-TRANSITIVE (Lane BK re-verification 2026-08-18 at bb52e0fc33): no standalone BH test node exists; the header is compiled through mapped consumers — piecewise_rational_eval called by metal erf.h:61, erfc.h:70, digamma.h:73; piecewise_rational_eval_parity_numer_denom by gelu.h:323 — all mapped families (sfpu_operations.h:126,127,123,169). Helper evaluator, no kernel entry. Hand path equally uncovered as a standalone surface; optional upstream standalone test.",
+    ),
+    "legacy__ckernel_sfpu_rope": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fns sfpu_rope_all_rows/sfpu_rope_face/sfpu_rope_load_cos_sin/sfpu_rope_dest_setup/sfpu_rope_configure_addrmod: zero hits. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+        notes="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fns sfpu_rope_all_rows/sfpu_rope_face/sfpu_rope_load_cos_sin/sfpu_rope_dest_setup/sfpu_rope_configure_addrmod: zero hits. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+    ),
+    "legacy__ckernel_sfpu_sparse_k_filter": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fn _sparse_k_filter_tile_: zero hits. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+        notes="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fn _sparse_k_filter_tile_: zero hits. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+    ),
+    "legacy__ckernel_sfpu_zero_pad": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fn _zero_pad_tile_: zero hits (the only tree-wide mention is the corpus self-test asserting it is unmapped). Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+        notes="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fn _zero_pad_tile_: zero hits (the only tree-wide mention is the corpus self-test asserting it is unmapped). Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+    ),
+    "metal__ckernel_sfpu_add_rsqrt": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fns calculate_add_rsqrt/init_add_rsqrt: zero hits. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+        notes="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fns calculate_add_rsqrt/init_add_rsqrt: zero hits. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+    ),
+    "metal__ckernel_sfpu_alt_complex_rotate90": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fns calculate_alt_complex_rotate90/alt_complex_rotate90_init: zero hits. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+        notes="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fns calculate_alt_complex_rotate90/alt_complex_rotate90_init: zero hits. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+    ),
+    "metal__ckernel_sfpu_bitwise": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fns calculate_sfpu_unary_bitwise/bitwise_{and,or,xor}_init: zero hits. NOTE the tested bitwise surface is the BINARY header ckernel_sfpu_binary_bitwise.h (mapped + wired) — a different file; this unary-bitwise header is absent-with-a-shadow. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+        notes="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fns calculate_sfpu_unary_bitwise/bitwise_{and,or,xor}_init: zero hits. NOTE the tested bitwise surface is the BINARY header ckernel_sfpu_binary_bitwise.h (mapped + wired) — a different file; this unary-bitwise header is absent-with-a-shadow. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+    ),
+    "metal__ckernel_sfpu_clamped_silu": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fns calculate_clamped_silu_gate/calculate_clamped_up/calculate_clamped/calculate_situ_gate/calculate_scaled_tanh: zero hits. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+        notes="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fns calculate_clamped_silu_gate/calculate_clamped_up/calculate_clamped/calculate_situ_gate/calculate_scaled_tanh: zero hits. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+    ),
+    "metal__ckernel_sfpu_copy_dest_values": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fns copy_dest_value/copy_dest_value_init: zero hits. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+        notes="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fns copy_dest_value/copy_dest_value_init: zero hits. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+    ),
+    "metal__ckernel_sfpu_cumsum": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fns calculate_cumsum/cumsum_init: zero hits; no cumsum token in sfpu_operations.h or llk_params.py. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+        notes="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fns calculate_cumsum/cumsum_init: zero hits; no cumsum token in sfpu_operations.h or llk_params.py. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+    ),
+    "metal__ckernel_sfpu_custom_add": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fn my_add_tile_face: zero hits. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+        notes="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fn my_add_tile_face: zero hits. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+    ),
+    "metal__ckernel_sfpu_dropout": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fns calculate_dropout/dropout_init: zero hits. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+        notes="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fns calculate_dropout/dropout_init: zero hits. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+    ),
+    "metal__ckernel_sfpu_int_sum": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fns calculate_sum_int_col/calculate_sum_int_row/sum_int_init/add_int: zero hits. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+        notes="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fns calculate_sum_int_col/calculate_sum_int_row/sum_int_init/add_int: zero hits. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+    ),
+    "metal__ckernel_sfpu_logit_softcap": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fn calculate_logit_softcap: zero hits. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+        notes="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fn calculate_logit_softcap: zero hits. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+    ),
+    "metal__ckernel_sfpu_max_pool_indices": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fns calculate_max_pool_with_indices/_calculate_max_pool_with_indices_(generic_)/init_max_pool_with_indices: zero hits; carries the TopK value/index-pairing hazard — audit against TOPK_TYPED_CONVERSION_BLOCKER.md before any selector promise. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+        notes="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fns calculate_max_pool_with_indices/_calculate_max_pool_with_indices_(generic_)/init_max_pool_with_indices: zero hits; carries the TopK value/index-pairing hazard — audit against TOPK_TYPED_CONVERSION_BLOCKER.md before any selector promise. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+    ),
+    "metal__ckernel_sfpu_quant": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fns calculate_{quant,requant,dequant}_int32/{quant,requant,dequant}_init: zero BH hits. Do NOT conflate with the Quasar namesake: sfpu_operations_quasar.h:47 includes the QUASAR metal quant header (quant_family), a different file on a different arch. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+        notes="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fns calculate_{quant,requant,dequant}_int32/{quant,requant,dequant}_init: zero BH hits. Do NOT conflate with the Quasar namesake: sfpu_operations_quasar.h:47 includes the QUASAR metal quant header (quant_family), a different file on a different arch. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+    ),
+    "metal__ckernel_sfpu_rand": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fns rand/rand_init/rand_rows/rand_row/rand_prng/make_lane_salt: zero hits. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+        notes="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fns rand/rand_init/rand_rows/rand_row/rand_prng/make_lane_salt: zero hits. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+    ),
+    "metal__ckernel_sfpu_reshuffle_rows": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fns calculate_reshuffle_rows/reshuffle_rows_init: zero hits. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+        notes="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fns calculate_reshuffle_rows/reshuffle_rows_init: zero hits. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+    ),
+    "metal__ckernel_sfpu_smoothstep": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fn smoothstep_tile_face: zero hits. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+        notes="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fn smoothstep_tile_face: zero hits. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+    ),
+    "metal__ckernel_sfpu_tiled_prod": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fns calculate_tiled_prod/tiled_prod_init: zero hits. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+        notes="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fns calculate_tiled_prod/tiled_prod_init: zero hits. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+    ),
+    "legacy__ckernel_sfpu_sigmoid": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — CLASS CORRECTED from B-TRANSITIVE (the old 'metal tanh includes it' chain conflated include paths): sfpu/ckernel_sfpu_sigmoid.h has ZERO BH consumers — repo-wide it is included only by the Quasar trees; BH metal silu.h:8/tanh.h:14/clamped_silu.h:23 use the unprefixed include = the METAL sigmoid sibling (self-contained body). _calculate_sigmoid_/_init_sigmoid_ have zero BH callers. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+        notes="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — CLASS CORRECTED from B-TRANSITIVE (the old 'metal tanh includes it' chain conflated include paths): sfpu/ckernel_sfpu_sigmoid.h has ZERO BH consumers — repo-wide it is included only by the Quasar trees; BH metal silu.h:8/tanh.h:14/clamped_silu.h:23 use the unprefixed include = the METAL sigmoid sibling (self-contained body). _calculate_sigmoid_/_init_sigmoid_ have zero BH callers. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+    ),
+    "legacy__ckernel_sfpu_tanh": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — CLASS CORRECTED from B-TRANSITIVE (same include-path conflation): sfpu/ckernel_sfpu_tanh.h is included by NOTHING repo-wide; metal gelu.h:20/tanhshrink.h:10/logit_softcap.h:13 use the unprefixed include = the METAL tanh; the tested Tanh mathop routes to metal calculate_tanh. _calculate_tanh_/_init_tanh_ have zero callers. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+        notes="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — CLASS CORRECTED from B-TRANSITIVE (same include-path conflation): sfpu/ckernel_sfpu_tanh.h is included by NOTHING repo-wide; metal gelu.h:20/tanhshrink.h:10/logit_softcap.h:13 use the unprefixed include = the METAL tanh; the tested Tanh mathop routes to metal calculate_tanh. _calculate_tanh_/_init_tanh_ have zero callers. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+    ),
+    "legacy__ckernel_sfpu_cast_fp32_to_fp16a": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class D-SHADOWED (Lane BK re-verification 2026-08-18 at bb52e0fc33): the OP is covered by a mapped other-surface header; THIS header is dispatched by nothing — op tested via the mapped metal cast_fp32_to_fp16a header (sfpu_operations.h:115 include, :827 dispatch); legacy _cast_fp32_to_fp16a_: zero hits.",
+        notes="Unmapped-cited, class D-SHADOWED (Lane BK re-verification 2026-08-18 at bb52e0fc33): the OP is covered by a mapped other-surface header; THIS header is dispatched by nothing — op tested via the mapped metal cast_fp32_to_fp16a header (sfpu_operations.h:115 include, :827 dispatch); legacy _cast_fp32_to_fp16a_: zero hits.",
+    ),
+    "legacy__ckernel_sfpu_comp": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class D-SHADOWED (Lane BK re-verification 2026-08-18 at bb52e0fc33): the OP is covered by a mapped other-surface header; THIS header is dispatched by nothing — zero/unary comp ops tested via the mapped metal comp headers (calculate_comp/_int/_uint16/eqz/nez, sfpu_operations.h:1297-1333); CAVEAT this legacy header IS compiled (direct include at sfpu_operations.h:193 with an explicit not-used comment) but _calculate_comp_/_calculate_zero_comp_* have zero dispatch.",
+        notes="Unmapped-cited, class D-SHADOWED (Lane BK re-verification 2026-08-18 at bb52e0fc33): the OP is covered by a mapped other-surface header; THIS header is dispatched by nothing — zero/unary comp ops tested via the mapped metal comp headers (calculate_comp/_int/_uint16/eqz/nez, sfpu_operations.h:1297-1333); CAVEAT this legacy header IS compiled (direct include at sfpu_operations.h:193 with an explicit not-used comment) but _calculate_comp_/_calculate_zero_comp_* have zero dispatch.",
+    ),
+    "metal__ckernel_sfpu_clamp": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class D-SHADOWED (Lane BK re-verification 2026-08-18 at bb52e0fc33): the OP is covered by a mapped other-surface header; THIS header is dispatched by nothing — op tested via the mapped legacy sfpu/ckernel_sfpu_clamp.h (_calculate_clamp_, sfpu_operations.h:1273); metal calculate_clamp appears only in the Quasar harness (sfpu_operations_quasar.h:296) and calculate_clamp_int32 has zero hits anywhere.",
+        notes="Unmapped-cited, class D-SHADOWED (Lane BK re-verification 2026-08-18 at bb52e0fc33): the OP is covered by a mapped other-surface header; THIS header is dispatched by nothing — op tested via the mapped legacy sfpu/ckernel_sfpu_clamp.h (_calculate_clamp_, sfpu_operations.h:1273); metal calculate_clamp appears only in the Quasar harness (sfpu_operations_quasar.h:296) and calculate_clamp_int32 has zero hits anywhere.",
+    ),
+    "metal__ckernel_sfpu_div_int32": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class D-SHADOWED (Lane BK re-verification 2026-08-18 at bb52e0fc33): the OP is covered by a mapped other-surface header; THIS header is dispatched by nothing — trunc/floor int32 division tested via the mapped metal div_int32_floor.h — BinaryOp::DIV_INT32 was re-pointed at calculate_div_int32_trunc (sfpu_operations.h:2049-2055, comment names the legacy fp32-result bug); CAVEAT this header IS compiled (include at sfpu_operations.h:124) but calculate_div_int32/div_init are dispatched by nothing (both appear only in comments).",
+        notes="Unmapped-cited, class D-SHADOWED (Lane BK re-verification 2026-08-18 at bb52e0fc33): the OP is covered by a mapped other-surface header; THIS header is dispatched by nothing — trunc/floor int32 division tested via the mapped metal div_int32_floor.h — BinaryOp::DIV_INT32 was re-pointed at calculate_div_int32_trunc (sfpu_operations.h:2049-2055, comment names the legacy fp32-result bug); CAVEAT this header IS compiled (include at sfpu_operations.h:124) but calculate_div_int32/div_init are dispatched by nothing (both appear only in comments).",
+    ),
+    "metal__ckernel_sfpu_hardtanh": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class D-SHADOWED (Lane BK re-verification 2026-08-18 at bb52e0fc33): the OP is covered by a mapped other-surface header; THIS header is dispatched by nothing — op tested via the mapped legacy sfpu/ckernel_sfpu_hardtanh.h (_calculate_hardtanh_, sfpu_operations.h:1287); metal calculate_hardtanh/hardtanh_init: zero hits.",
+        notes="Unmapped-cited, class D-SHADOWED (Lane BK re-verification 2026-08-18 at bb52e0fc33): the OP is covered by a mapped other-surface header; THIS header is dispatched by nothing — op tested via the mapped legacy sfpu/ckernel_sfpu_hardtanh.h (_calculate_hardtanh_, sfpu_operations.h:1287); metal calculate_hardtanh/hardtanh_init: zero hits.",
+    ),
+    "metal__ckernel_sfpu_silu": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class D-SHADOWED (Lane BK re-verification 2026-08-18 at bb52e0fc33): the OP is covered by a mapped other-surface header; THIS header is dispatched by nothing — op tested via the mapped legacy sfpu/ckernel_sfpu_silu.h (_calculate_silu_, sfpu_operations.h:1059; harness comment at :744 records the deliberate choice); metal calculate_silu: zero hits.",
+        notes="Unmapped-cited, class D-SHADOWED (Lane BK re-verification 2026-08-18 at bb52e0fc33): the OP is covered by a mapped other-surface header; THIS header is dispatched by nothing — op tested via the mapped legacy sfpu/ckernel_sfpu_silu.h (_calculate_silu_, sfpu_operations.h:1059; harness comment at :744 records the deliberate choice); metal calculate_silu: zero hits.",
+    ),
+    "metal__ckernel_sfpu_relu": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class D-SHADOWED (Lane BK re-verification 2026-08-18 at bb52e0fc33): the OP is covered by a mapped other-surface header; THIS header is dispatched by nothing — CLASS CORRECTED from B-TRANSITIVE (the old 'metal activations includes it' claim is false): NOTHING includes metal llk_sfpu/ckernel_sfpu_relu.h (its own line 11 includes the legacy relu); the relu family is tested through the LEGACY header (_relu_max_ :1168, _relu_min_ :1177/1181, _calculate_lrelu_ :1186 in sfpu_operations.h); relu_clamp_uint/relu_clamp_int/relu_min/relu_max/calculate_lrelu/lrelu_init of THIS file have zero dispatch.",
+        notes="Unmapped-cited, class D-SHADOWED (Lane BK re-verification 2026-08-18 at bb52e0fc33): the OP is covered by a mapped other-surface header; THIS header is dispatched by nothing — CLASS CORRECTED from B-TRANSITIVE (the old 'metal activations includes it' claim is false): NOTHING includes metal llk_sfpu/ckernel_sfpu_relu.h (its own line 11 includes the legacy relu); the relu family is tested through the LEGACY header (_relu_max_ :1168, _relu_min_ :1177/1181, _calculate_lrelu_ :1186 in sfpu_operations.h); relu_clamp_uint/relu_clamp_int/relu_min/relu_max/calculate_lrelu/lrelu_init of THIS file have zero dispatch.",
+    ),
     # ---- end coverage-parity audit seeds ----
 }
 
@@ -758,6 +969,16 @@ AUDITED_MAPPINGS = {
         functional_modules="test_sfpu_binop_scalar.py::test_sfpu_binop_scalar[formats:Float16_b->Float16_b-dest_acc:No-mathop:ScalarAdd]",
         perf_modules="perf_sfpu_binop_scalar.py::test_perf_sfpu_binop_scalar[formats:Float16_b->Float16_b-dest_acc:No-mathop:ScalarAdd-loop_factor:16-iterations:32-input_dimensions:[128, 64]]",
         notes="Lane AZ reclassification (was B-PERF-ONLY in the coverage-parity skip ledger): upstream 77c24691ab added test_sfpu_binop_scalar.py whose source sfpu_binop_scalar_test.cpp:68 includes llk_sfpu/ckernel_sfpu_binop_with_unary.h — audited chain test_sfpu_binop_scalar.py -> sources/sfpu_binop_scalar_test.cpp -> calculate_binop_with_scalar; exact BH-collected node recorded (representative ScalarAdd; Sub/Mul/Div/Rsub share the dispatch); perf twin perf_sfpu_binop_scalar.py collected on BH.",
+    ),
+    "legacy__ckernel_sfpu_softmax_k": dict(
+        functional_modules="test_sfpu_softmax_k.py::test_sfpu_softmax_k",
+        perf_modules="test_sfpu_softmax_k.py::test_sfpu_softmax_k_device_profile",
+        notes="Audited chain: sfpu_softmax_k_test.cpp -> sfpu/experimental/ckernel_sfpu_softmax_k.h (_init_softmax_k_/_softmax_k_<k>). Perf vehicle added (Lane BK 2026-08-18): isolated SOFTMAX_K_BODY MATH-zone device-profile fixture pinned to the legal-region point Float16_b/dest_acc:No/k=16 (both functional skip predicates avoided); corr-node .text no-harm byte-proven; supersedes the f1_candidates 'no isolated perf module' prose.",
+    ),
+    "legacy__ckernel_sfpu_generic_moe_gate_topk": dict(
+        functional_modules="test_sfpu_generic_moe_gate_topk.py::test_sfpu_generic_moe_gate_topk",
+        perf_modules="test_sfpu_generic_moe_gate_topk.py::test_sfpu_generic_moe_gate_topk_device_profile",
+        notes="Audited chain: sfpu_generic_moe_gate_topk_test.cpp -> sfpu/experimental/ckernel_sfpu_generic_moe_gate_topk.h (_init_generic_moe_gate_topk_/_generic_moe_gate_topk_; self-includes its _top8/_top16 halves, both executed). Perf vehicle added (Lane BK 2026-08-18): isolated MOE_GATE_TOPK_BODY MATH-zone device-profile fixture pinned to top-8 (single-schema). NOTE the header is pure SFPU — its manifest mop=1 static flag comes from the classify() text regex; zero mop_cfg/ckernel_template/lltt::replay usage exists in the header (Lane BK grep), so the MATH zone is the honest scope; corr-node .text no-harm byte-proven; supersedes the f1_candidates 'no paired isolated cycle fixture' prose.",
     ),
     "legacy__ckernel_sfpu_sdpa_exp_unclamped": dict(
         functional_modules="test_sfpu_sdpa_exp_unclamped.py::test_sfpu_sdpa_exp_unclamped",
@@ -835,7 +1056,8 @@ AUDITED_MAPPINGS = {
     ),
     "legacy__ckernel_sfpu_ema": dict(
         functional_modules="test_sfpu_ema.py::test_sfpu_ema",
-        notes="Audited chain: sfpu_ema_test.cpp -> llk_sfpu/llk_math_ema_sfpu_entry.h -> sfpu/ckernel_sfpu_ema.h (stateful two-tile EMA entry); functional-only mapping, no isolated perf fixture.",
+        perf_modules="test_sfpu_ema.py::test_sfpu_ema_device_profile",
+        notes="Audited chain: sfpu_ema_test.cpp -> llk_sfpu/llk_math_ema_sfpu_entry.h -> sfpu/ckernel_sfpu_ema.h (stateful two-tile EMA entry); functional-only mapping, no isolated perf fixture. Perf vehicle added (Lane BK 2026-08-18): isolated EMA_BODY MATH-zone device-profile fixture (Welford recipe; alpha/beta load + carry clear outside the zone; corr-node .text no-harm byte-proven) — the 'no isolated perf fixture' statement is closed.",
     ),
     "legacy__ckernel_sfpu_expm1_cw": dict(
         functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:Expm1Cw-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
@@ -855,7 +1077,8 @@ AUDITED_MAPPINGS = {
     ),
     "legacy__ckernel_sfpu_isinf_isnan": dict(
         functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu_isinf_isnan[formats:Float32->Float32-approx_mode:No-mathop:Isfinite-dest_acc:No-input_dimensions:[64, 64]],test_sfpu_unary.py::test_eltwise_unary_sfpu_isinf_isnan[formats:Float32->Float32-approx_mode:No-mathop:Isinf-dest_acc:No-input_dimensions:[64, 64]],test_sfpu_unary.py::test_eltwise_unary_sfpu_isinf_isnan[formats:Float32->Float32-approx_mode:No-mathop:Isnan-dest_acc:No-input_dimensions:[64, 64]],test_sfpu_unary.py::test_eltwise_unary_sfpu_isinf_isnan[formats:Float32->Float32-approx_mode:No-mathop:Isneginf-dest_acc:No-input_dimensions:[64, 64]],test_sfpu_unary.py::test_eltwise_unary_sfpu_isinf_isnan[formats:Float32->Float32-approx_mode:No-mathop:Isposinf-dest_acc:No-input_dimensions:[64, 64]]",
-        notes="Audited production-header mapping (coverage parity lane): _calculate_sfpu_isinf_isnan_ (SfpuType::isfinite); _calculate_sfpu_isinf_isnan_ (SfpuType::isinf); _calculate_sfpu_isinf_isnan_ (SfpuType::isnan); _calculate_sfpu_isinf_isnan_ (SfpuType::isneginf); _calculate_sfpu_isinf_isnan_ (SfpuType::isposinf) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+        perf_modules="perf_eltwise_unary_sfpu.py::test_perf_isinf_isnan[formats:Float16_b->Float16_b-dest_acc:No-mathop:Isinf],perf_eltwise_unary_sfpu.py::test_perf_isinf_isnan[formats:Float16_b->Float16_b-dest_acc:No-mathop:Isposinf],perf_eltwise_unary_sfpu.py::test_perf_isinf_isnan[formats:Float16_b->Float16_b-dest_acc:No-mathop:Isneginf],perf_eltwise_unary_sfpu.py::test_perf_isinf_isnan[formats:Float16_b->Float16_b-dest_acc:No-mathop:Isnan],perf_eltwise_unary_sfpu.py::test_perf_isinf_isnan[formats:Float16_b->Float16_b-dest_acc:No-mathop:Isfinite]",
+        notes="Audited production-header mapping (coverage parity lane): _calculate_sfpu_isinf_isnan_ (SfpuType::isfinite); _calculate_sfpu_isinf_isnan_ (SfpuType::isinf); _calculate_sfpu_isinf_isnan_ (SfpuType::isnan); _calculate_sfpu_isinf_isnan_ (SfpuType::isneginf); _calculate_sfpu_isinf_isnan_ (SfpuType::isposinf) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body. Perf vehicle added (Lane BK 2026-08-18, corr-only gap close): representative MATH_ISOLATE node(s) recorded in perf_modules; the functional nodes stay the correctness gate — collected + compile-PASS under pin-10 cc1plus 2911f0e680e4.",
     ),
     "legacy__ckernel_sfpu_log": dict(
         functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float16_b->Float16_b-approx_mode:No-mathop:Log-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]],test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:LogWithBase-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
@@ -868,6 +1091,11 @@ AUDITED_MAPPINGS = {
     "legacy__ckernel_sfpu_rounding_ops": dict(
         functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float16_b->Float16_b-approx_mode:No-mathop:Ceil-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]],test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float16_b->Float16_b-approx_mode:No-mathop:Floor-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]],test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float16_b->Float16_b-approx_mode:No-mathop:Frac-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]],test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float16_b->Float16_b-approx_mode:No-mathop:Trunc-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]],test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:Round-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
         notes="Audited production-header mapping (coverage parity lane): _calculate_ceil_ (SfpuType::ceil); _calculate_floor_ (SfpuType::floor); _calculate_frac_ (SfpuType::frac); _calculate_round_ (SfpuType::round); _calculate_trunc_ (SfpuType::trunc) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "legacy__ckernel_sfpu_rsqrt_compat": dict(
+        functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:RsqrtCompat-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]],test_sfpu_unary.py::test_eltwise_unary_sfpu_edges[formats:Float32->Float32-mathop:RsqrtCompat-dest_acc:No-input_dimensions:[64, 64]]",
+        perf_modules="perf_eltwise_unary_sfpu.py::test_perf_eltwise_unary_sfpu[formats:Float16_b->Float16_b-approx_mode:No-mathop:RsqrtCompat-dest_acc:No-loop_factor:16-iterations:32-fast_mode:No-stable_sort:No-input_dimensions:[128, 64]]",
+        notes="Audited production-header mapping (Lane BK 2026-08-18 unmapped-rescue, the binop_with_unary incident class — the coverage-parity B-TRANSITIVE label was stale): a DEDICATED functional surface exists — MathOperation.RsqrtCompat (SfpuType::rsqrt_compat, sfpu_operations.h:1615) routes calculate_rsqrt<..., true /* legacy_compat */> into this header's _calculate_rsqrt_compat_ body, with registered domain + edge specs and golden; the RsqrtCompat perf node exists in the standard unary perf sweep. Corr nodes are the F32->F32 dest_acc:No legal-region point (BH standard-profile guard skips every other dest_acc:No pair — Lane BK skip-guard audit caught the F16b pick SKIPPING at classify; expm1 corr/perf-format precedent). Exact BH-collected nodes recorded; no fresh selector, the production typed body is the compiler-path body.",
     ),
     "legacy__ckernel_sfpu_silu": dict(
         functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float16_b->Float16_b-approx_mode:No-mathop:Silu-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
@@ -899,7 +1127,18 @@ AUDITED_MAPPINGS = {
     ),
     "metal__ckernel_sfpu_atan2": dict(
         functional_modules="test_sfpu_binary.py::test_sfpu_binary_atan2[formats:Float16_b->Float16_b-mathop:SfpuAtan2-dest_acc:No]",
-        notes="Audited production-header mapping (coverage parity lane): calculate_sfpu_atan2 (BinaryOp::ATAN2) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+        perf_modules="perf_eltwise_binary_sfpu.py::test_perf_sfpu_binary_extended_float[formats:Float16_b->Float16_b-mathop:SfpuAtan2]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_sfpu_atan2 (BinaryOp::ATAN2) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body. Perf vehicle added (Lane BK 2026-08-18, corr-only gap close): representative MATH_ISOLATE node(s) recorded in perf_modules; the functional nodes stay the correctness gate — collected + compile-PASS under pin-10 cc1plus 2911f0e680e4.",
+    ),
+    "metal__ckernel_sfpu_abs": dict(
+        functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu_int32_signed[mathop:AbsInt32-dest_acc:Yes-input_dimensions:[64, 64]]",
+        perf_modules="perf_eltwise_unary_sfpu_int32.py::test_perf_eltwise_unary_sfpu_int32[formats:Int32->Int32-mathop:AbsInt32-input_dimensions:[128, 64]]",
+        notes="Lane BK 2026-08-18 B-PERF-ONLY closure (coverage-parity ledger class): calculate_abs_int32 (SfpuType::abs_int32, sfpu_operations.h:819) had perf-only coverage and no functional golden anywhere — new exact-int functional node with signed stimuli through the two's-complement L1 plumbing (rsub_int32 convention), exact golden abs(x), INT32_MIN excluded; PASS on the corrected BH sim 32489dda at default flags.",
+    ),
+    "metal__ckernel_sfpu_bitwise_not": dict(
+        functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu_int32_signed[mathop:BitwiseNot-dest_acc:Yes-input_dimensions:[64, 64]]",
+        perf_modules="perf_eltwise_unary_sfpu_int32.py::test_perf_eltwise_unary_sfpu_int32[formats:Int32->Int32-mathop:BitwiseNot-input_dimensions:[128, 64]]",
+        notes="Lane BK 2026-08-18 B-PERF-ONLY closure (coverage-parity ledger class): calculate_bitwise_not (SfpuType::bitwise_not, sfpu_operations.h:1196) had perf-only coverage and no functional golden anywhere — new exact-int functional node with signed stimuli through the two's-complement L1 plumbing, exact golden ~x; PASS on the corrected BH sim 32489dda at default flags.",
     ),
     "metal__ckernel_sfpu_binary": dict(
         functional_modules="test_sfpu_binary.py::test_sfpu_binary_edges[formats:Float16_b->Float16_b-mathop:SfpuElwdiv-dest_acc:No-edge_class:both_zero],test_sfpu_binary.py::test_sfpu_binary_float[formats:Float16_b->Float16_b-bcast_dim:Row-mathop:SfpuElwsub-dest_acc:No]",
@@ -907,19 +1146,23 @@ AUDITED_MAPPINGS = {
     ),
     "metal__ckernel_sfpu_binary_bitwise": dict(
         functional_modules="test_sfpu_binary.py::test_sfpu_binary_bitwise[formats:Int32->Int32-mathop:SfpuBitwiseAnd-dest_acc:Yes],test_sfpu_binary.py::test_sfpu_binary_bitwise[formats:Int32->Int32-mathop:SfpuBitwiseOr-dest_acc:Yes],test_sfpu_binary.py::test_sfpu_binary_bitwise[formats:Int32->Int32-mathop:SfpuBitwiseXor-dest_acc:Yes]",
-        notes="Audited production-header mapping (coverage parity lane): calculate_sfpu_binary_bitwise (BinaryOp::BITWISE_AND); calculate_sfpu_binary_bitwise (BinaryOp::BITWISE_OR); calculate_sfpu_binary_bitwise (BinaryOp::BITWISE_XOR) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+        perf_modules="perf_eltwise_binary_sfpu.py::test_perf_sfpu_binary_extended_int[formats:Int32->Int32-mathop:SfpuBitwiseAnd],perf_eltwise_binary_sfpu.py::test_perf_sfpu_binary_extended_int[formats:Int32->Int32-mathop:SfpuBitwiseOr],perf_eltwise_binary_sfpu.py::test_perf_sfpu_binary_extended_int[formats:Int32->Int32-mathop:SfpuBitwiseXor]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_sfpu_binary_bitwise (BinaryOp::BITWISE_AND); calculate_sfpu_binary_bitwise (BinaryOp::BITWISE_OR); calculate_sfpu_binary_bitwise (BinaryOp::BITWISE_XOR) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body. Perf vehicle added (Lane BK 2026-08-18, corr-only gap close): representative MATH_ISOLATE node(s) recorded in perf_modules; the functional nodes stay the correctness gate — collected + compile-PASS under pin-10 cc1plus 2911f0e680e4.",
     ),
     "metal__ckernel_sfpu_binary_comp": dict(
         functional_modules="test_sfpu_binary.py::test_sfpu_binary_eq_ne[formats:Float16_b->Float16_b-mathop:SfpuElwEq-dest_acc:No],test_sfpu_binary.py::test_sfpu_binary_eq_ne[formats:Float16_b->Float16_b-mathop:SfpuElwNe-dest_acc:No],test_sfpu_binary.py::test_sfpu_binary_eq_ne_int[formats:Int32->Int32-mathop:SfpuEqInt-dest_acc:Yes],test_sfpu_binary.py::test_sfpu_binary_eq_ne_int[formats:Int32->Int32-mathop:SfpuNeInt-dest_acc:Yes],test_sfpu_binary.py::test_sfpu_binary_float_comparison[formats:Float16_b->Float16_b-mathop:SfpuElwGe-dest_acc:No],test_sfpu_binary.py::test_sfpu_binary_float_comparison[formats:Float16_b->Float16_b-mathop:SfpuElwGt-dest_acc:No],test_sfpu_binary.py::test_sfpu_binary_float_comparison[formats:Float16_b->Float16_b-mathop:SfpuElwLe-dest_acc:No],test_sfpu_binary.py::test_sfpu_binary_float_comparison[formats:Float16_b->Float16_b-mathop:SfpuElwLt-dest_acc:No]",
-        notes="Audited production-header mapping (coverage parity lane): calculate_binary_eq_int (BinaryOp::EQ_INT); calculate_binary_comp_fp32 (BinaryOp::EQ); calculate_binary_comp_fp32 (BinaryOp::GE); calculate_binary_comp_fp32 (BinaryOp::GT); calculate_binary_comp_fp32 (BinaryOp::LE); calculate_binary_comp_fp32 (BinaryOp::LT); calculate_binary_eq_int (BinaryOp::NE_INT); calculate_binary_comp_fp32 (BinaryOp::NE) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+        perf_modules="perf_eltwise_binary_sfpu.py::test_perf_sfpu_binary_extended_float[formats:Float16_b->Float16_b-mathop:SfpuElwEq],perf_eltwise_binary_sfpu.py::test_perf_sfpu_binary_extended_float[formats:Float16_b->Float16_b-mathop:SfpuElwNe],perf_eltwise_binary_sfpu.py::test_perf_sfpu_binary_extended_int[formats:Int32->Int32-mathop:SfpuEqInt],perf_eltwise_binary_sfpu.py::test_perf_sfpu_binary_extended_int[formats:Int32->Int32-mathop:SfpuNeInt]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_binary_eq_int (BinaryOp::EQ_INT); calculate_binary_comp_fp32 (BinaryOp::EQ); calculate_binary_comp_fp32 (BinaryOp::GE); calculate_binary_comp_fp32 (BinaryOp::GT); calculate_binary_comp_fp32 (BinaryOp::LE); calculate_binary_comp_fp32 (BinaryOp::LT); calculate_binary_eq_int (BinaryOp::NE_INT); calculate_binary_comp_fp32 (BinaryOp::NE) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body. Perf vehicle added (Lane BK 2026-08-18, corr-only gap close): representative MATH_ISOLATE node(s) recorded in perf_modules; the functional nodes stay the correctness gate — collected + compile-PASS under pin-10 cc1plus 2911f0e680e4.",
     ),
     "metal__ckernel_sfpu_binary_fmod": dict(
         functional_modules="test_sfpu_binary.py::test_sfpu_binary_float_extended[formats:Float16_b->Float16_b-mathop:SfpuBinaryFmod-dest_acc:No],test_sfpu_binary.py::test_sfpu_binary_int_uniform[mathop:SfpuFmodInt32-dest_acc:Yes]",
-        notes="Audited production-header mapping (coverage parity lane): calculate_fmod_int32 (BinaryOp::FMOD_INT32); calculate_sfpu_binary_fmod (BinaryOp::FMOD) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+        perf_modules="perf_eltwise_binary_sfpu.py::test_perf_sfpu_binary_extended_float[formats:Float16_b->Float16_b-mathop:SfpuBinaryFmod]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_fmod_int32 (BinaryOp::FMOD_INT32); calculate_sfpu_binary_fmod (BinaryOp::FMOD) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body. Perf vehicle added (Lane BK 2026-08-18, corr-only gap close): representative MATH_ISOLATE node(s) recorded in perf_modules; the functional nodes stay the correctness gate — collected + compile-PASS under pin-10 cc1plus 2911f0e680e4.",
     ),
     "metal__ckernel_sfpu_binary_remainder": dict(
         functional_modules="test_sfpu_binary.py::test_sfpu_binary_float_extended[formats:Float16_b->Float16_b-mathop:SfpuBinaryRemainder-dest_acc:No],test_sfpu_binary.py::test_sfpu_binary_int_uniform[mathop:SfpuRemainderInt32-dest_acc:Yes],test_sfpu_binary.py::test_sfpu_binary_int_uniform[mathop:SfpuRemainderUint32-dest_acc:Yes]",
-        notes="Audited production-header mapping (coverage parity lane): calculate_remainder_int32 (BinaryOp::REMAINDER_INT32); calculate_remainder_uint32 (BinaryOp::REMAINDER_UINT32); calculate_sfpu_binary_remainder (BinaryOp::REMAINDER) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+        perf_modules="perf_eltwise_binary_sfpu.py::test_perf_sfpu_binary_extended_float[formats:Float16_b->Float16_b-mathop:SfpuBinaryRemainder]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_remainder_int32 (BinaryOp::REMAINDER_INT32); calculate_remainder_uint32 (BinaryOp::REMAINDER_UINT32); calculate_sfpu_binary_remainder (BinaryOp::REMAINDER) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body. Perf vehicle added (Lane BK 2026-08-18, corr-only gap close): representative MATH_ISOLATE node(s) recorded in perf_modules; the functional nodes stay the correctness gate — collected + compile-PASS under pin-10 cc1plus 2911f0e680e4.",
     ),
     "metal__ckernel_sfpu_cast_fp32_to_fp16a": dict(
         functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:CastFp32ToFp16a-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
@@ -943,7 +1186,8 @@ AUDITED_MAPPINGS = {
     ),
     "metal__ckernel_sfpu_div_int32_floor": dict(
         functional_modules="test_sfpu_binary.py::test_sfpu_binary_int_uniform[mathop:SfpuDivInt32-dest_acc:Yes],test_sfpu_binary.py::test_sfpu_binary_int_uniform[mathop:SfpuDivInt32Floor-dest_acc:Yes]",
-        notes="Audited production-header mapping (coverage parity lane): calculate_div_int32_floor (BinaryOp::DIV_INT32_FLOOR); calculate_div_int32_trunc (BinaryOp::DIV_INT32) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+        perf_modules="perf_eltwise_binary_sfpu.py::test_perf_sfpu_binary_extended_int[formats:Int32->Int32-mathop:SfpuDivInt32],perf_eltwise_binary_sfpu.py::test_perf_sfpu_binary_extended_int[formats:Int32->Int32-mathop:SfpuDivInt32Floor]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_div_int32_floor (BinaryOp::DIV_INT32_FLOOR); calculate_div_int32_trunc (BinaryOp::DIV_INT32) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body. Perf vehicle added (Lane BK 2026-08-18, corr-only gap close): representative MATH_ISOLATE node(s) recorded in perf_modules; the functional nodes stay the correctness gate — collected + compile-PASS under pin-10 cc1plus 2911f0e680e4.",
     ),
     "metal__ckernel_sfpu_elu": dict(
         functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float16_b->Float16_b-approx_mode:No-mathop:Elu-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
@@ -975,7 +1219,8 @@ AUDITED_MAPPINGS = {
     ),
     "metal__ckernel_sfpu_gcd": dict(
         functional_modules="test_sfpu_binary.py::test_sfpu_binary_int_uniform[mathop:SfpuGcd-dest_acc:Yes]",
-        notes="Audited production-header mapping (coverage parity lane): calculate_sfpu_gcd (BinaryOp::GCD) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+        perf_modules="perf_eltwise_binary_sfpu.py::test_perf_sfpu_binary_extended_int[formats:Int32->Int32-mathop:SfpuGcd]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_sfpu_gcd (BinaryOp::GCD) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body. Perf vehicle added (Lane BK 2026-08-18, corr-only gap close): representative MATH_ISOLATE node(s) recorded in perf_modules; the functional nodes stay the correctness gate — collected + compile-PASS under pin-10 cc1plus 2911f0e680e4.",
     ),
     "metal__ckernel_sfpu_gelu": dict(
         functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float16_b->Float16_b-approx_mode:No-mathop:Gelu-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]],test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float16_b->Float16_b-approx_mode:No-mathop:GeluTanh-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]],test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:GeluAppx-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]],test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:GeluDerivative-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
@@ -1011,11 +1256,13 @@ AUDITED_MAPPINGS = {
     ),
     "metal__ckernel_sfpu_isclose": dict(
         functional_modules="test_sfpu_binary.py::test_sfpu_binary_isclose[formats:Float16_b->Float16_b-mathop:SfpuIsclose-dest_acc:No]",
-        notes="Audited production-header mapping (coverage parity lane): calculate_sfpu_isclose (BinaryOp::ISCLOSE) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+        perf_modules="perf_eltwise_binary_sfpu.py::test_perf_sfpu_binary_extended_float[formats:Float16_b->Float16_b-mathop:SfpuIsclose]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_sfpu_isclose (BinaryOp::ISCLOSE) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body. Perf vehicle added (Lane BK 2026-08-18, corr-only gap close): representative MATH_ISOLATE node(s) recorded in perf_modules; the functional nodes stay the correctness gate — collected + compile-PASS under pin-10 cc1plus 2911f0e680e4.",
     ),
     "metal__ckernel_sfpu_lcm": dict(
         functional_modules="test_sfpu_binary.py::test_sfpu_binary_int_uniform[mathop:SfpuLcm-dest_acc:Yes]",
-        notes="Audited production-header mapping (coverage parity lane): calculate_sfpu_lcm (BinaryOp::LCM) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+        perf_modules="perf_eltwise_binary_sfpu.py::test_perf_sfpu_binary_extended_int[formats:Int32->Int32-mathop:SfpuLcm]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_sfpu_lcm (BinaryOp::LCM) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body. Perf vehicle added (Lane BK 2026-08-18, corr-only gap close): representative MATH_ISOLATE node(s) recorded in perf_modules; the functional nodes stay the correctness gate — collected + compile-PASS under pin-10 cc1plus 2911f0e680e4.",
     ),
     "metal__ckernel_sfpu_lgamma": dict(
         functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:Lgamma-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
@@ -1031,11 +1278,13 @@ AUDITED_MAPPINGS = {
     ),
     "metal__ckernel_sfpu_logsigmoid": dict(
         functional_modules="test_sfpu_binary.py::test_sfpu_binary_logsigmoid[formats:Float16_b->Float16_b-mathop:SfpuLogsigmoid-dest_acc:No]",
-        notes="Audited production-header mapping (coverage parity lane): calculate_logsigmoid (BinaryOp::LOGSIGMOID) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+        perf_modules="perf_eltwise_binary_sfpu.py::test_perf_sfpu_binary_extended_float[formats:Float16_b->Float16_b-mathop:SfpuLogsigmoid]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_logsigmoid (BinaryOp::LOGSIGMOID) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body. Perf vehicle added (Lane BK 2026-08-18, corr-only gap close): representative MATH_ISOLATE node(s) recorded in perf_modules; the functional nodes stay the correctness gate — collected + compile-PASS under pin-10 cc1plus 2911f0e680e4.",
     ),
     "metal__ckernel_sfpu_mask": dict(
         functional_modules="test_sfpu_binary.py::test_sfpu_binary_mask[formats:Float16_b->Float16_b-mathop:SfpuMask-dest_acc:No]",
-        notes="Audited production-header mapping (coverage parity lane): calculate_mask (BinaryOp::MASK) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+        perf_modules="perf_eltwise_binary_sfpu.py::test_perf_sfpu_binary_extended_float[formats:Float16_b->Float16_b-mathop:SfpuMask]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_mask (BinaryOp::MASK) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body. Perf vehicle added (Lane BK 2026-08-18, corr-only gap close): representative MATH_ISOLATE node(s) recorded in perf_modules; the functional nodes stay the correctness gate — collected + compile-PASS under pin-10 cc1plus 2911f0e680e4.",
     ),
     "metal__ckernel_sfpu_mish": dict(
         functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:Mish-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
@@ -1063,7 +1312,8 @@ AUDITED_MAPPINGS = {
     ),
     "metal__ckernel_sfpu_reduce": dict(
         functional_modules="test_sfpu_reduce.py::test_int32_reduce_extreme[mixed-INT32_MAX-ReducePool.Max-MathOperation.ReduceRow],test_sfpu_reduce_multidim.py::test_sfpu_reduce_multidim[formats:Int32->Int32-reduce_pool:Max-num_row_tiles:2-dest_acc:Yes-input_bounds:(-1000, 0)]",
-        notes="Audited production-header mapping (coverage parity lane): calculate_reduce (direct:sfpu_reduce_multidim_test.cpp); calculate_reduce (direct:sfpu_reduce_test.cpp) — included directly by its test source; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+        perf_modules="perf_sfpu_reduce_row_max.py::test_perf_sfpu_reduce_row_max_int32[formats:Int32->Int32-dest_acc:Yes-mathop:ReduceRow-reduce_pool:Max-loop_factor:100]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_reduce (direct:sfpu_reduce_multidim_test.cpp); calculate_reduce (direct:sfpu_reduce_test.cpp) — included directly by its test source; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body. Perf vehicle added (Lane BK 2026-08-18): test_perf_sfpu_reduce_row_max_int32 mirrors the corr-gated Int32 ReduceRow/Max branch (perform_reduce_row_max_min_int32) — the module's pre-existing Float32 sweep measures a different branch of this header and stays the F1 cost-model surface; audit note: perf_sfpu_reduce_row_max.py's cpp includes llk_sfpu/ckernel_sfpu_reduce.h directly (honest evidence), while perf_reduce.py is the FPU reduce and perf_sfpu_reduce_sdpa.py is BH-skipped.",
     ),
     "metal__ckernel_sfpu_remainder": dict(
         functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:Remainder-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
@@ -1079,15 +1329,18 @@ AUDITED_MAPPINGS = {
     ),
     "metal__ckernel_sfpu_rsub_int32": dict(
         functional_modules="test_sfpu_binary.py::test_sfpu_binary_rsub_int32[formats:Int32->Int32-mathop:SfpuRsubInt32-dest_acc:Yes]",
-        notes="Audited production-header mapping (coverage parity lane): calculate_rsub_int (BinaryOp::RSUB_INT32) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+        perf_modules="perf_eltwise_binary_sfpu.py::test_perf_sfpu_binary_extended_int[formats:Int32->Int32-mathop:SfpuRsubInt32]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_rsub_int (BinaryOp::RSUB_INT32) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body. Perf vehicle added (Lane BK 2026-08-18, corr-only gap close): representative MATH_ISOLATE node(s) recorded in perf_modules; the functional nodes stay the correctness gate — collected + compile-PASS under pin-10 cc1plus 2911f0e680e4.",
     ),
     "metal__ckernel_sfpu_sampling": dict(
         functional_modules="test_sfpu_sampling.py::test_sfpu_sampling[formats:Float16_b->Float16_b-dest_acc:No-op:ge-legacy_compat:True-vector_mode:C]",
-        notes="Audited production-header mapping (coverage parity lane): calculate_sampling_binary_comp_first_column (direct:sfpu_sampling_test.cpp) — included directly by its test source; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+        perf_modules="test_sfpu_sampling.py::test_sfpu_sampling_device_profile",
+        notes="Audited production-header mapping (coverage parity lane): calculate_sampling_binary_comp_first_column (direct:sfpu_sampling_test.cpp) — included directly by its test source; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body. Perf vehicle added (Lane BK 2026-08-18): isolated SAMPLING_BODY MATH-zone device-profile fixture pinned to recip_scalar/legacy_compat/VectorMode::None_ — the multi-DEST-tile layout is stimuli plumbing, the single unary-params call is the unambiguous zone; corr-node .text no-harm byte-proven.",
     ),
     "metal__ckernel_sfpu_sdpa": dict(
         functional_modules="test_sfpu_sdpa.py::test_sfpu_sdpa[variant:ExpPoly_scale1-precision:Fp32E2E]",
-        notes="Audited production-header mapping (coverage parity lane): calculate_exponential_first_column (direct:sfpu_sdpa_test.cpp) — included directly by its test source; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+        perf_modules="test_sfpu_sdpa.py::test_sfpu_sdpa_device_profile",
+        notes="Audited production-header mapping (coverage parity lane): calculate_exponential_first_column (direct:sfpu_sdpa_test.cpp) — included directly by its test source; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body. Perf vehicle added (Lane BK 2026-08-18): isolated SDPA_BODY MATH-zone device-profile fixture pinned to the corr-mapped point (ExpPoly scale +1.0, Fp32E2E) — the composite if-constexpr collapses to one body per build; corr-node .text no-harm byte-proven.",
     ),
     "metal__ckernel_sfpu_sdpa_exp_unclamped": dict(
         functional_modules="test_sfpu_sdpa_exp_unclamped.py",
@@ -1095,7 +1348,8 @@ AUDITED_MAPPINGS = {
     ),
     "metal__ckernel_sfpu_sdpa_fw": dict(
         functional_modules="test_sfpu_sdpa_fw.py::test_sfpu_sdpa_fw[variant:(<SdpaFwOp.Exp: 1>, 16000, <DestSync.Full: 'SyncFull'>, <ApproximationMode.No: False>)-precision:Fp32E2E]",
-        notes="Audited production-header mapping (coverage parity lane): calculate_exponential_first_column (direct:sfpu_sdpa_fw_test.cpp) — included directly by its test source; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+        perf_modules="test_sfpu_sdpa_fw.py::test_sfpu_sdpa_fw_device_profile[SdpaFwOp.Exp-exp_first_column],test_sfpu_sdpa_fw.py::test_sfpu_sdpa_fw_device_profile[SdpaFwOp.Recip-recip_first_column]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_exponential_first_column (direct:sfpu_sdpa_fw_test.cpp) — included directly by its test source; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body. Perf vehicle added (Lane BK 2026-08-18): isolated SDPA_FW_BODY MATH-zone device-profile fixture, one node per body (recip/exp first-column); corr-node .text no-harm byte-proven.",
     ),
     "metal__ckernel_sfpu_selu": dict(
         functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:Selu-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
@@ -1171,7 +1425,8 @@ AUDITED_MAPPINGS = {
     ),
     "metal__ckernel_sfpu_unary_shift": dict(
         functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu_int[mathop:LeftShift-dest_acc:Yes-input_dimensions:[64, 64]],test_sfpu_unary.py::test_eltwise_unary_sfpu_int[mathop:RightShift-dest_acc:Yes-input_dimensions:[64, 64]]",
-        notes="Audited production-header mapping (coverage parity lane): calculate_left_shift (SfpuType::left_shift); calculate_right_shift (SfpuType::right_shift) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+        perf_modules="perf_eltwise_unary_sfpu_int32.py::test_perf_eltwise_unary_sfpu_int32[formats:Int32->Int32-mathop:LeftShift-input_dimensions:[128, 64]],perf_eltwise_unary_sfpu_int32.py::test_perf_eltwise_unary_sfpu_int32[formats:Int32->Int32-mathop:RightShift-input_dimensions:[128, 64]]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_left_shift (SfpuType::left_shift); calculate_right_shift (SfpuType::right_shift) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body. Perf vehicle added (Lane BK 2026-08-18, corr-only gap close): representative MATH_ISOLATE node(s) recorded in perf_modules; the functional nodes stay the correctness gate — collected + compile-PASS under pin-10 cc1plus 2911f0e680e4.",
     ),
     "metal__ckernel_sfpu_xielu": dict(
         functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:Xielu-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",

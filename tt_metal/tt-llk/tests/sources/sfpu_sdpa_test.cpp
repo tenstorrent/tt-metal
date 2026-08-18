@@ -27,8 +27,10 @@
 #include <cstdint>
 
 #include "ckernel.h"
+#include "counters.h"
 #include "llk_defs.h"
 #include "params.h"
+#include "profiler.h"
 
 // Globals
 std::uint32_t unp_cfg_context          = 0;
@@ -176,7 +178,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
             tile, formats.math, formats.math);
     }
 
-    sdpa_op(SDPA_DST_INDEX);
+    {
+        // Isolated device-profile zone (test_sfpu_sdpa_device_profile):
+        // profiler-only L1 bookkeeping, compiles away in functional builds.
+        // The composite if-constexpr collapses to exactly one body per build,
+        // so the zone is well-defined for every SDPA_OP variant.
+        START_PERF_MEASURE("SDPA_BODY")
+        sdpa_op(SDPA_DST_INDEX);
+    }
 
     _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
 }

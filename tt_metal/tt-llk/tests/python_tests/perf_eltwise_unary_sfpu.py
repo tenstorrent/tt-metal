@@ -341,6 +341,44 @@ def test_perf_unary_max_min_fresh_cpp(
     ).run(perf_report)
 
 
+# Perf vehicle for the corr-only isinf/isnan corpus row (Lane BK measurement-
+# gap close): the comp-class predicate ops live outside the sfpu_unary_ops()
+# domain registry (their functional sweep is the dedicated
+# test_eltwise_unary_sfpu_isinf_isnan with specials-injecting stimuli), so
+# PERF_SWEEP_OPS never picks them up. One MATH_ISOLATE node per predicate at
+# the representative Float16_b pair (the corr axis stays F32 — the expm1
+# corr/perf-format precedent).
+@pytest.mark.perf
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b]),
+    dest_acc=[DestAccumulation.No],
+    mathop=[
+        MathOperation.Isinf,
+        MathOperation.Isposinf,
+        MathOperation.Isneginf,
+        MathOperation.Isnan,
+        MathOperation.Isfinite,
+    ],
+)
+def test_perf_isinf_isnan(
+    perf_report,
+    formats,
+    dest_acc,
+    mathop,
+):
+    _run(
+        formats,
+        mathop,
+        ApproximationMode.No,
+        dest_acc,
+        16,
+        32,
+        FastMode.No,
+        StableSort.No,
+        [128, 64],
+    ).run(perf_report)
+
+
 @pytest.mark.perf
 @parametrize(
     formats=input_output_formats([DataFormat.Float32]),
