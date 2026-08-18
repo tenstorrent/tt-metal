@@ -58,6 +58,90 @@ HEARTBEAT_INTERVAL_S = 30.0
 PRODUCER_SETTLE_BEFORE_RECOVER_S = 300.0
 
 
+def _short_id(sid: str) -> str:
+    """First 10 chars of a solution's content-hash id -- enough to eyeball, short enough to scan."""
+    return (sid or "")[:10]
+
+
+class SweepLog:
+    """All console formatting for the sweep driver (which runs ONE combo).
+
+    Every user-facing line goes through a semantic method here, so the box/rule/tree glyphs live in one
+    place and the rest of the driver just says what happened (``log.solution_start(...)``,
+    ``log.attempt(...)``). Output is this driver's own level: per-combo generation + per-solution trees +
+    retries. The cross-combo framing (SWEEP banners, RUN SUMMARY) is the caller's level -- see blaze cli.py.
+    """
+
+    _STATUS = {"pass": "PASS", "timeout": "TIMEOUT", "fail": "FAIL", "dry-run": "DRY-RUN"}
+
+    def line(self, s: str = "") -> None:
+        click.echo(f"{PREFIX} {s}".rstrip())
+
+    def blank(self) -> None:
+        click.echo("")
+
+    # -- combo framing (this driver = one combo / one solutions dir) --
+    def combo_start(self, sol_dir: Path, recover_cmd: str, retries: int) -> None:
+        self.line(f"sweeping → {sol_dir}")
+        if recover_cmd and recover_cmd != "true":
+            self.line(f"recover: {recover_cmd}   (retries {retries}, delay {RETRY_DELAY_S}s)")
+
+    def initial_reset(self) -> None:
+        self.line("▶ initial reset (reap all hosts + recover)")
+
+    def generating(self, log_path: Path) -> None:
+        self.line(f"▶ generating solutions (streaming) → {log_path}")
+
+    def found(self, n: int) -> None:
+        """Subtle progress note as the producer streams more solutions (lands between solution trees)."""
+        self.line(f"·  {n} solution(s) generated so far")
+
+    def combo_summary(self, name: str, total: int, passed: int, failed: int, timed_out: int) -> None:
+        parts = [f"{total} solution(s)", f"{passed} passed"]
+        if failed:
+            parts.append(f"{failed} failed")
+        if timed_out:
+            parts.append(f"{timed_out} timed out")
+        body = f"{name} · " + " · ".join(parts)
+        pad = "═" * 2
+        self.blank()
+        self.line(f"{pad} {body} {pad}")
+
+    def report(self, path: Path) -> None:
+        self.line(f"report → {path}")
+
+    # -- per-solution tree --
+    def solution_start(self, position: str, sid: str, host: str) -> None:
+        self.blank()
+        self.line(f"┌─ solution {position} · {_short_id(sid)} · {host}")
+
+    def solution_end(self, log_path: Path) -> None:
+        self.line(f"└─ log: {log_path}")
+
+    def solution_dry_run(self, retries: int, recover_cmd: str) -> None:
+        self.line(f"│    dry-run: would run tt-run (up to {retries}×, recover on fail) → {recover_cmd}")
+
+    # -- attempts + recover; ``indent`` is the tree prefix ("│    " under a solution, "    " at top level) --
+    def attempt(self, indent: str, label: str, n: int, m: int, status: str, seconds: Optional[float]) -> None:
+        res = self._STATUS.get(status, status.upper())
+        dur = f"  {seconds:.1f}s" if seconds is not None else ""
+        self.line(f"{indent}{label} {n}/{m} → {res}{dur}")
+
+    def recover_start(self, indent: str, host_set: Optional[str]) -> None:
+        where = f" {host_set}" if host_set else ""
+        self.line(f"{indent}↻ reap{where} + recover → retry")
+
+    def solution_failed(self, indent: str, attempts: int) -> None:
+        self.line(f"{indent}✗ FAILED after {attempts} attempt(s)")
+
+    def unrecoverable(self, label: str, retries: int, rc: Optional[int]) -> None:
+        self.blank()
+        self.line(f"✗ UNRECOVERABLE: recover failed after {retries} attempt(s) (rc={rc}); halting after {label}.")
+
+    def stop_on_failure(self, label: str) -> None:
+        self.line(f"■ --stop-on-failure: halting after {label}.")
+
+
 def _repo_root() -> Path:
     return Path(os.environ.get("TT_METAL_HOME", ".")).resolve()
 
@@ -161,10 +245,13 @@ class SolutionProducer:
 
     @classmethod
     def start(cls, cmd: List[str], *, cwd: Path, log_path: Path) -> "SolutionProducer":
-        """Launch the producer in the background in its own session and return a handle to it."""
-        click.echo(f"{PREFIX} Producer (stream solutions):\n  {' '.join(shlex.quote(c) for c in cmd)}")
-        click.echo(f"{PREFIX} Producer log -> {log_path}")
+        """Launch the producer in the background in its own session and return a handle to it.
+
+        The full generate_rank_bindings command is written into the producer log's header (self-describing);
+        the caller announces the phase on the console via SweepLog.generating()."""
         log_fh = open(log_path, "w")  # noqa: SIM115 (kept open for the life of the producer)
+        log_fh.write("# producer: " + " ".join(shlex.quote(c) for c in cmd) + "\n")
+        log_fh.flush()
         proc = subprocess.Popen(cmd, cwd=cwd, stdout=log_fh, stderr=subprocess.STDOUT, start_new_session=True)
         return cls(proc)
 
@@ -416,6 +503,8 @@ def _run_with_retries(
     host_set: Optional[str] = None,
     reap_pattern: Optional[str] = None,
     producer: Optional["SolutionProducer"] = None,
+    log: Optional["SweepLog"] = None,
+    indent: str = "    ",
 ) -> _RetryResult:
     """Run ``cmd`` up to ``retries`` times, recovering only after a failure.
 
@@ -425,7 +514,11 @@ def _run_with_retries(
       and retry ``cmd`` (used for recover itself).
     * Fail/timeout is returned only if every attempt fails. Recover exhausting
       its retries sets ``recover_exhausted`` and stops immediately.
+
+    Progress is reported through ``log`` (a SweepLog) at ``indent`` (the tree prefix). The recover's own
+    attempts are shown one level deeper.
     """
+    log = log or SweepLog()
     attempts = max(1, retries)
     last_status = "fail"
     last_rc: Optional[int] = None
@@ -433,17 +526,14 @@ def _run_with_retries(
 
     for attempt in range(1, attempts + 1):
         append = append_log or attempt > 1
-        header = None
+        # Header goes into the per-attempt LOG FILE (self-describing), not the console.
         display = cmd_display or " ".join(shlex.quote(c) for c in cmd)
-        if label == "tt-run" and attempt > 1:
-            header = f"\n{PREFIX} --- tt-run retry ---\n"
-        elif label == "recover":
-            header = ""
-            if attempt == 1:
-                header = f"\n{PREFIX} --- recover ---\n{display}\n"
-            header += f"{PREFIX} recover attempt {attempt}/{attempts}\n"
+        if attempt == 1 and not append_log:
+            header = f"# {label}: {display}\n"
+        else:
+            header = f"\n# {label} attempt {attempt}/{attempts}\n"
 
-        click.echo(f"{PREFIX}   {label} [{attempt}/{attempts}]")
+        t0 = time.time()
         last_status, last_rc = _run_once(
             cmd,
             cwd=cwd,
@@ -455,25 +545,18 @@ def _run_with_retries(
             reap_pattern=reap_pattern,
             spare_daemons_fn=(producer.alive if producer is not None else None),
         )
+        log.attempt(indent, label, attempt, attempts, last_status, time.time() - t0)
         if last_status == "pass":
-            if label == "recover":
-                click.echo(f"{PREFIX}   WARNING: recover succeeded (rc=0) on attempt {attempt}/{attempts}; continuing")
-            else:
-                click.echo(f"{PREFIX}   -> {last_status} (rc={last_rc}) attempt {attempt}/{attempts}")
             return _RetryResult(status=last_status, returncode=last_rc, attempts=attempt, recover_returncode=recover_rc)
 
-        if label == "recover":
-            click.echo(f"{PREFIX}   recover -> fail (rc={last_rc}) on attempt {attempt}/{attempts}")
-        else:
-            click.echo(f"{PREFIX}   -> {last_status} (rc={last_rc}) attempt {attempt}/{attempts}")
-
-        if recover_cmd:
-            # A recover is a whole-cluster reset; make sure the background producer is not running
-            # alongside it (it would be disrupted). Its already-streamed solutions on disk are kept.
+        if recover_cmd and attempt < attempts:
+            # Recover only when we'll actually retry -- no point resetting the cluster after the final
+            # failed attempt (the per-attempt reap already freed its ranks; the next solution self-heals
+            # by recovering if IT fails). A recover is a whole-cluster reset, so make sure the background
+            # producer is not running alongside it (it would be disrupted); its streamed solutions are kept.
             if producer is not None:
                 producer.settle_for_recover()
-            click.echo(f"{PREFIX}   recover: {recover_cmd}")
-            click.echo(f"{PREFIX}   recovering in {RETRY_DELAY_S}s...")
+            log.recover_start(indent, host_set)
             time.sleep(RETRY_DELAY_S)
             rec = _run_with_retries(
                 ["/bin/bash", "-c", recover_cmd],
@@ -485,6 +568,8 @@ def _run_with_retries(
                 label="recover",
                 append_log=True,
                 cmd_display=recover_cmd,
+                log=log,
+                indent=indent + "  ",
             )
             recover_rc = 0 if rec.status == "pass" else (rec.returncode if rec.returncode is not None else 1)
             if recover_rc != 0:
@@ -497,7 +582,6 @@ def _run_with_retries(
                 )
 
         if attempt < attempts:
-            click.echo(f"{PREFIX}   retrying {label} in {RETRY_DELAY_S}s...")
             time.sleep(RETRY_DELAY_S)
 
     return _RetryResult(
@@ -524,11 +608,13 @@ class TtRunExecutor:
         *,
         cwd: Path,
         retries: int,
+        log: "SweepLog",
         reap_pattern: Optional[str] = None,
         producer: Optional[SolutionProducer] = None,
     ):
         self.cwd = cwd
         self.retries = retries
+        self.log = log
         self.reap_pattern = reap_pattern
         self.producer = producer  # set after the producer is started; drives producer-aware reap/recover
 
@@ -547,6 +633,7 @@ class TtRunExecutor:
         *,
         log_path: Path,
         timeout: Optional[int],
+        indent: str = "    ",
         recover_cmd: Optional[str] = None,
         label: str = "tt-run",
         append_log: bool = False,
@@ -567,6 +654,8 @@ class TtRunExecutor:
             host_set=host_set,
             reap_pattern=self.reap_pattern,
             producer=self.producer,
+            log=self.log,
+            indent=indent,
         )
 
 
@@ -681,14 +770,7 @@ def _write_sweep_report(
         with open(report_path, "w") as f:
             # width=inf keeps long values (tt_run_command, paths) on a single line instead of YAML-wrapping them.
             yaml.safe_dump(report, f, sort_keys=False, default_flow_style=False, width=float("inf"))
-        click.echo(f"\n{PREFIX} Report: {report_path}")
-
-    click.echo(
-        f"{PREFIX} SUMMARY: {passed}/{len(results)} passed"
-        + (f", {failed} failed" if failed else "")
-        + (f", {timed_out} timed out" if timed_out else "")
-        + (f" (stopped early by --sweep-timeout; {len(solutions) - len(results)} not run)" if stopped_early else "")
-    )
+    # The console combo-summary + report line are emitted by the caller via SweepLog (this returns the data).
     return report_path, passed, failed, timed_out
 
 
@@ -771,6 +853,7 @@ class SolutionConsumer:
     ):
         self.cfg = cfg
         self.executor = executor
+        self.log = executor.log
         self.static_solutions = static_solutions
         self.producer = producer
         self.sweep_start = sweep_start
@@ -798,14 +881,12 @@ class SolutionConsumer:
             passthrough=cfg.passthrough,
         )
         label = sol.get("id", sol["dir"])
-        cmd_str = " ".join(shlex.quote(c) for c in cmd)  # exact, copy-paste-reproducible tt-run command
-        click.echo(f"\n{PREFIX} [{position_label}] solution {label} ({sol.get('num_hosts', '?')} hosts)\n  {cmd_str}")
+        cmd_str = " ".join(shlex.quote(c) for c in cmd)  # exact, copy-paste-reproducible tt-run command (-> log file)
+        host = "·".join(h.split("-")[-1] for h in (sol.get("host_set") or "").split(",") if h) or "?"
+        self.log.solution_start(position_label, label, host)
 
         if cfg.dry_run:
-            click.echo(
-                f"{PREFIX}   --dry-run: would retry tt-run up to {cfg.retries} time(s); "
-                f"recover on fail/timeout then sleep {RETRY_DELAY_S}s:\n  {cfg.recover_command}"
-            )
+            self.log.solution_dry_run(cfg.retries, cfg.recover_command)
             self.results.append(
                 _make_result(
                     sol=sol,
@@ -825,20 +906,21 @@ class SolutionConsumer:
         t0 = time.time()
         # After every attempt the executor reaps this solution's ranks on its hosts (sparing the producer's
         # daemons while it is alive), and recovers between failures -- see TtRunExecutor / SolutionProducer.
+        # Its per-attempt tt-run/recover lines print under this solution's tree via the `│    ` indent.
         outcome = self.executor.run(
             cmd,
             log_path=log_path,
             timeout=cfg.per_solution_timeout,
+            indent="│    ",
             recover_cmd=cfg.recover_command,
             label="tt-run",
             cmd_display=cmd_str,
             host_set=sol.get("host_set"),
         )
         dur = round(time.time() - t0, 1)
-        click.echo(
-            f"{PREFIX}   -> {outcome.status} (rc={outcome.returncode}, {dur}s, "
-            f"attempts={outcome.attempts})\n     log={log_path}"
-        )
+        if outcome.status != "pass" and not outcome.recover_exhausted:
+            self.log.solution_failed("│    ", outcome.attempts)
+        self.log.solution_end(log_path)
         self.results.append(
             _make_result(
                 sol=sol,
@@ -857,14 +939,10 @@ class SolutionConsumer:
         # Recover failure is unrecoverable: abort regardless of --stop-on-failure (that flag only governs a
         # *workload* fail/timeout after all tt-run retries).
         if outcome.recover_exhausted:
-            click.echo(
-                f"{PREFIX} UNRECOVERABLE: hardware cannot recover with this command "
-                f"after {cfg.retries} attempt(s) (last rc={outcome.recover_returncode}). "
-                f"--stop-on-failure/--continue-on-failure do not apply. Halting after {label}."
-            )
+            self.log.unrecoverable(label, cfg.retries, outcome.recover_returncode)
             return LoopAction.UNRECOVERABLE
         if outcome.status != "pass" and cfg.stop_on_failure:
-            click.echo(f"{PREFIX} --stop-on-failure: halting after {label}.")
+            self.log.stop_on_failure(label)
             return LoopAction.STOP
         return LoopAction.CONTINUE
 
@@ -875,12 +953,13 @@ class SolutionConsumer:
         is still generating and nothing new is available. Returns the per-solution results."""
         cfg = self.cfg
         consumed: set = set()
+        found_count = 0  # streaming: how many solutions the producer has generated so far (for the "N found" note)
         last_heartbeat = time.time()
         while True:
             # Total-budget check (before launching, so we never interrupt a running solve).
             if cfg.sweep_timeout is not None and (time.time() - self.sweep_start) >= cfg.sweep_timeout:
-                click.echo(
-                    f"{PREFIX} WARNING: --sweep-timeout ({cfg.sweep_timeout}s) reached after "
+                self.log.line(
+                    f"■ --sweep-timeout ({cfg.sweep_timeout}s) reached after "
                     f"{round(time.time() - self.sweep_start, 1)}s; stopping with {len(consumed)} solution(s) swept."
                 )
                 self.stopped_early = True
@@ -890,12 +969,23 @@ class SolutionConsumer:
                 break
 
             avail = self._available()
+            # Streaming: note each time the producer has generated more solutions. This only runs between
+            # solution trees (the consumer polls the index only when idle), so it never splits a tree.
+            if self.producer is not None and len(avail) > found_count:
+                found_count = len(avail)
+                self.log.found(found_count)
             new = [s for s in avail if _sol_key(s) not in consumed]
             if new:
                 sol = new[0]
                 consumed.add(_sol_key(sol))
-                total = str(len(self.static_solutions)) if self.static_solutions is not None else "streaming"
-                action = self.run_solution(sol, f"{len(consumed)}/{total}")
+                # Streaming: the total is unknown mid-run (the producer keeps finding more), so show just the
+                # running index. Static --solutions-dir: the list is fixed, so show n/total.
+                position = (
+                    f"{len(consumed)}/{len(self.static_solutions)}"
+                    if self.static_solutions is not None
+                    else str(len(consumed))
+                )
+                action = self.run_solution(sol, position)
                 if action is LoopAction.UNRECOVERABLE:
                     self.recover_exhausted = True
                     break
@@ -906,10 +996,7 @@ class SolutionConsumer:
             # Nothing new to consume yet.
             if self.producer is not None and self.producer.alive():
                 if time.time() - last_heartbeat >= HEARTBEAT_INTERVAL_S:
-                    click.echo(
-                        f"{PREFIX} waiting for producer: {len(consumed)} swept, {len(avail)} generated so far, "
-                        f"generation ongoing..."
-                    )
+                    self.log.line(f"… generating: {len(consumed)} swept, {len(avail)} found so far")
                     last_heartbeat = time.time()
                 time.sleep(POLL_INTERVAL_S)
                 continue
@@ -1155,13 +1242,11 @@ def main(
         sweep_timeout=sweep_timeout,
     )
 
-    _total_desc = f"{len(static_solutions)} solution(s)" if static_solutions is not None else "streaming solutions"
-    click.echo(f"{PREFIX} Sweeping {_total_desc} in {sol_dir}")
-    click.echo(f"{PREFIX} Per-solution logs -> {logs_root}")
-    click.echo(f"{PREFIX} Recover on failure: {recover_command} " f"(retries={retries}, delay={RETRY_DELAY_S}s)")
-
-    # One executor owns the process-management config (cwd/retries/reap-pattern) and, once set, the producer.
-    executor = TtRunExecutor(cwd=_repo_root(), retries=retries, reap_pattern=_reap_pattern_for(program))
+    # SweepLog owns all console formatting at this (per-combo) level; one executor owns the
+    # process-management config (cwd/retries/reap-pattern) and, once set, the producer.
+    log = SweepLog()
+    log.combo_start(sol_dir, recover_command, retries)
+    executor = TtRunExecutor(cwd=_repo_root(), retries=retries, log=log, reap_pattern=_reap_pattern_for(program))
 
     # PROACTIVE reset BEFORE the producer starts and BEFORE any tt-run: reap leftover ranks on every host
     # (they hold CHIP_IN_USE PCIe locks), then run the recover command once so both the producer's device
@@ -1169,7 +1254,7 @@ def main(
     if not dry_run:
         executor.reap(None, ",".join(parsed_hosts) if parsed_hosts else None)
         if recover_command and recover_command != "true":
-            click.echo(f"{PREFIX} Initial reset before sweep:\n  {recover_command}")
+            log.initial_reset()
             executor.run(
                 ["/bin/bash", "-c", recover_command],
                 log_path=logs_root / "_initial_recover.log",
@@ -1186,6 +1271,7 @@ def main(
             (sol_dir / "solutions_index.yaml").unlink()
         except FileNotFoundError:
             pass
+        log.generating(logs_root / "_producer.log")
         producer = SolutionProducer.start(producer_cmd, cwd=_repo_root(), log_path=logs_root / "_producer.log")
         executor.producer = producer  # from here the reap spares it while alive; a recover settles it first
 
@@ -1199,7 +1285,7 @@ def main(
     if producer is not None:
         producer_rc = producer.returncode()
         if producer.alive():
-            click.echo(f"{PREFIX} Stopping background producer (sweep ending).")
+            log.line("■ stopping producer (sweep ending)")
             producer.stop()
         elif producer_rc not in (None, 0) and not results:
             # Producer exited non-zero having produced nothing (e.g. no valid topology solutions found).
@@ -1210,7 +1296,7 @@ def main(
     # 3. Report. Final solution set + index: the fixed list, or everything the producer streamed to disk.
     index = _read_index_safe(sol_dir) or {"solutions": []}
     solutions = static_solutions if static_solutions is not None else _select_solutions(index, select, limit)
-    report_path, _passed, failed, timed_out = _write_sweep_report(
+    report_path, passed, failed, timed_out = _write_sweep_report(
         results=results,
         solutions=solutions,
         index=index,
@@ -1221,6 +1307,9 @@ def main(
         sweep_report=sweep_report,
         dry_run=dry_run,
     )
+    log.combo_summary(sol_dir.name, len(results), passed, failed, timed_out)
+    if not dry_run:
+        log.report(report_path)
     # Stopping early on --sweep-timeout is NOT an error -- return what we swept. A sweep that found 0
     # solutions has already exited non-zero above (empty --solutions-dir, or a failed producer). Real
     # per-solution failures/timeouts still surface as a non-zero exit. Recover exhausting its retries
