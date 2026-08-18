@@ -282,6 +282,106 @@ inline void call_add_sub_int_fresh_cpp(
     ::_llk_math_eltwise_sfpu_done_();
 }
 
+// Fresh typed-C++ int32 multiply over the sign-magnitude Int32 Dst the binary
+// harness drives.  The production kernel (metal ckernel_sfpu_mul_int32.h) reads
+// the Dst bits raw (plain InstrModLoadStore::INT32, no representation
+// conversion), which matches the golden's signed low-32 product only where
+// sign-magnitude and two's-complement coincide -- the non-negative test domain.
+// This body states the golden contract directly: DataLayout::SM32 loads/stores
+// carry the representation contract (the compiler owns the conversion lowering
+// -- a single self-inverse SFPCAST on BH), and the multiply is the plain
+// radix-23 split identity over the typed 24x24 primitive (fractional_mul),
+// retaining exactly the terms that contribute modulo 2^32 -- the same identity
+// the handwritten kernel schedules by hand through SFPLOADMACRO templates.
+// Signed multiplication has the same low 32 bits as unsigned multiplication
+// over the same two's-complement bits, so the wrap product is computed on the
+// raw bit patterns.  No fixed LREGs, raw instructions, replay slots, or
+// SFPLOADMACRO templates.
+#if !(__riscv_xtttensixbh || __riscv_xtttensixqsr)
+// WH has no integer multiply instruction.  Radix 2^10 keeps every chunk
+// product and coefficient below 2^23, so FP32 arithmetic and the 2^23
+// mantissa-extraction conversion are exact (no saturation).
+template <unsigned SHIFT_A, unsigned SHIFT_B>
+inline sfpi::vFloat mul_int_fresh_cpp_chunk_product(const sfpi::vUInt a, const sfpi::vUInt b)
+{
+    constexpr unsigned mask  = 0x3ff;
+    const sfpi::vInt a_chunk = sfpi::as<sfpi::vInt>((a >> SHIFT_A) & mask);
+    const sfpi::vInt b_chunk = sfpi::as<sfpi::vInt>((b >> SHIFT_B) & mask);
+    return sfpi::convert<sfpi::vFloat>(a_chunk, sfpi::RoundMode::Nearest) * sfpi::convert<sfpi::vFloat>(b_chunk, sfpi::RoundMode::Nearest);
+}
+#endif
+
+template <int ITERATIONS>
+__attribute__((noinline)) void calculate_mul_int_fresh_cpp()
+{
+    constexpr std::uint32_t tile_rows = 32;
+
+    // WH's 14-chunk-product emulation body is too large for a 4x face unroll
+    // (TRISC1_CODE overflow); keep the rolled face loop there.  BH keeps the
+    // add/sub-precedent shape.
+#if __riscv_xtttensixbh || __riscv_xtttensixqsr
+#pragma GCC unroll 4
+#endif
+    for (int face = 0; face < 4; ++face)
+    {
+#pragma GCC unroll 8
+        for (int row = 0; row < ITERATIONS; ++row)
+        {
+            // Keep the all-lane predicate boundary typed and local (the
+            // fresh max/min precedent): compiler macro formation may hoist
+            // the identical enables with its owned descriptor configuration
+            // after proving this body has no CC effects.
+            __builtin_rvtt_sfppushc(0);
+            __builtin_rvtt_sfppopc(0);
+            const sfpi::vInt a   = sfpi::dst_reg[0].mode<sfpi::DataLayout::SM32>();
+            const sfpi::vInt b   = sfpi::dst_reg[tile_rows].mode<sfpi::DataLayout::SM32>();
+            const sfpi::vUInt ua = sfpi::as<sfpi::vUInt>(a);
+            const sfpi::vUInt ub = sfpi::as<sfpi::vUInt>(b);
+#if __riscv_xtttensixbh || __riscv_xtttensixqsr
+            sfpi::vUInt lo = sfpi::fractional_mul(ua, ub, sfpi::FractionalHalf::Low);
+            sfpi::vUInt hi = sfpi::fractional_mul(ua, ub, sfpi::FractionalHalf::High);
+            hi += sfpi::fractional_mul(ua >> 23, ub, sfpi::FractionalHalf::Low);
+            hi += sfpi::fractional_mul(ua, ub >> 23, sfpi::FractionalHalf::Low);
+            const sfpi::vUInt product = lo + (hi << 23);
+#else
+            constexpr float bias = 8388608.0f; // 2^23
+
+            // Build and consume one radix coefficient at a time so live SFPU
+            // values stay below the eight-register architectural file.
+            sfpi::vUInt product      = sfpi::exman(mul_int_fresh_cpp_chunk_product<0, 0>(ua, ub) + bias);
+            sfpi::vFloat coefficient = mul_int_fresh_cpp_chunk_product<0, 10>(ua, ub) + mul_int_fresh_cpp_chunk_product<10, 0>(ua, ub) + bias;
+            product += sfpi::vUInt(sfpi::exman(coefficient)) << 10;
+            coefficient = mul_int_fresh_cpp_chunk_product<0, 20>(ua, ub) + mul_int_fresh_cpp_chunk_product<10, 10>(ua, ub) +
+                          mul_int_fresh_cpp_chunk_product<20, 0>(ua, ub) + bias;
+            product += sfpi::vUInt(sfpi::exman(coefficient)) << 20;
+            coefficient = mul_int_fresh_cpp_chunk_product<0, 30>(ua, ub) + mul_int_fresh_cpp_chunk_product<10, 20>(ua, ub) +
+                          mul_int_fresh_cpp_chunk_product<20, 10>(ua, ub) + mul_int_fresh_cpp_chunk_product<30, 0>(ua, ub) + bias;
+            product += sfpi::vUInt(sfpi::exman(coefficient)) << 30;
+#endif
+            sfpi::dst_reg[0].mode<sfpi::DataLayout::SM32>() = sfpi::as<sfpi::vInt>(product);
+            sfpi::dst_reg++;
+        }
+        ::_llk_math_eltwise_sfpu_inc_dst_face_addr_();
+    }
+}
+
+template <DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS>
+inline void call_mul_int_fresh_cpp(
+    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out, const VectorMode vector_mode)
+{
+    ::ckernel::_sfpu_binary_check_<DST_SYNC, DST_ACCUM>(dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
+    LLK_ASSERT(dst_index_in1 == dst_index_in0 + 1, "fresh mul int expects adjacent inputs");
+    LLK_ASSERT(dst_index_out == dst_index_in0, "fresh mul int expects in-place output");
+    LLK_ASSERT(vector_mode == VectorMode::RC, "fresh mul int expects full-tile vector mode");
+
+    // Anchor the dynamic tile once in the wrapper so the isolated semantic body
+    // contains only constant relative Dst addresses (same idiom as the fresh
+    // max/min and add/sub selectors).
+    ::_llk_math_eltwise_sfpu_start_(dst_index_in0);
+    calculate_mul_int_fresh_cpp<ITERATIONS>();
+    ::_llk_math_eltwise_sfpu_done_();
+}
+
 template <bool DST_ACCUM_MODE, DataFormat FORMAT, int ITERATIONS>
 inline void calculate_addcmul_fresh_cpp(
     const std::uint32_t dst_index_in0,

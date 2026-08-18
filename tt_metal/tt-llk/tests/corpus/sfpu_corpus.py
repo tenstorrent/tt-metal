@@ -224,7 +224,7 @@ AUDITED_SEEDS = {
     ),
     "metal__ckernel_sfpu_mul_int32": dict(
         semantic_cpp_class="macro_dependent",
-        semantic_cpp_blocker="Production Metal implementation owns SFPLOADMACRO scheduling; paired test selector is mapped through the legacy test surface pending a direct row mapping.",
+        semantic_cpp_blocker="Fresh typed semantic body landed (Lane BH: fresh_cpp_operations.h calculate_mul_int_fresh_cpp, SM32 typed loads/stores, radix-23 fractional_mul identity) with paired selectors test_fresh_cpp_mul_int / test_perf_fresh_cpp_mul_int; the WP12 derived-calendar planner forms it on BH (sweep row mulint32-fresh). Production Metal implementation still owns the handwritten SFPLOADMACRO scheduling on the hand arm.",
         paired_selector_status="implemented",
         test_status="pass",
         perf_status="measured",
@@ -1043,7 +1043,7 @@ AUDITED_MAPPINGS = {
     ),
     "metal__ckernel_sfpu_mul_int32": dict(
         functional_modules="test_sfpu_binary.py::test_sfpu_binary_int_uniform[mathop:SfpuMulInt32-dest_acc:Yes]",
-        notes="Audited production-header mapping (coverage parity lane): mul_int32 (BinaryOp::MUL_INT32) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+        notes="Audited production-header mapping (coverage parity lane): mul_int32 (BinaryOp::MUL_INT32) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; fresh typed selector landed at Lane BH (test_fresh_cpp_mul_int impl 0/1, sweep row mulint32-fresh), the production typed body remains the hand arm.",
     ),
     "metal__ckernel_sfpu_negative": dict(
         functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float16_b->Float16_b-approx_mode:No-mathop:Neg-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",

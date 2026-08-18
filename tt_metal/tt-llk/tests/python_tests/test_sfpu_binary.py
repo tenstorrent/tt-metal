@@ -746,6 +746,28 @@ def test_fresh_cpp_add_sub_int(formats, dest_acc, mathop, fresh_cpp_impl):
 
 
 @parametrize(
+    formats=input_output_formats([DataFormat.Int32]),
+    mathop=[MathOperation.SfpuMulInt32],
+    dest_acc=[DestAccumulation.Yes],
+    fresh_cpp_impl=[0, 1],
+)
+def test_fresh_cpp_mul_int(formats, dest_acc, mathop, fresh_cpp_impl):
+    """Handwritten (metal mul_int32 SFPLOADMACRO kernel) vs fresh typed-C++ A/B over
+    identical Int32 stimuli/golden; exact integer contract via the suite's integer
+    format gate. Stimuli mirror test_sfpu_binary_int_uniform's SfpuMulInt32 range:
+    positive operands with product < 2^31, so the low-32 golden round-trips the
+    sign-magnitude Dst packer for both implementations."""
+    low, high = _INT_BINARY_STIMULI[MathOperation.SfpuMulInt32]
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=low, high=high),
+        fresh_cpp_impl=fresh_cpp_impl,
+    )
+
+
+@parametrize(
     formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
     mathop=[MathOperation.SfpuMask],
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
