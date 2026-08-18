@@ -96,44 +96,133 @@
 // alone, then the same spin with one zone per iteration. Overhead per zone = (STTOT - STBASE) / N.
 // The spin (ZONE_CYC, --delay) appears in BOTH brackets so it cancels; its job is to hold the zone
 // rate below the ring-stall knee so no stall time lands inside the brackets.
+#define SELFTIME_SPIN()                                             \
+    for (volatile uint32_t _j = 0; _j < (uint32_t)ZONE_CYC; _j++) { \
+        asm volatile("nop");                                        \
+    }
+
+namespace stv {
+constexpr uint32_t kHash = 0x1234u;
+using namespace kernel_profiler;
+// Clone of the atomic close path with one line removed per variant (see brackets below).
+inline __attribute__((always_inline)) void emit_variant(uint64_t start, bool do_dur, bool do_sticky, bool do_credit) {
+    if (do_credit) {
+        ring_ensure_room(4);
+    }
+    uint32_t hi, lo;
+    read_wall_clock(hi, lo);
+    uint32_t d32 = 7u;
+    if (do_dur) {
+        const uint64_t d = ((static_cast<uint64_t>(hi) << 32) | lo) - start;
+        if (d >> 32) {
+            d32 = 0xFFFFFFFEu;
+        } else {
+            d32 = static_cast<uint32_t>(d);
+        }
+    }
+    if (do_sticky && hi != g_prev_timer_hi) {
+        ring_write_word(ppfmt::w0(ppfmt::T_STICKY_TIMER, hi));
+        g_prev_timer_hi = hi;
+    }
+    ring_write_word(ppfmt::w0(ppfmt::T_ZONE_ATOMIC, kHash));
+    ring_write_word(lo);
+    ring_write_word(d32);
+    if (wIndex - g_last_pub >= kPublishBatchWords) {
+        publish_tail();
+        g_last_pub = wIndex;
+    }
+}
+inline __attribute__((always_inline)) uint64_t rd64() {
+    uint32_t hi, lo;
+    kernel_profiler::read_wall_clock(hi, lo);
+    return (static_cast<uint64_t>(hi) << 32) | lo;
+}
+}  // namespace stv
+struct ZCtorOnly {
+    uint64_t s;
+    __attribute__((always_inline)) ZCtorOnly() { s = stv::rd64(); }
+    __attribute__((always_inline)) ~ZCtorOnly() {
+        uint32_t hi, lo;
+        kernel_profiler::read_wall_clock(hi, lo);
+        asm volatile("" ::"r"((uint32_t)s), "r"(hi), "r"(lo));
+    }
+};
+struct ZNoDur {
+    uint64_t s;
+    __attribute__((always_inline)) ZNoDur() { s = stv::rd64(); }
+    __attribute__((always_inline)) ~ZNoDur() { stv::emit_variant(s, false, true, true); }
+};
+struct ZNoSticky {
+    uint64_t s;
+    __attribute__((always_inline)) ZNoSticky() { s = stv::rd64(); }
+    __attribute__((always_inline)) ~ZNoSticky() { stv::emit_variant(s, true, false, true); }
+};
+struct ZNoCredit {
+    uint64_t s;
+    __attribute__((always_inline)) ZNoCredit() { s = stv::rd64(); }
+    __attribute__((always_inline)) ~ZNoCredit() { stv::emit_variant(s, true, true, false); }
+};
+
 void kernel_main() {
     {
         DeviceZoneScopedN(ZTAG "_STBASE");
         for (uint32_t i = 0; i < (uint32_t)N_ITERS; i++) {
-            for (volatile uint32_t j = 0; j < (uint32_t)ZONE_CYC; j++) {
-                asm volatile("nop");
-            }
+            SELFTIME_SPIN();
         }
     }
     {
         DeviceZoneScopedN(ZTAG "_STTOT");
         for (uint32_t i = 0; i < (uint32_t)N_ITERS; i++) {
             DeviceZoneScopedN(ZTAG "_S");
-            for (volatile uint32_t j = 0; j < (uint32_t)ZONE_CYC; j++) {
-                asm volatile("nop");
-            }
+            SELFTIME_SPIN();
         }
     }
-    // Component brackets: one 64-bit clock read / one fence per iteration, same spin, so
-    // (X - STBASE) / N prices the primitive the zone path is built from.
+    // Component brackets, same spin in each so (X - STBASE) / N prices one piece. The variant emits
+    // below are clones of mark_zone_atomic each missing exactly ONE line, so that line's cost is
+    // (STTOT - variant). All variants still write wire-valid records and keep the batched publish
+    // (the drainer must keep flowing).
     {
         DeviceZoneScopedN(ZTAG "_STCLK");
         for (uint32_t i = 0; i < (uint32_t)N_ITERS; i++) {
             uint32_t h, l;
             kernel_profiler::read_wall_clock(h, l);
             asm volatile("" ::"r"(h), "r"(l));
-            for (volatile uint32_t j = 0; j < (uint32_t)ZONE_CYC; j++) {
-                asm volatile("nop");
-            }
+            SELFTIME_SPIN();
         }
     }
     {
         DeviceZoneScopedN(ZTAG "_STFEN");
         for (uint32_t i = 0; i < (uint32_t)N_ITERS; i++) {
             asm volatile("fence" ::: "memory");
-            for (volatile uint32_t j = 0; j < (uint32_t)ZONE_CYC; j++) {
-                asm volatile("nop");
-            }
+            SELFTIME_SPIN();
+        }
+    }
+    {  // scope machinery only: both clock reads + held start, NO emit
+        DeviceZoneScopedN(ZTAG "_STCTOR");
+        for (uint32_t i = 0; i < (uint32_t)N_ITERS; i++) {
+            ZCtorOnly z{};
+            SELFTIME_SPIN();
+        }
+    }
+    {  // real emit minus the 64-bit dur math (constant dur)
+        DeviceZoneScopedN(ZTAG "_STNODUR");
+        for (uint32_t i = 0; i < (uint32_t)N_ITERS; i++) {
+            ZNoDur z{};
+            SELFTIME_SPIN();
+        }
+    }
+    {  // real emit minus the sticky-timer check
+        DeviceZoneScopedN(ZTAG "_STNOSTK");
+        for (uint32_t i = 0; i < (uint32_t)N_ITERS; i++) {
+            ZNoSticky z{};
+            SELFTIME_SPIN();
+        }
+    }
+    {  // real emit minus the room/credit check
+        DeviceZoneScopedN(ZTAG "_STNOCRD");
+        for (uint32_t i = 0; i < (uint32_t)N_ITERS; i++) {
+            ZNoCredit z{};
+            SELFTIME_SPIN();
         }
     }
 }

@@ -374,7 +374,6 @@ inline __attribute__((always_inline)) void mark_time(uint32_t timer_id, ZoneKind
 // back to the legacy split pair with explicit stickies for BOTH halves (the start's epoch is long
 // gone from g_prev_timer_hi); the host's pairing path still handles those.
 inline __attribute__((always_inline)) void mark_zone_atomic(uint32_t timer_id, uint64_t start) {
-    ring_ensure_room(4);  // worst case: 1-word TIMER sticky + 3-word record
     uint32_t hi, lo;
     read_wall_clock(hi, lo);
     const uint64_t d = ((static_cast<uint64_t>(hi) << 32) | lo) - start;
@@ -403,6 +402,11 @@ inline __attribute__((always_inline)) void mark_zone_atomic(uint32_t timer_id, u
     if (wIndex - g_last_pub >= kPublishBatchWords) {
         publish_tail();
         g_last_pub = wIndex;
+        // Credit for the NEXT batch, checked here so the compact path pays NO per-zone room check:
+        // between two takings of this branch at most kPublishBatchWords + one record + one sticky
+        // land unchecked, and 2x the batch covers that. A fresh kernel launch self-corrects: its
+        // statics re-zero, so wIndex - g_last_pub is huge and the first zone lands here.
+        ring_ensure_room(2 * kPublishBatchWords);
     }
 }
 
