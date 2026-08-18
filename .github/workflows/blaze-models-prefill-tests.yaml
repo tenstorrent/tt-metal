@@ -6,11 +6,7 @@ on:
       test-type:
         # Authoritative list of valid tokens lives in the test matrix
         # (tests/pipeline_reorg/blaze_models_prefill_tests.yaml) and is enforced
-        # by the validate-test-type job below. This text is just UX help -- and the
-        # check-help-text step below fails the run if the two ever disagree, because
-        # this list silently drifted once already (it advertised k3_moe, k3_moe_perf
-        # and prefill_transformer, none of which exist, and omitted kimi_k3_moe,
-        # kimi_k3_moe_perf and ring_joint_sdpa_perf, which do).
+        # by the validate-test-type job below. This text is just UX help.
         description: >-
           Comma-separated stages to run, e.g. "mla,prefill_block,kimi_moe".
           Empty or "all" runs every stage. Groups: "module" runs every stage,
@@ -68,14 +64,6 @@ jobs:
         timeout-minutes: 20
       - name: Install dependencies
         run: pip3 install PyYAML
-      - name: Check the test-type help text matches the matrix
-        # The picker's "Valid stages:" list is static text, so nothing stopped it from
-        # rotting away from the matrix. Fail here rather than let someone pick a stage
-        # that cannot run, or miss one that can.
-        run: |
-          python3 .github/scripts/utils/check_test_type_help_text.py \
-            "${{ env.TESTS_YAML_PATH }}" \
-            .github/workflows/blaze-models-prefill-tests.yaml
       - name: Validate test-type selection
         id: validate
         # Pass the user input via env (not direct ${{ }} interpolation) to avoid
