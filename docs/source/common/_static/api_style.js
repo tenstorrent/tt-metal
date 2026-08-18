@@ -344,8 +344,12 @@
         var nameDiv = document.createElement("div");
         nameDiv.className = "tt-api-card-name";
         if (link) {
-          var a = document.createElement("a");
-          a.href = link.href;
+          /* Clone the anchor Sphinx already emitted rather than copying its
+           * URL into a freshly built one: the destination is carried over as
+           * an existing attribute, so no URL value is ever assigned to an
+           * href sink here. */
+          var a = link.cloneNode(true);
+          a.removeAttribute("class"); /* card styling owns the look, not the theme's .reference rules */
           a.textContent = link.textContent.trim();
           nameDiv.appendChild(a);
         } else {

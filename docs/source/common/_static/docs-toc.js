@@ -24,17 +24,20 @@
 
     headings.forEach(function (h) {
       if (!h.id) {
-        h.id = h.textContent.trim()
-          .toLowerCase()
-          .replace(/[^a-z0-9]+/g, '-')
-          .replace(/^-|-$/g, '');
+        h.id = slugify(h.textContent);
       }
+
+      /* Percent-encode the id before it reaches an href. The value is already
+       * a same-page fragment because of the leading '#', so no scheme can be
+       * introduced; encoding additionally guarantees the whole href stays
+       * within the URL fragment grammar whatever Sphinx put in the id. */
+      var fragment = '#' + encodeURIComponent(h.id);
 
       var li = document.createElement('li');
       li.className = h.tagName === 'H3' ? 'toc-h3' : 'toc-h2';
 
       var a = document.createElement('a');
-      a.href = '#' + h.id;
+      a.setAttribute('href', fragment);
 
       /* Strip headerlink anchors (¶ / [] symbols) before reading text */
       var clone = h.cloneNode(true);
@@ -44,7 +47,7 @@
       a.addEventListener('click', function (e) {
         e.preventDefault();
         h.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        history.pushState(null, '', '#' + h.id);
+        history.pushState(null, '', fragment);
         setActive(a);
       });
 
@@ -56,6 +59,14 @@
     document.body.appendChild(toc);
 
     setupScrollSpy(headings, ul);
+  }
+
+  /* Reduce heading text to the [a-z0-9-] slug charset used for generated ids. */
+  function slugify(text) {
+    return text.trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-|-$/g, '');
   }
 
   function setActive(activeLink) {
@@ -77,9 +88,10 @@
     var observer = new IntersectionObserver(function (entries) {
       entries.forEach(function (entry) {
         if (entry.isIntersecting) {
-          var id = entry.target.id;
+          /* Must match the encoding used when the href was built above. */
+          var fragment = '#' + encodeURIComponent(entry.target.id);
           links.forEach(function (a) {
-            a.classList.toggle('active', a.getAttribute('href') === '#' + id);
+            a.classList.toggle('active', a.getAttribute('href') === fragment);
           });
         }
       });
