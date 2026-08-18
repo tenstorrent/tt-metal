@@ -25,9 +25,11 @@
  * tile in place. U must be strictly inside (0, 1) so both logs stay finite;
  * the caller's rand from/scale bits enforce that.
  *
- * Both logs run through tt-llk's _calculate_log_body_no_init_, which uses
- * immediate constants only -- no programmable const LREGs and no replay
- * slots -- so this pass composes with rand_tile on both architectures
+ * Both logs feed only the Gumbel noise magnitude, so they run through a
+ * cheap approximation (see _gumbel_noise_log_) rather than tt-llk's precise
+ * minimax body; define GUMBEL_SAMPLE_PRECISE_LOG to switch back. Either way
+ * the pass uses immediate constants only -- no programmable const LREGs and
+ * no replay slots -- so it composes with rand_tile on both architectures
  * (Wormhole's rand programs LREG12/LREG13; nothing here reads them).
  */
 
@@ -36,6 +38,42 @@ namespace ckernel {
 #ifdef TRISC_MATH
 
 namespace sfpu {
+
+#ifdef GUMBEL_SAMPLE_PRECISE_LOG
+sfpi_inline sfpi::vFloat _gumbel_noise_log_(const sfpi::vFloat v) { return _calculate_log_body_no_init_(v); }
+#else
+/**
+ * Approximate ln(v) for the noise chain: exponent split plus one quadratic
+ * over the mantissa octave -- 2 MADs and 4 constants (3 of them single-load
+ * fp16a) versus the precise body's 3 MADs, 4 two-load fp32 constants, and
+ * predicated zero guard.
+ *
+ * The noise needs distributional fidelity, not ULP accuracy. Invariants:
+ *  - Monotone: p(m) = m*(m*B + C) + D rises on [1,2) (p' >= 0.45), and the
+ *    stored constants satisfy p(1) = -2^-20 and p(2) = LN2 - 2^-20 exactly,
+ *    so e*LN2 + p(m) is continuous and increasing across octave boundaries
+ *    (up to 1-ulp fp32 jitter). A monotone transform of U cannot reorder
+ *    samples, so argmax semantics survive the approximation.
+ *  - Error: |p - ln| <= 5.4e-3 on [1,2), plus |e|*2.1e-4 from the fp16a
+ *    ln(2) -- orders below the sampling test's binomial resolution.
+ *  - No zero guard: the caller's rand bounds give U in [2^-32, 1-2^-24],
+ *    and the uniform 2^-20 downward shift keeps -log(U) >= ~1e-6 under
+ *    fp32 rounding, so the outer log's argument never reaches zero or
+ *    flips sign. Cost: noise tops out near 13.75 instead of 16.64,
+ *    compressing only the ~1e-6 upper quantile of the Gumbel tail.
+ */
+sfpi_inline sfpi::vFloat _gumbel_noise_log_(const sfpi::vFloat v) {
+    constexpr float kLn2 = 0.693359375F;  // ln(2) to fp16a precision
+    constexpr float kB = -0.240234375F;   // fp16a-exact minimax under the endpoint ties
+    constexpr float kC = 1.4140625F;      // kLn2 - 3*kB, fp16a-exact
+    constexpr float kD = -0x1.2c801p+0F;  // 2*kB - kLn2 - 2^-20, fp32-exact
+    const sfpi::vFloat m = sfpi::setexp(v, 127);
+    const sfpi::vFloat poly = m * (m * kB + kC) + kD;
+    const auto exp = sfpi::convert<sfpi::vSMag>(sfpi::exexp(v));
+    const sfpi::vFloat expf = sfpi::convert<sfpi::vFloat>(exp, sfpi::RoundMode::Nearest);
+    return expf * kLn2 + poly;
+}
+#endif
 
 template <std::uint32_t LOGITS_DST_OFFSET>
 inline void _calculate_gumbel_score_(const std::uint32_t inv_temperature_bits) {
@@ -48,8 +86,8 @@ inline void _calculate_gumbel_score_(const std::uint32_t inv_temperature_bits) {
         const sfpi::vFloat u = sfpi::dst_reg[0];
         const sfpi::vFloat logits = sfpi::dst_reg[LOGITS_DST_OFFSET * dst_tile_size_sfpi];
         // Negations are LREG sign flips; neither intermediate touches DST.
-        const sfpi::vFloat neg_log_u = -_calculate_log_body_no_init_(u);
-        const sfpi::vFloat gumbel = -_calculate_log_body_no_init_(neg_log_u);
+        const sfpi::vFloat neg_log_u = -_gumbel_noise_log_(u);
+        const sfpi::vFloat gumbel = -_gumbel_noise_log_(neg_log_u);
         sfpi::vFloat score = logits * inv_temperature + gumbel;
         if constexpr (!DST_ACCUM_MODE) {
             score = sfpi::convert<sfpi::vFloat16b>(score, sfpi::RoundMode::Nearest);
