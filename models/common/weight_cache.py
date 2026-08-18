@@ -336,6 +336,13 @@ def build_cached_state_dict(cache_path, host=None, args=None):
         keys = manifest.keys()
         args.fuse_qkv = any("qkv" in k for k in keys)
         args.fuse_mlp = any("gate_up" in k for k in keys)
+        if args.is_mixture_of_experts:
+            args.moe = True
+            expert_indices = [int(k[-11]) + 1 for k in keys if "block_sparse_moe.experts" in k]
+            if expert_indices:
+                args.num_experts = max(expert_indices)
+            elif hasattr(args, "num_local_experts"):
+                args.num_experts = args.num_local_experts
     if host is None and meta.get("host_weights"):
         host = load_host_sidecar(cache_path)
     host = host or {}

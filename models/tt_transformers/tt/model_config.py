@@ -3161,7 +3161,14 @@ class ModelArgs:
             precision = hashlib.sha1("|".join(dtypes).encode()).hexdigest()[:12]
         except Exception:  # never let the signature itself break a build
             precision = "unknown"
-        return {"prefetcher": bool(self.prefetcher), "precision": precision}
+        return {
+            "prefetcher": bool(self.prefetcher),
+            "precision": precision,
+            # attention.py caches wqkv_bias_decode_sharded_{batch_size}, so batch is in a filename.
+            "batch": int(getattr(self, "max_batch_size", 0) or 0),
+            # attention.py picks cache_name("wo_width_sharded_2d") vs cache_name("wo") off this.
+            "fused_ag": bool(getattr(self, "use_fused_all_gather_matmul", False)),
+        }
 
     def _weight_cache_identity(self, components=None):
         """Marker identity for this build. `components` names the parts being constructed, so a
@@ -3229,6 +3236,10 @@ class ModelArgs:
         # checkpoint keys, which the warm path never reads. The manifest has the same keys.
         self.fuse_qkv = any("qkv" in k for k in manifest)
         self.fuse_mlp = any("gate_up" in k for k in manifest)
+        if self.is_mixture_of_experts:
+            self.moe = True
+            expert_indices = [int(k[-11]) + 1 for k in manifest if "block_sparse_moe.experts" in k]
+            self.num_experts = max(expert_indices) if expert_indices else self.num_local_experts
 
         dtype_cache = {}
 
