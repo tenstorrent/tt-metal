@@ -800,8 +800,20 @@ void kernel_main() {
                             // packed+pushed. If PKrsv i0=0 prints but PKgot i0=0 does NOT -> PACK stuck waiting on
                             // MATH's subblock-0 commit = MATH<->PACK deadlock. If PKdone i0=0 prints then PKrsv i0=1
                             // stalls -> PACK is fine and MATH is the sole bottleneck (MATH-internal MVMUL stall).
+                            // [#48552 DS-DEBUG] PACK-side markers. PKrsv (before reserve) / PKgot (after
+                            // tile_regs_wait, PACK got MATH's committed DEST) / PKdone (after push). Cross
+                            // with MATH's MVdone: MVdone i1X present + no PKdone i1X => PACK is the stall;
+                            // MVdone i1X ABSENT => MATH stuck (DEST acquire starved by PACK, or MVMUL).
+                            if (in0_block_h_i == 0) {
+                                DPRINT_PACK(
+                                    "[DS] PKrsv kb{} i0{} i1{}\n", in0_block_w_i, in0_subblock_i, in1_subblock_i);
+                            }
                             curr_out_cb.reserve_back(out_subblock_num_tiles);
                             tile_regs_wait();
+                            if (in0_block_h_i == 0) {
+                                DPRINT_PACK(
+                                    "[DS] PKgot kb{} i0{} i1{}\n", in0_block_w_i, in0_subblock_i, in1_subblock_i);
+                            }
 
                             if constexpr (packer_l1_acc) {
                                 if (in0_block_w_i == 0) {
@@ -840,6 +852,10 @@ void kernel_main() {
 
                             tile_regs_release();
                             curr_out_cb.push_back(out_subblock_num_tiles);
+                            if (in0_block_h_i == 0) {
+                                DPRINT_PACK(
+                                    "[DS] PKdone kb{} i0{} i1{}\n", in0_block_w_i, in0_subblock_i, in1_subblock_i);
+                            }
                         }
 
                         in1_index_subblock_offset += out_subblock_w;
