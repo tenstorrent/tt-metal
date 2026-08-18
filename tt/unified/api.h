@@ -144,7 +144,7 @@ struct LogicalMcast {
 // ---------------------------------------------------------------------------
 
 struct Storage {
-    Storage(uint32_t cb_id, uint32_t num_tiles) : cb_id(cb_id), num_tiles(num_tiles) {}
+    Storage(uint32_t cb_id, uint32_t num_pages) : cb_id(cb_id), num_pages(num_pages) {}
 
     Storage(Storage&&) = delete;
     Storage(const Storage&) = delete;
@@ -157,7 +157,11 @@ struct Storage {
     Block store(const Node& node);
 
     uint32_t cb_id;
-    uint32_t num_tiles;  // could eventually be N dimensional, here and below
+    // PAGES, which is what the circular-buffer protocol counts -- reserve, push,
+    // wait and pop are all in pages, and cb_page_bytes() sizes one. The compute
+    // strategies then walk it as a TILE count, which holds only because this model
+    // configures one tile per page; see Storage::store.
+    uint32_t num_pages;  // could eventually be N dimensional, here and below
 };
 
 // This core's own pages, handed to a custom load or store routine. The harness has
@@ -199,7 +203,7 @@ class Accumulator;
 
 struct Block {
     explicit Block(const Storage& storage);
-    Block(uint32_t cb_id, uint32_t num_tiles);
+    Block(uint32_t cb_id, uint32_t num_pages);
 #if defined(ASSERT_ENABLED) && ASSERT_ENABLED
     ~Block();
 #endif
@@ -223,7 +227,7 @@ struct Block {
     void consume();
 
     uint32_t cb_id;
-    uint32_t num_tiles;
+    uint32_t num_pages;
 
 private:
     // A RETAINED block: one the Accumulator hands back mid-accumulation. Its pages
@@ -323,11 +327,11 @@ public:
     ComputeBlock& operator=(ComputeBlock&&) = delete;
 
     uint32_t get_cb_id() const { return cb_id; }
-    uint32_t get_num_tiles() const { return num_tiles; }
+    uint32_t get_num_pages() const { return num_pages; }
 
 private:
     uint32_t cb_id;
-    uint32_t num_tiles;
+    uint32_t num_pages;
 };
 
 // ---------------------------------------------------------------------------
@@ -508,7 +512,7 @@ private:
 template <int thread>
 struct NocAsyncReadTx {
     explicit NocAsyncReadTx(const Storage& storage);
-    NocAsyncReadTx(uint32_t cb_id, uint32_t num_tiles);
+    NocAsyncReadTx(uint32_t cb_id, uint32_t num_pages);
 
     NocAsyncReadTx(const NocAsyncReadTx&) = delete;
     NocAsyncReadTx& operator=(const NocAsyncReadTx&) = delete;
@@ -523,7 +527,7 @@ struct NocAsyncReadTx {
     Block wait() const;
 
     uint32_t cb_id;
-    uint32_t num_tiles;
+    uint32_t num_pages;
 
 #if defined(IS_DM_THREAD) && IS_DM_THREAD && defined(ASSERT_ENABLED) && ASSERT_ENABLED
     mutable bool waited = false;
@@ -533,7 +537,7 @@ struct NocAsyncReadTx {
 template <int thread>
 struct NocAsyncWriteTx {
     explicit NocAsyncWriteTx(const Storage& storage);
-    NocAsyncWriteTx(uint32_t cb_id, uint32_t num_tiles);
+    NocAsyncWriteTx(uint32_t cb_id, uint32_t num_pages);
 
     NocAsyncWriteTx(const NocAsyncWriteTx&) = delete;
     NocAsyncWriteTx& operator=(const NocAsyncWriteTx&) = delete;
@@ -547,7 +551,7 @@ struct NocAsyncWriteTx {
     void wait() const;
 
     uint32_t cb_id;
-    uint32_t num_tiles;
+    uint32_t num_pages;
 };
 
 // A core-to-core copy has both halves: a local source Block to release and a
@@ -571,9 +575,9 @@ struct NocAsyncReadCoreTx {
     Block wait() const;
 
     uint32_t dst_cb;
-    uint32_t dst_tiles;
+    uint32_t dst_pages;
     uint32_t src_cb;
-    uint32_t src_tiles;
+    uint32_t src_pages;
 
 #if defined(IS_DM_THREAD) && IS_DM_THREAD && defined(ASSERT_ENABLED) && ASSERT_ENABLED
     mutable bool waited = false;
@@ -609,9 +613,9 @@ struct NocAsyncWriteCoreTx {
     Block wait(uint32_t num_writers) const;
 
     uint32_t dst_cb;
-    uint32_t dst_tiles;
+    uint32_t dst_pages;
     uint32_t src_cb;
-    uint32_t src_tiles;
+    uint32_t src_pages;
 
     // mutable: wait() is const across the whole API, and signalling is what a
     // wait on this handle does.
@@ -628,8 +632,8 @@ struct NocAsyncWriteCoreTx {
 // compiles away entirely on every other thread.
 // ---------------------------------------------------------------------------
 
-// Reads `storage.num_tiles` pages into the buffer, starting at page
-// `block_idx * storage.num_tiles`. The returned handle publishes them.
+// Reads `storage.num_pages` pages into the buffer, starting at page
+// `block_idx * storage.num_pages`. The returned handle publishes them.
 template <int thread, typename Accessor>
 NocAsyncReadTx<thread> noc_load(const Storage& storage, const Accessor& acc, uint32_t block_idx);
 
