@@ -14,6 +14,13 @@ export LLK_HOME="$LLK_ROOT"
 # The plugin and its modules are imported by bare name from the pytest process.
 export PYTHONPATH="$HERE:$PYTHON_TESTS${PYTHONPATH:+:$PYTHONPATH}"
 
+# Quasar LLK tests run through tt-exalens against the simulator, same flags as
+# run_quasar_regression.sh. Silicon (WH/BH) leaves this empty.
+PYTEST_SIM_ARGS=()
+if [[ "${CHIP_ARCH}" == "quasar" ]]; then
+    PYTEST_SIM_ARGS=(--run-simulator --port="${EXALENS_PORT:-5556}" )
+fi
+
 # Serialise against other agents driving the same silicon, and against each other.
 DEVICE_LOCK="${TTNOP_DEVICE_LOCK:-/tmp/tt-llk-test-$CHIP_ARCH.lock}"
 BUILD_LOCK="${TTNOP_BUILD_LOCK:-/tmp/ttnop-build-$CHIP_ARCH.lock}"

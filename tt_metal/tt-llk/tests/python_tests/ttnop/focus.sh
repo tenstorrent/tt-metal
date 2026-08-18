@@ -96,7 +96,8 @@ echo ">> device_jobs=${DEVICE_JOBS} report=${REPORT_DIR}"
 
 # Build this one variant if the shared tree does not already hold it.
 echo ">> [1/2] compiling"
-flock "$BUILD_LOCK" python3 -m pytest --compile-producer -q "$NODE_ID"
+flock "$BUILD_LOCK" python3 -m pytest --compile-producer -q \
+    "${PYTEST_SIM_ARGS[@]}" "$NODE_ID"
 
 # The sweep owns the card, cores and all, so hold the device lock for all of it.
 exec 9>"$DEVICE_LOCK"
@@ -105,6 +106,6 @@ echo ">> [2/2] sweeping"
 started=$SECONDS
 status=0
 python3 -m pytest --compile-consumer -p ttnop_plugin -p no:randomly -q \
-    "${XDIST_ARGS[@]}" "$NODE_ID" || status=$?
+    "${PYTEST_SIM_ARGS[@]}" "${XDIST_ARGS[@]}" "$NODE_ID" || status=$?
 echo ">> timing: sweep=$((SECONDS - started))s total=${SECONDS}s"
 exit "$status"

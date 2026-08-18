@@ -12,21 +12,27 @@ Kernels are never rebuilt per delay. Each thread ELF is scanned once, and the
 free tail of its L1 code region becomes a **cave**:
 
 ```
-cave start ->  filler          \
-               filler           |  max_delay words (default 100)
-               ...             /
-parked     ->  <the instruction that used to live at the site>
-ret        ->  jal x0, site+4
+cave start              ->  NOP          \
+                            NOP           |  max_delay words (default 100)
+                            ...          /
+displaced_instruction   ->  <the instruction that used to live at the site>
+ret                     ->  jal x0, site+4
+end                     ->  first byte past this layout
 ```
 
+The ELF only reserves `[start, limit)` (`__kernel_cave_end` or the L1 tail).
+`ret` is not a symbol in that ELF — it is the trampoline word the injector
+writes inside the reservation. `end` is how much of that reservation this
+layout uses; `limit` is how much the linker set aside.
+
 The site itself is overwritten with `jal x0, <somewhere in the cave>`. Executing
-`n` fillers is just aiming that jump `n` words short of the parked instruction,
-so changing the delay costs one word write. Delay 0 lands directly on the parked
+`n` fillers is just aiming that jump `n` words short of the displaced instruction,
+so changing the delay costs one word write. Delay 0 lands directly on the displaced
 instruction, which makes it a free control: it still detours, so if delay 0
 passes and delay 8 fails, the fillers did it, not the jump.
 
 A sweep walks the delays of one site back to back, so the injector only writes
-what actually changed: the filler run when the nop changes, the parked word and
+what actually changed: the filler run when the nop changes, the displaced word and
 its jump back when the site changes, and always the one word at the site. The
 common step — next delay, same site — is a single word. Nothing is rebuilt and
 nothing is reloaded, which is what makes sweeping all 100 counts affordable.
@@ -192,10 +198,12 @@ nest.
 - Variants are meant to fail, so the harness's logging is muted while one runs;
   otherwise every mismatch dumps the offending tiles in colour. The baseline pass
   runs outside that, so a genuinely broken test still says why.
-- A hang is a `TimeoutError`. The finding is recorded, the case is closed, the
-  supervisor resets the card (`tt-smi -r`) and resumes at the next test. Soft
-  reset-and-continue is gone: it rebooted BRISC mid-session and failed every
-  case after the hang.
+- A hang is a `TimeoutError`. The finding is recorded, the case is closed, and
+  the worker parks until the supervisor kills it — xdist then brings a
+  replacement up on one of the card's spare Tensix, so the wedged core is simply
+  never addressed again and the other seven workers keep their cases. Only a card
+  with no spare cores left falls back to `tt-smi -r`. Soft reset-and-continue is
+  gone: it rebooted BRISC mid-session and failed every case after the hang.
 
 ## Metal
 

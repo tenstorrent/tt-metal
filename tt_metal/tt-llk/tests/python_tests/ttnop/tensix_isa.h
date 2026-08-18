@@ -95,11 +95,15 @@ constexpr std::uint32_t TT_OP_SFPNOP      = 0x8fu;
 
 // Filler words as .text stores them (.ttinsn = TT_OP rotated left by 2). Verified
 // encodings — only pure UNP_NOP mode for the unpackers (no ZEROSRC / SET_DVALID /
-// NEGINFSRC side effects). Identical on Wormhole B0 and Blackhole.
+// NEGINFSRC side effects). WH/BH UNP_NOP is Nop_type=2; Quasar Nop_type=2 is
+// UNP_NOP_SETDAVLID (sets SrcA/B dvalid and can stall on FPU). Quasar cycle delay
+// is Nop_type=1 → TT_OP(0x43, (UNP_SEL<<8)|1).
 constexpr std::uint32_t FILLER_TTI_NOP = 0x08000000u; // TTI_NOP
 constexpr std::uint32_t FILLER_SFPNOP  = 0x3C000002u; // SFPNOP
-constexpr std::uint32_t FILLER_UNPACR0 = 0x0C000009u; // UNPACR_NOP unpacker 0 / SrcA
-constexpr std::uint32_t FILLER_UNPACR1 = 0x0E000009u; // UNPACR_NOP unpacker 1 / SrcB
+constexpr std::uint32_t FILLER_UNPACR0 = 0x0C000005u; // quasar UNPACR_NOP UNP_A, Nop_type=1
+constexpr std::uint32_t FILLER_UNPACR1 = 0x0C000405u; // quasar UNPACR_NOP UNP_B, Nop_type=1
+// constexpr std::uint32_t FILLER_UNPACR0 = 0x0C000009u; // WH UNPACR_NOP unpacker 0 / SrcA
+// constexpr std::uint32_t FILLER_UNPACR1 = 0x0E000009u; // WH UNPACR_NOP unpacker 1 / SrcB
 
 // The only filler that costs the RISC a cycle without also costing the Tensix
 // front-end one, so it is the only one that can shift a RISC MMIO write against

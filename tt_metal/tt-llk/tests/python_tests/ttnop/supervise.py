@@ -5,15 +5,15 @@
 
 There are two ways a sweep loses a core, and they arrive here differently.
 
-The first is a device that still answers: the mailbox poll gives up after a
-couple of seconds and raises TimeoutError, so the worker can record the hang as
-the finding it is, take the case off the resume list, and ask for a reset
-(heartbeat.request_reset). Nothing else clears a core holding a kernel that
-never finished — a soft reset from inside the worker reboots BRISC mid-session
-and leaves it failing every case after that — so the request is honoured
-immediately: kill the run, reset the card, resume at the next case. It costs the
-other workers their in-flight cases, which come back on the resume list, and it
-is only worth doing because a hang is rare and is itself the finding.
+The first is a device that still answers: mailbox poll raises TimeoutError, the
+worker records the hang, drops it from the resume list, and calls
+heartbeat.request_recovery. It cannot unstick the core — a soft reset from
+inside reboots BRISC and poisons the rest of the session — but it only lost its
+own, and the card has spares. Same as a silent wedge below: kill the worker,
+let xdist replace it on a spare, never address the wedged core again. Card reset
+used to happen here too; it costs every other worker's in-flight case (six hangs
+spent the reset budget and abandoned 1478 of 2418). It is now the fallback when
+no spare cores are left.
 
 The second is a read that never returns at all, because the poll's deadline is
 only checked between reads — the worker is blocked inside one, where it can
@@ -151,7 +151,7 @@ def _int(value, fallback: int) -> int:
     return value if isinstance(value, int) and not isinstance(value, bool) else fallback
 
 
-def skip_hang_family(root: Path, hung: str, all_ids: list) -> None:
+def skip_hang_family(root: Path, hung: str, all_ids: list, report_dir: Path) -> None:
     """Step over the other params of a test that just hung.
 
     The hung case is already on the done-log. What used to happen next is the
@@ -166,6 +166,7 @@ def skip_hang_family(root: Path, hung: str, all_ids: list) -> None:
         siblings,
         reason=f"skipped: same hang family as {hung}",
     )
+    report.append_skips(report_dir, hung, siblings)
     log(f"skipping {len(siblings)} sibling(s) of {heartbeat.family_key(hung)}")
 
 
@@ -393,26 +394,33 @@ def watch(child, root: Path, total: int, config, pool: int, all_ids: list):
             last_progress = now
             log(f"{len(heartbeat.completed(root))}/{total} case(s) done")
 
-        # A worker that hung a core says so and then parks. It has already
-        # recorded the finding and taken its case off the resume list, so there
-        # is nothing to work out here: clear the core the only way that works and
-        # let the resume pick up at the next case.
-        request = heartbeat.reset_request(root)
-        if request:
-            skip_hang_family(root, request.get("case", ""), all_ids)
-            heartbeat.clear_reset_request(root)
-            log(
-                f"{request.get('worker', '?')} hung on "
-                f"{request.get('variant') or 'an unknown variant'}; resetting the card"
-            )
-            return "wedged", None, records
-
         workers = heartbeat.live_workers(root)
         if len(workers) > width:
             width = len(workers)
             # Every replacement takes the next core in the enumeration, so this is
             # exactly how many we can lose before asking for one that is not there.
             budget = max(0, pool - width) if pool else MAX_EVICTIONS
+
+        # A worker that hung a core says so and then parks. It has already
+        # recorded the finding and taken its case off the resume list, so the only
+        # thing left is to get it off that core — the same problem the silent
+        # wedge below has, and it takes the same answer. Parked means sitting in
+        # a plain sleep, so unlike a silent wedge this one always dies when asked.
+        request = heartbeat.recovery_request(root)
+        if request:
+            heartbeat.clear_recovery_request(root)
+            name = request.get("worker", "?")
+            label = request.get("variant") or "an unknown variant"
+            # One hang is the race. The other formats of this test hit the same
+            # site; letting them run costs another core each.
+            skip_hang_family(root, request.get("case", ""), all_ids, config.report_dir)
+            if evicted < budget and evict(request):
+                evicted += 1
+                log(f"{name} hung on {label}; killed, xdist replaces it on a spare")
+            else:
+                log(f"{name} hung on {label}; no spare core left, resetting the card")
+                return "wedged", None, records
+
         # One silent worker is enough to act on. Workers sit on separate cores, so
         # a NoC path wedged under one of them strands that worker alone while the
         # rest carry on, and waiting for the others to agree would defer this
@@ -429,7 +437,7 @@ def watch(child, root: Path, total: int, config, pool: int, all_ids: list):
             # so without this a later resume would retry it and wedge another core.
             record_wedge(config, [worker])
             heartbeat.record_skipped(root, [worker.get("case", "")])
-            skip_hang_family(root, worker.get("case", ""), all_ids)
+            skip_hang_family(root, worker.get("case", ""), all_ids, config.report_dir)
 
             # Only evictions spend the budget: a worker we fail to kill is never
             # replaced, so it takes no new core from the pool.
@@ -468,6 +476,20 @@ def watch(child, root: Path, total: int, config, pool: int, all_ids: list):
             newest, quiet_since = beat, now
         elif now - quiet_since > QUIET_TIMEOUT:
             log(f"no worker progress for >{QUIET_TIMEOUT:.0f}s — calling it a wedge")
+            return "wedged", None, records
+
+        # After a string of evictions xdist can sit on "bringing up nodes": the
+        # replacement hangs in device setup (before the first ALIVE beat) and
+        # every surviving worker has already published DONE. QUIET_TIMEOUT is
+        # 15 minutes; this is the same hole on WEDGE_TIMEOUT, because cases are
+        # still queued and nobody is running one.
+        alive = any(worker.get("status") == heartbeat.ALIVE for worker in workers)
+        left = total - len(heartbeat.completed(root))
+        if left > 0 and not alive and now - quiet_since > WEDGE_TIMEOUT:
+            log(
+                f"{left} case(s) left but no worker mid-case for >{WEDGE_TIMEOUT:.0f}s; "
+                "xdist spawn looks stuck"
+            )
             return "wedged", None, records
 
         time.sleep(POLL_SECONDS)
