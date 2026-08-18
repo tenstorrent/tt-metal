@@ -44,10 +44,15 @@
 #      tables, mop-form, multi-result effects, exp D3 + M3 compiler half).  Its nightly
 #      20260818e measured the pin-8 cells (typecast improved past drift: +3.14%→−2.26% vs
 #      hand — reviewed refresh pending; where sem_on 186.75).
-#   9. ac81ede3827d… (CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256) — the pin-cycle-5
-#      wave-7 union build (sfpi-gcc 69a885b9f67: AT where-prefix-elision WP11, AX MOP
-#      outward-ownership refusal, AS capture-rotation; M3 fire enabled in the ON set).
-#      No cells measured under pin 9 yet: the next sweep re-measures per the drift gates.
+#   9. ac81ede3827d… — the pin-cycle-5 wave-7 union build (sfpi-gcc 69a885b9f67: AT
+#      where-prefix-elision WP11, AX MOP outward-ownership refusal, AS capture-rotation).
+#      Its nightly 20260819 measured pin-9 cells; RED only on the new lb gate.
+#  10. 2911f0e680e4… (CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256) — the pin-cycle-6
+#      overnight five-lane union (sfpi-gcc f433762fe5b: BD raw-boundary decode, BG
+#      ccmask/lreg-rename + exp restructure, BC prgm-const scan fix/TTREGION retirement,
+#      BF transp-involution/exec-while-record, BH WP12 mul_int formation).  Expected
+#      movements next sweep (pre-registered): where ~171-175, exp ~82, welford ~320,
+#      sigmoid-tree ~29.7-29.9, mulint32-fresh first cells, sdpa/addint byte-recovery.
 # SIM PAIRING: from pin 7 onward the CRAQ oracle is the CORRECTED craq-sim 9f324140 pair —
 # bh 32489dda4fd6… (CURRENT sweep_2x2.conf PINNED_SIM_BH_SHA256), wh 8f0079a9a16c… (CURRENT
 # sweep_2x2.conf PINNED_SIM_WH_SHA256); conf_lint.sh R6 enforces the bh anchor and
