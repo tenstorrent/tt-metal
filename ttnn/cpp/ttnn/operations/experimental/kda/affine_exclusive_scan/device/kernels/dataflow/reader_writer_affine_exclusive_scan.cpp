@@ -2,88 +2,59 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "api/core_local_mem.h"
+
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/noc_semaphore.h"
-#include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
-namespace {
-constexpr uint32_t cb_initial_a = 0;
-constexpr uint32_t cb_initial_b = 1;
-constexpr uint32_t cb_stage_a_ping = 2;
-constexpr uint32_t cb_stage_b_ping = 3;
-constexpr uint32_t cb_stage_a_pong = 4;
-constexpr uint32_t cb_stage_b_pong = 5;
-constexpr uint32_t cb_remote_a = 6;
-constexpr uint32_t cb_remote_b = 7;
-constexpr uint32_t cb_initial_state = 8;
-constexpr uint32_t cb_output = 9;
-constexpr uint32_t cb_stage_token = 11;
-}  // namespace
-
-void kernel_main() {
-    constexpr uint32_t Kt = get_compile_time_arg_val(0);
-    constexpr uint32_t Vt = get_compile_time_arg_val(1);
-    constexpr uint32_t BH = get_compile_time_arg_val(2);
-    constexpr uint32_t G = get_compile_time_arg_val(3);
-    constexpr bool compose_only = get_compile_time_arg_val(4) == 1;
-    constexpr auto a_args = TensorAccessorArgs<5>();
-    constexpr auto b_args = TensorAccessorArgs<a_args.next_compile_time_args_offset()>();
-    constexpr auto s_args = TensorAccessorArgs<b_args.next_compile_time_args_offset()>();
-    constexpr auto output_a_args = TensorAccessorArgs<s_args.next_compile_time_args_offset()>();
-    constexpr auto output_b_args = TensorAccessorArgs<output_a_args.next_compile_time_args_offset()>();
+template <uint32_t Kt, uint32_t Vt, uint32_t BH, uint32_t G>
+TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group, uint32_t coordinator_x, uint32_t coordinator_y) {
     constexpr uint32_t kk = Kt * Kt;
     constexpr uint32_t kv = Kt * Vt;
-    static_assert(BH * G <= 128, "affine_exclusive_scan coordinate table exceeds runtime-arg budget");
+    constexpr uint32_t worker_count = BH * G;
+    static_assert(worker_count <= 128, "affine prefix coordinate table exceeds runtime-arg budget");
 
-    const uint32_t worker_index = get_arg_val<uint32_t>(0);
-    const uint32_t group = get_arg_val<uint32_t>(1);
-    const uint32_t worker_count = get_arg_val<uint32_t>(2);
-    const uint32_t a_addr = get_arg_val<uint32_t>(3);
-    const uint32_t b_addr = get_arg_val<uint32_t>(4);
-    const uint32_t s_addr = get_arg_val<uint32_t>(5);
-    const uint32_t output_a_addr = get_arg_val<uint32_t>(6);
-    const uint32_t output_b_addr = get_arg_val<uint32_t>(7);
-    const uint32_t ready_sem = get_arg_val<uint32_t>(8);
-    const uint32_t arrival_sem = get_arg_val<uint32_t>(9);
-    const uint32_t release_sem = get_arg_val<uint32_t>(10);
-    const uint32_t coordinator_x = get_arg_val<uint32_t>(11);
-    const uint32_t coordinator_y = get_arg_val<uint32_t>(12);
-
-    const uint32_t input_a_tile_bytes = get_tile_size(cb_initial_a);
-    const uint32_t input_b_tile_bytes = get_tile_size(cb_initial_b);
-    const uint32_t stage_a_tile_bytes = get_tile_size(cb_stage_a_ping);
-    const uint32_t stage_b_tile_bytes = get_tile_size(cb_stage_b_ping);
-    const uint32_t state_tile_bytes = get_tile_size(cb_initial_state);
-    const uint32_t output_tile_bytes = get_tile_size(cb_output);
-    const auto a_accessor = TensorAccessor(a_args, a_addr, input_a_tile_bytes);
-    const auto b_accessor = TensorAccessor(b_args, b_addr, input_b_tile_bytes);
-    const auto s_accessor = TensorAccessor(s_args, s_addr, state_tile_bytes);
-    const auto output_a_accessor = TensorAccessor(output_a_args, output_a_addr, output_tile_bytes);
-    const auto output_b_accessor = TensorAccessor(output_b_args, output_b_addr, output_tile_bytes);
+    const auto a_accessor = TensorAccessor(tensor::a);
+    const auto b_accessor = TensorAccessor(tensor::b);
+    const auto initial_state_accessor = TensorAccessor(tensor::initial_state);
+    const auto output_accessor = TensorAccessor(tensor::output);
+    DataflowBuffer initial_a(dfb::initial_a);
+    DataflowBuffer initial_b(dfb::initial_b);
+    DataflowBuffer send_a_ping(dfb::send_a_ping);
+    DataflowBuffer send_b_ping(dfb::send_b_ping);
+    DataflowBuffer send_a_pong(dfb::send_a_pong);
+    DataflowBuffer send_b_pong(dfb::send_b_pong);
+    DataflowBuffer remote_a(dfb::remote_a);
+    DataflowBuffer remote_b(dfb::remote_b);
+    DataflowBuffer initial_state(dfb::initial_state);
+    DataflowBuffer final(dfb::final);
+    DataflowBuffer stage_token(dfb::stage_token);
     Noc noc;
-    Semaphore<> ready(ready_sem);
-    Semaphore<> arrival(arrival_sem);
-    Semaphore<> release(release_sem);
+    Semaphore<> ready(sem::ready);
+    Semaphore<> arrival(sem::arrival);
+    Semaphore<> release(sem::release);
 
-    auto worker_x = [&](uint32_t worker) { return get_arg_val<uint32_t>(13 + 2 * worker); };
-    auto worker_y = [&](uint32_t worker) { return get_arg_val<uint32_t>(14 + 2 * worker); };
-    auto read_tiles = [&](const auto& accessor, uint32_t cb_id, uint32_t page, uint32_t tiles, uint32_t tile_bytes) {
-        CircularBuffer cb(cb_id);
-        cb.reserve_back(tiles);
+    auto worker_x = [](uint32_t worker) { return get_common_vararg(2 * worker); };
+    auto worker_y = [](uint32_t worker) { return get_common_vararg(2 * worker + 1); };
+    auto read_tiles = [&](const auto& accessor, DataflowBuffer& buffer, uint32_t page, uint32_t tiles) {
+        buffer.reserve_back(tiles);
         for (uint32_t tile = 0; tile < tiles; tile++) {
-            noc.async_read(accessor, cb, tile_bytes, {.page_id = page + tile}, {.offset_bytes = tile * tile_bytes});
+            noc.async_read(
+                accessor,
+                buffer,
+                buffer.get_entry_size(),
+                {.page_id = page + tile},
+                {.offset_bytes = tile * buffer.get_entry_size()});
         }
         noc.async_read_barrier();
-        cb.push_back(tiles);
+        buffer.push_back(tiles);
     };
-    read_tiles(a_accessor, cb_initial_a, worker_index * kk, kk, input_a_tile_bytes);
-    read_tiles(b_accessor, cb_initial_b, worker_index * kv, kv, input_b_tile_bytes);
-    if constexpr (!compose_only) {
-        read_tiles(s_accessor, cb_initial_state, (worker_index / G) * kv, kv, state_tile_bytes);
-    }
+    read_tiles(a_accessor, initial_a, worker_index * kk, kk);
+    read_tiles(b_accessor, initial_b, worker_index * kv, kv);
+    read_tiles(initial_state_accessor, initial_state, (worker_index / G) * kv, kv);
 
     uint32_t completed_stages = 0;
     auto stage_barrier = [&] {
@@ -98,44 +69,40 @@ void kernel_main() {
         }
         release.wait_min(completed_stages);
     };
-    auto send_pair = [&](uint32_t target, uint32_t current_a, uint32_t current_b) {
-        const CircularBuffer current_a_buffer(current_a);
-        const CircularBuffer current_b_buffer(current_b);
-        const CircularBuffer remote_a_buffer(cb_remote_a);
-        const CircularBuffer remote_b_buffer(cb_remote_b);
+    auto send_pair = [&](uint32_t target, DataflowBuffer& current_a, DataflowBuffer& current_b) {
         const uint32_t target_x = worker_x(target);
         const uint32_t target_y = worker_y(target);
         noc.async_write(
-            CoreLocalMem<uint32_t>(current_a_buffer.get_read_ptr()),
+            current_a,
             UnicastEndpoint{},
-            kk * stage_a_tile_bytes,
+            kk * current_a.get_entry_size(),
             {},
-            {.noc_x = target_x, .noc_y = target_y, .addr = remote_a_buffer.get_write_ptr()});
+            {.noc_x = target_x, .noc_y = target_y, .addr = remote_a.get_write_ptr()});
         noc.async_write(
-            CoreLocalMem<uint32_t>(current_b_buffer.get_read_ptr()),
+            current_b,
             UnicastEndpoint{},
-            kv * stage_b_tile_bytes,
+            kv * current_b.get_entry_size(),
             {},
-            {.noc_x = target_x, .noc_y = target_y, .addr = remote_b_buffer.get_write_ptr()});
+            {.noc_x = target_x, .noc_y = target_y, .addr = remote_b.get_write_ptr()});
         noc.async_write_barrier();
         ready.up(noc, target_x, target_y, 1);
     };
     auto receive_pair = [&] {
-        CircularBuffer(cb_remote_a).reserve_back(kk);
-        CircularBuffer(cb_remote_b).reserve_back(kv);
-        CircularBuffer(cb_remote_a).push_back(kk);
-        CircularBuffer(cb_remote_b).push_back(kv);
+        remote_a.reserve_back(kk);
+        remote_b.reserve_back(kv);
+        remote_a.push_back(kk);
+        remote_b.push_back(kv);
     };
 
     uint32_t ready_target = 0;
     bool ping = false;
     for (uint32_t distance = 1; distance < G; distance *= 2) {
-        const uint32_t current_a = ping ? cb_stage_a_pong : cb_stage_a_ping;
-        const uint32_t current_b = ping ? cb_stage_b_pong : cb_stage_b_ping;
-        const uint32_t next_a = ping ? cb_stage_a_ping : cb_stage_a_pong;
-        const uint32_t next_b = ping ? cb_stage_b_ping : cb_stage_b_pong;
-        CircularBuffer(current_a).wait_front(kk);
-        CircularBuffer(current_b).wait_front(kv);
+        DataflowBuffer& current_a = ping ? send_a_pong : send_a_ping;
+        DataflowBuffer& current_b = ping ? send_b_pong : send_b_ping;
+        DataflowBuffer& next_a = ping ? send_a_ping : send_a_pong;
+        DataflowBuffer& next_b = ping ? send_b_ping : send_b_pong;
+        current_a.wait_front(kk);
+        current_b.wait_front(kv);
         if (group + distance < G) {
             send_pair(worker_index + distance, current_a, current_b);
         }
@@ -143,49 +110,23 @@ void kernel_main() {
             ready_target++;
             ready.wait_min(ready_target);
             receive_pair();
-            CircularBuffer(cb_stage_token).reserve_back(1);
-            CircularBuffer(cb_stage_token).push_back(1);
-        }
-        if (group >= distance) {
-            CircularBuffer(next_a).wait_front(kk);
-            CircularBuffer(next_b).wait_front(kv);
+            stage_token.reserve_back(1);
+            stage_token.push_back(1);
+            next_a.wait_front(kk);
+            next_b.wait_front(kv);
+            current_a.pop_front(kk);
+            current_b.pop_front(kv);
             ping = !ping;
         }
-        // Do not release the next NoC stage until every receiver has consumed cb_remote and
-        // produced its next prefix. Otherwise the following stage can overwrite cb_remote while
-        // compute is still reading it.
+        // Do not release the next NoC stage until every receiver has consumed the remote buffers and produced its
+        // next prefix. Otherwise the following stage can overwrite the remote buffers while compute is reading them.
         stage_barrier();
     }
 
-    const uint32_t current_a = ping ? cb_stage_a_pong : cb_stage_a_ping;
-    const uint32_t current_b = ping ? cb_stage_b_pong : cb_stage_b_ping;
-    CircularBuffer(current_a).wait_front(kk);
-    CircularBuffer(current_b).wait_front(kv);
-    if constexpr (compose_only) {
-        if (group + 1 == G) {
-            CircularBuffer prefix_a(current_a);
-            CircularBuffer prefix_b(current_b);
-            const uint32_t head = worker_index / G;
-            for (uint32_t tile = 0; tile < kk; tile++) {
-                noc.async_write(
-                    prefix_a,
-                    output_a_accessor,
-                    output_tile_bytes,
-                    {.offset_bytes = tile * output_tile_bytes},
-                    {.page_id = head * kk + tile});
-            }
-            for (uint32_t tile = 0; tile < kv; tile++) {
-                noc.async_write(
-                    prefix_b,
-                    output_b_accessor,
-                    output_tile_bytes,
-                    {.offset_bytes = tile * output_tile_bytes},
-                    {.page_id = head * kv + tile});
-            }
-            noc.async_write_barrier();
-        }
-        return;
-    }
+    DataflowBuffer& current_a = ping ? send_a_pong : send_a_ping;
+    DataflowBuffer& current_b = ping ? send_b_pong : send_b_ping;
+    current_a.wait_front(kk);
+    current_b.wait_front(kv);
     if (group + 1 < G) {
         send_pair(worker_index + 1, current_a, current_b);
     }
@@ -194,19 +135,18 @@ void kernel_main() {
         ready.wait_min(ready_target);
         receive_pair();
     }
-    CircularBuffer(cb_stage_token).reserve_back(1);
-    CircularBuffer(cb_stage_token).push_back(1);
+    stage_token.reserve_back(1);
+    stage_token.push_back(1);
 
-    CircularBuffer output(cb_output);
-    output.wait_front(kv);
+    final.wait_front(kv);
     for (uint32_t tile = 0; tile < kv; tile++) {
         noc.async_write(
-            output,
-            output_a_accessor,
-            output_tile_bytes,
-            {.offset_bytes = tile * output_tile_bytes},
+            final,
+            output_accessor,
+            final.get_entry_size(),
+            {.offset_bytes = tile * final.get_entry_size()},
             {.page_id = worker_index * kv + tile});
     }
     noc.async_write_barrier();
-    output.pop_front(kv);
+    final.pop_front(kv);
 }
