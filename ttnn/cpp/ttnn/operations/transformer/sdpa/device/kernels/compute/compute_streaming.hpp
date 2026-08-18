@@ -708,6 +708,103 @@ void sub_exp_block_bcast_cols(
     PACK((llk_pack_reconfig_l1_acc(0)));
 }
 
+#ifdef Q_TINY_TILE
+/**
+ * Tiny-tile softmax drain: sub_exp_block_bcast_cols specialized for the Phase-2 in-place latent-V
+ * drain, with the per-call fixed costs hoisted out of the column-subblock loop. Tiny tiles never
+ * use blocked packs, so every pack below is a width-1 MOP: one pack configure serves the score
+ * repacks AND the row-sum L1-accumulate packs of every subblock (the generic helper reconfigures
+ * twice per call). The SUB unpack/math init, the packer ReLU window, and the L1-acc enable are
+ * likewise programmed once per drain instead of once (or more) per subblock. This is where the
+ * paired-q16 kernel loses most of its ground to q32 (2x the per-tile launches per 32 rows), so
+ * the fixed costs around those launches have to be paid once, not per call.
+ */
+template <bool profiling_enabled, uint32_t scale_fp32>
+void sub_exp_drain_tiny(
+    uint32_t inout_cb,
+    uint32_t max_cb,
+    uint32_t reduce_cb,
+    uint32_t cols_in_row,
+    uint32_t q_subblock,
+    uint32_t sbh,
+    uint32_t sbw,
+    uint32_t kt_num_subblocks) {
+    const uint32_t max_row_base = q_subblock * sbh;
+
+    exp_packthread_tile_init<true, scale_fp32, InputClamping::None>();
+    sub_bcast_cols_init_short_custom(inout_cb, max_cb, sbw);
+    CircularBuffer(max_cb).wait_front((q_subblock + 1) * sbh);
+
+    // All packs in the drain are exp results (scores >= 0), so the zeroing ReLU window can span
+    // the whole drain. Width-1 pack MOP shared by every pack site below.
+    PACK((llk_pack_relu_config(ReluConfig::zero())));
+    configure_single_tile_pack(inout_cb);
+
+    for (uint32_t kt_sub = 0; kt_sub < kt_num_subblocks; ++kt_sub) {
+        const uint32_t global_col_base = kt_sub * sbw;
+
+        tile_regs_acquire();
+        {
+            MaybeDeviceZoneScopedN(profiling_enabled, "SUB");
+            uint32_t dst_index = 0;
+            for (uint32_t i = 0; i < sbh; i++) {
+                const uint32_t in0_tile_index = (max_row_base + i) * cols_in_row + global_col_base;
+                sub_tiles_bcast_cols_custom(inout_cb, max_cb, in0_tile_index, max_row_base + i, dst_index, sbw);
+                dst_index += sbw;
+            }
+        }
+        tile_regs_commit();
+
+        tile_regs_wait();
+        {
+            MaybeDeviceZoneScopedN(profiling_enabled, "EXP");
+            constexpr int iterations = 8;
+            for (uint32_t d = 0; d < sbh * sbw; ++d) {
+                exp_packthread_tile<true, false, InputClamping::None, iterations>(d, VectorMode::R);
+            }
+            PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+        }
+
+        {
+            MaybeDeviceZoneScopedN(profiling_enabled, "PACK SUB_EXP");
+            // Scores back to inout_cb at absolute positions (L1-acc off).
+            uint32_t dst_index = 0;
+            for (uint32_t i = 0; i < sbh; i++) {
+                const uint32_t out_base = (max_row_base + i) * cols_in_row + global_col_base;
+                for (uint32_t j = 0; j < sbw; ++j) {
+                    pack_tile<true>(dst_index++, inout_cb, out_base + j);  // HOT: softmax exp, keep inline
+                }
+            }
+            // Row sums: L1-accumulate every score tile onto its row's sum tile. The first
+            // subblock initializes each row's sum with its first column tile (acc off); later
+            // subblocks accumulate every tile. Acc is dropped again before leaving the subblock
+            // so the next iteration's score repacks don't accumulate onto stale scores.
+            dst_index = 0;
+            if (global_col_base > 0) {
+                PACK((llk_pack_reconfig_l1_acc(1)));
+            }
+#pragma GCC unroll 1
+            for (uint32_t i = 0; i < sbh; i++) {
+                if (global_col_base == 0) {
+                    PACK((llk_pack_reconfig_l1_acc(0)));
+                }
+#pragma GCC unroll 1
+                for (uint32_t j = 0; j < sbw; ++j) {
+                    pack_tile<true>(dst_index++, reduce_cb, max_row_base + i);  // HOT: softmax exp, keep inline
+                    if (global_col_base == 0 && j == 0) {
+                        PACK((llk_pack_reconfig_l1_acc(1)));
+                    }
+                }
+            }
+            PACK((llk_pack_reconfig_l1_acc(0)));
+        }
+        tile_regs_release();
+    }
+
+    PACK((llk_pack_relu_config(ReluConfig::none())));
+}
+#endif  // Q_TINY_TILE
+
 /**
  * Column-only exp(prev_max - cur_max) for SALAD corrections.
  * Operates on first-column subset of tiles.
@@ -795,9 +892,9 @@ void salad_correct_fused(
         tile_regs_acquire();
         uint32_t dst_index = 0;
         for (uint32_t i = 0; i < tiles_per_row; i++) {
+            uint32_t in0_tile_index = (ob_row_base + i) * tiles_per_column + col_base;
             for (uint32_t j = 0; j < cur_cols; j++) {
-                uint32_t in0_tile_index = (ob_row_base + i) * tiles_per_column + col_base + j;
-                mul_tiles_bcast_cols(out_in_cb, bcast_cb, in0_tile_index, ob_row_base + i, dst_index++);
+                mul_tiles_bcast_cols(out_in_cb, bcast_cb, in0_tile_index + j, ob_row_base + i, dst_index++);
             }
         }
         if (fuse_sum_here) {
@@ -1837,6 +1934,19 @@ static void sdpa_inner_loop_step(
                 // per output column over all active_Sk tiles (DST-accumulated, packed once per DST
                 // group). Vs split-drain this drops the L1-acc and the per-kt_sub packs/barriers.
                 // active_Sk == kt_num_full_subblocks * actual_sbw exactly, so one pass covers the row.
+#ifdef Q_TINY_TILE
+                // Tiny tiles pay 2x the per-tile softmax launches per 32 rows; the specialized
+                // drain hoists the per-subblock init/ReLU/pack-configure costs out of the loop.
+                sub_exp_drain_tiny<profiling_enabled, scale_fp32>(
+                    cb_qkt_im,
+                    cur.max,
+                    cur.sum,
+                    KT_stride,
+                    q_num_subblocks - 1,
+                    qkt_subblock_h,
+                    actual_sbw,
+                    kt_num_full_subblocks);
+#else
                 for (uint32_t kt_sub = 0; kt_sub < kt_num_full_subblocks; ++kt_sub) {
                     sub_exp_block_bcast_cols<profiling_enabled, scale_fp32>(
                         cb_qkt_im,
@@ -1848,6 +1958,7 @@ static void sdpa_inner_loop_step(
                         qkt_subblock_h,
                         actual_sbw);
                 }
+#endif
                 if constexpr (q_num_subblocks == 1) {
                     PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
                     UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
