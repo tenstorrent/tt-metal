@@ -40,11 +40,16 @@ TT_KERNEL void compute(uint32_t wi_count) {
                 partial_b.wait_front(block_ct);
             }
 
+            reconfig_data_format_srca(dfb::act_tile);
+            reconfig_data_format_srcb(dfb::weights);
+            if (tap == 0) {
+                mul_bcast_rows_init(dfb::act_tile, dfb::weights);
+            }
             for (uint32_t ct = 0; ct < block_ct; ++ct) {
                 tile_regs_acquire();
-                reconfig_data_format_srca(dfb::act_tile);
-                reconfig_data_format_srcb(dfb::weights);
-                mul_bcast_rows_init(dfb::act_tile, dfb::weights);
+                if (tap != 0) {
+                    mul_bcast_rows_init(dfb::act_tile, dfb::weights);
+                }
                 mul_tiles_bcast_rows(dfb::act_tile, dfb::weights, ct, tap * block_ct + ct, 0);
 
                 if (tap != 0) {
