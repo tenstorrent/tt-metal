@@ -137,6 +137,55 @@ struct ReluOp {
     static void apply_in_place(uint32_t slot) { apply(slot, slot); }
 };
 
+// recip is what softmax normalises with, rsqrt what RMSNorm does. All three
+// take metal's own defaults for the approximation and legacy_compat template
+// parameters, the way exp and relu do. recip is full-accuracy on Float32,
+// Float16_b and Bfp8_b only.
+struct RecipOp {
+    static void apply(uint32_t src, uint32_t out) {
+#if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
+        (void)src;  // == out; SFPU unaries work in place
+        ckernel::recip_tile_init();
+        ckernel::recip_tile(out);
+#else
+        (void)src;
+        (void)out;
+#endif
+    }
+
+    static void apply_in_place(uint32_t slot) { apply(slot, slot); }
+};
+
+struct SqrtOp {
+    static void apply(uint32_t src, uint32_t out) {
+#if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
+        (void)src;  // == out; SFPU unaries work in place
+        ckernel::sqrt_tile_init();
+        ckernel::sqrt_tile(out);
+#else
+        (void)src;
+        (void)out;
+#endif
+    }
+
+    static void apply_in_place(uint32_t slot) { apply(slot, slot); }
+};
+
+struct RsqrtOp {
+    static void apply(uint32_t src, uint32_t out) {
+#if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
+        (void)src;  // == out; SFPU unaries work in place
+        ckernel::rsqrt_tile_init();
+        ckernel::rsqrt_tile(out);
+#else
+        (void)src;
+        (void)out;
+#endif
+    }
+
+    static void apply_in_place(uint32_t slot) { apply(slot, slot); }
+};
+
 // --- Kinds and FPU nodes ---
 
 using SFPUFusion = expr::TreeKind;
@@ -289,6 +338,21 @@ auto exp_(const ReduceNode<G, A, P, Chain>& r) {
     return ReduceNode<G, A, P, expr::chain_append_t<Chain, ExpOp>>{{}, r.in_cb, r.scaler_cb};
 }
 
+template <typename G, ReduceAxis A, ReducePool P, typename Chain>
+auto recip(const ReduceNode<G, A, P, Chain>& r) {
+    return ReduceNode<G, A, P, expr::chain_append_t<Chain, RecipOp>>{{}, r.in_cb, r.scaler_cb};
+}
+
+template <typename G, ReduceAxis A, ReducePool P, typename Chain>
+auto sqrt_(const ReduceNode<G, A, P, Chain>& r) {
+    return ReduceNode<G, A, P, expr::chain_append_t<Chain, SqrtOp>>{{}, r.in_cb, r.scaler_cb};
+}
+
+template <typename G, ReduceAxis A, ReducePool P, typename Chain>
+auto rsqrt(const ReduceNode<G, A, P, Chain>& r) {
+    return ReduceNode<G, A, P, expr::chain_append_t<Chain, RsqrtOp>>{{}, r.in_cb, r.scaler_cb};
+}
+
 // --- Operand plumbing ---
 //
 // `is_operand` and `as_node` are the extension points the core header hooks into:
@@ -313,6 +377,10 @@ auto operator+(const A& a, const B& b) {
 // relu() on a tree wraps it; relu() on an FPU node folds into that node's
 // epilogue chain instead. This per-kind dispatch is what a CRTP `Derived`
 // parameter would otherwise be threading through every combinator.
+//
+// A trailing underscore where the name would shadow a <cmath> function, and only
+// there: exp_ and sqrt_ carry one, relu, recip and rsqrt do not. The METHOD
+// spelling is unshadowed either way, so it stays bare -- x.exp(), x.sqrt().
 template <typename N, typename = std::enable_if_t<expr::is_expr<N>::value>>
 auto relu(const N& n) {
     return expr::Un<ReluOp, N>{{}, n};
@@ -323,6 +391,21 @@ auto exp_(const N& n) {
     return expr::Un<ExpOp, N>{{}, n};
 }
 
+template <typename N, typename = std::enable_if_t<expr::is_expr<N>::value>>
+auto recip(const N& n) {
+    return expr::Un<RecipOp, N>{{}, n};
+}
+
+template <typename N, typename = std::enable_if_t<expr::is_expr<N>::value>>
+auto sqrt_(const N& n) {
+    return expr::Un<SqrtOp, N>{{}, n};
+}
+
+template <typename N, typename = std::enable_if_t<expr::is_expr<N>::value>>
+auto rsqrt(const N& n) {
+    return expr::Un<RsqrtOp, N>{{}, n};
+}
+
 template <typename Geometry, typename Chain>
 auto relu(const MatmulNode<Geometry, Chain>& m) {
     return MatmulNode<Geometry, expr::chain_append_t<Chain, ReluOp>>{{}, m.in0_cb, m.in1_cb, m.bias_cb};
@@ -331,6 +414,21 @@ auto relu(const MatmulNode<Geometry, Chain>& m) {
 template <typename Geometry, typename Chain>
 auto exp_(const MatmulNode<Geometry, Chain>& m) {
     return MatmulNode<Geometry, expr::chain_append_t<Chain, ExpOp>>{{}, m.in0_cb, m.in1_cb, m.bias_cb};
+}
+
+template <typename Geometry, typename Chain>
+auto recip(const MatmulNode<Geometry, Chain>& m) {
+    return MatmulNode<Geometry, expr::chain_append_t<Chain, RecipOp>>{{}, m.in0_cb, m.in1_cb, m.bias_cb};
+}
+
+template <typename Geometry, typename Chain>
+auto sqrt_(const MatmulNode<Geometry, Chain>& m) {
+    return MatmulNode<Geometry, expr::chain_append_t<Chain, SqrtOp>>{{}, m.in0_cb, m.in1_cb, m.bias_cb};
+}
+
+template <typename Geometry, typename Chain>
+auto rsqrt(const MatmulNode<Geometry, Chain>& m) {
+    return MatmulNode<Geometry, expr::chain_append_t<Chain, RsqrtOp>>{{}, m.in0_cb, m.in1_cb, m.bias_cb};
 }
 
 // The hooks expr.hpp's Fluent calls. Unqualified inside, so ordinary lookup finds
@@ -344,6 +442,18 @@ auto fluent_relu(const N& n) {
 template <typename N>
 auto fluent_exp(const N& n) {
     return exp_(n);
+}
+template <typename N>
+auto fluent_recip(const N& n) {
+    return recip(n);
+}
+template <typename N>
+auto fluent_sqrt(const N& n) {
+    return sqrt_(n);
+}
+template <typename N>
+auto fluent_rsqrt(const N& n) {
+    return rsqrt(n);
 }
 }  // namespace expr
 

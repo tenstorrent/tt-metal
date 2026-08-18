@@ -349,6 +349,9 @@ TileSource as_node(const ComputeBlock& b);
 
 auto relu(const ComputeBlock& b);
 auto exp_(const ComputeBlock& b);
+auto recip(const ComputeBlock& b);
+auto sqrt_(const ComputeBlock& b);
+auto rsqrt(const ComputeBlock& b);
 
 template <typename Geometry>
 auto matmul(const ComputeBlock& a, const ComputeBlock& b);
