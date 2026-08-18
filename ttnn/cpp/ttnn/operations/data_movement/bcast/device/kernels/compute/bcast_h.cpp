@@ -4,46 +4,37 @@
 
 #include <cstdint>
 #include "api/compute/bcast.h"
-#include "api/dataflow/dataflow_buffer.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "experimental/kernel_args.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 
 void kernel_main() {
-    constexpr std::uint32_t onetile = 1;
-
-    DataflowBuffer dfb_a(dfb::in0);
-    DataflowBuffer dfb_b(dfb::in1);
-    DataflowBuffer dfb_out(dfb::out);
-
     auto B = get_arg(args::B);
     auto Ht = get_arg(args::Ht);
     auto Wt = get_arg(args::Wt);
+
     compute_kernel_hw_startup(dfb::in0, dfb::in1, dfb::out);
-    bcast_init<BCAST_LLKOP, BCAST_DIM>(dfb::in0, dfb::in1);
 
-    for (std::uint32_t b = 0; b < B; b++) {
-        for (std::uint32_t h = 0; h < Ht; h++) {
-            for (std::uint32_t w = 0; w < Wt; w++) {
-                // For this bcast-h op the reader will wrap the RHS source tile around at Wt
-                // so here we just linearly read 2 parallel arrays and apply bcast op per tile
-                // (bcast_h propagates the op down the H dimension, so it can be though of as bcast to H)
-                dfb_b.wait_front(onetile);
-                dfb_a.wait_front(onetile);
-
-                tile_regs_acquire();
-                BCAST_OP<BroadcastType::ROW>(dfb::in0, dfb::in1, 0, 0, 0);
-                tile_regs_commit();
-
-                dfb_a.pop_front(onetile);
-                dfb_b.pop_front(onetile);
-
-                dfb_out.reserve_back(onetile);
-
-                tile_regs_wait();
-                pack_tile(0, dfb::out);
-                tile_regs_release();
-
-                dfb_out.push_back(onetile);
-            }
-        }
-    }
+    // The reader repeats the RHS row every Wt tiles, so compute can consume both streams
+    // linearly while broadcasting RHS down H.
+    compute_kernel_lib::eltwise_chain(
+        compute_kernel_lib::IterationShape::tiles(B * Ht * Wt),
+        compute_kernel_lib::BinaryFpu<
+            CHAIN_BCAST_OP,
+            compute_kernel_lib::input(
+                dfb::in0,
+                compute_kernel_lib::WaitPolicy::PerTile,
+                compute_kernel_lib::PopPolicy::PerTile,
+                compute_kernel_lib::DataFormatReconfig::Disabled),
+            compute_kernel_lib::input(
+                dfb::in1,
+                CHAIN_BCAST_DIM,
+                compute_kernel_lib::WaitPolicy::PerTile,
+                compute_kernel_lib::PopPolicy::PerTile,
+                compute_kernel_lib::DataFormatReconfig::Disabled)>{},
+        compute_kernel_lib::PackTile<compute_kernel_lib::output(
+            dfb::out,
+            compute_kernel_lib::ReservePolicy::PerTile,
+            compute_kernel_lib::PushPolicy::PerTile,
+            compute_kernel_lib::DataFormatReconfig::Disabled)>{});
 }
