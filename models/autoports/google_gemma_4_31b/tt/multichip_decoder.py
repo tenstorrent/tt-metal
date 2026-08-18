@@ -13,6 +13,7 @@ optimized single-chip decoder.
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import dataclass, replace
 
 import torch
@@ -74,6 +75,37 @@ MLP_PREFILL_1D_MAX_ROWS = 128
 # rows, and only a final tail of fewer than 8 tile rows can land on one core.
 OUTPUT_PROJ_ROW_ALIGN = 8 * ttnn.TILE_SIZE  # 256 rows -> tile_rows % 8 == 0
 OUTPUT_PROJ_CHUNK = 16 * OUTPUT_PROJ_ROW_ALIGN  # 4096 rows, a multiple of the above
+
+
+def _prefill_sdpa_config(head_dim, seq_len):
+    """Prefill SDPA config with L1 headroom for the global (head_dim>=512) layers.
+
+    The shared helper's head_dim>=512 geometry -- (8,4) grid, q=k=128 -- leaves
+    the static circular buffer region ending at 1,374,976 B, which is within a
+    few hundred bytes of L1 buffers the decode path leaves resident on the same
+    cores: MLP_DECODE_CORES=14 places width-sharded decode activations on cores
+    0..13, and the SDPA grid [0-0 - 7-3] covers those. Observed collisions of
+    64 B (L1 buffer at 1,374,912) and 640 B (at 1,374,336), both fatal:
+
+        TT_THROW: Statically allocated circular buffers in program N clash with
+        L1 buffers on core range [0-0 - 7-3]
+
+    generator_vllm._release_decode_state() releases decode *traces* but not those
+    buffers, so the collision depends on allocator state rather than sequence
+    length -- which is why it reproduced during evals but not during a
+    power-of-two benchmark sweep. Halve the K chunk for the global layers to buy
+    headroom. Sliding layers (head_dim<=256) keep the shared (8,8) geometry.
+    """
+    if head_dim >= 512:
+        q_chunk = int(os.environ.get("GEMMA4_PREFILL_SDPA_QCHUNK", 128))
+        k_chunk = int(os.environ.get("GEMMA4_PREFILL_SDPA_KCHUNK", 64))
+        return ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(8, 4),
+            q_chunk_size=max(32, min(q_chunk, seq_len)),
+            k_chunk_size=max(32, min(k_chunk, seq_len)),
+            exp_approx_mode=False,
+        )
+    return prefill_sdpa_program_config(head_dim, seq_len)
 
 
 def _output_proj_row_ranges(seq_len: int) -> list[tuple[int, int]]:
@@ -1248,7 +1280,7 @@ class MultichipDecoder(OptimizedDecoder):
                 is_causal=True,
                 scale=1.0,
                 sliding_window_size=config.sliding_window if config.is_sliding else None,
-                program_config=prefill_sdpa_program_config(config.head_dim, seq_len),
+                program_config=_prefill_sdpa_config(config.head_dim, seq_len),
             )
         if q is not None:
             q.deallocate(True)
@@ -1392,12 +1424,7 @@ class MultichipDecoder(OptimizedDecoder):
         if page_table.shape[0] > 1:
             user_page_table = ttnn.slice(page_table, [user_id, 0], [user_id + 1, page_table.shape[1]])
             owns_page_table = True
-        program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=ttnn.CoreCoord(8, 4),
-            q_chunk_size=128,
-            k_chunk_size=128,
-            exp_approx_mode=False,
-        )
+        program_config = _prefill_sdpa_config(head_dim, seq_len)
         output_rm = ttnn.allocate_tensor_on_device(
             shape=(1, 1, seq_len, num_heads * head_dim),
             dtype=q.dtype,
