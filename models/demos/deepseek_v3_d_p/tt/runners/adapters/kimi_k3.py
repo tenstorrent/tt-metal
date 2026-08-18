@@ -65,15 +65,16 @@ class KimiK3Adapter(MLAPrefillAdapter):
     shared_path = None
 
     # Device vs upstream KimiSparseMoeBlock. Held at test_kimi_k3_moe's final_output_pcc: the two
-    # compare the same device tensor against references that agree to 1.7e-5, so they measure the
-    # same thing and cannot carry different bars. The 8x4 value is 0.9694 (reference 0.969434,
-    # final_output 0.969454) -- 8x4 spreads 896 experts over 32 chips instead of 8, so the top-16
+    # compare the same device tensor against references that agree to 2e-5, so they measure the same
+    # thing and cannot carry different bars. The 8x4 value is 0.9696 (reference 0.969567,
+    # final_output 0.969585) -- 8x4 spreads 896 experts over 32 chips instead of 8, so the top-16
     # combine accumulates across 4x as many chips in the bf8 latent space than on the 2x4 proxy
     # (0.995693). 0.965 keeps the usual ~0.005 of margin.
     #
-    # Moving the routed experts onto SiTU-GLU did not move either figure: 2x4 measures 0.995693
-    # against 0.995692 before. K3's realistic activations sit well inside both tanh caps, so the
-    # bf4 accuracy cost that _K3_SATURATION_CASES documents does not arise at these scales.
+    # Moving the routed experts onto SiTU-GLU did not cost anything here: 8x4 went 0.969434 ->
+    # 0.969567 and 2x4 0.995692 -> 0.995693. K3's realistic activations sit well inside both tanh
+    # caps, so the bf4 accuracy cost that _K3_SATURATION_CASES documents does not arise at these
+    # scales.
     moe_pcc_threshold = 0.965
 
     @property
