@@ -306,7 +306,7 @@ inline void rowsum_k(uint32_t Mt, uint32_t Kt) {
         dfb::scratch_one,
         dfb::ones,
         dfb::scratch_two,
-        compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
+        compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
         compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
         ReduceFp32Mode::Accurate>(compute_kernel_lib::ReduceInputBlockShape::of(Mt, Kt));
 }
@@ -402,10 +402,8 @@ TT_KERNEL void compute(uint32_t work_count) {
         DataflowBuffer* Kk = &k;
         if constexpr (true) {
             square_sfpu(q, scratch_one, ck);
-            WAIT(scratch_one, ck);
             rowsum_k(Ct, Kt);
             WAIT(scratch_two, Ct);
-            POP(scratch_one, ck);
             inv_rms(scratch_two, scratch_three, Ct, EPS_BITS, SCALE_BITS, true);
             WAIT(scratch_three, Ct);
             POP(scratch_two, Ct);
@@ -415,10 +413,8 @@ TT_KERNEL void compute(uint32_t work_count) {
             POP(q, ck);
 
             square_sfpu(k, scratch_one, ck);
-            WAIT(scratch_one, ck);
             rowsum_k(Ct, Kt);
             WAIT(scratch_two, Ct);
-            POP(scratch_one, ck);
             inv_rms(scratch_two, scratch_three, Ct, EPS_BITS, SCALE_BITS, false);
             WAIT(scratch_three, Ct);
             POP(scratch_two, Ct);
