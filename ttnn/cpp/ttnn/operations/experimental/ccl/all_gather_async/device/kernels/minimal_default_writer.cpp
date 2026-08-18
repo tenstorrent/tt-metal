@@ -679,17 +679,25 @@ void kernel_main() {
     noc_obj.async_atomic_barrier();
 #ifdef USE_WORKER_MUX
     if (mux_connection_valid) {
+        WAYPOINT("MXDW");
         tt::tt_fabric::fabric_client_disconnect(*fabric_direction_connection);
+        WAYPOINT("MXDD");
 
         if (is_termination_master) {
             Semaphore<> termination_sync(termination_sync_id);
+            WAYPOINT("TSMW");
             termination_sync.wait(num_mux_clients - 1);
+            WAYPOINT("TSMD");
+            WAYPOINT("FETW");
             tt::tt_fabric::fabric_endpoint_terminate(fabric_mux_x, fabric_mux_y, fabric_mux_termination_signal_address);
+            WAYPOINT("FETD");
         } else {
             uint64_t dest_addr =
                 safe_get_noc_addr(termination_master_noc_x, termination_master_noc_y, termination_sync_address, 0);
+            WAYPOINT("TSIW");
             noc_semaphore_inc(dest_addr, 1);
             noc_obj.async_atomic_barrier();
+            WAYPOINT("TSID");
         }
     }
 #else
