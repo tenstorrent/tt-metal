@@ -823,6 +823,9 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     // stored as a uint32 bit-pattern; the writer reinterprets it. Only the writer's mask uses these.
     const std::array<uint32_t, 2> w_shard =
         operation_attributes.neighborhood_w_shard.value_or(std::array<uint32_t, 2>{});
+    // Block-permuted Q descriptor {bt, bh, bw}; all-zero when strided (bt==0 selects the strided path in
+    // the reader/mask). The block counts (Hb, Wb) are derived kernel-side from nb_H/bh, nb_W/bw.
+    const std::array<uint32_t, 3> block = operation_attributes.neighborhood_block.value_or(std::array<uint32_t, 3>{});
     if (is_windowed) {
         // The reader->compute k-range ctrl CB carries each Q chunk's {k_lo, k_hi} and is needed in both
         // windowed sub-modes (block-diagonal and 3D-neighborhood); double-buffered so the reader can run a
@@ -1531,6 +1534,12 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         for (uint32_t d : neighborhood) {
             reader_args.push_back(d);
         }
+        // Block-permuted Q tail: {bt, bh, bw} then w_origin (bt==0 => strided path). The reader needs
+        // w_origin (the writer already gets it at slot 21) for the block box's global-w coords.
+        reader_args.push_back(block[0]);
+        reader_args.push_back(block[1]);
+        reader_args.push_back(block[2]);
+        reader_args.push_back(w_shard[1]);
 
         reader_desc.emplace_runtime_args(core, reader_args);
 
@@ -1557,7 +1566,10 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
              neighborhood[4],                                  // 18: kh
              neighborhood[5],                                  // 19: kw
              w_shard[0],                                       // 20: W_full (0 => not W-sharded)
-             w_shard[1]});                                     // 21: w_origin (signed int32 bit-pattern)
+             w_shard[1],                                       // 21: w_origin (signed int32 bit-pattern)
+             block[0],                                         // 22: block bt (0 => strided Q path)
+             block[1],                                         // 23: block bh
+             block[2]});                                       // 24: block bw
 
         compute_desc.emplace_runtime_args(
             core,

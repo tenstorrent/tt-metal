@@ -336,3 +336,22 @@ inline BlockCoord block_query_coord(
     const uint32_t dw = wid % bw, dh = (wid / bw) % bh, dt = wid / (bw * bh);
     return {b.t * bt + dt, b.h * bh + dh, w_origin + b.w * bw + dw};
 }
+
+// K-chunk iteration range covering the block's box in the STRIDED K/V table (k = t*HW + h*W + w). The
+// reader iterates [k_lo, k_hi) and neighborhood_chunk_active filters to the box's real cells; the mask
+// walks the same range. Both call this so their counts agree (the CB contract). Returns >= 1 chunk.
+inline WindowedKChunkRange neighborhood_box_k_chunk_range(
+    const NeighborhoodBox& box, uint32_t H, uint32_t W, uint32_t chunk_toks, uint32_t k_num_chunks) {
+    const uint32_t HW = H * W;
+    uint32_t k_lo = (box.t0 * HW + box.h_lo * W + box.w_lo) / chunk_toks;
+    const uint32_t last = (box.t1 - 1) * HW + (box.h_hi - 1) * W + (box.w_hi - 1);
+    uint32_t k_hi = last / chunk_toks + 1;
+    if (k_hi > k_num_chunks) {
+        k_hi = k_num_chunks;
+    }
+    if (k_lo >= k_hi) {
+        k_lo = k_hi > 0 ? k_hi - 1 : 0;
+        k_hi = k_lo + 1;
+    }
+    return {k_lo, k_hi};
+}
