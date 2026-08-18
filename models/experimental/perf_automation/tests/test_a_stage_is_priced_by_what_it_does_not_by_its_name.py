@@ -285,3 +285,58 @@ def test_an_unreadable_source_falls_back_to_generation_apis_only(tmp_path):
     assert _pipeline_is_generative(tmp_path / "nope", "out = m.generate(x, max_new_tokens=32)") is True
     assert _pipeline_is_generative(tmp_path / "nope", "for _ in range(3): y = net(x)") is False
     assert _pipeline_is_generative(tmp_path / "nope", "next_token = argmax(logits)") is False
+
+
+# ------------------------------------- the recurring stage reports itself; nothing matches its name
+
+
+def test_a_stage_that_retires_one_item_is_the_recurring_one():
+    """Derived, not matched. `recurring` is what the headline is per, and it used to be found by
+    `"decode" in name.lower()`: a loop called `generate` read as one-pass, and any stage called
+    decode read as autoregressive whether it looped or not."""
+    from agent.perf_adapter import _Stage
+
+    assert _Stage("generate", lambda: None, items=1).recurring is True
+    assert _Stage("encode", lambda: None, items=1500).recurring is False
+    assert _Stage("decode", lambda: None).recurring is False, "a name must not make a stage recurring"
+
+
+def test_the_legacy_decode_contract_states_its_own_count():
+    """decode_step(state) retires one token per call by definition, so the legacy path feeds the same
+    derived machinery the declared path does instead of relying on a fallback."""
+    from agent.trace_replay import _LegacyStage
+
+    st = _LegacyStage(type("A", (), {"step": staticmethod(lambda: None)})())
+    assert st.items == 1 and st.recurring is True
+
+
+def test_the_headline_stage_is_chosen_by_the_flag_before_the_name():
+    src = (_PA / "agent" / "trace_replay.py").read_text()
+    i = src.index("_rec = {st.name for st in stages")
+    j = src.index('"decode" in r[0].lower()', i)
+    assert i < j, "the name match runs before the reported flag"
+
+
+def test_a_pipeline_may_declare_its_own_unit():
+    """PIPELINE_UNIT is the model stating its unit the way PIPELINE_STAGES states its stages -- the
+    only source that cannot be wrong about a model nobody anticipated."""
+    from agent.perf_adapter import headline_unit
+
+    class _P:
+        PIPELINE_UNIT = "step"
+
+        def decode_step(self, state):  # would otherwise force "token"
+            return state
+
+    assert headline_unit(["decode"], _P()) == "step"
+
+
+def test_the_decode_contract_still_answers_when_nothing_is_declared():
+    from agent.perf_adapter import headline_unit
+
+    class _P:
+        def decode_step(self, state):
+            return state
+
+    assert headline_unit(["whatever"], _P()) == "token"
+    assert headline_unit(["classify"], None) == "inference"

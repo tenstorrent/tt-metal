@@ -87,6 +87,21 @@ def headline_unit(stage_names, pipeline=None) -> str:
     Lives here rather than in trace_replay because that module imports ttnn at module scope and so
     cannot be imported, let alone tested, without a device.
     """
+    # 1. WHAT THE PIPELINE SAYS IT RETIRES. PIPELINE_UNIT is the model stating its own unit, the way
+    # PIPELINE_STAGES states its own stages -- the only source that cannot be wrong about a model
+    # nobody anticipated. Optional: absent, the contract below answers for every pipeline in tree.
+    _declared = str(getattr(pipeline, "PIPELINE_UNIT", "") or "").strip().lower()
+    if not _declared and pipeline is not None:
+        import sys as _sys
+
+        _mod = _sys.modules.get(type(pipeline).__module__)
+        _declared = str(getattr(_mod, "PIPELINE_UNIT", "") or "").strip().lower() if _mod else ""
+    if _declared in ("token", "step", "inference"):
+        return _declared
+    # 2. THE DECODE CONTRACT, a fact about the built object: decode_step(state) retires one token per
+    # call by definition. Every stage-adapter pipeline in tree also keeps it, so the name matches
+    # below are already unreachable for them -- they remain for a pipeline that declares stages and
+    # keeps no contract, which is the only case left where nothing structural has spoken.
     if pipeline is not None and callable(getattr(pipeline, "decode_step", None)):
         return "token"
     names = [str(n or "").lower() for n in (stage_names or [])]
@@ -208,9 +223,9 @@ class PipelineDecodeAdapter:
 class _Stage:
     """One profilable unit emit-e2e emitted: a name and a host-op-free traceable step."""
 
-    __slots__ = ("name", "step", "self_traced", "trace_path", "items")
+    __slots__ = ("name", "step", "self_traced", "trace_path", "items", "recurring")
 
-    def __init__(self, name, step, self_traced=False, trace_path=None, items=0):
+    def __init__(self, name, step, self_traced=False, trace_path=None, items=0, recurring=None):
         self.name = name
         self.step = step
         self.self_traced = bool(self_traced)
@@ -221,6 +236,13 @@ class _Stage:
         # the audio encoder's compute roof read 0.041 ms against a measurement in the tens of ms.
         # 0 means "not stated", which the reader turns into 1; it is not a claim of one.
         self.items = max(0, int(items or 0))
+        # THE STAGE THE HEADLINE IS PER, derived rather than matched. A stage that retires exactly
+        # one item per call IS the recurring one -- that is what recurring means -- and the reader
+        # picked it by `"decode" in name.lower()` instead, so a pipeline whose loop is called
+        # `generate` read as one-pass and one that names any stage `decode` read as autoregressive
+        # whether it looped or not. Explicit for the legacy contract, which retires one token per
+        # call by definition; None when the stage stated no count, and the caller falls back.
+        self.recurring = (self.items == 1) if recurring is None else bool(recurring)
 
 
 class PipelineStageAdapter:
@@ -357,7 +379,13 @@ class PipelineStageAdapter:
         def _dstep():
             box["state"] = step(box["state"])
 
+        # ONE TOKEN PER CALL, BY DEFINITION -- that is what decode_step(state) is, and reaching here
+        # means the pipeline keeps that contract. Stated rather than left to a fallback, so the
+        # legacy path feeds the same derived machinery the declared path does: `recurring` selects
+        # the headline stage, `items` prices the compute ceiling. This is the ONLY place on the
+        # measurement path that still names a stage, and it names it because the contract it just
+        # verified is spelled that way.
         if bool(getattr(p, "self_traced", False)):
-            self.stages = [_Stage("decode", _dstep, True, getattr(p, "trace_path", None))]
+            self.stages = [_Stage("decode", _dstep, True, getattr(p, "trace_path", None), 1, True)]
             return
-        self.stages = [_Stage("decode", _dstep)]
+        self.stages = [_Stage("decode", _dstep, items=1, recurring=True)]

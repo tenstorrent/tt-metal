@@ -156,7 +156,11 @@ class _LegacyStage:
     """Wrap a legacy single-step adapter (PipelineDecodeAdapter: .step()) as a stage."""
 
     def __init__(self, adapter):
+        # The legacy adapter IS the decode contract -- PipelineDecodeAdapter raises NotTraceCapable
+        # without decode_step(state) -- so one token per call is a fact here, not a guess.
         self.name = "decode"
+        self.items = 1
+        self.recurring = True
         self.step = adapter.step
         self.self_traced = bool(getattr(adapter, "self_traced", False))
         self.trace_path = getattr(adapter, "trace_path", None)
@@ -265,7 +269,15 @@ def measure_adapter(adapter, device) -> float:
     from models.experimental.perf_automation.agent.perf_adapter import headline_unit as _hu
 
     _unit = _hu([r[0] for r in results], getattr(adapter, "_pipe", None))
-    decode = next((r for r in results if "decode" in r[0].lower()), None)
+    # THE RECURRING STAGE, AS THE STAGE ITSELF REPORTED IT. `recurring` is set from the item count
+    # the pipeline declares (one item per call is what recurring means) and unconditionally for the
+    # legacy decode contract. The name match below is what this used to do first, and it is a guess
+    # in both directions: a loop called `generate` read as one-pass, and any stage called `decode`
+    # read as the recurring one whether it looped or not.
+    _rec = {st.name for st in stages if getattr(st, "recurring", False)}
+    decode = next((r for r in results if r[0] in _rec), None)
+    if decode is None:
+        decode = next((r for r in results if "decode" in r[0].lower()), None)
     if _unit == "token" and decode is None and results:
         decode = results[-1]
     # WHICH UNIT OF WORK THE HEADLINE MEASURES. This selection already knew -- a decode stage means
