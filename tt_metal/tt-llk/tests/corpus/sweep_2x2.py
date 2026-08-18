@@ -169,13 +169,23 @@ ON_FLAGS = (
     # replay-exec-record (exec-while-record capture; fire witness =
     # sigmoidappx 33->32 launch shape).
     "-mtt-tensix-optimize-transp-involution "
-    "-mtt-tensix-optimize-replay-exec-record"
-    # M3/prgm-const is NOT in the ON set (un-shipped after pin 9's nightly):
-    # its only engagement channel was the trusted TTREGION source markers in
-    # the LLK headers, and trusted source annotation of the consumed library
-    # is rejected at the design level (LLK-pristine rule, conf R7).  The flag
-    # returns when the compiler PROVES region effects algorithmically
-    # (mop_cfg template-programming dataflow derivation — Lane BC).
+    "-mtt-tensix-optimize-replay-exec-record "
+    # Lane BL (COUPLED to the next pin cycle: requires a cc1plus built
+    # from sfpi-gcc agent/mopcfg-derivation or its merge — pin 10
+    # refuses this flag byte-identically, so it is inert until the
+    # re-pin).  M3/prgm-const returns to the ON set with the mop_cfg
+    # template-effect DERIVATION (Lane BC design, implemented Lane BL):
+    # the compiler PROVES the MOP run's PRGM/LaneConfig effects from
+    # the TU's own template-programming stores — no markers, no
+    # trusted annotations, stock harness.  Fire witness (dump-proven,
+    # laneBL-evidence-20260818): the exp perf node's MATH_ISOLATE
+    # math.elf — "allocated PRGM L14 for invariant immediate
+    # 0x42fe0000", capture 17->16, SFPMUL+SFPADDI fused to
+    # SFPMAD(...,L14); sdpa fires with the identical-immediate dedup
+    # (1 register + dominated reuses, was L12+L13+L14); exp corr CRAQ
+    # 7574->5630 and sdpa num_tiles:2 CRAQ 4886->4081 sim-cycles, both
+    # bit-exact PASS on the pinned BH sim.
+    "-mtt-tensix-optimize-prgm-const"
 )
 REMOVED_FLAGS = ("-mtt-tensix-emit-loadmacro", "-mtt-tensix-analyze-loadmacro")
 # Weekly per-knob attribution: OFF set plus exactly one positive knob.
@@ -196,6 +206,7 @@ KNOBS = {
     "interlock-schedule": "-mtt-tensix-optimize-interlock-schedule",
     "transp-involution": "-mtt-tensix-optimize-transp-involution",
     "replay-exec-record": "-mtt-tensix-optimize-replay-exec-record",
+    "prgm-const": "-mtt-tensix-optimize-prgm-const",
 }
 HARNESS_TOOLCHAIN = TESTS / "sfpi"  # untracked symlink the harness hardcodes
 DEVICE_LOCK = "/tmp/tt-device.lock"
