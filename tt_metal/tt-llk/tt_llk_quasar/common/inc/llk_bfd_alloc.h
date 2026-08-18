@@ -158,7 +158,10 @@ inline std::uint8_t bfd_current()
     static_assert(ckernel::TRISC_ID != 1, "math TRISC owns no buffer descriptors");
     static_assert(E < BfdResource::Count, "invalid BFD engine");
     static_assert(bfd_engine_owned_by_trisc(E, ckernel::TRISC_ID), "BFD engine not owned by compiling TRISC");
-    LLK_ASSERT(bfd_state.current[static_cast<std::uint8_t>(E)] != BFD_ID_INVALID, "bfd_current before first bfd_alloc");
+    // current[] is bss zero before the first bfd_alloc (0 is a valid id), and the BFD_ID_INVALID
+    // sentinel is only written inside bfd_alloc's lazy-init; gate on initialized so a bfd_current
+    // that races ahead of any allocation trips the assert instead of returning a bogus id 0.
+    LLK_ASSERT(bfd_state.initialized && bfd_state.current[static_cast<std::uint8_t>(E)] != BFD_ID_INVALID, "bfd_current before first bfd_alloc");
     return bfd_state.current[static_cast<std::uint8_t>(E)];
 }
 
