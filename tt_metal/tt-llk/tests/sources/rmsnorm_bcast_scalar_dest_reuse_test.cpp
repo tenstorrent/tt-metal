@@ -82,12 +82,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // _llk_unpack_A_rmsnorm_mop_config_; SCALAR is what routes the base address to upk0
     // (SrcA) while SrcB is fed a dummy dvalid for the MOVD2B on the math thread.
     _llk_unpack_A_rmsnorm_init_<RMSNORM_NUM_TILES, BroadcastType::SCALAR, true, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
-        RMSNORM_UNPACK_FULL_TRANSPOSE /* transpose_of_faces */,
-        RMSNORM_UNPACK_FULL_TRANSPOSE /* within_face_16x16_transpose */,
-        FACE_R_DIM,
-        RMSNORM_NUM_FACES,
-        formats.unpack_A_src,
-        formats.unpack_A_dst);
+        RMSNORM_UNPACK_FULL_TRANSPOSE /* transpose_of_faces */, RMSNORM_UNPACK_FULL_TRANSPOSE /* within_face_16x16_transpose */, FACE_R_DIM, RMSNORM_NUM_FACES);
 
     // ONE call: the MOP itself walks all RMSNORM_NUM_TILES tiles from this base address.
     _llk_unpack_A_<BroadcastType::SCALAR, true, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
