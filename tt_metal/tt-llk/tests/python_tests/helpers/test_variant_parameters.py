@@ -448,6 +448,35 @@ class DST_WRITE_ADDR_OFFSET(TemplateParameter):
 
 
 @dataclass
+class REDUCE_PASSES(TemplateParameter):
+    """Re-entry configuration for ``mul_reduce_scalar_reenter_test.cpp``.
+
+    ``REDUCE_PASSES``       how many times to re-run the whole multiply+reduce sequence
+                            over the same input, re-issuing the inits the chunked compute
+                            API re-issues per batch. 1 collapses to the non-chunked
+                            sequence and is the control; 2 is the re-entry question.
+    ``SINGLE_DEST_SECTION`` whether all passes share one DEST section. True is what
+                            ``mul_reduce_scalar_chunked_tile`` actually does -- the caller
+                            acquires DST once and every batch re-enters inside it, with no
+                            pack handshake between -- so only the final scalar is packed.
+                            False puts a full section boundary between passes, which lets
+                            each scalar be packed and compared but re-establishes more
+                            state than the chunked form does.
+    """
+
+    passes: int = 1
+    single_dest_section: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return "\n".join(
+            [
+                f"constexpr std::uint32_t REDUCE_PASSES = {self.passes}u;",
+                f"constexpr bool SINGLE_DEST_SECTION = {str(self.single_dest_section).lower()};",
+            ]
+        )
+
+
+@dataclass
 class PACK_NUM_TILES(TemplateParameter):
     """Tile count for the block/per-tile pack drivers.
 
