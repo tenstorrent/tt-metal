@@ -503,8 +503,8 @@ jobs:
     steps:
       - name: Configure S3 ccache storage
         id: configure-s3-ccache
-        # Failing internal jobs draws attention immediately so we can fix them and make them fast.
-        # Forks will never have secrets; don't fail the job for them, they'll just run slower
+        # Missing credentials fail by default. Forks skip this step, while callers that
+        # opt in can continue without remote caches.
         if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
         run: |
           if [ -z "${{ secrets.GARAGE_S3_ACCESS_KEY }}" ] || [ -z "${{ secrets.GARAGE_S3_SECRET_KEY }}" ]; then
@@ -632,8 +632,8 @@ jobs:
 
       - name: 📦 Restore CPM source cache (Garage S3)
         id: cpm-cache
-        # Same fork guard as the ccache S3 steps: forks have no secrets, so skip S3
-        # and let CMake configure fetch CPM sources from scratch.
+        # Remote CPM caching requires the credentials enabled by the ccache setup.
+        # Forks and opted-in credentialless callers fetch sources from scratch.
         if: ${{ steps.configure-s3-ccache.outputs.enabled == 'true' }}
         env:
           CACHE_KEY: ${{ steps.cpm-key.outputs.key }}
@@ -706,9 +706,8 @@ jobs:
           "${build_args[@]}"
 
       - name: 📦 Pack CPM cache
-        # Only pack when we can actually save. For fork PRs the restore step is
-        # skipped (no secrets), so 'hit' is unset and would otherwise trigger a
-        # pointless zstd compression that never gets uploaded.
+        # Only pack when remote caching is enabled; otherwise 'hit' is unset and
+        # compression would not be uploaded.
         if: >-
           steps.cpm-cache.outputs.hit != 'true' &&
           steps.configure-s3-ccache.outputs.enabled == 'true'
@@ -716,7 +715,7 @@ jobs:
           [ -d .cpmcache ] && tar -I 'zstd -T0 --long -9 -v' -cf .cpmcache.tar.zst .cpmcache || true
 
       - name: 📦 Save CPM source cache (Garage S3)
-        # Only upload on a miss, and only where we have S3 creds (same fork guard).
+        # Only upload cache misses when remote caching is enabled.
         if: >-
           steps.cpm-cache.outputs.hit != 'true' &&
           steps.configure-s3-ccache.outputs.enabled == 'true'
