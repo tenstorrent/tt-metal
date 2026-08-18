@@ -1,0 +1,11 @@
+2026-08-18 22:24:11.060 | INFO     | __main__:import_tracy_op_logs:345 - Importing ops logs
+/localdev/vkovacevic/tt-metal/tools/tracy/process_ops_logs.py:450: DtypeWarning: Columns (3,4,8) have mixed types. Specify dtype option on import or set low_memory=False.
+  df = pd.read_csv(tracyOpTimesLog)
+2026-08-18 22:24:14.426 | INFO     | tracy.perf_counter_analysis:get_device_op_data:2140 - Getting device ops
+2026-08-18 22:24:14.427 | INFO     | __main__:append_device_data:1009 - Appending device data
+2026-08-18 22:24:14.427 | INFO     | __main__:append_device_data:1023 - Forcing legacy device-log parsing even though cpp_device_perf_report.csv exists in models/autoports/qwen_qwen3_6_35b_a3b/doc/functional_decoder/tracy/raw/.logs.
+2026-08-18 22:24:24.556 | INFO     | tracy.process_device_log:core_to_device_timeseries:416 - Importing Data For Device Number : 0
+2026-08-18 22:25:23.723 | INFO     | __main__:generate_reports:1342 - OPs' perf analysis is finished! Generating reports ...
+2026-08-18 22:25:23.723 | INFO     | __main__:generate_reports:1360 - Copying runtime artifacts
+2026-08-18 22:25:23.823 | INFO     | __main__:generate_reports:1369 - Generating OPs CSV
+2026-08-18 22:25:24.599 | INFO     | __main__:generate_reports:1765 - OPs csv generated at: /localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/doc/functional_decoder/tracy/raw/reports/ops_perf_results.csv

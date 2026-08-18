@@ -1,0 +1,231 @@
+2026-08-18 17:43:48.461 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.12, pytest-9.0.3, pluggy-1.6.0 -- /localdev/vkovacevic/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/vkovacevic/tt-metal
+configfile: pytest.ini
+plugins: timeout-2.4.0, cov-7.0.0, benchmark-5.2.3, anyio-4.14.2, split-0.11.0, dash-2.15.0, github-actions-annotate-failures-0.3.0
+timeout: 800.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 19 items / 18 deselected / 1 selected
+
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_context_probe_full_attention_prefill_non_aligned[device_params0] 2026-08-18 17:43:50.469 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-18 17:43:50.469 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-08-18 17:43:50.469 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-08-18 17:43:50.469 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-08-18 17:43:50.470 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:569)
+2026-08-18 17:43:50.470 | info     |             UMD | Firmware bundle version 19.9.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-08-18 17:43:50.474 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-08-18 17:43:50.697 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:168)
+2026-08-18 17:43:50.697 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-08-18 17:43:50.697 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:145)
+2026-08-18 17:43:50.697 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-08-18 17:43:50.698 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-08-18 17:43:50.872 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+2026-08-18 17:43:50.991 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-08-18 17:43:50.991 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-08-18 17:43:50.991 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-08-18 17:43:50.991 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-08-18 17:43:50.991 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-18 17:43:50.991 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-18 17:43:50.991 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-18 17:43:50.991 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-18 17:43:50.991 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-18 17:43:50.991 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-18 17:43:50.991 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-18 17:43:50.991 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-18 17:43:50.992 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-08-18 17:43:50.992 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-08-18 17:43:50.997 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 17:43:50.997 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 17:43:50.997 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 17:43:50.997 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 17:43:51.025 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-08-18 17:43:51.065 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681931937_memory' (shm_resource_tracker.cpp:282)
+2026-08-18 17:43:51.643 | info     |           Metal | [Real-time profiler] Device 0 sync complete: 100 samples, frequency=1.349983 GHz, device_time_at_sync=425505901960 cycles (realtime_profiler_manager.cpp:1127)
+2026-08-18 17:44:40.578 | critical |          Always | TT_FATAL: Out of Memory: Not enough space to allocate 17213423616 B DRAM buffer across 8 banks, where each bank needs to store 2151677952 B, but bank size is 4272341376 B (allocated: 2158173376 B, free: 2114168000 B, largest free block: 1396868480 B) (assert.hpp:104)
+FAILED
+
+=================================== FAILURES ===================================
+____ test_context_probe_full_attention_prefill_non_aligned[device_params0] _____
+
+device = MeshDevice(1x1 grid, 1 devices)
+
+    @pytest.mark.context
+    @pytest.mark.skipif(os.environ.get("RUN_QWEN36_CONTEXT_PROBE") != "1", reason="set RUN_QWEN36_CONTEXT_PROBE=1 for larger context probes")
+    @pytest.mark.parametrize("device_params", [{"trace_region_size": 0}], indirect=True)
+    def test_context_probe_full_attention_prefill_non_aligned(device):
+        cfg = _target_text_config()
+        seq_len = int(os.environ.get("QWEN36_CONTEXT_PREFILL_SEQ", "1025"))
+        layer_idx = 3
+        state = _synthetic_layer_state(cfg, layer_idx)
+        tt_layer = FunctionalDecoder.from_state_dict(state, hf_config=cfg, layer_idx=layer_idx, mesh_device=device)
+        inputs = _full_prefill_inputs(device, cfg, seq_len)
+        kv_cache = FunctionalDecoder.allocate_full_attention_cache(
+            hf_config=cfg,
+            mesh_device=device,
+            max_batch_size=1,
+            max_seq_len=inputs["max_seq_len"],
+            block_size=BLOCK_SIZE,
+        )
+>       out = tt_layer.prefill_forward(
+            inputs["hidden"],
+            position_embeddings=inputs["position_embeddings"],
+            page_table=inputs["page_table"],
+            kv_cache=kv_cache,
+        ).hidden_states
+
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py:716:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+models/autoports/qwen_qwen3_6_35b_a3b/tt/functional_decoder.py:784: in prefill_forward
+    hidden_states = self.mlp(hidden_states)
+                    ^^^^^^^^^^^^^^^^^^^^^^^
+models/common/lightweightmodule.py:12: in __call__
+    return self.forward(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+models/autoports/qwen_qwen3_6_35b_a3b/tt/functional_decoder.py:599: in forward
+    routed = ttnn.matmul(expert_hidden, self.routed_down, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = FastOperation(python_fully_qualified_name='ttnn.matmul', function=<ttnn._ttnn.operations.matmul.matmul_t object at 0x7...<function default_postprocess_golden_function_outputs at 0x77c65fae0cc0>, is_cpp_operation=True, is_experimental=False)
+function_args = (ttnn.Tensor([[[[ 0.0000,  0.0000,  ...,  0.0000,  0.0000],
+               [ 0.0000,  0.0000,  ...,  0.0000,  0.0000],...  0.0000,  ...,  0.0000,  0.0000]]]], shape=Shape([1, 256, 512, 2048]), dtype=DataType::BFLOAT16, layout=Layout::TILE))
+function_kwargs = {'dtype': DataType.BFLOAT16, 'memory_config': MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)}
+cq_id = None, recording = False
+
+    def __call__(self, *function_args, **function_kwargs):
+        cq_id = None
+        if "queue_id" in function_kwargs:
+            cq_id = function_kwargs.pop("queue_id")
+        elif "cq_id" in function_kwargs:
+            cq_id = function_kwargs.pop("cq_id")
+
+        recording = ttnn.graph.is_python_io_recording_enabled()
+        if recording:
+            ttnn.graph.track_function_start(self.python_fully_qualified_name)
+            ttnn.graph.record_python_operation(self.python_fully_qualified_name, function_args, function_kwargs)
+            input_tensors = get_all_tensors((function_args, function_kwargs))
+            set_tensor_id(input_tensors)
+
+        try:
+            if cq_id is None:
+>               result = self.function(*function_args, **function_kwargs)
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E               RuntimeError: TT_FATAL @ /localdev/vkovacevic/tt-metal/tt_metal/impl/allocator/bank_manager.cpp:462: false
+E               info:
+E               Out of Memory: Not enough space to allocate 17213423616 B DRAM buffer across 8 banks, where each bank needs to store 2151677952 B, but bank size is 4272341376 B (allocated: 2158173376 B, free: 2114168000 B, largest free block: 1396868480 B)
+E               backtrace:
+E                --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x94c781) [0x77c6d8f4c781]
+E                --- tt::tt_metal::BankManager::allocate_buffer(unsigned long, unsigned long, bool, tt::tt_metal::CoreRangeSet const&, std::optional<unsigned int>, ttsl::StrongType<unsigned int, tt::tt_metal::AllocatorIDTag>, std::vector<std::pair<unsigned long, unsigned long>, std::allocator<std::pair<unsigned long, unsigned long> > > const&)
+E                --- tt::tt_metal::AllocatorImpl::allocate_buffer(tt::tt_metal::Buffer*)
+E                --- tt::tt_metal::Buffer::allocate_impl()
+E                --- tt::tt_metal::Buffer::create(tt::tt_metal::IDevice*, unsigned long, unsigned long, tt::tt_metal::BufferType, tt::tt_metal::BufferShardingArgs const&, std::optional<bool>, std::optional<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag> >)
+E                --- tt::tt_metal::distributed::MeshBuffer::create(std::variant<tt::tt_metal::distributed::ReplicatedBufferConfig, tt::tt_metal::distributed::ShardedBufferConfig> const&, tt::tt_metal::distributed::DeviceLocalBufferConfig const&, tt::tt_metal::distributed::MeshDevice*, std::optional<unsigned long>)
+E                --- tt::tt_metal::tensor_impl::allocate_device_buffer(tt::tt_metal::distributed::MeshDevice*, tt::tt_metal::TensorSpec const&)
+E                --- tt::tt_metal::MeshTensor::allocate_on_device(tt::tt_metal::distributed::MeshDevice&, tt::tt_metal::TensorSpec const&, tt::tt_metal::TensorTopology const&)
+E                --- tt::tt_metal::create_device_tensor(tt::tt_metal::TensorSpec const&, tt::tt_metal::distributed::MeshDevice*, std::optional<tt::tt_metal::TensorTopology>)
+E                --- ttnn::prim::MatmulDeviceOperation::create_output_tensors(ttnn::prim::MatmulParams const&, ttnn::prim::MatmulInputs const&)
+E                --- /localdev/vkovacevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim21MatmulDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x2b3) [0x77c6db1f59d3]
+E                --- ttnn::prim::matmul(tt::tt_metal::Tensor const&, tt::tt_metal::Tensor const&, std::optional<tt::tt_metal::Tensor> const&, std::optional<tt::tt_metal::Tensor> const&, ttnn::prim::MatmulParams const&)
+E                --- /localdev/vkovacevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x178aeea) [0x77c6db18aeea]
+E                --- /localdev/vkovacevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn10operations6matmul6matmulERKN2tt8tt_metal6TensorES6_bbRKSt8optionalIKNS3_12MemoryConfigEES7_IKNS3_8DataTypeEERKS7_IKSt7variantIJNS1_28MatmulMultiCoreProgramConfigENS1_33MatmulMultiCoreReuseProgramConfigENS1_42MatmulMultiCoreReuseMultiCastProgramConfigENS1_44MatmulMultiCoreReuseMultiCast1DProgramConfigENS1_53MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfigENS1_60MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfigEEEERKS7_IKSG_IJNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEENS0_5unary19BasicUnaryWithParamIJfEEEEEES7_IKNS_19ComputeKernelConfigEES7_IKNS_5types8CoreGridEERKS7_IKNS3_4TileEES7_IS4_ERKS7_IKNS3_12experimental20GlobalCircularBufferEERKS7_IN4ttsl10StrongTypeIhNS3_14SubDeviceIdTagEEEE+0x373) [0x77c6db18a2d3]
+E                --- /localdev/vkovacevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x4e439f) [0x77c6dbce439f]
+E                --- /localdev/vkovacevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x4e3acb) [0x77c6dbce3acb]
+E                --- /localdev/vkovacevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x3155d5) [0x77c6dbb155d5]
+E                --- /localdev/vkovacevic/tt-metal/python_env/bin/python3() [0x1876122]
+E                --- /localdev/vkovacevic/tt-metal/python_env/bin/python3() [0x1686e59]
+E                --- /localdev/vkovacevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0xe920) [0x1621aa0]
+E                --- /localdev/vkovacevic/tt-metal/python_env/bin/python3() [0x1876122]
+E                --- /localdev/vkovacevic/tt-metal/python_env/bin/python3() [0x1686e59]
+E                --- /localdev/vkovacevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x36f1) [0x1616871]
+E                --- /localdev/vkovacevic/tt-metal/python_env/bin/python3() [0x1612849]
+E                --- /localdev/vkovacevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0xe840) [0x16219c0]
+E                --- /localdev/vkovacevic/tt-metal/python_env/bin/python3(_PyObject_Call_Prepend+0x9a) [0x1686f1a]
+E                --- /localdev/vkovacevic/tt-metal/python_env/bin/python3() [0x1686e59]
+E                --- /localdev/vkovacevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x36f1) [0x1616871]
+E                --- /localdev/vkovacevic/tt-metal/python_env/bin/python3() [0x1876122]
+E                --- /localdev/vkovacevic/tt-metal/python_env/bin/python3() [0x1686e59]
+E                --- /localdev/vkovacevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x36f1) [0x1616871]
+E                --- /localdev/vkovacevic/tt-metal/python_env/bin/python3() [0x1876122]
+E                --- /localdev/vkovacevic/tt-metal/python_env/bin/python3() [0x1686e59]
+E                --- /localdev/vkovacevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0xe920) [0x1621aa0]
+E                --- /localdev/vkovacevic/tt-metal/python_env/bin/python3() [0x1876122]
+E                --- /localdev/vkovacevic/tt-metal/python_env/bin/python3() [0x1686e59]
+E                --- /localdev/vkovacevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x36f1) [0x1616871]
+E                --- /localdev/vkovacevic/tt-metal/python_env/bin/python3() [0x1876122]
+E                --- /localdev/vkovacevic/tt-metal/python_env/bin/python3() [0x1686e59]
+E                --- /localdev/vkovacevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x36f1) [0x1616871]
+E                --- /localdev/vkovacevic/tt-metal/python_env/bin/python3() [0x1876122]
+E                --- /localdev/vkovacevic/tt-metal/python_env/bin/python3() [0x1686e59]
+E                --- /localdev/vkovacevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x36f1) [0x1616871]
+E                --- /localdev/vkovacevic/tt-metal/python_env/bin/python3(PyEval_EvalCode+0xe2) [0x1684e62]
+E                --- /localdev/vkovacevic/tt-metal/python_env/bin/python3() [0x16a4982]
+E                --- /localdev/vkovacevic/tt-metal/python_env/bin/python3() [0x17aebff]
+E                --- /localdev/vkovacevic/tt-metal/python_env/bin/python3(_PyRun_SimpleFileObject+0x118) [0x17af3ac]
+E                --- /localdev/vkovacevic/tt-metal/python_env/bin/python3(_PyRun_AnyFileObject+0x42) [0x17af282]
+E                --- /localdev/vkovacevic/tt-metal/python_env/bin/python3() [0x17af1c4]
+E                --- /localdev/vkovacevic/tt-metal/python_env/bin/python3() [0x17af0d8]
+E                --- /localdev/vkovacevic/tt-metal/python_env/bin/python3(Py_RunMain+0x2e5) [0x171f33b]
+E                --- /localdev/vkovacevic/tt-metal/python_env/bin/python3() [0x17406fa]
+E                --- /localdev/vkovacevic/tt-metal/python_env/bin/python3() [0x17404ed]
+E                --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x77c6e002a1ca]
+E                --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x77c6e002a28b]
+E                --- /localdev/vkovacevic/tt-metal/python_env/bin/python3(_start+0x29) [0x1795ced]
+
+ttnn/ttnn/decorators.py:473: RuntimeError
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+- generated xml file: /localdev/vkovacevic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================== slowest durations ===============================
+48.92s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_context_probe_full_attention_prefill_non_aligned[device_params0]
+1.19s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_context_probe_full_attention_prefill_non_aligned[device_params0]
+0.13s teardown models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_context_probe_full_attention_prefill_non_aligned[device_params0]
+=========================== short test summary info ============================
+FAILED models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_context_probe_full_attention_prefill_non_aligned[device_params0]
+================ 1 failed, 18 deselected, 2 warnings in 55.85s =================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+nanobind: leaked 2 instances!
+ - leaked instance 0x77c66028ec28 of type "ttnn._ttnn.device.DispatchCoreConfig"
+ - leaked instance 0x77c66017ada8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 34 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - ... skipped remainder
+nanobind: leaked 303 functions!
+ - leaked function "SetDefaultDevice"
+ - leaked function ""
+ - leaked function "to"
+ - leaked function "__repr__"
+ - leaked function ""
+ - leaked function "experimental_set_per_core_allocation"
+ - leaked function ""
+ - leaked function "terminate_fast_dispatch"
+ - leaked function "__ne__"
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-18 17:44:46.819 | info     |    BuildKernels | JIT cache stats: 152/235 hits (64.7%) [152 cached, 54 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-18 17:44:46.819 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-18 17:44:46.831 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-08-18 17:44:46.831 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-08-18 17:44:47.396 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-08-18 17:44:47.396 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-08-18 17:44:47.396 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)

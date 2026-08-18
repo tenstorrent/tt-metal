@@ -1,0 +1,312 @@
+{
+  "model_id": "Qwen/Qwen3.6-35B-A3B",
+  "autoport_dir": "models/autoports/qwen_qwen3_6_35b_a3b",
+  "stage": "functional_decoder",
+  "hf_text_config": {
+    "advertised_context_length_tokens": 262144,
+    "hidden_size": 2048,
+    "num_hidden_layers": 40,
+    "num_attention_heads": 16,
+    "num_key_value_heads": 2,
+    "head_dim": 256,
+    "rotary_dim": 64,
+    "linear_key_head_dim": 128,
+    "linear_value_head_dim": 128,
+    "linear_num_key_heads": 16,
+    "linear_num_value_heads": 32,
+    "linear_conv_kernel_dim": 4,
+    "moe_intermediate_size": 512,
+    "shared_expert_intermediate_size": 512,
+    "num_experts": 256,
+    "num_experts_per_tok": 8,
+    "layer_type_counts": {
+      "linear_attention": 30,
+      "full_attention": 10
+    },
+    "layer_type_pattern_first_8": [
+      "linear_attention",
+      "linear_attention",
+      "linear_attention",
+      "full_attention",
+      "linear_attention",
+      "linear_attention",
+      "linear_attention",
+      "full_attention"
+    ]
+  },
+  "functional_decoder_contract": {
+    "single_device": true,
+    "layer_kinds": [
+      {
+        "kind": "linear_attention",
+        "representative_layer_idx": 0,
+        "count": 30
+      },
+      {
+        "kind": "full_attention",
+        "representative_layer_idx": 3,
+        "count": 10
+      }
+    ],
+    "prefill_input_shape": "[1, batch, seq, 2048]",
+    "decode_input_shape": "[1, 1, batch, 2048]",
+    "decode_current_pos": "TTNN int32 tensor, one absolute position per batch item",
+    "full_attention_cache": {
+      "paged": true,
+      "block_size": 32,
+      "cache_shape": "[max_num_blocks, 2, 32, 256]",
+      "page_table_owner": "caller",
+      "page_table_tested": "reversed logical-to-physical block table, including traced decode at current_pos=262143"
+    },
+    "linear_attention_state": {
+      "conv_state_shape": "[1, 1, batch, 8192] across four conv taps",
+      "recurrent_state_shape": "[1, batch * 32, 128, 128]",
+      "page_table_handling": "linear attention does not consume page tables; current_pos is accepted for interface parity",
+      "prefill_algorithm": "64-token TTNN chunked gated-delta prefill with carried conv/recurrent state"
+    },
+    "moe": {
+      "router": "real top-k router with softmax, topk, renormalize, and scatter to dense routing weights",
+      "decode_path": "active-expert sparse_matmul for single-token decode",
+      "prefill_path": "32-token chunked sparse_matmul with all-expert sparsity and post-routing reduction"
+    }
+  },
+  "tested_capability": {
+    "hf_advertised_context_tokens": 262144,
+    "prefill_context_tokens_supported_this_stage": {
+      "full_attention": 262144,
+      "linear_attention": 262144
+    },
+    "decode_context_tokens_supported_this_stage": {
+      "full_attention": {
+        "context": 262144,
+        "current_pos": 262143,
+        "traced": true
+      },
+      "linear_attention": {
+        "prefill_seq_len": 262144,
+        "decode_current_pos": 262144,
+        "traced_small_decode": true
+      }
+    },
+    "full_attention_prefill_largest_passing": {
+      "seq_len": 262144,
+      "artifact": "doc/functional_decoder/logs/context_probe_full_prefill_262144_sparse.log",
+      "call_time_seconds": 356.49,
+      "total_time_seconds": 359.85
+    },
+    "full_attention_prefill_near_max_nondivisible_passing": {
+      "seq_len": 262143,
+      "artifact": "doc/functional_decoder/logs/context_probe_full_prefill_262143_sparse.log",
+      "call_time_seconds": 359.25,
+      "total_time_seconds": 362.66
+    },
+    "full_attention_decode_largest_passing": {
+      "context": 262144,
+      "current_pos": 262143,
+      "traced": true,
+      "artifact": "doc/functional_decoder/logs/correctness_full.log",
+      "dedicated_artifact": "doc/functional_decoder/logs/context_probe_traced_decode_advertised.log"
+    },
+    "linear_attention_prefill_decode_largest_passing": {
+      "seq_len": 262144,
+      "decode_current_pos": 262144,
+      "artifact": "doc/functional_decoder/logs/context_probe_linear_prefill_262144_chunked.log",
+      "call_time_seconds": 315.48,
+      "total_time_seconds": 319.4
+    },
+    "linear_attention_prefill_decode_near_max_nondivisible_passing": {
+      "seq_len": 262143,
+      "decode_current_pos": 262143,
+      "artifact": "doc/functional_decoder/logs/context_probe_linear_prefill_262143_chunked.log",
+      "call_time_seconds": 320.42,
+      "total_time_seconds": 324.38
+    },
+    "sequence_lengths_exercised_current_implementation": [
+      1,
+      5,
+      33,
+      65,
+      1025,
+      262143,
+      262144
+    ],
+    "non_aligned_lengths_tested_current_implementation": [
+      5,
+      33,
+      65,
+      1025,
+      262143
+    ],
+    "chunk_or_page_aligned_lengths_tested_current_implementation": [
+      262144
+    ],
+    "batch_sizes_tested": [
+      1,
+      2
+    ],
+    "real_weight_layers_tested": [
+      0,
+      3
+    ],
+    "historical_linear_context_timeout_before_chunked_fix": {
+      "largest_token_step_passing_seq_len": 131073,
+      "timed_out_seq_len": 262144,
+      "timeout_seconds": 5400,
+      "diagnostic": "doc/functional_decoder/AUTODEBUG_linear_context.md",
+      "fix_design": "doc/functional_decoder/AUTOFIX_linear_chunked_design.md"
+    }
+  },
+  "capability_reduction": {
+    "full_attention": {
+      "prefill_reduced_from_hf_advertised_context": false,
+      "decode_reduced_from_hf_advertised_context": false,
+      "evidence": [
+        "doc/functional_decoder/logs/context_probe_full_prefill_262144_sparse.log",
+        "doc/functional_decoder/logs/context_probe_full_prefill_262143_sparse.log",
+        "doc/functional_decoder/logs/correctness_full.log",
+        "doc/functional_decoder/logs/context_probe_traced_decode_advertised.log"
+      ]
+    },
+    "linear_attention": {
+      "prefill_reduced_from_hf_advertised_context": false,
+      "decode_reduced_from_hf_advertised_context": false,
+      "evidence": [
+        "doc/functional_decoder/logs/context_probe_linear_prefill_262144_chunked.log",
+        "doc/functional_decoder/logs/context_probe_linear_prefill_262143_chunked.log",
+        "doc/functional_decoder/logs/correctness_full.log",
+        "doc/functional_decoder/logs/autofix_chunked_linear_context_65.log",
+        "doc/functional_decoder/logs/autofix_chunked_linear_context_1025.log"
+      ],
+      "hard_physical_limit_evidence": null
+    }
+  },
+  "correctness_evidence": {
+    "pcc_acceptance_bar": 0.995,
+    "synthetic_batch1": {
+      "linear_attention_layer0_seq5": {
+        "prefill_pcc": 0.9994461003286241,
+        "traced_decode_pcc": 0.9994787951042461
+      },
+      "full_attention_layer3_seq33": {
+        "prefill_pcc": 0.9996404835641908,
+        "traced_decode_pcc": 0.9994230880969464
+      }
+    },
+    "synthetic_batch2": {
+      "linear_attention_layer0_seq5": {
+        "prefill_pcc": 0.9995132077531952,
+        "traced_decode_pcc": 0.9995844476837497
+      },
+      "full_attention_layer3_seq33": {
+        "prefill_pcc": 0.9996329431454074,
+        "traced_decode_pcc": 0.9994690230596567
+      }
+    },
+    "real_weights": {
+      "linear_attention_layer0_seq1": {
+        "prefill_pcc": 0.9996229995741831,
+        "traced_decode_pcc": 0.9988370795673545
+      },
+      "full_attention_layer3_seq1": {
+        "prefill_pcc": 0.9998681212753325,
+        "traced_decode_pcc": 0.9995886582000745
+      },
+      "linear_attention_layer0_seq5": {
+        "prefill_pcc": 0.9993761564364843,
+        "traced_decode_pcc": 0.9997758895133866
+      },
+      "full_attention_layer3_seq5": {
+        "prefill_pcc": 0.9997494253841673,
+        "traced_decode_pcc": 0.9996446766105499
+      }
+    },
+    "trace_eager_control": {
+      "linear_attention_decode_pcc": 1.0,
+      "full_attention_decode_pcc": 1.0,
+      "full_attention_advertised_context_decode_pcc": 1.0
+    },
+    "determinism": {
+      "linear_attention_repeated_decode_pcc": 1.0,
+      "full_attention_repeated_decode_pcc": 1.0
+    },
+    "artifacts": [
+      "doc/functional_decoder/logs/correctness_full.log",
+      "doc/functional_decoder/logs/real_weight_multitoken_moe.log",
+      "doc/functional_decoder/logs/context_probe_full_prefill_262143_sparse.log",
+      "doc/functional_decoder/logs/context_probe_linear_prefill_262143_chunked.log",
+      "doc/functional_decoder/logs/runtime_fallback_audit.log",
+      "doc/functional_decoder/logs/watcher_correctness.log",
+      "doc/functional_decoder/logs/py_compile.log"
+    ]
+  },
+  "performance_evidence": {
+    "profiler": "Tracy plus tt-perf-report",
+    "tracy_command_options": [
+      "--no-runtime-analysis",
+      "--op-support-count=5000"
+    ],
+    "raw_ops_csv": "doc/functional_decoder/tracy/raw/reports/2026_08_18_22_31_32/ops_perf_results_2026_08_18_22_31_32.csv.gz",
+    "tt_perf_report_input_csv": "doc/functional_decoder/tracy/raw/reports/2026_08_18_22_31_32/ops_perf_results_2026_08_18_22_31_32_blackhole.csv.gz",
+    "blackhole_csv_normalization": "The legacy Tracy path emitted blank DEVICE ARCH and AVAILABLE WORKER CORE COUNT fields; the normalized copy sets DEVICE ARCH=blackhole and AVAILABLE WORKER CORE COUNT=110 for report generation.",
+    "perf_report_device_time_units": "microseconds",
+    "runs": {
+      "linear_attention_prefill_seq5": {
+        "wall_ms": 45.456,
+        "tt_perf_report_device_time_us": 37162.183,
+        "csv": "doc/functional_decoder/tracy/linear_attention/prefill_perf_report.csv",
+        "table": "doc/functional_decoder/tracy/linear_attention/prefill_perf_report.txt",
+        "filtered_ops_csv": "doc/functional_decoder/tracy/linear_attention/prefill_ops.csv.gz"
+      },
+      "full_attention_prefill_seq33": {
+        "wall_ms": 35.81,
+        "tt_perf_report_device_time_us": 34158.079,
+        "csv": "doc/functional_decoder/tracy/full_attention/prefill_perf_report.csv",
+        "table": "doc/functional_decoder/tracy/full_attention/prefill_perf_report.txt",
+        "filtered_ops_csv": "doc/functional_decoder/tracy/full_attention/prefill_ops.csv"
+      },
+      "linear_attention_traced_decode_seq5": {
+        "traced_wall_ms": 3.023,
+        "tt_perf_report_device_time_us": 2923.033,
+        "csv": "doc/functional_decoder/tracy/linear_attention/decode_perf_report.csv",
+        "table": "doc/functional_decoder/tracy/linear_attention/decode_perf_report.txt",
+        "filtered_ops_csv": "doc/functional_decoder/tracy/linear_attention/decode_ops.csv"
+      },
+      "full_attention_traced_decode_seq33": {
+        "traced_wall_ms": 2.714,
+        "tt_perf_report_device_time_us": 2620.75,
+        "csv": "doc/functional_decoder/tracy/full_attention/decode_perf_report.csv",
+        "table": "doc/functional_decoder/tracy/full_attention/decode_perf_report.txt",
+        "filtered_ops_csv": "doc/functional_decoder/tracy/full_attention/decode_ops.csv"
+      }
+    },
+    "provenance_log": "doc/functional_decoder/logs/tracy_perf_summary.log.gz",
+    "large_artifact_packaging": "Oversized Tracy raw CSVs, the Tracy provenance log, and the linear-prefill filtered ops CSV are committed as gzip archives to satisfy the repository per-file size limit; each archive expands to the path without .gz."
+  },
+  "runtime_fallback_audit": {
+    "source_audit_clean": true,
+    "throw_exception_on_fallback_run_clean": true,
+    "forbidden_runtime_calls": [
+      "torch",
+      "ttnn.from_torch",
+      "ttnn.to_torch",
+      "get_fallback_function"
+    ],
+    "artifact": "doc/functional_decoder/logs/runtime_fallback_audit.log"
+  },
+  "watcher": {
+    "enabled": "TT_METAL_WATCHER=10",
+    "clean": true,
+    "log_scan_patterns": "fatal|assert|watcher exception|noc|l1|cb|stack|sanitize|timeout|deadlock|hang|error",
+    "artifacts": [
+      "doc/functional_decoder/logs/watcher_correctness.log",
+      "doc/functional_decoder/watcher/final/generated/watcher/watcher.log"
+    ],
+    "scan_result": "only pytest timeout configuration lines matched; no watcher/device error patterns"
+  },
+  "source_revision": {
+    "branch": "vkovacevic/agentic-research/qb2-qwen36-35b-a3b",
+    "base_sha_at_evidence_time": "9e4baaa71435fc344b21912c9e30366a23c34a5d",
+    "stage_commit_sha": null,
+    "stage_commit_sha_note": "Recorded after final local commit; a commit cannot contain its own final SHA."
+  }
+}

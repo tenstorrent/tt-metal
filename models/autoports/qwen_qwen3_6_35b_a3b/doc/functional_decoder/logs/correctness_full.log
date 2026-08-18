@@ -1,0 +1,254 @@
+============================= test session starts ==============================
+platform linux -- Python 3.12.12, pytest-9.0.3, pluggy-1.6.0 -- /localdev/vkovacevic/tt-metal/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/vkovacevic/tt-metal
+configfile: pytest.ini
+plugins: timeout-2.4.0, cov-7.0.0, benchmark-5.2.3, anyio-4.14.2, split-0.11.0, dash-2.15.0, github-actions-annotate-failures-0.3.0
+timeout: 900.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 22 items / 4 deselected / 18 selected
+
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_target_decoder_contract PASSED
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_synthetic_functional_decoder_prefill_decode_against_hf[linear_seq5-device_params0] 2026-08-18 23:06:43.179 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-18 23:06:43.179 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-08-18 23:06:43.179 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-08-18 23:06:43.179 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-08-18 23:06:43.180 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:569)
+2026-08-18 23:06:43.180 | info     |             UMD | Firmware bundle version 19.9.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-08-18 23:06:43.185 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-08-18 23:06:43.406 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:168)
+2026-08-18 23:06:43.406 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-08-18 23:06:43.406 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:145)
+2026-08-18 23:06:43.406 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-08-18 23:06:43.408 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-08-18 23:06:43.551 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+2026-08-18 23:06:43.670 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-08-18 23:06:43.670 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-08-18 23:06:43.670 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-18 23:06:43.670 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-18 23:06:43.670 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-18 23:06:43.670 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-18 23:06:43.670 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-18 23:06:43.670 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-18 23:06:43.670 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-18 23:06:43.670 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-18 23:06:43.670 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-08-18 23:06:43.670 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-08-18 23:06:43.704 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 23:06:43.704 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 23:06:43.704 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 23:06:43.704 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 23:06:43.732 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-08-18 23:06:43.773 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681931937_memory' (shm_resource_tracker.cpp:282)
+2026-08-18 23:06:44.352 | info     |           Metal | [Real-time profiler] Device 0 sync complete: 100 samples, frequency=1.349984 GHz, device_time_at_sync=24178096733951 cycles (realtime_profiler_manager.cpp:1127)
+prefill 0.9994461003286241
+traced decode 0.9994787951042461
+PASSED
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_synthetic_functional_decoder_prefill_decode_against_hf[full_seq33-device_params0] 2026-08-18 23:06:46.277 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 23:06:46.278 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 23:06:46.278 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 23:06:46.279 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 23:06:46.307 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+prefill 0.9996404835641908
+traced decode 0.9994230880969464
+PASSED
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_synthetic_functional_decoder_batch2_prefill_decode_against_hf[linear_batch2-device_params0] 2026-08-18 23:06:48.110 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 23:06:48.111 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 23:06:48.112 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 23:06:48.113 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 23:06:48.141 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+batch2 prefill 0.9995132077531952
+batch2 traced decode 0.9995844476837497
+PASSED
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_synthetic_functional_decoder_batch2_prefill_decode_against_hf[full_batch2-device_params0] 2026-08-18 23:06:50.054 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 23:06:50.055 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 23:06:50.055 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 23:06:50.056 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 23:06:50.084 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+batch2 prefill 0.9996329431454074
+batch2 traced decode 0.9994690230596567
+PASSED
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_synthetic_functional_decoder_traced_decode[linear_trace-device_params0] 2026-08-18 23:06:51.955 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 23:06:51.956 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 23:06:51.957 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 23:06:51.957 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 23:06:51.985 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+traced decode 1.0
+PASSED
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_synthetic_functional_decoder_traced_decode[full_trace-device_params0] 2026-08-18 23:06:53.063 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 23:06:53.064 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 23:06:53.064 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 23:06:53.065 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 23:06:53.094 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+traced decode 1.0
+PASSED
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_synthetic_functional_decoder_repeated_input_determinism[linear_repeat-device_params0] 2026-08-18 23:06:54.187 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 23:06:54.188 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 23:06:54.189 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 23:06:54.189 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 23:06:54.218 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+repeated decode 1.0
+PASSED
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_synthetic_functional_decoder_repeated_input_determinism[full_repeat-device_params0] 2026-08-18 23:06:55.348 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 23:06:55.349 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 23:06:55.349 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 23:06:55.350 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 23:06:55.378 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+repeated decode 1.0
+PASSED
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_real_weight_functional_decoder_prefill_decode_against_hf[real_linear_layer0_seq1-device_params0] 2026-08-18 23:06:56.444 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 23:06:56.444 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 23:06:56.445 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 23:06:56.446 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 23:06:56.474 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+real prefill 0.9996229995741831
+real traced decode 0.9988370795673545
+PASSED
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_real_weight_functional_decoder_prefill_decode_against_hf[real_full_layer3_seq1-device_params0] 2026-08-18 23:06:58.154 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 23:06:58.155 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 23:06:58.156 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 23:06:58.156 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 23:06:58.185 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+real prefill 0.9998681212753325
+real traced decode 0.9995886582000745
+PASSED
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_real_weight_functional_decoder_prefill_decode_against_hf[real_linear_layer0_seq5-device_params0] 2026-08-18 23:06:59.822 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 23:06:59.823 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 23:06:59.823 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 23:06:59.824 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 23:06:59.852 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+real prefill 0.9993761564364843
+real traced decode 0.9997758895133866
+PASSED
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_real_weight_functional_decoder_prefill_decode_against_hf[real_full_layer3_seq5-device_params0] 2026-08-18 23:07:01.586 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 23:07:01.586 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 23:07:01.587 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 23:07:01.588 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 23:07:01.616 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+real prefill 0.9997494253841673
+real traced decode 0.9996446766105499
+PASSED
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_runtime_fallback_audit_source PASSED
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_context_probe_full_attention_decode_advertised_context[device_params0] 2026-08-18 23:07:03.294 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 23:07:03.294 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 23:07:03.295 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 23:07:03.296 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 23:07:03.324 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+full_attention advertised decode context=262144 current_pos=262143
+PASSED
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_context_probe_full_attention_decode_advertised_context_traced_control[device_params0] 2026-08-18 23:07:04.468 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 23:07:04.468 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 23:07:04.469 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 23:07:04.470 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 23:07:04.498 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+full_attention traced advertised decode context=262144 current_pos=262143 control 1.0
+PASSED
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_context_probe_full_attention_prefill_non_aligned[device_params0] 2026-08-18 23:07:05.765 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 23:07:05.766 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 23:07:05.766 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 23:07:05.767 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 23:07:05.795 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+full_attention non_aligned prefill seq_len=1025
+PASSED
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_context_probe_linear_attention_prefill_decode_non_aligned[device_params0] 2026-08-18 23:07:08.048 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 23:07:08.049 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 23:07:08.050 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 23:07:08.050 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 23:07:08.078 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+linear_attention non_aligned prefill/decode seq_len=65
+PASSED
+
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /localdev/vkovacevic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================== slowest durations ===============================
+2.07s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_context_probe_full_attention_prefill_non_aligned[device_params0]
+1.77s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_synthetic_functional_decoder_prefill_decode_against_hf[linear_seq5-device_params0]
+1.73s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_synthetic_functional_decoder_batch2_prefill_decode_against_hf[linear_batch2-device_params0]
+1.69s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_synthetic_functional_decoder_batch2_prefill_decode_against_hf[full_batch2-device_params0]
+1.62s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_synthetic_functional_decoder_prefill_decode_against_hf[full_seq33-device_params0]
+1.55s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_real_weight_functional_decoder_prefill_decode_against_hf[real_linear_layer0_seq5-device_params0]
+1.50s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_real_weight_functional_decoder_prefill_decode_against_hf[real_linear_layer0_seq1-device_params0]
+1.49s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_real_weight_functional_decoder_prefill_decode_against_hf[real_full_layer3_seq5-device_params0]
+1.46s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_real_weight_functional_decoder_prefill_decode_against_hf[real_full_layer3_seq1-device_params0]
+1.19s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_synthetic_functional_decoder_prefill_decode_against_hf[linear_seq5-device_params0]
+1.09s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_context_probe_full_attention_decode_advertised_context_traced_control[device_params0]
+1.00s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_context_probe_linear_attention_prefill_decode_non_aligned[device_params0]
+0.97s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_context_probe_full_attention_decode_advertised_context[device_params0]
+0.95s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_synthetic_functional_decoder_repeated_input_determinism[linear_repeat-device_params0]
+0.92s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_synthetic_functional_decoder_traced_decode[full_trace-device_params0]
+0.90s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_synthetic_functional_decoder_traced_decode[linear_trace-device_params0]
+0.88s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_synthetic_functional_decoder_repeated_input_determinism[full_repeat-device_params0]
+0.12s teardown models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_context_probe_linear_attention_prefill_decode_non_aligned[device_params0]
+0.12s teardown models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_synthetic_functional_decoder_repeated_input_determinism[full_repeat-device_params0]
+0.12s teardown models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_real_weight_functional_decoder_prefill_decode_against_hf[real_full_layer3_seq1-device_params0]
+0.12s teardown models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_synthetic_functional_decoder_repeated_input_determinism[linear_repeat-device_params0]
+0.12s teardown models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_synthetic_functional_decoder_prefill_decode_against_hf[full_seq33-device_params0]
+0.12s teardown models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_real_weight_functional_decoder_prefill_decode_against_hf[real_linear_layer0_seq5-device_params0]
+0.12s teardown models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_real_weight_functional_decoder_prefill_decode_against_hf[real_full_layer3_seq5-device_params0]
+0.12s teardown models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_synthetic_functional_decoder_traced_decode[full_trace-device_params0]
+0.12s teardown models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_real_weight_functional_decoder_prefill_decode_against_hf[real_linear_layer0_seq1-device_params0]
+0.12s teardown models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_context_probe_full_attention_prefill_non_aligned[device_params0]
+0.12s teardown models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_context_probe_full_attention_decode_advertised_context_traced_control[device_params0]
+0.12s teardown models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_synthetic_functional_decoder_batch2_prefill_decode_against_hf[linear_batch2-device_params0]
+0.12s teardown models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_synthetic_functional_decoder_prefill_decode_against_hf[linear_seq5-device_params0]
+0.12s teardown models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_synthetic_functional_decoder_traced_decode[linear_trace-device_params0]
+0.12s teardown models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_synthetic_functional_decoder_batch2_prefill_decode_against_hf[full_batch2-device_params0]
+0.11s teardown models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_context_probe_full_attention_decode_advertised_context[device_params0]
+0.09s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_synthetic_functional_decoder_traced_decode[full_trace-device_params0]
+0.09s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_synthetic_functional_decoder_repeated_input_determinism[linear_repeat-device_params0]
+0.08s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_real_weight_functional_decoder_prefill_decode_against_hf[real_linear_layer0_seq5-device_params0]
+0.08s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_synthetic_functional_decoder_batch2_prefill_decode_against_hf[full_batch2-device_params0]
+0.08s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_context_probe_linear_attention_prefill_decode_non_aligned[device_params0]
+0.08s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_synthetic_functional_decoder_batch2_prefill_decode_against_hf[linear_batch2-device_params0]
+0.08s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_real_weight_functional_decoder_prefill_decode_against_hf[real_full_layer3_seq5-device_params0]
+0.08s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_context_probe_full_attention_prefill_non_aligned[device_params0]
+0.08s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_real_weight_functional_decoder_prefill_decode_against_hf[real_full_layer3_seq1-device_params0]
+0.08s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_synthetic_functional_decoder_repeated_input_determinism[full_repeat-device_params0]
+0.08s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_real_weight_functional_decoder_prefill_decode_against_hf[real_linear_layer0_seq1-device_params0]
+0.08s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_synthetic_functional_decoder_traced_decode[linear_trace-device_params0]
+0.08s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_synthetic_functional_decoder_prefill_decode_against_hf[full_seq33-device_params0]
+0.08s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_context_probe_full_attention_decode_advertised_context[device_params0]
+0.08s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_context_probe_full_attention_decode_advertised_context_traced_control[device_params0]
+0.01s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_runtime_fallback_audit_source
+0.00s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_target_decoder_contract
+0.00s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_target_decoder_contract
+0.00s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_runtime_fallback_audit_source
+0.00s teardown models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_target_decoder_contract
+0.00s teardown models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_runtime_fallback_audit_source
+=========================== short test summary info ============================
+PASSED models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_target_decoder_contract
+PASSED models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_synthetic_functional_decoder_prefill_decode_against_hf[linear_seq5-device_params0]
+PASSED models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_synthetic_functional_decoder_prefill_decode_against_hf[full_seq33-device_params0]
+PASSED models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_synthetic_functional_decoder_batch2_prefill_decode_against_hf[linear_batch2-device_params0]
+PASSED models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_synthetic_functional_decoder_batch2_prefill_decode_against_hf[full_batch2-device_params0]
+PASSED models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_synthetic_functional_decoder_traced_decode[linear_trace-device_params0]
+PASSED models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_synthetic_functional_decoder_traced_decode[full_trace-device_params0]
+PASSED models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_synthetic_functional_decoder_repeated_input_determinism[linear_repeat-device_params0]
+PASSED models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_synthetic_functional_decoder_repeated_input_determinism[full_repeat-device_params0]
+PASSED models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_real_weight_functional_decoder_prefill_decode_against_hf[real_linear_layer0_seq1-device_params0]
+PASSED models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_real_weight_functional_decoder_prefill_decode_against_hf[real_full_layer3_seq1-device_params0]
+PASSED models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_real_weight_functional_decoder_prefill_decode_against_hf[real_linear_layer0_seq5-device_params0]
+PASSED models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_real_weight_functional_decoder_prefill_decode_against_hf[real_full_layer3_seq5-device_params0]
+PASSED models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_runtime_fallback_audit_source
+PASSED models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_context_probe_full_attention_decode_advertised_context[device_params0]
+PASSED models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_context_probe_full_attention_decode_advertised_context_traced_control[device_params0]
+PASSED models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_context_probe_full_attention_prefill_non_aligned[device_params0]
+PASSED models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_context_probe_linear_attention_prefill_decode_non_aligned[device_params0]
+================ 18 passed, 4 deselected, 2 warnings in 27.40s =================
+2026-08-18 23:07:10.989 | info     |    BuildKernels | JIT cache stats: 906/906 hits (100.0%) [906 cached, 5590 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-18 23:07:10.989 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-18 23:07:11.002 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-08-18 23:07:11.002 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-08-18 23:07:11.521 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-08-18 23:07:11.521 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-08-18 23:07:11.521 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)

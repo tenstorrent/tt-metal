@@ -1,0 +1,89 @@
+============================= test session starts ==============================
+platform linux -- Python 3.12.12, pytest-9.0.3, pluggy-1.6.0 -- /localdev/vkovacevic/tt-metal/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/vkovacevic/tt-metal
+configfile: pytest.ini
+plugins: timeout-2.4.0, cov-7.0.0, benchmark-5.2.3, anyio-4.14.2, split-0.11.0, dash-2.15.0, github-actions-annotate-failures-0.3.0
+timeout: 600.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 22 items / 19 deselected / 3 selected
+
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_synthetic_functional_decoder_prefill_decode_against_hf[linear_seq5-device_params0] 2026-08-18 23:07:23.854 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-18 23:07:23.854 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-08-18 23:07:23.854 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-08-18 23:07:23.854 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-08-18 23:07:23.855 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:569)
+2026-08-18 23:07:23.855 | info     |             UMD | Firmware bundle version 19.9.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-08-18 23:07:23.859 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-08-18 23:07:24.081 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:168)
+2026-08-18 23:07:24.081 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-08-18 23:07:24.081 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:145)
+2026-08-18 23:07:24.081 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-08-18 23:07:24.083 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-08-18 23:07:24.256 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+2026-08-18 23:07:24.374 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-08-18 23:07:24.374 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-08-18 23:07:24.374 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-18 23:07:24.374 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-18 23:07:24.374 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-18 23:07:24.374 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-18 23:07:24.374 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-18 23:07:24.374 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-18 23:07:24.374 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-18 23:07:24.374 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-18 23:07:24.374 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-08-18 23:07:24.374 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-08-18 23:07:24.379 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 23:07:24.379 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 23:07:24.379 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 23:07:24.379 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 23:07:24.408 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-08-18 23:07:24.447 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681931937_memory' (shm_resource_tracker.cpp:282)
+2026-08-18 23:07:25.025 | info     |           Metal | [Real-time profiler] Device 0 sync complete: 100 samples, frequency=1.349982 GHz, device_time_at_sync=24225743259286 cycles (realtime_profiler_manager.cpp:1127)
+prefill 0.9994461003286241
+traced decode 0.9994787951042461
+PASSED
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_synthetic_functional_decoder_prefill_decode_against_hf[full_seq33-device_params0] 2026-08-18 23:07:26.920 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 23:07:26.921 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 23:07:26.922 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 23:07:26.922 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-18 23:07:26.951 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+prefill 0.9996404835641908
+traced decode 0.9994230880969464
+PASSED
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_runtime_fallback_audit_source PASSED
+
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /localdev/vkovacevic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================== slowest durations ===============================
+1.74s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_synthetic_functional_decoder_prefill_decode_against_hf[linear_seq5-device_params0]
+1.59s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_synthetic_functional_decoder_prefill_decode_against_hf[full_seq33-device_params0]
+1.19s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_synthetic_functional_decoder_prefill_decode_against_hf[linear_seq5-device_params0]
+0.12s teardown models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_synthetic_functional_decoder_prefill_decode_against_hf[linear_seq5-device_params0]
+0.12s teardown models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_synthetic_functional_decoder_prefill_decode_against_hf[full_seq33-device_params0]
+0.08s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_synthetic_functional_decoder_prefill_decode_against_hf[full_seq33-device_params0]
+0.01s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_runtime_fallback_audit_source
+0.00s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_runtime_fallback_audit_source
+0.00s teardown models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_runtime_fallback_audit_source
+=========================== short test summary info ============================
+PASSED models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_synthetic_functional_decoder_prefill_decode_against_hf[linear_seq5-device_params0]
+PASSED models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_synthetic_functional_decoder_prefill_decode_against_hf[full_seq33-device_params0]
+PASSED models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py::test_runtime_fallback_audit_source
+================= 3 passed, 19 deselected, 2 warnings in 6.18s =================
+2026-08-18 23:07:30.485 | info     |    BuildKernels | JIT cache stats: 531/531 hits (100.0%) [531 cached, 528 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-18 23:07:30.485 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-18 23:07:30.498 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-08-18 23:07:30.498 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-08-18 23:07:31.024 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-08-18 23:07:31.024 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-08-18 23:07:31.024 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)
