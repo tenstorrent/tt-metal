@@ -291,19 +291,22 @@ class TtTransformerLM:
         # costs two warm-up passes, so it is skipped for very short generations.
         traced = None
         if use_trace and cap > 8:
-            from .decoder import TracedDecodeStep, TracedDecodeStepInPlace
+            from .decoder import TracedDecodeStep, TracedDecodeStepInPlace, kv_inplace_default
 
-            # `COSYVOICE_KV_INPLACE=1` writes the KV cache in place instead of
-            # rebuilding it -- 1.08x on the decode step, measured. Opt-in rather than
-            # default for two reasons, both about what it costs elsewhere: it captures
-            # 65 traces where this path captures one, so it needs a much larger trace
-            # region (384 MB observed to work; 64 MB fails), and it is not bit-exact
-            # against the moving cache (worst PCC 0.9986 over 72 steps,
-            # non-accumulating). The fallback below turns a too-small trace region
-            # into a warning and an untraced decode, which is 2.2x slower -- so
-            # defaulting it on would trade a certain 1.08x for a possible 2.2x loss
-            # on any caller that sizes its device the ordinary way.
-            kls = TracedDecodeStepInPlace if os.environ.get("COSYVOICE_KV_INPLACE") == "1" else TracedDecodeStep
+            # `COSYVOICE_KV_INPLACE` writes the KV cache in place instead of rebuilding
+            # it; unset, `kv_inplace_default` follows the architecture (on for
+            # Wormhole, off for Blackhole -- see its docstring for the numbers). It
+            # costs two things the moving cache does not: 65 captured traces instead
+            # of one, so it needs a much larger trace region (384 MB observed to work;
+            # 64 MB fails); and it is not bit-exact against the moving cache (worst
+            # PCC 0.9986 over 72 steps, non-accumulating). The fallback below turns a
+            # too-small trace region into a warning and an untraced decode (2.2x
+            # slower than either traced path) rather than a crash, which is what makes
+            # defaulting it on for Wormhole safe for a caller that has not resized its
+            # device: it degrades audibly, it does not fail.
+            _kv_env = os.environ.get("COSYVOICE_KV_INPLACE")
+            use_inplace = (_kv_env == "1") if _kv_env is not None else kv_inplace_default(self.decoder.device)
+            kls = TracedDecodeStepInPlace if use_inplace else TracedDecodeStep
             try:
                 traced = kls(self.decoder, max_len).capture()
                 traced.seed(caches)

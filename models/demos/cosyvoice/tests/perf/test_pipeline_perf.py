@@ -104,9 +104,11 @@ def test_device_end_to_end_rtf(device):
     # Traced decode -- the path `generate()` takes. The KV-cache mode is read from
     # the same environment variable `generate()` reads, so this measures whatever the
     # model would actually run rather than a fixed choice that can drift away from it.
-    from models.demos.cosyvoice.tt.llm.decoder import TracedDecodeStep, TracedDecodeStepInPlace
+    from models.demos.cosyvoice.tt.llm.decoder import TracedDecodeStep, TracedDecodeStepInPlace, kv_inplace_default
 
-    kls = TracedDecodeStepInPlace if os.environ.get("COSYVOICE_KV_INPLACE") == "1" else TracedDecodeStep
+    _kv_env = os.environ.get("COSYVOICE_KV_INPLACE")
+    use_inplace = (_kv_env == "1") if _kv_env is not None else kv_inplace_default(device)
+    kls = TracedDecodeStepInPlace if use_inplace else TracedDecodeStep
     caches = prefill()
     traced = kls(dec, max_len).capture()
     traced.seed(caches)

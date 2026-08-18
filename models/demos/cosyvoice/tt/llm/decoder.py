@@ -34,6 +34,8 @@ nothing, which is right: every cached position is real history.
 """
 from __future__ import annotations
 
+import os
+
 import torch
 
 import ttnn
@@ -52,6 +54,35 @@ def causal_bias(size: int, dtype=torch.float32) -> torch.Tensor:
     ).reshape(1, 1, size, size)
 
 
+def _core_grid_from_env(var: str):
+    """`ttnn.CoreGrid` from e.g. `COSYVOICE_FF2_GRID=8x2`, or None when unset.
+
+    Off by default. The gain is real and architecture-independent in direction, but the
+    best shape is not: 8x2 measured 1.50x on n300 and 1.98x on p150b, while 4x8 -- the
+    same core count, transposed -- managed only 1.15x on n300. A default that is optimal
+    on one part and mediocre on another is worse than an opt-in that says so.
+    """
+    val = os.environ.get(var, "").strip().lower()
+    if not val:
+        return None
+    x, _, y = val.partition("x")
+    return ttnn.CoreGrid(x=int(x), y=int(y))
+
+
+def kv_inplace_default(device) -> bool:
+    """Whether `TracedDecodeStepInPlace` should be the default on `device`.
+
+    `COSYVOICE_KV_INPLACE` overrides either direction; this is only the fallback when
+    it is unset. The trade is architecture-dependent -- in-place is worth 1.12-1.15x on
+    Blackhole and 1.42x on Wormhole n300 (PERF.md, F45) -- so the default follows the
+    architecture rather than picking one trade for both. `model.py` and
+    `test_pipeline_perf.py` both call this rather than each hand-coding the check, so
+    the test that is supposed to measure "whatever the model would actually run"
+    cannot silently drift from what the model runs.
+    """
+    return "WORMHOLE" in str(device.arch())
+
+
 class TtTransformerLayer:
     """`x = x + attn(norm1(x))`, `x = x + ff(norm2(x))`, with an optional KV cache."""
 
@@ -67,6 +98,19 @@ class TtTransformerLayer:
         self.w2, self.b2 = _linear(device, bag, "feed_forward.w_2", dtype, weights_dtype)
         self.g1, self.bt1 = _layernorm_weights(device, bag, "norm1", dtype)
         self.g2, self.bt2 = _layernorm_weights(device, bag, "norm2", dtype)
+        # `w_2` is `[d_ff, d_model]`, the largest and slowest op in a decode step, and it
+        # is bound by its `K = d_ff` reduction rather than by weight traffic -- `w_1` holds
+        # the same number of weight bytes and responds to `bfloat8_b` weights by -37 %
+        # where this one responds by -2 %. Handing it a *small* explicit grid is what moves
+        # it: at one row, spreading a 4096-deep reduction over the whole grid leaves each
+        # core a sliver and the gather dominates. Measured standalone, `[1,1,4096] x
+        # [4096,1024]`, bf16: 8x2 is 1.50x on n300 and 1.98x on p150b against the default,
+        # and the default is indistinguishable from asking for the full grid explicitly.
+        #
+        # **Decode only.** The optimum is a property of `M = 1`. Prefill runs this same
+        # linear at `M = 209`, where there is real work to spread and a 16-core grid would
+        # be a pessimisation, so `__call__` applies it only when `T == 1`.
+        self.ff2_grid = _core_grid_from_env("COSYVOICE_FF2_GRID")
 
     def __call__(
         self,
@@ -99,7 +143,8 @@ class TtTransformerLayer:
         f = ttnn.linear(h, self.w1, bias=self.b1, compute_kernel_config=self.cc)
         ttnn.deallocate(h)
         f = self.ffn_act(f)  # "relu" for this stack -- the text encoder uses SiLU
-        f2 = ttnn.linear(f, self.w2, bias=self.b2, compute_kernel_config=self.cc)
+        ff2_kw = {"core_grid": self.ff2_grid} if (self.ff2_grid and f.shape[-2] == 1) else {}
+        f2 = ttnn.linear(f, self.w2, bias=self.b2, compute_kernel_config=self.cc, **ff2_kw)
         ttnn.deallocate(f)
         out = ttnn.add(x1, f2)
         ttnn.deallocate(f2)
