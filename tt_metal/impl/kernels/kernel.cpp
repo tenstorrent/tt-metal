@@ -1520,15 +1520,17 @@ std::string QuasarComputeKernel::config_hash() const {
         unpack_mode_descriptor = fmt::format("{}", fmt::join(unpack_modes, "."));
     }
 
+    // Note: the 2x-packed src-register format is not hashed here. It is decided kernel-side from the
+    // operand's MxFp4 L1 data format (Quasar matmul/column-reduce), so it is already implied by the
+    // CB data formats that are part of the kernel's build identity.
     return fmt::format(
-        "{}_{}_{}_{}_{}_{}_{}_{}",
+        "{}_{}_{}_{}_{}_{}_{}",
         fmt::join(compute_processors_, "_"),
         enchantum::to_string(config_.math_fidelity),
         config_.fp32_dest_acc_en,
         config_.math_approx_mode,
         config_.dst_full_sync_en,
         config_.bfp8_pack_precise,
-        config_.enable_2x_src_format,
         unpack_mode_descriptor);
 }
 
@@ -1543,7 +1545,6 @@ void QuasarComputeKernel::set_build_options(JitBuildOptions& build_options) cons
     build_options.dst_full_sync_en = this->config_.dst_full_sync_en;
     build_options.unpack_to_dest_mode = this->config_.unpack_to_dest_mode;
     build_options.bfp8_pack_precise = this->config_.bfp8_pack_precise;
-    build_options.enable_2x_src_format = this->config_.enable_2x_src_format;
 }
 
 }  // namespace experimental::quasar

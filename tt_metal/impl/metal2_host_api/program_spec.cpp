@@ -2781,11 +2781,6 @@ experimental::quasar::QuasarComputeConfig MakeGen2ComputeConfig(
 
     std::vector<UnpackToDestMode> unpack_dst_modes = BuildUnpackToDestModeVector(gen2.unpack_modes, dfb_name_to_slot);
 
-    auto defines = to_defines_map(kernel_spec.compiler_options.defines);
-    // The 2x-packed src-register format is opted into via a kernel compile-time define rather than a
-    // ComputeHardwareConfig field. Its presence (any value) flips the jit_build format-table remap.
-    const bool enable_2x_src_format = defines.count(experimental::k2xSrcFormatDefine) > 0;
-
     return experimental::quasar::QuasarComputeConfig{
         .num_threads_per_cluster = kernel_spec.num_threads,
         .math_fidelity = gen2.fpu_math_fidelity,
@@ -2793,9 +2788,8 @@ experimental::quasar::QuasarComputeConfig MakeGen2ComputeConfig(
         .dst_full_sync_en = !gen2.double_buffer_dest,
         .unpack_to_dest_mode = unpack_dst_modes,
         .math_approx_mode = (gen2.sfpu_precision_mode == Precision::Approximate),
-        .enable_2x_src_format = enable_2x_src_format,
         .compile_args = {},  // Compile args are passed via named_compile_args
-        .defines = std::move(defines),
+        .defines = to_defines_map(kernel_spec.compiler_options.defines),
         .named_compile_args = to_named_compile_args_map(kernel_spec.compile_time_args),
         .opt_level = kernel_spec.compiler_options.opt_level,
         .compiler_include_paths = kernel_spec.compiler_options.include_paths,

@@ -74,7 +74,6 @@ struct BlockedMatmulConfig {
     tt::DataFormat in1_fmt = tt::DataFormat::Float16_b;
     tt::DataFormat out_fmt = tt::DataFormat::Float16_b;
     bool fp32_dest_acc_en = false;
-    bool enable_2x_src_format = false;
 };
 
 void create_CBs_for_fused_matmul(
@@ -831,7 +830,6 @@ bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
             core,
             tt_metal::experimental::quasar::QuasarComputeConfig{
                 .num_threads_per_cluster = 1,
-                .enable_2x_src_format = cfg.enable_2x_src_format,
                 .compile_args = compute_compile_args,
                 .defines = compute_defines});
 
@@ -1030,10 +1028,10 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixTestSingleCoreSingleBlockComp
         .N = 2,
         .num_blocks = 1,
         .packer_l1_acc = false,
+        // MxFp4 in0/in1 auto-selects the 2x-packed src-register format for matmul on Quasar.
         .in0_fmt = tt::DataFormat::MxFp4,
         .in1_fmt = tt::DataFormat::MxFp4,
-        .out_fmt = tt::DataFormat::Float16_b,
-        .enable_2x_src_format = true};
+        .out_fmt = tt::DataFormat::Float16_b};
     ASSERT_TRUE(unit_tests::compute::matmul::blocked_matmul(this->devices_.at(0), config));
 }
 

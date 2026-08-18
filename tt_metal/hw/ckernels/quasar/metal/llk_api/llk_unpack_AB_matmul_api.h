@@ -59,6 +59,22 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
         ct_dim,
         rt_dim,
         kt_dim);
+
+    // MxFp4 operands feeding matmul are ALWAYS unpacked as the 2x-packed src-register format
+    // (MxFp4_2x_B) on Quasar. The generated unpack_dst_format[] table keeps the op-agnostic MX
+    // default (Float16_b, needed by non-matmul MxFp4 ops), so override only the unpacker gasket
+    // OUT_DATA_FORMAT here. Safe: this runs at init with the unpacker idle (before the first
+    // UNPACR), OUT_DATA_FORMAT is a shadow register, and the buffer descriptor (keyed on the MxFp4
+    // L1 format + tile geometry) is unchanged. In0(operandA)->SrcB->UNP_B, In1(operandB)->SrcA->UNP_A.
+    // EN_32BIT_DEST does not affect the MxFp4->MxFp4_2x_B reconfig validity, so pass false.
+    if (static_cast<DataFormat>(get_operand_src_format(operandB_id)) == DataFormat::MxFp4) {
+        _llk_unpack_reconfig_data_format_src_<p_unpacr::UNP_A, false>(
+            get_operand_src_format(operandB_id), static_cast<std::uint32_t>(DataFormat::MxFp4_2x_B));
+    }
+    if (static_cast<DataFormat>(get_operand_src_format(operandA_id)) == DataFormat::MxFp4) {
+        _llk_unpack_reconfig_data_format_src_<p_unpacr::UNP_B, false>(
+            get_operand_src_format(operandA_id), static_cast<std::uint32_t>(DataFormat::MxFp4_2x_B));
+    }
 }
 
 /**

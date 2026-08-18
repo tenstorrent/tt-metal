@@ -34,8 +34,18 @@ inline void llk_math_matmul_init(
     const std::uint32_t rt_dim = 1) {
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
-    const DataFormat srcB_format = static_cast<DataFormat>(get_operand_dst_format(operandA_id));
-    const DataFormat srcA_format = static_cast<DataFormat>(get_operand_dst_format(operandB_id));
+    // MxFp4 fed to matmul is ALWAYS unpacked as the 2x-packed src-register format (MxFp4_2x_B) on
+    // Quasar — there is no non-2x MxFp4 matmul. The generated unpack_dst_format[] table keeps the
+    // op-agnostic MX default (Float16_b), so derive the effective src-register format from the L1
+    // (src) format here; the matching unpacker OUT_DATA_FORMAT override lives in
+    // llk_unpack_AB_matmul_init. This reaches the same HW state the old host-side remap produced.
+    const auto matmul_src_reg_format = [](const std::uint32_t op_id) -> DataFormat {
+        return (static_cast<DataFormat>(get_operand_src_format(op_id)) == DataFormat::MxFp4)
+                   ? DataFormat::MxFp4_2x_B
+                   : static_cast<DataFormat>(get_operand_dst_format(op_id));
+    };
+    const DataFormat srcB_format = matmul_src_reg_format(operandA_id);
+    const DataFormat srcA_format = matmul_src_reg_format(operandB_id);
     LLK_ASSERT(
         is_2x_format(srcA_format) == is_2x_format(srcB_format),
         "SrcA and SrcB must both be 2x formats or both non-2x formats");
