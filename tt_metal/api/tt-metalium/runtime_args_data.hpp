@@ -14,10 +14,6 @@
 
 namespace tt::tt_metal {
 
-namespace detail {
-struct RuntimeArgsDataAccess;
-}
-
 // RuntimeArgsData provides an indirection to the runtime args
 // Prior to generating the cq cmds for the device, this points into a vector within the kernel
 // After generation, this points into the cq cmds so that runtime args API calls
@@ -64,7 +60,8 @@ struct RuntimeArgsData {
     std::size_t size() const noexcept { return rt_args_count; }
 
 private:
-    friend struct detail::RuntimeArgsDataAccess;
+    std::uint32_t* rt_args_data = nullptr;
+    std::size_t rt_args_count = 0;
 
     bool in_bounds(std::size_t index) const noexcept {
         if (index >= rt_args_count) {
@@ -74,9 +71,6 @@ private:
         }
         return true;
     }
-
-    std::uint32_t* rt_args_data = nullptr;
-    std::size_t rt_args_count = 0;
 };
 
 }  // namespace tt::tt_metal
