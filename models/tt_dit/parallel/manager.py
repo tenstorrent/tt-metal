@@ -23,10 +23,17 @@ class CCLManager:
         mesh_device,
         num_links=1,
         topology=None,
+        fused_ccl_depth=2,
     ):
         self.mesh_device = mesh_device
         self.num_links = num_links
         self.topology = topology
+        # Ping-pong depth for the fused MM+RS semaphore/barrier pools. Models that issue
+        # several fused MM+RS calls back-to-back under trace need depth >= the number of
+        # calls that can be in flight at once (cosmos3 passes 8 for its 3-4 calls/layer);
+        # at depth 2 call N+2 would reuse call N's semaphore trio while its RS is still
+        # in flight.
+        self.fused_ccl_depth = fused_ccl_depth
 
         # Cache for ping pong buffers: key = (shape_tuple, dim, mesh_axis), value = [buffer1, buffer2]
         self._ping_pong_buffer_cache = {}
@@ -62,6 +69,7 @@ class CCLManager:
         self.sr_ping_pong_idx = [0, 0]
         self.barrier_idx = [0, 0]
         self.barrier_fused_idx = [0, 0]
+        self.mmrs_barrier_idx = [0, 0]
 
     def _init_subdevice(self):
         compute_grid_size = self.mesh_device.compute_with_storage_grid_size()
@@ -79,11 +87,8 @@ class CCLManager:
             1: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(rs_n_sems)],
         }
 
-        # 3 * 2 for ping pong semaphores for fused reduce scatter
-        # Depth 8, not 2: the trunk issues 3-4 fused MM+RS calls per layer back-to-back
-        # under trace; at depth 2 call N+2 reuses call N's semaphore trio while its RS
-        # can still be in flight.
-        fused_rs_n_sems = 3 * 8
+        # 3 semaphores per fused MM+RS call, fused_ccl_depth cycles (see __init__).
+        fused_rs_n_sems = 3 * self.fused_ccl_depth
         self.rs_ping_pong_semaphores_fused = {
             0: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(fused_rs_n_sems)],
             1: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(fused_rs_n_sems)],
@@ -117,10 +122,8 @@ class CCLManager:
             1: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(sr_n_sems)],
         }
 
-        # Initialize barrier semaphore. Depth 8 to match the fused MM+RS pool: the
-        # end-of-op barrier is what keeps call N+1's fabric writes off call N's
-        # still-in-flight intermediate; a reused stale barrier trio passes vacuously.
-        barrier_n_sems = 1 * 8
+        # Initialize barrier semaphore
+        barrier_n_sems = 1 * 2
         self.barrier_semaphores = {
             0: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(barrier_n_sems)],
             1: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(barrier_n_sems)],
@@ -136,6 +139,13 @@ class CCLManager:
         self.np_fused_ping_pong_semaphores = None
         self.barrier_fused_semaphores = None
         self.np_region_progress_semaphores = None
+        # Barrier pool for the fused MM+RS path, at fused_ccl_depth. The end-of-op
+        # barrier is what keeps call N+1's fabric writes off call N's still-in-flight
+        # intermediate; a reused stale barrier passes vacuously, so the pool depth must
+        # match the fused semaphore pool's. Lazily allocated: nothing draws from it
+        # unless a model routes RowParallel through the fused op.
+        self._mmrs_barrier_n_sems = 1 * self.fused_ccl_depth
+        self.mmrs_barrier_semaphores = None
 
     def get_rs_ping_pong_buffer(self, shape, dim, mesh_axis):
         """
@@ -255,7 +265,7 @@ class CCLManager:
         """
         cur_idx = self.rs_ping_pong_idx_fused[mesh_axis]
         n_sems = 3
-        self.rs_ping_pong_idx_fused[mesh_axis] = (cur_idx + 1) % 8
+        self.rs_ping_pong_idx_fused[mesh_axis] = (cur_idx + 1) % self.fused_ccl_depth
         return self.rs_ping_pong_semaphores_fused[mesh_axis][cur_idx * n_sems : (cur_idx + 1) * n_sems]
 
     def get_ag_ping_pong_semaphore(self, mesh_axis):
@@ -411,6 +421,14 @@ class CCLManager:
         cur_idx = self.barrier_fused_idx[mesh_axis]
         self.barrier_fused_idx[mesh_axis] = (cur_idx + 1) % 2
         return self.barrier_fused_semaphores[mesh_axis][cur_idx]
+
+    def get_mmrs_barrier_semaphore(self, mesh_axis):
+        """Get barrier semaphore for the fused MM+RS path (fused_ccl_depth pool)."""
+        if self.mmrs_barrier_semaphores is None:
+            self.mmrs_barrier_semaphores = self._make_semaphore_pool(self._mmrs_barrier_n_sems)
+        cur_idx = self.mmrs_barrier_idx[mesh_axis]
+        self.mmrs_barrier_idx[mesh_axis] = (cur_idx + 1) % self.fused_ccl_depth
+        return self.mmrs_barrier_semaphores[mesh_axis][cur_idx]
 
     def get_sr_ping_pong_semaphore(self, mesh_axis):
         """
@@ -603,7 +621,7 @@ class CCLManager:
         """
         cur_idx = self.barrier_idx[mesh_axis]
         n_sems = 1
-        self.barrier_idx[mesh_axis] = (cur_idx + 1) % 8
+        self.barrier_idx[mesh_axis] = (cur_idx + 1) % 2
         return self.barrier_semaphores[mesh_axis][cur_idx]
 
     def get_np_ping_pong_buffer(

@@ -122,7 +122,8 @@ def _build_second_trunk(
 
     _ccl_topology = ttnn.Topology.Ring if use_ring_ccl() else ttnn.Topology.Linear
     ccl_manager = (
-        CCLManager(mesh_device=submesh, num_links=num_links, topology=_ccl_topology)
+        # fused_ccl_depth=8: matches the trunk-A builder (see pipeline_cosmos3_native.py).
+        CCLManager(mesh_device=submesh, num_links=num_links, topology=_ccl_topology, fused_ccl_depth=8)
         if tp_factor > 1 or sp_factor > 1
         else None
     )

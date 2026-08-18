@@ -1013,7 +1013,9 @@ def build_cosmos3_i2v_native_pipeline(
 
     _ccl_topology = ttnn.Topology.Ring if use_ring_ccl() else ttnn.Topology.Linear
     ccl_manager = (
-        CCLManager(mesh_device=device, num_links=num_links, topology=_ccl_topology)
+        # fused_ccl_depth=8: the trunk issues 3-4 fused MM+RS calls per layer
+        # back-to-back under trace when the fused path is enabled.
+        CCLManager(mesh_device=device, num_links=num_links, topology=_ccl_topology, fused_ccl_depth=8)
         if tp_factor > 1 or sp_factor > 1
         else None
     )

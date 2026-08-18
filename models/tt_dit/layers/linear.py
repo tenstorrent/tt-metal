@@ -557,7 +557,7 @@ class RowParallelLinear(Module):
                 topology=self.ccl_manager.topology,
                 cluster_axis=self.mesh_axis,
                 compute_kernel_config=compute_kernel_config or self.compute_config,
-                barrier_semaphore=self.ccl_manager.get_barrier_semaphore(self.mesh_axis),
+                barrier_semaphore=self.ccl_manager.get_mmrs_barrier_semaphore(self.mesh_axis),
                 dtype=dtype,
             )
             if needs_reshape:
