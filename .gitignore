@@ -36,6 +36,10 @@ blobgen_cmd_log
 
 __pycache__
 
+# OpenCode (opencode) local artifacts
+.opencode/
+test_suite/test_coding_suite/runs/
+
 *.vcd
 
 run-log.yaml
