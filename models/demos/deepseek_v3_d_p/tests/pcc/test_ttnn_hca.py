@@ -104,6 +104,13 @@ _MESH_CONFIGS = [
         id="single-1x1",
     ),
     pytest.param(
+        (2, 2),
+        {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+        ttnn.Topology.Linear,
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"),
+        id="mesh-2x2",
+    ),
+    pytest.param(
         (4, 2),
         {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
         ttnn.Topology.Linear,
