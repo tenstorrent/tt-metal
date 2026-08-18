@@ -35,6 +35,9 @@ TIEBREAK_DELTA_FLOOR = 1e-30
 # that sentinel + index cannot overflow the int32 the min reduce runs in.
 TIEBREAK_INDEX_SENTINEL = 2**24
 
+# Widest input ttnn.topk accepts in one call; vocabs beyond it must be cut into chunks.
+TOPK_MAX_WIDTH = 64 * 1024
+
 
 class TTSampling(LightweightModule):
     """
@@ -68,6 +71,21 @@ class TTSampling(LightweightModule):
         Uses persistent buffers when CCL supports line_all_gather (llama3_70b_galaxy),
         otherwise uses standard all_gather where the CCL API handles memory allocation (tt-transformers).
     """
+
+    @classmethod
+    def num_single_device_vocab_splits(cls, padded_vocab_size):
+        """Fewest power-of-two same-device chunks whose width fits ttnn.topk.
+
+        Returns None when no tile-aligned cut exists, in which case the caller
+        must fall back to host sampling instead of constructing TTSampling.
+        """
+        num_splits = 2
+        while padded_vocab_size // num_splits > TOPK_MAX_WIDTH:
+            num_splits *= 2
+        chunk_width = padded_vocab_size // num_splits
+        if padded_vocab_size % num_splits != 0 or chunk_width % ttnn.TILE_SIZE != 0:
+            return None
+        return num_splits
 
     def _is_force_argmax_sampling(self, k, p, temp):
         """Detect whether all users request deterministic greedy decoding.
@@ -135,18 +153,21 @@ class TTSampling(LightweightModule):
         self.vocab_size = args.vocab_size
 
         # Single-device top-k runs the vocab in same-device chunks (multi-step reduction).
-        # ttnn.topk handles at most 64K elements per call, so use the fewest power-of-two
-        # chunks whose width fits: two chunks preserve the historical behavior for every
-        # vocab up to 128K, and larger vocabs (e.g. Qwen3's 151936) get four (#53064).
+        # ttnn.topk handles at most TOPK_MAX_WIDTH elements per call, so use the fewest
+        # power-of-two chunks whose width fits: two chunks preserve the historical behavior
+        # for every vocab up to 128K, and larger vocabs get four -- e.g. Qwen3's 151936
+        # (#53064) and Gemma-2's 256000. Callers gate on num_single_device_vocab_splits()
+        # returning non-None (host-sampling fallback), so reaching None here is a caller
+        # bug. Raise rather than assert: this guards a correctness invariant (misaligned
+        # chunks silently corrupt global token indices) and must survive python -O.
         self._num_vocab_splits = 2
         if self.multi_step_reduction:
-            while self.padded_vocab_size // self._num_vocab_splits > 64 * 1024:
-                self._num_vocab_splits *= 2
-            chunk_width = self.padded_vocab_size // self._num_vocab_splits
-            assert self.padded_vocab_size % self._num_vocab_splits == 0 and chunk_width % 32 == 0, (
-                f"padded_vocab_size={self.padded_vocab_size} cannot be cut into "
-                f"{self._num_vocab_splits} tile-aligned single-device top-k chunks"
-            )
+            self._num_vocab_splits = self.num_single_device_vocab_splits(self.padded_vocab_size)
+            if self._num_vocab_splits is None:
+                raise ValueError(
+                    f"padded_vocab_size={self.padded_vocab_size} cannot be cut into "
+                    f"tile-aligned single-device top-k chunks of at most {TOPK_MAX_WIDTH}"
+                )
         # Round up to the next tile boundary (32) — device tensors must be tile-aligned.
         raw_batch = getattr(args, "max_batch_size", 32)
         self.max_batch_size = max(32, ((raw_batch + 31) // 32) * 32)

@@ -845,6 +845,20 @@ def test_top_k_logprobs_pcc_torch_vs_tt(shape, mesh_device):
 # ===========================================================================
 
 
+@pytest.mark.parametrize(
+    "padded_vocab_size, expected_splits",
+    [
+        (32768, 2),  # Mistral: two 16384-wide halves
+        (151936, 4),  # Qwen3: four 37984-wide chunks
+        (256000, 4),  # Gemma-2: four 64000-wide chunks
+        (131072, 2),  # exactly 2x TOPK_MAX_WIDTH still splits in two
+        (131104, None),  # four 32776-wide chunks are not tile-aligned -> host-sampling fallback
+    ],
+)
+def test_num_single_device_vocab_splits(padded_vocab_size, expected_splits):
+    assert TTSampling.num_single_device_vocab_splits(padded_vocab_size) == expected_splits
+
+
 def _single_device_sampling_args(mesh_device, vocab_size, max_top_k=32, max_batch_size=32):
     """Minimal args for TTSampling on a 1x1 mesh: no vocab padding, no force-argmax."""
     grid = mesh_device.compute_with_storage_grid_size()
@@ -872,6 +886,9 @@ def _single_device_sampling_args(mesh_device, vocab_size, max_top_k=32, max_batc
         # Half the vocab exceeds ttnn.topk's 64K width limit, so TTSampling must cut the vocab
         # into four same-device chunks. Qwen3 has exactly this vocab size (#53064).
         pytest.param(151936, id="v151936_four_way_split"),
+        # Four 64000-wide tile-aligned chunks, none a power of two. Gemma-2-2B has exactly
+        # this vocab size and is the largest vocab any tiered model runs on one device.
+        pytest.param(256000, id="v256000_four_way_split_gemma"),
     ],
 )
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
