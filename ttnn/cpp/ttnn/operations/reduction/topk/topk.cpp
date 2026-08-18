@@ -194,7 +194,8 @@ std::vector<Tensor> topk(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<CoreRangeSet>& sub_core_grids,
     const std::optional<Tensor>& indices_tensor,
-    std::optional<std::tuple<Tensor&, Tensor&>> preallocated_output_tensors) {
+    std::optional<std::tuple<Tensor&, Tensor&>> preallocated_output_tensors,
+    const bool stable) {
     // Store original shape for final output validation
     const ttnn::Shape& original_lshape = input_tensor.logical_shape();
 
@@ -246,6 +247,27 @@ std::vector<Tensor> topk(
             desired_final_shape);
     }
 
+    if (indices_tensor.has_value()) {
+        // The reader streams a caller-supplied indices tensor with the input's page index, so the
+        // two have to describe the same grid. Only the dtype was checked, and a narrower indices
+        // tensor read at the input's stride returned indices from the wrong pages rather than
+        // failing.
+        TT_FATAL(
+            indices_tensor->logical_shape() == input_tensor.logical_shape(),
+            "Indices tensor has incorrect shape! Got : {}, expected: {}",
+            indices_tensor->logical_shape(),
+            input_tensor.logical_shape());
+        // Matching shapes are not enough when the reduced dim is not already last: the transpose
+        // below is applied to the input and not to the indices tensor, so the reader pages the
+        // indices in the input's post-transpose layout. At [1, 1, 8192, 32] with dim=2 that returns
+        // every index rounded down to a multiple of the tile height.
+        TT_FATAL(
+            is_dim_last_idx,
+            "Indices tensor is only supported for a reduction on the last dimension, got dim={} for rank {}",
+            dim,
+            rank);
+    }
+
     // When input is a scalar, PyTorch returns the copy of the input tensor (that is the 1 top element)
     // as values. This happens when k = 1 (which makes sense), but also when k = 0 (which is unusual,
     // but for now we simply match its behavior).
@@ -274,7 +296,7 @@ std::vector<Tensor> topk(
 
         // Creating indices tensor on host and copying to device (there is no direct way to write
         // to a device tensor with a scalar value).
-        const TensorSpec& indices_spec = indices.tensor_spec();
+        const tt::tt_metal::TensorSpec& indices_spec = indices.tensor_spec();
         TT_FATAL(indices_spec.data_type() == DataType::UINT16, "Indices tensor must be UINT16 for rank 0 input tensor");
         // Although we only need to store one value, have to account for extra padding
         // in the tile layout. So host buffer size needs to match device buffer size.
@@ -339,6 +361,10 @@ std::vector<Tensor> topk(
     // Choose padding value based on whether we want largest or smallest values
     const auto pad_val = largest ? -std::numeric_limits<float>::infinity() : std::numeric_limits<float>::infinity();
 
+    // A caller-supplied indices tensor must keep describing the same tile grid as the input the
+    // device op actually sees, so it is padded in lockstep. The pad slots hold +/-inf values and
+    // can never be selected, so the index value used to pad is irrelevant.
+    auto padded_indices_tensor = indices_tensor;
     if (pad_amount > 0) {
         ttsl::SmallVector<std::array<uint32_t, 2>> padding = {{0, 0}, {0, 0}, {0, 0}, {0, pad_amount}};
 
@@ -346,6 +372,9 @@ std::vector<Tensor> topk(
         const bool pad_multicore = transformed_tensor.dtype() == DataType::BFLOAT16 &&
                                    transformed_tensor.memory_config().buffer_type() != BufferType::L1;
         padded_tensor = ttnn::pad(transformed_tensor, padding, pad_val, pad_multicore);
+        if (padded_indices_tensor.has_value()) {
+            padded_indices_tensor = ttnn::pad(padded_indices_tensor.value(), padding, 0.0f, false);
+        }
     }
 
     // Fill any implicit tile padding with appropriate values
@@ -371,9 +400,10 @@ std::vector<Tensor> topk(
         -1,
         largest,
         sorted,
+        stable,
         input_memory_config,
         used_sub_core_grids,
-        indices_tensor,
+        padded_indices_tensor,
         output_tensors);
 
     // Package results into vector format expected by post-processing

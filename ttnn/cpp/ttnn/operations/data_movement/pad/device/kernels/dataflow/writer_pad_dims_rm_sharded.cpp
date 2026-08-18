@@ -5,21 +5,21 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
 inline __attribute__((always_inline)) void fill_pad_cb_with_val(
     Noc& noc, const uint32_t cb_id, const uint32_t num_bytes_risc, uint32_t num_noc_transfer, const uint32_t val) {
-    CircularBuffer cb(cb_id);
-    volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb.get_write_ptr());
+    DataflowBuffer dfb(cb_id);
+    volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dfb.get_write_ptr());
 
     for (uint32_t i = 0; i < num_bytes_risc / 2; ++i) {
         ptr[i] = val;
     }
 
-    uint32_t pad_val_addr = cb.get_write_ptr();
+    uint32_t pad_val_addr = dfb.get_write_ptr();
     uint32_t l1_write_addr = pad_val_addr;
 
     for (uint32_t i = 0; i < num_noc_transfer; ++i) {
@@ -39,8 +39,8 @@ inline __attribute__((always_inline)) void fill_pad_cb_with_val(
 
 inline __attribute__((always_inline)) void fill_pad_cb_with_zero(
     Noc& noc, const uint32_t cb_id, const uint32_t num_bytes_risc, uint32_t num_noc_transfer) {
-    CircularBuffer cb(cb_id);
-    noc.async_write_zeros(cb, num_bytes_risc * num_noc_transfer);
+    DataflowBuffer dfb(cb_id);
+    noc.async_write_zeros(dfb, num_bytes_risc * num_noc_transfer);
     noc.write_zeros_l1_barrier();
 }
 
@@ -73,13 +73,13 @@ void kernel_main() {
     }
 
     constexpr auto cb_pad = tt::CBIndex::c_1;
-    constexpr auto cb_out0 = tt::CBIndex::c_16;
-    CircularBuffer cb_pad_exp(cb_pad);
-    CircularBuffer cb_out0_exp(cb_out0);
+    constexpr auto dfb_out0 = tt::CBIndex::c_16;
+    DataflowBuffer dfb_pad_exp(cb_pad);
+    DataflowBuffer dfb_out0_exp(dfb_out0);
 
     Noc noc;
 
-    const uint32_t pad_val_addr = cb_pad_exp.get_read_ptr();
+    const uint32_t pad_val_addr = dfb_pad_exp.get_read_ptr();
 
     if constexpr (not_pad_by_zero) {
         fill_pad_cb_with_val(noc, cb_pad, row_major_min_bytes, num_sticks_padded_read, packed_pad_value);
@@ -87,7 +87,7 @@ void kernel_main() {
         fill_pad_cb_with_zero(noc, cb_pad, zero_pad_stick_size, num_zero_pad_sticks_read);
     }
 
-    uint32_t l1_write_addr = cb_out0_exp.get_write_ptr();
+    uint32_t l1_write_addr = dfb_out0_exp.get_write_ptr();
 
     uint32_t i_stick = start_id;
     uint32_t curr_c = start_dim_offset[2], curr_h = start_dim_offset[1], curr_n = start_dim_offset[3];

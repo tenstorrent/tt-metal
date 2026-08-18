@@ -11,6 +11,7 @@ from loguru import logger
 from tracy.process_model_log import post_process_ops_log, run_device_profiler
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 from models.tt_dit.utils.padding import get_padded_vision_seq_len
 from tests.tests_common.cache_entries_counter import CacheEntriesCounter
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
@@ -84,6 +85,7 @@ def run_ring_joint_sdpa_model_config(
     use_column_major_ccl,
     use_wormhole_compute_kernel_config,
     pcc_threshold=0.999,
+    fp32_dest_acc_en: bool = False,
 ):
     """
     Run ring_joint_scaled_dot_product_attention matching all model-specific
@@ -154,7 +156,7 @@ def run_ring_joint_sdpa_model_config(
         compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
-            fp32_dest_acc_en=False,
+            fp32_dest_acc_en=fp32_dest_acc_en,
         )
     else:
         # Wan / Mochi use init_device_compute_kernel_config
@@ -162,7 +164,7 @@ def run_ring_joint_sdpa_model_config(
             submesh.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
-            fp32_dest_acc_en=False,
+            fp32_dest_acc_en=fp32_dest_acc_en,
             packer_l1_acc=False,
         )
 
@@ -328,6 +330,7 @@ def run_ring_joint_sdpa(
     skip_check,
     pcc_threshold,
     max_mse=None,
+    fp32_dest_acc_en: bool = False,
 ):
     full_compute_grid = submesh.compute_with_storage_grid_size()
     sdpa_compute_grid = (full_compute_grid.x, full_compute_grid.y - 1)
@@ -385,7 +388,7 @@ def run_ring_joint_sdpa(
         submesh.arch(),
         math_fidelity=ttnn.MathFidelity.HiFi2,
         math_approx_mode=False,
-        fp32_dest_acc_en=False,
+        fp32_dest_acc_en=fp32_dest_acc_en,
         packer_l1_acc=False,
     )
 
@@ -580,6 +583,7 @@ def run_test_ring_joint_sdpa(
     dtype,
     pcc_threshold=0.994,
     max_mse=None,
+    fp32_dest_acc_en: bool = False,
 ):
     b, nh, base_seq_len, joint_seq_len, d = model_input_shape
     rp_axis, rp_factor, up_axis, up_factor = parallel_config
@@ -623,6 +627,7 @@ def run_test_ring_joint_sdpa(
         skip_check,
         pcc_threshold,
         max_mse=max_mse,
+        fp32_dest_acc_en=fp32_dest_acc_en,
     )
 
 
@@ -1273,4 +1278,366 @@ def test_ring_joint_sdpa_dit_bh_glx(
         dtype,
         pcc_threshold=pcc_threshold,
         max_mse=max_mse,
+    )
+
+
+def run_ring_joint_sdpa_sharded_prompt(
+    submesh,
+    *,
+    b,
+    nh,
+    base_seq_len,
+    padded_seq_len,
+    padded_joint_seq_len,
+    d,
+    rp_axis,
+    rp_factor,
+    up_axis,
+    q_chunk_size,
+    k_chunk_size,
+    num_links,
+    logical_l=None,
+    topology=ttnn.Topology.Linear,
+    pcc_threshold=0.999,
+):
+    """
+    joint_tensor_q/k/v are sharded L/P per device on rp_axis dim=2; logical_l activates the
+    internal gather and the output joint tensor is also sharded L/P per device.
+
+    logical_l (defaulting to padded_joint_seq_len) is the real joint length;
+    """
+    dtype = ttnn.bfloat16
+
+    full_compute_grid = submesh.compute_with_storage_grid_size()
+    sdpa_compute_grid = (full_compute_grid.x, full_compute_grid.y - 1)
+    ccl_core_grid_offset = (0, full_compute_grid.y - 1)
+
+    ccl_sub_device_crs = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(full_compute_grid.x - 1, full_compute_grid.y - 1))}
+    )
+    worker_sub_device = ttnn.SubDevice([ccl_sub_device_crs])
+    worker_sub_device_id = ttnn.SubDeviceId(0)
+    sub_device_manager = submesh.create_sub_device_manager([worker_sub_device], 0)
+    submesh.load_sub_device_manager(sub_device_manager)
+    submesh.set_sub_device_stall_group([worker_sub_device_id])
+
+    ccl_semaphore_handles = [ttnn.create_global_semaphore(submesh, ccl_sub_device_crs, 0) for _ in range(2)]
+
+    # ---- Joint-shard input dims: both spatial and prompt sharded on rp_axis seq dim ----
+    sdpa_input_shard_dims = [None, None]
+    sdpa_input_shard_dims[rp_axis] = 2
+    sdpa_input_shard_dims[up_axis] = 1
+
+    logical_l = padded_joint_seq_len if logical_l is None else logical_l
+    assert (
+        0 < logical_l <= padded_joint_seq_len
+    ), f"logical_l={logical_l} must be in (0, padded_joint_seq_len={padded_joint_seq_len}]"
+
+    # ---- PyTorch reference data ----
+    Q = fa_rand(b, nh, base_seq_len, d)
+    K = fa_rand(b, nh, base_seq_len, d)
+    V = fa_rand(b, nh, base_seq_len, d)
+    # Real joint tokens; the padded tail is zero-filled below.
+    joint_Q_real = fa_rand(b, nh, logical_l, d)
+    joint_K_real = fa_rand(b, nh, logical_l, d)
+    joint_V_real = fa_rand(b, nh, logical_l, d)
+
+    joint_pad = padded_joint_seq_len - logical_l
+    joint_Q = torch.cat([joint_Q_real, torch.zeros(b, nh, joint_pad, d)], dim=2) if joint_pad else joint_Q_real
+    joint_K = torch.cat([joint_K_real, torch.zeros(b, nh, joint_pad, d)], dim=2) if joint_pad else joint_K_real
+    joint_V = torch.cat([joint_V_real, torch.zeros(b, nh, joint_pad, d)], dim=2) if joint_pad else joint_V_real
+
+    # When base_seq_len (logical_n) is NOT tile-aligned, the last real spatial tile is a chunk-final
+    # sub-tile partial. Fill the spatial K/V pad tail with large garbage instead of zeros so a missing
+    # global_n partial-column mask is OBSERVABLE: a leaked zero key barely moves PCC, but leaked garbage
+    # collapses it. Tile-aligned cases keep zero pad (no partial column to expose) -> unchanged behavior.
+    spatial_pad = padded_seq_len - base_seq_len
+    if spatial_pad > 0 and base_seq_len % ttnn.TILE_SIZE != 0:
+        spatial_pad_K = 8.0 * fa_rand(b, nh, spatial_pad, d)
+        spatial_pad_V = 8.0 * fa_rand(b, nh, spatial_pad, d)
+    else:
+        spatial_pad_K = torch.zeros(b, nh, spatial_pad, d)
+        spatial_pad_V = torch.zeros(b, nh, spatial_pad, d)
+    padded_Q = torch.cat([Q, torch.zeros(b, nh, spatial_pad, d)], dim=2)
+    padded_K = torch.cat([K, spatial_pad_K], dim=2)
+    padded_V = torch.cat([V, spatial_pad_V], dim=2)
+
+    # Ground truth attends only real (unpadded) spatial + joint keys; the kernel masks both tails.
+    pt_Q_full = torch.cat([Q, joint_Q_real], dim=2)
+    pt_K_full = torch.cat([K, joint_K_real], dim=2)
+    pt_V_full = torch.cat([V, joint_V_real], dim=2)
+    gt_full = torch.nn.functional.scaled_dot_product_attention(pt_Q_full, pt_K_full, pt_V_full, is_causal=False)
+    gt_spatial = gt_full[:, :, :base_seq_len, :]
+    gt_joint = gt_full[:, :, base_seq_len : base_seq_len + logical_l, :]
+
+    # ---- TT persistent buffers for spatial K/V ----
+    kv_shard_dims = [None, None]
+    kv_shard_dims[up_axis] = 1
+    ag_kv_shape = (b, nh, padded_seq_len, d)
+    persistent_kv_bufs = [
+        ttnn.from_torch(
+            torch.zeros(ag_kv_shape),
+            device=submesh,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=dtype,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=kv_shard_dims),
+        )
+        for _ in range(2)
+    ]
+
+    # ---- TT persistent buffers for gathered joint K/V (full L, replicated on rp_axis) ----
+    joint_kv_shard_dims = [None, None]
+    joint_kv_shard_dims[up_axis] = 1
+    ag_joint_shape = (b, nh, padded_joint_seq_len, d)
+    persistent_joint_kv_bufs = [
+        ttnn.from_torch(
+            torch.zeros(ag_joint_shape),
+            device=submesh,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=dtype,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=joint_kv_shard_dims),
+        )
+        for _ in range(2)
+    ]
+
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=sdpa_compute_grid,
+        q_chunk_size=q_chunk_size,
+        k_chunk_size=k_chunk_size,
+        exp_approx_mode=False,
+    )
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        submesh.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+
+    tt_Q = ttnn.from_torch(
+        padded_Q,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_input_shard_dims),
+    )
+    tt_K = ttnn.from_torch(
+        padded_K,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_input_shard_dims),
+    )
+    tt_V = ttnn.from_torch(
+        padded_V,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_input_shard_dims),
+    )
+
+    # ---- joint tensors sharded on rp_axis seq (L/P per device) ----
+    joint_shard_dims_rp = [None, None]
+    joint_shard_dims_rp[rp_axis] = 2
+    joint_shard_dims_rp[up_axis] = 1
+    tt_joint_Q = ttnn.from_torch(
+        joint_Q,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=joint_shard_dims_rp),
+    )
+    tt_joint_K = ttnn.from_torch(
+        joint_K,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=joint_shard_dims_rp),
+    )
+    tt_joint_V = ttnn.from_torch(
+        joint_V,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=joint_shard_dims_rp),
+    )
+
+    logger.debug(
+        f"Sharded-joint test: Q={tt_Q.shape}, joint_Q={tt_joint_Q.shape}, "
+        f"joint_padded_per_device={padded_joint_seq_len // rp_factor}, "
+        f"padded_joint_seq_len={padded_joint_seq_len}, logical_l={logical_l}"
+    )
+
+    tt_out, tt_joint_out, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
+        tt_Q,
+        tt_K,
+        tt_V,
+        tt_joint_Q,
+        tt_joint_K,
+        tt_joint_V,
+        persistent_output_buffer_k=persistent_kv_bufs[0],
+        persistent_output_buffer_v=persistent_kv_bufs[1],
+        joint_strategy="rear",
+        logical_n=base_seq_len,
+        logical_l=logical_l,
+        program_config=program_config,
+        compute_kernel_config=compute_kernel_config,
+        dim=2,
+        multi_device_global_semaphore=ccl_semaphore_handles,
+        num_links=num_links,
+        cluster_axis=rp_axis,
+        mesh_device=submesh,
+        topology=topology,
+        subdevice_id=worker_sub_device_id,
+        ccl_core_grid_offset=ccl_core_grid_offset,
+        persistent_output_buffer_joint_k=persistent_joint_kv_bufs[0],
+        persistent_output_buffer_joint_v=persistent_joint_kv_bufs[1],
+    )
+    logger.info(f"Done processing...")
+
+    ttnn.synchronize_device(submesh)
+
+    logger.info(f"Done synchronizing...")
+
+    # ---- Spatial output: concat along rp seq, trim padding ----
+    tt_out_pt = ttnn.to_torch(
+        tt_out,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_input_shard_dims),
+    )
+    tt_out_pt = tt_out_pt[:, :, :base_seq_len, :]
+
+    out_pass, out_pcc = comp_pcc(tt_out_pt, gt_spatial, pcc_threshold)
+    logger.info(f"[sharded-joint] spatial PCC={out_pcc}")
+    assert out_pass, f"Spatial PCC {out_pcc} below threshold {pcc_threshold}"
+
+    # ---- Joint output: each device holds its L/P shard; concat to full L ----
+    tt_joint_out_pt = ttnn.to_torch(
+        tt_joint_out,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(submesh, mesh_shape=tuple(submesh.shape), dims=joint_shard_dims_rp),
+    )
+    tt_joint_out_pt = tt_joint_out_pt[:, :, :logical_l, :]
+
+    jout_pass, jout_pcc = comp_pcc(tt_joint_out_pt, gt_joint, pcc_threshold)
+    logger.info(f"[sharded-joint] joint PCC={jout_pcc}")
+    assert jout_pass, f"Joint PCC {jout_pcc} below threshold {pcc_threshold}"
+
+
+def sharded_prompt_num_links(mesh_shape):
+    shape = tuple(mesh_shape)
+    # (wh_links, bh_links)
+    ground_truth = {
+        (2, 2): (2, 2),
+        (2, 4): (1, 2),
+        (4, 8): (4, 2),
+    }
+    assert shape in ground_truth, f"No num_links ground truth for mesh shape {shape}"
+    wh_links, bh_links = ground_truth[shape]
+    return bh_links if is_blackhole() else wh_links
+
+
+# The same set of tail-masking use cases is run on each mesh shape (all joint-tail but the last).
+#   - packed:      logical_l == padded joint, chunk == per-shard tiles (Sk_chunk_t=1).
+#   - straddle:    last shard carries a chunk-final sub-tile partial (Sk_chunk_t=1).
+#   - emptyshards: trailing shard(s) fully empty + one straddle shard.
+#   - sk2partial:  Sk_chunk_t=2 chunk-final sub-tile partial (tile-count aligned yet 31-col partial).
+#   - packed_sk2:  logical_l == padded joint, chunk == per-shard tiles (Sk_chunk_t=2).
+#   - localn:      chunk wider than per-shard joint tiles, tile-aligned, packed (pure active_Sk
+#                  narrowing over zero-filled pad tiles; the (4,8) case is the FLUX.2 prod shape).
+#   - spatial_straddle: SPATIAL tail instead — base_seq_len (logical_n) chunk-final sub-tile partial
+#                  on the last spatial shard, joint packed (reproduces the spatial global_n gate hole).
+@pytest.mark.parametrize(
+    "mesh_device, sp_axis, b, nh, base_seq_len, padded_joint_seq_len, d, q_chunk_size, k_chunk_size, logical_l",
+    [
+        # ---- mesh (2,4) ----
+        ((2, 4), 0, 1, 24, 64, 64, 64, 32, 32, None),  # packed: 2 full shards
+        ((2, 4), 0, 1, 24, 64, 64, 64, 32, 32, 63),  # straddle: shard0 full, shard1 31+1 pad
+        ((2, 4), 0, 1, 24, 64, 64, 64, 32, 32, 20),  # emptyshards: shard0 20+12 pad, shard1 empty
+        ((2, 4), 0, 1, 24, 128, 128, 64, 64, 64, 63),  # sk2partial: 64/shard=2t, shard0 partial, shard1 empty
+        ((2, 4), 0, 1, 24, 64, 128, 64, 64, 64, None),  # packed_sk2: 64/shard=2t, chunk=2t
+        ((2, 4), 0, 1, 24, 64, 128, 64, 64, 128, None),  # localn: 64/shard=2t inside a 4t chunk
+        ((2, 4), 0, 1, 24, 63, 64, 64, 32, 32, None),  # spatial_straddle: spatial shard1 31+1 pad, joint packed
+        # ---- mesh (4,8) ----
+        ((4, 8), 0, 1, 24, 64, 128, 64, 32, 32, None),  # packed: 4 full shards
+        ((4, 8), 0, 1, 24, 64, 128, 64, 32, 32, 127),  # straddle: shards0-2 full, shard3 31+1 pad
+        ((4, 8), 0, 1, 24, 64, 128, 64, 32, 32, 40),  # emptyshards: shard0 full, shard1 8+24, shards2-3 empty
+        ((4, 8), 0, 1, 24, 256, 256, 64, 64, 64, 191),  # sk2partial: 64/shard=2t, shard2 partial, shard3 empty
+        ((4, 8), 0, 1, 24, 64, 256, 64, 64, 64, None),  # packed_sk2: 64/shard=2t, chunk=2t
+        # localn: sp_axis=1 -> sp_factor=8, so 512/8=64=2t inside a 16t chunk (FLUX.2 prod shape)
+        ((4, 8), 1, 1, 24, 4096, 512, 128, 256, 512, 512),
+        ((4, 8), 0, 1, 24, 127, 128, 64, 32, 32, None),  # spatial_straddle: spatial shard3 31+1 pad, joint packed
+    ],
+    ids=[
+        "m2x4_packed",
+        "m2x4_straddle",
+        "m2x4_emptyshards",
+        "m2x4_sk2partial",
+        "m2x4_packed_sk2",
+        "m2x4_localn",
+        "m2x4_spatial_straddle",
+        "m4x8_packed",
+        "m4x8_straddle",
+        "m4x8_emptyshards",
+        "m4x8_sk2partial",
+        "m4x8_packed_sk2",
+        "m4x8_localn",
+        "m4x8_spatial_straddle",
+    ],
+    indirect=["mesh_device"],
+)
+@pytest.mark.parametrize(
+    "device_params, all_gather_topology",
+    [
+        (
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            ttnn.Topology.Linear,
+        ),
+    ],
+    indirect=["device_params"],
+    ids=["line"],
+)
+def test_ring_joint_sdpa_sharded_prompt(
+    mesh_device,
+    sp_axis,
+    b,
+    nh,
+    base_seq_len,
+    padded_joint_seq_len,
+    d,
+    q_chunk_size,
+    k_chunk_size,
+    logical_l,
+    all_gather_topology,
+    reset_seeds,
+):
+    """
+    Functional correctness test for the B1-a sharded-joint path.
+    joint_tensor_q/k/v are sharded L/P per device; logical_l activates the internal gather.
+    padded_joint_seq_len is the device tensor length; logical_l (or padded_joint_seq_len when None)
+    is the real joint length driving the tail mask.
+    """
+    sp_factor = mesh_device.shape[sp_axis]
+    up_axis = 1 - sp_axis
+    num_links = sharded_prompt_num_links(mesh_device.shape)
+    submesh = mesh_device.create_submesh(ttnn.MeshShape(*mesh_device.shape))
+    submesh.cache_entries_counter = CacheEntriesCounter(submesh)
+    padded_seq_len = get_padded_vision_seq_len(base_seq_len, sp_factor)
+    assert padded_joint_seq_len % sp_factor == 0, "padded_joint_seq_len must be divisible by sp_factor"
+    run_ring_joint_sdpa_sharded_prompt(
+        submesh,
+        b=b,
+        nh=nh,
+        base_seq_len=base_seq_len,
+        padded_seq_len=padded_seq_len,
+        padded_joint_seq_len=padded_joint_seq_len,
+        d=d,
+        rp_axis=sp_axis,
+        rp_factor=sp_factor,
+        up_axis=up_axis,
+        q_chunk_size=q_chunk_size,
+        k_chunk_size=k_chunk_size,
+        num_links=num_links,
+        logical_l=logical_l,
+        topology=all_gather_topology,
     )

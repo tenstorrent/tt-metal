@@ -6,11 +6,14 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "cmath_common.h"
 
 using namespace sfpi;
 
 namespace ckernel {
 namespace sfpu {
+
+inline void alt_complex_rotate90_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 4>
 inline void calculate_alt_complex_rotate90() {

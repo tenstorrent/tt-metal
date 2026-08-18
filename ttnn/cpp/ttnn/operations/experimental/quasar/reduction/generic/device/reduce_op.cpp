@@ -50,8 +50,7 @@ Tensor reduce_min(
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids = std::nullopt) {
     Tensor input = input_tensor;
-    if (input.layout() == tt::tt_metal::Layout::ROW_MAJOR &&
-        input.storage_type() == tt::tt_metal::StorageType::DEVICE) {
+    if (input.layout() == tt::tt_metal::Layout::ROW_MAJOR && input.storage_type() == ttnn::StorageType::DEVICE) {
         // Changing layout to TILE with +inf padding
         auto pad_shape = ttnn::operations::data_movement::pad_to_tile_shape(input.padded_shape());
         input = ttnn::operations::experimental::quasar::tilize_with_val_padding(
@@ -94,7 +93,7 @@ Tensor reduce(
     auto is_multicore_hw = parallelization_strategy == tt::tt_metal::ReduceOpParallelizationStrategy::MULTI_CORE_HW;
     float pad_value = reduce_math == tt::tt_metal::ReduceOpMath::MAX ? -std::numeric_limits<float>::infinity() : 0;
 
-    TT_FATAL(input_tensor.storage_type() == tt::tt_metal::StorageType::DEVICE, "Expected input tensor to be on device");
+    TT_FATAL(input_tensor.storage_type() == ttnn::StorageType::DEVICE, "Expected input tensor to be on device");
     TT_FATAL(
         input_tensor.device() != nullptr,
         "input_tensor.device() == nullptr, No device found, move input_tensor to device");
@@ -159,14 +158,25 @@ Tensor reduce(
     // scalar after reduction via post-multiplication. See issue #40498. The flag also
     // covers reduce_min (math_op=MAX with negate=true) since high-level dispatch lowers
     // min through reduce_min before reaching here.
-    const bool use_post_mul = (reduce_math == tt::tt_metal::ReduceOpMath::MAX) && (scaler != 1.0f);
+    //
+    // Quasar-specific: the SUM/AVG pool path (GAPOOL) on Quasar also fails to apply the
+    // full-precision scaler from the scaler CB — it loses scaler-mantissa precision (a
+    // coarse unit-mantissa rounding: e.g. avg_pool2d's 1/49, bf16 1.3047*2^-6, is applied
+    // as ~1.5*2^-6 = 3/128, a fixed ~1.15x inflation independent of the input value).
+    // WH/BH GAPOOL applies the full scaler correctly (they pass), so restrict the SUM/AVG
+    // post-multiplication to Quasar. As with MAX/MIN we reduce with scaler=1.0 (bf16-exact,
+    // so GAPOOL sums with no scaler-precision loss) and apply the user scalar afterwards via
+    // SFPU post-multiplication (mul_unary_tile, full precision).
+    const bool is_quasar = arch == tt::ARCH::QUASAR;
+    const bool use_post_mul = (scaler != 1.0f) && ((reduce_math == tt::tt_metal::ReduceOpMath::MAX) ||
+                                                   (is_quasar && (reduce_math == tt::tt_metal::ReduceOpMath::SUM ||
+                                                                  reduce_math == tt::tt_metal::ReduceOpMath::AVG)));
     const float reduce_scaler = use_post_mul ? 1.0f : scaler;
     const float post_mul = use_post_mul ? scaler : 1.0f;
 
-    // External-negate fallback for the H step when the fused-negate kernel's
-    // CBs (reduce_h_neg.cpp uses Ht * lcm(Wt_g1, Wt_g2) tiles for both c_4 and
-    // c_5) won't fit in L1.  Computes -reduce(MAX, H, -x) using the regular
-    // reduce kernel.
+    // External-negate fallback for the H step: the fused-negate compute kernel is unported on Quasar
+    // (negative_tile stub) and removed, so MIN H-reduce always takes this path. Computes
+    // -reduce(MAX, H, -x) using the regular reduce kernel.
     auto h_reduce_with_external_negate =
         [&](const Tensor& h_input, float h_scaler, float h_post_mul, tt::tt_metal::DataType h_out_dtype) {
             // Keep neg_input in h_input's memory config (pass std::nullopt) so the
@@ -206,8 +216,14 @@ Tensor reduce(
         // Multi-core HW reduction: first reduce W, then reduce H on the result.
         // For the Sum chain's terminal fp32->bf16 stage, keep W in fp32 so only H packs to bf16.
         const auto out_final_dtype = output_dtype.value_or(input_tensor.dtype());
-        const bool keep_w_fp32 = output_dtype.has_value() && out_final_dtype == tt::tt_metal::DataType::BFLOAT16 &&
-                                 tilized_input.dtype() == tt::tt_metal::DataType::FLOAT32;
+        // Port of tt-metal 4eed5a8b8c7 (#48578): keep the W intermediate FP32 (only H packs to BF16) to
+        // preserve accumulation precision — SUM only. MAX/MIN must NOT (MIN = MAX+negate; the fused-negate
+        // W step gives wrong results with an FP32 intermediate, #40854; and select ops gain no precision).
+        const bool keep_w_fp32 =
+            reduce_math == tt::tt_metal::ReduceOpMath::SUM &&
+            ((output_dtype.has_value() && out_final_dtype == tt::tt_metal::DataType::BFLOAT16 &&
+              tilized_input.dtype() == tt::tt_metal::DataType::FLOAT32) ||
+             (tilized_input.dtype() == tt::tt_metal::DataType::BFLOAT16 && config.fp32_dest_acc_en));
         const auto out_w_dtype = keep_w_fp32 ? tt::tt_metal::DataType::FLOAT32 : out_final_dtype;
 
         const Tensor output_tensor = ttnn::prim::qsr::reduce(

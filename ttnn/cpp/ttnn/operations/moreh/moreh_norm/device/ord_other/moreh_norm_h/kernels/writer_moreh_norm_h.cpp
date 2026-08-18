@@ -8,23 +8,18 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    int i{0};
-    const auto output_addr = get_arg_val<uint32_t>(i++);
-    const bool output_is_dram = get_arg_val<uint32_t>(i++) == 1;
-    const auto num_cols_per_core = get_arg_val<uint32_t>(i++);
-    const auto tile_offset = get_arg_val<uint32_t>(i++);
+    const bool output_is_dram = get_arg(args::output_is_dram) == 1;
+    const auto num_cols_per_core = get_arg(args::num_cols_per_core);
+    const auto tile_offset = get_arg(args::tile_offset);
 
-    uint32_t cb_id{16};
-    const auto cb_id_output = cb_id++;
-
-    constexpr auto output_args = TensorAccessorArgs<0>();
-    const auto s = TensorAccessor(output_args, output_addr);
+    const auto s = TensorAccessor(tensor::output);
 
     Noc noc;
-    DataflowBuffer dfb_output(cb_id_output);
-    const auto output_tile_bytes = get_tile_size(cb_id_output);
+    DataflowBuffer dfb_output(dfb::output);
+    const auto output_tile_bytes = dfb_output.get_tile_size();
 
     auto output_tile_idx = tile_offset;
     for (uint32_t idx = 0; idx < num_cols_per_core; ++idx) {

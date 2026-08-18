@@ -55,10 +55,15 @@ SendAsyncMeshWorkloadFactory::create_at(
     const auto& socket_connection_config = mesh_socket.get_config().socket_connection_config;
 
     std::vector<CoreCoord> sender_core_coords;
+    sender_core_coords.reserve(socket_connection_config.size());
     std::vector<CoreCoord> receiver_core_coords;
+    receiver_core_coords.reserve(socket_connection_config.size());
     std::vector<tt::tt_fabric::FabricNodeId> sender_fabric_node_ids;
+    sender_fabric_node_ids.reserve(socket_connection_config.size());
     std::vector<tt::tt_fabric::FabricNodeId> receiver_fabric_node_ids;
+    receiver_fabric_node_ids.reserve(socket_connection_config.size());
     std::vector<size_t> connection_indices;
+    connection_indices.reserve(socket_connection_config.size());
 
     for (size_t conn_idx = 0; conn_idx < socket_connection_config.size(); ++conn_idx) {
         const auto& connection = socket_connection_config[conn_idx];

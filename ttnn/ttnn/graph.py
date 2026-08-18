@@ -596,8 +596,12 @@ def pretty_format(captured_graph):
             node_string = format_string.format("Add Tensor: " + str(node["params"]["tensor_id"]))
         elif node["node_type"] == "circular_buffer_allocate":
             node_string = format_string.format("Allocate Circular Buffer")
+        elif node["node_type"] == "dataflow_buffer_allocate":
+            node_string = format_string.format("Allocate Dataflow Buffer")
+        elif node["node_type"] == "scratchpad_allocate":
+            node_string = format_string.format("Allocate Kernel Scratchpad")
         elif node["node_type"] == "circular_buffer_deallocate_all":
-            node_string = format_string.format("Deallocate All Circular Buffers")
+            node_string = format_string.format("Deallocate All Program-Scope L1")
         else:
             raise ValueError(f"Unknown node type: {node['node_type']}")
 

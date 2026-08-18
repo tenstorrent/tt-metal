@@ -34,7 +34,7 @@ runs:
           --interval 1 \
           --label "Quasar compile (group ${{ inputs.test-group }}/${{ inputs.test-splits }})" \
           --output "$GITHUB_STEP_SUMMARY" \
-          -- pytest -q --compile-producer -n 8 --dist=worksteal \
+          -- pytest -q --compile-producer -n 8 \
                 -m "${{ inputs.pytest-markers }}" \
                 --splits ${{ inputs.test-splits }} --group ${{ inputs.test-group }} \
                 --override-ini=log_cli=false --tb=short --timeout=60 \

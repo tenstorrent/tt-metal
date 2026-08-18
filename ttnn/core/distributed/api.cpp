@@ -19,6 +19,7 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/system_mesh.hpp>
 #include <ttnn/distributed/types.hpp>
+#include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
 
 using namespace tt::tt_metal;
 
@@ -96,15 +97,14 @@ Tensor from_host_shards(const std::vector<Tensor>& tensor_shards, const MeshShap
 
     auto distributed_host_buffer = DistributedHostBuffer::create(mesh_shape);
     auto shard_it = tensor_shards.begin();
-    std::vector<distributed::MeshCoordinate> coords;
     for (const auto& coord : distributed::MeshCoordinateRange(mesh_shape)) {
         HostBuffer buffer = host_buffer::get_host_buffer(*(shard_it++));
         distributed_host_buffer.emplace_shard(coord, [&]() { return std::move(buffer); });
-        coords.push_back(coord);
     }
 
-    TensorTopology topology = TensorTopology::create_sharded_tensor_topology(mesh_shape, shard_dim);
-    return Tensor(HostTensor::from_buffer(
+    tt::tt_metal::TensorTopology topology =
+        tt::tt_metal::TensorTopology::create_sharded_tensor_topology(mesh_shape, shard_dim);
+    return Tensor(host_tensor_from_buffer_with_topology(
         std::move(distributed_host_buffer), reference_shard.tensor_spec(), std::move(topology)));
 }
 

@@ -10,6 +10,7 @@
 
 #include <tt_stl/aligned_allocator.hpp>
 #include <tt_stl/assert.hpp>
+#include "dispatch/dispatch_core_manager.hpp"
 #include "dispatch/dispatch_mem_map.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
 #include "dispatch/memcpy.hpp"
@@ -108,14 +109,17 @@ vector_aligned<uint32_t> DeviceCommand<hugepage_write>::cmd_vector() const {
 
 template <bool hugepage_write>
 void DeviceCommand<hugepage_write>::add_dispatch_wait(
-    uint32_t flags, uint32_t address, uint32_t stream, uint32_t count, uint8_t dispatcher_type) {
+    uint32_t flags, uint32_t address, uint32_t stream, uint32_t count, uint8_t cq_id, uint8_t dispatcher_type) {
     // If there are no stream registers (Quasar), translate stream flags to memory flags and calculate the L1 worker
     // completion counter address from the stream index.
     if (!MetalContext::instance().hal().has_stream_registers() &&
         (flags & (CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM))) {
         const auto& mem_map = MetalContext::instance().dispatch_mem_map();
         const uint32_t first_stream = mem_map.get_dispatch_stream_index(0);
-        address = mem_map.get_dispatch_message_addr_start() + mem_map.get_sync_offset(stream - first_stream);
+        const uint32_t completion_counter_offset = mem_map.get_completion_counter_offset(cq_id);
+        address = mem_map.get_dispatch_message_addr_start() +
+                  completion_counter_offset * MetalContext::instance().hal().get_alignment(HalMemType::L1) +
+                  mem_map.get_sync_offset(stream - first_stream);
         uint32_t new_flags = flags & ~(CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM);
         new_flags |= CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_MEMORY;
         if (flags & CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM) {
@@ -154,8 +158,8 @@ void DeviceCommand<hugepage_write>::add_dispatch_wait(
 
 template <bool hugepage_write>
 void DeviceCommand<hugepage_write>::add_dispatch_wait_with_prefetch_stall(
-    uint32_t flags, uint32_t address, uint32_t stream, uint32_t count) {
-    this->add_dispatch_wait(flags | CQ_DISPATCH_CMD_WAIT_FLAG_NOTIFY_PREFETCH, address, stream, count);
+    uint32_t flags, uint32_t address, uint32_t stream, uint32_t count, uint8_t cq_id) {
+    this->add_dispatch_wait(flags | CQ_DISPATCH_CMD_WAIT_FLAG_NOTIFY_PREFETCH, address, stream, count, cq_id);
     uint32_t increment_sizeB = tt::align(sizeof(CQPrefetchCmd), this->pcie_alignment);
     auto initialize_stall_cmd = [&](CQPrefetchCmd* stall_cmd) {
         *stall_cmd = {};

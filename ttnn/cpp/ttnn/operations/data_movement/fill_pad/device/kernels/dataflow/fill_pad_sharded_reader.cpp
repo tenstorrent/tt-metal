@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Reads border tiles from the local L1 shard into cb_data_in using NOC
+ * Reads border tiles from the local L1 shard into dfb_data_in using NOC
  * reads addressed to this core's own L1. No cross-core NOC access.
  *
  * CT args:
@@ -31,7 +31,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/tensor/noc_traits.h"
 
@@ -55,7 +55,7 @@ void kernel_main() {
     constexpr uint32_t row_stride_bytes = W_tiles * tile_bytes;
 
     Noc noc;
-    CircularBuffer cb_data_in(cb_data_in_idx);
+    DataflowBuffer dfb_data_in(cb_data_in_idx);
 
     // Local-L1 self-read via the Noc wrapper's UnicastEndpoint form: no
     // address-generator trait is applicable, so the endpoint carries explicit
@@ -69,17 +69,17 @@ void kernel_main() {
         if constexpr (has_right_pad) {
             uint32_t addr = shard_l1_base + local_right_col * tile_bytes;
             for (uint32_t r = 0; r < shard_H_tiles - 1u; r++) {
-                cb_data_in.reserve_back(1);
+                dfb_data_in.reserve_back(1);
                 noc.async_read(
                     UnicastEndpoint{},
-                    cb_data_in,
+                    dfb_data_in,
                     tile_bytes,
                     {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
                      .noc_y = (uint32_t)my_y[noc.get_noc_id()],
                      .addr = addr},
                     {.offset_bytes = 0});
                 noc.async_read_barrier();
-                cb_data_in.push_back(1);
+                dfb_data_in.push_back(1);
                 addr += row_stride_bytes;
             }
         }
@@ -89,17 +89,17 @@ void kernel_main() {
         {
             uint32_t addr = shard_l1_base + (shard_H_tiles - 1u) * row_stride_bytes;
             for (uint32_t c = 0; c <= local_right_col; c++) {
-                cb_data_in.reserve_back(1);
+                dfb_data_in.reserve_back(1);
                 noc.async_read(
                     UnicastEndpoint{},
-                    cb_data_in,
+                    dfb_data_in,
                     tile_bytes,
                     {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
                      .noc_y = (uint32_t)my_y[noc.get_noc_id()],
                      .addr = addr},
                     {.offset_bytes = 0});
                 noc.async_read_barrier();
-                cb_data_in.push_back(1);
+                dfb_data_in.push_back(1);
                 addr += tile_bytes;
             }
         }
@@ -110,17 +110,17 @@ void kernel_main() {
         if constexpr (has_right_pad) {
             uint32_t addr = shard_l1_base + local_right_col * tile_bytes;
             for (uint32_t r = 0; r < shard_H_tiles; r++) {
-                cb_data_in.reserve_back(1);
+                dfb_data_in.reserve_back(1);
                 noc.async_read(
                     UnicastEndpoint{},
-                    cb_data_in,
+                    dfb_data_in,
                     tile_bytes,
                     {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
                      .noc_y = (uint32_t)my_y[noc.get_noc_id()],
                      .addr = addr},
                     {.offset_bytes = 0});
                 noc.async_read_barrier();
-                cb_data_in.push_back(1);
+                dfb_data_in.push_back(1);
                 addr += row_stride_bytes;
             }
         }

@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tilize_multi_core_block_program_factory.hpp"
+#include "ttnn/operations/data_movement/tilize/device/tilize_device_operation.hpp"
+
+#include <tt-metalium/experimental/program_descriptor_patching.hpp>
 
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
@@ -30,17 +33,19 @@ void push_cb_pair(
     uint32_t num_tiles,
     tt::DataFormat input_cb_data_format,
     tt::DataFormat output_cb_data_format,
-    uint32_t dram_alignment) {
+    uint32_t dram_alignment,
+    uint32_t tile_height,
+    const TileDescriptor& tile_descriptor) {
     // c_1 is a per-row staging buffer used by the reader when the DRAM source row and the
     // L1 destination have different alignment offsets: the reader rounds the source address
     // down to a dram_alignment boundary, issues one noc_async_read of (row_bytes + dram_alignment)
     // into this buffer, then copies the correctly-offset slice into c_0.
-    //   row_bytes  = TILE_WIDTH * elt_size * num_tiles  (one row of a sub-block)
-    //              = input_single_tile_size / TILE_HEIGHT * num_tiles
+    //   row_bytes  = tile_width * elt_size * num_tiles  (one row of a sub-block)
+    //              = input_single_tile_size / tile_height * num_tiles
     //   + dram_alignment    : tail bytes from rounding the DRAM read down to alignment
     //   + dram_alignment    : headroom for aligning the L1 write pointer up to dram_alignment
     //                         (get_write_ptr only guarantees L1 alignment, not DRAM alignment)
-    uint32_t input_row_bytes = input_single_tile_size / TILE_HEIGHT;
+    uint32_t input_row_bytes = input_single_tile_size / tile_height;
     uint32_t temp_cb_size = input_row_bytes * num_tiles + 2 * dram_alignment;
     desc.cbs.push_back(CBDescriptor{
         .total_size = temp_cb_size,
@@ -58,6 +63,7 @@ void push_cb_pair(
             .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_0),
             .data_format = input_cb_data_format,
             .page_size = input_single_tile_size,
+            .tile = tile_descriptor,
         }}},
     });
     desc.cbs.push_back(CBDescriptor{
@@ -67,6 +73,7 @@ void push_cb_pair(
             .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_16),
             .data_format = output_cb_data_format,
             .page_size = output_single_tile_size,
+            .tile = tile_descriptor,
         }}},
     });
 }
@@ -78,14 +85,20 @@ ProgramDescriptor TilizeMultiCoreBlockProgramFactory::create_descriptor(
     const auto& a = tensor_args.input_tensor;
     const Tensor& output = tensor_return_value;
     const auto& sub_core_grids = operation_attributes.sub_core_grids;
+    const uint32_t tile_width = operation_attributes.tile.get_width();
+    const uint32_t tile_height = operation_attributes.tile.get_height();
+    const uint32_t tile_hw = operation_attributes.tile.get_tile_hw();
 
     tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
-    uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
+    uint32_t input_single_tile_size = operation_attributes.tile.get_tile_size(input_cb_data_format);
     tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
+    uint32_t output_single_tile_size = operation_attributes.tile.get_tile_size(output_cb_data_format);
 
+    // UInt8 requires fp32 dest acc on Blackhole: hardware promotes 8-bit integers to 32-bit in
+    // dest but keeps them as integers (not float), so the output CB stays as UInt8 (not Float32).
     bool fp32_llk_acc = a.dtype() == DataType::FLOAT32 || a.dtype() == DataType::FP8_E4M3 ||
-                        output.dtype() == DataType::FP8_E4M3 || output.dtype() == DataType::BFLOAT8_B;
+                        output.dtype() == DataType::FP8_E4M3 || output.dtype() == DataType::BFLOAT8_B ||
+                        a.dtype() == DataType::UINT8;
 
     IDevice* device = a.device();
     CoreCoord grid_size = device->compute_with_storage_grid_size();
@@ -94,11 +107,17 @@ ProgramDescriptor TilizeMultiCoreBlockProgramFactory::create_descriptor(
     CoreRangeSet available_grid = sub_core_grids.has_value() ? sub_core_grids.value() : default_grid;
 
     uint32_t max_l1_size = operations::data_movement::get_max_l1_space(a);
-    uint32_t num_tiles_per_col = output.padded_shape()[-2] / TILE_HEIGHT;
-    uint32_t num_tiles_per_row = output.padded_shape()[-1] / TILE_WIDTH;
+    uint32_t num_tiles_per_col = output.padded_shape()[-2] / tile_height;
+    uint32_t num_tiles_per_row = output.padded_shape()[-1] / tile_width;
 
-    uint32_t num_blocks = (output.padded_shape()[-1] * output.padded_shape()[-2]) / (TILE_HEIGHT * TILE_WIDTH);
-    uint32_t cb_block_size_limit = max_l1_size / (input_single_tile_size + output_single_tile_size);
+    uint32_t num_blocks = (output.padded_shape()[-1] * output.padded_shape()[-2]) / tile_hw;
+    const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
+    // Fold push_cb_pair's c_1 staging (bytes/tile + fixed) into the limit or the region overruns L1.
+    uint32_t staging_bytes_per_tile = input_single_tile_size / tile_height;
+    uint32_t fixed_staging_bytes = 2 * dram_alignment;
+    uint32_t budget_for_tiles = (max_l1_size > fixed_staging_bytes) ? (max_l1_size - fixed_staging_bytes) : 0;
+    uint32_t bytes_per_tile_pair = input_single_tile_size + output_single_tile_size + staging_bytes_per_tile;
+    uint32_t cb_block_size_limit = (bytes_per_tile_pair == 0) ? 0 : budget_for_tiles / bytes_per_tile_pair;
 
     auto
         [ncores,
@@ -132,7 +151,7 @@ ProgramDescriptor TilizeMultiCoreBlockProgramFactory::create_descriptor(
     Buffer* dst_buffer = output.buffer();
     TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
+    const TileDescriptor tile_descriptor(operation_attributes.tile);
 
     ProgramDescriptor desc;
 
@@ -145,7 +164,9 @@ ProgramDescriptor TilizeMultiCoreBlockProgramFactory::create_descriptor(
             single_sub_block_size,
             input_cb_data_format,
             output_cb_data_format,
-            dram_alignment);
+            dram_alignment,
+            tile_height,
+            tile_descriptor);
     }
     if (has_cliff_col && has_cliff_row) {
         push_cb_pair(
@@ -156,7 +177,9 @@ ProgramDescriptor TilizeMultiCoreBlockProgramFactory::create_descriptor(
             single_block_size_cliff_row,
             input_cb_data_format,
             output_cb_data_format,
-            dram_alignment);
+            dram_alignment,
+            tile_height,
+            tile_descriptor);
     }
     if (has_cliff_row) {
         push_cb_pair(
@@ -167,7 +190,9 @@ ProgramDescriptor TilizeMultiCoreBlockProgramFactory::create_descriptor(
             single_block_size_cliff_row,
             input_cb_data_format,
             output_cb_data_format,
-            dram_alignment);
+            dram_alignment,
+            tile_height,
+            tile_descriptor);
     }
     if (has_cliff_col) {
         push_cb_pair(
@@ -178,11 +203,13 @@ ProgramDescriptor TilizeMultiCoreBlockProgramFactory::create_descriptor(
             single_sub_block_size,
             input_cb_data_format,
             output_cb_data_format,
-            dram_alignment);
+            dram_alignment,
+            tile_height,
+            tile_descriptor);
     }
 
     // reader
-    uint32_t num_tiles_2d = output.padded_shape()[-1] * output.padded_shape()[-2] / TILE_HW;
+    uint32_t num_tiles_2d = output.padded_shape()[-1] * output.padded_shape()[-2] / tile_hw;
 
     auto log_shape = output.logical_shape();
     uint32_t third_dim = 1;
@@ -191,8 +218,6 @@ ProgramDescriptor TilizeMultiCoreBlockProgramFactory::create_descriptor(
     } else if (log_shape.rank() >= 4) {
         third_dim = log_shape[-3] * log_shape[-4];
     }
-
-    uint32_t tile_height = output.tensor_spec().tile().get_height();
 
     uint32_t total_num_rows = a.logical_shape()[-2];
 
@@ -230,7 +255,8 @@ ProgramDescriptor TilizeMultiCoreBlockProgramFactory::create_descriptor(
     uint32_t single_sub_block_cliff_col_wh = single_block_size_cliff_col * single_block_size / single_sub_block_size;
 
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
-    if (fp32_llk_acc) {
+    // UInt8 uses 32-bit dest as integer (not float): do not enable FP32 unpack-to-dest mode.
+    if (fp32_llk_acc && a.dtype() != DataType::UINT8) {
         unpack_to_dest_mode[tt::CBIndex::c_0] = UnpackToDestMode::UnpackToDestFp32;
     }
 
@@ -251,6 +277,7 @@ ProgramDescriptor TilizeMultiCoreBlockProgramFactory::create_descriptor(
     };
 
     std::vector<KernelDescriptor> compute_kernels;
+    compute_kernels.reserve(4);
     if (!core_range.empty()) {
         compute_kernels.push_back(
             make_compute_kernel(core_range, {single_sub_block_wh, single_sub_block_size, third_dim}));
@@ -311,22 +338,22 @@ ProgramDescriptor TilizeMultiCoreBlockProgramFactory::create_descriptor(
             core,
             {src0_buffer,
              std::uint32_t{0},
-             TILE_WIDTH * a.element_size() * single_block_size_row_arg,
+             tile_width * a.element_size() * single_block_size_row_arg,
              start_row_id,
              start_column_id,
              single_block_size_row_arg,
              single_block_size_col_arg,
-             TILE_WIDTH * a.element_size() * single_sub_block_size_row_arg,
+             tile_width * a.element_size() * single_sub_block_size_row_arg,
              single_sub_block_size_row_arg});
 
         // writer runtime args
         writer_desc.emplace_runtime_args(
             core, {dst_buffer, tile_start_id, single_block_size_row_arg, single_block_size_col_arg});
 
-        uint32_t end_column_id = start_column_id + (single_block_size_row_arg * TILE_WIDTH * a.element_size());
+        uint32_t end_column_id = start_column_id + (single_block_size_row_arg * tile_width * a.element_size());
         start_column_id = end_column_id % row_size_bytes;
         if (end_column_id % row_size_bytes == 0 && end_column_id != 0) {
-            start_row_id += single_block_size_col_arg * TILE_HEIGHT;
+            start_row_id += single_block_size_col_arg * tile_height;
         }
 
         if (start_column_id == 0) {
@@ -345,4 +372,17 @@ ProgramDescriptor TilizeMultiCoreBlockProgramFactory::create_descriptor(
 
     return desc;
 }
+
+void TilizeMultiCoreBlockProgramFactory::override_runtime_arguments(
+    tt::tt_metal::Program& program,
+    const TilizeParams& /*operation_attributes*/,
+    const TilizeInputs& tensor_args,
+    Tensor& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    // Every shape-derived arg is keyed, so only the reader/writer buffer addresses move on a hit.
+    // Reader is pushed first, writer second, each taking its buffer at slot 0.
+    patch_tilize_kernel_slot0(program, 0, tensor_args.input_tensor.buffer()->address());
+    patch_tilize_kernel_slot0(program, 1, tensor_return_value.buffer()->address());
+}
+
 }  // namespace ttnn::prim

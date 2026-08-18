@@ -11,7 +11,7 @@
 #include <vector>
 
 #include <tt_stl/assert.hpp>
-#include "tracy/Tracy.hpp"
+#include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 
 #include "impl/data_format/bfloat16_utils.hpp"
 
@@ -156,7 +156,7 @@ std::vector<bfloat16> create_identity_matrix(int rows, int cols, int num_ones) {
 }
 
 std::vector<uint32_t> pack_bfloat16_vec_into_uint32_vec(const std::vector<bfloat16>& data) {
-    ZoneScoped;
+    TTZoneScopedD(DATA_FORMAT);
     TT_ASSERT(data.size() % 2 == 0);
     std::vector<uint32_t> result(data.size() / 2);
     std::memcpy(result.data(), data.data(), result.size() * sizeof(uint32_t));
@@ -168,6 +168,7 @@ bfloat16 bfloat16_identity_transform(const bfloat16& input) { return input; }
 std::vector<bfloat16> unpack_uint32_vec_into_bfloat16_vec(
     const std::vector<std::uint32_t>& data, const std::function<bfloat16(const bfloat16&)>& transform) {
     std::vector<bfloat16> result;
+    result.reserve(data.size() * 2);
     for (unsigned int packed : data) {
         auto unpacked = unpack_two_bfloat16_from_uint32(packed);
         result.push_back(transform(unpacked.first));

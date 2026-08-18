@@ -45,7 +45,7 @@ def run_dm_tests(profile, verbose, gtest_filter, plot, report, arch_name):
         profile_dm_tests(verbose=verbose, gtest_filter=gtest_filter)
 
     # Gather analysis stats
-    stats_collector = StatsCollector(log_file_path, test_id_to_name, test_type_attributes, verbose=verbose)
+    stats_collector = StatsCollector(log_file_path, test_id_to_name, test_type_attributes, verbose=verbose, arch=arch)
     stats = stats_collector.gather_stats_from_csv()
     if not stats.get("devices"):
         logger.info("No profiling data available.")

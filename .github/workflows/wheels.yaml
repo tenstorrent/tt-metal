@@ -33,6 +33,13 @@ on:
         type: string
         default: "tt-ubuntu-2204-large-stable"
         description: "Runner label for the wheel build job"
+      checkout-filter:
+        required: false
+        type: string
+        default: ""
+        description: >-
+          Partial-clone filter for the checkout (e.g. 'tree:0' or 'blob:none').
+          Empty (default) means a normal, non-partial clone.
     outputs:
       artifact-name:
         description: "Name to give download-artifact to get the Wheel"
@@ -104,6 +111,7 @@ jobs:
           ref: ${{ inputs.ref || github.sha }}
           fetch-depth: ${{ (startsWith(inputs.ref, 'refs/tags/') || startsWith(github.ref, 'refs/tags/')) && 1 || 500 }}
           fetch-tags: true # Need tags for `git describe`
+          filter: ${{ inputs.checkout-filter }}
 
       - name: 📦 Restore CPM source cache
         id: cpm-cache

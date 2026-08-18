@@ -7,6 +7,7 @@ import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
+    TILE_DIMENSIONS,
     BroadcastGolden,
     get_golden_generator,
 )
@@ -32,8 +33,11 @@ from helpers.test_variant_parameters import (
     ACC_TO_DEST,
     BROADCAST_TYPE,
     DISABLE_SRC_ZERO_FLAG,
+    INPUT_DIMENSIONS,
     NUM_BLOCKS,
     NUM_FACES,
+    NUM_FACES_C_DIM,
+    NUM_FACES_R_DIM,
     NUM_TILES_IN_BLOCK,
     PARTIAL_FACE,
     REUSE_DEST_TYPE,
@@ -185,10 +189,16 @@ def test_unpack_bcast(
             UNPACK_TRANS_FACES(Transpose.No),
             UNPACK_TRANS_WITHIN_FACE(Transpose.No),
             NUM_FACES(num_faces),
+            NUM_FACES_R_DIM(num_faces_r_dim, num_faces_r_dim),
+            NUM_FACES_C_DIM(num_faces_c_dim, num_faces_c_dim),
             TILE_COUNT(tile_cnt_A),
             TEST_FACE_DIMS(face_r_dim=face_r_dim),
             NUM_TILES_IN_BLOCK(num_tiles_in_block),
             NUM_BLOCKS(num_blocks),
+            INPUT_DIMENSIONS(
+                input_dimensions[0] // TILE_DIMENSIONS[0],
+                input_dimensions[1] // TILE_DIMENSIONS[1],
+            ),
         ],
         variant_stimuli=StimuliConfig(
             src_A,

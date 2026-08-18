@@ -8,6 +8,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/global_semaphore.hpp"
+#include <cstddef>
 #include <optional>
 #include <vector>
 
@@ -49,7 +50,9 @@ struct AllGatherConcatParams {
     // Add attributes method for reflection
     auto attributes() const {
         using ttsl::reflection::Attribute;
+        constexpr std::size_t kNumAttributes = 9;
         std::vector<std::tuple<std::string, Attribute>> attrs;
+        attrs.reserve(kNumAttributes);
 
         attrs.emplace_back("dim", dim);
         attrs.emplace_back("num_links", num_links);

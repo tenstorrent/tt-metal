@@ -196,8 +196,10 @@ if(NOT DEFINED CMAKE_COMPILE_WARNING_AS_ERROR)
     set(CMAKE_COMPILE_WARNING_AS_ERROR ON)
 endif()
 
+set(TT_X86_MARCH "x86-64-v3" CACHE STRING "x86_64 architecture passed to -march")
+
 add_compile_options(
-    "$<$<STREQUAL:${CMAKE_SYSTEM_PROCESSOR},x86_64>:-march=x86-64-v3>"
+    "$<$<STREQUAL:${CMAKE_SYSTEM_PROCESSOR},x86_64>:-march=${TT_X86_MARCH}>"
     -fPIC
     -pipe # use pipes instead of tmp files
     -fvisibility-inlines-hidden
@@ -255,6 +257,18 @@ string(REPLACE ${PROJECT_NAME} ${PROJECT_NAME_LOWER} CMAKE_INSTALL_DOCDIR ${CMAK
 if(ENABLE_CODE_TIMERS)
     add_compile_definitions(TT_ENABLE_CODE_TIMERS)
 endif()
+
+# Descriptor cache-hit fast-path parity check: on every fast-path hit, rebuild the descriptor and
+# assert the patched runtime args + CB addresses match a full rebuild. A debug/CI regression net for
+# incomplete in-place re-application (SDXL silu / MorehAdamW). OFF by default (per-hit rebuild cost).
+# The check is compiled only in ttnn (mesh_device_operation_adapter.hpp), so the
+# TT_DESCRIPTOR_PATCHING_PARITY_CHECK definition is scoped to the ttnn target in ttnn/CMakeLists.txt
+# rather than applied globally.
+option(
+    ENABLE_DESCRIPTOR_PATCHING_PARITY_CHECK
+    "Assert descriptor cache-hit fast-path parity against a full rebuild (debug/CI)."
+    OFF
+)
 
 add_library(metal_common_pch STATIC)
 add_library(TT::CommonPCH ALIAS metal_common_pch)

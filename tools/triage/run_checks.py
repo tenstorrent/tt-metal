@@ -135,13 +135,13 @@ def get_devices(
         metal_device_ids = list(inspector_data.getDevicesInUse().metalDeviceIds)
 
         if len(metal_device_ids) == 0:
-            # Live "in use" list is empty — most often because firmware init failed and
+            # Live "in use" list is empty - most often because firmware init failed and
             # devices were torn down. Fall back to the SystemMesh's configured local set.
             system_mesh = inspector_data.getSystemMesh().systemMesh
             metal_device_ids = [m.localChipId for m in system_mesh.mappedDevices if m.isLocal]
             if len(metal_device_ids) > 0:
                 utils.WARN(
-                    f"  No devices in use found in inspector data — firmware init likely failed. "
+                    f"  No devices in use found in inspector data - firmware init likely failed. "
                     f"Falling back to the {len(metal_device_ids)} device(s) configured in the System Mesh."
                 )
             else:
@@ -233,7 +233,7 @@ def get_block_locations(
         for block_type in BLOCK_TYPES:
             block_locations[device][block_type] = _exalens_block_locations(device, block_type)
 
-    # Keep only the requested locations. Only logical coordinates are accepted — physical (noc0)
+    # Keep only the requested locations. Only logical coordinates are accepted - physical (noc0)
     # layout shifts with harvesting, so a logical string maps to the same core on every device.
     if locations:
         for loc in locations:
@@ -421,7 +421,7 @@ class RunChecks:
             result: list[PerCoreCheckResult] = []
 
             # Get the block and its available RISC cores
-            noc_block = location._device.get_block(location)
+            noc_block = location.device.get_block(location)
             risc_names = noc_block.risc_names
 
             for risc_name in risc_names:
@@ -444,7 +444,7 @@ class RunChecks:
                     result,
                     check_result,
                     PerCoreCheckResult,
-                    device_description=DeviceDescription(location._device, self._use_unique_id),
+                    device_description=DeviceDescription(location.device, self._use_unique_id),
                     location=location,
                     risc_name=risc_name,
                 )

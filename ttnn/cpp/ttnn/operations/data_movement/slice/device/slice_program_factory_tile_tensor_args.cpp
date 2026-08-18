@@ -5,6 +5,8 @@
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_program_factory_tile_tensor_args.hpp"
 
+#include <tt-metalium/experimental/program_descriptor_patching.hpp>
+
 #include <optional>
 #include <span>
 #include <tt-metalium/work_split.hpp>
@@ -143,10 +145,10 @@ tt::tt_metal::ProgramDescriptor SliceTileTensorArgsProgramFactory::create_descri
         } else if (core_group_2.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_2;
         } else {
-            // no-op core
+            // no-op core (num_tiles == 0 → address unused, but bound for a uniform arg layout)
             std::vector<uint32_t> reader_args(2 + num_dims, 0);
             reader_runtime_args.emplace_back(core, std::move(reader_args));
-            writer_desc.emplace_runtime_args(core, {0u, 0u, 0u});
+            writer_desc.emplace_runtime_args(core, {dst_buffer, 0u, 0u});
             continue;
         }
 
@@ -188,6 +190,15 @@ tt::tt_metal::ProgramDescriptor SliceTileTensorArgsProgramFactory::create_descri
     desc.kernels.push_back(std::move(writer_desc));
 
     return desc;
+}
+
+void SliceTileTensorArgsProgramFactory::override_runtime_arguments(
+    tt::tt_metal::Program& program,
+    const SliceParams& args,
+    const SliceInputs& tensor_args,
+    Tensor& output,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    patch_slice_program_addresses(program, SliceTileTensorArgsProgramFactory{}, args, tensor_args, output);
 }
 
 }  // namespace ttnn::prim

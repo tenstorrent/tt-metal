@@ -194,6 +194,7 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
 
     // Col senders: y=0 (all x)
     std::vector<tt::tt_metal::CoreCoord> col_senders;
+    col_senders.reserve(grid_dim);
     for (uint32_t x = 0; x < grid_dim; x++) col_senders.push_back({x, 0});
 
     // Row receivers (RISCV_0, x>0): ALL use receiver_writer (including y=0 edge)
@@ -513,6 +514,7 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
 
     // Diagonal: REDUCE_SENDER
     std::vector<tt::tt_metal::CoreCoord> sender_diag_cores;
+    sender_diag_cores.reserve(grid_dim);
     for (uint32_t d = 0; d < grid_dim; d++) sender_diag_cores.push_back({d, d});
     CreateKernel(
         program, compute_matmul_path, make_core_range_set(sender_diag_cores), compute_cfg({{"REDUCE_SENDER", "1"}}));
@@ -732,9 +734,11 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
     for (uint32_t y = 1; y < grid_dim; y++) row_sender_cores_list.push_back({0, y});
 
     std::vector<tt::tt_metal::CoreCoord> col_sender_cores_list;
+    col_sender_cores_list.reserve(grid_dim);
     for (uint32_t x = 0; x < grid_dim; x++) col_sender_cores_list.push_back({x, 0});
 
     std::vector<tt::tt_metal::CoreCoord> helper_cores_list;
+    helper_cores_list.reserve(grid_dim);
     for (uint32_t y = 0; y < grid_dim; y++) helper_cores_list.push_back({grid_dim, y});
 
     return {

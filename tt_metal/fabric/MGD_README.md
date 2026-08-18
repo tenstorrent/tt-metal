@@ -27,6 +27,14 @@ This descriptor will capture information about how to compose a "big-mesh" (intr
 
 Read more about Text proto at [Mesh Graph Descriptor 2.0](https://docs.google.com/document/d/1291H1Wl_pSkIGHP9B_L6oikaD3MflAGXg3Lox1O8S0c/edit?usp=sharing)
 
+### Torus dimensions
+
+`device_topology.dim_types` records declared topology. A `RING` axis remains
+declared as torus even when its extent is one or two; Fabric realizes a distinct
+wrap edge only at size three or greater. Size-two links retain ordinary mesh
+directionality and boundary ports, while deadlock avoidance remains based on
+the declared torus configuration.
+
 
 ## Minimal workflow
 > This is currently TBD
@@ -87,6 +95,160 @@ pinnings {
   }
 }
 ```
+
+### All-to-all pinnings
+
+A single `pinnings` entry may list multiple `logical_fabric_node_id` fields **and** multiple
+`physical_asic_position` fields. Any listed logical node may then map to any listed physical position
+(all-to-all). The solver still enforces a bijection, so distinct logical nodes land on distinct ASICs.
+This is useful when a set of interchangeable nodes (e.g. mesh corners) may each land on any position in
+a set of interchangeable hardware slots.
+
+```proto
+# The 4 corner nodes may land on any of the 4 tray-corner ASICs, in any assignment.
+pinnings {
+  logical_fabric_node_id { mesh_id: 0 chip_id: 0 }
+  logical_fabric_node_id { mesh_id: 0 chip_id: 3 }
+  logical_fabric_node_id { mesh_id: 0 chip_id: 12 }
+  logical_fabric_node_id { mesh_id: 0 chip_id: 15 }
+  physical_asic_position { tray_id: 1 asic_location: 1 }
+  physical_asic_position { tray_id: 2 asic_location: 1 }
+  physical_asic_position { tray_id: 3 asic_location: 1 }
+  physical_asic_position { tray_id: 4 asic_location: 1 }
+}
+```
+
+A given logical node may appear in at most one `pinnings` entry. Listing exactly one node and one
+position reproduces the classic one-to-one pin.
+
+### Multiple tray IDs in one entry
+
+When several physical trays expose interchangeable corner slots, list each candidate tray in the same
+`pinnings` entry. The solver assigns each logical node to exactly one listed position (bijection), so
+the 4 corner chips may land on any of the 4 tray-corner ASICs in any valid one-to-one assignment:
+
+```proto
+pinnings {
+  logical_fabric_node_id { mesh_id: 0 chip_id: 0 }
+  logical_fabric_node_id { mesh_id: 0 chip_id: 3 }
+  logical_fabric_node_id { mesh_id: 0 chip_id: 12 }
+  logical_fabric_node_id { mesh_id: 0 chip_id: 15 }
+  physical_asic_position { tray_id: 1 asic_location: 3 }
+  physical_asic_position { tray_id: 2 asic_location: 3 }
+  physical_asic_position { tray_id: 3 asic_location: 3 }
+  physical_asic_position { tray_id: 4 asic_location: 3 }
+}
+```
+
+Each `physical_asic_position` is a `(tray_id, asic_location)` pair from the cluster descriptor. You
+may also use `tray_id_regex` / `asic_location_regex` on the physical side (see below) to expand a
+pattern into many candidate trays or slots within one entry.
+
+### Regex and range patterns (`*_regex` fields)
+
+Instead of repeating near-identical `pinnings` blocks for every mesh, use optional `*_regex` string
+fields on logical nodes and physical positions. When a `*_regex` field is non-empty it **must** be
+the sole selector for that dimension — do not also set the corresponding numeric field
+(`mesh_id` vs `mesh_id_regex`, `tray_id` vs `tray_id_regex`, etc.).
+
+Supported syntax (same for `mesh_id_regex`, `chip_id_regex`, `tray_id_regex`, `asic_location_regex`):
+
+| Syntax | Example | Expands to |
+|---|---|---|
+| Inclusive numeric range | `"0-31"` | 0, 1, …, 31 |
+| Comma list | `"0,2,4-6"` | 0, 2, 4, 5, 6 |
+| Full-string `std::regex` match | `"[0-9]*[02468]"` | every even id in the domain |
+
+Expansion domains:
+
+- **`mesh_id_regex`**: all mesh instance ids present in the FABRIC graph.
+- **`chip_id_regex`**: `0 .. (rows × cols − 1)` for each matched mesh.
+- **`tray_id_regex` / `asic_location_regex`**: ids `0..255` (cluster-valid positions are filtered at mapping time).
+
+**Per-mesh replication:** when `mesh_id_regex` matches multiple meshes, the **entire** `pinnings`
+entry is replicated once per matched mesh (with that mesh id substituted). Each replica is an
+independent all-to-all group, so the per-mesh bijection is preserved. One source entry can stand in
+for dozens of identical per-mesh blocks.
+
+#### Example — same pins on all 32 pipeline stages (range)
+
+Before (excerpt): 32 copies of the same 6 corner pins → **192** `pinnings` blocks.
+
+After: **6** entries using `mesh_id_regex: "0-31"`; each expands to 32 per-mesh groups at parse time:
+
+```proto
+# Corner chip 0 on every mesh 0..31 pins to tray 1, ASIC slot 3.
+pinnings {
+  logical_fabric_node_id { mesh_id_regex: "0-31" chip_id: 0 }
+  physical_asic_position { tray_id: 1 asic_location: 3 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id_regex: "0-31" chip_id: 15 }
+  physical_asic_position { tray_id: 4 asic_location: 3 }
+}
+# ... four more corner entries (chips 14, 3, 12, 13) with their tray/asic pairs ...
+```
+
+See [`subtorus_4x4_pipeline_32stage_mesh_graph_descriptor.textproto`](../../tests/tt_metal/tt_fabric/custom_mesh_descriptors/subtorus/subtorus_4x4_pipeline_32stage_mesh_graph_descriptor.textproto).
+
+#### Example — even vs odd mesh parity (regex)
+
+An 8-stage 4×4 pipeline alternates two corner-pin layouts by mesh parity. Two regex selectors replace
+**48** per-mesh blocks (**6** entries × **8** meshes):
+
+```proto
+# Even meshes (0, 2, 4, 6): M0 corner set — chips 0, 15, 14
+pinnings {
+  logical_fabric_node_id { mesh_id_regex: "[0-9]*[02468]" chip_id: 0 }
+  physical_asic_position { tray_id: 1 asic_location: 3 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id_regex: "[0-9]*[02468]" chip_id: 15 }
+  physical_asic_position { tray_id: 4 asic_location: 3 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id_regex: "[0-9]*[02468]" chip_id: 14 }
+  physical_asic_position { tray_id: 4 asic_location: 7 }
+}
+
+# Odd meshes (1, 3, 5, 7): M1 corner set — chips 3, 12, 13
+pinnings {
+  logical_fabric_node_id { mesh_id_regex: "[0-9]*[13579]" chip_id: 3 }
+  physical_asic_position { tray_id: 4 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id_regex: "[0-9]*[13579]" chip_id: 12 }
+  physical_asic_position { tray_id: 1 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id_regex: "[0-9]*[13579]" chip_id: 13 }
+  physical_asic_position { tray_id: 1 asic_location: 6 }
+}
+```
+
+See [`subtorus_4x4_pipeline_8stage_mesh_graph_descriptor.textproto`](../../tests/tt_metal/tt_fabric/custom_mesh_descriptors/subtorus/subtorus_4x4_pipeline_8stage_mesh_graph_descriptor.textproto).
+
+#### Combining regex with many-to-many and multiple trays
+
+These features compose. For example, even-parity meshes may pin five corner chips to any of five
+tray-corner ASICs in one entry:
+
+```proto
+pinnings {
+  logical_fabric_node_id { mesh_id_regex: "[0-9]*[02468]" chip_id: 0 }
+  logical_fabric_node_id { mesh_id_regex: "[0-9]*[02468]" chip_id: 1 }
+  logical_fabric_node_id { mesh_id_regex: "[0-9]*[02468]" chip_id: 3 }
+  logical_fabric_node_id { mesh_id_regex: "[0-9]*[02468]" chip_id: 12 }
+  logical_fabric_node_id { mesh_id_regex: "[0-9]*[02468]" chip_id: 15 }
+  physical_asic_position { tray_id: 1 asic_location: 3 }
+  physical_asic_position { tray_id: 1 asic_location: 7 }
+  physical_asic_position { tray_id: 2 asic_location: 3 }
+  physical_asic_position { tray_id: 3 asic_location: 3 }
+  physical_asic_position { tray_id: 4 asic_location: 3 }
+}
+```
+
+This expands to one all-to-all group **per even mesh** (each with 5 nodes × 5 candidate trays).
 
 ---
 

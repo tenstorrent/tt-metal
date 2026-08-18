@@ -34,7 +34,7 @@ namespace ttnn::experimental::prim {
 struct StridedAllGatherMinimalMatmulAsync {
     using operation_attributes_t = StridedAllGatherMinimalMatmulAsyncParams;
     using tensor_args_t = StridedAllGatherMinimalMatmulAsyncInputs;
-    using spec_return_value_t = std::vector<TensorSpec>;
+    using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
     using tensor_return_value_t = std::vector<Tensor>;
 
     using program_factory_t = std::variant<StridedAllGatherMinimalMatmulAsyncProgramFactory>;
@@ -66,6 +66,14 @@ std::vector<Tensor> strided_all_gather_minimal_matmul_async(
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel,
-    std::optional<bool> read_local_slice_from_input);
+    std::optional<bool> read_local_slice_from_input,
+    const std::optional<const Tensor>& fused_ternary_input_a,
+    const std::optional<const Tensor>& fused_ternary_input_b,
+    std::optional<float> fused_ternary_scalar,
+    int32_t chunks,
+    ttnn::experimental::prim::MMSignalAggregatorMode mm_signal_aggregator_mode,
+    // Fused SwiGLU: the weight is a tile-pair-interleaved [gate|up] matrix of width 2N; the matmul
+    // emits silu(gate) * up of width N. See MinimalMatmulParams::fuse_swiglu.
+    bool fuse_swiglu = false);
 
 }  // namespace ttnn::prim

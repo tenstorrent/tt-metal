@@ -40,9 +40,9 @@ inline void _calculate_tanh_(const int iterations)
 template <bool APPROXIMATION_MODE>
 inline void _init_tanh_()
 {
-    sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vUInt(0x1DFF); // 0.90625*x
-    sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::vUInt(0x481A); // 0.09375*x + 0.8125
-    sfpi::l_reg[sfpi::LRegs::LReg2] = sfpi::vUInt(0xFF00); // 1
+    sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vUInt(static_cast<std::uint16_t>(0x1DFF)); // 0.90625*x
+    sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::vUInt(static_cast<std::uint16_t>(0x481A)); // 0.09375*x + 0.8125
+    sfpi::l_reg[sfpi::LRegs::LReg2] = sfpi::vUInt(static_cast<std::uint16_t>(0xFF00)); // 1
 }
 
 } // namespace sfpu

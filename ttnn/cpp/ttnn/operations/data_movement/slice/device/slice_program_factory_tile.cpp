@@ -5,6 +5,8 @@
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_program_factory_tile.hpp"
 
+#include <tt-metalium/experimental/program_descriptor_patching.hpp>
+
 #include <optional>
 #include <span>
 #include <tt-metalium/work_split.hpp>
@@ -134,7 +136,7 @@ tt::tt_metal::ProgramDescriptor SliceTileProgramFactory::create_descriptor(
     reader_kernel_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
     reader_kernel_desc.core_ranges = all_cores;
     reader_kernel_desc.compile_time_args = reader_compile_time_args;
-    reader_kernel_desc.named_compile_time_args = {{"cb_in", src0_cb_index}};
+    reader_kernel_desc.named_compile_time_args = {{"dfb_id_in", src0_cb_index}};
     reader_kernel_desc.runtime_args = std::move(reader_runtime_args);
     tt::tt_metal::KernelDescriptor::RTArgList reader_common;
     reader_common.reserve(1 + (num_dims * 2));
@@ -156,10 +158,12 @@ tt::tt_metal::ProgramDescriptor SliceTileProgramFactory::create_descriptor(
     writer_kernel_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
     writer_kernel_desc.core_ranges = all_cores;
     writer_kernel_desc.compile_time_args = writer_compile_time_args;
-    writer_kernel_desc.named_compile_time_args = {{"cb_out", src0_cb_index}};
+    writer_kernel_desc.named_compile_time_args = {{"dfb_id_out", src0_cb_index}};
     writer_kernel_desc.config = tt::tt_metal::WriterConfigDescriptor{};
 
-    // Writer per-core runtime args: [dst_addr, num_tiles, start_id]
+    // Writer per-core runtime args: [dst_addr, num_tiles, start_id].
+    // dst_buffer is declared as a buffer binding at arg 0, so the framework patches its
+    // base address on program-cache hits instead of rebuilding the descriptor.
     num_tiles_written = 0;
     for (const auto& core : corerange_to_cores(all_cores)) {
         uint32_t num_tiles_per_core;
@@ -180,6 +184,15 @@ tt::tt_metal::ProgramDescriptor SliceTileProgramFactory::create_descriptor(
     program_descriptor.kernels.push_back(std::move(writer_kernel_desc));
 
     return program_descriptor;
+}
+
+void SliceTileProgramFactory::override_runtime_arguments(
+    tt::tt_metal::Program& program,
+    const SliceParams& args,
+    const SliceInputs& tensor_args,
+    Tensor& output,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    patch_slice_program_addresses(program, SliceTileProgramFactory{}, args, tensor_args, output);
 }
 
 }  // namespace ttnn::prim

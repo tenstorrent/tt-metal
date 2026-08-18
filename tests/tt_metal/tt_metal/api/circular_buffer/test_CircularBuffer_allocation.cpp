@@ -25,11 +25,11 @@
 #include <tt-metalium/device.hpp>
 #include "device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
-#include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
-#include <tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp>
-#include <tt-metalium/experimental/tensor/spec/layout/page_config.hpp>
-#include <tt-metalium/experimental/tensor/topology/tensor_topology.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
+#include <tt-metalium/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
+#include <tt-metalium/tensor/spec/layout/page_config.hpp>
+#include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include "gtest/gtest.h"
 #include <tt-metalium/hal_types.hpp>
@@ -85,7 +85,7 @@ void validate_cb_address(
 }
 
 TEST_F(MeshDeviceFixture, TensixTestCircularBuffersSequentiallyPlaced) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
+    for (auto& device : this->devices_) {
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -99,7 +99,7 @@ TEST_F(MeshDeviceFixture, TensixTestCircularBuffersSequentiallyPlaced) {
         CoreRangeSet cr_set({cr});
 
         std::map<uint8_t, uint32_t> expected_addresses;
-        auto expected_cb_addr = devices_.at(id)->allocator()->get_base_allocator_addr(HalMemType::L1);
+        auto expected_cb_addr = device->allocator()->get_base_allocator_addr(HalMemType::L1);
         for (uint32_t cb_id = 0; cb_id < max_cbs_; cb_id++) {
             CircularBufferConfig config1 = CircularBufferConfig(cb_config.page_size, {{cb_id, cb_config.data_format}})
                                                .set_page_size(cb_id, cb_config.page_size);
@@ -112,12 +112,12 @@ TEST_F(MeshDeviceFixture, TensixTestCircularBuffersSequentiallyPlaced) {
 
         std::map<CoreCoord, std::map<uint8_t, uint32_t>> golden_addresses = {{core, expected_addresses}};
 
-        validate_cb_address(workload, this->devices_.at(id), cr_set, golden_addresses);
+        validate_cb_address(workload, device, cr_set, golden_addresses);
     }
 }
 
 TEST_F(MeshDeviceFixture, TensixTestCircularBufferSequentialAcrossAllCores) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
+    for (auto& device : this->devices_) {
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -135,7 +135,7 @@ TEST_F(MeshDeviceFixture, TensixTestCircularBufferSequentialAcrossAllCores) {
 
         uint32_t max_num_cbs = 0;
         for (const auto& [core, num_cbs] : core_to_num_cbs) {
-            auto expected_cb_addr = devices_.at(id)->allocator()->get_base_allocator_addr(HalMemType::L1);
+            auto expected_cb_addr = device->allocator()->get_base_allocator_addr(HalMemType::L1);
             max_num_cbs = std::max(max_num_cbs, num_cbs);
             std::map<uint8_t, uint32_t> expected_addresses;
             for (uint32_t buffer_id = 0; buffer_id < num_cbs; buffer_id++) {
@@ -153,7 +153,7 @@ TEST_F(MeshDeviceFixture, TensixTestCircularBufferSequentialAcrossAllCores) {
         CoreRangeSet cr_set({cr});
 
         auto expected_multi_core_address =
-            devices_.at(id)->allocator()->get_base_allocator_addr(HalMemType::L1) + (max_num_cbs * cb_config.page_size);
+            device->allocator()->get_base_allocator_addr(HalMemType::L1) + (max_num_cbs * cb_config.page_size);
         uint32_t multicore_buffer_idx = max_cbs_ - 1;
         CircularBufferConfig config2 =
             CircularBufferConfig(cb_config.page_size, {{multicore_buffer_idx, cb_config.data_format}})
@@ -164,12 +164,12 @@ TEST_F(MeshDeviceFixture, TensixTestCircularBufferSequentialAcrossAllCores) {
         golden_addresses_per_core[core2][multicore_buffer_idx] = expected_multi_core_address;
 
         initialize_program(program_, cr_set);
-        validate_cb_address(workload, this->devices_.at(id), cr_set, golden_addresses_per_core);
+        validate_cb_address(workload, device, cr_set, golden_addresses_per_core);
     }
 }
 
 TEST_F(MeshDeviceFixture, TensixTestValidCircularBufferAddress) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
+    for (auto& device : this->devices_) {
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -180,7 +180,7 @@ TEST_F(MeshDeviceFixture, TensixTestValidCircularBufferAddress) {
 
         auto buffer_size = cb_config.page_size;
         tt::tt_metal::InterleavedBufferConfig buff_config{
-            .device = this->devices_.at(id)->get_devices()[0],
+            .device = device->get_devices()[0],
             .size = buffer_size,
             .page_size = buffer_size,
             .buffer_type = tt::tt_metal::BufferType::L1};
@@ -213,13 +213,12 @@ TEST_F(MeshDeviceFixture, TensixTestValidCircularBufferAddress) {
         }
 
         initialize_program(program_, cr_set);
-        validate_cb_address(workload, this->devices_.at(id), cr_set, golden_addresses_per_core);
+        validate_cb_address(workload, device, cr_set, golden_addresses_per_core);
     }
 }
 
 TEST_F(MeshDeviceFixture, TensixTestCircularBuffersAndL1BuffersCollision) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        auto& mesh_device = devices_.at(id);
+    for (auto& mesh_device : this->devices_) {
         auto& cq = mesh_device->mesh_command_queue();
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -266,7 +265,7 @@ TEST_F(MeshDeviceFixture, TensixTestCircularBuffersAndL1BuffersCollision) {
 }
 
 TEST_F(MeshDeviceFixture, TensixTestValidUpdateCircularBufferSize) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
+    for (auto& device : this->devices_) {
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -283,7 +282,7 @@ TEST_F(MeshDeviceFixture, TensixTestValidUpdateCircularBufferSize) {
         const uint32_t core0_num_cbs = 2;
         std::map<CoreCoord, std::map<uint8_t, uint32_t>> golden_addresses_per_core;
         std::vector<CBHandle> cb_ids;
-        uint32_t l1_unreserved_base = devices_.at(id)->allocator()->get_base_allocator_addr(HalMemType::L1);
+        uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
         auto expected_cb_addr = l1_unreserved_base;
         for (uint32_t buffer_idx = 0; buffer_idx < core0_num_cbs; buffer_idx++) {
             CircularBufferConfig config1 =
@@ -295,20 +294,20 @@ TEST_F(MeshDeviceFixture, TensixTestValidUpdateCircularBufferSize) {
             expected_cb_addr += cb_config.page_size;
         }
 
-        validate_cb_address(workload, this->devices_.at(id), cr_set, golden_addresses_per_core);
+        validate_cb_address(workload, device, cr_set, golden_addresses_per_core);
 
         // Update size of the first CB
         UpdateCircularBufferTotalSize(program_, cb_ids[0], cb_config.page_size * 2);
         golden_addresses_per_core[core0][0] = l1_unreserved_base;
         golden_addresses_per_core[core0][1] = (l1_unreserved_base + (cb_config.page_size * 2));
 
-        validate_cb_address(workload, this->devices_.at(id), cr_set, golden_addresses_per_core);
+        validate_cb_address(workload, device, cr_set, golden_addresses_per_core);
     }
 }
 
 TEST_F(MeshDeviceFixture, TensixTestInvalidUpdateCircularBufferSize) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        auto& cq = devices_.at(id)->mesh_command_queue();
+    for (auto& device : this->devices_) {
+        auto& cq = device->mesh_command_queue();
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -325,7 +324,7 @@ TEST_F(MeshDeviceFixture, TensixTestInvalidUpdateCircularBufferSize) {
         const uint32_t core0_num_cbs = 2;
         std::map<CoreCoord, std::map<uint8_t, uint32_t>> golden_addresses_per_core;
         std::vector<CBHandle> cb_ids;
-        auto expected_cb_addr = devices_.at(id)->allocator()->get_base_allocator_addr(HalMemType::L1);
+        auto expected_cb_addr = device->allocator()->get_base_allocator_addr(HalMemType::L1);
         for (uint32_t buffer_idx = 0; buffer_idx < core0_num_cbs; buffer_idx++) {
             CircularBufferConfig config1 =
                 CircularBufferConfig(cb_config.page_size, {{buffer_idx, cb_config.data_format}})
@@ -336,7 +335,7 @@ TEST_F(MeshDeviceFixture, TensixTestInvalidUpdateCircularBufferSize) {
             expected_cb_addr += cb_config.page_size;
         }
 
-        validate_cb_address(workload, this->devices_.at(id), cr_set, golden_addresses_per_core);
+        validate_cb_address(workload, device, cr_set, golden_addresses_per_core);
 
         // Update size of the first CB
         UpdateCircularBufferTotalSize(program_, cb_ids[0], cb_config.page_size / 2);
@@ -345,7 +344,7 @@ TEST_F(MeshDeviceFixture, TensixTestInvalidUpdateCircularBufferSize) {
 }
 
 TEST_F(MeshDeviceFixture, TensixTestUpdateCircularBufferAddress) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
+    for (auto& device : this->devices_) {
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -359,7 +358,7 @@ TEST_F(MeshDeviceFixture, TensixTestUpdateCircularBufferAddress) {
 
         auto buffer_size = cb_config.page_size;
         tt::tt_metal::InterleavedBufferConfig buff_config{
-            .device = this->devices_.at(id)->get_devices()[0],
+            .device = device->get_devices()[0],
             .size = buffer_size,
             .page_size = buffer_size,
             .buffer_type = tt::tt_metal::BufferType::L1};
@@ -370,7 +369,7 @@ TEST_F(MeshDeviceFixture, TensixTestUpdateCircularBufferAddress) {
         const uint32_t core0_num_cbs = 2;
         std::map<CoreCoord, std::map<uint8_t, uint32_t>> golden_addresses_per_core;
         std::vector<CBHandle> cb_ids;
-        auto expected_cb_addr = devices_.at(id)->allocator()->get_base_allocator_addr(HalMemType::L1);
+        auto expected_cb_addr = device->allocator()->get_base_allocator_addr(HalMemType::L1);
         for (uint32_t buffer_idx = 0; buffer_idx < core0_num_cbs; buffer_idx++) {
             CircularBufferConfig config1 =
                 CircularBufferConfig(cb_config.page_size, {{buffer_idx, cb_config.data_format}})
@@ -381,16 +380,16 @@ TEST_F(MeshDeviceFixture, TensixTestUpdateCircularBufferAddress) {
             expected_cb_addr += cb_config.page_size;
         }
 
-        validate_cb_address(workload, this->devices_.at(id), cr_set, golden_addresses_per_core);
+        validate_cb_address(workload, device, cr_set, golden_addresses_per_core);
         // Update address of the first CB
         UpdateDynamicCircularBufferAddress(program_, cb_ids[0], *l1_buffer);
         golden_addresses_per_core[core0][0] = l1_buffer->address();
-        validate_cb_address(workload, this->devices_.at(id), cr_set, golden_addresses_per_core);
+        validate_cb_address(workload, device, cr_set, golden_addresses_per_core);
     }
 }
 
 TEST_F(MeshDeviceFixture, TensixTestUpdateCircularBufferAddressFromMeshTensor) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
+    for (auto& mesh_device : this->devices_) {
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -402,13 +401,12 @@ TEST_F(MeshDeviceFixture, TensixTestUpdateCircularBufferAddressFromMeshTensor) {
         CoreRange cr(core0, core0);
         CoreRangeSet cr_set({cr});
 
-        auto& mesh_device = devices_.at(id);
         auto tensor_layout = TensorLayout(
             DataType::BFLOAT16,
             PageConfig(Layout::TILE),
             MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1});
         auto spec = TensorSpec(Shape{32, 32}, tensor_layout);
-        auto tensor = MeshTensor::allocate_on_device(*mesh_device, spec, TensorTopology());
+        auto tensor = MeshTensor::allocate_on_device(*mesh_device, spec);
         Buffer* tensor_buffer = tensor.mesh_buffer().get_reference_buffer();
         ASSERT_NE(tensor_buffer, nullptr);
 
@@ -417,7 +415,7 @@ TEST_F(MeshDeviceFixture, TensixTestUpdateCircularBufferAddressFromMeshTensor) {
         const uint32_t core0_num_cbs = 2;
         std::map<CoreCoord, std::map<uint8_t, uint32_t>> golden_addresses_per_core;
         std::vector<CBHandle> cb_ids;
-        auto expected_cb_addr = devices_.at(id)->allocator()->get_base_allocator_addr(HalMemType::L1);
+        auto expected_cb_addr = mesh_device->allocator()->get_base_allocator_addr(HalMemType::L1);
         for (uint32_t buffer_idx = 0; buffer_idx < core0_num_cbs; buffer_idx++) {
             CircularBufferConfig config1 =
                 CircularBufferConfig(cb_config.page_size, {{buffer_idx, cb_config.data_format}})
@@ -428,10 +426,10 @@ TEST_F(MeshDeviceFixture, TensixTestUpdateCircularBufferAddressFromMeshTensor) {
             expected_cb_addr += cb_config.page_size;
         }
 
-        validate_cb_address(workload, this->devices_.at(id), cr_set, golden_addresses_per_core);
+        validate_cb_address(workload, mesh_device, cr_set, golden_addresses_per_core);
         UpdateDynamicCircularBufferAddress(program_, cb_ids[0], tensor);
         golden_addresses_per_core[core0][0] = tensor_buffer->address();
-        validate_cb_address(workload, this->devices_.at(id), cr_set, golden_addresses_per_core);
+        validate_cb_address(workload, mesh_device, cr_set, golden_addresses_per_core);
     }
 }
 
@@ -440,8 +438,7 @@ TEST_F(MeshDeviceFixture, TensixTestUpdateCircularBufferAddressFromMeshTensor) {
 // operator== compares total_size, globally_allocated_address, data_formats, page_sizes, tiles, and
 // shadow_global_buffer.
 TEST_F(MeshDeviceFixture, TensixTestSetGloballyAllocatedAddressFromMeshTensorMatchesBuffer) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        auto& mesh_device = devices_.at(id);
+    for (auto& mesh_device : this->devices_) {
         CBConfig cb_config;
 
         // Single-tile BFLOAT16 tensor → exactly one L1 page of cb_config.page_size (2048 B) bytes in one bank,
@@ -451,7 +448,7 @@ TEST_F(MeshDeviceFixture, TensixTestSetGloballyAllocatedAddressFromMeshTensorMat
             PageConfig(Layout::TILE),
             MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1});
         auto spec = TensorSpec(Shape{32, 32}, tensor_layout);
-        auto tensor = MeshTensor::allocate_on_device(*mesh_device, spec, TensorTopology());
+        auto tensor = MeshTensor::allocate_on_device(*mesh_device, spec);
 
         Buffer* underlying_buffer = tensor.mesh_buffer().get_reference_buffer();
         ASSERT_NE(underlying_buffer, nullptr);
@@ -468,8 +465,7 @@ TEST_F(MeshDeviceFixture, TensixTestSetGloballyAllocatedAddressFromMeshTensorMat
 }
 
 TEST_F(MeshDeviceFixture, TensixTestSetGloballyAllocatedAddressAndTotalSizeFromMeshTensorMatchesBuffer) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        auto& mesh_device = devices_.at(id);
+    for (auto& mesh_device : this->devices_) {
         CBConfig cb_config;
 
         auto tensor_layout = TensorLayout(
@@ -477,7 +473,7 @@ TEST_F(MeshDeviceFixture, TensixTestSetGloballyAllocatedAddressAndTotalSizeFromM
             PageConfig(Layout::TILE),
             MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1});
         auto spec = TensorSpec(Shape{32, 32}, tensor_layout);
-        auto tensor = MeshTensor::allocate_on_device(*mesh_device, spec, TensorTopology());
+        auto tensor = MeshTensor::allocate_on_device(*mesh_device, spec);
 
         Buffer* underlying_buffer = tensor.mesh_buffer().get_reference_buffer();
         ASSERT_NE(underlying_buffer, nullptr);
@@ -502,8 +498,8 @@ TEST_F(MeshDeviceFixture, TensixTestSetGloballyAllocatedAddressAndTotalSizeFromM
 }
 
 TEST_F(MeshDeviceFixture, TensixTestUpdateCircularBufferPageSize) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        auto& cq = devices_.at(id)->mesh_command_queue();
+    for (auto& device : this->devices_) {
+        auto& cq = device->mesh_command_queue();
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -521,7 +517,7 @@ TEST_F(MeshDeviceFixture, TensixTestUpdateCircularBufferPageSize) {
         std::map<CoreCoord, std::map<uint8_t, uint32_t>> golden_addresses_per_core;
         std::map<CoreCoord, std::map<uint8_t, uint32_t>> golden_num_pages_per_core;
         std::vector<CBHandle> cb_ids;
-        auto expected_cb_addr = devices_.at(id)->allocator()->get_base_allocator_addr(HalMemType::L1);
+        auto expected_cb_addr = device->allocator()->get_base_allocator_addr(HalMemType::L1);
         for (uint32_t buffer_idx = 0; buffer_idx < core0_num_cbs; buffer_idx++) {
             CircularBufferConfig config1 =
                 CircularBufferConfig(cb_config.page_size, {{buffer_idx, cb_config.data_format}})
@@ -542,14 +538,10 @@ TEST_F(MeshDeviceFixture, TensixTestUpdateCircularBufferPageSize) {
             for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
                 for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                     CoreCoord core_coord(x, y);
-                    auto address = program_.impl().get_cb_base_addr(
-                        this->devices_.at(id)->get_devices()[0], core_coord, tt::CoreType::WORKER);
+                    auto address =
+                        program_.impl().get_cb_base_addr(device->get_devices()[0], core_coord, tt::CoreType::WORKER);
                     tt::tt_metal::detail::ReadFromDeviceL1(
-                        this->devices_.at(id)->get_devices()[0],
-                        core_coord,
-                        address,
-                        cb_config_buffer_size,
-                        cb_config_vector);
+                        device->get_devices()[0], core_coord, address, cb_config_buffer_size, cb_config_vector);
 
                     std::map<uint8_t, uint32_t> address_per_buffer_index = golden_addresses_per_core.at(core_coord);
                     const std::map<uint8_t, uint32_t>& num_pages_per_buffer_index =
@@ -577,14 +569,10 @@ TEST_F(MeshDeviceFixture, TensixTestUpdateCircularBufferPageSize) {
             for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
                 for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                     CoreCoord core_coord(x, y);
-                    auto address = program_.impl().get_cb_base_addr(
-                        this->devices_.at(id)->get_devices()[0], core_coord, tt::CoreType::WORKER);
+                    auto address =
+                        program_.impl().get_cb_base_addr(device->get_devices()[0], core_coord, tt::CoreType::WORKER);
                     tt::tt_metal::detail::ReadFromDeviceL1(
-                        this->devices_.at(id)->get_devices()[0],
-                        core_coord,
-                        address,
-                        cb_config_buffer_size,
-                        cb_config_vector);
+                        device->get_devices()[0], core_coord, address, cb_config_buffer_size, cb_config_vector);
 
                     std::map<uint8_t, uint32_t> address_per_buffer_index = golden_addresses_per_core.at(core_coord);
                     const std::map<uint8_t, uint32_t>& num_pages_per_buffer_index =
@@ -605,8 +593,8 @@ TEST_F(MeshDeviceFixture, TensixTestUpdateCircularBufferPageSize) {
 }
 
 TEST_F(MeshDeviceFixture, TensixTestDataCopyWithUpdatedCircularBufferConfig) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        auto& cq = devices_.at(id)->mesh_command_queue();
+    for (auto& device : this->devices_) {
+        auto& cq = device->mesh_command_queue();
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -620,13 +608,13 @@ TEST_F(MeshDeviceFixture, TensixTestDataCopyWithUpdatedCircularBufferConfig) {
         uint32_t buffer_size = single_tile_size * num_tiles;
 
         tt::tt_metal::InterleavedBufferConfig dram_config{
-            .device = this->devices_.at(id)->get_devices()[0],
+            .device = device->get_devices()[0],
             .size = buffer_size,
             .page_size = buffer_size,
             .buffer_type = tt::tt_metal::BufferType::DRAM};
 
         tt::tt_metal::InterleavedBufferConfig l1_config{
-            .device = this->devices_.at(id)->get_devices()[0],
+            .device = device->get_devices()[0],
             .size = buffer_size,
             .page_size = buffer_size,
             .buffer_type = tt::tt_metal::BufferType::L1};
@@ -695,9 +683,9 @@ TEST_F(MeshDeviceFixture, TensixTestDataCopyWithUpdatedCircularBufferConfig) {
 
         std::vector<uint32_t> input_cb_data;
         detail::ReadFromDeviceL1(
-            this->devices_.at(id)->get_devices()[0],
+            device->get_devices()[0],
             core,
-            devices_.at(id)->allocator()->get_base_allocator_addr(HalMemType::L1),
+            device->allocator()->get_base_allocator_addr(HalMemType::L1),
             buffer_size,
             input_cb_data);
         EXPECT_EQ(src_vec, input_cb_data);
@@ -719,7 +707,7 @@ TEST_F(MeshDeviceFixture, TensixTestDataCopyWithUpdatedCircularBufferConfig) {
 
         std::vector<uint32_t> second_cb_data;
         detail::ReadFromDeviceL1(
-            this->devices_.at(id)->get_devices()[0], core, global_cb_buffer->address(), buffer_size, second_cb_data);
+            device->get_devices()[0], core, global_cb_buffer->address(), buffer_size, second_cb_data);
         EXPECT_EQ(src_vec, second_cb_data);
     }
 }

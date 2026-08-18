@@ -19,6 +19,8 @@ NB_MAKE_OPAQUE(ttml::serialization::NamedParameters)
 #include <nanobind/stl/unordered_map.h>
 #include <yaml-cpp/yaml.h>
 
+#include <stdexcept>
+
 #include "nanobind/nb_export_enum.hpp"
 #include "nanobind/nb_fwd.hpp"
 #include "optimizers/adamw.hpp"
@@ -129,6 +131,13 @@ void py_module(nb::module_& m) {
         [py_registry](nb::dict config, serialization::NamedParameters params) -> nb::object {
             auto type = nb::cast<std::string>(config.attr("get")("type", "AdamW"));
             if (py_registry.contains(type.c_str())) {
+                // Python-registered optimizers bypass OptimizerRegistry::create, so repeat its
+                // weight_decay_skip_1d guard or the key silently does nothing.
+                auto skip_1d = config.attr("get")("weight_decay_skip_1d", false);
+                if (!skip_1d.is_none() && nb::cast<bool>(skip_1d)) {
+                    throw std::runtime_error(
+                        "weight_decay_skip_1d is only supported by AdamW, got optimizer type: " + type);
+                }
                 return py_registry[type.c_str()](config, std::move(params));
             }
             return nb::cast(create_optimizer(obj_to_yaml(config), std::move(params)));
@@ -197,7 +206,8 @@ void py_module(nb::module_& m) {
                float epsilon,
                float weight_decay,
                bool amsgrad,
-               bool stochastic_rounding) {
+               bool stochastic_rounding,
+               bool weight_decay_skip_1d) {
                 return AdamWConfig{
                     .lr = lr,
                     .beta1 = beta1,
@@ -205,7 +215,8 @@ void py_module(nb::module_& m) {
                     .epsilon = epsilon,
                     .weight_decay = weight_decay,
                     .amsgrad = amsgrad,
-                    .stochastic_rounding = stochastic_rounding};
+                    .stochastic_rounding = stochastic_rounding,
+                    .weight_decay_skip_1d = weight_decay_skip_1d};
             },
             nb::arg("lr"),
             nb::arg("beta1"),
@@ -214,6 +225,7 @@ void py_module(nb::module_& m) {
             nb::arg("weight_decay"),
             nb::arg("amsgrad") = false,
             nb::arg("stochastic_rounding") = false,
+            nb::arg("weight_decay_skip_1d") = false,
             "Make an AdamWConfig object");
     }
 

@@ -6,7 +6,7 @@
 #include "prod_all_device_operation_types.hpp"
 
 #include "ttnn/device_operation.hpp"
-#include <tt-metalium/program_descriptors.hpp>
+#include "ttnn/metal_v2_artifacts.hpp"
 
 #include <variant>
 
@@ -15,11 +15,11 @@ namespace ttnn::prim {
 struct ProdAllDeviceOperation {
     using operation_attributes_t = ProdAllParams;
     using tensor_args_t = ProdAllInputs;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
 
     struct ProdAllProgramFactory {
-        static tt::tt_metal::ProgramDescriptor create_descriptor(
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);

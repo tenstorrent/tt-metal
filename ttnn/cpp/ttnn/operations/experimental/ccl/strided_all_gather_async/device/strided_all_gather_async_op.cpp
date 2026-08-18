@@ -20,7 +20,7 @@ StridedAllGatherAsync::spec_return_value_t StridedAllGatherAsync::compute_output
     const auto& input_tensor = tensor_args.input_tensor;
     auto shape = input_tensor.logical_shape();
     shape[attributes.dim] *= attributes.ring_size;
-    return {TensorSpec(
+    return {tt::tt_metal::TensorSpec(
         shape,
         TensorLayout(input_tensor.dtype(), input_tensor.tensor_spec().page_config(), attributes.output_mem_config))};
 }

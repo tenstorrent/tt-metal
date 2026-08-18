@@ -13,7 +13,7 @@ namespace ttml::core {
 
 autograd::TensorPtr clip_grad_norm(
     const serialization::NamedParameters& parameters, float max_norm, float p_norm_type, bool error_if_nonfinite) {
-    std::vector<tt::tt_metal::Tensor> grads;
+    std::vector<ttnn::Tensor> grads;
     grads.reserve(parameters.size());
     for (const auto& [_, tensor] : parameters) {
         if (tensor->get_requires_grad() && tensor->is_grad_initialized()) {

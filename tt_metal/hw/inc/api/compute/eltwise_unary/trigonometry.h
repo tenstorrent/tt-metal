@@ -164,9 +164,7 @@ ALWI void asinh_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void atanh_tile_init() {
-    MATH(SFPU_UNARY_INIT_FN(atanh, ckernel::sfpu::init_atanh, (APPROX, DST_ACCUM_MODE)));
-}
+ALWI void atanh_tile_init() { MATH(SFPU_UNARY_INIT_FN(atanh, ckernel::sfpu::init_atanh, (APPROX, DST_ACCUM_MODE))); }
 
 // clang-format off
 /**
@@ -219,7 +217,7 @@ ALWI void asin_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void asin_tile_init() { MATH(SFPU_UNARY_INIT(asin)); }
+ALWI void asin_tile_init() { MATH(SFPU_UNARY_INIT_FN(asin, sfpu::asin_acos_init, (DST_ACCUM_MODE))); }
 
 // clang-format off
 /**
@@ -248,7 +246,9 @@ ALWI void atan_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void atan_tile_init() { MATH(SFPU_UNARY_INIT_FN(atan, sfpu::atan_init, (true /*APPROXIMATION_MODE*/))); }
+ALWI void atan_tile_init() {
+    MATH(SFPU_UNARY_INIT_FN(atan, sfpu::atan_init, (true /*APPROXIMATION_MODE*/, DST_ACCUM_MODE)));
+}
 
 // clang-format off
 /**
@@ -277,7 +277,7 @@ ALWI void acos_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void acos_tile_init() { MATH(SFPU_UNARY_INIT(acos)); }
+ALWI void acos_tile_init() { MATH(SFPU_UNARY_INIT_FN(acos, sfpu::asin_acos_init, (DST_ACCUM_MODE))); }
 
 /**
  * Please refer to documentation for any_init.

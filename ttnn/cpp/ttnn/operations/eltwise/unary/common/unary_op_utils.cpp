@@ -5,6 +5,7 @@
 #include "unary_op_utils.hpp"
 
 #include <optional>
+#include <type_traits>
 #include <tt_stl/assert.hpp>
 #include "ttnn/tensor/types.hpp"
 
@@ -101,6 +102,7 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::HARDTANH: return "SFPU_OP_HARDTANH_INCLUDE";
         case UnaryOpType::RPOW: return "SFPU_OP_RPOW_INCLUDE";
         case UnaryOpType::HARDMISH: return "SFPU_OP_HARDMISH_INCLUDE";
+        case UnaryOpType::SOFTCAP: return "SFPU_OP_SOFTCAP_INCLUDE";
         case UnaryOpType::LGAMMA: return "SFPU_OP_LGAMMA_INCLUDE";
         case UnaryOpType::DIGAMMA: return "SFPU_OP_DIGAMMA_INCLUDE";
         case UnaryOpType::TANHSHRINK: return "SFPU_OP_TANHSHRINK_INCLUDE";
@@ -177,10 +179,35 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
         case UnaryOpType::RELU_MAX:
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
+            if (input_dtype == DataType::UINT16) {
+                const auto as_int = static_cast<std::int32_t>(param0_raw);
+                TT_FATAL(
+                    as_int >= 0 && as_int <= std::numeric_limits<std::uint16_t>::max(),
+                    "RELU_MAX upper_limit {} out of range for UInt16",
+                    as_int);
+                return {
+                    "relu_max_tile_init();",
+                    fmt::format("relu_max_tile_uint16({}, {}u);", idst, static_cast<uint32_t>(param0_raw))};
+            }
+            // UINT8 is zero-extended to 32 bits in DST by the unpacker (high bits = 0), so the
+            // U32-layout kernel clamps it correctly with the same unsigned compare logic.
+            if (input_dtype == DataType::UINT32 || input_dtype == DataType::UINT8) {
+                if (input_dtype == DataType::UINT8) {
+                    const auto as_int = static_cast<std::int32_t>(param0_raw);
+                    TT_FATAL(
+                        as_int >= 0 && as_int <= std::numeric_limits<std::uint8_t>::max(),
+                        "RELU_MAX upper_limit {} out of range for UInt8",
+                        as_int);
+                }
+                return {
+                    "relu_max_tile_init();",
+                    fmt::format("relu_max_tile_uint32({}, {}u);", idst, static_cast<uint32_t>(param0_raw))};
+            }
             if (input_dtype == DataType::INT32) {
                 return {
                     "relu_max_tile_init();",
-                    fmt::format("relu_max_tile_int32({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
+                    fmt::format(
+                        "relu_max_tile_int32({}, {}u);", idst, static_cast<uint32_t>(static_cast<int32_t>(params[0])))};
             }
             return {
                 "relu_max_tile_init();",
@@ -189,6 +216,30 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
         case UnaryOpType::RELU_MIN:
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
+            if (input_dtype == DataType::UINT16) {
+                const auto as_int = static_cast<std::int32_t>(param0_raw);
+                TT_FATAL(
+                    as_int >= 0 && as_int <= std::numeric_limits<std::uint16_t>::max(),
+                    "RELU_MIN lower_limit {} out of range for UInt16",
+                    as_int);
+                return {
+                    "relu_min_tile_init();",
+                    fmt::format("relu_min_tile_uint16({}, {}u);", idst, static_cast<uint32_t>(param0_raw))};
+            }
+            // UINT8 is zero-extended to 32 bits in DST by the unpacker (high bits = 0), so the
+            // U32-layout kernel clamps it correctly with the same unsigned compare logic.
+            if (input_dtype == DataType::UINT32 || input_dtype == DataType::UINT8) {
+                if (input_dtype == DataType::UINT8) {
+                    const auto as_int = static_cast<std::int32_t>(param0_raw);
+                    TT_FATAL(
+                        as_int >= 0 && as_int <= std::numeric_limits<std::uint8_t>::max(),
+                        "RELU_MIN lower_limit {} out of range for UInt8",
+                        as_int);
+                }
+                return {
+                    "relu_min_tile_init();",
+                    fmt::format("relu_min_tile_uint32({}, {}u);", idst, static_cast<uint32_t>(param0_raw))};
+            }
             if (input_dtype == DataType::INT32) {
                 return {"relu_min_tile_init();", fmt::format("relu_min_tile_int32({}, {}u);", idst, static_cast<uint32_t>(static_cast<int32_t>(params[0])))};
             }
@@ -207,6 +258,10 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 param0);
             return {"power_iterative_tile_init();", fmt::format("power_iterative_tile({}, {});", idst, param0_raw)};
         case UnaryOpType::LEAKY_RELU:
+            // For unsigned inputs, leaky_relu is the identity. Emit an empty op so the tile is just copied.
+            if (input_dtype == DataType::UINT32 || input_dtype == DataType::UINT16 || input_dtype == DataType::UINT8) {
+                return {};
+            }
             return {
                 "leaky_relu_tile_init();",
                 fmt::format("leaky_relu_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
@@ -283,6 +338,16 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                     idst,
                     (uint)params[0])};
         case UnaryOpType::REMAINDER:
+            if (input_dtype == DataType::UINT32) {
+                if constexpr (std::is_floating_point_v<T>) {
+                    TT_FATAL(false, "Expected integer scalar divisor (uint32 or int32)");
+                } else {
+                    TT_FATAL(param0_raw > 0, "Divisor must be positive, got {}", param0_raw);
+                }
+                return {
+                    "remainder_tile_uint32_init();",
+                    fmt::format("remainder_tile_uint32({}, {}u);", idst, static_cast<uint32_t>(param0_raw))};
+            }
             return {
                 fmt::format(
                     "remainder_tile_init({:#x}u, {:#x}u);",
@@ -547,6 +612,18 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 "celu_tile_init();",
                 fmt::format(
                     "celu_tile({}, {:#x}u, {:#x}u);",
+                    idst,
+                    std::bit_cast<uint32_t>(param0),
+                    std::bit_cast<uint32_t>(1.0f / param0))};
+        // softcap takes beta with 1/beta precomputed here, so the kernel never divides. The
+        // check is repeated from UnaryDeviceOperation::validate because fused activation chains
+        // (ttnn::multiply's lhs/rhs/post_activations) reach this emitter without going through it.
+        case UnaryOpType::SOFTCAP:
+            TT_FATAL(param0 != 0.0f, "SOFTCAP requires a non-zero beta");
+            return {
+                "softcap_tile_init();",
+                fmt::format(
+                    "softcap_tile({}, {:#x}u, {:#x}u);",
                     idst,
                     std::bit_cast<uint32_t>(param0),
                     std::bit_cast<uint32_t>(1.0f / param0))};
@@ -831,7 +908,19 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             return {"rounding_op_tile_init();", fmt::format("frac_tile({});", idst)};
-        case UnaryOpType::RELU6: return {"relu_max_tile_init();", fmt::format("relu_max_tile({}, 0x40c00000u);", idst)};
+        case UnaryOpType::RELU6:
+            if (input_dtype == DataType::UINT16) {
+                return {"relu_max_tile_init();", fmt::format("relu_max_tile_uint16({}, 6u);", idst)};
+            }
+            // UINT8 is zero-extended to 32 bits in DST by the unpacker (high bits = 0), so the
+            // U32-layout kernel clamps it correctly with the same unsigned compare logic.
+            if (input_dtype == DataType::UINT32 || input_dtype == DataType::UINT8) {
+                return {"relu_max_tile_init();", fmt::format("relu_max_tile_uint32({}, 6u);", idst)};
+            }
+            if (input_dtype == DataType::INT32) {
+                return {"relu_max_tile_init();", fmt::format("relu_max_tile_int32({}, 6u);", idst)};
+            }
+            return {"relu_max_tile_init();", fmt::format("relu_max_tile({}, 0x40c00000u);", idst)};
         case UnaryOpType::NEG:
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");

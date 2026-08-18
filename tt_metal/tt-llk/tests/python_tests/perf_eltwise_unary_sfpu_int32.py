@@ -14,11 +14,12 @@ from helpers.llk_params import (
     Transpose,
 )
 from helpers.param_config import input_output_formats, parametrize
-from helpers.perf import PerfConfig
+from helpers.perf.core import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import calculate_tile_and_face_counts
 from helpers.test_variant_parameters import (
     APPROX_MODE,
+    CLAMP_NEGATIVE,
     FAST_MODE,
     ITERATIONS,
     LOOP_FACTOR,
@@ -42,7 +43,11 @@ from helpers.test_variant_parameters import (
 _INT32_UNARY_OPS = [
     MathOperation.AddInt32,
     MathOperation.SubInt32,
+    MathOperation.AbsInt32,
     MathOperation.ReluMin,
+    MathOperation.BitwiseNot,
+    MathOperation.LogicalNot,
+    MathOperation.Fill,
 ]
 
 
@@ -62,6 +67,7 @@ def _run_math_isolate(formats, mathop, input_dimensions):
             ITERATIONS(32),
             FAST_MODE(FastMode.No),
             STABLE_SORT(StableSort.No),
+            CLAMP_NEGATIVE(False),
         ],
         runtimes=[
             TILE_COUNT(tile_count_A),

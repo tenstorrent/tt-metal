@@ -94,7 +94,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // ---- Run 1: plain datacopy of the ORIGINAL operand-A tile (no reconfig) ----
     _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-        0, 0, FACE_R_DIM, num_faces, formats_array[1].unpack_A_src, formats_array[1].unpack_A_dst);
+        0, 0, ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces), formats_array[1].unpack_A_src, formats_array[1].unpack_A_dst);
     _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
         L1_ADDRESS(params.buffer_A[0]), formats_array[1].unpack_A_src, formats_array[1].unpack_A_dst);
 }

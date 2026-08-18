@@ -21,7 +21,7 @@ namespace ttnn::prim::qsr {
 struct TilizeWithValPaddingDeviceOperation {
     using operation_attributes_t = TilizeWithValPaddingParams;
     using tensor_args_t = Tensor;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
 
     using program_factory_t = std::variant<
@@ -43,7 +43,7 @@ struct TilizeWithValPaddingDeviceOperation {
 Tensor tilize_with_val_padding(
     const Tensor& input_tensor,
     const ttnn::Shape& output_padded_shape,
-    const tt::tt_metal::PadValue& pad_value,
+    const ttnn::PadValue& pad_value,
     const std::optional<tt::tt_metal::MemoryConfig>& output_mem_config,
     const std::optional<tt::tt_metal::DataType>& output_dtype,
     bool use_multicore,
