@@ -100,6 +100,8 @@ void kernel_main() {
     const uint32_t is_empty_ship = get_arg_val<uint32_t>(19);
     const uint32_t indices_addr = get_arg_val<uint32_t>(20);
     const uint32_t values_addr = get_arg_val<uint32_t>(21);
+    // Multi-rectangle: this rectangle's first output row (0 on a single-rect program).
+    const uint32_t start_row = get_arg_val<uint32_t>(22);
 
     constexpr uint32_t cb_ship_values = get_compile_time_arg_val(0);
     constexpr uint32_t cb_ship_indices = get_compile_time_arg_val(1);
@@ -205,23 +207,23 @@ void kernel_main() {
         } else {
             // Root: values row then indices row (compute pushes in that order).
             if constexpr (source_slices_per_row == 32) {
-                issue_contiguous_row_write(values_cb, noc, values, row, values_page_bytes);
+                issue_contiguous_row_write(values_cb, noc, values, start_row + row, values_page_bytes);
                 noc.async_writes_flushed();
                 values_cb.pop_front(1);
 
-                issue_contiguous_row_write(indices_cb, noc, indices, row, indices_page_bytes);
+                issue_contiguous_row_write(indices_cb, noc, indices, start_row + row, indices_page_bytes);
                 noc.async_writes_flushed();
                 indices_cb.pop_front(1);
             } else {
                 CircularBuffer values_scratch_cb(cb_values_scratch);
                 issue_reordered_row_write<source_slices_per_row, output_slices_per_row, values_slice_bytes>(
-                    values_cb, values_scratch_cb, noc, values, row, values_page_bytes);
+                    values_cb, values_scratch_cb, noc, values, start_row + row, values_page_bytes);
                 noc.async_writes_flushed();
                 values_scratch_cb.pop_front(1);
 
                 CircularBuffer indices_scratch_cb(cb_indices_scratch);
                 issue_reordered_row_write<source_slices_per_row, output_slices_per_row, indices_slice_bytes>(
-                    indices_cb, indices_scratch_cb, noc, indices, row, indices_page_bytes);
+                    indices_cb, indices_scratch_cb, noc, indices, start_row + row, indices_page_bytes);
                 noc.async_writes_flushed();
                 indices_scratch_cb.pop_front(1);
             }

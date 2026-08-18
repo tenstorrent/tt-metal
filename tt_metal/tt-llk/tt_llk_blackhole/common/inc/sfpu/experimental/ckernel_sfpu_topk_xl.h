@@ -3139,6 +3139,56 @@ inline void _topk_xl_separate_indices_row_major_global_()
     }
 }
 
+// Segment-base variant of the global split (segmented fusion for rows wider
+// than 32 chunks): identical decode, then ORs a runtime segment base into the
+// index word. seg_base = seg * 32 * K is a multiple of 2^(5+log2(K)) while the
+// decoded local index occupies exactly those low bits, so OR == ADD with zero
+// bit overlap. LREG5 is free across the loop (body uses LREG0-4, constants
+// LREG12-14) and is loaded once per call.
+template <std::uint32_t K, bool APPROXIMATION_MODE>
+inline void _topk_xl_separate_indices_row_major_global_base_(std::uint32_t seg_base)
+{
+    static_assert(K == 512 || K == 1024 || K == 2048, "K must be 512, 1024, or 2048");
+    constexpr int row_scale_factor       = K == 512 ? 1 : K == 1024 ? 2 : 4;
+    constexpr int num_tiles_per_sequence = K == 512 ? 1 : K == 1024 ? 1 : 2;
+    constexpr int indices_offset         = num_tiles_per_sequence * 64;
+    constexpr int chunk_field_shift = K == 2048 ? 0 : K == 1024 ? -1 : -2;
+
+    TT_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_UPPER, (seg_base >> 16) & 0xFFFF);
+    TT_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_LOWER, seg_base & 0xFFFF);
+
+    for (int i = 0; i < row_scale_factor * 16; i++)
+    {
+        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+
+        TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
+        TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_LOWER, 0);
+
+        TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0);
+        TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG4, 0);
+        _topk_xl_decode_row_major_index_<K>();
+        TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG4, 0);
+        if constexpr (chunk_field_shift != 0)
+        {
+            TTI_SFPSHFT(chunk_field_shift & 0xFFF, p_sfpu::LREG4, p_sfpu::LREG4, 1);
+        }
+        TTI_SFPOR(0, p_sfpu::LREG4, p_sfpu::LREG0, 0);
+        TTI_SFPOR(0, p_sfpu::LREG5, p_sfpu::LREG0, 0);
+
+        TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_0, indices_offset);
+    }
+}
+
+// Clears SFPU index-tracking mode (bit [2] of SFPU_CONTROL_REG) set by the
+// unfused _topk_xl_init_. Segmented rows re-enter fused merge/rebuild after
+// an unfused cross-segment fold; no shipping path ran fused merges with the
+// bit set, so clear it defensively at each segment start.
+inline void _topk_xl_index_tracking_disable_()
+{
+    _sfpu_load_config32_(0xF, 0x0, 0x0);
+}
+
 // ============================================================================
 // END TOPK_LARGE_INDICES ADDITION: row-major UINT32 index split support
 // ============================================================================

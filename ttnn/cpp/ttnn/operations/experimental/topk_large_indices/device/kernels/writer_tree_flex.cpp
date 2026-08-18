@@ -34,6 +34,10 @@ void kernel_main() {
     const uint32_t winner_y = get_arg_val<uint32_t>(18);
     const uint32_t is_empty_ship = get_arg_val<uint32_t>(19);
     const uint32_t indices_addr = get_arg_val<uint32_t>(20);
+    // Multi-rectangle: this rectangle's first output row (0 on a single-rect
+    // program; the factory forbids tile_output with multiple rectangles, so
+    // the TILE scatter paths below keep their rect-local tile_row).
+    const uint32_t start_row_rt = get_arg_val<uint32_t>(22);
 #ifdef FLEX_WITH_VALUES
     const uint32_t values_addr = get_arg_val<uint32_t>(21);
 #endif
@@ -214,7 +218,7 @@ void kernel_main() {
                     indices,
                     indices_page_bytes,
                     {.offset_bytes = 0},
-                    {.page_id = row, .offset_bytes = 0});
+                    {.page_id = start_row_rt + row, .offset_bytes = 0});
 #endif
                 noc.async_writes_flushed();
                 indices_scratch_cb.pop_front(1);

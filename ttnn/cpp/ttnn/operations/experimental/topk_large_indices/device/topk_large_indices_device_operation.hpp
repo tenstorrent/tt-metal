@@ -44,7 +44,10 @@ struct TopkLargeIndicesDeviceOperation {
         bool return_values,
         std::optional<uint32_t> num_slices,
         bool tile_output,
-        std::optional<DataType> index_dtype);
+        std::optional<DataType> index_dtype,
+        std::optional<uint32_t> row_start = std::nullopt,
+        std::optional<uint32_t> row_count = std::nullopt,
+        bool neginf_sentinel = true);
 };
 
 }  // namespace ttnn::operations::experimental::topk_large_indices
@@ -62,7 +65,8 @@ Tensor topk_large_indices(
     std::optional<uint32_t> valid_length = std::nullopt,
     std::optional<uint32_t> num_slices = std::nullopt,
     bool tile_output = false,
-    std::optional<DataType> index_dtype = std::nullopt);
+    std::optional<DataType> index_dtype = std::nullopt,
+    bool neginf_sentinel = true);
 
 // (values, indices): values are BFLOAT16, sorted descending to match the indices;
 // sentinel-index (-inf) lanes carry exact bf16 -inf values. Layout/dtype opt-ins as above.
@@ -72,6 +76,7 @@ std::tuple<Tensor, Tensor> topk_large_indices_with_values(
     std::optional<uint32_t> valid_length = std::nullopt,
     std::optional<uint32_t> num_slices = std::nullopt,
     bool tile_output = false,
-    std::optional<DataType> index_dtype = std::nullopt);
+    std::optional<DataType> index_dtype = std::nullopt,
+    bool neginf_sentinel = true);
 
 }  // namespace ttnn::experimental

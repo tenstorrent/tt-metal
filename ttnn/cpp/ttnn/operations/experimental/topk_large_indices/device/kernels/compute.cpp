@@ -110,13 +110,20 @@ FORCE_INLINE void copy_chunk(CircularBuffer& input_cb, uint32_t dst_base, uint32
     input_cb.pop_front(tiles_per_sequence);
 }
 
-// Second half: stamp fused LSB indices, locally sort, split into unfused
-// values + row-major indices, and advance the chunk base. Skipped (except for
-// the chunk-base advance) when the chunk-skip test proves the chunk cannot
-// contribute to the final top-k.
+// Second half: stamp fused LSB indices and locally sort. FUSED_E2E rows stamp
+// the RUNTIME chunk id into index bits [15:11] and stay fused through every
+// merge/rebuild (one global split per row at the end); the classic path splits
+// to unfused values + row-major indices per chunk and advances the chunk base.
 template <uint32_t K>
-FORCE_INLINE void finish_chunk(uint32_t dst_base, bool ascending) {
+FORCE_INLINE void finish_chunk(uint32_t dst_base, bool ascending, uint32_t chunk_id) {
     topk_xl_add_lsb_indices_init();
+#ifdef FUSED_E2E
+    topk_xl_add_lsb_indices_rt<K>(dst_base, chunk_id);
+
+    topk_xl_init<K, true>();
+    topk_xl_local_sort<K>(dst_base, ascending);
+#else
+    (void)chunk_id;
     topk_xl_add_lsb_indices<K, 0>(dst_base);
 
     topk_xl_init<K, true>();
@@ -125,12 +132,30 @@ FORCE_INLINE void finish_chunk(uint32_t dst_base, bool ascending) {
     topk_xl_separate_indices_row_major_reinit();
     topk_xl_separate_indices_row_major<K>(dst_base);
     topk_xl_separate_indices_row_major_advance_chunk_base<K>();
+#endif
 }
 
+#ifdef FUSED_SEGMENTED
+// Segmented fusion (rows wider than 32 chunks): each <=32-chunk segment runs
+// the FUSED_E2E flow with a segment-LOCAL 5-bit chunk id, is split once with
+// the segment base OR'd into the decoded indices, and is folded into the
+// running cross-segment survivor with one unfused merge. See the LLK notes on
+// _topk_xl_separate_indices_row_major_global_base_.
 template <uint32_t K>
-FORCE_INLINE void process_chunk(CircularBuffer& input_cb, uint32_t dst_base, uint32_t active_elements, bool ascending) {
+FORCE_INLINE void finish_chunk_fused_local(uint32_t dst_base, bool ascending, uint32_t local_id) {
+    topk_xl_add_lsb_indices_init();
+    topk_xl_add_lsb_indices_rt<K>(dst_base, local_id);
+
+    topk_xl_init<K, true>();
+    topk_xl_local_sort<K>(dst_base, ascending);
+}
+#endif
+
+template <uint32_t K>
+FORCE_INLINE void process_chunk(
+    CircularBuffer& input_cb, uint32_t dst_base, uint32_t active_elements, bool ascending, uint32_t chunk_id) {
     copy_chunk<K>(input_cb, dst_base, active_elements);
-    finish_chunk<K>(dst_base, ascending);
+    finish_chunk<K>(dst_base, ascending, chunk_id);
 }
 
 }  // namespace
@@ -149,7 +174,19 @@ void kernel_main() {
     constexpr uint32_t tiles_per_sequence = (K + elements_per_tile - 1) / elements_per_tile;
     constexpr uint32_t sequence_tiles = tiles_per_sequence * 2u;
     constexpr uint32_t slot0 = 0;
+#ifdef FUSED_SEGMENTED
+    // Cross-segment survivor (unfused [v,i]) lives at tiles 0..2*tps-1; the
+    // in-flight fused segment at 2*tps..3*tps-1; its incoming chunk after it.
+    constexpr uint32_t slotA = sequence_tiles;
+#endif
+#ifdef FUSED_E2E
+    // Fused survivors are half the width of unfused ones (no separate index
+    // region until the final split), so the incoming chunk sits directly
+    // after the survivor — the fused merge expects its operand there.
+    constexpr uint32_t slot1 = tiles_per_sequence;
+#else
     constexpr uint32_t slot1 = sequence_tiles;
+#endif
 
     namespace skip = topk_large_indices_chunk_skip;
 
@@ -168,20 +205,80 @@ void kernel_main() {
         skip::telemetry_row_begin(num_chunks);
 #endif
 
+#ifdef FUSED_SEGMENTED
+        constexpr uint32_t seg_cap = 32;  // 5-bit local chunk id
+        const uint32_t num_segments = (num_chunks + seg_cap - 1) / seg_cap;
+        for (uint32_t seg = 0; seg < num_segments; ++seg) {
+            const uint32_t seg_first = seg * seg_cap;
+            const uint32_t seg_end = (seg_first + seg_cap < num_chunks) ? (seg_first + seg_cap) : num_chunks;
+            const uint32_t seg_last = seg_end - 1;
+            const uint32_t base = (seg == 0) ? slot0 : slotA;
+            const uint32_t chunkslot = base + tiles_per_sequence;
+            // Segments after the first rebuild their final survivor ASCENDING:
+            // the unfused cross-segment merge consumes a rank-mirrored operand
+            // against the descending survivor (the tree kernels' shipped
+            // rebuild-ascending pattern).
+            const bool mirror_last = (seg != 0);
+
+            if (seg != 0) {
+                // The unfused cross-segment init set the SFPU index-tracking
+                // bit; fused merges have never run under it -- clear it.
+                topk_xl_index_tracking_disable();
+            }
+
+            const uint32_t first_elems = (seg_first + 1 == num_chunks) ? tail_elements : K;
+            copy_chunk<K>(input_cb_obj, base, first_elems);
+            finish_chunk_fused_local<K>(base, false, 0);
+            if (seg_first == seg_last) {
+                topk_xl_rebuild<K, true>(base, mirror_last);
+            }
+            for (uint32_t chunk = seg_first + 1; chunk <= seg_last; ++chunk) {
+                const uint32_t active_elements = (chunk + 1 == num_chunks) ? tail_elements : K;
+                copy_chunk<K>(input_cb_obj, chunkslot, active_elements);
+                finish_chunk_fused_local<K>(chunkslot, true, chunk - seg_first);
+                topk_xl_merge<K, true>(base);
+                topk_xl_rebuild<K, true>(base, mirror_last && (chunk == seg_last));
+            }
+
+            // One split per segment: global index = seg*32*K + local. The
+            // in-place split writes indices at base + tps -- exactly the
+            // unfused merge's dense operand-1 slot when base == slotA, and
+            // exactly the epilogue's expected layout when base == slot0.
+            topk_xl_separate_indices_row_major_global_init();
+            topk_xl_separate_indices_row_major_global_base<K>(base, seg * (seg_cap * K));
+
+            if (seg != 0) {
+                topk_xl_init<K, false>();
+                topk_xl_merge<K, false>(slot0);
+                topk_xl_rebuild<K, false>(slot0, false);
+            }
+        }
+#else
+#ifndef FUSED_E2E
         topk_xl_separate_indices_row_major_init_static<0, 0>();
+#endif
 
         const uint32_t first_chunk_elements = (num_chunks == 1) ? tail_elements : K;
-        process_chunk<K>(input_cb_obj, slot0, first_chunk_elements, false);
+        process_chunk<K>(input_cb_obj, slot0, first_chunk_elements, false, 0);
 
         if (num_chunks == 1) {
+#ifdef FUSED_E2E
+            topk_xl_rebuild<K, true>(slot0, false);
+#else
             topk_xl_init<K, false>();
             topk_xl_rebuild<K, false>(slot0, false);
+#endif
         }
 
         for (uint32_t chunk = 1; chunk < num_chunks; ++chunk) {
             const uint32_t active_elements = (chunk + 1 == num_chunks) ? tail_elements : K;
             copy_chunk<K>(input_cb_obj, slot1, active_elements);
 
+#ifndef FUSED_E2E
+            // Chunk skip is a classic-path feature: its threshold read and
+            // chunk-max scratch assume the unfused DST layout, and every
+            // fused-eligible k=2048 row (<= 32 chunks) sits below the skip
+            // gate's first_tested_chunk anyway.
             if constexpr (kChunkSkipEnable) {
 #ifdef CHUNK_SKIP_TELEMETRY
                 // Telemetry variant: identical gate predicate and identical
@@ -209,12 +306,18 @@ void kernel_main() {
                 }
 #endif
             }
+#endif
 
-            finish_chunk<K>(slot1, true);
+            finish_chunk<K>(slot1, true, chunk);
 
+#ifdef FUSED_E2E
+            topk_xl_merge<K, true>(slot0);
+            topk_xl_rebuild<K, true>(slot0, false);
+#else
             topk_xl_init<K, false>();
             topk_xl_merge<K, false>(slot0);
             topk_xl_rebuild<K, false>(slot0, false);
+#endif
         }
 #ifdef CHUNK_SKIP_TELEMETRY
         skip::telemetry_row_end<USER_K>(row, num_chunks);
@@ -232,7 +335,17 @@ void kernel_main() {
         }
 #endif
 
+#ifdef FUSED_E2E
+        // One global split per row: recover chunk_id * K + within-chunk from
+        // the stamped fused words, leaving the exact unfused layout the
+        // epilogue below has always consumed.
+        topk_xl_separate_indices_row_major_global_init();
+        topk_xl_separate_indices_row_major_global<K>(slot0);
+#endif
+#endif  // FUSED_SEGMENTED
+#ifndef TOPK_SKIP_NEGINF_SENTINEL
         mark_neginf_indices<K>(slot0);
+#endif
         materialize_index_rank_order<K>(slot0, indices_cb);
 
         tile_regs_commit();

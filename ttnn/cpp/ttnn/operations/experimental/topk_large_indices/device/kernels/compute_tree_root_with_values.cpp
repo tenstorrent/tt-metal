@@ -90,7 +90,9 @@ void kernel_main() {
             topk_xl_rebuild<K, false>(slot0, false);
         }
 
+#ifndef TOPK_SKIP_NEGINF_SENTINEL
         mark_neginf_indices<K>(slot0);
+#endif
         materialize_index_rank_order<K>(slot0, indices_out_cb);
         materialize_values_rank_order<K>(slot0);
 

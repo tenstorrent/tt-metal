@@ -28,12 +28,14 @@ std::variant<ttnn::Tensor, std::tuple<ttnn::Tensor, ttnn::Tensor>> topk_large_in
     bool return_values,
     std::optional<uint32_t> num_slices,
     bool tile_output,
-    std::optional<ttnn::DataType> index_dtype) {
+    std::optional<ttnn::DataType> index_dtype,
+    bool neginf_sentinel) {
     if (return_values) {
         return ttnn::experimental::topk_large_indices_with_values(
-            input_tensor, k, valid_length, num_slices, tile_output, index_dtype);
+            input_tensor, k, valid_length, num_slices, tile_output, index_dtype, neginf_sentinel);
     }
-    return ttnn::experimental::topk_large_indices(input_tensor, k, valid_length, num_slices, tile_output, index_dtype);
+    return ttnn::experimental::topk_large_indices(
+        input_tensor, k, valid_length, num_slices, tile_output, index_dtype, neginf_sentinel);
 }
 
 }  // namespace
@@ -89,6 +91,14 @@ void bind_topk_large_indices(nb::module_& mod) {
             valid_length: optional number of leading columns to search (default: full width).
             return_values: also return the top-k values; the result becomes a
                 (values, indices) tuple (default: False, indices tensor only).
+            neginf_sentinel: emit the sentinel index (0xFFFFFFFF; 0xFFFF under UINT16)
+                on exact bf16 -inf value lanes (default True, the original contract).
+                False keeps each -inf lane's real source position for stock/torch
+                index parity (the fused stamp already carries it). Caveat: lanes
+                the op itself -inf-pads (width not a multiple of the chunk size,
+                or a short valid_length tail) carry their padded position, which
+                can exceed the logical width -- mirroring the stock op's own
+                looseness around its -inf padding.
             num_slices: optional column-parallel slice-count (core count) override.
                 Only valid when the column-parallel (single-row) factory is selected;
                 must be in [2, 128] and at most the row's LLK-window chunk count
@@ -109,7 +119,8 @@ void bind_topk_large_indices(nb::module_& mod) {
         nb::arg("return_values") = false,
         nb::arg("num_slices") = std::nullopt,
         nb::arg("tile_output") = false,
-        nb::arg("index_dtype") = std::nullopt);
+        nb::arg("index_dtype") = std::nullopt,
+        nb::arg("neginf_sentinel") = true);
 }
 
 }  // namespace ttnn::operations::experimental::topk_large_indices::detail

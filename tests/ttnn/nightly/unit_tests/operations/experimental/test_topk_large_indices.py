@@ -264,8 +264,11 @@ def test_topk_large_indices_production_perf_check(
 
 
 def test_topk_large_indices_program_cache_ignores_row_count_and_array_size(device):
+    # (2, 131072) crosses the old 32-chunk fused boundary: at k >= 1024 the
+    # compute-body mode is width-independent (one segmented codepath), so a
+    # growing-prefill caller must NOT recompile crossing 65536 positions.
     k = 1536
-    cases = [(2, 3000), (640, 51200), (5, 4097)]
+    cases = [(2, 3000), (640, 51200), (5, 4097), (2, 131072)]
     tt_inputs = []
     for num_rows, n in cases:
         torch_input = _make_large_index_input(num_rows=num_rows, n=n, k=k)
@@ -361,6 +364,156 @@ def test_topk_large_indices_row_major_mixed_negative_infinity_indices_are_sentin
     _assert_indices(tt_indices, expected, [2, k])
 
 
+@pytest.mark.parametrize("k", [512, 2048])
+def test_topk_large_indices_neginf_sentinel_false_returns_real_positions(device, k):
+    # neginf_sentinel=False: -inf value lanes keep their REAL source column
+    # (the fused stamp carries it) instead of the 0xFFFFFFFF sentinel --
+    # stock ttnn.topk / torch parity for the composite routing layer.
+    # n is chunk-aligned (a multiple of k) so every lane is a real column:
+    # unaligned tails are -inf-padded BEFORE the index stamp, so with the
+    # sentinel skipped a padded lane would carry its (out-of-range) padded
+    # position -- the same looseness the stock path has around its own
+    # -inf padding.
+    n = 2 * k
+    finite_count = 16
+    torch_input = torch.full((2, n), -float("inf"), dtype=torch.bfloat16)
+    finite_values = torch.arange(finite_count, dtype=torch.float32).to(torch.bfloat16)
+    torch_input[:, :finite_count] = finite_values
+    tt_indices = ttnn.experimental.topk_large_indices(
+        _to_device(torch_input, device), k=k, neginf_sentinel=False
+    )
+
+    torch_indices = ttnn.to_torch(tt_indices).to(torch.int64)
+    assert list(torch_indices.shape) == [2, k]
+    # Finite lanes are exact (descending finite values live at columns 15..0).
+    expected_prefix = torch.arange(finite_count - 1, -1, -1, dtype=torch.int64)
+    assert_equal(torch_indices[:, :finite_count], expected_prefix.unsqueeze(0).repeat(2, 1))
+    # -inf lanes: real, in-range, unique positions whose source value is -inf.
+    inf_indices = torch_indices[:, finite_count:]
+    assert inf_indices.min() >= finite_count
+    assert inf_indices.max() < n
+    for row in torch_indices:
+        assert row.unique().numel() == k
+    gathered = torch.gather(torch_input, -1, inf_indices)
+    assert torch.isneginf(gathered.float()).all()
+
+
+def test_topk_large_indices_column_parallel_neginf_sentinel_false(device):
+    # Same contract on the column-parallel (merge-tree) factory.
+    k, n, finite_count = 512, 65536, 16
+    torch_input = torch.full((1, n), -float("inf"), dtype=torch.bfloat16)
+    torch_input[:, :finite_count] = torch.arange(finite_count, dtype=torch.float32).to(torch.bfloat16)
+    tt_indices = ttnn.experimental.topk_large_indices(
+        _to_device(torch_input, device), k=k, num_slices=4, neginf_sentinel=False
+    )
+
+    torch_indices = ttnn.to_torch(tt_indices).to(torch.int64)
+    assert list(torch_indices.shape) == [1, k]
+    expected_prefix = torch.arange(finite_count - 1, -1, -1, dtype=torch.int64)
+    assert_equal(torch_indices[:, :finite_count], expected_prefix.unsqueeze(0))
+    inf_indices = torch_indices[:, finite_count:]
+    assert inf_indices.min() >= finite_count
+    assert inf_indices.max() < n
+    assert torch_indices[0].unique().numel() == k
+
+
+def test_topk_large_indices_neginf_sentinel_flag_in_program_cache(device):
+    # The flag is part of the program hash: flipping it on the same shape
+    # must compile a second program, and each variant must keep its own
+    # contract when replayed from cache.
+    k, n, finite_count = 512, 1024, 16
+    torch_input = torch.full((2, n), -float("inf"), dtype=torch.bfloat16)
+    torch_input[:, :finite_count] = torch.arange(finite_count, dtype=torch.float32).to(torch.bfloat16)
+    tt_input = _to_device(torch_input, device)
+
+    device.enable_program_cache()
+    device.clear_program_cache()
+    base_entries = device.num_program_cache_entries()
+    idx_sentinel = ttnn.to_torch(
+        ttnn.experimental.topk_large_indices(tt_input, k=k, neginf_sentinel=True)
+    ).to(torch.int64)
+    after_first = device.num_program_cache_entries()
+    idx_real = ttnn.to_torch(
+        ttnn.experimental.topk_large_indices(tt_input, k=k, neginf_sentinel=False)
+    ).to(torch.int64)
+    after_second = device.num_program_cache_entries()
+    assert after_first > base_entries
+    assert after_second > after_first  # distinct program, not a cache hit
+
+    assert (idx_sentinel[:, finite_count:] == 0xFFFFFFFF).all()
+    assert idx_real[:, finite_count:].max() < n
+    # Replay both from cache and re-check the contracts.
+    idx_sentinel2 = ttnn.to_torch(
+        ttnn.experimental.topk_large_indices(tt_input, k=k, neginf_sentinel=True)
+    ).to(torch.int64)
+    idx_real2 = ttnn.to_torch(
+        ttnn.experimental.topk_large_indices(tt_input, k=k, neginf_sentinel=False)
+    ).to(torch.int64)
+    assert device.num_program_cache_entries() == after_second
+    device.disable_and_clear_program_cache()
+    assert_equal(idx_sentinel2, idx_sentinel)
+    assert_equal(idx_real2, idx_real)
+
+
+# ---------------------------------------------------------------------------
+# Segmented fusion: rows wider than the 32-chunk fused ceiling run <=32-chunk
+# fused segments (segment-local chunk-id stamp, one split per segment) folded
+# by unfused cross-segment merges. Cells pin the risky boundaries: first
+# unfused-era width (33 chunks), a single-chunk tail segment, deep segment
+# counts, and valid_length collapsing a wide program back to one segment.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "k,num_rows,n",
+    [
+        (2048, 2, 67584),  # 33 chunks: segment 1 holds exactly ONE chunk (rebuild-asc after bare sort)
+        (2048, 2, 131072),  # 64 chunks: 2 full segments
+        (1536, 2, 131072),  # k=1536 runs the 2048 window; USER_K slice of a segmented row
+        (2048, 1, 524288),  # 256 chunks: 8 segments (Pavle's scaled shape class)
+        (1536, 2, 524288),
+        (2048, 1, 1048576),  # 512 chunks: 16 segments, index magnitudes to 2^20
+        (1024, 2, 66560),  # K=1024 window: 65 chunks, seg1 = 33... spans capacity at a different K
+        (2048, 2, 100000),  # non-chunk-multiple width: -inf padded tail inside the last segment
+    ],
+)
+def test_topk_large_indices_segmented_widths(device, k, num_rows, n):
+    torch_input = _make_large_index_input(num_rows=num_rows, n=n, k=k)
+    tt_indices = ttnn.experimental.topk_large_indices(_to_device(torch_input, device), k=k)
+    _assert_topk_matches_torch(torch_input, tt_indices, k)
+
+
+def test_topk_large_indices_segmented_with_values(device):
+    k, n = 2048, 524288
+    torch_input = _make_large_index_input(num_rows=2, n=n, k=k)
+    tt_values, tt_indices = ttnn.experimental.topk_large_indices(
+        _to_device(torch_input, device), k=k, return_values=True
+    )
+    _assert_topk_matches_torch(torch_input, tt_indices, k)
+    ref_values, _ = torch.topk(torch_input.float(), k, dim=-1, largest=True, sorted=True)
+    assert_equal(ttnn.to_torch(tt_values).float(), ref_values.to(torch.bfloat16).float())
+
+
+def test_topk_large_indices_segmented_valid_length_collapses_to_one_segment(device):
+    # A wide (segmented) program whose runtime valid_length shrinks the row to
+    # <= 32 chunks must run the single-segment path inside the SAME cached
+    # segmented binary -- and again at a segment-boundary-crossing length.
+    k, n = 2048, 524288
+    # Distinct top-k block INSIDE the smallest tested valid_length so every
+    # tested prefix has a tie-free torch reference (zeros elsewhere).
+    torch_input = torch.zeros((2, n), dtype=torch.bfloat16)
+    hi16 = (0x3F80 + np.arange(k, dtype=np.uint32)).astype(np.uint32)
+    torch_input[:, 40960 - k : 40960] = torch.from_numpy((hi16 << 16).view(np.float32).copy()).to(torch.bfloat16)
+    tt_input = _to_device(torch_input, device)
+    device.enable_program_cache()
+    device.clear_program_cache()
+    for valid_length in (n, 40960, 98304):  # 256 chunks, 20 chunks (1 seg), 48 chunks (2 segs)
+        tt_indices = ttnn.experimental.topk_large_indices(tt_input, k=k, valid_length=valid_length)
+        _assert_topk_matches_torch(torch_input[:, :valid_length], tt_indices, k)
+    assert device.num_program_cache_entries() == 1  # one program serves every runtime length
+    device.disable_and_clear_program_cache()
+
+
 # ---------------------------------------------------------------------------
 # valid_length: bound the search to the first N columns of each (wider) row.
 # ---------------------------------------------------------------------------
@@ -403,8 +556,13 @@ def test_topk_large_indices_valid_length_ignores_stale_tail(device, k, n, valid_
     ],
 )
 def test_topk_large_indices_valid_length_matches_sliced_input(device, k, num_rows, n, valid_length):
-    # valid_length=L must be numerically identical to physically slicing the row to [0, L) and running the
-    # full-width op. Both compute top-k over the exact same prefix, so the indices are bit-identical.
+    # valid_length=L must select the exact same top-k VALUE multiset as physically slicing the row to
+    # [0, L) and running the full-width op. Indices may legitimately differ ONLY on exact-bf16 ties: the
+    # two calls have different physical widths, and the engine (and with it the unspecified non-stable
+    # tie order) is chosen per physical width — e.g. the FUSED_E2E gate flips at 32 chunks, and fused
+    # cross-chunk compares break ties by stamped chunk id while unfused merges break them by network
+    # position. Every index mismatch is therefore asserted to be a bitwise value tie, and the sorted
+    # value sequences must match bit-for-bit.
     torch.manual_seed(0)
     torch_input = torch.randn(num_rows, n, dtype=torch.bfloat16)
 
@@ -414,7 +572,18 @@ def test_topk_large_indices_valid_length_matches_sliced_input(device, k, num_row
     bounded_t = ttnn.to_torch(bounded, dtype=torch.uint32).to(torch.int64)
     sliced_t = ttnn.to_torch(sliced, dtype=torch.uint32).to(torch.int64)
     _assert_index_metadata(bounded, [num_rows, k])
-    assert_equal(bounded_t, sliced_t)
+    source = torch_input.to(torch.float32)
+    for r in range(num_rows):
+        gathered_bounded = source[r, bounded_t[r]]
+        gathered_sliced = source[r, sliced_t[r]]
+        diff = (bounded_t[r] != sliced_t[r]).nonzero().flatten()
+        assert torch.equal(
+            gathered_bounded[diff], gathered_sliced[diff]
+        ), f"row {r}: {len(diff)} index diffs include a non-tie (values differ)"
+        assert torch.equal(
+            torch.sort(gathered_bounded, descending=True).values,
+            torch.sort(gathered_sliced, descending=True).values,
+        ), f"row {r}: top-k value multisets differ"
 
 
 def test_topk_large_indices_valid_length_full_width_is_noop(device):
@@ -928,12 +1097,17 @@ def test_topk_large_indices_num_slices_non_model_values(device, num_slices):
     assert_equal(actual_values.sort().values, ref_values.sort().values)
 
 
-def test_topk_large_indices_num_slices_rejected_on_row_parallel(device, expect_error):
-    # Multi-row shapes take the row-parallel factory where num_slices has no
-    # meaning: explicit beats ignored.
+def test_topk_large_indices_num_slices_multirow_matches_row_parallel(device):
+    # Explicit num_slices on a multi-row shape opts into the multi-rectangle
+    # tree factory (one P-core tree per row, all concurrent). The exact top-k
+    # value multiset must match the row-parallel default engine bit-for-bit
+    # (index ORDER may differ only on bf16 ties, which _make_bf16_exact_input
+    # rules out by construction).
     torch_input = _make_bf16_exact_input(num_rows=2, n=4096)
-    with expect_error(RuntimeError, "num_slices"):
-        ttnn.experimental.topk_large_indices(_to_device(torch_input, device), k=512, num_slices=4)
+    tt_input = _to_device(torch_input, device)
+    idx_default = ttnn.to_torch(ttnn.experimental.topk_large_indices(tt_input, k=512))
+    idx_rect = ttnn.to_torch(ttnn.experimental.topk_large_indices(tt_input, k=512, num_slices=4))
+    assert_equal(idx_default, idx_rect)
 
 
 @pytest.mark.parametrize(

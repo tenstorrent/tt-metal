@@ -39,12 +39,23 @@ struct operation_attributes_t {
     // specs, so it is part of the program hash. Default off: indices-only, byte-identical
     // program to before this option existed.
     bool return_values{false};
-    // Override the column-parallel slice count P (number of local cores splitting the row).
-    // Only meaningful when the column-parallel (single-row) factory is selected: setting it on a
-    // row-parallel shape is a loud error, as are values outside [2, 128] or above the row's chunk
-    // count; it is clamped only against the physical core grid (with a warning). Changes the
-    // program structure, so it is part of the program hash. nullopt = the built-in cost model.
+    // Override the column-parallel slice count P (tree cores splitting each row). Single row:
+    // the classic column-parallel tree. Multiple rows: opts into the multi-rectangle variant —
+    // one P-core tree per rectangle, rows split contiguously over as many rectangles as tile the
+    // worker grid, all concurrent (ROW_MAJOR output only; the cost model never auto-selects this
+    // form). Values outside [2, 128] or above the row's chunk count are loud errors; P is clamped
+    // only against the physical core grid (with a warning). Changes the program structure, so it
+    // is part of the program hash. nullopt = the built-in cost model.
     std::optional<uint32_t> num_slices{};
+    // Composite-internal row window [row_start, row_start + row_count): the op reads only these
+    // input rows and emits a row_count-row output. Set by the hybrid wrapper (ttnn::experimental::
+    // topk_large_indices) to run row-parallel full waves and a multi-rectangle remainder wave as
+    // two launches over one un-sliced input; not exposed through the public bindings. Requires the
+    // canonical [1.., R, W] shape (leading dims 1). Runtime-only for the program itself (rows are
+    // runtime args); the effective row count feeds the derived split config, whose hashed fields
+    // already capture any structural difference.
+    std::optional<uint32_t> row_start{};
+    std::optional<uint32_t> row_count{};
     // Emit the outputs (indices, and values when return_values) in TILE layout instead of
     // ROW_MAJOR. The writer scatters the 16-element result slices straight into their tile
     // positions and zero-fills the tile padding rows, so callers that need TILE tensors skip
@@ -59,6 +70,13 @@ struct operation_attributes_t {
     // value a UINT32 -> UINT16 typecast of the sentinel produces). Changes the writer kernel and
     // output spec, so it is part of the program hash.
     std::optional<tt::tt_metal::DataType> index_dtype{};
+    // Emit the 0xFFFFFFFF (0xFFFF under UINT16) sentinel index on lanes whose value is exact
+    // bf16 -inf (default, the op's original contract — sparse-attention consumers drop those
+    // lanes by sentinel). false: keep each -inf lane's REAL source position — the fused index
+    // stamp means every lane, -inf included, carries its true column; the sentinel pass simply
+    // overwrites it. The routed ttnn.topk path uses false for stock/torch index parity.
+    // Swaps a kernel define, so it is part of the program hash.
+    bool neginf_sentinel{true};
 };
 
 struct tensor_args_t {

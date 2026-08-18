@@ -363,6 +363,20 @@ ALWI void topk_xl_separate_indices_row_major_global(uint32_t idst) {
     MATH((llk_math_eltwise_unary_sfpu_topk_xl_separate_indices_row_major_global<K, false>(idst)));
 }
 
+// Segmented fusion: split one fused segment survivor in place, adding
+// seg_base (= segment_index * 32 * K, power-of-two aligned) to every decoded
+// index. Same init as the plain global split.
+template <uint32_t K>
+ALWI void topk_xl_separate_indices_row_major_global_base(uint32_t idst, uint32_t seg_base) {
+    MATH((llk_math_eltwise_unary_sfpu_topk_xl_separate_indices_row_major_global_base<K, false>(idst, seg_base)));
+}
+
+// Clears the SFPU index-tracking config bit before a segmented row re-enters
+// fused merges after an unfused cross-segment fold.
+ALWI void topk_xl_index_tracking_disable() {
+    MATH((llk_math_eltwise_unary_sfpu_topk_xl_index_tracking_disable()));
+}
+
 template <uint32_t K>
 ALWI void topk_xl_separate_indices_row_major_advance_chunk_base() {
     MATH((llk_math_eltwise_unary_sfpu_topk_xl_separate_indices_row_major_advance_chunk_base<K, false>()));

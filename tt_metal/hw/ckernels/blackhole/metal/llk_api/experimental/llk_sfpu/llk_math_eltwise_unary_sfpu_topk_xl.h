@@ -126,6 +126,23 @@ inline void llk_math_eltwise_unary_sfpu_topk_xl_separate_indices_row_major_globa
         ckernel::sfpu::_topk_xl_separate_indices_row_major_global_<K, APPROXIMATE>, dst_index, VectorMode::RC_custom);
 }
 
+// Segmented fusion: per-segment split with a runtime segment base OR'd into
+// the decoded index, and the SFPU index-tracking clear for fused re-entry.
+template <uint32_t K, bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_topk_xl_separate_indices_row_major_global_base(
+    uint dst_index, uint32_t seg_base) {
+    _llk_math_eltwise_unary_sfpu_params_(
+        ckernel::sfpu::_topk_xl_separate_indices_row_major_global_base_<K, APPROXIMATE>,
+        dst_index,
+        VectorMode::RC_custom,
+        seg_base);
+}
+
+inline void llk_math_eltwise_unary_sfpu_topk_xl_index_tracking_disable() {
+    TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
+    ckernel::sfpu::_topk_xl_index_tracking_disable_();
+}
+
 template <uint32_t K, bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_topk_xl_separate_indices_row_major_advance_chunk_base() {
     TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
