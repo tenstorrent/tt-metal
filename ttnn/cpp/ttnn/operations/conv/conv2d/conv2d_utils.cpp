@@ -1053,8 +1053,7 @@ core_count_and_size calculate_L1_usage_for_conv_op(
     // the DRAM auto-slicer can never find a valid config.
     const uint32_t weight_spatial_product = kernel_size[0] * kernel_size[1];
     const uint32_t effective_in_channels = (groups > 1) ? (in_channels_aligned / groups) : in_channels_aligned;
-    const ttnn::Shape weights_shape(
-        {1, 1, effective_in_channels * weight_spatial_product, output_channels_padded});
+    const ttnn::Shape weights_shape({1, 1, effective_in_channels * weight_spatial_product, output_channels_padded});
 
     const ParallelConfig input_parallel_config = _halo_input_memory_config.has_value() ? ParallelConfig{
             .grid = _halo_input_memory_config->shard_spec().value().grid,

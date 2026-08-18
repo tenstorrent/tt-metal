@@ -356,7 +356,8 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         filter_h);
 
     const bool enable_split_reader =
-        is_split_reader_supported(a.memory_config().memory_layout(), use_1d_depthwise_conv_kernels, act_block_h_ntiles) &&
+        is_split_reader_supported(
+            a.memory_config().memory_layout(), use_1d_depthwise_conv_kernels, act_block_h_ntiles) &&
         force_split_reader.value_or(is_split_reader_viable(
             a.memory_config().memory_layout(),
             act_block_h_ntiles,
@@ -1547,15 +1548,15 @@ tt::tt_metal::WorkloadDescriptor Conv2dShardedProgramFactory::create_workload_de
     // Mirror the program factory: the 1D depthwise kernels/arg layout are
     // height-sharded only; block-sharded 1D depthwise convs run the generic path,
     // so the reader-index metadata must follow the generic split-reader decision.
-    const bool use_1d_depthwise_conv_kernels =
-        is_conv_1d_depthwise_conv && !block_sharded;
+    const bool use_1d_depthwise_conv_kernels = is_conv_1d_depthwise_conv && !block_sharded;
 
     auto compute_kernel_config_args =
         get_compute_kernel_config_args(a.device()->arch(), operation_attributes.compute_kernel_config);
     const bool fp32_dest_acc_en = std::get<2>(compute_kernel_config_args);
 
     const bool enable_split_reader =
-        is_split_reader_supported(a.memory_config().memory_layout(), use_1d_depthwise_conv_kernels, act_block_h_ntiles) &&
+        is_split_reader_supported(
+            a.memory_config().memory_layout(), use_1d_depthwise_conv_kernels, act_block_h_ntiles) &&
         force_split_reader.value_or(is_split_reader_viable(
             a.memory_config().memory_layout(),
             act_block_h_ntiles,
