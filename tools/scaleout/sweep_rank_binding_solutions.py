@@ -1268,13 +1268,20 @@ def main(
         executor.reap(None, ",".join(parsed_hosts) if parsed_hosts else None)
         if recover_command and recover_command != "true":
             log.initial_reset()
-            executor.run(
+            reset = executor.run(
                 ["/bin/bash", "-c", recover_command],
                 log_path=logs_root / "_initial_recover.log",
                 timeout=None,
                 label="recover",
                 cmd_display=recover_command,
             )
+            # Don't sweep on hardware we've already classified as unrecoverable: if the initial reset failed
+            # every retry, abort before starting the producer / any tt-run.
+            if reset.status != "pass":
+                raise click.ClickException(
+                    f"Initial cluster recovery failed (recover rc={reset.returncode}) after {retries} attempt(s); "
+                    f"refusing to sweep on unrecoverable hardware. See {logs_root / '_initial_recover.log'}."
+                )
 
     # Start the streaming producer AFTER the reset (clean cluster). Clear any stale index first so the
     # consumer waits for THIS run's solutions. No producer in --solutions-dir mode (list already on disk).
@@ -1300,11 +1307,18 @@ def main(
         if producer.alive():
             log.line("■ stopping producer (sweep ending)")
             producer.stop()
-        elif producer_rc not in (None, 0) and not results:
-            # Producer exited non-zero having produced nothing (e.g. no valid topology solutions found).
-            raise click.ClickException(
-                f"Solution generation failed (generate_rank_bindings exit {producer_rc}); nothing swept."
-            )
+        elif producer_rc not in (None, 0):
+            # Producer exited non-zero on its OWN (a crash -- us stopping it leaves it alive, handled above).
+            # Generation is therefore incomplete, so this is an error even if some solutions were already
+            # swept -- UNLESS the user intentionally bounded the sweep (--limit / --stop-on-failure /
+            # --sweep-timeout), in which case an incomplete generation is expected and we just warn.
+            intentional = consumer.stopped_early or stop_on_failure or (limit is not None)
+            msg = f"Solution generation failed (generate_rank_bindings exit {producer_rc}); sweep incomplete"
+            if not results:
+                raise click.ClickException(msg + " (nothing swept).")
+            if not intentional:
+                raise click.ClickException(msg + f" ({len(results)} swept before the failure).")
+            log.line(f"■ WARNING: {msg}; kept {len(results)} swept (intentional early stop).")
 
     # 3. Report. Final solution set + index: the fixed list, or everything the producer streamed to disk.
     index = _read_index_safe(sol_dir) or {"solutions": []}
@@ -1331,6 +1345,13 @@ def main(
         raise click.ClickException(
             f"UNRECOVERABLE: hardware cannot recover with this command "
             f"(--recover-command failed after {retries} attempt(s)). Sweep aborted. See {report_path}."
+        )
+    # A sweep that ran NO workload must not report success (e.g. --select matched nothing, or streaming
+    # produced nothing) -- automation would read exit 0 as "passed". An intentional --sweep-timeout stop is
+    # exempt (it returns what it swept); a failed producer already raised above.
+    if not dry_run and not results and not consumer.stopped_early:
+        raise click.ClickException(
+            "No solutions were swept (empty --select match, or none generated); refusing to report success."
         )
     if not dry_run and (failed or timed_out):
         sys.exit(1)
