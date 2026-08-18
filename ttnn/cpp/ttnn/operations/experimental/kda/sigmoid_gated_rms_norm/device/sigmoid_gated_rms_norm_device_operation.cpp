@@ -58,11 +58,6 @@ void SigmoidGatedRmsNormOperation::validate_on_program_cache_miss(
         !attrs.compute_kernel_config.packer_l1_acc,
         "sigmoid_gated_rms_norm: packer_l1_acc=true is unsupported because the compute kernel does not accumulate "
         "through L1");
-    TT_FATAL(
-        attrs.compute_kernel_config.throttle_level ==
-            ttnn::operations::compute_throttle_utils::ThrottleLevel::NO_THROTTLE,
-        "sigmoid_gated_rms_norm: throttle_level must be NO_THROTTLE because the compute kernel does not implement "
-        "throttling");
 
     const auto& input_shape = in.input.logical_shape();
     const auto& gate_shape = in.gate.logical_shape();

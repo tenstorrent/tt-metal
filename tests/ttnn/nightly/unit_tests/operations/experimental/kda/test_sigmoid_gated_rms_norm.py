@@ -475,15 +475,8 @@ def test_sigmoid_gated_rms_norm_exact_math_changes_program_and_output(device: tt
             ),
             "packer_l1_acc=true is unsupported",
         ),
-        (
-            ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.HiFi4,
-                throttle_level=ttnn.ThrottleLevel.LEVEL_1,
-            ),
-            "throttle_level must be NO_THROTTLE",
-        ),
     ],
-    ids=["packer-l1-acc", "throttle"],
+    ids=["packer-l1-acc"],
 )
 def test_sigmoid_gated_rms_norm_rejects_unsupported_compute_config(
     device: ttnn.Device,
