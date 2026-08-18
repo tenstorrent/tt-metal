@@ -5,20 +5,22 @@
 #         "<Model>-<version>-<size> <unit under test> <accuracy|perf|determinism> <shape>"
 #         * Do NOT prefix with "Blaze - ": every job here is a Blaze job, so it carries no information.
 #         * Name the model the test actually runs, with version AND parameter count -- "GLM-5.2-744B",
-#           not "GLM"; "Kimi-K2.6-1T"/"Kimi-K2.7-1T"/"Kimi-K3-2.8T", not "Kimi". A job covering several
-#           models lists them in parentheses. Op-level jobs with no model (CCL, SDPA) name the op.
+#           not "GLM"; "Kimi-K2.6-1T"/"Kimi-K2.7-1T"/"Kimi-K3-2.8T", not "Kimi". Multi-model jobs
+#           follow the "&" rule below. Op-level jobs with no model (CCL, SDPA) name the op.
 #         * Tag what is being gated: "accuracy" (PCC/golden compare), "perf", or "determinism".
 #         * Chunked tests state total ISL and chunk size as <isl>@<chunk>, e.g. "code_debug 55k@5k".
 #         * One separator, one meaning -- a job whose name reads several ways is the bug this
 #           convention exists to prevent:
 #             "+"  the distinct things this one job gates, each carrying its own shape
 #                  -> "MoE accuracy 12.5k + perf 25k"
-#             ","  several shapes under a SINGLE tag; binds tighter than "+"
-#                  -> "MLA accuracy 100k, 128k"
+#             ","  peers sharing a qualifier; binds tighter than "+". Either direction:
+#                  several shapes under one tag, or several tags under one shape
+#                  -> "MLA accuracy 100k, 128k"      (two shapes, one tag)
+#                  -> "ring MLA chunked 55k@5k perf, accuracy, determinism"  (one shape, three tags)
 #             "&"  two models. At three or more the unit leads and the models move to a trailing
 #                  "(...)" list, so the unit under test is not buried behind the model list
 #                  -> "DeepSeek-V3-671B & Kimi-K2.6-1T MLA chunked accuracy 10k@5k"
-#                  -> "Ring joint SDPA perf + accuracy (WAN 2.2, DeepSeek-V3-671B, ...)"
+#                  -> "KV cache table accuracy (DeepSeek-V3-671B, Kimi-K2.6-1T, GLM-5.2-744B)"
 #             "/"  components of one pipeline, not a list of gated things
 #                  -> "disaggregated prefill runner/producer"
 #           Never leave a shape whose binding is ambiguous: "MoE accuracy + perf 25k" cannot say
@@ -275,7 +277,7 @@
   team: models
   sp_config: sc1
 
-- name: "DeepSeek-V3.2-671B sparse MLA accuracy + determinism (incl. chunked 10k@5k)"
+- name: "DeepSeek-V3.2-671B sparse MLA accuracy + determinism (incl. chunked 5k@1k)"
   cmd: |
     export DEEPSEEK_V3_HF_MODEL=/mnt/models/DeepSeek-R1-0528-fp8-4236a6af/
     export DEEPSEEK_V32_MLA_REF_CACHE=/tmp/deepseek_v32_mla_ref_cache
@@ -295,7 +297,7 @@
   team: models
   sp_config: sc1
 
-- name: "GLM-5.2-744B sparse MLA accuracy + determinism (incl. chunked 10k@5k)"
+- name: "GLM-5.2-744B sparse MLA accuracy + determinism (incl. chunked 5k@1k)"
   cmd: |
     export MESH_DEVICE=TG
     export GLM52_MLA_REF_CACHE=/mnt/models/deepseek-prefill-cache/glm_5_2_mla_ref_cache
@@ -390,7 +392,7 @@
   team: models
   sp_config: sc1
 
-- name: "Kimi-K3-2.8T MoE perf"
+- name: "Kimi-K3-2.8T MoE perf 5k"
   cmd: |
 
     mpirun --bind-to none --pernode --tag-output bash -lc '
@@ -473,10 +475,12 @@
   team: models
   sp_config: sc1
 
-# Ring joint SDPA math-utilization perf checks (1 WAN, 1 MLA-100k, 1 Kimi chunked ring_mla).
+# Ring joint SDPA gates, over ModelConfig shape presets on random tensors (not model runs):
+#   joint-attention perf -> wan2_2_1xGLX and mla_100k
+#   ring_mla chunked     -> kimi50k and kimi_k3 for perf; kimi_k3 for accuracy and determinism
 # Uses real-time device program records, so it runs on the plain build without ENABLE_TRACY.
 # sp/tp are auto-selected by MeshConfig.detect() on Galaxy (sp=8, tp=4).
-- name: "Ring joint SDPA perf + accuracy (WAN 2.2, DeepSeek-V3-671B, Kimi-K2.6-1T, Kimi-K3-2.8T)"
+- name: "Ring joint SDPA perf + ring MLA chunked 55k@5k perf, accuracy, determinism"
   # Run both perf checks unconditionally (so both report numbers) but fail the step if either
   # fails - the harness only propagates the last command's exit code, so aggregate it ourselves.
   cmd: |
