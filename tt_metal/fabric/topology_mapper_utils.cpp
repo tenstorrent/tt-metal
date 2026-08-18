@@ -150,8 +150,8 @@ std::optional<std::string> apply_pinning_groups(
 
     if (any_group_for_mesh && !any_group_applied) {
         return fmt::format(
-            "No pinned profile fits this placement for mesh {}: every pinning group's ASIC positions are absent "
-            "from the physical ASICs participating in this mesh",
+            "No pinned profile fits this placement for mesh {}: every pinning group's ASIC positions were not found "
+            "among the physical ASICs participating in this mesh",
             logical_mesh_id.get());
     }
 
