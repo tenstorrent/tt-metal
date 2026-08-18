@@ -48,7 +48,7 @@ void fused_sigmoid_with_bias_and_scale(
     cb_wait_front(cb_scratch, 1);
 
     tile_regs_acquire();
-    add_bcast_rows_init_short(cb_scratch, cb_bias);
+    add_bcast_rows_init(cb_scratch, cb_bias);
     add_tiles_bcast<BroadcastType::ROW>(cb_scratch, cb_bias, 0, 0, 0);
     sigmoid_tile_init();
     sigmoid_tile(0);
@@ -89,8 +89,7 @@ void kernel_main() {
     constexpr uint32_t eps_bits = get_compile_time_arg_val(11);
     constexpr uint32_t two_bits = get_compile_time_arg_val(12);
 
-    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_pre, cb_hidden, cb_collapsed);
-    binary_op_init_common(cb_pre_w, cb_pre_bias, cb_pre);
+    compute_kernel_hw_startup(cb_pre_w, cb_pre_bias, cb_pre);
 
     // One pass per token this core owns; the reader streams the per-token pre_w / post_w /
     // hidden tiles in the same order.
