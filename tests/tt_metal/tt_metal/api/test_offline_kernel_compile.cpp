@@ -14,6 +14,7 @@
 #include <variant>
 #include <vector>
 
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/offline_kernel_compile.hpp>
 #include <tt-metalium/experimental/mock_device/mock_device.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -22,6 +23,7 @@
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "device_fixture.hpp"
+#include "impl/context/metal_context.hpp"
 #include "jit_build/build.hpp"
 #include "llrt/rtoptions.hpp"
 #include "tt_metal/jit_build/build_cache_telemetry.hpp"
@@ -43,6 +45,17 @@ using CBCompileConfig = experimental::OfflineKernelCompileParams::CBCompileConfi
 // which a mock fixture forces to Mock) and skip the offline-compile tests until that path can build
 // (or locate) firmware for the simulator build_key.
 bool offline_compile_unsupported_under_simulator() { return llrt::RunTimeOptions{}.is_simulator_or_emulated(); }
+
+// CreateKernel injects ControlPlane::get_fabric_kernel_defines() (ROUTING_MODE,
+// FABRIC_1D_PKT_HDR_EXTENSION_WORDS, ...) into every data-movement and ethernet kernel whenever a
+// fabric config is active.
+// CompileKernelOffline cannot reproduce them: the values derive from live cluster topology (hop
+// counts feed the packet-header sizing) and it has no ControlPlane by construction.
+// TODO(#53160): emit fabric-define variants offline, or stop keying non-fabric kernels on fabric
+// defines, then drop this skip.
+bool offline_compile_unsupported_with_fabric_defines() {
+    return !MetalContext::instance().get_control_plane().get_fabric_kernel_defines().empty();
+}
 
 struct ScopedTempDir {
     explicit ScopedTempDir(const std::string& tag) {
@@ -249,6 +262,10 @@ TEST_F(AnyDispatchMeshDeviceFixture, RuntimePrecompiledHitLoadsWithoutJit) {
         GTEST_SKIP() << "CompileKernelOffline has no precompiled firmware for the simulator build_key "
                         "(multi-erisc disabled); skipping under TT_METAL_SIMULATOR.";
     }
+    if (offline_compile_unsupported_with_fabric_defines()) {
+        GTEST_SKIP() << "Fabric is active, so CreateKernel injects fabric defines that CompileKernelOffline "
+                        "cannot reproduce; the offline bucket is keyed on a different compile hash.";
+    }
     auto* device = this->devices_.at(0)->get_devices().at(0);
 
     ScopedTempDir precompiled_root("tt_metal_precompiled_seed_hit");
@@ -267,6 +284,10 @@ TEST_F(AnyDispatchMeshDeviceFixture, RuntimePrecompiledHitWithCbMetadataLoadsWit
     if (offline_compile_unsupported_under_simulator()) {
         GTEST_SKIP() << "CompileKernelOffline has no precompiled firmware for the simulator build_key "
                         "(multi-erisc disabled); skipping under TT_METAL_SIMULATOR.";
+    }
+    if (offline_compile_unsupported_with_fabric_defines()) {
+        GTEST_SKIP() << "Fabric is active, so CreateKernel injects fabric defines that CompileKernelOffline "
+                        "cannot reproduce; the offline bucket is keyed on a different compile hash.";
     }
     // Verifies the CBCompileConfigsFromProgram + CompileKernelOffline path produces a
     // bucket whose hash inputs (build_key + hlk_desc CB metadata + kernel compute hash)
