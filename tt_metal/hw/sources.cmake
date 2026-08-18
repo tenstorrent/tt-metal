@@ -92,6 +92,7 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/eltwise_unary/sfpu_int_sum.h
     inc/api/compute/eltwise_unary/sfpu_split_includes.h
     inc/api/compute/eltwise_unary/shift.h
+    inc/api/compute/eltwise_unary/softcap.h
     inc/api/compute/eltwise_unary/softplus.h
     inc/api/compute/eltwise_unary/sqrt.h
     inc/api/compute/eltwise_unary/tanh_derivative.h
@@ -104,6 +105,7 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/experimental/eltwise_mul_scalar.h
     inc/api/compute/experimental/fast_untilize.h
     inc/api/compute/experimental/mul_reduce_scalar.h
+    inc/api/compute/experimental/pack_block_uninit.h
     inc/api/compute/experimental/rmsnorm.h
     inc/api/compute/experimental/rope_sfpu.h
     inc/api/compute/experimental/semaphore.h
@@ -129,6 +131,7 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/sentinel/compute_kernel_sentinel.h
     inc/api/compute/sentinel/sentinel_core.h
     inc/api/compute/sentinel/testing_spy.h
+    inc/api/compute/situ_glu.h
     inc/api/compute/softmax.h
     inc/api/compute/src_order.h
     inc/api/compute/sub_int_sfpu.h
