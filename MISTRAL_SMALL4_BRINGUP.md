@@ -396,6 +396,52 @@ than assuming the load worked.
   `_compare_intermediate_pcc`'s value for "missing from TT intermediates" or a raised exception.
   Treat it as no coverage, not as a bad score.
 
+## Prefill throughput — what this model actually does
+
+**Do not confuse the demo's generation rate with prefill throughput.** The demo generates ~8 tok/s
+because it re-prefills a whole window per token; prefill throughput is `window / time per forward`,
+and it is a different number by three orders of magnitude. Measured traced, with a **full** window of
+real tokens (`actual_isl == window`), every row verified to sample the same token as eager:
+
+| window | eager | traced | **prefill tok/s** | speedup |
+|---|---|---|---|---|
+| 512 | 1967 ms | 83.9 ms | 6,105 | 23.5x |
+| 1024 | 2057 ms | 90.8 ms | **11,276** | 22.7x |
+| 2048 | 1681 ms | 117.7 ms | **17,403** | 14.3x |
+| 4096 | 1696 ms | 167.3 ms | **24,487** | 10.1x |
+| 5120 (production 5k) | 1990 ms | 195.4 ms | **26,202** | 10.2x |
+| 25600 (production 25k) | 1900 ms | 766.6 ms | **33,395** | 2.5x |
+
+Reproduce with `40_prefill_throughput.sh` and `41_long_isl.sh`. Untraced, the same rows are
+**260–2,415 tok/s**, so the trace work is worth ~10x on this metric, not a few percent.
+
+**Read the speedup column — it is the cost model in one place.** Host dispatch is ~1.1–1.9 s at
+*every* window, because the op COUNT is fixed (2316 per forward) and only the work per op grows;
+device time meanwhile goes 84 ms -> 767 ms. So trace buys 23x at 512, where host dominates, and only
+2.5x at 25k, where the device finally does. Anyone tuning this should know which regime they are in
+before optimising.
+
+Fitting those four points gives **≈ 67 ms fixed + ~24.5 µs per window token**. That single line
+explains most of what is confusing about this model's performance:
+
+- Throughput *rises* with window because the 67 ms of fixed per-layer cost (CCL, MoE plumbing, small
+  ops) amortizes over more tokens. It is the same fixed cost that makes the generation demo look slow.
+- Per-*token* generation cost barely moves with window (512 -> 1024 is +19%) for the same reason —
+  you are mostly paying the fixed part either way.
+- Extrapolating is unsafe past ~4k: prefill attention is quadratic while this fit is linear, so the
+  fit overstates long-context throughput. Measure, do not extrapolate.
+
+**Comparison to the Gemma4 number (11,058 tok/s on this box):** we pass it at a 1024 window and
+reach ~3x at 25k — but it is not apples to apples. That measurement was a **256k-context**
+prefill of a *dense* Gemma4, where amortization is maximal; ours is single-shot Mistral 119B MoE at
+<=4k. Treat "we beat it" as a sanity check that this stack is in the right regime, not as a win.
+
+**A load-bearing caveat about full occupancy:** window 512 costs 83.9 ms with all 512 tokens real
+versus 80.1 ms with only 96 real — **+4.7% for 8x the routed tokens**. Benchmarks that leave the
+window mostly padded therefore measure something close to the real thing here, but that is a property
+of this fixed-cost-dominated regime, not a general licence. `profile_prefill.py` fills the window on
+purpose.
+
 ## Interactive demo — chatting with the model today
 
 `demo/serve_mistral4_interactive.py` serves the 36-layer model with real weights behind an
