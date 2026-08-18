@@ -60,29 +60,18 @@ GATE_MODELS = {
     "dsv4_flash": DeepSeekV4FlashConfig,
 }
 
-# Per-chip sequence every gate case runs at. Must be passed at construction: TtMoEGateConfig re-keys
-# its tuned matmul configs by sp_dim, so assigning it afterwards silently drops to default tiling.
+# Per-chip sequence every gate case runs at. Must be passed at construction: TtMoEGateConfig keeps
+# only the tuned matmul configs keyed to sp_dim, so assigning it afterwards drops to default tiling.
 GATE_SP_DIM = 640
 
 
 def _gate_config(gate_model: str) -> TtMoEGateConfig:
-    """Gate config at GATE_SP_DIM, minus tuned matmul entries authored for a different depth.
+    """Gate config at GATE_SP_DIM.
 
-    A tuned entry encodes its shard height in per_core_M, but TtMoEGateConfig re-keys every entry to
-    the sp_dim in use, so one tuned at 4096 claims to apply at 640 while still carrying per_core_M=2
-    -- and the matmul rejects it outright: "per_core_M (2) must equal shard_shape[0] (32) / in0_tile
-    height (32)". Entries that already match this depth are kept (K3's is authored at 640); the rest
-    are dropped so TTNN picks its default tiling, which is what the untuned models do here anyway.
+    The depth must be passed at construction: TtMoEGateConfig drops every tuned matmul entry keyed to
+    another depth, so assigning sp_dim afterwards leaves the lookup on TTNN's default tiling.
     """
-    config = TtMoEGateConfig.from_model_cfg(GATE_MODELS[gate_model], sp_dim=GATE_SP_DIM)
-    shard_height = (config.sp_dim + config.num_cores - 1) // config.num_cores
-    shard_height = ((shard_height + 31) // 32) * 32
-    config.mm_configs = {
-        key: value
-        for key, value in config.mm_configs.items()
-        if not isinstance(key, tuple) or value.per_core_M == shard_height // 32
-    }
-    return config
+    return TtMoEGateConfig.from_model_cfg(GATE_MODELS[gate_model], sp_dim=GATE_SP_DIM)
 
 
 # First MoE layer in DeepSeek-V3 (metadata moe_layer_offset == 3); the golden

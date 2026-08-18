@@ -56,7 +56,7 @@ class GateComputeMode(Enum):
 
 
 # Per-chip prefill sequence the production deployment runs at, and the depth the MoE/gate tests
-# drive. Entries in mm_configs keyed at this depth override the any-depth (None) entries there.
+# drive. Every tuned matmul entry is keyed to it; other depths fall back to TTNN's default tiling.
 GATE_PRODUCTION_SP_DIM = 640
 
 # GPT-OSS is the one model whose per-device gate width is not tile-aligned: EMB_SIZE 2880 over TP 4
@@ -85,46 +85,14 @@ class TtMoEGateConfig:
     mm_configs: dict = field(
         default_factory=lambda: {
             # Keyed by (sp_dim, per_device_emb_dim, n_routed_experts); forward() looks up the tuple.
-            # sp_dim None means "any depth": __post_init__ re-keys it to the depth in use. An entry
-            # authored at a real depth overrides the None entry at that depth (see __post_init__).
-            # per_core_N = n_routed_experts / 32 (tile width). Missing key → TTNN auto-picks.
+            # An entry applies only at the depth it is keyed to; a missing key → TTNN auto-picks.
+            # per_core_N = n_routed_experts / 32 (tile width).
             #
             # per_core_M is not free. It must equal max(1, ceil(sp_dim / (32 * num_cores))): below
             # that the 1D matmul needs more blocks than the grid has cores ("num_blocks_total <=
             # num_cores"), and for a height-sharded in0 it must also equal shard_shape[0] / 32. Both
             # rules give 1 up to 3520 tokens/chip and 2 at 4096. out_block_h follows it.
             #
-            # The None entries below were tuned at 4096 and carry per_core_M=2, which is why 640 --
-            # the production depth -- needs its own entries: at 640 per_core_M=2 splits 20 M-tiles
-            # over 10 cores instead of 20.
-            (None, DeepSeekV3Config.EMB_SIZE // 4, DeepSeekV3Config.NUM_ROUTED_EXPERTS): (
-                ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                    compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
-                    in0_block_w=56,
-                    out_subblock_h=1,
-                    out_subblock_w=4,
-                    out_block_h=2,
-                    out_block_w=4,
-                    per_core_M=2,
-                    per_core_N=8,
-                    fuse_batch=True,
-                    mcast_in0=False,
-                )
-            ),
-            (None, KimiK26Config.EMB_SIZE // 4, KimiK26Config.NUM_ROUTED_EXPERTS): (
-                ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                    compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
-                    in0_block_w=56,
-                    out_subblock_h=1,
-                    out_subblock_w=4,
-                    out_block_h=2,
-                    out_block_w=4,
-                    per_core_M=2,
-                    per_core_N=12,
-                    fuse_batch=True,
-                    mcast_in0=False,
-                )
-            ),
             # 640 tokens/chip: 20 M-tiles, so per_core_M=1 spreads them over 20 cores rather than 10.
             #
             # The other three block sizes are measured, not derived, and none of them wants the value
@@ -404,20 +372,15 @@ class TtMoEGateConfig:
                 f"the op-side CB work that makes it true."
             )
 
-        # Resolve mm_configs against the depth actually in use, so _device_matmul's lookup
-        # (sp_dim, per_device_emb_dim, n_routed_experts) hits a tuned entry instead of silently
-        # falling back to TTNN's default tiling:
-        #   sp_dim None -> applies at whatever depth is in use (the old placeholder behaviour)
-        #   sp_dim int  -> applies only at that depth, and wins there over the any-depth entry
-        # setdefault is what enforces that precedence: a re-keyed any-depth entry never displaces a
-        # depth-specific one, whichever order the two were authored in.
+        # Drop the tuned entries authored at other depths, so _device_matmul's lookup
+        # (sp_dim, per_device_emb_dim, n_routed_experts) either hits an entry tuned at the depth in
+        # use or misses and falls back to TTNN's default tiling. per_core_M encodes the depth, so a
+        # foreign-depth entry is not merely mistuned -- the matmul rejects it against a sharded in0.
         def resolve(configs):
             resolved = {}
             for key, value in configs.items():
                 if not isinstance(key, tuple):
                     resolved[key] = value
-                elif key[0] is None:
-                    resolved.setdefault((self.sp_dim, *key[1:]), value)
                 elif key[0] == self.sp_dim:
                     resolved[key] = value
             return resolved
