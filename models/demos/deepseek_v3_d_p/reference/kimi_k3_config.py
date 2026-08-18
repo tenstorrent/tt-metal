@@ -103,8 +103,11 @@ class KimiK3Config:
     ATTN_RES_BLOCK_SIZE = 12
 
     LATENT_MOE_USE_NORM = True
-    # Must match SituGluConfigKimi, which the fused routed-expert kernel bakes in (#51351).
-    # Outside that kernel (shared expert, dense FFN) the device path still runs SiLU.
+    # The routed experts run the checkpoint's SiTU-GLU on device (#51351). Spelled as a string
+    # because this config is torch-only; ROUTED_EXPERT_ACTIVATION_BY_NAME maps it onto the kernel
+    # enum. Routed only: the shared expert and the dense FFN have no SiTU kernel and stay on SiLU.
+    ROUTED_EXPERT_ACTIVATION = "situ"
+    # Must match SituGluConfigKimi, which the fused routed-expert kernel bakes in.
     ACTIVATION_SITU_BETA = 4.0
     ACTIVATION_SITU_LINEAR_BETA = 25.0
 

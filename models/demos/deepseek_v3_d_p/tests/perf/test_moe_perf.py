@@ -107,9 +107,8 @@ _CMD_K3_8X4 = f"pytest {_K3_TEST_PATH} -k 'fabric2d-mesh-8x4 and kimi_k3-5k-perf
 @pytest.mark.timeout(0)
 def test_kimi_k3_moe_perf_galaxy():
     """
-    Measures the SiLU path, not the checkpoint's SiTU-GLU (#51335), so this baseline moves when that
-    kernel lands. MoE_START/MoE_END bracket the forward only -- the constructor's one-time weight
-    tilize/typecast is a large share of wall time at 896 experts, but is not per-token cost.
+    MoE_START/MoE_END bracket the forward only -- the constructor's one-time weight tilize/typecast
+    is a large share of wall time at 896 experts, but is not per-token cost.
     """
     if not _is_galaxy_env():
         pytest.skip("This test requires 8x4 mesh - galaxy. (set MESH_DEVICE=TG)")

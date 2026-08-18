@@ -30,6 +30,7 @@ from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import ACTIVATION_SILU, ACTIVATION_SITU
 from models.demos.deepseek_v3_d_p.reference.tt.moe.moe import TorchMoe
 from models.demos.deepseek_v3_d_p.tests.reference_runners import run_reference_moe
+from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import ROUTED_EXPERT_ACTIVATION_BY_NAME
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     ExpertMapping,
     compute_constants,
@@ -127,9 +128,10 @@ def run_model(
     torch reference. The shared expert always runs SiLU: no SiTU kernel exists outside the
     routed-expert op, so both sides must stay on SiLU there for the comparison to mean anything.
     """
-    torch_routed_activation = _TORCH_ROUTED_ACTIVATION.get(routed_activation)
-    if torch_routed_activation is None:
+    if routed_activation not in _TORCH_ROUTED_ACTIVATION or routed_activation not in _UPSTREAM_ACT:
         raise ValueError(f"no torch reference for {routed_activation}; supported: {list(_TORCH_ROUTED_ACTIVATION)}")
+    torch_routed_activation = _TORCH_ROUTED_ACTIVATION[routed_activation]
+    upstream_activation = _UPSTREAM_ACT[routed_activation]
 
     # Scoped: only the linear-8 / 64-expert / HOST_ALL / pcc-check case OOMs without this.
     # Cached all-gather semaphores get placed at the wrong offset for that specific config.
@@ -650,8 +652,8 @@ def run_model(
         latent_weights=latent_weights,
         x=x,
         # Same routed/shared split the device runs; see run_reference_moe.
-        hidden_act=_UPSTREAM_ACT[routed_activation],
-        shared_hidden_act="silu" if _UPSTREAM_ACT[routed_activation] is not None else None,
+        hidden_act=upstream_activation,
+        shared_hidden_act="silu" if upstream_activation is not None else None,
     )
     if ref_out is not None and tt_output is not None:
         logger.info("Running upstream MoE reference")
@@ -1026,5 +1028,5 @@ def test_kimi_k3_moe(
         latent_use_norm=KimiK3Config.LATENT_MOE_USE_NORM,
         rms_norm_eps=KimiK3Config.RMS_NORM_EPS,
         final_output_pcc=0.965,
-        routed_activation=ttnn.RoutedExpertActivation.SituGlu,
+        routed_activation=ROUTED_EXPERT_ACTIVATION_BY_NAME[KimiK3Config.ROUTED_EXPERT_ACTIVATION],
     )
