@@ -320,13 +320,15 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     reader_ct.push_back(fused_stream_k ? 1u : 0u);        // fused: stream k (no mcast) vs whole mcast block
     reader_ct.push_back(args.synthesize_gate ? 1u : 0u);  // fill cb_w with gate_scale in L1 vs read DRAM
     reader_ct.push_back(gate_scale_bits);                 // bf16 pair, the in-kernel gate fill value
+    // invP KEY remap: keyed on key_stripes()/key_stripe_chunk(), NOT block_cyclic->{sp, chunk_local} -- under KV
+    // dedup the keys are striped finer than the queries, and the causal geometry above stays on the query pair.
     const auto block_cyclic_ct = [&args, Tt]() {
         std::array<uint32_t, 5> ct{0, 1, 1, 0, 0};
         if (!args.has_block_cyclic()) {
             return ct;
         }
-        const uint32_t sp = args.block_cyclic->sp;
-        const uint32_t chunk_local = args.block_cyclic->chunk_local / tt::constants::TILE_WIDTH;
+        const uint32_t sp = args.key_stripes();
+        const uint32_t chunk_local = args.key_stripe_chunk() / tt::constants::TILE_WIDTH;
         ct = {
             1,
             chunk_local,

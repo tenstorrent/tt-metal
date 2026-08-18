@@ -89,6 +89,10 @@ void bind_indexer_score(nb::module_& mod) {
                 linearization over all devices (linear-approximate under a mid-slab
                 start); seq_shard_axes=[sp, tp] names both axes, giving the rotation-exact
                 2D geometry (see seq_shard_axes above).
+            block_cyclic_tp_sharded: optional bool (default False). KV dedup: the K cache is striped
+                across ALL sp*tp devices (linear chip = sp_coord*tp + tp_coord), so only the invP key
+                remap moves to (sp*tp, block_cyclic_chunk_local/tp) -- the causal geometry is unchanged.
+                Needs block_cyclic_chunk_local divisible by tp with a tile-aligned quotient.
 
         Returns: score [B, 1, Sq, T] bf16 row-major; future/pad columns -inf.
         )doc",
@@ -104,7 +108,8 @@ void bind_indexer_score(nb::module_& mod) {
         nb::arg("kv_len") = std::nullopt,
         nb::arg("seq_shard_axes") = std::nullopt,
         nb::arg("block_cyclic_sp_axis") = std::nullopt,
-        nb::arg("block_cyclic_chunk_local") = std::nullopt);
+        nb::arg("block_cyclic_chunk_local") = std::nullopt,
+        nb::arg("block_cyclic_tp_sharded") = false);
 
     ttnn::bind_function<"indexer_score_msa", "ttnn.experimental.">(
         mod,
