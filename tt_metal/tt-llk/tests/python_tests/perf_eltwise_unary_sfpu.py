@@ -358,6 +358,15 @@ def test_perf_unary_max_min_fresh_cpp(
         MathOperation.Tanh,
         MathOperation.TanhDerivativeLut,
         MathOperation.Silu,
+        # Batch 2 (Lane BR): remaining causal-tier lifts.
+        MathOperation.Fmod,
+        MathOperation.Remainder,
+        MathOperation.Xielu,
+        MathOperation.UnaryPower,
+        MathOperation.Expm1,
+        MathOperation.Log,
+        MathOperation.Sqrt,
+        MathOperation.Rsqrt,
     ],
     fresh_cpp_impl=[0, 1],
 )

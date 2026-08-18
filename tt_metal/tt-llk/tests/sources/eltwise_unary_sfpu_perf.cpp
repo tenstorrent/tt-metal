@@ -335,6 +335,80 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         {
                             SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_silu_fresh_cpp, (ITERATIONS), block_tile, VectorMode::None);
                         }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::fmod)
+                        {
+                            SFPU_UNARY_CALL(
+                                DST_SYNC_MODE,
+                                is_fp32_dest_acc_en,
+                                calculate_fmod_fresh_cpp,
+                                (ITERATIONS),
+                                block_tile,
+                                VectorMode::None,
+                                ckernel::sfpu::FRESH_FMOD_DIVISOR,
+                                ckernel::sfpu::FRESH_FMOD_DIVISOR_RECIP);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::remainder)
+                        {
+                            SFPU_UNARY_CALL(
+                                DST_SYNC_MODE,
+                                is_fp32_dest_acc_en,
+                                calculate_remainder_fresh_cpp,
+                                (ITERATIONS),
+                                block_tile,
+                                VectorMode::None,
+                                ckernel::sfpu::FRESH_FMOD_DIVISOR,
+                                ckernel::sfpu::FRESH_FMOD_DIVISOR_RECIP);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::log)
+                        {
+                            SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_log_fresh_cpp, (ITERATIONS), block_tile, VectorMode::None);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::expm1)
+                        {
+                            static_assert(
+                                FRESH_CPP_IMPL != 1 || SFPU_UNARY_OPERATION != SfpuType::expm1 || (!APPROX_MODE && !is_fp32_dest_acc_en),
+                                "fresh expm1 selector supports only non-approx, bf16 dest");
+                            SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_expm1_fresh_cpp, (ITERATIONS), block_tile, VectorMode::None);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && (SFPU_UNARY_OPERATION == SfpuType::sqrt || SFPU_UNARY_OPERATION == SfpuType::rsqrt))
+                        {
+                            static_assert(
+                                FRESH_CPP_IMPL != 1 || (SFPU_UNARY_OPERATION != SfpuType::sqrt && SFPU_UNARY_OPERATION != SfpuType::rsqrt) ||
+                                    (!APPROX_MODE && !is_fp32_dest_acc_en),
+                                "fresh sqrt/rsqrt selectors support only non-approx, bf16 dest");
+                            constexpr bool is_reciprocal = SFPU_UNARY_OPERATION == SfpuType::rsqrt;
+                            SFPU_UNARY_CALL(
+                                DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_sqrt_rsqrt_fresh_cpp, (is_reciprocal, ITERATIONS), block_tile, VectorMode::None);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::power)
+                        {
+                            static_assert(
+                                FRESH_CPP_IMPL != 1 || SFPU_UNARY_OPERATION != SfpuType::power || (!APPROX_MODE && !is_fp32_dest_acc_en),
+                                "fresh unary power selector supports only non-approx, bf16 dest");
+                            SFPU_UNARY_CALL(
+                                DST_SYNC_MODE,
+                                is_fp32_dest_acc_en,
+                                calculate_unary_power_fresh_cpp,
+                                (ITERATIONS),
+                                block_tile,
+                                VectorMode::None,
+                                ckernel::sfpu::FRESH_POWER_EXPONENT);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::xielu)
+                        {
+                            static_assert(
+                                FRESH_CPP_IMPL != 1 || SFPU_UNARY_OPERATION != SfpuType::xielu || (!APPROX_MODE && !is_fp32_dest_acc_en),
+                                "fresh xielu selector supports only non-approx, bf16 dest");
+                            SFPU_UNARY_CALL(
+                                DST_SYNC_MODE,
+                                is_fp32_dest_acc_en,
+                                calculate_xielu_fresh_cpp,
+                                (ITERATIONS),
+                                block_tile,
+                                VectorMode::None,
+                                ckernel::sfpu::FRESH_XIELU_ALPHA,
+                                ckernel::sfpu::FRESH_XIELU_ALPHA);
+                        }
                         else
                         {
                             test_utils::call_unary_sfpu_operation<
@@ -478,6 +552,80 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::silu)
                         {
                             SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_silu_fresh_cpp, (ITERATIONS), block_tile, VectorMode::None);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::fmod)
+                        {
+                            SFPU_UNARY_CALL(
+                                DST_SYNC_MODE,
+                                is_fp32_dest_acc_en,
+                                calculate_fmod_fresh_cpp,
+                                (ITERATIONS),
+                                block_tile,
+                                VectorMode::None,
+                                ckernel::sfpu::FRESH_FMOD_DIVISOR,
+                                ckernel::sfpu::FRESH_FMOD_DIVISOR_RECIP);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::remainder)
+                        {
+                            SFPU_UNARY_CALL(
+                                DST_SYNC_MODE,
+                                is_fp32_dest_acc_en,
+                                calculate_remainder_fresh_cpp,
+                                (ITERATIONS),
+                                block_tile,
+                                VectorMode::None,
+                                ckernel::sfpu::FRESH_FMOD_DIVISOR,
+                                ckernel::sfpu::FRESH_FMOD_DIVISOR_RECIP);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::log)
+                        {
+                            SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_log_fresh_cpp, (ITERATIONS), block_tile, VectorMode::None);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::expm1)
+                        {
+                            static_assert(
+                                FRESH_CPP_IMPL != 1 || SFPU_UNARY_OPERATION != SfpuType::expm1 || (!APPROX_MODE && !is_fp32_dest_acc_en),
+                                "fresh expm1 selector supports only non-approx, bf16 dest");
+                            SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_expm1_fresh_cpp, (ITERATIONS), block_tile, VectorMode::None);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && (SFPU_UNARY_OPERATION == SfpuType::sqrt || SFPU_UNARY_OPERATION == SfpuType::rsqrt))
+                        {
+                            static_assert(
+                                FRESH_CPP_IMPL != 1 || (SFPU_UNARY_OPERATION != SfpuType::sqrt && SFPU_UNARY_OPERATION != SfpuType::rsqrt) ||
+                                    (!APPROX_MODE && !is_fp32_dest_acc_en),
+                                "fresh sqrt/rsqrt selectors support only non-approx, bf16 dest");
+                            constexpr bool is_reciprocal = SFPU_UNARY_OPERATION == SfpuType::rsqrt;
+                            SFPU_UNARY_CALL(
+                                DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_sqrt_rsqrt_fresh_cpp, (is_reciprocal, ITERATIONS), block_tile, VectorMode::None);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::power)
+                        {
+                            static_assert(
+                                FRESH_CPP_IMPL != 1 || SFPU_UNARY_OPERATION != SfpuType::power || (!APPROX_MODE && !is_fp32_dest_acc_en),
+                                "fresh unary power selector supports only non-approx, bf16 dest");
+                            SFPU_UNARY_CALL(
+                                DST_SYNC_MODE,
+                                is_fp32_dest_acc_en,
+                                calculate_unary_power_fresh_cpp,
+                                (ITERATIONS),
+                                block_tile,
+                                VectorMode::None,
+                                ckernel::sfpu::FRESH_POWER_EXPONENT);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::xielu)
+                        {
+                            static_assert(
+                                FRESH_CPP_IMPL != 1 || SFPU_UNARY_OPERATION != SfpuType::xielu || (!APPROX_MODE && !is_fp32_dest_acc_en),
+                                "fresh xielu selector supports only non-approx, bf16 dest");
+                            SFPU_UNARY_CALL(
+                                DST_SYNC_MODE,
+                                is_fp32_dest_acc_en,
+                                calculate_xielu_fresh_cpp,
+                                (ITERATIONS),
+                                block_tile,
+                                VectorMode::None,
+                                ckernel::sfpu::FRESH_XIELU_ALPHA,
+                                ckernel::sfpu::FRESH_XIELU_ALPHA);
                         }
                         else
                         {

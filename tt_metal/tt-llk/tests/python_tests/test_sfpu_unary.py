@@ -1270,6 +1270,56 @@ def test_silu_fresh_cpp(fresh_cpp_impl):
     )
 
 
+# Batch 2 (Lane BR): one shared dedicated corr family for the remaining
+# causal-tier lifts.  Formats/dest_acc mirror each op's measured sweep-row
+# corr leg; golden and tolerance are the op's own (same machinery as the
+# swept production node).
+_CAUSAL_LIFT_B2_F32_OPS = [
+    MathOperation.Fmod,
+    MathOperation.Remainder,
+    MathOperation.Xielu,
+    MathOperation.UnaryPower,
+    MathOperation.Expm1,
+]
+_CAUSAL_LIFT_B2_F16B_OPS = [
+    MathOperation.Log,
+    MathOperation.Sqrt,
+    MathOperation.Rsqrt,
+]
+
+
+@pytest.mark.parametrize("fresh_cpp_impl", [0, 1], ids=["production", "fresh_cpp"])
+@pytest.mark.parametrize(
+    "mathop",
+    _CAUSAL_LIFT_B2_F32_OPS + _CAUSAL_LIFT_B2_F16B_OPS,
+    ids=lambda m: m.name,
+)
+def test_causal_lift_fresh_cpp(mathop, fresh_cpp_impl):
+    """A/B the batch-2 fresh semantic bodies (fresh_cpp_operations.h: same
+    golden-math algorithm as the production kernel, every constant a plain
+    local, no programmed constant registers / builtin-MAD pins / exponent-
+    shift strength reductions) against the hand-shaped production kernels
+    with identical inputs, golden, and tolerance."""
+    fmt = (
+        DataFormat.Float32
+        if mathop in _CAUSAL_LIFT_B2_F32_OPS
+        else DataFormat.Float16_b
+    )
+    custom_atol, custom_rtol = CUSTOM_TOLERANCES.get(mathop, (None, None))
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        InputOutputFormat(fmt, fmt),
+        DestAccumulation.No,
+        ApproximationMode.No,
+        mathop,
+        FastMode.No,
+        [64, 64],
+        custom_atol=custom_atol,
+        custom_rtol=custom_rtol,
+        fresh_cpp_impl=fresh_cpp_impl,
+    )
+
+
 @pytest.mark.parametrize("reciprocal_impl", [0, 1], ids=["production", "semantic"])
 @pytest.mark.parametrize(
     "formats,dest_acc",

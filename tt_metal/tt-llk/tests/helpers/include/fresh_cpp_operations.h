@@ -425,6 +425,16 @@ inline void calculate_addcmul_fresh_cpp(
 constexpr float FRESH_CLAMP_LO = -1.0f;
 constexpr float FRESH_CLAMP_HI = 1.0f;
 
+// Batch-2 fixed dispatch scalars, shared with the golden and identical to the
+// values the production dispatch sends (sfpu_operations.h / golden_generators
+// _FMOD_DIVISOR/_REMAINDER_DIVISOR = 2.0, _UNARY_POWER_EXP = 2.0,
+// _XIELU_ALPHA_P/_XIELU_ALPHA_N = 1.0).  Both legs must always receive
+// identical values.
+constexpr float FRESH_FMOD_DIVISOR           = 2.0f;
+constexpr float FRESH_FMOD_DIVISOR_RECIP     = 0.5f;
+constexpr std::uint32_t FRESH_POWER_EXPONENT = 0x40000000u; // 2.0f
+constexpr std::uint32_t FRESH_XIELU_ALPHA    = 0x3f800000u; // 1.0f
+
 // Ceil (production: raw-TTI _ceil_body_ over l_reg-pinned _trunc_body_,
 // tt_llk_blackhole ckernel_sfpu_rounding_ops.h).  Semantic statement: round
 // to nearest via the 2^23 mantissa-shift (the clean idiom the same file's
@@ -650,6 +660,442 @@ __attribute__((noinline)) void calculate_left_shift_fresh_cpp()
             sfpi::dst_reg++;
         }
         ::_llk_math_eltwise_sfpu_inc_dst_face_addr_();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Lane BR causal-tier lift, batch 2.  Same doctrine as batch 1: each body
+// states the production kernel's OWN algorithm (identical golden math
+// constants) in plain row-at-a-time typed C++ — every constant a local, no
+// programmed constant registers, no builtin MAD pinning, no hand interleave,
+// no exponent-shift strength reductions where a plain statement exists.
+// ---------------------------------------------------------------------------
+
+// Shared: round-to-nearest integer and its int value via the 1.5*2^23
+// rounding-bias identity (|z| < 2^22; golden math, the same identity the
+// production expm1/exp kernels use through raw bit reads).
+sfpi_inline sfpi::vFloat fresh_round_nearest(const sfpi::vFloat z, sfpi::vInt& k_int)
+{
+    constexpr float ROUNDING_BIAS = 12582912.0f; // 1.5 * 2^23
+    const sfpi::vFloat t          = z + ROUNDING_BIAS;
+    k_int                         = sfpi::as<sfpi::vInt>(t) - sfpi::as<sfpi::vInt>(sfpi::vFloat(ROUNDING_BIAS));
+    return t - ROUNDING_BIAS;
+}
+
+// Shared: truncate-toward-zero via round-nearest + downward fixup on the
+// magnitude (exact for every finite input; pass-through for |v| >= 2^23,
+// inf, NaN — the same contract as the production kernels' exponent-shift
+// truncation).
+sfpi_inline sfpi::vFloat fresh_trunc_magnitude(const sfpi::vFloat v)
+{
+    constexpr float MANTISSA_SHIFT = 8388608.0f; // 2^23
+    sfpi::vFloat r                 = v;
+    sfpi::vFloat t                 = v + MANTISSA_SHIFT;
+    t                              = t - MANTISSA_SHIFT;
+    v_if (sfpi::exexp(v) < 23)
+    {
+        r = t;
+    }
+    v_endif;
+    // Nearest may round up; truncation of a non-negative value never does.
+    v_if (r > v)
+    {
+        r = r - 1.0f;
+    }
+    v_endif;
+    return r;
+}
+
+// fmod / remainder core (production: metal ckernel_sfpu_fmod.h /
+// ckernel_sfpu_remainder.h — divisor and reciprocal smuggled through
+// vConstFloatPrgm0/1 by init, exponent-shift truncation, unroll-0 pins).
+// Same algorithm: |v| minus trunc(|v|*recip)*s, the fixed residual mop-up,
+// and the |v|==s zero snap; divisor/recip are the golden's fixed dispatch
+// constants (2.0, 0.5) as plain locals.
+sfpi_inline sfpi::vFloat fresh_fmod_core(const sfpi::vFloat v_mag, const sfpi::vFloat s, const sfpi::vFloat recip)
+{
+    sfpi::vFloat v        = v_mag;
+    sfpi::vFloat quotient = fresh_trunc_magnitude(v * recip);
+    v                     = v - quotient * s;
+
+    // Residual mop-up (production-identical iteration count; value-bearing).
+    constexpr int MOP_UP_ITERATIONS = 10;
+    for (int l = 0; l < MOP_UP_ITERATIONS; ++l)
+    {
+        v_if (v >= s)
+        {
+            v = v - s;
+        }
+        v_endif;
+    }
+    return v;
+}
+
+template <int ITERATIONS>
+__attribute__((noinline)) void calculate_fmod_fresh_cpp(const float divisor, const float divisor_recip)
+{
+    const sfpi::vFloat s     = sfpi::abs(sfpi::vFloat(divisor));
+    const sfpi::vFloat recip = sfpi::abs(sfpi::vFloat(divisor_recip));
+    for (int d = 0; d < ITERATIONS; ++d)
+    {
+        const sfpi::vFloat val = sfpi::dst_reg[0];
+        sfpi::vFloat v         = fresh_fmod_core(sfpi::abs(val), s, recip);
+        // fmod keeps the dividend's sign.
+        v = sfpi::copysgn(v, val);
+        v_if (s == 0.0f)
+        {
+            v = std::numeric_limits<float>::quiet_NaN();
+        }
+        v_endif;
+        v_if (sfpi::abs(v) - s == 0.0f)
+        {
+            v = 0.0f;
+        }
+        v_endif;
+        sfpi::dst_reg[0] = v;
+        sfpi::dst_reg++;
+    }
+}
+
+template <int ITERATIONS>
+__attribute__((noinline)) void calculate_remainder_fresh_cpp(const float divisor, const float divisor_recip)
+{
+    const sfpi::vFloat divisor_v = divisor;
+    const sfpi::vFloat s         = sfpi::abs(divisor_v);
+    const sfpi::vFloat recip     = sfpi::abs(sfpi::vFloat(divisor_recip));
+    for (int d = 0; d < ITERATIONS; ++d)
+    {
+        const sfpi::vFloat val = sfpi::dst_reg[0];
+        sfpi::vFloat v         = fresh_fmod_core(sfpi::abs(val), s, recip);
+        // remainder folds onto the divisor's sign (torch.remainder contract).
+        v_if (val < 0.0f && v != 0.0f)
+        {
+            v = s - v;
+        }
+        v_endif;
+        v_if (divisor_v < 0.0f && v != 0.0f)
+        {
+            v = v + divisor_v;
+        }
+        v_endif;
+        v = sfpi::copysgn(v, divisor_v);
+        v_if (s == 0.0f)
+        {
+            v = std::numeric_limits<float>::quiet_NaN();
+        }
+        v_endif;
+        v_if (sfpi::abs(v) - s == 0.0f)
+        {
+            v = 0.0f;
+        }
+        v_endif;
+        sfpi::dst_reg[0] = v;
+        sfpi::dst_reg++;
+    }
+}
+
+// Log, bf16 contract (production: tt_llk _calculate_log_body_ with the
+// pre-shifted Chebyshev coefficients split across vConstFloatPrgm1/2 and
+// inline literals).  Same executed constants (incl. the shipped B' = -0.7166
+// the golden tolerance is fitted to), all local; ln(x) = poly(mantissa) +
+// exponent * ln2; ln(0) = -inf.
+template <int ITERATIONS>
+__attribute__((noinline)) void calculate_log_fresh_cpp()
+{
+    constexpr float A   = 0.1058f;
+    constexpr float B   = -0.7166f;
+    constexpr float C   = 2.0871f;
+    constexpr float D   = -1.4753f;
+    constexpr float LN2 = 0.692871f;
+    for (int d = 0; d < ITERATIONS; ++d)
+    {
+        const sfpi::vFloat in = sfpi::dst_reg[0];
+        const sfpi::vFloat x  = sfpi::setexp(in, 127); // mantissa into [1, 2)
+        sfpi::vFloat series   = x * (x * (x * A + B) + C) + D;
+
+        const sfpi::vFloat expf = sfpi::convert<sfpi::vFloat>(sfpi::convert<sfpi::vSMag>(sfpi::exexp(in)), sfpi::RoundMode::Nearest);
+        sfpi::vFloat result     = expf * LN2 + series;
+
+        v_if (in == 0.0f)
+        {
+            result = -std::numeric_limits<float>::infinity();
+        }
+        v_endif;
+        sfpi::dst_reg[0] = result;
+        sfpi::dst_reg++;
+    }
+}
+
+// Expm1, bf16 contract (production: metal _sfpu_expm1_ non-fp32 branch —
+// Juffa reduction with log2e / -ln2 / c1 parked in vConstFloatPrgm0/1/2, two
+// raw __builtin_rvtt_sfpmad pins, and hand-interleaved Horner).  Identical
+// arithmetic, plain statement: i = rint(a/ln2), f = a - i*ln2, quartic
+// expm1(f), half-scaled 2^i reconstruction, saturation via the SMag8 clamp.
+template <int ITERATIONS>
+__attribute__((noinline)) void calculate_expm1_fresh_cpp()
+{
+    constexpr float LOG2E   = 1.442695f;
+    constexpr float NEG_LN2 = -0.6931471805599453f;
+    constexpr float C3      = 8.361816406e-03f;
+    constexpr float C2      = 4.177856445e-02f;
+    constexpr float C1      = 1.666259766e-01f;
+    for (int d = 0; d < ITERATIONS; ++d)
+    {
+        const sfpi::vFloat a = sfpi::dst_reg[0];
+        sfpi::vInt i;
+        const sfpi::vFloat j = fresh_round_nearest(a * LOG2E, i);
+        const sfpi::vFloat f = j * NEG_LN2 + a;
+
+        sfpi::vFloat r       = C3;
+        r                    = r * f + C2;
+        r                    = r * f + C1;
+        r                    = r * f + 0.5f;
+        const sfpi::vFloat s = f * f;
+        r                    = r * s + f;
+
+        // For j == 0, r already is expm1(a); the half-scaled reconstruction
+        // would flush tiny normal results through a subnormal.
+        v_if (j != 0.0f)
+        {
+            const sfpi::vFloat w     = 0.5f;
+            const sfpi::vFloat scale = sfpi::as<sfpi::vFloat>((i << 23) + sfpi::as<sfpi::vInt>(w)); // 0.5 * 2^i
+            const sfpi::vFloat bias  = scale - w;
+            const sfpi::vFloat jm2   = j + -2.0f;
+            r                        = scale * r + bias;
+
+            // Saturation: |i - 2| >= 127 covers a*log2(e) <= -125 / >= 129.
+            const sfpi::vInt tail = sfpi::as<sfpi::vInt>(sfpi::convert<sfpi::vSMag8>(sfpi::abs(jm2), sfpi::RoundMode::Nearest));
+            v_if (tail >= 127)
+            {
+                // +inf on the positive side; NaN propagates through the multiply.
+                r = jm2 * std::numeric_limits<float>::infinity();
+                v_if (jm2 < 0.0f)
+                {
+                    r = -0.5f;
+                }
+                v_endif;
+            }
+            v_endif;
+            r = r * 2.0f;
+        }
+        v_endif;
+        sfpi::dst_reg[0] = sfpi::convert<sfpi::vFloat16b>(r, sfpi::RoundMode::Nearest);
+        sfpi::dst_reg++;
+    }
+}
+
+// Sqrt / Rsqrt, non-approx bf16 contract (production: shared
+// _calculate_sqrt_body_ with the Kokosinski/Moroz integer seed and both
+// refinement coefficients parked in vConstIntPrgm0/vConstFloatPrgm1/2).
+// Identical SQRT_23-bits algorithm, seed and coefficients local.
+template <bool RECIPROCAL, int ITERATIONS>
+__attribute__((noinline)) void calculate_sqrt_rsqrt_fresh_cpp()
+{
+    constexpr int SEED = 0x5f1110a0; // Kokosinski/Moroz SQRT_23 seed (cited paper)
+    constexpr float K1 = 2.2825186f;
+    constexpr float K2 = 2.2533049f;
+    for (int d = 0; d < ITERATIONS; ++d)
+    {
+        const sfpi::vFloat x = sfpi::dst_reg[0];
+        sfpi::vFloat y       = sfpi::as<sfpi::vFloat>(sfpi::vInt(SEED) - sfpi::as<sfpi::vInt>(sfpi::as<sfpi::vUInt>(x) >> 1));
+
+        sfpi::vFloat xy                  = x * y;
+        const sfpi::vFloat c             = -y * xy;
+        const sfpi::vFloat infinity      = std::numeric_limits<float>::infinity();
+        const sfpi::vInt infinity_bits   = sfpi::as<sfpi::vInt>(infinity);
+        y                                = y * (K1 + c * (K2 + c));
+        xy                               = x * y;
+        const sfpi::vFloat one_minus_xyy = 1.0f + (-y * xy);
+
+        if constexpr (RECIPROCAL)
+        {
+            const sfpi::vFloat half_y              = sfpi::addexp(y, -1);
+            const sfpi::vInt infinity_minus_x_bits = infinity_bits - sfpi::as<sfpi::vInt>(x);
+            v_if (infinity_minus_x_bits != 0 && sfpi::as<sfpi::vInt>(x) != 0)
+            {
+                y = one_minus_xyy * half_y + y;
+            }
+            v_else
+            {
+                // x = 0 -> inf; x = inf -> 0.
+                y = sfpi::as<sfpi::vFloat>(infinity_minus_x_bits);
+            }
+            v_endif;
+        }
+        else
+        {
+            const sfpi::vFloat half_xy = 0.5f * xy;
+            v_if (sfpi::as<sfpi::vInt>(x) < infinity_bits)
+            {
+                y = one_minus_xyy * half_xy + xy;
+            }
+            v_endif;
+        }
+
+        v_if (x < 0.0f)
+        {
+            y = std::numeric_limits<float>::quiet_NaN();
+        }
+        v_endif;
+        sfpi::dst_reg[0] = sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::Nearest);
+        sfpi::dst_reg++;
+    }
+}
+
+// Unary power, bf16 exp_21f contract (production: metal
+// _sfpu_unary_power_21f_ with 1/ln2, the -127 clamp, and NaN parked in
+// vConstFloatPrgm0/1/2, the addexp(z,23) strength reduction, and integer
+// mantissa-offset spellings of the exp_21f quadratic).  Same two-step
+// algorithm — log2(base) by the rminimax cubic, then 2^z by the exp_21f
+// exponent/mantissa recombination already established in
+// calculate_exp_fresh_cpp — with the production's special-value contract
+// (0^negative = NaN, negative base: sign by integer-power parity, NaN for
+// non-integer powers) and the bf16 RNE store.
+template <int ITERATIONS>
+__attribute__((noinline)) void calculate_unary_power_fresh_cpp(const std::uint32_t exponent)
+{
+    // rminimax cubic over [1, 2) for ln(m) (production constants).
+    constexpr float P3      = 0x2.44734p-4f;
+    constexpr float P2      = -0xd.e712ap-4f;
+    constexpr float P1      = 0x2.4f5388p+0f;
+    constexpr float P0      = -0x1.952992p+0f;
+    constexpr float ONE_LN2 = 1.4426950408889634f;
+    // exp_21f fractional refinement (the calculate_exp_fresh_cpp constants).
+    constexpr float C0 = 1.0017248f;
+    constexpr float C1 = 7.839635491371155e-08f;
+    constexpr float C2 = 4.791750143340323e-15f;
+
+    const float pow_scalar = Converter::as_float(exponent);
+    const sfpi::vFloat pow = pow_scalar;
+    for (int d = 0; d < ITERATIONS; ++d)
+    {
+        const sfpi::vFloat base = sfpi::dst_reg[0];
+
+        // Step 1: log2(|base|) = poly(mantissa)/ln2 + exponent.
+        const sfpi::vFloat abs_base    = sfpi::abs(base);
+        const sfpi::vFloat m           = sfpi::setexp(abs_base, 127);
+        const sfpi::vFloat series      = m * (m * (m * P3 + P2) + P1) + P0;
+        const sfpi::vFloat exp_f32     = sfpi::convert<sfpi::vFloat>(sfpi::convert<sfpi::vSMag>(sfpi::exexp(base)), sfpi::RoundMode::Nearest);
+        const sfpi::vFloat log2_result = exp_f32 + series * ONE_LN2;
+
+        // Step 2: 2^z by exponent/mantissa recombination (exp_21f).
+        sfpi::vFloat zlog2   = pow * log2_result + 127.0f; // biased result exponent
+        zlog2                = sfpi::min(zlog2, 255.0f);
+        sfpi::vInt zi        = sfpi::shft(sfpi::exman(zlog2, sfpi::MantissaMode::ImplicitOne), sfpi::exexp(zlog2), sfpi::ShiftMode::Logical);
+        const sfpi::vFloat z = sfpi::as<sfpi::vFloat>(zi);
+
+        sfpi::vFloat frac = sfpi::convert<sfpi::vFloat>(sfpi::exman(z), sfpi::RoundMode::Nearest);
+        frac              = (C2 * frac + C1) * frac + C0;
+
+        sfpi::vFloat zc = z;
+        v_if (zlog2 <= 0.0f)
+        {
+            zc = 0.0f;
+        }
+        v_endif;
+        sfpi::vFloat y = sfpi::setexp(frac, sfpi::exexp(zc, sfpi::ExponentMode::Biased));
+
+        // Special values (production contract): 0^negative = NaN.
+        if (pow_scalar < 0.0f)
+        {
+            v_if (abs_base == 0.0f)
+            {
+                y = std::numeric_limits<float>::quiet_NaN();
+            }
+            v_endif;
+        }
+        // Negative base: sign from integer-power parity; NaN for non-integer powers.
+        v_if (base < 0.0f)
+        {
+            const auto pow_int             = sfpi::convert<sfpi::vSMag16>(pow, sfpi::RoundMode::Nearest);
+            const sfpi::vFloat pow_rounded = sfpi::convert<sfpi::vFloat>(pow_int, sfpi::RoundMode::Nearest);
+            y                              = sfpi::setsgn2(y, pow_int);
+            v_if (pow_rounded != pow)
+            {
+                y = std::numeric_limits<float>::quiet_NaN();
+            }
+            v_endif;
+        }
+        v_endif;
+
+        sfpi::dst_reg[0] = sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::Nearest);
+        sfpi::dst_reg++;
+    }
+}
+
+// xIELU (production: metal calculate_xielu — eps and expm1(eps) hidden in
+// vConstFloatPrgm1/2 and read back inside v_elseif conditions, plus a
+// private Cody-Waite negative-exp with 1/ln2 in vConstFloatPrgm0).  Same
+// four-region contract and constants (all the golden math), stated with
+// plain locals; alpha_p/alpha_n arrive exactly as the production dispatch
+// sends them, beta = 0.5 fixed.
+template <int ITERATIONS>
+__attribute__((noinline)) void calculate_xielu_fresh_cpp(const std::uint32_t param0, const std::uint32_t param1)
+{
+    constexpr float EPS        = -1e-6f;
+    constexpr float EXPM1_EPS  = -0.0000009999995427f;
+    constexpr float ONE_LN2    = 1.4426950408889634f;
+    constexpr float LN2_HI_NEG = -0.6931152343750000f;
+    constexpr float LN2_LO_NEG = -3.19461832987e-05f;
+    // Sollya expm1 tail (production constants), and the Taylor exp septic.
+    constexpr float T2 = 0.500000059604644775390625f;
+    constexpr float T3 = 0.16666667163372039794921875f;
+    constexpr float T4 = 4.16650883853435516357421875e-2f;
+    constexpr float T5 = 8.333188481628894805908203125e-3f;
+    constexpr float T6 = 1.400390756316483020782470703125e-3f;
+    constexpr float T7 = 1.99588379473425447940826416015625e-4f;
+
+    // Plain host floats: materialized per use, not held in vector registers
+    // across the loop (the production kernel instead parks constants in the
+    // programmable registers — the hand-ism this body removes).
+    const float alpha_p = Converter::as_float(param0);
+    const float alpha_n = Converter::as_float(param1);
+    for (int d = 0; d < ITERATIONS; ++d)
+    {
+        const sfpi::vFloat x          = sfpi::dst_reg[0];
+        const sfpi::vFloat beta_mul_x = 0.5f * x;
+        // Positive arm as the all-lane default; the negative regions overwrite.
+        sfpi::vFloat result = (alpha_p * x) * x + beta_mul_x;
+        v_if (x <= 0.0f && x >= EPS)
+        {
+            result = alpha_n * (EXPM1_EPS - x) + beta_mul_x;
+        }
+        v_elseif (x<0.0f && x> - 0.5f)
+        {
+            // expm1(x) - x = x^2 * (T2 + T3 x + ... + T7 x^5) (cancellation-free).
+            sfpi::vFloat p = T7;
+            p              = p * x + T6;
+            p              = p * x + T5;
+            p              = p * x + T4;
+            p              = p * x + T3;
+            p              = p * x + T2;
+            result         = alpha_n * (x * x * p) + beta_mul_x;
+        }
+        v_elseif (x <= -0.5f)
+        {
+            // exp(x) - 1 - x for large negative x, exp by Cody-Waite reduction
+            // and the Taylor septic (production constants).
+            sfpi::vFloat z = x * ONE_LN2;
+            z              = sfpi::max(z, -126.5f);
+            sfpi::vInt k_int;
+            const sfpi::vFloat k = fresh_round_nearest(z, k_int);
+            const sfpi::vFloat r = k * LN2_LO_NEG + (k * LN2_HI_NEG + x);
+
+            sfpi::vFloat p = 1.0f / 5040.0f;
+            p              = p * r + 1.0f / 720.0f;
+            p              = p * r + 1.0f / 120.0f;
+            p              = p * r + 1.0f / 24.0f;
+            p              = p * r + 1.0f / 6.0f;
+            p              = p * r + 0.5f;
+            p              = p * r + 1.0f;
+            p              = p * r + 1.0f;
+
+            const sfpi::vFloat expx = sfpi::setexp(p, sfpi::exexp(p, sfpi::ExponentMode::Biased) + k_int);
+            result                  = alpha_n * (expx - 1.0f - x) + beta_mul_x;
+        }
+        v_endif;
+        sfpi::dst_reg[0] = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
+        sfpi::dst_reg++;
     }
 }
 
