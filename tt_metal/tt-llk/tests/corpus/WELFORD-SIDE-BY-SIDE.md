@@ -219,3 +219,32 @@ gap needs (a) the full-bank transpose spelling (park elision, −74 slots),
 and (b) compiler replay compression firing on the PERF body the way it
 already does on the trace bodies (−~100 slots) — both generic mechanisms,
 no welford-specific work.
+
+## 7. Lane BF addendum (2026-08-18): the park elision landed
+
+The compiler work item of section 4 is implemented (sfpi-gcc
+agent/welford-win): `-mtt-tensix-optimize-transp-involution` forms the
+TRANSP / 4x SFPLOAD / TRANSP involution as ONE atomic
+companion-preserving instruction (the rename-through-permutation idea
+composed to pi*pi = identity — a single transpose scatters whole-register
+values at quarter-register granularity, so the involution is the only
+whole-value-usable composition), proves or FORCES the all-lanes state a
+sound involution requires (one materialized SFPENCC), and forwards all 16
+Dst park store/load pairs through registers (bit-exact-format +
+never-denormal producer audits; the final deposit stores survive).
+Separately, the recording-epoch raw-word closure un-poisons replay
+formation on the perf body (the hand init's raw record payload used to
+refuse formation function-wide), and compression now fires there (two
+4-slot record-execs in the free slots 24-31, relaunched in blocks 4-8).
+
+Census at the full new ON set (this source, unchanged): 251 issued slots /
+~267 executed SFPU ops (was parked 264/264; the OLD l_reg body — 323
+measured — was 264/264).  Both mechanisms CRAQ 15/15 bit-exact at OFF and
+ON.  Pre-registered prediction: generated ≈320, band 310-330, expected
+small WIN vs hand 326 — the old 323-record class recovered on the clean
+body.  The decisive-further-win route stays the parameterized counted-row
+formation (recips excluded from the record and delivered between
+launches; register-rotation via MVE-in-capture): the sequence matcher is
+word-exact and only 8 replay slots remain (the hand init owns 0-23, and
+stealing recorded-but-unlaunched-in-function slots would be unsound).
+Evidence: ~/sfpi-uplift/laneBF-evidence-20260818/.

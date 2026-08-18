@@ -141,7 +141,9 @@ OFF_FLAGS = (
     "-mno-tt-tensix-optimize-prgm-const "
     "-mno-tt-tensix-optimize-capture-rotation "
     "-mno-tt-tensix-optimize-ccmask "
-    "-mno-tt-tensix-optimize-interlock-schedule"
+    "-mno-tt-tensix-optimize-interlock-schedule "
+    "-mno-tt-tensix-optimize-transp-involution "
+    "-mno-tt-tensix-optimize-replay-exec-record"
 )
 ON_FLAGS = (
     "-mtt-tensix-optimize-latency-schedule "
@@ -161,7 +163,13 @@ ON_FLAGS = (
     # COUPLED with the exp semantic-source restructure merge: that source
     # without ccmask compiles to 28-slot rows.
     "-mtt-tensix-optimize-ccmask "
-    "-mtt-tensix-optimize-interlock-schedule"
+    "-mtt-tensix-optimize-interlock-schedule "
+    # Lane BF (pin 10): transp-involution (SFPTRANSP gather fusion +
+    # Dst-park elision; fire witness = welford dump, parks eliminated) and
+    # replay-exec-record (exec-while-record capture; fire witness =
+    # sigmoidappx 33->32 launch shape).
+    "-mtt-tensix-optimize-transp-involution "
+    "-mtt-tensix-optimize-replay-exec-record"
     # M3/prgm-const is NOT in the ON set (un-shipped after pin 9's nightly):
     # its only engagement channel was the trusted TTREGION source markers in
     # the LLK headers, and trusted source annotation of the consumed library
@@ -186,6 +194,8 @@ KNOBS = {
     "capture-rotation": "-mtt-tensix-optimize-capture-rotation",
     "ccmask": "-mtt-tensix-optimize-ccmask",
     "interlock-schedule": "-mtt-tensix-optimize-interlock-schedule",
+    "transp-involution": "-mtt-tensix-optimize-transp-involution",
+    "replay-exec-record": "-mtt-tensix-optimize-replay-exec-record",
 }
 HARNESS_TOOLCHAIN = TESTS / "sfpi"  # untracked symlink the harness hardcodes
 DEVICE_LOCK = "/tmp/tt-device.lock"
