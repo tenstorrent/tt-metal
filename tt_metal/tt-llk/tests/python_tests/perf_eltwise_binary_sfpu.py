@@ -358,6 +358,134 @@ def test_perf_eltwise_binary_sfpu_int(
     configuration.run(perf_report)
 
 
+# Perf vehicles for the corr-only mapped corpus rows (Lane BK measurement-gap
+# close): every op below already has an audited functional golden node in
+# test_sfpu_binary.py and a compiled dispatch in helpers/include/
+# sfpu_operations.h (call_binary_sfpu_operation), but had no perf module at
+# all — the exact tier-(c) gap named per row in the Lane AZ audit. One
+# representative MATH_ISOLATE node per op (the fresh_cpp_* precedent: single
+# format, loop_factor 16, iterations 32, [128, 64]); correctness stays owned
+# by the functional nodes, these exist so the sweep can record cycles/tile.
+_EXTENDED_FLOAT_BINARY_OPS = [
+    MathOperation.SfpuAtan2,
+    MathOperation.SfpuBinaryFmod,
+    MathOperation.SfpuBinaryRemainder,
+    MathOperation.SfpuIsclose,
+    MathOperation.SfpuLogsigmoid,
+    # calculate_mask hard-codes its dst operands through the test adapter
+    # (see test_sfpu_binary_mask); the isolate scenario measures the
+    # instruction stream, which is placement-independent.
+    MathOperation.SfpuMask,
+    MathOperation.SfpuElwEq,
+    MathOperation.SfpuElwNe,
+]
+
+
+@pytest.mark.perf
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b], same=True),
+    mathop=_EXTENDED_FLOAT_BINARY_OPS,
+)
+def test_perf_sfpu_binary_extended_float(perf_report, formats, mathop):
+    tile_count, _, faces_to_generate = calculate_tile_and_face_counts(
+        [128, 64], [128, 64], face_r_dim=16, num_faces=4
+    )
+    configuration = PerfConfig(
+        "sources/eltwise_binary_sfpu_perf.cpp",
+        formats,
+        run_types=[PerfRunType.MATH_ISOLATE],
+        templates=[
+            MATH_OP(mathop=mathop),
+            APPROX_MODE(ApproximationMode.No),
+            ITERATIONS(32),
+        ],
+        runtimes=[
+            TILE_COUNT(tile_count),
+            LOOP_FACTOR(16),
+            NUM_FACES(num_faces=faces_to_generate),
+            UNPACK_TRANS_FACES(Transpose.No),
+            UNPACK_TRANS_WITHIN_FACE(Transpose.No),
+        ],
+        variant_stimuli=StimuliConfig(
+            None,
+            formats.input_format,
+            None,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_count,
+            tile_count_B=tile_count,
+            tile_count_res=tile_count,
+        ),
+        unpack_to_dest=False,
+        dest_acc=DestAccumulation.No,
+        compile_time_formats=True,
+    )
+    configuration.run(perf_report)
+
+
+# Int32 counterparts of the corr-only rows above (bitwise, integer division,
+# gcd/lcm, rsub, integer eq/ne). The functional twins run dest_acc=Yes; the
+# perf convention for 32-bit integer isolates in this suite is dest_acc=No +
+# unpack_to_dest (see test_perf_eltwise_binary_sfpu_int) and MATH_ISOLATE
+# measures the same math instruction stream.
+_EXTENDED_INT_BINARY_OPS = [
+    MathOperation.SfpuBitwiseAnd,
+    MathOperation.SfpuBitwiseOr,
+    MathOperation.SfpuBitwiseXor,
+    MathOperation.SfpuDivInt32,
+    MathOperation.SfpuDivInt32Floor,
+    MathOperation.SfpuGcd,
+    MathOperation.SfpuLcm,
+    MathOperation.SfpuRsubInt32,
+    MathOperation.SfpuEqInt,
+    MathOperation.SfpuNeInt,
+]
+
+
+@pytest.mark.perf
+@parametrize(
+    formats=input_output_formats([DataFormat.Int32], same=True),
+    mathop=_EXTENDED_INT_BINARY_OPS,
+)
+def test_perf_sfpu_binary_extended_int(perf_report, formats, mathop):
+    tile_count, _, faces_to_generate = calculate_tile_and_face_counts(
+        [128, 64], [128, 64], face_r_dim=16, num_faces=4
+    )
+    configuration = PerfConfig(
+        "sources/eltwise_binary_sfpu_perf.cpp",
+        formats,
+        run_types=[PerfRunType.MATH_ISOLATE],
+        templates=[
+            MATH_OP(mathop=mathop),
+            APPROX_MODE(ApproximationMode.No),
+            ITERATIONS(32),
+        ],
+        runtimes=[
+            TILE_COUNT(tile_count),
+            LOOP_FACTOR(16),
+            NUM_FACES(num_faces=faces_to_generate),
+            UNPACK_TRANS_FACES(Transpose.No),
+            UNPACK_TRANS_WITHIN_FACE(Transpose.No),
+        ],
+        variant_stimuli=StimuliConfig(
+            None,
+            formats.input_format,
+            None,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_count,
+            tile_count_B=tile_count,
+            tile_count_res=tile_count,
+        ),
+        # Int32 is 32-bit integer: dest_acc No + unpack_to_dest, matching
+        # test_perf_eltwise_binary_sfpu_int's derivation for these formats.
+        unpack_to_dest=True,
+        dest_acc=DestAccumulation.No,
+        compile_time_formats=True,
+    )
+    configuration.run(perf_report)
+
+
 @pytest.mark.perf
 @parametrize(
     formats=input_output_formats(

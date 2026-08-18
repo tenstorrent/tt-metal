@@ -48,6 +48,13 @@ _INT32_UNARY_OPS = [
     MathOperation.BitwiseNot,
     MathOperation.LogicalNot,
     MathOperation.Fill,
+    # Unary shift perf vehicles (Lane BK, corr-only corpus row
+    # metal__ckernel_sfpu_unary_shift): the functional golden twins are
+    # test_sfpu_unary.py::test_eltwise_unary_sfpu_int[mathop:LeftShift/
+    # RightShift...]; these were the only audited unary-shift kernels with no
+    # perf node anywhere.
+    MathOperation.LeftShift,
+    MathOperation.RightShift,
 ]
 
 
