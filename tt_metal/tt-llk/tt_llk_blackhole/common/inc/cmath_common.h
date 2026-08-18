@@ -64,11 +64,23 @@ enum class SrcZeroFlagState : std::uint8_t
 static SrcZeroFlagState src_zero_flag_state = SrcZeroFlagState::UNCONFIGURED;
 static std::uint32_t src_zero_flag_srca_fmt = 0xff;
 static std::uint32_t src_zero_flag_srcb_fmt = 0xff;
+// Last value physically written to ALU_ACC_CTRL_Zero_Flag_disabled_src (0xff = unknown). DEFAULT is
+// re-established on every format-changing binary init (e.g. groupnorm's mul_bcast loop), but
+// requires_disabled_src_zero_flag() maps all float formats to the same bit -- so those re-applies are
+// no-ops at the HW level. Caching the written value lets the writer skip the pipe-draining
+// STALLWAIT + RMW when the bit is unchanged (tt-metal#49924).
+static std::uint32_t src_zero_flag_hw = 0xff;
 
 inline void _configure_src_zero_flag_(const bool disable)
 {
+    const std::uint32_t next = disable ? 1 : 0;
+    if (src_zero_flag_hw == next)
+    {
+        return;
+    }
+    src_zero_flag_hw = next;
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
-    cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(disable ? 1 : 0);
+    cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(next);
 }
 
 // DEFAULT: the flag follows the operand formats. Re-applies when the state or cached formats change.
@@ -97,10 +109,12 @@ inline void _configure_preserve_zero_flag_state_()
 }
 
 // Invalidate the tracked state after a code path that writes the flag directly (bypassing the
-// tracker), so the next configurator re-applies regardless of the skip-if-set fast path.
+// tracker), so the next configurator re-applies regardless of the skip-if-set fast path. The
+// physical value is now unknown too, so drop the write-cache to force the next _configure_ to write.
 inline void _invalidate_src_zero_flag_state_()
 {
     src_zero_flag_state = SrcZeroFlagState::UNCONFIGURED;
+    src_zero_flag_hw    = 0xff;
 }
 
 inline void reset_counters(const std::uint32_t setrwc)
