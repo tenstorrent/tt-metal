@@ -18,9 +18,26 @@
 namespace ckernel {
 namespace sfpu {
 
-// Dest geometry as SFPLOAD/SFPSTORE address it. dest_reg_addr bits [10:2] pick a group of four
-// consecutive face rows and bit 1 picks even vs odd columns of that group. A 32x32 tile is four
-// 16x16 faces, left-to-right then top-to-bottom:
+// How to read this file
+// ---------------------
+// Public API is init_reduce + calculate_reduce at the bottom. calculate_reduce
+// dispatches to one of four paths:
+//   COL + SUM/AVG → _calculate_reduce_col_sum_avg_
+//   COL + MAX/MIN → _calculate_reduce_col_max_min_
+//   ROW + SUM/AVG → _calculate_reduce_row_
+//   ROW + MAX/MIN → _calculate_reduce_row_  (records horiz-max first)
+//
+// init_reduce records dest-address-free instruction windows into the 32-slot
+// replay buffer (NoExec; TEN-4690). Calculate replays those windows. Dest
+// addresses stay outside recorded windows (absolute SFPLOAD/STORE + ADDR_MOD_7
+// incr=0). Every helper below is inline; splitting is for structure only.
+
+// =============================================================================
+// Dest geometry as SFPLOAD/SFPSTORE address it
+// =============================================================================
+// dest_reg_addr bits [10:2] pick a group of four consecutive face rows and bit 1
+// picks even vs odd columns of that group. A 32x32 tile is four 16x16 faces,
+// left-to-right then top-to-bottom:
 //   Face 0 rows 0-15 cols 0-15  (addr 0)  | Face 1 rows 0-15 cols 16-31 (addr 16)
 //   Face 2 rows 16-31 cols 0-15 (addr 32) | Face 3 rows 16-31 cols 16-31 (addr 48)
 constexpr std::uint32_t REDUCE_NUM_FACES = 4;
@@ -52,58 +69,37 @@ constexpr std::uint32_t REDUCE_COL_FINAL_ADDRS[2][2] = {
     {16, 48},
 };
 
-// Replay buffer is 32 slots. TEN-4690 forbids execute-while-loading; every
-// lltt::record here uses the default NoExec. Dest addresses stay outside the
-// recorded windows (absolute SFPLOAD/STORE + ADDR_MOD_7 incr=0).
+// =============================================================================
+// Replay-buffer layout (32 slots)
+// =============================================================================
+// SUM/AVG (init_reduce):
+//   [0, 6)  tree-add LREG0-3 || LREG4-7     REDUCE_TREE_ADD_FULL_LEN
+//   [6, 9)  tree-add LREG0-3                REDUCE_TREE_ADD_HALF_LEN
+//   [9, 23) horizontal-sum phases 2-3       REDUCE_HADD_TAIL_LEN
+//
+// MAX/MIN (init_reduce):
+//   [0, 3)  tree cswap LREG4-7 → LREG4      REDUCE_TREE_CSWAP_LEN
+//
+// Row MAX/MIN (calculate) overwrites the buffer:
+//   [0, 16) horizontal-max phases 2-4       REDUCE_HMAX_REPLAY_LEN
+//   A later column calculate needs a fresh init_reduce.
+//
+// Lengths assume _reduce_needs_neg_pair_fix_ is false (1 Tensix insn per SWAP).
+// Re-enabling the fix adds REDUCE_NEG_FIX_LEN per SWAP; phases 2-4 then no
+// longer fit in 32 slots (record phase 2 only and emit 3+4 inline).
 constexpr std::uint32_t REDUCE_REPLAY_BUF_LEN = 32;
-constexpr std::uint32_t REDUCE_NEG_FIX_LEN = 4;          // 2 SETCC + SWAP + ENCC
-constexpr std::uint32_t REDUCE_CSWAP_PAIR_BASE_LEN = 2;  // SWAP + SWAP (SFPSWAP already stalls the next cycle)
+constexpr std::uint32_t REDUCE_NEG_FIX_LEN = 4;  // 2 SETCC + SWAP + ENCC
 constexpr std::uint32_t REDUCE_TREE_ADD_FULL_LEN = 6;
 constexpr std::uint32_t REDUCE_TREE_ADD_HALF_LEN = 3;
-constexpr std::uint32_t REDUCE_TREE_ADD_REPLAY_LEN = REDUCE_TREE_ADD_FULL_LEN + REDUCE_TREE_ADD_HALF_LEN;
-constexpr std::uint32_t REDUCE_HADD_TAIL_SLOT = REDUCE_TREE_ADD_REPLAY_LEN;
+constexpr std::uint32_t REDUCE_HADD_TAIL_SLOT = REDUCE_TREE_ADD_FULL_LEN + REDUCE_TREE_ADD_HALF_LEN;
 constexpr std::uint32_t REDUCE_HADD_TAIL_LEN = 14;  // horizontal-sum phases 2-3
 constexpr std::uint32_t REDUCE_SUM_AVG_REPLAY_LEN = REDUCE_HADD_TAIL_SLOT + REDUCE_HADD_TAIL_LEN;
+constexpr std::uint32_t REDUCE_TREE_CSWAP_LEN = 3;    // SWAP+SWAP + SWAP
+constexpr std::uint32_t REDUCE_HMAX_REPLAY_LEN = 16;  // phases 2+3+4 (8+6+2)
 
-template <bool NEEDS_NEG_FIX>
-inline constexpr std::uint32_t _reduce_cswap_pair_len_() {
-    return REDUCE_CSWAP_PAIR_BASE_LEN + (NEEDS_NEG_FIX ? 2 * REDUCE_NEG_FIX_LEN : 0);
-}
-
-template <bool NEEDS_NEG_FIX>
-inline constexpr std::uint32_t _reduce_cswap_len_() {
-    return 1u + (NEEDS_NEG_FIX ? REDUCE_NEG_FIX_LEN : 0);
-}
-
-template <bool NEEDS_NEG_FIX>
-inline constexpr std::uint32_t _reduce_tree_cswap_len_() {
-    return _reduce_cswap_pair_len_<NEEDS_NEG_FIX>() + _reduce_cswap_len_<NEEDS_NEG_FIX>();
-}
-
-template <bool NEEDS_NEG_FIX>
-inline constexpr std::uint32_t _reduce_hmax_phase2_len_() {
-    return 6u + _reduce_cswap_pair_len_<NEEDS_NEG_FIX>();
-}
-
-template <bool NEEDS_NEG_FIX>
-inline constexpr std::uint32_t _reduce_hmax_phase34_len_() {
-    return 4u + _reduce_cswap_pair_len_<NEEDS_NEG_FIX>() + 2u;
-}
-
-template <bool NEEDS_NEG_FIX>
-inline constexpr bool _reduce_hmax_replays_phase34_() {
-    return _reduce_hmax_phase2_len_<NEEDS_NEG_FIX>() + _reduce_hmax_phase34_len_<NEEDS_NEG_FIX>() <=
-           REDUCE_REPLAY_BUF_LEN;
-}
-
-template <bool NEEDS_NEG_FIX>
-inline constexpr std::uint32_t _reduce_hmax_replay_len_() {
-    if constexpr (_reduce_hmax_replays_phase34_<NEEDS_NEG_FIX>()) {
-        return _reduce_hmax_phase2_len_<NEEDS_NEG_FIX>() + _reduce_hmax_phase34_len_<NEEDS_NEG_FIX>();
-    } else {
-        return _reduce_hmax_phase2_len_<NEEDS_NEG_FIX>();
-    }
-}
+// =============================================================================
+// Format predicates
+// =============================================================================
 
 // Quasar Dest has no UInt16 slot; UInt16 stimuli ride the Int16/SMAG16 container
 // (formats.math is Int16). Treat both as unsigned 16-bit for reduce.
@@ -150,16 +146,17 @@ inline constexpr std::uint32_t _reduce_sfpmem_() {
 // stores keep UINT16 so a later UINT16 load still round-trips. 16-bit dest (dest_acc No) already
 // holds the value in the packer-visible half — do not AND 0xFFFF there, that zeros the datum.
 template <bool PACK_LOW16>
-inline constexpr std::uint32_t _reduce_store_sfpmem_([[maybe_unused]] const std::uint32_t sfpmem) {
-    if constexpr (PACK_LOW16) {
-        return p_sfpu::sfpmem::LO16;
-    }
-    return sfpmem;
+inline constexpr std::uint32_t _reduce_store_sfpmem_(const std::uint32_t sfpmem) {
+    return PACK_LOW16 ? p_sfpu::sfpmem::LO16 : sfpmem;
 }
 
 inline constexpr std::uint32_t _reduce_tile_stride_() {
     return 1U << trisc::get_dest_tile_size_log2(trisc::DstTileShape::Tile32x32);
 }
+
+// =============================================================================
+// Load / store / add / compare-swap
+// =============================================================================
 
 template <bool CLEAR_HIGH>
 inline void _reduce_load_(const std::uint32_t lreg, const std::uint32_t sfpmem, const std::uint32_t dest_addr) {
@@ -182,7 +179,8 @@ inline void _reduce_store_(const std::uint32_t lreg, const std::uint32_t sfpmem,
  *
  * The CC must require *both* operands negative. A negative winner is not enough: for MIN a mixed
  * pair already has the negative (the true min) in FIRST, and a winner-only re-swap would replace
- * it with the positive. Matches calculate_binary_max_min / Wormhole `_emit_int32_signed_cswap_`.
+ * it with the positive. Matches Wormhole `_emit_int32_signed_cswap_`. Unused while float
+ * uses SFPSWAP imm12=1.
  */
 template <std::uint32_t A, std::uint32_t B>
 inline void _reduce_fix_neg_pair_() {
@@ -229,6 +227,28 @@ inline void _reduce_cswap_pair_() {
     }
 }
 
+template <bool IS_INTEGER>
+inline void _reduce_add_(const std::uint32_t src_c, const std::uint32_t dest) {
+    if constexpr (IS_INTEGER) {
+        TT_SFPIADD(0, src_c, dest, p_sfpu::sfp_binary_mod::SFPIADD_DISABLE_CC);
+    } else {
+        TT_SFPADD(dest, p_sfpu::LCONST_1, src_c, dest, 0);
+    }
+}
+
+template <std::uint32_t SFPMEM, bool CLEAR_HIGH>
+inline void _reduce_load_face_(
+    const std::uint32_t dst_lreg_base, const std::uint32_t face_addr, const std::uint32_t column_offset) {
+    _reduce_load_<CLEAR_HIGH>(dst_lreg_base + 0, SFPMEM, face_addr + column_offset);
+    _reduce_load_<CLEAR_HIGH>(dst_lreg_base + 1, SFPMEM, face_addr + column_offset + REDUCE_ROWS_PER_LOAD);
+    _reduce_load_<CLEAR_HIGH>(dst_lreg_base + 2, SFPMEM, face_addr + column_offset + 2 * REDUCE_ROWS_PER_LOAD);
+    _reduce_load_<CLEAR_HIGH>(dst_lreg_base + 3, SFPMEM, face_addr + column_offset + 3 * REDUCE_ROWS_PER_LOAD);
+}
+
+// =============================================================================
+// Vertical trees (recorded by init_reduce)
+// =============================================================================
+
 // Tree-reduce LREG0-3 -> LREG0 and LREG4-7 -> LREG4 by addition. The two trees are interleaved so
 // each SFPADD/SFPIADD covers the other's 2-cycle latency.
 template <bool IS_INTEGER>
@@ -271,48 +291,18 @@ inline void _reduce_tree_cswap_lreg4_7_() {
     _reduce_cswap_<FMT, IS_MAX, p_sfpu::LREG4, p_sfpu::LREG6>();
 }
 
-template <DataFormat FMT>
-inline void _reduce_replay_tree_cswap_lreg4_7_() {
-    lltt::replay(0, _reduce_tree_cswap_len_<_reduce_needs_neg_pair_fix_<FMT>()>());
-}
-
-template <bool IS_INTEGER>
-inline void _reduce_add_(const std::uint32_t src_c, const std::uint32_t dest) {
-    if constexpr (IS_INTEGER) {
-        TT_SFPIADD(0, src_c, dest, p_sfpu::sfp_binary_mod::SFPIADD_DISABLE_CC);
-    } else {
-        TT_SFPADD(dest, p_sfpu::LCONST_1, src_c, dest, 0);
-    }
-}
-
-/**
- * @brief Horizontal reduction of 8 SFPU columns down to column 0, two LREG pairs in lockstep.
- *
- * SFPSHFT2 mode 3 rotates one LREG globally across SFPU columns (with wrap). Interleaving the
- * LREG0/LREG1 and LREG4/LREG5 rotates hides the 2-cycle SHFT2 latency. Three fold stages
- * (rotate-by-4, -2, -1) collapse 8 partials into column 0 of LREG0 and LREG4.
- *
- * Phase 1 (rotate-by-4) stays inline. Phases 2-3 are recorded into slots
- * REDUCE_HADD_TAIL_SLOT.. by init_reduce (SUM/AVG) and replayed here.
- */
-template <bool IS_INTEGER>
-inline void _horizontal_reduce_sum_phase1_() {
-    TTI_SFPMOV(p_sfpu::LREG0, p_sfpu::LREG1, 0);
-    TTI_SFPMOV(p_sfpu::LREG4, p_sfpu::LREG5, 0);
-    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 3);
-    TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, 3);
-    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 3);
-    TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, 3);
-    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 3);
-    TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, 3);
-    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 3);
-    TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, 3);
-    _reduce_add_<IS_INTEGER>(p_sfpu::LREG1, p_sfpu::LREG0);
-    _reduce_add_<IS_INTEGER>(p_sfpu::LREG5, p_sfpu::LREG4);
-}
+// =============================================================================
+// Horizontal fold: 8 SFPU columns → column 0 of LREG0 and LREG4
+// =============================================================================
+// SFPSHFT2 mode 3 rotates one LREG globally across SFPU columns (with wrap).
+// Interleaving LREG0/LREG1 and LREG4/LREG5 hides the 2-cycle SHFT2 latency.
+// Three fold stages (rotate-by-4, -2, -1) collapse 8 partials into column 0.
+//
+// Phase 1 (rotate-by-4) stays inline. Later phases are recorded and replayed.
 
 template <bool IS_INTEGER>
 inline void _horizontal_reduce_sum_tail_() {
+    // Phase 2: rotate-by-2 and add.
     TTI_SFPMOV(p_sfpu::LREG0, p_sfpu::LREG1, 0);
     TTI_SFPMOV(p_sfpu::LREG4, p_sfpu::LREG5, 0);
     TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 3);
@@ -327,6 +317,7 @@ inline void _horizontal_reduce_sum_tail_() {
         TTI_SFPADD(p_sfpu::LREG4, p_sfpu::LCONST_1, p_sfpu::LREG5, p_sfpu::LREG4, 0);
     }
 
+    // Phase 3: rotate-by-1 and add.
     TTI_SFPMOV(p_sfpu::LREG0, p_sfpu::LREG1, 0);
     TTI_SFPMOV(p_sfpu::LREG4, p_sfpu::LREG5, 0);
     TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 3);
@@ -342,27 +333,29 @@ inline void _horizontal_reduce_sum_tail_() {
 
 template <bool IS_INTEGER>
 inline void _horizontal_reduce_sum_() {
-    _horizontal_reduce_sum_phase1_<IS_INTEGER>();
+    // Phase 1: rotate-by-4 and add (inline).
+    TTI_SFPMOV(p_sfpu::LREG0, p_sfpu::LREG1, 0);
+    TTI_SFPMOV(p_sfpu::LREG4, p_sfpu::LREG5, 0);
+    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 3);
+    TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, 3);
+    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 3);
+    TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, 3);
+    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 3);
+    TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, 3);
+    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 3);
+    TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, 3);
+    _reduce_add_<IS_INTEGER>(p_sfpu::LREG1, p_sfpu::LREG0);
+    _reduce_add_<IS_INTEGER>(p_sfpu::LREG5, p_sfpu::LREG4);
     lltt::replay(REDUCE_HADD_TAIL_SLOT, REDUCE_HADD_TAIL_LEN);
 }
 
 template <DataFormat FMT, bool IS_MAX>
-inline void _horizontal_reduce_max_phase1_() {
-    TTI_SFPMOV(p_sfpu::LREG0, p_sfpu::LREG1, 0);
-    TTI_SFPMOV(p_sfpu::LREG4, p_sfpu::LREG5, 0);
-    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 3);
-    TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, 3);
-    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 3);
-    TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, 3);
-    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 3);
-    TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, 3);
-    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 3);
-    TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, 3);
-    _reduce_cswap_pair_<FMT, IS_MAX, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG4, p_sfpu::LREG5>();
-}
+inline void _reduce_record_horizontal_max_() {
+    static_assert(!_reduce_needs_neg_pair_fix_<FMT>(), "replay lengths assume 1 insn per SWAP");
+    static_assert(REDUCE_HMAX_REPLAY_LEN <= REDUCE_REPLAY_BUF_LEN, "horizontal-max replay exceeds 32-slot buffer");
+    lltt::record(0, REDUCE_HMAX_REPLAY_LEN);
 
-template <DataFormat FMT, bool IS_MAX>
-inline void _horizontal_reduce_max_phase2_() {
+    // Phase 2: rotate-by-2 and keep extremum (2 MOV + 4 SHFT2 + 2 SWAP).
     TTI_SFPMOV(p_sfpu::LREG0, p_sfpu::LREG1, 0);
     TTI_SFPMOV(p_sfpu::LREG4, p_sfpu::LREG5, 0);
     TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 3);
@@ -370,45 +363,34 @@ inline void _horizontal_reduce_max_phase2_() {
     TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 3);
     TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, 3);
     _reduce_cswap_pair_<FMT, IS_MAX, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG4, p_sfpu::LREG5>();
-}
 
-template <DataFormat FMT, bool IS_MAX>
-inline void _horizontal_reduce_max_phase3_() {
+    // Phase 3: rotate-by-1 and keep extremum (2 MOV + 2 SHFT2 + 2 SWAP).
     TTI_SFPMOV(p_sfpu::LREG0, p_sfpu::LREG1, 0);
     TTI_SFPMOV(p_sfpu::LREG4, p_sfpu::LREG5, 0);
     TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 3);
     TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, 3);
     _reduce_cswap_pair_<FMT, IS_MAX, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG4, p_sfpu::LREG5>();
-}
 
-inline void _horizontal_reduce_max_phase4_() {
+    // Phase 4: rotate the result into column 0 (2 SHFT2).
     TTI_SFPSHFT2(0, p_sfpu::LREG0, p_sfpu::LREG0, 3);
     TTI_SFPSHFT2(0, p_sfpu::LREG4, p_sfpu::LREG4, 3);
 }
 
-// Phases 2-4 are 16 instr (BH-shaped: 2 SWAP per fold, no spacer).
-template <DataFormat FMT, bool IS_MAX>
-inline void _reduce_record_horizontal_max_() {
-    constexpr bool NEEDS_NEG_FIX = _reduce_needs_neg_pair_fix_<FMT>();
-    constexpr std::uint32_t len = _reduce_hmax_replay_len_<NEEDS_NEG_FIX>();
-    static_assert(len <= REDUCE_REPLAY_BUF_LEN, "horizontal-max replay exceeds 32-slot buffer");
-    lltt::record(0, len);
-    _horizontal_reduce_max_phase2_<FMT, IS_MAX>();
-    if constexpr (_reduce_hmax_replays_phase34_<NEEDS_NEG_FIX>()) {
-        _horizontal_reduce_max_phase3_<FMT, IS_MAX>();
-        _horizontal_reduce_max_phase4_();
-    }
-}
-
 template <DataFormat FMT, bool IS_MAX>
 inline void _horizontal_reduce_max_() {
-    constexpr bool NEEDS_NEG_FIX = _reduce_needs_neg_pair_fix_<FMT>();
-    _horizontal_reduce_max_phase1_<FMT, IS_MAX>();
-    lltt::replay(0, _reduce_hmax_replay_len_<NEEDS_NEG_FIX>());
-    if constexpr (!_reduce_hmax_replays_phase34_<NEEDS_NEG_FIX>()) {
-        _horizontal_reduce_max_phase3_<FMT, IS_MAX>();
-        _horizontal_reduce_max_phase4_();
-    }
+    // Phase 1: rotate-by-4 and keep extremum (inline). Phases 2-4 come from the replay buffer.
+    TTI_SFPMOV(p_sfpu::LREG0, p_sfpu::LREG1, 0);
+    TTI_SFPMOV(p_sfpu::LREG4, p_sfpu::LREG5, 0);
+    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 3);
+    TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, 3);
+    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 3);
+    TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, 3);
+    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 3);
+    TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, 3);
+    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 3);
+    TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, 3);
+    _reduce_cswap_pair_<FMT, IS_MAX, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG4, p_sfpu::LREG5>();
+    lltt::replay(0, REDUCE_HMAX_REPLAY_LEN);
 }
 
 // Toward-zero signed divide-by-32 of LREG0 (two's-complement). Logical right shift of the magnitude,
@@ -439,21 +421,9 @@ inline void _reduce_load_reciprocal_(const std::uint32_t lreg, const std::uint32
     TT_SFPLOADI(lreg, sfpi::SFPLOADI_MOD0_LOWER, bits & 0xFFFFu);
 }
 
-template <std::uint32_t SFPMEM, bool CLEAR_HIGH>
-inline void _reduce_load_face_(
-    const std::uint32_t dst_lreg_base, const std::uint32_t face_addr, const std::uint32_t column_offset) {
-    _reduce_load_<CLEAR_HIGH>(dst_lreg_base + 0, SFPMEM, face_addr + column_offset);
-    _reduce_load_<CLEAR_HIGH>(dst_lreg_base + 1, SFPMEM, face_addr + column_offset + REDUCE_ROWS_PER_LOAD);
-    _reduce_load_<CLEAR_HIGH>(dst_lreg_base + 2, SFPMEM, face_addr + column_offset + 2 * REDUCE_ROWS_PER_LOAD);
-    _reduce_load_<CLEAR_HIGH>(dst_lreg_base + 3, SFPMEM, face_addr + column_offset + 3 * REDUCE_ROWS_PER_LOAD);
-}
-
-template <std::uint32_t SFPMEM, bool CLEAR_HIGH>
-inline void _reduce_load_face_pair_(
-    const std::uint32_t upper_face_addr, const std::uint32_t lower_face_addr, const std::uint32_t column_offset) {
-    _reduce_load_face_<SFPMEM, CLEAR_HIGH>(p_sfpu::LREG0, upper_face_addr, column_offset);
-    _reduce_load_face_<SFPMEM, CLEAR_HIGH>(p_sfpu::LREG4, lower_face_addr, column_offset);
-}
+// =============================================================================
+// Column reduce
+// =============================================================================
 
 /**
  * @brief Column-wise SUM/AVG of one 32x32 tile. Result is written to dest row 0 of faces 0 and 1.
@@ -474,7 +444,8 @@ inline void _calculate_reduce_col_sum_avg_() {
         const std::uint32_t lower = REDUCE_COL_LOWER_FACE[i];
         const std::uint32_t col = REDUCE_COL_COLUMN_OFFSET[i];
 
-        _reduce_load_face_pair_<SFPMEM, CLEAR_HIGH>(upper, lower, col);
+        _reduce_load_face_<SFPMEM, CLEAR_HIGH>(p_sfpu::LREG0, upper, col);
+        _reduce_load_face_<SFPMEM, CLEAR_HIGH>(p_sfpu::LREG4, lower, col);
         lltt::replay(0, REDUCE_TREE_ADD_FULL_LEN);
         _reduce_add_<IS_INTEGER>(p_sfpu::LREG4, p_sfpu::LREG0);
         TTI_SFPTRANSP;
@@ -512,7 +483,7 @@ inline void _calculate_reduce_col_max_min_() {
         for (std::uint32_t i = 0; i < REDUCE_NUM_FACES; i++) {
             _reduce_load_face_<SFPMEM, CLEAR_HIGH>(
                 p_sfpu::LREG4, REDUCE_COL_FACE_ADDRS[j][i], REDUCE_COL_COLUMN_OFFSET[i]);
-            _reduce_replay_tree_cswap_lreg4_7_<FMT>();
+            lltt::replay(0, REDUCE_TREE_CSWAP_LEN);
             _reduce_store_(p_sfpu::LREG4, SFPMEM, REDUCE_COL_FACE_ADDRS[j][i] + REDUCE_COL_COLUMN_OFFSET[i]);
         }
 
@@ -527,7 +498,7 @@ inline void _calculate_reduce_col_max_min_() {
         TTI_SFPMOV(p_sfpu::LREG3, p_sfpu::LREG7, 0);
 
         TTI_SFPTRANSP;
-        _reduce_replay_tree_cswap_lreg4_7_<FMT>();
+        lltt::replay(0, REDUCE_TREE_CSWAP_LEN);
         TTI_SFPTRANSP;
 
         _reduce_cswap_<FMT, IS_MAX, p_sfpu::LREG4, p_sfpu::LREG5>();
@@ -540,46 +511,45 @@ inline void _calculate_reduce_col_max_min_() {
     }
 }
 
-/**
- * @brief Row-wise SUM/AVG of tiles in one dest row. Partial sums land in dest column 0; when
- *        block_ct_dim > 1 they are accumulated into the first tile of the row.
- */
+// =============================================================================
+// Row reduce
+// =============================================================================
+
+template <std::uint32_t SFPMEM, bool CLEAR_HIGH>
+inline void _reduce_load_row_halves_(const std::uint32_t group_a, const std::uint32_t group_b) {
+    _reduce_load_<CLEAR_HIGH>(p_sfpu::LREG0, SFPMEM, group_a);
+    _reduce_load_<CLEAR_HIGH>(p_sfpu::LREG1, SFPMEM, group_a + REDUCE_ODD_COLUMNS);
+    _reduce_load_<CLEAR_HIGH>(p_sfpu::LREG2, SFPMEM, group_a + REDUCE_ROWS_PER_FACE);
+    _reduce_load_<CLEAR_HIGH>(p_sfpu::LREG3, SFPMEM, group_a + REDUCE_ROWS_PER_FACE + REDUCE_ODD_COLUMNS);
+    _reduce_load_<CLEAR_HIGH>(p_sfpu::LREG4, SFPMEM, group_b);
+    _reduce_load_<CLEAR_HIGH>(p_sfpu::LREG5, SFPMEM, group_b + REDUCE_ODD_COLUMNS);
+    _reduce_load_<CLEAR_HIGH>(p_sfpu::LREG6, SFPMEM, group_b + REDUCE_ROWS_PER_FACE);
+    _reduce_load_<CLEAR_HIGH>(p_sfpu::LREG7, SFPMEM, group_b + REDUCE_ROWS_PER_FACE + REDUCE_ODD_COLUMNS);
+}
+
 template <PoolType POOL, DataFormat FMT, bool CLEAR_HIGH>
-inline void _perform_reduce_row_sum_tile_(
-    const std::uint32_t tile_offset,
-    const bool divide_now,
-    const std::uint32_t num_cols,
-    const std::uint32_t store_sfpmem) {
-    constexpr bool IS_INTEGER = _reduce_is_integer_<FMT>();
-    constexpr bool IS_AVG = (POOL == PoolType::AVG);
+inline void _perform_reduce_row_tile_(const std::uint32_t tile_offset, const std::uint32_t store_sfpmem) {
+    constexpr bool IS_MAX_MIN = (POOL == PoolType::MAX || POOL == PoolType::MIN);
     constexpr std::uint32_t SFPMEM = _reduce_sfpmem_<FMT>();
 
     for (std::uint32_t face_pair = 0; face_pair < 2; face_pair++) {
         const std::uint32_t face_pair_base = face_pair * 2 * REDUCE_ROWS_PER_FACE;
         for (std::uint32_t row_group = 0; row_group < 2; row_group++) {
-            const std::uint32_t row_a = row_group * 8;
-            const std::uint32_t row_b = row_a + 4;
-            const std::uint32_t group_a = tile_offset + face_pair_base + row_a;
-            const std::uint32_t group_b = tile_offset + face_pair_base + row_b;
+            const std::uint32_t group_a = tile_offset + face_pair_base + row_group * 2 * REDUCE_ROWS_PER_LOAD;
+            const std::uint32_t group_b = group_a + REDUCE_ROWS_PER_LOAD;
+            _reduce_load_row_halves_<SFPMEM, CLEAR_HIGH>(group_a, group_b);
 
-            _reduce_load_<CLEAR_HIGH>(p_sfpu::LREG0, SFPMEM, group_a);
-            _reduce_load_<CLEAR_HIGH>(p_sfpu::LREG1, SFPMEM, group_a + REDUCE_ODD_COLUMNS);
-            _reduce_load_<CLEAR_HIGH>(p_sfpu::LREG2, SFPMEM, group_a + REDUCE_ROWS_PER_FACE);
-            _reduce_load_<CLEAR_HIGH>(p_sfpu::LREG3, SFPMEM, group_a + REDUCE_ROWS_PER_FACE + REDUCE_ODD_COLUMNS);
-            _reduce_load_<CLEAR_HIGH>(p_sfpu::LREG4, SFPMEM, group_b);
-            _reduce_load_<CLEAR_HIGH>(p_sfpu::LREG5, SFPMEM, group_b + REDUCE_ODD_COLUMNS);
-            _reduce_load_<CLEAR_HIGH>(p_sfpu::LREG6, SFPMEM, group_b + REDUCE_ROWS_PER_FACE);
-            _reduce_load_<CLEAR_HIGH>(p_sfpu::LREG7, SFPMEM, group_b + REDUCE_ROWS_PER_FACE + REDUCE_ODD_COLUMNS);
-
-            lltt::replay(0, REDUCE_TREE_ADD_FULL_LEN);
-            _horizontal_reduce_sum_<IS_INTEGER>();
-
-            if constexpr (IS_AVG) {
-                if (divide_now) {
-                    _reduce_load_reciprocal_(p_sfpu::LREG2, num_cols);
-                    TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
-                    TTI_SFPMUL(p_sfpu::LREG4, p_sfpu::LREG2, p_sfpu::LCONST_0, p_sfpu::LREG4, 0);
-                }
+            if constexpr (IS_MAX_MIN) {
+                constexpr bool IS_MAX = (POOL == PoolType::MAX);
+                // Vertical max/min: left/right face pairs, then even/odd columns of each 4-row group.
+                _reduce_cswap_pair_<FMT, IS_MAX, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG4, p_sfpu::LREG6>();
+                _reduce_cswap_pair_<FMT, IS_MAX, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpu::LREG5, p_sfpu::LREG7>();
+                _reduce_cswap_pair_<FMT, IS_MAX, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG4, p_sfpu::LREG5>();
+                _horizontal_reduce_max_<FMT, IS_MAX>();
+            } else {
+                constexpr bool IS_INTEGER = _reduce_is_integer_<FMT>();
+                lltt::replay(0, REDUCE_TREE_ADD_FULL_LEN);
+                _horizontal_reduce_sum_<IS_INTEGER>();
             }
             _reduce_store_(p_sfpu::LREG0, store_sfpmem, group_a);
             _reduce_store_(p_sfpu::LREG4, store_sfpmem, group_b);
@@ -587,35 +557,25 @@ inline void _perform_reduce_row_sum_tile_(
     }
 }
 
-template <PoolType POOL, DataFormat FMT, bool CLEAR_HIGH>
-inline void _perform_reduce_row_max_tile_(const std::uint32_t tile_offset, const std::uint32_t store_sfpmem) {
-    static_assert(POOL == PoolType::MAX || POOL == PoolType::MIN, "row max/min only");
-    constexpr bool IS_MAX = (POOL == PoolType::MAX);
+// Single-tile row AVG divides by 32 in-register before the store. Multi-tile rows accumulate first
+// and divide in _combine_first_columns_ instead.
+template <DataFormat FMT, bool CLEAR_HIGH>
+inline void _perform_reduce_row_avg_tile_(const std::uint32_t tile_offset, const std::uint32_t store_sfpmem) {
+    constexpr bool IS_INTEGER = _reduce_is_integer_<FMT>();
     constexpr std::uint32_t SFPMEM = _reduce_sfpmem_<FMT>();
 
     for (std::uint32_t face_pair = 0; face_pair < 2; face_pair++) {
         const std::uint32_t face_pair_base = face_pair * 2 * REDUCE_ROWS_PER_FACE;
         for (std::uint32_t row_group = 0; row_group < 2; row_group++) {
-            const std::uint32_t row_a = row_group * 8;
-            const std::uint32_t row_b = row_a + 4;
-            const std::uint32_t group_a = tile_offset + face_pair_base + row_a;
-            const std::uint32_t group_b = tile_offset + face_pair_base + row_b;
+            const std::uint32_t group_a = tile_offset + face_pair_base + row_group * 2 * REDUCE_ROWS_PER_LOAD;
+            const std::uint32_t group_b = group_a + REDUCE_ROWS_PER_LOAD;
+            _reduce_load_row_halves_<SFPMEM, CLEAR_HIGH>(group_a, group_b);
 
-            _reduce_load_<CLEAR_HIGH>(p_sfpu::LREG0, SFPMEM, group_a);
-            _reduce_load_<CLEAR_HIGH>(p_sfpu::LREG1, SFPMEM, group_a + REDUCE_ODD_COLUMNS);
-            _reduce_load_<CLEAR_HIGH>(p_sfpu::LREG2, SFPMEM, group_a + REDUCE_ROWS_PER_FACE);
-            _reduce_load_<CLEAR_HIGH>(p_sfpu::LREG3, SFPMEM, group_a + REDUCE_ROWS_PER_FACE + REDUCE_ODD_COLUMNS);
-            _reduce_load_<CLEAR_HIGH>(p_sfpu::LREG4, SFPMEM, group_b);
-            _reduce_load_<CLEAR_HIGH>(p_sfpu::LREG5, SFPMEM, group_b + REDUCE_ODD_COLUMNS);
-            _reduce_load_<CLEAR_HIGH>(p_sfpu::LREG6, SFPMEM, group_b + REDUCE_ROWS_PER_FACE);
-            _reduce_load_<CLEAR_HIGH>(p_sfpu::LREG7, SFPMEM, group_b + REDUCE_ROWS_PER_FACE + REDUCE_ODD_COLUMNS);
-
-            // Vertical max/min: left/right face pairs, then even/odd columns of each 4-row group.
-            _reduce_cswap_pair_<FMT, IS_MAX, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG4, p_sfpu::LREG6>();
-            _reduce_cswap_pair_<FMT, IS_MAX, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpu::LREG5, p_sfpu::LREG7>();
-            _reduce_cswap_pair_<FMT, IS_MAX, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG4, p_sfpu::LREG5>();
-
-            _horizontal_reduce_max_<FMT, IS_MAX>();
+            lltt::replay(0, REDUCE_TREE_ADD_FULL_LEN);
+            _horizontal_reduce_sum_<IS_INTEGER>();
+            _reduce_load_reciprocal_(p_sfpu::LREG2, 32u);
+            TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+            TTI_SFPMUL(p_sfpu::LREG4, p_sfpu::LREG2, p_sfpu::LCONST_0, p_sfpu::LREG4, 0);
 
             _reduce_store_(p_sfpu::LREG0, store_sfpmem, group_a);
             _reduce_store_(p_sfpu::LREG4, store_sfpmem, group_b);
@@ -675,48 +635,40 @@ inline void _combine_first_columns_(const std::uint32_t tile_row_base, const std
 }
 
 template <PoolType POOL, DataFormat FMT, bool PACK_LOW16>
-inline void _calculate_reduce_row_sum_avg_(const std::uint32_t block_ct_dim, const std::uint32_t block_rt_dim) {
-    constexpr bool IS_AVG = (POOL == PoolType::AVG);
+inline void _calculate_reduce_row_(const std::uint32_t block_ct_dim, const std::uint32_t block_rt_dim) {
     constexpr std::uint32_t TILE_STRIDE = _reduce_tile_stride_();
     constexpr std::uint32_t SFPMEM = _reduce_sfpmem_<FMT>();
-    const std::uint32_t num_cols = 32u * block_ct_dim;
-    const bool divide_now = IS_AVG && (block_ct_dim == 1);
     // LO16 only on the packer-visible store (single-tile row, or the combine into tile 0).
-    const std::uint32_t tile_store_sfpmem = (PACK_LOW16 && block_ct_dim == 1) ? p_sfpu::sfpmem::LO16 : SFPMEM;
-
-    for (std::uint32_t r = 0; r < block_rt_dim; r++) {
-        const std::uint32_t tile_row_base = TILE_STRIDE * block_ct_dim * r;
-        for (std::uint32_t c = 0; c < block_ct_dim; c++) {
-            _perform_reduce_row_sum_tile_<POOL, FMT, PACK_LOW16>(
-                tile_row_base + TILE_STRIDE * c, divide_now, num_cols, tile_store_sfpmem);
-        }
-        if (block_ct_dim > 1) {
-            _combine_first_columns_<POOL, FMT, PACK_LOW16>(tile_row_base, block_ct_dim);
-        }
-    }
-}
-
-template <PoolType POOL, DataFormat FMT, bool PACK_LOW16>
-inline void _calculate_reduce_row_max_min_(const std::uint32_t block_ct_dim, const std::uint32_t block_rt_dim) {
-    constexpr bool IS_MAX = (POOL == PoolType::MAX);
-    constexpr std::uint32_t TILE_STRIDE = _reduce_tile_stride_();
-    constexpr std::uint32_t SFPMEM = _reduce_sfpmem_<FMT>();
     const std::uint32_t tile_store_sfpmem = (PACK_LOW16 && block_ct_dim == 1) ? p_sfpu::sfpmem::LO16 : SFPMEM;
 
     // Overwrites the LREG4-7 cswap buffer from init_reduce. Column MAX/MIN does not
     // call this path; a later column calculate needs a fresh init_reduce.
-    _reduce_record_horizontal_max_<FMT, IS_MAX>();
+    if constexpr (POOL == PoolType::MAX || POOL == PoolType::MIN) {
+        constexpr bool IS_MAX = (POOL == PoolType::MAX);
+        _reduce_record_horizontal_max_<FMT, IS_MAX>();
+    }
 
     for (std::uint32_t r = 0; r < block_rt_dim; r++) {
         const std::uint32_t tile_row_base = TILE_STRIDE * block_ct_dim * r;
         for (std::uint32_t c = 0; c < block_ct_dim; c++) {
-            _perform_reduce_row_max_tile_<POOL, FMT, PACK_LOW16>(tile_row_base + TILE_STRIDE * c, tile_store_sfpmem);
+            const std::uint32_t tile_offset = tile_row_base + TILE_STRIDE * c;
+            if constexpr (POOL == PoolType::AVG) {
+                if (block_ct_dim == 1) {
+                    _perform_reduce_row_avg_tile_<FMT, PACK_LOW16>(tile_offset, tile_store_sfpmem);
+                    continue;
+                }
+            }
+            _perform_reduce_row_tile_<POOL, FMT, PACK_LOW16>(tile_offset, tile_store_sfpmem);
         }
         if (block_ct_dim > 1) {
             _combine_first_columns_<POOL, FMT, PACK_LOW16>(tile_row_base, block_ct_dim);
         }
     }
 }
+
+// =============================================================================
+// Public API
+// =============================================================================
 
 /**
  * @brief Initialization for the SFPU reduce kernel.
@@ -737,6 +689,7 @@ inline void init_reduce([[maybe_unused]] std::uint32_t block_ct_dim = 1) {
         pool_type == PoolType::SUM || pool_type == PoolType::AVG || pool_type == PoolType::MAX ||
             pool_type == PoolType::MIN,
         "Unsupported pool_type. Supported: SUM, AVG, MAX, MIN");
+    static_assert(!_reduce_needs_neg_pair_fix_<format>(), "replay lengths assume 1 insn per SWAP");
     ckernel::math::_reset_counters_<p_setrwc::SET_ABD_F>();
     if constexpr (is_fp32_dest_acc_en && _reduce_is_uint16_<format>()) {
         // Mask for SFPAND after UINT16 loads from a 32-bit dest word. 16-bit dest does not need it.
@@ -746,15 +699,12 @@ inline void init_reduce([[maybe_unused]] std::uint32_t block_ct_dim = 1) {
     // Dest-address-free trees/tails. lltt::record is NoExec (TEN-4690).
     if constexpr (pool_type == PoolType::MAX || pool_type == PoolType::MIN) {
         constexpr bool IS_MAX = (pool_type == PoolType::MAX);
-        constexpr bool NEEDS_NEG_FIX = _reduce_needs_neg_pair_fix_<format>();
-        constexpr std::uint32_t len = _reduce_tree_cswap_len_<NEEDS_NEG_FIX>();
-        static_assert(len <= REDUCE_REPLAY_BUF_LEN, "LREG4-7 cswap replay exceeds 32-slot buffer");
-        lltt::record(0, len);
+        static_assert(REDUCE_TREE_CSWAP_LEN <= REDUCE_REPLAY_BUF_LEN, "LREG4-7 cswap replay exceeds 32-slot buffer");
+        lltt::record(0, REDUCE_TREE_CSWAP_LEN);
         _reduce_tree_cswap_lreg4_7_<format, IS_MAX>();
     } else {
         constexpr bool IS_INTEGER = _reduce_is_integer_<format>();
-        static_assert(
-            REDUCE_SUM_AVG_REPLAY_LEN <= REDUCE_REPLAY_BUF_LEN, "SUM/AVG replay exceeds 32-slot buffer");
+        static_assert(REDUCE_SUM_AVG_REPLAY_LEN <= REDUCE_REPLAY_BUF_LEN, "SUM/AVG replay exceeds 32-slot buffer");
         lltt::record(0, REDUCE_SUM_AVG_REPLAY_LEN);
         _reduce_tree_add_full_<IS_INTEGER>();
         _reduce_tree_add_half_<IS_INTEGER>();
@@ -803,18 +753,14 @@ inline void calculate_reduce(
         "Unsupported pool_type. Supported: SUM, AVG, MAX, MIN");
 
     constexpr bool pack_low16 = is_fp32_dest_acc_en && _reduce_is_uint16_<output_format>();
-    if constexpr (pool_type == PoolType::MAX || pool_type == PoolType::MIN) {
-        if constexpr (reduce_dim == ReduceDim::REDUCE_COL) {
+    if constexpr (reduce_dim == ReduceDim::REDUCE_COL) {
+        if constexpr (pool_type == PoolType::MAX || pool_type == PoolType::MIN) {
             _calculate_reduce_col_max_min_<pool_type, format, pack_low16>();
         } else {
-            _calculate_reduce_row_max_min_<pool_type, format, pack_low16>(block_ct_dim, block_rt_dim);
+            _calculate_reduce_col_sum_avg_<pool_type, format, pack_low16>();
         }
     } else {
-        if constexpr (reduce_dim == ReduceDim::REDUCE_COL) {
-            _calculate_reduce_col_sum_avg_<pool_type, format, pack_low16>();
-        } else {
-            _calculate_reduce_row_sum_avg_<pool_type, format, pack_low16>(block_ct_dim, block_rt_dim);
-        }
+        _calculate_reduce_row_<pool_type, format, pack_low16>(block_ct_dim, block_rt_dim);
     }
 }
 
