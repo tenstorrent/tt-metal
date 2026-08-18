@@ -479,6 +479,19 @@ then `prefill(prompt[0:n+1])` gives token `n+1`. Three consequences worth unders
 
 - **Per-token cost is one full prefill of the padded *window*, not of the real tokens.** Measured at
   window 512 over a 17-token reply: **~1.05 s/token, TTFT 979 ms.**
+- **Window scaling, settled (measure it traced, not eagerly):** window 512 → **80.1 ms/token**,
+  window 1024 → **95.2 ms/token**. Doubling the window costs **+19%**, not 2x, and both matched the
+  eager token. At these sizes the cost is dominated by fixed per-layer work — CCL is 30% of device
+  time, plus a long tail of small ops — not by sequence-length work.
+
+  **This is the number that decides how much decode is worth.** Decode's naive appeal is that it does
+  ~1/512th of the attention arithmetic, but we are not arithmetic-bound here: the fixed per-layer
+  cost that decode still has to pay is most of the bill. Extrapolating the measured points (~65 ms
+  fixed + ~0.03 ms per window token) puts a 4k window near ~190 ms/token and 8k near ~310 ms — and
+  that *understates* it, since prefill attention is quadratic while this fit is linear. So decode's
+  advantage is small for a short-context demo and grows with context: worth little at 512, roughly
+  5x at 8k, and decisive beyond that.
+
 - **Do not measure this with wall clock. Process-to-process variance is ~25% at a fixed
   configuration** — window 512 / `actual_isl` 64 / pad tail gave min 1401 ms in one process and
   1760 ms in another. That band is wider than every effect worth chasing, and four separate
