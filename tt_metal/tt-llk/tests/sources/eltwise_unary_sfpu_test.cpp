@@ -215,6 +215,41 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     VectorMode::None,
                     FRESH_UNARY_MAX_MIN_INT_SCALAR);
             }
+            else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::ceil)
+            {
+                SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_ceil_fresh_cpp, (iterations), block_tile, VectorMode::None);
+            }
+            else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::equal_zero)
+            {
+                SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_eqz_fresh_cpp, (iterations), block_tile, VectorMode::None);
+            }
+            else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::clamp)
+            {
+                SFPU_UNARY_CALL(
+                    DST_SYNC, is_fp32_dest_acc_en, calculate_clamp_fresh_cpp, (iterations), block_tile, VectorMode::None, FRESH_CLAMP_LO, FRESH_CLAMP_HI);
+            }
+            else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::hardtanh)
+            {
+                SFPU_UNARY_CALL(
+                    DST_SYNC, is_fp32_dest_acc_en, calculate_hardtanh_fresh_cpp, (iterations), block_tile, VectorMode::None, FRESH_CLAMP_LO, FRESH_CLAMP_HI);
+            }
+            else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::tanh)
+            {
+                // The fresh tanh states the bf16 production contract (polynomial +
+                // bf16 RNE store); guard only variants that select this branch.
+                static_assert(
+                    FRESH_CPP_IMPL != 1 || SFPU_UNARY_OPERATION != SfpuType::tanh || (!APPROX_MODE && !is_fp32_dest_acc_en),
+                    "fresh tanh selector supports only non-approx, bf16 dest");
+                SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_tanh_fresh_cpp, (iterations), block_tile, VectorMode::None);
+            }
+            else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::tanh_derivative_lut)
+            {
+                SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_tanh_derivative_lut_fresh_cpp, (iterations), block_tile, VectorMode::None);
+            }
+            else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::silu)
+            {
+                SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_silu_fresh_cpp, (iterations), block_tile, VectorMode::None);
+            }
             else if constexpr (RECIPROCAL_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::reciprocal)
             {
                 _llk_math_eltwise_unary_sfpu_params_(

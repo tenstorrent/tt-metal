@@ -138,6 +138,14 @@ inline void run_selected_binary_sfpu(
         // (metal mul_int32 SFPLOADMACRO kernel).
         call_mul_int_fresh_cpp<DST_SYNC_MODE, is_fp32_dest_acc_en, 8>(dst_in0, dst_in1, dst_out, VectorMode::RC);
     }
+    else if constexpr (
+        FRESH_CPP_IMPL == 1 && SFPU_BINARY_OPERATION == ckernel::BinaryOp::LSHFT &&
+        static_cast<std::uint32_t>(formats.math) == static_cast<std::uint32_t>(DataFormat::Int32))
+    {
+        // Test-only fresh typed-C++ leg for the Int32 binary left shift
+        // production path (metal ckernel_sfpu_shift.h raw-TTI kernel).
+        call_left_shift_fresh_cpp<DST_SYNC_MODE, is_fp32_dest_acc_en, 8>(dst_in0, dst_in1, dst_out, VectorMode::RC);
+    }
     else
     {
         test_utils::call_binary_sfpu_operation<

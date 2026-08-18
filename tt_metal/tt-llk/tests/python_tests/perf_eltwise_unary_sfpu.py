@@ -341,6 +341,47 @@ def test_perf_unary_max_min_fresh_cpp(
     ).run(perf_report)
 
 
+# Lane BR causal-tier lift perf vehicles: fresh typed-C++ semantic selectors
+# (impl 1) A/B'd against the hand-shaped production bodies (impl 0) on the
+# same node family — identical stimuli, marker, and metric.  Formats mirror
+# each op's measured sweep-row perf leg (Float16_b, dest_acc No — the corr
+# axis stays on the row's corr format, the expm1 corr/perf-format precedent).
+@pytest.mark.perf
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b]),
+    dest_acc=[DestAccumulation.No],
+    mathop=[
+        MathOperation.Ceil,
+        MathOperation.EqualZero,
+        MathOperation.Clamp,
+        MathOperation.Hardtanh,
+        MathOperation.Tanh,
+        MathOperation.TanhDerivativeLut,
+        MathOperation.Silu,
+    ],
+    fresh_cpp_impl=[0, 1],
+)
+def test_perf_causal_lift_fresh_cpp(
+    perf_report,
+    formats,
+    dest_acc,
+    mathop,
+    fresh_cpp_impl,
+):
+    _run(
+        formats,
+        mathop,
+        ApproximationMode.No,
+        dest_acc,
+        16,
+        32,
+        FastMode.No,
+        StableSort.No,
+        [128, 64],
+        fresh_cpp_impl,
+    ).run(perf_report)
+
+
 # Perf vehicle for the corr-only isinf/isnan corpus row (Lane BK measurement-
 # gap close): the comp-class predicate ops live outside the sfpu_unary_ops()
 # domain registry (their functional sweep is the dedicated

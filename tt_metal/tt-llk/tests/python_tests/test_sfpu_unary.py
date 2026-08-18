@@ -1119,6 +1119,157 @@ def test_unary_max_min_int_fresh_cpp(mathop, fresh_cpp_impl):
     )
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Lane BR causal-tier lift: fresh semantic selectors paired with hand-shaped
+# production bodies (raw-TTI streams, LUT l_reg idioms, hand pipelines,
+# regression-flagged shapes).  Each test A/Bs impl 0 (production) against
+# impl 1 (fresh typed C++) under the op's own golden and tolerance; formats
+# and dest_acc mirror the op's measured sweep row exactly.
+
+
+@pytest.mark.parametrize("fresh_cpp_impl", [0, 1], ids=["production", "fresh_cpp"])
+def test_ceil_fresh_cpp(fresh_cpp_impl):
+    """A/B the fresh semantic ceil (typed 2^23 round + bump) against the
+    production raw-TTI l_reg-pinned _ceil_body_ with identical inputs."""
+    mathop = MathOperation.Ceil
+    custom_atol, custom_rtol = CUSTOM_TOLERANCES.get(mathop, (None, None))
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+        DestAccumulation.No,
+        ApproximationMode.No,
+        mathop,
+        FastMode.No,
+        [64, 64],
+        custom_atol=custom_atol,
+        custom_rtol=custom_rtol,
+        fresh_cpp_impl=fresh_cpp_impl,
+    )
+
+
+@pytest.mark.parametrize("fresh_cpp_impl", [0, 1], ids=["production", "fresh_cpp"])
+def test_eqz_fresh_cpp(fresh_cpp_impl):
+    """A/B the fresh semantic equal-zero (typed |v|==0 predicate) against the
+    production all-raw-TTI calculate_comp float path with identical inputs."""
+    mathop = MathOperation.EqualZero
+    custom_atol, custom_rtol = CUSTOM_TOLERANCES.get(mathop, (None, None))
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
+        DestAccumulation.No,
+        ApproximationMode.No,
+        mathop,
+        FastMode.No,
+        [64, 64],
+        custom_atol=custom_atol,
+        custom_rtol=custom_rtol,
+        fresh_cpp_impl=fresh_cpp_impl,
+    )
+
+
+@pytest.mark.parametrize("fresh_cpp_impl", [0, 1], ids=["production", "fresh_cpp"])
+def test_clamp_fresh_cpp(fresh_cpp_impl):
+    """A/B the fresh semantic clamp (typed float bounds) against the production
+    fp16-bit-punned _calculate_clamp_ with identical inputs and bounds."""
+    mathop = MathOperation.Clamp
+    custom_atol, custom_rtol = CUSTOM_TOLERANCES.get(mathop, (None, None))
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
+        DestAccumulation.No,
+        ApproximationMode.No,
+        mathop,
+        FastMode.No,
+        [64, 64],
+        custom_atol=custom_atol,
+        custom_rtol=custom_rtol,
+        fresh_cpp_impl=fresh_cpp_impl,
+    )
+
+
+@pytest.mark.parametrize("fresh_cpp_impl", [0, 1], ids=["production", "fresh_cpp"])
+def test_hardtanh_fresh_cpp(fresh_cpp_impl):
+    """A/B the fresh semantic hardtanh (typed clamp) against the production
+    chained add-then-zero-select _calculate_hardtanh_ with identical inputs."""
+    mathop = MathOperation.Hardtanh
+    custom_atol, custom_rtol = CUSTOM_TOLERANCES.get(mathop, (None, None))
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
+        DestAccumulation.No,
+        ApproximationMode.No,
+        mathop,
+        FastMode.No,
+        [64, 64],
+        custom_atol=custom_atol,
+        custom_rtol=custom_rtol,
+        fresh_cpp_impl=fresh_cpp_impl,
+    )
+
+
+@pytest.mark.parametrize("fresh_cpp_impl", [0, 1], ids=["production", "fresh_cpp"])
+def test_tanh_fresh_cpp(fresh_cpp_impl):
+    """A/B the fresh semantic tanh (same Sollya polynomial, one datum per row,
+    all-local coefficients) against the production two-datum hand software
+    pipeline with programmed constant registers, identical inputs."""
+    mathop = MathOperation.Tanh
+    custom_atol, custom_rtol = CUSTOM_TOLERANCES.get(mathop, (None, None))
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+        DestAccumulation.No,
+        ApproximationMode.No,
+        mathop,
+        FastMode.No,
+        [64, 64],
+        custom_atol=custom_atol,
+        custom_rtol=custom_rtol,
+        fresh_cpp_impl=fresh_cpp_impl,
+    )
+
+
+@pytest.mark.parametrize("fresh_cpp_impl", [0, 1], ids=["production", "fresh_cpp"])
+def test_tanh_derivative_lut_fresh_cpp(fresh_cpp_impl):
+    """A/B the fresh semantic LUT-contract tanh' (typed 3-region piecewise —
+    the golden's own model — then 1-t^2) against the production l_reg-pinned
+    raw-SFPLUT _calculate_tanh_derivative_ with identical inputs."""
+    mathop = MathOperation.TanhDerivativeLut
+    custom_atol, custom_rtol = CUSTOM_TOLERANCES.get(mathop, (None, None))
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
+        DestAccumulation.No,
+        ApproximationMode.No,
+        mathop,
+        FastMode.No,
+        [64, 64],
+        custom_atol=custom_atol,
+        custom_rtol=custom_rtol,
+        fresh_cpp_impl=fresh_cpp_impl,
+    )
+
+
+@pytest.mark.parametrize("fresh_cpp_impl", [0, 1], ids=["production", "fresh_cpp"])
+def test_silu_fresh_cpp(fresh_cpp_impl):
+    """A/B the fresh semantic silu (identical piecewise sigmoid math, plain
+    loop and locals) against the production POLYVAL5-macro _calculate_silu_
+    with identical inputs."""
+    mathop = MathOperation.Silu
+    custom_atol, custom_rtol = CUSTOM_TOLERANCES.get(mathop, (None, None))
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+        DestAccumulation.No,
+        ApproximationMode.No,
+        mathop,
+        FastMode.No,
+        [64, 64],
+        custom_atol=custom_atol,
+        custom_rtol=custom_rtol,
+        fresh_cpp_impl=fresh_cpp_impl,
+    )
+
+
 @pytest.mark.parametrize("reciprocal_impl", [0, 1], ids=["production", "semantic"])
 @pytest.mark.parametrize(
     "formats,dest_acc",

@@ -768,6 +768,25 @@ def test_fresh_cpp_mul_int(formats, dest_acc, mathop, fresh_cpp_impl):
 
 
 @parametrize(
+    formats=input_output_formats([DataFormat.Int32]),
+    mathop=[MathOperation.SfpuElwLeftShift],
+    dest_acc=[DestAccumulation.Yes],
+    fresh_cpp_impl=[0, 1],
+)
+def test_fresh_cpp_left_shift(formats, dest_acc, mathop, fresh_cpp_impl):
+    """Handwritten (metal ckernel_sfpu_shift.h raw-TTI fixed-LREG kernel) vs fresh
+    typed-C++ A/B over identical Int32 stimuli/golden; exact integer contract,
+    stimuli/golden identical to test_sfpu_binary_int's SfpuElwLeftShift node
+    (out-of-range shift amounts produce 0)."""
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        fresh_cpp_impl=fresh_cpp_impl,
+    )
+
+
+@parametrize(
     formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
     mathop=[MathOperation.SfpuMask],
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],

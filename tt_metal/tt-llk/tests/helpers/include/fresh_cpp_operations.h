@@ -408,4 +408,266 @@ inline void calculate_addcmul_fresh_cpp(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Lane BR causal-tier lift: fresh typed semantic bodies for rows whose
+// production body is hand-shaped (raw TTI streams, fixed-LREG pinning, LUT
+// l_reg idioms, hand software pipelines, programmed constant registers).
+// Each body states the SAME golden contract as the production kernel it is
+// paired with (identical constants where the constants are the golden math)
+// in plain row-at-a-time typed C++: no fixed LREGs, raw instructions, replay
+// slots, SFPLOADMACRO templates, or hand-interleaved schedules.
+// ---------------------------------------------------------------------------
+
+// Fixed clamp/hardtanh bounds shared with the golden and with the production
+// dispatch (helpers/sfpu_dispatch_constants.py CLAMP_MIN/CLAMP_MAX; the
+// production legs receive the same values as fp16/bf16 bit patterns).  The
+// production and fresh legs must always receive identical bounds.
+constexpr float FRESH_CLAMP_LO = -1.0f;
+constexpr float FRESH_CLAMP_HI = 1.0f;
+
+// Ceil (production: raw-TTI _ceil_body_ over l_reg-pinned _trunc_body_,
+// tt_llk_blackhole ckernel_sfpu_rounding_ops.h).  Semantic statement: round
+// to nearest via the 2^23 mantissa-shift (the clean idiom the same file's
+// _round_even_ already uses), then bump lanes that rounded below the input.
+// Exact for every finite input: values with exponent >= 23 have no fraction
+// and keep their bits.
+template <int ITERATIONS>
+__attribute__((noinline)) void calculate_ceil_fresh_cpp()
+{
+    constexpr float MANTISSA_SHIFT = 8388608.0f; // 2^23
+    for (int d = 0; d < ITERATIONS; ++d)
+    {
+        const sfpi::vFloat v = sfpi::dst_reg[0];
+        sfpi::vFloat r       = v;
+        // |v| + 2^23 - 2^23 rounds away the fraction (nearest-even) for all
+        // |v| < 2^23; larger magnitudes (and inf/NaN) keep r = v below.
+        sfpi::vFloat t = sfpi::abs(v) + MANTISSA_SHIFT;
+        t              = t - MANTISSA_SHIFT;
+        v_if (sfpi::exexp(v) < 23)
+        {
+            r = sfpi::copysgn(t, v);
+        }
+        v_endif;
+        // Nearest-integer below the input means r = floor(v); ceil = r + 1.
+        v_if (r < v)
+        {
+            r = r + 1.0f;
+        }
+        v_endif;
+        sfpi::dst_reg[0] = r;
+        sfpi::dst_reg++;
+    }
+}
+
+// EqualZero (production: fully raw-TTI calculate_comp float path with fixed
+// LREG0/2/5 and an ADDR_MOD_6-fused store increment, metal ckernel_sfpu_comp.h).
+// Semantic statement: 1.0 where |v| == 0 (covers -0.0; NaN keeps a nonzero
+// magnitude and stays 0.0 — the production kernel's documented contract).
+template <int ITERATIONS>
+__attribute__((noinline)) void calculate_eqz_fresh_cpp()
+{
+    for (int d = 0; d < ITERATIONS; ++d)
+    {
+        const sfpi::vFloat v = sfpi::dst_reg[0];
+        sfpi::vFloat r       = 0.0f;
+        v_if (sfpi::abs(v) == 0.0f)
+        {
+            r = 1.0f;
+        }
+        v_endif;
+        sfpi::dst_reg[0] = r;
+        sfpi::dst_reg++;
+    }
+}
+
+// Clamp (production: _calculate_clamp_ with fp16-bit-punned scalar params, a
+// trailing offset addend, and #pragma GCC unroll 0).  The dispatch constants
+// are the golden's CLAMP_MIN/CLAMP_MAX with offset 0, so the semantic
+// statement is the bare clamp with typed float bounds.  The predicate form
+// (not min/max) preserves the production kernel's NaN pass-through.
+template <int ITERATIONS>
+__attribute__((noinline)) void calculate_clamp_fresh_cpp(const float lo, const float hi)
+{
+    for (int d = 0; d < ITERATIONS; ++d)
+    {
+        sfpi::vFloat v = sfpi::dst_reg[0];
+        v_if (v < lo)
+        {
+            v = lo;
+        }
+        v_elseif (v >= hi)
+        {
+            v = hi;
+        }
+        v_endif;
+        sfpi::dst_reg[0] = v;
+        sfpi::dst_reg++;
+    }
+}
+
+// Hardtanh (production: _calculate_hardtanh_ encodes the clamp as three
+// chained add-then-zero-select steps over host-pre-negated bf16 params).
+// hardtanh(x) = clamp(x, lo, hi) — same golden, same bounds; stated directly.
+template <int ITERATIONS>
+__attribute__((noinline)) void calculate_hardtanh_fresh_cpp(const float lo, const float hi)
+{
+    for (int d = 0; d < ITERATIONS; ++d)
+    {
+        sfpi::vFloat v = sfpi::dst_reg[0];
+        v_if (v < lo)
+        {
+            v = lo;
+        }
+        v_elseif (v >= hi)
+        {
+            v = hi;
+        }
+        v_endif;
+        sfpi::dst_reg[0] = v;
+        sfpi::dst_reg++;
+    }
+}
+
+// Tanh, bf16 non-approx contract (production: _sfpu_tanh_polynomial_x2_ — an
+// explicit two-datum hand software pipeline with three coefficients parked in
+// programmed constant registers and a scalar epilogue).  Same Sollya
+// polynomial (the golden math), one datum per row, every coefficient a plain
+// local: pipelining, unrolling, and constant residency are the compiler's.
+template <int ITERATIONS>
+__attribute__((noinline)) void calculate_tanh_fresh_cpp()
+{
+    constexpr float C1 = 0.999004364013671875f;
+    constexpr float C2 = 3.0897438526153564453125e-2f;
+    constexpr float C3 = -0.4890659749507904052734375f;
+    constexpr float C4 = 0.281917631626129150390625f;
+    constexpr float C5 = -6.6649019718170166015625e-2f;
+    constexpr float C6 = 5.876733921468257904052734375e-3f;
+    for (int d = 0; d < ITERATIONS; ++d)
+    {
+        const sfpi::vFloat x = sfpi::dst_reg[0];
+        const sfpi::vFloat a = sfpi::abs(x);
+        sfpi::vFloat r       = C6;
+        r                    = r * a + C5;
+        r                    = r * a + C4;
+        r                    = r * a + C3;
+        r                    = r * a + C2;
+        r                    = r * a + C1;
+        r                    = r * a;
+        r                    = sfpi::min(r, 1.0f);
+        r                    = sfpi::copysgn(r, x);
+        sfpi::dst_reg[0]     = sfpi::convert<sfpi::vFloat16b>(r, sfpi::RoundMode::Nearest);
+        sfpi::dst_reg++;
+    }
+}
+
+// Tanh-derivative, legacy LUT contract (production: _calculate_tanh_derivative_
+// pins l_reg[LReg0..2] across the tile and consumes the raw SFPLUT programmed
+// by tanh_derivative_init's TT_SFPLOADI words).  The row's golden IS the
+// 3-region piecewise-linear tanh (breakpoints 1.0/2.0, slopes 0.90625 and
+// 0.09375x+0.8125, saturation 1.0), so the faithful semantic statement is the
+// same piecewise dataflow as typed v_if regions (the sigmoidappx-tree
+// precedent), then 1 - t^2.
+template <int ITERATIONS>
+__attribute__((noinline)) void calculate_tanh_derivative_lut_fresh_cpp()
+{
+    for (int d = 0; d < ITERATIONS; ++d)
+    {
+        const sfpi::vFloat x = sfpi::dst_reg[0];
+        const sfpi::vFloat a = sfpi::abs(x);
+        sfpi::vFloat t       = 1.0f;
+        v_if (a < 1.0f)
+        {
+            t = a * 0.90625f;
+        }
+        v_elseif (a < 2.0f)
+        {
+            t = a * 0.09375f + 0.8125f;
+        }
+        v_endif;
+        sfpi::dst_reg[0] = t * (-t) + 1.0f;
+        sfpi::dst_reg++;
+    }
+}
+
+// Silu (production: _calculate_silu_ over the POLYVAL5 text macro with an
+// abs/1-x symmetry fold; the row measures causal exactly 0.0% — the passes
+// never engage the production structure).  Identical piecewise sigmoid math
+// (the golden tolerance is fitted to it), restated with plain locals and a
+// free loop so the compiler owns unrolling and delivery.
+template <int ITERATIONS>
+__attribute__((noinline)) void calculate_silu_fresh_cpp()
+{
+    for (int d = 0; d < ITERATIONS; ++d)
+    {
+        const sfpi::vFloat v   = sfpi::dst_reg[0];
+        const sfpi::vFloat mag = sfpi::abs(v);
+        sfpi::vFloat sig       = 1.0f;
+        v_if (mag <= 1.0f)
+        {
+            sig = mag * 0.229f + 0.5f;
+        }
+        v_elseif (mag < 5.0f)
+        {
+            sig = (((0.00144462f * mag + -0.01055479f) * mag + -0.01203685f) * mag + 0.24300185f) * mag + 0.50437757f;
+        }
+        v_endif;
+        v_if (v < 0.0f)
+        {
+            sig = 1.0f - sig;
+        }
+        v_endif;
+        sfpi::dst_reg[0] = v * sig;
+        sfpi::dst_reg++;
+    }
+}
+
+// Binary left shift, Int32 (production: calculate_binary_left_shift — an
+// entirely raw TT_SFPLOAD/TTI_SFP* stream over fixed LREG0..4 with magic
+// immediates 0xFE0/-32 and 0x020/32; the row is UNENGAGED at the current
+// pins).  Semantic statement over the same INT32_2S_COMP load/store contract
+// (typed DataLayout::SM32, the fresh add/sub/mul precedent): shift left by
+// the per-lane amount, zero where the amount is outside [0, 32).
+template <int ITERATIONS>
+__attribute__((noinline)) void calculate_left_shift_fresh_cpp()
+{
+    constexpr std::uint32_t tile_rows = 32;
+
+#pragma GCC unroll 4
+    for (int face = 0; face < 4; ++face)
+    {
+#pragma GCC unroll 8
+        for (int row = 0; row < ITERATIONS; ++row)
+        {
+            const sfpi::vInt value  = sfpi::dst_reg[0].mode<sfpi::DataLayout::SM32>();
+            const sfpi::vInt amount = sfpi::dst_reg[tile_rows].mode<sfpi::DataLayout::SM32>();
+            sfpi::vInt result       = sfpi::as<sfpi::vInt>(sfpi::shft(sfpi::as<sfpi::vUInt>(value), amount));
+            v_if (amount < 0 || amount >= 32)
+            {
+                result = 0;
+            }
+            v_endif;
+            sfpi::dst_reg[0].mode<sfpi::DataLayout::SM32>() = result;
+            sfpi::dst_reg++;
+        }
+        ::_llk_math_eltwise_sfpu_inc_dst_face_addr_();
+    }
+}
+
+template <DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS>
+inline void call_left_shift_fresh_cpp(
+    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out, const VectorMode vector_mode)
+{
+    ::ckernel::_sfpu_binary_check_<DST_SYNC, DST_ACCUM>(dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
+    LLK_ASSERT(dst_index_in1 == dst_index_in0 + 1, "fresh left shift expects adjacent inputs");
+    LLK_ASSERT(dst_index_out == dst_index_in0, "fresh left shift expects in-place output");
+    LLK_ASSERT(vector_mode == VectorMode::RC, "fresh left shift expects full-tile vector mode");
+
+    // Anchor the dynamic tile once in the wrapper so the isolated semantic body
+    // contains only constant relative Dst addresses (the fresh max/min, add/sub,
+    // and mul precedent).
+    ::_llk_math_eltwise_sfpu_start_(dst_index_in0);
+    calculate_left_shift_fresh_cpp<ITERATIONS>();
+    ::_llk_math_eltwise_sfpu_done_();
+}
+
 }  // namespace ckernel::sfpu
