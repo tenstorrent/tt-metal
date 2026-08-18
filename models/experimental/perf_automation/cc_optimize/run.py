@@ -1570,12 +1570,25 @@ def stacks_by_stage(seq) -> dict:
 
 
 def _model_id_for_facts(model_root) -> str:
-    """The model's HF id, via the one extractor that owns that question. "" when there is none."""
-    try:
-        from agent.model_contract import _hf_repo_ids
+    """The model's HF id, read from its own source. "" when there is none.
 
-        ids = _hf_repo_ids(Path(model_root)) or []
-        return str(ids[0]) if ids else ""
+    THE SECOND SITE OF THE SAME DEFECT, and it had never returned an id. This called
+    _hf_repo_ids(Path(model_root)) -- that function takes a parsed Source and does
+    `for _path, tree in src.trees.items()`, which raises AttributeError on a Path. The bare except
+    turned that into "", so every caller believed the model had no hub id.
+
+    _section_bytes_cached had the identical line and was fixed on 2026-08-17; this one was not,
+    because nothing pointed at it until stage_roots went looking. The cost: declared_sections needs
+    the id to find the checkpoint in the shared HF cache (the demo directory holds no weights), so it
+    returned {} -- and stage_roots bails on an empty section map before it ever reaches its fallback.
+    Every fix made to that fallback was therefore unreachable, across four runs.
+
+    model_id_from_source answers the same question and takes a path, which is what the callers have.
+    """
+    try:
+        from agent.stack_survey import model_id_from_source
+
+        return str(model_id_from_source(model_root) or "")
     except Exception:  # noqa: BLE001
         return ""
 

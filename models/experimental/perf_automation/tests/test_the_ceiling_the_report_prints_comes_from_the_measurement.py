@@ -265,3 +265,40 @@ def test_generated_tests_that_disagree_are_not_evidence(tmp_path):
         {"audio_tower.layers": 32, "language_model.model.layers": 30}, None, str(tmp_path)
     )
     assert "encode" not in got, got
+
+
+def test_nothing_hands_a_path_to_the_source_parser():
+    """TWO SITES, ONE DEFECT, AND FIXING ONE LEFT THE OTHER LIVE FOR FOUR MORE RUNS.
+
+    _hf_repo_ids takes a parsed Source and iterates `src.trees.items()`; handed a Path it raises
+    AttributeError, and both callers wrapped it in a bare except:
+
+        _section_bytes_cached   -> {} on every model, so _stage_share always returned 1.0
+        _model_id_for_facts     -> "" on every model, so declared_sections found no checkpoint
+                                   and stage_roots bailed before reaching its fallback
+
+    The first was found on 2026-08-17 and fixed. The second was not, because nothing pointed at it --
+    and it silently disabled every subsequent fix to stage_roots: four runs, each concluding the
+    mapping was still broken for a different reason. A grep for the CALL SHAPE would have found both
+    in one pass, which is what this is.
+    """
+    import re
+
+    for rel in ("cc_optimize/summary.py", "cc_optimize/run.py", "cc_optimize/perf_mcp.py"):
+        src = (_PA / rel).read_text()
+        # CODE ONLY. The docstrings quote the broken call to explain it; asserting over prose would
+        # forbid recording what the defect was.
+        code = "".join(seg for i, seg in enumerate(src.split('"""')) if i % 2 == 0)
+        code = "\n".join(ln for ln in code.splitlines() if not ln.lstrip().startswith("#"))
+        assert not re.search(r"_hf_repo_ids\(\s*Path\(", code), "%s passes a Path to _hf_repo_ids again" % rel
+
+
+def test_the_model_id_resolves_from_a_path_the_callers_actually_have():
+    """Both callers hold a model ROOT, never a parsed Source, so the resolver must take a path."""
+    import inspect
+
+    from cc_optimize.run import _model_id_for_facts
+
+    src = inspect.getsource(_model_id_for_facts)
+    assert "model_id_from_source" in src, "the id no longer comes from the model's own source"
+    assert "_hf_repo_ids" not in src.split('"""', 2)[-1], "the Source-only extractor is back"
