@@ -1976,6 +1976,8 @@ jobs:
       - name: Select owners for notification
         if: needs.parse-comment.outputs.is-direct-ping != 'true'
         id: select-owners
+        env:
+          GITHUB_TOKEN: ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}
         run: |
           # Read TEAM_MEMBERS from file (saved in generate-comment step)
           TEAM_MEMBERS=$(cat "${RUNNER_TEMP}/team_members.txt")
@@ -2002,6 +2004,102 @@ jobs:
           is_pr_author() {
             local username="$1"
             [ "$username" = "$PR_AUTHOR_LOGIN" ]
+          }
+
+          # Filter out out-of-office (OOO) users from a comma-separated login list.
+          # A user is treated as OOO if their GitHub status is non-null AND either
+          # indicatesLimitedAvailability is true (the "Busy" flag) OR the status
+          # message matches OOO/out-of-office/vacation/PTO (case-insensitive).
+          # GitHub auto-clears an expired status to null, so no expiry check is needed.
+          # Batches all logins into ONE GraphQL request via aliases to stay well
+          # within rate limits. Fails open: on any API/parse error or if filtering
+          # would leave the pool EMPTY, the original CSV is returned unchanged so we
+          # never ping nobody. Echoes the surviving CSV; also sets the global
+          # OOO_SKIPPED_USERS with any logins that were dropped (for logging).
+          OOO_SKIPPED_USERS=""
+          filter_out_ooo() {
+            local csv="$1"
+            [ -z "$csv" ] && { echo ""; return 0; }
+            if [ -z "${GITHUB_TOKEN:-}" ]; then
+              echo "$csv"
+              return 0
+            fi
+
+            local -a logins
+            IFS=',' read -ra logins <<< "$csv"
+            [ "${#logins[@]}" -eq 0 ] && { echo "$csv"; return 0; }
+
+            # Build a single aliased GraphQL query: u0: user(login:"a"){...}
+            local sub="" i=0 login
+            for login in "${logins[@]}"; do
+              [ -z "$login" ] && continue
+              # Guard against anything that is not a plausible GitHub login.
+              case "$login" in
+                *[!A-Za-z0-9-]*) continue ;;
+              esac
+              sub="${sub}u${i}: user(login: \"${login}\") { login status { message indicatesLimitedAvailability } } "
+              i=$((i + 1))
+            done
+            [ -z "$sub" ] && { echo "$csv"; return 0; }
+
+            local query resp
+            query=$(printf 'query { %s }' "$sub")
+            resp=$(curl -s --max-time 30 -X POST \
+              -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+              -H "Content-Type: application/json" \
+              -d "$(jq -n --arg q "$query" '{query: $q}')" \
+              "https://api.github.com/graphql")
+
+            # Fail open on transport error, malformed/null data, OR a GraphQL
+            # errors array (partial-data responses are valid GraphQL but may omit
+            # some users' status — treat them as "lookup failed").
+            if [ -z "$resp" ] \
+              || ! echo "$resp" | jq -e '.data != null' >/dev/null 2>&1 \
+              || echo "$resp" | jq -e '(.errors // []) | length > 0' >/dev/null 2>&1; then
+              echo "Warning: OOO lookup failed or returned partial data, using full owner list" >&2
+              echo "$csv"
+              return 0
+            fi
+
+            # Logins whose status marks them OOO. Match keywords as whole words
+            # (\b...\b) so e.g. "PTO" does not match "laptop".
+            local ooo
+            ooo=$(echo "$resp" | jq -r '
+              .data
+              | to_entries[]
+              | .value
+              | select(. != null and .status != null)
+              | select(
+                  (.status.indicatesLimitedAvailability == true)
+                  or ((.status.message // "") | test("\\b(OOO|out of office|vacation|PTO)\\b"; "i"))
+                )
+              | .login
+            ' 2>/dev/null | tr '\n' ' ')
+
+            [ -z "$ooo" ] && { echo "$csv"; return 0; }
+
+            # Rebuild CSV without OOO logins, in original order.
+            local kept="" dropped=""
+            for login in "${logins[@]}"; do
+              [ -z "$login" ] && continue
+              if echo " $ooo " | grep -q " $login "; then
+                dropped="$dropped$login,"
+              else
+                kept="$kept$login,"
+              fi
+            done
+            kept=$(echo "$kept" | sed 's/,$//')
+            dropped=$(echo "$dropped" | sed 's/,$//')
+
+            # Fail open if everyone in the pool is OOO — ping the full list anyway.
+            if [ -z "$kept" ]; then
+              echo "Note: all candidate owners appear OOO ($dropped); pinging full list anyway" >&2
+              echo "$csv"
+              return 0
+            fi
+
+            [ -n "$dropped" ] && echo "OOO owners skipped from ping pool: $dropped" >&2
+            echo "$kept"
           }
 
           # GitHub team to Slack group mapping
@@ -2345,6 +2443,8 @@ jobs:
                       # Common selection logic: select up to 2 owners from remaining unapproved members
                       # For metalium-api-owners API files: this is in addition to akerteszTT (if added above)
                       # For all other cases: this is the primary selection
+                      # Drop OOO members before the random pick (fails open to the full list).
+                      TEAM_UNAPPROVED=$(filter_out_ooo "$TEAM_UNAPPROVED")
                       if [ -n "$TEAM_UNAPPROVED" ]; then
                         IFS=',' read -ra TEAM_MEMBERS_ARRAY <<< "$TEAM_UNAPPROVED"
                         TEAM_MEMBER_COUNT=${#TEAM_MEMBERS_ARRAY[@]}
@@ -2404,6 +2504,9 @@ jobs:
                 fi
               done
               PATTERN_UNAPPROVED=$(echo "$PATTERN_UNAPPROVED" | sed 's/,$//')
+
+              # Drop OOO owners before the random pick (fails open to the full list).
+              PATTERN_UNAPPROVED=$(filter_out_ooo "$PATTERN_UNAPPROVED")
 
               # Select up to 2 owners from this pending pattern
               if [ -n "$PATTERN_UNAPPROVED" ]; then
