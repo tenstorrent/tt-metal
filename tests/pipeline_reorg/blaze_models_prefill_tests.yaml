@@ -9,6 +9,20 @@
 #           models lists them in parentheses. Op-level jobs with no model (CCL, SDPA) name the op.
 #         * Tag what is being gated: "accuracy" (PCC/golden compare), "perf", or "determinism".
 #         * Chunked tests state total ISL and chunk size as <isl>@<chunk>, e.g. "code_debug 55k@5k".
+#         * One separator, one meaning -- a job whose name reads several ways is the bug this
+#           convention exists to prevent:
+#             "+"  the distinct things this one job gates, each carrying its own shape
+#                  -> "MoE accuracy 12.5k + perf 25k"
+#             ","  several shapes under a SINGLE tag; binds tighter than "+"
+#                  -> "MLA accuracy 100k, 128k"
+#             "&"  two models. At three or more the unit leads and the models move to a trailing
+#                  "(...)" list, so the unit under test is not buried behind the model list
+#                  -> "DeepSeek-V3-671B & Kimi-K2.6-1T MLA chunked accuracy 10k@5k"
+#                  -> "Ring joint SDPA perf + accuracy (WAN 2.2, DeepSeek-V3-671B, ...)"
+#             "/"  components of one pipeline, not a list of gated things
+#                  -> "disaggregated prefill runner/producer"
+#           Never leave a shape whose binding is ambiguous: "MoE accuracy + perf 25k" cannot say
+#           whether 25k covers both tags, so give each tag its own shape or give neither one.
 #   cmd: The exact command to run (env vars must be inlined).
 #   test_type: Test type identifier for filtering (workflow_dispatch test-type selection).
 #   test_group: Group identifier for selecting multiple related tests at once.
@@ -42,7 +56,7 @@
   team: models
   sp_config: sc1
 
-- name: "DeepSeek-V3-671B MLA accuracy 100k + 128k"
+- name: "DeepSeek-V3-671B MLA accuracy 100k, 128k"
   cmd: |
     export DEEPSEEK_V3_HF_MODEL=/mnt/models/DeepSeek-R1-0528-fp8-4236a6af/
     export DEEPSEEK_V3_CACHE=/mnt/models/DeepSeek-R1-0528-Cache/CI
@@ -65,7 +79,7 @@
   team: models
   sp_config: sc1
 
-- name: "DeepSeek-V3-671B + Kimi-K2.6-1T MLA chunked accuracy 10k@5k"
+- name: "DeepSeek-V3-671B & Kimi-K2.6-1T MLA chunked accuracy 10k@5k"
   cmd: |
 
     mpirun --bind-to none --pernode --tag-output bash -lc '
@@ -244,7 +258,7 @@
   team: models
   sp_config: sc1
 
-- name: "Kimi-K2.6-1T MLA accuracy 5k + 25k"
+- name: "Kimi-K2.6-1T MLA accuracy 5k, 25k"
   cmd: |
     export KIMI_MLA_REF_CACHE=/mnt/models/kimi-prefill-cache/test_mla_output
 
@@ -303,7 +317,7 @@
   team: models
   sp_config: sc1
 
-- name: "GLM-5.2-744B MoE accuracy + perf 25k"
+- name: "GLM-5.2-744B MoE accuracy 12.5k + perf 25k"
   cmd: |
     export MESH_DEVICE=TG
     # GLM-5.2 256-expert MoE (device gate, DEVICE_FP32) vs the CPU MoE reference; random weights.
@@ -392,7 +406,7 @@
   team: models
   sp_config: sc1
 
-- name: "Kimi-K2.6-1T prefill block accuracy 5k + 25k"
+- name: "Kimi-K2.6-1T prefill block accuracy 5k, 25k"
   cmd: |
     export MESH_DEVICE=TG
     export KIMI_K2_6_HF_MODEL=/mnt/models/Kimi-K2_6-dequantized
@@ -659,7 +673,7 @@
 # 4-galaxy (SC4-blitz) disaggregated prefill: a 4-rank background runner opens the mesh, loads
 # Kimi-2.7, warmup-compiles, and publishes the merged KV chunk table to shared NFS; a device-less
 # producer then reads it back and PCCs it against the golden KV cache.
-- name: "Kimi-K2.7-1T disaggregated prefill runner + producer KV accuracy 55k@5k (SC4)"
+- name: "Kimi-K2.7-1T disaggregated prefill runner/producer KV accuracy 55k@5k (SC4)"
   cmd: |
     set -euo pipefail
     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
