@@ -20,10 +20,6 @@ class MetalContext;
 
 class DeviceCommandCalculator {
 public:
-    // Prefer DeviceCommandCalculator(MetalContext&). Legacy default resolves the global singleton
-    // and will be removed once all callers pass a MetalContext (N2c/C3).
-    // TODO(N2c/C3): remove once all callers pass a MetalContext.
-    DeviceCommandCalculator();
     explicit DeviceCommandCalculator(MetalContext& ctx);
 
     uint32_t write_offset_bytes() const { return this->cmd_write_offsetB; }
