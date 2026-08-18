@@ -27,7 +27,7 @@ from pipeline_config import SUBFOLDER, Config
 from utils.dataset import LatentEmbedDataset, TextEmbeds, make_collate_fn
 from utils.device_setup import setup_device
 from utils.logger import Logger
-from utils.lora_export import load_all, save_all
+from utils.lora_export import init_lora_A_gaussian, load_all, save_all
 from utils.lora_targets import resolve as resolve_lora_targets
 from timing import fmt, phase, record
 
@@ -85,6 +85,10 @@ def build_lora_expert(role: str, cfg: Config) -> ttml.modules.LoraModel:
         verbose=True,
     )
     lora_model = ttml.modules.LoraModel(model, lora_config)
+
+    if cfg.LORA_A_INIT == "gaussian":
+        n = init_lora_A_gaussian(lora_model, cfg.LORA_RANK, cfg.MESH_SHAPE, seed=cfg.SEED)
+        print(f"[lora] {role}: re-initialized {n} lora_A ~ N(0, 1/{cfg.LORA_RANK})")
 
     all_params = lora_model.parameters()
     trainable = {name: p for name, p in all_params.items() if "lora" in name}
