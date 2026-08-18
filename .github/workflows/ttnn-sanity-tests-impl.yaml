@@ -134,8 +134,10 @@ jobs:
       group: ttsim-lib-${{ github.run_id }}-${{ matrix.lib }}
       cancel-in-progress: false
       queue: max
+    # The probe and upload talk to the artifact service with the runtime token, not
+    # GITHUB_TOKEN, so no actions: scope is needed — and requesting one fails for callers that
+    # run with the default actions: none (a nested job cannot exceed its caller's grant).
     permissions:
-      actions: read # the existence check reads this run's artifact list
       contents: read
     steps:
       - name: Checkout fetch-ttsim action and pinned ttsim version
