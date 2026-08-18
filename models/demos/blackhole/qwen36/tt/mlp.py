@@ -222,6 +222,23 @@ class Qwen36MLP:
         self.compute_kernel_config_decode = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True, packer_l1_acc=True
         )
+        # WH-only, gate/up decode matmuls ONLY (not down): MEASURED (N300, M=32 K=4096 N=6144,
+        # test_mlp_decode_matmul_sweep.py, 3 independent runs each) fp32_dest_acc_en=False beats
+        # compute_kernel_config_decode's fp32_dest_acc_en=True by ~3-4% on both gate and up,
+        # reproducibly -- paired with mlp_w1_decode_1d_progcfg/mlp_w3_decode_1d_progcfg's num_cores=56
+        # (also re-tuned there). Down-proj showed no such win (already at its optimal core count, and
+        # fp32_dest_acc_en made an inconsistent <0.5% difference there) so it keeps
+        # compute_kernel_config_decode unchanged.
+        # SCOPED TO WORMHOLE 9B ON N300 (tpc.wh_9b_n300) -- and this MUST match the fp32_acc argument
+        # model_config.py passes to mlp_w1/w3_decode_1d_progcfg, which is gated on the same helper.
+        # Outside the scope this is compute_kernel_config_decode, i.e. the previously shipped config.
+        self.compute_kernel_config_gateup_decode = (
+            ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=False, packer_l1_acc=False
+            )
+            if (args is not None and tpc.wh_9b_n300(args))
+            else self.compute_kernel_config_decode
+        )
 
     def forward(self, x):
         if self.num_devices > 1:
@@ -299,14 +316,14 @@ class Qwen36MLP:
             w1_out = ttnn.linear(
                 x_il,
                 w.w1,
-                compute_kernel_config=ckc,
+                compute_kernel_config=self.compute_kernel_config_gateup_decode,
                 program_config=args.mlp_w1_decode_1d_progcfg,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
             )
             w3_out = ttnn.linear(
                 x_il,
                 w.w3,
-                compute_kernel_config=ckc,
+                compute_kernel_config=self.compute_kernel_config_gateup_decode,
                 program_config=args.mlp_w3_decode_1d_progcfg,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
             )
