@@ -148,7 +148,7 @@ class DFlashRunner:
         trace_verify: bool = True,
         verify_width: int = 256,
         verify_rows: int = 32,
-        offset_free_verify: bool = False,
+        offset_free_verify: bool = True,
         offset_free_eager: bool = False,
         max_verify_traces: int = 24,
     ) -> None:
@@ -277,10 +277,21 @@ class DFlashRunner:
         self.verify_rows = int(verify_rows)
         #: Capture the verify graph **once per generation** instead of once per 32-row
         #: window, by moving ``start_pos`` out of the program and into device tensors
-        #: (``PrefillRuntimeOffset``).  Per-window capture measured at 1.08 s of a 3.92 s
-        #: 128-token run -- 26 % of runtime spent compiling and capturing rather than
-        #: computing.  Falls back to the per-window path automatically once the window
-        #: would leave the sliding window, where the graph genuinely differs.
+        #: (``PrefillRuntimeOffset``).  Capture measured 1.069 s of a 3.93 s run at OSL
+        #: 128 and 4.83 s of 12.20 s at OSL 256 -- 27 % and 40 % of runtime spent
+        #: compiling rather than computing, and it grows with tokens generated.  One
+        #: capture costs 0.226 s regardless.
+        #:
+        #: Graded per window against the shipped graph rather than by token equality,
+        #: which F2 established is not a valid gate here: ``dflash_offset_free_probe``
+        #: measures bit-identical hidden states at offsets 64/96/160 and argmax agreement
+        #: 32/32 at all four probed offsets.  Offset 128 differs (PCC 0.9991, one element
+        #: by 20.0) because that is where the shipped path picks chunk 128 against this
+        #: path's fixed 32, i.e. a different reduction order; argmax is unaffected and
+        #: acceptance measured *higher* (2.783 against 2.723).
+        #:
+        #: Falls back to the per-window path automatically once the window would leave the
+        #: sliding window, where the graph genuinely differs.
         self.offset_free_verify = bool(offset_free_verify)
         #: Diagnostic: run the offset-free *graph* with no trace at all.  This splits the
         #: two ways F24's divergence-at-window-advance can be caused -- a wrong graph
