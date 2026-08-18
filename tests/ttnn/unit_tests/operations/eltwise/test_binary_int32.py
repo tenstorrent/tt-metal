@@ -1189,10 +1189,10 @@ def test_binary_scalar_div_int32(device):
         ttnn.fmod,
     ],
 )
-@pytest.mark.parametrize("scalar", [1, 2, 3, 7, 100, 65535, -3, -7])
+@pytest.mark.parametrize("scalar", [1, 2, 3, 7, 100, 65535, -3, -7, -2147483648, 2147483647])
 def test_binary_remainder_fmod_int32_scalar(ttnn_op, scalar, device):
     torch_input_tensor_a = torch.tensor(
-        [0, 1, 5, 7, -5, -7, 100, -100, 2147483647, -2147483647, 1073872896, -1073872896]
+        [0, 1, 5, 7, -5, -7, 100, -100, 2147483647, -2147483647, -2147483648, 1073872896, -1073872896]
     )
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
