@@ -267,7 +267,9 @@ def test_binary_golden_requires_dest_acc_and_output_format_together():
             "output_format": DataFormat.Float32,
         }
         del kwargs[missing]
-        with pytest.raises(ValueError, match="must be supplied together"):
+        with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+            ValueError, match="must be supplied together"
+        ):
             golden(
                 MathOperation.SfpuElwadd,
                 tile_pair.clone(),
