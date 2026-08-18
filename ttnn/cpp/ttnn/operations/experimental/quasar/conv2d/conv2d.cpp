@@ -692,11 +692,25 @@ Result conv2d_L1(
     // plain matmul (im2col is trivial), so setting full_inner_dim engages the split; this dodges the fused
     // conv's full-N HEIGHT_SHARDED weights overflow (the observed N-halving) AND the fused 0x19. 1x1 already
     // has act_block_w == full_K (single K-block, num_blocks_act_w == 1), so no act_block_w override is needed.
-    const bool force_1x1_nonmm_split = arch_is_quasar && split_env_requested && height_sharded_conv && !mm_conv &&
+    // [#48552 Stage2] EXTENDED to BLOCK_SHARDED 1x1 stride-2 (the layer2/3 s2 downsamples). The prior Stage2
+    // revert applied to the FUSED no-spill 3x3 path (force_conv_no_spill), where block-sharding genuinely
+    // splits K across grid columns. For a 1x1 conv on the SPLIT path this is avoidable: forcing
+    // act_block_w = full_K makes it a SINGLE K-block (in0_num_blocks_w == 1), so Program B is a single-K-block
+    // 2D-mcast matmul::linear with the N-split in its 2D config -- NO multi-K-block partials accumulate (the
+    // fused conv_bmm kb0->kb1 transition hang we localized), and NO HEIGHT_SHARDED full-N N-halving. This is
+    // the pragmatic route off the fused block-sharded conv for the s2 downsamples (layer3_module1 @28 stays
+    // block-sharded because HS N-halves it; this gives it a working device path without the LLK fix).
+    const bool force_1x1_nonmm_split = arch_is_quasar && split_env_requested &&
+                                       (height_sharded_conv || block_sharded_conv) && !mm_conv &&
                                        !conv_is_1d_depthwise && (kernel_size[0] == 1) && (kernel_size[1] == 1) &&
                                        (full_inner_dim_k_ntiles <= kQuasarConvNoSpillMaxKTiles);
     if (force_1x1_nonmm_split) {
         conv_config.full_inner_dim = true;
+        if (block_sharded_conv) {
+            // Height-sharded 1x1 already has act_block_w == full_K (single K-block); block-sharded defaults to
+            // splitting K across columns, so force the full-K single K-block explicitly here.
+            opt_conv_op_block_config.act_block_w_ntiles = full_inner_dim_k_ntiles;
+        }
     }
 
     // ---- Quasar SPLIT-PROGRAM stem OOM guard: DRAM height-slicing for large per-core M ----
