@@ -1,5 +1,6 @@
 # Owned by @tenstorrent/metalium-developers-ds-prefill. Add/remove ops for
 # this domain here without touching ttnn/CMakeLists.txt.
+add_subdirectory(attn_res_gather_softmax)
 add_subdirectory(combine)
 add_subdirectory(dispatch)
 add_subdirectory(extract)
@@ -27,6 +28,7 @@ add_library(TTNN::Ops::Experimental::DeepSeekPrefill ALIAS ttnn_op_deepseek_pref
 target_link_libraries(
     ttnn_op_deepseek_prefill
     INTERFACE
+        TTNN::Ops::Experimental::DeepSeekPrefill::AttnResGatherSoftmax
         TTNN::Ops::Experimental::DeepSeekPrefill::Combine
         TTNN::Ops::Experimental::DeepSeekPrefill::Dispatch
         TTNN::Ops::Experimental::DeepSeekPrefill::Extract
@@ -61,6 +63,7 @@ target_link_libraries(
 target_sources(
     ttnn_op_deepseek_prefill
     INTERFACE
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::AttnResGatherSoftmax>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::Combine>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::Dispatch>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::Extract>

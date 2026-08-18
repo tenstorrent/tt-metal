@@ -73,6 +73,18 @@
   owner_id: U08ARDXARPF # Ilija Anastasijevic
   team: ttnn
 
+# The op gathers over a mesh axis, and a mesh smaller than the box is a submesh, which
+# fabric does not come up on — so the mesh a row asks for is fixed by the box it runs on.
+- id: bh-lb-ttnn-attn-res-gather-softmax-unit
+  name: ttnn attn_res_gather_softmax unit tests
+  model-name: kimi_k3
+  cmd: pytest tests/ttnn/unit_tests/operations/experimental/test_attn_res_gather_softmax.py -k "mesh-2x4"
+  skus:
+    bh_loudbox:
+      timeout: 10
+  owner_id: U09LK84G4TF # Nikola Milicevic
+  team: ttnn
+
 # --- unit (fast) ---
 # Fast multi-card legs that the legacy blackhole-multi-card-unit-tests-impl.yaml
 # also runs in post-commit (fast-only: true). Kept in e2e to match the run-count
