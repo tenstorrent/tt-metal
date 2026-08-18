@@ -183,11 +183,12 @@ def plan(config: Config, scans: dict) -> list:
 
 
 class DeviceWedged(RuntimeError):
-    """A variant hung the core, and only a card reset will clear it.
+    """A variant hung the core, and nothing this worker can do will clear it.
 
     Carries the label of the variant that did it: that variant is the race the
-    sweep exists to find, and the reset about to follow takes the evidence with
-    it, so the label has to travel with the exception.
+    sweep exists to find, and the recovery about to follow — this worker killed,
+    or in the worst case the whole card reset — takes the evidence with it, so
+    the label has to travel with the exception.
     """
 
 

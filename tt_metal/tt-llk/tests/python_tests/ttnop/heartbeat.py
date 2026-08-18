@@ -33,10 +33,10 @@ DONE = "done"
 _HEARTBEAT_PREFIX = "hb."
 _DONE_PREFIX = "done."
 _RESULTS_PREFIX = "results."
-# One file, not one per worker: the supervisor only needs to be told once that
-# the card wants resetting, and a second worker hanging before it gets there is
-# the same request.
-_RESET_REQUEST = "reset-requested"
+# One file, not one per worker: the supervisor only needs to be told once that a
+# worker is stuck on a core it can no longer use, and a second worker hanging
+# before it gets there is the same request.
+_RECOVERY_REQUEST = "recovery-requested"
 
 # Enough of a failure to identify it in a report without carrying a whole tensor
 # dump per case into the junit XML.
@@ -114,14 +114,16 @@ class Writer:
         with open(self._done, "a") as handle:
             handle.write(nodeid + "\n")
 
-    def request_reset(self, case: str, variant: str) -> None:
-        """Ask the supervisor to reset the card, because we cannot.
+    def request_recovery(self, case: str, variant: str) -> None:
+        """Ask the supervisor to take this worker off the core it just hung.
 
         Eight workers share one card, so resetting from in here would take the
         other seven down mid-case; and it would not even fix this process, since
         the reset is only safe once the run it interrupts is dead. So the worker
         states the problem and the supervisor, which owns both the card and the
-        run, decides when to act on it.
+        run, decides how to act on it — normally by killing this worker so xdist
+        replaces it on one of the card's spare cores, and only resetting the card
+        when there are none of those left.
         """
         if self.root is None:
             return
@@ -129,14 +131,18 @@ class Writer:
             "worker": self.worker,
             "case": case,
             "variant": variant,
+            # Carried because killing this process is how the core is given up,
+            # and the supervisor cannot look the pid up from a heartbeat: parking
+            # publishes DONE, and a DONE worker is deliberately not in the live set.
+            "pid": os.getpid(),
             "ts": time.time(),
         }
         # Same temp-and-rename as a beat: the supervisor polls this file and must
         # never catch a half-written record.
-        temp = self.root / f"{_RESET_REQUEST}.{os.getpid()}.tmp"
+        temp = self.root / f"{_RECOVERY_REQUEST}.{os.getpid()}.tmp"
         with open(temp, "w") as handle:
             json.dump(payload, handle, separators=(",", ":"))
-        os.replace(temp, self.root / _RESET_REQUEST)
+        os.replace(temp, self.root / _RECOVERY_REQUEST)
 
     def record_result(
         self, nodeid: str, outcome: str, duration: float = 0.0, message: str = ""
@@ -299,15 +305,15 @@ def record_skipped(root: Path, nodeids, reason: str = "") -> None:
             )
 
 
-def reset_request(root: Path):
-    """The hang asking for a card reset, or None if nobody has hung."""
-    return _read(root / _RESET_REQUEST)
+def recovery_request(root: Path):
+    """The worker asking to be taken off a hung core, or None if nobody has hung."""
+    return _read(root / _RECOVERY_REQUEST)
 
 
-def clear_reset_request(root: Path) -> None:
-    """Drop a request once it has been acted on, so one hang buys one reset."""
+def clear_recovery_request(root: Path) -> None:
+    """Drop a request once it has been acted on, so one hang buys one recovery."""
     try:
-        (root / _RESET_REQUEST).unlink()
+        (root / _RECOVERY_REQUEST).unlink()
     except OSError:
         pass
 

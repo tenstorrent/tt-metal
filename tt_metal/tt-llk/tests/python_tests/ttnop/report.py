@@ -19,6 +19,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 FAILURES = "failures.jsonl"
+SKIPS = "skips.jsonl"
 MARKDOWN = "report.md"
 
 
@@ -94,6 +95,27 @@ def append(report_dir: Path, record: dict) -> None:
 
 def load(report_dir: Path) -> list:
     path = report_dir / FAILURES
+    if not path.exists():
+        return []
+    with open(path) as handle:
+        return [json.loads(line) for line in handle if line.strip()]
+
+
+def append_skips(report_dir: Path, hung: str, cases) -> None:
+    """Sibling params stepped over because `hung` wedged a core. Survives the reset."""
+    wanted = [case for case in cases if case]
+    if not wanted:
+        return
+    report_dir.mkdir(parents=True, exist_ok=True)
+    with open(report_dir / SKIPS, "a") as handle:
+        for case in wanted:
+            handle.write(
+                json.dumps({"case": case, "hung": hung}, separators=(",", ":")) + "\n"
+            )
+
+
+def load_skips(report_dir: Path) -> list:
+    path = report_dir / SKIPS
     if not path.exists():
         return []
     with open(path) as handle:
@@ -235,13 +257,43 @@ def _by_filler(group: list):
     ]
 
 
+def _skip_section(skips: list) -> list:
+    """Sibling params not run because another param of the same test hung a core."""
+    if not skips:
+        return []
+    by_hung = defaultdict(list)
+    for record in skips:
+        hung = record.get("hung") or "unknown"
+        case = record.get("case") or ""
+        if case:
+            by_hung[hung].append(case)
+    out = [
+        "",
+        "## Skipped after a hang",
+        "",
+        "These cases were not run. A sibling param of the same test hung a core, "
+        "and the rest of that family hits the same site — so they were stepped over "
+        "rather than spending another recovery on the same race. They are not findings.",
+        "",
+        "| skipped | hung case |",
+        "| --- | --- |",
+    ]
+    for hung, cases in by_hung.items():
+        for case in cases:
+            out.append(f"| `{case}` | `{hung}` |")
+    return out
+
+
 def render(report_dir: Path, env: dict) -> str:
     records = in_plan_order(load(report_dir))
-    if not records:
+    skips = load_skips(report_dir)
+    if not records and not skips:
         return ""
-    races, leftover = _first_races(records)
+    races, leftover = _first_races(records) if records else ({}, {})
     race_records = [record for group in races.values() for record in group]
-    sites, labels, cases, order = _by_site(race_records)
+    sites, labels, cases, order = (
+        _by_site(race_records) if race_records else ({}, {}, 0, [])
+    )
     folded = sum(len(group) for group in leftover.values())
 
     out = [
@@ -263,10 +315,16 @@ def render(report_dir: Path, env: dict) -> str:
         "",
         f"{len(order)} race(s) across {cases} case(s)"
         + (
-            f"; {folded} later variant(s) folded as leftover sync points."
+            f"; {folded} later variant(s) folded as leftover sync points"
             if folded
-            else "."
-        ),
+            else ""
+        )
+        + (f"; {len(skips)} case(s) skipped after a hang." if skips else "."),
+    ]
+    out += _skip_section(skips)
+    if not order:
+        return "\n".join(out) + "\n"
+    out += [
         "",
         "## Sites",
         "",

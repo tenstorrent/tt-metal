@@ -95,14 +95,14 @@ if [[ -z "$NODEIDS" ]]; then
     started=$SECONDS
     flock "$BUILD_LOCK" \
         python3 -m pytest --compile-producer -n "$JOBS" -q \
-            "${QUIET_ARGS[@]}" "${FILTER_ARGS[@]}" "${TESTS[@]}"
+            "${QUIET_ARGS[@]}" "${PYTEST_SIM_ARGS[@]}" "${FILTER_ARGS[@]}" "${TESTS[@]}"
     compile_s=$((SECONDS - started))
 
     echo ">> [2/3] collecting"
     NODEIDS="$(mktemp /tmp/ttnop-nodeids-XXXXXX)"
     trap 'rm -rf "$STATE_DIR"; [[ -n "${COLLECT_TO:-}" ]] || rm -f "$NODEIDS"' EXIT
     python3 -m pytest --collect-only -q --compile-consumer \
-        "${QUIET_ARGS[@]}" "${SPLIT_ARGS[@]}" "${FILTER_ARGS[@]}" "${TESTS[@]}" \
+        "${QUIET_ARGS[@]}" "${PYTEST_SIM_ARGS[@]}" "${SPLIT_ARGS[@]}" "${FILTER_ARGS[@]}" "${TESTS[@]}" \
         | grep '::' > "$NODEIDS" || true
     echo ">> $(grep -c . "$NODEIDS") case(s)"
 fi
@@ -122,7 +122,7 @@ started=$SECONDS
 # resumes; it exits 75 for that, and 70 if the sweep never produced junit.xml.
 status=0
 supervise_nodeids "$NODEIDS" --compile-consumer \
-    "${QUIET_ARGS[@]}" "${XDIST_ARGS[@]}" || status=$?
+    "${QUIET_ARGS[@]}" "${PYTEST_SIM_ARGS[@]}" "${XDIST_ARGS[@]}" || status=$?
 
 if [[ ! -f "$REPORT_DIR/junit.xml" ]]; then
     echo ">> ttnop: sweep did not complete — no junit.xml in $REPORT_DIR" >&2

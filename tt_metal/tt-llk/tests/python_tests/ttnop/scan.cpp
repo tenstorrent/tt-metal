@@ -43,29 +43,29 @@ struct Range
     }
 };
 
-// Optimisation folds the LLK helpers into one function, but the entry point still carries
-// the name, so prefer it. The symbol is C++-mangled, hence the substring match.
+// Prefer the run_kernel function: optimisation folds the LLK helpers into it
+// The symbol is C++-mangled, and it needs substring match; if several match, take the largest.
 Range find_body(const ElfImage& elf, const Range& cave)
 {
-    const Symbol* best = nullptr;
+    const Symbol* run_kernel = nullptr;
     for (const auto& [name, symbol] : elf.symbols)
     {
         if (symbol.type == STT_FUNC && symbol.size > 0 && name.find("run_kernel") != std::string::npos)
         {
-            if (best == nullptr || symbol.size > best->size)
+            if (run_kernel == nullptr || symbol.size > run_kernel->size)
             {
-                best = &symbol;
+                run_kernel = &symbol;
             }
         }
     }
-    if (best != nullptr)
+    if (run_kernel != nullptr)
     {
-        return {best->value, best->value + best->size, "run_kernel"};
+        return {run_kernel->value, run_kernel->value + run_kernel->size, "run_kernel"};
     }
 
     const std::uint32_t text_start = elf.text().header.sh_addr;
-    // Metal strips the entry symbol. An in-text cave is linked after all real code, so
-    // everything ahead of it is kernel body.
+    // Metal kernels have no run_kernel symbol (LTO folds it into _start). Body is
+    // .text up to the in-text cave (text_to_cave); whole .text if that cave is missing.
     if (cave.valid() && cave.start > text_start)
     {
         return {text_start, cave.start, "text_to_cave"};
@@ -186,7 +186,13 @@ ScanResult scan_text(const ElfImage& elf, const Range& body, bool all_instructio
             continue;
         }
 
+        // Quasar: do not tag SFPU sites. auto would pack sfpnop (WH encoding /
+        // STALLWAIT detect still not trusted here). tti_nop + risc_nop only.
+#if defined(ARCH_QUASAR)
+        const bool sfpu = false;
+#else
         const bool sfpu = is_sfpu_opcode(opcode) || (opcode == TT_OP_STALLWAIT && stallwait_touches_sfpu(params));
+#endif
         if (all_instructions || sync_op_name(opcode) != nullptr)
         {
             result.sites.push_back({vaddr, word, tensix_op_name(opcode), sfpu});

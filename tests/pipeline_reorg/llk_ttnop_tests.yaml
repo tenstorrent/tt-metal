@@ -1,5 +1,5 @@
 # ttnop sweep: 15 shards per arch, 1440 min timeout per machine.
-# TEMP: BH groups 1-5 of a 15-way split, 5 machines. Uncomment WH + BH 6-15 to restore.
+# TEMP: BH groups 9-13 of a 15-way split, 5 machines. Uncomment WH + BH 1-8/14-15 to restore.
 
 # TEMP: Wormhole parked. Uncomment the 15 groups below to restore.
 # Wormhole: 15-way pytest-split on wh_n150_civ2.
@@ -230,83 +230,83 @@
 #   owner_id: U09UC143684 # Nemanja Divnic
 
 # Blackhole: 15-way pytest-split on bh_p150b_civ2.
-# TEMP: groups 1-5 only (still --splits 15). Uncomment groups 6-15 below to restore.
-- name: llk_ttnop_blackhole group 1/15
-  split_group: 1
-  team: llk
-  coverage: false
-  cmd: |
-    set -euo pipefail
-    cd tests/python_tests/ttnop
-    ./ci.sh --test . \
-      --k 'not test_pack_reconfig' \
-      --splits 15 --group 1 \
-      --report-dir reports/blackhole-1
-  skus:
-    bh_p150b_civ2:
-      timeout: 1440
-  owner_id: U09UC143684 # Nemanja Divnic
-- name: llk_ttnop_blackhole group 2/15
-  split_group: 2
-  team: llk
-  coverage: false
-  cmd: |
-    set -euo pipefail
-    cd tests/python_tests/ttnop
-    ./ci.sh --test . \
-      --k 'not test_pack_reconfig' \
-      --splits 15 --group 2 \
-      --report-dir reports/blackhole-2
-  skus:
-    bh_p150b_civ2:
-      timeout: 1440
-  owner_id: U09UC143684 # Nemanja Divnic
-- name: llk_ttnop_blackhole group 3/15
-  split_group: 3
-  team: llk
-  coverage: false
-  cmd: |
-    set -euo pipefail
-    cd tests/python_tests/ttnop
-    ./ci.sh --test . \
-      --k 'not test_pack_reconfig' \
-      --splits 15 --group 3 \
-      --report-dir reports/blackhole-3
-  skus:
-    bh_p150b_civ2:
-      timeout: 1440
-  owner_id: U09UC143684 # Nemanja Divnic
-- name: llk_ttnop_blackhole group 4/15
-  split_group: 4
-  team: llk
-  coverage: false
-  cmd: |
-    set -euo pipefail
-    cd tests/python_tests/ttnop
-    ./ci.sh --test . \
-      --k 'not test_pack_reconfig' \
-      --splits 15 --group 4 \
-      --report-dir reports/blackhole-4
-  skus:
-    bh_p150b_civ2:
-      timeout: 1440
-  owner_id: U09UC143684 # Nemanja Divnic
-- name: llk_ttnop_blackhole group 5/15
-  split_group: 5
-  team: llk
-  coverage: false
-  cmd: |
-    set -euo pipefail
-    cd tests/python_tests/ttnop
-    ./ci.sh --test . \
-      --k 'not test_pack_reconfig' \
-      --splits 15 --group 5 \
-      --report-dir reports/blackhole-5
-  skus:
-    bh_p150b_civ2:
-      timeout: 1440
-  owner_id: U09UC143684 # Nemanja Divnic
-# TEMP: Blackhole groups 6-15 parked. Uncomment to restore.
+# TEMP: groups 9-13 only (still --splits 15). Uncomment the rest to restore.
+# TEMP: Blackhole groups 1-8 and 14-15 parked. Uncomment to restore.
+# - name: llk_ttnop_blackhole group 1/15
+#   split_group: 1
+#   team: llk
+#   coverage: false
+#   cmd: |
+#     set -euo pipefail
+#     cd tests/python_tests/ttnop
+#     ./ci.sh --test . \
+#       --k 'not test_pack_reconfig' \
+#       --splits 15 --group 1 \
+#       --report-dir reports/blackhole-1
+#   skus:
+#     bh_p150b_civ2:
+#       timeout: 1440
+#   owner_id: U09UC143684 # Nemanja Divnic
+# - name: llk_ttnop_blackhole group 2/15
+#   split_group: 2
+#   team: llk
+#   coverage: false
+#   cmd: |
+#     set -euo pipefail
+#     cd tests/python_tests/ttnop
+#     ./ci.sh --test . \
+#       --k 'not test_pack_reconfig' \
+#       --splits 15 --group 2 \
+#       --report-dir reports/blackhole-2
+#   skus:
+#     bh_p150b_civ2:
+#       timeout: 1440
+#   owner_id: U09UC143684 # Nemanja Divnic
+# - name: llk_ttnop_blackhole group 3/15
+#   split_group: 3
+#   team: llk
+#   coverage: false
+#   cmd: |
+#     set -euo pipefail
+#     cd tests/python_tests/ttnop
+#     ./ci.sh --test . \
+#       --k 'not test_pack_reconfig' \
+#       --splits 15 --group 3 \
+#       --report-dir reports/blackhole-3
+#   skus:
+#     bh_p150b_civ2:
+#       timeout: 1440
+#   owner_id: U09UC143684 # Nemanja Divnic
+# - name: llk_ttnop_blackhole group 4/15
+#   split_group: 4
+#   team: llk
+#   coverage: false
+#   cmd: |
+#     set -euo pipefail
+#     cd tests/python_tests/ttnop
+#     ./ci.sh --test . \
+#       --k 'not test_pack_reconfig' \
+#       --splits 15 --group 4 \
+#       --report-dir reports/blackhole-4
+#   skus:
+#     bh_p150b_civ2:
+#       timeout: 1440
+#   owner_id: U09UC143684 # Nemanja Divnic
+# - name: llk_ttnop_blackhole group 5/15
+#   split_group: 5
+#   team: llk
+#   coverage: false
+#   cmd: |
+#     set -euo pipefail
+#     cd tests/python_tests/ttnop
+#     ./ci.sh --test . \
+#       --k 'not test_pack_reconfig' \
+#       --splits 15 --group 5 \
+#       --report-dir reports/blackhole-5
+#   skus:
+#     bh_p150b_civ2:
+#       timeout: 1440
+#   owner_id: U09UC143684 # Nemanja Divnic
 # - name: llk_ttnop_blackhole group 6/15
 #   split_group: 6
 #   team: llk
@@ -352,81 +352,81 @@
 #     bh_p150b_civ2:
 #       timeout: 1440
 #   owner_id: U09UC143684 # Nemanja Divnic
-# - name: llk_ttnop_blackhole group 9/15
-#   split_group: 9
-#   team: llk
-#   coverage: false
-#   cmd: |
-#     set -euo pipefail
-#     cd tests/python_tests/ttnop
-#     ./ci.sh --test . \
-#       --k 'not test_pack_reconfig' \
-#       --splits 15 --group 9 \
-#       --report-dir reports/blackhole-9
-#   skus:
-#     bh_p150b_civ2:
-#       timeout: 1440
-#   owner_id: U09UC143684 # Nemanja Divnic
-# - name: llk_ttnop_blackhole group 10/15
-#   split_group: 10
-#   team: llk
-#   coverage: false
-#   cmd: |
-#     set -euo pipefail
-#     cd tests/python_tests/ttnop
-#     ./ci.sh --test . \
-#       --k 'not test_pack_reconfig' \
-#       --splits 15 --group 10 \
-#       --report-dir reports/blackhole-10
-#   skus:
-#     bh_p150b_civ2:
-#       timeout: 1440
-#   owner_id: U09UC143684 # Nemanja Divnic
-# - name: llk_ttnop_blackhole group 11/15
-#   split_group: 11
-#   team: llk
-#   coverage: false
-#   cmd: |
-#     set -euo pipefail
-#     cd tests/python_tests/ttnop
-#     ./ci.sh --test . \
-#       --k 'not test_pack_reconfig' \
-#       --splits 15 --group 11 \
-#       --report-dir reports/blackhole-11
-#   skus:
-#     bh_p150b_civ2:
-#       timeout: 1440
-#   owner_id: U09UC143684 # Nemanja Divnic
-# - name: llk_ttnop_blackhole group 12/15
-#   split_group: 12
-#   team: llk
-#   coverage: false
-#   cmd: |
-#     set -euo pipefail
-#     cd tests/python_tests/ttnop
-#     ./ci.sh --test . \
-#       --k 'not test_pack_reconfig' \
-#       --splits 15 --group 12 \
-#       --report-dir reports/blackhole-12
-#   skus:
-#     bh_p150b_civ2:
-#       timeout: 1440
-#   owner_id: U09UC143684 # Nemanja Divnic
-# - name: llk_ttnop_blackhole group 13/15
-#   split_group: 13
-#   team: llk
-#   coverage: false
-#   cmd: |
-#     set -euo pipefail
-#     cd tests/python_tests/ttnop
-#     ./ci.sh --test . \
-#       --k 'not test_pack_reconfig' \
-#       --splits 15 --group 13 \
-#       --report-dir reports/blackhole-13
-#   skus:
-#     bh_p150b_civ2:
-#       timeout: 1440
-#   owner_id: U09UC143684 # Nemanja Divnic
+- name: llk_ttnop_blackhole group 9/15
+  split_group: 9
+  team: llk
+  coverage: false
+  cmd: |
+    set -euo pipefail
+    cd tests/python_tests/ttnop
+    ./ci.sh --test . \
+      --k 'not test_pack_reconfig' \
+      --splits 15 --group 9 \
+      --report-dir reports/blackhole-9
+  skus:
+    bh_p150b_civ2:
+      timeout: 1440
+  owner_id: U09UC143684 # Nemanja Divnic
+- name: llk_ttnop_blackhole group 10/15
+  split_group: 10
+  team: llk
+  coverage: false
+  cmd: |
+    set -euo pipefail
+    cd tests/python_tests/ttnop
+    ./ci.sh --test . \
+      --k 'not test_pack_reconfig' \
+      --splits 15 --group 10 \
+      --report-dir reports/blackhole-10
+  skus:
+    bh_p150b_civ2:
+      timeout: 1440
+  owner_id: U09UC143684 # Nemanja Divnic
+- name: llk_ttnop_blackhole group 11/15
+  split_group: 11
+  team: llk
+  coverage: false
+  cmd: |
+    set -euo pipefail
+    cd tests/python_tests/ttnop
+    ./ci.sh --test . \
+      --k 'not test_pack_reconfig' \
+      --splits 15 --group 11 \
+      --report-dir reports/blackhole-11
+  skus:
+    bh_p150b_civ2:
+      timeout: 1440
+  owner_id: U09UC143684 # Nemanja Divnic
+- name: llk_ttnop_blackhole group 12/15
+  split_group: 12
+  team: llk
+  coverage: false
+  cmd: |
+    set -euo pipefail
+    cd tests/python_tests/ttnop
+    ./ci.sh --test . \
+      --k 'not test_pack_reconfig' \
+      --splits 15 --group 12 \
+      --report-dir reports/blackhole-12
+  skus:
+    bh_p150b_civ2:
+      timeout: 1440
+  owner_id: U09UC143684 # Nemanja Divnic
+- name: llk_ttnop_blackhole group 13/15
+  split_group: 13
+  team: llk
+  coverage: false
+  cmd: |
+    set -euo pipefail
+    cd tests/python_tests/ttnop
+    ./ci.sh --test . \
+      --k 'not test_pack_reconfig' \
+      --splits 15 --group 13 \
+      --report-dir reports/blackhole-13
+  skus:
+    bh_p150b_civ2:
+      timeout: 1440
+  owner_id: U09UC143684 # Nemanja Divnic
 # - name: llk_ttnop_blackhole group 14/15
 #   split_group: 14
 #   team: llk

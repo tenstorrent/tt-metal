@@ -38,8 +38,8 @@ _SKIPPED = (pytest.skip.Exception, pytest.xfail.Exception)
 _FAILED = pytest.fail.Exception
 
 _writer = None
-# Set once a hang has asked for a card reset, so the worker stops after the case
-# it is reporting rather than in the middle of it.
+# Set once a hang has asked the supervisor for recovery, so the worker stops
+# after the case it is reporting rather than in the middle of it.
 _parked = False
 
 
@@ -52,20 +52,20 @@ def _hb() -> heartbeat.Writer:
 
 
 def _hang_closes_case(nodeid: str, variant: str) -> None:
-    """Close a case out on a hang, and ask for the card the hang cost us back."""
+    """Close a case out on a hang, and ask to be moved off the core it cost us."""
     global _parked
     # Done, not retried: a case that just hung a core mostly hangs the next one,
-    # and the resume after the reset has to step over it. The red pytest reports
-    # is what carries the result.
+    # and anything resuming from the done-log has to step over it. The red pytest
+    # reports is what carries the result.
     _hb().mark_done(nodeid)
-    _hb().request_reset(nodeid, variant)
-    # Nobody is watching an unsupervised run, so there is no reset coming and
+    _hb().request_recovery(nodeid, variant)
+    # Nobody is watching an unsupervised run, so there is no recovery coming and
     # nothing to wait for.
     _parked = _hb().enabled
 
 
 def _park() -> None:
-    """Stop taking cases and wait for the supervisor to kill this run.
+    """Stop taking cases and wait for the supervisor to kill this worker.
 
     A hung core is not this worker's to fix, and every case it pulls off the
     queue meanwhile fails against that core in about a second — marked done for
@@ -460,6 +460,16 @@ def _get() -> Perturber:
     return _perturber
 
 
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_setup(item):
+    # Siblings of a hang land on the done-log from the supervisor. Skip them
+    # before fixtures open the device, or the next worker hits the same site
+    # and we lose another core.
+    root = heartbeat.state_dir()
+    if root is not None and item.nodeid in heartbeat.completed(root):
+        pytest.skip("already recorded")
+
+
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_call(item):
     perturber = _get()
@@ -487,7 +497,7 @@ def pytest_runtest_call(item):
             # core is the supervisor's job, so all this does is say so.
             _hang_closes_case(item.nodeid, str(err))
             outcome.force_exception(
-                AssertionError(f"hang: {err} wedged the core; card reset requested")
+                AssertionError(f"hang: {err} wedged the core; recovery requested")
             )
             return
         # After sweep(), not in a finally: a case that died with the device
@@ -538,8 +548,8 @@ def pytest_runtest_logfinish(nodeid, location):
     # supervisor must not read the gap as a stall — at the tail of a sweep that
     # gap is however long the slowest worker still has left to run.
     _hb().idle()
-    # Here rather than where the hang was caught, so the case that asked for the
-    # reset is fully reported before this worker stops answering for work.
+    # Here rather than where the hang was caught, so the case that asked for
+    # recovery is fully reported before this worker stops answering for work.
     if _parked:
         _park()
 
