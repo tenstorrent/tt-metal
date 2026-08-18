@@ -276,3 +276,44 @@ def test_gather_codegen_strided_split_honours_a_multi_range_core_grid(device):
     )
     golden, out = _codegen_vs_native(device, shape, kwargs, sub_core_grids=sub_core_grids, out=poisoned)
     assert_equal(golden, ttnn.to_torch(out))
+
+
+def test_gather_codegen_refuses_a_preallocated_output_off_the_created_spec(device, expect_error):
+    # A preallocated destination is handed straight back by compute_output_specs, so its page -- not
+    # the input's -- sizes every CB and the writer's per-tile transfer, while the readers still emit
+    # a 32x32 tile of the input's dtype at a stride derived from that page. Only the spec the op
+    # would have created for itself keeps the two in step, so anything else has to be declined at the
+    # gate rather than written through.
+    shape, kwargs = ([1, 1, 32, 64], {"dim": -1, "index": [1, 1, 32, 32]})
+    xt = ttnn.from_torch(_make_input(shape, ttnn.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    kwargs = _materialize_index(shape, kwargs, ttnn.TILE_LAYOUT, device)
+    index_shape = [1, 1, 32, 32]
+    off_spec_outs = [
+        ttnn.from_torch(
+            torch.zeros(index_shape, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+        ),
+        ttnn.from_torch(
+            torch.zeros(index_shape, dtype=torch.float32), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device
+        ),
+    ]
+    for out in off_spec_outs:
+        with expect_error(RuntimeError, "does not support"):
+            _force_codegen(xt, **kwargs, out=out)
+
+
+def test_gather_codegen_refuses_a_non_default_tile(device, expect_error):
+    # Layout::TILE also covers tiny and transposed tiles. Every reader walks a fixed 2x2 grid of
+    # 16x16 faces and the CB descriptors carry no tile override, so the kernels address a 32x32 tile
+    # whatever the spec says; the geometry helper also divides both padded widths by the input tile's
+    # width, which only yields the right Wt_index when the two tensors carry the same tile.
+    shape, kwargs = ([1, 1, 32, 64], {"dim": -1, "index": [1, 1, 32, 32]})
+    tiny = ttnn.Tile([16, 32])
+    xt = ttnn.from_torch(
+        _make_input(shape, ttnn.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, tile=tiny
+    )
+    kwargs = _materialize_index(shape, kwargs, ttnn.TILE_LAYOUT, device)
+    with expect_error(RuntimeError, "does not support"):
+        _force_codegen(xt, **kwargs)

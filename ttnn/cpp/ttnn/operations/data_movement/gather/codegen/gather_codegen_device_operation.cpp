@@ -159,10 +159,25 @@ void GatherCodegenDeviceOperation::validate_on_program_cache_miss(
         "factories place output tiles through an interleaved TensorAccessor only.",
         attributes.output_mem_config.memory_layout());
     if (tensor_args.output_tensor.has_value()) {
+        const auto& out = tensor_args.output_tensor.value();
         TT_FATAL(
-            !tensor_args.output_tensor.value().memory_config().is_sharded(),
+            !out.memory_config().is_sharded(),
             "gather_codegen: sharded preallocated output tensor is not supported (got memory layout {}).",
-            tensor_args.output_tensor.value().memory_config().memory_layout());
+            out.memory_config().memory_layout());
+        // compute_output_specs() hands a caller-supplied destination straight back, so its page --
+        // not the input's -- is what every CB and per-tile transfer is cut from while the kernels
+        // still address a 32x32 tile of the input's dtype. A direct forced call must be rejected here
+        // rather than silently written through that mismatch.
+        TT_FATAL(
+            ttnn::operations::data_movement::gather::supported_execution_controls(
+                tensor_args.input_tensor, attributes.output_mem_config, tensor_args.output_tensor),
+            "gather_codegen: preallocated output tensor must carry the spec the op would create for itself "
+            "(interleaved, TILE layout, {} dtype, untransposed 32x32 tile); got layout {}, dtype {}, tile {}x{}.",
+            tensor_args.input_tensor.dtype(),
+            out.layout(),
+            out.dtype(),
+            out.tensor_spec().tile().get_height(),
+            out.tensor_spec().tile().get_width());
     }
 }
 

@@ -21,10 +21,10 @@ namespace ttnn::operations::data_movement::gather {
 bool supported_by_codegen(const Tensor& input_tensor, int8_t dim, const Tensor& input_index_tensor);
 
 // The half of the call contract supported_by_codegen() cannot see: the caller-controlled output
-// placement, which is not an attribute of the codegen prim and so has no place in its validation
-// step. False means the codegen factories cannot honour what the caller asked for — `auto` must
-// route to native and forced `codegen` must fail rather than silently override the placement.
-// Not a perf question, so it is kept out of is_demoted() too.
+// placement and, when the caller preallocates a destination, the spec that destination carries.
+// False means the codegen factories cannot honour what the caller asked for — `auto` must route to
+// native and forced `codegen` must fail rather than silently write through the mismatch. Not a perf
+// question, so it is kept out of is_demoted() too.
 bool supported_execution_controls(
     const Tensor& input_tensor,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,

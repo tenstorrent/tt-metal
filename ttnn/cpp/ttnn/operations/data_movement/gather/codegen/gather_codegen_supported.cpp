@@ -6,6 +6,7 @@
 
 #include <cstdint>
 
+#include <tt-metalium/constants.hpp>
 #include <tt_stl/assert.hpp>
 
 #include "gather_codegen_program_factory.hpp"
@@ -13,6 +14,20 @@
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement::gather {
+
+namespace {
+
+// The one tile geometry the kernels implement. Every reader walks a fixed 2x2 grid of 16x16 faces
+// and make_tile_cb() leaves CBFormatDescriptor::tile unset, so the kernels address a 32x32 tile
+// whatever the tensor's spec claims. Tile::operator== compares shapes only, hence the explicit
+// transpose flags.
+bool has_default_tile(const Tensor& tensor) {
+    const auto& tile = tensor.tensor_spec().tile();
+    return tile.get_height() == tt::constants::TILE_HEIGHT && tile.get_width() == tt::constants::TILE_WIDTH &&
+           !tile.get_transpose_within_face() && !tile.get_transpose_of_faces();
+}
+
+}  // namespace
 
 bool supported_execution_controls(
     const Tensor& input_tensor,
@@ -29,13 +44,31 @@ bool supported_execution_controls(
     if (output_mem_config.is_sharded()) {
         return false;
     }
-    return !(optional_output_tensor.has_value() && optional_output_tensor.value().memory_config().is_sharded());
+    if (!optional_output_tensor.has_value()) {
+        return true;
+    }
+    const auto& out = optional_output_tensor.value();
+    if (out.memory_config().is_sharded()) {
+        return false;
+    }
+    // A caller-supplied destination keeps its own spec through compute_output_specs(), so it -- not
+    // the input -- is what make_tile_cb() cuts the output CB page from and what the writer transfers
+    // per tile. The readers emit a full 32x32 tile of elements at a stride derived from that page,
+    // and the L1 feasibility check budgets the output page as equal to the input page, so only the
+    // spec the op would have created for itself is in contract.
+    return out.layout() == Layout::TILE && out.dtype() == input_tensor.dtype() && has_default_tile(out);
 }
 
 bool supported_by_codegen(const Tensor& input_tensor, int8_t dim, const Tensor& input_index_tensor) {
     // The codegen kernels address purely in tile-page units (Ht/Wt_input/Wt_index) and have no
     // stick/row-major mode.
     if (input_tensor.layout() != Layout::TILE || input_index_tensor.layout() != Layout::TILE) {
+        return false;
+    }
+    // Layout::TILE also admits tiny and transposed tiles, which the kernels cannot address. The
+    // geometry helper additionally divides BOTH padded widths by the input tile's width, so Wt_index
+    // is only right when the two tensors carry the same tile.
+    if (!has_default_tile(input_tensor) || !has_default_tile(input_index_tensor)) {
         return false;
     }
     // Only bfloat16 input is in scope. Wider input dtypes reach these kernels, if at all, through a
