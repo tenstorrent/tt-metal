@@ -249,6 +249,12 @@ struct ReduceGeometry {
         return axis == ReduceAxis::Rows ? Wt : (axis == ReduceAxis::Cols ? Ht : 1);
     }
 
+    // Elements folded into ONE output value -- what an average divides by. A tile
+    // is 32x32, so collapsing rows folds ht*32 of them.
+    static constexpr uint32_t elements(ReduceAxis axis) {
+        return axis == ReduceAxis::Rows ? Ht * 32 : (axis == ReduceAxis::Cols ? Wt * 32 : Ht * Wt * 32 * 32);
+    }
+
     // Input tiles feeding one output tile.
     static constexpr uint32_t group(ReduceAxis axis) {
         return axis == ReduceAxis::Rows ? Ht : (axis == ReduceAxis::Cols ? Wt : num_tiles);
