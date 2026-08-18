@@ -913,8 +913,38 @@ class TPGatedDeltaNet:
                     max_cols=getattr(self.args, "decode_grid_w", 8),
                     tuning=getattr(self.args, "prefill_tuning", None),
                 )
+                # MODEL-GATED (27B on Wormhole). Emit bf8 so the row-parallel reduce-scatter that
+                # consumes this carries half the bytes. As the matmul's OUTPUT DTYPE, not a typecast
+                # afterwards -- a separate pass over this [S,dim] tensor costs ~175us and would eat
+                # most of the win.
+                #
+                # THIS OP HAS A DOCUMENTED DTYPE CLIFF (see forward_prefill's fp32/bf16 notes): the
+                # RS sums num_devices row-parallel partials, and dropping fp32->bf16 measured PCC
+                # ~0.69 at TP=4 on Blackhole. So this was measured, not reasoned by analogy with the
+                # MLP's down-proj:
+                #     MEASURED (T3K TP=8, 27B, T=128, test_gdn_tp_prefill)
+                #         bf16  PCC 0.9994457
+                #         bf8   PCC 0.9992864     <- 4th decimal, nothing like the TP=4 cliff
+                #     MEASURED (T3K TP=8, 27B, seq 2048, single-layer profile, device kernel time)
+                #         out-proj matmul 2048x768x5120   454 -> 315us  (-139, writes half the bytes)
+                #         reduce-scatter  [1,1,2048,5120] 1029 -> 553us  (-476)
+                #                                                       = -615us/layer
+                # 553us also matches the MLP's already-bf8 RS at the identical shape (581-587us),
+                # which is the cross-check that this is the expected floor and not a fluke.
+                #
+                # Gated to the 27B because the cliff above proves the safe dtype here is TP- and
+                # model-dependent, and TP=8/dim=5120 is the only configuration measured. Blackhole
+                # does not reach this arm at all (_fuse_out_mmrs_prefill takes the fused path there),
+                # but the 9B on Wormhole DOES, and it is deliberately left on bf16.
+                _rs_bf8 = self.args.dim > 4096 and not tpc.is_blackhole()
+                _dt = {"dtype": ttnn.bfloat8_b} if _rs_bf8 else {}
                 return ttnn.linear(
-                    x, weight, compute_kernel_config=self.cfg, program_config=pc, memory_config=ttnn.DRAM_MEMORY_CONFIG
+                    x,
+                    weight,
+                    compute_kernel_config=self.cfg,
+                    program_config=pc,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    **_dt,
                 )
             return ttnn.linear(x, weight, compute_kernel_config=self.cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return tpc.sharded_decode_matmul(
