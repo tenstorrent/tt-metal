@@ -11,7 +11,11 @@
 #   6. baseline header missing the anchor entirely -> RED;
 #   7. missing/short sim pin value -> RED;
 #   8. THE CHECKED-IN conf + p150 baseline lint GREEN (the shipping state
-#      must satisfy its own gate).
+#      must satisfy its own gate);
+#   9. (R7) a bogus LLK upstream base -> RED (LLK-pristine rule);
+#  10. (R8) a measured corpus row wired into the ops TSV -> GREEN;
+#  11. (R8) a measured corpus row with NO ops TSV row -> RED (the
+#      welford/recip/bcast/mul_int omission class).
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
 LINT="$HERE/conf_lint.sh"
@@ -116,8 +120,38 @@ sed 's/^_REVIEWED_LLK_UPSTREAM_BASE=.*/_REVIEWED_LLK_UPSTREAM_BASE=1111111111111
 check "R7 bogus LLK upstream base refuses RED" 1 $?
 grep -q "R7" "$TMP/out9.log" || { echo "SELFTEST FAIL: bogus-base RED is not attributed to R7"; overall=1; }
 
+# R8 fixtures: a two-row manifest (one measured, one not_run) and an ops TSV.
+write_manifest() { # write_manifest <file>
+  cat > "$1" <<'EOF'
+# fixture corpus manifest
+id	surface	perf_status	notes
+fixture__op_measured	legacy	measured	measured fixture row
+fixture__op_idle	legacy	not_run	unmeasured fixture row
+EOF
+}
+write_ops() { # write_ops <file> <corpus-id-to-wire>
+  cat > "$1" <<EOF
+# fixture ops
+op	corpus_id	kind
+fixture-op	$2	semantic
+EOF
+}
+write_manifest "$TMP/man.tsv"
+
+# 10. (R8) measured row wired -> GREEN
+write_ops "$TMP/ops-ok.tsv" fixture__op_measured
+"$LINT" "$TMP/ok.conf" "$TMP/ok.tsv" "$TMP/man.tsv" "$TMP/ops-ok.tsv" > "$TMP/out10.log" 2>&1
+check "R8 measured-row-wired lints GREEN" 0 $?
+
+# 11. (R8) measured row NOT wired -> RED naming the missing id
+write_ops "$TMP/ops-miss.tsv" fixture__op_idle
+"$LINT" "$TMP/ok.conf" "$TMP/ok.tsv" "$TMP/man.tsv" "$TMP/ops-miss.tsv" > "$TMP/out11.log" 2>&1
+check "R8 measured-row-unwired refuses RED" 1 $?
+grep -q "\[R8\]" "$TMP/out11.log" || { echo "SELFTEST FAIL: R8 RED lacks the rule tag"; overall=1; }
+grep -q "fixture__op_measured" "$TMP/out11.log" || { echo "SELFTEST FAIL: R8 RED does not name the missing corpus id"; overall=1; }
+
 if [ "$overall" -eq 0 ]; then
-  echo "conf-lint self-test: ALL GREEN (coherent->GREEN, stale-prose->RED, stale-(CURRENT)->RED, dup-(CURRENT)->RED, stale-anchor->RED, no-anchor->RED, bad-sim-pin->RED, shipping-state->GREEN, bogus-llk-base->RED)"
+  echo "conf-lint self-test: ALL GREEN (coherent->GREEN, stale-prose->RED, stale-(CURRENT)->RED, dup-(CURRENT)->RED, stale-anchor->RED, no-anchor->RED, bad-sim-pin->RED, shipping-state->GREEN, bogus-llk-base->RED, R8-wired->GREEN, R8-unwired->RED)"
 else
   echo "conf-lint self-test: FAILED"
 fi

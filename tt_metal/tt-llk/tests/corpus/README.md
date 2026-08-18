@@ -326,6 +326,33 @@ gate can never bless a sweep:
    verifies the libttsim sha256 at preflight and every phase entry
    (`--sim-bh-sha`/`--sim-wh-sha` from the wrappers).  A pinned-but-missing
    simulator refuses loudly instead of degrading to SKIP_NO_SIMULATOR.
+5. **LLK-pristine (R7, owner ruling 2026-08-17)** — `conf_lint.sh` refuses when
+   the `tt_llk_*` library trees differ from the reviewed upstream base commit
+   (`_REVIEWED_LLK_UPSTREAM_BASE` in `sweep_2x2.conf`): the compiler proves
+   effects algorithmically; no trusted markers, typed shims, or any other
+   source edit in the consumed library — semantic rewrites live under
+   `tests/` only.
+6. **Measured rows stay wired (R8, Lane AZ corpus expansion)** — `conf_lint.sh`
+   additionally refuses when any corpus manifest row with
+   `perf_status=measured` has no `sweep_2x2_ops.tsv` row for its corpus id
+   (the omission class that kept welford/recip/binary-bcast/mul_int measured
+   but un-swept for two pin cycles); machine-readable `kind=skip` rows
+   satisfy it, silence does not.
+
+### Corpus-wide sweep surface (Lane AZ expansion)
+
+`sweep_2x2_ops.tsv` carries EVERY mapped corpus row with a usable perf
+vehicle: `kind=full2x2` rows are tier (a) (distinct hand + semantic forms),
+`kind=semantic` rows are tier (b) *causal-only* rows — production typed-SFPI
+bodies where hand == semantic source, so the honest axes are passes OFF vs ON
+on the production body and no vs-hand claim exists.  Rows whose OFF/ON
+binaries are byte-identical are recorded refusals (zero perf device jobs).
+The `schedule` column implements the device-time budget as data: the nightly
+wrapper passes `--schedule nightly`; weekly/manual sweeps run every row.
+Per-selector `sem_extra_env`/`hand_extra_env` columns express same-node A/Bs
+whose axis is a harness define (the mulint32 macro-vs-plain delivery pair).
+Tier (c) corr-only and tier (d) blocked rows are documented in the Lane AZ
+audit evidence, deliberately unwired.
 
 ## Reproduce a baseline
 

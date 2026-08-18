@@ -305,6 +305,28 @@ def load_config(path):
         row["pin_flags"] = (row.get("pin_flags") or "").strip()
         env = (row.get("extra_env") or "").strip()
         row["extra_env"] = dict(kv.split("=", 1) for kv in env.split(";") if kv)
+        # Optional per-selector env (corpus-expansion lane): sem_extra_env /
+        # hand_extra_env apply on top of extra_env to the sem-*/hand-*
+        # selectors only.  This expresses same-node A/Bs whose axis is a
+        # harness compile define (e.g. mul_int: hand = production
+        # SFPLOADMACRO path, "generated" = the same header's
+        # -DDISABLE_SFPLOADMACRO plain-delivery arm selected via
+        # TT_METAL_DISABLE_SFPLOADMACRO=1) without forking the runner.
+        row["sel_extra_env"] = {}
+        for side in ("sem", "hand"):
+            v = (row.get(f"{side}_extra_env") or "").strip()
+            row["sel_extra_env"][side] = dict(
+                kv.split("=", 1) for kv in v.split(";") if kv
+            )
+        # Optional schedule column (device-time budget split): 'nightly'
+        # (default) or 'weekly'.  Data, not code forks: the nightly wrapper
+        # passes --schedule nightly; weekly/manual sweeps run every row.
+        row["schedule"] = (row.get("schedule") or "").strip() or "nightly"
+        if row["schedule"] not in ("nightly", "weekly"):
+            sys.exit(
+                f"config row {row['op']}: schedule must be 'nightly' or "
+                f"'weekly' (got '{row['schedule']}')"
+            )
         if row["kind"] == "pinpair" and not row["pin_flags"]:
             sys.exit(f"config row {row['op']}: kind=pinpair requires pin_flags")
         # Sweep-hardening 2: a perf leg without its own correctness leg
@@ -325,6 +347,14 @@ def load_config(path):
                         "node or withhold the perf leg in the row note"
                     )
     return rows
+
+
+def row_env(row, sel):
+    """Effective extra env for one selector: row extra_env overlaid with the
+    selector side's sem_extra_env/hand_extra_env (see load_config)."""
+    env = dict(row.get("extra_env") or {})
+    env.update((row.get("sel_extra_env") or {}).get(sel.split("-")[0], {}))
+    return env
 
 
 def row_scope(row):
@@ -363,6 +393,21 @@ class Sweep:
             missing = set(args.ops) - {r["op"] for r in self.rows}
             if missing:
                 sys.exit(f"unknown ops in --ops: {','.join(sorted(missing))}")
+        # Schedule filter (device-time budget, data-driven): --schedule
+        # nightly runs only schedule=nightly rows; --schedule weekly (and no
+        # --schedule at all) runs EVERY row — the weekly sweep is the full
+        # set, the nightly is the budgeted subset.  --ops overrides the
+        # filter (an explicit op list is an explicit intent).
+        self.deferred = []
+        if getattr(args, "schedule", None) == "nightly" and not args.ops:
+            self.deferred = [r for r in self.rows if r["schedule"] != "nightly"]
+            self.rows = [r for r in self.rows if r["schedule"] == "nightly"]
+            if self.deferred:
+                print(
+                    "schedule filter: nightly run defers "
+                    f"{len(self.deferred)} weekly rows: "
+                    + ",".join(r["op"] for r in self.deferred)
+                )
         self.reds = []
 
     @staticmethod
@@ -777,7 +822,7 @@ class Sweep:
             rc = self._pytest(
                 node,
                 ["--compile-producer"],
-                self._env("bh", rt, flags, extra=row["extra_env"]),
+                self._env("bh", rt, flags, extra=row_env(row, sel)),
                 work / f"compile-{leg}.log",
             )
             if rc != 0 or not self._passed(work / f"compile-{leg}.log"):
@@ -948,7 +993,7 @@ class Sweep:
             rc = self._pytest(
                 node,
                 ["--run-simulator"],
-                self._env(arch, rt, flags, sim=sim, extra=row["extra_env"]),
+                self._env(arch, rt, flags, sim=sim, extra=row_env(row, sel)),
                 log,
                 timeout=2400,
             )
@@ -1040,7 +1085,7 @@ class Sweep:
         jobkey = {
             "node": node,
             "flags": flags,
-            "extra_env": row["extra_env"] or {},
+            "extra_env": row_env(row, sel),
             "tag": tag,
         }
         # Resume skips only GREEN jobs whose (node, flags, extra_env) jobkey
@@ -1091,7 +1136,7 @@ class Sweep:
         (work / "node.txt").write_text(node + "\n")
         (work / "flags.txt").write_text(flags + "\n")
         (work / "jobkey.json").write_text(json.dumps(jobkey, indent=2) + "\n")
-        env_prefix = " ".join(f'{k}="{v}"' for k, v in (row["extra_env"] or {}).items())
+        env_prefix = " ".join(f'{k}="{v}"' for k, v in row_env(row, sel).items())
         inner = work / "inner.sh"
         # Single-quoted node id survives the sh -c layers because pytest node
         # ids never contain single quotes.  Explicit check, not an assert:
@@ -1929,6 +1974,20 @@ exit $RC
         phases = self.a.phases
         self.preflight()
         results, skips = [], []
+        # Schedule deferrals are machine-readable skips in every scoreboard —
+        # a weekly row absent from the nightly report would be the silent-
+        # omission class the corpus discipline forbids.
+        for row in getattr(self, "deferred", []):
+            skips.append(
+                {
+                    "op": row["op"],
+                    "corpus_id": row["corpus_id"],
+                    "status": "SKIP_SCHEDULE_WEEKLY",
+                    "reason": "schedule=weekly row deferred by --schedule "
+                    "nightly (device-time budget split; runs in the weekly/"
+                    "full sweep)",
+                }
+            )
         for row in self.rows:
             if row["kind"] == "skip":
                 skips.append(
@@ -2141,6 +2200,13 @@ def main():
         type=lambda s: s.split(","),
         default=None,
         help="weekly: comma list of headline rows that also get per-knob silicon legs",
+    )
+    ap.add_argument(
+        "--schedule",
+        choices=("nightly", "weekly"),
+        default=None,
+        help="row schedule filter (ops TSV 'schedule' column): 'nightly' runs "
+        "only schedule=nightly rows; 'weekly' or omitted runs every row",
     )
     ap.add_argument(
         "--skip-craq-gate",
