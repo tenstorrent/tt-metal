@@ -485,14 +485,14 @@ void kernel_main() {
         {
             MaybeDeviceZoneScope("compute_down");
             out_tiles_buf.reserve_back(out_block_tiles);
+            reconfig_data_format(cb_w_down, cb_h);
+            pack_reconfig_data_format(cb_out_tiles);
             if (wd_mrow) {
                 // The reader publishes the complete resident W_down shard once, while cb_h carries
                 // eight consecutive 1xHID_T activation rows.  Each call has one K-block, so the
                 // result never leaves DEST for an intermediate BF16 accumulation spill.
                 constexpr uint32_t WD_RESIDENT_TILES = HGROUPS * HN_PAD * WD_EC_MAX;
                 wd_buf.wait_front(WD_RESIDENT_TILES);
-                reconfig_data_format(cb_w_down, cb_h);
-                pack_reconfig_data_format(cb_out_tiles);
                 matmul_block_init(cb_h, cb_w_down, false, down_ec, 1, HID_T);
                 const MatmulShape row_shape = MatmulShape::of(1, 1, 1, down_ec, HID_T, 1);
                 for (uint32_t r = 0; r < down_rows; ++r) {
