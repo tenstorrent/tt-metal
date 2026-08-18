@@ -235,7 +235,7 @@ bool MeshBuffer::is_allocated() const {
 MeshBuffer::~MeshBuffer() { deallocate(); }
 
 MeshBuffer::MeshBuffer(MeshBuffer&& other) noexcept :
-    config_(Inspector::mesh_buffer_deallocated(&other), other.config_),
+    config_((Inspector::mesh_buffer_deallocated(&other), other.config_)),
     device_local_config_(std::move(other.device_local_config_)),
     mesh_device_(std::move(other.mesh_device_)),
     address_(other.address_),
