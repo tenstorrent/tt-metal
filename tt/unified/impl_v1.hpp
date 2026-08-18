@@ -550,24 +550,19 @@ void fill_reduce_scaler(const Storage& scaler, uint32_t value_bits) {
 #endif
 }
 
+// The built-in read, written as a custom routine. Every overload here funnels
+// through the Fn form below, so the harness half of the protocol -- reserve, the
+// write pointer, the page size, and via the handle the read barrier and push --
+// exists in exactly one place, and the built-ins are held to the same contract
+// they document for callers.
 template <int thread, typename Accessor>
 NocAsyncReadTx<thread> noc_load(const Storage& storage, const Accessor& acc, uint32_t block_idx) {
-#if defined(IS_DM_THREAD) && IS_DM_THREAD
-    if constexpr (thread == TT_DM_THREAD_ID) {
-        cb_reserve_back(storage.cb_id, storage.num_tiles);
-        uint32_t l1 = get_write_ptr(storage.cb_id);
-        const uint32_t bytes = cb_page_bytes(storage.cb_id);
-        const uint32_t first = block_idx * storage.num_tiles;
-        for (uint32_t p = 0; p < storage.num_tiles; ++p) {
-            noc_async_read(acc.get_noc_addr(first + p), l1, bytes);
-            l1 += bytes;
+    const uint32_t first = block_idx * storage.num_tiles;
+    return noc_load<thread>(storage, [&](L1Pages pages) {
+        for (uint32_t p = 0; p < pages.count; ++p) {
+            noc_async_read(acc.get_noc_addr(first + p), pages.addr(p), pages.page_bytes);
         }
-    }
-#else
-    (void)acc;
-    (void)block_idx;
-#endif
-    return NocAsyncReadTx<thread>(storage);
+    });
 }
 
 template <int thread, typename Fn>
@@ -575,7 +570,7 @@ NocAsyncReadTx<thread> noc_load(const Storage& storage, Fn fn) {
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     if constexpr (thread == TT_DM_THREAD_ID) {
         cb_reserve_back(storage.cb_id, storage.num_tiles);
-        fn(get_write_ptr(storage.cb_id), cb_page_bytes(storage.cb_id));
+        fn(L1Pages{get_write_ptr(storage.cb_id), cb_page_bytes(storage.cb_id), storage.num_tiles});
     }
 #else
     (void)fn;
@@ -583,25 +578,19 @@ NocAsyncReadTx<thread> noc_load(const Storage& storage, Fn fn) {
     return NocAsyncReadTx<thread>(storage);
 }
 
+// The built-in drain, written as a custom routine, so the harness half -- the
+// wait, the read pointer, the page size, and via the handle the flush and pop --
+// lives once, in the Fn form below. `first` is read BEFORE the move: consuming
+// the Block poisons its fields, and the move is what carries the obligation over
+// so consume() still runs exactly once, down there rather than here.
 template <int thread, typename Accessor>
 NocAsyncWriteTx<thread> noc_store(Block block, const Accessor& acc, uint32_t block_idx) {
-    block.consume();
-#if defined(IS_DM_THREAD) && IS_DM_THREAD
-    if constexpr (thread == TT_DM_THREAD_ID) {
-        cb_wait_front(block.cb_id, block.num_tiles);
-        uint32_t l1 = get_read_ptr(block.cb_id);
-        const uint32_t bytes = cb_page_bytes(block.cb_id);
-        const uint32_t first = block_idx * block.num_tiles;
-        for (uint32_t p = 0; p < block.num_tiles; ++p) {
-            noc_async_write(l1, acc.get_noc_addr(first + p), bytes);
-            l1 += bytes;
+    const uint32_t first = block_idx * block.num_tiles;
+    return noc_store<thread>(std::move(block), [&](L1Pages pages) {
+        for (uint32_t p = 0; p < pages.count; ++p) {
+            noc_async_write(pages.addr(p), acc.get_noc_addr(first + p), pages.page_bytes);
         }
-    }
-#else
-    (void)acc;
-    (void)block_idx;
-#endif
-    return NocAsyncWriteTx<thread>(block.cb_id, block.num_tiles);
+    });
 }
 
 template <int thread, typename Fn>
@@ -610,7 +599,7 @@ NocAsyncWriteTx<thread> noc_store(Block block, Fn fn) {
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     if constexpr (thread == TT_DM_THREAD_ID) {
         cb_wait_front(block.cb_id, block.num_tiles);
-        fn(get_read_ptr(block.cb_id), cb_page_bytes(block.cb_id));
+        fn(L1Pages{get_read_ptr(block.cb_id), cb_page_bytes(block.cb_id), block.num_tiles});
     }
 #else
     (void)fn;
@@ -626,23 +615,17 @@ NocAsyncReadTx<thread> noc_load(
     Semaphore<thread>& data_sent,
     const Accessor& acc,
     uint32_t block_idx) {
-#if defined(IS_DM_THREAD) && IS_DM_THREAD
-    if constexpr (thread == TT_DM_THREAD_ID) {
-        const uint32_t tiles = storage.num_tiles;
-        const uint32_t bytes = cb_page_bytes(storage.cb_id);
+    const uint32_t first = block_idx * storage.num_tiles;
 
-        // Every core reserves: the sender fills its own copy by reading, the
-        // receivers have theirs filled for them by the multicast.
-        cb_reserve_back(storage.cb_id, tiles);
-        const uint32_t l1 = get_write_ptr(storage.cb_id);
+    // Also a custom routine. Every core reserves -- the sender fills its own copy
+    // by reading, the receivers have theirs filled for them by the multicast --
+    // and publishing is still left to wait(), same as every other load.
+    return noc_load<thread>(storage, [&](L1Pages pages) {
         const uint32_t num_dests = mcast.volume() - 1;
 
         if (PhysicalCoord::this_core() == mcast.start) {
-            uint32_t at = l1;
-            const uint32_t first = block_idx * tiles;
-            for (uint32_t p = 0; p < tiles; ++p) {
-                noc_async_read(acc.get_noc_addr(first + p), at, bytes);
-                at += bytes;
+            for (uint32_t p = 0; p < pages.count; ++p) {
+                noc_async_read(acc.get_noc_addr(first + p), pages.addr(p), pages.page_bytes);
             }
 
             // A one-core rectangle -- a 1xN or Nx1 grid gives one for the
@@ -651,7 +634,7 @@ NocAsyncReadTx<thread> noc_load(
             // destinations.
             if (num_dests == 0) {
                 noc_async_read_barrier();
-                return NocAsyncReadTx<thread>(storage);
+                return;
             }
 
             // Do not multicast into a receiver's buffer until it has told us the
@@ -662,7 +645,7 @@ NocAsyncReadTx<thread> noc_load(
 
             noc_async_read_barrier();  // payload is in our L1 before we forward it
 
-            noc_async_write_multicast(l1, mcast.get_noc_addr(l1), tiles * bytes, num_dests);
+            noc_async_write_multicast(pages.base, mcast.get_noc_addr(pages.base), pages.total_bytes(), num_dests);
 
             // The flag must not overtake the payload it describes.
             noc_async_writes_flushed();
@@ -682,17 +665,7 @@ NocAsyncReadTx<thread> noc_load(
             data_sent.wait(1);
             data_sent.set(0);  // rearm for the next block
         }
-    }
-#else
-    (void)mcast;
-    (void)receivers_ready;
-    (void)data_sent;
-    (void)acc;
-    (void)block_idx;
-#endif
-    // Publishing is left to wait(), same as every other load: the pages become
-    // visible to the consumer when the caller says so, not as a side effect.
-    return NocAsyncReadTx<thread>(storage);
+    });
 }
 
 template <int thread, typename Accessor>
