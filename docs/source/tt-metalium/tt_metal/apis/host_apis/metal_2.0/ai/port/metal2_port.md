@@ -192,6 +192,43 @@ You read the subagent's summary and decide what to do next. If you then need to 
 
 ---
 
+### Ensure the Metal 2.0 host-side legality checks are enabled
+
+**A port verified with the legality checks bypassed is a false green.** Metal 2.0's own default is to validate: every entry point takes a `skip_validation` flag that defaults to **false**. But the flag is set by the **TTNN infrastructure** behind the factory concepts — a production performance knob, on the reasoning that a shipped model gains nothing from re-validating a spec it has already run a million times — and TTNN's handling of it has been buggy more than once.
+
+So if TTNN is behaving, you will find the checks already on and strictly need do nothing. The trouble is that you cannot tell from the outside, and the cost of being wrong is total: every spec mistake in your port passes quietly. **Force them and prove it** — not because they are expected to be off, but because it removes the question, and no harm comes from forcing a check that was already running.
+
+**Force.** Find the sites rather than trusting a list — the set shifts as the API gets fixed up, and a missed site fails *silently*:
+
+```bash
+grep -n 'bool skip_validation' tt_metal/impl/metal2_host_api/*.cpp
+```
+
+Make `skip_validation` false as the first statement of **every** function that grep names:
+
+```cpp
+skip_validation = false;  // TEMP: force Metal 2.0 legality checks on. DO NOT COMMIT.
+```
+
+Force all of them. Some are thin wrappers that forward straight to another on the list, and some are merge helpers a port never reaches; forcing those is harmless. The only failure mode that costs you anything is *missing* one, because that one goes quiet instead of loud.
+
+Two things worth understanding as you do it, so the result reads as deliberate rather than shotgunned:
+
+- **`BuildProgramFromSpec` (`program_spec.cpp`) is the spec-side choke point.** `MakeProgramFromSpec`, `MakeMeshWorkloadFromSpecs` and `MakeMeshWorkloadFromSpec` all funnel through it, and the gate itself lives there (`if (!skip_validation) ValidateProgramSpec(...)`). Forcing it covers all three regardless of whether you also force the wrappers.
+- **Which cache-*hit* site matters depends on your target concept.** `SetProgramRunArgs` covers the cache-miss apply on both concepts. On the base concept the hit path runs through `UpdateTensorArgs`; on `CustomProgramSpecFactoryConcept` it runs through `UpdateProgramRunArgs`. Force both, so your setup doesn't depend on which port you happen to be doing. Note that `UpdateTensorArgs` is *acquiring* a `skip_validation` parameter it was accidentally missing, so whether it appears in your grep depends on how fresh your tree is — which is the reason this step is a grep and not a list.
+
+If your invoker has already handed you a branch or patch that forces this, don't apply it twice — go straight to proving it.
+
+**Prove.** Editing the source is not evidence. This repo is a unity build, and a stale object file will happily keep the old behaviour — so confirm the checks are live in the binary you are actually testing. Add a one-shot announcement beside the force, once in **each file** the grep named:
+
+```cpp
+log_warning(tt::LogMetal, "METAL2_CHECKS_FORCED");
+```
+
+`BuildProgramFromSpec` and `SetProgramRunArgs` each run about once per `Program` construction, so the volume is a few lines per test run. (`tt-logger.hpp` is already included in both files; nothing new to add.) Rebuild, run one test, and grep the log for `METAL2_CHECKS_FORCED` — **two markers present** means both translation units are fresh and the checks are running. Deliberately do **not** put a marker in `UpdateProgramRunArgs`: it fires on every cache hit and will bury the log, and the `SetProgramRunArgs` marker already proves that file was rebuilt.
+
+**Never commit any of it.** The force and the markers are scaffolding for your working tree alone. `tt_metal/impl/` is far outside a port's scope, and a forced-on validator would impose the host cost on every production model. The [self-audit](#anti-pattern-self-audit) carries a check that fails if this scaffolding reaches your diff.
+
 ## Legacy inventory
 
 *This is an observation step. No decisions yet.*
@@ -826,6 +863,8 @@ The helper returns SUCCESS / FAILURE + key errors. On FAILURE, common causes:
 
 ### Run tests
 
+**Before you trust any green, confirm the legality checks are live.** Grep the test log for `METAL2_CHECKS_FORCED` and expect **both** markers ([Ensure the Metal 2.0 host-side legality checks are enabled](#ensure-the-metal-20-host-side-legality-checks-are-enabled)). A passing test with the checks bypassed is the most expensive false green in this procedure: it means every spec mistake you made is still sitting in the port, and the next person to meet it will be debugging a model, not a port. If the markers are missing, stop and fix the forcing before you read a single test result.
+
 Run the op's correctness tests the same way — in the background, reading the log ([Running builds and tests](#running-builds-and-tests-without-flooding-your-context)) — over the **confirmed test set** from [Locate and confirm the op's tests](#locate-and-confirm-the-ops-tests). Two layers:
 
 ```bash
@@ -878,6 +917,15 @@ Scan the ported code against this checklist. Each item is a Metal 2.0 design-int
 - [ ] **No unnecessary multi-binding flag, and never stacked with a self-loop.** Search the factory for `allow_instance_multi_binding = true`. For each, confirm the CB's kernel-touch census genuinely can't fit 1P+1C — **≥3 distinct touchers, or ≥2 kernels locked to the same FIFO role**. A two-toucher work-split (one source, Reader- + Writer-config over one grid) is a **1P+1C assignment, not a flag**. And a DFB must never be *both* self-looped *and* multi-bound — that stacking is the tell of a mis-slotted plain 1:1. See [Two-toucher DFB → assign 1P+1C](../shared/port_patterns.md#pattern-two-toucher-dfb--assign-1p1c-dual-instance-work-split).
 - [ ] **All CTAs are named.** Search the factory for positional `compile_time_args = {...}`; should be `compile_time_args = {{name, value}, ...}` only.
 - [ ] **No nameable argument smuggled into varargs.** For each `get_vararg` use, ask: does the kernel reach it as a **distinct field read a fixed number of times**? If yes — even via a legacy `arg_index++`, even at an offset *after* a variable-count block (named args live in a separate section, so the legacy offset is irrelevant), even sitting beside a genuine vararg loop — it's a **named** arg (this is the *silent* error; `get_vararg(arg_index++)` at the top of a kernel is the tell). Varargs are legitimate only for an **indexed-collection element**: a variable-count loop, a data-selected `get(k)`, or a scan-terminating sentinel. (Don't over-correct — a genuine collection element that lands in a named local is still a vararg.) See [Caution: Avoid varargs](../shared/port_patterns.md#caution-avoid-varargs-unless-absolutely-necessary).
+- [ ] **No forced-legality scaffolding in the diff.** The `skip_validation` force and its `METAL2_CHECKS_FORCED` markers ([Ensure the Metal 2.0 host-side legality checks are enabled](#ensure-the-metal-20-host-side-legality-checks-are-enabled)) belong to your working tree only. Run
+
+  ```bash
+  BASE=$(git merge-base origin/main HEAD)     # as in the TT_FATAL census
+  git diff --name-only "$BASE" | grep -E '^tt_metal/'
+  git diff "$BASE" | grep -nE 'METAL2_CHECKS_FORCED|DO NOT COMMIT'
+  ```
+
+  Expect **no output from either command**. The second catches the scaffolding wherever it landed; the first is the broader rule it is an instance of — a port touches the op's own directory, so *any* `tt_metal/` file in the diff is a scope violation regardless of what the change says.
 - [ ] **No ephemeral doc cited from code.** Run
 
   ```bash
