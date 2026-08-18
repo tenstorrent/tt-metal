@@ -857,7 +857,12 @@ def _pick_block(t_full: int, h_full: int, w_local: int, kmax: int = 11):
                 if vol % 32 or not (128 <= vol <= 512):
                     continue
                 box = (bt + kmax - 1) * (bh + kmax - 1) * (bw + kmax - 1)
-                key = (-vol, box)  # prefer larger vol (fewer chunks), then smaller box
+                # MEASURED (6s sweep, 2026-08-18): fused-sdpa cost tracks the BOX, not q_chunk/vol -- the
+                # box's outer-axis (W,H) extent sets how far apart the reader's k-segments are, so a small
+                # box beats a large-vol block even at 3x the chunk count (the block reorder is per-call, not
+                # per-chunk). Minimize box, tie-break LARGER vol (fewer chunks). (5,8,4) over (5,8,12): fused
+                # 10.2s->7.6s, 6s decode 25.0s->~22s. Old key (-vol, box) picked the slow large-vol block.
+                key = (box, -vol)
                 if best is None or key < best[0]:
                     best = (key, (bt, bh, bw))
     return best[1] if best else None
