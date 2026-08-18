@@ -43,10 +43,12 @@ class Config:
 
     TRAIN_H: int = 512
     TRAIN_W: int = 512
-    TRAIN_FRAMES: int = 1
+    # 4k+1. Stills are repeated into a static clip so the LoRA stylizes every
+    # temporal position; a 1-frame cache leaves video inference unadapted.
+    TRAIN_FRAMES: int = 13
 
     TRIGGER: str = "lg, "
-    STRIP_STYLE_WORDS: bool = False
+    STRIP_STYLE_WORDS: bool = True
     TEXT_DROP_PROB: float = 0.10
     SUBSET_SIZE: int = 0
     MAX_SEQ: int = 512
@@ -59,7 +61,9 @@ class Config:
     LORA_RANK: int = 32
     LORA_ALPHA: int = 32
     LORA_TARGET_SET: str = "attn"
-    LORA_A_INIT: str = "kaiming"
+    # "gaussian" = N(0, 1/rank), matching PEFT. "kaiming" = ttml's own init,
+    # ~4x smaller at rank 32, which trains a proportionally weaker adapter.
+    LORA_A_INIT: str = "gaussian"
     LORA_PATH: str = "cache/wan22_14b_lego/wan22_14b_lego_lora.safetensors"
 
     LR: float = 1e-4
@@ -151,6 +155,8 @@ class Config:
             raise ValueError(f"TRAIN_EXPERTS must be low|high|both, got {self.TRAIN_EXPERTS!r}")
         if self.LORA_TARGET_SET not in ("attn", "attn+ffn"):
             raise ValueError(f"LORA_TARGET_SET must be attn|attn+ffn, got {self.LORA_TARGET_SET!r}")
+        if self.LORA_A_INIT not in ("gaussian", "kaiming"):
+            raise ValueError(f"LORA_A_INIT must be gaussian|kaiming, got {self.LORA_A_INIT!r}")
         if len(tuple(self.MESH_SHAPE)) != 2:
             raise ValueError(f"MESH_SHAPE must have two entries, got {self.MESH_SHAPE!r}")
         if (self.TRAIN_FRAMES - 1) % 4 != 0:

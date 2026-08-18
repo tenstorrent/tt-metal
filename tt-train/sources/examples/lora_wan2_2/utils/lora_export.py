@@ -28,6 +28,12 @@ _LORA_SLOT_RE = re.compile(r"^(?P<base>.+)\.(?P<slot>lora_A|lora_B)$")
 _COL_PARALLEL = ("to_q", "to_k", "to_v", "ff1")
 _ROW_PARALLEL = ("to_out", "ff2")
 
+# Parameters live in bf16, and ttml's autocast cache never refreshes the FULL/float32
+# view after an in-place optimizer write (ttml/autograd/autocast_tensor.cpp, tracking
+# #41657). A default to_numpy() therefore returns whatever the first read cached, so
+# every checkpoint after the first is a stale snapshot. NATIVE reads the stored value.
+_NATIVE = ttml.autograd.PreferredPrecision.NATIVE
+
 
 def _to_diffusers_key(ttml_param_name: str) -> str:
     name = ttml_param_name
@@ -68,22 +74,22 @@ def _device():
 def _gather(tensor, name: str, mesh_shape) -> np.ndarray:
     dp_size, tp_size = tuple(mesh_shape)
     if tp_size == 1 and dp_size == 1:
-        return np.asarray(tensor.to_numpy(), dtype=np.float32)
+        return np.asarray(tensor.to_numpy(precision=_NATIVE), dtype=np.float32)
 
     device = _device()
     if _is_col_parallel_lora_B(name):
         composer = ttml.core.distributed.concat_mesh_to_tensor_composer(device, 2)
-        arr = np.asarray(tensor.to_numpy(composer=composer), dtype=np.float32)
+        arr = np.asarray(tensor.to_numpy(composer=composer, precision=_NATIVE), dtype=np.float32)
         if dp_size > 1:
             arr = arr[:, :, : arr.shape[2] // dp_size, :]
     elif _is_row_parallel_lora_A(name):
         composer = ttml.core.distributed.concat_mesh_to_tensor_composer(device, 3)
-        arr = np.asarray(tensor.to_numpy(composer=composer), dtype=np.float32)
+        arr = np.asarray(tensor.to_numpy(composer=composer, precision=_NATIVE), dtype=np.float32)
         if dp_size > 1:
             arr = arr[:, :, :, : arr.shape[3] // dp_size]
     else:
         composer = ttml.core.distributed.concat_mesh_to_tensor_composer(device, 0)
-        arr = np.asarray(tensor.to_numpy(composer=composer), dtype=np.float32)
+        arr = np.asarray(tensor.to_numpy(composer=composer, precision=_NATIVE), dtype=np.float32)
         arr = arr[:1]
     return arr
 
@@ -100,6 +106,29 @@ def _scatter(w_np: np.ndarray, name: str, mesh_shape):
     if mapper is not None:
         return ttml.autograd.Tensor.from_numpy(w_np, ttnn.Layout.TILE, ttnn.bfloat16, mapper)
     return ttml.autograd.Tensor.from_numpy(w_np, ttnn.Layout.TILE, ttnn.bfloat16)
+
+
+def init_lora_A_gaussian(model, rank: int, mesh_shape=(1, 1), seed: int = 0) -> int:
+    """Overwrite every lora_A with N(0, 1/rank), matching PEFT's "gaussian" init.
+
+    ttml initializes lora_A kaiming-uniform, ~4x smaller than PEFT at rank 32.
+    dW = B @ A and dL/dB scales with A, so the smaller init yields a weaker
+    adapter for the same step count. lora_B is left at its zero init.
+    """
+    rng = np.random.default_rng(seed)
+    std = 1.0 / float(rank)
+    initialized = 0
+    for name, tensor in _iter_lora_params(model):
+        if not name.endswith("lora_A"):
+            continue
+        # _gather returns the logical 4-D shape _scatter expects back.
+        shape = _gather(tensor, name, mesh_shape).shape
+        w_np = np.ascontiguousarray(rng.normal(0.0, std, size=shape), dtype=np.float32)
+        tensor.set_value(_scatter(w_np, name, mesh_shape).get_value())
+        initialized += 1
+    if not initialized:
+        raise RuntimeError("no lora_A parameters found — was the adapter injected?")
+    return initialized
 
 
 def lora_state_dict(model, mesh_shape=(1, 1)) -> dict[str, np.ndarray]:
