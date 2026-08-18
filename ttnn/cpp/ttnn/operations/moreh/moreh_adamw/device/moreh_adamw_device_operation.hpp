@@ -5,6 +5,7 @@
 #pragma once
 
 #include <optional>
+#include <variant>
 #include <vector>
 
 #include "ttnn/device_operation.hpp"
@@ -57,10 +58,23 @@ struct MorehAdamWDeviceOperation {
 
     using tensor_return_value_t = std::vector<std::optional<Tensor>>;
 
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value);
+    struct MorehAdamWProgramFactory {
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value);
+
+        // Cache-hit re-apply of all per-dispatch state (per-core args + tensor-backed CB/buffer
+        // addresses), since the hash excludes lr/step. Re-derives from create_descriptor; see the .cpp.
+        static void override_runtime_arguments(
+            tt::tt_metal::Program& program,
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value,
+            const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
+    };
+
+    using program_factory_t = std::variant<MorehAdamWProgramFactory>;
 
     // Mandatory methods
     static void validate_inputs(const operation_attributes_t& attributes, const tensor_args_t& tensor_args);
@@ -70,15 +84,6 @@ struct MorehAdamWDeviceOperation {
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-
-    // Cache-hit re-apply of all per-dispatch state (per-core args + tensor-backed CB/buffer addresses),
-    // since the hash excludes lr/step. Re-derives from create_descriptor; see the .cpp.
-    static void override_runtime_arguments(
-        tt::tt_metal::Program& program,
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value,
-        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
 }  // namespace ttnn::operations::moreh::moreh_adamw
 

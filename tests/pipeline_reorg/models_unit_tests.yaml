@@ -1171,6 +1171,22 @@
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
 
+- name: TT-DiT Motif-Image-6B unit tests
+  cmd: |
+    unset TT_METAL_WATCHER  # blocked by #50886
+    unset HF_HUB_OFFLINE
+    pytest --timeout 300 models/tt_dit/tests/models/motif/test_attention_motif.py
+    pytest --timeout 300 models/tt_dit/tests/models/motif/test_transformer_block_motif.py
+    pytest --timeout 900 models/tt_dit/tests/models/motif/test_transformer_motif.py
+  model: motif
+  model_family: Motif
+  skus:
+    wh_llmbox:
+      timeout: 25
+      tier: 2
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+
 # ============================================================================
 # Multihost (exabox) model-unit tests
 # ============================================================================
@@ -1349,3 +1365,24 @@
       tier: 3
   owner_id: U08E1JCMAJF # Marko Bezulj
   team: shield
+
+- name: BGE-M3 unit tests
+  cmd: |
+    export HF_MODEL=BAAI/bge-m3 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/BAAI/bge-m3
+    exit_code=0
+    pytest --timeout 300 \
+      models/demos/wormhole/bge_m3/tests/pcc/test_layernorm.py \
+      models/demos/wormhole/bge_m3/tests/pcc/test_embeddings.py \
+      models/demos/wormhole/bge_m3/tests/pcc/test_mlp.py \
+      models/demos/wormhole/bge_m3/tests/pcc/test_attention.py \
+      models/demos/wormhole/bge_m3/tests/pcc/test_transformer_block.py || exit_code=$?
+    pytest --timeout 600 models/demos/wormhole/bge_m3/tests/pcc/test_model.py || exit_code=$?
+    pytest --timeout 600 models/demos/wormhole/bge_m3/tests/pcc/test_generator_vllm.py || exit_code=$?
+    exit $exit_code
+  model: bge_m3
+  skus:
+    wh_n150:
+      timeout: 15
+      tier: 2
+  owner_id: U082LLYBLSW # Gabriel Tobar (CODEOWNERS @gtobarTT)
+  team: models
