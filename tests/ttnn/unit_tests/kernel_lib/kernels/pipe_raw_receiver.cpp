@@ -4,7 +4,7 @@
 // mcast_pipe helper unit test: RAW RECEIVER kernel — ReceiverPipe constructed BY HAND.
 //
 // No host helper (Mcast1D/Mcast2D) and no McastArgs decoder: this kernel reads its own CT/RT, hands
-// the sender coords to the ReceiverPipe ctor (which keeps them), then calls receive() per round.
+// the sender coords to the ReceiverPipe ctor (which retains a view), then calls receive() per round.
 // (Contrast pipe_receiver.cpp, which decodes the Mcast2D wire via McastArgs.)
 // The data-ready signal is Flag: receive() waits for VALID, then resets the flag each round.
 #include <stdint.h>
@@ -41,8 +41,9 @@ void kernel_main() {
     cb_dst_obj.reserve_back(payload_pages);
 
     // BY HAND: sem ids + pre_handshake + signal are template params; the sender coords (target of this
-    // receiver's consumer-ready ack) go to the ReceiverPipe ctor, which copies + keeps them (NUM_SENDERS
-    // defaults to 1). receive() then acks/waits the stored sender each round — no coords passed per call.
+    // receiver's consumer-ready ack) go to the ReceiverPipe ctor as a non-owning view (NUM_SENDERS
+    // defaults to 1). This array stays alive through every pipe use. receive() then acks/waits the
+    // stored sender each round — no coords passed per call.
     const uint32_t sender_coords[2] = {sender_x, sender_y};
     ReceiverPipe<data_ready_sem_id, pre_handshake != 0, consumer_ready_sem_id, DataReadySignal::Flag> pipe(
         noc, sender_coords);

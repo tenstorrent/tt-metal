@@ -24,7 +24,8 @@ void kernel_main() {
     constexpr uint32_t payload_pages = get_compile_time_arg_val(SCALARS + 0);
     constexpr uint32_t page_bytes = get_compile_time_arg_val(SCALARS + 1);
     constexpr uint32_t num_iters = get_compile_time_arg_val(SCALARS + 2);
-    constexpr auto in_args = TensorAccessorArgs<SCALARS + 3>();
+    constexpr bool guard_source_l1 = get_compile_time_arg_val(SCALARS + 3) != 0;
+    constexpr auto in_args = TensorAccessorArgs<SCALARS + 4>();
 
     const uint32_t input_addr = get_arg_val<uint32_t>(0);
     const uint32_t input_start_id = get_arg_val<uint32_t>(1);
@@ -52,6 +53,12 @@ void kernel_main() {
     auto pipe = mc.sender(noc);
 
     for (uint32_t iter = 0; iter < num_iters; ++iter) {
-        pipe.send(src_addr, dst_addr, payload_bytes);
+        if constexpr (guard_source_l1) {
+            pipe.send(src_addr, dst_addr, payload_bytes);
+        } else {
+            // The source CB is filled once and remains immutable through kernel exit, so its lifetime
+            // safely exceeds every multicast issued by this loop.
+            pipe.send<SourceL1Guard::CallerManaged>(src_addr, dst_addr, payload_bytes);
+        }
     }
 }
