@@ -11,6 +11,7 @@
 
 namespace ckl = compute_kernel_lib;
 
+// GELU backward using the exact (non-tanh) piecewise derivative: Sollya-fitted core and corrected negative tail.
 void kernel_main() {
     uint32_t num_tiles = get_arg(args::num_tiles);
 
