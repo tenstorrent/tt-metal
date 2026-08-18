@@ -2,12 +2,15 @@
 # Two [1, 4] meshes (one per MPI rank). The transfer goes over MPI, not fabric,
 # so the FABRIC graph below only needs to let both meshes open.
 #
+# Target: BH loudbox (8x p150). Rank 0 uses PCIe devices 0..3 as a [1, 4] line,
+# rank 1 uses PCIe devices 4..7 as a second [1, 4] line.
+#
 # !!! HARDWARE-SPECIFIC TEMPLATE !!!
 # device_topology / channel counts / connections MUST match your physical wiring.
 
 mesh_descriptors {
   name: "M0"
-  arch: WORMHOLE_B0
+  arch: BLACKHOLE
   device_topology { dims: [ 1, 4 ] }
   host_topology   { dims: [ 1, 1 ] }
   channels {

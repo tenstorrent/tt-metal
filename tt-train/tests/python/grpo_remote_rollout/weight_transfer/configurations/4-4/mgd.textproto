@@ -2,12 +2,14 @@
 # Two [1, 4] meshes (one per MPI rank): rank 0 the DDP mesh, rank 1 a parent split
 # into four [1, 1] submeshes.
 #
+# Target: BH loudbox (8x p150). Rank 0 uses PCIe devices 0..3, rank 1 uses 4..7.
+#
 # !!! HARDWARE-SPECIFIC TEMPLATE !!!
 # device_topology / channel counts / inter-mesh connections MUST match your wiring.
 
 mesh_descriptors {
   name: "M0"
-  arch: WORMHOLE_B0
+  arch: BLACKHOLE
   device_topology { dims: [ 1, 4 ] }
   host_topology   { dims: [ 1, 1 ] }
   channels {

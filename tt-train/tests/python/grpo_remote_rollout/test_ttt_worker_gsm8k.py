@@ -7,6 +7,8 @@ One GSM8K question, replicated 16x, generated greedily (temperature 0) on a [1, 
 mesh (8 completions per submesh). All 16 completions must be identical -- otherwise the
 two submeshes decoded differently for the same input. Single process, no MPI/bridge.
 
+Targets Blackhole (runs on any >=2-chip BH host, e.g. a subset of a BH loudbox).
+
 Run (needs >= 2 chips + HF_TOKEN):
     cd tt-train/tests/python/grpo_remote_rollout
     python3 -m pytest -s test_ttt_worker_gsm8k.py
@@ -41,20 +43,24 @@ def test_16_greedy_completions_are_identical():
     if len(ttnn.get_device_ids()) < MESH_SHAPE[0] * MESH_SHAPE[1]:
         pytest.skip(f"needs >= {MESH_SHAPE[0] * MESH_SHAPE[1]} chips")
 
+    # BH rejects DispatchCoreType.ETH, so let ttnn pick the arch default here
+    # (WORKER + COL on Blackhole).
     mesh_device = ttnn.open_mesh_device(
         mesh_shape=ttnn.MeshShape(*MESH_SHAPE),
         trace_region_size=_TRACE_REGION_SIZE,
-        dispatch_core_config=ttnn.DispatchCoreConfig(ttnn.device.DispatchCoreType.ETH),
     )
     completer = None
     try:
         completer = build_completer(mesh_device, dummy_weights=False, max_batch_size=PER_SUBMESH_BATCH)
 
         tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
+        # return_dict=False keeps the transformers 5.x return type as a flat
+        # list of ints (the 4.x default). The worker expects list-of-ints prompts.
         prompt_ids = tokenizer.apply_chat_template(
             [{"role": "user", "content": GSM8K_QUESTION}],
             tokenize=True,
             add_generation_prompt=True,
+            return_dict=False,
         )
 
         completions = completer.generate(

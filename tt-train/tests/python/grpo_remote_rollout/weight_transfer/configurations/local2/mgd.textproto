@@ -1,10 +1,12 @@
 # Mesh Graph Descriptor for the 2-rank ttml -> tt-transformers weight bridge test.
 # Two [1, 2] meshes (one per rank). The full physical eth topology must be declared
 # or ControlPlane::init_control_plane() trips `Fabric node ID not yet assigned ...`.
+#
+# Target: BH loudbox (8x p150). Rank 0 uses PCIe devices 0..1, rank 1 uses 2..3.
 
 mesh_descriptors {
   name: "M0"
-  arch: WORMHOLE_B0
+  arch: BLACKHOLE
   device_topology { dims: [ 1, 2 ] }
   host_topology   { dims: [ 1, 1 ] }
   channels {

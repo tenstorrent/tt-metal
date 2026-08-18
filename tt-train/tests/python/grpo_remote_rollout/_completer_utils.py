@@ -31,7 +31,7 @@ MAX_SEQ_LEN = 2048
 # the tt-transformers demo default.
 _TRACE_REGION_SIZE = 50_000_000
 
-REPO_ROOT = Path(__file__).resolve().parents[5]  # .../tt-metal
+REPO_ROOT = Path(__file__).resolve().parents[4]  # .../tt-metal
 
 
 def load_device_config(device_config_rel: str = TTML_DEVICE_CONFIG_REL):
@@ -42,8 +42,21 @@ def load_device_config(device_config_rel: str = TTML_DEVICE_CONFIG_REL):
 
 def open_device(device_config) -> Any:
     """Open the ttml ``AutoContext`` mesh (enabling fabric when multi-device);
-    return the ``ttnn.MeshDevice``. Pair with :func:`close_device`."""
-    if device_config.total_devices() > 1:
+    return the ``ttnn.MeshDevice``. Pair with :func:`close_device`.
+
+    Only enables fabric when it isn't already configured. Under tt-run the
+    grpo_remote_rollout ``conftest.py`` autouse fixture sets FABRIC_2D on every
+    rank before any test body runs; calling ``enable_fabric`` again from just
+    this rank (asymmetrically with the peer rank, which reaches the same
+    ControlPlane through ``ttnn.open_mesh_device``) triggers the non-idempotent
+    ``SetFabricConfig`` reinit branch in ``MetalEnvImpl::set_fabric_config``.
+    That branch calls ``initialize_control_plane_impl`` → new ``ControlPlane``
+    → ``run_physical_system_discovery`` (extra ``MPI_Barrier``), which the peer
+    rank never makes, and hangs ``init_control_plane``. The proper fix is to
+    make ``SetFabricConfig(same_value)`` idempotent upstream in metal_env.cpp;
+    this guard keeps the tests working in the meantime.
+    """
+    if device_config.total_devices() > 1 and ttnn.get_fabric_config() == ttnn.FabricConfig.DISABLED:
         ttml.core.distributed.enable_fabric(device_config.total_devices())
     autograd_ctx = ttml.autograd.AutoContext.get_instance()
     autograd_ctx.open_device(device_config.mesh_shape, device_config.device_ids)
@@ -134,13 +147,14 @@ def open_completer(
     GC, then close the mesh.
     """
     device_config, _ = load_device_config()
-    # HARDWARE-SPECIFIC: open via ttnn (not ttml AutoContext) with ETH dispatch
-    # so tt-transformers keeps the full 8x8 tensix grid (WORKER dispatch leaves
-    # only 8x7 on a 2-harvested N300), plus the trace region the decode needs.
+    # HARDWARE-SPECIFIC: open via ttnn (not ttml AutoContext) so we can request
+    # the trace region the tt-transformers decode needs. Targets Blackhole
+    # (p100 / BH loudbox); BH rejects DispatchCoreType.ETH ("COL axis is not
+    # supported for ETH dispatch core type"), so let ttnn pick the arch default
+    # (WORKER + COL on BH).
     mesh_device = ttnn.open_mesh_device(
         mesh_shape=ttnn.MeshShape(*device_config.mesh_shape),
         trace_region_size=_TRACE_REGION_SIZE,
-        dispatch_core_config=ttnn.DispatchCoreConfig(ttnn.device.DispatchCoreType.ETH),
     )
     completer = None
     try:
