@@ -119,6 +119,7 @@ struct ProgramDispatchEntry {
 struct DeviceDispatchTask {
     IDevice* device = nullptr;
     ProgramDispatchEntry* program_entry = nullptr;
+    uint32_t deferred_one_shot_fetch_size = 0;
 };
 
 [[maybe_unused]] MeshCoordinate get_local_start_coord(MeshDevice* mesh_device, const MeshCoordinateRange& range) {
@@ -584,7 +585,7 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
         const size_t tasks_before_program = program_tasks.size();
         for_each_local(mesh_device_, device_range, [&](const auto& coord) {
             auto* device = mesh_device_->impl().get_device(coord);
-            program_tasks.push_back(DeviceDispatchTask{device, &entry});
+            program_tasks.push_back(DeviceDispatchTask{device, &entry, 0});
             chip_ids_in_workload.insert(device->id());
         });
         if (program_tasks.size() == tasks_before_program) {
@@ -612,7 +613,24 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
         }
     }
 
-    auto write_program_for_device = [&](const DeviceDispatchTask& task) {
+    // A homogeneous program spanning several local devices is the launch-skew-sensitive collective shape. Prepare it
+    // before checking its final size, then copy its large one-shot issue entries in parallel and publish only after
+    // every device is ready. Keep heterogeneous workloads on the original fused prepare+copy path: splitting every
+    // model workload into two pool stages or synchronizing all of its programs adds material eager-mode overhead.
+    bool defer_program_launch = false;
+    if (program_tasks.size() > 1) {
+        auto* local_program_entry = program_tasks.front().program_entry;
+        const bool homogeneous = std::ranges::all_of(
+            program_tasks, [&](const auto& task) { return task.program_entry == local_program_entry; });
+        if (homogeneous) {
+            prepare_program(*local_program_entry);
+            defer_program_launch = local_program_entry->cmd_seq->get_one_shot_fetch_size(
+                                       dispatch_metadata.stall_first, dispatch_metadata.stall_before_program, true) <=
+                                   MetalContext::instance().dispatch_mem_map().max_prefetch_command_size();
+        }
+    }
+
+    auto write_program_for_device = [&](DeviceDispatchTask& task) {
         auto& entry = *task.program_entry;
         prepare_program(entry);
         if (record_sub_device) {
@@ -623,12 +641,14 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
                 sub_device_id,
                 num_available_worker_cores);
         }
-        program_dispatch::write_program_command_sequence(
+        task.deferred_one_shot_fetch_size = program_dispatch::write_program_command_sequence(
             *entry.cmd_seq,
             task.device->sysmem_manager(),
             id_,
             dispatch_metadata.stall_first,
-            dispatch_metadata.stall_before_program);
+            dispatch_metadata.stall_before_program,
+            true,
+            defer_program_launch);
     };
 
     // Each device has its own sysmem manager, so the program writes are independent and go out in
@@ -639,7 +659,7 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     // worker costs tens of microseconds, so a workload covering a single device would otherwise pay
     // for the pool without getting any overlap in return.
     for (size_t i = 1; i < program_tasks.size(); i++) {
-        const auto& task = program_tasks[i];
+        auto& task = program_tasks[i];
         dispatch_thread_pool_->enqueue(
             [&write_program_for_device, &task]() { write_program_for_device(task); }, task.device->id());
     }
@@ -675,6 +695,16 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     }
     if (dispatch_exception) {
         std::rethrow_exception(dispatch_exception);
+    }
+    if (defer_program_launch) {
+        // Reserve every device's fetch slot before publishing any entry. A blocking reservation after an earlier
+        // device was published would reintroduce arbitrary launch skew.
+        for (auto& task : program_tasks) {
+            task.device->sysmem_manager().fetch_queue_reserve_back(id_);
+        }
+        for (auto& task : program_tasks) {
+            task.device->sysmem_manager().fetch_queue_write(task.deferred_one_shot_fetch_size, id_);
+        }
     }
 
     // Increment Launch Message Buffer Write Pointers

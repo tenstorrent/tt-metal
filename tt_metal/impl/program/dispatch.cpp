@@ -67,6 +67,7 @@
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
+#include <umd/device/driver_atomics.hpp>
 #include "impl/dispatch/vector_aligned.hpp"
 #include "dispatch/worker_config_buffer.hpp"
 #include "tt_metal/distributed/mesh_workload_impl.hpp"
@@ -3166,13 +3167,14 @@ void update_traced_program_dispatch_commands(
     }
 }
 
-void write_program_command_sequence(
+uint32_t write_program_command_sequence(
     const ProgramCommandSequence& program_command_sequence,
     SystemMemoryManager& manager,
     uint32_t command_queue_id,
     bool stall_first,
     bool stall_before_program,
-    bool send_binary) {
+    bool send_binary,
+    bool defer_one_shot_commit) {
     LOG_TRACE_LAZY(tt::LogDispatch, "");
     LOG_TRACE_LAZY(
         tt::LogDispatch, "========== Writing Program Command Sequence to CQ {} ==========", command_queue_id);
@@ -3187,6 +3189,7 @@ void write_program_command_sequence(
     uint32_t one_shot_fetch_size =
         program_command_sequence.get_one_shot_fetch_size(stall_first, stall_before_program, send_binary);
     bool one_shot = one_shot_fetch_size <= MetalContext::instance().dispatch_mem_map().max_prefetch_command_size();
+    TT_FATAL(one_shot || !defer_one_shot_commit, "Only one-shot program commands can defer fetch queue publication");
 
     LOG_TRACE_LAZY(tt::LogDispatch, "One-shot mode: {}, Fetch size: {} bytes", one_shot, one_shot_fetch_size);
     if (one_shot) {
@@ -3272,12 +3275,20 @@ void write_program_command_sequence(
 
     if (one_shot) {
         manager.issue_queue_push_back(one_shot_fetch_size, command_queue_id);
+        if (defer_one_shot_commit) {
+            // The command payload may have been copied with non-temporal stores. Fence on the worker that performed
+            // those stores before reporting that this device is ready; a fence on the publishing thread cannot order
+            // writes performed by a different CPU.
+            tt_driver_atomics::sfence();
+            return one_shot_fetch_size;
+        }
         manager.fetch_queue_reserve_back(command_queue_id);
         manager.fetch_queue_write(one_shot_fetch_size, command_queue_id);
     }
 
     LOG_TRACE_LAZY(tt::LogDispatch, "========== Finished Writing Program Command Sequence ==========");
     LOG_TRACE_LAZY(tt::LogDispatch, "");
+    return 0;
 }
 
 TraceNode create_trace_node(

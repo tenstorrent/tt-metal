@@ -190,13 +190,16 @@ TraceNode create_trace_node(
     uint32_t num_workers,
     bool use_prefetcher_cache);
 
-void write_program_command_sequence(
+// Returns the fetch size when a one-shot command was copied and its issue queue entry was pushed, but the fetch queue
+// entry was intentionally not published. Otherwise returns zero.
+uint32_t write_program_command_sequence(
     const ProgramCommandSequence& program_command_sequence,
     SystemMemoryManager& manager,
     uint32_t command_queue_id,
     bool stall_first,
     bool stall_before_program,
-    bool send_binary = true);
+    bool send_binary = true,
+    bool defer_one_shot_commit = false);
 
 KernelHandle get_device_local_kernel_handle(KernelHandle kernel_handle);
 
