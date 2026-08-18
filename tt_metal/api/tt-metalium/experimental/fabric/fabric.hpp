@@ -172,7 +172,7 @@ void SetFabricConfig(
 FabricConfig GetFabricConfig();
 
 namespace experimental {
-    
+
 // How many ethernet links the weakest hop along one row or column can open. Planes held back for
 // dispatch do not count. `cluster_axis` picks the direction: 0 runs down a column, 1 runs along a
 // row. `row_or_col` picks which one of them. Returns 0 if no hop could be measured.
