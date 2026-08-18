@@ -4,7 +4,7 @@
 **Target:** Blackhole, single hardware command queue, supported local MMIO dispatch topology
 **Reference implementation:** `335393399b602a7d090c5cd4b3ac7652acbfda0f`
 **Clean baseline:** `5fa57f6d18bdc46e0d623a6f86a1b7d4bfcc547b` (`20e839e1ff9032573690c031751ad58b5e967fed^`), the exact pre-concurrent-profiler state
-**Status:** Milestones 0 and 1 approved by Claude Opus; Milestone 1 device-cycle adjudication approved by the product owner on 2026-08-18
+**Status:** Milestones 0 and 1 approved by Claude Opus; Milestone 1 device-cycle adjudication approved by the product owner on 2026-08-18; the combined Milestone 2/3 implementation and evidence are complete and locally qualified
 
 ## 1. Purpose
 

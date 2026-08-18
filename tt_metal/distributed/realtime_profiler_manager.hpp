@@ -78,6 +78,8 @@ private:
         uint32_t chip_id = 0;
         MeshCoordinate mesh_coord = MeshCoordinate(0);
         CoreCoord realtime_profiler_core;
+        CoreCoord dispatch_s_core;
+        uint32_t dispatch_s_profiler_msg_addr = 0;
         std::unique_ptr<D2HSocket> socket;
         // Owns the BRISC+NCRISC program to keep its kernels (and their metadata for tt-inspector) alive for the
         // manager's lifetime.
@@ -89,6 +91,8 @@ private:
         double sync_frequency = 0.0;
         uint32_t sync_request_addr = 0;
         uint32_t sync_host_ts_addr = 0;
+        uint32_t last_source_loss_low = 0;
+        uint64_t source_loss_high = 0;
         int64_t sync_host_time_before = 0;
         // Updated after a successful finish-path or init SYNC_CHECK handshake; used to
         // throttle redundant finish syncs (minimum 60s between attempts per device).
@@ -138,6 +142,7 @@ private:
     void on_callback_registered(
         tt::ProgramRealtimeProfilerCallbackHandle handle, const tt::ProgramRealtimeProfilerCallback& callback) override;
     void on_callback_unregistered(tt::ProgramRealtimeProfilerCallbackHandle handle) override;
+    std::vector<tt::ProgramRealtimeProfilerDeviceCapability> get_device_capabilities() const override;
 
     // Receiver thread entry point: drain every device socket, advance the finish-sync handshake, and
     // publish decoded records to the ring for consumer threads to read.
@@ -155,7 +160,7 @@ private:
         std::vector<tt::ProgramRealtimeRecord>& record_buf);
     // Decode program records from drained pages and publish them to the broadcast ring.
     void publish_pages(
-        const DeviceState& dev_state,
+        DeviceState& dev_state,
         const uint32_t* page_buf,
         uint32_t num_pages,
         std::vector<tt::ProgramRealtimeRecord>& records);

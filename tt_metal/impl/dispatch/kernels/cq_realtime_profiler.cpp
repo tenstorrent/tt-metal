@@ -33,16 +33,22 @@ volatile tt_l1_ptr realtime_profiler_msg_t* rt_profiler_msg =
     reinterpret_cast<volatile tt_l1_ptr realtime_profiler_msg_t*>(REALTIME_PROFILER_MSG_ADDR);
 
 volatile RtProfilerRingBuffer* ring_buffer = reinterpret_cast<volatile RtProfilerRingBuffer*>(RING_BUFFER_ADDR);
+static uint32_t transport_ack_epoch = 0;
+
+FORCE_INLINE void acknowledge_dispatch_payload() {
+    transport_ack_epoch = (transport_ack_epoch + 1) & REALTIME_PROFILER_PUBLICATION_EPOCH_MASK;
+    const uint64_t ack_addr =
+        get_noc_addr(DISPATCH_CORE_NOC_X, DISPATCH_CORE_NOC_Y, STREAM_REG_ADDR(8, STREAM_SCRATCH_1_REG_INDEX));
+    noc_inline_dw_write<InlineWriteDst::REG>(ack_addr, transport_ack_epoch);
+}
 
 // Read timestamps from dispatch_s into the next ring buffer slot
 __attribute__((noinline)) void realtime_profiler_read_and_enqueue(bool buffer_a) {
-    // Heartbeat: ring_full_wait_count increments once per enqueue blocked on a full ring.
-    // Host post-mortems can pair it with ncrisc_debug.socket_reserve_pages_{enter,exit}_count.
     if (rt_ring_full(ring_buffer)) {
         ring_buffer->ring_full_wait_count++;
-        while (rt_ring_full(ring_buffer)) {
-            invalidate_l1_cache();
-        }
+        rt_profiler_msg->loss_device_ring++;
+        acknowledge_dispatch_payload();
+        return;
     }
 
     uint32_t slot_addr = rt_ring_data_addr(ring_buffer, ring_buffer->write_index);
@@ -53,10 +59,14 @@ __attribute__((noinline)) void realtime_profiler_read_and_enqueue(bool buffer_a)
     noc_async_read(dispatch_noc_addr, slot_addr, realtime_profiler_timestamp_size);
     noc_async_read_barrier();
 
-    const uint32_t id = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot_addr)[2];
-    if (id != REALTIME_PROFILER_UNPROFILED_PROGRAM_HOST_ID) {
+    volatile tt_l1_ptr uint32_t* payload = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot_addr);
+    const uint32_t runtime_id = payload[2] & 0xFFFF;
+    if (runtime_id != REALTIME_PROFILER_UNPROFILED_PROGRAM_HOST_ID) {
+        payload[7] += rt_profiler_msg->loss_device_ring;
+        asm volatile("fence w, w" ::: "memory");
         ring_buffer->write_index++;
     }
+    acknowledge_dispatch_payload();
 }
 
 // Handle sync requests from host: capture device timestamp and enqueue
@@ -111,6 +121,8 @@ void kernel_main() {
     ring_buffer->write_index = 0;
     ring_buffer->read_index = 0;
     ring_buffer->terminate = 0;
+    ring_buffer->ring_full_wait_count = 0;
+    rt_profiler_msg->loss_device_ring = 0;
 
     rt_profiler_msg->realtime_profiler_state = REALTIME_PROFILER_STATE_IDLE;
 

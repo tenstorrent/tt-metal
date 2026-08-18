@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
@@ -31,6 +32,16 @@ public:
             std::lock_guard<std::mutex> lock(mutex_);
             host_dropped_ += batch.dropped;
             records_.insert(records_.end(), batch.records.begin(), batch.records.end());
+            for (const auto& snapshot : batch.device_loss) {
+                auto existing = std::find_if(device_loss_.begin(), device_loss_.end(), [&](const auto& entry) {
+                    return entry.chip_id == snapshot.chip_id;
+                });
+                if (existing == device_loss_.end()) {
+                    device_loss_.push_back(snapshot);
+                } else {
+                    existing->cumulative_source_dropped = snapshot.cumulative_source_dropped;
+                }
+            }
         }
         cv_.notify_all();
     }
@@ -69,10 +80,16 @@ public:
         return records_;
     }
 
+    std::vector<experimental::ProgramRealtimeProfilerDeviceLossSnapshot> device_loss() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return device_loss_;
+    }
+
 private:
     mutable std::mutex mutex_;
     std::condition_variable cv_;
     std::vector<experimental::ProgramRealtimeRecord> records_;
+    std::vector<experimental::ProgramRealtimeProfilerDeviceLossSnapshot> device_loss_;
     uint64_t host_dropped_ = 0;
 };
 

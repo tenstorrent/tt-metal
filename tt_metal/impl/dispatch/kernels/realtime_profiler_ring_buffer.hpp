@@ -19,6 +19,8 @@
 
 constexpr uint32_t RT_PROFILER_RING_CAPACITY = 4096;  // must be power-of-2
 constexpr uint32_t RT_PROFILER_ENTRY_SIZE = 64;       // matches D2H socket page size
+constexpr uint32_t RT_PROFILER_HOST_FIFO_PAGES = 32768;
+static_assert(RT_PROFILER_HOST_FIFO_PAGES >= RT_PROFILER_RING_CAPACITY);
 
 // NCRISC progress / heartbeat (cq_realtime_profiler_push.cpp). Host may read via L1 for
 // post-mortems; not used for protocol correctness.

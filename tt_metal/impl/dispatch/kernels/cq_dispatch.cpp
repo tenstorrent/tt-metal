@@ -105,6 +105,11 @@ constexpr uint32_t is_h_variant = IS_H_VARIANT;
 
 // The dispatch message entry limit also bounds the number of sub-devices.
 static std::array<uint32_t, max_num_worker_sems> workers_per_sub_device = {0};
+static_assert(max_num_worker_sems <= REALTIME_PROFILER_MAX_STREAMS);
+
+#if REALTIME_PROFILER_ENABLED
+static uint32_t realtime_profiler_reset_epoch = 0;
+#endif
 
 // Read and store telemetry values via local variables to avoid L1 reads
 static uint32_t upstream_blocked_counter = 0;
@@ -1131,6 +1136,27 @@ static void process_wait() {
             stream,
             STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX,
             neg_sem_val << REMOTE_DEST_BUF_WORDS_FREE_INC);
+#if REALTIME_PROFILER_ENABLED
+        const uint32_t stream_index = stream - first_stream_used;
+        if (stream_index < max_num_worker_sems) {
+#if REALTIME_PROFILER_TEST_RESET_PAUSE
+            if (rt_profiler_msg->test_protocol_words[0] != 0) {
+                rt_profiler_msg->test_protocol_words[0] = 2;
+                asm volatile("fence iorw, iorw" ::: "memory");
+                do {
+                    invalidate_l1_cache();
+                } while (rt_profiler_msg->test_protocol_words[0] != 0);
+            }
+#endif
+            // The supported co-located topology orders this publication before
+            // the next notify-dispatch-s command can release a GO.
+            rt_profiler_msg->stream_generation[stream_index]++;
+            asm volatile("fence iorw, iorw" ::: "memory");
+            realtime_profiler_reset_epoch =
+                (realtime_profiler_reset_epoch + 1) & REALTIME_PROFILER_PUBLICATION_EPOCH_MASK;
+            NOC_STREAM_WRITE_REG(8, STREAM_SCRATCH_3_REG_INDEX, realtime_profiler_reset_epoch);
+        }
+#endif
         if constexpr (telemetry_enabled) {
             dispatch_telemetry_control->worker_stream_reset_update = ++local_worker_stream_reset_update;
         }
@@ -1607,6 +1633,15 @@ void kernel_main() {
                 << REMOTE_DEST_BUF_WORDS_FREE_INC);
 #endif
     }
+
+#if REALTIME_PROFILER_ENABLED
+    for (size_t i = 0; i < max_num_worker_sems; ++i) {
+        rt_profiler_msg->stream_generation[i] = 0;
+    }
+    NOC_STREAM_WRITE_REG(8, STREAM_SCRATCH_3_REG_INDEX, 0);
+    asm volatile("fence iorw, iorw" ::: "memory");
+    rt_profiler_msg->dispatch_d_ready = REALTIME_PROFILER_PROTOCOL_VERSION;
+#endif
 
     uint32_t l1_cache[l1_cache_elements_rounded];
 

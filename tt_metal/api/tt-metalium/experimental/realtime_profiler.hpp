@@ -22,6 +22,18 @@ struct ProgramRealtimeRecord {
     double frequency;                                  // Device clock frequency (cycles per ns)
     std::span<const std::string_view> kernel_sources;  // Kernel source paths; valid until
                                                        // MetalContext teardown or reinitialization.
+    uint32_t command_queue_id = 0;
+    uint32_t dispatch_stream = 0;
+    uint32_t generation = 0;  // Zero-extended low 16 bits from the device record.
+    uint32_t sequence = 0;
+    uint32_t schema_version = 0;
+    uint32_t record_type = 0;
+    uint64_t cumulative_source_dropped = 0;
+};
+
+struct ProgramRealtimeProfilerDeviceLossSnapshot {
+    uint32_t chip_id = 0;
+    uint64_t cumulative_source_dropped = 0;
 };
 
 struct ProgramRealtimeRecordBatch {
@@ -29,6 +41,7 @@ struct ProgramRealtimeRecordBatch {
                                                      // until the callback returns.
     uint64_t dropped;                                // Records lost since this callback last ran; nonzero if the
                                                      // callback could not keep up with incoming profiler data.
+    std::span<const ProgramRealtimeProfilerDeviceLossSnapshot> device_loss;
 };
 
 enum class ProgramRealtimeProfilerInactiveReason : uint8_t {
@@ -46,6 +59,7 @@ enum class ProgramRealtimeProfilerInactiveReason : uint8_t {
     InsufficientL1,
     KernelsNullified,
     SocketInitializationFailed,
+    ProtocolInitializationFailed,
 };
 
 struct ProgramRealtimeProfilerLossCounts {
@@ -65,8 +79,8 @@ struct ProgramRealtimeProfilerDeviceCapability {
     uint32_t chip_id = 0;
     bool active = false;
     ProgramRealtimeProfilerInactiveReason inactive_reason = ProgramRealtimeProfilerInactiveReason::NotInitialized;
-    // Milestone 1 exposes the frozen shape but leaves all counters at zero. Device-side accounting populates this
-    // snapshot with the concurrent descriptor transport in Milestone 2.
+    // Refreshed from device L1 only when the explicit capability query is
+    // called; never used as a timing endpoint.
     ProgramRealtimeProfilerLossCounts loss;
 };
 
@@ -116,7 +130,11 @@ void UnregisterProgramRealtimeProfilerCallback(ProgramRealtimeProfilerCallbackHa
  */
 bool IsProgramRealtimeProfilerActive();
 
-/** Returns one capability snapshot for every device evaluated by an open MeshDevice. */
+/**
+ * Returns the newest capability snapshot for every evaluated chip. A closed
+ * device remains present with active=false so shutdown-only loss counters can
+ * be audited; the next evaluation of that chip replaces the snapshot.
+ */
 std::vector<ProgramRealtimeProfilerDeviceCapability> GetProgramRealtimeProfilerDeviceCapabilities();
 
 }  // namespace tt::tt_metal::experimental

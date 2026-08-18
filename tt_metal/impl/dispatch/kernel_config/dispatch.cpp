@@ -4,6 +4,7 @@
 
 #include "dispatch.hpp"
 
+#include <cstdlib>
 #include <tt-logger/tt-logger.hpp>
 #include <tt_metal.hpp>
 #include "impl/buffers/semaphore.hpp"
@@ -463,6 +464,9 @@ void DispatchKernel::CreateKernel() {
     uint32_t num_physical_active_eth_cores =
         get_control_plane_ref().get_active_ethernet_cores(device_->id(), /*skip_reserved_tunnel_cores*/ true).size();
     bool virtualize_num_eth_cores = num_virtual_active_eth_cores > num_physical_active_eth_cores;
+    const bool realtime_profiler_enabled =
+        static_config_.is_d_variant.value() &&
+        descriptor_.metal_context().get_dispatch_core_manager().evaluate_realtime_profiler_eligibility(device_).enabled;
 
     const auto& compute_grid_size = device_->compute_with_storage_grid_size();
     CoreRange device_worker_cores = CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1});
@@ -542,6 +546,7 @@ void DispatchKernel::CreateKernel() {
         {"FABRIC_HEADER_RB_ENTRIES", std::to_string(static_config_.fabric_header_rb_entries.value())},
         {"MY_FABRIC_SYNC_STATUS_ADDR", std::to_string(static_config_.my_fabric_sync_status_addr.value())},
         {"REALTIME_PROFILER_MSG_ADDR", std::to_string(static_config_.realtime_profiler_msg_addr.value())},
+        {"REALTIME_PROFILER_ENABLED", std::to_string(realtime_profiler_enabled)},
         {"DISPATCH_TELEMETRY_ADDR", std::to_string(static_config_.dispatch_telemetry_addr.value())},
         {"DISPATCH_TELEMETRY_CONTROL_ADDR", std::to_string(static_config_.dispatch_telemetry_control_addr.value())},
         {"DISPATCH_TELEMETRY_DISABLED", std::to_string(static_config_.dispatch_telemetry_disabled.value_or(false))},
@@ -579,6 +584,9 @@ void DispatchKernel::CreateKernel() {
         {"IS_D_VARIANT", std::to_string(static_config_.is_d_variant.value())},
         {"IS_H_VARIANT", std::to_string(static_config_.is_h_variant.value())},
     };
+    if (std::getenv("TT_METAL_REALTIME_PROFILER_TEST_RESET_PAUSE") != nullptr) {
+        defines["REALTIME_PROFILER_TEST_RESET_PAUSE"] = "1";
+    }
     if (!is_hd()) {
         defines["FABRIC_RELAY"] = "1";
         if (static_config_.is_2d_fabric.value_or(false)) {

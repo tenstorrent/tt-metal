@@ -52,9 +52,9 @@ struct dispatch_static_config_t {
     std::optional<uint32_t> my_fabric_sync_status_addr;
     std::optional<bool> is_2d_fabric;
 
-    // Dispatch-core-local L1 address of the realtime_profiler_msg_t block (state, ping-pong
-    // timestamps, host<->device sync, and the program-id handoff FIFO between cq_dispatch BRISC
-    // and cq_dispatch_subordinate NCRISC). Assigned by DispatchMemMap via
+    // Dispatch-core-local L1 address of the realtime_profiler_msg_t block (legacy M1 transport,
+    // concurrent per-stream descriptor queues, completed-record queue, readiness, and loss state). Assigned by
+    // DispatchMemMap via
     // CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG. The same address must be passed to
     // DispatchSKernel and to the RT-profiler core kernels.
     std::optional<uint32_t> realtime_profiler_msg_addr;

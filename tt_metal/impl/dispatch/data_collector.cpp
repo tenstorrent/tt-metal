@@ -240,11 +240,30 @@ void DataCollector::RemoveRealtimeProfilerCapability(uint32_t chip_id) {
 }
 
 std::vector<tt::ProgramRealtimeProfilerDeviceCapability> DataCollector::GetRealtimeProfilerDeviceCapabilities() const {
-    std::lock_guard<std::mutex> lock(realtime_profiler_active_chips_mutex_);
     std::vector<tt::ProgramRealtimeProfilerDeviceCapability> result;
-    result.reserve(realtime_profiler_capabilities_.size());
-    for (const auto& [chip_id, capability] : realtime_profiler_capabilities_) {
-        result.push_back(capability);
+    {
+        std::lock_guard<std::mutex> lock(realtime_profiler_active_chips_mutex_);
+        result.reserve(realtime_profiler_capabilities_.size());
+        for (const auto& [chip_id, capability] : realtime_profiler_capabilities_) {
+            result.push_back(capability);
+        }
+    }
+    {
+        // Keep listeners attached while invoking the explicit refresh so a
+        // concurrent manager shutdown cannot invalidate a copied pointer.
+        std::lock_guard<std::mutex> lock(program_realtime_profiler_callbacks_mutex_);
+        for (const auto* listener : realtime_callback_listeners_) {
+            for (auto capability : listener->get_device_capabilities()) {
+                const auto existing = std::find_if(result.begin(), result.end(), [&](const auto& entry) {
+                    return entry.chip_id == capability.chip_id;
+                });
+                if (existing == result.end()) {
+                    result.push_back(std::move(capability));
+                } else {
+                    *existing = std::move(capability);
+                }
+            }
+        }
     }
     std::sort(result.begin(), result.end(), [](const auto& lhs, const auto& rhs) { return lhs.chip_id < rhs.chip_id; });
     return result;

@@ -30,6 +30,7 @@ enum data_collector_t {
 // Aliases to the public experimental types for internal use.
 using ProgramRealtimeRecord = tt::tt_metal::experimental::ProgramRealtimeRecord;
 using ProgramRealtimeRecordBatch = tt::tt_metal::experimental::ProgramRealtimeRecordBatch;
+using ProgramRealtimeProfilerDeviceLossSnapshot = tt::tt_metal::experimental::ProgramRealtimeProfilerDeviceLossSnapshot;
 using ProgramRealtimeProfilerCallback = tt::tt_metal::experimental::ProgramRealtimeProfilerCallback;
 using ProgramRealtimeProfilerCallbackHandle = tt::tt_metal::experimental::ProgramRealtimeProfilerCallbackHandle;
 using ProgramRealtimeProfilerDeviceCapability = tt::tt_metal::experimental::ProgramRealtimeProfilerDeviceCapability;
@@ -98,6 +99,9 @@ public:
     virtual void on_callback_registered(
         ProgramRealtimeProfilerCallbackHandle handle, const ProgramRealtimeProfilerCallback& callback) = 0;
     virtual void on_callback_unregistered(ProgramRealtimeProfilerCallbackHandle handle) = 0;
+    // Explicit diagnostics query. Implementations may read device metadata, but
+    // must never synthesize timing endpoints or run on the dispatch/callback path.
+    virtual std::vector<ProgramRealtimeProfilerDeviceCapability> get_device_capabilities() const { return {}; }
 };
 
 // Returns true if the real-time profiler is currently active on at least one chip,

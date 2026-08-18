@@ -220,7 +220,7 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
 
     uint64_t stress_records = 0;
     uint64_t bad_frequency = 0;
-    uint64_t unexpected_end_timestamps = 0;
+    uint64_t invalid_device_intervals = 0;
     uint64_t max_callback_batch = 0;
     ProgramRealtimeProfilerCallbackHandle handle =
         RegisterProgramRealtimeProfilerCallback([&](const ProgramRealtimeRecordBatch& batch) {
@@ -233,8 +233,8 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
                 if (!(rec.frequency > 0.0)) {
                     ++bad_frequency;
                 }
-                if (rec.end_timestamp != 0) {
-                    ++unexpected_end_timestamps;
+                if (rec.start_timestamp == 0 || rec.end_timestamp <= rec.start_timestamp) {
+                    ++invalid_device_intervals;
                 }
             }
         });
@@ -273,7 +273,7 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
         tt::LogTest,
         "[RT profiler stress] {} stress records across {} active device(s) over {} ordinary launches, "
         "max_callback_batch={}, mean_publish_batch={:.1f}, peak_fifo={}/{} pages, ring_full_waits={}, "
-        "{} bad-frequency, {} unexpected-end",
+        "{} bad-frequency, {} invalid-device-interval",
         stress_records,
         num_active_devices,
         num_stress_programs,
@@ -283,7 +283,7 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
         fifo_capacity_pages,
         ring_full_waits,
         bad_frequency,
-        unexpected_end_timestamps);
+        invalid_device_intervals);
 
     ASSERT_GE(stress_records, expected_stress_records)
         << "expected one record per ordinary launch: " << num_stress_programs << " launches x " << num_active_devices
@@ -296,8 +296,8 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
         << "device ring reached capacity; the receiver drained it slower than the device filled it";
 
     EXPECT_EQ(bad_frequency, 0u) << bad_frequency << " stress record(s) had a non-positive frequency";
-    EXPECT_EQ(unexpected_end_timestamps, 0u)
-        << "Milestone 1 must suppress the legacy observer's off-by-one completion endpoint";
+    EXPECT_EQ(invalid_device_intervals, 0u)
+        << "Every stress record must carry a positive interval measured entirely on device";
 
     EXPECT_TRUE(mesh_device->close());
 }

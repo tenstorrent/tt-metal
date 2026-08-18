@@ -2,17 +2,19 @@
 
 ## Overview
 
-The real-time profiler streams per-program device-side timestamps to the host
-during execution. In clean-room Milestone 1, each profiled ordinary GO produces
-a correctly identified device start tick and `end_timestamp == 0`. Tracy skips
-these start-only records; Milestone 2 restores duration zones with a correlated
-completion-gated endpoint. Trace replay is intentionally unprofiled.
+The real-time profiler observes correlated per-program device intervals during
+execution. dispatch_s captures the start tick, a resident TRISC0 observes the
+matching completion counter, and the existing reserved-core/D2H path delivers
+both endpoints to callbacks. Every firmware queue is bounded and profiler
+pressure drops and counts data instead of blocking application progress. Trace
+replay is intentionally unprofiled.
 
 ### Components
 
 | Component | File | Core | NOC |
 |-----------|------|------|-----|
 | **dispatch_s** (signal source) | `cq_dispatch_subordinate.cpp` | NCRISC | NOC 1 |
+| **completion observer** | `cq_dispatch_subordinate_compute.cpp` | dispatch_s TRISC0 | register space / local L1 |
 | **BRISC reader** (fast path) | `cq_realtime_profiler.cpp` | reserved profiler tensix BRISC | NOC 0 |
 | **NCRISC pusher** (slow path) | `cq_realtime_profiler_push.cpp` | reserved profiler tensix NCRISC | NOC 1 |
 | **host manager** | `realtime_profiler_manager.cpp` | CPU threads | PCIe |
@@ -26,49 +28,53 @@ can be absorbed without dropping records.
 ### Data Flow
 
 ```
-dispatch_s            BRISC reader          NCRISC pusher          host
-(NCRISC, NOC 1)       (profiler tensix,     (profiler tensix,      (receiver thread)
-                       NOC 0)                NOC 1)
-    |                      |                      |                      |
-    |-- inline_dw_write -->|                      |                      |
-    |   PUSH_A / PUSH_B    |                      |                      |
-    |   (NOC 1)            |                      |                      |
-    |                      |-- noc_async_read     |                      |
-    |                      |   (read timestamps,  |                      |
-    |                      |    NOC 0)            |                      |
-    |                      |-- write_index++ ---->| L1 ring buffer       |
-    |                      |                      |                      |
-    |                      |                      |-- drain all pending  |
-    |                      |                      |   push_entries_to_host
-    |                      |                      |   (coalesced PCIe    |
-    |                      |                      |    writes, ~420 ns) ->| hugepage
-    |                      |                      |                      |-- read pages
-    |                      |                      |                      |   -> callbacks
+dispatch_s       TRISC0 observer       BRISC reader       NCRISC pusher       host
+    |                    |                   |                   |              |
+    |-- descriptor ----->|                   |                   |              |
+    |-- GO               |                   |                   |              |
+    |                    |-- completed ----->|                   |              |
+    |<-- bounded service-|   ring            |                   |              |
+    |-- A/B payload + PUSH_A/PUSH_B -------->|                   |              |
+    |                    |                   |-- L1 ring ------->|              |
+    |                    |                   |                   |-- D2H page -->|
+    |                    |                   |                   |              |-- callbacks
 ```
 
-## Double-Buffer Protocol
+## Concurrent Device-Local Protocol
 
-dispatch_s maintains two timestamp buffers in its own L1 (A/B). On each
-profiled `CQ_DISPATCH_CMD_SEND_GO_SIGNAL` it:
+For each accepted ordinary GO, dispatch_s reserves a slot in that sub-device
+stream's depth-four SPSC ring, captures one device-clock tick and stages local
+payload immediately before GO, then publishes the producer index and wakeup
+epoch immediately after the first GO write. The descriptor includes runtime
+identity, completion target, generation, and start tick; its ring supplies the
+stream identity. A resident TRISC0 observer stays parked
+until the profiler is activated, tracks only active streams, and samples the
+same device clock on the first poll that sees a target complete. It publishes
+the correlated interval to a bounded 64-record device-local SPSC ring.
 
-1. Waits for prior same-stream workers.
-2. Captures the device start tick immediately before the first go-signal NOC
-   write.
-3. Issues GO, writes the command-carried runtime ID, and sends a `PUSH_A` or
-   `PUSH_B` state to the reserved profiler tensix via a NOC inline dword write.
+Every producer path is one-shot: a full descriptor or completed-record ring
+increments its named loss counter and drops the record. No profiler path waits
+for space. A generation handshake around a real `CLEAR_STREAM` prevents a
+queued descriptor from crossing the counter-reset window. Both timing
+endpoints are device ticks; host timing and tensor readback are never fallback
+endpoints.
 
-There is no program-ID FIFO and no M1 completion timestamp. The public host
-record explicitly sets the end timestamp to zero.
+## Public Transport
 
-This alternation only hands one in-flight record to the reader at a time;
-dispatch_s never blocks on the profiler.
+dispatch_s checks the completed-publication scratch register at fixed safe
+service points. A clear signal returns without invalidating L1. When a record is
+pending and the A/B transport is acknowledged, one service action invalidates,
+copies exactly one eight-word interval, publishes the low-24-bit completed-ring
+consumer index, and notifies the reserved BRISC. The BRISC acknowledges only
+after consuming or explicitly dropping that payload, so dispatch_s never
+overwrites an in-flight mailbox. There is no program-ID FIFO and no profiler
+command emitted by ordinary `Finish`.
 
 The **BRISC reader** polls its state mailbox. On `PUSH_A`/`PUSH_B` it issues a
 `noc_async_read` of the 32-byte transport record from the indicated dispatch_s
-buffer into the next ring slot, then advances `write_index` (records for
-unprofiled programs are read but not committed). If the ring is full it spins
-(heartbeat `ring_full_wait_count`); in practice this does not happen, because the
-host drains records faster than they are produced. The reader also services host
+buffer into the next ring slot, composes its cumulative device-ring loss, then
+advances `write_index`. If the ring is full it increments `device_ring`, drops
+the interval, and acknowledges immediately. The reader also services host
 clock-sync requests, enqueueing sync-marker records into the same ring.
 
 The **NCRISC pusher** owns the slow PCIe path. Each iteration it snapshots
@@ -89,6 +95,10 @@ ring-wrap, host-FIFO-wrap, and burst-size boundaries — followed by a single
 |--------|-------|
 | Full enabled M1 GO-tail increment over the same binary disabled | **128 cycles (~95 ns at 1.35 GHz)** |
 | Disabled M1 GO-tail median versus exact clean baseline | **817 versus 927 cycles** |
+| Full enabled M3 GO-tail increment over the same binary disabled | **161 cycles (~119 ns at 1.35 GHz)** |
+| M3 device observation error, median GO lead / polling lag | **568 / 370 cycles** |
+| M3 observer loop, idle / one active / eight active streams | **24 / 90 / 464 cycles** |
+| M3 production observer TRISC0 text | **1,848 / 2,048 bytes** |
 
 ### Push cost (NCRISC pusher side)
 
@@ -98,12 +108,11 @@ ring-wrap, host-FIFO-wrap, and burst-size boundaries — followed by a single
 
 ### Throughput
 
-The signal-to-record path uses a fast NOC read into a deep L1 ring, decoupled
-from the PCIe push; the pusher drains pending entries in coalesced bursts. This
-does not claim losslessness under unbounded pressure. Milestone 1 qualification
-in `test_realtime_profiler_stress.cpp` uses repeated ordinary non-trace launches
-and verifies lossless delivery for the measured peak-load window. Later
-milestones add explicit device-side loss counters and drop behavior.
+The signal-to-record path uses bounded descriptor/completed queues followed by
+a fast NOC read into the deep reserved-core L1 ring. The PCIe pusher drains
+pending entries in coalesced bursts. None of these queues claims losslessness
+under unbounded pressure; every capacity failure has a monotonic stage-specific
+counter and no interval producer waits for space.
 
 ## Implementation Notes
 
@@ -112,3 +121,7 @@ milestones add explicit device-side loss counters and drop behavior.
   consumer threads read from the ring and invoke the registered callbacks. A slow
   callback only drops records for that consumer (tracked in `Consumer::dropped`);
   it never stalls page draining or dispatch.
+- Shutdown asks the observer to stop, waits only within a fixed cycle budget,
+  forwards at most the 64-record completed-ring capacity, and counts abandoned
+  descriptors, records, or stop timeouts. It does not publish a dummy record or
+  substitute a host timestamp.

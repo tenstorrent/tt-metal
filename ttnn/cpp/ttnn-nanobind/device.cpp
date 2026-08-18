@@ -59,9 +59,26 @@ namespace {
 // RegisterProgramRealtimeProfilerCallback. Access only from the Python thread (always under GIL), so no mutex needed.
 std::unordered_map<uint64_t, PyObject*> python_realtime_callback_refs;
 
+struct PythonProgramRealtimeRecord {
+    uint32_t runtime_id = 0;
+    uint32_t chip_id = 0;
+    uint64_t start_timestamp = 0;
+    uint64_t end_timestamp = 0;
+    double frequency = 0;
+    std::vector<std::string> kernel_sources;
+    uint32_t command_queue_id = 0;
+    uint32_t dispatch_stream = 0;
+    uint32_t generation = 0;
+    uint32_t sequence = 0;
+    uint32_t schema_version = 0;
+    uint32_t record_type = 0;
+    uint64_t cumulative_source_dropped = 0;
+};
+
 struct PythonProgramRealtimeRecordBatch {
-    std::vector<tt::tt_metal::experimental::ProgramRealtimeRecord> records;
+    std::vector<PythonProgramRealtimeRecord> records;
     uint64_t dropped = 0;
+    std::vector<tt::tt_metal::experimental::ProgramRealtimeProfilerDeviceLossSnapshot> device_loss;
 };
 
 void ttnn_device(nb::module_& mod) {
@@ -186,7 +203,10 @@ void py_device_module_types(nb::module_& m_device) {
         .value("KernelsNullified", tt::tt_metal::experimental::ProgramRealtimeProfilerInactiveReason::KernelsNullified)
         .value(
             "SocketInitializationFailed",
-            tt::tt_metal::experimental::ProgramRealtimeProfilerInactiveReason::SocketInitializationFailed);
+            tt::tt_metal::experimental::ProgramRealtimeProfilerInactiveReason::SocketInitializationFailed)
+        .value(
+            "ProtocolInitializationFailed",
+            tt::tt_metal::experimental::ProgramRealtimeProfilerInactiveReason::ProtocolInitializationFailed);
 
     nb::class_<tt::tt_metal::experimental::ProgramRealtimeProfilerLossCounts>(
         m_device, "ProgramRealtimeProfilerLossCounts", "Cumulative device and transport loss counters.")
@@ -214,28 +234,31 @@ void py_device_module_types(nb::module_& m_device) {
             "inactive_reason", &tt::tt_metal::experimental::ProgramRealtimeProfilerDeviceCapability::inactive_reason)
         .def_ro("loss", &tt::tt_metal::experimental::ProgramRealtimeProfilerDeviceCapability::loss);
 
-    nb::class_<tt::tt_metal::experimental::ProgramRealtimeRecord>(
+    nb::class_<tt::tt_metal::experimental::ProgramRealtimeProfilerDeviceLossSnapshot>(
+        m_device, "ProgramRealtimeProfilerDeviceLossSnapshot", "Cumulative device-source profiler loss.")
+        .def_ro("chip_id", &tt::tt_metal::experimental::ProgramRealtimeProfilerDeviceLossSnapshot::chip_id)
+        .def_ro(
+            "cumulative_source_dropped",
+            &tt::tt_metal::experimental::ProgramRealtimeProfilerDeviceLossSnapshot::cumulative_source_dropped);
+
+    nb::class_<PythonProgramRealtimeRecord>(
         m_device, "ProgramRealtimeRecord", "Record containing real-time profiler data from a device.")
-        .def_ro("runtime_id", &tt::tt_metal::experimental::ProgramRealtimeRecord::runtime_id, "Runtime ID")
+        .def_ro("runtime_id", &PythonProgramRealtimeRecord::runtime_id, "Runtime ID")
+        .def_ro("start_timestamp", &PythonProgramRealtimeRecord::start_timestamp, "Device start timestamp (raw ticks)")
+        .def_ro("end_timestamp", &PythonProgramRealtimeRecord::end_timestamp, "Device end timestamp (raw ticks)")
+        .def_ro("frequency", &PythonProgramRealtimeRecord::frequency, "Device clock frequency (cycles per ns)")
+        .def_ro("chip_id", &PythonProgramRealtimeRecord::chip_id, "Device chip ID")
+        .def_ro("command_queue_id", &PythonProgramRealtimeRecord::command_queue_id)
+        .def_ro("dispatch_stream", &PythonProgramRealtimeRecord::dispatch_stream)
+        .def_ro("generation", &PythonProgramRealtimeRecord::generation)
+        .def_ro("sequence", &PythonProgramRealtimeRecord::sequence)
+        .def_ro("schema_version", &PythonProgramRealtimeRecord::schema_version)
+        .def_ro("record_type", &PythonProgramRealtimeRecord::record_type)
+        .def_ro("cumulative_source_dropped", &PythonProgramRealtimeRecord::cumulative_source_dropped)
         .def_ro(
-            "start_timestamp",
-            &tt::tt_metal::experimental::ProgramRealtimeRecord::start_timestamp,
-            "Device start timestamp (raw ticks)")
-        .def_ro(
-            "end_timestamp",
-            &tt::tt_metal::experimental::ProgramRealtimeRecord::end_timestamp,
-            "Device end timestamp (raw ticks)")
-        .def_ro(
-            "frequency",
-            &tt::tt_metal::experimental::ProgramRealtimeRecord::frequency,
-            "Device clock frequency (cycles per ns)")
-        .def_ro("chip_id", &tt::tt_metal::experimental::ProgramRealtimeRecord::chip_id, "Device chip ID")
-        .def_prop_ro(
             "kernel_sources",
-            [](const tt::tt_metal::experimental::ProgramRealtimeRecord& record) {
-                return std::vector<std::string>(record.kernel_sources.begin(), record.kernel_sources.end());
-            },
-            "Kernel source paths associated with this runtime ID; valid until the callback returns");
+            &PythonProgramRealtimeRecord::kernel_sources,
+            "Python-owned kernel source paths associated with this runtime ID");
 
     nb::class_<PythonProgramRealtimeRecordBatch>(
         m_device, "ProgramRealtimeRecordBatch", "Batch of real-time profiler records delivered to a callback.")
@@ -247,7 +270,8 @@ void py_device_module_types(nb::module_& m_device) {
             "dropped",
             &PythonProgramRealtimeRecordBatch::dropped,
             "Records lost since this callback last ran; nonzero if the callback could not keep up with incoming "
-            "profiler data");
+            "profiler data")
+        .def_ro("device_loss", &PythonProgramRealtimeRecordBatch::device_loss);
 
     nb::class_<tt::tt_metal::detail::MemoryView>(
         m_device, "MemoryView", "Class representing view of the memory (dram, l1, l1_small, trace) of a device.")
@@ -784,10 +808,32 @@ void device_module(nb::module_& m_device) {
                 nb::gil_scoped_release release;
                 handle = tt::tt_metal::experimental::RegisterProgramRealtimeProfilerCallback(
                     [raw_cb](const tt::tt_metal::experimental::ProgramRealtimeRecordBatch& batch) {
+                        std::vector<PythonProgramRealtimeRecord> records;
+                        records.reserve(batch.records.size());
+                        for (const auto& record : batch.records) {
+                            records.push_back({
+                                .runtime_id = record.runtime_id,
+                                .chip_id = record.chip_id,
+                                .start_timestamp = record.start_timestamp,
+                                .end_timestamp = record.end_timestamp,
+                                .frequency = record.frequency,
+                                .kernel_sources = std::vector<std::string>(
+                                    record.kernel_sources.begin(), record.kernel_sources.end()),
+                                .command_queue_id = record.command_queue_id,
+                                .dispatch_stream = record.dispatch_stream,
+                                .generation = record.generation,
+                                .sequence = record.sequence,
+                                .schema_version = record.schema_version,
+                                .record_type = record.record_type,
+                                .cumulative_source_dropped = record.cumulative_source_dropped,
+                            });
+                        }
                         PythonProgramRealtimeRecordBatch py_batch{
-                            .records = std::vector<tt::tt_metal::experimental::ProgramRealtimeRecord>(
-                                batch.records.begin(), batch.records.end()),
+                            .records = std::move(records),
                             .dropped = batch.dropped,
+                            .device_loss =
+                                std::vector<tt::tt_metal::experimental::ProgramRealtimeProfilerDeviceLossSnapshot>(
+                                    batch.device_loss.begin(), batch.device_loss.end()),
                         };
                         nb::gil_scoped_acquire gil;
                         (nb::handle(raw_cb))(nb::cast(std::move(py_batch), nb::rv_policy::move));

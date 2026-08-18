@@ -2,7 +2,8 @@
 
 ## Status
 
-This is the Milestone 0 decision record for
+This is the implementation record for the Blackhole clean-room realtime
+profiler through Milestone 3 of
 `REALTIME_PROFILER_CLEAN_ROOM_IMPLEMENTATION_PLAN.md`.
 
 Milestone 1 evidence found that its original 0.5% cross-build host-throughput
@@ -43,6 +44,7 @@ no_reserved_profiler_core
 insufficient_l1
 kernels_nullified
 socket_initialization_failed
+protocol_initialization_failed
 ```
 
 Unsupported execution continues without concurrent records. It never creates
@@ -89,11 +91,10 @@ queue completion responsible for profiler delivery.
 
 ## Timing contract
 
-This section is the Milestone 2 interval contract. Milestone 1 deliberately
-publishes only `runtime_program_id` and the device `start_tick`, with the
-public end timestamp set to zero. The inherited observer endpoint is associated
-with launch N-1 while the Go-carried ID is associated with launch N; exposing
-them together would create a false interval.
+Milestone 1 deliberately published only `runtime_program_id` and the device
+`start_tick`, because its inherited endpoint belonged to launch N-1. The
+current descriptor/observer protocol correlates both endpoints to the same
+accepted launch and publishes that interval through the existing transport.
 
 Every accepted interval contains two 64-bit raw Blackhole wall-clock ticks:
 
@@ -187,12 +188,12 @@ Runtime control and counter ownership is equally strict:
 | --- | --- | --- |
 | Per-stream generation, reset epoch, `dispatch_d_ready` | dispatch_d | dispatch_s, TRISC0, host diagnostics |
 | Descriptor producer indices, descriptor epoch, `descriptor_full`, `unsupported_launch`, `terminal_descriptor`, `dispatch_s_ready` | dispatch_s | TRISC0 or host diagnostics |
-| Descriptor consumer indices, completed producer index/epoch, `reset_descriptor`, `observer_coalesced`, `stuck_head`, `completed_record`, `terminal_record`, `observer_ready` | TRISC0 | dispatch_s or host diagnostics |
-| Completed consumer index | dispatch_s | TRISC0, host diagnostics |
+| Descriptor consumer indices, completed producer index/epoch, successful sequence, `reset_descriptor`, `observer_coalesced`, `stuck_head`, `completed_record`, `observer_ready` | TRISC0-local state or shared L1 as specified | dispatch_s or host diagnostics |
+| Completed consumer low 24 bits, mailbox ack epoch, `terminal_record`, `observer_stop_timeout` | dispatch_s | TRISC0, dispatch_s, or host diagnostics |
 | `device_ring` | reserved profiler BRISC | reserved profiler NCRISC, host diagnostics |
 | Callback-ring dropped count | host callback fanout | callback batch consumer |
 | Activation/capability state | host manager | dispatch_s, TRISC0, public API |
-| Observer-stop timeout diagnostic | host manager | public API |
+| Observer-stop timeout diagnostic | dispatch_s | public API |
 
 ### Cold initialization
 
@@ -201,14 +202,14 @@ launched, exactly as `DispatchSKernel::ConfigureCore` does for the baseline
 mailbox. That pre-launch construction write cannot race a device RISC. Runtime
 ownership then begins and no RISC clears another RISC's fields:
 
-- dispatch_d initializes stream generations, its loss fields, stream-8 scratch
-  3, and finally publishes `dispatch_d_ready`;
-- dispatch_s initializes every descriptor producer index, the completed-ring
-  consumer index, its loss fields, stream-8 scratch 5, and finally publishes
+- dispatch_d initializes its local reset epoch, stream generations, stream-8
+  scratch 3, and finally publishes `dispatch_d_ready`;
+- dispatch_s initializes every descriptor producer index, its local consumer
+  and generation shadows, stream-8 scratch 1/2/5, and finally publishes
   `dispatch_s_ready`;
 - TRISC0 initializes every descriptor consumer index, the completed-ring
-  producer index, its loss fields, stream-8 scratch 4, and finally publishes
-  `observer_ready`;
+  producer index, its local sequence/epoch state, stream-8 scratch 4, and
+  finally publishes `observer_ready`;
 - the reserved profiler core initializes its existing transport/ring fields and
   its `device_ring` loss counter before reporting socket readiness.
 
@@ -228,13 +229,13 @@ The host is the sole pre-launch initializer; the named device RISC is the sole
 runtime writer of each field. This explicitly replaces the baseline's competing
 dispatch_d/TRISC mailbox clears.
 
-For the M1 legacy mailbox, the host writes the remote state address before the
-nonzero profiler-core NOC coordinate, which is the activation release. If D2H
+The host writes the remote state address before the nonzero profiler-core NOC
+coordinate, which is the activation release. If D2H
 socket construction fails after dispatch_s was compiled with profiler support,
 the host writes a permanent disabled sentinel. dispatch_s resolves that
-sentinel once and does not poll activation on later commands. M1 removes the
-legacy completion observer entirely; its TRISC0 image is a stub, and only
-independent TRISC1 telemetry remains.
+sentinel once and does not poll activation on later commands. Eligible
+Blackhole configurations launch the observer; ineligible configurations do
+not create it.
 
 ### Start descriptors
 
@@ -254,20 +255,21 @@ depth two leaves no observer slack after one completed-but-unobserved launch.
 Milestone 2 measures both depths at the shortest supported launch and may reduce
 the default only if the locked loss and L1 gates pass.
 
-dispatch_s first copies all command fields to locals. For a multicast launch it
-programs the existing NOC state, waits for prior same-stream workers, then does
-the local-only descriptor publication immediately before
-`cq_noc_async_write_with_state`. Local L1 stores do not touch the protected NOC
-command buffer. For a unicast-only launch it waits first, publishes immediately
-before the unicast loop, and uses one start tick for the fanout. A launch with
-both forms is timestamped before the first multicast go.
+dispatch_s first copies all command fields to locals, observes reset generation,
+and reserves a descriptor slot before programming multicast NOC state. Inside
+the protected stateful-write window it samples the start tick and stages only
+the timestamp payload in local L1. Immediately after the first successful GO
+write, it executes `fence w,w`, publishes the L1 producer index, and increments
+the stream-8 descriptor epoch last. For a unicast-only launch it follows the
+same stage-before-first-write and commit-after-first-write rule. A launch with
+both forms is timestamped before the first multicast GO.
 
-Publication writes payload, executes `fence w,w`, publishes the L1 producer
-index, and increments the stream-8 descriptor epoch last. If the ring is full it
-increments `descriptor_full` and issues the go signal without a descriptor.
-There is no retry. A fatal NOC failure after publication is a device execution
-failure, not a recoverable profiler event; ordinary successful go issuance
-cannot leave the descriptor behind without launching the program.
+The accepted common path uses local consumer/generation shadows and performs no
+L1 invalidation. Only an observed reset epoch or an apparently full local
+consumer shadow permits a refresh. If the ring remains full after that refresh
+it increments `descriptor_full` and issues the go signal without a descriptor.
+There is no retry. A fatal NOC failure before commit is a device execution
+failure and cannot fabricate a published profiler descriptor.
 
 ### Register-space publication signal
 
@@ -275,21 +277,20 @@ Blackhole has no uncached L1 alias. Empty-path readiness therefore uses
 NOC-overlay register space, which TRISC0 already reads without D-cache
 invalidation.
 
-The selected signals are:
+The selected register-space fields are:
 
 ```text
+stream 8, STREAM_SCRATCH_1_REG_INDEX: reserved-BRISC mailbox ack epoch
+stream 8, STREAM_SCRATCH_2_REG_INDEX: completed consumer index low 24 bits
+stream 8, STREAM_SCRATCH_3_REG_INDEX: reset-generation epoch
 stream 8, STREAM_SCRATCH_4_REG_INDEX: completed-publication epoch
 stream 8, STREAM_SCRATCH_5_REG_INDEX: descriptor-publication epoch
 ```
 
 Blackhole scratch registers 0–5 exist on streams 0–3 and 8–11 and store 24 data
 bits. The dispatch completion streams are 48–55. Repository search finds no
-dispatch-kernel use of stream 8 scratch 3/4/5. Milestone 0's on-device ownership
-test passes values from NCRISC to TRISC0 through all three registers, passes an
-acknowledgement from TRISC0 back to NCRISC through scratch 4, and restores the
-original values.
-These registers are reserved by the profiler protocol build and never used on
-Wormhole.
+dispatch-kernel use of these stream-8 registers outside this protocol. They are
+reserved by the profiler protocol build and never used on Wormhole.
 
 dispatch_s is the sole writer of the descriptor epoch and TRISC0 is the sole
 writer of the completed epoch. Both increment modulo 2^24 after publishing the
@@ -324,15 +325,15 @@ application dispatch remains unblocked.
 ### Completed interval ring
 
 TRISC0 publishes successful intervals into a compile-time 64-entry SPSC ring.
-Producer and consumer are monotonic `uint32_t` indices; the ring is full when
-their unsigned distance is 64, so all 64 array slots are usable. Each interval
+The producer and dispatch_s consumer indices are monotonic `uint32_t`; all 64
+array slots are usable. Each interval
 contains exactly eight words:
 
 ```text
 word 0: start_tick_hi
 word 1: start_tick_lo
 word 2: runtime_program_id[15:0] | generation_low16[31:16]
-word 3: schema_version[7:0] | record_type[11:8] | cq_id[15:12] |
+word 3: schema_version[7:0] | record_type[11:8] | reserved[15:12] |
         stream_id[23:16] | reserved[31:24]
 word 4: end_tick_hi
 word 5: end_tick_lo
@@ -369,7 +370,11 @@ before producer index with `fence w,w`.
 TRISC0 also publishes a monotonic completed-record signal in register space.
 dispatch_s checks that signal first. A clear signal returns with no L1
 invalidation. A pending signal permits one invalidation and one bounded service
-step for exactly one record.
+step for exactly one record. After copying it, dispatch_s publishes the
+consumer's low 24 bits directly in scratch register 2. TRISC0 reads that value
+when attempting its next publication and computes occupancy modulo 2^24. The
+queue distance is at most 64, so wrap is unambiguous and neither side needs a
+shared-L1 consumer field or invalidation for consumer progress.
 
 ### NOC command-buffer safety
 
@@ -378,6 +383,12 @@ No profiler NOC operation may execute between
 multicast go path. Blackhole's L1-destination inline-write workaround can use
 `NCRISC_WR_CMD_BUF` regardless of the requested dispatch_s buffer; inserting a
 profiler notification in this window can silently corrupt the go signal.
+
+The only profiler call in that window is
+`stage_realtime_profiler_start`, whose implementation is restricted to the
+local wall-clock register and local L1 payload stores. Producer-index commit and
+the stream-8 publication write execute after `with_state`. A source-contract
+test checks both the helper body and its placement between the stateful calls.
 
 Profiler service points are enumerated in code and tested. Saving/restoring
 command-buffer registers is defense in depth, not permission to service inside
@@ -390,13 +401,16 @@ The exact steady-state service points are:
 2. once per iteration while waiting for command-buffer pages;
 3. once per iteration in the dispatch_d sync-semaphore wait, before multicast
    NOC state is initialized;
-4. once after a command has completed all stateful go writes and before its page
+4. once per worker-wait iteration when no multicast command-buffer state is
+   live; the normal multicast path explicitly instantiates
+   `wait_for_workers<false>` between init-state and with-state;
+5. once after a command has completed all stateful go writes and before its page
    is released.
 
-No NOC-forwarding service occurs inside `wait_for_workers`, because the default
-multicast path calls that wait between init-state and with-state. TRISC0 remains
-free to publish into the bounded completed ring during that wait. The next safe
-service point forwards it without affecting the measured end tick.
+NOC-forwarding service is excluded specifically between multicast init-state
+and with-state. TRISC0 remains free to publish into the bounded completed ring
+during that protected wait. Worker waits outside the protected pair may service
+one record per iteration.
 
 ## Transport behavior
 
@@ -426,10 +440,12 @@ dispatch.
 
 Ordinary `Finish` emits no realtime-profiler command. The asynchronous callback
 and normal teardown drain deliver final accepted records. Teardown has explicit
-item and cycle budgets and reports terminal descriptor, terminal record, and
-observer-stop failures. Terminal counters that arise after the last accepted
-record remain available through the explicit capability/diagnostic query; close
-does not add an automatic L1 read or a fallback D2H path.
+64-item and one-million-cycle budgets and reports terminal descriptor, terminal
+record, and observer-stop failures. After dispatch termination, the existing
+manager lifecycle reads and retains the final diagnostic snapshot with
+`active=false`; the next evaluation of that chip replaces it. This is metadata
+inspection only—no timing endpoint, tensor readback, or fallback record is
+created.
 
 ## Reset protocol
 
@@ -544,6 +560,7 @@ enum class ProgramRealtimeProfilerInactiveReason : uint8_t {
     InsufficientL1,
     KernelsNullified,
     SocketInitializationFailed,
+    ProtocolInitializationFailed,
 };
 
 struct ProgramRealtimeProfilerLossCounts {
@@ -607,8 +624,10 @@ GetProgramRealtimeProfilerDeviceCapabilities();
 
 It refreshes detailed counters with an explicit diagnostic L1 read. That is
 metadata inspection, not an operation-duration fallback, and is never invoked
-in the dispatch or callback hot path. `IsProgramRealtimeProfilerActive()` is
-implemented as the compatibility aggregate over these per-device states.
+in the dispatch or callback hot path. Close retains the final snapshot with
+`active=false` so shutdown-only counters remain auditable; the next evaluation
+of that chip replaces it. `IsProgramRealtimeProfilerActive()` remains a
+separate compatibility aggregate over currently active devices.
 
 There is no `FinishAndCollectProgramRealtimeProfiler`, watermark record, control
 slot, or outstanding collection registry.
@@ -620,19 +639,22 @@ Implementation review must prove every edge:
 1. pre-launch host zero before any device RISC starts;
 2. each RISC's owned initialization before its ready flag;
 3. every required ready flag before host activation and mesh-open success;
-4. descriptor payload before descriptor producer index;
-5. descriptor producer index before register-space publication signal;
-6. TRISC0 sees publication signal before invalidating/reading descriptor L1;
-7. completed payload before completed producer index;
-8. completed producer index before register-space completed signal;
-9. dispatch_s sees completed signal before invalidating/reading record L1;
-10. staged loss composition before mailbox/ring publication;
-11. mailbox payload before NOC state notification;
-12. BRISC NOC read completion before mailbox acknowledgement;
-13. reserved-ring payload before write-index publication;
-14. NCRISC D2H write completion before reserved-ring read-index advance;
-15. reset counter clear before new generation acceptance;
-16. no profiler NOC operation inside the protected go-signal stateful-write
+4. descriptor payload staged before the first GO write;
+5. successful GO write before descriptor producer-index commit;
+6. descriptor producer index before register-space publication signal;
+7. TRISC0 sees publication signal before invalidating/reading descriptor L1;
+8. completed payload before completed producer index;
+9. completed producer index before register-space completed signal;
+10. dispatch_s sees the completed signal before invalidating/reading record L1,
+    then publishes the consumer's low 24 bits in register space; TRISC0 reads
+    that value before deciding whether its next completed slot is available;
+11. staged loss composition before mailbox/ring publication;
+12. mailbox payload before NOC state notification;
+13. BRISC NOC read completion before mailbox acknowledgement;
+14. reserved-ring payload before write-index publication;
+15. NCRISC D2H write completion before reserved-ring read-index advance;
+16. reset counter clear before new generation acceptance;
+17. no profiler NOC operation inside the protected go-signal stateful-write
     window.
 
 ## Resource and performance gates
@@ -686,6 +708,24 @@ pass. Per product-owner approval on 2026-08-18, Milestone 1 is adjudicated by:
 
 Later milestones retain device cycles as primary evidence and must add their
 own mechanism-specific gates before implementation.
+
+### Accepted Milestone 2 adjudication
+
+Per product-owner approval on 2026-08-18, Milestone 2 uses this
+mechanism-specific adjudication rather than silently extending Milestone 1:
+
+- the two legacy host-bootstrap bounds remain reported but descriptive because
+  the accepted no-op rebuild control exceeds their resolution;
+- the same-binary enabled GO-tail increment must be at most 300 device cycles;
+- the instrumented observer upper bounds must be at most 40 cycles idle, 100
+  cycles with one active stream, and 500 cycles with all eight active streams;
+- disabled/unsupported source gating, exact one-register empty-path polling,
+  footprint limits, bounded publication, and zero unexplained loss remain hard
+  gates without waiver.
+
+The final measured M2 host upper bound is 3.5368%. It remains reported as a
+descriptive failure of the original 2.0% host gate; the accepted device-cycle
+and observer bounds above are the primary adjudication.
 
 ## Rejected alternatives
 

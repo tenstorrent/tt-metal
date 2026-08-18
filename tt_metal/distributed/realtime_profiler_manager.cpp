@@ -54,7 +54,7 @@
 #include "tracy/Tracy.hpp"
 #include "tt_metal/impl/dispatch/data_collection.hpp"
 #include "tt_metal/impl/dispatch/data_collector.hpp"
-#include "tt_metal/hw/inc/hostdev/realtime_profiler_msgs.h"
+#include "tt_metal/hw/inc/hostdev/realtime_profiler_protocol_common.h"
 #include "tt_metal/impl/dispatch/kernels/realtime_profiler_ring_buffer.hpp"
 #include "tt_metal/impl/dispatch/realtime_profiler_tracy_handler.hpp"
 #include "tt_metal/impl/profiler/profiler.hpp"                // tt::tt_metal::SyncInfo, DeviceProfiler
@@ -64,6 +64,26 @@
 namespace tt::tt_metal::distributed {
 
 namespace {
+
+template <typename Function>
+class ScopeExit {
+public:
+    explicit ScopeExit(Function function) : function_(std::move(function)) {}
+    ScopeExit(const ScopeExit&) = delete;
+    ScopeExit& operator=(const ScopeExit&) = delete;
+
+    ~ScopeExit() {
+        if (active_) {
+            function_();
+        }
+    }
+
+    void release() { active_ = false; }
+
+private:
+    Function function_;
+    bool active_ = true;
+};
 
 // Minimum wall time between full init calibrations (run_sync + constructor SYNC_CHECK) and
 // between finish-path sync checks, per physical chip. Matches the finish-path throttle.
@@ -83,7 +103,7 @@ constexpr uint32_t REALTIME_PROFILER_SYNC_MARKER_ID = 0xFFFFFFFF;
 // Real-time profiler runtime constants. On-device L1 layout sizes are reused from
 // realtime_profiler_ring_buffer.hpp so host and device share a single source of truth.
 struct RealtimeProfilerRuntimeSizes {
-    static constexpr uint32_t fifo_pages = 32768;                  // host D2H FIFO depth, in pages
+    static constexpr uint32_t fifo_pages = RT_PROFILER_HOST_FIFO_PAGES;  // host D2H FIFO depth, in pages
     static constexpr uint32_t page_size = RT_PROFILER_ENTRY_SIZE;  // host page size == ring entry size
     static constexpr uint32_t fifo_size = fifo_pages * page_size;  // pinned-host FIFO, in bytes (2 MiB)
     static constexpr uint32_t core_l1_size = sizeof(RealtimeProfilerCoreL1);
@@ -195,13 +215,68 @@ uint32_t RealtimeProfilerManager::ring_full_wait_count() const {
     return peak;
 }
 
+std::vector<tt::ProgramRealtimeProfilerDeviceCapability> RealtimeProfilerManager::get_device_capabilities() const {
+    std::vector<tt::ProgramRealtimeProfilerDeviceCapability> capabilities;
+    capabilities.reserve(devices_.size());
+    for (const auto& dev_state : devices_) {
+        tt::ProgramRealtimeProfilerDeviceCapability capability{
+            .chip_id = dev_state.chip_id,
+            .active = true,
+            .inactive_reason = experimental::ProgramRealtimeProfilerInactiveReason::None,
+        };
+        if (dev_state.device != nullptr && dev_state.dispatch_s_profiler_msg_addr != 0) {
+            try {
+                constexpr uint32_t kLossWordCount = 9;
+                std::vector<uint32_t> words(kLossWordCount, 0);
+                tt::tt_metal::detail::ReadFromDeviceL1(
+                    dev_state.device,
+                    dev_state.dispatch_s_core,
+                    dev_state.dispatch_s_profiler_msg_addr + offsetof(realtime_profiler_msg_t, loss_descriptor_full),
+                    kLossWordCount * sizeof(uint32_t),
+                    words,
+                    CoreType::WORKER);
+                capability.loss.descriptor_full = words[0];
+                capability.loss.unsupported_launch = words[1];
+                capability.loss.terminal_descriptor = words[2];
+                capability.loss.reset_descriptor = words[3];
+                capability.loss.observer_coalesced = words[4];
+                capability.loss.stuck_head = words[5];
+                capability.loss.completed_record = words[6];
+                capability.loss.terminal_record = words[7];
+                capability.loss.observer_stop_timeout = words[8];
+                if (dev_state.dispatch_s_profiler_msg_addr != 0) {
+                    std::vector<uint32_t> device_ring_loss(1, 0);
+                    tt::tt_metal::detail::ReadFromDeviceL1(
+                        dev_state.device,
+                        dev_state.realtime_profiler_core,
+                        dev_state.dispatch_s_profiler_msg_addr + offsetof(realtime_profiler_msg_t, loss_device_ring),
+                        sizeof(uint32_t),
+                        device_ring_loss,
+                        CoreType::WORKER);
+                    capability.loss.device_ring = device_ring_loss[0];
+                }
+            } catch (const std::exception& e) {
+                log_warning(
+                    tt::LogMetal,
+                    "[Real-time profiler] Failed to refresh device loss counters for device {}: {}",
+                    dev_state.chip_id,
+                    e.what());
+            }
+        }
+        capabilities.push_back(capability);
+    }
+    return capabilities;
+}
+
 void RealtimeProfilerManager::publish_pages(
-    const DeviceState& dev_state,
+    DeviceState& dev_state,
     const uint32_t* page_buf,
     uint32_t num_pages,
     std::vector<tt::ProgramRealtimeRecord>& records) {
     constexpr uint32_t kPageWords = RealtimeProfilerRuntimeSizes::page_size / sizeof(uint32_t);
-    auto is_record = [](const uint32_t* page) { return page[2] != 0 && page[3] != REALTIME_PROFILER_SYNC_MARKER_ID; };
+    auto is_record = [](const uint32_t* page) {
+        return (page[2] & 0xFFFF) != 0 && page[3] != REALTIME_PROFILER_SYNC_MARKER_ID;
+    };
     records.clear();
     const uint32_t chip_id = dev_state.chip_id;
     const double sync_frequency = dev_state.sync_frequency;
@@ -211,16 +286,38 @@ void RealtimeProfilerManager::publish_pages(
         if (!is_record(rp)) {
             continue;
         }
-        records.emplace_back(
-            rp[2],
-            chip_id,
-            (static_cast<uint64_t>(rp[0]) << 32) | rp[1],
-            // The legacy A/B observer reports launch N-1's completion beside launch N's runtime ID. Preserve the
-            // device start and identity record, but suppress that systematically misattributed endpoint until the
-            // completion-gated Milestone 2 descriptor path can publish a correlated duration.
-            0,
-            sync_frequency,
-            data_collector->GetKernelSourcesForRuntimeId(static_cast<uint16_t>(rp[2])));
+        const uint32_t runtime_id = rp[2] & 0xFFFF;
+        const uint32_t generation = rp[2] >> 16;
+        const uint32_t schema_version = rp[3] & 0xFF;
+        const uint32_t record_type = (rp[3] >> 8) & 0xF;
+        if (schema_version != REALTIME_PROFILER_RECORD_SCHEMA_VERSION ||
+            (record_type != REALTIME_PROFILER_RECORD_TYPE_INTERVAL &&
+             record_type != REALTIME_PROFILER_RECORD_TYPE_RESET_OBSERVED)) {
+            continue;
+        }
+        const uint32_t source_loss_low = rp[7];
+        if (source_loss_low < dev_state.last_source_loss_low) {
+            dev_state.source_loss_high += uint64_t{1} << 32;
+        }
+        dev_state.last_source_loss_low = source_loss_low;
+        const uint64_t cumulative_source_dropped = dev_state.source_loss_high | source_loss_low;
+        records.emplace_back(tt::ProgramRealtimeRecord{
+            .runtime_id = runtime_id,
+            .chip_id = chip_id,
+            .start_timestamp = (static_cast<uint64_t>(rp[0]) << 32) | rp[1],
+            .end_timestamp = (static_cast<uint64_t>(rp[4]) << 32) | rp[5],
+            .frequency = sync_frequency,
+            .kernel_sources = data_collector->GetKernelSourcesForRuntimeId(static_cast<uint16_t>(runtime_id)),
+            // The supported realtime-profiler topology has exactly one CQ.
+            // Wire word 3 bits 15:12 remain reserved and are not decoded.
+            .command_queue_id = 0,
+            .dispatch_stream = (rp[3] >> 16) & 0xFF,
+            .generation = generation,
+            .sequence = rp[6],
+            .schema_version = schema_version,
+            .record_type = record_type,
+            .cumulative_source_dropped = cumulative_source_dropped,
+        });
     }
     if (records.empty()) {
         return;
@@ -373,6 +470,14 @@ void RealtimeProfilerManager::initialize_devices(const std::shared_ptr<MeshDevic
     // HAL offsets are the same for all devices (same arch).
     const auto& hal = MetalContext::instance(context_id_).hal();
     const auto& factory = hal.get_realtime_profiler_msgs_factory(HalProgrammableCoreType::TENSIX);
+    TT_ASSERT(
+        factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
+            realtime_profiler_msgs::realtime_profiler_msg_t::Field::loss_descriptor_full) ==
+        offsetof(realtime_profiler_msg_t, loss_descriptor_full));
+    TT_ASSERT(
+        factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
+            realtime_profiler_msgs::realtime_profiler_msg_t::Field::loss_device_ring) ==
+        offsetof(realtime_profiler_msg_t, loss_device_ring));
     // TODO: When realtime profiler is supported on Quasar, we'll need to pass in the command queue id(s) here.
     const auto& dispatch_mem_map = MetalContext::instance(context_id_).dispatch_mem_map();
     // TODO: When realtime profiler is supported on Quasar, we'll need to pass in the command queue id(s).
@@ -431,6 +536,39 @@ void RealtimeProfilerManager::initialize_devices(const std::shared_ptr<MeshDevic
         }
         CoreCoord realtime_profiler_core = eligibility.core;
 
+        std::optional<CoreCoord> dispatch_s_core_for_disable;
+        if (dispatch_core_manager.is_dispatcher_s_core_allocated(device_id, channel, 0)) {
+            const tt_cxy_pair& dispatch_s_cxy = dispatch_core_manager.dispatcher_s_core(device_id, channel, 0);
+            dispatch_s_core_for_disable = CoreCoord(dispatch_s_cxy.x, dispatch_s_cxy.y);
+        }
+        const uint32_t remote_state_addr_field_offset =
+            factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
+                realtime_profiler_msgs::realtime_profiler_msg_t::Field::realtime_profiler_remote_state_addr);
+        bool dispatch_activation_published = false;
+        ScopeExit disable_unactivated_observer([&] {
+            if (dispatch_activation_published || !dispatch_s_core_for_disable.has_value()) {
+                return;
+            }
+            try {
+                std::vector<uint32_t> disabled_marker = {REALTIME_PROFILER_REMOTE_STATE_DISABLED};
+                tt::tt_metal::detail::WriteToDeviceL1(
+                    device,
+                    *dispatch_s_core_for_disable,
+                    realtime_profiler_base_addr + remote_state_addr_field_offset,
+                    disabled_marker,
+                    CoreType::WORKER);
+            } catch (const std::exception& e) {
+                log_warning(
+                    tt::LogMetal,
+                    "Failed to release unactivated realtime-profiler observer on device {}: {}",
+                    device_id,
+                    e.what());
+            } catch (...) {
+                log_warning(
+                    tt::LogMetal, "Failed to release unactivated realtime-profiler observer on device {}", device_id);
+            }
+        });
+
         log_debug(
             tt::LogMetal,
             "[Real-time profiler] Using reserved tensix ({}, {}) for real-time profiler on device {}",
@@ -475,20 +613,6 @@ void RealtimeProfilerManager::initialize_devices(const std::shared_ptr<MeshDevic
                 "profiler on this device.",
                 device_id,
                 e.what());
-            if (dispatch_core_manager.is_dispatcher_s_core_allocated(device_id, channel, 0)) {
-                const tt_cxy_pair& dispatch_s_cxy = dispatch_core_manager.dispatcher_s_core(device_id, channel, 0);
-                const CoreCoord dispatch_s_core(dispatch_s_cxy.x, dispatch_s_cxy.y);
-                const uint32_t remote_state_addr_field_offset =
-                    factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
-                        realtime_profiler_msgs::realtime_profiler_msg_t::Field::realtime_profiler_remote_state_addr);
-                std::vector<uint32_t> disabled_marker = {REALTIME_PROFILER_REMOTE_STATE_DISABLED};
-                tt::tt_metal::detail::WriteToDeviceL1(
-                    device,
-                    dispatch_s_core,
-                    realtime_profiler_base_addr + remote_state_addr_field_offset,
-                    disabled_marker,
-                    CoreType::WORKER);
-            }
             MetalContext::instance(context_id_)
                 .data_collector()
                 ->NotifyRealtimeProfilerCapability({
@@ -525,9 +649,6 @@ void RealtimeProfilerManager::initialize_devices(const std::shared_ptr<MeshDevic
             uint32_t realtime_profiler_core_noc_xy_offset =
                 factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
                     realtime_profiler_msgs::realtime_profiler_msg_t::Field::realtime_profiler_core_noc_xy);
-            uint32_t remote_state_addr_field_offset =
-                factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
-                    realtime_profiler_msgs::realtime_profiler_msg_t::Field::realtime_profiler_remote_state_addr);
             uint32_t realtime_profiler_state_offset =
                 factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
                     realtime_profiler_msgs::realtime_profiler_msg_t::Field::realtime_profiler_state);
@@ -539,6 +660,62 @@ void RealtimeProfilerManager::initialize_devices(const std::shared_ptr<MeshDevic
                 .profiler_core_noc_xy_field_addr = realtime_profiler_base_addr + realtime_profiler_core_noc_xy_offset,
                 .remote_state_addr_field_addr = realtime_profiler_base_addr + remote_state_addr_field_offset,
             };
+            dev_state.dispatch_s_core = dispatch_s_core;
+            dev_state.dispatch_s_profiler_msg_addr = realtime_profiler_base_addr;
+        }
+
+        // dispatch_d, dispatch_s, and TRISC0 publish their owned protocol state
+        // before activation. Poll the three contiguous ready words with a finite
+        // initialization budget; do not launch the reserved-core program unless
+        // the dispatch-side protocol is constructed and version-matched.
+        bool dispatch_protocol_ready = false;
+        if (dispatch_activation.has_value()) {
+            constexpr auto kDispatchProtocolReadyTimeout = std::chrono::seconds(3);
+            constexpr auto kDispatchProtocolReadyPoll = std::chrono::milliseconds(1);
+            const uint32_t dispatch_d_ready_offset = factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
+                realtime_profiler_msgs::realtime_profiler_msg_t::Field::dispatch_d_ready);
+            const uint32_t dispatch_s_ready_offset = factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
+                realtime_profiler_msgs::realtime_profiler_msg_t::Field::dispatch_s_ready);
+            const uint32_t observer_ready_offset = factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
+                realtime_profiler_msgs::realtime_profiler_msg_t::Field::observer_ready);
+            TT_ASSERT(dispatch_s_ready_offset == dispatch_d_ready_offset + sizeof(uint32_t));
+            TT_ASSERT(observer_ready_offset == dispatch_s_ready_offset + sizeof(uint32_t));
+
+            const auto deadline = std::chrono::steady_clock::now() + kDispatchProtocolReadyTimeout;
+            std::vector<uint32_t> ready_words(3, 0);
+            do {
+                tt::tt_metal::detail::ReadFromDeviceL1(
+                    device,
+                    dispatch_activation->core,
+                    realtime_profiler_base_addr + dispatch_d_ready_offset,
+                    3 * sizeof(uint32_t),
+                    ready_words,
+                    CoreType::WORKER);
+                dispatch_protocol_ready = ready_words[0] == REALTIME_PROFILER_PROTOCOL_VERSION &&
+                                          ready_words[1] == REALTIME_PROFILER_PROTOCOL_VERSION &&
+                                          ready_words[2] == REALTIME_PROFILER_PROTOCOL_VERSION;
+                if (!dispatch_protocol_ready) {
+                    std::this_thread::sleep_for(kDispatchProtocolReadyPoll);
+                }
+            } while (!dispatch_protocol_ready && std::chrono::steady_clock::now() < deadline);
+        }
+
+        if (!dispatch_protocol_ready) {
+            log_warning(
+                tt::LogMetal,
+                "Real-time profiler disabled on device {}: dispatch protocol readiness timed out or version "
+                "mismatched",
+                device_id);
+            MetalContext::instance(context_id_)
+                .data_collector()
+                ->NotifyRealtimeProfilerCapability({
+                    .chip_id = static_cast<uint32_t>(device_id),
+                    .active = false,
+                    .inactive_reason =
+                        experimental::ProgramRealtimeProfilerInactiveReason::ProtocolInitializationFailed,
+                });
+            MetalContext::instance(context_id_).device_manager()->mark_rt_profiler_device_init_complete(device_id);
+            continue;
         }
 
         // Ring buffer (BRISC->NCRISC handoff) at a fixed carve-out offset; not Buffer::create'd since the core is off
@@ -660,7 +837,10 @@ void RealtimeProfilerManager::initialize_devices(const std::shared_ptr<MeshDevic
                 dispatch_activation->core.y,
                 dispatch_activation->profiler_core_noc_xy,
                 dispatch_activation->remote_state_addr);
+            dispatch_activation_published = true;
         }
+
+        disable_unactivated_observer.release();
 
         MetalContext::instance(context_id_).device_manager()->mark_rt_profiler_device_init_complete(device_id);
         devices_.push_back(std::move(dev_state));
@@ -983,7 +1163,19 @@ void RealtimeProfilerManager::run_consumer(Consumer& consumer) {
             const auto dropped_txt = fmt::format("dropped {}", dropped_delta);
             TTZoneTextD(RT_PROFILER, dropped_txt.c_str(), dropped_txt.size());
         }
-        const tt::ProgramRealtimeRecordBatch arg{batch, dropped_delta};
+        std::vector<tt::ProgramRealtimeProfilerDeviceLossSnapshot> device_loss;
+        device_loss.reserve(devices_.size());
+        for (const auto& record : batch) {
+            auto snapshot = std::find_if(device_loss.begin(), device_loss.end(), [&](const auto& entry) {
+                return entry.chip_id == record.chip_id;
+            });
+            if (snapshot == device_loss.end()) {
+                device_loss.push_back({record.chip_id, record.cumulative_source_dropped});
+            } else {
+                snapshot->cumulative_source_dropped = record.cumulative_source_dropped;
+            }
+        }
+        const tt::ProgramRealtimeRecordBatch arg{batch, dropped_delta, device_loss};
         reported_dropped = dropped_total;
         try {
             consumer.callback(arg);
@@ -1129,6 +1321,28 @@ void RealtimeProfilerManager::shutdown() {
         }
     }
 
+    // dispatch_s has completed its bounded observer stop/drain before the CQ
+    // terminates. Preserve that terminal diagnostic snapshot after close so a
+    // caller can audit losses that necessarily occur too late for an ordinary
+    // in-flight callback record. A later evaluation of the same chip replaces
+    // this entry.
+    auto* context_data_collector = MetalContext::instance(context_id_).data_collector().get();
+    for (auto capability : get_device_capabilities()) {
+        capability.active = false;
+        context_data_collector->NotifyRealtimeProfilerCapability(capability);
+        if (capability.loss.terminal_descriptor != 0 || capability.loss.terminal_record != 0 ||
+            capability.loss.observer_stop_timeout != 0) {
+            log_warning(
+                tt::LogMetal,
+                "[Real-time profiler] Device {} shutdown losses: terminal_descriptor={}, terminal_record={}, "
+                "observer_stop_timeout={}",
+                capability.chip_id,
+                capability.loss.terminal_descriptor,
+                capability.loss.terminal_record,
+                capability.loss.observer_stop_timeout);
+        }
+    }
+
     {
         std::lock_guard<std::mutex> lock(consumers_mutex_);
         for (auto& [handle, consumer] : consumers_) {
@@ -1140,12 +1354,8 @@ void RealtimeProfilerManager::shutdown() {
     tracy_handler_.reset();
     // Clear activation state before destroying per-device records so concurrent
     // tt::IsProgramRealtimeProfilerActive() queries don't observe a chip mid-shutdown.
-    auto* context_data_collector = MetalContext::instance(context_id_).data_collector().get();
     for (const auto& dev_state : devices_) {
         context_data_collector->NotifyRealtimeProfilerDeactivated(dev_state.chip_id);
-    }
-    for (uint32_t chip_id : evaluated_chip_ids_) {
-        context_data_collector->RemoveRealtimeProfilerCapability(chip_id);
     }
     evaluated_chip_ids_.clear();
     devices_.clear();

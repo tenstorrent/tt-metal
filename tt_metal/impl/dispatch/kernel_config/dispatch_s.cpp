@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "dispatch_s.hpp"
 
+#include <cstdlib>
 #include <span>
 #include <tt_metal.hpp>
 #include "impl/buffers/semaphore.hpp"
@@ -44,40 +45,17 @@ using namespace tt::tt_metal;
 
 namespace {
 
-// Zeros selected realtime_profiler_msg_t fields on dispatch_s L1 (REALTIME_PROFILER_MSG carve). Clear every
-// timestamp word, not only IDs, so the first observer publication cannot expose stale L1 ticks.
-void zero_dispatch_s_realtime_profiler_msg_fields(
+// Cold construction is host-owned. Zero the complete protocol region before
+// dispatch_d, dispatch_s, or TRISC0 starts so no device RISC can observe stale
+// queue state from a prior device lifetime.
+void zero_dispatch_s_realtime_profiler_msg(
     IDevice* device, const CoreCoord& logical_core, tt::CoreType core_type, const Hal& hal, uint32_t msg_base_l1_addr) {
     const auto& factory = hal.get_realtime_profiler_msgs_factory(HalProgrammableCoreType::TENSIX);
-    // WriteToDeviceL1(..., vector<uint32_t>&) requires a mutable vector (non-const ref overload).
-    std::vector<uint32_t> zero_word = {0u};
-
-    auto write_u32 = [&](uint32_t addr) {
-        tt::tt_metal::detail::WriteToDeviceL1(device, logical_core, addr, zero_word, core_type);
-    };
-
-    const uint32_t base = msg_base_l1_addr;
-    write_u32(
-        base + factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
-                   realtime_profiler_msgs::realtime_profiler_msg_t::Field::realtime_profiler_core_noc_xy));
-    write_u32(
-        base + factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
-                   realtime_profiler_msgs::realtime_profiler_msg_t::Field::realtime_profiler_remote_state_addr));
-    write_u32(
-        base + factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
-                   realtime_profiler_msgs::realtime_profiler_msg_t::Field::realtime_profiler_state));
-    const uint32_t ksa = factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
-        realtime_profiler_msgs::realtime_profiler_msg_t::Field::kernel_start_a);
-    const uint32_t keb = factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
-        realtime_profiler_msgs::realtime_profiler_msg_t::Field::kernel_end_b);
-    constexpr uint32_t timestamp_bytes = 4 * sizeof(realtime_profiler_timestamp_t);
-    static_assert(
-        offsetof(realtime_profiler_msg_t, kernel_end_b) + sizeof(realtime_profiler_timestamp_t) -
-            offsetof(realtime_profiler_msg_t, kernel_start_a) ==
-        timestamp_bytes);
-    TT_ASSERT(keb + sizeof(realtime_profiler_timestamp_t) - ksa == timestamp_bytes);
-    std::vector<uint32_t> zero_timestamps(timestamp_bytes / sizeof(uint32_t), 0u);
-    tt::tt_metal::detail::WriteToDeviceL1(device, logical_core, base + ksa, zero_timestamps, core_type);
+    const uint32_t msg_size = factory.size_of<realtime_profiler_msgs::realtime_profiler_msg_t>();
+    TT_ASSERT(msg_size == sizeof(realtime_profiler_msg_t));
+    TT_ASSERT((msg_size % sizeof(uint32_t)) == 0);
+    std::vector<uint32_t> zero_msg(msg_size / sizeof(uint32_t), 0u);
+    tt::tt_metal::detail::WriteToDeviceL1(device, logical_core, msg_base_l1_addr, zero_msg, core_type);
 }
 
 }  // namespace
@@ -337,15 +315,22 @@ void DispatchSKernel::CreateKernel() {
     const bool dispatch_telemetry_compute_enabled = !static_config_.dispatch_telemetry_disabled.value_or(false) &&
                                                     GetCoreType() == CoreType::WORKER &&
                                                     device_->arch() != tt::ARCH::QUASAR;
-    if (dispatch_telemetry_compute_enabled) {
+    const bool realtime_profiler_compute_enabled = realtime_profiler_enabled_ && GetCoreType() == CoreType::WORKER;
+    if (dispatch_telemetry_compute_enabled || realtime_profiler_compute_enabled) {
         const std::string compute_kernel_path = "tt_metal/impl/dispatch/kernels/cq_dispatch_subordinate_compute.cpp";
         std::map<std::string, std::string> compute_defines = {
             {"FIRST_STREAM_INDEX", std::to_string(static_config_.first_stream_used.value())},
+            {"NUM_STREAMS_TO_MONITOR", std::to_string(static_config_.max_num_worker_sems.value())},
+            {"REALTIME_PROFILER_MSG_ADDR", std::to_string(static_config_.realtime_profiler_msg_addr.value())},
+            {"REALTIME_PROFILER_ENABLED", std::to_string(realtime_profiler_compute_enabled)},
             {"DISPATCH_TELEMETRY_ADDR", std::to_string(static_config_.dispatch_telemetry_addr.value())},
             {"DISPATCH_TELEMETRY_DISABLED", std::to_string(static_config_.dispatch_telemetry_disabled.value_or(false))},
             {"TOTAL_SUB_DEVICES", std::to_string(static_config_.max_num_worker_sems.value())},
             {"DISPATCH_TELEMETRY_CONTROL_ADDR", std::to_string(static_config_.dispatch_telemetry_control_addr.value())},
         };
+        if (std::getenv("TT_METAL_REALTIME_PROFILER_TEST_OBSERVER_CYCLES") != nullptr) {
+            compute_defines["REALTIME_PROFILER_TEST_OBSERVER_CYCLES"] = "1";
+        }
         tt::tt_metal::ComputeConfig compute_config;
         compute_config.defines = compute_defines;
         tt::tt_metal::CreateKernel(*program_, compute_kernel_path, logical_core_, compute_config);
@@ -355,7 +340,7 @@ void DispatchSKernel::CreateKernel() {
 void DispatchSKernel::ConfigureCore() {
     if (get_dispatch_query_manager_ref().dispatch_s_enabled()) {
         TT_ASSERT(static_config_.realtime_profiler_msg_addr.has_value());
-        zero_dispatch_s_realtime_profiler_msg_fields(
+        zero_dispatch_s_realtime_profiler_msg(
             device_,
             logical_core_,
             GetCoreType(),
