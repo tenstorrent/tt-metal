@@ -1491,8 +1491,7 @@ class ttMLA:
         )
         # high_bw_all_gather returns a fresh Python wrapper for its supplied output. Do not use
         # wrapper identity here: SP>1 always writes the model-owned persistent scratch. At SP=1,
-        # slicing a multi-slot cache creates transient storage, while slicing a single-slot cache
-        # is a no-op that aliases the caller-owned persistent cache.
+        # a multi-slot selection owns transient storage. A single-slot cache is returned unchanged.
         if self.sp_factor == 1 and kvpe_cache.storage.shape[0] > 1:
             ttnn.deallocate(kvpe_dev.storage)
         ttnn.deallocate(tt_q)
@@ -1700,23 +1699,30 @@ class ttMLA:
         so sparse_sdpa needs no cache_batch_idx.
 
         Pipeline (all on device): a selected-slot prefix SP all-gather directly from the persistent
-        ND-sharded cache into the model-owned worst-case scratch (a transient selected-slot slice at sp==1).
-        The cache is already in the op format, so there is no read-back dtype/layout or memory-layout
-        conversion. The prefix is rounded to a whole block-cyclic slab; sparse SDPA only dereferences current
-        top-k indices, so its unwritten suffix is never consumed."""
+        ND-sharded cache into the model-owned worst-case scratch. At sp==1 a single-slot cache aliases the
+        persistent storage; only a multi-slot cache needs an on-device interleaved conversion before selecting
+        its slot. The cache is already in the op format, so there is no read-back dtype/layout conversion. The
+        prefix is rounded to a whole block-cyclic slab; sparse SDPA only dereferences current top-k indices, so
+        its unwritten suffix is never consumed."""
 
         storage = kvpe_cache.storage
         slot_lo = cache_batch_idx if storage.shape[0] > 1 else 0
         if self.sp_factor == 1:
             # The native high-bandwidth gather requires multiple devices. Preserve the single-device
-            # behavior, where sparse_sdpa still needs a batch-1 cache. For a multi-slot cache this
-            # slice creates owned transient storage that the caller releases; for a single-slot cache
-            # it is a no-op alias of the persistent cache and must not be released by the caller.
-            gathered = ttnn.slice(
-                storage,
-                [slot_lo, 0, 0, 0],
-                [slot_lo + 1, 1, storage.shape[2], storage.shape[3]],
-            )
+            # behavior, where sparse_sdpa still needs a batch-1 cache. A single-slot cache already has
+            # the required logical shape and can remain in its persistent ND-sharded storage; avoiding
+            # a no-op slice also avoids trying to reinterpret mesh shard coordinates as a per-device
+            # DRAM shard grid. A real multi-slot selection uses the established all-device conversion.
+            if storage.shape[0] == 1:
+                gathered = storage
+            else:
+                interleaved = ttnn.to_memory_config(storage, ttnn.DRAM_MEMORY_CONFIG)
+                gathered = ttnn.slice(
+                    interleaved,
+                    [slot_lo, 0, 0, 0],
+                    [slot_lo + 1, 1, storage.shape[2], storage.shape[3]],
+                )
+                ttnn.deallocate(interleaved)
         else:
             # Block-cyclic storage is meaningful only in complete SP slabs. The new AG writes each
             # rank's active local prefix into its fixed worst-case slot, retaining the allocation and

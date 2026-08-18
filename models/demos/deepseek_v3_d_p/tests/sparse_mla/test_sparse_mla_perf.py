@@ -11,15 +11,15 @@ The test can also run on smaller Blackhole boxes by profiling a per-chip Galaxy 
 and the cache scale by SP/8, so smaller boxes run a proportionally shorter sequence — the per-chip
 workload mirrors Galaxy rather than a heavier one:
   * Galaxy   (32 chips): SP=8 × TP=4, chunk=5120, cache=50k,   heads=128 (full workload)
-  * LoudBox  (8 chips):  SP=2 × TP=4, chunk=1280, cache=12.5k, heads=128 (1/4 sequence length)
-  * QuietBox (4 chips):  SP=1 × TP=4, chunk=640,  cache=6.25k, heads=128 (1/8 sequence length)
+  * LoudBox  (8 chips):  SP=2 × TP=4, chunk=1280, cache=12.5k (1/4 sequence length)
+  * QuietBox (4 chips):  SP=2 × TP=2, chunk=1280, cache=12.5k (1/4 sequence length)
 
-That keeps the per-chip COMPUTE shapes equal to Galaxy: local query rows/chip (640), MLA heads/chip
-(32), indexer heads/chip (16), the per-chip KVPE depth (cache/SP = 6.25k on every box), AND the number
-of chunks-to-fill in `cold` (11 on every box, not 41 on LoudBox). CAVEAT: the indexer K-cache is
-replicated full-depth (= the box-local cache), so on smaller boxes it holds a proportionally SHORTER
-prefix than Galaxy — only Galaxy exercises the true 50k (or 0.5M) indexer/top-k depth; smaller boxes
-under-represent any op that scales with the replicated key-cache length.
+That keeps local query rows/chip (640), per-chip KVPE depth (cache/SP = 6.25k), and the number of
+chunks-to-fill in `cold` (11) equal to Galaxy. QuietBox deliberately uses SP=2 so it exercises the
+all-gather/top-k overlap path; its TP=2 head shard is twice the Galaxy per-chip head shard. CAVEAT: the
+indexer K-cache is replicated full-depth (= the box-local cache), so on smaller boxes it holds a
+proportionally SHORTER prefix than Galaxy — only Galaxy exercises the true 50k (or 0.5M) indexer/top-k
+depth; smaller boxes under-represent any op that scales with the replicated key-cache length.
 No reference values: this just runs the real device forward and reports per-op device-kernel time.
 
 Profiler — realtime (lightweight), in-process (replaces Tracy)
@@ -68,12 +68,12 @@ Three scenarios (the test sweeps all three):
     the cache fills — recovered by profiling each forward as its own region.
   * long — like `warm` but with a 0.5M-token Galaxy cache (512000 = 100 chunks), to profile a single
     chunk over a long prefix. Like the others the cache scales by SP/8, so per-chip depth stays
-    Galaxy-equal on every box (LoudBox=128k, QuietBox=64k box-local cache).
+    Galaxy-equal on every box (LoudBox=128k, QuietBox=128k box-local cache).
 
-variant axis — deepseek_v32 (128 q-heads / 64 index heads) vs glm_5_1 / glm_5_2 (64 / 32). All run the
-  SAME TP=4 meshes: GLM's thin per-chip head shard (64/4=16 < 32) is handled by the head→sequence
-  reshard in ttMLA._sparse_mla (#48727) plus the head-replicated seq-sharded indexer, so GLM is no longer
-  TP-capped. GLM-5.2's sparse case intentionally builds the final ``full`` indexer layer (layer 74), with
+variant axis — deepseek_v32 (128 q-heads / 64 index heads) vs glm_5_1 / glm_5_2 (64 / 32). Galaxy and
+  LoudBox use TP=4; QuietBox uses TP=2 to retain SP=2. GLM's thin TP=4 head shard is handled by the
+  head→sequence reshard in ttMLA._sparse_mla (#48727) plus the head-replicated seq-sharded indexer.
+  GLM-5.2's sparse case intentionally builds the final ``full`` indexer layer (layer 74), with
   its compact 21-slot index cache. This makes the fused ring op select nonzero slot 20—the multi-slot path
   used by the complete 78-layer model—rather than exercising only the trivial single-slot GLM-5.1 proxy.
   All model dims come from the single-source reference configs.
@@ -90,7 +90,7 @@ kv_cache_format axis — sparse mode runs both supported persistent-cache format
   * kv_scaled_fp8 — packed [512 E4M3 + four FP32 scales + 64 BF16 RoPE] rows (656 bytes/token).
   Dense mode retains its tiled bfloat8_b cache and therefore has no sparse-cache-format sweep.
 
-Run (Blackhole Galaxy/LoudBox/QuietBox) — all combos (2 variants × 3 scenarios × 3 cache/mode cases), or narrow via -k:
+Run (Blackhole Galaxy/LoudBox/QuietBox) — all combos (3 variants × 3 scenarios × 3 cache/mode cases), or narrow via -k:
     pytest -m perf models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla_perf.py::test_mla_chunked_perf -s
     pytest -m perf ...::test_mla_chunked_perf -k "glm_5_1 and cold and sparse and kv_scaled_fp8" -s
     pytest -m perf ...::test_mla_chunked_perf -k "warm and sparse and kv_bf16" -s
@@ -149,11 +149,11 @@ LONG_CACHE_TOKENS = int(os.environ.get("DS_PERF_LONG_CACHE", 512000))
 # indexer, no top-k), a baseline to compare the sparse impl against. Each mode writes its own profiler
 # subdir + per-scenario CSVs so the two runs never clobber and stay directly comparable.
 ATTN_MODE = os.environ.get("DS_PERF_ATTN_MODE", "sparse")  # module-level default (mesh-shape detection)
-# Model-variant axis: deepseek_v32 (128 q-heads / 64 index heads) vs glm_5_1 / glm_5_2 (64 / 32). ALL
-# run the SAME TP=4 meshes — GLM's thin per-chip head shard (64/4=16 < 32) is handled by the
-# head→sequence reshard in ttMLA._sparse_mla (#48727) plus the head-replicated seq-sharded indexer, so
-# no TP cap applies. Every model dimension comes from the single-source reference config, never hardcoded
-# here. GLM-5.2 additionally exercises a nonzero slot of its compact full-indexer cache below.
+# Model-variant axis: deepseek_v32 (128 q-heads / 64 index heads) vs glm_5_1 / glm_5_2 (64 / 32).
+# Galaxy/LoudBox use TP=4; QuietBox uses TP=2 so its four chips retain SP=2 and exercise the overlap path.
+# GLM's thin TP=4 head shard is handled by the head→sequence reshard in ttMLA._sparse_mla (#48727).
+# Every model dimension comes from the single-source reference config, never hardcoded here. GLM-5.2
+# additionally exercises a nonzero slot of its compact full-indexer cache below.
 VARIANTS = ("deepseek_v32", "glm_5_1", "glm_5_2")
 VARIANT = os.environ.get("DS_PERF_VARIANT", "deepseek_v32")
 _CONFIG_BUILDERS = {
@@ -351,11 +351,12 @@ def _write_run_manifest(report_dir, *, variant, scenario, attn_mode, cache_forma
 
 def _local_cache_tokens(galaxy_cache: int, sp: int) -> int:
     """Box-local cached sequence length: scale the Galaxy-global cache by SP/GALAXY_SP exactly like the
-    chunk, so every box profiles the Galaxy per-chip workload rather than a heavier one. This keeps the
+    chunk, so every box profiles the Galaxy per-chip sequence workload rather than a longer one. This keeps
     number of chunks-to-fill constant (Galaxy=11, LoudBox=11, QuietBox=11 — NOT 41) and the per-chip
     KVPE depth Galaxy-equal (cache/SP = galaxy_cache/GALAXY_SP on every box). LoudBox runs 1/4 the
-    sequence length, QuietBox 1/8. CACHE_TOKENS/LONG_CACHE_TOKENS are multiples of GALAXY_SP and of the
-    per-box chunk, so the result stays an exact chunk multiple (required by the indexed rope table)."""
+    sequence length, and QuietBox also runs 1/4. CACHE_TOKENS/LONG_CACHE_TOKENS are multiples of
+    GALAXY_SP and of the per-box chunk, so the result stays an exact chunk multiple (required by the
+    indexed rope table)."""
     return galaxy_cache * sp // GALAXY_SP
 
 
@@ -391,7 +392,7 @@ class PerfWorkload:
 
 
 _SYSTEM_BY_DEVICE_COUNT = {
-    4: ("QuietBox", (1, 4)),
+    4: ("QuietBox", (2, 2)),
     8: ("LoudBox", (2, 4)),
     32: ("Galaxy", (8, 4)),
 }
@@ -418,15 +419,15 @@ def _detect_perf_workload(variant_name: str) -> tuple[PerfWorkload, str | None]:
     # glm_5_1: 64/32) — the same builder the config_only fixture resolves, so device and harness agree.
     cfg = _CONFIG_BUILDERS[variant_name]()
     local_chunk = _exact_div(CHUNK_TOKENS, GALAXY_SP, "DS_PERF_CHUNK")
-    local_heads = _exact_div(cfg.num_attention_heads, GALAXY_TP, f"{variant_name}.num_attention_heads")
-    local_index_heads = _exact_div(cfg.index_n_heads, GALAXY_TP, f"{variant_name}.index_n_heads")
+    _exact_div(cfg.num_attention_heads, GALAXY_TP, f"{variant_name}.num_attention_heads")
+    _exact_div(cfg.index_n_heads, GALAXY_TP, f"{variant_name}.index_n_heads")
     workload = PerfWorkload(
         system_name=system_name,
         num_devices=num_devices,
         mesh_shape=mesh_shape,
         chunk_tokens=local_chunk * sp,
-        num_attention_heads=local_heads * tp,
-        index_n_heads=local_index_heads * tp,
+        num_attention_heads=cfg.num_attention_heads,
+        index_n_heads=cfg.index_n_heads,
     )
     return workload, None
 
@@ -644,8 +645,8 @@ def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, kv_cache_fo
     subdir = _subdir(variant.name, attn_mode, kv_cache_format)
     sp_axis, tp_axis = 0, 1
     sp, tp = mesh_device.shape
-    # cache scales per box (sp/GALAXY_SP) like the chunk, so every box profiles the Galaxy per-chip
-    # workload: constant chunks-to-fill and Galaxy-equal per-chip depth (see _local_cache_tokens).
+    # Cache scales per box (sp/GALAXY_SP) like the chunk: constant chunks-to-fill and Galaxy-equal
+    # per-chip sequence depth (see _local_cache_tokens). QuietBox's TP=2 head shard is intentionally heavier.
     galaxy_cache = scenario_cfg["cache"]
     cache, chunk = _local_cache_tokens(galaxy_cache, sp), workload.chunk_tokens
     total = cache + chunk
