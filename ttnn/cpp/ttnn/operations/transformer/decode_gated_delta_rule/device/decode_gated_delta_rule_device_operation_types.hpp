@@ -29,7 +29,9 @@ struct DecodeGatedDeltaRuleParams {
 
 // All inputs are python-facing shapes, TILE layout, same dtype (bf16 or fp32),
 // on device. T=1 inputs ([B,1,H,*]) share TILE pages across 32 heads; the
-// reader gathers each head's row out of the shared pages.
+// reader gathers each head's row out of the shared pages. Outputs: o comes
+// back ROW_MAJOR (page bh == head bh's [V] stick; full-page writes only), the
+// new state is TILE [B,H,K,V].
 struct DecodeGatedDeltaRuleInputs {
     Tensor q;                             // [B,1,H,K]
     Tensor k;                             // [B,1,H,K]

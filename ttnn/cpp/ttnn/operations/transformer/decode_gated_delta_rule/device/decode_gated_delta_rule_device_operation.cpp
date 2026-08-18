@@ -49,10 +49,16 @@ void DecodeGatedDeltaRuleDeviceOperation::validate_on_program_cache_miss(
 DecodeGatedDeltaRuleDeviceOperation::spec_return_value_t
 DecodeGatedDeltaRuleDeviceOperation::compute_output_specs(const operation_attributes_t& attrs, const tensor_args_t& in) {
     const DataType dt = in.q.dtype();
-    const auto layout = TensorLayout(dt, PageConfig(Layout::TILE), attrs.output_mem_config);
+    // o is ROW_MAJOR on purpose: its flat 2D is [B*H, V], so page bh is head
+    // bh's own [V] stick and the writer kernel issues ONE full-page write per
+    // head (page-exclusive). A TILE o would share each page across 32 heads,
+    // forcing sub-page writes, which silently no-op on this stack (red-state
+    // pcc_o=0.000). Callers wanting TILE o pass it through ttnn.to_layout.
+    const auto layout_rm = TensorLayout(dt, PageConfig(Layout::ROW_MAJOR), attrs.output_mem_config);
+    const auto layout_tile = TensorLayout(dt, PageConfig(Layout::TILE), attrs.output_mem_config);
     return {
-        tt::tt_metal::TensorSpec(ttnn::Shape({attrs.B, 1, attrs.H, attrs.V}), layout),
-        tt::tt_metal::TensorSpec(ttnn::Shape({attrs.B, attrs.H, attrs.K, attrs.V}), layout)};
+        tt::tt_metal::TensorSpec(ttnn::Shape({attrs.B, 1, attrs.H, attrs.V}), layout_rm),
+        tt::tt_metal::TensorSpec(ttnn::Shape({attrs.B, attrs.H, attrs.K, attrs.V}), layout_tile)};
 }
 
 DecodeGatedDeltaRuleDeviceOperation::tensor_return_value_t

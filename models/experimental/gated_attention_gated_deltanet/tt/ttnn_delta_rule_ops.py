@@ -9,6 +9,7 @@ FLA layout: q,k [B,T,H,K]; v [B,T,H,V]; beta,g [B,T,H]; state [B,H,K,V].
 
 import math
 import os
+import warnings
 
 import torch
 import ttnn
@@ -381,12 +382,37 @@ def recurrent_delta_rule_step_ttnn(
     return o_t, h
 
 
+_FUSED_DECODE_OP_MISSING = object()  # resolved-and-absent sentinel
+_fused_decode_op_cache = None  # None = unresolved; MISSING = absent (warn once)
+
+
 def _fused_decode_enabled():
-    """QWEN_GDN_FUSED_DECODE: use the single-kernel C++ T=1 decode op (default OFF)."""
-    return os.environ.get("QWEN_GDN_FUSED_DECODE", "0") not in ("", "0")
+    """QWEN_GDN_FUSED_DECODE routes the T=1 decode to the fused C++ op. Default OFF:
+    unset/false/0 (case-insensitive) run the stock graph, byte-identical."""
+    return os.environ.get("QWEN_GDN_FUSED_DECODE", "").strip().lower() not in ("", "0", "false")
 
 
-def _decode_gated_delta_rule_fused(q, k, v, beta, g, scale, initial_state, device, high_precision, inplace_state=False):
+def _fused_decode_op():
+    """Resolve ttnn.transformer.decode_gated_delta_rule once (cached).
+
+    Returns the op, or None after a one-time warning when this ttnn build lacks
+    the binding — callers then fall back to the stock decode graph."""
+    global _fused_decode_op_cache
+    if _fused_decode_op_cache is None:
+        _fused_decode_op_cache = getattr(getattr(ttnn, "transformer", None), "decode_gated_delta_rule", None)
+        if _fused_decode_op_cache is None:
+            _fused_decode_op_cache = _FUSED_DECODE_OP_MISSING
+            warnings.warn(
+                "QWEN_GDN_FUSED_DECODE is set but ttnn.transformer.decode_gated_delta_rule is"
+                " not available in this ttnn build; falling back to the stock decode graph.",
+                stacklevel=2,
+            )
+    return None if _fused_decode_op_cache is _FUSED_DECODE_OP_MISSING else _fused_decode_op_cache
+
+
+def _decode_gated_delta_rule_fused(
+    op, q, k, v, beta, g, scale, initial_state, device, high_precision, inplace_state=False
+):
     """Drive the fused C++ op (ttnn.transformer.decode_gated_delta_rule) for T=1.
 
     Implements the same graph as recurrent_gated_delta_rule_decode_ttnn in one
@@ -403,7 +429,7 @@ def _decode_gated_delta_rule_fused(q, k, v, beta, g, scale, initial_state, devic
         g = ttnn.typecast(g, ttnn.float32)
         if initial_state is not None and initial_state.dtype != ttnn.float32:
             initial_state = ttnn.typecast(initial_state, ttnn.float32)
-    o, h = ttnn.transformer.decode_gated_delta_rule(
+    o, h = op(
         q=q,
         k=k,
         v=v,
@@ -434,9 +460,12 @@ def recurrent_gated_delta_rule_decode_ttnn(
     K = q.shape[3]
     V = v.shape[3]
 
-    # QWEN_GDN_FUSED_DECODE: single-kernel C++ path (fallback graph unchanged).
+    # QWEN_GDN_FUSED_DECODE: single-kernel C++ path when the binding exists; an absent
+    # binding warns once (inside _fused_decode_op) and falls through to the stock graph.
     if _fused_decode_enabled():
-        return _decode_gated_delta_rule_fused(q, k, v, beta, g, scale, initial_state, device, high_precision)
+        op = _fused_decode_op()
+        if op is not None:
+            return _decode_gated_delta_rule_fused(op, q, k, v, beta, g, scale, initial_state, device, high_precision)
 
     # high_precision: fp32 step avoids bf16 decay quantization error over long decode.
     if high_precision:
@@ -534,10 +563,11 @@ def recurrent_gated_delta_rule_decode_inplace_ttnn(
     high_precision=False,
 ):
     """Decode with in-place state copy to pre-allocated buffer (trace-safe addresses)."""
-    if _fused_decode_enabled():
+    op = _fused_decode_op() if _fused_decode_enabled() else None
+    if op is not None:
         # Fused path: the kernel writes new_state straight into state_buffer.
         return _decode_gated_delta_rule_fused(
-            q, k, v, beta, g, scale, state_buffer, device, high_precision, inplace_state=True
+            op, q, k, v, beta, g, scale, state_buffer, device, high_precision, inplace_state=True
         )
     o, new_h = recurrent_gated_delta_rule_decode_ttnn(
         q=q,
