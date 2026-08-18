@@ -169,3 +169,77 @@ def test_host_overhead_is_not_tagged_with_a_real_stage_name():
     block = src[i : i + 1200]
     assert '"regime": "decode"' not in block
     assert '"regime": "na"' in block
+
+
+# --------------------------------------------- a model with no decode is not told to fix its decode
+
+
+def test_the_kv_cache_gate_asks_whether_the_model_decodes_at_all(monkeypatch):
+    """_decode_gate BLOCKS a run until a KV-cache lever lands, from `decode_status ==
+    "repeat_prefill"` -- which trace_replay emits whenever its capture was SKIPPED, on any pipeline.
+    A classifier exposes no traceable step, skips, and was then ordered to add a cached single-token
+    decode step to a model that emits no tokens, with no way to clear it but the attempt cap."""
+    import cc_optimize.perf_mcp as PM
+
+    prof = {"decode_status": "repeat_prefill"}
+    monkeypatch.setenv("PERF_MCP_LAST_HEADLINE_UNIT", "inference")
+    assert PM._decode_gate(prof, []) is None, "a one-pass model was ordered to add a KV-cache"
+    monkeypatch.setenv("PERF_MCP_LAST_HEADLINE_UNIT", "step")
+    assert PM._decode_gate(prof, []) is None, "a diffusion model was ordered to add a KV-cache"
+
+
+def test_the_kv_cache_gate_still_fires_for_a_model_that_does_decode(monkeypatch):
+    """The gate is the whole reason repeat-prefill pipelines get fixed; it must not go quiet."""
+    import cc_optimize.perf_mcp as PM
+
+    monkeypatch.setenv("PERF_MCP_LAST_HEADLINE_UNIT", "token")
+    monkeypatch.delenv("TT_PERF_MODULE_LEVEL", raising=False)
+    assert PM._decode_gate({"decode_status": "repeat_prefill"}, []) is not None
+
+
+def test_an_unrecorded_unit_does_not_silence_the_gate(monkeypatch):
+    """A run predating the marker must keep the old behaviour: unknown is not "no decode"."""
+    import cc_optimize.perf_mcp as PM
+
+    monkeypatch.setenv("PERF_MCP_LAST_HEADLINE_UNIT", "")
+    monkeypatch.delenv("TT_PERF_MODULE_LEVEL", raising=False)
+    monkeypatch.setattr(PM, "_reliable_forward_unit", lambda: "")
+    assert PM._decode_gate({"decode_status": "repeat_prefill"}, []) is not None
+
+
+# ------------------------------------------------- the fallback row is named for the measured unit
+
+
+def test_a_model_that_declares_nothing_is_not_handed_two_llm_stages():
+    """The docstring of test_the_roofline_prices_the_stages_the_model_declares calls this the
+    original bug -- "a model with NO decode was still handed a DECODE row" -- and it survived in the
+    fallback branch."""
+    from cc_optimize.summary import _stage_roofs
+
+    assert list(_stage_roofs(1_000_000, 512.0, 1, "img/s", None, None)) == ["inference"]
+    assert list(_stage_roofs(1_000_000, 512.0, 1, "step/s", None, None)) == ["step"]
+
+
+def test_a_token_model_that_declares_nothing_still_gets_its_pair():
+    from cc_optimize.summary import _stage_roofs
+
+    assert list(_stage_roofs(1_000_000, 512.0, 1, "tok/s/u", None, None)) == ["prefill", "decode"]
+
+
+def test_the_end_to_end_line_does_not_describe_every_model_as_an_llm(monkeypatch):
+    from cc_optimize.run import _e2e_shape
+
+    monkeypatch.setenv("PERF_MCP_LAST_HEADLINE_UNIT", "inference")
+    assert _e2e_shape() == ", 1 forward pass"
+    monkeypatch.setenv("PERF_MCP_LAST_HEADLINE_UNIT", "token")
+    assert _e2e_shape() == ", prefill + 1 decode"
+    monkeypatch.setenv("PERF_MCP_LAST_HEADLINE_UNIT", "")
+    assert _e2e_shape() == "", "an unknown shape is described rather than guessed"
+
+
+def test_the_target_does_not_announce_a_regime_nobody_set():
+    from agent.perf_target import PerfTarget
+    import inspect
+
+    src = inspect.getsource(PerfTarget)
+    assert 'regime: str = "decode"' not in src, "the label defaults to a stage again"

@@ -5032,6 +5032,21 @@ def _decode_is_recompute(model_root) -> bool:
 def _decode_gate(prof: dict, attempts: list) -> dict | None:
     if os.environ.get("TT_PERF_MODULE_LEVEL") == "1":
         return None
+    # ONLY A MODEL THAT DECODES CAN HAVE A BROKEN DECODE. This gate BLOCKS a run until a KV-cache
+    # lever lands, and it reaches that verdict from `decode_status == "repeat_prefill"` -- which
+    # trace_replay emits whenever its capture was SKIPPED, for any reason, on any pipeline. A
+    # classifier or an encoder-only model exposes no traceable step, skips, and is then ordered to
+    # add a cached single-token decode step to a model that emits no tokens. Nothing downstream
+    # could clear it: there is no decode to cache, so the attempt cap is the only way out, three
+    # wasted rewrites later.
+    #
+    # The structural answer is already recorded. trace_replay prints TRACE_HEADLINE_UNIT from
+    # headline_unit(), which reads the decode_step CONTRACT rather than any name: "token" means the
+    # pipeline retires one token per call, "step" a denoise step, "inference" one whole pass. Only
+    # the first has a decode loop for a KV-cache to fix.
+    _unit = str(os.environ.get("PERF_MCP_LAST_HEADLINE_UNIT", "") or _reliable_forward_unit() or "").strip().lower()
+    if _unit and _unit != "token":
+        return None
     repeat = prof.get("decode_status") == "repeat_prefill"
     scale = kv_cache_needed_by_scaling(prof.get("decode_ms_at_c"), prof.get("decode_ms_at_2c"))
     recompute = bool(scale) if scale is not None else _decode_is_recompute(_MODEL_ROOT)

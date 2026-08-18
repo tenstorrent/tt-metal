@@ -1051,6 +1051,21 @@ def _stage_units(stage, prompt_tokens) -> int:
     return int(_n) * max(1, _prefill_batch())
 
 
+def _unit_work_name(unit) -> str:
+    """What one unit of this model's work is called, from the unit the run measured.
+
+    trace_replay's headline_unit already answers this structurally -- token / step / inference -- and
+    prints the rate's unit alongside. Used only when the model declared no stages at all, so the one
+    aggregate row is not labelled with a stage the model does not have.
+    """
+    u = str(unit or "").strip().lower()
+    if u.startswith("tok"):
+        return "decode"
+    if "step" in u or "denoise" in u or "diffus" in u:
+        return "step"
+    return "inference"
+
+
 def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None, stage_ms=None):
     """Both ceilings for both stages, from the MODEL'S OWN facts rather than from summing annotated ops.
 
@@ -1204,11 +1219,22 @@ def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None, stag
         stages = [(n, _stage_units(n, _pt)) for n in _declared]
     else:
         # NOTHING DECLARED. A model that never reported its stages still gets the recurring unit --
-        # every model has one -- and prefill when it consumes a prompt. This is the old behaviour, now
-        # reached only when there is nothing better to go on.
-        stages = [("decode", 1)]
-        if _pt:
-            stages.insert(0, ("prefill", _pt * max(1, _prefill_batch())))
+        # every model has one -- and a prompt-consuming stage when it consumes a prompt. This is the
+        # old behaviour, reached only when there is nothing better to go on.
+        #
+        # NAMED FOR THE UNIT THE RUN MEASURED, not for the two an LLM has. `unit` comes from
+        # trace_replay, which derives it from the decode_step CONTRACT rather than from any stage
+        # name: tok/s/u means the pipeline retires one token per call and the pair below describes
+        # it. Anything else -- a diffusion step, a classifier's forward pass -- was handed a DECODE
+        # row it does not have, on the exact reasoning this file's docstring calls the original bug
+        # ("a model with NO decode was still handed a DECODE row"), left in place because it was the
+        # fallback rather than the main path.
+        if str(unit or "").strip().lower().startswith("tok"):
+            stages = [("decode", 1)]
+            if _pt:
+                stages.insert(0, ("prefill", _pt * max(1, _prefill_batch())))
+        else:
+            stages = [(_unit_work_name(unit), 1)]
     for name, toks in stages:
         # EVERY TERM FROM THIS STAGE'S OWN BLOCK. params, layers and hidden were read from the model
         # root for every stage alike, so on a multi-tower model the audio encoder was priced with the

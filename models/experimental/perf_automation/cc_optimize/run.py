@@ -556,7 +556,11 @@ def _fullpipe_e2e_inner(repo_root: Path, mcp_env: dict, devices: str, label: str
     if ms is not None:
         print(
             f"  [optimize/cc] FULL-model end-to-end ({label}) = {ms:.1f} ms"
-            f"  (ALL layers, prefill + 1 decode{', ' + mode if mode else ''})"
+            # WHAT ONE PASS OF THIS MODEL IS. "prefill + 1 decode" was printed for every model
+            # measured, so a classifier's one forward pass and a diffusion step were both announced
+            # as an LLM's two phases. The run already records the unit trace_replay derived from the
+            # pipeline's own structure; unknown prints nothing rather than a borrowed description.
+            f"  (ALL layers{_e2e_shape()}{', ' + mode if mode else ''})"
         )
         _ledger_fullpipe(ms, mode, label)
     return ms, mode
@@ -577,6 +581,17 @@ def _ledger():
     _spec.loader.exec_module(_m)
     globals()["_LEDGER_MOD"] = _m
     return _m
+
+
+def _e2e_shape() -> str:
+    """How one measured pass is composed, from the unit the run recorded. "" when nothing said.
+
+    trace_replay derives the unit from the decode_step CONTRACT, not from any stage name, and prints
+    it as TRACE_HEADLINE_UNIT; perf_mcp keeps the last one. token -> an LLM request, step -> a
+    diffusion denoise, inference -> one forward pass.
+    """
+    _u = str(os.environ.get("PERF_MCP_LAST_HEADLINE_UNIT", "") or "").strip().lower()
+    return {"token": ", prefill + 1 decode", "step": ", 1 step", "inference": ", 1 forward pass"}.get(_u, "")
 
 
 def _ledger_fullpipe(ms: float, mode: str, label: str) -> None:

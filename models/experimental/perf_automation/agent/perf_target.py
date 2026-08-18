@@ -180,7 +180,10 @@ class PerfTarget:
     # cheaper than the bug it prevents.
     theoretical_rate: float
     band: tuple[float, float]
-    regime: str = "decode"
+    # A LABEL, AND NOT A DEFAULTED ONE. The byte model stopped consulting this when its terms started
+    # keying on `items`, but the field still announced "decode" to every reader of a target built for
+    # any other stage. Empty means unstated, which is what an unset label is.
+    regime: str = ""
     tp_degree: int = 1
     seq_len: int = 0
     # THE UNIT THE CEILING IS PER. peak_BW / active_bytes is a rate only if `active_bytes` is what ONE
