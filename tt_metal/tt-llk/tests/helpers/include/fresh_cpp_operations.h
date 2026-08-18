@@ -11,9 +11,62 @@ namespace ckernel::sfpu {
 
 template <int ITERATIONS>
 inline void calculate_exp_fresh_cpp() {
+    // exp(x) by exponent/mantissa recombination (the exp_21f algorithm of
+    // Moroz et al. 2022, the same math as the production kernels), stated
+    // row-at-a-time in plain vector C++:
+    //
+    //   exp(x) = 2**(x/ln2) = 2**xi * 2**xf.
+    //
+    // xlog2 = x/ln2 + 127 is the BIASED exponent of the result.  Feeding
+    // xlog2 through mantissa-with-implicit-one << unbiased-exponent yields
+    // the fixed-point encoding z whose exponent field is the integer part
+    // and whose mantissa field is the fractional part.  The fractional
+    // part is refined by the exp_21f quadratic and the two are recombined
+    // with setexp.
+    //
+    // Range handling states what the math means at the boundaries:
+    //  - above: exp overflows once the biased exponent would exceed 255,
+    //    so xlog2 saturates at 255 (min against the bound);
+    //  - below: exp underflows to zero once the biased exponent is not
+    //    positive.  The recombination's exponent source is zeroed for
+    //    those lanes; a zero exponent makes setexp produce a subnormal,
+    //    which the bf16 store path flushes to zero.  The fractional
+    //    refinement operates on the unmasked encoding: its value is
+    //    irrelevant on underflowed lanes because the zero exponent alone
+    //    forces the flush (the mantissa of a flushed subnormal is never
+    //    observable).
+    constexpr float ONE_LN2 = 1.4426950216293334961f;
+    constexpr float C0 = 1.0017248f;
+    constexpr float C1 = 7.839635491371155e-08f;
+    constexpr float C2 = 4.791750143340323e-15f;
     for (int row = 0; row < ITERATIONS; ++row) {
-        const sfpi::vFloat input = sfpi::dst_reg[0];
-        sfpi::dst_reg[0] = _sfpu_exp_21f_bf16_<false>(input);
+        const sfpi::vFloat val = sfpi::dst_reg[0];
+        sfpi::vFloat xlog2 = val * ONE_LN2 + 127.0f;
+        xlog2 = sfpi::min(xlog2, 255.0f);
+
+        // Fixed-point encoding of xlog2: mantissa (implicit one) shifted
+        // left by the unbiased exponent.
+        sfpi::vInt iexp = sfpi::exexp(xlog2);
+        sfpi::vInt zi = sfpi::exman(xlog2, sfpi::MantissaMode::ImplicitOne);
+        zi = sfpi::shft(zi, iexp, sfpi::ShiftMode::Logical);
+        const sfpi::vFloat z = sfpi::as<sfpi::vFloat>(zi);
+
+        // Quadratic refinement of 2**xf on [0, 1) from the unmasked
+        // encoding's mantissa field.
+        sfpi::vFloat frac = sfpi::convert<sfpi::vFloat>(sfpi::exman(z), sfpi::RoundMode::Nearest);
+        frac = (C2 * frac + C1) * frac + C0;
+
+        // Underflow: zero the exponent source where xlog2 is not positive.
+        sfpi::vFloat zc = z;
+        v_if (xlog2 <= 0.0f) { zc = 0.0f; }
+        v_endif;
+
+        sfpi::vFloat y = sfpi::setexp(frac, sfpi::exexp(zc, sfpi::ExponentMode::Biased));
+
+        // bf16 destination: round to nearest-even before the store
+        // truncates (keeps e.g. exp(ln(81)) at 81 rather than 80.5).
+        y = sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::Nearest);
+        sfpi::dst_reg[0] = y;
         sfpi::dst_reg++;
     }
 }
