@@ -981,6 +981,31 @@ measured, and at the pessimistic end of the overlap bracket it is a wash. The re
 that has held throughout: PP removes TP collectives, and by 256k the SP ring-attention term it
 cannot touch dominates.
 
+### M11 — PP=4 at 100k / 256k, measured directly (2026-08-18)
+
+The M10 figures were derived (one stage's per-chunk sum x overlap efficiency). Now measured with all
+four stages actually running chunked: `test_mistral4_pp4_concurrent_longctx` keeps each stage's 9
+layers' KV for the whole context and flows chunk c through stages 0..3 over four iterations, so each
+stage's attention sees everything it wrote for earlier chunks — chunked prefill, pipelined. One trace
+still serves every chunk: the per-chunk scalars (slot_id / actual_start / actual_end) live in
+1-element uint32 DRAM tensors refreshed in place between replays.
+
+| context | single-rank | **PP steady state** | gain | PP whole request | gain | (M10 derived) |
+|---|---|---|---|---|---|---|
+| 102,400 | 18,381 | **22,917** | **1.25x** | 19,343 | 1.05x | 22,118 |
+| 261,120 | 10,494 | **12,332** | **1.18x** | 12,264 | 1.17x | 12,246 |
+
+**The derived method held up** — 3.5% and 0.7% off the measured steady state. Worth knowing, because
+the stage-sum trick needs only 8 chips and one stage's cache, so it is the cheap way to sweep a new
+machine before committing to the full 4-submesh setup.
+
+**But the two PP columns differ, and that distinction matters more than the gain.** "Steady state"
+counts only full-pipeline iterations — what a server streaming requests sees. "Whole request" includes
+pipeline fill and drain, 3 of 23 iterations at 100k and 3 of 54 at 256k. At 256k those are amortised
+(1.17x vs 1.18x, near-identical) but **at 100k a single request keeps only 1.05x of the 1.25x** —
+fill/drain eats 84% of the benefit. So PP=4 is a *serving* win, and for one-off long prefills it is
+close to a wash at 100k and worth ~1.18x at 256k.
+
 ### Master comparison — every configuration measured on this box
 
 All traced, 36 layers, real weights, 32 chips, BH Galaxy (**8 kW**). Single-shot for 5,120 / 25,600;
@@ -990,7 +1015,8 @@ chunked at CHUNK=5120 for 102,400 / 261,120.
 |---|---|---|---|---|---|
 | **single-rank SP=8 x TP=4** (today) | 26,203 | **33,552** | 18,381 | 10,494 | the baseline; all four measured |
 | single-rank, bf8 experts | 25,772 | 32,713 | — | — | -0.6% / -2.5%; +0.012 nPCC |
-| **PP=4 x (8,1)** | **34,270** | **41,384** | ~22,118 | ~12,246 | 1.31x / 1.23x measured; 1.20x / 1.17x from stage sums |
+| **PP=4 x (8,1)** | **34,270** | **41,384** | **22,917** | **12,332** | all four MEASURED; 1.31x / 1.23x / 1.25x / 1.18x |
+| PP=4 x (8,1), whole request incl. fill/drain | — | — | 19,343 | 12,264 | 1.05x / 1.17x — one request pays pipeline fill |
 | PP=4 x (4,2) | 24,416 | 17,483 | — | — | **worse than no PP** (0.93x / 0.52x) |
 | PP=4 x (8,1), eager | 2,501 | — | — | — | host-bound, zero overlap |
 | PP=4 x (8,1), host hand-off | 4,035 | — | — | — | hand-off costs 1121 ms/iter |
@@ -1028,8 +1054,22 @@ TT_MISTRAL4_PREFILL_TTNN_CACHE=$HOME/mistral4_ttnn_cache_pp   python <repro>/pp/
 TT_MISTRAL4_PREFILL_TTNN_CACHE=$HOME/mistral4_ttnn_cache_pp PP_WINDOW=25600 PP_ITERS=12 PP_HANDOFF=none   pytest models/demos/deepseek_v3_d_p/tests/test_prefill_pipeline_concurrent.py -k 8x1 -q -s
 #   PP_HANDOFF=host shows what a naive host hand-off costs; -k 4x2 runs the losing variant
 
-# 5. PP=4 long context: one stage chunked at depth, then sum its per-chunk medians
-TT_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 TT_MISTRAL4_PREFILL_TTNN_CACHE=$HOME/mistral4_ttnn_cache_8x1 PREFILL_NOPCC_SEQ_CACHE=261120 pytest   models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py   -k "chunked_no_pcc and mistral4 and mesh-8x1 and L9 and chunks51 and two_iters and traced" -q -s
+# 5. PP=4 long context, MEASURED: all four stages chunked and concurrent -- the 22,917 / 12,332 row
+TT_MISTRAL4_PREFILL_TTNN_CACHE=$HOME/mistral4_ttnn_cache_pp \
+PP_CONTEXT=261120 PP_WINDOW=5120 PP_HANDOFF=none \
+  pytest models/demos/deepseek_v3_d_p/tests/test_prefill_pipeline_concurrent.py -k "longctx and 8x1" -q -s
+#   PP_CONTEXT=102400 for the 100k row. Prints both "total ... -> N tok/s" (whole request, incl.
+#   pipeline fill/drain) and "steady-state median ... -> N tok/s" (server case). Wrapper:
+#   pp/pp12_longctx.sh <context> <chunk> <handoff>
+
+# 5b. the cheap sweep: ONE stage chunked at depth, summed -- 8 chips, one stage's cache, ~1 min.
+#     Landed within 0.7-3.5% of step 5 on this box, so use it to triage a new machine first.
+TT_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
+TT_MISTRAL4_PREFILL_TTNN_CACHE=$HOME/mistral4_ttnn_cache_8x1 \
+PREFILL_NOPCC_SEQ_CACHE=261120 pytest \
+  models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py \
+  -k "chunked_no_pcc and mistral4 and mesh-8x1 and L9 and chunks51 and two_iters and traced" -q -s
+#   sum the per-chunk medians it prints; wrapper: pp/pp11_stage_at_depth.sh chunks51 261120
 ```
 
 Ready-made wrappers for all of the above are in `/data/kmabee/mistral4_repro_logs/{night2,pp}/`
@@ -1361,7 +1401,8 @@ at the ends of a request. Both are M5 work.
 | M7 concurrent 4-submesh pipeline | ✅ built + measured — **2,501 tok/s, 10x worse**: eager dispatch is host-bound, zero overlap |
 | M8 per-stage TRACE capture in the PP driver | ✅ traced replay overlaps (81% eff); host hand-off costs 1121 ms/iter |
 | M9 both variants measured | ✅ **(8,1) = 1.23-1.31x single-rank; (4,2) = 0.52-0.93x, worse than no PP** |
-| M10 PP=4 at 100k / 256k | ✅ ~22,118 / ~12,246 tok/s (**1.20x / 1.17x**) from one stage chunked at depth |
+| M10 PP=4 at 100k / 256k (derived) | ✅ ~22,118 / ~12,246 from one stage chunked at depth |
+| M11 PP=4 at 100k / 256k (measured, 4 stages chunked) | ✅ **22,917 / 12,332 steady (1.25x / 1.18x)**; 19,343 / 12,264 incl. fill/drain |
 
 **Code changed for PP so far** — deliberately small: one guard in `tt_distributed_rms_norm.py`, three
 new test parametrizations (`mesh-32x1`, `mesh-8x1`, `9_layers`), and one new test file
