@@ -139,3 +139,99 @@ hand-rolled run used `all`, and this is the discriminator recorded in
 `SAMPLING_TEXT_QUALITY.md` between the logits/sampling and detokenization hypotheses.
 The five documents that did complete are in this run's `samples_*.jsonl` and should be
 compared against the hand-rolled ones before either hypothesis is accepted.
+
+---
+
+## Correction: timeouts are not the main cause of 0.10 — the completed documents are also broken
+
+Written immediately after the section above, which attributed 0.10 primarily to the five
+`TimeoutError()` documents and proposed that fixing the timeout would recover the score.
+**That understates the problem.** The five documents that did *not* time out produced
+almost nothing usable.
+
+| doc | outcome | words | response tail |
+|---:|---|---:|---|
+| 0 | completed | 196 | `\Delta E_{min}$: The question might be interpreted}` |
+| 1 | **timeout** | 2 | `__INFERENCE_ERROR__: TimeoutError()` |
+| 2 | completed | **1** | `</think>` |
+| 3 | **timeout** | 2 | `__INFERENCE_ERROR__: TimeoutError()` |
+| 4 | **timeout** | 2 | `__INFERENCE_ERROR__: TimeoutError()` |
+| 5 | completed | 31 | `f cartesian coordinates. </think> </think> </think>   Let` |
+| 6 | completed | 160 | `**2.  **3**  **2}.  \4.** **3.  4.**  ****  *   ** </think>` |
+| 7 | **timeout** | 2 | `__INFERENCE_ERROR__: TimeoutError()` |
+| 8 | completed | 2 | ` 0   </think>` |
+| 9 | **timeout** | 2 | `__INFERENCE_ERROR__: TimeoutError()` |
+
+The five completed documents ran to **1, 2, 31, 160 and 196 words**. None produced an
+answer. So even with an unlimited timeout this configuration would score approximately
+zero: the timeout is real, but it is the *second* problem, not the first.
+
+`doc 2`'s entire response is nine characters:
+
+```
+\n</think>
+```
+
+and `doc 0` is corrupted from its first token, with content silently dropped:
+
+```
+LetLet's order of of magnitude.
+    Let's check the options again.
+    A) 10
+    B) 10
+    C) 10
+    D) 10
+    ...
+    three orders of magnitude larger larger.
+```
+
+The four answer options should carry exponents ($10^{-4}$ and so on); they arrive as bare
+`10`. Note also `LetLet's`, `of of`, `larger larger`.
+
+### A dose-response that discriminates the two hypotheses
+
+`SAMPLING_TEXT_QUALITY.md` left two candidates open: (A) wrong logits exposed by sampling,
+and (B) incremental detokenization / text assembly. This run adds a comparison that bears
+on it, because the corruption is the *same class* but much more severe:
+
+| | hand-rolled | CI-faithful |
+|---|---|---|
+| `sample_on_device_mode` | `all` | **`decode_only`** |
+| `max_num_seqs` | 1 | **32** |
+| `fabric_config` | `FABRIC_1D_RING` | **`FABRIC_1D`** |
+| `l1_small_size` | unset | **24576** |
+| completed-doc lengths | 218-13,559 words | **1-196 words** |
+| doc 0 | coherent opening sentence, decays over 2,170 chars | **corrupted from char 1** |
+| example corruption | `state state state`, `CalculateCalcul` | `LetLet's`, `of of`, `larger larger` |
+
+**A pure client-side detokenization bug should not depend on the serving batch size or on
+the device sampling mode.** The severity here does. That pushes the weight of evidence
+toward device-side sampling or per-slot state rather than text assembly — though it does
+not settle it, because a per-slot bug in the *incremental detokenizer* would also scale
+with batch size.
+
+Worth noting explicitly: this run is **at** the vLLM pin `03fa3af2e`, which is
+"[Bug Fix]: Fixed state slot bugs (#466)", and its parent includes
+`4f97d0ee3 "release a preempted request's device state slot (#468)"`. So both upstream
+state-slot fixes are present and the behaviour persists.
+
+### The experiment this now suggests
+
+Two runs isolate the two release-only variables, cheaply, one factor at a time:
+
+1. `max_num_seqs 1` **with** `sample_on_device_mode: decode_only` — isolates device
+   sampling mode from batch size.
+2. `max_num_seqs 32` **with** `sample_on_device_mode: all` — isolates batch size from
+   sampling mode.
+
+If (1) is clean and (2) is broken, the batch path is implicated. If (1) is broken and (2)
+clean, `decode_only` is. If both are broken, they compound, and the token-id-vs-string
+test from `SAMPLING_TEXT_QUALITY.md` becomes the next step.
+
+### One extraction artifact worth flagging
+
+`doc 9` scored **1** while its response is `__INFERENCE_ERROR__: TimeoutError()`. The
+task's `process_results_gpqa` extracted a correct answer from an error marker. That is a
+harness bug: a timed-out request should not be scoreable. It also means the reported
+`0.10` is one lucky match on an error string rather than one genuinely correct answer —
+the true score of this run is **0/10**.
