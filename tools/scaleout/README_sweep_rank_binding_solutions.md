@@ -19,6 +19,37 @@ Related:
 [`README_generate_rank_bindings_all_solutions.md`](README_generate_rank_bindings_all_solutions.md) ·
 [`../../ttnn/ttnn/distributed/README_ttrun.md`](../../ttnn/ttnn/distributed/README_ttrun.md).
 
+The tt-blaze `tools/pipeline_sweep` wrapper drives this script for full-cluster passthrough sweeps
+(e.g. SC36); see its `README.md` for the end-to-end build + run recipe.
+
+---
+
+## Recovery + retry (`--recover-command`)
+
+`--recover-command` is a **required** string: an arbitrary recovery command run (via `bash -c`)
+after a solution's tt-run fails or times out, after which the *same* tt-run is retried. Use it to
+reset the machine/cluster between attempts. On a scaleout cluster this is typically the exabox
+recovery script:
+
+```bash
+--recover-command "bash ${TT_METAL_HOME}/tools/scaleout/exabox/recover.sh --hosts $HOSTS --mpi-if ens5f0np0 --config 4x32"
+```
+
+Semantics:
+
+- Both tt-run and the recover command are each retried `DEFAULT_RETRIES` times (hidden `--retries`),
+  with `RETRY_DELAY_S` between attempts.
+- A later tt-run pass is recorded as **pass**; a solution is fail/timeout only if every tt-run
+  attempt fails. The sweep then **continues** to the next solution (unless `--stop-on-failure`).
+- Recovery is run **before** the first tt-run (proactive reset) and again after any fail/timeout.
+  It is **not** run on pass, but is still run after the final failure so the machine is left clean.
+- Exhausting the recover retries is treated as an **unrecoverable hardware error**: the sweep aborts
+  regardless of `--stop-on-failure` / `--continue-on-failure`.
+
+The tt-blaze `tools/pipeline_sweep` wrapper exposes this as its own `--recover-command` and passes
+the string **through verbatim**; `--no-reset` there sends `true` (a no-op) so this required flag is
+still satisfied without touching the cluster.
+
 ---
 
 ## Motivation
