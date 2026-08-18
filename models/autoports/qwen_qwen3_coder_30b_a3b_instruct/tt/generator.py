@@ -25,6 +25,7 @@ host sampling and is never used to produce a performance number.
 
 from __future__ import annotations
 
+import contextlib
 import math
 import os
 from pathlib import Path
@@ -80,9 +81,32 @@ class Qwen3CoderGenerator(Generator):
         #: table. See ``decode_forward``.
         self._trace_rotary_position: int | None = None
         self._decode_warm_key = None
+        #: Decode graph keys whose programs are already in the program cache.
+        #: Unlike ``_decode_warm_key`` this **survives a trace release**: the
+        #: eager warm pass exists to get every program compiled before capture,
+        #: and a program stays compiled after the trace that used it is freed.
+        #: Serving releases and re-captures the decode traces on every prefill
+        #: (a new request is admitted while other slots decode), so without this
+        #: each admission would pay a full eager decode forward it does not need.
+        #: The key is ``_decode_graph_key``, which includes ``rope_cache_len``:
+        #: growing the rotary tables changes the graph's shapes, so those
+        #: programs are *not* already compiled and the warm pass must run.
+        self._decode_compiled_keys: set = set()
         self._sampling_params = None
         self._sampling_snapshot = None
         self._sampling_stochastic = False
+
+        #: Sampling-penalty state. ``_penalty_mode`` is a *graph* property (see
+        #: ``_WatcherCleanSampling1D``'s penalty section): 0 means the penalty ops
+        #: are not in the captured decode trace at all, so an unpenalised request
+        #: pays nothing. ``_penalty_host`` are persistent full-vocabulary staging
+        #: buffers; ``_penalty_prev_*`` remember which columns each row last wrote
+        #: so a step resets only those instead of the whole 151936-wide row.
+        self._penalty_mode = 0
+        self._penalty_host = None
+        self._penalty_local_vocab = None
+        self._penalty_prev_add: list = []
+        self._penalty_prev_rep: list = []
 
         #: Steady-state host-work counters. Everything except ``replays`` and
         #: ``caller_token_readbacks`` must stay flat while tokens are produced.
@@ -97,6 +121,7 @@ class Qwen3CoderGenerator(Generator):
             "rotary_position_host_copies": 0,
             "page_table_host_copies": 0,
             "sampling_param_host_copies": 0,
+            "penalty_host_copies": 0,
             "caller_token_readbacks": 0,
             "explicit_synchronizations": 0,
             "resets": 0,
@@ -153,6 +178,74 @@ class Qwen3CoderGenerator(Generator):
         if self._kv_cache is None:
             self._kv_cache = self.model.allocate_kv_cache(num_blocks=self.num_blocks)
         return self._kv_cache
+
+    def configure_paging(self, *, page_block_size: int, pages_per_user: int, num_blocks: int) -> None:
+        """Adopt a **caller-owned** paging geometry (the vLLM serving mode).
+
+        Standalone mode derives ``page_block_size`` / ``pages_per_user`` /
+        ``num_blocks`` from the model, allocates its own cache and builds its own
+        page tables. Serving inverts that: vLLM picks the cache block size and
+        the block count, and every page table it hands over is
+        ``[batch, max_num_blocks_per_req]`` at *its* width. The two persistent
+        page-table tensors were sized for the standalone geometry in
+        ``_allocate_persistent_inputs``, so adopting vLLM's means reallocating
+        them -- which is only safe before any trace exists, hence the guard.
+
+        ``tt/generator_vllm.py`` calls this from ``allocate_kv_cache``, which the
+        TT plugin invokes once, before warmup and before any forward.
+        """
+        page_block_size = int(page_block_size)
+        pages_per_user = int(pages_per_user)
+        num_blocks = int(num_blocks)
+        if min(page_block_size, pages_per_user, num_blocks) < 1:
+            raise ValueError("paging geometry must be positive")
+        if self._trace_model_id is not None or self._trace_sampling_id is not None:
+            raise RuntimeError("configure_paging must run before any decode trace is captured")
+        if self._kv_cache is not None:
+            raise RuntimeError("configure_paging must run before the generator allocates its own cache")
+        if (page_block_size, pages_per_user, num_blocks) == (
+            self.page_block_size,
+            self.pages_per_user,
+            self.num_blocks,
+        ):
+            return
+        self.page_block_size = page_block_size
+        self.model.page_block_size = page_block_size
+        self.pages_per_user = pages_per_user
+        self.num_blocks = num_blocks
+        self._allocate_persistent_inputs()
+
+    def decode_device_state(self) -> dict[str, torch.Tensor] | None:
+        """The authoritative per-slot decode state that lives **on device**.
+
+        The traced decode path writes the sampled token straight into the
+        persistent token input and advances ``current_pos`` with
+        ``ttnn.plus_one``, so after step *N* the device -- not the host -- holds
+        the token and position step *N+1* must use. A serving scheduler under
+        async scheduling can be a step behind that, and re-installing its host
+        view would re-decode a position or feed a stale token. This exposes the
+        device view (plus the page table the live trace was captured against) so
+        ``tt/generator_vllm.py`` can keep it for slots that are simply
+        continuing and take the host's only for slots that changed hands.
+
+        Returns ``None`` when no trace is live. Costs two small device reads and
+        is called only on scheduler-layout changes, never per token.
+        """
+        if self._trace_model_id is None or self._trace_inputs is None:
+            return None
+        token, current_pos, _rotary, _page_table = self._trace_inputs
+        return {
+            "tokens": _first_device_to_torch(token).reshape(-1)[: self.batch].to(torch.int64),
+            "positions": _first_device_to_torch(current_pos).reshape(-1)[: self.batch].to(torch.int64),
+            "page_table": (
+                None if self._trace_page_table_snapshot is None else self._trace_page_table_snapshot.clone()
+            ),
+        }
+
+    def read_sampled_tokens(self, sampled, count: int | None = None) -> torch.Tensor:
+        """Host copy of a sampled-token tensor. The only readback on the token path."""
+        tokens = self._sampled_to_torch(sampled)
+        return tokens if count is None else tokens[: int(count)]
 
     def _synchronize(self) -> None:
         ttnn.synchronize_device(self.mesh_device)
@@ -249,6 +342,7 @@ class Qwen3CoderGenerator(Generator):
         prompt_lens: Sequence[int],
         return_all_logits: bool = False,
         sampling_mode: str = "host",
+        preserve_decode_traces: bool = False,
         **kwargs: Any,
     ):
         """Prefill arbitrary logical lengths, one user at a time into the cache.
@@ -258,6 +352,19 @@ class Qwen3CoderGenerator(Generator):
         at exactly its own logical length, so nothing is padded to a chunk, tile
         or page boundary at the model boundary and no mask is needed. The
         returned logits are sliced back to the logical prompt length.
+
+        ``preserve_decode_traces`` keeps a captured decode trace alive across
+        this prefill. Standalone callers never need it -- ``generate`` prefills
+        once, before any decode trace exists. **Serving does**: vLLM admits a new
+        request by prefilling it while other slots are mid-decode, and releasing
+        the decode traces there would re-capture them on the very next token,
+        putting a multi-second stall inside the measured inter-token latency of
+        every other in-flight request. It is safe because prefill's allocations
+        never touch the trace region and every tensor a captured trace holds --
+        ``_decode_trace_input_pool``, ``_trace_logits``, ``_trace_sampled`` --
+        is owned by this object and therefore never freed underneath it. The
+        page table is the one shared binding, and this method rebinds the cache
+        back to the live trace's page-table tensor before it returns.
         """
         if sampling_mode not in {"host", "device"}:
             raise ValueError("sampling_mode must be 'host' or 'device'")
@@ -273,13 +380,50 @@ class Qwen3CoderGenerator(Generator):
         if max(prompt_lens) > self.model.max_cache_len:
             raise ValueError("prompt exceeds the supported context")
 
-        self._release_decode_traces_before_allocating()
-        self.model.ensure_rope_capacity(max(prompt_lens))
+        if preserve_decode_traces:
+            if self._trace_model_id is not None:
+                # The replayed trace is asynchronous; prefill is eager. Let the
+                # queue drain before eager work reads or writes the same cache.
+                self._synchronize()
+            if self.model.ensure_rope_capacity(max(prompt_lens)):
+                # Growing the tables moves them, and a captured trace holds the
+                # old identities. Nothing can preserve a trace across that.
+                self._release_decode_traces()
+        else:
+            self._release_decode_traces_before_allocating()
+            self.model.ensure_rope_capacity(max(prompt_lens))
         caches = self._ensure_kv_cache() if kv_cache is None else kv_cache
         page_host = self._normalise_page_table(page_table, active_batch)
         self._copy_host(page_host, self._prefill_page_table, dtype=ttnn.int32)
         self.model.bind_page_table(caches, self._prefill_page_table)
+        try:
+            return self._prefill_body(
+                tokens,
+                caches,
+                active_batch=active_batch,
+                logical_width=logical_width,
+                prompt_lens=prompt_lens,
+                return_all_logits=return_all_logits,
+                sampling_mode=sampling_mode,
+            )
+        finally:
+            if self._trace_inputs is not None:
+                # Hand the cache back to the tensor the live decode trace was
+                # captured against, so the next replay writes through the page
+                # table the scheduler owns rather than the prefill scratch one.
+                self.model.bind_page_table(caches, self._trace_inputs[3])
 
+    def _prefill_body(
+        self,
+        tokens: torch.Tensor,
+        caches,
+        *,
+        active_batch: int,
+        logical_width: int,
+        prompt_lens: Sequence[int],
+        return_all_logits: bool,
+        sampling_mode: str,
+    ):
         per_user_logits: list[torch.Tensor] = []
         selected_rows = []
         for user in range(active_batch):
@@ -325,7 +469,8 @@ class Qwen3CoderGenerator(Generator):
             padded = self._pad_rows_to_sampling_slots(normed, active_batch)
             local = self.model.local_logits(padded)
             ttnn.deallocate(padded, True)
-            sampled = self._sample_device(local, tt_out_tok=self._prefill_sampled)
+            with self._penalties_suspended():
+                sampled = self._sample_device(local, tt_out_tok=self._prefill_sampled)
             ttnn.deallocate(local, True)
             return sampled
         local = self.model.local_logits(normed)
@@ -408,13 +553,232 @@ class Qwen3CoderGenerator(Generator):
             self.trace_stats["sampling_param_host_copies"] += 1
         self._sampling_snapshot = snapshot
 
+    # -- sampling penalties ---------------------------------------------------
+
+    @staticmethod
+    def _row_token_ids(history, row: int) -> torch.Tensor:
+        """Row ``row`` of a vLLM ``[rows, L]`` history tensor, -1 padding dropped.
+
+        vLLM pads both ``prompt_tokens`` and ``output_tokens`` with **-1**
+        (``input_batch.make_prompt_token_ids_tensor``: "TT device sampling relies
+        on -1 as the padding sentinel"), and pads the *batch* to ``max_num_reqs``
+        with all-(-1) rows. Dropping every negative entry handles both.
+        """
+        if history is None:
+            return torch.empty(0, dtype=torch.int64)
+        tensor = torch.as_tensor(history)
+        if tensor.ndim == 1:
+            tensor = tensor.reshape(1, -1)
+        if row >= tensor.shape[0]:
+            return torch.empty(0, dtype=torch.int64)
+        ids = tensor[row].reshape(-1).to(torch.int64)
+        return ids[ids >= 0]
+
+    def _ensure_penalty_host(self, slots: int, vocab: int) -> dict:
+        """Per-die staging buffers, **already contiguous in the shard layout**.
+
+        Not one ``[1,1,32,151936]`` tensor. Handing a full-width host tensor to
+        ``ttnn.ShardTensorToMesh(dim=-1)`` makes it re-slice a strided view into
+        four contiguous copies on every decode step, and that reshard -- not
+        tilization, not the wire -- was **6.601 ms of a 6.897 ms** upload.
+        Keeping the four ``[1,1,32,37984]`` buffers contiguous from the start and
+        assembling them with ``ttnn.from_host_shards`` costs **2.049 ms**
+        end to end, 3.4x less.
+
+        The trade is that the global -> (die, local) split now happens here, in
+        host Python, instead of being implied by the mesh mapper. That is the
+        one piece of index arithmetic in this feature, so it is checked rather
+        than trusted: ``penalty_shard_boundary_probe.py``'s
+        ``fast_staging_matches_shard_mapper`` leg builds the same operand both
+        ways and requires the two device tensors to be bit-identical, and its
+        cross-die/boundary legs would fail first if the split were wrong.
+        """
+        if self._penalty_host is None:
+            devices, local = self.model.sampler.penalty_shard_geometry()
+            if devices * local != vocab:
+                raise RuntimeError(f"penalty shard geometry {devices}x{local} does not cover {vocab}")
+            self._penalty_local_vocab = local
+            self._penalty_host = {
+                "rep_neg": [torch.ones((1, 1, slots, local), dtype=torch.bfloat16) for _ in range(devices)],
+                "add": [torch.zeros((1, 1, slots, local), dtype=torch.bfloat16) for _ in range(devices)],
+            }
+            self._penalty_prev_add = [None] * slots
+            self._penalty_prev_rep = [None] * slots
+        return self._penalty_host
+
+    def _penalty_split(self, ids: torch.Tensor):
+        """Global token ids -> ``[(die, local_ids_on_that_die, selector), ...]``.
+
+        ``die = t // local_vocab``, ``local = t % local_vocab`` -- the same
+        contiguous ascending decomposition ``_dist_die_offset`` is built from,
+        with ``local_vocab`` read off the sampler rather than re-derived here.
+        """
+        local_vocab = self._penalty_local_vocab
+        die = torch.div(ids, local_vocab, rounding_mode="floor")
+        local = ids - die * local_vocab
+        out = []
+        for index in range(len(self._penalty_host["rep_neg"])):
+            selector = die == index
+            if bool(selector.any()):
+                out.append((index, local[selector], selector))
+        return out
+
+    def set_penalty_params(
+        self,
+        *,
+        presence=None,
+        frequency=None,
+        repetition=None,
+        prompt_tokens=None,
+        output_tokens=None,
+        active_batch: int = 1,
+    ) -> tuple[bool, bool]:
+        """Stage the three vLLM sampling penalties for the next decode step.
+
+        Returns ``(live, graph_changed)``: whether the penalty stage runs this
+        step, and whether the decode graph changed shape -- the caller must
+        reinstall the trace when it did, because a mode change releases it. Everything
+        here is per **global** token id; the global -> die mapping is done by the
+        same ``ShardTensorToMesh(dim=-1)`` split the logits themselves live under,
+        so no index arithmetic can put a penalty on the wrong die. The argument is
+        in ``_WatcherCleanSampling1D``'s penalty section.
+
+        Semantics are vLLM's ``model_executor/layers/utils.py::apply_penalties``,
+        including its order: repetition (over prompt+output) multiplies the raw
+        logit, then frequency (output counts) and presence (output mask) subtract.
+        """
+        sampler = self.model.sampler
+        slots, vocab = sampler.penalty_buffer_shape()
+        rows = max(0, min(int(active_batch), slots))
+
+        def _row_values(values, neutral):
+            if values is None:
+                return [neutral] * rows
+            if isinstance(values, (int, float)):
+                return [float(values)] * rows
+            listed = [float(v) for v in list(values)[:rows]]
+            return listed + [neutral] * (rows - len(listed))
+
+        presence = _row_values(presence, 0.0)
+        frequency = _row_values(frequency, 0.0)
+        repetition = _row_values(repetition, 1.0)
+
+        rep_rows = [r for r in range(rows) if repetition[r] != 1.0]
+        add_rows = [r for r in range(rows) if presence[r] != 0.0 or frequency[r] != 0.0]
+        if (rep_rows or add_rows) and prompt_tokens is None and output_tokens is None:
+            # vLLM only sends the history when a penalty is live (and only on
+            # decode). Without it there is nothing to key a penalty on; run the
+            # unpenalised graph rather than invent one.
+            rep_rows, add_rows = [], []
+        mode = (1 if rep_rows else 0) | (2 if add_rows else 0)
+
+        if mode != self._penalty_mode:
+            # A graph change, exactly like the argmax/split flip: the ops either
+            # are or are not in the captured trace, so the trace must go.
+            if self._trace_model_id is not None or self._trace_sampling_id is not None:
+                self._release_decode_traces()
+            self._decode_warm_key = None
+            sampler.allocate_penalty_buffers(mode)
+            self._penalty_mode = mode
+            graph_changed = True
+        else:
+            graph_changed = False
+        if mode == 0:
+            return False, graph_changed
+
+        host = self._ensure_penalty_host(slots, vocab)
+        add, rep_neg = host["add"], host["rep_neg"]
+
+        # Reset only what this row wrote last step, not the whole 151936-wide
+        # row: the history is at most the context length and is usually far
+        # shorter, so this is O(history) rather than O(vocabulary).
+        for row in range(slots):
+            if mode & 2:
+                previous = self._penalty_prev_add[row]
+                if previous is not None:
+                    for die, local, _ in self._penalty_split(previous):
+                        add[die][0, 0, row].index_fill_(0, local, 0.0)
+                    self._penalty_prev_add[row] = None
+            if mode & 1:
+                previous = self._penalty_prev_rep[row]
+                if previous is not None:
+                    for die, local, _ in self._penalty_split(previous):
+                        rep_neg[die][0, 0, row].index_fill_(0, local, 1.0)
+                    self._penalty_prev_rep[row] = None
+
+        for row in add_rows:
+            out_ids = self._row_token_ids(output_tokens, row)
+            if out_ids.numel() == 0:
+                continue
+            unique, counts = torch.unique(out_ids, return_counts=True)
+            # f * count(t in output) + q * (count > 0), summed on the host so the
+            # device sees one additive tensor rather than two.
+            values = (counts.to(torch.float32) * frequency[row] + presence[row]).to(torch.bfloat16)
+            for die, local, selector in self._penalty_split(unique):
+                add[die][0, 0, row].index_copy_(0, local, values[selector])
+            self._penalty_prev_add[row] = unique
+
+        for row in rep_rows:
+            ids = torch.cat((self._row_token_ids(prompt_tokens, row), self._row_token_ids(output_tokens, row)))
+            if ids.numel() == 0:
+                continue
+            unique = torch.unique(ids)
+            # Only ``p`` is staged; ``1/p - p`` is derived on device from it. See
+            # ``_WatcherCleanSampling1D._apply_penalties``.
+            for die, local, _ in self._penalty_split(unique):
+                rep_neg[die][0, 0, row].index_fill_(0, local, repetition[row])
+            self._penalty_prev_rep[row] = unique
+
+        buffers = sampler.penalty_device_buffers()
+        for name in (("rep_neg",) if mode & 1 else ()) + (("add",) if mode & 2 else ()):
+            self._upload_penalty_tensor(host[name], buffers[name])
+            self.trace_stats["penalty_host_copies"] += 1
+        return True, graph_changed
+
+    def _upload_penalty_tensor(self, shards: list, device) -> None:
+        """Four contiguous ``[1,1,32,37984]`` host buffers -> the four die shards.
+
+        ``ttnn.from_host_shards`` assembles them into the multi-device host
+        tensor directly, so nothing re-slices a 9.7 MB strided view per step.
+        Shard ``d`` is die ``d``'s columns by the ordering
+        ``ShardTensorToMesh(dim=-1)`` uses, which the probe pins by building the
+        same operand both ways and requiring bit-identical device tensors.
+        """
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_host_shards(
+                [ttnn.from_torch(shard, device=None, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT) for shard in shards],
+                self.mesh_device.shape,
+            ),
+            device,
+        )
+
+    @contextlib.contextmanager
+    def _penalties_suspended(self):
+        """Run the enclosed sampling without the penalty stage.
+
+        Prefill and the eager host/device decode compatibility paths sample rows
+        that are **not** the decode trace's slots (a prefill's row *i* is the
+        *i*-th admitted request, not slot *i*), and vLLM does not send a token
+        history for them -- it populates ``prompt_tokens``/``output_tokens``
+        "if penalties are needed (decode only)". Applying another slot's staged
+        penalty row to them would penalise the wrong tokens, so the stage is off.
+        """
+        sampler = self.model.sampler
+        saved = sampler._penalty_mode
+        sampler._penalty_mode = 0
+        try:
+            yield
+        finally:
+            sampler._penalty_mode = saved
+
     def _sample_device(self, logits, *, tt_out_tok=None):
         """Greedy takes the argmax strategy, anything sampled takes the split one.
 
         Both are ``Sampling1D``, both traced, both write ``tt_out_tok``. The
         split is by *request*, not by convenience: greedy is exactly top-1, and
-        at this vocabulary the argmax strategy computes it 3.3x faster
-        (``doc/full_model/README.md``, "The sampler comparison"). Changing
+        at this vocabulary the argmax strategy computes it 6.6x faster
+        (0.928 ms against 6.155 ms, ``doc/optimized_full_model/README.md``,
+        "The sampler comparison"). Changing
         between the two releases the decode traces, which ``set_sampling_params``
         already does when ``_sampling_stochastic`` flips.
         """
@@ -462,6 +826,19 @@ class Qwen3CoderGenerator(Generator):
         if include_page_table:
             self.trace_stats["page_table_host_copies"] += 1
 
+    def _decode_graph_key(self, kv_cache, active_batch: int) -> tuple:
+        """Everything that changes which programs the decode graph needs.
+
+        ``rope_cache_len`` is part of it because ``_ensure_decode_rope_capacity``
+        reallocates the cos/sin tables at a *new length* when the horizon grows,
+        which changes the shapes ``ttnn.embedding`` and the untilize behind it
+        run at. Those programs are not in the cache yet, and a trace capture
+        cannot compile them ("Cannot load new binaries during trace capture").
+        Without the length in the key, ``_decode_compiled_keys`` would claim the
+        graph was already warm and skip the eager pass that compiles them.
+        """
+        return (id(kv_cache), active_batch, self._sampling_stochastic, self._penalty_mode, self.model.rope_cache_len)
+
     def _warm_decode_graphs(self, host_inputs, kv_cache, *, active_batch: int, initial_token_device=None) -> None:
         """Compile every program once eagerly.
 
@@ -490,7 +867,8 @@ class Qwen3CoderGenerator(Generator):
         self._synchronize()
         self._restore_trace_inputs(host_inputs, include_page_table=True, token_device=initial_token_device)
         self._synchronize()
-        self._decode_warm_key = (id(kv_cache), active_batch, self._sampling_stochastic)
+        self._decode_warm_key = self._decode_graph_key(kv_cache, active_batch)
+        self._decode_compiled_keys.add(self._decode_warm_key)
         self.trace_stats["decode_warmups"] += 1
 
     def _capture_decode_traces(self, host_inputs, kv_cache, *, active_batch: int, initial_token_device=None) -> None:
@@ -498,8 +876,8 @@ class Qwen3CoderGenerator(Generator):
         model_trace_id = sampling_trace_id = None
         model_open = sampling_open = False
         try:
-            warm_key = (id(kv_cache), active_batch, self._sampling_stochastic)
-            if self._decode_warm_key != warm_key:
+            warm_key = self._decode_graph_key(kv_cache, active_batch)
+            if self._decode_warm_key != warm_key and warm_key not in self._decode_compiled_keys:
                 self._warm_decode_graphs(
                     host_inputs, kv_cache, active_batch=active_batch, initial_token_device=initial_token_device
                 )
@@ -650,6 +1028,7 @@ class Qwen3CoderGenerator(Generator):
         enable_trace: bool = False,
         active_batch: int | None = None,
         decode_horizon: int | None = None,
+        validate_page_coverage: bool = True,
         **kwargs: Any,
     ):
         """One decode step.
@@ -694,7 +1073,8 @@ class Qwen3CoderGenerator(Generator):
                     raise ValueError("decode_horizon is below the requested start_pos")
                 self._ensure_decode_rope_capacity(horizon)
                 page_host = self._normalise_page_table(page_table, active_batch)
-                self._validate_page_coverage(page_host, start_pos, active_batch)
+                if validate_page_coverage:
+                    self._validate_page_coverage(page_host, start_pos, active_batch)
                 initial_token_device = self._prefill_sampled if tokens is None else None
                 host_tokens = torch.zeros(active_batch, dtype=torch.long) if tokens is None else tokens
                 host_inputs = self._prepare_decode_host_inputs(host_tokens, start_pos, page_host)
@@ -728,7 +1108,8 @@ class Qwen3CoderGenerator(Generator):
         # by this point, so the tables can simply be grown to fit.
         self._ensure_decode_rope_capacity(int(start_pos.reshape(-1).max().item()) + 1)
         page_host = self._normalise_page_table(page_table, active_batch)
-        self._validate_page_coverage(page_host, start_pos, active_batch)
+        if validate_page_coverage:
+            self._validate_page_coverage(page_host, start_pos, active_batch)
         host_inputs = self._prepare_decode_host_inputs(tokens, start_pos, page_host)
         device_inputs = [
             ttnn.to_device(tensor, self.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG) for tensor in host_inputs
@@ -742,7 +1123,8 @@ class Qwen3CoderGenerator(Generator):
             advance_position=False,
         )
         if sampling_mode == "device":
-            sampled = self._sample_device(logits)
+            with self._penalties_suspended():
+                sampled = self._sample_device(logits)
             ttnn.deallocate(logits, True)
             return sampled
         host = self.model.gather_logits_to_torch(logits, valid_rows=active_batch)[0, 0]
@@ -869,6 +1251,12 @@ class Qwen3CoderGenerator(Generator):
 
     def teardown(self) -> None:
         self._release_decode_traces()
+        #: Not cleared by ``_release_decode_traces`` on purpose -- a released
+        #: trace leaves its programs compiled, which is the whole point of the
+        #: set. Cleared here because teardown deallocates the KV cache, and the
+        #: key holds ``id(kv_cache)``: a later allocation could land on the same
+        #: address with a different shape and falsely claim to be warm.
+        self._decode_compiled_keys.clear()
         if self._kv_cache is not None:
             for cache in self._kv_cache:
                 ttnn.deallocate(cache.k, True)

@@ -1,0 +1,97 @@
+{
+  "server": "max_num_seqs=1, max_model_len=262144, block_size=32, sample_on_device_mode=all",
+  "note": "Each length is divisible by none of the page block (32), tile (32), 8, 64, 128 or 1024. All served without capping or truncation.",
+  "cases": [
+    {
+      "prompt_token_count": 37,
+      "divisible_by": {
+        "8": false,
+        "32": false,
+        "64": false,
+        "128": false,
+        "1024": false
+      },
+      "prompt_tokens_reported": 37,
+      "output_token_count": 12,
+      "completion": ", 1000000000",
+      "elapsed_s": 0.538,
+      "status": "pass"
+    },
+    {
+      "prompt_token_count": 131,
+      "divisible_by": {
+        "8": false,
+        "32": false,
+        "64": false,
+        "128": false,
+        "1024": false
+      },
+      "prompt_tokens_reported": 131,
+      "output_token_count": 12,
+      "completion": " 10000000000",
+      "elapsed_s": 2.644,
+      "status": "pass"
+    },
+    {
+      "prompt_token_count": 333,
+      "divisible_by": {
+        "8": false,
+        "32": false,
+        "64": false,
+        "128": false,
+        "1024": false
+      },
+      "prompt_tokens_reported": 333,
+      "output_token_count": 12,
+      "completion": ".10000000000",
+      "elapsed_s": 2.776,
+      "status": "pass"
+    },
+    {
+      "prompt_token_count": 1025,
+      "divisible_by": {
+        "8": false,
+        "32": false,
+        "64": false,
+        "128": false,
+        "1024": false
+      },
+      "prompt_tokens_reported": 1025,
+      "output_token_count": 12,
+      "completion": ") 0000000000",
+      "elapsed_s": 8.292,
+      "status": "pass"
+    },
+    {
+      "prompt_token_count": 4097,
+      "divisible_by": {
+        "8": false,
+        "32": false,
+        "64": false,
+        "128": false,
+        "1024": false
+      },
+      "prompt_tokens_reported": 4097,
+      "output_token_count": 12,
+      "completion": "_ 1000000000",
+      "elapsed_s": 11.648,
+      "status": "pass"
+    },
+    {
+      "prompt_token_count": 43,
+      "divisible_by": {
+        "8": false,
+        "32": false,
+        "64": false,
+        "128": false,
+        "1024": false
+      },
+      "prompt_tokens_reported": 43,
+      "output_token_count": 39,
+      "completion": " Paged attention needs a block table to efficiently manage and track the memory pages containing attention keys and values, allowing the system to quickly locate and access the relevant data during the attention computation process.",
+      "elapsed_s": 2.933,
+      "status": "pass",
+      "kind": "text"
+    }
+  ]
+}

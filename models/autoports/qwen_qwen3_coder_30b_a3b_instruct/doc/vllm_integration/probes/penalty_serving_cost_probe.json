@@ -1,0 +1,73 @@
+{
+  "url": "http://localhost:8100",
+  "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+  "workload": {
+    "prompt_len": 128,
+    "output_len": 128,
+    "num_requests": 1,
+    "concurrency": 1
+  },
+  "legs": {
+    "none": {
+      "penalties": {},
+      "repeats": 3,
+      "tokens_streamed": 128,
+      "ttft_ms": 298.276,
+      "tpot_ms": 19.873,
+      "itl_p50_ms": 19.872,
+      "itl_p99_ms": 21.231,
+      "tsu": 50.321,
+      "all_runs_tpot_ms": [
+        19.872,
+        19.881,
+        19.873
+      ]
+    },
+    "repetition_only": {
+      "penalties": {
+        "repetition_penalty": 1.05
+      },
+      "repeats": 3,
+      "tokens_streamed": 128,
+      "ttft_ms": 328.555,
+      "tpot_ms": 22.702,
+      "itl_p50_ms": 22.784,
+      "itl_p99_ms": 27.785,
+      "tsu": 44.049,
+      "all_runs_tpot_ms": [
+        22.686,
+        22.79,
+        22.702
+      ]
+    },
+    "all_three": {
+      "penalties": {
+        "repetition_penalty": 1.05,
+        "frequency_penalty": 0.5,
+        "presence_penalty": 0.5
+      },
+      "repeats": 3,
+      "tokens_streamed": 128,
+      "ttft_ms": 305.23,
+      "tpot_ms": 24.951,
+      "itl_p50_ms": 24.946,
+      "itl_p99_ms": 29.718,
+      "tsu": 40.079,
+      "all_runs_tpot_ms": [
+        24.951,
+        25.066,
+        24.89
+      ]
+    }
+  },
+  "penalty_tpot_overhead_ms": {
+    "repetition_only": 2.829,
+    "all_three": 5.078
+  },
+  "penalty_tpot_overhead_pct": {
+    "repetition_only": 14.2,
+    "all_three": 25.6
+  },
+  "unpenalised_tokens_streamed": 128,
+  "all_legs_same_token_count": true
+}

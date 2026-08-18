@@ -341,6 +341,237 @@ class _WatcherCleanSampling1D(Sampling1D):
             return int(slots)
         return max(1, min(int(rows), int(slots)))
 
+    # -- sampling penalties ---------------------------------------------------
+    #
+    # ``Sampling1D`` has no penalty stage at all, and the vLLM TT plugin does not
+    # route penalised requests to host sampling (``platform.py`` sends ``min_p``,
+    # ``bad_words``, ``logit_bias``, ``allowed_token_ids``, ``min_tokens``,
+    # ``prompt_logprobs`` and structured output to the host sampler -- penalties
+    # are deliberately *not* in that list). It packs all three into
+    # ``TTSamplingParams`` and hands the model the token history it needs
+    # (``model_runner.py``: ``prompt_tokens`` / ``output_tokens`` are populated
+    # "if penalties are needed (decode only)"), expecting the model's on-device
+    # sampler to apply them. This is that stage.
+    #
+    # ------------------------------------------------------------------------
+    # The shard-boundary problem, and why this spelling cannot get it wrong
+    # ------------------------------------------------------------------------
+    #
+    # Logits are column-parallel: die ``d`` holds vocabulary ids
+    # ``d*37984 .. d*37984+37983`` of the 151936, contiguous and ascending -- the
+    # same decomposition ``load_device_buffers`` above builds ``_dist_die_offset``
+    # from, and ``_dist_local_vocab`` is reused here rather than recomputed. A
+    # penalty is keyed by a **global** token id, so for id ``t`` only die
+    # ``t // 37984`` may touch column ``t % 37984``; penalising local index
+    # ``t % 37984`` on the *other three* dies would silently penalise three
+    # unrelated tokens and produce plausible-looking wrong output rather than an
+    # error.
+    #
+    # This stage never does that arithmetic in a kernel. The penalty operands are
+    # built on the host as **full-vocabulary** ``[1, 1, 32, 151936]`` tensors --
+    # indexed by global id, which is the only frame in which a penalty is
+    # defined -- and handed to the device through
+    # ``ttnn.ShardTensorToMesh(dim=-1)``, the *same* mapper and the same even
+    # 4-way split the logits themselves were produced under by the
+    # column-parallel LM head. Column ``t`` of the host tensor therefore lands on
+    # exactly the die and exactly the local column that holds logit ``t``, by
+    # construction rather than by a computed index. Every op below is
+    # elementwise between two tensors with identical per-die shapes, so no op
+    # ever needs to know a global id.
+    #
+    # The identity is *checked* rather than assumed:
+    # ``probes/penalty_shard_boundary_probe.py`` penalises one token in die 0's
+    # range and one in die 3's, and asserts both moved and that the same local
+    # index on the other dies did not.
+    #
+    # ------------------------------------------------------------------------
+    # The arithmetic
+    # ------------------------------------------------------------------------
+    #
+    # vLLM's ``model_executor/layers/utils.py::apply_penalties`` is the contract,
+    # and its order is load-bearing -- repetition first, on the raw logit:
+    #
+    #     repetition p (over prompt+output): x = x/p if x > 0 else x*p
+    #     frequency  f (over output):        x -= f * count(t in output)
+    #     presence   q (over output):        x -= q * (count(t in output) > 0)
+    #
+    # The repetition rule is sign-dependent, so it is *not* expressible as an
+    # additive delta. It is spelled as a per-column multiplicative factor whose
+    # two branches are both uploaded:
+    #
+    #     pos    = gtz(x)                       # 1.0 where x > 0, else 0.0
+    #     factor = rep_neg + pos * rep_dif      # rep_neg = p, rep_dif = 1/p - p
+    #     x      = x * factor
+    #     x      = x - add_delta                # f*count + q*presence, host-summed
+    #
+    # For a column no row penalises, the host writes ``rep_neg = 1.0``,
+    # ``rep_dif = 0.0``, ``add_delta = 0.0``: ``x * 1.0 - 0.0`` is **bit-exact**
+    # in bf16, so an unpenalised token is not merely close to unchanged, it is
+    # unchanged. That is what makes the cross-die non-perturbation claim a
+    # property of the arithmetic and not of a tolerance.
+    #
+    # Per-row isolation is likewise structural: the operands are ``[1,1,32,V]``
+    # and every op is elementwise, so row *i*'s columns are only ever combined
+    # with row *i*'s logits. Padding slots get the neutral row and are untouched.
+    #
+    # Baking the per-row scalars (p, 1/p, f, q) into the full-width tensors on
+    # the host, rather than broadcasting a ``[1,1,32,1]`` scalar column on
+    # device, costs one more upload but removes every H-broadcast from the traced
+    # graph -- and the host is rebuilding these rows anyway, because vLLM re-sends
+    # the whole token history each step.
+    #
+    # ------------------------------------------------------------------------
+    # Fast path
+    # ------------------------------------------------------------------------
+    #
+    # ``_penalty_mode`` is a *graph* property, not a value: 0 means the ops below
+    # are not in the captured trace at all, so an unpenalised request pays
+    # nothing -- no op, no buffer, no upload. Bit 0 is the repetition stage and
+    # bit 1 the additive stage, and they are independent, so a repetition-only
+    # request never pays for the additive tensor. The generator releases and
+    # re-captures the decode traces when the mode changes, exactly as it already
+    # does when ``_sampling_stochastic`` flips between the argmax and split
+    # strategies.
+
+    #: Bitmask: 1 = repetition stage in the graph, 2 = frequency/presence stage.
+    _penalty_mode = 0
+    _penalty_rep_neg = None
+    _penalty_add = None
+
+    def penalty_buffer_shape(self) -> tuple[int, int]:
+        """``(slots, vocab_size)`` the host-side penalty operands must have."""
+        cfg = self.config
+        return int(cfg.max_batch_size), int(cfg.vocab_size)
+
+    def penalty_shard_geometry(self) -> tuple[int, int]:
+        """``(num_devices, local_vocab)`` -- the split the operands must be staged in.
+
+        The **same** decomposition ``load_device_buffers`` builds
+        ``_dist_die_offset`` from, read off the same config rather than
+        recomputed, so the staging path and the distributed argmax cannot drift
+        apart.
+        """
+        cfg = self.config
+        devices = cfg.mesh_device.get_num_devices()
+        vocab = int(cfg.vocab_size)
+        if vocab % devices:
+            raise RuntimeError(f"penalties need an even column-parallel split; {vocab} % {devices} != 0")
+        return devices, vocab // devices
+
+    def allocate_penalty_buffers(self, mode: int) -> None:
+        """Allocate/free the per-stage operands for ``mode``.
+
+        Called by the generator **outside** any trace capture -- ``ttnn.from_torch``
+        inside ``begin_trace_capture`` raises and leaves the capture open (stage-04
+        ``work_log.md`` §6), which is the same reason ``load_device_buffers``
+        builds ``_dist_die_offset`` eagerly.
+        """
+        mode = int(mode)
+        if mode == self._penalty_mode:
+            return
+        cfg = self.config
+        slots, vocab = self.penalty_buffer_shape()
+        num_devices = cfg.mesh_device.get_num_devices()
+        if mode and vocab % num_devices != 0:
+            raise RuntimeError(f"penalties need an even column-parallel vocabulary split; {vocab} % {num_devices} != 0")
+
+        def _alloc(fill: float):
+            return ttnn.from_torch(
+                torch.full((1, 1, slots, vocab), fill, dtype=torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=cfg.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensorToMesh(cfg.mesh_device, dim=-1),
+            )
+
+        for want, names, fills in (
+            (mode & 1, ("_penalty_rep_neg",), (1.0,)),
+            (mode & 2, ("_penalty_add",), (0.0,)),
+        ):
+            for name, fill in zip(names, fills):
+                current = getattr(self, name, None)
+                if want and current is None:
+                    setattr(self, name, _alloc(fill))
+                elif not want and current is not None:
+                    ttnn.deallocate(current, True)
+                    setattr(self, name, None)
+        self._penalty_mode = mode
+
+    def penalty_device_buffers(self) -> dict:
+        """The live operands, keyed by name; the generator uploads into these."""
+        return {"rep_neg": self._penalty_rep_neg, "add": self._penalty_add}
+
+    def _apply_penalties(self, logits):
+        """``logits`` -> penalised logits, or ``logits`` itself when the mode is 0.
+
+        Returns ``(tensor, is_new)``; the caller deallocates when ``is_new``.
+        """
+        mode = self._penalty_mode
+        if not mode:
+            return logits, False
+        if int(logits.shape[-1]) != self.penalty_buffer_shape()[1] // self.config.mesh_device.get_num_devices():
+            # Already gathered, or some shape this stage was not built for. The
+            # penalty operands are per-die shards; refusing is the only safe
+            # answer, because applying them at the wrong width would penalise
+            # the wrong tokens.
+            raise RuntimeError(
+                f"penalty operands are per-die shards of width "
+                f"{self.penalty_buffer_shape()[1] // self.config.mesh_device.get_num_devices()}, "
+                f"got logits of width {int(logits.shape[-1])}"
+            )
+        out = logits
+        if mode & 1:
+            # ``rep_dif`` (= 1/p - p) is derived **on device** rather than
+            # uploaded. It used to be a second full-width operand, and staging one
+            # of those costs 2.049 ms of host time per decode step -- more than
+            # every device op in this stage put together. ``ttnn.reciprocal`` of
+            # the operand gives the same thing for free, because the operand is
+            # ``p`` at penalised columns and exactly ``1.0`` everywhere else.
+            #
+            # This is only allowed to be here because ``reciprocal(1.0)`` is
+            # **exactly** 1.0 on this device -- checked, not assumed
+            # (``penalty_shard_boundary_probe.py``'s reference and
+            # bit-identity legs both fail if it is not). That is what keeps the
+            # unpenalised column at ``x * 1.0 - 0.0``, i.e. bit-exact, which is
+            # the whole cross-die non-perturbation argument. At *penalised*
+            # columns the LLK reciprocal differs from a host-computed ``1/p`` by
+            # up to about one bf16 ulp (p=1.05: 0.95703 against 0.95313), which is
+            # inside the accuracy the bf16 operand already has.
+            inv = ttnn.reciprocal(self._penalty_rep_neg)
+            rep_dif = ttnn.subtract(inv, self._penalty_rep_neg)
+            ttnn.deallocate(inv)
+            # gtz, not a where: ttnn.where on this path is the op the argmax
+            # override already avoids, and gtz is a single unary.
+            pos = ttnn.gtz(out)
+            scaled = ttnn.multiply(pos, rep_dif)
+            ttnn.deallocate(pos)
+            ttnn.deallocate(rep_dif)
+            factor = ttnn.add(scaled, self._penalty_rep_neg)
+            ttnn.deallocate(scaled)
+            out = ttnn.multiply(out, factor)
+            ttnn.deallocate(factor)
+        if mode & 2:
+            penalised = ttnn.subtract(out, self._penalty_add)
+            if out is not logits:
+                ttnn.deallocate(out)
+            out = penalised
+        return out, True
+
+    def decode_forward(self, logits, **kwargs):
+        """Penalty stage, then ``Sampling1D``'s own routing -- unchanged.
+
+        Overriding here rather than in each strategy means both the argmax path
+        and the top-k/top-p split path get penalties from one place, applied
+        **before** any selection, which is the only order that is correct.
+        """
+        penalised, is_new = self._apply_penalties(logits)
+        try:
+            return super().decode_forward(penalised, **kwargs)
+        finally:
+            if is_new:
+                ttnn.deallocate(penalised)
+
     def load_device_buffers(self):
         """Base buffers, plus the per-die vocabulary offset the reduction adds.
 

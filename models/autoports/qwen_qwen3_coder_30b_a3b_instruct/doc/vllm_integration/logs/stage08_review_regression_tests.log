@@ -1,0 +1,299 @@
+# stage-08 review item 3: standalone generator.py regression
+# date: 2026-08-18T00:39:38+00:00
+# git: 9ec24b89ef50953a6756ec75a70d7498e697aaf7 (+ uncommitted stage 08 & review fixes)
+# cmd: pytest models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_trace.py models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py -q
+# note: first attempt at this commit FAILED test_decode_past_the_rope_cache_length_through_the_low_level_api
+#       (1 failed / 35 passed) -- _decode_compiled_keys skipped the eager warm pass
+#       after the rotary tables were reallocated at a new length, and the capture
+#       hit 'Cannot load new binaries during trace capture'. Fixed by folding
+#       model.rope_cache_len into the key (_decode_graph_key). This is the re-run.
+
+2026-08-18 00:39:39.874 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/raahem/.cache/ttnn,model_cache_path=/home/raahem/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0 -- /home/raahem/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/raahem/tt-metal
+configfile: pytest.ini
+plugins: dash-2.15.0, timeout-2.4.0, split-0.11.0, github-actions-annotate-failures-0.3.0, cov-7.0.0, anyio-4.14.2, benchmark-5.2.3
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 36 items
+
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_trace.py::test_decode_step_is_traceable[blackhole-1x1-device_params0] Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+2026-08-18 00:39:43.223 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-18 00:39:43.223 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-18 00:39:43.223 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-18 00:39:43.223 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-18 00:39:43.234 | info     |             UMD | Established firmware bundle version: 19.8.99 (topology_discovery.cpp:575)
+2026-08-18 00:39:43.234 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-18 00:39:43.318 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-18 00:39:43.318 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-18 00:39:43.318 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-18 00:39:43.318 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-18 00:39:43.320 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-18 00:39:43.479 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-18 00:39:43.605 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=50331648 from device_params (already set)
+2026-08-18 00:39:43.605 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-18 00:39:43.605 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-18 00:39:43.605 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-18 00:39:43.605 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-18 00:39:43.605 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-18 00:39:43.641 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-18 00:39:43.641 | warning  |           Metal | Failed to create shared memory /tt_device_154095682331104_memory: Permission denied (memory_stats_shm.cpp:60)
+2026-08-18 00:39:44.280 | DEBUG    | conftest:mesh_device:630 - multidevice with 1 devices is created
+[transformers] You tried to access the `AttentionInterface` with a `config._attn_implementation` set to `None`. This is expected if you use an Attention Module as a standalone Module. If this is not the case, something went wrong with the dispatch of `config._attn_implementation`
+[transformers] You tried to access the `ExpertsInterface` with a `config._experts_implementation` set to `None`. This is expected if you use an Expert Module as a standalone Module. If this is not the case, something went wrong with the dispatch of `config._experts_implementation`
+2026-08-18 00:39:46.626 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_trace:test_decode_step_is_traceable:129 - (True, 'Max ATOL Delta: 0.0, Max RTOL Delta: 0.0')
+2026-08-18 00:39:46.626 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_trace:test_decode_step_is_traceable:130 - traced vs eager: 1.0
+2026-08-18 00:39:46.626 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_trace:test_decode_step_is_traceable:134 - traced vs reference: 0.9946808621713572
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_trace.py::test_traced_replay_follows_new_input[blackhole-1x1-device_params0] 2026-08-18 00:39:46.974 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=50331648 from device_params (already set)
+2026-08-18 00:39:47.019 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-18 00:39:47.019 | warning  |           Metal | Failed to create shared memory /tt_device_154095682331104_memory: Permission denied (memory_stats_shm.cpp:60)
+2026-08-18 00:39:47.063 | DEBUG    | conftest:mesh_device:630 - multidevice with 1 devices is created
+2026-08-18 00:39:49.177 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_trace:test_traced_replay_follows_new_input:194 - max|out_a - out_b| after swapping the input token = 0.396484
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_generator_implements_the_contract 2026-08-18 00:39:49.402 | info     |           Metal | Fabric config changed from FabricConfig::DISABLED to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-18 00:39:49.402 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-18 00:39:49.402 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-18 00:39:49.403 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-18 00:39:49.403 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-18 00:39:49.450 | warning  |           Metal | Failed to create shared memory /tt_device_154095682331393_memory: Permission denied (memory_stats_shm.cpp:60)
+2026-08-18 00:39:49.450 | warning  |           Metal | Failed to create shared memory /tt_device_154095682331392_memory: Permission denied (memory_stats_shm.cpp:60)
+2026-08-18 00:39:49.450 | warning  |           Metal | Failed to create shared memory /tt_device_154095682331105_memory: Permission denied (memory_stats_shm.cpp:60)
+2026-08-18 00:39:49.450 | warning  |           Metal | Failed to create shared memory /tt_device_154095682331104_memory: Permission denied (memory_stats_shm.cpp:60)
+2026-08-18 00:39:49.452 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-18 00:39:49.476 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-18 00:39:49.476 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_split_sampling_feeds_its_own_token_back_on_device PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_steady_state_decode_does_no_host_work PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_unchanged_page_table_costs_no_host_copy PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_device_split_sampling_matches_host_argmax 2026-08-18 00:40:01.467 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-18 00:40:01.467 | warning  |              Op | Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op allocations. Configure an L1_SMALL region to mitigate this. (all_gather_unicast_factory.cpp:56)
+2026-08-18 00:40:01.467 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-18 00:40:01.468 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-18 00:40:01.468 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-18 00:40:01.468 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-18 00:40:01.482 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-18 00:40:01.482 | warning  |              Op | Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op allocations. Configure an L1_SMALL region to mitigate this. (all_gather_unicast_factory.cpp:56)
+2026-08-18 00:40:01.482 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-18 00:40:01.482 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-18 00:40:01.483 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-18 00:40:01.483 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-18 00:40:01.495 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-18 00:40:01.506 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-18 00:40:01.517 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-18 00:40:01.526 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_force_argmax_matches_split_sampling 2026-08-18 00:40:01.782 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_decode_past_the_rope_cache_length_through_the_low_level_api 2026-08-18 00:40:11.828 | INFO     | conftest:expect_error_:922 - [EXPECTED_ERROR BEGIN] RuntimeError message="rotary table"
+2026-08-18 00:40:11.928 | INFO     | conftest:expect_error_:927 - [EXPECTED_ERROR END] RuntimeError message="rotary table"
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_eager_decode_grows_the_rope_tables_for_its_position 2026-08-18 00:40:12.375 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-18 00:40:12.386 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_decode_beyond_the_advertised_context_is_refused 2026-08-18 00:40:12.622 | INFO     | conftest:expect_error_:922 - [EXPECTED_ERROR BEGIN] ValueError message="exceeds the supported context"
+2026-08-18 00:40:12.622 | INFO     | conftest:expect_error_:927 - [EXPECTED_ERROR END] ValueError message="exceeds the supported context"
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_top_k_top_p_sampling_runs_through_a_traced_generate 2026-08-18 00:40:12.884 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-18 00:40:12.884 | warning  |              Op | Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op allocations. Configure an L1_SMALL region to mitigate this. (all_gather_multicast_factory.cpp:42)
+2026-08-18 00:40:12.891 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-18 00:40:12.891 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-18 00:40:12.891 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-18 00:40:12.891 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-18 00:40:12.892 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-18 00:40:12.892 | warning  |              Op | Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op allocations. Configure an L1_SMALL region to mitigate this. (all_gather_multicast_factory.cpp:42)
+2026-08-18 00:40:12.893 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-18 00:40:12.893 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-18 00:40:12.893 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-18 00:40:12.893 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-18 00:40:12.913 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-18 00:40:12.913 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-18 00:40:12.927 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-18 00:40:12.927 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_alternating_sampling_modes_recapture_the_traces 2026-08-18 00:40:13.219 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-18 00:40:13.219 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-18 00:40:13.232 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-18 00:40:13.232 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_temperature_zero_is_spelled_as_greedy PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_set_sampling_params_releases_traces_only_on_a_mode_flip 2026-08-18 00:40:13.800 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-18 00:40:13.800 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-18 00:40:13.814 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-18 00:40:13.814 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_non_aligned_prompt_lengths[1] 2026-08-18 00:40:14.079 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_non_aligned_prompt_lengths[31] 2026-08-18 00:40:14.340 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_non_aligned_prompt_lengths[33] 2026-08-18 00:40:14.615 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_non_aligned_prompt_lengths[100] 2026-08-18 00:40:14.901 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_non_aligned_prompt_lengths[127] 2026-08-18 00:40:15.170 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_non_aligned_prompt_lengths[128] 2026-08-18 00:40:15.425 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_non_aligned_prompt_lengths[129] 2026-08-18 00:40:15.707 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_non_aligned_prompt_lengths[257] 2026-08-18 00:40:16.006 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_non_aligned_prompt_lengths[1000] 2026-08-18 00:40:16.363 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_return_all_logits_is_sliced_to_the_logical_length 2026-08-18 00:40:16.629 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-18 00:40:16.629 | warning  |              Op | Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op allocations. Configure an L1_SMALL region to mitigate this. (all_gather_unicast_factory.cpp:56)
+2026-08-18 00:40:16.629 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-18 00:40:16.629 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-18 00:40:16.630 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-18 00:40:16.630 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_mixed_length_batch_prefill_and_decode 2026-08-18 00:40:26.797 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-18 00:40:26.797 | warning  |              Op | Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op allocations. Configure an L1_SMALL region to mitigate this. (all_gather_unicast_factory.cpp:56)
+2026-08-18 00:40:26.798 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-18 00:40:26.798 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-18 00:40:26.798 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-18 00:40:26.799 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-18 00:40:26.856 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_inactive_rows_are_expressible 2026-08-18 00:40:27.127 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-18 00:40:27.127 | warning  |              Op | Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op allocations. Configure an L1_SMALL region to mitigate this. (all_gather_unicast_factory.cpp:56)
+2026-08-18 00:40:27.128 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-18 00:40:27.128 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-18 00:40:27.129 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-18 00:40:27.129 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_page_table_must_map_disjoint_pages 2026-08-18 00:40:27.365 | INFO     | conftest:expect_error_:922 - [EXPECTED_ERROR BEGIN] ValueError message="must map disjoint physical cache pages"
+2026-08-18 00:40:27.365 | INFO     | conftest:expect_error_:927 - [EXPECTED_ERROR END] ValueError message="must map disjoint physical cache pages"
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_sdpa_rounded_page_count_covers_the_read_window PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_distributed_argmax_is_exact_at_batch_above_one PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_caller_owned_cache_is_used_verbatim 2026-08-18 00:40:28.156 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_reset_makes_generation_reproducible PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_reset_zeroes_the_cache PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_prefill_logits_are_deterministic_across_runs 2026-08-18 00:40:28.951 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-18 00:40:28.960 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_runtime_fallback_audit_is_clean PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_inter_layer_residual_contract_is_preserved PASSED
+
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+_________ test_decode_step_is_traceable[blackhole-1x1-device_params0] __________
+------------------------------ Captured log setup ------------------------------
+WARNING  huggingface_hub.utils._http:_http.py:904 Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+- generated xml file: /home/raahem/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+10.81s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_generator_implements_the_contract
+10.07s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_mixed_length_batch_prefill_and_decode
+10.04s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_decode_past_the_rope_cache_length_through_the_low_level_api
+2.67s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_trace.py::test_decode_step_is_traceable[blackhole-1x1-device_params0]
+2.35s call     models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_trace.py::test_decode_step_is_traceable[blackhole-1x1-device_params0]
+2.11s call     models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_trace.py::test_traced_replay_follows_new_input[blackhole-1x1-device_params0]
+0.32s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_trace.py::test_traced_replay_follows_new_input[blackhole-1x1-device_params0]
+0.30s call     models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_decode_past_the_rope_cache_length_through_the_low_level_api
+0.24s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_non_aligned_prompt_lengths[1000]
+0.24s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_reset_zeroes_the_cache
+0.24s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_non_aligned_prompt_lengths[257]
+0.24s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_set_sampling_params_releases_traces_only_on_a_mode_flip
+0.24s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_runtime_fallback_audit_is_clean
+0.24s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_temperature_zero_is_spelled_as_greedy
+0.24s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_prefill_logits_are_deterministic_across_runs
+0.24s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_device_split_sampling_matches_host_argmax
+0.23s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_caller_owned_cache_is_used_verbatim
+0.23s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_non_aligned_prompt_lengths[127]
+0.23s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_reset_makes_generation_reproducible
+0.23s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_force_argmax_matches_split_sampling
+0.23s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_inter_layer_residual_contract_is_preserved
+0.23s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_inactive_rows_are_expressible
+0.23s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_distributed_argmax_is_exact_at_batch_above_one
+0.23s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_non_aligned_prompt_lengths[100]
+0.23s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_non_aligned_prompt_lengths[1]
+=========================== short test summary info ============================
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_trace.py::test_decode_step_is_traceable[blackhole-1x1-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_trace.py::test_traced_replay_follows_new_input[blackhole-1x1-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_generator_implements_the_contract
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_split_sampling_feeds_its_own_token_back_on_device
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_steady_state_decode_does_no_host_work
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_unchanged_page_table_costs_no_host_copy
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_device_split_sampling_matches_host_argmax
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_force_argmax_matches_split_sampling
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_decode_past_the_rope_cache_length_through_the_low_level_api
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_eager_decode_grows_the_rope_tables_for_its_position
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_decode_beyond_the_advertised_context_is_refused
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_top_k_top_p_sampling_runs_through_a_traced_generate
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_alternating_sampling_modes_recapture_the_traces
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_temperature_zero_is_spelled_as_greedy
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_set_sampling_params_releases_traces_only_on_a_mode_flip
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_non_aligned_prompt_lengths[1]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_non_aligned_prompt_lengths[31]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_non_aligned_prompt_lengths[33]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_non_aligned_prompt_lengths[100]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_non_aligned_prompt_lengths[127]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_non_aligned_prompt_lengths[128]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_non_aligned_prompt_lengths[129]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_non_aligned_prompt_lengths[257]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_non_aligned_prompt_lengths[1000]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_return_all_logits_is_sliced_to_the_logical_length
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_mixed_length_batch_prefill_and_decode
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_inactive_rows_are_expressible
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_page_table_must_map_disjoint_pages
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_sdpa_rounded_page_count_covers_the_read_window
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_distributed_argmax_is_exact_at_batch_above_one
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_caller_owned_cache_is_used_verbatim
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_reset_makes_generation_reproducible
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_reset_zeroes_the_cache
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_prefill_logits_are_deterministic_across_runs
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_runtime_fallback_audit_is_clean
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_full_model.py::test_inter_layer_residual_contract_is_preserved
+======================= 36 passed, 2 warnings in 49.01s ========================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+nanobind: leaked 2 instances!
+ - leaked instance 0x7a057bfd7d68 of type "ttnn._ttnn.tensor.MemoryConfig"
+ - leaked instance 0x7a057c220fa8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 37 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - ... skipped remainder
+nanobind: leaked 311 functions!
+ - leaked function "ranges"
+ - leaked function ""
+ - leaked function "get_num_devices"
+ - leaked function "empty"
+ - leaked function "open_device"
+ - leaked function "from_json"
+ - leaked function "get_optimal_dram_bank_to_logical_worker_assignment"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "is_per_core_allocated"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-18 00:40:31.727 | info     |    BuildKernels | JIT cache stats: 1472/1472 hits (100.0%) [1472 cached, 3338 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-18 00:40:31.727 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-18 00:40:31.751 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-18 00:40:31.751 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-18 00:40:32.318 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-18 00:40:32.318 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-18 00:40:32.318 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)
+EXIT=0

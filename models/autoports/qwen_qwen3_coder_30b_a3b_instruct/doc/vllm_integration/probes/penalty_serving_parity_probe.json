@@ -1,0 +1,135 @@
+{
+  "url": "http://localhost:8100",
+  "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+  "host_sampling_switch": {
+    "min_p": 0.01
+  },
+  "cases": [
+    {
+      "case": "control_no_penalty",
+      "prompt": "a b c a b c a b c",
+      "max_tokens": 40,
+      "penalties": {},
+      "device_sampled": " a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a",
+      "vllm_reference_sampled": " a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a",
+      "identical": true
+    },
+    {
+      "case": "presence_neg2",
+      "prompt": "a b c a b c a b c",
+      "max_tokens": 40,
+      "penalties": {
+        "presence_penalty": -2.0
+      },
+      "device_sampled": " a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a",
+      "vllm_reference_sampled": " a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a",
+      "identical": true
+    },
+    {
+      "case": "presence_pos2",
+      "prompt": "a b c a b c a b c",
+      "max_tokens": 40,
+      "penalties": {
+        "presence_penalty": 2.0
+      },
+      "device_sampled": " a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a",
+      "vllm_reference_sampled": " a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a",
+      "identical": true
+    },
+    {
+      "case": "frequency_0p3",
+      "prompt": "a b c a b c a b c",
+      "max_tokens": 40,
+      "penalties": {
+        "frequency_penalty": 0.3
+      },
+      "device_sampled": " a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a",
+      "vllm_reference_sampled": " a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a",
+      "identical": true
+    },
+    {
+      "case": "frequency_0p5",
+      "prompt": "a b c a b c a b c",
+      "max_tokens": 40,
+      "penalties": {
+        "frequency_penalty": 0.5
+      },
+      "device_sampled": " a b c a b c a b c a b c a b c a b c a b c a b c a b c\na b c d e f g h i j k l",
+      "vllm_reference_sampled": " a b c a b c a b c a b c a b c a b c a b c a b c a b c\na b c d e f g h i j k l",
+      "identical": true
+    },
+    {
+      "case": "frequency_1p0",
+      "prompt": "a b c a b c a b c",
+      "max_tokens": 40,
+      "penalties": {
+        "frequency_penalty": 1.0
+      },
+      "device_sampled": " a b c a b c a b c a b c a b c\na b c d e f g h i j k l m n o p q r s t u v w x",
+      "vllm_reference_sampled": " a b c a b c a b c a b c a b c\na b c d e f g h i j k l m n o p q r s t u v w x",
+      "identical": true
+    },
+    {
+      "case": "frequency_2p0_a",
+      "prompt": "a a a a a a a a a",
+      "max_tokens": 15,
+      "penalties": {
+        "frequency_penalty": 2.0
+      },
+      "device_sampled": " a 100% width and height of the container.\n   ",
+      "vllm_reference_sampled": " a 100% width and height of the container.\n   ",
+      "identical": true
+    },
+    {
+      "case": "repetition_2p0",
+      "prompt": "a a a a a a a a a",
+      "max_tokens": 10,
+      "penalties": {
+        "repetition_penalty": 2.0
+      },
+      "device_sampled": " a 10.5\" x\n2",
+      "vllm_reference_sampled": " a 10.5\" x\n2",
+      "identical": true
+    },
+    {
+      "case": "repetition_0p5",
+      "prompt": "a a a a a a a a a",
+      "max_tokens": 10,
+      "penalties": {
+        "repetition_penalty": 0.5
+      },
+      "device_sampled": " a a a a a a a a a a",
+      "vllm_reference_sampled": " a a a a a a a a a a",
+      "identical": true
+    },
+    {
+      "case": "repetition_1p5_abc",
+      "prompt": "a b c a b c a b c",
+      "max_tokens": 20,
+      "penalties": {
+        "repetition_penalty": 1.5
+      },
+      "device_sampled": " a 1. What is the next letter in this sequence? - Brainly.ph\nprofile\n",
+      "vllm_reference_sampled": " a 1. What is the next letter in this sequence? - Brainly.ph\nprofile\n",
+      "identical": true
+    },
+    {
+      "case": "mixed_all_three",
+      "prompt": "a b c a b c a b c",
+      "max_tokens": 20,
+      "penalties": {
+        "repetition_penalty": 1.2,
+        "frequency_penalty": 0.5,
+        "presence_penalty": 1.0
+      },
+      "device_sampled": " a b c\nThe sequence you've provided is:\n\n**a b c a b c a b",
+      "vllm_reference_sampled": " a b c\nThe sequence you've provided is:\n\n**a b c a b c a b",
+      "identical": true
+    }
+  ],
+  "all_identical_to_vllm_reference": true,
+  "presence_reference_also_unchanged": true,
+  "frequency_changes_output_on_same_prompt": true,
+  "repetition_changes_output": true,
+  "passed": true
+}

@@ -1,0 +1,117 @@
+{
+  "seed": 0,
+  "vocab": 151936,
+  "devices": 4,
+  "local_vocab": 37984,
+  "max_abs_error": 0.0078125,
+  "max_ulp_ratio": 0.19342359900474548,
+  "matches_vllm_reference": true,
+  "unexpected_columns_moved": [],
+  "no_unexpected_columns_moved": true,
+  "expected_columns_that_moved": 13,
+  "expected_columns_total": 13,
+  "penalised_tokens_per_die": {
+    "0": 5,
+    "1": 2,
+    "3": 4,
+    "2": 2
+  },
+  "reaches_die_0": true,
+  "reaches_die_3": true,
+  "boundary_columns_covered": [
+    0,
+    37983
+  ],
+  "same_local_index_on_other_dies_untouched": true,
+  "alias_failures": [],
+  "unpenalised_rows": 28,
+  "unpenalised_rows_bit_identical": true,
+  "sampler_tokens": [
+    36885,
+    38973,
+    74758,
+    125781,
+    68114
+  ],
+  "reference_penalised_tokens": [
+    36885,
+    38973,
+    74758,
+    125781,
+    68114
+  ],
+  "unpenalised_tokens": [
+    36885,
+    38973,
+    74758,
+    125781,
+    68114
+  ],
+  "sampler_matches_penalised_reference": true,
+  "forced_winner_dies": [
+    0,
+    1,
+    1,
+    3,
+    1
+  ],
+  "forced_prior_winners": [
+    36885,
+    38973,
+    74758,
+    125781,
+    68114
+  ],
+  "forced_tokens": [
+    80921,
+    38973,
+    112875,
+    31245,
+    107275
+  ],
+  "forced_reference_tokens": [
+    80921,
+    38973,
+    112875,
+    31245,
+    107275
+  ],
+  "forced_matches_reference": true,
+  "forced_winner_changed": [
+    true,
+    false,
+    true,
+    true,
+    true
+  ],
+  "forced_penalty_changed_the_winner": true,
+  "fast_staging_matches_shard_mapper": true,
+  "staged_operand_carries_p_on_the_owning_die": true,
+  "neutral_request_is_fast_path": true,
+  "fast_path_is_identity": true,
+  "passed": true,
+  "cost": {
+    "reps": 50,
+    "history_tokens_per_row": 0,
+    "sampler_ms_mode0": 0.6325,
+    "sampler_ms_mode1": 0.6876,
+    "host_staging_ms_mode1": 1.5351,
+    "sampler_ms_mode3": 0.7053,
+    "host_staging_ms_mode3": 3.3894,
+    "device_cost_repetition_only_ms": 0.0551,
+    "device_cost_both_ms": 0.0728,
+    "fast_path_is_free": true
+  },
+  "cost_serving_history": {
+    "reps": 50,
+    "history_tokens_per_row": 256,
+    "sampler_ms_mode0": 0.6329,
+    "sampler_ms_mode1": 0.6873,
+    "host_staging_ms_mode1": 1.5674,
+    "sampler_ms_mode3": 0.7058,
+    "host_staging_ms_mode3": 3.7624,
+    "device_cost_repetition_only_ms": 0.0544,
+    "device_cost_both_ms": 0.0729,
+    "fast_path_is_free": true
+  }
+}
