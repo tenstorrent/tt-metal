@@ -8,6 +8,7 @@ constants, cached chunk masks). Behavior-preserving extraction of the original
 `Qwen36GatedDeltaNet.__init__` weight code — every dtype / layout / memory_config
 and every env-var read is preserved verbatim.
 """
+import os
 from dataclasses import dataclass
 
 import torch
@@ -15,6 +16,16 @@ import torch
 import ttnn
 from models.demos.blackhole.qwen36.tt.gdn.config import GDNConfig
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_seq import create_chunk_masks_seq
+
+
+def gdn_proj_dtype_and_tag():
+    """QWEN36_GDN_BF4=1 stores GDN projections as bfloat4_b under a distinct .bfp4 cache name.
+
+    Conv taps, A_log, dt_bias, and the output norm stay bfloat16.
+    """
+    if os.environ.get("QWEN36_GDN_BF4", "0") == "1":
+        return ttnn.bfloat4_b, ".bfp4"
+    return ttnn.bfloat8_b, ""
 
 
 @dataclass

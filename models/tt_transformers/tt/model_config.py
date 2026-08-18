@@ -2471,6 +2471,9 @@ class ModelArgs:
                 "medgemma-4b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "gemma-3-27b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "medgemma-27b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
+                "Qwen3.5-27B": {"P150x4": 2, "P150x8": 2},
+                "Qwen3.6-27B": {"P150x4": 2, "P150x8": 2},
+                "Qwen3.8-27B": {"P150x4": 2, "P150x8": 2},
             }
             try:
                 max_prefill_chunk_size_div1024 = MAX_PREFILL_CHUNK_SIZES_DIV1024[self.base_model_name][self.device_name]
@@ -3630,6 +3633,7 @@ class ModelArgs:
             "gemma-3-4b": "google/gemma-3-4b-it",
             "gemma-3-27b": "google/gemma-3-27b-it",
             "Qwen3.6-27B": "Qwen/Qwen3.6-27B",
+            "Qwen3.8-27B": "Qwen/Qwen3.8-27B",
         }
 
         logger.info(f"Tokenizer path: {self.TOKENIZER_PATH}")

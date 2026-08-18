@@ -15,36 +15,52 @@ from typing import Mapping, Optional
 
 import torch
 from loguru import logger
-from vllm.model_executor.models.interfaces import SupportsMultiModal
-from vllm.model_executor.models.qwen3_5 import (
-    Qwen3_5ProcessingInfo,
-    Qwen3VLDummyInputsBuilder,
-    Qwen3VLMultiModalProcessor,
-)
-from vllm.multimodal import MULTIMODAL_REGISTRY
 
 import ttnn
 from models.demos.blackhole.qwen36.tt.common import create_tt_model
 from models.demos.blackhole.qwen36.tt.generator_interface import prefill_dispatch, warmup_decode_buckets
 from models.tt_transformers.tt.generator import Generator
 
+# Qwen3.5 multimodal processor helpers exist only on newer vLLM; text-only serve
+# works on 0.10.x without them (vision stays disabled either way).
+try:
+    from vllm.model_executor.models.interfaces import SupportsMultiModal
+    from vllm.model_executor.models.qwen3_5 import (
+        Qwen3_5ProcessingInfo,
+        Qwen3VLDummyInputsBuilder,
+        Qwen3VLMultiModalProcessor,
+    )
+    from vllm.multimodal import MULTIMODAL_REGISTRY
+
+    _HAS_QWEN35_MM = True
+except ImportError:  # pragma: no cover - depends on vLLM version
+    SupportsMultiModal = object  # type: ignore[misc,assignment]
+    _HAS_QWEN35_MM = False
+
 _PREFILL_WARMUP_CHUNK = 2048
 _PREFILL_WARMUP_BUCKET = 4096
 _BLOCK_SIZE = 64
 
 
-class TT_Qwen3_5ProcessingInfo(Qwen3_5ProcessingInfo):
-    def get_supported_mm_limits(self) -> Mapping[str, Optional[int]]:
-        # Serve a single visual item per request (B=1, max_concurrency=1). Image and video are both
-        # supported, but only ONE modality per request: the model's vision splice keys off a single
-        # placeholder token id (image_token_id XOR video_token_id), so a mixed image+video prompt
-        # cannot be spliced correctly.
-        return {"image": 1, "video": 1}
+if _HAS_QWEN35_MM:
+
+    class TT_Qwen3_5ProcessingInfo(Qwen3_5ProcessingInfo):
+        def get_supported_mm_limits(self) -> Mapping[str, Optional[int]]:
+            # Serve a single visual item per request (B=1, max_concurrency=1).
+            return {"image": 1, "video": 1}
+
+    def _mm_register(cls):
+        return MULTIMODAL_REGISTRY.register_processor(
+            Qwen3VLMultiModalProcessor, info=TT_Qwen3_5ProcessingInfo, dummy_inputs=Qwen3VLDummyInputsBuilder
+        )(cls)
+
+else:
+
+    def _mm_register(cls):
+        return cls
 
 
-@MULTIMODAL_REGISTRY.register_processor(
-    Qwen3VLMultiModalProcessor, info=TT_Qwen3_5ProcessingInfo, dummy_inputs=Qwen3VLDummyInputsBuilder
-)
+@_mm_register
 class Qwen36ForCausalLM(Generator, SupportsMultiModal):
     """vLLM-compatible wrapper for Qwen3.5-9B on Blackhole P150."""
 
@@ -59,6 +75,21 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         "supports_async_decode": False,
         "supports_sample_on_device": True,
     }
+
+    def __init__(self, *args, vllm_config=None, **kwargs):
+        # ``vllm_config`` satisfies vLLM's ``is_vllm_model`` init check; unused on the TT path.
+        _ = vllm_config
+        if args or ("model" in kwargs and "model_args" in kwargs):
+            super().__init__(*args, **kwargs)
+
+    def embed_input_ids(self, input_ids):  # pragma: no cover
+        raise NotImplementedError("TT bridge: use prefill_forward / decode_forward")
+
+    def forward(self, input_ids, positions, **kwargs):  # pragma: no cover
+        raise NotImplementedError("TT bridge: use prefill_forward / decode_forward")
+
+    def compute_logits(self, hidden_states, **kwargs):  # pragma: no cover
+        raise NotImplementedError("TT bridge: logits via prefill_forward / decode_forward")
 
     def _validate_device_sampling_request(self, requested):
         if not requested:
@@ -137,10 +168,9 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         args, model, _ = create_tt_model(
             mesh_device, max_batch_size=max_batch_size, max_seq_len=max_seq_len, hf_model=name_or_path
         )
-        # Attach the TT vision tower so prefill can splice image/video embeddings (multimodal path).
-        # No-op cost for text-only requests; get_image_features / get_video_features are only invoked
-        # when a request actually carries pixel_values / pixel_values_videos.
-        model.init_vision_model()
+        # Vision tower only when this vLLM build has Qwen3.5 MM helpers (text-only 0.10.x skips it).
+        if _HAS_QWEN35_MM:
+            model.init_vision_model()
         return cls([model], [args], mesh_device)
 
     def allocate_kv_cache(self, kv_cache_shape, dtype, num_layers):
