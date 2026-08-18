@@ -10,7 +10,7 @@ Ties the validated blocks into one persistent, multi-request object (mirroring t
 + captures, then the request-path methods are fast and reusable):
 
     XttsV2(mesh_device=None, ckpt_path=None)   # opens a (1,1) mesh if not given one
-      .warmup()                                # compile all programs + capture the decode trace
+      .warmup()                                # compile all programs + capture the traces
       .compute_voice(ref_audio, sr) -> Voice   # reference clip -> conditioning latents (Blocks 1+2)
       .generate(text, voice, ...)  -> [1,1,N]  # text -> 24 kHz waveform (Block 3 GPT + Block 4 vocoder)
       .close()
@@ -24,10 +24,11 @@ with `seen` per step; measured ~240x slower by step 586).
 Device layout notes carried over from the block bringups:
   * `l1_small_size=65536` is REQUIRED: the fp32 HiFi-GAN convs' halo config OOMs in the
     default/32K L1_SMALL (BUG-2/3 in the block docs).
-  * `trace_region_size=60_000_000` holds the traced 30-layer GPT decode step.
+  * `trace_region_size=120_000_000` holds the traced 30-layer GPT decode step (3 MB) plus one
+    vocoder trace per VOC_BUCKETS shape (11-37 MB each, 95 MB together).
   * Blocks 1 (cond+perceiver) and 4 (vocoder) run fp32 activations (PCC); Blocks 2/3 bf16.
 
-Trace lifecycle — WHY the trace is captured once (option (a)):
+Trace lifecycle — WHY the decode trace is captured once (option (a)):
   Capturing the decode trace after a single request's prefill serves that one request; for
   serving, consecutive `generate()` calls must all replay a valid trace. The known
   hazard is that device buffers allocated AFTER capture can land on the trace's baked
@@ -36,9 +37,12 @@ Trace lifecycle — WHY the trace is captured once (option (a)):
   tensor (weights, KV caches, the trace's stable in/out slots, `_pos`) BEFORE capture, and
   everything allocated afterwards (per-request prefill activations, Block-1/2/4
   activations, per-step host->device embeddings) is transient: dead before the next
-  trace replay reads or writes anything. `warmup()` captures ONE trace at the model-cap
-  max_seq (32 cond + 404 text + 1 START + 605 audio = 1042, rounded up internally per
-  BUG-1), and each request then just does reset_caches + prefill + traced steps.
+  trace replay reads or writes anything. `warmup()` captures ONE decode trace at the
+  model-cap max_seq (32 cond + 404 text + 1 START + 605 audio = 1042, rounded up internally
+  per BUG-1), and each request then just does reset_caches + prefill + traced steps. The
+  vocoder traces (one per VOC_BUCKETS shape) obey the same rule plus one of their own: every
+  trace's persistent state must exist before ANY capture, or one trace's replay lands on
+  another's buffers — see `_capture_vocoder`.
   Verified empirically during bringup: two consecutive
   generates produce sane audio, and a teacher-forced golden replay through the SAME
   captured trace AFTER those generates still matches `golden/gpt/latents.pt` at
@@ -155,7 +159,7 @@ class XttsV2:
 
     Usage:
         tts = XttsV2()                       # or XttsV2(mesh_device=..., ckpt_path=...)
-        tts.warmup()                         # once; compiles + captures the decode trace
+        tts.warmup()                         # once; compiles + captures the traces
         voice = tts.compute_voice(ref, sr)   # once per speaker
         wav = tts.generate("Hello!", voice)  # [1,1,N] float @ 24 kHz; repeatable
         tts.close()
@@ -174,9 +178,10 @@ class XttsV2:
             # 256K because conv halo-config tensors are PINNED in L1_SMALL per compiled shape
             # (see VOC_BUCKETS): the vocoder is held to 4 shapes, and compute_voice legitimately
             # sees a new speaker-encoder conv shape per distinct reference-clip length, and
-            # each pins a few KB. The trace region holds the captured 30-layer decode step.
+            # each pins a few KB. The trace region holds the decode step + one vocoder trace
+            # per bucket.
             self.mesh_device = ttnn.open_mesh_device(
-                ttnn.MeshShape(1, 1), l1_small_size=262144, trace_region_size=60_000_000
+                ttnn.MeshShape(1, 1), l1_small_size=262144, trace_region_size=120_000_000
             )
             self._owns_device = True
         else:
@@ -216,17 +221,19 @@ class XttsV2:
         # clearing happens per-XttsV2 instance, after that instance's own build.
         load_full_state.cache_clear()
         self._warm = False
+        self._voc_traces = {}  # bucket length -> (trace_id, z_in, g_in, out), captured at warmup
         self.last_timings = {}
         logger.info(f"[XttsV2] built (ckpt={self.ckpt_path}) in {time.time() - t0:.1f}s")
 
     # ------------------------------------------------------------------ warmup
     def warmup(self):
-        """Compile every program the request path uses, then capture the decode trace.
+        """Compile every program the request path uses, then capture the traces.
 
         Order matters (same discipline as z_image_turbo): programs compiled after capture
         risk landing where the trace keeps intermediates, so compile Blocks 1/2 (a full 6 s
         conditioning chunk — the shape every long reference hits), the vocoder at every
-        VOC_BUCKETS shape, one prefill, and the decode step BEFORE `capture()`. (Per-request
+        VOC_BUCKETS shape (also captured), one prefill, and the decode step BEFORE `capture()`.
+        Vocoder trace state is allocated here, i.e. before the decode capture. (Per-request
         prefill at a NEW prompt length still compiles a few programs post-capture — covered
         by the teacher-forced trace check in the bringup validation.)"""
         t0 = time.time()
@@ -236,13 +243,7 @@ class XttsV2:
         voice = self.compute_voice(dummy, 22050)
         logger.info(f"[XttsV2] warmup: Blocks 1+2 compiled in {time.time() - t0:.1f}s")
 
-        # 2) Vocoder at every bucket shape.
-        t1 = time.time()
-        for Lb in VOC_BUCKETS:
-            self._vocode(torch.zeros(1, 1024, Lb), voice.speaker_embedding)
-        logger.info(f"[XttsV2] warmup: vocoder compiled at {len(VOC_BUCKETS)} buckets in {time.time() - t1:.1f}s")
-
-        # 3) One eager prefill (compiles fill_cache/SDPA/etc.), then capture the step trace.
+        # 2) One eager prefill (compiles fill_cache/SDPA/etc.), then capture the step trace.
         t1 = time.time()
         prefix = assemble_prompt(
             self.tokenizer.encode("Warm up the decoder.", "en"), voice.gpt_cond_latent, self.tables
@@ -254,6 +255,11 @@ class XttsV2:
         logger.info(
             f"[XttsV2] warmup: GPT prefill + trace captured in {time.time() - t1:.1f}s (max_seq={self.decoder.max_seq})"
         )
+
+        # 3) Vocoder at every bucket shape, each captured for replay.
+        t1 = time.time()
+        self._capture_vocoder(voice.speaker_embedding)
+        logger.info(f"[XttsV2] warmup: vocoder traced at {len(VOC_BUCKETS)} buckets in {time.time() - t1:.1f}s")
 
         # 4) Tiny end-to-end generate: replays the fresh trace over the whole request path.
         t1 = time.time()
@@ -301,16 +307,52 @@ class XttsV2:
         return Voice(gpt_cond_latent=cond, speaker_embedding=spk)
 
     # --------------------------------------------------------------- generation
+    def _capture_vocoder(self, speaker_embedding):
+        """Trace the vocoder at every VOC_BUCKETS shape — replay costs no host op dispatch, and
+        the block is ~78 DRAM-sliced convs' worth of it.
+
+        Both loops are needed. A capture cannot compile, so every shape runs eagerly first; that
+        pass also allocates the stable slots and ttnn's prepared conv weights. All of it must
+        exist BEFORE any capture: a capture frees its intermediates on exit, the next shape's
+        persistent buffers land on those addresses, and replaying the earlier trace then writes
+        over them. Weights are never rewritten per request, so the damage sticks — measured as
+        one bucket silently changing another bucket's audio after a few interleaved requests."""
+        dev = self.mesh_device
+        slots = {}
+        for Lb in VOC_BUCKETS:
+            z_in = ttnn.from_torch(
+                torch.zeros(1, 1, Lb, 1024), dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev
+            )
+            g_in = ttnn.from_torch(
+                speaker_embedding.reshape(1, 512), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=dev
+            )
+            self.vocoder(z_in, g_in)
+            slots[Lb] = (z_in, g_in)
+        ttnn.synchronize_device(dev)
+        for Lb, (z_in, g_in) in slots.items():
+            trace_id = ttnn.begin_trace_capture(dev, cq_id=0)
+            out = self.vocoder(z_in, g_in)
+            ttnn.end_trace_capture(dev, trace_id, cq_id=0)
+            ttnn.synchronize_device(dev)
+            self._voc_traces[Lb] = (trace_id, z_in, g_in, out)
+
     def _vocode(self, z, speaker_embedding):
         """z torch [1,1024,L] + d-vector -> waveform torch [1,1,L*HOP], padded to z's bucket."""
         dev = self.mesh_device
         L, Lb = z.shape[-1], _voc_bucket(z.shape[-1])
         z_nhwc = F.pad(z, (0, Lb - L)).permute(0, 2, 1).reshape(1, 1, Lb, 1024)
-        z_tt = ttnn.from_torch(z_nhwc, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev)
-        g_tt = ttnn.from_torch(
-            speaker_embedding.reshape(1, 512), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=dev
-        )
-        wav = ttnn.to_torch(self.vocoder(z_tt, g_tt)).to(torch.float32).reshape(1, 1, -1)
+        g_2d = speaker_embedding.reshape(1, 512)
+        trace = self._voc_traces.get(Lb)
+        if trace is None:  # not warmed up (or a shape warmup did not cover): run eager
+            z_tt = ttnn.from_torch(z_nhwc, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev)
+            g_tt = ttnn.from_torch(g_2d, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=dev)
+            out = self.vocoder(z_tt, g_tt)
+        else:
+            trace_id, z_in, g_in, out = trace
+            ttnn.copy_host_to_device_tensor(ttnn.from_torch(z_nhwc, dtype=ttnn.float32), z_in)
+            ttnn.copy_host_to_device_tensor(ttnn.from_torch(g_2d, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT), g_in)
+            ttnn.execute_trace(dev, trace_id, cq_id=0, blocking=False)
+        wav = ttnn.to_torch(out).to(torch.float32).reshape(1, 1, -1)
         return wav[:, :, : L * HOP]  # trim the zero-padded tail
 
     def generate(self, text, voice: Voice, language="en", seed=None, max_new_tokens=GPT_MAX_AUDIO):
@@ -429,7 +471,13 @@ class XttsV2:
 
     # -------------------------------------------------------------------- close
     def close(self):
-        """Release the decode trace and close the device (only if this instance opened it)."""
+        """Release the traces and close the device (only if this instance opened it)."""
+        for trace_id, *_ in self._voc_traces.values():
+            try:
+                ttnn.release_trace(self.mesh_device, trace_id)
+            except Exception:
+                pass  # older ttnn builds release traces on device close
+        self._voc_traces.clear()
         if getattr(self.decoder, "trace_id", None) is not None:
             try:
                 ttnn.release_trace(self.mesh_device, self.decoder.trace_id)
