@@ -79,6 +79,7 @@ ttnn::Tensor unified_routed_expert_moe(
     uint32_t max_dispatched_tokens_per_expert,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     RoutedExpertActivation activation,
+    RoutedExpertImplementation implementation,
     const std::optional<std::vector<ttnn::Tensor>>& gate_biases,
     const std::optional<std::vector<ttnn::Tensor>>& up_biases,
     const std::optional<std::vector<ttnn::Tensor>>& down_biases) {
@@ -111,18 +112,25 @@ ttnn::Tensor unified_routed_expert_moe(
             down_biases->size());
     }
 
-    // Per-expert composite: run the fused SwiGLU kernel on each expert's slice
-    // of the dispatched buffer at that expert's region offset. This fuses the
+    // Per-expert composite: run the selected kernel on each expert's slice of
+    // the dispatched buffer at that expert's region offset. This fuses the
     // old ttnn::extract (input slice) + ttnn::insert (output placement) pair
     // into the reader and writer — no per-expert temporary buffer or extra DRAM
-    // round trip. SwiGluOai/bias variants retain the existing FFN path because
-    // their activation/bias semantics are not implemented by moe_fused_swiglu.
+    // round trip. The fused implementation is intentionally explicit: callers
+    // with SwiGluOai or projection biases must select the unified path.
     //
     // x is the whole shared buffer, so pass this expert's row count
     // (max_dispatched_tokens_per_expert in tiles) as input_m_tiles — the op sizes
     // its grid/chunks to one expert, not the buffer.
     //
-    const bool use_moe_fused_swiglu = activation == RoutedExpertActivation::Silu && !has_bias;
+    const bool use_moe_fused_swiglu = implementation == RoutedExpertImplementation::MoeFusedSwiGlu;
+    if (use_moe_fused_swiglu) {
+        TT_FATAL(
+            activation == RoutedExpertActivation::Silu,
+            "RoutedExpertImplementation::MoeFusedSwiGlu supports only RoutedExpertActivation::Silu");
+        TT_FATAL(
+            !has_bias, "RoutedExpertImplementation::MoeFusedSwiGlu does not support routed-expert projection biases");
+    }
 
     // moe_fused_swiglu readers prefetch the next M block, so its direct-write
     // output may not alias the shared input. Allocate one output for all

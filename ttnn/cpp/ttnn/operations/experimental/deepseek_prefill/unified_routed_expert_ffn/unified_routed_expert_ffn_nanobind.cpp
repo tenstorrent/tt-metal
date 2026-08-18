@@ -20,6 +20,10 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
         .value("Silu", RoutedExpertActivation::Silu)
         .value("SwiGluOai", RoutedExpertActivation::SwiGluOai);
 
+    nb::enum_<RoutedExpertImplementation>(mod, "RoutedExpertImplementation")
+        .value("Unified", RoutedExpertImplementation::Unified)
+        .value("MoeFusedSwiGlu", RoutedExpertImplementation::MoeFusedSwiGlu);
+
     ttnn::bind_function<"unified_routed_expert_ffn", "ttnn.experimental.deepseek_prefill.">(
         mod,
         R"doc(
@@ -121,10 +125,10 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
         mod,
         R"doc(
         MoE-level composite: takes the full dispatched buffer + ALL local
-        experts' weights and loops over local experts in C++. Bias-free SiLU
-        experts launch one ``moe_fused_swiglu`` device program per expert in
-        direct-write mode; other activation/bias variants retain the unified
-        FFN fallback. The writer places each output directly into the shared
+        experts' weights and loops over local experts in C++. The caller chooses
+        ``RoutedExpertImplementation.Unified`` or
+        ``RoutedExpertImplementation.MoeFusedSwiGlu``. The writer places each
+        output directly into the shared
         buffer at its region offset, so no separate ``ttnn::insert`` or
         per-expert temporary-buffer DRAM round trip is needed.
 
@@ -146,6 +150,10 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional)
             activation (ttnn.RoutedExpertActivation, optional):
                 Silu (default, DeepSeek) or SwiGluOai (clamped, MiniMax-M3 / gpt-oss).
+            implementation (ttnn.RoutedExpertImplementation, optional):
+                Unified (default) or MoeFusedSwiGlu. The latter requires
+                bias-free Silu and accepts DRAM-interleaved or DRAM ND-sharded
+                expert weights.
 
         Each per-expert FFN picks its chunk_M_tiles / per_core_M / num_chunks at
         RUNTIME from the device-resident token count, so there is no expected-token
@@ -166,6 +174,7 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("activation") = RoutedExpertActivation::Silu,
+        nb::arg("implementation") = RoutedExpertImplementation::Unified,
         nb::arg("gate_biases") = nb::none(),
         nb::arg("up_biases") = nb::none(),
         nb::arg("down_biases") = nb::none());

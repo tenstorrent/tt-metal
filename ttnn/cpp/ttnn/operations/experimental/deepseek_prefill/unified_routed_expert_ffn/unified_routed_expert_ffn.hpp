@@ -15,6 +15,14 @@
 
 namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn {
 
+// Device implementation used for each local routed expert in the MoE-level
+// composite. Keep this separate from RoutedExpertActivation: implementation is
+// a scheduling/storage choice, while activation controls model semantics.
+enum class RoutedExpertImplementation : uint8_t {
+    Unified = 0,
+    MoeFusedSwiGlu = 1,
+};
+
 // Single-op fused per-expert FFN for DeepSeek V3 prefill on Blackhole.
 //
 // Performs, all inside ONE device program (one row in tt-perf-report):
@@ -89,16 +97,17 @@ ttnn::Tensor unified_routed_expert_ffn(
     const std::optional<ttnn::Tensor>& down_bias = std::nullopt);
 
 // MoE-level composite: takes the dispatched buffer + ALL local experts'
-// weights and loops over local experts in C++. Bias-free SiLU experts use
-// moe_fused_swiglu in direct-write mode; activation/bias variants unsupported
-// by that kernel retain the unified_routed_expert_ffn fallback. Both writers
+// weights and loops over local experts in C++. The caller explicitly selects
+// unified_routed_expert_ffn or moe_fused_swiglu. Both writers
 // place each expert's output directly into the shared output buffer at its
 // region offset (the old per-expert ttnn::insert is fused — no temp buffer or
 // second DRAM round-trip). This is not one device program across experts:
 // Python sees one call, while the device sees one program per local expert.
 //
 // The unified FFN reads counts on-device so each expert's work scales to its
-// actual count. No host-side counts/idx read, no per-expert Python loop.
+// actual count. No host-side counts/idx read, no per-expert Python loop. The
+// Unified implementation requires interleaved weights; MoeFusedSwiGlu accepts
+// its native DRAM interleaved or DRAM ND-sharded weight placements.
 ttnn::Tensor unified_routed_expert_moe(
     const ttnn::Tensor& dispatched_buffer,
     const ttnn::Tensor& expert_region_offsets,
@@ -110,6 +119,7 @@ ttnn::Tensor unified_routed_expert_moe(
     uint32_t max_dispatched_tokens_per_expert,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     RoutedExpertActivation activation = RoutedExpertActivation::Silu,
+    RoutedExpertImplementation implementation = RoutedExpertImplementation::Unified,
     // Optional per-expert biases (gpt-oss), one entry per local expert (same
     // length/order as gate_projs). All three lists together or none. Omit for
     // the bias-free DeepSeek / MiniMax-M3 path.
@@ -121,6 +131,7 @@ ttnn::Tensor unified_routed_expert_moe(
 
 namespace ttnn {
 using operations::experimental::deepseek_prefill::unified_routed_expert_ffn::RoutedExpertActivation;
+using operations::experimental::deepseek_prefill::unified_routed_expert_ffn::RoutedExpertImplementation;
 using operations::experimental::deepseek_prefill::unified_routed_expert_ffn::unified_routed_expert_ffn;
 using operations::experimental::deepseek_prefill::unified_routed_expert_ffn::unified_routed_expert_moe;
 }  // namespace ttnn
