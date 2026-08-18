@@ -127,43 +127,19 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        # setup.py copies the compiled libs into the wheel at <site-packages>/ttnn/build/lib.
-        # `import ttnn` resolves to the installed package (the source tree on PYTHONPATH is
-        # only a namespace portion), so the wheel's own libs are the ones it links against
-        # and they must precede the cmake tarball's build/lib. That only actually differs
-        # when the wheel was compiled separately from the tarball — the manylinux
-        # build-wheel job used by package-and-release; with build-inplace-wheel both copies
-        # come from the same tree and the order is a no-op. Discovered here so no caller
-        # has to know the interpreter version or the venv layout.
-        wheel_lib=$(python3 - <<'PY'
-        import importlib.util, pathlib, sysconfig
-
-        candidates = []
-        try:
-            spec = importlib.util.find_spec("ttnn")
-        except Exception:
-            spec = None
-        # A namespace portion (the source tree) has origin None; skip it.
-        if spec is not None and spec.origin:
-            candidates.append(pathlib.Path(spec.origin).parent)
-        for key in ("purelib", "platlib"):
-            candidates.append(pathlib.Path(sysconfig.get_paths()[key]) / "ttnn")
-
-        for candidate in candidates:
-            lib = candidate / "build" / "lib"
-            if lib.is_dir():
-                print(lib)
-                break
-        PY
-        )
-        if [ -z "$wheel_lib" ]; then
-          echo "::error::Could not locate ttnn/build/lib in the installed wheel. Expected it"
-          echo "::error::under the venv site-packages; every ttnn wheel ships it (setup.py)."
-          echo "Interpreter: $(command -v python3)"
-          python3 -c "import sysconfig; print('purelib:', sysconfig.get_paths()['purelib'])"
+        # The wheel ships its own copies of the compiled libs and `import ttnn` resolves
+        # to the installed package, so they must precede the tarball's build/lib. Only
+        # differs when wheel and tarball were compiled separately (the manylinux
+        # build-wheel job used by package-and-release); with build-inplace-wheel both
+        # come from one tree and the order is a no-op.
+        # Globbed on a worker: job steps run on the control runner, but the venv holding
+        # the wheel is on the workers, so the python version is a worker-side fact.
+        wheel_lib=$(mpirun --pernode bash -lc \
+          'ls -d /opt/venv/lib/python*/site-packages/ttnn/build/lib' | tr -d '\r' | sort -u) || true
+        if [ "$(printf '%s' "$wheel_lib" | grep -c '^')" -ne 1 ]; then
+          echo "::error::Expected one ttnn/build/lib under /opt/venv on the workers, got: ${wheel_lib:-none}"
           exit 1
         fi
-        echo "Wheel native libs: ${wheel_lib}"
         echo "LD_LIBRARY_PATH=${wheel_lib}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}" >> "$GITHUB_ENV"
 
     - name: Reset cards and validate cluster
