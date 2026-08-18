@@ -958,7 +958,6 @@
 
 - name: TT-DiT Flux.1-schnell unit tests
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1
     pytest --timeout 10000 models/tt_dit/tests/models/flux1/test_pipeline_flux1.py -k flux_schnell
@@ -974,7 +973,6 @@
 
 - name: TT-DiT Flux.1-dev unit tests
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1
     pytest --timeout 10000 models/tt_dit/tests/models/flux1/test_pipeline_flux1.py -k flux_dev
