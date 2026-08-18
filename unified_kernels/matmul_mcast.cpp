@@ -62,7 +62,7 @@
 //   MM_IN1_THREAD              DM thread for the RHS broadcast: 1 on hardware
 //                              (second NOC, overlapped), 0 on ttsim
 
-#include <tt/unified>
+#include <tt/unified/core>
 
 namespace u = tt::unified;
 

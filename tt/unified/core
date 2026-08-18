@@ -2,23 +2,24 @@
 //
 // The unified programming model.
 //
-//     #include <tt/unified>
+//     #include <tt/unified/core>
 //
 // A unified kernel is ONE source describing a whole Tensix pipeline, compiled
 // once per baby RISC-V thread; each statement lowers to that thread's half of
-// the circular-buffer protocol. See tt/unified_api.h for the surface.
+// the circular-buffer protocol. See tt/unified/api.h for the surface.
 //
 // This file is the version selector. Today there is one target -- Metal v1
 // (Wormhole / Blackhole) -- so it picks the v1 adaptor and implementation
 // unconditionally. As other metal versions arrive the choice happens here, and
 // nothing above it changes:
 //
-//     tt/unified                   -- this file: selects backend + implementation
-//       tt/unified_adaptor_v1.hpp  -- binds the model's intrinsics to metal v1
-//       tt/unified_api.h           -- core API declarations (version-agnostic)
-//         tt/unified_math.hpp      -- leaves, ops, fusion kinds, strategies
-//           tt/unified_expr.hpp    -- domain-free expression tree + allocator
-//       tt/unified_impl_v1.hpp     -- definitions for the v1 target
+//     tt/unified/
+//       core               -- this file: selects a backend + implementation
+//         adaptor_v1.hpp   -- binds the model's intrinsics to metal v1
+//         api.h            -- core API declarations (version-agnostic)
+//           math.hpp       -- leaves, ops, fusion kinds, strategies
+//             expr.hpp     -- domain-free expression tree + allocator
+//         impl_v1.hpp      -- definitions for the v1 target
 //
 // To bind against something other than metal -- the host trace harness, say --
 // define TT_UNIFIED_CUSTOM_BINDING and provide the intrinsics yourself before
@@ -27,8 +28,8 @@
 #pragma once
 
 #ifndef TT_UNIFIED_CUSTOM_BINDING
-#include <tt/unified_adaptor_v1.hpp>
+#include <tt/unified/adaptor_v1.hpp>
 #endif
 
-#include <tt/unified_api.h>
-#include <tt/unified_impl_v1.hpp>
+#include <tt/unified/api.h>
+#include <tt/unified/impl_v1.hpp>
