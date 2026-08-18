@@ -559,7 +559,9 @@ class TtModelArgs:
 
         # Load model params. Galaxy Llama 3.3-70B always runs on HuggingFace checkpoints, so the
         # HF config (also available under TT_CACHE_PATH in CI) drives the params for both real and
-        # dummy weights.
+        # dummy weights. dummy_weights must be set before _set_hf_params: dummy runs read the
+        # bundled in-repo config instead of touching the HF hub/cache.
+        self.dummy_weights = dummy_weights
         self.checkpoint_type = CheckpointType.HuggingFace
         self._set_hf_params(self.CKPT_DIR)
 
@@ -567,8 +569,6 @@ class TtModelArgs:
             self.optimizations = optimizations(self.model_name)
         else:
             self.optimizations = optimizations
-
-        self.dummy_weights = dummy_weights
         self.tile_padded_batch_rows = self.tile_size * int(math.ceil(self.max_batch_size / self.tile_size))
 
         # Enable workarounds by default until di/dt issues are fixed
@@ -2188,7 +2188,28 @@ class TtModelArgs:
         from transformers import AutoConfig
 
         if self.from_hf_url:
-            self.hf_config = AutoConfig.from_pretrained(self.model_name, trust_remote_code=self.trust_remote_code_hf)
+            if self.dummy_weights:
+                # Dummy-weight runs must not depend on the HF hub or its on-disk cache: CI galaxy
+                # runners set HF_HUB_OFFLINE and the gated meta-llama repo may be absent from the
+                # runner's cache. Mirror tt_transformers.LOCAL_HF_PARAMS and load the architecture
+                # config bundled in-repo instead.
+                local_params_dir = os.path.join(
+                    os.path.dirname(os.path.abspath(__file__)),
+                    "..",
+                    "model_params",
+                    os.path.basename(self.model_name),
+                )
+                assert os.path.exists(
+                    os.path.join(local_params_dir, "config.json")
+                ), f"No bundled HF config for dummy weights at {local_params_dir}"
+                logger.info(f"Dummy weights: loading bundled HF config from {local_params_dir}")
+                self.hf_config = AutoConfig.from_pretrained(
+                    local_params_dir, trust_remote_code=self.trust_remote_code_hf
+                )
+            else:
+                self.hf_config = AutoConfig.from_pretrained(
+                    self.model_name, trust_remote_code=self.trust_remote_code_hf
+                )
             config = self.hf_config.to_dict()
         else:
             config_file = os.path.join(checkpoint_dir, "config.json")
