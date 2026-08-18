@@ -14,6 +14,7 @@
 #include "llk_math_eltwise_sfpu_common.h"
 #include "lltt.h"
 #include "sfpi.h"
+#include "tensor_shape.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -40,33 +41,35 @@ namespace sfpu {
 // left-to-right then top-to-bottom:
 //   Face 0 rows 0-15 cols 0-15  (addr 0)  | Face 1 rows 0-15 cols 16-31 (addr 16)
 //   Face 2 rows 16-31 cols 0-15 (addr 32) | Face 3 rows 16-31 cols 16-31 (addr 48)
-constexpr std::uint32_t REDUCE_NUM_FACES = 4;
-constexpr std::uint32_t REDUCE_ROWS_PER_LOAD = 4;
-constexpr std::uint32_t REDUCE_ROWS_PER_FACE = 16;
+static_assert(MAX_FACE_R_DIM == 16 && MAX_TILE_R_DIM == 32 && MAX_NUM_FACES == 4);
+
+constexpr std::uint32_t REDUCE_ROWS_PER_LOAD = 4;  // SFPLOAD 4-row dest group
 constexpr std::uint32_t REDUCE_ODD_COLUMNS = p_sfpu::col_offset::ODD_COL;
-constexpr std::uint32_t REDUCE_AVG_SHIFT = 5;  // divide by 32
+constexpr std::uint32_t REDUCE_AVG_SHIFT = 5;  // log2(MAX_TILE_C_DIM)
 constexpr std::uint32_t REDUCE_AVG_SHIFT_MASK = 0xfff;
-// bf16 encoding of 1/32 = 0.03125, used by SFPMULI for float column AVG.
+// bf16 encoding of 1/MAX_TILE_C_DIM = 0.03125, used by SFPMULI for float column AVG.
 constexpr std::uint32_t REDUCE_AVG_RECIP_BF16 = 0x3D00;
 // imm12 bit 11: SFPSETCC reads src_c as two's-complement INT32 (plain sign-bit test).
 constexpr std::uint32_t REDUCE_SETCC_INT32_SIGNBIT = 0x800;
 // vConstIntPrgm0 / LREG12 holds 0x0000FFFF for UInt16 loads. Reduce does not use SFPLUTFP32, so
 // programming this CREG is safe (the LUT intercept only applies to table reads).
 constexpr std::uint32_t REDUCE_UINT16_MASK_LREG = 12;
-// Row-reduce partials land in dest column 0 at these 4-row group addresses.
+
+// Row-reduce partials land in dest column 0: 4-row groups of Face 0 then Face 2.
 constexpr std::uint32_t REDUCE_ROW_RESULT_ADDRS[8] = {0, 4, 8, 12, 32, 36, 40, 44};
 
-constexpr std::uint32_t REDUCE_COL_UPPER_FACE[REDUCE_NUM_FACES] = {0, 0, 16, 16};
-constexpr std::uint32_t REDUCE_COL_LOWER_FACE[REDUCE_NUM_FACES] = {32, 32, 48, 48};
-constexpr std::uint32_t REDUCE_COL_COLUMN_OFFSET[REDUCE_NUM_FACES] = {0, 2, 0, 2};
+// Per-face dest bases for column reduce. Index is the even/odd half of each face pair.
+constexpr std::uint32_t REDUCE_COL_UPPER_FACE[MAX_NUM_FACES] = {0, 0, 16, 16};
+constexpr std::uint32_t REDUCE_COL_LOWER_FACE[MAX_NUM_FACES] = {32, 32, 48, 48};
+constexpr std::uint32_t REDUCE_COL_COLUMN_OFFSET[MAX_NUM_FACES] = {0, 2, 0, 2};
 
-constexpr std::uint32_t REDUCE_COL_FACE_ADDRS[2][REDUCE_NUM_FACES] = {
-    {0, 0, 32, 32},
-    {16, 16, 48, 48},
+constexpr std::uint32_t REDUCE_COL_FACE_ADDRS[MAX_NUM_FACES_C_DIM][MAX_NUM_FACES] = {
+    {0, 0, 32, 32},    // even cols: Face 0, Face 0, Face 2, Face 2
+    {16, 16, 48, 48},  // odd cols:  Face 1, Face 1, Face 3, Face 3
 };
-constexpr std::uint32_t REDUCE_COL_FINAL_ADDRS[2][2] = {
-    {0, 32},
-    {16, 48},
+constexpr std::uint32_t REDUCE_COL_FINAL_ADDRS[MAX_NUM_FACES_C_DIM][MAX_NUM_FACES_R_DIM] = {
+    {0, 32},   // even: Face 0, Face 2
+    {16, 48},  // odd:  Face 1, Face 3
 };
 
 // =============================================================================
@@ -399,7 +402,7 @@ inline void _calculate_reduce_col_sum_avg_() {
     constexpr std::uint32_t SFPMEM = _reduce_sfpmem_<FMT>();
     constexpr std::uint32_t RESULT_SFPMEM = _reduce_store_sfpmem_<PACK_LOW16>(SFPMEM);
 
-    for (std::uint32_t i = 0; i < REDUCE_NUM_FACES; i++) {
+    for (std::uint32_t i = 0; i < MAX_NUM_FACES; i++) {
         const std::uint32_t upper = REDUCE_COL_UPPER_FACE[i];
         const std::uint32_t lower = REDUCE_COL_LOWER_FACE[i];
         const std::uint32_t col = REDUCE_COL_COLUMN_OFFSET[i];
@@ -436,11 +439,11 @@ inline void _calculate_reduce_col_max_min_() {
     constexpr std::uint32_t SFPMEM = _reduce_sfpmem_<FMT>();
     constexpr std::uint32_t RESULT_SFPMEM = _reduce_store_sfpmem_<PACK_LOW16>(SFPMEM);
 
-    for (std::uint32_t j = 0; j < 2; j++) {
+    for (std::uint32_t j = 0; j < MAX_NUM_FACES_C_DIM; j++) {
         const std::uint32_t top_face = REDUCE_COL_FINAL_ADDRS[j][0];
         const std::uint32_t bot_face = REDUCE_COL_FINAL_ADDRS[j][1];
 
-        for (std::uint32_t i = 0; i < REDUCE_NUM_FACES; i++) {
+        for (std::uint32_t i = 0; i < MAX_NUM_FACES; i++) {
             _reduce_load_face_<SFPMEM, CLEAR_HIGH>(
                 p_sfpu::LREG4, REDUCE_COL_FACE_ADDRS[j][i], REDUCE_COL_COLUMN_OFFSET[i]);
             lltt::replay(0, REDUCE_TREE_CSWAP_LEN);
@@ -479,12 +482,12 @@ template <std::uint32_t SFPMEM, bool CLEAR_HIGH>
 inline void _reduce_load_row_halves_(const std::uint32_t group_a, const std::uint32_t group_b) {
     _reduce_load_<CLEAR_HIGH>(p_sfpu::LREG0, SFPMEM, group_a);
     _reduce_load_<CLEAR_HIGH>(p_sfpu::LREG1, SFPMEM, group_a + REDUCE_ODD_COLUMNS);
-    _reduce_load_<CLEAR_HIGH>(p_sfpu::LREG2, SFPMEM, group_a + REDUCE_ROWS_PER_FACE);
-    _reduce_load_<CLEAR_HIGH>(p_sfpu::LREG3, SFPMEM, group_a + REDUCE_ROWS_PER_FACE + REDUCE_ODD_COLUMNS);
+    _reduce_load_<CLEAR_HIGH>(p_sfpu::LREG2, SFPMEM, group_a + MAX_FACE_R_DIM);
+    _reduce_load_<CLEAR_HIGH>(p_sfpu::LREG3, SFPMEM, group_a + MAX_FACE_R_DIM + REDUCE_ODD_COLUMNS);
     _reduce_load_<CLEAR_HIGH>(p_sfpu::LREG4, SFPMEM, group_b);
     _reduce_load_<CLEAR_HIGH>(p_sfpu::LREG5, SFPMEM, group_b + REDUCE_ODD_COLUMNS);
-    _reduce_load_<CLEAR_HIGH>(p_sfpu::LREG6, SFPMEM, group_b + REDUCE_ROWS_PER_FACE);
-    _reduce_load_<CLEAR_HIGH>(p_sfpu::LREG7, SFPMEM, group_b + REDUCE_ROWS_PER_FACE + REDUCE_ODD_COLUMNS);
+    _reduce_load_<CLEAR_HIGH>(p_sfpu::LREG6, SFPMEM, group_b + MAX_FACE_R_DIM);
+    _reduce_load_<CLEAR_HIGH>(p_sfpu::LREG7, SFPMEM, group_b + MAX_FACE_R_DIM + REDUCE_ODD_COLUMNS);
 }
 
 template <PoolType POOL, DataFormat FMT, bool CLEAR_HIGH>
@@ -492,8 +495,8 @@ inline void _perform_reduce_row_tile_(const std::uint32_t tile_offset, const std
     constexpr bool IS_MAX_MIN = (POOL == PoolType::MAX || POOL == PoolType::MIN);
     constexpr std::uint32_t SFPMEM = _reduce_sfpmem_<FMT>();
 
-    for (std::uint32_t face_pair = 0; face_pair < 2; face_pair++) {
-        const std::uint32_t face_pair_base = face_pair * 2 * REDUCE_ROWS_PER_FACE;
+    for (std::uint32_t face_pair = 0; face_pair < MAX_NUM_FACES_R_DIM; face_pair++) {
+        const std::uint32_t face_pair_base = face_pair * MAX_TILE_R_DIM;
         for (std::uint32_t row_group = 0; row_group < 2; row_group++) {
             const std::uint32_t group_a = tile_offset + face_pair_base + row_group * 2 * REDUCE_ROWS_PER_LOAD;
             const std::uint32_t group_b = group_a + REDUCE_ROWS_PER_LOAD;
@@ -517,15 +520,15 @@ inline void _perform_reduce_row_tile_(const std::uint32_t tile_offset, const std
     }
 }
 
-// Single-tile row AVG divides by 32 in-register before the store. Multi-tile rows accumulate first
-// and divide in _combine_first_columns_ instead.
+// Single-tile row AVG divides by MAX_TILE_C_DIM in-register before the store. Multi-tile rows
+// accumulate first and divide in _combine_first_columns_ instead.
 template <DataFormat FMT, bool CLEAR_HIGH>
 inline void _perform_reduce_row_avg_tile_(const std::uint32_t tile_offset, const std::uint32_t store_sfpmem) {
     constexpr bool IS_INTEGER = _reduce_is_integer_<FMT>();
     constexpr std::uint32_t SFPMEM = _reduce_sfpmem_<FMT>();
 
-    for (std::uint32_t face_pair = 0; face_pair < 2; face_pair++) {
-        const std::uint32_t face_pair_base = face_pair * 2 * REDUCE_ROWS_PER_FACE;
+    for (std::uint32_t face_pair = 0; face_pair < MAX_NUM_FACES_R_DIM; face_pair++) {
+        const std::uint32_t face_pair_base = face_pair * MAX_TILE_R_DIM;
         for (std::uint32_t row_group = 0; row_group < 2; row_group++) {
             const std::uint32_t group_a = tile_offset + face_pair_base + row_group * 2 * REDUCE_ROWS_PER_LOAD;
             const std::uint32_t group_b = group_a + REDUCE_ROWS_PER_LOAD;
@@ -533,7 +536,7 @@ inline void _perform_reduce_row_avg_tile_(const std::uint32_t tile_offset, const
 
             lltt::replay(0, REDUCE_TREE_ADD_FULL_LEN);
             _horizontal_reduce_sum_<IS_INTEGER>();
-            _reduce_load_reciprocal_(p_sfpu::LREG2, 32u);
+            _reduce_load_reciprocal_(p_sfpu::LREG2, MAX_TILE_C_DIM);
             TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
             TTI_SFPMUL(p_sfpu::LREG4, p_sfpu::LREG2, p_sfpu::LCONST_0, p_sfpu::LREG4, 0);
 
@@ -580,7 +583,7 @@ inline void _combine_first_columns_(const std::uint32_t tile_row_base, const std
         }
 
         if constexpr (IS_AVG) {
-            _reduce_load_reciprocal_(p_sfpu::LREG4, 32u * block_ct_dim);
+            _reduce_load_reciprocal_(p_sfpu::LREG4, MAX_TILE_C_DIM * block_ct_dim);
             TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG4, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
             TTI_SFPMUL(p_sfpu::LREG1, p_sfpu::LREG4, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
             TTI_SFPMUL(p_sfpu::LREG2, p_sfpu::LREG4, p_sfpu::LCONST_0, p_sfpu::LREG2, 0);
