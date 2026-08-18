@@ -602,21 +602,6 @@ class Model:
 
         return logits
 
-    def slice_last_token_block(self, x, last_token_idx, out=None):
-        """Slice out the 32-token tile containing ``last_token_idx``.
-
-        ``out`` writes into a caller-owned tensor instead of allocating a fresh one. The generator relies
-        on that to run this slice with a trace live on device: the tile is the input buffer of the traced
-        post-prefill tail, so the slice must not allocate (see Generator._run_post_prefill).
-        """
-        get_last_token = (last_token_idx // 32) * 32
-        return ttnn.slice(
-            x,
-            (0, 0, get_last_token, 0),
-            (1, 1, get_last_token + 32, x.shape[-1]),
-            output_tensor=out,
-        )
-
     def process_logits_after_prefill_trace(self, logits, last_token_idx):
         """
         Post-process traced prefill output to the 32-token tile containing `last_token_idx`.
@@ -624,7 +609,13 @@ class Model:
         Unlike tt_transformers `Transformer`, GPT-OSS `ttnn_prefill_forward` already
         applies final norm + lm_head, so this method only slices logits.
         """
-        return self.slice_last_token_block(logits, last_token_idx)
+        get_last_token = (last_token_idx // 32) * 32
+        logits = ttnn.slice(
+            logits,
+            (0, 0, get_last_token, 0),
+            (1, 1, get_last_token + 32, logits.shape[-1]),
+        )
+        return logits
 
     def prepare_row_sharded_prefill_iter(
         self, tokens, page_table, prompt_lens, iter_idx, max_padded_len, max_num_blocks, users_per_row_per_iter=1
@@ -722,15 +713,9 @@ class Model:
         model_args=None,
         trace_cache=None,
         empty_slots=None,
-        before_capture=None,
     ):
         """Row-parallel batched prefill: 1 user per row per iteration.
 
-        ``before_capture``: optional callback invoked once, immediately before the trace capture and after
-        this path's own trace inputs are allocated. It is the last point at which a caller can allocate
-        long-lived buffers with no trace live; the generator uses it to stage the decode trace's inputs,
-        which would otherwise be allocated during the decode loop, inside this trace's scratch, and be
-        overwritten on every replay.
 
         Allocation only -- do not compile from here. Compiling a decode program at this point makes the
         capture below deadlock in the MoE dispatch, and compiling one before any prefill has run deadlocks
@@ -868,11 +853,6 @@ class Model:
                 ho = self.prepare_inputs_prefill(t0, page_table=p0, trace_enabled=True, batched_prefill=True)
                 hi = (ho[0], ho[3], ho[4])
                 di = copy_host_to_device(hi, mesh_device=mesh_device)
-                # Last moment at which a caller can allocate long-lived buffers with no trace live.
-                # Deliberately after ``di``: the trace binds to those buffers, and letting the callback
-                # allocate first would move them off the addresses the compile pass just used.
-                if before_capture is not None:
-                    before_capture()
                 tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
                 tr = self.transform_and_embed_prefill_inputs_device(*di)
                 tt_out = self.ttnn_prefill_forward(

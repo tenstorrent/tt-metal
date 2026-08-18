@@ -904,19 +904,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         assert (
             self.data_parallel == 1
         ), "Row-sharded batched prefill requires data_parallel=1 (model handles DP internally)"
-        before_capture = None
-        if enable_trace and self._prealloc_decode_inputs is None and not self._any_trace_captured():
-            # Allocate decode's persistent trace inputs in the one window this path leaves: after its own
-            # trace inputs are staged, before its capture. These are the buffers that matter -- they are
-            # refreshed in place for the entire decode loop, so allocating them later (with the prefill
-            # trace live) leaves them sitting in that trace's scratch, to be overwritten on every replay.
-            # The transient buffers of decode's compile pass are not hoisted with them: compiling decode
-            # here makes the capture below deadlock, so that pass stays in the decode loop. Its allocations
-            # are freed before anything replays, which is why they are the tolerable half of this.
-            # Same prefetcher exclusion as _prepare_decode_trace_once: staging decode inputs from inside
-            # the prefill capture window is not safe for prefetcher-driven models.
-            if not self._uses_prefetcher():
-                before_capture = lambda: self._stage_prealloc_decode_inputs(page_table)  # noqa: E731
         return self.model[0].row_sharded_batched_prefill(
             tokens,
             page_table,
@@ -932,7 +919,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 "outputs": self.trace_output_prefill,
             },
             empty_slots=empty_slots,
-            before_capture=before_capture,
         )
 
     def _easy_trace_prefill(

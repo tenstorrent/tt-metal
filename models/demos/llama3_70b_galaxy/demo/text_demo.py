@@ -1208,15 +1208,6 @@ def test_demo_text(
                     enable_trace=prefill_enable_trace,
                     tt_out_logits_all_users=tt_out_logits_all_users,
                     sampling_params=device_sampling_params,
-                    # Declare the layout the decode loop below will use, so warmup can capture the decode
-                    # trace before the prefill traces instead of leaving its compile pass -- prefetcher,
-                    # CCLs, sampling module -- to allocate behind them. Must match the decode_forward call.
-                    decode_layout={
-                        "is_cur_pos_sharded": is_cur_pos_sharded,
-                        "is_page_table_sharded": is_page_table_sharded,
-                        # decode_forward always passes sampling_params, so decode returns on-device logits.
-                        "on_device_logits": True,
-                    },
                 )
             except Exception as e:
                 logger.error(f"Error during prefill warmup: {str(e)}")

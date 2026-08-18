@@ -544,12 +544,6 @@ def format_sampling_params(sampling_params, max_batch_size):
             # Device sampling treats p=0 as a first-token cutoff; with k=1
             # this is the compact argmax representation for greedy rows.
             top_p[i] = 0.0
-            # A greedy row has a single candidate and never draws from the RNG, so a seed on it cannot
-            # change the sampled token. Clear it: otherwise a caller-supplied default (seed=0 rather
-            # than None is enough) marks the request "explicitly seeded", which forces sampling off its
-            # captured trace and re-runs the whole sampling graph every token -- allocating device
-            # buffers behind live traces on every step, where they can be corrupted on replay.
-            seed[i] = None
         else:
             temperature[i] = 1 / temperature[i]
 
