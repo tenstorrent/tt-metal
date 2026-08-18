@@ -40,8 +40,10 @@ TILE = 32
 
 def run(device, ht=4, wt=4, grid_h=2, grid_w=2, num_blocks=1, seed=0):
     torch.manual_seed(seed)
-    # Keep values small and centred so a 32*ht-deep bfloat16 sum stays accurate.
-    a = ((torch.rand([1, 1, num_blocks * ht * TILE, wt * TILE]) - 0.5) * 0.5).to(torch.bfloat16)
+    # One input block per (block, column): column x reads b * grid_w + x, so every
+    # column reduces different data and a mis-indexed column shows up as garbage.
+    # Values kept small and centred so a 32*ht-deep bfloat16 sum stays accurate.
+    a = ((torch.rand([1, 1, num_blocks * grid_w * ht * TILE, wt * TILE]) - 0.5) * 0.5).to(torch.bfloat16)
 
     dram = ttnn.DRAM_MEMORY_CONFIG
     ta = ttnn.from_torch(a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=dram)
@@ -93,12 +95,13 @@ def run(device, ht=4, wt=4, grid_h=2, grid_w=2, num_blocks=1, seed=0):
     af = a.to(torch.float32)
     got_rows, want_rows = [], []
     for b in range(num_blocks):
-        # Each core reduces block b down its rows; its column then sums grid_h of
-        # those. Every column reads the same input, so every column's slot must
-        # hold the same answer -- and each must be written, which is what catches
-        # two columns sharing one output slot.
-        block = af[0, 0, b * ht * TILE : (b + 1) * ht * TILE, :]
         for x in range(grid_w):
+            # Column x reduces input block b * grid_w + x down its rows; the grid_h
+            # cores of the column all read that block, so the gather sums grid_h
+            # copies of it. Distinct data per column, so the check catches a column
+            # reading or writing the wrong index.
+            k = b * grid_w + x
+            block = af[0, 0, k * ht * TILE : (k + 1) * ht * TILE, :]
             want_rows.append(block.sum(dim=0) * grid_h)
             got_rows.append(got_full[0, 0, b * TILE, x * wt * TILE : (x + 1) * wt * TILE])
 

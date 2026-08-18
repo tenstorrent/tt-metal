@@ -26,10 +26,10 @@
 //   1        in1 base address
 //   2        out base address
 //
-// `out` holds num_blocks x kCoreGridW results of reduced_tiles_per_block tiles
-// each, indexed b * kCoreGridW + column. Every column reduces the same input for
-// now -- the load is indexed by block alone -- so the columns are redundant
-// copies; index the load per column too to make them independent.
+// Columns are independent: column x reduces input block b * kCoreGridW + x and
+// writes result block b * kCoreGridW + x, so `in0` and `out` both hold
+// num_blocks x kCoreGridW blocks and the two indexings line up. The cores WITHIN a
+// column still share a block, so their gather sums kCoreGridH copies of it.
 
 #include <tt/unified/core>
 
@@ -89,7 +89,8 @@ void kernel_main() {
     const uint32_t byte_offset = this_core.y * reduced_tiles_per_block * u::cb_page_bytes(kCbTmp1);
 
     for (uint32_t b = 0; b < num_blocks; ++b) {
-        u::ComputeBlock a = u::noc_load<1>(in0_storage, in0, b).wait();
+        // Column x owns its own input block, the same index its result goes to.
+        u::ComputeBlock a = u::noc_load<1>(in0_storage, in0, b * u::kCoreGridW + this_core.x).wait();
 
         u::Block per_core_sum = tmp0_storage.store(u::reduce_sum<PerCore, kAxis>(a, scaler_storage));
 
