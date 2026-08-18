@@ -79,6 +79,9 @@ except ImportError:  # profiler build absent: keep the module runnable for the w
 
 
 PROFILE_SEQ_LEN = int(os.environ.get("PROFILE_SEQ_LEN", 512))
+# Layers this profile builds. 36 = the whole model (default, the single-rank numbers). 9 = 36/4,
+# i.e. ONE PP=4 stage — pair with mesh-8x1 to time the stage geometry the PP proposal targets.
+PROFILE_NUM_LAYERS = int(os.environ.get("PROFILE_NUM_LAYERS", 36))
 PROFILE_ISL = int(os.environ.get("PROFILE_ISL", 64))  # real tokens, like a short chat prompt
 WARMUP = int(os.environ.get("PROFILE_WARMUP", 3))
 REPS = int(os.environ.get("PROFILE_REPS", 8))
@@ -273,6 +276,22 @@ _marks = [
                 ttnn.Topology.Linear,
                 id="mesh-8x4",
             ),
+            # The PP=4 stage geometry: SP=8 x TP=1 on an 8-chip carve (TT_VISIBLE_DEVICES=0..7).
+            # Pair with PROFILE_NUM_LAYERS=9 to time one stage. Per-chip token count matches mesh-8x4
+            # at the same window (both isl/8), so the traced times are directly comparable, and
+            # PP=4 steady-state throughput ~= 1 / T(one stage).
+            pytest.param(
+                (8, 1),
+                {
+                    "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                    "fabric_router_config": create_fabric_router_config(
+                        max_payload_size=MistralSmall4Config.FABRIC_PAYLOAD_SIZE
+                    ),
+                },
+                2,
+                ttnn.Topology.Linear,
+                id="mesh-8x1",
+            ),
         ],
         indirect=["mesh_device", "device_params"],
     ),
@@ -311,7 +330,7 @@ def _build_and_run(
         False,  # is_balanced
         PROFILE_SEQ_LEN,
         8,  # dispatch_buffer_capacity_factor
-        36,  # num_layers
+        PROFILE_NUM_LAYERS,  # num_layers (9 = one PP=4 stage; 36 = whole model)
         MistralSmall4Config.NUM_ROUTED_EXPERTS,
         GateComputeMode.GPT_DEVICE,
         num_links,

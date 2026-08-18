@@ -260,20 +260,32 @@ class TtDistributedRmsNorm(LightweightModule):
         )
         logger.debug(f"Pre-all-gather stats shape: {tt_stats.shape}")
 
-        # Step 2: All-gather stats across cluster_axis
-        all_gather_kwargs = {
-            "input_tensor": tt_stats,
-            "dim": 3,
-            "cluster_axis": self.cluster_axis,
-            "num_links": self.num_links,
-            "topology": self.topology,
-        }
-        if self.stats_memcfg is not None:
-            all_gather_kwargs["memory_config"] = self.stats_memcfg
+        # Step 2: All-gather stats across cluster_axis.
+        #
+        # TP=1 (a PP=4 x (8,1) stage) makes cluster_axis length 1, and ttnn.all_gather TT_FATALs on
+        # num_devices == 1 rather than degenerating to a copy. An all-gather over one device IS the
+        # identity, and with no TP split each device already holds the full hidden dim, so its local
+        # sum(x^2) is already the global statistic. Pass the local stats straight to
+        # rms_norm_post_all_gather: same kernels, same numerics, no collective. Deliberately NOT a
+        # switch to a plain ttnn.rms_norm — keeping the pre/post pair means the TP=1 path cannot drift
+        # numerically from the TP>1 one.
+        if self.mesh_device.shape[self.cluster_axis] == 1:
+            tt_gathered_stats = tt_stats  # freed once, below
+            logger.debug("cluster_axis length 1 (TP=1): skipping the stats all-gather (identity)")
+        else:
+            all_gather_kwargs = {
+                "input_tensor": tt_stats,
+                "dim": 3,
+                "cluster_axis": self.cluster_axis,
+                "num_links": self.num_links,
+                "topology": self.topology,
+            }
+            if self.stats_memcfg is not None:
+                all_gather_kwargs["memory_config"] = self.stats_memcfg
 
-        tt_gathered_stats = ttnn.all_gather(**all_gather_kwargs)
-        ttnn.deallocate(tt_stats)
-        logger.debug(f"Gathered stats shape: {tt_gathered_stats.shape}")
+            tt_gathered_stats = ttnn.all_gather(**all_gather_kwargs)
+            ttnn.deallocate(tt_stats)
+            logger.debug(f"Gathered stats shape: {tt_gathered_stats.shape}")
 
         # Step 3: Post-all-gather - normalize using gathered global stats
         tt_output = ttnn.rms_norm_post_all_gather(
