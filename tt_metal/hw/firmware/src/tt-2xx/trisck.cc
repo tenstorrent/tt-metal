@@ -110,6 +110,18 @@ uint32_t _start() {
 
     EARLY_RETURN_FOR_DEBUG
 
+#ifdef ARCH_QUASAR
+    // [#48552] Raise the compute MOP timeout so a slow-reader MOP (e.g. the avg-pool / reduce datacopy that
+    // stalls on a lagging reader) does not trip a 0x19 (MOP timeout) on the emulator. Placed here in the
+    // TRISC firmware (per LLK-team guidance, instead of ckernel_template.h) so it is set ONCE per kernel on
+    // each compute TRISC, after FW/CRT init and immediately before run_kernel(). Band-aid until the reader
+    // handshake is fixed.
+#ifndef CSR_TIMEOUT_COUNT
+#define CSR_TIMEOUT_COUNT 0xBD0
+#endif
+    asm volatile("csrw %0, %1" : : "i"(CSR_TIMEOUT_COUNT), "r"(0x100000));
+#endif
+
     WAYPOINT("K");
     run_kernel();
     WAYPOINT("KD");
