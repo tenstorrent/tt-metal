@@ -164,13 +164,23 @@ class SamplingGenerator:
         for key, slot in self._trace_states.items():
             if slot["id"] is None:
                 continue
+            # Never interpolate the raw trace handle. Its nanobind __repr__ is
+            # declared as returning std::string, and on builds where that
+            # conversion is unavailable formatting it raises TypeError -- from
+            # inside a logger.debug f-string, which is evaluated eagerly
+            # regardless of log level. That turned a log line into a hard
+            # failure of reset()/teardown() and left traces unreleased.
+            try:
+                trace_id_text = str(slot["id"])
+            except Exception:  # pragma: no cover - depends on the ttnn build
+                trace_id_text = f"<unprintable {type(slot['id']).__name__}>"
             logger.debug(
                 f"Resetting sampling trace (bucket={key.bucket}, penalties={key.penalties_on}, log_probs={key.log_probs_on}, force_argmax={key.force_argmax}, trace_id={slot['id']})"
             )
             try:
                 ttnn.release_trace(self.mesh_device, slot["id"])
             except Exception as e:
-                logger.warning(f"Failed to release trace {slot['id']} : {e}")
+                logger.warning(f"Failed to release trace {trace_id_text} : {e}")
                 continue
         self._trace_states.clear()
 
