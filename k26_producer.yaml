@@ -1,0 +1,24 @@
+model:
+  variant: kimi_k2_6         # [MATCH RUNNER] the PREFILL_MODEL kimi26.json selects
+  num_layers: 61             # [MATCH RUNNER] ack count is num_layers x chunks; a mismatch hangs the drain
+  max_seq_len: 56320         # [MATCH RUNNER]
+  chunk_size: 5120           # [MATCH RUNNER] 56320 / 5120 = 11 chunks exactly, no partial tail
+
+transport:
+  sp: 8                      # [MATCH RUNNER] 8x4 = the 32-chip BH galaxy
+  tp: 4
+  h2d_service_id: kimi26_prefill   # [MATCH RUNNER] PREFILL_H2D_SERVICE_ID
+  connect_timeout_s: 60
+
+workload:
+  num_users: 1               # one slot answers the question; halves the run. [MATCH RUNNER NUM_USERS]
+  chunks: "11"               # full prompt
+  max_requests: 1
+  interleave: round_robin
+  check_pcc: false           # the RUNNER does the on-device check; see header
+  # The tokens pushed AND the golden the runner PCCs against. MUST equal the runner's PREFILL_TRACE_DIR,
+  # or the check is measured against a different prompt.
+  trace_dir: /mnt/models/deepseek-prefill-cache/golden/structured_traces/kimi_debug_55k_vllm
+
+migration:
+  issue: false               # no endpoint, no worker, no table
