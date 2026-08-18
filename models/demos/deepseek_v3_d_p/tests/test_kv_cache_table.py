@@ -574,12 +574,16 @@ def test_dflash_kv_cache_mock(
                 config_id=base + head_idx,
             )
 
-    def bf8_round(reference):
-        return ttnn.to_torch(ttnn.from_torch(reference, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)).to(
-            torch.bfloat16
-        )
+    # read_device_chunk() returns the raw bfp8 stored in the cache (reference went in via to_device ->
+    # from_torch(bfloat8_b)). Rebuild that same bfp8 from reference for the golden, then compare as bf16.
+    reference_k_bf8 = ttnn.to_torch(ttnn.from_torch(reference_k, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)).to(
+        torch.bfloat16
+    )
+    reference_v_bf8 = ttnn.to_torch(ttnn.from_torch(reference_v, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)).to(
+        torch.bfloat16
+    )
 
-    reference_bf8 = {K_BASE: bf8_round(reference_k), V_BASE: bf8_round(reference_v)}
+    reference_bf8 = {K_BASE: reference_k_bf8, V_BASE: reference_v_bf8}
 
     chunk_shape = [1, 1, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, head_dim]
     for base, name in ((K_BASE, "k"), (V_BASE, "v")):

@@ -130,7 +130,14 @@ def build_and_serialize_kv_chunk_table(
     )
 
     primary_cache = kvpe_cache.storage
-    all_caches = (primary_cache,) + ((index_kv_cache,) if index_kv_cache is not None else ())
+    # One tagged list of every cache this rank owns, merged into ONE table downstream. The tag routes
+    # each cache to its populate path: "kvpe" / "index" are block-cyclic MLA caches named positionally
+    # (KVPE at config 0, index at 1); "dflash" is the drafter's (k, v) pair that fans out per-head.
+    all_caches = [("kvpe", primary_cache)]
+    if index_kv_cache is not None:
+        all_caches.append(("index", index_kv_cache))
+    if dflash_caches is not None:
+        all_caches.append(("dflash", dflash_caches))
     if index_kv_cache is not None or dflash_caches is not None:
         # The cross-stage (pipeline-parallel) merge is not wired through the multi-cache merged table
         # yet; callers gate this out (build_kv_chunk_table asserts index is None / drops the drafter on
@@ -142,7 +149,6 @@ def build_and_serialize_kv_chunk_table(
         return _build_and_serialize_merged_kv_chunk_table(
             mesh_device=mesh_device,
             caches=all_caches,
-            dflash_caches=dflash_caches,
             seq_len=seq_len,
             num_layers=num_layers,
             mesh_shape=mesh_shape,
@@ -191,13 +197,13 @@ def _build_and_serialize_merged_kv_chunk_table(
     path,
     tp_axis=1,
     chunk_size_global=None,
-    dflash_caches=None,
 ) -> str:
     """Build ONE KvChunkAddressTable over every cache this rank owns and serialize it to ``path``.
-    ``caches`` are the MLA/kimi model caches, named "0" (KVPE), "1" (index); the optional DFlash drafter
-    (``dflash_caches``, Kimi-only) adds one config per (K|V, kv-head) via :func:`dflash_config_name`.
-    Names must stay in sorted order (asserted) so the protobuf round-trip keeps KVPE at config id 0 and
-    the index at 1 — see the naming note at the top of this module."""
+    ``caches`` is a tagged list of ``(kind, payload)``: ``("kvpe", tensor)`` / ``("index", tensor)`` for
+    the block-cyclic MLA caches, named "0" (KVPE), "1" (GLM-5.2 index); ``("dflash", (k_cache, v_cache))``
+    for the DFlash drafter (Kimi-only), which adds one config per (K|V, kv-head) via
+    :func:`dflash_config_name`. Names must stay in sorted order (asserted) so the protobuf round-trip
+    keeps KVPE at config id 0 and the index at 1 — see the naming note at the top of this module."""
     disagg = ttnn.experimental.disaggregation
 
     def _table_config(cache):
@@ -211,23 +217,33 @@ def _build_and_serialize_merged_kv_chunk_table(
         cfg.chunk_size_bytes = _dram_chunk_size_bytes(cache)
         return cfg
 
-    # (name, cache, head_idx); head_idx is None for the MLA/kimi model caches, the kv-head otherwise.
-    entries = [(str(i), cache, None) for i, cache in enumerate(caches)]
+    # (name, cache, head_idx); head_idx is None for the block-cyclic MLA caches ("kvpe" / "index"), the
+    # global kv-head otherwise ("dflash" drafter). Block-cyclic entries come first so config names sort
+    # globally (asserted below) with KVPE at id 0.
+    entries = []
     dflash_kv_heads = 0
-    if dflash_caches is not None:
-        k_cache, v_cache = dflash_caches
-        # Distinct allocations, else every V config aliases K's addresses (a same-address table still
-        # looks well-formed). dim 1 is this chip's TP head slice, so the GLOBAL head count is shape[1]*tp.
-        assert (
-            k_cache.buffer_address() != v_cache.buffer_address()
-        ), "drafter K and V must be distinct allocations (same buffer => V configs alias K)"
-        assert v_cache.shape == k_cache.shape, f"drafter V shape {v_cache.shape} != K shape {k_cache.shape}"
-        dflash_kv_heads = k_cache.shape[1] * mesh_shape[tp_axis]
-        entries += [
-            (dflash_config_name(kind, h), cache, h)
-            for kind, cache in (("k", k_cache), ("v", v_cache))
-            for h in range(dflash_kv_heads)
-        ]
+    n_block_cyclic = 0
+    for kind, payload in caches:
+        if kind in ("kvpe", "index"):  # block-cyclic MLA caches -> populate_kv_chunk_address_table_kimi
+            entries.append((str(n_block_cyclic), payload, None))
+            n_block_cyclic += 1
+        elif kind == "dflash":
+            k_cache, v_cache = payload
+            # Distinct allocations, else every V config aliases K's addresses (a same-address table
+            # still looks well-formed). dim 1 is this chip's TP head slice, so the GLOBAL head count is
+            # shape[1]*tp.
+            assert (
+                k_cache.buffer_address() != v_cache.buffer_address()
+            ), "drafter K and V must be distinct allocations (same buffer => V configs alias K)"
+            assert v_cache.shape == k_cache.shape, f"drafter V shape {v_cache.shape} != K shape {k_cache.shape}"
+            dflash_kv_heads = k_cache.shape[1] * mesh_shape[tp_axis]
+            entries += [
+                (dflash_config_name(k_or_v, h), cache, h)
+                for k_or_v, cache in (("k", k_cache), ("v", v_cache))
+                for h in range(dflash_kv_heads)
+            ]
+        else:
+            raise ValueError(f"unknown KV table cache kind: {kind!r} (expected 'kvpe', 'index', or 'dflash')")
 
     names = [name for name, _, _ in entries]
     assert names == sorted(names), f"config names must already be sorted (protobuf renumbers by name): {names}"
