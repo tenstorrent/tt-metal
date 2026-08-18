@@ -455,6 +455,9 @@ def _decode_gated_delta_rule_fused(
         # the proven standalone configuration.
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
+    # The op returns o ROW_MAJOR (its exclusive-page write shape); the decode
+    # graph feeds o straight into rms_norm, which requires TILE.
+    o = ttnn.to_layout(o, ttnn.TILE_LAYOUT)
     return o, h
 
 
