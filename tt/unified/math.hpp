@@ -181,6 +181,14 @@ struct MatmulNode : expr::Fluent<MatmulNode<Geometry, Chain>> {
     // block and must not be popped until the kernel ends. See unified_kernels.
     template <typename Operand>
     auto bias(const Operand& operand) const {
+        // The bias is ct_dim tiles, one per output column. Fewer and the finishing
+        // pass reads past what was pushed -- whatever is next in that buffer, with
+        // nothing to notice; more and the kernel and the geometry disagree about
+        // the shape. Checked here rather than in the strategy because this is where
+        // the operand's page count is still in hand.
+#if defined(ASSERT_ENABLED) && ASSERT_ENABLED
+        ASSERT(operand.get_num_pages() == Geometry::ct_dim);
+#endif
         MatmulNode<Geometry, Chain> out{{}, in0_cb, in1_cb, operand.get_cb_id()};
         return out;
     }
