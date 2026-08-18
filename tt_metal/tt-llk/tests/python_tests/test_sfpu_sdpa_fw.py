@@ -11,6 +11,7 @@ sources/sfpu_sdpa_fw_test.cpp declares one and this file drives it.
 import struct
 from enum import Enum
 
+import pytest
 import torch
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
@@ -23,11 +24,13 @@ from helpers.llk_params import (
     ApproximationMode,
     DestAccumulation,
     DestSync,
+    PerfRunType,
     SdpaFwOp,
     SdpaOp,
     format_dict,
 )
 from helpers.param_config import parametrize
+from helpers.perf.core import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
@@ -219,3 +222,60 @@ def test_sfpu_sdpa_fw(variant, precision):
         f"sdpa_fw SFPU result does not match golden "
         f"(atol={atol:g}, rtol={rtol:g} for {op.name}/{precision.label})"
     )
+
+
+@pytest.mark.parametrize(
+    "op,label",
+    [(SdpaFwOp.Recip, "recip_first_column"), (SdpaFwOp.Exp, "exp_first_column")],
+)
+def test_sfpu_sdpa_fw_device_profile(perf_report, op, label):
+    """One on-device MATH-zone sample of the SDPA_FW body (Lane BK perf vehicle).
+
+    Same recipe as test_sfpu_welford_device_profile: the profiler build records
+    the MATH TRISC zone around SDPA_FW_BODY and PerfConfig retrieves the device
+    timestamps. Correctness stays owned by test_sfpu_sdpa_fw; this node exists
+    so the corpus sweep can record cycles for the sdpa_fw header (no perf
+    module existed for it at all).
+    """
+    formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
+    exp_scale_bf16 = EXP_SCALE_BF16_VALUES[0]
+
+    src_A = _stimulus(op, exp_scale_bf16).to(format_dict[formats.input_format])
+    src_B = torch.zeros_like(src_A)
+    src_A_tilized = tilize_block(
+        src_A, TILE_DIMENSIONS, stimuli_format=formats.input_format
+    ).flatten()
+
+    configuration = PerfConfig(
+        "sources/sfpu_sdpa_fw_test.cpp",
+        formats,
+        run_types=[PerfRunType.MATH_ISOLATE],
+        templates=[
+            SDPA_FW_OP(op),
+            APPROX_MODE(ApproximationMode.No),
+            DEST_SYNC(DestSync.Half),
+            SDPA_EXP_SCALE(scale_bf16=exp_scale_bf16),
+        ],
+        runtimes=[],
+        variant_stimuli=StimuliConfig(
+            src_A_tilized,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=1,
+            tile_count_B=1,
+            tile_count_res=1,
+        ),
+        dest_acc=DestAccumulation.No,
+        unpack_to_dest=False,
+        disable_format_inference=True,
+        compile_time_formats=True,
+    )
+    configuration.run(perf_report, run_count=1)
+    frame = perf_report.frame()
+    rows = frame[frame["marker"] == "SDPA_FW_BODY"]
+    assert len(rows) == 1, frame.to_string(index=False)
+    cycles = float(rows.iloc[0]["mean(MATH_ISOLATE)"])
+    assert cycles > 0
+    print(f"SDPA_FW_DEVICE_PROFILE op={label} math_cycles={int(cycles)}")

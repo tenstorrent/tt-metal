@@ -46,8 +46,10 @@
 #include <cstdint>
 
 #include "ckernel.h"
+#include "counters.h"
 #include "llk_defs.h"
 #include "params.h"
+#include "profiler.h"
 
 // Globals required by the test framework.
 std::uint32_t unp_cfg_context          = 0;
@@ -126,15 +128,20 @@ void run_kernel(RUNTIME_PARAMETERS params)
         MOE_GATE_BIAS_DST_TILE, formats.math, formats.math);
 
     // RC_custom: the kernel walks DEST itself off the tile-0 base.
-    SFPU_UNARY_CALL(
-        DST_SYNC,
-        is_fp32_dest_acc_en,
-        _generic_moe_gate_topk_,
-        (MOE_GATE_NORMALIZE, MOE_GATE_NUM_SELECTED_EXPERTS, MOE_GATE_NUM_TOTAL_EXPERTS, MOE_GATE_ZERO_TAIL, MOE_GATE_FULL_SORT),
-        MOE_GATE_SCORES_DST_TILE,
-        VectorMode::RC_custom,
-        MOE_GATE_EPS_BITS,
-        MOE_GATE_SCALE_BITS);
+    {
+        // Isolated device-profile zone (test_sfpu_generic_moe_gate_topk_device_profile):
+        // profiler-only L1 bookkeeping, compiles away in functional builds.
+        START_PERF_MEASURE("MOE_GATE_TOPK_BODY")
+        SFPU_UNARY_CALL(
+            DST_SYNC,
+            is_fp32_dest_acc_en,
+            _generic_moe_gate_topk_,
+            (MOE_GATE_NORMALIZE, MOE_GATE_NUM_SELECTED_EXPERTS, MOE_GATE_NUM_TOTAL_EXPERTS, MOE_GATE_ZERO_TAIL, MOE_GATE_FULL_SORT),
+            MOE_GATE_SCORES_DST_TILE,
+            VectorMode::RC_custom,
+            MOE_GATE_EPS_BITS,
+            MOE_GATE_SCALE_BITS);
+    }
 
     _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
 }

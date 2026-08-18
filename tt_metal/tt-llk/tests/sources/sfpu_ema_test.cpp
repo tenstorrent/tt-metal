@@ -15,8 +15,10 @@
 #include <cstdint>
 
 #include "ckernel.h"
+#include "counters.h"
 #include "llk_defs.h"
 #include "params.h"
+#include "profiler.h"
 
 // Globals
 std::uint32_t unp_cfg_context              = 0;
@@ -92,7 +94,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
             EMA_INPUT_DST_INDEX, formats.math, formats.math);
 
         // EMA reads dst tile 0, writes dst tile 1, updates the LREG4 carry.
-        llk_math_ema_sfpu_tile(EMA_INPUT_DST_INDEX);
+        {
+            // Isolated device-profile zone (test_sfpu_ema_device_profile):
+            // profiler-only L1 bookkeeping (no SFPU instruction, no LREG
+            // touched — safe around the LREG4/5/6 carry ABI), compiles away
+            // in functional builds. Alpha/beta load and carry clear stay
+            // outside the zone, like the Welford state clear.
+            START_PERF_MEASURE("EMA_BODY")
+            llk_math_ema_sfpu_tile(EMA_INPUT_DST_INDEX);
+        }
 
         _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
     }

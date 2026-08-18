@@ -56,15 +56,16 @@ compile-and-structure check on two different kernels rather than as a numeric on
 import pytest
 import torch
 from conftest import skip_for_wormhole
-from helpers.format_config import DataFormat
+from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     ELEMENTS_PER_TILE,
     TILE_DIM,
     SoftmaxKGolden,
     get_golden_generator,
 )
-from helpers.llk_params import DestAccumulation, format_dict
+from helpers.llk_params import DestAccumulation, PerfRunType, format_dict
 from helpers.param_config import input_output_formats, parametrize
+from helpers.perf.core import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import SOFTMAX_K, TILE_COUNT
@@ -212,3 +213,49 @@ def test_sfpu_softmax_k(formats, dest_acc, k):
         res_tile[SOFTMAX_ROWS:, :].flatten(),
         formats.output_format,
     ), "softmax_k modified DEST rows outside its 4-row band"
+
+
+@skip_for_wormhole
+def test_sfpu_softmax_k_device_profile(perf_report):
+    """One on-device MATH-zone sample of the SOFTMAX_K body (Lane BK perf vehicle).
+
+    Welford device-profile recipe: the profiler build records the MATH TRISC
+    zone around SOFTMAX_K_BODY. Pinned to the legal-region representative point
+    (Float16_b, dest_acc=No, k=16) so neither functional skip predicate can
+    fire. Correctness stays owned by test_sfpu_softmax_k.
+    """
+    formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
+    torch.manual_seed(0)
+    torch_format = format_dict[formats.input_format]
+    input_tile, _ = _build_input_tile(FACE_DIM, torch_format)
+    src_A = tilize_block(
+        input_tile.flatten(), [TILE_DIM, TILE_DIM], stimuli_format=formats.input_format
+    ).flatten()
+    src_B = torch.zeros(ELEMENTS_PER_TILE, dtype=torch_format)
+
+    configuration = PerfConfig(
+        "sources/sfpu_softmax_k_test.cpp",
+        formats,
+        run_types=[PerfRunType.MATH_ISOLATE],
+        templates=[SOFTMAX_K(softmax_k=FACE_DIM)],
+        runtimes=[TILE_COUNT(1)],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=1,
+            tile_count_B=1,
+            tile_count_res=1,
+        ),
+        dest_acc=DestAccumulation.No,
+        unpack_to_dest=False,
+    )
+    configuration.run(perf_report, run_count=1)
+    frame = perf_report.frame()
+    rows = frame[frame["marker"] == "SOFTMAX_K_BODY"]
+    assert len(rows) == 1, frame.to_string(index=False)
+    cycles = float(rows.iloc[0]["mean(MATH_ISOLATE)"])
+    assert cycles > 0
+    print(f"SOFTMAX_K_DEVICE_PROFILE k=16 math_cycles={int(cycles)}")

@@ -43,7 +43,7 @@ import struct
 import pytest
 import torch
 from conftest import skip_for_wormhole
-from helpers.format_config import DataFormat
+from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     ELEMENTS_PER_TILE,
     TILE_DIM,
@@ -51,8 +51,9 @@ from helpers.golden_generators import (
     get_golden_generator,
     round_to_dest_width,
 )
-from helpers.llk_params import DestAccumulation, VectorMode, format_dict
+from helpers.llk_params import DestAccumulation, PerfRunType, VectorMode, format_dict
 from helpers.param_config import input_output_formats, parametrize
+from helpers.perf.core import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
@@ -357,3 +358,67 @@ def test_sfpu_sampling(formats, dest_acc, op, legacy_compat, vector_mode):
                 f"{op}: face 1 (columns 16-31) must be untouched, but "
                 f"[{row}, {col}] holds {got}, want {want}"
             )
+
+
+@skip_for_wormhole
+def test_sfpu_sampling_device_profile(perf_report):
+    """One on-device MATH-zone sample of the SAMPLING body (Lane BK perf vehicle).
+
+    Welford device-profile recipe around SAMPLING_BODY. Pinned to the
+    production-shaped representative point (recip_scalar, legacy_compat=True,
+    dest_acc=No, VectorMode::None_) — the legal-region corner none of the
+    functional skip predicates rejects. The three-DEST-tile in0/in1/out
+    layout is stimuli plumbing; the single _llk_math_eltwise_unary_sfpu_params_
+    call is the unambiguous marker boundary. Correctness stays owned by
+    test_sfpu_sampling.
+    """
+    torch.manual_seed(0)
+    formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
+    torch_format = format_dict[formats.input_format]
+
+    in0_tile = _column_uniform_tile(_bf16_row_values(), torch_format)
+    in1_tile = _column_uniform_tile(_bf16_row_values(), torch_format)
+    background_tile = torch.full(
+        (TILE_DIM, TILE_DIM), OUT_BACKGROUND, dtype=torch_format
+    )
+    src_A = torch.cat(
+        [
+            tilize_block(
+                t.flatten(), [TILE_DIM, TILE_DIM], stimuli_format=formats.input_format
+            ).flatten()
+            for t in (in0_tile, in1_tile, background_tile)
+        ]
+    )
+    src_B = torch.zeros(ELEMENTS_PER_TILE, dtype=torch_format)
+
+    configuration = PerfConfig(
+        "sources/sfpu_sampling_test.cpp",
+        formats,
+        run_types=[PerfRunType.MATH_ISOLATE],
+        templates=[
+            SAMPLING_OP(sampling_op="recip_scalar"),
+            SAMPLING_LEGACY_COMPAT(legacy_compat=True),
+            SFPU_UNARY_SCALAR(value_bits=_f32_bits(MUL_SCALAR)),
+            VECTOR_MODE(vector_mode=VectorMode.None_),
+        ],
+        runtimes=[],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=NUM_TILES,
+            tile_count_B=1,
+            tile_count_res=NUM_TILES,
+        ),
+        dest_acc=DestAccumulation.No,
+        unpack_to_dest=False,
+    )
+    configuration.run(perf_report, run_count=1)
+    frame = perf_report.frame()
+    rows = frame[frame["marker"] == "SAMPLING_BODY"]
+    assert len(rows) == 1, frame.to_string(index=False)
+    cycles = float(rows.iloc[0]["mean(MATH_ISOLATE)"])
+    assert cycles > 0
+    print(f"SAMPLING_DEVICE_PROFILE op=recip_scalar math_cycles={int(cycles)}")

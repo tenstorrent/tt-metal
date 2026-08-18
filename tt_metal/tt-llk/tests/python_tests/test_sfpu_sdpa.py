@@ -25,10 +25,12 @@ from helpers.llk_params import (
     ApproximationMode,
     DestAccumulation,
     DestSync,
+    PerfRunType,
     SdpaOp,
     format_dict,
 )
 from helpers.param_config import parametrize
+from helpers.perf.core import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
@@ -441,3 +443,54 @@ def test_sfpu_sdpa_correction(dest_config, scale_bf16):
             f"correction result does not match golden in the {name} region "
             f"(atol={atol:g}, rtol={rtol:g} for {precision.label})"
         )
+
+
+def test_sfpu_sdpa_device_profile(perf_report):
+    """One on-device MATH-zone sample of the SDPA composite body (Lane BK perf vehicle).
+
+    Welford device-profile recipe around SDPA_BODY. Pinned to the corr-mapped
+    representative point (ExpPoly, scale +1.0, Fp32E2E precision) so the perf
+    kernel is exactly the correctness-gated one; one PerfConfig node keeps the
+    module single-schema. Correctness stays owned by test_sfpu_sdpa.
+    """
+    variant = Variant(SdpaOp.ExpPoly)
+    precision = Precision.Fp32E2E
+    formats = InputOutputFormat(precision.data_format, precision.data_format)
+    torch_format = format_dict[formats.input_format]
+
+    src_A = _stimulus(variant).to(torch_format)
+    src_B = torch.zeros_like(src_A)
+    src_A_tilized = tilize_block(
+        src_A, TILE_DIMENSIONS, stimuli_format=formats.input_format
+    ).flatten()
+
+    configuration = PerfConfig(
+        "sources/sfpu_sdpa_test.cpp",
+        formats,
+        run_types=[PerfRunType.MATH_ISOLATE],
+        templates=_templates(variant),
+        runtimes=[],
+        variant_stimuli=StimuliConfig(
+            src_A_tilized,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=1,
+            tile_count_B=1,
+            tile_count_res=1,
+        ),
+        dest_acc=precision.dest_acc,
+        unpack_to_dest=precision.unpack_to_dest,
+        disable_format_inference=True,
+        compile_time_formats=True,
+    )
+    configuration.run(perf_report, run_count=1)
+    frame = perf_report.frame()
+    rows = frame[frame["marker"] == "SDPA_BODY"]
+    assert len(rows) == 1, frame.to_string(index=False)
+    cycles = float(rows.iloc[0]["mean(MATH_ISOLATE)"])
+    assert cycles > 0
+    print(
+        f"SDPA_DEVICE_PROFILE variant=ExpPoly_scale1_fp32_e2e math_cycles={int(cycles)}"
+    )

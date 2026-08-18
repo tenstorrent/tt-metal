@@ -37,8 +37,10 @@
 #include <cstdint>
 
 #include "ckernel.h"
+#include "counters.h"
 #include "llk_defs.h"
 #include "params.h"
+#include "profiler.h"
 
 // Globals required by the test framework.
 std::uint32_t unp_cfg_context          = 0;
@@ -110,7 +112,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
             0 /* dst_index */, formats.math, formats.math);
 
         // RC_custom: the kernel does its own DEST addressing, so no per-face loop.
-        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, _softmax_k_, (SOFTMAX_K), 0 /* dst_index */, VectorMode::RC_custom);
+        {
+            // Isolated device-profile zone (test_sfpu_softmax_k_device_profile):
+            // profiler-only L1 bookkeeping, compiles away in functional builds.
+            START_PERF_MEASURE("SOFTMAX_K_BODY")
+            SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, _softmax_k_, (SOFTMAX_K), 0 /* dst_index */, VectorMode::RC_custom);
+        }
 
         _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
     }

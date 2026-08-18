@@ -9,9 +9,11 @@ from helpers.golden_generators import ELEMENTS_PER_TILE, TILE_DIM
 from helpers.llk_params import (
     ApproximationMode,
     DestAccumulation,
+    PerfRunType,
     format_dict,
 )
 from helpers.param_config import parametrize
+from helpers.perf.core import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
@@ -117,3 +119,55 @@ def test_sfpu_ema(dest_acc, num_time_tiles):
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format
     ), "EMA result does not match golden"
+
+
+def test_sfpu_ema_device_profile(perf_report):
+    """One on-device MATH-zone sample of the EMA body (Lane BK perf vehicle).
+
+    Welford device-profile recipe around EMA_BODY. num_time_tiles=1 gives one
+    clean zone firing; init/alpha-beta load/carry clear sit outside the zone.
+    Correctness stays owned by test_sfpu_ema.
+    """
+    torch.manual_seed(0)
+    formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
+    torch_format = format_dict[formats.input_format]
+
+    src_A = torch.empty((ELEMENTS_PER_TILE,), dtype=torch_format).uniform_(-4.0, 4.0)
+    src_B = torch.zeros_like(src_A)
+    src_A_tilized = tilize_block(
+        src_A, [TILE_DIM, TILE_DIM], stimuli_format=formats.input_format
+    ).flatten()
+
+    configuration = PerfConfig(
+        "sources/sfpu_ema_test.cpp",
+        formats,
+        run_types=[PerfRunType.MATH_ISOLATE],
+        templates=[
+            APPROX_MODE(ApproximationMode.No),
+            EMA_ALPHA_BETA(
+                alpha_bits=_f32_bits(EMA_ALPHA), beta_bits=_f32_bits(EMA_BETA)
+            ),
+        ],
+        runtimes=[TILE_COUNT(1)],
+        variant_stimuli=StimuliConfig(
+            src_A_tilized,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=1,
+            tile_count_B=1,
+            tile_count_res=1,
+        ),
+        dest_acc=DestAccumulation.No,
+        unpack_to_dest=False,
+        disable_format_inference=True,
+        compile_time_formats=True,
+    )
+    configuration.run(perf_report, run_count=1)
+    frame = perf_report.frame()
+    rows = frame[frame["marker"] == "EMA_BODY"]
+    assert len(rows) == 1, frame.to_string(index=False)
+    cycles = float(rows.iloc[0]["mean(MATH_ISOLATE)"])
+    assert cycles > 0
+    print(f"EMA_DEVICE_PROFILE num_time_tiles=1 math_cycles={int(cycles)}")
