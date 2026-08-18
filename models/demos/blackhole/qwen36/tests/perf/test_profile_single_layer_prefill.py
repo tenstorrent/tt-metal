@@ -66,7 +66,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import run_for_wormhole_b0_or_blackhole
-from models.demos.blackhole.qwen36.tests.perf.perf_signposts import install_mlp_signposts
+from models.demos.blackhole.qwen36.tests.perf.perf_signposts import install_attention_signposts, install_mlp_signposts
 
 # 4 layers gives pattern G,G,G,F -- the smallest build containing both kernel types.
 NUM_LAYERS = 4
@@ -236,12 +236,12 @@ def test_profile_single_layer_prefill(mesh_device, device_params, seq_len, layer
         _run_prefill_step(mesh_device, f)
 
     # Nested MLP signposts only on the measured iteration, so the warmup stays unmarked like before.
-    restore_mlp_signposts = install_mlp_signposts(f.layer) if use_signpost else None
+    restores = [g(f.layer) for g in (install_attention_signposts, install_mlp_signposts)] if use_signpost else []
     try:
         _run_prefill_step(mesh_device, f, use_signpost=use_signpost)
     finally:
-        if restore_mlp_signposts is not None:
-            restore_mlp_signposts()
+        for r in restores:
+            r()
 
     ttnn.deallocate(f.x)
     ttnn.deallocate(f.cos)
