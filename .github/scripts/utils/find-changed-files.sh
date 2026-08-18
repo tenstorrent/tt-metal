@@ -183,6 +183,23 @@ RAW_LLK_SFPI_CHANGED=$LLK_SFPI_CHANGED
 # tests/scale_out and tests/tt_eager are included because the clang-tidy
 # CMake preset inherits TT_METAL_BUILD_TESTS=TRUE and TTNN_BUILD_TESTS=TRUE,
 # and tests/CMakeLists.txt builds those trees under exactly those flags.
+#
+# .fbs is included alongside the C/C++ extensions: FlatBuffer schemas
+# (tt_metal/impl/flatbuffer/*.fbs, tt_metal/api/.../serialized_descriptors/*.fbs,
+# ttnn/core/tensor/flatbuffer/*.fbs, tt-train/.../serialization/*.fbs) generate
+# *_generated.h headers via GENERATE_FBS_HEADER (cmake/flatbuffers.cmake) that
+# are compiled straight into their target's sources with no SKIP_LINTING or
+# HeaderFilterRegex exclusion — clang-tidy genuinely analyzes them, so an
+# .fbs-only PR must not be skipped.
+#
+# .proto is deliberately NOT included, despite generating C++ the same way:
+# GENERATE_PROTO_FILES (cmake/protobuf.cmake) sets SKIP_LINTING on the
+# generated .pb.cc, drops a no-op .clang-tidy into the generated directory so
+# the .pb.h is never scanned via #include either, and the repo's top-level
+# .clang-tidy HeaderFilterRegex separately excludes '.pb.h$' outright. Same
+# reasoning excludes .capnp: tt_metal/impl/CMakeLists.txt sets SKIP_LINTING
+# on every capnp-generated RPC source/header. Neither can affect clang-tidy
+# output no matter how the schema changes.
 CPP_SOURCE_FOR_CLANG_TIDY_CHANGED=false
 # Explicit, human-auditable list of workflow files whose changes affect the
 # clang-tidy scan itself (its definition, implementation, caller/inputs, or
@@ -193,7 +210,18 @@ CPP_SOURCE_FOR_CLANG_TIDY_CHANGED=false
 CLANG_TIDY_KEY_WORKFLOW_CHANGED=false
 while IFS= read -r FILE; do
     case "$FILE" in
-        @(tt_metal|ttnn|tests/tt_metal|tests/ttnn|tests/scale_out|tests/tt_eager|tt-train|tools|tt_stl)/*(*/)*.@(h|hpp|c|cpp|cc|inl|tpp))
+        @(tt_metal|ttnn|tests/tt_metal|tests/ttnn|tests/scale_out|tests/tt_eager|tt-train|tools|tt_stl)/*(*/)*.@(h|hpp|c|cpp|cc|inl|tpp|fbs))
+            CPP_SOURCE_FOR_CLANG_TIDY_CHANGED=true
+            ;;
+        # tt_metal/llrt/hal's codegen.py/codegen.sh regenerate dev_msgs.hpp,
+        # fabric_telemetry.hpp, and realtime_profiler_msgs.hpp (+ *_impl.hpp),
+        # which ARE linted (no SKIP_LINTING in tt_metal/llrt/hal/CMakeLists.txt).
+        # Their primary inputs (tt_metal/hw/inc/hostdev/*.h) already match the
+        # pattern above, but the generator scripts themselves don't live under
+        # tt_metal/**/*.h|.cpp — a change to the generator logic alone, with no
+        # input header touched, would otherwise regenerate different linted
+        # headers undetected.
+        tt_metal/llrt/hal/codegen/codegen.py|tt_metal/llrt/hal/codegen/codegen.sh)
             CPP_SOURCE_FOR_CLANG_TIDY_CHANGED=true
             ;;
         .github/workflows/code-analysis.yaml|\
