@@ -1444,6 +1444,43 @@ REVIEW_PROMPT = (
 )
 
 
+# The DECISION line, decorated as models decorate it, EXCLUDING the spec quoted back
+# (`DECISION: continue|stop`). Shared, so the parser and the complaint below can never disagree
+# about what counts as an answer -- a retry that scolds the reviewer for something the parser would
+# have accepted is worse than no retry at all.
+_VERDICT_TOKEN_RE = re.compile(r"^[\s>*_#-]*DECISION[\s*_]*[:=]?[\s*_]*(continue|stop)\b(?!\s*[|/])", re.I | re.M)
+_VERDICT_SPEC_RE = re.compile(r"^[\s>*_#-]*DECISION[\s*_]*[:=]?[\s*_]*(?:continue|stop)\s*[|/]", re.I | re.M)
+
+
+def review_verdict_complaint(raw: str) -> str:
+    """Why that reply could not be read as a verdict, addressed TO the reviewer.
+
+    A retry that just repeats the question invites the same answer. This names the specific defect
+    and quotes the reply back, so the second attempt is a correction rather than a coin toss -- the
+    reviewer is a language model, and a model told exactly what it got wrong generally fixes it.
+    """
+    text = (raw or "").strip()
+    if not text:
+        return "Your previous reply was EMPTY -- no text at all came back."
+    _hits = {m.group(1).lower() for m in _VERDICT_TOKEN_RE.finditer(text)}
+    if len(_hits) > 1:
+        return (
+            "Your previous reply stated BOTH decisions (%s), so it decided nothing. Pick exactly "
+            "one and state it once." % ", ".join(sorted(_hits))
+        )
+    if _VERDICT_SPEC_RE.search(text):
+        return (
+            "Your previous reply quoted the FORMAT back -- a literal `DECISION: continue|stop` line "
+            "with the bar in it. That is the template, not an answer. Write ONE of the two words."
+        )
+    if re.search(r"\b(continue|stop|proceed|reject)\b", text, re.I):
+        return (
+            "Your previous reply discussed the decision in prose but never put it on a `DECISION:` "
+            "line, so it could not be read. The verdict must be on its OWN line, as the FIRST thing."
+        )
+    return "Your previous reply contained no `DECISION:` line and no JSON `decision` field."
+
+
 def parse_review_verdict(text: str):
     """(decision, reasoning) from a lead-review reply, or (None, raw) when it states neither.
 
@@ -1481,8 +1518,7 @@ def parse_review_verdict(text: str):
     # TWO DIFFERENT ANSWERS ARE NO ANSWER. A reply that says continue and later stop has not decided;
     # picking the first (or the last) invents a verdict from ordering. That is UNKNOWN, which the
     # caller handles, rather than a coin toss on whether to stop the run.
-    _tok = _re.compile(r"^[\s>*_#-]*DECISION[\s*_]*[:=]?[\s*_]*(continue|stop)\b(?!\s*[|/])", _re.I | _re.M)
-    _hits = [(m, m.group(1).lower()) for m in _tok.finditer(raw)]
+    _hits = [(m, m.group(1).lower()) for m in _VERDICT_TOKEN_RE.finditer(raw)]
     if _hits:
         _vals = {v for _m, v in _hits}
         if len(_vals) > 1:
@@ -1526,59 +1562,98 @@ def cli_lead_review_gate(
         env.pop(_k, None)
     from .agent_bin import resolve_claude_bin
 
-    r = subprocess.run(
-        [
-            resolve_claude_bin(),
-            "-p",
-            prompt,
-            "--output-format",
-            "text",
-            "--system-prompt",
-            "You make go/no-go calls for an automated perf-optimization harness.",
-        ],
-        capture_output=True,
-        text=True,
-        timeout=600,
-        env=env,
-    )
-    if r.returncode != 0:
-        raise DiscoveryRejected(f"cc lead review (claude CLI) exit {r.returncode}: {(r.stderr or '')[-200:]}")
-    # A VERDICT THAT WILL NOT PARSE IS UNKNOWN, NOT A REFUSAL. Two separate mistakes lived here.
+    # ASK AGAIN BEFORE THROWING THE RUN AWAY.
     #
-    # strict=False, because the failure was never about the DECISION. Run 9, 2026-08-17:
+    # The reviewer was asked ONCE, and an unusable answer failed the whole discovery. The retry then
+    # lived only at the run level: regenerate every perf test, re-survey the model -- fifteen to
+    # twenty minutes -- and only then ask a second time. Run 9, 2026-08-17, spent exactly that on a
+    # reply whose only fault was a line break, and the attempt after it passed because the next
+    # answer happened to fit on one line. That is luck, bought at twenty minutes.
     #
-    #     lead review returned unparseable verdict:
-    #     Invalid control character at: line 1 column 1029 (char 1028)
+    # A reviewer that garbles one answer is not a reviewer that cannot answer, so the cheap question
+    # comes first: ask again in place, seconds, nothing regenerated. Only if it will not state a
+    # decision across ALL these attempts is the discovery rejected -- and that rejection still
+    # regenerates and re-asks at the run level, so an unreadable reviewer is bounded twice over
+    # instead of costing a rebuild per question.
     #
-    # The answer WAS json; it carried a literal newline or tab inside one of its text fields, which
-    # json.loads rejects by default and accepts with strict=False. The review may well have said
-    # continue -- nobody knows, because the text went out with the exception. A run was refused, the
-    # supervisor restarted it, and the retry only passed because the agent happened to phrase itself
-    # without a stray newline the second time.
-    #
-    # And a parse failure is not a decision. "I could not read the verdict" and "the plan is
-    # rejected" are different states, and conflating them turns a formatting glitch into a stopped
-    # run. The rule the preflight already follows applies: something that could not RUN has not
-    # decided anything, so it proceeds and SAYS SO rather than asserting a verdict it does not have.
-    # A genuine `stop` still stops, and a non-zero exit above still refuses.
-    decision, reasoning = parse_review_verdict(r.stdout or "")
+    # AND THE RETRY CARRIES THE COMPLAINT. Repeating an identical prompt to a model that just
+    # misread it mostly buys an identical answer; naming the defect and quoting the reply back is
+    # what makes the second attempt a correction. The complaint comes from the same regexes the
+    # parser uses, so it can never scold the reviewer for something the parser would have accepted.
+    _tries = max(1, int(os.environ.get("PERF_MCP_REVIEW_TRIES", "5") or "5"))
+    _ask, decision, reasoning = prompt, None, ""
+    for _attempt in range(1, _tries + 1):
+        r = subprocess.run(
+            [
+                resolve_claude_bin(),
+                "-p",
+                _ask,
+                "--output-format",
+                "text",
+                "--system-prompt",
+                "You make go/no-go calls for an automated perf-optimization harness.",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=600,
+            env=env,
+        )
+        if r.returncode != 0:
+            raise DiscoveryRejected(f"cc lead review (claude CLI) exit {r.returncode}: {(r.stderr or '')[-200:]}")
+        # A VERDICT THAT WILL NOT PARSE IS UNKNOWN, NOT A REFUSAL, and not an approval either.
+        #
+        # strict=False in the parser, because the failure was never about the DECISION. Run 9:
+        #
+        #     lead review returned unparseable verdict:
+        #     Invalid control character at: line 1 column 1029 (char 1028)
+        #
+        # The answer WAS json; it carried a literal newline inside a text field, which json.loads
+        # rejects by default. The review may well have said continue -- nobody knew, because the
+        # text went out with the exception, the supervisor restarted the run, and the retry passed
+        # only because the agent happened to phrase itself without a stray newline the second time.
+        #
+        # "I could not read the verdict" and "the plan is rejected" are different states, and
+        # conflating them turned a formatting glitch into a stopped run. So an unreadable answer is
+        # neither: it is a question worth asking again. A genuine `stop` still stops, and a non-zero
+        # exit above still refuses.
+        decision, reasoning = parse_review_verdict(r.stdout or "")
+        if decision is not None:
+            break
+        _why = review_verdict_complaint(r.stdout or "")
+        print(
+            "  [probes] lead review stated no decision (attempt %d/%d): %s%s"
+            % (_attempt, _tries, _why, " Asking again." if _attempt < _tries else " Out of attempts."),
+            file=sys.stderr,
+            flush=True,
+        )
+        if _attempt == _tries:
+            break
+        _ask = (
+            prompt
+            + "\n\nYOUR PREVIOUS ANSWER COULD NOT BE READ, so the question stands unanswered.\n"
+            + _why
+            + "\n\nThis is what you sent (verbatim, truncated):\n"
+            + (r.stdout or "").strip()[:1500]
+            + "\n\nAnswer again. The FIRST line must be exactly `DECISION: continue` or `DECISION: stop` "
+            "-- one word, no bar, no brackets, no emphasis, nothing before it. Put your reasoning after "
+            "it on a `REASON:` line, where it may run to any length. Judge the findings themselves; do "
+            "not stop merely because this is a retry."
+        )
     if decision is None:
-        # NO VERDICT MEANS ASK AGAIN, NOT PROCEED.
+        # NO VERDICT MEANS ASK AGAIN, NOT PROCEED -- and by here, it has been asked again, with the
+        # defect named each time. Continuing now would run a plan nobody approved, silently, and make
+        # the gate bypassable by any reply that failed to state a decision.
         #
-        # Continuing here would run a plan nobody approved, and silently -- the gate would be
-        # bypassable by any reply that failed to state a decision. Refusing used to mean killing the
-        # run, which is why proceeding looked like the lesser evil; it no longer does. A refusal now
-        # regenerates discovery and asks again (supervisor, bounded by the restart limit), so the
-        # cost of refusing an unreadable answer is one more attempt rather than the whole run.
+        # The parse is already generous -- token form and JSON, decorated or fenced, newlines and all
+        # -- so a reply that survives every attempt stated nothing usable, or stated two different
+        # things. Neither is approval.
         #
-        # The parse itself is already generous -- both the token form and JSON, decorated or fenced,
-        # newlines and all -- so reaching here means the reply stated nothing usable, or stated two
-        # different things. Neither is approval.
-        #
-        # THE COST, STATED: a reviewer that is systematically unreadable will exhaust the retries and
-        # stop the run. That is the right outcome -- "I never got a verdict" is not "carry on".
+        # THE COST, STATED: a systematically unreadable reviewer exhausts these attempts, then the
+        # supervisor's, and stops the run. That is the right outcome -- never getting a verdict is
+        # not "carry on".
         raise DiscoveryRejected(
-            "lead review stated no decision (reply began: %s)" % (reasoning or "")[:200].replace("\n", " ")
+            "lead review stated no decision in %d attempts: %s (reply began: %s)"
+            % (_tries, review_verdict_complaint(reasoning or ""), (reasoning or "")[:200].replace("\n", " "))
         )
     if decision == "stop":
         raise DiscoveryRejected(f"cc lead agent stopped the run: {reasoning}")

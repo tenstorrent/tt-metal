@@ -359,11 +359,93 @@ def test_no_decision_at_all_is_none_and_the_gate_asks_again():
     assert parse_review_verdict("I could not evaluate this.")[0] is None
     assert parse_review_verdict("")[0] is None
 
-    src = (_PA / "agent" / "probes.py").read_text()
-    i = src.index("decision, reasoning = parse_review_verdict(")
-    body = src[i : i + 1600]
+    body = _gate_source()
     assert "raise DiscoveryRejected" in body, "an unreadable verdict proceeds again"
     assert '"decision": "continue"' not in body, "the gate still manufactures approval"
+
+
+def _gate_source() -> str:
+    """The whole cli_lead_review_gate body -- anchored to the function, not to a character window,
+    because every window this file has used has broken on an unrelated edit above it."""
+    src = (_PA / "agent" / "probes.py").read_text()
+    i = src.index("def cli_lead_review_gate(")
+    j = src.index("\ndef ", i + 1)
+    return src[i:j]
+
+
+class _FakeCompleted:
+    def __init__(self, stdout: str) -> None:
+        self.returncode, self.stdout, self.stderr = 0, stdout, ""
+
+
+def _gate_over(answers, monkeypatch):
+    """Run the real gate against a scripted reviewer; return (verdict-or-exception, prompts sent)."""
+    from agent import probes
+
+    asked: list[str] = []
+
+    def _fake_run(cmd, **_kw):
+        asked.append(cmd[cmd.index("-p") + 1])
+        return _FakeCompleted(answers[min(len(asked) - 1, len(answers) - 1)])
+
+    monkeypatch.setattr(probes.subprocess, "run", _fake_run)
+    monkeypatch.setattr("agent.agent_bin.resolve_claude_bin", lambda: "claude")
+    pathmap = {k: "x" for k in ("perf_test", "pcc", "components", "summary", "warnings")}
+    try:
+        return probes.cli_lead_review_gate(pathmap), asked
+    except probes.DiscoveryRejected as exc:
+        return exc, asked
+
+
+def test_an_unreadable_answer_is_asked_again_in_place_not_after_a_rebuild(monkeypatch):
+    """The retry used to live ONLY at the run level: an unusable reply threw away discovery and cost
+    fifteen to twenty minutes of regeneration before anyone asked a second time. Run 9 paid exactly
+    that for a line break. The reviewer is asked again here, in seconds, with nothing regenerated."""
+    got, asked = _gate_over(["mumble", "no idea", "DECISION: continue\nREASON: sound"], monkeypatch)
+
+    assert getattr(got, "get", lambda _k: None)("decision") == "continue", got
+    assert len(asked) == 3, "the gate did not re-ask in place"
+
+
+def test_the_retry_tells_the_reviewer_what_was_wrong_with_its_answer(monkeypatch):
+    """Repeating an identical prompt to a model that just misread it mostly buys an identical
+    answer. The second ask names the defect and quotes the reply back, so it is a correction."""
+    _got, asked = _gate_over(["DECISION: continue|stop", "DECISION: stop\nREASON: no gate"], monkeypatch)
+
+    assert len(asked) == 2
+    retry = asked[1]
+    assert "quoted the FORMAT back" in retry, "the retry did not say what was wrong"
+    assert "DECISION: continue|stop" in retry.split("PREVIOUS ANSWER")[1], "it did not quote the reply back"
+    assert asked[0] in retry, "the retry dropped the findings"
+
+
+def test_a_reviewer_that_never_states_a_decision_runs_out_and_refuses(monkeypatch):
+    """The bound is real. A systematically unreadable reviewer exhausts these attempts, then the
+    supervisor's, and stops the run -- never getting a verdict is not approval."""
+    got, asked = _gate_over(["I cannot tell."] * 9, monkeypatch)
+
+    from agent.probes import DiscoveryRejected
+
+    assert isinstance(got, DiscoveryRejected), got
+    assert len(asked) == 5, "the in-place retry is unbounded or missing"
+    assert "no `DECISION:` line" in str(got), "the refusal does not say what was wrong"
+
+
+def test_the_complaint_can_only_name_defects_the_parser_agrees_are_defects(monkeypatch):
+    """A retry that scolds the reviewer for something the parser would have ACCEPTED is worse than no
+    retry: it teaches the model to change an answer that was already fine. The complaint and the
+    parse read the same regexes, so anything that parses never reaches the complaint."""
+    from agent.probes import parse_review_verdict, review_verdict_complaint
+
+    for reply, expected in [
+        ("", "EMPTY"),
+        ("DECISION: continue|stop\nREASON: x", "quoted the FORMAT back"),
+        ("DECISION: continue\nOn reflection:\nDECISION: stop", "BOTH decisions"),
+        ("I would continue here.", "never put it on a `DECISION:` line"),
+        ("Hello.", "no `DECISION:` line"),
+    ]:
+        assert parse_review_verdict(reply)[0] is None, f"the parser accepts {reply!r}; do not complain"
+        assert expected in review_verdict_complaint(reply), reply
 
 
 def test_the_prompt_asks_for_the_shape_that_cannot_break():
