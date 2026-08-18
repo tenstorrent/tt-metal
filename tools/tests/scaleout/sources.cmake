@@ -21,3 +21,5 @@ set(TEST_HOST_ID_ASSIGNMENT_SRCS test_host_id_assignment.cpp)
 set(TEST_INSTANCE_FILTER_SRCS test_instance_filter.cpp)
 
 set(TEST_GENERATE_RANK_BINDINGS_SRCS test_generate_rank_bindings.cpp)
+
+set(TEST_FSD_TO_PSD_SRCS test_fsd_to_psd.cpp)

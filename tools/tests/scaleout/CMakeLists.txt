@@ -163,3 +163,29 @@ target_link_libraries(
         gmock_main
         enchantum::enchantum
 )
+
+# Test for the offline FSD -> PSD builder (TT::FsdToPsd). Links tt_metal so the PSD proto symbols
+# (compiled once, in fabric) resolve; TT::FsdToPsd itself does not link the metal runtime.
+add_executable(test_fsd_to_psd)
+target_sources(test_fsd_to_psd PRIVATE ${TEST_FSD_TO_PSD_SRCS})
+
+target_include_directories(
+    test_fsd_to_psd
+    SYSTEM
+    PRIVATE
+        ${Metalium_BINARY_DIR}/tools/scaleout # scaleout-generated protobuf/factory_system_descriptor.pb.h
+        "$<TARGET_PROPERTY:fabric,BINARY_DIR>" # fabric-generated protobuf/physical_system_descriptor.pb.h
+)
+
+target_link_libraries(
+    test_fsd_to_psd
+    PRIVATE
+        TT::FsdToPsd
+        TT::ScaleoutTools
+        tt_metal
+        gmock_main
+        protobuf::libprotobuf
+        enchantum::enchantum
+)
+
+add_dependencies(test_fsd_to_psd scaleout_generated_protos fabric_generated_protos)
