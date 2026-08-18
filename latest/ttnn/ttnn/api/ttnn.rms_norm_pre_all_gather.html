@@ -378,7 +378,6 @@ Its output should be combined across devices with <a class="reference internal" 
 <li><p><strong>program_config</strong> (<em>ttnn.ProgramConfig</em><em>, </em><em>optional</em>) – the program configuration. Defaults to None.</p></li>
 <li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – the memory configuration. Defaults to None.</p></li>
 <li><p><strong>use_2d_core_grid</strong> (<em>bool</em><em>, </em><em>optional</em>) – the 2D core grid. Defaults to None.</p></li>
-<li><p><strong>fast_and_approximate_mode</strong> (<em>bool</em><em>, </em><em>optional</em>) – FLOAT32 only. <code class="docutils literal notranslate"><span class="pre">False</span></code> (default) uses the accurate SFPU path (full float32 accumulation); <code class="docutils literal notranslate"><span class="pre">True</span></code> uses the faster FPU path (inputs truncated to TF32). The accurate path is unavailable on Quasar and falls back to the FPU there. No effect for non-FLOAT32 inputs. Defaults to False.</p></li>
 </ul>
 </dd>
 <dt class="field-odd">Returns<span class="colon">:</span>
