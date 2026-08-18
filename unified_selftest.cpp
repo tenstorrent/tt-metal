@@ -272,6 +272,77 @@ void example_peer_hop() {
     noc_store<0>(out_storage.store(y.exp()), t2, 0);
 }
 
+// The two spellings of every unary op, side by side. The method form delegates to
+// the free function, so these must emit the same instructions; report_same() is
+// what keeps that true rather than merely intended. Keep the pair in lockstep --
+// a new op belongs in both.
+//
+// Only the COMPUTE projection can actually catch a divergence: relu and exp emit
+// nothing on a data-movement thread, so DM0/DM1 compare identical traces however
+// wrong the mixin is. Verified by making Fluent::relu delegate to exp_ -- COMPUTE
+// reported it and exited non-zero, DM0 passed regardless.
+void example_syntax_free() {
+    auto t0 = TensorAccessor(FakeArgs{0}, 0);
+    auto t2 = TensorAccessor(FakeArgs{2}, 0);
+    Storage in0(0, 2), in1(1, 2), out(2, 2), scaler(3, 1), red(4, 1);
+    using Geom = MatmulGeometry</*rt=*/2, /*ct=*/2, /*kt=*/2>;
+    using RG = ReduceGeometry</*ht=*/2, /*wt=*/1>;
+
+    {  // Bin
+        ComputeBlock a = noc_load<1>(in0, t0, 0).wait();
+        ComputeBlock b = noc_load<1>(in1, t0, 0).wait();
+        noc_store<0>(out.store(relu(a + b)), t2, 0);
+    }
+    {  // ComputeBlock
+        ComputeBlock a = noc_load<1>(in0, t0, 0).wait();
+        noc_store<0>(out.store(exp_(a)), t2, 0);
+    }
+    {  // Un, chained
+        ComputeBlock a = noc_load<1>(in0, t0, 0).wait();
+        noc_store<0>(out.store(exp_(relu(a))), t2, 0);
+    }
+    {  // MatmulNode -- appends to the epilogue chain
+        ComputeBlock a = noc_load<1>(in0, t0, 0).wait();
+        ComputeBlock b = noc_load<1>(in1, t0, 0).wait();
+        noc_store<0>(out.store(relu(matmul<Geom>(a, b))), t2, 0);
+    }
+    {  // ReduceNode -- likewise
+        ComputeBlock a = noc_load<1>(in0, t0, 0).wait();
+        noc_store<0>(red.store(exp_(reduce_sum<RG, ReduceAxis::Rows>(a, scaler))), t2, 0);
+    }
+}
+
+void example_syntax_method() {
+    auto t0 = TensorAccessor(FakeArgs{0}, 0);
+    auto t2 = TensorAccessor(FakeArgs{2}, 0);
+    Storage in0(0, 2), in1(1, 2), out(2, 2), scaler(3, 1), red(4, 1);
+    using Geom = MatmulGeometry</*rt=*/2, /*ct=*/2, /*kt=*/2>;
+    using RG = ReduceGeometry</*ht=*/2, /*wt=*/1>;
+
+    {  // Bin
+        ComputeBlock a = noc_load<1>(in0, t0, 0).wait();
+        ComputeBlock b = noc_load<1>(in1, t0, 0).wait();
+        noc_store<0>(out.store((a + b).relu()), t2, 0);
+    }
+    {  // ComputeBlock
+        ComputeBlock a = noc_load<1>(in0, t0, 0).wait();
+        noc_store<0>(out.store(a.exp()), t2, 0);
+    }
+    {  // Un, chained
+        ComputeBlock a = noc_load<1>(in0, t0, 0).wait();
+        noc_store<0>(out.store(a.relu().exp()), t2, 0);
+    }
+    {  // MatmulNode -- appends to the epilogue chain
+        ComputeBlock a = noc_load<1>(in0, t0, 0).wait();
+        ComputeBlock b = noc_load<1>(in1, t0, 0).wait();
+        noc_store<0>(out.store(matmul<Geom>(a, b).relu()), t2, 0);
+    }
+    {  // ReduceNode -- likewise
+        ComputeBlock a = noc_load<1>(in0, t0, 0).wait();
+        noc_store<0>(red.store(reduce_sum<RG, ReduceAxis::Rows>(a, scaler).exp()), t2, 0);
+    }
+}
+
 // Single-shot matmul: one k-block straight through Storage::store(), no
 // accumulation buffer.
 void example_matmul_single() {
@@ -319,6 +390,36 @@ void example_matmul_acc() {
 
 }  // namespace unified
 }  // namespace tt
+
+// Runs two examples that should be indistinguishable and diffs their traces. A
+// different question from report()'s: not "is the protocol balanced" but "did
+// these two spellings emit the same thing".
+static bool report_same(const char* title, void (*lhs)(), void (*rhs)()) {
+    lhs();
+    std::vector<std::string> a = trace;
+    trace.clear();
+    rhs();
+    std::vector<std::string> b = trace;
+    trace.clear();
+
+    printf("\n===== %s :: %s =====\n", TT_LABEL, title);
+    if (a == b) {
+        printf("  %d instructions, identical\n", (int)a.size());
+        printf("  RESULT: spellings agree\n");
+        return true;
+    }
+    size_t max = a.size() > b.size() ? a.size() : b.size();
+    for (size_t i = 0; i < max; ++i) {
+        const char* l = i < a.size() ? a[i].c_str() : "<end>";
+        const char* r = i < b.size() ? b[i].c_str() : "<end>";
+        if (i >= a.size() || i >= b.size() || a[i] != b[i]) {
+            printf("    [%d] free  : %s\n", (int)i, l);
+            printf("    [%d] method: %s\n", (int)i, r);
+        }
+    }
+    printf("  RESULT: *** SPELLINGS DIVERGE ***\n");
+    return false;
+}
 
 static bool report(const char* title) {
     printf("\n===== %s :: %s =====\n", TT_LABEL, title);
@@ -376,6 +477,7 @@ int main() {
     ok &= report("matmul_acc");
     tt::unified::example_peer_hop();
     ok &= report("peer_hop");
+    ok &= report_same("syntax: free vs method", tt::unified::example_syntax_free, tt::unified::example_syntax_method);
     printf("\n%s: %s\n", TT_LABEL, ok ? "ALL BALANCED" : "FAILURES PRESENT");
     return ok ? 0 : 1;
 }
