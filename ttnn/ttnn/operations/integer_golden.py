@@ -3,11 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-_UNSIGNED_DTYPES = (torch.uint16, torch.uint32)
-
-
 def is_unsigned_dtype(dtype):
-    return dtype in _UNSIGNED_DTYPES
+    import torch
+
+    return dtype in (torch.uint16, torch.uint32)
 
 
 def _bit_width(dtype):
