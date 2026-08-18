@@ -199,12 +199,7 @@ ALWI constexpr uint32_t get_dst_index(const AccumulateT& accumulate) {
     }
 }
 
-template <
-    PoolType reduce_type,
-    ReduceDim reduce_dim,
-    DataFormat reduce_format,
-    typename AccumulateT,
-    bool is_sfpu = false>
+template <PoolType reduce_type, ReduceDim reduce_dim, typename AccumulateT, bool is_sfpu = false>
 ALWI void reload_accumulator_if_needed(
     DataflowBuffer& accum_dfb, uint32_t input_dfb_id, uint32_t scaler_dfb_id, const AccumulateT& accumulate) {
     if constexpr (is_accumulate_v<AccumulateT>) {
@@ -237,7 +232,9 @@ ALWI void reload_accumulator_if_needed(
             // Use short version since packer config is still valid from initial init
             // Pass accumulator DFB as old_dfb_id to reconfigure data format from accumulator to input DFB
             if constexpr (is_sfpu) {
-                detail::sfpu_reduce_fold_init<reduce_type, reduce_format>();
+                // Point SrcA back at the input for the next fold; the caller does the fold init.
+                reconfig_data_format_srca(accumulate.config.cb_accumulator, input_dfb_id);
+                copy_tile_to_dst_init_short(input_dfb_id);
             } else {
                 reduce_init_short_with_dt<reduce_type, reduce_dim>(
                     accumulate.config.cb_accumulator, input_dfb_id, scaler_dfb_id);
@@ -335,9 +332,12 @@ ALWI void reduce(
     ASSERT(input_dfb_id != output_dfb_id);
     ASSERT(input_dfb_id != scaler_dfb_id);
     ASSERT(output_dfb_id != scaler_dfb_id);
+#ifndef ARCH_QUASAR
+    // is_valid_dfb_tile_page_size() is a debug validator only defined on WH/BH
     UNPACK(ASSERT(is_valid_dfb_tile_page_size(input_dfb_id, (DataFormat)unpack_src_format[input_dfb_id])));
     UNPACK(ASSERT(is_valid_dfb_tile_page_size(scaler_dfb_id, (DataFormat)unpack_src_format[scaler_dfb_id])));
     PACK(ASSERT(is_valid_dfb_tile_page_size(output_dfb_id, (DataFormat)pack_dst_format[output_dfb_id])));
+#endif
     ASSERT(input_block_shape.rows > 0);
     ASSERT(input_block_shape.cols > 0);
     ASSERT(input_block_shape.batches > 0);
@@ -420,7 +420,7 @@ ALWI void reduce(
             tile_regs_acquire();
 
             // Reload accumulator if needed (zero overhead when AccumulateT is NoAccumulation)
-            reload_accumulator_if_needed<reduce_type, reduce_dim, reduce_format, AccumulateT, is_sfpu>(
+            reload_accumulator_if_needed<reduce_type, reduce_dim, AccumulateT, is_sfpu>(
                 accum_dfb, input_dfb_id, scaler_dfb_id, accumulate);
 
             const uint32_t dst_idx = get_dst_index(accumulate);
@@ -506,10 +506,11 @@ ALWI void reduce(
                 tile_regs_acquire();
 
                 // Reload accumulator if needed (zero overhead when AccumulateT is NoAccumulation)
-                reload_accumulator_if_needed<reduce_type, reduce_dim, reduce_format, AccumulateT, is_sfpu>(
+                reload_accumulator_if_needed<reduce_type, reduce_dim, AccumulateT, is_sfpu>(
                     accum_dfb, input_dfb_id, scaler_dfb_id, accumulate);
                 if constexpr (is_sfpu) {
-                    if (Wt > 1) {
+                    // Fold needed if the axis has >1 tile, or Accumulate reloaded a result into DST.
+                    if (Wt > 1 || !detail::sfpu_is_first_tile(0, accumulate)) {
                         detail::sfpu_reduce_fold_init<reduce_type, reduce_format>();
                     }
                 }
@@ -548,8 +549,17 @@ ALWI void reduce(
 
                 // SFPU intra-tile finalize
                 if constexpr (is_sfpu) {
+#ifndef ARCH_QUASAR
                     sfpu_reduce_init<reduce_type, reduce_format>();
                     sfpu_reduce<reduce_type, reduce_format, reduce_dim>(dst_idx, /*ct_dim=*/1, /*rt_dim=*/1);
+#else
+                    // The SFPU reduce path (Int32, or accurate-fp32 SUM) is unported on Quasar:
+                    // sfpu_reduce/_init are ARCH_QUASAR-guarded out. is_sfpu_reduce_path() is false for the
+                    // FPU/GMPOOL paths Quasar does support (e.g. avg_pool SUM, MAX), so this branch is dead
+                    // there; static_assert makes an actual Quasar SFPU-reduce instantiation fail loudly
+                    // rather than silently drop the finalize.
+                    static_assert(!is_sfpu, "SFPU reduce path is not supported on Quasar");
+#endif
                 }
 
                 // Call post-reduce operation (e.g., recip_tile for softmax)
@@ -627,10 +637,11 @@ ALWI void reduce(
                 tile_regs_acquire();
 
                 // Reload accumulator if needed (zero overhead when AccumulateT is NoAccumulation)
-                reload_accumulator_if_needed<reduce_type, reduce_dim, reduce_format, AccumulateT, is_sfpu>(
+                reload_accumulator_if_needed<reduce_type, reduce_dim, AccumulateT, is_sfpu>(
                     accum_dfb, input_dfb_id, scaler_dfb_id, accumulate);
                 if constexpr (is_sfpu) {
-                    if (Ht > 1) {
+                    // Fold needed if the axis has >1 tile, or Accumulate reloaded a result into DST.
+                    if (Ht > 1 || !detail::sfpu_is_first_tile(0, accumulate)) {
                         detail::sfpu_reduce_fold_init<reduce_type, reduce_format>();
                     }
                 }
@@ -678,12 +689,18 @@ ALWI void reduce(
 
                 // SFPU intra-tile finalize per output slot
                 if constexpr (is_sfpu) {
+#ifndef ARCH_QUASAR
                     const uint32_t sfpu_base_dst = get_dst_index(accumulate);
                     sfpu_reduce_init<reduce_type, reduce_format>();
                     for (uint32_t k = 0; k < current_chunk; ++k) {
                         sfpu_reduce<reduce_type, reduce_format, reduce_dim>(
                             sfpu_base_dst + k, /*ct_dim=*/1, /*rt_dim=*/1);
                     }
+#else
+                    // SFPU reduce path unported on Quasar (see the matching guard above); dead for the
+                    // FPU/GMPOOL paths Quasar supports, static_assert catches a real Quasar SFPU reduce.
+                    static_assert(!is_sfpu, "SFPU reduce path is not supported on Quasar");
+#endif
                 }
 
                 // Post-reduce operation for each output tile in chunk

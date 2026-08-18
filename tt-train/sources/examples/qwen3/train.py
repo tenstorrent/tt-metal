@@ -79,6 +79,7 @@ from tqdm import tqdm
 import ttml
 from ttml.models.qwen3.flops import calculate_flops_per_token
 
+from utils.device_setup import setup_device, teardown_device
 from utils.lora import LORA_TARGETS_ACCEPTED, LORA_TARGETS_ALL, inject_adapter_in_model, normalize_lora_targets
 from utils.memory import MemoryUsageTracker, finalize_memory
 from ttml.common.performance import get_device_peak_tflops_bf16
@@ -153,7 +154,7 @@ def evaluate(
 
             input_tensor = create_input_tensor(x_np, dp_mapper)
 
-            logits = model(input_tensor, causal_mask, input_ids_np=x_np)
+            logits = model(input_tensor, causal_mask)
             target_tensor = create_target_tensor(y_np, dp_mapper)
             if use_tp:
                 loss = ttml.ops.distributed.vocab_parallel_cross_entropy_loss(
@@ -192,7 +193,7 @@ def generate_text(model, config, tokenizer, prompt, max_tokens, max_seq_len, dev
             padded[0, 0, 0, : len(tokens_window)] = np.array(tokens_window, dtype=np.uint32)
 
             input_tensor = create_input_tensor(padded)
-            logits = model(input_tensor, causal_mask, input_ids_np=padded)
+            logits = model(input_tensor, causal_mask)
             logits_np = extract_logits(logits, distributed)
 
             pred_pos = len(tokens_window) - 1
@@ -481,8 +482,6 @@ def main():
     tp_size = args.mesh_shape[1]
     distributed = tp_size > 1 or dp_size > 1
     use_distributed_model = tp_size > 1
-
-    from utils.device_setup import setup_device
 
     ctx, device = setup_device(dp_size, tp_size, seed=args.seed)
 
@@ -825,7 +824,7 @@ def main():
             t0 = _tlog(step, "create_input", t0)
 
             # Forward pass
-            logits = ttml_model(input_tensor, causal_mask, input_ids_np=x_np)
+            logits = ttml_model(input_tensor, causal_mask)
             t0 = _tlog(step, "forward", t0)
 
             # Memory snapshot after forward pass (only during first iteration)
@@ -1125,8 +1124,14 @@ def main():
         tb_train_writer.close()
     if tb_val_writer is not None:
         tb_val_writer.close()
-    ctx.close_device()
+    teardown_device()
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    finally:
+        # main() tears down on the success path; this covers the exception path,
+        # where that call is skipped. teardown_device() is idempotent, so the
+        # double call on success is a no-op.
+        teardown_device()

@@ -15,7 +15,7 @@ TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache
 # Example usage:
 #   export PYTEST_CMD="python -m tracy -r -p --dump-device-data-mid-run -m pytest"
 #   source run_single_card_demo_tests.sh
-#   run_resnet_func
+#   run_bge_m3_demo
 # ============================================================================
 PYTEST_CMD="${PYTEST_CMD:-pytest}"
 
@@ -31,22 +31,6 @@ run_ds_r1_qwen_func() {
 
 run_phi4_func() {
   HF_MODEL=microsoft/phi-4 $PYTEST_CMD models/tt_transformers/demo/simple_text_demo.py -k "accuracy and ci-token-matching"
-}
-
-run_segformer_func() {
-  #Segformer Segmentation Demo
-  $PYTEST_CMD models/demos/vision/segmentation/segformer/demo/demo_for_semantic_segmentation.py
-
-  #Segformer Classification Demo
-  $PYTEST_CMD models/demos/vision/segmentation/segformer/demo/demo_for_image_classification.py
-
-}
-
-run_sentencebert_func() {
-
-  #SentenceBERT Demo
-  $PYTEST_CMD models/demos/wormhole/sentence_bert/demo/demo.py
-
 }
 
 run_bge_m3_demo() {
@@ -71,48 +55,6 @@ run_yolov11m_func() {
 
 }
 
-run_ufld_v2_func() {
-  #ufld_v2 demo
-  $PYTEST_CMD models/demos/vision/segmentation/ufld_v2/wormhole/demo/demo.py
-}
-
-run_vgg_func() {
-
-  #VGG11/VGG16
-  $PYTEST_CMD models/demos/vision/classification/vgg/demo/demo.py
-
-}
-
-run_bert_tiny_func() {
-
-  pytest models/demos/wormhole/bert_tiny/demo/demo.py
-
-}
-
-run_bert_func() {
-  fail=0
-
-  $PYTEST_CMD models/demos/metal_BERT_large_11/demo/demo.py -k batch_7 || fail=1
-  $PYTEST_CMD models/demos/metal_BERT_large_11/demo/demo.py -k batch_8 || fail=1
-
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
-
-}
-
-run_resnet_stability() {
-
-  $PYTEST_CMD models/demos/vision/classification/resnet50/wormhole/tests/test_resnet50_stability.py -k "short"
-
-}
-
-run_resnet_func() {
-
-  $PYTEST_CMD models/demos/vision/classification/resnet50/wormhole/demo/demo.py
-
-}
-
 run_sdxl_func() {
   TT_MM_THROTTLE_PERF=5 $PYTEST_CMD models/demos/stable_diffusion_xl_base/demo/demo.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel"
   TT_MM_THROTTLE_PERF=5 $PYTEST_CMD models/demos/stable_diffusion_xl_base/demo/demo_base_and_refiner.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel"
@@ -120,38 +62,6 @@ run_sdxl_func() {
   TT_MM_THROTTLE_PERF=5 $PYTEST_CMD models/demos/stable_diffusion_xl_base/demo/demo_inpainting.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel"
   TT_MM_THROTTLE_PERF=5 $PYTEST_CMD models/demos/stable_diffusion_xl_base/demo/demo_lora.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel"
 }
-
-run_distilbert_func() {
-
-  pytest models/demos/wormhole/distilbert/demo/demo.py
-
-}
-
-
-run_mnist_func() {
-
-  $PYTEST_CMD models/demos/vision/classification/mnist/demo/demo.py
-
-}
-
-run_squeezebert_func() {
-
-  $PYTEST_CMD models/demos/squeezebert/demo/demo.py
-
-}
-
-run_efficientnet_b0_func(){
-
-  $PYTEST_CMD models/experimental/efficientnetb0/demo/demo.py
-
-}
-
-run_stable_diffusion_func() {
-
-  $PYTEST_CMD --timeout 600 --input-path="models/demos/vision/generative/stable_diffusion/wormhole/demo/input_data.json" models/demos/vision/generative/stable_diffusion/wormhole/demo/demo.py::test_demo
-
-}
-
 
 run_yolov9c_perf() {
   # yolov9c demo
@@ -166,35 +76,11 @@ run_yolov8s_perf() {
 }
 
 
-run_mobilenetv2_perf(){
-
-#  mobilenetv2 demo
- $PYTEST_CMD models/demos/vision/classification/mobilenetv2/demo/demo.py
-
-}
-
 run_yolov8s_world_perf() {
 
   # yolov8s_world demo
   $PYTEST_CMD models/demos/yolov8s_world/demo/demo.py
 
-
-}
-
-run_vanilla_unet_demo() {
- # vanilla_unet demo
- $PYTEST_CMD models/demos/vision/segmentation/vanilla_unet/demo/demo.py
-}
-
-run_swin_s_demo() {
-
-  $PYTEST_CMD models/experimental/swin_s/demo/demo.py
-
-}
-
-run_swin_v2_demo() {
-
-  $PYTEST_CMD models/experimental/swin_v2/demo/demo.py
 
 }
 
@@ -231,24 +117,12 @@ run_yolov6l_demo() {
 
 }
 
-run_vgg_unet_demo() {
- # vgg_unet demo
-  $PYTEST_CMD models/demos/vision/segmentation/vgg_unet/wormhole/demo/demo.py
-}
-
-
 run_yolov12x_demo() {
 
   $PYTEST_CMD models/demos/yolov12x/demo/demo.py
 
 }
 
-
-run_vovnet_demo(){
-
- $PYTEST_CMD models/experimental/vovnet/demo/demo.py
-
-}
 
 run_vit_demo(){
 

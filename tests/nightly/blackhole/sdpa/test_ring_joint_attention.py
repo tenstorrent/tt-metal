@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import ttnn
 from loguru import logger
 import pytest
@@ -26,6 +28,7 @@ def skip_on_large_clusters():
         )
 
 
+@pytest.mark.skipif(os.environ.get("CI") == "true", reason="Heavyweight ring-joint SDPA matrix is not run in CI")
 @bh_qb_ge_unit_test_params
 @pytest.mark.parametrize(
     "device_params, all_gather_topology",

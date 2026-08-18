@@ -9,7 +9,7 @@
 #include <string>
 #include "impl/context/context_types.hpp"
 #include "impl/program/program_impl.hpp"
-#include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/tensor/spec/tensor_spec.hpp>
 #include <tt-metalium/mesh_trace_id.hpp>
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include "mesh_coord.hpp"
