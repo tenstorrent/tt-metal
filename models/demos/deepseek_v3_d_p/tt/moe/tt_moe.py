@@ -50,12 +50,12 @@ class TtMoe(LightweightModule):
                                 final = routed_output + shared_output
 
     Layout Flow:
-        - Dispatch: ROW_MAJOR → ROW_MAJOR
-        - Routed Expert: TILE_LAYOUT → TILE_LAYOUT (convert before/after)
-        - Combine: ROW_MAJOR → ROW_MAJOR
+        - Model/shared-expert input: TILE_LAYOUT, BF16
+        - Dispatch: TILE_LAYOUT, BF16 → ROW_MAJOR, BF16
+        - Routed Expert: ROW_MAJOR, BF16 → TILE_LAYOUT, BF8_B
+        - Combine: TILE_LAYOUT → ROW_MAJOR
         - Shared Expert: TILE_LAYOUT → TILE_LAYOUT
-        - Split Connection: ROW_MAJOR (elementwise ops)
-        - Final Add: ROW_MAJOR
+        - Reduce/final add: TILE_LAYOUT
     """
 
     @staticmethod
@@ -151,6 +151,8 @@ class TtMoe(LightweightModule):
         shared_expert_weights: dict = None,
         routed_expert_activations_dtype=ttnn.bfloat8_b,
         routed_expert_weights_dtype=ttnn.bfloat4_b,
+        routed_expert_implementation=ttnn.RoutedExpertImplementation.Unified,
+        routed_expert_weight_memory_layout=None,
         shared_expert_activations_dtype=ttnn.bfloat16,
         shared_expert_weights_dtype=ttnn.bfloat8_b,
         gate_fallback_mode: GateComputeMode = GateComputeMode.HOST_ALL,
@@ -188,6 +190,10 @@ class TtMoe(LightweightModule):
                                    for shared expert.
             routed_expert_activations_dtype: Data type for routed expert activations
             routed_expert_weights_dtype: Data type for routed expert weights
+            routed_expert_implementation: Routed expert kernel implementation selected
+                explicitly from Python. Defaults to the established Unified path.
+            routed_expert_weight_memory_layout: Optional INTERLEAVED or ND_SHARDED
+                placement. Defaults to the selected implementation's preferred layout.
             shared_expert_activations_dtype: Data type for shared expert activations
             shared_expert_weights_dtype: Data type for shared expert weights
             gate_weights: Dict with "weight" and "e_score_correction_bias" keys for gate
@@ -409,6 +415,8 @@ class TtMoe(LightweightModule):
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.routed_expert",
             activation=ttnn.RoutedExpertActivation.Silu,
+            implementation=routed_expert_implementation,
+            weight_memory_layout=routed_expert_weight_memory_layout,
         )
 
         # Initialize shared expert (col axis: axis 1)
@@ -470,7 +478,7 @@ class TtMoe(LightweightModule):
         Forward pass through the full MoE pipeline.
 
         Args:
-            x: Input tensor - ROW_MAJOR, sharded:
+            x: Input tensor - TILE_LAYOUT, sharded:
                - For 2D mesh: sharded dims=(0, -1) - dim 0 across axis 0, dim -1 across axis 1
                - Shape per device: (dispatch_group_size/axis0, seq_len_per_chip, emb_dim/axis1)
             return_intermediates: If True, return intermediate tensors for debugging
@@ -626,8 +634,7 @@ class TtMoe(LightweightModule):
         # ========================================
         # Step 1: Shared expert (enabled)
         # ========================================
-        # Shared expert expects replicated input (full emb_dim)
-        # Convert x to TILE_LAYOUT for shared expert
+        # Shared expert expects tiled, replicated input (full emb_dim).
         logger.debug(f"[TtMoe.forward] {x.shape=} {x.memory_config()=}")
 
         shared_output = self.shared_expert(x)

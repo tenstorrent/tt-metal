@@ -217,6 +217,8 @@ class TtPrefillBlock(LightweightModule):
         gate_fallback_mode: GateComputeMode = GateComputeMode.HOST_ALL,
         routed_expert_activations_dtype=ttnn.bfloat8_b,
         routed_expert_weights_dtype=ttnn.bfloat4_b,
+        routed_expert_implementation=ttnn.RoutedExpertImplementation.Unified,
+        routed_expert_weight_memory_layout=None,
         shared_expert_activations_dtype=ttnn.bfloat16,
         shared_expert_weights_dtype=ttnn.bfloat8_b,
         weight_cache_path: Optional[Path] = None,
@@ -372,6 +374,8 @@ class TtPrefillBlock(LightweightModule):
         gate_fallback_mode,
         routed_expert_activations_dtype,
         routed_expert_weights_dtype,
+        routed_expert_implementation,
+        routed_expert_weight_memory_layout,
         shared_expert_activations_dtype,
         shared_expert_weights_dtype,
         dispatch_buffer_capacity_factor,
@@ -418,6 +422,8 @@ class TtPrefillBlock(LightweightModule):
             shared_expert_weights=state_dict.get("shared_expert_weights"),  # None if cache exists
             routed_expert_activations_dtype=routed_expert_activations_dtype,
             routed_expert_weights_dtype=routed_expert_weights_dtype,
+            routed_expert_implementation=routed_expert_implementation,
+            routed_expert_weight_memory_layout=routed_expert_weight_memory_layout,
             shared_expert_activations_dtype=shared_expert_activations_dtype,
             shared_expert_weights_dtype=shared_expert_weights_dtype,
             gate_weights=state_dict.get("gate_weights"),  # None if cache exists

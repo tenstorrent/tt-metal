@@ -18,6 +18,9 @@ from typing import Optional
 import torch
 from loguru import logger
 from tracy import signpost
+from ttnn.operations.moe_fused_swiglu.moe_fused_swiglu_helpers import (
+    weight_memory_configs as fused_weight_memory_configs,
+)
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -33,6 +36,8 @@ COMPUTE_KERNEL_CONFIG_LOFI = ttnn.WormholeComputeKernelConfig(
 
 
 class TtRoutedExpert(LightweightModule):
+    _FUSED_WEIGHT_CORE_GRID = ttnn.CoreCoord(11, 8)
+
     @staticmethod
     def check_cache_complete(cache_path: Path, cache_name_prefix: str, experts_per_chip: int) -> bool:
         """Check if all routed expert weight cache files exist."""
@@ -58,6 +63,7 @@ class TtRoutedExpert(LightweightModule):
         *,
         emb_dim: int | None = None,
         hidden_dim: int | None = None,
+        target_memory_configs: tuple | None = None,
     ):
         """
         Shared logic for converting expert weights to ttnn with caching.
@@ -73,6 +79,8 @@ class TtRoutedExpert(LightweightModule):
             device: None for cache-only, mesh_device for cache+load
             emb_dim: Required when torch_weights is None
             hidden_dim: Required when torch_weights is None
+            target_memory_configs: Optional (gate, up, down) memory configs used
+                when materializing tensors on device. Cache-only conversion ignores it.
 
         Returns:
             (gate_projs, up_projs, down_projs) if device is not None, else None
@@ -111,7 +119,7 @@ class TtRoutedExpert(LightweightModule):
                 stacked_up = torch.empty(mesh_rows, mesh_cols, emb_dim, hidden_dim)
                 stacked_down = torch.empty(mesh_rows, mesh_cols, hidden_dim, emb_dim)
 
-            mem = ttnn.DRAM_MEMORY_CONFIG if device else None
+            materialization_memory_config = ttnn.DRAM_MEMORY_CONFIG if device else None
             mapper = ExpertMapping.get_weights_mesh_mapper(mesh_device)
 
             gate_tt = ttnn.as_tensor(
@@ -120,7 +128,7 @@ class TtRoutedExpert(LightweightModule):
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
                 dtype=weights_dtype,
-                memory_config=mem,
+                memory_config=materialization_memory_config,
                 cache_file_name=_cache_name(f"local_{local_expert_idx}_gate"),
             )
             up_tt = ttnn.as_tensor(
@@ -129,7 +137,7 @@ class TtRoutedExpert(LightweightModule):
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
                 dtype=weights_dtype,
-                memory_config=mem,
+                memory_config=materialization_memory_config,
                 cache_file_name=_cache_name(f"local_{local_expert_idx}_up"),
             )
             down_tt = ttnn.as_tensor(
@@ -138,21 +146,67 @@ class TtRoutedExpert(LightweightModule):
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
                 dtype=weights_dtype,
-                memory_config=mem,
+                memory_config=materialization_memory_config,
                 cache_file_name=_cache_name(f"local_{local_expert_idx}_down"),
             )
 
             if device is None:
                 del gate_tt, up_tt, down_tt
             else:
-                gate_tt = ttnn.squeeze(ttnn.squeeze(gate_tt, dim=0), dim=0)
-                up_tt = ttnn.squeeze(ttnn.squeeze(up_tt, dim=0), dim=0)
-                down_tt = ttnn.squeeze(ttnn.squeeze(down_tt, dim=0), dim=0)
+                # Cached tensors are placement-neutral artifacts, materialized
+                # interleaved above. First remove the mesh mapper's leading
+                # singleton dimensions, then deliberately place the rank-2
+                # local weight for the selected implementation. This behaves
+                # identically for fresh conversion and cache-backed loading.
+                local_weights = tuple(
+                    ttnn.squeeze(ttnn.squeeze(weight, dim=0), dim=0) for weight in (gate_tt, up_tt, down_tt)
+                )
+                if target_memory_configs is not None:
+                    local_weights = tuple(
+                        ttnn.to_memory_config(weight, memory_config)
+                        for weight, memory_config in zip(local_weights, target_memory_configs, strict=True)
+                    )
+                gate_tt, up_tt, down_tt = local_weights
                 gate_tensors.append(gate_tt)
                 up_tensors.append(up_tt)
                 down_tensors.append(down_tt)
 
         return (gate_tensors, up_tensors, down_tensors) if device else None
+
+    @classmethod
+    def _resolve_weight_placement(cls, mesh_device, emb_dim, hidden_dim, implementation, weight_memory_layout):
+        if weight_memory_layout is None:
+            weight_memory_layout = (
+                ttnn.TensorMemoryLayout.ND_SHARDED
+                if implementation == ttnn.RoutedExpertImplementation.MoeFusedSwiGlu
+                else ttnn.TensorMemoryLayout.INTERLEAVED
+            )
+
+        if weight_memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED:
+            return weight_memory_layout, None
+        if weight_memory_layout != ttnn.TensorMemoryLayout.ND_SHARDED:
+            raise ValueError(
+                "Routed-expert weights support only INTERLEAVED or ND_SHARDED memory layouts; "
+                f"got {weight_memory_layout}"
+            )
+        if implementation != ttnn.RoutedExpertImplementation.MoeFusedSwiGlu:
+            raise ValueError("ND-sharded routed-expert weights require the MoeFusedSwiGlu implementation")
+
+        gate_up_memory_config, down_memory_config = fused_weight_memory_configs(
+            mesh_device, emb_dim, hidden_dim, core_grid=cls._FUSED_WEIGHT_CORE_GRID
+        )
+        return weight_memory_layout, (gate_up_memory_config, gate_up_memory_config, down_memory_config)
+
+    @staticmethod
+    def _validate_nd_sharded_weights(gate_projs, up_projs, down_projs):
+        for projection_name, projections in (("gate", gate_projs), ("up", up_projs), ("down", down_projs)):
+            for local_expert, projection in enumerate(projections):
+                memory_config = projection.memory_config()
+                if memory_config.buffer_type != ttnn.BufferType.DRAM or memory_config.nd_shard_spec is None:
+                    raise RuntimeError(
+                        "MoeFusedSwiGlu routed-expert weights must be DRAM ND-sharded; "
+                        f"local expert {local_expert} {projection_name} has {memory_config}"
+                    )
 
     @staticmethod
     def _convert_expert_biases(
@@ -255,6 +309,8 @@ class TtRoutedExpert(LightweightModule):
         cache_name_prefix: Optional[str] = None,
         *,
         activation: "ttnn.RoutedExpertActivation",
+        implementation: "ttnn.RoutedExpertImplementation" = ttnn.RoutedExpertImplementation.Unified,
+        weight_memory_layout: "ttnn.TensorMemoryLayout | None" = None,
     ):
         """
         Initialize TtRoutedExpert module.
@@ -285,6 +341,11 @@ class TtRoutedExpert(LightweightModule):
                           (byte-identical) or RoutedExpertActivation.SwiGluOai for the
                           MiniMax-M3 / gpt-oss clamped swigluoai activation. Keyword-only and
                           without a default so the caller must choose explicitly.
+            implementation: Routed-expert device implementation. Unified preserves the
+                          established kernel; MoeFusedSwiGlu selects the new fused kernel.
+            weight_memory_layout: INTERLEAVED or ND_SHARDED. When omitted, Unified uses
+                          interleaved weights and MoeFusedSwiGlu uses its preferred DRAM
+                          ND-sharded placement.
         """
         super().__init__()
         self.mesh_device = mesh_device
@@ -310,6 +371,10 @@ class TtRoutedExpert(LightweightModule):
                 "TtRoutedExpert requires an explicit `activation` (ttnn.RoutedExpertActivation.Silu or .SwiGluOai)"
             )
         self.activation = activation
+        self.implementation = implementation
+        self.weight_memory_layout, target_memory_configs = self._resolve_weight_placement(
+            mesh_device, emb_dim, hidden_dim, implementation, weight_memory_layout
+        )
 
         # Optional per-expert projection biases (gpt-oss). Only supported with
         # SwiGluOai (the kernel adds gate/up bias before the clamp and down bias
@@ -346,6 +411,7 @@ class TtRoutedExpert(LightweightModule):
                 self.weight_cache_path,
                 self.cache_name_prefix,
                 device=self.mesh_device,
+                target_memory_configs=target_memory_configs,
             )
         elif weight_cache_path is not None:
             logger.debug(f"Loading weights from cache ({experts_per_chip} local experts)")
@@ -359,6 +425,7 @@ class TtRoutedExpert(LightweightModule):
                 device=self.mesh_device,
                 emb_dim=emb_dim,
                 hidden_dim=hidden_dim,
+                target_memory_configs=target_memory_configs,
             )
         else:
             logger.debug(f"Creating dummy tensors for testing ({total_experts} experts)")
@@ -379,10 +446,13 @@ class TtRoutedExpert(LightweightModule):
                 None,
                 None,
                 device=self.mesh_device,
+                target_memory_configs=target_memory_configs,
             )
 
         assert result is not None, "Expected weight tensors to be returned when device is provided"
         self.gate_projs, self.up_projs, self.down_projs = result
+        if self.weight_memory_layout == ttnn.TensorMemoryLayout.ND_SHARDED:
+            self._validate_nd_sharded_weights(self.gate_projs, self.up_projs, self.down_projs)
 
         # Convert + distribute optional per-expert biases (gpt-oss), one (1, N)
         # tensor per local expert, mesh-distributed like the weights.
@@ -487,16 +557,18 @@ class TtRoutedExpert(LightweightModule):
         logger.debug(f"Forward pass: dispatched_buffer shape={dispatched_buffer.shape}")
 
         if is_blackhole():
-            # Fused path. The composite op selects its strategy from the input
-            # layout: a ROW_MAJOR bf16 buffer is consumed directly (x tilized and
-            # bf8-packed internally, fresh output); a TILE buffer takes the
-            # non-fused read path and is written in place. TILE mode requires x to
-            # be bf8, so cast a mismatched TILE input; the ROW_MAJOR fast path is
-            # left untouched.
+            # Both Blackhole implementations consume ROW_MAJOR bf16 directly.
+            # Keep the legacy TILE-input behavior for callers outside this model,
+            # which dispatches ROW_MAJOR activations.
             if dispatched_buffer.layout == ttnn.TILE_LAYOUT and dispatched_buffer.dtype != self.activations_dtype:
                 logger.warning(f"{dispatched_buffer.dtype=} typecasting to {self.activations_dtype}")
                 dispatched_buffer = ttnn.typecast(dispatched_buffer, self.activations_dtype)
-            signpost(header="UnifiedRoutedExpertMoe")
+            routed_expert_zone = (
+                "MoeFusedSwiGlu"
+                if self.implementation == ttnn.RoutedExpertImplementation.MoeFusedSwiGlu
+                else "UnifiedRoutedExpertMoe"
+            )
+            signpost(header=routed_expert_zone)
             expert_outputs = ttnn.experimental.deepseek_prefill.unified_routed_expert_moe(
                 dispatched_buffer,
                 expert_region_offsets,
@@ -508,6 +580,7 @@ class TtRoutedExpert(LightweightModule):
                 max_dispatched_tokens_per_expert=self.max_tokens,
                 compute_kernel_config=self.compute_kernel_config,
                 activation=self.activation,
+                implementation=self.implementation,
                 gate_biases=self.gate_biases,
                 up_biases=self.up_biases,
                 down_biases=self.down_biases,
