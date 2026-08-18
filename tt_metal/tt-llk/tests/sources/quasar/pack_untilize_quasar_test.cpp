@@ -95,7 +95,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _configure_buf_desc_table_(td_val.buf_desc_id, td_val.buf_desc);
         if constexpr (unpack_to_dest)
         {
-            _llk_unpack_configure_unary_<SELECTED_UNPACKER>(td_val);
+            _llk_unpack_configure_unary_<SELECTED_UNPACKER>(td_val.reg_data_format);
             // Unpack one tile row at a time for double-buffering with packer (SyncHalf).
             // Writing all tiles at once would cause _llk_pack_dest_dvalid_section_done_'s
             // ZEROACC to wipe subsequent tile rows after packing the first one.
@@ -105,11 +105,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             if constexpr (is_fp32_dest_acc_en)
             {
-                _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(td_val, td_val);
+                _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(td_val.reg_data_format, td_val.reg_data_format);
             }
             else
             {
-                _llk_unpack_configure_unary_<SELECTED_UNPACKER>(td_val);
+                _llk_unpack_configure_unary_<SELECTED_UNPACKER>(td_val.reg_data_format);
             }
             _llk_unpack_unary_operand_init_<SELECTED_UNPACKER, false /*transpose*/, is_fp32_dest_acc_en>(buf_desc_id, tensor_shape_A, num_tiles_per_unpack);
         }
@@ -323,7 +323,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
 
         _configure_buf_desc_table_(tdma_desc.buf_desc_id, tdma_desc.buf_desc);
-        _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(tdma_desc, ckernel::ReluConfig::none());
+        _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(tdma_desc.reg_data_format, ckernel::ReluConfig::none());
         if (tensor_shape.total_num_faces() == NUM_FACES)
         {
             _llk_pack_untilize_init_<FULL_CT_DIM, BLOCK_CT_DIM>(buf_desc_id, tensor_shape);

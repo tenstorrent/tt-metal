@@ -131,6 +131,14 @@ _gate_mode_name = os.environ.get("PREFILL_GATE_FALLBACK_MODE", ADAPTER.default_g
 # When on (default), the last transformer layer runs kv-only: it fills the KV cache for migration and
 # skips its Q/SDPA/wo, FFN/MoE, final norm, and LM head. In a pipeline only the last rank applies it.
 KV_ONLY_LAST_LAYER = os.environ.get("PREFILL_KV_ONLY_LAST_LAYER", "1") == "1"
+# Build the DFlash drafter context-KV cache during this prefill. Three gates, ALL required: the selected
+# model declares the capability (ADAPTER.supports_dflash — only Kimi K2.6/K2.7), the run explicitly opts in
+# (PREFILL_DFLASH=1), and a drafter checkpoint is provided (DFLASH_HF_MODEL, resolved by the runtime). The
+# capability gate keeps a non-dflash model from ever building a Kimi drafter; the explicit PREFILL_DFLASH
+# switch keeps it off unless asked for, even when a checkpoint happens to be on disk.
+DFLASH_ENABLED = (
+    ADAPTER.supports_dflash and os.environ.get("PREFILL_DFLASH", "0") == "1" and bool(os.environ.get("DFLASH_HF_MODEL"))
+)
 # Measurement-only: synchronize the device after each chunk's forward and log the isolated per-rank
 # compute (CHUNK_COMPUTE). Off in production — the sync serializes dispatch and kills pipeline overlap.
 SYNC_PER_CHUNK = os.environ.get("PREFILL_SYNC_PER_CHUNK", "0") == "1"
@@ -143,6 +151,13 @@ _L1_SMALL_SIZE = ADAPTER.l1_small_size
 # swaps + per-layer acks) is handled by SubDeviceTraceController inside the runtime.
 USE_TRACE = os.environ.get("PREFILL_USE_TRACE", "0") == "1"
 _TRACE_REGION_SIZE = int(os.environ.get("PREFILL_TRACE_REGION_SIZE", 256 * 1024 * 1024)) if USE_TRACE else 0
+# DFlash is not trace-compatible: the drafter tap / pack-unpack / KV finalize run outside the runtime's
+# captured per-chunk segment, so a replayed trace would silently skip them. Fail loudly rather than
+# produce meaningless drafter KV. (Per offline discussion — keep DFlash on the eager per-op path.)
+assert not (DFLASH_ENABLED and USE_TRACE), (
+    "PREFILL_DFLASH=1 is incompatible with PREFILL_USE_TRACE=1: the DFlash drafter path is not "
+    "trace-captured. Run DFlash with PREFILL_USE_TRACE=0."
+)
 
 os.environ.setdefault("PREFILL_TTNN_CACHE", ADAPTER.ttnn_cache_default)
 
@@ -516,6 +531,11 @@ def _print_config() -> None:
         ("PREFILL_NUM_LAYERS", str(NUM_LAYERS)),
         ("PREFILL_PP_LAYER_COUNTS", os.environ.get("PREFILL_PP_LAYER_COUNTS", "<even split>")),
         ("PREFILL_KV_ONLY_LAST_LAYER", str(KV_ONLY_LAST_LAYER)),
+        (
+            "DFLASH_ENABLED",
+            f"{DFLASH_ENABLED} (adapter.supports_dflash={ADAPTER.supports_dflash}, "
+            f"DFLASH_HF_MODEL={os.environ.get('DFLASH_HF_MODEL') or '<unset>'})",
+        ),
         ("PREFILL_USE_TRACE", f"{USE_TRACE} (trace_region={_TRACE_REGION_SIZE >> 20} MB)"),
         ("PREFILL_CHUNK_SIZE", str(CHUNK_SIZE)),
         ("PREFILL_MAX_SEQ_LEN", str(MAX_SEQ_LEN)),
@@ -637,6 +657,9 @@ def main() -> None:
         # headless: its last layer runs KV-only and no norm/LM-head is built. Only the last rank does
         # this (single-rank inherits it); PREFILL_KV_ONLY_LAST_LAYER can force it off.
         kv_only_last_layer=is_last_rank and KV_ONLY_LAST_LAYER,
+        # NOT gated on is_last_rank: every rank builds its owned fc slices; the runtime derives the
+        # last-rank KV tail from is_last_rank.
+        dflash_enabled=DFLASH_ENABLED,
         weight_cache_path=ADAPTER.weight_cache_path(GLOBAL_MESH_SHAPE),
         sparse_kv_cache_format=ADAPTER.default_sparse_kv_cache_format,
         use_trace=USE_TRACE,
@@ -677,6 +700,9 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     num_ranks>1. Shutdown for num_ranks>1 is rough: downstream ranks block in D2D recv when rank 0
     stops, so they exit on teardown / SIGKILL."""
     single_rank = num_ranks == 1
+    # DFlash packs the drafter's FC partial alongside the hidden (concat on the feature dim), so the D2D
+    # activation is 2H wide when enabled; the non-dflash path (every other model) stays H.
+    d2d_activation_width = hf_config.hidden_size * (2 if DFLASH_ENABLED else 1)
 
     ttnn.distributed_context_barrier()  # warm-up: all ranks finish compile before chunks flow
 
@@ -705,7 +731,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     d2d_in = d2d_out = None
     if num_ranks > 1:
         mesh_device.clear_loaded_sub_device_manager()
-        d2d_in, d2d_out = build_d2d_pipeline_endpoints(mesh_device, rank, num_ranks, CHUNK_SIZE, hf_config.hidden_size)
+        d2d_in, d2d_out = build_d2d_pipeline_endpoints(mesh_device, rank, num_ranks, CHUNK_SIZE, d2d_activation_width)
         # The chained D2D socket rendezvous finishes at staggered times per rank. Without this barrier
         # a rank can reach the loop's first fabric-link lease while an upstream/downstream rank is still
         # in rendezvous, deadlocking the lease handshake before any chunk flows.
@@ -1083,7 +1109,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             kv_caches,
             rank,
             num_ranks,
-            hidden_size=hf_config.hidden_size,
+            hidden_size=d2d_activation_width,
             h2d_service=h2d_service,
             d2d_in=d2d_in,
             d2d_out=d2d_out,
