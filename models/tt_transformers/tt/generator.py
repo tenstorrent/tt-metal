@@ -506,7 +506,17 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         cores", program.cpp:2205). The prefetcher is Blackhole-only and GPT-OSS does not use it, so
         keeping these models on the original non-hoisted path costs this change nothing it targets.
         """
-        return any(getattr(m, "prefetcher", None) is not None for m in self.model)
+        uses = any(getattr(m, "prefetcher", None) is not None for m in self.model)
+        if uses and not getattr(self, "_logged_prefetcher_hoist_skip", False):
+            self._logged_prefetcher_hoist_skip = True
+            logger.info(
+                "DRAM prefetcher detected: keeping the original (non-hoisted) decode trace setup. "
+                "This model does not get the hoisted trace-allocation path, because the prefetcher's "
+                "per-mode sub-device managers are incompatible with preparing decode setup during the "
+                "prefill phase (see _uses_prefetcher). Trace I/O buffers for this model may still be "
+                "allocated while a trace is live."
+            )
+        return uses
 
     def _prepare_decode_trace_once(self, kv_cache, page_table, on_device_sampling):
         """Prepare the decode trace unless it is already prepared. Safe to call from either hoist point."""
