@@ -28,7 +28,7 @@ that means no driver under `tt_metal/tt-llk/tests/sources/` references the symbo
 | ~~A4~~ | ~~`mul_reduce_scalar_chunked_tile` untested~~ | — | — | **Defect located → C4** |
 | **A5** | `eltwise_mul_scalar` HiFi init — untested, rationale disproved | test | unknown | C2 |
 | ~~A6~~ | ~~Thin spots inside landed tests~~ | — | — | **DONE 2026-08-18** |
-| **B1** | `custom_mm` vs `compressed_custom_mm` divergence guard | test, **outside tt-llk** | ~1 d | needs an owner |
+| **B1** | `custom_mm` vs `compressed_custom_mm` divergence guard | test, **outside tt-llk** | ~1 d | needs an owner (interim static guard landed) |
 | **C1** | `dense_packing` W-stride not format-aware | **defect** | ~0.5 d once decided | owner decision |
 | **C2** | `eltwise_mul_scalar` HiFi workaround rationale does not hold | **question** | — | #52709 author |
 | **C3** | `topk_xl` → `eltwise_binary` reconfig escape | **defect**, pre-existing | unknown | needs an owner |
@@ -37,7 +37,7 @@ that means no driver under `tt_metal/tt-llk/tests/sources/` references the symbo
 | ~~D2~~ | ~~bare `false, false` in `rmsnorm.h:27`~~ | — | — | **DONE 2026-08-18** |
 | **D3** | `restore_tile_pack_mop` has no consumer | cleanup | — | `custom_mm.h` owner |
 | **E** | PR mechanics | chore | minutes | — |
-| **F** | Intermittent `test_matmul_custom_compressed` failure | **observation** | — | see below |
+| **F** | `test_matmul_custom_compressed` hangs — host/BRISC desync | **defect**, nightly-only | unknown | needs an owner |
 
 A1 and A2 remain the real holes: both promoted, both shipping, neither has a line of coverage.
 Both are still blocked — #52727 and #52713 were re-checked on 2026-08-18 and are **still open**.
@@ -247,11 +247,26 @@ diverge, every existing test keeps passing. Copilot raised the same point indepe
 **Plan.** A compute-kernel test under `tests/tt_metal/` that calls the real entry points. ~1 d,
 but it needs an owner who works in that tree.
 
-**Cheaper interim option.** A pre-commit check that fails if the two uninit bodies stop matching
-textually. Ugly, closes the specific risk in an hour.
+**Cheaper interim option — DONE 2026-08-18.** `tests/python_tests/test_custom_mm_uninit_parity.py`
+(commit `495adc689c9`), a device-free static gate rather than a pre-commit hook, so it runs in
+the smoke job that already collects the whole `python_tests` directory. It asserts two things:
+
+- the two compute-API uninit bodies are still byte-identical modulo comments (divergence); and
+- the driver's replicated `DENSE_WSTRIDE` / `DEFAULT_WSTRIDE` expressions are still the ones
+  the headers use (staleness) — the driver hardcodes them, so if a header changes the driver
+  keeps asserting the old behaviour *and passes*, because it programs that stride itself.
+
+Both mutation-checked: dropping the `restore_tile_pack_mop` branch from
+`compressed_custom_mm.h` fails the first with a diff naming the missing branch; changing the
+driver's `DENSE_WSTRIDE` to `* 4` fails the second.
+
+**This does not close B1.** A text match cannot say the functions *work*, only that they still
+say the same thing. The metal-side test calling the real entry points is still wanted, and is
+still the item that needs an owner. What the guard buys is that divergence now fails loudly
+instead of silently, which was the specific risk.
 
 **Note.** `b35270f3016` reduced the blast radius a little — the flag's documentation now says
-what it actually does — but the divergence risk is unchanged.
+what it actually does.
 
 ---
 
@@ -379,30 +394,58 @@ the number.
 
 ---
 
-## F. Intermittent `test_matmul_custom_compressed` failure — **observation, unresolved**
+## F. Intermittent `test_matmul_custom_compressed` hangs — **diagnosed 2026-08-18**
 
-On 2026-08-18 the same suite, unchanged, on the same commit, gave:
+Was an unidentified single failure; now characterised. Six back-to-back runs of the suite on
+BH p100a:
+
+| run | outcome |
+|---|---|
+| 1 | 588 passed |
+| 2 | **hang** (exit 5) in `test_matmul_custom_compressed_clustered` |
+| 3 | 2 failed — build-tree race, see below |
+| 4 | 3 failed (`TTException`) in `test_matmul_custom_compressed_single` |
+| 5 | **hang** (exit 5) in `test_matmul_custom_compressed_interleaved` |
+| 6 | 588 passed |
+
+**It is a hang, not a golden mismatch.** `run_test.sh`'s triage on run 2 caught the state:
 
 ```
-run 1:  588 passed
-run 2:  587 passed, 1 failed     <-- not reproduced since
-run 3:  588 passed
+Unpacker/Math/Packer mailboxes = 0x0 (KERNEL_STARTED)
+TRISC0/1/2  in_reset=True
+BRISC       pc=0x368, unchanged  (spinning)
+BriscCounter=0x118 (280)   host Python counter: 281
 ```
 
-**The failing variant was not identified** — the run was backgrounded through a `grep` that
-discarded the detail, and it has not recurred in the two runs since. So this is a report that
-the suite is not deterministic, not a diagnosis.
+All three TRISCs sit in soft reset while BRISC spins one command behind the host — a host↔BRISC
+command desync, not an LLK compute bug. `get_tensix_state` then failed to halt BRISC, so the
+device was already unresponsive.
 
-It is **not** from the 2026-08-18 changes: the 6 new metadata-boundary variants passed in all
-three runs, and nothing else in that suite's compile path was touched. C3 already records a
-pre-existing order-dependent reconfig escape in a neighbouring area, which is the obvious
-suspect but is unconfirmed.
+**It does not affect the PR gate.** Every failing variant reproduced —
+`clustered`, `interleaved`, `single` — is `@pytest.mark.nightly`, and the gate filters
+`not nightly`. It would affect a nightly run.
 
-**If you see it:** capture the full log, and per the tt-llk notes treat a reconfig escape as a
-real bug rather than a test-ordering nuisance. Do **not** `tt-smi -r` past it. The `perturb`
-skill exists for exactly this shape of problem.
+**Two caveats on this reproduction, both important:**
 
----
+1. **Back-to-back runs are not how CI runs it,** and may be the aggravating factor rather than
+   an independent trigger. Runs 1 and 6 were clean; the failures cluster in the middle.
+2. **Run 3 is not a real failure.** It hit
+   `test_matmul_custom_compressed_metadata_word_boundary` with
+   `ld: cannot open output file .../elf/pack.elf: No such file or directory` — a `/tmp/tt-llk-build`
+   tree race left behind when run 2's hang handler killed the process tree mid-compile. An
+   artifact of looping, not a defect, but worth knowing since it is the one failure that landed
+   on a gate-visible (non-nightly) test.
+
+**Six runs also wedged the device** (`PcieHangError`, all devices unhealthy), needing
+`tt-smi -r`. That is the sanctioned remedy here per the tt-llk notes — a runtime timeout, not a
+reconfig escape — but it means this reproduction is not free, and whoever repeats it should
+expect to reset.
+
+**Still needs an owner**, and it is now a much better-specified ask than before: a host/BRISC
+command-protocol desync under repeated kernel launches, reproducible ~2 in 6 on p100a, with
+triage output above. Whether it is the same phenomenon as C3's reconfig escape is still
+unproven — C3 is a golden mismatch under a specific test ordering, this is a hang, so they are
+probably different.
 
 ## Environment setup, for whoever picks this up next
 
@@ -467,4 +510,5 @@ pairing, which reports real pairs as unmatched.
 4. **A1** when #52727 merges, **A2** when #52713 merges. A2 is the bigger job and also restores
    the dropped wrappers.
 5. **B1** once an owner in the metal tree exists.
-6. **F** — opportunistic: capture a full log the next time it fires.
+6. **F** — now diagnosed (host/BRISC command desync, nightly-only). Route to an owner with the
+   triage output; no further reproduction needed, and repeating it costs a device reset.

@@ -35,10 +35,10 @@
 | | |
 |---|---|
 | Verification tier (V1-V4) | 4 of 4, all green |
-| New test items landed | **8** — the original 5 (`add_rsqrt`, `custom_mm` `block_uninit`, sort-header coexistence, sampling Prgm0 hazard, rmsnorm bcast-scalar dest-reuse) plus 3 from 2026-08-18 (`set_dst_write_addr_offset` behaviour, compressed metadata-word boundary, `mul_reduce_scalar` re-entry) |
+| New test items landed | **9** — the original 5 (`add_rsqrt`, `custom_mm` `block_uninit`, sort-header coexistence, sampling Prgm0 hazard, rmsnorm bcast-scalar dest-reuse) plus 3 from 2026-08-18 (`set_dst_write_addr_offset` behaviour, compressed metadata-word boundary, `mul_reduce_scalar` re-entry) |
 | Test results | **235 new variants passing / 13 xfailed** (42 + 15 + 2 + 12 + 114 + 14 + 6 + 36; xfails are 1 W-stride + 12 re-entry) |
 | Files | 12 added (6 `tests/sources/*.cpp`, 6 `tests/python_tests/test_*.py`) + 3 extended (`sfpu_sampling_test.cpp`, `test_sfpu_sampling.py`, `test_matmul_custom_compressed.py`) + 2 LLK headers fixed to compile + 3 template params added |
-| Product findings | **2 defects** (both need a decision) + 1 pre-existing reconfig escape + 1 unresolved intermittent + 8 behavioural constraints |
+| Product findings | **3 defects** (all need an owner) + 1 pre-existing reconfig escape + 8 behavioural constraints |
 
 ### Landed tests
 
@@ -52,6 +52,7 @@
 | **`set_dst_write_addr_offset` behaviour (#52713)** — 2026-08-18 | `tests/sources/set_dst_write_addr_offset_test.cpp`, `tests/python_tests/test_set_dst_write_addr_offset.py` | **14 passed, 14 skipped** |
 | **Compressed metadata-word boundary (#52727)** — 2026-08-18 | `tests/python_tests/test_matmul_custom_compressed.py` (extended) | **6 passed** (suite 582 -> 588) |
 | **`mul_reduce_scalar` re-entry (#52709)** — 2026-08-18 | `tests/sources/mul_reduce_scalar_reenter_test.cpp`, `tests/python_tests/test_mul_reduce_scalar_reenter.py` | **36 passed, 12 xfailed** (Finding 9) |
+| **custom_mm uninit parity guard (#52727)** — 2026-08-18 | `tests/python_tests/test_custom_mm_uninit_parity.py` | **2 passed** — static, device-free; B1's interim guard |
 
 ### Verification tier — all green on the merged branch
 
@@ -622,19 +623,37 @@ Two smaller facts from the same pass, both previously unswept anywhere in the su
   lands in which SrcA bank while each fidelity phase masks a different mantissa slice, and
   nothing ran the two together.
 
-### Finding 12 — `test_matmul_custom_compressed.py` is not deterministic (unresolved)
+### Finding 12 — DEFECT (needs an owner): `test_matmul_custom_compressed.py` hangs on repeat, host/BRISC desync
 
-On 2026-08-18, three runs of the same suite on the same commit gave 588 passed, then **587
-passed / 1 failed**, then 588 passed. The failing variant was **not identified** — the run was
-backgrounded through a `grep` that discarded the detail, and it has not recurred.
+First seen as an unidentified single failure, then reproduced and diagnosed the same day. Six
+back-to-back runs on BH p100a: runs 1 and 6 clean, runs 2 and 5 **hung** (exit 5, in
+`_clustered` and `_interleaved`), run 4 failed 3 with `TTException` in `_single`, run 3 hit a
+build-tree race (see below).
 
-Not caused by the 2026-08-18 changes: the 6 new metadata-boundary variants passed in all three
-runs, and nothing else in that suite's compile path was touched. Finding 8 already records a
-pre-existing order-dependent reconfig escape in a neighbouring area, which is the obvious
-suspect but is unconfirmed.
+It is a **hang, not a mismatch**. `run_test.sh` triage on run 2:
 
-Recorded so a single green run of this suite is not read as proof. If it fires again, capture
-the full log; the `perturb` skill exists for this shape of problem.
+```
+Unpacker/Math/Packer mailboxes = 0x0 (KERNEL_STARTED)
+TRISC0/1/2  in_reset=True
+BRISC       pc=0x368, unchanged (spinning)
+BriscCounter=0x118 (280)   host Python counter: 281
+```
+
+All three TRISCs in soft reset while BRISC spins one command behind the host — a host↔BRISC
+command-protocol desync, not an LLK compute bug. `get_tensix_state` could not then halt BRISC.
+
+**Nightly-only, so the PR gate is unaffected:** every failing variant (`clustered`,
+`interleaved`, `single`) is `@pytest.mark.nightly`, and the gate filters `not nightly`.
+
+Caveats worth carrying: back-to-back runs are not how CI runs the suite and may be the
+aggravating factor rather than an independent trigger; and run 3's failure was **not** real —
+`ld: cannot open output file .../elf/pack.elf` in the new metadata-boundary test, a
+`/tmp/tt-llk-build` race left when run 2's hang handler killed the tree mid-compile. Six runs
+also left the device at `PcieHangError`, needing `tt-smi -r` — sanctioned here (runtime timeout,
+not a reconfig escape), but it means reproducing this is not free.
+
+Probably distinct from Finding 8: that is a golden mismatch under a specific test ordering, this
+is a hang.
 
 ### Finding 13 — a test that passes first try has not been shown to test anything
 
