@@ -726,8 +726,7 @@ def neighborhood_attention_3d_op_sp(
 
     # One offset per chip along sp_axis: chip at position p holds seq [p*seq_local, ...) -- the same
     # slice mesh_partition assigns. Distribute the (sp,) table so page 0 per chip is its own origin.
-    offsets = torch.arange(sp, dtype=torch.int32) * seq_local
-    off_tt = from_torch(offsets, device=mesh, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_axes=[sp_axis])
+    off_tt = ccl_manager.get_shard_offsets(sp, seq_local, sp_axis)
 
     attended = ttnn.transformer.scaled_dot_product_attention(
         tq,
@@ -815,8 +814,7 @@ def neighborhood_attention_3d_op_sp_w(
     # One flattened W-outer origin per chip along sp_axis: chip at position p holds seq
     # [p*seq_local, ...), the same slice mesh_partition assigns. The mask adds it to each local query
     # index to recover the query's global (w, t, h).
-    offsets = torch.arange(sp, dtype=torch.int32) * seq_local
-    off_tt = from_torch(offsets, device=mesh, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_axes=[sp_axis])
+    off_tt = ccl_manager.get_shard_offsets(sp, seq_local, sp_axis)
 
     attended = ttnn.transformer.scaled_dot_product_attention(
         tq,
@@ -1038,8 +1036,7 @@ def neighborhood_attention_3d_op_sp_w_sharded(
 
     # Block mode: the offset tensor carries the per-device global-W origin (shard*w_local) for the box;
     # strided mode: the per-device global token position (shard*seq_local).
-    offsets = torch.arange(sp, dtype=torch.int32) * (w_local if op_block is not None else seq_local)
-    off_tt = from_torch(offsets, device=mesh, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_axes=[sp_axis])
+    off_tt = ccl_manager.get_shard_offsets(sp, w_local if op_block is not None else seq_local, sp_axis)
 
     # DIFFVAE_SP_FUSED=1 runs the fast fused (neighborhood_gather) kernel instead of the streamed op:
     # K/V become the W-row-paged ROW_MAJOR layout the fused reader gathers from (grid is W-outer, so a
@@ -1194,8 +1191,7 @@ def neighborhood_attention_3d_op_sp_sharded(
     tv = ccl_manager.all_gather(to_seq(v, seq_local), dim=2, mesh_axis=sp_axis, use_hyperparams=False)
     tq = to_seq(q, seq_local)  # Q stays sharded
 
-    offsets = torch.arange(sp, dtype=torch.int32) * seq_local
-    off_tt = from_torch(offsets, device=mesh, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_axes=[sp_axis])
+    off_tt = ccl_manager.get_shard_offsets(sp, seq_local, sp_axis)
 
     attended = ttnn.transformer.scaled_dot_product_attention(
         tq,

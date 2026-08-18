@@ -1041,6 +1041,7 @@ class DiffVAEDecoder(Module):
 
         self.config = config
         self.mesh_device = mesh_device
+        self._timestep = None
         # Without a manager every chip decodes the whole volume, which is correct but costs the
         # mesh: memory per chip then scales with frame count rather than with frames/mesh size.
         self.ccl_manager = ccl_manager
@@ -1128,13 +1129,19 @@ class DiffVAEDecoder(Module):
         return max(grown - self.ghost_latent_frames * self.time_scale, self.stage5_kernel[0])
 
     def forward_context(
-        self, latent: torch.Tensor, *, gather_output: bool = True
+        self, latent: torch.Tensor, *, gather_output: bool = True, latent_tt: ttnn.Tensor | None = None
     ) -> tuple[ttnn.Tensor, tuple[int, int, int]]:
         """Deterministic stages on a ``(B, C, T, H, W)`` normalized latent, ghost cropped.
 
         ``gather_output=False`` returns the context W-sharded (this chip's band), for the W-sharded
         det->stage-5 handoff. ``dims`` is always the FULL ``(T, H, W)``; the ghost crop is on ``T``,
         which is orthogonal to the W-shard, so it just uses ``W/sp`` columns per chip when sharded.
+
+        ``latent_tt`` supplies the raw latent already on device, in the ROW_MAJOR
+        ``(1, C, T, H*W)`` form the device-preproc path uploads. It exists for tracing: a trace
+        refuses host-to-device writes during capture, so the upload has to happen outside the
+        captured region and the buffer be handed in. ``latent`` is then read for its shape only,
+        and the caller keeps ownership of the buffer.
         """
         batch, channels, t, h, w = latent.shape
         assert batch == 1, f"batched decode is not implemented; got batch={batch}"
@@ -1146,19 +1153,22 @@ class DiffVAEDecoder(Module):
             # only host step left before the pipeline is the transfer itself. The pad replicates the
             # last frame, which is a slice plus a concat on the T axis.
             _t0 = stage_time_start(self.mesh_device)
-            raw = ttnn.from_torch(
-                latent.reshape(1, channels, t, h * w).contiguous(),
-                device=self.mesh_device,
-                dtype=self.dtype,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-            )
+            raw = latent_tt
+            if raw is None:
+                raw = ttnn.from_torch(
+                    latent.reshape(1, channels, t, h * w).contiguous(),
+                    device=self.mesh_device,
+                    dtype=self.dtype,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                )
             stage_time_end(self.mesh_device, "host->mesh: upload latent (raw)", _t0)
 
             _t0 = stage_time_start(self.mesh_device)
             last = ttnn.slice(raw, [0, 0, t - 1, 0], [1, channels, t, h * w])
             parts = [raw] + [last] * ghost
             padded_tt = ttnn.concat(parts, dim=2)
-            ttnn.deallocate(raw)
+            if latent_tt is None:
+                ttnn.deallocate(raw)
             ttnn.deallocate(last)
             moved = ttnn.permute(padded_tt, (0, 2, 3, 1))  # (1, T+ghost, H*W, C)
             ttnn.deallocate(padded_tt)
@@ -1232,10 +1242,14 @@ class DiffVAEDecoder(Module):
             noise = torch.randn(shape, generator=torch.Generator().manual_seed(seed))
             stage_time_end(self.mesh_device, f"host: noise randn {tuple(shape)}", _t0)
 
-        # default_num_inference_steps is 1 on this checkpoint, so linspace(1, 1, 1) = [1.0].
-        timestep = ttnn.from_torch(
-            torch.tensor([[[[1.0]]]]), device=self.mesh_device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT
-        )
+        # default_num_inference_steps is 1 on this checkpoint, so linspace(1, 1, 1) = [1.0]. Uploaded
+        # once and kept: a constant on the per-decode path is still a host-to-device write, which a
+        # trace refuses during capture.
+        if self._timestep is None:
+            self._timestep = ttnn.from_torch(
+                torch.tensor([[[[1.0]]]]), device=self.mesh_device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT
+            )
+        timestep = self._timestep
         _t0 = stage_time_start(self.mesh_device)
         pixels = self.stage5.forward(context, noise, timestep, grid, context_sharded=self._wsharded_handoff, seed=seed)
         stage_time_end(self.mesh_device, "stage5 TOTAL (forward)", _t0)
