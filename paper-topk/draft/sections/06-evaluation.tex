@@ -371,11 +371,14 @@ callers, while callers with rows ${\geq}$ grid are core-optimal on
 one-core-per-row \emph{except} for the idle remainder wave, which a
 hybrid landing now harvests: rows past the full row-parallel waves run
 as concurrent per-row merge trees on the cores the last wave would
-idle, inside the op (no call-site change). The 160-row indexer of
-Table~\ref{tab:scenarios} --- 712.3\us{} $\approx 2\times357.0$ at the
-table's pinning --- measures 467.0\us{} on the final tree
-($1.53\times$; the $k{=}512$ sibling $559.5 \to 358.3$\us{},
-$1.56\times$). Cutting per-core work is the fusion lever below.
+idle, inside the op (no call-site change); and a fused-u16 landing then
+cuts the per-core work itself --- rows of $\leq$32 chunks keep the fused
+$[\text{bf16}\,|\,\text{u16}]$ word through every merge/rebuild (a
+runtime chunk-id stamp in index bits [15:11]; one global split per row),
+taking the per-row kernel $359.7 \to 280.6$\us{}. The 160-row indexer
+of Table~\ref{tab:scenarios} --- 712.3\us{} pre-campaign --- measures
+\textbf{387.8\us{} ($1.84\times$)}; the $k{=}512$ sibling
+$559.5 \to 358.2$\us{} ($1.56\times$). Producer fusion remains.
 One term is structural: selection, never sorting --- only
 $M$-wide candidate windows cross the NoC, $P{-}1$ in total
 (Fig.~\ref{fig:operator}, \S\ref{sec:tree}). Why these moves and not
