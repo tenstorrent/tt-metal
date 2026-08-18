@@ -1007,6 +1007,11 @@ def neighborhood_attention_3d_op_sp_w_sharded(
     # (composite's all_broadcast allocates its own semaphores per call). The pad rows land interleaved
     # between shards; they are stripped in wrow below, in ROW_MAJOR, where the fused reader was going
     # to untilize anyway -- so the strip costs a strided copy rather than a retile.
+    # DIFFVAE_AG_HYPERPARAMS=1 hands the K/V and head gathers the tuned chunking (chunks_per_sync,
+    # workers and buffers per channel) instead of the op defaults. The fabric caps num_links at 2 on
+    # the size-8 axis -- only 2 eth channels reach across it -- so chunking is the remaining knob on
+    # collectives that measure ~3.4 GB/s here.
+    ag_hyper = os.environ.get("DIFFVAE_AG_HYPERPARAMS", "0") == "1"
     fused_reader = os.environ.get("DIFFVAE_SP_FUSED", "0") == "1"
     pad_gather = os.environ.get("DIFFVAE_PAD_GATHER") == "1" and fused_reader and seq_local % 32 != 0
     seq_pad = ((seq_local + 31) // 32) * 32 if pad_gather else seq_local
@@ -1022,7 +1027,7 @@ def neighborhood_attention_3d_op_sp_w_sharded(
             ttnn.deallocate(seq)
             seq = padded
         return ccl_manager.all_gather(
-            seq, dim=2, mesh_axis=sp_axis, use_hyperparams=False, use_persistent_buffer=persist_ccl
+            seq, dim=2, mesh_axis=sp_axis, use_hyperparams=ag_hyper, use_persistent_buffer=persist_ccl
         )
 
     with _sp_w_prof(mesh, "kv-allgather"):
@@ -1103,7 +1108,7 @@ def neighborhood_attention_3d_op_sp_w_sharded(
     if tp_axis is not None:
         with _sp_w_prof(mesh, "head-allgather"):
             attended = ccl_manager.all_gather(
-                attended, dim=1, mesh_axis=tp_axis, use_hyperparams=False, use_persistent_buffer=persist_ccl
+                attended, dim=1, mesh_axis=tp_axis, use_hyperparams=ag_hyper, use_persistent_buffer=persist_ccl
             )
         heads = full_heads
         width = heads * head_dim

@@ -23,6 +23,15 @@ CHECKPOINT = Path(
 )
 
 
+# These tests run the RING fabric config, but the collectives have always been handed
+# Topology.Linear -- the wraparound link is enabled and unused. Selectable so the two can be
+# measured against each other; default stays Linear.
+def _topology():
+    if os.environ.get("DIFFVAE_TOPOLOGY", "linear").lower() == "ring":
+        return ttnn.Topology.Ring
+    return ttnn.Topology.Linear
+
+
 # (deterministic-stages backend, stage-5 backend). "gather+fused5" is the interesting mixed config:
 # fast gather where it fits (the smaller early stages) and the memory-light fused only for stage 5,
 # the stage that OOMs gather at 1080p. Set DIFFVAE_STAGE_TIMING=1 for the per-stage breakdown.
@@ -77,7 +86,9 @@ def test_decode_wsp_timing(*, mesh_device, latent_hw):
     # DIFFVAE_LATENT_T (e.g. 4 -> 25 frames) for a quick smaller run.
     t_lat = int(os.environ.get("DIFFVAE_LATENT_T", 19))
     latent = torch.randn(1, config["in_channels"], t_lat, lh, lw)
-    ccl = CCLManager(mesh_device, num_links=int(os.environ.get("DIFFVAE_NUM_LINKS", 1)), topology=ttnn.Topology.Linear)    # DIFFVAE_TP_HEADS=1 adds TP-over-heads on the orthogonal (rows, size-4) mesh axis: stage-5
+    ccl = CCLManager(
+        mesh_device, num_links=int(os.environ.get("DIFFVAE_NUM_LINKS", 1)), topology=_topology()
+    )  # DIFFVAE_TP_HEADS=1 adds TP-over-heads on the orthogonal (rows, size-4) mesh axis: stage-5
     # attention runs on heads/4 of the 4 heads per chip, gathered back before the output proj.
     tp_axis = 0 if os.environ.get("DIFFVAE_TP_HEADS") == "1" else None
     # DIFFVAE_STAGES_WSP=1 also W-shards the deterministic stages (stage 0 stays replicated), so the
@@ -129,7 +140,7 @@ def test_decode_gather_mesh_timing(*, mesh_device, latent_hw):
     lh, lw = latent_hw
     torch.manual_seed(0)
     latent = torch.randn(1, config["in_channels"], 4, lh, lw)
-    ccl = CCLManager(mesh_device, num_links=int(os.environ.get("DIFFVAE_NUM_LINKS", 1)), topology=ttnn.Topology.Linear)
+    ccl = CCLManager(mesh_device, num_links=int(os.environ.get("DIFFVAE_NUM_LINKS", 1)), topology=_topology())
     dec = DiffVAEDecoder(config, mesh_device=mesh_device, ccl_manager=ccl, stage5_na3d_backend="gather")
     dec.load_checkpoint(CHECKPOINT)
 
@@ -169,7 +180,7 @@ def test_decode_1080p_tp_pcc(*, mesh_device):
     config = decoder_config(CHECKPOINT)
     torch.manual_seed(0)
     latent = torch.randn(1, config["in_channels"], 4, 34, 60)  # 1080p, 25 frames
-    ccl = CCLManager(mesh_device, num_links=int(os.environ.get("DIFFVAE_NUM_LINKS", 1)), topology=ttnn.Topology.Linear)
+    ccl = CCLManager(mesh_device, num_links=int(os.environ.get("DIFFVAE_NUM_LINKS", 1)), topology=_topology())
 
     def timed(dec):
         dec.decode(latent, seed=0)  # warmup

@@ -44,14 +44,21 @@ def _flat(x: torch.Tensor, channels: int) -> torch.Tensor:
 
 
 def main() -> None:
-    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
+    # A ring closes the wraparound link, so a gather is hops/2 rather than hops sequential
+    # steps; it needs the ring fabric config to match the topology handed to the collectives.
+    ring = os.environ.get("DIFFVAE_TOPOLOGY", "linear").lower() == "ring"
+    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING if ring else ttnn.FabricConfig.FABRIC_1D)
     mesh = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(4, 8))
     try:
         cfg = DiffVAEStage5Config()
         sp = int(list(mesh.shape)[SP_AXIS])
         assert GRID.w % sp == 0, f"W={GRID.w} not divisible by sp={sp}"
 
-        ccl = CCLManager(mesh, num_links=int(os.environ.get("LINKS", 1)), topology=ttnn.Topology.Linear)
+        ccl = CCLManager(
+            mesh,
+            num_links=int(os.environ.get("LINKS", 1)),
+            topology=ttnn.Topology.Ring if ring else ttnn.Topology.Linear,
+        )
         model = DiffVAEStage5(
             cfg,
             mesh_device=mesh,

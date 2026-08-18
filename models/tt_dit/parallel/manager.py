@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import torch
 
 import ttnn
@@ -871,17 +873,27 @@ class CCLManager:
 
     def get_ag_hyperparams(self, shape):
         if shape[2] > 512:
-            return {
+            params = {
                 "chunks_per_sync": 16,
                 "num_workers_per_link": 3,
                 "num_buffers_per_channel": 2,
             }
         else:
-            return {
+            params = {
                 "chunks_per_sync": 10,
                 "num_workers_per_link": 2,
                 "num_buffers_per_channel": 2,
             }
+        # Overridable per-knob: these are a tuned starting point, not a measured optimum for every
+        # shape on this mesh, and reaching them from a sweep otherwise needs a source edit.
+        for key, env in (
+            ("chunks_per_sync", "DIFFVAE_AG_CHUNKS"),
+            ("num_workers_per_link", "DIFFVAE_AG_WORKERS"),
+            ("num_buffers_per_channel", "DIFFVAE_AG_BUFS"),
+        ):
+            if os.environ.get(env):
+                params[key] = int(os.environ[env])
+        return params
 
     def get_rs_hyperparams(self, shape):
         return {
