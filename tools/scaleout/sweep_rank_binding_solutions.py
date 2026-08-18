@@ -134,6 +134,8 @@ class SweepLog:
 
     def attempt(self, indent: str, label: str, n: int, m: int, status: str, seconds: Optional[float]) -> None:
         res = self._STATUS.get(status, status.upper())
+        if label == "recover" and status == "pass":
+            res = "OK"  # a recover "passing" reads better as OK
         dur = f"  {seconds:.1f}s" if seconds is not None else ""
         self.line(f"{indent}{label} {n}/{m} → {res}{dur}")
 
