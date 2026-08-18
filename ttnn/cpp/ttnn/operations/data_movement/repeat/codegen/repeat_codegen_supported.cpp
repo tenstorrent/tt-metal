@@ -97,15 +97,18 @@ bool single_dim_ok(const Tensor& input, uint32_t d, uint32_t reps) {
 }
 
 // The host-side page map that feeds the codegen prim derives Ht/Wt from the 32x32
-// constants, so an off-default tile gives the kernels both a page count and a page
-// size the buffer does not have. A ROW_MAJOR page is a whole stick and never
-// consults the tile, so this constrains TILE only.
+// constants, so an off-default tile shape gives the kernels both a page count and a
+// page size the buffer does not have. A transposed tile keeps both but swizzles the
+// datums within the page, and compute_output_specs() derives the output tile from the
+// layout alone, so the copied pages would come back labelled untransposed. A ROW_MAJOR
+// page is a whole stick and never consults the tile, so this constrains TILE only.
 bool tile_geometry_ok(const Tensor& input) {
     if (input.layout() != ttnn::TILE_LAYOUT) {
         return true;
     }
     const auto tile = input.tensor_spec().tile();
-    return tile.get_height() == tt::constants::TILE_HEIGHT && tile.get_width() == tt::constants::TILE_WIDTH;
+    return tile.get_height() == tt::constants::TILE_HEIGHT && tile.get_width() == tt::constants::TILE_WIDTH &&
+           !tile.get_transpose_within_face() && !tile.get_transpose_of_faces();
 }
 
 }  // namespace
