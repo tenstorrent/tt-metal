@@ -16,7 +16,6 @@
 #include <bit>
 #include <map>
 #include <string>
-#include <utility>
 #include <vector>
 #include <fmt/format.h>
 #include <cstdint>
@@ -523,99 +522,30 @@ ttnn::device_operation::ProgramArtifacts FillPadL1ShardedProgramFactory::create_
     const auto fill_defines =
         build_kernel_defines(input_tensor, cb_data_format, input_element_size_bytes, is_float_type, is_fp32);
 
-    // ---- Build kernels + work units ----
-    // Key each KernelSpec on only the axes its binary depends on, and share it across the per-key
-    // WorkUnitSpecs that fall under it (a KernelSpec may belong to multiple WorkUnitSpecs):
-    //   reader  -> has_right_pad                    (binds only data_in, present on every node)
-    //   writer  -> (has_right_pad, has_bottom_pad)  (mask bindings + HAS_*_PAD defines)
-    //   compute -> full ComputeKey                  (effective_W / H drive its compile-time args)
-    // Every node still contributes exactly one reader + one writer + one compute instance, so each
-    // DFB stays 1-producer / 1-consumer per node. This mirrors main's legacy grouping (reader per
-    // rp, compute per full key), taking the writer only as fine as the DFB-binding rules require.
+    // ---- Build kernels + work units per group ----
+    struct GroupInfo {
+        KernelSpecName reader_id, writer_id, compute_id;
+        KernelRunArgs reader_run, writer_run, compute_run;
+    };
+    std::map<ComputeKey, GroupInfo> groups;
     Group<KernelSpec> kernels;
     Group<WorkUnitSpec> work_units;
 
-    // Reader KernelSpecs — one per distinct has_right_pad, created on first use.
-    std::map<std::uint32_t, KernelSpecName> reader_ids;
-    std::map<std::uint32_t, KernelRunArgs> reader_runs;
-    auto reader_id_for = [&](std::uint32_t rp) -> KernelSpecName {
-        if (const auto it = reader_ids.find(rp); it != reader_ids.end()) {
-            return it->second;
-        }
-        const KernelSpecName id{"reader_rp" + std::to_string(rp)};
-        kernels.push_back(KernelSpec{
-            .unique_id = id,
-            .source = kShardedReaderSrc,
-            .dfb_bindings = {DFBBinding{
-                .dfb_spec_name = DATA_IN, .accessor_name = "data_in", .endpoint_type = DFBEndpointType::PRODUCER}},
-            .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "src"}},
-            .compile_time_args = {{"W_tiles", W_tiles}, {"has_right_pad", rp}, {"elem_size", input_element_size_bytes}},
-            .runtime_arg_schema =
-                {.runtime_arg_names = {"shard_H_tiles", "has_bottom_pad_core", "num_work", "local_right_col"}},
-            .hw_config = ttnn::create_reader_datamovement_config(input_tensor.device()->arch()),
-        });
-        reader_ids.emplace(rp, id);
-        reader_runs.emplace(rp, KernelRunArgs{.kernel = id});
-        return id;
-    };
-
-    // Writer KernelSpecs — one per distinct (has_right_pad, has_bottom_pad), created on first use.
-    std::map<std::pair<std::uint32_t, std::uint32_t>, KernelSpecName> writer_ids;
-    std::map<std::pair<std::uint32_t, std::uint32_t>, KernelRunArgs> writer_runs;
-    auto writer_id_for = [&](std::uint32_t rp, std::uint32_t bp) -> KernelSpecName {
-        const std::pair<std::uint32_t, std::uint32_t> wk{rp, bp};
-        if (const auto it = writer_ids.find(wk); it != writer_ids.end()) {
-            return it->second;
-        }
-        const KernelSpecName id{"writer_rp" + std::to_string(rp) + "_bp" + std::to_string(bp)};
-        Group<DFBBinding> writer_dfb_bindings = {DFBBinding{
-            .dfb_spec_name = DATA_OUT, .accessor_name = "data_out", .endpoint_type = DFBEndpointType::CONSUMER}};
-        KernelSpec::CompileTimeArgs writer_cta = {{"W_tiles", W_tiles}};
-        auto writer_defines = fill_defines;
-        if (rp != 0u) {
-            writer_dfb_bindings.push_back(DFBBinding{
-                .dfb_spec_name = RIGHT_MASK,
-                .accessor_name = "right_mask",
-                .endpoint_type = DFBEndpointType::PRODUCER});
-            writer_cta.insert({"W_mod32", W_mod32});
-            writer_defines.insert({"HAS_RIGHT_PAD", "1"});
-        }
-        if (bp != 0u) {
-            writer_dfb_bindings.push_back(DFBBinding{
-                .dfb_spec_name = BOT_MASK, .accessor_name = "bot_mask", .endpoint_type = DFBEndpointType::PRODUCER});
-            writer_cta.insert({"H_mod32", H_mod32});
-            writer_defines.insert({"HAS_BOTTOM_PAD", "1"});
-        }
-        KernelSpec writer_spec{
-            .unique_id = id,
-            .source = kShardedWriterSrc,
-            .dfb_bindings = std::move(writer_dfb_bindings),
-            .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "dst"}},
-            .compile_time_args = std::move(writer_cta),
-            .runtime_arg_schema =
-                {.runtime_arg_names = {"shard_H_tiles", "has_bottom_pad_core", "num_work", "local_right_col"}},
-            .hw_config = ttnn::create_writer_datamovement_config(input_tensor.device()->arch()),
-        };
-        writer_spec.compiler_options.defines = std::move(writer_defines);
-        kernels.push_back(std::move(writer_spec));
-        writer_ids.emplace(wk, id);
-        writer_runs.emplace(wk, KernelRunArgs{.kernel = id});
-        return id;
-    };
-
-    // Compute KernelSpecs — one per full ComputeKey — each with its own WorkUnitSpec that also
-    // references the shared reader / writer covering its cores.
-    std::map<ComputeKey, KernelRunArgs> compute_runs;
     std::uint32_t g = 0;
     for (const auto& [key, ranges] : group_ranges) {
+        const std::string gs = std::to_string(g);
+        GroupInfo gi{
+            .reader_id = KernelSpecName{"reader_" + gs},
+            .writer_id = KernelSpecName{"writer_" + gs},
+            .compute_id = KernelSpecName{"compute_" + gs},
+            .reader_run = KernelRunArgs{.kernel = KernelSpecName{"reader_" + gs}},
+            .writer_run = KernelRunArgs{.kernel = KernelSpecName{"writer_" + gs}},
+            .compute_run = KernelRunArgs{.kernel = KernelSpecName{"compute_" + gs}}};
+
         const bool k_right = key.has_right_pad != 0u;
         const bool k_bottom = key.has_bottom_pad != 0u;
 
-        const KernelSpecName reader_id = reader_id_for(key.has_right_pad);
-        const KernelSpecName writer_id = writer_id_for(key.has_right_pad, key.has_bottom_pad);
-        const KernelSpecName compute_id{"compute_" + std::to_string(g)};
-
-        // Mask defines for this key's compute kernel.
+        // Mask defines for this group's writer + compute.
         auto mask_defines = fill_defines;
         if (k_right) {
             mask_defines.insert({"HAS_RIGHT_PAD", "1"});
@@ -624,6 +554,49 @@ ttnn::device_operation::ProgramArtifacts FillPadL1ShardedProgramFactory::create_
             mask_defines.insert({"HAS_BOTTOM_PAD", "1"});
         }
 
+        // Reader.
+        KernelSpec reader_spec{
+            .unique_id = gi.reader_id,
+            .source = kShardedReaderSrc,
+            .dfb_bindings = {DFBBinding{
+                .dfb_spec_name = DATA_IN, .accessor_name = "data_in", .endpoint_type = DFBEndpointType::PRODUCER}},
+            .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "src"}},
+            .compile_time_args =
+                {{"W_tiles", W_tiles}, {"has_right_pad", key.has_right_pad}, {"elem_size", input_element_size_bytes}},
+            .runtime_arg_schema =
+                {.runtime_arg_names = {"shard_H_tiles", "has_bottom_pad_core", "num_work", "local_right_col"}},
+            .hw_config = ttnn::create_reader_datamovement_config(input_tensor.device()->arch()),
+        };
+
+        // Writer.
+        Group<DFBBinding> writer_dfb_bindings = {DFBBinding{
+            .dfb_spec_name = DATA_OUT, .accessor_name = "data_out", .endpoint_type = DFBEndpointType::CONSUMER}};
+        KernelSpec::CompileTimeArgs writer_cta = {{"W_tiles", W_tiles}};
+        if (k_right) {
+            writer_dfb_bindings.push_back(DFBBinding{
+                .dfb_spec_name = RIGHT_MASK,
+                .accessor_name = "right_mask",
+                .endpoint_type = DFBEndpointType::PRODUCER});
+            writer_cta.insert({"W_mod32", W_mod32});
+        }
+        if (k_bottom) {
+            writer_dfb_bindings.push_back(DFBBinding{
+                .dfb_spec_name = BOT_MASK, .accessor_name = "bot_mask", .endpoint_type = DFBEndpointType::PRODUCER});
+            writer_cta.insert({"H_mod32", H_mod32});
+        }
+        KernelSpec writer_spec{
+            .unique_id = gi.writer_id,
+            .source = kShardedWriterSrc,
+            .dfb_bindings = std::move(writer_dfb_bindings),
+            .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "dst"}},
+            .compile_time_args = std::move(writer_cta),
+            .runtime_arg_schema =
+                {.runtime_arg_names = {"shard_H_tiles", "has_bottom_pad_core", "num_work", "local_right_col"}},
+            .hw_config = ttnn::create_writer_datamovement_config(input_tensor.device()->arch()),
+        };
+        writer_spec.compiler_options.defines = mask_defines;
+
+        // Compute.
         Group<DFBBinding> compute_dfb_bindings = {
             DFBBinding{
                 .dfb_spec_name = DATA_IN, .accessor_name = "data_in", .endpoint_type = DFBEndpointType::CONSUMER},
@@ -651,7 +624,7 @@ ttnn::device_operation::ProgramArtifacts FillPadL1ShardedProgramFactory::create_
             }
         }
         KernelSpec compute_spec{
-            .unique_id = compute_id,
+            .unique_id = gi.compute_id,
             .source = kComputeSrc,
             .dfb_bindings = std::move(compute_dfb_bindings),
             .compile_time_args =
@@ -662,15 +635,18 @@ ttnn::device_operation::ProgramArtifacts FillPadL1ShardedProgramFactory::create_
             .runtime_arg_schema = {.runtime_arg_names = {"num_right", "num_bottom", "num_corner"}},
             .hw_config = ComputeHardwareConfig{std::move(compute_hw)},
         };
-        compute_spec.compiler_options.defines = std::move(mask_defines);
+        compute_spec.compiler_options.defines = mask_defines;
         compute_spec.compiler_options.opt_level = KernelBuildOptLevel::O3;
-        kernels.push_back(std::move(compute_spec));
-        compute_runs.emplace(key, KernelRunArgs{.kernel = compute_id});
 
+        kernels.push_back(std::move(reader_spec));
+        kernels.push_back(std::move(writer_spec));
+        kernels.push_back(std::move(compute_spec));
         work_units.push_back(WorkUnitSpec{
-            .name = "wu_" + std::to_string(g),
-            .kernels = {reader_id, writer_id, compute_id},
+            .name = "wu_" + gs,
+            .kernels = {gi.reader_id, gi.writer_id, gi.compute_id},
             .target_nodes = CoreRangeSet(ranges)});
+
+        groups.emplace(key, std::move(gi));
         ++g;
     }
 
@@ -679,16 +655,16 @@ ttnn::device_operation::ProgramArtifacts FillPadL1ShardedProgramFactory::create_
     // counts below let the shared compute kernel process them in lock-step (the ordering discipline
     // whose earlier violation caused #50904's revert — kept intact here).
     for (const auto& ci : active) {
-        const ComputeKey key = key_of(ci);
+        GroupInfo& gi = groups.at(key_of(ci));
         AddRuntimeArgsForNode(
-            reader_runs.at(ci.has_right_pad).runtime_arg_values,
+            gi.reader_run.runtime_arg_values,
             ci.coord,
             {{"shard_H_tiles", ci.shard_H_tiles},
              {"has_bottom_pad_core", ci.has_bottom_pad},
              {"num_work", ci.num_work},
              {"local_right_col", ci.local_right_col}});
         AddRuntimeArgsForNode(
-            writer_runs.at({ci.has_right_pad, ci.has_bottom_pad}).runtime_arg_values,
+            gi.writer_run.runtime_arg_values,
             ci.coord,
             {{"shard_H_tiles", ci.shard_H_tiles},
              {"has_bottom_pad_core", ci.has_bottom_pad},
@@ -709,7 +685,7 @@ ttnn::device_operation::ProgramArtifacts FillPadL1ShardedProgramFactory::create_
             num_bottom = ci.local_valid_w;
         }
         AddRuntimeArgsForNode(
-            compute_runs.at(key).runtime_arg_values,
+            gi.compute_run.runtime_arg_values,
             ci.coord,
             {{"num_right", num_right}, {"num_bottom", num_bottom}, {"num_corner", num_corner}});
     }
@@ -724,14 +700,10 @@ ttnn::device_operation::ProgramArtifacts FillPadL1ShardedProgramFactory::create_
     };
 
     ProgramRunArgs run_args;
-    for (auto& [rp, r] : reader_runs) {
-        run_args.kernel_run_args.push_back(std::move(r));
-    }
-    for (auto& [wk, w] : writer_runs) {
-        run_args.kernel_run_args.push_back(std::move(w));
-    }
-    for (auto& [key, c] : compute_runs) {
-        run_args.kernel_run_args.push_back(std::move(c));
+    for (auto& [key, gi] : groups) {
+        run_args.kernel_run_args.push_back(std::move(gi.reader_run));
+        run_args.kernel_run_args.push_back(std::move(gi.writer_run));
+        run_args.kernel_run_args.push_back(std::move(gi.compute_run));
     }
     run_args.tensor_args.insert({INPUT, TensorArgument{tensor_args.input.mesh_tensor()}});
 
