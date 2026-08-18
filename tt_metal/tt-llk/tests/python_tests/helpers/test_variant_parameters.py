@@ -409,6 +409,45 @@ class SAMPLING_PRGM0_HAZARD(TemplateParameter):
 
 
 @dataclass
+class DST_WRITE_ADDR_OFFSET(TemplateParameter):
+    """Compile-time knobs for ``set_dst_write_addr_offset_test.cpp``.
+
+    ``OFFSET_ENABLED``   whether the SFPU body calls
+                         ``ckernel::sfpu::set_dst_write_addr_offset`` at all. False is the
+                         control the helper is measured against: with it absent,
+                         ``SFPU_DST_INDEX`` alone decides where the negate lands, so
+                         ``helper(N * 64) at dst_index 0`` and ``no helper at dst_index N``
+                         must agree bit for bit.
+    ``OFFSET_ROWS``      the argument, in Dst ROWS. One 32x32 tile is 64 rows
+                         (``DstTileSizeLog2[Tile32x32] == 6``), which is what makes the two
+                         real call patterns land where they do: 64 is a whole-tile rebase
+                         (deepseek_top32_rm's ``tile_offset``) and 2 is the column-group
+                         flip (topk_xl's ``odd_col_offset``).
+    ``SFPU_DST_INDEX``   the ``dst_index`` handed to
+                         ``_llk_math_eltwise_unary_sfpu_params_``, i.e. where
+                         ``_llk_math_eltwise_sfpu_start_`` points the write pointer before
+                         the body runs -- and therefore what the helper overwrites.
+    ``SFPU_ENABLED``     drop the SFPU op entirely, giving the datacopy-only baseline the
+                         negated variants are diffed against.
+    """
+
+    offset_enabled: bool = True
+    offset_rows: int = 0
+    sfpu_dst_index: int = 0
+    sfpu_enabled: bool = True
+
+    def convert_to_cpp(self) -> str:
+        return "\n".join(
+            [
+                f"constexpr bool OFFSET_ENABLED = {str(self.offset_enabled).lower()};",
+                f"constexpr std::uint32_t OFFSET_ROWS = {self.offset_rows}u;",
+                f"constexpr std::uint32_t SFPU_DST_INDEX = {self.sfpu_dst_index}u;",
+                f"constexpr bool SFPU_ENABLED = {str(self.sfpu_enabled).lower()};",
+            ]
+        )
+
+
+@dataclass
 class PACK_NUM_TILES(TemplateParameter):
     """Tile count for the block/per-tile pack drivers.
 
