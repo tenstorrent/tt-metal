@@ -21,7 +21,7 @@
 #include "layernorm_compute_utils.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/broadcast/bcast.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/misc.hpp"  // Square
@@ -121,7 +121,6 @@ void kernel_main() {
     DataflowBuffer dfb_inb_obj(dfb_inb_id);
     DataflowBuffer dfb_out_obj(dfb_out_id);
     DataflowBuffer dfb_ex_obj(dfb_ex_id);
-    DataflowBuffer dfb_ex2_obj(dfb_ex2_id);
     DataflowBuffer dfb_xmm2_obj(dfb_xmm2_id);
     DataflowBuffer dfb_ex2pe_obj(dfb_ex2pe_id);
     DataflowBuffer dfb_accumulate_obj(dfb_accumulate_id);
@@ -204,12 +203,12 @@ void kernel_main() {
                 ckl::Optional<
                     do_fuse_pre_add,  // FUSE_PRE_ADD: + b (DEST-reuse), else stripped
                     ckl::DestReuseBinary<
+                        ckl::BinaryFpuOp::Add,
                         ckl::input(
                             dfb_inb_id,
                             ckl::WaitPolicy::PerBlockSize,
                             ckl::PopPolicy::PerBlockSize,
                             ckl::OperandKind::Block),
-                        ckl::BinaryFpuOp::Add,
                         ckl::DestReuseType::DEST_TO_SRCB>>{},
                 ckl::Square<ckl::Dst::D0>{},
                 ckl::PackTile<ckl::output(
@@ -233,10 +232,11 @@ void kernel_main() {
                 reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(dfb_xmm2_id, dfb_scaler_id, i, scaler_tile_idx, dst0);
             }
 
-            DataflowBuffer(dfb_xmm2_id).pop_front(block.full_block_size());
+            dfb_xmm2_obj.pop_front(block.full_block_size());
 
             const auto final_iter = block.last() == Wt;
             const auto pack_dfb_id = final_iter ? dfb_ex2_id : dfb_accumulate_id;
+            DataflowBuffer pack_dfb_obj(pack_dfb_id);
             if (final_iter) {
                 // Divide by W
                 binop_with_scalar_tile_init();
@@ -247,11 +247,11 @@ void kernel_main() {
             tile_regs_commit();
             tile_regs_wait();
 
-            DataflowBuffer(pack_dfb_id).reserve_back(onetile);
+            pack_dfb_obj.reserve_back(onetile);
             pack_reconfig_data_format(pack_dfb_id);
             pack_tile(dst0, pack_dfb_id);
             tile_regs_release();
-            DataflowBuffer(pack_dfb_id).push_back(onetile);
+            pack_dfb_obj.push_back(onetile);
         }
 
         // End of
@@ -326,12 +326,12 @@ void kernel_main() {
                 ckl::Optional<
                     do_fuse_pre_add,  // FUSE_PRE_ADD: + b (DEST-reuse), else stripped
                     ckl::DestReuseBinary<
+                        ckl::BinaryFpuOp::Add,
                         ckl::input(
                             dfb_inb_id,
                             ckl::WaitPolicy::PerBlockSize,
                             ckl::PopPolicy::PerBlockSize,
                             ckl::OperandKind::Block),
-                        ckl::BinaryFpuOp::Add,
                         ckl::DestReuseType::DEST_TO_SRCB>>{},
                 ckl::PackTile<ckl::output(
                     dfb_xmm_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{});

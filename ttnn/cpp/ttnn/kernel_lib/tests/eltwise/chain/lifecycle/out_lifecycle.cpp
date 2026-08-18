@@ -17,7 +17,7 @@
 //   4     ReserveNonePushEnd      push n at end                         reserve n before
 
 #include <cstdint>
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 #include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {

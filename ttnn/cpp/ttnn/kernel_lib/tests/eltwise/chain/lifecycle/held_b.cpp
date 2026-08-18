@@ -21,7 +21,7 @@
 #include <cstdint>
 // chain.hpp first: it pulls in the compute API (PACK/UNPACK macros + llk decls) that
 // circular_buffer.h depends on. Reversing the order fails to compile.
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 #include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {

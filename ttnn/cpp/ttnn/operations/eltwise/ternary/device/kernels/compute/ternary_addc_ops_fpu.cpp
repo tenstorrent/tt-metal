@@ -6,7 +6,7 @@
 
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/scalar.hpp"  // MulUnary
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/optional.hpp"
 
@@ -27,7 +27,7 @@ inline void run_addcmul(uint32_t num_tiles, uint32_t scalar_arg) {
             ckl::input(
                 dfb_in2_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>{},
         ckl::runtime_if(scalar_arg != 1u, ckl::MulUnary<ckl::Dst::D0>{scalar_arg}),
-        ckl::DestReuseBinary<ckl::input(dfb_in0_id), ckl::BinaryFpuOp::Add, ckl::DestReuseType::DEST_TO_SRCA>{},
+        ckl::DestReuseBinary<ckl::BinaryFpuOp::Add, ckl::input(dfb_in0_id), ckl::DestReuseType::DEST_TO_SRCA>{},
         ckl::PackTile<ckl::output(
             dfb_out_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>{});
 }

@@ -8,7 +8,7 @@
 #include <tuple>
 #include <type_traits>
 
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 
 /**
  * @file optional.hpp

@@ -159,7 +159,7 @@ def _build_outer_reader(tt_a, tt_b, height_tiles, width_tiles, grid):
 
 @pytest.mark.parametrize("Ht,Wt,fp32_dest_acc_en", [(2, 1, False), (3, 5, True)])
 def test_outer_stream_broadcast(device, Ht, Wt, fp32_dest_acc_en):
-    """PerOuter waits and pops hold one B tile across each output row."""
+    """PerTile + Col holds one streamed B tile across each output row."""
     dt = ttnn.bfloat16
     a_shape = [1, 1, 32, 32 * Ht * Wt]
     b_shape = [1, 1, 32, 32 * Ht]
@@ -192,5 +192,5 @@ def test_outer_stream_broadcast(device, Ht, Wt, fp32_dest_acc_en):
     b_v = torch_b.to(torch.float32).view(1, 1, 32, Ht, 1, 32)
     golden = (a_v + b_v).reshape(1, 1, 32, 32 * Ht * Wt)
     pcc_ok, msg = comp_pcc(golden, torch_out, 0.999)
-    logger.info(f"OuterStream | Ht={Ht} Wt={Wt} fp32_dest_acc_en={fp32_dest_acc_en} | {msg}")
+    logger.info(f"StreamedCol | Ht={Ht} Wt={Wt} fp32_dest_acc_en={fp32_dest_acc_en} | {msg}")
     assert pcc_ok, msg

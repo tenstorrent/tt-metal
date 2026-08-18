@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "api/dataflow/dataflow_buffer.h"
@@ -15,6 +15,7 @@ namespace ckl = compute_kernel_lib;
 void kernel_main() {
     constexpr int onetile = 1;
     const auto per_core_block_cnt = get_arg(args::per_core_block_cnt);
+    DataflowBuffer dfb_scaler(dfb::scaler);
     compute_kernel_hw_startup(dfb::in0, dfb::in1, dfb::out);
 
     for (uint32_t block = 0; block < per_core_block_cnt; ++block) {
@@ -55,5 +56,5 @@ void kernel_main() {
         }
     }
     // The reduce helper reuses the scaler tile for every block.
-    DataflowBuffer(dfb::scaler).pop_front(onetile);
+    dfb_scaler.pop_front(onetile);
 }

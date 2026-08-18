@@ -13,7 +13,7 @@
 // CT args: [n, block_size, life, batch].
 
 #include <cstdint>
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"
 
 void kernel_main() {
@@ -43,8 +43,8 @@ void kernel_main() {
                     input(cb_b, WaitPolicy::Upfront, PopPolicy::AtEnd, OperandKind::Block)>{},
                 Exp<>{},
                 DestReuseBinary<
-                    input(cb_c, WaitPolicy::Upfront, PopPolicy::AtEnd, OperandKind::Block),
                     BinaryFpuOp::Mul,
+                    input(cb_c, WaitPolicy::Upfront, PopPolicy::AtEnd, OperandKind::Block),
                     DestReuseType::DEST_TO_SRCA>{},
                 PackTile<output(cb_out, ReservePolicy::Upfront, PushPolicy::AtEnd)>{});
         }
@@ -57,8 +57,8 @@ void kernel_main() {
                 input(cb_b, WaitPolicy::PerBlockSize, PopPolicy::PerBlockSize, OperandKind::Block)>{},
             Exp<>{},
             DestReuseBinary<
-                input(cb_c, WaitPolicy::PerBlockSize, PopPolicy::PerBlockSize, OperandKind::Block),
                 BinaryFpuOp::Mul,
+                input(cb_c, WaitPolicy::PerBlockSize, PopPolicy::PerBlockSize, OperandKind::Block),
                 DestReuseType::DEST_TO_SRCA>{},
             PackTile<output(cb_out, ReservePolicy::PerBlockSize, PushPolicy::PerBlockSize)>{});
     }

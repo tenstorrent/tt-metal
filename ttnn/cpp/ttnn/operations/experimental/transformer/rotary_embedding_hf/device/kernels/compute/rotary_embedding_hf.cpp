@@ -7,7 +7,7 @@
 #include "api/compute/common.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/bcast.h"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
 
 namespace ckl = compute_kernel_lib;

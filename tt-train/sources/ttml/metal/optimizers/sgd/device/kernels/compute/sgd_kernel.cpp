@@ -6,7 +6,7 @@
 
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/eltwise_binary.h"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 
 namespace ckl = compute_kernel_lib;
 
@@ -69,7 +69,8 @@ ALWI void binary_block() {
 
 template <uint32_t GradDfb>
 ALWI void finish_momentum() {
-    DataflowBuffer(GradDfb).wait_front(block_size);
+    DataflowBuffer grad_dfb(GradDfb);
+    grad_dfb.wait_front(block_size);
     ckl::eltwise_chain(
         ckl::IterationShape::tiles(block_size).block_size(block_size),
         ckl::BinaryFpu<
@@ -105,14 +106,14 @@ ALWI void finish_momentum() {
         ckl::BroadcastDim::None,
         true,
         false>();
-    DataflowBuffer(GradDfb).pop_front(block_size);
+    grad_dfb.pop_front(block_size);
 #else
-    DataflowBuffer(GradDfb).pop_front(block_size);
+    grad_dfb.pop_front(block_size);
 #endif
 }
 
 template <uint32_t GradDfb>
-ALWI void process_update(bool use_dampening) {
+ALWI void process_update(bool use_dampening, DataflowBuffer& dfb_param_in) {
 #if USE_MOMENTUM
     binary_block<
         dfb_momentum_in_idx_id,
@@ -165,7 +166,7 @@ ALWI void process_update(bool use_dampening) {
         ckl::BroadcastDim::None,
         false,
         true>();
-    DataflowBuffer(dfb_param_in_idx_id).pop_front(block_size);
+    dfb_param_in.pop_front(block_size);
 }
 
 void kernel_main() {
@@ -175,12 +176,18 @@ void kernel_main() {
     const bool use_weight_decay = get_arg_val<uint32_t>(runtime_args_counter++);
     const bool use_dampening = get_arg_val<uint32_t>(runtime_args_counter++);
 
-    DataflowBuffer(dfb_bcast_lr_idx_id).wait_front(1);
-    DataflowBuffer(dfb_bcast_momentum_idx_id).wait_front(1);
-    DataflowBuffer(dfb_bcast_one_minus_dampening_idx_id).wait_front(1);
-    DataflowBuffer(dfb_bcast_wd_idx_id).wait_front(1);
+    DataflowBuffer dfb_param_in(dfb_param_in_idx_id);
+    DataflowBuffer dfb_bcast_lr(dfb_bcast_lr_idx_id);
+    DataflowBuffer dfb_bcast_momentum(dfb_bcast_momentum_idx_id);
+    DataflowBuffer dfb_bcast_one_minus_dampening(dfb_bcast_one_minus_dampening_idx_id);
+    DataflowBuffer dfb_bcast_wd(dfb_bcast_wd_idx_id);
+
+    dfb_bcast_lr.wait_front(1);
+    dfb_bcast_momentum.wait_front(1);
+    dfb_bcast_one_minus_dampening.wait_front(1);
+    dfb_bcast_wd.wait_front(1);
     for (uint32_t tile_idx = 0; tile_idx < num_tiles_per_core; tile_idx += block_size) {
-        DataflowBuffer(dfb_param_in_idx_id).wait_front(block_size);
+        dfb_param_in.wait_front(block_size);
         if (use_weight_decay) {
             binary_block<
                 dfb_param_in_idx_id,
@@ -192,13 +199,13 @@ void kernel_main() {
                 false,
                 ckl::OperandKind::Scalar>();
             binary_block<dfb_param_wd_idx_id, dfb_grad_idx_id, dfb_grad_wd_idx_id, ckl::BinaryFpuOp::Add>();
-            process_update<dfb_grad_wd_idx_id>(use_dampening);
+            process_update<dfb_grad_wd_idx_id>(use_dampening, dfb_param_in);
         } else {
-            process_update<dfb_grad_idx_id>(use_dampening);
+            process_update<dfb_grad_idx_id>(use_dampening, dfb_param_in);
         }
     }
-    DataflowBuffer(dfb_bcast_lr_idx_id).pop_front(1);
-    DataflowBuffer(dfb_bcast_momentum_idx_id).pop_front(1);
-    DataflowBuffer(dfb_bcast_one_minus_dampening_idx_id).pop_front(1);
-    DataflowBuffer(dfb_bcast_wd_idx_id).pop_front(1);
+    dfb_bcast_lr.pop_front(1);
+    dfb_bcast_momentum.pop_front(1);
+    dfb_bcast_one_minus_dampening.pop_front(1);
+    dfb_bcast_wd.pop_front(1);
 }

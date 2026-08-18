@@ -10,7 +10,7 @@
 // swap reads a different tile and fails PCC. Row/Col need a non-streaming lifecycle (Bulk).
 
 #include <cstdint>
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 
 void kernel_main() {
     constexpr uint32_t cb_a = tt::CBIndex::c_0;

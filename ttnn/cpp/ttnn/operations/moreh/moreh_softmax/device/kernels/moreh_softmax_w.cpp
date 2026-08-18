@@ -5,7 +5,7 @@
 #include <cstdint>
 
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"  // sub
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"       // Exp
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/misc.hpp"       // Mask, Negative

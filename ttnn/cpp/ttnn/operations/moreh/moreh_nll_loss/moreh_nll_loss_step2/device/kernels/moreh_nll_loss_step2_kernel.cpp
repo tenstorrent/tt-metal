@@ -5,7 +5,7 @@
 #include <cstdint>
 
 #include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.hpp"       // BinaryFpu, CopyTile, DestReuseBinary, PackTile
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"        // BinaryFpu, CopyTile, DestReuseBinary, PackTile
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"  // unary
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"       // Recip
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/misc.hpp"       // Negative
@@ -45,7 +45,7 @@ void kernel_main() {
 
     constexpr auto weight_mul = ckl::Optional<
         has_weight,
-        ckl::DestReuseBinary<ckl::input(dfb_tmp_weight_id), ckl::BinaryFpuOp::Mul, ckl::DestReuseType::DEST_TO_SRCA>>{};
+        ckl::DestReuseBinary<ckl::BinaryFpuOp::Mul, ckl::input(dfb_tmp_weight_id), ckl::DestReuseType::DEST_TO_SRCA>>{};
 
     constexpr auto negate = ckl::Negative<D::D0>{};
     constexpr auto pack_out = ckl::PackTile<ckl::output(dfb_output_id)>{};

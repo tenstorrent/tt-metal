@@ -8,7 +8,7 @@
  * @brief Misc / utility SFPU op structs — Identity, Negative, Typecast, Sign, Abs, Square.
  */
 
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 
 namespace compute_kernel_lib {
 

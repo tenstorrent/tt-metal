@@ -15,7 +15,7 @@
 #include "api/compute/compute_kernel_api.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/misc.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/binary/sfpu/basic.hpp"
@@ -39,6 +39,7 @@ void kernel_main() {
     // Accurate mode only supports SUM; with the reader's scaler of 1.0, SUM and AVG are equivalent.
     constexpr auto reduce_type = unpack_fp32_active ? PoolType::SUM : PoolType::AVG;
     constexpr auto reduce_fp32_mode = unpack_fp32_active ? ReduceFp32Mode::Accurate : ReduceFp32Mode::Fast;
+    DataflowBuffer dfb_reduce(dfb::reduce);
 
 #ifdef FUSE_PRE_ADD
     compute_kernel_hw_startup(dfb::in0, dfb::res, dfb_inp_id);
@@ -104,5 +105,5 @@ void kernel_main() {
             compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
             reduce_fp32_mode>(compute_kernel_lib::ReduceInputBlockShape::row(Wt));
     }
-    DataflowBuffer(dfb::reduce).pop_front(1);
+    dfb_reduce.pop_front(1);
 }

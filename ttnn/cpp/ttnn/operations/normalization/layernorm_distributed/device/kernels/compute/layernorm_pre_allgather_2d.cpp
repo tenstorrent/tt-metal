@@ -17,7 +17,7 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"  // add
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/misc.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/binary/sfpu/basic.hpp"
@@ -39,9 +39,14 @@ void kernel_main() {
     constexpr auto blk = get_arg(args::blk);
     constexpr auto num_cores_y = get_arg(args::num_cores_y);
     constexpr bool unpack_fp32_active = get_arg(args::unpack_fp32_active) != 0;
+    // The merge buffers and reader protocol carry one partial-stat tile per x core. The host maps
+    // exactly one tile row to each x core; keep that contract visible at the kernel boundary too.
+    static_assert(NCHt == 1, "2D layernorm pre-allgather requires one tile row per x core");
     // Accurate mode only supports SUM; with the reader's scaler of 1.0, SUM and AVG are equivalent.
     constexpr auto reduce_type = unpack_fp32_active ? PoolType::SUM : PoolType::AVG;
     constexpr auto reduce_fp32_mode = unpack_fp32_active ? ReduceFp32Mode::Accurate : ReduceFp32Mode::Fast;
+    DataflowBuffer dfb_inp(dfb_inp_id);
+    DataflowBuffer dfb_reduce(dfb::reduce);
 
 #ifdef FUSE_PRE_ADD
     compute_kernel_hw_startup(dfb::in0, dfb::res, dfb_inp_id);
@@ -93,52 +98,41 @@ void kernel_main() {
             compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop,
             compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
             reduce_fp32_mode>(compute_kernel_lib::ReduceInputBlockShape::row(Wt));
-        DataflowBuffer(dfb_inp_id).pop_front(Wt);
-        DataflowBuffer(dfb::reduce).pop_front(1);
+        dfb_inp.pop_front(Wt);
     }
+    // The reader produces one reduce-scaler tile before the row loop. Every reduction reuses that
+    // resident tile, so release its single credit only after all rows are complete.
+    dfb_reduce.pop_front(1);
 
 #ifdef IS_MERGE_CORE
     // Only merge-core builds bind out_final, so this block must be selected by the preprocessor.
+    DataflowBuffer dfb_x2_merge(dfb::x2_merge);
+    DataflowBuffer dfb_zero(dfb::zero);
+    dfb_x2_merge.wait_front(num_cores_y);
+    dfb_zero.wait_front(1);
+
+    // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the
+    // pre-cleanup full-init behaviour) should become a targeted DST re-arm.
+    compute_kernel_hw_startup(dfb::x2_merge, dfb::zero, dfb::out_final);
+
     if constexpr (unpack_fp32_active) {
-        DataflowBuffer dfb_x2_merge(dfb::x2_merge);
         DataflowBuffer dfb_out_final(dfb::out_final);
-        DataflowBuffer dfb_zero(dfb::zero);
         constexpr int dst0 = 0;
 
-        // Wait for all num_cores_y tiles
-        dfb_x2_merge.wait_front(num_cores_y);
-        dfb_zero.wait_front(1);
-
-        // Initialize accumulation
-        // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the
-        // pre-cleanup full-init behaviour) should become a targeted DST re-arm.
-        compute_kernel_hw_startup(dfb::x2_merge, dfb::zero, dfb::out_final);
         reconfig_data_format(dfb::x2_merge, dfb::zero);
         pack_reconfig_data_format(dfb::out_final);
         // Add all the column's partials together. The accurate path sums them in Dest on the SFPU;
         // add_tiles would pull each through SrcA/SrcB and round it to TF32.
-        if constexpr (unpack_fp32_active) {
-            copy_tile_to_dst_init_short(dfb::x2_merge);
-            add_binary_tile_init();
-        } else {
-            add_init(dfb::x2_merge, dfb::zero, true);
-        }
+        copy_tile_to_dst_init_short(dfb::x2_merge);
+        add_binary_tile_init();
 
         tile_regs_acquire();
-        if constexpr (unpack_fp32_active) {
-            copy_tile(dfb::x2_merge, 0, dst0);
-            for (uint32_t i = 1; i < num_cores_y; i++) {
-                copy_tile(dfb::x2_merge, i, dst0 + 1);
-                add_binary_tile(dst0, dst0 + 1, dst0);
-            }
-        } else {
-            for (uint32_t i = 0; i < num_cores_y; i++) {
-                add_tiles(dfb::x2_merge, dfb::zero, i, 0, dst0);
-            }
+        copy_tile(dfb::x2_merge, 0, dst0);
+        for (uint32_t i = 1; i < num_cores_y; i++) {
+            copy_tile(dfb::x2_merge, i, dst0 + 1);
+            add_binary_tile(dst0, dst0 + 1, dst0);
         }
         tile_regs_commit();
-
-        dfb_x2_merge.pop_front(num_cores_y);
 
         dfb_out_final.reserve_back(1);
 
@@ -152,8 +146,8 @@ void kernel_main() {
             ckl::IterationShape::tiles(num_cores_y),
             ckl::BinaryFpu<
                 ckl::BinaryFpuOp::Add,
-                ckl::input(dfb::x2_merge, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
-                ckl::input(dfb::zero, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None),
+                ckl::input(dfb::x2_merge, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::OperandKind::Block),
+                ckl::input(dfb::zero, ckl::WaitPolicy::None, ckl::PopPolicy::None),
                 ckl::Dst::D0,
                 ckl::DestAccumulation::WholeShape>{},
             ckl::PackTile<ckl::output(
@@ -165,5 +159,6 @@ void kernel_main() {
                 ckl::L1Accumulation::Disabled,
                 ckl::DestAccumulation::WholeShape)>{});
     }
+    dfb_x2_merge.pop_front(num_cores_y);
 #endif
 }

@@ -27,7 +27,7 @@
 #include "api/dataflow/dataflow_buffer.h"
 
 #include "layernorm_compute_utils.h"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"  // square
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/optional.hpp"
@@ -100,6 +100,7 @@ void kernel_main() {
     DataflowBuffer dfb_ex2_obj(dfb_ex2_id);
     DataflowBuffer dfb_xmm2_obj(dfb_xmm2_id);
     DataflowBuffer dfb_ex2pe_obj(dfb_ex2pe_id);
+    DataflowBuffer dfb_scaler_obj(dfb_scaler_id);
 
     constexpr auto dfb_in_rm_id =
         get_named_compile_time_arg_val("cb_in_rm");  // input row-major (if row-major input, otherwise unused)
@@ -175,10 +176,10 @@ void kernel_main() {
 
 #ifndef RMSNORM
         // E[x]
-        DataflowBuffer dfb_x_obj(dfb_x_id), dfb_scaler_obj_id(dfb_scaler_id), dfb_ex_obj(dfb_ex_id);
+        DataflowBuffer dfb_x_obj(dfb_x_id), dfb_ex_obj(dfb_ex_id);
         numeric::
             row_wise_mean<PoolType::SUM, ReduceDim::REDUCE_ROW, FLOAT32_REDUCTION, policies::FullBlockWithoutPopPolicy>(
-                dfb_x_obj, dfb_scaler_obj_id, dfb_ex_obj, W, Wt, block_size, tile_width);
+                dfb_x_obj, dfb_scaler_obj, dfb_ex_obj, W, Wt, block_size, tile_width);
 
         // x - E[x]; the mean stays resident for the whole row.
         ckl::sub<
@@ -214,10 +215,10 @@ void kernel_main() {
 #endif
 
         // Var[x]
-        DataflowBuffer dfb_xmm2_obj(dfb_xmm2_id), dfb_scaler_obj2_id(dfb_scaler_id), dfb_ex2_obj(dfb_ex2_id);
+        DataflowBuffer dfb_xmm2_obj(dfb_xmm2_id), dfb_ex2_obj(dfb_ex2_id);
         numeric::
             row_wise_mean<PoolType::SUM, ReduceDim::REDUCE_ROW, FLOAT32_REDUCTION, policies::FullBlockWithPopPolicy>(
-                dfb_xmm2_obj, dfb_scaler_obj2_id, dfb_ex2_obj, W, Wt, block_size, tile_width);
+                dfb_xmm2_obj, dfb_scaler_obj, dfb_ex2_obj, W, Wt, block_size, tile_width);
 
         // 1/sqrt(Var[x] + eps)
         ckl::eltwise_chain(
@@ -328,10 +329,10 @@ void kernel_main() {
         untilize_all_blocks_from_cb<block_size>(dfb_out_obj, dfb_out_rm_obj, Wt);
 #endif
     }  // NCHt loop
-    // The reduce scaler is generated once by the reader and reused (waited inside row_wise_mean)
-    // across every NCHt iteration but never popped. Pop the producer's tile count once here to
-    // balance the DFB. The reader pushes a second scaler tile only when the last column tile is
-    // partial (W not a multiple of tile_width), matching row_wise_mean's wait count.
-    constexpr uint32_t num_scaler_tiles = (W % tile_width > 0) ? 2 : 1;
-    DataflowBuffer(dfb_scaler_id).pop_front(num_scaler_tiles);
+    // The reader generates one canonical 32-wide scaler tile, plus a second tile when W is not a
+    // multiple of that scaler width. The row reductions hold those tiles across every NCHt
+    // iteration, so drain exactly the producer's count once all rows are complete.
+    constexpr uint32_t scaler_tile_width = 32;
+    constexpr uint32_t num_scaler_tiles = (W % scaler_tile_width > 0) ? 2 : 1;
+    dfb_scaler_obj.pop_front(num_scaler_tiles);
 }

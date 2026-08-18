@@ -9,7 +9,7 @@
 // identical across block_size; larger blocks should cut loop/DEST-sync overhead (the perf signal).
 
 #include <cstdint>
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"
 
 void kernel_main() {

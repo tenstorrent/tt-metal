@@ -4,7 +4,7 @@
 
 #include <cstdint>
 #include "api/compute/compute_kernel_hw_startup.h"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"  // unary
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/binary/sfpu/basic.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/misc.hpp"     // Typecast
@@ -17,22 +17,17 @@ using D = ckl::Dst;
 
 template <uint32_t dfb_batch_id, uint32_t dfb_old_id, uint32_t dfb_updated_id, bool AlsoOut0>
 ALWI void update_running_stat() {
-    using ckl::AddBinary;
-    using ckl::MulBinary;
-    using ckl::SubBinary;
-    constexpr auto SCALAR = ckl::OperandKind::Scalar;
-
     ckl::eltwise_chain(
         ckl::IterationShape::one_tile(),
-        ckl::CopyTile<ckl::input(dfb::one, ckl::WaitPolicy::None, ckl::PopPolicy::None, SCALAR), D::D0>{},
-        ckl::CopyTile<ckl::input(dfb::momentum, ckl::WaitPolicy::None, ckl::PopPolicy::None, SCALAR), D::D1>{},
-        SubBinary<D::D0, D::D1, D::D0>{},  // D0 = 1 - momentum
-        ckl::CopyTile<ckl::input(dfb_old_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, SCALAR), D::D1>{},
-        MulBinary<D::D0, D::D1, D::D0>{},  // D0 = (1 - momentum) * old_stat
-        ckl::CopyTile<ckl::input(dfb::momentum, ckl::WaitPolicy::None, ckl::PopPolicy::None, SCALAR), D::D1>{},
-        ckl::CopyTile<ckl::input(dfb_batch_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, SCALAR), D::D2>{},
-        MulBinary<D::D1, D::D2, D::D1>{},  // D1 = momentum * batch_stat
-        AddBinary<D::D0, D::D1, D::D0>{},  // D0 = (1 - momentum) * old + momentum * batch
+        ckl::CopyTile<ckl::input(dfb::one, ckl::WaitPolicy::None, ckl::PopPolicy::None), D::D0>{},
+        ckl::CopyTile<ckl::input(dfb::momentum, ckl::WaitPolicy::None, ckl::PopPolicy::None), D::D1>{},
+        ckl::SubBinary<D::D0, D::D1, D::D0>{},  // D0 = 1 - momentum
+        ckl::CopyTile<ckl::input(dfb_old_id), D::D1>{},
+        ckl::MulBinary<D::D0, D::D1, D::D0>{},  // D0 = (1 - momentum) * old_stat
+        ckl::CopyTile<ckl::input(dfb::momentum, ckl::WaitPolicy::None, ckl::PopPolicy::None), D::D1>{},
+        ckl::CopyTile<ckl::input(dfb_batch_id, ckl::WaitPolicy::None, ckl::PopPolicy::None), D::D2>{},
+        ckl::MulBinary<D::D1, D::D2, D::D1>{},  // D1 = momentum * batch_stat
+        ckl::AddBinary<D::D0, D::D1, D::D0>{},  // D0 = (1 - momentum) * old + momentum * batch
         ckl::PackTile<ckl::output(dfb_updated_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>{},
         ckl::Optional<
             AlsoOut0,
@@ -82,20 +77,23 @@ void kernel_main() {
 
     DataflowBuffer dfb_batch_mean_obj(dfb::batch_mean);
     DataflowBuffer dfb_batch_var_obj(dfb::batch_var);
+    DataflowBuffer dfb_momentum_obj(dfb::momentum);
+    DataflowBuffer dfb_one_obj(dfb::one);
+    DataflowBuffer dfb_out_obj(dfb::out);
 
     compute_kernel_hw_startup(dfb::batch_mean, dfb::out);
     constexpr uint32_t onetile = 1;
 
-    DataflowBuffer(dfb::momentum).wait_front(1);
-    DataflowBuffer(dfb::one).wait_front(1);
+    dfb_momentum_obj.wait_front(1);
+    dfb_one_obj.wait_front(1);
 
     for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
-        // The reader produces both batch-stat streams for every tile, even when only one
-        // running statistic is requested. Consume both streams unconditionally to avoid
+        // The reader and writer produce the batch-mean and batch-var streams for every tile, even
+        // when only one running statistic is requested. Consume both streams unconditionally to avoid
         // filling either two-entry buffer and stalling its producer.
         dfb_batch_mean_obj.wait_front(onetile);
         dfb_batch_var_obj.wait_front(onetile);
-        DataflowBuffer(dfb::out).reserve_back(onetile);
+        dfb_out_obj.reserve_back(onetile);
 
         if constexpr (old_running_mean_has_value) {
             update_running_stat<
@@ -125,11 +123,11 @@ void kernel_main() {
                 dfb_writer_updated_var_binding>();
         }
 
-        DataflowBuffer(dfb::out).push_back(onetile);
+        dfb_out_obj.push_back(onetile);
         dfb_batch_mean_obj.pop_front(onetile);
         dfb_batch_var_obj.pop_front(onetile);
     }
 
-    DataflowBuffer(dfb::momentum).pop_front(1);
-    DataflowBuffer(dfb::one).pop_front(1);
+    dfb_momentum_obj.pop_front(1);
+    dfb_one_obj.pop_front(1);
 }

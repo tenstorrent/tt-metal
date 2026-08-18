@@ -6,8 +6,7 @@
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/misc.hpp"  // Mask
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
 
 void kernel_main() {
     // Carries the per-core work-split count (the host's num_rows_per_core_group_N), not a tile height.
@@ -19,6 +18,7 @@ void kernel_main() {
     // Selected at runtime between the input DFB and the masked-input DFB; stays uint32_t-valued so the
     // reassignment below is legal — the generated dfb:: handles convert to uint32_t at compile time.
     uint32_t dfb_input_id = dfb::input;
+    DataflowBuffer dfb_input_obj(dfb::input);
     constexpr auto dfb_scaler_id = dfb::scaler;
     DataflowBuffer dfb_scaler_obj(dfb_scaler_id);
     constexpr auto dfb_mask_w_id = dfb::mask_w;
@@ -26,10 +26,12 @@ void kernel_main() {
     constexpr auto dfb_accum_dst_id = dfb::accum_dst;
     DataflowBuffer dfb_accum_dst_obj(dfb_accum_dst_id);
     constexpr auto dfb_masked_input_id = dfb::masked_input;
+    DataflowBuffer dfb_masked_input_obj(dfb_masked_input_id);
     constexpr auto dfb_out_id = dfb::out;
     DataflowBuffer dfb_out_obj(dfb_out_id);
     constexpr uint32_t TILE_W = 32;
     constexpr bool do_mask_w = (origin_W % TILE_W) != 0;
+    DataflowBuffer& dfb_reduction_input_obj = do_mask_w ? dfb_masked_input_obj : dfb_input_obj;
 
     compute_kernel_hw_startup(dfb_input_id, dfb_scaler_id, dfb_out_id);
 
@@ -37,7 +39,6 @@ void kernel_main() {
 
     constexpr int onetile = 1;
     int reduce_dst_idx = 0;
-    const uint32_t mask_dst_idx = reduce_dst_idx + 1;
 
     if (do_mask_w) {
         dfb_mask_w_obj.wait_front(onetile);
@@ -53,14 +54,14 @@ void kernel_main() {
             if (!is_w_single_tile) {
                 tile_regs_acquire();
                 for (uint32_t wt = 0; wt < Wt - 1; ++wt) {
-                    DataflowBuffer(dfb_input_id).wait_front(onetile);
+                    dfb_input_obj.wait_front(onetile);
 #if defined FP32_DEST_ACC_EN
                     reconfig_data_format(dfb_input_id, dfb_scaler_id);
 #endif
                     matmul_init(dfb_input_id, dfb_scaler_id, false);
                     matmul_tiles(dfb_input_id, dfb_scaler_id, 0, 0, reduce_dst_idx);
 
-                    DataflowBuffer(dfb_input_id).pop_front(onetile);
+                    dfb_input_obj.pop_front(onetile);
                 }
                 tile_regs_commit();
                 dfb_accum_dst_obj.reserve_back(onetile);
@@ -74,24 +75,18 @@ void kernel_main() {
             }
 
             if (do_mask_w) {
-                // CopyTile<input(c_0)> + CopyTile<input(dfb_mask_w_id), D1> + Mask + PackTile.
-                // dfb_input_id is always c_0 here (reset at line 46 before this conditional).
-                // Reconfig: chain Input+Output (fold elides no-op transitions); matches
-                // the FP32_DEST_ACC_EN-guarded reconfigs in the original.
-                compute_kernel_lib::eltwise_chain(
-                    compute_kernel_lib::IterationShape::tiles(onetile),
-                    compute_kernel_lib::CopyTile<compute_kernel_lib::input(dfb::input)>{},
-                    compute_kernel_lib::CopyTile<
-                        compute_kernel_lib::input(
-                            dfb_mask_w_id, compute_kernel_lib::WaitPolicy::None, compute_kernel_lib::PopPolicy::None),
-                        compute_kernel_lib::Dst::D1>{},
-                    compute_kernel_lib::Mask<DataFormat::Float16_b, compute_kernel_lib::Dst::D0>{},
-                    compute_kernel_lib::PackTile<compute_kernel_lib::output(dfb_masked_input_id)>{});
+                compute_kernel_lib::binary_sfpu<
+                    compute_kernel_lib::Mask<DataFormat::Float16_b>,
+                    compute_kernel_lib::input(dfb::input),
+                    compute_kernel_lib::input(
+                        dfb_mask_w_id, compute_kernel_lib::WaitPolicy::None, compute_kernel_lib::PopPolicy::None),
+                    compute_kernel_lib::output(dfb_masked_input_id)>(
+                    compute_kernel_lib::IterationShape::tiles(onetile));
                 dfb_input_id = dfb_masked_input_id;
             }
 
             tile_regs_acquire();
-            DataflowBuffer(dfb_input_id).wait_front(onetile);
+            dfb_reduction_input_obj.wait_front(onetile);
             if (!is_w_single_tile) {
 #if defined FP32_DEST_ACC_EN
                 reconfig_data_format_srca(dfb_accum_dst_id);
@@ -117,7 +112,7 @@ void kernel_main() {
             tile_regs_release();
             dfb_out_obj.push_back(onetile);
 
-            DataflowBuffer(dfb_input_id).pop_front(onetile);
+            dfb_reduction_input_obj.pop_front(onetile);
             if (!is_w_single_tile) {
                 dfb_accum_dst_obj.pop_front(onetile);
             }

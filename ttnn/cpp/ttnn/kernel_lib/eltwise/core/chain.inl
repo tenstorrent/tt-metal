@@ -35,8 +35,6 @@ constexpr TypedIterationShape<IterationShapeKind::Tiles> IterationShape::tiles(u
 
 constexpr TypedIterationShape<IterationShapeKind::Grid> IterationShape::grid(uint32_t H, uint32_t W) { return {H, W}; }
 
-constexpr TypedIterationShape<IterationShapeKind::Grid> IterationShape::of(uint32_t r, uint32_t c) { return {r, c}; }
-
 constexpr TypedIterationShape<IterationShapeKind::Grid> IterationShape::row(uint32_t c) { return {1, c}; }
 
 constexpr TypedIterationShape<IterationShapeKind::Grid> IterationShape::col(uint32_t r) { return {r, 1}; }
@@ -48,7 +46,6 @@ constexpr bool is_legal_input_policy(WaitPolicy wait, PopPolicy pop) noexcept {
         case WaitPolicy::None: return pop == PopPolicy::None || pop == PopPolicy::PerTile || pop == PopPolicy::AtEnd;
         case WaitPolicy::PerTile: return pop == PopPolicy::None || pop == PopPolicy::PerTile;
         case WaitPolicy::PerBlockSize: return pop == PopPolicy::PerBlockSize;
-        case WaitPolicy::PerOuter: return pop == PopPolicy::PerOuter;
         case WaitPolicy::Upfront: return pop == PopPolicy::None || pop == PopPolicy::PerTile || pop == PopPolicy::AtEnd;
         case WaitPolicy::Cumulative: return pop == PopPolicy::None || pop == PopPolicy::AtEnd;
     }
@@ -80,12 +77,14 @@ constexpr bool is_legal_input_policy_for_kind(OperandKind kind, WaitPolicy wait,
                    ((wait == WaitPolicy::Upfront || wait == WaitPolicy::None) &&
                     (pop == PopPolicy::None || pop == PopPolicy::AtEnd));
         case OperandKind::Row:
-        case OperandKind::Col:
             return (wait == WaitPolicy::Upfront || wait == WaitPolicy::None) &&
                    (pop == PopPolicy::None || pop == PopPolicy::AtEnd);
+        case OperandKind::Col:
+            return (wait == WaitPolicy::PerTile && pop == PopPolicy::PerTile) ||
+                   ((wait == WaitPolicy::Upfront || wait == WaitPolicy::None) &&
+                    (pop == PopPolicy::None || pop == PopPolicy::AtEnd));
         case OperandKind::Scalar:
-            return wait == WaitPolicy::None || wait == WaitPolicy::PerTile || wait == WaitPolicy::PerOuter ||
-                   wait == WaitPolicy::Upfront;
+            return wait == WaitPolicy::None || wait == WaitPolicy::PerTile || wait == WaitPolicy::Upfront;
     }
     return false;
 }
@@ -718,6 +717,18 @@ ALWI constexpr uint32_t idx(
     }
 }
 
+// PerTile + Col is a row-stream lifecycle rather than an Ht-tile staged window. Its front advances
+// at row boundaries, so every access within the current row uses front index 0. Other Col policies
+// retain ordinary absolute-row indexing.
+template <OperandKind M, WaitPolicy Wait, PopPolicy Pop, TileOffset Offset>
+ALWI constexpr uint32_t input_idx(uint32_t flat_index, uint32_t row, uint32_t column, uint32_t row_stride) noexcept {
+    if constexpr (M == OperandKind::Col && Wait == WaitPolicy::PerTile && Pop == PopPolicy::PerTile) {
+        return 0;
+    } else {
+        return idx<M, Offset>(flat_index, row, column, row_stride);
+    }
+}
+
 template <OperandKind M>
 ALWI constexpr uint32_t window([[maybe_unused]] uint32_t Ht, [[maybe_unused]] uint32_t Wt) noexcept {
     if constexpr (M == OperandKind::Block) {
@@ -928,8 +939,8 @@ struct detail::CopyTileImpl : InputStream, CopyTileTag {
     static ALWI void init() { copy_tile_init(Cb); }
 
     ALWI void exec(uint32_t i_flat, uint32_t ht, uint32_t wt, uint32_t slot_offset) const {
-        const uint32_t in_idx =
-            tile_base_value<Offset>(tile_base) + detail::idx<IndexMode, Offset>(i_flat, ht, wt, row_stride);
+        const uint32_t in_idx = tile_base_value<Offset>(tile_base) +
+                                detail::input_idx<IndexMode, Wait, Pop, Offset>(i_flat, ht, wt, row_stride);
         copy_tile(Cb, in_idx, to_u32(DstSlot) + slot_offset);
     }
 
@@ -1229,10 +1240,10 @@ struct detail::BinaryFpuImpl : BinaryFpuTag {
         const uint32_t b_flat = b_uses_local_idx ? i_flat_local : i_flat_abs;
         const uint32_t a_wt = a_uses_local_idx ? wt_local : wt_abs;
         const uint32_t b_wt = b_uses_local_idx ? wt_local : wt_abs;
-        const uint32_t a_idx =
-            tile_base_value<OffsetA>(a.tile_base) + detail::idx<AIndex, OffsetA>(a_flat, ht, a_wt, a.row_stride);
-        const uint32_t b_idx =
-            tile_base_value<OffsetB>(b.tile_base) + detail::idx<BIndex, OffsetB>(b_flat, ht, b_wt, b.row_stride);
+        const uint32_t a_idx = tile_base_value<OffsetA>(a.tile_base) +
+                               detail::input_idx<AIndex, AWait, APop, OffsetA>(a_flat, ht, a_wt, a.row_stride);
+        const uint32_t b_idx = tile_base_value<OffsetB>(b.tile_base) +
+                               detail::input_idx<BIndex, BWait, BPop, OffsetB>(b_flat, ht, b_wt, b.row_stride);
         const uint32_t dst =
             Accumulation != DestAccumulation::Disabled ? to_u32(DstSlot) : to_u32(DstSlot) + slot_offset;
         if constexpr (Bcast == BroadcastDim::None) {
@@ -1353,8 +1364,8 @@ struct detail::DestReuseBinaryImpl : InputStream, DestReuseBinaryTag {
         constexpr auto reuse = (ReuseType == DestReuseType::DEST_TO_SRCA)
                                    ? ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCA
                                    : ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCB;
-        const uint32_t in_idx =
-            tile_base_value<Offset>(tile_base) + detail::idx<IndexMode, Offset>(i_flat, ht, wt, row_stride);
+        const uint32_t in_idx = tile_base_value<Offset>(tile_base) +
+                                detail::input_idx<IndexMode, Wait, Pop, Offset>(i_flat, ht, wt, row_stride);
         if constexpr (Op == BinaryFpuOp::Add) {
             add_reuse_dest_tiles<reuse>(Cb, in_idx, to_u32(DstSlot) + slot_offset);
         } else if constexpr (Op == BinaryFpuOp::Sub) {
@@ -1581,12 +1592,12 @@ struct ElemDesc {
     uint32_t lane_width;
     uint32_t transient_lane_width;
     bool supports_block;
-    uint32_t outer_input_a_cb;
-    uint32_t outer_input_b_cb;
-    bool wait_a_per_outer;
-    bool wait_b_per_outer;
-    bool pop_a_per_outer;
-    bool pop_b_per_outer;
+    uint32_t row_stream_input_a_cb;
+    uint32_t row_stream_input_b_cb;
+    bool wait_a_per_row;
+    bool wait_b_per_row;
+    bool pop_a_per_row;
+    bool pop_b_per_row;
     bool reserve_per_outer;
     bool push_per_outer;
 };
@@ -1667,7 +1678,7 @@ constexpr uint32_t transient_lane_width_of() {
 }
 
 template <class E>
-constexpr uint32_t outer_input_a_cb_of() {
+constexpr uint32_t row_stream_input_a_cb_of() {
     if constexpr (is_binary_fpu_op_v<E>) {
         return E::dfb_a_id();
     } else if constexpr (is_cb_reader_op_v<E>) {
@@ -1678,7 +1689,7 @@ constexpr uint32_t outer_input_a_cb_of() {
 }
 
 template <class E>
-constexpr uint32_t outer_input_b_cb_of() {
+constexpr uint32_t row_stream_input_b_cb_of() {
     if constexpr (is_binary_fpu_op_v<E>) {
         if constexpr (!E::same_dfb) {
             return E::dfb_b_id();
@@ -1688,42 +1699,42 @@ constexpr uint32_t outer_input_b_cb_of() {
 }
 
 template <class E>
-constexpr bool wait_a_per_outer_of() {
+constexpr bool wait_a_per_row_of() {
     if constexpr (is_binary_fpu_op_v<E>) {
-        return E::AWait == WaitPolicy::PerOuter;
+        return E::AWait == WaitPolicy::PerTile && E::APop == PopPolicy::PerTile && E::AIndex == OperandKind::Col;
     } else if constexpr (is_cb_reader_op_v<E>) {
-        return E::Wait == WaitPolicy::PerOuter;
+        return E::Wait == WaitPolicy::PerTile && E::Pop == PopPolicy::PerTile && E::IndexMode == OperandKind::Col;
     } else {
         return false;
     }
 }
 
 template <class E>
-constexpr bool wait_b_per_outer_of() {
+constexpr bool wait_b_per_row_of() {
     if constexpr (is_binary_fpu_op_v<E>) {
         if constexpr (!E::same_dfb) {
-            return E::BWait == WaitPolicy::PerOuter;
+            return E::BWait == WaitPolicy::PerTile && E::BPop == PopPolicy::PerTile && E::BIndex == OperandKind::Col;
         }
     }
     return false;
 }
 
 template <class E>
-constexpr bool pop_a_per_outer_of() {
+constexpr bool pop_a_per_row_of() {
     if constexpr (is_binary_fpu_op_v<E>) {
-        return E::APop == PopPolicy::PerOuter;
+        return E::AWait == WaitPolicy::PerTile && E::APop == PopPolicy::PerTile && E::AIndex == OperandKind::Col;
     } else if constexpr (is_cb_reader_op_v<E>) {
-        return E::Pop == PopPolicy::PerOuter;
+        return E::Wait == WaitPolicy::PerTile && E::Pop == PopPolicy::PerTile && E::IndexMode == OperandKind::Col;
     } else {
         return false;
     }
 }
 
 template <class E>
-constexpr bool pop_b_per_outer_of() {
+constexpr bool pop_b_per_row_of() {
     if constexpr (is_binary_fpu_op_v<E>) {
         if constexpr (!E::same_dfb) {
-            return E::BPop == PopPolicy::PerOuter;
+            return E::BWait == WaitPolicy::PerTile && E::BPop == PopPolicy::PerTile && E::BIndex == OperandKind::Col;
         }
     }
     return false;
@@ -1771,12 +1782,12 @@ constexpr ElemDesc describe() {
         elem_lane_width_v<E>,
         transient_lane_width_of<E>(),
         element_supports_block<E>(),
-        outer_input_a_cb_of<E>(),
-        outer_input_b_cb_of<E>(),
-        wait_a_per_outer_of<E>(),
-        wait_b_per_outer_of<E>(),
-        pop_a_per_outer_of<E>(),
-        pop_b_per_outer_of<E>(),
+        row_stream_input_a_cb_of<E>(),
+        row_stream_input_b_cb_of<E>(),
+        wait_a_per_row_of<E>(),
+        wait_b_per_row_of<E>(),
+        pop_a_per_row_of<E>(),
+        pop_b_per_row_of<E>(),
         reserve_per_outer_of<E>(),
         push_per_outer_of<E>(),
     };
@@ -2653,7 +2664,7 @@ ALWI void elem_apply_compute(
         // here: it's hoisted once to the chain boundary (elem_wait_upfront, pre-loop fold), so it's
         // placed exactly once rather than re-issued per block-iter relying on idempotency.
         if constexpr (is_binary_fpu_op_v<ElemT>) {
-            if constexpr (ElemT::AWait == WaitPolicy::PerTile) {
+            if constexpr (ElemT::AWait == WaitPolicy::PerTile && ElemT::AIndex != OperandKind::Col) {
                 emit_wait<true>(ElemT::dfb_a_id(), 1);
             } else if constexpr (ElemT::AWait == WaitPolicy::Cumulative) {
                 emit_wait<true>(ElemT::dfb_a_id(), i_flat + inner_count);
@@ -2661,7 +2672,7 @@ ALWI void elem_apply_compute(
                 emit_wait<true>(ElemT::dfb_a_id(), block_sync_count);
             }
             if constexpr (!ElemT::same_dfb) {
-                if constexpr (ElemT::BWait == WaitPolicy::PerTile) {
+                if constexpr (ElemT::BWait == WaitPolicy::PerTile && ElemT::BIndex != OperandKind::Col) {
                     emit_wait<true>(ElemT::dfb_b_id(), 1);
                 } else if constexpr (ElemT::BWait == WaitPolicy::Cumulative) {
                     emit_wait<true>(ElemT::dfb_b_id(), i_flat + inner_count);
@@ -2670,7 +2681,7 @@ ALWI void elem_apply_compute(
                 }
             }
         } else {
-            if constexpr (ElemT::Wait == WaitPolicy::PerTile) {
+            if constexpr (ElemT::Wait == WaitPolicy::PerTile && ElemT::IndexMode != OperandKind::Col) {
                 emit_wait<true>(ElemT::dfb, 1);
             } else if constexpr (ElemT::Wait == WaitPolicy::Cumulative) {
                 emit_wait<true>(ElemT::dfb, i_flat + inner_count);
@@ -2702,20 +2713,20 @@ ALWI void elem_apply_compute(
             }
         }
         if constexpr (is_binary_fpu_op_v<ElemT>) {
-            if constexpr (ElemT::APop == PopPolicy::PerTile) {
+            if constexpr (ElemT::APop == PopPolicy::PerTile && ElemT::AIndex != OperandKind::Col) {
                 emit_pop<true>(ElemT::dfb_a_id(), 1);
             } else if constexpr (ElemT::APop == PopPolicy::PerBlockSize) {
                 emit_pop<true>(ElemT::dfb_a_id(), block_sync_count);
             }
             if constexpr (!ElemT::same_dfb) {
-                if constexpr (ElemT::BPop == PopPolicy::PerTile) {
+                if constexpr (ElemT::BPop == PopPolicy::PerTile && ElemT::BIndex != OperandKind::Col) {
                     emit_pop<true>(ElemT::dfb_b_id(), 1);
                 } else if constexpr (ElemT::BPop == PopPolicy::PerBlockSize) {
                     emit_pop<true>(ElemT::dfb_b_id(), block_sync_count);
                 }
             }
         } else {
-            if constexpr (ElemT::Pop == PopPolicy::PerTile) {
+            if constexpr (ElemT::Pop == PopPolicy::PerTile && ElemT::IndexMode != OperandKind::Col) {
                 emit_pop<true>(ElemT::dfb, 1);
             } else if constexpr (ElemT::Pop == PopPolicy::PerBlockSize) {
                 emit_pop<true>(ElemT::dfb, block_sync_count);
@@ -3056,9 +3067,10 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
     for (uint32_t ht = 0; ht < Ht; ++ht) {
         const uint32_t row_base = ht * Wt;
         (detail::emit_wait_per_row<
-             detail::ChainTraits<Es...>::d[Is].wait_a_per_outer,
-             detail::ChainTraits<Es...>::d[Is].wait_b_per_outer>(
-             detail::ChainTraits<Es...>::d[Is].outer_input_a_cb, detail::ChainTraits<Es...>::d[Is].outer_input_b_cb),
+             detail::ChainTraits<Es...>::d[Is].wait_a_per_row,
+             detail::ChainTraits<Es...>::d[Is].wait_b_per_row>(
+             detail::ChainTraits<Es...>::d[Is].row_stream_input_a_cb,
+             detail::ChainTraits<Es...>::d[Is].row_stream_input_b_cb),
          ...);
         if constexpr (per_row_dest_accumulation) {
             (detail::emit_reserve_per_row<detail::ChainTraits<Es...>::d[Is].reserve_per_outer>(
@@ -3156,9 +3168,10 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
              ...);
         }
         (detail::emit_pop_per_row<
-             detail::ChainTraits<Es...>::d[Is].pop_a_per_outer,
-             detail::ChainTraits<Es...>::d[Is].pop_b_per_outer>(
-             detail::ChainTraits<Es...>::d[Is].outer_input_a_cb, detail::ChainTraits<Es...>::d[Is].outer_input_b_cb),
+             detail::ChainTraits<Es...>::d[Is].pop_a_per_row,
+             detail::ChainTraits<Es...>::d[Is].pop_b_per_row>(
+             detail::ChainTraits<Es...>::d[Is].row_stream_input_a_cb,
+             detail::ChainTraits<Es...>::d[Is].row_stream_input_b_cb),
          ...);
     }
     if constexpr (whole_shape_dest_accumulation) {

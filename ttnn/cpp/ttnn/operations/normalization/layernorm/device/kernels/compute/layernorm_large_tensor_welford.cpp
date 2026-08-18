@@ -21,7 +21,7 @@
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/broadcast/bcast.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"
 
@@ -343,7 +343,7 @@ void kernel_main() {
     constexpr auto dfb_gamma_id = get_named_compile_time_arg_val("cb_gamma");
     constexpr auto dfb_beta_id = get_named_compile_time_arg_val("cb_beta");
     constexpr auto dfb_xmm_id = get_named_compile_time_arg_val("cb_xmm");  // x - E[x]
-    uint32_t dfb_xmm_runtime_id = dfb_xmm_id;
+    constexpr uint32_t dfb_xmm_runtime_id = (do_gamma == 1 || do_beta == 1) ? dfb_xmm_id : dfb_out_id;
     constexpr auto dfb_ex_id = get_named_compile_time_arg_val("cb_ex");             // E[x]
     constexpr auto dfb_ex2_id = get_named_compile_time_arg_val("cb_ex2");           // Var[x] = E[(x-E[x])^2]
     constexpr auto dfb_ex2pe_id = get_named_compile_time_arg_val("cb_ex2pe");       // Var[x]+ε
@@ -357,6 +357,7 @@ void kernel_main() {
     DataflowBuffer dfb_ex_obj(dfb_ex_id);
     DataflowBuffer dfb_ex2_obj(dfb_ex2_id);
     DataflowBuffer dfb_ex2pe_obj(dfb_ex2pe_id);
+    DataflowBuffer dfb_xmm_runtime_obj(dfb_xmm_runtime_id);
 
     constexpr uint32_t onetile = 1;
 
@@ -534,18 +535,14 @@ void kernel_main() {
             }
             tile_regs_commit();
 
-            if constexpr (!(do_gamma == 1 or do_beta == 1)) {
-                dfb_xmm_runtime_id = dfb_out_id;
-            }
-
             pack_reconfig_data_format(dfb_xmm_runtime_id);
             // Sync with writer on full blocks
-            DataflowBuffer(dfb_xmm_runtime_id).reserve_back(block.full_block_size());
+            dfb_xmm_runtime_obj.reserve_back(block.full_block_size());
             tile_regs_wait();
             for (auto i : block.local()) {
                 pack_tile(i, dfb_xmm_runtime_id);
             }
-            DataflowBuffer(dfb_xmm_runtime_id).push_back(block.full_block_size());
+            dfb_xmm_runtime_obj.push_back(block.full_block_size());
             tile_regs_release();
 
             if constexpr (do_gamma == 1) {
@@ -585,7 +582,6 @@ void kernel_main() {
             }
         }
 
-        dfb_xmm_runtime_id = dfb_xmm_id;
         dfb_ex2pe_obj.pop_front(onetile);
         dfb_ex_obj.pop_front(onetile);
     }  // NCHt loop

@@ -4,7 +4,7 @@
 
 #include <cstdint>
 #include "api/compute/compute_kernel_hw_startup.h"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.hpp"  // BinaryFpu, DestReuseBinary, PackTile
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"  // BinaryFpu, DestReuseBinary, PackTile
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/binary/sfpu/basic.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/optional.hpp"  // Optional
 #include "api/dataflow/dataflow_buffer.h"
@@ -24,7 +24,7 @@ ALWI void update_running_stat() {
             ckl::input(dfb::one, ckl::WaitPolicy::None, ckl::PopPolicy::None),
             ckl::input(dfb::momentum, ckl::WaitPolicy::None, ckl::PopPolicy::None)>{},  // D0 = 1 - momentum
         ckl::
-            DestReuseBinary<ckl::input(dfb_old_id), BinaryFpuOp::Mul, ckl::DestReuseType::DEST_TO_SRCA>{},  // D0 = (1
+            DestReuseBinary<BinaryFpuOp::Mul, ckl::input(dfb_old_id), ckl::DestReuseType::DEST_TO_SRCA>{},  // D0 = (1
                                                                                                             // -
                                                                                                             // momentum)
                                                                                                             // *
@@ -51,20 +51,23 @@ void kernel_main() {
 
     DataflowBuffer dfb_batch_mean_obj(dfb::batch_mean);
     DataflowBuffer dfb_batch_var_obj(dfb::batch_var);
+    DataflowBuffer dfb_momentum_obj(dfb::momentum);
+    DataflowBuffer dfb_one_obj(dfb::one);
+    DataflowBuffer dfb_out_obj(dfb::out);
 
     compute_kernel_hw_startup(dfb::batch_mean, dfb::batch_var, dfb::out);
     constexpr uint32_t onetile = 1;
 
-    DataflowBuffer(dfb::one).wait_front(1);
-    DataflowBuffer(dfb::momentum).wait_front(1);
+    dfb_one_obj.wait_front(1);
+    dfb_momentum_obj.wait_front(1);
 
     for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
-        // The reader produces both batch-stat streams for every tile, even when only one
-        // running statistic is requested. Consume both streams unconditionally to avoid
+        // The reader and writer produce the batch-mean and batch-var streams for every tile, even
+        // when only one running statistic is requested. Consume both streams unconditionally to avoid
         // filling either two-entry buffer and stalling its producer.
         dfb_batch_mean_obj.wait_front(onetile);
         dfb_batch_var_obj.wait_front(onetile);
-        DataflowBuffer(dfb::out).reserve_back(onetile);
+        dfb_out_obj.reserve_back(onetile);
 
         if constexpr (old_running_mean_has_value) {
             update_running_stat<
@@ -82,11 +85,11 @@ void kernel_main() {
                 /*AlsoOut0=*/true>();
         }
 
-        DataflowBuffer(dfb::out).push_back(onetile);
+        dfb_out_obj.push_back(onetile);
         dfb_batch_mean_obj.pop_front(onetile);
         dfb_batch_var_obj.pop_front(onetile);
     }
 
-    DataflowBuffer(dfb::one).pop_front(1);
-    DataflowBuffer(dfb::momentum).pop_front(1);
+    dfb_one_obj.pop_front(1);
+    dfb_momentum_obj.pop_front(1);
 }

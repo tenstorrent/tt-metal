@@ -9,7 +9,7 @@
  *        Where. (TanhDerivative lives in activations.hpp.)
  */
 
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/op_params.hpp"  // Approx
 
 namespace compute_kernel_lib {

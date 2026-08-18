@@ -129,7 +129,7 @@ struct TypedIterationShape;
 /// (or `IterationShape::one_tile()` for one tile). This keeps `eltwise_chain(...)` and the
 /// convenience wrappers from silently treating a stray integer as a tile count.
 ///
-/// `of/row/col/one_tile` aliases mirror `binary_op_helpers`' `BinaryInputBlockShape`.
+/// `row/col/one_tile` aliases mirror `binary_op_helpers`' `BinaryInputBlockShape`.
 struct IterationShape {
     uint32_t Ht;
     uint32_t Wt;
@@ -145,7 +145,6 @@ struct IterationShape {
     static constexpr TypedIterationShape<IterationShapeKind::Tiles> tiles(uint32_t n);
     static constexpr TypedIterationShape<IterationShapeKind::Grid> grid(uint32_t H, uint32_t W);
 
-    static constexpr TypedIterationShape<IterationShapeKind::Grid> of(uint32_t r, uint32_t c);
     static constexpr TypedIterationShape<IterationShapeKind::Grid> row(uint32_t c);
     static constexpr TypedIterationShape<IterationShapeKind::Grid> col(uint32_t r);
     static constexpr TypedIterationShape<IterationShapeKind::Tiles> one_tile();
@@ -203,7 +202,7 @@ enum class InitReconfigOwner {
 // Opt in either before including this header or through the kernel's compiler defines:
 //
 //   #define CKL_ELTWISE_CHAIN_SKIP_COMPUTE 1
-//   #include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.hpp"
+//   #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 //
 // The knob covers ordinary, L1-accumulation, and DEST-accumulation walks. It does not suppress
 // caller-owned work outside eltwise_chain, including compute_kernel_hw_startup or setup emitted for
@@ -216,16 +215,20 @@ enum class InitReconfigOwner {
 // 1b. Input and output CB synchronization policies
 // =============================================================================
 
-/// `PerBlockSize` synchronizes a CB once per `IterationShape::block_size` group. It is unrelated to
-/// `OperandKind::Block`, which controls how an input tile index maps onto the output shape. On a
-/// partial final group, `BlockTailSync` selects whether the synchronized count is the valid
+/// Lifecycle policies control FIFO synchronization together with `OperandKind`, which controls tile
+/// indexing. `PerBlockSize` synchronizes once per `IterationShape::block_size` group. For an input,
+/// `PerTile + Col` denotes a streamed column: the chain waits for one tile at each grid-row boundary,
+/// reuses the current front tile across that row, then pops it. `Upfront + Col` instead stages an
+/// Ht-tile window and indexes it by row. Output `PerTile` remains literal: one output tile is reserved
+/// and pushed per grid cell. `PerOuter` exists only for output DEST-row accumulation.
+/// On a partial final block, `BlockTailSync` selects whether synchronization covers the valid
 /// remainder or the full `block_size`.
 
 /// When the chain waits for an input CB.
-enum class WaitPolicy : uint8_t { None, PerTile, PerBlockSize, PerOuter, Upfront, Cumulative };
+enum class WaitPolicy : uint8_t { None, PerTile, PerBlockSize, Upfront, Cumulative };
 
 /// When the chain pops an input CB.
-enum class PopPolicy : uint8_t { None, PerTile, PerBlockSize, PerOuter, AtEnd };
+enum class PopPolicy : uint8_t { None, PerTile, PerBlockSize, AtEnd };
 
 /// When the chain reserves an output CB.
 enum class ReservePolicy : uint8_t { None, PerTile, PerBlockSize, Upfront, PerOuter, OneUpfront };
@@ -237,7 +240,8 @@ enum class PushPolicy : uint8_t { None, PerTile, PerBlockSize, AtEnd, PerOuter, 
 /// Pick the one that matches how your input maps onto the output:
 ///   - Block  — a distinct tile every step; the index advances with the walk (full Ht x Wt input).
 ///   - Row    — indexed by column only: the same tile-row is re-read for every output row ([1, Wt] input).
-///   - Col    — indexed by row only: the same tile-column is re-read for every output column ([Ht, 1] input).
+///   - Col    — with a staged lifecycle, indexed by row so the same tile-column is re-read for every
+///              output column ([Ht, 1] input); with PerTile/PerTile, streamed one tile per row.
 ///   - Scalar — contribute index 0 every step, pinning the read to the operand's base tile
 ///              (`TileOffset::Set` may make that base nonzero). This is inter-tile indexing, not a
 ///              hardware scalar broadcast; it is independent of `BroadcastDim`.
@@ -353,6 +357,8 @@ struct OutputSpec {
 
 /// Bind one input buffer id to its configuration.
 /// Defaults: wait/pop per tile, Scalar indexing, reconfig enabled, and no tile offset.
+/// `PerTile/PerTile + Col` streams one front tile per grid row; other `Col` lifecycles retain
+/// row-indexed window semantics.
 constexpr InputSpec input(
     uint32_t cb_id,
     WaitPolicy wait = WaitPolicy::PerTile,
@@ -515,7 +521,8 @@ using BinaryFpu = detail::BinaryFpuImpl<
 
 /// Apply an FPU binary operation between one CB input and `DstSlot`.
 /// The LLK operation is in-place in DEST: it reads and overwrites the same slot.
-template <InputSpec Input, BinaryFpuOp Op, DestReuseType ReuseType, Dst DstSlot = Dst::D0>
+/// `Op` is the first template argument, matching `BinaryFpu`.
+template <BinaryFpuOp Op, InputSpec Input, DestReuseType ReuseType, Dst DstSlot = Dst::D0>
 using DestReuseBinary =
     detail::DestReuseBinaryImpl<Input.cb_id, detail::dest_reuse_binary_config_bits(Op, ReuseType, Input, DstSlot)>;
 

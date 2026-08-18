@@ -5,7 +5,7 @@
 #include <cstdint>
 
 #include "api/compute/compute_kernel_hw_startup.h"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.hpp"     // BinaryFpu, DestReuseBinary, PackTile, eltwise_chain
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"      // BinaryFpu, DestReuseBinary, PackTile, eltwise_chain
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"     // Rsqrt
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/optional.hpp"  // Optional
 
@@ -30,7 +30,8 @@ void kernel_main() {
     const uint32_t complete_iterations = (num_tiles + tile_start) / tile_freq;
     const uint32_t remaining_iterations = (num_tiles + tile_start) % tile_freq;
 
-    DataflowBuffer(dfb::eps).wait_front(1);
+    DataflowBuffer dfb_eps_obj(dfb::eps);
+    dfb_eps_obj.wait_front(1);
 
     // out = ((input - batch_mean) / sqrt(batch_var + eps)) * optional(weight) + optional(bias).
     const auto batchnorm_bcast_tiles = [](uint32_t freq, uint32_t tile_start) __attribute__((always_inline)) {
@@ -50,20 +51,20 @@ void kernel_main() {
             ckl::input(dfb::input),
             ckl::input(dfb::batch_mean, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd)>{};
         constexpr auto mul_den = ckl::DestReuseBinary<
-            ckl::input(dfb::den, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
             ckl::BinaryFpuOp::Mul,
+            ckl::input(dfb::den, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
             ckl::DestReuseType::DEST_TO_SRCA>{};
         constexpr auto mul_weight = ckl::Optional<
             weight_has_value,
             ckl::DestReuseBinary<
-                ckl::input(dfb::weight, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
                 ckl::BinaryFpuOp::Mul,
+                ckl::input(dfb::weight, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
                 ckl::DestReuseType::DEST_TO_SRCA>>{};
         constexpr auto add_bias = ckl::Optional<
             bias_has_value,
             ckl::DestReuseBinary<
-                ckl::input(dfb::bias, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
                 ckl::BinaryFpuOp::Add,
+                ckl::input(dfb::bias, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
                 ckl::DestReuseType::DEST_TO_SRCA>>{};
         constexpr auto pack_out = ckl::PackTile<ckl::output(dfb::out)>{};
 
@@ -77,5 +78,5 @@ void kernel_main() {
         batchnorm_bcast_tiles(remaining_iterations, tile_start);
     }
 
-    DataflowBuffer(dfb::eps).pop_front(1);
+    dfb_eps_obj.pop_front(1);
 }

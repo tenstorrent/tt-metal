@@ -11,7 +11,7 @@
 #include "api/compute/reduce.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/optional.hpp"
@@ -173,7 +173,7 @@ void kernel_main() {
         // SUM reduce with reciprocal operation using PRELOADED mode
         // PRELOADED is correct for sharded - all tiles loaded at once
         // Auto-detects FP32 mode from ENABLE_FP32_DEST_ACC define
-        DataflowBuffer(dfb_exps_id).wait_front(block_w);
+        dfb_exps_obj_id.wait_front(block_w);
         ckl::reduce<
             PoolType::SUM,
             ReduceDim::REDUCE_ROW,

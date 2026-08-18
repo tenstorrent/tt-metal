@@ -10,7 +10,7 @@
 // and an over-limit slot FAILS to compile with "DEST slot exceeds DEST_AUTO_LIMIT".
 
 #include <cstdint>
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 
 void kernel_main() {
     constexpr uint32_t cb_in = tt::CBIndex::c_0;

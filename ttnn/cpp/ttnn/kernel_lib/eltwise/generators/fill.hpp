@@ -12,7 +12,7 @@
  * Each overrides `exec(uint32_t)` directly to capture the runtime constant.
  */
 
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 
 namespace compute_kernel_lib {
 

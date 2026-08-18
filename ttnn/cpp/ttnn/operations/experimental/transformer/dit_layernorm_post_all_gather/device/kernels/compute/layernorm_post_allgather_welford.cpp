@@ -17,7 +17,7 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/layernorm.h"
 #include "ttnn/cpp/ttnn/operations/normalization/kernel_util/compute/combine_welford.h"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"
 
@@ -54,11 +54,15 @@ void kernel_main() {
 
     compute_kernel_hw_startup(dfb_inp_id, dfb_inp_id, dfb_stats_reduced_id);
 
-    DataflowBuffer(dfb_eps_id).wait_front(1);
-
     // combine_welford_partials takes DataflowBuffer&, while the eltwise chains require raw DFB ids.
     DataflowBuffer dfb_stats(dfb_stats_id);
     DataflowBuffer dfb_stats_reduced(dfb_stats_reduced_id);
+    DataflowBuffer dfb_eps(dfb_eps_id);
+    DataflowBuffer dfb_recip_sqrt_var(dfb_recip_sqrt_var_id);
+    DataflowBuffer dfb_gamma(dfb_gamma_id);
+    DataflowBuffer dfb_beta(dfb_beta_id);
+
+    dfb_eps.wait_front(1);
 
     for (uint32_t tile_row = 0; tile_row < num_tile_rows; tile_row++) {
         // Calculate global tile row and batch index
@@ -99,7 +103,7 @@ void kernel_main() {
                 ckl::IterationShape::tiles(block_size).block_size(/*block_size=*/block_size));
 
             constexpr uint32_t norm_target_dfb_id = (do_gamma || do_beta) ? dfb_intermediate_id : dfb_out_id;
-            DataflowBuffer(dfb_recip_sqrt_var_id).wait_front(1);
+            dfb_recip_sqrt_var.wait_front(1);
             ckl::mul<
                 ckl::input(
                     dfb_intermediate_id,
@@ -112,7 +116,7 @@ void kernel_main() {
 
             if constexpr (do_gamma) {
                 constexpr uint32_t gamma_out_dfb_id = do_beta ? dfb_intermediate_id : dfb_out_id;
-                DataflowBuffer(dfb_gamma_id).wait_front(col_tile + block_size);
+                dfb_gamma.wait_front(col_tile + block_size);
                 ckl::eltwise_chain(
                     ckl::IterationShape::tiles(block_size).block_size(/*block_size=*/block_size),
                     ckl::BinaryFpu<
@@ -136,7 +140,7 @@ void kernel_main() {
 
             // 4) optional beta (only if gamma was provided)
             if constexpr (do_beta) {
-                DataflowBuffer(dfb_beta_id).wait_front(col_tile + block_size);
+                dfb_beta.wait_front(col_tile + block_size);
                 ckl::eltwise_chain(
                     ckl::IterationShape::tiles(block_size).block_size(/*block_size=*/block_size),
                     ckl::BinaryFpu<
@@ -160,7 +164,7 @@ void kernel_main() {
 
         // free up per-row resources
         dfb_stats_reduced.pop_front(stats_tile_stride);
-        DataflowBuffer(dfb_recip_sqrt_var_id).pop_front(1);
+        dfb_recip_sqrt_var.pop_front(1);
 
         // Check if next tile_row is in a different batch - if so, pop gamma/beta
         if (tile_row + 1 < num_tile_rows) {
@@ -169,10 +173,10 @@ void kernel_main() {
             if (next_batch_idx != batch_idx) {
                 // Pop gamma/beta to prepare for next batch
                 if constexpr (do_gamma && gamma_is_batched) {
-                    DataflowBuffer(dfb_gamma_id).pop_front(Wt_round_up_block_sizes);
+                    dfb_gamma.pop_front(Wt_round_up_block_sizes);
                 }
                 if constexpr (do_beta && beta_is_batched) {
-                    DataflowBuffer(dfb_beta_id).pop_front(Wt_round_up_block_sizes);
+                    dfb_beta.pop_front(Wt_round_up_block_sizes);
                 }
             }
         }
@@ -180,11 +184,11 @@ void kernel_main() {
 
     // Pop remaining gamma/beta at the end (if batched, only the last batch's data)
     if constexpr (do_gamma) {
-        DataflowBuffer(dfb_gamma_id).pop_front(Wt_round_up_block_sizes);
+        dfb_gamma.pop_front(Wt_round_up_block_sizes);
     }
     if constexpr (do_beta) {
-        DataflowBuffer(dfb_beta_id).pop_front(Wt_round_up_block_sizes);
+        dfb_beta.pop_front(Wt_round_up_block_sizes);
     }
 
-    DataflowBuffer(dfb_eps_id).pop_front(1);
+    dfb_eps.pop_front(1);
 }

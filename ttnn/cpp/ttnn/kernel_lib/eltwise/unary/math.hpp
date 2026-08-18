@@ -12,7 +12,7 @@
  * Runtime-param ops (Power, Rpow) override `exec(uint32_t)` directly to capture instance state.
  */
 
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/op_params.hpp"  // Approx, Legacy
 
 namespace compute_kernel_lib {

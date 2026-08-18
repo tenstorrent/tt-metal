@@ -13,7 +13,7 @@
  * additionally take a runtime `value` (uint32 bits).
  */
 
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 
 namespace compute_kernel_lib {
 

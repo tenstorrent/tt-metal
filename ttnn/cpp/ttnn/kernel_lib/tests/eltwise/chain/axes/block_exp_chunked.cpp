@@ -9,7 +9,7 @@
 // CT args: [n, block_size]. Host sizes cb_in/cb_out to a small multiple of block_size.
 
 #include <cstdint>
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"
 
 void kernel_main() {

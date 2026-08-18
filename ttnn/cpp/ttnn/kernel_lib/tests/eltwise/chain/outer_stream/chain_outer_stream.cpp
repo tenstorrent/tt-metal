@@ -2,17 +2,18 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Functional validation for WaitPolicy::PerOuter, PopPolicy::PerOuter — streamed outer-axis broadcast.
+// Functional validation for PerTile + Col — a streamed column/outer-axis broadcast.
 //
 // BinaryFpu(cb_a, cb_b) -> PackTile(cb_out) over grid(Ht, Wt):
 //   cb_a: Streaming + Scalar — full Ht*Wt walk, one tile per (ht, wt), popped per tile.
-//   cb_b: OuterStream + Scalar — ONE tile per row: waited at row entry, re-read across the row's Wt
-//         cols, popped at row exit. Producer feeds a shallow 2-deep CB (O(1) L1) instead of the
-//         Ht-deep window a Bulk+Col operand needs.
+//   cb_b: PerTile + Col — ONE tile per row: waited at row entry, read at front index 0 across the
+//         row's Wt cols, and popped at row exit. Producer feeds a shallow 2-deep CB (O(1) L1) instead
+//         of the Ht-deep window an upfront + Col operand needs.
+//   cb_out: PerTile output — one result tile per (ht, wt), unaffected by the streamed input lifecycle.
 // Net: out[ht*Wt + wt] = cb_a[ht*Wt + wt] + cb_b[ht].
 
 #include <cstdint>
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 
 namespace ckl = compute_kernel_lib;
 
@@ -31,6 +32,11 @@ void kernel_main() {
         ckl::BinaryFpu<
             ckl::BinaryFpuOp::Add,
             ckl::input(cb_a, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
-            ckl::input(cb_b, ckl::WaitPolicy::PerOuter, ckl::PopPolicy::PerOuter, ckl::DataFormatReconfig::Disabled)>{},
+            ckl::input(
+                cb_b,
+                ckl::WaitPolicy::PerTile,
+                ckl::PopPolicy::PerTile,
+                ckl::OperandKind::Col,
+                ckl::DataFormatReconfig::Disabled)>{},
         ckl::PackTile<ckl::output(cb_out)>{});
 }

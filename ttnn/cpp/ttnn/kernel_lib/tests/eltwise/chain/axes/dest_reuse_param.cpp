@@ -10,7 +10,7 @@
 // CT args: [n, reuse (0=SRCA,1=SRCB), op (0=Add,1=Sub,2=Mul)].
 
 #include <cstdint>
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 
 void kernel_main() {
     constexpr uint32_t cb_a = tt::CBIndex::c_0;
@@ -26,11 +26,11 @@ void kernel_main() {
     constexpr DestReuseType R = (reuse == 0) ? DestReuseType::DEST_TO_SRCA : DestReuseType::DEST_TO_SRCB;
     constexpr BinaryFpuOp OP = (op == 0) ? BinaryFpuOp::Add : ((op == 1) ? BinaryFpuOp::Sub : BinaryFpuOp::Mul);
 
-    using CbOnSrcA = DestReuseBinary<input(cb_c), BinaryFpuOp::Add, DestReuseType::DEST_TO_SRCB>;
-    using CbOnSrcB = DestReuseBinary<input(cb_c), BinaryFpuOp::Add, DestReuseType::DEST_TO_SRCA>;
+    using CbOnSrcA = DestReuseBinary<BinaryFpuOp::Add, input(cb_c), DestReuseType::DEST_TO_SRCB>;
+    using CbOnSrcB = DestReuseBinary<BinaryFpuOp::Add, input(cb_c), DestReuseType::DEST_TO_SRCA>;
     using ReconfigDisabled = DestReuseBinary<
-        input(cb_c, WaitPolicy::PerTile, PopPolicy::PerTile, DataFormatReconfig::Disabled),
         BinaryFpuOp::Add,
+        input(cb_c, WaitPolicy::PerTile, PopPolicy::PerTile, DataFormatReconfig::Disabled),
         DestReuseType::DEST_TO_SRCA>;
     static_assert(CbOnSrcA::reconfig_srca_dfb == cb_c && CbOnSrcA::reconfig_srcb_dfb == NO_PREV_DFB);
     static_assert(CbOnSrcB::reconfig_srca_dfb == NO_PREV_DFB && CbOnSrcB::reconfig_srcb_dfb == cb_c);
@@ -42,6 +42,6 @@ void kernel_main() {
     eltwise_chain(
         IterationShape::tiles(n),
         BinaryFpu<BinaryFpuOp::Add, input(cb_a), input(cb_b)>{},
-        DestReuseBinary<input(cb_c), OP, R>{},
+        DestReuseBinary<OP, input(cb_c), R>{},
         PackTile<output(cb_out)>{});
 }

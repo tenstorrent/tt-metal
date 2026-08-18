@@ -4,7 +4,7 @@
 
 #include <cstdint>
 #include "api/compute/compute_kernel_hw_startup.h"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/activations.hpp"  // Hardsigmoid
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/binary/sfpu/basic.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/optional.hpp"  // Optional
@@ -43,9 +43,9 @@ void kernel_main() {
         ckl::Optional<
             kIsFloat,
             ckl::DestReuseBinary<
+                ckl::BinaryFpuOp::Mul,
                 ckl::input(
                     dfb_input_id, ckl::WaitPolicy::None, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
-                ckl::BinaryFpuOp::Mul,
                 ckl::DestReuseType::DEST_TO_SRCA>>{},
         ckl::PackTile<ckl::output(
             dfb_output_id,

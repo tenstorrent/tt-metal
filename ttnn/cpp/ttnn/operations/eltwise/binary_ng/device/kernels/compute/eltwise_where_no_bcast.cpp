@@ -6,7 +6,7 @@
 
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/special.hpp"    // Where
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/generators/fill.hpp"  // FillBitcast / FillInt
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/optional.hpp"    // Optional

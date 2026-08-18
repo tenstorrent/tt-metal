@@ -11,7 +11,7 @@
  * LogicalNot, plus runtime-param unary comparisons (UnaryEq/Ne/Gt/Ge/Lt/Le).
  */
 
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 
 namespace compute_kernel_lib {
 

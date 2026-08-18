@@ -75,8 +75,8 @@ struct detail::UnaryBcastImpl : InputStream, UnaryBcastTag {
 
     ALWI void exec(uint32_t i_flat, uint32_t ht, uint32_t wt, uint32_t slot_offset) const {
         constexpr ckernel::BroadcastType bt = static_cast<ckernel::BroadcastType>(static_cast<uint8_t>(Dim));
-        const uint32_t in_idx =
-            tile_base_value<Offset>(tile_base) + detail::idx<IndexMode, Offset>(i_flat, ht, wt, row_stride);
+        const uint32_t in_idx = tile_base_value<Offset>(tile_base) +
+                                detail::input_idx<IndexMode, Wait, Pop, Offset>(i_flat, ht, wt, row_stride);
         ::unary_bcast<bt>(Cb, in_idx, to_u32(DstSlot) + slot_offset);
     }
 

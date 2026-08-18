@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"  // Rsqrt
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/misc.hpp"  // Typecast
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/binary/sfpu/basic.hpp"
@@ -33,7 +33,8 @@ void kernel_main() {
 
     compute_kernel_hw_startup(dfb::input, dfb::batch_mean, dfb::out);
 
-    DataflowBuffer(dfb::eps).wait_front(1);
+    DataflowBuffer dfb_eps_obj(dfb::eps);
+    dfb_eps_obj.wait_front(1);
 
     const uint32_t complete_iterations = (num_tiles + tile_start) / tile_freq;
     const uint32_t remaining_iterations = (num_tiles + tile_start) % tile_freq;
@@ -83,5 +84,5 @@ void kernel_main() {
         batchnorm_bcast_tiles(remaining_iterations, tile_start);
     }
 
-    DataflowBuffer(dfb::eps).pop_front(1);
+    dfb_eps_obj.pop_front(1);
 }

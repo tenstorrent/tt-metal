@@ -2,10 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// NOTE: A Metal 2.0 fork of this kernel lives beside it, as
-// rmsnorm_post_allgather_metal2.cpp. Ops ported to Metal 2.0 bind the fork; this file serves
-// the consumers still on the legacy API. Until the last of them migrates and
-// this file is retired, changes here likely belong in the fork too.
+// NOTE: Production post-allgather factories bind the Metal 2.0 fork beside this file,
+// rmsnorm_post_allgather_metal2.cpp. This legacy source remains as a kernel-source composition
+// fixture; keep its algorithm aligned with the fork until the fixture is retired.
 
 /*
  * This kernel computes rmsnorm, dependent on the RMSNORM define.
@@ -22,7 +21,7 @@
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/layernorm.h"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
@@ -49,7 +48,6 @@ void kernel_main() {
 
     constexpr uint32_t dfb_out_id = tt::CBIndex::c_14;
 
-    constexpr uint32_t dfb_var_eps_id = tt::CBIndex::c_9;          // var + epsilon (or E(x**2) + epsilon)
     constexpr uint32_t dfb_recip_sqrt_var_id = tt::CBIndex::c_10;  // 1/sqrt(var+eps)
     constexpr uint32_t dfb_x_normed_id =
         tt::CBIndex::c_12;  // (x - E(x)) * 1/sqrt(var+eps) or x * 1/sqrt(E(x**2) + eps)
@@ -61,10 +59,15 @@ void kernel_main() {
     constexpr uint32_t dfb_beta_id = tt::CBIndex::c_3;
     constexpr uint32_t dfb_times_gamma_out_id = (do_gamma && do_beta) ? tt::CBIndex::c_13 : dfb_out_id;
 
+    DataflowBuffer dfb_reduce(dfb_reduce_id);
+    DataflowBuffer dfb_eps(dfb_eps_id);
+    DataflowBuffer dfb_gamma(dfb_gamma_id);
+    DataflowBuffer dfb_beta(dfb_beta_id);
+
     compute_kernel_hw_startup(dfb_inp_id, dfb_inp_id, dfb_var_id);
 
-    DataflowBuffer(dfb_reduce_id).wait_front(1);  // comes from the reader
-    DataflowBuffer(dfb_eps_id).wait_front(1);     // comes from the reader
+    dfb_reduce.wait_front(1);  // comes from the reader
+    dfb_eps.wait_front(1);     // comes from the reader
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         /*
@@ -90,29 +93,37 @@ void kernel_main() {
         constexpr uint32_t normed_output_dfb_id = do_gamma ? dfb_x_normed_id : dfb_out_id;
 
         ckl::mul<
-            ckl::input(dfb_norm_x_input_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
+            ckl::input(
+                dfb_norm_x_input_id,
+                ckl::WaitPolicy::PerBlockSize,
+                ckl::PopPolicy::PerBlockSize,
+                ckl::OperandKind::Block),
             ckl::input(dfb_recip_sqrt_var_id, ckl::BroadcastDim::Col, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
-            ckl::output(normed_output_dfb_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(
+            ckl::output(normed_output_dfb_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(
             ckl::IterationShape::tiles(Wt).block_size(/*block_size=*/blk));
 
         if constexpr (do_gamma) {
             ckl::mul<
-                ckl::input(dfb_x_normed_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
+                ckl::input(
+                    dfb_x_normed_id,
+                    ckl::WaitPolicy::PerBlockSize,
+                    ckl::PopPolicy::PerBlockSize,
+                    ckl::OperandKind::Block),
                 ckl::input(
                     dfb_gamma_id,
                     ckl::BroadcastDim::Row,
                     ckl::WaitPolicy::Upfront,
                     ckl::PopPolicy::None,
                     ckl::OperandKind::Block),
-                ckl::output(dfb_times_gamma_out_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(
+                ckl::output(dfb_times_gamma_out_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(
                 ckl::IterationShape::tiles(Wt).block_size(/*block_size=*/blk));
 
             if constexpr (do_beta) {
                 ckl::add<
                     ckl::input(
                         dfb_times_gamma_out_id,
-                        ckl::WaitPolicy::Upfront,
-                        ckl::PopPolicy::AtEnd,
+                        ckl::WaitPolicy::PerBlockSize,
+                        ckl::PopPolicy::PerBlockSize,
                         ckl::OperandKind::Block),
                     ckl::input(
                         dfb_beta_id,
@@ -120,17 +131,17 @@ void kernel_main() {
                         ckl::WaitPolicy::Upfront,
                         ckl::PopPolicy::None,
                         ckl::OperandKind::Block),
-                    ckl::output(dfb_out_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(
+                    ckl::output(dfb_out_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(
                     ckl::IterationShape::tiles(Wt).block_size(/*block_size=*/blk));
             }
         }
     }
-    DataflowBuffer(dfb_eps_id).pop_front(1);
-    DataflowBuffer(dfb_reduce_id).pop_front(1);
+    dfb_eps.pop_front(1);
+    dfb_reduce.pop_front(1);
     if constexpr (do_gamma) {
-        DataflowBuffer(dfb_gamma_id).pop_front(Wt);
+        dfb_gamma.pop_front(Wt);
     }
     if constexpr (do_beta) {
-        DataflowBuffer(dfb_beta_id).pop_front(Wt);
+        dfb_beta.pop_front(Wt);
     }
 }
