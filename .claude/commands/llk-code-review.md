@@ -1,4 +1,5 @@
 ---
+argument-hint: <OWNER/REPOSITORY/pull/NUMBER> [--comment]
 allowed-tools:
   - Agent
   - Task
@@ -6,14 +7,12 @@ allowed-tools:
   - Grep
   - Glob
   - Skill
-  - Bash(gh issue view:*)
-  - Bash(gh search:*)
-  - Bash(gh issue list:*)
-  - Bash(gh pr comment:*)
-  - Bash(gh pr diff:*)
-  - Bash(gh pr view:*)
-  - Bash(gh pr list:*)
   - Bash(gh api:*)
+  - Bash(gh pr diff:*)
+  - Bash(git diff:*)
+  - Bash(git show:*)
+  - Bash(git log:*)
+  - Bash(git rev-parse:*)
   - mcp__deepwiki__*
   - mcp__atlassian__*
   - mcp__glean_default__*
@@ -21,6 +20,14 @@ description: Code review a pull request
 ---
 
 Provide a code review for the given pull request.
+
+Invocation arguments: `$ARGUMENTS`
+
+Parse the pull-request reference and whether the literal `--comment` flag is
+present before doing anything else. Record that boolean once and preserve it
+through the entire run. A successful run with `--comment` MUST end with at least
+one GitHub write whose command result is a non-empty `html_url`; otherwise report
+an error instead of claiming that the review completed.
 
 The workflow places authoritative LLK review knowledge in this directory,
 relative to the repository root:
@@ -30,24 +37,40 @@ relative to the repository root:
 In the steps below, `K` denotes that directory. Expand `K` to the literal path
 above in every Task prompt so each subagent receives an exact readable path.
 
+The workflow also materializes the exact PR revisions in these directories:
+
+- `H` = `.llk-review-pr-head` (the exact reviewed head commit)
+- `B` = `.llk-review-pr-base` (the exact PR merge-base comparison commit)
+
+Expand `H` and `B` to those literal paths in every Task prompt. The checkout root
+contains review orchestration and MUST NOT be used as the source of PR code.
+
 ## Operating rules
 
 - Task subagents have isolated contexts. They do not inherit this command, the
   parent's appended system prompt, conversation history, or prior tool results.
-  Every Task prompt MUST therefore tell the subagent which exact knowledge files
-  to read and include the PR title, description, change summary, and existing-
-  discussion digest. Every Task prompt MUST also repeat the shell and filesystem
-  constraints below. Refer to files by path; do not paste the full corpus.
+  Every Task prompt MUST repeat the shell/filesystem constraints and name the
+  literal `H` and `B` paths. After intake, every review/validation Task prompt
+  MUST also name its exact knowledge files and include the PR title, concise
+  body/change summary, exact base-tip/comparison-base/head SHAs, relevant
+  changed-file groups, and existing-discussion digest. Refer to files by path;
+  do not paste the full corpus.
 - Tools are functional. Do not test them or make exploratory calls. Use a tool
   only when it is required for the review.
-- Keep the working tree read-only. Never call Write, Edit, or NotebookEdit, and
+- Keep all worktrees read-only. Never call Write, Edit, or NotebookEdit, and
   never save PR data, diffs, summaries, plans, comments, or intermediate results
   to a file. Keep coordination and comment preparation in context.
-- Use Read, Grep, and Glob for repository files. Use Bash only for one direct,
-  single-line `gh` command per tool call. Do not use pipes, `&&`, `||`, `;`, `&`,
-  redirects, heredocs, command/process substitution, inline environment
-  assignments, or multiple commands. Use separate tool calls when more than one
-  GitHub query is needed.
+- Read current code and surrounding context only under `H`; read baseline code
+  only under `B`. Never read repository implementation from the checkout root,
+  another branch, a Claude execution file, or a tool-result cache.
+- Use Read, Grep, and Glob for files under `H`, `B`, and `K`. Use Bash only for
+  one direct, single-line `gh api` command, the intake agent's one complete
+  `gh pr diff` call, or one read-only `git diff`, `git show`, `git log`, or
+  `git rev-parse` command per tool call. Outside intake, scope diffs to a relevant
+  changed path and use the exact comparison-base/head SHAs. Never run `find /`.
+- Do not use pipes, `&&`, `||`, `;`, `&`, redirects, heredocs, command/process
+  substitution, inline environment assignments, or multiple commands. Use
+  separate tool calls when more than one query is needed.
 - Use `gh`'s native `--json` and `--jq` flags instead of an external parser. Use
   literal repository, PR, path, line, and SHA values learned from prior tool
   results rather than shell variables. Pass comment bodies as arguments to the
@@ -63,29 +86,56 @@ above in every Task prompt so each subagent receives an exact readable path.
   issue is worth returning as `plausible`; include the evidence, confidence, and
   one concrete fact that would confirm or refute it. Do not manufacture generic
   concerns merely to produce comments.
+- Delegated agents return candidates or verdicts only. They MUST NOT post to
+  GitHub or call `ReportFindings`; the parent command is the sole posting owner.
 
 Follow these steps precisely:
 
-1. Launch a Haiku agent to check whether the pull request is closed. If it is
-   closed, post a short issue-level skip comment with `gh pr comment` when
-   `--comment` was provided, then stop. Review every open PR that was explicitly
-   dispatched, including draft, automated, Claude-generated, and trivial PRs.
+1. Launch a Haiku agent to check whether the pull request is closed. Give it the
+   parsed PR reference and the shell/filesystem constraints; it may inspect PR
+   state only and must not inspect code or post. If the PR is closed, the parent
+   posts a short issue-level skip comment through the issue-comments `gh api`
+   endpoint when `--comment` was provided, selects `.html_url`, verifies that it
+   is non-empty, then stops. Review every open
+   PR that was explicitly dispatched, including draft, automated,
+   Claude-generated, and trivial PRs.
 
 2. Launch a Haiku agent to return only the paths of applicable `CLAUDE.md` files:
-   the repository root file if present, plus files in or above directories touched
-   by the PR. A `CLAUDE.md` rule applies only to files under its directory.
+   the exact-head root file under `H` if present, plus files under `H` in or above
+   directories touched by the PR. A `CLAUDE.md` rule applies only to files under
+   its directory. It must not inspect `CLAUDE.md` or code from the orchestration
+   checkout root. It may query the changed-file list through bounded PR metadata
+   endpoints, but must not request patches or the whole diff.
 
-3. Launch a Sonnet intake agent to inspect the PR and return:
-   - title, description, base/head SHAs, and changed-file list;
+3. Launch a Sonnet intake agent to inspect the entire PR, including the complete
+   PR diff, metadata, and discussion, so the shared context covers every changed
+   file and cross-file relationship. It may make one direct `gh pr diff` call for
+   this purpose. It must return:
+   - title, description, exact base-branch-tip/head SHAs, and changed-file list;
    - a concise change summary and which architecture/code paths are affected;
+   - compact changed-file groups that later agents can use for path-scoped review;
    - booleans for `touches_test_or_golden`, `touches_sfpi_or_raw_tti`, and
      `changes_llk_api_or_behavior`;
    - a concise digest of existing issue comments, inline review comments, and
      reviews, including their paths/lines, so later agents avoid duplicates.
 
+   The intake agent should synthesize the complete diff rather than echoing large
+   patches in its response, but must not omit a changed file from its analysis.
+   The parent verifies that the returned base-tip/head SHAs match the exact
+   revisions named in the coordination system prompt before launching code
+   reviewers; a mismatch is an error and must stop the review. The parent adds
+   the exact PR merge-base comparison SHA from that system prompt to the shared
+   context.
+
 4. Launch these four review agents in parallel. Every task prompt must include
    the shared PR context from step 3, the applicable `CLAUDE.md` paths from step
-   2, the recall policy above, and its role-specific Read instructions:
+   2, the recall policy above, and its role-specific Read instructions. It must
+   also tell the agent to compare the exact merge-base SHA to the exact head SHA
+   with separate path-scoped
+   `git diff COMPARISON_BASE_SHA HEAD_SHA -- CHANGED_PATH` calls and to read
+   surrounding current/baseline code only from the literal `H`/`B` paths.
+   No agent may request or return the whole PR diff, inspect implementation code
+   in the checkout root, post to GitHub, or call `ReportFindings`:
 
    - **Agent 1 — Sonnet, mandatory team-policy pass.** Read
      `K/pinned-rules.md` and `K/learnings.md`. Actively check every pinned rule
@@ -121,13 +171,20 @@ Follow these steps precisely:
    issues, duplicates, explicitly silenced rules, generic lint/compiler findings,
    or a concern disproved by the code.
 
+   Each agent is responsible for every changed-file group relevant to its role,
+   but should open only the individual patches and surrounding regions required
+   for that role. It must summarize evidence rather than echoing large patches.
+
 5. Merge exact duplicates before validation. For each unique candidate, launch a
    focused validation subagent in parallel. Pass only the PR metadata, that single
-   candidate, and the relevant diff/context location. Tell the validator to Read
+   candidate, exact comparison-base/head SHAs, literal `H`/`B` paths, and the
+   relevant changed path/context location. Tell the validator to use a path-
+   scoped exact-SHA diff, read current/baseline code only from `H`/`B`, and Read
    only the candidate's cited `knowledge_sources` and applicable `CLAUDE.md`, not
-   the entire knowledge directory. Use Opus for correctness, hazard, and
-   performance candidates; use Sonnet for policy, parity, propagation, style,
-   cleanup, and test candidates.
+   the entire knowledge directory. It must not use the checkout-root implementation,
+   temporary files, `find /`, GitHub writes, or `ReportFindings`. Use Opus for
+   correctness, hazard, and performance candidates; use Sonnet for policy,
+   parity, propagation, style, cleanup, and test candidates.
 
    Each validator must verify that `path`, `start_line`, and `line` identify the
    minimal relevant right-side range in the PR diff, correcting the anchor when
@@ -148,10 +205,18 @@ Follow these steps precisely:
    and never use GitHub suggestion blocks. Do not expose internal severity labels
    or validation narration in comments.
 
-7. Return a concise findings summary in your response; do not use Bash or a file
-   for the summary. If `--comment` was not provided, stop without writing to
-   GitHub. If it was provided and no findings survived, post this issue-level
-   comment with one direct `gh pr comment` call and stop:
+7. If `--comment` was not provided, return a concise findings summary in your
+   response and stop without writing to GitHub. Do not use Bash, a file, or
+   `ReportFindings` for the summary.
+
+   If `--comment` was provided, do not return the final response yet. Immediately
+   before any review-result write, query the PR's current `.head.sha` with a
+   direct `gh api` call and compare it to the exact reviewed head SHA from step 3.
+   If they differ, do not post stale findings or a no-findings summary; report
+   that the PR changed during review and stop with an error.
+
+   If no findings survived, post this issue-level comment with one direct issue-
+   comments `gh api` call using `--raw-field body=... --jq '.html_url'`:
 
    ```markdown
    ## Code review
@@ -159,6 +224,9 @@ Follow these steps precisely:
    No issues found. Checked LLK correctness, hazards, team rules, and applicable
    architecture/test context.
    ```
+
+   Verify that the command result is a non-empty URL. Only then return the concise
+   no-findings summary and the posted URL in the final response.
 
 8. If findings survived, refresh the PR's issue comments and inline review
    comments immediately before posting. Remove any finding another reviewer has
@@ -173,34 +241,39 @@ Follow these steps precisely:
    `mcp__github_inline_comment__create_inline_comment`: claude-code-action does
    not install that server for `workflow_dispatch` runs.
 
-   Get the current head SHA immediately before posting:
+   Re-read the current head SHA immediately before posting each batch:
 
    ```bash
    gh api "repos/OWNER/REPOSITORY/pulls/PR_NUMBER" --jq '.head.sha'
    ```
 
-   Read the SHA from that tool result and place it literally in the separate
-   posting call. Do not assign a shell variable or combine the calls.
+   Confirm again that it equals the exact reviewed head SHA, then place it
+   literally in the separate posting call. Do not assign a shell variable or
+   combine the calls. A mismatch is an error and no stale comment may be posted.
 
    For a single-line anchor (`start_line: null`), post using the changed-file path
    and valid new-side diff line:
 
    ```bash
-   gh api --method POST "repos/OWNER/REPOSITORY/pulls/PR_NUMBER/comments" --raw-field body="COMMENT_BODY" --raw-field commit_id="HEAD_SHA" --raw-field path="CHANGED_FILE_PATH" --field line=NEW_SIDE_LINE_NUMBER --raw-field side="RIGHT"
+   gh api --method POST "repos/OWNER/REPOSITORY/pulls/PR_NUMBER/comments" --raw-field body="COMMENT_BODY" --raw-field commit_id="HEAD_SHA" --raw-field path="CHANGED_FILE_PATH" --field line=NEW_SIDE_LINE_NUMBER --raw-field side="RIGHT" --jq '.html_url'
    ```
 
    For a genuine multi-line anchor, add GitHub's `start_line` and `start_side`;
    `line` remains the last line of the range:
 
    ```bash
-   gh api --method POST "repos/OWNER/REPOSITORY/pulls/PR_NUMBER/comments" --raw-field body="COMMENT_BODY" --raw-field commit_id="HEAD_SHA" --raw-field path="CHANGED_FILE_PATH" --field start_line=FIRST_NEW_SIDE_LINE --raw-field start_side="RIGHT" --field line=LAST_NEW_SIDE_LINE --raw-field side="RIGHT"
+   gh api --method POST "repos/OWNER/REPOSITORY/pulls/PR_NUMBER/comments" --raw-field body="COMMENT_BODY" --raw-field commit_id="HEAD_SHA" --raw-field path="CHANGED_FILE_PATH" --field start_line=FIRST_NEW_SIDE_LINE --raw-field start_side="RIGHT" --field line=LAST_NEW_SIDE_LINE --raw-field side="RIGHT" --jq '.html_url'
    ```
 
-   Verify every successful write returns an `html_url`. If an inline anchor is
-   rejected, post that finding with `gh pr comment`, prefixing it with
+   Verify every successful write returns a non-empty `html_url`. If an inline
+   anchor is rejected, post that finding through the issue-comments `gh api`
+   endpoint with `--jq '.html_url'`, prefixing its body with
    `` `path:line` `` for a single line or `` `path:start_line-line` `` for a
    range, so the location is preserved. A fallback failure is an error. Never
    finish a `--comment` run without at least one successful GitHub write.
+
+   Only after all required writes have returned non-empty URLs may you return the
+   concise findings summary and posted URLs in the final response.
 
 When a comment relies on a documented repository rule, identify that rule and
 link it using the reviewed repository and full head SHA. Do not add redundant

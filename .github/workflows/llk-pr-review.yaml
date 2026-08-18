@@ -1,5 +1,5 @@
 name: LLK PR Review
-run-name: "LLK PR Review — PR #${{ github.event.inputs.pr_number }} (effort: ${{ github.event.inputs.effort }})"
+run-name: "LLK PR Review — PR #${{ inputs.pr_number }} (effort: ${{ inputs.effort }}, debug: ${{ inputs.debug_output }})"
 
 # On-demand AI code review for LLK pull requests.
 #
@@ -29,27 +29,32 @@ on:
         default: "max"
         type: choice
         options: [low, medium, high, max]
+      debug_output:
+        description: "Print full Claude output (may expose private review context in Actions logs)"
+        required: false
+        default: false
+        type: boolean
 
 # One review at a time per PR; a newer trigger does not kill an in-flight review.
 concurrency:
-  group: llk-pr-review-${{ github.event.inputs.pr_number }}
+  group: llk-pr-review-${{ inputs.pr_number }}
   cancel-in-progress: false
 
 jobs:
   review:
     runs-on: ubuntu-latest
-    timeout-minutes: 100         # extra headroom for the multi-agent review
+    timeout-minutes: 150         # measured full reviews can exceed 85 minutes
     permissions:
       contents: read             # read the checkout
       pull-requests: write       # post inline review comments
       issues: write              # post acknowledgement / summary
       id-token: write            # OIDC, if the key path requires it
     env:
-      PR_NUMBER: ${{ github.event.inputs.pr_number }}
+      PR_NUMBER: ${{ inputs.pr_number }}
     steps:
-      # 1. Checkout so the command (and the knowledge assembly step) has the repo.
-      #    The command fetches the diff itself via `gh pr diff`, so a shallow
-      #    checkout of the default ref is enough.
+      # 1. Checkout the ref containing this workflow and the review command.
+      #    This checkout is orchestration-only; PR code is placed in exact
+      #    base/head worktrees below.
       - name: Checkout repository
         uses: actions/checkout@main   # intentionally floating: always latest
         with:
@@ -69,7 +74,69 @@ jobs:
           sparse-checkout-cone-mode: false
           persist-credentials: false
 
-      # 3. Validate the runtime knowledge and build a compact coordination prompt.
+      # 3. Materialize the exact PR revisions. A workflow_dispatch checkout is
+      #    normally the reviewer branch, not the PR base or head; allowing agents
+      #    to read code from it can produce stale comparisons and false findings.
+      - name: Prepare exact PR base and head worktrees
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if [[ ! "$PR_NUMBER" =~ ^[0-9]+$ ]]; then
+            echo "::error::PR number must contain only decimal digits"
+            exit 1
+          fi
+
+          base_tip_sha="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.base.sha')"
+          head_sha="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha')"
+          if [[ ! "$base_tip_sha" =~ ^[0-9a-f]{40}$ ]] || [[ ! "$head_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::GitHub returned an invalid PR base or head SHA"
+            exit 1
+          fi
+
+          git fetch --no-tags --depth=200 origin "$base_tip_sha"
+          git fetch --no-tags --depth=200 origin "pull/${PR_NUMBER}/head"
+          fetched_head="$(git rev-parse FETCH_HEAD)"
+          if [ "$fetched_head" != "$head_sha" ]; then
+            echo "::error::PR head moved while the review was starting; dispatch a fresh review"
+            exit 1
+          fi
+
+          if ! comparison_base_sha="$(git merge-base "$base_tip_sha" "$head_sha")"; then
+            git fetch --no-tags --depth=2000 origin "$base_tip_sha"
+            git fetch --no-tags --depth=2000 origin "pull/${PR_NUMBER}/head"
+            fetched_head="$(git rev-parse FETCH_HEAD)"
+            if [ "$fetched_head" != "$head_sha" ]; then
+              echo "::error::PR head moved while resolving its merge-base; dispatch a fresh review"
+              exit 1
+            fi
+            comparison_base_sha="$(git merge-base "$base_tip_sha" "$head_sha")"
+          fi
+          if [[ ! "$comparison_base_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Could not resolve the PR merge-base"
+            exit 1
+          fi
+
+          base_dir="${GITHUB_WORKSPACE}/.llk-review-pr-base"
+          head_dir="${GITHUB_WORKSPACE}/.llk-review-pr-head"
+          git worktree add --detach "$base_dir" "$comparison_base_sha"
+          git worktree add --detach "$head_dir" "$head_sha"
+
+          test "$(git -C "$base_dir" rev-parse HEAD)" = "$comparison_base_sha"
+          test "$(git -C "$head_dir" rev-parse HEAD)" = "$head_sha"
+
+          {
+            echo "LLK_PR_BASE_TIP_SHA=$base_tip_sha"
+            echo "LLK_PR_BASE_SHA=$comparison_base_sha"
+            echo "LLK_PR_HEAD_SHA=$head_sha"
+            echo "LLK_PR_BASE_DIR=$base_dir"
+            echo "LLK_PR_HEAD_DIR=$head_dir"
+          } >> "$GITHUB_ENV"
+
+          echo "Prepared PR merge-base ${comparison_base_sha:0:12}, base tip ${base_tip_sha:0:12}, and head ${head_sha:0:12}"
+
+      # 4. Validate the runtime knowledge and build a compact coordination prompt.
       #    Task subagents have isolated contexts, so the repository-local command
       #    tells each role which source files to read. Keeping the full corpus out
       #    of the parent prompt avoids paying for irrelevant knowledge repeatedly.
@@ -101,6 +168,17 @@ jobs:
             echo "The authoritative private knowledge files are under:"
             echo "  $src"
             echo
+            echo "The workflow checkout root contains review orchestration, not PR code."
+            echo "Read current PR code only from the exact head worktree:"
+            echo "  $LLK_PR_HEAD_DIR (commit $LLK_PR_HEAD_SHA)"
+            echo "Read baseline code only from the exact PR merge-base worktree:"
+            echo "  $LLK_PR_BASE_DIR (merge-base commit $LLK_PR_BASE_SHA)"
+            echo "The current PR base-branch tip is commit $LLK_PR_BASE_TIP_SHA."
+            echo "The intake agent may inspect the complete PR diff once to build whole-PR"
+            echo "context. Downstream reviewers and validators must use exact-SHA, path-scoped"
+            echo "git diffs. Never infer PR code from the workflow checkout root or another"
+            echo "local branch."
+            echo
             echo "Task subagents do not inherit this system prompt or the parent's context."
             echo "For every delegated review or validation task, explicitly name the exact"
             echo "knowledge files that role must Read. Do not paste the whole corpus into task"
@@ -121,14 +199,17 @@ jobs:
             echo "deduplicated against existing review comments, and anchored to the smallest"
             echo "relevant changed line or contiguous right-side range, with file/line fallback."
             echo
-            echo "Keep the working tree read-only. Never use Write/Edit or temporary files. Use"
-            echo "Bash only for one direct, single-line gh command per call, with no pipes,"
-            echo "redirects, shell composition, substitution, or inline environment assignment."
-            echo "Repeat these constraints in every delegated Task prompt."
+            echo "Keep all worktrees read-only. Never use Write/Edit or temporary files. Use"
+            echo "Bash only for one direct gh api command, the intake agent's one complete"
+            echo "gh pr diff call, or an allowlisted read-only"
+            echo "git diff/show/log/rev-parse command per call, with no pipes, redirects, shell"
+            echo "composition, substitution, or inline environment assignment. Never run"
+            echo "find / or read Claude execution/tool-result files. Repeat these constraints"
+            echo "and the exact revision paths in every delegated Task prompt."
           } > "$out"
           echo "Prepared compact coordination prompt ($(wc -w < "$out") words); validated ${#required[@]} knowledge files"
 
-      # 4. Run the repository-local review command against the PR. It posts via
+      # 5. Run the repository-local review command against the PR. It posts via
       #    the authenticated gh CLI instead of the unavailable inline-comment
       #    MCP server.
       - name: Record review start time
@@ -146,7 +227,7 @@ jobs:
           # Real Anthropic API key — sent as x-api-key to api.anthropic.com.
           anthropic_api_key: ${{ secrets.LLK_PR_REVIEW_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          show_full_output: false   # keep the run log quiet; flip to true to debug
+          show_full_output: ${{ inputs.debug_output }}
           # The command is versioned with this repository under .claude/commands.
           prompt: "/llk-code-review ${{ github.repository }}/pull/${{ env.PR_NUMBER }} --comment"
           # No --model override: defaults apply, so the command's per-role
@@ -154,8 +235,8 @@ jobs:
           # sets the session reasoning effort (the review command itself takes
           # no effort argument). gh is used for both PR inspection and posting.
           claude_args: |
-            --effort ${{ github.event.inputs.effort || 'max' }}
-            --allowedTools "Agent,Task,Read,Grep,Glob,Skill,Bash(gh:*),Bash(git:*),Bash(grep:*),Bash(rg:*),Bash(find:*),Bash(diff:*),Bash(head:*),Bash(tail:*),Bash(sed:*),Bash(awk:*),Bash(cat:*),Bash(ls:*),Bash(wc:*),Bash(nl:*),Bash(cut:*),Bash(sort:*),Bash(uniq:*),Bash(tree:*),Bash(basename:*),Bash(dirname:*),mcp__deepwiki__*,mcp__atlassian__*,mcp__glean_default__*"
+            --effort ${{ inputs.effort || 'max' }}
+            --allowedTools "Agent,Task,Read,Grep,Glob,Skill,Bash(gh api:*),Bash(gh pr diff:*),Bash(git diff:*),Bash(git show:*),Bash(git log:*),Bash(git rev-parse:*),mcp__deepwiki__*,mcp__atlassian__*,mcp__glean_default__*"
             --max-turns 150
             --mcp-config tt_metal/tt-llk/.mcp.json
             --append-system-prompt-file ${{ github.workspace }}/.llk-review-system-prompt.md
@@ -191,12 +272,16 @@ jobs:
                     "empty-or-unavailable"
                   elif ($command | test("^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=")) then
                     "inline-environment-assignment"
-                  elif ($command | test("^[[:space:]]*gh([[:space:]]|$)")) then
-                    "allowlisted-gh"
-                  elif ($command | test("^[[:space:]]*git([[:space:]]|$)")) then
-                    "allowlisted-git"
-                  elif ($command | test("^[[:space:]]*(grep|rg|find|diff|head|tail|sed|awk|cat|ls|wc|nl|cut|sort|uniq|tree|basename|dirname)([[:space:]]|$)")) then
-                    "allowlisted-read-command"
+                  elif ($command | test("^[[:space:]]*gh[[:space:]]+api([[:space:]]|$)")) then
+                    "allowlisted-gh-api"
+                  elif ($command | test("^[[:space:]]*gh[[:space:]]+pr[[:space:]]+diff([[:space:]]|$)")) then
+                    "allowlisted-intake-pr-diff"
+                  elif ($command | test("^[[:space:]]*git[[:space:]]+(diff|show|log|rev-parse)([[:space:]]|$)")) then
+                    "allowlisted-read-only-git"
+                  elif ($command | test("^[[:space:]]*find([[:space:]]|$)")) then
+                    "forbidden-find"
+                  elif ($command | test("^[[:space:]]*(grep|rg|diff|head|tail|sed|awk|cat|ls|wc|nl|cut|sort|uniq|tree|basename|dirname)([[:space:]]|$)")) then
+                    "unlisted-read-command"
                   else
                     "unrecognized-or-unlisted"
                   end;
@@ -239,59 +324,21 @@ jobs:
             echo "${category}/${label}: ${count}"
           done <<< "$denial_summary"
 
-      # Claude normally posts either inline findings or the no-findings summary
-      # itself. If it completes without doing so, leave the deterministic
-      # no-findings summary here so every successful review has visible output.
-      - name: Ensure review output was posted
-        if: steps.llk_code_review.outcome == 'success'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          inline_count="$(
-            gh api \
-              "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/comments?since=${LLK_REVIEW_STARTED_AT}&per_page=100" \
-              --jq '[.[] | select(.user.login == "github-actions[bot]")] | length'
-          )"
-          issue_count="$(
-            gh api \
-              "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments?since=${LLK_REVIEW_STARTED_AT}&per_page=100" \
-              --jq '[.[] | select(.user.login == "github-actions[bot]")] | length'
-          )"
-
-          if (( inline_count + issue_count > 0 )); then
-            echo "LLK review posted ${inline_count} inline and ${issue_count} issue-level comment(s)"
-            exit 0
-          fi
-
-          fallback_body=$'## Code review\n\nNo issues found. Checked LLK correctness, hazards, team rules, and applicable\narchitecture/test context.'
-          if ! fallback_url="$(
-            gh api \
-              --method POST \
-              "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
-              --raw-field body="$fallback_body" \
-              --jq '.html_url'
-          )"; then
-            echo "::error::LLK review posted no output and the no-findings fallback failed"
-            exit 1
-          fi
-
-          if [ -z "$fallback_url" ]; then
-            echo "::error::No-findings fallback returned no comment URL"
-            exit 1
-          fi
-
-          echo "LLK review posted no output; added no-findings fallback: ${fallback_url}"
-
-      # Re-read GitHub after the fallback instead of trusting the POST response.
-      # This is the final invariant: a successful Claude session must leave at
-      # least one bot-authored inline or issue-level comment from this run.
+      # Re-read GitHub instead of trusting process success. A session that exits
+      # cleanly without executing its posting contract is a failed review; never
+      # mask that failure by manufacturing a workflow-level "No issues found".
       - name: Verify review output was posted
         if: steps.llk_code_review.outcome == 'success'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          current_head="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha')"
+          if [ "$current_head" != "$LLK_PR_HEAD_SHA" ]; then
+            echo "::error::PR head changed during review; discard this result and dispatch a fresh review"
+            exit 1
+          fi
+
           for attempt in 1 2 3; do
             inline_count="$(
               gh api \
@@ -312,5 +359,5 @@ jobs:
             fi
           done
 
-          echo "::error::LLK review and no-findings fallback posted no PR output"
+          echo "::error::Claude completed without posting any LLK review output"
           exit 1
