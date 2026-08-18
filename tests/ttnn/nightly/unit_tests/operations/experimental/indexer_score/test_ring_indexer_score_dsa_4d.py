@@ -14,7 +14,7 @@ layouts that fit in 4 chips:
 Unlike the LoudBox suite these open the target mesh DIRECTLY (no (2,4)->(1,4) carve), so they run on any
 4-device Blackhole box. Gathered buffer seeded with ZEROS -> a correct score proves device-side local sourcing.
 
-Run:  scripts/run_safe_pytest.sh tests/ttnn/nightly/unit_tests/operations/experimental/test_ring_indexer_score_dsa_4d.py
+Run:  scripts/run_safe_pytest.sh tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_ring_indexer_score_dsa_4d.py
 """
 
 import pytest
@@ -23,7 +23,7 @@ from loguru import logger
 
 import ttnn
 
-from tests.ttnn.nightly.unit_tests.operations.experimental.test_indexer_score import (
+from tests.ttnn.nightly.unit_tests.operations.experimental.indexer_score.test_indexer_score import (
     assert_indexer_match,
     glx_config,
     indexer_score_dsa_ref,
@@ -47,7 +47,8 @@ pytestmark = [
 
 def _open_ccl(mesh_shape):
     """Open `mesh_shape` directly (no parent carve), load a worker sub-device, make 2 ccl semaphores (the two
-    ring directions). Mirrors ring4_ccl_helpers._open_ring4_ccl without the (2,4)->(1,4) submesh step, so it
+    ring directions). Mirrors ring_indexer_score_test_utils._open_ring4_ccl without the (2,4)->(1,4) submesh
+    step, so it
     runs on a 4-chip box. Returns (mesh, ccl_semaphores, worker_sub_device_id, stall_group)."""
     ttnn.set_fabric_config(
         ttnn.FabricConfig.FABRIC_1D,
