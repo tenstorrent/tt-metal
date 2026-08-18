@@ -185,6 +185,8 @@ shield:
   device_perf:
     wh_n150: 100
     bh_p150: 60
+  demo:
+    bh_sc4: 15
 
 scaleout:
   merge_gate:
@@ -296,8 +298,8 @@ models:
     bh_p150b_civ2_viommu: 110
     bh_p300: 10
   frequent:
-    wh_n150: 348
-    wh_n300: 330
+    wh_n150: 318
+    wh_n300: 300
     wh_n150_civ2: 30
     wh_n300_civ2: 30
     bh_p150b_civ2: 120
@@ -320,7 +322,7 @@ models:
     bh_sc4: 120
   e2e_tier2:
     wh_llmbox_perf: 266
-    wh_n150: 41
+    wh_n150: 45
     wh_n300: 6
     bh_p150: 26
     bh_p300: 42
@@ -349,7 +351,7 @@ models:
   unit_tier2:
     wh_llmbox: 114
     wh_llmbox_perf: 172
-    wh_n150: 67
+    wh_n150: 82
     wh_n300: 30
     bh_p150: 20
     bh_quietbox_2: 50
@@ -378,8 +380,8 @@ models:
     wh_galaxy: 345
     wh_galaxy_perf: 145
     bh_galaxy: 470
-    bh_sc1: 485
-    bh_sc1_high_power: 163
+    bh_sc1: 488
+    bh_sc1_high_power: 166
     wh_n150: 500
     wh_n150_civ2: 300
     wh_n300: 600

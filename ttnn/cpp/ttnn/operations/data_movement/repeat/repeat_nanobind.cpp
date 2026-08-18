@@ -29,6 +29,7 @@ void bind_repeat(nb::module_& mod) {
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             implementation (str, optional): "auto" (default), "native", or "codegen".
+            optional_output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -41,12 +42,14 @@ void bind_repeat(nb::module_& mod) {
             const ttnn::Tensor&,
             const ttsl::SmallVector<uint32_t>&,
             const std::optional<MemoryConfig>&,
-            const std::string&>(&ttnn::repeat),
+            const std::string&,
+            const std::optional<Tensor>&>(&ttnn::repeat),
         nb::arg("input_tensor"),
         nb::arg("repeat_dims"),
         nb::kw_only(),
         nb::arg("memory_config") = nb::none(),
-        nb::arg("implementation") = "auto");
+        nb::arg("implementation") = "auto",
+        nb::arg("optional_output_tensor") = nb::none());
 }
 
 }  // namespace ttnn::operations::data_movement

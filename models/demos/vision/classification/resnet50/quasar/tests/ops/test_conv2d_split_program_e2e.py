@@ -3,23 +3,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Option B — end-to-end two-program split conv, with a PCC correctness gate.
+End-to-end two-program split conv, with a PCC correctness gate.
 
-The Quasar tilize 0x19 (per-tile MATH A2D datacopy never freeing the FPU dest-dvalid ring) is fixed by
-UnpackToDestEn (TT_METAL_QSR_TILIZE_UNPACK_TO_DEST), but only in a tilize kernel WITHOUT an interleaved matmul
-(the fused conv re-faults — dvalid-synced tilize + semaphore-synced matmul in one kernel). So the conv is split
-into two Metal programs, orchestrated host-side in conv2d.cpp under TT_METAL_QSR_CONV_SPLIT_PROGRAM:
-  - Program A: reader im2col gather + UnpackToDestEn tilize -> tilized activation tensor [M, K].
+The conv is split into two Metal programs, orchestrated host-side in conv2d.cpp under
+TT_METAL_QSR_CONV_SPLIT_PROGRAM:
+  - Program A: reader im2col gather + tilize -> tilized activation tensor [M, K].
   - Program B: quasar matmul::linear(act_tilized, weights) -> conv output [M, N] (same GEMM the 1x1 path uses).
 
 This runs the FULL split conv on the L1 path (pre-sharded L1 input, so no DRAM slicing / unported slice_write)
-and checks the ACTUAL conv output against a torch golden — validating BOTH that the fix clears the 0x19 AND
-that the unpack-to-dest tilize produced CORRECT data (fed through the matmul). Stem-like K=16-tile shape shrunk
-to fit L1; act_block_h_override forces >=2 height blocks so the multi-block tilize (which faulted) is exercised.
-
-Program A runs the DATACOPY tilize (per-tile FPU dest-dvalid clear = the 0x19 fix), NOT UnpackToDestEn — the
-test sets TT_METAL_QSR_CONV_SPLIT_PROGRAM itself and deliberately DROPS TT_METAL_QSR_TILIZE_UNPACK_TO_DEST
-(the batched UNP_DEST tilize intermittently hangs on Quasar).
+and checks the ACTUAL conv output against a torch golden. Stem-like K=16-tile shape shrunk to fit L1;
+act_block_h_override forces >=2 height blocks so the multi-block tilize is exercised.
 
 Run (emulator / WH, slow dispatch + forced JIT; the split env is set inside the test):
   TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_FORCE_JIT_COMPILE=1 \
@@ -119,17 +112,11 @@ def _run(
     )
 
     # Two-program split: Program A tilize + Program B matmul.
-    # Program A uses the DATACOPY tilize (per-tile FPU dest-dvalid clear = the 0x19 fix in tilize.h), NOT
-    # UnpackToDestEn. On WH datacopy is the only path anyway; on Quasar we explicitly DROP
-    # TT_METAL_QSR_TILIZE_UNPACK_TO_DEST so tilize_block takes the datacopy branch. The batched UNP_DEST tilize
-    # intermittently HANGS on Quasar (pack frozen inside tilize_block mid DEST-dvalid handshake, ~block 4 —
-    # dprint_spe1 / utd10-12); the datacopy path is what validated on WH.
-    saved = {k: os.environ.get(k) for k in ("TT_METAL_QSR_CONV_SPLIT_PROGRAM", "TT_METAL_QSR_TILIZE_UNPACK_TO_DEST")}
+    saved = {k: os.environ.get(k) for k in ("TT_METAL_QSR_CONV_SPLIT_PROGRAM",)}
     if use_split:
         os.environ["TT_METAL_QSR_CONV_SPLIT_PROGRAM"] = "1"
     else:
         os.environ.pop("TT_METAL_QSR_CONV_SPLIT_PROGRAM", None)  # plain conv path (model's 1x1 / mm_conv route)
-    os.environ.pop("TT_METAL_QSR_TILIZE_UNPACK_TO_DEST", None)
     try:
         out, [oh, ow], _wb = ttnn.experimental.quasar.conv2d(
             input_tensor=tt_input,
@@ -449,9 +436,8 @@ def test_quasar_bottleneck_integration(mesh_device):
         )
         return out, oh, ow
 
-    saved = {k: os.environ.get(k) for k in ("TT_METAL_QSR_CONV_SPLIT_PROGRAM", "TT_METAL_QSR_TILIZE_UNPACK_TO_DEST")}
+    saved = {k: os.environ.get(k) for k in ("TT_METAL_QSR_CONV_SPLIT_PROGRAM",)}
     os.environ["TT_METAL_QSR_CONV_SPLIT_PROGRAM"] = "1"  # auto-splits conv2 (3x3, K<=72) via force_conv_no_spill
-    os.environ.pop("TT_METAL_QSR_TILIZE_UNPACK_TO_DEST", None)
     try:
         c1, h1, w1o = _conv(tt_x, w1, b1, C_IN, C_MID, 1, 0, H, W, relu=True)
         print("  BN conv1 done", tuple(c1.shape))

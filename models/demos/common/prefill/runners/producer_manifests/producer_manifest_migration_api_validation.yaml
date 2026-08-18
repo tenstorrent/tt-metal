@@ -1,24 +1,22 @@
-# Producer manifest: Python migration API + on-device KV validation.
+# Producer manifest: Python migration API.
 #
 # `issue: true` attaches a MigrationLayerClient and calls migrate() + wait_complete() per resident slot,
-# then writes the DONE sentinel. The paired runner validates each migrated pair on-device with
-# PREFILL_VALIDATE_MIGRATION=1 (src vs golden + dst vs golden, or dst==src with PREFILL_MIGRATE_PAIRWISE=1).
-# Uniform mapping here (dst = src + 2); set `pairs:` instead for an arbitrary mapping.
+# then writes the DONE sentinel. Uniform mapping here (dst = src + 2); set `pairs:` instead for an
+# arbitrary mapping.
 #
 # Requires (a) a running migration_endpoint (prefill_endpoint_id 1) and (b) a single-rank REQUEST-mode
-# runner with migration + on-device validation enabled. Start from
+# runner with migration enabled. Start from
 # topology_configuration/pipeline_prefill_request_1rank.yaml and add to its global_env:
 #   PREFILL_NUM_USERS: "4"            # dst slots 2,3 must exist in the table
 #   PREFILL_ENABLE_MIGRATION: "1"     # publish the KV table + reach WORKER_READY
-#   PREFILL_VALIDATE_MIGRATION: "1"   # PCC each migrated pair once the DONE sentinel appears
-#   PREFILL_STANDALONE_CHUNKED_NCHUNKS: "22"  # num_users * chunks, so the loop exits before validating
 #   PREFILL_MIGRATION_CMD_QUEUE / _TABLE_QUEUE / _RESP_QUEUE / _TABLE_PATH / _CLIENT_DIR  # match below
-#   MIGRATION_DONE_FILE               # match `done_file` below
 #   PREFILL_MANIFEST + PREFILL_NUM_LAYERS                                    # your model
-# Run:
-#   python -m models.demos.common.prefill.runners.prefill_producer \
+# Run it with migration_driver, NOT prefill_producer — the latter ignores `migration:` entirely, so the
+# scenario this file describes would never be exercised:
+#   python -m models.demos.common.prefill.runners.migration_driver \
 #     --manifest models/demos/common/prefill/runners/producer_manifests/producer_manifest_migration_api_validation.yaml
-# Expect in the runner log: [kv-migrate-validate] ... ALL <N> migrated pair(s) PASSED.
+# Every verdict is logged there — the runner validates nothing. Sources come from check_pcc below,
+# destinations from --verify-migration (default dst-bytes).
 #
 # MODEL-AGNOSTIC: this file describes the migration SCENARIO only, so it works with any prefill model.
 # The model + wire layout are deliberately NOT set here; they must match the runner you launched. Supply
@@ -39,7 +37,7 @@ workload:
   chunks: "11"
   max_requests: 2
   interleave: round_robin
-  check_pcc: false        # validation is on the RUNNER (on-device), not producer-side here
+  check_pcc: true         # SOURCE-slot golden PCC; --verify-migration covers the destinations
 
 migration:
   issue: true             # <-- the Python Migration API: MigrationLayerClient.migrate()/wait_complete()
