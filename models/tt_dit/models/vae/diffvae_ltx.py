@@ -1015,7 +1015,7 @@ class DiffVAEDecoder(Module):
 
     #: The conv decoder can hand back YUV 4:2:0 straight off the mesh; this one returns host
     #: pixels, so the pipeline keeps the float export path when this decoder is installed.
-    supports_yuv = False
+    supports_yuv = True
 
     #: Unlike the conv decoder, this one cannot share the mesh with the transformer: its stage-5
     #: activations are ~8.5 GB at 1920x1088, against the ~2.6 GB a resident 22B DiT leaves free.
@@ -1210,16 +1210,23 @@ class DiffVAEDecoder(Module):
         *,
         noise: torch.Tensor | None = None,
         seed: int = 0,
-    ) -> torch.Tensor:
+        latent_tt: ttnn.Tensor | None = None,
+        device_out: bool = False,
+        output_type: str = "float",
+    ) -> torch.Tensor | ttnn.Tensor:
         """Normalized ``(B, C, T, H, W)`` latent to ``(B, 3, T', H', W')`` pixels.
 
         ``noise`` is an input, not an implementation detail: stage 5 predicts x0 from it in a
         single step. Pass it to compare against a reference that drew its own.
+
+        ``latent_tt`` and ``device_out`` move the two host boundaries out of the way so the whole
+        decode can be captured as one trace: the upload happens before the region and the PCIe pull
+        after it. See :meth:`forward_context` and :meth:`DiffVAEStage5.forward`.
         """
         from .diffvae_ltx_stage5 import Grid
 
         _ctx_t0 = stage_time_start(self.mesh_device)
-        context, dims = self.forward_context(latent, gather_output=not self._wsharded_handoff)
+        context, dims = self.forward_context(latent, gather_output=not self._wsharded_handoff, latent_tt=latent_tt)
         stage_time_end(self.mesh_device, "det stages TOTAL (forward_context)", _ctx_t0)
         grid = Grid(batch=1, t=dims[0], h=dims[1], w=dims[2])
         channels_out = self.config["stage_channels"][-1]
@@ -1251,7 +1258,16 @@ class DiffVAEDecoder(Module):
             )
         timestep = self._timestep
         _t0 = stage_time_start(self.mesh_device)
-        pixels = self.stage5.forward(context, noise, timestep, grid, context_sharded=self._wsharded_handoff, seed=seed)
+        pixels = self.stage5.forward(
+            context,
+            noise,
+            timestep,
+            grid,
+            context_sharded=self._wsharded_handoff,
+            seed=seed,
+            device_out=device_out,
+            output_type=output_type,
+        )
         stage_time_end(self.mesh_device, "stage5 TOTAL (forward)", _t0)
         return pixels
 
@@ -1268,11 +1284,11 @@ class DiffVAEDecoder(Module):
 
         ``output_type`` matches ``LTXVideoDecoder.forward``: ``float`` keeps ``[-1, 1]``, ``rgb``
         maps it to planar uint8 the same way ``utils.tensor.float_to_uint8`` does on device.
-        ``yuv`` is a device-side export shortcut this decoder does not have (see
-        :attr:`supports_yuv`), so it is rejected rather than silently returning the wrong layout.
+        ``yuv`` converts and gathers YUV 4:2:0 on device, which needs
+        ``DIFFVAE_DEVICE_UNPATCHIFY=1`` so the pixels exist on device in the first place.
         """
         if output_type == "yuv":
-            raise ValueError("DiffVAE decodes on host; use output_type='float' (see supports_yuv)")
+            return self.decode(latent, noise=noise, seed=seed, output_type="yuv")
         pixels = self.decode(latent, noise=noise, seed=seed)
         if output_type == "float":
             return pixels

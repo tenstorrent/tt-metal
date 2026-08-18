@@ -91,6 +91,7 @@ from ...utils.tensor import fast_device_to_host
 from ...utils.tensor import from_torch as sharded_from_torch
 from ...utils.tensor import local_device_to_torch
 from ...utils.tensor import to_torch as gathered_to_torch
+from ...utils.yuv_d2h import fast_device_to_host_yuv
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -1340,9 +1341,16 @@ class DiffVAEStage5(Module):
         *,
         context_sharded: bool = False,
         seed: int = 0,
-    ) -> torch.Tensor:
+        device_out: bool = False,
+        output_type: str = "float",
+    ) -> torch.Tensor | ttnn.Tensor:
         """Return pixels. Valid as the whole decode only for ``model_output_type="x0"``
         with a single inference step, which is what the shipped 2.5 DiffVAE config asks for.
+
+        ``device_out=True`` returns pixels still on device, stopping immediately before the PCIe
+        pull -- the channel trim and the depth-to-space unpatchify are device ops and stay inside.
+        A trace region cannot contain the pull, so a caller capturing the decode takes this and
+        transfers it itself.
 
         ``context_sharded=True`` means the det stages already handed the context over W-sharded (this
         chip's ``(1, 1, T*H*(W/sp), dim)`` band, same ``sp_axis``), so the re-shard is skipped.
@@ -1369,12 +1377,16 @@ class DiffVAEStage5(Module):
         with stage_timer(self.mesh_device, "stage5 diff-blocks (attn+MLP)"):
             out = self.forward_diff_step(context, x_bands, timestep, grid, bands)
 
-        return self._to_pixels(out, grid)
+        return self._to_pixels(out, grid, device_out=device_out, output_type=output_type)
 
-    def _to_pixels(self, out, grid):
+    def _to_pixels(self, out, grid, *, device_out: bool = False, output_type: str = "float"):
         # The tail splits into a device->host PCIe pull and a host-side unpatchify permute; timing
         # them apart tells us which one the (large, at 1080p) tail cost actually is.
         cfg = self.config
+        needs_device_tail = device_out or output_type == "yuv"
+        if needs_device_tail and not (self._w_sharded and os.environ.get("DIFFVAE_DEVICE_UNPATCHIFY") == "1"):
+            msg = "device_out/yuv need the W-sharded fast path with DIFFVAE_DEVICE_UNPATCHIFY=1"
+            raise ValueError(msg)
         if self._w_sharded:
             # ``out`` is (1, batch, T*H*(W/sp), padded_pc): W-sharded over sp_axis, and REPLICATED
             # over the other mesh axis (nothing shards it there -- the input was uploaded replicated
@@ -1427,6 +1439,27 @@ class DiffVAEStage5(Module):
                         concat_dims[self.sp_axis] = 4  # W-band, now in pixels
                         if shard_other:
                             concat_dims[other_axis] = 3
+                        if device_out:
+                            # Everything above is device work a trace can hold; the pull below is not.
+                            if shard_other:
+                                ttnn.deallocate(rm)
+                            return vol
+                        if output_type == "yuv":
+                            # vol is exactly what the YUV kernel wants: (1, 3, T, H, W) bf16 row-major
+                            # in [-1, 1], sharded {mesh axis 0: H, mesh axis 1: W}. Convert and gather
+                            # on device so the pull moves 1.5 bytes/pixel instead of 6.
+                            h_out, w_out = grid.h * pv, grid.w * pv
+                            planar = fast_device_to_host_yuv(
+                                vol,
+                                self.mesh_device,
+                                ccl_manager=self.ccl_manager,
+                                logical_h=h_out,
+                                logical_w=w_out,
+                            )
+                            ttnn.deallocate(vol)
+                            if shard_other:
+                                ttnn.deallocate(rm)
+                            return planar.reshape(planar.shape[0], h_out * 3 // 2, w_out)
                         px = fast_device_to_host(vol, self.mesh_device, concat_dims, ccl_manager=self.ccl_manager)
                         ttnn.deallocate(vol)
                         if shard_other:
