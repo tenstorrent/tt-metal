@@ -16,19 +16,13 @@ namespace tt::tt_fabric::fabric_tests {
 
 namespace {
 
-// The ports an express multicast actually leaves on, which are not in general the direction the
-// client named. A range expressed as "north 8" can have a canonical root output of Z, because the
-// route to the far end of that range takes a chord; opening the N port for it would leave the chord
-// idle and the range undelivered. So the directions come from the canonical map, exactly as §7.3.1
-// requires -- never inferred from the extents.
+// The directions an express multicast leaves the source on. They come from the canonical routing
+// map, not from the requested extents: a "north 8" range leaves on Z when the route to its far end
+// takes a chord.
 //
-// There may be more than one. On an express axis a root that is itself a chord tail leaves on the
-// plain edge and the chord at once, because the near rows of the range need the former and the far
-// end needs the latter. Each output roots a disjoint subtree, so the caller opens one connection per
-// output and injects a copy into each; a worker bypasses the source RX that lets transit routers
-// clone atomically, so nothing else can do the split for it.
-//
-// Returns empty when this is not an express multicast and the ordinary hop-map rule applies.
+// A root can have several outputs, each covering a disjoint part of the range. The caller opens one
+// connection per returned direction and injects one copy into each. Returns empty when the source
+// mesh does not use express routing, where the ordinary hop-map rule applies instead.
 std::vector<RoutingDirection> express_mcast_outgoing_directions(
     const FabricNodeId& src_node_id, const std::unordered_map<RoutingDirection, uint32_t>& hops) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
@@ -75,14 +69,13 @@ std::vector<RoutingDirection> express_mcast_outgoing_directions(
     return directions;
 }
 
-// register_fabric_connection picks the eth chan for a direction by narrowing on the caller's final
-// destination and, when that does not name a direct neighbor, by taking link_idx into the direction's
-// whole channel list. Neither works for a multicast: its "destination" is a subtree, not a chip, so
-// the narrowing always falls through, and the fallback picks a peer by position. That is fine while a
-// direction reaches exactly one peer, which is every cardinal one, but a chip can own two chords and
-// report both under Z -- and then the arbitrary pick can put the packet on the chord going the wrong
-// way, arriving at a chip in the range whose action is valid but is not the one the tree assigned it.
-// The result delivers, partially, and looks like a routing bug. So refuse instead.
+// Rejects a direction that reaches more than one peer. register_fabric_connection selects the eth
+// chan for a direction by narrowing on the caller's final destination, falling back to indexing the
+// direction's channel list by link_idx when that destination is not a direct neighbor. A multicast
+// has no single destination chip, so it always takes the fallback and picks a peer by position.
+// Every cardinal direction reaches one peer, where picking by position is unambiguous. A chip can
+// own two chords and report both under Z, where it can select the wrong chord and deliver only part
+// of the range.
 void assert_direction_reaches_one_peer(const FabricNodeId& src_node_id, RoutingDirection direction) {
     const auto& cp = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto chans = cp.get_active_fabric_eth_channels_in_direction(src_node_id, direction);
@@ -460,10 +453,6 @@ void TestWorker::create_kernel(
     uint32_t local_args_capacity_bytes,
     const std::vector<std::pair<size_t, size_t>>& addresses_and_size_to_clear,
     tt::tt_metal::NOC noc_id) const {
-    // Test workers build 2D routes through the same producer API as any other kernel, so they need
-    // the same per-mesh ABI selector. Without it a worker on an express mesh writes a hop program
-    // into a header whose routers decode destination-indexed action maps, and nothing reports the
-    // mismatch: the packet is simply never acted on.
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto mesh_id = this->test_device_ptr_->get_node_id().mesh_id;
     const auto defines = control_plane.get_fabric_context().get_express_kernel_defines(control_plane, mesh_id);
@@ -485,10 +474,6 @@ void TestWorker::create_kernel(
 
     // Set local args to memory buffer
     if (!local_args.empty()) {
-        // The region immediately after the local args is the result buffer, which the kernel zeroes on
-        // startup, so an overflow here does not crash: it silently blanks the tail of the args and the
-        // configs parsed from them come up with num_packets = 0. Fail loudly instead, naming the
-        // config count so the fix (more sender cores, or a bigger LOCAL_ARGS_BUFFER_SIZE) is obvious.
         const size_t local_args_bytes = local_args.size() * sizeof(uint32_t);
         TT_FATAL(
             local_args_bytes <= local_args_capacity_bytes,
@@ -533,12 +518,7 @@ void TestSender::add_config(TestTrafficSenderConfig config) {
                                (config.parameters.is_2D_routing_enabled) &&
                                (config.parameters.chip_send_type == ChipSendType::CHIP_UNICAST);
 
-    // A Z hop is exempt from the torus workaround above. That workaround exists because cardinal
-    // torus wrap confuses hop-count routing, but Z is a skip link: get_hops only reports {Z: 1}
-    // when the destination is genuinely one chord away, whereas the control plane's forwarding
-    // direction for that same chip is a cardinal one that routes the long way around. Deferring to
-    // the control plane here would send a single-hop chord flow out a cardinal port, collapsing it
-    // onto a direction the chip already uses for another destination.
+    // A Z hop is exempt from the torus workaround above.
     const bool hops_are_single_z = config.hops.has_value() && config.hops->contains(RoutingDirection::Z) &&
                                    config.hops->at(RoutingDirection::Z) > 0;
 
@@ -690,11 +670,6 @@ void TestSync::add_config(TestTrafficSyncConfig sync_config) {
     // Multicast sync configs should always have hops specified (multicast pattern)
     TT_FATAL(sender_config.hops.has_value(), "Sync config on core {} should have hops specified", this->logical_core_);
 
-    // A sync packet is a multicast encoded by the same codec as test traffic, so it picks its outgoing
-    // edges the same way. On an express mesh the canonical root output for a range is often a chord,
-    // not the cardinal direction the hop map names, and taking the hop map's answer attaches the sync
-    // to a router the tree never traces through: the packet leaves and reaches nobody. Because sync
-    // runs before the first test packet, that shows up as a hang at startup with no traffic at all.
     std::vector<RoutingDirection> outgoing_directions;
     if (sender_config.parameters.chip_send_type == ChipSendType::CHIP_MULTICAST &&
         sender_config.parameters.is_2D_routing_enabled) {
@@ -826,13 +801,7 @@ ConnectionKey TestDevice::register_fabric_connection(
         static_cast<int>(outgoing_direction),
         this->fabric_node_id_);
 
-    // On a skip-link mesh a single direction can fan out to several distinct peer chips: a Z
-    // chord is built by repurposing a cardinal port, so the channels reported for Z are the
-    // union across every chord leaving this chip. link_idx is only meaningful within the set
-    // of parallel links to one peer, so indexing the by-direction union directly makes two
-    // destinations on different chords resolve to the same channel. They then produce
-    // identical ConnectionKeys, dedup into one connection, and the second destination's
-    // traffic silently leaves over the first destination's chord.
+    // Narrow to the channels landing on final_dst before link_idx selects one.
     std::vector<chan_id_t> chans_to_final_dst;
     if (final_dst.has_value()) {
         for (const auto chan : candidate_eth_chans) {
@@ -841,9 +810,7 @@ ConnectionKey TestDevice::register_fabric_connection(
             }
         }
     }
-    // Empty means the destination is not a direct neighbor through this direction, i.e. a
-    // multi-hop route. Every channel in the direction is then an equally valid first hop and
-    // the by-direction list is the right one to index.
+    // Empty means the destination is not a direct neighbor through this direction
     const std::vector<chan_id_t>& eth_chans = chans_to_final_dst.empty() ? candidate_eth_chans : chans_to_final_dst;
 
     TT_FATAL(

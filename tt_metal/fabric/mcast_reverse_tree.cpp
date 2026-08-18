@@ -136,15 +136,14 @@ std::optional<McastReverseTree> build_mcast_reverse_tree(
     }
 
     // Descendants before ancestors. The worker propagates `needed` from a child to its parent in one
-    // pass, so every edge below a row must be visited before the edge above it; ordering by decreasing
-    // child depth gives exactly that. Ties are independent subtrees, so their relative order is free.
+    // pass, so every edge below a row must be visited before the edge above it, which ordering by
+    // decreasing child depth gives. Ties are independent subtrees, so their relative order is free.
     std::stable_sort(tree.edges.begin(), tree.edges.end(), [&depth](const McastTreeEdge& a, const McastTreeEdge& b) {
         return depth[a.child] > depth[b.child];
     });
 
-    // The tree path from root to any dst is the walk that built it -- each row has one parent, so there
-    // is no other path -- which is the "tree path == canonical route" requirement, established by
-    // construction rather than by a second traversal.
+    // Each row has one parent, so the tree path from root to any dst is the walk that built it:
+    // "tree path == canonical route" holds by construction, with no second traversal to check it.
     return tree;
 }
 
@@ -174,9 +173,8 @@ std::optional<std::vector<std::uint16_t>> pack_mcast_reverse_tree(const McastRev
             MCAST_TREE_MAX_AXIS_LEN));
     }
 
-    // Descendants before ancestors, checked rather than assumed: an edge hanging off row r must be
-    // serialized before the edge entering r, or the device pass reads r's edge before r was marked
-    // needed and drops that whole branch.
+    // An edge hanging off row r must be serialized before the edge entering r, or the device pass
+    // reads r's edge before r was marked needed and drops that whole branch.
     std::vector<int> position_of_edge_into(tree.axis_len, -1);
     for (std::size_t i = 0; i < tree.edges.size(); i++) {
         position_of_edge_into[tree.edges[i].child] = static_cast<int>(i);
@@ -289,8 +287,7 @@ std::vector<RoutingDirection> mcast_root_output_directions(
     const auto y_size = static_cast<std::uint32_t>(y_topo.axis_len);
     const auto x_size = static_cast<std::uint32_t>(x_topo.axis_len);
 
-    // Embedded and encoded rather than reasoned about: the answer must be the worker's answer, and
-    // the only way to be sure of that is to run the worker's code over the worker's bytes.
+    // Runs the worker's encoder over the worker's bytes, so the answer is the worker's answer.
     std::vector<std::uint8_t> table(IndexedMeshRoutingFields::INDEXED_VECTOR_TABLE_BYTES, 0);
     if (!embed_mcast_reverse_trees(mesh_graph, mesh_id, y_topo, x_topo, root_y, root_x, table.data(), failure)) {
         return {};
@@ -311,8 +308,8 @@ std::vector<RoutingDirection> mcast_root_output_directions(
 
     const std::uint8_t root_action = maps[root_y] & IndexedMeshRoutingFields::ACTION_ETH_MASK;
 
-    // Inverted through mcast_action_bit rather than a second bit-to-direction table, so there is one
-    // place where a direction and its action bit are related.
+    // Inverted through mcast_action_bit rather than a second bit-to-direction table, so a direction
+    // and its action bit are related in one place.
     std::vector<RoutingDirection> directions;
     for (const auto direction :
          {RoutingDirection::E, RoutingDirection::W, RoutingDirection::N, RoutingDirection::S, RoutingDirection::Z}) {
@@ -394,7 +391,7 @@ bool embed_mcast_reverse_trees(
         if (failure != nullptr) {
             *failure = fmt::format(
                 "[{},{}] needs {} B of vectors plus {} B of reverse trees, over the {} B union slot; "
-                "routing_l1_info_t must grow first (codec contract 6.2)",
+                "routing_l1_info_t must grow first",
                 y_size,
                 x_size,
                 IndexedMeshRoutingFields::vectors_region_bytes(y_size, x_size),
