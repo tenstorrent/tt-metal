@@ -356,3 +356,55 @@ inline WindowedKChunkRange neighborhood_box_k_chunk_range(
     }
     return {k_lo, k_hi};
 }
+
+// Box-sparse tile-skip: per-q-sub-tile PACKED k-tile band. For the TILE-query sub-tile at within-block
+// index [wid0, wid0+tile_height) of block chunk ``qc``, returns the contiguous packed k-tile band
+// [lo, hi) that can hold a live (masked-in) key. Keys pack T-outer/H-mid/W-inner over ``box`` (the fused
+// gather order), so a query's live cells form a sub-box whose packed indices span [min, max]; the tiles
+// outside that are entirely -inf (exp(-inf)=0) and are skipped LOSSLESSLY. Host twin:
+// block_permute.qtile_k_band, brute-force-verified lossless in test_tile_skip.py. Only for the block path.
+struct KTileBand {
+    uint32_t lo, hi;
+};
+
+inline KTileBand block_qtile_k_band(
+    uint32_t qc,
+    uint32_t wid0,
+    uint32_t tile_height,
+    uint32_t bt,
+    uint32_t bh,
+    uint32_t bw,
+    uint32_t hb,
+    uint32_t wb,
+    uint32_t T,
+    uint32_t H,
+    uint32_t W,
+    uint32_t kt,
+    uint32_t kh,
+    uint32_t kw,
+    uint32_t w_origin,
+    const NeighborhoodBox& box) {
+    const uint32_t bh_box = box.h_hi - box.h_lo;
+    const uint32_t bw_box = box.w_hi - box.w_lo;
+    const uint32_t hw_box = bh_box * bw_box;
+    const uint32_t vol = bt * bh * bw;
+    const uint32_t ker_t = kt > T ? T : kt, ker_h = kh > H ? H : kh, ker_w = kw > W ? W : kw;
+    const BlockCoord b = block_index_of_chunk(qc, hb, wb);
+    const uint32_t wid_end = (wid0 + tile_height < vol) ? (wid0 + tile_height) : vol;
+    uint32_t jmin = 0xffffffffu, jmax = 0;
+    for (uint32_t wid = wid0; wid < wid_end; ++wid) {
+        const uint32_t dw = wid % bw, dh = (wid / bw) % bh, dt = wid / (bw * bh);
+        const uint32_t wt = nbr_shift_start(w_origin + b.t * bt + dt, T, kt) - box.t0;
+        const uint32_t wh = nbr_shift_start(b.h * bh + dh, H, kh) - box.h_lo;
+        const uint32_t ww = nbr_shift_start(b.w * bw + dw, W, kw) - box.w_lo;
+        const uint32_t j_min_q = wt * hw_box + wh * bw_box + ww;
+        const uint32_t j_max_q = (wt + ker_t - 1) * hw_box + (wh + ker_h - 1) * bw_box + (ww + ker_w - 1);
+        if (j_min_q < jmin) {
+            jmin = j_min_q;
+        }
+        if (j_max_q > jmax) {
+            jmax = j_max_q;
+        }
+    }
+    return {jmin / tile_height, jmax / tile_height + 1};
+}
