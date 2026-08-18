@@ -4,10 +4,10 @@ name: "[internal] Fabric sanity tests impl"
 # Called from sanity-tests.yaml. Single source of truth for fabric coverage in
 # the sanity pipeline: WH N300 smoke, T3K llmbox, and BH card smoke.
 #
-# Coverage-preservation hooks are conditional on SKU / entry flags — search for
-# "Coverage:" below. Mirrors the pattern in tm-fabric-tests-impl.yaml so
-# wh_llmbox_civ2 legs get power sidecar / kernel ccache / --memory 256g /
-# fabric BW SFTP upload.
+# SKU- and entry-conditional infra hooks are documented with "Coverage:"
+# comments below; grep them when adding a new SKU or entry. Mirrors the
+# hook set in tm-fabric-tests-impl.yaml so wh_llmbox_civ2 legs get the same
+# power sidecar / kernel ccache / --memory 256g / fabric BW SFTP treatment.
 
 on:
   workflow_call:
@@ -84,7 +84,8 @@ jobs:
         test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
     name: ${{ matrix.test-group.name }}
     runs-on: ${{ matrix.test-group.runs_on }}
-    # Coverage: mainline environment gate — SFTP secrets are only bound on main.
+    # Coverage: bind the mainline GH environment on main so the fabric BW /
+    # latency SFTP upload secrets below are available.
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
@@ -95,13 +96,17 @@ jobs:
         ARCH_NAME: ${{ matrix.test-group.arch }}
         LOGURU_LEVEL: INFO
         GTEST_OUTPUT: xml:/work/generated/test_reports/
-        # Coverage: mirrors tm-fabric-tests-impl / t3000-sanity-tests-impl.
+        # Coverage: enable TTNN program-arg validation on every sanity leg. Trivial
+        # cost on non-TTNN entries; set universally rather than per-SKU.
         TTNN_CONFIG_OVERRIDES: '{"validate_program_args": true}'
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
-        # Coverage: viommu runners skip hugepages.
+        # Coverage: mount /dev/hugepages-1G on non-viommu runners only. Viommu SKUs
+        # (e.g. bh_p150b_civ2_viommu) bypass the hugepages path and must not have
+        # the mount.
         - ${{ !contains(join(matrix.test-group.runs_on, ','), 'viommu') && '/dev/hugepages-1G:/dev/hugepages-1G' || '/no_hugepages:/no_hugepages' }}
-      # Coverage: --memory 256g for wh_llmbox_civ2 (WH-LB memory cap).
+      # Coverage: cap container memory to 256 GiB on WH-LB (wh_llmbox*) to keep
+      # T3K legs from ballooning host memory. Other SKUs use the container default.
       options: --device /dev/tenstorrent ${{ contains(matrix.test-group.sku, 'wh_llmbox') && '--memory 256g' || '' }}
     defaults:
       run:
@@ -122,11 +127,14 @@ jobs:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           enable-watcher: ${{ inputs.enable-watcher || false }}
-          # Coverage: kernel ccache for wh_llmbox_civ2 legs (mirrors t3000-sanity-tests-impl).
+          # Coverage: enable runtime kernel ccache (Redis-backed) on WH-LB legs
+          # where JIT compile amortizes across the run. Other SKUs skip ccache
+          # setup entirely; the Redis storage string only resolves on WH-LB.
           enable-kernel-ccache: ${{ contains(matrix.test-group.sku, 'wh_llmbox') }}
           redis-ccache-storage: ${{ contains(matrix.test-group.sku, 'wh_llmbox') && format('redis://{0}:{1}@{2}:{3}{4}', vars.REDIS_CCACHE_USER, secrets.REDIS_CCACHE_PASSWORD, vars.REDIS_CCACHE_HOST, vars.REDIS_CCACHE_PORT, vars.REDIS_CCACHE_IS_READONLY == 'true' && '|read-only=true' || '') || '' }}
 
-      # Coverage: BH health-check pre-step matches the tm-fabric-tests BH matrix.
+      # Coverage: Run the smi-reset + system-health loop before every BH leg
+      # to ensure the links are online.
       - name: Ensure BH links online
         if: ${{ startsWith(matrix.test-group.sku, 'bh_') }}
         uses: ./docker-job/.github/actions/ensure-bh-links-online
@@ -135,8 +143,8 @@ jobs:
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ inputs.timeout-minutes-override > 0 && inputs.timeout-minutes-override || matrix.test-group.timeout }}
         env:
-          # Coverage: wrap cmd in power sidecar on wh_llmbox_civ2 (matches
-          # t3000-sanity-tests-impl); other SKUs run the raw cmd.
+          # Coverage: on WH-LB, wrap the cmd in tt_power_sidecar.py to sample SoC
+          # power for the downstream power dashboard. Other SKUs run the raw cmd.
           _TEST_CMD: ${{ matrix.test-group.cmd }}
         run: |
           mkdir -p generated/test_reports
@@ -154,7 +162,8 @@ jobs:
         run: |
           tt-smi -s
 
-      # Coverage: power sidecar report artifact (wh_llmbox only).
+      # Coverage: publish the per-leg power_report.json produced by the
+      # tt_power_sidecar wrap for offline power analysis. WH-LB only.
       - name: Upload power report
         if: ${{ !cancelled() && startsWith(matrix.test-group.sku, 'wh_llmbox') }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
@@ -179,8 +188,9 @@ jobs:
             echo '```' >> $GITHUB_STEP_SUMMARY
           fi
 
-      # Coverage: fabric BW/latency SFTP upload for entries flagged
-      # `upload_benchmarks: true` (t3k_fabric_tests). Mirrors t3000-sanity-tests-impl.
+      # Coverage: entries that emit fabric BW / latency CSVs opt in via
+      # `upload_benchmarks: true`. On main, check for the generated files
+      # and SFTP them to the perf dashboard.
       - name: Check for benchmark and latency data
         id: check-data
         if: ${{ !cancelled() && github.ref_name == 'main' && matrix.test-group.upload_benchmarks == true }}

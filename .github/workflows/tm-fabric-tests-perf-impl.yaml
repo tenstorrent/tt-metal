@@ -1,8 +1,9 @@
 name: "[internal] TM Fabric Perf Tests"
 
 # Runs the fabric perf matrix from tests/pipeline_reorg/fabric_perf_tests.yaml.
-# T3K microbenchmarks — same profiler / SFTP semantics as the pre-refactor inline
-# matrix. Entries opt into benchmark data SFTP upload via `upload_benchmarks: true`.
+# T3K microbenchmarks with profiler on by default (see the TT_METAL_DEVICE_PROFILER
+# Coverage comment below). Entries opt into fabric BW / latency SFTP upload via
+# `upload_benchmarks: true`.
 
 on:
   workflow_call:
@@ -93,7 +94,8 @@ jobs:
         test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
     name: ${{ matrix.test-group.name }}
     runs-on: ${{ matrix.test-group.runs_on }}
-    # Coverage: mainline environment gate — SFTP secrets are only bound on main.
+    # Coverage: bind the mainline GH environment on main so the fabric BW /
+    # latency SFTP upload secrets below are available.
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     container:
       image: ${{ inputs.docker-image }}
@@ -103,8 +105,9 @@ jobs:
         LD_LIBRARY_PATH: /work/build/lib
         ARCH_NAME: ${{ matrix.test-group.arch }}
         LOGURU_LEVEL: INFO
-        # Coverage: profiler defaults — entries that need it off (BW golden calibration)
-        # prepend TT_METAL_DEVICE_PROFILER=0 to their cmd (see fabric_perf_tests.yaml).
+        # Coverage: perf legs default to profiler ON so Tracy captures timing.
+        # Entries whose BW golden is calibrated against uninstrumented routers
+        # must prepend TT_METAL_DEVICE_PROFILER=0 to their cmd (see fabric_perf_tests.yaml).
         TT_METAL_DEVICE_PROFILER: 1
         TRACY_NO_INVARIANT_CHECK: 1
       volumes:
@@ -131,8 +134,9 @@ jobs:
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: ${{ matrix.test-group.cmd }}
-      # Coverage: microbenchmark CSV artifact upload — distinct from the generic
-      # test_reports_ artifact; downstream perf tooling ingests these.
+      # Coverage: upload the microbenchmark CSVs produced under
+      # /work/generated/profiler/.logs. Distinct from the generic test_reports_
+      # artifact; downstream perf tooling ingests these.
       - name: Upload microbenchmark report csvs
         uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
@@ -146,9 +150,9 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           prefix: "test_reports_"
-      # Coverage: fabric BW SFTP upload — gate switched from name-based
-      # (contains(name, 'Fabric BW')) to a `upload_benchmarks: true` flag on
-      # the entry (see fabric_perf_tests.yaml).
+      # Coverage: entries that emit fabric BW / latency CSVs opt in via
+      # `upload_benchmarks: true` (see fabric_perf_tests.yaml). On main,
+      # check for the generated files and SFTP them to the perf dashboard.
       - name: Check for benchmark and latency data
         id: check-data
         if: ${{ !cancelled() && github.ref_name == 'main' && matrix.test-group.upload_benchmarks == true }}
