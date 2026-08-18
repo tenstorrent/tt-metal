@@ -47,6 +47,7 @@ from loguru import logger
 import ttnn
 from models.demos.gemma4.demo.sampling_utils import (
     build_device_sampling_params,
+    device_tracks_decode_on_device,
     log_sampling_mode,
     model_can_sample_on_device,
 )
@@ -719,7 +720,12 @@ def _run_generation_via_generator(
     current_pos = torch.tensor([decoding_pos[b] for b in range(batch_size)])
     out_tok = prefilled_flat.reshape(batch_size, 1)
     iteration = 0
-    logger.info("Starting decode loop...")
+    device_tracks_pos = device_tracks_decode_on_device(
+        generator.model[0],
+        device_sampling=device_sampling_params is not None,
+        enable_trace=enable_decode_trace,
+    )
+    logger.info(f"Starting decode loop... (device_pos_on_device: {device_tracks_pos})")
     profiler.start("inference_decode")
     while iteration < max_new_tokens:
         profiler.start(f"inference_decode_time_{iteration}")
@@ -736,7 +742,8 @@ def _run_generation_via_generator(
         else:
             out_tok = _host_sample_greedy(decode_out)
         profiler.end(f"inference_decode_time_{iteration}")
-        current_pos += 1
+        if not device_tracks_pos:
+            current_pos += 1
         for user in range(batch_size):
             tok = int(out_tok[user, 0].item())
             if tok not in tokenizer.stop_tokens:
@@ -890,6 +897,28 @@ def run_generation(
         mesh_mapper=replicate,
     )
 
+    # ── Sampling mode (prefill first token + decode) ──────────────────────
+    # On-device whenever the model built a SamplingGenerator — any mesh whose
+    # per-device vocab shard fits, including 1x1/1x2 (model.py). Device sampling
+    # keeps the full-vocab logits row off the host in both prefill and decode.
+    # GEMMA4_HOST_SAMPLE=1 restores the host argmax path, matching
+    # text_demo_v2 / _run_generation_via_generator.
+    force_host_sample = os.environ.get("GEMMA4_HOST_SAMPLE", "0").lower() in ("1", "true", "yes")
+    on_device_sampling = (not force_host_sample) and model_can_sample_on_device(model)
+    log_sampling_mode(on_device_sampling, {"temperature": 0})
+
+    def _sample_on_device(tt_logits, tt_out_tok=None):
+        """Sample ``[1,1,32,vocab]`` logits on device → host int list of 32 ids.
+
+        Used for both the prefill first token and decode. ``tt_out_tok`` binds
+        the sampler's output buffer so the ids are also written straight back
+        into the decode trace's token input (#51186).
+        """
+        sampled = model.sampling.sample(tt_logits, enable_trace=False, tt_out_tok=tt_out_tok)
+        tt_tokens = sampled[0] if isinstance(sampled, tuple) else sampled
+        tokens_cpu = ttnn.to_torch(ttnn.get_device_tensors(tt_tokens)[0]) if is_mesh else ttnn.to_torch(tt_tokens)
+        return tokens_cpu.reshape(-1)
+
     generated_texts = []
 
     for prompt_idx, prompt in enumerate(prompts):
@@ -935,16 +964,27 @@ def run_generation(
         # across both prefill calls below.
         import torch.nn.functional as F
 
+        # PLI (E2B/E4B) is the only consumer: ``_compute_per_layer_inputs``
+        # returns None on its first line for non-PLI models, so building this
+        # for 12B/26B-A4B/31B is a full-prompt vocab gather + float32 copy that
+        # is thrown away. ``Generator.prepare_inputs_prefill`` applies the same
+        # gate (model.py). The device does the real prompt embedding either way,
+        # in ``_build_prefill_embeds`` below.
+        needs_host_embeds = bool(model.hidden_size_per_layer_input and model.per_layer_input_weights)
         embeds_torch = (
-            F.embedding(
-                input_ids_padded.unsqueeze(0).long(),
-                state_dict.get(
-                    "model.language_model.embed_tokens.weight",
-                    state_dict.get("model.embed_tokens.weight", torch.zeros(1)),
-                ),
-            )
-            * model.embed_scale
-        ).float()
+            (
+                F.embedding(
+                    input_ids_padded.unsqueeze(0).long(),
+                    state_dict.get(
+                        "model.language_model.embed_tokens.weight",
+                        state_dict.get("model.embed_tokens.weight", torch.zeros(1)),
+                    ),
+                )
+                * model.embed_scale
+            ).float()
+            if needs_host_embeds
+            else None
+        )
 
         # True last-token index for bounded ring fill; model tile-aligns lm_head.
         get_last_token = prompt_len - 1
@@ -983,7 +1023,16 @@ def run_generation(
                 get_last_token=get_last_token,
                 input_ids_torch=input_ids_padded.unsqueeze(0),
                 embeds_torch=embeds_torch,
+                # Must match the measured call: with device sampling the vocab
+                # AllGather is skipped and the sampler consumes TP-sharded
+                # logits, which is a different program to compile here.
+                allow_sharded_prefill_logits=on_device_sampling,
             )
+            if on_device_sampling:
+                # Compile the sampling program inside the warmup window so TTFT
+                # measures inference only — mirrors Gemma4Generator's
+                # ``_capture_trace_prefill_sampling`` precompile step.
+                _sample_on_device(warmup_logits)
         except Exception as e:
             logger.error(f"Prefill warmup failed: {e}")
             tb.print_exc()
@@ -1004,24 +1053,33 @@ def run_generation(
                 get_last_token=get_last_token,
                 input_ids_torch=input_ids_padded.unsqueeze(0),
                 embeds_torch=embeds_torch,
+                allow_sharded_prefill_logits=on_device_sampling,
             )
         except Exception as e:
             logger.error(f"Prefill failed: {e}")
             tb.print_exc()
             raise
 
-        # Sample first token (argmax from last position) — included in the
-        # TTFT window so the metric matches the user-visible "time to first
-        # token" (tt_transformers / gpt_oss put argmax inside the same window).
-        if is_mesh:
-            logits_cpu = ttnn.to_torch(ttnn.get_device_tensors(logits)[0])
-        else:
-            logits_cpu = ttnn.to_torch(logits)
-        logits.deallocate(True)
-
-        # Logits are the tile containing the last prompt token.
+        # Sample first token (greedy, from the last prompt position) — included
+        # in the TTFT window so the metric matches the user-visible "time to
+        # first token" (tt_transformers / gpt_oss put argmax inside the same
+        # window). Logits are the tile containing the last prompt token, so row
+        # ``pos_in_tile`` is the one that matters; the sampler returns one id
+        # per row and the rest are discarded.
         pos_in_tile = (prompt_len - 1) % 32
-        next_token = logits_cpu[0, 0, pos_in_tile, :].argmax().item()
+        if on_device_sampling:
+            # Device path reads back 32 int32 ids instead of a 262144-wide bf16
+            # vocab row (~16 MB D2H + a host argmax over the full vocab), and
+            # the sharded logits skip the vocab AllGather entirely.
+            next_token = int(_sample_on_device(logits)[pos_in_tile].item())
+            logits.deallocate(True)
+        else:
+            if is_mesh:
+                logits_cpu = ttnn.to_torch(ttnn.get_device_tensors(logits)[0])
+            else:
+                logits_cpu = ttnn.to_torch(logits)
+            logits.deallocate(True)
+            next_token = logits_cpu[0, 0, pos_in_tile, :].argmax().item()
         profiler.end(f"inference_prefill", iteration=prompt_idx)
 
         logger.info(
@@ -1040,36 +1098,73 @@ def run_generation(
         # ── Decode helpers ─────────────────────────────────────────────────
         # Token IDs (+ optional PLI) staged on host; embedding lookup runs on
         # device inside ``ttnn_decode_forward``. Trace captures decoder onward.
-        # Sampling: SamplingGenerator for TP >= 2, host torch.argmax for TP = 1.
-        on_device_sampling = model.sampling is not None
+        # Sampling mode is resolved once before the prompt loop (``on_device_sampling``).
+        #
+        # ``device_tracks_decode`` is True when the captured trace owns its own
+        # decode state: ``ttnn_decode_forward`` runs ``ttnn.plus_one`` on both
+        # position tensors on the on-device-logits path, so restaging positions
+        # from host every replay is a pair of redundant allocations + H2D
+        # transfers per token. PLI models (E2B/E4B) and
+        # ``GEMMA4_ALWAYS_REFRESH_DECODE=1`` set
+        # ``_tt_vllm_always_refresh_decode_trace_inputs``, which disables the
+        # device increment; host positions stay authoritative there. Same helper
+        # the Generator paths use (``_run_generation_via_generator``, v2).
+        device_tracks_decode = device_tracks_decode_on_device(
+            model, device_sampling=on_device_sampling, enable_trace=enable_decode_trace
+        )
+        # Sampled-token writeback (#51186): bind the sampler's output buffer to
+        # the trace's own token input, so the next replay reads the id the device
+        # just produced instead of one the host restages. Needs the tile-wide
+        # token buffer built below. GEMMA4_DEMO_TOKEN_FEEDBACK=0 restores host
+        # token staging. No extra barrier is needed — the ``to_torch`` of the
+        # sampled tokens already orders the writeback on CQ0 ahead of the next
+        # replay (see Gemma4Generator.sample_decode_on_device).
+        device_token_feedback = device_tracks_decode and os.environ.get(
+            "GEMMA4_DEMO_TOKEN_FEEDBACK", "1"
+        ).lower() not in ("0", "false", "no", "off")
 
-        def _make_decode_inputs(tok, pos):
-            """Create host tensors for one decode iteration."""
-            pli_torch = model.compute_host_pli(tok)
-            tokens_h = ttnn.from_torch(
-                torch.tensor([[tok]], dtype=torch.int32),
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                dtype=ttnn.uint32,
-                mesh_mapper=replicate,
-            )
-            pos_padded = torch.nn.functional.pad(
-                torch.tensor([pos], dtype=torch.int32).reshape(1, 1), (0, 31), "constant", 0
-            )
-            inputs = {
-                "tokens": tokens_h,
-                "position": ttnn.from_torch(
+        def _make_decode_inputs(tok, pos, with_token=True, with_positions=True):
+            """Create host tensors for one decode iteration.
+
+            ``with_token`` / ``with_positions`` drop the inputs the captured
+            trace maintains on device (sampled-token writeback and position
+            ``plus_one``). In steady state a non-PLI traced decode needs
+            neither, so this returns an empty dict and nothing is staged.
+            """
+            inputs = {}
+            if with_token:
+                if device_token_feedback:
+                    # Tile-wide [1,1,1,32] uint32 so ``ttnn.sampling`` can write
+                    # all 32 rows back into this buffer; decode slices row 0 via
+                    # ``rot_mat_idxs`` (_DECODE_TOKEN_FEEDBACK_WIDTH, model.py).
+                    tok_host = torch.zeros(1, 1, 1, model._DECODE_TOKEN_FEEDBACK_WIDTH, dtype=torch.int32)
+                    tok_host[0, 0, 0, 0] = tok
+                else:
+                    tok_host = torch.tensor([[tok]], dtype=torch.int32)
+                inputs["tokens"] = ttnn.from_torch(
+                    tok_host,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    dtype=ttnn.uint32,
+                    mesh_mapper=replicate,
+                )
+            if with_positions:
+                pos_padded = torch.nn.functional.pad(
+                    torch.tensor([pos], dtype=torch.int32).reshape(1, 1), (0, 31), "constant", 0
+                )
+                inputs["position"] = ttnn.from_torch(
                     pos_padded,
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                     dtype=ttnn.uint32,
                     mesh_mapper=replicate,
-                ),
-                "position_int32": ttnn.from_torch(
+                )
+                inputs["position_int32"] = ttnn.from_torch(
                     torch.tensor([pos], dtype=torch.int32),
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                     dtype=ttnn.int32,
                     mesh_mapper=replicate,
-                ),
-            }
+                )
+            # PLI is derived from the token, so it follows the token decision.
+            pli_torch = model.compute_host_pli(tok) if with_token else None
             if pli_torch is not None:
                 inputs["pli"] = ttnn.from_torch(
                     pli_torch.to(torch.bfloat16),
@@ -1102,17 +1197,16 @@ def run_generation(
                 if v is not None and k in trace_device_inputs:
                     ttnn.copy_host_to_device_tensor(v, trace_device_inputs[k])
 
-        def _extract_token(decode_output):
-            """Extract next token from model output (token IDs or logits)."""
+        def _extract_token(decode_output, tt_out_tok=None):
+            """Extract next token from model output (token IDs or logits).
+
+            ``tt_out_tok`` is the decode trace's token buffer when device token
+            feedback is on: the sampler writes the sampled ids into it as part
+            of the same op, so the next replay needs no host restage.
+            """
             if on_device_sampling:
                 # Keep main behavior: decode sampling in this demo remains untraced.
-                # SamplingGenerator.sample() returns (tt_tokens, tt_log_probs); take the tokens.
-                sampled = model.sampling.sample(decode_output, enable_trace=False)
-                tt_tokens = sampled[0] if isinstance(sampled, tuple) else sampled
-                sampled_cpu = (
-                    ttnn.to_torch(ttnn.get_device_tensors(tt_tokens)[0]) if is_mesh else ttnn.to_torch(tt_tokens)
-                )
-                return sampled_cpu.reshape(-1)[0].item()
+                return int(_sample_on_device(decode_output, tt_out_tok=tt_out_tok)[0].item())
             else:
                 output_cpu = (
                     ttnn.to_torch(ttnn.get_device_tensors(decode_output)[0])
@@ -1145,11 +1239,22 @@ def run_generation(
                 else:
                     profiler.start(f"inference_decode_time_{iteration}", iteration=prompt_idx)
 
+                # Traced replay reuses the device-resident trace buffers: the
+                # trace increments the positions itself and the sampler writes
+                # the next token back into them. The untraced and compile-run
+                # paths build fresh device tensors each step, so host inputs
+                # stay authoritative there.
+                traced_replay = enable_decode_trace and trace_id is not None
+                stage_positions = not (traced_replay and device_tracks_decode)
+                stage_token = not (traced_replay and device_token_feedback)
+
                 t_make_start = time.perf_counter()
-                inputs_h = _make_decode_inputs(next_token, current_pos)
+                inputs_h = _make_decode_inputs(
+                    next_token, current_pos, with_token=stage_token, with_positions=stage_positions
+                )
                 t_make_end = time.perf_counter()
 
-                if enable_decode_trace and trace_id is not None:
+                if traced_replay:
                     # ── Traced execution: copy inputs and replay ──
                     _copy_inputs_to_trace(inputs_h)
                     ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
@@ -1195,10 +1300,18 @@ def run_generation(
                     decode_logits, _ = _fwd(inputs_d)
                     t_enq_end = time.perf_counter()
 
-                next_token = _extract_token(decode_logits)
+                feedback_buf = (
+                    trace_device_inputs["tokens"] if device_token_feedback and trace_device_inputs is not None else None
+                )
+                next_token = _extract_token(decode_logits, tt_out_tok=feedback_buf)
                 t_sync_end = time.perf_counter()
                 generated_tokens.append(next_token)
-                current_pos += 1
+                if stage_positions:
+                    # Host only tracks the position while it still stages it;
+                    # once the trace owns the device buffers ``current_pos`` is
+                    # frozen and read by nothing (it never flips back within a
+                    # prompt, and is re-seeded from ``prompt_len`` for the next).
+                    current_pos += 1
 
                 if iteration == 0:
                     profiler.end(f"compile_decode", iteration=prompt_idx)

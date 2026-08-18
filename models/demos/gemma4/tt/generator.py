@@ -1051,6 +1051,7 @@ class ChunkedPrefillPageTableGuardMixin:
         output_tokens=None,
         slot_remap=None,
         enable_trace=False,
+        skip_precompile=False,
     ):
         """Eager sampling writeback into padded decode tokens (Gemma4-only, #51186).
 
@@ -1112,6 +1113,7 @@ class ChunkedPrefillPageTableGuardMixin:
                 output_tokens=output_tokens,
                 slot_remap=slot_remap,
                 enable_trace=enable_trace,
+                skip_precompile=skip_precompile,
             )
             if wrote_feedback and self._should_sync_after_eager_sample_writeback():
                 try:
