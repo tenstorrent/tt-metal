@@ -59,8 +59,17 @@ RmCbBudget rm_cb_budget(const Tensor& input_tensor, const std::optional<MemoryCo
         tt::round_up(stick_bytes, page_alignment(out_config)));
 
     auto* device = input_tensor.device();
-    const uint32_t l1_capacity =
-        device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    const uint32_t cb_base = device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    // Static circular buffers grow up from the unreserved base and are rejected at program-creation
+    // time if the region reaches the lowest live L1 buffer, not the architectural end of L1
+    // (ProgramImpl::validate_circular_buffer_region). Budgeting against the full range would admit a
+    // stick that fits an empty L1 and then TT_THROW out of allocation instead of falling back --
+    // reachable here because this path holds kRmCbSlots whole sticks where native's row-major reader
+    // holds two, so an L1-resident tensor leaves it four times as little room to spare.
+    const auto lowest_occupied = device->lowest_occupied_compute_l1_address();
+    const uint32_t ceiling =
+        lowest_occupied.has_value() ? static_cast<uint32_t>(*lowest_occupied) : device->l1_size_per_core();
+    const uint32_t l1_capacity = ceiling > cb_base ? ceiling - cb_base : 0;
     return {slot_stride, slot_stride == 0 ? 0 : l1_capacity / slot_stride};
 }
 
@@ -145,8 +154,20 @@ bool supported_by_codegen(
     // TT_THROWing out of circular-buffer allocation at program-compile time. Only the row-invariant
     // factory pages whole sticks; the blocked-generic one pages fixed 32-element chunks, so its
     // footprint does not scale with any tensor dimension.
-    if (is_row_invariant(dims) && rm_cb_budget(input_tensor, output_mem_config).max_slots < kRmCbSlots) {
-        return false;
+    if (is_row_invariant(dims)) {
+        // rm_cb_budget() reads the L1 that is occupied *now*, and the output buffer is allocated
+        // after this gate returns -- an L1 output would lower the very frontier the budget measured,
+        // so a stick admitted here could still collide with it. Estimating the output's per-bank
+        // footprint would put an unverifiable number in the gate; declining the placement costs only
+        // a fall back to native, and interleaved DRAM on both sides is the surface this path is
+        // certified over.
+        const MemoryConfig& out_config = output_mem_config.value_or(input_tensor.memory_config());
+        if (out_config.buffer_type() != tt::tt_metal::BufferType::DRAM) {
+            return false;
+        }
+        if (rm_cb_budget(input_tensor, output_mem_config).max_slots < kRmCbSlots) {
+            return false;
+        }
     }
 
     return true;

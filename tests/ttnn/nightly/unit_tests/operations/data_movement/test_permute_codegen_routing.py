@@ -249,3 +249,23 @@ def test_forced_codegen_refuses_a_repeated_axis(device, expect_error, dims):
     )
     with expect_error(RuntimeError, "does not support"):
         _force_codegen(xt, dims)
+
+
+# The row-invariant CB holds a whole stick per slot, budgeted against the L1 that is occupied at the
+# moment the gate runs. A requested L1 output is allocated only after that and lowers the very
+# frontier the budget measured, so the gate declines the placement instead of admitting a stick it
+# cannot account for. The routed entry falls back to native, which serves the same call.
+def test_forced_codegen_refuses_an_l1_output(device, expect_error):
+    xt = ttnn.from_torch(
+        _make_input([3, 64, 96], ttnn.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    with expect_error(RuntimeError, "does not support"):
+        _force_codegen(xt, [1, 0, 2], memory_config=ttnn.L1_MEMORY_CONFIG)
+
+
+def test_routed_l1_output_falls_back_to_native(device):
+    torch_input = _make_input([3, 64, 96], ttnn.bfloat16)
+    xt = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    out = ttnn.permute(xt, [1, 0, 2], memory_config=ttnn.L1_MEMORY_CONFIG)
+    assert out.memory_config().buffer_type == ttnn.BufferType.L1
+    assert_equal(ttnn.to_torch(out), torch_input.permute(1, 0, 2))

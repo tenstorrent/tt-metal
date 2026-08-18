@@ -40,8 +40,8 @@ inline constexpr uint32_t kRmCbSlots = 2 * std::max(kRmReadBatch, kRmWriteBatch)
 // to fit in one core's L1) and by the program factory (which sizes the CB from it); the two must
 // agree or the gate would claim a config the factory cannot instantiate.
 struct RmCbBudget {
-    uint32_t slot_stride;  // bytes per CB slot
-    uint32_t max_slots;    // slots that fit in per-core L1
+    uint32_t slot_stride;  // bytes per CB slot; a pure function of the shape, dtype and alignments
+    uint32_t max_slots;    // slots that fit under the caller-visible L1 frontier, read at call time
 };
 RmCbBudget rm_cb_budget(const Tensor& input_tensor, const std::optional<MemoryConfig>& output_mem_config);
 
