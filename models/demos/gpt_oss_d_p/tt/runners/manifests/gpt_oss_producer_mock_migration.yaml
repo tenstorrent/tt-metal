@@ -1,0 +1,49 @@
+# Producer manifest: GPT-OSS Gate 1 (mock migration) — prefill both slots, then PCC them; no copy.
+#
+# MODEL-SPECIFIC transport: SP=4 TP=8 (TP cols == num_kv_heads). Pair with
+# gpt_oss_binding_mock_migration.yaml.
+#
+# Run it with prefill_producer, NOT migration_driver: `issue: false` is honoured only by the plain
+# producer — invoking the driver IS the opt-in to migrate, so it warns and migrates anyway.
+#   export PREFILL_TRACE_DIR=<golden trace dir>
+#   python -m models.demos.common.prefill.runners.prefill_producer \
+#     --manifest models/demos/gpt_oss_d_p/tt/runners/manifests/gpt_oss_producer_mock_migration.yaml
+#
+# Every verdict is logged HERE — the runner validates nothing. check_pcc below is the whole signal;
+# this manifest issues no migration, so there is no destination to read back.
+
+transport:
+  sp: 4
+  tp: 8
+  h2d_service_id: gpt_oss_prefill
+  connect_timeout_s: 60
+
+model:
+  variant: gpt_oss_d_p
+  num_layers: 36
+  max_seq_len: 56320
+  chunk_size: 5120
+
+workload:
+  num_users: 2
+  slot_prompts:
+    - /data/lgalas/gpt_oss_tt_cache/golden/longbook_qa_eng_prefill_56320
+    - /data/lgalas/gpt_oss_tt_cache/golden/longbook_qa_eng_prefill_56320
+  max_requests: 2
+  interleave: round_robin
+  check_pcc: true
+
+migration:
+  issue: false
+  dest_endpoint_id: 1
+  dst_slot_offset: 2
+  timeout_ms: 3600000
+  done_file: /tmp/migration_done.sentinel
+  table_path: /tmp/prefill_kv_chunk_table.pb
+  cmd_queue: /mig_ep1_cmd
+  table_queue: /mig_ep1_table
+  resp_queue: /mig_ep1_resp
+
+env:
+  PREFILL_MIGRATION_TABLE_PATH: /tmp/prefill_kv_chunk_table.pb
+  PREFILL_STANDALONE_CHUNKED_PCC: "0.82"

@@ -13,7 +13,6 @@
 #include <tt_stl/assert.hpp>
 
 #include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/data_types.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
 
