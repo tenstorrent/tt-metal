@@ -19,21 +19,16 @@ void kernel_main() {
     // reassignment below is legal — the generated dfb:: handles convert to uint32_t at compile time.
     uint32_t dfb_input_id = dfb::input;
     DataflowBuffer dfb_input_obj(dfb::input);
-    constexpr auto dfb_scaler_id = dfb::scaler;
-    DataflowBuffer dfb_scaler_obj(dfb_scaler_id);
-    constexpr auto dfb_mask_w_id = dfb::mask_w;
-    DataflowBuffer dfb_mask_w_obj(dfb_mask_w_id);
-    constexpr auto dfb_accum_dst_id = dfb::accum_dst;
-    DataflowBuffer dfb_accum_dst_obj(dfb_accum_dst_id);
-    constexpr auto dfb_masked_input_id = dfb::masked_input;
-    DataflowBuffer dfb_masked_input_obj(dfb_masked_input_id);
-    constexpr auto dfb_out_id = dfb::out;
-    DataflowBuffer dfb_out_obj(dfb_out_id);
+    DataflowBuffer dfb_scaler_obj(dfb::scaler);
+    DataflowBuffer dfb_mask_w_obj(dfb::mask_w);
+    DataflowBuffer dfb_accum_dst_obj(dfb::accum_dst);
+    DataflowBuffer dfb_masked_input_obj(dfb::masked_input);
+    DataflowBuffer dfb_out_obj(dfb::out);
     constexpr uint32_t TILE_W = 32;
     constexpr bool do_mask_w = (origin_W % TILE_W) != 0;
     DataflowBuffer& dfb_reduction_input_obj = do_mask_w ? dfb_masked_input_obj : dfb_input_obj;
 
-    compute_kernel_hw_startup(dfb_input_id, dfb_scaler_id, dfb_out_id);
+    compute_kernel_hw_startup(dfb_input_id, dfb::scaler, dfb::out);
 
     dfb_scaler_obj.wait_front(1);  // scaler tile from the reader
 
@@ -56,10 +51,10 @@ void kernel_main() {
                 for (uint32_t wt = 0; wt < Wt - 1; ++wt) {
                     dfb_input_obj.wait_front(onetile);
 #if defined FP32_DEST_ACC_EN
-                    reconfig_data_format(dfb_input_id, dfb_scaler_id);
+                    reconfig_data_format(dfb_input_id, dfb::scaler);
 #endif
-                    matmul_init(dfb_input_id, dfb_scaler_id, false);
-                    matmul_tiles(dfb_input_id, dfb_scaler_id, 0, 0, reduce_dst_idx);
+                    matmul_init(dfb_input_id, dfb::scaler, false);
+                    matmul_tiles(dfb_input_id, dfb::scaler, 0, 0, reduce_dst_idx);
 
                     dfb_input_obj.pop_front(onetile);
                 }
@@ -67,9 +62,9 @@ void kernel_main() {
                 dfb_accum_dst_obj.reserve_back(onetile);
                 tile_regs_wait();
 #if defined FP32_DEST_ACC_EN
-                pack_reconfig_data_format(dfb_accum_dst_id);
+                pack_reconfig_data_format(dfb::accum_dst);
 #endif
-                pack_tile(reduce_dst_idx, dfb_accum_dst_id);
+                pack_tile(reduce_dst_idx, dfb::accum_dst);
                 tile_regs_release();
                 dfb_accum_dst_obj.push_back(onetile);
             }
@@ -79,36 +74,35 @@ void kernel_main() {
                     compute_kernel_lib::Mask<DataFormat::Float16_b>,
                     compute_kernel_lib::input(dfb::input),
                     compute_kernel_lib::input(
-                        dfb_mask_w_id, compute_kernel_lib::WaitPolicy::None, compute_kernel_lib::PopPolicy::None),
-                    compute_kernel_lib::output(dfb_masked_input_id)>(
-                    compute_kernel_lib::IterationShape::tiles(onetile));
-                dfb_input_id = dfb_masked_input_id;
+                        dfb::mask_w, compute_kernel_lib::WaitPolicy::None, compute_kernel_lib::PopPolicy::None),
+                    compute_kernel_lib::output(dfb::masked_input)>(compute_kernel_lib::IterationShape::tiles(onetile));
+                dfb_input_id = dfb::masked_input;
             }
 
             tile_regs_acquire();
             dfb_reduction_input_obj.wait_front(onetile);
             if (!is_w_single_tile) {
 #if defined FP32_DEST_ACC_EN
-                reconfig_data_format_srca(dfb_accum_dst_id);
+                reconfig_data_format_srca(dfb::accum_dst);
 #endif
                 dfb_accum_dst_obj.wait_front(onetile);
-                copy_tile_to_dst_init_short(dfb_accum_dst_id);
-                copy_tile(dfb_accum_dst_id, 0, reduce_dst_idx);
+                copy_tile_to_dst_init_short(dfb::accum_dst);
+                copy_tile(dfb::accum_dst, 0, reduce_dst_idx);
             }
 
 #if defined FP32_DEST_ACC_EN
-            reconfig_data_format(dfb_input_id, dfb_scaler_id);
+            reconfig_data_format(dfb_input_id, dfb::scaler);
 #endif
-            matmul_init(dfb_input_id, dfb_scaler_id, false);
-            matmul_tiles(dfb_input_id, dfb_scaler_id, 0, 0, reduce_dst_idx);
+            matmul_init(dfb_input_id, dfb::scaler, false);
+            matmul_tiles(dfb_input_id, dfb::scaler, 0, 0, reduce_dst_idx);
             tile_regs_commit();
 
             dfb_out_obj.reserve_back(onetile);
             tile_regs_wait();
 #if defined FP32_DEST_ACC_EN
-            pack_reconfig_data_format(dfb_out_id);
+            pack_reconfig_data_format(dfb::out);
 #endif
-            pack_tile(reduce_dst_idx, dfb_out_id);
+            pack_tile(reduce_dst_idx, dfb::out);
             tile_regs_release();
             dfb_out_obj.push_back(onetile);
 

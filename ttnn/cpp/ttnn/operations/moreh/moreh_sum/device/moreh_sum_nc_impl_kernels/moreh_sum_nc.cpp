@@ -16,23 +16,19 @@ void kernel_main() {
     constexpr uint32_t num_output_tiles = get_arg(args::num_output_tiles);
     constexpr uint32_t num_input_tiles = get_arg(args::num_input_tiles);
 
-    constexpr auto dfb_in0_id = dfb::input;
-    constexpr auto dfb_in1_id = dfb::zero;
-    constexpr auto dfb_out0_id = dfb::out;
-
-    compute_kernel_hw_startup(dfb_in0_id, dfb_in1_id, dfb_out0_id);
+    compute_kernel_hw_startup(dfb::input, dfb::zero, dfb::out);
 
     ckl::eltwise_chain(
         ckl::IterationShape::grid(num_output_tiles, num_input_tiles),
         ckl::BinaryFpu<
             ckl::BinaryFpuOp::Add,
             ckl::input(
-                dfb_in0_id, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::OperandKind::Block),
-            ckl::input(dfb_in1_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Scalar),
+                dfb::input, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::OperandKind::Block),
+            ckl::input(dfb::zero, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Scalar),
             ckl::Dst::D0,
             ckl::DestAccumulation::PerRow>{},
         ckl::PackTile<ckl::output(
-            dfb_out0_id,
+            dfb::out,
             ckl::ReservePolicy::PerOuter,
             ckl::PushPolicy::PerOuter,
             ckl::DataFormatReconfig::Enabled,

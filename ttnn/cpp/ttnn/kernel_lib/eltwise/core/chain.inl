@@ -1702,6 +1702,8 @@ template <class E>
 constexpr bool wait_a_per_row_of() {
     if constexpr (is_binary_fpu_op_v<E>) {
         return E::AWait == WaitPolicy::PerTile && E::APop == PopPolicy::PerTile && E::AIndex == OperandKind::Col;
+    } else if constexpr (is_runtime_conditional_sequence_op_v<E>) {
+        return false;
     } else if constexpr (is_cb_reader_op_v<E>) {
         return E::Wait == WaitPolicy::PerTile && E::Pop == PopPolicy::PerTile && E::IndexMode == OperandKind::Col;
     } else {
@@ -1723,6 +1725,8 @@ template <class E>
 constexpr bool pop_a_per_row_of() {
     if constexpr (is_binary_fpu_op_v<E>) {
         return E::AWait == WaitPolicy::PerTile && E::APop == PopPolicy::PerTile && E::AIndex == OperandKind::Col;
+    } else if constexpr (is_runtime_conditional_sequence_op_v<E>) {
+        return false;
     } else if constexpr (is_cb_reader_op_v<E>) {
         return E::Wait == WaitPolicy::PerTile && E::Pop == PopPolicy::PerTile && E::IndexMode == OperandKind::Col;
     } else {

@@ -18,19 +18,9 @@ namespace ckl = compute_kernel_lib;
 void kernel_main() {
     constexpr uint32_t onetile = 1;
 
-    constexpr auto dfb_y_id = dfb::y;
-    constexpr auto dfb_dy_id = dfb::dy;
-    constexpr auto dfb_scaler_id = dfb::scaler;
-    constexpr auto dfb_mask_id = dfb::mask;
-    constexpr auto dfb_dx_id = dfb::dx;
+    DataflowBuffer dfb_sum_obj(dfb::sum);
 
-    constexpr auto dfb_ydy_id = dfb::ydy;  // y * dy
-    constexpr auto dfb_sum_id = dfb::sum;
-    DataflowBuffer dfb_sum_obj(dfb_sum_id);
-    constexpr auto dfb_dy_m_sum_id = dfb::dy_m_sum;
-    constexpr auto dfb_add_id = dfb::add;
-
-    compute_kernel_hw_startup(dfb_y_id, dfb_scaler_id, dfb_dx_id);
+    compute_kernel_hw_startup(dfb::y, dfb::scaler, dfb::dx);
 
     uint32_t N = get_arg(args::N);
     uint32_t Wt = get_arg(args::Wt);
@@ -40,68 +30,68 @@ void kernel_main() {
         for (uint32_t w = 0; w < Wt; ++w) {
             if (w == Wt - 1) {
                 if (w == 0) {
-                    mask_tile_to_dfb<dfb_dy_id, dfb_mask_id, dfb_add_id>(
+                    mask_tile_to_dfb<dfb::dy, dfb::mask, dfb::add>(
                         /*itile=*/0, /*mtile=*/0, /*pop=*/1, /*popm=*/0);
                 } else {
-                    constexpr auto dfb_inter0_id = dfb_ydy_id;
-                    mask_tile_to_dfb<dfb_dy_id, dfb_mask_id, dfb_inter0_id>(
+                    constexpr auto dfb_inter0_id = dfb::ydy;
+                    mask_tile_to_dfb<dfb::dy, dfb::mask, dfb_inter0_id>(
                         /*itile=*/0, /*mtile=*/0, /*pop=*/1, /*popm=*/0);
 
-                    add_tiles_to_dfb<dfb_add_id, dfb_inter0_id, dfb_add_id>();
+                    add_tiles_to_dfb<dfb::add, dfb_inter0_id, dfb::add>();
                 }
             } else {
                 if (w == 0) {
-                    copy_tile_to_dfb<dfb_dy_id, dfb_add_id>();
+                    copy_tile_to_dfb<dfb::dy, dfb::add>();
                 } else {
-                    add_tiles_to_dfb<dfb_add_id, dfb_dy_id, dfb_add_id>();
+                    add_tiles_to_dfb<dfb::add, dfb::dy, dfb::add>();
                 }
             }
         }
 
-        ckl::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, dfb_add_id, dfb_scaler_id, dfb_sum_id>(
+        ckl::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, dfb::add, dfb::scaler, dfb::sum>(
             ckl::ReduceInputBlockShape::single());
 
         for (uint32_t w = 0; w < Wt; w += onetile) {
-            constexpr auto dfb_exp_id = dfb_ydy_id;
-            exp_tile_to_dfb<dfb_y_id, dfb_exp_id>();
+            constexpr auto dfb_exp_id = dfb::ydy;
+            exp_tile_to_dfb<dfb::y, dfb_exp_id>();
             // sum * exp(y)
-            mul_tiles_bcast_cols_to_dfb<dfb_exp_id, dfb_sum_id, dfb_dy_m_sum_id>(0, 0, /*pop0=*/1, /*pop1=*/0);
+            mul_tiles_bcast_cols_to_dfb<dfb_exp_id, dfb::sum, dfb::dy_m_sum>(0, 0, /*pop0=*/1, /*pop1=*/0);
 
             // dy - sum * exp(y)
-            sub_tiles_to_dfb<dfb_dy_id, dfb_dy_m_sum_id, dfb_dx_id>();
+            sub_tiles_to_dfb<dfb::dy, dfb::dy_m_sum, dfb::dx>();
         }
 
         dfb_sum_obj.pop_front(onetile);
 #else
         for (uint32_t w = 0; w < Wt; ++w) {
             if (w == Wt - 1) {
-                mul_tiles_and_mask_tile_to_dfb<dfb_y_id, dfb_dy_id, dfb_mask_id, dfb_ydy_id>(
+                mul_tiles_and_mask_tile_to_dfb<dfb::y, dfb::dy, dfb::mask, dfb::ydy>(
                     0, 0, 0, /*pop0=*/1, /*pop1=*/1, /*popm=*/0);
             } else {
-                mul_tiles_to_dfb<dfb_y_id, dfb_dy_id, dfb_ydy_id>();
+                mul_tiles_to_dfb<dfb::y, dfb::dy, dfb::ydy>();
             }
 
             if (w == 0) {
-                copy_tile_to_dfb<dfb_ydy_id, dfb_add_id>();
+                copy_tile_to_dfb<dfb::ydy, dfb::add>();
             } else {
-                add_tiles_to_dfb<dfb_add_id, dfb_ydy_id, dfb_add_id>();
+                add_tiles_to_dfb<dfb::add, dfb::ydy, dfb::add>();
             }
         }
 
         // step 2, compute sum(y * dy)
-        ckl::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, dfb_add_id, dfb_scaler_id, dfb_sum_id>(
+        ckl::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, dfb::add, dfb::scaler, dfb::sum>(
             ckl::ReduceInputBlockShape::single());
 
         for (uint32_t w = 0; w < Wt; w += onetile) {
             // dy - sum
-            sub_tiles_bcast_cols_to_dfb<dfb_dy_id, dfb_sum_id, dfb_dy_m_sum_id>(0, 0, /*pop0=*/1, /*pop1=*/0);
+            sub_tiles_bcast_cols_to_dfb<dfb::dy, dfb::sum, dfb::dy_m_sum>(0, 0, /*pop0=*/1, /*pop1=*/0);
 
 #ifdef SOFTMAX
             // (dy - sum) * y
-            mul_tiles_to_dfb<dfb_y_id, dfb_dy_m_sum_id, dfb_dx_id>();
+            mul_tiles_to_dfb<dfb::y, dfb::dy_m_sum, dfb::dx>();
 #else
             // -(dy - sum) * y
-            mul_tiles_and_negative_to_dfb<dfb_y_id, dfb_dy_m_sum_id, dfb_dx_id>();
+            mul_tiles_and_negative_to_dfb<dfb::y, dfb::dy_m_sum, dfb::dx>();
 #endif
         }
 

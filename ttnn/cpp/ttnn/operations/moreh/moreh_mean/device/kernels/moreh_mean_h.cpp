@@ -23,17 +23,11 @@ void kernel_main() {
     const auto NC = get_arg(args::NC);
     constexpr uint32_t origin_H = get_arg(args::origin_H);
 
-    constexpr auto dfb_input_id = dfb::input;
-    constexpr auto dfb_scaler_id = dfb::scaler;
-    DataflowBuffer dfb_scaler_obj(dfb_scaler_id);
-    constexpr auto dfb_mask_h_id = dfb::mask_h;
-    DataflowBuffer dfb_mask_h_obj(dfb_mask_h_id);
-    constexpr auto dfb_accum_dst_id = dfb::accum_dst;
-    constexpr auto dfb_masked_input_id = dfb::masked_input;
-    constexpr auto dfb_out_id = dfb::out;
+    DataflowBuffer dfb_scaler_obj(dfb::scaler);
+    DataflowBuffer dfb_mask_h_obj(dfb::mask_h);
     constexpr bool do_mask_h = (origin_H % TILE_HEIGHT) != 0;
 
-    compute_kernel_hw_startup(dfb_input_id, dfb_input_id, dfb_out_id);
+    compute_kernel_hw_startup(dfb::input, dfb::input, dfb::out);
 
     dfb_scaler_obj.wait_front(1);  // scaler tile from the reader
 
@@ -52,7 +46,7 @@ void kernel_main() {
 
             // Phase 1: Reduce Ht-1 tiles into accumulator (if Ht > 1)
             if (!is_h_single_tile) {
-                ckl::reduce<REDUCE_OP, REDUCE_DIM, dfb_input_id, dfb_scaler_id, dfb_accum_dst_id>(
+                ckl::reduce<REDUCE_OP, REDUCE_DIM, dfb::input, dfb::scaler, dfb::accum_dst>(
                     ckl::ReduceInputBlockShape::col(Ht - 1));
             }
 
@@ -60,26 +54,24 @@ void kernel_main() {
             if constexpr (do_mask_h) {
                 ckl::eltwise_chain(
                     ckl::IterationShape::tiles(onetile),
-                    ckl::CopyTile<ckl::input(dfb_input_id)>{},
-                    ckl::CopyTile<
-                        ckl::input(dfb_mask_h_id, ckl::WaitPolicy::None, ckl::PopPolicy::None),
-                        ckl::Dst::D1>{},
+                    ckl::CopyTile<ckl::input(dfb::input)>{},
+                    ckl::CopyTile<ckl::input(dfb::mask_h, ckl::WaitPolicy::None, ckl::PopPolicy::None), ckl::Dst::D1>{},
                     ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>{},
-                    ckl::PackTile<ckl::output(dfb_masked_input_id)>{});
+                    ckl::PackTile<ckl::output(dfb::masked_input)>{});
 
                 // Phase 2 with masked input: Reduce final masked tile with accumulation
-                ckl::reduce<REDUCE_OP, REDUCE_DIM, dfb_masked_input_id, dfb_scaler_id, dfb_out_id>(
+                ckl::reduce<REDUCE_OP, REDUCE_DIM, dfb::masked_input, dfb::scaler, dfb::out>(
                     ckl::ReduceInputBlockShape::single(),
                     ckl::ReduceInputMemoryLayout::contiguous(),
-                    ckl::Accumulate::at(dfb_accum_dst_id, is_h_single_tile ? 0 : 1));
+                    ckl::Accumulate::at(dfb::accum_dst, is_h_single_tile ? 0 : 1));
             } else {
                 // Phase 2 without masking: Reduce final tile with accumulation
                 // - If Ht == 1 (single tile): iteration=0, no accumulator reload
-                // - If Ht > 1 (multi-tile): iteration=1, reload accumulator from dfb_accum_dst_id
-                ckl::reduce<REDUCE_OP, REDUCE_DIM, dfb_input_id, dfb_scaler_id, dfb_out_id>(
+                // - If Ht > 1 (multi-tile): iteration=1, reload accumulator from dfb::accum_dst
+                ckl::reduce<REDUCE_OP, REDUCE_DIM, dfb::input, dfb::scaler, dfb::out>(
                     ckl::ReduceInputBlockShape::single(),
                     ckl::ReduceInputMemoryLayout::contiguous(),
-                    ckl::Accumulate::at(dfb_accum_dst_id, is_h_single_tile ? 0 : 1));
+                    ckl::Accumulate::at(dfb::accum_dst, is_h_single_tile ? 0 : 1));
             }
         }
     }

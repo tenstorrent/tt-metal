@@ -16,11 +16,7 @@ void kernel_main() {
     constexpr bool wt_need_bcast = (get_arg(args::wt_need_bcast) == 1);
     constexpr bool ht_need_bcast = (get_arg(args::ht_need_bcast) == 1);
 
-    constexpr uint32_t dfb_in0_id = dfb::in0;
-    constexpr uint32_t dfb_in1_id = dfb::in1;
-    constexpr uint32_t dfb_out0_id = dfb::out0;
-
-    compute_kernel_hw_startup(dfb_in1_id, dfb_in0_id, dfb_out0_id);
+    compute_kernel_hw_startup(dfb::in1, dfb::in0, dfb::out0);
 
     constexpr bool has_bcast = ht_need_bcast || wt_need_bcast;
     constexpr auto bcast_dim = (ht_need_bcast && wt_need_bcast) ? ckl::BroadcastDim::Scalar
@@ -35,13 +31,13 @@ void kernel_main() {
             ckl::BinaryFpu<
                 ckl::BinaryFpuOp::Add,
                 ckl::input(
-                    dfb_in1_id,
+                    dfb::in1,
                     ckl::WaitPolicy::Upfront,
                     ckl::PopPolicy::AtEnd,
                     ckl::OperandKind::Scalar,
                     ckl::DataFormatReconfig::Disabled),
                 ckl::input(
-                    dfb_in0_id,
+                    dfb::in0,
                     bcast_dim,
                     ckl::WaitPolicy::PerTile,
                     ckl::PopPolicy::PerTile,
@@ -50,8 +46,8 @@ void kernel_main() {
             !has_bcast,
             ckl::CopyTile<
                 ckl::input(
-                    dfb_in0_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
+                    dfb::in0, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
                 ckl::Dst::D0>>{},
         ckl::PackTile<ckl::output(
-            dfb_out0_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>{});
+            dfb::out0, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>{});
 }

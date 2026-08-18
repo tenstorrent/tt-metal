@@ -33,21 +33,16 @@ void kernel_main() {
     // the accessor type inferred by auto.
     uint32_t dfb_input_id = dfb::input;
     DataflowBuffer dfb_input_obj(dfb::input);
-    constexpr auto dfb_scaler_id = dfb::scaler;
-    DataflowBuffer dfb_scaler_obj(dfb_scaler_id);
-    constexpr auto dfb_mask_w_id = dfb::mask_w;
-    DataflowBuffer dfb_mask_w_obj(dfb_mask_w_id);
-    constexpr auto dfb_accum_dst_id = dfb::accum_dst;
-    DataflowBuffer dfb_accum_dst_obj(dfb_accum_dst_id);
-    constexpr auto dfb_masked_input_id = dfb::masked_input;
-    DataflowBuffer dfb_masked_input_obj(dfb_masked_input_id);
-    constexpr auto dfb_out_id = dfb::out;
-    DataflowBuffer dfb_out_obj(dfb_out_id);
+    DataflowBuffer dfb_scaler_obj(dfb::scaler);
+    DataflowBuffer dfb_mask_w_obj(dfb::mask_w);
+    DataflowBuffer dfb_accum_dst_obj(dfb::accum_dst);
+    DataflowBuffer dfb_masked_input_obj(dfb::masked_input);
+    DataflowBuffer dfb_out_obj(dfb::out);
     constexpr bool do_mask_w = (origin_W % TILE_WIDTH) != 0;
     constexpr bool is_w_single_tile = Wt == 1;
     DataflowBuffer& dfb_reduction_input_obj = do_mask_w ? dfb_masked_input_obj : dfb_input_obj;
 
-    compute_kernel_hw_startup(dfb_input_id, dfb_input_id, dfb_out_id);
+    compute_kernel_hw_startup(dfb_input_id, dfb_input_id, dfb::out);
 
     dfb_scaler_obj.wait_front(1);  // scaler tile from the reader
 
@@ -68,10 +63,10 @@ void kernel_main() {
                 for (uint32_t wt = 0; wt < Wt - 1; ++wt) {
                     dfb_input_obj.wait_front(onetile);
 #if defined FP32_DEST_ACC_EN
-                    reconfig_data_format(dfb_input_id, dfb_scaler_id);
+                    reconfig_data_format(dfb_input_id, dfb::scaler);
 #endif
-                    matmul_init(dfb_input_id, dfb_scaler_id, false);
-                    matmul_tiles(dfb_input_id, dfb_scaler_id, 0, 0, reduce_dst_idx);
+                    matmul_init(dfb_input_id, dfb::scaler, false);
+                    matmul_tiles(dfb_input_id, dfb::scaler, 0, 0, reduce_dst_idx);
                     dfb_input_obj.pop_front(onetile);
                 }
                 tile_regs_commit();
@@ -89,15 +84,15 @@ void kernel_main() {
                     ckl::CopyTile<ckl::input(
                         dfb::input, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig)>{},
                     ckl::CopyTile<
-                        ckl::input(dfb_mask_w_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, kDataFormatReconfig),
+                        ckl::input(dfb::mask_w, ckl::WaitPolicy::None, ckl::PopPolicy::None, kDataFormatReconfig),
                         ckl::Dst::D1>{},
                     ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>{},
                     ckl::PackTile<ckl::output(
-                        dfb_masked_input_id,
+                        dfb::masked_input,
                         ckl::ReservePolicy::PerTile,
                         ckl::PushPolicy::PerTile,
                         kDataFormatReconfig)>{});
-                dfb_input_id = dfb_masked_input_id;
+                dfb_input_id = dfb::masked_input;
             }
 
             tile_regs_acquire();
@@ -105,14 +100,14 @@ void kernel_main() {
             if constexpr (!is_w_single_tile) {
                 dfb_accum_dst_obj.wait_front(onetile);
                 copy_tile_init_with_dt(dfb_accum_dst_obj);
-                copy_tile(dfb_accum_dst_id, 0, reduce_dst_idx);
+                copy_tile(dfb::accum_dst, 0, reduce_dst_idx);
             }
 
 #if defined FP32_DEST_ACC_EN
-            reconfig_data_format(dfb_input_id, dfb_scaler_id);
+            reconfig_data_format(dfb_input_id, dfb::scaler);
 #endif
-            matmul_init(dfb_input_id, dfb_scaler_id, false);
-            matmul_tiles(dfb_input_id, dfb_scaler_id, 0, 0, reduce_dst_idx);
+            matmul_init(dfb_input_id, dfb::scaler, false);
+            matmul_tiles(dfb_input_id, dfb::scaler, 0, 0, reduce_dst_idx);
             tile_regs_commit();
 
             dfb_out_obj.reserve_back(onetile);
