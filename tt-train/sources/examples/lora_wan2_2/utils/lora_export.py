@@ -8,12 +8,16 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import TYPE_CHECKING, Iterator, Sequence
 
 import numpy as np
 import ttnn
 from safetensors.numpy import load_file, save_file
 
 import ttml
+
+if TYPE_CHECKING:
+    from pipeline_config import Config
 
 # ttml leaf module name -> diffusers leaf path
 _LEAF_RENAMES = [
@@ -61,7 +65,7 @@ def _is_row_parallel_lora_A(name: str) -> bool:
     return any(f".{proj}.lora_A" in name for proj in _ROW_PARALLEL)
 
 
-def _iter_lora_params(model):
+def _iter_lora_params(model: ttml.modules.ModuleBase) -> Iterator[tuple[str, ttml.autograd.Tensor]]:
     for name, tensor in model.named_parameters():
         if name.endswith(("lora_A", "lora_B")):
             yield name, tensor
@@ -71,7 +75,7 @@ def _device():
     return ttml.autograd.AutoContext.get_instance().get_device()
 
 
-def _gather(tensor, name: str, mesh_shape) -> np.ndarray:
+def _gather(tensor: ttml.autograd.Tensor, name: str, mesh_shape: Sequence[int]) -> np.ndarray:
     dp_size, tp_size = tuple(mesh_shape)
     if tp_size == 1 and dp_size == 1:
         return np.asarray(tensor.to_numpy(precision=_NATIVE), dtype=np.float32)
@@ -94,7 +98,7 @@ def _gather(tensor, name: str, mesh_shape) -> np.ndarray:
     return arr
 
 
-def _scatter(w_np: np.ndarray, name: str, mesh_shape):
+def _scatter(w_np: np.ndarray, name: str, mesh_shape: Sequence[int]) -> ttml.autograd.Tensor:
     _, tp_size = tuple(mesh_shape)
     mapper = None
     if tp_size > 1:
@@ -108,7 +112,9 @@ def _scatter(w_np: np.ndarray, name: str, mesh_shape):
     return ttml.autograd.Tensor.from_numpy(w_np, ttnn.Layout.TILE, ttnn.bfloat16)
 
 
-def init_lora_A_gaussian(model, rank: int, mesh_shape=(1, 1), seed: int = 0) -> int:
+def init_lora_A_gaussian(
+    model: ttml.modules.ModuleBase, rank: int, mesh_shape: Sequence[int] = (1, 1), seed: int = 0
+) -> int:
     """Overwrite every lora_A with N(0, 1/rank), matching PEFT's "gaussian" init.
 
     ttml initializes lora_A kaiming-uniform, ~4x smaller than PEFT at rank 32.
@@ -131,7 +137,7 @@ def init_lora_A_gaussian(model, rank: int, mesh_shape=(1, 1), seed: int = 0) -> 
     return initialized
 
 
-def lora_state_dict(model, mesh_shape=(1, 1)) -> dict[str, np.ndarray]:
+def lora_state_dict(model: ttml.modules.ModuleBase, mesh_shape: Sequence[int] = (1, 1)) -> dict[str, np.ndarray]:
     state: dict[str, np.ndarray] = {}
     for name, tensor in _iter_lora_params(model):
         arr = _gather(tensor, name, mesh_shape)
@@ -142,32 +148,15 @@ def lora_state_dict(model, mesh_shape=(1, 1)) -> dict[str, np.ndarray]:
     return state
 
 
-def save_lora_expert(model, path: str, mesh_shape=(1, 1)) -> None:
+def save_lora_expert(model: ttml.modules.ModuleBase, path: str, mesh_shape: Sequence[int] = (1, 1)) -> int:
+    """Write one expert's adapter. Returns the tensor count so the caller reports it."""
     state = lora_state_dict(model, mesh_shape)
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     save_file(state, str(path))
-    print(f"[save] wrote {len(state)} LoRA tensors -> {path}")
+    return len(state)
 
 
-def _with_suffix(path: str, suffix: str) -> str:
-    if not suffix:
-        return path
-    return str(Path(path).with_name(Path(path).stem + suffix + ".safetensors"))
-
-
-def save_all(experts: dict, cfg, suffix: str = "") -> None:
-    for role, model in experts.items():
-        save_lora_expert(model, _with_suffix(cfg.expert_path(role), suffix), cfg.MESH_SHAPE)
-
-
-def load_all(experts: dict, cfg, suffix: str = "") -> None:
-    for role, model in experts.items():
-        path = _with_suffix(cfg.expert_path(role), suffix)
-        n = load_lora_expert(model, path, cfg.MESH_SHAPE)
-        print(f"[load] restored {n} LoRA tensors <- {path}")
-
-
-def load_lora_expert(model, path: str, mesh_shape=(1, 1)) -> int:
+def load_lora_expert(model: ttml.modules.ModuleBase, path: str, mesh_shape: Sequence[int] = (1, 1)) -> int:
     state = load_file(str(path))
     restored = 0
     for name, tensor in _iter_lora_params(model):
@@ -178,3 +167,23 @@ def load_lora_expert(model, path: str, mesh_shape=(1, 1)) -> int:
         tensor.set_value(_scatter(w_np, name, mesh_shape).get_value())
         restored += 1
     return restored
+
+
+def _with_suffix(path: str, suffix: str) -> str:
+    if not suffix:
+        return path
+    return str(Path(path).with_name(Path(path).stem + suffix + ".safetensors"))
+
+
+def save_all(experts: dict[str, ttml.modules.ModuleBase], cfg: Config, suffix: str = "") -> None:
+    for role, model in experts.items():
+        path = _with_suffix(cfg.expert_path(role), suffix)
+        n = save_lora_expert(model, path, cfg.MESH_SHAPE)
+        print(f"[save] wrote {n} LoRA tensors -> {path}")
+
+
+def load_all(experts: dict[str, ttml.modules.ModuleBase], cfg: Config, suffix: str = "") -> None:
+    for role, model in experts.items():
+        path = _with_suffix(cfg.expert_path(role), suffix)
+        n = load_lora_expert(model, path, cfg.MESH_SHAPE)
+        print(f"[load] restored {n} LoRA tensors <- {path}")
