@@ -2273,6 +2273,8 @@ class UnarySFPUGolden:
             MathOperation.UnaryMinInt32: self._unary_min_int32,
             MathOperation.UnaryMaxUint32: self._unary_max_int32,
             MathOperation.UnaryMinUint32: self._unary_min_int32,
+            MathOperation.AbsInt32: self._abs_int32,
+            MathOperation.BitwiseNot: self._bitwise_not,
         }
         # Elementwise integer unary ops that use the dedicated exact-int path in
         # __call__. Only these ops are routed there; other integer-capable ops
@@ -2284,6 +2286,8 @@ class UnarySFPUGolden:
             MathOperation.UnaryMinInt32,
             MathOperation.UnaryMaxUint32,
             MathOperation.UnaryMinUint32,
+            MathOperation.AbsInt32,
+            MathOperation.BitwiseNot,
         }
         # Fixed dispatch constants shared with sfpu_operations.h: unary shift by 3
         # bits, integer unary max/min against the scalar 1000.
@@ -2825,6 +2829,18 @@ class UnarySFPUGolden:
 
     def _unary_min_int32(self, x):
         return min(int(x), self._int_maxmin_scalar)
+
+    def _abs_int32(self, x):
+        # Matches calculate_abs_int32 (SFPABS integer mod on the I32 view, stored
+        # through the M32 magnitude layout); stimuli exclude INT32_MIN, whose
+        # magnitude is unrepresentable.
+        return abs(int(x))
+
+    def _bitwise_not(self, x):
+        # Matches calculate_bitwise_not (~ on the raw I32 view). Python ~ on ints is
+        # exact two's-complement inversion; the harness twos_complement stimuli
+        # plumbing carries the negative halves through L1 pack/unpack.
+        return ~int(x)
 
     def _neg(self, x):
         return -x

@@ -709,6 +709,48 @@ def test_eltwise_unary_sfpu_int(
     )
 
 
+# Signed integer unary SFPU ops whose input or result crosses zero, so they need
+# the two's-complement L1 stimuli plumbing (the test_sfpu_binary_rsub_int32
+# convention) instead of the positive-only domain above. These were the last two
+# perf-only int32 unary kernels with no functional golden anywhere (coverage-parity
+# ledger class B-PERF-ONLY; Lane BK 2026-08-18 closes it): calculate_abs_int32
+# (SFPABS on the I32 view, M32 magnitude store) and calculate_bitwise_not
+# (~ on the raw I32 view). Golden is exact.
+_INT32_SIGNED_UNARY_OPS = [
+    MathOperation.AbsInt32,
+    MathOperation.BitwiseNot,
+]
+
+
+@parametrize(
+    mathop=_INT32_SIGNED_UNARY_OPS,
+    dest_acc=[DestAccumulation.Yes],
+    input_dimensions=[[64, 64]],
+)
+def test_eltwise_unary_sfpu_int32_signed(
+    mathop: MathOperation,
+    dest_acc: DestAccumulation,
+    input_dimensions: list[int],
+):
+    formats = InputOutputFormat(DataFormat.Int32, DataFormat.Int32)
+
+    # Both signs, zero straddled deterministically; magnitudes stay far from
+    # INT32_MIN (abs(INT32_MIN) is unrepresentable) and from INT32_MAX.
+    spec_A = StimuliSpec.uniform(low=-1_000_000.0, high=1_000_000.0)
+
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        dest_acc,
+        ApproximationMode.No,
+        mathop,
+        FastMode.No,
+        input_dimensions,
+        spec_A=spec_A,
+        twos_complement=True,
+    )
+
+
 @parametrize(
     formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
     approx_mode=[ApproximationMode.No],
@@ -871,6 +913,7 @@ def eltwise_unary_sfpu(
     custom_rtol=None,
     fresh_cpp_impl=0,
     reciprocal_impl=0,
+    twos_complement=False,
 ):
     torch.manual_seed(0)
     torch.set_printoptions(precision=10)
@@ -940,6 +983,10 @@ def eltwise_unary_sfpu(
             tile_count_A=tile_cnt_A,
             tile_count_B=tile_cnt_B,
             tile_count_res=tile_cnt_A,
+            # Signed-integer ops whose inputs or results are negative need the
+            # two's-complement L1 pack/unpack (the test_sfpu_binary_rsub_int32
+            # convention); positive-only int ops keep the default.
+            twos_complement=twos_complement,
         ),
         dest_acc=dest_acc,
         # dest_acc off: Float32 unpacks to 16-bit in src regs (later copied to dest for SFPU op)

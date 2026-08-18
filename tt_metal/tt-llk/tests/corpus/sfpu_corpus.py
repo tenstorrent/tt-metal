@@ -468,9 +468,17 @@ AUDITED_SEEDS = {
         semantic_cpp_class="ready",
         semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
     ),
+    "metal__ckernel_sfpu_abs": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production int32 body is pure typed SFPI (sfpi::abs on the I32 view, M32 magnitude store): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped through the new exact functional node (Lane BK). The float calculate_abs arm is dispatched from the legacy abs header (already mapped).",
+    ),
     "metal__ckernel_sfpu_atan2": dict(
         semantic_cpp_class="ready",
         semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
+    "metal__ckernel_sfpu_bitwise_not": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (~ on the raw I32 view): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped through the new exact functional node (Lane BK).",
     ),
     "metal__ckernel_sfpu_binary": dict(
         semantic_cpp_class="ready",
@@ -922,6 +930,16 @@ AUDITED_MAPPINGS = {
         functional_modules="test_sfpu_binary.py::test_sfpu_binary_atan2[formats:Float16_b->Float16_b-mathop:SfpuAtan2-dest_acc:No]",
         perf_modules="perf_eltwise_binary_sfpu.py::test_perf_sfpu_binary_extended_float[formats:Float16_b->Float16_b-mathop:SfpuAtan2]",
         notes="Audited production-header mapping (coverage parity lane): calculate_sfpu_atan2 (BinaryOp::ATAN2) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body. Perf vehicle added (Lane BK 2026-08-18, corr-only gap close): representative MATH_ISOLATE node(s) recorded in perf_modules; the functional nodes stay the correctness gate — collected + compile-PASS under pin-10 cc1plus 2911f0e680e4.",
+    ),
+    "metal__ckernel_sfpu_abs": dict(
+        functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu_int32_signed[mathop:AbsInt32-dest_acc:Yes-input_dimensions:[64, 64]]",
+        perf_modules="perf_eltwise_unary_sfpu_int32.py::test_perf_eltwise_unary_sfpu_int32[formats:Int32->Int32-mathop:AbsInt32-input_dimensions:[128, 64]]",
+        notes="Lane BK 2026-08-18 B-PERF-ONLY closure (coverage-parity ledger class): calculate_abs_int32 (SfpuType::abs_int32, sfpu_operations.h:819) had perf-only coverage and no functional golden anywhere — new exact-int functional node with signed stimuli through the two's-complement L1 plumbing (rsub_int32 convention), exact golden abs(x), INT32_MIN excluded; PASS on the corrected BH sim 32489dda at default flags.",
+    ),
+    "metal__ckernel_sfpu_bitwise_not": dict(
+        functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu_int32_signed[mathop:BitwiseNot-dest_acc:Yes-input_dimensions:[64, 64]]",
+        perf_modules="perf_eltwise_unary_sfpu_int32.py::test_perf_eltwise_unary_sfpu_int32[formats:Int32->Int32-mathop:BitwiseNot-input_dimensions:[128, 64]]",
+        notes="Lane BK 2026-08-18 B-PERF-ONLY closure (coverage-parity ledger class): calculate_bitwise_not (SfpuType::bitwise_not, sfpu_operations.h:1196) had perf-only coverage and no functional golden anywhere — new exact-int functional node with signed stimuli through the two's-complement L1 plumbing, exact golden ~x; PASS on the corrected BH sim 32489dda at default flags.",
     ),
     "metal__ckernel_sfpu_binary": dict(
         functional_modules="test_sfpu_binary.py::test_sfpu_binary_edges[formats:Float16_b->Float16_b-mathop:SfpuElwdiv-dest_acc:No-edge_class:both_zero],test_sfpu_binary.py::test_sfpu_binary_float[formats:Float16_b->Float16_b-bcast_dim:Row-mathop:SfpuElwsub-dest_acc:No]",
