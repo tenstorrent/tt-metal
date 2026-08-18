@@ -7,6 +7,8 @@ import pytest
 import ttnn
 import random
 
+from tests.ttnn.utils_for_testing import assert_with_pcc
+
 pytestmark = pytest.mark.use_module_device
 
 
@@ -282,3 +284,58 @@ def test_binary_scalar_uint32_large_values(scalar, device):
         f"Large scalar {scalar} was likely truncated to float. "
         f"Expected {expected.flatten()[0].item()}, got {result.flatten()[0].item()}"
     )
+
+
+def test_binary_scalar_sharded_evenness_not_cached(device):
+    """The sharded-vs-interleaved decision must take part in the tensor-scalar program-cache key.
+
+    For the scalar path is_native_L1_sharding() reduces to !is_uneven(a), a function of
+    padded_shape -- which tensor_args_t::to_hash() deliberately excludes. The three shard-volume
+    attributes are the only program-cache attributes carrying that decision, and the tensor-scalar
+    overload of prim::binary_ng left them all nullopt, so an evenly- and an unevenly-sharded call
+    sharing one MemoryConfig collided. create_descriptor compiles SRC_SHARDED/DST_SHARDED and the
+    globally-allocated CBs from that decision, so the second call ran the wrong reader/writer pair.
+
+    Uneven runs first on purpose: the even-then-uneven order drives the cached SRC_SHARDED reader
+    with a_num_tiles == 0, which pushes no tiles and hangs the compute kernel in cb_wait_front.
+    """
+    device.enable_program_cache()
+    device.clear_program_cache()
+
+    torch.manual_seed(0)
+    shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))}),
+        (64, 32),
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+    scalar = 5.0
+
+    def run(height):
+        torch_in = torch.rand([1, 1, height, 32], dtype=torch.bfloat16)
+        tt_in = ttnn.from_torch(
+            torch_in, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem_config
+        )
+        result = ttnn.to_torch(ttnn.add(tt_in, scalar))
+        return torch_in + scalar, result
+
+    # 96 rows over a 64-row shard is uneven -> interleaved program.
+    want_uneven, got_uneven = run(96)
+    entries_after_uneven = device.num_program_cache_entries()
+
+    # 128 rows over the same shard spec is even -> native L1 sharded program, and the identical
+    # MemoryConfig means nothing else in the key differs.
+    want_even, got_even = run(128)
+
+    assert device.num_program_cache_entries() > entries_after_uneven, (
+        "evenly-sharded call reused the unevenly-sharded program: the sharded-vs-interleaved "
+        "decision is missing from the program-cache key"
+    )
+
+    # PCC rather than allclose: a bfloat16 ULP at this magnitude is 0.03125, so an elementwise
+    # tolerance tight enough to be meaningful would trip on correct rounding. The failure mode being
+    # guarded (wrong reader/writer variant, shard-math args on an interleaved program) is gross.
+    assert_with_pcc(want_uneven, got_uneven, 0.999)
+    assert_with_pcc(want_even, got_even, 0.999)
+
+    device.disable_and_clear_program_cache()

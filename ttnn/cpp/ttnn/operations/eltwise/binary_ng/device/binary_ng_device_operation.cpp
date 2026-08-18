@@ -736,6 +736,20 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
         std::nullopt};
 
     auto tensor_args = OperationType::tensor_args_t{input_tensor_a, std::nullopt, output_tensor};
+    // The shard volumes are the only program-cache attributes carrying the sharded-vs-interleaved
+    // decision, and for the scalar path that decision reduces to is_uneven(a) -- a function of
+    // padded_shape, which tensor_args_t::to_hash() deliberately excludes. Leaving them nullopt lets
+    // an evenly-sharded and an unevenly-sharded call with the same MemoryConfig share one program,
+    // even though create_descriptor compiles SRC_SHARDED/DST_SHARDED from that decision.
+    const auto shard_volumes = ttnn::operations::binary_ng::get_shard_volumes(
+        input_tensor_a.tensor_spec(),
+        std::nullopt,
+        OperationType::compute_output_specs(operation_attributes, tensor_args));
+    if (shard_volumes.has_value()) {
+        operation_attributes.a_shard_volume = shard_volumes->a_shard_volume;
+        operation_attributes.b_shard_volume = shard_volumes->b_shard_volume;
+        operation_attributes.c_shard_volume = shard_volumes->c_shard_volume;
+    }
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
