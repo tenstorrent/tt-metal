@@ -81,6 +81,9 @@ inline void _llk_unpack_A_mop_config_(
     TTI_UNPACR(SrcB, 0b1 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
     static constexpr std::uint32_t unpack_srca_zerosrc_set_dvalid = lltt::replay_insn(0, 2);
     static constexpr std::uint32_t unpack_srcb_unpack_srcb        = lltt::replay_insn(2, 2);
+    // One zeroed SrcA with its dvalid set, followed by one SrcB face: the operand pair an accumulating
+    // ELWADD broadcast consumes per math outer iteration.
+    static constexpr std::uint32_t unpack_srca_zerosrc_set_dvalid_srcb = lltt::replay_insn(0, 3);
 
     if (should_unpack_to_dest(unpack_to_dest, unpack_src_format, unpack_dst_format))
     {
@@ -126,19 +129,34 @@ inline void _llk_unpack_A_mop_config_(
     }
     else if constexpr (BType == BroadcastType::ROW)
     {
-        constexpr std::uint32_t innerloop = 1;
-        constexpr std::uint32_t outerloop = 1; // TODO: add support for num_faces
-        ckernel_template tmp(outerloop, innerloop, unpack_srcb_unpack_srcb, srcb_clear_z);
         if constexpr (acc_to_dest)
         {
-            tmp.set_start_op(unpack_srca_zerosrc_set_dvalid);
+            // The accumulating datacopy issues ELWADD(SRCB_BCAST_ROW) instead of MOVB2D, so every SrcB face has to be
+            // paired with a zeroed SrcA whose dvalid is set. The math MOP clears SrcA and SrcB once per outer
+            // iteration, so both ledgers close at four.
+            constexpr std::uint32_t innerloop = 2;
+            constexpr std::uint32_t outerloop = 2; // TODO: add support for num_faces
+            ckernel_template tmp(outerloop, innerloop, unpack_srca_zerosrc_set_dvalid_srcb);
+            tmp.set_end_op(srcb_clear_z);
+            tmp.program();
         }
-        tmp.set_end_op(unpack_srcb_unpack_srcb);
-        tmp.program();
+        else
+        {
+            constexpr std::uint32_t innerloop = 1;
+            constexpr std::uint32_t outerloop = 1; // TODO: add support for num_faces
+            ckernel_template tmp(outerloop, innerloop, unpack_srcb_unpack_srcb, srcb_clear_z);
+            tmp.set_end_op(unpack_srcb_unpack_srcb);
+            tmp.program();
+        }
     }
     else if constexpr (BType == BroadcastType::SCALAR)
     {
-        static_assert((!acc_to_dest) && "accumulate into dest with broadcast scaler is not supported!");
+        // The accumulating scalar broadcast runs on ELWADD(SRCB_BCAST_ALL) with the dest-accumulate bit set, and the
+        // staging below is already exactly what that needs: one zeroed SrcA with its dvalid set plus one SrcB unpack.
+        // Dest reuse stays rejected because it makes SrcA carry real data instead of the zero fill.
+        static_assert(
+            !(acc_to_dest && (binary_reuse_dest != EltwiseBinaryReuseDestType::NONE)),
+            "accumulate into dest with broadcast scalar and dest reuse is not supported!");
         constexpr std::uint32_t outerloop = 1;
         constexpr std::uint32_t innerloop = 1;
         ckernel_template tmp(outerloop, innerloop, unpack_srcb_inc_z_0);

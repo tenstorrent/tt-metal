@@ -423,12 +423,20 @@ inline void eltwise_unary_configure_addrmod(const std::uint32_t dst_format)
  * @tparam bcast_type: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
  * @tparam tilize: Pack in tilize layout (A2D only); collapses the outer loop to a single iteration.
  * @tparam is_int_fpu_en: Enable integer FPU datapath (forces the ELWADD move path like FP32 dest).
+ * @tparam acc_to_dest: Accumulate the broadcast operand into dest (sets the ELWADD dest-accumulate bit and moves the
+ *         row broadcast off MOVB2D, which can only overwrite dest); B2D broadcast only.
  * @param rows_per_inst: Rows moved per instruction (selects single-row vs. multi-row addr mode and loop count).
  * @param total_rows: Total rows to move across the inner loop.
  * @param num_faces: Number of faces in the tile.
  * @param dst_format: Destination data format (DataFormat enum underlying value); selects UInt16 special-casing.
  */
-template <DataCopyType type, bool is_fp32_dest_acc_en, BroadcastType bcast_type = BroadcastType::NONE, bool tilize = false, bool is_int_fpu_en = false>
+template <
+    DataCopyType type,
+    bool is_fp32_dest_acc_en,
+    BroadcastType bcast_type = BroadcastType::NONE,
+    bool tilize              = false,
+    bool is_int_fpu_en       = false,
+    bool acc_to_dest         = false>
 inline void eltwise_unary_configure_mop(std::uint32_t rows_per_inst, std::uint32_t total_rows, const std::uint32_t num_faces, const std::uint32_t dst_format)
 {
     // always move 32x32 tile, packed as 16x16x4
@@ -482,8 +490,10 @@ inline void eltwise_unary_configure_mop(std::uint32_t rows_per_inst, std::uint32
         }
         else if constexpr (bcast_type == BroadcastType::ROW)
         {
-            innerloop      = (total_rows >> 3);
-            broadcast_type = p_movb2d::MOV_8_ROW_BRCST;
+            innerloop = (total_rows >> 3);
+            // ELWADD(SRCB_BCAST_ROW) reads the same SrcB row and writes the same 8-row aligned dest block as
+            // MOVB2D(MOV_8_ROW_BRCST), so accumulation only costs the instruction swap below.
+            broadcast_type = acc_to_dest ? p_elwise::SRCB_BCAST_ROW : p_movb2d::MOV_8_ROW_BRCST;
         }
         else if constexpr (bcast_type == BroadcastType::SCALAR)
         {
@@ -498,10 +508,11 @@ inline void eltwise_unary_configure_mop(std::uint32_t rows_per_inst, std::uint32
 
         // ELWADD moves 8 rows/cycle (vs MOVB2D's 4) but routes through the FPU, which interprets
         // UInt16 bit patterns as floats and flushes values with exp=0. UInt16 falls back to MOVB2D.
+        // MOVB2D can only overwrite dest, so UInt16 can never accumulate; the init rejects that pairing.
         if constexpr (bcast_type == BroadcastType::SCALAR)
         {
             const std::uint32_t copy_op = (dst_format == to_underlying(DataFormat::UInt16)) ? TT_OP_MOVB2D(0, 0, addr_mod, broadcast_type, 0)
-                                                                                            : TT_OP_ELWADD(0, 0, broadcast_type, addr_mod, 0);
+                                                                                            : TT_OP_ELWADD(0, acc_to_dest, broadcast_type, addr_mod, 0);
             ckernel_template tmp(outerloop, innerloop, copy_op);
             tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, 0));
             tmp.program();
@@ -509,9 +520,17 @@ inline void eltwise_unary_configure_mop(std::uint32_t rows_per_inst, std::uint32
         else if constexpr (bcast_type == BroadcastType::COL)
         {
             const std::uint32_t copy_op = (dst_format == to_underlying(DataFormat::UInt16)) ? TT_OP_MOVB2D(0, 0, addr_mod, broadcast_type, 0)
-                                                                                            : TT_OP_ELWADD(0, 0, broadcast_type, addr_mod, 0);
+                                                                                            : TT_OP_ELWADD(0, acc_to_dest, broadcast_type, addr_mod, 0);
             ckernel_template tmp(outerloop, innerloop, copy_op);
             tmp.set_end_op(TT_OP_SETRWC(0, p_setrwc::CR_B, 0, 0, 0, p_setrwc::SET_B));
+            tmp.program();
+        }
+        else if constexpr (bcast_type == BroadcastType::ROW && acc_to_dest)
+        {
+            // Unlike MOVB2D, ELWADD also reads SrcA. The unpack MOP stages one zeroed SrcA with its dvalid set per
+            // outer iteration, so the end op has to clear SrcA as well as SrcB or the SrcA banks fill and the pipe stalls.
+            ckernel_template tmp(outerloop, innerloop, TT_OP_ELWADD(0, p_elwise::DEST_ACCUM_EN, broadcast_type, addr_mod, 0));
+            tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_AB, p_setrwc::CR_B, 0, 0, 0, p_setrwc::SET_B));
             tmp.program();
         }
         else if constexpr (bcast_type == BroadcastType::ROW)
@@ -537,25 +556,32 @@ inline void eltwise_unary_configure_mop(std::uint32_t rows_per_inst, std::uint32
  * @tparam src_b_bcast_type: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
  * @tparam is_int_fpu_en: Enable integer FPU datapath.
  * @tparam pack_mode: Packing layout, values = <Default/Tilize>
+ * @tparam acc_to_dest: Accumulate the broadcast operand into dest instead of overwriting it (B2D broadcast only).
  * @param num_faces: Number of faces in the tile (must be 1, 2, or 4).
  * @param dst_format: Destination data format (DataFormat enum underlying value); 255 means unset.
  * @param skip_bh_tilize_workaround: Skip the Blackhole tilize workaround (set when unpacking 8-bit datums).
  * @note On the unpack thread, pair with @ref _llk_unpack_A_init_ (copy/transpose), @ref _llk_unpack_tilize_init_ (tilize) or @ref _llk_unpack_untilize_init_
  * (untilize) which feed the tile.
  * @note @ref _llk_math_eltwise_unary_datacopy_ runs the configured op with matching template args.
+ * @note For an accumulating broadcast, pass the same acc_to_dest to @ref _llk_unpack_A_init_ so the unpack thread
+ *       stages the zeroed SrcA dvalids the accumulating ELWADD consumes.
  */
 template <
     DataCopyType type,
     bool is_fp32_dest_acc_en,
     BroadcastType src_b_bcast_type = BroadcastType::NONE,
     bool is_int_fpu_en             = false,
-    PackMode pack_mode             = PackMode::Default>
+    PackMode pack_mode             = PackMode::Default,
+    bool acc_to_dest               = false>
 inline void _llk_math_eltwise_unary_datacopy_init_(
     const std::uint32_t num_faces = 4, const std::uint32_t dst_format = 255, const bool skip_bh_tilize_workaround = false)
 {
     static_assert(
         pack_mode == PackMode::Default || pack_mode == PackMode::Tilize,
         "Blackhole _llk_math_eltwise_unary_datacopy_init_ supports only PackMode::Default and PackMode::Tilize");
+    static_assert(
+        !acc_to_dest || (type == DataCopyType::B2D && src_b_bcast_type != BroadcastType::NONE),
+        "Accumulate into dest is supported only for a B2D broadcast datacopy (COL/ROW/SCALAR)");
     constexpr bool tilize = (pack_mode == PackMode::Tilize);
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     if constexpr (type == DataCopyType::A2D)
@@ -587,7 +613,14 @@ inline void _llk_math_eltwise_unary_datacopy_init_(
     }
     else if constexpr (type == DataCopyType::B2D)
     {
-        eltwise_unary_configure_mop<type, false, src_b_bcast_type>(p_movb2d::MOV_4_ROWS, 16, num_faces, dst_format);
+        if constexpr (acc_to_dest)
+        {
+            // UInt16 broadcasts run on MOVB2D because ELWADD reinterprets their bit patterns as floats;
+            // MOVB2D only ever overwrites dest, so a UInt16 accumulate has no encoding.
+            LLK_ASSERT(dst_format != to_underlying(DataFormat::UInt16), "Accumulate into dest is not supported for a UInt16 broadcast datacopy");
+        }
+        eltwise_unary_configure_mop<type, false, src_b_bcast_type, false /* tilize */, false /* is_int_fpu_en */, acc_to_dest>(
+            p_movb2d::MOV_4_ROWS, 16, num_faces, dst_format);
     }
 
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
