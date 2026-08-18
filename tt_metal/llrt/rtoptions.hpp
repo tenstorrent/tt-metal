@@ -184,6 +184,11 @@ class RunTimeOptions {
     bool is_custom_fabric_mesh_graph_desc_path_set = false;
     std::string custom_fabric_mesh_graph_desc_path;
 
+    // Factory System Descriptor (FSD): the "as-built"/expected topology descriptor. When set, tooling
+    // (tt-run / generate_rank_bindings) may map against it instead of live-discovering the PSD. See
+    // TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH.
+    std::string factory_system_descriptor_path;
+
     bool build_map_enabled = false;
 
     WatcherSettings watcher_settings;
@@ -741,6 +746,11 @@ public:
 
     bool is_custom_fabric_mesh_graph_desc_path_specified() const { return is_custom_fabric_mesh_graph_desc_path_set; }
     std::string get_custom_fabric_mesh_graph_desc_path() const { return custom_fabric_mesh_graph_desc_path; }
+
+    // Factory System Descriptor (FSD) path. Empty when unset.
+    bool has_factory_system_descriptor_path() const { return !factory_system_descriptor_path.empty(); }
+    const std::string& get_factory_system_descriptor_path() const { return factory_system_descriptor_path; }
+    void set_factory_system_descriptor_path(const std::string& path) { factory_system_descriptor_path = path; }
 
     bool get_log_kernels_compilation_commands() const { return log_kernels_compilation_commands; }
 
