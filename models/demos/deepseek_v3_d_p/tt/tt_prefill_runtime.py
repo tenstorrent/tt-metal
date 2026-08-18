@@ -167,6 +167,10 @@ class TtPrefillRuntime:
                 is_first_rank=self.config.is_first_rank,
                 is_last_rank=self.config.is_last_rank,
                 kv_only_last_layer=self.config.kv_only_last_layer,
+                # Required for a LatentMoE model (Kimi-K3): without it the per-block check cannot know
+                # to look for the latent-projection cache files and would call an incomplete cache
+                # complete. model_cfg is already in hand two lines up.
+                model_cfg=model_cfg,
             ):
                 logger.info(f"TTNN weight cache complete at {self.config.weight_cache_path}; loading from disk")
             else:
@@ -611,14 +615,22 @@ class TtPrefillRuntime:
         only; the pipeline-parallel path (stage_layout given) migrates the KVPE cache alone."""
         from models.demos.deepseek_v3_d_p.tt.runners.kv_chunk_table import build_and_serialize_kv_chunk_table
 
-        # PP path migrates the primary (KVPE) cache only; the sparse/DSA index cache isn't wired
-        # through the cross-stage merge yet (port it into _build_and_serialize_merged_kv_chunk_table
-        # to add it) — fail loudly rather than silently drop it.
-        if stage_layout is not None:
-            assert kv_caches.index is None, (
+        # The CROSS-STAGE merge migrates the primary (KVPE) cache only; the sparse/DSA index cache
+        # isn't wired through it yet (port it into _build_and_serialize_merged_kv_chunk_table to add
+        # it) — fail loudly rather than silently drop it.
+        #
+        # A SINGLE-stage layout is not that case: the runner all-gathers one unconditionally whenever
+        # migration is enabled (prefill_runner._serve_request), so a single-galaxy sparse run arrived
+        # here with a 1-element stage_layout and tripped the assert before it could ever reach the
+        # endpoint. The merged builder does not consume stage_layout — it gathers its OWN layout per
+        # cache, since each config needs that cache's DRAM base — so dropping it here is lossless and
+        # keeps the dual-cache table reachable single-rank.
+        if stage_layout is not None and kv_caches.index is not None:
+            assert len(stage_layout) == 1, (
                 "build_kv_chunk_table: index-cache (sparse/DSA) migration is not supported on the "
-                "pipeline-parallel path yet."
+                f"pipeline-parallel path yet (got {len(stage_layout)} stages)."
             )
+            stage_layout = None
 
         return build_and_serialize_kv_chunk_table(
             mesh_device=self.mesh_device,
@@ -649,22 +661,38 @@ class TtPrefillRuntime:
         # the same path kv_cache_pcc_check takes. (Using `kvpe` directly here raised
         # 'MlaKvCache' object has no attribute 'shape'.)
         kvpe = kv_caches.kvpe
-        storage = kvpe.storage
-        s = list(storage.shape)
-        sl = ttnn.slice(
-            storage,
-            [slot * num_layers, 0, 0, 0],
-            [(slot + 1) * num_layers, s[1], s[2], s[3]],
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        physical = ttnn.to_torch(
-            sl, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape)
-        )[
-            :, :1
-        ]  # one TP replica: [num_layers, 1, seq_cache, packed_row]
-        ttnn.deallocate(sl)
-        block = kvpe.unpack_host(physical).to(torch.float32)  # [num_layers, 1, seq_cache, kvpe_logical]
-        return [block]
+        composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape)
+
+        def _slot_block(tensor, rows_per_slot: int):
+            """This slot's rows of a user-major cache, gathered to host as one TP replica:
+            [rows_per_slot, 1, seq_cache, row]. `rows_per_slot` differs per cache — see below."""
+            s = list(tensor.shape)
+            sl = ttnn.slice(
+                tensor,
+                [slot * rows_per_slot, 0, 0, 0],
+                [(slot + 1) * rows_per_slot, s[1], s[2], s[3]],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            host = ttnn.to_torch(sl, mesh_composer=composer)[:, :1]
+            ttnn.deallocate(sl)
+            return host
+
+        physical = _slot_block(kvpe.storage, num_layers)
+        blocks = [kvpe.unpack_host(physical).to(torch.float32)]  # [num_layers, 1, seq_cache, kvpe_logical]
+        if kv_caches.index is not None:
+            # Sparse/DSA second cache (the lightning-indexer keys). Returned so a slot-vs-slot
+            # comparison (validate_migrations_pairwise, which is length-agnostic over the returned
+            # list) covers BOTH caches — without this a migrated sparse model reports "PASSED"
+            # having checked only the KVPE half.
+            #
+            # Two ways it differs from `.kvpe`: its per-slot stride is its OWN layer count, NOT
+            # config.num_layers (GLM-5.2 sizes it to the `full` indexer layers only, so 21 vs 78);
+            # and it is a plain ttnn.Tensor, so there is no `.storage` / `unpack_host` (bfp8_b TILE
+            # dequantizes on to_torch).
+            index = kv_caches.index
+            rows_per_slot = index.shape[0] // self.config.num_users
+            blocks.append(_slot_block(index, rows_per_slot).to(torch.float32))
+        return blocks
 
     def kv_cache_pcc_check(
         self,
@@ -683,7 +711,7 @@ class TtPrefillRuntime:
         PREFILL_STANDALONE_CHUNKED_RECORD_ONLY=1). Thin forwarder into the model's validation module.
         `real_len` caps the compared extent to the real (non-pad) tokens — a partial last chunk makes
         n_chunks * chunk_size overshoot the prompt; `pt_path_override` selects a per-slot .pt golden
-        (both are used by the migration validators in prefill/runners/validation.py)."""
+        (both are for out-of-tree callers; nothing in-tree passes either)."""
         from models.demos.deepseek_v3_d_p.tt.runners.prefill_kv_validation import kv_cache_pcc_check
 
         return kv_cache_pcc_check(

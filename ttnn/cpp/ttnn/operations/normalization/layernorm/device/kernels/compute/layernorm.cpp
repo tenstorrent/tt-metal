@@ -21,6 +21,7 @@
 #include "ttnn/operations/normalization/kernel_util/compute/numeric.h"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
 #include "ttnn/operations/normalization/kernel_util/generic/bit.h"
+#include "ttnn/operations/normalization/layernorm/device/kernels/layernorm_scaler_tiles.h"
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
@@ -120,13 +121,16 @@ void kernel_main() {
         tilize_all_blocks_to_cb<block_size>(dfb_in_rm, dfb_in, Wt);
         // Re-init binary ops after tilize hardware reconfiguration.
 #ifdef FUSE_PRE_ADD
-        // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
+        // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the
+        // pre-cleanup full-init behaviour) should become a targeted DST re-arm.
         compute_kernel_hw_startup(dfb_in_id, dfb_inb_id, dfb_x_id);
 #elif defined(RMSNORM)
-        // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
+        // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the
+        // pre-cleanup full-init behaviour) should become a targeted DST re-arm.
         compute_kernel_hw_startup(dfb_xmm_id, dfb_xmm_id, dfb_xmm2_id);
 #else
-        // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
+        // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the
+        // pre-cleanup full-init behaviour) should become a targeted DST re-arm.
         compute_kernel_hw_startup(dfb_x_id, dfb_scaler_id, dfb_ex_id);
 #endif
 #endif
@@ -404,6 +408,15 @@ void kernel_main() {
     // across every NCHt iteration but never popped. Pop the producer's tile count once here to
     // balance the CB. The reader pushes a second scaler tile only when the last column tile is
     // partial (W not a multiple of tile_width), matching row_wise_mean's wait count.
-    constexpr uint32_t num_scaler_tiles = (W % tile_width > 0) ? 2 : 1;
+    //
+    // The reader generates the scalers using tt::constants::TILE_WIDTH; this kernel must use the
+    // same width for the count to match, so derive both from the shared helper. (tile_width is the
+    // tensor's tile width, which equals TILE_WIDTH for every supported layernorm config — see the
+    // partial-column handling in row_wise_mean above.)
+    static_assert(
+        tile_width == tt::constants::TILE_WIDTH,
+        "layernorm reader generates reduce scalers using TILE_WIDTH; compute must use the same tile "
+        "width or cb_scaler push/pop counts diverge (issue #48487)");
+    constexpr uint32_t num_scaler_tiles = norm::layernorm::reduce_scaler_tile_count(W, tile_width);
     DataflowBuffer(dfb_scaler).pop_front(num_scaler_tiles);
 }

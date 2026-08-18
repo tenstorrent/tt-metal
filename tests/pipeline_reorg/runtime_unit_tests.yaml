@@ -250,11 +250,11 @@
   cmd: TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_data_movement
   skus:
     wh_n150_civ2:
-      timeout: 10
+      timeout: 8
     wh_n300_civ2:
       timeout: 10
     bh_p150b_civ2:
-      timeout: 10
+      timeout: 8
     bh_p300:
       timeout: 10
     bh_p100a_civ2_viommu:
@@ -294,11 +294,11 @@
     TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_llk --gtest_filter='*'
   skus:
     wh_n150_civ2:
-      timeout: 10
+      timeout: 12
     wh_n300_civ2:
       timeout: 12
     bh_p150b_civ2:
-      timeout: 10
+      timeout: 12
     bh_p300:
       timeout: 12
     bh_p100a_civ2_viommu:
