@@ -32,7 +32,8 @@
 #   TT_METAL_HOME     tt-metal source root         (default: git root of this script)
 #   TT_EMULE_PATH     existing tt-emule checkout    (default: clone TT_EMULE_REPO@TT_EMULE_REF)
 #   TT_EMULE_REPO     repo to clone if no checkout  (default: https://github.com/tenstorrent/tt-emule)
-#   TT_EMULE_REF      ref to clone / fetch          (default: main)
+#   TT_EMULE_REF      ref to clone / fetch          (default: main; branch, tag or SHA)
+#   TT_EMULE_CACHE    cache dir for the clone       (default: $HOME/.cache/tt-metal-emule-smoke/tt-emule)
 #   BUILD_DIR         build tree                    (default: $TT_METAL_HOME/build_emule)
 #   EMULE_SKIP_BUILD  =1 to reuse an existing build (skip configure + compile)
 #
@@ -52,7 +53,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # ---------------------------------------------------------------------------
 # Inputs
 # ---------------------------------------------------------------------------
-TT_METAL_HOME="${TT_METAL_HOME:-$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null)}"
+TT_METAL_HOME="${TT_METAL_HOME:-$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null || true)}"
 [ -n "${TT_METAL_HOME:-}" ] && [ -d "$TT_METAL_HOME" ] || die "cannot locate tt-metal root; set TT_METAL_HOME"
 TT_METAL_HOME="$(cd "$TT_METAL_HOME" && pwd)"
 
@@ -91,20 +92,22 @@ if [ -n "${TT_EMULE_PATH:-}" ]; then
 else
     TT_EMULE_PATH="${TT_EMULE_CACHE:-$HOME/.cache/tt-metal-emule-smoke/tt-emule}"
     log "Fetching tt-emule ($TT_EMULE_REPO @ $TT_EMULE_REF) into $TT_EMULE_PATH"
-    if [ -d "$TT_EMULE_PATH/.git" ]; then
-        git -C "$TT_EMULE_PATH" fetch --depth=1 origin "$TT_EMULE_REF"
-        git -C "$TT_EMULE_PATH" checkout -q FETCH_HEAD
-    else
-        mkdir -p "$(dirname "$TT_EMULE_PATH")"
-        git clone --depth=1 --branch "$TT_EMULE_REF" "$TT_EMULE_REPO" "$TT_EMULE_PATH"
+    # Init-then-fetch works identically cold or warm, and (unlike
+    # `git clone --branch`) accepts a branch, tag *or* commit SHA — so a
+    # SHA pin in TT_EMULE_REF bootstraps a fresh cache the same way it
+    # refreshes an existing one.
+    if [ ! -d "$TT_EMULE_PATH/.git" ]; then
+        mkdir -p "$TT_EMULE_PATH"
+        git -C "$TT_EMULE_PATH" init -q
+        git -C "$TT_EMULE_PATH" remote add origin "$TT_EMULE_REPO"
     fi
+    git -C "$TT_EMULE_PATH" fetch --depth=1 origin "$TT_EMULE_REF"
+    git -C "$TT_EMULE_PATH" checkout -q FETCH_HEAD
 fi
 
 CI_BUILD="$TT_EMULE_PATH/.github/scripts/ci-build.sh"
 WH_SCRIPT="$TT_EMULE_PATH/scripts/run_regression_wormhole.sh"
 BH_SCRIPT="$TT_EMULE_PATH/scripts/run_regression_blackhole.sh"
-[ -f "$WH_SCRIPT" ] || die "missing $WH_SCRIPT — is $TT_EMULE_PATH a tt-emule checkout?"
-[ -f "$BH_SCRIPT" ] || die "missing $BH_SCRIPT — is $TT_EMULE_PATH a tt-emule checkout?"
 
 # ---------------------------------------------------------------------------
 # Submodules: emule needs UMD (SWEmuleChip + the cluster_descriptor_examples the
@@ -122,6 +125,7 @@ CLUSTER_EXAMPLES="$TT_METAL_HOME/tt_metal/third_party/umd/tests/cluster_descript
 # recipe when present (single source of truth); otherwise inline an equivalent.
 # ---------------------------------------------------------------------------
 if [ "$EMULE_SKIP_BUILD" = "1" ]; then
+    [ -d "$BUILD_DIR" ] || die "EMULE_SKIP_BUILD=1 but no build tree at $BUILD_DIR"
     log "EMULE_SKIP_BUILD=1 — reusing existing build at $BUILD_DIR"
 elif [ -f "$CI_BUILD" ]; then
     log "Building via tt-emule ci-build.sh"
@@ -143,20 +147,28 @@ else
         -DTT_INSTALL=OFF \
         -DTT_USE_SYSTEM_SFPI=OFF
     log "Building smoke-test binaries"
+    # Mirror the target set ci-build.sh builds (the source of truth). Kept in
+    # sync as a best-effort fallback for checkouts without that script; the
+    # regression runners report a clear "binary not found" for any target a
+    # newer upstream test list needs that this list has not yet picked up.
     cmake --build "$BUILD_DIR" -j"$(nproc)" --target \
-        unit_tests_api unit_tests_data_movement unit_tests_ttnn ttnn
+        unit_tests_api unit_tests_integration unit_tests_legacy \
+        unit_tests_data_movement unit_tests_per_core_allocation \
+        unit_tests_ttnn ttnn
 fi
 
 # ---------------------------------------------------------------------------
 # Run the per-arch smoke sets sequentially (shared JIT cache). Wormhole runs its
-# curated PR tier (CI_TIER=pr); blackhole runs its full suite (small — Tier 1 +
-# INT32 Tier 4). A failure in either arch fails the whole run.
+# curated PR tier (CI_TIER=pr); blackhole runs its full suite. The exact test
+# lists live in tt-emule's run_regression_<arch>.sh and are tracked upstream, so
+# they are not restated here. A failure in either arch fails the whole run.
 # ---------------------------------------------------------------------------
 declare -A RESULT
 overall=0
 
 run_arch() {
     local arch="$1" script="$2"; shift 2
+    [ -f "$script" ] || die "missing $script — is $TT_EMULE_PATH a tt-emule checkout?"
     log "Regression: $arch"
     if TT_METAL_DIR="$TT_METAL_HOME" BUILD_DIR="$BUILD_DIR" "$@" bash "$script"; then
         RESULT[$arch]=PASS

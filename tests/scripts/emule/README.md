@@ -34,8 +34,8 @@ EMULE_SKIP_BUILD=1 TT_EMULE_PATH=/path/to/tt-emule \
 ```
 
 If `TT_EMULE_PATH` is not set, the script clones `tenstorrent/tt-emule@main`
-into `$HOME/.cache/tt-metal-emule-smoke/tt-emule` (refreshed on re-run). See the
-script header for all environment variables.
+into `$HOME/.cache/tt-metal-emule-smoke/tt-emule` (override with `TT_EMULE_CACHE`;
+refreshed on re-run). See the script header for all environment variables.
 
 **Prerequisites:** clang-20 + libstdc++ (gcc-13+), CMake ≥ 3.24, Ninja, ccache.
 The `ghcr.io/tenstorrent/tt-mlir/tt-mlir-ci-ubuntu-24-04` image has them all.
@@ -48,12 +48,13 @@ The `ghcr.io/tenstorrent/tt-mlir/tt-mlir-ci-ubuntu-24-04` image has them all.
    `ci-build.sh` (clang-20 + libstdc++), falling back to an inline `cmake`
    recipe if that script is absent.
 4. Runs the per-arch smoke sets **sequentially** (they share a JIT cache):
-   - **wormhole** — the curated PR tier (`CI_TIER=pr`): tilize/format, L1 + DRAM
-     buffers, a Tensix JIT kernel, DRAM channels, a DM loopback, a ttnn reduction.
-   - **blackhole** — the full (small) suite: host-only checks + INT32 ttnn ops.
+   - **wormhole** — the curated PR tier (`CI_TIER=pr`).
+   - **blackhole** — the full (small) suite.
 
-The build recipe and test lists are owned by tt-emule and reused as-is, so the
-smoke set tracks upstream automatically and this stays a thin driver.
+The build recipe and per-arch test lists are owned by tt-emule
+(`scripts/run_regression_<arch>.sh`) and reused as-is, so the smoke set tracks
+upstream automatically and this stays a thin driver. The exact tests are
+deliberately not restated here — check those scripts for the current set.
 
 ## Notes
 
