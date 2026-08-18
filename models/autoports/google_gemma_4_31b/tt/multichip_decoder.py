@@ -57,6 +57,43 @@ MLP_DECODE_CORES = 14
 MLP_BFP8_PACKED_GATE_UP_BLOCK_W_MAX = 6
 MLP_PREFILL_CORES = 24
 MLP_PREFILL_1D_MAX_ROWS = 128
+
+# Chunked attention output projection geometry.
+#
+# Each chunk is written through a block shard that splits its tile rows over at
+# most 8 core rows. When the tile-row count has no divisor in 2..8 that split
+# collapses to one core row, and the whole chunk has to fit a single L1 bank:
+#   rows * (hidden / width_cores) * sizeof(bf16) = rows * 768 * 2 = 1536 * rows
+# A 1760-row chunk then needs 2,703,360 B against a 1,461,504 B bank and the
+# allocator throws.
+#
+# Rather than pad each chunk up to a power of two -- which would need a real
+# allocation and copy of up to twice the chunk, and is pure waste for a prompt
+# just past a boundary -- align the chunk BOUNDARIES so the tile-row count is a
+# multiple of 8 by construction. Every full chunk then splits over all 8 core
+# rows, and only a final tail of fewer than 8 tile rows can land on one core.
+OUTPUT_PROJ_ROW_ALIGN = 8 * ttnn.TILE_SIZE  # 256 rows -> tile_rows % 8 == 0
+OUTPUT_PROJ_CHUNK = 16 * OUTPUT_PROJ_ROW_ALIGN  # 4096 rows, a multiple of the above
+
+
+def _output_proj_row_ranges(seq_len: int) -> list[tuple[int, int]]:
+    """Chunk boundaries whose tile-row counts keep the block shard inside L1.
+
+    Every range except a possible final tail spans a multiple of
+    ``OUTPUT_PROJ_ROW_ALIGN`` rows, so its tile-row count divides by 8 and the
+    shard uses all 8 core rows. The tail is shorter than one alignment unit, so
+    even collapsed onto a single core row it needs at most
+    ``OUTPUT_PROJ_ROW_ALIGN * 768 * 2`` = 393,216 B.
+    """
+    aligned_end = (seq_len // OUTPUT_PROJ_ROW_ALIGN) * OUTPUT_PROJ_ROW_ALIGN
+    ranges = [
+        (start, min(start + OUTPUT_PROJ_CHUNK, aligned_end)) for start in range(0, aligned_end, OUTPUT_PROJ_CHUNK)
+    ]
+    if aligned_end < seq_len:
+        ranges.append((aligned_end, seq_len))
+    return ranges
+
+
 PERSISTENT_CCL_CORES = 24
 DEFAULT_MULTICHIP_OPTIMIZATION_POLICY = replace(
     DEFAULT_OPTIMIZATION_POLICY,
@@ -1293,8 +1330,7 @@ class MultichipDecoder(OptimizedDecoder):
         width_cores = 7
         if hidden % (width_cores * ttnn.TILE_SIZE):
             raise ValueError(f"attention output width {hidden} is not tile-divisible over {width_cores} cores")
-        for start in range(0, seq_len, MLP_CHUNK):
-            end = min(start + MLP_CHUNK, seq_len)
+        for start, end in _output_proj_row_ranges(seq_len):
             chunk_rows = end - start
             chunk = ttnn.slice(concatenated, [0, 0, start, 0], [1, 1, end, concatenated.shape[-1]])
             partial = ttnn.linear(chunk, output_weight)
@@ -1320,7 +1356,15 @@ class MultichipDecoder(OptimizedDecoder):
                 normalized.deallocate(True)
             padded_chunk_rows = math.ceil(chunk_rows / ttnn.TILE_SIZE) * ttnn.TILE_SIZE
             tile_rows = padded_chunk_rows // ttnn.TILE_SIZE
-            height_cores = math.gcd(tile_rows, 8)
+            # Largest legal split of the chunk's tile rows over up to 8 core
+            # rows. math.gcd(tile_rows, 8) was wrong here: for any tile_rows
+            # coprime with 8 -- which every non-power-of-two prompt length
+            # produces -- it collapses to 1, putting the whole chunk on a single
+            # core row. A 1760-row chunk then needs 1760*768*2 = 2,703,360 B in
+            # one 1,461,504 B L1 bank and the allocator throws. Benchmark sweeps
+            # use power-of-two lengths (tile_rows 64/128, gcd 8) and never hit
+            # it; real eval prompt lengths do.
+            height_cores = max(divisor for divisor in range(1, 9) if tile_rows % divisor == 0)
             shard_memory = ttnn.create_sharded_memory_config(
                 shape=(padded_chunk_rows // height_cores, hidden // width_cores),
                 core_grid=ttnn.CoreGrid(x=width_cores, y=height_cores),
