@@ -55,6 +55,13 @@ contains review orchestration and MUST NOT be used as the source of PR code.
   body/change summary, exact base-tip/comparison-base/head SHAs, relevant
   changed-file groups, and existing-discussion digest. Refer to files by path;
   do not paste the full corpus.
+- Every delegated Agent call MUST set `run_in_background: false`. Never launch a
+  background agent. For a phase with multiple independent agents, issue all of
+  that phase's Agent tool calls together in one assistant message so they execute
+  concurrently while remaining blocking. Do not advance to validation, posting,
+  or a final response until every Agent tool result for the current phase has
+  been received. A progress statement such as "agents are running" is never a
+  valid final response.
 - Tools are functional. Do not test them or make exploratory calls. Use a tool
   only when it is required for the review.
 - Keep all worktrees read-only. Never call Write, Edit, or NotebookEdit, and
@@ -68,6 +75,11 @@ contains review orchestration and MUST NOT be used as the source of PR code.
   `gh pr diff` call, or one read-only `git diff`, `git show`, `git log`, or
   `git rev-parse` command per tool call. Outside intake, scope diffs to a relevant
   changed path and use the exact comparison-base/head SHAs. Never run `find /`.
+- Run read-only git commands directly from the orchestration checkout root, whose
+  object database contains both exact commits. A valid diff starts literally
+  with `git diff COMPARISON_BASE_SHA HEAD_SHA -- CHANGED_PATH`. Never prepend
+  `git -C`, `cd`, an absolute worktree path, or any other command/prefix. `H` and
+  `B` are for Read/Grep/Glob file access, not for changing Bash's working directory.
 - Do not use pipes, `&&`, `||`, `;`, `&`, redirects, heredocs, command/process
   substitution, inline environment assignments, or multiple commands. Use
   separate tool calls when more than one query is needed.
@@ -127,12 +139,16 @@ Follow these steps precisely:
    the exact PR merge-base comparison SHA from that system prompt to the shared
    context.
 
-4. Launch these four review agents in parallel. Every task prompt must include
+4. Launch these four review agents concurrently and synchronously. In one
+   assistant message, emit exactly four Agent tool calls, each with
+   `run_in_background: false`; do not launch them one per turn and do not use
+   background mode. Wait for all four tool results before doing anything in step
+   5. Every task prompt must include
    the shared PR context from step 3, the applicable `CLAUDE.md` paths from step
    2, the recall policy above, and its role-specific Read instructions. It must
    also tell the agent to compare the exact merge-base SHA to the exact head SHA
-   with separate path-scoped
-   `git diff COMPARISON_BASE_SHA HEAD_SHA -- CHANGED_PATH` calls and to read
+   with separate path-scoped commands run directly from the current checkout root:
+   `git diff COMPARISON_BASE_SHA HEAD_SHA -- CHANGED_PATH`. Tell it to read
    surrounding current/baseline code only from the literal `H`/`B` paths.
    No agent may request or return the whole PR diff, inspect implementation code
    in the checkout root, post to GitHub, or call `ReportFindings`:
@@ -175,8 +191,15 @@ Follow these steps precisely:
    but should open only the individual patches and surrounding regions required
    for that role. It must summarize evidence rather than echoing large patches.
 
+   After the four calls return, verify that four complete candidate responses
+   were received. If any result is missing, do not summarize progress or finish;
+   synchronously retry only the missing role and wait for its result.
+
 5. Merge exact duplicates before validation. For each unique candidate, launch a
-   focused validation subagent in parallel. Pass only the PR metadata, that single
+   focused validation subagent concurrently with the others. Emit all validator
+   Agent calls for this phase together in one assistant message, set
+   `run_in_background: false` on every call, and wait for every tool result before
+   continuing. Pass only the PR metadata, that single
    candidate, exact comparison-base/head SHAs, literal `H`/`B` paths, and the
    relevant changed path/context location. Tell the validator to use a path-
    scoped exact-SHA diff, read current/baseline code only from `H`/`B`, and Read
@@ -185,6 +208,9 @@ Follow these steps precisely:
    temporary files, `find /`, GitHub writes, or `ReportFindings`. Use Opus for
    correctness, hazard, and performance candidates; use Sonnet for policy,
    parity, propagation, style, cleanup, and test candidates.
+
+   If any validator result is missing, synchronously retry only that validator
+   and wait. Never continue to filtering or posting while a validator is running.
 
    Each validator must verify that `path`, `start_line`, and `line` identify the
    minimal relevant right-side range in the PR diff, correcting the anchor when

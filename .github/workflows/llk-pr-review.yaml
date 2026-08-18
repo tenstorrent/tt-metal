@@ -184,6 +184,12 @@ jobs:
             echo "knowledge files that role must Read. Do not paste the whole corpus into task"
             echo "prompts. The repository-local review command defines the role-to-file routing."
             echo
+            echo "Every Agent call must set run_in_background=false. For a parallel phase, emit"
+            echo "all Agent calls together in one assistant message and wait for every tool"
+            echo "result. Never return a progress update as the final result while agents run."
+            echo "Do not begin validation until all reviewers return, and do not begin posting"
+            echo "until all validators return. Missing results must be retried synchronously."
+            echo
             echo "Recall is more important than precision for subtle LLK correctness and HW"
             echo "hazards. Keep grounded suspicions and state what would confirm or refute them;"
             echo "drop only findings shown to be incorrect, pre-existing, duplicate, or out of"
@@ -206,6 +212,8 @@ jobs:
             echo "composition, substitution, or inline environment assignment. Never run"
             echo "find / or read Claude execution/tool-result files. Repeat these constraints"
             echo "and the exact revision paths in every delegated Task prompt."
+            echo "Run git commands directly from the orchestration checkout root. Never use"
+            echo "git -C or cd; exact commits are already available in the root object database."
           } > "$out"
           echo "Prepared compact coordination prompt ($(wc -w < "$out") words); validated ${#required[@]} knowledge files"
 
