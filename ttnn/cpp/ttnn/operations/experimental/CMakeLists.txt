@@ -53,6 +53,7 @@ add_subdirectory(slice_write)
 
 # No team-specific CODEOWNERS rule — falls back to the ops-leads catch-all
 # today. Kept as the status quo owner rather than guessed at.
+add_subdirectory(attn_residual)
 add_subdirectory(bcast_to)
 add_subdirectory(copy)
 add_subdirectory(deepseek/mla/matmul_wo)
@@ -97,6 +98,7 @@ target_link_libraries(
         TTNN::Ops::Experimental::RgbToYuv
         TTNN::Ops::Experimental::PaddedSlice
         TTNN::Ops::Experimental::SliceWrite
+        TTNN::Ops::Experimental::AttnResidual
         TTNN::Ops::Experimental::BcastTo
         TTNN::Ops::Experimental::Copy
         TTNN::Ops::Experimental::Deepseek::MLA::Matmul_WO
@@ -147,6 +149,7 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::RgbToYuv>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::PaddedSlice>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::SliceWrite>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::AttnResidual>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::BcastTo>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::Copy>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::Deepseek::MLA::Matmul_WO>

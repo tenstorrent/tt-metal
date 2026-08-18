@@ -11,6 +11,7 @@
 #include "ttnn/operations/experimental/cnn/convert_to_hwc/convert_to_hwc_nanobind.hpp"
 #include "ttnn/operations/experimental/conv3d/conv3d_nanobind.hpp"
 #include "ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc_nanobind.hpp"
+#include "ttnn/operations/experimental/reduction/fast_weighted_reduce_nc/fast_weighted_reduce_nc_nanobind.hpp"
 #include "ttnn/operations/experimental/reduction/deepseek_moe_fast_reduce_nc/deepseek_moe_fast_reduce_nc_nanobind.hpp"
 #include "ttnn/operations/experimental/reduction/deepseek_moe_fast_reduce_nc_fused/deepseek_moe_fast_reduce_nc_fused_nanobind.hpp"
 #include "ttnn/operations/experimental/reduction/integral_image/intimg_nanobind.hpp"
@@ -65,6 +66,7 @@
 #include "ttnn/operations/experimental/test/prefetcher_consumer/dram_prefetcher_consumer_nanobind.hpp"
 #include "ttnn/operations/experimental/minimal_matmul/minimal_matmul_nanobind.hpp"
 #include "ttnn/operations/experimental/isin/isin_nanobind.hpp"
+#include "ttnn/operations/experimental/attn_residual/attn_res_gather_softmax_nanobind.hpp"
 #include "ttnn/operations/experimental/minimal_matmul/minimal_matmul_split_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek/moe/moe_gate_mm/moe_gate_mm_nanobind.hpp"
 #include "ttnn/operations/experimental/topk_router_gpt/topk_router_gpt_nanobind.hpp"
@@ -132,6 +134,7 @@ void py_module(nb::module_& mod) {
     create_qkv_heads::detail::bind_create_qkv_heads(mod);
 
     reduction::detail::bind_fast_reduce_nc(mod);
+    reduction::detail::bind_fast_weighted_reduce_nc(mod);
     reduction::detail::bind_deepseek_moe_fast_reduce_nc(mod);
     reduction::detail::bind_deepseek_moe_fast_reduce_nc_fused(mod);
     reduction::detail::bind_reduction_intimg_operation(mod);
@@ -201,6 +204,7 @@ void py_module(nb::module_& mod) {
     deepseek::mla::detail::bind_matmul_wo(mod);
     indexer_score::detail::bind_indexer_score(mod);
     moe_gpt::detail::bind_moe_gpt(mod);
+    attn_residual::bind_attn_res_gather_softmax(mod);
 
     // DeepSeek prefill MoE operations
     deepseek_prefill::detail::bind_dispatch(mod);
