@@ -1184,6 +1184,40 @@ class DiffVAEStage5(Module):
             frames = None
         return _bands(grid.t, frames=int(frames) if frames else None, kernel=kernel)
 
+    def device_x_t(self, grid: Grid, bands: tuple[_Band, ...], *, seed: int = 0) -> list[ttnn.Tensor]:
+        """x_t noise drawn on device, already in the patchified layout. One tensor per band.
+
+        Patchify is a permutation of iid samples, so drawing at the destination layout is the same
+        distribution as drawing pixel-space noise and reshuffling it -- which is what lets this skip a
+        908M-element host randn plus the patchify, channel pad, W-reorder and upload. For the same
+        reason the shard needs no W-band reorder: any contiguous slice of iid draws is iid, and the
+        model only requires that each site's noise be an independent sample, not that it came from a
+        particular draw.
+
+        Channels past ``patch_channels`` land on the zero-padded columns of ``conv_in_x_t``, so filling
+        them is inert. Drawn at the FULL volume and partitioned rather than per-chip: ttnn.randn
+        replicates across the mesh, so a per-chip draw hands every W-band identical values.
+        """
+        sp = int(list(self.mesh_device.shape)[self.sp_axis]) if self._w_sharded else 1
+        out = []
+        for index, band in enumerate(bands):
+            rows = (band.hi - band.lo) * grid.h * grid.w
+            assert rows % sp == 0, f"band rows {rows} not divisible by sp={sp}"
+            full = ttnn.randn(
+                [1, grid.batch, rows, self.padded_patch_channels],
+                device=self.mesh_device,
+                dtype=self.dtype,
+                layout=ttnn.TILE_LAYOUT,
+                seed=seed + index,
+            )
+            if sp > 1:
+                local = ttnn.mesh_partition(full, dim=2, cluster_axis=self.sp_axis)
+                ttnn.deallocate(full)
+                full = local
+            out.append(self.conv_in_x_t(full))
+            ttnn.deallocate(full)
+        return out
+
     def embed_x_t(self, x_t: torch.Tensor, bands: tuple[_Band, ...]) -> list[ttnn.Tensor]:
         """Patchify pixel-space ``(B, C, T, H, W)`` noise and project it, one tensor per band.
 
@@ -1242,17 +1276,21 @@ class DiffVAEStage5(Module):
         block writes the context half, so nothing depends on them being adjacent.
         """
         cfg = self.config
+        _t0 = stage_time_start(self.mesh_device)
         scaled_t = ttnn.multiply(timestep, cfg.timestep_scale_multiplier)
         modulation = self.shared_adaln(self.t_embedder(scaled_t), grid.batch)
         tables = self.rope_tables(grid)
         band_tables = tuple(tables.frames(band.pad_lo, band.pad_hi) for band in bands)
+        stage_time_end(self.mesh_device, "stage5 setup: AdaLN + rope tables", _t0)
         log_dram(self.mesh_device, f"stage5 entry ({len(bands)} band(s))")
         from ...layers.na3d import SP_W_PROF
 
         _BLOCK_PROF.clear()
         SP_W_PROF.clear()
         for index, block in enumerate(self.diff_blocks):
+            _bt0 = stage_time_start(self.mesh_device)
             x = block(x, context, modulation, grid, bands, band_tables)
+            stage_time_end(self.mesh_device, f"  stage5 block {index}", _bt0)
             log_dram(self.mesh_device, f"stage5 block {index}")
         if _STAGE_TIMING and _BLOCK_PROF:
             for key, ms in sorted({**_BLOCK_PROF, **SP_W_PROF}.items(), key=lambda kv: -kv[1]):
@@ -1296,11 +1334,12 @@ class DiffVAEStage5(Module):
     def forward(
         self,
         context: ttnn.Tensor,
-        x_t: torch.Tensor,
+        x_t: torch.Tensor | None,
         timestep: ttnn.Tensor,
         grid: Grid,
         *,
         context_sharded: bool = False,
+        seed: int = 0,
     ) -> torch.Tensor:
         """Return pixels. Valid as the whole decode only for ``model_output_type="x0"``
         with a single inference step, which is what the shipped 2.5 DiffVAE config asks for.
@@ -1310,12 +1349,25 @@ class DiffVAEStage5(Module):
         """
         cfg = self.config
         bands = self.bands(grid)
+        _t0 = stage_time_start(self.mesh_device)
         if self._w_sharded and not context_sharded:
             context = self._wshard_context(context, grid)
         elif self._w_sharded:
             context = ttnn.to_layout(context, ttnn.TILE_LAYOUT)  # already this chip's band; just ensure TILE
+        stage_time_end(self.mesh_device, "stage5: context reshard", _t0)
+
+        # Evaluated apart from the block timer: as an argument it was host patchify and a noise
+        # upload being charged to the diffusion blocks.
+        _t0 = stage_time_start(self.mesh_device)
+        if x_t is None:
+            x_bands = self.device_x_t(grid, bands, seed=seed)
+            stage_time_end(self.mesh_device, "stage5: device randn + embed x_t", _t0)
+        else:
+            x_bands = self.embed_x_t(x_t, bands)
+            stage_time_end(self.mesh_device, "stage5: host patchify + embed x_t", _t0)
+
         with stage_timer(self.mesh_device, "stage5 diff-blocks (attn+MLP)"):
-            out = self.forward_diff_step(context, self.embed_x_t(x_t, bands), timestep, grid, bands)
+            out = self.forward_diff_step(context, x_bands, timestep, grid, bands)
 
         return self._to_pixels(out, grid)
 
@@ -1352,6 +1404,34 @@ class DiffVAEStage5(Module):
                     if shard_other:
                         vol = ttnn.mesh_partition(vol, dim=2, cluster_axis=other_axis)  # H over the replicated axis
                         concat_dims[other_axis] = 2
+                    # DIFFVAE_TRIM_PAD_CHANNELS=1 drops the tile padding BEFORE the pull. conv_out emits
+                    # padded_patch_channels because patch_channels (48) is not tile-aligned, so a quarter
+                    # of what crosses PCIe is zeros. Trimming on device is exact -- those columns come
+                    # from the zero-padded rows of the conv_out weight -- but it is a strided row-major
+                    # copy of the whole volume, so whether it wins is a question for the profile.
+                    if os.environ.get("DIFFVAE_TRIM_PAD_CHANNELS") == "1":
+                        shape = list(vol.shape)
+                        trimmed = ttnn.slice(vol, [0] * len(shape), shape[:-1] + [cfg.patch_channels])
+                        ttnn.deallocate(vol)
+                        vol = trimmed
+                    if os.environ.get("DIFFVAE_DEVICE_UNPATCHIFY") == "1":
+                        # Depth-to-space on device so the pull lands final-shaped pixels and the host
+                        # does nothing. Packed channel order is (c, w_sub, h_sub), per patchify.
+                        pv = cfg.patch_size
+                        shp = list(vol.shape)
+                        wl = shp[3]
+                        vol = ttnn.reshape(vol, (1, shp[1], shp[2], wl, cfg.out_channels, pv, pv))
+                        vol = ttnn.permute(vol, (0, 4, 1, 2, 6, 3, 5))  # (1, C, T, H, h_sub, W, w_sub)
+                        vol = ttnn.reshape(vol, (1, cfg.out_channels, shp[1], shp[2] * pv, wl * pv))
+                        concat_dims = [None, None]
+                        concat_dims[self.sp_axis] = 4  # W-band, now in pixels
+                        if shard_other:
+                            concat_dims[other_axis] = 3
+                        px = fast_device_to_host(vol, self.mesh_device, concat_dims, ccl_manager=self.ccl_manager)
+                        ttnn.deallocate(vol)
+                        if shard_other:
+                            ttnn.deallocate(rm)
+                        return px
                     gathered = fast_device_to_host(vol, self.mesh_device, concat_dims, ccl_manager=self.ccl_manager)[
                         ..., : cfg.patch_channels
                     ]  # (1, T, H, W, patch_channels)

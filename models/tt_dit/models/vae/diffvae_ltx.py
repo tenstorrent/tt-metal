@@ -947,7 +947,9 @@ class DeterministicStages(Module):
         the band directly (same ``sp_axis``, same W order) rather than re-sharding a replicated context.
         ``dims`` is still the FULL ``(T, H, W)``; the caller derives ``W/sp`` from ``self.sp``.
         """
+        _t0 = stage_time_start(self.mesh_device)
         x = self.conv_in(x)
+        stage_time_end(self.mesh_device, "conv_in (denorm folded)", _t0)
         count = len(self.upsamples) if stages is None else stages
         sharded = False
         for stage in range(count):
@@ -957,21 +959,33 @@ class DeterministicStages(Module):
             if stage_sharded:
                 assert w % self.sp == 0, f"stage {stage} W={w} not divisible by sp={self.sp}"
                 if not sharded:
+                    _t0 = stage_time_start(self.mesh_device)
                     x = self._wshard(x, dims)  # replicated -> W-sharded at the stage-0 -> 1 boundary
+                    stage_time_end(self.mesh_device, "reshard: replicated -> W-sharded", _t0)
                     sharded = True
             local_dims = (t, h, w // self.sp) if stage_sharded else dims
 
+            # Tables and plan are per-stage setup, not block work; timed apart so a stage's number is
+            # its blocks rather than its blocks plus whatever it had to build first.
+            _t0 = stage_time_start(self.mesh_device)
             cos, sin = self._rope(dims)
             if stage_sharded:
                 cos = ttnn.mesh_partition(cos, dim=3, cluster_axis=self.sp_axis)
                 sin = ttnn.mesh_partition(sin, dim=3, cluster_axis=self.sp_axis)
             plan = None if stage_sharded else self._plan(dims, self.stage_kernels[stage])
+            stage_time_end(self.mesh_device, f"stage {stage + 1} setup: rope tables + plan", _t0)
 
+            _t0 = stage_time_start(self.mesh_device)
             for index, block in enumerate(self.det_stages[stage]):
                 x = block(x, dims=local_dims, cos=cos, sin=sin, device_plan=plan)
                 log_dram(self.mesh_device, f"det stage {stage} block {index} dims={local_dims} sharded={stage_sharded}")
+            stage_time_end(
+                self.mesh_device, f"STAGE {stage + 1}: {len(self.det_stages[stage])}x NABlock dim {x.shape[-1]}", _t0
+            )
 
+            _t0 = stage_time_start(self.mesh_device)
             x, out_dims = self.upsamples[stage](x, dims=local_dims, drop_leading_frame=drop_leading_frame)
+            stage_time_end(self.mesh_device, f"upsample {stage + 1}", _t0)
             if stage_sharded:
                 out_dims = (out_dims[0], out_dims[1], out_dims[2] * self.sp)  # local W -> full W
             dims = out_dims
@@ -979,7 +993,9 @@ class DeterministicStages(Module):
             stage_time_end(self.mesh_device, f"det stage {stage} -> {dims}", _stage_t0)
 
         if sharded and gather_output:
+            _t0 = stage_time_start(self.mesh_device)
             x = self._wgather(x, dims)  # W-sharded -> replicated context; stage-5 handoff unchanged
+            stage_time_end(self.mesh_device, "det -> replicated context gather", _t0)
             log_dram(self.mesh_device, f"det gathered to replicated {dims}")
         return x, dims
 
@@ -1124,14 +1140,45 @@ class DiffVAEDecoder(Module):
         assert batch == 1, f"batched decode is not implemented; got batch={batch}"
         assert channels == self.in_channels, f"latent has {channels} channels, expected {self.in_channels}"
 
-        padded = torch.cat([latent, latent[:, :, -1:].expand(-1, -1, self.ghost_latent_frames, -1, -1)], dim=2)
-        tokens = padded.permute(0, 2, 3, 4, 1).reshape(-1, channels).contiguous()
-        x = ttnn.from_torch(tokens, device=self.mesh_device, dtype=self.dtype, layout=ttnn.TILE_LAYOUT)
+        ghost = self.ghost_latent_frames
+        if os.environ.get("DIFFVAE_DEVICE_PREPROC") == "1":
+            # Upload the latent as-is and do the ghost pad and channels-last flatten on device, so the
+            # only host step left before the pipeline is the transfer itself. The pad replicates the
+            # last frame, which is a slice plus a concat on the T axis.
+            _t0 = stage_time_start(self.mesh_device)
+            raw = ttnn.from_torch(
+                latent.reshape(1, channels, t, h * w).contiguous(),
+                device=self.mesh_device,
+                dtype=self.dtype,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
+            stage_time_end(self.mesh_device, "host->mesh: upload latent (raw)", _t0)
 
-        x, dims = self.stages(x, dims=(padded.shape[2], h, w), gather_output=gather_output)
+            _t0 = stage_time_start(self.mesh_device)
+            last = ttnn.slice(raw, [0, 0, t - 1, 0], [1, channels, t, h * w])
+            parts = [raw] + [last] * ghost
+            padded_tt = ttnn.concat(parts, dim=2)
+            ttnn.deallocate(raw)
+            ttnn.deallocate(last)
+            moved = ttnn.permute(padded_tt, (0, 2, 3, 1))  # (1, T+ghost, H*W, C)
+            ttnn.deallocate(padded_tt)
+            x = ttnn.to_layout(ttnn.reshape(moved, ((t + ghost) * h * w, channels)), ttnn.TILE_LAYOUT)
+            ttnn.deallocate(moved)
+            stage_time_end(self.mesh_device, "device: ghost pad + flatten", _t0)
+        else:
+            _t0 = stage_time_start(self.mesh_device)
+            padded = torch.cat([latent, latent[:, :, -1:].expand(-1, -1, ghost, -1, -1)], dim=2)
+            tokens = padded.permute(0, 2, 3, 4, 1).reshape(-1, channels).contiguous()
+            stage_time_end(self.mesh_device, "host: ghost pad + permute/flatten", _t0)
+            _t0 = stage_time_start(self.mesh_device)
+            x = ttnn.from_torch(tokens, device=self.mesh_device, dtype=self.dtype, layout=ttnn.TILE_LAYOUT)
+            stage_time_end(self.mesh_device, "host->mesh: upload TILE", _t0)
+
+        x, dims = self.stages(x, dims=(t + ghost, h, w), gather_output=gather_output)
         sharded_out = self.stages._w_sharded and not gather_output
         w_eff = dims[2] // self.stages.sp if sharded_out else dims[2]  # local W columns per chip
         keep = self.context_frames(t)
+        _t0 = stage_time_start(self.mesh_device)
         if keep < dims[0]:
             channels_out = self.config["stage_channels"][-1]
             # Each step here allocates a full copy of the uncropped volume, which at 1920x1088 is
@@ -1144,6 +1191,7 @@ class DiffVAEDecoder(Module):
             x = ttnn.to_layout(ttnn.reshape(cropped, (keep * dims[1] * w_eff, channels_out)), ttnn.TILE_LAYOUT)
             ttnn.deallocate(cropped)
             dims = (keep, dims[1], dims[2])
+        stage_time_end(self.mesh_device, "ghost crop on T", _t0)
         return x, dims
 
     def decode(
@@ -1167,21 +1215,31 @@ class DiffVAEDecoder(Module):
         channels_out = self.config["stage_channels"][-1]
         # W-sharded handoff: context is this chip's band; reshape to the local site count stage 5's
         # W-sharded path expects and skip its re-shard (the det->stage-5 all-gather + re-shard both go).
+        _t0 = stage_time_start(self.mesh_device)
         if self._wsharded_handoff:
             w_local = grid.w // self.stages.sp
             context = ttnn.reshape(context, (1, 1, grid.t * grid.h * w_local, channels_out))
         else:
             context = ttnn.reshape(context, (1, 1, grid.sites, channels_out))
+        stage_time_end(self.mesh_device, "context reshape for stage 5", _t0)
 
-        if noise is None:
+        # DIFFVAE_DEVICE_NOISE=1 leaves noise as None so stage 5 draws it on device in the patchified
+        # layout. Host generation is proportional to the OUTPUT volume, not the latent -- 908M floats at
+        # 1080p 6s -- and a caller supplying its own noise pays neither path.
+        if noise is None and os.environ.get("DIFFVAE_DEVICE_NOISE") != "1":
+            _t0 = stage_time_start(self.mesh_device)
             shape = (1, self.out_channels, grid.t, grid.h * self.patch_size, grid.w * self.patch_size)
             noise = torch.randn(shape, generator=torch.Generator().manual_seed(seed))
+            stage_time_end(self.mesh_device, f"host: noise randn {tuple(shape)}", _t0)
 
         # default_num_inference_steps is 1 on this checkpoint, so linspace(1, 1, 1) = [1.0].
         timestep = ttnn.from_torch(
             torch.tensor([[[[1.0]]]]), device=self.mesh_device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT
         )
-        return self.stage5.forward(context, noise, timestep, grid, context_sharded=self._wsharded_handoff)
+        _t0 = stage_time_start(self.mesh_device)
+        pixels = self.stage5.forward(context, noise, timestep, grid, context_sharded=self._wsharded_handoff, seed=seed)
+        stage_time_end(self.mesh_device, "stage5 TOTAL (forward)", _t0)
+        return pixels
 
     def forward(
         self,
