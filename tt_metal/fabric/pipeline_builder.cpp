@@ -183,6 +183,13 @@ std::map<std::string, size_t> assign_submeshes(
                 if (!is_lb) {
                     continue;
                 }
+                // A self-loop is satisfied trivially: a single-stage graph's return path
+                // never leaves its submesh, so there is no inter-submesh link to require.
+                // discover_connections() skips i == j, so demanding one here would make
+                // every single-stage graph unassignable.
+                if (src == dst) {
+                    continue;
+                }
                 size_t si = node_to_sub.at(src);
                 size_t sj = node_to_sub.at(dst);
                 if (!connections.contains({si, sj})) {
@@ -328,6 +335,12 @@ GraphLayoutResult resolve_graph_layout(
     std::vector<ResolvedEdge> resolved_edges;
     resolved_edges.reserve(edges.size());
     for (const auto& [src, dst, is_lb] : edges) {
+        // Self-loop: no physical hop to resolve (see assign_submeshes). It is left out of
+        // resolved_edges deliberately — a single-stage caller reads its entry/exit from
+        // h2d_entry_* / d2h_exit_* below, not from a per-edge entry.
+        if (src == dst) {
+            continue;
+        }
         size_t si = node_to_sub.at(src);
         size_t sj = node_to_sub.at(dst);
         auto it = connections.find({si, sj});
