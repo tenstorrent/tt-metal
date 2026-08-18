@@ -6,6 +6,9 @@ description: >-
 
 # Canonical Claude Skill
 
-Read `canonical/SKILL.md` completely and follow its Markdown body as the
-authoritative workflow. Ignore only its Claude-specific frontmatter. Resolve
-its relative paths from `canonical/` and apply the host mappings in `AGENTS.md`.
+From the TT-LLK repository root, read
+`.claude/skills/instruction-latency-audit/SKILL.md` completely and follow its
+Markdown body as the authoritative workflow. Ignore only its Claude-specific
+frontmatter. Resolve its relative paths from
+`.claude/skills/instruction-latency-audit/` and apply the host mappings in
+`AGENTS.md`.
