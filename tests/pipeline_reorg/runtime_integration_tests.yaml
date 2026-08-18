@@ -137,3 +137,88 @@
       timeout: 45
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
+
+# =============================================================================
+# Profiler Tests (require the ENABLE_TRACY=ON build + wheel)
+# =============================================================================
+
+- name: runtime_profiler_mid_run_data_dump
+  cmd: |
+    export DONT_USE_VIRTUAL_ENVIRONMENT=1
+    bash tests/scripts/single_card/run_single_card_profiler_tests.sh --full run_mid_run_data_dump
+  skus:
+    wh_n150_civ2:
+      timeout: 5
+    wh_n300_civ2:
+      timeout: 5
+    wh_llmbox:
+      timeout: 8
+    bh_p100a_civ2_viommu:
+      timeout: 5
+    bh_p150b_civ2_viommu:
+      timeout: 5
+  owner_id: U03BJ1L3LUQ # Mo Memarian
+  team: runtime
+
+# Kept separate from the _t3k entry, which does not exclude TestOpSupportCount.
+- name: runtime_profiler_perf_op_report
+  cmd: |
+    export DONT_USE_VIRTUAL_ENVIRONMENT=1
+    bash tests/scripts/single_card/run_single_card_profiler_tests.sh --full run_perf_op_report_test
+  skus:
+    wh_n150_civ2:
+      timeout: 8
+    wh_n300_civ2:
+      timeout: 8
+    bh_p100a_civ2_viommu:
+      timeout: 8
+    bh_p150b_civ2_viommu:
+      timeout: 8
+  owner_id: U03BJ1L3LUQ # Mo Memarian
+  team: runtime
+
+- name: runtime_profiler_perf_op_report_t3k
+  cmd: |
+    export DONT_USE_VIRTUAL_ENVIRONMENT=1
+    bash tests/scripts/t3000/run_t3000_profiler_tests.sh run_perf_op_report_test
+  skus:
+    wh_llmbox:
+      timeout: 8
+  owner_id: U03BJ1L3LUQ # Mo Memarian
+  team: runtime
+
+- name: runtime_profiler_l1_accumulate
+  cmd: |
+    export DONT_USE_VIRTUAL_ENVIRONMENT=1
+    bash tests/scripts/single_card/run_single_card_profiler_tests.sh --full run_accumulate_profiler_test
+  skus:
+    wh_n150_civ2:
+      timeout: 6
+    wh_n300_civ2:
+      timeout: 6
+    bh_p100a_civ2_viommu:
+      timeout: 6
+    bh_p150b_civ2_viommu:
+      timeout: 6
+  owner_id: U03BJ1L3LUQ # Mo Memarian
+  team: runtime
+
+- name: runtime_profiler_ccl_all_gather
+  cmd: |
+    export DONT_USE_VIRTUAL_ENVIRONMENT=1
+    bash tests/scripts/t3000/run_t3000_profiler_tests.sh run_ccl_T3000_test
+  skus:
+    wh_llmbox:
+      timeout: 10
+  owner_id: U03BJ1L3LUQ # Mo Memarian
+  team: runtime
+
+- name: runtime_profiler_multi_host_tracy_smoke
+  cmd: |
+    export DONT_USE_VIRTUAL_ENVIRONMENT=1
+    bash tests/scripts/t3000/run_t3000_profiler_tests.sh run_multi_host_tracy_smoke
+  skus:
+    wh_llmbox:
+      timeout: 10
+  owner_id: U03BJ1L3LUQ # Mo Memarian
+  team: runtime

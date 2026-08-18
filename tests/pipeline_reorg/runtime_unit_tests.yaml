@@ -436,3 +436,55 @@
       timeout: 5
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
+
+# --- Profiler Tests (require the ENABLE_TRACY=ON build + wheel) ---
+# tags: [profiler] keeps these out of callers that build without Tracy; the nightly
+# coverage workflow reads this same list with --exclude-tag profiler.
+- name: runtime_device_profiler
+  tags: [profiler]
+  cmd: |
+    export DONT_USE_VIRTUAL_ENVIRONMENT=1
+    bash tests/scripts/single_card/run_single_card_profiler_tests.sh --full run_device_profiler_test
+  skus:
+    wh_n150_civ2:
+      timeout: 25
+    wh_n300_civ2:
+      timeout: 25
+    wh_llmbox:
+      timeout: 25
+    wh_galaxy:
+      timeout: 30
+    bh_p100a_civ2_viommu:
+      timeout: 25
+    bh_p150b_civ2_viommu:
+      timeout: 25
+  owner_id: U03BJ1L3LUQ # Mo Memarian
+  team: runtime
+
+- name: runtime_realtime_profiler
+  tags: [profiler]
+  cmd: |
+    export DONT_USE_VIRTUAL_ENVIRONMENT=1
+    bash tests/scripts/single_card/run_single_card_profiler_tests.sh --full run_realtime_profiler_test
+  skus:
+    wh_n150_civ2:
+      timeout: 15
+    wh_n300_civ2:
+      timeout: 15
+    bh_p100a_civ2_viommu:
+      timeout: 15
+    bh_p150b_civ2_viommu:
+      timeout: 15
+  owner_id: U03BJ1L3LUQ # Mo Memarian
+  team: runtime
+
+- name: runtime_realtime_profiler_tg
+  tags: [profiler]
+  cmd: |
+    export DONT_USE_VIRTUAL_ENVIRONMENT=1
+    bash tests/scripts/wh_6u/run_wh_6u_profiler_tests.sh run_realtime_profiler_cross_reference_tg_test
+  skus:
+    wh_galaxy:
+      timeout: 15
+  owner_id: U03BJ1L3LUQ # Mo Memarian
+  team: runtime

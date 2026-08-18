@@ -602,6 +602,176 @@ def test_llk_pr_gate_uses_viommu_not_bh_p150b_civ2():
     assert concrete_skus(mq) == {"wh_n150_civ2", "bh_p150b_civ2_viommu_prio"}
 
 
+# ---------------------------------------------------------------------------
+# Tag exclusions (shared lists read by callers with different builds)
+# ---------------------------------------------------------------------------
+
+
+_TAGGED_YAML = """\
+- name: plain test
+  cmd: echo ok
+  skus:
+    wh_n150_civ2:
+      timeout: 15
+  team: runtime
+- name: tagged list test
+  tags: [profiler]
+  cmd: echo profiler
+  skus:
+    wh_n150_civ2:
+      timeout: 15
+  team: runtime
+- name: tagged string test
+  tags: profiler
+  cmd: echo profiler
+  skus:
+    wh_n150_civ2:
+      timeout: 15
+  team: runtime
+"""
+
+
+@pytest.fixture
+def tagged_yaml(tmp_path: Path) -> Path:
+    path = tmp_path / "tagged.yaml"
+    path.write_text(_TAGGED_YAML)
+    return path
+
+
+def test_no_exclude_tag_keeps_tagged_entries(tagged_yaml: Path):
+    matrix = run_matrix(tagged_yaml, "wh_n150_civ2")
+    assert [e["name"] for e in matrix] == [
+        "plain test [wh_n150_civ2]",
+        "tagged list test [wh_n150_civ2]",
+        "tagged string test [wh_n150_civ2]",
+    ]
+
+
+def test_exclude_tag_drops_tagged_entries(tagged_yaml: Path):
+    """Both list and bare-string `tags` forms are excluded."""
+    matrix = run_matrix(tagged_yaml, "wh_n150_civ2", "--exclude-tag", "profiler")
+    assert [e["name"] for e in matrix] == ["plain test [wh_n150_civ2]"]
+
+
+def test_exclude_tag_is_repeatable(tmp_path: Path):
+    path = tmp_path / "tags.yaml"
+    path.write_text(
+        textwrap.dedent(
+            """\
+            - name: keeper
+              cmd: echo ok
+              skus:
+                wh_n150_civ2:
+                  timeout: 5
+              team: runtime
+            - name: profiler entry
+              tags: [profiler]
+              cmd: echo ok
+              skus:
+                wh_n150_civ2:
+                  timeout: 5
+              team: runtime
+            - name: slow entry
+              tags: [slow]
+              cmd: echo ok
+              skus:
+                wh_n150_civ2:
+                  timeout: 5
+              team: runtime
+            """
+        )
+    )
+    matrix = run_matrix(path, "wh_n150_civ2", "--exclude-tag", "profiler", "--exclude-tag", "slow")
+    assert [e["name"] for e in matrix] == ["keeper [wh_n150_civ2]"]
+
+
+def test_exclude_tag_unknown_tag_is_a_noop(tagged_yaml: Path):
+    matrix = run_matrix(tagged_yaml, "wh_n150_civ2", "--exclude-tag", "does_not_exist")
+    assert len(matrix) == 3
+
+
+def test_exclude_tag_applies_under_all_skus_in_tests(tmp_path: Path):
+    """Excluded entries must not contribute their SKUs to ALL_SKUS_IN_TESTS resolution."""
+    path = tmp_path / "tags.yaml"
+    path.write_text(
+        textwrap.dedent(
+            """\
+            - name: keeper
+              cmd: echo ok
+              skus:
+                wh_n150_civ2:
+                  timeout: 5
+              team: runtime
+            - name: galaxy only profiler entry
+              tags: [profiler]
+              cmd: echo ok
+              skus:
+                wh_galaxy:
+                  timeout: 5
+              team: runtime
+            """
+        )
+    )
+    matrix = run_matrix(path, "ALL_SKUS_IN_TESTS", "--exclude-tag", "profiler")
+    assert concrete_skus(matrix) == {"wh_n150_civ2"}
+
+
+def test_exclude_tag_removing_every_entry_skips_rather_than_fails(tmp_path: Path):
+    """A list that is entirely excluded is vacuously correct: matrix=[], exit 0."""
+    path = tmp_path / "tags.yaml"
+    path.write_text(
+        textwrap.dedent(
+            """\
+            - name: profiler entry
+              tags: [profiler]
+              cmd: echo ok
+              skus:
+                wh_n150_civ2:
+                  timeout: 5
+              team: runtime
+            """
+        )
+    )
+    for enabled in ("wh_n150_civ2", "ALL_SKUS_IN_TESTS"):
+        result = _run_with_skus(path, enabled, "--exclude-tag", "profiler")
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert re.search(r"^matrix=\[\]$", result.stdout, re.M)
+
+
+_TRACY_ONLY_UNIT_ENTRIES = {
+    "runtime_device_profiler",
+    "runtime_realtime_profiler",
+    "runtime_realtime_profiler_tg",
+}
+
+
+def test_runtime_unit_tracy_entries_are_tagged():
+    """The coverage caller relies on this tag; an untagged Tracy entry breaks it.
+
+    runtime_rt_profiler is deliberately absent: it is a plain gtest binary that
+    predates the profiler move and runs fine without Tracy.
+    """
+    with open(PIPELINE / "runtime_unit_tests.yaml") as f:
+        tests = yaml.safe_load(f)
+
+    tagged = {t["name"] for t in tests if "profiler" in (t.get("tags") or [])}
+    assert tagged == _TRACY_ONLY_UNIT_ENTRIES
+
+
+def test_runtime_unit_coverage_caller_gets_no_tracy_legs():
+    """What the nightly coverage workflow actually gets: n150 legs minus Tracy ones."""
+    matrix = run_matrix(
+        PIPELINE / "runtime_unit_tests.yaml",
+        "wh_n150_civ2",
+        "--exclude-tag",
+        "profiler",
+    )
+    assert matrix, "coverage caller must still get runtime unit legs"
+    names = {e["name"] for e in matrix}
+    assert not (names & {f"{n} [wh_n150_civ2]" for n in _TRACY_ONLY_UNIT_ENTRIES})
+    assert "runtime_rt_profiler [wh_n150_civ2]" in names
+
+
 def test_pipeline_reorg_yamls_have_no_prio_sku_keys():
     """Prio SKUs belong only in sku_config (merge_queue_sku targets), never in test lists."""
     leftovers = []

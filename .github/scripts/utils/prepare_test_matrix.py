@@ -4,18 +4,19 @@ Build a filtered test matrix based on enabled SKUs.
 
 This script:
 1. Loads test definitions from a YAML file
-2. Filters tests based on enabled SKUs (comma-separated string)
-3. Optionally intersects with --sku-allowlist (change gating)
-4. Optionally rewrites SKUs to merge_queue_sku when --event is merge_group
-5. Adds runs_on labels from the SKU configuration
-6. Annotates each entry with weights-cache-mode from sku_config.yaml
+2. Optionally drops entries carrying a --exclude-tag tag
+3. Filters tests based on enabled SKUs (comma-separated string)
+4. Optionally intersects with --sku-allowlist (change gating)
+5. Optionally rewrites SKUs to merge_queue_sku when --event is merge_group
+6. Adds runs_on labels from the SKU configuration
+7. Annotates each entry with weights-cache-mode from sku_config.yaml
    (used by the Blackhole demo pipeline so the per-job container volume mount can
    pick the right cache source)
-7. Outputs the filtered matrix as JSON
+8. Outputs the filtered matrix as JSON
 
 Usage:
     python prepare_test_matrix.py <tests_yaml_path> <enabled_skus> <sku_config_yaml_path>
-        [--event EVENT] [--sku-allowlist LIST]
+        [--event EVENT] [--sku-allowlist LIST] [--exclude-tag TAG]
 
 enabled_skus is a comma-separated list, or the literal ALL_SKUS_IN_TESTS to enable every SKU
 key that appears under any test entry's skus mapping in the tests YAML. An empty / placeholder
@@ -26,6 +27,11 @@ rewritten to that concrete prio SKU before runs_on lookup.
 
 --sku-allowlist: omit for no extra filter; empty string skips all tests (matrix=[]
 exit 0); otherwise comma-separated logical SKUs intersected with coverage.
+
+--exclude-tag: repeatable; drops entries whose `tags` contain the tag. For lists shared
+by callers with different builds, where some entries cannot run under every build (e.g.
+the profiler entries in runtime_unit_tests.yaml need ENABLE_TRACY=ON, which the nightly
+coverage build disables).
 
 `weights-cache-mode` is an optional per-SKU field in sku_config.yaml; when present,
 it is copied into each output matrix entry.
@@ -100,6 +106,37 @@ def apply_sku_allowlist(enabled_skus, sku_allowlist):
     filtered = [s for s in enabled_skus if s in allow]
     print(f"SKU allowlist {allow} → {filtered}")
     return filtered
+
+
+def apply_tag_exclusions(tests, exclude_tags):
+    """
+    Drop tests carrying any of the excluded tags.
+
+    A test's `tags` may be a list or a bare string. Runs before SKU resolution so an
+    excluded entry contributes nothing, including under ALL_SKUS_IN_TESTS.
+
+    Args:
+        tests: List of test dictionaries
+        exclude_tags: None / empty for no filter; else an iterable of tags to drop
+
+    Returns:
+        Filtered list of test dictionaries (possibly empty)
+    """
+    if not exclude_tags:
+        return tests
+
+    excluded = set(exclude_tags)
+    kept = []
+    for test in tests:
+        tags = test.get("tags") or []
+        if isinstance(tags, str):
+            tags = [tags]
+        matched = excluded.intersection(tags)
+        if matched:
+            print(f"Excluding test '{test.get('name', 'Unnamed Test')}' (tagged {','.join(sorted(matched))})")
+            continue
+        kept.append(test)
+    return kept
 
 
 def resolve_sku_for_event(sku_name, sku_config, event):
@@ -356,6 +393,14 @@ def main(argv=None):
         help="Omit for no filter; empty string skips all; else CSV of logical SKUs",
     )
     parser.add_argument(
+        "--exclude-tag",
+        action="append",
+        default=None,
+        metavar="TAG",
+        help="Drop entries whose `tags` contain TAG; repeatable. For callers sharing a "
+        "test list with others whose build cannot run every entry.",
+    )
+    parser.add_argument(
         "--allow-missing-cmd",
         action="store_true",
         help="Allow entries without a `cmd` key (for pipelines that build the command "
@@ -371,9 +416,12 @@ def main(argv=None):
         print(f"Event: '{args.event}'")
     if args.sku_allowlist is not None:
         print(f"SKU allowlist: '{args.sku_allowlist}'")
+    if args.exclude_tag:
+        print(f"Excluded tags: {args.exclude_tag}")
 
     sku_config = load_sku_config(args.sku_config_yaml_path)
     tests = load_tests(args.tests_yaml_path)
+    tests = apply_tag_exclusions(tests, args.exclude_tag)
 
     if args.enabled_skus.strip().upper() == ALL_SKUS_IN_TESTS:
         enabled_skus = collect_skus_from_tests(tests)

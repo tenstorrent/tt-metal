@@ -250,18 +250,22 @@ runtime:
     sim_wh_galaxy: 10
     sim_bh_galaxy: 10
   unit:
-    wh_n150_civ2: 232
-    wh_n300_civ2: 99
-    wh_llmbox: 20
+    wh_n150_civ2: 272
+    wh_n300_civ2: 139
+    wh_llmbox: 30
     bh_p150b_civ2: 214
     bh_p300: 69
-    bh_p150b_civ2_viommu: 11
-    bh_p100a_civ2_viommu: 79
+    bh_p150b_civ2_viommu: 51
+    bh_p100a_civ2_viommu: 119
     bh_loudbox: 20
-    wh_galaxy: 39
+    wh_galaxy: 84
   integration:
-    wh_n150_civ2: 360
+    wh_n150_civ2: 379
+    wh_n300_civ2: 19
+    wh_llmbox: 36
     bh_p150b_civ2: 360
+    bh_p100a_civ2_viommu: 19
+    bh_p150b_civ2_viommu: 19
     bh_loudbox: 25
     wh_galaxy: 15
     bh_galaxy: 15

@@ -9,6 +9,10 @@ on:
       build-artifact-name:
         required: true
         type: string
+      wheel-artifact-name:
+        required: false
+        type: string
+        default: ''
       enabled-skus:
         required: true
         type: string
@@ -46,11 +50,15 @@ jobs:
             "unit"
       - name: Build unified test matrix based on enabled SKUs
         id: build-matrix
+        # Coverage callers build with ENABLE_TRACY=OFF, so the profiler-tagged entries
+        # cannot run there (no build/tools/profiler/bin, device profiling compiled out).
+        env:
+          EXCLUDE_ARGS: ${{ inputs.collect-coverage && '--exclude-tag profiler' || '' }}
         run: |
           python3 .github/scripts/utils/prepare_test_matrix.py \
             ${{ env.TESTS_YAML_PATH }} \
             "${{ inputs.enabled-skus }}" \
-            ./.github/sku_config.yaml
+            ./.github/sku_config.yaml $EXCLUDE_ARGS
 
   runtime-unit-tests:
     needs: load-test-matrix
@@ -99,6 +107,7 @@ jobs:
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: Ensure BH links online
         if: ${{ contains(matrix.test-group.sku, 'bh_loudbox') || contains(matrix.test-group.sku, 'bh_galaxy') }}
         uses: tenstorrent/tt-metal/.github/actions/ensure-bh-links-online@main
